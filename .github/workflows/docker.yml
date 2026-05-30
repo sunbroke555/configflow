@@ -5,7 +5,7 @@ on:
     tags:
       - 'v*'
     branches:
-      - main
+      - test
     paths:
       - 'backend/**'
       - 'frontend/**'
