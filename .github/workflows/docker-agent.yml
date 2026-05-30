@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - test
     paths:
       - 'backend/agents/**'
       - 'docker/Dockerfile.agent'
