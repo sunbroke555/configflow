@@ -1,13 +1,72 @@
 """MosDNS 配置路由模块"""
 import logging
+import os
+from urllib.parse import urlparse
+
 from flask import request, jsonify
 
 from backend.converters.mihomo import apply_github_proxy_domain
 from backend.routes import mosdns_bp as bp
 from backend.common.auth import require_auth
 from backend.common.config import config_data, save_config
+from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
 
 logger = logging.getLogger(__name__)
+
+
+def _load_cached_rule_content_for_url(original_url: str) -> str:
+    """尝试从本地规则缓存中读取与 URL 对应的规则内容。"""
+    if not original_url:
+        return ''
+
+    candidate_names = []
+
+    # 1. 优先从 rule_configs / rule_library 中按 URL 反查规则名称
+    for rule_item in config_data.get('rule_configs', []):
+        if rule_item.get('itemType') == 'ruleset' and rule_item.get('url') == original_url:
+            name = rule_item.get('name', '')
+            if name:
+                candidate_names.append(name)
+
+    for library_item in config_data.get('rule_library', []):
+        if library_item.get('url') == original_url:
+            name = library_item.get('name', '')
+            if name:
+                candidate_names.append(name)
+
+    # 2. 如果是 rule-library/content/<id> 形式，按 id 找规则库名称
+    parsed = urlparse(original_url)
+    path = parsed.path or ''
+    marker = '/api/rule-library/content/'
+    if marker in path:
+        rule_id = path.split(marker, 1)[1].strip('/').split('/', 1)[0]
+        if rule_id:
+            library_item = next(
+                (r for r in config_data.get('rule_library', []) if r.get('id') == rule_id),
+                None
+            )
+            if library_item and library_item.get('name'):
+                candidate_names.append(library_item['name'])
+
+    # 去重并尝试读取缓存文件
+    seen = set()
+    for name in candidate_names:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+
+        filename = f"{sanitize_rule_name(name)}.list"
+        filepath = os.path.join(get_rules_dir(), filename)
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    cached_content = f.read()
+                logger.info(f"使用本地规则缓存兜底: {filepath}")
+                return cached_content
+            except Exception as e:
+                logger.warning(f"读取本地规则缓存失败 {filepath}: {e}")
+
+    return ''
 
 
 @bp.route('/rulesets', methods=['GET', 'POST'])
@@ -330,12 +389,16 @@ def mosdns_rule_proxy():
         fetch_url = apply_github_proxy_domain(original_url, config_data)
 
         # 拉取原始规则文件
+        original_content = ''
         try:
             response = requests.get(fetch_url, timeout=10)
             response.raise_for_status()
             original_content = response.text
         except requests.exceptions.RequestException as e:
-            return jsonify({'success': False, 'message': f'Failed to fetch original URL: {str(e)}'}), 500
+            logger.warning(f"远程拉取规则失败，尝试使用本地缓存兜底: {original_url}, 错误: {e}")
+            original_content = _load_cached_rule_content_for_url(original_url)
+            if not original_content:
+                return jsonify({'success': False, 'message': f'Failed to fetch original URL: {str(e)}'}), 500
 
         # 检测内容格式
         # 如果内容已经是 mosdns 格式，则直接返回
@@ -461,4 +524,3 @@ def mosdns_rule_proxy():
 
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
-
