@@ -324,7 +324,7 @@
     >
       <div class="dialog-card">
         <el-form :model="addRuleToSetForm" label-width="100px" class="rule-form">
-          <el-form-item label="规则类型">
+          <el-form-item v-if="currentRuleSet?.behavior === 'classical'" label="规则类型">
             <el-select v-model="addRuleToSetForm.rule_type" placeholder="选择规则类型" style="width: 100%">
               <el-option label="DOMAIN" value="DOMAIN" />
               <el-option label="DOMAIN-SUFFIX" value="DOMAIN-SUFFIX" />
@@ -343,10 +343,7 @@
               type="textarea"
             />
             <div class="helper-text">
-              每行一个值。例如：<br>
-              example.com<br>
-              baidu.com<br>
-              192.168.1.0/24
+              {{ addRuleToSetHelperText }}
             </div>
           </el-form-item>
         </el-form>
@@ -554,6 +551,17 @@ const ruleContentHelperText = computed(() => {
 const addRuleToSetForm = ref({
   rule_type: 'DOMAIN-SUFFIX',
   value: ''
+})
+
+const addRuleToSetHelperText = computed(() => {
+  switch (currentRuleSet.value?.behavior) {
+    case 'domain':
+      return '每行一个域名，例如 example.com 或 baidu.com。'
+    case 'ipcidr':
+      return '每行一个 CIDR，例如 1.1.1.0/24 或 2001:db8::/32。'
+    default:
+      return '每行一个值，例如 example.com、baidu.com 或 192.168.1.0/24。'
+  }
 })
 
 const loadRuleLibrary = async () => {
@@ -867,10 +875,57 @@ const toggleEnabled = async (row: RuleLibraryItem) => {
 const showAddRuleToSetDialog = (row: RuleLibraryItem) => {
   currentRuleSet.value = row
   addRuleToSetForm.value = {
-    rule_type: 'DOMAIN-SUFFIX',
+    rule_type: row.behavior === 'ipcidr' ? 'IP-CIDR' : 'DOMAIN-SUFFIX',
     value: ''
   }
   addRuleToSetDialogVisible.value = true
+}
+
+const formatRuleValueForRuleSet = (value: string) => {
+  const trimmedValue = value.trim()
+
+  if (currentRuleSet.value?.behavior === 'classical') {
+    return `${addRuleToSetForm.value.rule_type},${trimmedValue}`
+  }
+
+  return trimmedValue
+}
+
+const isValidIpv4Cidr = (value: string) => {
+  const match = value.match(/^(\d{1,3})(?:\.(\d{1,3})){3}\/(\d{1,2})$/)
+  if (!match) return false
+
+  const [address, prefix] = value.split('/')
+  const octets = address.split('.').map(Number)
+  const prefixNumber = Number(prefix)
+
+  return octets.every(octet => octet >= 0 && octet <= 255) && prefixNumber >= 0 && prefixNumber <= 32
+}
+
+const isValidIpv6Cidr = (value: string) => {
+  const match = value.match(/^([0-9a-fA-F:]+)\/(\d{1,3})$/)
+  if (!match || !match[1].includes(':')) return false
+
+  const prefixNumber = Number(match[2])
+  return prefixNumber >= 0 && prefixNumber <= 128
+}
+
+const isValidCidr = (value: string) => isValidIpv4Cidr(value) || isValidIpv6Cidr(value)
+
+const isLikelyDomainValue = (value: string) => {
+  if (value.includes(',') || value.includes('/')) return false
+  return /^[a-zA-Z0-9+*_.-]+$/.test(value)
+}
+
+const getInvalidRuleValue = (values: string[]) => {
+  switch (currentRuleSet.value?.behavior) {
+    case 'domain':
+      return values.find(value => !isLikelyDomainValue(value.trim()))
+    case 'ipcidr':
+      return values.find(value => !isValidCidr(value.trim()))
+    default:
+      return undefined
+  }
 }
 
 const saveRuleToSet = async () => {
@@ -884,7 +939,15 @@ const saveRuleToSet = async () => {
   }
 
   const values = addRuleToSetForm.value.value.trim().split('\n').filter(line => line.trim())
-  const newRules = values.map(value => `${addRuleToSetForm.value.rule_type},${value.trim()}`).join('\n')
+  const invalidValue = getInvalidRuleValue(values)
+  if (invalidValue) {
+    const behavior = currentRuleSet.value.behavior
+    const expectedText = behavior === 'ipcidr' ? 'CIDR，例如 1.1.1.0/24' : '域名，例如 example.com'
+    ElMessage.warning(`"${invalidValue.trim()}" 不符合 ${currentRuleSet.value.name} 的规则集类型，请输入${expectedText}`)
+    return
+  }
+
+  const newRules = values.map(formatRuleValueForRuleSet).join('\n')
 
   const existingContent = currentRuleSet.value.content || ''
   const updatedContent = existingContent ? `${existingContent}\n${newRules}` : newRules
