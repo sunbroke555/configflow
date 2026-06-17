@@ -77,7 +77,8 @@ export const proxyGroupApi = {
   getAll: () => api.get('/proxy-groups'),
   create: (data: any) => api.post('/proxy-groups', data),
   update: (id: string, data: any) => api.put(`/proxy-groups/${id}`, data),
-  delete: (id: string) => api.delete(`/proxy-groups/${id}`)
+  delete: (id: string) => api.delete(`/proxy-groups/${id}`),
+  previewRegex: (data: any) => api.post('/proxy-groups/preview-regex', data)
 }
 
 // 获取服务域名配置（优先使用配置的域名，否则使用当前页面的 base URL）

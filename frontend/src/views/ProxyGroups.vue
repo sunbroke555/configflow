@@ -97,7 +97,18 @@
 
               <div v-if="group.aggregation_regex" class="card-section">
                 <div class="section-label"><el-icon><Filter /></el-icon>聚合正则</div>
-                <div class="section-content code-box small">{{ group.aggregation_regex }}</div>
+                <div class="regex-display-row">
+                  <div class="section-content code-box small">{{ group.aggregation_regex }}</div>
+                  <el-button
+                    class="preview-btn compact-preview"
+                    size="small"
+                    :loading="regexPreviewLoading && regexPreviewSource === 'aggregation'"
+                    @click.stop="previewSavedRegexMatches(group, 'aggregation')"
+                  >
+                    <el-icon><View /></el-icon>
+                    预览
+                  </el-button>
+                </div>
               </div>
 
               <div v-if="hasSubscriptions(group) && !hasAggregations(group)" class="card-section">
@@ -105,9 +116,20 @@
                 <div class="section-content">{{ getSubscriptionDisplay(group) }}</div>
               </div>
 
-              <div v-if="group.regex && hasSubscriptions(group) && !hasAggregations(group)" class="card-section">
+              <div v-if="group.regex && hasSubscriptions(group)" class="card-section">
                 <div class="section-label"><el-icon><Filter /></el-icon>订阅正则</div>
-                <div class="section-content code-box small">{{ group.regex }}</div>
+                <div class="regex-display-row">
+                  <div class="section-content code-box small">{{ group.regex }}</div>
+                  <el-button
+                    class="preview-btn compact-preview"
+                    size="small"
+                    :loading="regexPreviewLoading && regexPreviewSource === 'subscription'"
+                    @click.stop="previewSavedRegexMatches(group, 'subscription')"
+                  >
+                    <el-icon><View /></el-icon>
+                    预览
+                  </el-button>
+                </div>
               </div>
 
               <div v-if="hasManualNodes(group) && !hasAggregations(group)" class="card-section">
@@ -236,11 +258,21 @@
             </el-select>
           </el-form-item>
           <el-form-item label="正则过滤" v-if="form.subscriptions && form.subscriptions.length > 0">
-            <el-input
-              v-model="form.regex"
-              clearable
-              placeholder="输入正则表达式（可选，过滤订阅节点名称）"
-            />
+            <div class="regex-preview-row">
+              <el-input
+                v-model="form.regex"
+                clearable
+                placeholder="输入正则表达式（可选，过滤订阅节点名称）"
+              />
+              <el-button
+                class="preview-btn"
+                :loading="regexPreviewLoading && regexPreviewSource === 'subscription'"
+                @click="previewRegexMatches('subscription')"
+              >
+                <el-icon><View /></el-icon>
+                预览
+              </el-button>
+            </div>
           </el-form-item>
         </template>
 
@@ -293,11 +325,21 @@
         </el-form-item>
         <!-- 聚合正则过滤 -->
         <el-form-item label="正则过滤" v-if="enabledSources.includes('aggregation') && form.aggregations && form.aggregations.length > 0">
-          <el-input
-            v-model="form.aggregation_regex"
-            clearable
-            placeholder="输入正则表达式（可选，过滤聚合节点名称）"
-          />
+          <div class="regex-preview-row">
+            <el-input
+              v-model="form.aggregation_regex"
+              clearable
+              placeholder="输入正则表达式（可选，过滤聚合节点名称）"
+            />
+            <el-button
+              class="preview-btn"
+              :loading="regexPreviewLoading && regexPreviewSource === 'aggregation'"
+              @click="previewRegexMatches('aggregation')"
+            >
+              <el-icon><View /></el-icon>
+              预览
+            </el-button>
+          </div>
           <div style="margin-top: 8px; color: #909399; font-size: 12px">
             此正则过滤将应用于聚合中的节点，不使用聚合自带的正则过滤器
           </div>
@@ -385,6 +427,46 @@
         <el-button type="primary" @click="saveGroup">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="regexPreviewVisible"
+      class="groups-helper-dialog"
+      :title="regexPreviewTitle"
+      width="680px"
+      :close-on-click-modal="false"
+    >
+      <div v-loading="regexPreviewLoading">
+        <el-alert
+          v-if="regexPreviewResult"
+          :title="`匹配 ${regexPreviewNodes.length} 个节点，候选 ${regexPreviewResult.total_candidates} 个`"
+          type="success"
+          :closable="false"
+          class="dialog-alert"
+        />
+        <div v-if="regexPreviewNodes.length > 0" class="preview-section">
+          <el-scrollbar max-height="420px">
+            <div class="node-list">
+              <div v-for="node in regexPreviewNodes" :key="`${node.source_id || ''}-${node.name}`" class="node-item preview-node-item">
+                <div class="preview-node-main">
+                  <el-icon><Connection /></el-icon>
+                  <span class="preview-node-name">{{ node.name }}</span>
+                </div>
+                <div class="preview-node-meta">
+                  <el-tag size="small" type="info">{{ getPreviewSourceLabel(node) }}</el-tag>
+                  <el-tag size="small" type="success">{{ (node.type || 'unknown').toUpperCase() }}</el-tag>
+                </div>
+              </div>
+            </div>
+          </el-scrollbar>
+        </div>
+        <div v-if="regexPreviewNodes.length === 0 && !regexPreviewLoading" class="empty-helper">
+          当前正则没有匹配到节点
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="regexPreviewVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 <script setup lang="ts">
@@ -404,6 +486,12 @@ const savingStatus = ref<Record<string, boolean>>({})
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const enabledSources = ref<string[]>([])
+const regexPreviewVisible = ref(false)
+const regexPreviewLoading = ref(false)
+const regexPreviewSource = ref<'subscription' | 'aggregation' | ''>('')
+const regexPreviewResult = ref<{ total_candidates: number } | null>(null)
+const regexPreviewNodes = ref<any[]>([])
+const regexPreviewTitle = ref('正则匹配预览')
 
 const groupsContainer = ref<HTMLElement | null>(null)
 const orderedProxiesRef = ref<HTMLElement | null>(null)
@@ -925,6 +1013,100 @@ const getSourceSummary = (group: ProxyGroup) => {
   }
 
   return sources.length > 0 ? sources.join(' + ') : '无来源'
+}
+
+const getPreviewSourceLabel = (node: any) => {
+  if (node.source_type === 'subscription') {
+    return node.source_name ? `订阅: ${node.source_name}` : '订阅'
+  }
+  if (node.source_type === 'aggregation') {
+    return node.source_name ? `聚合: ${node.source_name}` : '聚合'
+  }
+  return node.subscription_name || '节点'
+}
+
+const previewRegexMatches = async (source: 'subscription' | 'aggregation') => {
+  const regex = source === 'subscription' ? form.value.regex : form.value.aggregation_regex
+  const sourceIds = source === 'subscription' ? (form.value.subscriptions || []) : (form.value.aggregations || [])
+
+  if (!sourceIds.length) {
+    ElMessage.warning(source === 'subscription' ? '请先选择订阅' : '请先选择聚合')
+    return
+  }
+
+  if (!regex || !regex.trim()) {
+    ElMessage.warning('请先输入正则表达式')
+    return
+  }
+
+  regexPreviewVisible.value = true
+  regexPreviewLoading.value = true
+  regexPreviewSource.value = source
+  regexPreviewResult.value = null
+  regexPreviewNodes.value = []
+  regexPreviewTitle.value = source === 'subscription' ? '订阅正则匹配预览' : '聚合正则匹配预览'
+
+  try {
+    const payload = source === 'subscription'
+      ? { source, regex, subscriptions: sourceIds }
+      : { source, regex, aggregations: sourceIds }
+    const { data } = await proxyGroupApi.previewRegex(payload)
+
+    if (data.success) {
+      regexPreviewResult.value = {
+        total_candidates: data.total_candidates || 0
+      }
+      regexPreviewNodes.value = data.nodes || []
+    } else {
+      ElMessage.error(data.message || '预览失败')
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '预览失败')
+  } finally {
+    regexPreviewLoading.value = false
+  }
+}
+
+const previewSavedRegexMatches = async (group: ProxyGroup, source: 'subscription' | 'aggregation') => {
+  const regex = source === 'subscription' ? group.regex : group.aggregation_regex
+  const sourceIds = source === 'subscription' ? (group.subscriptions || []) : (group.aggregations || [])
+
+  if (!sourceIds.length) {
+    ElMessage.warning(source === 'subscription' ? '该策略组没有订阅来源' : '该策略组没有聚合来源')
+    return
+  }
+
+  if (!regex || !regex.trim()) {
+    ElMessage.warning('该策略组没有配置正则表达式')
+    return
+  }
+
+  regexPreviewVisible.value = true
+  regexPreviewLoading.value = true
+  regexPreviewSource.value = source
+  regexPreviewResult.value = null
+  regexPreviewNodes.value = []
+  regexPreviewTitle.value = `${group.name} - ${source === 'subscription' ? '订阅正则匹配预览' : '聚合正则匹配预览'}`
+
+  try {
+    const payload = source === 'subscription'
+      ? { source, regex, subscriptions: sourceIds }
+      : { source, regex, aggregations: sourceIds }
+    const { data } = await proxyGroupApi.previewRegex(payload)
+
+    if (data.success) {
+      regexPreviewResult.value = {
+        total_candidates: data.total_candidates || 0
+      }
+      regexPreviewNodes.value = data.nodes || []
+    } else {
+      ElMessage.error(data.message || '预览失败')
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '预览失败')
+  } finally {
+    regexPreviewLoading.value = false
+  }
 }
 
 const loadProxyGroups = async () => {
@@ -1996,6 +2178,34 @@ onUnmounted(() => {
   color: #9099bf;
 }
 
+.regex-preview-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.regex-display-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.preview-btn.el-button {
+  border-radius: var(--group-radius-md, 16px);
+  border: 1px solid rgba(107, 115, 255, 0.25);
+  background: rgba(107, 115, 255, 0.1);
+  color: #4e5eff;
+  font-weight: 600;
+}
+
+.preview-btn.compact-preview {
+  flex-shrink: 0;
+  min-width: 78px;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
@@ -2092,6 +2302,36 @@ onUnmounted(() => {
   border-bottom: none;
 }
 
+.preview-section {
+  margin-top: 14px;
+}
+
+.preview-node-item {
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.preview-node-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #35405f;
+}
+
+.preview-node-name {
+  word-break: break-all;
+}
+
+.preview-node-meta {
+  flex-shrink: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 @media (max-width: 1024px) {
   .proxy-groups-page {
     padding: 24px;
@@ -2135,6 +2375,22 @@ onUnmounted(() => {
 
   .card-btn.el-button {
     width: 100%;
+  }
+
+  .regex-preview-row {
+    grid-template-columns: 1fr;
+  }
+
+  .regex-display-row {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-node-item {
+    flex-direction: column;
+  }
+
+  .preview-node-meta {
+    justify-content: flex-start;
   }
 }
 
