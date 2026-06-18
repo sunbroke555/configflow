@@ -10,6 +10,7 @@ Sub-Store API 参考:
   - GET  /download/:name/:target — 下载订阅 (target 放在路径中)
 """
 import os
+import uuid
 from urllib.parse import quote
 
 import requests
@@ -164,8 +165,9 @@ def get_subscription_proxies_yaml(sub_id, url, target='ClashMeta'):
     base = _get_base_url()
     logger.info(f"Sub-Store base URL: {base}")
 
-    # 使用带前缀的临时名称，避免和 Sub-Store 中已有订阅冲突
-    temp_name = f"_cf_tmp_{sub_id}"
+    # 使用带前缀和随机后缀的临时名称，避免和 Sub-Store 中已有订阅冲突，
+    # 也避免并发请求同一订阅时临时订阅撞名导致 500
+    temp_name = f"_cf_tmp_{sub_id}_{uuid.uuid4().hex[:8]}"
     # 创建临时订阅
     _create_subscription(base, temp_name, url)
 
@@ -207,9 +209,6 @@ def get_subscription_proxies_yaml(sub_id, url, target='ClashMeta'):
         )
 
 
-_TEMP_NODE_SUB_NAME = '_cf_tmp_node_convert'
-
-
 def convert_proxy_string(proxy_string, target='ClashMeta'):
     """通过 Sub-Store 将单个节点字符串（URI / YAML）转换为 mihomo 格式的 proxy dict。
 
@@ -224,11 +223,13 @@ def convert_proxy_string(proxy_string, target='ClashMeta'):
     logger.info(f"节点转换: proxy_string={proxy_string[:80]}...")
 
     # 创建临时订阅（需要一个名字才能调用 download）
-    _create_subscription(base, _TEMP_NODE_SUB_NAME, 'https://example.com')
+    # 随机后缀避免并发节点转换时撞名导致 500
+    temp_name = f"_cf_tmp_node_convert_{uuid.uuid4().hex[:8]}"
+    _create_subscription(base, temp_name, 'https://example.com')
 
     try:
         # 通过 content 参数直接传入节点内容，覆盖订阅 URL
-        download_url = f'{base}/download/{quote(_TEMP_NODE_SUB_NAME, safe="")}/{target}'
+        download_url = f'{base}/download/{quote(temp_name, safe="")}/{target}'
         logger.info(f"节点转换下载: {download_url}")
         resp = requests.get(
             download_url,
@@ -256,7 +257,7 @@ def convert_proxy_string(proxy_string, target='ClashMeta'):
         logger.warning(f"Sub-Store 节点转换失败: {e}")
         return None
     finally:
-        _delete_subscription(base, _TEMP_NODE_SUB_NAME)
+        _delete_subscription(base, temp_name)
 
 
 def parse_proxies_from_yaml(yaml_text):

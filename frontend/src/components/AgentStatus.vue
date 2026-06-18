@@ -85,7 +85,7 @@
 
           <!-- 3. 网络速率 -->
           <div class="metric-item">
-            <div class="metric-header">
+            <div class="metric-header metric-header-network">
               <span class="metric-name">网络速率</span>
               <span class="metric-value metric-network">
                 <span class="upload">↑{{ formatSpeed(agent.system_metrics.network?.speed_sent) }}</span>
@@ -105,7 +105,7 @@
 
           <!-- 4. 流量统计 -->
           <div class="metric-item" v-if="trafficStats[agent.id]">
-            <div class="metric-header">
+            <div class="metric-header metric-header-network">
               <span class="metric-name">流量统计</span>
               <span class="metric-value metric-network">
                 <span class="upload">↑{{ formatBytes(trafficStats[agent.id].total?.bytes_sent) }}</span>
@@ -266,6 +266,20 @@ const loadAllMetricsHistory = async () => {
   }
 }
 
+const chartTooltipBase = {
+  appendToBody: true,
+  confine: false,
+  extraCssText: 'z-index: 9999; pointer-events: none;'
+}
+
+const formatTrafficAxisLabel = (value: number) => {
+  if (value >= 1024) {
+    const tb = value / 1024
+    return `${tb >= 10 ? tb.toFixed(0) : tb.toFixed(1)} TB`
+  }
+  return `${value.toFixed(0)} GB`
+}
+
 // CPU 图表配置
 const getCpuChartOption = (agentId: string) => {
   const history = metricsHistory.value[agentId] || []
@@ -276,6 +290,7 @@ const getCpuChartOption = (agentId: string) => {
     xAxis: { type: 'category', show: false, boundaryGap: false },
     yAxis: { type: 'value', show: false, max: 100 },
     tooltip: {
+      ...chartTooltipBase,
       trigger: 'axis',
       formatter: '{c}%',
       axisPointer: { type: 'line' }
@@ -310,6 +325,7 @@ const getMemoryChartOption = (agentId: string) => {
     xAxis: { type: 'category', show: false, boundaryGap: false },
     yAxis: { type: 'value', show: false, max: 100 },
     tooltip: {
+      ...chartTooltipBase,
       trigger: 'axis',
       formatter: '{c}%',
       axisPointer: { type: 'line' }
@@ -344,6 +360,7 @@ const getDiskChartOption = (agentId: string) => {
     xAxis: { type: 'category', show: false, boundaryGap: false },
     yAxis: { type: 'value', show: false, max: 100 },
     tooltip: {
+      ...chartTooltipBase,
       trigger: 'axis',
       formatter: '{c}%',
       axisPointer: { type: 'line' }
@@ -379,6 +396,7 @@ const getNetworkChartOption = (agentId: string) => {
     xAxis: { type: 'category', show: false, boundaryGap: false },
     yAxis: { type: 'value', show: false },
     tooltip: {
+      ...chartTooltipBase,
       trigger: 'axis',
       formatter: (params: any) => `↑${params[0].value} KB/s<br/>↓${params[1].value} KB/s`,
       axisPointer: { type: 'line' }
@@ -421,7 +439,7 @@ const getTrafficTrendChartOption = (agentId: string) => {
   const todayDownload = stats?.today?.bytes_recv_delta || 0
 
   return {
-    grid: { left: 35, right: 10, top: 15, bottom: 20 },
+    grid: { left: 8, right: 10, top: 8, bottom: 0, containLabel: true },
     xAxis: {
       type: 'category',
       data: timestamps,
@@ -430,14 +448,18 @@ const getTrafficTrendChartOption = (agentId: string) => {
     },
     yAxis: {
       type: 'value',
+      min: 0,
+      splitNumber: 4,
       axisLabel: {
         fontSize: 10,
         color: '#666',
-        formatter: (value: number) => `${value} GB`
+        margin: 8,
+        formatter: formatTrafficAxisLabel
       },
       splitLine: { lineStyle: { color: '#f0f0f0' } }
     },
     tooltip: {
+      ...chartTooltipBase,
       trigger: 'axis',
       formatter: (params: any) => {
         const time = params[0].axisValue
@@ -579,7 +601,7 @@ onUnmounted(() => {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .agent-row::before {
@@ -592,6 +614,7 @@ onUnmounted(() => {
   background: linear-gradient(180deg, #6b7dff 0%, #5b6dff 100%);
   opacity: 0;
   transition: opacity 0.3s;
+  border-radius: 20px 0 0 20px;
 }
 
 .agent-row:hover {
@@ -748,10 +771,13 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 4px;
+  min-height: 24px;
+  margin-bottom: 0;
+  min-width: 0;
 }
 
 .metric-name {
+  flex: 0 0 auto;
   font-size: 12px;
   font-weight: 700;
   color: #7d88af;
@@ -760,16 +786,22 @@ onUnmounted(() => {
 }
 
 .metric-value {
+  flex: 0 1 auto;
   font-size: 14px;
   font-weight: 700;
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  line-height: 20px;
   padding: 2px 8px;
   border-radius: 6px;
+  white-space: nowrap;
 }
 
 .metric-value.metric-network {
   display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  min-height: 24px;
   padding: 0;
   font-size: 11px;
 }
@@ -801,7 +833,7 @@ onUnmounted(() => {
   background: rgba(107, 115, 255, 0.02);
   border-radius: 8px;
   border: 1px solid rgba(107, 115, 255, 0.06);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .no-data {
@@ -874,10 +906,37 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .agent-metrics-section {
     grid-template-columns: repeat(2, 1fr);
+    gap: 16px 12px;
   }
 
   .agent-row {
     padding: 20px;
+  }
+
+  .metric-header {
+    gap: 4px 8px;
+  }
+
+  .metric-header-network {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: flex-start;
+    min-height: 44px;
+  }
+
+  .metric-header-network .metric-value.metric-network {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 2px 8px;
+    line-height: 16px;
+    min-height: 0;
+    width: 100%;
+  }
+
+  .metric-header-network .upload,
+  .metric-header-network .download {
+    white-space: nowrap;
   }
 }
 </style>

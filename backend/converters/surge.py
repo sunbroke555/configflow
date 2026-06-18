@@ -695,6 +695,25 @@ def convert_node_to_surge(node: Dict[str, Any]) -> tuple:
 
         return ', '.join(parts), None
 
+    elif node_type == 'anytls':
+        # AnyTLS: name = anytls, server, port, password=pwd, ...
+        password = params.get('password', '')
+        sni = params.get('sni', '')
+        skip_cert = params.get('skip-cert-verify', False)
+
+        parts = [f"{name} = anytls", server, str(port), f"password={password}"]
+
+        if sni:
+            parts.append(f"sni={sni}")
+        if skip_cert:
+            parts.append("skip-cert-verify=true")
+
+        # 添加 UDP 支持
+        if params.get('udp') or params.get('udp-relay'):
+            parts.append('udp-relay=true')
+
+        return ', '.join(parts), None
+
     elif node_type == 'wireguard' or node_type == 'wg':
         # WireGuard: name = wireguard, section-name = xxx
         # 需要生成两部分：1) 引用行 2) WireGuard section配置
@@ -1005,9 +1024,15 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
         return None
 
     # 添加 policy-path 参数
+    # 若策略组配置了 regex（地区过滤），转换为 Surge 的 policy-regex-filter，
+    # 使各地区策略组在同一订阅源下按节点名正则过滤，与 Mihomo 的 filter 行为一致
     if policy_paths:
+        regex_filter = (group.get('regex') or '').strip()
         for policy_path in policy_paths:
-            group_line += f", policy-path = {policy_path}, update-interval = 86400"
+            group_line += f", policy-path = {policy_path}"
+            if regex_filter:
+                group_line += f", policy-regex-filter = {regex_filter}"
+            group_line += ", update-interval = 86400"
 
     logger.debug(f"Group '{name}' final line: {group_line}")
     return group_line
