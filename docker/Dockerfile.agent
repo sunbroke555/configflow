@@ -43,7 +43,11 @@ COPY backend/agents/go-agent/supervisord.conf /etc/supervisor/supervisord.conf
 COPY backend/agents/go-agent/supervisor/ /etc/supervisor/conf.d/
 COPY docker/docker-agent-entrypoint-service.sh /entrypoint.sh
 
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/repositories && \
+# 优先使用国内镜像源加速；镜像源不可用时（DNS 抖动、临时故障）
+# 自动回退官方源，避免 CI 因单一镜像源随机失败
+RUN { sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/repositories && apk update; } || \
+    { echo "镜像源不可用，回退官方源" && \
+      sed -i 's/mirrors.tuna.tsinghua.edu.cn/dl-cdn.alpinelinux.org/g' /etc/apk/repositories && apk update; } && \
     apk add --no-cache ca-certificates su-exec supervisor python3-dev py3-pip bash && \
     pip3 install --break-system-packages "setuptools<81" && \
     mkdir -p /etc/mihomo /etc/mosdns /etc/supervisor/conf.d /var/log/supervisor /run && \

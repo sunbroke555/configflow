@@ -9,6 +9,33 @@ import (
 	"io"
 )
 
+// RestartService 执行服务重启命令，返回命令输出。
+// supervisorctl 场景下补全配置文件路径；restart 失败时回退为 start。
+func RestartService(cfg *Config) ([]byte, error) {
+	restartCommand := cfg.RestartCommand
+	if strings.Contains(restartCommand, "supervisorctl") && !strings.Contains(restartCommand, "-c") {
+		restartCommand = strings.Replace(restartCommand, "supervisorctl", "supervisorctl -c /etc/supervisor/supervisord.conf", 1)
+		log.Printf("Modified supervisorctl command: %s", restartCommand)
+	}
+
+	log.Printf("Executing restart command: %s", restartCommand)
+	output, err := executeURLCommand(restartCommand)
+	if err == nil {
+		return output, nil
+	}
+
+	log.Printf("Restart command failed: %v\nOutput: %s", err, string(output))
+
+	// supervisorctl restart 失败时，服务可能未在运行，改用 start
+	if strings.Contains(restartCommand, "supervisorctl") && strings.Contains(restartCommand, "restart") {
+		startCommand := strings.Replace(restartCommand, "restart", "start", 1)
+		log.Printf("Attempting to start service instead: %s", startCommand)
+		return executeURLCommand(startCommand)
+	}
+
+	return output, err
+}
+
 // RestartHandler 处理服务重启请求
 func RestartHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

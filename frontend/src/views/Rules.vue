@@ -44,6 +44,14 @@
           <el-icon><Search /></el-icon>
           规则索引
         </el-button>
+        <el-button
+          type="primary"
+          class="action-btn action-secondary"
+          @click="showDuplicateDialog"
+        >
+          <el-icon><CopyDocument /></el-icon>
+          查找重复
+        </el-button>
       </div>
     </div>
 
@@ -329,7 +337,7 @@
           <el-form-item label="no-resolve" v-if="isIpRuleType">
             <div class="switch-with-tip">
               <el-switch v-model="ruleForm.no_resolve" />
-              <span class="form-tip">IP 类规则建议开启</span>
+              <span class="form-tip">IP 类规则建议开启；逻辑规则会写入其 IP 子条件</span>
             </div>
           </el-form-item>
           <el-form-item label="状态">
@@ -551,13 +559,106 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 查找重复规则对话框 -->
+    <el-dialog v-model="duplicateDialogVisible" title="查找重复规则" width="700px" class="rule-dialog">
+      <div class="dialog-card">
+        <el-alert
+          title="查找重复规则"
+          type="info"
+          :closable="false"
+          style="margin-bottom: 16px"
+        >
+          <div style="font-size: 13px; margin-top: 8px;">
+            检查已启用的直接规则与规则集内容，找出完全相同的规则条目（首次扫描需拉取规则集内容，可能较慢）
+          </div>
+        </el-alert>
+
+        <div v-if="duplicateLoading" class="dup-loading">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>正在扫描规则……</span>
+        </div>
+
+        <template v-else-if="duplicateResult">
+          <div class="dup-stats">
+            <span>已检查 {{ duplicateResult.stats.rules_checked }} 条规则、{{ duplicateResult.stats.rulesets_checked }} 个规则集</span>
+            <el-tag v-if="duplicateResult.duplicates.length" type="warning" size="small">
+              {{ duplicateResult.duplicates.length }} 组重复
+            </el-tag>
+            <el-tag v-else type="success" size="small">无重复</el-tag>
+            <el-tag v-if="duplicateResult.elapsed_time !== undefined" type="info" size="small">
+              {{ duplicateResult.elapsed_time }} ms
+            </el-tag>
+          </div>
+
+          <el-alert
+            v-if="duplicateResult.stats.failed_rulesets.length"
+            type="warning"
+            :closable="false"
+            style="margin-bottom: 12px"
+            :title="`以下规则集内容获取失败，未参与查重：${duplicateResult.stats.failed_rulesets.join('、')}`"
+          />
+
+          <el-result
+            v-if="!duplicateResult.duplicates.length"
+            icon="success"
+            title="未发现重复规则"
+            style="padding: 20px 0;"
+          />
+
+          <div v-else class="dup-list">
+            <div v-for="group in duplicateResult.duplicates" :key="`${group.rule_type},${group.value}`" class="dup-group">
+              <div class="dup-group-header">
+                <el-tag type="info" size="small" style="font-family: monospace;">
+                  {{ group.rule_type }},{{ group.value }}
+                </el-tag>
+                <el-tag type="warning" size="small">{{ group.count }} 处</el-tag>
+                <el-tag v-if="group.policy_conflict" type="danger" size="small">策略冲突</el-tag>
+              </div>
+              <div class="dup-occ" v-for="(occ, i) in group.occurrences" :key="i">
+                <el-tag :type="occ.source_type === 'rule' ? 'primary' : 'success'" size="small">
+                  {{ occ.source_type === 'rule' ? '直接规则' : '规则集' }}
+                </el-tag>
+                <span class="dup-occ-source" :title="occ.line">
+                  {{ occ.source_type === 'rule' ? occ.line : `${occ.source} · 第 ${occ.line_no} 行` }}
+                </span>
+                <span class="dup-occ-meta">优先级 #{{ occ.priority }}</span>
+                <el-tag
+                  :type="occ.policy === 'DIRECT' ? 'success' : occ.policy === 'REJECT' ? 'danger' : 'primary'"
+                  size="small"
+                >
+                  {{ occ.policy }}
+                </el-tag>
+                <el-button
+                  v-if="occ.source_type === 'rule'"
+                  class="list-btn danger"
+                  size="small"
+                  title="删除该条直接规则"
+                  @click="deleteDuplicateRule(occ)"
+                >
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button class="footer-btn ghost" @click="duplicateDialogVisible = false">关闭</el-button>
+          <el-button class="footer-btn primary" type="primary" @click="performDuplicateScan" :loading="duplicateLoading">
+            重新扫描
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, onActivated, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { DCaret, Edit, Delete, FolderOpened, ArrowUp, ArrowDown, Search, Plus, View, Hide, InfoFilled, List, Grid, ChatLineSquare } from '@element-plus/icons-vue'
+import { DCaret, Edit, Delete, FolderOpened, ArrowUp, ArrowDown, Search, Plus, View, Hide, InfoFilled, List, Grid, ChatLineSquare, CopyDocument, Loading } from '@element-plus/icons-vue'
 import { ruleApi, ruleSetApi, proxyGroupApi } from '@/api'
 import type { Rule, RuleSet, ProxyGroup } from '@/types'
 import Sortable from 'sortablejs'
@@ -585,6 +686,11 @@ const ruleIndexDialogVisible = ref(false)
 const ruleIndexQuery = ref('')
 const ruleIndexResult = ref<any>(null)
 const ruleIndexLoading = ref(false)
+
+// 查找重复规则相关
+const duplicateDialogVisible = ref(false)
+const duplicateResult = ref<any>(null)
+const duplicateLoading = ref(false)
 const isSavingOrder = ref(false) // 防止并发保存排序
 
 const ruleForm = ref<Partial<Rule>>({
@@ -615,8 +721,13 @@ const availablePolicies = computed(() => {
 })
 
 // 判断当前规则类型是否为 IP 类型（需要 no-resolve）
+// 逻辑规则内部可包含 IP 类条件，同样需要 no-resolve（生成时会写入子条件内）
+const LOGIC_RULE_TYPES = ['AND', 'OR', 'NOT']
+const IP_RULE_TYPES = ['IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'GEOIP']
+
 const isIpRuleType = computed(() => {
-  return ['IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'GEOIP'].includes(ruleForm.value.rule_type || '')
+  const type = ruleForm.value.rule_type || ''
+  return IP_RULE_TYPES.includes(type) || LOGIC_RULE_TYPES.includes(type)
 })
 
 // 展开的组ID集合
@@ -847,8 +958,7 @@ const editRule = (row: Rule) => {
   ruleForm.value = { ...row }
   // 如果没有 no_resolve 字段，根据规则类型设置默认值
   if (ruleForm.value.no_resolve === undefined || ruleForm.value.no_resolve === null) {
-    const isIpType = ['IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'GEOIP'].includes(ruleForm.value.rule_type || '')
-    ruleForm.value.no_resolve = isIpType
+    ruleForm.value.no_resolve = IP_RULE_TYPES.includes(ruleForm.value.rule_type || '')
   }
   ruleDialogVisible.value = true
 }
@@ -1345,6 +1455,48 @@ const performRuleIndexQuery = async () => {
   } finally {
     ruleIndexLoading.value = false
   }
+}
+
+// 查找重复规则相关方法
+const showDuplicateDialog = () => {
+  duplicateDialogVisible.value = true
+  performDuplicateScan()
+}
+
+const performDuplicateScan = async () => {
+  duplicateLoading.value = true
+  duplicateResult.value = null
+
+  try {
+    // 需要拉取并解析规则集内容，与规则索引一样使用较长超时
+    const { data } = await ruleApi.findDuplicates()
+    if (data.success) {
+      duplicateResult.value = data
+    } else {
+      ElMessage.error(data.message || '查重失败')
+    }
+  } catch (error: any) {
+    console.error('Find duplicates failed:', error)
+    if (error.code === 'ECONNABORTED') {
+      ElMessage.error('查重超时，请检查规则集配置是否正确')
+    } else {
+      ElMessage.error(error.response?.data?.message || '查重失败，请稍后重试')
+    }
+  } finally {
+    duplicateLoading.value = false
+  }
+}
+
+const deleteDuplicateRule = async (occ: any) => {
+  // 后端对缺失 itemType 的旧数据按 'rule' 兜底，这里保持同样口径
+  const rule = allRules.value.find(r => r.id === occ.rule_id && (r.itemType ?? 'rule') === 'rule')
+  if (!rule) {
+    ElMessage.error('未找到对应的规则，可能已被删除')
+    return
+  }
+  await deleteRule(rule)
+  // 删除后刷新查重结果
+  performDuplicateScan()
 }
 
 // 监听视图模式切换，重新初始化拖拽
@@ -1980,6 +2132,74 @@ onActivated(() => {
 
 .sortable-ghost {
   opacity: 0.4;
+}
+
+/* 查找重复规则对话框 */
+.dup-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 0;
+  color: #6c74a0;
+  font-size: 14px;
+}
+
+.dup-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #6c74a0;
+}
+
+.dup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.dup-group {
+  border: 1px solid rgba(107, 115, 255, 0.14);
+  border-radius: var(--rule-radius-md, 16px);
+  padding: 12px 16px;
+  background: rgba(107, 115, 255, 0.04);
+}
+
+.dup-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.dup-occ {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed rgba(107, 115, 255, 0.12);
+  font-size: 13px;
+}
+
+.dup-occ-source {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #303133;
+  font-family: monospace;
+}
+
+.dup-occ-meta {
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* 视图切换按钮样式 */

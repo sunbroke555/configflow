@@ -40,7 +40,7 @@ func checkServiceWithSystemctl(serviceName string) (string, bool) {
 
 	cmd := exec.Command("systemctl", "is-active", "--quiet", serviceName)
 	if err := cmd.Run(); err == nil {
-		log.Printf("Service %s is active (systemctl)", serviceName)
+		logDebugf("Service %s is active (systemctl)", serviceName)
 		return "active", true
 	}
 	return "", false
@@ -58,11 +58,11 @@ func checkServiceWithOpenRC(serviceName string) (string, bool) {
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
-	log.Printf("rc-service output for %s: %s", serviceName, outputStr)
+	logDebugf("rc-service output for %s: %s", serviceName, outputStr)
 
 	// 检查服务状态
 	if err == nil && (strings.Contains(outputStr, "started") || strings.Contains(outputStr, "running")) {
-		log.Printf("Service %s is active (rc-service)", serviceName)
+		logDebugf("Service %s is active (rc-service)", serviceName)
 		return "active", true
 	} else if strings.Contains(outputStr, "stopped") || strings.Contains(outputStr, "crashed") {
 		log.Printf("Service %s is inactive (rc-service)", serviceName)
@@ -91,7 +91,7 @@ func checkServiceWithSupervisorctl(serviceName string) (string, bool) {
 	if strings.Contains(outputStr, serviceName) {
 		// 检查输出中是否包含 RUNNING
 		if strings.Contains(outputStr, "RUNNING") {
-			log.Printf("Service %s is active (supervisorctl)", serviceName)
+			logDebugf("Service %s is active (supervisorctl)", serviceName)
 			return "active", true
 		} else if strings.Contains(outputStr, "FATAL") {
 			log.Printf("Service %s is in FATAL state (supervisorctl) - reporting as inactive", serviceName)
@@ -130,7 +130,7 @@ func checkServiceWithProcess(serviceName string) (string, bool) {
 
 // getServiceStatus 检查服务状态（支持多种 init 系统）
 func getServiceStatus(serviceName string) string {
-	log.Printf("Checking service status for: %s", serviceName)
+	logDebugf("Checking service status for: %s", serviceName)
 
 	// 首先尝试使用 systemctl (systemd)
 	if status, found := checkServiceWithSystemctl(serviceName); found {

@@ -75,6 +75,9 @@ def parse_rule_line(line: str) -> Optional[Tuple[str, str]]:
         parts = line.split(',', 1)
         rule_type = parts[0].strip().upper()
         rule_value = parts[1].strip()
+        # 剥离尾部的 no-resolve 参数，它不属于规则值（否则 IP 匹配和查重都会失效）
+        if rule_value.lower().endswith(',no-resolve'):
+            rule_value = rule_value[:-len(',no-resolve')].strip()
         return (rule_type, rule_value)
 
     # 2. MosDNS 格式（domain: / full: / keyword: / regexp: / ip:）
@@ -82,6 +85,10 @@ def parse_rule_line(line: str) -> Optional[Tuple[str, str]]:
         prefix, value = line.split(':', 1)
         prefix = prefix.strip().lower()
         value = value.strip()
+
+        # YAML 规则集的 payload: 头行不是规则
+        if prefix == 'payload' and not value:
+            return None
 
         if prefix == 'domain':
             return ('DOMAIN-SUFFIX', value)

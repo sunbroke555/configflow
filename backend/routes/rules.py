@@ -604,3 +604,122 @@ def match_test_rule():
     except Exception as e:
         logger.error(f'Rule match test failed: {e}')
         return jsonify({'success': False, 'message': f'查询失败: {str(e)}'}), 500
+
+
+@bp.route('/find-duplicates', methods=['POST'])
+@require_auth
+def find_duplicate_rules():
+    """查找重复规则 - 检查直接规则与规则集内容中的重复条目"""
+    import time
+
+    start_time = time.time()
+
+    try:
+        rule_configs = config_data.get('rule_configs', [])
+        rule_library = config_data.get('rule_library', [])
+
+        # key: (规则类型, 归一化规则值) -> {'value': 首次出现的原始值, 'items': 出现位置列表}
+        occurrences = {}
+        rules_checked = 0
+        rulesets_checked = 0
+        failed_rulesets = []
+
+        # 正则类规则值大小写敏感，不做小写归一
+        case_sensitive_types = {'REGEX', 'REGEXP'}
+
+        def add_occurrence(rule_type, rule_value, item):
+            normalized = rule_value if rule_type in case_sensitive_types else rule_value.lower()
+            entry = occurrences.setdefault((rule_type, normalized), {'value': rule_value, 'items': []})
+            entry['items'].append(item)
+
+        for index, rule_item in enumerate(rule_configs, start=1):
+            # 跳过禁用的规则（与生成配置、规则索引行为一致）
+            if not rule_item.get('enabled', True):
+                continue
+
+            item_type = rule_item.get('itemType', 'rule')
+
+            if item_type == 'rule':
+                rule_type = (rule_item.get('rule_type') or '').strip().upper()
+                rule_value = (rule_item.get('value') or '').strip()
+                if not rule_type or not rule_value:
+                    continue
+
+                rules_checked += 1
+                add_occurrence(rule_type, rule_value, {
+                    'source_type': 'rule',
+                    'source': '直接配置的规则',
+                    'rule_id': rule_item.get('id', ''),
+                    'policy': rule_item.get('policy', 'DIRECT'),
+                    'priority': index,
+                    'line': f'{rule_type},{rule_value}'
+                })
+
+            elif item_type == 'ruleset':
+                rule_set_name = rule_item.get('name', '规则集')
+                policy = rule_item.get('policy', 'DIRECT')
+                library_rule_id = rule_item.get('library_rule_id', '')
+
+                library_rule = None
+                if library_rule_id:
+                    library_rule = next((r for r in rule_library if r.get('id') == library_rule_id), None)
+
+                rule_content = get_ruleset_content(rule_item, library_rule)
+                if not rule_content:
+                    logger.warning(f'Skipping ruleset "{rule_set_name}" in duplicate check: unable to fetch content')
+                    failed_rulesets.append(rule_set_name)
+                    continue
+
+                rulesets_checked += 1
+                for line_no, line in enumerate(rule_content.splitlines(), start=1):
+                    parsed = parse_rule_line(line)
+                    if not parsed:
+                        continue
+
+                    rule_type, rule_value = parsed
+                    if not rule_value:
+                        continue
+
+                    add_occurrence(rule_type, rule_value, {
+                        'source_type': 'ruleset',
+                        'source': rule_set_name,
+                        'rule_id': rule_item.get('id', ''),
+                        'policy': policy,
+                        'priority': index,
+                        'line': line.strip(),
+                        'line_no': line_no
+                    })
+
+        # 同一规则集内部与跨来源的重复都算重复
+        duplicates = []
+        for (rule_type, _), entry in occurrences.items():
+            items = entry['items']
+            if len(items) < 2:
+                continue
+            duplicates.append({
+                'rule_type': rule_type,
+                'value': entry['value'],  # 首次出现的原始值，保留大小写用于展示
+                'count': len(items),
+                'policy_conflict': len({i['policy'] for i in items}) > 1,
+                'occurrences': items
+            })
+
+        # 策略冲突的排前面，其余按出现次数降序、优先级升序
+        duplicates.sort(key=lambda d: (not d['policy_conflict'], -d['count'], d['occurrences'][0]['priority']))
+
+        elapsed_time = time.time() - start_time
+        return jsonify({
+            'success': True,
+            'duplicates': duplicates,
+            'stats': {
+                'rules_checked': rules_checked,
+                'rulesets_checked': rulesets_checked,
+                'failed_rulesets': failed_rulesets,
+                'duplicate_groups': len(duplicates)
+            },
+            'elapsed_time': round(elapsed_time * 1000, 2)  # 毫秒
+        })
+
+    except Exception as e:
+        logger.error(f'Find duplicate rules failed: {e}', exc_info=True)
+        return jsonify({'success': False, 'message': f'查重失败: {str(e)}'}), 500

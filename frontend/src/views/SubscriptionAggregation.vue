@@ -210,6 +210,14 @@
             />
           </el-form-item>
 
+          <el-form-item label="健康检查">
+            <el-input
+              v-model="form.health_check_url"
+              placeholder="留空使用默认（http://www.gstatic.com/generate_204）"
+            />
+            <div class="form-tip">回家 / 内网聚合从国内出网，境外地址会被误判为失活，建议填 http://www.baidu.com</div>
+          </el-form-item>
+
           <el-form-item label="描述">
             <el-input
               v-model="form.description"
@@ -368,6 +376,8 @@ interface Aggregation {
   description?: string
   enabled?: boolean
   regex_filter?: string
+  /** 健康检查地址，留空用默认（境外）；回家/内网聚合建议填国内地址 */
+  health_check_url?: string
   created_at?: string
   updated_at?: string
   node_count?: number
@@ -401,7 +411,8 @@ const form = ref<Aggregation>({
   nodes: [],
   description: '',
   enabled: true,
-  regex_filter: ''
+  regex_filter: '',
+  health_check_url: ''
 })
 
 const loadAggregationNodeCount = async (aggregation: Aggregation) => {

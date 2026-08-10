@@ -75,64 +75,103 @@ def generate_aggregation_provider(aggregation: Dict[str, Any]) -> Dict[str, Any]
     subscription_ids = aggregation.get('subscriptions', [])
     if subscription_ids:
         subscriptions = config_data.get('subscriptions', [])
-        for sub_id in subscription_ids:
-            sub = next((s for s in subscriptions if s['id'] == sub_id and s.get('enabled', True)), None)
-            if sub:
-                nodes_list = None
 
-                # 优先通过 Sub-Store 获取
-                try:
-                    logger.info(f"尝试通过 Sub-Store 获取订阅最新数据: '{sub['name']}'")
-                    yaml_text, source = get_subscription_proxies_yaml(sub_id, sub['url'])
-                    proxies = parse_proxies_from_yaml(yaml_text)
-                    sub_proxies_map[sub_id] = proxies
+        def fetch_one_subscription(sub_id, sub):
+            """拉取单个订阅，返回 (sub_id, proxies 或 None, nodes_list)
 
-                    # 转换为 node 格式用于缓存和过滤
-                    nodes_list = proxies_to_nodes(proxies)
-                    for node in nodes_list:
-                        node['subscription_id'] = sub_id
-                        node['subscription_name'] = sub['name']
-                        if 'id' not in node:
-                            node['id'] = f"node_{uuid.uuid4().hex[:8]}"
+            单个订阅的失败被限制在本函数内：调用方只会看到 nodes_list 为
+            空，不会中断其他订阅。
+            """
+            nodes_list = None
+            proxies = None
 
-                    # 保存到本地缓存
-                    save_subscription_nodes(
-                        sub_id,
-                        nodes_list,
-                        {
-                            'subscription_name': sub['name'],
-                            'url': sub.get('url')
-                        }
-                    )
-                    if source == 'rendered_yaml':
-                        logger.info(f"成功直接复用订阅 URL 返回的 Sub-Store YAML 并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
-                    elif source == 'sub_store':
-                        logger.info(f"成功通过 Sub-Store 转换订阅并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
-                    elif source == 'direct_url_fallback':
-                        logger.info(f"Sub-Store 获取失败后，成功直接拉取原始订阅并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
-                    else:
-                        logger.info(f"成功获取订阅并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
-                except Exception as e:
-                    logger.warning(f"通过 Sub-Store 获取订阅 '{sub['name']}' 失败: {e}, 尝试读取本地缓存")
+            # 优先通过 Sub-Store 获取
+            try:
+                logger.info(f"尝试通过 Sub-Store 获取订阅最新数据: '{sub['name']}'")
+                yaml_text, source = get_subscription_proxies_yaml(sub_id, sub['url'])
+                proxies = parse_proxies_from_yaml(yaml_text)
 
-                # 如果从 Sub-Store 获取失败，从本地缓存读取
-                if not nodes_list:
-                    cache = load_subscription_cache(sub_id)
-                    if cache:
-                        nodes_list = cache.get('nodes', [])
-                        logger.info(f"从本地缓存读取订阅 '{sub['name']}', 节点数: {len(nodes_list)}")
-                    else:
-                        logger.error(f"订阅 '{sub['name']}' 既无法从 Sub-Store 获取也没有本地缓存")
-                        nodes_list = []
-
-                # 记录该订阅的节点数（在过滤前）
-                subscription_node_counts[sub_id] = len(nodes_list)
-
-                # 添加到节点列表（用于正则过滤）
+                # 转换为 node 格式用于缓存和过滤
+                nodes_list = proxies_to_nodes(proxies)
                 for node in nodes_list:
                     node['subscription_id'] = sub_id
-                    node['enabled'] = True
-                    all_nodes.append(node)
+                    node['subscription_name'] = sub['name']
+                    if 'id' not in node:
+                        node['id'] = f"node_{uuid.uuid4().hex[:8]}"
+
+                # 保存到本地缓存
+                save_subscription_nodes(
+                    sub_id,
+                    nodes_list,
+                    {
+                        'subscription_name': sub['name'],
+                        'url': sub.get('url')
+                    }
+                )
+                if source == 'rendered_yaml':
+                    logger.info(f"成功直接复用订阅 URL 返回的 Sub-Store YAML 并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
+                elif source == 'sub_store':
+                    logger.info(f"成功通过 Sub-Store 转换订阅并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
+                elif source == 'direct_url_fallback':
+                    logger.info(f"Sub-Store 获取失败后，成功直接拉取原始订阅并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
+                else:
+                    logger.info(f"成功获取订阅并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
+            except Exception as e:
+                proxies = None
+                nodes_list = None
+                logger.warning(f"通过 Sub-Store 获取订阅 '{sub['name']}' 失败: {e}, 尝试读取本地缓存")
+
+            # 如果从 Sub-Store 获取失败，从本地缓存读取
+            if not nodes_list:
+                cache = load_subscription_cache(sub_id)
+                if cache:
+                    nodes_list = cache.get('nodes', [])
+                    logger.info(f"从本地缓存读取订阅 '{sub['name']}', 节点数: {len(nodes_list)}")
+                else:
+                    logger.error(f"订阅 '{sub['name']}' 既无法从 Sub-Store 获取也没有本地缓存")
+                    nodes_list = []
+
+            return sub_id, proxies, nodes_list
+
+        # 并发拉取各订阅：单个订阅经 Sub-Store 解析最长可耗数十秒，
+        # 串行时一个慢/失败的订阅会拖长整个聚合，导致客户端（如 Mihomo
+        # 拉取 provider）先行超时，表现为"整个聚合更新失败"
+        pending = [
+            (sub_id, sub)
+            for sub_id in subscription_ids
+            for sub in [next((s for s in subscriptions
+                              if s['id'] == sub_id and s.get('enabled', True)), None)]
+            if sub
+        ]
+
+        results = {}
+        if pending:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=min(8, len(pending))) as executor:
+                futures = [executor.submit(fetch_one_subscription, sub_id, sub)
+                           for sub_id, sub in pending]
+                for future in as_completed(futures):
+                    try:
+                        fetched_id, proxies, nodes_list = future.result()
+                        results[fetched_id] = (proxies, nodes_list)
+                    except Exception as e:
+                        # 兜底：单个订阅的任何未预期异常都不影响其他订阅
+                        logger.error(f"订阅拉取任务异常: {e}")
+
+        # 按聚合中配置的订阅顺序汇总，保证输出稳定
+        for sub_id, _sub in pending:
+            proxies, nodes_list = results.get(sub_id, (None, []))
+            if proxies is not None:
+                sub_proxies_map[sub_id] = proxies
+
+            # 记录该订阅的节点数（在过滤前）
+            subscription_node_counts[sub_id] = len(nodes_list)
+
+            # 添加到节点列表（用于正则过滤）
+            for node in nodes_list:
+                node['subscription_id'] = sub_id
+                node['enabled'] = True
+                all_nodes.append(node)
 
     # 2. 添加手动选择的节点
     node_ids = aggregation.get('nodes', [])

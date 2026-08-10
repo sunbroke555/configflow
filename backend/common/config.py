@@ -87,9 +87,18 @@ def load_config():
                     return
                 loaded_data = json.loads(content)
 
+            # 与默认配置递归合并，补齐旧版本 config.json 中缺失的配置节。
+            # 代码中存在直接按键访问（config_data['subscriptions'] 等），缺键会抛
+            # KeyError 导致接口 500、页面报「加载订阅列表失败」。用户已有的值优先。
+            missing_keys = [k for k in get_default_config() if k not in loaded_data]
+            merged_data = _deep_merge(get_default_config(), loaded_data)
+
             # 这样所有持有 config_data 引用的对象（如 agent_manager）都能看到更新
             config_data.clear()
-            config_data.update(loaded_data)
+            config_data.update(merged_data)
+
+            if missing_keys:
+                logger.info(f"配置缺少顶层项，已补齐默认值: {', '.join(missing_keys)}")
 
             # 为没有 ID 的节点生成 ID
             nodes_updated = False
@@ -104,8 +113,8 @@ def load_config():
             # 清理策略组中对已删除/已禁用聚合的引用
             proxy_groups_cleaned = clean_invalid_proxy_group_aggregations()
 
-            # 如果节点被更新或聚合/策略组被清理，保存配置
-            if nodes_updated or aggregations_cleaned or proxy_groups_cleaned:
+            # 如果补齐了缺失项、节点被更新或聚合/策略组被清理，保存配置
+            if missing_keys or nodes_updated or aggregations_cleaned or proxy_groups_cleaned:
                 save_config()
 
         except (json.JSONDecodeError, ValueError) as e:

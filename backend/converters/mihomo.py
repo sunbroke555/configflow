@@ -1,4 +1,5 @@
 """Mihomo (Clash Meta) 配置生成器"""
+import re
 import yaml
 from typing import Dict, Any, List, Optional
 from backend.utils.logger import get_logger
@@ -87,6 +88,55 @@ def split_rules_and_rulesets(config_data: Dict[str, Any]) -> tuple:
     return rules, rule_sets
 
 
+# Provider 健康检查默认地址
+DEFAULT_HEALTH_CHECK_URL = 'http://www.gstatic.com/generate_204'
+
+
+def build_provider_health_check(source: Dict[str, Any]) -> Dict[str, Any]:
+    """构建 Provider 的健康检查配置
+
+    默认使用境外地址探测。回家/内网类订阅从国内网络出网，用境外地址
+    检查必然超时而被误判为失活，客户端因此不会选用这些节点，故允许每个
+    订阅/聚合单独指定检查地址（如 http://www.baidu.com）。
+    """
+    url = str(source.get('health_check_url') or '').strip() or DEFAULT_HEALTH_CHECK_URL
+    return {
+        'enable': True,
+        'url': url,
+        'interval': 300,
+        # 懒惰检测：仅当 Provider 被策略组实际使用时才探测，
+        # 避免闲置节点持续占用 CPU（低配设备上尤其明显）
+        'lazy': True
+    }
+
+
+# 逻辑规则类型：no-resolve 不能作为第四个字段追加，Mihomo 会把它当成策略名
+LOGIC_RULE_TYPES = ('AND', 'OR', 'NOT')
+
+# 会触发域名解析的目标 IP 类规则（SRC-IP-CIDR 匹配来源 IP，不触发解析）
+_RESOLVE_TRIGGER_RULE_TYPES = ('IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'GEOIP', 'IP-ASN')
+
+
+def apply_no_resolve_to_logic_rule(value: str) -> str:
+    """为逻辑规则内部的目标 IP 类子条件补上 no-resolve
+
+    Mihomo 的逻辑规则（AND/OR/NOT）不接受尾部的 no-resolve 参数，会报
+    `proxy [no-resolve] not found` 导致配置加载失败；正确写法是写在子条件内：
+
+        AND,((SRC-IP-CIDR,10.0.0.0/24),(IP-CIDR,10.0.0.0/24,no-resolve)),DIRECT
+    """
+    def _inject(match: 're.Match') -> str:
+        inner = match.group(1)
+        parts = [p.strip() for p in inner.split(',')]
+        if not parts or parts[0].upper() not in _RESOLVE_TRIGGER_RULE_TYPES:
+            return match.group(0)
+        if any(p.lower() == 'no-resolve' for p in parts):
+            return match.group(0)
+        return f"({inner},no-resolve)"
+
+    return re.sub(r'\(([^()]*)\)', _inject, value)
+
+
 def normalize_find_process_mode(mihomo_config: Dict[str, Any]) -> None:
     """保留 find-process-mode 的字符串取值，避免 off 变成布尔类型"""
     value = mihomo_config.get('find-process-mode')
@@ -103,8 +153,77 @@ def normalize_find_process_mode(mihomo_config: Dict[str, Any]) -> None:
             mihomo_config['find-process-mode'] = normalized
 
 
-def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '') -> str:
-    """生成 Mihomo YAML 配置"""
+def parse_mosdns_custom_hosts(custom_hosts: str) -> Dict[str, str]:
+    """解析 MosDNS 自定义 Hosts 文本为 {域名: IP} 映射
+
+    与 MosDNS 转换器保持一致，支持两种格式：
+    1. 域名在前，IP 在后：example.com 192.168.1.1（推荐格式）
+    2. IP 在前，域名在后：192.168.1.1 example.com（传统 hosts 格式）
+    """
+    import re
+
+    hosts: Dict[str, str] = {}
+    if not custom_hosts or not custom_hosts.strip():
+        return hosts
+
+    for line in custom_hosts.strip().split('\n'):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        first, second = parts[0], parts[1]
+        if re.match(r'^[\d\.]+$', second):
+            domain, ip = first, second
+        else:
+            domain, ip = second, first
+        hosts[domain] = ip
+    return hosts
+
+
+def sync_mosdns_hosts(mihomo_config: Dict[str, Any], config_data: Dict[str, Any]) -> None:
+    """将 MosDNS 自定义 Hosts 同步注入 Mihomo 配置
+
+    MosDNS 的自定义 Hosts 只对查询 MosDNS 的客户端生效；Mihomo 自身
+    使用独立的 DNS 上游（不能指回 MosDNS，否则形成解析回环），因此
+    内网域名映射需要同步写入 Mihomo 顶层 hosts，避免 Mihomo 自身
+    （订阅更新、节点域名解析）经公网 NAT 回环访问内网服务。
+
+    注意：仅用于推送给局域网内 Agent 的配置（sync_lan_hosts=True）；
+    订阅/下载配置可能被漫游设备（手机在外）使用，注入内网 IP 会导致
+    这些域名在外网不可达，因此默认不注入。
+
+    - 自定义配置中已显式写的同名 hosts 条目优先，不覆盖
+    - hosts 参与解析需要 dns.use-hosts: true；用户显式配置过则不改动
+    """
+    synced = parse_mosdns_custom_hosts(
+        config_data.get('mosdns', {}).get('custom_hosts', '')
+    )
+    if not synced:
+        return
+
+    hosts = mihomo_config.get('hosts')
+    if not isinstance(hosts, dict):
+        hosts = {}
+    for domain, ip in synced.items():
+        hosts.setdefault(domain, ip)
+    mihomo_config['hosts'] = hosts
+
+    dns_config = mihomo_config.get('dns')
+    if isinstance(dns_config, dict) and 'use-hosts' not in dns_config:
+        dns_config['use-hosts'] = True
+
+
+def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
+                           sync_lan_hosts: bool = False) -> str:
+    """生成 Mihomo YAML 配置
+
+    Args:
+        sync_lan_hosts: 是否把 MosDNS 自定义 Hosts（内网域名映射）注入
+            顶层 hosts。仅推送给局域网内 Agent 时为 True；订阅/下载
+            配置保持 False，避免漫游设备在外网解析到内网 IP。
+    """
 
     # 从合并数组中分离规则和规则集
     rules_list, rule_sets_list = split_rules_and_rulesets(config_data)
@@ -155,6 +274,10 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '') -> s
         }
 
     normalize_find_process_mode(mihomo_config)
+
+    # 仅 Agent 推送场景同步 MosDNS 自定义 Hosts（内网域名映射）
+    if sync_lan_hosts:
+        sync_mosdns_hosts(mihomo_config, config_data)
 
     # 收集被策略组使用的节点ID、订阅ID和聚合ID
     used_node_ids = set()
@@ -332,11 +455,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '') -> s
                 'url': sub_url,
                 'path': f"./providers/{sub['name']}.yaml",
                 'interval': 3600,
-                'health-check': {
-                    'enable': True,
-                    'url': 'http://www.gstatic.com/generate_204',
-                    'interval': 300
-                }
+                'health-check': build_provider_health_check(sub)
             }
 
     # 添加聚合提供者 - 只添加被策略组使用且启用的聚合
@@ -356,11 +475,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '') -> s
                 'url': agg_url,
                 'path': f"./providers/{agg['name']}.yaml",
                 'interval': 3600,
-                'health-check': {
-                    'enable': True,
-                    'url': 'http://www.gstatic.com/generate_204',
-                    'interval': 300
-                }
+                'health-check': build_provider_health_check(agg)
             }
 
     if proxy_providers:
@@ -837,6 +952,12 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '') -> s
                 rules.append(f"MATCH,{policy}")
             elif rule_type == 'RULE-SET':
                 rules.append(f"RULE-SET,{value},{policy}")
+            elif rule_type in LOGIC_RULE_TYPES:
+                # 逻辑规则的 no-resolve 必须写在子条件内部，追加为第四个字段
+                # 会被 Mihomo 当作策略名，导致配置加载失败
+                if item.get('no_resolve', False):
+                    value = apply_no_resolve_to_logic_rule(value)
+                rules.append(f"{rule_type},{value},{policy}")
             else:
                 # 其他规则有三个字段：RULE_TYPE,VALUE,POLICY
                 # 根据配置决定是否添加 no-resolve 参数

@@ -23,6 +23,10 @@ type UpdateRequest struct {
 	ProviderDownloads []ProviderDownloadItem `json:"provider_downloads,omitempty"`
 	RulesetDownloads  []RulesetDownloadItem  `json:"ruleset_downloads,omitempty"`
 	CustomFiles       []CustomFileItem       `json:"custom_files,omitempty"`
+	// RestartAfterUpdate 为真时，由 Agent 在配置与规则集全部落盘后自行重启服务。
+	// 配置更新是异步的（HTTP 200 仅表示任务已启动），服务端收到响应后立即重启
+	// 会撞上「旧配置已清理、新配置未写入」的窗口，导致服务起不来。
+	RestartAfterUpdate bool `json:"restart_after_update,omitempty"`
 }
 
 // ProviderDownloadItem 定义 provider 下载项的结构
@@ -812,6 +816,17 @@ func handleConfigUpdateAsync(cfg *Config, req UpdateRequest) {
 	}
 
 	log.Printf("Async config update completed successfully.")
+
+	// 配置与规则集全部落盘后再重启，避免服务端在异步任务进行中重启导致
+	// 服务读到不完整（甚至缺失）的配置而启动失败
+	if req.RestartAfterUpdate {
+		log.Printf("RestartAfterUpdate is set, restarting service...")
+		if output, err := RestartService(cfg); err != nil {
+			log.Printf("Restart after config update failed: %v\nOutput: %s", err, string(output))
+		} else {
+			log.Printf("Service restarted successfully after config update.")
+		}
+	}
 }
 
 // handleConfigUpdate 处理配置更新请求 (同步版本，保留用于兼容)

@@ -225,6 +225,15 @@ depend() {{
 start_pre() {{
     checkpath --directory --mode 0755 /var/log
     checkpath --file --mode 0644 --owner root:root /var/log/configflow-agent.log
+    # 日志超过 10MB 时保留一份备份后截断，防止长期运行占满小容量磁盘
+    if [ -f /var/log/configflow-agent.log ]; then
+        log_size=$(wc -c < /var/log/configflow-agent.log 2>/dev/null || echo 0)
+        if [ "$log_size" -gt 10485760 ]; then
+            mv -f /var/log/configflow-agent.log /var/log/configflow-agent.log.1
+            : > /var/log/configflow-agent.log
+            chmod 0644 /var/log/configflow-agent.log
+        fi
+    fi
 }}
 INITEOF
 

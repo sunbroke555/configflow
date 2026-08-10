@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const AgentVersion = "1.0.9-go"
+const AgentVersion = "1.1.0-go"
 
 // 全局监控数据收集器
 var metricsCollector *MetricsCollector
@@ -197,7 +197,7 @@ func (c *Config) createHeartbeatRequest() ([]byte, error) {
 // sendHeartbeatRequest 发送心跳请求到服务器
 func (c *Config) sendHeartbeatRequest(jsonData []byte) error {
 	heartbeatURL := fmt.Sprintf("%s/api/agents/%s/heartbeat", c.ServerURL, c.AgentID)
-	log.Printf("Sending heartbeat to: %s", heartbeatURL)
+	logDebugf("Sending heartbeat to: %s", heartbeatURL)
 	
 	req, err := http.NewRequest("POST", heartbeatURL, bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -218,7 +218,13 @@ func (c *Config) sendHeartbeatRequest(jsonData []byte) error {
 
 	if resp.StatusCode == http.StatusOK {
 		status := getServiceStatus(c.ServiceName)
-		log.Printf("Heartbeat sent successfully (service status: %s)", status)
+		// 心跳成功是常态，仅在服务状态发生变化时记录，避免日志无限累积
+		if status != lastReportedStatus {
+			log.Printf("Heartbeat sent successfully (service status: %s -> %s)", lastReportedStatus, status)
+			lastReportedStatus = status
+		} else {
+			logDebugf("Heartbeat sent successfully (service status: %s)", status)
+		}
 	} else {
 		// 读取响应体以便记录错误信息
 		respBody := make([]byte, 1024)

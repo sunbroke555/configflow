@@ -172,6 +172,13 @@
                 <span class="interval-hint">秒（建议 86400 = 1 天）</span>
               </div>
             </el-form-item>
+            <el-form-item label="健康检查" class="form-item">
+              <el-input
+                v-model="form.health_check_url"
+                placeholder="留空使用默认（http://www.gstatic.com/generate_204）"
+              />
+              <div class="form-tip">回家 / 内网订阅从国内出网，境外地址会被误判为失活，建议填 http://www.baidu.com</div>
+            </el-form-item>
             <el-form-item label="启用状态" class="form-item status-item">
               <div class="status-toggle-row">
                 <el-switch v-model="form.enabled" />
@@ -260,7 +267,8 @@ const form = ref<Partial<Subscription>>({
   url: '',
   type: 'universal',
   enabled: true,
-  interval: 86400
+  interval: 86400,
+  health_check_url: ''
 })
 
 // 节点预览相关

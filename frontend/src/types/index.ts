@@ -5,6 +5,8 @@ export interface Subscription {
   type: string
   enabled: boolean
   interval?: number
+  /** 健康检查地址，留空用默认（境外）；回家/内网订阅建议填国内地址 */
+  health_check_url?: string
   cached_node_count?: number | null
   cached_updated_at?: string | null
 }

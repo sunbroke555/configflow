@@ -6,7 +6,12 @@ import os
 from flask import request, jsonify, send_file
 
 from backend.agents.config_generator import generate_agent_config
-from backend.agents.version import get_latest_version, has_update
+from backend.agents.version import (
+    LATEST_AGENT_VERSION,
+    compare_versions,
+    get_latest_version,
+    has_update,
+)
 from backend.converters.mihomo import generate_mihomo_config, get_mihomo_provider_downloads, get_mihomo_ruleset_downloads
 from backend.converters.mosdns import generate_mosdns_config, get_mosdns_ruleset_downloads, get_mosdns_custom_files
 from backend.converters.surge import generate_surge_config
@@ -18,6 +23,17 @@ from backend.common.utils import str_to_bool
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 支持「配置落盘后由 Agent 自行重启」的最低 Agent 版本。
+# 更早的版本不认识 restart_after_update 字段，只能由服务端触发重启。
+_SELF_RESTART_MIN_VERSION = "1.1.0-go"
+
+
+def _supports_self_restart(agent_version: str) -> bool:
+    """判断 Agent 是否支持配置落盘后自重启"""
+    if not agent_version:
+        return False
+    return compare_versions(agent_version, _SELF_RESTART_MIN_VERSION) >= 0
 
 
 @bp.route('/install-script', methods=['GET'])
@@ -607,7 +623,10 @@ def push_config_to_agent(agent_id):
         try:
             if service_type == 'mihomo':
                 logger.info("生成 Mihomo 配置...")
-                config_content = generate_mihomo_config(config_data, base_url=base_url)
+                # Agent 在局域网内，注入 MosDNS 自定义 Hosts 让内网域名直达；
+                # 订阅/下载配置（可能被在外设备使用）不注入
+                config_content = generate_mihomo_config(config_data, base_url=base_url,
+                                                        sync_lan_hosts=True)
 
                 # 获取 provider 下载信息
                 provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url)
@@ -655,14 +674,22 @@ def push_config_to_agent(agent_id):
         # 推送到 Agent
         logger.info(f"推送配置到 Agent: {agent.get('host')}:{agent.get('port')}")
 
+        # Agent 的配置更新是异步的：HTTP 200 只代表任务已启动，此时旧配置可能
+        # 已被清理而新配置尚未写入。因此重启交给 Agent 在落盘后自行执行，
+        # 服务端不再在收到响应后立即重启（那样会让服务读到不完整配置而启动失败）。
+        restart_requested = data.get('restart', True)
+        agent_version = agent.get('version') or ''
+        agent_supports_self_restart = _supports_self_restart(agent_version)
+
         # 准备额外数据
-        extra_data = None
+        extra_data = {}
+        if restart_requested and agent_supports_self_restart:
+            extra_data['restart_after_update'] = True
         if service_type == 'mihomo':
             # Mihomo 需要下载 providers 和 rulesets
             if provider_downloads or ruleset_downloads:
-                extra_data = {
-                    'directories': ['providers', 'ruleset']  # Agent 需要创建 providers 和 ruleset 目录
-                }
+                # Agent 需要创建 providers 和 ruleset 目录
+                extra_data['directories'] = ['providers', 'ruleset']
                 if provider_downloads:
                     extra_data['provider_downloads'] = provider_downloads
                 if ruleset_downloads:
@@ -678,9 +705,8 @@ def push_config_to_agent(agent_id):
                 logger.info(f"准备推送配置，包含 {', '.join(log_parts)}")
         elif service_type == 'mosdns':
             # MosDNS 需要下载 rulesets 和写入自定义文件
-            extra_data = {
-                'directories': ['rules']  # Agent 需要在配置文件同级目录创建 rules 文件夹
-            }
+            # Agent 需要在配置文件同级目录创建 rules 文件夹
+            extra_data['directories'] = ['rules']
             if ruleset_downloads:
                 extra_data['ruleset_downloads'] = ruleset_downloads
             if custom_files:
@@ -695,7 +721,7 @@ def push_config_to_agent(agent_id):
 
             logger.info(f"准备推送配置，包含 {', '.join(log_parts)}")
 
-        result = agent_manager.push_config_to_agent(agent_id, config_content, extra_data=extra_data)
+        result = agent_manager.push_config_to_agent(agent_id, config_content, extra_data=extra_data or None)
 
         # 处理推送结果
         if result['success']:
@@ -714,6 +740,27 @@ def push_config_to_agent(agent_id):
                 if ruleset_downloads:
                     result['ruleset_downloads'] = ruleset_downloads
             save_config()
+
+            # 重启由 Agent 在配置落盘后自行完成（见 restart_after_update）。
+            # 旧版 Agent 不认识该字段，只能退回服务端触发重启——那样存在竞态，
+            # 因此仅在旧版上保留，并提示升级。
+            if restart_requested and not agent_supports_self_restart:
+                logger.warning(
+                    f"Agent {agent.get('name')} 版本 {agent_version or '未知'} 不支持落盘后自重启，"
+                    f"退回服务端触发重启（存在与异步写入的竞态，建议升级 Agent 至 {LATEST_AGENT_VERSION}）"
+                )
+                restart_result = agent_manager.restart_agent_service(agent_id)
+                result['restart'] = restart_result
+                if not restart_result.get('success'):
+                    logger.warning(
+                        f"配置已推送但服务重启失败: {restart_result.get('message')}，"
+                        f"需手动重启服务后新配置才会生效"
+                    )
+            elif restart_requested:
+                result['restart'] = {
+                    'success': True,
+                    'message': 'Restart delegated to agent after config is written',
+                }
         else:
             logger.error(f"配置推送失败: {result.get('message')}")
 

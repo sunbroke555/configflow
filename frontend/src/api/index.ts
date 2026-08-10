@@ -61,7 +61,8 @@ export const ruleApi = {
   create: (data: any) => api.post('/rules', data),
   update: (id: string, data: any) => api.put(`/rules/${id}`, data),
   delete: (id: string) => api.delete(`/rules/${id}`),
-  batchCreate: (data: any) => api.post('/rules/batch', data)
+  batchCreate: (data: any) => api.post('/rules/batch', data),
+  findDuplicates: () => api.post('/rules/find-duplicates', {}, { timeout: 120000 })
 }
 
 // 规则集相关

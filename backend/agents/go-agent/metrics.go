@@ -231,11 +231,15 @@ func (m *MetricsCollector) collectNetwork() (NetworkMetrics, error) {
 		if elapsed > 0 {
 			if last, exists := m.lastNetStats["all"]; exists {
 				// 计算速度 = (当前值 - 上次值) / 时间差
-				bytesSentDiff := current.BytesSent - last.BytesSent
-				bytesRecvDiff := current.BytesRecv - last.BytesRecv
+				// 计数器重置（容器/接口重启）时当前值小于上次值，
+				// uint64 相减会下溢成极大值，此时速度置零并重建基线
+				if current.BytesSent >= last.BytesSent && current.BytesRecv >= last.BytesRecv {
+					bytesSentDiff := current.BytesSent - last.BytesSent
+					bytesRecvDiff := current.BytesRecv - last.BytesRecv
 
-				speedSent = uint64(float64(bytesSentDiff) / elapsed)
-				speedRecv = uint64(float64(bytesRecvDiff) / elapsed)
+					speedSent = uint64(float64(bytesSentDiff) / elapsed)
+					speedRecv = uint64(float64(bytesRecvDiff) / elapsed)
+				}
 			}
 		}
 	}

@@ -1,7 +1,7 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.0.9-go"
+LATEST_AGENT_VERSION = "1.1.0-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
