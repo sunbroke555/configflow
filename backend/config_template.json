@@ -1187,6 +1187,7 @@
     "cache_enabled": true,
     "cache_size": 10240,
     "cache_lazy_ttl": 21600,
+    "cache_dump_enabled": true,
     "cache_dump_file": "./cache.dump",
     "cache_dump_interval": 300
   },

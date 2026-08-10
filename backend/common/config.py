@@ -53,7 +53,13 @@ def get_default_config() -> Dict[str, Any]:
             'custom_hosts': '',
             'custom_config': '',
             'custom_matches': [],
-            'custom_match_position': 'tail'
+            'custom_match_position': 'tail',
+            'cache_enabled': True,
+            'cache_size': 10240,
+            'cache_lazy_ttl': 21600,
+            'cache_dump_enabled': True,
+            'cache_dump_file': './cache.dump',
+            'cache_dump_interval': 300
         }
     }
 

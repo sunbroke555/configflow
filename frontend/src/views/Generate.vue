@@ -657,7 +657,11 @@
               </div>
             </el-form-item>
 
-            <el-form-item label="dump_file" v-if="mosdnsCacheEnabled">
+            <el-form-item label="持久化缓存" v-if="mosdnsCacheEnabled">
+              <el-switch v-model="mosdnsCacheDumpEnabled" />
+            </el-form-item>
+
+            <el-form-item label="dump_file" v-if="mosdnsCacheEnabled && mosdnsCacheDumpEnabled">
               <el-input
                 v-model="mosdnsCacheDumpFile"
                 placeholder="./cache.dump"
@@ -667,16 +671,16 @@
               </div>
             </el-form-item>
 
-            <el-form-item label="dump_interval" v-if="mosdnsCacheEnabled">
+            <el-form-item label="dump_interval" v-if="mosdnsCacheEnabled && mosdnsCacheDumpEnabled">
               <el-input-number
                 v-model="mosdnsCacheDumpInterval"
-                :min="0"
+                :min="1"
                 :max="86400"
                 :step="10"
                 controls-position="right"
               />
               <div style="margin-top: 8px; color: #909399; font-size: 12px">
-                缓存保存间隔（秒），0 表示禁用定时保存
+                缓存保存间隔（秒）
               </div>
             </el-form-item>
           </el-form>
@@ -1582,6 +1586,7 @@ const mosdnsApiAddress = ref('0.0.0.0:8338')
 const mosdnsCacheEnabled = ref(true)
 const mosdnsCacheSize = ref(10240)
 const mosdnsCacheLazyTtl = ref(21600)
+const mosdnsCacheDumpEnabled = ref(true)
 const mosdnsCacheDumpFile = ref('./cache.dump')
 const mosdnsCacheDumpInterval = ref(300)
 const availableRuleSets = ref<RuleSet[]>([])
@@ -2416,7 +2421,8 @@ const showMosdnsSettingsDialog = async () => {
     mosdnsCacheEnabled.value = cacheResponse.data.cache_enabled !== undefined ? Boolean(cacheResponse.data.cache_enabled) : true
     mosdnsCacheSize.value = Number(cacheResponse.data.cache_size ?? 10240)
     mosdnsCacheLazyTtl.value = Number(cacheResponse.data.cache_lazy_ttl ?? 21600)
-    mosdnsCacheDumpFile.value = cacheResponse.data.cache_dump_file || './cache.dump'
+    mosdnsCacheDumpEnabled.value = cacheResponse.data.cache_dump_enabled !== undefined ? Boolean(cacheResponse.data.cache_dump_enabled) : true
+    mosdnsCacheDumpFile.value = cacheResponse.data.cache_dump_file ?? './cache.dump'
     mosdnsCacheDumpInterval.value = Number(cacheResponse.data.cache_dump_interval ?? 300)
 
     // 重置到第一个 tab
@@ -2497,6 +2503,7 @@ const saveMosdnsSettings = async () => {
       cache_enabled: mosdnsCacheEnabled.value,
       cache_size: mosdnsCacheSize.value,
       cache_lazy_ttl: mosdnsCacheLazyTtl.value,
+      cache_dump_enabled: mosdnsCacheDumpEnabled.value,
       cache_dump_file: mosdnsCacheDumpFile.value,
       cache_dump_interval: mosdnsCacheDumpInterval.value
     })

@@ -301,6 +301,7 @@ def handle_mosdns_cache_settings():
             'cache_enabled': True,
             'cache_size': 10240,
             'cache_lazy_ttl': 21600,
+            'cache_dump_enabled': True,
             'cache_dump_file': './cache.dump',
             'cache_dump_interval': 300
         }
@@ -314,6 +315,8 @@ def handle_mosdns_cache_settings():
         mosdns_config['cache_size'] = 10240
     if 'cache_lazy_ttl' not in mosdns_config:
         mosdns_config['cache_lazy_ttl'] = 21600
+    if 'cache_dump_enabled' not in mosdns_config:
+        mosdns_config['cache_dump_enabled'] = True
     if 'cache_dump_file' not in mosdns_config:
         mosdns_config['cache_dump_file'] = './cache.dump'
     if 'cache_dump_interval' not in mosdns_config:
@@ -324,6 +327,7 @@ def handle_mosdns_cache_settings():
             'cache_enabled': mosdns_config.get('cache_enabled', True),
             'cache_size': mosdns_config.get('cache_size', 10240),
             'cache_lazy_ttl': mosdns_config.get('cache_lazy_ttl', 21600),
+            'cache_dump_enabled': mosdns_config.get('cache_dump_enabled', True),
             'cache_dump_file': mosdns_config.get('cache_dump_file', './cache.dump'),
             'cache_dump_interval': mosdns_config.get('cache_dump_interval', 300)
         })
@@ -333,6 +337,7 @@ def handle_mosdns_cache_settings():
             data = request.json or {}
 
             mosdns_config['cache_enabled'] = bool(data.get('cache_enabled', True))
+            mosdns_config['cache_dump_enabled'] = bool(data.get('cache_dump_enabled', True))
 
             # 数字字段做简单容错
             def _to_int(value, default: int) -> int:
@@ -343,7 +348,8 @@ def handle_mosdns_cache_settings():
 
             mosdns_config['cache_size'] = _to_int(data.get('cache_size', 10240), 10240)
             mosdns_config['cache_lazy_ttl'] = _to_int(data.get('cache_lazy_ttl', 21600), 21600)
-            mosdns_config['cache_dump_interval'] = _to_int(data.get('cache_dump_interval', 300), 300)
+            dump_interval = _to_int(data.get('cache_dump_interval', 300), 300)
+            mosdns_config['cache_dump_interval'] = dump_interval if dump_interval > 0 else 300
 
             dump_file = data.get('cache_dump_file', './cache.dump')
             mosdns_config['cache_dump_file'] = str(dump_file) if dump_file is not None else './cache.dump'

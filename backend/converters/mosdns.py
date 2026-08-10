@@ -676,19 +676,32 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
     cache_enabled = mosdns_config_data.get('cache_enabled', True)
     cache_size = mosdns_config_data.get('cache_size', 10240)
     cache_lazy_ttl = mosdns_config_data.get('cache_lazy_ttl', 21600)
+    cache_dump_enabled = mosdns_config_data.get('cache_dump_enabled', True)
     cache_dump_file = mosdns_config_data.get('cache_dump_file', './cache.dump')
     cache_dump_interval = mosdns_config_data.get('cache_dump_interval', 300)
 
     if cache_enabled:
+        cache_args = {
+            'size': int(cache_size) if cache_size is not None else 10240,
+            'lazy_cache_ttl': int(cache_lazy_ttl) if cache_lazy_ttl is not None else 21600,
+        }
+        if cache_dump_enabled:
+            try:
+                normalized_dump_interval = int(cache_dump_interval)
+            except (TypeError, ValueError):
+                normalized_dump_interval = 300
+            if normalized_dump_interval <= 0:
+                normalized_dump_interval = 300
+
+            cache_args.update({
+                'dump_file': str(cache_dump_file).strip() if cache_dump_file else './cache.dump',
+                'dump_interval': normalized_dump_interval
+            })
+
         plugins.append({
             'tag': 'lazy_cache',
             'type': 'cache',
-            'args': {
-                'size': int(cache_size) if cache_size is not None else 10240,
-                'lazy_cache_ttl': int(cache_lazy_ttl) if cache_lazy_ttl is not None else 21600,
-                'dump_file': str(cache_dump_file) if cache_dump_file else './cache.dump',
-                'dump_interval': int(cache_dump_interval) if cache_dump_interval is not None else 300
-            }
+            'args': cache_args
         })
 
     # 3. 转发插件 - 国内 DNS 服务器

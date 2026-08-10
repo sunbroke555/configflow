@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -65,11 +67,11 @@ type Config struct {
 	HeartbeatInterval  int    `json:"heartbeat_interval"`
 	AgentID            string `json:"agent_id,omitempty"`
 	Token              string `json:"token,omitempty"`
-	
+
 	// MosDNS 特殊功能字段
 	Directories       []string              `json:"directories,omitempty"`
 	RulesetDownloads  []RulesetDownloadItem `json:"ruleset_downloads,omitempty"`
-	
+
 	filePath string
 }
 
@@ -77,14 +79,14 @@ type Config struct {
 func ConfigUpdateHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Config update requested from %s", r.RemoteAddr)
-		
+
 		var req UpdateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			log.Printf("Failed to decode request body: %v", err)
 			JsonResponse(w, http.StatusBadRequest, map[string]string{"success": "false", "message": "Invalid request body"})
 			return
 		}
-		
+
 		log.Printf("Request parsed. Config length: %d, Directories: %d, RulesetDownloads: %d, CustomFiles: %d",
 			len(req.Config), len(req.Directories), len(req.RulesetDownloads), len(req.CustomFiles))
 
@@ -102,25 +104,24 @@ func handleMosdnsFeatures(cfg *Config, req UpdateRequest) error {
 	// 获取实际的配置文件目录（从 ConfigPath 中提取）
 	configDir := filepath.Dir(cfg.ConfigPath)
 
-	// 1. 创建 cache.dump 文件（如果不存在）
-	cacheDumpPath := filepath.Join(configDir, "cache.dump")
-	if _, err := os.Stat(cacheDumpPath); os.IsNotExist(err) {
-		log.Printf("cache.dump not found, creating empty file: %s", cacheDumpPath)
-		// 创建空的 cache.dump 文件
-		file, err := os.Create(cacheDumpPath)
-		if err != nil {
-			log.Printf("Warning: failed to create cache.dump: %v", err)
-			// 不返回错误，只记录警告，因为这不是致命错误
+	// 1. 仅在配置启用缓存持久化时预创建 dump 文件
+	cacheDumpFile, err := mosdnsCacheDumpFile(req.Config)
+	if err != nil {
+		log.Printf("Warning: failed to inspect MosDNS cache settings: %v", err)
+	} else if cacheDumpFile != "" {
+		cacheDumpPath := cacheDumpFile
+		if !filepath.IsAbs(cacheDumpPath) {
+			cacheDumpPath = filepath.Join(configDir, cacheDumpPath)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(cacheDumpPath), 0755); err != nil {
+			log.Printf("Warning: failed to create cache dump directory: %v", err)
+		} else if file, err := os.OpenFile(cacheDumpPath, os.O_CREATE|os.O_WRONLY, 0644); err != nil {
+			log.Printf("Warning: failed to create cache dump file: %v", err)
 		} else {
 			file.Close()
-			// 设置文件权限为 0644
-			if err := os.Chmod(cacheDumpPath, 0644); err != nil {
-				log.Printf("Warning: failed to set permissions for cache.dump: %v", err)
-			}
-			log.Printf("Successfully created empty cache.dump file")
+			log.Printf("Cache dump file ready: %s", cacheDumpPath)
 		}
-	} else {
-		log.Printf("cache.dump already exists: %s", cacheDumpPath)
 	}
 
 	// 2. 处理 MosDNS 目录创建
@@ -151,6 +152,29 @@ func handleMosdnsFeatures(cfg *Config, req UpdateRequest) error {
 	}
 
 	return nil
+}
+
+func mosdnsCacheDumpFile(configContent string) (string, error) {
+	var config struct {
+		Plugins []struct {
+			Type string `yaml:"type"`
+			Args struct {
+				DumpFile string `yaml:"dump_file"`
+			} `yaml:"args"`
+		} `yaml:"plugins"`
+	}
+
+	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
+		return "", err
+	}
+
+	for _, plugin := range config.Plugins {
+		if plugin.Type == "cache" {
+			return strings.TrimSpace(plugin.Args.DumpFile), nil
+		}
+	}
+
+	return "", nil
 }
 
 // handleMihomoFeatures 处理Mihomo特殊功能
@@ -274,7 +298,7 @@ func downloadRuleset(configDir string, item RulesetDownloadItem) error {
 
 	// 否则从 URL 下载（向后兼容）
 	log.Printf("Downloading ruleset: %s from %s to %s (base: %s)", item.Name, item.URL, localPath, configDir)
-	
+
 	// 创建目标目录
 	dir := filepath.Dir(localPath)
 	log.Printf("Creating directory for ruleset: %s", dir)
@@ -681,12 +705,12 @@ func writeConfig(cfg *Config, configContent string, backupPath string) error {
 		// 获取当前用户ID和组ID
 		uid := os.Getuid()
 		gid := os.Getgid()
-		
+
 		log.Printf("Setting ownership for %s to uid=%d, gid=%d", configDir, uid, gid)
 		if err := os.Chown(configDir, uid, gid); err != nil {
 			log.Printf("Warning: failed to set ownership for %s: %v", configDir, err)
 		}
-		
+
 		// 递归设置目录中所有文件的权限
 		err := filepath.Walk(configDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -709,7 +733,7 @@ func writeConfig(cfg *Config, configContent string, backupPath string) error {
 		}
 		return fmt.Errorf("failed to write new config: %w", err)
 	}
-	
+
 	return nil
 }
 
