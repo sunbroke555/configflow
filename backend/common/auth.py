@@ -1,12 +1,16 @@
 """认证相关工具模块"""
 import os
+import secrets
 import jwt
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import request, jsonify
 
+from backend.common.internal_call import is_internal_call
+
 # JWT 配置
-JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-change-this-in-production')
+# 未显式配置时随机生成（进程级），避免使用可预测的硬编码默认密钥
+JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or secrets.token_urlsafe(48)
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION_HOURS = 24
 
@@ -51,6 +55,10 @@ def validate_token_or_jwt(request_obj):
     Returns:
         dict: {'valid': bool, 'message': str}
     """
+    # MCP 层发起的进程内调用，认证已在 /mcp 入口完成
+    if is_internal_call():
+        return {'valid': True}
+
     # 2. 检查 URL query token（用于外部客户端）
     from backend.common.config import config_data
     config_token = config_data.get('system_config', {}).get('config_token', '')
@@ -84,6 +92,10 @@ def require_auth(f):
     """认证装饰器 - 只有在启用认证时才检查 token"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # MCP 层发起的进程内调用，认证已在 /mcp 入口完成
+        if is_internal_call():
+            return f(*args, **kwargs)
+
         # 如果没有设置用户名和密码，则不需要认证（直接放行，忽略任何 token）
         if not is_auth_enabled():
             return f(*args, **kwargs)
@@ -112,86 +124,17 @@ def require_auth(f):
 
 
 def validate_required_env_vars():
-    """验证必需的环境变量是否已设置"""
-    # 开发环境检测：检查 DATA_DIR 环境变量
-    # 如果 DATA_DIR 未设置或设置为 /data 但目录不存在，则认为是开发环境
-    data_dir = os.environ.get('DATA_DIR', '/data')
-    is_dev_mode = not os.path.exists(data_dir) if data_dir == '/data' else False
-
-    # 也可以通过 SKIP_AUTH_CHECK 环境变量跳过验证（用于本地开发）
-    if os.environ.get('SKIP_AUTH_CHECK', '').lower() == 'true':
-        is_dev_mode = True
-
-    if is_dev_mode:
-        # 开发模式：如果没有设置认证信息，给出提示但不强制退出
-        if not ADMIN_USERNAME or not ADMIN_PASSWORD:
-            print('\n' + '=' * 80)
-            print('INFO: Running in DEVELOPMENT mode without authentication')
-            print('=' * 80)
-            print('⚠️  Authentication is DISABLED. Anyone can access the application.')
-            print('')
-            print('To enable authentication in development, set:')
-            print('  export ADMIN_USERNAME=admin')
-            print('  export ADMIN_PASSWORD=your-password')
-            print('  export JWT_SECRET_KEY=your-secret-key')
-            print('')
-            print('Production environments (Docker) REQUIRE authentication.')
-            print('=' * 80 + '\n')
+    """启动时提示认证状态（认证为可选功能，不做强制校验）"""
+    if is_auth_enabled():
         return
 
-    # 生产环境：强制要求配置
-    missing_vars = []
-    invalid_vars = []
-
-    # 检查 ADMIN_USERNAME
-    if not ADMIN_USERNAME or ADMIN_USERNAME.strip() == '':
-        missing_vars.append('ADMIN_USERNAME')
-
-    # 检查 ADMIN_PASSWORD
-    if not ADMIN_PASSWORD or ADMIN_PASSWORD.strip() == '':
-        missing_vars.append('ADMIN_PASSWORD')
-
-    # 检查 JWT_SECRET_KEY
-    if not JWT_SECRET_KEY or JWT_SECRET_KEY.strip() == '':
-        missing_vars.append('JWT_SECRET_KEY')
-    elif len(JWT_SECRET_KEY.strip()) < 32 or JWT_SECRET_KEY.strip() == 'your-secret-key-change-this-in-production':
-        invalid_vars.append('JWT_SECRET_KEY (must be at least 32 characters and not use default value)')
-
-    if missing_vars or invalid_vars:
-        error_msg = '\n' + '=' * 80 + '\n'
-        error_msg += '❌ ERROR: Authentication configuration is REQUIRED in production!\n'
-        error_msg += '=' * 80 + '\n\n'
-
-        if missing_vars:
-            error_msg += '❌ Missing required environment variables:\n'
-            for var in missing_vars:
-                error_msg += f'  - {var}\n'
-            error_msg += '\n'
-
-        if invalid_vars:
-            error_msg += '❌ Invalid environment variables:\n'
-            for var in invalid_vars:
-                error_msg += f'  - {var}\n'
-            error_msg += '\n'
-
-        error_msg += 'Please set the following environment variables:\n'
-        error_msg += '  - ADMIN_USERNAME: Admin username for login (e.g., admin)\n'
-        error_msg += '  - ADMIN_PASSWORD: Admin password for login (e.g., admin123)\n'
-        error_msg += '  - JWT_SECRET_KEY: Secret key for JWT token (must be unique and secure)\n'
-        error_msg += '\n📝 Example (docker-compose.yml):\n'
-        error_msg += '  environment:\n'
-        error_msg += '    - ADMIN_USERNAME=admin\n'
-        error_msg += '    - ADMIN_PASSWORD=your-secure-password\n'
-        error_msg += '    - JWT_SECRET_KEY=your-unique-secret-key-here\n'
-        error_msg += '\n📝 Example (Docker run):\n'
-        error_msg += '  docker run -e ADMIN_USERNAME=admin \\\n'
-        error_msg += '             -e ADMIN_PASSWORD=your-secure-password \\\n'
-        error_msg += '             -e JWT_SECRET_KEY=your-unique-secret-key-here \\\n'
-        error_msg += '             ...\n'
-        error_msg += '\n💡 For local development without auth:\n'
-        error_msg += '  export SKIP_AUTH_CHECK=true\n'
-        error_msg += '=' * 80 + '\n'
-
-        print(error_msg, flush=True)
-        import sys
-        sys.exit(1)
+    print('\n' + '=' * 80)
+    print('INFO: Running WITHOUT authentication')
+    print('=' * 80)
+    print('⚠️  Authentication is DISABLED. Anyone can access the application.')
+    print('')
+    print('To enable authentication, set:')
+    print('  ADMIN_USERNAME=admin')
+    print('  ADMIN_PASSWORD=your-password')
+    print('  JWT_SECRET_KEY=your-secret-key')
+    print('=' * 80 + '\n', flush=True)

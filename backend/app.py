@@ -25,6 +25,9 @@ from backend.version import get_version_info
 from backend.routes import register_blueprints
 from backend.routes.auth import setup_before_request
 
+# 导入 MCP 服务端
+from backend.mcp_server import mcp_bp
+
 app = Flask(__name__)
 
 CORS(app)
@@ -92,6 +95,9 @@ load_config()
 
 # 注册所有蓝图
 register_blueprints(app)
+
+# 注册 MCP 端点（供外部 MCP 客户端调用）
+app.register_blueprint(mcp_bp)
 
 # 设置全局认证中间件
 setup_before_request(app)

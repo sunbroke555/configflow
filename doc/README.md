@@ -130,6 +130,19 @@
 
 ---
 
+### 🔌 MCP 服务
+
+内置 MCP 服务端，可用 Claude 等 AI 客户端通过自然语言操作平台的全部功能。
+
+**主要特性：**
+- 内置 `/mcp` 端点，与主应用同进程，无需额外部署
+- 36 个工具覆盖订阅、节点、规则、策略组、MosDNS、Agent 与配置生成
+- 复用现有配置令牌 / 登录凭证，无需额外密钥
+
+[查看详细文档 →](module/mcp.md)
+
+---
+
 ## 快速开始
 
 ### 1. 部署系统
@@ -166,7 +179,7 @@ services:
 
 启动：`docker-compose up -d`，访问 `http://localhost` 即可使用。
 
-> 请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值，生产环境务必更新凭据。
+> 认证是可选的：不设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 即无需登录直接使用；设置后才开启登录，此时请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值。
 > Sub-Store 用于订阅解析和节点格式转换，也可在「配置生成」页面配置已有的 Sub-Store 地址。
 
 [查看完整部署指南 →](module/deployment.md)
@@ -221,6 +234,7 @@ services:
 - [规则仓库](module/rule-library.md) - 集中管理规则集
 - [规则配置](module/rules.md) - 创建分流规则
 - [配置生成](module/generate.md) - 生成和导出配置
+- [MCP 服务](module/mcp.md) - 通过 MCP 用 AI 客户端操作平台
 
 ### 部署文档
 - [部署指南](module/deployment.md) - Docker 和 Docker Compose 部署

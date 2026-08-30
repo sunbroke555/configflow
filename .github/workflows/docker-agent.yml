@@ -1,6 +1,8 @@
 name: Docker Agent Build
 
 on:
+  schedule:
+    - cron: '0 3 */3 * *'
   workflow_dispatch:
   push:
     branches:
@@ -16,7 +18,58 @@ env:
   IMAGE_NAME: thsrite/config-flow-agent
 
 jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore upstream digest cache
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/agent-upstream-digests.txt
+          key: agent-upstream-digests-${{ github.run_id }}
+          restore-keys: |
+            agent-upstream-digests-
+
+      - name: Check upstream images
+        id: check
+        run: |
+          set -eu
+
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            printf 'mihomo '
+            docker buildx imagetools inspect metacubex/mihomo:latest | awk '/Digest:/ {print $2; exit}'
+            printf 'mosdns '
+            docker buildx imagetools inspect irinesistiana/mosdns:latest | awk '/Digest:/ {print $2; exit}'
+          } > /tmp/agent-upstream-digests.next
+
+          if [ ! -f /tmp/agent-upstream-digests.txt ] || ! cmp -s /tmp/agent-upstream-digests.txt /tmp/agent-upstream-digests.next; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload upstream digests
+        if: github.event_name == 'schedule' && steps.check.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-upstream-digests
+          path: /tmp/agent-upstream-digests.next
+          if-no-files-found: error
+          retention-days: 1
+
   build:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
     permissions:
       contents: read
       packages: write
@@ -53,6 +106,7 @@ jobs:
           context: .
           file: ./docker/Dockerfile.agent
           platforms: ${{ matrix.platform.arch }}
+          pull: true
           outputs: type=image,name=${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=agent-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=agent-${{ matrix.platform.arch }}
@@ -100,3 +154,25 @@ jobs:
 
       - name: Inspect image
         run: docker buildx imagetools inspect ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:latest
+
+  save-upstream-digests:
+    runs-on: ubuntu-latest
+    needs:
+      - check-upstream
+      - merge
+    if: github.event_name == 'schedule' && needs.check-upstream.outputs.should_build == 'true'
+    steps:
+      - name: Download upstream digests
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-upstream-digests
+          path: /tmp
+
+      - name: Move digest file
+        run: mv /tmp/agent-upstream-digests.next /tmp/agent-upstream-digests.txt
+
+      - name: Save upstream digest cache
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/agent-upstream-digests.txt
+          key: agent-upstream-digests-${{ github.run_id }}

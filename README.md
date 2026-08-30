@@ -55,6 +55,11 @@
 - 一键生成 MosDNS 配置
 - 实时预览 & 配置导入导出
 
+### 🔌 MCP 服务
+- 内置 MCP 服务端（`/mcp` 端点）
+- 36 个工具覆盖平台全部功能
+- Claude Desktop / Claude Code 等客户端可直接接入
+
 ### 🤖 Agent 远程管理
 - 一键生成安装脚本
 - 自动注册与心跳监控
@@ -138,6 +143,7 @@ config-flow/
 │   ├── app.py             # 主应用入口
 │   ├── common/            # 公共模块 (认证、配置)
 │   ├── routes/            # API 路由
+│   ├── mcp_server/        # MCP 服务端 (对外暴露 /mcp)
 │   ├── converters/        # 配置生成器 (Mihomo/Surge/MosDNS)
 │   ├── agents/            # Agent 管理
 │   └── utils/             # 工具函数

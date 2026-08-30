@@ -1,6 +1,7 @@
 """认证相关路由"""
 from flask import request, jsonify
 from backend.routes import auth_bp
+from backend.common.internal_call import is_internal_call
 from backend.common.auth import (
     is_auth_enabled,
     generate_token,
@@ -60,6 +61,10 @@ def setup_before_request(app):
     @app.before_request
     def before_request_auth():
         """全局认证检查 - 只在启用认证时生效"""
+        # 由 MCP 层发起的进程内调用，认证已在 /mcp 入口完成，不再重复校验
+        if is_internal_call():
+            return None
+
         # 如果没有启用认证，跳过
         if not is_auth_enabled():
             return None
@@ -83,6 +88,7 @@ def setup_before_request(app):
             '/api/rules/local/',  # 本地规则文件（供 Mihomo 访问）
             '/api/mosdns/rule-proxy',  # MosDNS 规则代理
             '/api/version',  # 版本信息
+            '/mcp',  # MCP 端点（在 mcp_server.auth 中自行校验 JWT / 配置令牌）
             '/api/static/agents/',  # Agent 二进制文件下载
             '/',  # 前端首页
         ]

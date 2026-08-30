@@ -44,7 +44,7 @@ services:
 - 访问 `http://localhost`，出现登录页说明部署成功。
 - `./data` 保存 ConfigFlow 数据，`./sub-store-data` 保存 Sub-Store 数据，方便以后迁移或备份。
 
-> 请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值，生产环境务必更新凭据。
+> 认证是可选的：不设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 即无需登录直接使用；设置后才开启登录，此时请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值。
 > Sub-Store 用于订阅解析和节点格式转换。如果已有 Sub-Store 服务，可移除 `sub-store` 部分，在「配置生成」页面配置已有的 Sub-Store URL。
 
 ---
