@@ -2807,20 +2807,34 @@ onUnmounted(() => {
 
 .agent-profile-native-select {
   width: 100%;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
-  background-color: #fff;
+  height: 36px;
+  padding: 0 34px 0 12px;
+  border: 1px solid rgba(107, 115, 255, 0.2);
+  border-radius: var(--agent-radius-sm, 12px);
+  background-color: rgba(107, 115, 255, 0.06);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%235b6dff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
   color: #30354d;
   -webkit-text-fill-color: #30354d;
   color-scheme: light;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: all 0.2s ease;
+}
+
+.agent-profile-native-select:hover {
+  border-color: rgba(107, 115, 255, 0.38);
+  background-color: rgba(107, 115, 255, 0.1);
 }
 
 .agent-profile-native-select:focus {
-  border-color: #409eff;
+  border-color: #5b6dff;
+  box-shadow: 0 0 0 3px rgba(107, 115, 255, 0.15);
   outline: none;
 }
 
@@ -2832,6 +2846,7 @@ onUnmounted(() => {
 .agent-profile-native-select option {
   background: #fff;
   color: #30354d;
+  font-weight: 500;
 }
 
 :deep(.el-input-number) {

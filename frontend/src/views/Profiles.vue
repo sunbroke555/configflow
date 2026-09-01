@@ -6,11 +6,11 @@
         <p>管理隔离的订阅、节点、规则和生成配置</p>
       </div>
       <div class="header-actions">
-        <el-button @click="pickImportFile">
+        <el-button class="action-btn action-secondary" @click="pickImportFile">
           <el-icon><Upload /></el-icon>
           导入到当前 Profile
         </el-button>
-        <el-button type="primary" @click="openCreate">
+        <el-button class="action-btn action-primary" @click="openCreate">
           <el-icon><Plus /></el-icon>
           新建 Profile
         </el-button>
@@ -18,49 +18,75 @@
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="profiles" row-key="id" class="profiles-table">
-      <el-table-column prop="name" label="名称" min-width="180" />
-      <el-table-column prop="id" label="ID" min-width="150" />
-      <el-table-column prop="description" label="说明" min-width="220" show-overflow-tooltip />
-      <el-table-column label="状态" width="110">
-        <template #default="{ row }">
-          <el-tag v-if="row.id === activeProfileId" type="success">当前</el-tag>
-          <span v-else class="muted">未使用</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="330" fixed="right">
-        <template #default="{ row }">
+    <div v-loading="loading" class="profiles-grid">
+      <div
+        v-for="profile in profiles"
+        :key="profile.id"
+        class="profile-card"
+        :class="{ 'is-active': profile.id === activeProfileId }"
+      >
+        <div class="card-header">
+          <div class="card-title-group">
+            <div class="profile-avatar">
+              <el-icon><Collection /></el-icon>
+            </div>
+            <div class="card-title-text">
+              <div class="card-title">{{ profile.name }}</div>
+              <div class="card-id">{{ profile.id }}</div>
+            </div>
+          </div>
+          <span v-if="profile.id === activeProfileId" class="active-pill">
+            <el-icon><CircleCheck /></el-icon>
+            使用中
+          </span>
+        </div>
+
+        <p class="card-desc">{{ profile.description || '暂无说明' }}</p>
+
+        <div class="card-actions">
           <el-button
-            v-if="row.id !== activeProfileId"
-            text
-            type="primary"
-            :disabled="row.id === 'default' && activeProfileId === row.id"
-            @click="activate(row.id)"
+            v-if="profile.id !== activeProfileId"
+            class="card-btn primary"
+            @click="activate(profile.id)"
           >
             <el-icon><CircleCheck /></el-icon>
             使用
           </el-button>
-          <el-button text @click="openEdit(row)">
-            <el-icon><Edit /></el-icon>
-            编辑
-          </el-button>
-          <el-button text @click="clone(row)">
-            <el-icon><CopyDocument /></el-icon>
-            克隆
-          </el-button>
-          <el-button text @click="exportProfile(row.id)">
-            <el-icon><Download /></el-icon>
-            导出
-          </el-button>
-          <el-button v-if="row.id !== 'default'" text type="danger" @click="remove(row)">
-            <el-icon><Delete /></el-icon>
-            删除
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+          <span v-else class="current-hint">当前正在使用</span>
+          <div class="icon-actions">
+            <el-button class="icon-btn" title="编辑" @click="openEdit(profile)">
+              <el-icon><Edit /></el-icon>
+            </el-button>
+            <el-button class="icon-btn" title="克隆" @click="clone(profile)">
+              <el-icon><CopyDocument /></el-icon>
+            </el-button>
+            <el-button class="icon-btn" title="导出" @click="exportProfile(profile.id)">
+              <el-icon><Download /></el-icon>
+            </el-button>
+            <el-button
+              v-if="profile.id !== 'default'"
+              class="icon-btn danger"
+              title="删除"
+              @click="remove(profile)"
+            >
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </div>
+        </div>
+      </div>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑 Profile' : '新建 Profile'" width="460px">
+      <div v-if="!loading && profiles.length === 0" class="empty-state">
+        <el-icon><Collection /></el-icon>
+        <p>还没有配置 Profile，点击右上角新建一个吧</p>
+      </div>
+    </div>
+
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editingId ? '编辑 Profile' : '新建 Profile'"
+      width="460px"
+      class="profile-dialog"
+    >
       <el-form label-width="82px" @submit.prevent="submit">
         <el-form-item label="Profile ID">
           <el-input v-model="form.id" :disabled="Boolean(editingId)" maxlength="64" />
@@ -73,8 +99,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
+        <el-button class="action-btn ghost" @click="dialogVisible = false">取消</el-button>
+        <el-button class="action-btn action-primary" :loading="saving" @click="submit">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -83,7 +109,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CircleCheck, CopyDocument, Delete, Download, Edit, Plus, Upload } from '@element-plus/icons-vue'
+import { CircleCheck, Collection, CopyDocument, Delete, Download, Edit, Plus, Upload } from '@element-plus/icons-vue'
 import { profileApi } from '@/api'
 import { useProfileStore, type Profile } from '@/stores/profile'
 
@@ -214,25 +240,313 @@ onMounted(() => {
 
 <style scoped>
 .profiles-page {
-  min-height: 100%;
+  padding: 28px 32px 40px;
+  background: #f5f7ff;
+  min-height: calc(100vh - 64px);
 }
 
-.profiles-table {
-  width: 100%;
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: #f5f7ff;
+  margin: -28px -32px 28px -32px;
+  padding: 28px 32px;
 }
 
-.muted {
-  color: #909399;
+.title-block h2 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.title-block p {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: #7f87af;
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+  height: 40px;
+  border-radius: 16px;
+  font-weight: 600;
+  font-size: 14px;
+  border: none;
+  background: rgba(107, 115, 255, 0.15);
+  color: #4a5bff;
+  transition: all 0.2s ease;
+}
+
+.action-btn .el-icon {
+  font-size: 16px;
+}
+
+.action-btn.action-secondary {
+  border: 1px solid rgba(107, 115, 255, 0.35);
+}
+
+.action-btn.action-primary {
+  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
+  color: #fff;
+  box-shadow: 0 12px 30px rgba(87, 104, 255, 0.25);
+}
+
+.action-btn.ghost {
+  background: rgba(107, 115, 255, 0.08);
+  color: #4a5bff;
+  border: 1px solid rgba(107, 115, 255, 0.2);
+}
+
+.action-btn:not([disabled]):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(87, 104, 255, 0.25);
+}
+
+.profiles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 24px;
+  min-height: 120px;
+}
+
+.profile-card {
+  background: #fff;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 8px 24px rgba(65, 80, 180, 0.08);
+  border: 1px solid rgba(107, 115, 255, 0.1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.profile-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 22px 48px rgba(91, 112, 255, 0.2);
+  border-color: rgba(107, 115, 255, 0.25);
+}
+
+.profile-card.is-active {
+  border-color: rgba(107, 115, 255, 0.45);
+  box-shadow: 0 14px 36px rgba(91, 112, 255, 0.18);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-avatar {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(107, 125, 255, 0.16) 0%, rgba(91, 109, 255, 0.12) 100%);
+  color: #5b6dff;
+  font-size: 20px;
+}
+
+.card-title-text {
+  min-width: 0;
+}
+
+.card-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #30354d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-id {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #9aa1c4;
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(107, 115, 255, 0.12);
+  color: #4e5eff;
+  border: 1px solid rgba(107, 115, 255, 0.18);
+}
+
+.card-desc {
+  margin: 0;
   font-size: 13px;
+  line-height: 1.6;
+  color: #7f87af;
+  min-height: 42px;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px dashed rgba(107, 115, 255, 0.16);
+  margin-top: auto;
+}
+
+.card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 16px;
+  margin: 0;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.card-btn.primary {
+  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
+  color: #fff;
+}
+
+.card-btn.primary:hover {
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(87, 104, 255, 0.28);
+}
+
+.current-hint {
+  font-size: 13px;
+  font-weight: 600;
+  color: #9aa1c4;
+}
+
+.icon-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.icon-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  margin: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(107, 115, 255, 0.18);
+  background: rgba(107, 115, 255, 0.06);
+  color: #5b6dff;
+  font-size: 15px;
+  transition: all 0.2s ease;
+}
+
+.icon-btn:hover {
+  background: rgba(107, 115, 255, 0.14);
+  border-color: rgba(107, 115, 255, 0.32);
+  color: #4a5bff;
+  transform: translateY(-1px);
+}
+
+.icon-btn.danger {
+  border-color: rgba(245, 108, 108, 0.22);
+  background: rgba(245, 108, 108, 0.08);
+  color: #f56c6c;
+}
+
+.icon-btn.danger:hover {
+  background: rgba(245, 108, 108, 0.16);
+  border-color: rgba(245, 108, 108, 0.35);
+  color: #f56c6c;
+}
+
+.empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 60px 20px;
+  border-radius: 24px;
+  background: #fff;
+  border: 1px dashed rgba(107, 115, 255, 0.24);
+  color: #9aa1c4;
+}
+
+.empty-state .el-icon {
+  font-size: 40px;
+  color: rgba(107, 115, 255, 0.4);
+}
+
+.empty-state p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.profile-dialog :deep(.el-dialog) {
+  border-radius: 20px;
 }
 
 @media (max-width: 720px) {
-  .header-actions {
-    flex-wrap: wrap;
+  .profiles-page {
+    padding: 20px 16px 32px;
   }
 
-  .profiles-table :deep(.el-table__fixed-right) {
-    display: none;
+  .page-header {
+    margin: -20px -16px 20px -16px;
+    padding: 20px 16px;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .profiles-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
   }
 }
 </style>

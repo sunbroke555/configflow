@@ -7,6 +7,7 @@
       class="profile-select"
       :loading="loading"
       aria-label="当前配置 Profile"
+      popper-class="profile-select-popper"
       @change="handleChange"
     >
       <el-option
@@ -15,8 +16,10 @@
         :label="profile.name"
         :value="profile.id"
       >
-        <span>{{ profile.name }}</span>
-        <small>{{ profile.id }}</small>
+        <div class="profile-option">
+          <span class="profile-option-name">{{ profile.name }}</span>
+          <span class="profile-option-id">{{ profile.id }}</span>
+        </div>
       </el-option>
     </el-select>
     <el-button
@@ -70,34 +73,110 @@ onMounted(() => {
 .profile-switcher {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
+  padding: 4px 6px 4px 10px;
+  border-radius: 10px;
+  background: rgba(107, 115, 255, 0.05);
+  transition: background 0.3s ease;
+}
+
+.profile-switcher:hover {
+  background: rgba(107, 115, 255, 0.1);
 }
 
 .profile-icon {
-  color: #5b67d8;
+  color: #6b7dff;
+  font-size: 16px;
+  flex-shrink: 0;
 }
 
 .profile-select {
-  width: 158px;
+  width: 150px;
+}
+
+.profile-select :deep(.el-select__wrapper),
+.profile-select :deep(.el-input__wrapper) {
+  background: transparent;
+  box-shadow: none !important;
+  padding-left: 6px;
+  padding-right: 6px;
+  min-height: 28px;
+}
+
+.profile-select :deep(.el-select__placeholder),
+.profile-select :deep(.el-input__inner) {
+  color: #4a5bff;
+  font-weight: 600;
+  font-size: 13px;
 }
 
 .profile-manager-button {
-  color: #5b67d8;
+  color: #6b7dff;
+  padding: 4px;
+  height: 28px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
 }
 
-.profile-select small {
-  margin-left: 8px;
-  color: #909399;
+.profile-manager-button:hover {
+  color: #4a5bff;
+  background: rgba(107, 115, 255, 0.14);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 768px) {
+  .profile-switcher {
+    padding: 4px;
+    gap: 2px;
+  }
+
   .profile-icon {
     display: none;
   }
 
   .profile-select {
-    width: 128px;
+    width: 112px;
   }
+}
+</style>
+
+<style>
+.profile-select-popper {
+  border-radius: 14px !important;
+  border: 1px solid rgba(107, 115, 255, 0.15) !important;
+  box-shadow: 0 12px 32px rgba(65, 80, 180, 0.16) !important;
+}
+
+.profile-select-popper .el-select-dropdown__item {
+  height: auto;
+  padding: 8px 16px;
+  border-radius: 10px;
+  margin: 2px 6px;
+}
+
+.profile-select-popper .el-select-dropdown__item.is-selected {
+  background: rgba(107, 115, 255, 0.1);
+}
+
+.profile-select-popper .profile-option {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+
+.profile-select-popper .profile-option-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #30354d;
+}
+
+.profile-select-popper .el-select-dropdown__item.is-selected .profile-option-name {
+  color: #4a5bff;
+}
+
+.profile-select-popper .profile-option-id {
+  font-size: 11px;
+  color: #9aa1c4;
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
 }
 </style>
