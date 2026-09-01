@@ -126,20 +126,20 @@
             <el-icon><Setting /></el-icon>
             配置 Profile
           </div>
-          <el-select
-            :model-value="agent.profile_id || 'default'"
-            size="small"
-            popper-class="agent-profile-select-popper"
+          <select
+            class="agent-profile-native-select"
+            :value="agent.profile_id || 'default'"
             :disabled="bindingAgentId === agent.id"
-            @change="bindAgentProfile(agent, $event)"
+            @change="handleAgentProfileChange(agent, $event)"
           >
-            <el-option
+            <option
               v-for="profile in profileStore.profiles"
               :key="profile.id"
-              :label="profile.name"
               :value="profile.id"
-            />
-          </el-select>
+            >
+              {{ profile.name }}
+            </option>
+          </select>
         </div>
 
         <!-- 系统监控指标 -->
@@ -1333,19 +1333,29 @@ const loadAgents = async () => {
   }
 }
 
-const bindAgentProfile = async (agent: Agent, profileId: string) => {
+const bindAgentProfile = async (agent: Agent, profileId: string): Promise<boolean> => {
   const previousProfileId = agent.profile_id || 'default'
-  if (profileId === previousProfileId) return
+  if (profileId === previousProfileId) return true
   bindingAgentId.value = agent.id
   try {
     await agentApi.bindProfile(agent.id, profileId)
     agent.profile_id = profileId
     ElMessage.success('Agent 配置 Profile 已更新')
+    return true
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || 'Agent 配置 Profile 更新失败')
+    return false
   } finally {
     bindingAgentId.value = null
   }
+}
+
+const handleAgentProfileChange = async (agent: Agent, event: Event) => {
+  const select = event.target
+  if (!(select instanceof HTMLSelectElement)) return
+  const previousProfileId = agent.profile_id || 'default'
+  const updated = await bindAgentProfile(agent, select.value)
+  if (!updated) select.value = previousProfileId
 }
 
 // 格式化时间
@@ -2795,24 +2805,33 @@ onUnmounted(() => {
   color: #909399 !important;
 }
 
-:global(.agent-profile-select-popper.el-popper),
-:global(.agent-profile-select-popper .el-select-dropdown) {
-  background: #fff !important;
+.agent-profile-native-select {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  background-color: #fff;
+  color: #30354d;
+  -webkit-text-fill-color: #30354d;
+  color-scheme: light;
+  font-size: 14px;
+  cursor: pointer;
 }
 
-:global(.agent-profile-select-popper .el-select-dropdown__item),
-:global(.agent-profile-select-popper .el-select-dropdown__item span) {
-  color: #30354d !important;
+.agent-profile-native-select:focus {
+  border-color: #409eff;
+  outline: none;
 }
 
-:global(.agent-profile-select-popper .el-select-dropdown__item.is-hovering) {
-  background: rgba(107, 115, 255, 0.08) !important;
+.agent-profile-native-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
-:global(.agent-profile-select-popper .el-select-dropdown__item.is-selected),
-:global(.agent-profile-select-popper .el-select-dropdown__item.is-selected span) {
-  color: #000dff !important;
-  font-weight: 600;
+.agent-profile-native-select option {
+  background: #fff;
+  color: #30354d;
 }
 
 :deep(.el-input-number) {
