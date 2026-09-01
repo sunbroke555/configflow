@@ -33,3 +33,13 @@ def test_agent_profile_native_change_forwards_selected_profile_id():
     assert "await bindAgentProfile(agent, select.value)" in handler
     assert "select.value = previousProfileId" in handler
     assert "agent-profile-select-popper" not in source
+
+
+def test_agent_profile_options_bind_to_unwrapped_profiles_ref():
+    """模板里访问 useProfileStore() 返回对象的 ref 属性不会自动解包，
+    v-for 会遍历到 ref 自身的内部键，渲染出一批空白 <option>。"""
+    source = _agents_source()
+
+    assert 'const { profiles, refreshProfiles } = useProfileStore()' in source
+    assert 'v-for="profile in profiles"' in source
+    assert 'profileStore.profiles' not in source

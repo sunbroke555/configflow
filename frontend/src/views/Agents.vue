@@ -133,7 +133,7 @@
             @change="handleAgentProfileChange(agent, $event)"
           >
             <option
-              v-for="profile in profileStore.profiles"
+              v-for="profile in profiles"
               :key="profile.id"
               :value="profile.id"
             >
@@ -898,7 +898,7 @@ import VChart from 'vue-echarts'
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
 
 const agents = ref<Agent[]>([])
-const profileStore = useProfileStore()
+const { profiles, refreshProfiles } = useProfileStore()
 const bindingAgentId = ref<string | null>(null)
 const scriptDialogVisible = ref(false)
 const logsDialogVisible = ref(false)
@@ -2145,7 +2145,7 @@ const stopAutoRefresh = () => {
 
 onMounted(() => {
   loadAgents()
-  profileStore.refreshProfiles().catch(() => undefined)
+  refreshProfiles().catch(() => undefined)
   startAutoRefresh()
 })
 
