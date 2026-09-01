@@ -210,3 +210,73 @@ def test_rest_reorder_still_accepts_full_object_arrays(app_with_config):
             body={"groups": [{"id": "group-2", "name": "AUTO"}, {"id": "group-1", "name": "PROXY"}]},
         )
     assert _ids(repository, "proxy_groups") == ["group-2", "group-1"]
+
+
+def _schema(name):
+    return next(tool for tool in tools.list_tools() if tool["name"] == name)
+
+
+def test_tool_descriptions_use_real_field_names():
+    """工具描述里的字段名必须是后端真实字段，否则模型照着填会被静默忽略"""
+    group = _schema("manage_proxy_group")
+    text = group["description"] + json.dumps(group["inputSchema"], ensure_ascii=False)
+    for field in ("include_groups", "regex", "aggregation_regex", "follow_group", "manual_nodes"):
+        assert field in text, field
+    for fabricated in ("exclude_filter", "'filter'", "groups（引用的其他策略组名）"):
+        assert fabricated not in text, fabricated
+
+    node = _schema("manage_node")
+    node_text = node["description"] + json.dumps(node["inputSchema"], ensure_ascii=False)
+    assert "proxy_string" in node_text
+    assert "cipher" not in node_text and "uuid" not in node_text
+
+    agg_text = json.dumps(_schema("manage_aggregation"), ensure_ascii=False)
+    assert "regex_filter" in agg_text and "exclude_keywords" not in agg_text
+
+    sub_text = json.dumps(_schema("manage_subscription"), ensure_ascii=False)
+    assert "health_check_url" in sub_text and "exclude_keywords" not in sub_text
+
+    lib_text = json.dumps(_schema("manage_rule_library"), ensure_ascii=False)
+    assert "format（yaml / text）" not in lib_text
+
+
+def test_proxy_group_edit_round_trip_with_real_fields(app_with_config):
+    """按工具描述里的字段名编辑策略组，改动必须真的落到配置里"""
+    app, repository = app_with_config
+    with app.app_context():
+        created = tools.call_tool(
+            "manage_proxy_group",
+            {
+                "action": "create",
+                "data": {
+                    "name": "AUTO-HK",
+                    "type": "url-test",
+                    "enabled": True,
+                    "subscriptions": ["sub-1"],
+                    "regex": "HK|香港",
+                    "include_groups": ["group-1"],
+                    "manual_nodes": ["DIRECT"],
+                },
+            },
+        )
+        group_id = created["item"]["id"]
+        tools.call_tool(
+            "manage_proxy_group",
+            {"action": "update", "id": group_id, "data": {"regex": "SG|新加坡", "interval": 600}},
+        )
+    stored = {g["id"]: g for g in repository.get_profile("default")["proxy_groups"]}[group_id]
+    assert stored["regex"] == "SG|新加坡"
+    assert stored["include_groups"] == ["group-1"]
+    assert stored["subscriptions"] == ["sub-1"]
+    assert stored["interval"] == 600
+
+
+def test_node_create_uses_proxy_string(app_with_config):
+    app, repository = app_with_config
+    with app.app_context():
+        created = tools.call_tool(
+            "manage_node",
+            {"action": "create", "data": {"name": "HK-01", "proxy_string": "ss://abc@1.2.3.4:443", "enabled": True}},
+        )
+    stored = {n["id"]: n for n in repository.get_profile("default").get("nodes", [])}
+    assert stored[created["item"]["id"]]["proxy_string"] == "ss://abc@1.2.3.4:443"

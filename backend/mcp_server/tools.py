@@ -347,9 +347,9 @@ def _list_subscriptions(args):
             'action': ACTION,
             'id': string('订阅 id，update / delete 时必填'),
             'data': free_object(
-                '订阅字段，如 name（名称）、url（订阅链接）、type'
-                '（mihomo / surge / general）、enabled（是否启用）、udp、'
-                'exclude_keywords（排除关键字）'
+                '订阅字段：name（名称）、url（订阅链接）、type（mihomo / surge / general）、'
+                'enabled（是否启用）、interval（更新间隔秒）、'
+                'health_check_url（健康检查地址，留空用默认）'
             ),
         },
         ['action'],
@@ -405,14 +405,15 @@ def _list_aggregations(args):
 @tool(
     'manage_aggregation',
     '创建、更新或删除订阅聚合。create 时 data 至少包含 name；'
-    'subscriptions 为订阅 id 列表，nodes 为手动节点 id 列表。',
+    'subscriptions 为订阅 id 列表，nodes 为手动节点 id 列表；'
+    '筛选正则字段名是 regex_filter。',
     obj(
         {
             'action': ACTION,
             'id': string('聚合 id，update / delete 时必填'),
             'data': free_object(
-                '聚合字段，如 name、subscriptions（订阅 id 数组）、'
-                'nodes（手动节点 id 数组）、enabled、exclude_keywords'
+                '聚合字段：name、subscriptions（订阅 id 数组）、nodes（手动节点 id 数组）、'
+                'regex_filter（节点名筛选正则）、description、enabled、health_check_url'
             ),
         },
         ['action'],
@@ -481,15 +482,17 @@ def _list_nodes(args):
 
 @tool(
     'manage_node',
-    '创建、更新或删除手动节点。create 时 data 至少包含 name、type、server、port；'
-    'type 支持 ss / ssr / vmess / trojan / hysteria / hysteria2。',
+    '创建、更新或删除手动节点。create 时 data 至少包含 name 和 proxy_string；'
+    'proxy_string 是完整的节点链接（ss:// / vmess:// / trojan:// / hysteria2:// 等），'
+    '也可以是 mihomo 的结构化 proxy（YAML / JSON 文本）。协议、服务器、端口都从中解析，'
+    '不要拆成 server / port / password 之类的独立字段。',
     obj(
         {
             'action': ACTION,
             'id': string('节点 id，update / delete 时必填'),
             'data': free_object(
-                '节点字段，如 name、type、server、port、password、uuid、'
-                'cipher、enabled，以及各协议特有字段'
+                '节点字段：name（节点名）、proxy_string（节点链接或结构化 proxy 文本）、'
+                'enabled、remark（备注）'
             ),
         },
         ['action'],
@@ -522,8 +525,9 @@ def _list_rules(args):
             'action': ACTION,
             'id': string('规则 id，update / delete 时必填'),
             'data': free_object(
-                '规则字段，如 itemType（rule / ruleset）、rule_type、value、'
-                'policy（目标策略组名）、name、url、library_rule_id、enabled'
+                '规则字段：itemType（rule / ruleset）、rule_type、value、'
+                'policy（目标策略组名）、enabled、no_resolve、remark、group_name；'
+                'ruleset 另有 name、url、behavior、library_rule_id'
             ),
             'position': string(
                 'create 时新规则放在列表哪一端，默认 top（优先级最高）',
@@ -609,8 +613,8 @@ def _list_rule_library(args):
             'action': ACTION,
             'id': string('规则仓库条目 id，update / delete 时必填'),
             'data': free_object(
-                '条目字段，如 name、source_type（url / content）、url、content、'
-                'behavior（domain / ipcidr / classical）、format（yaml / text）、enabled'
+                '条目字段：name、source_type（url / content）、url、content、'
+                'behavior（domain / ipcidr / classical）、enabled'
             ),
         },
         ['action'],
@@ -666,16 +670,25 @@ def _list_proxy_groups(args):
     'manage_proxy_group',
     '创建、更新或删除策略组。create 时 data 至少包含 name 和 type；'
     'type 支持 select（手动选择）、url-test（自动测速）、fallback（故障转移）、'
-    'load-balance（负载均衡）、relay。',
+    'load-balance（负载均衡）、relay。'
+    '节点来源可以是订阅（subscriptions + regex）、聚合（aggregations + aggregation_regex）、'
+    '手动节点（manual_nodes）或引用其他策略组（include_groups），可组合使用；'
+    'follow_group 则表示整体跟随另一个策略组。'
+    '引用类字段填的都是 id，不是名称。',
     obj(
         {
             'action': ACTION,
             'id': string('策略组 id，update / delete 时必填'),
             'data': free_object(
-                '策略组字段，如 name、type、subscriptions（订阅 id 数组）、'
-                'aggregations（聚合 id 数组）、manual_nodes（节点 id 数组）、'
-                'groups（引用的其他策略组名）、filter（节点名筛选正则）、'
-                'exclude_filter、url、interval、enabled'
+                '策略组字段：name、type、enabled、'
+                'subscriptions（订阅 id 数组）、regex（订阅节点名筛选正则）、'
+                'aggregations（聚合 id 数组）、aggregation_regex（聚合节点名筛选正则）、'
+                'manual_nodes（节点 id 数组，DIRECT / REJECT 直接用名称）、'
+                'include_groups（引用的其他策略组 id 数组）、'
+                'follow_group（跟随的策略组 id）、proxies_order（节点顺序）、'
+                'url（测试地址）、interval（测试间隔秒）、'
+                'strategy（load-balance 的 round-robin / consistent-hashing / sticky-sessions）、'
+                'lazy（懒加载）'
             ),
         },
         ['action'],
