@@ -495,6 +495,11 @@ def _fetch_remote_content(url: str) -> str:
 def _require_rule_proxy_auth():
     from backend.common.auth import is_token_within_length, parse_bearer_token, verify_token
     from backend.common.config import get_repository
+    from backend.common.internal_call import is_internal_call
+
+    # MCP 层发起的进程内调用，认证已在 /mcp 入口完成（与 validate_token_or_jwt 一致）
+    if is_internal_call():
+        return True
     system_config = config_data.get('system_config', {})
     config_token = system_config.get('config_token', '')
     rule_proxy_token = system_config.get('rule_proxy_token', '')

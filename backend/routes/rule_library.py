@@ -8,6 +8,7 @@ from flask import Blueprint
 from backend.common.auth import require_auth
 from backend.common.config import config_data, save_config, get_config, update_config_transaction
 from backend.common.profile_context import profile_api_path, resolve_profile_id
+from backend.utils.reorder import resolve_new_order
 from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local
 from backend.utils.logger import get_logger
 
@@ -201,12 +202,19 @@ def handle_rule_library_item(rule_id):
 @rule_library_bp.route('/reorder', methods=['POST'])
 @require_auth
 def reorder_rule_library():
-    """批量更新规则仓库顺序"""
+    """批量更新规则仓库顺序
+
+    按 id 排序时传 {'ids': [...], 'position': 'top'|'bottom'}；
+    传完整对象数组的旧格式仍然兼容。
+    """
     try:
-        new_order = request.json.get('rules', [])
+        body = request.json or {}
+        new_order, missing = resolve_new_order(config_data.get('rule_library', []), body, 'rules')
+        if missing:
+            return jsonify({'success': False, 'message': f'以下规则仓库 id 不存在: {missing}'}), 404
         config_data['rule_library'] = new_order
         save_config()
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'order': [r.get('id') for r in new_order]})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

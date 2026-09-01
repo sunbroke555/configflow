@@ -7,6 +7,7 @@ import yaml
 from backend.routes import subscriptions_bp
 from backend.common.auth import require_auth, validate_token_or_jwt
 from backend.common.config import get_config, save_config, update_config_transaction
+from backend.utils.reorder import resolve_new_order
 from backend.utils.subscription_cache import (
     load_subscription_cache,
     save_subscription_nodes,
@@ -127,10 +128,13 @@ def reorder_subscriptions():
     """批量更新订阅顺序"""
     try:
         config_data = get_config()
-        new_order = request.json.get('subscriptions', [])
+        body = request.json or {}
+        new_order, missing = resolve_new_order(config_data.get('subscriptions', []), body, 'subscriptions')
+        if missing:
+            return jsonify({'success': False, 'message': f'以下订阅 id 不存在: {missing}'}), 404
         config_data['subscriptions'] = new_order
         save_config()
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'order': [s.get('id') for s in new_order]})
     except Exception as e:
         current_app.logger.error("订阅操作失败: %s", safe_exception_details(e))
         return jsonify({'success': False, 'message': '订阅操作失败'}), 500

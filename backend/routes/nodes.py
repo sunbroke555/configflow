@@ -5,6 +5,7 @@ import uuid
 from backend.routes import nodes_bp
 from backend.common.auth import require_auth
 from backend.common.config import get_config, save_config, update_config_transaction
+from backend.utils.reorder import resolve_new_order
 
 
 def clean_aggregations_node(node_id):
@@ -107,9 +108,12 @@ def reorder_nodes():
     """批量更新节点顺序"""
     try:
         config_data = get_config()
-        new_order = request.json.get('nodes', [])
+        body = request.json or {}
+        new_order, missing = resolve_new_order(config_data.get('nodes', []), body, 'nodes')
+        if missing:
+            return jsonify({'success': False, 'message': f'以下节点 id 不存在: {missing}'}), 404
         config_data['nodes'] = new_order
         save_config()
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'order': [n.get('id') for n in new_order]})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
