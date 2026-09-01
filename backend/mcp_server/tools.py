@@ -70,7 +70,7 @@ def obj(properties: Dict[str, Any], required: Optional[List[str]] = None) -> Dic
     properties = dict(properties)
     properties.setdefault(
         'profile_id',
-        {'type': 'string', 'description': '目标 profile id；留空使用 active/default profile'},
+        {'type': 'string', 'description': "目标 profile id；留空使用 'default' profile（不跟随界面上激活的 profile）"},
     )
     return {
         'type': 'object',
@@ -181,10 +181,69 @@ def _crud(
     raise ApiError(400, f"不支持的 action: {action}")
 
 
+# collection -> reorder 接口路径。排序按 id 提交，由服务端在存量数据上重排，
+# 避免把列表接口加工过的展示数据（拼过域名的 URL、缓存计数、脱敏字段）回写进配置。
+_REORDER_COLLECTIONS = {
+    'subscriptions': '/api/subscriptions/reorder',
+    'nodes': '/api/nodes/reorder',
+    'rules': '/api/rules/reorder',
+    'rule_library': '/api/rule-library/reorder',
+    'proxy_groups': '/api/proxy-groups/reorder',
+}
+_REORDER_NAMES = list(_REORDER_COLLECTIONS)
+
+
+def _reorder(collection: str, ids: List[str], position: str) -> Dict[str, Any]:
+    if collection not in _REORDER_COLLECTIONS:
+        raise ApiError(400, f"不支持的 collection: {collection}，可选 {_REORDER_NAMES}")
+    if position not in ('top', 'bottom'):
+        raise ApiError(400, "position 必须是 'top' 或 'bottom'")
+    if not ids:
+        raise ApiError(400, '需要提供至少一个 id')
+    if len(set(ids)) != len(ids):
+        raise ApiError(400, 'ids 中存在重复项')
+
+    result = call_api(
+        'POST',
+        _REORDER_COLLECTIONS[collection],
+        body={'ids': ids, 'position': position},
+    )
+    return {
+        'collection': collection,
+        'position': position,
+        'moved': ids,
+        'order': (result or {}).get('order'),
+    }
+
+
 def _unwrap(result: Any, fallback: Any) -> Any:
     if isinstance(result, dict) and 'data' in result:
         return result['data']
     return fallback
+
+
+# ================================================================ 排序
+
+@tool(
+    'reorder_items',
+    '调整集合内条目的顺序。ids 里的条目按给定顺序整体移到最前（position=top，默认）'
+    '或最后（position=bottom），未列出的条目保持原有相对顺序。'
+    '规则顺序即匹配优先级，策略组顺序即客户端里的展示顺序。',
+    obj(
+        {
+            'collection': string('目标集合', _REORDER_NAMES),
+            'ids': array('要移动的条目 id，按目标先后顺序排列'),
+            'position': string('移动到集合的哪一端，默认 top', ['top', 'bottom']),
+        },
+        ['collection', 'ids'],
+    ),
+)
+def _reorder_items(args):
+    return _reorder(
+        _require(args, 'collection'),
+        _require(args, 'ids'),
+        args.get('position', 'top'),
+    )
 
 
 # ================================================================ Profiles
@@ -288,9 +347,9 @@ def _list_subscriptions(args):
             'action': ACTION,
             'id': string('订阅 id，update / delete 时必填'),
             'data': free_object(
-                '订阅字段，如 name（名称）、url（订阅链接）、type'
-                '（mihomo / surge / general）、enabled（是否启用）、udp、'
-                'exclude_keywords（排除关键字）'
+                '订阅字段：name（名称）、url（订阅链接）、type（mihomo / surge / general）、'
+                'enabled（是否启用）、interval（更新间隔秒）、'
+                'health_check_url（健康检查地址，留空用默认）'
             ),
         },
         ['action'],
@@ -346,14 +405,15 @@ def _list_aggregations(args):
 @tool(
     'manage_aggregation',
     '创建、更新或删除订阅聚合。create 时 data 至少包含 name；'
-    'subscriptions 为订阅 id 列表，nodes 为手动节点 id 列表。',
+    'subscriptions 为订阅 id 列表，nodes 为手动节点 id 列表；'
+    '筛选正则字段名是 regex_filter。',
     obj(
         {
             'action': ACTION,
             'id': string('聚合 id，update / delete 时必填'),
             'data': free_object(
-                '聚合字段，如 name、subscriptions（订阅 id 数组）、'
-                'nodes（手动节点 id 数组）、enabled、exclude_keywords'
+                '聚合字段：name、subscriptions（订阅 id 数组）、nodes（手动节点 id 数组）、'
+                'regex_filter（节点名筛选正则）、description、enabled、health_check_url'
             ),
         },
         ['action'],
@@ -386,19 +446,26 @@ def _manage_aggregation(args):
 
 @tool(
     'preview_aggregation',
-    '预览聚合最终产出的节点列表与节点数，用于确认筛选规则是否符合预期。',
+    '预览聚合最终产出的节点列表与节点数，用于确认筛选规则是否符合预期。'
+    'mode=count 只返回节点数量，mode=provider 返回给客户端用的 provider YAML 文本。',
     obj(
         {
             'id': string('聚合 id'),
-            'count_only': boolean('只返回节点数量，默认 false'),
+            'mode': string('返回内容，默认 nodes', ['nodes', 'count', 'provider']),
+            'count_only': boolean('等价于 mode=count，保留兼容'),
         },
         ['id'],
     ),
 )
 def _preview_aggregation(args):
     agg_id = _require(args, 'id')
-    if args.get('count_only'):
+    mode = 'count' if args.get('count_only') else args.get('mode', 'nodes')
+    if mode == 'count':
         return call_api('GET', f"/api/aggregations/{agg_id}/count")
+    if mode == 'provider':
+        return {'id': agg_id, 'provider': call_api('GET', f"/api/aggregations/{agg_id}/provider")}
+    if mode != 'nodes':
+        raise ApiError(400, f"不支持的 mode: {mode}")
     return call_api('GET', f"/api/aggregations/{agg_id}/preview")
 
 
@@ -415,15 +482,17 @@ def _list_nodes(args):
 
 @tool(
     'manage_node',
-    '创建、更新或删除手动节点。create 时 data 至少包含 name、type、server、port；'
-    'type 支持 ss / ssr / vmess / trojan / hysteria / hysteria2。',
+    '创建、更新或删除手动节点。create 时 data 至少包含 name 和 proxy_string；'
+    'proxy_string 是完整的节点链接（ss:// / vmess:// / trojan:// / hysteria2:// 等），'
+    '也可以是 mihomo 的结构化 proxy（YAML / JSON 文本）。协议、服务器、端口都从中解析，'
+    '不要拆成 server / port / password 之类的独立字段。',
     obj(
         {
             'action': ACTION,
             'id': string('节点 id，update / delete 时必填'),
             'data': free_object(
-                '节点字段，如 name、type、server、port、password、uuid、'
-                'cipher、enabled，以及各协议特有字段'
+                '节点字段：name（节点名）、proxy_string（节点链接或结构化 proxy 文本）、'
+                'enabled、remark（备注）'
             ),
         },
         ['action'],
@@ -449,14 +518,20 @@ def _list_rules(args):
     'manage_rule',
     '创建、更新或删除一条规则或规则集。'
     'itemType=rule 时 data 需含 rule_type（如 DOMAIN-SUFFIX / IP-CIDR）、value、policy；'
-    'itemType=ruleset 时 data 需含 name、policy，以及 url 或 library_rule_id。',
+    'itemType=ruleset 时 data 需含 name、policy，以及 url 或 library_rule_id。'
+    '新建的规则默认插在列表最前（优先级最高），要放到最后传 position=bottom。',
     obj(
         {
             'action': ACTION,
             'id': string('规则 id，update / delete 时必填'),
             'data': free_object(
-                '规则字段，如 itemType（rule / ruleset）、rule_type、value、'
-                'policy（目标策略组名）、name、url、library_rule_id、enabled'
+                '规则字段：itemType（rule / ruleset）、rule_type、value、'
+                'policy（目标策略组名）、enabled、no_resolve、remark、group_name；'
+                'ruleset 另有 name、url、behavior、library_rule_id'
+            ),
+            'position': string(
+                'create 时新规则放在列表哪一端，默认 top（优先级最高）',
+                ['top', 'bottom'],
             ),
         },
         ['action'],
@@ -465,7 +540,15 @@ def _list_rules(args):
 def _manage_rule(args):
     data = args.get('data') or {}
     prefix = 'ruleset' if data.get('itemType') == 'ruleset' else 'rule'
-    return _crud(args, '/api/rules', prefix, '规则')
+    result = _crud(args, '/api/rules', prefix, '规则')
+    # 后端 POST /api/rules 固定插到队首，要放队尾就创建后再移一次
+    position = args.get('position', 'top')
+    if result.get('action') == 'create' and position == 'bottom':
+        new_id = (result.get('item') or {}).get('id')
+        if new_id:
+            _reorder('rules', [new_id], 'bottom')
+            result['position'] = 'bottom'
+    return result
 
 
 @tool(
@@ -530,8 +613,8 @@ def _list_rule_library(args):
             'action': ACTION,
             'id': string('规则仓库条目 id，update / delete 时必填'),
             'data': free_object(
-                '条目字段，如 name、source_type（url / content）、url、content、'
-                'behavior（domain / ipcidr / classical）、format（yaml / text）、enabled'
+                '条目字段：name、source_type（url / content）、url、content、'
+                'behavior（domain / ipcidr / classical）、enabled'
             ),
         },
         ['action'],
@@ -539,6 +622,25 @@ def _list_rule_library(args):
 )
 def _manage_rule_library(args):
     return _crud(args, '/api/rule-library', 'lib', '规则仓库条目')
+
+
+@tool(
+    'get_rule_library_content',
+    '读取规则仓库中 source_type=content 的条目正文（URL 类型的条目没有正文）。',
+    obj({'id': string('规则仓库条目 id')}, ['id']),
+)
+def _get_rule_library_content(args):
+    rule_id = _require(args, 'id')
+    return {'id': rule_id, 'content': call_api('GET', f"/api/rule-library/content/{rule_id}")}
+
+
+@tool(
+    'cache_rule_library',
+    '把指定的 URL 类型规则仓库条目拉取并缓存到本地，之后生成配置可离线引用。',
+    obj({'ids': array('要缓存的规则仓库条目 id 列表')}, ['ids']),
+)
+def _cache_rule_library(args):
+    return call_api('POST', '/api/rule-library/cache', body={'rule_ids': _require(args, 'ids')})
 
 
 @tool(
@@ -568,16 +670,25 @@ def _list_proxy_groups(args):
     'manage_proxy_group',
     '创建、更新或删除策略组。create 时 data 至少包含 name 和 type；'
     'type 支持 select（手动选择）、url-test（自动测速）、fallback（故障转移）、'
-    'load-balance（负载均衡）、relay。',
+    'load-balance（负载均衡）、relay。'
+    '节点来源可以是订阅（subscriptions + regex）、聚合（aggregations + aggregation_regex）、'
+    '手动节点（manual_nodes）或引用其他策略组（include_groups），可组合使用；'
+    'follow_group 则表示整体跟随另一个策略组。'
+    '引用类字段填的都是 id，不是名称。',
     obj(
         {
             'action': ACTION,
             'id': string('策略组 id，update / delete 时必填'),
             'data': free_object(
-                '策略组字段，如 name、type、subscriptions（订阅 id 数组）、'
-                'aggregations（聚合 id 数组）、manual_nodes（节点 id 数组）、'
-                'groups（引用的其他策略组名）、filter（节点名筛选正则）、'
-                'exclude_filter、url、interval、enabled'
+                '策略组字段：name、type、enabled、'
+                'subscriptions（订阅 id 数组）、regex（订阅节点名筛选正则）、'
+                'aggregations（聚合 id 数组）、aggregation_regex（聚合节点名筛选正则）、'
+                'manual_nodes（节点 id 数组，DIRECT / REJECT 直接用名称）、'
+                'include_groups（引用的其他策略组 id 数组）、'
+                'follow_group（跟随的策略组 id）、proxies_order（节点顺序）、'
+                'url（测试地址）、interval（测试间隔秒）、'
+                'strategy（load-balance 的 round-robin / consistent-hashing / sticky-sessions）、'
+                'lazy（懒加载）'
             ),
         },
         ['action'],
@@ -689,12 +800,15 @@ def _generate_config(args):
 
 @tool(
     'manage_config_backup',
-    '导出、导入或重置 ConfigFlow 的整份配置。'
-    'export 返回完整配置 JSON；import 用 data 覆盖当前配置；reset 恢复出厂设置。',
+    '导出、导入或重置 ConfigFlow 配置。'
+    'export 返回配置 JSON；import 用 data 覆盖；reset 恢复出厂设置。'
+    'scope=system（默认）作用于整份配置，scope=profile 只作用于 profile_id 指定的那份 profile'
+    '（profile 粒度不支持 reset）。',
     obj(
         {
             'action': string('操作类型', ['export', 'import', 'reset']),
-            'data': free_object('import 时要导入的完整配置 JSON'),
+            'scope': string('作用范围，默认 system', ['system', 'profile']),
+            'data': free_object('import 时要导入的配置 JSON'),
             'desensitize': boolean('export 时脱敏订阅 URL 与节点凭证，默认 false'),
         },
         ['action'],
@@ -702,6 +816,21 @@ def _generate_config(args):
 )
 def _manage_config_backup(args):
     action = _require(args, 'action')
+    scope = args.get('scope', 'system')
+    if scope not in ('system', 'profile'):
+        raise ApiError(400, f"不支持的 scope: {scope}")
+
+    if scope == 'profile':
+        profile_id = args.get('profile_id') or 'default'
+        if action == 'export':
+            return call_api('GET', f"/api/profiles/{profile_id}/export")
+        if action == 'import':
+            data = args.get('data')
+            if not data:
+                raise ApiError(400, '导入配置需要提供 data')
+            return call_api('POST', f"/api/profiles/{profile_id}/import", body=data)
+        raise ApiError(400, f"scope=profile 不支持 action: {action}")
+
     if action == 'export':
         return call_api('GET', '/api/config/export', query={'desensitize': args.get('desensitize')})
     if action == 'import':
@@ -748,12 +877,17 @@ def _get_agent(args):
     'manage_agent',
     '对 Agent 执行管理操作：update（修改配置字段）、delete（从列表移除）、'
     'restart（重启被管服务）、push_config（把最新配置推送到 Agent）、'
-    'uninstall（远程卸载）、upgrade（升级 Agent 到最新版本）。',
+    'uninstall（远程卸载）、upgrade（升级 Agent 到最新版本）、'
+    'clear_log（清空指定日志文件，需 log_path）、validate_log_path（校验日志路径，需 log_path）、'
+    'get_logging（读取日志采集开关）、set_logging（开关日志采集，需 enabled）。',
     obj(
         {
             'action': string(
                 '操作类型',
-                ['update', 'delete', 'restart', 'push_config', 'uninstall', 'upgrade'],
+                [
+                    'update', 'delete', 'restart', 'push_config', 'uninstall', 'upgrade',
+                    'clear_log', 'validate_log_path', 'get_logging', 'set_logging',
+                ],
             ),
             'id': string('Agent id'),
             'data': free_object(
@@ -761,6 +895,8 @@ def _get_agent(args):
                 '配置路径、重启命令等属于 Agent 端的安装参数，需在 Agent 侧调整'
             ),
             'base_url': string('push_config 时 Agent 回取配置用的服务地址，留空自动推断'),
+            'log_path': string('clear_log / validate_log_path 时的日志文件路径'),
+            'enabled': boolean('set_logging 时是否启用日志采集'),
         },
         ['action', 'id'],
     ),
@@ -790,6 +926,28 @@ def _manage_agent(args):
         return call_api('POST', f"/api/agents/{agent_id}/uninstall", body={})
     if action == 'upgrade':
         return call_api('POST', f"/api/agents/{agent_id}/update", body={})
+    if action == 'clear_log':
+        return call_api(
+            'POST',
+            f"/api/agents/{agent_id}/logs/clear",
+            body={'log_path': _require(args, 'log_path')},
+        )
+    if action == 'validate_log_path':
+        return call_api(
+            'POST',
+            f"/api/agents/{agent_id}/logs/validate",
+            body={'path': _require(args, 'log_path')},
+        )
+    if action == 'get_logging':
+        return call_api('GET', f"/api/agents/{agent_id}/config/logging")
+    if action == 'set_logging':
+        if 'enabled' not in args:
+            raise ApiError(400, 'set_logging 需要提供 enabled')
+        return call_api(
+            'POST',
+            f"/api/agents/{agent_id}/config/logging",
+            body={'enabled': bool(args['enabled'])},
+        )
     raise ApiError(400, f"不支持的 action: {action}")
 
 
@@ -842,6 +1000,40 @@ def _get_agent_metrics(args):
         raise ApiError(400, f"不支持的 scope: {scope}")
     suffix, query = paths[scope]
     return call_api('GET', f"/api/agents/{agent_id}{suffix}", query=query)
+
+
+# method -> 生成接口路径
+_AGENT_INSTALL_ENDPOINTS = {
+    'install_script': '/api/agents/install-script',
+    'docker_compose': '/api/agents/docker-agent-compose',
+    'docker_run': '/api/agents/docker-agent-run',
+    'latest_version': '/api/agents/latest-version',
+}
+
+
+@tool(
+    'get_agent_install_info',
+    '获取新增 Agent 所需的安装物料：install_script（一键安装脚本）、'
+    'docker_compose（compose 文件）、docker_run（docker run 命令）、'
+    'latest_version（最新 Agent 版本号）。',
+    obj(
+        {
+            'method': string('要获取的物料', list(_AGENT_INSTALL_ENDPOINTS)),
+            'params': free_object(
+                '生成参数（作为 query 传给后端），如 server_url、name / agent_name、'
+                'type（mihomo / mosdns）、port、agent_ip、config_path、restart_command、'
+                'agent_type（go / shell）、data_dir、network_mode、enable_mihomo、enable_mosdns'
+            ),
+        },
+        ['method'],
+    ),
+)
+def _get_agent_install_info(args):
+    method = _require(args, 'method')
+    if method not in _AGENT_INSTALL_ENDPOINTS:
+        raise ApiError(400, f"不支持的 method: {method}")
+    result = call_api('GET', _AGENT_INSTALL_ENDPOINTS[method], query=args.get('params') or {})
+    return result if isinstance(result, dict) else {'method': method, 'content': result}
 
 
 # ================================================================ MosDNS
@@ -900,6 +1092,17 @@ def _update_mosdns_settings(args):
     return call_api('POST', path, body=merged)
 
 
+@tool(
+    'convert_mosdns_rule',
+    '把一个远程规则文件（Clash / list 格式）转换成 MosDNS 域名规则格式并返回文本，'
+    '用于确认某个规则源能否被 MosDNS 正确解析。',
+    obj({'url': string('规则文件地址')}, ['url']),
+)
+def _convert_mosdns_rule(args):
+    url = _require(args, 'url')
+    return {'url': url, 'content': call_api('GET', '/api/mosdns/rule-proxy', query={'url': url})}
+
+
 # ================================================================ 系统
 
 # section -> (GET 路径, POST 路径, GET 响应字段 -> POST 请求字段)
@@ -913,6 +1116,7 @@ _SETTING_SECTIONS = {
         {},
     ),
     'backup': ('/api/backup/config', '/api/backup/config', {}),
+    'github_proxy': ('/api/rule-library/proxy-domains', '/api/rule-library/proxy-domains', {}),
     'version': ('/api/version', None, {}),
 }
 _SETTING_SECTION_NAMES = list(_SETTING_SECTIONS)
@@ -932,7 +1136,8 @@ def _get_overview(args):
     'get_settings',
     '读取系统设置。section 对应：server_domain（对外域名）、config_token（订阅链接令牌）、'
     'sub_store_url（Sub-Store 地址）、subscription_aggregation（聚合功能开关）、'
-    'backup（WebDAV 备份配置）、version（版本信息）。留空返回全部。',
+    'backup（WebDAV 备份配置）、github_proxy（GitHub 规则源加速域名）、'
+    'version（版本信息）。留空返回全部。',
     obj({'section': string('设置分区，留空返回全部', _SETTING_SECTION_NAMES)}),
 )
 def _get_settings(args):
@@ -949,7 +1154,8 @@ def _get_settings(args):
     '更新系统设置。server_domain 传 {"server_domain": "..."}；'
     'config_token 传 {"config_token": "..."} 或 {"generate": true} 生成随机令牌；'
     'subscription_aggregation 传 {"enabled": true/false}；'
-    'backup 传 webdav_url / webdav_username / webdav_password / webdav_path / auto_backup。',
+    'backup 传 webdav_url / webdav_username / webdav_password / webdav_path / auto_backup；'
+    'github_proxy 传 {"proxy_domains": "https://ghproxy.example.com/"}，传空字符串表示关闭。',
     obj(
         {
             'section': string(
@@ -1024,6 +1230,20 @@ def _get_app_logs(args):
             'level': args.get('level'),
         },
     )
+
+
+@tool(
+    'manage_app_logs',
+    '查看服务端日志文件信息（大小、修改时间）或清空日志文件。读日志内容用 get_app_logs。',
+    obj({'action': string('操作类型', ['info', 'clear'])}, ['action']),
+)
+def _manage_app_logs(args):
+    action = _require(args, 'action')
+    if action == 'info':
+        return call_api('GET', '/api/logs/info')
+    if action == 'clear':
+        return call_api('POST', '/api/logs/clear', body={})
+    raise ApiError(400, f"不支持的 action: {action}")
 
 
 @tool(

@@ -15,6 +15,7 @@ from backend.common.config import (
 )
 from backend.common.profile_context import profile_api_path, resolve_profile_id
 from backend.utils.rule_matcher import parse_rule_line, match_query, is_valid_domain, is_valid_ip
+from backend.utils.reorder import reorder_by_ids
 from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
 from backend.utils.logger import get_logger
 from backend.utils.url_utils import safe_exception_details, safe_url_for_log
@@ -151,28 +152,45 @@ def handle_rule(rule_id):
 @bp.route('/reorder', methods=['POST'])
 @require_auth
 def reorder_rules():
-    """批量更新规则和规则集顺序"""
+    """批量更新规则和规则集顺序
+
+    按 id 排序时传 {'ids': [...], 'position': 'top'|'bottom'}；
+    传完整 rule_configs 数组的旧格式仍然兼容。
+    """
     try:
         # 检查请求体是否存在
         if not request.json:
             logger.warning("Reorder request with no JSON body")
             return jsonify({'success': False, 'message': 'No request body provided'}), 400
 
-        rule_configs = request.json.get('rule_configs')
+        body = request.json
+        ids = body.get('ids')
 
-        # 检查 rule_configs 是否存在且为列表
-        if rule_configs is None:
-            logger.warning("Reorder request with no rule_configs field")
-            return jsonify({'success': False, 'message': 'No rule_configs provided'}), 400
+        if ids is not None:
+            if not isinstance(ids, list):
+                logger.warning(f"Reorder request with invalid ids type: {type(ids)}")
+                return jsonify({'success': False, 'message': 'ids must be a list'}), 400
+            rule_configs, missing = reorder_by_ids(
+                config_data.get('rule_configs', []), ids, body.get('position', 'top')
+            )
+            if missing:
+                return jsonify({'success': False, 'message': f'以下规则 id 不存在: {missing}'}), 404
+        else:
+            rule_configs = body.get('rule_configs')
 
-        if not isinstance(rule_configs, list):
-            logger.warning(f"Reorder request with invalid rule_configs type: {type(rule_configs)}")
-            return jsonify({'success': False, 'message': 'rule_configs must be a list'}), 400
+            # 检查 rule_configs 是否存在且为列表
+            if rule_configs is None:
+                logger.warning("Reorder request with no rule_configs field")
+                return jsonify({'success': False, 'message': 'No rule_configs provided'}), 400
+
+            if not isinstance(rule_configs, list):
+                logger.warning(f"Reorder request with invalid rule_configs type: {type(rule_configs)}")
+                return jsonify({'success': False, 'message': 'rule_configs must be a list'}), 400
 
         config_data['rule_configs'] = rule_configs
         save_config()
         logger.info(f"Successfully reordered {len(rule_configs)} rules")
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'order': [r.get('id') for r in rule_configs]})
     except Exception as e:
         logger.error("Error reordering rules: %s", safe_exception_details(e))
         return jsonify({'success': False, 'message': 'Error reordering rules'}), 500
