@@ -55,22 +55,22 @@ type CustomFileItem struct {
 
 // Config 结构体定义
 type Config struct {
-	ServerURL          string `json:"server_url"`
-	AgentName          string `json:"agent_name"`
-	AgentHost          string `json:"agent_host"`
-	AgentPort          int    `json:"agent_port"`
-	AgentIP            string `json:"agent_ip,omitempty"`
-	ServiceType        string `json:"service_type"`
-	ServiceName        string `json:"service_name"`
-	ConfigPath         string `json:"config_path"`
-	RestartCommand     string `json:"restart_command"`
-	HeartbeatInterval  int    `json:"heartbeat_interval"`
-	AgentID            string `json:"agent_id,omitempty"`
-	Token              string `json:"token,omitempty"`
+	ServerURL         string `json:"server_url"`
+	AgentName         string `json:"agent_name"`
+	AgentHost         string `json:"agent_host"`
+	AgentPort         int    `json:"agent_port"`
+	AgentIP           string `json:"agent_ip,omitempty"`
+	ServiceType       string `json:"service_type"`
+	ServiceName       string `json:"service_name"`
+	ConfigPath        string `json:"config_path"`
+	RestartCommand    string `json:"restart_command"`
+	HeartbeatInterval int    `json:"heartbeat_interval"`
+	AgentID           string `json:"agent_id,omitempty"`
+	Token             string `json:"token,omitempty"`
 
 	// MosDNS 特殊功能字段
-	Directories       []string              `json:"directories,omitempty"`
-	RulesetDownloads  []RulesetDownloadItem `json:"ruleset_downloads,omitempty"`
+	Directories      []string              `json:"directories,omitempty"`
+	RulesetDownloads []RulesetDownloadItem `json:"ruleset_downloads,omitempty"`
 
 	filePath string
 }
@@ -297,7 +297,8 @@ func downloadRuleset(configDir string, item RulesetDownloadItem) error {
 	}
 
 	// 否则从 URL 下载（向后兼容）
-	log.Printf("Downloading ruleset: %s from %s to %s (base: %s)", item.Name, item.URL, localPath, configDir)
+	safeURL := redactURLForLog(item.URL)
+	log.Printf("Downloading ruleset: %s from %s to %s (base: %s)", item.Name, safeURL, localPath, configDir)
 
 	// 创建目标目录
 	dir := filepath.Dir(localPath)
@@ -342,25 +343,25 @@ func downloadRuleset(configDir string, item RulesetDownloadItem) error {
 
 	req, err := http.NewRequestWithContext(ctx, "GET", item.URL, nil)
 	if err != nil {
-		log.Printf("Failed to create request for %s: %v", item.URL, err)
-		return fmt.Errorf("failed to create request for %s: %w", item.URL, err)
+		log.Printf("Failed to create request for %s", safeURL)
+		return fmt.Errorf("failed to create request for %s", safeURL)
 	}
 
 	// 设置一个标准的 User-Agent，以避免被某些服务器拒绝
 	req.Header.Set("User-Agent", "configflow-agent/1.0")
 
 	// 下载文件
-	log.Printf("Starting download from: %s", item.URL)
+	log.Printf("Starting download from: %s", safeURL)
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Failed to download %s: %v", item.URL, err)
-		return fmt.Errorf("failed to download %s: %w", item.URL, err)
+		log.Printf("Failed to download %s", safeURL)
+		return fmt.Errorf("failed to download %s", safeURL)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to download %s: status code %d", item.URL, resp.StatusCode)
-		return fmt.Errorf("failed to download %s: status code %d", item.URL, resp.StatusCode)
+		log.Printf("Failed to download %s: status code %d", safeURL, resp.StatusCode)
+		return fmt.Errorf("failed to download %s: status code %d", safeURL, resp.StatusCode)
 	}
 
 	// 保存文件
@@ -378,7 +379,7 @@ func downloadRuleset(configDir string, item RulesetDownloadItem) error {
 		return fmt.Errorf("failed to save file %s: %w", localPath, err)
 	}
 
-	log.Printf("Successfully downloaded ruleset: %s -> %s", item.URL, localPath)
+	log.Printf("Successfully downloaded ruleset: %s -> %s", safeURL, localPath)
 	return nil
 }
 
@@ -445,7 +446,8 @@ func downloadProvider(configDir string, item ProviderDownloadItem) error {
 	}
 
 	// 否则从 URL 下载（向后兼容）
-	log.Printf("Downloading provider: %s from %s to %s (base: %s)", item.Name, item.URL, localPath, configDir)
+	safeURL := redactURLForLog(item.URL)
+	log.Printf("Downloading provider: %s from %s to %s (base: %s)", item.Name, safeURL, localPath, configDir)
 
 	// 创建目标目录
 	dir := filepath.Dir(localPath)
@@ -491,24 +493,24 @@ func downloadProvider(configDir string, item ProviderDownloadItem) error {
 	// 创建请求
 	req, err := http.NewRequestWithContext(ctx, "GET", item.URL, nil)
 	if err != nil {
-		log.Printf("Failed to create request for %s: %v", item.URL, err)
-		return fmt.Errorf("failed to create request for %s: %w", item.URL, err)
+		log.Printf("Failed to create request for %s", safeURL)
+		return fmt.Errorf("failed to create request for %s", safeURL)
 	}
 
 	// 下载文件
-	log.Printf("Sending HTTP request to: %s", item.URL)
+	log.Printf("Sending HTTP request to: %s", safeURL)
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Failed to download %s: %v", item.URL, err)
-		return fmt.Errorf("failed to download %s: %w", item.URL, err)
+		log.Printf("Failed to download %s", safeURL)
+		return fmt.Errorf("failed to download %s", safeURL)
 	}
 	defer resp.Body.Close()
 
 	// 检查状态码
-	log.Printf("HTTP response status for %s: %d", item.URL, resp.StatusCode)
+	log.Printf("HTTP response status for %s: %d", safeURL, resp.StatusCode)
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed to download %s: status code %d", item.URL, resp.StatusCode)
-		return fmt.Errorf("failed to download %s: status code %d", item.URL, resp.StatusCode)
+		log.Printf("Failed to download %s: status code %d", safeURL, resp.StatusCode)
+		return fmt.Errorf("failed to download %s: status code %d", safeURL, resp.StatusCode)
 	}
 
 	// 保存文件
@@ -526,7 +528,7 @@ func downloadProvider(configDir string, item ProviderDownloadItem) error {
 		return fmt.Errorf("failed to save file %s: %w", localPath, err)
 	}
 
-	log.Printf("Successfully downloaded provider: %s -> %s", item.URL, localPath)
+	log.Printf("Successfully downloaded provider: %s -> %s", safeURL, localPath)
 	return nil
 }
 
@@ -845,8 +847,8 @@ func handleConfigUpdateAsync(cfg *Config, req UpdateRequest) {
 	// 服务读到不完整（甚至缺失）的配置而启动失败
 	if req.RestartAfterUpdate {
 		log.Printf("RestartAfterUpdate is set, restarting service...")
-		if output, err := RestartService(cfg); err != nil {
-			log.Printf("Restart after config update failed: %v\nOutput: %s", err, string(output))
+		if _, err := RestartService(cfg); err != nil {
+			log.Print("Restart after config update failed")
 		} else {
 			log.Printf("Service restarted successfully after config update.")
 		}

@@ -88,7 +88,7 @@ func performUpdate(req AgentUpdateRequest, cfg *Config) {
 	}
 
 	downloadURL := fmt.Sprintf("%s/api/agents/download/configflow-agent-%s", serverURL, arch)
-	log.Printf("构造下载 URL: %s", downloadURL)
+	log.Printf("构造下载 URL: %s", redactURLForLog(downloadURL))
 
 	// 4. 创建备份目录
 	backupDir := "/opt/configflow-agent/backup"
@@ -175,7 +175,7 @@ func downloadFile(filepath string, url string) error {
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return fmt.Errorf("下载失败: %w", err)
+		return safeURLFailure("从以下地址下载失败:", url, err)
 	}
 	defer resp.Body.Close()
 

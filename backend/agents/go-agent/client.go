@@ -47,25 +47,31 @@ func (c *Config) sendRegisterRequest(reqBody RegisterRequest) (*RegisterResponse
 		log.Printf("Failed to marshal register request: %v", err)
 		return nil, fmt.Errorf("failed to marshal register request: %w", err)
 	}
-	
-	log.Printf("Register request body: %s", string(jsonData))
+
+	log.Printf("Register request prepared (body length: %d)", len(jsonData))
 
 	registerURL := fmt.Sprintf("%s/api/agents/register", c.ServerURL)
-	log.Printf("Sending register request to: %s", registerURL)
-	resp, err := http.Post(registerURL, "application/json", bytes.NewBuffer(jsonData))
+	log.Printf("Sending register request to: %s", redactURLForLog(registerURL))
+	req, err := http.NewRequest(http.MethodPost, registerURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Failed to send register request: %v", err)
-		return nil, fmt.Errorf("failed to send register request: %w", err)
+		log.Printf("Failed to create register request for %s", redactURLForLog(registerURL))
+		return nil, safeURLFailure("failed to create register request for", registerURL, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("Failed to send register request to %s", redactURLForLog(registerURL))
+		return nil, safeURLFailure("failed to send register request to", registerURL, err)
 	}
 	defer resp.Body.Close()
-	
+
 	log.Printf("Register request response status: %d", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
-		// 读取响应体以便记录错误信息
-		respBody := make([]byte, 1024)
-		n, _ := resp.Body.Read(respBody)
-		log.Printf("Register request failed with status code: %d, response: %s", resp.StatusCode, string(respBody[:n]))
+		log.Printf("Register request failed with status code: %d", resp.StatusCode)
 		return nil, fmt.Errorf("register request failed with status code: %d", resp.StatusCode)
 	}
 
@@ -74,7 +80,7 @@ func (c *Config) sendRegisterRequest(reqBody RegisterRequest) (*RegisterResponse
 		log.Printf("Failed to decode register response: %v", err)
 		return nil, fmt.Errorf("failed to decode register response: %w", err)
 	}
-	
+
 	log.Printf("Register response: success=%t, id=%s", regResp.Success, regResp.ID)
 	return &regResp, nil
 }
@@ -88,14 +94,16 @@ func (c *Config) handleRegisterResponse(regResp *RegisterResponse) error {
 
 	log.Printf("Registration successful! Agent ID: %s", regResp.ID)
 	c.AgentID = regResp.ID
-	c.Token = regResp.Token
+	if regResp.Token != "" {
+		c.Token = regResp.Token
+	}
 
 	log.Printf("Saving configuration...")
 	if err := c.Save(); err != nil {
 		log.Printf("Failed to save configuration: %v", err)
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
-	
+
 	log.Printf("Configuration saved successfully")
 	return nil
 }
@@ -115,8 +123,8 @@ func (c *Config) RegisterAgent() error {
 	if hostIP == "" {
 		hostIP = localIP
 	}
-	
-	log.Printf("Registering agent with name: %s, host: %s, port: %d, service_type: %s", 
+
+	log.Printf("Registering agent with name: %s, host: %s, port: %d, service_type: %s",
 		c.AgentName, hostIP, c.AgentPort, c.ServiceType)
 
 	reqBody := RegisterRequest{
@@ -194,25 +202,27 @@ func (c *Config) createHeartbeatRequest() ([]byte, error) {
 	return jsonData, nil
 }
 
+var heartbeatHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 // sendHeartbeatRequest 发送心跳请求到服务器
 func (c *Config) sendHeartbeatRequest(jsonData []byte) error {
 	heartbeatURL := fmt.Sprintf("%s/api/agents/%s/heartbeat", c.ServerURL, c.AgentID)
-	logDebugf("Sending heartbeat to: %s", heartbeatURL)
-	
+	logDebugf("Sending heartbeat to: %s", redactURLForLog(heartbeatURL))
+
 	req, err := http.NewRequest("POST", heartbeatURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Error: Failed to create heartbeat request: %v", err)
-		return err
+		log.Printf("Error: Failed to create heartbeat request for %s", redactURLForLog(heartbeatURL))
+		return safeURLFailure("failed to create heartbeat request for", heartbeatURL, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := heartbeatHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error: Failed to send heartbeat: %v", err)
-		return err
+		log.Printf("Error: Failed to send heartbeat to %s", redactURLForLog(heartbeatURL))
+		return safeURLFailure("failed to send heartbeat to", heartbeatURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -226,19 +236,16 @@ func (c *Config) sendHeartbeatRequest(jsonData []byte) error {
 			logDebugf("Heartbeat sent successfully (service status: %s)", status)
 		}
 	} else {
-		// 读取响应体以便记录错误信息
-		respBody := make([]byte, 1024)
-		n, _ := resp.Body.Read(respBody)
-		log.Printf("Error: Heartbeat failed with status code: %d, response: %s", resp.StatusCode, string(respBody[:n]))
+		log.Printf("Error: Heartbeat failed with status code: %d", resp.StatusCode)
 	}
-	
+
 	return nil
 }
 
 // SendHeartbeat 发送心跳
 func (c *Config) SendHeartbeat() {
 	log.Printf("Sending heartbeat...")
-	
+
 	if c.AgentID == "" || c.Token == "" {
 		log.Println("Skipping heartbeat: agent_id or token is empty.")
 		return

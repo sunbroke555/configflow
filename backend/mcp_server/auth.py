@@ -16,7 +16,12 @@ MCP 令牌，而不是继续共用此令牌。
 """
 from flask import request
 
-from backend.common.auth import is_auth_enabled, verify_token
+from backend.common.auth import (
+    is_auth_enabled,
+    is_token_within_length,
+    parse_bearer_token,
+    verify_token,
+)
 
 
 def _config_token() -> str:
@@ -25,11 +30,14 @@ def _config_token() -> str:
     return (get_config().get('system_config', {}) or {}).get('config_token', '') or ''
 
 
+def _internal_rule_proxy_tokens() -> set[str]:
+    from backend.common.config import get_repository
+
+    return get_repository().rule_proxy_tokens_for_sanitization()
+
+
 def _bearer() -> str:
-    header = request.headers.get('Authorization', '')
-    if header.startswith('Bearer '):
-        return header[len('Bearer '):].strip()
-    return ''
+    return parse_bearer_token(request.headers.get('Authorization', '')) or ''
 
 
 def _is_valid_jwt(token: str) -> bool:
@@ -43,9 +51,17 @@ def authenticate() -> bool:
     """校验当前 MCP 请求，返回是否放行"""
     config_token = _config_token()
     bearer = _bearer()
+    url_token = request.args.get('token', '')
+    if not is_token_within_length(url_token):
+        url_token = ''
+
+    # rule-proxy 的内部能力令牌只能访问规则代理，绝不能授权 MCP。
+    internal_tokens = _internal_rule_proxy_tokens()
+    if bearer in internal_tokens or url_token in internal_tokens:
+        return False
 
     # 配置令牌（两种带法）
-    if config_token and (bearer == config_token or request.args.get('token', '') == config_token):
+    if config_token and (bearer == config_token or url_token == config_token):
         return True
 
     # 启用账号密码登录时，前端签发的 JWT 同样可用

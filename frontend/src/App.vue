@@ -15,6 +15,7 @@
             <h2 class="logo-text">ConfigFlow</h2>
           </div>
           <div class="header-actions">
+            <ProfileSwitcher v-if="!isLoginPage" />
             <div class="version-github-group">
               <el-tag class="version-tag" effect="plain">{{ versionInfo }}</el-tag>
               <el-button
@@ -59,6 +60,10 @@
             <el-menu-item index="/dashboard" class="menu-item">
               <el-icon><DataAnalysis /></el-icon>
               <span>数据统计</span>
+            </el-menu-item>
+            <el-menu-item index="/profiles" class="menu-item">
+              <el-icon><Setting /></el-icon>
+              <span>Profile 管理</span>
             </el-menu-item>
             <el-menu-item index="/subscriptions" class="menu-item">
               <el-icon><Link /></el-icon>
@@ -117,6 +122,10 @@
               <el-icon><DataAnalysis /></el-icon>
               <span>数据统计</span>
             </el-menu-item>
+            <el-menu-item index="/profiles">
+              <el-icon><Setting /></el-icon>
+              <span>Profile 管理</span>
+            </el-menu-item>
             <el-menu-item index="/subscriptions">
               <el-icon><Link /></el-icon>
               <span>订阅管理</span>
@@ -157,7 +166,7 @@
         </el-drawer>
 
         <el-main class="modern-main">
-          <router-view />
+          <router-view :key="activeProfileId" />
         </el-main>
       </el-container>
     </el-container>
@@ -170,9 +179,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { systemApi, statsApi } from './api'
 import api from './api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import ProfileSwitcher from './components/ProfileSwitcher.vue'
+import { useProfileStore } from './stores/profile'
 
 const route = useRoute()
 const router = useRouter()
+const profileStore = useProfileStore()
+const { activeProfileId } = profileStore
 const activeMenu = ref(route.path)
 const drawerVisible = ref(false)
 const versionInfo = ref('v1.0')
@@ -285,6 +298,7 @@ const handleCommand = async (command: string) => {
 onMounted(async () => {
   loadVersion()
   checkAuthStatus()
+  profileStore.refreshProfiles().catch(() => undefined)
 
   // 加载订阅聚合配置
   loadSubscriptionAggregationSetting()

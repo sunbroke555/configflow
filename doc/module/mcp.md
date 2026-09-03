@@ -36,7 +36,7 @@ MCP 服务与主应用同进程运行，不需要额外部署或额外端口。
 > （`.../api/config/mihomo?token=<配置令牌>`），你复制到 Mihomo / Surge 等客户端的
 > 那串链接里就带着它。
 >
-> 而 MCP 工具可以导出整份配置（含各订阅的明文地址）、重置系统、卸载 Agent。
+> 而 MCP 工具可以导出整份配置（含各订阅的明文地址）、重置系统、卸载 Agent、清空日志。
 > 因此 **持有订阅链接 = 持有管理员权限**。
 >
 > 这意味着：**订阅链接不要分享给他人**。如果确实需要把订阅链接发给别人，
@@ -74,6 +74,7 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 ## 可用工具
 
 工具按功能域组织，读操作以 `list_` / `get_` 开头，写操作以 `manage_` 开头（通过 `action` 参数区分增删改）。
+所有工具都接受可选的 `profile_id`；留空时作用于 `default` profile（不跟随界面上激活的 profile）。
 
 ### 订阅与节点
 
@@ -85,18 +86,20 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 | `get_subscription_nodes` | 获取订阅下已解析的节点 |
 | `list_nodes` / `manage_node` | 手动节点的查询与增删改 |
 | `list_aggregations` / `manage_aggregation` | 订阅聚合的查询与增删改 |
-| `preview_aggregation` | 预览聚合产出的节点与数量 |
+| `preview_aggregation` | 预览聚合产出的节点、数量或 provider YAML（`mode`） |
 
 ### 规则
 
 | 工具 | 说明 |
 |------|------|
-| `list_rules` / `manage_rule` | 规则与规则集的查询与增删改 |
+| `list_rules` / `manage_rule` | 规则与规则集的查询与增删改（`position` 控制新规则放队首还是队尾） |
 | `batch_add_rules` | 按同一类型和策略批量添加规则 |
 | `test_rule_match` | 测试域名/IP 命中哪条规则、走哪个策略组 |
 | `find_duplicate_rules` | 扫描重复的规则条目 |
 | `list_rule_library` / `manage_rule_library` | 规则仓库条目的查询与增删改 |
 | `test_rule_library` | 测试规则集 URL 的连通性 |
+| `get_rule_library_content` | 读取 `source_type=content` 条目的正文 |
+| `cache_rule_library` | 把指定条目拉取并缓存到本地 |
 
 ### 策略组与配置
 
@@ -107,7 +110,8 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 | `preview_config` | 生成配置内容并返回，不写盘 |
 | `generate_config` | 生成配置并保存（MosDNS 为打包下载，不落盘） |
 | `manage_custom_config` | 读写自定义配置片段 |
-| `manage_config_backup` | 导出 / 导入 / 重置整份配置 |
+| `manage_config_backup` | 导出 / 导入 / 重置配置（`scope=profile` 时只作用于单个 profile） |
+| `reorder_items` | 调整订阅 / 节点 / 规则 / 规则仓库 / 策略组的顺序 |
 
 ### MosDNS、Agent 与系统
 
@@ -116,16 +120,20 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 | `get_mosdns_settings` / `update_mosdns_settings` | MosDNS 各分区配置的读写 |
 | `list_agents` / `get_agent` / `manage_agent` | Agent 的查询、重启、推送配置、升级、卸载 |
 | `get_agent_logs` / `get_agent_metrics` | Agent 日志与监控数据 |
+| `get_agent_install_info` | 安装脚本 / Docker compose / run 命令 / 最新版本号 |
+| `convert_mosdns_rule` | 把远程规则文件转换成 MosDNS 格式预览 |
 | `get_overview` | 系统概览统计 |
 | `get_settings` / `update_settings` | 系统设置的读写 |
 | `run_backup` | 立即备份或测试 WebDAV 连通性 |
 | `get_app_logs` | 读取服务端日志 |
+| `manage_app_logs` | 查看日志文件信息或清空日志 |
 
 ## 使用要点
 
 - **改完配置记得生成**：修改订阅、规则或策略组后，需要调用 `generate_config` 才会写入 Mihomo / Surge 订阅链接对应的配置文件（MosDNS 订阅链接为实时生成，无需此步）。
 - **更新是增量的**：`manage_*` 的 `update` 只需给出要改的字段，其余字段会自动保留。
 - **先看再改**：`preview_config`、`preview_proxy_group_regex`、`preview_aggregation` 都不会改动数据，适合在落盘前确认效果。
+- **顺序就是优先级**：规则列表顺序即匹配优先级，新建规则默认插在最前面；要调整顺序用 `reorder_items`（`ids` 里的条目按给定顺序整体移到最前或最后，其余保持原相对顺序）。
 
 ## 对话示例
 
@@ -134,6 +142,8 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 > 把 github.com 和 githubusercontent.com 加到「国外流量」策略组
 
 > 检查一下规则里有没有重复条目
+
+> 把广告拦截那条规则挪到规则列表最前面
 
 > 预览一下当前的 Mihomo 配置，确认没问题后生成
 

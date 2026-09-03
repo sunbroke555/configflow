@@ -4,6 +4,8 @@ import yaml
 from typing import Dict, Any, List, Optional
 from backend.utils.logger import get_logger
 from backend.utils.proxy_utils import fix_proxy_fields
+from backend.common.profile_context import append_url_query, profile_api_path
+from backend.utils.url_utils import safe_url_for_log
 
 # 获取当前模块的日志记录器
 logger = get_logger(__name__)
@@ -35,7 +37,9 @@ def apply_github_proxy_domain(url: str, config_data: Dict[str, Any]) -> str:
     if not config_data:
         return url
 
-    proxy_url = config_data.get('system_config', {}).get('github_proxy_domain', '').strip()
+    configured_proxy = config_data.get('system_config', {}).get('github_proxy_domain', '')
+    proxy_url = configured_proxy.strip() if isinstance(configured_proxy, str) else ''
+
     if not proxy_url:
         return url
 
@@ -435,20 +439,20 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     # 使用本地接口而不是原始订阅 URL
     proxy_providers = {}
     logger.info(f"开始生成订阅 proxy-providers，使用本地接口")
-    logger.info(f"Server domain: {effective_base_url}")
+    logger.info(f"Server domain: {safe_url_for_log(effective_base_url)}")
     logger.info(f"Config token: {'已配置' if config_token else '未配置'}")
 
     for sub in config_data.get('subscriptions', []):
         if sub.get('enabled', True) and sub.get('id') in used_subscription_ids:
             # 构建订阅 provider 的 URL（使用本地接口）
             sub_id = sub['id']
-            sub_url = f"{effective_base_url}/api/subscriptions/{sub_id}/proxies"
+            sub_url = f"{effective_base_url}{profile_api_path(config_data, f'/subscriptions/{sub_id}/proxies')}"
 
             # 如果配置了令牌，添加到 URL
             if config_token:
-                sub_url += f"?token={config_token}"
+                sub_url = append_url_query(sub_url, {'token': config_token})
 
-            logger.info(f"订阅 '{sub['name']}' 使用本地接口: {sub_url}")
+            logger.info(f"订阅 '{sub['name']}' 使用本地接口: {safe_url_for_log(sub_url)}")
 
             proxy_providers[sub['name']] = {
                 'type': 'http',
@@ -464,11 +468,11 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
         if agg.get('enabled', True) and agg.get('id') in used_aggregation_ids:
             # 构建聚合 provider 的 URL（使用服务域名配置）
             agg_id = agg['id']
-            agg_url = f"{effective_base_url}/api/aggregations/{agg_id}/provider"
+            agg_url = f"{effective_base_url}{profile_api_path(config_data, f'/aggregations/{agg_id}/provider')}"
 
             # 如果配置了令牌，添加到 URL
             if config_token:
-                agg_url += f"?token={config_token}"
+                agg_url = append_url_query(agg_url, {'token': config_token})
 
             proxy_providers[agg['name']] = {
                 'type': 'http',
@@ -899,7 +903,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                     # 这样所有规则都从本地获取，避免外部网络请求
                     rule_name = library_rule.get('name', '')
                     if rule_name:
-                        url = f"/api/rules/local/{rule_name}"
+                        url = profile_api_path(config_data, f"/rules/local/{rule_name}")
 
             # 如果 URL 是相对路径，动态拼接 server_domain
             if url and url.startswith('/') and effective_base_url:
@@ -1059,11 +1063,11 @@ def get_mihomo_provider_downloads(config_data: Dict[str, Any], base_url: str = '
     for sub in config_data.get('subscriptions', []):
         if sub.get('enabled', True) and sub.get('id') in used_subscription_ids:
             sub_id = sub['id']
-            sub_url = f"{effective_base_url}/api/subscriptions/{sub_id}/proxies"
+            sub_url = f"{effective_base_url}{profile_api_path(config_data, f'/subscriptions/{sub_id}/proxies')}"
 
             # 如果配置了令牌，添加到 URL
             if config_token:
-                sub_url += f"?token={config_token}"
+                sub_url = append_url_query(sub_url, {'token': config_token})
 
             downloads.append({
                 'name': sub['name'],
@@ -1075,11 +1079,11 @@ def get_mihomo_provider_downloads(config_data: Dict[str, Any], base_url: str = '
     for agg in config_data.get('subscription_aggregations', []):
         if agg.get('enabled', True) and agg.get('id') in used_aggregation_ids:
             agg_id = agg['id']
-            agg_url = f"{effective_base_url}/api/aggregations/{agg_id}/provider"
+            agg_url = f"{effective_base_url}{profile_api_path(config_data, f'/aggregations/{agg_id}/provider')}"
 
             # 如果配置了令牌，添加到 URL
             if config_token:
-                agg_url += f"?token={config_token}"
+                agg_url = append_url_query(agg_url, {'token': config_token})
 
             downloads.append({
                 'name': agg['name'],
@@ -1129,7 +1133,7 @@ def get_mihomo_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
                     # 使用本地缓存的规则文件接口
                     rule_name = library_rule.get('name', '')
                     if rule_name:
-                        url = f"/api/rules/local/{rule_name}"
+                        url = profile_api_path(config_data, f"/rules/local/{rule_name}")
 
             # 如果 URL 是相对路径，动态拼接 server_domain
             if url and url.startswith('/') and effective_base_url:

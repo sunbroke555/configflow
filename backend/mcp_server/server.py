@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from flask import Blueprint, Response, jsonify, request
 
+from backend.common.config import get_config
+from backend.common.config_export import sanitize_external_payload
 from backend.mcp_server import auth
 from backend.mcp_server.invoker import ApiError
 from backend.mcp_server.tools import call_tool, list_tools, has_tool
@@ -50,6 +52,8 @@ def _error(request_id: Any, code: int, message: str) -> Dict[str, Any]:
 
 
 def _text_content(payload: Any) -> List[Dict[str, str]]:
+    system_config = get_config().get('system_config', {}) or {}
+    payload = sanitize_external_payload(payload, system_config)
     if isinstance(payload, str):
         text = payload
     else:

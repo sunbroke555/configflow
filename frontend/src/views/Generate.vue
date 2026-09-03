@@ -1278,6 +1278,7 @@ import { generateApi, configApi, customConfigApi, subscriptionApi, nodeApi, rule
 import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'
 import type { RuleSet } from '@/types'
+import { activeProfileId } from '@/profileContext'
 import * as yaml from 'js-yaml'
 import Sortable from 'sortablejs'
 
@@ -1874,15 +1875,15 @@ const baseUrl = computed(() => {
 })
 
 const mihomoUrl = computed(() => {
-  const url = `${baseUrl.value}/api/config/mihomo`
+  const url = `${baseUrl.value}/api/config/${encodeURIComponent(activeProfileId.value)}/mihomo`
   return configToken.value ? `${url}?token=${configToken.value}` : url
 })
 const surgeUrl = computed(() => {
-  const url = `${baseUrl.value}/api/config/surge`
+  const url = `${baseUrl.value}/api/config/${encodeURIComponent(activeProfileId.value)}/surge`
   return configToken.value ? `${url}?token=${configToken.value}` : url
 })
 const mosdnsUrl = computed(() => {
-  const url = `${baseUrl.value}/api/config/mosdns`
+  const url = `${baseUrl.value}/api/config/${encodeURIComponent(activeProfileId.value)}/mosdns`
   return configToken.value ? `${url}?token=${configToken.value}` : url
 })
 

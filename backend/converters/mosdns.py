@@ -1,6 +1,7 @@
 """MosDNS 配置生成器"""
 import yaml
 from typing import Dict, Any, List
+from backend.common.profile_context import append_url_query, profile_api_path
 
 # 统一处理规则集 ID，避免重复的前缀
 def _normalize_ruleset_id(rule_set_id: str) -> str:
@@ -168,6 +169,18 @@ def split_rules_and_rulesets(config_data: Dict[str, Any]) -> tuple:
     return rules, rule_sets
 
 
+def _build_rule_proxy_url(config_data: Dict[str, Any], effective_base_url: str, url: str) -> str:
+    endpoint = profile_api_path(config_data, '/mosdns/rule-proxy')
+    if endpoint == '/mosdns/rule-proxy':
+        endpoint = f'/api{endpoint}'
+    query = {'url': url}
+    rule_proxy_token = config_data.get('system_config', {}).get('rule_proxy_token', '')
+    if not isinstance(rule_proxy_token, str) or not rule_proxy_token:
+        raise ValueError('MosDNS rule proxy requires a rule proxy token')
+    query['token'] = rule_proxy_token
+    return append_url_query(f"{effective_base_url}{endpoint}", query)
+
+
 def parse_dns_upstreams(dns_config: str) -> List[Dict[str, Any]]:
     """
     解析 DNS 服务器配置，支持多种格式
@@ -290,8 +303,6 @@ def get_mosdns_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
                 ...
             ]
     """
-    import urllib.parse
-
     # 从合并数组中分离规则和规则集
     rules_list, rule_sets_list = split_rules_and_rulesets(config_data)
 
@@ -332,10 +343,7 @@ def get_mosdns_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
         # 构建下载 URL（使用代理接口）
         # rule-proxy 会将所有格式转换为 MosDNS 文本格式，所以始终使用 .txt 扩展名
         if url:
-            if effective_base_url:
-                download_url = f"{effective_base_url}/api/mosdns/rule-proxy?url={urllib.parse.quote(url)}"
-            else:
-                download_url = f"/api/mosdns/rule-proxy?url={urllib.parse.quote(url)}"
+            download_url = _build_rule_proxy_url(config_data, effective_base_url, url)
 
             downloads.append({
                 'name': rule_set['name'],
@@ -621,13 +629,9 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
 
         # 使用代理接口转换规则格式
         # rule-proxy 会将所有格式转换为 MosDNS 文本格式，所以始终使用 .txt 扩展名
-        import urllib.parse
         if url:
             # 构建代理 URL - 用于下载规则文件
-            if effective_base_url:
-                download_url = f"{effective_base_url}/api/mosdns/rule-proxy?url={urllib.parse.quote(url)}"
-            else:
-                download_url = f"/api/mosdns/rule-proxy?url={urllib.parse.quote(url)}"
+            download_url = _build_rule_proxy_url(config_data, effective_base_url, url)
         else:
             download_url = None
 

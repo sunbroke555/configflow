@@ -106,7 +106,22 @@ generate_agent_config() {
     _config_path=$4
 
     _config_file="${AGENT_DIR}/config-${_service_type}.json"
-    cat > "$_config_file" <<EOF
+    _existing_agent_id=""
+    _existing_token=""
+    if [ -f "$_config_file" ]; then
+        _existing_agent_id=$(sed -n 's/.*"agent_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_.-]*\)".*/\1/p' "$_config_file" | head -n 1)
+        _existing_token=$(sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' "$_config_file" | head -n 1)
+    fi
+
+    _identity_fields=""
+    if [ -n "$_existing_agent_id" ] && [ -n "$_existing_token" ]; then
+        _identity_fields=",
+  \"agent_id\": \"${_existing_agent_id}\",
+  \"token\": \"${_existing_token}\""
+    fi
+
+    _config_tmp="${_config_file}.tmp.$$"
+    cat > "$_config_tmp" <<EOF
 {
   "server_url": "${SERVER_URL}",
   "agent_name": "${_agent_name}",
@@ -117,9 +132,10 @@ generate_agent_config() {
   "service_name": "${_service_type}",
   "config_path": "${_config_path}",
   "restart_command": "${SUPERVISORCTL_CMD} restart ${_service_type}",
-  "heartbeat_interval": ${HEARTBEAT_INTERVAL:-60}
+  "heartbeat_interval": ${HEARTBEAT_INTERVAL:-60}${_identity_fields}
 }
 EOF
+    mv "$_config_tmp" "$_config_file"
     echo "Agent config generated at $_config_file"
 }
 

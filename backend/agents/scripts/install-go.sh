@@ -152,7 +152,6 @@ fi
 # 下载 Go Agent 二进制
 BINARY_URL="{binary_download_url}/configflow-agent-$AGENT_ARCH"
 printf "%b\n" "${{YELLOW}}下载 Go Agent 二进制...${{NC}}"
-printf "%b\n" "${{BLUE}}URL: $BINARY_URL${{NC}}"
 
 if command -v wget >/dev/null 2>&1; then
     wget -O /tmp/configflow-agent "$BINARY_URL" || {{

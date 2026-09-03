@@ -78,6 +78,7 @@ export interface Agent {
   version: string
   config_version: string
   enabled: boolean
+  profile_id?: string
   has_update?: boolean
   created_at?: string
   updated_at?: string

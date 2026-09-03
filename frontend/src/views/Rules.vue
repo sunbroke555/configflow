@@ -661,6 +661,7 @@ import { ElMessage } from 'element-plus'
 import { DCaret, Edit, Delete, FolderOpened, ArrowUp, ArrowDown, Search, Plus, View, Hide, InfoFilled, List, Grid, ChatLineSquare, CopyDocument, Loading } from '@element-plus/icons-vue'
 import { ruleApi, ruleSetApi, proxyGroupApi } from '@/api'
 import type { Rule, RuleSet, ProxyGroup } from '@/types'
+import { activeProfileId } from '@/profileContext'
 import Sortable from 'sortablejs'
 import api from '@/api'
 
@@ -1052,7 +1053,7 @@ const onLibraryRuleSelect = (libraryRuleId: string) => {
     if (selectedRule.source_type === 'content') {
       // 规则内容类型，使用内容接口
       const baseUrl = `${window.location.protocol}//${window.location.host}`
-      ruleSetForm.value.url = `${baseUrl}/api/rule-library/content/${libraryRuleId}`
+      ruleSetForm.value.url = `${baseUrl}/api/profiles/${encodeURIComponent(activeProfileId.value)}/rule-library/content/${libraryRuleId}`
     } else {
       // URL 类型，使用原始 URL
       ruleSetForm.value.url = selectedRule.url

@@ -18,8 +18,18 @@ import yaml
 
 from backend.utils.logger import get_logger
 from backend.utils.proxy_utils import fix_proxy_fields
+from backend.utils.url_utils import safe_exception_details, safe_url_for_log
 
 logger = get_logger(__name__)
+
+
+class SubscriptionFetchError(Exception):
+    """Safe public error retaining both underlying failures for callers."""
+
+    def __init__(self, sub_store_error, direct_error):
+        super().__init__("subscription fetch failed via Sub-Store and direct fallback")
+        self.sub_store_error = sub_store_error
+        self.direct_error = direct_error
 
 
 def _get_base_url():
@@ -65,7 +75,7 @@ def _fetch_direct_subscription_yaml(url):
     headers = {
         'User-Agent': 'clash.meta'
     }
-    logger.info(f"直接拉取订阅 URL: {url}")
+    logger.info("Direct subscription fetch started")
     resp = requests.get(url, headers=headers, timeout=30)
     resp.raise_for_status()
 
@@ -119,7 +129,7 @@ def _create_subscription(base, sub_id, url):
         logger.warning(f"Sub-Store 创建订阅 '{sub_id}' 返回状态码: {create_resp.status_code}")
         return False
     except Exception as e:
-        logger.warning(f"Sub-Store 创建订阅 '{sub_id}' 失败: {e}")
+        logger.warning("Sub-Store 创建订阅失败: %s", safe_exception_details(e))
         return False
 
 
@@ -132,7 +142,7 @@ def _delete_subscription(base, sub_id):
         else:
             logger.debug(f"Sub-Store 删除订阅 '{sub_id}' 返回状态码: {resp.status_code}")
     except Exception as e:
-        logger.debug(f"Sub-Store 删除订阅 '{sub_id}' 失败（可忽略）: {e}")
+        logger.debug("Sub-Store 删除订阅失败（可忽略）: %s", safe_exception_details(e))
 
 
 def get_subscription_proxies_yaml(sub_id, url, target='ClashMeta'):
@@ -159,11 +169,11 @@ def get_subscription_proxies_yaml(sub_id, url, target='ClashMeta'):
         is_rendered_yaml, rendered_yaml = _looks_like_sub_store_rendered_yaml_response(url)
         if is_rendered_yaml and rendered_yaml:
             return rendered_yaml, 'rendered_yaml'
-    except Exception as e:
-        logger.warning(f"探测订阅 URL 是否为 Sub-Store 成品失败，继续走标准流程: {e}")
+    except Exception:
+        logger.warning("探测订阅 URL 是否为 Sub-Store 成品失败，继续走标准流程")
 
     base = _get_base_url()
-    logger.info(f"Sub-Store base URL: {base}")
+    logger.info(f"Sub-Store base URL: {safe_url_for_log(base)}")
 
     # 使用带前缀和随机后缀的临时名称，避免和 Sub-Store 中已有订阅冲突，
     # 也避免并发请求同一订阅时临时订阅撞名导致 500
@@ -175,7 +185,7 @@ def get_subscription_proxies_yaml(sub_id, url, target='ClashMeta'):
     try:
         # 下载订阅（target 放在路径中，这是 Sub-Store 推荐的方式）
         download_url = f'{base}/download/{quote(temp_name, safe="")}/{target}'
-        logger.info(f"Sub-Store 下载: {download_url}")
+        logger.info(f"Sub-Store 下载: {safe_url_for_log(download_url)}")
 
         resp = requests.get(download_url, timeout=30)
         resp.raise_for_status()
@@ -193,7 +203,7 @@ def get_subscription_proxies_yaml(sub_id, url, target='ClashMeta'):
         return text, 'sub_store'
     except Exception as e:
         sub_store_error = e
-        logger.warning(f"Sub-Store 获取订阅失败，尝试直接拉取原始订阅 URL: {e}")
+        logger.warning("Sub-Store 获取订阅失败，尝试直接拉取原始订阅 URL: %s", safe_exception_details(e))
     finally:
         # 用完即删，不在 Sub-Store 中残留订阅数据
         _delete_subscription(base, temp_name)
@@ -202,11 +212,8 @@ def get_subscription_proxies_yaml(sub_id, url, target='ClashMeta'):
         text = _fetch_direct_subscription_yaml(url)
         return text, 'direct_url_fallback'
     except Exception as direct_error:
-        raise Exception(
-            "Sub-Store 获取失败，且直接拉取订阅也失败。"
-            f"Sub-Store 错误: {sub_store_error}; "
-            f"直接拉取错误: {direct_error}"
-        )
+        logger.warning("直接拉取订阅失败: %s", safe_exception_details(direct_error))
+        raise SubscriptionFetchError(sub_store_error, direct_error) from direct_error
 
 
 def convert_proxy_string(proxy_string, target='ClashMeta'):
@@ -220,7 +227,13 @@ def convert_proxy_string(proxy_string, target='ClashMeta'):
         dict 或 None: 转换后的 mihomo proxy dict，失败返回 None
     """
     base = _get_base_url()
-    logger.info(f"节点转换: proxy_string={proxy_string[:80]}...")
+    proxy_type = "unknown"
+    if isinstance(proxy_string, str) and '://' in proxy_string:
+        candidate = proxy_string.split('://', 1)[0].lower()
+        if candidate.replace('+', '').replace('-', '').replace('.', '').isalnum():
+            proxy_type = candidate[:32]
+    input_length = len(proxy_string) if isinstance(proxy_string, str) else 0
+    logger.info("节点转换开始: proxy_type=%s input_length=%d", proxy_type, input_length)
 
     # 创建临时订阅（需要一个名字才能调用 download）
     # 随机后缀避免并发节点转换时撞名导致 500
@@ -230,31 +243,27 @@ def convert_proxy_string(proxy_string, target='ClashMeta'):
     try:
         # 通过 content 参数直接传入节点内容，覆盖订阅 URL
         download_url = f'{base}/download/{quote(temp_name, safe="")}/{target}'
-        logger.info(f"节点转换下载: {download_url}")
         resp = requests.get(
             download_url,
             params={'content': proxy_string},
             timeout=15
         )
-        logger.info(f"节点转换响应: status={resp.status_code}, content-type={resp.headers.get('content-type', '')}")
         resp.raise_for_status()
 
         text = resp.text
-        logger.info(f"节点转换响应内容(前200字符): {text[:200]}")
 
         if not _is_yaml_response(text):
-            logger.warning(f"Sub-Store 节点转换返回非 YAML 内容: {text[:200]}")
+            logger.warning("节点转换返回无效内容: proxy_type=%s input_length=%d", proxy_type, input_length)
             return None
 
         proxies = parse_proxies_from_yaml(text)
-        logger.info(f"节点转换解析结果: {len(proxies)} 个 proxy")
         if proxies:
-            logger.info(f"节点转换成功: {proxies[0].get('name', '')} ({proxies[0].get('type', '')})")
+            logger.info("节点转换成功: proxy_type=%s input_length=%d", proxy_type, input_length)
             return proxies[0]
-        logger.warning("节点转换: YAML 解析成功但 proxies 列表为空")
+        logger.warning("节点转换结果为空: proxy_type=%s input_length=%d", proxy_type, input_length)
         return None
-    except Exception as e:
-        logger.warning(f"Sub-Store 节点转换失败: {e}")
+    except Exception:
+        logger.warning("节点转换失败: proxy_type=%s input_length=%d", proxy_type, input_length)
         return None
     finally:
         _delete_subscription(base, temp_name)

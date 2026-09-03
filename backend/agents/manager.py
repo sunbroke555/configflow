@@ -1,31 +1,57 @@
 """Agent 管理器"""
 import secrets
 import hashlib
+import hmac
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import requests
 from .metrics_history import MetricsHistory
 
 
+def _constant_time_ascii_equal(provided: Any, expected: Any) -> bool:
+    """Compare credentials without timing leaks; non-ASCII is simply invalid."""
+    if not isinstance(provided, str) or not isinstance(expected, str):
+        return False
+    try:
+        return hmac.compare_digest(provided.encode('ascii'), expected.encode('ascii'))
+    except UnicodeEncodeError:
+        return False
+
+
 class AgentManager:
     """Agent 管理器，负责 Agent 的注册、心跳、状态管理等"""
 
-    def __init__(self, config_data: Dict[str, Any]):
+    def __init__(self, repository):
         """
         初始化 Agent 管理器
 
         Args:
-            config_data: 全局配置数据字典
+            repository: system/profile 配置仓库
         """
-        self.config_data = config_data
-        # 确保 agents 字段存在
-        if 'agents' not in self.config_data:
-            self.config_data['agents'] = []
+        self.repository = repository
 
         # 初始化监控历史管理器
         self.metrics_history = MetricsHistory()
 
-    def register_agent(self, agent_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _agents(self) -> List[Dict[str, Any]]:
+        return self.repository.get_system().get('agents', [])
+
+    def _update_agents(self, updater, profile_id=None):
+        result = {}
+
+        def update(system):
+            if profile_id:
+                self.repository._profile_metadata(profile_id, system)
+            result['value'] = updater(system.setdefault('agents', []))
+
+        self.repository.update_system_transaction(update)
+        return result.get('value')
+
+    def register_agent(
+        self,
+        agent_data: Dict[str, Any],
+        existing_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         注册新的 Agent
 
@@ -36,62 +62,47 @@ class AgentManager:
             agent_data: Agent 信息，包含 name, host, port, service_type
 
         Returns:
-            Dict: 包含 id 和 token 的注册信息
+            Dict: 新 Agent 包含一次性返回的 token；已有 Agent 只返回非敏感状态
         """
         agent_name = agent_data.get('name', 'Unnamed Agent')
         agent_host = agent_data.get('host', '')
+        requested_profile_id = agent_data.get('profile_id')
+        if requested_profile_id:
+            from backend.common.config import get_repository
+            get_repository().validate_profile_id(requested_profile_id)
 
-        # 查找是否已存在相同名称和地址的 Agent
-        agents = self.config_data.get('agents', [])
-        existing_agent = None
-        existing_index = -1
+        def register(agents):
+            existing_agent = next(
+                (agent for agent in agents if agent.get('name') == agent_name and agent.get('host') == agent_host),
+                None,
+            )
+            if existing_agent:
+                if not _constant_time_ascii_equal(existing_token, existing_agent.get('token')):
+                    raise PermissionError('Unauthorized')
+                agent_id = existing_agent['id']
+                token = existing_agent['token']
+                updated_agent = {
+                    'id': agent_id,
+                    'name': agent_name,
+                    'host': agent_host,
+                    'port': agent_data.get('port', 8080),
+                    'token': token,
+                    'service_type': agent_data.get('service_type', 'mihomo'),
+                    'profile_id': requested_profile_id or existing_agent.get('profile_id', 'default'),
+                    'deployment_method': agent_data.get('deployment_method', existing_agent.get('deployment_method', 'unknown')),
+                    'status': 'online',
+                    'last_heartbeat': datetime.now().isoformat(),
+                    'version': agent_data.get('version', '1.0.0'),
+                    'config_version': existing_agent.get('config_version', '0'),
+                    'enabled': True,
+                    'created_at': existing_agent.get('created_at', datetime.now().isoformat()),
+                    'updated_at': datetime.now().isoformat(),
+                }
+                agents[agents.index(existing_agent)] = updated_agent
+                return {'id': agent_id, 'status': 'online', 'is_new': False}
 
-        for i, agent in enumerate(agents):
-            if agent.get('name') == agent_name and agent.get('host') == agent_host:
-                existing_agent = agent
-                existing_index = i
-                break
-
-        if existing_agent:
-            # 已存在，更新记录（保留 ID 和 token）
-            agent_id = existing_agent['id']
-            token = existing_agent['token']
-
-            # 更新 Agent 信息
-            updated_agent = {
-                'id': agent_id,
-                'name': agent_name,
-                'host': agent_host,
-                'port': agent_data.get('port', 8080),
-                'token': token,
-                'service_type': agent_data.get('service_type', 'mihomo'),
-                'deployment_method': agent_data.get('deployment_method', existing_agent.get('deployment_method', 'unknown')),
-                'status': 'online',
-                'last_heartbeat': datetime.now().isoformat(),
-                'version': agent_data.get('version', '1.0.0'),
-                'config_version': existing_agent.get('config_version', '0'),
-                'enabled': True,
-                'created_at': existing_agent.get('created_at', datetime.now().isoformat()),
-                'updated_at': datetime.now().isoformat()
-            }
-
-            # 更新列表中的记录
-            self.config_data['agents'][existing_index] = updated_agent
-
-            return {
-                'id': agent_id,
-                'token': token,
-                'agent': updated_agent
-            }
-        else:
-            # 不存在，创建新记录
-            # 生成唯一 ID
-            agent_id = f"agent_{int(datetime.now().timestamp() * 1000)}"
-
-            # 生成随机 token（32 字符）
+            agent_id = f"agent_{int(datetime.now().timestamp() * 1000)}_{secrets.token_hex(3)}"
             token = secrets.token_urlsafe(24)
-
-            # 构建 Agent 完整信息
             agent = {
                 'id': agent_id,
                 'name': agent_name,
@@ -99,27 +110,28 @@ class AgentManager:
                 'port': agent_data.get('port', 8080),
                 'token': token,
                 'service_type': agent_data.get('service_type', 'mihomo'),
+                'profile_id': requested_profile_id or 'default',
                 'deployment_method': agent_data.get('deployment_method', 'unknown'),
                 'status': 'online',
                 'last_heartbeat': datetime.now().isoformat(),
                 'version': agent_data.get('version', '1.0.0'),
-                'config_version': '0',  # 初始配置版本
+                'config_version': '0',
                 'enabled': True,
-                'created_at': datetime.now().isoformat()
+                'created_at': datetime.now().isoformat(),
             }
-
-            # 添加到列表
-            self.config_data['agents'].append(agent)
-
+            agents.append(agent)
             return {
                 'id': agent_id,
+                'status': 'online',
+                'is_new': True,
                 'token': token,
-                'agent': agent
             }
+
+        return self._update_agents(register, requested_profile_id)
 
     def get_all_agents(self) -> List[Dict[str, Any]]:
         """获取所有 Agent 列表"""
-        agents = self.config_data.get('agents', [])
+        agents = self._agents()
 
         # 更新在线状态（超过 2 分钟未心跳视为离线）
         now = datetime.now()
@@ -135,12 +147,12 @@ class AgentManager:
 
     def get_agent_by_id(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """根据 ID 获取 Agent"""
-        agents = self.config_data.get('agents', [])
+        agents = self._agents()
         return next((a for a in agents if a['id'] == agent_id), None)
 
     def get_agent_by_token(self, token: str) -> Optional[Dict[str, Any]]:
         """根据 token 获取 Agent（用于认证）"""
-        agents = self.config_data.get('agents', [])
+        agents = self._agents()
         return next((a for a in agents if a.get('token') == token), None)
 
     def update_agent(self, agent_id: str, updates: Dict[str, Any]) -> bool:
@@ -154,27 +166,33 @@ class AgentManager:
         Returns:
             bool: 是否更新成功
         """
-        agents = self.config_data.get('agents', [])
-        for i, agent in enumerate(agents):
-            if agent['id'] == agent_id:
+        if 'profile_id' in updates:
+            self.repository.validate_profile_id(updates['profile_id'])
+
+        def update(agents):
+            for agent in agents:
+                if agent['id'] != agent_id:
+                    continue
                 # 更新允许的字段
-                allowed_fields = ['name', 'host', 'port', 'enabled', 'service_type']
+                allowed_fields = ['name', 'host', 'port', 'enabled', 'service_type', 'profile_id']
                 for field in allowed_fields:
                     if field in updates:
                         agent[field] = updates[field]
 
                 agent['updated_at'] = datetime.now().isoformat()
-                self.config_data['agents'][i] = agent
                 return True
+            return False
 
-        return False
+        return self._update_agents(update, updates.get('profile_id'))
 
     def delete_agent(self, agent_id: str) -> bool:
         """删除 Agent"""
-        agents = self.config_data.get('agents', [])
-        initial_len = len(agents)
-        self.config_data['agents'] = [a for a in agents if a['id'] != agent_id]
-        return len(self.config_data['agents']) < initial_len
+        def delete(agents):
+            initial_len = len(agents)
+            agents[:] = [agent for agent in agents if agent['id'] != agent_id]
+            return len(agents) < initial_len
+
+        return self._update_agents(delete)
 
     def update_heartbeat(self, agent_id: str, heartbeat_data: Dict[str, Any] = None) -> bool:
         """
@@ -187,9 +205,10 @@ class AgentManager:
         Returns:
             bool: 是否更新成功
         """
-        agents = self.config_data.get('agents', [])
-        for i, agent in enumerate(agents):
-            if agent['id'] == agent_id:
+        def update(agents):
+            for agent in agents:
+                if agent['id'] != agent_id:
+                    continue
                 agent['last_heartbeat'] = datetime.now().isoformat()
                 agent['status'] = 'online'  # Agent 在线状态
 
@@ -229,10 +248,10 @@ class AgentManager:
                     elif 'memory' in heartbeat_data:
                         agent['memory'] = heartbeat_data['memory']
 
-                self.config_data['agents'][i] = agent
                 return True
+            return False
 
-        return False
+        return self._update_agents(update)
 
     def push_config_to_agent(self, agent_id: str, config_content: str, extra_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -287,7 +306,14 @@ class AgentManager:
                 result = response.json()
                 # 更新配置版本
                 if result.get('success'):
-                    agent['config_version'] = config_md5[:8]
+                    def update_version(agents):
+                        for item in agents:
+                            if item['id'] == agent_id:
+                                item['config_version'] = config_md5[:8]
+                                return True
+                        return False
+
+                    self._update_agents(update_version)
                     return {'success': True, 'message': 'Config pushed successfully'}
                 else:
                     return {'success': False, 'message': result.get('message', 'Unknown error')}
@@ -621,14 +647,14 @@ class AgentManager:
                 result = response.json()
                 # 更新本地配置记录
                 if result.get('success'):
-                    agents = self.config_data.get('agents', [])
-                    for i, a in enumerate(agents):
-                        if a['id'] == agent_id:
-                            if 'logging_config' not in a:
-                                a['logging_config'] = {}
-                            a['logging_config']['enabled'] = enabled
-                            self.config_data['agents'][i] = a
-                            break
+                    def update_logging(agents):
+                        for item in agents:
+                            if item['id'] == agent_id:
+                                item.setdefault('logging_config', {})['enabled'] = enabled
+                                return True
+                        return False
+
+                    self._update_agents(update_logging)
                 return result
             else:
                 return {'success': False, 'message': f'HTTP {response.status_code}'}

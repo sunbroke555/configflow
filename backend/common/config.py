@@ -1,10 +1,14 @@
 """配置管理模块"""
 import os
 import json
-from typing import Dict, Any
+import copy
+from contextvars import ContextVar
+from collections.abc import MutableMapping, Iterator
+from typing import Callable, Dict, Any, Optional
 
 from backend.common.utils import get_local_ip
 from backend.common.resource import get_backend_resource
+from backend.common.config_repository import ProfileRepository
 from backend.utils.logger import get_logger
 
 # 获取当前模块的日志记录器
@@ -13,14 +17,11 @@ logger = get_logger(__name__)
 # 配置存储文件
 # 优先使用环境变量指定的路径，否则使用默认路径
 DATA_DIR = os.environ.get('DATA_DIR', '/data')
-if not os.path.exists(DATA_DIR):
+if not os.path.exists(DATA_DIR) and 'DATA_DIR' not in os.environ:
     DATA_DIR = '.'  # 开发模式，使用当前目录
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 AGGREGATION_PROVIDERS_DIR = os.path.join(DATA_DIR, 'providers')
 
-# 确保聚合 providers 目录存在
-if not os.path.exists(AGGREGATION_PROVIDERS_DIR):
-    os.makedirs(AGGREGATION_PROVIDERS_DIR)
 
 # 全局配置初始化函数
 def get_default_config() -> Dict[str, Any]:
@@ -35,7 +36,7 @@ def get_default_config() -> Dict[str, Any]:
         'rule_library': [],  # 规则仓库
         'system_config': {  # 系统配置
             'server_domain': '',
-            'github_proxy_domain': {},
+            'github_proxy_domain': '',
         },
         'subscription_aggregations': [],
         'mihomo': {  # Mihomo 配置
@@ -65,127 +66,188 @@ def get_default_config() -> Dict[str, Any]:
 
     return config
 
-# 全局配置
-config_data: Dict[str, Any] = get_default_config()
 
-def get_config():
-    """获取全局配置"""
-    return config_data
+def _get_initial_config() -> Dict[str, Any]:
+    """Keep the existing first-start template separate from migration defaults."""
+    config = get_default_config()
+    template_file = get_backend_resource('config_template.json')
+    try:
+        with open(template_file, 'r', encoding='utf-8') as handle:
+            template = json.load(handle)
+        if isinstance(template, dict):
+            config = _deep_merge(config, template)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return config
 
 
-def load_config():
-    """加载配置"""
-    global config_data, agent_manager
+_repository: Optional[ProfileRepository] = None
+_CONFIG_CACHE: ContextVar[Optional[Dict[str, Dict[str, Any]]]] = ContextVar(
+    'configflow_profile_cache', default=None
+)
+_CONFIG_BASELINES: ContextVar[Optional[Dict[str, Dict[str, Any]]]] = ContextVar(
+    'configflow_profile_baselines', default=None
+)
+
+
+def get_repository() -> ProfileRepository:
+    global _repository
+    if _repository is None:
+        _repository = ProfileRepository(
+            DATA_DIR,
+            default_config_factory=get_default_config,
+            initial_config_factory=_get_initial_config,
+        )
+    return _repository
+
+
+def set_repository(repository: ProfileRepository) -> None:
+    """Replace the repository for tests and embedded deployments."""
+    global _repository
+    _repository = repository
+    _CONFIG_CACHE.set({})
+    _CONFIG_BASELINES.set({})
+
+
+def _cache() -> Dict[str, Dict[str, Any]]:
+    cache = _CONFIG_CACHE.get()
+    if cache is None:
+        cache = {}
+        _CONFIG_CACHE.set(cache)
+    return cache
+
+
+def reset_config_context() -> None:
+    """Discard compatibility snapshots at request/task boundaries."""
+    _CONFIG_CACHE.set(None)
+    _CONFIG_BASELINES.set(None)
+
+
+class ProfileConfigProxy(MutableMapping[str, Any]):
+    """Compatibility mapping resolved to the current request profile."""
+
+    def _data(self) -> Dict[str, Any]:
+        return get_config()
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data()[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._data()[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self._data()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data())
+
+    def __len__(self) -> int:
+        return len(self._data())
+
+    def __deepcopy__(self, memo: Dict[int, Any]) -> Dict[str, Any]:
+        return copy.deepcopy(self._data(), memo)
+
+
+config_data = ProfileConfigProxy()
+
+
+def get_config(profile_id: Optional[str] = None) -> Dict[str, Any]:
+    """Get a request-scoped compatibility view of a profile."""
+    from backend.common.profile_context import resolve_profile_id
+
+    resolved_id = resolve_profile_id(profile_id)
+    cache = _cache()
+    if resolved_id not in cache:
+        cache[resolved_id] = get_repository().get_compat_config(resolved_id)
+        baselines = _CONFIG_BASELINES.get()
+        if baselines is None:
+            baselines = {}
+            _CONFIG_BASELINES.set(baselines)
+        baselines[resolved_id] = copy.deepcopy(cache[resolved_id])
+    return cache[resolved_id]
+
+
+def load_config() -> Dict[str, Any]:
+    """Initialize storage and normalize the active profile."""
     import uuid
+    from backend.common.profile_context import resolve_profile_id
 
-    # 如果 config.json 是目录（Docker 挂载时可能发生），删除它
-    if os.path.isdir(CONFIG_FILE):
-        import shutil
-        shutil.rmtree(CONFIG_FILE)
+    repository = get_repository()
+    _CONFIG_CACHE.set({})
+    active_id = resolve_profile_id()
+    data = get_config(active_id)
+    changed = False
+    for node in data.get('nodes', []):
+        if 'id' not in node:
+            node['id'] = f"node_{uuid.uuid4().hex[:8]}"
+            changed = True
+    if clean_invalid_aggregation_references():
+        changed = True
+    if clean_invalid_proxy_group_aggregations():
+        changed = True
+    if not data.get('system_config', {}).get('server_domain', '').strip():
+        data.setdefault('system_config', {})['server_domain'] = f"http://{get_local_ip()}:5001"
+        changed = True
+    if changed:
+        save_config(data, active_id)
 
-    if os.path.exists(CONFIG_FILE) and os.path.isfile(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-                # 如果文件为空，使用默认配置
-                if not content:
-                    save_config()
-                    return
-                loaded_data = json.loads(content)
-
-            # 与默认配置递归合并，补齐旧版本 config.json 中缺失的配置节。
-            # 代码中存在直接按键访问（config_data['subscriptions'] 等），缺键会抛
-            # KeyError 导致接口 500、页面报「加载订阅列表失败」。用户已有的值优先。
-            missing_keys = [k for k in get_default_config() if k not in loaded_data]
-            merged_data = _deep_merge(get_default_config(), loaded_data)
-
-            # 这样所有持有 config_data 引用的对象（如 agent_manager）都能看到更新
-            config_data.clear()
-            config_data.update(merged_data)
-
-            if missing_keys:
-                logger.info(f"配置缺少顶层项，已补齐默认值: {', '.join(missing_keys)}")
-
-            # 为没有 ID 的节点生成 ID
-            nodes_updated = False
-            for node in config_data.get('nodes', []):
-                if 'id' not in node:
-                    node['id'] = f"node_{uuid.uuid4().hex[:8]}"
-                    nodes_updated = True
-
-            # 清理聚合中的无效引用
-            aggregations_cleaned = clean_invalid_aggregation_references()
-
-            # 清理策略组中对已删除/已禁用聚合的引用
-            proxy_groups_cleaned = clean_invalid_proxy_group_aggregations()
-
-            # 如果补齐了缺失项、节点被更新或聚合/策略组被清理，保存配置
-            if missing_keys or nodes_updated or aggregations_cleaned or proxy_groups_cleaned:
-                save_config()
-
-        except (json.JSONDecodeError, ValueError) as e:
-            # JSON 解析失败，使用默认配置
-            print(f"配置文件解析失败，使用默认配置: {e}")
-            save_config()
-    else:
-        # 配置文件不存在，尝试从模板初始化
-        # 使用 resource helper 获取模板文件路径（兼容开发环境和 PyInstaller 打包后的环境）
-        template_file = get_backend_resource('config_template.json')
-        if os.path.exists(template_file) and os.path.isfile(template_file):
-            try:
-                # 从模板加载配置
-                import shutil
-                shutil.copy(template_file, CONFIG_FILE)
-                print(f'已从模板初始化配置文件: {template_file} -> {CONFIG_FILE}')
-
-                # 读取模板配置并加载到 config_data
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    loaded_template = json.loads(f.read())
-
-                # 更新 config_data（不要重新赋值，而是清空并更新）
-                config_data.clear()
-                config_data.update(loaded_template)
-            except Exception as e:
-                print(f'从模板初始化配置失败，使用空配置: {e}')
-                save_config()
-        else:
-            # 模板文件不存在，创建默认空配置
-            save_config()
-
-
-    # 如果 server_domain 未配置，自动设置为 http://本机IP:5001
-    server_domain_updated = False
-    if not config_data.get('system_config', {}).get('server_domain', '').strip():
-        local_ip = get_local_ip()
-        if 'system_config' not in config_data:
-            config_data['system_config'] = {}
-        config_data['system_config']['server_domain'] = f"http://{local_ip}:5001"
-        server_domain_updated = True
-        logger.info(f"Server domain not configured, auto-detected and set to: {config_data['system_config']['server_domain']}")
-
-    # 如果 server_domain 被自动设置，保存配置
-    if server_domain_updated:
-        save_config()
-
-    # 初始化 Agent 管理器单例
-    # 注意：由于我们使用 config_data.clear() + update() 而不是重新赋值
-    # agent_manager 持有的 config_data 引用始终有效
-    # 这里重新初始化是为了确保 agent_manager 正确初始化
     from backend.common.agent_manager import init_agent_manager
     init_agent_manager()
+    return data
 
 
-def save_config():
-    """保存配置到文件"""
-    try:
-        # 创建要保存的配置副本
-        config_to_save = {**config_data}
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config_to_save, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        print(f"Error saving config: {e}")
-        return False
+def save_config(config: Optional[Dict[str, Any]] = None, profile_id: Optional[str] = None) -> bool:
+    """Persist a profile while retaining the legacy call signature."""
+    from backend.common.profile_context import resolve_profile_id
+
+    resolved_id = resolve_profile_id(profile_id)
+    if config is None:
+        config = get_config(resolved_id)
+    repository = get_repository()
+    baseline = (_CONFIG_BASELINES.get() or {}).get(resolved_id, {})
+    profile_changes = {
+        key: value for key, value in config.items()
+        if key in repository.PROFILE_FIELDS and baseline.get(key) != value
+    }
+    if profile_changes:
+        repository.update_profile_fields(
+            resolved_id,
+            profile_changes,
+            baseline={key: baseline.get(key) for key in profile_changes},
+        )
+    system_changes = {
+        key: config[key] for key in ("system_config", "backup")
+        if key in config and baseline.get(key) != config[key]
+    }
+    if system_changes:
+        def update_system(system):
+            for key, value in system_changes.items():
+                if isinstance(system.get(key), dict) and isinstance(value, dict):
+                    system[key] = _deep_merge(system[key], value)
+                else:
+                    system[key] = copy.deepcopy(value)
+        repository.update_system_transaction(update_system)
+    _cache()[resolved_id] = copy.deepcopy(config)
+    baselines = _CONFIG_BASELINES.get()
+    if baselines is not None:
+        baselines[resolved_id] = copy.deepcopy(config)
+    return True
+
+
+def update_config_transaction(
+    updater: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
+    profile_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply an incremental resource update to freshly locked profile data."""
+    from backend.common.profile_context import resolve_profile_id
+
+    resolved_id = resolve_profile_id(profile_id)
+    result = get_repository().update_profile_transaction(resolved_id, updater)
+    _cache().pop(resolved_id, None)
+    baselines = _CONFIG_BASELINES.get()
+    if baselines is not None:
+        baselines.pop(resolved_id, None)
+    return result
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -205,13 +267,15 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return result
 
 
-def safe_import_config(new_data: Dict[str, Any]) -> None:
-    """安全导入配置：与默认配置递归合并，避免丢失字段。"""
-    default = get_default_config()
-    merged = _deep_merge(default, new_data)
-    config_data.clear()
-    config_data.update(merged)
-    save_config()
+def safe_import_config(new_data: Dict[str, Any], profile_id: Optional[str] = None) -> None:
+    """Safely import a legacy/full configuration into one profile."""
+    repository = get_repository()
+    profile_data = {
+        key: value for key, value in new_data.items()
+        if key not in repository.SYSTEM_FIELDS
+    }
+    merged = _deep_merge(get_config(profile_id), profile_data)
+    save_config(merged, profile_id)
 
 
 def clean_invalid_aggregation_references():

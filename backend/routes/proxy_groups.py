@@ -5,7 +5,8 @@ from flask import request, jsonify
 
 from backend.routes import proxy_groups_bp
 from backend.common.auth import require_auth
-from backend.common.config import get_config, save_config
+from backend.common.config import get_config, save_config, update_config_transaction
+from backend.utils.reorder import resolve_new_order
 from backend.utils.subscription_cache import load_subscription_cache
 
 
@@ -72,8 +73,9 @@ def handle_proxy_groups():
 
     elif request.method == 'POST':
         group = request.json
-        config_data['proxy_groups'].append(group)
-        save_config()
+        update_config_transaction(
+            lambda profile: profile.setdefault('proxy_groups', []).append(group)
+        )
         return jsonify({'success': True, 'data': group})
 
 
@@ -200,12 +202,19 @@ def preview_proxy_group_regex():
 @proxy_groups_bp.route('/reorder', methods=['POST'])
 @require_auth
 def reorder_proxy_groups():
-    """批量更新策略组顺序"""
+    """批量更新策略组顺序
+
+    按 id 排序时传 {'ids': [...], 'position': 'top'|'bottom'}；
+    传完整对象数组的旧格式仍然兼容。
+    """
     try:
         config_data = get_config()
-        new_order = request.json.get('groups', [])
+        body = request.json or {}
+        new_order, missing = resolve_new_order(config_data.get('proxy_groups', []), body, 'groups')
+        if missing:
+            return jsonify({'success': False, 'message': f'以下策略组 id 不存在: {missing}'}), 404
         config_data['proxy_groups'] = new_order
         save_config()
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'order': [g.get('id') for g in new_order]})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500

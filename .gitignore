@@ -23,31 +23,37 @@ dist/
 *.swo
 .claude/
 
-# Config
-config.json
-backend/*.yaml
-backend/*.conf
+# Runtime configuration and generated data only
+/config.json
+/backend/config.json
+/system.json
+/system.json.lock
+/profiles/
+/cache/
+/generated/
+/backup/
+/backend/rules/
+/backend/statics/
+/backend/providers/
+/backend/subscribes/
+/data/
+/backend/data/metrics/
+
+!*.example.json
+!*.sample.json
+!*.example.yaml
+!*.sample.yaml
 
 # Logs
 *.log
-backend/config.json
-frontend/node_modules/
-frontend/dist/
 
 # License keys (IMPORTANT: Never commit private keys!)
 keys/
 private_key.pem
 *.pem.private
-/backend/rules/
-/backend/statics/
-/backend/providers/
-/backend/subscribes/
+
 /frontend/dist.zip
-backup/
-/data/
 /backend/agents/go-agent/agent-test
-/backend/data/metrics/agent_1762946067748_metrics.json
-/backend/agents/go-agent/config.example.json
 /backend/agents/go-agent/config.test.json
 /backend/agents/go-agent/test_local.sh
 /backend/agents/go-agent/test_metrics.go

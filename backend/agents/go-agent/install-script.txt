@@ -443,7 +443,7 @@ register_to_server() {
 
     log "注册数据: $json_data"
 
-    # 发送注册请求
+    # 发送注册请求；响应可能包含令牌，禁止写入日志
     local response=$(curl -s -w "\n%{http_code}" -X POST "$register_url" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json" \
@@ -453,7 +453,7 @@ register_to_server() {
     local body=$(echo "$response" | sed '$d')
 
     log "注册响应状态码: $http_code"
-    log "注册响应内容: $body"
+
 
     if [ "$http_code" = "200" ]; then
         # 解析 JSON 响应
@@ -514,9 +514,8 @@ send_heartbeat() {
 
     local json_data="{\"version\":\"$AGENT_VERSION\",\"service_status\":\"$service_status\"}"
 
-    # 打印心跳命令（方便调试）
-    local token_prefix=$(echo "$TOKEN" | cut -c1-10)
-    log "发送心跳: curl -X POST '$heartbeat_url' -H 'Authorization: Bearer ${token_prefix}...' -H 'Content-Type: application/json' -d '$json_data'"
+    # 打印脱敏后的心跳命令（不得泄露任何令牌片段）
+    log "发送心跳: curl -X POST '$heartbeat_url' -H 'Authorization: Bearer ***' -H 'Content-Type: application/json' -d '$json_data'"
 
     # 发送心跳并记录详细结果
     local response=$(curl -s -w "\n%{http_code}" --connect-timeout 5 --max-time 10 -X POST "$heartbeat_url" \
@@ -532,12 +531,12 @@ send_heartbeat() {
 
     if [ $exit_code -ne 0 ]; then
         log_error "心跳发送失败: curl 退出码 $exit_code"
-        log_error "完整响应: $response"
+        log_error "心跳请求未完成（响应长度: ${#response}）"
     elif [ "$http_code" = "200" ]; then
         log "心跳发送成功 (服务状态: $service_status)"
     else
         log_error "心跳发送失败，HTTP状态码: $http_code"
-        log_error "响应内容: $body"
+        log_error "响应内容未记录（响应长度: ${#body}）"
     fi
 }
 
@@ -567,7 +566,7 @@ restart_service() {
         local http_code=$(echo "$response" | tail -n1)
         local body=$(echo "$response" | sed '$d')
 
-        log "重启请求响应: HTTP状态码=$http_code, 响应内容=$body"
+        log "重启请求响应: HTTP状态码=$http_code, 响应长度=${#body}"
 
         if [ "$http_code" = "200" ] || [ "$http_code" = "204" ]; then
             log "服务重启成功 (URL方式)"

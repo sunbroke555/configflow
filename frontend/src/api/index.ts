@@ -1,11 +1,27 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
+import { clearActiveProfileId, getActiveProfileId } from '@/profileContext'
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000
 })
+
+let profileRecovery: Promise<void> | null = null
+
+const recoverFromMissingProfile = (): Promise<void> => {
+  if (!profileRecovery) {
+    clearActiveProfileId()
+    profileRecovery = import('@/stores/profile')
+      .then(({ useProfileStore }) => useProfileStore().refreshProfiles())
+      .then(() => undefined)
+      .finally(() => {
+        profileRecovery = null
+      })
+  }
+  return profileRecovery
+}
 
 // 请求拦截器 - 添加 token
 api.interceptors.request.use(
@@ -14,6 +30,7 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
+    config.headers['X-ConfigFlow-Profile'] = getActiveProfileId()
     return config
   },
   (error) => {
@@ -27,7 +44,10 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
-    if (error.response?.status === 401) {
+    const message = error.response?.data?.message
+    if (error.response?.status === 404 && typeof message === 'string' && message.startsWith('Profile not found:')) {
+      void recoverFromMissingProfile().catch(() => undefined)
+    } else if (error.response?.status === 401) {
       // token 无效或过期
       localStorage.removeItem('token')
       localStorage.removeItem('username')
@@ -87,14 +107,29 @@ const getBaseUrl = () => {
   return localStorage.getItem('serverDomain') || window.location.origin
 }
 
+const profilePath = (profileId: string, path: string = '') =>
+  `/profiles/${encodeURIComponent(profileId)}${path}`
+
+export const profileApi = {
+  list: () => api.get('/profiles'),
+  get: (id: string) => api.get(profilePath(id)),
+  create: (data: any) => api.post('/profiles', data),
+  update: (id: string, data: any) => api.put(profilePath(id), data),
+  delete: (id: string) => api.delete(profilePath(id)),
+  clone: (id: string, data: any) => api.post(profilePath(id, '/clone'), data),
+  activate: (id: string) => api.post(profilePath(id, '/activate')),
+  export: (id: string) => api.get(profilePath(id, '/export'), { responseType: 'blob' }),
+  import: (id: string, data: any) => api.post(profilePath(id, '/import'), data),
+}
+
 // 配置生成
 export const generateApi = {
-  mihomo: () => api.post('/generate/mihomo', { base_url: getBaseUrl() }, { responseType: 'blob' }),
-  surge: () => api.post('/generate/surge', { base_url: getBaseUrl() }, { responseType: 'blob' }),
-  mosdns: () => api.post('/generate/mosdns', { base_url: getBaseUrl() }, { responseType: 'blob' }),
-  previewMihomo: () => api.post('/generate/mihomo/preview', { base_url: getBaseUrl() }),
-  previewSurge: () => api.post('/generate/surge/preview', { base_url: getBaseUrl() }),
-  previewMosdns: () => api.post('/generate/mosdns/preview', { base_url: getBaseUrl() })
+  mihomo: () => api.post(profilePath(getActiveProfileId(), '/generate/mihomo'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
+  surge: () => api.post(profilePath(getActiveProfileId(), '/generate/surge'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
+  mosdns: () => api.post(profilePath(getActiveProfileId(), '/generate/mosdns'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
+  previewMihomo: () => api.post(profilePath(getActiveProfileId(), '/generate/mihomo/preview'), { base_url: getBaseUrl() }),
+  previewSurge: () => api.post(profilePath(getActiveProfileId(), '/generate/surge/preview'), { base_url: getBaseUrl() }),
+  previewMosdns: () => api.post(profilePath(getActiveProfileId(), '/generate/mosdns/preview'), { base_url: getBaseUrl() })
 }
 
 // 配置导入导出
@@ -119,6 +154,7 @@ export const agentApi = {
   getAll: () => api.get('/agents'),
   create: (data: any) => api.post('/agents', data),
   update: (id: string, data: any = {}) => api.post(`/agents/${id}/update`, data),
+  bindProfile: (id: string, profileId: string) => api.put(`/agents/${id}`, { profile_id: profileId }),
   delete: (id: string) => api.delete(`/agents/${id}`),
   restart: (id: string) => api.post(`/agents/${id}/restart`),
   getStatus: (id: string) => api.get(`/agents/${id}/status`),

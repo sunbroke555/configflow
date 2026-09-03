@@ -17,6 +17,7 @@ mosdns_bp = Blueprint('mosdns', __name__, url_prefix='/api/mosdns')
 settings_bp = Blueprint('settings', __name__, url_prefix='/api')
 logs_bp = Blueprint('logs', __name__, url_prefix='/api/logs')
 stats_bp = Blueprint('stats', __name__, url_prefix='/api/stats')
+profiles_bp = Blueprint('profiles', __name__, url_prefix='/api/profiles')
 
 
 def register_blueprints(app):
@@ -39,6 +40,7 @@ def register_blueprints(app):
     from backend.routes import settings
     from backend.routes.logs import logs_bp  # 日志路由
     from backend.routes.stats import stats_bp  # 统计路由
+    from backend.routes import profiles
 
     # 注册所有蓝图
     app.register_blueprint(auth_bp)
@@ -57,3 +59,21 @@ def register_blueprints(app):
     app.register_blueprint(settings_bp)
     app.register_blueprint(logs_bp)  # 注册日志路由
     app.register_blueprint(stats_bp)  # 注册统计路由
+    app.register_blueprint(profiles_bp)
+
+    from backend.common.config_repository import ProfileRepositoryError, ProfileNotFound, ProfileValidationError
+    from backend.common.profile_context import install_profile_context
+
+    @app.errorhandler(ProfileValidationError)
+    def _profile_validation_error(error):
+        return {'success': False, 'message': str(error)}, 400
+
+    @app.errorhandler(ProfileNotFound)
+    def _profile_not_found(error):
+        return {'success': False, 'message': f'Profile not found: {error.args[0]}'}, 404
+
+    @app.errorhandler(ProfileRepositoryError)
+    def _profile_repository_error(error):
+        return {'success': False, 'message': str(error)}, 400
+
+    install_profile_context(app)

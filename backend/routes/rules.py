@@ -6,10 +6,19 @@ from urllib.parse import urlparse
 from flask import request, jsonify, make_response
 from backend.routes import rules_bp as bp, rule_sets_bp as rule_sets_bp
 from backend.common.auth import require_auth
-from backend.common.config import config_data, save_config, get_config
+from backend.common.config import (
+    config_data,
+    save_config,
+    update_config_transaction,
+    get_config,
+    get_repository,
+)
+from backend.common.profile_context import profile_api_path, resolve_profile_id
 from backend.utils.rule_matcher import parse_rule_line, match_query, is_valid_domain, is_valid_ip
+from backend.utils.reorder import reorder_by_ids
 from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
 from backend.utils.logger import get_logger
+from backend.utils.url_utils import safe_exception_details, safe_url_for_log
 
 logger = get_logger(__name__)
 
@@ -56,7 +65,10 @@ def normalize_rule_config_url(rule_item: dict) -> None:
 
         source_type = library_rule.get('source_type', 'url')
         if source_type == 'content':
-            rule_item['url'] = f"/api/rule-library/content/{library_rule_id}"
+            rule_item['url'] = profile_api_path(
+                config_data,
+                f'/rule-library/content/{library_rule_id}',
+            )
         else:
             rule_item['url'] = library_rule.get('url', '')
         return
@@ -106,9 +118,9 @@ def handle_rules():
         if 'itemType' not in rule:
             rule['itemType'] = 'rule' if 'rule_type' in rule else 'ruleset'
         normalize_rule_config_url(rule)
-        rule_configs = config_data.setdefault('rule_configs', [])
-        rule_configs.insert(0, rule)  # 新规则添加到第一位
-        save_config()
+        update_config_transaction(
+            lambda profile: profile.setdefault('rule_configs', []).insert(0, rule)
+        )
         return jsonify({'success': True, 'data': rule})
 
 
@@ -140,31 +152,48 @@ def handle_rule(rule_id):
 @bp.route('/reorder', methods=['POST'])
 @require_auth
 def reorder_rules():
-    """批量更新规则和规则集顺序"""
+    """批量更新规则和规则集顺序
+
+    按 id 排序时传 {'ids': [...], 'position': 'top'|'bottom'}；
+    传完整 rule_configs 数组的旧格式仍然兼容。
+    """
     try:
         # 检查请求体是否存在
         if not request.json:
             logger.warning("Reorder request with no JSON body")
             return jsonify({'success': False, 'message': 'No request body provided'}), 400
 
-        rule_configs = request.json.get('rule_configs')
+        body = request.json
+        ids = body.get('ids')
 
-        # 检查 rule_configs 是否存在且为列表
-        if rule_configs is None:
-            logger.warning("Reorder request with no rule_configs field")
-            return jsonify({'success': False, 'message': 'No rule_configs provided'}), 400
+        if ids is not None:
+            if not isinstance(ids, list):
+                logger.warning(f"Reorder request with invalid ids type: {type(ids)}")
+                return jsonify({'success': False, 'message': 'ids must be a list'}), 400
+            rule_configs, missing = reorder_by_ids(
+                config_data.get('rule_configs', []), ids, body.get('position', 'top')
+            )
+            if missing:
+                return jsonify({'success': False, 'message': f'以下规则 id 不存在: {missing}'}), 404
+        else:
+            rule_configs = body.get('rule_configs')
 
-        if not isinstance(rule_configs, list):
-            logger.warning(f"Reorder request with invalid rule_configs type: {type(rule_configs)}")
-            return jsonify({'success': False, 'message': 'rule_configs must be a list'}), 400
+            # 检查 rule_configs 是否存在且为列表
+            if rule_configs is None:
+                logger.warning("Reorder request with no rule_configs field")
+                return jsonify({'success': False, 'message': 'No rule_configs provided'}), 400
+
+            if not isinstance(rule_configs, list):
+                logger.warning(f"Reorder request with invalid rule_configs type: {type(rule_configs)}")
+                return jsonify({'success': False, 'message': 'rule_configs must be a list'}), 400
 
         config_data['rule_configs'] = rule_configs
         save_config()
         logger.info(f"Successfully reordered {len(rule_configs)} rules")
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'order': [r.get('id') for r in rule_configs]})
     except Exception as e:
-        logger.error(f"Error reordering rules: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error("Error reordering rules: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': 'Error reordering rules'}), 500
 
 
 @bp.route('/batch', methods=['POST'])
@@ -192,9 +221,9 @@ def batch_add_rules():
         }
         new_rules.append(rule)
 
-    rule_configs = config_data.setdefault('rule_configs', [])
-    rule_configs[:0] = new_rules  # 新规则添加到最前面
-    save_config()
+    update_config_transaction(
+        lambda profile: profile.setdefault('rule_configs', []).__setitem__(slice(0, 0), new_rules)
+    )
     return jsonify({'success': True, 'count': len(new_rules), 'rules': new_rules})
 
 
@@ -212,7 +241,8 @@ def get_local_rule(name):
     """
     import os
     from flask import send_file
-    from backend.common.config import DATA_DIR
+    from backend.common.config import get_repository
+    from backend.common.profile_context import resolve_profile_id
     from backend.utils.logger import get_logger
 
     logger = get_logger(__name__)
@@ -221,8 +251,10 @@ def get_local_rule(name):
         # 对规则名称进行清理，确保与文件名匹配
         from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local
 
+        profile_id = resolve_profile_id()
+        repository = get_repository()
         filename = f"{sanitize_rule_name(name)}.list"
-        filepath = os.path.join(get_rules_dir(), filename)
+        filepath = repository.profile_path(profile_id, os.path.join('rules', filename))
 
         logger.info(f"Requesting local rule: {name}, filepath: {filepath}")
 
@@ -252,7 +284,7 @@ def get_local_rule(name):
         if rule.get('source_type') == 'url':
             import requests
             url = rule.get('url', '')
-            logger.info(f"Rule '{name}' is URL type, attempting to fetch from: {url}")
+            logger.info(f"Rule '{name}' is URL type, attempting to fetch from: {safe_url_for_log(url)}")
 
             try:
                 # 尝试在 2 秒内拉取最新数据
@@ -260,9 +292,11 @@ def get_local_rule(name):
                 if response.status_code == 200:
                     logger.info(f"Successfully fetched latest data for rule '{name}'")
                     # 更新本地缓存
-                    os.makedirs(get_rules_dir(), exist_ok=True)
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        f.write(response.text)
+                    repository.write_profile_text(
+                        profile_id,
+                        os.path.join('rules', filename),
+                        response.text,
+                    )
                     # 返回响应并添加 Content-Length 头
                     content = response.text.encode('utf-8')
                     resp = make_response(content, 200)
@@ -274,7 +308,7 @@ def get_local_rule(name):
             except requests.Timeout:
                 logger.warning(f"Timeout fetching rule '{name}', falling back to cache")
             except Exception as e:
-                logger.error(f"Error fetching rule '{name}': {e}, falling back to cache")
+                logger.error("Error fetching rule '%s', falling back to cache: %s", name, safe_exception_details(e))
 
         # 如果是 content 类型或拉取失败，使用本地缓存
         if os.path.exists(filepath):
@@ -289,7 +323,7 @@ def get_local_rule(name):
             # 缓存文件不存在，尝试重新生成
             logger.warning(f"Cache file not found for rule '{name}', regenerating...")
             try:
-                save_rule_to_local(rule)
+                save_rule_to_local(rule, profile_id=profile_id)
                 if os.path.exists(filepath):
                     logger.info(f"Successfully regenerated cache for rule '{name}'")
                     with open(filepath, 'rb') as f:
@@ -312,8 +346,8 @@ def get_local_rule(name):
                 }), 500
 
     except Exception as e:
-        logger.error(f"Error getting local rule '{name}': {str(e)}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error("Error getting local rule '%s': %s", name, safe_exception_details(e))
+        return jsonify({'success': False, 'message': 'Error getting local rule'}), 500
 
 
 # ==================== /api/rule-sets 路由（向后兼容）====================
@@ -337,9 +371,9 @@ def handle_rule_sets():
         # 确保有 itemType 字段
         rule_set['itemType'] = 'ruleset'
         normalize_rule_config_url(rule_set)
-        rule_configs = config_data.setdefault('rule_configs', [])
-        rule_configs.insert(0, rule_set)  # 新规则集添加到第一位
-        save_config()
+        update_config_transaction(
+            lambda profile: profile.setdefault('rule_configs', []).insert(0, rule_set)
+        )
         return jsonify({'success': True, 'data': rule_set})
 
 
@@ -381,7 +415,8 @@ def reorder_rule_sets():
             'message': 'This endpoint is deprecated. Please use /api/rules/reorder instead.'
         }), 410
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error("Deprecated rule endpoint failed: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': 'Deprecated rule endpoint failed'}), 500
 
 
 def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
@@ -399,6 +434,8 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
     rule_content = ''
     rule_name = ''
     filepath = ''
+    profile_id = resolve_profile_id()
+    repository = get_repository()
 
     # 获取规则名称和缓存路径
     if library_rule:
@@ -408,7 +445,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
 
     if rule_name:
         filename = f"{sanitize_rule_name(rule_name)}.list"
-        filepath = os.path.join(get_rules_dir(), filename)
+        filepath = str(repository.profile_path(profile_id, os.path.join('rules', filename)))
 
     # 1. 优先尝试从本地缓存读取
     if filepath and os.path.exists(filepath):
@@ -418,7 +455,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
             logger.info(f"Loaded rule content from cache: {filepath}")
             return rule_content
         except Exception as e:
-            logger.warning(f"Failed to read cached rule file {filepath}: {e}")
+            logger.warning("Failed to read cached rule file %s: %s", filepath, safe_exception_details(e))
 
     # 2. 如果缓存不存在或读取失败，从规则仓库获取内容
     if library_rule and not rule_content:
@@ -436,21 +473,23 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
                     response = requests.get(url, timeout=30)
                     if response.status_code == 200:
                         rule_content = response.text
-                        logger.info(f"Fetched rule content from library URL: {url}")
+                        logger.info(f"Fetched rule content from library URL: {safe_url_for_log(url)}")
 
                         # 保存到本地缓存
                         if filepath:
                             try:
-                                os.makedirs(get_rules_dir(), exist_ok=True)
-                                with open(filepath, 'w', encoding='utf-8') as f:
-                                    f.write(rule_content)
+                                repository.write_profile_text(
+                                    profile_id,
+                                    os.path.join('rules', filename),
+                                    rule_content,
+                                )
                                 logger.info(f"Cached rule content to: {filepath}")
                             except Exception as cache_error:
                                 logger.warning(f"Failed to cache rule content to {filepath}: {cache_error}")
 
                         return rule_content
                 except Exception as e:
-                    logger.warning(f"Failed to fetch rule from library URL {url}: {e}")
+                    logger.warning("Failed to fetch rule from library URL %s: %s", safe_url_for_log(url), safe_exception_details(e))
 
     # 3. 如果规则仓库没有，尝试从规则集的 url 字段获取
     if not rule_content:
@@ -466,21 +505,23 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
                 response = requests.get(url, timeout=30)
                 if response.status_code == 200:
                     rule_content = response.text
-                    logger.info(f"Fetched rule content from item URL: {url}")
+                    logger.info(f"Fetched rule content from item URL: {safe_url_for_log(url)}")
 
                     # 保存到本地缓存
                     if filepath:
                         try:
-                            os.makedirs(get_rules_dir(), exist_ok=True)
-                            with open(filepath, 'w', encoding='utf-8') as f:
-                                f.write(rule_content)
+                            repository.write_profile_text(
+                                profile_id,
+                                os.path.join('rules', filename),
+                                rule_content,
+                            )
                             logger.info(f"Cached rule content to: {filepath}")
                         except Exception as cache_error:
                             logger.warning(f"Failed to cache rule content to {filepath}: {cache_error}")
 
                     return rule_content
             except Exception as e:
-                logger.warning(f"Failed to fetch rule from item URL {url}: {e}")
+                logger.warning("Failed to fetch rule from item URL %s: %s", safe_url_for_log(url), safe_exception_details(e))
 
     return rule_content
 
@@ -589,7 +630,7 @@ def match_test_rule():
 
                 except Exception as e:
                     # 规则集处理失败，记录错误并跳过该规则集
-                    logger.error(f'Error processing ruleset "{rule_set_name}": {e}')
+                    logger.error('Error processing ruleset "%s": %s', rule_set_name, safe_exception_details(e))
                     continue
 
         # 没有匹配到任何规则
@@ -602,8 +643,8 @@ def match_test_rule():
         })
 
     except Exception as e:
-        logger.error(f'Rule match test failed: {e}')
-        return jsonify({'success': False, 'message': f'查询失败: {str(e)}'}), 500
+        logger.error('Rule match test failed: %s', safe_exception_details(e))
+        return jsonify({'success': False, 'message': '查询失败'}), 500
 
 
 @bp.route('/find-duplicates', methods=['POST'])
@@ -721,5 +762,5 @@ def find_duplicate_rules():
         })
 
     except Exception as e:
-        logger.error(f'Find duplicate rules failed: {e}', exc_info=True)
-        return jsonify({'success': False, 'message': f'查重失败: {str(e)}'}), 500
+        logger.error('Find duplicate rules failed: %s', safe_exception_details(e))
+        return jsonify({'success': False, 'message': '查重失败'}), 500

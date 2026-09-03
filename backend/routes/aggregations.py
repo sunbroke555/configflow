@@ -13,7 +13,15 @@ from typing import Dict, Any
 from datetime import datetime
 from flask import request, jsonify, send_file, current_app, Response
 
-from backend.common.config import config_data, save_config, DATA_DIR
+from backend.common.config import (
+    config_data,
+    save_config,
+    update_config_transaction,
+    DATA_DIR,
+    get_repository,
+    get_config,
+)
+from backend.common.profile_context import resolve_profile_id
 from backend.common.auth import validate_token_or_jwt, require_auth
 from backend.routes import subscription_aggregations_bp as bp
 from backend.converters.mihomo import convert_node_to_mihomo
@@ -24,15 +32,13 @@ from backend.utils.sub_store_client import (
     proxies_to_nodes,
 )
 from backend.utils.logger import get_logger
+from backend.utils.url_utils import safe_exception_details
 
 logger = get_logger(__name__)
 
 # 聚合 provider 文件存储目录
 AGGREGATION_PROVIDERS_DIR = os.path.join(DATA_DIR, 'providers')
 
-# 确保目录存在
-if not os.path.exists(AGGREGATION_PROVIDERS_DIR):
-    os.makedirs(AGGREGATION_PROVIDERS_DIR)
 
 
 # ============================================================================
@@ -60,6 +66,8 @@ def generate_aggregation_provider(aggregation: Dict[str, Any]) -> Dict[str, Any]
     4. 转换为 mihomo 格式
     5. 生成并保存 YAML 文件
     """
+    profile_id = resolve_profile_id()
+    config_data = get_config(profile_id)
     agg_id = aggregation['id']
     agg_name = aggregation['name']
 
@@ -106,7 +114,8 @@ def generate_aggregation_provider(aggregation: Dict[str, Any]) -> Dict[str, Any]
                     {
                         'subscription_name': sub['name'],
                         'url': sub.get('url')
-                    }
+                    },
+                    profile_id=profile_id,
                 )
                 if source == 'rendered_yaml':
                     logger.info(f"成功直接复用订阅 URL 返回的 Sub-Store YAML 并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
@@ -119,11 +128,11 @@ def generate_aggregation_provider(aggregation: Dict[str, Any]) -> Dict[str, Any]
             except Exception as e:
                 proxies = None
                 nodes_list = None
-                logger.warning(f"通过 Sub-Store 获取订阅 '{sub['name']}' 失败: {e}, 尝试读取本地缓存")
+                logger.warning("通过 Sub-Store 获取订阅 '%s' 失败, 尝试读取本地缓存: %s", sub['name'], safe_exception_details(e))
 
             # 如果从 Sub-Store 获取失败，从本地缓存读取
             if not nodes_list:
-                cache = load_subscription_cache(sub_id)
+                cache = load_subscription_cache(sub_id, profile_id=profile_id)
                 if cache:
                     nodes_list = cache.get('nodes', [])
                     logger.info(f"从本地缓存读取订阅 '{sub['name']}', 节点数: {len(nodes_list)}")
@@ -156,7 +165,7 @@ def generate_aggregation_provider(aggregation: Dict[str, Any]) -> Dict[str, Any]
                         results[fetched_id] = (proxies, nodes_list)
                     except Exception as e:
                         # 兜底：单个订阅的任何未预期异常都不影响其他订阅
-                        logger.error(f"订阅拉取任务异常: {e}")
+                        logger.error("订阅拉取任务异常: %s", safe_exception_details(e))
 
         # 按聚合中配置的订阅顺序汇总，保证输出稳定
         for sub_id, _sub in pending:
@@ -193,7 +202,7 @@ def generate_aggregation_provider(aggregation: Dict[str, Any]) -> Dict[str, Any]
             regex = re.compile(regex_filter)
             all_nodes = [node for node in all_nodes if regex.search(node.get('name', ''))]
         except re.error as e:
-            logger.error(f"聚合 '{agg_name}' 的正则表达式无效: {e}")
+            logger.error("聚合 '%s' 的正则表达式无效: %s", agg_name, safe_exception_details(e))
 
     # 4. 转换为 mihomo 格式
     # 构建 sub-store proxies 按名称索引（用于快速查找）
@@ -226,16 +235,18 @@ def generate_aggregation_provider(aggregation: Dict[str, Any]) -> Dict[str, Any]
         indent=2
     )
 
-    # 6. 保存到文件
-    file_path = os.path.join(AGGREGATION_PROVIDERS_DIR, f"{agg_id}.yaml")
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(yaml_content)
+    # 6. 保存到当前 profile 的文件
+    file_path = get_repository().write_profile_text(
+        profile_id,
+        os.path.join('providers', f"{agg_id}.yaml"),
+        yaml_content,
+    )
 
     logger.info(f"生成聚合 provider: {agg_name}, {len(proxies)} 个节点")
 
     # 7. 返回文件路径和统计数据（不保存到配置文件）
     return {
-        'file_path': file_path,
+        'file_path': str(file_path),
         'subscription_node_counts': subscription_node_counts,
         'total_count': len(proxies)
     }
@@ -317,11 +328,9 @@ def handle_subscription_aggregations():
         aggregation.pop('subscription_node_counts', None)
         aggregation.pop('loading_count', None)
 
-        if 'subscription_aggregations' not in config_data:
-            config_data['subscription_aggregations'] = []
-
-        config_data['subscription_aggregations'].append(aggregation)
-        save_config()
+        update_config_transaction(
+            lambda profile: profile.setdefault('subscription_aggregations', []).append(aggregation)
+        )
 
         return jsonify({'success': True, 'data': aggregation})
 
@@ -375,7 +384,8 @@ def handle_subscription_aggregation_item(agg_id):
 
             return jsonify({'success': False, 'message': 'Aggregation not found'}), 404
         except Exception as e:
-            return jsonify({'success': False, 'message': str(e)}), 500
+            logger.error("聚合操作失败: %s", safe_exception_details(e))
+            return jsonify({'success': False, 'message': '聚合操作失败'}), 500
 
     elif request.method == 'DELETE':
         # 删除聚合
@@ -425,8 +435,8 @@ def get_aggregation_node_count(agg_id):
         })
 
     except Exception as e:
-        logger.error(f"获取聚合节点数量失败: {str(e)}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error("获取聚合节点数量失败: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': '获取聚合节点数量失败'}), 500
 
 
 @bp.route('/<agg_id>/preview', methods=['GET'])
@@ -463,7 +473,8 @@ def preview_aggregation_nodes(agg_id):
         })
 
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error("聚合操作失败: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': '聚合操作失败'}), 500
 
 
 @bp.route('/<agg_id>/provider', methods=['GET'])
@@ -523,4 +534,5 @@ def get_aggregation_provider(agg_id):
         )
 
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        logger.error("聚合操作失败: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': '聚合操作失败'}), 500

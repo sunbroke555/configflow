@@ -455,6 +455,7 @@ import {
   CopyDocument
 } from '@element-plus/icons-vue'
 import api from '@/api'
+import { activeProfileId } from '@/profileContext'
 import Sortable from 'sortablejs'
 
 interface RuleLibraryItem {
@@ -1244,7 +1245,7 @@ const handleSaveProxyDomains = async () => {
 const getRuleDownloadUrl = (rule: RuleLibraryItem): string => {
   if (rule.source_type === 'content') {
     const baseUrl = `${window.location.protocol}//${window.location.host}`
-    return `${baseUrl}/api/rule-library/content/${rule.id}`
+    return `${baseUrl}/api/profiles/${encodeURIComponent(activeProfileId.value)}/rule-library/content/${rule.id}`
   }
   return rule.url || ''
 }

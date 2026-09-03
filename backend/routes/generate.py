@@ -1,6 +1,5 @@
 """配置生成路由"""
 import io
-import os
 import zipfile
 
 import requests
@@ -8,7 +7,8 @@ from flask import request, jsonify, send_file
 
 from backend.routes import generate_bp
 from backend.common.auth import require_auth
-from backend.common.config import get_config, DATA_DIR
+from backend.common.config import get_config, get_repository
+from backend.common.profile_context import resolve_profile_id
 from backend.converters.mihomo import generate_mihomo_config
 from backend.converters.surge import generate_surge_config
 from backend.converters.mosdns import (
@@ -32,9 +32,9 @@ def generate_mihomo():
         yaml_content = generate_mihomo_config(config_data, base_url=base_url)
 
         # 保存到数据目录
-        output_file = os.path.join(DATA_DIR, 'config.yaml')
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(yaml_content)
+        output_file = get_repository().write_generated(
+            resolve_profile_id(), 'config.yaml', yaml_content
+        )
 
         return send_file(output_file, as_attachment=True, download_name='mihomo.yaml')
     except Exception as e:
@@ -55,9 +55,9 @@ def generate_surge():
         config_content = generate_surge_config(config_data, base_url=base_url)
 
         # 保存到数据目录
-        output_file = os.path.join(DATA_DIR, 'config.conf')
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(config_content)
+        output_file = get_repository().write_generated(
+            resolve_profile_id(), 'config.conf', config_content
+        )
 
         return send_file(output_file, as_attachment=True, download_name='surge.conf')
     except Exception as e:

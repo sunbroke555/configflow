@@ -121,6 +121,27 @@
           <div class="section-value">{{ agent.version || 'N/A' }}</div>
         </div>
 
+        <div class="card-section profile-binding">
+          <div class="section-label">
+            <el-icon><Setting /></el-icon>
+            配置 Profile
+          </div>
+          <select
+            class="agent-profile-native-select"
+            :value="agent.profile_id || 'default'"
+            :disabled="bindingAgentId === agent.id"
+            @change="handleAgentProfileChange(agent, $event)"
+          >
+            <option
+              v-for="profile in profiles"
+              :key="profile.id"
+              :value="profile.id"
+            >
+              {{ profile.name }}
+            </option>
+          </select>
+        </div>
+
         <!-- 系统监控指标 -->
         <div v-if="agent.system_metrics" class="metrics-section">
           <div class="metrics-header">
@@ -862,10 +883,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
-import { Document, Refresh, Monitor, SuccessFilled, WarningFilled, DocumentCopy, QuestionFilled, Connection, Clock, InfoFilled, Upload, RefreshRight, View, Delete, Close, Download, TrendCharts } from '@element-plus/icons-vue'
+import { Document, Refresh, Monitor, SuccessFilled, WarningFilled, DocumentCopy, QuestionFilled, Connection, Clock, InfoFilled, Upload, RefreshRight, View, Delete, Close, Download, TrendCharts, Setting } from '@element-plus/icons-vue'
 import { agentApi } from '@/api'
 import api from '@/api'
 import type { Agent } from '@/types'
+import { useProfileStore } from '@/stores/profile'
 import { use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent, TitleComponent } from 'echarts/components'
@@ -876,6 +898,8 @@ import VChart from 'vue-echarts'
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
 
 const agents = ref<Agent[]>([])
+const { profiles, refreshProfiles } = useProfileStore()
+const bindingAgentId = ref<string | null>(null)
 const scriptDialogVisible = ref(false)
 const logsDialogVisible = ref(false)
 const metricsDialogVisible = ref(false)
@@ -1307,6 +1331,31 @@ const loadAgents = async () => {
   } catch (error) {
     ElMessage.error('加载 Agent 列表失败')
   }
+}
+
+const bindAgentProfile = async (agent: Agent, profileId: string): Promise<boolean> => {
+  const previousProfileId = agent.profile_id || 'default'
+  if (profileId === previousProfileId) return true
+  bindingAgentId.value = agent.id
+  try {
+    await agentApi.bindProfile(agent.id, profileId)
+    agent.profile_id = profileId
+    ElMessage.success('Agent 配置 Profile 已更新')
+    return true
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || 'Agent 配置 Profile 更新失败')
+    return false
+  } finally {
+    bindingAgentId.value = null
+  }
+}
+
+const handleAgentProfileChange = async (agent: Agent, event: Event) => {
+  const select = event.target
+  if (!(select instanceof HTMLSelectElement)) return
+  const previousProfileId = agent.profile_id || 'default'
+  const updated = await bindAgentProfile(agent, select.value)
+  if (!updated) select.value = previousProfileId
 }
 
 // 格式化时间
@@ -2096,6 +2145,7 @@ const stopAutoRefresh = () => {
 
 onMounted(() => {
   loadAgents()
+  refreshProfiles().catch(() => undefined)
   startAutoRefresh()
 })
 
@@ -2755,7 +2805,49 @@ onUnmounted(() => {
   color: #909399 !important;
 }
 
-/* Agent select popper 样式已移除（使用 teleported=false） */
+.agent-profile-native-select {
+  width: 100%;
+  height: 36px;
+  padding: 0 34px 0 12px;
+  border: 1px solid rgba(107, 115, 255, 0.2);
+  border-radius: var(--agent-radius-sm, 12px);
+  background-color: rgba(107, 115, 255, 0.06);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%235b6dff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+  color: #30354d;
+  -webkit-text-fill-color: #30354d;
+  color-scheme: light;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: all 0.2s ease;
+}
+
+.agent-profile-native-select:hover {
+  border-color: rgba(107, 115, 255, 0.38);
+  background-color: rgba(107, 115, 255, 0.1);
+}
+
+.agent-profile-native-select:focus {
+  border-color: #5b6dff;
+  box-shadow: 0 0 0 3px rgba(107, 115, 255, 0.15);
+  outline: none;
+}
+
+.agent-profile-native-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.agent-profile-native-select option {
+  background: #fff;
+  color: #30354d;
+  font-weight: 500;
+}
 
 :deep(.el-input-number) {
   width: 100%;

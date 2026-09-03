@@ -4,6 +4,7 @@ MCP 工具不复制业务逻辑，而是在进程内复用现有 REST 路由：
 所有既有的参数校验、持久化和副作用都保持单一实现。
 """
 import json
+from contextvars import ContextVar
 from typing import Any, Dict, Optional
 
 from flask import current_app
@@ -20,11 +21,24 @@ class ApiError(Exception):
         self.message = message
 
 
+_MCP_PROFILE_ID: ContextVar[Optional[str]] = ContextVar('mcp_profile_id', default=None)
+
+
+def set_profile_context(profile_id: Optional[str]):
+    return _MCP_PROFILE_ID.set(profile_id)
+
+
+def reset_profile_context(token) -> None:
+    _MCP_PROFILE_ID.reset(token)
+
+
 def call_api(
     method: str,
     path: str,
     body: Optional[Dict[str, Any]] = None,
     query: Optional[Dict[str, Any]] = None,
+    headers: Optional[Dict[str, str]] = None,
+    profile_id: Optional[str] = None,
 ) -> Any:
     """在进程内调用自身的 REST 接口
 
@@ -43,12 +57,18 @@ def call_api(
     client = current_app.test_client()
     clean_query = {k: v for k, v in (query or {}).items() if v is not None}
 
+    request_headers = dict(headers or {})
+    selected_profile_id = profile_id or _MCP_PROFILE_ID.get()
+    if selected_profile_id:
+        request_headers.setdefault('X-ConfigFlow-Profile', selected_profile_id)
+    request_headers[INTERNAL_CALL_HEADER] = INTERNAL_CALL_TOKEN
+
     response = client.open(
         path,
         method=method,
         json=body if body is not None else None,
         query_string=clean_query,
-        headers={INTERNAL_CALL_HEADER: INTERNAL_CALL_TOKEN},
+        headers=request_headers,
     )
 
     # 部分接口（如 MosDNS 配置生成）返回 zip 等二进制，不能按文本解码

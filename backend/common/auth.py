@@ -13,10 +13,28 @@ from backend.common.internal_call import is_internal_call
 JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or secrets.token_urlsafe(48)
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION_HOURS = 24
+MAX_AUTH_TOKEN_LENGTH = 8192
 
 # 登录配置（从环境变量读取）
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', '')  # 默认为空表示不需要登录
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '')
+
+
+def parse_bearer_token(auth_header):
+    """Return a strictly formatted ASCII Bearer token, or ``None``."""
+    if not isinstance(auth_header, str) or not auth_header.startswith('Bearer '):
+        return None
+    token = auth_header[len('Bearer '):]
+    if not token or len(token) > MAX_AUTH_TOKEN_LENGTH:
+        return None
+    if any(ord(char) < 0x21 or ord(char) > 0x7E for char in token):
+        return None
+    return token
+
+
+def is_token_within_length(token):
+    """Return whether a non-Bearer credential is a bounded non-empty string."""
+    return isinstance(token, str) and 0 < len(token) <= MAX_AUTH_TOKEN_LENGTH
 
 
 def is_auth_enabled():
@@ -46,7 +64,7 @@ def verify_token(token):
         return {'error': 'invalid', 'detail': str(e)}
 
 
-def validate_token_or_jwt(request_obj):
+def validate_token_or_jwt(request_obj, config=None):
     """验证 JWT token（前端）或 URL query token（外部客户端）
 
     Args:
@@ -60,28 +78,42 @@ def validate_token_or_jwt(request_obj):
         return {'valid': True}
 
     # 2. 检查 URL query token（用于外部客户端）
-    from backend.common.config import config_data
-    config_token = config_data.get('system_config', {}).get('config_token', '')
+    if config is None:
+        from backend.common.config import config_data
+        config = config_data
+    system_config = config.get('system_config', {}) or {}
+    config_token = system_config.get('config_token', '')
+    rule_proxy_token = system_config.get('rule_proxy_token', '')
+    retired_rule_proxy_tokens = system_config.get('retired_rule_proxy_tokens', [])
+    if not isinstance(retired_rule_proxy_tokens, list):
+        retired_rule_proxy_tokens = []
+    auth_header = request_obj.headers.get('Authorization', '')
+    bearer = parse_bearer_token(auth_header)
+    url_token = request_obj.args.get('token', '')
+    if not is_token_within_length(url_token):
+        url_token = ''
+
+    # The internal rule-proxy capability must never authenticate public APIs,
+    # even if persisted legacy state accidentally made both tokens equal.
+    internal_tokens = {
+        token for token in [rule_proxy_token, *retired_rule_proxy_tokens]
+        if isinstance(token, str) and token
+    }
+    if bearer in internal_tokens or url_token in internal_tokens:
+        return {'valid': False, 'message': 'Invalid or missing authentication'}
 
     # 如果没有启用认证，直接通过
     if not is_auth_enabled() and not config_token:
         return {'valid': True}
 
     # 1. 先检查 Authorization header (JWT token)
-    auth_header = request_obj.headers.get('Authorization')
-    if auth_header and auth_header.startswith('Bearer '):
-        token = auth_header.split(' ')[1]
-        payload = verify_token(token)
+    if bearer is not None:
+        payload = verify_token(bearer)
         # 如果 payload 不为 None 且不包含 error 键，说明验证成功
         if payload and not (isinstance(payload, dict) and 'error' in payload):
             return {'valid': True}
 
-    # 如果没有配置 config_token，允许无 token 访问（外部客户端）
-    if not config_token:
-        return {'valid': True}
-
     # 如果配置了 config_token，检查 URL query 参数中的 token
-    url_token = request_obj.args.get('token', '')
     if url_token and url_token == config_token:
         return {'valid': True}
 
@@ -101,11 +133,10 @@ def require_auth(f):
             return f(*args, **kwargs)
 
         # 认证已启用，检查 token
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
+        token = parse_bearer_token(request.headers.get('Authorization'))
+        if token is None:
             return jsonify({'success': False, 'message': 'Unauthorized: Missing or invalid Authorization header'}), 401
 
-        token = auth_header.split(' ')[1]
         payload = verify_token(token)
 
         # 检查验证结果

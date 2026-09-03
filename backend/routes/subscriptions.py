@@ -6,7 +6,8 @@ import yaml
 
 from backend.routes import subscriptions_bp
 from backend.common.auth import require_auth, validate_token_or_jwt
-from backend.common.config import get_config, save_config
+from backend.common.config import get_config, save_config, update_config_transaction
+from backend.utils.reorder import resolve_new_order
 from backend.utils.subscription_cache import (
     load_subscription_cache,
     save_subscription_nodes,
@@ -16,6 +17,7 @@ from backend.utils.sub_store_client import (
     parse_proxies_from_yaml,
     proxies_to_nodes,
 )
+from backend.utils.url_utils import safe_exception_details
 
 
 def clean_aggregations_subscription(sub_id):
@@ -82,8 +84,9 @@ def handle_subscriptions():
 
     elif request.method == 'POST':
         sub = request.json
-        config_data['subscriptions'].append(sub)
-        save_config()
+        update_config_transaction(
+            lambda profile: profile.setdefault('subscriptions', []).append(sub)
+        )
         return jsonify({'success': True, 'data': sub})
 
 
@@ -125,12 +128,16 @@ def reorder_subscriptions():
     """批量更新订阅顺序"""
     try:
         config_data = get_config()
-        new_order = request.json.get('subscriptions', [])
+        body = request.json or {}
+        new_order, missing = resolve_new_order(config_data.get('subscriptions', []), body, 'subscriptions')
+        if missing:
+            return jsonify({'success': False, 'message': f'以下订阅 id 不存在: {missing}'}), 404
         config_data['subscriptions'] = new_order
         save_config()
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'order': [s.get('id') for s in new_order]})
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        current_app.logger.error("订阅操作失败: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': '订阅操作失败'}), 500
 
 
 @subscriptions_bp.route('/<sub_id>/nodes', methods=['GET'])
@@ -203,8 +210,8 @@ def fetch_subscription(sub_id):
             current_app.logger.info(f"成功获取订阅并写入缓存: {sub['name']}, 节点数: {len(nodes)}")
 
     except Exception as e:
-        fetch_error = str(e)
-        current_app.logger.warning(f"从URL获取订阅失败: {sub['name']}, 错误: {fetch_error}, 尝试读取本地缓存")
+        fetch_error = f"request_failed ({safe_exception_details(e)})"
+        current_app.logger.warning("从URL获取订阅失败: %s, 尝试读取本地缓存: %s", sub['name'], safe_exception_details(e))
 
         # 从URL获取失败，尝试读取本地缓存
         cache = load_subscription_cache(sub_id)
@@ -255,7 +262,8 @@ def fetch_subscription(sub_id):
             'cached_updated_at': cache_payload.get('updated_at') if cache_payload else None
         })
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        current_app.logger.error("订阅操作失败: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': '订阅操作失败'}), 500
 
 
 @subscriptions_bp.route('/test', methods=['GET'])
@@ -304,7 +312,7 @@ def get_all_subscription_proxies():
                 yaml_text, _source = get_subscription_proxies_yaml(sub_id, sub_url)
                 proxies = parse_proxies_from_yaml(yaml_text)
             except Exception as e:
-                current_app.logger.warning(f"通过 Sub-Store 获取订阅 '{sub_name}' 失败: {e}，尝试本地缓存")
+                current_app.logger.warning("通过 Sub-Store 获取订阅 '%s' 失败，尝试本地缓存: %s", sub_name, safe_exception_details(e))
                 # 降级：从本地缓存加载并转换
                 cache = load_subscription_cache(sub_id)
                 if cache:
@@ -367,8 +375,8 @@ def get_all_subscription_proxies():
         )
 
     except Exception as e:
-        current_app.logger.error(f"获取订阅代理列表失败: {str(e)}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        current_app.logger.error("获取订阅代理列表失败: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': '获取订阅代理列表失败'}), 500
 
 
 @subscriptions_bp.route('/<sub_id>/proxies', methods=['GET'])
@@ -437,8 +445,8 @@ def get_subscription_proxies(sub_id):
                     else:
                         current_app.logger.info(f"成功获取订阅并更新缓存: {sub_name}, 节点数: {len(proxies)}")
             except Exception as e:
-                fetch_error = str(e)
-                current_app.logger.warning(f"通过 Sub-Store 获取配置失败: {sub_name}, 错误: {fetch_error}, 将使用本地缓存")
+                fetch_error = f"request_failed ({safe_exception_details(e)})"
+                current_app.logger.warning("通过 Sub-Store 获取配置失败: %s, 将使用本地缓存: %s", sub_name, safe_exception_details(e))
 
         # 如果从 Sub-Store 获取失败或没有URL，则从本地缓存加载并转换
         if proxies is None:
@@ -466,7 +474,7 @@ def get_subscription_proxies(sub_id):
                     if proxy:
                         proxies.append(proxy)
                 except Exception as e:
-                    current_app.logger.error(f"转换节点失败: {node.get('name')}, 错误: {str(e)}")
+                    current_app.logger.error("转换节点失败: %s", safe_exception_details(e))
                     continue
 
         # 如果请求 Surge 格式，转换为 Surge 纯文本
@@ -516,5 +524,5 @@ def get_subscription_proxies(sub_id):
         )
 
     except Exception as e:
-        current_app.logger.error(f"获取订阅代理列表失败: {str(e)}")
-        return jsonify({'success': False, 'message': str(e)}), 500
+        current_app.logger.error("获取订阅代理列表失败: %s", safe_exception_details(e))
+        return jsonify({'success': False, 'message': '获取订阅代理列表失败'}), 500

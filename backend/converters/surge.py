@@ -4,6 +4,7 @@ import os
 from typing import Dict, Any, List
 from backend.utils.subscription_parser import parse_uri_list
 from backend.utils.logger import get_logger
+from backend.common.profile_context import append_url_query, config_api_path, profile_api_path
 
 logger = get_logger(__name__)
 
@@ -412,9 +413,9 @@ def generate_surge_config(config_data: Dict[str, Any], base_url: str = '') -> st
 
     # 在最上方添加远程托管配置
     config_token = config_data.get('system_config', {}).get('config_token', '')
-    surge_url = f"{effective_base_url}/api/config/surge"
+    surge_url = f"{effective_base_url}{config_api_path(config_data, 'surge')}"
     if config_token:
-        surge_url += f"?token={config_token}"
+        surge_url = append_url_query(surge_url, {'token': config_token})
     managed_line = f"#!MANAGED-CONFIG {surge_url} interval=86400 strict=true"
 
     return f"{managed_line}\n\n{config_output}"
@@ -954,12 +955,12 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
             sub = next((s for s in all_subs if s['id'] == sub_id and s.get('enabled', True)), None)
             if sub:
                 # 构建订阅 URL（使用本地接口）
-                sub_url = f"{effective_base_url}/api/subscriptions/{sub_id}/proxies"
+                sub_url = f"{effective_base_url}{profile_api_path(config_data, f'/subscriptions/{sub_id}/proxies')}"
                 # 如果配置了令牌，添加到 URL
+                query = {'format': 'surge'}
                 if config_token:
-                    sub_url += f"?token={config_token}&format=surge"
-                else:
-                    sub_url += f"?format=surge"
+                    query['token'] = config_token
+                sub_url = append_url_query(sub_url, query)
                 policy_paths.append(sub_url)
 
     # 添加聚合的 policy-path
@@ -969,12 +970,12 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
             agg = next((a for a in aggregations if a['id'] == agg_id and a.get('enabled', True)), None)
             if agg:
                 # 构建聚合 URL
-                agg_url = f"{effective_base_url}/api/aggregations/{agg_id}/provider"
+                agg_url = f"{effective_base_url}{profile_api_path(config_data, f'/aggregations/{agg_id}/provider')}"
                 # 如果配置了令牌，添加到 URL
+                query = {'format': 'surge'}
                 if config_token:
-                    agg_url += f"?token={config_token}&format=surge"
-                else:
-                    agg_url += f"?format=surge"
+                    query['token'] = config_token
+                agg_url = append_url_query(agg_url, query)
                 policy_paths.append(agg_url)
 
     # 如果没有普通节点但有 policy-path，允许继续生成
