@@ -117,6 +117,11 @@ def _create_subscription(base, sub_id, url):
     Returns:
         True 如果创建成功
     """
+    # 追加 #noFlow 让 Sub-Store 跳过流量信息拉取（下载前会剥掉该片段）。
+    # 该步骤单次超时 8s，会把聚合 provider 拖过 Mihomo 的拉取超时；
+    # 已带 # 片段的 URL 是 Sub-Store 自有参数，保持原样避免破坏。
+    if '#' not in url:
+        url = f'{url}#noFlow'
     try:
         logger.info(f"Sub-Store 创建临时订阅 '{sub_id}'")
         create_resp = requests.post(
