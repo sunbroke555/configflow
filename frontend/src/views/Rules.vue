@@ -458,7 +458,9 @@
             <Label>选择规则</Label>
             <Select v-model="selectedLibraryRule" @update:model-value="value => onLibraryRuleSelect(String(value))">
               <SelectTrigger class="w-full bg-background/50">
-                <SelectValue placeholder="从规则仓库选择（可选）" />
+                <SelectValue placeholder="从规则仓库选择（可选）">
+                  {{ selectedLibraryRuleLabel || '从规则仓库选择（可选）' }}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent class="glass-strong">
                 <SelectItem v-for="rule in enabledLibraryRules" :key="rule.id" :value="rule.id">
@@ -861,6 +863,13 @@ const allRules = ref<any[]>([])  // 包含规则和规则集的合并数组
 const proxyGroups = ref<ProxyGroup[]>([])
 const ruleLibrary = ref<any[]>([])  // 规则仓库
 const selectedLibraryRule = ref('')  // 选中的规则仓库项ID
+const selectedLibraryRuleLabel = computed(() => {
+  if (!selectedLibraryRule.value) return ''
+
+  return ruleLibrary.value.find(rule => rule.id === selectedLibraryRule.value)?.name
+    || ruleSetForm.value.name
+    || ''
+})
 const ruleDialogVisible = ref(false)
 const ruleSetDialogVisible = ref(false)
 const isEditRule = ref(false)
@@ -1707,4 +1716,3 @@ onActivated(() => {
   Promise.all([loadAllRules(), loadProxyGroups(), loadRuleLibrary()])
 })
 </script>
-
