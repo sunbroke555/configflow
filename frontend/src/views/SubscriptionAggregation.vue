@@ -1,363 +1,437 @@
 <template>
-  <div class="aggregation-page">
-    <div class="page-header">
-      <div class="title-block">
-        <h2>订阅聚合</h2>
-        <p>整合多个订阅和节点，构建统一输出</p>
-      </div>
-      <div class="header-actions">
-        <el-button class="action-btn action-primary" @click="showAddDialog">
-          <el-icon><Plus /></el-icon>
-          添加聚合
-        </el-button>
-      </div>
-    </div>
+  <div :class="reorder.active.value && 'cf-reordering'">
+    <ScopeBanner
+      scope="resource"
+      :profile-name="cfProfileName"
+      description="把多个订阅与节点合并成一个可引用的集合"
+    />
 
-    <div v-if="aggregations.length === 0" class="empty-state">
-      <el-empty description="暂无聚合，点击右上角添加">
-        <el-button class="action-btn action-primary" type="primary" @click="showAddDialog">
-          <el-icon><Plus /></el-icon>
-          添加聚合
-        </el-button>
-      </el-empty>
-    </div>
-
-    <div v-else class="aggregation-grid" ref="cardContainer">
-      <div
-        v-for="aggregation in aggregations"
-        :key="aggregation.id"
-        class="aggregation-card"
-        :data-id="aggregation.id"
-        :class="{ disabled: !aggregation.enabled }"
-      >
-        <div class="card-header">
-          <div class="card-title-group">
-            <div class="card-drag-handle">
-              <el-icon><Rank /></el-icon>
-            </div>
-            <div class="card-title">
-              <span class="card-name">{{ aggregation.name }}</span>
-            </div>
-          </div>
-          <div class="card-meta">
-            <span class="meta-pill">订阅 {{ aggregation.subscriptions.length }}</span>
-            <span class="meta-pill">节点 {{ aggregation.nodes.length }}</span>
-            <button
-              type="button"
-              class="status-toggle-btn compact"
-              :class="{ active: aggregation.enabled, loading: aggregation.id ? savingStatus[aggregation.id] : false }"
-              @click="handleToggle(aggregation)"
-              :disabled="aggregation.id ? savingStatus[aggregation.id] : false"
-            >
-              <el-icon><View /></el-icon>
-            </button>
-          </div>
-        </div>
-
-        <div v-if="aggregation.description" class="card-description">
-          {{ aggregation.description }}
-        </div>
-
-        <div class="card-section">
-          <div class="section-label">
-            <el-icon><Link /></el-icon>
-            包含订阅
-          </div>
-          <div class="tag-list">
-            <el-tag
-              v-for="subId in aggregation.subscriptions"
-              :key="subId"
-              size="small"
-              class="data-tag"
-            >
-              {{ getSubscriptionName(subId) }}
-            </el-tag>
-            <span v-if="aggregation.subscriptions.length === 0" class="empty-text">无</span>
-          </div>
-        </div>
-
-        <div class="card-section">
-          <div class="section-label">
-            <el-icon><Connection /></el-icon>
-            包含节点
-          </div>
-          <div class="tag-list">
-            <el-tag
-              v-for="nodeId in aggregation.nodes"
-              :key="nodeId"
-              size="small"
-              type="success"
-              class="data-tag"
-            >
-              {{ getNodeName(nodeId) }}
-            </el-tag>
-            <span v-if="aggregation.nodes.length === 0" class="empty-text">无</span>
-          </div>
-        </div>
-
-        <div v-if="aggregation.regex_filter" class="card-section">
-          <div class="section-label">
-            <el-icon><Filter /></el-icon>
-            正则过滤
-          </div>
-          <div class="code-box small">{{ aggregation.regex_filter }}</div>
-        </div>
-
-        <div class="card-section inline">
-          <div class="section-label">节点统计</div>
-          <el-tag
-            v-if="aggregation.loading_count"
-            type="info"
-            size="large"
-            class="count-tag"
-          >
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span style="margin-left: 4px">加载中...</span>
-          </el-tag>
-          <el-tag
-            v-else
-            type="info"
-            size="large"
-            class="count-tag"
-          >
-            {{ aggregation.node_count !== undefined ? aggregation.node_count : '-' }} 个节点
-          </el-tag>
-        </div>
-
-        <div class="card-footer">
-          <div class="card-actions">
-            <el-button class="card-btn ghost" size="small" @click="handlePreviewNodes(aggregation)">
-              <el-icon><View /></el-icon>
-              预览节点
-            </el-button>
-            <el-button class="card-btn ghost" size="small" @click="editAggregation(aggregation)">
-              <el-icon><Edit /></el-icon>
-              编辑
-            </el-button>
-            <el-button class="card-btn danger" size="small" @click="deleteAggregation(aggregation)">
-              <el-icon><Delete /></el-icon>
-              删除
-            </el-button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <el-dialog
-      v-model="dialogVisible"
-      class="aggregation-dialog"
-      width="760px"
-      :close-on-click-modal="false"
-      :destroy-on-close="true"
+    <PageHeader
+      eyebrow="Resource"
+      title="订阅聚合"
+      description="把多个订阅与节点合并成一个可引用的集合，供策略组直接引用。"
     >
-      <template #header="{ close }">
-        <div class="dialog-header">
-          <div class="dialog-title-group">
-            <h3>{{ isEdit ? '编辑聚合' : '添加聚合' }}</h3>
-            <p>选择订阅或节点，构建一个新的聚合输出</p>
-          </div>
-          <button class="dialog-close-btn" type="button" @click="close">
-            <el-icon><Close /></el-icon>
-          </button>
-        </div>
+      <template #actions>
+        <Button
+          v-if="!reorder.active.value"
+          variant="outline"
+          class="border-border/60 bg-background/40"
+          :disabled="aggregations.length < 2"
+          @click="reorder.enter"
+        >
+          <ArrowUpDown class="size-4" />
+          调整顺序
+        </Button>
+        <Button class="shadow-glow" @click="showAddDialog">
+          <Plus class="size-4" />
+          添加聚合
+        </Button>
       </template>
-      <div class="dialog-card">
-        <el-form :model="form" label-position="top" class="aggregation-form">
-          <el-form-item label="聚合名称" required>
-            <el-input v-model="form.name" placeholder="请输入聚合名称" />
-          </el-form-item>
+    </PageHeader>
 
-          <el-form-item label="选择订阅">
-            <el-select
+    <ReorderBar
+      :active="reorder.active.value"
+      :saving="reorder.saving.value"
+      :announcement="reorder.announcement.value"
+      @cancel="reorder.cancel"
+      @save="handleSaveOrder"
+    />
+
+    <SectionCard v-if="aggregations.length === 0" :padded="false">
+      <EmptyState
+        :icon="Share2"
+        title="暂无聚合"
+        description="聚合可以把若干订阅与独立节点合并成一个集合，再被策略组统一引用。"
+      >
+        <Button @click="showAddDialog">
+          <Plus class="size-4" />
+          添加聚合
+        </Button>
+      </EmptyState>
+    </SectionCard>
+
+    <div
+      v-else
+      ref="cardContainer"
+      class="grid grid-cols-[repeat(auto-fill,minmax(360px,1fr))] gap-3 max-md:grid-cols-1"
+    >
+      <Motion
+        v-for="(aggregation, cfIndex) in aggregations"
+        :key="aggregation.id"
+        v-bind="listItem(cfIndex)"
+        :data-id="aggregation.id"
+        data-reorder-item
+        :class="[
+          'hairline edge-light relative flex flex-col gap-3 overflow-hidden rounded-xl border border-border/35 bg-card/55 p-4 backdrop-blur-xl transition-all duration-300 hover:shadow-glow-soft',
+          !aggregation.enabled && 'opacity-60'
+        ]"
+      >
+        <header class="flex items-start gap-2.5">
+          <DragHandle
+            v-if="reorder.active.value"
+            :label="aggregation.name || aggregation.id"
+            :index="cfIndex"
+            :total="aggregations.length"
+            :position="reorder.positionLabel(cfIndex)"
+            :grabbed="reorder.grabbedIndex.value === cfIndex"
+            @up="reorder.moveUp(cfIndex)"
+            @down="reorder.moveDown(cfIndex)"
+            @keydown="reorder.onHandleKeydown($event, cfIndex)"
+          />
+          <div class="min-w-0 flex-1">
+            <p class="m-0 truncate text-[14px] font-semibold text-foreground">{{ aggregation.name }}</p>
+            <p
+              v-if="aggregation.description"
+              class="mt-0.5 mb-0 truncate text-[12px] text-muted-foreground"
+            >
+              {{ aggregation.description }}
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="cf-reorder-mute shrink-0"
+            :class="aggregation.enabled ? 'text-success-accent' : 'text-muted-foreground'"
+            :title="aggregation.enabled ? '停用' : '启用'"
+            :aria-label="aggregation.enabled ? `停用 ${aggregation.name}` : `启用 ${aggregation.name}`"
+            :disabled="aggregation.id ? savingStatus[aggregation.id] : false"
+            @click="handleToggle(aggregation)"
+          >
+            <component :is="aggregation.enabled ? Eye : EyeOff" class="size-4" />
+          </Button>
+        </header>
+
+        <!-- 节点总数是这张卡最该被一眼看到的数字，单独占一行 -->
+        <div
+          class="cf-reorder-mute flex items-center gap-3 rounded-lg border border-border/40 bg-background/40 px-3 py-2"
+        >
+          <span class="text-[11.5px] tracking-[0.04em] text-muted-foreground uppercase">节点总数</span>
+          <span class="num ml-auto text-[18px] leading-none font-semibold text-foreground">
+            <Loader2 v-if="aggregation.loading_count" class="size-4 animate-spin" aria-hidden="true" />
+            <template v-else>{{ aggregation.node_count ?? '-' }}</template>
+          </span>
+          <Badge variant="outline" class="text-[10.5px]">订阅 {{ aggregation.subscriptions.length }}</Badge>
+          <Badge variant="outline" class="text-[10.5px]">节点 {{ aggregation.nodes.length }}</Badge>
+        </div>
+
+        <div class="cf-reorder-mute flex flex-col gap-2.5">
+          <div>
+            <p class="m-0 mb-1.5 flex items-center gap-1.5 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+              <Link2 class="size-3" aria-hidden="true" />
+              包含订阅
+            </p>
+            <div class="flex flex-wrap gap-1">
+              <Badge
+                v-for="subId in aggregation.subscriptions"
+                :key="subId"
+                variant="info"
+                class="max-w-[180px] truncate text-[10.5px]"
+              >
+                {{ getSubscriptionName(subId) }}
+              </Badge>
+              <span v-if="!aggregation.subscriptions.length" class="text-[12px] text-muted-foreground">无</span>
+            </div>
+          </div>
+
+          <div>
+            <p class="m-0 mb-1.5 flex items-center gap-1.5 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+              <Network class="size-3" aria-hidden="true" />
+              包含节点
+            </p>
+            <div class="flex flex-wrap gap-1">
+              <Badge
+                v-for="nodeId in aggregation.nodes"
+                :key="nodeId"
+                variant="success"
+                class="max-w-[180px] truncate text-[10.5px]"
+              >
+                {{ getNodeName(nodeId) }}
+              </Badge>
+              <span v-if="!aggregation.nodes.length" class="text-[12px] text-muted-foreground">无</span>
+            </div>
+          </div>
+
+          <div v-if="aggregation.regex_filter">
+            <p class="m-0 mb-1.5 flex items-center gap-1.5 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+              <Filter class="size-3" aria-hidden="true" />
+              正则过滤
+            </p>
+            <code
+              class="block truncate rounded-md border border-border/50 bg-background/50 px-2 py-1 font-mono text-[11.5px] text-muted-foreground"
+            >
+              {{ aggregation.regex_filter }}
+            </code>
+          </div>
+        </div>
+
+        <footer class="cf-reorder-mute mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3">
+          <Button variant="ghost" size="sm" @click="handlePreviewNodes(aggregation)">
+            <Eye class="size-3.5" />
+            预览节点
+          </Button>
+          <Button variant="ghost" size="sm" @click="editAggregation(aggregation)">
+            <Pencil class="size-3.5" />
+            编辑
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="ml-auto text-destructive-accent hover:bg-destructive-soft"
+            @click="deleteAggregation(aggregation)"
+          >
+            <Trash2 class="size-3.5" />
+            删除
+          </Button>
+        </footer>
+      </Motion>
+    </div>
+
+    <!-- ===== 新增 / 编辑聚合 ===== -->
+    <Dialog v-model:open="dialogVisible">
+      <DialogContent class="glass-strong hairline max-w-[760px] border-border/50">
+        <DialogHeader>
+          <DialogTitle>{{ isEdit ? '编辑聚合' : '添加聚合' }}</DialogTitle>
+          <DialogDescription>选择订阅或节点，构建一个新的聚合输出。</DialogDescription>
+        </DialogHeader>
+
+        <div class="flex max-h-[62dvh] flex-col gap-4 overflow-y-auto pr-1">
+          <div class="flex flex-col gap-1.5">
+            <Label for="agg-name">聚合名称</Label>
+            <Input id="agg-name" v-model="form.name" class="bg-background/50" placeholder="请输入聚合名称" />
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <Label>选择订阅</Label>
+            <MultiSelect
               v-model="form.subscriptions"
-              multiple
-              filterable
+              :options="subscriptionOptions"
               placeholder="选择要包含的订阅"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="sub in subscriptions"
-                :key="sub.id"
-                :label="sub.name"
-                :value="sub.id"
-              />
-            </el-select>
-            <p class="helper-text">选择的订阅中的所有节点都会被包含在聚合中</p>
-          </el-form-item>
-
-          <el-form-item label="选择节点">
-            <el-select
-              v-model="form.nodes"
-              multiple
-              filterable
-              placeholder="选择要包含的节点"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="node in nodes"
-                :key="node.id"
-                :label="node.name"
-                :value="node.id"
-              />
-            </el-select>
-            <p class="helper-text">可额外加入独立节点，与订阅节点一起输出</p>
-          </el-form-item>
-
-          <el-form-item label="正则过滤">
-            <el-input
-              v-model="form.regex_filter"
-              placeholder="可选：使用正则表达式过滤节点名称，例如 香港|HK"
             />
-          </el-form-item>
+            <p class="m-0 text-[12px] text-muted-foreground">选择的订阅中的所有节点都会被包含在聚合中。</p>
+          </div>
 
-          <el-form-item label="健康检查">
-            <el-input
+          <div class="flex flex-col gap-1.5">
+            <Label>选择节点</Label>
+            <MultiSelect
+              v-model="form.nodes"
+              :options="nodeOptions"
+              placeholder="选择要包含的节点"
+            />
+            <p class="m-0 text-[12px] text-muted-foreground">可额外加入独立节点，与订阅节点一起输出。</p>
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <Label for="agg-regex">正则过滤</Label>
+            <Input
+              id="agg-regex"
+              v-model="form.regex_filter"
+              class="bg-background/50 font-mono"
+              placeholder="可选：过滤节点名称，例如 香港|HK"
+            />
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <Label for="agg-health">健康检查</Label>
+            <Input
+              id="agg-health"
               v-model="form.health_check_url"
+              class="bg-background/50 font-mono"
               placeholder="留空使用默认（http://www.gstatic.com/generate_204）"
             />
-            <div class="form-tip">回家 / 内网聚合从国内出网，境外地址会被误判为失活，建议填 http://www.baidu.com</div>
-          </el-form-item>
+            <p class="m-0 text-[12px] text-muted-foreground">
+              回家 / 内网聚合从国内出网，境外地址会被误判为失活，建议填 http://www.baidu.com
+            </p>
+          </div>
 
-          <el-form-item label="描述">
-            <el-input
+          <div class="flex flex-col gap-1.5">
+            <Label for="agg-desc">描述</Label>
+            <Textarea
+              id="agg-desc"
               v-model="form.description"
-              type="textarea"
+              class="bg-background/50"
               :rows="3"
               placeholder="可选：说明聚合用途"
             />
-          </el-form-item>
+          </div>
 
-          <el-form-item label="启用状态">
-            <div class="status-toggle-row">
-              <el-switch v-model="form.enabled" />
-              <span>{{ form.enabled ? '聚合启用中' : '聚合已停用' }}</span>
+          <div class="flex flex-col gap-1.5">
+            <div class="flex items-center gap-2.5">
+              <Switch id="agg-enabled" v-model="form.enabled" />
+              <Label for="agg-enabled" class="text-[13px] text-muted-foreground">
+                {{ form.enabled ? '聚合启用中' : '聚合已停用' }}
+              </Label>
             </div>
-            <p class="helper-text">停用后，该聚合不会出现在策略组的选择列表中</p>
-          </el-form-item>
-        </el-form>
-      </div>
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button class="footer-btn ghost" @click="dialogVisible = false">取消</el-button>
-          <el-button class="footer-btn primary" type="primary" @click="saveAggregation" :loading="saving">
-            保存
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="previewDialogVisible"
-      class="aggregation-helper-dialog"
-      title="节点预览"
-      width="650px"
-      :close-on-click-modal="false"
-    >
-      <div v-loading="previewLoading">
-        <el-alert
-          v-if="previewNodes.length > 0"
-          :title="`共 ${previewNodes.length} 个节点`"
-          type="success"
-          :closable="false"
-          class="dialog-alert"
-        />
-
-        <!-- 订阅统计信息 -->
-        <div v-if="Object.keys(previewSubscriptionCounts).length > 0" class="preview-section">
-          <div class="section-title">订阅统计</div>
-          <div class="subscription-count-list">
-            <div
-              v-for="(count, subId) in previewSubscriptionCounts"
-              :key="subId"
-              class="subscription-count-item clickable"
-              @click="showSubscriptionNodes({ id: subId, name: getSubscriptionName(subId) })"
-            >
-              <div class="subscription-info">
-                <el-icon style="color: #6B73FF;"><Postcard /></el-icon>
-                <span class="subscription-name">{{ getSubscriptionName(subId) }}</span>
-              </div>
-              <el-tag type="primary" size="large">{{ count }} 个节点</el-tag>
-            </div>
+            <p class="m-0 text-[12px] text-muted-foreground">停用后，该聚合不会出现在策略组的选择列表中。</p>
           </div>
         </div>
 
-        <!-- 所有节点列表 -->
-        <div v-if="previewNodes.length > 0" class="preview-section">
-          <div class="section-title">所有节点</div>
-          <el-scrollbar max-height="400px">
-            <div class="node-list">
+        <DialogFooter>
+          <Button variant="outline" @click="dialogVisible = false">取消</Button>
+          <Button :disabled="saving" @click="saveAggregation">
+            <Loader2 v-if="saving" class="size-4 animate-spin" />
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- ===== 节点预览 ===== -->
+    <Dialog v-model:open="previewDialogVisible">
+      <DialogContent class="glass-strong hairline max-w-[660px] border-border/50">
+        <DialogHeader>
+          <DialogTitle>节点预览</DialogTitle>
+          <DialogDescription>
+            {{ previewLoading ? '正在拉取节点…' : `共 ${previewNodes.length} 个节点` }}
+          </DialogDescription>
+        </DialogHeader>
+
+        <LoadingRows v-if="previewLoading" :rows="4" />
+
+        <div v-else class="flex max-h-[60dvh] flex-col gap-4 overflow-y-auto pr-1">
+          <section v-if="Object.keys(previewSubscriptionCounts).length">
+            <p class="m-0 mb-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+              订阅统计
+            </p>
+            <div class="flex flex-col gap-1.5">
+              <button
+                v-for="(count, subId) in previewSubscriptionCounts"
+                :key="subId"
+                type="button"
+                class="flex cursor-pointer items-center gap-2 rounded-lg border border-border/50 bg-background/40 px-3 py-2 text-left text-[13px] transition-colors hover:border-border-strong hover:bg-accent/50"
+                @click="showSubscriptionNodes({ id: String(subId), name: getSubscriptionName(String(subId)) })"
+              >
+                <Link2 class="size-3.5 shrink-0 text-info-accent" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate text-foreground">{{ getSubscriptionName(String(subId)) }}</span>
+                <Badge variant="info" class="num shrink-0">{{ count }}</Badge>
+              </button>
+            </div>
+          </section>
+
+          <section v-if="previewNodes.length">
+            <p class="m-0 mb-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+              所有节点
+            </p>
+            <div class="flex flex-col gap-1.5">
               <div
                 v-for="(node, index) in previewNodes"
                 :key="index"
-                class="node-item clickable-node"
-                @click="togglePreviewExpand(index)"
+                class="rounded-lg border border-border/50 bg-background/40"
               >
-                <div class="node-info">
-                  <div class="node-name">
-                    <el-icon><Connection /></el-icon>
-                    <span>{{ node.name }}</span>
-                    <el-icon class="expand-arrow" :class="{ expanded: expandedPreviewNodes.has(index) }"><ArrowDown /></el-icon>
-                  </div>
-                  <div class="node-details">
-                    <el-tag size="small" type="primary">{{ node.type?.toUpperCase() || 'UNKNOWN' }}</el-tag>
-                    <span class="node-server">{{ node.server }}:{{ node.port }}</span>
-                  </div>
-                </div>
-                <pre v-show="expandedPreviewNodes.has(index)" class="code-box" @click.stop>{{ formatNodeToYaml(node) }}</pre>
+                <button
+                  type="button"
+                  class="flex w-full cursor-pointer items-center gap-2 border-0 bg-transparent px-3 py-2 text-left text-[13px]"
+                  @click="togglePreviewExpand(index)"
+                >
+                  <Network class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span class="min-w-0 flex-1 truncate text-foreground">{{ node.name }}</span>
+                  <Badge variant="outline" class="shrink-0 font-mono text-[10px]">
+                    {{ node.type?.toUpperCase() || 'UNKNOWN' }}
+                  </Badge>
+                  <span class="num shrink-0 font-mono text-[11.5px] text-muted-foreground">
+                    {{ node.server }}:{{ node.port }}
+                  </span>
+                  <ChevronDown
+                    class="size-3.5 shrink-0 transition-transform duration-200"
+                    :class="expandedPreviewNodes.has(index) && 'rotate-180'"
+                    aria-hidden="true"
+                  />
+                </button>
+                <pre
+                  v-show="expandedPreviewNodes.has(index)"
+                  class="m-0 max-h-52 overflow-auto border-0 border-t border-border/50 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
+                >{{ formatNodeToYaml(node) }}</pre>
               </div>
             </div>
-          </el-scrollbar>
-        </div>
+          </section>
 
-        <div v-if="previewNodes.length === 0 && !previewLoading" class="empty-helper">
-          暂无节点
+          <EmptyState v-if="!previewNodes.length" :icon="Network" title="暂无节点" />
         </div>
-      </div>
-    </el-dialog>
+      </DialogContent>
+    </Dialog>
 
-    <el-dialog
-      v-model="subscriptionNodesDialogVisible"
-      class="aggregation-helper-dialog"
-      :title="`${currentSubscription.name} - 节点列表`"
-      width="600px"
-      :close-on-click-modal="false"
-    >
-      <div v-loading="subscriptionNodesLoading">
-        <el-alert
-          v-if="subscriptionNodes.length > 0"
-          :title="`共 ${subscriptionNodes.length} 个节点`"
-          type="success"
-          :closable="false"
-          class="dialog-alert"
-        />
-        <div v-if="subscriptionNodes.length === 0 && !subscriptionNodesLoading" class="empty-helper">
-          暂无节点
-        </div>
-        <el-scrollbar max-height="400px">
-          <div class="node-list">
-            <div v-for="node in subscriptionNodes" :key="node.id" class="node-item">
-              <el-icon><Connection /></el-icon>
-              <span>{{ node.name }}</span>
-              <el-tag size="small" type="info" style="margin-left: auto;">{{ node.type }}</el-tag>
-            </div>
+    <!-- ===== 单个订阅的节点列表 ===== -->
+    <Dialog v-model:open="subscriptionNodesDialogVisible">
+      <DialogContent class="glass-strong hairline max-w-[600px] border-border/50">
+        <DialogHeader>
+          <DialogTitle>{{ currentSubscription.name }} · 节点列表</DialogTitle>
+          <DialogDescription>
+            {{ subscriptionNodesLoading ? '正在拉取节点…' : `共 ${subscriptionNodes.length} 个节点` }}
+          </DialogDescription>
+        </DialogHeader>
+
+        <LoadingRows v-if="subscriptionNodesLoading" :rows="4" />
+
+        <div v-else class="flex max-h-[55dvh] flex-col gap-1.5 overflow-y-auto pr-1">
+          <div
+            v-for="node in subscriptionNodes"
+            :key="node.id"
+            class="flex items-center gap-2 rounded-lg border border-border/50 bg-background/40 px-3 py-2 text-[13px]"
+          >
+            <Network class="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span class="min-w-0 flex-1 truncate text-foreground">{{ node.name }}</span>
+            <Badge variant="outline" class="shrink-0 font-mono text-[10px]">{{ node.type }}</Badge>
           </div>
-        </el-scrollbar>
-      </div>
-      <template #footer>
-        <el-button @click="subscriptionNodesDialogVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
+          <EmptyState v-if="!subscriptionNodes.length" :icon="Network" title="暂无节点" />
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" @click="subscriptionNodesDialogVisible = false">关闭</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Rank, Edit, Delete, View, Connection, Loading, Postcard, Close, Link, Filter, ArrowDown } from '@element-plus/icons-vue'
+import { computed, ref, onMounted, nextTick } from 'vue'
+import { Motion } from 'motion-v'
+import {
+  ArrowUpDown,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Filter,
+  Link2,
+  Loader2,
+  Network,
+  Pencil,
+  Plus,
+  Share2,
+  Trash2
+} from '@lucide/vue'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
+import EmptyState from '@/components/common/EmptyState.vue'
+import LoadingRows from '@/components/common/LoadingRows.vue'
+import MultiSelect from '@/components/common/MultiSelect.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import SectionCard from '@/components/common/SectionCard.vue'
+import ReorderBar from '@/components/shell/ReorderBar.vue'
+import DragHandle from '@/components/shell/DragHandle.vue'
+import { useReorder } from '@/composables/useReorder'
+import { confirmDanger, notify } from '@/lib/feedback'
+import { listItem } from '@/lib/motion'
+import { useProfileStore } from '@/stores/profile'
 import api from '@/api'
-import Sortable from 'sortablejs'
 import * as yaml from 'js-yaml'
 
+
+const cfProfileStore = useProfileStore()
+const cfProfileName = computed(
+  () => cfProfileStore.activeProfile.value?.name || cfProfileStore.activeProfileId.value
+)
 interface Subscription {
   id: string
   name: string
@@ -446,7 +520,7 @@ const loadAggregations = async () => {
     })
   } catch (error) {
     console.error('Failed to load aggregations:', error)
-    ElMessage.error('加载聚合失败')
+    notify.error('加载聚合失败')
   }
 }
 
@@ -467,6 +541,12 @@ const loadNodes = async () => {
     console.error('Failed to load nodes:', error)
   }
 }
+
+/* MultiSelect 需要 {value,label}，由订阅/节点列表派生 */
+const subscriptionOptions = computed(() =>
+  subscriptions.value.map(sub => ({ value: sub.id, label: sub.name }))
+)
+const nodeOptions = computed(() => nodes.value.map(node => ({ value: node.id, label: node.name })))
 
 const getSubscriptionName = (subId: string) => {
   const sub = subscriptions.value.find(s => s.id === subId)
@@ -508,9 +588,9 @@ const toggleAggregationEnabled = async (aggregation: Aggregation) => {
   savingStatus.value[aggregation.id] = true
   try {
     await api.put(`/aggregations/${aggregation.id}`, aggregation)
-    ElMessage.success(aggregation.enabled ? '已启用' : '已禁用')
+    notify.success(aggregation.enabled ? '已启用' : '已禁用')
   } catch (error) {
-    ElMessage.error('更新状态失败')
+    notify.error('更新状态失败')
     aggregation.enabled = previous
     loadAggregations()
   } finally {
@@ -526,12 +606,12 @@ const editAggregation = (aggregation: Aggregation) => {
 
 const saveAggregation = async () => {
   if (!form.value.name) {
-    ElMessage.warning('请输入聚合名称')
+    notify.warning('请输入聚合名称')
     return
   }
 
   if (form.value.subscriptions.length === 0 && form.value.nodes.length === 0) {
-    ElMessage.warning('请至少选择一个订阅或节点')
+    notify.warning('请至少选择一个订阅或节点')
     return
   }
 
@@ -540,36 +620,31 @@ const saveAggregation = async () => {
 
     if (isEdit.value && form.value.id) {
       await api.put(`/aggregations/${form.value.id}`, form.value)
-      ElMessage.success('聚合已更新')
+      notify.success('聚合已更新')
     } else {
       await api.post('/aggregations', form.value)
-      ElMessage.success('聚合已创建')
+      notify.success('聚合已创建')
     }
 
     dialogVisible.value = false
     await loadAggregations()
   } catch (error) {
     console.error('Failed to save aggregation:', error)
-    ElMessage.error('保存失败')
+    notify.error('保存失败')
   } finally {
     saving.value = false
   }
 }
 
 const deleteAggregation = async (aggregation: Aggregation) => {
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除聚合 "${aggregation.name}" 吗？`,
-      '删除确认',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    )
+  const ok = await confirmDanger(`确定要删除聚合「${aggregation.name}」吗？`, {
+    title: '删除聚合'
+  })
+  if (!ok) return
 
+  try {
     await api.delete(`/aggregations/${aggregation.id}`)
-    ElMessage.success('聚合已删除')
+    notify.success('聚合已删除')
 
     if (aggregation.id) {
       delete savingStatus.value[aggregation.id]
@@ -577,10 +652,8 @@ const deleteAggregation = async (aggregation: Aggregation) => {
 
     await loadAggregations()
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close') {
-      console.error('Failed to delete aggregation:', error)
-      ElMessage.error('删除失败')
-    }
+    console.error('Failed to delete aggregation:', error)
+    notify.error('删除失败')
   }
 }
 
@@ -612,11 +685,11 @@ const handlePreviewNodes = async (aggregation: Aggregation) => {
       // 预览后更新列表中的节点数量（因为预览会更新各订阅的本地缓存）
       aggregation.node_count = response.data.count || 0
     } else {
-      ElMessage.error(response.data.message || '获取节点失败')
+      notify.error(response.data.message || '获取节点失败')
     }
   } catch (error) {
     console.error('Failed to preview nodes:', error)
-    ElMessage.error('获取节点失败')
+    notify.error('获取节点失败')
   } finally {
     previewLoading.value = false
   }
@@ -633,755 +706,43 @@ const showSubscriptionNodes = async (subscription: { id: string; name: string })
     if (response.data.success) {
       subscriptionNodes.value = response.data.nodes || []
     } else {
-      ElMessage.error(response.data.message || '获取节点列表失败')
+      notify.error(response.data.message || '获取节点列表失败')
     }
   } catch (error) {
     console.error('Failed to get subscription nodes:', error)
-    ElMessage.error('获取节点列表失败')
+    notify.error('获取节点列表失败')
   } finally {
     subscriptionNodesLoading.value = false
   }
 }
 
-const initSortable = () => {
-  nextTick(() => {
-    if (cardContainer.value) {
-      Sortable.create(cardContainer.value, {
-        animation: 150,
-        handle: '.card-drag-handle',
-        onEnd: async ({ oldIndex, newIndex }) => {
-          if (oldIndex === newIndex) return
 
-          const moved = aggregations.value.splice(oldIndex, 1)[0]
-          aggregations.value.splice(newIndex, 0, moved)
+/* ---------- 统一拖动排序 ---------- */
+const reorder = useReorder<any>({
+  items: aggregations,
+  container: cardContainer,
+  labelOf: item => item.name || item.id,
+  // 按 id 提交，服务端在存量数据上重排，不回写列表接口的计算字段
+  persist: async items => {
+    await api.post('/aggregations/reorder', {
+      ids: items.map(item => item.id),
+      position: 'top'
+    })
+  }
+})
 
-          try {
-            await api.post('/aggregations/reorder', {
-              aggregations: aggregations.value
-            })
-            ElMessage.success('排序已更新')
-          } catch (error) {
-            console.error('Failed to save order:', error)
-            ElMessage.error('保存排序失败')
-            loadAggregations()
-          }
-        }
-      })
-    }
-  })
+const handleSaveOrder = async () => {
+  try {
+    await reorder.save()
+    notify.success('顺序已保存，所有配置空间生效')
+  } catch (error) {
+    notify.error('保存顺序失败，顺序已还原')
+  }
 }
 
 onMounted(async () => {
   await loadAggregations()
   await Promise.all([loadSubscriptions(), loadNodes()])
-  initSortable()
 })
 </script>
 
-<style scoped>
-.aggregation-page {
-  padding: 28px 32px 40px;
-  background: #f5f7ff;
-  min-height: calc(100vh - 64px);
-  --agg-radius-xl: 40px;
-  --agg-radius-lg: 24px;
-  --agg-radius-md: 16px;
-  --agg-radius-sm: 12px;
-  --agg-radius-pill: 999px;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-  /* 固定顶部 */
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: #f5f7ff;
-  margin: -28px -32px 28px -32px;
-  padding: 28px 32px;
-}
-
-.title-block h2 {
-  margin: 0;
-  font-size: 26px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.title-block p {
-  margin: 6px 0 0;
-  font-size: 14px;
-  color: #7f87af;
-}
-
-.header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  justify-content: flex-end;
-}
-
-.action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 20px;
-  height: 40px;
-  border-radius: var(--agg-radius-md, 16px);
-  font-weight: 600;
-  font-size: 14px;
-  border: none;
-  background: rgba(107, 115, 255, 0.15);
-  color: #4a5bff;
-  transition: all 0.2s ease;
-}
-
-.action-btn .el-icon {
-  font-size: 16px;
-}
-
-.action-btn.action-primary {
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  color: #fff;
-  box-shadow: 0 12px 30px rgba(87, 104, 255, 0.25);
-}
-
-.action-btn.action-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 36px rgba(87, 104, 255, 0.28);
-}
-
-.empty-state {
-  margin-top: 32px;
-}
-
-.aggregation-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 24px;
-  margin-top: 24px;
-}
-
-.aggregation-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 28px 26px 24px;
-  border-radius: var(--agg-radius-lg, 24px);
-  background: #fff;
-  border: 1px solid rgba(107, 115, 255, 0.12);
-  box-shadow: 0 20px 40px rgba(91, 112, 255, 0.16);
-  transition: transform 0.25s ease, box-shadow 0.25s ease;
-}
-
-.aggregation-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 24px 48px rgba(91, 112, 255, 0.2);
-}
-
-.aggregation-card.disabled {
-  opacity: 0.5;
-  filter: grayscale(0.4);
-}
-
-.card-drag-handle {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(107, 115, 255, 0.14);
-  color: #616bff;
-  cursor: grab;
-  transition: background 0.2s ease, color 0.2s ease;
-}
-
-.card-drag-handle:hover {
-  background: rgba(107, 115, 255, 0.22);
-  color: #3f4ffa;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-}
-
-.card-title-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.card-name {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1f2d3d;
-}
-
-.card-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.meta-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 12px;
-  border-radius: var(--agg-radius-pill);
-  background: rgba(107, 115, 255, 0.12);
-  color: #4e5eff;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.status-toggle-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(107, 115, 255, 0.18);
-  color: #4e5eff;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  box-shadow: 0 12px 26px rgba(87, 104, 255, 0.18);
-}
-
-.status-toggle-btn.compact {
-  width: 40px;
-  height: 40px;
-}
-
-.status-toggle-btn .el-icon {
-  font-size: 18px;
-}
-
-.status-toggle-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 30px rgba(87, 104, 255, 0.22);
-}
-
-.status-toggle-btn.active {
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  color: #fff;
-}
-
-.status-toggle-btn.loading {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-.status-toggle-btn:disabled {
-  cursor: not-allowed;
-}
-
-.card-description {
-  font-size: 13px;
-  color: #6c74a0;
-  background: rgba(107, 115, 255, 0.08);
-  padding: 12px 14px;
-  border-radius: var(--agg-radius-md, 16px);
-}
-
-.card-section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.card-section.inline {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.section-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #7d88af;
-  font-weight: 600;
-}
-
-.section-label .el-icon {
-  font-size: 16px;
-  color: #4e5eff;
-}
-
-.tag-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.data-tag {
-  background: rgba(107, 115, 255, 0.12);
-  border: none;
-  color: #4e5eff;
-}
-
-.empty-text {
-  font-size: 12px;
-  color: #a0a8c2;
-}
-
-.code-box {
-  padding: 12px 14px;
-  border-radius: var(--agg-radius-md, 16px);
-  background: #f4f6ff;
-  color: #1f2d3d;
-  font-size: 13px;
-  font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
-  border: 1px solid rgba(107, 115, 255, 0.12);
-}
-
-.code-box.small {
-  max-height: 160px;
-  overflow: auto;
-}
-
-.count-tag {
-  cursor: pointer;
-  border-radius: var(--agg-radius-pill);
-}
-
-.card-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-top: auto;
-}
-
-.time-text {
-  font-size: 12px;
-  color: #9097b5;
-}
-
-.card-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.card-btn.el-button {
-  border-radius: var(--agg-radius-md, 16px);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 0 16px;
-}
-
-.card-btn.ghost {
-  background: rgba(107, 115, 255, 0.12);
-  color: #4e5eff;
-  border: 1px solid rgba(107, 115, 255, 0.25);
-}
-
-.card-btn.danger {
-  background: rgba(155, 143, 255, 0.12);
-  color: #9b8fff;
-  border: 1px solid rgba(155, 143, 255, 0.28);
-}
-
-.aggregation-dialog :deep(.el-dialog),
-:deep(.el-overlay-dialog .aggregation-dialog) {
-  border-radius: var(--agg-radius-xl, 40px) !important;
-  overflow: hidden;
-  background: rgba(252, 253, 255, 0.97);
-  box-shadow: 0 36px 80px rgba(65, 80, 180, 0.28);
-  border: 1px solid rgba(107, 115, 255, 0.16);
-  backdrop-filter: blur(20px);
-  --el-dialog-border-radius: var(--agg-radius-xl, 40px);
-}
-
-.dialog-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 8px 0 18px;
-  color: #30354d;
-}
-
-.dialog-title-group h3 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.dialog-title-group p {
-  margin: 8px 0 0;
-  font-size: 13px;
-  color: #7c86ae;
-}
-
-.dialog-close-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 1px solid rgba(124, 134, 174, 0.35);
-  background: transparent;
-  color: #7c86ae;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.dialog-close-btn:hover {
-  background: rgba(107, 115, 255, 0.12);
-  border-color: rgba(107, 115, 255, 0.35);
-  color: #4e5eff;
-}
-
-.dialog-card {
-  background: #fff;
-  border-radius: var(--agg-radius-lg, 24px);
-  padding: 30px 28px 26px;
-  box-shadow: 0 18px 30px rgba(91, 112, 255, 0.12);
-  border: 1px solid rgba(107, 115, 255, 0.1);
-}
-
-.aggregation-form {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-:deep(.aggregation-form .el-form-item__label) {
-  font-weight: 600;
-  font-size: 13px;
-  color: #6c74a0;
-}
-
-:deep(.aggregation-form .el-input__wrapper),
-:deep(.aggregation-form .el-select .el-input__wrapper),
-:deep(.aggregation-form .el-textarea__inner) {
-  border-radius: var(--agg-radius-md, 16px);
-  border: none;
-  box-shadow: 0 0 0 1px rgba(107, 115, 255, 0.14);
-  background-color: #f9faff;
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
-}
-
-:deep(.aggregation-form .el-input__wrapper.is-focus),
-:deep(.aggregation-form .el-select .el-input__wrapper.is-focus),
-:deep(.aggregation-form .el-textarea__inner:focus) {
-  box-shadow: 0 0 0 2px rgba(107, 115, 255, 0.32);
-  transform: translateY(-1px);
-  background-color: #fff;
-}
-
-.helper-text {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: #9099bf;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
-
-.footer-btn {
-  min-width: 118px;
-  height: 42px;
-  border-radius: var(--agg-radius-md, 16px);
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.footer-btn.ghost {
-  background: transparent;
-  color: #5460d7;
-  border: 1px solid rgba(107, 115, 255, 0.3);
-}
-
-.footer-btn.ghost:hover {
-  background: rgba(107, 115, 255, 0.08);
-}
-
-.footer-btn.primary {
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  border: none;
-  color: #fff;
-  box-shadow: 0 12px 24px rgba(87, 104, 255, 0.28);
-}
-
-.aggregation-helper-dialog :deep(.el-dialog) {
-  border-radius: var(--agg-radius-lg, 24px);
-}
-
-.dialog-alert {
-  margin-bottom: 16px;
-}
-
-.empty-helper {
-  text-align: center;
-  padding: 40px 0;
-  color: #909399;
-}
-
-.preview-section {
-  margin-top: 20px;
-}
-
-.preview-section:first-child {
-  margin-top: 0;
-}
-
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #404a67;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #eef1f8;
-}
-
-.subscription-count-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.subscription-count-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-radius: var(--agg-radius-md, 16px);
-  background: rgba(107, 115, 255, 0.08);
-  transition: all 0.2s ease;
-}
-
-.subscription-count-item.clickable {
-  cursor: pointer;
-}
-
-.subscription-count-item.clickable:hover {
-  background: rgba(107, 115, 255, 0.14);
-  transform: translateX(4px);
-}
-
-.subscription-info {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 600;
-  color: #404a67;
-}
-
-.node-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.node-item {
-  padding: 12px 16px;
-  border-bottom: 1px solid #eef1f8;
-  color: #4b5678;
-}
-
-.node-item.clickable-node {
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-.node-item.clickable-node:hover {
-  background: #f7f8ff;
-}
-
-.node-item:last-child {
-  border-bottom: none;
-}
-
-.node-info {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.node-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f2d3d;
-}
-
-.node-name .el-icon {
-  color: #4e5eff;
-  font-size: 16px;
-}
-
-.expand-arrow {
-  font-size: 14px;
-  color: #7d88af;
-  margin-left: auto;
-  transition: transform 0.2s ease;
-  flex-shrink: 0;
-}
-
-.expand-arrow.expanded {
-  transform: rotate(180deg);
-}
-
-.node-details {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 13px;
-  color: #7d88af;
-}
-
-.node-server {
-  font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
-  color: #7d88af;
-}
-
-.code-box {
-  margin-top: 10px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: #f4f6ff;
-  color: #1f2d3d;
-  font-size: 13px;
-  font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 260px;
-  overflow: auto;
-  border: 1px solid rgba(107, 115, 255, 0.1);
-  cursor: text;
-}
-
-@media (max-width: 1024px) {
-  .aggregation-page {
-    padding: 24px;
-    --agg-radius-xl: 32px;
-    --agg-radius-lg: 22px;
-    --agg-radius-md: 14px;
-  }
-
-  .aggregation-grid {
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  }
-
-  .aggregation-dialog :deep(.el-dialog__body),
-  .aggregation-dialog :deep(.el-dialog__footer) {
-    padding: 0 24px 24px;
-  }
-}
-
-@media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
-    align-items: flex-start;
-    margin: -20px -16px 20px -16px;
-    padding: 20px 16px;
-  }
-
-  .header-actions {
-    width: 100%;
-    flex-direction: column;
-    justify-content: flex-start;
-    gap: 10px;
-    align-items: stretch;
-  }
-
-  :deep(.header-actions .el-button + .el-button) {
-    margin-left: 0;
-  }
-
-  .action-btn {
-    width: 100%;
-    justify-content: center;
-    box-sizing: border-box;
-  }
-
-  .aggregation-page {
-    padding: 20px;
-    --agg-radius-xl: 28px;
-    --agg-radius-lg: 20px;
-    --agg-radius-md: 14px;
-  }
-
-  .aggregation-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .card-actions {
-    flex-direction: column;
-    flex-wrap: nowrap;
-    align-items: stretch;
-    gap: 10px;
-    width: 100%;
-  }
-
-  :deep(.card-actions .el-button + .el-button) {
-    margin-left: 0;
-  }
-
-  .card-btn.el-button {
-    width: 100%;
-    flex: unset;
-    display: flex;
-    box-sizing: border-box;
-    justify-content: center;
-  }
-
-  .aggregation-dialog :deep(.el-dialog__body),
-  .aggregation-dialog :deep(.el-dialog__footer) {
-    padding: 0 24px 24px;
-  }
-}
-
-@media (max-width: 480px) {
-  .aggregation-page {
-    padding: 16px;
-    --agg-radius-xl: 24px;
-    --agg-radius-lg: 18px;
-    --agg-radius-md: 12px;
-  }
-
-  .action-btn {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .aggregation-dialog :deep(.el-dialog__body),
-  .aggregation-dialog :deep(.el-dialog__footer) {
-    padding: 0 20px 20px;
-  }
-
-  .dialog-card {
-    padding: 24px 18px 20px;
-  }
-}
-</style>

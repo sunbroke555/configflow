@@ -1,229 +1,452 @@
 <template>
-  <div class="nodes-page">
-    <div class="page-header">
-      <div class="title-block">
-        <h2>节点管理</h2>
-        <p>管理节点连接、批量导入以及订阅来源</p>
-      </div>
-      <div class="header-actions">
-        <el-button class="action-btn action-secondary" @click="showBatchAddDialog">
-          <el-icon><DocumentAdd /></el-icon>
+  <div :class="reorder.active.value && 'cf-reordering'">
+    <ScopeBanner
+      scope="resource"
+      :profile-name="cfProfileName"
+      description="订阅拉取与手动录入的节点，按配置空间隔离"
+    />
+
+    <PageHeader eyebrow="Resource" title="节点库" description="订阅拉取与手动录入的节点集中在此。">
+      <template #actions>
+        <Button
+          v-if="!reorder.active.value"
+          variant="outline"
+          class="border-border/60 bg-background/40"
+          :disabled="nodes.length < 2"
+          @click="reorder.enter"
+        >
+          <ArrowUpDown class="size-4" />
+          调整顺序
+        </Button>
+        <Button variant="outline" class="border-border/60 bg-background/40" @click="showBatchAddDialog">
+          <FilePlus2 class="size-4" />
           批量添加
-        </el-button>
-        <el-button class="action-btn action-primary" @click="showAddDialog">
-          <el-icon><Plus /></el-icon>
+        </Button>
+        <Button class="shadow-glow" @click="showAddDialog">
+          <Plus class="size-4" />
           添加节点
-        </el-button>
-        <el-button
+        </Button>
+      </template>
+    </PageHeader>
+
+    <Toolbar v-model:search="keyword" placeholder="搜索名称、地址或备注…">
+      <template #filters>
+        <Select v-model="protocolFilter" :disabled="reorder.active.value">
+          <SelectTrigger class="h-9 w-[150px] border-transparent bg-background/50 text-[13px]">
+            <SelectValue placeholder="全部协议" />
+          </SelectTrigger>
+          <SelectContent class="glass-strong">
+            <SelectItem value="all">全部协议</SelectItem>
+            <SelectItem v-for="p in protocolOptions" :key="p" :value="p">
+              {{ p.toUpperCase() }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </template>
+
+      <template #actions>
+        <Button
           v-if="nodes.length > 0"
-          class="action-btn ghost"
-          :class="{ active: isAllSelected }"
+          variant="ghost"
+          size="sm"
+          :disabled="reorder.active.value"
           @click="toggleSelectAll"
         >
           {{ isAllSelected ? '取消全选' : '全选' }}
-        </el-button>
-        <el-button
+        </Button>
+        <Button
           v-if="selectedNodeIds.size > 0"
-          class="action-btn danger"
+          variant="outline"
+          size="sm"
+          class="border-destructive-accent/30 bg-destructive-soft/40 text-destructive-accent"
           @click="batchDeleteNodes"
         >
-          <el-icon><Delete /></el-icon>
-          批量删除 ({{ selectedNodeIds.size }})
-        </el-button>
-      </div>
-    </div>
-
-    <div v-if="selectedNodeIds.size > 0" class="selection-tip">
-      已选择 <strong>{{ selectedNodeIds.size }}</strong> 个节点
-    </div>
-
-    <div class="nodes-grid" ref="nodesContainer">
-      <div
-        v-for="node in nodes"
-        :key="node.id || node.name"
-        class="node-card"
-        :class="{ 'node-selected': selectedNodeIds.has(node.id), disabled: !node.enabled }"
-        :data-name="node.name"
-      >
-        <div class="card-header">
-          <div class="card-title-group">
-            <div class="card-drag-handle">
-              <el-icon><DCaret /></el-icon>
-            </div>
-            <el-checkbox
-              :model-value="selectedNodeIds.has(node.id)"
-              @change="toggleNodeSelection(node.id)"
-              class="node-checkbox"
-            />
-            <div class="card-title">
-              <span class="node-icon">🌐</span>
-              <div class="node-name-group">
-                <span class="node-name" :title="node.name">{{ node.name }}</span>
-                <span v-if="node.remark" class="node-remark" :title="node.remark">{{ node.remark }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="card-meta">
-            <span class="meta-pill protocol-pill" :class="`protocol-${getProtocol(node.proxy_string).toLowerCase()}`">
-              {{ getProtocol(node.proxy_string) }}
-            </span>
-            <span
-              v-if="node.subscription_name"
-              class="meta-pill source-pill"
-            >
-              {{ node.subscription_name }}
-            </span>
-            <button
-              type="button"
-              class="status-toggle-btn compact"
-              :class="{ active: node.enabled, loading: savingStatus[node.id] }"
-              @click="handleToggle(node)"
-              :disabled="savingStatus[node.id]"
-            >
-              <el-icon><View /></el-icon>
-            </button>
-          </div>
-        </div>
-
-        <div class="card-section">
-          <div class="section-label-row">
-            <div class="section-label">
-              <el-icon><Link /></el-icon>
-              节点字符串
-            </div>
-            <button
-              type="button"
-              class="expand-toggle-btn"
-              @click="toggleNodeExpand(node.id)"
-            >
-              <el-icon v-if="expandedNodes.has(node.id)"><ArrowUp /></el-icon>
-              <el-icon v-else><ArrowDown /></el-icon>
-            </button>
-          </div>
-          <pre v-show="expandedNodes.has(node.id)" class="code-box">{{ formatProxyStringForDisplay(node.proxy_string) }}</pre>
-        </div>
-
-        <div class="card-actions">
-          <el-button class="card-btn ghost" size="small" @click="editNode(node)">
-            <el-icon><EditPen /></el-icon>
-            编辑
-          </el-button>
-          <el-button class="card-btn danger" size="small" @click="deleteNode(node)">
-            <el-icon><Delete /></el-icon>
-            删除
-          </el-button>
-        </div>
-      </div>
-    </div>
-
-    <el-dialog
-      v-model="dialogVisible"
-      class="node-dialog"
-      width="720px"
-      :close-on-click-modal="false"
-      :destroy-on-close="true"
-    >
-      <template #header="{ close }">
-        <div class="dialog-header">
-          <div class="dialog-title-group">
-            <h3>{{ isEdit ? '编辑节点' : '添加节点' }}</h3>
-            <p>填写节点名称与连接字符串，支持 URI / JSON / YAML 格式</p>
-          </div>
-          <button class="dialog-close-btn" type="button" @click="close">
-            <el-icon><Close /></el-icon>
-          </button>
-        </div>
+          <Trash2 class="size-3.5" />
+          删除 {{ selectedNodeIds.size }} 项
+        </Button>
+        <ViewToggle v-model="viewMode" class="max-md:hidden" />
       </template>
-      <div class="dialog-card">
-        <el-form :model="form" label-position="top" class="nodes-form">
-          <el-form-item label="节点名称">
-            <el-input v-model="form.name" placeholder="请输入节点名称，例如：香港节点 01" />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="form.remark" placeholder="可选，添加备注信息" />
-          </el-form-item>
-          <el-form-item label="节点字符串">
-            <el-input
+    </Toolbar>
+
+    <ReorderBar
+      :active="reorder.active.value"
+      :saving="reorder.saving.value"
+      :announcement="reorder.announcement.value"
+      @cancel="reorder.cancel"
+      @save="handleSaveOrder"
+    />
+
+    <SectionCard v-if="visibleNodes.length === 0" :padded="false">
+      <EmptyState :icon="Network" title="没有匹配的节点" :description="nodesEmptyText">
+        <Button @click="showAddDialog">
+          <Plus class="size-4" />
+          添加节点
+        </Button>
+      </EmptyState>
+    </SectionCard>
+
+    <!-- ===== 表格视图（桌面默认） ===== -->
+    <DataTableShell
+      v-else-if="effectiveView === 'list'"
+      :footer="`共 ${visibleNodes.length} 个节点`"
+    >
+      <TableHeader>
+        <TableRow class="hover:bg-transparent">
+          <TableHead v-if="reorder.active.value" class="w-10"><span class="cf-sr">排序</span></TableHead>
+          <TableHead class="w-10"><span class="cf-sr">选择</span></TableHead>
+          <TableHead class="w-12 text-right">#</TableHead>
+          <TableHead>名称</TableHead>
+          <TableHead class="w-28">协议</TableHead>
+          <TableHead>地址</TableHead>
+          <TableHead class="w-40">来源</TableHead>
+          <TableHead class="w-32 text-right">操作</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody ref="nodesContainer">
+        <TableRow
+          v-for="(node, cfIndex) in visibleNodes"
+          :key="node.id || node.name"
+          :data-name="node.name"
+          data-reorder-item
+          :class="!node.enabled && 'opacity-55'"
+        >
+          <TableCell v-if="reorder.active.value">
+            <DragHandle
+              :label="node.name || node.id"
+              :index="cfIndex"
+              :total="nodes.length"
+              :position="reorder.positionLabel(cfIndex)"
+              :grabbed="reorder.grabbedIndex.value === cfIndex"
+              @up="reorder.moveUp(cfIndex)"
+              @down="reorder.moveDown(cfIndex)"
+              @keydown="reorder.onHandleKeydown($event, cfIndex)"
+            />
+          </TableCell>
+          <TableCell class="cf-reorder-mute">
+            <Checkbox
+              :model-value="selectedNodeIds.has(node.id)"
+              :aria-label="`选择 ${node.name}`"
+              @update:model-value="toggleNodeSelection(node.id)"
+            />
+          </TableCell>
+          <TableCell class="num text-right text-muted-foreground">{{ cfIndex + 1 }}</TableCell>
+          <TableCell>
+            <div class="flex items-center gap-2">
+              <span
+                class="size-1.5 shrink-0 rounded-full"
+                :class="node.enabled
+                  ? 'bg-success-accent shadow-[0_0_6px_var(--success-accent)]'
+                  : 'bg-muted-foreground'"
+                aria-hidden="true"
+              />
+              <span class="min-w-0 truncate font-medium text-foreground">{{ node.name }}</span>
+              <span v-if="node.remark" class="truncate text-[12px] text-muted-foreground">
+                {{ node.remark }}
+              </span>
+            </div>
+          </TableCell>
+          <TableCell>
+            <Badge variant="outline" class="font-mono text-[10.5px]">{{ nodeProtocol(node) }}</Badge>
+          </TableCell>
+          <TableCell class="font-mono text-[12px] text-muted-foreground">{{ nodeAddress(node) }}</TableCell>
+          <TableCell class="truncate text-[12.5px] text-muted-foreground">
+            {{ node.subscription_name || '手动添加' }}
+          </TableCell>
+          <TableCell class="cf-reorder-mute text-right">
+            <div class="flex items-center justify-end gap-0.5">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                :aria-label="node.enabled ? `停用 ${node.name}` : `启用 ${node.name}`"
+                :title="node.enabled ? '停用' : '启用'"
+                :disabled="savingStatus[node.id]"
+                @click="handleToggle(node)"
+              >
+                <component :is="node.enabled ? Eye : EyeOff" class="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                :aria-label="`编辑 ${node.name}`"
+                title="编辑"
+                @click="editNode(node)"
+              >
+                <Pencil class="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                class="text-destructive-accent hover:bg-destructive-soft"
+                :aria-label="`删除 ${node.name}`"
+                title="删除"
+                @click="deleteNode(node)"
+              >
+                <Trash2 class="size-4" />
+              </Button>
+            </div>
+          </TableCell>
+        </TableRow>
+      </TableBody>
+    </DataTableShell>
+
+    <!-- ===== 卡片视图 ===== -->
+    <div
+      v-else
+      ref="nodesContainer"
+      class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3 max-md:grid-cols-1"
+    >
+      <Motion
+        v-for="(node, cfIndex) in visibleNodes"
+        :key="node.id || node.name"
+        v-bind="listItem(cfIndex)"
+        :data-name="node.name"
+        data-reorder-item
+        :class="[
+          'hairline edge-light relative flex flex-col gap-3 overflow-hidden rounded-xl border bg-card/55 p-4 backdrop-blur-xl transition-all duration-300 hover:shadow-glow-soft',
+          selectedNodeIds.has(node.id) ? 'border-primary-accent/45' : 'border-border/35',
+          !node.enabled && 'opacity-60'
+        ]"
+      >
+        <header class="flex items-start gap-2.5">
+          <DragHandle
+            v-if="reorder.active.value"
+            :label="node.name || node.id"
+            :index="cfIndex"
+            :total="nodes.length"
+            :position="reorder.positionLabel(cfIndex)"
+            :grabbed="reorder.grabbedIndex.value === cfIndex"
+            @up="reorder.moveUp(cfIndex)"
+            @down="reorder.moveDown(cfIndex)"
+            @keydown="reorder.onHandleKeydown($event, cfIndex)"
+          />
+          <Checkbox
+            class="cf-reorder-mute mt-0.5"
+            :model-value="selectedNodeIds.has(node.id)"
+            :aria-label="`选择 ${node.name}`"
+            @update:model-value="toggleNodeSelection(node.id)"
+          />
+          <div class="min-w-0 flex-1">
+            <p class="m-0 truncate text-[14px] font-semibold text-foreground" :title="node.name">
+              {{ node.name }}
+            </p>
+            <p
+              v-if="node.remark"
+              class="mt-0.5 mb-0 truncate text-[12px] text-muted-foreground"
+              :title="node.remark"
+            >
+              {{ node.remark }}
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="cf-reorder-mute shrink-0"
+            :class="node.enabled ? 'text-success-accent' : 'text-muted-foreground'"
+            :title="node.enabled ? '停用' : '启用'"
+            :aria-label="node.enabled ? `停用 ${node.name}` : `启用 ${node.name}`"
+            :disabled="savingStatus[node.id]"
+            @click="handleToggle(node)"
+          >
+            <component :is="node.enabled ? Eye : EyeOff" class="size-4" />
+          </Button>
+        </header>
+
+        <div class="cf-reorder-mute flex flex-wrap items-center gap-1.5">
+          <Badge variant="outline" class="font-mono text-[10.5px]">
+            {{ getProtocol(node.proxy_string) }}
+          </Badge>
+          <Badge v-if="node.subscription_name" variant="info" class="max-w-[180px] truncate text-[10.5px]">
+            {{ node.subscription_name }}
+          </Badge>
+        </div>
+
+        <div class="cf-reorder-mute">
+          <button
+            type="button"
+            class="flex w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase transition-colors hover:text-foreground"
+            @click="toggleNodeExpand(node.id)"
+          >
+            <Link2 class="size-3.5" aria-hidden="true" />
+            节点字符串
+            <ChevronDown
+              class="ml-auto size-3.5 transition-transform duration-200"
+              :class="expandedNodes.has(node.id) && 'rotate-180'"
+              aria-hidden="true"
+            />
+          </button>
+          <pre
+            v-show="expandedNodes.has(node.id)"
+            class="mt-2 max-h-40 overflow-auto rounded-lg border border-border/50 bg-background/50 p-2.5 font-mono text-[11px] leading-relaxed break-all whitespace-pre-wrap text-muted-foreground"
+          >{{ formatProxyStringForDisplay(node.proxy_string) }}</pre>
+        </div>
+
+        <footer class="cf-reorder-mute mt-auto flex items-center gap-2 border-0 border-t border-border/50 pt-3">
+          <Button variant="ghost" size="sm" @click="editNode(node)">
+            <Pencil class="size-3.5" />
+            编辑
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="ml-auto text-destructive-accent hover:bg-destructive-soft"
+            @click="deleteNode(node)"
+          >
+            <Trash2 class="size-3.5" />
+            删除
+          </Button>
+        </footer>
+      </Motion>
+    </div>
+
+    <!-- ===== 新增 / 编辑节点 ===== -->
+    <Dialog v-model:open="dialogVisible">
+      <DialogContent class="glass-strong hairline max-w-[720px] border-border/50">
+        <DialogHeader>
+          <DialogTitle>{{ isEdit ? '编辑节点' : '添加节点' }}</DialogTitle>
+          <DialogDescription>填写节点名称与连接字符串，支持 URI / JSON / YAML 格式。</DialogDescription>
+        </DialogHeader>
+
+        <div class="flex max-h-[60dvh] flex-col gap-4 overflow-y-auto pr-1">
+          <div class="flex flex-col gap-1.5">
+            <Label for="node-name">节点名称</Label>
+            <Input
+              id="node-name"
+              v-model="form.name"
+              class="bg-background/50"
+              placeholder="例如：香港节点 01"
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label for="node-remark">备注</Label>
+            <Input
+              id="node-remark"
+              v-model="form.remark"
+              class="bg-background/50"
+              placeholder="可选，添加备注信息"
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label for="node-string">节点字符串</Label>
+            <Textarea
+              id="node-string"
               v-model="form.proxy_string"
-              type="textarea"
+              class="min-h-[220px] bg-background/50 font-mono text-[12px]"
               :rows="12"
-              class="code-textarea"
               placeholder="支持 URI、JSON、YAML 等格式"
             />
-          </el-form-item>
-          <el-form-item label="启用状态">
-            <div class="status-toggle-row">
-              <el-switch v-model="form.enabled" />
-              <span>{{ form.enabled ? '节点启用中' : '节点已停用' }}</span>
-            </div>
-          </el-form-item>
-        </el-form>
-      </div>
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button class="footer-btn ghost" @click="dialogVisible = false">取消</el-button>
-          <el-button class="footer-btn primary" type="primary" @click="saveNode">保存</el-button>
-        </div>
-      </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="batchDialogVisible"
-      class="node-dialog"
-      width="780px"
-      :close-on-click-modal="false"
-      :destroy-on-close="true"
-    >
-      <template #header="{ close }">
-        <div class="dialog-header">
-          <div class="dialog-title-group">
-            <h3>批量添加节点</h3>
-            <p>粘贴多个节点链接或配置，系统会自动识别格式并导入</p>
           </div>
-          <button class="dialog-close-btn" type="button" @click="close">
-            <el-icon><Close /></el-icon>
-          </button>
+          <div class="flex items-center gap-2.5">
+            <Switch id="node-enabled" v-model="form.enabled" />
+            <Label for="node-enabled" class="text-[13px] text-muted-foreground">
+              {{ form.enabled ? '节点启用中' : '节点已停用' }}
+            </Label>
+          </div>
         </div>
-      </template>
-      <div class="dialog-card">
-        <el-form :model="batchForm" label-position="top" class="nodes-form">
-          <el-form-item label="节点链接或配置">
-            <el-input
+
+        <DialogFooter>
+          <Button variant="outline" @click="dialogVisible = false">取消</Button>
+          <Button @click="saveNode">保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- ===== 批量添加 ===== -->
+    <Dialog v-model:open="batchDialogVisible">
+      <DialogContent class="glass-strong hairline max-w-[780px] border-border/50">
+        <DialogHeader>
+          <DialogTitle>批量添加节点</DialogTitle>
+          <DialogDescription>粘贴多个节点链接或配置，系统会自动识别格式并导入。</DialogDescription>
+        </DialogHeader>
+
+        <div class="flex flex-col gap-4">
+          <div class="flex flex-col gap-1.5">
+            <Label for="batch-nodes">节点链接或配置</Label>
+            <Textarea
+              id="batch-nodes"
               v-model="batchForm.nodes_text"
-              type="textarea"
+              class="min-h-[300px] bg-background/50 font-mono text-[12px]"
               :rows="16"
-              class="code-textarea large"
               placeholder="支持 URI、JSON、YAML 多种格式，自动忽略空行和 // 注释"
             />
-          </el-form-item>
-          <el-form-item label="默认状态">
-            <div class="status-toggle-row">
-              <el-switch v-model="batchForm.enabled" />
-              <span>{{ batchForm.enabled ? '导入后默认启用节点' : '导入后默认禁用节点' }}</span>
-            </div>
-          </el-form-item>
-        </el-form>
-      </div>
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button class="footer-btn ghost" @click="batchDialogVisible = false">取消</el-button>
-          <el-button class="footer-btn primary" type="primary" @click="saveBatchNodes">批量添加</el-button>
+          </div>
+          <div class="flex items-center gap-2.5">
+            <Switch id="batch-enabled" v-model="batchForm.enabled" />
+            <Label for="batch-enabled" class="text-[13px] text-muted-foreground">
+              {{ batchForm.enabled ? '导入后默认启用节点' : '导入后默认禁用节点' }}
+            </Label>
+          </div>
         </div>
-      </template>
-    </el-dialog>
+
+        <DialogFooter>
+          <Button variant="outline" @click="batchDialogVisible = false">取消</Button>
+          <Button @click="saveBatchNodes">批量添加</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { DCaret, Plus, DocumentAdd, Delete, EditPen, Close, Link, View, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { onUnmounted, watch, ref, computed, onMounted, nextTick } from 'vue'
+import { Motion } from 'motion-v'
+import {
+  ArrowUpDown,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  FilePlus2,
+  Link2,
+  Network,
+  Pencil,
+  Plus,
+  Trash2
+} from '@lucide/vue'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
+import DataTableShell from '@/components/common/DataTableShell.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
+import SectionCard from '@/components/common/SectionCard.vue'
+import Toolbar from '@/components/common/Toolbar.vue'
+import ViewToggle from '@/components/common/ViewToggle.vue'
+import ReorderBar from '@/components/shell/ReorderBar.vue'
+import DragHandle from '@/components/shell/DragHandle.vue'
+import ScopeBanner from '@/components/shell/ScopeBanner.vue'
+import { useReorder } from '@/composables/useReorder'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { listItem } from '@/lib/motion'
+import { useProfileStore } from '@/stores/profile'
 import { nodeApi, subStoreUrlApi } from '@/api'
 import type { ProxyNode } from '@/types'
-import Sortable from 'sortablejs'
 import api from '@/api'
 import * as yaml from 'js-yaml'
 
+
+const cfProfileStore = useProfileStore()
+const cfProfileName = computed(
+  () => cfProfileStore.activeProfile.value?.name || cfProfileStore.activeProfileId.value
+)
 const nodes = ref<ProxyNode[]>([])
 const savingStatus = ref<Record<string, boolean>>({})
 const nodesContainer = ref<HTMLElement | null>(null)
@@ -373,7 +596,7 @@ const loadNodes = async () => {
     const { data } = await nodeApi.getAll()
     nodes.value = data
   } catch (error) {
-    ElMessage.error('加载节点列表失败')
+    notify.error('加载节点列表失败')
   }
 }
 
@@ -382,21 +605,15 @@ const checkSubStoreUrl = async (): Promise<boolean> => {
     const response = await subStoreUrlApi.get()
     const url = response.data?.sub_store_url || ''
     if (!url) {
-      await ElMessageBox.confirm(
-        '尚未配置 Sub-Store URL，节点格式转换功能将不可用。请前往「生成配置」页面配置 Sub-Store 地址。',
-        '提示',
-        {
-          confirmButtonText: '继续添加',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
+      return await confirm(
+        '尚未配置 Sub-Store URL，节点格式转换功能将不可用。请前往「配置生成」页面配置 Sub-Store 地址。',
+        { title: '未配置 Sub-Store', confirmText: '继续添加' }
       )
     }
     return true
-  } catch (error: any) {
-    if (error === 'cancel' || error?.toString?.().includes('cancel')) {
-      return false
-    }
+  } catch (error) {
+    // 读取设置失败不应阻断添加流程
+    console.error('Failed to check Sub-Store URL:', error)
     return true
   }
 }
@@ -456,22 +673,17 @@ const toggleSelectAll = () => {
 // 批量删除
 const batchDeleteNodes = async () => {
   if (selectedNodeIds.value.size === 0) {
-    ElMessage.warning('请先选择要删除的节点')
+    notify.warning('请先选择要删除的节点')
     return
   }
 
-  try {
-    // 确认删除
-    await ElMessageBox.confirm(
-      `确定要删除选中的 ${selectedNodeIds.value.size} 个节点吗？删除后将同步清理策略组中对这些节点的引用。`,
-      '批量删除确认',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    )
+  const confirmed = await confirmDanger(
+    `确定要删除选中的 ${selectedNodeIds.value.size} 个节点吗？删除后将同步清理策略组中对这些节点的引用。`,
+    { title: '批量删除节点' }
+  )
+  if (!confirmed) return
 
+  try {
     const nodeIdsToDelete = Array.from(selectedNodeIds.value)
     let successCount = 0
     let failCount = 0
@@ -528,16 +740,16 @@ const batchDeleteNodes = async () => {
       // 显示结果
       if (failCount === 0) {
         if (updatedGroupCount > 0) {
-          ElMessage.success(`批量删除成功！已删除 ${successCount} 个节点，清理了 ${updatedGroupCount} 个策略组中的引用`)
+          notify.success(`批量删除成功！已删除 ${successCount} 个节点，清理了 ${updatedGroupCount} 个策略组中的引用`)
         } else {
-          ElMessage.success(`批量删除成功！已删除 ${successCount} 个节点`)
+          notify.success(`批量删除成功！已删除 ${successCount} 个节点`)
         }
       } else {
-        ElMessage.warning(`批量删除完成！成功 ${successCount} 个，失败 ${failCount} 个`)
+        notify.warning(`批量删除完成！成功 ${successCount} 个，失败 ${failCount} 个`)
       }
     } catch (error) {
       console.error('清理策略组引用失败:', error)
-      ElMessage.warning(`已删除 ${successCount} 个节点，但清理策略组引用时出现错误`)
+      notify.warning(`已删除 ${successCount} 个节点，但清理策略组引用时出现错误`)
     }
 
     // 清空选择并刷新列表
@@ -545,7 +757,7 @@ const batchDeleteNodes = async () => {
     loadNodes()
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') {
-      ElMessage.error('批量删除失败')
+      notify.error('批量删除失败')
       console.error('批量删除节点失败:', error)
     }
   }
@@ -561,9 +773,9 @@ const toggleNodeEnabled = async (node: ProxyNode) => {
   savingStatus.value[node.id] = true
   try {
     await nodeApi.update(node.id, node)
-    ElMessage.success(node.enabled ? '已启用' : '已禁用')
+    notify.success(node.enabled ? '已启用' : '已禁用')
   } catch (error) {
-    ElMessage.error('更新状态失败')
+    notify.error('更新状态失败')
     node.enabled = previous
     loadNodes()
   } finally {
@@ -703,15 +915,15 @@ const saveNode = async () => {
 
     if (isEdit.value) {
       await nodeApi.update(form.value.id!, form.value)
-      ElMessage.success('更新成功')
+      notify.success('更新成功')
     } else {
       await nodeApi.create(form.value)
-      ElMessage.success('添加成功')
+      notify.success('添加成功')
     }
     dialogVisible.value = false
     loadNodes()
   } catch (error) {
-    ElMessage.error('保存失败')
+    notify.error('保存失败')
   }
 }
 
@@ -752,7 +964,7 @@ const saveBatchNodes = async () => {
   try {
     const text = batchForm.value.nodes_text.trim()
     if (!text) {
-      ElMessage.warning('请输入节点链接')
+      notify.warning('请输入节点链接')
       return
     }
 
@@ -791,7 +1003,7 @@ const saveBatchNodes = async () => {
         }
 
         if (proxies.length === 0) {
-          ElMessage.warning('未找到有效的节点定义')
+          notify.warning('未找到有效的节点定义')
           console.warn('[批量添加] 未找到有效的节点定义')
           return
         }
@@ -822,7 +1034,7 @@ const saveBatchNodes = async () => {
           }
         }
       } catch (yamlError: any) {
-        ElMessage.error(`YAML 解析失败: ${yamlError.message}`)
+        notify.error(`YAML 解析失败: ${yamlError.message}`)
         return
       }
     } else {
@@ -835,7 +1047,7 @@ const saveBatchNodes = async () => {
       console.log('[批量添加] 过滤后的行数:', lines.length)
 
       if (lines.length === 0) {
-        ElMessage.warning('没有有效的节点链接')
+        notify.warning('没有有效的节点链接')
         return
       }
 
@@ -874,22 +1086,22 @@ const saveBatchNodes = async () => {
 
     // 显示结果摘要
     if (failCount === 0) {
-      ElMessage.success(`批量添加完成！成功添加 ${successCount} 个节点`)
+      notify.success(`批量添加完成！成功添加 ${successCount} 个节点`)
     } else if (successCount === 0) {
-      ElMessage.error(`批量添加失败！所有 ${failCount} 个节点都添加失败`)
+      notify.error(`批量添加失败！所有 ${failCount} 个节点都添加失败`)
       if (errors.length > 0) {
         console.error('批量添加错误详情:', errors)
       }
     } else {
-      ElMessage.warning(`批量添加完成！成功 ${successCount} 个，失败 ${failCount} 个`)
+      notify.warning(`批量添加完成！成功 ${successCount} 个，失败 ${failCount} 个`)
       if (errors.length > 0 && errors.length <= 5) {
         // 如果错误不多，显示错误详情
         setTimeout(() => {
-          errors.forEach(err => ElMessage.error(err))
+          errors.forEach(err => notify.error(err))
         }, 500)
       } else if (errors.length > 5) {
         console.error('批量添加错误详情:', errors)
-        ElMessage.info('查看控制台了解详细错误信息')
+        notify.info('查看控制台了解详细错误信息')
       }
     }
 
@@ -899,24 +1111,19 @@ const saveBatchNodes = async () => {
       loadNodes()
     }
   } catch (error) {
-    ElMessage.error('批量添加失败')
+    notify.error('批量添加失败')
     console.error('批量添加错误:', error)
   }
 }
 
 const deleteNode = async (row: ProxyNode) => {
-  try {
-    // 确认删除
-    await ElMessageBox.confirm(
-      '确定要删除该节点吗？删除后将同步清理策略组中对该节点的引用。',
-      '删除确认',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    )
+  const confirmed = await confirmDanger(
+    '确定要删除该节点吗？删除后将同步清理策略组中对该节点的引用。',
+    { title: '删除节点' }
+  )
+  if (!confirmed) return
 
+  try {
     // 先删除节点
     await nodeApi.delete(row.id)
 
@@ -947,958 +1154,123 @@ const deleteNode = async (row: ProxyNode) => {
     }
 
     if (updatedCount > 0) {
-      ElMessage.success(`删除成功，已同步清理 ${updatedCount} 个策略组中的引用`)
+      notify.success(`删除成功，已同步清理 ${updatedCount} 个策略组中的引用`)
     } else {
-      ElMessage.success('删除成功')
+      notify.success('删除成功')
     }
     loadNodes()
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') {
-      ElMessage.error('删除失败')
+      notify.error('删除失败')
       console.error('删除节点失败:', error)
     }
   }
 }
 
-const initSortable = () => {
-  nextTick(() => {
-    if (nodesContainer.value) {
-      Sortable.create(nodesContainer.value, {
-        animation: 150,
-        handle: '.card-drag-handle',
-        ghostClass: 'sortable-ghost',
-        chosenClass: 'sortable-chosen',
-        dragClass: 'sortable-drag',
-        onEnd: async (evt: any) => {
-          const { oldIndex, newIndex } = evt
-          if (oldIndex === newIndex) return
 
-          const movedItem = nodes.value.splice(oldIndex, 1)[0]
-          nodes.value.splice(newIndex, 0, movedItem)
 
-          try {
-            await saveNodesOrder()
-            ElMessage.success('排序已更新')
-          } catch (error) {
-            ElMessage.error('保存排序失败')
-            loadNodes()
-          }
-        }
-      })
-    }
-  })
+/* ---------- 视图模式与筛选 ---------- */
+type ViewMode = 'list' | 'card'
+const VIEW_KEY = 'configflow-nodes-view'
+
+const readView = (): ViewMode => {
+  try {
+    const v = localStorage.getItem(VIEW_KEY)
+    if (v === 'list' || v === 'card') return v
+  } catch {
+    // 存储不可用时用默认视图
+  }
+  return 'list'
 }
 
-const saveNodesOrder = async () => {
-  // 批量更新节点顺序
-  await api.post('/nodes/reorder', {
-    nodes: nodes.value
+const viewMode = ref<ViewMode>(readView())
+watch(viewMode, mode => {
+  try {
+    localStorage.setItem(VIEW_KEY, mode)
+  } catch {
+    // 仅当前会话生效
+  }
+})
+
+// 节点表格列多，窄屏不可读，移动端一律用卡片
+const isNarrow = ref(false)
+const syncNarrow = () => {
+  isNarrow.value = window.matchMedia('(max-width: 900px)').matches
+}
+const effectiveView = computed<ViewMode>(() => (isNarrow.value ? 'card' : viewMode.value))
+
+const keyword = ref('')
+const protocolFilter = ref('all')
+
+const nodeProtocol = (node: any): string => {
+  const raw = node.type || getProtocol(node.proxy_string) || ''
+  return String(raw).toUpperCase() || '—'
+}
+
+const nodeAddress = (node: any): string => {
+  if (!node.server) return '—'
+  return node.port ? `${node.server}:${node.port}` : String(node.server)
+}
+
+const protocolOptions = computed(() => {
+  const set = new Set<string>()
+  nodes.value.forEach(n => {
+    const p = (n.type || getProtocol(n.proxy_string) || '').toString().toLowerCase()
+    if (p) set.add(p)
   })
+  return [...set].sort()
+})
+
+// 排序模式下必须展示完整列表，否则筛选会让保存的顺序丢条目
+const visibleNodes = computed(() => {
+  if (reorder.active.value) return nodes.value
+  const q = keyword.value.trim().toLowerCase()
+  return nodes.value.filter(n => {
+    if (protocolFilter.value !== 'all') {
+      const p = (n.type || getProtocol(n.proxy_string) || '').toString().toLowerCase()
+      if (p !== protocolFilter.value) return false
+    }
+    if (!q) return true
+    return [n.name, n.server, n.remark, n.subscription_name]
+      .some(v => String(v || '').toLowerCase().includes(q))
+  })
+})
+
+const nodesEmptyText = computed(() =>
+  nodes.value.length === 0 ? '还没有节点' : '没有匹配的节点'
+)
+
+/* ---------- 统一拖动排序 ---------- */
+const reorder = useReorder<any>({
+  items: nodes,
+  container: nodesContainer,
+  labelOf: item => item.name || item.id,
+  // 按 id 提交，服务端在存量数据上重排，不回写列表接口的计算字段
+  persist: async items => {
+    await api.post('/nodes/reorder', {
+      ids: items.map(item => item.id),
+      position: 'top'
+    })
+  }
+})
+
+const handleSaveOrder = async () => {
+  try {
+    await reorder.save()
+    notify.success('顺序已保存，所有配置空间生效')
+  } catch (error) {
+    notify.error('保存顺序失败，顺序已还原')
+  }
 }
 
 onMounted(() => {
-  loadNodes().then(() => {
-    initSortable()
-  })
+  syncNarrow()
+  window.addEventListener('resize', syncNarrow)
+  loadNodes()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', syncNarrow)
 })
 </script>
 
-<style scoped>
-.nodes-page {
-  padding: 28px 32px 40px;
-  background: #f5f7ff;
-  min-height: calc(100vh - 64px);
-  --node-radius-xl: 40px;
-  --node-radius-lg: 24px;
-  --node-radius-md: 16px;
-  --node-radius-sm: 12px;
-  --node-radius-pill: 999px;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-  /* 固定顶部 */
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: #f5f7ff;
-  margin: -28px -32px 28px -32px;
-  padding: 28px 32px;
-}
-
-.title-block h2 {
-  margin: 0;
-  font-size: 26px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-}
-
-.title-block p {
-  margin: 6px 0 0;
-  font-size: 14px;
-  color: #7f87af;
-}
-
-.header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  justify-content: flex-end;
-}
-
-.action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 20px;
-  height: 40px;
-  border-radius: var(--node-radius-md, 16px);
-  font-weight: 600;
-  font-size: 14px;
-  border: none;
-  background: rgba(107, 115, 255, 0.15);
-  color: #4a5bff;
-  transition: all 0.2s ease;
-}
-
-.action-btn .el-icon {
-  font-size: 16px;
-}
-
-.action-btn.action-secondary {
-  border: 1px solid rgba(107, 115, 255, 0.35);
-}
-
-.action-btn.action-primary {
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  color: #fff;
-  box-shadow: 0 12px 30px rgba(87, 104, 255, 0.25);
-}
-
-.action-btn.ghost {
-  background: rgba(107, 115, 255, 0.08);
-  color: #4a5bff;
-  border: 1px solid rgba(107, 115, 255, 0.2);
-}
-
-.action-btn.ghost.active {
-  box-shadow: 0 0 0 2px rgba(107, 115, 255, 0.35);
-}
-
-.action-btn.danger {
-  background: rgba(155, 143, 255, 0.15);
-  color: #9b8fff;
-  border: 1px solid rgba(155, 143, 255, 0.35);
-}
-
-.action-btn:not([disabled]):hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgba(87, 104, 255, 0.25);
-}
-
-.selection-tip {
-  margin-top: 16px;
-  margin-bottom: -4px;
-  padding: 10px 16px;
-  border-radius: var(--node-radius-md, 16px);
-  background: rgba(107, 115, 255, 0.12);
-  color: #4e5eff;
-  font-size: 13px;
-  font-weight: 600;
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.selection-tip strong {
-  font-weight: 700;
-}
-
-.nodes-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 24px;
-  margin-top: 24px;
-}
-
-.node-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 28px 26px 24px;
-  border-radius: var(--node-radius-lg, 24px);
-  background: #fff;
-  border: 1px solid rgba(107, 115, 255, 0.12);
-  box-shadow: 0 20px 40px rgba(91, 112, 255, 0.16);
-  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
-  min-height: 100%;
-}
-
-.node-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 24px 48px rgba(91, 112, 255, 0.2);
-}
-
-.node-card.node-selected {
-  border-color: rgba(78, 95, 255, 0.6);
-  box-shadow: 0 20px 50px rgba(78, 95, 255, 0.25);
-}
-
-.node-card.disabled {
-  opacity: 0.5;
-  filter: grayscale(0.4);
-}
-
-.card-drag-handle {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(107, 115, 255, 0.14);
-  color: #616bff;
-  cursor: grab;
-  transition: background 0.2s ease, color 0.2s ease;
-  z-index: 2;
-}
-
-.card-drag-handle:hover {
-  background: rgba(107, 115, 255, 0.22);
-  color: #3f4ffa;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-}
-
-.card-title-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.node-checkbox {
-  display: inline-flex;
-  align-items: center;
-}
-
-:deep(.node-checkbox .el-checkbox__inner) {
-  border-radius: 6px;
-  width: 18px;
-  height: 18px;
-}
-
-:deep(.node-checkbox .el-checkbox__inner::after) {
-  left: 5px;
-  top: 1px;
-}
-
-:deep(.node-checkbox .el-checkbox__input.is-checked .el-checkbox__inner) {
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  border: none;
-  box-shadow: 0 6px 16px rgba(87, 104, 255, 0.35);
-}
-
-:deep(.node-checkbox .el-checkbox__input.is-checked .el-checkbox__inner::after) {
-  border-color: #fff;
-  left: 4px;
-}
-
-:deep(.node-checkbox .el-checkbox__inner:hover) {
-  border-color: rgba(107, 115, 255, 0.6);
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.node-icon {
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.node-name-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.node-name {
-  font-size: 17px;
-  font-weight: 600;
-  color: #1f2d3d;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.node-remark {
-  font-size: 12px;
-  color: #7d88af;
-  font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
-  flex-shrink: 0;
-}
-
-.meta-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: var(--node-radius-pill);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.status-toggle-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(107, 115, 255, 0.18);
-  color: #4e5eff;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  box-shadow: 0 12px 26px rgba(87, 104, 255, 0.18);
-}
-
-.status-toggle-btn.compact {
-  width: 40px;
-  height: 40px;
-}
-
-.status-toggle-btn .el-icon {
-  font-size: 18px;
-}
-
-.status-toggle-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 30px rgba(87, 104, 255, 0.22);
-}
-
-.status-toggle-btn.active {
-  background: linear-gradient(135deg, #8b8fff 0%, #6b7dff 100%);
-  color: #fff;
-}
-
-.status-toggle-btn.loading {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-.status-toggle-btn:disabled {
-  cursor: not-allowed;
-}
-
-.protocol-pill {
-  background: rgba(107, 115, 255, 0.16);
-  color: #4e5eff !important;
-}
-
-.protocol-pill.protocol-ss {
-  background: rgba(107, 115, 255, 0.16);
-  color: #4e5eff;
-}
-
-.protocol-pill.protocol-vmess,
-.protocol-pill.protocol-vless {
-  background: rgba(139, 143, 255, 0.16);
-  color: #8b8fff;
-}
-
-.protocol-pill.protocol-trojan {
-  background: rgba(107, 115, 255, 0.16);
-  color: #6b73ff;
-}
-
-.protocol-pill.protocol-hysteria2 {
-  background: rgba(78, 94, 255, 0.18);
-  color: #4e5eff;
-}
-
-.protocol-pill.protocol-wireguard {
-  background: rgba(107, 115, 255, 0.18);
-  color: #3040ff;
-}
-
-.protocol-pill.protocol-http,
-.protocol-pill.protocol-https {
-  background: rgba(130, 143, 178, 0.18);
-  color: #4c5775;
-}
-
-.protocol-pill.protocol-unknown {
-  background: rgba(162, 170, 206, 0.16);
-  color: #5c6387;
-}
-
-.source-pill {
-  background: rgba(255, 255, 255, 0.7);
-  color: #4c5775;
-  border: 1px dashed rgba(107, 115, 255, 0.25);
-}
-
-.status-pill {
-  background: rgba(139, 143, 255, 0.16);
-  color: #8b8fff;
-}
-
-.status-pill.disabled {
-  background: rgba(162, 170, 206, 0.16);
-  color: #6c7496;
-}
-
-.card-section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.card-section.inline {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.section-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.section-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #7d88af;
-}
-
-.section-label .el-icon {
-  font-size: 16px;
-  color: #4e5eff;
-}
-
-.expand-toggle-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 1px solid rgba(107, 115, 255, 0.25);
-  background: rgba(107, 115, 255, 0.08);
-  color: #4e5eff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  flex-shrink: 0;
-}
-
-.expand-toggle-btn:hover {
-  background: rgba(107, 115, 255, 0.15);
-  border-color: rgba(107, 115, 255, 0.35);
-  transform: scale(1.05);
-}
-
- .section-value {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f2d3d;
-}
-
-.code-box {
-  padding: 14px 16px;
-  border-radius: var(--node-radius-md, 16px);
-  background: #f4f6ff;
-  color: #1f2d3d;
-  font-size: 13px;
-  font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 220px;
-  overflow: auto;
-  border: 1px solid rgba(107, 115, 255, 0.1);
-}
-
-.card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: auto;
-}
-
-.card-btn.el-button {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 40px;
-  border-radius: var(--node-radius-md, 16px);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 0 16px;
-  border: none;
-}
-
-.card-btn.ghost {
-  background: rgba(107, 115, 255, 0.12);
-  color: #4e5eff;
-  border: 1px solid rgba(107, 115, 255, 0.25);
-}
-
-.card-btn.danger {
-  background: rgba(155, 143, 255, 0.12);
-  color: #9b8fff;
-  border: 1px solid rgba(155, 143, 255, 0.28);
-}
-
-.card-btn:hover {
-  box-shadow: 0 10px 24px rgba(87, 104, 255, 0.15);
-}
-
-.card-btn.danger:hover {
-  box-shadow: 0 10px 24px rgba(155, 143, 255, 0.25);
-}
-
-.sortable-ghost {
-  opacity: 0.6;
-  transform: scale(0.98);
-}
-
-.sortable-chosen {
-  box-shadow: 0 20px 50px rgba(91, 112, 255, 0.2);
-}
-
-.sortable-drag {
-  cursor: grabbing !important;
-}
-
-.node-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  box-shadow: inset 0 0 0 1px rgba(107, 115, 255, 0.08);
-}
-
-.node-card.node-selected::before {
-  box-shadow: inset 0 0 0 2px rgba(78, 95, 255, 0.35);
-}
-
-.nodes-form {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.status-toggle-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-radius: var(--node-radius-pill);
-  background: rgba(107, 115, 255, 0.12);
-  color: #4e5eff;
-  font-weight: 600;
-}
-
-.status-toggle-row span {
-  font-size: 13px;
-}
-
-:deep(.node-dialog),
-:deep(.el-overlay-dialog .node-dialog) {
-  border-radius: var(--node-radius-xl, 40px) !important;
-  overflow: hidden;
-  background: rgba(252, 253, 255, 0.97);
-  box-shadow: 0 36px 80px rgba(65, 80, 180, 0.28);
-  border: 1px solid rgba(107, 115, 255, 0.16);
-  backdrop-filter: blur(20px);
-  --el-dialog-border-radius: var(--node-radius-xl, 40px);
-}
-
-:deep(.node-dialog .el-dialog__header) {
-  padding: 20px 32px 0;
-  margin: 0;
-  border-bottom: none;
-}
-
-:deep(.node-dialog .el-dialog__body) {
-  padding: 0 32px 28px;
-  background: #f7f8ff;
-}
-
-:deep(.node-dialog .el-dialog__footer) {
-  padding: 0 32px 28px;
-  border-top: none;
-}
-
-.dialog-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 8px 0 18px;
-  color: #30354d;
-}
-
-.dialog-title-group h3 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.dialog-title-group p {
-  margin: 8px 0 0;
-  font-size: 13px;
-  color: #7c86ae;
-}
-
-.dialog-close-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: 1px solid rgba(124, 134, 174, 0.35);
-  background: transparent;
-  color: #7c86ae;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.dialog-close-btn:hover {
-  background: rgba(107, 115, 255, 0.12);
-  border-color: rgba(107, 115, 255, 0.35);
-  color: #4e5eff;
-}
-
-.dialog-card {
-  background: #fff;
-  border-radius: var(--node-radius-lg, 24px);
-  padding: 30px 28px 26px;
-  box-shadow: 0 18px 30px rgba(91, 112, 255, 0.12);
-  border: 1px solid rgba(107, 115, 255, 0.1);
-}
-
-:deep(.node-dialog .el-form-item__label) {
-  font-weight: 600;
-  font-size: 13px;
-  color: #6c74a0;
-}
-
-:deep(.node-dialog .el-input__wrapper),
-:deep(.node-dialog .el-select .el-input__wrapper),
-:deep(.node-dialog .el-textarea__inner),
-:deep(.node-dialog .el-input-number .el-input__wrapper) {
-  border-radius: var(--node-radius-md, 16px);
-  border: none;
-  box-shadow: 0 0 0 1px rgba(107, 115, 255, 0.14);
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
-  background-color: #f9faff;
-}
-
-:deep(.node-dialog .el-input__wrapper.is-focus),
-:deep(.node-dialog .el-select .el-input__wrapper.is-focus),
-:deep(.node-dialog .el-input-number.is-active .el-input__wrapper),
-:deep(.node-dialog .el-input-number:hover .el-input__wrapper),
-:deep(.node-dialog .el-textarea__inner:focus) {
-  box-shadow: 0 0 0 2px rgba(107, 115, 255, 0.32);
-  transform: translateY(-1px);
-  background-color: #fff;
-}
-
-.code-textarea :deep(.el-textarea__inner) {
-  font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
-  min-height: 200px;
-}
-
-.code-textarea.large :deep(.el-textarea__inner) {
-  min-height: 320px;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
-
-.footer-btn {
-  min-width: 118px;
-  height: 42px;
-  border-radius: var(--node-radius-md, 16px);
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.footer-btn.ghost {
-  background: transparent;
-  color: #5460d7;
-  border: 1px solid rgba(107, 115, 255, 0.3);
-}
-
-.footer-btn.ghost:hover {
-  background: rgba(107, 115, 255, 0.08);
-}
-
-.footer-btn.primary {
-  background: linear-gradient(135deg, #6b7dff 0%, #5b6dff 100%);
-  border: none;
-  color: #fff;
-  box-shadow: 0 12px 24px rgba(87, 104, 255, 0.28);
-}
-
-.footer-btn.primary:hover {
-  transform: translateY(-1px);
-}
-
-.nodes-preview-dialog :deep(.el-dialog) {
-  border-radius: var(--node-radius-lg, 24px);
-  overflow: hidden;
-}
-
-.nodes-preview-dialog .preview-header {
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #ebedf5;
-}
-
-.nodes-preview-dialog .preview-count {
-  font-size: 14px;
-  color: #65708f;
-  font-weight: 500;
-}
-
-.nodes-preview-dialog .nodes-list {
-  margin: 0 -20px;
-}
-
-.nodes-preview-dialog .node-item {
-  padding: 12px 20px;
-  border-bottom: 1px solid #eef1f8;
-  transition: background 0.2s ease;
-}
-
-.nodes-preview-dialog .node-item:hover {
-  background: #f7f8ff;
-}
-
-.nodes-preview-dialog .node-item:last-child {
-  border-bottom: none;
-}
-
-.nodes-preview-dialog .node-info {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.nodes-preview-dialog .node-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f2d3d;
-}
-
-.nodes-preview-dialog .node-name .el-icon {
-  color: #4e5eff;
-  font-size: 16px;
-}
-
-.nodes-preview-dialog .node-details {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 13px;
-  color: #7d88af;
-}
-
-.nodes-preview-dialog .node-server {
-  font-family: 'SFMono-Regular', 'Consolas', 'Monaco', monospace;
-  color: #7d88af;
-}
-
-@media (max-width: 1024px) {
-  .nodes-page {
-    padding: 24px;
-    --node-radius-xl: 32px;
-    --node-radius-lg: 22px;
-    --node-radius-md: 14px;
-  }
-
-  .nodes-grid {
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  }
-
-  :deep(.node-dialog .el-dialog__body),
-  :deep(.node-dialog .el-dialog__footer) {
-    padding: 0 24px 24px;
-  }
-}
-
-@media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
-    align-items: flex-start;
-    margin: -20px -20px 20px -20px;
-    padding: 20px;
-  }
-
-  .header-actions {
-    width: 100%;
-    flex-direction: column;
-    justify-content: flex-start;
-    gap: 10px;
-    align-items: stretch;
-  }
-
-  :deep(.header-actions .el-button + .el-button) {
-    margin-left: 0;
-  }
-
-  .action-btn {
-    width: 100%;
-    justify-content: center;
-    box-sizing: border-box;
-  }
-
-  .nodes-page {
-    padding: 20px;
-    --node-radius-xl: 28px;
-    --node-radius-lg: 20px;
-    --node-radius-md: 14px;
-  }
-
-  .nodes-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .card-actions {
-    flex-direction: column;
-    flex-wrap: nowrap;
-    align-items: stretch;
-    gap: 10px;
-    width: 100%;
-  }
-
-  :deep(.card-actions .el-button + .el-button) {
-    margin-left: 0;
-  }
-
-  :deep(.card-btn.el-button) {
-    width: 100%;
-    flex: unset;
-    display: flex;
-    box-sizing: border-box;
-    justify-content: center;
-  }
-
-  .dialog-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  .dialog-close-btn {
-    align-self: flex-end;
-  }
-
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .interval-row {
-    grid-template-columns: 1fr;
-    gap: 16px;
-  }
-
-  :deep(.node-dialog .el-dialog__body),
-  :deep(.node-dialog .el-dialog__footer) {
-    padding: 0 24px 24px;
-  }
-
-  :deep(.node-dialog),
-  :deep(.el-overlay-dialog .node-dialog) {
-    border-radius: var(--node-radius-xl, 28px) !important;
-    --el-dialog-border-radius: var(--node-radius-xl, 28px);
-  }
-}
-
-@media (max-width: 480px) {
-  .nodes-page {
-    padding: 16px;
-    --node-radius-xl: 24px;
-    --node-radius-lg: 18px;
-    --node-radius-md: 12px;
-  }
-
-  .card-title {
-    gap: 8px;
-  }
-
-  .action-btn {
-    width: 100%;
-    justify-content: center;
-  }
-
-  :deep(.node-dialog .el-dialog__body),
-  :deep(.node-dialog .el-dialog__footer) {
-    padding: 0 20px 20px;
-  }
-
-  :deep(.node-dialog),
-  :deep(.el-overlay-dialog .node-dialog) {
-    border-radius: var(--node-radius-xl, 24px) !important;
-    --el-dialog-border-radius: var(--node-radius-xl, 24px);
-  }
-
-  .dialog-card {
-    padding: 24px 18px 20px;
-  }
-}
-</style>
