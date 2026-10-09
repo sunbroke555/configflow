@@ -61,7 +61,7 @@
           !group.enabled && 'opacity-60'
         ]"
       >
-        <header class="flex items-start gap-2.5">
+        <header class="flex items-center gap-2.5">
           <DragHandle
             v-if="reorder.active.value"
             :label="group.name || group.id"
@@ -1920,5 +1920,4 @@ onMounted(() => {
 onUnmounted(() => {
 })
 </script>
-
 

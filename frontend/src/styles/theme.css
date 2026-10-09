@@ -263,7 +263,7 @@ main .bg-card:not(input):not(textarea):not(button) {
   box-shadow: 0 0 24px -4px color-mix(in oklch, var(--primary-accent) 60%, transparent);
 }
 
-.cf-workbench a[aria-current='page'] {
+.cf-workbench nav a[aria-current='page'] {
   box-shadow: var(--surface-glow);
 }
 

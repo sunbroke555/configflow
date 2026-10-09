@@ -40,7 +40,8 @@ onMounted(() => {
       EditorState.readOnly.of(props.readOnly || false),
       EditorView.theme({
         '&': {
-          height: '500px',
+          height: '100%',
+          minHeight: '0',
           fontSize: '14px'
         },
         '.cm-scroller': {
@@ -86,6 +87,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .yaml-editor {
+  height: 100%;
+  min-height: 0;
   border: 1px solid var(--cf-bd-strong);
   border-radius: var(--cf-r-md);
   overflow: hidden;

@@ -15,10 +15,16 @@
     >
       <router-link
         to="/dashboard"
-        class="flex min-h-11 min-w-0 shrink-0 items-center gap-2.5 rounded-lg text-[15px] font-semibold tracking-[-0.015em] text-foreground no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        class="group flex min-h-11 min-w-0 shrink-0 items-center gap-2.5 rounded-lg text-[15px] font-semibold tracking-[-0.015em] text-foreground no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <img src="/icon.png" alt="" class="size-7 rounded-lg" />
-        <span>ConfigFlow</span>
+        <span class="relative flex size-7 items-center justify-center">
+          <span
+            class="absolute inset-0 rounded-[9px] bg-linear-to-br from-primary/50 to-accent-2-fill/40 opacity-70 blur-[7px] transition-opacity duration-300 group-hover:opacity-100"
+            aria-hidden="true"
+          />
+          <img src="/icon.png" alt="" class="relative size-6.5 rounded-[8px]" />
+        </span>
+        <span class="truncate max-[360px]:hidden">ConfigFlow</span>
       </router-link>
 
       <!-- 命令面板入口：桌面显示快捷键，移动端退化为图标按钮 -->
@@ -306,4 +312,3 @@ onUnmounted(() => {
   )
 })
 </script>
-

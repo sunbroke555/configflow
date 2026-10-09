@@ -3,7 +3,8 @@
     <span class="shrink-0 text-xs text-muted-foreground max-[1100px]:hidden">当前配置</span>
     <Select v-model="selectedProfileId" :disabled="loading || scopedRequests > 0" @update:model-value="handleChange">
       <SelectTrigger
-        class="data-[size=default]:h-11 w-[190px] min-w-0 gap-2 border-border bg-background text-[13px] font-medium transition-colors hover:border-border-strong hover:text-foreground max-[1100px]:w-[160px] max-[700px]:flex-1"
+        size="sm"
+        class="w-[144px] min-w-0 gap-1.5 border-border/80 bg-background px-2.5 text-[13px] font-medium shadow-none transition-colors hover:border-border-strong hover:text-foreground max-[1100px]:w-[132px] max-[700px]:data-[size=sm]:h-11 max-[700px]:flex-1 max-[700px]:px-3"
         aria-label="当前配置空间"
       >
         <Boxes class="size-4 shrink-0 text-primary-accent" />
@@ -24,7 +25,7 @@
     <Button
       variant="ghost"
       size="icon-sm"
-      class="size-11 shrink-0 text-muted-foreground"
+      class="size-8 shrink-0 text-muted-foreground max-[700px]:size-11"
       title="管理配置空间"
       aria-label="管理配置空间"
       @click="router.push('/profiles')"

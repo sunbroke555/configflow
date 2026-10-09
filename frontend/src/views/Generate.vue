@@ -55,13 +55,23 @@
           <p class="m-0 text-[11.5px] text-muted-foreground">将链接添加到客户端即可订阅。链接中的令牌同时拥有 MCP 管理权限，请勿公开分享。</p>
         </div>
 
-        <div class="mt-auto grid grid-cols-[repeat(auto-fit,minmax(5.5rem,1fr))] gap-1.5">
+        <div
+          :class="cn(
+            'mt-auto grid gap-1.5 max-[480px]:grid-cols-2',
+            target.actions.length === 4 ? 'grid-cols-4' : 'grid-cols-3'
+          )"
+        >
           <Button
             v-for="action in target.actions"
             :key="action.label"
             :variant="action.primary ? 'default' : 'outline'"
             size="sm"
-            class="h-auto min-h-8 min-w-0 whitespace-normal py-1.5"
+            :class="cn(
+              'h-auto min-h-8 min-w-0 py-1.5',
+              target.actions.length === 4
+                ? 'gap-0.5 px-0.5 text-[11px] whitespace-nowrap max-[480px]:gap-1.5 max-[480px]:px-2.5 max-[480px]:text-sm'
+                : 'whitespace-normal'
+            )"
             :disabled="action.loading"
             @click="action.run"
           >
@@ -75,7 +85,9 @@
 
     <!-- ===== 自定义基础配置 ===== -->
     <Dialog v-model:open="customConfigDialogVisible">
-      <DialogContent class="max-w-[900px] [overflow-wrap:anywhere]">
+      <DialogContent
+        class="h-[min(88dvh,900px)] max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden [overflow-wrap:anywhere] sm:w-[90vw] sm:max-w-[1400px] max-sm:h-[calc(100dvh-1rem)] max-sm:max-h-[calc(100dvh-1rem)] max-sm:w-[calc(100vw-1rem)] max-sm:max-w-[calc(100vw-1rem)] max-sm:p-4"
+      >
         <DialogHeader>
           <DialogTitle>{{ getCustomConfigDialogTitle() }}</DialogTitle>
           <DialogDescription class="[overflow-wrap:anywhere]">
@@ -84,7 +96,11 @@
           </DialogDescription>
         </DialogHeader>
 
-        <YamlEditor v-model="customConfigContent" :placeholder="getCustomConfigPlaceholder()" />
+        <YamlEditor
+          v-model="customConfigContent"
+          class="h-full min-h-0"
+          :placeholder="getCustomConfigPlaceholder()"
+        />
 
         <DialogFooter>
           <Button variant="outline" @click="customConfigDialogVisible = false">取消</Button>
@@ -98,13 +114,15 @@
 
     <!-- ===== 配置预览 ===== -->
     <Dialog v-model:open="previewDialogVisible">
-      <DialogContent class="max-w-[1000px] [overflow-wrap:anywhere]">
+      <DialogContent
+        class="h-[min(88dvh,900px)] max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden [overflow-wrap:anywhere] sm:w-[90vw] sm:max-w-[1400px] max-sm:h-[calc(100dvh-1rem)] max-sm:max-h-[calc(100dvh-1rem)] max-sm:w-[calc(100vw-1rem)] max-sm:max-w-[calc(100vw-1rem)] max-sm:p-4"
+      >
         <DialogHeader>
           <DialogTitle>{{ getPreviewDialogTitle() }}</DialogTitle>
           <DialogDescription>查看生成结果，确认后可复制完整内容。此处不能直接修改。</DialogDescription>
         </DialogHeader>
 
-        <YamlEditor v-model="previewContent" :read-only="true" />
+        <YamlEditor v-model="previewContent" class="h-full min-h-0" :read-only="true" />
 
         <DialogFooter>
           <Button variant="outline" @click="previewDialogVisible = false">关闭</Button>
@@ -734,6 +752,7 @@ import LabeledDivider from '@/components/common/LabeledDivider.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import { notify } from '@/lib/feedback'
 import { listItem } from '@/lib/motion'
+import { cn } from '@/lib/utils'
 import { generateApi, customConfigApi, ruleApi, ruleSetApi, proxyGroupApi, serverDomainApi, configTokenApi } from '@/api'
 import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'
@@ -1863,4 +1882,3 @@ onMounted(async () => {
 })
 
 </script>
-
