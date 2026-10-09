@@ -99,7 +99,7 @@ def test_rules_request_exception_log_does_not_leak_url(monkeypatch, caplog):
 
 def test_subscription_request_exception_response_and_log_do_not_leak(monkeypatch, caplog):
     exc = requests.ConnectionError(f"GET failed for {SECRET_URL}")
-    monkeypatch.setattr(subscriptions, "get_config", lambda: {
+    monkeypatch.setattr(subscriptions, "get_shared_config", lambda: {
         "subscriptions": [{"id": "sub-1", "name": "Probe", "url": SECRET_URL}],
         "nodes": [],
     })
@@ -119,7 +119,7 @@ def test_subscription_request_exception_response_and_log_do_not_leak(monkeypatch
 
 def test_aggregation_request_exception_log_does_not_leak(monkeypatch, tmp_path, caplog):
     exc = requests.ConnectionError(f"GET failed for {SECRET_URL}")
-    monkeypatch.setattr(aggregations, "get_config", lambda profile_id=None: {
+    monkeypatch.setattr(aggregations, "get_resource_config", lambda *args: {
         "subscriptions": [{"id": "sub-1", "name": "Probe", "url": SECRET_URL}],
         "nodes": [],
     })

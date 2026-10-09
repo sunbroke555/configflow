@@ -1,5 +1,7 @@
 import json
 
+import pytest
+import yaml
 from flask import Flask
 
 from backend.common.config_repository import ProfileRepository
@@ -15,155 +17,117 @@ def make_app(repository, monkeypatch):
     return app
 
 
-def test_profile_context_prefers_route_over_header_and_query(tmp_path, monkeypatch):
-    repository = ProfileRepository(tmp_path)
-    repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.create_profile({"id": "beta", "name": "Beta"})
-    repository.save_profile("alpha", {"subscriptions": [{"id": "alpha"}]})
-    repository.save_profile("beta", {"subscriptions": [{"id": "beta"}]})
-    app = make_app(repository, monkeypatch)
-    client = app.test_client()
+def _rule(rule_id):
+    return {"id": rule_id, "itemType": "rule", "rule_type": "DOMAIN", "value": f"{rule_id}.test", "policy": "DIRECT"}
 
-    response = client.get(
-        "/api/profiles/beta/subscriptions?profile=alpha",
-        headers={"X-ConfigFlow-Profile": "alpha"},
+
+def test_profile_context_prefers_route_over_query_and_header(tmp_path, monkeypatch):
+    repository = ProfileRepository(tmp_path)
+    for profile_id in ("alpha", "beta"):
+        repository.create_profile({"id": profile_id, "name": profile_id})
+        repository.save_profile(profile_id, {"rule_configs": [_rule(profile_id)]})
+    app = make_app(repository, monkeypatch)
+
+    response = app.test_client().get(
+        "/api/profiles/beta/rules?profile=alpha",
+        headers={"X-ConfigFlow-Profile": "missing"},
     )
 
     assert response.status_code == 200
     assert response.get_json()[0]["id"] == "beta"
+    assert response.headers["X-ConfigFlow-Profile"] == "beta"
 
 
-def test_legacy_routes_use_active_profile_and_header_is_request_scoped(tmp_path, monkeypatch):
+def test_query_precedes_header_and_selection_is_request_local(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.save_profile("alpha", {"subscriptions": [{"id": "alpha"}]})
-    repository.activate_profile("alpha")
-    app = make_app(repository, monkeypatch)
-    client = app.test_client()
+    repository.save_profile("alpha", {"rule_configs": [_rule("alpha")]})
+    client = make_app(repository, monkeypatch).test_client()
 
-    active_response = client.get("/api/subscriptions")
-    explicit_response = client.get("/api/subscriptions", headers={"X-ConfigFlow-Profile": "default"})
+    selected = client.get("/api/rules?profile=alpha", headers={"X-ConfigFlow-Profile": "missing"})
+    default = client.get("/api/rules")
 
-    assert active_response.get_json()[0]["id"] == "alpha"
-    assert explicit_response.get_json() == []
-    assert repository.active_profile_id() == "alpha"
+    assert selected.status_code == 200
+    assert selected.get_json()[0]["id"] == "alpha"
+    assert default.get_json() == []
+    assert default.headers["X-ConfigFlow-Profile"] == "default"
 
 
 def test_profile_crud_clone_import_export_and_delete_rules(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    app = make_app(repository, monkeypatch)
-    client = app.test_client()
+    repository.save_shared({"subscriptions": [{"id": "sub-1", "name": "Shared", "url": "https://sub.test/list"}]})
+    client = make_app(repository, monkeypatch).test_client()
+    assert client.post("/api/profiles", json={"id": "alpha", "name": "Alpha"}).status_code == 201
+    groups = [{"id": "shared", "name": "Shared", "type": "select", "subscriptions": ["sub-1"]}]
+    repository.save_profile("alpha", {"proxy_groups": groups})
 
-    created = client.post("/api/profiles", json={"id": "alpha", "name": "Alpha"})
-    assert created.status_code == 201
-    repository.save_profile("alpha", {"subscriptions": [{"id": "sub-alpha"}]})
-
-    cloned = client.post("/api/profiles/alpha/clone", json={"id": "beta", "name": "Beta"})
-    assert cloned.status_code == 201
-    assert repository.get_profile("beta")["subscriptions"] == [{"id": "sub-alpha"}]
-
+    assert client.post("/api/profiles/alpha/clone", json={"id": "beta", "name": "Beta"}).status_code == 201
     exported = client.get("/api/profiles/beta/export")
     assert exported.status_code == 200
-    assert exported.get_json()["subscriptions"] == [{"id": "sub-alpha"}]
+    assert exported.get_json()["proxy_groups"] == groups
+    assert "resource_refs" not in exported.get_json()
+    assert "node_dialers" not in exported.get_json()
+    assert "subscriptions" not in exported.get_json()
 
-    imported = client.post(
-        "/api/profiles/beta/import",
-        json={"subscriptions": [{"id": "sub-imported"}]},
-    )
+    imported = client.post("/api/profiles/beta/import", json={
+        "proxy_groups": groups, "mihomo": {"custom_config": "port: 12345\n"},
+    })
     assert imported.status_code == 200
-    assert repository.get_profile("beta")["subscriptions"] == [{"id": "sub-imported"}]
-
-    assert client.delete("/api/profiles/default").status_code == 400
+    assert repository.get_profile("beta")["mihomo"]["custom_config"] == "port: 12345\n"
+    assert repository.get_shared()["subscriptions"][0]["url"] == "https://sub.test/list"
+    assert client.delete("/api/profiles/default").status_code == 409
     assert client.delete("/api/profiles/beta").status_code == 204
     assert not (tmp_path / "profiles" / "beta").exists()
 
 
-def test_invalid_profile_context_returns_not_found(tmp_path, monkeypatch):
-    app = make_app(ProfileRepository(tmp_path), monkeypatch)
-
-    response = app.test_client().get(
-        "/api/subscriptions",
-        headers={"X-ConfigFlow-Profile": "../outside"},
-    )
-
-    assert response.status_code == 400
+@pytest.mark.parametrize("selection,status", [("../outside", 400), ("", 400), ("deleted-profile", 404)])
+def test_invalid_profile_selection_never_falls_back(tmp_path, monkeypatch, selection, status):
+    client = make_app(ProfileRepository(tmp_path), monkeypatch).test_client()
+    response = client.get("/api/rules", headers={"X-ConfigFlow-Profile": selection})
+    assert response.status_code == status
+    query_response = client.get("/api/rules", query_string={"profile": selection}, headers={"X-ConfigFlow-Profile": "default"})
+    assert query_response.status_code == status
 
 
-def test_stale_profile_header_does_not_block_auth_or_profile_management(tmp_path, monkeypatch):
-    app = make_app(ProfileRepository(tmp_path), monkeypatch)
-    client = app.test_client()
+def test_stale_profile_selection_does_not_block_global_operations(tmp_path, monkeypatch):
+    client = make_app(ProfileRepository(tmp_path), monkeypatch).test_client()
     headers = {"X-ConfigFlow-Profile": "deleted-profile"}
-
-    assert client.get("/api/auth/status", headers=headers).status_code == 200
-    assert client.post(
-        "/api/auth/login",
-        headers=headers,
-        json={"username": "nobody", "password": "wrong"},
-    ).status_code != 404
-    profiles_response = client.get("/api/profiles", headers=headers)
-    assert profiles_response.status_code == 200
-    assert profiles_response.get_json()[0]["id"] == "default"
+    for path in ("/api/auth/status", "/api/profiles", "/api/subscriptions", "/api/nodes", "/api/rule-library", "/api/server-domain", "/api/config/export"):
+        response = client.get(path, headers=headers, query_string={"profile": "../outside"})
+        assert response.status_code == 200, (path, response.get_json())
+        assert "X-ConfigFlow-Profile" not in response.headers
+    assert client.get("/api/profiles/deleted-profile/proxy-groups", headers=headers).status_code == 404
 
 
-def test_stale_profile_header_returns_clear_not_found_for_profile_resources(tmp_path, monkeypatch):
-    app = make_app(ProfileRepository(tmp_path), monkeypatch)
-
-    response = app.test_client().get(
-        "/api/subscriptions",
-        headers={"X-ConfigFlow-Profile": "deleted-profile"},
-    )
-
-    assert response.status_code == 404
-    assert response.get_json()["message"] == "Profile not found: deleted-profile"
-
-
-def test_profile_config_and_generate_aliases_are_explicit(tmp_path, monkeypatch):
+def test_profile_config_and_generated_artifact_use_the_explicit_profile(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    config_module.set_repository(repository)
-    app = Flask(__name__)
-    register_blueprints(app)
-    monkeypatch.setattr(
-        "backend.routes.generate.generate_mihomo_config",
-        lambda data, base_url="": "alpha-config",
-    )
+    repository.save_profile("alpha", {"mihomo": {"custom_config": "port: 12345\n"}})
+    client = make_app(repository, monkeypatch).test_client()
 
-    config_response = app.test_client().get("/api/config/alpha/mihomo")
-    generated_response = app.test_client().post("/api/profiles/alpha/generate/mihomo", json={})
+    config_response = client.get("/api/config/alpha/mihomo", headers={"X-ConfigFlow-Profile": "missing"})
+    generated_response = client.post("/api/profiles/alpha/generate/mihomo", json={})
 
-    assert config_response.status_code == 200
-    assert config_response.get_data(as_text=True)
-    assert generated_response.status_code == 200
-    assert (repository.generated_dir("alpha") / "config.yaml").read_text(encoding="utf-8") == "alpha-config"
+    assert config_response.status_code == generated_response.status_code == 200
+    assert yaml.safe_load(config_response.get_data())["port"] == 12345
+    output = repository.generated_dir("alpha") / "config.yaml"
+    assert yaml.safe_load(output.read_text(encoding="utf-8"))["port"] == 12345
+    assert not (repository.generated_dir("default") / "config.yaml").exists()
 
 
 def test_profile_import_does_not_overwrite_system_or_agents(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.save_profile(
-        "default",
-        {
-            "system_config": {"server_domain": "http://stable.test"},
-        },
-    )
-    repository.update_system_transaction(
-        lambda system: system.update({
-            "agents": [{"id": "agent-1", "profile_id": "default"}],
-        })
-    )
-    app = make_app(repository, monkeypatch)
-
-    response = app.test_client().post(
-        "/api/profiles/alpha/import",
-        json={
-            "subscriptions": [{"id": "imported"}],
-            "system_config": {"server_domain": "http://attacker.test"},
-            "agents": [{"id": "attacker"}],
-        },
-    )
+    repository.save_system({"system_config": {"server_domain": "http://stable.test"}, "agents": [{"id": "agent-1", "profile_id": "default"}]})
+    client = make_app(repository, monkeypatch).test_client()
+    response = client.post("/api/profiles/alpha/import", json={
+        "mihomo": {"custom_config": "port: 12345\n"},
+        "system_config": {"server_domain": "http://attacker.test"},
+        "agents": [{"id": "attacker"}],
+    })
 
     assert response.status_code == 200
-    assert repository.get_profile("alpha")["subscriptions"] == [{"id": "imported"}]
+    assert repository.get_profile("alpha")["mihomo"]["custom_config"] == "port: 12345\n"
     system = repository.get_system()
     assert system["system_config"]["server_domain"] == "http://stable.test"
     assert system["agents"] == [{"id": "agent-1", "profile_id": "default"}]
@@ -172,77 +136,51 @@ def test_profile_import_does_not_overwrite_system_or_agents(tmp_path, monkeypatc
 def test_profile_config_url_is_public_when_config_token_is_valid(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.save_profile("default", {"system_config": {"config_token": "secret"}})
-    config_module.set_repository(repository)
+    repository.save_system({"system_config": {"config_token": "secret"}})
     monkeypatch.setattr("backend.routes.auth.is_auth_enabled", lambda: True)
-    app = Flask(__name__)
-    register_blueprints(app)
+    app = make_app(repository, monkeypatch)
     setup_before_request(app)
-
-    response = app.test_client().get("/api/config/alpha/mihomo?token=secret")
-
-    assert response.status_code == 200
+    assert app.test_client().get("/api/config/alpha/mihomo?token=secret").status_code == 200
 
 
-def test_legacy_config_export_reads_the_active_profile(tmp_path, monkeypatch):
+def test_full_backup_contains_shared_data_and_all_profiles(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"subscriptions": [{"id": "exported"}]})
-    config_module.set_repository(repository)
-    app = Flask(__name__)
-    register_blueprints(app)
-
-    response = app.test_client().get("/api/config/export")
-
+    repository.save_shared({"subscriptions": [{"id": "exported", "name": "Exported", "url": "https://sub.test"}]})
+    repository.create_profile({"id": "alpha", "name": "Alpha"})
+    response = make_app(repository, monkeypatch).test_client().get("/api/config/export", headers={"X-ConfigFlow-Profile": "alpha"})
     assert response.status_code == 200
-    assert response.get_json()["subscriptions"] == [{"id": "exported"}]
+    exported = json.loads(response.get_data())
+    assert exported["schema_version"] == 5
+    assert exported["shared"]["subscriptions"][0]["id"] == "exported"
+    assert set(exported["profiles"]) == {"default", "alpha"}
 
 
 def test_legacy_config_url_defaults_to_default_profile(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.save_profile("default", {"marker": "default"})
-    repository.save_profile("alpha", {"marker": "alpha"})
-    repository.activate_profile("alpha")
-    config_module.set_repository(repository)
-    app = Flask(__name__)
-    register_blueprints(app)
-    monkeypatch.setattr(
-        "backend.routes.config.generate_mihomo_config",
-        lambda data, base_url="": data["marker"],
-    )
-
-    response = app.test_client().get("/api/config/mihomo")
-
+    repository.save_profile("default", {"mihomo": {"custom_config": "port: 11111\n"}})
+    repository.save_profile("alpha", {"mihomo": {"custom_config": "port: 22222\n"}})
+    response = make_app(repository, monkeypatch).test_client().get("/api/config/mihomo")
     assert response.status_code == 200
-    assert response.get_data(as_text=True) == "default"
+    assert yaml.safe_load(response.get_data())["port"] == 11111
 
 
 def test_load_config_uses_request_profile_context(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.create_profile({"id": "beta", "name": "Beta"})
-    repository.save_profile("alpha", {"marker": "alpha"})
-    repository.save_profile("beta", {"marker": "beta"})
-    repository.activate_profile("beta")
-    config_module.set_repository(repository)
-    app = Flask(__name__)
-
-    with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):
-        loaded = config_module.load_config()
-
-    assert loaded["marker"] == "alpha"
-
-
-def test_each_request_reads_latest_profile_config(tmp_path, monkeypatch):
-    repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"subscriptions": [{"id": "before"}]})
+    repository.save_profile("alpha", {"mihomo": {"custom_config": "port: 22222\n"}})
     app = make_app(repository, monkeypatch)
-    client = app.test_client()
+    with app.test_request_context("/api/proxy-groups", headers={"X-ConfigFlow-Profile": "alpha"}):
+        loaded = config_module.load_config()
+    assert loaded["mihomo"]["custom_config"] == "port: 22222\n"
 
+
+def test_each_request_reads_latest_shared_config(tmp_path, monkeypatch):
+    repository = ProfileRepository(tmp_path)
+    repository.save_shared({"subscriptions": [{"id": "before", "name": "Before", "url": "https://sub.test"}]})
+    client = make_app(repository, monkeypatch).test_client()
     assert client.get("/api/subscriptions").get_json()[0]["id"] == "before"
-
-    repository.save_profile("default", {"subscriptions": [{"id": "after"}]})
-
+    repository.save_shared({"subscriptions": [{"id": "after", "name": "After", "url": "https://sub.test"}]})
     assert client.get("/api/subscriptions").get_json()[0]["id"] == "after"
 
 
@@ -250,68 +188,36 @@ def test_incremental_config_transaction_uses_latest_disk_state(tmp_path, monkeyp
     repository = ProfileRepository(tmp_path)
     independent = ProfileRepository(tmp_path)
     config_module.set_repository(repository)
-    config_module.get_config("default")  # Populate a deliberately stale compatibility snapshot.
-    independent.update_profile_transaction(
-        "default", lambda profile: profile["subscriptions"].append({"id": "independent"})
-    )
-
-    config_module.update_config_transaction(
-        lambda profile: profile["subscriptions"].append({"id": "route"}),
-        "default",
-    )
-
-    assert repository.get_profile("default")["subscriptions"] == [
-        {"id": "independent"},
-        {"id": "route"},
-    ]
-
-
-def test_profile_config_snapshot_is_cleared_after_request(tmp_path, monkeypatch):
-    app = make_app(ProfileRepository(tmp_path), monkeypatch)
-
-    app.test_client().get("/api/subscriptions")
-
-    assert config_module._CONFIG_CACHE.get() is None
-
-
-def test_desensitized_export_does_not_create_external_temp_file(tmp_path, monkeypatch):
-    repository = ProfileRepository(tmp_path)
-    repository.save_profile(
-        "default",
-        {"subscriptions": [{"id": "sub-1", "url": "https://secret.example"}]},
-    )
-    config_module.set_repository(repository)
-    app = Flask(__name__)
-    register_blueprints(app)
-
-    def fail_temp_file(*args, **kwargs):
-        raise AssertionError("export must stay in memory")
-
-    monkeypatch.setattr("tempfile.NamedTemporaryFile", fail_temp_file)
-    response = app.test_client().get("/api/config/export?desensitize=true")
-
-    assert response.status_code == 200
-    assert json.loads(response.get_data())['subscriptions'][0]['url'] == '***已脱敏***'
+    config_module.get_config("default")
+    independent.update_profile_transaction("default", lambda profile: profile["rule_configs"].append(_rule("independent")))
+    config_module.update_config_transaction(lambda profile: profile["rule_configs"].append(_rule("route")), "default")
+    assert repository.get_profile("default")["rule_configs"] == [_rule("independent"), _rule("route")]
 
 
 def test_new_repository_keeps_existing_template_defaults(tmp_path, monkeypatch):
-    template = tmp_path / 'config_template.json'
-    template.write_text(
-        json.dumps({
-            'subscriptions': [{'id': 'template-sub'}],
-            'marker': 'template',
-            'system_config': {'server_domain': 'http://template.test'},
-        }),
-        encoding='utf-8',
-    )
-    data_dir = tmp_path / 'data'
-    monkeypatch.setattr(config_module, 'DATA_DIR', str(data_dir))
-    monkeypatch.setattr(config_module, 'get_backend_resource', lambda _: str(template))
-    monkeypatch.setattr(config_module, '_repository', None)
-
+    template = tmp_path / "config_template.json"
+    template.write_text(json.dumps({
+        "subscriptions": [{"id": "template-sub", "name": "Template", "url": "https://sub.test"}],
+        "mihomo": {"custom_config": "port: 12345\n"},
+        "system_config": {"server_domain": "http://template.test"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(config_module, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(config_module, "get_backend_resource", lambda _: str(template))
+    monkeypatch.setattr(config_module, "_repository", None)
     repository = config_module.get_repository()
+    assert repository.get_shared()["subscriptions"][0]["id"] == "template-sub"
+    assert "resource_refs" not in repository.get_profile("default")
+    assert repository.get_profile("default")["mihomo"]["custom_config"] == "port: 12345\n"
+    assert "system_config" not in repository.get_profile("default")
+    assert repository.get_system()["system_config"]["server_domain"] == "http://template.test"
 
-    assert repository.get_profile('default')['subscriptions'] == [{'id': 'template-sub'}]
-    assert repository.get_profile('default')['marker'] == 'template'
-    assert 'system_config' not in repository.get_profile('default')
-    assert repository.get_system()['system_config']['server_domain'] == 'http://template.test'
+
+@pytest.mark.parametrize("endpoint", ["resources", "node-dialers"])
+@pytest.mark.parametrize("method", ["get", "put"])
+def test_obsolete_profile_resource_and_node_dialer_routes_are_absent(tmp_path, monkeypatch, endpoint, method):
+    repository = ProfileRepository(tmp_path)
+    client = make_app(repository, monkeypatch).test_client()
+    before = repository.export_all()
+    response = getattr(client, method)(f"/api/profiles/default/{endpoint}", json={})
+    assert response.status_code == 404
+    assert repository.export_all() == before

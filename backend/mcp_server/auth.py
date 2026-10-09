@@ -25,9 +25,9 @@ from backend.common.auth import (
 
 
 def _config_token() -> str:
-    from backend.common.config import get_config
+    from backend.common.config import get_system_config
 
-    return (get_config().get('system_config', {}) or {}).get('config_token', '') or ''
+    return (get_system_config().get('system_config', {}) or {}).get('config_token', '') or ''
 
 
 def _internal_rule_proxy_tokens() -> set[str]:

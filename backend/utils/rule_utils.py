@@ -9,17 +9,16 @@ import os
 import re
 from typing import Dict, Any
 from backend.common.config import get_repository
-from backend.common.profile_context import resolve_profile_id
 from backend.utils.url_utils import safe_url_for_log
 
 
-def get_rules_dir(profile_id: str = None) -> str:
+def get_rules_dir() -> str:
     """获取规则缓存目录路径
 
     Returns:
         规则目录的绝对路径
     """
-    return str(get_repository().rules_dir(resolve_profile_id(profile_id)))
+    return str(get_repository().shared_rules_dir())
 
 
 def sanitize_rule_name(name: str) -> str:
@@ -42,8 +41,8 @@ def sanitize_rule_name(name: str) -> str:
     return safe_name[:200] if safe_name else 'unnamed'
 
 
-def save_rule_to_local(rule: Dict[str, Any], profile_id: str = None) -> str:
-    """将规则内容保存到当前 profile 的 rules/{rule_name}.list
+def save_rule_to_local(rule: Dict[str, Any]) -> str:
+    """将共享规则原始内容保存到共享 rules/{rule_name}.list
 
     Args:
         rule: 规则字典
@@ -58,8 +57,7 @@ def save_rule_to_local(rule: Dict[str, Any], profile_id: str = None) -> str:
 
     rule_name = rule.get('name', 'unnamed')
     filename = f"{sanitize_rule_name(rule_name)}.list"
-    resolved_profile_id = resolve_profile_id(profile_id)
-    rules_dir = get_rules_dir(resolved_profile_id)
+    rules_dir = get_rules_dir()
     filepath = os.path.join(rules_dir, filename)
 
     # 确保目录存在
@@ -70,8 +68,7 @@ def save_rule_to_local(rule: Dict[str, Any], profile_id: str = None) -> str:
     if source_type == 'content':
         # 直接保存内容
         content = rule.get('content', '')
-        get_repository().write_profile_text(
-            resolved_profile_id,
+        get_repository().write_shared_text(
             os.path.join('rules', filename),
             content,
         )
@@ -89,8 +86,7 @@ def save_rule_to_local(rule: Dict[str, Any], profile_id: str = None) -> str:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
 
-            get_repository().write_profile_text(
-                resolved_profile_id,
+            get_repository().write_shared_text(
                 os.path.join('rules', filename),
                 response.text,
             )

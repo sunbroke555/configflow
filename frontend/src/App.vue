@@ -1,35 +1,30 @@
 <template>
+  <MotionConfig reduced-motion="user" :skip-animations="reduceMotion">
   <!-- 登录页不套用应用壳 -->
   <template v-if="isLoginPage">
     <router-view />
   </template>
 
-  <div v-else class="relative flex min-h-screen min-h-dvh flex-col bg-background">
-    <!-- 全局氛围层：网格 + 极光，固定在视口，不参与布局与交互 -->
-    <div class="tech-backdrop" aria-hidden="true" />
+  <div v-else class="cf-workbench relative flex min-h-screen min-h-dvh flex-col bg-background [--cf-shell-header-h:calc(var(--cf-topbar-h)+env(safe-area-inset-top))] max-[700px]:[--cf-shell-header-h:calc(105px+env(safe-area-inset-top))]">
+    <a href="#main-content" class="sr-only fixed top-2 left-3 z-40 rounded-lg bg-primary px-4 py-3 font-medium text-primary-foreground focus:not-sr-only focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+      跳转到主要内容
+    </a>
 
     <header
-      class="glass-strong sticky top-0 z-800 flex h-(--cf-topbar-h) shrink-0 items-center gap-3 border-b border-border/50 px-4 pt-[env(safe-area-inset-top)] max-[900px]:gap-2 max-[900px]:px-3"
-      style="box-sizing: content-box"
+      class="sticky top-0 z-30 flex min-h-[calc(var(--cf-topbar-h)+env(safe-area-inset-top))] shrink-0 items-center gap-3 border-b border-border bg-card px-5 pt-[env(safe-area-inset-top)] max-[900px]:gap-2 max-[900px]:px-3 max-[700px]:flex-wrap max-[700px]:pb-2"
     >
       <router-link
         to="/dashboard"
-        class="group flex min-w-0 shrink items-center gap-2.5 text-[15px] font-semibold tracking-[-0.015em] text-foreground no-underline max-[900px]:min-h-9 max-[900px]:min-w-9"
+        class="flex min-h-11 min-w-0 shrink-0 items-center gap-2.5 rounded-lg text-[15px] font-semibold tracking-[-0.015em] text-foreground no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span class="relative flex size-7 items-center justify-center">
-          <span
-            class="absolute inset-0 rounded-[9px] bg-linear-to-br from-primary/50 to-accent-2-fill/40 blur-[7px] transition-opacity duration-300 group-hover:opacity-100 opacity-70"
-            aria-hidden="true"
-          />
-          <img src="/icon.png" alt="" class="relative size-6.5 rounded-[8px]" />
-        </span>
-        <span class="truncate max-[360px]:hidden">ConfigFlow</span>
+        <img src="/icon.png" alt="" class="size-7 rounded-lg" />
+        <span>ConfigFlow</span>
       </router-link>
 
       <!-- 命令面板入口：桌面显示快捷键，移动端退化为图标按钮 -->
       <button
         type="button"
-        class="ml-2 hidden h-8 min-w-[190px] cursor-pointer items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-2.5 text-[12.5px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground md:flex"
+        class="ml-3 hidden h-9 min-w-[180px] cursor-pointer items-center gap-2 rounded-lg border border-border bg-background px-3 text-[12.5px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:flex"
         @click="palette?.show()"
       >
         <Search class="size-3.5" aria-hidden="true" />
@@ -39,20 +34,16 @@
         </kbd>
       </button>
 
-      <div class="ml-auto flex min-w-0 items-center gap-1.5">
-        <ProfileSwitcher />
+      <ProfileSwitcher class="ml-auto max-[700px]:order-last max-[700px]:ml-0 max-[700px]:w-[calc(100%-5rem)]" />
+      <Badge variant="outline" class="shrink-0 rounded-md border-border font-mono text-[11px] text-muted-foreground max-[700px]:order-last max-[700px]:ml-auto max-[700px]:max-w-16 max-[700px]:truncate" :title="versionInfo">
+        {{ versionInfo }}
+      </Badge>
 
-        <Badge
-          variant="outline"
-          class="rounded-md border-border/60 font-mono text-[11px] text-muted-foreground max-[420px]:hidden"
-        >
-          {{ versionInfo }}
-        </Badge>
-
+      <div class="flex shrink-0 items-center gap-1 max-[700px]:ml-auto">
         <Button
           variant="ghost"
           size="icon-sm"
-          class="md:hidden"
+          class="size-11 lg:hidden"
           title="快速跳转"
           aria-label="快速跳转"
           @click="palette?.show()"
@@ -63,6 +54,7 @@
         <Button
           variant="ghost"
           size="icon-sm"
+          class="size-11"
           :title="theme === 'dark' ? '切换到浅色' : '切换到深色'"
           :aria-label="theme === 'dark' ? '切换到浅色' : '切换到深色'"
           @click="toggleTheme"
@@ -73,7 +65,7 @@
         <Button
           variant="ghost"
           size="icon-sm"
-          class="max-[900px]:hidden"
+          class="size-11"
           title="查看文档"
           aria-label="查看文档"
           @click="openGithub"
@@ -83,11 +75,11 @@
 
         <DropdownMenu v-if="showUserInfo">
           <DropdownMenuTrigger as-child>
-            <Button variant="ghost" size="icon-sm" :title="username" :aria-label="`用户 ${username}`">
+            <Button variant="ghost" size="icon-sm" class="size-11" :title="username" :aria-label="`用户 ${username}`">
               <User class="size-[17px]" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" class="glass-strong">
+          <DropdownMenuContent align="end">
             <DropdownMenuLabel class="text-[12px] font-normal text-muted-foreground">
               已登录 · {{ username }}
             </DropdownMenuLabel>
@@ -109,9 +101,9 @@
         :subscription-aggregation-enabled="subscriptionAggregationEnabled"
       />
 
-      <main class="relative z-10 min-w-0 flex-1 overflow-x-hidden">
+      <main id="main-content" tabindex="-1" class="relative z-10 min-w-0 flex-1 scroll-mt-32 overflow-x-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
         <div
-          class="mx-auto max-w-(--cf-content-max) px-8 pt-6 pb-10 max-[900px]:px-4 max-[900px]:pt-4 max-[900px]:pb-[calc(env(safe-area-inset-bottom)+var(--cf-tabbar-h)+var(--cf-sp-5))]"
+          class="mx-auto max-w-(--cf-content-max) px-8 pt-7 pb-10 max-[900px]:px-4 max-[900px]:pt-4 max-[900px]:pb-[calc(env(safe-area-inset-bottom)+var(--cf-tabbar-h)+var(--cf-sp-5))]"
         >
           <MobileGroupNav
             :active-path="route.path"
@@ -119,7 +111,7 @@
           />
           <!-- 不做整页过渡：out-in 会在两页之间留一帧空白，观感是闪一下。
                进场动效交给页面内的卡片与列表逐项播放。 -->
-          <router-view :key="`${activeProfileId}:${route.path}`" />
+          <router-view :key="pageKey" />
         </div>
       </main>
     </div>
@@ -135,12 +127,15 @@
   <Toaster position="top-center" rich-colors close-button :duration="3000" />
   <ConfirmHost />
   <PromptHost />
+  </MotionConfig>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { FileText, LogOut, Moon, Search, Sun, User } from '@lucide/vue'
+import { useMediaQuery } from '@vueuse/core'
+import { MotionConfig } from 'motion-v'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -166,6 +161,8 @@ import { useProfileStore } from './stores/profile'
 import { useThemeStore } from './stores/theme'
 import { scopeOfPath, type NavGroup, type NavItem } from './navigation'
 
+const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+
 const route = useRoute()
 const router = useRouter()
 const profileStore = useProfileStore()
@@ -178,6 +175,11 @@ const showUserInfo = ref(false)
 const username = ref('')
 const palette = ref<InstanceType<typeof CommandPalette> | null>(null)
 const isLoginPage = computed(() => route.path === '/login')
+const pageKey = computed(() =>
+  scopeOfPath(route.path) === 'profile' || route.path === '/dashboard'
+    ? `${activeProfileId.value}:${route.path}`
+    : route.path
+)
 
 // 快捷键提示按平台显示，Windows/Linux 上写 ⌘ 会误导
 const metaKeyLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'
@@ -267,6 +269,13 @@ const checkAuthStatus = async () => {
   }
 }
 
+watch(isLoginPage, login => {
+  if (login) return
+  checkAuthStatus()
+  profileStore.refreshProfiles().catch(() => undefined)
+  loadSubscriptionAggregationSetting()
+}, { immediate: true })
+
 const openGithub = () => {
   window.open('https://github.com/thsrite/configflow', '_blank')
 }
@@ -284,9 +293,6 @@ const handleCommand = async (command: string) => {
 
 onMounted(async () => {
   loadVersion()
-  checkAuthStatus()
-  profileStore.refreshProfiles().catch(() => undefined)
-  loadSubscriptionAggregationSetting()
   window.addEventListener(
     'subscription-aggregation-changed',
     handleSubscriptionAggregationChange as EventListener

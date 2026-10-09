@@ -5,6 +5,7 @@ import pytest
 from flask import Flask
 
 from backend.agents.manager import AgentManager
+from backend.common import auth as auth_module
 from backend.common import config as config_module
 from backend.common.agent_manager import init_agent_manager
 from backend.common.auth import MAX_AUTH_TOKEN_LENGTH
@@ -151,18 +152,31 @@ def test_authenticated_duplicate_registration_never_returns_token(tmp_path, monk
 
 def test_agent_list_and_item_never_expose_token(tmp_path, monkeypatch):
     monkeypatch.delenv("AGENT_REGISTRATION_KEY", raising=False)
-    monkeypatch.setenv("API_TOKEN", "admin-token")
+    monkeypatch.setattr(auth_module, "ADMIN_USERNAME", "admin")
+    monkeypatch.setattr(auth_module, "ADMIN_PASSWORD", "admin-password")
     repository = ProfileRepository(tmp_path)
+    repository.create_profile({"id": "alpha", "name": "Alpha"})
+    repository.create_profile({"id": "beta", "name": "Beta"})
     app = _app(repository)
+    from backend.routes.auth import setup_before_request
+    setup_before_request(app)
     client = app.test_client()
-    created = client.post("/api/agents/register", json=_registration_payload()).get_json()
-    auth = {"Authorization": "Bearer admin-token"}
+    created = client.post(
+        "/api/agents/register", json=_registration_payload(profile_id="alpha"),
+        headers={"X-ConfigFlow-Profile": "alpha"},
+    ).get_json()
+    auth = {
+        "Authorization": f"Bearer {auth_module.generate_token('admin')}",
+        "X-ConfigFlow-Profile": "beta",
+    }
 
     listed = client.get("/api/agents", headers=auth)
     item = client.get(f"/api/agents/{created['id']}", headers=auth)
 
     assert listed.status_code == 200
     assert item.status_code == 200
+    assert listed.get_json()[0]["id"] == created["id"]
+    assert item.get_json()["profile_id"] == "alpha"
     assert "token" not in listed.get_data(as_text=True)
     assert "token" not in item.get_data(as_text=True)
 

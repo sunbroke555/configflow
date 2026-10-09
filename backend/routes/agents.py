@@ -26,6 +26,7 @@ from backend.common.agent_manager import get_agent_manager
 from backend.common.utils import str_to_bool
 from backend.utils.logger import get_logger
 from backend.utils.url_utils import safe_url_for_log
+from backend.utils.strategy_references import StrategyReferenceError
 
 logger = get_logger(__name__)
 
@@ -358,7 +359,8 @@ def get_agent_config(agent_id):
 
         # 生成配置
         profile_id = agent.get('profile_id', 'default')
-        config_result = generate_agent_config(get_config(profile_id), agent)
+        config_result = generate_agent_config(
+            get_config(profile_id), agent, base_url=request.url_root.rstrip('/'))
 
         return jsonify({
             'success': True,
@@ -368,6 +370,10 @@ def get_agent_config(agent_id):
             'version': config_result['version']
         }), 200
 
+    except StrategyReferenceError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
+    except ProfileRepositoryError as e:
+        return jsonify({'success': False, 'message': f'Agent profile unavailable: {e}'}), 409
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -665,7 +671,7 @@ def get_docker_agent_run():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-def _prefetch_download_contents(downloads, base_url):
+def _prefetch_download_contents(downloads, base_url, *, validation_urls=()):
     """预获取所有下载项的文件内容，写入 item['content']
 
     Args:
@@ -689,9 +695,13 @@ def _prefetch_download_contents(downloads, base_url):
                 fetch_url = url.replace(base_url, 'http://127.0.0.1:5001', 1)
 
             resp = requests.get(fetch_url, timeout=30)
+            if resp.status_code == 400 and url in validation_urls:
+                raise StrategyReferenceError('Provider validation failed (HTTP 400)')
             resp.raise_for_status()
             item['content'] = resp.text
             logger.info(f"预获取成功: {item.get('name') or safe_url_for_log(url)} ({len(resp.text)} 字符)")
+        except StrategyReferenceError:
+            raise
         except Exception as e:
             logger.warning(f"预获取失败: {item.get('name') or safe_url_for_log(url)}, Agent 将 fallback 到 URL 下载")
             item['content'] = ''
@@ -744,11 +754,15 @@ def push_config_to_agent(agent_id):
                 logger.info("生成 Mihomo 配置...")
                 # Agent 在局域网内，注入 MosDNS 自定义 Hosts 让内网域名直达；
                 # 订阅/下载配置（可能被在外设备使用）不注入
+                # Provider bytes are materialized once below and pass the same
+                # global bundle gate as converter preflight before publication.
                 config_content = generate_mihomo_config(config_data, base_url=base_url,
-                                                        sync_lan_hosts=True)
+                                                        sync_lan_hosts=True, preflight_providers=False)
 
                 # 获取 provider 下载信息
-                provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url)
+                import yaml
+                provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url,
+                                                                  main_config=yaml.safe_load(config_content))
                 logger.info(f"需要下载 {len(provider_downloads)} 个 provider 文件")
 
                 # 获取 ruleset 下载信息
@@ -773,6 +787,8 @@ def push_config_to_agent(agent_id):
                 return jsonify({'success': False, 'message': f'Unsupported service type: {service_type}'}), 400
 
             logger.info(f"配置生成成功，长度: {len(config_content)} 字符")
+        except StrategyReferenceError as gen_error:
+            return jsonify({'success': False, 'message': str(gen_error)}), 400
         except Exception as gen_error:
             import traceback
             error_detail = traceback.format_exc()
@@ -780,13 +796,25 @@ def push_config_to_agent(agent_id):
             logger.error(f"错误详情: {error_detail}")
             return jsonify({'success': False, 'message': f'配置生成失败: {str(gen_error)}'}), 500
 
+        # Prepare actual provider bytes against the exact generated main graph.
+        # Do not HTTP-refetch our own routes with an independently resolved scope.
+        if service_type == 'mihomo' and provider_downloads:
+            import yaml
+            from backend.utils.provider_delivery import prepare_provider_bundle, commit_provider_bundle
+            bundle = prepare_provider_bundle(config_data, yaml.safe_load(config_content),
+                                             render_all=True, allow_transport_fallback=True)
+            commit_provider_bundle(profile_id, bundle)
+            provider_downloads = [{key: item[key] for key in ('name', 'url', 'local_path', 'content')}
+                                  for item in bundle]
+
         # 预获取所有文件内容，随配置一起推送给 Agent（避免 Agent 逐个下载）
-        if provider_downloads or ruleset_downloads:
+        if ruleset_downloads:
             server_domain = config_data.get('system_config', {}).get('server_domain', '').strip()
             effective_base_url = server_domain or base_url
-            all_downloads = provider_downloads + ruleset_downloads
+            all_downloads = ruleset_downloads
             logger.info(f"预获取 {len(all_downloads)} 个文件内容...")
-            _prefetch_download_contents(all_downloads, effective_base_url)
+            _prefetch_download_contents(all_downloads, effective_base_url,
+                                        validation_urls={d['url'] for d in provider_downloads})
             prefetched_count = sum(1 for d in all_downloads if d.get('content'))
             logger.info(f"预获取完成: {prefetched_count}/{len(all_downloads)} 个文件成功")
 
@@ -885,6 +913,8 @@ def push_config_to_agent(agent_id):
 
         return jsonify(result), 200 if result['success'] else 500
 
+    except StrategyReferenceError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         import traceback
         error_detail = traceback.format_exc()

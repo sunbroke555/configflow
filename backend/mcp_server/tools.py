@@ -53,7 +53,7 @@ def has_tool(name: str) -> bool:
 def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
     """执行一个工具（tools/call）"""
     arguments = arguments or {}
-    selected_profile_id = arguments.get('profile_id') or 'default'
+    selected_profile_id = arguments.get('profile_id', 'default')
     token = set_profile_context(selected_profile_id)
     try:
         result = _REGISTRY[name]['handler'](arguments)
@@ -70,7 +70,7 @@ def obj(properties: Dict[str, Any], required: Optional[List[str]] = None) -> Dic
     properties = dict(properties)
     properties.setdefault(
         'profile_id',
-        {'type': 'string', 'description': "目标 profile id；留空使用 'default' profile（不跟随界面上激活的 profile）"},
+        {'type': 'string', 'description': "独立配置的目标 id；省略使用 'default'，不读取浏览器选择。全局资源和系统设置不受此参数限制。"},
     )
     return {
         'type': 'object',
@@ -269,11 +269,11 @@ def _get_profile(args):
 
 @tool(
     'manage_profile',
-    '创建、更新、激活或删除 profile。默认 profile 不可删除。',
+    '创建、更新或删除 profile。默认 profile 不可删除；配置选择仅保存在各浏览器会话中。',
     obj(
         {
-            'action': string('操作类型', ['create', 'update', 'activate', 'delete']),
-            'id': string('profile id，update / activate / delete 时必填'),
+            'action': string('操作类型', ['create', 'update', 'delete']),
+            'id': string('profile id，update / delete 时必填'),
             'data': free_object('profile 元数据；create 时至少包含 id 或 name'),
         },
         ['action'],
@@ -281,14 +281,11 @@ def _get_profile(args):
 )
 def _manage_profile(args):
     action = _require(args, 'action')
-    profile_id = args.get('id')
     if action == 'create':
         return call_api('POST', '/api/profiles', body=args.get('data') or {})
     profile_id = _require(args, 'id')
     if action == 'update':
         return call_api('PUT', f'/api/profiles/{profile_id}', body=args.get('data') or {})
-    if action == 'activate':
-        return call_api('POST', f'/api/profiles/{profile_id}/activate', body={})
     if action == 'delete':
         call_api('DELETE', f'/api/profiles/{profile_id}')
         return {'success': True, 'profile_id': profile_id}
@@ -492,7 +489,8 @@ def _list_nodes(args):
             'id': string('节点 id，update / delete 时必填'),
             'data': free_object(
                 '节点字段：name（节点名）、proxy_string（节点链接或结构化 proxy 文本）、'
-                'enabled、remark（备注）'
+                'enabled、remark（备注）。共享节点不能保存 dialer_ref；'
+                '配置独立代理链请使用 manage_proxy_group 的 chain 类型。'
             ),
         },
         ['action'],
@@ -670,10 +668,13 @@ def _list_proxy_groups(args):
     'manage_proxy_group',
     '创建、更新或删除策略组。create 时 data 至少包含 name 和 type；'
     'type 支持 select（手动选择）、url-test（自动测速）、fallback（故障转移）、'
-    'load-balance（负载均衡）、relay。'
-    '节点来源可以是订阅（subscriptions + regex）、聚合（aggregations + aggregation_regex）、'
-    '手动节点（manual_nodes）或引用其他策略组（include_groups），可组合使用；'
-    'follow_group 则表示整体跟随另一个策略组。'
+    'load-balance（负载均衡）、chain（Mihomo 代理链）。'
+    '普通组可直接引用共享订阅（subscriptions + regex）、聚合（aggregations + aggregation_regex）、'
+    '手动节点（manual_nodes）或当前配置其它策略组/代理链（include_groups），无需资源预选；'
+    'follow_group 可整体跟随普通策略组，不能跟随代理链。'
+    'chain 类型使用 chain={entry:{type:"node"|"group",id:稳定ID},exit:{type:"node"|"group",id:稳定ID}}。'
+    '节点引用仅支持手动节点；订阅和聚合通过策略组使用。前置直接引用原组，落地生成独立的链内节点/组，'
+    '保留来源、筛选、测速和选路参数，不改变原资源；Provider 刷新可更新候选。Surge 拒绝启用链。'
     '引用类字段填的都是 id，不是名称。',
     obj(
         {
@@ -688,7 +689,7 @@ def _list_proxy_groups(args):
                 'follow_group（跟随的策略组 id）、proxies_order（节点顺序）、'
                 'url（测试地址）、interval（测试间隔秒）、'
                 'strategy（load-balance 的 round-robin / consistent-hashing / sticky-sessions）、'
-                'lazy（懒加载）'
+                'lazy（懒加载）、chain（代理链的 entry 与 exit；不与普通来源字段混用）'
             ),
         },
         ['action'],
@@ -802,8 +803,8 @@ def _generate_config(args):
     'manage_config_backup',
     '导出、导入或重置 ConfigFlow 配置。'
     'export 返回配置 JSON；import 用 data 覆盖；reset 恢复出厂设置。'
-    'scope=system（默认）作用于整份配置，scope=profile 只作用于 profile_id 指定的那份 profile'
-    '（profile 粒度不支持 reset）。',
+    'scope=system（默认）作用于系统设置、共享资源及全部配置；scope=profile 只导入导出资源引用和独立参数。'
+    'MCP 返回会移除内部凭据；完整恢复备份请在系统设置下载。profile 粒度不支持 reset。',
     obj(
         {
             'action': string('操作类型', ['export', 'import', 'reset']),
@@ -821,7 +822,7 @@ def _manage_config_backup(args):
         raise ApiError(400, f"不支持的 scope: {scope}")
 
     if scope == 'profile':
-        profile_id = args.get('profile_id') or 'default'
+        profile_id = args.get('profile_id', 'default')
         if action == 'export':
             return call_api('GET', f"/api/profiles/{profile_id}/export")
         if action == 'import':

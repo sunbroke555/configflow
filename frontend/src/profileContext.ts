@@ -12,6 +12,12 @@ const readStoredProfile = (): string => {
 
 export const activeProfileId = ref(readStoredProfile())
 
+export const scopedRequests = ref(0)
+export const beginScopedRequest = (): void => { scopedRequests.value++ }
+export const endScopedRequest = (): void => {
+  scopedRequests.value = Math.max(0, scopedRequests.value - 1)
+}
+
 export const setActiveProfileId = (profileId: string): void => {
   if (!profileId) return
   activeProfileId.value = profileId

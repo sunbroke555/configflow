@@ -1,35 +1,28 @@
 <template>
   <div
-    class="hairline edge-light group relative overflow-hidden rounded-xl border border-border/35 bg-card/55 p-4 backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:shadow-glow-soft"
+    class="h-full min-w-0 rounded-xl border border-border bg-card p-5 max-sm:p-4"
   >
-    <!-- 悬停时的定向辉光，强调当前关注的指标 -->
-    <span
-      class="pointer-events-none absolute -top-16 -right-10 size-32 rounded-full opacity-0 blur-3xl transition-opacity duration-500 group-hover:opacity-100"
-      :class="glowClass"
-      aria-hidden="true"
-    />
-
-    <div class="relative flex items-start justify-between gap-3">
+    <div class="flex items-start justify-between gap-2">
       <div class="min-w-0">
-        <p class="m-0 truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground">
+        <p class="m-0 break-words text-[13px] leading-5 font-medium text-muted-foreground">
           {{ label }}
         </p>
-        <p class="mt-2 mb-0 flex items-baseline gap-1 text-[28px] leading-none font-semibold tracking-[-0.03em] text-foreground">
-          <AnimatedNumber :value="value" :precision="precision" />
+        <p class="mt-3 mb-0 flex flex-wrap items-baseline gap-1 break-all text-[30px] leading-none font-semibold tracking-[-0.03em] text-foreground">
+          <AnimatedNumber :value="value" :precision="precision" instant />
           <span v-if="unit" class="text-[13px] font-medium text-muted-foreground">{{ unit }}</span>
         </p>
       </div>
 
       <div
         v-if="icon"
-        class="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-background/50"
+        class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted"
         :class="iconClass"
       >
         <component :is="icon" class="size-4.5" :stroke-width="2" aria-hidden="true" />
       </div>
     </div>
 
-    <div v-if="hint || $slots.default" class="relative mt-3 flex items-center gap-2 text-[11.5px] text-muted-foreground">
+    <div v-if="hint || $slots.default" class="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
       <slot>{{ hint }}</slot>
     </div>
   </div>
@@ -54,16 +47,6 @@ const props = withDefaults(
   { tone: 'primary', precision: 0 }
 )
 
-const glowClass = computed(
-  () =>
-    ({
-      primary: 'bg-primary/25',
-      success: 'bg-success/25',
-      warning: 'bg-warning/25',
-      danger: 'bg-destructive/25',
-      info: 'bg-info/25'
-    })[props.tone]
-)
 
 const iconClass = computed(
   () =>

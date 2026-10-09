@@ -39,14 +39,19 @@ def resolve_new_order(
     body: Dict[str, Any],
     object_key: str,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """解析排序请求体：优先按 id 在存量数据上重排，否则沿用整份对象数组的旧格式
+    """按已有条目的 ID 排序；旧对象数组只提供顺序，不覆盖资源定义。
 
     Returns:
         (重排后的集合, 无法处理的 id / 错误说明列表)
     """
     ids = body.get('ids')
     if ids is None:
-        return body.get(object_key, []), []
+        items = body.get(object_key)
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            return current, [f'{object_key} 必须是对象数组']
+        ids = [item.get('id') for item in items]
     if not isinstance(ids, list):
         return current, ['ids 必须是数组']
+    if any(not isinstance(item_id, str) for item_id in ids) or len(ids) != len(set(ids)):
+        return current, ['id 必须是互不重复的字符串']
     return reorder_by_ids(current, ids, body.get('position', 'top'))

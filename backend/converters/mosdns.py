@@ -155,6 +155,8 @@ def split_rules_and_rulesets(config_data: Dict[str, Any]) -> tuple:
     rule_sets = []
 
     for item in all_rules:
+        if not item.get('enabled', True) or not item.get('library_enabled', True):
+            continue
         item_type = item.get('itemType', '')
         if item_type == 'rule':
             rules.append(item)
@@ -424,7 +426,7 @@ def get_mosdns_custom_files(config_data: Dict[str, Any]) -> List[Dict[str, str]]
     proxy_ip_rules = []       # 代理IP规则
 
     for rule in rules_list:
-        if not rule.get('enabled', True):
+        if not rule.get('enabled', True) or not rule.get('library_enabled', True):
             continue
 
         rule_id = rule.get('id')
@@ -921,7 +923,7 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
 
     # 遍历所有规则，按照直连/代理分组
     for rule in rules_list:
-        if not rule.get('enabled', True):
+        if not rule.get('enabled', True) or not rule.get('library_enabled', True):
             continue
 
         rule_id = rule.get('id')
@@ -1045,7 +1047,7 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
     added_merged_tags = set()
 
     for item in all_rules:
-        if not item.get('enabled', True):
+        if not item.get('enabled', True) or not item.get('library_enabled', True):
             continue
 
         item_type = item.get('itemType', '')

@@ -19,6 +19,7 @@ export interface ProxyNode {
   remark?: string  // 备注
   subscription_id?: string
   subscription_name?: string
+  params?: Record<string, unknown>
 }
 
 export interface Rule {
@@ -52,6 +53,15 @@ export interface ProxyGroup {
   name: string
   type: string
   enabled: boolean
+  chain?: { entry: { type: 'node' | 'group'; id: string }; exit: { type: 'node' | 'group'; id: string } }
+  aggregations?: string[]
+  aggregation_regex?: string
+  follow_group?: string
+  proxies_order?: { type: string; id: string }[]
+  proxy_order?: string
+  use?: string[]
+  include_all?: boolean
+  'include-all'?: boolean
   url?: string
   interval?: number
   subscriptions?: string[]    // 订阅来源
@@ -71,7 +81,7 @@ export interface Agent {
   host: string
   port: number
   token: string
-  service_type: 'mihomo' | 'mosdns'
+  service_type: 'mihomo' | 'surge' | 'mosdns'
   deployment_method?: 'shell' | 'docker' | 'unknown'
   status: 'online' | 'offline'
   last_heartbeat: string

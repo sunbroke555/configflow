@@ -5,16 +5,16 @@
         type="button"
         role="combobox"
         :aria-expanded="open"
-        class="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-md border border-input bg-background/50 px-3 py-1.5 text-left text-[13px] transition-colors hover:border-border-strong focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        class="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 text-left text-[13px] transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
       >
-        <span v-if="!selected.length" class="flex-1 text-muted-foreground">{{ placeholder }}</span>
+        <span v-if="!selected.length" class="min-w-0 flex-1 whitespace-normal break-words text-muted-foreground">{{ placeholder }}</span>
         <span v-else class="flex min-w-0 flex-1 flex-wrap gap-1">
           <!-- 选中项超过 maxVisible 时折叠成计数，避免触发器高度失控 -->
           <Badge
             v-for="option in visibleSelected"
             :key="option.value"
             variant="secondary"
-            class="max-w-[180px] gap-1 truncate"
+            class="max-w-full gap-1 whitespace-normal break-all text-left"
           >
             {{ option.label }}
           </Badge>
@@ -24,11 +24,11 @@
       </button>
     </PopoverTrigger>
 
-    <PopoverContent class="glass-strong w-(--reka-popper-anchor-width) p-0" align="start">
+    <PopoverContent class="w-(--reka-popper-anchor-width) p-0" align="start">
       <Command :filter-function="filterOptions">
         <CommandInput :placeholder="searchPlaceholder" />
         <CommandList>
-          <CommandEmpty>没有匹配项</CommandEmpty>
+          <CommandEmpty>没有找到可选项，请调整搜索条件或先添加对应资源。</CommandEmpty>
           <CommandGroup>
             <CommandItem
               v-for="option in options"
@@ -41,7 +41,7 @@
                 :class="modelValue.includes(option.value) ? 'opacity-100 text-primary-accent' : 'opacity-0'"
                 aria-hidden="true"
               />
-              <span class="min-w-0 truncate">{{ option.label }}</span>
+              <span class="min-w-0 whitespace-normal break-all">{{ option.label }}</span>
             </CommandItem>
           </CommandGroup>
         </CommandList>

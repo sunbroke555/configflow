@@ -1,15 +1,15 @@
 """配置管理路由"""
-import os
 import json
 import io
 from flask import request, jsonify, send_file
 
 from backend.routes import config_bp
 from backend.common.auth import require_auth, validate_token_or_jwt
-from backend.common.config import get_config, save_config
-from backend.common.config_export import prepare_config_export
+from backend.common.config import get_config, save_config, get_repository, reset_config_context
+from backend.common.config_repository import ProfileValidationError
 from backend.common.profile_context import resolve_profile_id
 from backend.utils.logger import get_logger
+from backend.utils.strategy_references import StrategyReferenceError
 
 logger = get_logger(__name__)
 from backend.converters.mihomo import generate_mihomo_config
@@ -57,6 +57,8 @@ def get_mihomo_config():
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': 'inline'
         }
+    except StrategyReferenceError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -89,6 +91,8 @@ def get_surge_config():
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': 'inline'
         }
+    except StrategyReferenceError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -121,6 +125,8 @@ def get_mosdns_config():
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': 'inline'
         }
+    except StrategyReferenceError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -143,11 +149,9 @@ def get_profile_mosdns_config(profile_id):
 @config_bp.route('/export', methods=['GET'])
 @require_auth
 def export_config():
-    """导出配置为 JSON"""
-    config_data = get_config()
-
+    """Download a complete, restorable global backup for the administrator."""
     desensitize = request.args.get('desensitize', 'false').lower() == 'true'
-    export_data = prepare_config_export(config_data, desensitize=desensitize)
+    export_data = get_repository().export_all(desensitize=desensitize)
     payload = json.dumps(export_data, ensure_ascii=False, indent=2).encode('utf-8')
     return send_file(
         io.BytesIO(payload),
@@ -163,9 +167,11 @@ def import_config():
     try:
         if not isinstance(request.json, dict):
             return jsonify({'success': False, 'message': '请求数据必须是 JSON 对象'}), 400
-        from backend.common.config import safe_import_config
-        safe_import_config(request.json)
+        get_repository().import_all(request.json)
+        reset_config_context()
         return jsonify({'success': True})
+    except ProfileValidationError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -173,19 +179,10 @@ def import_config():
 @config_bp.route('/reset', methods=['POST'])
 @require_auth
 def reset_config():
-    """重置配置为默认模板"""
+    """Reset the entire schema, including shared resources and all profiles."""
     try:
-        from backend.common.config import config_data as global_config
-
-        # 读取模板配置
-        template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config_template.json')
-        with open(template_path, 'r', encoding='utf-8') as f:
-            template_data = json.load(f)
-
-        # 清空当前配置并使用模板数据
-        global_config.clear()
-        global_config.update(template_data)
-        save_config()
+        get_repository().reset_all()
+        reset_config_context()
 
         return jsonify({'success': True, 'message': '配置已重置为默认值'})
     except Exception as e:
@@ -216,8 +213,19 @@ def handle_custom_mihomo_config():
         # 保存自定义配置（保存到嵌套结构中）
         try:
             custom_config = request.json.get('config', '')
+            # 预先做 YAML 校验：避免把坏的 custom_config 写进 config.json，
+            # 下次生成时反而更难定位问题（生成路径也会 fail-closed）。
+            if custom_config and custom_config.strip():
+                try:
+                    import yaml as _yaml
+                    _yaml.safe_load(custom_config)
+                except _yaml.YAMLError as e:
+                    return jsonify({
+                        'success': False,
+                        'message': f'YAML 语法错误，未保存: {e}',
+                    }), 400
             config_data['mihomo']['custom_config'] = custom_config
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -249,7 +257,7 @@ def handle_custom_surge_config():
                 config_data['surge']['custom_config'] = data['config']
             if 'smart_groups' in data:
                 config_data['surge']['smart_groups'] = data['smart_groups']
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -286,7 +294,7 @@ def handle_custom_mosdns_config():
         try:
             custom_config = request.json.get('config', '')
             config_data['mosdns']['custom_config'] = custom_config
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500

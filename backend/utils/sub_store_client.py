@@ -40,9 +40,8 @@ def _get_base_url():
     """
     # 优先从配置文件读取（用户在 UI 中设置的值）
     try:
-        from backend.common.config import get_config
-        config_data = get_config()
-        config_url = config_data.get('system_config', {}).get('sub_store_url', '')
+        from backend.common.config import get_system_config
+        config_url = get_system_config().get('system_config', {}).get('sub_store_url', '')
         if config_url and config_url.strip():
             return config_url.strip().rstrip('/')
     except Exception:

@@ -2,20 +2,19 @@
   <div>
     <ScopeBanner
       scope="system"
-      description="Agent 列表为所有配置空间共有；每个 Agent 各自绑定一个配置空间，推送时使用它绑定的那份配置"
+      description="所有配置空间共用此 Agent 列表。每个 Agent 只绑定一个配置空间，推送以其绑定的配置为准。"
     />
 
     <PageHeader
-      eyebrow="System"
       title="Agent"
-      description="Agent 注册、配置推送与运行状态。"
+      description="在目标机器安装 Agent 后，可在这里推送配置、重启服务和查看运行状态。"
     >
       <template #actions>
         <Button variant="outline" class="border-border/60 bg-background/40" @click="loadAgents">
           <RefreshCw class="size-4" />
           刷新
         </Button>
-        <Button class="shadow-glow" @click="handleGenerateScript">
+        <Button @click="handleGenerateScript">
           <FileText class="size-4" />
           生成安装脚本
         </Button>
@@ -33,7 +32,7 @@
       <EmptyState
         :icon="Server"
         title="暂无 Agent"
-        description="生成安装脚本并在目标机器上执行，Agent 注册后会出现在这里。"
+        description="点击「生成安装脚本」，复制命令到目标机器执行。安装并连接成功后，Agent 会显示在这里。"
       >
         <Button @click="handleGenerateScript">
           <FileText class="size-4" />
@@ -47,7 +46,7 @@
         v-for="(agent, index) in agents"
         :key="agent.id"
         v-bind="listItem(index)"
-        class="hairline edge-light relative flex flex-col gap-3.5 overflow-hidden rounded-xl border border-border/35 bg-card/55 p-4 backdrop-blur-xl transition-all duration-300 hover:shadow-glow-soft"
+        class="relative flex flex-col gap-3.5 overflow-hidden rounded-xl border border-border bg-card p-5 transition-colors duration-200"
       >
         <header class="flex flex-wrap items-center gap-2">
           <StatusDot
@@ -58,7 +57,7 @@
             {{ agent.name }}
           </p>
           <Badge :variant="agent.service_type === 'mihomo' ? 'brand' : 'info'" class="text-[10.5px]">
-            {{ agent.service_type === 'mihomo' ? 'Mihomo' : 'MosDNS' }}
+            {{ serviceTypeLabels[agent.service_type] }}
           </Badge>
           <Badge v-if="agent.deployment_method" variant="outline" class="text-[10.5px]">
             {{ agent.deployment_method === 'shell' ? 'Shell' : agent.deployment_method === 'docker' ? 'Docker' : agent.deployment_method }}
@@ -70,7 +69,7 @@
           <dd class="m-0 truncate font-mono text-foreground">{{ agent.host }}:{{ agent.port }}</dd>
           <dt class="text-muted-foreground">配置版本</dt>
           <dd class="m-0 truncate font-mono text-foreground">{{ agent.config_version || 'N/A' }}</dd>
-          <dt class="text-muted-foreground">最后心跳</dt>
+          <dt class="text-muted-foreground">最近联系</dt>
           <dd class="m-0 truncate text-foreground">{{ formatTime(agent.last_heartbeat) }}</dd>
           <dt class="text-muted-foreground">Agent 版本</dt>
           <dd class="m-0 truncate font-mono text-foreground">{{ agent.version || 'N/A' }}</dd>
@@ -82,11 +81,11 @@
             :disabled="bindingAgentId === agent.id"
             @update:model-value="value => handleAgentProfileChange(agent, String(value))"
           >
-            <SelectTrigger class="h-8 w-full bg-background/50 text-[12.5px]">
-              <SelectValue />
+            <SelectTrigger class="data-[size=default]:h-auto min-h-8 w-full min-w-0 bg-background/50 py-1.5 text-[12.5px] [&_[data-slot=select-value]]:line-clamp-none" :aria-label="`绑定配置空间 ${agent.name}`">
+              <SelectValue class="min-w-0 whitespace-normal break-all text-left" />
             </SelectTrigger>
-            <SelectContent class="glass-strong">
-              <SelectItem v-for="profile in profiles" :key="profile.id" :value="profile.id">
+            <SelectContent class="max-w-[calc(100vw-32px)]">
+              <SelectItem v-for="profile in profiles" :key="profile.id" :value="profile.id" class="whitespace-normal break-all">
                 {{ profile.name }}
               </SelectItem>
             </SelectContent>
@@ -138,11 +137,11 @@
         <footer class="mt-auto flex flex-wrap items-center gap-1 border-0 border-t border-border/50 pt-3">
           <Button variant="ghost" size="sm" @click="pushConfig(agent)">
             <Upload class="size-3.5" />
-            推送
+            推送配置
           </Button>
           <Button variant="ghost" size="sm" @click="restartAgent(agent)">
             <RotateCw class="size-3.5" />
-            重启
+            重启服务
           </Button>
           <Button variant="ghost" size="sm" @click="viewLogs(agent)">
             <ScrollText class="size-3.5" />
@@ -159,7 +158,7 @@
                 <MoreHorizontal class="size-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" class="glass-strong">
+            <DropdownMenuContent align="end">
               <DropdownMenuItem class="text-destructive-accent" @select="uninstallAgent(agent)">
                 <Trash2 class="size-4" />
                 卸载 Agent
@@ -176,10 +175,10 @@
 
     <!-- ===== 生成安装脚本 ===== -->
     <Dialog v-model:open="scriptDialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[760px] border-border/50">
+      <DialogContent class="max-w-[760px]">
         <DialogHeader>
           <DialogTitle>生成 Agent 安装脚本</DialogTitle>
-          <DialogDescription>填写部署参数，生成可直接在目标机器执行的一键安装命令。</DialogDescription>
+          <DialogDescription>选择安装方式并填写机器信息，然后复制生成的命令到目标机器执行。</DialogDescription>
         </DialogHeader>
 
         <div class="flex max-h-[62dvh] flex-col gap-4 overflow-y-auto pr-1">
@@ -278,7 +277,7 @@
           </FormField>
 
           <template v-if="scriptForm.installType === 'shell'">
-            <FormField label="配置文件路径" html-for="agent-config-path" hint="Agent 拉取配置后保存的文件路径。">
+            <FormField label="配置文件路径" html-for="agent-config-path" hint="填写配置在目标机器上的保存位置，须包含文件名。">
               <Input
                 id="agent-config-path"
                 v-model="scriptForm.config_path"
@@ -383,7 +382,7 @@
             </Collapsible>
           </template>
 
-          <Button v-else class="w-full shadow-glow" @click="generateScript">
+          <Button v-else class="w-full" @click="generateScript">
             <FileText class="size-4" />
             {{ scriptForm.installType === 'docker' ? '生成 Docker 部署命令' : '生成安装命令' }}
           </Button>
@@ -398,10 +397,10 @@
 
     <!-- ===== Agent 日志 ===== -->
     <Dialog v-model:open="logsDialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[900px] border-border/50">
+      <DialogContent class="max-w-[900px]">
         <DialogHeader>
           <DialogTitle>Agent 日志 · {{ currentAgent?.name }}</DialogTitle>
-          <DialogDescription>选择日志文件后查看内容，可清空或刷新。</DialogDescription>
+          <DialogDescription>选择此 Agent 机器上的日志文件查看内容。清空会删除所选文件中的全部日志，且无法恢复。</DialogDescription>
         </DialogHeader>
 
         <div class="flex flex-col gap-3">
@@ -410,7 +409,7 @@
               <SelectTrigger class="h-9 w-[260px] bg-background/50 text-[13px]">
                 <SelectValue placeholder="选择日志文件" />
               </SelectTrigger>
-              <SelectContent class="glass-strong">
+              <SelectContent>
                 <SelectItem v-for="opt in logPathOptions" :key="opt.value" :value="opt.value">
                   {{ opt.label }}
                 </SelectItem>
@@ -432,7 +431,7 @@
                 @click="validateAndLoadCustomPath"
               >
                 <Loader2 v-if="validatingPath" class="size-4 animate-spin" />
-                验证
+                查看日志
               </Button>
             </template>
           </div>
@@ -476,10 +475,10 @@
 
     <!-- ===== 监控详情 ===== -->
     <Dialog v-model:open="metricsDialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[1100px] border-border/50">
+      <DialogContent class="max-w-[1100px]">
         <DialogHeader>
           <DialogTitle>系统监控 · {{ currentMetricsAgent?.name }}</DialogTitle>
-          <DialogDescription>最近 24 小时的监控数据，共 {{ metricsHistory.length }} 个数据点。</DialogDescription>
+          <DialogDescription>查看最近 24 小时的资源使用情况，已有 {{ metricsHistory.length }} 条记录。</DialogDescription>
         </DialogHeader>
 
         <LoadingRows v-if="metricsLoading" :rows="4" />
@@ -488,7 +487,7 @@
           v-else-if="metricsHistory.length === 0"
           :icon="ChartLine"
           title="暂无监控数据"
-          description="Agent 上报心跳后，监控数据会在这里按时间聚合展示。"
+          description="等待 Agent 连接并发送运行数据后，点击「刷新」查看。"
         />
 
         <div v-else class="flex max-h-[68dvh] flex-col gap-3 overflow-y-auto pr-1">
@@ -648,6 +647,12 @@ const scriptForm = ref({
   mihomoAgentPort: 8080,
   mosdnsAgentPort: 8081
 })
+
+const serviceTypeLabels: Record<Agent['service_type'], string> = {
+  mihomo: 'Mihomo',
+  surge: 'Surge',
+  mosdns: 'MosDNS'
+}
 
 // 服务类型选项
 const serviceTypeOptions = [
@@ -1174,8 +1179,8 @@ const DOCKER_MODES = [
 
 const installTypeHint = computed(() =>
   scriptForm.value.installType === 'shell'
-    ? '将 Agent 直接安装到系统服务。'
-    : '使用 Docker 容器运行 Agent，内置 Mihomo / MosDNS 服务。'
+    ? '将 Agent 安装为目标机器上的系统服务。'
+    : '用 Docker 运行 Agent，无需另行安装 Mihomo / MosDNS。'
 )
 
 const dockerModeHint = computed(
@@ -1191,18 +1196,18 @@ const DOCKER_NOTES: Record<string, { title: string; lines: string[] }> = {
   mihomo: {
     title: 'Docker Mihomo Agent 使用说明',
     lines: [
-      '镜像内置 Mihomo，Agent 与 Mihomo 在同一容器中运行',
-      '无需单独部署 Mihomo 服务，一个容器即可完成',
-      '支持自动配置拉取、更新和服务重启',
+      '安装后即可使用 Mihomo 代理服务',
+      'Agent 与 Mihomo 在同一容器运行，无需另外安装 Mihomo',
+      '可自动获取和更新配置，也可在此页面重启服务',
       '代理端口：7890 (HTTP)、7891 (SOCKS5)、9090 (API)'
     ]
   },
   mosdns: {
     title: 'Docker MosDNS Agent 使用说明',
     lines: [
-      '镜像内置 MosDNS，Agent 与 MosDNS 在同一容器中运行',
-      '无需单独部署 MosDNS 服务，一个容器即可完成',
-      '支持自动配置拉取、更新和服务重启',
+      '安装后即可使用 MosDNS 解析域名',
+      'Agent 与 MosDNS 在同一容器运行，无需另外安装 MosDNS',
+      '可自动获取和更新配置，也可在此页面重启服务',
       'DNS 端口：53 (TCP/UDP)'
     ]
   },
@@ -1521,7 +1526,7 @@ const generateScript = async () => {
 
       dockerComposeContent.value = composeResponse.data
       dockerRunCommand.value = runResponse.data
-      notify.success('Docker 部署命令生成成功！')
+      notify.success('Docker 部署命令已生成，请复制到目标机器执行')
     } else {
       // 生成 Shell 脚本
       const response = await agentApi.generateScript({
@@ -1564,7 +1569,7 @@ const generateScript = async () => {
       // 生成一键命令 - Alpine Linux
       installCommandAlpine.value = `curl -sSL "${scriptUrl}" | sh`
 
-      notify.success('安装命令生成成功！')
+      notify.success('安装命令已生成，请复制到目标机器执行')
     }
   } catch (error: any) {
     console.error('生成脚本失败，错误详情：', error)
@@ -1756,7 +1761,7 @@ const uninstallAgent = async (agent: Agent) => {
 // 删除 Agent 记录
 const deleteAgent = async (agent: Agent) => {
   const ok = await confirmDanger(
-    `确定要删除 Agent「${agent.name}」的管理记录吗？\n\n注意：此操作仅删除管理记录，不会卸载远程服务器上的 Agent 程序。如需完全卸载，请使用「卸载 Agent」。`,
+    `确定删除 Agent「${agent.name}」的管理记录吗？记录删除后无法恢复，但不会卸载远程机器上的 Agent 程序。如需移除程序，请使用「卸载 Agent」。`,
     { title: '删除记录', confirmText: '确定删除' }
   )
   if (!ok) return
@@ -1950,7 +1955,7 @@ const toggleLogging = async (enabled: boolean) => {
     if (data.success) {
       notify.success(enabled ? '日志已启用' : '日志已禁用')
     } else {
-      notify.error('设置失败')
+      notify.error('修改日志开关失败')
       loggingEnabled.value = !enabled // 回滚状态
     }
   } catch (error: any) {

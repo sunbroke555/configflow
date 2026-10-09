@@ -22,13 +22,9 @@ def get_aggregation_nodes(agg_id: str, config_data: Dict[str, Any]) -> List[Dict
         return []
 
     try:
-        # 生成 provider 文件（会自动重新解析订阅）
-        result = generate_aggregation_provider(aggregation)
-        file_path = result['file_path']
-
-        # 读取生成的 YAML 文件
-        with open(file_path, 'r', encoding='utf-8') as f:
-            provider_data = yaml.safe_load(f)
+        # Render from the bound profile snapshot, never the request selection.
+        result = generate_aggregation_provider(aggregation, config=config_data, persist=False)
+        provider_data = yaml.safe_load(result['content'])
 
         proxies = provider_data.get('proxies', [])
         logger.info(f"从聚合 '{aggregation['name']}' 获取了 {len(proxies)} 个节点")
@@ -52,6 +48,8 @@ def split_rules_and_rulesets(config_data: Dict[str, Any]) -> tuple:
     rule_sets = []
 
     for item in all_rules:
+        if not item.get('enabled', True) or not item.get('library_enabled', True):
+            continue
         item_type = item.get('itemType', '')
         if item_type == 'rule':
             rules.append(item)
@@ -78,6 +76,9 @@ def generate_surge_config(config_data: Dict[str, Any], base_url: str = '') -> st
         str: Surge 格式的配置字符串
     """
 
+    from backend.utils.dialer_references import validate_dialers, reject_surge_dialers
+    validate_dialers(config_data)
+    reject_surge_dialers(config_data)
     # 从合并数组中分离规则和规则集
     rules_list, rule_sets_list = split_rules_and_rulesets(config_data)
 
@@ -324,7 +325,7 @@ def generate_surge_config(config_data: Dict[str, Any], base_url: str = '') -> st
 
     # 遍历合并后的规则数组，保持用户配置的顺序
     for item in config_data.get('rule_configs', []):
-        if not item.get('enabled', True):
+        if not item.get('enabled', True) or not item.get('library_enabled', True):
             continue
 
         item_type = item.get('itemType', '')
@@ -408,6 +409,13 @@ def generate_surge_config(config_data: Dict[str, Any], base_url: str = '') -> st
         if section_name not in auto_sections:
             sections.append(section_content)
 
+    from backend.utils.strategy_references import validate_rule_policies
+    validate_rule_policies(
+        config_data,
+        [line.split('=', 1)[0].strip() for line in proxies[1:] + proxy_groups[1:] if '=' in line],
+        'surge',
+    )
+
     # 组合所有部分
     config_output = '\n\n'.join(sections)
 
@@ -433,6 +441,9 @@ def convert_proxies_to_surge_text(proxies: List[Dict[str, Any]]) -> str:
         str: Surge 格式纯文本，每行一个节点
     """
     from backend.utils.sub_store_client import proxies_to_nodes
+    from backend.utils.dialer_references import DialerReferenceError
+    if any(proxy.get('dialer-proxy') is not None for proxy in proxies):
+        raise DialerReferenceError('Surge policy-path 暂不支持 dialer-proxy，不能静默移除拨号配置')
 
     nodes = proxies_to_nodes(proxies)
     lines = []

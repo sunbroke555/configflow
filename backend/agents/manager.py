@@ -41,7 +41,7 @@ class AgentManager:
 
         def update(system):
             if profile_id:
-                self.repository._profile_metadata(profile_id, system)
+                self.repository._profile_metadata(profile_id)
             result['value'] = updater(system.setdefault('agents', []))
 
         self.repository.update_system_transaction(update)

@@ -6,4 +6,5 @@ import router from './router'
 import './stores/theme'
 import App from './App.vue'
 
-createApp(App).use(router).mount('#app')
+const app = createApp(App).use(router)
+router.isReady().then(() => app.mount('#app'))

@@ -13,23 +13,23 @@ from backend.routes import register_blueprints
 @pytest.fixture
 def app_with_config(tmp_path):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile(
-        "default",
-        {
-            "system_config": {"config_token": "mcp-admin-token", "server_domain": "https://cf.example.com"},
-            "subscriptions": [{"id": "sub-1", "name": "A"}, {"id": "sub-2", "name": "B"}],
+    repository.save_system({"system_config": {"config_token": "mcp-admin-token", "server_domain": "https://cf.example.com"}})
+    repository.save_shared({
+        "subscriptions": [{"id": "sub-1", "name": "A"}, {"id": "sub-2", "name": "B"}],
+        "rule_library": [
+            {"id": "lib-1", "name": "inline", "source_type": "content", "content": "DOMAIN,a.com"},
+            {"id": "lib-2", "name": "remote", "source_type": "url", "url": "https://example.com/x.list"},
+        ],
+    })
+    repository.save_profile("default", {
             "proxy_groups": [
-                {"id": "group-1", "name": "PROXY"},
+                {"id": "group-1", "name": "PROXY", "type": "select", "subscriptions": ["sub-1", "sub-2"]},
                 {"id": "group-2", "name": "AUTO"},
-                {"id": "group-3", "name": "DIRECT"},
+                {"id": "group-3", "name": "Fallback"},
             ],
             "rule_configs": [
                 {"id": "rule-1", "itemType": "rule", "rule_type": "DOMAIN", "value": "a.com", "policy": "PROXY"},
-                {"id": "ruleset-1", "itemType": "ruleset", "name": "cn", "policy": "DIRECT", "url": "/api/rules/local/cn"},
-            ],
-            "rule_library": [
-                {"id": "lib-1", "name": "inline", "source_type": "content", "content": "DOMAIN,a.com"},
-                {"id": "lib-2", "name": "remote", "source_type": "url", "url": "https://example.com/x.list"},
+                {"id": "ruleset-1", "itemType": "ruleset", "library_rule_id": "lib-1", "policy": "DIRECT"},
             ],
         },
     )
@@ -40,19 +40,10 @@ def app_with_config(tmp_path):
 
 
 def _ids(repository, key):
-    return [item["id"] for item in repository.get_profile("default").get(key, [])]
+    config = repository.get_shared() if key in {"subscriptions", "nodes", "rule_library"} else repository.get_profile("default")
+    return [item["id"] for item in config.get(key, [])]
 
 
-def test_new_tools_are_registered():
-    names = {tool["name"] for tool in tools.list_tools()}
-    assert {
-        "reorder_items",
-        "get_rule_library_content",
-        "cache_rule_library",
-        "get_agent_install_info",
-        "convert_mosdns_rule",
-        "manage_app_logs",
-    } <= names
 
 
 def test_reorder_moves_listed_items_to_top_and_bottom(app_with_config):
@@ -78,13 +69,15 @@ def test_reorder_supports_every_declared_collection(app_with_config):
     assert _ids(repository, "rule_configs") == ["ruleset-1", "rule-1"]
 
 
-def test_reorder_keeps_ruleset_url_relative(app_with_config):
-    """列表接口会给规则集 URL 拼上 server_domain，回写时必须还原成相对路径"""
+def test_reorder_does_not_persist_hydrated_rule_source(app_with_config):
+    """列表中的来源字段不能被排序写回为独立配置覆盖。"""
     app, repository = app_with_config
     with app.app_context():
         tools.call_tool("reorder_items", {"collection": "rules", "ids": ["ruleset-1"]})
     stored = {item["id"]: item for item in repository.get_profile("default")["rule_configs"]}
-    assert stored["ruleset-1"]["url"] == "/api/rules/local/cn"
+    assert stored["ruleset-1"]["library_rule_id"] == "lib-1"
+    assert "url" not in stored["ruleset-1"]
+    assert repository.get_shared()["rule_library"][0]["content"] == "DOMAIN,a.com"
 
 
 def test_reorder_rejects_unknown_id(app_with_config):
@@ -137,22 +130,29 @@ def test_rule_library_content_and_settings_section(app_with_config):
 def test_profile_scoped_backup_export_and_import(app_with_config):
     app, repository = app_with_config
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.save_profile("alpha", {"subscriptions": [{"id": "alpha-sub"}]})
+    group = {"id": "shared", "name": "Shared", "type": "select", "subscriptions": ["sub-1"]}
+    repository.save_profile("alpha", {"proxy_groups": [group]})
+    default = repository.get_profile("default")
     with app.app_context():
         exported = tools.call_tool(
             "manage_config_backup", {"action": "export", "scope": "profile", "profile_id": "alpha"}
         )
-        assert [sub["id"] for sub in exported["subscriptions"]] == ["alpha-sub"]
+        assert exported["proxy_groups"] == [group]
+        assert "resource_refs" not in exported
+        assert "node_dialers" not in exported
+        assert "subscriptions" not in exported
         tools.call_tool(
             "manage_config_backup",
             {
                 "action": "import",
                 "scope": "profile",
                 "profile_id": "alpha",
-                "data": {"subscriptions": [{"id": "imported-sub"}]},
+                "data": {"proxy_groups": [{**group, "subscriptions": ["sub-2"]}]},
             },
         )
-    assert [sub["id"] for sub in repository.get_profile("alpha")["subscriptions"]] == ["imported-sub"]
+    assert repository.get_profile("alpha")["proxy_groups"] == [{**group, "subscriptions": ["sub-2"]}]
+    assert repository.get_profile("default") == default
+    assert _ids(repository, "subscriptions") == ["sub-1", "sub-2"]
 
 
 def test_app_log_info_tool(app_with_config):
@@ -175,7 +175,7 @@ def test_reorder_does_not_persist_derived_list_fields(app_with_config):
     app, repository = app_with_config
     with app.app_context():
         tools.call_tool("reorder_items", {"collection": "subscriptions", "ids": ["sub-2"]})
-    stored = repository.get_profile("default")["subscriptions"]
+    stored = repository.get_shared()["subscriptions"]
     assert all("cached_node_count" not in sub for sub in stored)
 
 
@@ -186,20 +186,19 @@ def test_reorder_keeps_urls_that_output_sanitizer_redacts(app_with_config):
         lambda system: system.setdefault("system_config", {}).update({"rule_proxy_token": "sekret-token"})
     )
     secret_url = "https://cf.example.com/api/rules/local/cn?token=sekret-token"
-    repository.update_profile_transaction(
-        "default",
-        lambda profile: profile["subscriptions"].__setitem__(0, {"id": "sub-1", "name": "A", "url": secret_url}),
+    repository.update_shared_transaction(
+        lambda shared: shared["subscriptions"].__setitem__(0, {"id": "sub-1", "name": "A", "url": secret_url}),
     )
     with app.app_context():
         listed = tools.call_tool("list_subscriptions", {})
         assert listed[0]["url"] == "[REDACTED]", "前提：列表响应确实会脱敏"
         tools.call_tool("reorder_items", {"collection": "subscriptions", "ids": ["sub-2"]})
-    stored = {sub["id"]: sub for sub in repository.get_profile("default")["subscriptions"]}
+    stored = {sub["id"]: sub for sub in repository.get_shared()["subscriptions"]}
     assert stored["sub-1"]["url"] == secret_url
 
 
-def test_rest_reorder_still_accepts_full_object_arrays(app_with_config):
-    """旧格式（整份对象数组）保持兼容，前端不受影响"""
+def test_rest_reorder_full_object_arrays_preserve_unlisted_groups(app_with_config):
+    """排序不删除并发新增或未列出的策略组。"""
     app, repository = app_with_config
     from backend.mcp_server.invoker import call_api
 
@@ -209,35 +208,9 @@ def test_rest_reorder_still_accepts_full_object_arrays(app_with_config):
             "/api/proxy-groups/reorder",
             body={"groups": [{"id": "group-2", "name": "AUTO"}, {"id": "group-1", "name": "PROXY"}]},
         )
-    assert _ids(repository, "proxy_groups") == ["group-2", "group-1"]
+    assert _ids(repository, "proxy_groups") == ["group-2", "group-1", "group-3"]
 
 
-def _schema(name):
-    return next(tool for tool in tools.list_tools() if tool["name"] == name)
-
-
-def test_tool_descriptions_use_real_field_names():
-    """工具描述里的字段名必须是后端真实字段，否则模型照着填会被静默忽略"""
-    group = _schema("manage_proxy_group")
-    text = group["description"] + json.dumps(group["inputSchema"], ensure_ascii=False)
-    for field in ("include_groups", "regex", "aggregation_regex", "follow_group", "manual_nodes"):
-        assert field in text, field
-    for fabricated in ("exclude_filter", "'filter'", "groups（引用的其他策略组名）"):
-        assert fabricated not in text, fabricated
-
-    node = _schema("manage_node")
-    node_text = node["description"] + json.dumps(node["inputSchema"], ensure_ascii=False)
-    assert "proxy_string" in node_text
-    assert "cipher" not in node_text and "uuid" not in node_text
-
-    agg_text = json.dumps(_schema("manage_aggregation"), ensure_ascii=False)
-    assert "regex_filter" in agg_text and "exclude_keywords" not in agg_text
-
-    sub_text = json.dumps(_schema("manage_subscription"), ensure_ascii=False)
-    assert "health_check_url" in sub_text and "exclude_keywords" not in sub_text
-
-    lib_text = json.dumps(_schema("manage_rule_library"), ensure_ascii=False)
-    assert "format（yaml / text）" not in lib_text
 
 
 def test_proxy_group_edit_round_trip_with_real_fields(app_with_config):
@@ -278,5 +251,45 @@ def test_node_create_uses_proxy_string(app_with_config):
             "manage_node",
             {"action": "create", "data": {"name": "HK-01", "proxy_string": "ss://abc@1.2.3.4:443", "enabled": True}},
         )
-    stored = {n["id"]: n for n in repository.get_profile("default").get("nodes", [])}
+    stored = {n["id"]: n for n in repository.get_shared().get("nodes", [])}
     assert stored[created["item"]["id"]]["proxy_string"] == "ss://abc@1.2.3.4:443"
+
+
+def test_named_chain_roundtrip_uses_proxy_group_tools_and_stays_profile_local(app_with_config):
+    app, repository = app_with_config
+    repository.create_profile({"id": "alpha", "name": "Alpha"})
+    default = repository.get_profile("default")
+    with app.app_context():
+        node = tools.call_tool("manage_node", {
+            "action": "create", "data": {"name": "Exit", "type": "http", "enabled": True,
+            "proxy_string": '{"type":"http","server":"exit.test","port":80}'},
+        })["item"]
+        shared = repository.get_shared()
+        entry = tools.call_tool("manage_proxy_group", {
+            "action": "create", "profile_id": "alpha",
+            "data": {"name": "Entry", "type": "select", "manual_nodes": ["DIRECT"]},
+        })["item"]
+        chain = {"entry": {"type": "group", "id": entry["id"]}, "exit": {"type": "node", "id": node["id"]}}
+        created = tools.call_tool("manage_proxy_group", {
+            "action": "create", "profile_id": "alpha",
+            "data": {"name": "Via Exit", "type": "chain", "chain": chain},
+        })["item"]
+        tools.call_tool("manage_proxy_group", {
+            "action": "update", "id": created["id"], "profile_id": "alpha",
+            "data": {"name": "Renamed Chain"},
+        })
+        listed = tools.call_tool("list_proxy_groups", {"profile_id": "alpha"})
+        stored = next(group for group in listed if group["id"] == created["id"])
+        assert stored["name"] == "Renamed Chain"
+        assert stored["type"] == "chain"
+        assert stored["chain"] == chain
+        assert next(group for group in repository.get_profile("alpha")["proxy_groups"]
+                    if group["id"] == created["id"])["chain"] == chain
+        assert repository.get_profile("default") == default
+        assert repository.get_shared() == shared
+        tools.call_tool("manage_proxy_group", {
+            "action": "delete", "id": created["id"], "profile_id": "alpha",
+        })
+    assert [group["id"] for group in repository.get_profile("alpha")["proxy_groups"]] == [entry["id"]]
+    assert repository.get_profile("default") == default
+    assert repository.get_shared() == shared

@@ -79,8 +79,8 @@ def validate_token_or_jwt(request_obj, config=None):
 
     # 2. 检查 URL query token（用于外部客户端）
     if config is None:
-        from backend.common.config import config_data
-        config = config_data
+        from backend.common.config import get_system_config
+        config = get_system_config()
     system_config = config.get('system_config', {}) or {}
     config_token = system_config.get('config_token', '')
     rule_proxy_token = system_config.get('rule_proxy_token', '')

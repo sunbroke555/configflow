@@ -108,7 +108,7 @@ def test_require_auth_rejects_malformed_bearer(monkeypatch, authorization):
 
 def _mcp_app(monkeypatch, tmp_path, *, config_token=""):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"config_token": config_token}})
+    repository.save_system({"system_config": {"config_token": config_token}})
     config_module.set_repository(repository)
     monkeypatch.setattr("backend.mcp_server.auth.is_auth_enabled", lambda: True)
     app = Flask(__name__)

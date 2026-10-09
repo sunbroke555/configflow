@@ -33,7 +33,7 @@ MCP 服务与主应用同进程运行，不需要额外部署或额外端口。
 > ⚠️ **请注意配置令牌的权限范围**
 >
 > 配置令牌同时也是**订阅链接令牌** —— 「配置生成」页会把它拼进订阅 URL
-> （`.../api/config/mihomo?token=<配置令牌>`），你复制到 Mihomo / Surge 等客户端的
+> （`.../api/config/<profile_id>/mihomo?token=<配置令牌>`），你复制到 Mihomo / Surge 等客户端的
 > 那串链接里就带着它。
 >
 > 而 MCP 工具可以导出整份配置（含各订阅的明文地址）、重置系统、卸载 Agent、清空日志。
@@ -74,7 +74,15 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 ## 可用工具
 
 工具按功能域组织，读操作以 `list_` / `get_` 开头，写操作以 `manage_` 开头（通过 `action` 参数区分增删改）。
-所有工具都接受可选的 `profile_id`；留空时作用于 `default` profile（不跟随界面上激活的 profile）。
+独立配置工具接受 `profile_id`，省略使用 `default`，不跟随浏览器选择。共享订阅、节点、聚合、规则库、系统设置和全量备份始终是全局操作。策略组直接引用共享资源，不另设资源白名单。
+
+### 配置空间
+
+| 工具 | 说明 |
+|------|------|
+| `list_profiles` / `get_profile` | 查看配置列表与元数据 |
+| `manage_profile` / `clone_profile` | 创建、改名、删除或克隆；默认配置与绑定 Agent 的配置不能删除 |
+| `bind_agent_profile` | 将 Agent 绑定到指定配置；推送和拉取不受当前浏览器选择影响 |
 
 ### 订阅与节点
 
@@ -92,7 +100,7 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 
 | 工具 | 说明 |
 |------|------|
-| `list_rules` / `manage_rule` | 规则与规则集的查询与增删改（`position` 控制新规则放队首还是队尾） |
+| `list_rules` / `manage_rule` | 当前配置的规则编排；规则集提交 `library_rule_id` 和本配置目标，不复制共享来源字段 |
 | `batch_add_rules` | 按同一类型和策略批量添加规则 |
 | `test_rule_match` | 测试域名/IP 命中哪条规则、走哪个策略组 |
 | `find_duplicate_rules` | 扫描重复的规则条目 |
@@ -105,13 +113,15 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 
 | 工具 | 说明 |
 |------|------|
-| `list_proxy_groups` / `manage_proxy_group` | 策略组的查询与增删改 |
+| `list_proxy_groups` / `manage_proxy_group` | 策略组与命名代理链的查询、增删改；直接引用共享资源 ID |
 | `preview_proxy_group_regex` | 预览筛选正则会匹配到哪些节点 |
 | `preview_config` | 生成配置内容并返回，不写盘 |
 | `generate_config` | 生成配置并保存（MosDNS 为打包下载，不落盘） |
 | `manage_custom_config` | 读写自定义配置片段 |
-| `manage_config_backup` | 导出 / 导入 / 重置配置（`scope=profile` 时只作用于单个 profile） |
+| `manage_config_backup` | 默认 `scope=system` 导出/导入/重置整个系统；`scope=profile` 仅导入/导出资源引用与独立参数，不支持重置 |
 | `reorder_items` | 调整订阅 / 节点 / 规则 / 规则仓库 / 策略组的顺序 |
+
+`manage_proxy_group` 创建代理链示例：`{"action":"create","profile_id":"home","data":{"name":"经 A 的 B","type":"chain","chain":{"entry":{"type":"node","id":"a"},"exit":{"type":"node","id":"b"}}}}`。两端均可用 `{"type":"group","id":"group-id"}` 引用策略组；订阅和聚合通过组使用。前置沿用原组，落地生成独立链组；原节点和原组不变，链仅用于 Mihomo。
 
 ### MosDNS、Agent 与系统
 
@@ -130,10 +140,12 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 
 ## 使用要点
 
-- **改完配置记得生成**：修改订阅、规则或策略组后，需要调用 `generate_config` 才会写入 Mihomo / Surge 订阅链接对应的配置文件（MosDNS 订阅链接为实时生成，无需此步）。
+- **生成与订阅**：`preview_config` 用于预览，`generate_config` 用于显式生成；带配置 ID 的订阅接口按该配置生成，不跟随浏览器选择。
 - **更新是增量的**：`manage_*` 的 `update` 只需给出要改的字段，其余字段会自动保留。
 - **先看再改**：`preview_config`、`preview_proxy_group_regex`、`preview_aggregation` 都不会改动数据，适合在落盘前确认效果。
 - **顺序就是优先级**：规则列表顺序即匹配优先级，新建规则默认插在最前面；要调整顺序用 `reorder_items`（`ids` 里的条目按给定顺序整体移到最前或最后，其余保持原相对顺序）。
+- **完整备份**：MCP 返回会移除内部凭据；需恢复 Agent 等完整数据时，在「系统设置」下载全量备份。
+- **共享依赖**：引用中的共享资源不能删除；先调整相关配置或聚合，`409` 返回引用者。规则库更新会动态作用于引用者，但不改变各配置的策略目标和顺序。
 
 ## 对话示例
 
@@ -151,7 +163,7 @@ claude mcp add --transport http configflow http://<你的地址>/mcp \
 
 | 现象 | 原因与处理 |
 |------|-----------|
-| 客户端提示 401 | 未带凭证或凭证不对，检查配置令牌是否与「配置生成」页中一致 |
+| 客户端提示 401 | 未带凭证或凭证不对，检查是否与「系统设置」的全局令牌一致 |
 | 接入一段时间后开始 401 | 用的可能是 JWT（24 小时过期），改用配置令牌可长期有效 |
 | 客户端提示不支持的传输 | 本服务只支持 POST，请确认客户端使用的是 Streamable HTTP 而非 SSE |
 | 工具返回「调用失败」 | 属于业务失败（如 Agent 不在线、订阅地址不可达），错误信息中会带上原因 |

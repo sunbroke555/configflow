@@ -1,37 +1,17 @@
 <template>
-  <SectionCard class="mb-3" :padded="false" role="region" aria-label="配置健康">
-    <div class="flex items-center gap-4 px-5 pt-5 pb-4 max-md:px-4">
-      <!-- 健康度环：由下方各项的 ok 占比推导，不引入无法计算的指标 -->
-      <div class="relative grid size-16 shrink-0 place-items-center">
-        <svg viewBox="0 0 44 44" class="size-16 -rotate-90" aria-hidden="true">
-          <circle cx="22" cy="22" r="19" fill="none" stroke="var(--border)" stroke-width="4" />
-          <circle
-            cx="22"
-            cy="22"
-            r="19"
-            fill="none"
-            :stroke="ringColor"
-            stroke-width="4"
-            stroke-linecap="round"
-            :stroke-dasharray="CIRCUMFERENCE"
-            :stroke-dashoffset="CIRCUMFERENCE * (1 - score / 100)"
-            class="transition-[stroke-dashoffset] duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]"
-            :style="{ filter: `drop-shadow(0 0 6px ${ringColor})` }"
-          />
-        </svg>
-        <span class="absolute text-[15px] leading-none font-semibold tracking-[-0.02em] num text-foreground">
-          {{ score }}
-        </span>
-      </div>
-
-      <div class="min-w-0 flex-1">
-        <h2 class="m-0 text-[14px] font-semibold text-foreground">配置健康</h2>
-        <p class="mt-1 mb-0 text-[12px] text-muted-foreground">
-          {{ okCount }}/{{ rows.length }} 项正常
+  <SectionCard :padded="false" role="region" aria-label="配置健康" :aria-busy="loading">
+    <header class="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 pb-4 max-md:px-4">
+      <div>
+        <h2 class="m-0 text-sm font-semibold text-foreground">配置健康</h2>
+        <p class="mt-1 mb-0 text-[13px] text-muted-foreground">
+          <span class="tabular-nums">{{ okCount }} / {{ rows.length }}</span> 项正常
         </p>
-        <Badge :variant="overall.variant" class="mt-2">{{ overall.text }}</Badge>
+        <p class="mt-1 mb-0 text-xs text-muted-foreground">
+          健康评分 <span class="tabular-nums">{{ score }}</span>
+        </p>
       </div>
-    </div>
+      <Badge :variant="overall.variant">{{ overall.text }}</Badge>
+    </header>
 
     <Separator />
 
@@ -39,11 +19,11 @@
       <li
         v-for="row in rows"
         :key="row.label"
-        class="flex items-center gap-2.5 border-b border-border/50 py-2.5 last:border-b-0"
+        class="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-border py-3 last:border-b-0"
       >
-        <StatusDot :tone="toneOf(row.level)" :pulse="row.level === 'err'" />
-        <span class="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">{{ row.label }}</span>
-        <span class="num shrink-0 text-[13px] font-medium" :class="textTone(row.level)">
+        <StatusDot :tone="toneOf(row.level)" />
+        <span class="min-w-0 flex-1 text-[13px] text-muted-foreground">{{ row.label }}</span>
+        <span class="num ml-auto text-right text-[13px] font-medium" :class="textTone(row.level)">
           {{ row.value }}
         </span>
       </li>
@@ -51,11 +31,11 @@
 
     <Separator />
 
-    <footer class="flex items-center gap-2 px-5 py-2.5 max-md:px-4">
-      <span class="text-xs text-muted-foreground">上次检测 {{ checkedAt || '—' }}</span>
+    <footer class="flex flex-wrap items-center gap-2 px-5 py-3 max-md:px-4">
+      <span class="text-xs text-muted-foreground">上次检测 <span class="tabular-nums">{{ checkedAt || '—' }}</span></span>
       <Button variant="ghost" size="sm" class="ml-auto" :disabled="loading" @click="$emit('refresh')">
-        <RefreshCw class="size-3.5" :class="loading && 'animate-spin'" />
-        立即检测
+        <RefreshCw class="size-3.5" :class="loading && 'animate-spin motion-reduce:animate-none'" aria-hidden="true" />
+        {{ loading ? '检测中…' : '立即检测' }}
       </Button>
     </footer>
   </SectionCard>
@@ -86,12 +66,9 @@ const props = defineProps<{
 
 defineEmits<{ (e: 'refresh'): void }>()
 
-const CIRCUMFERENCE = 2 * Math.PI * 19
-
 const okCount = computed(() => props.rows.filter(r => r.level === 'ok').length)
 
-/* 健康度 = 正常项占比。warn 记半分，err 不计分，
- * 这样「有告警」与「有异常」不会得到同一个分数。 */
+// 正常项计一分，告警项计半分，异常项不计分。
 const score = computed(() => {
   if (!props.rows.length) return 0
   const points = props.rows.reduce(
@@ -107,14 +84,6 @@ const overall = computed(() => {
   if (props.rows.some(r => r.level === 'warn')) return { variant: 'warning' as const, text: '需关注' }
   return { variant: 'success' as const, text: '良好' }
 })
-
-const ringColor = computed(() =>
-  overall.value.text === '异常'
-    ? 'var(--destructive-accent)'
-    : overall.value.text === '需关注'
-      ? 'var(--warning-accent)'
-      : 'var(--success-accent)'
-)
 
 const toneOf = (level: HealthLevel) =>
   level === 'ok' ? ('success' as const) : level === 'warn' ? ('warning' as const) : ('danger' as const)

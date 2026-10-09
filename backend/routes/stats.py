@@ -1,14 +1,14 @@
 """统计数据路由"""
 from flask import jsonify
 from backend.routes import Blueprint
-from backend.common.config import get_config
+from backend.common.config import get_config, get_shared_config
 
 stats_bp = Blueprint('stats', __name__, url_prefix='/api/stats')
 
 
 def get_data_count(data_type):
     """获取各类数据的数量"""
-    config = get_config()
+    config = get_shared_config() if data_type in ('subscriptions', 'nodes') else get_config()
 
     if data_type == 'subscriptions':
         return len(config.get('subscriptions', []))

@@ -2,7 +2,7 @@
  * motion-v 动效预设：全站进出场语汇的唯一来源。
  *
  * 统一用 spring，避免不同页面各写一套时长导致节奏不一致。
- * 需要减少动效时由 CSS 的 prefers-reduced-motion 兜底（motion-v 自身也会遵循）。
+ * App 的 MotionConfig 跟随系统减少动效偏好；CSS 动效由 tokens.css 兜底。
  */
 export const SPRING = { type: 'spring', stiffness: 320, damping: 30, mass: 0.7 } as const
 export const SPRING_SOFT = { type: 'spring', stiffness: 200, damping: 26 } as const

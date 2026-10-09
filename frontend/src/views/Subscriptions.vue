@@ -1,11 +1,10 @@
 <template>
   <div :class="reorder.active.value && 'cf-reordering'">
-    <ScopeBanner scope="resource" :profile-name="cfProfileName" description="订阅源按配置空间隔离，切换配置空间会看到各自的列表" />
+    <ScopeBanner scope="resource" :profile-name="cfProfileName" description="所有配置共用这些订阅；可在当前配置的策略组中选择使用。" />
 
     <PageHeader
-      eyebrow="Resource"
       title="订阅来源"
-      description="订阅拉取后的节点进入本配置空间的节点库。"
+      description="添加订阅链接并更新节点。修改订阅会影响使用它的所有配置。"
     >
       <template #actions>
         <Button
@@ -18,7 +17,7 @@
           <RefreshCw v-else class="size-4" />
           批量更新
         </Button>
-        <Button class="shadow-glow" :disabled="reorder.active.value" @click="showAddDialog">
+        <Button :disabled="reorder.active.value" @click="showAddDialog">
           <Plus class="size-4" />
           添加订阅
         </Button>
@@ -31,7 +30,7 @@
           <SelectTrigger class="h-9 w-[132px] border-transparent bg-background/50 text-[13px]" aria-label="按状态筛选">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent class="glass-strong">
+          <SelectContent>
             <SelectItem value="all">全部状态</SelectItem>
             <SelectItem value="enabled">已启用</SelectItem>
             <SelectItem value="disabled">已停用</SelectItem>
@@ -66,7 +65,7 @@
     />
 
     <SectionCard v-if="visibleSubscriptions.length === 0" :padded="false">
-      <EmptyState :icon="Link2" title="没有匹配的订阅" :description="emptyText">
+      <EmptyState :icon="Link2" :title="subscriptions.length ? '没有匹配的订阅' : '还没有订阅来源'" :description="emptyText">
         <Button @click="showAddDialog">
           <Plus class="size-4" />
           添加订阅
@@ -190,7 +189,7 @@
         :data-id="sub.id"
         data-reorder-item
         :class="cn(
-          'hairline edge-light relative overflow-hidden rounded-xl border border-border/35 bg-card/55 backdrop-blur-xl transition-all duration-300 hover:shadow-glow-soft',
+          'relative overflow-hidden rounded-xl border border-border bg-card transition-colors duration-200',
           !sub.enabled && 'opacity-60'
         )"
       >
@@ -267,10 +266,10 @@
 
     <!-- 添加/编辑对话框 -->
     <Dialog v-model:open="dialogVisible">
-      <DialogContent class="glass-strong hairline border-border/50 sm:max-w-[640px]" @pointer-down-outside.prevent>
+      <DialogContent class="sm:max-w-[640px]" @pointer-down-outside.prevent>
         <DialogHeader>
           <DialogTitle>{{ isEdit ? '编辑订阅' : '添加订阅' }}</DialogTitle>
-          <DialogDescription>配置订阅名称、链接与同步策略以保持节点数据最新</DialogDescription>
+          <DialogDescription>填写订阅名称和链接，设置节点更新间隔。</DialogDescription>
         </DialogHeader>
 
         <div class="grid gap-4">
@@ -285,7 +284,7 @@
                 <SelectTrigger id="sub-type" class="w-full bg-background/50">
                   <SelectValue placeholder="请选择订阅类型" />
                 </SelectTrigger>
-                <SelectContent class="glass-strong">
+                <SelectContent>
                   <SelectItem value="universal">通用</SelectItem>
                   <SelectItem value="mihomo">Mihomo</SelectItem>
                   <SelectItem value="surge">Surge</SelectItem>
@@ -324,7 +323,7 @@
               placeholder="留空使用默认（http://www.gstatic.com/generate_204）"
             />
             <p class="m-0 text-xs text-muted-foreground">
-              回家 / 内网订阅从国内出网，境外地址会被误判为失活，建议填 http://www.baidu.com
+              回家或内网节点若无法访问境外测试地址，可能被误判为不可用；建议填 http://www.baidu.com。
             </p>
           </div>
 
@@ -345,7 +344,7 @@
 
     <!-- 节点预览对话框 -->
     <Dialog v-model:open="nodesPreviewVisible">
-      <DialogContent class="glass-strong hairline border-border/50 sm:max-w-[800px]">
+      <DialogContent class="sm:max-w-[800px]">
         <DialogHeader>
           <DialogTitle>节点预览</DialogTitle>
           <DialogDescription>共 {{ previewNodes.length }} 个节点</DialogDescription>
@@ -630,7 +629,7 @@ const checkSubStoreUrl = async (): Promise<boolean> => {
     const url = response.data?.sub_store_url || ''
     if (!url) {
       return await confirm(
-        '尚未配置 Sub-Store URL，订阅解析和节点格式转换功能将不可用。请前往「配置生成」页面配置 Sub-Store 地址。',
+        '尚未配置 Sub-Store URL，订阅解析和节点格式转换功能将不可用。请前往「系统设置」页面配置 Sub-Store 地址。',
         { title: '未配置 Sub-Store', confirmText: '继续添加' }
       )
     }
@@ -666,6 +665,10 @@ const INTERVAL_MIN = 60
 const INTERVAL_MAX = 604800
 
 const saveSubscription = async () => {
+  if (!form.value.name?.trim() || !form.value.url?.trim()) {
+    notify.warning('请输入订阅名称和链接')
+    return
+  }
   // 原生 number 输入不像 el-input-number 那样钳制越界值，也允许留空，
   // 这里在提交前兜底，避免把越界值或空串写进订阅配置
   const interval = Number(form.value.interval)
@@ -691,7 +694,7 @@ const saveSubscription = async () => {
 }
 
 const deleteSubscription = async (row: Subscription) => {
-  const ok = await confirmDanger('确定要删除该订阅吗？删除后将同步清理策略组中对该订阅的引用。', {
+  const ok = await confirmDanger('确定删除该订阅吗？如果仍被配置或聚合使用，或仍保留从该订阅获取的节点，将无法删除。请先取消相关使用，并移除该订阅已获取的节点。删除后无法恢复。', {
     title: '删除订阅'
   })
   if (!ok) return
@@ -720,7 +723,7 @@ const deleteSubscription = async (row: Subscription) => {
     }
 
     if (updatedCount > 0) {
-      notify.success(`删除成功，已同步清理 ${updatedCount} 个策略组中的引用`)
+      notify.success('订阅已删除')
     } else {
       notify.success('删除成功')
     }
@@ -938,7 +941,7 @@ const visibleSubscriptions = computed(() => {
 })
 
 const emptyText = computed(() =>
-  subscriptions.value.length === 0 ? '还没有订阅来源' : '没有匹配的订阅'
+  subscriptions.value.length === 0 ? '添加订阅链接后，即可在各配置的策略组中选择使用。' : '试试其他关键词，或调整状态筛选。'
 )
 
 const dotTone = (sub: Subscription): string => {
@@ -951,7 +954,7 @@ const dotTone = (sub: Subscription): string => {
 const handleSaveOrder = async () => {
   try {
     await reorder.save()
-    notify.success('顺序已保存，所有配置空间生效')
+    notify.success('顺序已保存，对所有配置生效')
   } catch (error) {
     notify.error('保存顺序失败，顺序已还原')
   }

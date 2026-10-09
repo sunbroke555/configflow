@@ -1,6 +1,6 @@
 <template>
-  <div class="space-y-2 p-4">
-    <Skeleton v-for="i in rows" :key="i" class="h-11 w-full rounded-lg" :style="{ opacity: 1 - i * 0.08 }" />
+  <div class="space-y-2 p-4" role="status" aria-label="正在加载">
+    <Skeleton v-for="i in rows" :key="i" class="h-11 w-full rounded-lg motion-reduce:animate-none" />
   </div>
 </template>
 

@@ -3,7 +3,6 @@ import os
 import json
 import copy
 from contextvars import ContextVar
-from collections.abc import MutableMapping, Iterator
 from typing import Callable, Dict, Any, Optional
 
 from backend.common.utils import get_local_ip
@@ -123,34 +122,6 @@ def reset_config_context() -> None:
     _CONFIG_BASELINES.set(None)
 
 
-class ProfileConfigProxy(MutableMapping[str, Any]):
-    """Compatibility mapping resolved to the current request profile."""
-
-    def _data(self) -> Dict[str, Any]:
-        return get_config()
-
-    def __getitem__(self, key: str) -> Any:
-        return self._data()[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self._data()[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self._data()[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._data())
-
-    def __len__(self) -> int:
-        return len(self._data())
-
-    def __deepcopy__(self, memo: Dict[int, Any]) -> Dict[str, Any]:
-        return copy.deepcopy(self._data(), memo)
-
-
-config_data = ProfileConfigProxy()
-
-
 def get_config(profile_id: Optional[str] = None) -> Dict[str, Any]:
     """Get a request-scoped compatibility view of a profile."""
     from backend.common.profile_context import resolve_profile_id
@@ -167,70 +138,34 @@ def get_config(profile_id: Optional[str] = None) -> Dict[str, Any]:
     return cache[resolved_id]
 
 
-def load_config() -> Dict[str, Any]:
-    """Initialize storage and normalize the active profile."""
-    import uuid
+def get_resource_config(kind, resource_id=None, profile_id=None):
+    """Resolve an explicit shared-resource request without persisting selection."""
     from backend.common.profile_context import resolve_profile_id
+    return get_repository().get_compat_config(resolve_profile_id(profile_id),
+        resource_roots={kind: [resource_id] if resource_id is not None else None})
 
+
+def load_config() -> Dict[str, Any]:
+    """Initialize global settings without silently rewriting resource references."""
+    reset_config_context()
     repository = get_repository()
-    _CONFIG_CACHE.set({})
-    active_id = resolve_profile_id()
-    data = get_config(active_id)
-    changed = False
-    for node in data.get('nodes', []):
-        if 'id' not in node:
-            node['id'] = f"node_{uuid.uuid4().hex[:8]}"
-            changed = True
-    if clean_invalid_aggregation_references():
-        changed = True
-    if clean_invalid_proxy_group_aggregations():
-        changed = True
-    if not data.get('system_config', {}).get('server_domain', '').strip():
-        data.setdefault('system_config', {})['server_domain'] = f"http://{get_local_ip()}:5001"
-        changed = True
-    if changed:
-        save_config(data, active_id)
-
+    if not repository.get_system()['system_config'].get('server_domain', '').strip():
+        repository.update_system_transaction(
+            lambda system: system['system_config'].update(server_domain=f'http://{get_local_ip()}:5001'))
     from backend.common.agent_manager import init_agent_manager
     init_agent_manager()
-    return data
+    return get_config()
 
 
 def save_config(config: Optional[Dict[str, Any]] = None, profile_id: Optional[str] = None) -> bool:
-    """Persist a profile while retaining the legacy call signature."""
+    """Save only independent profile fields from an explicit/request snapshot."""
     from backend.common.profile_context import resolve_profile_id
-
     resolved_id = resolve_profile_id(profile_id)
     if config is None:
         config = get_config(resolved_id)
-    repository = get_repository()
-    baseline = (_CONFIG_BASELINES.get() or {}).get(resolved_id, {})
-    profile_changes = {
-        key: value for key, value in config.items()
-        if key in repository.PROFILE_FIELDS and baseline.get(key) != value
-    }
-    if profile_changes:
-        repository.update_profile_fields(
-            resolved_id,
-            profile_changes,
-            baseline={key: baseline.get(key) for key in profile_changes},
-        )
-    system_changes = {
-        key: config[key] for key in ("system_config", "backup")
-        if key in config and baseline.get(key) != config[key]
-    }
-    if system_changes:
-        def update_system(system):
-            for key, value in system_changes.items():
-                if isinstance(system.get(key), dict) and isinstance(value, dict):
-                    system[key] = _deep_merge(system[key], value)
-                else:
-                    system[key] = copy.deepcopy(value)
-        repository.update_system_transaction(update_system)
-    _cache()[resolved_id] = copy.deepcopy(config)
-    baselines = _CONFIG_BASELINES.get()
-    if baselines is not None:
-        baselines[resolved_id] = copy.deepcopy(config)
+    baseline = (_CONFIG_BASELINES.get() or {}).get(resolved_id)
+    get_repository().save_profile(resolved_id, config, baseline=baseline)
+    reset_config_context()
     return True
 
 
@@ -268,96 +203,50 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 
 
 def safe_import_config(new_data: Dict[str, Any], profile_id: Optional[str] = None) -> None:
-    """Safely import a legacy/full configuration into one profile."""
-    repository = get_repository()
-    profile_data = {
-        key: value for key, value in new_data.items()
-        if key not in repository.SYSTEM_FIELDS
-    }
-    merged = _deep_merge(get_config(profile_id), profile_data)
-    save_config(merged, profile_id)
+    """Import independent profile parameters, never shared source copies."""
+    from backend.common.profile_context import resolve_profile_id
+    get_repository().import_profile(resolve_profile_id(profile_id), new_data)
+    reset_config_context()
 
 
-def clean_invalid_aggregation_references():
-    """清理聚合中所有无效的订阅和节点引用（不存在或已禁用的），如果聚合变空则禁用"""
-    aggregations = config_data.get('subscription_aggregations', [])
-    if not aggregations:
-        return False
-
-    # 获取所有启用的订阅和节点的 ID
-    enabled_subscription_ids = {
-        sub['id'] for sub in config_data.get('subscriptions', [])
-        if sub.get('enabled', True)
-    }
-    enabled_node_ids = {
-        node['id'] for node in config_data.get('nodes', [])
-        if node.get('enabled', True)
-    }
-    enabled_node_ids.update(['DIRECT', 'REJECT'])  # 添加特殊值
-
-    config_changed = False
-
-    for agg in aggregations:
-        original_subs = set(agg.get('subscriptions', []))
-        original_nodes = set(agg.get('nodes', []))
-
-        # 过滤掉无效的订阅引用
-        valid_subs = [
-            sub_id for sub_id in agg.get('subscriptions', [])
-            if sub_id in enabled_subscription_ids
-        ]
-
-        # 过滤掉无效的节点引用
-        valid_nodes = [
-            node_id for node_id in agg.get('nodes', [])
-            if node_id in enabled_node_ids
-        ]
-
-        # 如果有变化，更新聚合
-        if set(valid_subs) != original_subs or set(valid_nodes) != original_nodes:
-            agg['subscriptions'] = valid_subs
-            agg['nodes'] = valid_nodes
-            config_changed = True
-
-        # 如果聚合变空（既没有订阅也没有节点），禁用该聚合
-        if not valid_subs and not valid_nodes:
-            if agg.get('enabled', True):
-                agg['enabled'] = False
-                config_changed = True
-
-    return config_changed
 
 
-def clean_invalid_proxy_group_aggregations():
-    """清理策略组中所有无效的聚合引用（不存在或已禁用的）"""
-    proxy_groups = config_data.get('proxy_groups', [])
-    if not proxy_groups:
-        return False
 
-    # 获取所有启用的聚合 ID
-    enabled_aggregation_ids = {
-        agg['id'] for agg in config_data.get('subscription_aggregations', [])
-        if agg.get('enabled', True)
-    }
 
-    config_changed = False
+def get_shared_config() -> Dict[str, Any]:
+    result = get_repository().get_shared()
+    baselines = dict(_CONFIG_BASELINES.get() or {})
+    baselines['@shared'] = copy.deepcopy(result)
+    _CONFIG_BASELINES.set(baselines)
+    return result
 
-    for group in proxy_groups:
-        aggregation_ids = group.get('aggregations', [])
-        if not aggregation_ids:
-            continue
 
-        original_count = len(aggregation_ids)
+def save_shared_config(config: Dict[str, Any], baseline=None) -> bool:
+    if baseline is None:
+        baseline = (_CONFIG_BASELINES.get() or {}).get('@shared')
+    get_repository().save_shared(config, baseline=baseline)
+    reset_config_context()
+    return True
 
-        # 过滤掉无效的聚合引用
-        valid_aggregation_ids = [
-            agg_id for agg_id in aggregation_ids
-            if agg_id in enabled_aggregation_ids
-        ]
 
-        # 如果有变化，更新策略组
-        if len(valid_aggregation_ids) != original_count:
-            group['aggregations'] = valid_aggregation_ids
-            config_changed = True
+def update_shared_config_transaction(updater) -> Dict[str, Any]:
+    result = get_repository().update_shared_transaction(updater)
+    reset_config_context()
+    return result
 
-    return config_changed
+
+def get_system_config() -> Dict[str, Any]:
+    """Return the global system section, including settings, backup and agents."""
+    result = get_repository().get_system()
+    baselines = dict(_CONFIG_BASELINES.get() or {})
+    baselines['@system'] = copy.deepcopy(result)
+    _CONFIG_BASELINES.set(baselines)
+    return result
+
+
+def save_system_config(config: Dict[str, Any], baseline=None) -> bool:
+    if baseline is None:
+        baseline = (_CONFIG_BASELINES.get() or {}).get('@system')
+    get_repository().save_system(config, baseline=baseline)
+    reset_config_context()
+    return True

@@ -25,12 +25,12 @@ def _initialize_repository_rounds_worker(data_dirs, barrier, results):
                 {
                     "round": round_index,
                     "ok": True,
-                    "profile": (repository.profile_dir("default") / "config.json").read_text(
+                    "profile": repository.path.read_text(
                         encoding="utf-8"
                     ),
-                    "system": repository.system_file.read_text(encoding="utf-8"),
+                    "system": repository.path.read_text(encoding="utf-8"),
                     "derived": (
-                        repository.profile_dir("default") / "rules" / "legacy.list"
+                        repository.shared_rules_dir() / "legacy.list"
                     ).read_text(encoding="utf-8"),
                 }
             )
@@ -45,11 +45,72 @@ def _initialize_repository_rounds_worker(data_dirs, barrier, results):
     results.put(rounds)
 
 
-def _hold_repository_lock_worker(lock_path, hold_seconds, ready):
+def _hold_repository_lock_worker(lock_path, hold_seconds, ready, release=None):
     repository = ProfileRepository.__new__(ProfileRepository)
     with repository._lock(Path(lock_path)):
         ready.set()
-        time.sleep(hold_seconds)
+        if release is None:
+            time.sleep(hold_seconds)
+        else:
+            assert release.wait(timeout=10), "parent did not release holder"
+
+
+def _synchronized_lock_contender_worker(
+    lock_path, results, ready, start, acquired, release, blocked=None
+):
+    repository = ProfileRepository.__new__(ProfileRepository)
+    ready.set()
+    assert start.wait(timeout=10), "parent did not start contender"
+    started = time.monotonic()
+    try:
+        identity = None
+        if blocked is not None:
+            # A real failed OS syscall proves contention, without replacing the
+            # repository's flock/retry implementation or inferring it from time.
+            import fcntl
+
+            with open(lock_path, "a+b") as probe:
+                stat = os.fstat(probe.fileno())
+                identity = (stat.st_dev, stat.st_ino)
+                try:
+                    fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    blocked.set()
+                else:
+                    fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                    raise AssertionError("holder did not exclude OS lock probe")
+        with repository._lock(Path(lock_path)):
+            elapsed = time.monotonic() - started
+            after_release = release.is_set()
+            acquired.set()
+        results.put({
+            "ok": True,
+            "elapsed": elapsed,
+            "after_release": after_release,
+            "identity": identity,
+        })
+    except BaseException as exc:  # pragma: no cover - parent reports exact failure
+        results.put({
+            "ok": False,
+            "elapsed": time.monotonic() - started,
+            "type": type(exc).__name__,
+            "error": str(exc),
+        })
+
+
+def _finish_lock_workers(workers, start, release, results):
+    # Release every gate even when an assertion/queue timeout fails. Never leave
+    # a blocked spawned worker behind to hang pytest or a subsequent test.
+    start.set()
+    release.set()
+    for worker in workers:
+        if worker.pid is not None:
+            worker.join(timeout=2)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=2)
+    results.close()
+    results.join_thread()
 
 
 def _acquire_repository_lock_worker(lock_path, results, raise_inside=False):
@@ -108,60 +169,97 @@ def test_windows_cross_process_lock_waits_beyond_msvcrt_implicit_retry_window(tm
 
 
 @pytest.mark.skipif(os.name == "nt", reason="exercises the POSIX flock retry path")
-def test_posix_cross_process_lock_waits_then_succeeds(tmp_path):
+@pytest.mark.parametrize("start_method", ["spawn", "fork"])
+def test_posix_cross_process_lock_waits_then_succeeds(tmp_path, start_method):
     lock_path = tmp_path / "posix-held.lock"
-    context = multiprocessing.get_context("spawn")
+    context = multiprocessing.get_context(start_method)
     ready = context.Event()
+    contender_ready = context.Event()
+    start = context.Event()
+    release = context.Event()
+    blocked = context.Event()
+    acquired = context.Event()
     results = context.Queue()
     holder = context.Process(
         target=_hold_repository_lock_worker,
-        args=(str(lock_path), 0.4, ready),
+        args=(str(lock_path), None, ready, release),
     )
     contender = context.Process(
-        target=_acquire_repository_lock_worker,
-        args=(str(lock_path), results),
+        target=_synchronized_lock_contender_worker,
+        args=(str(lock_path), results, contender_ready, start, acquired, release, blocked),
     )
 
-    holder.start()
-    assert ready.wait(timeout=10)
-    contender.start()
-    result = results.get(timeout=10)
-    contender.join(timeout=10)
-    holder.join(timeout=10)
+    try:
+        holder.start()
+        assert ready.wait(timeout=10)
+        stat = lock_path.stat()
+        contender.start()
+        assert contender_ready.wait(timeout=10)
+        start.set()
+        assert blocked.wait(timeout=5), "contender never observed real OS contention"
+        # Startup/import time cannot consume this interval: the holder remains
+        # gated until the contender's timer and actual EAGAIN have occurred.
+        assert not acquired.wait(timeout=0.4), "contender entered while holder owned lock"
+        release.set()
+        result = results.get(timeout=10)
+        contender.join(timeout=2)
+        holder.join(timeout=2)
 
-    assert holder.exitcode == contender.exitcode == 0
-    assert result["ok"], result
-    assert 0.2 <= result["elapsed"] < 5
+        assert holder.exitcode == contender.exitcode == 0
+        assert result["ok"], result
+        assert acquired.is_set()
+        assert result["after_release"], result
+        assert result["identity"] == (stat.st_dev, stat.st_ino)
+        assert 0.2 <= result["elapsed"] < 5
+    finally:
+        _finish_lock_workers((holder, contender), start, release, results)
 
 
-def test_cross_process_lock_timeout_is_short_configurable_and_path_safe(tmp_path, monkeypatch):
+@pytest.mark.parametrize("start_method", ["spawn"] if os.name == "nt" else ["spawn", "fork"])
+def test_cross_process_lock_timeout_is_short_configurable_and_path_safe(
+    tmp_path, monkeypatch, start_method
+):
     lock_path = tmp_path / "sensitive-profile-name.lock"
     monkeypatch.setenv("CONFIGFLOW_LOCK_TIMEOUT_SECONDS", "0.2")
-    context = multiprocessing.get_context("spawn")
+    context = multiprocessing.get_context(start_method)
     ready = context.Event()
+    contender_ready = context.Event()
+    start = context.Event()
+    release = context.Event()
+    acquired = context.Event()
     results = context.Queue()
     holder = context.Process(
         target=_hold_repository_lock_worker,
-        args=(str(lock_path), 1.0, ready),
+        args=(str(lock_path), None, ready, release),
     )
     contender = context.Process(
-        target=_acquire_repository_lock_worker,
-        args=(str(lock_path), results),
+        target=_synchronized_lock_contender_worker,
+        args=(str(lock_path), results, contender_ready, start, acquired, release),
     )
 
-    holder.start()
-    assert ready.wait(timeout=10)
-    contender.start()
-    result = results.get(timeout=10)
-    contender.join(timeout=10)
-    holder.join(timeout=10)
+    try:
+        holder.start()
+        assert ready.wait(timeout=10)
+        contender.start()
+        assert contender_ready.wait(timeout=10)
+        start.set()
+        # Keep ownership through the error, regardless of contender startup.
+        result = results.get(timeout=10)
+        contender.join(timeout=2)
+        assert not acquired.is_set()
+        assert holder.is_alive()
+        assert not release.is_set()
+        release.set()
+        holder.join(timeout=2)
 
-    assert holder.exitcode == contender.exitcode == 0
-    assert not result["ok"]
-    assert result["type"] == ProfileRepositoryError.__name__
-    assert 0.1 <= result["elapsed"] < 0.9
-    assert "Timed out waiting for profile repository lock" in result["error"]
-    assert str(lock_path) not in result["error"]
+        assert holder.exitcode == contender.exitcode == 0
+        assert not result["ok"]
+        assert result["type"] == ProfileRepositoryError.__name__
+        assert 0.1 <= result["elapsed"] < 0.9
+        assert "Timed out waiting for profile repository lock" in result["error"]
+        assert str(lock_path) not in result["error"]
+    finally:
+        _finish_lock_workers((holder, contender), start, release, results)
 
 
 @pytest.mark.parametrize("configured", ["-1", "0", "nan", "inf", "999999", "not-a-number"])
@@ -238,14 +336,17 @@ def test_thread_lock_remains_reentrant_for_same_thread(tmp_path):
 
 def test_repository_creates_isolated_default_profile(tmp_path):
     repository = ProfileRepository(tmp_path)
-
-    assert repository.list_profiles()[0]["id"] == "default"
-    assert repository.profile_dir("default") == tmp_path / "profiles" / "default"
-    assert (tmp_path / "profiles" / "default" / "config.json").exists()
-    assert (tmp_path / "profiles" / "default" / "subscribes").is_dir()
-    assert (tmp_path / "profiles" / "default" / "providers").is_dir()
-    assert (tmp_path / "profiles" / "default" / "rules").is_dir()
-    assert (tmp_path / "profiles" / "default" / "generated").is_dir()
+    assert repository.list_profiles()[0]['id'] == 'default'
+    assert repository.profile_dir('default') == tmp_path / 'profiles' / 'default'
+    assert repository.path == tmp_path / 'config.json'
+    assert repository.export_all()['schema_version'] == 5
+    assert not (tmp_path / 'system.json').exists()
+    assert not (repository.profile_dir('default') / 'config.json').exists()
+    profile = repository.get_profile('default')
+    assert profile['proxy_groups'] == []
+    assert 'resource_refs' not in profile
+    assert 'node_dialers' not in profile
+    assert repository.shared_cache_dir() == tmp_path / 'shared' / 'subscribes'
 
 
 def test_empty_data_directory_generates_and_atomically_persists_rule_proxy_token(tmp_path, monkeypatch):
@@ -255,9 +356,9 @@ def test_empty_data_directory_generates_and_atomically_persists_rule_proxy_token
 
     assert repository.get_system()["system_config"]["rule_proxy_token"] == "generated-default-token"
     assert repository.get_system()["system_config"].get("config_token", "") == ""
-    persisted = json.loads((tmp_path / "system.json").read_text(encoding="utf-8"))
-    assert persisted["system_config"]["rule_proxy_token"] == "generated-default-token"
-    assert not list(tmp_path.glob(".system.json.*.tmp"))
+    persisted = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert persisted["system"]["system_config"]["rule_proxy_token"] == "generated-default-token"
+    assert not list(tmp_path.glob(".config.json.*.tmp"))
 
 
 @pytest.mark.parametrize(
@@ -284,8 +385,8 @@ def test_legacy_missing_or_empty_rule_proxy_token_is_generated_and_persisted(
     assert repository.get_system()["system_config"]["rule_proxy_token"] == "generated-legacy-token"
     if legacy_system_config.get("config_token"):
         assert repository.get_system()["system_config"]["config_token"] == legacy_system_config["config_token"]
-    persisted = json.loads((tmp_path / "system.json").read_text(encoding="utf-8"))
-    assert persisted["system_config"]["rule_proxy_token"] == "generated-legacy-token"
+    persisted = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert persisted["system"]["system_config"]["rule_proxy_token"] == "generated-legacy-token"
 
 
 def test_new_repository_rotates_equal_factory_tokens(tmp_path, monkeypatch):
@@ -315,7 +416,7 @@ def test_new_repository_rotates_equal_factory_tokens(tmp_path, monkeypatch):
 
 def test_existing_nonempty_rule_proxy_token_is_preserved(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"rule_proxy_token": "keep-existing"}})
+    repository.update_system_transaction(lambda system: system["system_config"].update(rule_proxy_token="keep-existing"))
     monkeypatch.setattr(
         "backend.common.config_repository.secrets.token_urlsafe",
         lambda size: pytest.fail("must not replace an existing token"),
@@ -333,7 +434,9 @@ def test_restart_atomically_rotates_rule_proxy_token_equal_to_config_token(tmp_p
         "config_token": "shared-token",
         "rule_proxy_token": "shared-token",
     })
-    repository._write_system(system)
+    document = repository.export_all()
+    document["system"] = system
+    repository._write_json(repository.path, document)
     monkeypatch.setattr(
         "backend.common.config_repository.secrets.token_urlsafe",
         lambda size: "rotated-internal-token",
@@ -344,7 +447,7 @@ def test_restart_atomically_rotates_rule_proxy_token_equal_to_config_token(tmp_p
     system_config = restarted.get_system()["system_config"]
     assert system_config["config_token"] == "shared-token"
     assert system_config["rule_proxy_token"] == "rotated-internal-token"
-    assert json.loads((tmp_path / "system.json").read_text(encoding="utf-8"))["system_config"] == system_config
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["system"]["system_config"] == system_config
     assert restarted.rule_proxy_tokens_for_sanitization() == {
         "shared-token",
         "rotated-internal-token",
@@ -359,7 +462,7 @@ def test_restart_atomically_rotates_rule_proxy_token_equal_to_config_token(tmp_p
         assert restarted.get_system()["system_config"]["retired_rule_proxy_tokens"] == [
             "shared-token"
         ]
-    assert not list(tmp_path.glob(".system.json.*.tmp"))
+    assert not list(tmp_path.glob(".config.json.*.tmp"))
 
 
 def test_legacy_retired_rule_proxy_tokens_are_normalized_and_preserved(tmp_path):
@@ -406,8 +509,8 @@ def test_system_transaction_never_persists_equal_config_and_rule_proxy_tokens(tm
     )
 
     persisted_system_config = json.loads(
-        (tmp_path / "system.json").read_text(encoding="utf-8")
-    )["system_config"]
+        (tmp_path / "config.json").read_text(encoding="utf-8")
+    )["system"]["system_config"]
     assert persisted_system_config["config_token"] == internal_token
     assert persisted_system_config["rule_proxy_token"] == "transaction-rotated-token"
     assert repository.get_system()["system_config"] == persisted_system_config
@@ -423,7 +526,7 @@ def test_existing_nonempty_rule_proxy_token_is_preserved_across_restarts(
     original = ProfileRepository(tmp_path)
     system = original.get_system()
     system["system_config"]["rule_proxy_token"] = old_token
-    original._write_system(system)
+    original.save_system(system)
     monkeypatch.setattr(
         "backend.common.config_repository.secrets.token_urlsafe",
         lambda size: pytest.fail("must not replace any existing nonempty token"),
@@ -434,9 +537,9 @@ def test_existing_nonempty_rule_proxy_token_is_preserved_across_restarts(
         assert restarted.get_system()["system_config"]["rule_proxy_token"] == old_token
         assert restarted.rule_proxy_tokens_for_sanitization() == {old_token}
 
-    persisted = json.loads((tmp_path / "system.json").read_text(encoding="utf-8"))
-    assert persisted["system_config"]["rule_proxy_token"] == old_token
-    assert not list(tmp_path.glob(".system.json.*.tmp"))
+    persisted = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert persisted["system"]["system_config"]["rule_proxy_token"] == old_token
+    assert not list(tmp_path.glob(".config.json.*.tmp"))
 
 
 def test_profile_id_cannot_escape_profiles_directory(tmp_path):
@@ -457,7 +560,7 @@ def test_legacy_config_migrates_without_data_loss_and_is_idempotent(tmp_path):
     legacy = {
         "subscriptions": [{"id": "sub-1", "name": "legacy"}],
         "nodes": [{"id": "node-1", "name": "node"}],
-        "rule_configs": [{"id": "rule-1", "value": "example.com"}],
+        "rule_configs": [{"id": "rule-1", "itemType": "rule", "rule_type": "DOMAIN", "value": "example.com", "policy": "DIRECT"}],
         "proxy_groups": [],
         "rule_library": [],
         "system_config": {"server_domain": "https://config.example", "config_token": "keep"},
@@ -476,21 +579,21 @@ def test_legacy_config_migrates_without_data_loss_and_is_idempotent(tmp_path):
     first_profile = repository.get_profile("default")
     first_system = repository.get_system()
 
-    assert first_profile["subscriptions"] == legacy["subscriptions"]
+    assert repository.get_shared()["subscriptions"] == legacy["subscriptions"]
     assert first_profile["rule_configs"] == legacy["rule_configs"]
     assert first_system["agents"] == [{**legacy["agents"][0], "profile_id": "default"}]
     assert first_system["system_config"]["server_domain"] == "https://config.example"
     assert first_system["system_config"]["config_token"] == "keep"
     assert first_system["system_config"]["rule_proxy_token"]
     assert first_system["backup"] == legacy["backup"]
-    assert (tmp_path / "profiles" / "default" / "subscribes" / "sub-1.json").exists()
-    assert (tmp_path / "profiles" / "default" / "providers" / "agg.yaml").exists()
-    assert (tmp_path / "profiles" / "default" / "rules" / "legacy.list").exists()
+    assert (tmp_path / "shared" / "subscribes" / "sub-1.json").exists()
+    assert (tmp_path / "providers" / "agg.yaml").exists()
+    assert (tmp_path / "shared" / "rules" / "legacy.list").exists()
 
     second = ProfileRepository(tmp_path)
     assert second.get_profile("default") == first_profile
     assert second.get_system() == first_system
-    assert len(list((tmp_path / "migrations").glob("*/config.json"))) == 1
+    assert len(list((tmp_path / "migrations").glob("*/migration/config.json"))) == 1
 
 
 def test_legacy_initialization_is_serialized_across_processes_over_multiple_rounds(
@@ -540,118 +643,54 @@ def test_legacy_initialization_is_serialized_across_processes_over_multiple_roun
         assert first["profile"] == second["profile"]
         assert first["derived"] == second["derived"] == f"DOMAIN,round-{round_index}.example"
         assert first["system"] == second["system"]
-        assert len(list((data_dir / "migrations").glob("*/config.json"))) == 1
-        assert len(list(data_dir.glob("system.json"))) == 1
+        assert len(list((data_dir / "migrations").glob("*/migration/config.json"))) == 1
+        assert len(list(data_dir.glob("config.json"))) == 1
         assert not list((data_dir / "profiles").glob(".*staging*"))
         assert not list((data_dir / "profiles").glob(".*migration-backup*"))
 
 
 def test_legacy_migration_cleans_partial_derived_copy_and_retry_succeeds(tmp_path, monkeypatch):
-    legacy = {
-        "subscriptions": [{"id": "legacy-sub"}],
-        "system_config": {"config_token": "public-token"},
-    }
-    legacy_bytes = json.dumps(legacy).encode("utf-8")
-    (tmp_path / "config.json").write_bytes(legacy_bytes)
-    for dirname, filename, content in (
-        ("subscribes", "sub.json", "{}"),
-        ("providers", "provider.yaml", "proxies: []"),
-        ("rules", "legacy.list", "DOMAIN,example.com"),
-    ):
-        source_dir = tmp_path / dirname
-        source_dir.mkdir()
-        (source_dir / filename).write_text(content, encoding="utf-8")
-
-    original_copytree = shutil.copytree
-    copied = 0
-
-    def fail_midway(source, destination, *args, **kwargs):
-        nonlocal copied
-        result = original_copytree(source, destination, *args, **kwargs)
-        copied += 1
-        if copied == 2:
-            raise OSError("injected derived-data copy failure")
-        return result
-
-    monkeypatch.setattr("backend.common.config_repository.shutil.copytree", fail_midway)
-    with pytest.raises(OSError, match="injected derived-data copy failure"):
+    legacy = {'subscriptions': [{'id': 'legacy-sub'}], 'system_config': {'config_token': 'public-token'}}
+    legacy_bytes = json.dumps(legacy).encode()
+    (tmp_path / 'config.json').write_bytes(legacy_bytes)
+    (tmp_path / 'subscribes').mkdir()
+    (tmp_path / 'subscribes' / 'sub.json').write_text('{}')
+    original = shutil.copy2
+    def fail_cache(source, destination, *args, **kwargs):
+        if Path(source).name == 'sub.json':
+            raise OSError('injected derived-data copy failure')
+        return original(source, destination, *args, **kwargs)
+    monkeypatch.setattr('backend.common.config_repository.shutil.copy2', fail_cache)
+    with pytest.raises(OSError, match='injected derived-data copy failure'):
         ProfileRepository(tmp_path)
-
-    assert (tmp_path / "config.json").read_bytes() == legacy_bytes
-    assert not (tmp_path / "system.json").exists()
-    assert not (tmp_path / "profiles" / "default").exists()
-    assert not list((tmp_path / "profiles").glob(".*staging*"))
-
-    monkeypatch.setattr("backend.common.config_repository.shutil.copytree", original_copytree)
+    assert (tmp_path / 'config.json').read_bytes() == legacy_bytes
+    monkeypatch.setattr('backend.common.config_repository.shutil.copy2', original)
     repository = ProfileRepository(tmp_path)
-
-    assert repository.get_profile("default")["subscriptions"] == legacy["subscriptions"]
-    assert (repository.profile_dir("default") / "subscribes" / "sub.json").exists()
-    assert (repository.profile_dir("default") / "providers" / "provider.yaml").exists()
-    assert (repository.profile_dir("default") / "rules" / "legacy.list").exists()
-    assert repository.get_system()["system_config"]["config_token"] == "public-token"
-    assert not list((tmp_path / "profiles").glob(".*staging*"))
+    assert repository.get_shared()['subscriptions'] == legacy['subscriptions']
+    assert (repository.shared_cache_dir() / 'sub.json').exists()
 
 
-def test_legacy_migration_restores_preexisting_default_when_system_commit_fails(tmp_path, monkeypatch):
-    (tmp_path / "config.json").write_text(
-        json.dumps({"subscriptions": [{"id": "legacy"}]}),
-        encoding="utf-8",
-    )
-    previous_default = tmp_path / "profiles" / "default"
-    previous_default.mkdir(parents=True)
-    (previous_default / "config.json").write_bytes(b"previous-profile")
-    (previous_default / "keep.bin").write_bytes(b"previous-derived")
-    before = {
-        path.relative_to(previous_default).as_posix(): path.read_bytes()
-        for path in previous_default.rglob("*")
-        if path.is_file()
-    }
-    original_write_system = ProfileRepository._write_system
-
-    def fail_system_commit(self, system):
-        original_write_system(self, system)
-        raise OSError("injected system commit failure")
-
-    monkeypatch.setattr(ProfileRepository, "_write_system", fail_system_commit)
-    with pytest.raises(OSError, match="injected system commit failure"):
-        ProfileRepository(tmp_path)
-
-    after = {
-        path.relative_to(previous_default).as_posix(): path.read_bytes()
-        for path in previous_default.rglob("*")
-        if path.is_file()
-    }
-    assert after == before
-    assert not (tmp_path / "system.json").exists()
-    assert not list((tmp_path / "profiles").glob(".*migration-staging*"))
-    assert not list((tmp_path / "profiles").glob(".*migration-backup*"))
-
-    monkeypatch.setattr(ProfileRepository, "_write_system", original_write_system)
-    repository = ProfileRepository(tmp_path)
-    assert repository.get_profile("default")["subscriptions"] == [{"id": "legacy"}]
-    assert (tmp_path / "system.json").exists()
 
 
 def test_atomic_profile_save_keeps_previous_file_when_replace_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"subscriptions": [{"id": "old"}]})
-    config_path = repository.profile_dir("default") / "config.json"
+    repository.save_profile("default", {"proxy_groups": [{"id": "old", "name": "old"}]})
+    config_path = repository.path
 
     def fail_replace(source, target):
         raise OSError("replace failed")
 
     monkeypatch.setattr("backend.common.config_repository.os.replace", fail_replace)
     with pytest.raises(OSError):
-        repository.save_profile("default", {"subscriptions": [{"id": "new"}]})
+        repository.save_profile("default", {"proxy_groups": [{"id": "new", "name": "new"}]})
 
-    assert json.loads(config_path.read_text(encoding="utf-8"))["subscriptions"] == [{"id": "old"}]
+    assert json.loads(config_path.read_text(encoding="utf-8"))["profiles"]["default"]["proxy_groups"] == [{"id": "old", "name": "old"}]
 
 
 def test_partial_system_metadata_save_keeps_other_fields(tmp_path):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"config_token": "token"}})
-    repository.save_profile("default", {"system_config": {"server_domain": "http://configflow.test"}})
+    repository.update_system_transaction(lambda system: system["system_config"].update(config_token="token"))
+    repository.update_system_transaction(lambda system: system["system_config"].update(server_domain="http://configflow.test"))
 
     system_config = repository.get_system()["system_config"]
     assert system_config["rule_proxy_token"]
@@ -672,7 +711,7 @@ def test_concurrent_profile_saves_do_not_cross_contaminate(tmp_path):
     def save(profile_id, value):
         try:
             for _ in range(20):
-                repository.save_profile(profile_id, {"subscriptions": [{"id": value}]})
+                repository.save_profile(profile_id, {"proxy_groups": [{"id": value, "name": value}]})
         except Exception as exc:  # pragma: no cover - assertion below reports it
             failures.append(exc)
 
@@ -686,24 +725,18 @@ def test_concurrent_profile_saves_do_not_cross_contaminate(tmp_path):
         thread.join()
 
     assert not failures
-    assert repository.get_profile("alpha")["subscriptions"] == [{"id": "alpha"}]
-    assert repository.get_profile("beta")["subscriptions"] == [{"id": "beta"}]
+    assert repository.get_profile("alpha")["proxy_groups"] == [{"id": "alpha", "name": "alpha"}]
+    assert repository.get_profile("beta")["proxy_groups"] == [{"id": "beta", "name": "beta"}]
 
 
 def test_concurrent_profile_creation_preserves_system_index(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    original_write_system = repository._write_system
     barrier = threading.Barrier(2)
-
-    def delayed_write_system(system):
-        barrier.wait(timeout=5)
-        original_write_system(system)
-
-    monkeypatch.setattr(repository, "_write_system", delayed_write_system)
     failures = []
 
     def create(profile_id):
         try:
+            barrier.wait(timeout=5)
             repository.create_profile({"id": profile_id})
         except Exception as exc:
             failures.append(exc)
@@ -726,7 +759,7 @@ def test_profile_transaction_preserves_concurrent_list_updates(tmp_path):
         try:
             repository.update_profile_transaction(
                 "default",
-                lambda profile: profile["subscriptions"].append({"id": f"sub-{index}"}),
+                lambda profile: profile["proxy_groups"].append({"id": f"sub-{index}", "name": f"Group {index}"}),
             )
         except Exception as exc:  # pragma: no cover - assertion below reports it
             failures.append(exc)
@@ -738,15 +771,15 @@ def test_profile_transaction_preserves_concurrent_list_updates(tmp_path):
         worker.join(timeout=10)
 
     assert not failures
-    assert {item["id"] for item in repository.get_profile("default")["subscriptions"]} == {
+    assert {item["id"] for item in repository.get_profile("default")["proxy_groups"]} == {
         f"sub-{index}" for index in range(12)
     }
 
 
 def test_save_profile_rolls_back_profile_when_system_commit_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"subscriptions": [{"id": "old"}]})
-    system_path = repository.system_file
+    repository.save_profile("default", {"proxy_groups": [{"id": "old", "name": "old"}]})
+    system_path = repository.path
     original_write_json = repository._write_json
 
     def fail_system_commit(path, data):
@@ -756,15 +789,15 @@ def test_save_profile_rolls_back_profile_when_system_commit_fails(tmp_path, monk
 
     monkeypatch.setattr(repository, "_write_json", fail_system_commit)
     with pytest.raises(OSError, match="injected system commit failure"):
-        repository.save_profile("default", {"subscriptions": [{"id": "new"}]})
+        repository.save_profile("default", {"proxy_groups": [{"id": "new", "name": "new"}]})
 
-    assert repository.get_profile("default")["subscriptions"] == [{"id": "old"}]
+    assert repository.get_profile("default")["proxy_groups"] == [{"id": "old", "name": "old"}]
 
 
 def test_save_profile_rolls_back_system_when_commit_fails_after_replace(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     before = repository.get_system()
-    system_path = repository.system_file
+    system_path = repository.path
     original_write_json = repository._write_json
 
     def write_then_fail(path, data):
@@ -775,14 +808,14 @@ def test_save_profile_rolls_back_system_when_commit_fails_after_replace(tmp_path
 
     monkeypatch.setattr(repository, "_write_json", write_then_fail)
     with pytest.raises(OSError, match="injected post-replace failure"):
-        repository.save_profile("default", {"subscriptions": [{"id": "new"}]})
+        repository.save_profile("default", {"proxy_groups": [{"id": "new", "name": "new"}]})
 
     assert repository.get_system() == before
 
 
 def test_create_profile_cleans_directory_when_system_commit_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    system_path = repository.system_file
+    system_path = repository.path
     original_write_json = repository._write_json
 
     def fail_system_commit(path, data):
@@ -808,7 +841,7 @@ def test_create_profile_restores_preexisting_orphan_directory_on_commit_failure(
     original_write_json = repository._write_json
 
     def fail_system_commit(path, data):
-        if path == repository.system_file:
+        if path == repository.path:
             raise OSError("system commit failed")
         return original_write_json(path, data)
 
@@ -830,7 +863,7 @@ def test_delete_profile_serializes_with_in_flight_profile_write(tmp_path, monkey
     original_write_json = repository._write_json
 
     def blocked_profile_write(path, data):
-        if path == repository.profile_dir("deletable") / "config.json":
+        if path == repository.path:
             write_started.set()
             assert allow_write.wait(timeout=5)
         return original_write_json(path, data)
@@ -840,7 +873,7 @@ def test_delete_profile_serializes_with_in_flight_profile_write(tmp_path, monkey
 
     def write_profile():
         try:
-            repository.save_profile("deletable", {"subscriptions": [{"id": "write"}]})
+            repository.save_profile("deletable", {"proxy_groups": [{"id": "write", "name": "write"}]})
         except Exception as exc:  # pragma: no cover - assertion below reports it
             write_error.append(exc)
 
@@ -863,8 +896,8 @@ def test_delete_profile_serializes_with_in_flight_profile_write(tmp_path, monkey
 
 def test_update_profile_transaction_rolls_back_profile_when_system_commit_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"subscriptions": [{"id": "old"}]})
-    system_path = repository.system_file
+    repository.save_profile("default", {"proxy_groups": [{"id": "old", "name": "old"}]})
+    system_path = repository.path
     original_write_json = repository._write_json
 
     def fail_system_commit(path, data):
@@ -875,26 +908,23 @@ def test_update_profile_transaction_rolls_back_profile_when_system_commit_fails(
     monkeypatch.setattr(repository, "_write_json", fail_system_commit)
     with pytest.raises(OSError, match="system commit failed"):
         repository.update_profile_transaction(
-            "default", lambda profile: profile.update({"subscriptions": [{"id": "new"}]}),
+            "default", lambda profile: profile.update({"proxy_groups": [{"id": "new", "name": "new"}]}),
         )
 
-    assert repository.get_profile("default")["subscriptions"] == [{"id": "old"}]
+    assert repository.get_profile("default")["proxy_groups"] == [{"id": "old", "name": "old"}]
 
 
-def test_delete_profile_keeps_tombstone_when_post_commit_cleanup_fails(tmp_path, monkeypatch):
+def test_delete_profile_archives_derived_files_without_destroying_recovery_data(tmp_path):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "keep", "name": "Keep"})
+    repository.profile_dir("keep").mkdir()
     (repository.profile_dir("keep") / "important.txt").write_text("keep me", encoding="utf-8")
 
-    def fail_rmtree(path):
-        raise OSError("directory removal failed")
-
-    monkeypatch.setattr("backend.common.config_repository.shutil.rmtree", fail_rmtree)
     repository.delete_profile("keep")
 
     assert "keep" not in {profile["id"] for profile in repository.list_profiles()}
     assert not repository.profile_dir("keep").exists()
-    tombstones = list(repository.profiles_dir.glob(".keep.tombstone-*"))
+    tombstones = list(repository.migrations_dir.glob("deleted-keep-*"))
     assert len(tombstones) == 1
     assert (tombstones[0] / "important.txt").read_text(encoding="utf-8") == "keep me"
 
@@ -902,13 +932,14 @@ def test_delete_profile_keeps_tombstone_when_post_commit_cleanup_fails(tmp_path,
 def test_delete_profile_restores_directory_when_system_commit_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "keep", "name": "Keep"})
+    repository.profile_dir("keep").mkdir()
     marker = repository.profile_dir("keep") / "important.txt"
     marker.write_text("original", encoding="utf-8")
     before = repository.get_system()
     original_write_json = repository._write_json
 
     def fail_system_commit(path, data):
-        if path == repository.system_file:
+        if path == repository.path:
             raise OSError("system commit failed")
         return original_write_json(path, data)
 
@@ -918,7 +949,7 @@ def test_delete_profile_restores_directory_when_system_commit_fails(tmp_path, mo
 
     assert repository.get_system() == before
     assert marker.read_text(encoding="utf-8") == "original"
-    assert not list(repository.profiles_dir.glob(".keep.tombstone-*"))
+    assert not list(repository.migrations_dir.glob("deleted-keep-*"))
 
 
 def test_independent_repositories_merge_locked_field_and_list_updates(tmp_path):
@@ -936,7 +967,7 @@ def test_independent_repositories_merge_locked_field_and_list_updates(tmp_path):
     def append_item():
         try:
             second.update_profile_transaction(
-                "default", lambda profile: profile["subscriptions"].append({"id": "concurrent"}),
+                "default", lambda profile: profile["proxy_groups"].append({"id": "concurrent", "name": "concurrent"}),
             )
         except Exception as exc:
             failures.append(exc)
@@ -950,32 +981,32 @@ def test_independent_repositories_merge_locked_field_and_list_updates(tmp_path):
     assert not failures
     result = first.get_profile("default")
     assert result["mihomo"]["custom_config"] == "field"
-    assert result["subscriptions"] == [{"id": "concurrent"}]
+    assert result["proxy_groups"] == [{"id": "concurrent", "name": "concurrent"}]
 
 
 def test_update_profile_fields_three_way_merges_stale_list_appends(tmp_path):
     first = ProfileRepository(tmp_path)
     second = ProfileRepository(tmp_path)
-    first.save_profile("default", {"subscriptions": [{"id": "existing"}]})
+    first.save_profile("default", {"proxy_groups": [{"id": "existing", "name": "existing"}]})
 
     first_baseline = first.get_profile("default")
     second_baseline = second.get_profile("default")
-    first_value = first_baseline["subscriptions"] + [{"id": "from-first"}]
-    second_value = second_baseline["subscriptions"] + [{"id": "from-second"}]
+    first_value = first_baseline["proxy_groups"] + [{"id": "from-first", "name": "from-first"}]
+    second_value = second_baseline["proxy_groups"] + [{"id": "from-second", "name": "from-second"}]
 
     first.update_profile_fields(
         "default",
-        {"subscriptions": first_value},
-        baseline={"subscriptions": first_baseline["subscriptions"]},
+        {"proxy_groups": first_value},
+        baseline={"proxy_groups": first_baseline["proxy_groups"]},
     )
     second.update_profile_fields(
         "default",
-        {"subscriptions": second_value},
-        baseline={"subscriptions": second_baseline["subscriptions"]},
+        {"proxy_groups": second_value},
+        baseline={"proxy_groups": second_baseline["proxy_groups"]},
     )
 
-    assert first.get_profile("default")["subscriptions"] == [
-        {"id": "existing"},
-        {"id": "from-first"},
-        {"id": "from-second"},
+    assert first.get_profile("default")["proxy_groups"] == [
+        {"id": "existing", "name": "existing"},
+        {"id": "from-first", "name": "from-first"},
+        {"id": "from-second", "name": "from-second"},
     ]

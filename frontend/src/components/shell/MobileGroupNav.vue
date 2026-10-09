@@ -3,7 +3,7 @@
        仅移动端出现；桌面由左侧 rail 承担分组导航。 -->
   <nav
     v-if="items.length > 1"
-    class="-mx-4 mb-4 hidden gap-2 overflow-x-auto px-4 [scrollbar-width:none] [scroll-snap-type:x_proximity] [&::-webkit-scrollbar]:hidden max-[900px]:flex"
+    class="-mx-4 mb-5 hidden gap-2 overflow-x-auto px-4 py-1 [scroll-snap-type:x_proximity] max-[900px]:flex"
     aria-label="分组内页面"
   >
     <router-link
@@ -11,10 +11,10 @@
       :key="item.path"
       :to="item.path"
       :class="cn(
-        'relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] font-medium whitespace-nowrap no-underline [scroll-snap-align:start] transition-colors duration-200',
+        'relative inline-flex min-h-11 shrink-0 items-center gap-2 rounded-lg border px-3.5 text-[13px] font-medium whitespace-nowrap no-underline [scroll-snap-align:start] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
         activePath === item.path
-          ? 'border-primary-accent/40 bg-primary-soft/60 text-foreground shadow-glow-soft'
-          : 'border-border/60 bg-card/50 text-muted-foreground'
+          ? 'border-primary-accent/30 bg-primary-soft text-primary-accent'
+          : 'border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground'
       )"
       :aria-current="activePath === item.path ? 'page' : undefined"
     >

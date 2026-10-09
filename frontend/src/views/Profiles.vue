@@ -1,16 +1,15 @@
 <template>
   <div>
     <PageHeader
-      eyebrow="System"
       title="配置空间"
-      description="新建、克隆、导入导出与切换配置空间。每个配置空间拥有独立的订阅、策略与生成结果。"
+      description="为家庭、办公等场景分别设置策略和规则，再生成配置。资源由所有配置空间共用，修改资源会影响使用它的所有配置。此处导入导出单个配置的设置和资源选择；备份全部数据请前往系统设置。"
     >
       <template #actions>
         <Button variant="outline" class="border-border/60 bg-background/40" @click="pickImportFile">
           <Upload class="size-4" />
           导入到当前
         </Button>
-        <Button class="shadow-glow" @click="openCreate">
+        <Button @click="openCreate">
           <Plus class="size-4" />
           新建配置空间
         </Button>
@@ -24,7 +23,7 @@
       <EmptyState
         :icon="Boxes"
         title="还没有配置空间"
-        description="配置空间用于隔离不同场景的订阅与策略，先创建一个开始使用。"
+        description="先创建一个配置空间，为家庭或办公等场景选择资源、设置策略和规则。"
       >
         <Button @click="openCreate">
           <Plus class="size-4" />
@@ -39,10 +38,10 @@
         :key="profile.id"
         v-bind="listItem(index)"
         :class="[
-          'hairline edge-light group relative flex flex-col gap-4 overflow-hidden rounded-xl border bg-card/55 p-5 backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:shadow-glow-soft',
+          'group relative flex flex-col gap-4 overflow-hidden rounded-xl border bg-card p-5 transition-colors duration-200',
           profile.id === activeProfileId
-            ? 'border-primary-accent/40 shadow-glow-soft'
-            : 'border-border/35'
+            ? 'border-primary-accent'
+            : 'border-border'
         ]"
       >
         <header class="flex items-start justify-between gap-3">
@@ -51,7 +50,7 @@
               class="relative grid size-10 shrink-0 place-items-center rounded-xl border border-border/50 bg-background/50 text-primary-accent"
             >
               <span
-                class="absolute inset-0 rounded-xl bg-linear-to-br from-primary/20 to-accent-2/10"
+                class="absolute inset-0 rounded-xl bg-primary-soft"
                 aria-hidden="true"
               />
               <Boxes class="relative size-5" :stroke-width="2" aria-hidden="true" />
@@ -72,15 +71,16 @@
           </Badge>
         </header>
 
-        <p class="m-0 min-h-10 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p class="m-0 min-h-10 break-words text-[12.5px] leading-relaxed text-muted-foreground">
           {{ profile.description || '暂无说明' }}
         </p>
 
-        <footer class="mt-auto flex items-center gap-2 border-0 border-t border-dashed border-border/50 pt-4">
+        <footer class="mt-auto flex flex-wrap items-center gap-2 border-0 border-t border-dashed border-border/50 pt-4">
           <Button
             v-if="profile.id !== activeProfileId"
             size="sm"
-            @click="activate(profile.id)"
+            :disabled="scopedRequests > 0"
+            @click="switchProfile(profile.id)"
           >
             <CircleCheck class="size-3.5" />
             使用
@@ -91,7 +91,7 @@
             <Button variant="ghost" size="icon-sm" title="编辑" aria-label="编辑" @click="openEdit(profile)">
               <Pencil class="size-4" />
             </Button>
-            <Button variant="ghost" size="icon-sm" title="克隆" aria-label="克隆" @click="clone(profile)">
+            <Button variant="ghost" size="icon-sm" title="创建副本" aria-label="创建副本" @click="clone(profile)">
               <Copy class="size-4" />
             </Button>
             <Button
@@ -120,11 +120,11 @@
     </div>
 
     <Dialog v-model:open="dialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[460px] border-border/50">
+      <DialogContent class="max-w-[460px]">
         <DialogHeader>
           <DialogTitle>{{ editingId ? '编辑配置空间' : '新建配置空间' }}</DialogTitle>
           <DialogDescription>
-            标识 ID 创建后不可修改，用于接口路径与生成文件命名。
+            为配置空间填写名称和说明。标识 ID 用于访问配置和命名生成文件，创建后不可修改。
           </DialogDescription>
         </DialogHeader>
 
@@ -205,7 +205,7 @@ import { listItem } from '@/lib/motion'
 import { useProfileStore, type Profile } from '@/stores/profile'
 
 const profileStore = useProfileStore()
-const { profiles, loading, activeProfileId, refreshProfiles, switchProfile } = profileStore
+const { profiles, loading, scopedRequests, activeProfileId, refreshProfiles, switchProfile } = profileStore
 const dialogVisible = ref(false)
 const saving = ref(false)
 const editingId = ref('')
@@ -252,33 +252,24 @@ const submit = async () => {
   }
 }
 
-const activate = async (profileId: string) => {
-  try {
-    await profileApi.activate(profileId)
-    switchProfile(profileId)
-    window.location.reload()
-  } catch (error: any) {
-    notify.error(error.response?.data?.message || '切换配置空间失败')
-  }
-}
 
 const clone = async (profile: Profile) => {
   const id = await prompt({
-    title: `克隆 ${profile.name}`,
-    description: '为副本指定一个新的标识 ID。',
+    title: `复制 ${profile.name}`,
+    description: '填写新副本的标识 ID。副本可单独设置策略和规则，资源仍与其他配置空间共用。',
     defaultValue: `${profile.id}-copy`,
-    confirmText: '克隆',
+    confirmText: '创建副本',
     validate: value =>
-      PROFILE_ID.test(value.trim()) ? '' : 'ID 只能包含字母、数字、下划线和短横线'
+      PROFILE_ID.test(value.trim()) ? '' : 'ID 须为 1–64 个字符，以字母或数字开头，仅含字母、数字、下划线和短横线'
   })
   if (id === null) return
 
   try {
     await profileApi.clone(profile.id, { id: id.trim(), name: `${profile.name} 副本` })
     await refreshProfiles()
-    notify.success('配置空间已克隆')
+    notify.success('配置空间副本已创建')
   } catch (error: any) {
-    notify.error(error.response?.data?.message || '配置空间克隆失败')
+    notify.error(error.response?.data?.message || '创建配置空间副本失败')
   }
 }
 
@@ -318,9 +309,10 @@ const importProfile = async (event: Event) => {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
+  const profileId = activeProfileId.value
   try {
     const data = JSON.parse(await file.text())
-    await profileApi.import(activeProfileId.value, data)
+    await profileApi.import(profileId, data)
     await refreshProfiles()
     notify.success('配置已导入当前配置空间')
   } catch (error: any) {

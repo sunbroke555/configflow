@@ -2,18 +2,16 @@
 import copy
 import os
 import requests
-from urllib.parse import urlparse
 from flask import request, jsonify, make_response
 from backend.routes import rules_bp as bp, rule_sets_bp as rule_sets_bp
 from backend.common.auth import require_auth
 from backend.common.config import (
-    config_data,
-    save_config,
     update_config_transaction,
     get_config,
     get_repository,
 )
-from backend.common.profile_context import profile_api_path, resolve_profile_id
+from backend.common.profile_context import resolve_profile_id
+from backend.common.config_repository import ProfileRepositoryError, ProfileValidationError
 from backend.utils.rule_matcher import parse_rule_line, match_query, is_valid_domain, is_valid_ip
 from backend.utils.reorder import reorder_by_ids
 from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
@@ -33,6 +31,7 @@ def attach_full_url_to_rules(rules: list) -> list:
         带有完整 URL 的规则列表副本
     """
     # 深拷贝，避免修改原始数据
+    config_data = get_config()
     rules_copy = copy.deepcopy(rules)
     server_domain = config_data.get('system_config', {}).get('server_domain', '').strip()
 
@@ -51,53 +50,20 @@ def attach_full_url_to_rules(rules: list) -> list:
     return rules_copy
 
 
-def normalize_rule_config_url(rule_item: dict) -> None:
-    """Normalize stored rule URLs when linked to the rule library."""
+def normalize_rule_config(rule_item: dict) -> None:
+    """Persist composition only; shared library owns every source field."""
+    from backend.common.config_repository import ProfileValidationError
     if not isinstance(rule_item, dict):
+        raise ProfileValidationError('规则请求必须是 JSON 对象')
+    rule_item.setdefault('itemType', 'rule' if 'rule_type' in rule_item else 'ruleset')
+    if rule_item['itemType'] != 'ruleset':
         return
-
-    library_rule_id = rule_item.get('library_rule_id')
-    if library_rule_id:
-        rule_library = config_data.get('rule_library', [])
-        library_rule = next((lr for lr in rule_library if lr.get('id') == library_rule_id), None)
-        if not library_rule:
-            return
-
-        source_type = library_rule.get('source_type', 'url')
-        if source_type == 'content':
-            rule_item['url'] = profile_api_path(
-                config_data,
-                f'/rule-library/content/{library_rule_id}',
-            )
-        else:
-            rule_item['url'] = library_rule.get('url', '')
-        return
-
-    url = rule_item.get('url', '') or ''
-    if not url:
-        return
-
-    server_domain = (config_data.get('system_config', {}).get('server_domain', '') or '').strip()
-    if not server_domain:
-        return
-
-    def _parse(value: str):
-        prefixed = value if '://' in value else f"http://{value}"
-        return urlparse(prefixed)
-
-    parsed_server = _parse(server_domain)
-    parsed_url = _parse(url)
-
-    if parsed_url.netloc and parsed_url.netloc == parsed_server.netloc:
-        server_path = parsed_server.path.rstrip('/')
-        rest_path = parsed_url.path
-        if server_path and rest_path.startswith(server_path):
-            rest_path = rest_path[len(server_path):]
-            if not rest_path.startswith('/'):
-                rest_path = '/' + rest_path
-
-        if rest_path.startswith('/api/rule-library/content/'):
-            rule_item['url'] = rest_path
+    library_id = rule_item.get('library_rule_id')
+    if not library_id or not any(item.get('id') == library_id
+                                 for item in get_config().get('rule_library', [])):
+        raise ProfileValidationError('规则集必须引用存在的共享规则库条目')
+    for field in ('name', 'url', 'content', 'source_type', 'behavior', 'format', 'base_url', 'library_enabled'):
+        rule_item.pop(field, None)
 
 
 @bp.route('', methods=['GET', 'POST'])
@@ -114,39 +80,42 @@ def handle_rules():
 
     elif request.method == 'POST':
         rule = request.json
-        # 确保有 itemType 字段
-        if 'itemType' not in rule:
-            rule['itemType'] = 'rule' if 'rule_type' in rule else 'ruleset'
-        normalize_rule_config_url(rule)
+        normalize_rule_config(rule)
         update_config_transaction(
             lambda profile: profile.setdefault('rule_configs', []).insert(0, rule)
         )
         return jsonify({'success': True, 'data': rule})
 
 
+def _mutate_rule(rule_id, item_type=None):
+    from werkzeug.exceptions import NotFound
+    payload = request.get_json() if request.method == 'PUT' else None
+    if request.method == 'PUT' and not isinstance(payload, dict):
+        raise ProfileValidationError('规则请求必须是 JSON 对象')
+    result = {}
+    def mutate(profile):
+        items = profile.setdefault('rule_configs', [])
+        original = next((item for item in items if item.get('id') == rule_id
+                         and (item_type is None or item.get('itemType') == item_type)), None)
+        if original is None:
+            raise NotFound('Rule not found')
+        if request.method == 'DELETE':
+            items.remove(original)
+            return
+        updated = {**original, **payload, 'id': rule_id}
+        if item_type:
+            updated['itemType'] = item_type
+        normalize_rule_config(updated)
+        items[items.index(original)] = updated
+        result.update(updated)
+    update_config_transaction(mutate)
+    return jsonify({'success': True, **({'data': result} if result else {})})
+
+
 @bp.route('/<rule_id>', methods=['DELETE', 'PUT'])
 @require_auth
 def handle_rule(rule_id):
-    """单个规则操作（规则或规则集）"""
-    rule_configs = config_data.get('rule_configs', [])
-
-    if request.method == 'DELETE':
-        config_data['rule_configs'] = [r for r in rule_configs if r['id'] != rule_id]
-        save_config()
-        return jsonify({'success': True})
-
-    elif request.method == 'PUT':
-        for i, r in enumerate(rule_configs):
-            if r['id'] == rule_id:
-                updated_rule = request.json
-                # 保留 itemType
-                if 'itemType' not in updated_rule and 'itemType' in r:
-                    updated_rule['itemType'] = r['itemType']
-                normalize_rule_config_url(updated_rule)
-                config_data['rule_configs'][i] = updated_rule
-                save_config()
-                return jsonify({'success': True, 'data': updated_rule})
-        return jsonify({'success': False, 'message': 'Rule not found'}), 404
+    return _mutate_rule(rule_id)
 
 
 @bp.route('/reorder', methods=['POST'])
@@ -157,43 +126,27 @@ def reorder_rules():
     按 id 排序时传 {'ids': [...], 'position': 'top'|'bottom'}；
     传完整 rule_configs 数组的旧格式仍然兼容。
     """
-    try:
-        # 检查请求体是否存在
-        if not request.json:
-            logger.warning("Reorder request with no JSON body")
-            return jsonify({'success': False, 'message': 'No request body provided'}), 400
-
-        body = request.json
-        ids = body.get('ids')
-
-        if ids is not None:
-            if not isinstance(ids, list):
-                logger.warning(f"Reorder request with invalid ids type: {type(ids)}")
-                return jsonify({'success': False, 'message': 'ids must be a list'}), 400
-            rule_configs, missing = reorder_by_ids(
-                config_data.get('rule_configs', []), ids, body.get('position', 'top')
-            )
-            if missing:
-                return jsonify({'success': False, 'message': f'以下规则 id 不存在: {missing}'}), 404
-        else:
-            rule_configs = body.get('rule_configs')
-
-            # 检查 rule_configs 是否存在且为列表
-            if rule_configs is None:
-                logger.warning("Reorder request with no rule_configs field")
-                return jsonify({'success': False, 'message': 'No rule_configs provided'}), 400
-
-            if not isinstance(rule_configs, list):
-                logger.warning(f"Reorder request with invalid rule_configs type: {type(rule_configs)}")
-                return jsonify({'success': False, 'message': 'rule_configs must be a list'}), 400
-
-        config_data['rule_configs'] = rule_configs
-        save_config()
-        logger.info(f"Successfully reordered {len(rule_configs)} rules")
-        return jsonify({'success': True, 'order': [r.get('id') for r in rule_configs]})
-    except Exception as e:
-        logger.error("Error reordering rules: %s", safe_exception_details(e))
-        return jsonify({'success': False, 'message': 'Error reordering rules'}), 500
+    from werkzeug.exceptions import NotFound
+    body = request.get_json()
+    if not isinstance(body, dict) or not body:
+        raise ProfileValidationError('No request body provided')
+    ids = body.get('ids')
+    if ids is None:
+        items = body.get('rule_configs')
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise ProfileValidationError('rule_configs must be a list')
+        ids = [item.get('id') for item in items]
+    if not isinstance(ids, list):
+        raise ProfileValidationError('ids must be a list')
+    order = []
+    def mutate(profile):
+        items, missing = reorder_by_ids(profile.get('rule_configs', []), ids, body.get('position', 'top'))
+        if missing:
+            raise NotFound(f'以下规则 id 不存在: {missing}')
+        profile['rule_configs'] = items
+        order.extend(item['id'] for item in items)
+    update_config_transaction(mutate)
+    return jsonify({'success': True, 'order': order})
 
 
 @bp.route('/batch', methods=['POST'])
@@ -205,25 +158,29 @@ def batch_add_rules():
     domains = data.get('domains', [])  # 域名列表
     policy = data.get('policy')
 
-    # 获取现有规则数量（只计算 itemType 为 'rule' 的项目）
-    rule_configs = config_data.get('rule_configs', [])
-    existing_rules_count = len([r for r in rule_configs if r.get('itemType') == 'rule'])
-
     new_rules = []
-    for domain in domains:
-        rule = {
-            'id': f"rule_{existing_rules_count + len(new_rules) + 1}",
-            'rule_type': rule_type,
-            'value': domain.strip(),
-            'policy': policy,
-            'enabled': True,
-            'itemType': 'rule'
-        }
-        new_rules.append(rule)
 
-    update_config_transaction(
-        lambda profile: profile.setdefault('rule_configs', []).__setitem__(slice(0, 0), new_rules)
-    )
+    def add_rules(profile):
+        # Allocate under the repository transaction lock; never renumber stored IDs.
+        rules = profile.setdefault('rule_configs', [])
+        used_ids = {r.get('id') for r in rules}
+        next_id = 1
+        for domain in domains:
+            while f'rule_{next_id}' in used_ids:
+                next_id += 1
+            rule_id = f'rule_{next_id}'
+            used_ids.add(rule_id)
+            new_rules.append({
+                'id': rule_id,
+                'rule_type': rule_type,
+                'value': domain.strip(),
+                'policy': policy,
+                'enabled': True,
+                'itemType': 'rule',
+            })
+        rules[0:0] = new_rules
+
+    update_config_transaction(add_rules)
     return jsonify({'success': True, 'count': len(new_rules), 'rules': new_rules})
 
 
@@ -246,6 +203,7 @@ def get_local_rule(name):
     from backend.utils.logger import get_logger
 
     logger = get_logger(__name__)
+    config_data = get_config()
 
     try:
         # 对规则名称进行清理，确保与文件名匹配
@@ -254,7 +212,7 @@ def get_local_rule(name):
         profile_id = resolve_profile_id()
         repository = get_repository()
         filename = f"{sanitize_rule_name(name)}.list"
-        filepath = repository.profile_path(profile_id, os.path.join('rules', filename))
+        filepath = os.path.join(get_rules_dir(), filename)
 
         logger.info(f"Requesting local rule: {name}, filepath: {filepath}")
 
@@ -292,11 +250,7 @@ def get_local_rule(name):
                 if response.status_code == 200:
                     logger.info(f"Successfully fetched latest data for rule '{name}'")
                     # 更新本地缓存
-                    repository.write_profile_text(
-                        profile_id,
-                        os.path.join('rules', filename),
-                        response.text,
-                    )
+                    repository.write_shared_text(os.path.join('rules', filename), response.text)
                     # 返回响应并添加 Content-Length 头
                     content = response.text.encode('utf-8')
                     resp = make_response(content, 200)
@@ -323,7 +277,7 @@ def get_local_rule(name):
             # 缓存文件不存在，尝试重新生成
             logger.warning(f"Cache file not found for rule '{name}', regenerating...")
             try:
-                save_rule_to_local(rule, profile_id=profile_id)
+                save_rule_to_local(rule)
                 if os.path.exists(filepath):
                     logger.info(f"Successfully regenerated cache for rule '{name}'")
                     with open(filepath, 'rb') as f:
@@ -358,6 +312,7 @@ def get_local_rule(name):
 @require_auth
 def handle_rule_sets():
     """规则集管理（使用 rule_configs 数组）"""
+    config_data = get_config()
     if request.method == 'GET':
         # 从 rule_configs 中筛选出规则集
         rule_configs = config_data.get('rule_configs', [])
@@ -370,7 +325,7 @@ def handle_rule_sets():
         rule_set = request.json
         # 确保有 itemType 字段
         rule_set['itemType'] = 'ruleset'
-        normalize_rule_config_url(rule_set)
+        normalize_rule_config(rule_set)
         update_config_transaction(
             lambda profile: profile.setdefault('rule_configs', []).insert(0, rule_set)
         )
@@ -380,43 +335,9 @@ def handle_rule_sets():
 @rule_sets_bp.route('/<rule_set_id>', methods=['DELETE', 'PUT'])
 @require_auth
 def handle_rule_set(rule_set_id):
-    """单个规则集操作（使用 rule_configs 数组）"""
-    rule_configs = config_data.get('rule_configs', [])
-
-    if request.method == 'DELETE':
-        # 从 rule_configs 中删除指定的规则集
-        config_data['rule_configs'] = [r for r in rule_configs if not (r.get('id') == rule_set_id and r.get('itemType') == 'ruleset')]
-        save_config()
-        return jsonify({'success': True})
-
-    elif request.method == 'PUT':
-        # 在 rule_configs 中更新指定的规则集
-        for i, r in enumerate(rule_configs):
-            if r.get('id') == rule_set_id and r.get('itemType') == 'ruleset':
-                updated_rule_set = request.json
-                # 确保保留 itemType
-                updated_rule_set['itemType'] = 'ruleset'
-                normalize_rule_config_url(updated_rule_set)
-                config_data['rule_configs'][i] = updated_rule_set
-                save_config()
-                return jsonify({'success': True, 'data': updated_rule_set})
-        return jsonify({'success': False, 'message': 'Rule set not found'}), 404
+    return _mutate_rule(rule_set_id, 'ruleset')
 
 
-@rule_sets_bp.route('/reorder', methods=['POST'])
-@require_auth
-def reorder_rule_sets():
-    """批量更新规则集顺序（已废弃，请使用 /api/rules/reorder）"""
-    # 注意：此接口已废弃，因为规则和规则集现在合并在 rule_configs 中统一排序
-    # 保留此接口仅为向后兼容
-    try:
-        return jsonify({
-            'success': False,
-            'message': 'This endpoint is deprecated. Please use /api/rules/reorder instead.'
-        }), 410
-    except Exception as e:
-        logger.error("Deprecated rule endpoint failed: %s", safe_exception_details(e))
-        return jsonify({'success': False, 'message': 'Deprecated rule endpoint failed'}), 500
 
 
 def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
@@ -430,6 +351,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
         规则集内容字符串，获取失败返回空字符串
     """
     import os
+    config_data = get_config()
 
     rule_content = ''
     rule_name = ''
@@ -445,7 +367,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
 
     if rule_name:
         filename = f"{sanitize_rule_name(rule_name)}.list"
-        filepath = str(repository.profile_path(profile_id, os.path.join('rules', filename)))
+        filepath = str(os.path.join(get_rules_dir(), filename))
 
     # 1. 优先尝试从本地缓存读取
     if filepath and os.path.exists(filepath):
@@ -478,11 +400,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
                         # 保存到本地缓存
                         if filepath:
                             try:
-                                repository.write_profile_text(
-                                    profile_id,
-                                    os.path.join('rules', filename),
-                                    rule_content,
-                                )
+                                repository.write_shared_text(os.path.join('rules', filename), rule_content)
                                 logger.info(f"Cached rule content to: {filepath}")
                             except Exception as cache_error:
                                 logger.warning(f"Failed to cache rule content to {filepath}: {cache_error}")
@@ -510,11 +428,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
                     # 保存到本地缓存
                     if filepath:
                         try:
-                            repository.write_profile_text(
-                                profile_id,
-                                os.path.join('rules', filename),
-                                rule_content,
-                            )
+                            repository.write_shared_text(os.path.join('rules', filename), rule_content)
                             logger.info(f"Cached rule content to: {filepath}")
                         except Exception as cache_error:
                             logger.warning(f"Failed to cache rule content to {filepath}: {cache_error}")
@@ -531,6 +445,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None) -> str:
 def match_test_rule():
     """规则索引 - 测试域名/IP匹配哪条规则（专业版功能）"""
     import time
+    config_data = get_config()
 
     # 记录开始时间
     start_time = time.time()
@@ -553,7 +468,7 @@ def match_test_rule():
         # 遍历规则，按顺序匹配
         for index, rule_item in enumerate(rule_configs, start=1):
             # 跳过禁用的规则
-            if not rule_item.get('enabled', True):
+            if not rule_item.get('enabled', True) or not rule_item.get('library_enabled', True):
                 continue
 
             item_type = rule_item.get('itemType', 'rule')
@@ -652,6 +567,7 @@ def match_test_rule():
 def find_duplicate_rules():
     """查找重复规则 - 检查直接规则与规则集内容中的重复条目"""
     import time
+    config_data = get_config()
 
     start_time = time.time()
 
@@ -675,7 +591,7 @@ def find_duplicate_rules():
 
         for index, rule_item in enumerate(rule_configs, start=1):
             # 跳过禁用的规则（与生成配置、规则索引行为一致）
-            if not rule_item.get('enabled', True):
+            if not rule_item.get('enabled', True) or not rule_item.get('library_enabled', True):
                 continue
 
             item_type = rule_item.get('itemType', 'rule')

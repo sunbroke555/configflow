@@ -10,6 +10,45 @@ from backend.utils.url_utils import safe_url_for_log
 # 获取当前模块的日志记录器
 logger = get_logger(__name__)
 
+class CustomConfigYAMLError(Exception):
+    """mihomo.custom_config 解析/校验失败。
+
+    生成路径在解析失败时抛此异常，上游 Flask 路由透传到 HTTP 500，
+    确保不会写 /data/config.yaml，保留上一份有效产物。
+    """
+
+
+def _default_mihomo_template() -> dict:
+    """首次初始化时的内嵌默认模板。
+
+    仅用于 mihomo.custom_config 字段从未设置过的场景；
+    解析失败时**不再** fallback 到这个模板，而是抛 CustomConfigYAMLError。
+    """
+    return {
+        'mixed-port': 7890,
+        'allow-lan': True,
+        'bind-address': '*',
+        'mode': 'rule',
+        'log-level': 'info',
+        'external-controller': '127.0.0.1:9090',
+        'dns': {
+            'enable': True,
+            'listen': '0.0.0.0:53',
+            'enhanced-mode': 'fake-ip',
+            'fake-ip-range': '198.18.0.1/16',
+            'nameserver': [
+                '223.5.5.5',
+                '119.29.29.29',
+            ],
+            'fallback': [
+                'https://1.1.1.1/dns-query',
+                'https://dns.google/dns-query',
+            ],
+        },
+    }
+
+
+
 
 class IndentDumper(yaml.Dumper):
     """自定义 YAML Dumper，增加列表项缩进"""
@@ -78,6 +117,8 @@ def split_rules_and_rulesets(config_data: Dict[str, Any]) -> tuple:
     rule_sets = []
 
     for item in all_rules:
+        if not item.get('enabled', True) or not item.get('library_enabled', True):
+            continue
         item_type = item.get('itemType', '')
         if item_type == 'rule':
             rules.append(item)
@@ -220,7 +261,7 @@ def sync_mosdns_hosts(mihomo_config: Dict[str, Any], config_data: Dict[str, Any]
 
 
 def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
-                           sync_lan_hosts: bool = False) -> str:
+                           sync_lan_hosts: bool = False, *, preflight_providers: bool = True) -> str:
     """生成 Mihomo YAML 配置
 
     Args:
@@ -229,6 +270,9 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
             配置保持 False，避免漫游设备在外网解析到内网 IP。
     """
 
+    from backend.utils.proxy_chains import lower_proxy_chains
+    logical_config = config_data
+    config_data = lower_proxy_chains(config_data)
     # 从合并数组中分离规则和规则集
     rules_list, rule_sets_list = split_rules_and_rulesets(config_data)
 
@@ -236,46 +280,47 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     rule_library = config_data.get('rule_library', [])
 
     # 检查是否有自定义配置（从嵌套结构中读取）
+    # 策略变更：v1.3.0 的实现会在 yaml.safe_load 抛异常时静默设置
+    # mihomo_config = {} 并 fallback 到内嵌默认模板（mixed-port 7890 /
+    # log-level info / external-controller 127.0.0.1:9090 / dns.listen
+    # 0.0.0.0:53 / 223.5.5.5+119.29.29.29 / fallback 1.1.1.1+dns.google），
+    # 导致用户的 tun / dns.listen / nameserver-policy 等被静默抹掉。
+    #
+    # 改为"硬失败"：
+    # - custom_config 解析失败 / 结果非 dict 时抛 CustomConfigYAMLError
+    # - 上游 Flask 路由透传到 HTTP 500，不写 config.yaml
+    # - 上一份有效 /data/config.yaml 不会被覆盖
+    # - 内嵌默认模板仅在 custom_config 字段从未被设置时使用（首次初始化）
     mihomo_config_data = config_data.get('mihomo', {})
     custom_mihomo_config = mihomo_config_data.get('custom_config', '')
 
-    if custom_mihomo_config and custom_mihomo_config.strip():
-        # 使用自定义配置作为基础
+    if not (custom_mihomo_config and custom_mihomo_config.strip()):
+        # 没有任何 custom_config —— 首次初始化场景，使用内嵌默认模板
+        mihomo_config = _default_mihomo_template()
+    else:
         try:
             mihomo_config = yaml.safe_load(custom_mihomo_config)
-            if not isinstance(mihomo_config, dict):
-                mihomo_config = {}
-        except Exception:
-            # 如果解析失败，使用默认配置
-            mihomo_config = {}
-    else:
-        # 使用默认基础配置
-        mihomo_config = {}
+        except yaml.YAMLError as e:
+            logger.error(
+                'mihomo.custom_config YAML 解析失败，本次生成被中止，'
+                '/data/config.yaml 未被覆盖。原因: %s '
+                '（常见原因：nameserver-policy / fake-ip-filter 等 mapping 段缩进错乱，'
+                '请到 UI → Mihomo 基础配置 → 修正后重新保存并重新生成。）',
+                e
+            )
+            raise CustomConfigYAMLError(
+                f'mihomo.custom_config YAML 解析失败: {e}'
+            ) from e
 
-    # 如果没有基础配置或基础配置为空，使用默认配置
-    if not mihomo_config:
-        mihomo_config = {
-            'mixed-port': 7890,
-            'allow-lan': True,
-            'bind-address': '*',
-            'mode': 'rule',
-            'log-level': 'info',
-            'external-controller': '127.0.0.1:9090',
-            'dns': {
-                'enable': True,
-                'listen': '0.0.0.0:53',
-                'enhanced-mode': 'fake-ip',
-                'fake-ip-range': '198.18.0.1/16',
-                'nameserver': [
-                    '223.5.5.5',
-                    '119.29.29.29'
-                ],
-                'fallback': [
-                    'https://1.1.1.1/dns-query',
-                    'https://dns.google/dns-query'
-                ]
-            }
-        }
+        if not isinstance(mihomo_config, dict):
+            logger.error(
+                'mihomo.custom_config 解析成功但不是 mapping（得到 %s），'
+                '本次生成被中止，/data/config.yaml 未被覆盖。',
+                type(mihomo_config).__name__
+            )
+            raise CustomConfigYAMLError(
+                f'mihomo.custom_config 不是 mapping，得到 {type(mihomo_config).__name__}'
+            )
 
     normalize_find_process_mode(mihomo_config)
 
@@ -284,7 +329,10 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
         sync_mosdns_hosts(mihomo_config, config_data)
 
     # 收集被策略组使用的节点ID、订阅ID和聚合ID
-    used_node_ids = set()
+    # Logical chains are policies in their own right, even without a parent group.
+    used_node_ids = {n['id'] for n in config_data.get('nodes', []) if n.get('_proxy_chain_id')}
+    used_node_ids.update(g['_chain_dialer']['id'] for g in config_data.get('proxy_groups', [])
+                         if g.get('_chain_dialer', {}).get('type') == 'node')
     used_subscription_ids = set()
     used_aggregation_ids = set()
 
@@ -401,7 +449,19 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
 
     logger.debug(f"仅通过聚合使用的节点ID（将被排除）: {nodes_only_in_aggregations}")
 
-    # 添加代理节点（只添加被策略组直接使用且启用的节点，排除聚合中的节点）
+    from backend.utils.dialer_references import dependency_node_ids, overlay_dialer, group_members
+    for group in config_data.get('proxy_groups', []):
+        if group.get('enabled', True):
+            legacy_nodes = {id for kind, id in group_members(group) if kind == 'node' and id not in ('DIRECT', 'REJECT')}
+            used_node_ids.update(legacy_nodes)
+            directly_selected_node_ids.update(legacy_nodes)
+    aggregation_roots = {id for agg in config_data.get('subscription_aggregations', [])
+                         if agg.get('enabled', True) and agg.get('id') in used_aggregation_ids
+                         for id in agg.get('nodes', [])}
+    required_dependencies = dependency_node_ids(config_data, used_node_ids | aggregation_roots, include_roots=False)
+    nodes_only_in_aggregations -= required_dependencies | directly_selected_node_ids
+    used_node_ids = dependency_node_ids(config_data, used_node_ids | aggregation_roots)
+    # 添加代理节点（包括拨号依赖）
     proxies = []
     logger.debug(f"收集到的被使用节点ID: {used_node_ids}")
     logger.debug(f"开始生成 proxies，总节点数: {len(config_data.get('nodes', []))}")
@@ -419,7 +479,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
         if node.get('id') in nodes_only_in_aggregations:
             logger.debug(f"跳过仅通过聚合使用的节点: {node.get('name')} (id: {node.get('id')})")
             continue
-        proxy = convert_node_to_mihomo(node)
+        proxy = overlay_dialer(config_data, node, convert_node_to_mihomo(node))
         if proxy:
             proxies.append(proxy)
             logger.debug(f"添加节点到 proxies: {node.get('name')}")
@@ -848,11 +908,16 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                 proxy_group['strategy'] = group['strategy']
             if group.get('lazy') is not None:
                 proxy_group['lazy'] = group['lazy']
+        settings = followed_group if follow_group_id else group
+        for key in ('url', 'interval', 'tolerance', 'lazy', 'strategy', 'timeout', 'max-failed-times',
+                    'expected-status', 'disable-udp', 'hidden', 'icon', 'exclude-filter', 'exclude-type'):
+            if key in settings:
+                proxy_group[key] = settings[key]
 
         proxy_groups.append(proxy_group)
 
     # 添加默认策略组
-    if not proxy_groups:
+    if not proxy_groups and not any(n.get('_proxy_chain_id') for n in config_data.get('nodes', [])):
         all_proxy_names = [p['name'] for p in proxies]
         if all_proxy_names:
             proxy_groups = [
@@ -940,7 +1005,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
 
     # 遍历合并后的规则数组，保持用户配置的顺序
     for item in config_data.get('rule_configs', []):
-        if not item.get('enabled', True):
+        if not item.get('enabled', True) or not item.get('library_enabled', True):
             continue
 
         item_type = item.get('itemType', '')
@@ -983,7 +1048,21 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                 rules.append(f"RULE-SET,{ruleset_name},{policy}")
 
     mihomo_config['rules'] = rules
+    from backend.utils.proxy_chains import lower_chain_providers
+    lower_chain_providers(config_data, mihomo_config)
 
+    from backend.utils.strategy_references import validate_rule_policies
+    validate_rule_policies(
+        config_data,
+        [p['name'] for p in mihomo_config['proxies']] + [g['name'] for g in mihomo_config['proxy-groups']],
+        'mihomo',
+    )
+
+    from backend.utils.dialer_references import validate_emitted
+    validate_emitted(mihomo_config)
+    if preflight_providers:
+        from backend.utils.provider_delivery import prepare_provider_bundle
+        prepare_provider_bundle(logical_config, mihomo_config)
     # 转换为 YAML
     return yaml.dump(
         mihomo_config,
@@ -995,103 +1074,12 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     )
 
 
-def get_mihomo_provider_downloads(config_data: Dict[str, Any], base_url: str = '') -> List[Dict[str, str]]:
-    """
-    获取 Mihomo 需要下载的 proxy provider 文件列表
-
-    Args:
-        config_data: 配置数据字典
-        base_url: 基础 URL
-
-    Returns:
-        下载列表，格式：[{'name': 'provider名称', 'url': 'URL', 'local_path': './providers/xxx.yaml'}]
-    """
-    downloads = []
-
-    # 获取系统配置
-    server_domain = config_data.get('system_config', {}).get('server_domain', '').strip()
-    effective_base_url = server_domain or base_url
-    config_token = config_data.get('system_config', {}).get('config_token', '')
-
-    # 首先找出所有被策略组使用的订阅和聚合 ID
-    used_subscription_ids = set()
-    used_aggregation_ids = set()
-
-    for group in config_data.get('proxy_groups', []):
-        if not group.get('enabled', True):
-            continue
-
-        # 处理跟随模式
-        follow_group_id = group.get('follow_group')
-        if follow_group_id:
-            # 查找被跟随的策略组
-            followed_group = next((g for g in config_data.get('proxy_groups', []) if g.get('id') == follow_group_id),
-                                  None)
-            if followed_group:
-                # 使用被跟随策略组的设置
-                aggregation_ids = followed_group.get('aggregations', [])
-                subscriptions = followed_group.get('subscriptions', [])
-            else:
-                continue
-        else:
-            # 使用自己的设置
-            aggregation_ids = group.get('aggregations', [])
-            subscriptions = group.get('subscriptions', [])
-
-        # 收集聚合ID（聚合本身作为 provider）
-        if aggregation_ids:
-            for agg_id in aggregation_ids:
-                used_aggregation_ids.add(agg_id)
-
-        # 收集该策略组所有聚合中包含的订阅ID
-        subscriptions_in_group_aggregations = set()
-        if aggregation_ids:
-            aggregations = config_data.get('subscription_aggregations', [])
-            for agg_id in aggregation_ids:
-                agg = next((a for a in aggregations if a['id'] == agg_id and a.get('enabled', True)), None)
-                if agg:
-                    agg_subs = agg.get('subscriptions', [])
-                    subscriptions_in_group_aggregations.update(agg_subs)
-
-        # 收集直接引用的订阅（跳过已在聚合中的订阅）
-        for sub_id in subscriptions:
-            # 如果该订阅已经在某个聚合中，不需要单独添加到 proxy-providers
-            if sub_id not in subscriptions_in_group_aggregations:
-                used_subscription_ids.add(sub_id)
-
-    # 处理订阅 providers
-    for sub in config_data.get('subscriptions', []):
-        if sub.get('enabled', True) and sub.get('id') in used_subscription_ids:
-            sub_id = sub['id']
-            sub_url = f"{effective_base_url}{profile_api_path(config_data, f'/subscriptions/{sub_id}/proxies')}"
-
-            # 如果配置了令牌，添加到 URL
-            if config_token:
-                sub_url = append_url_query(sub_url, {'token': config_token})
-
-            downloads.append({
-                'name': sub['name'],
-                'url': sub_url,
-                'local_path': f"./providers/{sub['name']}.yaml"
-            })
-
-    # 处理聚合 providers
-    for agg in config_data.get('subscription_aggregations', []):
-        if agg.get('enabled', True) and agg.get('id') in used_aggregation_ids:
-            agg_id = agg['id']
-            agg_url = f"{effective_base_url}{profile_api_path(config_data, f'/aggregations/{agg_id}/provider')}"
-
-            # 如果配置了令牌，添加到 URL
-            if config_token:
-                agg_url = append_url_query(agg_url, {'token': config_token})
-
-            downloads.append({
-                'name': agg['name'],
-                'url': agg_url,
-                'local_path': f"./providers/{agg['name']}.yaml"
-            })
-
-    return downloads
+def get_mihomo_provider_downloads(config_data: Dict[str, Any], base_url: str = '', *, main_config=None) -> List[Dict[str, str]]:
+    """Return every native provider artifact, including independent chain copies."""
+    main = main_config if main_config is not None else yaml.safe_load(
+        generate_mihomo_config(config_data, base_url, preflight_providers=False))
+    return [{'name': name, 'url': provider['url'], 'local_path': provider['path']}
+            for name, provider in main.get('proxy-providers', {}).items() if provider.get('url')]
 
 
 def get_mihomo_ruleset_downloads(config_data: Dict[str, Any], base_url: str = '') -> List[Dict[str, str]]:
@@ -1112,7 +1100,7 @@ def get_mihomo_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
     effective_base_url = server_domain or base_url
 
     # 获取所有规则集
-    rule_sets_list = config_data.get('rule_sets', [])
+    _, rule_sets_list = split_rules_and_rulesets(config_data)
     rule_library = config_data.get('rule_library', [])
 
     for rule_set in rule_sets_list:

@@ -33,10 +33,8 @@ export const NAV_GROUPS: NavGroup[] = [
     scope: 'resource',
     tabLabel: '资源',
     tabIcon: 'Files',
-    title: '资源',
-    // 注意：这些资源当前仍按配置空间隔离，尚未真正共享。
-    // 在存储层实现共享之前，此处不得宣称「所有配置空间共用」。
-    hint: '订阅、节点与规则集',
+    title: '共享资源',
+    hint: '所有配置共用的订阅、节点、聚合与规则库',
     items: [
       { path: '/subscriptions', label: '订阅来源', icon: 'Link' },
       { path: '/nodes', label: '节点库', icon: 'Connection' },
@@ -67,6 +65,7 @@ export const NAV_GROUPS: NavGroup[] = [
     tabIcon: 'Setting',
     title: '系统',
     items: [
+      { path: '/system-settings', label: '系统设置', icon: 'Setting' },
       { path: '/profiles', label: '配置空间', icon: 'Setting' },
       { path: '/agents', label: 'Agent', icon: 'Monitor' },
       { path: '/logs', label: '日志', icon: 'Tickets' }

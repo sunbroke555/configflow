@@ -1,6 +1,6 @@
 <template>
   <div>
-    <p class="m-0 mb-1 flex items-center gap-1.5 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+    <p class="m-0 mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
       <component v-if="icon" :is="icon" class="size-3" aria-hidden="true" />
       {{ label }}
     </p>

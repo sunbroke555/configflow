@@ -2,11 +2,10 @@
   <div :class="reorder.active.value && 'cf-reordering'">
     <ScopeBanner
       scope="resource"
-      :profile-name="cfProfileName"
-      description="订阅拉取与手动录入的节点，按配置空间隔离"
+      description="修改节点会影响使用它的所有配置。若只想组合前置和落地节点，请在策略组中创建代理链，不会修改原节点。"
     />
 
-    <PageHeader eyebrow="Resource" title="节点库" description="订阅拉取与手动录入的节点集中在此。">
+    <PageHeader title="节点库" description="查看和管理从订阅获取或手动添加的节点。">
       <template #actions>
         <Button
           v-if="!reorder.active.value"
@@ -22,7 +21,7 @@
           <FilePlus2 class="size-4" />
           批量添加
         </Button>
-        <Button class="shadow-glow" @click="showAddDialog">
+        <Button @click="showAddDialog">
           <Plus class="size-4" />
           添加节点
         </Button>
@@ -35,7 +34,7 @@
           <SelectTrigger class="h-9 w-[150px] border-transparent bg-background/50 text-[13px]">
             <SelectValue placeholder="全部协议" />
           </SelectTrigger>
-          <SelectContent class="glass-strong">
+          <SelectContent>
             <SelectItem value="all">全部协议</SelectItem>
             <SelectItem v-for="p in protocolOptions" :key="p" :value="p">
               {{ p.toUpperCase() }}
@@ -202,8 +201,8 @@
         :data-name="node.name"
         data-reorder-item
         :class="[
-          'hairline edge-light relative flex flex-col gap-3 overflow-hidden rounded-xl border bg-card/55 p-4 backdrop-blur-xl transition-all duration-300 hover:shadow-glow-soft',
-          selectedNodeIds.has(node.id) ? 'border-primary-accent/45' : 'border-border/35',
+          'relative flex flex-col gap-3 overflow-hidden rounded-xl border bg-card p-4 transition-colors duration-200',
+          selectedNodeIds.has(node.id) ? 'border-primary-accent' : 'border-border',
           !node.enabled && 'opacity-60'
         ]"
       >
@@ -300,10 +299,10 @@
 
     <!-- ===== 新增 / 编辑节点 ===== -->
     <Dialog v-model:open="dialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[720px] border-border/50">
+      <DialogContent class="max-w-[720px]">
         <DialogHeader>
           <DialogTitle>{{ isEdit ? '编辑节点' : '添加节点' }}</DialogTitle>
-          <DialogDescription>填写节点名称与连接字符串，支持 URI / JSON / YAML 格式。</DialogDescription>
+          <DialogDescription>填写节点名称，粘贴节点链接或 JSON / YAML 配置。</DialogDescription>
         </DialogHeader>
 
         <div class="flex max-h-[60dvh] flex-col gap-4 overflow-y-auto pr-1">
@@ -352,7 +351,7 @@
 
     <!-- ===== 批量添加 ===== -->
     <Dialog v-model:open="batchDialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[780px] border-border/50">
+      <DialogContent class="max-w-[780px]">
         <DialogHeader>
           <DialogTitle>批量添加节点</DialogTitle>
           <DialogDescription>粘贴多个节点链接或配置，系统会自动识别格式并导入。</DialogDescription>
@@ -436,17 +435,12 @@ import ScopeBanner from '@/components/shell/ScopeBanner.vue'
 import { useReorder } from '@/composables/useReorder'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { listItem } from '@/lib/motion'
-import { useProfileStore } from '@/stores/profile'
 import { nodeApi, subStoreUrlApi } from '@/api'
 import type { ProxyNode } from '@/types'
 import api from '@/api'
 import * as yaml from 'js-yaml'
 
 
-const cfProfileStore = useProfileStore()
-const cfProfileName = computed(
-  () => cfProfileStore.activeProfile.value?.name || cfProfileStore.activeProfileId.value
-)
 const nodes = ref<ProxyNode[]>([])
 const savingStatus = ref<Record<string, boolean>>({})
 const nodesContainer = ref<HTMLElement | null>(null)
@@ -458,6 +452,7 @@ const form = ref<Partial<ProxyNode>>({
   enabled: true,
   remark: ''
 })
+
 
 // 节点字符串展开/收起状态
 const expandedNodes = ref<Set<string>>(new Set())
@@ -472,7 +467,7 @@ const batchForm = ref({
 // 批量删除相关
 const selectedNodeIds = ref<Set<string>>(new Set())
 const isAllSelected = computed(() => {
-  return nodes.value.length > 0 && selectedNodeIds.value.size === nodes.value.length
+  return visibleNodes.value.length > 0 && visibleNodes.value.every(n => selectedNodeIds.value.has(n.id))
 })
 const isSomeSelected = computed(() => {
   return selectedNodeIds.value.size > 0 && selectedNodeIds.value.size < nodes.value.length
@@ -606,7 +601,7 @@ const checkSubStoreUrl = async (): Promise<boolean> => {
     const url = response.data?.sub_store_url || ''
     if (!url) {
       return await confirm(
-        '尚未配置 Sub-Store URL，节点格式转换功能将不可用。请前往「配置生成」页面配置 Sub-Store 地址。',
+        '尚未配置 Sub-Store URL，节点格式转换功能将不可用。请前往「系统设置」页面配置 Sub-Store 地址。',
         { title: '未配置 Sub-Store', confirmText: '继续添加' }
       )
     }
@@ -663,11 +658,14 @@ const toggleNodeExpand = (nodeId: string) => {
 
 // 全选/取消全选
 const toggleSelectAll = () => {
-  if (isAllSelected.value) {
-    selectedNodeIds.value.clear()
-  } else {
-    selectedNodeIds.value = new Set(nodes.value.map(n => n.id))
+  // Only toggle visible rows; keep selections made before filtering.
+  const next = new Set(selectedNodeIds.value)
+  const deselect = isAllSelected.value
+  for (const node of visibleNodes.value) {
+    if (deselect) next.delete(node.id)
+    else next.add(node.id)
   }
+  selectedNodeIds.value = next
 }
 
 // 批量删除
@@ -678,7 +676,7 @@ const batchDeleteNodes = async () => {
   }
 
   const confirmed = await confirmDanger(
-    `确定要删除选中的 ${selectedNodeIds.value.size} 个节点吗？删除后将同步清理策略组中对这些节点的引用。`,
+    `确定删除选中的 ${selectedNodeIds.value.size} 个节点吗？删除后无法恢复。仍被配置或聚合使用的节点无法删除，请先取消相关使用。`,
     { title: '批量删除节点' }
   )
   if (!confirmed) return
@@ -693,64 +691,14 @@ const batchDeleteNodes = async () => {
       try {
         await nodeApi.delete(nodeId)
         successCount++
-      } catch (error) {
+      } catch (error: any) {
         failCount++
-        console.error(`删除节点 ${nodeId} 失败:`, error)
+        notify.error(error?.response?.data?.message || '删除节点失败')
       }
     }
 
-    // 获取所有策略组，清理引用
-    try {
-      const { data: proxyGroups } = await api.get('/proxy-groups')
-      let updatedGroupCount = 0
-
-      for (const group of proxyGroups) {
-        let groupModified = false
-
-        if (group.manual_nodes && group.manual_nodes.length > 0) {
-          const originalLength = group.manual_nodes.length
-          group.manual_nodes = group.manual_nodes.filter(
-            (id: string) => !nodeIdsToDelete.includes(id)
-          )
-          if (group.manual_nodes.length !== originalLength) {
-            groupModified = true
-          }
-        }
-
-        if (group.proxies_order && group.proxies_order.length > 0) {
-          const originalLength = group.proxies_order.length
-          group.proxies_order = group.proxies_order.filter(
-            (item: any) => !(item.type === 'node' && nodeIdsToDelete.includes(item.id))
-          )
-          if (group.proxies_order.length !== originalLength) {
-            groupModified = true
-          }
-        }
-
-        if (groupModified) {
-          try {
-            await api.put(`/proxy-groups/${group.id}`, group)
-            updatedGroupCount++
-          } catch (error) {
-            console.error(`更新策略组 ${group.name} 失败:`, error)
-          }
-        }
-      }
-
-      // 显示结果
-      if (failCount === 0) {
-        if (updatedGroupCount > 0) {
-          notify.success(`批量删除成功！已删除 ${successCount} 个节点，清理了 ${updatedGroupCount} 个策略组中的引用`)
-        } else {
-          notify.success(`批量删除成功！已删除 ${successCount} 个节点`)
-        }
-      } else {
-        notify.warning(`批量删除完成！成功 ${successCount} 个，失败 ${failCount} 个`)
-      }
-    } catch (error) {
-      console.error('清理策略组引用失败:', error)
-      notify.warning(`已删除 ${successCount} 个节点，但清理策略组引用时出现错误`)
-    }
+    if (failCount === 0) notify.success(`批量删除成功！已删除 ${successCount} 个节点`)
+    else notify.warning(`批量删除完成！成功 ${successCount} 个，失败 ${failCount} 个`)
 
     // 清空选择并刷新列表
     selectedNodeIds.value.clear()
@@ -774,8 +722,8 @@ const toggleNodeEnabled = async (node: ProxyNode) => {
   try {
     await nodeApi.update(node.id, node)
     notify.success(node.enabled ? '已启用' : '已禁用')
-  } catch (error) {
-    notify.error('更新状态失败')
+  } catch (error: any) {
+    notify.error(error?.response?.data?.message || '更新状态失败')
     node.enabled = previous
     loadNodes()
   } finally {
@@ -922,8 +870,8 @@ const saveNode = async () => {
     }
     dialogVisible.value = false
     loadNodes()
-  } catch (error) {
-    notify.error('保存失败')
+  } catch (error: any) {
+    notify.error(error?.response?.data?.message || '保存失败')
   }
 }
 
@@ -1118,7 +1066,7 @@ const saveBatchNodes = async () => {
 
 const deleteNode = async (row: ProxyNode) => {
   const confirmed = await confirmDanger(
-    '确定要删除该节点吗？删除后将同步清理策略组中对该节点的引用。',
+    '确定删除该节点吗？删除后无法恢复。仍被配置或聚合使用的节点无法删除，请先取消相关使用。',
     { title: '删除节点' }
   )
   if (!confirmed) return
@@ -1127,41 +1075,11 @@ const deleteNode = async (row: ProxyNode) => {
     // 先删除节点
     await nodeApi.delete(row.id)
 
-    // 获取所有策略组，清理引用
-    const { data: proxyGroups } = await api.get('/proxy-groups')
-    let updatedCount = 0
-
-    // 查找引用了该节点的策略组
-    for (const group of proxyGroups) {
-      if (group.manual_nodes && group.manual_nodes.includes(row.id)) {
-        // 从节点列表中移除该节点ID
-        group.manual_nodes = group.manual_nodes.filter((id: string) => id !== row.id)
-
-        // 同步更新 proxies_order
-        if (group.proxies_order && group.proxies_order.length > 0) {
-          group.proxies_order = group.proxies_order.filter(
-            (item: any) => !(item.type === 'node' && item.id === row.id)
-          )
-        }
-
-        try {
-          await api.put(`/proxy-groups/${group.id}`, group)
-          updatedCount++
-        } catch (error) {
-          console.error(`更新策略组 ${group.name} 失败:`, error)
-        }
-      }
-    }
-
-    if (updatedCount > 0) {
-      notify.success(`删除成功，已同步清理 ${updatedCount} 个策略组中的引用`)
-    } else {
-      notify.success('删除成功')
-    }
+    notify.success('删除成功')
     loadNodes()
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') {
-      notify.error('删除失败')
+      notify.error(error?.response?.data?.message || '删除失败')
       console.error('删除节点失败:', error)
     }
   }
@@ -1237,7 +1155,7 @@ const visibleNodes = computed(() => {
 })
 
 const nodesEmptyText = computed(() =>
-  nodes.value.length === 0 ? '还没有节点' : '没有匹配的节点'
+  nodes.value.length === 0 ? '添加节点链接或配置，也可一次粘贴多个节点批量添加。' : '试试其他关键词，或调整协议筛选。'
 )
 
 /* ---------- 统一拖动排序 ---------- */
@@ -1257,7 +1175,7 @@ const reorder = useReorder<any>({
 const handleSaveOrder = async () => {
   try {
     await reorder.save()
-    notify.success('顺序已保存，所有配置空间生效')
+    notify.success('顺序已保存，对所有配置生效')
   } catch (error) {
     notify.error('保存顺序失败，顺序已还原')
   }

@@ -27,7 +27,6 @@ def test_agents_are_system_scoped_and_bind_profiles(tmp_path, monkeypatch):
         {"name": "bound", "host": "127.0.0.2", "profile_id": "alpha"}
     )
     bound = next(agent for agent in repository.get_system()["agents"] if agent["id"] == bound_result["id"])
-    config_module.save_config()
 
     agents = repository.get_system()["agents"]
     assert next(agent for agent in agents if agent["id"] == legacy["id"])["profile_id"] == "default"
@@ -36,16 +35,16 @@ def test_agents_are_system_scoped_and_bind_profiles(tmp_path, monkeypatch):
 
 def test_agent_config_endpoint_uses_bound_profile(tmp_path, monkeypatch):
     app, repository = setup_agent_app(tmp_path, monkeypatch)
-    repository.save_profile("alpha", {"marker": "alpha"})
+    repository.save_profile("alpha", {"mihomo": {"custom_config": "log-level: debug"}})
+    repository.save_profile("beta", {"mihomo": {"custom_config": "log-level: warning"}})
     manager = init_agent_manager()
     result = manager.register_agent(
         {"name": "bound", "host": "127.0.0.2", "profile_id": "alpha"}
     )
-    config_module.save_config()
     monkeypatch.setattr(
         "backend.routes.agents.generate_agent_config",
-        lambda data, agent: {
-            "content": data["marker"],
+        lambda data, agent, **kwargs: {
+            "content": data["mihomo"]["custom_config"],
             "md5": "hash",
             "version": "hash",
         },
@@ -57,23 +56,23 @@ def test_agent_config_endpoint_uses_bound_profile(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.get_json()["content"] == "alpha"
+    assert response.get_json()["content"] == "log-level: debug"
     assert response.get_json()["profile_id"] == "alpha"
 
 
 def test_push_config_uses_bound_profile_even_with_other_request_context(tmp_path, monkeypatch):
     app, repository = setup_agent_app(tmp_path, monkeypatch)
-    repository.save_profile("alpha", {"marker": "alpha"})
+    repository.save_profile("alpha", {"mihomo": {"custom_config": "log-level: debug"}})
+    repository.save_profile("beta", {"mihomo": {"custom_config": "log-level: warning"}})
     manager = init_agent_manager()
     result = manager.register_agent(
         {"name": "bound", "host": "127.0.0.2", "profile_id": "alpha"}
     )
-    config_module.save_config()
     seen = {}
 
     monkeypatch.setattr(
         "backend.routes.agents.generate_mihomo_config",
-        lambda data, **kwargs: seen.setdefault("marker", data["marker"]) or "content",
+        lambda data, **kwargs: seen.setdefault("custom_config", data["mihomo"]["custom_config"]),
     )
     monkeypatch.setattr("backend.routes.agents.get_mihomo_provider_downloads", lambda *args, **kwargs: [])
     monkeypatch.setattr("backend.routes.agents.get_mihomo_ruleset_downloads", lambda *args, **kwargs: [])
@@ -90,7 +89,7 @@ def test_push_config_uses_bound_profile_even_with_other_request_context(tmp_path
     )
 
     assert response.status_code == 200
-    assert seen["marker"] == "alpha"
+    assert seen["custom_config"] == "log-level: debug"
     assert response.get_json()["profile_id"] == "alpha"
 
 
@@ -112,7 +111,6 @@ def test_agent_registration_does_not_overwrite_system_agents_from_profile_snapsh
             ]}),
         )
         manager.register_agent({"name": "new", "host": "10.0.0.3", "profile_id": "alpha"})
-        config_module.save_config()
 
     assert {agent["id"] for agent in repository.get_system()["agents"]} >= {"stable", "concurrent"}
 

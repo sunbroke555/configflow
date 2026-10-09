@@ -3,7 +3,7 @@
     <div class="flex gap-1">
       <button
         type="button"
-        class="grid h-8.5 w-9 place-items-center rounded-sm border border-border bg-secondary text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:text-muted-foreground"
+        class="grid size-11 place-items-center rounded-lg border border-border bg-secondary text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-30 disabled:hover:text-muted-foreground"
         :disabled="index === 0"
         :aria-label="`${label} 上移`"
         @click.stop="$emit('up')"
@@ -12,7 +12,7 @@
       </button>
       <button
         type="button"
-        class="grid h-8.5 w-9 place-items-center rounded-sm border border-border bg-secondary text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-30 disabled:hover:text-muted-foreground"
+        class="grid size-11 place-items-center rounded-lg border border-border bg-secondary text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-30 disabled:hover:text-muted-foreground"
         :disabled="index === total - 1"
         :aria-label="`${label} 下移`"
         @click.stop="$emit('down')"
@@ -24,7 +24,7 @@
     <button
       type="button"
       :class="cn(
-        'grid size-(--cf-touch) cursor-grab place-items-center rounded-md border border-transparent bg-transparent text-muted-foreground [touch-action:none] transition-colors hover:bg-secondary hover:text-foreground',
+        'grid size-(--cf-touch) cursor-grab place-items-center rounded-lg border border-transparent bg-transparent text-muted-foreground [touch-action:none] transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         grabbed && 'cursor-grabbing border-primary-accent bg-primary-soft text-primary-accent'
       )"
       data-reorder-handle

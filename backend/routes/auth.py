@@ -40,7 +40,7 @@ def setup_before_request(app):
             '/api/agents/docker-mosdns-run', '/api/version', '/', '/mcp',
         }
         public_prefixes = ('/api/rule-library/content/', '/api/rules/local/', '/mcp/', '/api/static/agents/', '/assets/', '/static/')
-        if request.path.startswith('/api/agents/') and request.path.endswith('/heartbeat'):
+        if request.endpoint in {'agents.agent_heartbeat', 'agents.get_agent_config'}:
             return None
         profile_public_patterns = (
             r'^/api/config/[A-Za-z0-9][A-Za-z0-9_-]{0,63}/(?:mihomo|surge|mosdns)$',

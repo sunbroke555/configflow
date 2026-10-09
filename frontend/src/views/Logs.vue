@@ -1,9 +1,8 @@
 <template>
   <div>
     <PageHeader
-      eyebrow="System"
       title="日志"
-      description="运行记录与错误排查，支持关键词搜索、级别过滤与自动刷新。"
+      description="查看运行记录、查找错误。可按关键词和日志级别筛选，开启自动刷新后每 5 秒更新一次。"
     >
       <template #actions>
         <Button variant="outline" class="border-border/60 bg-background/40" :disabled="loading" @click="loadLogs()">
@@ -27,7 +26,7 @@
           <SelectTrigger class="h-9 w-[132px] border-transparent bg-background/50 text-[13px]">
             <SelectValue placeholder="日志级别" />
           </SelectTrigger>
-          <SelectContent class="glass-strong">
+          <SelectContent>
             <SelectItem v-for="level in LEVELS" :key="level.value" :value="level.value">
               {{ level.label }}
             </SelectItem>
@@ -38,7 +37,7 @@
           <SelectTrigger class="h-9 w-[120px] border-transparent bg-background/50 text-[13px]">
             <SelectValue placeholder="显示行数" />
           </SelectTrigger>
-          <SelectContent class="glass-strong">
+          <SelectContent>
             <SelectItem v-for="option in LINE_OPTIONS" :key="option.value" :value="option.value">
               {{ option.label }}
             </SelectItem>
@@ -71,7 +70,7 @@
       </Badge>
       <Badge variant="outline" class="num font-mono text-[11px]">总行数 {{ totalLines }}</Badge>
       <Badge v-if="filteredLines !== totalLines" variant="brand" class="num font-mono text-[11px]">
-        过滤后 {{ filteredLines }}
+        筛选后 {{ filteredLines }}
       </Badge>
     </div>
 
@@ -85,7 +84,7 @@
           v-if="!logs.length"
           :icon="ScrollText"
           title="暂无日志"
-          description="调整关键词或级别筛选，或等待系统产生新的运行记录。"
+          description="当前没有可显示的记录。可清除关键词、选择全部级别，或稍后刷新。"
         />
 
         <div v-else class="min-w-max py-2">
@@ -245,7 +244,7 @@ const toggleAutoRefresh = (enabled: boolean) => {
   autoRefresh.value = enabled
   if (enabled) {
     refreshTimer.value = window.setInterval(() => loadLogs(true), REFRESH_INTERVAL)
-    notify.success('已启用自动刷新', '每 5 秒拉取一次最新日志')
+    notify.success('已启用自动刷新', '每 5 秒显示最新日志')
   } else {
     if (refreshTimer.value) {
       clearInterval(refreshTimer.value)
@@ -256,7 +255,7 @@ const toggleAutoRefresh = (enabled: boolean) => {
 }
 
 const clearLogs = async () => {
-  const ok = await confirmDanger('确定要清空日志文件吗？此操作不可恢复。', {
+  const ok = await confirmDanger('确定清空整个日志文件吗？这会删除全部日志，不仅是当前筛选结果，且无法恢复。', {
     title: '清空日志',
     confirmText: '清空'
   })

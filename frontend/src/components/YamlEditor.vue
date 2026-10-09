@@ -86,8 +86,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .yaml-editor {
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
+  border: 1px solid var(--cf-bd-strong);
+  border-radius: var(--cf-r-md);
   overflow: hidden;
 }
 </style>

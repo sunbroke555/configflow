@@ -61,7 +61,10 @@ def register_blueprints(app):
     app.register_blueprint(stats_bp)  # 注册统计路由
     app.register_blueprint(profiles_bp)
 
-    from backend.common.config_repository import ProfileRepositoryError, ProfileNotFound, ProfileValidationError
+    from backend.common.config_repository import (
+        ProfileRepositoryError, ProfileNotFound, ProfileValidationError,
+        ProfileExists, ProfileInUse,
+    )
     from backend.common.profile_context import install_profile_context
 
     @app.errorhandler(ProfileValidationError)
@@ -71,6 +74,14 @@ def register_blueprints(app):
     @app.errorhandler(ProfileNotFound)
     def _profile_not_found(error):
         return {'success': False, 'message': f'Profile not found: {error.args[0]}'}, 404
+
+    @app.errorhandler(ProfileExists)
+    @app.errorhandler(ProfileInUse)
+    def _profile_conflict(error):
+        payload = {'success': False, 'message': str(error)}
+        if isinstance(error, ProfileInUse):
+            payload['usages'] = error.usages
+        return payload, 409
 
     @app.errorhandler(ProfileRepositoryError)
     def _profile_repository_error(error):

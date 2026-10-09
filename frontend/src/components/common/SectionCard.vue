@@ -1,22 +1,22 @@
 <template>
   <section
     :class="cn(
-      'hairline edge-light relative overflow-hidden rounded-xl border border-border/35 bg-card/55 backdrop-blur-xl transition-shadow duration-300',
-      interactive && 'hover:shadow-glow-soft hover:border-border-strong/70',
+      'min-w-0 overflow-hidden rounded-xl border border-border bg-card',
+      interactive && 'transition-colors hover:border-border-strong motion-reduce:transition-none',
       padded && 'p-5 max-md:p-4'
     )"
   >
-    <header v-if="title || $slots.actions" :class="cn('flex flex-wrap items-center gap-3', padded ? 'mb-4' : 'px-5 pt-5 pb-3 max-md:px-4')">
+    <header v-if="title || description || $slots.actions" :class="cn('flex flex-wrap items-center gap-3', padded ? 'mb-4' : 'px-5 pt-5 pb-4 max-md:px-4')">
       <div class="min-w-0 flex-1">
-        <h2 v-if="title" class="m-0 flex items-center gap-2 text-[14px] font-semibold tracking-[-0.01em] text-foreground">
-          <component v-if="icon" :is="icon" class="size-4 text-primary-accent" :stroke-width="2.2" aria-hidden="true" />
+        <h2 v-if="title" class="m-0 flex items-center gap-2 text-sm font-semibold text-foreground">
+          <component v-if="icon" :is="icon" class="size-4 shrink-0 text-muted-foreground" :stroke-width="2" aria-hidden="true" />
           {{ title }}
         </h2>
-        <p v-if="description" class="mt-1 mb-0 text-[12px] leading-relaxed text-muted-foreground">
+        <p v-if="description" class="mt-1 mb-0 break-words text-[13px] leading-relaxed text-muted-foreground">
           {{ description }}
         </p>
       </div>
-      <div v-if="$slots.actions" class="flex shrink-0 items-center gap-2">
+      <div v-if="$slots.actions" class="flex min-w-0 max-w-full flex-wrap items-center gap-2">
         <slot name="actions" />
       </div>
     </header>

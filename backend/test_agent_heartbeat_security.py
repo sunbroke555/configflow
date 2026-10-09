@@ -5,6 +5,7 @@ import io
 import pytest
 from flask import Flask, Request
 
+from backend.common import auth as auth_module
 from backend.common import config as config_module
 from backend.common.agent_manager import init_agent_manager
 from backend.common.auth import MAX_AUTH_TOKEN_LENGTH
@@ -86,7 +87,7 @@ def test_heartbeat_accepts_matching_bearer_token(tmp_path):
     assert agent["service_status"] == "running"
 
 
-def test_agent_token_is_one_time_registration_only_and_still_authorizes_heartbeat(tmp_path):
+def test_agent_token_is_redacted_from_ordinary_outputs_and_still_authorizes_heartbeat(tmp_path):
     repository = ProfileRepository(tmp_path)
     config_module.set_repository(repository)
     init_agent_manager()
@@ -108,7 +109,7 @@ def test_agent_token_is_one_time_registration_only_and_still_authorizes_heartbea
         client.get("/api/agents"),
         client.get(f"/api/agents/{agent_id}"),
         client.get(f"/api/agents/{agent_id}/status"),
-        client.get("/api/config/export"),
+        client.get("/api/config/export?desensitize=true"),
         client.get("/api/profiles/default/export"),
     ]
     for response in ordinary_responses:
@@ -122,6 +123,90 @@ def test_agent_token_is_one_time_registration_only_and_still_authorizes_heartbea
     )
     assert heartbeat.status_code == 200
     assert token not in heartbeat.get_data(as_text=True)
+
+
+def test_authenticated_global_backup_preserves_secrets_for_recovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "ADMIN_USERNAME", "admin")
+    monkeypatch.setattr(auth_module, "ADMIN_PASSWORD", "admin-password")
+    monkeypatch.delenv("AGENT_REGISTRATION_KEY", raising=False)
+    repository = ProfileRepository(tmp_path / "source")
+    repository.create_profile({"id": "alpha", "name": "Alpha"})
+    repository.create_profile({"id": "beta", "name": "Beta"})
+    repository.save_shared({"subscriptions": [{
+        "id": "sub-1", "name": "Shared", "url": "https://example.test/sub?token=subscription-secret",
+    }]})
+    repository.save_profile("alpha", {
+        "proxy_groups": [{"id": "shared", "name": "Shared", "type": "select", "subscriptions": ["sub-1"]}],
+        "mihomo": {"custom_config": "log-level: debug"},
+    })
+    backup_settings = {
+        "webdav_url": "https://backup.test", "webdav_username": "backup-user",
+        "webdav_password": "webdav-secret-for-recovery",
+    }
+    repository.update_system_transaction(lambda system: system.update({"backup": backup_settings}))
+    config_module.set_repository(repository)
+    registered = init_agent_manager().register_agent({
+        "name": "recoverable", "host": "10.0.0.8", "profile_id": "alpha",
+    })
+    app = Flask(__name__)
+    register_blueprints(app)
+    from backend.routes.auth import setup_before_request
+    setup_before_request(app)
+    client = app.test_client()
+    admin_headers = {
+        "Authorization": f"Bearer {auth_module.generate_token('admin')}",
+        "X-ConfigFlow-Profile": "alpha",
+    }
+
+    for headers in ({}, {"Authorization": "Bearer wrong-token"},
+                    {"Authorization": f"Bearer {registered['token']}"}):
+        denied = client.get("/api/config/export", headers=headers)
+        assert denied.status_code == 401
+        assert registered["token"] not in denied.get_data(as_text=True)
+        assert backup_settings["webdav_password"] not in denied.get_data(as_text=True)
+
+    response = client.get("/api/config/export", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.mimetype == "application/json"
+    assert response.headers["Content-Disposition"].startswith("attachment;")
+    exported = response.get_json()
+    assert exported["schema_version"] == 5
+    assert set(exported["profiles"]) == {"default", "alpha", "beta"}
+    assert exported["shared"]["subscriptions"] == repository.get_shared()["subscriptions"]
+    assert exported["profiles"]["alpha"]["proxy_groups"][0]["subscriptions"] == ["sub-1"]
+    assert "resource_refs" not in exported["profiles"]["alpha"]
+    assert "node_dialers" not in exported["profiles"]["alpha"]
+    assert "subscriptions" not in exported["profiles"]["alpha"]
+    assert exported["system"]["agents"][0]["token"] == registered["token"]
+    assert exported["system"]["backup"] == backup_settings
+
+    for path in (
+        "/api/agents", f"/api/agents/{registered['id']}",
+        f"/api/agents/{registered['id']}/status", "/api/backup/config",
+        "/api/profiles/alpha/export", "/api/config/export?desensitize=true",
+    ):
+        ordinary = client.get(path, headers=admin_headers)
+        assert ordinary.status_code == 200
+        assert registered["token"] not in ordinary.get_data(as_text=True)
+        assert backup_settings["webdav_password"] not in ordinary.get_data(as_text=True)
+
+    restored = ProfileRepository(tmp_path / "restored")
+    restored.import_all(exported)
+    assert restored.get_system()["agents"] == repository.get_system()["agents"]
+    assert restored.get_system()["backup"] == backup_settings
+    assert restored.get_shared()["subscriptions"] == exported["shared"]["subscriptions"]
+    assert restored.get_profile("alpha")["proxy_groups"] == exported["profiles"]["alpha"]["proxy_groups"]
+    assert restored.get_profile("alpha")["mihomo"]["custom_config"] == "log-level: debug"
+    config_module.set_repository(restored)
+    init_agent_manager()
+    heartbeat = client.post(
+        f"/api/agents/{registered['id']}/heartbeat",
+        headers={"Authorization": f"Bearer {registered['token']}"},
+        json={"version": "restored"},
+    )
+    assert heartbeat.status_code == 200
+    assert restored.get_system()["agents"][0]["version"] == "restored"
+    assert registered["token"] not in heartbeat.get_data(as_text=True)
 
 
 def test_manual_agent_create_does_not_return_token_even_without_auth(tmp_path):

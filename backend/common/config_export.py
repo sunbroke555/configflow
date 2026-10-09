@@ -8,7 +8,6 @@ from typing import Any, Dict, Iterable, Optional
 SENSITIVE_SYSTEM_CONFIG_FIELDS = frozenset(
     {"rule_proxy_token", "retired_rule_proxy_tokens"}
 )
-_DESENSITIZED = "***已脱敏***"
 _REDACTED = "[REDACTED]"
 
 
@@ -157,16 +156,3 @@ def sanitize_config_for_output(config: Dict[str, Any]) -> Dict[str, Any]:
         config, system_config if isinstance(system_config, dict) else None
     )
 
-
-def prepare_config_export(config: Dict[str, Any], *, desensitize: bool = False) -> Dict[str, Any]:
-    """Build a safe full or credential-desensitized configuration export."""
-    output = sanitize_config_for_output(config)
-    output.pop("profile_id", None)
-    if desensitize:
-        for subscription in output.get("subscriptions", []):
-            if isinstance(subscription, dict) and "url" in subscription:
-                subscription["url"] = _DESENSITIZED
-        for node in output.get("nodes", []):
-            if isinstance(node, dict) and "proxy_string" in node:
-                node["proxy_string"] = _DESENSITIZED
-    return output

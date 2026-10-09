@@ -58,3 +58,19 @@ def test_reorder_aggregations_rejects_unknown_id(tmp_path):
     # 未知 id 必须报错而不是静默丢数据
     listed = client.get("/api/aggregations").get_json()
     assert [item["id"] for item in listed] == [first, second]
+
+
+def test_legacy_object_reorder_preserves_shared_definitions(tmp_path):
+    client = _make_client(tmp_path)
+    first, second = _seed(client, ['First', 'Second'])
+    before = {item['id']: item for item in client.get('/api/aggregations').get_json()}
+    response = client.post('/api/aggregations/reorder',
+                           headers={'X-ConfigFlow-Profile': 'missing'},
+                           json={'aggregations': [{'id': second, 'name': 'Forged'}, {'id': first}]})
+    assert response.status_code == 200
+    items = client.get('/api/aggregations').get_json()
+    assert [item['id'] for item in items] == [second, first]
+    assert {item['id']: item for item in items} == before
+    profile = config_module.get_repository().get_profile('default')
+    assert profile['proxy_groups'] == []
+    assert 'resource_refs' not in profile

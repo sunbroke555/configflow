@@ -8,11 +8,8 @@ from flask import request, jsonify, current_app
 from backend.routes import settings_bp
 from backend.common.auth import require_auth
 from backend.common.utils import generate_random_token
-from backend.common.config import get_config, save_config
-from backend.common.config_export import (
-    contains_internal_rule_proxy_token,
-    prepare_config_export,
-)
+from backend.common.config import get_repository, get_system_config, save_system_config
+from backend.common.config_export import contains_internal_rule_proxy_token
 from backend.version import get_version_info
 from backend.utils.url_utils import safe_url_for_log
 
@@ -21,7 +18,7 @@ from backend.utils.url_utils import safe_url_for_log
 @require_auth
 def handle_server_domain():
     """服务域名管理"""
-    config_data = get_config()
+    config_data = get_system_config()
 
     if request.method == 'GET':
         # 获取当前服务域名
@@ -46,7 +43,7 @@ def handle_server_domain():
 
             current_app.logger.info(f"Updated server domain to {new_domain}")
 
-            save_config()
+            save_system_config(config_data)
             return jsonify({
                 'success': True,
                 'server_domain': new_domain
@@ -60,7 +57,7 @@ def handle_server_domain():
 @require_auth
 def handle_config_token():
     """配置令牌管理"""
-    config_data = get_config()
+    config_data = get_system_config()
 
     if request.method == 'GET':
         # 获取当前配置令牌
@@ -96,7 +93,7 @@ def handle_config_token():
 
             current_app.logger.info(f"Updated config token")
 
-            save_config()
+            save_system_config(config_data)
             return jsonify({
                 'success': True,
                 'config_token': new_token
@@ -111,7 +108,7 @@ def handle_config_token():
             if 'system_config' not in config_data:
                 config_data['system_config'] = {}
             config_data['system_config']['config_token'] = ''
-            save_config()
+            save_system_config(config_data)
             current_app.logger.info("Deleted config token")
             return jsonify({'success': True})
         except Exception as e:
@@ -129,7 +126,7 @@ def get_version():
 @require_auth
 def backup_config():
     """获取或保存备份配置"""
-    config_data = get_config()
+    config_data = get_system_config()
 
     if request.method == 'GET':
         # 返回备份配置（密码脱敏）
@@ -156,7 +153,7 @@ def backup_config():
         config_data['backup']['webdav_path'] = data.get('webdav_path', '/config-flow-backup/')
         config_data['backup']['auto_backup'] = data.get('auto_backup', False)
 
-        save_config()
+        save_system_config(config_data)
         return jsonify({'success': True, 'message': '备份配置已保存'})
 
 
@@ -167,7 +164,7 @@ def test_backup():
     try:
         from webdav3.client import Client
 
-        config_data = get_config()
+        config_data = get_system_config()
         data = request.json
         webdav_url = data.get('webdav_url', '').rstrip('/')
         webdav_username = data.get('webdav_username', '')
@@ -226,7 +223,7 @@ def backup_now():
     try:
         from webdav3.client import Client
 
-        config_data = get_config()
+        config_data = get_system_config()
         data = request.json
         webdav_url = data.get('webdav_url', '').rstrip('/')
         webdav_username = data.get('webdav_username', '')
@@ -275,10 +272,8 @@ def backup_now():
 
         # 创建临时文件保存配置
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-            # 复制配置、移除内部能力字段，并脱敏备份凭证
-            backup_data = prepare_config_export(config_data)
-            if 'backup' in backup_data and 'webdav_password' in backup_data['backup']:
-                backup_data['backup']['webdav_password'] = '******'
+            # WebDAV 是管理员的完整恢复备份，与全量下载使用同一数据范围。
+            backup_data = get_repository().export_all()
 
             json.dump(backup_data, tmp_file, ensure_ascii=False, indent=2)
             tmp_file_path = tmp_file.name
@@ -300,7 +295,7 @@ def backup_now():
 @require_auth
 def handle_sub_store_url():
     """Sub-Store URL 管理"""
-    config_data = get_config()
+    config_data = get_system_config()
 
     if request.method == 'GET':
         sub_store_url = config_data.get('system_config', {}).get('sub_store_url', '')
@@ -318,7 +313,7 @@ def handle_sub_store_url():
 
             current_app.logger.info(f"Updated Sub-Store URL to {safe_url_for_log(new_url)}")
 
-            save_config()
+            save_system_config(config_data)
             return jsonify({
                 'success': True,
                 'sub_store_url': new_url
@@ -332,7 +327,7 @@ def handle_sub_store_url():
 @require_auth
 def handle_subscription_aggregation():
     """订阅聚合开关管理"""
-    config_data = get_config()
+    config_data = get_system_config()
 
     if request.method == 'GET':
         # 获取当前订阅聚合开关状态
@@ -354,7 +349,7 @@ def handle_subscription_aggregation():
 
             current_app.logger.info(f"Updated subscription aggregation enabled to {enabled}")
 
-            save_config()
+            save_system_config(config_data)
             return jsonify({
                 'success': True,
                 'enabled': enabled

@@ -1,27 +1,23 @@
 <template>
-  <div class="relative flex min-h-screen min-h-dvh items-center justify-center overflow-hidden bg-background px-5">
-    <div class="tech-backdrop" aria-hidden="true" />
-
-    <Motion
-      v-bind="riseIn"
-      class="hairline edge-light relative z-10 w-full max-w-[400px] overflow-hidden rounded-2xl border border-border/35 bg-card/70 p-8 backdrop-blur-2xl max-[480px]:p-6"
-      style="box-shadow: var(--shadow-overlay)"
-    >
-      <div class="flex flex-col items-center gap-3 pb-7 text-center">
-        <span class="relative flex size-14 items-center justify-center">
-          <span
-            class="absolute inset-0 rounded-2xl bg-linear-to-br from-primary/60 to-accent-2-fill/45 blur-lg"
-            aria-hidden="true"
-          />
-          <img src="/icon.png" alt="" class="relative size-12 rounded-[14px]" />
-        </span>
-        <div>
-          <h1 class="m-0 text-[26px] leading-tight font-semibold tracking-[-0.03em] text-foreground">
-            ConfigFlow
-          </h1>
-          <p class="mt-1.5 mb-0 text-[13px] text-muted-foreground">代理配置管理系统</p>
+  <main class="flex min-h-dvh items-center justify-center bg-background px-5 py-10">
+    <div class="grid w-full max-w-[920px] overflow-hidden rounded-xl border border-border bg-card md:grid-cols-[1.1fr_1fr]">
+      <section class="flex flex-col justify-between gap-10 border-b border-border bg-secondary/40 p-8 md:border-r md:border-b-0 md:p-10">
+        <div class="flex items-center gap-3">
+          <img src="/icon.png" alt="" class="size-9 rounded-lg" />
+          <span class="text-xl font-semibold tracking-tight">ConfigFlow</span>
         </div>
-      </div>
+        <div>
+          <h1 class="text-3xl font-semibold leading-tight tracking-tight text-foreground">代理配置管理系统</h1>
+          <p class="mt-4 max-w-[32ch] text-sm leading-7 text-muted-foreground">管理订阅和节点，为不同设备或使用场景设置分流规则，生成可直接使用的配置。</p>
+        </div>
+        <div class="hidden border-t border-border pt-5 text-xs leading-6 text-muted-foreground md:block">
+          <p>订阅和节点共用，策略和规则分别设置</p>
+          <p class="mt-1 font-mono">Mihomo / Surge / MosDNS</p>
+        </div>
+      </section>
+      <section class="p-8 md:px-10 md:py-12" aria-labelledby="login-title">
+        <h2 id="login-title" class="text-xl font-semibold tracking-tight">登录</h2>
+        <p class="mt-2 mb-7 text-sm text-muted-foreground">使用管理员账号进入工作台。</p>
 
       <form class="flex flex-col gap-4" @submit.prevent="handleLogin">
         <div class="flex flex-col gap-1.5">
@@ -69,26 +65,25 @@
           </p>
         </div>
 
-        <Button type="submit" class="mt-2 h-11 w-full text-[14px] shadow-glow" :disabled="loading">
+        <Button type="submit" class="mt-2 h-11 w-full text-[14px]" :disabled="loading">
           <Loader2 v-if="loading" class="size-4 animate-spin" aria-hidden="true" />
           {{ loading ? '登录中…' : '登录' }}
         </Button>
       </form>
-    </Motion>
-  </div>
+      </section>
+    </div>
+  </main>
 </template>
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
-import { Motion } from 'motion-v'
 import { Loader2, Lock, User } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { notify } from '@/lib/feedback'
-import { riseIn } from '@/lib/motion'
 
 const router = useRouter()
 const loading = ref(false)

@@ -4,11 +4,11 @@
 
 ## 前提条件
 
-ConfigFlow 依赖 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 进行订阅解析和节点格式转换。推荐使用 Docker Compose 一并部署，也可在「配置生成」页面配置已有的 Sub-Store 地址。
+ConfigFlow 依赖 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 进行订阅解析和节点格式转换。推荐使用 Docker Compose 一并部署，也可在「系统设置」页面配置已有的 Sub-Store 地址。
 
 ## Docker 单独部署
 
-> 注意：单独部署 ConfigFlow 时，需要另外运行 Sub-Store 服务，并在「配置生成」页面配置 Sub-Store URL。
+> 注意：单独部署 ConfigFlow 时，需要另外运行 Sub-Store 服务，并在「系统设置」页面配置 Sub-Store URL。
 
 ### 快速开始
 
@@ -130,7 +130,7 @@ docker-compose up -d
 访问 `http://localhost` 即可使用。
 
 > 认证是可选的：不设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 即无需登录直接使用；设置后才开启登录，此时请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值。
-> 如果已有 Sub-Store 服务，可移除 `sub-store` 部分，在「配置生成」页面配置已有的 Sub-Store URL。
+> 如果已有 Sub-Store 服务，可移除 `sub-store` 部分，在「系统设置」页面配置已有的 Sub-Store URL。
 
 ### 配置说明
 

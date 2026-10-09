@@ -17,7 +17,7 @@ on:
 
 env:
   REGISTRY_DOCKERHUB: docker.io
-  IMAGE_NAME: thsrite/config-flow
+  IMAGE_NAME: ${{ vars.DOCKERHUB_NAMESPACE || 'thsrite' }}/config-flow
 
 jobs:
   build-and-push:

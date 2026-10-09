@@ -42,7 +42,7 @@ def test_profile_provider_rejects_anonymous_when_auth_enabled_and_config_token_e
 ):
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
-    repository.save_profile("default", {"system_config": {"config_token": ""}})
+    repository.save_system({"system_config": {"config_token": ""}})
     config_module.set_repository(repository)
     monkeypatch.setattr("backend.common.auth.is_auth_enabled", lambda: True)
     monkeypatch.setattr("backend.routes.auth.is_auth_enabled", lambda: True)
@@ -62,7 +62,7 @@ def _config_endpoint_app(monkeypatch, tmp_path, *, auth_enabled, config_token=No
     repository = ProfileRepository(tmp_path)
     repository.create_profile({"id": "alpha", "name": "Alpha"})
     if config_token is not None:
-        repository.save_profile("default", {"system_config": {"config_token": config_token}})
+        repository.save_system({"system_config": {"config_token": config_token}})
     config_module.set_repository(repository)
     monkeypatch.setattr("backend.common.auth.is_auth_enabled", lambda: auth_enabled)
     monkeypatch.setattr("backend.routes.auth.is_auth_enabled", lambda: auth_enabled)
@@ -175,7 +175,7 @@ def test_config_token_post_rejects_embedded_encoded_current_or_retired_internal_
     current = system["system_config"]["rule_proxy_token"]
     retired = "retired-internal-token"
     system["system_config"]["retired_rule_proxy_tokens"] = [retired]
-    repository._write_system(system)
+    repository.save_system(system)
     before = repository.get_system()["system_config"]
 
     for internal in (current, retired):
@@ -199,7 +199,7 @@ def test_config_token_get_scrubs_legacy_embedded_internal_token(monkeypatch, tmp
     system = repository.get_system()
     internal = system["system_config"]["rule_proxy_token"]
     system["system_config"]["config_token"] = f"legacy::{internal}::embedded"
-    repository._write_system(system)
+    repository.save_system(system)
 
     response = app.test_client().get("/api/config-token")
 
@@ -210,12 +210,12 @@ def test_config_token_get_scrubs_legacy_embedded_internal_token(monkeypatch, tmp
 
 def test_retired_rule_proxy_token_never_authorizes_config_rule_proxy_or_mcp(monkeypatch, tmp_path):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"config_token": "public-token"}})
+    repository.save_system({"system_config": {"config_token": "public-token"}})
     system = repository.get_system()
     retired = "retired-internal-token"
     system["system_config"]["retired_rule_proxy_tokens"] = [retired]
     system["system_config"]["config_token"] = retired
-    repository._write_system(system)
+    repository.save_system(system)
     config_module.set_repository(repository)
     monkeypatch.setattr("backend.common.auth.is_auth_enabled", lambda: True)
     monkeypatch.setattr("backend.routes.auth.is_auth_enabled", lambda: True)
@@ -289,7 +289,7 @@ def test_rule_proxy_requires_auth_even_when_global_auth_is_disabled(monkeypatch,
 
 def test_auth_enabled_rule_proxy_accepts_valid_config_token(monkeypatch, tmp_path):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"config_token": "valid /&?"}})
+    repository.save_system({"system_config": {"config_token": "valid /&?"}})
     config_module.set_repository(repository)
     monkeypatch.setattr("backend.common.auth.is_auth_enabled", lambda: True)
     monkeypatch.setattr("backend.routes.auth.is_auth_enabled", lambda: True)
@@ -317,7 +317,7 @@ def test_auth_enabled_rule_proxy_accepts_valid_config_token(monkeypatch, tmp_pat
 def test_rule_proxy_rejects_oversized_query_token(monkeypatch, tmp_path):
     token = "x" * (MAX_AUTH_TOKEN_LENGTH + 1)
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"config_token": token}})
+    repository.save_system({"system_config": {"config_token": token}})
     config_module.set_repository(repository)
     monkeypatch.setattr(mosdns, "_fetch_remote_content", lambda url: "must-not-fetch")
     app = Flask(__name__)
@@ -388,7 +388,7 @@ def test_rule_proxy_rejects_malformed_bearer(monkeypatch, tmp_path, authorizatio
 @pytest.mark.parametrize("token", [None, "wrong"], ids=["missing-token", "wrong-token"])
 def test_auth_enabled_rule_proxy_rejects_invalid_config_token(monkeypatch, tmp_path, token):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"config_token": "valid"}})
+    repository.save_system({"system_config": {"config_token": "valid"}})
     config_module.set_repository(repository)
     monkeypatch.setattr("backend.common.auth.is_auth_enabled", lambda: True)
     monkeypatch.setattr("backend.routes.auth.is_auth_enabled", lambda: True)

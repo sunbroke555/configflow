@@ -1,11 +1,22 @@
 import axios from 'axios'
 import { notify } from '@/lib/feedback'
 import router from '@/router'
-import { clearActiveProfileId, getActiveProfileId } from '@/profileContext'
+import { beginScopedRequest, clearActiveProfileId, endScopedRequest, getActiveProfileId } from '@/profileContext'
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000
+})
+
+declare module 'axios' {
+  interface InternalAxiosRequestConfig {
+    profileRequestTracked?: boolean
+  }
+}
+
+const scopedPath = /^\/(?:profiles\/[^/]+\/generate|proxy-groups(?:\/|$)|rules(?:\/|$)|rule-sets(?:\/|$)|rule-configs(?:\/|$)|custom-config(?:\/|$)|mosdns(?:\/|$)|stats(?:\/|$))/
+const profileOptions = (profileId = getActiveProfileId()) => ({
+  headers: { 'X-ConfigFlow-Profile': profileId }
 })
 
 let profileRecovery: Promise<void> | null = null
@@ -30,20 +41,29 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
-    config.headers['X-ConfigFlow-Profile'] = getActiveProfileId()
+    if (!config.headers.has('X-ConfigFlow-Profile')) {
+      config.headers.set('X-ConfigFlow-Profile', getActiveProfileId())
+    }
+    if (scopedPath.test(config.url || '')) {
+      config.profileRequestTracked = true
+      beginScopedRequest()
+    }
     return config
   },
   (error) => {
     return Promise.reject(error)
-  }
+  },
+  { synchronous: true }
 )
 
 // 响应拦截器 - 处理认证错误
 api.interceptors.response.use(
   (response) => {
+    if (response.config.profileRequestTracked) endScopedRequest()
     return response
   },
   (error) => {
+    if (error.config?.profileRequestTracked) endScopedRequest()
     const message = error.response?.data?.message
     if (error.response?.status === 404 && typeof message === 'string' && message.startsWith('Profile not found:')) {
       void recoverFromMissingProfile().catch(() => undefined)
@@ -77,29 +97,29 @@ export const nodeApi = {
 
 // 规则相关
 export const ruleApi = {
-  getAll: () => api.get('/rules'),
-  create: (data: any) => api.post('/rules', data),
-  update: (id: string, data: any) => api.put(`/rules/${id}`, data),
-  delete: (id: string) => api.delete(`/rules/${id}`),
-  batchCreate: (data: any) => api.post('/rules/batch', data),
-  findDuplicates: () => api.post('/rules/find-duplicates', {}, { timeout: 120000 })
+  getAll: (profileId?: string) => api.get('/rules', profileOptions(profileId)),
+  create: (data: unknown, profileId?: string) => api.post('/rules', data, profileOptions(profileId)),
+  update: (id: string, data: unknown, profileId?: string) => api.put(`/rules/${id}`, data, profileOptions(profileId)),
+  delete: (id: string, profileId?: string) => api.delete(`/rules/${id}`, profileOptions(profileId)),
+  batchCreate: (data: unknown, profileId?: string) => api.post('/rules/batch', data, profileOptions(profileId)),
+  findDuplicates: (profileId?: string) => api.post('/rules/find-duplicates', {}, { ...profileOptions(profileId), timeout: 120000 })
 }
 
 // 规则集相关
 export const ruleSetApi = {
-  getAll: () => api.get('/rule-sets'),
-  create: (data: any) => api.post('/rule-sets', data),
-  update: (id: string, data: any) => api.put(`/rule-sets/${id}`, data),
-  delete: (id: string) => api.delete(`/rule-sets/${id}`)
+  getAll: (profileId?: string) => api.get('/rule-sets', profileOptions(profileId)),
+  create: (data: unknown, profileId?: string) => api.post('/rule-sets', data, profileOptions(profileId)),
+  update: (id: string, data: unknown, profileId?: string) => api.put(`/rule-sets/${id}`, data, profileOptions(profileId)),
+  delete: (id: string, profileId?: string) => api.delete(`/rule-sets/${id}`, profileOptions(profileId))
 }
 
 // 策略组相关
 export const proxyGroupApi = {
-  getAll: () => api.get('/proxy-groups'),
-  create: (data: any) => api.post('/proxy-groups', data),
-  update: (id: string, data: any) => api.put(`/proxy-groups/${id}`, data),
-  delete: (id: string) => api.delete(`/proxy-groups/${id}`),
-  previewRegex: (data: any) => api.post('/proxy-groups/preview-regex', data)
+  getAll: (profileId?: string) => api.get('/proxy-groups', profileOptions(profileId)),
+  create: (data: unknown, profileId?: string) => api.post('/proxy-groups', data, profileOptions(profileId)),
+  update: (id: string, data: unknown, profileId?: string) => api.put(`/proxy-groups/${id}`, data, profileOptions(profileId)),
+  delete: (id: string, profileId?: string) => api.delete(`/proxy-groups/${id}`, profileOptions(profileId)),
+  previewRegex: (data: unknown, profileId?: string) => api.post('/proxy-groups/preview-regex', data, profileOptions(profileId))
 }
 
 // 获取服务域名配置（优先使用配置的域名，否则使用当前页面的 base URL）
@@ -117,19 +137,18 @@ export const profileApi = {
   update: (id: string, data: any) => api.put(profilePath(id), data),
   delete: (id: string) => api.delete(profilePath(id)),
   clone: (id: string, data: any) => api.post(profilePath(id, '/clone'), data),
-  activate: (id: string) => api.post(profilePath(id, '/activate')),
   export: (id: string) => api.get(profilePath(id, '/export'), { responseType: 'blob' }),
   import: (id: string, data: any) => api.post(profilePath(id, '/import'), data),
 }
 
 // 配置生成
 export const generateApi = {
-  mihomo: () => api.post(profilePath(getActiveProfileId(), '/generate/mihomo'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
-  surge: () => api.post(profilePath(getActiveProfileId(), '/generate/surge'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
-  mosdns: () => api.post(profilePath(getActiveProfileId(), '/generate/mosdns'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
-  previewMihomo: () => api.post(profilePath(getActiveProfileId(), '/generate/mihomo/preview'), { base_url: getBaseUrl() }),
-  previewSurge: () => api.post(profilePath(getActiveProfileId(), '/generate/surge/preview'), { base_url: getBaseUrl() }),
-  previewMosdns: () => api.post(profilePath(getActiveProfileId(), '/generate/mosdns/preview'), { base_url: getBaseUrl() })
+  mihomo: (profileId = getActiveProfileId()) => api.post(profilePath(profileId, '/generate/mihomo'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
+  surge: (profileId = getActiveProfileId()) => api.post(profilePath(profileId, '/generate/surge'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
+  mosdns: (profileId = getActiveProfileId()) => api.post(profilePath(profileId, '/generate/mosdns'), { base_url: getBaseUrl() }, { responseType: 'blob' }),
+  previewMihomo: (profileId = getActiveProfileId()) => api.post(profilePath(profileId, '/generate/mihomo/preview'), { base_url: getBaseUrl() }),
+  previewSurge: (profileId = getActiveProfileId()) => api.post(profilePath(profileId, '/generate/surge/preview'), { base_url: getBaseUrl() }),
+  previewMosdns: (profileId = getActiveProfileId()) => api.post(profilePath(profileId, '/generate/mosdns/preview'), { base_url: getBaseUrl() })
 }
 
 // 配置导入导出
@@ -141,12 +160,12 @@ export const configApi = {
 
 // 自定义配置
 export const customConfigApi = {
-  getMihomo: () => api.get('/custom-config/mihomo'),
-  saveMihomo: (data: any) => api.post('/custom-config/mihomo', data),
-  getSurge: () => api.get('/custom-config/surge'),
-  saveSurge: (data: any) => api.post('/custom-config/surge', data),
-  getMosdns: () => api.get('/custom-config/mosdns'),
-  saveMosdns: (data: any) => api.post('/custom-config/mosdns', data)
+  getMihomo: (profileId?: string) => api.get('/custom-config/mihomo', profileOptions(profileId)),
+  saveMihomo: (data: unknown, profileId?: string) => api.post('/custom-config/mihomo', data, profileOptions(profileId)),
+  getSurge: (profileId?: string) => api.get('/custom-config/surge', profileOptions(profileId)),
+  saveSurge: (data: unknown, profileId?: string) => api.post('/custom-config/surge', data, profileOptions(profileId)),
+  getMosdns: (profileId?: string) => api.get('/custom-config/mosdns', profileOptions(profileId)),
+  saveMosdns: (data: unknown, profileId?: string) => api.post('/custom-config/mosdns', data, profileOptions(profileId))
 }
 
 // Agent 管理

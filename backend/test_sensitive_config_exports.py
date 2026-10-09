@@ -62,9 +62,7 @@ def _assert_all_secret_forms_absent(content):
 
 def test_sanitize_external_payload_uses_repository_token_and_scrubs_nested_encoded_forms(tmp_path):
     repository = ProfileRepository(tmp_path)
-    repository.save_profile(
-        "default", {"system_config": {"rule_proxy_token": RULE_PROXY_SECRET}}
-    )
+    repository.save_system({"system_config": {"rule_proxy_token": RULE_PROXY_SECRET}})
     config_module.set_repository(repository)
     encoded = urllib.parse.quote_plus(RULE_PROXY_SECRET, safe="")
     repeated = urllib.parse.quote(encoded, safe="").replace("%2F", "%2f")
@@ -149,32 +147,30 @@ def test_sanitize_external_payload_handles_wide_container_with_bounded_overhead(
     assert elapsed < 5.0
 
 
-def test_after_request_returns_controlled_json_for_pathologically_deep_payload(
-    tmp_path, monkeypatch
-):
+@pytest.mark.parametrize('depth', [8, 5000])
+def test_after_request_bounds_raw_json_depth_and_never_exposes_secrets(tmp_path, depth):
     app, _ = _app_with_secrets(tmp_path)
-    deep_payload = {"deep": _nested_list(1100), "safe": True}
     from flask.wrappers import Response
 
-    original_get_json = Response.get_json
+    raw_json = '[' * depth + json.dumps(RULE_PROXY_SECRET) + ']' * depth
 
-    def deep_get_json(self, *args, **kwargs):
-        if self.headers.get("X-Deep-Test") == "1":
-            return deep_payload
-        return original_get_json(self, *args, **kwargs)
-
-    monkeypatch.setattr(Response, "get_json", deep_get_json)
-
-    @app.get("/api/deep-json")
+    @app.get('/api/deep-json')
     def deep_json():
-        return Response("{}", mimetype="application/json", headers={"X-Deep-Test": "1"})
+        return Response(raw_json, mimetype='application/json')
 
-    response = app.test_client().get("/api/deep-json")
-    body = original_get_json(response)
+    response = app.test_client().get('/api/deep-json')
 
     assert response.status_code == 200
-    assert body["safe"] is True
-    assert _descend_singleton_lists(body["deep"], 127) == REDACTED
+    assert response.is_json
+    _assert_all_secret_forms_absent(response.get_data())
+    body = response.get_json()
+    output_depth = 0
+    while isinstance(body, list):
+        assert len(body) == 1
+        output_depth += 1
+        assert output_depth <= 128
+        body = body[0]
+    assert body == REDACTED
 
 
 def test_sanitize_config_for_output_does_not_deepcopy_pathological_input(tmp_path):
@@ -188,23 +184,6 @@ def test_sanitize_config_for_output_does_not_deepcopy_pathological_input(tmp_pat
     assert _descend_singleton_lists(config["deep"], 1100) == "leaf"
 
 
-def test_after_request_replaces_raw_json_that_exceeds_decoder_recursion_limit(tmp_path):
-    app, _ = _app_with_secrets(tmp_path)
-    from flask.wrappers import Response
-
-    raw_deep_json = "[" * 1100 + '"leaf"' + "]" * 1100
-
-    @app.get("/api/raw-deep-json")
-    def raw_deep_json_response():
-        return Response(raw_deep_json, mimetype="application/json")
-
-    response = app.test_client().get("/api/raw-deep-json")
-
-    assert response.status_code == 200
-    assert response.is_json
-    assert response.get_json() == REDACTED
-
-
 @pytest.mark.parametrize("layers", range(21))
 @pytest.mark.parametrize("mode", ["quote", "quote_plus", "mixed"])
 def test_sanitize_external_payload_redacts_entire_string_at_zero_to_twenty_encoding_layers(
@@ -212,7 +191,7 @@ def test_sanitize_external_payload_redacts_entire_string_at_zero_to_twenty_encod
 ):
     token = "令牌 +/%?=🔐"
     repository = ProfileRepository(tmp_path)
-    repository.save_profile("default", {"system_config": {"rule_proxy_token": token}})
+    repository.save_system({"system_config": {"rule_proxy_token": token}})
     config_module.set_repository(repository)
     encoded = _encode_layers(token, layers, mode)
 
@@ -232,32 +211,21 @@ def _app_with_secrets(tmp_path):
     repository = ProfileRepository(tmp_path)
     encoded = urllib.parse.quote_plus(RULE_PROXY_SECRET, safe="")
     repeated = urllib.parse.quote(encoded, safe="")
-    repository.save_profile(
-        "default",
-        {
-            "system_config": {
-                "rule_proxy_token": RULE_PROXY_SECRET,
-                "config_token": CONFIG_TOKEN,
-                "server_domain": f"https://config.test/{RULE_PROXY_SECRET}",
-                "sub_store_url": f"https://store.test/?token={encoded}",
-            },
-            "subscriptions": [
-                {"id": "sub-1", "url": f"https://secret.test/sub?token={repeated}"}
-            ],
-            "nodes": [
-                {"id": "node-1", "proxy_string": f"ss://secret#{RULE_PROXY_SECRET}"}
-            ],
-            "rule_configs": [
-                {
-                    "id": "rules-1",
-                    "name": "Rules",
-                    "itemType": "ruleset",
-                    "url": "https://rules.test/list",
-                }
-            ],
-            "mosdns": {"direct_rulesets": ["rules-1"], "proxy_rulesets": []},
-        },
-    )
+    repository.save_system({"system_config": {
+        "rule_proxy_token": RULE_PROXY_SECRET,
+        "config_token": CONFIG_TOKEN,
+        "server_domain": f"https://config.test/{RULE_PROXY_SECRET}",
+        "sub_store_url": f"https://store.test/?token={encoded}",
+    }})
+    repository.save_shared({
+        "subscriptions": [{"id": "sub-1", "name": "Secret subscription", "url": f"https://secret.test/sub?token={repeated}"}],
+        "nodes": [{"id": "node-1", "name": "Secret node", "proxy_string": f"ss://secret#{RULE_PROXY_SECRET}"}],
+        "rule_library": [{"id": "remote-rules", "name": "Rules", "source_type": "url", "url": "https://rules.test/list", "behavior": "classical"}],
+    })
+    repository.save_profile("default", {
+        "rule_configs": [{"id": "rules-1", "itemType": "ruleset", "library_rule_id": "remote-rules", "policy": "DIRECT"}],
+        "mosdns": {"direct_rulesets": ["rules-1"], "proxy_rulesets": []},
+    })
     config_module.set_repository(repository)
     app = Flask(__name__)
     register_blueprints(app)
@@ -271,21 +239,38 @@ def _assert_rule_proxy_secret_absent(response):
     _assert_all_secret_forms_absent(response.get_data())
 
 
-@pytest.mark.parametrize("desensitize", [False, True], ids=["full", "desensitized"])
-def test_config_exports_strip_internal_rule_proxy_token_but_preserve_managed_config_token(
-    tmp_path, desensitize
-):
+def test_full_backup_requires_admin_auth_and_preserves_restorable_credentials(tmp_path, monkeypatch):
+    from backend.common.auth import generate_token
+
     app, repository = _app_with_secrets(tmp_path)
-
-    response = app.test_client().get(
-        "/api/config/export", query_string={"desensitize": str(desensitize).lower()}
-    )
-
-    _assert_rule_proxy_secret_absent(response)
+    monkeypatch.setattr("backend.common.auth.is_auth_enabled", lambda: True)
+    client = app.test_client()
+    assert client.get("/api/config/export").status_code == 401
+    response = client.get("/api/config/export", headers={"Authorization": f"Bearer {generate_token('admin')}"})
+    assert response.status_code == 200
     exported = json.loads(response.get_data())
-    assert "rule_proxy_token" not in exported["system_config"]
-    assert exported["system_config"]["config_token"] == CONFIG_TOKEN
-    assert RULE_PROXY_SECRET in repository.rule_proxy_tokens_for_sanitization()
+    assert exported["system"]["system_config"]["config_token"] == CONFIG_TOKEN
+    assert exported["system"]["system_config"]["rule_proxy_token"] == RULE_PROXY_SECRET
+    restored = ProfileRepository(tmp_path / "restored")
+    previous_token = restored.get_system()["system_config"]["rule_proxy_token"]
+    restored.import_all(exported)
+    restored_settings = restored.get_system()["system_config"]
+    expected_settings = repository.get_system()["system_config"]
+    assert previous_token in restored_settings['retired_rule_proxy_tokens']
+    assert {key: value for key, value in restored_settings.items() if key != 'retired_rule_proxy_tokens'} == {
+        key: value for key, value in expected_settings.items() if key != 'retired_rule_proxy_tokens'
+    }
+    assert restored.get_shared()["subscriptions"] == repository.get_shared()["subscriptions"]
+
+
+def test_desensitized_backup_removes_credentials_without_changing_live_state(tmp_path):
+    app, repository = _app_with_secrets(tmp_path)
+    response = app.test_client().get("/api/config/export?desensitize=true")
+    _assert_rule_proxy_secret_absent(response)
+    assert CONFIG_TOKEN.encode() not in response.get_data()
+    exported = json.loads(response.get_data())
+    assert "config_token" not in exported["system"]["system_config"]
+    assert exported["shared"]["subscriptions"][0]["url"] == REDACTED
     assert repository.get_system()["system_config"]["rule_proxy_token"] == RULE_PROXY_SECRET
 
 
@@ -338,7 +323,7 @@ def test_all_ordinary_json_api_responses_scrub_embedded_repository_token(tmp_pat
 def test_config_token_management_scrubs_legacy_value_embedding_internal_token(tmp_path):
     app, repository = _app_with_secrets(tmp_path)
     managed_value = f"managed::{RULE_PROXY_SECRET}"
-    repository.save_profile("default", {"system_config": {"config_token": managed_value}})
+    repository.save_system({"system_config": {"config_token": managed_value}})
 
     response = app.test_client().get("/api/config-token")
 
@@ -368,7 +353,6 @@ def test_agent_tokens_are_centrally_scrubbed_from_api_profile_export_and_mcp(tmp
     responses = [
         app.test_client().get("/api/agents"),
         app.test_client().get(f"/api/agents/{registered['id']}"),
-        app.test_client().get("/api/config/export"),
         app.test_client().get("/api/profiles/default/export"),
         _mcp_call(app.test_client(), "synthetic_agent_payload"),
     ]
@@ -383,7 +367,7 @@ def test_retired_internal_token_is_scrubbed_from_keys_and_values_after_multiple_
     repository = ProfileRepository(tmp_path)
     system = repository.get_system()
     system["system_config"]["retired_rule_proxy_tokens"] = [RULE_PROXY_SECRET]
-    repository._write_system(system)
+    repository.save_system(system)
 
     for restart in range(3):
         repository = ProfileRepository(tmp_path)
@@ -400,7 +384,7 @@ def test_retired_internal_token_is_scrubbed_from_keys_and_values_after_multiple_
         assert json.loads(serialized)["safe"] == restart
 
 
-def test_webdav_backup_export_strips_rule_proxy_token(tmp_path, monkeypatch):
+def test_webdav_backup_contains_full_restorable_system_and_shared_data(tmp_path, monkeypatch):
     app, _ = _app_with_secrets(tmp_path)
     uploaded = {}
 
@@ -433,9 +417,12 @@ def test_webdav_backup_export_strips_rule_proxy_token(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 200
-    _assert_all_secret_forms_absent(uploaded["content"])
-    assert b"rule_proxy_token" not in uploaded["content"]
-    assert json.loads(uploaded["content"])["system_config"]["config_token"] == CONFIG_TOKEN
+    exported = json.loads(uploaded["content"])
+    assert exported["system"]["system_config"]["rule_proxy_token"] == RULE_PROXY_SECRET
+    assert exported["system"]["system_config"]["config_token"] == CONFIG_TOKEN
+    restored = ProfileRepository(tmp_path / "webdav-restored")
+    restored.import_all(exported)
+    assert restored.get_shared()["subscriptions"] == exported["shared"]["subscriptions"]
 
 
 def test_rule_proxy_authentication_still_uses_migrated_internal_token(tmp_path, monkeypatch):
@@ -462,7 +449,7 @@ def test_rule_proxy_authentication_still_uses_migrated_internal_token(tmp_path, 
     assert response.get_data(as_text=True) == "domain:internal-path-still-works"
 
 
-def test_legacy_unicode_token_survives_restarts_and_stays_private_across_api_webdav_and_mcp(
+def test_legacy_unicode_token_survives_restarts_and_is_scrubbed_from_api_and_mcp(
     tmp_path, monkeypatch
 ):
     token = "旧令牌 +/&?=秘密🔐"
@@ -553,8 +540,9 @@ def test_legacy_unicode_token_survives_restarts_and_stays_private_across_api_web
             },
         )
         assert backup_response.status_code == 200
-        assert token.encode() not in uploads[-1]
-        assert REDACTED.encode() in uploads[-1]
+        backup = json.loads(uploads[-1])
+        assert backup["system"]["system_config"]["rule_proxy_token"] == token
+        assert backup["system"]["system_config"]["server_domain"] == legacy["system_config"]["server_domain"]
 
         auth_response = client.get(
             "/api/mosdns/rule-proxy",
@@ -615,5 +603,5 @@ def test_mcp_config_and_settings_responses_do_not_leak_rule_proxy_token(
     response = _mcp_call(app.test_client(), tool_name, arguments)
 
     _assert_rule_proxy_secret_absent(response)
-    if tool_name != "preview_config":
+    if tool_name != "preview_config" and not arguments.get("desensitize"):
         assert CONFIG_TOKEN.encode() in response.get_data()

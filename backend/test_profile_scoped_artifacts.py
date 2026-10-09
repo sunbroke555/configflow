@@ -7,10 +7,9 @@ import pytest
 from backend.common import config as config_module
 from backend.common.config_repository import ProfileRepository
 from backend.routes import register_blueprints
-from backend.routes.aggregations import generate_aggregation_provider
 from backend.converters.mihomo import get_mihomo_provider_downloads
 from backend.converters.mosdns import get_mosdns_ruleset_downloads
-from backend.routes.rules import get_ruleset_content, normalize_rule_config_url
+from backend.routes.rules import get_ruleset_content
 from backend.utils import subscription_cache
 from backend.utils.rule_utils import get_rules_dir
 
@@ -23,39 +22,58 @@ def setup_repository(tmp_path, monkeypatch):
     return repository
 
 
-def test_subscription_and_rule_caches_are_profile_scoped(tmp_path, monkeypatch):
+def test_raw_subscription_and_rule_caches_are_shared(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
     app = Flask(__name__)
 
     with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):
-        subscription_cache.save_subscription_nodes("same", [{"name": "alpha-node"}])
+        subscription_cache.save_subscription_nodes("same", [{"name": "shared-node"}])
+        alpha_cache = subscription_cache._get_cache_path("same")
         alpha_rules = get_rules_dir()
     with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "beta"}):
-        subscription_cache.save_subscription_nodes("same", [{"name": "beta-node"}])
+        assert subscription_cache.load_subscription_cache("same")["nodes"][0]["name"] == "shared-node"
+        beta_cache = subscription_cache._get_cache_path("same")
         beta_rules = get_rules_dir()
+        subscription_cache.save_subscription_nodes("same", [{"name": "updated-node"}])
 
     with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):
-        assert subscription_cache.load_subscription_cache("same")["nodes"][0]["name"] == "alpha-node"
-    with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "beta"}):
-        assert subscription_cache.load_subscription_cache("same")["nodes"][0]["name"] == "beta-node"
-    assert alpha_rules == str(repository.rules_dir("alpha"))
-    assert beta_rules == str(repository.rules_dir("beta"))
-    assert alpha_rules != beta_rules
+        assert subscription_cache.load_subscription_cache("same")["nodes"][0]["name"] == "updated-node"
+    assert alpha_cache == beta_cache == str(repository.shared_cache_dir() / "same.json")
+    assert alpha_rules == beta_rules == str(repository.shared_rules_dir())
 
 
 def test_aggregation_provider_is_profile_scoped(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
     app = Flask(__name__)
+    register_blueprints(app)
+    client = app.test_client()
     aggregation = {"id": "agg-same", "name": "Same", "subscriptions": [], "nodes": []}
+    repository.save_shared({"subscription_aggregations": [aggregation]})
+    for profile_id in ("alpha", "beta"):
+        repository.save_profile(profile_id, {
+            "proxy_groups": [{"id": "shared", "name": "Shared", "type": "select", "aggregations": ["agg-same"]}],
+        })
 
-    with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):
-        alpha_path = generate_aggregation_provider(aggregation)["file_path"]
-    with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "beta"}):
-        beta_path = generate_aggregation_provider(aggregation)["file_path"]
+    beta_path = repository.write_profile_text("beta", "providers/agg-same.yaml", "last-known-good-beta")
+    alpha = client.get(
+        "/api/profiles/alpha/aggregations/agg-same/provider",
+        headers={"X-ConfigFlow-Profile": "beta"},
+    )
+    assert alpha.status_code == 200, alpha.get_data(as_text=True)
+    alpha_path = repository.providers_dir("alpha") / "agg-same.yaml"
+    alpha_content = alpha_path.read_bytes()
+    assert alpha_content == alpha.data
+    assert beta_path.read_text(encoding="utf-8") == "last-known-good-beta"
 
-    assert alpha_path == str(repository.providers_dir("alpha") / "agg-same.yaml")
-    assert beta_path == str(repository.providers_dir("beta") / "agg-same.yaml")
+    beta = client.get(
+        "/api/profiles/beta/aggregations/agg-same/provider",
+        headers={"X-ConfigFlow-Profile": "alpha"},
+    )
+    assert beta.status_code == 200, beta.get_data(as_text=True)
+    assert beta_path.read_bytes() == beta.data
+    assert alpha_path.read_bytes() == alpha_content
     assert alpha_path != beta_path
+    assert not (repository.providers_dir("default") / "agg-same.yaml").exists()
 
 
 def test_generated_configuration_is_written_under_selected_profile(tmp_path, monkeypatch):
@@ -77,22 +95,25 @@ def test_generated_configuration_is_written_under_selected_profile(tmp_path, mon
 
 def test_generated_provider_urls_include_the_selected_profile(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
-    config = repository.get_compat_config("alpha")
-    config["system_config"]["server_domain"] = "http://configflow.test"
-    config["subscriptions"] = [{
+    repository.update_system_transaction(
+        lambda system: system["system_config"].update({"server_domain": "http://configflow.test"})
+    )
+    repository.save_shared({"subscriptions": [{
         "id": "sub-1",
         "name": "Primary",
         "url": "https://example.test/sub",
         "enabled": True,
-    }]
-    config["proxy_groups"] = [{
-        "id": "group-1",
-        "name": "Proxy",
-        "type": "select",
-        "enabled": True,
-        "subscriptions": ["sub-1"],
-    }]
-    config_module.set_repository(repository)
+    }]})
+    repository.save_profile("alpha", {
+        "proxy_groups": [{
+            "id": "group-1",
+            "name": "Proxy",
+            "type": "select",
+            "enabled": True,
+            "subscriptions": ["sub-1"],
+        }],
+    })
+    config = repository.get_compat_config("alpha")
 
     downloads = get_mihomo_provider_downloads(config, base_url="http://fallback.test")
 
@@ -142,12 +163,18 @@ def test_mosdns_refuses_to_generate_rule_proxy_url_without_internal_token():
 
 
 def _assert_generated_default_url_authenticates(repository, monkeypatch):
+    repository.update_system_transaction(
+        lambda system: system["system_config"].update({"server_domain": "https://config.test"})
+    )
+    repository.save_shared({"rule_library": [{
+        "id": "library-1", "name": "Rules", "source_type": "url",
+        "url": "https://rules.test/list",
+    }]})
     repository.save_profile("default", {
-        "system_config": {"server_domain": "https://config.test"},
         "mosdns": {"direct_rulesets": ["rules-1"], "proxy_rulesets": []},
         "rule_configs": [{
-            "id": "rules-1", "name": "Rules", "itemType": "ruleset",
-            "url": "https://rules.test/list",
+            "id": "rules-1", "itemType": "ruleset", "library_rule_id": "library-1",
+            "policy": "DIRECT", "enabled": True,
         }],
     })
     config_module.set_repository(repository)
@@ -181,12 +208,20 @@ def test_legacy_empty_token_generates_mosdns_url_accepted_by_rule_proxy(tmp_path
 
 def test_generated_profile_rule_proxy_url_downloads_with_auth_enabled(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
+    repository.update_system_transaction(
+        lambda system: system["system_config"].update({
+            "server_domain": "https://config.test", "config_token": "profile token",
+        })
+    )
+    repository.save_shared({"rule_library": [{
+        "id": "library-1", "name": "Rules", "source_type": "url",
+        "url": "https://rules.test/list",
+    }]})
     repository.save_profile("alpha", {
-        "system_config": {"server_domain": "https://config.test", "config_token": "profile token"},
         "mosdns": {"direct_rulesets": ["rules-1"], "proxy_rulesets": []},
         "rule_configs": [{
-            "id": "rules-1", "name": "Rules", "itemType": "ruleset",
-            "url": "https://rules.test/list",
+            "id": "rules-1", "itemType": "ruleset", "library_rule_id": "library-1",
+            "policy": "DIRECT", "enabled": True,
         }],
     })
     config = repository.get_compat_config("alpha")
@@ -215,67 +250,83 @@ def test_generated_profile_rule_proxy_url_downloads_with_auth_enabled(tmp_path, 
     assert fetched == ["https://rules.test/list"]
 
 
-def test_profile_resource_aliases_include_rule_library(tmp_path, monkeypatch):
+def test_rule_library_catalog_is_global_not_a_profile_alias(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
-    repository.save_profile("alpha", {
+    repository.save_shared({
         "rule_library": [{"id": "rule-1", "name": "Local", "source_type": "content", "content": "DOMAIN,example.test"}],
     })
     app = Flask(__name__)
     register_blueprints(app)
 
-    response = app.test_client().get("/api/profiles/alpha/rule-library")
+    client = app.test_client()
+    catalogs = []
+    for profile_id in ("alpha", "beta"):
+        response = client.get("/api/rule-library", headers={"X-ConfigFlow-Profile": profile_id})
+        assert response.status_code == 200
+        catalogs.append(response.get_json())
+        assert catalogs[-1][0]["id"] == "rule-1"
+        assert repository.get_profile(profile_id)["rule_configs"] == []
+        assert client.get(f"/api/profiles/{profile_id}/rule-library").status_code == 404
+    assert catalogs[0] == catalogs[1]
 
-    assert response.status_code == 200
-    assert response.get_json()[0]["id"] == "rule-1"
 
-
-def test_aggregation_workers_keep_the_selected_profile_context(tmp_path, monkeypatch):
+def test_aggregation_workers_share_raw_cache_and_scope_generated_provider(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
-    repository.save_profile("alpha", {
+    repository.save_shared({
         "subscriptions": [{
             "id": "sub-1",
             "name": "Primary",
             "url": "https://example.test/sub",
             "enabled": True,
         }],
+        "subscription_aggregations": [{
+            "id": "agg-1", "name": "Aggregation", "subscriptions": ["sub-1"], "nodes": [],
+        }],
+    })
+    repository.save_profile("alpha", {
+        "proxy_groups": [{"id": "shared", "name": "Shared", "type": "select", "aggregations": ["agg-1"]}],
     })
     app = Flask(__name__)
-    seen_profiles = []
+    register_blueprints(app)
+    client = app.test_client()
     monkeypatch.setattr(
         "backend.routes.aggregations.get_subscription_proxies_yaml",
-        lambda sub_id, url: ("ignored", "test"),
-    )
-    monkeypatch.setattr(
-        "backend.routes.aggregations.parse_proxies_from_yaml",
-        lambda text: [{"name": "node-1"}],
-    )
-    monkeypatch.setattr(
-        "backend.routes.aggregations.proxies_to_nodes",
-        lambda proxies: proxies,
-    )
-    monkeypatch.setattr(
-        "backend.routes.aggregations.save_subscription_nodes",
-        lambda sub_id, nodes, metadata=None, profile_id=None: seen_profiles.append(profile_id) or {"nodes": nodes},
-    )
-    monkeypatch.setattr(
-        "backend.routes.aggregations.load_subscription_cache",
-        lambda sub_id, profile_id=None: seen_profiles.append(profile_id) or None,
+        lambda sub_id, url: (
+            'proxies: [{name: node-1, type: ss, server: proxy.test, port: 443, cipher: aes-128-gcm, password: secret}]',
+            'test',
+        ),
     )
 
-    with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):
-        generate_aggregation_provider({
-            "id": "agg-1",
-            "name": "Aggregation",
-            "subscriptions": ["sub-1"],
-            "nodes": [],
-        })
+    response = client.get(
+        "/api/profiles/alpha/aggregations/agg-1/provider",
+        headers={"X-ConfigFlow-Profile": "beta"},
+    )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    alpha_path = repository.providers_dir("alpha") / "agg-1.yaml"
+    assert alpha_path.read_bytes() == response.data
+    assert "node-1" in response.get_data(as_text=True)
+    cache_path = repository.shared_cache_dir() / "sub-1.json"
 
-    assert seen_profiles == ["alpha"]
+    with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "beta"}):
+        cached = subscription_cache.load_subscription_cache("sub-1")
+        assert cached["nodes"][0]["name"] == "node-1"
+        assert subscription_cache._get_cache_path("sub-1") == str(cache_path)
+        assert config_module.get_config("beta")["subscriptions"] == []
+    beta_profile = repository.get_profile("beta")
+    beta = client.get(
+        "/api/profiles/beta/aggregations/agg-1/provider",
+        headers={"X-ConfigFlow-Profile": "alpha"},
+    )
+    assert beta.status_code == 200, beta.get_data(as_text=True)
+    assert alpha_path.read_bytes() == response.data
+    assert (repository.providers_dir("beta") / "agg-1.yaml").read_bytes() == beta.data
+    assert repository.get_profile("beta") == beta_profile
+    assert not (repository.providers_dir("default") / "agg-1.yaml").exists()
 
 
-def test_local_rule_refresh_uses_profile_repository_write(tmp_path, monkeypatch):
+def test_local_rule_refresh_uses_shared_repository_write(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
-    repository.save_profile("alpha", {
+    repository.save_shared({
         "rule_library": [{
             "id": "rule-1",
             "name": "Remote",
@@ -286,13 +337,13 @@ def test_local_rule_refresh_uses_profile_repository_write(tmp_path, monkeypatch)
     app = Flask(__name__)
     register_blueprints(app)
     calls = []
-    original_write = repository.write_profile_text
+    original_write = repository.write_shared_text
 
-    def write_profile_text(profile_id, relative_path, content):
-        calls.append(profile_id)
-        return original_write(profile_id, relative_path, content)
+    def write_shared_text(relative_path, content):
+        calls.append(relative_path)
+        return original_write(relative_path, content)
 
-    monkeypatch.setattr(repository, "write_profile_text", write_profile_text)
+    monkeypatch.setattr(repository, "write_shared_text", write_shared_text)
     monkeypatch.setattr(
         "backend.routes.rules.requests.get",
         lambda url, timeout: type("Response", (), {"status_code": 200, "text": "DOMAIN,remote.test"})(),
@@ -304,27 +355,43 @@ def test_local_rule_refresh_uses_profile_repository_write(tmp_path, monkeypatch)
     )
 
     assert response.status_code == 200
-    assert calls == ["alpha"]
+    assert calls == ["rules/Remote.list"]
+    assert (repository.shared_rules_dir() / "Remote.list").read_text(encoding="utf-8") == "DOMAIN,remote.test"
 
 
 def test_rule_library_content_urls_include_the_selected_profile(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
-    repository.save_profile("alpha", {
-        "rule_library": [{"id": "rule-1", "source_type": "content"}],
+    repository.save_shared({
+        "rule_library": [{"id": "rule-1", "name": "Local", "source_type": "content", "content": "DOMAIN,example.test"}],
     })
+    repository.update_system_transaction(
+        lambda system: system["system_config"].update({"server_domain": "https://config.test"})
+    )
+    for profile_id in ("alpha", "beta"):
+        repository.save_profile(profile_id, {"rule_configs": [{
+            "id": "selected-rule", "itemType": "ruleset", "library_rule_id": "rule-1",
+            "policy": "DIRECT", "enabled": True,
+        }]})
     app = Flask(__name__)
-    config_module.set_repository(repository)
+    register_blueprints(app)
+    client = app.test_client()
 
-    with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):
-        rule = {"library_rule_id": "rule-1"}
-        normalize_rule_config_url(rule)
+    for profile_id in ("alpha", "beta"):
+        response = client.get("/api/rules", headers={"X-ConfigFlow-Profile": profile_id})
+        assert response.status_code == 200
+        rule = response.get_json()[0]
+        assert rule["library_rule_id"] == "rule-1"
+        assert rule["name"] == "Local"
+        assert rule["url"] == f"https://config.test/api/profiles/{profile_id}/rule-library/content/rule-1"
+        assert "url" not in repository.get_profile(profile_id)["rule_configs"][0]
+        content = client.get(urlsplit(rule["url"]).path)
+        assert content.status_code == 200
+        assert content.get_data(as_text=True) == "DOMAIN,example.test"
 
-    assert rule["url"] == "/api/profiles/alpha/rule-library/content/rule-1"
 
-
-def test_rule_cache_workers_keep_the_selected_profile_context(tmp_path, monkeypatch):
+def test_rule_cache_workers_use_shared_rule_sources(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
-    repository.save_profile("alpha", {
+    repository.save_shared({
         "rule_library": [{
             "id": "rule-1",
             "name": "Remote",
@@ -334,10 +401,10 @@ def test_rule_cache_workers_keep_the_selected_profile_context(tmp_path, monkeypa
     })
     app = Flask(__name__)
     register_blueprints(app)
-    seen_profiles = []
+    seen_rules = []
     monkeypatch.setattr(
         "backend.utils.rule_utils.save_rule_to_local",
-        lambda rule, profile_id=None: seen_profiles.append(profile_id) or "cached.list",
+        lambda rule: seen_rules.append(rule["id"]) or "cached.list",
     )
 
     response = app.test_client().post(
@@ -347,20 +414,20 @@ def test_rule_cache_workers_keep_the_selected_profile_context(tmp_path, monkeypa
     )
 
     assert response.status_code == 200
-    assert seen_profiles == ["alpha"]
+    assert seen_rules == ["rule-1"]
 
 
-def test_ruleset_content_cache_uses_profile_repository_write(tmp_path, monkeypatch):
+def test_ruleset_content_cache_uses_shared_repository_write(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
     app = Flask(__name__)
     calls = []
-    original_write = repository.write_profile_text
+    original_write = repository.write_shared_text
 
-    def write_profile_text(profile_id, relative_path, content):
-        calls.append(profile_id)
-        return original_write(profile_id, relative_path, content)
+    def write_shared_text(relative_path, content):
+        calls.append(relative_path)
+        return original_write(relative_path, content)
 
-    monkeypatch.setattr(repository, "write_profile_text", write_profile_text)
+    monkeypatch.setattr(repository, "write_shared_text", write_shared_text)
     monkeypatch.setattr(
         "backend.routes.rules.requests.get",
         lambda url, timeout: type("Response", (), {"status_code": 200, "text": "DOMAIN,remote.test"})(),
@@ -373,12 +440,13 @@ def test_ruleset_content_cache_uses_profile_repository_write(tmp_path, monkeypat
         )
 
     assert content == "DOMAIN,remote.test"
-    assert calls == ["alpha"]
+    assert calls == ["rules/Remote.list"]
+    assert (repository.shared_rules_dir() / "Remote.list").read_text(encoding="utf-8") == content
 
 
 def test_corrupt_subscription_cache_is_ignored(tmp_path, monkeypatch):
     repository = setup_repository(tmp_path, monkeypatch)
-    (repository.cache_dir("alpha") / "broken.json").write_text("{", encoding="utf-8")
+    repository.write_shared_text("subscribes/broken.json", "{")
     app = Flask(__name__)
 
     with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):

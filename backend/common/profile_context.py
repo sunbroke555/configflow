@@ -29,26 +29,49 @@ def config_api_path(config_data, target: str) -> str:
     return f"/api/config/{profile_id}/{target}" if profile_id else f"/api/config/{target}"
 
 
+def _is_global_request() -> bool:
+    if (request.view_args or {}).get("profile_id") is not None:
+        return False
+    endpoint = request.endpoint or ""
+    if endpoint in {
+        "subscriptions.get_all_subscription_proxies",
+        "subscriptions.get_subscription_proxies",
+        "subscription_aggregations.get_aggregation_provider",
+    }:
+        return False
+    return (
+        request.blueprint in {
+            "auth", "settings", "mcp", "agents", "logs", "nodes",
+            "subscriptions", "subscription_aggregations", "rule_library", "profiles",
+        }
+        or endpoint in {"config.export_config", "config.import_config", "config.reset_config"}
+        or not request.path.startswith("/api/")
+        or not endpoint
+    )
+
+
 def resolve_profile_id(explicit: Optional[str] = None, fallback: Optional[str] = None) -> str:
-    """Resolve URL, header, query, active profile in that order."""
+    """Resolve explicit/path, query, header, then the stable default profile."""
     from backend.common.config import get_repository
 
     repository = get_repository()
     if explicit is not None:
         candidate = explicit
-    elif has_request_context():
-        route_values = request.view_args or {}
-        candidate = route_values.get("profile_id")
+    elif has_request_context() and (request.endpoint is None or not _is_global_request()):
+        candidate = (request.view_args or {}).get("profile_id")
+        if candidate is None:
+            candidate = request.args.get("profile")
+        if candidate is None:
+            candidate = request.args.get("profile_id")
         if candidate is None:
             candidate = request.headers.get("X-ConfigFlow-Profile")
-        if candidate is None:
-            candidate = request.args.get("profile") or request.args.get("profile_id")
     else:
         candidate = None
 
-    candidate = candidate or fallback or repository.active_profile_id()
+    if candidate is None:
+        candidate = fallback if fallback is not None else "default"
     repository.validate_profile_id(candidate)
-    repository.get_profile(candidate)
+    repository._profile_metadata(candidate)
     return candidate
 
 
@@ -60,8 +83,7 @@ def install_profile_context(app) -> None:
         from backend.common.config import reset_config_context
 
         reset_config_context()
-        endpoint = request.endpoint or ""
-        if endpoint.startswith("auth.") or endpoint == "profiles.handle_profiles":
+        if _is_global_request():
             g.configflow_profile_id = None
             return None
         g.configflow_profile_id = resolve_profile_id()
@@ -95,6 +117,16 @@ def install_profile_context(app) -> None:
                     and isinstance(payload.get("token"), str)
                 ):
                     sanitized["token"] = payload["token"]
+                # An authenticated Agent pull is a generated artifact, not metadata.
+                # Keep its bytes and checksum consistent; other fields stay scrubbed.
+                if (
+                    endpoint == "agents.get_agent_config"
+                    and response.status_code == 200
+                    and isinstance(payload, dict)
+                    and payload.get("success") is True
+                    and isinstance(payload.get("content"), str)
+                ):
+                    sanitized["content"] = payload["content"]
                 response.set_data(app.json.dumps(sanitized))
         return response
 

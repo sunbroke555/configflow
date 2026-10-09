@@ -3,7 +3,7 @@
     <span class="relative flex size-2 shrink-0">
       <span
         v-if="pulse"
-        class="absolute inline-flex size-full animate-ping rounded-full opacity-70"
+        class="absolute inline-flex size-full animate-ping rounded-full opacity-70 motion-reduce:animate-none"
         :class="dotClass"
         aria-hidden="true"
       />

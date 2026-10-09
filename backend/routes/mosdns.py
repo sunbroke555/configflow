@@ -10,7 +10,7 @@ from flask import request, jsonify
 from backend.converters.mihomo import apply_github_proxy_domain
 from backend.routes import mosdns_bp as bp
 from backend.common.auth import require_auth
-from backend.common.config import config_data, save_config
+from backend.common.config import get_config, save_config
 from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
 from backend.utils.url_utils import safe_exception_details, safe_url_for_log
 
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 def _load_cached_rule_content_for_url(original_url: str) -> str:
     """尝试从本地规则缓存中读取与 URL 对应的规则内容。"""
+    config_data = get_config()
     if not original_url:
         return ''
 
@@ -76,6 +77,7 @@ def _load_cached_rule_content_for_url(original_url: str) -> str:
 @require_auth
 def handle_mosdns_rulesets():
     """MosDNS 规则集管理"""
+    config_data = get_config()
     # 确保 mosdns 字段存在
     if 'mosdns' not in config_data:
         config_data['mosdns'] = {
@@ -108,7 +110,7 @@ def handle_mosdns_rulesets():
             mosdns_config['proxy_rulesets'] = data.get('proxy_rulesets', [])
             mosdns_config['direct_rules'] = data.get('direct_rules', [])
             mosdns_config['proxy_rules'] = data.get('proxy_rules', [])
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -118,6 +120,7 @@ def handle_mosdns_rulesets():
 @require_auth
 def handle_mosdns_custom_matches():
     """MosDNS 自定义匹配规则管理"""
+    config_data = get_config()
     # 确保 mosdns 字段存在
     if 'mosdns' not in config_data:
         config_data['mosdns'] = {
@@ -148,7 +151,7 @@ def handle_mosdns_custom_matches():
             data = request.json
             mosdns_config['custom_matches'] = data.get('custom_matches', [])
             mosdns_config['custom_match_position'] = data.get('position', 'tail')
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -158,6 +161,7 @@ def handle_mosdns_custom_matches():
 @require_auth
 def handle_mosdns_dns_servers():
     """MosDNS DNS 服务器配置"""
+    config_data = get_config()
     # 确保 mosdns 字段存在
     if 'mosdns' not in config_data:
         config_data['mosdns'] = {
@@ -192,7 +196,7 @@ def handle_mosdns_dns_servers():
             mosdns_config['fallback_dns'] = data.get('fallback_dns', '')
             mosdns_config['default_forward'] = data.get('default_forward', 'forward_remote')
             mosdns_config['custom_hosts'] = data.get('custom_hosts', '')
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -202,6 +206,7 @@ def handle_mosdns_dns_servers():
 @require_auth
 def handle_mosdns_log_settings():
     """MosDNS 日志设置"""
+    config_data = get_config()
     # 确保 mosdns 字段存在
     if 'mosdns' not in config_data:
         config_data['mosdns'] = {
@@ -235,7 +240,7 @@ def handle_mosdns_log_settings():
             mosdns_config['log_enabled'] = data.get('log_enabled', True)
             mosdns_config['log_level'] = data.get('log_level', 'info')
             mosdns_config['log_file'] = data.get('log_file', '')
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -245,6 +250,7 @@ def handle_mosdns_log_settings():
 @require_auth
 def handle_mosdns_api_settings():
     """MosDNS API 设置"""
+    config_data = get_config()
     # 确保 mosdns 字段存在
     if 'mosdns' not in config_data:
         config_data['mosdns'] = {
@@ -278,7 +284,7 @@ def handle_mosdns_api_settings():
             # 清理旧字段
             if 'api_addr' in mosdns_config:
                 del mosdns_config['api_addr']
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -288,6 +294,7 @@ def handle_mosdns_api_settings():
 @require_auth
 def handle_mosdns_cache_settings():
     """MosDNS 缓存设置"""
+    config_data = get_config()
     # 确保 mosdns 字段存在
     if 'mosdns' not in config_data:
         config_data['mosdns'] = {
@@ -357,7 +364,7 @@ def handle_mosdns_cache_settings():
             dump_file = data.get('cache_dump_file', './cache.dump')
             mosdns_config['cache_dump_file'] = str(dump_file) if dump_file is not None else './cache.dump'
 
-            save_config()
+            save_config(config_data)
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
@@ -500,7 +507,7 @@ def _require_rule_proxy_auth():
     # MCP 层发起的进程内调用，认证已在 /mcp 入口完成（与 validate_token_or_jwt 一致）
     if is_internal_call():
         return True
-    system_config = config_data.get('system_config', {})
+    system_config = get_config().get('system_config', {})
     config_token = system_config.get('config_token', '')
     rule_proxy_token = system_config.get('rule_proxy_token', '')
     header = request.headers.get('Authorization', '')
@@ -522,6 +529,29 @@ def _require_rule_proxy_auth():
         (rule_proxy_token and url_token == rule_proxy_token)
         or (config_token and url_token == config_token)
     )
+
+
+def _local_content_rule(original_url, config):
+    """Resolve only this profile's inline library sources, without self-HTTP."""
+    from backend.common.profile_context import profile_api_path
+
+    parsed = urlparse(original_url)
+    base = config.get('system_config', {}).get('server_domain', '').strip() or request.host_url.rstrip('/')
+    origin = urlparse(base)
+    if parsed.scheme or parsed.netloc:
+        if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc):
+            return None
+    if parsed.query or parsed.fragment:
+        return None
+    selected = {rule.get('library_rule_id') for rule in config.get('rule_configs', [])
+                if rule.get('enabled', True) and rule.get('library_enabled', True)}
+    for rule in config.get('rule_library', []):
+        if rule.get('id') not in selected or rule.get('source_type') != 'content':
+            continue
+        path = profile_api_path(config, f'/rule-library/content/{rule["id"]}')
+        if parsed.path in {path, origin.path.rstrip('/') + path}:
+            return rule.get('content', '')
+    return None
 
 
 @bp.route('/rule-proxy', methods=['GET'])
@@ -550,6 +580,7 @@ def mosdns_rule_proxy():
         import re
         import requests
 
+        config_data = get_config()
         if not _require_rule_proxy_auth():
             return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
@@ -558,24 +589,22 @@ def mosdns_rule_proxy():
         if not original_url:
             return jsonify({'success': False, 'message': 'URL parameter is required'}), 400
 
-        # 应用代理替换后仍须按最终 URL 做 SSRF 校验。
-        fetch_url = apply_github_proxy_domain(original_url, config_data)
-        _validate_remote_url(fetch_url)
-
-        # 拉取原始规则文件
-        original_content = ''
-        try:
-            original_content = _fetch_remote_content(fetch_url)
-
-        except requests.exceptions.RequestException as e:
-            logger.warning(
-                "远程拉取规则失败，尝试使用本地缓存兜底: %s %s",
-                safe_url_for_log(original_url),
-                safe_exception_details(e),
-            )
-            original_content = _load_cached_rule_content_for_url(original_url)
-            if not original_content:
-                return jsonify({'success': False, 'message': 'Failed to fetch original URL'}), 500
+        original_content = _local_content_rule(original_url, config_data)
+        if original_content is None:
+            # Every network request, including redirects, keeps the pinned SSRF gate.
+            fetch_url = apply_github_proxy_domain(original_url, config_data)
+            _validate_remote_url(fetch_url)
+            try:
+                original_content = _fetch_remote_content(fetch_url)
+            except requests.exceptions.RequestException as e:
+                logger.warning(
+                    "远程拉取规则失败，尝试使用本地缓存兜底: %s %s",
+                    safe_url_for_log(original_url),
+                    safe_exception_details(e),
+                )
+                original_content = _load_cached_rule_content_for_url(original_url)
+                if not original_content:
+                    return jsonify({'success': False, 'message': 'Failed to fetch original URL'}), 500
 
         # 检测内容格式
         # 如果内容已经是 mosdns 格式，则直接返回

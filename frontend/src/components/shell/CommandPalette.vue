@@ -1,8 +1,8 @@
 <template>
   <CommandDialog v-model:open="open">
-    <CommandInput placeholder="跳转到页面，或输入操作…" />
+    <CommandInput placeholder="搜索页面或操作…" />
     <CommandList>
-      <CommandEmpty>没有匹配的页面</CommandEmpty>
+      <CommandEmpty>没有找到匹配项，试试其他关键词。</CommandEmpty>
       <CommandGroup v-for="group in groups" :key="group.scope" :heading="group.title || '总览'">
         <CommandItem
           v-for="item in visibleItems(group)"

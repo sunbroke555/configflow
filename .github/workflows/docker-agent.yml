@@ -15,7 +15,7 @@ on:
 
 env:
   REGISTRY_DOCKERHUB: docker.io
-  IMAGE_NAME: thsrite/config-flow-agent
+  IMAGE_NAME: ${{ vars.DOCKERHUB_NAMESPACE || 'thsrite' }}/config-flow-agent
 
 jobs:
   check-upstream:

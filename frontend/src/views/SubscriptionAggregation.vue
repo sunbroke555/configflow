@@ -3,13 +3,12 @@
     <ScopeBanner
       scope="resource"
       :profile-name="cfProfileName"
-      description="把多个订阅与节点合并成一个可引用的集合"
+      description="所有配置共用这些聚合；修改会影响使用它的所有配置。"
     />
 
     <PageHeader
-      eyebrow="Resource"
       title="订阅聚合"
-      description="把多个订阅与节点合并成一个可引用的集合，供策略组直接引用。"
+      description="把多个订阅和节点合并，再到策略组中选择使用。"
     >
       <template #actions>
         <Button
@@ -22,7 +21,7 @@
           <ArrowUpDown class="size-4" />
           调整顺序
         </Button>
-        <Button class="shadow-glow" @click="showAddDialog">
+        <Button @click="showAddDialog">
           <Plus class="size-4" />
           添加聚合
         </Button>
@@ -41,7 +40,7 @@
       <EmptyState
         :icon="Share2"
         title="暂无聚合"
-        description="聚合可以把若干订阅与独立节点合并成一个集合，再被策略组统一引用。"
+        description="添加聚合，选择要合并的订阅和节点，即可在策略组中一起使用。"
       >
         <Button @click="showAddDialog">
           <Plus class="size-4" />
@@ -62,7 +61,7 @@
         :data-id="aggregation.id"
         data-reorder-item
         :class="[
-          'hairline edge-light relative flex flex-col gap-3 overflow-hidden rounded-xl border border-border/35 bg-card/55 p-4 backdrop-blur-xl transition-all duration-300 hover:shadow-glow-soft',
+          'relative flex flex-col gap-3 overflow-hidden rounded-xl border border-border bg-card p-4 transition-colors duration-200',
           !aggregation.enabled && 'opacity-60'
         ]"
       >
@@ -188,10 +187,10 @@
 
     <!-- ===== 新增 / 编辑聚合 ===== -->
     <Dialog v-model:open="dialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[760px] border-border/50">
+      <DialogContent class="max-w-[760px]">
         <DialogHeader>
           <DialogTitle>{{ isEdit ? '编辑聚合' : '添加聚合' }}</DialogTitle>
-          <DialogDescription>选择订阅或节点，构建一个新的聚合输出。</DialogDescription>
+          <DialogDescription>选择要合并的订阅和节点，可按节点名称筛选。</DialogDescription>
         </DialogHeader>
 
         <div class="flex max-h-[62dvh] flex-col gap-4 overflow-y-auto pr-1">
@@ -207,7 +206,7 @@
               :options="subscriptionOptions"
               placeholder="选择要包含的订阅"
             />
-            <p class="m-0 text-[12px] text-muted-foreground">选择的订阅中的所有节点都会被包含在聚合中。</p>
+            <p class="m-0 text-[12px] text-muted-foreground">加入所选订阅的节点；填写下方正则表达式可进一步筛选。</p>
           </div>
 
           <div class="flex flex-col gap-1.5">
@@ -217,7 +216,7 @@
               :options="nodeOptions"
               placeholder="选择要包含的节点"
             />
-            <p class="m-0 text-[12px] text-muted-foreground">可额外加入独立节点，与订阅节点一起输出。</p>
+            <p class="m-0 text-[12px] text-muted-foreground">还可加入独立节点，与订阅节点一起使用。</p>
           </div>
 
           <div class="flex flex-col gap-1.5">
@@ -239,7 +238,7 @@
               placeholder="留空使用默认（http://www.gstatic.com/generate_204）"
             />
             <p class="m-0 text-[12px] text-muted-foreground">
-              回家 / 内网聚合从国内出网，境外地址会被误判为失活，建议填 http://www.baidu.com
+              回家或内网节点若无法访问境外测试地址，可能被误判为不可用；建议填 http://www.baidu.com。
             </p>
           </div>
 
@@ -277,7 +276,7 @@
 
     <!-- ===== 节点预览 ===== -->
     <Dialog v-model:open="previewDialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[660px] border-border/50">
+      <DialogContent class="max-w-[660px]">
         <DialogHeader>
           <DialogTitle>节点预览</DialogTitle>
           <DialogDescription>
@@ -351,7 +350,7 @@
 
     <!-- ===== 单个订阅的节点列表 ===== -->
     <Dialog v-model:open="subscriptionNodesDialogVisible">
-      <DialogContent class="glass-strong hairline max-w-[600px] border-border/50">
+      <DialogContent class="max-w-[600px]">
         <DialogHeader>
           <DialogTitle>{{ currentSubscription.name }} · 节点列表</DialogTitle>
           <DialogDescription>
@@ -418,6 +417,7 @@ import LoadingRows from '@/components/common/LoadingRows.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import ScopeBanner from '@/components/shell/ScopeBanner.vue'
 import ReorderBar from '@/components/shell/ReorderBar.vue'
 import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
@@ -637,7 +637,7 @@ const saveAggregation = async () => {
 }
 
 const deleteAggregation = async (aggregation: Aggregation) => {
-  const ok = await confirmDanger(`确定要删除聚合「${aggregation.name}」吗？`, {
+  const ok = await confirmDanger(`确定删除聚合「${aggregation.name}」吗？如果仍有配置在使用它，将无法删除，请先取消相关使用。删除后无法恢复。`, {
     title: '删除聚合'
   })
   if (!ok) return
@@ -734,7 +734,7 @@ const reorder = useReorder<any>({
 const handleSaveOrder = async () => {
   try {
     await reorder.save()
-    notify.success('顺序已保存，所有配置空间生效')
+    notify.success('顺序已保存，对所有配置生效')
   } catch (error) {
     notify.error('保存顺序失败，顺序已还原')
   }

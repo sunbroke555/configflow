@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="promptState.open" @update:open="value => !value && settlePrompt(null)">
-    <DialogContent class="glass-strong hairline max-w-[420px] border-border/50">
+    <DialogContent class="max-w-[420px]">
       <DialogHeader>
         <DialogTitle>{{ promptState.title }}</DialogTitle>
         <DialogDescription v-if="promptState.description">

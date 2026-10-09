@@ -62,6 +62,11 @@ const routes = [
     component: () => import('@/views/ProxyGroups.vue')
   },
   {
+    path: '/system-settings',
+    name: 'SystemSettings',
+    component: () => import('@/views/SystemSettings.vue')
+  },
+  {
     path: '/generate',
     name: 'Generate',
     component: () => import('@/views/Generate.vue')

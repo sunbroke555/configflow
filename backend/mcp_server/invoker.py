@@ -58,8 +58,10 @@ def call_api(
     clean_query = {k: v for k, v in (query or {}).items() if v is not None}
 
     request_headers = dict(headers or {})
-    selected_profile_id = profile_id or _MCP_PROFILE_ID.get()
-    if selected_profile_id:
+    selected_profile_id = profile_id if profile_id is not None else _MCP_PROFILE_ID.get()
+    if selected_profile_id is not None:
+        if not isinstance(selected_profile_id, str):
+            raise ApiError(400, 'profile_id 必须是字符串')
         request_headers.setdefault('X-ConfigFlow-Profile', selected_profile_id)
     request_headers[INTERNAL_CALL_HEADER] = INTERNAL_CALL_TOKEN
 
