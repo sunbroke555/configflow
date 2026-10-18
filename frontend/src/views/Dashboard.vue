@@ -264,6 +264,8 @@ const live = useLive()
 const { boundAgents, speedOf, downHistory } = live
 
 const loading = ref(false)
+let disposed = false
+const canRefresh = () => !disposed && !document.hidden
 const loadFailed = ref(false)
 const counts = ref({ subscriptions: 0, nodes: 0, proxyGroups: 0, rules: 0 })
 const history = ref<Record<string, number[]>>({})
@@ -510,6 +512,7 @@ interface StreamEvent {
 const LOG_LINE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})[,.]?\d*\s+-\s+([\w.]+)\s+-\s+(\w+)\s+-\s+(.*)$/
 const events = ref<StreamEvent[]>([])
 const eventsLoaded = ref(false)
+let eventsLoading = false
 
 const classify = (logger: string, message: string, level: string): Pick<StreamEvent, 'task' | 'tone' | 'icon'> => {
   const text = `${logger} ${message}`.toLowerCase()
@@ -523,6 +526,8 @@ const classify = (logger: string, message: string, level: string): Pick<StreamEv
 }
 
 const loadEvents = async () => {
+  if (!canRefresh() || eventsLoading) return
+  eventsLoading = true
   try {
     const { data } = await api.get('/logs/tail', { params: { lines: 60 } })
     const lines: string[] = data?.logs || []
@@ -543,6 +548,7 @@ const loadEvents = async () => {
   } catch {
     // 日志不可读时保留上次结果
   } finally {
+    eventsLoading = false
     eventsLoaded.value = true
   }
 }
@@ -582,6 +588,7 @@ const healthRows = computed(() =>
 )
 
 const loadHealth = async () => {
+  if (!canRefresh() || healthLoading.value) return
   healthLoading.value = true
   try {
     const { data } = await subscriptionApi.health()
@@ -603,6 +610,7 @@ const QUICK_ACTIONS: Array<{ id: AppAction; icon: typeof Zap }> = [
 
 /* ---------- 数据加载 ---------- */
 const loadAllData = async () => {
+  if (!canRefresh() || loading.value) return
   loading.value = true
   try {
     const [stats, subRes, groupRes, ruleSetRes, nodeRes, latencyRes] = await Promise.allSettled([
@@ -613,6 +621,8 @@ const loadAllData = async () => {
       nodeApi.getAll(),
       nodeApi.latency()
     ])
+
+    if (!canRefresh()) return
 
     loadFailed.value = [stats, subRes, groupRes, ruleSetRes, nodeRes].some(result => result.status === 'rejected')
       || (stats.status === 'fulfilled' && !stats.value.data?.success)
@@ -652,26 +662,33 @@ const loadAllData = async () => {
     } else {
       subscriptionNodeNames.value = []
     }
+    // Keep this refresh in flight through its follow-up reads as well.
+    if (!canRefresh()) return
+    await Promise.all([loadHealth(), loadEvents(), live.refresh()])
   } finally {
     loading.value = false
   }
-  loadHealth()
-  loadEvents()
-  live.refresh()
 }
 
 let timer: number | undefined
 let eventTimer: number | undefined
 
+const onVisibilityChange = () => {
+  if (canRefresh()) void loadAllData()
+}
+
 onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
   live.start()
   loadAllData()
   timer = window.setInterval(loadAllData, 30000)
   // 事件流比其他数据刷新得更勤，页面不可见时跳过
-  eventTimer = window.setInterval(() => !document.hidden && loadEvents(), 5000)
+  eventTimer = window.setInterval(loadEvents, 5000)
 })
 
 onUnmounted(() => {
+  disposed = true
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   live.stop()
   clearInterval(timer)
   clearInterval(eventTimer)

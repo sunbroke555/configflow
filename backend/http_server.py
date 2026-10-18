@@ -35,5 +35,12 @@ def run_http_server(app, *, debug=False):
         return
 
     from waitress import serve
+    from backend.http_queue import QueueWaitDispatcher
 
-    serve(app, **server_options())
+    options = server_options()
+    dispatcher = QueueWaitDispatcher()
+    try:
+        dispatcher.set_thread_count(options['threads'])
+        serve(app, _dispatcher=dispatcher, **options)
+    finally:
+        dispatcher.shutdown()
