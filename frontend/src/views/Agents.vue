@@ -747,6 +747,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import StatTile from '@/components/common/StatTile.vue'
 import StatusDot from '@/components/common/StatusDot.vue'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
 import { agentApi } from '@/api'
 import api from '@/api'
@@ -1830,90 +1831,20 @@ const generateScript = async () => {
   }
 }
 
-// 复制命令
-const copyCommand = () => {
-  if (!installCommand.value) return
-
-  // 检查 Clipboard API 是否可用
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(installCommand.value).then(() => {
-      notify.success('命令已复制到剪贴板')
-    }).catch(() => {
-      fallbackCopy(installCommand.value)
-    })
-  } else {
-    // 降级到传统方法
-    fallbackCopy(installCommand.value)
-  }
-}
-
-// 复制 Alpine 命令
-const copyCommandAlpine = () => {
-  if (!installCommandAlpine.value) return
-
-  // 检查 Clipboard API 是否可用
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(installCommandAlpine.value).then(() => {
-      notify.success('Alpine 命令已复制到剪贴板')
-    }).catch(() => {
-      fallbackCopy(installCommandAlpine.value)
-    })
-  } else {
-    // 降级到传统方法
-    fallbackCopy(installCommandAlpine.value)
-  }
-}
-
-// 复制 Docker Compose
-const copyDockerCompose = () => {
-  if (!dockerComposeContent.value) return
-
-  // 检查 Clipboard API 是否可用
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(dockerComposeContent.value).then(() => {
-      notify.success('Docker Compose 已复制到剪贴板')
-    }).catch(() => {
-      fallbackCopy(dockerComposeContent.value)
-    })
-  } else {
-    // 降级到传统方法
-    fallbackCopy(dockerComposeContent.value)
-  }
-}
-
-// 复制 Docker Run 命令
-const copyDockerRun = () => {
-  if (!dockerRunCommand.value) return
-
-  // 检查 Clipboard API 是否可用
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(dockerRunCommand.value).then(() => {
-      notify.success('Docker Run 命令已复制到剪贴板')
-    }).catch(() => {
-      fallbackCopy(dockerRunCommand.value)
-    })
-  } else {
-    // 降级到传统方法
-    fallbackCopy(dockerRunCommand.value)
-  }
-}
-
-// 降级复制方法
-const fallbackCopy = (text: string) => {
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
+const copyAgentContent = async (text: string, message: string) => {
+  if (!text) return
   try {
-    document.execCommand('copy')
-    notify.success('内容已复制到剪贴板')
-  } catch (err) {
+    await copyText(text)
+    notify.success(message)
+  } catch {
     notify.error('复制失败，请手动复制')
   }
-  document.body.removeChild(textarea)
 }
+
+const copyCommand = () => copyAgentContent(installCommand.value, '命令已复制到剪贴板')
+const copyCommandAlpine = () => copyAgentContent(installCommandAlpine.value, 'Alpine 命令已复制到剪贴板')
+const copyDockerCompose = () => copyAgentContent(dockerComposeContent.value, 'Docker Compose 已复制到剪贴板')
+const copyDockerRun = () => copyAgentContent(dockerRunCommand.value, 'Docker Run 命令已复制到剪贴板')
 
 // 推送配置
 const pushingIds = ref<Set<string>>(new Set())

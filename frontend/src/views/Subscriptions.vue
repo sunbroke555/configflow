@@ -538,6 +538,7 @@ import ViewToggle from '@/components/common/ViewToggle.vue'
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Motion } from 'motion-v'
 import { confirmDanger, notify } from '@/lib/feedback'
+import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
 
 
@@ -1059,7 +1060,7 @@ const statusText = (sub: Subscription): string => {
 
 const copyUrl = async (sub: Subscription) => {
   try {
-    await navigator.clipboard.writeText(sub.url || '')
+    await copyText(sub.url || '')
     notify.success('地址已复制')
   } catch {
     notify.error('复制失败，请手动选择地址')
