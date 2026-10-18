@@ -12,6 +12,16 @@ from backend.utils.provider_delivery import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_source_cache(tmp_path, monkeypatch):
+    from backend.common import config
+    from backend.common.config_repository import ProfileRepository
+    monkeypatch.setattr(config, '_repository', ProfileRepository(tmp_path))
+    config.reset_config_context()
+    yield
+    config.reset_config_context()
+
+
 def snapshot(main=None):
     return DeliverySnapshot.capture('default', main or {'proxies': [], 'proxy-groups': []})
 
@@ -113,7 +123,7 @@ def test_valid_provider_output_and_success_path_parsing_unchanged(monkeypatch, t
 
 
 def test_invalid_download_does_not_fall_back_to_cache(monkeypatch):
-    cache = Mock(side_effect=AssertionError('Content errors must not use cached nodes'))
+    cache = Mock(side_effect=[None, AssertionError('Content errors must not use cached nodes')])
     monkeypatch.setattr('backend.utils.subscription_cache.load_subscription_cache', cache)
     sub = {'id': 's', 'name': 'Feed', 'url': 'https://example.test/sub'}
     with pytest.raises(DialerReferenceError) as caught:
@@ -124,7 +134,7 @@ def test_invalid_download_does_not_fall_back_to_cache(monkeypatch):
     assert detail.count('订阅「Feed」') == 1
     assert detail.count('文件：./providers/s.yaml') == 1
     assert 'proxies[0].type' in detail
-    cache.assert_not_called()
+    cache.assert_called_once_with('s')
 
 
 def test_missing_cache_retains_transport_diagnostic_and_source(monkeypatch):

@@ -59,11 +59,13 @@ def health_impact(resource_id):
 # ============================================================================
 
 def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
-                                  main_config=None, persist=True, subscription_fetch=None) -> Dict[str, Any]:
+                                  main_config=None, persist=True, subscription_fetch=None,
+                                  source_prepared=False) -> Dict[str, Any]:
     """生成订阅聚合的 provider YAML 文件
 
     Args:
         aggregation: 聚合配置，包含 subscriptions、nodes、regex_filter 等字段
+        source_prepared: 调用方已按刷新策略固定本次发布的数据，直接复用其结果
 
     Returns:
         Dict[str, Any]: 包含文件路径和节点统计数据
@@ -74,7 +76,7 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
         }
 
     处理流程：
-    1. 从选择的订阅中获取节点（优先从URL获取并更新缓存，失败则读取本地缓存）
+    1. 按订阅源更新间隔获取节点；关闭更新或尚未到期时复用缓存
     2. 添加手动选择的节点（避免重复）
     3. 应用正则过滤
     4. 转换为 mihomo 格式
@@ -133,8 +135,8 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
             # 优先通过 Sub-Store 获取
             try:
                 logger.info(f"尝试通过 Sub-Store 获取订阅最新数据: '{sub['name']}'")
-                result = fetch_subscription_source(
-                    sub, fetch=subscription_fetch or get_subscription_proxies_yaml)
+                fetch = subscription_fetch or get_subscription_proxies_yaml
+                result = fetch(sub_id, sub['url']) if source_prepared else fetch_subscription_source(sub, fetch=fetch)
                 yaml_text, source = result
                 from backend.utils.provider_delivery import parse_provider_proxies
                 proxies = parse_provider_proxies(yaml_text, name=sub['name'])
@@ -178,7 +180,7 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
                     logger.error(f"订阅 '{sub['name']}' 既无法从 Sub-Store 获取也没有本地缓存")
                     nodes_list = []
 
-            metadata = source_cache_metadata(sub, result) if proxies is not None and source != 'cache' else None
+            metadata = source_cache_metadata(sub, result) if proxies is not None and source not in ('cache', 'prepared_yaml') else None
             return sub_id, proxies, nodes_list, metadata
 
         # 并发拉取各订阅：单个订阅经 Sub-Store 解析最长可耗数十秒，
