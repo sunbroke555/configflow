@@ -463,7 +463,7 @@
                 <p class="m-0">Agent 名称可使用字母、数字、短横线或下划线。生成命令不会注册 Agent，需在目标机器执行后才会接入面板。</p>
                 <template v-if="scriptForm.installType === 'shell'">
                   <p class="m-0">在目标机器以 root 身份执行，支持 systemd / OpenRC。勾选安装核心后，脚本先安装核心，成功后再安装 Agent；已有核心和配置会保留，仅补装缺少的核心。</p>
-                  <p class="m-0">默认使用 curl，也可切换 wget；完整下载成功后才执行。环境检测与依赖补装由脚本完成；如果两个下载工具都没有，请先安装 curl 或 wget。</p>
+                  <p class="m-0">默认使用 curl，也可切换 wget；完整下载为当前目录的 configflow-install.sh 后才执行。环境检测与依赖补装由脚本完成；两个下载工具都没有时，请先安装一个。</p>
                   <p class="m-0 break-words">安装核心时使用 <code class="font-mono">/etc/{{ shellAio ? '{mihomo,oxidns}' : scriptForm.type }}/config.yaml</code>，程序位于 <code class="font-mono">/usr/local/bin</code>，服务名与核心同名。已有部署须与默认布局一致；自定义部署请取消勾选，并在高级配置中填写实际路径。</p>
                   <template v-if="shellAio">
                     <p class="m-0"><strong class="font-medium text-foreground">同机 DNS：</strong>OxiDNS <code class="font-mono">53</code> → Mihomo <code class="font-mono">127.0.0.1:1053</code>。发布 Mihomo 配置时自动将 DNS 监听和 TUN DNS 劫持端口调整为 <code class="font-mono">1053</code>。</p>
@@ -512,11 +512,12 @@
                         <Copy class="size-4" />复制命令
                       </Button>
                     </div>
+                    <p class="m-0 text-[11.5px] text-muted-foreground">链接有效至 {{ coreInstallLinkExpiry }}，过期后请重新生成。</p>
                     <Textarea id="core-install-command" :model-value="coreInstallCommand" :aria-label="`${coreInstallLabel}的独立安装命令`" readonly :rows="3" class="max-h-48 bg-background/50 font-mono text-[11.5px]" />
                     <Collapsible>
                       <CollapsibleTrigger class="min-h-11 w-full text-left text-[12.5px] text-muted-foreground">查看核心安装脚本</CollapsibleTrigger>
                       <CollapsibleContent>
-                        <p class="mt-0 text-[12px] text-muted-foreground">通用脚本预览；上方命令会传入所选核心，请复制上方命令执行。</p>
+                        <p class="mt-0 text-[12px] text-muted-foreground">已包含所选核心，与上方链接下载的脚本一致。</p>
                         <Textarea :model-value="coreInstallScript" :aria-label="`${coreInstallLabel}的独立安装脚本`" readonly :rows="12" class="max-h-64 bg-background/50 font-mono text-[11.5px]" />
                       </CollapsibleContent>
                     </Collapsible>
@@ -538,6 +539,7 @@
                 <RadioGroupItem :value="downloader" />{{ downloader }}
               </label>
             </RadioGroup>
+            <p v-if="scriptForm.installType === 'shell'" class="m-0 text-[11.5px] text-muted-foreground">链接有效至 {{ installLinkExpiry }}，过期后请重新生成。</p>
             <div v-for="block in commandBlocks" :key="block.title" class="flex min-w-0 flex-col gap-2">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <span class="text-[12.5px] font-semibold text-foreground">{{ block.title }}</span>
@@ -719,7 +721,7 @@ import FlowMap, { type FlowColumn, type FlowEdge, type FlowTone } from '@/compon
 import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
-import { buildAgentInstallCommand, buildAgentCoreInstallCommand, buildCoreInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
+import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import { Motion } from 'motion-v'
 import {
@@ -854,11 +856,12 @@ let scriptRequest = 0
 const INSTALLER_DOWNLOADERS = ['curl', 'wget'] as const
 const installerDownloader = ref<InstallerDownloader>('curl')
 const installScriptUrl = ref('')
-const installScriptIncludesCore = ref(false)
+const installLinkExpiry = ref('')
 const installCommand = computed(() => installScriptUrl.value
-  ? (installScriptIncludesCore.value ? buildAgentCoreInstallCommand : buildAgentInstallCommand)(installScriptUrl.value, installerDownloader.value)
+  ? buildInstallCommand(installScriptUrl.value, installerDownloader.value)
   : '')
 const coreInstallScriptUrl = ref('')
+const coreInstallLinkExpiry = ref('')
 const CORE_INSTALL_TARGETS = [
   { value: 'both', label: 'Mihomo + OxiDNS' },
   { value: 'mihomo', label: '仅 Mihomo' },
@@ -866,7 +869,7 @@ const CORE_INSTALL_TARGETS = [
 ] as const
 const coreInstallTarget = ref<CoreInstallTarget>('both')
 const coreInstallCommand = computed(() => coreInstallScriptUrl.value
-  ? buildCoreInstallCommand(coreInstallScriptUrl.value, coreInstallTarget.value, installerDownloader.value)
+  ? buildInstallCommand(coreInstallScriptUrl.value, installerDownloader.value)
   : '')
 const coreInstallLabel = computed(() => coreInstallTarget.value === 'both' ? '两个核心' : coreInstallTarget.value === 'mihomo' ? 'Mihomo' : 'OxiDNS')
 const coreInstallScript = ref('')
@@ -946,11 +949,38 @@ watch(() => [scriptForm.value.type, scriptForm.value.installType, scriptForm.val
 const resetCoreInstallCommand = () => {
   coreInstallRequest += 1
   coreInstallScriptUrl.value = ''
+  coreInstallLinkExpiry.value = ''
   coreInstallScript.value = ''
   coreInstallLoading.value = false
 }
 
 watch([shellAio, aioCoreInstall, scriptDialogVisible, coreInstallTarget], resetCoreInstallCommand, { flush: 'sync' })
+
+const installCommandUpdateMessage = '当前服务不支持短安装链接，请更新 ConfigFlow 后重试'
+
+const readInstallCommand = (data: unknown, baseUrl: URL) => {
+  if (!data || typeof data !== 'object') throw new Error(installCommandUpdateMessage)
+  const { script, download_path: path, expires_at: expiresAt } = data as Record<string, unknown>
+  if (typeof script !== 'string' || !script.startsWith('#!')) throw new Error(installCommandUpdateMessage)
+  if (typeof path !== 'string' || !/^\/api\/agents\/i\/[A-Za-z0-9_-]{22}$/.test(path)) {
+    throw new Error('服务返回的安装链接无效，请更新 ConfigFlow 后重试')
+  }
+  if (typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() / 1000) {
+    throw new Error('安装链接已失效，请重新生成')
+  }
+  const url = new URL(baseUrl)
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`
+  return {
+    script, url: url.toString(),
+    expiry: new Date(expiresAt * 1000).toLocaleString('zh-CN', {
+      month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+    })
+  }
+}
+
+const installCommandError = (error: any, fallback: string) => [404, 405].includes(error.response?.status)
+  ? installCommandUpdateMessage
+  : error.response?.data?.message || error.message || fallback
 
 const generateCoreInstallCommand = async () => {
   if (coreInstallLoading.value) return
@@ -966,20 +996,18 @@ const generateCoreInstallCommand = async () => {
     if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.search || baseUrl.hash || baseUrl.username || baseUrl.password) {
       throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
     }
-    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, '')}/api/agents/core-install-script`
-    const response = await agentApi.generateCoreInstallScript()
+    const response = await agentApi.generateCoreInstallCommand(coreInstallTarget.value)
     if (request !== coreInstallRequest || !shellAio.value || aioCoreInstall.value || !scriptDialogVisible.value) return
-    if (typeof response.data !== 'string' || !response.data.trimStart().startsWith('#!')) {
-      throw new Error('服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新')
-    }
-    if (response.data.split('\n', 2)[1] !== CORE_INSTALL_INTERFACE) {
+    const result = readInstallCommand(response.data, baseUrl)
+    if (result.script.split('\n', 2)[1] !== CORE_INSTALL_INTERFACE) {
       throw new Error('安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试')
     }
-    coreInstallScript.value = response.data
-    coreInstallScriptUrl.value = baseUrl.toString()
+    coreInstallScript.value = result.script
+    coreInstallScriptUrl.value = result.url
+    coreInstallLinkExpiry.value = result.expiry
     notify.success('核心安装命令已生成，请以 root 身份在目标机器执行')
   } catch (error: any) {
-    if (request === coreInstallRequest) notify.error(error.response?.data?.message || error.message || '生成核心安装命令失败')
+    if (request === coreInstallRequest) notify.error(installCommandError(error, '生成核心安装命令失败'))
   } finally {
     if (request === coreInstallRequest) coreInstallLoading.value = false
   }
@@ -1745,6 +1773,7 @@ const showMetricsDetail = async (agent: any) => {
 const onInstallTypeChange = () => {
   // 清空之前生成的命令
   installScriptUrl.value = ''
+  installLinkExpiry.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
 
@@ -1765,6 +1794,7 @@ const onInstallTypeChange = () => {
 // Docker 模式变化时
 const onDockerModeChange = () => {
   installScriptUrl.value = ''
+  installLinkExpiry.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
 
@@ -1821,6 +1851,7 @@ const showGenerateScriptDialog = () => {
   // 清空其他值
   installScript.value = ''
   installScriptUrl.value = ''
+  installLinkExpiry.value = ''
   installerDownloader.value = 'curl'
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
@@ -1843,6 +1874,7 @@ const resetForm = () => {
   scriptLoading.value = false
   installScript.value = ''
   installScriptUrl.value = ''
+  installLinkExpiry.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
   scriptPanelOpen.value = false
@@ -1989,31 +2021,25 @@ const generateScript = async () => {
         ...lifecycleParams,
         ...(includeCore ? { install_core: true } : {})
       }
-      const response = await agentApi.generateScript(shellParams)
+      const response = await agentApi.generateInstallCommand(shellParams)
       if (request !== scriptRequest || !scriptDialogVisible.value) return
-      if (includeCore && (typeof response.data !== 'string' || !response.data.startsWith('#!') || response.data.split('\n', 2)[1] !== AGENT_CORE_INSTALL_INTERFACE)) {
+      const result = readInstallCommand(response.data, parsed)
+      if (includeCore && result.script.split('\n', 2)[1] !== AGENT_CORE_INSTALL_INTERFACE) {
         throw new Error('安装脚本版本不支持同时安装核心，请更新 ConfigFlow 后重试')
       }
 
-      // Preview and one-click installation use exactly the same parameters.
-      const params = new URLSearchParams()
-      for (const [key, value] of Object.entries(shellParams)) {
-        if (value !== '') params.set(key, String(value))
-      }
-      // An explicit empty restart command requests lifecycle auto-detection.
-      if (shellParams.restart_command !== undefined) params.set('restart_command', shellParams.restart_command)
-
-      const scriptUrl = `${serverUrl}/api/agents/install-script?${params.toString()}`
-
-      installScript.value = response.data
-      installScriptIncludesCore.value = includeCore
-      installScriptUrl.value = scriptUrl
+      // The preview and download are the same immutable server-generated snapshot.
+      installScript.value = result.script
+      installScriptUrl.value = result.url
+      installLinkExpiry.value = result.expiry
 
       notify.success('安装命令已生成，请复制到目标机器执行')
     }
   } catch (error: any) {
     if (request === scriptRequest) {
-      const errorMsg = error.response?.data?.message || error.message || '生成脚本失败'
+      const errorMsg = scriptForm.value.installType === 'shell'
+        ? installCommandError(error, '生成脚本失败')
+        : error.response?.data?.message || error.message || '生成脚本失败'
       notify.error(errorMsg)
     }
   } finally {

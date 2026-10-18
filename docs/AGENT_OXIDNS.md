@@ -46,17 +46,17 @@ systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_pat
 
 ### 单服务同时安装核心
 
-在 Agent 安装弹窗选择 Shell →「单服务」及 Mihomo / OxiDNS，可勾选「同时安装对应核心」。默认不勾选，沿用接管已有服务的方式；勾选后生成一条完整下载成功才执行的命令，以 root 在目标 Linux 机器运行，支持 systemd / OpenRC。命令默认使用 curl，可切换为 wget，先下载到私有临时文件，成功后执行并清理。目标机器须已有所选下载工具和 mktemp；若 curl、wget 都没有，请先安装其中一个。环境检测和其余依赖补装在脚本中进行，失败会提示修复方法。终端选择「安装或升级」后，先运行对应核心安装步骤，成功后继续安装 Agent；选择取消或卸载时不执行核心安装。MosDNS 暂不提供此选项。
+在 Agent 安装弹窗选择 Shell →「单服务」及 Mihomo / OxiDNS，可勾选「同时安装对应核心」。默认不勾选，沿用接管已有服务的方式；勾选后生成一条完整下载成功才执行的命令，以 root 在目标 Linux 机器运行，支持 systemd / OpenRC。面板把安装设置保存为脚本快照，提供 24 小时有效的短安装链接。命令默认使用 curl，可切换为 wget；将脚本保存到当前目录的 `configflow-install.sh`，完整下载成功后执行。目标机器须已有所选下载工具；若 curl、wget 都没有，请先安装其中一个。环境检测和其余依赖补装在脚本中进行，失败会提示修复方法。终端选择「安装或升级」后，先运行对应核心安装步骤，成功后继续安装 Agent；选择取消或卸载时不执行核心安装。MosDNS 暂不提供此选项。
 
 勾选时使用标准布局：核心程序 `/usr/local/bin/mihomo` 或 `/usr/local/bin/oxidns`，配置 `/etc/<核心名>/config.yaml`，服务名为核心名，自动识别服务管理器。配置路径及服务设置位于默认收起的「服务管理高级配置（可选）」中；勾选时暂不可编辑，取消勾选后恢复原来填写的内容。已有自定义布局应取消勾选并填写实际路径；接口也会拒绝将核心安装与不匹配的接管路径或服务命令组合。
 
 新装 Mihomo 的 DNS 为 `1053`，保留 TUN 自动检测与开启逻辑；新装 OxiDNS 的 DNS 为 `53`，使用公共 DNS 上游，可独立运行。已有核心的程序、配置和服务会保留，跳过安装不代表已确认其健康。核心步骤失败时，不继续安装 Agent；核心步骤成功后，若 Agent 安装失败，已安装核心会保留，可修复 Agent 问题后重试。卸载 Agent 也不卸载核心。
 
-该选项通过 `/api/agents/install-script?install_core=true` 生成组合脚本，预览与实际下载使用相同参数；未传或传 `false` 时仅安装 Agent。面板生成命令前检查返回脚本的接口标记；旧服务端不支持该选项时会提示更新。核心程序仍从固定版本的官方发行页下载并校验 SHA256，命令没有打包核心二进制。
+面板通过 `POST /api/agents/install-command` 提交安装设置（勾选时为 `install_core: true`），返回脚本预览、短下载路径和过期时间；预览与短链接下载的是同一份脚本，不再把名称、端口和路径拼入 URL。短链接可在有效期内重复下载，面板重启后仍有效；过期后需重新生成。旧版 `/api/agents/install-script` 入口继续保留。面板生成命令前检查返回脚本的接口标记；旧服务端不支持短链接时会提示更新。核心程序仍从固定版本的官方发行页下载并校验 SHA256，命令没有打包核心二进制。
 
 ### 一键安装两个核心
 
-在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，保持「同时安装 Mihomo 与 OxiDNS 核心」未勾选，展开「仅安装核心」，选择安装两个核心、仅 Mihomo 或仅 OxiDNS，再生成对应命令。以 root 在目标 Linux 机器粘贴执行这一行命令；无需填写 Agent 名称。默认提供 curl 命令，可切换为 wget；先完整下载脚本，下载成功后才执行，结束时清理私有临时文件。若两个下载工具都没有，请先通过系统包管理器安装 curl 或 wget；缺少 mktemp 时先安装 coreutils。其余环境检测与必要依赖补装由脚本处理。该脚本只安装所选核心，不安装 Agent，也不向面板注册。
+在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，保持「同时安装 Mihomo 与 OxiDNS 核心」未勾选，展开「仅安装核心」，选择安装两个核心、仅 Mihomo 或仅 OxiDNS，再生成对应命令。以 root 在目标 Linux 机器粘贴执行这一行命令；无需填写 Agent 名称。默认提供 curl 命令，可切换为 wget；先把脚本完整下载到当前目录的 `configflow-install.sh`，下载成功后才执行。所选核心已保存在服务端脚本快照中，命令只包含短链接和下载、执行两步；链接 24 小时有效。若两个下载工具都没有，请先通过系统包管理器安装 curl 或 wget。其余环境检测与必要依赖补装由脚本处理。该脚本只安装所选核心，不安装 Agent，也不向面板注册。
 
 | 安装选择 | 新建核心的初始 DNS 配置 |
 | --- | --- |
@@ -97,7 +97,7 @@ dig @127.0.0.1 -p 1053 example.com
 dig @127.0.0.1 -p 1053 example.com +tcp
 ```
 
-脚本下载入口为 `/api/agents/core-install-script`，使用固定布局且不包含 Agent 身份信息。已下载脚本可用 `sh install-cores.sh --core mihomo` 或 `sh install-cores.sh --core oxidns` 单独安装；省略参数或传 `--core both` 为同机协作模式。面板生成命令前检查脚本接口标记，旧版不支持选择核心时会提示更新。其命令与 `/api/agents/install-script` 的 Agent 安装命令相互独立。
+面板通过 `POST /api/agents/core-install-command` 提交所选核心，生成预览和 `/api/agents/i/<随机标识>` 短链接；仅创建接口要求面板登录，目标机器凭短链接下载对应快照。脚本使用固定布局且不包含 Agent 身份信息。原通用脚本下载入口 `/api/agents/core-install-script` 继续保留，已下载的通用脚本可用 `sh install-cores.sh --core mihomo` 或 `sh install-cores.sh --core oxidns` 单独安装；省略参数或传 `--core both` 为同机协作模式。面板生成命令前检查脚本接口标记，旧版不支持选择核心时会提示更新。独立核心命令与 Agent 安装命令相互独立。
 
 ### Shell 同机安装 Mihomo + OxiDNS
 
@@ -105,7 +105,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 勾选时使用 `/etc/mihomo/config.yaml`、`/etc/oxidns/config.yaml`，核心程序位于 `/usr/local/bin`，服务名为 `mihomo` 和 `oxidns`；高级配置暂时锁定，取消勾选后恢复原值。新装核心的 DNS 链路为 OxiDNS `53` → Mihomo `127.0.0.1:1053`，Mihomo 沿用 TUN 自动检测。已有核心和配置会跳过并保留；已有 Mihomo 需确认 DNS 监听 `1053`，已有 OxiDNS 的上游不会被自动迁移。两个 Agent 的端口不能占用 `53` / `1053`，也不能相同。
 
-组合命令完整下载后再执行，通过 `type=aio&install_core=true` 生成，默认使用 curl，可切换 wget；面板生成前校验脚本接口标记。在终端选择安装后才执行核心安装；取消或卸载只处理原有 Agent 流程。核心安装失败时不进入 Agent 安装，后续 Agent 安装失败则保留已完成的核心。Agent 接入前会验证两个核心的服务配置，并检查是否存在未完成的发布；任一检查失败时，不停止现有 Agent。
+组合命令完整下载后再执行，面板以 `type: aio`、`install_core: true` 生成脚本快照和短链接，默认使用 curl，可切换 wget；面板生成前校验脚本接口标记。在终端选择安装后才执行核心安装；取消或卸载只处理原有 Agent 流程。核心安装失败时不进入 Agent 安装，后续 Agent 安装失败则保留已完成的核心。Agent 接入前会验证两个核心的服务配置，并检查是否存在未完成的发布；任一检查失败时，不停止现有 Agent。
 
 运行安装或卸载脚本期间，请暂停从面板发起新的配置发布和 Agent 升级；脚本的状态预检不代替跨进程的完整操作锁。
 

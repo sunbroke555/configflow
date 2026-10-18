@@ -6,9 +6,11 @@ import hmac
 import json
 import math
 import os
+import sqlite3
 import time
 from urllib.parse import urlsplit, urlunsplit
 from flask import request, jsonify, send_file
+from werkzeug.datastructures import MultiDict
 
 from backend.agents.config_generator import generate_agent_config
 from backend.agents.deployment_messages import public_deployment_messages
@@ -191,8 +193,117 @@ def get_core_install_script():
     }
 
 
+_INSTALL_COMMAND_FIELDS = frozenset({
+    'name', 'type', 'port', 'agent_ip', 'config_path', 'restart_command', 'server_url',
+    'agent_type', 'install_core', 'service_manager', 'service_unit', 'service_binary',
+    'stop_command', 'start_command', 'status_command', 'health_url',
+    'health_dns_address', 'health_dns_name', 'deployment_health_timeout',
+    'mihomo_agent_port', 'oxidns_agent_port', 'mihomo_config_path', 'oxidns_config_path',
+    'mihomo_service_unit', 'oxidns_service_unit', 'mihomo_service_binary', 'oxidns_service_binary',
+})
+_INSTALL_COMMAND_NUMBERS = frozenset({
+    'port', 'mihomo_agent_port', 'oxidns_agent_port', 'deployment_health_timeout',
+})
+
+
+def _install_command_params(payload):
+    if not isinstance(payload, dict) or set(payload) - _INSTALL_COMMAND_FIELDS:
+        raise ValueError('安装参数无效，请重新生成命令。')
+    params = MultiDict()
+    for key, value in payload.items():
+        if key == 'install_core':
+            if not isinstance(value, bool):
+                raise ValueError('install_core 必须为 true 或 false')
+            value = 'true' if value else 'false'
+        elif key in _INSTALL_COMMAND_NUMBERS:
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+                raise ValueError(f'{key} 必须是 1 到 65535 之间的整数')
+            value = str(value)
+        elif not isinstance(value, str) or len(value) > 4096 or '\0' in value:
+            raise ValueError(f'{key} 参数无效')
+        params[key] = value
+    if params.get('agent_type', 'go') not in ('go', 'shell'):
+        raise ValueError('agent_type 必须为 go 或 shell')
+    return params
+
+
+def _save_install_command(script):
+    from backend.agents.install_command_store import InstallCommandStoreFull, save_install_script
+    try:
+        token, expires_at = save_install_script(script)
+    except InstallCommandStoreFull:
+        return jsonify({'success': False, 'message': '可用安装链接已达上限，请使用已生成的命令或等待旧链接过期。'}), 503
+    except (OSError, ValueError, sqlite3.Error):
+        logger.exception('保存安装命令失败')
+        return jsonify({'success': False, 'message': '无法保存安装命令，请检查数据目录后重试。'}), 500
+    response = jsonify({
+        'success': True, 'script': script,
+        'download_path': f'/api/agents/i/{token}', 'expires_at': expires_at,
+    })
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/install-command', methods=['POST'])
+@require_auth
+def create_install_command():
+    """Render once and keep the preview and downloaded script identical."""
+    payload, error = _read_json_body(32 * 1024, '安装参数无效')
+    if error:
+        return error
+    try:
+        params = _install_command_params(payload)
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+    rendered = _install_script_response(params)
+    if rendered[1] != 200:
+        return rendered
+    return _save_install_command(rendered[0])
+
+
+@bp.route('/core-install-command', methods=['POST'])
+@require_auth
+def create_core_install_command():
+    payload, error = _read_json_body(1024, '核心安装参数无效')
+    if error:
+        return error
+    if (not isinstance(payload, dict) or set(payload) != {'target'}
+            or payload['target'] not in ('both', 'mihomo', 'oxidns')):
+        return jsonify({'success': False, 'message': '请选择 both、mihomo 或 oxidns 核心。'}), 400
+    rendered = get_core_install_script()
+    if rendered[1] != 200:
+        return rendered
+    lines = rendered[0].splitlines(keepends=True)
+    # Preserve the shebang and interface marker while fixing the chosen target.
+    script = ''.join(lines[:2]) + f"set -- --core {payload['target']}\n" + ''.join(lines[2:])
+    return _save_install_command(script)
+
+
+@bp.route('/i/<token>', methods=['GET'])
+def download_install_command(token):
+    from backend.agents.install_command_store import load_install_script
+    headers = {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="configflow-install.sh"',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+    }
+    try:
+        script = load_install_script(token)
+    except (OSError, sqlite3.Error):
+        logger.exception('读取安装命令失败')
+        return '安装脚本暂时不可用，请稍后重试。\n', 503, headers
+    if script is None:
+        return '安装链接不存在或已过期，请在面板重新生成。\n', 404, headers
+    return script, 200, headers
+
+
 @bp.route('/install-script', methods=['GET'])
 def get_install_script():
+    return _install_script_response(request.args)
+
+
+def _install_script_response(params):
     """生成原生 Agent 安装脚本，支持单服务和 Mihomo + OxiDNS 同机。"""
     try:
         import os
@@ -200,16 +311,16 @@ def get_install_script():
         from backend.agents.install_script import generate_lightweight_install_script
 
         # 获取参数
-        agent_name = request.args.get('name', 'My-Agent')
-        service_type = request.args.get('type', 'mihomo')
-        agent_port = request.args.get('port', 8080, type=int)
-        agent_ip = request.args.get('agent_ip', '').strip()  # 可选的 Agent IP
-        config_path = request.args.get('config_path', f'/etc/{service_type}/config.yaml')
-        restart_command = request.args.get('restart_command', f'systemctl restart {service_type}')
+        agent_name = params.get('name', 'My-Agent')
+        service_type = params.get('type', 'mihomo')
+        agent_port = params.get('port', 8080, type=int)
+        agent_ip = params.get('agent_ip', '').strip()  # 可选的 Agent IP
+        config_path = params.get('config_path', f'/etc/{service_type}/config.yaml')
+        restart_command = params.get('restart_command', f'systemctl restart {service_type}')
 
         # agent_type: 'go' (默认) 或 'shell'
-        agent_type = request.args.get('agent_type', 'go').lower().strip()
-        install_core_value = request.args.get('install_core', 'false')
+        agent_type = params.get('agent_type', 'go').lower().strip()
+        install_core_value = params.get('install_core', 'false')
         if install_core_value not in ('true', 'false'):
             raise ValueError('install_core 必须为 true 或 false')
         install_core = install_core_value == 'true'
@@ -218,7 +329,7 @@ def get_install_script():
                 raise ValueError('仅 Mihomo、OxiDNS 或同机双服务 Go Agent 支持同时安装核心')
             # Preserve strict validation instead of Flask's integer converter
             # silently replacing an invalid explicit value with the default.
-            agent_port = request.args.get('port', '8080')
+            agent_port = params.get('port', '8080')
 
         logger.info(f"生成安装脚本请求 - 名称: {agent_name}, 类型: {service_type}, 端口: {agent_port}, Agent类型: {agent_type}")
 
@@ -231,7 +342,7 @@ def get_install_script():
 
         # 获取服务器 URL
         # 优先使用前端传递的 server_url 参数（包含协议+IP/域名+端口）
-        server_url = request.args.get('server_url', '').strip()
+        server_url = params.get('server_url', '').strip()
 
         # 如果前端没有传递，则自动获取
         if not server_url:
@@ -256,10 +367,10 @@ def get_install_script():
                 agent_name=agent_name,
                 agent_ip=agent_ip,
                 binary_download_url=f"{server_url}/api/agents/download",
-                mihomo_agent_port=request.args.get('mihomo_agent_port', '8080'),
-                oxidns_agent_port=request.args.get('oxidns_agent_port', '8082'),
+                mihomo_agent_port=params.get('mihomo_agent_port', '8080'),
+                oxidns_agent_port=params.get('oxidns_agent_port', '8082'),
                 install_core=install_core,
-                **{f'{service}_{field}': request.args.get(f'{service}_{field}', default).strip()
+                **{f'{service}_{field}': params.get(f'{service}_{field}', default).strip()
                    for service in ('mihomo', 'oxidns')
                    for field, default in (
                        ('config_path', f'/etc/{service}/config.yaml'),
@@ -292,10 +403,10 @@ def get_install_script():
                 config_path=config_path,
                 restart_command=restart_command,
                 binary_download_url=binary_download_url,
-                **{key: request.args.get(key, '').strip() for key in (
+                **{key: params.get(key, '').strip() for key in (
                     'service_manager', 'service_unit', 'service_binary', 'stop_command',
                     'start_command', 'status_command', 'health_url', 'health_dns_address', 'health_dns_name')},
-                deployment_health_timeout=request.args.get('deployment_health_timeout', 30, type=int),
+                deployment_health_timeout=params.get('deployment_health_timeout', 30, type=int),
                 install_core=install_core,
             )
 
@@ -320,7 +431,7 @@ def get_install_script():
         error_detail = traceback.format_exc()
         logger.error(f"生成安装脚本失败: {str(e)}")
         logger.error(f"错误详情:\n{error_detail}")
-        logger.error(f"请求参数: name={request.args.get('name')}, type={request.args.get('type')}, port={request.args.get('port')}, agent_type={request.args.get('agent_type')}")
+        logger.error(f"请求参数: name={params.get('name')}, type={params.get('type')}, port={params.get('port')}, agent_type={params.get('agent_type')}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 

@@ -40,9 +40,9 @@ def setup_before_request(app):
             '/api/agents/docker-mosdns-run', '/api/version', '/', '/mcp',
         }
         public_prefixes = ('/api/rule-library/content/', '/api/rules/local/', '/mcp/', '/api/static/agents/', '/assets/', '/static/')
-        # Installers and both Agent update protocols fetch these public binaries
-        # without an admin JWT; the route enforces its exact filename allowlist.
-        if request.endpoint == 'agents.download_agent_binary':
+        # Installers fetch allowlisted binaries and expiring, random-token script
+        # snapshots without a panel JWT. Snapshot creation still requires login.
+        if request.endpoint in {'agents.download_agent_binary', 'agents.download_install_command'}:
             return None
         # These routes validate their own Agent credentials (or, for upgrade
         # status, an admin JWT). Do not require a JWT before their checks run.
