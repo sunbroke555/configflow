@@ -139,3 +139,15 @@ def test_reload_and_upgrade_need_newer_agent_and_send_no_body(calls):
     assert [(c['method'], c['url'].rsplit('/api/mihomo/', 1)[1], c['data'], c['params']) for c in calls] == [
         ('PUT', 'configs', None, {}), ('POST', 'upgrade', None, {})]
     assert calls[1]['timeout'] == (3, 200)
+
+
+@pytest.mark.parametrize('message', [
+    'download failed: dial tcp: i/o timeout',
+    'Agent download connection failed',
+])
+def test_core_upgrade_errors_keep_original_text(calls, message):
+    calls.replies.append(Response({'message': message}, status=500))
+    with pytest.raises(MonitorError) as exc:
+        panel.call(Manager({**AGENT, 'version': '1.8.16-go'}), 'mihomo', 'upgrade', 'POST', MultiDict())
+    assert exc.value.code == 'CORE_ERROR'
+    assert exc.value.message == message
