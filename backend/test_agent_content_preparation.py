@@ -195,3 +195,20 @@ def test_optional_preparation_progress_keeps_the_same_bundle(content_env):
     assert fingerprint(actual) == fingerprint(expected)
     total = len(actual['ruleset_downloads'])
     assert progress == [(done, total) for done in range(total + 1)]
+
+
+def test_named_preparation_progress_reports_real_subscription_rule_and_pack_objects(content_env):
+    config, _remote, fetches, _repository = content_env
+    phases, rules = [], []
+    actual = agents._prepare_transactional_content(
+        {'id': 'mihomo-agent', 'profile_id': 'default', 'service_type': 'mihomo'},
+        config, base_url=BASE_URL,
+        phase_progress=lambda message, **_kwargs: phases.append(message),
+        detail_progress=lambda done, total, name, phase: rules.append((done, total, name, phase)))
+    assert any('正在准备订阅「Feed」' in message for message in phases)
+    assert any('校验节点来源与拨号引用关系' in message for message in phases)
+    assert phases[-1] == f'正在打包发布文件（{len(actual["bundle"].manifest["files"])} 个文件）'
+    assert fetches and rules
+    assert any(name == 'Selected' and phase == 'preparing' for _, _, name, phase in rules)
+    assert any(name == 'Selected' and done == total and phase == 'prepared' for done, total, name, phase in rules)
+    assert not any('https://' in message for message in phases)

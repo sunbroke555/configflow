@@ -18,8 +18,8 @@
                 <div v-if="record.deployment_id === latestId" class="mt-1 text-xs text-primary-accent">最新记录</div>
               </td>
               <td role="cell" data-label="结果" class="cf-record-wide max-w-[280px] align-top max-sm:max-w-none">
-                <div class="flex items-center gap-2"><Loader2 v-if="busy && record.deployment_id === latestId" class="size-3.5 shrink-0 animate-spin" />{{ deploymentStatusLabel(record) }}</div>
-                <AgentFailureDetails :task="record" class="mt-1" />
+                <AgentOperationSteps :task="record" :busy="busy && record.deployment_id === latestId" />
+                <AgentFailureDetails :show-progress-message="false" :task="record" class="mt-1" />
                 <p v-if="record.query_error" class="mt-1 text-xs text-muted-foreground">正在查询 Agent 确认结果。</p>
               </td>
               <td role="cell" class="cf-record-wide text-right align-top">
@@ -38,11 +38,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Loader2 } from '@lucide/vue'
 import type { Agent } from '@/types'
-import { deploymentStatusLabel, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { type AgentDeployment } from '@/composables/useAgentDeployments'
 import EmptyState from '@/components/common/EmptyState.vue'
 import AgentFailureDetails from './AgentFailureDetails.vue'
+import AgentOperationSteps from './AgentOperationSteps.vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 

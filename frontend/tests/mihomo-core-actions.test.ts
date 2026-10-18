@@ -75,4 +75,24 @@ describe('mihomo core actions', () => {
     expect(notify.error).toHaveBeenCalledWith('更新内核失败', 'already using latest version')
     expect(wrapper.emitted('changed')).toBeUndefined()
   })
+
+  it('distinguishes an in-flight core update request from waiting for the core to return', async () => {
+    const { wrapper, actions } = render()
+    vi.mocked(confirm).mockResolvedValue(true)
+    let accept!: (value: any) => void
+    vi.mocked(mihomoPanelApi.upgradeCore).mockReturnValue(new Promise(resolve => { accept = resolve }))
+    vi.mocked(mihomoPanelApi.version).mockResolvedValue({ data: { data: { version: 'v1.19.32' } } } as any)
+    const pending = actions.upgradeCore()
+    await flushPromises()
+    expect(wrapper.text()).toContain('请求 Mihomo 更新')
+    expect(mihomoPanelApi.version).not.toHaveBeenCalled()
+    accept({})
+    await flushPromises()
+    expect(wrapper.text()).toContain('等待 Mihomo 重新上线')
+    expect(notify.success).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2000)
+    await pending
+    expect(notify.success).toHaveBeenCalledWith('内核已更新', '当前版本 v1.19.32')
+    wrapper.unmount()
+  })
 })

@@ -19,6 +19,46 @@ beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks() })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers() })
 
 describe('Agent deployment lifecycle feedback', () => {
+  it('keeps activation busy on an old ready snapshot and preserves observed success after a late POST timeout', async () => {
+    const { flow } = render()
+    flow.track('one', { deployment_id: 'ready-one', status: 'ready' })
+    let reject!: (error: any) => void
+    vi.mocked(agentApi.activateDeployment).mockImplementationOnce(() => new Promise((_resolve, no) => { reject = no }))
+    vi.mocked(agentApi.getDeployment)
+      .mockResolvedValueOnce({ data: { deployment_id: 'ready-one', status: 'ready' } } as any)
+      .mockResolvedValueOnce({ data: { deployment_id: 'ready-one', status: 'succeeded' } } as any)
+    const activation = flow.activate('one')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flow.busy('one')).toBe(true)
+    expect(flow.deployments.one.request_pending).toBe(true)
+    await flow.activate('one')
+    expect(agentApi.activateDeployment).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(flow.deployments.one.status).toBe('succeeded')
+    reject(new Error('late timeout')); await activation
+    expect(flow.deployments.one.status).toBe('succeeded')
+    expect(flow.busy('one')).toBe(false)
+  })
+  it.each([undefined, 409])('preserves polled rollback completion when its POST later fails (%s)', async status => {
+    const { flow } = render()
+    flow.track('one', { deployment_id: 'active-one', status: 'succeeded' }, false)
+    let reject!: (error: any) => void
+    vi.mocked(agentApi.rollbackDeployment).mockImplementationOnce(() => new Promise((_resolve, no) => { reject = no }))
+    vi.mocked(agentApi.getDeployment)
+      .mockResolvedValueOnce({ data: { deployment_id: 'active-one', status: 'succeeded' } } as any)
+      .mockResolvedValueOnce({ data: { deployment_id: 'active-one', status: 'rolled_back', manual_rollback: true } } as any)
+    const rollback = flow.rollback('one', 'active-one')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flow.busy('one')).toBe(true)
+    expect(flow.deployments.one.request_pending).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(flow.deployments.one.status).toBe('rolled_back')
+    reject(status ? { response: { status, data: { message: 'late response' } } } : new Error('late timeout'))
+    await rollback
+    expect(flow.deployments.one).toMatchObject({ status: 'rolled_back', manual_rollback: true })
+    expect(flow.busy('one')).toBe(false)
+    expect(flow.deployments.one.rollback_rejected).toBeUndefined()
+  })
   it('announces DNS warnings once without masking them with a completion toast', async () => {
     const { flow, onSuccess } = render()
     const dns_checks = [{ name: 'DNS 劫持', level: 'warn' as const, message: '53 劫持可能绕过 OxiDNS', fix: '检查劫持规则' }]

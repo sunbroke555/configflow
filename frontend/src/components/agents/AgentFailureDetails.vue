@@ -8,10 +8,10 @@ import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { deploymentLabels, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentDNSChecks from './AgentDNSChecks.vue'
 
-const props = defineProps<{ task: Partial<AgentDeployment> }>()
+const props = withDefaults(defineProps<{ task: Partial<AgentDeployment>; showProgressMessage?: boolean }>(), { showProgressMessage: true })
 const failed = computed(() => !!props.task.error || !!props.task.error_details || !!props.task.rollback_error || !!props.task.rollback_error_details || ['failed', 'rollback_failed'].includes(props.task.status || '') || (props.task.status === 'rolled_back' && !props.task.manual_rollback))
 const sections = computed(() => [
-  { key: 'publish', label: '发布失败详情', summary: props.task.error || props.task.message || '', details: props.task.error_details || '' },
+  { key: 'publish', label: '发布失败详情', summary: props.task.error || ((props.showProgressMessage || failed.value) ? props.task.message : '') || '', details: props.task.error_details || '' },
   { key: 'rollback', label: '回滚失败详情', summary: props.task.rollback_error || props.task.rollback_message || '', details: props.task.rollback_error_details || '' },
 ].map(section => ({
   ...section,

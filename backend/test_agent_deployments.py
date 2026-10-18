@@ -515,6 +515,85 @@ def test_missing_agent_journal_after_upload_still_fails(env, monkeypatch):
     assert manager.get_deployment(agent['id'], 'missing-upload')['status'] == 'failed'
 
 
+def test_preparation_finishing_during_poll_is_not_marked_interrupted(env, monkeypatch):
+    _, manager, agent, _ = env
+    manager.begin_deployment(agent['id'], 'preparation-race')
+
+    def finished(*_args):
+        manager.record_deployment(agent['id'], 'preparation-race', {'status': 'uploading', 'submitted': True})
+        manager.finish_deployment_preparation(agent['id'], 'preparation-race')
+        return False
+
+    monkeypatch.setattr(manager, '_preparation_running', finished)
+    monkeypatch.setattr(manager, '_deployment_request', lambda *_a, **_k: {'status': 'checking', 'success': True})
+    assert manager.get_deployment(agent['id'], 'preparation-race')['status'] == 'checking'
+    assert manager.record_deployment(agent['id'], 'preparation-race', {'status': 'failed'}, only_unsubmitted=True)['status'] == 'checking'
+
+
+def test_late_upload_acceptance_does_not_replace_observed_startup(env, monkeypatch):
+    _, manager, agent, config = env
+    bundle = minimal_bundle(agent, config, 'acceptance-race')
+
+    def request(_agent, method, suffix, **_kwargs):
+        if method == 'get':
+            return {'deployment_protocols': [1], 'service_type': 'mihomo'}
+        manager.record_deployment(agent['id'], 'acceptance-race', {'status': 'starting'})
+        return {'status': 'verifying', 'success': True}
+
+    monkeypatch.setattr(manager, '_deployment_request', request)
+    state = manager.publish_deployment(agent['id'], bundle)
+    assert state['status'] == 'starting'
+    assert state['events'][-1]['status'] == 'starting'
+
+
+@pytest.mark.parametrize('operation', ['upload', 'activate'])
+def test_late_transport_timeout_does_not_replace_observed_checking(env, monkeypatch, operation):
+    _, manager, agent, config = env
+    bundle = minimal_bundle(agent, config, 'late-timeout')
+    if operation == 'activate':
+        manager.begin_deployment(agent['id'], 'late-timeout')
+        manager.record_deployment(agent['id'], 'late-timeout', {'status': 'ready', 'submitted': True})
+        manager.finish_deployment_preparation(agent['id'], 'late-timeout')
+
+    def request(_agent, method, suffix, **_kwargs):
+        if method == 'get':
+            return ({'deployment_protocols': [1], 'service_type': 'mihomo'} if suffix == 'capabilities'
+                    else {'status': 'ready'})
+        manager.record_deployment(agent['id'], 'late-timeout', {'status': 'checking'})
+        raise requests.Timeout('late upload/activation response')
+
+    monkeypatch.setattr(manager, '_deployment_request', request)
+    state = manager.publish_deployment(agent['id'], bundle) if operation == 'upload' else manager.activate_deployment(agent['id'], 'late-timeout')
+    assert state['status'] == 'checking'
+    assert state['events'][-1]['status'] == 'checking'
+
+
+def test_deployment_history_persists_actual_changes_and_redacts_events(env):
+    repository, manager, agent, _ = env
+    manager.begin_deployment(agent['id'], 'history')
+    message = f'规则 Feed： https://user:password@rules.test/private-token?token=hidden {agent["token"]}'
+    for _ in range(3):
+        manager.record_deployment(agent['id'], 'history', {'status': 'preparing', 'message': message})
+    manager.record_deployment(agent['id'], 'history', {'status': 'uploading', 'submitted': True})
+    manager.record_deployment(agent['id'], 'history', {'status': 'succeeded', 'success': True})
+    state = AgentManager(repository).get_agent_by_id(agent['id'])['latest_deployment']
+    assert [item['status'] for item in state['events']] == ['preparing', 'preparing', 'uploading', 'succeeded']
+    for secret in ('password', 'private-token', 'hidden', agent['token']):
+        assert secret not in str(state['events'])
+    manager.finish_deployment_preparation(agent['id'], 'history')
+
+
+def test_older_agent_status_timestamp_cannot_regress_progress_but_new_rollback_can(env):
+    _, manager, agent, _ = env
+    manager.begin_deployment(agent['id'], 'timestamp-order')
+    manager.record_deployment(agent['id'], 'timestamp-order', {'status': 'checking', 'updated_at': '2026-10-18T00:00:00.1Z'})
+    state = manager.record_deployment(agent['id'], 'timestamp-order', {'status': 'verifying', 'updated_at': '2026-10-18T00:00:00Z'})
+    assert state['status'] == 'checking'
+    state = manager.record_deployment(agent['id'], 'timestamp-order', {'status': 'rolling_back', 'updated_at': '2026-10-18T00:00:01Z'})
+    assert state['status'] == 'rolling_back'
+    manager.finish_deployment_preparation(agent['id'], 'timestamp-order')
+
+
 @pytest.mark.parametrize('fail', [False, True])
 def test_route_preparation_progress_is_visible_throttled_and_terminal_safe(env, monkeypatch, fail):
     from flask import Flask
@@ -555,6 +634,7 @@ def test_route_preparation_progress_is_visible_throttled_and_terminal_safe(env, 
     result = client.post(f'/api/agents/{agent["id"]}/push-config', json={'deployment_id': 'progress'})
     assert result.status_code == (400 if fail else 200)
     assert result.json['status'] == ('failed' if fail else 'succeeded')
+    assert result.json['events'][-1]['status'] == result.json['status']
     assert messages == ['正在生成并检查配置', '正在准备规则文件 0/5', '正在准备规则文件 3/5',
                         '规则文件准备完成，正在打包'] + ([] if fail else ['文件已准备，正在校验并连接设备'])
     final = client.get(f'/api/agents/{agent["id"]}/deployments/progress').json
@@ -712,6 +792,8 @@ def test_manual_rollback_definite_rejection_preserves_successful_publication(env
     assert current['latest_deployment']['status'] == 'succeeded'
     assert current['latest_deployment']['rollback_rejected']
     assert not current['latest_deployment'].get('manual_rollback')
+    assert current['latest_deployment']['events'][-1]['status'] == 'succeeded'
+    assert '回滚未执行，原配置继续运行' in current['latest_deployment']['events'][-1]['message']
     assert manager.begin_deployment(agent['id'], 'after-rejection')['success']
     manager.finish_deployment_preparation(agent['id'], 'after-rejection')
 
@@ -741,6 +823,7 @@ def test_manual_rollback_transport_timeout_reconciles_same_identity(env, monkeyp
         assert result['status'] == 'succeeded' and result['rollback_rejected']
         assert result['rollback_message'] == 'rollback backup checksum mismatch'
         assert not result.get('manual_rollback')
+        assert '回滚未执行，原配置继续运行' in result['events'][-1]['message']
     else:
         assert result['status'] == 'rolled_back' and result['manual_rollback']
 

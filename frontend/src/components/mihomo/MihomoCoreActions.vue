@@ -87,14 +87,15 @@ async function flush(kind: 'fakeip' | 'dns') {
 }
 
 async function upgradeCore() {
-  if (!await confirm('内核会从官方发布页下载新版本并替换自身，完成后自动重启，期间网络会短暂中断。', { title: '更新内核', confirmText: '更新' })) return
-  await run('更新中…', async () => {
+  if (!await confirm('Mihomo 会从官方发布页下载新版本并替换自身，完成后自动重启，期间网络会短暂中断。面板可显示请求和重新上线阶段；内核未提供逐文件下载、校验进度。', { title: '更新内核', confirmText: '更新' })) return
+  await run('请求 Mihomo 更新…', async () => {
     try {
       await mihomoPanelApi.upgradeCore(props.agentId)
     } catch (failure) {
       notify.error('更新内核失败', panelError(failure))
       return
     }
+    running.value = '等待 Mihomo 重新上线…'
     const version = await waitForCore(90000)
     if (version === null) notify.warning('内核已开始更新，但暂未恢复连接', '请稍后刷新，或到 Agent 页查看日志。')
     else notify.success('内核已更新', version ? `当前版本 ${version}` : undefined)
@@ -104,7 +105,7 @@ async function upgradeCore() {
 
 async function restartCore() {
   if (!await confirmDanger('通过 Agent 重启 Mihomo 服务，所有连接会断开，网络会短暂中断。', { title: '重启内核', confirmText: '重启' })) return
-  await run('重启中…', async () => {
+  await run('请求重启 Mihomo…', async () => {
     try {
       const { data } = await agentApi.restart(props.agentId)
       if (data?.success === false) throw new Error(data.message || '重启失败')
@@ -112,6 +113,7 @@ async function restartCore() {
       notify.error('重启内核失败', panelError(failure))
       return
     }
+    running.value = '等待 Mihomo 重新上线…'
     const version = await waitForCore()
     if (version === null) notify.warning('已发送重启，但内核暂未恢复', '请稍后刷新，或到 Agent 页查看日志。')
     else notify.success('内核已重启')

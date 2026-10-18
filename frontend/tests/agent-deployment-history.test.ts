@@ -40,6 +40,17 @@ describe('Agent deployment history rollback availability', () => {
 })
 
 describe('Agent deployment history diagnostics', () => {
+  it('reopens the recorded operation steps and their specific work items', async () => {
+    const events = [{ at: '2026-10-18T12:00:00Z', status: 'uploading', message: '上传配置和 3 个规则文件' },
+      { at: '2026-10-18T12:00:01Z', status: 'succeeded', message: 'OxiDNS 配置已应用并通过 DNS 检查' }]
+    await render({ agent: { ...agent, latest_deployment: { ...latest, events }, deployments: {} } })
+    const details = document.querySelector('details')!
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain('上传配置和 3 个规则文件')
+    expect(details.querySelectorAll('li')).toHaveLength(2)
+    details.open = true
+    expect(details.textContent).toContain('OxiDNS 配置已应用并通过 DNS 检查')
+  })
   it('keeps DNS warnings and their fixes visible in successful release history', async () => {
     await render({ progress: { ...latest, dns_checks: [{ name: 'DNS 劫持', level: 'warn', message: 'any:53 可能绕过 OxiDNS', fix: '检查劫持规则' }] } })
     const report = document.querySelector('[aria-label="DNS 检查结果"]')!

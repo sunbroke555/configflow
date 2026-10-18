@@ -48,6 +48,29 @@ async function click(w: VueWrapper, text: string) {
 }
 
 describe('one-place DNS and ROS workflow', () => {
+  it('shows the first target’s real work while its submission is pending without starting later targets', async () => {
+    vi.useFakeTimers()
+    let resolvePost!: (value: any) => void
+    let requestId = ''
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce((_id, deploymentId) => {
+      requestId = deploymentId!
+      return new Promise(resolve => { resolvePost = resolve })
+    })
+    const events = [{ at: '2026-10-18T12:00:00Z', status: 'preparing', message: '正在校验 OxiDNS 规则集「设备策略」' }]
+    vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, deploymentId) => ({ data: {
+      deployment_id: deploymentId, status: 'preparing', message: events[0].message, events,
+    } }) as any)
+    const wrapper = await setup()
+    await click(wrapper, '保存并预览'); await click(wrapper, '确认发布')
+    await vi.advanceTimersByTimeAsync(0)
+    await flushPromises()
+    expect(wrapper.get('[aria-label="发布结果"]').text()).toContain(events[0].message)
+    expect(agentApi.pushConfig).toHaveBeenCalledTimes(1)
+    expect(routerApi.apply).not.toHaveBeenCalled()
+    resolvePost({ data: { deployment_id: requestId, status: 'preparing', message: '请求已创建' } })
+    await flushPromises()
+    expect(wrapper.get('[aria-label="发布结果"]').text()).toContain(events[0].message)
+  })
 
   it('preserves a source address still being entered before it reaches the saved draft', async () => {
     const w = await setup()

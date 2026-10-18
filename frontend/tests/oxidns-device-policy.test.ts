@@ -93,7 +93,7 @@ describe('OxiDNS device policy editing', () => {
     await button(wrapper, '发布中…').trigger('click')
     expect(agentApi.pushConfig).toHaveBeenCalledOnce()
     await vi.advanceTimersByTimeAsync(0)
-    expect(wrapper.text()).toContain('准备文件')
+    expect(wrapper.text()).toContain('提交请求')
     expect(wrapper.text()).not.toContain('发布结果暂未确认')
     await vi.advanceTimersByTimeAsync(2000)
     expect(wrapper.text()).toContain('上传中')

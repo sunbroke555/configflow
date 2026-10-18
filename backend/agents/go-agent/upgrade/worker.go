@@ -30,14 +30,27 @@ type Request struct {
 	Size    int64  `json:"size"`
 }
 type Status struct {
-	ID              string `json:"update_id"`
-	Status          string `json:"status"`
-	Version         string `json:"target_version"`
-	PreviousVersion string `json:"previous_version"`
-	AgentID         string `json:"agent_id"`
-	Error           string `json:"error,omitempty"`
-	UpdatedAt       string `json:"updated_at"`
+	ID              string  `json:"update_id"`
+	Status          string  `json:"status"`
+	Version         string  `json:"target_version"`
+	PreviousVersion string  `json:"previous_version"`
+	AgentID         string  `json:"agent_id"`
+	Error           string  `json:"error,omitempty"`
+	UpdatedAt       string  `json:"updated_at"`
+	Message         string  `json:"message,omitempty"`
+	Events          []Event `json:"events,omitempty"`
 }
+
+// Events describe work actually entered by this worker. Never include request
+// URLs, configuration contents or raw errors in the progress timeline.
+type Event struct {
+	At      string `json:"at"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
+const maxEvents = 80
+
 type Job struct {
 	Status
 	ConfigFile   string      `json:"config_file"`
@@ -59,6 +72,51 @@ type Job struct {
 
 var idPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{16,64}$`)
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var displayVersionPattern = regexp.MustCompile(`^[a-zA-Z0-9._+-]{1,64}$`)
+
+func agentVersionLabel(version string) string {
+	if displayVersionPattern.MatchString(version) {
+		return "Agent " + version
+	}
+	return "Agent 目标版本"
+}
+
+func (j *Job) stageMessage(stage string) string {
+	target := agentVersionLabel(j.Version)
+	switch stage {
+	case "queued":
+		return "等待更新进程启动，目标：" + target
+	case "downloading":
+		arch := runtime.GOARCH
+		if arch == "arm" {
+			arch = "armv7"
+		}
+		return fmt.Sprintf("正在下载 %s（configflow-agent-linux-%s，%d 字节），并校验文件大小与 SHA-256", target, arch, j.Size)
+	case "verifying":
+		return "下载文件大小与 SHA-256 校验通过；正在检查 " + target + " 的可执行性和版本号"
+	case "backing_up":
+		return "正在备份旧版 Agent 程序、配置和服务文件"
+	case "migrating":
+		return "正在迁移 Agent 配置和服务文件，保留设备身份与核心配置"
+	case "replacing":
+		return "正在用 " + target + " 替换 Agent 主程序"
+	case "restarting":
+		return "正在重启 Agent 服务以运行 " + target
+	case "checking":
+		return "正在确认 " + target + " 的运行版本、设备身份和配置迁移结果"
+	case "rolling_back":
+		return "正在校验并恢复旧版 Agent 程序、配置和服务文件"
+	case "succeeded":
+		return target + " 已启动，设备身份与配置迁移检查通过"
+	case "failed":
+		return "Agent 更新失败，尚未替换现有部署；具体原因见错误详情"
+	case "rolled_back":
+		return "已恢复旧版 Agent 程序与配置，并通过服务检查"
+	case "rollback_failed":
+		return "Agent 恢复失败，需要处理；具体原因见错误详情"
+	}
+	return ""
+}
 
 func terminal(status string) bool {
 	return status == "succeeded" || status == "failed" || status == "rolled_back" || status == "rollback_failed"
@@ -84,6 +142,13 @@ func loadJob(path string) (*Job, error) {
 }
 func (j *Job) save(path, stage string) error {
 	j.Status.Status, j.UpdatedAt = stage, time.Now().UTC().Format(time.RFC3339Nano)
+	j.Message = j.stageMessage(stage)
+	if len(j.Events) == 0 || j.Events[len(j.Events)-1].Status != stage || j.Events[len(j.Events)-1].Message != j.Message {
+		j.Events = append(j.Events, Event{At: j.UpdatedAt, Status: stage, Message: j.Message})
+		if len(j.Events) > maxEvents {
+			j.Events = j.Events[len(j.Events)-maxEvents:]
+		}
+	}
 	b, err := json.MarshalIndent(j, "", "  ")
 	if err != nil {
 		return err
@@ -97,7 +162,7 @@ func (j *Job) save(path, stage string) error {
 		}
 	}
 	if err == nil {
-		log.Printf("Agent update %s: %s", j.ID, stage)
+		log.Printf("Agent update %s: %s — %s", j.ID, stage, j.Message)
 	}
 	return err
 }
@@ -114,6 +179,10 @@ func ReadStatus(binary, agentID string) (*Status, error) {
 		if lockErr != nil {
 			status := j.Status
 			status.Status = "checking"
+			status.Message = "更新步骤已执行，正在等待更新进程释放操作锁"
+			if n := len(status.Events); n > 0 && terminal(status.Events[n-1].Status) {
+				status.Events = status.Events[:n-1]
+			}
 			return &status, nil
 		}
 		release()

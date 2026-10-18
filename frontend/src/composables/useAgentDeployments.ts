@@ -2,6 +2,7 @@ import { onUnmounted, reactive } from 'vue'
 import { agentApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
+import type { AgentOperationEvent } from '@/types/agentOperation'
 
 export interface AgentDNSCheck {
   name: string
@@ -14,6 +15,8 @@ export interface AgentDeployment {
   deployment_id: string
   status: string
   message?: string
+  events?: AgentOperationEvent[]
+  request_pending?: boolean
   error?: string
   error_details?: string
   failed_stage?: string
@@ -72,12 +75,13 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const inFlight = new Set<string>()
   const submissions = new Map<string, { id: string; observed: boolean }>()
+  const actions = reactive(new Map<string, { id: string; kind: 'activate' | 'rollback'; observed: boolean }>())
   const announced = new Set<string>()
   let disposed = false
 
   function busy(agentId: string) {
     const task = deployments[agentId]
-    return !!task && !terminal.has(task.status) && task.status !== 'ready'
+    return actions.has(agentId) || !!task && !terminal.has(task.status) && task.status !== 'ready'
   }
 
   function schedule(agentId: string, delay = 2000) {
@@ -91,7 +95,7 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
   function beginSubmission(agentId: string, deploymentId: string) {
     if (disposed || submissions.has(agentId) || busy(agentId)) return false
     submissions.set(agentId, { id: deploymentId, observed: false })
-    track(agentId, { deployment_id: deploymentId, status: 'preparing' })
+    track(agentId, { deployment_id: deploymentId, status: 'preparing', request_pending: true, message: '正在提交发布请求，等待服务端报告步骤。' })
     return true
   }
 
@@ -118,6 +122,16 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
     if (disposed || !task.deployment_id) return
     announce = announce && shouldAnnounce(agentId, task)
     const previous = deployments[agentId]
+    if (previous?.deployment_id === task.deployment_id && previous.updated_at && task.updated_at
+      && Date.parse(task.updated_at) < Date.parse(previous.updated_at) && !task.pending) return
+    const action = actions.get(agentId)
+    if (action?.id === task.deployment_id && !task.request_pending) {
+      if ((action.kind === 'activate' && task.status === 'ready') || (action.kind === 'rollback' && !task.manual_rollback)) {
+        schedule(agentId)
+        return
+      }
+      if (!task.pending && task.status !== 'unknown') action.observed = true
+    }
     if (task.rollback_rejected && !(previous?.deployment_id === task.deployment_id && previous.manual_rollback && terminal.has(previous.status))) {
       // The server has resolved an uncertain request as rejected; the original release remains active.
       deployments[agentId] = { ...task, manual_rollback: false, query_error: false }
@@ -141,7 +155,7 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
       const manualRollback = previous.status === 'succeeded' && task.manual_rollback && ['rolling_back', 'rolled_back', 'rollback_failed', 'recovery_pending'].includes(task.status)
       if (!recovering && !manualRollback) return
     }
-    deployments[agentId] = { ...task, query_error: !!task.pending }
+    deployments[agentId] = { ...task, events: task.events ?? (previous?.deployment_id === task.deployment_id ? previous.events : undefined), query_error: !!task.pending }
     clearTimeout(timers.get(agentId))
     if (task.pending) {
       schedule(agentId, 5000)
@@ -233,32 +247,46 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
 
   async function activate(agentId: string) {
     const task = deployments[agentId]
-    if (!task || task.status !== 'ready') return
-    deployments[agentId] = { ...task, status: 'verifying' }
+    if (!task || task.status !== 'ready' || actions.has(agentId)) return
+    actions.set(agentId, { id: task.deployment_id, kind: 'activate', observed: false })
+    track(agentId, { ...task, status: 'verifying', request_pending: true, message: '正在提交激活请求，等待 Agent 报告执行步骤。' }, false)
+    schedule(agentId, 0)
     try {
       const { data } = await agentApi.activateDeployment(agentId, task.deployment_id)
-      track(agentId, data)
+      if (disposed || deployments[agentId]?.deployment_id !== task.deployment_id) return
+      if (!actions.get(agentId)?.observed) {
+        actions.delete(agentId)
+        track(agentId, data)
+      }
     } catch (error: any) {
+      if (disposed || deployments[agentId]?.deployment_id !== task.deployment_id || actions.get(agentId)?.observed) return
+      actions.delete(agentId)
       if (error.response?.data?.deployment_id) track(agentId, error.response.data)
       else {
         deployments[agentId] = { ...task, status: 'unknown', query_error: true, message: error.response?.data?.message, error_details: error.response?.data?.error_details }
         schedule(agentId)
       }
-    }
+    } finally { actions.delete(agentId) }
   }
 
   async function rollback(agentId: string, deploymentId: string) {
     const task = deployments[agentId]
-    if (!task || task.deployment_id !== deploymentId || task.status !== 'succeeded' || disposed) return
+    if (!task || task.deployment_id !== deploymentId || task.status !== 'succeeded' || disposed || actions.has(agentId)) return
     clearTimeout(timers.get(agentId))
     const rejectedKeyPrefix = `${agentId}:${deploymentId}:rollback_rejected:`
     for (const key of announced) if (key.startsWith(rejectedKeyPrefix)) announced.delete(key)
-    deployments[agentId] = { ...task, manual_rollback: true, rollback_rejected: false, rollback_message: undefined, rollback_error_details: undefined, status: 'rolling_back', query_error: false }
+    actions.set(agentId, { id: deploymentId, kind: 'rollback', observed: false })
+    track(agentId, { ...task, manual_rollback: true, rollback_rejected: false, rollback_message: undefined, rollback_error_details: undefined, status: 'rolling_back', query_error: false, request_pending: true, message: '正在提交回滚请求，等待 Agent 报告执行步骤。' }, false)
+    schedule(agentId, 0)
     try {
       const { data } = await agentApi.rollbackDeployment(agentId, deploymentId)
-      if (!disposed) track(agentId, { ...data, manual_rollback: true })
+      if (!disposed && deployments[agentId]?.deployment_id === deploymentId && !actions.get(agentId)?.observed) {
+        actions.delete(agentId)
+        track(agentId, { ...data, manual_rollback: true })
+      }
     } catch (error: any) {
-      if (disposed) return
+      if (disposed || deployments[agentId]?.deployment_id !== deploymentId || actions.get(agentId)?.observed) return
+      actions.delete(agentId)
       if (error.response?.data?.deployment_id && error.response?.data?.manual_rollback) {
         track(agentId, error.response.data)
       } else if (error.response && error.response.status >= 400 && error.response.status < 500) {
@@ -269,7 +297,7 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
         deployments[agentId] = { ...task, manual_rollback: true, rollback_rejected: false, rollback_message: undefined, rollback_error_details: error.response?.data?.rollback_error_details || error.response?.data?.error_details, status: 'unknown', query_error: true }
         schedule(agentId, 0)
       }
-    }
+    } finally { actions.delete(agentId) }
   }
 
   onUnmounted(() => {
@@ -277,6 +305,7 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
     timers.forEach(clearTimeout)
     timers.clear()
     submissions.clear()
+    actions.clear()
   })
 
   return { deployments, busy, track, refresh, beginSubmission, endSubmission, activate, retryPublish, rollback }

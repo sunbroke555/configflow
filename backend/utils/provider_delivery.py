@@ -260,7 +260,7 @@ def commit_cache_updates(updates):
 
 
 def prepare_provider_bundle(config, main, *, requested=None, render_all=False, allow_transport_fallback=False,
-                            prepared=None, subscription_fetch=None):
+                            prepared=None, subscription_fetch=None, progress=None):
     """Capture once, render each original source once, validate all copies, never commit."""
     from urllib.parse import urlsplit, unquote
     from backend.routes.aggregations import (generate_aggregation_provider,
@@ -322,11 +322,16 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
 
     def materialize(url, name):
         from backend.utils.strategy_references import StrategyReferenceError
+        kind = '订阅聚合' if '/aggregations/' in unquote(urlsplit(url).path) else '订阅'
+        if progress is not None:
+            progress(f'正在准备{kind}「{name}」')
         try:
             _materialize(url, name)
         except StrategyReferenceError as exc:
             kind = '订阅聚合' if '/aggregations/' in unquote(urlsplit(url).path) else '订阅'
             raise _provider_context(exc, name=name, path=definitions[name].get('path', ''), kind=kind) from exc
+        if progress is not None:
+            progress(f'{kind}「{name}」已准备')
 
     def _materialize(url, name):
         if prepared and name in prepared:
@@ -375,6 +380,8 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
     bundle = [{**rendered[definition['url']], 'name': name, 'url': definition['url'],
                'local_path': definition['path']} for name, definition in definitions.items()
               if definition.get('url') in rendered]
+    if progress is not None:
+        progress(f'正在校验节点来源与拨号引用关系（{len(bundle)} 个文件）', force=True)
     validate_rendered_bundle(snapshot, bundle)
     return bundle
 

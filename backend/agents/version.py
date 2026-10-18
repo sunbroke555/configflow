@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.20-go"
+LATEST_AGENT_VERSION = "1.8.21-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.21-go": {
+        "date": "2026-10-18",
+        "features": [
+            "Agent 在线更新记录实际执行步骤，显示下载的版本和文件、大小与校验和检查、程序验证、备份、迁移和重启确认",
+            "步骤记录随更新任务持久保存，面板可查看详情；旧 Agent 继续显示已观察到的更新状态"
+        ]
+    },
     "1.8.20-go": {
         "date": "2026-10-18",
         "features": [

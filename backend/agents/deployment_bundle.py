@@ -293,7 +293,7 @@ def convert_mosdns_rules(content, rule_type='domain_set'):
 
 def build_deployment_bundle(agent, config, config_content, *, provider_downloads=(),
                             ruleset_downloads=(), custom_files=(), base_url='', deployment_id=None,
-                            progress=None):
+                            progress=None, detail_progress=None, phase_progress=None):
     """Pack the exact generated graph and all its managed file references."""
     config = deepcopy(config)
     service = agent.get('service_type', 'mihomo')
@@ -430,6 +430,8 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                 pending_downloads.pop(url, None)
 
     def download(item):
+        if detail_progress is not None:
+            detail_progress(None, len(downloads), item.get('name') or '未命名', 'preparing')
         try:
             value = materialize_rule(item.get('url', ''), config, base_url,
                                      raw_mosdns=relative_path(item['local_path']) in rule_types,
@@ -454,7 +456,9 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             for done, future in enumerate(as_completed(futures), 1):
                 item, value = future.result()
                 add(item['local_path'], value, 'rule', name=item.get('name', ''))
-                if progress is not None:
+                if detail_progress is not None:
+                    detail_progress(done, len(downloads), item.get('name') or '未命名', 'prepared')
+                elif progress is not None:
                     progress(done, len(downloads))
     finally:
         raw_downloads.clear()
@@ -503,6 +507,8 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                    **({'name': file_names[path]} if path in file_names else {})}
                   for path, (value, role) in sorted(files.items())],
     }
+    if phase_progress is not None:
+        phase_progress(f'正在打包发布文件（{len(files)} 个文件）')
     return _pack(manifest, files, hashlib.sha256(config_bytes).hexdigest()[:8])
 
 

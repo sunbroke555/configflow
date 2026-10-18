@@ -46,6 +46,30 @@ async function render(service: keyof typeof labels) {
 }
 
 describe('Generated config publication diagnostics', () => {
+  it('shows real preparation objects while POST is pending and does not regress to its older response', async () => {
+    let resolvePost!: (value: any) => void
+    let requestId = ''
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce((_agent, deploymentId) => {
+      requestId = deploymentId!
+      return new Promise(resolve => { resolvePost = resolve })
+    })
+    const events = [{ at: '2026-10-18T12:00:00Z', status: 'preparing', message: '正在下载规则集「海外服务」' }]
+    vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, deploymentId) => ({ data: {
+      deployment_id: deploymentId, status: 'preparing', message: events[0].message, events,
+    } }) as any)
+    const wrapper = await render('mihomo')
+    expect(wrapper.text()).toContain('正在提交发布请求')
+    await vi.advanceTimersByTimeAsync(0)
+    await flushPromises()
+    const progress = wrapper.get('[aria-label="配置发布结果"]')
+    expect(progress.get('[role="status"]').text()).toContain('正在下载规则集「海外服务」')
+    expect(progress.findAll('li')).toHaveLength(1)
+    expect(notify.loading).not.toHaveBeenCalled()
+    resolvePost({ data: { deployment_id: requestId, status: 'preparing', message: '请求已创建' } })
+    await flushPromises()
+    expect(progress.get('[role="status"]').text()).toContain('正在下载规则集「海外服务」')
+    expect(agentApi.pushConfig).toHaveBeenCalledOnce()
+  })
   it('retains DNS warnings beside the push controls after a successful publication', async () => {
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'succeeded', dns_checks: [{ name: 'DNS 解析', level: 'warn', message: '当前 DNS 查询超时', fix: '检查 DNS 上游' }] } }) as any)
     const wrapper = await render('mihomo')

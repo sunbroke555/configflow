@@ -51,6 +51,24 @@ def test_old_agent_retains_compatibility_and_no_unneeded_download(monkeypatch):
     assert prepare_mihomo_resources(no_geo, {'mihomo_resources': []}, {}) is no_geo
 
 
+def test_geo_progress_names_actual_file_and_checks_without_exposing_source_url(monkeypatch):
+    messages = []
+
+    def fetch(_url, _config):
+        assert messages[-1] == '正在下载 GeoSite 资源：GeoSite.dat'
+        return b'geo fixture'
+
+    monkeypatch.setattr('backend.agents.mihomo_resources._fetch_bytes', fetch)
+    original = bundle({'rules': ['GEOSITE,cn,DIRECT'], 'geox-url': {'geosite': 'https://source.test/private?token=secret'}})
+    prepare_mihomo_resources(original, {'mihomo_resources': []}, {}, progress=messages.append)
+    assert messages == ['正在下载 GeoSite 资源：GeoSite.dat', '正在检查 GeoSite.dat 下载内容与文件大小',
+                        'GeoSite.dat 已准备（11 字节），已计算发布用 SHA256']
+    assert 'source.test' not in str(messages) and 'secret' not in str(messages)
+    messages.clear()
+    prepare_mihomo_resources(original, {'mihomo_resources': ['GeoSite.dat']}, {}, progress=messages.append)
+    assert messages == ['复用已有 GeoSite 资源（GeoSite.dat），不重复下载']
+
+
 @pytest.mark.parametrize('document, expected', [
     ({'rules': ['GEOIP,private,DIRECT']}, []),
     ({'rules': ['GEOIP,CN,DIRECT']}, ['mmdb']),

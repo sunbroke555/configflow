@@ -140,7 +140,7 @@
 
           <div v-if="submissionFailures[agent.id]" class="mt-3 min-w-0 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
             <p class="mb-1 mt-0 text-xs font-medium text-destructive-accent">发布失败</p>
-            <AgentFailureDetails :task="submissionFailures[agent.id]" />
+            <AgentFailureDetails :show-progress-message="false" :task="submissionFailures[agent.id]" />
           </div>
           <!-- 事务发布与在线更新的进度：结果由 useAgentDeployments / useAgentUpgrades 轮询 -->
           <section
@@ -148,14 +148,9 @@
             class="mb-3 rounded-xl border border-border bg-background/50 p-3 text-[12.5px]"
             aria-live="polite"
           >
-            <p class="m-0 flex items-center gap-2 font-medium">
-              <Loader2 v-if="deploymentBusy(agent.id)" class="size-3.5 animate-spin text-primary-accent" />
-              {{ deploymentStatusLabel(deployments[agent.id]) }}
-            </p>
-            <p v-if="agent.service_type === 'oxidns' && !deployments[agent.id].manual_rollback" class="mt-1 mb-0 text-muted-foreground">发布先检查配置规则，再由目标 OxiDNS 核心校验；通过后才会替换配置。</p>
+            <AgentOperationSteps :task="deployments[agent.id]" :busy="deploymentBusy(agent.id)" />
             <p v-if="deployments[agent.id].not_recorded && !deployments[agent.id].manual_rollback" class="mt-1 mb-0 text-muted-foreground">后端暂未记录此发布，正在继续查询。可使用原发布编号重新提交。</p>
-            <p v-else-if="deployments[agent.id].query_error" class="mt-1 mb-0 text-muted-foreground">暂时无法确认结果，正在重新查询。</p>
-            <AgentFailureDetails :task="deployments[agent.id]" class="mt-1" />
+            <AgentFailureDetails :show-progress-message="false" :task="deployments[agent.id]" class="mt-1" />
             <Button v-if="deployments[agent.id].status === 'ready'" variant="outline" size="sm" class="mt-2" @click="activateDeployment(agent.id)">应用并启动</Button>
             <Button v-if="deployments[agent.id].status === 'rollback_failed'" variant="outline" size="sm" class="mt-2" @click="refreshDeployment(agent.id)">查询恢复状态</Button>
             <Button v-if="!deployments[agent.id].manual_rollback && (deployments[agent.id].not_recorded || deployments[agent.id].retrying)" variant="outline" size="sm" class="mt-2" :disabled="deployments[agent.id].retrying" @click="retryDeployment(agent.id)">{{ deployments[agent.id].retrying ? '正在重新提交…' : '重试同一次发布' }}</Button>
@@ -166,8 +161,10 @@
             class="mb-3 rounded-xl border border-border bg-background/50 p-3 text-[12.5px]"
             aria-live="polite"
           >
-            <p class="m-0 font-medium">{{ upgradeLabels[upgrades[agent.id].status] || upgrades[agent.id].status }} · {{ upgrades[agent.id].target_version }}</p>
+            <AgentOperationSteps :task="upgrades[agent.id]" kind="upgrade" :busy="upgradeBusy(agent.id)" />
+            <p v-if="upgrades[agent.id].target_version" class="mt-1 mb-0 text-muted-foreground">目标版本：{{ upgrades[agent.id].target_version }}</p>
             <p v-if="upgrades[agent.id].error" class="mt-1 mb-0 break-words text-destructive-accent">{{ upgrades[agent.id].error }}</p>
+            <Button v-if="!upgrades[agent.id].update_id && upgrades[agent.id].status === 'unknown'" variant="outline" size="sm" class="mt-2 min-h-11" :disabled="upgradeQuerying.has(agent.id)" @click="retryUnconfirmedUpgrade(agent.id)">重新确认并提交更新</Button>
             <Button
               v-if="upgradeBusy(agent.id)"
               variant="outline"
@@ -788,9 +785,11 @@ import { agentApi, type AgentInstallScriptParams } from '@/api'
 import api from '@/api'
 import type { Agent } from '@/types'
 import { useProfileStore } from '@/stores/profile'
-import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentDeploymentHistory from '@/components/agents/AgentDeploymentHistory.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
+import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
+import { submitAgentRequests } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { upgradeLabels, useAgentUpgrades } from '@/composables/useAgentUpgrades'
 import { use } from 'echarts/core'
@@ -803,7 +802,7 @@ import VChart from 'vue-echarts'
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
 
 const agents = ref<Agent[]>([])
-const { deployments, busy: deploymentBusy, track: trackDeployment, refresh: refreshDeployment, activate: activateDeployment, retryPublish: retryDeployment, rollback: rollbackDeployment } = useAgentDeployments(() => { void loadAgents() })
+const { deployments, busy: deploymentBusy, track: trackDeployment, beginSubmission, endSubmission, refresh: refreshDeployment, activate: activateDeployment, retryPublish: retryDeployment, rollback: rollbackDeployment } = useAgentDeployments(() => { void loadAgents() })
 const deploymentHistoryAgentId = ref<string | null>(null)
 const deploymentHistoryAgent = computed(() => agents.value.find(agent => agent.id === deploymentHistoryAgentId.value))
 const rollbackConfirming = ref(false)
@@ -824,8 +823,16 @@ const requestRollback = async (agent: Agent, record: AgentDeployment) => {
   }
 }
 const {
-  upgrades, busy: upgradeBusy, querying: upgradeQuerying, track: trackUpgrade, query: queryAgentUpgrade, start: startUpgrade
+  upgrades, busy: upgradeBusy, querying: upgradeQuerying, track: trackUpgrade, query: queryAgentUpgrade, start: startUpgrade, retryUnknown: retryUnknownUpgrade
 } = useAgentUpgrades(() => { void loadAgents() })
+
+const retryUnconfirmedUpgrade = async (agentId: string) => {
+  try {
+    await retryUnknownUpgrade(agentId, () => confirm('尚未发现本次更新的新任务记录。重新提交前会再次由 Agent 检查是否已有更新在执行；如已有任务，系统会阻止重复执行，请查看最新结果。', {
+      title: '重新提交更新请求？', confirmText: '重新提交', cancelText: '继续等待'
+    }))
+  } catch (error: any) { notify.error('暂时无法重新提交', error.response?.data?.message || error.message || '请稍后查询更新结果。') }
+}
 
 const queryUpgrade = async (agentId: string) => {
   try {
@@ -2077,16 +2084,20 @@ const pushOne = async (agent: Agent, quiet = false): Promise<PushOutcome> => {
   if (deploymentBusy(agent.id)) return 'busy'
   delete submissionFailures.value[agent.id]
   const deploymentId = createDeploymentId()
-  deployments[agent.id] = { deployment_id: deploymentId, status: 'preparing' }
+  const transactional = agent.service_type !== 'surge'
+  if (transactional && !beginSubmission(agent.id, deploymentId)) return 'busy'
   pushingIds.value = new Set([...pushingIds.value, agent.id])
   topology.value?.burst(`agent:${agent.id}`, 16)
   try {
     const { data } = await agentApi.pushConfig(agent.id, deploymentId)
-    if (data.deployment_id) {
-      trackDeployment(agent.id, data)
+    if (data.deployment_id === deploymentId && typeof data.status === 'string') {
+      endSubmission(agent.id, deploymentId, data)
       return 'submitted'
     }
-    delete deployments[agent.id]
+    if (transactional) {
+      endSubmission(agent.id, deploymentId, 'unknown')
+      return 'submitted'
+    }
     if (data?.success === false || data?.restart?.success === false) {
       submissionFailures.value[agent.id] = { ...data, error: data.restart?.success === false ? `配置已写入，但重启失败：${data.restart.message || '服务未确认启动。'}` : data.error || data.message, error_details: data.restart?.error_details || data.error_details }
       if (!quiet) notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
@@ -2095,14 +2106,19 @@ const pushOne = async (agent: Agent, quiet = false): Promise<PushOutcome> => {
     return 'done'
   } catch (error: any) {
     if (error.response?.data?.deployment_id) {
+      if (error.response.data.deployment_id === deploymentId) {
+        endSubmission(agent.id, deploymentId, error.response.data)
+        return 'submitted'
+      }
+      endSubmission(agent.id, deploymentId, 'rejected')
       trackDeployment(agent.id, error.response.data)
       return 'submitted'
     }
-    if (!error.response) {
-      trackDeployment(agent.id, { deployment_id: deploymentId, status: 'unknown' })
+    if (transactional && (!error.response || error.response.status >= 500)) {
+      endSubmission(agent.id, deploymentId, 'unknown')
       return 'submitted'
     }
-    delete deployments[agent.id]
+    if (transactional && endSubmission(agent.id, deploymentId, 'rejected')) return 'submitted'
     submissionFailures.value[agent.id] = { ...error.response?.data, error: error.response?.data?.error || error.response?.data?.message || '发布请求失败，请重试。' }
     if (!quiet) notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
     return 'failed'
@@ -2115,14 +2131,9 @@ const pushOne = async (agent: Agent, quiet = false): Promise<PushOutcome> => {
 
 const pushConfig = async (agent: Agent) => {
   if (deploymentBusy(agent.id)) return
-  const loadingToast = notify.loading('正在准备并上传发布文件...')
-  try {
-    if ((await pushOne(agent)) === 'done') {
-      notify.success(`已推送至「${agent.name}」`)
-      void loadAgents()
-    }
-  } finally {
-    notify.dismiss(loadingToast)
+  if ((await pushOne(agent)) === 'done') {
+    notify.success(`已推送至「${agent.name}」`)
+    void loadAgents()
   }
 }
 
@@ -2130,7 +2141,7 @@ const pushAll = async () => {
   const online = agents.value.filter(a => a.status === 'online' && !deploymentBusy(a.id))
   if (!online.length || pushingAll.value) return
   pushingAll.value = true
-  const results = await Promise.all(online.map(agent => pushOne(agent, true)))
+  const results = await submitAgentRequests(online, agent => pushOne(agent, true))
   pushingAll.value = false
   const sent = results.filter(r => r === 'submitted' || r === 'done').length
   const failed = results.filter(r => r === 'failed').length
@@ -2179,7 +2190,6 @@ const updateAgent = async (agent: Agent) => {
   if (!ok) return
   try {
     await startUpgrade(agent.id)
-    notify.info('更新任务已创建，正在确认执行结果')
   } catch (error: any) {
     notify.error(error.response?.data?.message || '更新请求未确认，请查询更新结果')
     void loadAgents()

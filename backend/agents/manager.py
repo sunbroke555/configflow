@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional
 import requests
 from .metrics_history import MetricsHistory
 from .diagnostics import dns_report_fields, failure_text, response_failure
+from .operation_events import append_event, event_time
 
 
 def _constant_time_ascii_equal(provided: Any, expected: Any) -> bool:
@@ -338,6 +339,7 @@ class AgentManager:
             record = {'success': True, 'deployment_id': deployment_id, 'status': 'preparing',
                       'profile_id': (agent.get('profile_id') or self.repository.default_profile_id()),
                       'service_type': agent.get('service_type', 'mihomo'), 'created_at': datetime.now().isoformat()}
+            record['events'] = append_event([], 'preparing')
             handle = self._preparation_file(agent_id, deployment_id)
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -361,7 +363,7 @@ class AgentManager:
                 self._preparing_deployments.add((agent_id, deployment_id))
             return result
 
-    def record_deployment(self, agent_id, deployment_id, updates):
+    def record_deployment(self, agent_id, deployment_id, updates, *, only_unsubmitted=False, upload_receipt=False, activation_receipt=False):
         """Only a confirmed successful activation changes the displayed version."""
         def record(agents):
             agent = next((item for item in agents if item['id'] == agent_id), None)
@@ -370,12 +372,25 @@ class AgentManager:
             state = agent.get('deployments', {}).get(deployment_id)
             if state is None:
                 return {'success': False, 'message': 'Deployment not found', 'http_status': 404}
+            if only_unsubmitted and state.get('submitted'):
+                return state.copy()
+            if (upload_receipt and updates.get('status') not in ('succeeded', 'failed', 'rolled_back', 'rollback_failed')
+                    and state.get('status') not in ('preparing', 'uploading', 'receiving')):
+                # A POST acceptance snapshot can arrive after a GET has already
+                # observed validation/startup. It is not a fresh worker status.
+                return state.copy()
+            if (activation_receipt and updates.get('status') not in ('succeeded', 'failed', 'rolled_back', 'rollback_failed')
+                    and state.get('status') not in ('ready', 'unknown')):
+                return state.copy()
             if state.get('manual_rollback') and not updates.get('manual_rollback'):
                 # An overlapping publication poll cannot undo a reserved rollback.
                 return state.copy()
             if state.get('status') in ('succeeded', 'failed', 'rolled_back') and updates.get('status', state['status']) != state['status']:
                 # An upload response or overlapping poll may arrive after a
                 # newer terminal result. Never regress a confirmed transaction.
+                return state.copy()
+            reported_at = event_time(updates.get('updated_at')) if isinstance(updates.get('updated_at'), str) else None
+            if reported_at and state.get('agent_updated_at') and reported_at < state['agent_updated_at']:
                 return state.copy()
             if updates.get('status') and updates.get('status') != 'unknown' and not updates.get('http_status'):
                 if state.get('status') == 'unknown':
@@ -410,6 +425,11 @@ class AgentManager:
                 state.pop('rollback_error', None)
                 state.pop('rollback_error_details', None)
             state['updated_at'] = datetime.now().isoformat()
+            if reported_at:
+                state['agent_updated_at'] = reported_at
+            state['events'] = append_event(state.get('events'), state.get('status'),
+                                           state.get('message') or state.get('error'),
+                                           secrets=(agent.get('token'),))
             is_latest = (agent.get('latest_deployment') or {}).get('deployment_id') == deployment_id
             if (state.get('status') == 'succeeded' and is_latest
                     and state.get('profile_id') == (agent.get('profile_id') or self.repository.default_profile_id())
@@ -491,8 +511,18 @@ class AgentManager:
         if not state.get('submitted'):
             if self._preparation_running(agent_id, deployment_id):
                 return state
-            return self.record_deployment(agent_id, deployment_id, {
-                'success': False, 'status': 'failed', 'message': 'Preparation interrupted before upload; current service unchanged'})
+            # The POST may finish preparation between our first read and the
+            # lock check. Re-read before classifying an interrupted task.
+            agent = self.get_agent_by_id(agent_id)
+            state = agent.get('deployments', {}).get(deployment_id, state)
+            if state.get('status') in ('succeeded', 'failed', 'rolled_back'):
+                return state
+            if not state.get('submitted'):
+                if self._preparation_running(agent_id, deployment_id):
+                    return state
+                return self.record_deployment(agent_id, deployment_id, {
+                    'success': False, 'status': 'failed', 'message': 'Preparation interrupted before upload; current service unchanged'},
+                    only_unsubmitted=True)
         upload_in_flight = self._preparation_running(agent_id, deployment_id)
         try:
             result = self._deployment_request(agent, 'get', f'deployments/{deployment_id}')
@@ -555,6 +585,7 @@ class AgentManager:
                         task.update(success=False, status='failed', failed_stage='verifying', http_status=409,
                                     message='候选配置缺少当前规则的校验证明，已停止激活。请重新推送配置并完成校验。',
                                     updated_at=datetime.now().isoformat())
+                        task['events'] = append_event(task.get('events'), task['status'], task['message'], secrets=(current.get('token'),))
                         if (current.get('latest_deployment') or {}).get('deployment_id') == deployment_id:
                             current['latest_deployment'] = task.copy()
                         return task.copy()
@@ -565,10 +596,10 @@ class AgentManager:
             result = self._deployment_request(agent, 'post', f'deployments/{deployment_id}/activate')
             if result.get('http_status'):
                 return result
-            return self.record_deployment(agent_id, deployment_id, result)
+            return self.record_deployment(agent_id, deployment_id, result, activation_receipt=True)
         except requests.RequestException:
             return self.record_deployment(agent_id, deployment_id, {
-                'success': True, 'status': 'unknown', 'message': 'Activation sent; awaiting Agent status'})
+                'success': True, 'status': 'unknown', 'message': 'Activation sent; awaiting Agent status'}, activation_receipt=True)
 
     def rollback_deployment(self, agent_id, deployment_id):
         """Reserve a rollback before network I/O so a new push cannot race it."""
@@ -590,6 +621,7 @@ class AgentManager:
             if state.get('status') != 'succeeded':
                 return {'success': False, 'message': 'Only a successful deployment can be rolled back', 'http_status': 409}
             state.update(status='rolling_back', manual_rollback=True, success=True, submitted=True)
+            state['events'] = append_event(state.get('events'), 'rolling_back', '正在向 Agent 提交回滚请求')
             state.pop('http_status', None)
             state.pop('rollback_rejected', None)
             state.pop('rollback_message', None)
@@ -626,6 +658,9 @@ class AgentManager:
             if task.get('status') in ('rolling_back', 'unknown') and task.get('manual_rollback'):
                 task.update(status='succeeded', success=True, rollback_rejected=True,
                             rollback_message=failure_text(rejection.get('message', 'Rollback was rejected by Agent'), (current.get('token'),)))
+                task['updated_at'] = datetime.now().isoformat()
+                task['events'] = append_event(task.get('events'), 'succeeded',
+                                              '回滚请求被拒绝，回滚未执行，原配置继续运行', secrets=(current.get('token'),))
                 details = rejection.get('rollback_error_details') or rejection.get('error_details')
                 task.pop('rollback_error', None)
                 if details:
@@ -689,15 +724,21 @@ class AgentManager:
             content_bundle = bundle
             if agent.get('service_type') == 'mihomo':
                 from .mihomo_resources import prepare_mihomo_resources
-                bundle = prepare_mihomo_resources(bundle, capability, resource_config or self.repository.get_compat_config(bundle.manifest['profile_id']))
+                self.record_deployment(agent_id, deployment_id, {
+                    'status': 'preparing', 'message': '正在检查并准备 Mihomo Geo 资源'})
+                bundle = prepare_mihomo_resources(bundle, capability, resource_config or self.repository.get_compat_config(bundle.manifest['profile_id']),
+                    progress=lambda message: self.record_deployment(agent_id, deployment_id, {'status': 'preparing', 'message': message}))
             validation_receipt = None
             if agent.get('service_type') == 'oxidns':
                 from .oxidns_validation_receipt import validate_bundle
+                self.record_deployment(agent_id, deployment_id, {
+                    'status': 'preparing', 'message': '正在校验 OxiDNS 配置与规则文件'})
                 validation_receipt = validate_bundle(agent_id, bundle)
             self._remember_deployment_content(agent_id, content_bundle, base_url, validation_receipt)
             # Persist before the request: a lost response can still be reconciled.
             self.record_deployment(agent_id, deployment_id, {
                 'success': True, 'status': 'uploading', 'submitted': True,
+                'message': f'正在上传发布包（{len(bundle.manifest["files"])} 个文件，{len(bundle.archive):,} 字节）',
                 'sha256': bundle.sha256, 'source_sha256': content_bundle.sha256, 'config_version': bundle.config_version,
                 'config_revision': config_revision})
             result = self._deployment_request(agent, 'post', 'deployments', data=bundle.archive, timeout=(10, 120), headers={
@@ -707,7 +748,7 @@ class AgentManager:
                 result.setdefault('status', 'failed')
             elif not isinstance(result.get('status'), str):
                 result = {'success': True, 'status': 'unknown', 'message': 'Upload accepted; awaiting valid Agent status'}
-            return self.record_deployment(agent_id, deployment_id, result)
+            return self.record_deployment(agent_id, deployment_id, result, upload_receipt=True)
         except requests.RequestException as exc:
             agent = self.get_agent_by_id(agent_id)
             state = agent.get('deployments', {}).get(deployment_id, {})
@@ -715,7 +756,7 @@ class AgentManager:
             return self.record_deployment(agent_id, deployment_id, {
                 'success': submitted, 'status': 'unknown' if submitted else 'failed',
                 'message': 'Upload outcome unknown; query deployment status' if submitted else 'Unable to query Agent deployment capabilities',
-                'error_details': failure_text(str(exc), (agent.get('token'),))})
+                'error_details': failure_text(str(exc), (agent.get('token'),))}, upload_receipt=True)
         except ValueError as exc:
             details = failure_text(str(exc), (agent.get('token'),))
             return self.record_deployment(agent_id, deployment_id, {
