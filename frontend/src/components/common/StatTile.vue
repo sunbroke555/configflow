@@ -1,6 +1,6 @@
 <template>
   <div
-    class="group relative overflow-hidden rounded-[18px] border border-border bg-card/90 p-4 shadow-surface transition-[transform,border-color] duration-350 ease-(--ease-flow) hover:-translate-y-[3px] hover:border-border-strong"
+    class="group relative min-w-0 overflow-hidden rounded-[18px] border border-border bg-card/90 p-4 max-sm:p-3 shadow-surface transition-[transform,border-color] duration-350 ease-(--ease-flow) hover:-translate-y-[3px] hover:border-border-strong"
   >
     <!-- 悬停时的定向辉光，强调当前关注的指标 -->
     <span
@@ -14,8 +14,8 @@
         <p class="m-0 truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground">
           {{ label }}
         </p>
-        <p class="font-display mt-2.5 mb-0 flex items-baseline gap-1 text-[38px] leading-none tracking-[-0.03em] text-foreground max-md:text-[30px]">
-          <AnimatedNumber :value="value" :precision="precision" />
+        <p class="font-display mt-2.5 mb-0 flex max-sm:flex-wrap items-baseline gap-1 text-[38px] leading-none tracking-[-0.03em] text-foreground max-md:text-[30px] max-sm:text-[26px]">
+          <AnimatedNumber class="max-w-full break-all" :value="value" :precision="precision" />
           <span v-if="unit" class="font-sans text-[13px] font-medium tracking-normal text-muted-foreground">{{ unit }}</span>
         </p>
       </div>

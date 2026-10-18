@@ -27,17 +27,17 @@
 
     <div class="relative flex min-w-0 flex-1 flex-col">
       <header
-        class="glass-strong sticky top-0 z-20 flex h-(--cf-topbar-h) shrink-0 items-center gap-3 border-b border-border/60 px-7 pt-[env(safe-area-inset-top)] max-[900px]:gap-2 max-[900px]:px-3"
+        class="cf-app-topbar glass-strong sticky top-0 z-20 flex h-(--cf-topbar-h) shrink-0 items-center gap-3 border-b border-border/60 px-7 pt-[env(safe-area-inset-top)] max-[900px]:gap-2 max-[900px]:px-3"
         style="box-sizing: content-box"
       >
         <!-- 移动端没有侧栏，品牌放在顶栏 -->
         <router-link
           to="/dashboard"
-          class="group hidden min-w-0 shrink items-center gap-2 text-foreground no-underline max-[900px]:flex max-[900px]:min-h-9 max-[900px]:min-w-9"
+          class="group hidden min-w-0 shrink items-center gap-2 text-foreground no-underline max-[900px]:flex max-[900px]:min-h-11 max-[900px]:min-w-11"
           aria-label="ConfigFlow 首页"
         >
           <BrandMark class="size-6 text-primary" />
-          <span class="font-display truncate text-[17px] font-semibold max-[440px]:hidden">ConfigFlow</span>
+          <span class="font-display truncate text-[17px] font-semibold max-[359px]:hidden">ConfigFlow</span>
         </router-link>
 
         <!-- 桌面端面包屑：作用域 + 当前页 -->
@@ -58,7 +58,9 @@
           <span class="truncate text-[13.5px] font-semibold text-foreground">{{ crumb.label }}</span>
         </div>
 
-        <div class="ml-auto flex min-w-0 items-center gap-1.5">
+        <ProfileSwitcher class="cf-mobile-profile hidden max-[900px]:flex" />
+
+        <div class="cf-topbar-actions ml-auto flex min-w-0 items-center gap-1.5">
           <!-- 实时吞吐：已绑定在线 Agent 心跳上报的网卡速率，没有上报时整块隐藏 -->
           <div
             v-if="liveThroughput"
@@ -73,7 +75,7 @@
           <!-- 命令面板入口：桌面显示快捷键，移动端退化为图标按钮 -->
           <button
             type="button"
-            class="hidden h-8 min-w-[210px] cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-card/60 px-2.5 text-[12.5px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground md:flex"
+            class="hidden h-8 min-w-[210px] cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-card/60 px-2.5 text-[12.5px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground min-[901px]:flex"
             @click="palette?.show()"
           >
             <Search class="size-3.5" aria-hidden="true" />
@@ -83,12 +85,10 @@
             </kbd>
           </button>
 
-          <ProfileSwitcher class="min-[901px]:hidden" />
-
           <Button
             variant="ghost"
             size="icon-sm"
-            class="md:hidden"
+            class="min-[901px]:hidden"
             title="快速跳转"
             aria-label="快速跳转"
             @click="palette?.show()"

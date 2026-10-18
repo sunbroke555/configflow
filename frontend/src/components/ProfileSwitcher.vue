@@ -6,7 +6,7 @@
           'gap-2 border-border/60 bg-background/40 text-[13px] font-medium transition-colors hover:border-border-strong',
           rail
             ? 'h-auto! min-w-0 flex-1 rounded-xl bg-card/70 px-2.5 py-2'
-            : 'h-8 w-[190px] max-md:w-[132px]'
+            : 'h-8 w-[190px] max-sm:w-full max-sm:flex-1'
         )"
         aria-label="当前配置空间"
       >

@@ -4,7 +4,7 @@
       <Toolbar v-model:search="draft.qname" placeholder="查询域名" class="[&_input]:min-h-11">
         <template #filters>
           <Select :model-value="recorder" @update:model-value="value => emit('recorder', String(value))">
-            <SelectTrigger class="min-h-11 w-full sm:w-[190px]" aria-label="查询记录器"><SelectValue /></SelectTrigger>
+            <SelectTrigger class="min-h-11 w-full max-sm:col-span-2 sm:w-[190px]" aria-label="查询记录器"><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem v-for="tag in recorders" :key="tag" :value="tag">{{ tag }}</SelectItem></SelectContent>
           </Select>
           <Select :model-value="draft.range" @update:model-value="selectFilter('range', $event as OxiDNSQueryFilters['range'])">
@@ -63,7 +63,7 @@
     <p v-if="data?.records.length" class="m-0 text-xs leading-relaxed text-muted-foreground">解析来源根据执行轨迹归纳，显示转发组、缓存或本地策略；详情保留完整路径。</p>
     <div v-if="data || page > 1" class="flex flex-wrap items-center justify-between gap-3">
       <p class="m-0 text-xs text-muted-foreground">{{ page > 1 ? '浏览历史页时暂停记录自动刷新，保留当前页。' : '记录按时间倒序排列，每页最多 50 条。' }}</p>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 max-sm:w-full max-sm:[&>button]:flex-1">
         <Button variant="outline" class="min-h-11" :disabled="loading || page <= 1" @click="emit('previous')">上一页</Button>
         <Button variant="outline" class="min-h-11" :disabled="loading || !hasNext" @click="emit('next')">下一页</Button>
       </div>

@@ -1,6 +1,6 @@
 <template>
   <SectionCard class="min-w-0" :title="title" help="按请求次数排列 · 前 10 项" :padded="false">
-    <div class="cf-table-wrap h-96 max-w-full overflow-y-auto lg:h-[32rem]" tabindex="0" role="region" :aria-label="title">
+    <div class="cf-table-wrap h-72 max-w-full overflow-y-auto sm:h-96 lg:h-[32rem]" tabindex="0" role="region" :aria-label="title">
       <EmptyState v-if="!entries.length" class="h-full" :title="emptyTitle" :description="emptyDescription" />
       <table v-else class="cf-table table-fixed">
         <caption class="cf-sr">{{ title }}，按请求次数从高到低排列</caption>

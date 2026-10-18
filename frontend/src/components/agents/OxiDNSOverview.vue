@@ -1,7 +1,7 @@
 <template>
   <div class="oxidns-overview min-w-0 space-y-4">
     <p v-if="overview.statistics?.partial" class="m-0 text-xs leading-relaxed text-warning-accent">部分指标缺少基线或插件已重新计数，本轮统计可能不完整；无法确认的值显示「—」。</p>
-    <div class="grid grid-cols-2 gap-3.5 xl:grid-cols-3">
+    <div class="grid min-w-0 grid-cols-2 gap-3 xl:grid-cols-3">
       <OxiDNSMetric label="DNS 请求" :value="overview.metrics.requests_total" :hint="periodLabel" />
       <OxiDNSMetric label="近期请求速率" :value="qps" unit="次/秒" :precision="2" :hint="qps === null ? '采样中，需两次数据计算' : '最近两次采样之间的平均值'" />
       <OxiDNSMetric label="平均响应时间" :value="overview.metrics.avg_latency_ms" unit="ms" :precision="2" :hint="periodLabel" />
@@ -21,7 +21,7 @@
           </p>
         </div>
         <Select v-if="overview.recorders.length > 1" :model-value="recorder" :disabled="resetting" @update:model-value="$emit('recorder', String($event))">
-          <SelectTrigger class="min-h-11 w-[180px] max-w-full" aria-label="排行记录器"><SelectValue placeholder="选择记录器" /></SelectTrigger>
+          <SelectTrigger class="min-h-11 w-full sm:w-[180px] max-w-full" aria-label="排行记录器"><SelectValue placeholder="选择记录器" /></SelectTrigger>
           <SelectContent><SelectItem v-for="tag in overview.recorders" :key="tag" :value="tag">{{ tag }}</SelectItem></SelectContent>
         </Select>
       </header>

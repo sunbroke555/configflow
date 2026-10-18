@@ -42,7 +42,7 @@
       </EmptyState>
     </SectionCard>
     <template v-else>
-      <div v-if="currentDevice || overview" class="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted-foreground">
+      <div v-if="currentDevice || overview" class="cf-monitor-status mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted-foreground">
         <StatusDot v-if="currentDevice?.status === 'offline'" tone="muted" label="Agent 离线" />
         <StatusDot v-if="overview" :tone="coreRunning ? 'success' : 'warning'" :label="coreRunning ? '核心运行中' : '核心状态：' + overview.core.status" />
         <span v-if="currentDevice?.host" class="min-w-0 break-all font-mono" aria-label="当前设备 IP">{{ currentDevice.host }}</span>
@@ -55,10 +55,10 @@
       </p>
       <Tabs :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
         <div class="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <TabsList class="min-h-11 shrink-0">
-            <TabsTrigger value="overview" class="min-h-11 px-4">运行概览</TabsTrigger>
-            <TabsTrigger value="queries" class="min-h-11 px-4">查询记录</TabsTrigger>
-            <TabsTrigger value="devices" class="min-h-11 px-4">设备策略</TabsTrigger>
+          <TabsList class="min-h-11 shrink-0 max-sm:grid max-sm:h-auto max-sm:w-full max-sm:grid-cols-3">
+            <TabsTrigger value="overview" class="min-h-11 px-4 max-sm:px-2">运行概览</TabsTrigger>
+            <TabsTrigger value="queries" class="min-h-11 px-4 max-sm:px-2">查询记录</TabsTrigger>
+            <TabsTrigger value="devices" class="min-h-11 px-4 max-sm:px-2">设备策略</TabsTrigger>
           </TabsList>
           <OxiDNSStatisticsControls v-if="tab === 'overview' && overview" :statistics="overview.statistics" :resetting="resettingStatistics" @reset="confirmResetStatistics" />
         </div>

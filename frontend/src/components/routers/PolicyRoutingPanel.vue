@@ -11,7 +11,7 @@
     <p v-if="error" role="alert" class="m-0 break-words px-5 pb-4 text-sm text-destructive-accent">{{ error }}</p>
     <Tabs v-if="state" v-model="tab" class="min-w-0 gap-0">
       <div class="px-5 pb-4 max-md:px-4">
-        <TabsList class="h-auto w-full flex-wrap justify-start sm:w-auto" aria-label="策略路由设置">
+        <TabsList class="h-auto w-full flex-wrap justify-start max-sm:grid max-sm:grid-cols-2 sm:w-auto" aria-label="策略路由设置">
           <TabsTrigger v-for="item in tabs" :key="item.value" :value="item.value" class="min-h-11 px-3">{{ item.label }}</TabsTrigger>
         </TabsList>
       </div>
@@ -48,12 +48,12 @@
             </div>
           </div>
           <div v-if="policies.length" class="cf-table-wrap">
-            <table class="cf-table min-w-[540px] w-full"><thead><tr><th>客户端 IP / 网段</th><th>备注</th><th>策略</th><th class="text-right">操作</th></tr></thead>
-              <tbody><tr v-for="(row, index) in policies" :key="row.ip">
-                <td class="font-mono text-xs">{{ row.ip }}</td>
-                <td><Input v-model="row.name" :aria-label="`${row.ip} 备注`" maxlength="80" class="min-h-11 min-w-28" /></td>
-                <td><Select v-model="row.mode" :disabled="locked || !state.sources.editable"><SelectTrigger class="min-h-11 w-32" :aria-label="`${row.ip} 策略`"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="smart">智能分流</SelectItem><SelectItem value="direct">直连</SelectItem></SelectContent></Select></td>
-                <td class="text-right"><div class="flex justify-end"><Button variant="ghost" size="icon" class="size-11" :aria-label="`编辑 ${row.ip}`" @click="editSource(index)"><Pencil class="size-4" /></Button><Button variant="ghost" size="icon" class="size-11" :aria-label="`移除 ${row.ip}`" @click="policies.splice(index, 1)"><Trash2 class="size-4" /></Button></div></td>
+            <table class="cf-table cf-mobile-records policy-source-records min-w-[540px] w-full" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader">客户端 IP / 网段</th><th role="columnheader">备注</th><th role="columnheader">策略</th><th role="columnheader" class="text-right">操作</th></tr></thead>
+              <tbody role="rowgroup"><tr role="row" v-for="(row, index) in policies" :key="row.ip">
+                <td role="cell" class="cf-record-wide font-mono text-xs" data-label="客户端 IP / 网段">{{ row.ip }}</td>
+                <td role="cell" data-label="备注"><Input v-model="row.name" :aria-label="`${row.ip} 备注`" maxlength="80" class="min-h-11 min-w-28" /></td>
+                <td role="cell" data-label="策略"><Select v-model="row.mode" :disabled="locked || !state.sources.editable"><SelectTrigger class="min-h-11 w-32" :aria-label="`${row.ip} 策略`"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="smart">智能分流</SelectItem><SelectItem value="direct">直连</SelectItem></SelectContent></Select></td>
+                <td role="cell" class="cf-record-wide text-right"><div class="flex justify-end gap-2"><Button variant="ghost" size="icon" class="size-11" :aria-label="`编辑 ${row.ip}`" @click="editSource(index)"><Pencil class="size-4" /></Button><Button variant="ghost" size="icon" class="size-11" :aria-label="`移除 ${row.ip}`" @click="policies.splice(index, 1)"><Trash2 class="size-4" /></Button></div></td>
               </tr></tbody>
             </table>
           </div>
@@ -81,7 +81,7 @@
               <FieldHelp label="OxiDNS 发布目标" text="选中的设备将接收当前配置空间的完整已保存配置，包含其他草稿改动。未选中的设备保持现状；全部取消时只发布 ROS。" />
             </legend>
             <div class="flex flex-wrap gap-2">
-              <label v-for="agent in state.source_agents" :key="agent.id" class="flex min-h-11 max-w-full cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors" :class="targets.includes(agent.id) ? 'border-primary-accent/30 bg-primary-soft' : 'border-border hover:bg-muted'">
+              <label v-for="agent in state.source_agents" :key="agent.id" class="flex min-h-11 max-w-full max-sm:w-full cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors" :class="targets.includes(agent.id) ? 'border-primary-accent/30 bg-primary-soft' : 'border-border hover:bg-muted'">
                 <input v-model="targets" type="checkbox" :value="agent.id" class="size-4 shrink-0 accent-primary" />
                 <span class="min-w-0"><span class="block break-words font-medium">{{ agent.name }}</span><span class="block font-mono text-xs text-muted-foreground">{{ agent.host }}</span></span>
                 <span class="ml-1 flex shrink-0 items-center gap-1.5 text-xs" :class="agent.status === 'online' ? 'text-success-accent' : 'text-muted-foreground'"><span class="size-1.5 rounded-full bg-current" />{{ agent.status === 'online' ? '在线' : '离线' }}</span>

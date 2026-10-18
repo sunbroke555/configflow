@@ -31,24 +31,24 @@
 
     <SectionCard v-else :padded="false" title="路由器">
       <div class="cf-table-wrap">
-        <table class="cf-table min-w-[880px]">
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>类型</th>
-              <th>管理地址</th>
-              <th>版本</th>
-              <th>状态</th>
-              <th class="text-right">操作</th>
+        <table class="cf-table cf-mobile-records router-records min-w-[880px]" role="table">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th role="columnheader">名称</th>
+              <th role="columnheader">类型</th>
+              <th role="columnheader">管理地址</th>
+              <th role="columnheader">版本</th>
+              <th role="columnheader">状态</th>
+              <th role="columnheader" class="text-right">操作</th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="router in routers" :key="router.id">
-              <td class="font-medium">{{ router.name }}</td>
-              <td>{{ typeLabel(router.type) }}</td>
-              <td class="font-mono text-[12px]">{{ router.endpoint }}</td>
-              <td class="font-mono text-[12px]">{{ router.last_probe?.ok ? router.last_probe.version : '—' }}</td>
-              <td>
+          <tbody role="rowgroup">
+            <tr role="row" v-for="router in routers" :key="router.id">
+              <td role="cell" class="cf-record-wide font-medium">{{ router.name }}</td>
+              <td role="cell" data-label="类型">{{ typeLabel(router.type) }}</td>
+              <td role="cell" class="cf-record-wide font-mono text-[12px]" data-label="管理地址">{{ router.endpoint }}</td>
+              <td role="cell" class="font-mono text-[12px]" data-label="版本">{{ router.last_probe?.ok ? router.last_probe.version : '—' }}</td>
+              <td role="cell" data-label="状态">
                 <StatusDot
                   :tone="!router.last_probe ? 'muted' : router.last_probe.ok ? 'success' : 'danger'"
                   :label="!router.last_probe ? '未探测' : router.last_probe.ok ? '可连接' : '连接失败'"
@@ -57,8 +57,8 @@
                   {{ router.last_probe.message }}
                 </p>
               </td>
-              <td>
-                <div class="flex items-center justify-end gap-1">
+              <td role="cell" class="cf-record-wide">
+                <div class="router-record-actions flex items-center justify-end gap-1">
                   <Button size="sm" variant="outline" :disabled="busyId === router.id" @click="probe(router)">
                     <Loader2 v-if="busyId === router.id && busyAction === 'probe'" class="size-3.5 animate-spin" />
                     <Activity v-else class="size-3.5" />

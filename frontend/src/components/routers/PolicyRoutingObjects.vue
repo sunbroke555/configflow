@@ -2,7 +2,7 @@
   <div class="min-w-0">
     <div class="flex flex-wrap items-center justify-between gap-2 px-5 pb-3 max-md:px-4">
       <span class="text-xs text-muted-foreground">{{ collectedAt ? `读取于 ${collectedAt}` : '' }}</span>
-      <div class="flex flex-wrap gap-2">
+      <div class="cf-section-actions flex flex-wrap gap-2">
         <Button variant="outline" class="min-h-11" :disabled="disabled || !sourcesEditable" @click="emit('add-source')"><Plus class="size-4" />新增来源</Button>
         <Button variant="outline" class="min-h-11" :disabled="disabled" @click="emit('edit-destinations')">编辑目的规则集</Button>
         <Button variant="outline" class="min-h-11" :disabled="loading || disabled" @click="load"><RefreshCw class="size-4" />刷新对象</Button>

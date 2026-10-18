@@ -14,10 +14,10 @@
           <Switch :id="`rule-sync-${id}`" :model-value="settings.auto_rule_sync" :disabled="saving || loading || disabled" @update:model-value="value => save({ ...settings!, auto_rule_sync: Boolean(value) })" />
           <Label :for="`rule-sync-${id}`" class="flex min-h-11 items-center text-[13px] leading-relaxed">自动同步规则到 ROS</Label>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 max-sm:w-full">
           <Label :for="`rule-sync-interval-${id}`" class="whitespace-nowrap text-[13px] font-normal text-muted-foreground">检查频率</Label>
           <Select :model-value="String(settings.rule_sync_interval)" :disabled="saving || loading || disabled" @update:model-value="value => save({ ...settings!, rule_sync_interval: Number(value) })">
-            <SelectTrigger :id="`rule-sync-interval-${id}`" class="min-h-11 w-36 text-[13px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger :id="`rule-sync-interval-${id}`" class="min-h-11 w-36 text-[13px] max-sm:flex-1"><SelectValue /></SelectTrigger>
             <SelectContent><SelectItem v-for="item in intervals" :key="item.value" :value="String(item.value)">{{ item.label }}</SelectItem></SelectContent>
           </Select>
         </div>
@@ -29,7 +29,7 @@
         </div>
         <p class="m-0 break-words text-[13px] leading-relaxed text-muted-foreground">{{ statusNote }}</p>
       </div>
-      <dl v-if="state && (state.ready || state.checked_at)" class="m-0 grid grid-cols-1 gap-x-6 gap-y-4 border-t border-border pt-4 sm:grid-cols-2 xl:grid-cols-4">
+      <dl v-if="state && (state.ready || state.checked_at)" class="m-0 grid grid-cols-2 gap-x-4 gap-y-4 border-t border-border pt-4 sm:grid-cols-2 xl:grid-cols-4">
         <div class="grid gap-1"><dt class="text-muted-foreground">最近检查</dt><dd class="m-0 num">{{ time(state.checked_at) }}</dd></div>
         <div class="grid gap-1"><dt class="text-muted-foreground">规则内容更新</dt><dd class="m-0 num">{{ time(state.updated_at) }}</dd></div>
         <div class="grid gap-1"><dt class="text-muted-foreground">最近同步到 ROS</dt><dd class="m-0 num">{{ time(state.synced_at) }}</dd></div>

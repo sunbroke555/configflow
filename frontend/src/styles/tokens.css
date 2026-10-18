@@ -255,6 +255,191 @@ body {
   color: var(--cf-fg-3);
 }
 
+@media (width < 768px) {
+  button.chip,
+  [data-segment],
+  [data-slot='select-item'],
+  [data-slot='dropdown-menu-item'] {
+    min-height: var(--cf-touch);
+  }
+}
+
+/* 手机沿用相同控件与操作，只调整信息和按钮的排列。宽数据表仍在自身容器滚动。 */
+@media (width < 640px) {
+  .cf-app-topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    height: auto;
+    padding-bottom: var(--cf-sp-3);
+    padding-top: calc(env(safe-area-inset-top) + var(--cf-sp-2));
+  }
+
+  .cf-mobile-profile {
+    order: 3;
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .cf-page-header {
+    align-items: stretch;
+    gap: var(--cf-sp-3);
+  }
+
+  .cf-page-heading {
+    flex-wrap: wrap;
+  }
+
+  .cf-page-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .cf-page-actions > [data-slot='button'] {
+    width: 100%;
+    min-width: 0;
+    padding-inline: var(--cf-sp-3);
+  }
+
+  .cf-page-actions > :not([data-slot='button']),
+  .cf-page-actions > :only-child {
+    grid-column: 1 / -1;
+  }
+
+  .cf-page-actions > [role='group'] {
+    justify-self: end;
+  }
+
+  .cf-section-header > :first-child {
+    flex-basis: 100%;
+  }
+
+  .cf-section-actions {
+    width: 100%;
+  }
+
+  .cf-section-actions > [data-slot='button'] {
+    flex: 1 1 auto;
+  }
+
+  .cf-toolbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--cf-sp-2);
+  }
+
+  .cf-toolbar-search,
+  .cf-toolbar-actions {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .cf-toolbar > [role='combobox'] {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .cf-toolbar-actions > [data-slot='button'] {
+    flex: 1 1 auto;
+  }
+
+  .cf-monitor-status {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: var(--cf-sp-2);
+  }
+
+  .cf-monitor-status > :last-child {
+    margin-left: 0;
+  }
+
+  /* 少量设备和可编辑来源按记录排列；同一 DOM 保留编辑值、禁用态和事件。 */
+  .cf-mobile-records {
+    display: block;
+    min-width: 0;
+  }
+
+  .cf-mobile-records thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .cf-mobile-records tbody {
+    display: block;
+  }
+
+  .cf-mobile-records tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--cf-sp-3);
+    padding: var(--cf-sp-4);
+  }
+
+  .cf-mobile-records tbody tr + tr {
+    border-top: 1px solid var(--cf-bd);
+  }
+
+  .cf-mobile-records tbody td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .cf-mobile-records td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: var(--cf-sp-1);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+
+  .cf-mobile-records .cf-record-wide {
+    grid-column: 1 / -1;
+  }
+
+  .router-records tbody tr {
+    grid-template-areas: 'name status' 'endpoint endpoint' 'type version' 'actions actions';
+  }
+
+  .router-records td:nth-child(1) { grid-area: name; }
+  .router-records td:nth-child(2) { grid-area: type; }
+  .router-records td:nth-child(3) { grid-area: endpoint; }
+  .router-records td:nth-child(4) { grid-area: version; }
+  .router-records td:nth-child(5) { grid-area: status; }
+  .router-records td:nth-child(6) { grid-area: actions; }
+
+  .router-record-actions {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--cf-sp-2);
+    padding-top: var(--cf-sp-2);
+  }
+
+  .router-record-actions > [data-slot='button'] {
+    grid-column: span 2;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .router-record-actions > [aria-label] {
+    grid-column: span 1;
+  }
+
+  .policy-source-records [data-slot='select-trigger'],
+  .policy-source-records [data-slot='input'] {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
 /* 列表 / 卡片视图切换 */
 .cf-viewtoggle {
   margin-left: auto;
