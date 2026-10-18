@@ -9,6 +9,7 @@ import { routerApi, agentApi, ruleApi } from '@/api'
 import { NAV_GROUPS, scopeOfPath } from '@/navigation'
 import { activeProfileId } from '@/profileContext'
 import { notify } from '@/lib/feedback'
+import { canReloadPage } from '@/lib/pageReloadGuard'
 
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn() },
@@ -720,5 +721,79 @@ describe('routers view', () => {
     expect(text).toContain('已撤销：配置回流规则')
     expect(text).not.toContain('发布失败，已回滚')
     expect(text).not.toContain('发布失败，已撤销已完成的变更')
+  })
+})
+
+
+describe('route release automatic reload protection', () => {
+  it.each(['success', 'rollback', 'conflict'])('keeps a submitted release protected after its preview closes (%s)', async outcome => {
+    let resolve!: (value: any) => void
+    let reject!: (error: any) => void
+    const pending = new Promise<any>((done, fail) => { resolve = done; reject = fail })
+    vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, report: REPORT, generated_at: '2026-10-17T10:00:00' } } as any)
+    vi.mocked(routerApi.plan).mockResolvedValue({ data: { success: true, plan: {
+      blockers: [], warnings: [], fingerprint: 'protected-release', empty: false,
+      stages: [{ key: 'routes', title: '主路由代理路由', ops: [{ kind: 'route_add', summary: '新增路由' }] }],
+    } } } as any)
+    vi.mocked(routerApi.apply).mockReturnValueOnce(pending)
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros' })
+    await wrapper.findAll('button').find(button => button.text().includes('差异报告'))!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('预览发布'))!.trigger('click')
+    await flushPromises()
+    buttonInDocument('确认发布').click()
+    await flushPromises()
+    buttonInDocument('取消').click()
+    await flushPromises()
+    try {
+      expect(document.querySelector('[role="dialog"][data-state="open"]')).toBeNull()
+      expect(routerApi.apply).toHaveBeenCalledOnce()
+      expect(canReloadPage()).toBe(false)
+      if (outcome === 'success') resolve({ data: { success: true, result: { ok: true, log: [], rollback: [] } } })
+      else reject({ response: { status: outcome === 'conflict' ? 409 : 500, data: {
+        message: '发布失败', ...(outcome === 'rollback' ? { result: { ok: false, log: [], rollback: [{ status: 'ok', stage: 'routes', summary: '已撤销' }] } } : {}),
+      } } })
+      await flushPromises()
+      expect(canReloadPage()).toBe(true)
+      expect(routerApi.apply).toHaveBeenCalledOnce()
+      expect(routerApi.report).toHaveBeenCalledTimes(2)
+    } finally {
+      resolve({ data: { success: true, result: { ok: true, log: [], rollback: [] } } })
+      await flushPromises()
+    }
+  })
+
+  it.each(['success', 'failure'])('retains only the release request protection after its component unmounts (%s)', async outcome => {
+    let resolve!: (value: any) => void
+    let reject!: (error: any) => void
+    const pending = new Promise<any>((done, fail) => { resolve = done; reject = fail })
+    vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, report: REPORT, generated_at: '2026-10-17T10:00:00' } } as any)
+    vi.mocked(routerApi.plan).mockResolvedValue({ data: { success: true, plan: {
+      blockers: [], warnings: [], fingerprint: 'protected-release', empty: false,
+      stages: [{ key: 'routes', title: '主路由代理路由', ops: [{ kind: 'route_add', summary: '新增路由' }] }],
+    } } } as any)
+    vi.mocked(routerApi.apply).mockReturnValueOnce(pending)
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros' })
+    await wrapper.findAll('button').find(button => button.text().includes('差异报告'))!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('预览发布'))!.trigger('click')
+    await flushPromises()
+    buttonInDocument('确认发布').click()
+    await flushPromises()
+    try {
+      wrapper.unmount()
+      wrappers.splice(wrappers.indexOf(wrapper), 1)
+      expect(document.querySelector('[role="dialog"][data-state="open"]')).toBeNull()
+      expect(canReloadPage()).toBe(false)
+      if (outcome === 'success') resolve({ data: { success: true, result: { ok: true, log: [], rollback: [] } } })
+      else reject(new Error('connection lost'))
+      await flushPromises()
+      expect(canReloadPage()).toBe(true)
+      expect(routerApi.apply).toHaveBeenCalledOnce()
+      expect(routerApi.report).toHaveBeenCalledOnce()
+    } finally {
+      resolve({ data: { success: true, result: { ok: true, log: [], rollback: [] } } })
+      await flushPromises()
+    }
   })
 })

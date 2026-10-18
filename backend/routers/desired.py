@@ -76,6 +76,13 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
     from backend.converters.mosdns import convert_rule_content_for_mosdns
 
     warnings: List[str] = []
+    blocking_warnings: List[str] = []
+
+    def incomplete(message: str) -> None:
+        # Static routes keep their existing warning behavior. Policy bundles
+        # must also know when selected input is missing, to avoid withdrawing it.
+        warnings.append(message)
+        blocking_warnings.append(message)
     sources: Dict[ipaddress.IPv4Network, List[str]] = {}
     fake_ip = fake_ip_network(config)
     sources[fake_ip] = ['fake-ip']
@@ -87,11 +94,11 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
     for rule_id in ip_rule_sets or []:
         item = rulesets.get(rule_id)
         if item is None:
-            warnings.append(f'所选规则集 {rule_id} 已不存在，已忽略')
+            incomplete(f'所选规则集 {rule_id} 已不存在，已忽略')
             continue
         name = str(item.get('name') or item.get('id') or '规则集')
         if item.get('enabled') is False:
-            warnings.append(f'规则集「{name}」在策略规则中已停用，未计入')
+            incomplete(f'规则集「{name}」在策略规则中已停用，未计入')
             continue
         policy = str(item.get('policy') or '')
         if policy in BUILTIN_NON_PROXY or policy in direct_groups:
@@ -102,7 +109,7 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
         except Exception:  # noqa: BLE001 - a broken rule source must not break the report
             content = ''
         if not content:
-            warnings.append(f'规则集「{name}」没有本地缓存，未计入其中的 IP 段')
+            incomplete(f'规则集「{name}」没有本地缓存，未计入其中的 IP 段')
             continue
         for network in _public_ipv4_networks(convert_rule_content_for_mosdns(content, 'ip')):
             sources.setdefault(network, []).append(name)
@@ -115,10 +122,11 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
     proxy_cidrs.sort(key=lambda entry: ipaddress.IPv4Network(entry['cidr']))
 
     if not proxy_gateway:
-        warnings.append('未关联 mihomo Agent，无法确定代理路由的下一跳')
+        incomplete('未关联 mihomo Agent，无法确定代理路由的下一跳')
     return {
         'fake_ip_range': str(fake_ip),
         'proxy_gateway': proxy_gateway or '',
         'proxy_cidrs': proxy_cidrs,
         'warnings': warnings,
+        'blocking_warnings': blocking_warnings,
     }

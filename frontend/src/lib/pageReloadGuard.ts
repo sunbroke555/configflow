@@ -8,6 +8,17 @@ export function usePageReloadGuard(blocked: () => boolean): void {
   onScopeDispose(() => blockers.delete(blocked))
 }
 
+/** A submitted write outlives its page; release this guard when the request settles. */
+export async function withPageReloadBlocked<T>(operation: () => Promise<T>): Promise<T> {
+  const blocked = () => true
+  blockers.add(blocked)
+  try {
+    return await operation()
+  } finally {
+    blockers.delete(blocked)
+  }
+}
+
 export function canReloadPage(): boolean {
   if ([...blockers].some(blocked => blocked())) return false
   // Dialogs also contain forms that do not need ordinary navigation guards.
