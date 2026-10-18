@@ -141,7 +141,7 @@ def _supports_self_restart(agent_version: str) -> bool:
 
 def _public_agent(agent):
     """Hide credentials and private deployment comparison metadata."""
-    public = {key: value for key, value in agent.items() if key not in ('token', 'applied_content')}
+    public = {key: value for key, value in agent.items() if key not in ('token', 'applied_content', 'dns_follow_job')}
     if 'deployments' in public:
         public['deployments'] = {key: _public_deployment(value)
                                  for key, value in public['deployments'].items()}
@@ -150,6 +150,36 @@ def _public_agent(agent):
     if isinstance(public.get('latest_upgrade'), dict):
         public['latest_upgrade'] = public_upgrade_state(public['latest_upgrade'])
     return public
+
+
+@bp.route('/<agent_id>/dns-follow', methods=['GET', 'PUT', 'DELETE'])
+@require_auth
+def agent_dns_follow(agent_id):
+    from backend.agents import dns_follow
+    manager = get_agent_manager()
+    try:
+        if request.method == 'PUT':
+            result = dns_follow.configure(manager, agent_id, request.get_json(silent=True))
+        elif request.method == 'DELETE':
+            result = dns_follow.disable(manager, agent_id)
+        else:
+            result = dns_follow.options(manager, agent_id)
+        return jsonify(result)
+    except ValueError as error:
+        secrets = tuple(agent.get('token') for agent in manager.get_all_agents())
+        return jsonify({'success': False, 'message': failure_text(str(error), secrets)}), 409
+
+
+@bp.route('/<agent_id>/dns-follow/retry', methods=['POST'])
+@require_auth
+def retry_agent_dns_follow(agent_id):
+    from backend.agents import dns_follow
+    manager = get_agent_manager()
+    try:
+        return jsonify(dns_follow.retry(manager, agent_id)), 202
+    except ValueError as error:
+        secrets = tuple(agent.get('token') for agent in manager.get_all_agents())
+        return jsonify({'success': False, 'message': failure_text(str(error), secrets)}), 409
 
 
 def _public_deployment(record):

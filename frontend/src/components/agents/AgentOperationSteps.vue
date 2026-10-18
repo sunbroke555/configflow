@@ -4,14 +4,16 @@ import { Loader2 } from '@lucide/vue'
 import { deploymentStatusLabel, type AgentDeployment } from '@/composables/useAgentDeployments'
 import { upgradeLabels, upgradeStepMessage } from '@/composables/useAgentUpgrades'
 import type { AgentOperationEvent } from '@/types/agentOperation'
+import { dnsFollowLabels } from '@/types/agentDNSFollow'
 
 const props = withDefaults(defineProps<{
   task: Pick<Partial<AgentDeployment>, 'status' | 'message' | 'events' | 'query_error' | 'request_pending' | 'manual_rollback' | 'rollback_rejected'> & { target_version?: string }
-  kind?: 'deployment' | 'upgrade'
+  kind?: 'deployment' | 'upgrade' | 'dns-follow'
   busy?: boolean
   showCurrent?: boolean
 }>(), { kind: 'deployment', showCurrent: true })
-const label = computed(() => props.task.request_pending ? '提交请求' : props.kind === 'upgrade'
+const label = computed(() => props.task.request_pending ? '提交请求' : props.kind === 'dns-follow'
+  ? dnsFollowLabels[props.task.status || 'waiting'] || props.task.status : props.kind === 'upgrade'
   ? upgradeLabels[props.task.status || 'unknown'] || props.task.status
   : deploymentStatusLabel({ ...props.task, deployment_id: '', status: props.task.status || 'unknown' }))
 const message = computed(() => {
@@ -27,7 +29,8 @@ const connectionMessage = computed(() => {
   }
   return '暂时无法取得最新状态，正在继续查询；下方保留最近已确认的步骤。'
 })
-const eventLabel = (event: AgentOperationEvent) => props.kind === 'upgrade'
+const eventLabel = (event: AgentOperationEvent) => props.kind === 'dns-follow'
+  ? dnsFollowLabels[event.status] || event.status : props.kind === 'upgrade'
   ? upgradeLabels[event.status] || event.status
   : deploymentStatusLabel({ deployment_id: '', status: event.status, manual_rollback: props.task.manual_rollback })
 const eventTime = (value: string) => {
@@ -55,7 +58,7 @@ const eventTime = (value: string) => {
             <p v-if="event.message" class="mb-0 mt-1 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{{ event.message }}</p>
           </li>
         </ol>
-        <p v-else class="m-0 text-muted-foreground">{{ task.request_pending ? '请求已提交，等待服务端返回步骤记录。' : '此任务未提供步骤记录，仅能显示已报告的状态；旧版 Agent 更新后可记录后续任务的详细步骤。' }}</p>
+        <p v-else class="m-0 text-muted-foreground">{{ task.request_pending ? '请求已提交，等待服务端返回步骤记录。' : kind === 'dns-follow' ? '暂无同步步骤记录，仅显示后台已确认的状态。' : '此任务未提供步骤记录，仅能显示已报告的状态；旧版 Agent 更新后可记录后续任务的详细步骤。' }}</p>
       </div>
     </details>
   </div>

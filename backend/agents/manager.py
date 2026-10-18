@@ -35,6 +35,12 @@ def _upgrade_busy(agent):
     return bool(upgrade) and upgrade.get('status') not in ('succeeded', 'failed', 'rolled_back')
 
 
+def _dns_follow_busy(agents, agent_id):
+    return any((item.get('dns_follow_state') or {}).get('status') in ('preparing', 'publishing')
+               and (item['id'] == agent_id or (item.get('dns_follow') or {}).get('source_agent_id') == agent_id)
+               for item in agents)
+
+
 class AgentManager:
     """Agent 管理器，负责 Agent 的注册、心跳、状态管理等"""
 
@@ -99,6 +105,11 @@ class AgentManager:
             if existing_agent:
                 if not _constant_time_ascii_equal(existing_token, existing_agent.get('token')):
                     raise PermissionError('Unauthorized')
+                if _dns_follow_busy(agents, existing_agent['id']) and (
+                        agent_data.get('service_type', 'mihomo') != existing_agent.get('service_type')
+                        or (requested_profile_id and requested_profile_id != existing_agent.get('profile_id'))
+                        or agent_data.get('port', 8080) != existing_agent.get('port')):
+                    raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再改变 Agent 注册信息')
                 agent_id = existing_agent['id']
                 token = existing_agent['token']
                 updated_agent = {
@@ -123,7 +134,7 @@ class AgentManager:
                     # 管理端设置的开关，重新注册不能把它清掉
                     'domain_discovery_enabled': existing_agent.get('domain_discovery_enabled', False),
                 }
-                for field in ('config_revision', 'pushed_at', 'applied_content'):
+                for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job'):
                     if field in existing_agent:
                         updated_agent[field] = deepcopy(existing_agent[field])
                 agents[agents.index(existing_agent)] = updated_agent
@@ -203,6 +214,10 @@ class AgentManager:
                     continue
                 if _upgrade_busy(agent):
                     raise AgentDeploymentConflict('Agent update is in progress; wait for confirmation before editing it')
+                if _dns_follow_busy(agents, agent_id) and any(
+                        key in updates and updates[key] != agent.get(key)
+                        for key in ('host', 'port', 'enabled', 'service_type', 'profile_id')):
+                    raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再修改 Agent')
                 if ('profile_id' in updates and updates['profile_id'] != (agent.get('profile_id') or self.repository.default_profile_id())
                         and any(task.get('status') not in ('succeeded', 'failed', 'rolled_back')
                                 for task in agent.get('deployments', {}).values())):
@@ -227,6 +242,8 @@ class AgentManager:
             agent = next((item for item in agents if item['id'] == agent_id), None)
             if agent and _upgrade_busy(agent):
                 raise AgentDeploymentConflict('Agent 正在更新或等待恢复')
+            if _dns_follow_busy(agents, agent_id):
+                raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再删除 Agent')
             initial_len = len(agents)
             agents[:] = [agent for agent in agents if agent['id'] != agent_id]
             return len(agents) < initial_len
@@ -326,6 +343,12 @@ class AgentManager:
             agent = next((item for item in agents if item['id'] == agent_id), None)
             if agent is None:
                 return {'success': False, 'message': 'Agent not found', 'http_status': 404}
+            follow = agent.get('dns_follow_state') or {}
+            if follow.get('status') in ('preparing', 'publishing') and follow.get('target_deployment_id') != deployment_id:
+                return {'success': False, 'message': 'DNS 联动发布正在执行，请等待结果后再发布 OxiDNS', 'http_status': 409}
+            if any((item.get('dns_follow') or {}).get('source_agent_id') == agent_id
+                   and (item.get('dns_follow_state') or {}).get('status') in ('preparing', 'publishing') for item in agents):
+                return {'success': False, 'message': '绑定的 OxiDNS 正在同步，请等待结果后再发布 Mihomo', 'http_status': 409}
             if _upgrade_busy(agent):
                 return {'success': False, 'message': 'Agent update is in progress', 'http_status': 409}
             deployments = agent.setdefault('deployments', {})
@@ -612,6 +635,8 @@ class AgentManager:
                 return {'success': False, 'message': 'Deployment not found', 'http_status': 404}
             if _upgrade_busy(agent):
                 return {'success': False, 'message': 'Agent update is in progress', 'http_status': 409}
+            if _dns_follow_busy(agents, agent_id):
+                return {'success': False, 'message': 'DNS 联动发布尚未确认结束，请等待结果后再回滚', 'http_status': 409}
             if (state.get('profile_id') != (agent.get('profile_id') or self.repository.default_profile_id())
                     or state.get('service_type', agent.get('service_type')) != agent.get('service_type')
                     or (agent.get('latest_deployment') or {}).get('deployment_id') != deployment_id):
