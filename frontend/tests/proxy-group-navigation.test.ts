@@ -22,7 +22,6 @@ const matches = [
 let wrapper: VueWrapper | undefined
 let scrollDescriptor: PropertyDescriptor | undefined
 let groups: ProxyGroup[]
-let latency: ReturnType<typeof deferred<AxiosResponse>>
 
 function response<T>(data: T): AxiosResponse<T> {
   return { data, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config: { headers: new AxiosHeaders() } }
@@ -49,8 +48,6 @@ beforeEach(() => {
   sessionStorage.clear()
   setActiveProfileId('profile-a')
   groups = [group('Hong Kong')]
-  latency = deferred<AxiosResponse>()
-  vi.mocked(nodeApi.latency).mockReturnValue(latency.promise)
   vi.mocked(nodeApi.getAll).mockResolvedValue(response([]))
   vi.mocked(proxyGroupApi.getAll).mockImplementation(async () => response(JSON.parse(JSON.stringify(groups))))
   vi.mocked(proxyGroupApi.previewRegex).mockResolvedValue(result())
@@ -86,10 +83,11 @@ function invalidRegex() {
 describe('proxy group navigation lifecycle', () => {
   it('does not dispatch a pending debounce after leaving the page', async () => {
     await render()
+    const calls = vi.mocked(proxyGroupApi.previewRegex).mock.calls.length
     wrapper!.unmount()
     wrapper = undefined
     await debounce()
-    expect(proxyGroupApi.previewRegex).not.toHaveBeenCalled()
+    expect(proxyGroupApi.previewRegex).toHaveBeenCalledTimes(calls)
   })
 
   it('ignores the result of a preview already running when the page is left', async () => {
@@ -98,12 +96,14 @@ describe('proxy group navigation lifecycle', () => {
     await render()
     await debounce()
     const state = (wrapper!.vm as any).$.setupState
+    const previousNodes = JSON.parse(JSON.stringify(state.preview.nodes))
+    const previousCounts = { ...state.matchCounts }
     wrapper!.unmount()
     wrapper = undefined
     old.resolve(result(['Stale Hong Kong']))
     await flushPromises()
-    expect(state.preview.nodes).toEqual([])
-    expect(state.matchCounts).toEqual({})
+    expect(state.preview.nodes).toEqual(previousNodes)
+    expect(state.matchCounts).toEqual(previousCounts)
   })
 
   it('stops the count worker queue and ignores in-flight results after leaving', async () => {
@@ -111,7 +111,6 @@ describe('proxy group navigation lifecycle', () => {
     const requests = Array.from({ length: 3 }, () => deferred<AxiosResponse>())
     requests.forEach(request => vi.mocked(proxyGroupApi.previewRegex).mockReturnValueOnce(request.promise))
     await render()
-    latency.resolve(response({ results: {} }))
     await flushPromises()
     expect(proxyGroupApi.previewRegex).toHaveBeenCalledTimes(3)
     const state = (wrapper!.vm as any).$.setupState
@@ -126,13 +125,28 @@ describe('proxy group navigation lifecycle', () => {
     expect(state.matchCounts).toEqual({})
   })
 
-  it('does not start the count queue if initial latency loading completes after leaving', async () => {
-    groups = [group('Manual', { subscriptions: [], manual_nodes: ['DIRECT'] }), group('Hong Kong')]
+  it.each(['url-test', 'fallback', 'load-balance'] as const)('does not infer %s runtime failures or selection from cached latency', async type => {
+    groups = [group('Automatic', { type })]
+    vi.mocked(nodeApi.latency).mockResolvedValue(response({ results: {
+      'HK 01': { latency: null }, 'Hong Kong 02': { latency: 1 }
+    } }))
     await render()
-    wrapper!.unmount()
-    wrapper = undefined
-    latency.resolve(response({ results: {} }))
-    await flushPromises()
-    expect(proxyGroupApi.previewRegex).not.toHaveBeenCalled()
+    await debounce()
+    expect(wrapper!.text()).toContain('HK 01')
+    expect(wrapper!.text()).toContain('实际延迟与可用性请在目标设备的 Mihomo 面板查看')
+    expect(wrapper!.text()).not.toContain('超时')
+    expect(wrapper!.text()).not.toContain('按测速预计生效')
+    expect(wrapper!.find('.matched-node.is-winner').exists()).toBe(false)
+    expect(nodeApi.latency).not.toHaveBeenCalled()
   })
+  it('preserves the manual group default without latency history', async () => {
+    groups = [group('Manual', { type: 'select' })]
+    await render()
+    await debounce()
+    const details = wrapper!.get('[aria-label="策略组详情"]')
+    expect(details.text()).toContain('默认选中：')
+    expect(details.get('.matched-node.is-winner').text()).toBe('HK 01')
+    expect(nodeApi.latency).not.toHaveBeenCalled()
+  })
+
 })

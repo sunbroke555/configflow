@@ -305,13 +305,12 @@ describe('proxy group selection', () => {
 
   it.each(['follow', 'no-sources'])('ignores the old preview when switching to a %s group', async kind => {
     groups[1] = group('Beta', kind === 'follow' ? { follow_group: 'alpha' } : { subscriptions: [] })
-    vi.mocked(nodeApi.latency).mockReturnValue(new Promise(() => undefined))
     const oldPreview = deferred<AxiosResponse>()
     vi.mocked(proxyGroupApi.previewRegex).mockReturnValue(oldPreview.promise)
     const wrapper = await render()
     await vi.advanceTimersByTimeAsync(280)
     await flushPromises()
-    expect(proxyGroupApi.previewRegex).toHaveBeenCalledTimes(1)
+    expect(proxyGroupApi.previewRegex).toHaveBeenCalledTimes(3)
     await select(wrapper, 'Beta')
     expect(heading(wrapper)).toBe('Beta')
     oldPreview.resolve(response({ success: true, nodes: [{ name: 'Stale Alpha node' }], count: 1, total_candidates: 100 }))
@@ -323,7 +322,6 @@ describe('proxy group selection', () => {
   })
 
   it('still preserves the last valid result for an invalid regex in the same group', async () => {
-    vi.mocked(nodeApi.latency).mockReturnValue(new Promise(() => undefined))
     const wrapper = await render()
     await vi.advanceTimersByTimeAsync(280)
     await flushPromises()
