@@ -153,7 +153,7 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) error {
 	if e != nil {
 		return e
 	}
-	if cfg.ServiceType == "mihomo" && (os.Getenv("ENABLE_MOSDNS") == "true" || os.Getenv("ENABLE_OXIDNS") == "true") {
+	if cfg.ServiceType == "mihomo" && (cfg.NativeAIO || os.Getenv("ENABLE_MOSDNS") == "true" || os.Getenv("ENABLE_OXIDNS") == "true") {
 		modified, e := modifyMihomoConfig(string(data))
 		if e != nil {
 			return diagnosticFailure("invalid Mihomo configuration", e, nil)

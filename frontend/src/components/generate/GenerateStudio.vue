@@ -405,7 +405,7 @@ const { deployments, busy: deploymentBusy, track: trackDeployment } = useAgentDe
 const deploying = computed(() => pushTargets.value.some(a => deploymentBusy(a.id)))
 const pushResults = computed(() => Object.entries(pushedAgents.value).flatMap(([id, agent]) => {
   const task = submissionFailures.value[id] || deployments[id]
-  return agent.serviceType === active.value && live.boundAgents.value.some(bound => bound.id === id) && task && ['failed', 'rolled_back', 'rollback_failed', 'ready', 'unknown'].includes(task.status || 'failed')
+  return agent.serviceType === active.value && live.boundAgents.value.some(bound => bound.id === id) && task && (['failed', 'rolled_back', 'rollback_failed', 'ready', 'unknown'].includes(task.status || 'failed') || task.dns_checks?.some(check => check.level !== 'pass'))
     ? [{ id, name: agent.name, task }] : []
 }))
 // 「已校验，待激活」需要在 Agent 页手动激活，这里没有激活入口，只给出指引。

@@ -34,6 +34,7 @@ type Config struct {
 	AgentID                 string `json:"agent_id,omitempty"`
 	UpgradeSchema           int    `json:"upgrade_schema,omitempty"`
 	AgentServiceUnit        string `json:"agent_service_unit,omitempty"`
+	NativeAIO               bool   `json:"native_aio,omitempty"`
 	Token                   string `json:"token,omitempty"`
 
 	// 监控功能配置（使用指针以区分未设置和 false）

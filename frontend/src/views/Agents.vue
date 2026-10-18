@@ -286,6 +286,15 @@
             </RadioGroup>
           </FormField>
 
+          <FormField v-if="scriptForm.installType === 'shell'" label="Shell 模式" hint="同机模式为两个已安装的核心分别创建 Agent。">
+            <RadioGroup v-model="scriptForm.shellMode" class="flex flex-wrap gap-2" @update:model-value="resetForm">
+              <label v-for="option in SHELL_MODES" :key="option.value" :class="chipClass(scriptForm.shellMode === option.value)">
+                <RadioGroupItem :value="option.value" />
+                {{ option.label }}
+              </label>
+            </RadioGroup>
+          </FormField>
+
           <FormField v-if="scriptForm.installType === 'docker'" label="Docker 模式" :hint="dockerModeHint">
             <RadioGroup v-model="scriptForm.dockerMode" class="flex flex-wrap gap-2" @update:model-value="onDockerModeChange">
               <label
@@ -303,7 +312,7 @@
             <Input id="agent-name" v-model="scriptForm.name" class="bg-background/50" placeholder="例如：hong-kong-server" />
           </FormField>
 
-          <FormField v-if="scriptForm.installType !== 'docker'" label="服务类型">
+          <FormField v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" label="服务类型">
             <RadioGroup v-model="scriptForm.type" class="flex flex-wrap gap-2" @update:model-value="onServiceTypeChange">
               <label
                 v-for="option in serviceTypeOptions"
@@ -316,7 +325,7 @@
             </RadioGroup>
           </FormField>
 
-          <FormField v-if="scriptForm.installType !== 'docker'" label="Agent 端口" html-for="agent-port">
+          <FormField v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" label="Agent 端口" html-for="agent-port">
             <Input
               id="agent-port"
               v-model.number="scriptForm.port"
@@ -330,11 +339,12 @@
           <FormField v-else label="Agent 端口">
             <div class="flex flex-col gap-2">
               <div
-                v-if="scriptForm.dockerMode === 'mihomo' || scriptForm.dockerMode === 'aio'"
+                v-if="shellAio || scriptForm.dockerMode === 'mihomo' || scriptForm.dockerMode === 'aio'"
                 class="flex items-center gap-2"
               >
-                <span class="w-32 shrink-0 text-[12.5px] text-muted-foreground">Mihomo Agent</span>
+                <label for="mihomo-agent-port" class="w-32 shrink-0 text-[12.5px] text-muted-foreground">Mihomo Agent</label>
                 <Input
+                  id="mihomo-agent-port"
                   v-model.number="scriptForm.mihomoAgentPort"
                   type="number"
                   :min="1024"
@@ -343,11 +353,12 @@
                 />
               </div>
               <div
-                v-if="scriptForm.dockerMode === 'mosdns'"
+                v-if="!shellAio && scriptForm.dockerMode === 'mosdns'"
                 class="flex items-center gap-2"
               >
-                <span class="w-32 shrink-0 text-[12.5px] text-muted-foreground">MosDNS Agent</span>
+                <label for="mosdns-agent-port" class="w-32 shrink-0 text-[12.5px] text-muted-foreground">MosDNS Agent</label>
                 <Input
+                  id="mosdns-agent-port"
                   v-model.number="scriptForm.mosdnsAgentPort"
                   type="number"
                   :min="1024"
@@ -356,11 +367,12 @@
                 />
               </div>
               <div
-                v-if="scriptForm.dockerMode === 'oxidns' || scriptForm.dockerMode === 'aio'"
+                v-if="shellAio || scriptForm.dockerMode === 'oxidns' || scriptForm.dockerMode === 'aio'"
                 class="flex items-center gap-2"
               >
-                <span class="w-32 shrink-0 text-[12.5px] text-muted-foreground">OxiDNS Agent</span>
+                <label for="oxidns-agent-port" class="w-32 shrink-0 text-[12.5px] text-muted-foreground">OxiDNS Agent</label>
                 <Input
+                  id="oxidns-agent-port"
                   v-model.number="scriptForm.oxidnsAgentPort"
                   type="number"
                   :min="1024"
@@ -380,7 +392,46 @@
             />
           </FormField>
 
-          <template v-if="scriptForm.installType === 'shell'">
+          <template v-if="shellAio">
+            <InfoNote>
+              <p>请先在同一台机器安装 Mihomo 与 OxiDNS，并配置为 systemd / OpenRC 服务；脚本仅安装和接管两个 Agent。</p>
+              <p>DNS 端口分工：OxiDNS 使用 <code class="font-mono">53</code>，Mihomo 使用 <code class="font-mono">1053</code>。发布 Mihomo 配置时会自动调整 DNS 监听和 TUN DNS 劫持端口为 <code class="font-mono">1053</code>。</p>
+              <p>请在 OxiDNS 中将远端 DNS 上游设置为 <code class="font-mono">127.0.0.1:1053</code>。使用 TUN 时，还需在系统准备 TUN 设备、权限及所需的 IPv4 转发设置。</p>
+            </InfoNote>
+
+            <Collapsible v-model:open="lifecyclePanelOpen" class="rounded-lg border border-border/70">
+              <CollapsibleTrigger class="min-h-11 w-full px-3 py-2 text-left text-[13px] font-medium">
+                核心服务高级配置
+              </CollapsibleTrigger>
+              <CollapsibleContent class="space-y-4 border-t border-border/60 p-3">
+                <FormField label="Mihomo 配置文件路径" html-for="aio-mihomo-config-path">
+                  <Input id="aio-mihomo-config-path" v-model="scriptForm.mihomoConfigPath" class="bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
+                </FormField>
+                <FormField label="OxiDNS 配置文件路径" html-for="aio-oxidns-config-path">
+                  <Input id="aio-oxidns-config-path" v-model="scriptForm.oxidnsConfigPath" class="bg-background/50 font-mono" placeholder="/etc/oxidns/config.yaml" />
+                </FormField>
+                <InfoNote>
+                  <p>OxiDNS 服务的 <code class="font-mono">-d</code> 工作目录必须与配置文件所在目录一致。例如配置为 <code class="font-mono">/opt/oxidns/config.yaml</code> 时，服务应使用 <code class="font-mono">-d /opt/oxidns</code>。请按现有服务的实际路径填写。</p>
+                </InfoNote>
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Mihomo 服务名称" html-for="aio-mihomo-service-unit">
+                    <Input id="aio-mihomo-service-unit" v-model="scriptForm.mihomoServiceUnit" class="bg-background/50 font-mono" placeholder="mihomo" />
+                  </FormField>
+                  <FormField label="OxiDNS 服务名称" html-for="aio-oxidns-service-unit">
+                    <Input id="aio-oxidns-service-unit" v-model="scriptForm.oxidnsServiceUnit" class="bg-background/50 font-mono" placeholder="oxidns" />
+                  </FormField>
+                </div>
+                <FormField label="Mihomo 内核程序路径" html-for="aio-mihomo-service-binary" hint="可填写程序名或绝对路径，应与现有服务使用的程序一致。">
+                  <Input id="aio-mihomo-service-binary" v-model="scriptForm.mihomoServiceBinary" class="bg-background/50 font-mono" placeholder="mihomo" />
+                </FormField>
+                <FormField label="OxiDNS 内核程序路径" html-for="aio-oxidns-service-binary" hint="可填写程序名或绝对路径，应与现有服务使用的程序一致。">
+                  <Input id="aio-oxidns-service-binary" v-model="scriptForm.oxidnsServiceBinary" class="bg-background/50 font-mono" placeholder="oxidns" />
+                </FormField>
+              </CollapsibleContent>
+            </Collapsible>
+          </template>
+
+          <template v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'">
             <FormField label="配置文件路径" html-for="agent-config-path" hint="填写配置在目标机器上的保存位置，须包含文件名。">
               <Input
                 id="agent-config-path"
@@ -751,7 +802,7 @@ import StatusDot from '@/components/common/StatusDot.vue'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
-import { agentApi } from '@/api'
+import { agentApi, type AgentInstallScriptParams } from '@/api'
 import api from '@/api'
 import type { Agent } from '@/types'
 import { useProfileStore } from '@/stores/profile'
@@ -832,6 +883,7 @@ const logsPaneRef = ref<HTMLElement | null>(null)
 
 const createScriptForm = () => ({
   installType: 'shell',
+  shellMode: 'single',
   dockerMode: 'mihomo', // mihomo, mosdns, oxidns, aio
   name: '',
   type: 'mihomo',
@@ -849,12 +901,19 @@ const createScriptForm = () => ({
   containerName: 'configflow-agent',
   serviceContainerName: '',
   networkMode: 'bridge',
-  // Docker Agent 端口配置
+  // 多服务 Agent 端口配置
   mihomoAgentPort: 8080,
   mosdnsAgentPort: 8081,
-  oxidnsAgentPort: 8082
+  oxidnsAgentPort: 8082,
+  mihomoConfigPath: '/etc/mihomo/config.yaml',
+  oxidnsConfigPath: '/etc/oxidns/config.yaml',
+  mihomoServiceUnit: 'mihomo',
+  oxidnsServiceUnit: 'oxidns',
+  mihomoServiceBinary: 'mihomo',
+  oxidnsServiceBinary: 'oxidns'
 })
 const scriptForm = ref(createScriptForm())
+const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
 
 const serviceTypeLabels: Record<Agent['service_type'], string> = {
   mihomo: 'Mihomo',
@@ -1404,6 +1463,11 @@ const INSTALL_TYPES = [
   { value: 'docker', label: 'Docker 容器' }
 ]
 
+const SHELL_MODES = [
+  { value: 'single', label: '单服务' },
+  { value: 'aio', label: 'Mihomo + OxiDNS 同机' }
+]
+
 const DOCKER_MODES = [
   { value: 'mihomo', label: 'Mihomo (Clash)' },
   { value: 'mosdns', label: 'MosDNS' },
@@ -1736,22 +1800,34 @@ const generateScript = async () => {
       notify.warning('Agent 名称只能包含字母、数字、短横线或下划线')
       return
     }
-    const configPath = scriptForm.value.config_path.trim()
-    if (configPath && !configPath.match(/\.\w+$/)) {
+    const form = scriptForm.value
+    const configPaths = shellAio.value ? [form.mihomoConfigPath, form.oxidnsConfigPath] : [form.config_path]
+    if (configPaths.some(path => path.trim() && !path.trim().match(/\.\w+$/))) {
+      lifecyclePanelOpen.value = shellAio.value
       notify.warning('配置文件路径应指向一个文件（如 config.yaml），而不是文件夹')
       return
     }
-    const form = scriptForm.value
-    const unit = (form.service_unit.trim() || form.type).replace(/\.service$/, '')
-    const restart = form.restart_command.trim()
-    const standardRestart = !restart || [
-      `systemctl restart ${unit}`, `systemctl restart ${unit}.service`, `rc-service ${unit} restart`
-    ].includes(restart)
-    const customLifecycle = form.service_manager === 'command' || (form.service_manager === 'auto' && !standardRestart)
-    if (customLifecycle && ![form.stop_command, form.start_command, form.status_command].every(value => value.trim())) {
-      lifecyclePanelOpen.value = true
-      notify.warning('自定义服务需要填写停止、启动和状态检查命令，才能在发布失败时回滚')
-      return
+    if (shellAio.value) {
+      if (![form.mihomoAgentPort, form.oxidnsAgentPort].every(port => Number.isInteger(port) && port >= 1024 && port <= 65535)) {
+        notify.warning('Agent 端口应为 1024 到 65535 之间的整数')
+        return
+      }
+      if (form.mihomoAgentPort === form.oxidnsAgentPort) {
+        notify.warning('两个 Agent 必须使用不同的端口')
+        return
+      }
+    } else {
+      const unit = (form.service_unit.trim() || form.type).replace(/\.service$/, '')
+      const restart = form.restart_command.trim()
+      const standardRestart = !restart || [
+        `systemctl restart ${unit}`, `systemctl restart ${unit}.service`, `rc-service ${unit} restart`
+      ].includes(restart)
+      const customLifecycle = form.service_manager === 'command' || (form.service_manager === 'auto' && !standardRestart)
+      if (customLifecycle && ![form.stop_command, form.start_command, form.status_command].every(value => value.trim())) {
+        lifecyclePanelOpen.value = true
+        notify.warning('自定义服务需要填写停止、启动和状态检查命令，才能在发布失败时回滚')
+        return
+      }
     }
   }
 
@@ -1796,7 +1872,20 @@ const generateScript = async () => {
         const value = form[key].trim()
         if (value) lifecycleParams[key] = value
       }
-      const shellParams = {
+      const shellParams: AgentInstallScriptParams = shellAio.value ? {
+        name: form.name.trim(),
+        type: 'aio',
+        agent_ip: form.agent_ip.trim(),
+        server_url: serverUrl,
+        mihomo_agent_port: form.mihomoAgentPort,
+        oxidns_agent_port: form.oxidnsAgentPort,
+        mihomo_config_path: form.mihomoConfigPath.trim() || '/etc/mihomo/config.yaml',
+        oxidns_config_path: form.oxidnsConfigPath.trim() || '/etc/oxidns/config.yaml',
+        mihomo_service_unit: form.mihomoServiceUnit.trim() || 'mihomo',
+        oxidns_service_unit: form.oxidnsServiceUnit.trim() || 'oxidns',
+        mihomo_service_binary: form.mihomoServiceBinary.trim() || 'mihomo',
+        oxidns_service_binary: form.oxidnsServiceBinary.trim() || 'oxidns',
+      } : {
         name: form.name.trim(),
         type: form.type,
         port: form.port,
@@ -1815,7 +1904,7 @@ const generateScript = async () => {
         if (value !== '') params.set(key, String(value))
       }
       // An explicit empty restart command requests lifecycle auto-detection.
-      params.set('restart_command', shellParams.restart_command)
+      if (shellParams.restart_command !== undefined) params.set('restart_command', shellParams.restart_command)
 
       const scriptUrl = `${serverUrl}/api/agents/install-script?${params.toString()}`
 

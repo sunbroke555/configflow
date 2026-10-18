@@ -91,6 +91,12 @@ printf 'agent %s\n' "$*" >> "$EVENTS"
 case "$*" in
     *-recover-*) exit 42 ;;
     *-validate-service*) if [ "${FAIL_VALIDATION:-}" = "yes" ]; then exit 46; fi ;;
+    *-check-environment*)
+        if [ "${FAIL_ENVIRONMENT:-}" = "yes" ]; then
+            echo "端口已被其他进程占用；修复建议：选择空闲端口或调整冲突服务。" >&2
+            exit 48
+        fi
+        ;;
 esac
 ''')
     agent.chmod(0o755)
@@ -187,8 +193,10 @@ def test_native_reinstall_safely_detaches_old_gate_and_is_repeatable(tmp_path, m
     assert not any("stop" in event and "old-core" in event for event in events)
     assert any("-check-deployments" in event for event in events)
     validation = next(i for i, event in enumerate(events) if "-validate-service" in event)
+    environment = next(i for i, event in enumerate(events) if "-check-environment" in event)
     stop = next(i for i, event in enumerate(events) if "stop" in event and "configflow-agent" in event)
-    assert validation < stop
+    assert validation < environment < stop
+    assert sum("-check-environment" in event for event in events) == 2
     assert not any(" -recover-" in event for event in events)
 
 
@@ -306,6 +314,27 @@ def test_oxidns_invalid_working_directory_leaves_existing_agent_running(tmp_path
     events = (tmp_path / "events").read_text().splitlines()
     assert any("-validate-service" in event for event in events)
     assert not any("stop" in event or "reload" in event for event in events)
+
+
+@pytest.mark.parametrize("manager", ["systemd", "openrc"])
+@pytest.mark.parametrize("service", ["mihomo", "mosdns", "oxidns"])
+def test_native_environment_failure_keeps_existing_agent_and_core(tmp_path, manager, service):
+    script, env, gate, core, dropin, agent_dropin, config = native_install_harness(tmp_path, manager, service)
+    before = {path: path.read_bytes() for path in (config, core, dropin, agent_dropin, gate)}
+    env["FAIL_ENVIRONMENT"] = "yes"
+    result = subprocess.run(["sh", str(script)], input="1\n", env=env, text=True, capture_output=True)
+    assert result.returncode == 48, result.stderr
+    assert "端口" in result.stderr and "修复建议" in result.stderr
+    assert "未知 -check-environment 参数" in result.stderr
+    assert "1.8.19-go 或更高" in result.stderr
+    for path, data in before.items():
+        assert path.read_bytes() == data
+    events = (tmp_path / "events").read_text().splitlines()
+    validation = next(i for i, event in enumerate(events) if "-validate-service" in event)
+    checks = [i for i, event in enumerate(events) if "-check-environment" in event]
+    assert len(checks) == 1 and validation < checks[0]
+    assert not any("stop" in event or "start" in event or "reload" in event for event in events)
+    assert not list((tmp_path / "local-bin").glob(".configflow-agent.install.*"))
 
 
 @pytest.mark.parametrize("mode", ["single", "aio"])

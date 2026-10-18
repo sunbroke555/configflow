@@ -176,10 +176,10 @@ def _agent_with_content_sync(agent, snapshots):
 
 @bp.route('/install-script', methods=['GET'])
 def get_install_script():
-    """生成 Agent 安装脚本（默认 Go 版本，可选 Shell 版本）"""
+    """生成原生 Agent 安装脚本，支持单服务和 Mihomo + OxiDNS 同机。"""
     try:
         import os
-        from backend.agents.go_install_script import generate_go_agent_install_script
+        from backend.agents.go_install_script import generate_go_agent_install_script, generate_go_aio_install_script
         from backend.agents.install_script import generate_lightweight_install_script
 
         # 获取参数
@@ -221,7 +221,25 @@ def get_install_script():
         # logger.info(f"服务器URL: {server_url}")
 
         # 根据 agent_type 生成对应的脚本
-        if agent_type == 'shell':
+        if service_type == 'aio':
+            if agent_type != 'go':
+                raise ValueError('Mihomo + OxiDNS 同机安装需要 Go Agent')
+            script = generate_go_aio_install_script(
+                server_url=server_url,
+                agent_name=agent_name,
+                agent_ip=agent_ip,
+                binary_download_url=f"{server_url}/api/agents/download",
+                mihomo_agent_port=request.args.get('mihomo_agent_port', '8080'),
+                oxidns_agent_port=request.args.get('oxidns_agent_port', '8082'),
+                **{f'{service}_{field}': request.args.get(f'{service}_{field}', default).strip()
+                   for service in ('mihomo', 'oxidns')
+                   for field, default in (
+                       ('config_path', f'/etc/{service}/config.yaml'),
+                       ('service_unit', service),
+                       ('service_binary', service),
+                   )},
+            )
+        elif agent_type == 'shell':
             # Shell 版本（兼容性更好）
             logger.info("生成 Shell 版本安装脚本")
             script = generate_lightweight_install_script(

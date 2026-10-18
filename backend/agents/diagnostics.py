@@ -1,10 +1,15 @@
 """Bounded, readable failure details shared by Agent response paths."""
 import re
+from datetime import datetime
 from urllib.parse import quote, quote_plus
 
 from backend.utils.url_utils import safe_url_for_log
 
 DETAIL_LIMIT = 16 * 1024
+DNS_CHECK_LIMIT = 32
+DNS_NAME_LIMIT = 128
+DNS_MESSAGE_LIMIT = 2048
+DNS_FIX_LIMIT = 1024
 _ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 _URL = re.compile(r'[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>"\'\\]+')
 _AUTH = re.compile(r'(?i)\b(Bearer|Basic)\s+[^\s,"\'<>]+')
@@ -63,6 +68,50 @@ def failure_text(value, secrets=(), limit=DETAIL_LIMIT):
         suffix = '\n[输出过长，已截断]'
         text = encoded[:limit - len(suffix.encode())].decode('utf-8', errors='ignore') + suffix
     return text
+
+
+def dns_report_fields(payload, secrets=()):
+    """Keep bounded, safe DNS results without inventing a result for old Agents."""
+    result = {}
+    checks = payload.get('dns_checks')
+    if isinstance(checks, list):
+        safe_checks = []
+        incomplete = len(checks) > DNS_CHECK_LIMIT
+        for check in checks[:DNS_CHECK_LIMIT]:
+            if (not isinstance(check, dict)
+                    or check.get('level') not in ('pass', 'warn', 'error')
+                    or not isinstance(check.get('name'), str)
+                    or not isinstance(check.get('message'), str)):
+                incomplete = True
+                continue
+            name = failure_text(check['name'], secrets, limit=DNS_NAME_LIMIT)
+            message = failure_text(check['message'], secrets, limit=DNS_MESSAGE_LIMIT)
+            if not name or not message:
+                incomplete = True
+                continue
+            safe = {'name': name, 'level': check['level'], 'message': message}
+            if isinstance(check.get('fix'), str):
+                fix = failure_text(check['fix'], secrets, limit=DNS_FIX_LIMIT)
+                if fix:
+                    safe['fix'] = fix
+            safe_checks.append(safe)
+        if incomplete:
+            # A partial report must not look like an exhaustive all-pass result.
+            safe_checks = safe_checks[:DNS_CHECK_LIMIT - 1]
+            safe_checks.append({'name': 'DNS 报告完整性', 'level': 'warn',
+                                'message': '部分 DNS 检测结果格式无效或数量过多，未完整显示。',
+                                'fix': '请减少重复监听配置，或检查 Agent 返回的 DNS 检测结果。'})
+        result['dns_checks'] = safe_checks
+    checked_at = payload.get('dns_checked_at')
+    if isinstance(checked_at, str) and len(checked_at) <= 64 and 'T' in checked_at:
+        try:
+            parsed = datetime.fromisoformat(checked_at.replace('Z', '+00:00'))
+        except ValueError:
+            pass
+        else:
+            if parsed.tzinfo is not None:
+                result['dns_checked_at'] = checked_at
+    return result
 
 
 def response_failure(response, *, fallback, secrets=()):

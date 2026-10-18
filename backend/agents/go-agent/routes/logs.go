@@ -43,7 +43,7 @@ func GetLogsHandler(cfg *Config) http.HandlerFunc {
 		}
 
 		// 未指定路径，使用自动检测
-		logs, errLogs := getLogData(cfg.ServiceType, cfg.ConfigPath, lines, cfg.ServiceUnit)
+		logs, errLogs := getLogDataWithAgentLog(cfg.ServiceType, cfg.ConfigPath, lines, AgentLogPath(cfg), cfg.ServiceUnit)
 
 		JsonResponse(w, http.StatusOK, map[string]interface{}{
 			"success":      true,
@@ -126,7 +126,7 @@ func PortBasedLogsHandler(cfg *Config) http.HandlerFunc {
 		configPath := cfg.ConfigPath
 		serviceName := cfg.ServiceName
 
-		if cfg.ServiceType == "oxidns" {
+		if cfg.NativeAIO || cfg.ServiceType == "oxidns" {
 			// The configured core wins over legacy port heuristics.
 		} else if port == getEnvPort("AGENT_MIHOMO_PORT", 8080) {
 			serviceType = "mihomo"
@@ -158,7 +158,7 @@ func PortBasedLogsHandler(cfg *Config) http.HandlerFunc {
 		}
 
 		// 未指定路径，使用自动检测
-		logs, errLogs := getLogData(serviceType, configPath, lines, cfg.ServiceUnit)
+		logs, errLogs := getLogDataWithAgentLog(serviceType, configPath, lines, AgentLogPath(cfg), cfg.ServiceUnit)
 
 		JsonResponse(w, http.StatusOK, map[string]interface{}{
 			"success":      true,
@@ -204,6 +204,10 @@ func getConfigDir(configPath string) string {
 
 // getLogData 获取指定服务的日志数据
 func getLogData(serviceType string, configPath string, lines int, serviceUnits ...string) (string, string) {
+	return getLogDataWithAgentLog(serviceType, configPath, lines, "/var/log/configflow-agent.log", serviceUnits...)
+}
+
+func getLogDataWithAgentLog(serviceType string, configPath string, lines int, agentLogPath string, serviceUnits ...string) (string, string) {
 	if serviceType == "oxidns" {
 		return getOxiDNSLogs(configPath, lines, serviceUnits...)
 	}
@@ -216,8 +220,6 @@ func getLogData(serviceType string, configPath string, lines int, serviceUnits .
 	supervisorErrPath := fmt.Sprintf("/var/log/supervisor/%s.err.log", serviceType)
 
 	// 2. ConfigFlow Agent 特殊路径 (Shell 安装)
-	agentLogPath := "/var/log/configflow-agent.log"
-
 	// 3. 系统服务路径 (OpenRC/systemd)
 	systemLogPath := fmt.Sprintf("/var/log/%s.log", serviceType)
 

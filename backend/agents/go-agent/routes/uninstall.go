@@ -12,6 +12,18 @@ import (
 // UninstallHandler 卸载功能处理程序
 func UninstallHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var nativeInstance nativeAIOInstallation
+		if cfg.NativeAIO {
+			var err error
+			nativeInstance, err = nativeAIOInstallationFor(cfg)
+			if err == nil {
+				err = nativeInstance.validateDirectory()
+			}
+			if err != nil {
+				deploymentFailure(w, http.StatusConflict, err)
+				return
+			}
+		}
 		release, err := AcquireServiceOperation(cfg)
 		if err != nil {
 			deploymentFailure(w, http.StatusConflict, err)
@@ -45,6 +57,12 @@ func UninstallHandler(cfg *Config) http.HandlerFunc {
 
 			if err := RemoveRecoveryInstallation(cfg); err != nil {
 				log.Printf("Uninstall stopped: recovery boot gate cleanup failed: %v", err)
+				return
+			}
+			if cfg.NativeAIO {
+				if err := nativeInstance.startUninstall(); err != nil {
+					log.Printf("Native AIO uninstall failed: %v", err)
+				}
 				return
 			}
 
