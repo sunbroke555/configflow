@@ -128,13 +128,20 @@ def node_latency():
     if not isinstance(payload, dict):
         return jsonify({'success': False, 'message': '请求必须是 JSON 对象'}), 400
     names = payload.get('names')
+    keys = payload.get('keys')
     if names is not None and (
         not isinstance(names, list) or not all(isinstance(n, str) for n in names)
     ):
         return jsonify({'success': False, 'message': 'names 必须是字符串数组'}), 400
+    if keys is not None and (
+        not isinstance(keys, list) or not all(isinstance(key, str) for key in keys)
+    ):
+        return jsonify({'success': False, 'message': 'keys 必须是字符串数组'}), 400
+    if names is not None and keys is not None:
+        return jsonify({'success': False, 'message': 'names 与 keys 不能同时指定'}), 400
 
     try:
-        outcome = run_tests(names)
+        outcome = run_tests(names, keys=keys)
     except ProbeBusy as exc:
         return jsonify({'success': False, 'message': str(exc)}), 409
     except ProbeUnavailable as exc:

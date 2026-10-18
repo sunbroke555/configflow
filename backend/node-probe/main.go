@@ -10,14 +10,15 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/metacubex/http"
 	"github.com/metacubex/mihomo/adapter"
+	"github.com/metacubex/mihomo/component/ca"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 )
@@ -83,65 +84,80 @@ func measure(ctx context.Context, node map[string]any, target string, unified bo
 		return failure(name, "config", "节点配置无效或缺少必要参数")
 	}
 	defer p.Close()
+	u, err := url.Parse(target)
+	if err != nil {
+		return failure(name, "config", "测试地址无效")
+	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	var metadata C.Metadata
+	if err := metadata.SetRemoteAddress(net.JoinHostPort(u.Hostname(), port)); err != nil {
+		return failure(name, "config", "测试地址无效")
+	}
+	// Mirror Mihomo v1.19.32's Proxy.URLTest without changing its process-global
+	// UnifiedDelay switch. Keeping this local also lets us retain first_latency.
+	started := time.Now()
+	connection, err := p.DialContext(ctx, &metadata)
+	if err != nil {
+		return connectionFailure(name, err)
+	}
+	defer connection.Close()
+	tlsConfig, err := ca.GetTLSConfig(ca.Option{})
+	if err != nil {
+		return connectionFailure(name, err)
+	}
 	transport := &http.Transport{
-		// Explicit node dialer: do not use HTTP_PROXY or a system proxy.
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			var metadata C.Metadata
-			if err := metadata.SetRemoteAddress(address); err != nil {
-				return nil, err
-			}
-			return p.DialContext(ctx, &metadata)
+		// Reuse the exact connection as URLTest does; never use HTTP_PROXY.
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return connection, nil
 		},
-		MaxIdleConns:        1,
-		MaxIdleConnsPerHost: 1,
-		TLSHandshakeTimeout: 5 * time.Second,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		TLSClientConfig:       tlsConfig,
 	}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	probe := func() (int64, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, target, nil)
-		if err != nil {
-			return 0, err
-		}
-		started := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, target, nil)
+	if err != nil {
+		return failure(name, "config", "测试地址无效")
+	}
+	probe := func() error {
 		resp, err := client.Do(req)
 		if err != nil {
-			return 0, err
+			return err
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusNoContent {
-			return 0, statusError(resp.StatusCode)
-		}
-		return max(1, time.Since(started).Milliseconds()), nil
+		_ = resp.Body.Close()
+		// The panel does not set an expected status: any HTTP response is a
+		// completed latency probe, including redirects (which are not followed).
+		return nil
 	}
-	first, err := probe()
-	if err != nil {
-		return probeFailure(name, err)
+	if err = probe(); err != nil {
+		return connectionFailure(name, err)
 	}
+	first := max(1, time.Since(started).Milliseconds())
 	elapsed := first
 	if unified {
-		// Like unified-delay, measure a second HEAD on a reusable connection.
-		// A failed second request is a failure, never a successful warm-up result.
-		elapsed, err = probe()
-		if err != nil {
-			return probeFailure(name, err)
+		second := time.Now()
+		if err := probe(); err == nil {
+			started = second
 		}
+		// As in URLTest, a failed second request keeps the first connection's
+		// start time. A hard overall deadline still fails, as in the core API.
+		elapsed = max(1, time.Since(started).Milliseconds())
+	}
+	if err := ctx.Err(); err != nil {
+		return connectionFailure(name, err)
 	}
 	return result{Name: name, Latency: &elapsed, FirstLatency: &first}
-}
-
-type statusError int
-
-func (e statusError) Error() string { return fmt.Sprintf("HTTP %d", int(e)) }
-
-func probeFailure(name string, err error) result {
-	var status statusError
-	if errors.As(err, &status) {
-		return failure(name, "http_status", fmt.Sprintf("测试地址返回 HTTP %d，预期 204", status))
-	}
-	return connectionFailure(name, err)
 }
 
 func execute(input request) ([]result, error) {
@@ -155,7 +171,7 @@ func execute(input request) ([]result, error) {
 	results := make([]result, len(input.Nodes))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	for range min(5, len(input.Nodes)) {
+	for range min(maxNodes, len(input.Nodes)) {
 		wg.Go(func() {
 			for i := range jobs {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Duration(input.TimeoutMS)*time.Millisecond)
@@ -185,7 +201,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 1, "results": results}); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 2, "results": results}); err != nil {
 		os.Exit(1)
 	}
 }

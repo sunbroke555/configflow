@@ -249,7 +249,7 @@
                 <b class="text-foreground">{{ selected.follow_group ? '跟随' : getGroupTypeLabel(selected.type) }}</b>
                 · {{ strategyText }}
                 <template v-if="winner">
-                  <br />{{ selected.type === 'select' ? '默认选中' : '按测速预计生效' }}：
+                  <br />默认选中：
                   <b class="text-primary-accent">{{ winner.name }}</b>
                 </template>
               </div>
@@ -265,6 +265,7 @@
               <Loader2 v-if="preview.loading" class="ml-1 inline size-3 animate-spin" />
             </div>
             <div class="flex flex-1 flex-col gap-2 rounded-[14px] border border-border bg-background/60 p-3">
+              <p class="m-0 text-[11.5px] text-muted-foreground">实际延迟与可用性请在目标设备的 Mihomo 面板查看。</p>
               <div ref="matchedNodesContainer" class="flex max-h-[260px] flex-wrap content-start gap-1.5 overflow-auto">
                 <span
                   v-for="(node, i) in preview.nodes"
@@ -276,7 +277,6 @@
                   :style="{ animationDelay: `${Math.min(i, 24) * 18}ms` }"
                 >
                   <span class="min-w-0 [overflow-wrap:anywhere]">{{ node.name }}</span>
-                  <i class="shrink-0 font-mono text-[10.5px] not-italic text-muted-foreground">{{ latencyLabel(node.name) }}</i>
                 </span>
                 <span v-if="!preview.nodes.length && !preview.loading" class="text-[12.5px] text-muted-foreground">
                   {{ selected.follow_group ? '跟随策略组不单独筛选节点。' : draft.sources.length ? '没有节点命中这个正则。' : '先选择至少一个来源。' }}
@@ -2076,27 +2076,10 @@ const computeMatchCounts = async () => {
   await Promise.all([worker(), worker(), worker()])
 }
 
-/* ---------- 延迟与预计生效节点 ---------- */
-const latencyMap = ref<Record<string, { latency: number | null }>>({})
-const latencyLabel = (name: string) => {
-  const r = latencyMap.value[name]
-  if (!r) return '—'
-  return r.latency === null ? '超时' : String(r.latency)
-}
-
+/* ---------- 手动策略组的默认节点；自动策略组由设备核心实际测速选择 ---------- */
 const winner = computed(() => {
-  const group = selected.value
-  const nodes = preview.value.nodes
-  if (!group || !nodes.length) return null
-  const reachable = nodes.filter(n => typeof latencyMap.value[n.name]?.latency === 'number')
-  if (group.type === 'url-test') {
-    return [...reachable].sort(
-      (a, b) => (latencyMap.value[a.name].latency as number) - (latencyMap.value[b.name].latency as number)
-    )[0] || null
-  }
-  if (group.type === 'fallback') return reachable[0] || null
-  if (group.type === 'select') return nodes[0]
-  return null
+  if (selected.value?.type !== 'select') return null
+  return preview.value.nodes[0] || null
 })
 
 const strategyText = computed(() => {
@@ -2180,14 +2163,7 @@ watch(proxyGroups, groups => {
 onMounted(async () => {
   await Promise.all([loadProxyGroups(), loadResources()])
   if (!viewActive) return
-  try {
-    const { data } = await nodeApi.latency()
-    if (!viewActive) return
-    latencyMap.value = data?.results || {}
-  } catch {
-    // 没有测速结果时只显示节点名
-  }
-  if (viewActive) computeMatchCounts()
+  computeMatchCounts()
 })
 
 // 聚合列表可能晚于选中项加载完成，两者任一变化都再检查一次
@@ -2287,10 +2263,6 @@ onUnmounted(() => {
   background: var(--primary-soft);
   color: var(--foreground);
   box-shadow: 0 0 20px -6px var(--primary-accent);
-}
-
-.matched-node.is-winner i {
-  color: var(--primary-accent);
 }
 
 @keyframes node-pop {
