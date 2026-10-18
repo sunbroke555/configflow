@@ -77,6 +77,29 @@ def clone_profile(profile_id):
     return jsonify(get_repository().clone_profile(profile_id, data)), 201
 
 
+@profiles_bp.route('/<profile_id>/agents', methods=['GET'])
+@require_auth
+def profile_agent_bindings(profile_id):
+    return jsonify(get_repository().get_profile_agent_bindings(profile_id))
+
+
+@profiles_bp.route('/<profile_id>/agents/rebind', methods=['POST'])
+@require_auth
+def rebind_profile_agents(profile_id):
+    from backend.common.agent_manager import get_agent_manager
+    from backend.agents.manager import AgentDeploymentConflict
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'message': '请求数据必须是 JSON 对象'}), 400
+    try:
+        result = get_agent_manager().rebind_profile_agents(
+            profile_id, data.get('target_profile_id'), data.get('agent_ids'))
+    except AgentDeploymentConflict as error:
+        return jsonify({'success': False, 'message': str(error)}), 409
+    return jsonify({'success': True, **result})
+
+
 @profiles_bp.route('/<profile_id>/export', methods=['GET'])
 @require_auth
 def export_profile(profile_id):

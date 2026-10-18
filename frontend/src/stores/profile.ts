@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { profileApi } from '@/api'
+import { profileApi, type ProfileAgentBinding } from '@/api'
 import { activeProfileId, scopedRequests, setActiveProfileId } from '@/profileContext'
 import { confirm, notify } from '@/lib/feedback'
 
@@ -13,6 +13,7 @@ export interface Profile {
   revision?: number
   /** 是否为默认配置空间（未指定配置空间时使用；删除默认配置时可切换给其他配置空间） */
   is_default?: boolean
+  bound_agents?: ProfileAgentBinding[]
 }
 
 const profiles = ref<Profile[]>([])

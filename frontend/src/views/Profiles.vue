@@ -77,6 +77,11 @@
           {{ profile.description || '暂无说明' }}
         </p>
 
+        <Button v-if="profile.bound_agents?.length" variant="outline" class="h-auto min-h-11 justify-start whitespace-normal text-left" @click="openBindings(profile)">
+          <span class="min-w-0 break-words text-xs">{{ profile.bound_agents.length }} 个 Agent 绑定：{{ profile.bound_agents.slice(0, 2).map(agent => agent.name).join('、') }}{{ profile.bound_agents.length > 2 ? ' 等' : '' }} · 查看 / 解绑</span>
+        </Button>
+        <p v-else class="m-0 text-xs text-muted-foreground">暂无 Agent 绑定</p>
+
         <footer class="mt-auto flex flex-wrap items-center gap-2 border-0 border-t border-dashed border-border/50 pt-4">
           <Button
             v-if="profile.id !== activeProfileId"
@@ -112,14 +117,18 @@
               class="text-destructive-accent hover:bg-destructive-soft"
               title="删除"
               aria-label="删除"
+              :disabled="Boolean(checkingDelete)"
               @click="remove(profile)"
             >
-              <Trash2 class="size-4" />
+              <Loader2 v-if="checkingDelete === profile.id" class="size-4 animate-spin" />
+              <Trash2 v-else class="size-4" />
             </Button>
           </div>
         </footer>
       </Motion>
     </div>
+
+    <ProfileAgentBindings v-if="bindingProfile" :key="bindingProfile.id" :profile="bindingProfile" :delete-requested="bindingDeleteRequested" @close="bindingProfile = null" @changed="refreshBindings" @continue-delete="continueDelete" />
 
     <Dialog v-model:open="dialogVisible">
       <DialogContent class="max-w-[460px]">
@@ -388,6 +397,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
+import ProfileAgentBindings from '@/components/ProfileAgentBindings.vue'
 import { profileApi, subscriptionApi } from '@/api'
 import { confirmDanger, notify, prompt } from '@/lib/feedback'
 import { listItem } from '@/lib/motion'
@@ -469,6 +479,31 @@ const defaultDelete = reactive({
   successor: ''
 })
 
+const checkingDelete = ref('')
+const bindingProfile = ref<Profile | null>(null)
+const bindingDeleteRequested = ref(false)
+const openBindings = (profile: Profile, deleting = false) => {
+  bindingDeleteRequested.value = deleting
+  bindingProfile.value = profile
+}
+const refreshBindings = async () => {
+  try { await refreshProfiles() }
+  catch { notify.warning('绑定已调整，配置空间列表刷新失败，请稍后刷新页面') }
+}
+const continueDelete = () => {
+  const profile = bindingProfile.value
+  bindingProfile.value = null
+  if (profile) void remove(profile)
+}
+const deletionFailed = (profile: Profile, error: any) => {
+  if (error.response?.data?.usages?.some((usage: any) => usage.kind === 'agent')) {
+    defaultDelete.visible = false
+    openBindings(profile, true)
+  } else {
+    notify.error('配置空间删除失败', error.response?.data?.message)
+  }
+}
+
 const confirmDefaultDelete = async () => {
   if (!defaultDelete.profile || !defaultDelete.successor) return
   defaultDelete.saving = true
@@ -478,13 +513,27 @@ const confirmDefaultDelete = async () => {
     await refreshProfiles()
     notify.success('配置空间已删除', `默认配置空间已切换为「${profileStore.profileName(defaultDelete.successor)}」`)
   } catch (error: any) {
-    notify.error('配置空间删除失败', error.response?.data?.message)
+    deletionFailed(defaultDelete.profile, error)
   } finally {
     defaultDelete.saving = false
   }
 }
 
 const remove = async (profile: Profile) => {
+  if (checkingDelete.value) return
+  checkingDelete.value = profile.id
+  try {
+    const { data } = await profileApi.agentBindings(profile.id)
+    if (data.agents.length) {
+      openBindings(profile, true)
+      return
+    }
+  } catch (error: any) {
+    notify.error('无法检查 Agent 绑定', error.response?.data?.message || '请稍后重试')
+    return
+  } finally {
+    checkingDelete.value = ''
+  }
   if (isDefaultProfile(profile)) {
     // 默认配置空间需要先选接任者，后端会在同一事务里切换默认并删除
     const others = profiles.value.filter(item => item.id !== profile.id)
@@ -497,7 +546,7 @@ const remove = async (profile: Profile) => {
     return
   }
   const ok = await confirmDanger(
-    `确定删除配置空间「${profile.name}」及其缓存和生成文件吗？此操作不可撤销。`,
+    `确定删除配置空间「${profile.name}」的设置、缓存和生成文件吗？该空间的配置链接将失效，共享资源保留。此操作不可撤销。`,
     { title: '删除配置空间' }
   )
   if (!ok) return
@@ -507,7 +556,7 @@ const remove = async (profile: Profile) => {
     await refreshProfiles()
     notify.success('配置空间已删除')
   } catch (error: any) {
-    notify.error(error.response?.data?.message || '配置空间删除失败')
+    deletionFailed(profile, error)
   }
 }
 

@@ -710,10 +710,28 @@ class ProfileRepository:
         with self._document() as document:
             shared_revision = int(document['shared'].get('_revision', 0))
             default_id = self._default_profile_id(document)
+            bindings = {}
+            for agent in document['system']['agents']:
+                bindings.setdefault(agent.get('profile_id') or default_id, []).append(self.agent_binding_summary(agent))
             # revision 即生成配置的版本号（见 config_revision），界面据此判断 Agent 是否待更新
             return [dict(self._metadata(profile), revision=int(profile.get('_revision', 0)) + shared_revision,
-                         is_default=profile['id'] == default_id)
+                         is_default=profile['id'] == default_id, bound_agents=bindings.get(profile['id'], []))
                     for profile in document['profiles'].values()]
+
+    @staticmethod
+    def agent_binding_summary(agent):
+        """Only expose device identity here, never credentials or deployment payloads."""
+        return {'id': agent['id'], 'name': agent.get('name') or agent['id'],
+                'host': agent.get('host', ''), 'port': agent.get('port'),
+                'service_type': agent.get('service_type') or 'mihomo'}
+
+    def get_profile_agent_bindings(self, profile_id):
+        with self._document() as document:
+            profile = self._profile(document, profile_id)
+            default_id = self._default_profile_id(document)
+            return {'profile': self._metadata(profile), 'agents': [self.agent_binding_summary(agent)
+                    for agent in document['system']['agents']
+                    if (agent.get('profile_id') or default_id) == profile_id]}
 
     def _profile_metadata(self, profile_id):
         return self._metadata(self.get_profile(profile_id))
@@ -816,10 +834,11 @@ class ProfileRepository:
                             raise ProfileInUse('删除默认配置时需要指定新的默认配置空间')
                         if new_default_id == profile_id or new_default_id not in document['profiles']:
                             raise ProfileValidationError(f'新的默认配置空间不存在：{new_default_id}')
-                    usages = [{'kind': 'agent', 'id': a['id'], 'name': a.get('name', a['id']), 'profile_id': profile_id, 'profile_name': profile['name']}
+                    usages = [{'kind': 'agent', 'id': a['id'], 'name': a.get('name') or a['id'], 'profile_id': profile_id, 'profile_name': profile['name']}
                               for a in document['system']['agents'] if a.get('profile_id') == profile_id]
                     if usages:
-                        raise ProfileInUse(f'配置 {profile["name"]} 仍被 Agent 使用', usages)
+                        names = '、'.join(usage['name'] for usage in usages)
+                        raise ProfileInUse(f'配置「{profile["name"]}」仍被以下 Agent 使用：{names}', usages)
                     # Keep job locks until after the document commits, and take
                     # them before moving profile-local artifacts out of the way.
                     without_profile = {'profiles': {key: value for key, value in document['profiles'].items()
