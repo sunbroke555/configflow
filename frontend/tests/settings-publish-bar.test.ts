@@ -4,6 +4,7 @@ import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { notify } from '@/lib/feedback'
 import { Select } from '@/components/ui/select'
 import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
+import { ruleLocationDetails } from './fixtures/agent-failure'
 
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
@@ -400,10 +401,10 @@ describe('settings save and publish', () => {
 describe('Settings publication failure details', () => {
   it.each(['mihomo', 'mosdns', 'oxidns'])('keeps %s validation and rollback diagnostics in the settings workspace', async serviceType => {
     vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: serviceType })]))
-    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'rollback_failed', failed_stage: 'verifying', error: '配置检查失败', error_details: 'line 17: unknown group', rollback_error: '恢复失败', rollback_error_details: 'failed to bind :53' }))
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'rollback_failed', failed_stage: 'verifying', error: '配置检查失败', error_details: ruleLocationDetails, rollback_error: '恢复失败', rollback_error_details: 'failed to bind :53' }))
     const wrapper = await render({ serviceType, save: vi.fn().mockResolvedValue(guard({ expected_service_type: serviceType as any })) })
     await publish(wrapper)
-    expect(wrapper.findAll('pre').map(item => item.text())).toEqual(['line 17: unknown group', 'failed to bind :53'])
+    expect(wrapper.findAll('pre').map(item => item.element.textContent)).toEqual([ruleLocationDetails, 'failed to bind :53'])
     expect(wrapper.text()).toContain('失败步骤：校验中')
     expect(notify.error).toHaveBeenCalledWith('回滚失败，需要处理', '配置检查失败')
   })
@@ -416,11 +417,12 @@ describe('Settings publication failure details', () => {
     expect(wrapper.get('pre').text()).toBe('invalid policy on line 4')
     expect(wrapper.text()).not.toContain('配置已推送')
   })
-  it('preserves a pre-submission rejection and clears it when changing the editing session', async () => {
-    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '本地校验失败', error_details: 'line 19: invalid rule' } } })
-    const wrapper = await render()
+  it.each(['mihomo', 'mosdns', 'oxidns', 'surge'] as const)('preserves a %s pre-submission rejection and clears it when changing the editing session', async serviceType => {
+    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: serviceType })]))
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '本地校验失败', error_details: ruleLocationDetails } } })
+    const wrapper = await render({ serviceType, save: vi.fn().mockResolvedValue(guard({ expected_service_type: serviceType })) })
     await publish(wrapper)
-    expect(wrapper.get('pre').text()).toBe('line 19: invalid rule')
+    expect(wrapper.get('pre').element.textContent).toBe(ruleLocationDetails)
     await wrapper.setProps({ open: false })
     await wrapper.setProps({ open: true })
     await flushPromises()

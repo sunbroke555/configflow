@@ -1,10 +1,16 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.18-go"
+LATEST_AGENT_VERSION = "1.8.19-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.19-go": {
+        "date": "2026-10-18",
+        "features": [
+            "发布失败详情补充规则集或订阅名称、出错文件、可确定的行号与原文；Mihomo 规则、节点和策略组校验错误可定位到生成配置，保留具体原因并隐藏敏感内容"
+        ]
+    },
     "1.8.18-go": {
         "date": "2026-10-18",
         "features": [

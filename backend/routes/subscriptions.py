@@ -364,7 +364,7 @@ def get_all_subscription_proxies():
             proxies = []
             try:
                 yaml_text, _source = get_subscription_proxies_yaml(sub_id, sub_url)
-                proxies = filter_subscription_items(sub, parse_provider_proxies(yaml_text))
+                proxies = filter_subscription_items(sub, parse_provider_proxies(yaml_text, name=sub_name))
             except StrategyReferenceError:
                 # Invalid content is not a transport failure and must not use cache.
                 raise
@@ -524,7 +524,7 @@ def get_subscription_proxies(sub_id):
                     current_app.logger.info(f"尝试获取最新配置: {sub_name} (id: {sub_id})")
                     yaml_text, source = get_subscription_proxies_yaml(sub_id, sub_url)
                     from backend.utils.provider_delivery import parse_provider_proxies
-                    raw_proxies = parse_provider_proxies(yaml_text)
+                    raw_proxies = parse_provider_proxies(yaml_text, name=sub_name)
                     proxies = filter_subscription_items(sub, raw_proxies)
                     # Reject the actual raw graph before node transforms/cache writes.
                     if request.args.get('format') == 'surge':

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import AgentDeploymentHistory from '@/components/agents/AgentDeploymentHistory.vue'
 import type { Agent } from '@/types'
+import { ruleLocationDetails } from './fixtures/agent-failure'
 
 const wrappers: ReturnType<typeof mount>[] = []
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = '' })
@@ -40,9 +41,14 @@ describe('Agent deployment history rollback availability', () => {
 
 describe('Agent deployment history diagnostics', () => {
   it('renders persisted publication and rollback diagnostics independently', async () => {
-    await render({ progress: { ...latest, status: 'rollback_failed', error: '配置校验失败', failed_stage: 'verifying', error_details: 'line 17: missing group', rollback_error: '服务恢复失败', rollback_error_details: 'failed to bind :53' } })
+    await render({ progress: { ...latest, status: 'rollback_failed', error: '配置校验失败', failed_stage: 'verifying', error_details: ruleLocationDetails, rollback_error: '服务恢复失败', rollback_error_details: 'failed to bind :53' } })
     expect(document.body.textContent).toContain('失败步骤：校验中')
-    expect([...document.querySelectorAll('pre')].map(element => element.textContent)).toEqual(['line 17: missing group', 'failed to bind :53'])
+    expect([...document.querySelectorAll('pre')].map(element => element.textContent)).toEqual([ruleLocationDetails, 'failed to bind :53'])
     expect([...document.querySelectorAll('details')].every(element => !element.open)).toBe(true)
+  })
+  it('shows rule locations from a saved record after reopening the page', async () => {
+    const failed = { ...latest, status: 'failed', error: '规则集内容无效', error_details: ruleLocationDetails }
+    await render({ agent: { ...agent, latest_deployment: failed, deployments: { latest: failed } } })
+    expect(document.querySelector('pre')?.textContent).toBe(ruleLocationDetails)
   })
 })

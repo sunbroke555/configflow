@@ -182,7 +182,7 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 		}
 		rel := filepath.ToSlash(filepath.Clean(raw))
 		if !safeRelative(rel) || !listed[rel] {
-			return fmt.Errorf("OxiDNS resource files must be included in the deployment")
+			return fmt.Errorf("OxiDNS resource files must be included in the deployment: %s", raw)
 		}
 		_, err := resolveStagedReference(cfg, stage, raw)
 		return err
@@ -191,41 +191,53 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 	for index, value := range plugins {
 		p, ok := value.(map[string]interface{})
 		if !ok {
-			return fmt.Errorf("invalid OxiDNS plugin")
+			return pluginLocation(fmt.Errorf("invalid OxiDNS plugin"), stage, manifest, index)
 		}
 		args, _ := p["args"].(map[string]interface{})
 		kind, _ := p["type"].(string)
 		tag, _ := p["tag"].(string)
 		if kind == "" || tag == "" || tags[tag] {
-			return fmt.Errorf("OxiDNS plugin type/tag missing or duplicated")
+			field := "tag"
+			if kind == "" {
+				field = "type"
+			}
+			return pluginLocation(fmt.Errorf("OxiDNS plugin type/tag missing or duplicated"), stage, manifest, index, field)
 		}
 		tags[tag] = true
-		references := []interface{}{}
+		type resourceReference struct {
+			value interface{}
+			path  []interface{}
+		}
+		references := []resourceReference{}
 		for _, key := range []string{"file", "cert", "key"} {
 			if file, ok := args[key]; ok && file != "" && file != nil {
-				references = append(references, file)
+				references = append(references, resourceReference{file, []interface{}{"args", key}})
 			}
 		}
 		if values, exists := args["files"]; exists {
 			files, ok := values.([]interface{})
 			if !ok {
-				return fmt.Errorf("OxiDNS files must be a sequence")
+				return pluginLocation(fmt.Errorf("OxiDNS files must be a sequence"), stage, manifest, index, "args", "files")
 			}
-			references = append(references, files...)
+			for fileIndex, file := range files {
+				references = append(references, resourceReference{file, []interface{}{"args", "files", fileIndex}})
+			}
 		}
 		if persistent, ok := args["persistent"].(map[string]interface{}); ok {
 			if files, ok := persistent["files"].([]interface{}); ok {
-				references = append(references, files...)
+				for fileIndex, file := range files {
+					references = append(references, resourceReference{file, []interface{}{"args", "persistent", "files", fileIndex}})
+				}
 			}
 		}
 		if tls, ok := args["tls"].(map[string]interface{}); ok {
 			if ca, exists := tls["ca"]; exists && ca != "" && ca != nil {
-				references = append(references, ca)
+				references = append(references, resourceReference{ca, []interface{}{"args", "tls", "ca"}})
 			}
 		}
-		for _, value := range references {
-			if err := checkReference(value); err != nil {
-				return err
+		for _, reference := range references {
+			if err := checkReference(reference.value); err != nil {
+				return pluginLocation(err, stage, manifest, index, reference.path...)
 			}
 		}
 		// Keep all generated persistent outputs outside the managed manifest.
@@ -242,7 +254,7 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 				rel := filepath.ToSlash(filepath.Clean(raw))
 				external := filepath.IsAbs(raw) || strings.Contains(raw, "${")
 				if !external && !safeRelative(rel) {
-					return fmt.Errorf("OxiDNS runtime paths must be relative to the service directory")
+					return pluginLocation(fmt.Errorf("OxiDNS runtime paths must be relative to the service directory"), stage, manifest, index, "args", key)
 				}
 				if filepath.IsAbs(raw) {
 					if relative, err := filepath.Rel(filepath.Dir(cfg.ConfigPath), raw); err == nil {
@@ -251,7 +263,7 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 				}
 				for _, f := range manifest.Files {
 					if f.Path == rel {
-						return fmt.Errorf("OxiDNS runtime file collides with managed deployment file")
+						return pluginLocation(fmt.Errorf("OxiDNS runtime file collides with managed deployment file"), stage, manifest, index, "args", key)
 					}
 				}
 				if external {
@@ -263,7 +275,7 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 					shadowNeeded = true
 				}
 				if err := os.MkdirAll(filepath.Join(stage, filepath.Dir(rel)), 0700); err != nil {
-					return err
+					return pluginLocation(err, stage, manifest, index, "args", key)
 				}
 			}
 		}
@@ -335,7 +347,7 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 	command := exec.CommandContext(ctx, binary, "check", "-c", config, "-d", stage)
 	command.Dir = stage
 	if _, err := runDiagnosticCommand(ctx, command, "OxiDNS native configuration check", append(configurationDiagnosticSecrets(doc), cfg.Token)...); err != nil {
-		return err
+		return nativeConfigurationLocation(err, stage, config, manifest, false)
 	}
 	return verifyManifestFiles(stage, manifest)
 }
