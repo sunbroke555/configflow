@@ -3,38 +3,40 @@
 
 # ==============================================================================
 # Stage 1: 构建 Go Agent 二进制文件
+# 产物与目标平台无关，固定在构建机原生平台运行：多架构构建时不再经 QEMU 模拟重复编译。
 # ==============================================================================
-FROM golang:1.21-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.21-alpine AS go-builder
 
 WORKDIR /build
-ENV GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=https://goproxy.cn,direct CGO_ENABLED=0 GOOS=linux
 
 # 先复制依赖文件，利用 Docker 层缓存（go.mod/go.sum 不变则跳过 go mod download）
 COPY backend/agents/go-agent/go.mod backend/agents/go-agent/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-# 再复制源码并编译（仅 Go 源码变更时才重新编译）
+# 再复制源码并编译（仅 Go 源码变更时才重新编译；编译缓存跨构建复用）
 COPY backend/agents/go-agent/ ./
 RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
     mkdir -p /dist && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /dist/configflow-agent-linux-amd64 . && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o /dist/configflow-agent-linux-arm64 . && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o /dist/configflow-agent-linux-armv7 .
+    GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /dist/configflow-agent-linux-amd64 . && \
+    GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o /dist/configflow-agent-linux-arm64 . && \
+    GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w" -o /dist/configflow-agent-linux-armv7 .
 
 # ==============================================================================
-# Stage 2: 构建前端
+# Stage 2: 构建前端（产物为静态文件，同样只在构建机原生平台构建一次）
 # ==============================================================================
 # vite-plugin-pwa 依赖的 workbox-build 要求 node >= 20；
 # Node 18 已于 2025-04 结束维护，直接升到 20 LTS。
-FROM node:20-alpine AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
 # 先复制 package 文件，利用 Docker 层缓存（依赖不变则跳过 npm ci）
 COPY frontend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci
+    npm ci --no-audit --no-fund
 
 # 再复制源码并构建（仅前端源码变更时才重新 build）
 COPY frontend/ ./
@@ -45,15 +47,52 @@ RUN npm run build
 # ==============================================================================
 FROM node:24-bookworm-slim AS node-runtime
 
+# Node 与 Sub-Store bundle 很少变化，合成最终镜像中独立的一层，应用代码更新时可直接复用
+FROM --platform=$BUILDPLATFORM python:3.11-slim AS sub-store
+# 内置 Sub-Store 后端版本（https://github.com/sub-store-org/Sub-Store/releases），可在线更新
+ARG SUB_STORE_VERSION=2.42.3
+COPY --from=node-runtime /usr/local/bin/node /rootfs/usr/local/bin/node
+ADD --chmod=644 https://github.com/sub-store-org/Sub-Store/releases/download/${SUB_STORE_VERSION}/sub-store.bundle.js /rootfs/opt/sub-store/sub-store.bundle.js
+RUN echo "${SUB_STORE_VERSION}" > /rootfs/opt/sub-store/VERSION
+
 # ==============================================================================
-# Stage 4: 最终镜像（源码部署）
+# Stage 4: 组装应用文件（后端源码、前端、Agent、配置与脚本），在最终镜像中只占一层
 # ==============================================================================
-FROM python:3.11-slim AS runtime
+FROM --platform=$BUILDPLATFORM python:3.11-slim AS app
 
 # 版本号参数，从 GitHub Actions 传入
 ARG VERSION=dev
-# 内置 Sub-Store 后端版本（https://github.com/sub-store-org/Sub-Store/releases），可在线更新
-ARG SUB_STORE_VERSION=2.42.3
+
+COPY backend/ /rootfs/app/backend/
+# Keep the launcher outside auto-update's replaceable backend source directory.
+# Older cached sources still start even when they do not include startup.py.
+COPY backend/startup.py /rootfs/usr/local/bin/configflow-python-start.py
+COPY docker/nginx.conf /rootfs/etc/nginx/nginx.conf
+COPY docker/supervisord.conf /rootfs/etc/supervisor/conf.d/supervisord.conf
+COPY --chmod=755 docker/sub-store-start.sh docker/configflow-start.sh /rootfs/usr/local/bin/
+COPY --chmod=755 docker/auto_update.py /rootfs/usr/local/bin/configflow-auto-update.py
+COPY --from=go-builder /dist/ /rootfs/opt/configflow/static/agents/
+COPY --from=frontend-builder /app/frontend/dist /rootfs/usr/share/nginx/html
+
+# 写入版本号；预编译字节码，容器首次启动免去编译开销；预压缩前端资源供 nginx gzip_static 直接发送。
+# Fingerprint the sources the bundled frontend/Agent came from, so auto-update
+# without a toolchain refuses commits that would mix versions.
+RUN --mount=type=bind,source=frontend,target=/tmp/image-src/frontend \
+    --mount=type=bind,source=backend/agents/go-agent,target=/tmp/image-src/go-agent \
+    sed -i "s/__version__ = \"dev\"/__version__ = \"${VERSION}\"/" /rootfs/app/backend/version.py && \
+    python3 -m compileall -q /rootfs/app/backend && \
+    find /rootfs/usr/share/nginx/html -type f -size +1k \
+        \( -name '*.js' -o -name '*.mjs' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.webmanifest' \) \
+        -exec gzip -9 -k -n {} + && \
+    mkdir -p /app && \
+    python3 /rootfs/usr/local/bin/configflow-auto-update.py --record-image /tmp/image-src && \
+    mv /app/.image-trees.json /rootfs/app/.image-trees.json
+
+# ==============================================================================
+# Stage 5: 最终镜像（源码部署）
+# 层次按变化频率从低到高：系统包 → Python 依赖 → Node/Sub-Store → 应用文件
+# ==============================================================================
+FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
@@ -63,45 +102,17 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     (groupadd -r nginx || true) && (useradd -r -g nginx -s /sbin/nologin -d /nonexistent nginx || true) && \
     mkdir -p /data /var/log/supervisor /var/cache/nginx /var/log/nginx /etc/supervisor/conf.d && \
-    chown -R nginx:nginx /var/cache/nginx /var/log/nginx /usr/share/nginx/html && \
+    chown -R nginx:nginx /var/cache/nginx && \
     rm -rf /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default /etc/nginx/conf.d/default.conf /usr/share/nginx/html/*
 
-# 安装 Python 依赖
-COPY backend/requirements.txt /tmp/requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && pip install -r /tmp/requirements.txt && \
-    sha256sum /tmp/requirements.txt | cut -d' ' -f1 > /app/.image-requirements.sha256 && \
-    rm /tmp/requirements.txt
+# 安装 Python 依赖（依赖清单只挂载不复制，不额外产生镜像层）
+RUN --mount=type=bind,source=backend/requirements.txt,target=/tmp/requirements.txt \
+    --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check -r /tmp/requirements.txt && \
+    sha256sum /tmp/requirements.txt | cut -d' ' -f1 > /app/.image-requirements.sha256
 
-# 复制后端源码并替换版本号
-COPY backend/ /app/backend/
-RUN sed -i "s/__version__ = \"dev\"/__version__ = \"${VERSION}\"/" /app/backend/version.py
-# Keep the launcher outside auto-update's replaceable backend source directory.
-# Older cached sources still start even when they do not include startup.py.
-COPY backend/startup.py /usr/local/bin/configflow-python-start.py
-
-# 复制 Go Agent 二进制
-COPY --from=go-builder /dist/ /opt/configflow/static/agents/
-
-# 复制前端构建产物（在 nginx 安装后，覆盖默认页面）
-COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
-
-# 内置 Sub-Store：Node.js 运行时 + 后端 bundle
-COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-ADD --chmod=644 https://github.com/sub-store-org/Sub-Store/releases/download/${SUB_STORE_VERSION}/sub-store.bundle.js /opt/sub-store/sub-store.bundle.js
-RUN echo "${SUB_STORE_VERSION}" > /opt/sub-store/VERSION && node --version
-
-# 复制配置文件（在安装软件包之后）
-COPY docker/nginx.conf /etc/nginx/nginx.conf
-COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY --chmod=755 docker/sub-store-start.sh /usr/local/bin/sub-store-start.sh
-COPY --chmod=755 docker/configflow-start.sh /usr/local/bin/configflow-start.sh
-COPY --chmod=755 docker/auto_update.py /usr/local/bin/configflow-auto-update.py
-# Fingerprint the sources the bundled frontend/Agent came from, so auto-update
-# without a toolchain refuses commits that would mix versions.
-RUN --mount=type=bind,source=frontend,target=/tmp/image-src/frontend \
-    --mount=type=bind,source=backend/agents/go-agent,target=/tmp/image-src/go-agent \
-    python3 /usr/local/bin/configflow-auto-update.py --record-image /tmp/image-src
+COPY --link --from=sub-store /rootfs/ /
+COPY --link --from=app /rootfs/ /
 
 ENV DATA_DIR=/data TZ=Asia/Shanghai \
     SUB_STORE_BACKEND_API_HOST=127.0.0.1 \
@@ -113,7 +124,7 @@ EXPOSE 80
 CMD ["/usr/local/bin/configflow-start.sh"]
 
 # ==============================================================================
-# Stage 5: 自动更新镜像（标签 autoupdate）
+# Stage 6: 自动更新镜像（标签 autoupdate）
 # 在 runtime 基础上加入 Go 与 npm：容器启动时拉取分支最新源码，按需重建前端与
 # Agent 后运行（见 docker/auto_update.py）。默认镜像构建请指定 target: runtime。
 # ==============================================================================
