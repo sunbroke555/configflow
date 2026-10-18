@@ -334,7 +334,7 @@
             />
           </FormField>
 
-          <FormField hint="开启后，每次修改配置都会自动备份全部数据。">
+          <FormField hint="保存配置后在后台备份全部数据，短时间内的多次修改会合并备份。">
             <div class="flex items-center gap-2.5">
               <Switch id="auto-backup" v-model="backupForm.auto_backup" />
               <Label for="auto-backup" class="text-[13px] text-muted-foreground">自动备份</Label>

@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from backend.utils.subscription_parser import parse_uri_list
 from backend.utils.logger import get_logger
 from backend.common.profile_context import append_url_query, profile_api_path
+from backend.converters.common import ruleset_format
 
 logger = get_logger(__name__)
 
@@ -396,7 +397,7 @@ def _build_rules(config_data: Dict[str, Any], effective_base_url: str) -> Tuple[
                 url = f"{effective_base_url}{url}"
             if not url:
                 continue
-            if original_url.endswith(('.yaml', '.yml', '.mrs')):
+            if ruleset_format(item, config_data, original_url) in ('yaml', 'mrs'):
                 remote_rules.append(f"# Loon 不支持 YAML/MRS 规则集，已忽略: {name} {url}")
                 continue
             tag = _sanitize_name(name) or 'rule'

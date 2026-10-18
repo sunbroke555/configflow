@@ -9,8 +9,12 @@ from backend.converters.mihomo import apply_github_proxy_domain
 from backend.converters.mosdns import RULE_PARTS, convert_rule_content_for_mosdns
 from backend.routes import mosdns_bp as bp
 from backend.common.auth import require_auth
-from backend.common.config import get_config, save_config, save_config_with_publish_guard
-from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
+from backend.common.config import (
+    get_config, get_repository, reset_config_context, save_config, save_config_with_publish_guard,
+)
+from backend.common.config_repository import ProfileValidationError
+from backend.common.profile_context import resolve_profile_id
+from backend.utils.rule_utils import rule_cache_read_path
 from backend.utils.rule_fetch import request_rule, validate_rule_url
 from backend.utils.url_utils import safe_exception_details, safe_url_for_log
 
@@ -24,54 +28,88 @@ def _load_cached_rule_content_for_url(original_url: str, config_data=None) -> st
     if not original_url:
         return ''
 
-    candidate_names = []
+    library = config_data.get('rule_library', [])
+    by_id = {item.get('id'): item for item in library}
+    candidates = []
+    for item in config_data.get('rule_configs', []):
+        if item.get('itemType') == 'ruleset' and item.get('url') == original_url:
+            candidates.append(by_id.get(item.get('library_rule_id')) or item)
+    candidates.extend(item for item in library if item.get('url') == original_url)
 
-    # 1. 优先从 rule_configs / rule_library 中按 URL 反查规则名称
-    for rule_item in config_data.get('rule_configs', []):
-        if rule_item.get('itemType') == 'ruleset' and rule_item.get('url') == original_url:
-            name = rule_item.get('name', '')
-            if name:
-                candidate_names.append(name)
-
-    for library_item in config_data.get('rule_library', []):
-        if library_item.get('url') == original_url:
-            name = library_item.get('name', '')
-            if name:
-                candidate_names.append(name)
-
-    # 2. 如果是 rule-library/content/<id> 形式，按 id 找规则库名称
-    parsed = urlparse(original_url)
-    path = parsed.path or ''
+    path = urlparse(original_url).path or ''
     marker = '/rule-library/content/'
     if marker in path:
         rule_id = path.split(marker, 1)[1].strip('/').split('/', 1)[0]
-        if rule_id:
-            library_item = next(
-                (r for r in config_data.get('rule_library', []) if r.get('id') == rule_id),
-                None
-            )
-            if library_item and library_item.get('name'):
-                candidate_names.append(library_item['name'])
+        if rule_id in by_id:
+            candidates.append(by_id[rule_id])
 
-    # 去重并尝试读取缓存文件
     seen = set()
-    for name in candidate_names:
-        if not name or name in seen:
+    for source in candidates:
+        filepath = rule_cache_read_path(source, library)
+        if filepath in seen:
             continue
-        seen.add(name)
-
-        filename = f"{sanitize_rule_name(name)}.list"
-        filepath = os.path.join(get_rules_dir(), filename)
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    cached_content = f.read()
-                logger.info(f"使用本地规则缓存兜底: {filepath}")
-                return cached_content
-            except Exception as e:
-                logger.warning(f"读取本地规则缓存失败 {filepath}: {e}")
+        seen.add(filepath)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as handle:
+                return handle.read()
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeError) as error:
+            logger.warning('读取本地规则缓存失败 %s: %s', filepath, error)
 
     return ''
+
+
+def _cache_settings(data):
+    """Keep whole-editor and legacy cache saves on the same normalization rules."""
+    def to_int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return default
+
+    interval = to_int(data.get('cache_dump_interval', 300), 300)
+    dump_file = data.get('cache_dump_file', './cache.dump')
+    return {
+        'cache_enabled': bool(data.get('cache_enabled', True)),
+        'cache_dump_enabled': bool(data.get('cache_dump_enabled', True)),
+        'cache_size': to_int(data.get('cache_size', 10240), 10240),
+        'cache_lazy_ttl': to_int(data.get('cache_lazy_ttl', 21600), 21600),
+        'cache_dump_interval': interval if interval > 0 else 300,
+        'cache_dump_file': str(dump_file) if dump_file is not None else './cache.dump',
+    }
+
+
+@bp.route('/settings', methods=['POST'])
+@require_auth
+def save_mosdns_settings():
+    """Save the complete editor draft in one existing repository transaction."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise ProfileValidationError('MosDNS 设置必须是 JSON 对象')
+    defaults = {
+        'custom_config': '', 'direct_rulesets': [], 'proxy_rulesets': [],
+        'direct_rules': [], 'proxy_rules': [], 'custom_matches': [],
+        'custom_match_position': 'tail', 'local_dns': '', 'remote_dns': '',
+        'fallback_dns': '', 'default_forward': 'forward_remote', 'custom_hosts': '',
+        'log_enabled': True, 'log_level': 'info', 'log_file': '',
+        'api_enabled': True, 'api_address': ':8080',
+    }
+    settings = {key: data.get(key, default) for key, default in defaults.items()}
+    settings.update(_cache_settings(data))
+
+    def mutate(profile):
+        current = profile.setdefault('mosdns', {})
+        current.update(settings)
+        current.pop('api_addr', None)
+
+    profile_id = resolve_profile_id()
+    _, revision = get_repository().update_profile_transaction(
+        profile_id, mutate, include_config_revision=True)
+    reset_config_context()
+    return jsonify({'success': True, 'publish_guard': {
+        'expected_profile_id': profile_id, 'expected_service_type': 'mosdns',
+        'expected_config_revision': revision}})
 
 
 @bp.route('/rulesets', methods=['GET', 'POST'])
@@ -347,23 +385,7 @@ def handle_mosdns_cache_settings():
         try:
             data = request.json or {}
 
-            mosdns_config['cache_enabled'] = bool(data.get('cache_enabled', True))
-            mosdns_config['cache_dump_enabled'] = bool(data.get('cache_dump_enabled', True))
-
-            # 数字字段做简单容错
-            def _to_int(value, default: int) -> int:
-                try:
-                    return int(value)
-                except Exception:
-                    return default
-
-            mosdns_config['cache_size'] = _to_int(data.get('cache_size', 10240), 10240)
-            mosdns_config['cache_lazy_ttl'] = _to_int(data.get('cache_lazy_ttl', 21600), 21600)
-            dump_interval = _to_int(data.get('cache_dump_interval', 300), 300)
-            mosdns_config['cache_dump_interval'] = dump_interval if dump_interval > 0 else 300
-
-            dump_file = data.get('cache_dump_file', './cache.dump')
-            mosdns_config['cache_dump_file'] = str(dump_file) if dump_file is not None else './cache.dump'
+            mosdns_config.update(_cache_settings(data))
 
             guard = save_config_with_publish_guard(config_data, 'mosdns')
             return jsonify({'success': True, 'publish_guard': guard})

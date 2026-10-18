@@ -17,7 +17,7 @@ const emit = defineEmits<{ select: [id: string]; toggle: [id: string] }>()
 const open = computed(() => props.searchActive || props.expanded.has(props.item.id))
 const blocked = computed(() => props.disabled || props.item.disabled)
 const accessibleLabel = computed(() => props.item.code ? `${props.item.label}（${props.item.code}）` : props.item.label)
-const shortCode = computed(() => props.item.kind === 'section' ? props.item.code || '' : props.item.code?.split('.').at(-1) || '')
+const shortCode = computed(() => props.item.kind === 'section' ? props.item.code || '' : props.item.code?.split('.').pop() || '')
 
 function select() {
   if (!blocked.value) emit('select', props.item.id)

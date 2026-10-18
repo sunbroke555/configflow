@@ -109,7 +109,7 @@ class StatefulRouterOS:
                 return RESTResponse({'message': 'Forbidden'}, 403)
             visible = [row for row in rows if row.get('.id') not in self.hidden_ids]
             if row_id:
-                row = next((row for row in visible if row.get('.id') == row_id), None)
+                row = next((row for row in rows if row.get('.id') == row_id), None)
                 return RESTResponse(row, 200 if row is not None else 404)
             return RESTResponse(visible)
 
@@ -181,7 +181,11 @@ def driver_for(session):
 
 def release_session(**kwargs):
     """Write/rollback scenarios need source NAT which actually requires a bypass."""
-    kwargs.setdefault('nats', HOME_NATS + [BROAD_SOURCE_NAT])
+    # Complete coverage for end-to-end releases. The deliberately restricted
+    # HOME_NATS fixture remains in the low-level matcher-preservation tests.
+    kwargs.setdefault('nats', [{'.id': '*A', 'chain': 'srcnat', 'action': 'accept',
+                               'comment': 'mihomo', 'disabled': 'false', 'src-address': '10.0.0.0/24',
+                               'dst-address': '198.18.0.0/16'}, BROAD_SOURCE_NAT])
     return StatefulRouterOS(**kwargs)
 
 
@@ -230,10 +234,10 @@ def test_nat_update_retains_all_source_and_match_restrictions_and_can_undo():
     clones = [row for row in session.rows[NAT] if row['.id'] != '*A']
     assert {row['dst-address'] for row in clones} == set(targets)
     inherited = {key: value for key, value in HOME_NATS[0].items()
-                 if key not in READ_ONLY | {'comment', 'dst-address-list'}}
+                 if key not in READ_ONLY | {'comment'}}
     for row in clones:
         assert all(row.get(key) == value for key, value in inherited.items())
-        assert 'dst-address-list' not in row
+        assert row['dst-address-list'] == HOME_NATS[0]['dst-address-list']
         assert row['comment'] == 'cf-mihomo'
         assert session.rows[NAT].index(row) < session.rows[NAT].index(original)
     assert session.rows[ADDRESSES] == HOME_ADDRESSES
@@ -325,7 +329,7 @@ def test_nat_source_drift_changes_fingerprint_and_rejects_stale_operation(field,
     driver = driver_for(session)
     preview = release_plan(driver)
     op = next(op for stage in preview['stages'] for op in stage['ops'] if op['kind'] == 'nat_update')
-    assert op['expected'][field] == HOME_NATS[0][field]
+    assert op['expected'] == driver._payload(NAT, session.rows[NAT][0])
     session.rows[NAT][0][field] = value
     assert release_plan(driver)['fingerprint'] != preview['fingerprint']
     with pytest.raises(RouterError, match='预览'):
@@ -360,7 +364,7 @@ def test_failed_local_nat_rollback_is_reported_with_current_stage():
     result = execute(release_plan(driver), driver, agent)
     assert result['ok'] is False and result['failed_stage'] == 'nat_bypass'
     assert any(item['stage'] == 'nat_bypass' and item['status'] == 'failed' for item in result['rollback'])
-    assert len(session.rows[NAT]) == len(HOME_NATS) + 2
+    assert len(session.rows[NAT]) == 3
     assert next(row for row in session.rows[NAT] if row['.id'] == '*A')['comment'] == 'mihomo'
     assert configured(session.rows[ROUTES]) == routes_before
     assert agent.calls[-1] == ('remove', False)
@@ -408,7 +412,11 @@ def test_lost_response_after_mutation_restores_original_configuration(method, op
     before = configured(session.rows[ROUTES])
     with pytest.raises(RouterError):
         driver.apply(op)
-    assert configured(session.rows[ROUTES]) == before
+    if method == 'PUT':
+        assert len(session.rows[ROUTES]) == len(before) + 1
+        assert not any(verb == 'DELETE' for verb, _, _ in session.writes)
+    else:
+        assert configured(session.rows[ROUTES]) == before
 
 
 def test_routeros_preview_and_publish_api(authenticated_app, monkeypatch):  # noqa: F811
@@ -434,8 +442,8 @@ def test_routeros_preview_and_publish_api(authenticated_app, monkeypatch):  # no
     assert original['script'] == '' and not any(stage['manual'] for stage in original['stages'])
     assert session.writes == [] and agent.calls == []
 
-    # Editing a source restriction after preview invalidates the API fingerprint.
-    session.rows[NAT][0]['src-address'] = '10.0.0.0/25'
+    # An externally widened selector still changes the preview fingerprint.
+    session.rows[NAT][0]['src-address'] = '10.0.0.0/16'
     rejected = client.post(f'/api/routers/{router_id}/apply', headers=admin,
                            json={'fingerprint': original['fingerprint']})
     assert rejected.status_code == 409, rejected.get_json()

@@ -795,14 +795,14 @@ const validateYaml = (entry: DnsEntry): void => {
       if (Array.isArray(parsed)) {
         if (parsed.length > 0) {
           const firstItem = parsed[0]
-          if (typeof firstItem !== 'object' || !firstItem.addr) {
+          if (firstItem === null || typeof firstItem !== 'object' || !('addr' in firstItem) || !firstItem.addr) {
             entry.yaml_error = '请为 YAML 列表中的 DNS 条目填写 addr 地址字段'
             return
           }
         }
       } else {
         // 如果是对象，必须有 addr 字段
-        if (!parsed.addr) {
+        if (!('addr' in parsed) || !parsed.addr) {
           entry.yaml_error = '请在 YAML 中填写 addr 地址字段'
           return
         }
@@ -1942,41 +1942,24 @@ const saveMosdnsSettings = async (close = true): Promise<PublishGuard | null> =>
   try {
     savingMosdnsSettings.value = true
 
-    // Keep the existing save endpoints and publish only when every section succeeds.
-    await customConfigApi.saveMosdns({ config: draft.customConfig }, profileId)
-    if (!mosdnsSettingsSession.isCurrent(session)) return null
-    await api.post('/mosdns/rulesets', {
+    const response = await api.post('/mosdns/settings', {
+      custom_config: draft.customConfig,
       direct_rulesets: draft.directRulesets,
       proxy_rulesets: draft.proxyRulesets,
       direct_rules: draft.directRules,
-      proxy_rules: draft.proxyRules
-    }, profileOptions)
-    if (!mosdnsSettingsSession.isCurrent(session)) return null
-    await api.post('/mosdns/custom-matches', {
+      proxy_rules: draft.proxyRules,
       custom_matches: customMatchPayload,
-      position: draft.customMatchPosition
-    }, profileOptions)
-    if (!mosdnsSettingsSession.isCurrent(session)) return null
-    await api.post('/mosdns/dns-servers', {
+      custom_match_position: draft.customMatchPosition,
       local_dns: localDnsText,
       remote_dns: remoteDnsText,
       fallback_dns: fallbackDnsText,
       default_forward: draft.defaultForward,
-      custom_hosts: draft.customHosts
-    }, profileOptions)
-    if (!mosdnsSettingsSession.isCurrent(session)) return null
-    await api.post('/mosdns/log-settings', {
+      custom_hosts: draft.customHosts,
       log_enabled: draft.logEnabled,
       log_level: draft.logLevel,
-      log_file: draft.logFile
-    }, profileOptions)
-    if (!mosdnsSettingsSession.isCurrent(session)) return null
-    await api.post('/mosdns/api-settings', {
+      log_file: draft.logFile,
       api_enabled: draft.apiEnabled,
-      api_address: draft.apiAddress
-    }, profileOptions)
-    if (!mosdnsSettingsSession.isCurrent(session)) return null
-    const response = await api.post('/mosdns/cache-settings', {
+      api_address: draft.apiAddress,
       cache_enabled: draft.cacheEnabled,
       cache_size: draft.cacheSize,
       cache_lazy_ttl: draft.cacheLazyTtl,

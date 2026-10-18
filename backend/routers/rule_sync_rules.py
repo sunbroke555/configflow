@@ -116,13 +116,10 @@ def classify(content, behavior='classical'):
 
 
 def selected_sources(config, router):
-    from backend.utils.rule_utils import sanitize_rule_name
-    from collections import Counter
     selected = list(dict.fromkeys(static_rule_sets(router) + (router.get('ros_policy_rule_sets') or [])))
     if len(selected) > 128:
         raise RouterError('自动同步每台路由器最多支持 128 个规则集')
     library = {item['id']: item for item in config.get('rule_library', [])}
-    cache_names = Counter(sanitize_rule_name(item.get('name') or '') for item in library.values())
     rules = {item['id']: item for item in config.get('rule_configs', []) if item.get('itemType') == 'ruleset'}
     result = {}
     for rule_id in selected:
@@ -130,8 +127,6 @@ def selected_sources(config, router):
         source = library.get((item or {}).get('library_rule_id'))
         if item is None or source is None or item.get('enabled') is False or source.get('enabled') is False:
             raise RouterError('所选规则集缺失或已停用，请重新手动预览发布')
-        if cache_names[sanitize_rule_name(source.get('name') or '')] != 1:
-            raise RouterError('规则仓库存在相同缓存文件名，请先修正规则名称')
         result[rule_id] = (item, source)
     if not result:
         raise RouterError('没有选择需要同步的 IP 规则集')
@@ -140,7 +135,7 @@ def selected_sources(config, router):
 
 def load_sources(config, router, download=None):
     from pathlib import Path
-    from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
+    from backend.utils.rule_utils import rule_cache_read_path
     sources = selected_sources(config, router)
     contents, records, fetched, size = {}, {}, {}, 0
     for rule_id, (item, source) in sources.items():
@@ -150,7 +145,7 @@ def load_sources(config, router, download=None):
             if download is not None and source.get('source_type', 'url') == 'url':
                 fetched[key] = download(source, config)
             else:
-                path = Path(get_rules_dir()) / (sanitize_rule_name(name) + '.list')
+                path = Path(rule_cache_read_path(source, config.get('rule_library', [])))
                 try:
                     with path.open('rb') as handle:
                         raw = handle.read(MAX_BYTES + 1)

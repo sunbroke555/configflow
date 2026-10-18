@@ -307,6 +307,8 @@ def test_withdrawal_requires_full_old_source_destination_nat_proof(condition):
         row['protocol'] = 'tcp'
     elif condition == 'other-interface':
         row['out-interface'] = 'wan'
+    elif condition == 'complete':
+        row['src-address'] = '192.168.0.0/24'
     driver.rows[NAT].insert(len(driver.rows[NAT]) if condition == 'late-accept' else 0, row)
     before = configurations(driver)
     manifest = copy.deepcopy(driver.ros_policy_manifest)
@@ -323,6 +325,12 @@ def test_withdrawal_requires_full_old_source_destination_nat_proof(condition):
 
     driver._request = request
     _, plan = inspect(driver, desired_for(driver, selected=False))
+    if condition != 'complete':
+        assert plan['blockers']
+        assert not execute(plan, driver, None)['ok']
+        assert configurations(driver) == before and driver.ros_policy_manifest == manifest
+        assert not observations
+        return
     assert not plan['blockers'], plan['blockers']
     result = execute(plan, driver, None)
     assert observations

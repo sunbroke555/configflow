@@ -146,7 +146,7 @@ def test_failed_or_unverified_patch_restores_original_dns(failure):
     assert session.rows == before
 
 
-def test_failed_reads_after_patch_still_attempt_saved_dns_restore_but_cannot_confirm_it():
+def test_failed_reads_after_patch_preserve_unverified_dns_and_report_incomplete_rollback():
     driver, session = setup_driver()
     session.rows[DHCP_NETWORKS][0]['dns-none'] = 'true'
     before = copy.deepcopy(session.rows)
@@ -156,9 +156,9 @@ def test_failed_reads_after_patch_still_attempt_saved_dns_restore_but_cannot_con
         driver.apply(op)
     assert session.writes == [
         ('*A', {'dns-server': '192.168.0.4', 'dns-none': 'false'}),
-        ('*A', {'dns-server': NETWORK['dns-server'], 'dns-none': 'true'}),
     ]
-    assert session.rows == before
+    assert session.rows != before
+    assert session.rows[DHCP_NETWORKS][0]['dns-server'] == '192.168.0.4'
 
 
 def test_preview_drift_blocks_before_writing_and_option_drift_is_rechecked():

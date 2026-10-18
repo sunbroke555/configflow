@@ -350,6 +350,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     blockers.extend(f'{item["cidr"]}：无法确认是否需要 NAT 免转换。{item["detail"]}'
                     for item in nat_items if item['status'] == 'unknown')
     nat_ops, exempt = _nat_ops(report, state, gateway, skipped, router.get('type', ''))
+    if router.get('type') == 'routeros' and state.nat_context is not None:
+        from backend.routers.routeros_nat import planned_bypass_conflicts
+        blockers.extend(planned_bypass_conflicts(nat_ops, state, gateway))
     proxy_cidrs = [entry['cidr'] for entry in desired['proxy_cidrs'] if entry['cidr'] not in skipped]
     # A skipped destination is unchanged, not removed from the Agent's
     # replacement set. Retain exactly its previously protected intersection.
@@ -375,7 +378,7 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                 op['summary'] += '；先准备 NAT 保护，再建立并回读替代静态路径'
                 op['prepare_static'] = nat_ops + [entry for entry in route_ops if entry is not op]
                 route_ops = [op]
-                op['static_nat_checks'] = {
+                op['static_nat_checks'] = {'gateway': gateway,
                     'nat_bypass': [item['cidr'] for item in nat_items
                                    if item['status'] not in {'not_required', 'unknown'}],
                     'nat_not_required': [{'cidr': item['cidr'], 'gateway': gateway}

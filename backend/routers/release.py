@@ -13,7 +13,7 @@ from backend.routers.plan import (
     RETURN_ALLOCATION_FIELDS, RETURN_SAFETY_VERSION, return_allocation, return_safety_blockers,
 )
 from backend.routers.report import _networks
-from backend.routers.routeros_nat import assess_nat, RouteEgressIndex
+from backend.routers.routeros_nat import assess_nat, assess_bypass, RouteEgressIndex
 
 
 class ReleaseError(Exception):
@@ -79,10 +79,12 @@ def _covered(cidr: str, state: RouterState) -> bool:
 
 def verify_nat(checks: Dict[str, Any], state: RouterState) -> None:
     """Verify the same NAT prerequisites during preparation and final readback."""
-    uncovered = [cidr for cidr in checks['nat_bypass'] if not _covered(cidr, state)]
+    route_index = RouteEgressIndex(state.nat_context)
+    uncovered = [cidr for cidr in checks['nat_bypass']
+                 if (assess_bypass(cidr, checks.get('gateway', ''), state, route_index=route_index)['status'] not in ('synced', 'not_required')
+                     if state.nat_context is not None else not _covered(cidr, state))]
     if uncovered:
         raise RouterError(f'回读校验失败：{", ".join(uncovered)} 没有被受管 NAT 免转换规则覆盖')
-    route_index = RouteEgressIndex(state.nat_context)
     for check in checks.get('nat_not_required') or []:
         assessment = assess_nat(check['cidr'], check['gateway'], state, route_index=route_index)
         if assessment['status'] != 'not_required':

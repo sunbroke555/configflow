@@ -7,6 +7,7 @@
 """
 import os
 import re
+import hashlib
 from typing import Dict, Any
 from backend.common.config import get_repository
 from backend.utils.url_utils import safe_url_for_log
@@ -42,8 +43,35 @@ def sanitize_rule_name(name: str) -> str:
     return safe_name[:200] if safe_name else 'unnamed'
 
 
+def rule_cache_filename(rule: Dict[str, Any]) -> str:
+    """Stable resource identity; names are display labels and can collide."""
+    identity = rule.get('library_rule_id') or rule.get('id')
+    namespace = 'by-id' if identity is not None else 'by-name'
+    identity = str(identity if identity is not None else rule.get('name', ''))
+    return f'{namespace}/{hashlib.sha256(identity.encode()).hexdigest()}.list'
+
+
+def rule_cache_read_path(rule, library=None, *, rules_dir=None):
+    """Read new caches first, retaining unambiguous legacy caches offline."""
+    root = rules_dir if rules_dir is not None else get_rules_dir()
+    path = os.path.join(root, rule_cache_filename(rule))
+    if os.path.exists(path):
+        return path
+    if library is None:
+        library = get_repository().get_shared().get('rule_library', [])
+    name = rule.get('name', '')
+    legacy_name = sanitize_rule_name(name)
+    matches = [item for item in library if sanitize_rule_name(item.get('name', '')) == legacy_name]
+    # A legacy file has no identity receipt. Never attribute a shared filename
+    # to either of two resources, or to an unknown spelling of a known name.
+    if len(matches) > 1 or (matches and matches[0].get('name') != name):
+        return path
+    legacy = os.path.join(root, legacy_name + '.list')
+    return legacy if os.path.exists(legacy) else path
+
+
 def save_rule_to_local(rule: Dict[str, Any]) -> str:
-    """将共享规则原始内容保存到共享 rules/{rule_name}.list
+    """将共享规则原始内容按规则 ID 保存到共享缓存。
 
     Args:
         rule: 规则字典
@@ -57,7 +85,7 @@ def save_rule_to_local(rule: Dict[str, Any]) -> str:
     logger = get_logger(__name__)
 
     rule_name = rule.get('name', 'unnamed')
-    filename = f"{sanitize_rule_name(rule_name)}.list"
+    filename = rule_cache_filename(rule)
     rules_dir = get_rules_dir()
     filepath = os.path.join(rules_dir, filename)
 

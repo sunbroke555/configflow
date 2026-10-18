@@ -682,6 +682,9 @@ class ProfileRepository:
                 self._local.document = None
                 if write:
                     self._document_cache = None
+        if write and document['system'].get('backup', {}).get('auto_backup'):
+            from backend.utils.webdav_backup import configuration_committed
+            configuration_committed(self, previous, document)
 
     @staticmethod
     def _profile(document, profile_id):

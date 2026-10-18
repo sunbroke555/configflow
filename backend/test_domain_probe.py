@@ -292,8 +292,7 @@ def test_auto_round_rechecks_old_entries(env):
 
 def test_provider_revision_follows_served_file_not_config(env):
     """配置已提交但缓存文件还没写时，摘要不能变，否则 Agent 会让 Mihomo 拉到旧内容。"""
-    import os
-    from backend.utils.rule_utils import get_rules_dir
+    from backend.utils.rule_utils import rule_cache_read_path
     client, repository, _, _, _ = env
     _init(client)
     before = service.provider_revisions('default')
@@ -305,7 +304,8 @@ def test_provider_revision_follows_served_file_not_config(env):
     config_module.update_shared_config_transaction(add_line)
     assert service.provider_revisions('default') == before
 
-    with open(os.path.join(get_rules_dir(), '域名发现-代理.list'), 'w', encoding='utf-8') as handle:
+    source = next(item for item in repository.get_shared()['rule_library'] if item['name'] == '域名发现-代理')
+    with open(rule_cache_read_path(source), 'w', encoding='utf-8') as handle:
         handle.write('DOMAIN-SUFFIX,late.com\n')
     assert service.provider_revisions('default')['域名发现-代理'] != before['域名发现-代理']
 

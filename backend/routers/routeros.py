@@ -326,68 +326,85 @@ class RouterOSDriver(RouterDriver):
         return {key: value for key, value in row.items()
                 if key not in NAT_READ_ONLY and not key.startswith('.')}
 
+    def _ownership_snapshot(self, path, row):
+        """Stable fields of the exact object last written by this transaction."""
+        values = self._payload(path, row)
+        defaults = {'disabled': 'false', 'comment': ''}
+        if path == ROUTES:
+            defaults.update({'routing-table': 'main', 'distance': '1', 'scope': '30',
+                             'target-scope': '10', 'check-gateway': 'none', 'pref-src': '',
+                             'suppress-hw-offload': 'false', 'blackhole': 'false', 'vrf-interface': ''})
+        return {key: _comparable(key, value) for key, value in {**defaults, **values}.items()
+                if key != 'place-before'}
+
     def _perform(self, change: Dict[str, Any], undo: List[Dict[str, Any]], *, restoring: bool = False):
-        """Journal an inverse before writes where the affected ID is known."""
+        """Compensate only objects whose stable fields still match our write."""
         method, path = change['method'], change['path']
         values = dict(change.get('values') or {})
         if method == 'RESTORE':
-            # DELETE may have succeeded before a timeout. Recreate only if its
-            # original ID is absent; never duplicate a row after a rejected delete.
             rows = self._list(path)
-            if any(str(row.get('.id')) == str(change['id']) for row in rows):
+            current = next((row for row in rows if str(row.get('.id')) == str(change['id'])), None)
+            if current is not None:
+                if self._ownership_snapshot(path, current) != change.get('expected'):
+                    raise RouterError('回滚对象已发生外部变化，保留现有配置')
                 return {'path': path, 'id': str(change['id']),
                         'values': {key: value for key, value in values.items() if key != 'place-before'}}
+            if path == ROUTES and any(str(row.get('.id')) not in change.get('known_ids', [])
+                    and row.get('dst-address') == values.get('dst-address')
+                    and row.get('routing-table', 'main') == values.get('routing-table', 'main') for row in rows):
+                raise RouterError('回滚期间已有其他程序新增同网段路由，保留现有配置')
+            if values.get('place-before') and not any(row.get('.id') == values['place-before'] for row in rows):
+                raise RouterError('原 NAT 规则位置已变化，无法安全恢复顺序')
             return self._perform({'method': 'PUT', 'path': path, 'values': values}, undo)
         if method == 'PUT':
             before = {str(row.get('.id')) for row in self._list(path)}
             try:
                 row = self._request(method, path, values)
-                row_id = str(row.get('.id') or '') if isinstance(row, dict) else ''
-                if not row_id:
-                    raise UncertainWrite(f'RouterOS {path} 已提交但没有返回对象 ID')
+                row_id = row.get('.id') if isinstance(row, dict) else None
+                if (not isinstance(row_id, str) or not re.fullmatch(r'\*[0-9a-fA-F]+', row_id)
+                        or row_id in before):
+                    raise UncertainWrite(f'RouterOS {path} 已提交但没有返回可信的新对象 ID')
             except UncertainWrite as error:
-                # Recover the exact newly created row after a lost/malformed
-                # response. Do not delete a pre-existing or ambiguous match.
-                try:
-                    candidates = [row for row in self._list(path)
-                                  if str(row.get('.id')) not in before and _matches(row, values)]
-                except RouterError as read_error:
-                    raise RouterRollbackError(f'{error}；无法确认本次写入结果，回滚未完成：{read_error}') from error
-                if len(candidates) == 1:
-                    undo.append({'method': 'DELETE', 'path': path, 'id': str(candidates[0]['.id'])})
-                else:
-                    raise RouterRollbackError(f'{error}；无法唯一确认新增对象，回滚未完成，请检查路由器') from error
-                raise
-            undo.append({'method': 'DELETE', 'path': path, 'id': row_id})
+                # Identical newly appearing values may belong to another writer.
+                # Without a trustworthy response ID there is no safe DELETE.
+                raise RouterRollbackError(f'{error}；无法确认新增对象归属，已保留现场，请检查路由器') from error
+            expected = self._ownership_snapshot(path, {**values, **row})
+            undo.append({'method': 'DELETE', 'path': path, 'id': row_id, 'expected': expected})
             return {'path': path, 'id': row_id, 'values': values}
 
         row_id = str(change['id'])
         resource = f'{path}/{quote(row_id, safe="*")}'
-        try:
-            rows = self._list(path)
-        except RouterError:
-            if (restoring and path == DHCP_NETWORKS and method == 'PATCH'
-                    and values and set(values) <= {'dns-server', 'dns-none'}):
-                # The saved DNS fields and known ID permit a best-effort undo
-                # even when reads fail after the original PATCH. _restore still
-                # requires readback; an unreachable read must not claim success.
-                self._request(method, resource, values)
-                return {'path': path, 'id': row_id, 'values': values}
-            raise
+        rows = self._list(path)
         row = next((row for row in rows if str(row.get('.id')) == row_id), None)
         if row is None and method == 'DELETE':
-            # A create response supplied an exact ID. Even if a list read is
-            # stale, delete that ID rather than leaving an unverified rule behind.
-            self._request(method, f'{path}/{quote(row_id, safe="*")}')
-            return {'path': path, 'id': row_id, 'absent': True}
+            # A missing/hidden row gives no evidence it still has our last values.
+            # Never delete an unreadable object merely because its ID is known.
+            if restoring:
+                try:
+                    current = self._get(resource)
+                except MissingResource:
+                    return {'path': path, 'id': row_id, 'absent': True}
+                if not isinstance(current, dict) or current.get('.id') != row_id:
+                    raise RouterError('回滚对象无法完整回读，保留现有配置')
+                row = current
+            else:
+                raise RouterError(f'RouterOS {path} 中找不到 id={row_id}')
         if row is None:
             raise RouterError(f'RouterOS {path} 中找不到 id={row_id}')
         original = self._payload(path, row)
+        snapshot = self._ownership_snapshot(path, row)
+        if restoring and change.get('unchanged') == snapshot:
+            return {'path': path, 'id': row_id, 'values': values}
+        if 'expected' in change and snapshot != change['expected']:
+            raise RouterError('对象在操作期间发生外部变化，保留现有配置')
+        if restoring and 'expected' not in change:
+            raise RouterError('回滚缺少本次写入快照，无法确认对象归属')
         if method == 'PATCH':
             if _matches(row, values):
                 return {'path': path, 'id': row_id, 'values': values}
             previous = {key: original.get(key, '') for key in values}
-            undo.append({'method': 'PATCH', 'path': path, 'id': row_id, 'values': previous})
+            undo.append({'method': 'PATCH', 'path': path, 'id': row_id, 'values': previous,
+                         'expected': self._ownership_snapshot(path, {**row, **values}), 'unchanged': snapshot})
             self._request(method, resource, values)
             return {'path': path, 'id': row_id, 'values': values}
         if method == 'DELETE':
@@ -395,7 +412,8 @@ class RouterOSDriver(RouterDriver):
                 index = rows.index(row)
                 if index + 1 < len(rows):
                     original['place-before'] = rows[index + 1]['.id']
-            undo.append({'method': 'RESTORE', 'path': path, 'id': row_id, 'values': original})
+            undo.append({'method': 'RESTORE', 'path': path, 'id': row_id, 'values': original,
+                         'expected': snapshot, 'known_ids': [str(item.get('.id')) for item in rows]})
             self._request(method, resource)
             return {'path': path, 'id': row_id, 'absent': True}
         raise RouterError(f'不支持的 RouterOS 写入方法 {method}')
@@ -494,7 +512,6 @@ class RouterOSDriver(RouterDriver):
             for cidr in dict.fromkeys(op.get('add_dst') or []):
                 values = {**original, 'dst-address': cidr, 'comment': op['comment'],
                           'place-before': row['.id']}
-                values.pop('dst-address-list', None)
                 if op.get('out_interface'):
                     values['out-interface'] = op['out_interface']
                 changes.append({'method': 'PUT', 'path': NAT, 'values': values})

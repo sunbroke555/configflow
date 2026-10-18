@@ -428,7 +428,8 @@
             <div class="flex flex-col gap-1.5">
               <Label>订阅筛选</Label>
               <MultiSelect
-                v-model="form.subscriptions"
+                :model-value="form.subscriptions || []"
+                @update:model-value="form.subscriptions = $event"
                 :options="subscriptionOptions"
                 placeholder="选择订阅（自动包含订阅的所有节点）"
               />
@@ -458,14 +459,15 @@
           <!-- 手动节点 -->
           <div v-if="enabledSources.includes('node')" class="flex flex-col gap-1.5">
             <Label>包含节点</Label>
-            <MultiSelect v-model="form.manual_nodes" :options="nodeOptions" placeholder="手动选择节点" />
+            <MultiSelect :model-value="form.manual_nodes || []" :options="nodeOptions" placeholder="手动选择节点" @update:model-value="form.manual_nodes = $event" />
           </div>
 
           <!-- 引用聚合 -->
           <div v-if="enabledSources.includes('aggregation')" class="flex flex-col gap-1.5">
             <Label>引用聚合</Label>
             <MultiSelect
-              v-model="form.aggregations"
+              :model-value="form.aggregations || []"
+              @update:model-value="form.aggregations = $event"
               :options="aggregationOptions"
               placeholder="选择订阅聚合"
             />
@@ -503,7 +505,8 @@
           <div v-if="enabledSources.includes('strategy')" class="flex flex-col gap-1.5">
             <Label>引用策略</Label>
             <MultiSelect
-              v-model="form.include_groups"
+              :model-value="form.include_groups || []"
+              @update:model-value="form.include_groups = $event"
               :options="strategyOptions"
               placeholder="选择已有策略组"
             />
@@ -1730,7 +1733,8 @@ const saveGroup = async () => {
       saveData.include_groups = []
     }
     if (!enabledSources.value.includes('follow')) {
-      delete saveData.follow_group
+      // Updates merge with the stored group, so omission would retain its old source.
+      saveData.follow_group = ''
     }
 
 
@@ -1756,7 +1760,7 @@ const saveGroup = async () => {
       // Server atomically updates the group and all policy references.
       // 使用 id 进行API调用
       const original = proxyGroups.value.find(group => group.id === saveData.id)
-      const delete_fields = ['url-test', 'fallback', 'load-balance'].includes(saveData.type)
+      const delete_fields = ['url-test', 'fallback', 'load-balance'].includes(saveData.type || '')
         ? healthKeys.filter(key => original?.[key] !== undefined && saveData[key] === undefined) : []
       await proxyGroupApi.update(saveData.id!, { ...saveData, ...(delete_fields.length ? { delete_fields } : {}) }, profileId)
       notify.success('更新成功')

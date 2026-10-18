@@ -30,6 +30,7 @@ const network = vi.hoisted(() => {
     create: vi.fn(async (_body: Record<string, unknown>, _profileId?: string) => ({ data: {} })),
     update: vi.fn(async (_id: string, _body: Record<string, unknown>, _profileId?: string) => ({ data: {} })),
     delete: vi.fn(async (_id: string, _profileId?: string) => ({ data: {} })),
+    renameGroup: vi.fn(async (_ids: string[], _name: string, _profileId?: string) => ({ data: { success: true } })),
     findDuplicates: vi.fn(async (_profileId?: string) => ({ data: {} }))
   }
   const sets = {
@@ -118,6 +119,21 @@ function expectReferenceOnly(payload: unknown) {
 }
 
 describe('profile rule references', () => {
+  it('renames a whole mixed group with IDs and a label only, never stale rule fields', async () => {
+    network.state.rules.push({ id: 'inline-one', itemType: 'rule', rule_type: 'DOMAIN', value: 'local.test', policy: 'DIRECT', enabled: true })
+    const wrapper = await render(Rules)
+    await wrapper.get('button[aria-label="重命名分组"]').trigger('click')
+    await flushPromises()
+    const input = document.querySelector<HTMLInputElement>('#group-rename')!
+    input.value = ' New label '
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    await clickText('保存')
+    expect(network.rules.renameGroup).toHaveBeenCalledExactlyOnceWith(['ruleset-one', 'inline-one'], 'New label', 'default')
+    expect(network.rules.update).not.toHaveBeenCalled()
+    expect(network.sets.update).not.toHaveBeenCalled()
+  })
+
   it('edits references without copying hydrated sources and keeps independent formats', async () => {
     const wrapper = await render(Rules)
     await wrapper.get('button[aria-label="编辑"]').trigger('click')

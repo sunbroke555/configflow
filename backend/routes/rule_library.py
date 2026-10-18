@@ -11,7 +11,7 @@ from backend.common.auth import require_auth
 from backend.common.config import get_shared_config, save_shared_config, update_shared_config_transaction, get_config, get_repository, get_system_config, save_system_config
 from backend.common.config_repository import ProfileRepositoryError
 from backend.utils.reorder import resolve_new_order
-from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local
+from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local, rule_cache_filename
 from backend.utils.logger import get_logger
 from backend.utils.rule_fetch import request_rule
 from backend.utils.url_utils import safe_exception_details
@@ -125,6 +125,11 @@ def handle_rule_library_item(rule_id):
         new_rule.pop('url' if new_rule.get('source_type') == 'content' else 'content', None)
         library[library.index(old)] = new_rule
     update_shared_config_transaction(mutate)
+    if new_rule is None:
+        try:
+            os.remove(os.path.join(get_rules_dir(), rule_cache_filename(previous)))
+        except FileNotFoundError:
+            pass
     old_name = previous.get('name')
     if old_name and (new_rule is None or new_rule.get('name') != old_name):
         old_path = os.path.join(get_rules_dir(), f'{sanitize_rule_name(old_name)}.list')

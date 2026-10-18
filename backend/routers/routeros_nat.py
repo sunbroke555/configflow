@@ -4,6 +4,7 @@ This is deliberately not a firewall simulator. Only a proven egress mismatch
 excludes a potentially translating rule; other packet matchers remain possible.
 """
 import ipaddress
+from bisect import bisect_left, bisect_right
 from typing import Any, Dict, Optional, Tuple
 
 from backend.routers.base import RouteEntry, StaticRouteIndex
@@ -58,6 +59,7 @@ class RouteEgressIndex:
         self.raw = {}
         self._static = None
         self._gateways = {}
+        self.nat_selectors = {}
         rows = context.get('routes') if isinstance(context, dict) else None
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             self.error = '无法读取路由出口信息'
@@ -236,6 +238,8 @@ def _selector_matches(value: Any, interface: str, context: Dict[str, Any], is_li
     name = text[1:] if negate else text
     if not name or name.startswith('!'):
         return None
+    if interface is None and name not in ('all', 'none'):
+        return None
     if is_list:
         result = _list_contains(name, interface, context)
     elif name == 'all':
@@ -302,17 +306,53 @@ def assess_nat(cidr: str, gateway: str, state, *, policy_routing: bool = False, 
             'detail': f'旁路出口为 {interface}，与启用的潜在源 NAT 规则均不匹配，无需额外免 NAT'}
 
 
-def preserves_sources(rows, sources, destinations, interface, context):
+def _address_hits(row, field, target, context, cache):
+    """Intersect a packet range with both literal and list selectors (AND)."""
+    try:
+        literal = ipaddress.IPv4Network(row.get(field) or '0.0.0.0/0', strict=False)
+    except (ValueError, TypeError):
+        return None
+    if not target.overlaps(literal):
+        return []
+    target = target if target.subnet_of(literal) else literal
+    name = row.get(field + '-list')
+    if not name:
+        return [target]
+    lists = context.get('address_sets') or {}
+    if not isinstance(name, str) or name.startswith('!') or name not in lists:
+        return None
+    if name not in cache:
+        try:
+            networks = []
+            for value in lists[name]:
+                if '-' in value:
+                    first, last = value.split('-', 1)
+                    networks.extend(ipaddress.summarize_address_range(ipaddress.IPv4Address(first), ipaddress.IPv4Address(last)))
+                else:
+                    networks.append(ipaddress.IPv4Network(value, strict=False))
+            networks = list(ipaddress.collapse_addresses(networks))
+            cache[name] = (networks, [int(net.network_address) for net in networks],
+                           [int(net.broadcast_address) for net in networks])
+        except (ValueError, TypeError):
+            cache[name] = None
+    if cache[name] is None:
+        return None
+    networks, starts, ends = cache[name]
+    left, right = bisect_left(ends, int(target.network_address)), bisect_right(starts, int(target.broadcast_address))
+    return [target if target.subnet_of(net) else net for net in networks[left:right]]
+
+
+def preserves_sources(rows, sources, destinations, interface, context, *, accepted_ids=None, selector_cache=None):
     """Prove no source translation for every source/destination pair, in order.
 
-    Only literal address and proven egress selectors can discharge coverage.
-    Other matchers never establish an unconditional exemption. An unsupported
-    translating/jump rule remains a possible match and prevents the proof.
+    Literal addresses, address lists and proven egress selectors can discharge
+    coverage. Other matchers cannot establish an unconditional exemption.
     """
     pending = [(source, destination) for source in sources for destination in destinations]
+    cache = selector_cache if selector_cache is not None else {}
     fields = {'.id', 'chain', 'action', 'disabled', 'comment', 'log', 'log-prefix',
               'bytes', 'packets', 'dynamic', 'invalid', 'src-address', 'dst-address',
-              'out-interface'}
+              'src-address-list', 'dst-address-list', 'out-interface', 'out-interface-list'}
     for row in rows:
         if not pending:
             return True
@@ -322,13 +362,12 @@ def preserves_sources(rows, sources, destinations, interface, context):
         list_match = _selector_matches(row.get('out-interface-list'), interface, context, True)
         if egress_match is False or list_match is False:
             continue
-        try:
-            source = ipaddress.IPv4Network(row.get('src-address') or '0.0.0.0/0', strict=False)
-            destination = ipaddress.IPv4Network(row.get('dst-address') or '0.0.0.0/0', strict=False)
-        except (ValueError, TypeError):
-            source = destination = None
-        affected = [(src, dst) for src, dst in pending
-                    if source is None or (src.overlaps(source) and dst.overlaps(destination))]
+        affected = []
+        for src, dst in pending:
+            sources_hit = _address_hits(row, 'src-address', src, context, cache)
+            destinations_hit = _address_hits(row, 'dst-address', dst, context, cache)
+            if sources_hit != [] and destinations_hit != []:
+                affected.append((src, dst, sources_hit, destinations_hit))
         if not affected:
             continue
         action = row.get('action')
@@ -336,20 +375,116 @@ def preserves_sources(rows, sources, destinations, interface, context):
             continue
         if action != 'accept':
             return False
-        if (source is None or not row.get('chain') or set(row) - fields
-                or _truthy(row.get('invalid')) or _truthy(row.get('dynamic'))
-                or egress_match is not True):
+        if (not row.get('chain') or set(row) - fields or _truthy(row.get('invalid'))
+                or _truthy(row.get('dynamic')) or egress_match is not True or list_match is not True):
             continue
-        remainder = []
-        for src, dst in pending:
-            if not src.overlaps(source) or not dst.overlaps(destination):
-                remainder.append((src, dst))
+        before = pending
+        pending = list(pending)
+        for src, dst, sources_hit, destinations_hit in affected:
+            if sources_hit is None or destinations_hit is None:
                 continue
-            src_hit = src if src.subnet_of(source) else source
-            dst_hit = dst if dst.subnet_of(destination) else destination
-            remainder.extend((part, dst) for part in src.address_exclude(src_hit))
-            remainder.extend((src_hit, part) for part in dst.address_exclude(dst_hit))
-        pending = remainder
-    # Uncovered packets are safe only if no possibly matching translation or
-    # unsupported control flow was encountered on their path through the chain.
+            pieces = [(src, dst)]
+            for source in sources_hit:
+                for destination in destinations_hit:
+                    remainder = []
+                    for a, b in pieces:
+                        if not a.overlaps(source) or not b.overlaps(destination):
+                            remainder.append((a, b))
+                            continue
+                        hit_a = a if a.subnet_of(source) else source
+                        hit_b = b if b.subnet_of(destination) else destination
+                        remainder.extend((part, b) for part in a.address_exclude(hit_a))
+                        remainder.extend((hit_a, part) for part in b.address_exclude(hit_b))
+                    pieces = remainder
+            pending.remove((src, dst))
+            pending.extend(pieces)
+        if accepted_ids is not None and pending != before:
+            accepted_ids.append(str(row.get('.id', '')))
     return True
+
+
+def client_source_networks(gateway):
+    """The same existing /24 host scope used when creating a new exemption."""
+    address = ipaddress.IPv4Address(gateway)
+    network = ipaddress.IPv4Network(f'{gateway}/24', strict=False)
+    result = []
+    if address > network.network_address + 1:
+        result.extend(ipaddress.summarize_address_range(network.network_address + 1, address - 1))
+    if address < network.broadcast_address - 1:
+        result.extend(ipaddress.summarize_address_range(address + 1, network.broadcast_address - 1))
+    return result
+
+
+def assess_bypass(cidr, gateway, state, *, route_index=None):
+    """Read the actual ordered chain before claiming an exemption is effective.
+
+    An accept with unsupported matchers cannot prove all intended clients are
+    protected. Keep it intact and report the existing 'unknown' state instead
+    of silently broadening it or treating its destination alone as coverage.
+    """
+    from backend.routers.base import is_managed
+
+    context = {**(state.nat_context or {}), 'address_sets': getattr(state, 'address_sets', {})}
+    assessment = assess_nat(cidr, gateway, state, route_index=route_index)
+    if assessment['status'] == 'not_required':
+        return {**assessment, 'rule_ids': []}
+    rows = context.get('rules') if isinstance(context, dict) else None
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return {**assessment, 'rule_ids': []}
+    interface = None
+    if any(row.get('out-interface') or row.get('out-interface-list') for row in rows):
+        interface, _ = _egress(cidr, gateway, context, route_index=route_index)
+    try:
+        sources = client_source_networks(gateway)
+        destination = ipaddress.IPv4Network(cidr)
+    except ValueError:
+        return {'status': 'unknown', 'detail': '无法确认 NAT 免转换的客户端范围', 'rule_ids': []}
+    accepted_ids = []
+    cache = route_index.nat_selectors if route_index is not None else {}
+    if preserves_sources(rows, sources, [destination], interface, context, accepted_ids=accepted_ids, selector_cache=cache):
+        accepted = [row for row in rows if str(row.get('.id', '')) in accepted_ids]
+        if not accepted:
+            return {'status': 'not_required', 'detail': '客户端流量不会命中源 NAT 转换规则，无需额外免 NAT', 'rule_ids': []}
+        managed = all(is_managed(row.get('comment')) for row in accepted)
+        return {'status': 'synced' if managed else 'adoptable', 'rule_ids': accepted_ids,
+                'detail': '' if managed else '现有免转换规则可保护客户端流量，将直接接管'}
+    retiring = {item['id'] for op in (getattr(state, 'ros_policy_plan', None) or {}).get('ops', [])
+                for item in op.get('owned', []) if item['path'] == '/ip/firewall/nat'}
+    # An existing exemption with any potentially overlapping destination must
+    # be preserved. Do not compensate for its restrictions with a broader rule.
+    for row in rows:
+        if (not _enabled(row) or row.get('chain') != 'srcnat' or row.get('action') != 'accept'
+                or row.get('.id') in retiring):
+            continue
+        # A literal target combined with a narrower list is still an existing
+        # restriction on this target; cloning must not silently discard it.
+        selectors = {key: value for key, value in row.items() if key != 'dst-address-list'} if row.get('dst-address') else row
+        if _address_hits(selectors, 'dst-address', destination, context, cache) != []:
+            return {'status': 'unknown', 'rule_ids': [],
+                    'detail': '已有免转换规则的顺序或来源、地址列表、接口、协议等条件不能保证客户端流量均免转换；请先检查现有规则'}
+    return {**assessment, 'rule_ids': []}
+
+
+def planned_bypass_conflicts(operations, state, gateway):
+    """Check expanded copies without changing or broadening their matchers."""
+    import copy
+    from types import SimpleNamespace
+
+    expanding = [op for op in operations if op['kind'] == 'nat_update' and op.get('add_dst')]
+    if not expanding:
+        return []
+    context = {**state.nat_context, 'rules': copy.deepcopy(state.nat_context['rules'])}
+    rows = context['rules']
+    targets = set()
+    for op in expanding:
+        original = next(row for row in rows if str(row.get('.id')) == op['id'])
+        for cidr in op['add_dst']:
+            clone = {**original, '.id': f'preview:{op["id"]}:{cidr}',
+                     'dst-address': cidr, 'comment': op['comment']}
+            rows.insert(rows.index(original), clone)
+            targets.add(cidr)
+    virtual = SimpleNamespace(nat_context=context, address_sets=state.address_sets)
+    index = RouteEgressIndex(context)
+    return [f'{cidr}：扩充后仍无法确认 NAT 免转换覆盖，已保留原规则的限制，请先检查现有规则'
+            for cidr in sorted(targets)
+            if assess_bypass(cidr, gateway, virtual, route_index=index)['status'] not in ('synced', 'adoptable', 'not_required')]

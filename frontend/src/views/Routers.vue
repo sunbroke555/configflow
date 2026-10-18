@@ -287,7 +287,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
         </div>
         <p v-if="report.nat_bypass.disabled_rules.length" class="m-0 px-5 pb-4 text-[12px] text-muted-foreground max-md:px-4">
           另有 {{ report.nat_bypass.disabled_rules.length }} 条已停用的免转换规则：
-          {{ report.nat_bypass.disabled_rules.map(rule => rule.comment || rule.rule_id).join('、') }}
+          {{ report.nat_bypass.disabled_rules.map(disabledNatRuleLabel).join('、') }}
         </p>
       </SectionCard>
 
@@ -687,6 +687,7 @@ const STATUS: Record<Status, { label: string; chip: string }> = {
   pending: { label: '待更新', chip: 'chip-warn' }
 }
 const statusInfo = (status: string) => STATUS[status as Status] || STATUS.unknown
+const disabledNatRuleLabel = (rule: { comment?: string; rule_id: string }) => rule.comment || rule.rule_id
 const DHCP_DNS_STATUS = {
   disabled: { label: '未关联', tone: 'muted' },
   synced: { label: '已同步', tone: 'success' },

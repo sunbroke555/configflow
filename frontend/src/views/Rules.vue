@@ -1174,16 +1174,7 @@ const showGroupRenameDialog = (group: any) => {
 const saveGroupName = async () => {
   try {
     const newGroupName = groupRenameForm.value.groupName.trim()
-    // 更新组内所有规则项的 group_name 字段
-    for (const item of groupRenameForm.value.items) {
-      const updatedItem = { ...item, group_name: newGroupName }
-      delete updatedItem.uniqueId // 移除前端添加的字段
-      if (item.itemType === 'rule') {
-        await ruleApi.update(item.id, updatedItem, profileId)
-      } else {
-        await ruleSetApi.update(item.id, ruleSetPayload(updatedItem), profileId)
-      }
-    }
+    await ruleApi.renameGroup(groupRenameForm.value.items.map(item => item.id), newGroupName, profileId)
     notify.success('重命名成功')
     groupRenameDialogVisible.value = false
     loadAllRules()

@@ -71,6 +71,18 @@ async function openSettings(target: string, label: string) {
 }
 
 describe('generation settings workspace integration', () => {
+  it('submits the whole MosDNS draft in one request and returns that commit receipt', async () => {
+    const { workspace, draft } = await openSettings('mosdns', '设置')
+    draft.mosdnsCustomHosts = 'example.test 192.0.2.1'
+    draft.mosdnsLogFile = 'new.log'
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { success: true, publish_guard: guard('mosdns', 27) } } as any)
+    expect(await workspace.getComponent(SettingsPublishBar).props('save')()).toEqual(guard('mosdns', 27))
+    expect(post).toHaveBeenCalledExactlyOnceWith('/mosdns/settings', expect.objectContaining({
+      custom_config: initialConfig, custom_hosts: 'example.test 192.0.2.1', log_file: 'new.log'
+    }), { headers: { 'X-ConfigFlow-Profile': 'workspace-profile' } })
+    expect(customConfigApi.saveMosdns).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['mihomo', 'saveMihomo'], ['surge', 'saveSurge'], ['loon', 'saveLoon']
   ] as const)('%s keeps configuration text intact and restores clean state after reverting', async (target, saveMethod) => {
@@ -139,11 +151,11 @@ describe('generation settings workspace integration', () => {
     expect(customConfigApi.saveMosdns).not.toHaveBeenCalled()
   })
 
-  it('retains MosDNS drafts when any save stage fails and closes only after all stages succeed', async () => {
+  it('retains the whole MosDNS draft on save failure and closes only after a successful retry', async () => {
     const { workspace, draft } = await openSettings('mosdns', '设置')
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const post = vi.spyOn(api, 'post').mockImplementation(async (url: string) => {
-      if (url === '/mosdns/cache-settings') throw new Error('save failed')
+      if (url === '/mosdns/settings') throw new Error('save failed')
       return { data: { success: true } } as any
     })
     draft.mosdnsCustomHosts = 'example.org 127.0.0.1'
@@ -155,7 +167,7 @@ describe('generation settings workspace integration', () => {
     post.mockResolvedValue({ data: { success: true } } as any)
     workspace.vm.$emit('save')
     await flushPromises()
-    expect(post).toHaveBeenCalledWith('/mosdns/dns-servers', expect.objectContaining({ custom_hosts: 'example.org 127.0.0.1' }), { headers: { 'X-ConfigFlow-Profile': 'workspace-profile' } })
+    expect(post).toHaveBeenCalledWith('/mosdns/settings', expect.objectContaining({ custom_hosts: 'example.org 127.0.0.1' }), { headers: { 'X-ConfigFlow-Profile': 'workspace-profile' } })
     expect(workspace.props('open')).toBe(false)
   })
 
@@ -209,39 +221,32 @@ describe('generation settings workspace integration', () => {
     expect(workspace.findComponent(SettingsPublishBar).exists()).toBe(false)
   })
 
-  it('uses the final MosDNS save receipt only after every existing save endpoint succeeds', async () => {
+  it('waits for the complete MosDNS save before returning a publish receipt', async () => {
     const { workspace } = await openSettings('mosdns', '设置')
-    const post = vi.spyOn(api, 'post').mockImplementation(async (url: string) => ({
-      data: { success: true, publish_guard: guard('mosdns', url === '/mosdns/cache-settings' ? 27 : 26) }
-    } as any))
-    const receipt = await workspace.getComponent(SettingsPublishBar).props('save')()
+    const pending = deferred<any>()
+    const post = vi.spyOn(api, 'post').mockReturnValueOnce(pending.promise)
+    const saving = workspace.getComponent(SettingsPublishBar).props('save')()
+    await nextTick()
+    expect(workspace.props('busy')).toBe(true)
+    pending.resolve({ data: { success: true, publish_guard: guard('mosdns', 27) } })
+    const receipt = await saving
     await nextTick()
     expect(receipt).toEqual(guard('mosdns', 27))
-    expect(customConfigApi.saveMosdns).toHaveBeenCalledExactlyOnceWith({ config: initialConfig }, 'workspace-profile')
-    expect(post.mock.calls.map(([url]) => url)).toEqual([
-      '/mosdns/rulesets', '/mosdns/custom-matches', '/mosdns/dns-servers',
-      '/mosdns/log-settings', '/mosdns/api-settings', '/mosdns/cache-settings'
-    ])
+    expect(customConfigApi.saveMosdns).not.toHaveBeenCalled()
+    expect(post.mock.calls.map(([url]) => url)).toEqual(['/mosdns/settings'])
     expect(workspace.props()).toMatchObject({ open: true, dirty: false, busy: false })
   })
 
-  it.each([
-    'base', '/mosdns/rulesets', '/mosdns/custom-matches', '/mosdns/dns-servers',
-    '/mosdns/log-settings', '/mosdns/api-settings', '/mosdns/cache-settings'
-  ])('does not permit publishing after the MosDNS %s save fails', async failing => {
+  it('does not permit publishing after the complete MosDNS save fails', async () => {
     const { workspace, draft } = await openSettings('mosdns', '设置')
     vi.spyOn(console, 'error').mockImplementation(() => {})
     draft.mosdnsCustomHosts = 'example.org 127.0.0.1'
-    if (failing === 'base') vi.mocked(customConfigApi.saveMosdns).mockRejectedValueOnce(new Error('save failed'))
-    const post = vi.spyOn(api, 'post').mockImplementation(async (url: string) => {
-      if (url === failing) throw new Error('save failed')
-      return { data: { publish_guard: guard('mosdns') } } as any
-    })
+    const post = vi.spyOn(api, 'post').mockRejectedValueOnce(new Error('save failed'))
     expect(await workspace.getComponent(SettingsPublishBar).props('save')()).toBeNull()
     await nextTick()
     expect(workspace.props()).toMatchObject({ open: true, dirty: true, busy: false })
-    if (failing === 'base') expect(post).not.toHaveBeenCalled()
-    else expect(post.mock.calls.at(-1)?.[0]).toBe(failing)
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(customConfigApi.saveMosdns).not.toHaveBeenCalled()
   })
 
   it('rejects duplicate saves and tracks only the submitted draft as saved', async () => {
@@ -283,17 +288,16 @@ describe('generation settings workspace integration', () => {
     expect(notify.success).not.toHaveBeenCalled()
   })
 
-  it('does not continue the remaining MosDNS saves or publishing after the page unmounts', async () => {
+  it('does not publish a completed MosDNS save after the page unmounts', async () => {
     const { wrapper, workspace } = await openSettings('mosdns', '设置')
     const pending = deferred<any>()
-    vi.mocked(customConfigApi.saveMosdns).mockReturnValueOnce(pending.promise)
-    const post = vi.spyOn(api, 'post')
+    const post = vi.spyOn(api, 'post').mockReturnValueOnce(pending.promise)
     const saving = workspace.getComponent(SettingsPublishBar).props('save')()
     wrapper.unmount()
     wrappers.splice(wrappers.indexOf(wrapper), 1)
     pending.resolve({ data: { publish_guard: guard('mosdns') } })
     expect(await saving).toBeNull()
-    expect(post).not.toHaveBeenCalled()
+    expect(post).toHaveBeenCalledTimes(1)
     expect(notify.success).not.toHaveBeenCalled()
   })
 

@@ -10,7 +10,7 @@ import time
 from collections import OrderedDict
 
 from backend.utils.rule_matcher import RuleConfigMatcher
-from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
+from backend.utils.rule_utils import get_rules_dir, rule_cache_read_path
 from backend.utils.logger import get_logger
 
 MAX_MATCHERS = 4
@@ -45,9 +45,11 @@ def _read_key(item, library_rule):
 class _LocalSource:
     """Local-file/inline loader with retry state and no reference back to its owner."""
 
-    def __init__(self, rules_dir, stamps):
+    def __init__(self, rules_dir, stamps, library, paths):
         self.rules_dir = rules_dir
         self.stamps = stamps
+        self.library = library
+        self.paths = paths
         self.failed = set()
         self.retry_at = None
 
@@ -59,7 +61,11 @@ class _LocalSource:
     def __call__(self, item, library_rule):
         name = (library_rule or {}).get('name') or item.get('name')
         if name:
-            path = os.path.join(self.rules_dir, f'{sanitize_rule_name(name)}.list')
+            path = rule_cache_read_path(library_rule or item, self.library, rules_dir=self.rules_dir)
+            key = _read_key(item, library_rule)
+            if self.paths.get(key, path) != path:
+                self._retry(item, library_rule)
+            self.paths[key] = path
             try:
                 with open(path, 'r', encoding='utf-8') as handle:
                     before = _file_stamp(os.fstat(handle.fileno()))
@@ -93,7 +99,7 @@ class _CachedMatcher:
         self.active = 0
         self._lock = threading.Lock()
         self._results = OrderedDict()
-        self._source = _LocalSource(rules_dir, stamps)
+        self._source = _LocalSource(rules_dir, stamps, config.get('cache_library', config.get('rule_library', [])), config.get('_source_paths', {}))
         self._matcher = RuleConfigMatcher(
             config.get('rule_configs', []), config.get('rule_library', []),
             self._source, index_key=_library_key,
@@ -133,6 +139,7 @@ def _signature(config, rules_dir):
     library = {item.get('id'): item for item in config.get('rule_library', [])}
     referenced = []
     stamps = {}
+    paths = config['_source_paths'] = {}
     for item in rules:
         if (item.get('itemType') != 'ruleset' or not item.get('enabled', True)
                 or not item.get('library_enabled', True)):
@@ -142,7 +149,8 @@ def _signature(config, rules_dir):
         name = (source or {}).get('name') or item.get('name')
         if not name:
             continue
-        path = os.path.join(rules_dir, f'{sanitize_rule_name(name)}.list')
+        path = rule_cache_read_path(source or item, config.get('cache_library', config.get('rule_library', [])), rules_dir=rules_dir)
+        paths[_read_key(item, source)] = path
         try:
             stamps[path] = _file_stamp(os.stat(path))
         except OSError:
@@ -200,6 +208,9 @@ def local_matcher(config, profile_id):
     referenced = {item.get('library_rule_id') for item in rules if item.get('itemType') == 'ruleset'}
     snapshot = copy.deepcopy({'rule_configs': rules, 'rule_library': [
         item for item in config.get('rule_library', []) if item.get('id') in referenced]})
+    # Only names/IDs are needed to disambiguate old caches, not unreferenced content.
+    snapshot['cache_library'] = [{'id': item.get('id'), 'name': item.get('name', '')}
+                                 for item in config.get('rule_library', [])]
     signature, stamps = _signature(snapshot, rules_dir)
     slot = (rules_dir, profile_id)
     now = time.monotonic()

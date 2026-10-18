@@ -1,8 +1,4 @@
 """设置相关路由"""
-import os
-import json
-import tempfile
-from datetime import datetime
 from flask import request, jsonify, current_app
 
 from backend.routes import settings_bp
@@ -256,71 +252,16 @@ def test_backup():
 def backup_now():
     """立即备份配置到 WebDAV"""
     try:
-        from webdav3.client import Client
+        from backend.utils.webdav_backup import upload_backup, WebDAVConfigurationError
 
-        config_data = get_system_config()
-        data = request.json
-        webdav_url = data.get('webdav_url', '').rstrip('/')
-        webdav_username = data.get('webdav_username', '')
-        webdav_password = data.get('webdav_password', '')
-        # 如果密码是掩码，从配置中读取真实密码
-        if webdav_password == '******':
-            webdav_password = config_data.get('backup', {}).get('webdav_password', '')
-        webdav_path = data.get('webdav_path', '/config-flow-backup/')
-
-        if not webdav_url or not webdav_username or not webdav_password:
-            return jsonify({'success': False, 'message': '请填写完整的 WebDAV 配置'}), 400
-
-        # 创建 WebDAV 客户端
-        options = {
-            'webdav_hostname': webdav_url,
-            'webdav_login': webdav_username,
-            'webdav_password': webdav_password,
-            'webdav_timeout': 30
-        }
-
-        client = Client(options)
-
-        # 确保备份目录存在
-        if not webdav_path.startswith('/'):
-            webdav_path = '/' + webdav_path
-        if not webdav_path.endswith('/'):
-            webdav_path = webdav_path + '/'
-
-        # 递归创建目录（包括所有父目录）
-        if not client.check(webdav_path):
-            # 分解路径，逐级创建目录
-            path_parts = [p for p in webdav_path.strip('/').split('/') if p]
-            current_path = '/'
-            for part in path_parts:
-                current_path = current_path + part + '/'
-                if not client.check(current_path):
-                    try:
-                        client.mkdir(current_path)
-                    except Exception as mkdir_error:
-                        return jsonify({'success': False, 'message': f'无法创建目录 {current_path}：{str(mkdir_error)}'}), 400
-
-        # 生成备份文件名（带时间戳）
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'config_backup_{timestamp}.json'
-        remote_path = webdav_path + filename
-
-        # 创建临时文件保存配置
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-            # WebDAV 是管理员的完整恢复备份，与全量下载使用同一数据范围。
-            backup_data = get_repository().export_all()
-
-            json.dump(backup_data, tmp_file, ensure_ascii=False, indent=2)
-            tmp_file_path = tmp_file.name
-
+        data = dict(request.json)
+        if data.get('webdav_password') == '******':
+            data['webdav_password'] = get_system_config().get('backup', {}).get('webdav_password', '')
         try:
-            # 上传到 WebDAV
-            client.upload_sync(remote_path=remote_path, local_path=tmp_file_path)
-            return jsonify({'success': True, 'message': f'备份成功：{filename}'})
-        finally:
-            # 清理临时文件
-            if os.path.exists(tmp_file_path):
-                os.remove(tmp_file_path)
+            filename = upload_backup(get_repository().export_all(), data)
+        except WebDAVConfigurationError as error:
+            return jsonify({'success': False, 'message': str(error)}), 400
+        return jsonify({'success': True, 'message': f'备份成功：{filename}'})
 
     except Exception as e:
         return jsonify({'success': False, 'message': f'备份失败：{str(e)}。请检查父级目录是否存在。'}), 500

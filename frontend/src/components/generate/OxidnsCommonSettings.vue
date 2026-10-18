@@ -18,7 +18,7 @@
           <div class="grid min-w-0 gap-4 sm:grid-cols-2">
             <FormField v-for="group in ruleGroups" :key="group.key" :label="group.label" :help="group.hint">
               <div v-if="isCustom(group.key)" class="flex min-h-11 items-center gap-1 text-xs text-muted-foreground"><span>暂不可编辑</span><FieldHelp :label="`${group.label}配置状态`" :text="capability(group.key)?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability(group.key)?.target || group.key)">完整参数<ChevronRight class="size-3.5" /></Button></div>
-              <fieldset v-else class="min-w-0 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="disabled"><MultiSelect :model-value="read(group.key) || []" :options="ruleOptions(group)" :placeholder="`选择${group.label}`" @update:model-value="change(group.key, $event)" /></fieldset>
+              <fieldset v-else class="min-w-0 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="disabled"><MultiSelect :model-value="selectedRules(group.key)" :options="ruleOptions(group)" :placeholder="`选择${group.label}`" @update:model-value="change(group.key, $event)" /></fieldset>
             </FormField>
           </div>
           <p v-if="!rules.length && !ruleSets.length" class="text-sm text-muted-foreground">当前空间尚无规则，可先在「规则管理」中添加。</p>
@@ -44,7 +44,7 @@
         <TabsContent force-mount value="advanced" class="mt-0 space-y-4 data-[state=inactive]:hidden">
           <OxidnsFields :settings="draft" :fields="positionFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
           <div v-if="isCustom('custom_matches')" class="flex items-center gap-1 text-xs text-muted-foreground"><span>自定义匹配使用手工结构</span><FieldHelp label="自定义匹配配置状态" :text="capability('custom_matches')?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability('custom_matches')?.target || 'custom_matches')">完整参数<ChevronRight class="size-3.5" /></Button></div>
-          <OxidnsMatchEditor v-else :model-value="read('custom_matches') || []" :disabled="disabled" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
+          <OxidnsMatchEditor v-else :model-value="customMatches" :disabled="disabled" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
           <div class="flex flex-wrap items-center gap-2 border-t border-border pt-3"><span class="text-xs text-muted-foreground">其他插件、网络出站和扩展字段</span><Button type="button" variant="outline" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">完整参数<ChevronRight class="size-3.5" /></Button></div>
         </TabsContent>
       </div>
@@ -90,15 +90,29 @@ const ruleGroups = [
   { key: 'direct_rules', opposite: 'proxy_rules', label: '直连规则', sets: false, hint: '选择单独添加的域名或 IP 规则，命中后使用直连 DNS。与规则集一起按原有顺序参与分流。' },
   { key: 'proxy_rules', opposite: 'direct_rules', label: '代理规则', sets: false, hint: '选择单独添加的域名或 IP 规则，命中后进入代理 DNS 与备用 DNS 流程。' },
 ]
-const read = (path: string) => path.split('.').reduce((value, key) => value?.[key], draft)
+const read = (path: string): unknown => path.split('.').reduce<unknown>((value, key) =>
+  value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, draft)
+const selectedRules = (path: string): string[] => {
+  const value = read(path)
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+const customMatches = computed(() => {
+  const value = read('custom_matches')
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> =>
+    item !== null && typeof item === 'object' && !Array.isArray(item)) : []
+})
 function capability(path: string): OxidnsFieldCapability | undefined {
   const parts = path.split('.')
   while (parts.length) { const found = props.capabilities[parts.join('.')]; if (found) return found; parts.pop() }
 }
 const isCustom = (path: string) => capability(path)?.editable === false
-const ruleOptions = (group: typeof ruleGroups[number]) => (group.sets ? props.ruleSets : props.rules)
-  .filter(item => !(read(group.opposite) || []).includes(item.id) || (read(group.key) || []).includes(item.id))
-  .map(item => ({ value: item.id, label: item.name || `${item.type || item.rule_type || '规则'} · ${item.value || item.rule_value || item.id}` }))
+const ruleOptions = (group: typeof ruleGroups[number]) => {
+  const opposite = selectedRules(group.opposite)
+  const selected = selectedRules(group.key)
+  return (group.sets ? props.ruleSets : props.rules)
+    .filter(item => !opposite.includes(item.id) || selected.includes(item.id))
+    .map(item => ({ value: item.id, label: item.name || `${item.type || item.rule_type || '规则'} · ${item.value || item.rule_value || item.id}` }))
+}
 function write(path: string, value: unknown) {
   const parts = path.split('.'); const key = parts.pop()!
   const target = parts.reduce((object, part) => (object[part] ??= {}), draft)
