@@ -176,9 +176,15 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
 		if e != nil {
 			return diagnosticFailure("invalid Mihomo configuration", e, nil)
 		}
+		adjustments := mihomoAIODNSAdjustments(cfg, data)
 		data = []byte(modified)
 		if e = durableWrite(name, data, 0600); e != nil {
 			return e
+		}
+		// A ready deployment may be checked again after the original bytes have
+		// already been adapted. Retain the original, safe adjustment explanation.
+		if len(adjustments) != 0 {
+			s.DNSAdjustments = adjustments
 		}
 		for i := range s.Manifest.Files {
 			if s.Manifest.Files[i].Path == s.Manifest.ConfigPath {

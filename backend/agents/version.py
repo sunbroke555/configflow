@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.21-go"
+LATEST_AGENT_VERSION = "1.8.22-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.22-go": {
+        "date": "2026-10-18",
+        "features": [
+            "All in One 发布 Mihomo 配置时提示 DNS 监听和 TUN DNS 劫持的自动调整，显示调整前后的值",
+            "自动调整提示保留在 DNS 检查与发布历史中，激活时重新检查不会丢失；独立安装保持原有配置"
+        ]
+    },
     "1.8.21-go": {
         "date": "2026-10-18",
         "features": [

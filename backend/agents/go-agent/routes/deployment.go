@@ -79,6 +79,7 @@ type DeploymentState struct {
 	ManualRollback       bool                 `json:"manual_rollback,omitempty"`
 	DNSChecks            []DeploymentDNSCheck `json:"dns_checks,omitempty"`
 	DNSCheckedAt         string               `json:"dns_checked_at,omitempty"`
+	DNSAdjustments       []DeploymentDNSCheck `json:"dns_adjustments,omitempty"`
 }
 
 func deploymentRoot(cfg *Config) string {
