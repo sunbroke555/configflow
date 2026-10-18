@@ -15,7 +15,7 @@ fi
 {init_detection}
 
 {agent_install_dependencies}
-echo "1) 安装或升级 Go Agent（包含事务发布与失败回滚）"
+echo "1) {installation_action}"
 echo "2) 卸载 Agent"
 echo "3) 取消"
 printf '请输入选项 [1-3]: '

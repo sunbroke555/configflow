@@ -97,7 +97,7 @@ stop_existing_agent() {
 
 {agent_install_dependencies}
 {installation_description}
-echo "1) 安装或升级两个独立 Agent"
+echo "1) {installation_action}"
 echo "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
 echo "3) 取消"
 printf '请输入选项 [1-3]: '

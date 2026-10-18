@@ -121,12 +121,15 @@ def generate_go_agent_install_script(
         "binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
         "init_detection": _AGENT_INIT_DETECTION,
         "agent_install_dependencies": AGENT_INSTALL_DEPENDENCIES,
+        "installation_action": "安装或升级 Go Agent（包含事务发布与失败回滚）",
         "core_install_phase": "",
         "agent_cleanup_trap": 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM',
     }
     if install_core:
         from backend.agents.core_install_script import generate_core_install_script
 
+        core_name = "Mihomo" if service_type == "mihomo" else "OxiDNS"
+        replacements["installation_action"] = f"补装 {core_name} 核心，并安装或升级 Agent"
         # Keep the core installer's variables, umask, traps and exit statements
         # inside a subshell. In particular, do not place this in an if/&&/||
         # condition: that would disable its set -e failure handling.
@@ -277,6 +280,7 @@ else
     fail "需要 systemd 或 OpenRC 管理已安装的 Mihomo 和 OxiDNS。"
 fi''',
         "installation_description": 'echo "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。"',
+        "installation_action": "安装或升级两个独立 Agent",
         "agent_arch_detection": "\n".join("        " + line for line in agent_arch_detection.splitlines()),
         "agent_install_dependencies": AGENT_INSTALL_DEPENDENCIES,
         "core_phase_state": "",
@@ -289,6 +293,7 @@ fi''',
         replacements.update({
             "init_detection": _CORE_INIT_DETECTION,
             "installation_description": 'echo "选择安装时先补装缺少的 Mihomo 和 OxiDNS 核心，再安装两个独立 Agent；已有核心与配置保留。"',
+            "installation_action": "补装 Mihomo 与 OxiDNS 核心，并安装或升级两个 Agent",
             "core_phase_state": "CORE_PHASE_COMPLETED=false\n",
             "core_cleanup_message": '''        if [ "$CORE_PHASE_COMPLETED" = true ]; then
             echo "Agent 安装未完成；两个核心的安装阶段已结束，已安装或原有的核心予以保留。修复上方 Agent 错误后可重新运行。" >&2
