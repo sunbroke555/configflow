@@ -61,6 +61,17 @@ export interface MihomoConnectionsSnapshot {
   memory?: number
 }
 
+/** 面板采样后补充的显示字段，不写入核心配置。 */
+export interface ConnectionRow extends MihomoConnection {
+  raw: MihomoConnection
+  target: string
+  chain: string
+  upSpeed: number
+  downSpeed: number
+  /** 前端发现连接消失的时间（毫秒）；活跃连接为空 */
+  closedAt?: number
+}
+
 export interface MihomoRule {
   type: string
   payload: string
