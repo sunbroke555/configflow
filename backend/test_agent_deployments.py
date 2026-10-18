@@ -330,6 +330,39 @@ def test_route_client_id_persisted_and_staging_repeated_request_is_idempotent(en
     assert client.get(f'/api/agents/{agent["id"]}/deployments/client-id').json['status'] == 'ready'
 
 
+@pytest.mark.parametrize('rule_name', ['Claude', 'Google'])
+def test_rule_download_failure_is_reported_without_pushing_to_agent(env, monkeypatch, rule_name):
+    from flask import Flask
+    from backend.routes import agents as routes, register_blueprints
+
+    _, manager, agent, _ = env
+    main = {'rule-providers': {rule_name: {'type': 'http', 'format': 'mrs',
+                                         'url': 'https://rules.test/list', 'path': './rules/test.mrs'}}}
+    monkeypatch.setattr(routes, 'get_agent_manager', lambda: manager)
+    monkeypatch.setattr(routes, 'generate_mihomo_config', lambda *_a, **_k: yaml.safe_dump(main))
+    monkeypatch.setattr(routes, 'get_mihomo_provider_downloads', lambda *_a, **_k: [])
+    monkeypatch.setattr(routes, 'get_mihomo_ruleset_downloads', lambda *_a, **_k: [])
+    monkeypatch.setattr(manager, 'push_config_to_agent', lambda *_a, **_k: pytest.fail('pushed incomplete bundle'))
+
+    def fetch(*_args, **_kwargs):
+        raise requests.exceptions.ConnectionError('https://rules.test/list?token=secret')
+
+    monkeypatch.setattr('backend.agents.deployment_bundle.request_rule', fetch)
+    app = Flask(__name__)
+    register_blueprints(app)
+    client = app.test_client()
+    result = client.post(f'/api/agents/{agent["id"]}/push-config', json={'deployment_id': 'download-failure'})
+    assert result.status_code == 400
+    assert result.json['status'] == 'failed'
+    assert result.json['message'] == (
+        f'无法下载「{rule_name}」规则集：连接失败，请检查规则下载地址及网络连接。'
+        '本次发布已停止，设备仍使用原配置。')
+    recorded = client.get(f'/api/agents/{agent["id"]}/deployments/download-failure').json
+    assert recorded['status'] == 'failed'
+    assert recorded['message'] == result.json['message']
+    assert not manager._preparation_running(agent['id'], 'download-failure')
+
+
 def test_custom_installed_filename_negotiated_without_changing_bytes(env, monkeypatch):
     _, manager, agent, config = env
     bundle = minimal_bundle(agent, config)

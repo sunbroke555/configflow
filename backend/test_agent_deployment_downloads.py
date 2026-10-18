@@ -137,7 +137,7 @@ def test_concurrent_failure_is_shared_and_does_not_poison_next_publication(monke
         return response(b'new bytes')
 
     monkeypatch.setattr(bundles, 'request_rule', fetch)
-    with pytest.raises(bundles.DeploymentPreparationError, match='Required rule download failed') as exc:
+    with pytest.raises(bundles.DeploymentPreparationError, match='代理连接失败') as exc:
         raw_bundle([SOURCE_URL] * 8, progress=lambda *value: progress.append(value))
     assert calls == [SOURCE_URL]
     assert 'password' not in str(exc.value)
@@ -146,6 +146,46 @@ def test_concurrent_failure_is_shared_and_does_not_poison_next_publication(monke
     bundle = raw_bundle([SOURCE_URL] * 8)
     assert calls == [SOURCE_URL, SOURCE_URL]
     assert contents(bundle)['rules/0.mrs'] == b'new bytes'
+
+
+@pytest.mark.parametrize('error, reason', [
+    (requests.exceptions.ConnectionError, '连接失败'),
+    (requests.exceptions.ConnectTimeout, '下载超时'),
+    (requests.exceptions.ReadTimeout, '下载超时'),
+    (requests.exceptions.ProxyError, '代理连接失败'),
+    (requests.exceptions.SSLError, '无法建立 HTTPS 安全连接'),
+    (requests.exceptions.ChunkedEncodingError, '下载失败'),
+    (ValueError, '下载失败'),
+])
+def test_download_errors_explain_cause_without_exposing_request_details(monkeypatch, error, reason):
+    def fetch(*_args, **_kwargs):
+        raise error('https://user:password@rules.test/list?token=secret')
+
+    monkeypatch.setattr(bundles, 'request_rule', fetch)
+    with pytest.raises(bundles.DeploymentPreparationError) as exc:
+        raw_bundle([SOURCE_URL])
+    message = str(exc.value)
+    assert '无法下载「0」规则集' in message
+    assert reason in message
+    assert '本次发布已停止，设备仍使用原配置。' in message
+    for private in ('password', 'token', 'secret', 'rules.test'):
+        assert private not in message
+
+
+@pytest.mark.parametrize('status', [403, 404, 503])
+def test_http_download_failure_shows_status_and_closes_response(monkeypatch, status):
+    result = response(b'')
+    result.status_code = status
+    result.url = 'https://user:password@rules.test/list?token=secret'
+    closed = []
+    monkeypatch.setattr(result, 'close', lambda: closed.append(True))
+    monkeypatch.setattr(bundles, 'request_rule', lambda *_a, **_k: result)
+    with pytest.raises(bundles.DeploymentPreparationError) as exc:
+        raw_bundle([SOURCE_URL])
+    assert f'HTTP {status}' in str(exc.value)
+    assert 'password' not in str(exc.value)
+    assert 'secret' not in str(exc.value)
+    assert closed == [True]
 
 
 def test_distinct_urls_and_separate_publications_do_not_share_bytes(monkeypatch):
