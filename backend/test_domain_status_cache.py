@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -37,6 +38,16 @@ def track_reads(store, monkeypatch):
     return calls
 
 
+def wait_for_changed_ctime(path, previous):
+    # In-place invalidation relies on ctime; older Linux filesystems may keep
+    # it unchanged within a clock tick even though Python exposes nanoseconds.
+    deadline = time.monotonic() + 2
+    while path.stat().st_ctime_ns == previous.st_ctime_ns and time.monotonic() < deadline:
+        time.sleep(0.01)
+        os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+    assert path.stat().st_ctime_ns != previous.st_ctime_ns
+
+
 def test_status_hit_reuses_only_small_independent_metadata(tmp_path, monkeypatch):
     store = TrafficStore(tmp_path)
     write_data(store)
@@ -62,6 +73,8 @@ def test_external_same_size_same_mtime_change_invalidates(tmp_path, atomic):
     os.utime(destination, ns=(previous.st_atime_ns, previous.st_mtime_ns))
     if atomic:
         os.replace(destination, path)
+    else:
+        wait_for_changed_ctime(path, previous)
     assert path.stat().st_size == previous.st_size
     assert path.stat().st_mtime_ns == previous.st_mtime_ns
     assert store.load_status('a')['value'] == 'unknown'
@@ -146,7 +159,10 @@ def test_external_change_after_report_write_cannot_acquire_written_status(tmp_pa
         os.utime(destination, ns=(previous.st_atime_ns, previous.st_mtime_ns))
         if atomic:
             os.replace(destination, path)
+        else:
+            wait_for_changed_ctime(path, previous)
         assert path.stat().st_size == previous.st_size
+        assert path.stat().st_mtime_ns == previous.st_mtime_ns
         return written
 
     monkeypatch.setattr(store, '_write_json', replace_after_write)
