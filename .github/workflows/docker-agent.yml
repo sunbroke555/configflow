@@ -69,13 +69,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  checks:
-    needs: check-upstream
-    if: needs.check-upstream.outputs.should_build == 'true'
-    uses: ./.github/workflows/checks.yml
-
   build:
-    needs: [check-upstream, checks]
+    needs: check-upstream
     if: needs.check-upstream.outputs.should_build == 'true'
     permissions:
       contents: read

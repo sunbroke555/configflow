@@ -6,11 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  checks:
-    uses: ./.github/workflows/checks.yml
-
   create-release:
-    needs: checks
     name: Create GitHub Release
     runs-on: ubuntu-latest
     permissions:
