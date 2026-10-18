@@ -5,7 +5,7 @@ import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 import { createDeploymentId, deploymentStatusLabel, type AgentDeployment } from './useAgentDeployments'
 import type { OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
 
-export interface PolicyReleaseRow { id: string; name: string; status: string; message?: string; deployment_id?: string }
+export interface PolicyReleaseRow { id: string; name: string; status: string; message?: string; deployment_id?: string; task?: Partial<AgentDeployment> }
 const terminal = new Set(['succeeded', 'failed', 'rolled_back', 'rollback_failed'])
 const message = (error: any) => error?.response?.data?.message || error?.message || '操作失败，请重试。'
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
@@ -103,6 +103,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
     && !results.value.length && (!preview.value.router_plan.empty || !!preview.value.targets.length))
 
   function updateTask(row: PolicyReleaseRow, task: AgentDeployment) {
+    row.task = task
     row.status = task.pending ? 'unknown' : task.status
     row.message = task.error || task.message || deploymentStatusLabel(task)
   }
@@ -159,7 +160,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
         } catch (failure: any) {
           if (!current(c)) return
           if (failure.response?.data?.deployment_id) updateTask(live, failure.response.data)
-          else { live.status = failure.response ? 'failed' : 'unknown'; live.message = message(failure) }
+          else { live.status = failure.response ? 'failed' : 'unknown'; live.message = message(failure); live.task = failure.response?.data }
         }
         if (!await waitForAgent(live, c)) throw new Error(`${target.name} 未确认发布成功，后续设备及 ROS 已暂停。请核对下方结果。`)
       }

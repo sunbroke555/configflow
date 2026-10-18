@@ -120,12 +120,12 @@ func (r *oxidnsReloader) request(method, path string) (int, []byte, error) {
 	req.Header.Set("Accept", "application/json")
 	response, err := r.client.Do(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("OxiDNS API unreachable")
+		return 0, nil, diagnosticFailure("OxiDNS API unreachable", err, nil)
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	if err != nil {
-		return 0, nil, fmt.Errorf("OxiDNS API response unreadable")
+		return 0, nil, diagnosticFailure("OxiDNS API response unreadable", err, nil)
 	}
 	return response.StatusCode, data, nil
 }
@@ -136,11 +136,11 @@ func (r *oxidnsReloader) status() (*oxidnsReloadStatus, error) {
 		return nil, err
 	}
 	if code != http.StatusOK {
-		return nil, fmt.Errorf("reload status returned HTTP %d", code)
+		return nil, diagnosticFailure(fmt.Sprintf("reload status returned HTTP %d", code), nil, data, r.password)
 	}
 	var status oxidnsReloadStatus
 	if err = json.Unmarshal(data, &status); err != nil || status.Status == "" {
-		return nil, fmt.Errorf("reload status is not recognized")
+		return nil, diagnosticFailure("reload status is not recognized", err, nil)
 	}
 	return &status, nil
 }
@@ -156,12 +156,12 @@ func (r *oxidnsReloader) reload(cfg *Config) error {
 	if err = prepareOxiDNSRuntimeDirectories(cfg); err != nil {
 		return err
 	}
-	code, _, err := r.request(http.MethodPost, "/api/reload")
+	code, response, err := r.request(http.MethodPost, "/api/reload")
 	if err != nil {
 		return err
 	}
 	if code != http.StatusAccepted {
-		return fmt.Errorf("reload request returned HTTP %d", code)
+		return diagnosticFailure(fmt.Sprintf("reload request returned HTTP %d", code), nil, response, r.password)
 	}
 	deadline := time.Now().Add(oxidnsReloadTimeout)
 	for {
@@ -169,7 +169,7 @@ func (r *oxidnsReloader) reload(cfg *Config) error {
 		status, err := r.status()
 		if err == nil && !status.Pending && !status.InProgress {
 			if status.LastError != nil && *status.LastError != "" {
-				return fmt.Errorf("OxiDNS rejected the reload")
+				return diagnosticFailure("OxiDNS rejected the reload", nil, []byte(*status.LastError), r.password)
 			}
 			if status.RunningVersion != nil && *status.RunningVersion == want {
 				return nil
@@ -177,7 +177,7 @@ func (r *oxidnsReloader) reload(cfg *Config) error {
 			return fmt.Errorf("OxiDNS did not report the new configuration as running")
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("OxiDNS reload did not finish in time")
+			return diagnosticFailure("OxiDNS reload did not finish in time", err, nil)
 		}
 	}
 }

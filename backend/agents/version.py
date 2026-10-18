@@ -1,10 +1,16 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.16-go"
+LATEST_AGENT_VERSION = "1.8.17-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.17-go": {
+        "date": "2026-10-18",
+        "features": [
+            "Mihomo、MosDNS、OxiDNS 发布失败保留具体校验、服务和回滚原因，发布记录可展开查看和复制；敏感信息自动隐藏"
+        ]
+    },
     "1.8.16-go": {
         "date": "2026-10-18",
         "features": [

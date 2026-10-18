@@ -108,6 +108,8 @@ docker compose logs --tail=100
 
 先在 Agent 卡片查看失败阶段、发布错误和回滚错误。需要更多信息时，读取该发布的 `state.json`，并查看 Agent 及核心日志。状态查询接口保留现有鉴权，不要把 Token 贴到日志或共享诊断记录中。
 
+Agent 1.8.17-go 起，发布记录中的 `error_details` 和 `rollback_error_details` 保留校验、服务命令及健康探测返回的具体错误，单项最多 16 KiB，密码、Token 和 URL 凭据会隐藏。Mihomo 与 OxiDNS 包含原生校验输出；MosDNS 使用现有 YAML/插件检查及服务启动、健康探测结果，不新增原生校验步骤。OxiDNS 热重载失败且回退重启也失败时，两次原因一并记录。成功发布或成功完成回滚后会清除对应旧错误。旧版已丢弃的校验输出无法补回，需要更新 Agent 后的新发布才能记录详情；服务管理器未提供具体原因时，仍需查看核心日志。
+
 - systemd Agent 日志：`journalctl -u configflow-agent --no-pager -n 100`。
 - OpenRC Agent 日志：`/var/log/configflow-agent.log`。
 - Docker 日志：`docker compose logs --tail=100`；同时检查容器内 Supervisor 核心日志。

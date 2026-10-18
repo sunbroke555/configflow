@@ -274,3 +274,22 @@ it('reuses a shared device note when adding a DNS policy', async () => {
   expect(vi.mocked(oxidnsDevicePolicyApi.save).mock.lastCall?.[1].policies).toEqual([{ ip: '192.168.50.51', name: '工作电脑', mode: 'smart' }])
   expect(agentApi.pushConfig).not.toHaveBeenCalled()
 })
+
+describe('OxiDNS device-policy publication diagnostics', () => {
+  it('shows target validation and rollback details directly in the device policy panel', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'rollback_failed', failed_stage: 'verifying', error: '配置校验失败', error_details: 'plugin resolver: unknown option', rollback_error: '启动失败', rollback_error_details: 'cannot bind :53' }))
+    const wrapper = await render()
+    await button(wrapper, '发布到当前设备').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('pre').map(item => item.text())).toEqual(['plugin resolver: unknown option', 'cannot bind :53'])
+    expect(wrapper.text()).toContain('失败步骤：校验中')
+  })
+  it('keeps rejection details even when no deployment was created', async () => {
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成失败', error_details: 'unknown resolver tag' } } })
+    const wrapper = await render()
+    await button(wrapper, '发布到当前设备').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('pre').text()).toBe('unknown resolver tag')
+    expect(wrapper.text()).toContain('生成失败')
+  })
+})

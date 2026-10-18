@@ -8,21 +8,21 @@
       <p class="text-xs leading-relaxed text-muted-foreground">首版只支持回滚当前仍生效的最新成功部署。Agent 会检查备份、活动版本与服务健康；较旧记录用于查看，不能直接切换到任意历史版本。</p>
       <EmptyState v-if="!records.length" title="暂无发布记录" description="首次推送配置后会在这里显示发布结果。" />
       <div v-else class="cf-table-wrap">
-        <table class="cf-table w-full text-sm">
-          <thead><tr><th class="text-left">发布</th><th class="text-left">结果</th><th class="text-right">操作</th></tr></thead>
-          <tbody>
-            <tr v-for="record in records" :key="record.deployment_id">
-              <td class="max-w-[260px] align-top">
+        <table class="cf-table cf-mobile-records w-full text-sm" role="table">
+          <thead role="rowgroup"><tr role="row"><th role="columnheader" class="text-left">发布</th><th role="columnheader" class="text-left">结果</th><th role="columnheader" class="text-right">操作</th></tr></thead>
+          <tbody role="rowgroup">
+            <tr role="row" v-for="record in records" :key="record.deployment_id">
+              <td role="cell" data-label="发布" class="cf-record-wide max-w-[260px] align-top max-sm:max-w-none">
                 <div class="break-all font-mono text-xs" :title="record.deployment_id">{{ record.deployment_id }}</div>
                 <div class="mt-1 text-xs text-muted-foreground">{{ formatDate(record.updated_at || record.created_at) }}<template v-if="record.config_revision !== undefined"> · 修订 {{ record.config_revision }}</template></div>
                 <div v-if="record.deployment_id === latestId" class="mt-1 text-xs text-primary-accent">最新记录</div>
               </td>
-              <td class="max-w-[280px] align-top">
+              <td role="cell" data-label="结果" class="cf-record-wide max-w-[280px] align-top max-sm:max-w-none">
                 <div class="flex items-center gap-2"><Loader2 v-if="busy && record.deployment_id === latestId" class="size-3.5 shrink-0 animate-spin" />{{ deploymentStatusLabel(record) }}</div>
-                <p v-if="record.error || record.rollback_error || record.rollback_message" class="mt-1 break-words text-xs text-destructive-accent">{{ record.error }} {{ record.rollback_error }} {{ record.rollback_message }}</p>
+                <AgentFailureDetails :task="record" class="mt-1" />
                 <p v-if="record.query_error" class="mt-1 text-xs text-muted-foreground">正在查询 Agent 确认结果。</p>
               </td>
-              <td class="text-right align-top">
+              <td role="cell" class="cf-record-wide text-right align-top">
                 <Button v-if="record.deployment_id === latestId && record.status === 'succeeded'" variant="outline" size="sm" class="min-h-11 whitespace-nowrap" :disabled="blocked || busy || agent.status !== 'online'" @click="emit('rollback', record)">回滚到发布前</Button>
                 <span v-else class="text-xs text-muted-foreground">—</span>
               </td>
@@ -42,6 +42,7 @@ import { Loader2 } from '@lucide/vue'
 import type { Agent } from '@/types'
 import { deploymentStatusLabel, type AgentDeployment } from '@/composables/useAgentDeployments'
 import EmptyState from '@/components/common/EmptyState.vue'
+import AgentFailureDetails from './AgentFailureDetails.vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 

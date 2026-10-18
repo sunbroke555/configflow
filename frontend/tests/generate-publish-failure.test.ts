@@ -1,0 +1,69 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { computed, defineComponent, markRaw } from 'vue'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import GenerateStudio from '@/components/generate/GenerateStudio.vue'
+import { agentApi, generateApi, statsApi, ruleSetApi } from '@/api'
+import { notify } from '@/lib/feedback'
+
+const live = vi.hoisted(() => ({ agents: [] as any[], start: vi.fn(), stop: vi.fn(), refresh: vi.fn() }))
+vi.mock('@/api', () => ({
+  agentApi: { pushConfig: vi.fn(), getDeployment: vi.fn() },
+  generateApi: { previewMihomo: vi.fn(), previewMosdns: vi.fn(), previewOxidns: vi.fn(), previewSurge: vi.fn(), previewLoon: vi.fn() },
+  statsApi: { getOverview: vi.fn() }, ruleSetApi: { getAll: vi.fn() },
+}))
+vi.mock('@/stores/live', () => ({ useLive: () => ({ ...live, boundAgents: computed(() => live.agents), isOnline: () => true }) }))
+vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn(), loading: vi.fn(), dismiss: vi.fn() } }))
+const wrappers: VueWrapper[] = []
+const labels = { mihomo: 'Mihomo', mosdns: 'MosDNS', oxidns: 'OxiDNS', surge: 'Surge' } as const
+const icon = markRaw(defineComponent({ template: '<i />' }))
+const button = (w: VueWrapper, label: string) => w.findAll('button').find(item => item.text() === label)!
+beforeEach(() => {
+  vi.resetAllMocks()
+  vi.useFakeTimers()
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(1), 1))
+  for (const api of Object.values(generateApi)) vi.mocked(api).mockResolvedValue({ data: { content: 'rules: []' } } as any)
+  vi.mocked(statsApi.getOverview).mockResolvedValue({ data: { success: true, data: {} } } as any)
+  vi.mocked(ruleSetApi.getAll).mockResolvedValue({ data: [] } as any)
+})
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
+async function render(service: keyof typeof labels) {
+  live.agents = [{ id: service, name: `${labels[service]} test`, service_type: service }]
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: icon }, { path: '/agents', component: icon }] })
+  await router.push('/')
+  const targets = Object.entries(labels).map(([key, title]) => ({ key: key as keyof typeof labels, title, icon, desc: '', url: '', urlDisplay: '', actions: [] }))
+  const wrapper = mount(GenerateStudio, { props: { targets }, global: { plugins: [router] } })
+  wrappers.push(wrapper)
+  if (service !== 'mihomo') await button(wrapper, labels[service]).trigger('click')
+  await button(wrapper, '生成').trigger('click')
+  await vi.advanceTimersByTimeAsync(3000)
+  await flushPromises()
+  expect(button(wrapper, '推送').attributes('disabled')).toBeUndefined()
+  await button(wrapper, '推送').trigger('click')
+  await flushPromises()
+  return wrapper
+}
+
+describe('Generated config publication diagnostics', () => {
+  it.each(['mihomo', 'mosdns', 'oxidns'] as const)('shows %s terminal task details by the push controls', async service => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'failed', failed_stage: 'verifying', error: '配置校验失败', error_details: 'line 9: unknown target' } }) as any)
+    const wrapper = await render(service)
+    expect(wrapper.get('[aria-label="配置发布结果"]').text()).toContain('失败步骤：校验中')
+    expect(wrapper.get('pre[tabindex="0"]').text()).toBe('line 9: unknown target')
+    expect(wrapper.get('a[href="/agents"]').text()).toContain('查看发布记录')
+    expect(notify.error).toHaveBeenCalledWith('发布失败', '配置校验失败')
+  })
+  it('does not treat Surge config-write success as restart success', async () => {
+    vi.mocked(agentApi.pushConfig).mockResolvedValueOnce({ data: { success: true, restart: { success: false, message: '重启失败', error_details: 'line 17: invalid policy' } } } as any)
+    const wrapper = await render('surge')
+    expect(wrapper.get('[aria-label="配置发布结果"]').text()).toContain('配置已写入，但重启失败')
+    expect(wrapper.get('pre[tabindex="0"]').text()).toBe('line 17: invalid policy')
+    expect(notify.success).not.toHaveBeenCalledWith('已推送到 1 台 Agent')
+  })
+  it('preserves an HTTP rejection even when no deployment id was assigned', async () => {
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成失败', error_details: 'invalid rule syntax' } } })
+    const wrapper = await render('mihomo')
+    expect(wrapper.get('pre[tabindex="0"]').text()).toBe('invalid rule syntax')
+    expect(wrapper.get('[aria-label="配置发布结果"]').text()).toContain('生成失败')
+  })
+})

@@ -29,6 +29,7 @@ from backend.common.config_repository import ProfileRepositoryError
 from backend.common.agent_manager import get_agent_manager
 from backend.common.utils import str_to_bool
 from backend.utils.logger import get_logger
+from backend.agents.diagnostics import failure_text
 from backend.utils.url_utils import safe_url_for_log
 from backend.utils.strategy_references import StrategyReferenceError
 from backend.utils.rule_fetch import is_internal_rule_url, request_rule
@@ -957,6 +958,7 @@ def push_config_to_agent(agent_id):
     agent_manager = get_agent_manager()
     deployment_id = None
     owns_preparation = False
+    agent = {}
     try:
         agent = agent_manager.get_agent_by_id(agent_id)
         if not agent:
@@ -1073,7 +1075,10 @@ def push_config_to_agent(agent_id):
         result['rule_count'] = len(prepared['ruleset_downloads'])
         return _deployment_response(result)
     except (StrategyReferenceError, DeploymentPreparationError, ValueError) as exc:
-        result = {'success': False, 'status': 'failed', 'message': str(exc)}
+        details = failure_text(str(exc), (agent.get('token'),))
+        result = {'success': False, 'status': 'failed', 'failed_stage': 'preparing',
+                  'message': details.splitlines()[0][:300] if details else 'Deployment preparation failed',
+                  'error_details': details}
         if hasattr(exc, 'issues'):
             result['issues'] = exc.issues
         if deployment_id:
@@ -1081,9 +1086,10 @@ def push_config_to_agent(agent_id):
             result['deployment_id'] = deployment_id
         return jsonify(result), 400
     except Exception as exc:
-        # Do not expose transport exceptions containing subscription credentials.
         logger.error('Agent deployment preparation failed (%s)', type(exc).__name__)
-        result = {'success': False, 'status': 'failed', 'message': 'Deployment preparation failed'}
+        result = {'success': False, 'status': 'failed', 'failed_stage': 'preparing',
+                  'message': 'Deployment preparation failed',
+                  'error_details': failure_text(f'{type(exc).__name__}: {exc}', (agent.get('token'),))}
         if deployment_id:
             agent_manager.record_deployment(agent_id, deployment_id, result)
             result['deployment_id'] = deployment_id

@@ -153,7 +153,7 @@ describe('Agent deployment lifecycle feedback', () => {
     expect(agentApi.rollbackDeployment).toHaveBeenCalledOnce()
     reject({ response: { status: 409, data: { message: '备份已不存在' } } })
     await operation
-    expect(flow.deployments['agent-1']).toEqual({ deployment_id: 'current', status: 'succeeded', query_error: false })
+    expect(flow.deployments['agent-1']).toMatchObject({ deployment_id: 'current', status: 'succeeded', query_error: false, rollback_rejected: true, rollback_message: '备份已不存在' })
     expect(flow.busy('agent-1')).toBe(false)
     expect(notify.error).toHaveBeenCalledWith('无法手动回滚', '备份已不存在')
   })
@@ -338,5 +338,24 @@ describe('Agent deployment lifecycle feedback', () => {
     expect(agentApi.getDeployment).toHaveBeenLastCalledWith('agent-1', 'retry-1')
     expect(flow.deployments['agent-1'].not_recorded).toBe(true)
     expect(notify.error).not.toHaveBeenCalled()
+  })
+})
+
+describe('Agent failure response diagnostics', () => {
+  it('retains diagnostic output when activation remains uncertain', async () => {
+    const { flow } = render()
+    flow.track('one', { deployment_id: 'ready', status: 'ready' }, false)
+    vi.mocked(agentApi.activateDeployment).mockRejectedValueOnce({ response: { status: 503, data: { message: 'response interrupted', error_details: 'failed to read core status' } } })
+    await flow.activate('one')
+    expect(flow.deployments.one).toMatchObject({ status: 'unknown', query_error: true, error_details: 'failed to read core status' })
+  })
+  it('keeps rollback rejection details without changing the successful deployment or retry eligibility', async () => {
+    const { flow } = render()
+    flow.track('one', { deployment_id: 'active', status: 'succeeded' }, false)
+    vi.mocked(agentApi.rollbackDeployment).mockRejectedValueOnce({ response: { status: 409, data: { message: 'backup unavailable', error_details: 'missing previous/config.yaml' } } })
+    await flow.rollback('one', 'active')
+    expect(flow.deployments.one).toMatchObject({ status: 'succeeded', rollback_rejected: true, rollback_error_details: 'missing previous/config.yaml' })
+    expect(deploymentStatusLabel(flow.deployments.one)).toBe('手动回滚未执行')
+    expect(flow.busy('one')).toBe(false)
   })
 })

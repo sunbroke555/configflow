@@ -138,6 +138,10 @@
             </Select>
           </div>
 
+          <div v-if="submissionFailures[agent.id]" class="mt-3 min-w-0 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
+            <p class="mb-1 mt-0 text-xs font-medium text-destructive-accent">发布失败</p>
+            <AgentFailureDetails :task="submissionFailures[agent.id]" />
+          </div>
           <!-- 事务发布与在线更新的进度：结果由 useAgentDeployments / useAgentUpgrades 轮询 -->
           <section
             v-if="deployments[agent.id]"
@@ -151,9 +155,7 @@
             <p v-if="agent.service_type === 'oxidns' && !deployments[agent.id].manual_rollback" class="mt-1 mb-0 text-muted-foreground">发布先检查配置规则，再由目标 OxiDNS 核心校验；通过后才会替换配置。</p>
             <p v-if="deployments[agent.id].not_recorded && !deployments[agent.id].manual_rollback" class="mt-1 mb-0 text-muted-foreground">后端暂未记录此发布，正在继续查询。可使用原发布编号重新提交。</p>
             <p v-else-if="deployments[agent.id].query_error" class="mt-1 mb-0 text-muted-foreground">暂时无法确认结果，正在重新查询。</p>
-            <p v-if="deployments[agent.id].error || deployments[agent.id].rollback_error || deployments[agent.id].rollback_message" class="mt-1 mb-0 break-words text-destructive-accent">
-              {{ deployments[agent.id].error }} {{ deployments[agent.id].rollback_error }} {{ deployments[agent.id].rollback_message }}
-            </p>
+            <AgentFailureDetails :task="deployments[agent.id]" class="mt-1" />
             <Button v-if="deployments[agent.id].status === 'ready'" variant="outline" size="sm" class="mt-2" @click="activateDeployment(agent.id)">应用并启动</Button>
             <Button v-if="deployments[agent.id].status === 'rollback_failed'" variant="outline" size="sm" class="mt-2" @click="refreshDeployment(agent.id)">查询恢复状态</Button>
             <Button v-if="!deployments[agent.id].manual_rollback && (deployments[agent.id].not_recorded || deployments[agent.id].retrying)" variant="outline" size="sm" class="mt-2" :disabled="deployments[agent.id].retrying" @click="retryDeployment(agent.id)">{{ deployments[agent.id].retrying ? '正在重新提交…' : '重试同一次发布' }}</Button>
@@ -755,6 +757,8 @@ import type { Agent } from '@/types'
 import { useProfileStore } from '@/stores/profile'
 import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentDeploymentHistory from '@/components/agents/AgentDeploymentHistory.vue'
+import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
+import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { upgradeLabels, useAgentUpgrades } from '@/composables/useAgentUpgrades'
 import { use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -1847,6 +1851,7 @@ const copyDockerCompose = () => copyAgentContent(dockerComposeContent.value, 'Do
 const copyDockerRun = () => copyAgentContent(dockerRunCommand.value, 'Docker Run 命令已复制到剪贴板')
 
 // 推送配置
+const submissionFailures = ref<Record<string, Partial<AgentDeployment>>>({})
 const pushingIds = ref<Set<string>>(new Set())
 const pushingAll = ref(false)
 
@@ -1858,6 +1863,7 @@ type PushOutcome = 'submitted' | 'done' | 'failed' | 'busy'
  */
 const pushOne = async (agent: Agent, quiet = false): Promise<PushOutcome> => {
   if (deploymentBusy(agent.id)) return 'busy'
+  delete submissionFailures.value[agent.id]
   const deploymentId = createDeploymentId()
   deployments[agent.id] = { deployment_id: deploymentId, status: 'preparing' }
   pushingIds.value = new Set([...pushingIds.value, agent.id])
@@ -1869,6 +1875,11 @@ const pushOne = async (agent: Agent, quiet = false): Promise<PushOutcome> => {
       return 'submitted'
     }
     delete deployments[agent.id]
+    if (data?.success === false || data?.restart?.success === false) {
+      submissionFailures.value[agent.id] = { ...data, error: data.restart?.success === false ? `配置已写入，但重启失败：${data.restart.message || '服务未确认启动。'}` : data.error || data.message, error_details: data.restart?.error_details || data.error_details }
+      if (!quiet) notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
+      return 'failed'
+    }
     return 'done'
   } catch (error: any) {
     if (error.response?.data?.deployment_id) {
@@ -1880,7 +1891,8 @@ const pushOne = async (agent: Agent, quiet = false): Promise<PushOutcome> => {
       return 'submitted'
     }
     delete deployments[agent.id]
-    if (!quiet) notify.error(`「${agent.name}」配置发布失败`, error.response?.data?.message)
+    submissionFailures.value[agent.id] = { ...error.response?.data, error: error.response?.data?.error || error.response?.data?.message || '发布请求失败，请重试。' }
+    if (!quiet) notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
     return 'failed'
   } finally {
     const next = new Set(pushingIds.value)

@@ -19,7 +19,7 @@ func RestartService(cfg *Config) ([]byte, error) {
 	}
 
 	log.Print("Executing restart command")
-	output, err := executeURLCommand(restartCommand)
+	output, err := executeURLCommand(restartCommand, cfg.Token)
 	if err == nil {
 		return output, nil
 	}
@@ -29,7 +29,11 @@ func RestartService(cfg *Config) ([]byte, error) {
 	if strings.Contains(restartCommand, "supervisorctl") && strings.Contains(restartCommand, "restart") {
 		startCommand := strings.Replace(restartCommand, "restart", "start", 1)
 		log.Print("Attempting to start service instead")
-		return executeURLCommand(startCommand)
+		output, startErr := executeURLCommand(startCommand, cfg.Token)
+		if startErr != nil {
+			return nil, withPreviousDiagnostic("Restart and start both failed", err, startErr)
+		}
+		return output, nil
 	}
 
 	return nil, err
@@ -57,7 +61,7 @@ func RestartHandler(cfg *Config) http.HandlerFunc {
 			log.Print("Prepared supervisorctl restart command")
 		}
 
-		_, err = executeURLCommand(restartCommand)
+		_, err = executeURLCommand(restartCommand, cfg.Token)
 		if err != nil {
 			log.Print("Restart command failed")
 
@@ -66,13 +70,10 @@ func RestartHandler(cfg *Config) http.HandlerFunc {
 				startCommand := strings.Replace(restartCommand, "restart", "start", 1)
 				log.Print("Executing start command")
 
-				_, startErr := executeURLCommand(startCommand)
+				_, startErr := executeURLCommand(startCommand, cfg.Token)
 				if startErr != nil {
 					log.Print("Start command also failed")
-					JsonResponse(w, http.StatusInternalServerError, map[string]interface{}{
-						"success": false,
-						"message": "Restart and start both failed",
-					})
+					deploymentFailure(w, http.StatusInternalServerError, withPreviousDiagnostic("Restart and start both failed", err, startErr))
 					return
 				}
 
@@ -81,7 +82,7 @@ func RestartHandler(cfg *Config) http.HandlerFunc {
 				return
 			}
 
-			JsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"success": false, "message": "Restart failed"})
+			deploymentFailure(w, http.StatusInternalServerError, diagnosticFailure("Restart failed", err, nil))
 			return
 		}
 
@@ -91,7 +92,7 @@ func RestartHandler(cfg *Config) http.HandlerFunc {
 }
 
 // executeURLCommand 执行URL或shell格式的命令。
-func executeURLCommand(command string) ([]byte, error) {
+func executeURLCommand(command string, secrets ...string) ([]byte, error) {
 	log.Print("Executing configured command")
 
 	if strings.HasPrefix(command, "http://") || strings.HasPrefix(command, "https://") {
@@ -99,19 +100,20 @@ func executeURLCommand(command string) ([]byte, error) {
 		resp, err := http.Post(command, "application/json", nil)
 		if err != nil {
 			log.Print("Failed to execute URL command")
-			return nil, &safeWrappedError{message: "failed to execute URL command", cause: err}
+			return nil, diagnosticFailure("failed to execute URL command", err, nil, secrets...)
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			var output diagnosticOutput
+			_, readErr := io.Copy(&output, resp.Body)
+			log.Printf("URL command failed with status %d", resp.StatusCode)
+			return nil, diagnosticFailure(fmt.Sprintf("URL command failed with status %d", resp.StatusCode), readErr, output.Bytes(), secrets...)
+		}
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Print("Failed to read URL command response")
-			return nil, &safeWrappedError{message: "failed to read URL command response", cause: err}
-		}
-
-		if resp.StatusCode >= 400 {
-			log.Printf("URL command failed with status %d", resp.StatusCode)
-			return nil, fmt.Errorf("URL command failed with status %d", resp.StatusCode)
+			return nil, diagnosticFailure("failed to read URL command response", err, nil, secrets...)
 		}
 
 		log.Print("URL command executed successfully")
@@ -125,10 +127,10 @@ func executeURLCommand(command string) ([]byte, error) {
 	}
 
 	cmd := exec.Command("sh", "-c", command)
-	output, err := cmd.CombinedOutput()
+	output, err := runDiagnosticCommand(nil, cmd, "shell command", secrets...)
 	if err != nil {
 		log.Print("Shell command failed")
-		return nil, &safeWrappedError{message: "shell command failed", cause: err}
+		return nil, err
 	}
 	log.Print("Shell command executed successfully")
 	return output, nil

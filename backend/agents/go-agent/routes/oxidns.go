@@ -70,9 +70,9 @@ func ValidateOxiDNSServiceDirectory(cfg *Config) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	data, err := exec.CommandContext(ctx, "systemctl", "show", cfg.ServiceUnit, "--property=ExecStart", "--property=WorkingDirectory").Output()
+	data, err := runDiagnosticCommand(ctx, exec.CommandContext(ctx, "systemctl", "show", cfg.ServiceUnit, "--property=ExecStart", "--property=WorkingDirectory"), "inspect OxiDNS service working directory", cfg.Token)
 	if err != nil {
-		return fmt.Errorf("cannot inspect OxiDNS service working directory")
+		return err
 	}
 	return validateOxiDNSSystemdDirectory(string(data), cfg.ConfigPath)
 }
@@ -334,12 +334,8 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, "check", "-c", config, "-d", stage)
 	command.Dir = stage
-	// OxiDNS diagnostics can contain upstream/API credentials. Return only status.
-	if err := command.Run(); err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("OxiDNS native configuration check timed out")
-		}
-		return fmt.Errorf("OxiDNS native configuration check failed; check the configuration and installed core features")
+	if _, err := runDiagnosticCommand(ctx, command, "OxiDNS native configuration check", append(configurationDiagnosticSecrets(doc), cfg.Token)...); err != nil {
+		return err
 	}
 	return verifyManifestFiles(stage, manifest)
 }
