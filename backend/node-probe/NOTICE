@@ -1,0 +1,10 @@
+configflow-node-probe is distributed under GNU GPL version 3.
+Its source is in backend/node-probe in the matching ConfigFlow source release.
+
+This independent executable links Mihomo v1.19.32:
+https://github.com/MetaCubeX/mihomo/tree/v1.19.32
+Copyright and license notices are in LICENSE and the upstream source.
+Dependency source versions and checksums are recorded in go.mod and go.sum.
+
+ConfigFlow communicates with this executable using JSON over stdin/stdout.
+The main application's license is recorded separately in the repository root.

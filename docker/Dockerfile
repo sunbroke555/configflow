@@ -25,6 +25,23 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w" -o /dist/configflow-agent-linux-armv7 .
 
 # ==============================================================================
+# 独立节点测速组件：仅编译目标架构，运行时不启用 TUN 或监听服务
+# ==============================================================================
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS node-probe-builder
+WORKDIR /build
+ENV CGO_ENABLED=0
+COPY backend/node-probe/go.mod backend/node-probe/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY backend/node-probe/ ./
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
+    go build -trimpath -ldflags="-s -w" -o /dist/configflow-node-probe .
+
+# ==============================================================================
 # Stage 2: 构建前端（产物为静态文件，同样只在构建机原生平台构建一次）
 # ==============================================================================
 # vite-plugin-pwa 依赖的 workbox-build 要求 node >= 20；
@@ -72,6 +89,8 @@ COPY docker/supervisord.conf /rootfs/etc/supervisor/conf.d/supervisord.conf
 COPY --chmod=755 docker/sub-store-start.sh docker/configflow-start.sh /rootfs/usr/local/bin/
 COPY --chmod=755 docker/auto_update.py /rootfs/usr/local/bin/configflow-auto-update.py
 COPY --from=go-builder /dist/ /rootfs/opt/configflow/static/agents/
+COPY --from=node-probe-builder /dist/ /rootfs/opt/configflow/node-probe/
+COPY backend/node-probe/LICENSE backend/node-probe/NOTICE /rootfs/opt/configflow/node-probe/
 COPY --from=frontend-builder /app/frontend/dist /rootfs/usr/share/nginx/html
 
 # 写入版本号；预编译字节码，容器首次启动免去编译开销；预压缩前端资源供 nginx gzip_static 直接发送。
@@ -79,6 +98,7 @@ COPY --from=frontend-builder /app/frontend/dist /rootfs/usr/share/nginx/html
 # without a toolchain refuses commits that would mix versions.
 RUN --mount=type=bind,source=frontend,target=/tmp/image-src/frontend \
     --mount=type=bind,source=backend/agents/go-agent,target=/tmp/image-src/go-agent \
+    --mount=type=bind,source=backend/node-probe,target=/tmp/image-src/node-probe \
     sed -i "s/__version__ = \"dev\"/__version__ = \"${VERSION}\"/" /rootfs/app/backend/version.py && \
     python3 -m compileall -q /rootfs/app/backend && \
     find /rootfs/usr/share/nginx/html -type f -size +1k \
@@ -128,7 +148,7 @@ CMD ["/usr/local/bin/configflow-start.sh"]
 # 在 runtime 基础上加入 Go 与 npm：容器启动时拉取分支最新源码，按需重建前端与
 # Agent 后运行（见 docker/auto_update.py）。默认镜像构建请指定 target: runtime。
 # ==============================================================================
-FROM golang:1.21-bookworm AS go-toolchain
+FROM golang:1.26-bookworm AS go-toolchain
 
 FROM runtime AS autoupdate
 COPY --from=go-toolchain /usr/local/go /usr/local/go

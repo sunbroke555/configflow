@@ -173,3 +173,59 @@ it('表格中的订阅预览节点保持只读，不能编辑、删除或选中'
   expect(row.find('button[aria-label="单独测速 日本 订阅预览"]').exists()).toBe(true)
   expect(row.text()).toContain('测试订阅')
 })
+
+it('代理测速分批展示真实进度，失败保留原因，已停用节点不测试', async () => {
+  const records = Array.from({ length: 7 }, (_, i) => ({
+    id: `node-${i}`, name: `node-${i}`, enabled: i !== 6, proxy_string: 'trojan://secret@example.invalid:443'
+  }))
+  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: records } as any)
+  vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
+  let finishFirst!: (value: any) => void
+  let finishSecond!: (value: any) => void
+  vi.mocked(nodeApi.testLatency)
+    .mockReturnValueOnce(new Promise(resolve => { finishFirst = resolve }))
+    .mockReturnValueOnce(new Promise(resolve => { finishSecond = resolve }))
+  await render('card')
+  await click('全部测速')
+  expect(nodeApi.testLatency).toHaveBeenNthCalledWith(1, ['node-0', 'node-1', 'node-2', 'node-3', 'node-4'])
+  expect(wrapper!.text()).toContain('正在测速… 0/6')
+  const results = Object.fromEntries(records.slice(0, 5).map(node => [node.name, { latency: 150 }]))
+  finishFirst({ data: { results, missing: [] } })
+  await flushPromises()
+  expect(wrapper!.text()).toContain('正在测速… 5/6')
+  expect(wrapper!.get('[data-name="node-0"]').text()).toContain('150')
+  expect(nodeApi.testLatency).toHaveBeenNthCalledWith(2, ['node-5'])
+  finishSecond({ data: { results: { 'node-5': { latency: null, error_code: 'auth', error: '代理认证失败，请检查节点凭据' } } } })
+  await flushPromises()
+  const failed = wrapper!.get('[data-name="node-5"]').text()
+  expect(failed).toContain('代理认证失败')
+  expect(failed).not.toContain('超时')
+  expect(wrapper!.text()).toContain('全部测速')
+})
+
+it('组件不可用时提示原因，不将现有结果覆盖为超时', async () => {
+  const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+  vi.mocked(nodeApi.latency).mockResolvedValue({ data: { results: { '香港 手动': { latency: 123 } } } } as any)
+  vi.mocked(nodeApi.testLatency).mockRejectedValue({ response: { data: { message: '独立测速组件未安装' } } })
+  await render('list')
+  await wrapper!.get('button[aria-label="单独测速 香港 手动"]').trigger('click')
+  await flushPromises()
+  expect(error).toHaveBeenCalledWith('独立测速组件未安装', undefined)
+  expect(wrapper!.get('[data-name="香港 手动"]').text()).toContain('123')
+})
+
+it('离开页面后不再提交后续测速批次', async () => {
+  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: Array.from({ length: 6 }, (_, i) => ({
+    id: `n${i}`, name: `n${i}`, enabled: true
+  })) } as any)
+  vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
+  let finish!: (value: any) => void
+  vi.mocked(nodeApi.testLatency).mockReturnValue(new Promise(resolve => { finish = resolve }))
+  await render('list')
+  await click('全部测速')
+  wrapper!.unmount()
+  wrapper = undefined
+  finish({ data: { results: {} } })
+  await flushPromises()
+  expect(nodeApi.testLatency).toHaveBeenCalledTimes(1)
+})

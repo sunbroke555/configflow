@@ -11,6 +11,7 @@ image's own code when there is none: startup must never be blocked.
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,7 @@ REPO = os.environ.get('CONFIGFLOW_UPDATE_REPO', 'thsrite/configflow')
 BRANCH = os.environ.get('CONFIGFLOW_UPDATE_BRANCH', 'main')
 STATE = os.path.join(os.environ.get('DATA_DIR', '/data'), '.auto-update')
 BACKEND, HTML, AGENTS = '/app/backend', '/usr/share/nginx/html', '/opt/configflow/static/agents'
+NODE_PROBE = '/opt/configflow/node-probe'
 IMAGE_COPY = '/app/.image'  # the image's own code, restored when no build is usable
 IMAGE_TREES = '/app/.image-trees.json'  # source fingerprints of the bundled frontend/Agent
 ARCHES = (('amd64', {}), ('arm64', {}), ('armv7', {'GOARCH': 'arm', 'GOARM': '7'}))
@@ -176,6 +178,42 @@ def build_agents(source, manifest):
     return out
 
 
+def build_node_probe(source, manifest):
+    probe = os.path.join(source, 'backend', 'node-probe')
+    if not os.path.isfile(os.path.join(probe, 'go.mod')):
+        manifest['node_probe'] = None
+        return None
+    key = tree_hash(probe, _agent_input)
+    if not os.path.exists('/usr/local/go/bin/go'):
+        if key != image_trees().get('node_probe'):
+            raise MissingToolchain('独立测速组件有改动但镜像里没有 Go')
+        manifest['node_probe'] = None
+        return None
+    arch = {'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64',
+            'armv7l': 'arm', 'armv6l': 'arm'}.get(platform.machine())
+    if not arch:
+        raise MissingToolchain('此 CPU 架构尚未支持独立测速组件')
+    out = os.path.join(STATE, f'node-probe-{key[:16]}-{platform.machine()}')
+    if not os.path.isfile(os.path.join(out, 'configflow-node-probe')):
+        log('building independent node latency worker')
+        staging = out + '.tmp'
+        shutil.rmtree(staging, ignore_errors=True)
+        os.makedirs(staging)
+        env = {'CGO_ENABLED': '0', 'GOOS': 'linux', 'GOARCH': arch,
+               'GOARM': '6' if platform.machine() == 'armv6l' else '7',
+               'GOCACHE': os.path.join(STATE, 'go-cache'),
+               'GOMODCACHE': os.path.join(STATE, 'go-mod'),
+               'PATH': '/usr/local/go/bin:' + os.environ.get('PATH', '')}
+        run(['go', 'build', '-trimpath', '-ldflags=-s -w', '-o',
+             os.path.join(staging, 'configflow-node-probe'), '.'], probe, env=env)
+        for notice in ('LICENSE', 'NOTICE'):
+            if os.path.isfile(os.path.join(probe, notice)):
+                shutil.copy2(os.path.join(probe, notice), staging)
+        os.replace(staging, out)
+    manifest['node_probe'] = out
+    return out
+
+
 def install_requirements(source, manifest):
     requirements = os.path.join(source, 'backend', 'requirements.txt')
     key = hashlib.sha256(open(requirements, 'rb').read()).hexdigest()
@@ -209,14 +247,14 @@ def preserve_image():
         return
     staging = IMAGE_COPY + '.tmp'
     shutil.rmtree(staging, ignore_errors=True)
-    for name, path in (('backend', BACKEND), ('html', HTML), ('agents', AGENTS)):
+    for name, path in (('backend', BACKEND), ('html', HTML), ('agents', AGENTS), ('node_probe', NODE_PROBE)):
         if os.path.isdir(path):
             shutil.copytree(path, os.path.join(staging, name), symlinks=True)
     os.replace(staging, IMAGE_COPY)
 
 
 def restore_image():
-    for name, path in (('backend', BACKEND), ('html', HTML), ('agents', AGENTS)):
+    for name, path in (('backend', BACKEND), ('html', HTML), ('agents', AGENTS), ('node_probe', NODE_PROBE)):
         saved = os.path.join(IMAGE_COPY, name)
         if os.path.isdir(saved):
             replace_dir(saved, path)
@@ -236,7 +274,7 @@ def install(manifest):
         handle.write(text.replace('__version__ = "dev"', f'__version__ = "{BRANCH}-{manifest["sha"][:7]}"'))
     # A component without its own build uses the image's copy, never a stale
     # build left over from an earlier commit.
-    for key, path, saved in (('frontend', HTML, 'html'), ('agents', AGENTS, 'agents')):
+    for key, path, saved in (('frontend', HTML, 'html'), ('agents', AGENTS, 'agents'), ('node_probe', NODE_PROBE, 'node_probe')):
         if manifest.get(key) and os.path.isdir(manifest[key]):
             replace_dir(manifest[key], path)
         elif os.path.isdir(os.path.join(IMAGE_COPY, saved)):
@@ -246,10 +284,10 @@ def install(manifest):
 
 def prune(manifest):
     """Drop sources and builds the manifest no longer points at (caches stay)."""
-    keep = {os.path.basename(manifest.get(k) or '') for k in ('source', 'frontend', 'agents', 'deps')}
+    keep = {os.path.basename(manifest.get(k) or '') for k in ('source', 'frontend', 'agents', 'node_probe', 'deps')}
     for name in os.listdir(STATE):
         path = os.path.join(STATE, name)
-        built = name.startswith(('src-', 'frontend-', 'agents-', 'deps-'))
+        built = name.startswith(('src-', 'frontend-', 'agents-', 'node-probe-', 'deps-'))
         leftover = name.endswith(('.tmp', '.tar.gz'))
         if (built and name not in keep) or leftover:
             if os.path.isdir(path):
@@ -261,7 +299,8 @@ def prune(manifest):
 def record_image(root):
     """Build time: fingerprint the sources the image's frontend/Agent were built from."""
     trees = {'frontend': tree_hash(os.path.join(root, 'frontend')),
-             'agents': tree_hash(os.path.join(root, 'go-agent'), _agent_input)}
+             'agents': tree_hash(os.path.join(root, 'go-agent'), _agent_input),
+             'node_probe': tree_hash(os.path.join(root, 'node-probe'), _agent_input)}
     with open(IMAGE_TREES, 'w') as handle:
         json.dump(trees, handle)
     print(f'recorded image source fingerprints: {trees}')
@@ -293,6 +332,7 @@ def main():
         candidate['source'] = download(sha)
         build_frontend(candidate['source'], candidate)
         build_agents(candidate['source'], candidate)
+        build_node_probe(candidate['source'], candidate)
         install_requirements(candidate['source'], candidate)
         candidate['sha'] = sha
         install(candidate)
