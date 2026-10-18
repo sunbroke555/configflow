@@ -8,9 +8,9 @@
 #   AIO 模式:    ENABLE_MIHOMO=true ENABLE_MOSDNS=true
 
 # ==============================================================================
-# Stage: 构建 Go Agent
+# Stage: 构建 Go Agent（在构建机原生平台交叉编译，不经 QEMU 模拟）
 # ==============================================================================
-FROM golang:1.21-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.21-alpine AS builder
 
 WORKDIR /build
 ENV GOPROXY=https://goproxy.cn,direct
@@ -20,10 +20,13 @@ COPY backend/agents/go-agent/go.mod backend/agents/go-agent/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-# 再复制源码并编译
+# 再复制源码并编译（编译缓存跨构建复用）
 COPY backend/agents/go-agent/ ./
+ARG TARGETOS TARGETARCH TARGETVARIANT
 RUN --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /configflow-agent .
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM=${TARGETVARIANT#v} \
+    go build -trimpath -ldflags="-s -w" -o /configflow-agent .
 
 # ==============================================================================
 # Stage: 服务二进制来源
@@ -32,31 +35,36 @@ FROM metacubex/mihomo:latest AS mihomo-bin
 FROM irinesistiana/mosdns:latest AS mosdns-bin
 FROM svenshi/oxidns:v1.6.1@sha256:78e322898a99900ed63e5aa0c6fe406210597ca5f2380ff2fd5ec8bec3a04381 AS oxidns-bin
 
-# ==============================================================================
-# Final: 统一镜像（Agent + Mihomo + MosDNS）
-# ==============================================================================
-FROM alpine:latest
-
-COPY --from=builder /configflow-agent /usr/local/bin/configflow-agent
-COPY --from=mihomo-bin /mihomo /usr/local/bin/mihomo
-COPY --from=mosdns-bin /usr/bin/mosdns /usr/local/bin/mosdns
-COPY --from=oxidns-bin /usr/local/bin/oxidns /usr/local/bin/oxidns
+# 汇总所有二进制与配置，在最终镜像中只占一层
+FROM scratch AS rootfs
+COPY --chmod=755 --from=builder /configflow-agent /usr/local/bin/configflow-agent
+COPY --chmod=755 --from=mihomo-bin /mihomo /usr/local/bin/mihomo
+COPY --chmod=755 --from=mosdns-bin /usr/bin/mosdns /usr/local/bin/mosdns
+COPY --chmod=755 --from=oxidns-bin /usr/local/bin/oxidns /usr/local/bin/oxidns
 COPY --from=oxidns-bin /etc/oxidns/webui /usr/share/oxidns/webui
 COPY --from=oxidns-bin /usr/share/licenses/oxidns/LICENSE /usr/share/licenses/oxidns/LICENSE
 COPY backend/agents/go-agent/supervisord.conf /etc/supervisor/supervisord.conf
 COPY backend/agents/go-agent/supervisor/ /etc/supervisor/conf.d/
-COPY docker/docker-agent-entrypoint-service.sh /entrypoint.sh
+COPY --chmod=755 docker/docker-agent-entrypoint-service.sh /entrypoint.sh
+
+# ==============================================================================
+# Final: 统一镜像（Agent + Mihomo + MosDNS）
+# 系统包层在前、二进制层在后：上游核心或 Agent 更新时不再重装系统包
+# ==============================================================================
+FROM alpine:latest
 
 # 优先使用国内镜像源加速；镜像源不可用时（DNS 抖动、临时故障）
 # 自动回退官方源，避免 CI 因单一镜像源随机失败
 RUN { sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/repositories && apk update; } || \
     { echo "镜像源不可用，回退官方源" && \
       sed -i 's/mirrors.tuna.tsinghua.edu.cn/dl-cdn.alpinelinux.org/g' /etc/apk/repositories && apk update; } && \
-    apk add --no-cache ca-certificates tzdata su-exec supervisor python3-dev py3-pip bash && \
-    pip3 install --break-system-packages "setuptools<81" && \
+    apk add --no-cache ca-certificates tzdata su-exec supervisor python3 py3-pip bash && \
+    pip3 install --no-cache-dir --disable-pip-version-check --break-system-packages "setuptools<81" && \
+    rm -rf /var/cache/apk/* && \
     mkdir -p /etc/mihomo /etc/mosdns /etc/oxidns/state /etc/supervisor/conf.d /var/log/supervisor /run && \
-    chmod +x /usr/local/bin/configflow-agent /usr/local/bin/mihomo /usr/local/bin/mosdns /usr/local/bin/oxidns /entrypoint.sh && \
     chmod -R 755 /etc/mihomo && chmod -R 775 /etc/mosdns && chmod -R 777 /var/log/supervisor /run
+
+COPY --link --from=rootfs / /
 
 ENV SERVER_URL="" AGENT_IP="" HEARTBEAT_INTERVAL="30" TZ=Asia/Shanghai
 

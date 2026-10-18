@@ -28,9 +28,9 @@
       </div>
       <Toolbar v-model:search="search" class="mb-0 rounded-none border-0 bg-transparent" placeholder="搜索主机、IP、备注、规则，支持正则">
         <template #filters>
-          <div class="col-span-full flex min-w-0 items-center gap-1.5 max-md:w-full">
+          <div class="col-span-full flex min-w-0 flex-wrap items-center gap-1.5 max-md:w-full">
             <Select :model-value="settings.sort" @update:model-value="value => changeSort(String(value) as ConnectionSort)">
-              <SelectTrigger class="min-h-11 w-36 min-w-0 max-md:flex-1" aria-label="连接排序字段"><SelectValue /></SelectTrigger>
+              <SelectTrigger class="min-h-11 w-36 min-w-0 max-md:flex-[1_1_8rem]" aria-label="连接排序字段"><SelectValue /></SelectTrigger>
               <SelectContent class="max-h-80">
                 <SelectItem v-for="option in CONNECTION_SORT_OPTIONS" :key="option.key" :value="option.key">{{ option.label }}</SelectItem>
               </SelectContent>
@@ -39,6 +39,15 @@
               @click="settings.direction = settings.direction === 'asc' ? 'desc' : 'asc'">
               <ArrowUp v-if="settings.direction === 'asc'" class="size-4" /><ArrowDown v-else class="size-4" />
             </Button>
+            <Select :model-value="settings.groupBy || 'none'" @update:model-value="value => setGroup(String(value))">
+              <SelectTrigger class="min-h-11 w-40 min-w-0 max-md:flex-[1_1_8rem]" :class="settings.groupBy ? 'border-primary-accent text-primary-accent' : ''" aria-label="连接分组">
+                <span class="flex min-w-0 items-center gap-2"><Layers class="size-4" :class="settings.groupBy ? 'text-primary-accent' : 'text-muted-foreground'" /><SelectValue class="truncate" /></span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">不分组</SelectItem>
+                <SelectItem v-for="field in CONNECTION_GROUP_FIELDS" :key="field" :value="field">按{{ columnLabel(field) }}分组</SelectItem>
+              </SelectContent>
+            </Select>
             <Popover>
               <PopoverTrigger as-child>
                 <Button variant="outline" class="min-h-11 shrink-0 gap-1.5 px-3" :class="filterCount ? 'border-primary-accent text-primary-accent' : ''" :aria-label="`筛选连接${filterCount ? `，${filterCount} 项条件` : ''}`">
@@ -81,26 +90,19 @@
           </div>
         </template>
       </Toolbar>
-      <div v-if="filtering" class="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-1 text-xs text-muted-foreground">
-        <span>匹配 <span class="num text-foreground">{{ rows.length }}</span> 条连接<span v-if="filters.exclude.trim()"> · 已应用隐藏条件</span></span>
-        <Button variant="ghost" class="min-h-11 px-2 text-xs" @click="clearFilters"><X class="size-3.5" />清除筛选</Button>
+      <div v-if="filtering || settings.groupBy" class="flex min-w-0 flex-wrap items-center justify-between gap-x-2 border-t border-border px-3 py-1 text-xs text-muted-foreground">
+        <span class="min-w-0">
+          <template v-if="settings.groupBy">按{{ columnLabel(settings.groupBy) }}分组 · <span class="num text-foreground">{{ groups.length }}</span> 组 · </template>
+          {{ filtering ? '匹配' : '共' }} <span class="num text-foreground">{{ rows.length }}</span> 条连接<span v-if="filters.exclude.trim()"> · 已应用隐藏条件</span>
+        </span>
+        <div class="flex flex-wrap items-center gap-1">
+          <template v-if="settings.groupBy">
+            <Button variant="ghost" class="min-h-11 px-2 text-xs" :disabled="!expanded.size" @click="expanded = new Set()">全部收起</Button>
+            <Button variant="ghost" class="min-h-11 px-2 text-xs" @click="setGroup('none')"><X class="size-3.5" />取消分组</Button>
+          </template>
+          <Button v-if="filtering" variant="ghost" class="min-h-11 px-2 text-xs" @click="clearFilters"><X class="size-3.5" />清除筛选</Button>
+        </div>
       </div>
-    </div>
-
-    <div class="connection-group-toolbar mb-3 flex min-w-0 flex-wrap items-center gap-2">
-      <Select :model-value="settings.groupBy || 'none'" @update:model-value="value => setGroup(String(value))">
-        <SelectTrigger class="w-40 min-h-9 max-md:min-h-11" aria-label="连接分组"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="none">不分组</SelectItem>
-          <SelectItem v-for="field in CONNECTION_GROUP_FIELDS" :key="field" :value="field">按{{ columnLabel(field) }}分组</SelectItem>
-        </SelectContent>
-      </Select>
-      <template v-if="settings.groupBy">
-        <span class="text-xs text-muted-foreground">{{ groups.length }} 组 · {{ rows.length }} 条连接</span>
-        <Button variant="ghost" size="sm" :disabled="!expanded.size" @click="expanded = new Set()">全部收起</Button>
-        <Button variant="ghost" size="sm" @click="setGroup('none')"><X class="size-3.5" />取消分组</Button>
-      </template>
-      <span v-if="hiddenColumnCount" class="ml-auto text-xs text-muted-foreground">已收起 {{ hiddenColumnCount }} 列 · 点击连接查看详情</span>
     </div>
 
     <div v-if="notesError" role="alert" class="mb-3 flex flex-wrap items-center gap-2 text-xs text-warning-accent">
@@ -181,7 +183,7 @@
         </table>
       </div>
       <div class="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
-        <span class="num">共 {{ rows.length }} 条连接<span v-if="settings.groupBy"> · {{ groups.length }} 组</span><span v-if="pageCount > 1"> · {{ (page - 1) * PAGE_SIZE + 1 }}–{{ Math.min(page * PAGE_SIZE, pageTotal) }}{{ settings.groupBy ? ' 组' : '' }}</span></span>
+        <span class="num">共 {{ rows.length }} 条连接<span v-if="settings.groupBy"> · {{ groups.length }} 组</span><span v-if="pageCount > 1"> · {{ (page - 1) * PAGE_SIZE + 1 }}–{{ Math.min(page * PAGE_SIZE, pageTotal) }}{{ settings.groupBy ? ' 组' : '' }}</span><span v-if="hiddenColumnCount" class="font-sans"> · 已收起 {{ hiddenColumnCount }} 列，点击连接查看详情</span></span>
         <div v-if="pageCount > 1" class="flex items-center gap-1">
           <Button variant="ghost" size="icon" class="size-11" aria-label="上一页连接" :disabled="page === 1" @click="page--"><ChevronLeft class="size-4" /></Button>
           <span class="num px-1">{{ page }} / {{ pageCount }}</span>
@@ -198,7 +200,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useElementSize, useMediaQuery } from '@vueuse/core'
-import { ChevronDown, ZoomIn, ZoomOut, ArrowDown, ArrowUp, ArrowUpDown, Cable, ChevronLeft, ChevronRight, Columns3, Ellipsis, Eraser, ListFilter, Loader2, Pencil, TriangleAlert, X } from '@lucide/vue'
+import { ChevronDown, Layers, ZoomIn, ZoomOut, ArrowDown, ArrowUp, ArrowUpDown, Cable, ChevronLeft, ChevronRight, Columns3, Ellipsis, Eraser, ListFilter, Loader2, Pencil, TriangleAlert, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Checkbox } from '@/components/ui/checkbox'
