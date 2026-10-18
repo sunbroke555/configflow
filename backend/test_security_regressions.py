@@ -458,6 +458,7 @@ def test_rule_proxy_uses_original_hostname_tls_and_timeouts(monkeypatch):
     assert mosdns._fetch_remote_content(url) == "domain:example.com"
     assert calls == [(url, {
         "timeout": (3, 10), "stream": True, "allow_redirects": False, "verify": True,
+        "proxies": {"http": "", "https": ""},
     })]
     assert response.closed
 
