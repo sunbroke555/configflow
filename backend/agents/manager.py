@@ -236,6 +236,40 @@ class AgentManager:
 
         return self._update_agents(update, updates.get('profile_id'))
 
+    def rebind_profile_agents(self, source_profile_id, target_profile_id, expected_agent_ids):
+        """Move exactly the reviewed bindings together, under the deployment transaction lock."""
+        from backend.common.config_repository import ProfileInUse, ProfileValidationError
+
+        self.repository.validate_profile_id(source_profile_id)
+        self.repository.validate_profile_id(target_profile_id)
+        if source_profile_id == target_profile_id:
+            raise ProfileValidationError('请选择其他配置空间')
+        if (not isinstance(expected_agent_ids, list) or not expected_agent_ids
+                or any(not isinstance(item, str) or not item for item in expected_agent_ids)
+                or len(set(expected_agent_ids)) != len(expected_agent_ids)):
+            raise ProfileValidationError('请提供已确认的 Agent ID 列表')
+
+        def rebind(agents):
+            source = self.repository._profile_metadata(source_profile_id)
+            target = self.repository._profile_metadata(target_profile_id)
+            default_id = self.repository.default_profile_id()
+            bound = [agent for agent in agents if (agent.get('profile_id') or default_id) == source_profile_id]
+            if {agent['id'] for agent in bound} != set(expected_agent_ids):
+                raise ProfileInUse('Agent 绑定已变化，请刷新列表后重新确认')
+            blocked = [agent.get('name') or agent['id'] for agent in bound
+                       if _upgrade_busy(agent) or any(task.get('status') not in ('succeeded', 'failed', 'rolled_back')
+                                                     for task in agent.get('deployments', {}).values())]
+            if blocked:
+                raise AgentDeploymentConflict(f'以下 Agent 正在发布、更新或等待恢复，请完成后再改绑：{"、".join(blocked)}')
+            result = {'from_profile': source, 'to_profile': target,
+                      'agents': [self.repository.agent_binding_summary(agent) for agent in bound]}
+            for agent in bound:
+                agent['profile_id'] = target_profile_id
+                agent['updated_at'] = datetime.now().isoformat()
+            return result
+
+        return self._update_agents(rebind)
+
     def delete_agent(self, agent_id: str) -> bool:
         """删除 Agent"""
         def delete(agents):

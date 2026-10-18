@@ -157,6 +157,20 @@ const getBaseUrl = () => {
 const profilePath = (profileId: string, path: string = '') =>
   `/profiles/${encodeURIComponent(profileId)}${path}`
 
+export interface ProfileAgentBinding {
+  id: string
+  name: string
+  host: string
+  port?: number | null
+  service_type: string
+}
+
+export interface ProfileRebindResult {
+  from_profile: { id: string; name: string }
+  to_profile: { id: string; name: string }
+  agents: ProfileAgentBinding[]
+}
+
 export const profileApi = {
   list: () => api.get('/profiles'),
   get: (id: string) => api.get(profilePath(id)),
@@ -164,6 +178,9 @@ export const profileApi = {
   update: (id: string, data: any) => api.put(profilePath(id), data),
   delete: (id: string, newDefault?: string) =>
     api.delete(profilePath(id), newDefault ? { params: { new_default: newDefault } } : undefined),
+  agentBindings: (id: string) => api.get<{ profile: { id: string; name: string }; agents: ProfileAgentBinding[] }>(profilePath(id, '/agents')),
+  rebindAgents: (id: string, targetProfileId: string, agentIds: string[]) =>
+    api.post<ProfileRebindResult>(profilePath(id, '/agents/rebind'), { target_profile_id: targetProfileId, agent_ids: agentIds }),
   clone: (id: string, data: any) => api.post(profilePath(id, '/clone'), data),
   export: (id: string) => api.get(profilePath(id, '/export'), { responseType: 'blob' }),
   import: (id: string, data: any) => api.post(profilePath(id, '/import'), data),

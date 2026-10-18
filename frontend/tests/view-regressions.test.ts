@@ -24,7 +24,7 @@ vi.mock('@/api', () => ({
   { id: 'group-one', name: 'Synthetic strategy', type: 'select', enabled: true, manual_nodes: ['DIRECT'] }
  ] })), create: vi.fn(async () => ({})), update: vi.fn(async () => ({})) },
  nodeApi: { getAll: vi.fn(async () => ({ data: [{ id: 'node-one', name: 'Synthetic manual node' }] })) },
- profileApi: { list: vi.fn(), delete: vi.fn() }
+ profileApi: { list: vi.fn(), delete: vi.fn(), agentBindings: vi.fn() }
 }))
 const wrappers: ReturnType<typeof mount>[] = []
 // jsdom has no layout/scrolling; replace only that absent browser primitive.
@@ -50,6 +50,9 @@ beforeEach(() => {
   { id: 'default', name: 'Synthetic default' }, { id: 'target', name: 'Synthetic target' }
  ] } as any)
  vi.mocked(profileApi.delete).mockResolvedValue({} as any)
+ vi.mocked(profileApi.agentBindings).mockImplementation(async id => ({
+  data: { profile: { id, name: `Synthetic ${id}` }, agents: [] }
+ } as any))
 })
 afterEach(() => {
  wrappers.splice(0).forEach(w => w.unmount())
@@ -277,6 +280,7 @@ describe.each([
   await flushPromises()
   expect(feedback.confirmState.open).toBe(true)
   expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('Synthetic target')
+  expect(profileApi.agentBindings).toHaveBeenCalledExactlyOnceWith('target')
   await clickText('删除')
   console.log('DELETE_TRACE', JSON.stringify({ version, events, calls: vi.mocked(profileApi.delete).mock.calls, remaining: w.text().includes('Synthetic target') }))
   if (version.startsWith('legacy')) {
@@ -320,6 +324,7 @@ describe('current Profiles default profile deletion', () => {
   const dialog = document.querySelector('[role="dialog"]')
   expect(dialog?.textContent).toContain('删除默认配置空间')
   expect(dialog?.textContent).toContain('Synthetic target')
+  expect(profileApi.agentBindings).toHaveBeenCalledExactlyOnceWith('default')
   await clickText('删除')
   expect(profileApi.delete).toHaveBeenCalledExactlyOnceWith('default', 'target')
  })
@@ -335,7 +340,7 @@ describe('current Profiles API rejection feedback', () => {
   await w.findAll('button[aria-label="删除"]').at(-1)!.trigger('click')
   await clickText('删除')
   expect(profileApi.delete).toHaveBeenCalledExactlyOnceWith('target')
-  expect(error).toHaveBeenCalledWith('Synthetic bound-profile denial')
+  expect(error).toHaveBeenCalledWith('配置空间删除失败', 'Synthetic bound-profile denial')
   expect(w.text()).toContain('Synthetic target')
  })
 })
