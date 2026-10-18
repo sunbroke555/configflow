@@ -1,4 +1,5 @@
 """Provider downloads answer within Mihomo's 20 s timeout using the last good content."""
+from concurrent.futures import Future
 import threading
 import time
 
@@ -39,6 +40,32 @@ def _wait_for(predicate):
     while not predicate() and time.monotonic() < deadline:
         time.sleep(0.02)
     assert predicate()
+
+
+def test_immediate_render_clears_flight_without_reentering_locked_callback(tmp_path, monkeypatch):
+    _, app = _setup(tmp_path, monkeypatch)
+    lock = threading.Lock()
+    flights = {}
+
+    class CompletedFuture(Future):
+        def add_done_callback(self, callback):
+            # Fail immediately with the old implementation instead of hanging
+            # the test process when Future invokes the callback synchronously.
+            assert not lock.locked(), "completed callback registered while holding flight lock"
+            super().add_done_callback(callback)
+
+    class ImmediatePool:
+        def submit(self, run):
+            future = CompletedFuture()
+            future.set_result(run())
+            return future
+
+    monkeypatch.setattr(provider_response, "_pool", ImmediatePool())
+    monkeypatch.setattr(provider_response, "_flights_lock", lock)
+    monkeypatch.setattr(provider_response, "_flights", flights)
+    for content in ("proxies: [first]", "proxies: [second]"):
+        assert _serve(app, lambda: Response(content, mimetype="text/yaml")) == (200, content, None)
+        assert flights == {}
 
 
 def test_slow_render_returns_last_good_and_refreshes_it_in_the_background(tmp_path, monkeypatch):

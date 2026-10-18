@@ -75,12 +75,17 @@ def serve_provider(kind, item_id, profile_id, config_data, render):
                                                     response.get_data(as_text=True))
             return response
 
+    created = False
     with _flights_lock:
         future = _flights.get(key)
         if future is None:
             future = _pool.submit(run)
             _flights[key] = future
-            future.add_done_callback(lambda done, key=key: _forget(key, done))
+            created = True
+    # Completed futures run callbacks immediately, so _forget must be able to
+    # acquire the lock even when rendering finished before registration.
+    if created:
+        future.add_done_callback(lambda done, key=key: _forget(key, done))
     try:
         return _copy(future.result(timeout=RESPONSE_SECONDS if fallback else None))
     except FutureTimeout:
