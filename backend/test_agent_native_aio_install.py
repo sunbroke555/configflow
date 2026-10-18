@@ -91,6 +91,8 @@ cfg = json.load(open(args[args.index('-config') + 1]))
 with open(os.environ['EVENTS'], 'a') as log:
     log.write('agent ' + cfg['service_type'] + ' ' + args[-1] + ' ' + args[1] + '\\n')
 if '-check-environment' in args:
+    if os.environ.get('VERBOSE_ENVIRONMENT') == 'yes':
+        print('verbose-environment-detail-for-log-only')
     assert '-environment-peer-config' in args, 'AIO must inspect both services together'
     peer_path = args[args.index('-environment-peer-config') + 1]
     peer = json.load(open(peer_path))
@@ -152,12 +154,18 @@ esac
             (directory / "keep-state").write_text(service)
             (units / (f"configflow-agent-{service}" + (".service" if manager == "systemd" else ""))).write_text("# old Agent unit\n")
     env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
-               EVENTS=str(events), FAKE_AGENT=str(agent))
+               EVENTS=str(events), FAKE_AGENT=str(agent), CONFIGFLOW_INSTALL_LOG_DIR=str(tmp_path))
     return installer, env, units
 
 
 def run(installer, env, choice="1"):
     return subprocess.run(["sh", str(installer)], input=choice + "\n", env=env, text=True, capture_output=True)
+
+
+def detail_output(result):
+    path = next(line.removeprefix("详细日志：") for line in result.stdout.splitlines()
+                if line.startswith("详细日志："))
+    return Path(path).read_text()
 
 
 @pytest.mark.parametrize("manager", ["systemd", "openrc"])
@@ -240,6 +248,25 @@ def test_native_aio_install_isolated_identity_and_repeatable(tmp_path, manager, 
                        for service in ("mihomo", "oxidns") for line in events)
         assert not (tmp_path / "agent/config-mihomo.json").exists()
         assert not (tmp_path / "local-bin/configflow-agent").exists()
+
+
+def test_native_aio_summary_preserves_existing_core_dns_guidance_without_verbose_output(tmp_path):
+    installer, env, _ = harness(tmp_path)
+    env["VERBOSE_ENVIRONMENT"] = "yes"
+    result = run(installer, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "请输入选项 [1-3]: " in result.stdout
+    assert "检查安装环境与依赖" in result.stdout
+    assert "检查核心接管与下载 Agent" in result.stdout
+    assert "检查运行环境" in result.stdout
+    assert "安装并启动 Agent 服务" in result.stdout
+    assert "Mihomo Agent：端口 8080，服务已启动" in result.stdout
+    assert "OxiDNS Agent：端口 8082，服务已启动" in result.stdout
+    assert "已有核心配置已保留，请核对 DNS 链路" in result.stdout
+    assert "先在 ConfigFlow 发布" not in result.stdout
+    assert "安装完成" in result.stdout and "详细日志：" in result.stdout
+    assert "verbose-environment-detail-for-log-only" not in result.stdout + result.stderr
+    assert "verbose-environment-detail-for-log-only" in detail_output(result)
 
 
 @pytest.mark.parametrize("manager", ["systemd", "openrc"])

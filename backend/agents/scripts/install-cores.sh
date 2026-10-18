@@ -78,6 +78,7 @@ while [ "$#" -gt 0 ]; do
 done
 case "$CORE_SELECTION" in both) REQUESTED_CORES='mihomo oxidns' ;; mihomo|oxidns) REQUESTED_CORES=$CORE_SELECTION ;; *) fail '无效的 --core 参数：请选择 both、mihomo 或 oxidns。' ;; esac
 
+cf_step '检查核心安装环境与依赖'
 [ "$(id -u)" -eq 0 ] || fail '请使用 root 运行，例如 sudo sh install-cores.sh。'
 [ "$(uname -s)" = Linux ] || fail '仅支持 Linux（systemd 或 OpenRC）。'
 case "$(uname -m)" in
@@ -124,6 +125,9 @@ for service in $REQUESTED_CORES; do
     fi
     if [ -n "${existing_core}" ]; then
         printf '%s\n' "跳过已有 ${service}：${existing_core}。保留程序、配置和服务，不升级或重启；尚未验证其完整性与运行状态，残留文件也会跳过。需要管理时请使用 Agent 接入。"
+        if [ "$service" = mihomo ]; then core_label=Mihomo; else core_label=OxiDNS; fi
+        cf_fact "service_$service" "${core_label}：已有部署，已保留（运行状态未验证）"
+        cf_note "existing_$service" "${core_label} 的已有程序、配置与服务均跳过；DNS 和运行状态未单独验证。"
     else
         NEW_CORES="${NEW_CORES:+${NEW_CORES} }$service"
         if [ "$service" = mihomo ]; then NEW_MIHOMO=true; DNS_PORTS="${DNS_PORTS:+$DNS_PORTS }1053"
@@ -132,6 +136,9 @@ for service in $REQUESTED_CORES; do
 done
 if [ -z "${NEW_CORES}" ]; then
     printf '%s\n' '所选核心均已有程序、配置或服务，本次全部跳过；未下载、升级或重启核心。'
+    cf_step_done '所选核心已有部署，全部跳过'
+    cf_fact dns 'DNS：未验证（本次没有新装核心）'
+    cf_complete '核心检查完成'
     COMMITTED=true
     exit 0
 fi
@@ -225,6 +232,8 @@ show_tun_disabled_guidance() {
         'PVE LXC：在 PVE 宿主机执行 modprobe tun，检查 pct config <CTID> 的空闲 devN 槽，再用 pct set <CTID> --devN /dev/net/tun 添加设备（例如空闲的 dev0）；完整停止并启动容器后，在容器内复查。不要改为特权容器或放宽整个设备目录权限。' \
         '权限：保留容器的 CAP_NET_ADMIN；核对 Mihomo 服务的 CapabilityBoundingSet、DeviceAllow=/dev/net/tun rw 及设备隔离策略。若接口重名，确认已有接口的归属后更改 Mihomo 的 tun.device。' \
         '修复后：在面板的 Mihomo 基础配置中设置 tun.enable: true，保留 DNS 监听及 TUN DNS 劫持端口 1053，再保存并发布；未接入 Agent 时修改 /etc/mihomo/config.yaml 并重启 mihomo 服务。重复运行本安装脚本会保留已有配置，不会自动开启 TUN。'
+    cf_fact tun 'TUN：已关闭'
+    cf_note tun "TUN 未启用：${TUN_REASON}修复步骤见详细日志。"
 }
 
 # Probe without creating an interface, changing routes, or writing sysctls.
@@ -274,13 +283,21 @@ check_tun_environment() {
     forwarding=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || true)
     if [ "$forwarding" = 1 ]; then
         printf '%s\n' 'IPv4 转发：当前为 1；重启后的持久化状态尚未验证。'
+        cf_note forwarding 'IPv4 转发：当前已开启；重启后是否保持尚未确认。'
     else
         if [ "$forwarding" = 0 ]; then forwarding_status='当前为 0'; else forwarding_status='状态无法读取'; fi
         printf '%s\n' "IPv4 转发：${forwarding_status}。这不影响本机 TUN 的选择；仅当此 Linux/LXC 承担旁路网关或路由转发时需要开启。" \
             '旁路网关修复：在该 Linux/LXC 内执行 sysctl -w net.ipv4.ip_forward=1，并把 net.ipv4.ip_forward=1 写入 /etc/sysctl.d/99-configflow-forward.conf；检查其他 sysctl 文件是否将其改回 0，重启后用 sysctl net.ipv4.ip_forward 验证。PVE 仅做二层网桥时不因此需要开启宿主机转发。'
+        cf_note forwarding "IPv4 转发：${forwarding_status}，持久化未验证；作为旁路网关时需开启，修复步骤见详细日志。"
     fi
 }
 if [ "$NEW_MIHOMO" = true ]; then check_tun_environment; fi
+cf_step_done "完成（${INIT_SYSTEM}）"
+case "$NEW_CORES" in
+    'mihomo oxidns') cf_step '下载安装 Mihomo 与 OxiDNS 核心' ;;
+    mihomo) cf_step '下载安装 Mihomo 核心' ;;
+    oxidns) cf_step '下载安装 OxiDNS 核心' ;;
+esac
 STAGE=$(mktemp -d /tmp/configflow-cores.XXXXXX)
 chmod 700 "$STAGE"
 for service in ${NEW_CORES}; do mkdir "$STAGE/$service"; done
@@ -498,6 +515,8 @@ if [ "$TUN_ENABLED" = true ]; then
     # Allow slower machines to finish listener creation before falling back.
     if wait_for_tun_interface; then
         printf '%s\n' '已确认 Mihomo 创建并持有 configflow-tun TUN 接口；此检查不代表全部透明代理路由或代理节点已配置。'
+        cf_fact tun_verified yes
+        cf_fact tun 'TUN：已启用，configflow-tun 已创建并由 Mihomo 持有'
     else
         show_service_logs mihomo
         printf '%s\n' '未能确认 Mihomo 实际创建并持有 TUN 接口；将关闭本次初始配置的 TUN，保留 DNS 服务安装。'
@@ -515,6 +534,8 @@ if [ "$TUN_ENABLED" = true ]; then
         show_tun_disabled_guidance
     fi
 fi
+cf_step_done '核心服务已启动'
+cf_step '验证新装核心的 DNS'
 if command -v dig >/dev/null 2>&1; then
     for port in $DNS_PORTS; do
         if [ "$port" = 53 ] && [ "$CORE_SELECTION" = both ]; then
@@ -532,9 +553,14 @@ if command -v dig >/dev/null 2>&1; then
         done
     done
     printf '%s\n' "本次新装核心（${NEW_CORES}）的 UDP/TCP DNS 查询均已通过。"
+    cf_fact dns 'DNS 验证：UDP/TCP 查询通过（仅本次新装核心）'
+    cf_step_done 'UDP/TCP 查询均通过'
 else
     printf '%s\n' '服务已启动，实际 DNS 解析尚未验证（未安装 dig）。可安装 dnsutils（Debian/Ubuntu）或 bind-tools（Alpine）后运行：'
     for port in $DNS_PORTS; do printf '%s\n' "dig @127.0.0.1 -p $port example.com; dig @127.0.0.1 -p $port example.com +tcp"; done
+    cf_step_done '未验证（缺少 dig）'
+    cf_fact dns 'DNS：服务已启动，实际解析未验证'
+    cf_note dns_validation '缺少 dig，未验证 DNS 解析；安装 dnsutils 或 bind-tools 后按详细日志中的命令检查。'
 fi
 for service in ${NEW_CORES}; do
     printf '%s\n' "$receipt" > "$STAGE/receipt"
@@ -542,15 +568,35 @@ for service in ${NEW_CORES}; do
     write_new_file "$STAGE/receipt" "/etc/$service/.configflow-core-install"
 done
 COMMITTED=true
-for service in ${NEW_CORES}; do printf '%s\n' "${service} 已安装并设置开机启动，配置：/etc/$service/config.yaml。"; done
+for service in ${NEW_CORES}; do
+    printf '%s\n' "${service} 已安装并设置开机启动，配置：/etc/$service/config.yaml。"
+    if [ "$service" = mihomo ]; then core_label=Mihomo; else core_label=OxiDNS; fi
+    cf_fact "core_${service}_new" yes
+    cf_fact "service_$service" "${core_label}：新装，服务运行中，已设开机启动"
+done
+if [ "$NEW_MIHOMO" = true ] && [ "$NEW_OXIDNS" = true ]; then
+    cf_fact core_dns_ports 'DNS：OxiDNS :53 → Mihomo :1053 → 上游 DNS'
+elif [ "$NEW_OXIDNS" = true ]; then
+    if [ "$CORE_SELECTION" = both ]; then cf_fact core_dns_ports 'OxiDNS DNS：:53 → 127.0.0.1:1053（已有 Mihomo）'
+    else cf_fact core_dns_ports 'OxiDNS DNS：:53 → 公共 DNS'; fi
+elif [ "$NEW_MIHOMO" = true ]; then
+    cf_fact core_dns_ports 'Mihomo DNS：:1053 → 公共 DNS'
+fi
 if [ "$NEW_OXIDNS" = true ]; then
     if [ "$CORE_SELECTION" = both ]; then printf '%s\n' 'DNS 分工：OxiDNS 53 → Mihomo 1053 → 上游 DNS；已有核心的配置保持原样。'
     else printf '%s\n' '独立 OxiDNS：53 → 公共 DNS 223.5.5.5 / 119.29.29.29。'; fi
 elif [ "$CORE_SELECTION" = both ]; then
     printf '%s\n' '已有 OxiDNS 的上游保持原样。要使用 AIO DNS 链路，请在其配置中将远端 DNS 上游设为 127.0.0.1:1053，再通过 Agent 发布或自行重启 OxiDNS。'
+    cf_note oxidns_upstream '已有 OxiDNS 的上游保持原样；使用同机 DNS 链路时，请确认远端上游为 127.0.0.1:1053。'
 fi
 if [ "$NEW_MIHOMO" = true ]; then
     printf '%s\n' '新 Mihomo 在 1053 提供 DNS，当前没有代理节点，流量按 DIRECT 直连。'
     printf '%s\n' "安装结果：tun.enable=${TUN_ENABLED}。首次从面板发布前，请检查 Mihomo 基础配置的 tun.enable 与本次检测结果一致；发布以面板配置为准。"
+    cf_note direct '当前没有代理节点，Mihomo 流量使用 DIRECT 直连。'
+    cf_note panel_tun '后续发布配置时，TUN 设置以面板配置为准。'
 fi
-printf '%s\n' '本脚本只安装所选的缺失核心；如需面板管理，请继续使用独立的 Agent 接入安装。'
+if [ "${CF_OUTPUT_OWNER:-true}" = true ]; then
+    printf '%s\n' '本脚本只安装所选的缺失核心；如需面板管理，请继续使用独立的 Agent 接入安装。'
+    cf_note agent '如需面板管理，请继续安装对应 Agent。'
+fi
+cf_complete '核心安装完成'

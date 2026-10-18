@@ -36,7 +36,7 @@ def test_combined_api_reuses_selected_canonical_installer_and_has_valid_shell(cl
     assert generate_core_install_script().rstrip() in source
     assert f"(\nset -- --core {service}\n" in source
     assert source.index('case "$choice"') < source.index('case "$(uname -m)"') < source.index(f"set -- --core {service}")
-    assert source.index(f"set -- --core {service}") < source.index('echo "下载 Go Agent 二进制..."')
+    assert source.index(f"set -- --core {service}") < source.index('cf_step "下载并校验 Agent"')
     script = tmp_path / "install.sh"
     script.write_text(source)
     result = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True)
@@ -99,10 +99,10 @@ exit 0
 '''
 
 
-def harness(tmp_path, monkeypatch, service="mihomo", manager="systemd", real_core=False, **settings):
+def harness(tmp_path, monkeypatch, service="mihomo", manager="systemd", real_core=False, install_core=True, **settings):
     if not real_core:
         monkeypatch.setattr("backend.agents.core_install_script.generate_core_install_script", lambda: FAKE_CORE)
-    source = generated(service, install_core=True)
+    source = generated(service, install_core=install_core)
     root = tmp_path / "root"
     for relative in ("etc/systemd/system", "etc/init.d", "usr/local/bin", "sbin", "run", "opt", "var/log"):
         (root / relative).mkdir(parents=True)
@@ -151,6 +151,10 @@ if args == ['-h']:
     raise SystemExit(0)
 cfg = json.load(open(args[args.index('-config') + 1]))
 assert cfg['service_manager'] == os.environ['TEST_MANAGER']
+if '-check-environment' in args and os.environ.get('VERBOSE_ENVIRONMENT') == 'yes':
+    print('verbose-environment-detail-for-log-only')
+if '-check-deployments' in args and os.environ.get('PENDING_DEPLOYMENT') == 'yes':
+    print('2026/10/18 12:00:00 Deployment check requires attention: pending publication; inspect its journal', file=sys.stderr)
 ''')
     fake_agent.chmod(0o755)
     manager_body = '''printf '%s %s\\n' "$(basename "$0")" "$*" >> "$EVENTS"
@@ -162,6 +166,10 @@ case "$*" in *--property=LoadState*) printf '%s\\n' "${CORE_LOAD_STATE:-loaded}"
         "wget": 'echo agent-download >> "$EVENTS"\n[ "${FAIL_AGENT_DOWNLOAD:-}" != yes ] || exit 47\ncp "$FAKE_AGENT" "$3"\n',
         "systemctl": manager_body, "rc-service": manager_body, "rc-update": manager_body,
     }
+    if not install_core and manager == "systemd":
+        # The legacy Agent-only detector chooses OpenRC when both are present.
+        # Model the selected init instead of the combined-mode priority fixture.
+        del mocks["rc-service"], mocks["rc-update"]
     for name, body in mocks.items():
         command = commands / name
         command.write_text("#!/bin/sh\nset -eu\n" + body)
@@ -170,13 +178,20 @@ case "$*" in *--property=LoadState*) printf '%s\\n' "${CORE_LOAD_STATE:-loaded}"
     events.touch()
     env = dict(os.environ, PATH=f"{commands}:{root}/usr/local/bin:" + os.environ["PATH"],
                EVENTS=str(events), FAKE_AGENT=str(fake_agent), TEST_CORE=service,
-               TEST_MANAGER=manager, CORE_COMPLETED=str(tmp_path / "core-completed"), **settings)
+               TEST_MANAGER=manager, CORE_COMPLETED=str(tmp_path / "core-completed"),
+               CONFIGFLOW_INSTALL_LOG_DIR=str(tmp_path), **settings)
     return script, env, root, events
 
 
 def run(script, env, choice="1"):
     return subprocess.run(["/bin/sh", str(script)], input=choice + "\n", env=env,
                           text=True, capture_output=True)
+
+
+def detail_output(result):
+    path = next(line.removeprefix("详细日志：") for line in result.stdout.splitlines()
+                if line.startswith("详细日志："))
+    return Path(path).read_text()
 
 
 @pytest.mark.parametrize("service", ["mihomo", "oxidns"])
@@ -192,6 +207,44 @@ def test_core_completes_before_agent_with_isolated_state(tmp_path, monkeypatch, 
     # Both manager commands exist; a running systemd must win in combined mode.
     unexpected_manager = "rc-service" if manager == "systemd" else "systemctl"
     assert unexpected_manager not in log
+
+
+@pytest.mark.parametrize("service,label", [("mihomo", "Mihomo"), ("oxidns", "OxiDNS"), ("mosdns", "MosDNS")])
+def test_single_agent_only_prints_progress_and_service_summary(tmp_path, monkeypatch, service, label):
+    script, env, root, events = harness(tmp_path, monkeypatch, service, install_core=False,
+                                      VERBOSE_ENVIRONMENT="yes")
+    result = run(script, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "请输入选项 [1-3]: " in result.stdout
+    assert "检查安装环境与依赖" in result.stdout
+    assert "下载并校验 Agent" in result.stdout
+    assert "检查核心接管与运行环境" in result.stdout
+    assert "安装并启动 Agent 服务" in result.stdout
+    assert f"{label} Agent：端口 8080，服务已启动" in result.stdout
+    assert "安装完成" in result.stdout and "详细日志：" in result.stdout
+    assert "verbose-environment-detail-for-log-only" not in result.stdout + result.stderr
+    assert "verbose-environment-detail-for-log-only" in detail_output(result)
+    assert "core --core" not in events.read_text()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_single_agent_pending_publication_remains_visible_in_success_summary(tmp_path, monkeypatch, existing):
+    script, env, _, events = harness(tmp_path, monkeypatch, install_core=False)
+    if existing:
+        installed = run(script, env)
+        assert installed.returncode == 0, installed.stdout + installed.stderr
+        events.write_text("")
+    env["PENDING_DEPLOYMENT"] = "yes"
+    result = run(script, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "安装完成" in result.stdout
+    assert result.stdout.count("存在需要处理的发布记录") == 1
+    assert "Deployment check requires attention:" not in result.stdout + result.stderr
+    details = detail_output(result)
+    expected_checks = 2 if existing else 1
+    assert details.count("Deployment check requires attention:") == expected_checks
+    assert "inspect its journal" in details
+    assert events.read_text().count("-check-deployments") == expected_checks
 
 
 @pytest.mark.parametrize("choice", ["2", "3"])
@@ -274,7 +327,8 @@ def test_existing_core_reuses_real_skip_logic_without_modification(tmp_path, mon
         root / "etc/systemd/system/mihomo.service")}
     result = run(script, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "跳过已有 mihomo" in result.stdout
+    assert "Mihomo：已有部署，已保留" in result.stdout
+    assert "跳过已有 mihomo" in detail_output(result)
     for path, content in originals.items():
         assert path.read_bytes() == content
     assert "agent-download" in events.read_text()

@@ -194,12 +194,18 @@ for executable in (Path(os.environ['FIXTURE']) / 'unavailable-commands').iterdir
     env = dict(os.environ)
     # CI may export this globally; tests must observe what the installer sets.
     env.pop("DEBIAN_FRONTEND", None)
-    env.update(PATH=str(commands), EVENTS=str(events), FIXTURE=str(tmp_path), ROOT=str(root), **options)
+    env.update(PATH=str(commands), EVENTS=str(events), FIXTURE=str(tmp_path), ROOT=str(root), CONFIGFLOW_INSTALL_LOG_DIR=str(tmp_path), **options)
     return installer, env, root, events
 
 
 def run(installer, env, *args):
-    return subprocess.run(["sh", str(installer), *args], env=env, text=True, errors="replace", capture_output=True, timeout=30, start_new_session=True)
+    result = subprocess.run(["sh", str(installer), *args], env=env, text=True, errors="replace", capture_output=True, timeout=30, start_new_session=True)
+    log_match = re.search(r"详细日志[：:]\s*([^\r\n]+)", result.stdout + result.stderr)
+    result.log_path = Path(log_match[1].strip()) if log_match else None
+    # Minimal systems without mktemp deliberately fall back to raw output until
+    # dependencies are installed; all ordinary fixtures inspect the saved log.
+    result.detail_output = result.log_path.read_text(errors="replace") if result.log_path and result.log_path.is_file() else result.stdout + result.stderr
+    return result
 
 
 def assert_uninstalled(root):
@@ -403,7 +409,7 @@ def test_install_two_cores_and_preserve_configuration_on_second_run(tmp_path, ma
     config.write_text("# user's published configuration\n")
     result = run(installer, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "跳过" in result.stdout
+    assert "跳过" in result.detail_output
     assert events.read_text() == initial_events
     assert config.read_text() == "# user's published configuration\n"
     assert not (root / "run/configflow-core-install.lock").exists()
@@ -451,7 +457,7 @@ def test_existing_partial_configuration_is_skipped_while_other_core_installs(tmp
     path.write_text("original config")
     result = run(installer, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "跳过" in result.stdout
+    assert "跳过" in result.detail_output
     assert path.read_text() == "original config"
     assert "svenshi/oxidns" not in events.read_text()
     assert (root / "usr/local/bin/mihomo").exists()
@@ -486,9 +492,9 @@ def test_single_core_installs_only_selected_binary_service_and_dns(tmp_path, man
         config = yaml.safe_load((root / "etc/oxidns/config.yaml").read_text())
         upstreams = config["plugins"][0]["args"]["upstreams"]
         assert upstreams == [{"addr": "udp://223.5.5.5"}, {"addr": "udp://119.29.29.29"}]
-        assert "公共" in result.stdout
-        assert "IPv4 转发" not in result.stdout
-        assert "tun.enable" not in result.stdout
+        assert "公共" in result.detail_output
+        assert "IPv4 转发" not in result.detail_output
+        assert "tun.enable" not in result.detail_output
 
 
 @pytest.mark.parametrize("manager", ["systemd", "openrc"])
@@ -500,7 +506,7 @@ def test_both_installs_missing_core_without_touching_existing_peer(tmp_path, man
         file.write(f"0: 00000000:{occupied_port} 00000000:0000 07\n")
     result = run(installer, env, "--core", "both")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "跳过" in result.stdout
+    assert "跳过" in result.detail_output
     assert (root / f"etc/{new}/.configflow-core-install").is_file()
     assert_existing_core_untouched(root, existing, contents, events)
     log = events.read_text()
@@ -514,11 +520,11 @@ def test_both_installs_missing_core_without_touching_existing_peer(tmp_path, man
     if new == "oxidns":
         config = yaml.safe_load((root / "etc/oxidns/config.yaml").read_text())
         assert config["plugins"][0]["args"]["upstreams"] == [{"addr": "udp://127.0.0.1:1053"}]
-        assert "127.0.0.1:1053" in result.stdout
-        assert "tun.enable" not in result.stdout
+        assert "127.0.0.1:1053" in result.detail_output
+        assert "tun.enable" not in result.detail_output
     else:
-        assert "已有 OxiDNS 的上游保持原样" in result.stdout
-        assert "127.0.0.1:1053" in result.stdout
+        assert "已有 OxiDNS 的上游保持原样" in result.detail_output
+        assert "127.0.0.1:1053" in result.detail_output
 
 
 @pytest.mark.parametrize("selected", ["both", "mihomo", "oxidns"])
@@ -529,7 +535,7 @@ def test_existing_selected_cores_skip_without_package_or_service_operations(tmp_
     contents = {service: seed_existing_core(root, service) for service in ("mihomo", "oxidns")}
     result = run(installer, env, "--core", selected)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "跳过" in result.stdout
+    assert "跳过" in result.detail_output
     assert operational_events(events) == []
     for service, files in contents.items():
         assert_existing_core_untouched(root, service, files, events)
@@ -551,7 +557,7 @@ def test_external_mihomo_installation_is_recognized_without_default_config(tmp_p
         path.chmod(0o755)
     result = run(installer, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "跳过" in result.stdout
+    assert "跳过" in result.detail_output
     assert not (root / "etc/mihomo").exists()
     assert (root / "etc/oxidns/.configflow-core-install").is_file()
     assert "MetaCubeX/mihomo" not in events.read_text()
@@ -607,8 +613,8 @@ def test_install_missing_core_failure_preserves_existing_mihomo(tmp_path, manage
     assert not (root / "etc/oxidns").exists()
     assert not (root / "run/configflow-core-install.lock").exists()
     if failure == "dns":
-        assert "127.0.0.1:1053" in result.stdout + result.stderr
-        assert "公共" not in result.stdout
+        assert "127.0.0.1:1053" in result.detail_output + result.stderr
+        assert "公共" not in result.detail_output
     if failure == "package":
         assert "download " not in events.read_text()
 
@@ -664,9 +670,70 @@ def test_no_dig_reports_unverified_dns_without_rejecting_install(tmp_path):
     installer, env, root, events = harness(tmp_path, NO_DIG=True)
     result = run(installer, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "实际 DNS 解析尚未验证" in result.stdout
-    assert "UDP/TCP DNS 查询均已通过" not in result.stdout
+    assert "实际 DNS 解析尚未验证" in result.detail_output
+    assert "UDP/TCP DNS 查询均已通过" not in result.detail_output
+    assert "未验证（缺少 dig）" in result.stdout
+    assert "实际解析未验证" in result.stdout
+    assert "UDP/TCP 查询通过" not in result.stdout
     assert (root / "etc/mihomo/.configflow-core-install").exists()
+
+
+@pytest.mark.parametrize("selected", ["both", "mihomo", "oxidns"])
+def test_default_output_summarizes_every_core_selection_and_keeps_verbose_log(tmp_path, selected):
+    installer, env, root, events = harness(tmp_path)
+    result = run(installer, env, "--core", selected)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "检查核心安装环境与依赖" in result.stdout
+    assert "下载安装" in result.stdout
+    assert "验证新装核心的 DNS" in result.stdout
+    assert "UDP/TCP 查询均通过" in result.stdout
+    assert "核心安装完成" in result.stdout
+    assert "详细日志：" in result.stdout
+    assert "HEADER" not in result.stdout
+    assert "初始上游为公共 DNS" not in result.stdout
+    assert "首次从面板发布前" not in result.stdout
+    assert result.log_path and result.log_path.is_file()
+    assert result.log_path.stat().st_mode & 0o077 == 0
+    assert "status: NOERROR" in result.detail_output
+    if selected in ("both", "mihomo"):
+        assert "Mihomo：新装" in result.stdout
+        assert "TUN：已启用" in result.stdout
+        assert "DIRECT 直连" in result.stdout
+        assert "重启后是否保持尚未确认" in result.stdout
+    if selected in ("both", "oxidns"):
+        assert "OxiDNS：新装" in result.stdout
+    if selected == "oxidns":
+        assert "TUN：" not in result.stdout
+        assert "IPv4 转发" not in result.stdout
+        assert "DIRECT 直连" not in result.stdout
+    assert "如需面板管理，请继续安装对应 Agent" in result.stdout
+
+
+def test_existing_core_summary_does_not_claim_dns_or_tun_success(tmp_path):
+    installer, env, root, events = harness(tmp_path)
+    for service in ("mihomo", "oxidns"):
+        seed_existing_core(root, service)
+    result = run(installer, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "全部跳过" in result.stdout
+    assert "运行状态未验证" in result.stdout
+    assert "DNS：未验证" in result.stdout
+    assert "UDP/TCP 查询通过" not in result.stdout
+    assert "TUN：已启用" not in result.stdout
+    assert operational_events(events) == []
+
+
+def test_tun_runtime_fallback_summary_is_clear_and_preserves_detailed_repair_help(tmp_path):
+    installer, env, root, events = harness(tmp_path, NO_TUN_INTERFACE="1")
+    result = run(installer, env, "--core", "mihomo")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TUN：已关闭" in result.stdout
+    assert "TUN 未启用" in result.stdout
+    assert "修复步骤见详细日志" in result.stdout
+    assert "TUN：已启用" not in result.stdout
+    assert "UDP/TCP 查询通过" in result.stdout
+    assert "pct set <CTID> --devN" not in result.stdout
+    assert "pct set <CTID> --devN" in result.detail_output
 
 
 @pytest.mark.parametrize("target", ["usr/local/bin/mihomo", "etc/systemd/system/oxidns.service"])
@@ -717,21 +784,21 @@ def test_tun_ready_auto_enables_without_changing_forwarding(tmp_path, manager, f
     assert config["dns"]["enable"] is True
     assert config["rules"] == ["MATCH,DIRECT"]
     assert config["proxies"] == []
-    assert "已确认 Mihomo 创建并持有" in result.stdout
-    assert "安装结果：tun.enable=true" in result.stdout
-    assert "自动调整本机路由" in result.stdout
+    assert "已确认 Mihomo 创建并持有" in result.detail_output
+    assert "安装结果：tun.enable=true" in result.detail_output
+    assert "自动调整本机路由" in result.detail_output
     assert "FORBIDDEN" not in events.read_text()
     forward_file = root / "proc/sys/net/ipv4/ip_forward"
     if forwarding is None:
         assert not forward_file.exists()
-        assert "IPv4 转发：状态无法读取" in result.stdout
+        assert "IPv4 转发：状态无法读取" in result.detail_output
     else:
         assert forward_file.read_text() == forwarding + "\n"
-        assert "当前为 " + forwarding in result.stdout
+        assert "当前为 " + forwarding in result.detail_output
     if forwarding != "1":
-        assert "sysctl -w net.ipv4.ip_forward=1" in result.stdout
-        assert "99-configflow-forward.conf" in result.stdout
-        assert "仅做二层网桥" in result.stdout
+        assert "sysctl -w net.ipv4.ip_forward=1" in result.detail_output
+        assert "99-configflow-forward.conf" in result.detail_output
+        assert "仅做二层网桥" in result.detail_output
     assert not (root / "etc/sysctl.d").exists()
 
 
@@ -757,16 +824,16 @@ def test_unavailable_tun_installs_dns_and_prints_repair_steps(tmp_path, options,
     config = yaml.safe_load((root / "etc/mihomo/config.yaml").read_text())
     assert config["tun"]["enable"] is False
     assert config["dns"]["enable"] is True
-    assert reason in result.stdout
-    assert "PVE 宿主机" in result.stdout
-    assert "pct set <CTID> --devN" in result.stdout
-    assert "面板的 Mihomo 基础配置中设置 tun.enable: true" in result.stdout
-    assert "首次从面板发布前" in result.stdout
-    assert "发布以面板配置为准" in result.stdout
-    assert "安装结果：tun.enable=false" in result.stdout
+    assert reason in result.detail_output
+    assert "PVE 宿主机" in result.detail_output
+    assert "pct set <CTID> --devN" in result.detail_output
+    assert "面板的 Mihomo 基础配置中设置 tun.enable: true" in result.detail_output
+    assert "首次从面板发布前" in result.detail_output
+    assert "发布以面板配置为准" in result.detail_output
+    assert "安装结果：tun.enable=false" in result.detail_output
     assert events.read_text().count("dig ") == 4
     assert "FORBIDDEN" not in events.read_text()
-    assert "已确认 Mihomo 创建并持有" not in result.stdout
+    assert "已确认 Mihomo 创建并持有" not in result.detail_output
     assert (root / "etc/oxidns/.configflow-core-install").exists()
 
 
@@ -797,9 +864,9 @@ def test_runtime_tun_failure_falls_back_to_dns_with_guidance(tmp_path, manager, 
     assert config["tun"]["enable"] is False
     assert config["dns"]["enable"] is True
     assert config["dns"]["listen"] == "0.0.0.0:1053"
-    assert "将关闭本次初始配置的 TUN，保留 DNS 服务安装" in result.stdout
-    assert "服务管理器权限或容器设备策略" in result.stdout
-    assert "安装结果：tun.enable=false" in result.stdout
+    assert "将关闭本次初始配置的 TUN，保留 DNS 服务安装" in result.detail_output
+    assert "服务管理器权限或容器设备策略" in result.detail_output
+    assert "安装结果：tun.enable=false" in result.detail_output
     log = events.read_text()
     stop = "systemctl stop mihomo" if manager == "systemd" else "rc-service mihomo stop"
     start = "systemctl start mihomo" if manager == "systemd" else "rc-service mihomo start"
@@ -843,7 +910,7 @@ def test_reinstall_does_not_enable_tun_after_device_is_fixed(tmp_path):
     (root / "dev/net/tun").symlink_to("/dev/null")
     result = run(installer, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "跳过" in result.stdout
+    assert "跳过" in result.detail_output
     assert config.read_text() == old_config
     assert yaml.safe_load(old_config)["tun"]["enable"] is False
     assert events.read_text() == old_events
@@ -856,8 +923,8 @@ def test_slow_tun_start_gets_time_to_initialize(tmp_path, manager):
     assert result.returncode == 0, result.stdout + result.stderr
     assert yaml.safe_load((root / "etc/mihomo/config.yaml").read_text())["tun"]["enable"] is True
     assert (root / "run/tun-wait-count").read_text() == "3"
-    assert "已确认 Mihomo 创建并持有" in result.stdout
-    assert "保留 DNS 服务安装" not in result.stdout
+    assert "已确认 Mihomo 创建并持有" in result.detail_output
+    assert "保留 DNS 服务安装" not in result.detail_output
 
 
 def test_tun_wait_is_bounded_before_dns_fallback(tmp_path):

@@ -97,15 +97,17 @@ stop_existing_agent() {
 
 {agent_install_dependencies}
 {installation_description}
-echo "1) {installation_action}"
-echo "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
-echo "3) 取消"
-printf '请输入选项 [1-3]: '
+cf_ui "1) {installation_action}"
+cf_ui "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
+cf_ui "3) 取消"
+cf_prompt '请输入选项 [1-3]: '
 read -r choice < /dev/tty
 case "$choice" in
     1)
+        cf_step "检查安装环境与依赖"
 {agent_arch_detection}
         agent_ensure_dependencies
+        cf_step_done "安装环境与依赖已就绪"
         ;;
     2) ;;
     *) exit 0 ;;
@@ -169,7 +171,7 @@ case "$choice" in
             rm -f "$AGENT_LOG" "$AGENT_LOG".* "/etc/logrotate.d/$AGENT_UNIT"
         done
         if [ "$INIT_SYSTEM" = systemd ]; then systemctl daemon-reload; else rc-update -u; fi
-        echo "两个 Agent 已卸载；核心服务、配置及发布记录未改动。"
+        cf_ui "两个 Agent 已卸载；核心服务、配置及发布记录未改动。"
         exit 0
         ;;
     *) exit 0 ;;
@@ -177,6 +179,7 @@ esac
 
 {core_install_phase}# Read-only core checks precede even the Agent download. The existing service
 # manager remains the only owner of each core process.
+cf_step "检查核心接管与下载 Agent"
 PHYSICAL_AGENT_ROOT="$(CDPATH= cd "$(dirname "$AGENT_ROOT")" && pwd -P)/$(basename "$AGENT_ROOT")"
 for service in mihomo oxidns; do
     select_service "$service"
@@ -205,7 +208,6 @@ STAGE_DIR=$(mktemp -d "$AGENT_ROOT/.aio-install.XXXXXX")
 BINARY_TMP="$STAGE_DIR/configflow-agent"
 BINARY_BASE={binary_download_url_shell}
 BINARY_URL="$BINARY_BASE/configflow-agent-$AGENT_ARCH"
-echo "下载 Go Agent 二进制并检查两个核心..."
 if command -v wget >/dev/null 2>&1; then
     wget -q -O "$BINARY_TMP" "$BINARY_URL" || fail "Agent 二进制下载失败"
 elif command -v curl >/dev/null 2>&1; then
@@ -239,11 +241,13 @@ for service in mihomo oxidns; do
     fi
     "$BINARY_TMP" -config "$CANDIDATE" -require-clean-deployments
 done
+cf_step_done "核心接管检查与 Agent 下载校验通过"
 
 # Inspect the pair together so the environment check can distinguish their
 # listeners from unrelated port owners. Diagnostics include repair guidance;
 # the check never changes capabilities, forwarding or either core config.
-if "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json" \
+cf_step "检查运行环境"
+if cf_environment_check "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json" \
     -environment-peer-config "$STAGE_DIR/oxidns-config.json" -check-environment; then
     :
 else
@@ -251,8 +255,10 @@ else
     echo "若提示未知 -check-environment 参数，请更新 ConfigFlow 并重新构建/提供 1.8.19-go 或更高的 Agent 下载文件；否则按上方环境问题修复后重跑。" >&2
     exit "$environment_status"
 fi
+cf_step_done "运行环境检查通过"
 
 # Both candidates, existing roots and environment passed. No Agent is stopped earlier.
+cf_step "安装并启动 Agent 服务"
 for service in mihomo oxidns; do
     select_service "$service"
     stop_existing_agent
@@ -347,7 +353,10 @@ for service in mihomo oxidns; do
     fi
 done
 RESTART_ON_FAILURE=""
-echo "同机双 Agent 安装成功。Mihomo 与 OxiDNS 核心继续由各自原服务管理。"
-echo "Mihomo Agent 端口：{mihomo_agent_port}；OxiDNS Agent 端口：{oxidns_agent_port}。"
-echo "现有核心配置未修改。请先在 ConfigFlow 发布 Mihomo 配置，将 DNS 调整到 1053。"
-echo "随后发布 OxiDNS 配置：监听 53，需要交给 Mihomo 的上游设为 udp://127.0.0.1:1053。"
+cf_step_done "两个 Agent 服务已启动"
+cf_fact agent_mihomo "Mihomo Agent：端口 {mihomo_agent_port}，服务已启动"
+cf_fact agent_oxidns "OxiDNS Agent：端口 {oxidns_agent_port}，服务已启动"
+if [ "$(cf_fact_read core_mihomo_new)" != yes ] || [ "$(cf_fact_read core_oxidns_new)" != yes ]; then
+    cf_note dns_existing "已有核心配置已保留，请核对 DNS 链路：OxiDNS :53 → Mihomo :1053；需要调整时通过面板发布配置。"
+fi
+cf_complete "安装完成"
