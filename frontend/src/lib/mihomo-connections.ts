@@ -34,8 +34,8 @@ const LEGACY_DEFAULT_COLUMNS: ConnectionColumn[] = ['target', 'source', 'rule', 
 export const CONNECTION_GROUP_FIELDS = ['target', 'source', 'network', 'rule', 'chain'] as const
 export type ConnectionGroupField = typeof CONNECTION_GROUP_FIELDS[number]
 
-/** Independent columns; only low-priority fields fold away when the panel is narrow. */
-export function connectionDisplayColumns(selected: ConnectionColumn[], width = 1400, reservedWidth = 76) {
+/** Keep recently chosen columns visible while fitting the existing table width. */
+export function connectionDisplayColumns(selected: ConnectionColumn[], width = 1400, reservedWidth = 76, preferredColumns: ConnectionColumn[] = []) {
   const sizes: Record<ConnectionColumn, number> = {
     target: 180, source: 130, network: 110, rule: 150, chain: 220,
     downSpeed: 90, upSpeed: 90, download: 85, upload: 85, duration: 80, start: 155, process: 130
@@ -45,7 +45,10 @@ export function connectionDisplayColumns(selected: ConnectionColumn[], width = 1
   }))
   // Mobile uses a labelled grid, so every selected field remains available there.
   if (width <= 740) return fields
-  for (const key of ['process', 'start', 'network', 'upload', 'download', 'chain', 'rule', 'source'] as ConnectionColumn[]) {
+  const foldOrder: ConnectionColumn[] = ['process', 'start', 'network', 'upload', 'download', 'chain', 'rule', 'source', 'downSpeed', 'upSpeed', 'duration']
+  // Older manual choices can yield when space runs out; the host/detail entry stays.
+  const preferred = preferredColumns.filter(key => key !== 'target' && selected.includes(key))
+  for (const key of [...foldOrder.filter(key => !preferred.includes(key)), ...preferred]) {
     if (fields.reduce((sum, column) => sum + column.width, reservedWidth) <= width) break
     const index = fields.findIndex(column => column.key === key)
     if (index >= 0) fields.splice(index, 1)
@@ -57,6 +60,7 @@ export interface ConnectionTableSettings {
   sort: ConnectionSort
   direction: SortDirection
   columns: ConnectionColumn[]
+  preferredColumns?: ConnectionColumn[]
   groupBy?: ConnectionGroupField | null
 }
 export const CONNECTION_SETTINGS_KEY = 'configflow:mihomo-panel:connection-table'
@@ -78,6 +82,11 @@ export function loadConnectionTableSettings(): ConnectionTableSettings {
       const oldPreset = stored.layoutVersion === 2 ? compactDefault : LEGACY_DEFAULT_COLUMNS
       if (stored.layoutVersion !== 3 && defaults.columns.length === oldPreset.length &&
         oldPreset.every(key => defaults.columns.includes(key))) defaults.columns = [...DEFAULT_CONNECTION_COLUMNS]
+    }
+    if (Array.isArray(stored.preferredColumns)) {
+      const preferred = stored.preferredColumns.filter((key: ConnectionColumn, index: number, list: unknown[]) =>
+        key !== 'target' && defaults.columns.includes(key) && list.lastIndexOf(key) === index)
+      if (preferred.length) defaults.preferredColumns = preferred
     }
   } catch { /* 禁用存储或旧数据损坏时使用默认表格。 */ }
   return defaults
