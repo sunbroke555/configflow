@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, effectScope, ref } from 'vue'
 import { mount, type VueWrapper } from '@vue/test-utils'
-import { canReloadPage, usePageReloadGuard } from '@/lib/pageReloadGuard'
+import { canReloadPage, usePageReloadGuard, withPageReloadBlocked } from '@/lib/pageReloadGuard'
 import { useReorder } from '@/composables/useReorder'
 
 const scopes: ReturnType<typeof effectScope>[] = []
@@ -112,6 +112,52 @@ describe('manual list sorting reload protection', () => {
     reorder.moveDown(0)
     await expect(reorder.save()).rejects.toThrow('save failed')
     expect(items.value).toEqual(['first', 'second', 'third'])
+    expect(canReloadPage()).toBe(true)
+  })
+})
+
+
+describe('submitted write reload protection', () => {
+  it('starts before submission and releases on success without changing the returned value', async () => {
+    let resolve!: (value: string) => void
+    const operation = vi.fn(() => {
+      expect(canReloadPage()).toBe(false)
+      return new Promise<string>(done => { resolve = done })
+    })
+    const pending = withPageReloadBlocked(operation)
+    expect(operation).toHaveBeenCalledOnce()
+    expect(canReloadPage()).toBe(false)
+    resolve('server response')
+    expect(await pending).toBe('server response')
+    expect(canReloadPage()).toBe(true)
+  })
+
+  it.each(['synchronous', 'asynchronous'])('releases on a %s failure and preserves the original error', async kind => {
+    const failure = new Error('write rejected')
+    const operation = vi.fn(() => {
+      expect(canReloadPage()).toBe(false)
+      if (kind === 'synchronous') throw failure
+      return Promise.reject(failure)
+    })
+    await expect(withPageReloadBlocked(operation)).rejects.toBe(failure)
+    expect(operation).toHaveBeenCalledOnce()
+    expect(canReloadPage()).toBe(true)
+  })
+
+  it('keeps simultaneous writes independent after an editing scope is disposed', async () => {
+    const scope = guard(() => true)
+    let resolveFirst!: () => void
+    let rejectSecond!: (failure: Error) => void
+    const first = withPageReloadBlocked(() => new Promise<void>(done => { resolveFirst = done }))
+    const second = withPageReloadBlocked(() => new Promise<void>((_done, fail) => { rejectSecond = fail }))
+    scope.stop()
+    expect(canReloadPage()).toBe(false)
+    resolveFirst()
+    await first
+    expect(canReloadPage()).toBe(false)
+    const rejected = expect(second).rejects.toThrow('second write failed')
+    rejectSecond(new Error('second write failed'))
+    await rejected
     expect(canReloadPage()).toBe(true)
   })
 })

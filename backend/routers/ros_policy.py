@@ -126,10 +126,11 @@ def inspect_desired(config, router, desired, content_loader=None):
     policy = compute_desired(config, desired.get('proxy_gateway'), selected,
                              **({'content_loader': content_loader} if content_loader else {}))
     result['cidrs'] = [entry for entry in policy['proxy_cidrs'] if entry['sources'] != ['fake-ip']]
-    result['warnings'] = policy['warnings']
+    blocking_warnings = policy.get('blocking_warnings', [])
+    result['warnings'] = [warning for warning in policy['warnings'] if warning not in blocking_warnings]
     # Missing/disabled rules must not silently withdraw an existing bundle.
-    if policy['warnings']:
-        result['error'] = '策略路由规则集尚不能完整读取：' + '；'.join(policy['warnings'])
+    if blocking_warnings:
+        result['error'] = '策略路由暂不能发布：' + '；'.join(blocking_warnings)
     settings = config.get('oxidns') or {}
     result['source_revision'] = revision(settings)
     try:
@@ -282,7 +283,7 @@ def build(desired, state):
     """Build one guarded bundle operation and human-readable policy report."""
     request = desired['ros_policy']
     live = state.ros_policy
-    result = {'ops': [], 'blockers': [], 'warnings': [], 'items': [], 'check': None}
+    result = {'ops': [], 'blockers': [], 'warnings': list(request.get('warnings') or []), 'items': [], 'check': None}
     if request.get('error'):
         result['blockers'].append(request['error'])
     if live is None:

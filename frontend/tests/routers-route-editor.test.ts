@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import Routers from '@/views/Routers.vue'
+import { defineComponent, h } from 'vue'
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
+import { canReloadPage } from '@/lib/pageReloadGuard'
 import { agentApi, routerApi, ruleApi } from '@/api'
 import { confirm, confirmDanger } from '@/lib/feedback'
 import { activeProfileId } from '@/profileContext'
@@ -23,8 +26,9 @@ const preview = (before: any = null, after: any = VALUES) => ({ data: { success:
 } } })
 const deferred = () => {
   let resolve!: (value: any) => void
-  const promise = new Promise<any>(done => { resolve = done })
-  return { promise, resolve }
+  let reject!: (error: any) => void
+  const promise = new Promise<any>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 const button = (label: string) => Array.from(document.body.querySelectorAll('button')).find(item => item.textContent?.trim() === label)!
 const field = (id: string) => new DOMWrapper(document.getElementById(id) as HTMLInputElement)
@@ -218,5 +222,100 @@ describe('independent static route management', () => {
     await flushPromises()
     expect(document.body.textContent).toContain('下一跳必须是 IPv4 地址')
     expect(routerApi.routePlan).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('static route automatic reload protection', () => {
+  it('keeps the request and subsequent route refresh protected after confirmation closes', async () => {
+    const pending = deferred(), refresh = deferred()
+    vi.mocked(routerApi.routeApply).mockReturnValueOnce(pending.promise)
+    await openManager()
+    await fillAdd()
+    vi.mocked(routerApi.routes).mockReturnValueOnce(refresh.promise)
+    button('预览路由变更').click()
+    await flushPromises()
+    try {
+      expect(routerApi.routeApply).toHaveBeenCalledOnce()
+      expect(document.querySelector('[role="dialog"][data-state="open"]')).toBeNull()
+      expect(canReloadPage()).toBe(false)
+      pending.resolve({ data: { success: true, result: { changed: true } } })
+      await flushPromises()
+      expect(routerApi.routes).toHaveBeenCalledTimes(2)
+      expect(canReloadPage()).toBe(false)
+      refresh.resolve({ data: { success: true, routes: [ROUTE] } })
+      await flushPromises()
+      expect(canReloadPage()).toBe(true)
+      expect(routerApi.routeApply).toHaveBeenCalledOnce()
+    } finally {
+      pending.resolve({ data: { success: true, result: { changed: true } } })
+      refresh.resolve({ data: { success: true, routes: [ROUTE] } })
+      await flushPromises()
+    }
+  })
+
+  it.each([500, 409])('retains edits after HTTP %i and releases protection after the editor is closed', async status => {
+    const pending = deferred(), refresh = deferred()
+    vi.mocked(routerApi.routeApply).mockReturnValueOnce(pending.promise)
+    await openManager()
+    await fillAdd()
+    if (status === 409) vi.mocked(routerApi.routes).mockReturnValueOnce(refresh.promise)
+    button('预览路由变更').click()
+    await flushPromises()
+    try {
+      expect(canReloadPage()).toBe(false)
+      pending.reject({ response: { status, data: { message: status === 409 ? '路由已被修改' : '写入失败' } } })
+      await flushPromises()
+      if (status === 409) {
+        expect(canReloadPage()).toBe(false)
+        refresh.resolve({ data: { success: true, routes: [ROUTE] } })
+        await flushPromises()
+      }
+      expect((document.getElementById('static-route-comment') as HTMLTextAreaElement).value).toBe(VALUES.comment)
+      expect(canReloadPage()).toBe(false)
+      button('取消').click()
+      await flushPromises()
+      expect(canReloadPage()).toBe(true)
+      expect(routerApi.routeApply).toHaveBeenCalledOnce()
+    } finally {
+      pending.resolve({ data: { success: true, result: { changed: true } } })
+      refresh.resolve({ data: { success: true, routes: [ROUTE] } })
+      await flushPromises()
+    }
+  })
+
+  it.each(['success', 'failure', 'conflict'])('allows normal navigation but keeps an in-flight write protected across unmount (%s)', async outcome => {
+    const pending = deferred()
+    vi.mocked(routerApi.routeApply).mockReturnValueOnce(pending.promise)
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/routers', component: Routers },
+      { path: '/other', component: { render: () => h('p', 'Other page') } },
+    ] })
+    await router.push('/routers')
+    wrapper = mount(defineComponent({ render: () => h(RouterView) }), { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+    button('静态路由').click()
+    await flushPromises()
+    await fillAdd()
+    button('预览路由变更').click()
+    await flushPromises()
+    try {
+      expect(routerApi.routeApply).toHaveBeenCalledOnce()
+      await router.push('/other')
+      await flushPromises()
+      expect(router.currentRoute.value.path).toBe('/other')
+      expect(wrapper.text()).toContain('Other page')
+      expect(document.querySelector('[role="dialog"][data-state="open"]')).toBeNull()
+      expect(canReloadPage()).toBe(false)
+      if (outcome === 'success') pending.resolve({ data: { success: true, result: { changed: true } } })
+      else pending.reject({ response: { status: outcome === 'conflict' ? 409 : 500, data: { message: '写入未完成' } } })
+      await flushPromises()
+      expect(canReloadPage()).toBe(true)
+      expect(routerApi.routeApply).toHaveBeenCalledOnce()
+      expect(routerApi.routes).toHaveBeenCalledOnce()
+    } finally {
+      pending.resolve({ data: { success: true, result: { changed: true } } })
+      await flushPromises()
+    }
   })
 })

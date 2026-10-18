@@ -618,6 +618,7 @@ import RouterOperationPreview from '@/components/routers/RouterOperationPreview.
 import { agentApi, routerApi, ruleApi, type StaticRouteChange, type StaticRouteItem, type StaticRoutePlan, type StaticRouteValues } from '@/api'
 import { activeProfileId, getActiveProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
+import { usePageReloadGuard, withPageReloadBlocked } from '@/lib/pageReloadGuard'
 
 const routerPageHelp = '在这里查看和调整主路由的分流设置。「差异报告」只检查，不会修改设备。点「预览发布」查看具体改动，确认后再应用；如果发布失败，会尝试撤销本次改动，并显示结果。'
 
@@ -819,6 +820,7 @@ const openRuleSync = async (router: RouterItem) => {
 const routeRows = ref<StaticRouteItem[]>([])
 const routeLoading = ref(false)
 const routeBusy = ref(false)
+usePageReloadGuard(() => routeBusy.value || applying.value)
 const routeError = ref('')
 const routeEditorVisible = ref(false)
 const routeEditing = ref<StaticRouteItem | null>(null)
@@ -917,7 +919,9 @@ const previewRouteChange = async (change: StaticRouteChange) => {
     if (!currentRouteContext(context)) return
     ownedRouteConfirmation = null
     if (!accepted) return
-    const response = await routerApi.routeApply(context.id!, { ...change, fingerprint: preview.fingerprint }, context.profile)
+    const response = await withPageReloadBlocked(() => routerApi.routeApply(
+      context.id!, { ...change, fingerprint: preview.fingerprint }, context.profile
+    ))
     if (!currentRouteContext(context)) return
     if (!response.data.success) throw new Error(response.data.message || '路由写入失败')
     reopenEditor = false
@@ -1194,9 +1198,10 @@ const applyPlan = async () => {
   const router = reportRouter.value
   if (!router || !plan.value || applying.value) return
   const revision = inspectionRevision
+  const fingerprint = plan.value.fingerprint
   applying.value = true
   try {
-    const { data } = await routerApi.apply(router.id, plan.value.fingerprint)
+    const { data } = await withPageReloadBlocked(() => routerApi.apply(router.id, fingerprint))
     if (revision !== inspectionRevision) return
     releaseResult.value = data.result
     if (data.result.ok) notify.success('发布完成')

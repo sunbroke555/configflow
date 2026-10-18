@@ -64,6 +64,24 @@ def test_desired_defaults_and_missing_gateway():
     assert any('mihomo Agent' in warning for warning in result['warnings'])
 
 
+@pytest.mark.parametrize('policy', ['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', '🎯 全球直连'])
+def test_non_proxy_policy_keeps_selected_ips_as_an_advisory(policy):
+    config = profile_config()
+    config['rule_configs'][1]['policy'] = policy
+    result = desired_module.compute_desired(config, '192.168.1.4', ['r1', 'r2'], content_loader=loader)
+    assert any(entry['cidr'] == '1.0.1.0/24' for entry in result['proxy_cidrs'])
+    assert len(result['warnings']) == 1 and policy in result['warnings'][0]
+    assert result['blocking_warnings'] == []
+
+
+def test_incomplete_selection_is_distinct_from_non_proxy_advice():
+    result = desired_module.compute_desired(profile_config(), None, ['r2', 'r4', 'r5', 'gone'], content_loader=loader)
+    assert len(result['warnings']) == 5
+    assert len(result['blocking_warnings']) == 4
+    assert all(warning in result['warnings'] for warning in result['blocking_warnings'])
+    assert not any('ChinaIP' in warning for warning in result['blocking_warnings'])
+
+
 def _desired(gateway='192.168.1.4'):
     return {'fake_ip_range': '198.18.0.0/16', 'proxy_gateway': gateway, 'warnings': [],
             'proxy_cidrs': [{'cidr': '198.18.0.0/16', 'sources': ['fake-ip']},
