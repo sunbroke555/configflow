@@ -298,7 +298,8 @@
           <section v-if="shellAio" aria-labelledby="core-install-title" class="min-w-0 space-y-3 rounded-lg border border-border/70 bg-background/40 p-3">
             <h3 id="core-install-title" class="m-0 text-[13px] font-semibold">先安装两个核心</h3>
             <p class="m-0 text-[12.5px] text-muted-foreground">新机器可先一键安装 Mihomo 与 OxiDNS，并创建 systemd / OpenRC 服务。此命令不安装 Agent，无需填写下面的 Agent 信息。检测到已有核心或配置时会保留并停止安装；本脚本已完成的安装会跳过。</p>
-            <p class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">mihomo</code> / <code class="font-mono">oxidns</code>，配置目录 <code class="font-mono">/etc/mihomo</code> / <code class="font-mono">/etc/oxidns</code>，DNS 端口分别为 <code class="font-mono">1053</code> / <code class="font-mono">53</code>，TUN 初始关闭。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
+            <p class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">mihomo</code> / <code class="font-mono">oxidns</code>，配置目录 <code class="font-mono">/etc/mihomo</code> / <code class="font-mono">/etc/oxidns</code>，DNS 端口分别为 <code class="font-mono">1053</code> / <code class="font-mono">53</code>。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
+            <p class="m-0 text-[12.5px] text-muted-foreground">首次安装检测 TUN 设备和权限：可用时自动开启 TUN 及自动路由；不可用时保持关闭，并提示修复和开启方法。初始流量直连，尚无代理节点。作为网关时还需开启 IPv4 转发，脚本会提示但不会修改转发设置。后续发布前请检查面板草稿中的 TUN 开关。</p>
             <template v-if="coreInstallCommand">
               <p class="m-0 text-[12.5px] font-medium">在目标机器以 root 身份执行；完成后，再生成下方的 Agent 安装命令。</p>
               <Button variant="outline" class="min-h-11" @click="copyAgentContent(coreInstallCommand, '核心安装命令已复制到剪贴板')">

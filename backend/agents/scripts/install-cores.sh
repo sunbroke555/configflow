@@ -14,6 +14,8 @@ CREATED_DIRS=""
 ENABLE_ATTEMPTED=""
 START_ATTEMPTED=""
 INIT_SYSTEM=""
+TUN_ENABLED=false
+TUN_REASON=""
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 exists() { [ -e "$1" ] || [ -L "$1" ]; }
@@ -139,6 +141,69 @@ check_ports() {
     fi
 }
 check_ports
+
+show_tun_disabled_guidance() {
+    printf '%s\n' "TUN 初始配置保持关闭：$TUN_REASON" \
+        '普通 Linux/虚拟机：先检查内核 TUN 驱动（modprobe tun），确认 /dev/net/tun 为 10:200 字符设备且可读写。' \
+        'PVE LXC：在 PVE 宿主机执行 modprobe tun，检查 pct config <CTID> 的空闲 devN 槽，再用 pct set <CTID> --devN /dev/net/tun 添加设备（例如空闲的 dev0）；完整停止并启动容器后，在容器内复查。不要改为特权容器或放宽整个设备目录权限。' \
+        '权限：保留容器的 CAP_NET_ADMIN；核对 Mihomo 服务的 CapabilityBoundingSet、DeviceAllow=/dev/net/tun rw 及设备隔离策略。若接口重名，确认已有接口的归属后更改 Mihomo 的 tun.device。' \
+        '修复后：在面板的 Mihomo 基础配置中设置 tun.enable: true，保留 DNS 监听及 TUN DNS 劫持端口 1053，再保存并发布；未接入 Agent 时修改 /etc/mihomo/config.yaml 并重启 mihomo 服务。重复运行本安装脚本会保留已有配置，不会自动开启 TUN。'
+}
+
+# Probe without creating an interface, changing routes, or writing sysctls.
+# The new service runs as root; these checks describe the installer context.
+# Service-manager policy may differ, so actual interface creation is checked
+# again after startup instead of treating an active DNS process as TUN success.
+check_tun_environment() {
+    if ! exists /dev/net/tun; then
+        TUN_REASON='/dev/net/tun 未提供。'
+    elif [ ! -c /dev/net/tun ]; then
+        TUN_REASON='/dev/net/tun 不是字符设备。'
+    elif ! command -v stat >/dev/null 2>&1; then
+        TUN_REASON='缺少 stat，无法确认 TUN 设备号；请安装 coreutils 后再检查。'
+    elif [ "$(stat -L -c '%t:%T' /dev/net/tun 2>/dev/null || true)" != a:c8 ]; then
+        TUN_REASON='无法确认 /dev/net/tun 是 Linux TUN 设备（主/次设备号 10:200）。'
+    elif ! (exec 3<>/dev/net/tun) 2>/dev/null; then
+        TUN_REASON='TUN 设备存在，但无法读写打开；设备映射、cgroup 或安全策略可能限制访问。'
+    elif [ -e /sys/class/net/configflow-tun ]; then
+        TUN_REASON='网络接口 configflow-tun 已存在；为避免接管其他接口，保留 TUN 关闭。'
+    else
+        # CAP_NET_ADMIN is bit 12. Inspect its hex digit without relying on
+        # awk extensions or shell integer width (also supports 32-bit armv7).
+        tun_capability=$(awk '
+            $1 == "CapEff:" || $1 == "CapBnd:" {
+                if (NF != 2 || $2 !~ /^[0-9a-fA-F]+$/ || length($2) > 16) {invalid=1; next}
+                mask=tolower($2); digit=length(mask) >= 4 ? substr(mask, length(mask)-3, 1) : "0"
+                seen[$1]++; allowed[$1]=(digit ~ /^[13579bdf]$/)
+            }
+            END {
+                if (invalid || seen["CapEff:"] != 1 || seen["CapBnd:"] != 1) print "unknown"
+                else if (!allowed["CapEff:"]) print "effective"
+                else if (!allowed["CapBnd:"]) print "bounding"
+                else print "available"
+            }' /proc/self/status 2>/dev/null) || tun_capability=unknown
+        case "$tun_capability" in
+            available) TUN_ENABLED=true ;;
+            effective) TUN_REASON='当前进程缺少有效 CAP_NET_ADMIN，无法确认可创建 TUN 和调整路由。' ;;
+            bounding) TUN_REASON='当前进程的能力上限 CapBnd 不包含 CAP_NET_ADMIN。' ;;
+            *) TUN_REASON='无法读取或解析当前进程的 CAP_NET_ADMIN，不能确认 TUN 权限。' ;;
+        esac
+    fi
+    if [ "$TUN_ENABLED" = true ]; then
+        printf '%s\n' 'TUN 环境检测通过，初始配置将启用 TUN（mixed、auto-route）。启动时会创建 configflow-tun 并自动调整本机路由；当前没有代理节点，流量按 DIRECT 直连。'
+    else
+        show_tun_disabled_guidance
+    fi
+    forwarding=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || true)
+    if [ "$forwarding" = 1 ]; then
+        printf '%s\n' 'IPv4 转发：当前为 1；重启后的持久化状态尚未验证。'
+    else
+        if [ "$forwarding" = 0 ]; then forwarding_status='当前为 0'; else forwarding_status='状态无法读取'; fi
+        printf '%s\n' "IPv4 转发：${forwarding_status}。这不影响本机 TUN 的选择；仅当此 Linux/LXC 承担旁路网关或路由转发时需要开启。" \
+            '旁路网关修复：在该 Linux/LXC 内执行 sysctl -w net.ipv4.ip_forward=1，并把 net.ipv4.ip_forward=1 写入 /etc/sysctl.d/99-configflow-forward.conf；检查其他 sysctl 文件是否将其改回 0，重启后用 sysctl net.ipv4.ip_forward 验证。PVE 仅做二层网桥时不因此需要开启宿主机转发。'
+    fi
+}
+check_tun_environment
 STAGE=$(mktemp -d /tmp/configflow-cores.XXXXXX)
 chmod 700 "$STAGE"
 mkdir "$STAGE/mihomo" "$STAGE/oxidns"
@@ -159,8 +224,9 @@ gzip -dc "$STAGE/mihomo.gz" > "$STAGE/mihomo-bin" || fail 'Mihomo 压缩包解�
 tar -xzf "$STAGE/oxidns.tar.gz" -C "$STAGE/oxidns" oxidns || fail 'OxiDNS 压缩包解压失败。'
 [ -f "$STAGE/oxidns/oxidns" ] && [ ! -L "$STAGE/oxidns/oxidns" ] || fail 'OxiDNS 包内核心文件无效。'
 chmod 755 "$STAGE/mihomo-bin" "$STAGE/oxidns/oxidns"
-cat > "$STAGE/mihomo/config.yaml" <<'MIHOMO_CONFIG'
-# DNS-only bootstrap; publish your own routing/proxy configuration afterward.
+write_mihomo_bootstrap() {
+cat > "$STAGE/mihomo/config.yaml" <<MIHOMO_CONFIG
+# Direct bootstrap; TUN follows the installation environment probe.
 port: 0
 socks-port: 0
 mixed-port: 0
@@ -170,7 +236,15 @@ mode: rule
 log-level: info
 ipv6: false
 tun:
-  enable: false
+  enable: $TUN_ENABLED
+  device: configflow-tun
+  stack: mixed
+  auto-route: true
+  auto-detect-interface: true
+  auto-redirect: false
+  dns-hijack:
+    - any:1053
+    - tcp://any:1053
 dns:
   enable: true
   listen: 0.0.0.0:1053
@@ -184,6 +258,8 @@ proxy-groups: []
 rules:
   - MATCH,DIRECT
 MIHOMO_CONFIG
+}
+write_mihomo_bootstrap
 cat > "$STAGE/oxidns/config.yaml" <<'OXIDNS_CONFIG'
 log:
   level: info
@@ -289,6 +365,57 @@ for service in mihomo oxidns; do
     if [ "$INIT_SYSTEM" = systemd ]; then systemctl is-active --quiet "$service" || { show_service_logs "$service"; fail "$service 启动后未保持运行，请查看服务日志。"; }
     else rc-service "$service" status || { show_service_logs "$service"; fail "$service 启动后未保持运行，请查看服务日志。"; }; fi
 done
+tun_interface_ready() {
+    for tun_flag_file in /sys/class/net/configflow-tun/tun_flags /sys/class/net/configflow-tun/flags; do
+        tun_flags=$(cat "$tun_flag_file" 2>/dev/null || true)
+        # Bit 0 is IFF_TUN in tun_flags and IFF_UP in interface flags.
+        printf '%s\n' "$tun_flags" | awk '/^0x[0-9a-fA-F]+$/ {digit=substr(tolower($0), length($0), 1); if (digit ~ /^[13579bdf]$/) ok=1} END {exit ok ? 0 : 1}' || return 1
+    done
+    if [ "$INIT_SYSTEM" = systemd ]; then
+        tun_pid=$(systemctl show mihomo.service --property=MainPID --value 2>/dev/null) || return 1
+    else
+        tun_pid=$(cat /run/mihomo.pid 2>/dev/null) || return 1
+    fi
+    case "$tun_pid" in ''|0|*[!0-9]*) return 1 ;; esac
+    # An existing interface alone is insufficient: require the new core's
+    # open TUN descriptor to identify exactly our explicitly named device.
+    for tun_fdinfo in /proc/"$tun_pid"/fdinfo/*; do
+        [ -r "$tun_fdinfo" ] || continue
+        if awk '$1 == "iff:" && $2 == "configflow-tun" && NF == 2 {found=1} END {exit found ? 0 : 1}' "$tun_fdinfo"; then return 0; fi
+    done
+    return 1
+}
+wait_for_tun_interface() {
+    tun_wait=0
+    until tun_interface_ready; do
+        [ "$tun_wait" -lt 10 ] || return 1
+        sleep 1
+        tun_wait=$((tun_wait + 1))
+    done
+    return 0
+}
+if [ "$TUN_ENABLED" = true ]; then
+    # Mihomo can remain active with DNS working after its TUN listener failed.
+    # Allow slower machines to finish listener creation before falling back.
+    if wait_for_tun_interface; then
+        printf '%s\n' '已确认 Mihomo 创建并持有 configflow-tun TUN 接口；此检查不代表全部透明代理路由或代理节点已配置。'
+    else
+        show_service_logs mihomo
+        printf '%s\n' '未能确认 Mihomo 实际创建并持有 TUN 接口；将关闭本次初始配置的 TUN，保留 DNS 服务安装。'
+        if [ "$INIT_SYSTEM" = systemd ]; then systemctl stop mihomo || fail '关闭 TUN 前停止 Mihomo 失败，未改写运行配置；请手动检查服务。'
+        else rc-service mihomo stop || fail '关闭 TUN 前停止 Mihomo 失败，未改写运行配置；请手动检查服务。'; fi
+        TUN_ENABLED=false
+        TUN_REASON='安装进程预检通过，但未能确认核心服务实际创建 TUN；服务管理器权限或容器设备策略可能与安装进程不同。'
+        write_mihomo_bootstrap
+        cp "$STAGE/mihomo/config.yaml" /etc/mihomo/config.yaml || fail '写入关闭 TUN 的初始配置失败。'
+        if [ "$INIT_SYSTEM" = systemd ]; then systemctl start mihomo || { show_service_logs mihomo; fail '关闭 TUN 后 Mihomo 启动失败。'; }
+        else rc-service mihomo start || { show_service_logs mihomo; fail '关闭 TUN 后 Mihomo 启动失败。'; }; fi
+        sleep 2
+        if [ "$INIT_SYSTEM" = systemd ]; then systemctl is-active --quiet mihomo || { show_service_logs mihomo; fail '关闭 TUN 后 Mihomo 未保持运行。'; }
+        else rc-service mihomo status || { show_service_logs mihomo; fail '关闭 TUN 后 Mihomo 未保持运行。'; }; fi
+        show_tun_disabled_guidance
+    fi
+fi
 if command -v dig >/dev/null 2>&1; then
     for port in 1053 53; do
         for transport in +notcp +tcp; do
@@ -313,5 +440,6 @@ for service in mihomo oxidns; do
 done
 COMMITTED=true
 printf '%s\n' 'Mihomo 与 OxiDNS 已分别安装并设置开机启动。OxiDNS 53 → Mihomo 1053 → 公共 DNS。' \
-    '配置：/etc/mihomo/config.yaml、/etc/oxidns/config.yaml。当前为基础 DNS 转发，不启用 TUN 或代理节点。' \
+    '配置：/etc/mihomo/config.yaml、/etc/oxidns/config.yaml。当前没有代理节点，流量按 DIRECT 直连。' \
     '本脚本只安装两个核心；如需面板管理，请继续使用独立的 Agent 接入安装。'
+printf '%s\n' "安装结果：tun.enable=${TUN_ENABLED}。首次从面板发布前，请检查 Mihomo 基础配置的 tun.enable 与本次检测结果一致；发布以面板配置为准。"
