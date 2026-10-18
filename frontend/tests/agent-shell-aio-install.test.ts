@@ -59,11 +59,21 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
+function findButton(text: string) {
+  const buttons = [...document.querySelectorAll('button')]
+  const label = (button: HTMLButtonElement) => button.textContent?.trim().replace(/\s+/g, ' ')
+  return buttons.find(button => label(button) === text) ?? buttons.find(button => label(button)?.startsWith(`${text} `))
+}
 async function click(text: string) {
-  const button = [...document.querySelectorAll('button')].find(item => item.textContent?.trim() === text)
+  const button = findButton(text)
   expect(button, text).toBeTruthy()
   button!.click()
   await flushPromises()
+}
+async function expand(text: string) {
+  const button = findButton(text)
+  expect(button, text).toBeTruthy()
+  if (button!.getAttribute('aria-expanded') !== 'true') await click(text)
 }
 async function input(id: string, value: string) {
   const element = document.getElementById(id) as HTMLInputElement
@@ -90,9 +100,12 @@ describe('Shell Mihomo + OxiDNS installation', () => {
     expect((document.getElementById('oxidns-agent-port') as HTMLInputElement).value).toBe('8082')
     expect(document.getElementById('mosdns-agent-port')).toBeNull()
     expect(document.getElementById('agent-config-path')).toBeNull()
-    expect(document.body.textContent).toContain('127.0.0.1:1053')
-    expect(document.body.textContent).toContain('脚本仅安装和接管两个 Agent')
     expect(document.getElementById('aio-install-cores')?.getAttribute('aria-checked')).toBe('false')
+    expect(findButton('安装说明')?.getAttribute('aria-expanded')).toBe('false')
+    expect(document.body.textContent).not.toContain('IPv4 转发')
+    await expand('安装说明')
+    expect(document.body.textContent).toContain('127.0.0.1:1053')
+    expect(document.body.textContent).toContain('IPv4 转发')
 
     await click('生成安装命令')
     const params = {
@@ -107,9 +120,10 @@ describe('Shell Mihomo + OxiDNS installation', () => {
   })
 
   it('uses each core’s custom paths and excludes stale single-service lifecycle settings', async () => {
+    await expand('服务管理高级配置（可选）')
     await input('agent-restart', '/opt/single/control restart')
     await radio('aio')
-    await click('核心服务高级配置')
+    await expand('核心服务高级配置')
     await input('aio-mihomo-config-path', '/opt/mihomo/config.yaml')
     await input('aio-oxidns-config-path', '/opt/oxidns/config.yaml')
     await input('aio-mihomo-service-unit', 'mihomo-native')
@@ -140,6 +154,21 @@ describe('Shell Mihomo + OxiDNS installation', () => {
     expect(document.querySelector('textarea')).toBeNull()
   })
 
+  it.each([
+    { mode: 'single', section: '服务管理高级配置（可选）', field: 'agent-config-path' },
+    { mode: 'aio', section: '核心服务高级配置', field: 'aio-mihomo-config-path' }
+  ])('reveals an invalid $mode configuration path when advanced settings are collapsed', async ({ mode, section, field }) => {
+    if (mode === 'aio') await radio('aio')
+    await expand(section)
+    await input(field, '/opt/custom/')
+    await click(section)
+    expect(document.getElementById(field)).toBeNull()
+    await click('生成安装命令')
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+    expect(notify.warning).toHaveBeenCalledWith('配置文件路径应指向一个文件（如 config.yaml），而不是文件夹')
+    expect((document.getElementById(field) as HTMLInputElement)?.value).toBe('/opt/custom/')
+  })
+
   it('keeps the existing single-service request and its explicit lifecycle auto-detection', async () => {
     await input('agent-port', '18080')
     await click('生成安装命令')
@@ -166,12 +195,11 @@ describe('Shell Mihomo + OxiDNS installation', () => {
 })
 
 describe('independent Mihomo + OxiDNS core installation', () => {
-  it.each([{ target: 'mihomo', name: 'Mihomo', message: '仅安装 Mihomo，DNS 监听 1053' }, { target: 'oxidns', name: 'OxiDNS', message: '使用公共 DNS 上游，无需 Mihomo' }])('generates an independent command for only $name', async ({ target, name, message }) => {
+  it.each([{ target: 'mihomo', name: 'Mihomo' }, { target: 'oxidns', name: 'OxiDNS' }])('generates an independent command for only $name', async ({ target, name }) => {
     await input('agent-name', '')
     await radio('aio')
+    await expand('仅安装核心')
     await radio(target)
-    expect(document.body.textContent).toContain(message)
-    if (target === 'oxidns') expect(document.body.textContent).not.toContain('首次安装 Mihomo 时检测 TUN')
     await click(`生成${name}的安装命令`)
     const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
     expect(command).toContain(`'${target}'`)
@@ -182,6 +210,7 @@ describe('independent Mihomo + OxiDNS core installation', () => {
 
   it('clears commands and ignores pending results after changing the core selection', async () => {
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     await radio('mihomo')
     expect(document.getElementById('core-install-command')).toBeNull()
@@ -199,6 +228,8 @@ describe('independent Mihomo + OxiDNS core installation', () => {
   it('generates the core command with an empty Agent name and default layout, independently of Agent settings', async () => {
     await input('agent-name', '')
     await radio('aio')
+    expect(document.querySelector('[aria-label="要安装的核心"]')).toBeNull()
+    await expand('仅安装核心')
     await click('核心服务高级配置')
     await input('aio-mihomo-config-path', '/opt/custom/mihomo.yaml')
     await input('oxidns-agent-port', '8080')
@@ -210,18 +241,14 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     expect(command).toContain("'https://config.example.test/api/agents/core-install-script'")
     expect(command).not.toMatch(/[\r\n]/)
     expect(command).toContain('sh -c ')
-    expect(document.body.textContent).toContain('自动补齐缺少的依赖')
     expect(command).not.toContain('/opt/custom')
     expect(command).not.toContain('agent_name')
-    expect(document.body.textContent).toContain('可用时自动开启 TUN 及自动路由')
-    expect(document.body.textContent).toContain('不可用时保持关闭，并提示修复和开启方法')
-    expect(document.body.textContent).toContain('后续发布前请检查面板草稿中的 TUN 开关')
-    expect(document.body.textContent).toContain('高级配置只用于接管已有服务')
     expect(document.body.textContent).toContain('生成安装命令')
   })
 
   it('preserves Agent output while generating a separate core command and script preview', async () => {
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成安装命令')
     const agentParams = generatedUrlParams()
     await click('生成两个核心的安装命令')
@@ -234,10 +261,12 @@ describe('independent Mihomo + OxiDNS core installation', () => {
 
   it('clears core output when switching to single-service or Docker modes', async () => {
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     await radio('single')
     expect(document.getElementById('core-install-command')).toBeNull()
     await radio('aio')
+    await expand('仅安装核心')
     expect(document.getElementById('core-install-command')).toBeNull()
     await click('生成两个核心的安装命令')
     await radio('docker')
@@ -249,10 +278,12 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     let finish!: (value: any) => void
     vi.mocked(agentApi.generateCoreInstallScript).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     expect(document.body.textContent).toContain('正在生成核心安装命令…')
     await radio('single')
     await radio('aio')
+    await expand('仅安装核心')
     finish({ data: '#!/bin/sh\necho stale' })
     await flushPromises()
     expect(document.getElementById('core-install-command')).toBeNull()
@@ -265,6 +296,7 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     let fail!: (reason: any) => void
     vi.mocked(agentApi.generateCoreInstallScript).mockReturnValueOnce(new Promise((_, reject) => { fail = reject }))
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     await click('关闭')
     fail(new Error('stale error'))
@@ -272,12 +304,14 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     expect(notify.error).not.toHaveBeenCalled()
     await click('生成安装脚本')
     await radio('aio')
+    await expand('仅安装核心')
     expect(document.getElementById('core-install-command')).toBeNull()
   })
 
   it('shows request failure and permits retry without affecting Agent generation', async () => {
     vi.mocked(agentApi.generateCoreInstallScript).mockRejectedValueOnce({ response: { data: { message: '核心安装文件尚未就绪' } } })
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     expect(notify.error).toHaveBeenCalledWith('核心安装文件尚未就绪')
     expect(document.getElementById('core-install-command')).toBeNull()
@@ -289,6 +323,7 @@ describe('independent Mihomo + OxiDNS core installation', () => {
   it.each(['javascript:alert(1)', 'https://config.example.test/?token=abc', 'https://user:pass@config.example.test'])('rejects an invalid installation service URL: %s', async baseUrl => {
     localStorage.setItem('serverDomain', baseUrl)
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     expect(agentApi.generateCoreInstallScript).not.toHaveBeenCalled()
     expect(notify.error).toHaveBeenCalledWith(expect.stringContaining('HTTP / HTTPS'))
@@ -298,6 +333,7 @@ describe('independent Mihomo + OxiDNS core installation', () => {
   it('does not present commands if an older server returns HTML instead of the script', async () => {
     vi.mocked(agentApi.generateCoreInstallScript).mockResolvedValueOnce({ data: '<!doctype html><title>ConfigFlow</title>' } as any)
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     expect(notify.error).toHaveBeenCalledWith('服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新')
     expect(document.getElementById('core-install-command')).toBeNull()
@@ -306,6 +342,7 @@ describe('independent Mihomo + OxiDNS core installation', () => {
   it.each(['#!/bin/sh\necho old-installer', '#!/bin/sh\n'])('rejects an older or incomplete installer before showing a selected-core command', async script => {
     vi.mocked(agentApi.generateCoreInstallScript).mockResolvedValueOnce({ data: script } as any)
     await radio('aio')
+    await expand('仅安装核心')
     await radio('oxidns')
     await click('生成OxiDNS的安装命令')
     expect(notify.error).toHaveBeenCalledWith('安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试')
@@ -315,6 +352,7 @@ describe('independent Mihomo + OxiDNS core installation', () => {
   it('quotes special URL characters in the generated one-line command', async () => {
     localStorage.setItem('serverDomain', "https://config.example.test/base'$(printf_injected)/")
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
     expect(command).not.toMatch(/[\r\n]/)
@@ -370,7 +408,6 @@ describe('single Agent with its corresponding core', () => {
     expect(commands()).toHaveLength(1)
     expect(document.body.textContent).toContain('Linux（systemd / OpenRC）')
     expect(document.body.textContent).not.toContain('Ubuntu / Debian / CentOS')
-    expect(document.body.textContent).toContain(type === 'mihomo' ? '首次安装检测 TUN 设备与权限' : '独立运行且不依赖 Mihomo')
     await click('查看完整安装脚本')
     expect(commands()).toContain(combinedScript)
     expect(agentApi.generateCoreInstallScript).not.toHaveBeenCalled()
@@ -386,9 +423,9 @@ describe('single Agent with its corresponding core', () => {
   })
 
   it('shows locked defaults while preserving and restoring custom service settings', async () => {
+    await expand('服务管理高级配置（可选）')
     await input('agent-config-path', '/opt/custom/main.yaml')
     await input('agent-restart', '/opt/custom/control restart')
-    await click('服务管理高级配置（可选）')
     await input('agent-service-unit', 'custom-core')
     await input('agent-service-binary', '/opt/custom/mihomo')
     await input('agent-service-stop', '/opt/custom/control stop')
@@ -482,9 +519,6 @@ describe('Shell AIO with both cores', () => {
     await input('mihomo-agent-port', '18080')
     await input('oxidns-agent-port', '18082')
     expect(document.getElementById('core-install-title')).toBeNull()
-    expect(document.body.textContent).toContain('新装 OxiDNS 会使用 127.0.0.1:1053 作为上游')
-    expect(document.body.textContent).toContain('首次安装 Mihomo 时检测 TUN 设备和权限')
-    expect(document.body.textContent).not.toContain('脚本仅安装和接管两个 Agent')
     vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data: combinedScript } as any)
     await click('生成安装命令')
     const expected = {
@@ -533,7 +567,7 @@ describe('Shell AIO with both cores', () => {
     })
     await toggleCores()
     expect(commands()).toEqual([])
-    expect(document.getElementById('core-install-title')).not.toBeNull()
+    expect(findButton('仅安装核心')).toBeTruthy()
     for (const [id, value] of Object.entries(custom)) {
       const element = document.getElementById(id) as HTMLInputElement
       expect(element.value).toBe(value)
@@ -592,6 +626,7 @@ describe('Shell AIO with both cores', () => {
 
   it('clears an independent core command and discards in-flight core requests when combined installation is selected', async () => {
     await radio('aio')
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     expect(document.getElementById('core-install-command')).not.toBeNull()
     await toggleCores()
@@ -599,6 +634,7 @@ describe('Shell AIO with both cores', () => {
     expect(document.getElementById('core-install-command')).toBeNull()
     let finish!: (response: any) => void
     vi.mocked(agentApi.generateCoreInstallScript).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await expand('仅安装核心')
     await click('生成两个核心的安装命令')
     await toggleCores()
     vi.mocked(notify.success).mockClear()

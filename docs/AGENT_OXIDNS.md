@@ -48,7 +48,7 @@ systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_pat
 
 在 Agent 安装弹窗选择 Shell →「单服务」及 Mihomo / OxiDNS，可勾选「同时安装对应核心」。默认不勾选，沿用接管已有服务的方式；勾选后生成一条完整下载成功才执行的命令，以 root 在目标 Linux 机器运行，支持 systemd / OpenRC、curl / wget，缺少下载工具时自动补装，新装核心沿用核心安装器的依赖补装。已有核心但缺少 Agent 必要工具时，会提示补齐后重试。终端选择「安装或升级」后，先运行对应核心安装步骤，成功后继续安装 Agent；选择取消或卸载时不执行核心安装。MosDNS 暂不提供此选项。
 
-勾选时使用标准布局：核心程序 `/usr/local/bin/mihomo` 或 `/usr/local/bin/oxidns`，配置 `/etc/<核心名>/config.yaml`，服务名为核心名，自动识别服务管理器。相关自定义字段暂不可编辑，取消勾选后恢复原来填写的内容。已有自定义布局应取消勾选并填写实际路径；接口也会拒绝将核心安装与不匹配的接管路径或服务命令组合。
+勾选时使用标准布局：核心程序 `/usr/local/bin/mihomo` 或 `/usr/local/bin/oxidns`，配置 `/etc/<核心名>/config.yaml`，服务名为核心名，自动识别服务管理器。配置路径及服务设置位于默认收起的「服务管理高级配置（可选）」中；勾选时暂不可编辑，取消勾选后恢复原来填写的内容。已有自定义布局应取消勾选并填写实际路径；接口也会拒绝将核心安装与不匹配的接管路径或服务命令组合。
 
 新装 Mihomo 的 DNS 为 `1053`，保留 TUN 自动检测与开启逻辑；新装 OxiDNS 的 DNS 为 `53`，使用公共 DNS 上游，可独立运行。已有核心的程序、配置和服务会保留，跳过安装不代表已确认其健康。核心步骤失败时，不继续安装 Agent；核心步骤成功后，若 Agent 安装失败，已安装核心会保留，可修复 Agent 问题后重试。卸载 Agent 也不卸载核心。
 
@@ -56,7 +56,7 @@ systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_pat
 
 ### 一键安装两个核心
 
-在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，保持「同时安装 Mihomo 与 OxiDNS 核心」未勾选，即可使用独立核心安装入口，选择安装两个核心、仅 Mihomo 或仅 OxiDNS，再生成对应命令。以 root 在目标 Linux 机器粘贴执行这一行命令；无需填写 Agent 名称。命令优先使用已有的 curl，也支持只有 wget 的机器；先完整下载脚本，下载成功后才执行，结束时清理临时文件。没有下载工具时，先通过系统包管理器安装 curl 和 ca-certificates；缺少临时文件工具时补装 coreutils。该脚本只安装所选核心，不安装 Agent，也不向面板注册。
+在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，保持「同时安装 Mihomo 与 OxiDNS 核心」未勾选，展开「仅安装核心」，选择安装两个核心、仅 Mihomo 或仅 OxiDNS，再生成对应命令。以 root 在目标 Linux 机器粘贴执行这一行命令；无需填写 Agent 名称。命令优先使用已有的 curl，也支持只有 wget 的机器；先完整下载脚本，下载成功后才执行，结束时清理临时文件。没有下载工具时，先通过系统包管理器安装 curl 和 ca-certificates；缺少临时文件工具时补装 coreutils。该脚本只安装所选核心，不安装 Agent，也不向面板注册。
 
 | 安装选择 | 新建核心的初始 DNS 配置 |
 | --- | --- |
@@ -101,7 +101,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 ### Shell 同机安装 Mihomo + OxiDNS
 
-在 Agent 安装弹窗选择 Shell 的「Mihomo + OxiDNS 同机」模式，可勾选「同时安装 Mihomo 与 OxiDNS 核心」，用一条命令先安装或补齐两个核心，再安装两个独立 Agent。默认不勾选，继续接管已安装的核心；此时也可使用上方独立核心安装命令。两种方式均支持 systemd 和 OpenRC。
+在 Agent 安装弹窗选择 Shell 的「Mihomo + OxiDNS 同机」模式，可勾选「同时安装 Mihomo 与 OxiDNS 核心」，用一条命令先安装或补齐两个核心，再安装两个独立 Agent。默认不勾选，继续接管已安装的核心；此时也可展开「仅安装核心」生成独立命令。两种方式均支持 systemd 和 OpenRC。
 
 勾选时使用 `/etc/mihomo/config.yaml`、`/etc/oxidns/config.yaml`，核心程序位于 `/usr/local/bin`，服务名为 `mihomo` 和 `oxidns`；高级配置暂时锁定，取消勾选后恢复原值。新装核心的 DNS 链路为 OxiDNS `53` → Mihomo `127.0.0.1:1053`，Mihomo 沿用 TUN 自动检测。已有核心和配置会跳过并保留；已有 Mihomo 需确认 DNS 监听 `1053`，已有 OxiDNS 的上游不会被自动迁移。两个 Agent 的端口不能占用 `53` / `1053`，也不能相同。
 
