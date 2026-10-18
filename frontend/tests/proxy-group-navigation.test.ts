@@ -92,10 +92,16 @@ describe('proxy group navigation lifecycle', () => {
 
   it('ignores the result of a preview already running when the page is left', async () => {
     const old = deferred<AxiosResponse>()
-    vi.mocked(proxyGroupApi.previewRegex).mockReturnValueOnce(old.promise)
+    // Initial counts run immediately; only the later detail preview stays pending.
+    vi.mocked(proxyGroupApi.previewRegex)
+      .mockResolvedValueOnce(result())
+      .mockReturnValueOnce(old.promise)
     await render()
     await debounce()
+    expect(proxyGroupApi.previewRegex).toHaveBeenCalledTimes(2)
     const state = (wrapper!.vm as any).$.setupState
+    expect(state.preview.loading).toBe(true)
+    expect(state.preview.nodes).toEqual([])
     const previousNodes = JSON.parse(JSON.stringify(state.preview.nodes))
     const previousCounts = { ...state.matchCounts }
     wrapper!.unmount()

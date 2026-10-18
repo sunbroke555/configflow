@@ -32,22 +32,22 @@ def test_node_latency_preserves_full_proxy_config_and_results(tmp_path, monkeypa
         assert options['unified_delay'] is True
         assert proxies[0]['password'] == 'secret'
         assert proxies[0]['sni'] == 'test.example'
-        return {proxy['name']: {'latency': 88} if proxy['name'] == '香港 01' else
+        return {proxy['name']: {'latency': 88} if proxy['name'] == '["node","n1"]' else
                 {'latency': None, 'error': '连接或请求超时', 'error_code': 'timeout'} for proxy in proxies}
 
     monkeypatch.setattr(node_latency, '_run_probe', probe)
     response = client.post('/api/nodes/latency', json={})
     body = response.get_json()
     assert response.status_code == 200
-    assert set(body['results']) == {'香港 01', '失联节点'}
-    assert body['results']['香港 01']['latency'] == 88
-    assert body['results']['失联节点']['latency'] is None
-    assert body['results']['失联节点']['error_code'] == 'timeout'
+    assert set(body['results']) == {'["node","n1"]', '["node","n2"]'}
+    assert body['results']['["node","n1"]']['latency'] == 88
+    assert body['results']['["node","n2"]']['latency'] is None
+    assert body['results']['["node","n2"]']['error_code'] == 'timeout'
     assert b'secret' not in response.data
     client.post('/api/nodes/latency', json={'names': ['香港 01']})
     stored = client.get('/api/nodes/latency').get_json()['results']
-    assert len(stored['香港 01']['history']) == 2
-    assert len(stored['失联节点']['history']) == 1
+    assert len(stored['["node","n1"]']['history']) == 2
+    assert len(stored['["node","n2"]']['history']) == 1
 
 
 def test_node_latency_rejects_bad_names(tmp_path):
@@ -68,7 +68,7 @@ def test_node_latency_history_is_bounded(tmp_path, monkeypatch):
     })
     for _ in range(node_latency.HISTORY_SIZE + 5):
         node_latency.run_tests()
-    assert len(node_latency.load_results()["A"]["history"]) == node_latency.HISTORY_SIZE
+    assert len(node_latency.load_results()['["node","n1"]']["history"]) == node_latency.HISTORY_SIZE
 
 
 def test_parse_userinfo():

@@ -22,6 +22,8 @@ const previewNodes = [
 ]
 const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
 let wrapper: VueWrapper | undefined
+const storedKey = (id: string) => JSON.stringify(['node', id])
+const subscriptionKey = (id: string, name: string) => JSON.stringify(['subscription', id, name])
 
 beforeAll(() => {
   Object.defineProperty(window, 'matchMedia', {
@@ -174,9 +176,9 @@ it('表格中的订阅预览节点保持只读，不能编辑、删除或选中'
   expect(row.text()).toContain('测试订阅')
 })
 
-it('代理测速分批展示真实进度，失败保留原因，已停用节点不测试', async () => {
-  const records = Array.from({ length: 7 }, (_, i) => ({
-    id: `node-${i}`, name: `node-${i}`, enabled: i !== 6, proxy_string: 'trojan://secret@example.invalid:443'
+it('代理测速每批最多二十个并展示真实进度，失败保留原因，已停用节点不测试', async () => {
+  const records = Array.from({ length: 22 }, (_, i) => ({
+    id: `node-${i}`, name: `node-${i}`, enabled: i !== 21, type: 'trojan', server: 'example.invalid', port: 443, params: { password: 'secret' }
   }))
   vi.mocked(nodeApi.getAll).mockResolvedValue({ data: records } as any)
   vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
@@ -187,25 +189,64 @@ it('代理测速分批展示真实进度，失败保留原因，已停用节点�
     .mockReturnValueOnce(new Promise(resolve => { finishSecond = resolve }))
   await render('card')
   await click('全部测速')
-  expect(nodeApi.testLatency).toHaveBeenNthCalledWith(1, ['node-0', 'node-1', 'node-2', 'node-3', 'node-4'])
-  expect(wrapper!.text()).toContain('正在测速… 0/6')
-  const results = Object.fromEntries(records.slice(0, 5).map(node => [node.name, { latency: 150 }]))
+  expect(nodeApi.testLatency).toHaveBeenCalledTimes(1)
+  expect(nodeApi.testLatency).toHaveBeenNthCalledWith(1, records.slice(0, 20).map(node => storedKey(node.id)))
+  expect(wrapper!.text()).toContain('正在测速… 0/21')
+  expect(wrapper!.get('button[title="从 ConfigFlow 所在机器，经节点访问测试地址"]').attributes('disabled')).toBeDefined()
+  const results = Object.fromEntries(records.slice(0, 20).map(node => [storedKey(node.id), { latency: 150 }]))
   finishFirst({ data: { results, missing: [] } })
   await flushPromises()
-  expect(wrapper!.text()).toContain('正在测速… 5/6')
+  expect(wrapper!.text()).toContain('正在测速… 20/21')
   expect(wrapper!.get('[data-name="node-0"]').text()).toContain('150')
-  expect(nodeApi.testLatency).toHaveBeenNthCalledWith(2, ['node-5'])
-  finishSecond({ data: { results: { 'node-5': { latency: null, error_code: 'auth', error: '代理认证失败，请检查节点凭据' } } } })
+  expect(nodeApi.testLatency).toHaveBeenNthCalledWith(2, [storedKey('node-20')])
+  finishSecond({ data: { results: { [storedKey('node-20')]: { latency: null, error_code: 'auth', error: '代理认证失败，请检查节点凭据' } } } })
   await flushPromises()
-  const failed = wrapper!.get('[data-name="node-5"]').text()
+  const failed = wrapper!.get('[data-name="node-20"]').text()
   expect(failed).toContain('代理认证失败')
   expect(failed).not.toContain('超时')
   expect(wrapper!.text()).toContain('全部测速')
+  expect(nodeApi.testLatency).toHaveBeenCalledTimes(2)
+  expect(wrapper!.get('button[title="从 ConfigFlow 所在机器，经节点访问测试地址"]').attributes('disabled')).toBeUndefined()
+})
+
+it.each([
+  { kind: '结构化', batchSize: 20, total: 41 },
+  { kind: 'URI', batchSize: 5, total: 11 }
+])('$kind 后续批次请求失败时按实际完成数提示并保留结果', async ({ kind, batchSize, total }) => {
+  const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+  const records = Array.from({ length: total }, (_, i) => ({
+    id: `n${i}`, name: `n${i}`, enabled: true,
+    ...(kind === 'URI' ? { proxy_string: 'trojan://secret@example.invalid:443' } : { type: 'trojan', server: 'example.invalid', port: 443 })
+  }))
+  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: records } as any)
+  vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
+  vi.mocked(nodeApi.latency).mockResolvedValue({ data: { results: { [storedKey(`n${batchSize}`)]: { latency: 321 } } } } as any)
+  const results = Object.fromEntries(records.slice(0, batchSize).map(node => [storedKey(node.id),
+    node.name === 'n1' ? { latency: null, error_code: 'auth', error: '代理认证失败' } : { latency: 150 }
+  ]))
+  let failSecond!: (reason: any) => void
+  vi.mocked(nodeApi.testLatency)
+    .mockResolvedValueOnce({ data: { results } } as any)
+    .mockReturnValueOnce(new Promise((_, reject) => { failSecond = reject }))
+  await render('card')
+  await click('全部测速')
+  expect(wrapper!.text()).toContain(`正在测速… ${batchSize}/${total}`)
+  expect(nodeApi.testLatency).toHaveBeenNthCalledWith(2, records.slice(batchSize, batchSize * 2).map(node => storedKey(node.id)))
+  failSecond({ response: { data: { message: '独立测速组件暂时不可用' } } })
+  await flushPromises()
+  expect(error).toHaveBeenCalledWith('独立测速组件暂时不可用', `已完成 ${batchSize}/${total}，结果已保留`)
+  expect(nodeApi.testLatency).toHaveBeenCalledTimes(2)
+  expect(wrapper!.get('[data-name="n0"]').text()).toContain('150')
+  expect(wrapper!.get('[data-name="n1"]').text()).toContain('代理认证失败')
+  expect(wrapper!.get(`[data-name="n${batchSize}"]`).text()).toContain('321')
+  expect(wrapper!.get(`[data-name="n${total - 1}"]`).text()).toContain('未测速')
+  expect(wrapper!.text()).toContain('全部测速')
+  expect(wrapper!.get('button[title="从 ConfigFlow 所在机器，经节点访问测试地址"]').attributes('disabled')).toBeUndefined()
 })
 
 it('组件不可用时提示原因，不将现有结果覆盖为超时', async () => {
   const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
-  vi.mocked(nodeApi.latency).mockResolvedValue({ data: { results: { '香港 手动': { latency: 123 } } } } as any)
+  vi.mocked(nodeApi.latency).mockResolvedValue({ data: { results: { [storedKey('manual-hk')]: { latency: 123 } } } } as any)
   vi.mocked(nodeApi.testLatency).mockRejectedValue({ response: { data: { message: '独立测速组件未安装' } } })
   await render('list')
   await wrapper!.get('button[aria-label="单独测速 香港 手动"]').trigger('click')
@@ -214,18 +255,188 @@ it('组件不可用时提示原因，不将现有结果覆盖为超时', async (
   expect(wrapper!.get('[data-name="香港 手动"]').text()).toContain('123')
 })
 
-it('离开页面后不再提交后续测速批次', async () => {
-  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: Array.from({ length: 6 }, (_, i) => ({
-    id: `n${i}`, name: `n${i}`, enabled: true
+it.each([
+  { kind: '结构化', batchSize: 20 },
+  { kind: 'URI', batchSize: 5 }
+])('$kind 离开页面后不再提交后续测速批次或更新完成数', async ({ kind, batchSize }) => {
+  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: Array.from({ length: batchSize + 1 }, (_, i) => ({
+    id: `n${i}`, name: `n${i}`, enabled: true,
+    ...(kind === 'URI' ? { proxy_string: 'trojan://secret@example.invalid:443' } : { type: 'trojan', server: 'example.invalid', port: 443 })
   })) } as any)
   vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
   let finish!: (value: any) => void
   vi.mocked(nodeApi.testLatency).mockReturnValue(new Promise(resolve => { finish = resolve }))
   await render('list')
   await click('全部测速')
+  expect(nodeApi.testLatency).toHaveBeenCalledWith(Array.from({ length: batchSize }, (_, i) => storedKey(`n${i}`)))
+  expect(wrapper!.text()).toContain(`正在测速… 0/${batchSize + 1}`)
+  const state = (wrapper!.vm as any).$.setupState
   wrapper!.unmount()
   wrapper = undefined
   finish({ data: { results: {} } })
   await flushPromises()
   expect(nodeApi.testLatency).toHaveBeenCalledTimes(1)
+  expect(state.completedTests).toBe(0)
+})
+
+it('二十一个 URI 节点按五个一批保序提交，完成数随真实响应增加', async () => {
+  const records = Array.from({ length: 21 }, (_, i) => ({
+    id: `uri-${i}`, name: `uri-${i}`, enabled: true, proxy_string: 'trojan://secret@example.invalid:443'
+  }))
+  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: records } as any)
+  vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
+  const finishes: Array<(value: any) => void> = []
+  vi.mocked(nodeApi.testLatency).mockImplementation(() => new Promise(resolve => { finishes.push(resolve) }))
+  await render('list')
+  await click('全部测速')
+  for (let index = 0; index < 5; index++) {
+    const keys = records.slice(index * 5, (index + 1) * 5).map(node => storedKey(node.id))
+    expect(nodeApi.testLatency).toHaveBeenCalledTimes(index + 1)
+    expect(nodeApi.testLatency).toHaveBeenNthCalledWith(index + 1, keys)
+    expect(wrapper!.text()).toContain(`正在测速… ${index * 5}/21`)
+    finishes[index]!({ data: { results: Object.fromEntries(keys.map(key => [key, { latency: 120 }])) } })
+    await flushPromises()
+  }
+  expect(nodeApi.testLatency).toHaveBeenCalledTimes(5)
+  expect(wrapper!.text()).toContain('全部测速')
+})
+
+it.each(['JSON', 'YAML'] as const)('%s 结构化节点字符串保留二十个一批的探测并发', async format => {
+  const records = Array.from({ length: 20 }, (_, i) => ({
+    id: `local-${i}`, name: `local-${i}`, enabled: true,
+    proxy_string: format === 'JSON'
+      ? JSON.stringify({ type: 'trojan', server: 'example.invalid', port: 443, password: 'secret' })
+      : 'type: trojan\nserver: example.invalid\nport: 443\npassword: secret'
+  }))
+  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: records } as any)
+  vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
+  vi.mocked(nodeApi.testLatency).mockResolvedValue({ data: { results: {} } } as any)
+  await render('list')
+  await click('全部测速')
+  expect(nodeApi.testLatency).toHaveBeenCalledOnce()
+  expect(nodeApi.testLatency).toHaveBeenCalledWith(records.map(node => storedKey(node.id)))
+})
+
+it('混合节点保序装批，同时限制二十个总节点和五个外部转换节点', async () => {
+  const raw = ['trojan://secret@example.invalid:443', 'dHJvamFuOi8vc2VjcmV0', 'type: [', '- type: trojan', '{"server":"example.invalid"}', 'vless://uuid@example.invalid:443']
+  const records = Array.from({ length: 35 }, (_, i) => ({
+    id: `mixed-${i}`, name: `mixed-${i}`, enabled: true,
+    ...(i <= 10 && i % 2 === 0 ? { proxy_string: raw[i / 2] } : { type: 'trojan', server: 'example.invalid', port: 443 })
+  }))
+  vi.mocked(nodeApi.getAll).mockResolvedValue({ data: records } as any)
+  vi.mocked(api.get).mockResolvedValue({ data: [] } as any)
+  vi.mocked(nodeApi.testLatency).mockResolvedValue({ data: { results: {} } } as any)
+  await render('list')
+  await click('全部测速')
+  expect(vi.mocked(nodeApi.testLatency).mock.calls.map(([keys]) => keys)).toEqual([
+    records.slice(0, 10).map(node => storedKey(node.id)),
+    records.slice(10, 30).map(node => storedKey(node.id)),
+    records.slice(30).map(node => storedKey(node.id))
+  ])
+})
+
+describe.each(['card', 'list'] as const)('%s 同名节点测速隔离', view => {
+  const name = '同名 香港'
+  const keys = [storedKey('same-manual'), storedKey('same-imported'), subscriptionKey('sub-two', name)]
+  beforeEach(() => {
+    vi.mocked(nodeApi.getAll).mockResolvedValue({ data: [
+      { id: 'same-manual', name, enabled: true },
+      { id: 'same-imported', name, enabled: true, subscription_id: 'sub-one', subscription_name: '订阅一' }
+    ] } as any)
+    vi.mocked(api.get).mockResolvedValue({ data: [{ id: 'sub-one' }, { id: 'sub-two' }] } as any)
+    vi.mocked(api.post).mockResolvedValue({ data: {
+      imported_node_ids: ['same-imported'],
+      nodes: [
+        { name, type: 'trojan', source_type: 'subscription', source_id: 'sub-one', subscription_name: '订阅一' },
+        { name, type: 'trojan', source_type: 'subscription', source_id: 'sub-two', subscription_name: '订阅二' }
+      ]
+    } } as any)
+  })
+
+  function rows() {
+    return wrapper!.findAll('[data-name]').filter(row => row.attributes('data-name') === name)
+  }
+
+  async function testRow(index: number) {
+    const row = rows()[index]!
+    const direct = row.find(`button[aria-label="单独测速 ${name}"]`)
+    if (direct.exists()) {
+      await direct.trigger('click')
+    } else {
+      await row.get(`button[aria-label="${name} 的更多操作"]`).trigger('keydown', { key: 'Enter' })
+      await flushPromises()
+      const action = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+        .find(item => item.textContent?.trim() === '单独测速')
+      expect(action).toBeDefined()
+      action!.click()
+    }
+    await flushPromises()
+  }
+
+  it('分别测试手动、导入和另一订阅的同名节点，加载态、延迟、错误和历史互不串用', async () => {
+    vi.mocked(nodeApi.latency).mockResolvedValue({ data: { results: {
+      [name]: { latency: 999, error: '旧名称缓存不应显示', history: [null] }
+    } } } as any)
+    await render(view)
+    expect(rows()).toHaveLength(3)
+    rows().forEach(row => {
+      expect(row.text()).toContain('未测速')
+      expect(row.text()).not.toContain('旧名称缓存不应显示')
+    })
+    const records = [
+      { latency: 111, history: [111], url: 'https://manual.test/' },
+      { latency: null, history: [null], error_code: 'auth', error: '订阅一认证失败', url: 'https://sub-one.test/' },
+      { latency: 333, history: [333], url: 'https://sub-two.test/' }
+    ]
+    for (let index = 0; index < keys.length; index++) {
+      let finish!: (value: any) => void
+      vi.mocked(nodeApi.testLatency).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+      await testRow(index)
+      expect(nodeApi.testLatency).toHaveBeenLastCalledWith([keys[index]])
+      expect(wrapper!.text()).toContain('正在测速… 0/1')
+      rows().forEach((row, rowIndex) => {
+        expect(view === 'card' ? row.classes().includes('is-testing') : row.find('.animate-spin').exists()).toBe(rowIndex === index)
+      })
+      finish({ data: { results: { [keys[index]!]: records[index] } } })
+      await flushPromises()
+    }
+    const [manual, imported, subscription] = rows()
+    expect(manual!.text()).toContain('111')
+    expect(manual!.text()).not.toContain('333')
+    expect(imported!.text()).toContain('失败')
+    expect(imported!.text()).not.toContain('111')
+    expect(imported!.text()).not.toContain('333')
+    expect(subscription!.text()).toContain('333')
+    expect(subscription!.text()).not.toContain('111')
+    rows().forEach((row, index) => {
+      const titles = row.findAll('[title]').map(item => item.attributes('title')).join(' ')
+      expect(titles).toContain(records[index]!.url)
+      expect(titles.includes('订阅一认证失败')).toBe(index === 1)
+    })
+    if (view === 'card') {
+      expect(manual!.findAll('i').at(-1)!.attributes('style')).toContain('height: 63%')
+      expect(imported!.findAll('i').at(-1)!.attributes('style')).toContain('height: 18%')
+      expect(subscription!.findAll('i').at(-1)!.attributes('style')).toContain('height: 12%')
+    }
+  })
+
+  it('批量包含所有同名来源，不可用结果仅属于对应来源且通知使用节点名称', async () => {
+    const success = vi.spyOn(notify, 'success').mockImplementation(() => 0)
+    let finish!: (value: any) => void
+    vi.mocked(nodeApi.testLatency).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    await render(view)
+    await click('全部测速')
+    expect(nodeApi.testLatency).toHaveBeenCalledWith(keys)
+    expect(wrapper!.text()).toContain('正在测速… 0/3')
+    finish({ data: { results: {
+      [keys[0]!]: { latency: 31 }, [keys[2]!]: { latency: 63 }
+    }, missing: [keys[1]] } })
+    await flushPromises()
+    expect(rows()[0]!.text()).toContain('31')
+    expect(rows()[0]!.text()).not.toContain('不可用')
+    expect(rows()[1]!.text()).toContain('不可用')
+    expect(rows()[2]!.text()).toContain('63')
+    expect(rows()[2]!.text()).not.toContain('不可用')
+    expect(success).toHaveBeenCalledWith(`测速完成 · 最快 ${name} 31ms`, '1 个已删除或停用')
+  })
 })

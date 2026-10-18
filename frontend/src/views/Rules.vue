@@ -806,7 +806,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import ViewToggle from '@/components/common/ViewToggle.vue'
 import { notify } from '@/lib/feedback'
 import { listItem } from '@/lib/motion'
-import { ruleApi, ruleSetApi, proxyGroupApi, nodeApi } from '@/api'
+import { ruleApi, ruleSetApi, proxyGroupApi } from '@/api'
 import { cn } from '@/lib/utils'
 import type { Rule, RuleSet, ProxyGroup } from '@/types'
 import api from '@/api'
@@ -866,19 +866,6 @@ const simResult = ref<any>(null)
 const simScanKey = ref('')
 const simMatchKey = ref('')
 const simVia = ref<{ label: string; hint: string } | null>(null)
-const latencyMap = ref<Record<string, { latency: number | null }>>({})
-let latencyLoaded = false
-/** 测速结果只在模拟命中策略组、需要推断出口节点时才读取 */
-const ensureLatency = async () => {
-  if (latencyLoaded) return
-  try {
-    const { data } = await nodeApi.latency()
-    latencyMap.value = data?.results || {}
-    latencyLoaded = true
-  } catch {
-    // 没有测速结果时只按策略组默认项推断
-  }
-}
 
 const policyChip = (policy: string) =>
   policy === 'DIRECT' ? 'chip-ok font-mono' : policy === 'REJECT' ? 'chip-bad font-mono' : 'chip-acc'
@@ -912,10 +899,10 @@ const simSamples = computed(() => {
 
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
-/** 命中的是策略组时，按其来源与正则取节点，再用最近测速推断出口节点 */
+/** 仅展示手动策略组的默认项；自动策略组的实际出口由目标设备决定。 */
 const resolveVia = async (policy: string) => {
   const group: any = proxyGroups.value.find(g => g.name === policy)
-  if (!group || group.follow_group) return null
+  if (!group || group.follow_group || group.type !== 'select') return null
   const useAgg = (group.aggregations || []).length > 0
   const sources = useAgg ? group.aggregations : group.subscriptions || []
   if (!sources.length) return null
@@ -927,21 +914,9 @@ const resolveVia = async (policy: string) => {
     }, profileId)
     const nodes: any[] = data.nodes || []
     if (!nodes.length) return null
-    await ensureLatency()
-    const reachable = nodes.filter(n => typeof latencyMap.value[n.name]?.latency === 'number')
-    const pick =
-      group.type === 'url-test'
-        ? [...reachable].sort((a, b) => (latencyMap.value[a.name].latency as number) - (latencyMap.value[b.name].latency as number))[0]
-        : group.type === 'fallback'
-          ? reachable[0]
-          : group.type === 'select'
-            ? nodes[0]
-            : null
-    if (!pick) return null
-    const ms = latencyMap.value[pick.name]?.latency
     return {
-      label: typeof ms === 'number' ? `${pick.name} · ${ms}ms` : pick.name,
-      hint: group.type === 'select' ? '策略组默认选中' : '按最近测速推断'
+      label: `默认：${nodes[0].name}`,
+      hint: '策略组默认选中，实际出口以目标设备 Mihomo 面板为准'
     }
   } catch {
     return null

@@ -1,7 +1,7 @@
 """Real proxy latency through an independent, on-demand worker.
 
 The worker uses complete node credentials, never the running Mihomo controller.
-Legacy TCP results are excluded from proxy-latency history.
+Results from earlier probe semantics are excluded from proxy-latency history.
 """
 import json
 import os
@@ -23,10 +23,11 @@ from backend.utils.subscription_filter import filter_subscription_items
 
 logger = get_logger(__name__)
 LATENCY_FILE = 'node_latency.json'
-METHOD = 'proxy_http_v1'
+METHOD = 'proxy_http_v2'
 HISTORY_SIZE = 14
-MAX_WORKERS = 5
-MAX_NODES = 20  # The UI sends batches of five, below ordinary HTTP timeouts.
+MAX_NODES = 20
+MAX_WORKERS = MAX_NODES  # Keep in sync with the bounded node-probe batch.
+MAX_CONVERSION_WORKERS = 5  # Avoid flooding Sub-Store for URI-only nodes.
 _test_lock = threading.Lock()
 
 
@@ -55,22 +56,25 @@ def settings() -> Dict[str, Any]:
 
 
 def collect_candidates() -> Dict[str, Dict[str, Any]]:
-    """Preserve credentials and transport options; manual nodes win name collisions."""
+    """Preserve complete nodes and distinguish equal names from different sources."""
     config = get_shared_config()
     candidates = {}
 
-    def add(node):
+    def add(node, identity):
         if isinstance(node, dict) and node.get('enabled') is not False and node.get('name'):
-            candidates.setdefault(node['name'], node)
+            key = json.dumps(identity, ensure_ascii=False, separators=(',', ':'))
+            candidates.setdefault(key, node)
 
     for node in config.get('nodes', []):
-        add(node)
+        if isinstance(node, dict) and node.get('id'):
+            add(node, ['node', node['id']])
     for sub in config.get('subscriptions', []):
-        if sub.get('enabled') is False:
+        if sub.get('enabled') is False or not sub.get('id'):
             continue
-        cache = load_subscription_cache(sub.get('id', '')) or {}
+        cache = load_subscription_cache(sub['id']) or {}
         for node in filter_subscription_items(sub, cache.get('nodes', []) or []):
-            add(node)
+            if isinstance(node, dict):
+                add(node, ['subscription', sub['id'], node.get('name')])
     return candidates
 
 
@@ -91,6 +95,13 @@ def _proxy_of(node):
         return proxy
     except Exception:  # A malformed node must not prevent testing the others.
         return None
+
+
+def _needs_sub_store(node):
+    from backend.converters.mihomo import _parse_structured_proxy_string
+
+    raw = node.get('proxy_string')
+    return isinstance(raw, str) and bool(raw) and _parse_structured_proxy_string(raw) is None
 
 
 def _probe_binary() -> str:
@@ -127,7 +138,9 @@ def _run_probe(proxies, options):
         raise ProbeUnavailable('测速组件异常退出，请检查组件版本后重试')
     try:
         response = json.loads(process.stdout)
-        if response['version'] != 1 or not isinstance(response['results'], list):
+        if response['version'] != 2:
+            raise ProbeUnavailable('测速组件版本不匹配，请更新 ConfigFlow 镜像；源码部署请重新构建 backend/node-probe')
+        if not isinstance(response['results'], list):
             raise ValueError
         results = {entry['name']: entry for entry in response['results']}
         if set(results) != {proxy['name'] for proxy in proxies}:
@@ -161,47 +174,67 @@ def _save_results(results):
         logger.error('写入节点延迟结果失败')
 
 
-def run_tests(names: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+def run_tests(names: Optional[Iterable[str]] = None, *, keys: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     if not _test_lock.acquire(blocking=False):
         raise ProbeBusy('已有节点测速正在进行，请稍后重试')
     try:
-        return _run_tests(names)
+        return _run_tests(names, keys)
     finally:
         _test_lock.release()
 
 
-def _run_tests(names):
+def _run_tests(names, keys):
     candidates = collect_candidates()
-    requested = list(dict.fromkeys(candidates if names is None else names))
+    if names is not None and keys is not None:
+        raise ValueError('names 与 keys 不能同时指定')
+    requested_ids = names if names is not None else keys
+    requested = list(dict.fromkeys(candidates if requested_ids is None else requested_ids))
     if len(requested) > MAX_NODES:
         raise ValueError(f'单次最多测试 {MAX_NODES} 个节点，请分批测试')
-    wanted = [name for name in requested if name in candidates]
+    # Explicit legacy names requests remain supported only when unambiguous.
+    # Responses use the requested names, but all persisted records use source keys.
+    identities = {key: key for key in requested if key in candidates}
+    if names is not None:
+        by_name = {}
+        for key, node in candidates.items():
+            by_name.setdefault(node['name'], []).append(key)
+        if any(len(by_name.get(name, [])) > 1 for name in requested):
+            raise ValueError('存在同名节点，请使用 keys 指定节点来源后重试')
+        identities = {name: by_name[name][0] for name in requested if name in by_name}
+    wanted = list(identities.values())
+    # Keep URI conversion within one bounded wave even when local nodes fill a
+    # 20-node probe batch. Four sequential conversion waves can outlast HTTP.
+    if sum(_needs_sub_store(candidates[key]) for key in wanted) > MAX_CONVERSION_WORKERS:
+        raise ValueError(f'单次最多测试 {MAX_CONVERSION_WORKERS} 个需要 Sub-Store 转换的节点，请分批测试')
     options = settings()
     measured = {}
     if wanted:
         _probe_binary()  # Fail before conversion if the component is missing.
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(wanted))) as pool:
-            converted = list(pool.map(lambda name: _proxy_of(candidates[name]), wanted))
+        with ThreadPoolExecutor(max_workers=min(MAX_CONVERSION_WORKERS, len(wanted))) as pool:
+            converted = list(pool.map(lambda key: _proxy_of(candidates[key]), wanted))
         proxies = []
-        for name, proxy in zip(wanted, converted):
+        for key, proxy in zip(wanted, converted):
             if proxy:
+                # The worker uses its name only to correlate a result with input.
+                # Source keys prevent same-name nodes from overwriting each other.
+                proxy['name'] = key
                 proxies.append(proxy)
             else:
-                measured[name] = {'latency': None, 'error_code': 'config',
-                                  'error': '无法解析完整节点配置，请检查格式或 Sub-Store 服务'}
+                measured[key] = {'latency': None, 'error_code': 'config',
+                                 'error': '无法解析完整节点配置，请检查格式或 Sub-Store 服务'}
         if proxies:
             measured.update(_run_probe(proxies, options))
 
     stamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     stored = load_results()
-    for name, measurement in measured.items():
-        entry = stored.get(name, {})
+    for key, measurement in measured.items():
+        entry = stored.get(key, {})
         same_test = entry.get('url') == options['url'] and entry.get('unified_delay') == options['unified_delay']
         history = list(entry.get('history') or [])[-(HISTORY_SIZE - 1):] if same_test else []
         history.append(measurement['latency'])
-        stored[name] = {key: value for key, value in measurement.items() if key != 'name'}
-        stored[name].update(method=METHOD, tested_at=stamp, history=history, **options)
-    stored = {name: entry for name, entry in stored.items() if name in candidates}
+        stored[key] = {field: value for field, value in measurement.items() if field != 'name'}
+        stored[key].update(method=METHOD, tested_at=stamp, history=history, **options)
+    stored = {key: entry for key, entry in stored.items() if key in candidates}
     _save_results(stored)
-    return {'tested_at': stamp, 'results': {name: stored[name] for name in measured},
-            'missing': [name for name in requested if name not in candidates], 'settings': options}
+    return {'tested_at': stamp, 'results': {requested_id: stored[key] for requested_id, key in identities.items()},
+            'missing': [requested_id for requested_id in requested if requested_id not in identities], 'settings': options}

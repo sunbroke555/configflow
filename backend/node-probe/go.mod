@@ -2,7 +2,10 @@ module configflow/node-probe
 
 go 1.26.0
 
-require github.com/metacubex/mihomo v1.19.32
+require (
+	github.com/metacubex/http v0.1.8
+	github.com/metacubex/mihomo v1.19.32
+)
 
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
@@ -53,7 +56,6 @@ require (
 	github.com/metacubex/gvisor v0.0.0-20260922041103-e2cbcd6e7400 // indirect
 	github.com/metacubex/hkdf v0.1.0 // indirect
 	github.com/metacubex/hpke v0.1.0 // indirect
-	github.com/metacubex/http v0.1.8 // indirect
 	github.com/metacubex/jls-quic-go v0.0.0-20260727080412-732f2fc9a34d // indirect
 	github.com/metacubex/jls-tls v0.0.0-20260723084315-67adc0e2f796 // indirect
 	github.com/metacubex/jsonv2 v0.0.0-20260721082349-16b4998c8f89 // indirect

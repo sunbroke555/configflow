@@ -18,10 +18,40 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/metacubex/mihomo/adapter"
 )
+
+// URLTest has a global option; only the reference implementation in these
+// differential tests changes it, under a lock. Production probes use no globals.
+var coreTestMu sync.Mutex
+
+func coreLatency(t *testing.T, node map[string]any, target string, unified bool, timeout time.Duration) (uint16, error) {
+	t.Helper()
+	coreTestMu.Lock()
+	defer coreTestMu.Unlock()
+	previous := adapter.UnifiedDelay.Load()
+	adapter.UnifiedDelay.Store(unified)
+	defer adapter.UnifiedDelay.Store(previous)
+	proxy, err := adapter.ParseProxy(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	delay, err := proxy.URLTest(ctx, target, nil)
+	// The controller checks the deadline even if URLTest falls back to its
+	// first response after the second request runs out of time.
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	return delay, err
+}
 
 func proxyServer(t *testing.T, destination string, delay time.Duration) (map[string]any, *atomic.Int32) {
 	t.Helper()
@@ -94,6 +124,42 @@ func TestProxyProtocolAndUnifiedDelay(t *testing.T) {
 	}
 }
 
+func TestConcurrentMeasurementsKeepDelayModeLocal(t *testing.T) {
+	var firstCalls, unifiedCalls atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/first" {
+			firstCalls.Add(1)
+		} else {
+			unifiedCalls.Add(1)
+		}
+		time.Sleep(20 * time.Millisecond)
+		w.WriteHeader(204)
+	}))
+	defer target.Close()
+	node, _ := proxyServer(t, target.Listener.Addr().String(), 120*time.Millisecond)
+	var results [2]result
+	var wg sync.WaitGroup
+	for i, path := range []string{"first", "unified"} {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			results[i] = measure(ctx, node, "http://only-via-proxy.invalid/"+path, i == 1)
+		})
+	}
+	wg.Wait()
+	for _, result := range results {
+		if result.Latency == nil || result.FirstLatency == nil || *result.FirstLatency < 120 {
+			t.Fatalf("proxy handshake was not included: %+v", result)
+		}
+	}
+	if *results[0].Latency != *results[0].FirstLatency || *results[1].FirstLatency < *results[1].Latency+90 {
+		t.Fatalf("delay modes interfered: first=%+v, unified=%+v", results[0], results[1])
+	}
+	if firstCalls.Load() != 1 || unifiedCalls.Load() != 2 {
+		t.Fatalf("first HEADs=%d, unified HEADs=%d", firstCalls.Load(), unifiedCalls.Load())
+	}
+}
+
 func TestWrongCredentialsCannotPass(t *testing.T) {
 	target := targetServer(t, 204)
 	node, connections := proxyServer(t, target.Listener.Addr().String(), 0)
@@ -131,32 +197,80 @@ func TestOpenTCPPortIsNotAWorkingProxy(t *testing.T) {
 	}
 }
 
-func TestBadHTTPStatusAndRedirectFail(t *testing.T) {
-	for _, status := range []int{200, 302, 500} {
+func TestHTTPResponsesMatchMihomoLatency(t *testing.T) {
+	for _, status := range []int{200, 204, 302, 500} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			target := targetServer(t, status)
 			node, _ := proxyServer(t, target.Listener.Addr().String(), 0)
 			result := measure(context.Background(), node, "http://only-via-proxy.invalid/", true)
-			if result.Latency != nil || result.ErrorCode != "http_status" {
+			coreDelay, coreErr := coreLatency(t, node, "http://only-via-proxy.invalid/", true, 2*time.Second)
+			if coreErr != nil || coreDelay == 0 || result.Latency == nil || result.Error != "" {
+				t.Fatalf("worker=%+v; core=%d, %v", result, coreDelay, coreErr)
+			}
+		})
+	}
+}
+
+func TestSecondRequestMatchesMihomo(t *testing.T) {
+	for _, behavior := range []string{"http_response", "connection_closed", "timeout"} {
+		t.Run(behavior, func(t *testing.T) {
+			var calls atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				time.Sleep(20 * time.Millisecond)
+				if calls.Add(1) == 1 {
+					w.WriteHeader(204)
+					return
+				}
+				switch behavior {
+				case "http_response":
+					w.WriteHeader(503)
+				case "connection_closed":
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err == nil {
+						_ = conn.Close()
+					}
+				case "timeout":
+					<-r.Context().Done()
+				}
+			}))
+			defer target.Close()
+			node, _ := proxyServer(t, target.Listener.Addr().String(), 0)
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			result := measure(ctx, node, "http://only-via-proxy.invalid/", true)
+			calls.Store(0)
+			coreDelay, coreErr := coreLatency(t, node, "http://only-via-proxy.invalid/", true, 200*time.Millisecond)
+			if behavior == "timeout" {
+				if result.ErrorCode != "timeout" || result.Latency != nil || coreErr == nil {
+					t.Fatalf("worker=%+v; core=%d, %v", result, coreDelay, coreErr)
+				}
+				return
+			}
+			if result.Latency == nil || coreErr != nil || coreDelay == 0 || result.FirstLatency == nil {
+				t.Fatalf("worker=%+v; core=%d, %v", result, coreDelay, coreErr)
+			}
+			if behavior == "connection_closed" && *result.Latency < *result.FirstLatency+15 {
+				t.Fatalf("fallback must include the failed second attempt: %+v", result)
+			}
+			if calls.Load() < 2 {
 				t.Fatalf("%+v", result)
 			}
 		})
 	}
 }
 
-func TestSecondRequestFailureIsNotWarmupSuccess(t *testing.T) {
-	var calls atomic.Int32
+func TestFirstRequestFailureCannotPass(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) == 1 {
-			w.WriteHeader(204)
-		} else {
-			w.WriteHeader(503)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
 		}
 	}))
 	defer target.Close()
 	node, _ := proxyServer(t, target.Listener.Addr().String(), 0)
 	result := measure(context.Background(), node, "http://only-via-proxy.invalid/", true)
-	if result.Latency != nil || result.ErrorCode != "http_status" {
+	_, coreErr := coreLatency(t, node, "http://only-via-proxy.invalid/", true, time.Second)
+	if result.Latency != nil || result.ErrorCode != "connection" || coreErr == nil {
 		t.Fatalf("%+v", result)
 	}
 }
@@ -199,8 +313,10 @@ func TestBatchBoundedAndIsolatesFailures(t *testing.T) {
 	}
 }
 
-func TestBatchUsesAtMostFiveRequestsAndFirstConnectionMode(t *testing.T) {
+func TestBatchRunsTwentyConcurrentlyAndPreservesFirstConnectionMode(t *testing.T) {
 	var active, peak, calls atomic.Int32
+	started := make(chan struct{}, maxNodes)
+	release := make(chan struct{})
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := active.Add(1)
 		defer active.Add(-1)
@@ -210,26 +326,74 @@ func TestBatchUsesAtMostFiveRequestsAndFirstConnectionMode(t *testing.T) {
 			}
 		}
 		calls.Add(1)
-		time.Sleep(30 * time.Millisecond)
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
 		w.WriteHeader(204)
 	}))
 	defer target.Close()
 	node, _ := proxyServer(t, target.Listener.Addr().String(), 0)
-	nodes := make([]map[string]any, 11)
+	nodes := make([]map[string]any, maxNodes)
 	for i := range nodes {
 		nodes[i] = node
 	}
-	results, err := execute(request{URL: "http://only-via-proxy.invalid/", TimeoutMS: 1000, Nodes: nodes})
-	if err != nil {
-		t.Fatal(err)
+	finished := make(chan []result, 1)
+	go func() {
+		results, _ := execute(request{URL: "http://only-via-proxy.invalid/", TimeoutMS: 2000, Nodes: nodes})
+		finished <- results
+	}()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for range maxNodes {
+		select {
+		case <-started:
+		case <-deadline.C:
+			close(release)
+			<-finished
+			t.Fatal("the whole batch did not start together")
+		}
+	}
+	close(release)
+	results := <-finished
+	if len(results) != maxNodes {
+		t.Fatalf("results=%d", len(results))
 	}
 	for _, result := range results {
 		if result.Latency == nil || *result.Latency != *result.FirstLatency {
 			t.Fatalf("%+v", result)
 		}
 	}
-	if calls.Load() != 11 || peak.Load() > 5 {
+	if calls.Load() != maxNodes || peak.Load() != maxNodes {
 		t.Fatalf("calls=%d, peak=%d", calls.Load(), peak.Load())
+	}
+}
+
+func TestTimeoutBatchFinishesInOneRound(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer target.Close()
+	node, _ := proxyServer(t, target.Listener.Addr().String(), 0)
+	nodes := make([]map[string]any, maxNodes)
+	for i := range nodes {
+		nodes[i] = node
+	}
+	started := time.Now()
+	results, err := execute(request{URL: "http://only-via-proxy.invalid/", TimeoutMS: 500, UnifiedDelay: true, Nodes: nodes})
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.ErrorCode != "timeout" || result.Latency != nil {
+			t.Fatalf("%+v", result)
+		}
+	}
+	t.Logf("20 timeout nodes completed in %s (previous five-worker schedule requires four 500ms rounds)", elapsed.Round(time.Millisecond))
+	if elapsed >= 1500*time.Millisecond {
+		t.Fatalf("batch still waited for serial timeout rounds: %s", elapsed)
 	}
 }
 
@@ -276,12 +440,13 @@ func TestHTTPSWorkerProcess(t *testing.T) {
 			t.Fatal(err)
 		}
 		var response struct {
+			Version int      `json:"version"`
 			Results []result `json:"results"`
 		}
 		if err := json.Unmarshal(output, &response); err != nil {
 			t.Fatalf("%s: %v", output, err)
 		}
-		if len(response.Results) != 1 {
+		if response.Version != 2 || len(response.Results) != 1 {
 			t.Fatal(string(output))
 		}
 		item := response.Results[0]
