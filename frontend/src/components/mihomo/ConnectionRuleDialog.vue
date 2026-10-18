@@ -66,6 +66,7 @@ import { clientToolsApi } from '@/api'
 import { deviceAddress, type ConnectionRuleTargets, type ConnectionRuleType } from '@/lib/device-notes'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
 import { panelError } from '@/types/mihomo'
+import { domainRuleLine } from '@/lib/ruleset-format'
 const props = defineProps<{ agentId: string; values: string[]; target: 'direct' | 'proxy' }>()
 const emit = defineEmits<{ close: [] }>()
 const state = ref<ConnectionRuleTargets | null>(null)
@@ -88,7 +89,7 @@ const selectedTarget = computed(() => isIP.value ? ipTargets.value.find(item => 
 const domainRuleType = ref<'DOMAIN' | 'DOMAIN-SUFFIX'>('DOMAIN')
 const ruleType = computed<ConnectionRuleType>(() => isIP.value ? (value.value.includes(':') ? 'IP-CIDR6' : 'IP-CIDR') : domainRuleType.value)
 const rulePreview = computed(() => {
-  if (!isIP.value) return `${ruleType.value},${value.value}`
+  if (!isIP.value) return domainRuleLine(selectedTarget.value?.behavior, ruleType.value, value.value)
   return (selectedTarget.value as { behavior?: string })?.behavior === 'ipcidr' ? ipCidr.value : `${ruleType.value},${ipCidr.value},no-resolve`
 })
 const result = ref<{ added: unknown[]; skipped: unknown[]; warnings: string[] } | null>(null)

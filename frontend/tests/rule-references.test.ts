@@ -22,7 +22,9 @@ const network = vi.hoisted(() => {
       : path === '/rule-library/proxy-domains' ? { proxy_domains: '' }
       : []
   }))
-  const post = vi.fn(async (_path: string, _body?: Record<string, unknown>, _config?: unknown) => ({ data: { success: true } }))
+  const post = vi.fn(async (_path: string, _body?: Record<string, unknown>, _config?: unknown): Promise<{ data: any }> => ({ data: _path === '/rule-library/check-content'
+    ? { content: String(_body?.content || '') + ((_body?.append_lines as string[] || []).length ? '\n' + (_body!.append_lines as string[]).join('\n') + '\n' : ''), changes: [], errors: [] }
+    : { success: true } }))
   const put = vi.fn(async (_path: string, _body?: Record<string, unknown>, _config?: unknown) => ({ data: { success: true } }))
   const remove = vi.fn(async (_path: string) => ({ data: { success: true } }))
   const rules = {
@@ -198,6 +200,67 @@ describe('profile rule references', () => {
 })
 
 describe('shared rule library', () => {
+  it('offers exact, suffix and explicit wildcard input with the stored format preview', async () => {
+    const wrapper = await render(RuleLibrary)
+    const state = (wrapper.vm as any).$.setupState
+    state.showAddRuleToSetDialog(network.state.library[0]); await flushPromises()
+    state.addRuleToSetForm.value = 'api.example.com'; await flushPromises()
+    expect(state.addRulePreview).toBe('api.example.com')
+    expect(document.body.textContent).toContain('匹配范围')
+    state.addRuleToSetForm.rule_type = 'DOMAIN-SUFFIX'; await flushPromises()
+    expect(state.addRulePreview).toBe('+.api.example.com')
+    state.addRuleToSetForm.rule_type = 'PATTERN'
+    state.addRuleToSetForm.value = '+.x.ai\napi.telegram.org'; await flushPromises()
+    expect(state.addRulePreview).toBe('+.x.ai\napi.telegram.org')
+    await clickText('添加')
+    expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({
+      content: 'example.com\n+.x.ai\napi.telegram.org\n', behavior: 'domain'
+    }))
+  })
+
+  it('shows correct examples and leaves mixed drafts untouched when conversion is cancelled', async () => {
+    network.state.library[0]!.content = 'DOMAIN-SUFFIX,x.ai\napi.telegram.org'
+    const wrapper = await render(RuleLibrary)
+    await render(ConfirmHost)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.placeholder).toContain('+.example.com')
+    expect(document.body.textContent).toContain('两种写法可混用')
+    network.post.mockResolvedValueOnce({ data: { content: '+.x.ai\napi.telegram.org', errors: [], changes: [{ line: 1, before: 'DOMAIN-SUFFIX,x.ai', after: '+.x.ai' }] } })
+    await clickText('保存')
+    expect(network.put).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('DOMAIN-SUFFIX,x.ai → +.x.ai')
+    await clickText('返回编辑')
+    expect(network.put).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.value).toBe('DOMAIN-SUFFIX,x.ai\napi.telegram.org')
+  })
+
+  it('saves only after approving conversion and blocks unsafe formats', async () => {
+    const wrapper = await render(RuleLibrary)
+    await render(ConfirmHost)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    const warning = vi.spyOn(notify, 'warning').mockImplementation(() => 0)
+    network.post.mockResolvedValueOnce({ data: { content: 'bad', changes: [], errors: [{ line: 2, message: 'Domain 无法表达 DOMAIN-KEYWORD；请使用 Classical。' }] } })
+    await clickText('保存')
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('第 2 行'))
+    expect(network.put).not.toHaveBeenCalled()
+    network.post.mockResolvedValueOnce({ data: { content: '+.x.ai\napi.telegram.org', errors: [], changes: [{ line: 1, before: 'DOMAIN-SUFFIX,x.ai', after: '+.x.ai' }] } })
+    await clickText('保存')
+    expect(network.put).not.toHaveBeenCalled()
+    await clickText('转换并保存')
+    expect(network.put).toHaveBeenCalledExactlyOnceWith('/rule-library/library-one', expect.objectContaining({ content: '+.x.ai\napi.telegram.org' }))
+  })
+
+  it('keeps a draft and releases the save lock when format checking fails', async () => {
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    network.post.mockRejectedValueOnce(new Error('offline'))
+    const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+    await clickText('保存')
+    expect(network.put).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalled()
+    expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.value).toBe('example.com')
+    expect((wrapper.vm as any).$.setupState.savingRule).toBe(false)
+  })
   it('keeps a shared source draft when switching profiles and writes shared fields only', async () => {
     network.state.library[0]!.policy = 'legacy-profile-policy'
     const wrapper = await render(RuleLibrary)

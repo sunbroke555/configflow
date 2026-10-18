@@ -394,14 +394,14 @@
     </Dialog>
 
     <!-- ===== 添加 / 编辑规则集 ===== -->
-    <Dialog v-model:open="dialogVisible">
-      <DialogContent class="max-w-[700px]">
+    <Dialog :open="dialogVisible" @update:open="value => { if (!savingRule) dialogVisible = value }">
+      <DialogContent class="max-w-[700px]" @escape-key-down="event => { if (savingRule) event.preventDefault() }" @interact-outside="event => { if (savingRule) event.preventDefault() }">
         <DialogHeader>
           <DialogTitle>{{ isEdit ? '编辑规则' : '添加规则' }}</DialogTitle>
           <DialogDescription>修改来源或内容会影响使用此规则集的所有配置，但不会改变各配置的策略、顺序或启用状态。</DialogDescription>
         </DialogHeader>
 
-        <div class="cf-focus-gutter flex max-h-[62dvh] flex-col gap-4 overflow-y-auto">
+        <fieldset :disabled="savingRule" class="cf-focus-gutter m-0 flex max-h-[62dvh] min-w-0 flex-col gap-4 overflow-y-auto border-0 p-0">
           <div class="flex flex-col gap-1.5">
             <Label for="lib-name">规则名</Label>
             <Input id="lib-name" v-model="form.name" class="bg-background/50" placeholder="请输入规则名称" />
@@ -472,24 +472,35 @@
               {{ form.enabled ? '规则启用中' : '规则已停用' }}
             </Label>
           </div>
-        </div>
+        </fieldset>
 
         <DialogFooter>
-          <Button variant="outline" @click="dialogVisible = false">取消</Button>
-          <Button @click="saveRule">保存</Button>
+          <Button variant="outline" :disabled="savingRule" @click="dialogVisible = false">取消</Button>
+          <Button :disabled="savingRule" @click="saveRule">{{ savingRule ? '保存中…' : '保存' }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
 
     <!-- ===== 向规则集添加规则 ===== -->
-    <Dialog v-model:open="addRuleToSetDialogVisible">
-      <DialogContent class="max-w-[600px]">
+    <Dialog :open="addRuleToSetDialogVisible" @update:open="value => { if (!savingRule) addRuleToSetDialogVisible = value }">
+      <DialogContent class="max-w-[600px]" @escape-key-down="event => { if (savingRule) event.preventDefault() }" @interact-outside="event => { if (savingRule) event.preventDefault() }">
         <DialogHeader>
           <DialogTitle>添加规则到 {{ currentRuleSet?.name }}</DialogTitle>
           <DialogDescription>{{ addRuleToSetHelperText }}</DialogDescription>
         </DialogHeader>
 
-        <div class="flex flex-col gap-4">
+        <fieldset :disabled="savingRule" class="m-0 flex min-w-0 flex-col gap-4 border-0 p-0">
+          <div v-if="currentRuleSet?.behavior === 'domain'" class="flex flex-col gap-1.5">
+            <Label for="add-domain-scope">匹配范围</Label>
+            <Select v-model="addRuleToSetForm.rule_type" :disabled="savingRule">
+              <SelectTrigger id="add-domain-scope" class="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="DOMAIN">仅此域名</SelectItem>
+                <SelectItem value="DOMAIN-SUFFIX">此域名及其子域名</SelectItem>
+                <SelectItem value="PATTERN">按输入内容（含通配符）</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div v-if="currentRuleSet?.behavior === 'classical'" class="flex flex-col gap-1.5">
             <Label>规则类型</Label>
             <Select v-model="addRuleToSetForm.rule_type">
@@ -511,14 +522,18 @@
               v-model="addRuleToSetForm.value"
               class="min-h-[120px] bg-background/50 font-mono text-[12px]"
               :rows="5"
-              placeholder="域名、IP 或规则集名称，每行一条"
+              :placeholder="currentRuleSet?.behavior === 'ipcidr' ? '192.0.2.0/24\n2001:db8::/64' : 'example.com\napi.example.org'"
             />
           </div>
-        </div>
+          <div v-if="addRulePreview" class="flex min-w-0 flex-col gap-1.5">
+            <Label>将写入的内容</Label>
+            <pre class="m-0 max-h-36 overflow-auto rounded-lg bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap break-all">{{ addRulePreview }}</pre>
+          </div>
+        </fieldset>
 
         <DialogFooter>
-          <Button variant="outline" @click="addRuleToSetDialogVisible = false">取消</Button>
-          <Button @click="saveRuleToSet">添加</Button>
+          <Button variant="outline" :disabled="savingRule" @click="addRuleToSetDialogVisible = false">取消</Button>
+          <Button :disabled="savingRule" @click="saveRuleToSet">{{ savingRule ? '添加中…' : '添加' }}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -659,6 +674,8 @@ import { useProfileStore } from '@/stores/profile'
 import api from '@/api'
 import { activeProfileId, getActiveProfileId } from '@/profileContext'
 import { isAxiosError } from 'axios'
+import { domainRuleLine } from '@/lib/ruleset-format'
+import { prepareRuleContent } from '@/lib/ruleset-content'
 
 const errorMessage = (error: unknown, fallback: string) =>
   isAxiosError<{ message?: string }>(error) ? error.response?.data?.message || fallback : fallback
@@ -752,6 +769,7 @@ const batchImportText = ref('')
 const isEdit = ref(false)
 const testing = ref(false)
 const caching = ref(false) // 批量缓存加载状态
+const savingRule = ref(false)
 const testResults = ref<Record<string, boolean>>({})
 const currentRuleSet = ref<RuleLibraryItem | null>(null)
 const rulesContainer = ref<HTMLElement | null>(null)
@@ -803,24 +821,23 @@ const ruleContentPlaceholder = computed(() => {
       return [
         '请输入域名规则，每行一条规则',
         '示例：',
-        'DOMAIN-SUFFIX,example.com',
-        'DOMAIN,github.com',
-        'DOMAIN-KEYWORD,google'
+        '+.example.com',
+        'api.github.com'
       ].join('\n')
     case 'ipcidr':
       return [
         '请输入 IP 规则，每行一条规则',
         '示例：',
-        'IP-CIDR,192.168.0.0/16',
-        'IP-CIDR,10.0.0.0/8',
-        'IP-CIDR6,2001:db8::/32'
+        '192.168.0.0/16',
+        '10.0.0.0/8',
+        '2001:db8::/32'
       ].join('\n')
     default:
       return [
         '请输入规则内容，每行一条规则',
         '示例：',
-        'RULE-SET,ads',
-        'GEOSITE,category-ads-all',
+        'DOMAIN-SUFFIX,example.com',
+        'IP-CIDR,192.0.2.0/24',
         'PROCESS-NAME,Google Chrome'
       ].join('\n')
   }
@@ -830,11 +847,11 @@ const ruleContentHelperText = computed(() => {
   const behavior = form.value.behavior || 'classical'
   switch (behavior) {
     case 'domain':
-      return '支持 DOMAIN、DOMAIN-SUFFIX、DOMAIN-KEYWORD 等域名规则，每行一条。'
+      return 'example.com 仅匹配此域名；+.example.com 包含它的所有子域名。两种写法可混用，每行一条，不加 DOMAIN 等前缀。'
     case 'ipcidr':
       return '支持 IPv4/IPv6 CIDR 写法，例如 192.168.0.0/16 或 2001:db8::/32。'
     default:
-      return '可混合使用 DOMAIN、GEOIP、RULE-SET 等规则前缀，请确保格式符合 Clash/Mihomo 要求。'
+      return '每行带规则类型，例如 DOMAIN,example.com、DOMAIN-SUFFIX,example.com 或 IP-CIDR,192.0.2.0/24；不支持嵌套 RULE-SET。'
   }
 })
 
@@ -846,7 +863,7 @@ const addRuleToSetForm = ref({
 const addRuleToSetHelperText = computed(() => {
   switch (currentRuleSet.value?.behavior) {
     case 'domain':
-      return '每行一个域名，例如 example.com 或 baidu.com。'
+      return '每行一个域名，由下方选择是否包含子域名；已有通配符可选择「按输入内容」。'
     case 'ipcidr':
       return '每行一个 CIDR，例如 1.1.1.0/24 或 2001:db8::/32。'
     default:
@@ -922,7 +939,7 @@ const handleFormStatusChange = async (enabled: boolean) => {
   }
 }
 
-const saveRule = async () => {
+const performSaveRule = async () => {
   if (!form.value.name) {
     notify.warning('请输入规则名称')
     return
@@ -938,6 +955,9 @@ const saveRule = async () => {
       notify.warning('请输入规则内容')
       return
     }
+    const checked = await prepareRuleContent(form.value)
+    if (checked === null) return
+    form.value.content = checked
   }
 
   let isAvailable = true
@@ -972,6 +992,13 @@ const saveRule = async () => {
   }
 }
 
+const saveRule = async () => {
+  if (savingRule.value) return
+  savingRule.value = true
+  try { await performSaveRule() }
+  catch (error) { notify.error(errorMessage(error, '检查规则内容失败')) }
+  finally { savingRule.value = false }
+}
 
 const deleteRule = async (row: RuleLibraryItem) => {
   const ok = await confirmDanger('确定删除此规则集吗？删除后无法恢复。仍在配置中使用的规则集无法删除，请先从对应配置中移除。', { title: '删除共享规则集' })
@@ -1014,9 +1041,9 @@ const toggleEnabled = async (row: RuleLibraryItem) => {
 }
 
 const showAddRuleToSetDialog = (row: RuleLibraryItem) => {
-  currentRuleSet.value = row
+  currentRuleSet.value = { ...row }
   addRuleToSetForm.value = {
-    rule_type: row.behavior === 'ipcidr' ? 'IP-CIDR' : 'DOMAIN-SUFFIX',
+    rule_type: row.behavior === 'ipcidr' ? 'IP-CIDR' : row.behavior === 'domain' ? 'DOMAIN' : 'DOMAIN-SUFFIX',
     value: ''
   }
   addRuleToSetDialogVisible.value = true
@@ -1025,13 +1052,14 @@ const showAddRuleToSetDialog = (row: RuleLibraryItem) => {
 const formatRuleValueForRuleSet = (value: string) => {
   const trimmedValue = value.trim()
 
-  if (currentRuleSet.value?.behavior === 'classical') {
-    return `${addRuleToSetForm.value.rule_type},${trimmedValue}`
+  if (currentRuleSet.value?.behavior !== 'ipcidr') {
+    return domainRuleLine(currentRuleSet.value?.behavior, addRuleToSetForm.value.rule_type, trimmedValue)
   }
 
   return trimmedValue
 }
 
+const addRulePreview = computed(() => addRuleToSetForm.value.value.split('\n').filter(value => value.trim()).map(formatRuleValueForRuleSet).join('\n'))
 const isValidIpv4Cidr = (value: string) => {
   const match = value.match(/^(\d{1,3})(?:\.(\d{1,3})){3}\/(\d{1,2})$/)
   if (!match) return false
@@ -1069,7 +1097,7 @@ const getInvalidRuleValue = (values: string[]) => {
   }
 }
 
-const saveRuleToSet = async () => {
+const performSaveRuleToSet = async () => {
   if (!currentRuleSet.value) {
     return
   }
@@ -1080,6 +1108,11 @@ const saveRuleToSet = async () => {
   }
 
   const values = addRuleToSetForm.value.value.trim().split('\n').filter(line => line.trim())
+  if (currentRuleSet.value.behavior === 'domain' && addRuleToSetForm.value.rule_type !== 'PATTERN'
+      && values.some(value => /[+*]/.test(value) || value.trim().startsWith('.'))) {
+    notify.warning('使用通配符时请选择「按输入内容」，或只填写域名并在上方选择匹配范围。')
+    return
+  }
   const invalidValue = getInvalidRuleValue(values)
   if (invalidValue) {
     const behavior = currentRuleSet.value.behavior
@@ -1088,15 +1121,14 @@ const saveRuleToSet = async () => {
     return
   }
 
-  const newRules = values.map(formatRuleValueForRuleSet).join('\n')
-
-  const existingContent = currentRuleSet.value.content || ''
-  const updatedContent = existingContent ? `${existingContent}\n${newRules}` : newRules
+  const newRules = values.map(formatRuleValueForRuleSet)
 
   try {
+    const checked = await prepareRuleContent(currentRuleSet.value, newRules)
+    if (checked === null) return
     const updatedRule = {
       ...libraryPayload(currentRuleSet.value),
-      content: updatedContent
+      content: checked
     }
 
     await api.put(`/rule-library/${currentRuleSet.value.id}`, updatedRule)
@@ -1108,6 +1140,12 @@ const saveRuleToSet = async () => {
   }
 }
 
+const saveRuleToSet = async () => {
+  if (savingRule.value) return
+  savingRule.value = true
+  try { await performSaveRuleToSet() }
+  finally { savingRule.value = false }
+}
 const showBatchImportDialog = () => {
   batchImportText.value = ''
   batchImportDialogVisible.value = true

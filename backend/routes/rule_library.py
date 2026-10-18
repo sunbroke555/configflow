@@ -15,6 +15,7 @@ from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rul
 from backend.utils.logger import get_logger
 from backend.utils.rule_fetch import request_rule
 from backend.utils.url_utils import safe_exception_details
+from backend.utils.ruleset_content import inspect_domain_content, validate_domain_content, read_rule_payload, append_rule_lines
 
 logger = get_logger(__name__)
 
@@ -24,6 +25,24 @@ rule_library_bp = Blueprint('rule_library', __name__, url_prefix='/api/rule-libr
 
 def _content_revision(rule):
     return hashlib.sha256(json.dumps(rule, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+@rule_library_bp.route('/check-content', methods=['POST'])
+@require_auth
+def check_rule_content():
+    """Preview format repairs without changing shared sources or caches."""
+    from backend.common.config_repository import ProfileValidationError
+    body = request.get_json()
+    if not isinstance(body, dict) or not isinstance(body.get('content'), str):
+        raise ProfileValidationError('请提交规则类型和文本内容。')
+    content = body['content']
+    lines = body.get('append_lines', [])
+    if not isinstance(lines, list) or not all(isinstance(line, str) and '\n' not in line and '\r' not in line for line in lines):
+        raise ProfileValidationError('新增规则应为单行文本列表。')
+    if lines:
+        _, payload = read_rule_payload(content)
+        content = append_rule_lines(content, lines, payload)
+    return jsonify(inspect_domain_content(content, body.get('behavior'), body.get('format')))
 
 
 @rule_library_bp.route('/<rule_id>/draft-content', methods=['GET', 'PUT'])
@@ -61,6 +80,7 @@ def edit_rule_library_content(rule_id):
             raise Conflict('规则集已在其他页面更新，请重新读取后再编辑。')
         if rule.get('source_type') != 'content':
             raise ProfileValidationError('订阅规则由订阅源更新，请使用内容型规则集添加手动 IP。')
+        validate_domain_content({**rule, 'content': body['content']}, rule)
         rule['content'] = body['content']
         updated.update(rule)
 
@@ -82,6 +102,10 @@ def handle_rule_library():
 
     elif request.method == 'POST':
         rule = request.json
+        from backend.common.config_repository import ProfileValidationError
+        if not isinstance(rule, dict):
+            raise ProfileValidationError('规则库请求必须是 JSON 对象')
+        validate_domain_content(rule)
 
         # 根据 source_type 清理字段
         source_type = rule.get('source_type', 'url')
@@ -123,6 +147,7 @@ def handle_rule_library_item(rule_id):
         new_rule['id'] = rule_id
         new_rule.pop('base_url', None)
         new_rule.pop('url' if new_rule.get('source_type') == 'content' else 'content', None)
+        validate_domain_content(new_rule, old)
         library[library.index(old)] = new_rule
     update_shared_config_transaction(mutate)
     if new_rule is None:

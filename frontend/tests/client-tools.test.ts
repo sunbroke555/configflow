@@ -61,6 +61,20 @@ describe('device notes', () => {
 })
 
 describe('connection rules', () => {
+  it.each([
+    ['domain', 'DOMAIN', 'www.example.com'],
+    ['domain', 'DOMAIN-SUFFIX', '+.www.example.com'],
+    ['classical', 'DOMAIN-SUFFIX', 'DOMAIN-SUFFIX,www.example.com']
+  ])('shows the saved format for %s / %s', async (behavior, ruleType, expected) => {
+    vi.mocked(clientToolsApi.ruleTargets).mockResolvedValue(ok({ ...targets, proxy: { ...targets.proxy, behavior } }))
+    const w = wrap(ConnectionRuleDialog, { agentId: 'gw', values: ['www.example.com'], target: 'proxy' }); await flushPromises()
+    const state = (w.vm as any).$.setupState
+    state.domainRuleType = ruleType; await flushPromises()
+    expect(state.rulePreview).toBe(expected)
+    expect(document.body.textContent).toContain(expected)
+    await state.save()
+    expect(clientToolsApi.addRule).toHaveBeenCalledWith('gw', expect.objectContaining({ rule_type: ruleType, value: 'www.example.com' }))
+  })
   const ipTarget = { id: 'ip-proxy', name: '代理 IP', behavior: 'classical', problem: null, active: true, targets: ['proxy'] }
   it('allows choosing an IP set when the domain default cannot store IPs, and submits a single address', async () => {
     vi.mocked(clientToolsApi.ruleTargets).mockResolvedValue(ok({ ...targets, ip_rulesets: [ipTarget, { ...ipTarget, id: 'direct-ip', targets: ['direct'] }] }))

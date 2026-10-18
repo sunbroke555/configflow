@@ -98,6 +98,9 @@ def test_connection_rules_use_agent_defaults_and_skip_duplicates(oxidns_app, mon
     app, repo = oxidns_app
     aid = agent()
     rule_setup(repo, monkeypatch)
+    # A writable Domain provider uses domain syntax; invalid legacy prefixes
+    # have a separate regression covering the explicit repair requirement.
+    repo.update_shared_transaction(lambda shared: shared['rule_library'][0].update(content='+.example.test\n'))
     client = app.test_client()
     url = f'/api/agents/{aid}/mihomo/rule-targets'
     state = client.get(url + '?profile=default').get_json()

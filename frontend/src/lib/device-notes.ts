@@ -44,6 +44,7 @@ export interface ConnectionRuleTarget {
   name: string
   problem: string | null
   active: boolean
+  behavior?: string
 }
 export interface ConnectionIPRuleTarget extends ConnectionRuleTarget {
   behavior: 'classical' | 'ipcidr'
