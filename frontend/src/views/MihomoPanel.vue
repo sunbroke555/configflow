@@ -27,10 +27,14 @@
             <Button variant="outline" class="min-h-11" :disabled="statusLoading" @click="reloadAll">
               <RefreshCw class="size-4" :class="{ 'animate-spin': statusLoading }" />刷新
             </Button>
+            <Button variant="outline" class="min-h-11" :disabled="openingSettings || !currentDevice" @click="openSettings">
+              <Loader2 v-if="openingSettings" class="size-4 animate-spin" /><Settings v-else class="size-4" />{{ openingSettings ? '正在打开…' : '设置' }}
+            </Button>
           </div>
         </div>
       </template>
     </PageHeader>
+    <p v-if="settingsError" role="alert" class="mb-4 break-words text-sm text-destructive-accent">{{ settingsError }}</p>
 
     <div v-if="devicesError" role="alert" class="mb-4 flex flex-wrap items-center gap-x-3 text-sm text-warning-accent">
       <span>{{ devicesError }}</span>
@@ -69,13 +73,15 @@
         <TabsContent value="rules"><MihomoRules :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
       </Tabs>
     </template>
+    <MihomoSettings v-if="settingsEditor" :open="true" :profile-id="settingsEditor.profileId" :context-label="settingsEditor.label"
+      @update:open="value => { if (!value) settingsEditor = null }" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { RefreshCw, Server, TriangleAlert } from '@lucide/vue'
+import { Loader2, RefreshCw, Server, Settings, TriangleAlert } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -89,11 +95,12 @@ import MihomoProxies from '@/components/mihomo/MihomoProxies.vue'
 import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
 import MihomoRules from '@/components/mihomo/MihomoRules.vue'
 import MihomoCoreActions from '@/components/mihomo/MihomoCoreActions.vue'
-import { agentApi, mihomoPanelApi } from '@/api'
+import { agentApi, mihomoPanelApi, profileApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { panelError, type MihomoMode } from '@/types/mihomo'
 import type { Agent } from '@/types'
 
+const MihomoSettings = defineAsyncComponent(() => import('@/components/generate/MihomoSettings.vue'))
 type Device = Pick<Agent, 'id' | 'name' | 'host' | 'status'>
 const STORAGE_KEY = 'configflow:mihomo-panel:agent'
 const TABS = ['proxies', 'connections', 'rules']
@@ -119,6 +126,36 @@ const statusLoading = ref(false)
 const statusError = ref('')
 const upgradeRequired = ref(false)
 const reloadToken = ref(0)
+const settingsEditor = ref<{ profileId: string; label: string } | null>(null)
+const openingSettings = ref(false)
+const settingsError = ref('')
+let settingsRequest = 0
+let disposed = false
+
+async function openSettings() {
+  if (openingSettings.value || !currentDevice.value) return
+  const request = ++settingsRequest
+  const id = agentId.value
+  openingSettings.value = true
+  settingsError.value = ''
+  try {
+    // Read the selected device's binding; the sidebar may show another profile.
+    const [agents, profiles] = await Promise.all([agentApi.getAll(), profileApi.list()])
+    if (disposed || request !== settingsRequest || id !== agentId.value) return
+    const agent = agents.data.find((item: Agent) => item.id === id && (item.service_type || 'mihomo') === 'mihomo')
+    if (!agent) throw new Error('这台 Mihomo Agent 已不存在，请刷新设备列表。')
+    const defaultProfile = profiles.data.find((item: any) => item.is_default === true)
+      || profiles.data.find((item: any) => item.is_default === undefined && item.id === 'default')
+    const profileId = agent.profile_id || defaultProfile?.id
+    const profile = profiles.data.find((item: any) => item.id === profileId)
+    if (!profile) throw new Error('找不到此 Agent 绑定的配置空间，请检查设备绑定后重试。')
+    settingsEditor.value = { profileId: profile.id, label: `${profile.name || profile.id} · ${agent.name || id}` }
+  } catch (failure) {
+    if (!disposed && request === settingsRequest) settingsError.value = panelError(failure, '暂时无法打开设置，请重试。')
+  } finally {
+    if (request === settingsRequest) openingSettings.value = false
+  }
+}
 
 function remember(id: string) {
   try { window.localStorage.setItem(STORAGE_KEY, id) } catch { /* Storage can be unavailable in private browsers. */ }
@@ -200,6 +237,9 @@ function reloadAll() {
 }
 
 watch(agentId, () => {
+  settingsRequest++
+  openingSettings.value = false
+  settingsError.value = ''
   coreVersion.value = ''
   loadStatus()
 })
@@ -207,4 +247,5 @@ onMounted(() => {
   loadDevices()
   loadStatus()
 })
+onUnmounted(() => { disposed = true })
 </script>
