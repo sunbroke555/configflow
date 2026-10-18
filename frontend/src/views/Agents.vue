@@ -266,365 +266,308 @@
 
     <!-- ===== 生成安装脚本 ===== -->
     <Dialog v-model:open="scriptDialogVisible">
-      <DialogContent class="max-w-[760px]">
-        <DialogHeader>
+      <DialogContent class="flex max-w-[760px] flex-col overflow-hidden">
+        <DialogHeader class="shrink-0">
           <DialogTitle>生成 Agent 安装脚本</DialogTitle>
-          <DialogDescription>选择安装方式并填写机器信息，然后复制生成的命令到目标机器执行。</DialogDescription>
+          <DialogDescription>选择服务，填写机器信息，再复制命令执行。</DialogDescription>
         </DialogHeader>
 
-        <div class="cf-focus-gutter flex max-h-[62dvh] flex-col gap-4 overflow-y-auto">
-          <FormField label="安装类型" :hint="installTypeHint">
-            <RadioGroup v-model="scriptForm.installType" class="flex gap-2" @update:model-value="onInstallTypeChange">
-              <label
-                v-for="option in INSTALL_TYPES"
-                :key="option.value"
-                :class="chipClass(scriptForm.installType === option.value)"
-              >
-                <RadioGroupItem :value="option.value" />
-                {{ option.label }}
-              </label>
-            </RadioGroup>
-          </FormField>
-
-          <FormField v-if="scriptForm.installType === 'shell'" label="Shell 模式" hint="同机模式为两个已安装的核心分别创建 Agent。">
-            <RadioGroup v-model="scriptForm.shellMode" class="flex flex-wrap gap-2" @update:model-value="resetForm">
-              <label v-for="option in SHELL_MODES" :key="option.value" :class="chipClass(scriptForm.shellMode === option.value)">
-                <RadioGroupItem :value="option.value" />
-                {{ option.label }}
-              </label>
-            </RadioGroup>
-          </FormField>
-
-          <section v-if="shellAio" aria-labelledby="core-install-title" class="min-w-0 space-y-3 rounded-lg border border-border/70 bg-background/40 p-3">
-            <h3 id="core-install-title" class="m-0 text-[13px] font-semibold">先安装核心</h3>
-            <p class="m-0 text-[12.5px] text-muted-foreground">可一起安装 Mihomo 与 OxiDNS，也可只安装其中一个，目标机器需使用 systemd / OpenRC。此命令不安装 Agent，无需填写下面的 Agent 信息。已有核心和配置会保留，仅补装缺少的核心；已有服务是否正常需另行确认。</p>
-            <p class="m-0 text-[12.5px] text-muted-foreground">命令会自动补齐缺少的依赖，兼容 curl 或 wget，完整下载成功后再执行安装脚本。</p>
-            <RadioGroup v-model="coreInstallTarget" aria-label="要安装的核心" class="flex flex-wrap gap-2">
-              <label v-for="option in CORE_INSTALL_TARGETS" :key="option.value" :class="[chipClass(coreInstallTarget === option.value), 'min-h-11']">
-                <RadioGroupItem :value="option.value" />
-                {{ option.label }}
-              </label>
-            </RadioGroup>
-            <p v-if="coreInstallTarget === 'both'" class="m-0 text-[12.5px] text-muted-foreground">同机 DNS：OxiDNS 53 → Mihomo 1053。已有 Mihomo 时仍可选择此项，仅补装 OxiDNS，并使用 <code class="font-mono">127.0.0.1:1053</code> 作为上游；请确认已有 Mihomo 的 DNS 监听端口。</p>
-            <p v-else-if="coreInstallTarget === 'oxidns'" class="m-0 text-[12.5px] text-muted-foreground">独立 DNS：OxiDNS 监听 53，使用公共 DNS 上游，无需 Mihomo。接入 Agent 后可在面板修改上游；若要使用同机 Mihomo，请选择「Mihomo + OxiDNS」。</p>
-            <p v-else class="m-0 text-[12.5px] text-muted-foreground">仅安装 Mihomo，DNS 监听 1053，使用公共 DNS 上游；不安装 OxiDNS。</p>
-            <p v-if="coreInstallTarget === 'both'" class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">mihomo</code> / <code class="font-mono">oxidns</code>，配置目录 <code class="font-mono">/etc/mihomo</code> / <code class="font-mono">/etc/oxidns</code>，DNS 端口分别为 <code class="font-mono">1053</code> / <code class="font-mono">53</code>。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
-            <p v-else class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">{{ coreInstallTarget }}</code>，配置目录 <code class="font-mono">/etc/{{ coreInstallTarget }}</code>。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
-            <p v-if="coreInstallTarget !== 'oxidns'" class="m-0 text-[12.5px] text-muted-foreground">首次安装 Mihomo 时检测 TUN 设备和权限：可用时自动开启 TUN 及自动路由；不可用时保持关闭，并提示修复和开启方法。初始流量直连，尚无代理节点。作为网关时还需开启 IPv4 转发，脚本会提示但不会修改转发设置。后续发布前请检查面板草稿中的 TUN 开关。</p>
-            <template v-if="coreInstallCommand">
-              <p class="m-0 text-[12.5px] font-medium">在目标机器以 root 身份执行；完成后，再生成下方的 Agent 安装命令。</p>
-              <Button variant="outline" class="min-h-11" @click="copyAgentContent(coreInstallCommand, '核心安装命令已复制到剪贴板')">
-                <Copy class="size-4" />
-                复制核心安装命令
-              </Button>
-              <Textarea id="core-install-command" :model-value="coreInstallCommand" :aria-label="`${coreInstallLabel}的独立安装命令`" readonly :rows="8" class="max-h-56 bg-background/50 font-mono text-[11.5px]" />
-              <Collapsible>
-                <CollapsibleTrigger class="min-h-11 w-full text-left text-[12.5px] text-muted-foreground">查看核心安装脚本</CollapsibleTrigger>
-                <CollapsibleContent>
-                  <p class="mt-0 text-[12px] text-muted-foreground">这是通用安装脚本；上方命令会传入当前选择的核心，请复制上方命令执行。</p>
-                  <Textarea :model-value="coreInstallScript" :aria-label="`${coreInstallLabel}的独立安装脚本`" readonly :rows="12" class="max-h-64 bg-background/50 font-mono text-[11.5px]" />
-                </CollapsibleContent>
-              </Collapsible>
-            </template>
-            <Button v-else variant="outline" class="min-h-11" :disabled="coreInstallLoading" @click="generateCoreInstallCommand">
-              <Loader2 v-if="coreInstallLoading" class="size-4 animate-spin" />
-              <Download v-else class="size-4" />
-              {{ coreInstallLoading ? '正在生成核心安装命令…' : `生成${coreInstallLabel}的安装命令` }}
-            </Button>
-          </section>
-
-          <FormField v-if="scriptForm.installType === 'docker'" label="Docker 模式" :hint="dockerModeHint">
-            <RadioGroup v-model="scriptForm.dockerMode" class="flex flex-wrap gap-2" @update:model-value="onDockerModeChange">
-              <label
-                v-for="option in DOCKER_MODES"
-                :key="option.value"
-                :class="chipClass(scriptForm.dockerMode === option.value)"
-              >
-                <RadioGroupItem :value="option.value" />
-                {{ option.label }}
-              </label>
-            </RadioGroup>
-          </FormField>
-
-          <FormField label="Agent 名称" html-for="agent-name" hint="使用字母、数字、短横线或下划线。">
-            <Input id="agent-name" v-model="scriptForm.name" class="bg-background/50" placeholder="例如：hong-kong-server" />
-          </FormField>
-
-          <FormField v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" label="服务类型">
-            <RadioGroup v-model="scriptForm.type" class="flex flex-wrap gap-2" @update:model-value="onServiceTypeChange">
-              <label
-                v-for="option in serviceTypeOptions"
-                :key="option.value"
-                :class="chipClass(scriptForm.type === option.value)"
-              >
-                <RadioGroupItem :value="option.value" />
-                {{ option.label }}
-              </label>
-            </RadioGroup>
-          </FormField>
-
-          <FormField v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" label="Agent 端口" html-for="agent-port">
-            <Input
-              id="agent-port"
-              v-model.number="scriptForm.port"
-              type="number"
-              :min="1024"
-              :max="65535"
-              class="w-44 bg-background/50"
-            />
-          </FormField>
-
-          <FormField v-else label="Agent 端口">
-            <div class="flex flex-col gap-2">
-              <div
-                v-if="shellAio || scriptForm.dockerMode === 'mihomo' || scriptForm.dockerMode === 'aio'"
-                class="flex items-center gap-2"
-              >
-                <label for="mihomo-agent-port" class="w-32 shrink-0 text-[12.5px] text-muted-foreground">Mihomo Agent</label>
-                <Input
-                  id="mihomo-agent-port"
-                  v-model.number="scriptForm.mihomoAgentPort"
-                  type="number"
-                  :min="1024"
-                  :max="65535"
-                  class="w-36 bg-background/50"
-                />
-              </div>
-              <div
-                v-if="!shellAio && scriptForm.dockerMode === 'mosdns'"
-                class="flex items-center gap-2"
-              >
-                <label for="mosdns-agent-port" class="w-32 shrink-0 text-[12.5px] text-muted-foreground">MosDNS Agent</label>
-                <Input
-                  id="mosdns-agent-port"
-                  v-model.number="scriptForm.mosdnsAgentPort"
-                  type="number"
-                  :min="1024"
-                  :max="65535"
-                  class="w-36 bg-background/50"
-                />
-              </div>
-              <div
-                v-if="shellAio || scriptForm.dockerMode === 'oxidns' || scriptForm.dockerMode === 'aio'"
-                class="flex items-center gap-2"
-              >
-                <label for="oxidns-agent-port" class="w-32 shrink-0 text-[12.5px] text-muted-foreground">OxiDNS Agent</label>
-                <Input
-                  id="oxidns-agent-port"
-                  v-model.number="scriptForm.oxidnsAgentPort"
-                  type="number"
-                  :min="1024"
-                  :max="65535"
-                  class="w-36 bg-background/50"
-                />
-              </div>
-            </div>
-          </FormField>
-
-          <FormField label="Agent IP" html-for="agent-ip" hint="可选：指定 Agent 的 IP 地址，留空则脚本会自动获取。">
-            <Input
-              id="agent-ip"
-              v-model="scriptForm.agent_ip"
-              class="bg-background/50 font-mono"
-              placeholder="留空则自动获取"
-            />
-          </FormField>
-
-          <template v-if="shellAio">
-            <InfoNote>
-              <p>未安装核心时，可先使用上方的独立核心安装命令。已有核心请确认已配置 systemd / OpenRC 服务；下方脚本仅安装和接管两个 Agent。</p>
-              <p>DNS 端口分工：OxiDNS 使用 <code class="font-mono">53</code>，Mihomo 使用 <code class="font-mono">1053</code>。发布 Mihomo 配置时会自动调整 DNS 监听和 TUN DNS 劫持端口为 <code class="font-mono">1053</code>。</p>
-              <p>请在 OxiDNS 中将远端 DNS 上游设置为 <code class="font-mono">127.0.0.1:1053</code>。使用 TUN 时，还需在系统准备 TUN 设备、权限及所需的 IPv4 转发设置。</p>
-            </InfoNote>
-
-            <Collapsible v-model:open="lifecyclePanelOpen" class="rounded-lg border border-border/70">
-              <CollapsibleTrigger class="min-h-11 w-full px-3 py-2 text-left text-[13px] font-medium">
-                核心服务高级配置
-              </CollapsibleTrigger>
-              <CollapsibleContent class="space-y-4 border-t border-border/60 p-3">
-                <FormField label="Mihomo 配置文件路径" html-for="aio-mihomo-config-path">
-                  <Input id="aio-mihomo-config-path" v-model="scriptForm.mihomoConfigPath" class="bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
-                </FormField>
-                <FormField label="OxiDNS 配置文件路径" html-for="aio-oxidns-config-path">
-                  <Input id="aio-oxidns-config-path" v-model="scriptForm.oxidnsConfigPath" class="bg-background/50 font-mono" placeholder="/etc/oxidns/config.yaml" />
-                </FormField>
-                <InfoNote>
-                  <p>OxiDNS 服务的 <code class="font-mono">-d</code> 工作目录必须与配置文件所在目录一致。例如配置为 <code class="font-mono">/opt/oxidns/config.yaml</code> 时，服务应使用 <code class="font-mono">-d /opt/oxidns</code>。请按现有服务的实际路径填写。</p>
-                </InfoNote>
-                <div class="grid gap-4 sm:grid-cols-2">
-                  <FormField label="Mihomo 服务名称" html-for="aio-mihomo-service-unit">
-                    <Input id="aio-mihomo-service-unit" v-model="scriptForm.mihomoServiceUnit" class="bg-background/50 font-mono" placeholder="mihomo" />
-                  </FormField>
-                  <FormField label="OxiDNS 服务名称" html-for="aio-oxidns-service-unit">
-                    <Input id="aio-oxidns-service-unit" v-model="scriptForm.oxidnsServiceUnit" class="bg-background/50 font-mono" placeholder="oxidns" />
-                  </FormField>
-                </div>
-                <FormField label="Mihomo 内核程序路径" html-for="aio-mihomo-service-binary" hint="可填写程序名或绝对路径，应与现有服务使用的程序一致。">
-                  <Input id="aio-mihomo-service-binary" v-model="scriptForm.mihomoServiceBinary" class="bg-background/50 font-mono" placeholder="mihomo" />
-                </FormField>
-                <FormField label="OxiDNS 内核程序路径" html-for="aio-oxidns-service-binary" hint="可填写程序名或绝对路径，应与现有服务使用的程序一致。">
-                  <Input id="aio-oxidns-service-binary" v-model="scriptForm.oxidnsServiceBinary" class="bg-background/50 font-mono" placeholder="oxidns" />
-                </FormField>
-              </CollapsibleContent>
-            </Collapsible>
-          </template>
-
-          <template v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'">
-            <FormField label="配置文件路径" html-for="agent-config-path" hint="填写配置在目标机器上的保存位置，须包含文件名。">
-              <Input
-                id="agent-config-path"
-                v-model="scriptForm.config_path"
-                class="bg-background/50 font-mono"
-                placeholder="/etc/mihomo/config.yaml"
-              />
-            </FormField>
-
-            <InfoNote v-if="scriptForm.type === 'oxidns'">
-              <p>OxiDNS 服务的 <code class="font-mono">-d</code> 工作目录必须与配置文件所在目录一致。例如配置填写 <code class="font-mono">/opt/oxidns/config.yaml</code>，服务使用 <code class="font-mono">-d /opt/oxidns</code>。</p>
-              <p>官方 Debian 默认的 <code class="font-mono">/etc</code> 配置与 <code class="font-mono">/var/lib</code> 工作目录分离布局暂不支持，安装器会在停止原 Agent 前拒绝安装。请先调整服务及规则资源布局，再填写实际配置路径。Docker 已自动保持目录一致。</p>
-            </InfoNote>
-
-            <FormField
-              label="重启命令（可选）"
-              html-for="agent-restart"
-              hint="留空由安装脚本识别 systemd / OpenRC。使用自定义命令时，请在高级配置中提供停止、启动和状态检查方式。"
-            >
-              <Input
-                id="agent-restart"
-                v-model="scriptForm.restart_command"
-                class="bg-background/50 font-mono"
-                placeholder="留空自动识别"
-              />
-            </FormField>
-
-            <Collapsible v-model:open="lifecyclePanelOpen" class="rounded-lg border border-border/70">
-              <CollapsibleTrigger class="w-full px-3 py-2 text-left text-[13px] font-medium">
-                服务管理高级配置（可选）
-              </CollapsibleTrigger>
-              <CollapsibleContent class="space-y-4 border-t border-border/60 p-3">
-                <FormField label="服务管理方式" hint="默认自动识别；自行启动的服务可选择自定义命令。">
-                  <Select v-model="scriptForm.service_manager">
-                    <SelectTrigger class="bg-background/50"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">自动识别 systemd / OpenRC</SelectItem>
-                      <SelectItem value="systemd">systemd</SelectItem>
-                      <SelectItem value="openrc">OpenRC</SelectItem>
-                      <SelectItem value="command">自定义命令</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </FormField>
-                <FormField label="服务名称" html-for="agent-service-unit" hint="留空使用 mihomo、mosdns 或 oxidns；可填写自定义 systemd 单元或 OpenRC 服务名。">
-                  <Input id="agent-service-unit" v-model="scriptForm.service_unit" class="bg-background/50 font-mono" :placeholder="scriptForm.type" />
-                </FormField>
-                <FormField label="内核程序路径" html-for="agent-service-binary" hint="用于配置检查，应指向正在运行的同一个 Mihomo / MosDNS / OxiDNS 程序；留空按程序名查找。">
-                  <Input id="agent-service-binary" v-model="scriptForm.service_binary" class="bg-background/50 font-mono" :placeholder="`/usr/local/bin/${scriptForm.type}`" />
-                </FormField>
-                <template v-if="scriptForm.service_manager === 'command' || scriptForm.restart_command.trim()">
-                  <FormField label="停止命令" html-for="agent-service-stop" hint="应等待服务完全停止后再退出。">
-                    <Input id="agent-service-stop" v-model="scriptForm.stop_command" class="bg-background/50 font-mono" placeholder="例如：/opt/service/control stop" />
-                  </FormField>
-                  <FormField label="启动命令" html-for="agent-service-start">
-                    <Input id="agent-service-start" v-model="scriptForm.start_command" class="bg-background/50 font-mono" placeholder="例如：/opt/service/control start" />
-                  </FormField>
-                  <FormField label="状态检查命令" html-for="agent-service-status" hint="服务运行时退出码为 0，未运行时为非 0。">
-                    <Input id="agent-service-status" v-model="scriptForm.status_command" class="bg-background/50 font-mono" placeholder="例如：/opt/service/control status" />
-                  </FormField>
-                </template>
-              </CollapsibleContent>
-            </Collapsible>
-          </template>
-
-          <template v-if="scriptForm.installType === 'docker'">
-            <InfoNote>
-              <p><strong class="text-foreground">{{ dockerNote.title }}</strong></p>
-              <p v-for="line in dockerNote.lines" :key="line">• {{ line }}</p>
-            </InfoNote>
-
-            <FormField label="Docker 镜像" html-for="docker-image" hint="可选：留空则使用默认官方镜像。">
-              <Input
-                id="docker-image"
-                v-model="scriptForm.dockerImage"
-                class="bg-background/50 font-mono"
-                placeholder="默认使用官方镜像"
-              />
-            </FormField>
-
-            <FormField label="Agent 容器名" html-for="docker-container" hint="Agent 的 Docker 容器名称。">
-              <Input
-                id="docker-container"
-                v-model="scriptForm.containerName"
-                class="bg-background/50 font-mono"
-                placeholder="configflow-agent"
-              />
-            </FormField>
-
-            <FormField label="网络模式" hint="host 模式可直接访问主机网络，bridge 模式需要端口映射。">
-              <RadioGroup v-model="scriptForm.networkMode" class="flex flex-wrap gap-2">
-                <label
-                  v-for="option in networkModeOptions"
-                  :key="option.value"
-                  :class="chipClass(scriptForm.networkMode === option.value)"
-                >
+        <div class="cf-focus-gutter flex max-h-[65dvh] min-h-0 flex-col gap-5 overflow-y-auto">
+          <div class="space-y-4">
+            <FormField label="安装类型" :help="installTypeHint">
+              <RadioGroup v-model="scriptForm.installType" class="flex gap-2" @update:model-value="onInstallTypeChange">
+                <label v-for="option in INSTALL_TYPES" :key="option.value" :class="[chipClass(scriptForm.installType === option.value), 'min-h-11']">
                   <RadioGroupItem :value="option.value" />
                   {{ option.label }}
                 </label>
               </RadioGroup>
             </FormField>
-          </template>
 
-          <LabeledDivider label="一键安装命令" />
+            <FormField v-if="scriptForm.installType === 'shell'" label="Shell 模式">
+              <RadioGroup v-model="scriptForm.shellMode" class="flex flex-wrap gap-2" @update:model-value="resetForm">
+                <label v-for="option in SHELL_MODES" :key="option.value" :class="[chipClass(scriptForm.shellMode === option.value), 'min-h-11']">
+                  <RadioGroupItem :value="option.value" />
+                  {{ option.label }}
+                </label>
+              </RadioGroup>
+            </FormField>
 
-          <template v-if="installCommand || dockerComposeContent || dockerRunCommand">
-            <div v-for="block in commandBlocks" :key="block.title" class="flex flex-col gap-2">
-              <div class="flex items-baseline gap-2">
-                <span class="text-[12.5px] font-semibold text-foreground">{{ block.title }}</span>
-                <span class="text-[11.5px] text-muted-foreground">{{ block.note }}</span>
-              </div>
-              <Textarea
-                :model-value="block.value"
-                readonly
-                :rows="block.rows"
-                class="bg-background/50 font-mono text-[11.5px]"
-              />
-              <Button variant="outline" class="border-border/60 bg-background/40" @click="block.copy">
-                <Copy class="size-4" />
-                复制
-              </Button>
-            </div>
+            <FormField v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" label="服务类型">
+              <RadioGroup v-model="scriptForm.type" class="grid grid-cols-3 gap-2 sm:flex" @update:model-value="onServiceTypeChange">
+                <label v-for="option in serviceTypeOptions" :key="option.value" :class="[chipClass(scriptForm.type === option.value), 'min-h-11 justify-center max-sm:gap-1.5 max-sm:px-2']">
+                  <RadioGroupItem :value="option.value" />
+                  {{ option.label }}
+                </label>
+              </RadioGroup>
+            </FormField>
 
-            <Collapsible v-model:open="scriptPanelOpen">
-              <CollapsibleTrigger as-child>
-                <button
-                  type="button"
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-border/50 bg-background/40 px-3 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:border-border-strong"
-                >
-                  查看完整安装脚本
-                  <ChevronDown
-                    class="ml-auto size-3.5 transition-transform duration-200"
-                    :class="scriptPanelOpen && 'rotate-180'"
-                  />
-                </button>
+            <FormField v-if="scriptForm.installType === 'docker'" label="Docker 模式" :help="dockerModeHint">
+              <RadioGroup v-model="scriptForm.dockerMode" class="flex flex-wrap gap-2" @update:model-value="onDockerModeChange">
+                <label v-for="option in DOCKER_MODES" :key="option.value" :class="[chipClass(scriptForm.dockerMode === option.value), 'min-h-11']">
+                  <RadioGroupItem :value="option.value" />
+                  {{ option.label }}
+                </label>
+              </RadioGroup>
+            </FormField>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4 border-t border-border/60 pt-4">
+            <FormField label="Agent 名称" html-for="agent-name" :class="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single' ? 'min-w-0' : 'col-span-2 sm:col-span-1'">
+              <Input id="agent-name" v-model="scriptForm.name" class="min-h-11 bg-background/50" placeholder="例如：home-server" />
+            </FormField>
+
+            <FormField v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" label="Agent 端口" html-for="agent-port">
+              <Input id="agent-port" v-model.number="scriptForm.port" type="number" :min="1024" :max="65535" class="min-h-11 bg-background/50 font-mono" />
+            </FormField>
+
+            <FormField label="Agent IP（可选）" html-for="agent-ip" :class="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single' ? 'col-span-2' : 'col-span-2 sm:col-span-1'">
+              <Input id="agent-ip" v-model="scriptForm.agent_ip" class="min-h-11 bg-background/50 font-mono" placeholder="留空则自动获取" />
+            </FormField>
+
+            <FormField v-if="scriptForm.installType === 'docker'" label="Agent 容器名" html-for="docker-container" class="col-span-2">
+              <Input id="docker-container" v-model="scriptForm.containerName" class="min-h-11 bg-background/50 font-mono" placeholder="configflow-agent" />
+            </FormField>
+
+            <template v-if="!(scriptForm.installType === 'shell' && scriptForm.shellMode === 'single')">
+              <FormField v-if="shellAio || scriptForm.dockerMode === 'mihomo' || scriptForm.dockerMode === 'aio'" label="Mihomo Agent 端口" html-for="mihomo-agent-port">
+                <Input id="mihomo-agent-port" v-model.number="scriptForm.mihomoAgentPort" type="number" :min="1024" :max="65535" class="min-h-11 bg-background/50 font-mono" />
+              </FormField>
+              <FormField v-if="!shellAio && scriptForm.dockerMode === 'mosdns'" label="MosDNS Agent 端口" html-for="mosdns-agent-port">
+                <Input id="mosdns-agent-port" v-model.number="scriptForm.mosdnsAgentPort" type="number" :min="1024" :max="65535" class="min-h-11 bg-background/50 font-mono" />
+              </FormField>
+              <FormField v-if="shellAio || scriptForm.dockerMode === 'oxidns' || scriptForm.dockerMode === 'aio'" label="OxiDNS Agent 端口" html-for="oxidns-agent-port">
+                <Input id="oxidns-agent-port" v-model.number="scriptForm.oxidnsAgentPort" type="number" :min="1024" :max="65535" class="min-h-11 bg-background/50 font-mono" />
+              </FormField>
+            </template>
+          </div>
+
+          <div v-if="shellAio || singleCoreSupported" class="min-w-0">
+            <label :for="shellAio ? 'aio-install-cores' : 'agent-install-core'" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px] font-medium">
+              <Checkbox :id="shellAio ? 'aio-install-cores' : 'agent-install-core'" v-model="scriptForm.installCore" :aria-describedby="shellAio ? 'aio-install-cores-note' : 'agent-install-core-note'" />
+              同时安装 {{ shellAio ? 'Mihomo 与 OxiDNS' : scriptForm.type === 'mihomo' ? 'Mihomo' : 'OxiDNS' }} 核心
+            </label>
+            <p :id="shellAio ? 'aio-install-cores-note' : 'agent-install-core-note'" class="m-0 pl-6 text-[12px] leading-relaxed text-muted-foreground">
+              {{ combinedCoreInstall ? '保留已有核心，仅补装缺少部分；使用默认路径。' : '未勾选时仅安装 Agent，接管已有核心。' }}
+            </p>
+          </div>
+
+          <div class="divide-y divide-border/60 border-y border-border/60">
+            <Collapsible v-if="shellAio" v-model:open="lifecyclePanelOpen">
+              <CollapsibleTrigger aria-label="核心服务高级配置" class="flex min-h-11 w-full items-center gap-2 py-3 text-left text-[13px] font-medium">
+                核心服务高级配置
+                <span class="ml-auto text-[12px] font-normal text-muted-foreground">路径 / 服务</span>
+                <ChevronDown class="size-3.5 shrink-0 transition-transform" :class="lifecyclePanelOpen && 'rotate-180'" />
               </CollapsibleTrigger>
-              <CollapsibleContent>
-                <Textarea
-                  :model-value="installScript"
-                  readonly
-                  :rows="15"
-                  class="mt-2 bg-background/50 font-mono text-[11.5px]"
-                />
+              <CollapsibleContent class="space-y-4 pb-4">
+                <p v-if="aioCoreInstall" class="m-0 text-[12px] text-muted-foreground">同时安装核心时使用默认路径；接管自定义部署请取消勾选。</p>
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <FormField label="Mihomo 配置文件路径" html-for="aio-mihomo-config-path">
+                    <Input id="aio-mihomo-config-path" :model-value="aioServiceSettings.mihomoConfigPath" :disabled="aioCoreInstall" @update:model-value="scriptForm.mihomoConfigPath = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
+                  </FormField>
+                  <FormField label="OxiDNS 配置文件路径" html-for="aio-oxidns-config-path">
+                    <Input id="aio-oxidns-config-path" :model-value="aioServiceSettings.oxidnsConfigPath" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsConfigPath = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="/etc/oxidns/config.yaml" />
+                  </FormField>
+                  <FormField label="Mihomo 服务名称" html-for="aio-mihomo-service-unit">
+                    <Input id="aio-mihomo-service-unit" :model-value="aioServiceSettings.mihomoServiceUnit" :disabled="aioCoreInstall" @update:model-value="scriptForm.mihomoServiceUnit = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="mihomo" />
+                  </FormField>
+                  <FormField label="OxiDNS 服务名称" html-for="aio-oxidns-service-unit">
+                    <Input id="aio-oxidns-service-unit" :model-value="aioServiceSettings.oxidnsServiceUnit" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsServiceUnit = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="oxidns" />
+                  </FormField>
+                  <FormField label="Mihomo 内核程序路径" html-for="aio-mihomo-service-binary" help="填写现有服务使用的程序名或绝对路径。">
+                    <Input id="aio-mihomo-service-binary" :model-value="aioServiceSettings.mihomoServiceBinary" :disabled="aioCoreInstall" @update:model-value="scriptForm.mihomoServiceBinary = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="mihomo" />
+                  </FormField>
+                  <FormField label="OxiDNS 内核程序路径" html-for="aio-oxidns-service-binary" help="填写现有服务使用的程序名或绝对路径。">
+                    <Input id="aio-oxidns-service-binary" :model-value="aioServiceSettings.oxidnsServiceBinary" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsServiceBinary = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="oxidns" />
+                  </FormField>
+                </div>
+                <p v-if="!aioCoreInstall" class="m-0 text-[12px] leading-relaxed text-muted-foreground">OxiDNS 服务的 <code class="font-mono">-d</code> 工作目录须与配置文件所在目录一致。</p>
               </CollapsibleContent>
             </Collapsible>
-          </template>
 
-          <Button v-else class="w-full" @click="generateScript">
-            <FileText class="size-4" />
-            {{ scriptForm.installType === 'docker' ? '生成 Docker 部署命令' : '生成安装命令' }}
-          </Button>
+            <Collapsible v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" v-model:open="lifecyclePanelOpen">
+              <CollapsibleTrigger aria-label="服务管理高级配置（可选）" class="flex min-h-11 w-full items-center gap-2 py-3 text-left text-[13px] font-medium">
+                服务管理高级配置（可选）
+                <span class="ml-auto whitespace-nowrap text-[12px] font-normal text-muted-foreground">路径 / 服务</span>
+                <ChevronDown class="size-3.5 shrink-0 transition-transform" :class="lifecyclePanelOpen && 'rotate-180'" />
+              </CollapsibleTrigger>
+              <CollapsibleContent class="space-y-4 pb-4">
+                <p v-if="singleCoreInstall" class="m-0 text-[12px] text-muted-foreground">同时安装核心时使用默认路径；接管自定义部署请取消勾选。</p>
+                <FormField label="配置文件路径" html-for="agent-config-path" help="填写目标机器上的完整配置路径，须包含文件名。">
+                  <Input id="agent-config-path" :model-value="singleServiceSettings.config_path" :disabled="singleCoreInstall" @update:model-value="scriptForm.config_path = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
+                </FormField>
+                <p v-if="scriptForm.type === 'oxidns' && !singleCoreInstall" class="m-0 text-[12px] leading-relaxed text-muted-foreground">OxiDNS 的 <code class="font-mono">-d</code> 工作目录须与配置文件所在目录一致；分离布局暂不支持，详见安装说明。</p>
+                <FormField label="重启命令（可选）" html-for="agent-restart" help="留空自动识别 systemd / OpenRC；自定义命令需同时提供停止、启动及状态检查命令。">
+                  <Input id="agent-restart" :model-value="singleServiceSettings.restart_command" :disabled="singleCoreInstall" @update:model-value="scriptForm.restart_command = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="留空自动识别" />
+                </FormField>
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <FormField label="服务管理方式">
+                    <Select :model-value="singleServiceSettings.service_manager" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_manager = String($event ?? '')">
+                      <SelectTrigger class="min-h-11 w-full bg-background/50"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">自动识别 systemd / OpenRC</SelectItem>
+                        <SelectItem value="systemd">systemd</SelectItem>
+                        <SelectItem value="openrc">OpenRC</SelectItem>
+                        <SelectItem value="command">自定义命令</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <FormField label="服务名称" html-for="agent-service-unit" help="留空使用核心名称，也可填写自定义 systemd 单元或 OpenRC 服务名。">
+                    <Input id="agent-service-unit" :model-value="singleServiceSettings.service_unit" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_unit = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" :placeholder="scriptForm.type" />
+                  </FormField>
+                </div>
+                <FormField label="内核程序路径" html-for="agent-service-binary" help="应指向现有服务使用的程序；留空按程序名查找。">
+                  <Input id="agent-service-binary" :model-value="singleServiceSettings.service_binary" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_binary = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" :placeholder="`/usr/local/bin/${scriptForm.type}`" />
+                </FormField>
+                <template v-if="!singleCoreInstall && (scriptForm.service_manager === 'command' || scriptForm.restart_command.trim())">
+                  <FormField label="停止命令" html-for="agent-service-stop" help="应等待服务完全停止后再退出。">
+                    <Input id="agent-service-stop" v-model="scriptForm.stop_command" class="min-h-11 bg-background/50 font-mono" placeholder="例如：/opt/service/control stop" />
+                  </FormField>
+                  <FormField label="启动命令" html-for="agent-service-start">
+                    <Input id="agent-service-start" v-model="scriptForm.start_command" class="min-h-11 bg-background/50 font-mono" placeholder="例如：/opt/service/control start" />
+                  </FormField>
+                  <FormField label="状态检查命令" html-for="agent-service-status" help="服务运行时退出码为 0，未运行时为非 0。">
+                    <Input id="agent-service-status" v-model="scriptForm.status_command" class="min-h-11 bg-background/50 font-mono" placeholder="例如：/opt/service/control status" />
+                  </FormField>
+                </template>
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible v-if="scriptForm.installType === 'docker'" v-model:open="dockerOptionsOpen">
+              <CollapsibleTrigger class="flex min-h-11 w-full items-center gap-2 py-3 text-left text-[13px] font-medium">
+                Docker 高级配置
+                <span class="ml-auto text-[12px] font-normal text-muted-foreground">镜像 / 网络</span>
+                <ChevronDown class="size-3.5 shrink-0 transition-transform" :class="dockerOptionsOpen && 'rotate-180'" />
+              </CollapsibleTrigger>
+              <CollapsibleContent class="space-y-4 pb-4">
+                <FormField label="Docker 镜像" html-for="docker-image">
+                  <Input id="docker-image" v-model="scriptForm.dockerImage" class="min-h-11 bg-background/50 font-mono" placeholder="留空使用官方镜像" />
+                </FormField>
+                <FormField label="网络模式" help="host 直接访问主机网络；bridge 通过端口映射访问。">
+                  <RadioGroup v-model="scriptForm.networkMode" class="flex flex-wrap gap-2">
+                    <label v-for="option in networkModeOptions" :key="option.value" :class="[chipClass(scriptForm.networkMode === option.value), 'min-h-11']">
+                      <RadioGroupItem :value="option.value" />
+                      {{ option.label }}
+                    </label>
+                  </RadioGroup>
+                </FormField>
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible v-model:open="installHelpOpen">
+              <CollapsibleTrigger aria-label="安装说明" class="flex min-h-11 w-full items-center gap-2 py-3 text-left text-[13px] font-medium">
+                安装说明
+                <span class="ml-auto text-[12px] font-normal text-muted-foreground">{{ scriptForm.installType === 'docker' ? '部署须知' : 'DNS / TUN' }}</span>
+                <ChevronDown class="size-3.5 shrink-0 transition-transform" :class="installHelpOpen && 'rotate-180'" />
+              </CollapsibleTrigger>
+              <CollapsibleContent class="space-y-3 pb-4 text-[12.5px] leading-relaxed text-muted-foreground">
+                <p class="m-0">Agent 名称可使用字母、数字、短横线或下划线。生成命令不会注册 Agent，需在目标机器执行后才会接入面板。</p>
+                <template v-if="scriptForm.installType === 'shell'">
+                  <p class="m-0">在目标机器以 root 身份执行，支持 systemd / OpenRC。勾选安装核心后，脚本先安装核心，成功后再安装 Agent；已有核心和配置会保留，仅补装缺少的核心。</p>
+                  <p class="m-0">默认使用 curl，也可切换 wget；完整下载为当前目录的 configflow-install.sh 后才执行。环境检测与依赖补装由脚本完成；两个下载工具都没有时，请先安装一个。</p>
+                  <p class="m-0 break-words">安装核心时使用 <code class="font-mono">/etc/{{ shellAio ? '{mihomo,oxidns}' : scriptForm.type }}/config.yaml</code>，程序位于 <code class="font-mono">/usr/local/bin</code>，服务名与核心同名。已有部署须与默认布局一致；自定义部署请取消勾选，并在高级配置中填写实际路径。</p>
+                  <template v-if="shellAio">
+                    <p class="m-0"><strong class="font-medium text-foreground">同机 DNS：</strong>OxiDNS <code class="font-mono">53</code> → Mihomo <code class="font-mono">127.0.0.1:1053</code>。发布 Mihomo 配置时自动将 DNS 监听和 TUN DNS 劫持端口调整为 <code class="font-mono">1053</code>。</p>
+                    <p v-if="aioCoreInstall" class="m-0">新装 OxiDNS 会自动使用上述上游；已有配置保持不变，请确认已有核心的 DNS 监听与上游设置。</p>
+                    <p v-else class="m-0">请先准备两个核心及其 systemd / OpenRC 服务，并将 OxiDNS 的远端 DNS 上游设为 <code class="font-mono">127.0.0.1:1053</code>。</p>
+                  </template>
+                  <p v-else-if="singleCoreInstall && scriptForm.type === 'mihomo'" class="m-0"><strong class="font-medium text-foreground">Mihomo DNS：</strong>监听 <code class="font-mono">1053</code>，使用公共 DNS 上游。</p>
+                  <p v-else-if="singleCoreInstall && scriptForm.type === 'oxidns'" class="m-0"><strong class="font-medium text-foreground">OxiDNS：</strong>监听 <code class="font-mono">53</code>，使用公共 DNS 上游，独立运行且不依赖 Mihomo。接入后可在面板修改上游。</p>
+                  <p v-if="shellAio || scriptForm.type === 'mihomo'" class="m-0"><strong class="font-medium text-foreground">TUN：</strong>首次安装 Mihomo 时检测设备与权限，可用则开启 TUN 和自动路由，否则关闭并提示修复方法。初始流量直连，尚无代理节点；作为网关还需开启 IPv4 转发，脚本仅提示、不修改。发布前请检查面板草稿的 TUN 开关。</p>
+                  <p v-if="(shellAio || scriptForm.type === 'oxidns') && !combinedCoreInstall" class="m-0"><strong class="font-medium text-foreground">OxiDNS 路径：</strong>服务的 <code class="font-mono">-d</code> 工作目录须与配置目录一致，例如 <code class="font-mono">/opt/oxidns/config.yaml</code> 对应 <code class="font-mono">-d /opt/oxidns</code>。官方 Debian 的 <code class="font-mono">/etc</code> 配置与 <code class="font-mono">/var/lib</code> 工作目录分离布局暂不支持，需先调整服务与规则资源布局。</p>
+                </template>
+                <template v-else>
+                  <p class="m-0 font-medium text-foreground">{{ dockerNote.title }}</p>
+                  <ul class="m-0 list-disc space-y-1 pl-4"><li v-for="line in dockerNote.lines" :key="line">{{ line }}</li></ul>
+                </template>
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible v-if="shellAio && !aioCoreInstall" v-model:open="coreOnlyPanelOpen">
+              <CollapsibleTrigger id="core-install-title" aria-label="仅安装核心" class="flex min-h-11 w-full items-center gap-2 py-3 text-left text-[13px] font-medium">
+                仅安装核心
+                <span class="ml-auto text-[12px] font-normal text-muted-foreground">不安装 Agent</span>
+                <ChevronDown class="size-3.5 shrink-0 transition-transform" :class="coreOnlyPanelOpen && 'rotate-180'" />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <section aria-labelledby="core-install-title" class="min-w-0 space-y-3 pb-4">
+                  <p class="m-0 text-[12.5px] text-muted-foreground">无需填写 Agent 信息。保留已有核心和配置，仅补装缺少部分。</p>
+                  <RadioGroup v-model="coreInstallTarget" aria-label="要安装的核心" class="flex flex-wrap gap-2">
+                    <label v-for="option in CORE_INSTALL_TARGETS" :key="option.value" :class="[chipClass(coreInstallTarget === option.value), 'min-h-11']">
+                      <RadioGroupItem :value="option.value" />
+                      {{ option.label }}
+                    </label>
+                  </RadioGroup>
+                  <p v-if="coreInstallTarget === 'both'" class="m-0 text-[12px] leading-relaxed text-muted-foreground">OxiDNS 53 → Mihomo 1053。已有 Mihomo 时仅补装 OxiDNS；请确认 Mihomo DNS 监听 <code class="font-mono">127.0.0.1:1053</code>。</p>
+                  <p v-else-if="coreInstallTarget === 'oxidns'" class="m-0 text-[12px] leading-relaxed text-muted-foreground">OxiDNS 监听 53，使用公共 DNS 上游，无需 Mihomo。</p>
+                  <p v-else class="m-0 text-[12px] leading-relaxed text-muted-foreground">Mihomo DNS 监听 1053，使用公共 DNS 上游。</p>
+                  <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">以 root 执行，支持 systemd / OpenRC；自动补齐依赖，完整下载后安装。使用默认路径，不受高级配置影响。TUN 检测规则见安装说明。</p>
+                  <template v-if="coreInstallCommand">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <RadioGroup v-model="installerDownloader" aria-label="核心安装命令下载方式" class="flex gap-2">
+                        <label v-for="downloader in INSTALLER_DOWNLOADERS" :key="downloader" :class="[chipClass(installerDownloader === downloader), 'min-h-11']">
+                          <RadioGroupItem :value="downloader" />{{ downloader }}
+                        </label>
+                      </RadioGroup>
+                      <Button variant="outline" class="min-h-11" @click="copyAgentContent(coreInstallCommand, '核心安装命令已复制到剪贴板')">
+                        <Copy class="size-4" />复制命令
+                      </Button>
+                    </div>
+                    <p class="m-0 text-[11.5px] text-muted-foreground">链接有效至 {{ coreInstallLinkExpiry }}，过期后请重新生成。</p>
+                    <Textarea id="core-install-command" :model-value="coreInstallCommand" :aria-label="`${coreInstallLabel}的独立安装命令`" readonly :rows="3" class="max-h-48 bg-background/50 font-mono text-[11.5px]" />
+                    <Collapsible>
+                      <CollapsibleTrigger class="min-h-11 w-full text-left text-[12.5px] text-muted-foreground">查看核心安装脚本</CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <p class="mt-0 text-[12px] text-muted-foreground">已包含所选核心，与上方链接下载的脚本一致。</p>
+                        <Textarea :model-value="coreInstallScript" :aria-label="`${coreInstallLabel}的独立安装脚本`" readonly :rows="12" class="max-h-64 bg-background/50 font-mono text-[11.5px]" />
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </template>
+                  <Button v-else variant="outline" class="min-h-11" :disabled="coreInstallLoading" @click="generateCoreInstallCommand">
+                    <Loader2 v-if="coreInstallLoading" class="size-4 animate-spin" />
+                    <Download v-else class="size-4" />
+                    {{ coreInstallLoading ? '正在生成核心安装命令…' : `生成${coreInstallLabel}的安装命令` }}
+                  </Button>
+                </section>
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
+
+          <section v-if="installCommand || dockerComposeContent || dockerRunCommand" ref="installCommandSection" aria-label="一键安装命令" class="space-y-4">
+            <LabeledDivider label="一键安装命令" />
+            <RadioGroup v-if="scriptForm.installType === 'shell'" v-model="installerDownloader" aria-label="安装命令下载方式" class="flex gap-2">
+              <label v-for="downloader in INSTALLER_DOWNLOADERS" :key="downloader" :class="[chipClass(installerDownloader === downloader), 'min-h-11']">
+                <RadioGroupItem :value="downloader" />{{ downloader }}
+              </label>
+            </RadioGroup>
+            <p v-if="scriptForm.installType === 'shell'" class="m-0 text-[11.5px] text-muted-foreground">链接有效至 {{ installLinkExpiry }}，过期后请重新生成。</p>
+            <div v-for="block in commandBlocks" :key="block.title" class="flex min-w-0 flex-col gap-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-[12.5px] font-semibold text-foreground">{{ block.title }}</span>
+                <Button variant="outline" class="min-h-11 border-border/60 bg-background/40" @click="block.copy"><Copy class="size-4" />复制</Button>
+              </div>
+              <p class="m-0 text-[11.5px] text-muted-foreground">{{ block.note }}</p>
+              <Textarea :model-value="block.value" readonly :rows="block.rows" class="max-h-48 bg-background/50 font-mono text-[11.5px]" />
+            </div>
+            <Collapsible v-model:open="scriptPanelOpen">
+              <CollapsibleTrigger class="flex min-h-11 w-full cursor-pointer items-center gap-2 py-2 text-left text-[13px] text-muted-foreground">
+                查看完整安装脚本
+                <ChevronDown class="ml-auto size-3.5 transition-transform duration-200" :class="scriptPanelOpen && 'rotate-180'" />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <Textarea :model-value="installScript" readonly :rows="15" class="mt-2 max-h-72 bg-background/50 font-mono text-[11.5px]" />
+              </CollapsibleContent>
+            </Collapsible>
+          </section>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" @click="scriptDialogVisible = false">关闭</Button>
-          <Button v-if="installCommand" variant="outline" @click="resetForm">重新生成</Button>
+        <DialogFooter class="shrink-0 flex-row items-center justify-end gap-2 border-t border-border/60 pt-4">
+          <Button variant="outline" class="min-h-11" @click="scriptDialogVisible = false">关闭</Button>
+          <Button v-if="installCommand || dockerComposeContent || dockerRunCommand" variant="outline" class="min-h-11" @click="resetForm">重新生成</Button>
+          <Button v-else class="min-h-11" :disabled="scriptLoading" @click="generateScript">
+            <Loader2 v-if="scriptLoading" class="size-4 animate-spin" />
+            <FileText v-else class="size-4" />
+            {{ scriptLoading ? '正在生成安装命令…' : scriptForm.installType === 'docker' ? '生成 Docker 部署命令' : '生成安装命令' }}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -778,7 +721,7 @@ import FlowMap, { type FlowColumn, type FlowEdge, type FlowTone } from '@/compon
 import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
-import { buildCoreInstallCommand, CORE_INSTALL_INTERFACE, type CoreInstallTarget } from '@/lib/coreInstallCommand'
+import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import { Motion } from 'motion-v'
 import {
@@ -803,6 +746,7 @@ import {
 } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
@@ -832,7 +776,6 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import EmptyState from '@/components/common/EmptyState.vue'
 import FormField from '@/components/common/FormField.vue'
-import InfoNote from '@/components/common/InfoNote.vue'
 import LabeledDivider from '@/components/common/LabeledDivider.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
@@ -901,18 +844,33 @@ const bindingAgentId = ref<string | null>(null)
 const scriptDialogVisible = ref(false)
 const dockerUpdateAgent = ref<Agent | null>(null)
 const lifecyclePanelOpen = ref(false)
+const installHelpOpen = ref(false)
+const coreOnlyPanelOpen = ref(false)
+const dockerOptionsOpen = ref(false)
 const logsDialogVisible = ref(false)
 const metricsDialogVisible = ref(false)
+const installCommandSection = ref<HTMLElement | null>(null)
 const installScript = ref('')
-const installCommand = ref('')
-const installCommandAlpine = ref('')
-const coreInstallCommand = ref('')
+const scriptLoading = ref(false)
+let scriptRequest = 0
+const INSTALLER_DOWNLOADERS = ['curl', 'wget'] as const
+const installerDownloader = ref<InstallerDownloader>('curl')
+const installScriptUrl = ref('')
+const installLinkExpiry = ref('')
+const installCommand = computed(() => installScriptUrl.value
+  ? buildInstallCommand(installScriptUrl.value, installerDownloader.value)
+  : '')
+const coreInstallScriptUrl = ref('')
+const coreInstallLinkExpiry = ref('')
 const CORE_INSTALL_TARGETS = [
   { value: 'both', label: 'Mihomo + OxiDNS' },
   { value: 'mihomo', label: '仅 Mihomo' },
   { value: 'oxidns', label: '仅 OxiDNS' },
 ] as const
 const coreInstallTarget = ref<CoreInstallTarget>('both')
+const coreInstallCommand = computed(() => coreInstallScriptUrl.value
+  ? buildInstallCommand(coreInstallScriptUrl.value, installerDownloader.value)
+  : '')
 const coreInstallLabel = computed(() => coreInstallTarget.value === 'both' ? '两个核心' : coreInstallTarget.value === 'mihomo' ? 'Mihomo' : 'OxiDNS')
 const coreInstallScript = ref('')
 const coreInstallLoading = ref(false)
@@ -934,6 +892,7 @@ const logsPaneRef = ref<HTMLElement | null>(null)
 const createScriptForm = () => ({
   installType: 'shell',
   shellMode: 'single',
+  installCore: false,
   dockerMode: 'mihomo', // mihomo, mosdns, oxidns, aio
   name: '',
   type: 'mihomo',
@@ -964,15 +923,64 @@ const createScriptForm = () => ({
 })
 const scriptForm = ref(createScriptForm())
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
+const singleCoreSupported = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && ['mihomo', 'oxidns'].includes(scriptForm.value.type))
+const singleCoreInstall = computed(() => singleCoreSupported.value && scriptForm.value.installCore)
+const aioCoreInstall = computed(() => shellAio.value && scriptForm.value.installCore)
+const combinedCoreInstall = computed(() => singleCoreInstall.value || aioCoreInstall.value)
+// The displayed defaults do not overwrite the user's existing-service settings.
+const singleServiceSettings = computed(() => singleCoreInstall.value ? {
+  ...scriptForm.value,
+  config_path: `/etc/${scriptForm.value.type}/config.yaml`, restart_command: '',
+  service_manager: 'auto', service_unit: scriptForm.value.type,
+  service_binary: `/usr/local/bin/${scriptForm.value.type}`,
+  stop_command: '', start_command: '', status_command: ''
+} : scriptForm.value)
+const aioServiceSettings = computed(() => aioCoreInstall.value ? {
+  ...scriptForm.value,
+  mihomoConfigPath: '/etc/mihomo/config.yaml', oxidnsConfigPath: '/etc/oxidns/config.yaml',
+  mihomoServiceUnit: 'mihomo', oxidnsServiceUnit: 'oxidns',
+  mihomoServiceBinary: '/usr/local/bin/mihomo', oxidnsServiceBinary: '/usr/local/bin/oxidns'
+} : scriptForm.value)
+const shellServiceSettings = computed(() => shellAio.value ? aioServiceSettings.value : singleServiceSettings.value)
+watch(() => [scriptForm.value.type, scriptForm.value.installType, scriptForm.value.shellMode], () => {
+  scriptForm.value.installCore = false
+}, { flush: 'sync' })
 
 const resetCoreInstallCommand = () => {
   coreInstallRequest += 1
-  coreInstallCommand.value = ''
+  coreInstallScriptUrl.value = ''
+  coreInstallLinkExpiry.value = ''
   coreInstallScript.value = ''
   coreInstallLoading.value = false
 }
 
-watch([shellAio, scriptDialogVisible, coreInstallTarget], resetCoreInstallCommand, { flush: 'sync' })
+watch([shellAio, aioCoreInstall, scriptDialogVisible, coreInstallTarget], resetCoreInstallCommand, { flush: 'sync' })
+
+const installCommandUpdateMessage = '当前服务不支持短安装链接，请更新 ConfigFlow 后重试'
+
+const readInstallCommand = (data: unknown, baseUrl: URL) => {
+  if (!data || typeof data !== 'object') throw new Error(installCommandUpdateMessage)
+  const { script, download_path: path, expires_at: expiresAt } = data as Record<string, unknown>
+  if (typeof script !== 'string' || !script.startsWith('#!')) throw new Error(installCommandUpdateMessage)
+  if (typeof path !== 'string' || !/^\/api\/agents\/i\/[A-Za-z0-9_-]{22}$/.test(path)) {
+    throw new Error('服务返回的安装链接无效，请更新 ConfigFlow 后重试')
+  }
+  if (typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() / 1000) {
+    throw new Error('安装链接已失效，请重新生成')
+  }
+  const url = new URL(baseUrl)
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`
+  return {
+    script, url: url.toString(),
+    expiry: new Date(expiresAt * 1000).toLocaleString('zh-CN', {
+      month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+    })
+  }
+}
+
+const installCommandError = (error: any, fallback: string) => [404, 405].includes(error.response?.status)
+  ? installCommandUpdateMessage
+  : error.response?.data?.message || error.message || fallback
 
 const generateCoreInstallCommand = async () => {
   if (coreInstallLoading.value) return
@@ -988,20 +996,18 @@ const generateCoreInstallCommand = async () => {
     if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.search || baseUrl.hash || baseUrl.username || baseUrl.password) {
       throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
     }
-    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, '')}/api/agents/core-install-script`
-    const response = await agentApi.generateCoreInstallScript()
-    if (request !== coreInstallRequest || !shellAio.value || !scriptDialogVisible.value) return
-    if (typeof response.data !== 'string' || !response.data.trimStart().startsWith('#!')) {
-      throw new Error('服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新')
-    }
-    if (response.data.split('\n', 2)[1] !== CORE_INSTALL_INTERFACE) {
+    const response = await agentApi.generateCoreInstallCommand(coreInstallTarget.value)
+    if (request !== coreInstallRequest || !shellAio.value || aioCoreInstall.value || !scriptDialogVisible.value) return
+    const result = readInstallCommand(response.data, baseUrl)
+    if (result.script.split('\n', 2)[1] !== CORE_INSTALL_INTERFACE) {
       throw new Error('安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试')
     }
-    coreInstallScript.value = response.data
-    coreInstallCommand.value = buildCoreInstallCommand(baseUrl.toString(), coreInstallTarget.value)
+    coreInstallScript.value = result.script
+    coreInstallScriptUrl.value = result.url
+    coreInstallLinkExpiry.value = result.expiry
     notify.success('核心安装命令已生成，请以 root 身份在目标机器执行')
   } catch (error: any) {
-    if (request === coreInstallRequest) notify.error(error.response?.data?.message || error.message || '生成核心安装命令失败')
+    if (request === coreInstallRequest) notify.error(installCommandError(error, '生成核心安装命令失败'))
   } finally {
     if (request === coreInstallRequest) coreInstallLoading.value = false
   }
@@ -1631,22 +1637,11 @@ const scriptPanelOpen = ref(false)
 /** 生成结果按安装方式给出可复制的命令块，避免模板里重复四段几乎相同的结构 */
 const commandBlocks = computed(() => {
   if (scriptForm.value.installType === 'shell') {
-    return [
-      {
-        title: 'Ubuntu / Debian / CentOS',
-        note: '使用 systemd',
-        value: installCommand.value,
-        rows: 3,
-        copy: copyCommand
-      },
-      {
-        title: 'Alpine Linux',
-        note: '使用 OpenRC',
-        value: installCommandAlpine.value,
-        rows: 3,
-        copy: copyCommandAlpine
-      }
-    ]
+    return [{
+      title: 'Linux（systemd / OpenRC）',
+      note: combinedCoreInstall.value ? '以 root 执行；完整下载成功后，先安装核心，再安装 Agent。' : '以 root 执行；完整下载成功后安装 Agent。',
+      value: installCommand.value, rows: 3, copy: copyCommand
+    }]
   }
   return [
     {
@@ -1777,8 +1772,8 @@ const showMetricsDetail = async (agent: any) => {
 // 安装类型变化时重置相关字段
 const onInstallTypeChange = () => {
   // 清空之前生成的命令
-  installCommand.value = ''
-  installCommandAlpine.value = ''
+  installScriptUrl.value = ''
+  installLinkExpiry.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
 
@@ -1798,8 +1793,8 @@ const onInstallTypeChange = () => {
 
 // Docker 模式变化时
 const onDockerModeChange = () => {
-  installCommand.value = ''
-  installCommandAlpine.value = ''
+  installScriptUrl.value = ''
+  installLinkExpiry.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
 
@@ -1855,7 +1850,9 @@ const handleGenerateScript = () => {
 const showGenerateScriptDialog = () => {
   // 清空其他值
   installScript.value = ''
-  installCommand.value = ''
+  installScriptUrl.value = ''
+  installLinkExpiry.value = ''
+  installerDownloader.value = 'curl'
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
   scriptPanelOpen.value = false
@@ -1863,7 +1860,9 @@ const showGenerateScriptDialog = () => {
   // Reset every installation field, including both Docker Agent ports.
   scriptForm.value = { ...createScriptForm(), port: generateRandomPort() }
   lifecyclePanelOpen.value = false
-  installCommandAlpine.value = ''
+  installHelpOpen.value = false
+  coreOnlyPanelOpen.value = false
+  dockerOptionsOpen.value = false
 
   // 打开对话框 - v-if 会确保表单完全重新渲染
   scriptDialogVisible.value = true
@@ -1871,16 +1870,27 @@ const showGenerateScriptDialog = () => {
 
 // 重置表单
 const resetForm = () => {
+  scriptRequest += 1
+  scriptLoading.value = false
   installScript.value = ''
-  installCommand.value = ''
-  installCommandAlpine.value = ''
+  installScriptUrl.value = ''
+  installLinkExpiry.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
   scriptPanelOpen.value = false
 }
 
+watch(scriptForm, resetForm, { deep: true, flush: 'sync' })
+watch(scriptDialogVisible, resetForm, { flush: 'sync' })
+watch([installScriptUrl, dockerComposeContent, dockerRunCommand], async (commands) => {
+  if (!commands.some(Boolean)) return
+  await nextTick()
+  installCommandSection.value?.scrollIntoView?.({ block: 'start', behavior: 'auto' })
+})
+
 // 生成安装脚本
 const generateScript = async () => {
+  if (scriptLoading.value) return
   if (!scriptForm.value.name.trim()) {
     notify.warning('请输入 Agent 名称')
     return
@@ -1892,10 +1902,10 @@ const generateScript = async () => {
       notify.warning('Agent 名称只能包含字母、数字、短横线或下划线')
       return
     }
-    const form = scriptForm.value
+    const form = shellServiceSettings.value
     const configPaths = shellAio.value ? [form.mihomoConfigPath, form.oxidnsConfigPath] : [form.config_path]
     if (configPaths.some(path => path.trim() && !path.trim().match(/\.\w+$/))) {
-      lifecyclePanelOpen.value = shellAio.value
+      lifecyclePanelOpen.value = true
       notify.warning('配置文件路径应指向一个文件（如 config.yaml），而不是文件夹')
       return
     }
@@ -1908,7 +1918,19 @@ const generateScript = async () => {
         notify.warning('两个 Agent 必须使用不同的端口')
         return
       }
+      if (aioCoreInstall.value && [form.mihomoAgentPort, form.oxidnsAgentPort].includes(1053)) {
+        notify.warning('Mihomo DNS 使用 1053，请为 Agent 选择其他端口')
+        return
+      }
     } else {
+      if (singleCoreInstall.value && (!Number.isInteger(form.port) || form.port < 1024 || form.port > 65535)) {
+        notify.warning('Agent 端口应为 1024 到 65535 之间的整数')
+        return
+      }
+      if (singleCoreInstall.value && form.type === 'mihomo' && form.port === 1053) {
+        notify.warning('Mihomo DNS 使用 1053，请为 Agent 选择其他端口')
+        return
+      }
       const unit = (form.service_unit.trim() || form.type).replace(/\.service$/, '')
       const restart = form.restart_command.trim()
       const standardRestart = !restart || [
@@ -1923,6 +1945,9 @@ const generateScript = async () => {
     }
   }
 
+  const request = ++scriptRequest
+  const includeCore = combinedCoreInstall.value
+  scriptLoading.value = true
   const loadingToast = notify.loading(scriptForm.value.installType === 'docker' ? '正在生成 Docker 部署命令...' : '正在生成安装命令...')
 
   try {
@@ -1952,12 +1977,19 @@ const generateScript = async () => {
         api.get('/agents/docker-agent-run', { params: dockerParams })
       ])
 
+      if (request !== scriptRequest || !scriptDialogVisible.value) return
       dockerComposeContent.value = composeResponse.data
       dockerRunCommand.value = runResponse.data
       notify.success('Docker 部署命令已生成，请复制到目标机器执行')
     } else {
-      const serverUrl = localStorage.getItem('serverDomain') || window.location.origin
-      const form = scriptForm.value
+      let serverUrl = localStorage.getItem('serverDomain') || window.location.origin
+      let parsed: URL
+      try { parsed = new URL(serverUrl.trim()) } catch { throw new Error('服务地址无效，请先设置完整的 HTTP / HTTPS 地址') }
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.search || parsed.hash || parsed.username || parsed.password) {
+        throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
+      }
+      serverUrl = parsed.toString().replace(/\/+$/, '')
+      const form = { ...shellServiceSettings.value }
       const lifecycleParams: Record<string, string> = {}
       if (form.service_manager !== 'auto') lifecycleParams.service_manager = form.service_manager
       for (const key of ['service_unit', 'service_binary', 'stop_command', 'start_command', 'status_command'] as const) {
@@ -1977,6 +2009,7 @@ const generateScript = async () => {
         oxidns_service_unit: form.oxidnsServiceUnit.trim() || 'oxidns',
         mihomo_service_binary: form.mihomoServiceBinary.trim() || 'mihomo',
         oxidns_service_binary: form.oxidnsServiceBinary.trim() || 'oxidns',
+        ...(includeCore ? { install_core: true } : {})
       } : {
         name: form.name.trim(),
         type: form.type,
@@ -1985,33 +2018,32 @@ const generateScript = async () => {
         config_path: form.config_path.trim(),
         restart_command: form.restart_command.trim(),
         server_url: serverUrl,
-        ...lifecycleParams
+        ...lifecycleParams,
+        ...(includeCore ? { install_core: true } : {})
       }
-      const response = await agentApi.generateScript(shellParams)
-      installScript.value = response.data
-
-      // Preview and one-click installation use exactly the same parameters.
-      const params = new URLSearchParams()
-      for (const [key, value] of Object.entries(shellParams)) {
-        if (value !== '') params.set(key, String(value))
+      const response = await agentApi.generateInstallCommand(shellParams)
+      if (request !== scriptRequest || !scriptDialogVisible.value) return
+      const result = readInstallCommand(response.data, parsed)
+      if (includeCore && result.script.split('\n', 2)[1] !== AGENT_CORE_INSTALL_INTERFACE) {
+        throw new Error('安装脚本版本不支持同时安装核心，请更新 ConfigFlow 后重试')
       }
-      // An explicit empty restart command requests lifecycle auto-detection.
-      if (shellParams.restart_command !== undefined) params.set('restart_command', shellParams.restart_command)
 
-      const scriptUrl = `${serverUrl}/api/agents/install-script?${params.toString()}`
-
-      // 生成一键命令 - 标准 Linux
-      installCommand.value = `curl -sSL "${scriptUrl}" | sudo bash`
-
-      // 生成一键命令 - Alpine Linux
-      installCommandAlpine.value = `curl -sSL "${scriptUrl}" | sh`
+      // The preview and download are the same immutable server-generated snapshot.
+      installScript.value = result.script
+      installScriptUrl.value = result.url
+      installLinkExpiry.value = result.expiry
 
       notify.success('安装命令已生成，请复制到目标机器执行')
     }
   } catch (error: any) {
-    const errorMsg = error.response?.data?.message || error.message || '生成脚本失败'
-    notify.error(errorMsg)
+    if (request === scriptRequest) {
+      const errorMsg = scriptForm.value.installType === 'shell'
+        ? installCommandError(error, '生成脚本失败')
+        : error.response?.data?.message || error.message || '生成脚本失败'
+      notify.error(errorMsg)
+    }
   } finally {
+    if (request === scriptRequest) scriptLoading.value = false
     notify.dismiss(loadingToast)
   }
 }
@@ -2027,7 +2059,6 @@ const copyAgentContent = async (text: string, message: string) => {
 }
 
 const copyCommand = () => copyAgentContent(installCommand.value, '命令已复制到剪贴板')
-const copyCommandAlpine = () => copyAgentContent(installCommandAlpine.value, 'Alpine 命令已复制到剪贴板')
 const copyDockerCompose = () => copyAgentContent(dockerComposeContent.value, 'Docker Compose 已复制到剪贴板')
 const copyDockerRun = () => copyAgentContent(dockerRunCommand.value, 'Docker Run 命令已复制到剪贴板')
 

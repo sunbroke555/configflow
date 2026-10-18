@@ -221,16 +221,18 @@ describe('Docker installation choices', () => {
     name.value = 'new-aio'
     name.dispatchEvent(new Event('input', { bubbles: true }))
     await flushPromises()
-    expect(dialog.textContent).toContain('Agent + Mihomo + OxiDNS')
+    await click('button[aria-label="Docker 模式说明"]')
+    expect(document.querySelector('[data-field-help-content]')?.textContent).toContain('Agent + Mihomo + OxiDNS')
+    await click('button[aria-label="Docker 模式说明"]')
     expect(dialog.textContent).not.toContain('MosDNS Agent')
     const port = (text: string) => {
       const label = Array.from(dialog.querySelectorAll('label')).find(item => item.textContent?.trim() === text)
       return label?.htmlFor ? dialog.querySelector<HTMLInputElement>(`#${label.htmlFor}`) ?? undefined : undefined
     }
-    expect(port('Mihomo Agent')?.value).toBe('8080')
-    expect(port('OxiDNS Agent')?.value).toBe('8082')
-    port('OxiDNS Agent')!.value = '8182'
-    port('OxiDNS Agent')!.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(port('Mihomo Agent 端口')?.value).toBe('8080')
+    expect(port('OxiDNS Agent 端口')?.value).toBe('8082')
+    port('OxiDNS Agent 端口')!.value = '8182'
+    port('OxiDNS Agent 端口')!.dispatchEvent(new Event('input', { bubbles: true }))
     await flushPromises()
     await generate()
     for (const endpoint of ['/agents/docker-agent-compose', '/agents/docker-agent-run']) {
@@ -243,8 +245,8 @@ describe('Docker installation choices', () => {
       .toEqual(expect.arrayContaining(['generated-compose', 'generated-run']))
     vi.mocked(api.get).mockClear()
     await click('[role="radio"][value="mosdns"]')
-    expect(port('MosDNS Agent')?.value).toBe('8081')
-    expect(port('OxiDNS Agent')).toBeUndefined()
+    expect(port('MosDNS Agent 端口')?.value).toBe('8081')
+    expect(port('OxiDNS Agent 端口')).toBeUndefined()
     await generate()
     for (const endpoint of ['/agents/docker-agent-compose', '/agents/docker-agent-run']) {
       expect(api.get).toHaveBeenCalledWith(endpoint, { params: expect.objectContaining({

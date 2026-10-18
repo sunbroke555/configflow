@@ -11,10 +11,10 @@ MIHOMO_SERVICE_BINARY={mihomo_service_binary_shell}
 OXIDNS_SERVICE_BINARY={oxidns_service_binary_shell}
 STAGE_DIR=""
 RESTART_ON_FAILURE=""
-cleanup() {
+{core_phase_state}cleanup() {
     cleanup_status=$?
     if [ "$cleanup_status" -ne 0 ]; then
-        for stopped_service in $RESTART_ON_FAILURE; do
+{core_cleanup_message}        for stopped_service in $RESTART_ON_FAILURE; do
             if [ "$INIT_SYSTEM" = systemd ]; then
                 systemctl start "configflow-agent-$stopped_service" || true
             else
@@ -93,13 +93,23 @@ stop_existing_agent() {
 }
 
 [ "$(id -u)" -eq 0 ] || fail "请使用 root 用户运行此脚本"
-if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
-    INIT_SYSTEM=openrc
-elif command -v systemctl >/dev/null 2>&1; then
-    INIT_SYSTEM=systemd
-else
-    fail "需要 systemd 或 OpenRC 管理已安装的 Mihomo 和 OxiDNS。"
-fi
+{init_detection}
+
+{agent_install_dependencies}
+{installation_description}
+echo "1) 安装或升级两个独立 Agent"
+echo "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
+echo "3) 取消"
+printf '请输入选项 [1-3]: '
+read -r choice < /dev/tty
+case "$choice" in
+    1)
+{agent_arch_detection}
+        agent_ensure_dependencies
+        ;;
+    2) ;;
+    *) exit 0 ;;
+esac
 
 # A legacy Agent owns a shared binary and directory. Do not guess how to split
 # its identity or let either installer delete another instance's state.
@@ -123,12 +133,6 @@ for service in mihomo oxidns; do
     fi
 done
 
-echo "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。"
-echo "1) 安装或升级两个独立 Agent"
-echo "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
-echo "3) 取消"
-printf '请输入选项 [1-3]: '
-read -r choice < /dev/tty
 case "$choice" in
     1) ;;
     2)
@@ -171,7 +175,7 @@ case "$choice" in
     *) exit 0 ;;
 esac
 
-# Read-only core checks precede even the Agent download. The existing service
+{core_install_phase}# Read-only core checks precede even the Agent download. The existing service
 # manager remains the only owner of each core process.
 PHYSICAL_AGENT_ROOT="$(CDPATH= cd "$(dirname "$AGENT_ROOT")" && pwd -P)/$(basename "$AGENT_ROOT")"
 for service in mihomo oxidns; do
@@ -195,12 +199,6 @@ for service in mihomo oxidns; do
     fi
 done
 
-case "$(uname -m)" in
-    x86_64|amd64) AGENT_ARCH=linux-amd64 ;;
-    aarch64|arm64) AGENT_ARCH=linux-arm64 ;;
-    armv7l|armhf) AGENT_ARCH=linux-armv7 ;;
-    *) fail "不支持的 CPU 架构" ;;
-esac
 umask 077
 mkdir -p "$AGENT_ROOT"
 STAGE_DIR=$(mktemp -d "$AGENT_ROOT/.aio-install.XXXXXX")

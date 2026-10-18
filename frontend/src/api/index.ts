@@ -340,11 +340,17 @@ export interface AgentInstallScriptParams {
   name: string; type: string; port?: number; agent_ip?: string; config_path?: string;
   restart_command?: string; server_url?: string; service_manager?: string;
   service_unit?: string; service_binary?: string; stop_command?: string;
-  start_command?: string; status_command?: string;
+  start_command?: string; status_command?: string; install_core?: boolean;
   mihomo_agent_port?: number; oxidns_agent_port?: number;
   mihomo_config_path?: string; oxidns_config_path?: string;
   mihomo_service_unit?: string; oxidns_service_unit?: string;
   mihomo_service_binary?: string; oxidns_service_binary?: string;
+}
+
+export interface InstallCommandResult {
+  script: string
+  download_path: string
+  expires_at: number
 }
 
 export const agentApi = {
@@ -374,10 +380,10 @@ export const agentApi = {
   activateDeployment: (id: string, deploymentId: string) => api.post(`/agents/${id}/deployments/${deploymentId}/activate`),
   rollbackDeployment: (id: string, deploymentId: string) => api.post(`/agents/${id}/deployments/${deploymentId}/rollback`, {}),
   uninstall: (id: string) => api.post(`/agents/${id}/uninstall`),
-  generateScript: (params: AgentInstallScriptParams) =>
-    api.get('/agents/install-script', { params, responseType: 'text' }),
-  generateCoreInstallScript: () =>
-    api.get('/agents/core-install-script', { responseType: 'text' }),
+  generateInstallCommand: (params: AgentInstallScriptParams) =>
+    api.post<InstallCommandResult>('/agents/install-command', params),
+  generateCoreInstallCommand: (target: 'both' | 'mihomo' | 'oxidns') =>
+    api.post<InstallCommandResult>('/agents/core-install-command', { target }),
   generateDockerCompose: (params: any) =>
     api.get('/agents/docker-compose', { params, responseType: 'text' }),
   generateDockerRun: (params: any) =>
