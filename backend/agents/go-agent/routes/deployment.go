@@ -36,6 +36,7 @@ var errDeploymentBusy = errors.New("another service operation is in progress")
 
 type DeploymentFile struct {
 	Path   string `json:"path"`
+	Name   string `json:"name,omitempty"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
 	Role   string `json:"role"`
@@ -306,6 +307,7 @@ func DeploymentUploadHandler(cfg *Config) http.HandlerFunc {
 		}
 		fail := func(err error) {
 			s.FailedStage = s.Status
+			err = deploymentStageLocation(err, cfg, s.Status)
 			s.Error, s.ErrorDetails = deploymentErrorFields(err)
 			_ = saveDeployment(cfg, s, "failed")
 			cleanupDeployments(cfg, s.DeploymentID)
@@ -413,7 +415,7 @@ func DeploymentHandler(cfg *Config) http.HandlerFunc {
 			defer release()
 			if e := loadEffectiveManifest(cfg, s); e != nil {
 				s.FailedStage = s.Status
-				s.Error, s.ErrorDetails = deploymentErrorFields(e)
+				s.Error, s.ErrorDetails = deploymentErrorFields(deploymentStageLocation(e, cfg, s.Status))
 				_ = saveDeployment(cfg, s, "failed")
 				return
 			}
@@ -441,7 +443,7 @@ func hashFile(name string) (string, int64, error) {
 func prepareDeployment(cfg *Config, s *DeploymentState, activate bool) {
 	fail := func(e error) {
 		s.FailedStage = s.Status
-		s.Error, s.ErrorDetails = deploymentErrorFields(e)
+		s.Error, s.ErrorDetails = deploymentErrorFields(deploymentStageLocation(e, cfg, s.Status))
 		_ = saveDeployment(cfg, s, "failed")
 		cleanupDeployments(cfg, s.DeploymentID)
 	}
@@ -851,7 +853,7 @@ func replaceDeployment(cfg *Config, s *DeploymentState) error {
 func activateDeployment(cfg *Config, s *DeploymentState) {
 	failBefore := func(e error) {
 		s.FailedStage = s.Status
-		s.Error, s.ErrorDetails = deploymentErrorFields(e)
+		s.Error, s.ErrorDetails = deploymentErrorFields(deploymentStageLocation(e, cfg, s.Status))
 		_ = saveDeployment(cfg, s, "failed")
 		cleanupDeployments(cfg, s.DeploymentID)
 	}
@@ -908,7 +910,7 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 			e = withPreviousDiagnostic("OxiDNS reload and fallback restart failed", reloadErr, e)
 		}
 		s.FailedStage = s.Status
-		s.Error, s.ErrorDetails = deploymentErrorFields(e)
+		s.Error, s.ErrorDetails = deploymentErrorFields(deploymentStageLocation(e, cfg, s.Status))
 		rollbackDeployment(cfg, s, true)
 		cleanupDeployments(cfg, s.DeploymentID)
 	}
@@ -1010,7 +1012,7 @@ func rollbackDeployment(cfg *Config, s *DeploymentState, start bool) {
 	_ = saveDeployment(cfg, s, "rolling_back")
 	rollbackErr := func(e error) {
 		s.ConfigVersion = ""
-		s.RollbackError, s.RollbackErrorDetails = deploymentErrorFields(e)
+		s.RollbackError, s.RollbackErrorDetails = deploymentErrorFields(deploymentStageLocation(e, cfg, s.Status))
 		_ = saveDeployment(cfg, s, "rollback_failed")
 	}
 	if start {
@@ -1147,7 +1149,7 @@ func RecoverDeployments(cfg *Config, startService bool) error {
 					if startupErr != nil {
 						e = withPreviousDiagnostic("restored service startup and health check failed", startupErr, e)
 					}
-					s.RollbackError, s.RollbackErrorDetails = deploymentErrorFields(e)
+					s.RollbackError, s.RollbackErrorDetails = deploymentErrorFields(deploymentStageLocation(e, cfg, s.Status))
 					_ = saveDeployment(cfg, s, "rollback_failed")
 					return fmt.Errorf("restored service health failed")
 				}

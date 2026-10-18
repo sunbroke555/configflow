@@ -6,6 +6,7 @@ import api, { agentApi, profileApi } from '@/api'
 import { setActiveProfileId } from '@/profileContext'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
 import { Select } from '@/components/ui/select'
+import { ruleLocationDetails } from './fixtures/agent-failure'
 
 // Keep the actual Agent cards, stores and deployment state; replace only HTTP.
 vi.mock('@/api', () => ({
@@ -280,8 +281,8 @@ describe('deployment progress precedes the content comparison', () => {
 
 describe('Agent card diagnostics', () => {
   it.each(['mihomo', 'mosdns', 'oxidns'])('shows %s publication and rollback failure details in its card', async service_type => {
-    const { wrapper } = await render(agent({ service_type, latest_deployment: deployment({ status: 'rollback_failed', error: '启动检查失败', error_details: 'listen: address in use', rollback_error: '旧服务启动失败', rollback_error_details: 'permission denied' }) }))
-    expect(wrapper.findAll('pre').map(item => item.text())).toContain('listen: address in use')
+    const { wrapper } = await render(agent({ service_type, latest_deployment: deployment({ status: 'rollback_failed', error: '配置检查失败', error_details: ruleLocationDetails, rollback_error: '旧服务启动失败', rollback_error_details: 'permission denied' }) }))
+    expect(wrapper.findAll('pre').map(item => item.element.textContent)).toContain(ruleLocationDetails)
     expect(wrapper.findAll('pre').map(item => item.text())).toContain('permission denied')
   })
 })

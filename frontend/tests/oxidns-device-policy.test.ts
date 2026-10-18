@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ruleLocationDetails } from './fixtures/agent-failure'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { agentApi, oxidnsDevicePolicyApi, oxidnsMonitorApi } from '@/api'
@@ -285,11 +286,11 @@ describe('OxiDNS device-policy publication diagnostics', () => {
     expect(wrapper.text()).toContain('失败步骤：校验中')
   })
   it('keeps rejection details even when no deployment was created', async () => {
-    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成失败', error_details: 'unknown resolver tag' } } })
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成失败', error_details: ruleLocationDetails } } })
     const wrapper = await render()
     await button(wrapper, '发布到当前设备').trigger('click')
     await flushPromises()
-    expect(wrapper.get('pre').text()).toBe('unknown resolver tag')
+    expect(wrapper.get('pre').element.textContent).toBe(ruleLocationDetails)
     expect(wrapper.text()).toContain('生成失败')
   })
 })

@@ -134,7 +134,7 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
                 logger.info(f"尝试通过 Sub-Store 获取订阅最新数据: '{sub['name']}'")
                 yaml_text, source = (subscription_fetch or get_subscription_proxies_yaml)(sub_id, sub['url'])
                 from backend.utils.provider_delivery import parse_provider_proxies
-                proxies = parse_provider_proxies(yaml_text)
+                proxies = parse_provider_proxies(yaml_text, name=sub['name'])
 
                 # 转换为 node 格式用于缓存和过滤
                 nodes_list = proxies_to_nodes(proxies)

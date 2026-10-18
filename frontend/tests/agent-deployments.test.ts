@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { agentApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { deploymentStatusLabel, useAgentDeployments } from '@/composables/useAgentDeployments'
+import { ruleLocationDetails } from './fixtures/agent-failure'
 
 vi.mock('@/api', () => ({ agentApi: { getDeployment: vi.fn(), activateDeployment: vi.fn(), rollbackDeployment: vi.fn(), pushConfig: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() } }))
@@ -342,6 +343,22 @@ describe('Agent deployment lifecycle feedback', () => {
 })
 
 describe('Agent failure response diagnostics', () => {
+  it('retains retry validation locations while continuing to confirm the original deployment', async () => {
+    const { flow } = render()
+    vi.mocked(agentApi.getDeployment)
+      .mockRejectedValueOnce({ response: { status: 404 } })
+      .mockResolvedValueOnce({ data: { deployment_id: 'retry-locations', status: 'succeeded' } } as any)
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: `规则集内容无效\n${ruleLocationDetails}`, error_details: ruleLocationDetails } } })
+    flow.track('one', { deployment_id: 'retry-locations', status: 'unknown' })
+    await vi.advanceTimersByTimeAsync(0)
+    await flow.retryPublish('one')
+    expect(flow.deployments.one).toMatchObject({ status: 'unknown', query_error: true, error_details: ruleLocationDetails })
+    expect(agentApi.pushConfig).toHaveBeenCalledExactlyOnceWith('one', 'retry-locations')
+    expect(notify.error).toHaveBeenCalledWith('重新提交未完成', '规则集内容无效')
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(flow.deployments.one.status).toBe('succeeded')
+    expect(flow.deployments.one.error_details).toBeUndefined()
+  })
   it('retains diagnostic output when activation remains uncertain', async () => {
     const { flow } = render()
     flow.track('one', { deployment_id: 'ready', status: 'ready' }, false)
