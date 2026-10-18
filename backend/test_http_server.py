@@ -14,13 +14,16 @@ import requests
 from waitress import create_server
 
 from backend.http_server import run_http_server, server_options
+from backend.http_queue import QueueWaitDispatcher
 
 
 @contextmanager
 def running_server(app, *, threads=1):
     options = dict(server_options(), host='127.0.0.1', port=0, threads=threads,
                    asyncore_loop_timeout=0.05)
-    server = create_server(app, map={}, **options)
+    dispatcher = QueueWaitDispatcher()
+    dispatcher.set_thread_count(threads)
+    server = create_server(app, map={}, _dispatcher=dispatcher, **options)
     loop = threading.Thread(target=server.run, daemon=True)
     loop.start()
     session = requests.Session()
@@ -48,8 +51,14 @@ def test_production_uses_reusable_workers_and_debug_keeps_reloader(monkeypatch):
     app, serve = Mock(), Mock()
     monkeypatch.setattr('waitress.serve', serve)
     run_http_server(app)
-    serve.assert_called_once_with(app, host='0.0.0.0', port=5001, threads=8,
-                                  channel_timeout=300, clear_untrusted_proxy_headers=False)
+    serve.assert_called_once()
+    assert serve.call_args.args == (app,)
+    options = dict(serve.call_args.kwargs)
+    dispatcher = options.pop('_dispatcher')
+    assert isinstance(dispatcher, QueueWaitDispatcher)
+    assert not dispatcher._monitor.is_alive()
+    assert options == dict(host='0.0.0.0', port=5001, threads=8,
+                           channel_timeout=300, clear_untrusted_proxy_headers=False)
     app.run.assert_not_called()
     run_http_server(app, debug=True)
     app.run.assert_called_once_with(host='0.0.0.0', port=5001, debug=True)
