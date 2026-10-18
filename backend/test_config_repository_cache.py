@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -106,6 +107,13 @@ def test_external_same_size_same_mtime_edit_invalidates(repository, atomic):
     else:
         repository.path.write_text(json.dumps(changed, ensure_ascii=False, indent=2) + '\n')
         os.utime(repository.path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        # This branch relies on ctime, which may not advance within one Linux
+        # clock tick. Establish that premise without changing size or mtime.
+        deadline = time.monotonic() + 2
+        while repository.path.stat().st_ctime_ns == previous.st_ctime_ns and time.monotonic() < deadline:
+            time.sleep(0.01)
+            os.utime(repository.path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        assert repository.path.stat().st_ctime_ns != previous.st_ctime_ns
     current = repository.path.stat()
     assert (current.st_size, current.st_mtime_ns) == (previous.st_size, previous.st_mtime_ns)
     assert repository.get_profile('default')['name'] == 'Bravo'

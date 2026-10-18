@@ -35,8 +35,13 @@ def register(manager, service='mihomo', profile='office'):
 
 
 def save(client, service='mihomo'):
-    path = '/api/oxidns/settings' if service == 'oxidns' else f'/api/custom-config/{service}'
-    value = {'worker_threads': 2} if service == 'oxidns' else {'config': 'mode: rule'}
+    if service == 'oxidns':
+        path, value = '/api/oxidns/settings', {'worker_threads': 2}
+    elif service == 'mosdns':
+        path, value = '/api/mosdns/settings', {'custom_config': 'plugins: []',
+                                             'local_dns': '223.5.5.5', 'log_file': 'new.log'}
+    else:
+        path, value = f'/api/custom-config/{service}', {'config': 'mode: rule'}
     result = client.post(path + '?profile=office', json=value)
     assert result.status_code == 200, result.json
     return result.json['publish_guard']
@@ -61,6 +66,7 @@ def stub_preparation(monkeypatch, manager, seen):
     ('/api/custom-config/surge', {'smart_groups': []}, 'surge'),
     ('/api/oxidns/settings', {'worker_threads': 2}, 'oxidns'),
     ('/api/mosdns/cache-settings', {'cache_size': 100}, 'mosdns'),
+    ('/api/mosdns/settings', {'local_dns': '223.5.5.5', 'log_file': 'new.log'}, 'mosdns'),
 ])
 def test_save_returns_exact_profile_type_and_committed_revision(publish_app, path, payload, service):
     client, repository, _ = publish_app
@@ -147,6 +153,22 @@ def test_matching_guard_uses_existing_transactional_preparation(publish_app, mon
     assert result.status_code == 200, result.json
     assert result.json['status'] == 'succeeded'
     assert seen[0]['profile_id'] == 'office'
+    if service == 'mosdns':
+        assert seen[0]['mosdns']['custom_config'] == 'plugins: []'
+        assert seen[0]['mosdns']['local_dns'] == '223.5.5.5'
+        assert seen[0]['mosdns']['log_file'] == 'new.log'
+
+
+def test_whole_mosdns_save_guard_rejects_a_changed_draft_before_publication(publish_app, monkeypatch):
+    client, repository, manager = publish_app
+    agent_id = register(manager, 'mosdns')
+    guard = save(client, 'mosdns')
+    repository.update_profile_transaction('office', lambda profile: profile['mosdns'].update(log_file='later.log'))
+    monkeypatch.setattr('backend.routes.agents._prepare_transactional_content',
+                        lambda *_a, **_k: pytest.fail('Stale MosDNS draft was prepared'))
+    result = client.post(f'/api/agents/{agent_id}/push-config', json=guard)
+    assert result.status_code == 409
+    assert not manager.get_agent_by_id(agent_id).get('deployments')
 
 
 def test_guard_checks_the_same_snapshot_that_is_generated(publish_app, monkeypatch):

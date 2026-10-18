@@ -62,7 +62,7 @@
         <header class="flex items-start gap-2.5">
           <DragHandle
             v-if="reorder.active.value"
-            :label="aggregation.name || aggregation.id"
+            :label="aggregation.name || aggregation.id || '订阅聚合'"
             :index="cfIndex"
             :total="aggregations.length"
             :position="reorder.positionLabel(cfIndex)"

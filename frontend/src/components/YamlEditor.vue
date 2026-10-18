@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import { EditorView, basicSetup } from 'codemirror'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { yaml } from '@codemirror/lang-yaml'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
@@ -72,6 +72,7 @@ const emit = defineEmits<{
 }>()
 
 const editorRef = ref<HTMLElement>()
+const readOnlyCompartment = new Compartment()
 let editorView: EditorView | null = null
 
 onMounted(() => {
@@ -90,7 +91,7 @@ onMounted(() => {
           emit('update:modelValue', newValue)
         }
       }),
-      EditorState.readOnly.of(props.readOnly || false)
+      readOnlyCompartment.of(EditorState.readOnly.of(props.readOnly || false))
     ]
   })
 
@@ -115,7 +116,7 @@ watch(() => props.modelValue, (newValue) => {
 watch(() => props.readOnly, (newReadOnly) => {
   if (editorView) {
     editorView.dispatch({
-      effects: EditorState.readOnly.reconfigure(newReadOnly || false)
+      effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(newReadOnly || false))
     })
   }
 })

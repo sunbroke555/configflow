@@ -130,7 +130,7 @@ async function verifyTarget(current: Attempt) {
     return false
   }
   const snapshotChanged = current.deploymentId && [deployments[agent.id], agent.latest_deployment].some(record =>
-    record?.deployment_id === current.deploymentId
+    record && record.deployment_id === current.deploymentId
     && ((record.profile_id && record.profile_id !== current.profileId)
       || (record.service_type && record.service_type !== current.serviceType)))
   if (snapshotChanged) {

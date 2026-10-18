@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
+import time
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -116,6 +117,13 @@ def test_in_place_edit_with_same_size_and_mtime_invalidates_cache(artifact_dir, 
     assert upgrades.artifacts()[upgrades.ARCHES[0]] == info(b'\x7fELFold')
     path.write_bytes(b'\x7fELFnew')
     os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    # Older Linux filesystems can keep ctime unchanged within one clock tick.
+    # This case exercises invalidation by ctime, so first establish that change.
+    deadline = time.monotonic() + 2
+    while path.stat().st_ctime_ns == original.st_ctime_ns and time.monotonic() < deadline:
+        time.sleep(0.01)
+        os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert path.stat().st_ctime_ns != original.st_ctime_ns
     assert path.stat().st_mtime_ns == original.st_mtime_ns
     assert upgrades.artifacts()[upgrades.ARCHES[0]] == info(b'\x7fELFnew')
     assert len(opened) == 2

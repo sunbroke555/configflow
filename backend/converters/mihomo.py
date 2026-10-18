@@ -11,6 +11,7 @@ from backend.utils.logger import get_logger
 from backend.utils.proxy_utils import fix_proxy_fields
 from backend.common.profile_context import append_url_query, profile_api_path
 from backend.utils.url_utils import safe_url_for_log
+from backend.converters.common import parse_hosts_pairs, ruleset_format
 
 # 获取当前模块的日志记录器
 logger = get_logger(__name__)
@@ -215,26 +216,7 @@ def parse_mosdns_custom_hosts(custom_hosts: str) -> Dict[str, str]:
     1. 域名在前，IP 在后：example.com 192.168.1.1（推荐格式）
     2. IP 在前，域名在后：192.168.1.1 example.com（传统 hosts 格式）
     """
-    import re
-
-    hosts: Dict[str, str] = {}
-    if not custom_hosts or not custom_hosts.strip():
-        return hosts
-
-    for line in custom_hosts.strip().split('\n'):
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        first, second = parts[0], parts[1]
-        if re.match(r'^[\d\.]+$', second):
-            domain, ip = first, second
-        else:
-            domain, ip = second, first
-        hosts[domain] = ip
-    return hosts
+    return dict(parse_hosts_pairs(custom_hosts))
 
 
 def sync_mosdns_hosts(mihomo_config: Dict[str, Any], config_data: Dict[str, Any]) -> None:
@@ -743,15 +725,8 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
 
             behavior = rule_set.get('behavior', 'domain')
 
-            # 根据原始 URL 后缀判断格式（使用原始 URL 而不是转换后的）
-            rule_format = 'text'
-            path_extension = 'list'
-            if original_url and (original_url.endswith('.yaml') or original_url.endswith('.yml')):
-                rule_format = 'yaml'
-                path_extension = 'yaml'
-            elif original_url and original_url.split('?', 1)[0].endswith('.mrs'):
-                rule_format = 'mrs'
-                path_extension = 'mrs'
+            rule_format = ruleset_format(rule_set, config_data, original_url)
+            path_extension = 'list' if rule_format == 'text' else rule_format
 
             rule_providers[rule_set['name']] = {
                 'type': 'http',
@@ -901,12 +876,8 @@ def get_mihomo_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
             elif url and url.startswith('http'):
                 url = apply_github_proxy_domain(url, config_data)
 
-            # 根据原始 URL 后缀判断格式
-            path_extension = 'list'
-            if original_url and (original_url.endswith('.yaml') or original_url.endswith('.yml')):
-                path_extension = 'yaml'
-            elif original_url and original_url.split('?', 1)[0].endswith('.mrs'):
-                path_extension = 'mrs'
+            rule_format = ruleset_format(rule_set, config_data, original_url)
+            path_extension = 'list' if rule_format == 'text' else rule_format
 
             downloads.append({
                 'name': rule_set['name'],

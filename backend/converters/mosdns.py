@@ -2,6 +2,14 @@
 import yaml
 from typing import Dict, Any, List
 from backend.common.profile_context import append_url_query, profile_api_path
+from backend.converters.common import parse_hosts_pairs
+
+
+_BUILTIN_TAGS = {
+    'lazy_cache', 'forward_local', 'forward_remote', 'forward_remote_fallback',
+    'custom_hosts', 'remote_dns', 'remote_dns_fallback', 'proxy_dns', 'proxy_dns_seq',
+    'china_dns', 'sequence_main', 'ip_requery_proxy',
+}
 
 # 统一处理规则集 ID，避免重复的前缀
 def _normalize_ruleset_id(rule_set_id: str) -> str:
@@ -33,10 +41,11 @@ def _ruleset_execution_order(config_data: Dict[str, Any], rule_sets_list: List[D
     return ordered_ids
 
 
-def _build_ruleset_tag_map(rule_sets_map: Dict[str, Dict[str, Any]], ruleset_order: List[str]) -> Dict[str, str]:
-    """Map each ruleset id to a tag derived from its name, keeping tags unique"""
+def _build_ruleset_tag_map(rule_sets_map: Dict[str, Dict[str, Any]], ruleset_order: List[str],
+                           reserved=()) -> Dict[str, str]:
+    """Keep familiar tags where possible, including space for classical IP tags."""
     tag_map: Dict[str, str] = {}
-    name_usage: Dict[str, int] = {}
+    used = _BUILTIN_TAGS | set(reserved)
 
     for ruleset_id in ruleset_order:
         rule_set = rule_sets_map.get(ruleset_id, {})
@@ -44,9 +53,12 @@ def _build_ruleset_tag_map(rule_sets_map: Dict[str, Dict[str, Any]], ruleset_ord
         if not name:
             name = _normalize_ruleset_id(ruleset_id)
 
-        count = name_usage.get(name, 0)
-        tag = f"{name}_{count + 1}" if count else name
-        name_usage[name] = count + 1
+        suffixes = ('', '_ip') if rule_set.get('behavior') == 'classical' else ('',)
+        tag, index = name, 1
+        while any(tag + suffix in used for suffix in suffixes):
+            index += 1
+            tag = f'{name}_{index}'
+        used.update(tag + suffix for suffix in suffixes)
         tag_map[ruleset_id] = tag
 
     return tag_map
@@ -229,10 +241,60 @@ def _ruleset_parts(behavior: str) -> List[str]:
     return [RULE_PART_DOMAIN]
 
 
-def _ruleset_local_path(rule_set: Dict[str, Any], part: str) -> str:
+def _single_rule_groups(config_data):
+    """Only adjacent rules with the same route and matcher may share a file."""
+    settings = config_data.get('mosdns', {})
+    direct = set(settings.get('direct_rules', []))
+    proxy = set(settings.get('proxy_rules', []))
+    selected = direct | proxy
+    groups, counts, previous = [], {}, None
+    items = config_data.get('rule_configs') or config_data.get('rules', [])
+    for item in items:
+        ident, kind = item.get('id'), item.get('rule_type')
+        if (item.get('itemType', 'rule') != 'rule' or not item.get('enabled', True)
+                or not item.get('library_enabled', True) or ident not in selected):
+            previous = None
+            continue
+        if kind in _CLASH_DOMAIN_PREFIXES:
+            part = RULE_PART_DOMAIN
+            value = f"{_CLASH_DOMAIN_PREFIXES[kind]}:{item.get('value', '')}"
+        elif kind in _CLASH_IP_TYPES:
+            part, value = RULE_PART_IP, item.get('value', '')
+        else:
+            previous = None
+            continue
+        is_direct = ident in direct
+        base = ('direct' if is_direct else 'proxy') + ('_ip_rules' if part == RULE_PART_IP else '_rules')
+        if previous != base:
+            counts[base] = counts.get(base, 0) + 1
+            tag = base if counts[base] == 1 else f'{base}_{counts[base]}'
+            groups.append({'tag': tag, 'part': part, 'ids': [],
+                           'path': f'./rules/{tag}.txt', 'lines': []})
+        groups[-1]['ids'].append(ident)
+        groups[-1]['lines'].append(value)
+        previous = base
+    return groups
+
+
+def _ruleset_layout(config_data, rule_sets_map, ruleset_order):
+    """Use one namespace for generated tags/files in preview, ZIP and Agent paths."""
+    groups = _single_rule_groups(config_data)
+    tags = _build_ruleset_tag_map(rule_sets_map, ruleset_order,
+                                  reserved=[group['tag'] for group in groups])
+    stems, sources = {}, {}
+    for ident in ruleset_order:
+        item = rule_sets_map.get(ident, {})
+        # Multiple references to one library still share downloaded content.
+        source = (item.get('library_rule_id'), item.get('name'),
+                  item.get('behavior', 'domain'), item.get('url'))
+        stems[ident] = sources.setdefault(source, tags[ident])
+    return tags, stems
+
+
+def _ruleset_local_path(rule_set: Dict[str, Any], part: str, file_stem=None) -> str:
     # 混合规则集的 IP 部分单独落盘，域名部分沿用原文件名保持兼容
     suffix = '_ip' if part == RULE_PART_IP and rule_set.get('behavior') == 'classical' else ''
-    return f"./rules/{rule_set['name']}{suffix}.txt"
+    return f"./rules/{file_stem or rule_set['name']}{suffix}.txt"
 
 
 def _ruleset_ip_tag(rule_set: Dict[str, Any], ruleset_tag: str) -> str:
@@ -240,7 +302,7 @@ def _ruleset_ip_tag(rule_set: Dict[str, Any], ruleset_tag: str) -> str:
 
 
 def _ruleset_files(config_data: Dict[str, Any], effective_base_url: str,
-                   rule_set: Dict[str, Any]) -> List[Dict[str, Any]]:
+                   rule_set: Dict[str, Any], file_stem=None) -> List[Dict[str, Any]]:
     """规则集需要的本地文件及其下载地址（rule-proxy 会转换为 MosDNS 文本格式）"""
     behavior = rule_set.get('behavior', 'domain')
     url = rule_set.get('url', '')
@@ -260,7 +322,7 @@ def _ruleset_files(config_data: Dict[str, Any], effective_base_url: str,
         files.append({
             'part': part,
             'url': download_url,
-            'local_path': _ruleset_local_path(rule_set, part),
+            'local_path': _ruleset_local_path(rule_set, part, file_stem),
         })
     return files
 
@@ -516,6 +578,7 @@ def get_mosdns_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
         rule_set.get('id'): rule_set for rule_set in rule_sets_list if rule_set.get('id')
     }
     ruleset_order = _ruleset_execution_order(config_data, rule_sets_list)
+    _, ruleset_file_stems = _ruleset_layout(config_data, rule_sets_map, ruleset_order)
 
     # 获取 server_domain
     server_domain = config_data.get('system_config', {}).get('server_domain', '').strip()
@@ -534,7 +597,7 @@ def get_mosdns_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
 
         # rule-proxy 会将所有格式转换为 MosDNS 文本格式，所以始终使用 .txt 扩展名
         # 混合规则集会拆成域名、IP 两个文件
-        for ruleset_file in _ruleset_files(config_data, effective_base_url, rule_set):
+        for ruleset_file in _ruleset_files(config_data, effective_base_url, rule_set, ruleset_file_stems[rule_set_id]):
             if ruleset_file['url']:
                 downloads.append({
                     'name': rule_set['name'],
@@ -563,112 +626,14 @@ def get_mosdns_custom_files(config_data: Dict[str, Any]) -> List[Dict[str, str]]
     # 从嵌套结构中获取 MosDNS 配置
     mosdns_config_data = config_data.get('mosdns', {})
 
-    # 1. 处理自定义 Hosts
-    custom_hosts_config = mosdns_config_data.get('custom_hosts', '')
-    if custom_hosts_config and custom_hosts_config.strip():
-        hosts_entries = []
-        for line in custom_hosts_config.strip().split('\n'):
-            line = line.strip()
-            if line and not line.startswith('#'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    first = parts[0]
-                    second = parts[1]
-
-                    import re
-                    if re.match(r'^[\d\.]+$', second):
-                        domain = first
-                        ip = second
-                    else:
-                        ip = first
-                        domain = second
-
-                    hosts_entries.append(f"{domain} {ip}")
-
-        if hosts_entries:
-            custom_files.append({
-                'path': './rules/custom_hosts.txt',
-                'content': '\n'.join(hosts_entries)
-            })
-
-    # 2. 处理单个规则（按照直连/代理分组合并到同一文件）
-    # 获取配置的直连和代理规则
-    direct_rule_ids = mosdns_config_data.get('direct_rules', [])
-    proxy_rule_ids = mosdns_config_data.get('proxy_rules', [])
-
-    # 获取规则列表
-    rules_list = config_data.get('rule_configs', [])
-    if not rules_list:
-        rules_list = config_data.get('rules', [])
-
-    # 规则类型映射
-    rule_type_mapping = {
-        'DOMAIN': 'full',
-        'DOMAIN-SUFFIX': 'domain',
-        'DOMAIN-KEYWORD': 'keyword'
-    }
-
-    # 按照规则类型（直连/代理）分组收集规则内容
-    direct_domain_rules = []  # 直连域名规则
-    proxy_domain_rules = []   # 代理域名规则
-    direct_ip_rules = []      # 直连IP规则
-    proxy_ip_rules = []       # 代理IP规则
-
-    for rule in rules_list:
-        if not rule.get('enabled', True) or not rule.get('library_enabled', True):
-            continue
-
-        rule_id = rule.get('id')
-        rule_type = rule.get('rule_type', '')
-        value = rule.get('value', '')
-
-        # 判断规则是直连还是代理
-        is_direct = rule_id in direct_rule_ids
-        is_proxy = rule_id in proxy_rule_ids
-
-        if not (is_direct or is_proxy):
-            continue
-
-        # 根据规则类型处理
-        if rule_type in ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD']:
-            prefix = rule_type_mapping.get(rule_type, 'full')
-            rule_content = f"{prefix}:{value}"
-
-            if is_direct:
-                direct_domain_rules.append(rule_content)
-            elif is_proxy:
-                proxy_domain_rules.append(rule_content)
-
-        elif rule_type in ['IP-CIDR', 'IP-CIDR6']:
-            if is_direct:
-                direct_ip_rules.append(value)
-            elif is_proxy:
-                proxy_ip_rules.append(value)
-
-    # 生成合并后的文件
-    if direct_domain_rules:
+    hosts = parse_hosts_pairs(mosdns_config_data.get('custom_hosts', ''))
+    if hosts:
         custom_files.append({
-            'path': './rules/direct_rules.txt',
-            'content': '\n'.join(direct_domain_rules)
+            'path': './rules/custom_hosts.txt',
+            'content': '\n'.join(f'{domain} {address}' for domain, address in hosts),
         })
-
-    if proxy_domain_rules:
-        custom_files.append({
-            'path': './rules/proxy_rules.txt',
-            'content': '\n'.join(proxy_domain_rules)
-        })
-
-    if direct_ip_rules:
-        custom_files.append({
-            'path': './rules/direct_ip_rules.txt',
-            'content': '\n'.join(direct_ip_rules)
-        })
-
-    if proxy_ip_rules:
-        custom_files.append({
-            'path': './rules/proxy_ip_rules.txt',
-            'content': '\n'.join(proxy_ip_rules)
-        })
+    for group in _single_rule_groups(config_data):
+        custom_files.append({'path': group['path'], 'content': '\n'.join(group['lines'])})
 
     return custom_files
 
@@ -705,7 +670,7 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
         rule_set.get('id'): rule_set for rule_set in rule_sets_list if rule_set.get('id')
     }
     ruleset_order = _ruleset_execution_order(config_data, rule_sets_list)
-    ruleset_tag_map = _build_ruleset_tag_map(rule_sets_map, ruleset_order)
+    ruleset_tag_map, ruleset_file_stems = _ruleset_layout(config_data, rule_sets_map, ruleset_order)
 
     # 获取 MosDNS 配置（从嵌套结构中读取）
     mosdns_config_data = config_data.get('mosdns', {})
@@ -818,7 +783,7 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
 
         # 为每个规则集创建独立的插件（Agent 会将规则文件下载到 local_path）
         # 混合规则集（classical）拆成 domain_set + ip_set，IP 部分 tag 加 _ip 后缀
-        for ruleset_file in _ruleset_files(config_data, effective_base_url, rule_set):
+        for ruleset_file in _ruleset_files(config_data, effective_base_url, rule_set, ruleset_file_stems[rule_set_id]):
             if ruleset_file['url']:
                 ruleset_downloads.append({
                     'name': rule_set['name'],
@@ -939,53 +904,13 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
         }
     })
 
-    # 6. Hosts 插件 - 自定义域名解析
-    # 用于配置自定义的域名到 IP 映射，优先级最高（从嵌套结构中读取）
-    custom_hosts_config = mosdns_config_data.get('custom_hosts', '')
-    custom_hosts_content = None  # 用于收集需要写入文件的内容
-
-    if custom_hosts_config and custom_hosts_config.strip():
-        # 解析 hosts 配置
-        # 支持两种格式：
-        # 1. 域名在前，IP在后：example.com 192.168.1.1（推荐格式）
-        # 2. IP在前，域名在后：192.168.1.1 example.com（传统 hosts 格式）
-        hosts_entries = []
-        for line in custom_hosts_config.strip().split('\n'):
-            line = line.strip()
-            if line and not line.startswith('#'):  # 忽略空行和注释
-                # 分割并获取前两个部分
-                parts = line.split()
-                if len(parts) >= 2:
-                    first = parts[0]
-                    second = parts[1]
-
-                    # 简单判断：如果第一个部分包含字母且第二个部分全是数字和点，认为是"域名 IP"格式
-                    # 否则认为是"IP 域名"格式
-                    import re
-                    if re.match(r'^[\d\.]+$', second):
-                        # 第二个参数是 IP（只包含数字和点），所以第一个是域名
-                        domain = first
-                        ip = second
-                    else:
-                        # 第一个参数是 IP，第二个是域名（标准格式）
-                        ip = first
-                        domain = second
-
-                    # MosDNS hosts 格式：domain ip
-                    hosts_entries.append(f"{domain} {ip}")
-
-        if hosts_entries:
-            # 保存 hosts 内容用于写入文件
-            custom_hosts_content = '\n'.join(hosts_entries)
-
-            # 使用文件引用方式
-            plugins.append({
-                'tag': 'custom_hosts',
-                'type': 'hosts',
-                'args': {
-                    'files': ['./rules/custom_hosts.txt']
-                }
-            })
+    # 6. Hosts 与打包文件共用解析，避免 IPv6 被当成域名。
+    custom_hosts = parse_hosts_pairs(mosdns_config_data.get('custom_hosts', ''))
+    if custom_hosts:
+        plugins.append({
+            'tag': 'custom_hosts', 'type': 'hosts',
+            'args': {'files': ['./rules/custom_hosts.txt']},
+        })
 
     # 7. 远程 DNS 序列插件
     # 主远程 DNS 查询序列，带错误处理和 TTL 设置
@@ -1068,108 +993,14 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
         'args': china_dns_args
     })
 
-    # 11. 匹配插件 - 为配置的单条规则创建匹配器
-    # 收集需要写入文件的规则内容
-    rule_files_content = {}  # {file_path: content}
-
-    # 按照规则类型（直连/代理）分组收集规则内容
-    direct_domain_rules = []  # 直连域名规则
-    proxy_domain_rules = []   # 代理域名规则
-    direct_ip_rules = []      # 直连IP规则
-    proxy_ip_rules = []       # 代理IP规则
-
-    # 规则ID到tag的映射（用于后续sequence中引用）
-    rule_id_to_tag = {}  # rule_id -> tag (direct_rules 或 proxy_rules)
-
-    # 遍历所有规则，按照直连/代理分组
-    for rule in rules_list:
-        if not rule.get('enabled', True) or not rule.get('library_enabled', True):
-            continue
-
-        rule_id = rule.get('id')
-        rule_type = rule.get('rule_type', '')
-        value = rule.get('value', '')
-
-        # 判断规则是直连还是代理
-        is_direct = rule_id in direct_rule_ids
-        is_proxy = rule_id in proxy_rule_ids
-
-        if not (is_direct or is_proxy):
-            continue
-
-        # 根据规则类型处理
-        if rule_type in ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD']:
-            # 域名类规则：根据规则类型确定 MosDNS 格式前缀
-            rule_type_mapping = {
-                'DOMAIN': 'full',          # 完整域名
-                'DOMAIN-SUFFIX': 'domain', # 域名后缀
-                'DOMAIN-KEYWORD': 'keyword' # 域名关键字
-            }
-            prefix = rule_type_mapping.get(rule_type, 'full')
-            rule_content = f"{prefix}:{value}"
-
-            if is_direct:
-                direct_domain_rules.append(rule_content)
-                rule_id_to_tag[rule_id] = 'direct_rules'
-            elif is_proxy:
-                proxy_domain_rules.append(rule_content)
-                rule_id_to_tag[rule_id] = 'proxy_rules'
-
-        elif rule_type in ['IP-CIDR', 'IP-CIDR6']:
-            # IP类规则：直接使用CIDR格式
-            if is_direct:
-                direct_ip_rules.append(value)
-                rule_id_to_tag[rule_id] = 'direct_ip_rules'
-            elif is_proxy:
-                proxy_ip_rules.append(value)
-                rule_id_to_tag[rule_id] = 'proxy_ip_rules'
-
-    # 创建直连域名规则插件和文件
-    if direct_domain_rules:
-        file_path = './rules/direct_rules.txt'
-        rule_files_content[file_path] = '\n'.join(direct_domain_rules)
+    # 11. 相邻同策略规则才合并；生成与附属文件使用同一份分组逻辑。
+    rule_id_to_tag = {}
+    for group in _single_rule_groups(config_data):
+        rule_id_to_tag.update({ident: group['tag'] for ident in group['ids']})
         plugins.append({
-            'tag': 'direct_rules',
-            'type': 'domain_set',
-            'args': {
-                'files': [file_path]
-            }
-        })
-
-    # 创建代理域名规则插件和文件
-    if proxy_domain_rules:
-        file_path = './rules/proxy_rules.txt'
-        rule_files_content[file_path] = '\n'.join(proxy_domain_rules)
-        plugins.append({
-            'tag': 'proxy_rules',
-            'type': 'domain_set',
-            'args': {
-                'files': [file_path]
-            }
-        })
-
-    # 创建直连IP规则插件和文件
-    if direct_ip_rules:
-        file_path = './rules/direct_ip_rules.txt'
-        rule_files_content[file_path] = '\n'.join(direct_ip_rules)
-        plugins.append({
-            'tag': 'direct_ip_rules',
-            'type': 'ip_set',
-            'args': {
-                'files': [file_path]
-            }
-        })
-
-    # 创建代理IP规则插件和文件
-    if proxy_ip_rules:
-        file_path = './rules/proxy_ip_rules.txt'
-        rule_files_content[file_path] = '\n'.join(proxy_ip_rules)
-        plugins.append({
-            'tag': 'proxy_ip_rules',
-            'type': 'ip_set',
-            'args': {
-                'files': [file_path]
-            }
+            'tag': group['tag'],
+            'type': 'ip_set' if group['part'] == RULE_PART_IP else 'domain_set',
+            'args': {'files': [group['path']]},
         })
 
     # 12. 主要执行序列插件
@@ -1186,7 +1017,7 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
 
     # 第三步：自定义 Hosts（如果有配置）
     # 优先级最高，在所有规则之前匹配
-    if custom_hosts_config and custom_hosts_config.strip():
+    if custom_hosts:
         sequence.append({'exec': '$custom_hosts'})
         sequence.append({
             'matches': ['has_resp'],
@@ -1259,9 +1090,7 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
                 })
         elif item_type == 'rule':
             # 单条规则
-            # 所有直连域名规则合并到 direct_rules tag
-            # 所有代理域名规则合并到 proxy_rules tag
-            # IP规则同理
+            # 每个相邻分组在首次出现处执行，不能跨过其他规则或规则集。
             rule_tag = rule_id_to_tag.get(item_id)
 
             if not rule_tag:
@@ -1276,7 +1105,7 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
 
             # IP 类规则需要应答 IP，延后到 IP 匹配阶段
             if 'ip_rules' in rule_tag:
-                ip_match_entries.append(_ip_match_entry(rule_tag, rule_tag == 'direct_ip_rules'))
+                ip_match_entries.append(_ip_match_entry(rule_tag, item_id in direct_rule_ids))
                 continue
 
             # 域名规则使用 qname

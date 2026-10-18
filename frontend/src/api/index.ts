@@ -125,6 +125,8 @@ export const ruleApi = {
   update: (id: string, data: unknown, profileId?: string) => api.put(`/rules/${id}`, data, profileOptions(profileId)),
   delete: (id: string, profileId?: string) => api.delete(`/rules/${id}`, profileOptions(profileId)),
   batchCreate: (data: unknown, profileId?: string) => api.post('/rules/batch', data, profileOptions(profileId)),
+  renameGroup: (ids: string[], groupName: string, profileId?: string) =>
+    api.post('/rules/group-name', { ids, group_name: groupName }, profileOptions(profileId)),
   findDuplicates: (profileId?: string, signal?: AbortSignal) => api.post('/rules/find-duplicates', {}, { ...profileOptions(profileId), timeout: 120000, signal })
 }
 

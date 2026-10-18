@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from backend.utils.subscription_parser import parse_uri_list
 from backend.utils.logger import get_logger
 from backend.common.profile_context import append_url_query, config_api_path, profile_api_path
+from backend.converters.common import ruleset_format
 
 logger = get_logger(__name__)
 
@@ -388,7 +389,7 @@ def generate_surge_config(config_data: Dict[str, Any], base_url: str = '') -> st
                 rule_options.append('no-resolve')
 
             # 使用原始 URL 判断格式，如果是 YAML 格式则添加 rule-set-format
-            if original_url and (original_url.endswith('.yaml') or original_url.endswith('.yml')):
+            if ruleset_format(item, config_data, original_url) == 'yaml':
                 rule_options.append('rule-set-format=yaml')
 
             # 组合规则

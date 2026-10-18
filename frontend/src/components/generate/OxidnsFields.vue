@@ -16,7 +16,7 @@
         <SelectContent><SelectItem v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</SelectItem></SelectContent>
       </Select>
       <Textarea v-else-if="field.type === 'textarea'" :id="`oxi-${field.path}`" :disabled="disabled" :model-value="display(field)" :rows="field.rows ?? 3" :placeholder="field.placeholder" class="min-w-0 font-mono text-xs" @update:model-value="updateText(field, String($event))" />
-      <Input v-else :id="`oxi-${field.path}`" :disabled="disabled" :model-value="field.type === 'number' ? (numberDrafts[field.path] ?? read(field.path) ?? '') : (read(field.path) ?? '')" :type="field.type === 'number' ? 'text' : field.type ?? 'text'" :inputmode="field.type === 'number' ? 'numeric' : undefined" :min="capabilities ? undefined : field.min" :max="capabilities ? undefined : field.max" :aria-invalid="Boolean(numberErrors[field.path])" :placeholder="field.placeholder || (read(field.path) == null ? (field.type === 'number' ? '未配置（使用核心默认）' : '未配置') : undefined)" :autocomplete="field.type === 'password' ? 'new-password' : 'off'" class="min-h-11 min-w-0 font-mono" @update:model-value="field.type === 'number' ? updateNumber(field, String($event)) : write(field.path, $event)" />
+      <Input v-else :id="`oxi-${field.path}`" :disabled="disabled" :model-value="inputValue(field)" :type="field.type === 'number' ? 'text' : field.type ?? 'text'" :inputmode="field.type === 'number' ? 'numeric' : undefined" :min="capabilities ? undefined : field.min" :max="capabilities ? undefined : field.max" :aria-invalid="Boolean(numberErrors[field.path])" :placeholder="field.placeholder || (read(field.path) == null ? (field.type === 'number' ? '未配置（使用核心默认）' : '未配置') : undefined)" :autocomplete="field.type === 'password' ? 'new-password' : 'off'" class="min-h-11 min-w-0 font-mono" @update:model-value="field.type === 'number' ? updateNumber(field, String($event)) : write(field.path, $event)" />
       <p v-if="numberErrors[field.path]" role="alert" class="text-xs text-destructive-accent">{{ numberErrors[field.path] }}</p>
       </fieldset>
     </FormField>
@@ -43,7 +43,12 @@ const textDrafts = reactive<Record<string, string>>({})
 const numberDrafts = reactive<Record<string, string>>({})
 const numberErrors = reactive<Record<string, string>>({})
 const lastValues = new Map<string, string | undefined>()
-const read = (path: string) => path.split('.').reduce((value, key) => value?.[key], props.settings)
+const read = (path: string): unknown => path.split('.').reduce<unknown>((value, key) =>
+  value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, props.settings)
+const inputValue = (field: OxidnsField): string | number => {
+  const value = field.type === 'number' ? numberDrafts[field.path] ?? read(field.path) : read(field.path)
+  return typeof value === 'number' ? value : String(value ?? '')
+}
 const visibleFields = computed(() => props.fields.filter(field => !field.when || Boolean(read(field.when))))
 function capability(path: string): OxidnsFieldCapability | undefined {
   const parts = path.split('.')

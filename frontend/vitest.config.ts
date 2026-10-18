@@ -5,5 +5,5 @@ import { fileURLToPath, URL } from 'node:url'
 export default defineConfig({
  plugins: [vue()],
  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
- test: { environment: 'jsdom', include: ['tests/*.test.ts'], pool: 'forks', poolOptions: { forks: { singleFork: true } } }
+ test: { environment: 'jsdom', include: ['tests/*.test.ts'], pool: 'forks', maxWorkers: 1, minWorkers: 1 }
 })

@@ -15,7 +15,6 @@ from backend.common.profile_context import resolve_profile_id
 from backend.common.config_repository import ProfileRepositoryError, ProfileValidationError
 from backend.utils.rule_matcher import RuleConfigMatcher, parse_rule_line, is_valid_domain, is_valid_ip
 from backend.utils.reorder import reorder_by_ids
-from backend.utils.rule_utils import get_rules_dir, sanitize_rule_name
 from backend.utils.logger import get_logger
 from backend.utils.url_utils import safe_exception_details, safe_url_for_log
 from backend.utils.rule_fetch import request_rule
@@ -127,6 +126,35 @@ def handle_rule(rule_id):
     return _mutate_rule(rule_id)
 
 
+@bp.route('/group-name', methods=['POST'])
+@require_auth
+def rename_rule_group():
+    """Update the selected labels together without replacing stale rule fields."""
+    from werkzeug.exceptions import NotFound
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get('group_name'), str):
+        raise ProfileValidationError('请提供规则 ID 列表和组名称')
+    ids = body.get('ids')
+    if (not isinstance(ids, list) or not ids
+            or any(not isinstance(value, str) or not value for value in ids)
+            or len(set(ids)) != len(ids)):
+        raise ProfileValidationError('规则 ID 列表不能为空或包含重复项')
+    name = body['group_name'].strip()
+
+    def mutate(profile):
+        items = {item['id']: item for item in profile.get('rule_configs', [])}
+        if any(value not in items for value in ids):
+            raise NotFound('部分规则已被删除，请刷新列表后再重命名')
+        for value in ids:
+            items[value]['group_name'] = name
+
+    try:
+        update_config_transaction(mutate)
+    except NotFound as error:
+        return jsonify({'success': False, 'message': error.description}), 404
+    return jsonify({'success': True})
+
+
 @bp.route('/reorder', methods=['POST'])
 @require_auth
 def reorder_rules():
@@ -216,18 +244,17 @@ def get_local_rule(name):
 
     try:
         # 对规则名称进行清理，确保与文件名匹配
-        from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local
+        from backend.utils.rule_utils import rule_cache_filename, rule_cache_read_path, save_rule_to_local
 
         profile_id = resolve_profile_id()
         repository = get_repository()
-        filename = f"{sanitize_rule_name(name)}.list"
-        filepath = os.path.join(get_rules_dir(), filename)
-
-        logger.info(f"Requesting local rule: {name}, filepath: {filepath}")
-
         # 查找规则库中的规则（通过名称）
         rule_library = config_data.get('rule_library', [])
         rule = next((r for r in rule_library if r.get('name') == name), None)
+        filename = rule_cache_filename(rule or {'name': name})
+        filepath = rule_cache_read_path(rule or {'name': name}, rule_library)
+
+        logger.info(f"Requesting local rule: {name}, filepath: {filepath}")
 
         # 如果规则仓库中没有找到该规则
         if not rule:
@@ -363,6 +390,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
         规则集内容字符串，获取失败返回空字符串
     """
     import os
+    from backend.utils.rule_utils import rule_cache_filename, rule_cache_read_path
 
     rule_content = ''
     rule_name = ''
@@ -376,8 +404,10 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
         rule_name = rule_item.get('name', '')
 
     if rule_name:
-        filename = f"{sanitize_rule_name(rule_name)}.list"
-        filepath = str(os.path.join(get_rules_dir(), filename))
+        source = library_rule or rule_item
+        filename = rule_cache_filename(source)
+        library = config_data.get('rule_library', []) if config_data is not None else None
+        filepath = rule_cache_read_path(source, library)
 
     # 1. 优先尝试从本地缓存读取
     if filepath and os.path.exists(filepath):

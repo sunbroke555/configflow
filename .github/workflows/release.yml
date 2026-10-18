@@ -6,7 +6,11 @@ on:
       - 'v*'
 
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   create-release:
+    needs: checks
     name: Create GitHub Release
     runs-on: ubuntu-latest
     permissions:
@@ -68,7 +72,7 @@ jobs:
           fi
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body_path: release_notes.md
           draft: false

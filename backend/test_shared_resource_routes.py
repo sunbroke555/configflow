@@ -47,8 +47,8 @@ def test_catalog_ignores_unrelated_profile_selection(catalog, endpoint):
 @pytest.mark.parametrize('endpoint,resource_id', [('subscriptions', 'sub'), ('nodes', 'node'), ('aggregations', 'agg'), ('rule-library', 'library')])
 def test_referenced_delete_preserves_all_profiles_sources_and_cache(catalog, endpoint, resource_id):
     client, repository = catalog
-    save_rule_to_local(repository.get_shared()['rule_library'][0])
-    cache = repository.shared_rules_dir() / 'Library.list'
+    filename = save_rule_to_local(repository.get_shared()['rule_library'][0])
+    cache = repository.shared_rules_dir() / filename
     before = repository.export_all()
     response = client.delete(f'/api/{endpoint}/{resource_id}')
     assert response.status_code == 409, response.get_data(as_text=True)

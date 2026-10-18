@@ -458,6 +458,22 @@ it('does not offer chains as follow targets', async () => {
   expect(choices.map(option => option.textContent?.trim())).toEqual(['Static', 'Dynamic'])
 })
 
+it('explicitly clears the previous follow group when switching to manual nodes', async () => {
+  groups.push({ id: 'follower', name: 'Follower', type: 'select', follow_group: 'static' })
+  await render()
+  await edit('Follower')
+  await source('跟随')
+  await source('节点')
+  await button('手动选择节点')
+  ;([...document.querySelectorAll('[role="option"]')].find(option => option.textContent?.trim() === 'REJECT') as HTMLElement).click()
+  await flushPromises()
+  await button('REJECT', document.querySelector('[role="dialog"]')!)
+  await button('保存')
+  expect(proxyGroupApi.update).toHaveBeenCalledWith('follower', expect.objectContaining({
+    manual_nodes: ['REJECT'], follow_group: ''
+  }), 'default')
+})
+
 it('offers a named chain as a rule policy and persists its name', async () => {
   groups.push(chain())
   await render(Rules)

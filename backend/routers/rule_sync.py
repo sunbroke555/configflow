@@ -145,18 +145,13 @@ def _save_manifest(profile_id, router, driver):
 
 def _cache_sources(config, router, contents):
     from backend.common.config import get_repository
-    from backend.utils.rule_utils import sanitize_rule_name
+    from backend.utils.rule_utils import rule_cache_filename
     seen = set()
     for rule_id, (_, source) in selected_sources(config, router).items():
         if source['id'] in seen or source.get('source_type', 'url') != 'url':
             continue
         seen.add(source['id'])
-        filename = sanitize_rule_name(source['name']) + '.list'
-        # Avoid overwriting an independent source whose name maps to the same file.
-        collisions = [item for item in config.get('rule_library', [])
-                      if sanitize_rule_name(item.get('name') or '') + '.list' == filename]
-        if len(collisions) != 1:
-            raise RouterError('规则仓库存在相同缓存文件名，请先修正规则名称')
+        filename = rule_cache_filename(source)
         get_repository().write_shared_text('rules/' + filename, contents[rule_id])
 
 

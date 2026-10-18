@@ -91,6 +91,14 @@ export interface AgentContentSync {
   checked_at?: string
 }
 
+export interface AgentSystemMetrics {
+  cpu?: { usage_percent: number; core_count: number }
+  memory?: { total: number; used: number; available: number; used_percent: number }
+  disk?: { total: number; used: number; free: number; used_percent: number }
+  network?: { bytes_sent: number; bytes_recv: number; speed_sent: number; speed_recv: number }
+  collected_at: string
+}
+
 export interface Agent {
   id: string
   name: string
@@ -105,6 +113,7 @@ export interface Agent {
   config_version: string
   config_revision?: number
   content_sync?: AgentContentSync
+  system_metrics?: AgentSystemMetrics
   latest_deployment?: import('@/composables/useAgentDeployments').AgentDeployment
   deployments?: Record<string, import('@/composables/useAgentDeployments').AgentDeployment>
   enabled: boolean

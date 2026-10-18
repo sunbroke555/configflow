@@ -103,7 +103,8 @@ def test_policy_remote_change_updates_only_destinations_and_remains_withdrawable
     assert all(path.startswith(ADDRESSES) for _, path, _ in driver.writes)
     assert all(driver.rows[path] == rows for path, rows in kept.items())
     assert result['rules'][0]['version'] == result['rules'][0]['synced_version']
-    assert (repo.shared_rules_dir() / 'Remote.list').read_text() == NEW
+    from backend.utils.rule_utils import rule_cache_filename
+    assert (repo.shared_rules_dir() / rule_cache_filename({'id': 'lib'})).read_text() == NEW
     repo.update_profile_transaction('default', lambda doc: doc['routers']['items'][0].update(ros_policy_rule_sets=[]))
     from backend.routes.routers import _inspect
     config = rule_sync.config_for('default'); router = config['routers']['items'][0]
@@ -427,6 +428,8 @@ def test_large_input_guard_and_duplicate_cache_names(environment, monkeypatch):
     repo, driver = environment
     repo.update_shared_transaction(lambda doc: doc['rule_library'].append({
         'id': 'collision', 'name': 'Remote.', 'source_type': 'url', 'url': 'https://example.test/other'}))
-    with pytest.raises(RouterError, match='相同缓存文件名'):
-        load_sources(rule_sync.config_for('default'), repo.get_profile('default')['routers']['items'][0])
+    from backend.utils.rule_utils import rule_cache_filename
+    repo.write_shared_text('rules/' + rule_cache_filename({'id': 'lib'}), OLD)
+    contents, _ = load_sources(rule_sync.config_for('default'), repo.get_profile('default')['routers']['items'][0])
+    assert contents == {'remote': OLD}
     assert not driver.writes

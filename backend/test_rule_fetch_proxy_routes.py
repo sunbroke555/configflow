@@ -75,7 +75,8 @@ def test_local_refresh_and_ruleset_fallback_use_proxy(rule_app):
     response = app.test_client().get('/api/profiles/alpha/rules/local/Remote')
     assert response.status_code == 200
     assert response.get_data(as_text=True) == BODY
-    assert (repository.shared_rules_dir() / 'Remote.list').read_text() == BODY
+    from backend.utils.rule_utils import rule_cache_filename
+    assert (repository.shared_rules_dir() / rule_cache_filename({'id': 'source'})).read_text() == BODY
     with app.test_request_context('/api/profiles/alpha/rules'):
         # Different names exercise the URL fallbacks without hitting the cache.
         assert get_ruleset_content({'name': 'Fallback', 'url': SOURCE}) == BODY

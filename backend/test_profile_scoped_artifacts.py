@@ -355,8 +355,10 @@ def test_local_rule_refresh_uses_shared_repository_write(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 200
-    assert calls == ["rules/Remote.list"]
-    assert (repository.shared_rules_dir() / "Remote.list").read_text(encoding="utf-8") == "DOMAIN,remote.test"
+    from backend.utils.rule_utils import rule_cache_filename
+    cache = rule_cache_filename({"id": "rule-1"})
+    assert calls == ["rules/" + cache]
+    assert (repository.shared_rules_dir() / cache).read_text(encoding="utf-8") == "DOMAIN,remote.test"
 
 
 def test_rule_library_content_urls_include_the_selected_profile(tmp_path, monkeypatch):
@@ -440,8 +442,10 @@ def test_ruleset_content_cache_uses_shared_repository_write(tmp_path, monkeypatc
         )
 
     assert content == "DOMAIN,remote.test"
-    assert calls == ["rules/Remote.list"]
-    assert (repository.shared_rules_dir() / "Remote.list").read_text(encoding="utf-8") == content
+    from backend.utils.rule_utils import rule_cache_filename
+    cache = rule_cache_filename({"name": "Remote"})
+    assert calls == ["rules/" + cache]
+    assert (repository.shared_rules_dir() / cache).read_text(encoding="utf-8") == content
 
 
 def test_corrupt_subscription_cache_is_ignored(tmp_path, monkeypatch):

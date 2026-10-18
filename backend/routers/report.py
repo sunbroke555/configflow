@@ -17,7 +17,7 @@ from backend.routers.base import (
     StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
-from backend.routers.routeros_nat import assess_nat, RouteEgressIndex
+from backend.routers.routeros_nat import assess_bypass, RouteEgressIndex
 
 
 def _networks(values: Iterable[str]) -> List[ipaddress.IPv4Network]:
@@ -130,20 +130,24 @@ def _nat_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     route_index = RouteEgressIndex(state.nat_context)
     items = []
     for entry in desired['proxy_cidrs']:
-        target = ipaddress.IPv4Network(entry['cidr'])
-        covering = [rule for rule in rules if any(target.subnet_of(net) for net in _networks(rule.dst))]
-        if any(is_managed(rule.comment) for rule in covering):
-            status, detail = 'synced', ''
-        elif covering:
-            status, detail = 'adoptable', f'已被手工规则「{covering[0].comment or covering[0].id}」覆盖，将直接接管'
-        elif state.nat_context is not None:
-            assessment = assess_nat(entry['cidr'], desired.get('proxy_gateway') or '', state,
-                                    route_index=route_index)
+        if state.nat_context is not None:
+            assessment = assess_bypass(entry['cidr'], desired.get('proxy_gateway') or '', state,
+                                       route_index=route_index)
             status, detail = assessment['status'], assessment['detail']
+            rule_ids = assessment['rule_ids']
         else:
-            status, detail = 'missing', '未发现覆盖该网段的 NAT 免转换规则，需结合源 NAT 配置确认是否影响客户端 IP'
-        items.append({'cidr': entry['cidr'], 'status': status, 'detail': detail,
-                      'rule_ids': [rule.id for rule in covering]})
+            target = ipaddress.IPv4Network(entry['cidr'])
+            covering = [rule for rule in rules if any(target.subnet_of(net) for net in _networks(rule.dst))]
+            if any(is_managed(rule.comment) for rule in covering):
+                status, detail = 'synced', ''
+                rule_ids = [rule.id for rule in covering]
+            elif covering:
+                status, detail = 'adoptable', f'已被手工规则「{covering[0].comment or covering[0].id}」覆盖，将直接接管'
+                rule_ids = [rule.id for rule in covering]
+            else:
+                status, detail = 'missing', '未发现覆盖该网段的 NAT 免转换规则，需结合源 NAT 配置确认是否影响客户端 IP'
+                rule_ids = []
+        items.append({'cidr': entry['cidr'], 'status': status, 'detail': detail, 'rule_ids': rule_ids})
     disabled = [{'rule_id': rule.id, 'comment': rule.comment, 'dst': rule.dst}
                 for rule in state.nat_bypass if not rule.enabled]
     return {'items': items, 'disabled_rules': disabled}
