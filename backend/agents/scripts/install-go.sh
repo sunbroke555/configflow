@@ -168,6 +168,12 @@ remove_recovery_gate() {
 
 # One native installer owns the legacy configflow-agent unit and shared binary.
 # Refuse a cross-core overwrite; Docker supports separate core/Agent instances.
+for isolated_dir in "$AGENT_DIR/mihomo" "$AGENT_DIR/oxidns"; do
+    if [ -e "$isolated_dir" ] || [ -L "$isolated_dir" ]; then
+        echo "检测到原生同机双 Agent：${isolated_dir}。请使用同机安装器管理；单服务安装/卸载不会覆盖或删除它。" >&2
+        exit 1
+    fi
+done
 for other_config in "$AGENT_DIR"/config*.json; do
     [ -f "$other_config" ] || continue
     other_type=$(sed -n 's/.*"service_type"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' "$other_config" | head -n 1)
@@ -267,6 +273,15 @@ fi
 sed -i "s/__CONFIGFLOW_INIT__/$INIT_SYSTEM/g; s/__CONFIGFLOW_RESTART__/$RESTART/g; s/__CONFIGFLOW_AGENT_ID__/$EXISTING_ID/g; s/__CONFIGFLOW_TOKEN__/$EXISTING_TOKEN/g" "$CONFIG_FILE.new"
 # Validate OxiDNS's working directory before stopping an existing Agent.
 "$BINARY_TMP" -config "$CONFIG_FILE.new" -validate-service
+# Report TUN, permissions, forwarding and listener conflicts with repair steps.
+# This check is read-only; an error leaves the previous Agent running.
+if "$BINARY_TMP" -config "$CONFIG_FILE.new" -check-environment; then
+    :
+else
+    environment_status=$?
+    echo "若提示未知 -check-environment 参数，请更新 ConfigFlow 并重新构建/提供 1.8.19-go 或更高的 Agent 下载文件；否则按上方环境问题修复后重跑。" >&2
+    exit "$environment_status"
+fi
 # Stop the previous Go or legacy Shell Agent before replacing its binary/config.
 if [ "$INIT_SYSTEM" = "systemd" ]; then
     systemctl stop configflow-agent 2>/dev/null || true

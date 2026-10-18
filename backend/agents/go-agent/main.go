@@ -1,6 +1,7 @@
 package main
 
 import (
+	"agent/preflight"
 	"agent/routes"
 	"agent/upgrade"
 	"flag"
@@ -18,9 +19,12 @@ func main() {
 	cleanupOnly := flag.Bool("cleanup", false, "Reclaim completed deployment payloads and oversized Agent logs, then exit")
 	upgradeWorker := flag.String("upgrade-worker", "", "Run a durable Agent update outside the Agent service")
 	checkDeployments := flag.Bool("check-deployments", false, "Check deployment journals without changing files or services; do not register or listen")
+	requireCleanDeployments := flag.Bool("require-clean-deployments", false, "Read-only installation preflight; exit nonzero if deployment or native Agent update journals require attention")
 	recoverOnly := flag.Bool("recover-only", false, "Deprecated compatibility alias for -check-deployments; does not restore files")
 	recoverAndExit := flag.Bool("recover-and-exit", false, "Recover interrupted deployments with service lifecycle, then exit without registration")
 	validateService := flag.Bool("validate-service", false, "Validate OxiDNS service working directory without registration or mutation")
+	checkEnvironment := flag.Bool("check-environment", false, "Inspect native installation TUN, permissions, IPv4 forwarding and port occupancy without changing the system")
+	environmentPeerConfig := flag.String("environment-peer-config", "", "Peer Agent candidate configuration for a joint native AIO environment check")
 
 	// 解析命令行参数
 	flag.Parse()
@@ -61,7 +65,28 @@ func main() {
 	}
 
 	log.Printf("Using config file: %s", *configPath)
-	if !*checkDeployments && !*recoverOnly && !*recoverAndExit && !*cleanupOnly && !*validateService {
+	if *checkEnvironment {
+		paths := []string{*configPath}
+		if *environmentPeerConfig != "" {
+			paths = append(paths, *environmentPeerConfig)
+		}
+		configs := make([]preflight.Config, 0, len(paths))
+		for _, path := range paths {
+			candidate, err := preflight.LoadConfig(path)
+			if err != nil {
+				preflight.Report{{Name: "安装配置", Level: "error", Message: err.Error(), Fix: "核对两个核心的安装参数并重新生成脚本。"}}.Print(os.Stdout)
+				os.Exit(1)
+			}
+			configs = append(configs, candidate)
+		}
+		report := preflight.Run(configs)
+		report.Print(os.Stdout)
+		if report.HasErrors() {
+			os.Exit(1)
+		}
+		return
+	}
+	if !*checkDeployments && !*requireCleanDeployments && !*recoverOnly && !*recoverAndExit && !*cleanupOnly && !*validateService {
 		binary, err := os.Executable()
 		if err != nil {
 			log.Fatal(err)
@@ -101,12 +126,18 @@ func main() {
 		log.Println("Deployment recovery completed.")
 		return
 	}
+	if *requireCleanDeployments && cfg.NativeAIO && upgrade.Pending(filepath.Join(filepath.Dir(cfg.filePath), "configflow-agent")) {
+		log.Fatal("Native AIO Agent update requires completion or recovery; installation preflight left files and services unchanged.")
+	}
 	if err := routes.CheckDeployments(toRoutesConfig(cfg)); err != nil {
 		log.Printf("Deployment check requires attention: %v. Files and services were left unchanged; inspect the journal and use -recover-and-exit to recover explicitly.", err)
+		if *requireCleanDeployments {
+			os.Exit(1)
+		}
 	} else {
 		log.Println("Deployment check completed; no recovery required.")
 	}
-	if *checkDeployments || *recoverOnly {
+	if *checkDeployments || *requireCleanDeployments || *recoverOnly {
 		return
 	}
 

@@ -13,6 +13,7 @@ func TestDeploymentConfigSurvivesSaveAndRouteConversion(t *testing.T) {
 		ServiceUnit: "mihomo", StopCommand: "stop", StartCommand: "start", StatusCommand: "status",
 		HealthURL: "http://127.0.0.1:9090/version", HealthDNSAddress: "127.0.0.1:53",
 		HealthDNSName: "health.test", DeploymentHealthTimeout: 12, Token: "private-token", filePath: path,
+		NativeAIO: true, AgentServiceUnit: "configflow-agent-mihomo",
 	}
 	if err := cfg.Save(); err != nil {
 		t.Fatal(err)
@@ -22,6 +23,9 @@ func TestDeploymentConfigSurvivesSaveAndRouteConversion(t *testing.T) {
 		t.Fatal(err)
 	}
 	mapped := toRoutesConfig(loaded)
+	if !mapped.NativeAIO || mapped.AgentServiceUnit != "configflow-agent-mihomo" || mapped.AgentConfigFile != path {
+		t.Fatalf("lost native AIO config: %+v", mapped)
+	}
 	if mapped.ServiceManager != "command" || mapped.ServiceBinary != "/usr/bin/mihomo" || mapped.ServiceUnit != "mihomo" || mapped.StopCommand != "stop" || mapped.StartCommand != "start" || mapped.StatusCommand != "status" || mapped.HealthURL != cfg.HealthURL || mapped.HealthDNSAddress != cfg.HealthDNSAddress || mapped.HealthDNSName != cfg.HealthDNSName || mapped.DeploymentHealthTimeout != 12 {
 		t.Fatalf("lost lifecycle config: %+v", mapped)
 	}

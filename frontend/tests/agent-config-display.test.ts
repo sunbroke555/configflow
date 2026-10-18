@@ -223,8 +223,10 @@ describe('Docker installation choices', () => {
     await flushPromises()
     expect(dialog.textContent).toContain('Agent + Mihomo + OxiDNS')
     expect(dialog.textContent).not.toContain('MosDNS Agent')
-    const port = (label: string) => Array.from(dialog.querySelectorAll('span'))
-      .find(item => item.textContent?.trim() === label)?.parentElement?.querySelector<HTMLInputElement>('input')
+    const port = (text: string) => {
+      const label = Array.from(dialog.querySelectorAll('label')).find(item => item.textContent?.trim() === text)
+      return label?.htmlFor ? dialog.querySelector<HTMLInputElement>(`#${label.htmlFor}`) ?? undefined : undefined
+    }
     expect(port('Mihomo Agent')?.value).toBe('8080')
     expect(port('OxiDNS Agent')?.value).toBe('8082')
     port('OxiDNS Agent')!.value = '8182'

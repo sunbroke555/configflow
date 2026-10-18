@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"agent/preflight"
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
@@ -21,6 +22,11 @@ import (
 
 func testDeploymentConfig(t *testing.T) *Config {
 	t.Helper()
+	// Lifecycle fixtures use in-process DNS/HTTP servers, not an installed core
+	// owning those sockets. Keep them independent of the host /proc snapshot;
+	// DNS rejection/activation tests replace this hook with explicit findings,
+	// while the preflight package tests listener ownership and DNS on the wire.
+	useDNSCheck(t, func(preflight.DNSCandidate, preflight.DNSOptions) preflight.Report { return nil })
 	root := t.TempDir()
 	binary := filepath.Join(root, "mihomo-test")
 	if e := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); e != nil {

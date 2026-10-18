@@ -3,13 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import PolicyRoutingPanel from '@/components/routers/PolicyRoutingPanel.vue'
 import { agentApi, routerApi, oxidnsMonitorApi } from '@/api'
-import { confirm } from '@/lib/feedback'
+import { confirm, notify } from '@/lib/feedback'
 import { scopedRequests } from '@/profileContext'
 vi.mock('@/api', () => ({
   routerApi: { policySettings: vi.fn(), savePolicySettings: vi.fn(), previewPolicySettings: vi.fn(), apply: vi.fn(), policy: vi.fn() },
   agentApi: { pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn(), clients: vi.fn() }
 }))
-vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const initial = () => ({ profile_id: 'office', profile_name: '家庭', revision: 'rev-1', oxidns_revision: 'dns-1',
   router: { id: 'ros', name: 'ROS', ip_rule_sets: ['static'], ros_policy_rule_sets: ['proxy'], proxy_gateway_agent_id: 'mihomo' },
@@ -247,6 +247,17 @@ describe('one-place DNS and ROS workflow', () => {
 })
 
 describe('DNS publication diagnostics in routing workspace', () => {
+  it('continues after DNS warnings and keeps them visible when all selected targets finish', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'succeeded', dns_checks: [{ name: 'DNS 劫持', level: 'warn', message: 'any:53 可能绕过 OxiDNS', fix: '检查劫持规则' }] } }) as any)
+    const w = await setup()
+    await click(w, '保存并预览')
+    await click(w, '确认发布')
+    expect(agentApi.pushConfig).toHaveBeenCalledTimes(2)
+    expect(routerApi.apply).toHaveBeenCalledOnce()
+    expect(w.get('[aria-label="DNS 检查结果"]').text()).toContain('修复建议：检查劫持规则')
+    expect(notify.warning).toHaveBeenCalledExactlyOnceWith('所选目标发布完成，DNS 检查有提醒', '请查看下方设备的 DNS 检查结果和修复建议。')
+    expect(notify.success).not.toHaveBeenCalled()
+  })
   it('preserves target and rollback errors and still pauses ROS after a DNS failure', async () => {
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'rollback_failed', error: '配置校验失败', error_details: 'unknown sequence target', rollback_error: '服务恢复失败', rollback_error_details: 'listen :53 failed' } }) as any)
     const w = await setup()

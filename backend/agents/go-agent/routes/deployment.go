@@ -60,23 +60,25 @@ type deploymentBackup struct {
 	SHA256         string `json:"sha256,omitempty"`
 }
 type DeploymentState struct {
-	Success              bool                `json:"success"`
-	DeploymentID         string              `json:"deployment_id"`
-	Status               string              `json:"status"`
-	ArchiveSHA256        string              `json:"archive_sha256"`
-	ConfigVersion        string              `json:"config_version,omitempty"`
-	Error                string              `json:"error,omitempty"`
-	ErrorDetails         string              `json:"error_details,omitempty"`
-	FailedStage          string              `json:"failed_stage,omitempty"`
-	RollbackError        string              `json:"rollback_error,omitempty"`
-	RollbackErrorDetails string              `json:"rollback_error_details,omitempty"`
-	UpdatedAt            string              `json:"updated_at"`
-	Manifest             *DeploymentManifest `json:"-"`
-	WasRunning           bool                `json:"was_running"`
-	Backups              []deploymentBackup  `json:"backups,omitempty"`
-	BackupComplete       bool                `json:"backup_complete"`
-	PreviousManifest     json.RawMessage     `json:"previous_manifest,omitempty"`
-	ManualRollback       bool                `json:"manual_rollback,omitempty"`
+	Success              bool                 `json:"success"`
+	DeploymentID         string               `json:"deployment_id"`
+	Status               string               `json:"status"`
+	ArchiveSHA256        string               `json:"archive_sha256"`
+	ConfigVersion        string               `json:"config_version,omitempty"`
+	Error                string               `json:"error,omitempty"`
+	ErrorDetails         string               `json:"error_details,omitempty"`
+	FailedStage          string               `json:"failed_stage,omitempty"`
+	RollbackError        string               `json:"rollback_error,omitempty"`
+	RollbackErrorDetails string               `json:"rollback_error_details,omitempty"`
+	UpdatedAt            string               `json:"updated_at"`
+	Manifest             *DeploymentManifest  `json:"-"`
+	WasRunning           bool                 `json:"was_running"`
+	Backups              []deploymentBackup   `json:"backups,omitempty"`
+	BackupComplete       bool                 `json:"backup_complete"`
+	PreviousManifest     json.RawMessage      `json:"previous_manifest,omitempty"`
+	ManualRollback       bool                 `json:"manual_rollback,omitempty"`
+	DNSChecks            []DeploymentDNSCheck `json:"dns_checks,omitempty"`
+	DNSCheckedAt         string               `json:"dns_checked_at,omitempty"`
 }
 
 func deploymentRoot(cfg *Config) string {
@@ -466,6 +468,10 @@ func prepareDeployment(cfg *Config, s *DeploymentState, activate bool) {
 	}
 	if activate {
 		activateDeployment(cfg, s)
+		return
+	}
+	if e = validateDeploymentDNS(cfg, s); e != nil {
+		fail(e)
 		return
 	}
 	if e = saveDeployment(cfg, s, "ready"); e != nil {
@@ -891,6 +897,12 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 		}
 	}
 	if e := validateServiceLifecycle(cfg); e != nil {
+		failBefore(e)
+		return
+	}
+	// A prepared candidate can outlive both its peer configuration and current
+	// listeners. Check again before stopping or replacing any live service.
+	if e := validateDeploymentDNS(cfg, s); e != nil {
 		failBefore(e)
 		return
 	}

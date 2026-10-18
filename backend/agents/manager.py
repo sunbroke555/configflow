@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 import requests
 from .metrics_history import MetricsHistory
-from .diagnostics import failure_text, response_failure
+from .diagnostics import dns_report_fields, failure_text, response_failure
 
 
 def _constant_time_ascii_equal(provided: Any, expected: Any) -> bool:
@@ -398,6 +398,10 @@ class AgentManager:
                     state[key] = (failure_text(updates[key], (agent.get('token'),))
                                   if key in ('message', 'error', 'error_details', 'rollback_error', 'rollback_error_details')
                                   else updates[key])
+            # Reports describe the candidate checked before activation. Keep
+            # them through ready/success/failure even when later replies omit
+            # them, and leave old Agents' missing results genuinely unknown.
+            state.update(dns_report_fields(updates, (agent.get('token'),)))
             if updates.get('status') in ('ready', 'succeeded'):
                 for field in ('error', 'error_details', 'failed_stage', 'rollback_error', 'rollback_error_details'):
                     if field not in updates:
@@ -460,6 +464,10 @@ class AgentManager:
             for field in ('message', 'error', 'error_details', 'rollback_error', 'rollback_error_details', 'rollback_message', 'failed_stage'):
                 if field in result:
                     result[field] = failure_text(result[field], (agent.get('token'),))
+            report = dns_report_fields(result, (agent.get('token'),))
+            for field in ('dns_checks', 'dns_checked_at'):
+                result.pop(field, None)
+            result.update(report)
             response.close()
             remaining = deadline - time.monotonic()
             if not retry_busy or not busy or attempt == 20 or remaining <= 0:

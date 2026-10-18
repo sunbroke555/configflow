@@ -66,6 +66,8 @@ type Config struct {
 	RestartCommand    string `json:"restart_command"`
 	HeartbeatInterval int    `json:"heartbeat_interval"`
 	AgentID           string `json:"agent_id,omitempty"`
+	AgentServiceUnit  string `json:"agent_service_unit,omitempty"`
+	NativeAIO         bool   `json:"native_aio,omitempty"`
 	Token             string `json:"token,omitempty"`
 
 	ServiceManager          string `json:"service_manager,omitempty"`
@@ -741,24 +743,26 @@ func modifyMihomoConfig(configContent string) (string, error) {
 		return "", fmt.Errorf("failed to unmarshal mihomo config: %w", err)
 	}
 
-	// 修改 tun.dns-hijack
-	if tunNode := findNode(&root, "tun"); tunNode != nil {
-		if dnsHijackNode := findNode(tunNode, "dns-hijack"); dnsHijackNode != nil {
-			// 确保节点是序列节点
-			dnsHijackNode.Kind = yaml.SequenceNode
-			dnsHijackNode.Content = []*yaml.Node{
-				{Kind: yaml.ScalarNode, Value: "any:1053", Style: yaml.FlowStyle},
-				{Kind: yaml.ScalarNode, Value: "tcp://any:1053", Style: yaml.FlowStyle},
-			}
+	if len(root.Content) != 1 || root.Content[0].Kind != yaml.MappingNode || len(root.Content[0].Content) == 0 {
+		return "", fmt.Errorf("mihomo config must be a nonempty YAML mapping")
+	}
+	// Reserve port 53 for the co-hosted DNS service. Adding these fields must
+	// not enable DNS or TUN when the published configuration leaves them off.
+	for _, key := range []string{"tun", "dns"} {
+		node := findNode(&root, key)
+		if node == nil || (node.Kind == yaml.ScalarNode && node.Tag == "!!null") {
+			node = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setMappingNode(root.Content[0], key, node)
+		}
+		if node.Kind != yaml.MappingNode {
+			return "", fmt.Errorf("mihomo %s must be a mapping", key)
 		}
 	}
-
-	// 修改 dns.listen
-	if dnsNode := findNode(&root, "dns"); dnsNode != nil {
-		if listenNode := findNode(dnsNode, "listen"); listenNode != nil {
-			listenNode.Value = "0.0.0.0:1053"
-		}
-	}
+	setMappingNode(findNode(&root, "tun"), "dns-hijack", &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "any:1053"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "tcp://any:1053"},
+	}})
+	setMappingNode(findNode(&root, "dns"), "listen", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "0.0.0.0:1053"})
 
 	modifiedContent, err := yaml.Marshal(&root)
 	if err != nil {
@@ -766,6 +770,16 @@ func modifyMihomoConfig(configContent string) (string, error) {
 	}
 
 	return string(modifiedContent), nil
+}
+
+func setMappingNode(parent *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(parent.Content); i += 2 {
+		if parent.Content[i].Value == key {
+			parent.Content[i+1] = value
+			return
+		}
+	}
+	parent.Content = append(parent.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
 }
 
 // findNode 在 YAML 节点中查找指定键的子节点

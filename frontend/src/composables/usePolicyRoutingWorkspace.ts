@@ -184,7 +184,10 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
         live.status = failure.response ? 'failed' : 'unknown'; live.message = message(failure)
       }
       if (live.status === 'succeeded') {
-        notify.success('所选目标发布完成'); changes.value = []; saved()
+        if (results.value.some(row => row.task?.dns_checks?.some(check => check.level === 'warn'))) {
+          notify.warning('所选目标发布完成，DNS 检查有提醒', '请查看下方设备的 DNS 检查结果和修复建议。')
+        } else notify.success('所选目标发布完成')
+        changes.value = []; saved()
         // ROS stores ownership after publishing. Refresh that revision without
         // discarding the visible release results or any concurrent editor change.
         try {

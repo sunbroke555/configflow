@@ -1,11 +1,13 @@
 """Generate the canonical Shell installer for the Go Agent."""
 import json
+import posixpath
 import re
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 INSTALL_GO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go.sh").read_text(encoding="utf-8")
+INSTALL_GO_AIO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go-aio.sh").read_text(encoding="utf-8")
 
 
 def generate_go_agent_install_script(
@@ -88,3 +90,86 @@ def generate_go_agent_install_script(
     # Single pass: values containing braces must remain literal, especially JSON
     # commands and URLs. The config heredoc is quoted to disable shell expansion.
     return re.sub(r"\{(" + "|".join(replacements) + r")\}", lambda match: replacements[match.group(1)], INSTALL_GO_SCRIPT_TEMPLATE)
+
+
+def generate_go_aio_install_script(
+    server_url: str,
+    agent_name: str,
+    agent_ip: str = "",
+    binary_download_url: str = "",
+    mihomo_agent_port: int = 8080,
+    oxidns_agent_port: int = 8082,
+    mihomo_config_path: str = "/etc/mihomo/config.yaml",
+    oxidns_config_path: str = "/etc/oxidns/config.yaml",
+    mihomo_service_unit: str = "mihomo",
+    oxidns_service_unit: str = "oxidns",
+    mihomo_service_binary: str = "mihomo",
+    oxidns_service_binary: str = "oxidns",
+) -> str:
+    """Manage two isolated native Agents for already-installed native cores.
+
+    The target script checks both cores and both deployment journals before
+    stopping either Agent. It never installs, rewrites or restarts the cores.
+    """
+    if not isinstance(agent_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", agent_name):
+        raise ValueError("Invalid agent name: use letters, numbers, hyphens or underscores")
+    ports = []
+    for port in (mihomo_agent_port, oxidns_agent_port):
+        if isinstance(port, bool) or not re.fullmatch(r"[0-9]+", str(port)) or not 1 <= int(port) <= 65535:
+            raise ValueError("Invalid Agent port")
+        ports.append(int(port))
+    if ports[0] == ports[1]:
+        raise ValueError("Mihomo and OxiDNS Agent ports must be different")
+    def inside_agent_directory(value):
+        # Collapse Linux absolute-path aliases before comparing components.
+        normalized = PurePosixPath(posixpath.normpath("/" + value.lstrip("/")))
+        agent_root = PurePosixPath("/opt/configflow-agent")
+        return normalized == agent_root or agent_root in normalized.parents
+
+    paths = []
+    for value in (mihomo_config_path, oxidns_config_path):
+        if (not isinstance(value, str) or not value.startswith("/") or
+                any(ord(c) < 32 or ord(c) == 127 for c in value) or
+                ".." in PurePosixPath(value).parts or str(PurePosixPath(value)) == "/" or value.endswith("/")):
+            raise ValueError("Core configuration paths must be absolute file paths without parent traversal")
+        if inside_agent_directory(value):
+            raise ValueError("Core configuration paths must be outside the Agent directory")
+        paths.append(str(PurePosixPath("/" + value.lstrip("/"))))
+    if paths[0] == paths[1]:
+        raise ValueError("Mihomo and OxiDNS configuration paths must be different")
+    if PurePosixPath(paths[0]).parent == PurePosixPath(paths[1]).parent:
+        raise ValueError("Core configurations require separate directories for deployment journals")
+    replacements = {"binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
+                    "mihomo_agent_port": str(ports[0]), "oxidns_agent_port": str(ports[1])}
+    for service, port, path, unit, binary in zip(
+        ("mihomo", "oxidns"), ports, paths,
+        (mihomo_service_unit, oxidns_service_unit),
+        (mihomo_service_binary, oxidns_service_binary),
+    ):
+        if not isinstance(unit, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@-]*", unit):
+            raise ValueError("Invalid service unit")
+        unit = unit.removesuffix(".service")
+        if not unit or unit.startswith("configflow-"):
+            raise ValueError("Core service unit must not be a ConfigFlow Agent unit")
+        if not isinstance(binary, str) or not binary or any(ord(c) < 32 or ord(c) == 127 for c in binary):
+            raise ValueError("Invalid core service binary")
+        if binary.startswith("/") and inside_agent_directory(binary):
+            raise ValueError("Core service binaries must be outside the Agent directory")
+        cfg = {
+            "server_url": server_url, "agent_name": f"{agent_name}-{service}",
+            "agent_host": "0.0.0.0", "agent_port": port, "agent_ip": agent_ip,
+            "service_type": service, "service_name": service, "deployment_method": "shell",
+            "native_aio": True, "agent_service_unit": f"configflow-agent-{service}",
+            "config_path": path, "service_manager": "__CONFIGFLOW_INIT__", "service_unit": unit,
+            "service_binary": binary, "restart_command": "__CONFIGFLOW_RESTART__",
+            "heartbeat_interval": 30, "deployment_health_timeout": 30,
+            "agent_id": "__CONFIGFLOW_AGENT_ID__", "token": "__CONFIGFLOW_TOKEN__",
+        }
+        replacements[f"{service}_config_json"] = json.dumps(cfg, ensure_ascii=True, indent=2)
+        replacements[f"{service}_config_path_shell"] = shlex.quote(path)
+        replacements[f"{service}_service_unit_shell"] = shlex.quote(unit)
+        replacements[f"{service}_service_binary_shell"] = shlex.quote(binary)
+    if mihomo_service_unit.removesuffix(".service") == oxidns_service_unit.removesuffix(".service"):
+        raise ValueError("Mihomo and OxiDNS service units must be different")
+    return re.sub(r"\{(" + "|".join(replacements) + r")\}",
+                  lambda match: replacements[match.group(1)], INSTALL_GO_AIO_SCRIPT_TEMPLATE)

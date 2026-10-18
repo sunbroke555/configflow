@@ -25,6 +25,28 @@ function render(task: Record<string, unknown>) {
 }
 
 describe('Agent failure diagnostics', () => {
+  it('shows DNS issues and repair suggestions without hiding them in error details', () => {
+    const wrapper = render({ deployment_id: 'dns-error', status: 'failed', dns_checked_at: '2026-10-18T09:00:00Z', dns_checks: [
+      { name: 'DNS 监听', level: 'error', message: '0.0.0.0:53 已被占用', fix: '更改冲突程序的监听端口' },
+      { name: 'DNS 劫持', level: 'warn', message: 'any:53 可能绕过 OxiDNS', fix: '核对 DNS 劫持规则' },
+      { name: 'DNS 配置', level: 'pass', message: '已读取指定配置文件' },
+    ] })
+    const report = wrapper.get('[aria-label="DNS 检查结果"]')
+    expect(report.text()).toContain('错误 · DNS 监听')
+    expect(report.text()).toContain('警告 · DNS 劫持')
+    expect(report.text()).toContain('修复建议：更改冲突程序的监听端口')
+    expect(report.find('li').element.closest('details')).toBeNull()
+    expect(report.get('summary').text()).toBe('查看通过项目 · 1 项通过')
+    expect(report.get('time').attributes('datetime')).toBe('2026-10-18T09:00:00Z')
+    expect(report.text()).toContain('解析探测针对检查时运行的 DNS 服务')
+  })
+  it('keeps successful DNS checks collapsed and does not invent a report for older Agents', () => {
+    const wrapper = render({ status: 'succeeded', dns_checks: [{ name: 'DNS 解析', level: 'pass', message: '当前 DNS 返回有效响应' }] })
+    expect(wrapper.get('summary').text()).toBe('DNS 检查 · 1 项通过')
+    expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(false)
+    expect(render({ status: 'succeeded' }).find('[aria-label="DNS 检查结果"]').exists()).toBe(false)
+    expect(render({ status: 'succeeded', dns_checks: [] }).find('[aria-label="DNS 检查结果"]').exists()).toBe(false)
+  })
   it('renders rule locations and untrusted content as selectable text and copies every line', async () => {
     const details = `${ruleLocationDetails}\n出错内容：<script>alert(1)</script><img src=x onerror=alert(1)>\n${'长规则'.repeat(3000)}`
     const writeText = vi.fn().mockResolvedValue(undefined)

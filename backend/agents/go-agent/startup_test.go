@@ -31,9 +31,62 @@ func TestAgentStartupProcess(t *testing.T) {
 	main()
 }
 
+func TestStrictDeploymentPreflightCleanDoesNotRegisterOrMigrate(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "agent.json")
+	config := []byte(`{"service_type":"mihomo","config_path":"` + filepath.Join(root, "config.yaml") + `","service_manager":"systemd","native_aio":true}`)
+	if err := os.WriteFile(configPath, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAgentStartupProcess$", "--", "-config", configPath, "-require-clean-deployments")
+	cmd.Env = append(os.Environ(), "CONFIGFLOW_STARTUP_TEST_HELPER=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clean preflight failed: %v\n%s", err, output)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil || !bytes.Equal(got, config) {
+		t.Fatalf("preflight changed config: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("preflight created state: %v, %v", entries, err)
+	}
+}
+
+func TestStrictNativeAIOPreflightRejectsPendingAgentUpdate(t *testing.T) {
+	for _, journal := range []string{`{"status":"checking","update_id":"aio-preflight-check"}`, `not-readable-json`} {
+		root := t.TempDir()
+		configPath := filepath.Join(root, "config.json")
+		config := []byte(`{"service_type":"mihomo","config_path":"` + filepath.Join(root, "core/config.yaml") + `","service_manager":"systemd","native_aio":true}`)
+		if err := os.WriteFile(configPath, config, 0600); err != nil {
+			t.Fatal(err)
+		}
+		journalPath := filepath.Join(root, ".configflow-updates/current.json")
+		if err := os.MkdirAll(filepath.Dir(journalPath), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(journalPath, []byte(journal), 0600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAgentStartupProcess$", "--", "-config", configPath, "-require-clean-deployments")
+		cmd.Env = append(os.Environ(), "CONFIGFLOW_STARTUP_TEST_HELPER=1")
+		output, err := cmd.CombinedOutput()
+		cancel()
+		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 || !strings.Contains(string(output), "Agent update requires completion") {
+			t.Fatalf("pending Agent update did not block install: %v\n%s", err, output)
+		}
+		if got, err := os.ReadFile(journalPath); err != nil || string(got) != journal {
+			t.Fatalf("preflight changed Agent update journal: %v", err)
+		}
+	}
+}
+
 func TestAgentStartupOnlyInspectsInterruptedDeployments(t *testing.T) {
 	for _, kind := range []string{"mihomo", "mosdns", "oxidns"} {
-		for _, mode := range []string{"normal", "-check-deployments", "-recover-only"} {
+		for _, mode := range []string{"normal", "-check-deployments", "-require-clean-deployments", "-recover-only"} {
 			t.Run(kind+"/"+mode, func(t *testing.T) {
 				root := t.TempDir()
 				listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -112,8 +165,15 @@ func TestAgentStartupOnlyInspectsInterruptedDeployments(t *testing.T) {
 					if !ready {
 						t.Fatalf("Agent API did not start with pending recovery: %s", output.String())
 					}
-				} else if err := cmd.Wait(); err != nil {
-					t.Fatalf("inspection must not block startup: %v\n%s", err, output.String())
+				} else {
+					err := cmd.Wait()
+					if mode == "-require-clean-deployments" {
+						if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+							t.Fatalf("strict preflight must fail with exit 1: %v\n%s", err, output.String())
+						}
+					} else if err != nil {
+						t.Fatalf("inspection must not block startup: %v\n%s", err, output.String())
+					}
 				}
 				if !strings.Contains(output.String(), "Deployment check requires attention") || !strings.Contains(output.String(), "-recover-and-exit") {
 					t.Fatalf("missing actionable startup warning: %s", output.String())

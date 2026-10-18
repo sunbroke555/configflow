@@ -3,6 +3,13 @@ import { agentApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 
+export interface AgentDNSCheck {
+  name: string
+  level: 'pass' | 'warn' | 'error'
+  message: string
+  fix?: string
+}
+
 export interface AgentDeployment {
   deployment_id: string
   status: string
@@ -25,6 +32,8 @@ export interface AgentDeployment {
   pending?: boolean
   not_recorded?: boolean
   retrying?: boolean
+  dns_checks?: AgentDNSCheck[]
+  dns_checked_at?: string
 }
 
 export const deploymentLabels: Record<string, string> = {
@@ -138,11 +147,20 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
       schedule(agentId, 5000)
       return
     }
+    const dnsWarnings = task.manual_rollback ? [] : task.dns_checks?.filter(check => check.level === 'warn')
+    if (dnsWarnings?.length && (!terminal.has(task.status) || task.status === 'succeeded')) {
+      const key = `${agentId}:${task.deployment_id}:dns-warnings`
+      if (announce && !announced.has(key)) {
+        notify.warning(task.status === 'succeeded' ? '配置已发布，DNS 检查有提醒' : 'DNS 检查有提醒', deploymentErrorSummary({ message: dnsWarnings[0].message }))
+      }
+      announced.add(key)
+    }
     if (terminal.has(task.status)) {
       const key = `${agentId}:${task.deployment_id}:${task.status}`
       if (announce && !announced.has(key)) {
         if (task.status === 'succeeded' || (task.manual_rollback && task.status === 'rolled_back')) {
-          notify.success(task.manual_rollback ? '手动回滚成功，发布前配置已恢复并通过服务检查' : '配置发布成功，服务检查已通过')
+          // Keep the DNS warning visible; completion remains in the page's status.
+          if (!dnsWarnings?.length) notify.success(task.manual_rollback ? '手动回滚成功，发布前配置已恢复并通过服务检查' : '配置发布成功，服务检查已通过')
           onSuccess()
         } else {
           notify.error(deploymentLabels[task.status], deploymentErrorSummary(task))

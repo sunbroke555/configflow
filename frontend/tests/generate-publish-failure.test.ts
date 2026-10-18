@@ -46,6 +46,17 @@ async function render(service: keyof typeof labels) {
 }
 
 describe('Generated config publication diagnostics', () => {
+  it('retains DNS warnings beside the push controls after a successful publication', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'succeeded', dns_checks: [{ name: 'DNS 解析', level: 'warn', message: '当前 DNS 查询超时', fix: '检查 DNS 上游' }] } }) as any)
+    const wrapper = await render('mihomo')
+    const result = wrapper.get('[aria-label="配置发布结果"]')
+    expect(result.text()).toContain('成功')
+    expect(result.text()).toContain('警告 · DNS 解析')
+    expect(result.text()).toContain('修复建议：检查 DNS 上游')
+    expect(notify.warning).toHaveBeenCalledExactlyOnceWith('配置已发布，DNS 检查有提醒', '当前 DNS 查询超时')
+    expect(notify.success).not.toHaveBeenCalledWith('配置发布成功，服务检查已通过')
+    expect(notify.success).not.toHaveBeenCalledWith('已推送到 1 台 Agent')
+  })
   it.each(['mihomo', 'mosdns', 'oxidns'] as const)('shows %s terminal task details by the push controls', async service => {
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'failed', failed_stage: 'verifying', error: '配置校验失败', error_details: ruleLocationDetails } }) as any)
     const wrapper = await render(service)

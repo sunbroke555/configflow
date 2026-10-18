@@ -66,6 +66,8 @@ func toRoutesConfig(cfg *Config) *routes.Config {
 		DNSWatchdogDisabled:     cfg.DNSWatchdogDisabled,
 		HeartbeatInterval:       cfg.HeartbeatInterval,
 		AgentID:                 cfg.AgentID,
+		AgentServiceUnit:        cfg.AgentServiceUnit,
+		NativeAIO:               cfg.NativeAIO,
 		Token:                   cfg.Token,
 		Directories:             cfg.Directories,
 		RulesetDownloads:        rulesetDownloads,

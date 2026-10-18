@@ -59,7 +59,8 @@ func cleanupDisk(cfg *Config) error {
 	if binary, err := os.Executable(); err == nil {
 		prune = upgrade.PruneCompleted(binary)
 	}
-	return errors.Join(compactAgentLog("/var/log/configflow-agent.log"), routes.CleanupDisk(toRoutesConfig(cfg)), prune)
+	routeConfig := toRoutesConfig(cfg)
+	return errors.Join(compactAgentLog(routes.AgentLogPath(routeConfig)), routes.CleanupDisk(routeConfig), prune)
 }
 
 func startDiskCleanup(cfg *Config) {

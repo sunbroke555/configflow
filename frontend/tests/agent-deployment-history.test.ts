@@ -40,6 +40,12 @@ describe('Agent deployment history rollback availability', () => {
 })
 
 describe('Agent deployment history diagnostics', () => {
+  it('keeps DNS warnings and their fixes visible in successful release history', async () => {
+    await render({ progress: { ...latest, dns_checks: [{ name: 'DNS 劫持', level: 'warn', message: 'any:53 可能绕过 OxiDNS', fix: '检查劫持规则' }] } })
+    const report = document.querySelector('[aria-label="DNS 检查结果"]')!
+    expect(report.textContent).toContain('警告 · DNS 劫持')
+    expect(report.textContent).toContain('修复建议：检查劫持规则')
+  })
   it('renders persisted publication and rollback diagnostics independently', async () => {
     await render({ progress: { ...latest, status: 'rollback_failed', error: '配置校验失败', failed_stage: 'verifying', error_details: ruleLocationDetails, rollback_error: '服务恢复失败', rollback_error_details: 'failed to bind :53' } })
     expect(document.body.textContent).toContain('失败步骤：校验中')

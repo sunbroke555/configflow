@@ -7,7 +7,7 @@ import { deploymentStatusLabel, useAgentDeployments } from '@/composables/useAge
 import { ruleLocationDetails } from './fixtures/agent-failure'
 
 vi.mock('@/api', () => ({ agentApi: { getDeployment: vi.fn(), activateDeployment: vi.fn(), rollbackDeployment: vi.fn(), pushConfig: vi.fn() } }))
-vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }))
 const wrappers: ReturnType<typeof mount>[] = []
 function render(shouldAnnounce?: Parameters<typeof useAgentDeployments>[1]) {
   let flow!: ReturnType<typeof useAgentDeployments>
@@ -19,6 +19,53 @@ beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks() })
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers() })
 
 describe('Agent deployment lifecycle feedback', () => {
+  it('announces DNS warnings once without masking them with a completion toast', async () => {
+    const { flow, onSuccess } = render()
+    const dns_checks = [{ name: 'DNS 劫持', level: 'warn' as const, message: '53 劫持可能绕过 OxiDNS', fix: '检查劫持规则' }]
+    flow.track('dns', { deployment_id: 'warn', status: 'ready', dns_checks })
+    flow.track('dns', { deployment_id: 'warn', status: 'ready', dns_checks })
+    expect(notify.warning).toHaveBeenCalledExactlyOnceWith('DNS 检查有提醒', '53 劫持可能绕过 OxiDNS')
+    flow.track('dns', { deployment_id: 'warn', status: 'succeeded', dns_checks })
+    flow.track('dns', { deployment_id: 'warn', status: 'succeeded', dns_checks })
+    expect(notify.warning).toHaveBeenCalledOnce()
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(onSuccess).toHaveBeenCalledOnce()
+    expect(flow.busy('dns')).toBe(false)
+  })
+
+  it('includes publication success when the first DNS report arrives with completion', () => {
+    const { flow, onSuccess } = render()
+    flow.track('dns', { deployment_id: 'done', status: 'succeeded', dns_checks: [{ name: 'DNS 解析', level: 'warn', message: '当前 DNS 查询超时' }] })
+    expect(notify.warning).toHaveBeenCalledExactlyOnceWith('配置已发布，DNS 检查有提醒', '当前 DNS 查询超时')
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(onSuccess).toHaveBeenCalledOnce()
+  })
+
+  it('keeps old reports quiet and ignores DNS warnings inherited by a manual rollback', () => {
+    const { flow } = render()
+    const dns_checks = [{ name: 'DNS 解析', level: 'warn' as const, message: '当前 DNS 查询超时' }]
+    flow.track('dns', { deployment_id: 'old', status: 'succeeded', dns_checks }, false)
+    flow.track('dns', { deployment_id: 'old', status: 'succeeded', dns_checks })
+    expect(notify.warning).not.toHaveBeenCalled()
+    flow.track('dns', { deployment_id: 'old', status: 'rolled_back', manual_rollback: true, dns_checks })
+    expect(notify.warning).not.toHaveBeenCalled()
+    expect(notify.success).toHaveBeenCalledWith('手动回滚成功，发布前配置已恢复并通过服务检查')
+  })
+
+  it('reports a blocked DNS check as a failure and retains its actionable report', () => {
+    const { flow, onSuccess } = render()
+    const task = { deployment_id: 'blocked', status: 'failed', error: 'DNS 监听端口冲突', dns_checks: [
+      { name: 'DNS 端口', level: 'error' as const, message: '0.0.0.0:53 已被其他服务占用', fix: '调整监听端口' },
+      { name: 'DNS 解析', level: 'warn' as const, message: '未执行解析探测' },
+    ] }
+    flow.track('dns', task)
+    expect(notify.error).toHaveBeenCalledExactlyOnceWith('发布失败', 'DNS 监听端口冲突')
+    expect(notify.warning).not.toHaveBeenCalled()
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(onSuccess).not.toHaveBeenCalled()
+    expect(flow.deployments.dns.dns_checks).toEqual(task.dns_checks)
+  })
+
   it('keeps tracking a submitted task without announcing after its editor session ends', async () => {
     let active = true
     const { flow, onSuccess } = render(() => active)
