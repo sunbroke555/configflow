@@ -92,6 +92,7 @@ describe('Shell Mihomo + OxiDNS installation', () => {
     expect(document.getElementById('agent-config-path')).toBeNull()
     expect(document.body.textContent).toContain('127.0.0.1:1053')
     expect(document.body.textContent).toContain('脚本仅安装和接管两个 Agent')
+    expect(document.getElementById('aio-install-cores')?.getAttribute('aria-checked')).toBe('false')
 
     await click('生成安装命令')
     const params = {
@@ -454,5 +455,179 @@ describe('single Agent with its corresponding core', () => {
     expect(commands()).toHaveLength(1)
     await input('agent-port', '18082')
     expect(commands()).toEqual([])
+  })
+})
+
+describe('Shell AIO with both cores', () => {
+  const combinedScript = `#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho installed`
+  const defaults = {
+    'aio-mihomo-config-path': '/etc/mihomo/config.yaml',
+    'aio-oxidns-config-path': '/etc/oxidns/config.yaml',
+    'aio-mihomo-service-unit': 'mihomo',
+    'aio-oxidns-service-unit': 'oxidns',
+    'aio-mihomo-service-binary': '/usr/local/bin/mihomo',
+    'aio-oxidns-service-binary': '/usr/local/bin/oxidns'
+  }
+  async function toggleCores() {
+    const checkbox = document.getElementById('aio-install-cores')!
+    expect(checkbox).toBeTruthy()
+    checkbox.click()
+    await flushPromises()
+  }
+  function commands() { return [...document.querySelectorAll('textarea')].map(element => element.value) }
+
+  it('generates one combined command with both standard layouts and matching preview parameters', async () => {
+    await radio('aio')
+    await toggleCores()
+    await input('mihomo-agent-port', '18080')
+    await input('oxidns-agent-port', '18082')
+    expect(document.getElementById('core-install-title')).toBeNull()
+    expect(document.body.textContent).toContain('新装 OxiDNS 会使用 127.0.0.1:1053 作为上游')
+    expect(document.body.textContent).toContain('首次安装 Mihomo 时检测 TUN 设备和权限')
+    expect(document.body.textContent).not.toContain('脚本仅安装和接管两个 Agent')
+    vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data: combinedScript } as any)
+    await click('生成安装命令')
+    const expected = {
+      name: 'home-proxy', type: 'aio', agent_ip: '', server_url: 'https://config.example.test',
+      mihomo_agent_port: 18080, oxidns_agent_port: 18082,
+      mihomo_config_path: '/etc/mihomo/config.yaml', oxidns_config_path: '/etc/oxidns/config.yaml',
+      mihomo_service_unit: 'mihomo', oxidns_service_unit: 'oxidns',
+      mihomo_service_binary: '/usr/local/bin/mihomo', oxidns_service_binary: '/usr/local/bin/oxidns',
+      install_core: true
+    }
+    expect(agentApi.generateScript).toHaveBeenCalledExactlyOnceWith(expected)
+    expect(commands()).toHaveLength(1)
+    const command = commands()[0]!
+    const url = command.match(/ sh '([^']+)'$/)![1]!
+    expect(Object.fromEntries(new URL(url).searchParams)).toEqual(Object.fromEntries(
+      Object.entries(expected).filter(([, value]) => value !== '').map(([key, value]) => [key, String(value)])
+    ))
+    expect(command).toBe(buildAgentCoreInstallCommand(url))
+    expect(command).not.toMatch(/[\r\n]/)
+    expect(document.body.textContent).toContain('Linux（systemd / OpenRC）')
+    expect(document.body.textContent).not.toContain('Ubuntu / Debian / CentOS')
+    expect(agentApi.generateCoreInstallScript).not.toHaveBeenCalled()
+    await click('查看完整安装脚本')
+    expect(commands()).toContain(combinedScript)
+  })
+
+  it('locks both standard layouts without overwriting custom takeover settings', async () => {
+    await radio('aio')
+    await click('核心服务高级配置')
+    const custom = {
+      'aio-mihomo-config-path': '/opt/mihomo/main.yaml', 'aio-oxidns-config-path': '/opt/oxidns/main.yaml',
+      'aio-mihomo-service-unit': 'mihomo-native', 'aio-oxidns-service-unit': 'oxidns-native',
+      'aio-mihomo-service-binary': '/opt/mihomo/core', 'aio-oxidns-service-binary': '/opt/oxidns/core'
+    }
+    for (const [id, value] of Object.entries(custom)) await input(id, value)
+    await toggleCores()
+    for (const [id, value] of Object.entries(defaults)) {
+      const element = document.getElementById(id) as HTMLInputElement
+      expect(element.value).toBe(value)
+      expect(element.disabled).toBe(true)
+    }
+    vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data: combinedScript } as any)
+    await click('生成安装命令')
+    expect(vi.mocked(agentApi.generateScript).mock.calls[0]![0]).toMatchObject({
+      install_core: true, mihomo_config_path: '/etc/mihomo/config.yaml', oxidns_config_path: '/etc/oxidns/config.yaml'
+    })
+    await toggleCores()
+    expect(commands()).toEqual([])
+    expect(document.getElementById('core-install-title')).not.toBeNull()
+    for (const [id, value] of Object.entries(custom)) {
+      const element = document.getElementById(id) as HTMLInputElement
+      expect(element.value).toBe(value)
+      expect(element.disabled).toBe(false)
+    }
+    await click('生成安装命令')
+    expect(vi.mocked(agentApi.generateScript).mock.calls[1]![0]).toMatchObject({
+      mihomo_config_path: '/opt/mihomo/main.yaml', oxidns_config_path: '/opt/oxidns/main.yaml',
+      mihomo_service_unit: 'mihomo-native', oxidns_service_unit: 'oxidns-native',
+      mihomo_service_binary: '/opt/mihomo/core', oxidns_service_binary: '/opt/oxidns/core'
+    })
+    expect(vi.mocked(agentApi.generateScript).mock.calls[1]![0]).not.toHaveProperty('install_core')
+  })
+
+  it.each([
+    ['mihomo-agent-port', '1053'], ['oxidns-agent-port', '1053'],
+    ['mihomo-agent-port', '53'], ['oxidns-agent-port', '53'],
+    ['mihomo-agent-port', '18080.5'], ['oxidns-agent-port', '65536'],
+    ['oxidns-agent-port', '8080']
+  ])('rejects conflicting or invalid %s=%s before generation', async (id, value) => {
+    await radio('aio')
+    await toggleCores()
+    await input(id!, value!)
+    await click('生成安装命令')
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+    const message = value === '1053' ? 'Mihomo DNS 使用 1053，请为 Agent 选择其他端口'
+      : value === '8080' ? '两个 Agent 必须使用不同的端口' : 'Agent 端口应为 1024 到 65535 之间的整数'
+    expect(notify.warning).toHaveBeenCalledWith(message)
+    expect(commands()).toEqual([])
+  })
+
+  it.each(['#!/bin/sh\necho old-aio', '#!/bin/sh\n# ConfigFlow core installer interface: 1\n'])('rejects an older non-combined AIO preview %s', async data => {
+    await radio('aio')
+    await toggleCores()
+    vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data } as any)
+    await click('生成安装命令')
+    expect(commands()).toEqual([])
+    expect(notify.error).toHaveBeenCalledWith('安装脚本版本不支持同时安装核心，请更新 ConfigFlow 后重试')
+  })
+
+  it.each(['toggle', 'mode', 'port', 'close'])('discards pending combined output after changing %s', async change => {
+    await radio('aio')
+    await toggleCores()
+    let finish!: (response: any) => void
+    vi.mocked(agentApi.generateScript).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await click('生成安装命令')
+    if (change === 'toggle') await toggleCores()
+    if (change === 'mode') { await radio('single'); await radio('aio') }
+    if (change === 'port') await input('oxidns-agent-port', '18082')
+    if (change === 'close') await click('关闭')
+    finish({ data: combinedScript })
+    await flushPromises()
+    expect(commands()).toEqual([])
+    expect(notify.success).not.toHaveBeenCalled()
+  })
+
+  it('clears an independent core command and discards in-flight core requests when combined installation is selected', async () => {
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    expect(document.getElementById('core-install-command')).not.toBeNull()
+    await toggleCores()
+    await toggleCores()
+    expect(document.getElementById('core-install-command')).toBeNull()
+    let finish!: (response: any) => void
+    vi.mocked(agentApi.generateCoreInstallScript).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await click('生成两个核心的安装命令')
+    await toggleCores()
+    vi.mocked(notify.success).mockClear()
+    finish({ data: '#!/bin/sh\n# ConfigFlow core installer interface: 1\necho stale' })
+    await flushPromises()
+    expect(notify.success).not.toHaveBeenCalled()
+    await toggleCores()
+    expect(document.getElementById('core-install-command')).toBeNull()
+    expect(document.body.textContent).not.toContain('正在生成核心安装命令…')
+  })
+
+  it('resets the opt-in when switching modes and leaves Docker deployment unchanged', async () => {
+    await radio('aio')
+    await toggleCores()
+    await radio('single')
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe('false')
+    await radio('aio')
+    expect(document.getElementById('aio-install-cores')?.getAttribute('aria-checked')).toBe('false')
+    await toggleCores()
+    await radio('docker')
+    expect(document.getElementById('aio-install-cores')).toBeNull()
+    await radio('aio')
+    await click('生成 Docker 部署命令')
+    expect(api.get).toHaveBeenCalledWith('/agents/docker-agent-compose', { params: expect.objectContaining({
+      enable_mihomo: true, enable_mosdns: false, enable_oxidns: true
+    }) })
+    expect(vi.mocked(api.get).mock.calls[0]![1]!.params).not.toHaveProperty('install_core')
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+    await radio('shell')
+    expect(document.getElementById('aio-install-cores')?.getAttribute('aria-checked')).toBe('false')
   })
 })

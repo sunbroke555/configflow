@@ -198,12 +198,15 @@ def generate_go_aio_install_script(
     oxidns_service_unit: str = "oxidns",
     mihomo_service_binary: str = "mihomo",
     oxidns_service_binary: str = "oxidns",
+    install_core: bool = False,
 ) -> str:
-    """Manage two isolated native Agents for already-installed native cores.
+    """Manage two isolated native Agents, optionally installing missing cores.
 
-    The target script checks both cores and both deployment journals before
-    stopping either Agent. It never installs, rewrites or restarts the cores.
+    Core installation is opt-in and uses the canonical installer in an isolated
+    phase. Agent failures retain completed cores and restart previous Agents.
     """
+    if not isinstance(install_core, bool):
+        raise ValueError("install_core 必须为 true 或 false")
     if not isinstance(agent_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", agent_name):
         raise ValueError("Invalid agent name: use letters, numbers, hyphens or underscores")
     ports = []
@@ -213,6 +216,8 @@ def generate_go_aio_install_script(
         ports.append(int(port))
     if ports[0] == ports[1]:
         raise ValueError("Mihomo and OxiDNS Agent ports must be different")
+    if install_core and any(port in (53, 1053) for port in ports):
+        raise ValueError("两个 Agent 端口均不能使用核心 DNS 监听端口 53 或 1053")
     def inside_agent_directory(value):
         # Collapse Linux absolute-path aliases before comparing components.
         normalized = PurePosixPath(posixpath.normpath("/" + value.lstrip("/")))
@@ -248,6 +253,9 @@ def generate_go_aio_install_script(
             raise ValueError("Invalid core service binary")
         if binary.startswith("/") and inside_agent_directory(binary):
             raise ValueError("Core service binaries must be outside the Agent directory")
+        if install_core and (path != f"/etc/{service}/config.yaml" or unit != service or
+                             binary not in (service, f"/usr/local/bin/{service}")):
+            raise ValueError("同时安装两个核心需要默认配置路径、服务名和核心路径；自定义部署请取消同时安装核心")
         cfg = {
             "server_url": server_url, "agent_name": f"{agent_name}-{service}",
             "agent_host": "0.0.0.0", "agent_port": port, "agent_ip": agent_ip,
@@ -264,5 +272,57 @@ def generate_go_aio_install_script(
         replacements[f"{service}_service_binary_shell"] = shlex.quote(binary)
     if mihomo_service_unit.removesuffix(".service") == oxidns_service_unit.removesuffix(".service"):
         raise ValueError("Mihomo and OxiDNS service units must be different")
-    return re.sub(r"\{(" + "|".join(replacements) + r")\}",
-                  lambda match: replacements[match.group(1)], INSTALL_GO_AIO_SCRIPT_TEMPLATE)
+    agent_arch_detection = '''case "$(uname -m)" in
+    x86_64|amd64) AGENT_ARCH=linux-amd64 ;;
+    aarch64|arm64) AGENT_ARCH=linux-arm64 ;;
+    armv7l|armhf) AGENT_ARCH=linux-armv7 ;;
+    *) fail "不支持的 CPU 架构" ;;
+esac'''
+    replacements.update({
+        "init_detection": '''if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+    INIT_SYSTEM=openrc
+elif command -v systemctl >/dev/null 2>&1; then
+    INIT_SYSTEM=systemd
+else
+    fail "需要 systemd 或 OpenRC 管理已安装的 Mihomo 和 OxiDNS。"
+fi''',
+        "installation_description": 'echo "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。"',
+        "agent_arch_detection": agent_arch_detection,
+        "core_phase_state": "",
+        "core_cleanup_message": "",
+        "core_install_phase": "",
+    })
+    if install_core:
+        from backend.agents.core_install_script import generate_core_install_script
+
+        replacements.update({
+            "init_detection": _CORE_INIT_DETECTION,
+            "installation_description": 'echo "选择安装时先补装缺少的 Mihomo 和 OxiDNS 核心，再安装两个独立 Agent；已有核心与配置保留。"',
+            "agent_arch_detection": "",
+            "core_phase_state": "CORE_PHASE_COMPLETED=false\n",
+            "core_cleanup_message": '''        if [ "$CORE_PHASE_COMPLETED" = true ]; then
+            echo "Agent 安装未完成；两个核心的安装阶段已结束，已安装或原有的核心予以保留。修复上方 Agent 错误后可重新运行。" >&2
+        fi
+''',
+            # An unconditional subshell preserves set -e, unlike an if/&&/||
+            # context, and isolates core variables, exit statements and traps.
+            "core_install_phase": agent_arch_detection + '\n'
+                + 'echo "先安装或保留两个核心，成功后继续安装两个 Agent。"\n'
+                + '(\nset -- --core both\n' + generate_core_install_script().rstrip() + '\n)\n'
+                + 'CORE_PHASE_COMPLETED=true\n'
+                + '''# Existing cores can skip core dependency installation; check Agent tools.
+for agent_tool in cat chmod cp dirname basename grep head mkdir mktemp mv pwd readlink rm sed; do
+    command -v "$agent_tool" >/dev/null 2>&1 || fail "Agent 安装缺少工具：${agent_tool}。请使用系统包管理器补齐后重新运行。"
+done
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    fail "Agent 安装需要 curl 或 wget，请使用系统包管理器安装后重新运行。"
+fi
+# Minimal systems may not yet have /opt, needed for physical path checks.
+mkdir -p "$(dirname "$AGENT_ROOT")"
+''',
+        })
+    script = re.sub(r"\{(" + "|".join(replacements) + r")\}",
+                    lambda match: replacements[match.group(1)], INSTALL_GO_AIO_SCRIPT_TEMPLATE)
+    if install_core:
+        script = script.replace("#!/bin/sh\n", f"#!/bin/sh\n{AGENT_CORE_INSTALL_INTERFACE}\n", 1)
+    return script

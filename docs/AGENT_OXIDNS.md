@@ -56,7 +56,7 @@ systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_pat
 
 ### 一键安装两个核心
 
-在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，可选择安装两个核心、仅 Mihomo 或仅 OxiDNS，再生成对应命令。以 root 在目标 Linux 机器粘贴执行这一行命令；无需填写 Agent 名称。命令优先使用已有的 curl，也支持只有 wget 的机器；先完整下载脚本，下载成功后才执行，结束时清理临时文件。没有下载工具时，先通过系统包管理器安装 curl 和 ca-certificates；缺少临时文件工具时补装 coreutils。该脚本只安装所选核心，不安装 Agent，也不向面板注册。
+在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，保持「同时安装 Mihomo 与 OxiDNS 核心」未勾选，即可使用独立核心安装入口，选择安装两个核心、仅 Mihomo 或仅 OxiDNS，再生成对应命令。以 root 在目标 Linux 机器粘贴执行这一行命令；无需填写 Agent 名称。命令优先使用已有的 curl，也支持只有 wget 的机器；先完整下载脚本，下载成功后才执行，结束时清理临时文件。没有下载工具时，先通过系统包管理器安装 curl 和 ca-certificates；缺少临时文件工具时补装 coreutils。该脚本只安装所选核心，不安装 Agent，也不向面板注册。
 
 | 安装选择 | 新建核心的初始 DNS 配置 |
 | --- | --- |
@@ -101,7 +101,11 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 ### Shell 同机安装 Mihomo + OxiDNS
 
-在 Agent 安装弹窗选择 Shell 的「Mihomo + OxiDNS 同机」模式，生成一份脚本接入两个已安装的核心。支持 systemd 和 OpenRC；这份 Agent 脚本不负责下载核心、创建核心服务或迁移核心配置。尚未安装核心可先运行上方独立的双核心安装脚本。接入前会验证两个核心的服务配置，并检查是否存在未完成的发布；任一检查失败时，不停止现有 Agent。
+在 Agent 安装弹窗选择 Shell 的「Mihomo + OxiDNS 同机」模式，可勾选「同时安装 Mihomo 与 OxiDNS 核心」，用一条命令先安装或补齐两个核心，再安装两个独立 Agent。默认不勾选，继续接管已安装的核心；此时也可使用上方独立核心安装命令。两种方式均支持 systemd 和 OpenRC。
+
+勾选时使用 `/etc/mihomo/config.yaml`、`/etc/oxidns/config.yaml`，核心程序位于 `/usr/local/bin`，服务名为 `mihomo` 和 `oxidns`；高级配置暂时锁定，取消勾选后恢复原值。新装核心的 DNS 链路为 OxiDNS `53` → Mihomo `127.0.0.1:1053`，Mihomo 沿用 TUN 自动检测。已有核心和配置会跳过并保留；已有 Mihomo 需确认 DNS 监听 `1053`，已有 OxiDNS 的上游不会被自动迁移。两个 Agent 的端口不能占用 `53` / `1053`，也不能相同。
+
+组合命令完整下载后再执行，通过 `type=aio&install_core=true` 生成，兼容 curl / wget 并校验脚本接口标记。在终端选择安装后才执行核心安装；取消或卸载只处理原有 Agent 流程。核心安装失败时不进入 Agent 安装，后续 Agent 安装失败则保留已完成的核心。Agent 接入前会验证两个核心的服务配置，并检查是否存在未完成的发布；任一检查失败时，不停止现有 Agent。
 
 运行安装或卸载脚本期间，请暂停从面板发起新的配置发布和 Agent 升级；脚本的状态预检不代替跨进程的完整操作锁。
 
@@ -112,10 +116,10 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 | Mihomo Agent | 8080 |
 | OxiDNS Agent | 8082 |
 
-DNS 端口分工与 Docker 同时启用 Mihomo、OxiDNS 时一致。两套 Agent 端口可在安装弹窗修改；核心配置路径、服务名和可执行文件也可分别设置。两个 Agent 分别以 `<名称>-mihomo`、`<名称>-oxidns` 注册。
+DNS 端口分工与 Docker 同时启用 Mihomo、OxiDNS 时一致。两套 Agent 端口可在安装弹窗修改；未勾选同时安装核心时，核心配置路径、服务名和可执行文件也可分别设置。两个 Agent 分别以 `<名称>-mihomo`、`<名称>-oxidns` 注册。
 
 - 两套 Agent 使用独立的 `configflow-agent-mihomo` / `configflow-agent-oxidns` 系统服务、`/opt/configflow-agent/mihomo` / `/opt/configflow-agent/oxidns` 目录和二进制，升级及远程卸载互不删除对方的文件。重跑同机脚本会保留对应 Agent 身份。
-- 安装脚本保留现有核心配置。首次接入先在 ConfigFlow 发布 Mihomo 配置，再发布 OxiDNS 配置：Mihomo Agent 将 DNS 监听调整到 `0.0.0.0:1053`，将 TUN 的 DNS 劫持目标调整为 `any:1053` 和 `tcp://any:1053`，避免抢占 OxiDNS 的 53 端口。不会替用户开启 DNS 或 TUN。
+- 安装脚本保留现有核心配置。首次接入先在 ConfigFlow 发布 Mihomo 配置，再发布 OxiDNS 配置：Mihomo Agent 将 DNS 监听调整到 `0.0.0.0:1053`，将 TUN 的 DNS 劫持目标调整为 `any:1053` 和 `tcp://any:1053`，避免抢占 OxiDNS 的 53 端口。Agent 发布时沿用面板草稿中的 DNS 和 TUN 开关。
 - OxiDNS 的监听和上游沿用用户配置。使用常用设置时保留 DNS 监听 `53`；需要 Mihomo 处理远程解析时，将远程上游改为 `127.0.0.1:1053`。Mihomo 上游不应再指回 OxiDNS，以免形成循环。自定义 OxiDNS YAML 不会被强制改写。
 - TUN 可继续使用，但 `/dev/net/tun`、网络管理权限及路由需要在运行核心的系统中准备。承担网关转发的 LXC / VM 需在该系统持久开启 IPv4 转发；安装脚本不会修改 PVE、RouterOS 或系统转发设置。OxiDNS 上游是否经过 TUN 仍由 Mihomo 路由与规则决定，端口适配不等于上游绕行配置。
 

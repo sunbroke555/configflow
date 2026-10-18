@@ -286,7 +286,7 @@
             </RadioGroup>
           </FormField>
 
-          <FormField v-if="scriptForm.installType === 'shell'" label="Shell 模式" hint="同机模式为两个已安装的核心分别创建 Agent。">
+          <FormField v-if="scriptForm.installType === 'shell'" label="Shell 模式" hint="同机模式为 Mihomo 与 OxiDNS 分别创建 Agent，可选择同时安装核心。">
             <RadioGroup v-model="scriptForm.shellMode" class="flex flex-wrap gap-2" @update:model-value="resetForm">
               <label v-for="option in SHELL_MODES" :key="option.value" :class="chipClass(scriptForm.shellMode === option.value)">
                 <RadioGroupItem :value="option.value" />
@@ -295,7 +295,19 @@
             </RadioGroup>
           </FormField>
 
-          <section v-if="shellAio" aria-labelledby="core-install-title" class="min-w-0 space-y-3 rounded-lg border border-border/70 bg-background/40 p-3">
+          <section v-if="shellAio" class="min-w-0 space-y-2 rounded-lg border border-border/70 bg-background/40 p-3">
+            <label for="aio-install-cores" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px] font-medium">
+              <Checkbox id="aio-install-cores" v-model="scriptForm.installCore" aria-describedby="aio-install-cores-note" />
+              同时安装 Mihomo 与 OxiDNS 核心
+            </label>
+            <p id="aio-install-cores-note" class="m-0 text-[12.5px] text-muted-foreground">勾选后生成一条命令，先安装两个核心，成功后再安装两个 Agent。已有核心和配置会保留，仅补装缺少的核心。请在目标机器以 root 身份执行，支持 systemd / OpenRC。</p>
+            <template v-if="aioCoreInstall">
+              <p class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认配置 <code class="font-mono">/etc/mihomo/config.yaml</code> / <code class="font-mono">/etc/oxidns/config.yaml</code>、服务名 <code class="font-mono">mihomo</code> / <code class="font-mono">oxidns</code>，程序位于 <code class="font-mono">/usr/local/bin</code>。已有部署须与此布局一致；自定义部署请取消勾选后填写实际设置。</p>
+              <p class="m-0 text-[12.5px] text-muted-foreground">首次安装 Mihomo 时检测 TUN 设备和权限：可用时开启 TUN 及自动路由；不可用时保持关闭并提示修复。初始流量直连，作为网关仍需准备 IPv4 转发。</p>
+            </template>
+          </section>
+
+          <section v-if="shellAio && !aioCoreInstall" aria-labelledby="core-install-title" class="min-w-0 space-y-3 rounded-lg border border-border/70 bg-background/40 p-3">
             <h3 id="core-install-title" class="m-0 text-[13px] font-semibold">先安装核心</h3>
             <p class="m-0 text-[12.5px] text-muted-foreground">可一起安装 Mihomo 与 OxiDNS，也可只安装其中一个，目标机器需使用 systemd / OpenRC。此命令不安装 Agent，无需填写下面的 Agent 信息。已有核心和配置会保留，仅补装缺少的核心；已有服务是否正常需另行确认。</p>
             <p class="m-0 text-[12.5px] text-muted-foreground">命令会自动补齐缺少的依赖，兼容 curl 或 wget，完整下载成功后再执行安装脚本。</p>
@@ -445,9 +457,10 @@
 
           <template v-if="shellAio">
             <InfoNote>
-              <p>未安装核心时，可先使用上方的独立核心安装命令。已有核心请确认已配置 systemd / OpenRC 服务；下方脚本仅安装和接管两个 Agent。</p>
+              <p v-if="aioCoreInstall">一条命令完成核心与两个 Agent 的安装。新装 OxiDNS 会使用 <code class="font-mono">127.0.0.1:1053</code> 作为上游；已有配置保持不变，请确认已有核心的 DNS 监听和上游设置。</p>
+              <p v-else>未安装核心时，可勾选「同时安装 Mihomo 与 OxiDNS 核心」，也可先使用上方的独立核心安装命令。已有核心请确认已配置 systemd / OpenRC 服务；未勾选时脚本仅安装和接管两个 Agent。</p>
               <p>DNS 端口分工：OxiDNS 使用 <code class="font-mono">53</code>，Mihomo 使用 <code class="font-mono">1053</code>。发布 Mihomo 配置时会自动调整 DNS 监听和 TUN DNS 劫持端口为 <code class="font-mono">1053</code>。</p>
-              <p>请在 OxiDNS 中将远端 DNS 上游设置为 <code class="font-mono">127.0.0.1:1053</code>。使用 TUN 时，还需在系统准备 TUN 设备、权限及所需的 IPv4 转发设置。</p>
+              <p v-if="!aioCoreInstall">请在 OxiDNS 中将远端 DNS 上游设置为 <code class="font-mono">127.0.0.1:1053</code>。使用 TUN 时，还需在系统准备 TUN 设备、权限及所需的 IPv4 转发设置。</p>
             </InfoNote>
 
             <Collapsible v-model:open="lifecyclePanelOpen" class="rounded-lg border border-border/70">
@@ -456,27 +469,27 @@
               </CollapsibleTrigger>
               <CollapsibleContent class="space-y-4 border-t border-border/60 p-3">
                 <FormField label="Mihomo 配置文件路径" html-for="aio-mihomo-config-path">
-                  <Input id="aio-mihomo-config-path" v-model="scriptForm.mihomoConfigPath" class="bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
+                  <Input id="aio-mihomo-config-path" :model-value="aioServiceSettings.mihomoConfigPath" :disabled="aioCoreInstall" @update:model-value="scriptForm.mihomoConfigPath = String($event ?? '')" class="bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
                 </FormField>
                 <FormField label="OxiDNS 配置文件路径" html-for="aio-oxidns-config-path">
-                  <Input id="aio-oxidns-config-path" v-model="scriptForm.oxidnsConfigPath" class="bg-background/50 font-mono" placeholder="/etc/oxidns/config.yaml" />
+                  <Input id="aio-oxidns-config-path" :model-value="aioServiceSettings.oxidnsConfigPath" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsConfigPath = String($event ?? '')" class="bg-background/50 font-mono" placeholder="/etc/oxidns/config.yaml" />
                 </FormField>
-                <InfoNote>
+                <InfoNote v-if="!aioCoreInstall">
                   <p>OxiDNS 服务的 <code class="font-mono">-d</code> 工作目录必须与配置文件所在目录一致。例如配置为 <code class="font-mono">/opt/oxidns/config.yaml</code> 时，服务应使用 <code class="font-mono">-d /opt/oxidns</code>。请按现有服务的实际路径填写。</p>
                 </InfoNote>
                 <div class="grid gap-4 sm:grid-cols-2">
                   <FormField label="Mihomo 服务名称" html-for="aio-mihomo-service-unit">
-                    <Input id="aio-mihomo-service-unit" v-model="scriptForm.mihomoServiceUnit" class="bg-background/50 font-mono" placeholder="mihomo" />
+                    <Input id="aio-mihomo-service-unit" :model-value="aioServiceSettings.mihomoServiceUnit" :disabled="aioCoreInstall" @update:model-value="scriptForm.mihomoServiceUnit = String($event ?? '')" class="bg-background/50 font-mono" placeholder="mihomo" />
                   </FormField>
                   <FormField label="OxiDNS 服务名称" html-for="aio-oxidns-service-unit">
-                    <Input id="aio-oxidns-service-unit" v-model="scriptForm.oxidnsServiceUnit" class="bg-background/50 font-mono" placeholder="oxidns" />
+                    <Input id="aio-oxidns-service-unit" :model-value="aioServiceSettings.oxidnsServiceUnit" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsServiceUnit = String($event ?? '')" class="bg-background/50 font-mono" placeholder="oxidns" />
                   </FormField>
                 </div>
                 <FormField label="Mihomo 内核程序路径" html-for="aio-mihomo-service-binary" hint="可填写程序名或绝对路径，应与现有服务使用的程序一致。">
-                  <Input id="aio-mihomo-service-binary" v-model="scriptForm.mihomoServiceBinary" class="bg-background/50 font-mono" placeholder="mihomo" />
+                  <Input id="aio-mihomo-service-binary" :model-value="aioServiceSettings.mihomoServiceBinary" :disabled="aioCoreInstall" @update:model-value="scriptForm.mihomoServiceBinary = String($event ?? '')" class="bg-background/50 font-mono" placeholder="mihomo" />
                 </FormField>
                 <FormField label="OxiDNS 内核程序路径" html-for="aio-oxidns-service-binary" hint="可填写程序名或绝对路径，应与现有服务使用的程序一致。">
-                  <Input id="aio-oxidns-service-binary" v-model="scriptForm.oxidnsServiceBinary" class="bg-background/50 font-mono" placeholder="oxidns" />
+                  <Input id="aio-oxidns-service-binary" :model-value="aioServiceSettings.oxidnsServiceBinary" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsServiceBinary = String($event ?? '')" class="bg-background/50 font-mono" placeholder="oxidns" />
                 </FormField>
               </CollapsibleContent>
             </Collapsible>
@@ -984,6 +997,8 @@ const scriptForm = ref(createScriptForm())
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
 const singleCoreSupported = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && ['mihomo', 'oxidns'].includes(scriptForm.value.type))
 const singleCoreInstall = computed(() => singleCoreSupported.value && scriptForm.value.installCore)
+const aioCoreInstall = computed(() => shellAio.value && scriptForm.value.installCore)
+const combinedCoreInstall = computed(() => singleCoreInstall.value || aioCoreInstall.value)
 // The displayed defaults do not overwrite the user's existing-service settings.
 const singleServiceSettings = computed(() => singleCoreInstall.value ? {
   ...scriptForm.value,
@@ -992,6 +1007,13 @@ const singleServiceSettings = computed(() => singleCoreInstall.value ? {
   service_binary: `/usr/local/bin/${scriptForm.value.type}`,
   stop_command: '', start_command: '', status_command: ''
 } : scriptForm.value)
+const aioServiceSettings = computed(() => aioCoreInstall.value ? {
+  ...scriptForm.value,
+  mihomoConfigPath: '/etc/mihomo/config.yaml', oxidnsConfigPath: '/etc/oxidns/config.yaml',
+  mihomoServiceUnit: 'mihomo', oxidnsServiceUnit: 'oxidns',
+  mihomoServiceBinary: '/usr/local/bin/mihomo', oxidnsServiceBinary: '/usr/local/bin/oxidns'
+} : scriptForm.value)
+const shellServiceSettings = computed(() => shellAio.value ? aioServiceSettings.value : singleServiceSettings.value)
 watch(() => [scriptForm.value.type, scriptForm.value.installType, scriptForm.value.shellMode], () => {
   scriptForm.value.installCore = false
 }, { flush: 'sync' })
@@ -1003,7 +1025,7 @@ const resetCoreInstallCommand = () => {
   coreInstallLoading.value = false
 }
 
-watch([shellAio, scriptDialogVisible, coreInstallTarget], resetCoreInstallCommand, { flush: 'sync' })
+watch([shellAio, aioCoreInstall, scriptDialogVisible, coreInstallTarget], resetCoreInstallCommand, { flush: 'sync' })
 
 const generateCoreInstallCommand = async () => {
   if (coreInstallLoading.value) return
@@ -1021,7 +1043,7 @@ const generateCoreInstallCommand = async () => {
     }
     baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, '')}/api/agents/core-install-script`
     const response = await agentApi.generateCoreInstallScript()
-    if (request !== coreInstallRequest || !shellAio.value || !scriptDialogVisible.value) return
+    if (request !== coreInstallRequest || !shellAio.value || aioCoreInstall.value || !scriptDialogVisible.value) return
     if (typeof response.data !== 'string' || !response.data.trimStart().startsWith('#!')) {
       throw new Error('服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新')
     }
@@ -1662,7 +1684,7 @@ const scriptPanelOpen = ref(false)
 /** 生成结果按安装方式给出可复制的命令块，避免模板里重复四段几乎相同的结构 */
 const commandBlocks = computed(() => {
   if (scriptForm.value.installType === 'shell') {
-    if (singleCoreInstall.value) return [{
+    if (combinedCoreInstall.value) return [{
       title: 'Linux（systemd / OpenRC）', note: '以 root 身份执行，先安装核心，再安装 Agent',
       value: installCommand.value, rows: 6, copy: copyCommand
     }]
@@ -1933,7 +1955,7 @@ const generateScript = async () => {
       notify.warning('Agent 名称只能包含字母、数字、短横线或下划线')
       return
     }
-    const form = singleServiceSettings.value
+    const form = shellServiceSettings.value
     const configPaths = shellAio.value ? [form.mihomoConfigPath, form.oxidnsConfigPath] : [form.config_path]
     if (configPaths.some(path => path.trim() && !path.trim().match(/\.\w+$/))) {
       lifecyclePanelOpen.value = shellAio.value
@@ -1947,6 +1969,10 @@ const generateScript = async () => {
       }
       if (form.mihomoAgentPort === form.oxidnsAgentPort) {
         notify.warning('两个 Agent 必须使用不同的端口')
+        return
+      }
+      if (aioCoreInstall.value && [form.mihomoAgentPort, form.oxidnsAgentPort].includes(1053)) {
+        notify.warning('Mihomo DNS 使用 1053，请为 Agent 选择其他端口')
         return
       }
     } else {
@@ -1973,7 +1999,7 @@ const generateScript = async () => {
   }
 
   const request = ++scriptRequest
-  const includeCore = singleCoreInstall.value
+  const includeCore = combinedCoreInstall.value
   scriptLoading.value = true
   const loadingToast = notify.loading(scriptForm.value.installType === 'docker' ? '正在生成 Docker 部署命令...' : '正在生成安装命令...')
 
@@ -2018,7 +2044,7 @@ const generateScript = async () => {
         }
         serverUrl = parsed.toString().replace(/\/+$/, '')
       }
-      const form = { ...singleServiceSettings.value }
+      const form = { ...shellServiceSettings.value }
       const lifecycleParams: Record<string, string> = {}
       if (form.service_manager !== 'auto') lifecycleParams.service_manager = form.service_manager
       for (const key of ['service_unit', 'service_binary', 'stop_command', 'start_command', 'status_command'] as const) {
@@ -2038,6 +2064,7 @@ const generateScript = async () => {
         oxidns_service_unit: form.oxidnsServiceUnit.trim() || 'oxidns',
         mihomo_service_binary: form.mihomoServiceBinary.trim() || 'mihomo',
         oxidns_service_binary: form.oxidnsServiceBinary.trim() || 'oxidns',
+        ...(includeCore ? { install_core: true } : {})
       } : {
         name: form.name.trim(),
         type: form.type,

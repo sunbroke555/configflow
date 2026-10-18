@@ -56,7 +56,7 @@ def test_omitted_and_false_preserve_agent_only_api(client, service):
 
 @pytest.mark.parametrize("options", [
     {"install_core": "1"}, {"install_core": "yes"}, {"install_core": "TRUE"}, {"install_core": ""},
-    {"type": "aio"}, {"type": "mosdns"}, {"agent_type": "shell"}, {"agent_type": "unknown"},
+    {"type": "mosdns"}, {"agent_type": "shell"}, {"agent_type": "unknown"},
     {"config_path": "/srv/mihomo/config.yaml"}, {"service_unit": "custom"},
     {"service_binary": "/usr/bin/custom"}, {"service_manager": "systemd"},
     {"restart_command": "/custom/restart"}, {"stop_command": "/custom/stop"},

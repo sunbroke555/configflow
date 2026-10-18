@@ -214,8 +214,8 @@ def get_install_script():
             raise ValueError('install_core 必须为 true 或 false')
         install_core = install_core_value == 'true'
         if install_core:
-            if service_type not in ('mihomo', 'oxidns') or agent_type != 'go':
-                raise ValueError('仅单服务 Mihomo 或 OxiDNS Go Agent 支持同时安装核心')
+            if service_type not in ('mihomo', 'oxidns', 'aio') or agent_type != 'go':
+                raise ValueError('仅 Mihomo、OxiDNS 或同机双服务 Go Agent 支持同时安装核心')
             # Preserve strict validation instead of Flask's integer converter
             # silently replacing an invalid explicit value with the default.
             agent_port = request.args.get('port', '8080')
@@ -258,6 +258,7 @@ def get_install_script():
                 binary_download_url=f"{server_url}/api/agents/download",
                 mihomo_agent_port=request.args.get('mihomo_agent_port', '8080'),
                 oxidns_agent_port=request.args.get('oxidns_agent_port', '8082'),
+                install_core=install_core,
                 **{f'{service}_{field}': request.args.get(f'{service}_{field}', default).strip()
                    for service in ('mihomo', 'oxidns')
                    for field, default in (
