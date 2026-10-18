@@ -163,7 +163,7 @@ def _default_profile_config() -> Dict[str, Any]:
 
 SHARED_FIELDS = ('subscriptions', 'nodes', 'subscription_aggregations', 'rule_library')
 RESOURCE_FIELDS = SHARED_FIELDS[:3]
-PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers')
+PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes')
 BUILTIN_POLICIES = {'DIRECT', 'REJECT'}
 RULE_SOURCE_FIELDS = ('name', 'url', 'behavior', 'content', 'source_type', 'format')
 ROUTER_IDENTITY_FIELDS = ('type', 'endpoint')
@@ -322,7 +322,7 @@ class ProfileRepository:
 
     def _empty_profile(self, profile_id, name, description=''):
         defaults = self._legacy_defaults()
-        result = {key: copy.deepcopy(defaults.get(key, {} if key in ('mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers') else []))
+        result = {key: copy.deepcopy(defaults.get(key, {} if key in ('mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes') else []))
                   for key in PROFILE_FIELDS}
         result.update(id=profile_id, name=name, description=description, _revision=0,
                       created_at=_now(), updated_at=_now())
@@ -1884,6 +1884,12 @@ class ProfileRepository:
         # 域名发现设置同样是后加字段，缺省为空对象
         if not isinstance(profile.get('domain_discovery', {}), dict):
             raise ProfileValidationError('domain_discovery 参数必须是对象')
+        from backend.common.device_notes import normalize_notes
+        from backend.common.oxidns_settings import OxidnsSettingsError
+        try:
+            normalize_notes(profile.get('device_notes', {}))
+        except OxidnsSettingsError as exc:
+            raise ProfileValidationError(str(exc)) from exc
         # 上游路由器同样是后加字段，缺省为空对象
         routers = profile.get('routers', {})
         if not isinstance(routers, dict) or not isinstance(routers.get('items', []), list):

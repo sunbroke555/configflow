@@ -1,18 +1,18 @@
 import { compareSources, connectionMatcher, sourceLabel, type ConnectionRow } from '@/types/mihomo'
 
 export const CONNECTION_COLUMNS = [
-  { key: 'target', label: '主机', width: 240 },
-  { key: 'source', label: '来源', width: 152 },
-  { key: 'network', label: '协议', width: 96 },
-  { key: 'rule', label: '规则', width: 176 },
-  { key: 'chain', label: '链路', width: 192 },
-  { key: 'downSpeed', label: '下载速度', width: 120, numeric: true },
-  { key: 'upSpeed', label: '上传速度', width: 120, numeric: true },
-  { key: 'download', label: '下载量', width: 112, numeric: true },
-  { key: 'upload', label: '上传量', width: 112, numeric: true },
-  { key: 'duration', label: '时长', width: 96, numeric: true },
-  { key: 'start', label: '开始时间', width: 184, numeric: true },
-  { key: 'process', label: '进程', width: 176 }
+  { key: 'target', label: '主机' },
+  { key: 'source', label: '来源' },
+  { key: 'network', label: '协议' },
+  { key: 'rule', label: '规则' },
+  { key: 'chain', label: '链路' },
+  { key: 'downSpeed', label: '下载速度' },
+  { key: 'upSpeed', label: '上传速度' },
+  { key: 'download', label: '下载量' },
+  { key: 'upload', label: '上传量' },
+  { key: 'duration', label: '时长' },
+  { key: 'start', label: '开始时间' },
+  { key: 'process', label: '进程' }
 ] as const
 
 export type ConnectionColumn = typeof CONNECTION_COLUMNS[number]['key']
@@ -26,8 +26,33 @@ export const CONNECTION_SORT_OPTIONS = [
 ] as const
 
 export const DEFAULT_CONNECTION_COLUMNS: ConnectionColumn[] = [
-  'target', 'source', 'rule', 'chain', 'downSpeed', 'upSpeed', 'download', 'upload', 'duration'
+  'target', 'source', 'network', 'rule', 'chain', 'downSpeed', 'upSpeed', 'duration'
 ]
+
+const LEGACY_DEFAULT_COLUMNS: ConnectionColumn[] = ['target', 'source', 'rule', 'chain', 'downSpeed', 'upSpeed', 'download', 'upload', 'duration']
+
+/** Keep optional fields in the same compact columns instead of growing a horizontal table. */
+export function connectionDisplayColumns(selected: ConnectionColumn[]) {
+  const groups: Array<{ key: string; label: string; fields: ConnectionColumn[]; weight: number; numeric: boolean }> = [
+    { key: 'target', label: '主机', fields: ['target', 'network', 'process'], weight: 28, numeric: false },
+    { key: 'source', label: '来源设备', fields: ['source'], weight: 18, numeric: false },
+    { key: 'routing', label: '规则 / 链路', fields: ['rule', 'chain'], weight: 26, numeric: false },
+    { key: 'transfer', label: '实时速度', fields: ['downSpeed', 'upSpeed', 'download', 'upload'], weight: 20, numeric: true },
+    { key: 'time', label: '时长', fields: ['duration', 'start'], weight: 11, numeric: true }
+  ]
+  return groups.map(group => {
+    const fields = group.fields.filter(field => selected.includes(field))
+    let label = group.label
+    if (group.key === 'routing' && fields.length === 1) label = fields[0] === 'rule' ? '规则' : '链路'
+    if (group.key === 'transfer') {
+      const speed = fields.some(field => field === 'downSpeed' || field === 'upSpeed')
+      const traffic = fields.some(field => field === 'download' || field === 'upload')
+      label = speed && traffic ? '速度 / 流量' : traffic ? '流量' : '实时速度'
+    }
+    if (group.key === 'time') label = fields.includes('start') ? (fields.includes('duration') ? '时间' : '开始时间') : '时长'
+    return { ...group, fields, label, weight: group.key === 'time' && fields.includes('start') ? 19 : group.weight }
+  }).filter(group => group.fields.length)
+}
 
 export interface ConnectionTableSettings {
   sort: ConnectionSort
@@ -47,13 +72,16 @@ export function loadConnectionTableSettings(): ConnectionTableSettings {
     if (Array.isArray(stored.columns)) {
       // 主机始终可见，保证连接详情的键盘入口不会被隐藏。
       defaults.columns = CONNECTION_COLUMNS.filter(column => column.key === 'target' || stored.columns.includes(column.key)).map(column => column.key)
+      // Migrate the old default preset once; keep custom choices and future selections intact.
+      if (stored.layoutVersion !== 2 && defaults.columns.length === LEGACY_DEFAULT_COLUMNS.length &&
+        LEGACY_DEFAULT_COLUMNS.every(key => defaults.columns.includes(key))) defaults.columns = [...DEFAULT_CONNECTION_COLUMNS]
     }
   } catch { /* 禁用存储或旧数据损坏时使用默认表格。 */ }
   return defaults
 }
 
 export function saveConnectionTableSettings(settings: ConnectionTableSettings) {
-  try { window.localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify(settings)) } catch { /* 本次访问仍生效。 */ }
+  try { window.localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ ...settings, layoutVersion: 2 })) } catch { /* 本次访问仍生效。 */ }
 }
 
 export interface ConnectionFilters {
@@ -75,7 +103,7 @@ function searchableValues(row: ConnectionRow) {
 }
 
 /** 同一项多选为「或」，不同项之间为「且」；批量断开也复用这份结果。 */
-export function filterConnections(rows: ConnectionRow[], search: string, filters: ConnectionFilters): ConnectionRow[] {
+export function filterConnections(rows: ConnectionRow[], search: string, filters: ConnectionFilters, sourceName: (row: ConnectionRow) => string = () => ''): ConnectionRow[] {
   const includes = connectionMatcher(search)
   const excludes = filters.exclude.trim() ? connectionMatcher(filters.exclude) : null
   return rows.filter(row => {
@@ -83,7 +111,7 @@ export function filterConnections(rows: ConnectionRow[], search: string, filters
     if (filters.networks.length && !filters.networks.includes(connectionNetworkLabel(row))) return false
     if (filters.rules.length && !filters.rules.includes(connectionRuleLabel(row))) return false
     if (filters.chains.length && !row.chains.some(chain => filters.chains.includes(chain))) return false
-    const values = searchableValues(row)
+    const values = [...searchableValues(row), sourceName(row)]
     return values.some(includes) && (!excludes || !values.some(excludes))
   })
 }

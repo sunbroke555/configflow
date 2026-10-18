@@ -6,9 +6,9 @@ import { notify } from '@/lib/feedback'
 import { DEFAULT_PROXY_SETTINGS, finalNode, loadProxySettings, saveProxySettings } from '@/types/mihomo'
 
 vi.mock('@/api', () => ({
-  mihomoPanelApi: { proxies: vi.fn(), proxyProviders: vi.fn(), selectProxy: vi.fn(), connections: vi.fn(), closeConnection: vi.fn() }
+  mihomoPanelApi: { groupDelay: vi.fn(), proxyDelay: vi.fn(), proxies: vi.fn(), proxyProviders: vi.fn(), selectProxy: vi.fn(), connections: vi.fn(), closeConnection: vi.fn() }
 }))
-vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ notify: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }))
 
 function stubStorage() {
   const values = new Map<string, string>()
@@ -105,5 +105,55 @@ describe('proxy panel settings', () => {
     state.applySettings({ ...state.settings, closeConnectionsOnSwitch: false })
     await state.select({ ...PROXIES.Proxy, now: 'Fast' }, 'Slow')
     expect(mihomoPanelApi.connections).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('individual and all-group delay tests', () => {
+  it('tests a node without selecting it and isolates the test URL', async () => {
+    vi.mocked(mihomoPanelApi.proxyDelay).mockResolvedValue({ data: { data: { delay: 123 } } } as any)
+    const { wrapper, state } = await render()
+    await wrapper.get('button[aria-label="单节点测速 Fast（Proxy）"]').trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledWith('gw', 'Fast', undefined)
+    expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
+    expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(123)
+    expect(state.delayOf('Fast', { ...PROXIES.Proxy, testUrl: 'https://different.test' })).toBe(40)
+    expect(wrapper.find('button[aria-label="单节点测速 Auto（Proxy）"]').exists()).toBe(false)
+  })
+  it('tests hidden and visible groups sequentially and continues after failure', async () => {
+    let running = 0, peak = 0
+    vi.mocked(mihomoPanelApi.groupDelay).mockImplementation(async (_id, name) => {
+      peak = Math.max(peak, ++running); await Promise.resolve(); running--
+      if (name === 'Auto') throw new Error('failed')
+      return { data: { data: { Fast: 10 } } } as any
+    })
+    const { state } = await render()
+    state.search = 'Slow'
+    await state.testAll()
+    expect(vi.mocked(mihomoPanelApi.groupDelay).mock.calls.map(call => call[1]).sort()).toEqual(['Auto', 'GLOBAL', 'Hidden', 'Proxy'])
+    expect(peak).toBe(1); expect(state.batchDone).toBe(4); expect(state.batchRunning).toBe(false)
+    expect(notify.info).toHaveBeenCalledWith('全部分组测速完成', '已测 4 组，1 组失败')
+  })
+  it('stops queued tests after stop and unmount', async () => {
+    let resolve!: (value: any) => void
+    vi.mocked(mihomoPanelApi.groupDelay).mockImplementation(() => new Promise(yes => { resolve = yes }))
+    const { state, wrapper } = await render()
+    const batch = state.testAll(); await flushPromises(); state.batchStop = true
+    resolve({ data: { data: {} } }); await batch
+    expect(mihomoPanelApi.groupDelay).toHaveBeenCalledTimes(1)
+    const second = state.testAll(); wrapper.unmount()
+    resolve({ data: { data: {} } }); await second
+    expect(mihomoPanelApi.groupDelay).toHaveBeenCalledTimes(2)
+  })
+  it('discards old results when changing Agent', async () => {
+    let resolve!: (value: any) => void
+    vi.mocked(mihomoPanelApi.groupDelay).mockImplementationOnce(() => new Promise(yes => { resolve = yes }))
+    const { state, wrapper } = await render()
+    const batch = state.testAll()
+    await wrapper.setProps({ agentId: 'other' })
+    resolve({ data: { data: { Fast: 999 } } }); await batch
+    expect(mihomoPanelApi.groupDelay).toHaveBeenCalledTimes(1)
+    expect(state.batchRunning).toBe(false); expect(state.delays.size).toBe(0)
   })
 })

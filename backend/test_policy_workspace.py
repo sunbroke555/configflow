@@ -59,8 +59,9 @@ def test_saves_sources_and_router_atomically_preserving_unrelated_settings(works
     assert updated['router']['proxy_gateway_agent_id'] == ''
     assert updated['revision'] != state['revision']
     after = get_repository().get_profile('default')
+    assert after['device_notes'] == {'192.0.2.105': 'NAS', '192.0.2.51': 'direct'}
     for key in before:
-        if key not in ('oxidns', 'routers', '_revision', 'updated_at'):
+        if key not in ('oxidns', 'routers', 'device_notes', '_revision', 'updated_at'):
             assert after[key] == before[key]
     assert after['routers']['items'][0]['password'] == 'private-password'
 

@@ -1,5 +1,6 @@
 """One profile draft for OxiDNS source devices and a RouterOS policy bundle."""
 from backend.common.oxidns_device_policy import apply_policies, read_policies, revision
+from backend.common.device_notes import prepare_policy_notes
 from backend.routers.ros_policy import digest
 from backend.routers.store import find_router, normalize, public_view, routers_of
 from backend.routers.base import RouterConflictError
@@ -41,7 +42,9 @@ def save_workspace(config, router_id, body, base_url):
     if body['policies'] != existing['policies']:
         # Validation happens before either section is changed. The repository
         # commits the two sections together, never a half-saved workflow.
-        settings = apply_policies(settings, config, body['policies'], base_url)
+        rows, notes = prepare_policy_notes(config, body['policies'])
+        settings = apply_policies(settings, config, rows, base_url)
+        config['device_notes'] = notes
     items = routers_of(config)
     items[next(i for i, row in enumerate(items) if row['id'] == router_id)] = updated
     config['routers'] = {**config.get('routers', {}), 'items': items}

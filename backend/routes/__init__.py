@@ -38,6 +38,7 @@ def register_blueprints(app):
     from backend.routes import generate
     from backend.routes import config  # 包含 custom_config 路由
     from backend.routes import agents
+    from backend.routes import client_tools
     from backend.routes import mosdns
     from backend.routes import oxidns
     from backend.routes import settings

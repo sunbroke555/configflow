@@ -1388,6 +1388,7 @@ def oxidns_device_policies(agent_id):
     """Edit only the bound profile, independently of the global UI selection."""
     from backend.common.config import update_config_transaction
     from backend.common.oxidns_device_policy import apply_policies, read_policies, revision
+    from backend.common.device_notes import prepare_policy_notes, read_notes
     from backend.common.oxidns_settings import OxidnsSettingsError
 
     def response(data, status=200):
@@ -1418,8 +1419,9 @@ def oxidns_device_policies(agent_id):
                         (latest.get('profile_id') or get_default_profile_id()) != profile_id or \
                         body.get('revision') != revision(config.get('oxidns', {})):
                     raise PolicyConflict('配置或设备绑定已更新，请重新载入后再保存。')
-                config['oxidns'] = apply_policies(config.get('oxidns', {}), config,
-                                                 body.get('policies'), body.get('base_url', ''))
+                rows, notes = prepare_policy_notes(config, body.get('policies'))
+                config['oxidns'] = apply_policies(config.get('oxidns', {}), config, rows, body.get('base_url', ''))
+                config['device_notes'] = notes
 
             update_config_transaction(update, profile_id)
         config = get_config(profile_id)
@@ -1431,7 +1433,7 @@ def oxidns_device_policies(agent_id):
                  (item.get('profile_id') or get_default_profile_id()) == profile_id]
         return response({'success': True, 'draft': True, 'profile_id': profile_id,
                          'profile_name': profile.get('name') or profile_id,
-                         'revision': revision(settings), 'agents': peers,
+                         'revision': revision(settings), 'agents': peers, 'device_notes': read_notes(config),
                          'deployment': _public_deployment(agent['latest_deployment']) if agent.get('latest_deployment') else None,
                          **read_policies(settings, config)})
     except PolicyConflict as exc:

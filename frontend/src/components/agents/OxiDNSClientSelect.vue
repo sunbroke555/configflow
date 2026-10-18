@@ -4,7 +4,7 @@
     <PopoverTrigger as-child>
       <Button type="button" variant="outline" role="combobox" aria-label="客户端 IP" :aria-expanded="open"
         class="min-h-11 w-full min-w-0 justify-between gap-2 bg-card font-normal" :disabled="!agentId || !recorder">
-        <span :class="['min-w-0 truncate', modelValue ? 'font-mono' : 'text-muted-foreground']" :title="modelValue || placeholder">{{ modelValue || placeholder }}</span>
+        <span :class="['min-w-0 truncate', modelValue ? 'font-mono' : 'text-muted-foreground']" :title="modelValue || placeholder">{{ modelValue ? clientLabel(modelValue) : placeholder }}</span>
         <ChevronsUpDown class="size-4 shrink-0 text-muted-foreground" />
       </Button>
     </PopoverTrigger>
@@ -14,7 +14,7 @@
           <Search class="size-4 shrink-0 text-muted-foreground" />
           <ListboxFilter :model-value="search" @update:model-value="changeSearch"
             class="min-h-11 w-full min-w-0 rounded-sm border-0 bg-transparent px-0 font-mono text-base text-foreground outline-none placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-primary-accent md:text-sm"
-            aria-label="搜索已有客户端 IP" placeholder="搜索已有 IP…" />
+            aria-label="搜索已有客户端 IP" placeholder="搜索 IP 或设备备注…" />
         </div>
         <div v-if="allowAll" class="border-b px-1 py-1">
           <Button type="button" variant="ghost" class="min-h-11 w-full justify-start font-normal" @click="select('')">
@@ -30,7 +30,7 @@
           <CommandGroup>
           <CommandItem v-for="client in options" :key="client.ip" :value="client.ip" class="min-h-11 gap-2" @select="select(client.ip)">
             <Check :class="['size-4 shrink-0', modelValue === client.ip ? 'text-primary-accent' : 'opacity-0']" />
-            <span class="min-w-0 break-all font-mono text-xs">{{ client.ip }}</span>
+            <span class="min-w-0 break-all text-xs"><span v-if="note(client.ip)" class="mb-0.5 block">{{ note(client.ip) }}</span><span class="font-mono text-muted-foreground">{{ client.ip }}</span></span>
             <span v-if="client.ip === modelValue" class="ml-auto shrink-0 text-xs text-muted-foreground">已选</span>
           </CommandItem>
           </CommandGroup>
@@ -47,13 +47,16 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { Check, ChevronsUpDown, Loader2, Search } from '@lucide/vue'
 import { ListboxFilter } from 'reka-ui'
+import { deviceNote } from '@/lib/device-notes'
 import { oxidnsMonitorApi } from '@/api'
 import type { OxiDNSClients, OxiDNSQueryFilters } from '@/types/oxidnsMonitor'
 import { Button } from '@/components/ui/button'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-const props = withDefaults(defineProps<{ modelValue: string; agentId: string; recorder: string; range: OxiDNSQueryFilters['range']; allowAll?: boolean; placeholder?: string }>(), { allowAll: true, placeholder: '全部客户端' })
+const props = withDefaults(defineProps<{ modelValue: string; agentId: string; recorder: string; range: OxiDNSQueryFilters['range']; allowAll?: boolean; placeholder?: string; notes?: Record<string, string> }>(), { allowAll: true, placeholder: '全部客户端' })
+const note = (ip: string) => deviceNote(props.notes || {}, ip)
+const clientLabel = (ip: string) => note(ip) ? `${note(ip)} · ${ip}` : ip
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 const open = ref(false)
 const search = ref('')
@@ -70,7 +73,7 @@ let disposed = false
 const options = computed(() => {
   const values = new Map(clients.value.map(client => [client.ip, client]))
   if (props.modelValue && !values.has(props.modelValue)) values.set(props.modelValue, { ip: props.modelValue, count: 0 })
-  return [...values.values()].filter(client => client.ip.toLowerCase().includes(search.value.toLowerCase().trim()))
+  return [...values.values()].filter(client => clientLabel(client.ip).toLowerCase().includes(search.value.toLowerCase().trim()))
 })
 
 function cancel() {
@@ -89,9 +92,12 @@ async function load() {
   loading.value = true
   error.value = ''
   const now = Date.now()
+  const keyword = search.value.trim()
+  // The core searches IPs only; names are matched against the bounded result here.
+  const matchesNote = !!keyword && Object.values(props.notes || {}).some(name => name.toLowerCase().includes(keyword.toLowerCase()))
   try {
     const { data } = await oxidnsMonitorApi.clients(props.agentId, {
-      recorder: props.recorder, search: search.value.trim() || undefined,
+      recorder: props.recorder, search: matchesNote ? undefined : keyword || undefined,
       since_ms: props.range === 'all' ? undefined : now - (props.range === '1h' ? 3600000 : 86400000),
       until_ms: now
     }, { signal: current.signal })

@@ -46,6 +46,7 @@ vi.mock('vue-router', () => ({ useRoute: () => routeState.route, useRouter: () =
 vi.mock('@/api', () => {
   const ok = (data: unknown) => vi.fn().mockResolvedValue({ data: { success: true, data } })
   return {
+    clientToolsApi: { notes: vi.fn().mockResolvedValue({ data: { success: true, notes: {} } }) },
     agentApi: { getAll: vi.fn() },
     mihomoPanelApi: {
       version: ok({ version: 'v1.19.0' }),

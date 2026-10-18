@@ -142,6 +142,7 @@ export interface OxiDNSDevicePolicy {
 }
 
 export interface OxiDNSDevicePolicies {
+  device_notes?: Record<string, string>
   success: true
   draft: true
   profile_id: string
