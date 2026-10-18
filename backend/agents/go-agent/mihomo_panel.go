@@ -50,6 +50,7 @@ var mihomoPanelRoutes = []mihomoPanelRoute{
 	{regexp.MustCompile(`^providers/proxies$`), "GET", nil},
 	{regexp.MustCompile(`^providers/proxies/` + panelSegment + `$`), "PUT", nil},
 	{regexp.MustCompile(`^providers/proxies/` + panelSegment + `/healthcheck$`), "GET", nil},
+	{regexp.MustCompile(`^providers/proxies/` + panelSegment + `/` + panelSegment + `/healthcheck$`), "GET", []string{"url", "timeout"}},
 	{regexp.MustCompile(`^providers/rules$`), "GET", nil},
 	{regexp.MustCompile(`^providers/rules/` + panelSegment + `$`), "PUT", nil},
 	{regexp.MustCompile(`^cache/fakeip/flush$`), "POST", nil},

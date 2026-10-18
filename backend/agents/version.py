@@ -1,10 +1,16 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.17-go"
+LATEST_AGENT_VERSION = "1.8.18-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.18-go": {
+        "date": "2026-10-18",
+        "features": [
+            "修复 Mihomo 面板订阅节点单独测速提示 Resource not found；普通节点和订阅节点按来源使用对应测速接口"
+        ]
+    },
     "1.8.17-go": {
         "date": "2026-10-18",
         "features": [

@@ -421,6 +421,9 @@ export const mihomoPanelApi = {
   unfixProxy: (id: string, group: string) => api.delete(mihomoPath(id, 'proxy'), mihomoName(group)),
   proxyDelay: (id: string, name: string, url?: string, timeout = 5000) =>
     api.get(mihomoPath(id, 'proxy/delay'), { params: { name, url, timeout }, timeout: 45000 }),
+  /** proxy-providers 内单个节点测速（Agent 1.8.18-go+） */
+  providerProxyDelay: (id: string, provider: string, name: string, url?: string, timeout = 5000) =>
+    api.get(mihomoPath(id, 'providers/proxy/delay'), { params: { provider, name, url, timeout }, timeout: 45000 }),
   groupDelay: (id: string, name: string, url?: string, timeout = 5000) =>
     api.get(mihomoPath(id, 'group/delay'), { params: { name, url, timeout }, timeout: 45000 }),
   connections: (id: string, options: { signal?: AbortSignal } = {}) => api.get(mihomoPath(id, 'connections'), options),

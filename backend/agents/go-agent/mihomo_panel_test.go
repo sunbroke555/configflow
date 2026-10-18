@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newMihomoPanelFixture(t *testing.T, core http.HandlerFunc) http.HandlerFunc {
@@ -33,6 +36,12 @@ func TestMihomoPanelForwardsAllowedRequests(t *testing.T) {
 		{"PUT", "/api/mihomo/proxies/%E8%8A%82%E7%82%B9%2FA", `{"name":"x"}`, `PUT /proxies/%E8%8A%82%E7%82%B9%2FA Bearer s3cret {"name":"x"}`},
 		{"GET", "/api/mihomo/group/Auto/delay?url=http%3A%2F%2Fcp.cloudflare.com&timeout=5000&extra=1", "",
 			"GET /group/Auto/delay?timeout=5000&url=http%3A%2F%2Fcp.cloudflare.com Bearer s3cret "},
+		{"GET", "/api/mihomo/proxies/JP-05/delay?url=https%3A%2F%2Fexample.com%2F204&timeout=5000&extra=1", "",
+			"GET /proxies/JP-05/delay?timeout=5000&url=https%3A%2F%2Fexample.com%2F204 Bearer s3cret "},
+		{"GET", "/api/mihomo/providers/proxies/Subscription/healthcheck?url=https%3A%2F%2Fignored.test&timeout=5000&extra=1", "",
+			"GET /providers/proxies/Subscription/healthcheck Bearer s3cret "},
+		{"GET", "/api/mihomo/providers/proxies/Subscription/JP-05/healthcheck?url=https%3A%2F%2Fexample.com%2F204&timeout=5000&extra=1", "",
+			"GET /providers/proxies/Subscription/JP-05/healthcheck?timeout=5000&url=https%3A%2F%2Fexample.com%2F204 Bearer s3cret "},
 		{"DELETE", "/api/mihomo/connections/abc", "", "DELETE /connections/abc Bearer s3cret "},
 	}
 	for _, c := range cases {
@@ -60,6 +69,13 @@ func TestMihomoPanelRejectsOtherEndpoints(t *testing.T) {
 		{"GET", "/api/mihomo/logs", http.StatusNotFound},
 		{"DELETE", "/api/mihomo/rules", http.StatusMethodNotAllowed},
 		{"GET", "/api/mihomo/proxies/a/b", http.StatusNotFound},
+		{"POST", "/api/mihomo/providers/proxies/sub/node/healthcheck", http.StatusMethodNotAllowed},
+		{"PUT", "/api/mihomo/providers/proxies/sub/node/healthcheck", http.StatusMethodNotAllowed},
+		{"PATCH", "/api/mihomo/providers/proxies/sub/node/healthcheck", http.StatusMethodNotAllowed},
+		{"DELETE", "/api/mihomo/providers/proxies/sub/node/healthcheck", http.StatusMethodNotAllowed},
+		{"HEAD", "/api/mihomo/providers/proxies/sub/node/healthcheck", http.StatusMethodNotAllowed},
+		{"GET", "/api/mihomo/providers/proxies/sub/node/extra/healthcheck", http.StatusNotFound},
+		{"GET", "/api/mihomo/providers/proxies//node/healthcheck", http.StatusNotFound},
 	}
 	for _, c := range cases {
 		recorder := httptest.NewRecorder()
@@ -70,6 +86,98 @@ func TestMihomoPanelRejectsOtherEndpoints(t *testing.T) {
 	}
 	if called {
 		t.Fatal("rejected request reached the controller")
+	}
+}
+
+func TestMihomoPanelProviderNodeDelayPreservesEncodedNames(t *testing.T) {
+	provider, node := "订阅 🇯🇵/50%?source#1", "🇯🇵 JP-05 · AWS2/节点%?name#2"
+	probeURL := "https://example.com/generate_204?from=测速&percent=%25#fragment"
+	path := "/providers/proxies/" + url.PathEscape(provider) + "/" + url.PathEscape(node) + "/healthcheck"
+	query := url.Values{"url": {probeURL}, "timeout": {"7000"}}
+	wantURI := path + "?" + query.Encode()
+	seenURI, seenToken := "", ""
+	handler := newMihomoPanelFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		seenURI, seenToken = r.URL.RequestURI(), r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"delay":42}`))
+	})
+	recorder := httptest.NewRecorder()
+	handler(recorder, httptest.NewRequest(http.MethodGet, "/api/mihomo"+wantURI+"&secret=ignored&force=true", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != `{"delay":42}` {
+		t.Fatalf("got %d %s", recorder.Code, recorder.Body.String())
+	}
+	if seenURI != wantURI || seenToken != "Bearer s3cret" {
+		t.Fatalf("forwarded %q with token %q, want %q with controller token", seenURI, seenToken, wantURI)
+	}
+	if recorder.Header().Get("Content-Type") != "application/json" || recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected reply headers: %v", recorder.Header())
+	}
+}
+
+func TestMihomoPanelProviderNodeDelayErrorResponses(t *testing.T) {
+	cases := []struct {
+		name       string
+		coreStatus int
+		coreBody   string
+		wantStatus int
+		wantBody   string
+	}{
+		{"missing node", http.StatusNotFound, `{"message":"Resource not found"}`, http.StatusNotFound, `{"message":"Resource not found"}`},
+		{"probe failed", http.StatusGatewayTimeout, `{"message":"An error occurred in the delay test"}`, http.StatusGatewayTimeout, `{"message":"An error occurred in the delay test"}`},
+		{"forbidden controller", http.StatusForbidden, `{"message":"secret internal diagnostic"}`, http.StatusBadGateway, "CORE_AUTH_FAILED"},
+		{"unauthorized controller", http.StatusUnauthorized, `{"message":"secret internal diagnostic"}`, http.StatusBadGateway, "CORE_AUTH_FAILED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := newMihomoPanelFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.coreStatus)
+				_, _ = w.Write([]byte(tc.coreBody))
+			})
+			recorder := httptest.NewRecorder()
+			handler(recorder, httptest.NewRequest(http.MethodGet, "/api/mihomo/providers/proxies/sub/node/healthcheck?url=http%3A%2F%2Fexample.com&timeout=100", nil))
+			if recorder.Code != tc.wantStatus || !strings.Contains(recorder.Body.String(), tc.wantBody) {
+				t.Fatalf("got %d %s", recorder.Code, recorder.Body.String())
+			}
+			if tc.wantStatus == http.StatusBadGateway && strings.Contains(recorder.Body.String(), "secret internal diagnostic") {
+				t.Fatal("controller auth details leaked")
+			}
+		})
+	}
+}
+
+func TestMihomoPanelProviderNodeDelayCancelsControllerRequest(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	handler := newMihomoPanelFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		close(cancelled)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler(recorder, httptest.NewRequest(http.MethodGet, "/api/mihomo/providers/proxies/sub/node/healthcheck", nil).WithContext(ctx))
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach controller")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not stop after cancellation")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("controller request was not cancelled")
+	}
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "CORE_UNREACHABLE") {
+		t.Fatalf("got %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 
