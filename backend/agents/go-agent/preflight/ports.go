@@ -110,7 +110,7 @@ func portChecksWithProbe(configs []Config, probe portProbe) []Check {
 	}
 	for _, requirement := range requirements {
 		result := Check{Name: fmt.Sprintf("%s %s/%d", requirement.Name, requirement.Protocol, requirement.Port), Level: "pass", Message: "当前没有重叠的监听占用"}
-		owned, migration, unknown, external := false, false, false, false
+		owned, unknown, external := false, false, false
 		var pids []string
 		for _, listener := range listeners {
 			if !portBindingsOverlap(requirement.portBinding, listener.portBinding) {
@@ -130,19 +130,7 @@ func portChecksWithProbe(configs []Config, probe portProbe) []Check {
 					owned = true
 					continue
 				}
-				isMigration := false
-				if !requirement.Agent && cfg.NativeAIO && cfg.ServiceType == "oxidns" && requirement.Port == 53 {
-					for i, peer := range configs {
-						if peer.NativeAIO && peer.ServiceType == "mihomo" && portOwnerIsCore(owner, peer, executables[i]) {
-							isMigration = true
-						}
-					}
-				}
-				if isMigration {
-					migration = true
-				} else {
-					external = true
-				}
+				external = true
 			}
 		}
 		switch {
@@ -156,10 +144,6 @@ func portChecksWithProbe(configs []Config, probe portProbe) []Check {
 				result.Message += "（PID " + strings.Join(pids, ", ") + "）"
 			}
 			result.Fix = fmt.Sprintf("运行 ss -lntup 检查 %d 端口；确认占用服务用途后调整 Agent 端口或核心监听地址/端口。IPv6 通配监听可能双栈占用，带接口范围的 IPv6 地址也按可能重叠检查。不会自动终止任何进程。", requirement.Port)
-		case migration:
-			result.Level = "warn"
-			result.Message = "53 端口由当前受管 Mihomo 使用，需要先迁移到 1053"
-			result.Fix = "安装后先发布 Mihomo 配置使 DNS 改为 1053，再发布/启动监听 53 的 OxiDNS；请预留 DNS 切换窗口。"
 		case owned:
 			result.Message = "监听属于当前受管服务，可继续重装 Agent"
 		}
@@ -195,9 +179,7 @@ func corePortRequirements(cfg Config, doc map[string]interface{}, index int) ([]
 		}
 		if enabled {
 			address, isString := dns["listen"].(string)
-			if cfg.NativeAIO {
-				address = "0.0.0.0:1053"
-			} else if value, present := dns["listen"]; present && value != nil && !isString {
+			if value, present := dns["listen"]; present && value != nil && !isString {
 				unrecognized("dns.listen 不是字符串，无法判断外部 DNS 监听")
 			}
 			// Mihomo keeps its internal resolver enabled without opening a

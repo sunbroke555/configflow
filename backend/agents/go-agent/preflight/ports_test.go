@@ -66,12 +66,21 @@ func TestPortRequirementsUseActualDNSListeners(t *testing.T) {
 	}
 }
 
-func TestMihomoNativeAIOChecksTargetPortWithoutEnablingDNS(t *testing.T) {
+func TestMihomoNativeAIOChecksActualPortWithoutEnablingDNS(t *testing.T) {
 	cfg := portTestConfig(t, "mihomo", "dns: {enable: true, listen: '127.0.0.1:5353'}\n")
 	cfg.NativeAIO = true
-	checks := portChecksWithProbe([]Config{cfg}, fakePortProbe{})
-	if len(checks) != 3 || checks[1].Name != "mihomo DNS tcp/1053" || checks[2].Name != "mihomo DNS udp/1053" {
-		t.Fatalf("missing AIO target: %+v", checks)
+	foreign := portProcess{PID: 50, Exe: "/usr/bin/other-dns"}
+	probe := fakePortProbe{listeners: []portListener{
+		portTestListener(":1053", "udp", foreign),
+		portTestListener("192.0.2.1:5353", "udp", foreign),
+	}}
+	checks := portChecksWithProbe([]Config{cfg}, probe)
+	if portErrors(checks) || len(checks) != 3 || checks[1].Name != "mihomo DNS tcp/5353" || checks[2].Name != "mihomo DNS udp/5353" {
+		t.Fatalf("AIO custom address/port not respected: %+v", checks)
+	}
+	probe.listeners = append(probe.listeners, portTestListener("127.0.0.1:5353", "udp", foreign))
+	if checks = portChecksWithProbe([]Config{cfg}, probe); !portErrors(checks) {
+		t.Fatalf("AIO ignored an actual custom-port conflict: %+v", checks)
 	}
 	for _, content := range []string{"dns: {enable: false, listen: ':53'}", "mixed-port: 7890"} {
 		os.WriteFile(cfg.ConfigPath, []byte(content), 0600)
@@ -94,14 +103,18 @@ func TestMihomoInternalDNSWithoutListenDoesNotRequireExternalPort(t *testing.T) 
 			}
 			cfg.NativeAIO = true
 			checks = portChecksWithProbe([]Config{cfg}, probe)
-			if !portErrors(checks) || len(checks) != 3 || checks[1].Name != "mihomo DNS tcp/1053" || checks[2].Name != "mihomo DNS udp/1053" {
-				t.Fatalf("AIO did not check planned 1053 listeners: %+v", checks)
+			if portErrors(checks) || len(checks) != 2 || !strings.Contains(checks[0].Message, "内部解析") {
+				t.Fatalf("AIO internal DNS incorrectly required an external socket: %+v", checks)
 			}
 		})
 	}
 	cfg := portTestConfig(t, "mihomo", "dns: {enable: true, listen: 53}")
 	if !portErrors(portChecksWithProbe([]Config{cfg}, fakePortProbe{})) {
 		t.Fatal("invalid listen type treated as absent")
+	}
+	cfg.NativeAIO = true
+	if !portErrors(portChecksWithProbe([]Config{cfg}, fakePortProbe{})) {
+		t.Fatal("AIO invalid listen type replaced by a default port")
 	}
 }
 
@@ -304,7 +317,7 @@ func TestLegacyShellAgentUpgradeRequiresExactManagedSocat(t *testing.T) {
 	}
 }
 
-func TestAIOCurrentMihomoOn53IsMigrationNotExternalConflict(t *testing.T) {
+func TestAIOCurrentMihomoOn53ConflictsWithOxiDNS(t *testing.T) {
 	mihomo := portTestConfig(t, "mihomo", "dns: {enable: true, listen: ':53'}")
 	mihomo.NativeAIO = true
 	oxidns := portTestConfig(t, "oxidns", "plugins:\n- type: udp_server\n  args: {listen: ':53'}\n")
@@ -312,12 +325,14 @@ func TestAIOCurrentMihomoOn53IsMigrationNotExternalConflict(t *testing.T) {
 	listener := portTestListener(":53", "udp", portTestCore(mihomo))
 	probe := fakePortProbe{listeners: []portListener{listener}}
 	checks := portChecksWithProbe([]Config{mihomo, oxidns}, probe)
-	if portErrors(checks) || checks[len(checks)-1].Level != "warn" || !strings.Contains(checks[len(checks)-1].Fix, "先发布 Mihomo") {
-		t.Fatalf("migration not identified: %+v", checks)
+	if !portErrors(checks) || checks[len(checks)-1].Level != "error" || !strings.Contains(checks[len(checks)-1].Message, "其他进程占用") {
+		t.Fatalf("Mihomo's current 53 listener must block OxiDNS without automatic migration: %+v", checks)
 	}
-	probe.listeners[0].Owners = append(probe.listeners[0].Owners, portProcess{PID: 88, Exe: "/usr/bin/external"})
-	if !portErrors(portChecksWithProbe([]Config{mihomo, oxidns}, probe)) {
-		t.Fatal("foreign shared owner must block migration")
+	if !portErrors(portChecksWithProbe([]Config{mihomo, oxidns}, fakePortProbe{})) {
+		t.Fatal("overlapping configured 53 listeners must conflict even before either core starts")
+	}
+	if checks = portChecksWithProbe([]Config{mihomo}, probe); portErrors(checks) {
+		t.Fatalf("Mihomo may keep its own 53 listener when no peer conflicts: %+v", checks)
 	}
 }
 

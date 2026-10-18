@@ -105,16 +105,18 @@ func TestDeploymentDNSRechecksReadyCandidateBeforeActivation(t *testing.T) {
 	}
 }
 
-func TestDeploymentDNSUsesFinalAIOPorts(t *testing.T) {
+func TestDeploymentDNSUsesOriginalAIOPorts(t *testing.T) {
 	cfg := testDeploymentConfig(t)
 	cfg.NativeAIO = true
+	content := "dns: {enable: true, listen: '127.0.0.2:5353'}\ntun: {enable: true, dns-hijack: ['any:5353', 'tcp://any:5353']}\n"
 	useDNSCheck(t, func(candidate preflight.DNSCandidate, _ preflight.DNSOptions) preflight.Report {
-		if !strings.Contains(string(candidate.Content), "0.0.0.0:1053") || !candidate.Config.NativeAIO {
-			t.Error("DNS check must follow AIO config adaptation")
+		assertOriginalDNSDocument(t, candidate.Content, []byte(content))
+		if !candidate.Config.NativeAIO {
+			t.Error("DNS check must retain AIO identity")
 		}
-		return preflight.Report{{Name: "DNS", Level: "pass", Message: "已检查最终配置"}}
+		return preflight.Report{{Name: "DNS", Level: "pass", Message: "已检查用户配置"}}
 	})
-	s := submitBundle(t, cfg, "dns-effective", map[string][]byte{"config.yaml": []byte("dns: {enable: false, listen: '0.0.0.0:53'}\n")}, false)
+	s := submitBundle(t, cfg, "dns-effective", map[string][]byte{"config.yaml": []byte(content)}, false)
 	if s.Status != "ready" {
 		t.Fatalf("prepare failed: %+v", s)
 	}

@@ -128,6 +128,28 @@ func TestDNSRelationshipsCustomPortsAndLoops(t *testing.T) {
 	}
 }
 
+func TestDNSAIOBlocksActualPeerListenerConflictsAtAnyPort(t *testing.T) {
+	for _, test := range []struct {
+		name, mihomoListen, oxidnsListen string
+		conflict                         bool
+	}{
+		{"shared-53", ":53", ":53", true},
+		{"shared-custom-port", ":5353", "127.0.0.1:5353", true},
+		{"custom-ports", "127.0.0.1:5353", ":53", false},
+		{"separate-addresses", "127.0.0.1:53", "192.0.2.1:53", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mihomo := dnsTestCandidate("mihomo", "dns: {enable: true, listen: '"+test.mihomoListen+"', nameserver: [1.1.1.1]}", true)
+			oxidns := dnsTestCandidate("oxidns", dnsOxiConfig(test.oxidnsListen, "udp://1.1.1.1:53", false), true)
+			for _, report := range []Report{dnsTestCheck(mihomo, &oxidns), dnsTestCheck(oxidns, &mihomo)} {
+				if report.HasErrors() != test.conflict || dnsHas(report, "error", "监听冲突") != test.conflict {
+					t.Fatalf("actual peer binding conflict was misclassified: %+v", report)
+				}
+			}
+		})
+	}
+}
+
 func TestDNSWildcardDoesNotMakeRemoteUpstreamSelf(t *testing.T) {
 	for _, service := range []string{"mihomo", "oxidns"} {
 		content := "dns: {enable: true, listen: ':53', nameserver: [1.1.1.1]}"
@@ -159,6 +181,8 @@ func TestDNSHijackOnlyAIOActiveTUNIncludingPeer(t *testing.T) {
 		{"top-level", "tun: {enable: true, dns-hijack: ['any:53']}", true, true},
 		{"listener", "listeners: [{type: tun, dns-hijack: ['tcp://any:53']}]", true, true},
 		{"1053", "tun: {enable: true, dns-hijack: ['any:1053']}", true, false},
+		{"custom", "tun: {enable: true, dns-hijack: ['any:5353', 'tcp://any:7874']}", true, false},
+		{"mixed-custom-and-53", "tun: {enable: true, dns-hijack: ['any:5353', 'tcp://any:53']}", true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := dnsTestCandidate("mihomo", test.content+"\ndns: {enable: false}", test.aio)

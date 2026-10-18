@@ -44,9 +44,7 @@ func dnsDocument(candidate DNSCandidate) (map[string]interface{}, error) {
 }
 
 func dnsRequirements(cfg Config, doc map[string]interface{}, index int) ([]portRequirement, []Check) {
-	// The caller already applied native AIO adaptation. Never substitute default
-	// ports here: peer files and final candidate files may use custom ports.
-	cfg.NativeAIO = false
+	// Candidate and peer files are checked as supplied, including custom ports.
 	requirements, checks := corePortRequirements(cfg, doc, index)
 	for i := range checks {
 		checks[i].Fix = "检查实际配置的 DNS 监听地址、端口及外部 include 文件后重新检测。"
@@ -223,7 +221,7 @@ func dnsHijackChecks(cfg Config, doc map[string]interface{}) []Check {
 		for _, item := range hijacks {
 			value, _ := item.(string)
 			if value == "any:53" || value == "tcp://any:53" || value == "udp://any:53" {
-				return []Check{{Name: "DNS 劫持范围", Level: "warn", Message: "一体化模式下，TUN 对目标端口 53 的 DNS 劫持可能绕过 OxiDNS；这不是监听端口占用", Fix: "确认进入 TUN 的 DNS 请求是否应先交给 OxiDNS，并核对实际路由和排除规则。"}}
+				return []Check{{Name: "DNS 劫持范围", Level: "warn", Message: "一体化模式下，TUN 对目标端口 53 的 DNS 劫持可能绕过同机 DNS 服务；这不是监听端口占用", Fix: "确认进入 TUN 的 DNS 请求是否应先交给同机 DNS 服务，并核对实际路由和排除规则。"}}
 			}
 		}
 	}

@@ -112,6 +112,8 @@ describe('Shell Mihomo + OxiDNS installation', () => {
     expect(document.body.textContent).not.toContain('IPv4 转发')
     await expand('安装说明')
     expect(document.body.textContent).toContain('127.0.0.1:1053')
+    expect(document.body.textContent).toContain('发布时保留自定义监听地址、端口及 dns-hijack')
+    expect(document.body.textContent).not.toContain('自动将 DNS 监听')
     expect(document.body.textContent).toContain('IPv4 转发')
 
     await click('生成安装命令')
