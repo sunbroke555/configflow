@@ -5,8 +5,10 @@
         <Button variant="outline" class="min-h-11" :disabled="!groups.length" @click="toggleAll">
           <ChevronsUpDown class="size-3.5" />{{ allExpanded ? '全部收起' : '全部展开' }}
         </Button>
+        <Button variant="outline" class="min-h-11" @click="settingsOpen = true"><Settings2 class="size-3.5" />设置</Button>
       </template>
     </Toolbar>
+    <MihomoProxySettings v-model:open="settingsOpen" :settings="settings" @update:settings="applySettings" />
 
     <LoadingRows v-if="loading && !groups.length" :rows="5" />
     <SectionCard v-else-if="error && !groups.length">
@@ -18,7 +20,7 @@
       <EmptyState :icon="Search" :title="search ? '没有匹配的策略组' : '暂无策略组'" :description="search ? '换个关键词试试。' : 'Mihomo 配置中没有可展示的策略组。'" />
     </SectionCard>
 
-    <div v-else class="grid min-w-0 gap-3 xl:grid-cols-2">
+    <div v-else class="grid min-w-0 gap-3 xl:grid-cols-2" :class="{ 'select-none': settings.disableTextSelection }">
       <section v-for="group in visibleGroups" :key="group.name" class="min-w-0 rounded-xl border border-border bg-card shadow-surface">
         <header class="flex min-w-0 items-center gap-2 p-2 pl-4">
           <button type="button" class="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring"
@@ -29,11 +31,12 @@
                 <span class="break-all font-semibold text-foreground">{{ group.name }}</span>
                 <span class="chip">{{ GROUP_TYPE_LABELS[group.type] || group.type }}</span>
                 <span v-if="group.fixed" class="chip chip-warn">已固定</span>
+                <span v-if="group.hidden" class="chip">隐藏</span>
                 <span class="num text-xs text-muted-foreground">{{ group.all?.length || 0 }} 个</span>
               </span>
               <span v-if="group.now" class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
                 <ArrowRight class="size-3 shrink-0" aria-hidden="true" />
-                <span class="truncate">{{ group.now }}</span>
+                <span class="truncate">{{ group.now }}<template v-if="settings.showFinalNode && finalNode(proxies, group.now) !== group.now"> → {{ finalNode(proxies, group.now) }}</template></span>
                 <span class="num shrink-0" :class="toneClass(delayOf(group.now, group))">{{ delayText(delayOf(group.now, group)) }}</span>
               </span>
             </span>
@@ -45,17 +48,23 @@
             <Zap v-else class="size-4" />
           </Button>
         </header>
-        <div v-if="isExpanded(group.name)" class="flex flex-wrap gap-2 border-t border-border p-3">
-          <button v-for="member in membersOf(group)" :key="member" type="button"
-            class="flex min-h-11 min-w-0 max-w-full flex-col justify-center rounded-lg border px-3 py-1.5 text-left transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default"
-            :class="member === group.now ? 'border-primary-accent/60 bg-primary-soft' : 'border-border bg-background hover:border-border-strong enabled:hover:bg-accent'"
-            :disabled="!canSwitch(group) || busy.has(group.name)" :aria-pressed="member === group.now" @click="select(group, member)">
-            <span class="max-w-60 truncate text-[13px] text-foreground">{{ member }}</span>
-            <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
-              <span>{{ proxies[member]?.type || '—' }}</span>
-              <span class="num" :class="toneClass(delayOf(member, group))">{{ delayText(delayOf(member, group)) }}</span>
-            </span>
-          </button>
+        <div v-if="isExpanded(group.name)" class="space-y-3 border-t border-border p-3">
+          <div v-for="section in sectionsOf(group)" :key="section.title">
+            <div v-if="settings.groupByProvider" class="mb-1.5 text-[11.5px] text-muted-foreground">{{ section.title }} · {{ section.members.length }}</div>
+            <div class="grid gap-2" :style="{ gridTemplateColumns: `repeat(auto-fill, minmax(min(${settings.cardMinWidth}px, 100%), 1fr))` }">
+              <button v-for="member in section.members" :key="member" type="button"
+                class="flex min-h-11 min-w-0 flex-col justify-center rounded-lg border px-3 py-1.5 text-left transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default"
+                :class="member === group.now ? 'border-primary-accent/60 bg-primary-soft' : 'border-border bg-background hover:border-border-strong enabled:hover:bg-accent'"
+                :disabled="!canSwitch(group) || busy.has(group.name)" :aria-pressed="member === group.now" @click="select(group, member)">
+                <span class="truncate text-[13px] text-foreground" :title="member">{{ member }}</span>
+                <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+                  <span>{{ proxies[member]?.type || '—' }}</span>
+                  <span class="num" :class="toneClass(delayOf(member, group))">{{ delayText(delayOf(member, group)) }}</span>
+                </span>
+              </button>
+            </div>
+          </div>
+          <p v-if="!sectionsOf(group).length" class="m-0 text-xs text-muted-foreground">没有可显示的节点{{ settings.hideUnavailable ? '（已隐藏不可用节点）' : '' }}。</p>
         </div>
       </section>
     </div>
@@ -86,24 +95,33 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ArrowRight, ChevronRight, ChevronsUpDown, Loader2, Search, TriangleAlert, Zap } from '@lucide/vue'
+import { ArrowRight, ChevronRight, ChevronsUpDown, Loader2, Search, Settings2, TriangleAlert, Zap } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import Toolbar from '@/components/common/Toolbar.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
+import MihomoProxySettings from './MihomoProxySettings.vue'
 import { mihomoPanelApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { formatBytes, relativeTime } from '@/lib/format'
 import {
-  GROUP_TYPE_LABELS, SWITCHABLE_GROUP_TYPES, delayText, delayTone, latestDelay, orderedGroups, panelError,
-  type MihomoProvider, type MihomoProxy
+  GROUP_TYPE_LABELS, GROUP_TYPES, SWITCHABLE_GROUP_TYPES, delayText, delayTone, finalNode, latestDelay, loadProxySettings,
+  orderedGroups, panelError, saveProxySettings, type MihomoProvider, type MihomoProxy, type ProxyPanelSettings
 } from '@/types/mihomo'
 
 const props = defineProps<{ agentId: string; reloadToken: number }>()
 
 const proxies = ref<Record<string, MihomoProxy>>({})
 const providers = ref<MihomoProvider[]>([])
+/** 节点名 → 所属代理集合；default 是配置文件里直接写的节点 */
+const nodeProvider = ref(new Map<string, string>())
+const settings = ref<ProxyPanelSettings>(loadProxySettings())
+const settingsOpen = ref(false)
+function applySettings(value: ProxyPanelSettings) {
+  settings.value = value
+  saveProxySettings(value)
+}
 const loading = ref(false)
 const error = ref('')
 const search = ref('')
@@ -113,7 +131,7 @@ const busy = reactive(new Set<string>())
 /** 本次会话里测速得到的延迟，优先于核心记录的历史 */
 const delays = reactive(new Map<string, number>())
 
-const groups = computed(() => orderedGroups(proxies.value))
+const groups = computed(() => orderedGroups(proxies.value, settings.value.showHiddenGroups))
 const visibleGroups = computed(() => {
   const keyword = search.value.trim().toLowerCase()
   if (!keyword) return groups.value
@@ -135,9 +153,30 @@ function toggleAll() {
 
 function membersOf(group: MihomoProxy) {
   const keyword = search.value.trim().toLowerCase()
-  const members = group.all || []
-  if (!keyword || group.name.toLowerCase().includes(keyword)) return members
-  return members.filter(member => member.toLowerCase().includes(keyword))
+  let members = group.all || []
+  if (keyword && !group.name.toLowerCase().includes(keyword)) members = members.filter(member => member.toLowerCase().includes(keyword))
+  if (settings.value.hideUnavailable) {
+    members = members.filter(member => member === group.now || (delayOf(member, group) !== 0 && proxies.value[member]?.alive !== false))
+  }
+  if (settings.value.sort === 'name') members = [...members].sort((a, b) => a.localeCompare(b))
+  if (settings.value.sort === 'delay') {
+    // 未测速和超时排在最后
+    const rank = (member: string) => { const delay = delayOf(member, group); return delay && delay > 0 ? delay : Number.MAX_SAFE_INTEGER }
+    members = [...members].sort((a, b) => rank(a) - rank(b))
+  }
+  return members
+}
+
+function sectionsOf(group: MihomoProxy): Array<{ title: string; members: string[] }> {
+  const members = membersOf(group)
+  if (!settings.value.groupByProvider) return members.length ? [{ title: '', members }] : []
+  const sections = new Map<string, string[]>()
+  for (const member of members) {
+    const title = GROUP_TYPES.has(proxies.value[member]?.type || '') ? '策略组'
+      : nodeProvider.value.get(member) === 'default' || !nodeProvider.value.has(member) ? '配置节点' : nodeProvider.value.get(member) as string
+    sections.set(title, [...(sections.get(title) || []), member])
+  }
+  return [...sections].map(([title, items]) => ({ title, members: items }))
 }
 
 const canSwitch = (group: MihomoProxy) => SWITCHABLE_GROUP_TYPES.has(group.type)
@@ -179,6 +218,8 @@ async function load() {
     // /proxies 不含 proxy-providers 里的节点，合并进来才能显示策略组成员的类型和延迟
     const providerProxies = Object.fromEntries(Object.values(providerMap)
       .flatMap(provider => provider.proxies || []).map(proxy => [proxy.name, proxy]))
+    nodeProvider.value = new Map(Object.values(providerMap)
+      .flatMap(provider => (provider.proxies || []).map(proxy => [proxy.name, provider.name] as [string, string])))
     proxies.value = { ...providerProxies, ...(proxyResult.data.data?.proxies || {}) }
     providers.value = Object.values(providerMap).filter(provider => provider.vehicleType !== 'Compatible')
   } catch (failure) {
@@ -194,11 +235,25 @@ async function select(group: MihomoProxy, member: string) {
   try {
     await mihomoPanelApi.selectProxy(props.agentId, group.name, member)
     proxies.value[group.name] = { ...group, now: member, fixed: group.type === 'Selector' ? group.fixed : member }
-    notify.success(`${group.name} 已切换到 ${member}`)
+    const closed = settings.value.closeConnectionsOnSwitch ? await closeGroupConnections(group.name) : 0
+    notify.success(`${group.name} 已切换到 ${member}`, closed ? `已断开经过该策略组的 ${closed} 条连接` : undefined)
   } catch (failure) {
     notify.error('切换失败', panelError(failure))
   } finally {
     busy.delete(group.name)
+  }
+}
+
+/** 断开链路经过该策略组的连接，让后续连接走新节点；失败不影响切换结果 */
+async function closeGroupConnections(groupName: string): Promise<number> {
+  try {
+    const { data } = await mihomoPanelApi.connections(props.agentId)
+    const targets = ((data.data?.connections || []) as Array<{ id: string; chains: string[] }>)
+      .filter(connection => connection.chains.includes(groupName))
+    const results = await Promise.allSettled(targets.map(connection => mihomoPanelApi.closeConnection(props.agentId, connection.id)))
+    return results.filter(result => result.status === 'fulfilled').length
+  } catch {
+    return 0
   }
 }
 

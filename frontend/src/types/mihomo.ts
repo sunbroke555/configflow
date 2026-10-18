@@ -114,8 +114,8 @@ export function delayText(delay: number | undefined): string {
 }
 
 /** 按 GLOBAL 组成员顺序排列策略组（与配置文件中的书写顺序一致），GLOBAL 自身放最后 */
-export function orderedGroups(proxies: Record<string, MihomoProxy>): MihomoProxy[] {
-  const groups = Object.values(proxies).filter(proxy => GROUP_TYPES.has(proxy.type) && !proxy.hidden)
+export function orderedGroups(proxies: Record<string, MihomoProxy>, includeHidden = false): MihomoProxy[] {
+  const groups = Object.values(proxies).filter(proxy => GROUP_TYPES.has(proxy.type) && (includeHidden || !proxy.hidden))
   const order = proxies.GLOBAL?.all || []
   const rank = new Map(order.map((name, index) => [name, index]))
   return groups.sort((a, b) => {
@@ -155,4 +155,66 @@ export function compareSources(a: string, b: string): number {
   if (x !== null) return -1
   if (y !== null) return 1
   return a.localeCompare(b)
+}
+
+export type MemberSort = 'config' | 'delay' | 'name'
+
+/** 策略页的显示偏好，只存在当前浏览器 */
+export interface ProxyPanelSettings {
+  sort: MemberSort
+  groupByProvider: boolean
+  hideUnavailable: boolean
+  showHiddenGroups: boolean
+  closeConnectionsOnSwitch: boolean
+  showFinalNode: boolean
+  disableTextSelection: boolean
+  cardMinWidth: number
+}
+
+export const DEFAULT_CARD_MIN_WIDTH = 145
+export const CARD_MIN_WIDTH_RANGE = [100, 320] as const
+export const DEFAULT_PROXY_SETTINGS: ProxyPanelSettings = {
+  sort: 'config',
+  groupByProvider: false,
+  hideUnavailable: false,
+  showHiddenGroups: false,
+  closeConnectionsOnSwitch: true,
+  showFinalNode: false,
+  disableTextSelection: true,
+  cardMinWidth: DEFAULT_CARD_MIN_WIDTH
+}
+const PROXY_SETTINGS_KEY = 'configflow:mihomo-panel:proxy-settings'
+
+export function clampCardWidth(value: unknown): number {
+  const number = Math.round(Number(value))
+  if (!Number.isFinite(number)) return DEFAULT_CARD_MIN_WIDTH
+  return Math.min(CARD_MIN_WIDTH_RANGE[1], Math.max(CARD_MIN_WIDTH_RANGE[0], number))
+}
+
+/** 读取时逐项校验类型，旧版本或手改的存储值不会让页面出错 */
+export function loadProxySettings(): ProxyPanelSettings {
+  let stored: Record<string, unknown> = {}
+  try { stored = JSON.parse(window.localStorage.getItem(PROXY_SETTINGS_KEY) || '{}') || {} } catch { /* Fall back to defaults. */ }
+  const result = { ...DEFAULT_PROXY_SETTINGS }
+  for (const key of Object.keys(result) as Array<keyof ProxyPanelSettings>) {
+    if (typeof stored[key] === typeof result[key]) (result as Record<string, unknown>)[key] = stored[key]
+  }
+  if (!['config', 'delay', 'name'].includes(result.sort)) result.sort = 'config'
+  result.cardMinWidth = clampCardWidth(result.cardMinWidth)
+  return result
+}
+
+export function saveProxySettings(settings: ProxyPanelSettings) {
+  try { window.localStorage.setItem(PROXY_SETTINGS_KEY, JSON.stringify(settings)) } catch { /* Settings still apply for this visit. */ }
+}
+
+/** 沿 now 逐级找到最终出站节点；遇到环或超过 8 层时停在当前位置 */
+export function finalNode(proxies: Record<string, MihomoProxy>, name: string): string {
+  let current = name
+  const seen = new Set<string>()
+  while (proxies[current]?.now && GROUP_TYPES.has(proxies[current].type) && !seen.has(current) && seen.size < 8) {
+    seen.add(current)
+    current = proxies[current].now as string
+  }
+  return current
 }
