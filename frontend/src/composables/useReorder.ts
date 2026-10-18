@@ -1,5 +1,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 import Sortable from 'sortablejs'
+import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 
 export interface ReorderOptions<T> {
   /** 被排序的列表；进入排序模式时会做快照，取消时还原 */
@@ -29,6 +30,10 @@ export const useReorder = <T>(options: ReorderOptions<T>) => {
 
   let snapshot: T[] = []
   let sortable: Sortable | null = null
+
+  usePageReloadGuard(() => saving.value || (active.value && (
+    items.value.length !== snapshot.length || items.value.some((item, index) => item !== snapshot[index])
+  )))
 
   const total = computed(() => items.value.length)
 
