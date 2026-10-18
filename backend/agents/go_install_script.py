@@ -292,8 +292,8 @@ fi''',
 
         replacements.update({
             "init_detection": _CORE_INIT_DETECTION,
-            "installation_description": 'echo "先安装 Mihomo 和 OxiDNS 核心，再安装两个独立 Agent；已有核心与配置保留。"',
-            "installation_action": "安装 Mihomo 与 OxiDNS 核心及两个 Agent",
+            "installation_description": 'echo "安装 Mihomo 与 OxiDNS，并自动安装管理 Agent；已有核心与配置保留。"',
+            "installation_action": "安装 Mihomo 与 OxiDNS",
             "core_phase_state": "CORE_PHASE_COMPLETED=false\n",
             "core_cleanup_message": '''        if [ "$CORE_PHASE_COMPLETED" = true ]; then
             echo "Agent 安装未完成；两个核心的安装阶段已结束，已安装或原有的核心予以保留。修复上方 Agent 错误后可重新运行。" >&2
