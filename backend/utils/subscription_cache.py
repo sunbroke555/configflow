@@ -41,6 +41,8 @@ def save_subscription_nodes(
     }
     if metadata:
         payload['metadata'] = metadata
+        if metadata.get('fetched_at'):
+            payload['updated_at'] = metadata['fetched_at']
     try:
         get_repository().write_shared_json(
             os.path.join('subscribes', os.path.basename(cache_path)), payload,

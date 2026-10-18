@@ -16,6 +16,7 @@
       save-label="保存草稿"
       @save="saveCustomConfig()"
     >
+      <MihomoSyncInterval v-if="currentConfigType === 'mihomo'" v-model="mihomoSyncInterval" :inert="savingCustomConfig" />
       <div :inert="savingCustomConfig" class="min-h-0 min-w-0 flex-1 p-4 md:p-5">
         <YamlEditor
           v-model="customConfigContent"
@@ -634,6 +635,8 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import OxidnsSettings from '@/components/generate/OxidnsSettings.vue'
 import GenerateStudio from '@/components/generate/GenerateStudio.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
+import MihomoSyncInterval from '@/components/generate/MihomoSyncInterval.vue'
+import { isRefreshInterval } from '@/lib/subscriptionRefresh'
 import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
 import { useProfileStore } from '@/stores/profile'
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick, type Ref } from 'vue'
@@ -985,7 +988,10 @@ type ConfigType = 'mihomo' | 'surge' | 'loon' | 'mosdns'
 const customConfigDialogVisible = ref(false)
 const customConfigContent = ref('')
 const customConfigSavedContent = ref('')
-const customConfigDirty = computed(() => customConfigContent.value !== customConfigSavedContent.value)
+const mihomoSyncInterval = ref<number | string>(3600)
+const mihomoSavedSyncInterval = ref(3600)
+const customConfigDirty = computed(() => customConfigContent.value !== customConfigSavedContent.value
+  || (currentConfigType.value === 'mihomo' && mihomoSyncInterval.value !== mihomoSavedSyncInterval.value))
 const savingCustomConfig = ref(false)
 const currentConfigType = ref<ConfigType>('mihomo')
 const customConfigSession = trackEditorSession(customConfigDialogVisible, savingCustomConfig)
@@ -1565,6 +1571,7 @@ const showCustomConfigDialog = async (type: ConfigType) => {
     const response = await apiMap[type](profileId)
     customConfigContent.value = response.data.config || ''
     customConfigSavedContent.value = customConfigContent.value
+    if (type === 'mihomo') mihomoSyncInterval.value = mihomoSavedSyncInterval.value = response.data.provider_update_interval ?? 3600
     customConfigDialogVisible.value = true
   } catch (error) {
     notify.error('加载自定义配置失败')
@@ -1576,6 +1583,11 @@ const saveCustomConfig = async (close = true): Promise<PublishGuard | null> => {
   const session = customConfigSession.capture()
   const type = currentConfigType.value
   const content = customConfigContent.value
+  const interval = mihomoSyncInterval.value
+  if (type === 'mihomo' && !isRefreshInterval(interval)) {
+    notify.warning('订阅同步间隔需为 0 或 60 ~ 604800 秒的整数')
+    return null
+  }
   try {
     savingCustomConfig.value = true
     const apiMap = {
@@ -1584,9 +1596,10 @@ const saveCustomConfig = async (close = true): Promise<PublishGuard | null> => {
       loon: customConfigApi.saveLoon,
       mosdns: customConfigApi.saveMosdns
     }
-    const response = await apiMap[type]({ config: content }, profileId)
+    const response = await apiMap[type]({ config: content, ...(type === 'mihomo' ? { provider_update_interval: interval } : {}) }, profileId)
     if (!customConfigSession.isCurrent(session) || type !== currentConfigType.value) return null
     customConfigSavedContent.value = content
+    if (type === 'mihomo') mihomoSavedSyncInterval.value = interval as number
     notify.success('基础配置草稿已保存')
     if (close) customConfigDialogVisible.value = false
     return response.data.publish_guard ?? null

@@ -101,6 +101,17 @@ async function openSettings(target: string, label: string) {
 }
 
 describe('generation settings workspace integration', () => {
+  it('loads and saves the independent Mihomo provider sync interval including zero', async () => {
+    vi.mocked(customConfigApi.getMihomo).mockResolvedValueOnce({ data: { config: initialConfig, provider_update_interval: 7200 } } as any)
+    const { workspace, draft } = await openSettings('mihomo', '基础配置')
+    expect(draft.mihomoSyncInterval).toBe(7200)
+    draft.mihomoSyncInterval = 0
+    await nextTick()
+    expect(workspace.props('dirty')).toBe(true)
+    await workspace.getComponent(SettingsPublishBar).props('save')()
+    expect(customConfigApi.saveMihomo).toHaveBeenCalledExactlyOnceWith({ config: initialConfig, provider_update_interval: 0 }, 'workspace-profile')
+    expect(workspace.props('dirty')).toBe(false)
+  })
   it('submits the whole MosDNS draft in one request and returns that commit receipt', async () => {
     const { workspace, draft } = await openSettings('mosdns', '设置')
     draft.mosdnsCustomHosts = 'example.test 192.0.2.1'
@@ -129,7 +140,7 @@ describe('generation settings workspace integration', () => {
     await nextTick()
     workspace.vm.$emit('save')
     await flushPromises()
-    expect(customConfigApi[saveMethod]).toHaveBeenCalledExactlyOnceWith({ config: edited }, 'workspace-profile')
+    expect(customConfigApi[saveMethod]).toHaveBeenCalledExactlyOnceWith({ config: edited, ...(target === 'mihomo' ? { provider_update_interval: 3600 } : {}) }, 'workspace-profile')
     expect(workspace.props('open')).toBe(false)
   })
 
@@ -145,7 +156,7 @@ describe('generation settings workspace integration', () => {
     expect(notify.error).toHaveBeenCalledWith('保存基础配置失败')
     workspace.vm.$emit('save')
     await flushPromises()
-    expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '' }, 'workspace-profile')
+    expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '', provider_update_interval: 3600 }, 'workspace-profile')
     expect(workspace.props('open')).toBe(false)
   })
 
@@ -296,7 +307,7 @@ describe('generation settings workspace integration', () => {
     expect(await first).toEqual(guard('mihomo'))
     await nextTick()
     expect(workspace.props()).toMatchObject({ open: true, dirty: true, busy: false })
-    expect(customConfigApi.saveMihomo).toHaveBeenCalledWith({ config: 'submitted: true\n' }, 'workspace-profile')
+    expect(customConfigApi.saveMihomo).toHaveBeenCalledWith({ config: 'submitted: true\n', provider_update_interval: 3600 }, 'workspace-profile')
   })
 
   it('does not publish a late save response into a reopened editor session', async () => {

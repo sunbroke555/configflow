@@ -289,8 +289,8 @@
               </b>
             </div>
             <div>
-              <small class="block text-[11px] text-muted-foreground">更新间隔</small>
-              <b class="font-mono text-[15px] font-medium">{{ sub.interval ? formatInterval(sub.interval) : '—' }}</b>
+              <small class="block text-[11px] text-muted-foreground">订阅源更新</small>
+              <b class="font-mono text-[15px] font-medium">{{ formatInterval(sub.interval ?? 86400) }}</b>
             </div>
           </div>
 
@@ -396,19 +396,20 @@
           </div>
 
           <div class="grid gap-2">
-            <Label for="sub-interval">更新间隔</Label>
+            <Label for="sub-interval">订阅源更新间隔</Label>
             <div class="flex items-center gap-2">
               <Input
                 id="sub-interval"
                 v-model.number="form.interval"
                 type="number"
-                :min="60"
+                :min="0"
                 :max="604800"
                 :step="3600"
                 class="w-40 bg-background/50"
               />
-              <span class="text-xs text-muted-foreground">秒（建议 86400 = 1 天）</span>
+              <span class="text-xs text-muted-foreground">秒，0 为仅手动更新</span>
             </div>
+            <p class="m-0 text-xs text-muted-foreground">自动请求在间隔内使用缓存；设为 0 后不自动访问订阅源，Mihomo 仍可同步面板缓存。</p>
           </div>
 
           <HealthCheckFields v-model="providerHealth" provider />
@@ -538,6 +539,7 @@ import ViewToggle from '@/components/common/ViewToggle.vue'
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Motion } from 'motion-v'
 import { confirmDanger, notify } from '@/lib/feedback'
+import { isRefreshInterval, referencedProfileNames } from '@/lib/subscriptionRefresh'
 import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
 
@@ -620,6 +622,7 @@ const statusTone = (status?: SubscriptionStatusItem) => {
 
 // 格式化更新间隔
 const formatInterval = (seconds: number) => {
+  if (seconds === 0) return '仅手动'
   if (seconds < 3600) {
     return `${Math.floor(seconds / 60)} 分钟`
   } else if (seconds < 86400) {
@@ -779,15 +782,12 @@ const showAddDialog = async () => {
 
 const editSubscription = (row: Subscription) => {
   isEdit.value = true
-  form.value = { ...row }
+  form.value = { ...row, interval: row.interval ?? 86400 }
   healthError.value = ''
   impactProfiles.value = ''
-  api.get(`/subscriptions/${row.id}/health-impact`).then(({ data }) => { impactProfiles.value = [...new Set(data.map((item: any) => item.profile_name))].join('、') }).catch(() => { impactProfiles.value = '引用信息读取失败；可能影响多个配置' })
+  api.get(`/subscriptions/${row.id}/health-impact`).then(({ data }) => { impactProfiles.value = referencedProfileNames(data) }).catch(() => { impactProfiles.value = '引用信息读取失败；可能影响多个配置' })
   dialogVisible.value = true
 }
-
-const INTERVAL_MIN = 60
-const INTERVAL_MAX = 604800
 
 const saveSubscription = async () => {
   if (!form.value.name?.trim() || !form.value.url?.trim()) {
@@ -796,9 +796,9 @@ const saveSubscription = async () => {
   }
   // 原生 number 输入不像 el-input-number 那样钳制越界值，也允许留空，
   // 这里在提交前兜底，避免把越界值或空串写进订阅配置
-  const interval = Number(form.value.interval)
-  if (!Number.isFinite(interval) || interval < INTERVAL_MIN || interval > INTERVAL_MAX) {
-    notify.warning(`更新间隔需在 ${INTERVAL_MIN} ~ ${INTERVAL_MAX} 秒之间`)
+  const interval = form.value.interval
+  if (!isRefreshInterval(interval)) {
+    notify.warning('更新间隔需为 0（仅手动更新）或 60 ~ 604800 秒的整数')
     return
   }
   form.value.interval = interval

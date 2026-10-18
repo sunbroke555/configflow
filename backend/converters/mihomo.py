@@ -535,6 +535,10 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     # 添加订阅提供者 (Proxy Providers) - 只添加被策略组直接使用且启用的订阅
     # 使用本地接口而不是原始订阅 URL
     proxy_providers = {}
+    from backend.utils.subscription_refresh import DEFAULT_PROVIDER_INTERVAL, validate_refresh_interval
+    provider_interval = validate_refresh_interval(
+        config_data.get('mihomo', {}).get('provider_update_interval', DEFAULT_PROVIDER_INTERVAL),
+        'Mihomo 订阅同步间隔')
     logger.info(f"开始生成订阅 proxy-providers，使用本地接口")
     logger.info(f"Server domain: {safe_url_for_log(effective_base_url)}")
     logger.info(f"Config token: {'已配置' if config_token else '未配置'}")
@@ -555,7 +559,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                 'type': 'http',
                 'url': sub_url,
                 'path': f"./providers/{sub['name']}.yaml",
-                'interval': 3600,
+                'interval': provider_interval,
                 'health-check': build_provider_health_check(sub)
             }
 
@@ -575,7 +579,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                 'type': 'http',
                 'url': agg_url,
                 'path': f"./providers/{agg['name']}.yaml",
-                'interval': 3600,
+                'interval': provider_interval,
                 'health-check': build_provider_health_check(agg)
             }
 

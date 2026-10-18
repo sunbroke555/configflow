@@ -407,6 +407,7 @@ import ReorderBar from '@/components/shell/ReorderBar.vue'
 import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
 import { confirmDanger, notify } from '@/lib/feedback'
+import { referencedProfileNames } from '@/lib/subscriptionRefresh'
 import { listItem } from '@/lib/motion'
 import api from '@/api'
 import * as yaml from 'js-yaml'
@@ -596,7 +597,7 @@ const editAggregation = (aggregation: Aggregation) => {
   form.value = { ...aggregation }
   healthError.value = ''
   impactProfiles.value = ''
-  api.get(`/aggregations/${aggregation.id}/health-impact`).then(({ data }) => { impactProfiles.value = [...new Set(data.map((item: any) => item.profile_name))].join('、') }).catch(() => { impactProfiles.value = '引用信息读取失败；可能影响多个配置' })
+  api.get(`/aggregations/${aggregation.id}/health-impact`).then(({ data }) => { impactProfiles.value = referencedProfileNames(data) }).catch(() => { impactProfiles.value = '引用信息读取失败；可能影响多个配置' })
   dialogVisible.value = true
 }
 

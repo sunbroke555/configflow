@@ -161,7 +161,12 @@ def test_combined_legacy_compatible_controls(tmp_path, monkeypatch, case):
     response = app.test_client().get('/api/subscriptions/proxies')
     assert response.status_code == 200, response.data
     assert [p['name'] for p in yaml.safe_load(response.data)['proxies']] == expected
-    assert load_subscription_cache('s') == before
+    if case == 'duplicate-no-chain':
+        # Successful combined delivery now refreshes the per-source cache so
+        # subsequent client polls obey the upstream interval.
+        assert [n['name'] for n in load_subscription_cache('s')['nodes']] == ['Same']
+    else:
+        assert load_subscription_cache('s') == before
 
 
 @pytest.mark.parametrize('selector', ['header', 'query'])

@@ -1,4 +1,4 @@
-"""Request-local provider delivery validation, before any durable side effect."""
+"""Request-local provider validation before publishing node caches or artifacts."""
 from dataclasses import dataclass
 import json
 
@@ -143,19 +143,24 @@ def parse_provider_proxies(text, *, name='', path=''):
 
 
 def prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
-                                  allow_transport_fallback=False, source_path=''):
-    """Prepare a subscription without writes, retaining its name on failure."""
+                                  allow_transport_fallback=False, source_path='', source_prepared=False):
+    """Prepare without publishing node caches, retaining its name on failure.
+
+    source_prepared means fetch already resolves the bundle's captured source
+    under its refresh policy; do not replace that snapshot with another cache.
+    """
     from backend.utils.strategy_references import StrategyReferenceError
     try:
         return _prepare_subscription_provider(sub, config, snapshot, fetch=fetch,
-                    allow_transport_fallback=allow_transport_fallback, source_path=source_path)
+                    allow_transport_fallback=allow_transport_fallback, source_path=source_path,
+                    source_prepared=source_prepared)
     except StrategyReferenceError as exc:
         raise _provider_context(exc, name=sub.get('name', ''), path=source_path) from exc
 
 
 def _prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
-                                   allow_transport_fallback=False, source_path=''):
-    """Return exact validated output and staged cache update; never write here."""
+                                   allow_transport_fallback=False, source_path='', source_prepared=False):
+    """Return validated output and staged node-cache updates for the caller."""
     import uuid
     import yaml
     from backend.utils.sub_store_client import (get_subscription_proxies_yaml,
@@ -165,6 +170,7 @@ def _prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
     from backend.utils.dialer_references import validate_shapes
     from backend.converters.mihomo import convert_node_to_mihomo, IndentDumper
     from backend.utils.subscription_filter import filter_subscription_items
+    from backend.utils.subscription_refresh import fetch_subscription_source, source_cache_metadata
 
     fetch = fetch or get_subscription_proxies_yaml
     update = None
@@ -172,17 +178,18 @@ def _prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
     transport_error = None
     if sub.get('url'):
         try:
-            text, _source = fetch(sub['id'], sub['url'])
+            result = fetch(sub['id'], sub['url']) if source_prepared else fetch_subscription_source(sub, fetch=fetch)
+            text, _source = result
             raw_proxies = parse_provider_proxies(text, name=sub.get('name', ''), path=source_path)
             proxies = filter_subscription_items(sub, raw_proxies)
             snapshot.validate(proxies, provider_name=sub['name'])
-            if raw_proxies:
+            if raw_proxies and _source not in ('cache', 'prepared_yaml'):
                 nodes = proxies_to_nodes(raw_proxies)
                 for node in nodes:
                     node['subscription_id'] = sub['id']
                     node['subscription_name'] = sub['name']
                     node.setdefault('id', f"node_{uuid.uuid4().hex[:8]}")
-                update = (sub['id'], nodes, {'subscription_name': sub['name'], 'url': sub['url']})
+                update = (sub['id'], nodes, source_cache_metadata(sub, result))
         except StrategyReferenceError:
             raise
         except Exception as exc:
@@ -271,6 +278,7 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
     from threading import Lock
     from copy import deepcopy
     from functools import partial
+    from backend.utils.subscription_refresh import fetch_subscription_source
 
     requested_name = None
     if requested:
@@ -296,7 +304,8 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
             result = fetch_results[key]
         if owner:
             try:
-                result.set_result((subscription_fetch or fetch)(id, url))
+                sub = next(s for s in config.get('subscriptions', []) if s['id'] == id)
+                result.set_result(fetch_subscription_source(sub, fetch=subscription_fetch or fetch))
             except Exception as exc:
                 result.set_exception(exc)
         return result.result()
@@ -344,12 +353,14 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
             value = prepare_subscription_provider(sub, config, snapshot,
                                                   fetch=partial(fetch_subscription, fetch=get_subscription_proxies_yaml),
                                                   allow_transport_fallback=allow_transport_fallback,
+                                                  source_prepared=True,
                                                   source_path=definitions[name].get('path', ''))
         elif '/aggregations/' in path:
             id = path.rsplit('/aggregations/', 1)[1].split('/')[0]
             agg = next(a for a in config.get('subscription_aggregations', []) if a['id'] == id)
             value = generate_aggregation_provider(agg, config=config, main_config=main, persist=False,
-                                                  subscription_fetch=partial(fetch_subscription, fetch=get_aggregation_subscription))
+                                                  subscription_fetch=partial(fetch_subscription, fetch=get_aggregation_subscription),
+                                                  source_prepared=True)
             value['aggregation_id'] = id
         else:
             raise DialerReferenceError('拨号拓扑 Provider 必须使用当前配置空间的订阅或聚合来源')

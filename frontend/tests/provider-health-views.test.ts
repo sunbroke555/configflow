@@ -16,7 +16,7 @@ beforeEach(() => {
   vi.mocked(subscriptionApi.getAll).mockImplementation(async () => ({data:[copy(row)]}) as any)
   vi.mocked(subscriptionApi.update).mockImplementation(async (_id, payload) => {row=copy(payload);return {data:{success:true}} as any})
   vi.mocked(api.put).mockImplementation(async (_path, payload) => {row=copy(payload);return {data:{success:true}} as any})
-  vi.mocked(api.get).mockImplementation(async path => ({data: path==='/aggregations' ? [copy(row)] : path==='/proxy-groups/health-defaults' ? {provider:defaults} : path.endsWith('/count') ? {success:true,total_count:0} : path==='/subscriptions/health' ? {items:[]} : []}) as any)
+  vi.mocked(api.get).mockImplementation(async path => ({data: path==='/aggregations' ? [copy(row)] : path==='/proxy-groups/health-defaults' ? {provider:defaults} : path.endsWith('/count') ? {success:true,total_count:0} : path==='/subscriptions/health' ? {items:[]} : path.endsWith('/health-impact') ? [{kind:'node',name:'Node'}, {profile_name:''}, {profile_name:'Default'}, {profile_name:'Default'}] : []}) as any)
 })
 afterEach(() => {wrapper?.unmount();document.body.innerHTML='';vi.restoreAllMocks()})
 async function button(text:string) {
@@ -35,6 +35,8 @@ for (const [name,component] of [['subscription',Subscriptions],['aggregation',Ag
       await router.push('/');await router.isReady()
       wrapper=mount(component,{attachTo:document.body,global:{plugins:[router]}});await flushPromises()
       await button('编辑')
+      expect(document.body.textContent).toContain('引用配置：Default')
+      expect(document.body.textContent).not.toContain('引用配置：、')
       expect(vi.mocked(api.get).mock.calls.filter(([path]) => path === '/proxy-groups/health-defaults')).toHaveLength(0)
       expect((document.querySelector('[data-health="timeout"]') as HTMLInputElement).value).toBe('')
       expect((document.querySelector('[data-health="lazy"]') as HTMLSelectElement).value).toBe('unset')
@@ -71,3 +73,28 @@ for (const [name,component] of [['subscription',Subscriptions],['aggregation',Ag
     expect((document.querySelector('[data-health="enable"]') as HTMLSelectElement).value).toBe('unset')
   })
 }
+
+it('saves zero as manual-only source refresh and retains it on reopen', async () => {
+  const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:Subscriptions}]})
+  await router.push('/');await router.isReady()
+  wrapper=mount(Subscriptions,{attachTo:document.body,global:{plugins:[router]}});await flushPromises()
+  await button('编辑')
+  const input=document.querySelector('#sub-interval') as HTMLInputElement
+  input.value='0';input.dispatchEvent(new Event('input',{bubbles:true}));await flushPromises()
+  await button('保存')
+  expect(row.interval).toBe(0)
+  expect(document.body.textContent).toContain('仅手动')
+  await button('编辑')
+  expect((document.querySelector('#sub-interval') as HTMLInputElement).value).toBe('0')
+})
+
+it.each(['', '-1', '1', '60.5'])('rejects invalid source interval %s without saving', async value => {
+  const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:Subscriptions}]})
+  await router.push('/');await router.isReady()
+  wrapper=mount(Subscriptions,{attachTo:document.body,global:{plugins:[router]}});await flushPromises()
+  await button('编辑')
+  const input=document.querySelector('#sub-interval') as HTMLInputElement
+  input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));await flushPromises()
+  await button('保存')
+  expect(subscriptionApi.update).not.toHaveBeenCalled()
+})

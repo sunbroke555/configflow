@@ -138,6 +138,16 @@ async function editor() {
 }
 
 describe('Mihomo settings editor', () => {
+  it('saves a zero sync interval independently of the YAML and marks only that edit dirty', async () => {
+    const wrapper = await editor()
+    const input = wrapper.getComponent({ name: 'MihomoSyncInterval' })
+    input.vm.$emit('update:modelValue', 0)
+    await flushPromises()
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    await wrapper.getComponent(SettingsPublishBar).props('save')()
+    expect(customConfigApi.saveMihomo).toHaveBeenCalledExactlyOnceWith({ config: initialConfig, provider_update_interval: 0 }, 'bound')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+  })
   it('preserves YAML text and saves to the bound profile before returning the publish receipt', async () => {
     const wrapper = await editor()
     expect(customConfigApi.getMihomo).toHaveBeenCalledExactlyOnceWith('bound')
@@ -149,7 +159,7 @@ describe('Mihomo settings editor', () => {
     expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
     const receipt = await wrapper.getComponent(SettingsPublishBar).props('save')()
     expect(receipt).toEqual(guard)
-    expect(customConfigApi.saveMihomo).toHaveBeenCalledExactlyOnceWith({ config: text }, 'bound')
+    expect(customConfigApi.saveMihomo).toHaveBeenCalledExactlyOnceWith({ config: text, provider_update_interval: 3600 }, 'bound')
     expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
     expect(wrapper.emitted('update:open')).toBeUndefined()
   })
@@ -166,7 +176,7 @@ describe('Mihomo settings editor', () => {
     expect(wrapper.emitted('update:open')).toBeUndefined()
     wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft')
     await flushPromises()
-    expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '' }, 'bound')
+    expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '', provider_update_interval: 3600 }, 'bound')
     expect(wrapper.emitted('update:open')).toEqual([[false]])
   })
 

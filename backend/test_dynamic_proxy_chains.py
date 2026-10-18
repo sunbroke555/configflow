@@ -11,6 +11,25 @@ from backend.utils.provider_delivery import prepare_provider_bundle
 from backend.test_proxy_chains import chain, node, profile
 
 
+@pytest.fixture(autouse=True)
+def isolated_source_cache(tmp_path, monkeypatch):
+    from backend.common import config
+    from backend.common.config_repository import ProfileRepository
+    monkeypatch.setattr(config, '_repository', ProfileRepository(tmp_path))
+    config.reset_config_context()
+    yield
+    config.reset_config_context()
+
+
+def expire_source_download():
+    from backend.common.config import get_repository
+    from backend.utils.subscription_refresh import _download_cache_path
+    path = _download_cache_path('https://feed.test')
+    cached = get_repository().read_shared_json(path)
+    cached['fetched_at'] = '2000-01-01T00:00:00+00:00'
+    get_repository().write_shared_json(path, cached)
+
+
 def dynamic_profile(kind='url-test'):
     config = profile({'id': 'exit', 'name': 'Exit', 'type': kind,
                       'subscriptions': ['feed'], 'regex': '^US-', 'url': 'https://probe.test',
@@ -63,6 +82,9 @@ def test_group_exit_has_independent_strategy_and_live_provider_membership(kind, 
     assert len({item['local_path'] for item in downloads}) == 2
     assert len({item['url'] for item in downloads}) == 1
     membership[:] = ['US-new', 'US-extra', 'HK-new']
+    prepare_provider_bundle(config, main)
+    assert len(calls) == 1  # Polling before expiry must not refresh the source.
+    expire_source_download()
     refreshed = prepare_provider_bundle(config, main)
     assert len(calls) == 2
     assert all([p['name'] for p in yaml.safe_load(item['content'])['proxies']] == membership for item in refreshed)
@@ -314,6 +336,7 @@ def test_readable_provider_names_survive_refresh_and_preserve_chain_isolation(re
         assert override['dialer-proxy'] == dialer
         assert provider_proxy_name({'name': 'US-old'}, override) == f'{provider_name}_{marker}US-old'
     membership[:] = ['US-new', 'HK-new']
+    expire_source_download()
     bundle = prepare_provider_bundle(config, main)
     payloads = {item['name']: yaml.safe_load(item['content'])['proxies'] for item in bundle}
     validate_emitted(main, provider_proxies=payloads, require_providers=True)
@@ -359,8 +382,11 @@ def test_combined_prepared_source_is_reused_by_aggregation_without_fetch(monkeyp
     config['proxy_groups'][1]['aggregations'] = ['agg']
     config['subscription_aggregations'] = [{'id': 'agg', 'name': 'Aggregate', 'subscriptions': ['feed']}]
     main = yaml.safe_load(generate_mihomo_config(config, preflight_providers=False))
+    from backend.utils.subscription_refresh import remember_source_download
+    remember_source_download(config['subscriptions'][0], (provider_text(['US-stale']), 'rendered_yaml'))
     monkeypatch.setattr('backend.routes.subscriptions.get_subscription_proxies_yaml',
                         lambda *_: pytest.fail('Prepared subscription bytes must not be fetched again'))
     bundle = prepare_provider_bundle(config, main,
         prepared={'Feed': {'content': provider_text(['US-captured']), 'cache_updates': []}})
     assert all(yaml.safe_load(item['content'])['proxies'][0]['name'] == 'US-captured' for item in bundle)
+    assert all(not item['cache_updates'] for item in bundle)

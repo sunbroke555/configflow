@@ -94,8 +94,10 @@ def test_standalone_uri_activation_and_transport_cache_controls(tmp_path, monkey
     fetch.assert_called_once()
     convert.assert_called_once_with('opaque://exit')
     network.assert_not_called()
-    if chain or fallback or consumer == 'combined':
+    if chain or fallback:
         assert load_subscription_cache('s') == before
+    else:
+        assert [n['name'] for n in load_subscription_cache('s')['nodes']] == ['Same', 'Same', 'DIRECT']
     if chain:
         assert artifact.read_text() == 'last-good'
     else:

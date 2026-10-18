@@ -1765,7 +1765,11 @@ class ProfileRepository:
         shared = document['shared']
         catalogs = {key: _items_by_id(shared.get(key), key) for key in SHARED_FIELDS}
         from backend.utils.health_check import validate_health
+        from backend.utils.subscription_refresh import validate_refresh_interval
         try:
+            for source in catalogs['subscriptions'].values():
+                if 'interval' in source:
+                    validate_refresh_interval(source['interval'])
             for kind in ('subscriptions', 'subscription_aggregations'):
                 for source in catalogs[kind].values():
                     if 'health_check' in source:

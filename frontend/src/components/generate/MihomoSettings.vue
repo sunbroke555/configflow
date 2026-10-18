@@ -7,15 +7,19 @@ import LoadingRows from '@/components/common/LoadingRows.vue'
 import { Button } from '@/components/ui/button'
 import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
+import MihomoSyncInterval from './MihomoSyncInterval.vue'
+import { isRefreshInterval } from '@/lib/subscriptionRefresh'
 
 const props = defineProps<{ open: boolean; profileId: string; contextLabel: string }>()
 const emit = defineEmits<{ 'update:open': [value: boolean] }>()
 const content = ref('')
 const savedContent = ref('')
+const syncInterval = ref<number | string>(3600)
+const savedSyncInterval = ref(3600)
 const loading = ref(false)
 const saving = ref(false)
 const loadError = ref('')
-const dirty = computed(() => content.value !== savedContent.value)
+const dirty = computed(() => content.value !== savedContent.value || syncInterval.value !== savedSyncInterval.value)
 let session = 0
 let disposed = false
 const current = (request: number) => !disposed && props.open && session === request
@@ -28,7 +32,10 @@ async function load() {
   content.value = savedContent.value = ''
   try {
     const response = await customConfigApi.getMihomo(props.profileId)
-    if (current(request)) content.value = savedContent.value = response.data.config || ''
+    if (current(request)) {
+      content.value = savedContent.value = response.data.config || ''
+      syncInterval.value = savedSyncInterval.value = response.data.provider_update_interval ?? 3600
+    }
   } catch (failure: any) {
     if (current(request)) loadError.value = failure?.response?.data?.message || failure?.message || '基础配置读取失败，请重试。'
   } finally {
@@ -40,11 +47,17 @@ async function save(close = true): Promise<PublishGuard | null> {
   if (!props.open || disposed || loading.value || loadError.value || saving.value) return null
   const request = session
   const submitted = content.value
+  const interval = syncInterval.value
+  if (!isRefreshInterval(interval)) {
+    notify.warning('订阅同步间隔需为 0 或 60 ~ 604800 秒的整数')
+    return null
+  }
   saving.value = true
   try {
-    const response = await customConfigApi.saveMihomo({ config: submitted }, props.profileId)
+    const response = await customConfigApi.saveMihomo({ config: submitted, provider_update_interval: interval }, props.profileId)
     if (!current(request)) return null
     savedContent.value = submitted
+    savedSyncInterval.value = interval
     notify.success('基础配置草稿已保存')
     if (close) emit('update:open', false)
     return response.data.publish_guard ?? null
@@ -74,8 +87,11 @@ onUnmounted(() => { disposed = true })
       <p class="mb-3 break-words">{{ loadError }}</p>
       <Button variant="outline" class="min-h-11" @click="load">重新读取</Button>
     </div>
-    <div v-else :inert="saving" class="min-h-0 min-w-0 flex-1 p-4 md:p-5">
-      <YamlEditor v-model="content" class="h-full min-h-0" placeholder="输入 Mihomo 基础 YAML 配置，例如 mixed-port、dns、tun。" />
+    <div v-else :inert="saving" class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <MihomoSyncInterval v-model="syncInterval" />
+      <div class="min-h-0 flex-1 p-4 md:p-5">
+        <YamlEditor v-model="content" class="h-full min-h-0" placeholder="输入 Mihomo 基础 YAML 配置，例如 mixed-port、dns、tun。" />
+      </div>
     </div>
     <template #footer="{ disabled }">
       <SettingsPublishBar :open="open" :profile-id="profileId" service-type="mihomo" :disabled="disabled"

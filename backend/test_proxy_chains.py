@@ -260,7 +260,7 @@ def test_provider_receives_original_catalog_and_never_automatic_chain_copy(monke
     config['subscription_aggregations'] = [{'id': 'agg', 'name': 'Aggregate', 'nodes': ['b']}]
     before = deepcopy(config)
     calls = []
-    def provider(aggregation, *, config, main_config, persist, subscription_fetch=None):
+    def provider(aggregation, *, config, main_config, persist, subscription_fetch=None, source_prepared=False):
         calls.append(config)
         assert persist is False
         assert config == before

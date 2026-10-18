@@ -277,12 +277,20 @@ def handle_custom_mihomo_config():
     if request.method == 'GET':
         # 获取自定义配置（从嵌套结构中读取）
         mihomo_config = config_data['mihomo'].get('custom_config', '')
-        return jsonify({'config': mihomo_config})
+        return jsonify({'config': mihomo_config,
+                        'provider_update_interval': config_data['mihomo'].get('provider_update_interval', 3600)})
 
     elif request.method == 'POST':
         # 保存自定义配置（保存到嵌套结构中）
         try:
             custom_config = request.json.get('config', '')
+            if 'provider_update_interval' in request.json:
+                from backend.utils.subscription_refresh import validate_refresh_interval
+                try:
+                    interval = validate_refresh_interval(request.json['provider_update_interval'], 'Mihomo 订阅同步间隔')
+                except ValueError as exc:
+                    return jsonify({'success': False, 'message': str(exc)}), 400
+                config_data['mihomo']['provider_update_interval'] = interval
             # 预先做 YAML 校验：避免把坏的 custom_config 写进 config.json，
             # 下次生成时反而更难定位问题（生成路径也会 fail-closed）。
             if custom_config and custom_config.strip():
