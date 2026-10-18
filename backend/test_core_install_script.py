@@ -24,7 +24,7 @@ def harness(tmp_path, manager="systemd", **options):
         (root / directory).mkdir(parents=True, exist_ok=True)
     if manager == "systemd":
         (root / "run/systemd/system").mkdir(parents=True)
-    else:
+    elif manager == "openrc":
         (root / "sbin/openrc-run").write_text("#!/bin/sh\n")
         (root / "sbin/openrc-run").chmod(0o755)
     for network in ("tcp", "udp", "tcp6", "udp6"):
@@ -73,7 +73,7 @@ if os.environ.get('FAIL_VALIDATE') == name: raise SystemExit(29)
     installer.write_text(source)
     command_bodies = {
         "id": "print(os.environ.get('FAKE_UID', '0'))",
-        "uname": "print('Linux' if sys.argv[1] == '-s' else os.environ.get('ARCH', 'x86_64'))",
+        "uname": "print(os.environ.get('OS_NAME', 'Linux') if sys.argv[1] == '-s' else os.environ.get('ARCH', 'x86_64'))",
         "sleep": """from pathlib import Path
 if os.environ.get('LATE_TUN_READY') and sys.argv[1] == '1':
     root = Path(os.environ['ROOT'])
@@ -112,7 +112,9 @@ else:
     service_body = """name = os.path.basename(sys.argv[0])
 args = sys.argv[1:]
 with open(os.environ['EVENTS'], 'a') as log: log.write(name + ' ' + ' '.join(args) + '\\n')
-if args[0] == 'show': print('12345' if '--property=MainPID' in args else 'not-found'); raise SystemExit(0)
+if args[0] == 'show':
+    print('12345' if '--property=MainPID' in args else ('loaded' if os.environ.get('EXISTING_SERVICE') == args[1] else 'not-found'))
+    raise SystemExit(0)
 action = args[0] if name != 'rc-service' else args[1]
 service = args[-1] if name == 'systemctl' else (args[0] if name == 'rc-service' else args[1])
 if os.environ.get('FAIL_SERVICE') == action + ':' + service or os.environ.get('FAIL_ROLLBACK') == action + ':' + service:
@@ -158,6 +160,24 @@ else:
         del command_bodies["stat"]
     if options.pop("NO_DIG", False):
         del command_bodies["dig"]
+    if options.pop("DOWNLOAD_TOOL", "curl") == "wget":
+        command_bodies["wget"] = command_bodies.pop("curl").replace("'--output'", "'-O'")
+    package_manager = options.pop("PACKAGE_MANAGER", None)
+    missing_commands = options.pop("MISSING_COMMANDS", ())
+    if package_manager:
+        command_bodies[package_manager] = """from pathlib import Path
+import shutil
+name = os.path.basename(sys.argv[0])
+with open(os.environ['EVENTS'], 'a') as log:
+    log.write('package ' + name + ' ' + ' '.join(sys.argv[1:]) + ' DEBIAN_FRONTEND=' + os.environ.get('DEBIAN_FRONTEND', '') + '\\n')
+updating = sys.argv[1:] == ['update']
+if os.environ.get('FAIL_PACKAGE') == ('update' if updating else 'install'): raise SystemExit(41)
+if updating or os.environ.get('PACKAGE_NO_COMMANDS'): raise SystemExit(0)
+commands = Path(os.environ['PATH'])
+for executable in (Path(os.environ['FIXTURE']) / 'unavailable-commands').iterdir():
+    # Restore the real fixture command only after a successful fake transaction.
+    shutil.move(str(executable), commands / executable.name)
+"""
     for name in ("sysctl", "ip", "iptables", "nft", "modprobe", "pct"):
         command_bodies[name] = "with open(os.environ['EVENTS'], 'a') as log: log.write('FORBIDDEN ' + os.path.basename(sys.argv[0]) + '\\n')\nraise SystemExit(99)"
     for name, body in command_bodies.items():
@@ -167,12 +187,19 @@ else:
     for name in ("awk", "cat", "chmod", "cp", "gzip", "mkdir", "mktemp", "mv", "rm", "rmdir", "sed", "sleep", "tail", "tar", "sh"):
         if not (commands / name).exists():
             (commands / name).symlink_to(shutil.which(name))
-    env = dict(os.environ, PATH=str(commands), EVENTS=str(events), FIXTURE=str(tmp_path), ROOT=str(root), **options)
+    unavailable = tmp_path / "unavailable-commands"
+    unavailable.mkdir()
+    for name in missing_commands:
+        (commands / name).rename(unavailable / name)
+    env = dict(os.environ)
+    # CI may export this globally; tests must observe what the installer sets.
+    env.pop("DEBIAN_FRONTEND", None)
+    env.update(PATH=str(commands), EVENTS=str(events), FIXTURE=str(tmp_path), ROOT=str(root), **options)
     return installer, env, root, events
 
 
-def run(installer, env):
-    return subprocess.run(["sh", str(installer)], env=env, text=True, capture_output=True, timeout=30, start_new_session=True)
+def run(installer, env, *args):
+    return subprocess.run(["sh", str(installer), *args], env=env, text=True, errors="replace", capture_output=True, timeout=30, start_new_session=True)
 
 
 def assert_uninstalled(root):
@@ -184,13 +211,45 @@ def assert_uninstalled(root):
     assert not (root / "run/configflow-core-install.lock").exists()
 
 
+def seed_existing_core(root, service, manager="systemd"):
+    """Represent an externally managed install, without ConfigFlow receipts."""
+    unit = f"etc/systemd/system/{service}.service" if manager == "systemd" else f"etc/init.d/{service}"
+    contents = {
+        f"usr/local/bin/{service}": b"existing core executable\n",
+        f"etc/{service}/config.yaml": b"# existing user configuration\n",
+        f"etc/{service}/state.db": b"existing runtime state\x00\x01",
+        unit: b"# existing service definition\n",
+    }
+    for relative, data in contents.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    (root / f"usr/local/bin/{service}").chmod(0o755)
+    return contents
+
+
+def assert_existing_core_untouched(root, service, contents, events):
+    for relative, data in contents.items():
+        assert (root / relative).read_bytes() == data
+    assert not (root / f"etc/{service}/.configflow-core-install").exists()
+    for line in events.read_text().splitlines():
+        assert not re.match(rf"systemctl (?:start|stop|restart|enable|disable) {service}(?:\.service)?$", line)
+        assert not re.match(rf"rc-service {service} (?:start|stop|restart)$", line)
+        assert not re.match(rf"rc-update (?:add|del) {service}(?: |$)", line)
+
+
+def operational_events(events):
+    """Ignore read-only systemd discovery while checking absence of changes."""
+    return [line for line in events.read_text().splitlines() if not line.startswith("systemctl show ")]
+
+
 def test_generated_script_syntax_and_bootstrap_config(tmp_path):
     source = generate_core_install_script()
+    assert source.startswith("#!/bin/sh\n# ConfigFlow core installer interface: 1\n")
     script = tmp_path / "script.sh"
     script.write_text(source)
     assert subprocess.run(["sh", "-n", str(script)], capture_output=True).returncode == 0
     mihomo = yaml.safe_load(source.split("<<MIHOMO_CONFIG\n", 1)[1].split("\nMIHOMO_CONFIG", 1)[0])
-    oxidns = yaml.safe_load(source.split("<<'OXIDNS_CONFIG'\n", 1)[1].split("\nOXIDNS_CONFIG", 1)[0])
     assert mihomo["tun"]["enable"] == "$TUN_ENABLED"
     assert mihomo["tun"]["dns-hijack"] == ["any:1053", "tcp://any:1053"]
     assert mihomo["tun"]["auto-route"] is True
@@ -198,10 +257,135 @@ def test_generated_script_syntax_and_bootstrap_config(tmp_path):
     assert mihomo["dns"]["listen"] == "0.0.0.0:1053"
     assert mihomo["dns"]["nameserver"] == ["223.5.5.5", "119.29.29.29"]
     assert all(mihomo[key] == 0 for key in ("port", "socks-port", "mixed-port", "redir-port", "tproxy-port"))
-    assert oxidns["plugins"][0]["args"]["upstreams"] == [{"addr": "udp://127.0.0.1:1053"}]
     assert "/opt/configflow-agent" not in source
     assert "iptables" not in source
     assert "sysctl -w net.ipv4.ip_forward=1" in source  # Printed repair instructions only.
+
+
+@pytest.mark.parametrize("package_manager,install_prefix", [
+    ("apk", "apk add --no-cache"),
+    ("apt-get", "apt-get install -y --no-install-recommends"),
+    ("dnf", "dnf install -y"),
+    ("yum", "yum install -y"),
+    ("pacman", "pacman -S --needed --noconfirm"),
+    ("zypper", "zypper --non-interactive install --no-recommends"),
+])
+def test_missing_dependencies_installed_before_core_download(tmp_path, package_manager, install_prefix):
+    installer, env, root, events = harness(
+        tmp_path, "openrc" if package_manager == "apk" else "systemd",
+        PACKAGE_MANAGER=package_manager,
+        MISSING_COMMANDS=("awk", "cat", "chmod", "cp", "gzip", "mkdir", "mktemp", "mv", "rm", "rmdir", "sed", "sha256sum", "sleep", "tail", "tar", "curl"),
+    )
+    result = run(installer, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = events.read_text()
+    package_events = [line for line in log.splitlines() if line.startswith("package ")]
+    transaction = next(line for line in package_events if line.startswith("package " + install_prefix))
+    assert transaction.split(" DEBIAN_FRONTEND=", 1)[0] == (
+        "package " + install_prefix + " gawk coreutils gzip sed tar curl ca-certificates"
+    )
+    assert log.index(transaction) < log.index("download ") < log.index("validate mihomo")
+    if package_manager == "apt-get":
+        assert package_events[0].startswith("package apt-get update ")
+        assert transaction.endswith("DEBIAN_FRONTEND=noninteractive")
+    else:
+        assert len(package_events) == 1
+    assert "-Sy" not in log and " upgrade " not in log
+    assert (root / "etc/mihomo/.configflow-core-install").is_file()
+    # A second invocation must not rerun the package manager or restart cores.
+    assert run(installer, env).returncode == 0
+    assert events.read_text() == log
+
+
+@pytest.mark.parametrize("missing", [(), ("tar",)])
+def test_existing_wget_and_custom_trust_are_preserved(tmp_path, missing):
+    installer, env, root, events = harness(
+        tmp_path, PACKAGE_MANAGER="apk", DOWNLOAD_TOOL="wget", MISSING_COMMANDS=missing,
+        SSL_CERT_FILE="/custom/company-ca.pem", CURL_CA_BUNDLE="/custom/curl-ca.pem",
+    )
+    result = run(installer, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    package_events = [line for line in events.read_text().splitlines() if line.startswith("package ")]
+    assert package_events == (["package apk add --no-cache tar DEBIAN_FRONTEND="] if missing else [])
+    assert not (Path(env["PATH"]) / "curl").exists()
+    assert env["SSL_CERT_FILE"] == "/custom/company-ca.pem"
+    assert env["CURL_CA_BUNDLE"] == "/custom/curl-ca.pem"
+
+
+def test_missing_dependencies_without_supported_package_manager_stop_before_core_changes(tmp_path):
+    installer, env, root, events = harness(tmp_path, MISSING_COMMANDS=("tar", "curl"))
+    result = run(installer, env)
+    assert result.returncode != 0
+    assert "未找到支持的包管理器" in result.stderr
+    assert "tar curl ca-certificates" in result.stderr
+    assert operational_events(events) == []
+    assert_uninstalled(root)
+
+
+@pytest.mark.parametrize("package_manager", ["apk", "apt-get", "dnf", "yum", "pacman", "zypper"])
+def test_dependency_install_failure_never_downloads_or_installs_cores(tmp_path, package_manager):
+    installer, env, root, events = harness(
+        tmp_path, PACKAGE_MANAGER=package_manager, MISSING_COMMANDS=("tar",), FAIL_PACKAGE="install",
+    )
+    result = run(installer, env)
+    assert result.returncode != 0
+    assert "系统依赖安装失败" in result.stderr
+    assert "软件源及包管理器锁" in result.stderr
+    assert "系统依赖会保留" in result.stderr
+    assert all(line.startswith("package ") for line in operational_events(events))
+    assert_uninstalled(root)
+
+
+def test_failed_apt_update_does_not_install_packages_or_cores(tmp_path):
+    installer, env, root, events = harness(
+        tmp_path, PACKAGE_MANAGER="apt-get", MISSING_COMMANDS=("tar",), FAIL_PACKAGE="update",
+    )
+    result = run(installer, env)
+    assert result.returncode != 0
+    assert operational_events(events) == ["package apt-get update DEBIAN_FRONTEND="]
+    assert_uninstalled(root)
+
+
+def test_nominal_dependency_install_rechecks_actual_commands(tmp_path):
+    installer, env, root, events = harness(
+        tmp_path, PACKAGE_MANAGER="apk", MISSING_COMMANDS=("tar", "curl"), PACKAGE_NO_COMMANDS="1",
+    )
+    result = run(installer, env)
+    assert result.returncode != 0
+    assert "包管理器执行后仍缺少依赖：tar curl/wget" in result.stderr
+    assert "尚未下载或安装核心" in result.stderr
+    assert "download " not in events.read_text()
+    assert_uninstalled(root)
+
+
+@pytest.mark.parametrize("manager,options", [
+    ("systemd", {"FAKE_UID": "1000"}),
+    ("systemd", {"OS_NAME": "Darwin"}),
+    ("systemd", {"ARCH": "riscv64"}),
+    ("none", {}),
+])
+def test_unsupported_environment_never_installs_dependencies(tmp_path, manager, options):
+    installer, env, root, events = harness(
+        tmp_path, manager, PACKAGE_MANAGER="apk", MISSING_COMMANDS=("tar", "curl"), **options,
+    )
+    result = run(installer, env)
+    assert result.returncode != 0
+    assert events.read_text() == ""
+    assert_uninstalled(root)
+
+
+def test_later_core_failure_keeps_installed_dependencies(tmp_path):
+    installer, env, root, events = harness(
+        tmp_path, PACKAGE_MANAGER="apk", MISSING_COMMANDS=("tar",), FAIL_DOWNLOAD="1",
+    )
+    result = run(installer, env)
+    assert result.returncode != 0
+    assert "系统依赖会保留" in result.stderr
+    assert "ca-certificates / 自定义 CA 信任" in result.stderr
+    assert (Path(env["PATH"]) / "tar").exists()
+    assert "package apk add --no-cache tar" in events.read_text()
+    assert "package apk del" not in events.read_text()
+    assert_uninstalled(root)
 
 
 @pytest.mark.parametrize("manager", ["systemd", "openrc"])
@@ -260,17 +444,173 @@ def test_dns_failure_even_zero_exit_servfail_rolls_back(tmp_path, failure):
     assert_uninstalled(root)
 
 
-def test_preserve_existing_configuration_and_refuse_install(tmp_path):
+def test_existing_partial_configuration_is_skipped_while_other_core_installs(tmp_path):
     installer, env, root, events = harness(tmp_path)
     path = root / "etc/oxidns/config.yaml"
     path.parent.mkdir()
     path.write_text("original config")
     result = run(installer, env)
-    assert result.returncode != 0
-    assert "已有核心、配置或服务" in result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "跳过" in result.stdout
     assert path.read_text() == "original config"
+    assert "svenshi/oxidns" not in events.read_text()
+    assert (root / "usr/local/bin/mihomo").exists()
+    assert not (root / "usr/local/bin/oxidns").exists()
+    assert "oxidns" not in "\n".join(line for line in operational_events(events) if not line.startswith("download "))
+
+
+@pytest.mark.parametrize("manager", ["systemd", "openrc"])
+@pytest.mark.parametrize("selected,port,asset,other", [
+    ("mihomo", 1053, "MetaCubeX/mihomo", "oxidns"),
+    ("oxidns", 53, "svenshi/oxidns", "mihomo"),
+])
+def test_single_core_installs_only_selected_binary_service_and_dns(tmp_path, manager, selected, port, asset, other):
+    installer, env, root, events = harness(tmp_path, manager)
+    result = run(installer, env, "--core", selected)
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = events.read_text()
+    downloads = [line for line in log.splitlines() if line.startswith("download ")]
+    assert len(downloads) == 1 and asset in downloads[0]
+    assert f"validate {selected}" in log
+    assert f"validate {other}" not in log
+    assert (root / f"usr/local/bin/{selected}").is_file()
+    assert (root / f"etc/{selected}/.configflow-core-install").is_file()
+    assert not (root / f"usr/local/bin/{other}").exists()
+    assert not (root / f"etc/{other}").exists()
+    queries = [line for line in log.splitlines() if line.startswith("dig ")]
+    assert len(queries) == 2
+    assert all(f" -p {port} " in line for line in queries)
+    assert sum("+tcp" in line for line in queries) == 1
+    assert other not in "\n".join(operational_events(events))
+    if selected == "oxidns":
+        config = yaml.safe_load((root / "etc/oxidns/config.yaml").read_text())
+        upstreams = config["plugins"][0]["args"]["upstreams"]
+        assert upstreams == [{"addr": "udp://223.5.5.5"}, {"addr": "udp://119.29.29.29"}]
+        assert "公共" in result.stdout
+        assert "IPv4 转发" not in result.stdout
+        assert "tun.enable" not in result.stdout
+
+
+@pytest.mark.parametrize("manager", ["systemd", "openrc"])
+@pytest.mark.parametrize("existing,new,occupied_port", [("mihomo", "oxidns", "041D"), ("oxidns", "mihomo", "0035")])
+def test_both_installs_missing_core_without_touching_existing_peer(tmp_path, manager, existing, new, occupied_port):
+    installer, env, root, events = harness(tmp_path, manager)
+    contents = seed_existing_core(root, existing, manager)
+    with (root / "proc/net/udp").open("a") as file:
+        file.write(f"0: 00000000:{occupied_port} 00000000:0000 07\n")
+    result = run(installer, env, "--core", "both")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "跳过" in result.stdout
+    assert (root / f"etc/{new}/.configflow-core-install").is_file()
+    assert_existing_core_untouched(root, existing, contents, events)
+    log = events.read_text()
+    assert len([line for line in log.splitlines() if line.startswith("download ")]) == 1
+    assert f"validate {existing}" not in log
+    assert f"validate {new}" in log
+    queries = [line for line in log.splitlines() if line.startswith("dig ")]
+    assert len(queries) == 2
+    new_port = 53 if new == "oxidns" else 1053
+    assert all(f" -p {new_port} " in line for line in queries)
+    if new == "oxidns":
+        config = yaml.safe_load((root / "etc/oxidns/config.yaml").read_text())
+        assert config["plugins"][0]["args"]["upstreams"] == [{"addr": "udp://127.0.0.1:1053"}]
+        assert "127.0.0.1:1053" in result.stdout
+        assert "tun.enable" not in result.stdout
+    else:
+        assert "已有 OxiDNS 的上游保持原样" in result.stdout
+        assert "127.0.0.1:1053" in result.stdout
+
+
+@pytest.mark.parametrize("selected", ["both", "mihomo", "oxidns"])
+def test_existing_selected_cores_skip_without_package_or_service_operations(tmp_path, selected):
+    installer, env, root, events = harness(
+        tmp_path, PACKAGE_MANAGER="apk", MISSING_COMMANDS=("awk", "tar", "curl", "sha256sum", "cat"),
+    )
+    contents = {service: seed_existing_core(root, service) for service in ("mihomo", "oxidns")}
+    result = run(installer, env, "--core", selected)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "跳过" in result.stdout
+    assert operational_events(events) == []
+    for service, files in contents.items():
+        assert_existing_core_untouched(root, service, files, events)
+    assert not (root / "run/configflow-core-install.lock").exists()
+
+
+@pytest.mark.parametrize("evidence", ["binary", "service", "path", "loaded-service"])
+def test_external_mihomo_installation_is_recognized_without_default_config(tmp_path, evidence):
+    installer, env, root, events = harness(tmp_path, EXISTING_SERVICE="mihomo.service" if evidence == "loaded-service" else "")
+    path = None
+    if evidence == "binary":
+        path = root / "usr/local/bin/mihomo"
+    elif evidence == "service":
+        path = root / "etc/systemd/system/mihomo.service"
+    elif evidence == "path":
+        path = Path(env["PATH"]) / "mihomo"
+    if path is not None:
+        path.write_text("#!/bin/sh\nexit 97\n")
+        path.chmod(0o755)
+    result = run(installer, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "跳过" in result.stdout
+    assert not (root / "etc/mihomo").exists()
+    assert (root / "etc/oxidns/.configflow-core-install").is_file()
+    assert "MetaCubeX/mihomo" not in events.read_text()
+    assert not any("mihomo" in line for line in operational_events(events))
+    if path is not None:
+        assert path.read_text() == "#!/bin/sh\nexit 97\n"
+
+
+@pytest.mark.parametrize("args", [("--core", "invalid"), ("--core",), ("--bad-option",), ("mihomo",)])
+def test_invalid_core_arguments_reject_before_dependency_or_service_actions(tmp_path, args):
+    installer, env, root, events = harness(tmp_path, PACKAGE_MANAGER="apk", MISSING_COMMANDS=("tar", "curl"))
+    result = run(installer, env, *args)
+    assert result.returncode != 0
+    assert events.read_text() == ""
+    assert_uninstalled(root)
+
+
+@pytest.mark.parametrize("selected,other_port", [("oxidns", "041D"), ("mihomo", "0035")])
+@pytest.mark.parametrize("network,state", [("tcp", "0A"), ("udp", "07"), ("tcp6", "0A"), ("udp6", "07")])
+def test_single_core_ignores_unrelated_dns_port(tmp_path, selected, other_port, network, state):
+    installer, env, root, events = harness(tmp_path)
+    with (root / f"proc/net/{network}").open("a") as file:
+        file.write(f"0: 00000000:{other_port} 00000000:0000 {state}\n")
+    result = run(installer, env, "--core", selected)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / f"etc/{selected}/.configflow-core-install").is_file()
+
+
+@pytest.mark.parametrize("selected,port", [("oxidns", "0035"), ("mihomo", "041D")])
+def test_single_core_checks_its_own_dns_port_before_download(tmp_path, selected, port):
+    installer, env, root, events = harness(tmp_path)
+    with (root / "proc/net/udp").open("a") as file:
+        file.write(f"0: 00000000:{port} 00000000:0000 07\n")
+    result = run(installer, env, "--core", selected)
+    assert result.returncode != 0
+    assert "端口被占用" in result.stderr
     assert "download " not in events.read_text()
-    assert not (root / "usr/local/bin/mihomo").exists()
+    assert_uninstalled(root)
+
+
+@pytest.mark.parametrize("manager", ["systemd", "openrc"])
+@pytest.mark.parametrize("failure", ["service", "dns", "package"])
+def test_install_missing_core_failure_preserves_existing_mihomo(tmp_path, manager, failure):
+    options = {"FAIL_SERVICE": "start:oxidns"} if failure == "service" else {"FAIL_DIG": "servfail"}
+    if failure == "package":
+        options = {"PACKAGE_MANAGER": "apk", "MISSING_COMMANDS": ("tar",), "FAIL_PACKAGE": "install"}
+    installer, env, root, events = harness(tmp_path, manager, **options)
+    contents = seed_existing_core(root, "mihomo", manager)
+    result = run(installer, env, "--core", "both")
+    assert result.returncode != 0
+    assert_existing_core_untouched(root, "mihomo", contents, events)
+    assert not (root / "usr/local/bin/oxidns").exists()
+    assert not (root / "etc/oxidns").exists()
+    assert not (root / "run/configflow-core-install.lock").exists()
+    if failure == "dns":
+        assert "127.0.0.1:1053" in result.stdout + result.stderr
+        assert "公共" not in result.stdout
+    if failure == "package":
+        assert "download " not in events.read_text()
 
 
 @pytest.mark.parametrize("network,port,state", [("udp", "0035", "07"), ("tcp", "041D", "0A"), ("udp6", "041D", "07"), ("tcp6", "0035", "0A")])
@@ -290,7 +630,7 @@ def test_unsupported_environment_writes_nothing(tmp_path, options):
     installer, env, root, events = harness(tmp_path, **options)
     result = run(installer, env)
     assert result.returncode != 0
-    assert events.read_text() == ""
+    assert operational_events(events) == []
     assert_uninstalled(root)
 
 
@@ -303,7 +643,7 @@ def test_concurrent_install_keeps_other_process_lock(tmp_path):
     assert result.returncode != 0
     assert "另一个核心安装" in result.stderr
     assert (lock / "pid").read_text() == "123456"
-    assert events.read_text() == ""
+    assert operational_events(events) == []
 
 
 @pytest.mark.parametrize("manager", ["systemd", "openrc"])
@@ -337,7 +677,7 @@ def test_changed_binary_or_service_is_preserved_and_not_reinstalled(tmp_path, ta
     path.write_text("custom replacement")
     initial_events = events.read_text()
     result = run(installer, env)
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stdout + result.stderr
     assert path.read_text() == "custom replacement"
     assert events.read_text() == initial_events
 
