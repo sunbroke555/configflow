@@ -1,12 +1,12 @@
 <template>
   <div class="min-w-0">
-    <div class="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
-      <div v-for="item in summary" :key="item.label" class="flex min-w-0 flex-col rounded-xl border border-border bg-card px-4 py-3">
-        <div class="text-[12px] text-muted-foreground">{{ item.label }}</div>
-        <div class="num mt-1 truncate text-[18px] text-foreground">{{ item.value }}</div>
+    <div class="mb-4 grid grid-cols-3 gap-3 max-md:gap-2">
+      <div v-for="item in summary" :key="item.label" class="flex min-w-0 flex-col rounded-xl border border-border bg-card px-4 py-3 max-md:px-3">
+        <div class="truncate text-[12px] text-muted-foreground">{{ item.label }}</div>
+        <div class="num mt-1 truncate text-[18px] text-foreground max-md:text-[15px]">{{ item.value }}</div>
         <template v-if="item.trend">
           <Sparkline class="mt-2 h-9 w-full" :data="item.trend" :color="item.color" />
-          <div class="num mt-1 text-[11px] text-muted-foreground">近 2 分钟峰值 {{ item.peak }}</div>
+          <div class="num mt-1 truncate text-[11px] text-muted-foreground" :title="`近 2 分钟峰值 ${item.peak}`">近 2 分钟峰值 {{ item.peak }}</div>
         </template>
       </div>
     </div>
@@ -202,21 +202,22 @@ const selected = computed(() => selectedId.value
 const visibleRows = computed(() => rows.value.slice(0, ROW_LIMIT))
 
 const peak = (values: number[]) => values.length ? Math.max(...values) : 0
+// 上排是计数与累计量，下排是带趋势线的实时指标，两排高度各自一致
 const summary = computed(() => [
   { label: '连接', value: String(snapshot.value?.connections?.length ?? '—') },
+  { label: '累计上传', value: formatBytes(snapshot.value?.uploadTotal) },
+  { label: '累计下载', value: formatBytes(snapshot.value?.downloadTotal) },
   {
     label: '内存使用', value: formatBytes(snapshot.value?.memory),
     trend: trend.value.memory, color: '--warning-accent', peak: formatBytes(peak(trend.value.memory))
   },
-  { label: '累计下载', value: formatBytes(snapshot.value?.downloadTotal) },
-  {
-    label: '下载速度', value: speedText(totalSpeed.value.down),
-    trend: trend.value.down, color: '--info-accent', peak: speedText(peak(trend.value.down))
-  },
-  { label: '累计上传', value: formatBytes(snapshot.value?.uploadTotal) },
   {
     label: '上传速度', value: speedText(totalSpeed.value.up),
     trend: trend.value.up, color: '--success-accent', peak: speedText(peak(trend.value.up))
+  },
+  {
+    label: '下载速度', value: speedText(totalSpeed.value.down),
+    trend: trend.value.down, color: '--info-accent', peak: speedText(peak(trend.value.down))
   }
 ])
 
