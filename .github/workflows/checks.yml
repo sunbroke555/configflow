@@ -20,8 +20,8 @@ jobs:
           python-version: '3.11'
           cache: pip
           cache-dependency-path: backend/requirements.txt
-      - run: python -m pip install -r backend/requirements.txt pytest pytest-subtests
-      - run: python -m pytest backend -q
+      - run: python -m pip install -r backend/requirements.txt pytest pytest-subtests pytest-xdist
+      - run: python -m pytest backend -q -n 4 --dist=worksteal --durations=15
         env:
           DATA_DIR: ${{ runner.temp }}/configflow-test-data
 
