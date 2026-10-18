@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { notify } from '@/lib/feedback'
 import { Select } from '@/components/ui/select'
@@ -23,10 +24,11 @@ const deferred = <T,>() => {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
   return { promise, resolve, reject }
 }
-async function render(props: Record<string, any> = {}) {
+async function render(props: Record<string, any> = {}, router?: ReturnType<typeof createRouter>) {
   const wrapper = mount(SettingsPublishBar, {
     props: { open: true, profileId: 'office', serviceType: 'oxidns', save: vi.fn().mockResolvedValue(guard()), ...props },
     attachTo: document.body,
+    global: { plugins: router ? [router] : [] },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -57,6 +59,31 @@ afterEach(() => {
 })
 
 describe('settings save and publish', () => {
+  it.each([
+    ['succeeded', true, true],
+    ['succeeded', false, false],
+    ['failed', true, false],
+  ])('links to separate DNS follow results after source %s with binding=%s', async (status, bound, shown) => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/', component: { render: () => null } }, { path: '/agents', component: { render: () => null } },
+    ] })
+    await router.push('/')
+    await router.isReady()
+    vi.mocked(agentApi.getAll).mockResolvedValue(response([
+      agent({ service_type: 'mihomo', name: '家庭 Mihomo' }),
+      agent({ id: 'dns-target', dns_follow: bound ? { source_agent_id: 'one' } : null }),
+    ]))
+    vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status }))
+    const wrapper = await render({ serviceType: 'mihomo', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'mihomo' })) }, router)
+    await publish(wrapper)
+    expect(wrapper.find('[data-dns-follow-hint]').exists()).toBe(shown)
+    if (shown) {
+      expect(wrapper.get('[data-dns-follow-hint]').text()).toContain('后台会继续处理已绑定的 OxiDNS')
+      expect(wrapper.get('[data-dns-follow-hint] a').attributes('href')).toBe('/agents')
+      expect(wrapper.text()).not.toContain('OxiDNS DNS 同步完成')
+    }
+  })
+
   it('shows a single bound target and publishes only after its saved revision is confirmed', async () => {
     const saved = deferred<PublishGuard>()
     const save = vi.fn(() => saved.promise)

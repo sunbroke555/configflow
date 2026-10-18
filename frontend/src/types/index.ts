@@ -121,6 +121,8 @@ export interface Agent {
   has_update?: boolean
   upgrade_available?: boolean
   latest_upgrade?: import('@/composables/useAgentUpgrades').AgentUpgrade
+  dns_follow?: import('./agentDNSFollow').AgentDNSFollowBinding | null
+  dns_follow_state?: import('./agentDNSFollow').AgentDNSFollowState | null
   created_at?: string
   updated_at?: string
   cpu?: number

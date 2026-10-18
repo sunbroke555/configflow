@@ -26,6 +26,18 @@ Shell 同机模式与 Docker AIO 会读取另一核心实际配置，提示上�
 
 面板在发布进度和历史记录显示 `dns_checks` 与 `dns_checked_at`，错误及修复建议直接可见，警告不新增确认弹窗；旧 Agent 未返回报告时不会显示“通过”。安装前的 TUN、权限、IPv4 转发和端口环境检查保持原有逻辑。
 
+### 跟随 Mihomo DNS
+
+ConfigFlow 与两个 Go Agent 更新至支持此功能的版本（Agent `1.8.24-go` 起）后，在 **Agent → OxiDNS 卡片 → 跟随 Mihomo DNS** 中选择 Mihomo 来源和具体的一条 UDP / TCP 上游，开启自动同步并发布。请先手动成功发布一次 OxiDNS，建立当前配置基准。
+
+同一套 Shell All in One 或 Docker AIO 可选择自动验证：Agent 核实两者共用网络空间，再把 Mihomo 的通配监听转换为对应的回环地址。不同 LXC / 虚拟机应选择指定网络地址，填写 OxiDNS 能访问的 Mihomo IP 或主机名，端口无需填写。同在一台 PVE 不等于共用网络空间。
+
+开启后，从 Mihomo 下一次发布成功开始，后台读取设备已确认生效的 `dns.listen`，只改绑定上游的 `addr`，保留其他上游和附加参数，再按正常校验、健康检查和回滚流程发布 OxiDNS。草稿编辑、失败发布、手动回滚和 `tun.dns-hijack` 不触发联动。地址未变时不重复发布；关闭浏览器后后台继续处理。
+
+卡片分别显示 Mihomo 与 OxiDNS 的结果和步骤。OxiDNS 同步失败会保留原因，可在处理问题后点击 **重试同步**；网络中断导致结果未确认时继续查询原任务，不新建重复发布。若 OxiDNS 草稿有其他未发布修改、设备文件被手工修改、绑定上游被编辑或移动，会提示先处理这些差异。成功后仅在草稿未被同时修改时更新面板草稿；并发编辑会保留并提示核对。
+
+同一个 OxiDNS 配置仅允许一个自动联动写入方；需要独立跟随的设备应使用独立配置。停止跟随保留现有配置；执行中的联动须先确认结果才能修改或解除绑定。
+
 ### 手动回滚已成功发布的配置
 
 Agent 页面“发布记录”中的“回滚到发布前”用于恢复最近成功发布前的备份。服务端入口为 `POST /api/agents/{agent_id}/deployments/{deployment_id}/rollback`，通过原部署状态接口轮询结果。已受理任务保留相同部署 ID，带 `manual_rollback: true`，状态从 `rolling_back` 进入 `rolled_back`；此时 `success: true`。自动失败回滚仍用 `success: false` 区分。

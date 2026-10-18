@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.23-go"
+LATEST_AGENT_VERSION = "1.8.24-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.24-go": {
+        "date": "2026-10-19",
+        "features": [
+            "OxiDNS 支持跟随指定 Mihomo DNS，Mihomo 发布成功后自动同步并发布，失败保留原因并支持重试",
+            "Agent 核实已生效发布、实际 DNS 监听、同机安装关系与受管文件，避免使用草稿或覆盖设备上的额外修改"
+        ]
+    },
     "1.8.23-go": {
         "date": "2026-10-18",
         "features": [

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import { LoaderCircle, RefreshCw, Save, Upload } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { Button } from '@/components/ui/button'
@@ -9,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 
 type ServiceType = 'mihomo' | 'mosdns' | 'oxidns' | 'surge'
-type Agent = { id: string; name: string; profile_id?: string; service_type: string; status?: string; enabled?: boolean; latest_deployment?: AgentDeployment }
+type Agent = { id: string; name: string; profile_id?: string; service_type: string; status?: string; enabled?: boolean; latest_deployment?: AgentDeployment; dns_follow?: { source_agent_id: string } | null }
 type Profile = { id: string; name: string; is_default?: boolean }
 type Attempt = { session: number; agentId: string; agentName: string; profileId: string; serviceType: ServiceType; deploymentId?: string; saved: boolean; inherited?: boolean }
 
@@ -56,6 +57,8 @@ const task = computed(() => {
   return found && found.deployment_id === current?.deploymentId ? found : undefined
 })
 const unresolved = computed(() => !!task.value && !terminal.has(task.value.status))
+const hasDNSFollowers = computed(() => visibleAttempt.value?.serviceType === 'mihomo'
+  && agents.value.some(agent => agent.service_type === 'oxidns' && agent.dns_follow?.source_agent_id === visibleAttempt.value?.agentId))
 const blockedRecovery = computed(() => task.value?.status === 'rollback_failed')
 const working = computed(() => phase.value !== 'idle' || unresolved.value || synchronousResult.value === 'unknown')
 const canPublish = computed(() => props.open && !props.disabled && !loading.value && !loadError.value
@@ -305,6 +308,9 @@ onUnmounted(() => { disposed = true; session++ })
     </div>
     <div v-if="progressLabel" role="status" aria-live="polite" class="settings-publish-progress min-w-0 space-y-1 text-xs leading-relaxed" :class="progressClass">
       <p class="m-0 break-words">{{ progressLabel }}</p>
+      <p v-if="task?.status === 'succeeded' && hasDNSFollowers" class="m-0 break-words text-muted-foreground" data-dns-follow-hint>
+        后台会继续处理已绑定的 OxiDNS；<RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">到 Agent 页面查看同步结果或重试</RouterLink>。
+      </p>
       <AgentOperationSteps v-if="task" :task="task" :show-current="false" />
       <p v-if="visibleAttempt && !visibleAttempt.inherited && (task || synchronousResult !== 'idle')" class="m-0 break-words text-muted-foreground">
         本次发布到「{{ visibleAttempt.agentName }}」，仅包含本次保存的配置；后续修改需重新保存并发布。

@@ -19,4 +19,6 @@ def init_agent_manager():
     """初始化 AgentManager（在应用启动时调用）"""
     global _agent_manager
     _agent_manager = AgentManager(get_repository())
+    from backend.agents.dns_follow import start_loop
+    start_loop(_agent_manager)
     return _agent_manager

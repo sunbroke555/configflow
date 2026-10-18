@@ -138,6 +138,14 @@
             </Select>
           </div>
 
+          <AgentDNSFollow
+            v-if="agent.service_type === 'oxidns'"
+            :agent="agent"
+            :source-name="agents.find(item => item.id === agent.dns_follow?.source_agent_id)?.name"
+            :blocked="deploymentBusy(agent.id) || upgradeBusy(agent.id) || pushingIds.has(agent.id)"
+            @changed="loadAgents"
+          />
+
           <div v-if="submissionFailures[agent.id]" class="mt-3 min-w-0 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
             <p class="mb-1 mt-0 text-xs font-medium text-destructive-accent">发布失败</p>
             <AgentFailureDetails :show-progress-message="false" :task="submissionFailures[agent.id]" />
@@ -789,6 +797,7 @@ import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@
 import AgentDeploymentHistory from '@/components/agents/AgentDeploymentHistory.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
+import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
 import { submitAgentRequests } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { upgradeLabels, useAgentUpgrades } from '@/composables/useAgentUpgrades'
