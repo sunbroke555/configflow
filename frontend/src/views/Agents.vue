@@ -463,9 +463,9 @@
                   <p class="m-0">默认使用 curl，也可切换 wget；完整下载为当前目录的 configflow-install.sh 后才执行。环境检测与依赖补装由脚本完成；两个下载工具都没有时，请先安装一个。</p>
                   <p class="m-0 break-words">安装核心时使用 <code class="font-mono">/etc/{{ shellAio ? '{mihomo,oxidns}' : scriptForm.type }}/config.yaml</code>，程序位于 <code class="font-mono">/usr/local/bin</code>，服务名与核心同名。已有部署须与默认布局一致；自定义部署请取消勾选，并在高级配置中填写实际路径。</p>
                   <template v-if="shellAio">
-                    <p class="m-0"><strong class="font-medium text-foreground">同机 DNS：</strong>OxiDNS <code class="font-mono">53</code> → Mihomo <code class="font-mono">127.0.0.1:1053</code>。发布 Mihomo 配置时自动将 DNS 监听和 TUN DNS 劫持端口调整为 <code class="font-mono">1053</code>。</p>
+                    <p class="m-0"><strong class="font-medium text-foreground">初始 DNS：</strong>OxiDNS <code class="font-mono">53</code> → Mihomo <code class="font-mono">127.0.0.1:1053</code>。发布时保留自定义监听地址、端口及 <code class="font-mono">dns-hijack</code>，并检查实际 DNS 配置。</p>
                     <p v-if="aioCoreInstall" class="m-0">新装 OxiDNS 会自动使用上述上游；已有配置保持不变，请确认已有核心的 DNS 监听与上游设置。</p>
-                    <p v-else class="m-0">请先准备两个核心及其 systemd / OpenRC 服务，并将 OxiDNS 的远端 DNS 上游设为 <code class="font-mono">127.0.0.1:1053</code>。</p>
+                    <p v-else class="m-0">请先准备两个核心及其 systemd / OpenRC 服务，并将 OxiDNS 的远端 DNS 上游设为 Mihomo 实际的 DNS 监听地址和端口。</p>
                   </template>
                   <p v-else-if="singleCoreInstall && scriptForm.type === 'mihomo'" class="m-0"><strong class="font-medium text-foreground">Mihomo DNS：</strong>监听 <code class="font-mono">1053</code>，使用公共 DNS 上游。</p>
                   <p v-else-if="singleCoreInstall && scriptForm.type === 'oxidns'" class="m-0"><strong class="font-medium text-foreground">OxiDNS：</strong>监听 <code class="font-mono">53</code>，使用公共 DNS 上游，独立运行且不依赖 Mihomo。接入后可在面板修改上游。</p>

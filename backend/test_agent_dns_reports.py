@@ -15,8 +15,6 @@ from backend.test_agent_deployments import env, minimal_bundle, response
 CHECKED_AT = '2026-10-18T10:00:00.123456789Z'
 WARNING = {'name': 'dns_hijack', 'level': 'warn',
            'message': 'DNS 劫持可能绕过 OxiDNS。', 'fix': '检查 TUN 中的 DNS 劫持范围。'}
-ADJUSTMENT = {'name': 'All in One DNS 自动调整', 'level': 'warn',
-              'message': "tun.dns-hijack 已自动调整：['any:53', 'tcp://any:53'] → ['any:1053', 'tcp://any:1053']。"}
 CONFLICT = {'name': 'dns_listener', 'level': 'error',
             'message': 'UDP 53 已被其他程序占用。', 'fix': '调整 DNS 监听端口。'}
 
@@ -62,13 +60,12 @@ def test_upload_report_reaches_panel_and_persisted_history(env, monkeypatch, sta
         assert failed.json['dns_checks'] == [check]
 
 
-@pytest.mark.parametrize('check', [WARNING, ADJUSTMENT])
-def test_warning_report_survives_ready_poll_activation_and_success(env, monkeypatch, check):
+def test_warning_report_survives_ready_poll_activation_and_success(env, monkeypatch):
     repository, manager, agent, _ = env
     manager.begin_deployment(agent['id'], 'dns-warning')
     manager.record_deployment(agent['id'], 'dns-warning', {
         'success': True, 'status': 'ready', 'submitted': True,
-        'dns_checks': [check], 'dns_checked_at': CHECKED_AT,
+        'dns_checks': [WARNING], 'dns_checked_at': CHECKED_AT,
     })
     manager.finish_deployment_preparation(agent['id'], 'dns-warning')
     monkeypatch.setattr('backend.agents.manager.requests.get', lambda *_a, **_k: response({
@@ -77,16 +74,16 @@ def test_warning_report_survives_ready_poll_activation_and_success(env, monkeypa
         'success': True, 'status': 'succeeded', 'config_version': 'dns-approved'}))
     client = public_client(manager, monkeypatch)
     polled = client.get(f'/api/agents/{agent["id"]}/deployments/dns-warning')
-    assert polled.json['dns_checks'] == [check]
+    assert polled.json['dns_checks'] == [WARNING]
     activated = client.post(f'/api/agents/{agent["id"]}/deployments/dns-warning/activate')
     assert activated.status_code == 200
     assert activated.json['success'] is True
     assert activated.json['status'] == 'succeeded'
-    assert activated.json['dns_checks'] == [check]
+    assert activated.json['dns_checks'] == [WARNING]
     assert activated.json['dns_checked_at'] == CHECKED_AT
     restarted = AgentManager(repository)
     final = restarted.get_deployment(agent['id'], 'dns-warning')
-    assert final['dns_checks'] == [check]
+    assert final['dns_checks'] == [WARNING]
     assert restarted.get_agent_by_id(agent['id'])['config_version'] == 'dns-approved'
     manager.begin_deployment(agent['id'], 'next-candidate')
     latest = manager.get_agent_by_id(agent['id'])['latest_deployment']

@@ -357,6 +357,6 @@ cf_step_done "两个 Agent 服务已启动"
 cf_fact agent_mihomo "Mihomo Agent：端口 {mihomo_agent_port}，服务已启动"
 cf_fact agent_oxidns "OxiDNS Agent：端口 {oxidns_agent_port}，服务已启动"
 if [ "$(cf_fact_read core_mihomo_new)" != yes ] || [ "$(cf_fact_read core_oxidns_new)" != yes ]; then
-    cf_note dns_existing "已有核心配置已保留，请核对 DNS 链路：OxiDNS :53 → Mihomo :1053；需要调整时通过面板发布配置。"
+    cf_note dns_existing "已有核心配置已保留；发布也会保留自定义 DNS 端口和 dns-hijack，请将 OxiDNS 上游与 Mihomo 实际 DNS 监听地址及端口对应。"
 fi
 cf_complete "安装完成"

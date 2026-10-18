@@ -1,7 +1,6 @@
 package routes
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,114 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
-
-func TestAIOPublishesMihomoDNSOn1053(t *testing.T) {
-	for _, mode := range []string{"native", "docker-oxidns", "docker-mosdns", "single"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Setenv("ENABLE_OXIDNS", "false")
-			t.Setenv("ENABLE_MOSDNS", "false")
-			cfg := testDeploymentConfig(t)
-			cfg.NativeAIO = mode == "native"
-			if mode == "docker-oxidns" {
-				t.Setenv("ENABLE_OXIDNS", "true")
-			}
-			if mode == "docker-mosdns" {
-				t.Setenv("ENABLE_MOSDNS", "true")
-			}
-			original := []byte("mode: rule\ndns:\n  enable: false\n  listen: 127.0.0.1:53\ntun:\n  enable: false\n  dns-hijack: [any:53, 'tcp://any:53']\n")
-			s := submitBundle(t, cfg, "cohost-ports", map[string][]byte{"config.yaml": original}, true)
-			if s.Status != "succeeded" {
-				t.Fatalf("publish failed: %+v", s)
-			}
-			published, err := os.ReadFile(cfg.ConfigPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if mode == "single" {
-				var doc struct {
-					DNS struct {
-						Listen string `yaml:"listen"`
-					} `yaml:"dns"`
-					TUN struct {
-						Hijack []string `yaml:"dns-hijack"`
-					} `yaml:"tun"`
-				}
-				if err := yaml.Unmarshal(published, &doc); err != nil {
-					t.Fatal(err)
-				}
-				if doc.DNS.Listen != "127.0.0.1:53" || len(doc.TUN.Hijack) != 2 || doc.TUN.Hijack[0] != "any:53" || doc.TUN.Hijack[1] != "tcp://any:53" {
-					t.Fatalf("single-service publish changed DNS: %s", published)
-				}
-				return
-			}
-			assertAIOPorts(t, string(published), false, false)
-			digest, size, err := hashFile(cfg.ConfigPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			manifestData, err := os.ReadFile(filepath.Join(deploymentRoot(cfg), "active-manifest.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var manifest DeploymentManifest
-			if err := json.Unmarshal(manifestData, &manifest); err != nil {
-				t.Fatal(err)
-			}
-			for _, file := range manifest.Files {
-				if file.Path == "config.yaml" && (file.SHA256 != digest || file.Size != size) {
-					t.Fatal("published manifest does not describe adapted bytes")
-				}
-			}
-		})
-	}
-}
-
-func assertAIOPorts(t *testing.T, content string, dnsEnabled, tunEnabled interface{}) {
-	t.Helper()
-	var doc map[string]interface{}
-	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
-		t.Fatal(err)
-	}
-	dns := doc["dns"].(map[string]interface{})
-	tun := doc["tun"].(map[string]interface{})
-	if dns["listen"] != "0.0.0.0:1053" || dns["enable"] != dnsEnabled || tun["enable"] != tunEnabled {
-		t.Fatalf("unexpected DNS/TUN settings: %s", content)
-	}
-	hijacks, ok := tun["dns-hijack"].([]interface{})
-	if !ok || len(hijacks) != 2 || hijacks[0] != "any:1053" || hijacks[1] != "tcp://any:1053" {
-		t.Fatalf("port 53 could still be hijacked: %s", content)
-	}
-}
-
-func TestMihomoAIOAddsMissingPortFieldsWithoutEnablingFeatures(t *testing.T) {
-	for _, input := range []string{"mode: rule\n", "mode: rule\ndns: {}\ntun: {}\n", "mode: rule\ndns: null\ntun: null\n"} {
-		got, err := modifyMihomoConfig(input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertAIOPorts(t, got, nil, nil)
-		again, err := modifyMihomoConfig(got)
-		if err != nil || again != got {
-			t.Fatalf("AIO port adaptation is not idempotent: %v\n%s", err, again)
-		}
-	}
-	enabled, err := modifyMihomoConfig("mode: rule\ndns:\n  enable: true\ntun:\n  enable: true\n  auto-route: true\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertAIOPorts(t, enabled, true, true)
-	if !strings.Contains(enabled, "auto-route: true") {
-		t.Fatal("AIO adaptation changed existing TUN configuration")
-	}
-	for _, invalid := range []string{"", "{}", "[]", "mode: rule\ndns: 53", "mode: rule\ntun: []"} {
-		if _, err := modifyMihomoConfig(invalid); err == nil {
-			t.Fatalf("accepted invalid mapping %q", invalid)
-		}
-	}
-}
 
 func TestNativeAIOUninstallRejectsSharedOrMismatchedInstallation(t *testing.T) {
 	valid := Config{NativeAIO: true, ServiceType: "mihomo", AgentConfigFile: "/opt/configflow-agent/mihomo/config.json", AgentServiceUnit: "configflow-agent-mihomo", ServiceManager: "systemd"}

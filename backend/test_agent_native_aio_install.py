@@ -262,7 +262,7 @@ def test_native_aio_summary_preserves_existing_core_dns_guidance_without_verbose
     assert "安装并启动 Agent 服务" in result.stdout
     assert "Mihomo Agent：端口 8080，服务已启动" in result.stdout
     assert "OxiDNS Agent：端口 8082，服务已启动" in result.stdout
-    assert "已有核心配置已保留，请核对 DNS 链路" in result.stdout
+    assert "已有核心配置已保留；发布也会保留自定义 DNS 端口和 dns-hijack" in result.stdout
     assert "先在 ConfigFlow 发布" not in result.stdout
     assert "安装完成" in result.stdout and "详细日志：" in result.stdout
     assert "verbose-environment-detail-for-log-only" not in result.stdout + result.stderr

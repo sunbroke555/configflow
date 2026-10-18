@@ -123,12 +123,6 @@ func validateDeploymentDNS(cfg *Config, state *DeploymentState) error {
 	peer, extra := deploymentDNSPeer(cfg, readDNSConfigFile)
 	report := runDeploymentDNSChecks(preflight.DNSCandidate{Config: deploymentDNSConfig(cfg), Content: content},
 		preflight.DNSOptions{Peer: peer, Probe: true, QueryName: cfg.HealthDNSName})
-	// The final candidate no longer contains the original AIO port settings.
-	// Keep the resolved adjustment visible without re-reporting it as a risk.
-	for i := len(state.DNSAdjustments) - 1; i >= 0; i-- {
-		check := state.DNSAdjustments[i]
-		report = append(preflight.Report{{Name: check.Name, Level: check.Level, Message: check.Message, Fix: check.Fix}}, report...)
-	}
 	report = append(report, extra...)
 	secrets := []string{cfg.Token}
 	for _, data := range [][]byte{content, func() []byte {

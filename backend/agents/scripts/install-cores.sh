@@ -231,7 +231,7 @@ show_tun_disabled_guidance() {
         '普通 Linux/虚拟机：先检查内核 TUN 驱动（modprobe tun），确认 /dev/net/tun 为 10:200 字符设备且可读写。' \
         'PVE LXC：在 PVE 宿主机执行 modprobe tun，检查 pct config <CTID> 的空闲 devN 槽，再用 pct set <CTID> --devN /dev/net/tun 添加设备（例如空闲的 dev0）；完整停止并启动容器后，在容器内复查。不要改为特权容器或放宽整个设备目录权限。' \
         '权限：保留容器的 CAP_NET_ADMIN；核对 Mihomo 服务的 CapabilityBoundingSet、DeviceAllow=/dev/net/tun rw 及设备隔离策略。若接口重名，确认已有接口的归属后更改 Mihomo 的 tun.device。' \
-        '修复后：在面板的 Mihomo 基础配置中设置 tun.enable: true，保留 DNS 监听及 TUN DNS 劫持端口 1053，再保存并发布；未接入 Agent 时修改 /etc/mihomo/config.yaml 并重启 mihomo 服务。重复运行本安装脚本会保留已有配置，不会自动开启 TUN。'
+        '修复后：在面板的 Mihomo 基础配置中设置 tun.enable: true，核对 DNS 监听、dns-hijack 及同机 DNS 上下游关系后保存并发布；未接入 Agent 时修改 /etc/mihomo/config.yaml 并重启 mihomo 服务。发布保留自定义端口；重复运行本安装脚本会保留已有配置，不会自动开启 TUN。'
     cf_fact tun 'TUN：已关闭'
     cf_note tun "TUN 未启用：${TUN_REASON}修复步骤见详细日志。"
 }
@@ -586,8 +586,8 @@ if [ "$NEW_OXIDNS" = true ]; then
     if [ "$CORE_SELECTION" = both ]; then printf '%s\n' 'DNS 分工：OxiDNS 53 → Mihomo 1053 → 上游 DNS；已有核心的配置保持原样。'
     else printf '%s\n' '独立 OxiDNS：53 → 公共 DNS 223.5.5.5 / 119.29.29.29。'; fi
 elif [ "$CORE_SELECTION" = both ]; then
-    printf '%s\n' '已有 OxiDNS 的上游保持原样。要使用 AIO DNS 链路，请在其配置中将远端 DNS 上游设为 127.0.0.1:1053，再通过 Agent 发布或自行重启 OxiDNS。'
-    cf_note oxidns_upstream '已有 OxiDNS 的上游保持原样；使用同机 DNS 链路时，请确认远端上游为 127.0.0.1:1053。'
+    printf '%s\n' '已有 OxiDNS 的上游保持原样。要使用 AIO DNS 链路，请将远端上游对应到 Mihomo 实际的 DNS 监听地址和端口（新装默认 127.0.0.1:1053），再通过 Agent 发布或自行重启 OxiDNS。'
+    cf_note oxidns_upstream '已有 OxiDNS 的上游保持原样；使用同机 DNS 链路时，请将远端上游对应到 Mihomo 实际的 DNS 监听（新装默认 127.0.0.1:1053）。'
 fi
 if [ "$NEW_MIHOMO" = true ]; then
     printf '%s\n' '新 Mihomo 在 1053 提供 DNS，当前没有代理节点，流量按 DIRECT 直连。'

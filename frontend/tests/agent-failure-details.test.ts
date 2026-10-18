@@ -25,15 +25,6 @@ function render(task: Record<string, unknown>) {
 }
 
 describe('Agent failure diagnostics', () => {
-  it.each(['ready', 'succeeded'])('keeps AIO automatic adjustments visible for a %s publication', status => {
-    const message = "tun.dns-hijack 已自动调整：['any:53', 'tcp://any:53'] → ['any:1053', 'tcp://any:1053']。"
-    const wrapper = render({ status, dns_checks: [{ name: 'All in One DNS 自动调整', level: 'warn', message }] })
-    const report = wrapper.get('[aria-label="DNS 检查结果"]')
-    expect(report.text()).toContain(message)
-    expect(report.get('li').element.closest('details')).toBeNull()
-    expect(report.text()).not.toContain('修复建议')
-    expect(wrapper.text()).not.toContain('发布失败')
-  })
   it('shows DNS issues and repair suggestions without hiding them in error details', () => {
     const wrapper = render({ deployment_id: 'dns-error', status: 'failed', dns_checked_at: '2026-10-18T09:00:00Z', dns_checks: [
       { name: 'DNS 监听', level: 'error', message: '0.0.0.0:53 已被占用', fix: '更改冲突程序的监听端口' },
