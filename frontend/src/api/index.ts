@@ -374,6 +374,15 @@ export const agentApi = {
     api.get('/agents/docker-run', { params, responseType: 'text' })
 }
 
+export const clientToolsApi = {
+  notes: (id: string) => api.get(`/agents/${encodeURIComponent(id)}/client-notes`),
+  saveNote: (id: string, data: { profile_id: string; ip: string; name: string; previous_name: string }) =>
+    api.put(`/agents/${encodeURIComponent(id)}/client-notes`, data),
+  ruleTargets: (id: string) => api.get(`/agents/${encodeURIComponent(id)}/mihomo/rule-targets`),
+  addRule: (id: string, data: { profile_id: string; ruleset_id: string; target: 'direct' | 'proxy'; value: string; rule_type: 'DOMAIN' | 'DOMAIN-SUFFIX' }) =>
+    api.post(`/agents/${encodeURIComponent(id)}/mihomo/rule-targets/apply`, data)
+}
+
 // OxiDNS monitoring never sends core credentials or addresses from the browser.
 export const oxidnsDevicePolicyApi = {
   get: (id: string, options: { signal?: AbortSignal } = {}) =>

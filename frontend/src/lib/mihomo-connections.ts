@@ -75,7 +75,7 @@ function searchableValues(row: ConnectionRow) {
 }
 
 /** 同一项多选为「或」，不同项之间为「且」；批量断开也复用这份结果。 */
-export function filterConnections(rows: ConnectionRow[], search: string, filters: ConnectionFilters): ConnectionRow[] {
+export function filterConnections(rows: ConnectionRow[], search: string, filters: ConnectionFilters, sourceName: (row: ConnectionRow) => string = () => ''): ConnectionRow[] {
   const includes = connectionMatcher(search)
   const excludes = filters.exclude.trim() ? connectionMatcher(filters.exclude) : null
   return rows.filter(row => {
@@ -83,7 +83,7 @@ export function filterConnections(rows: ConnectionRow[], search: string, filters
     if (filters.networks.length && !filters.networks.includes(connectionNetworkLabel(row))) return false
     if (filters.rules.length && !filters.rules.includes(connectionRuleLabel(row))) return false
     if (filters.chains.length && !row.chains.some(chain => filters.chains.includes(chain))) return false
-    const values = searchableValues(row)
+    const values = [...searchableValues(row), sourceName(row)]
     return values.some(includes) && (!excludes || !values.some(excludes))
   })
 }

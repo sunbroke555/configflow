@@ -202,3 +202,16 @@ describe('existing OxiDNS clients', () => {
     expect(wrapper.emitted('filter')?.at(-1)?.[0]).toMatchObject({ client_ip: '' })
   })
 })
+
+it('searches notes locally without passing a name to the core IP search', async () => {
+  vi.useFakeTimers()
+  const wrapper = mountPicker({ allowAll: false, notes: { '192.0.2.10': '客厅电视' } })
+  await open(wrapper)
+  expect(document.body.textContent).toContain('客厅电视')
+  const input = new DOMWrapper(document.querySelector<HTMLInputElement>('input[aria-label="搜索已有客户端 IP"]')!)
+  await input.setValue('电视'); await vi.advanceTimersByTimeAsync(300); await flushPromises()
+  expect(vi.mocked(oxidnsMonitorApi.clients).mock.lastCall?.[1].search).toBeUndefined()
+  const options = [...document.querySelectorAll('[role="option"]')]
+  expect(options).toHaveLength(1); expect(options[0].textContent).toContain('192.0.2.10')
+  await choose('192.0.2.10'); expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['192.0.2.10'])
+})

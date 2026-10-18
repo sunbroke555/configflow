@@ -554,7 +554,7 @@ def _covered(existing, rule_type, value):
     )
 
 
-def apply_domains(profile_id, entries, *, source='manual', evidence=None, now=None):
+def apply_domains(profile_id, entries, *, source='manual', evidence=None, now=None, before_write=None):
     """把域名追加进默认规则集，并记录到历史。evidence: {value: 探测建议}。"""
     now = now or datetime.now()
     evidence = evidence or {}
@@ -570,6 +570,8 @@ def apply_domains(profile_id, entries, *, source='manual', evidence=None, now=No
     added, skipped, updated_items = [], [], []
 
     def append_lines(shared):
+        if before_write is not None:
+            before_write(infos)
         library = {item.get('id'): item for item in shared.get('rule_library', [])}
         for target, info in infos.items():
             item = library.get(info['id'])

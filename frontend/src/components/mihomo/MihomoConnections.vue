@@ -26,7 +26,7 @@
           </Button>
         </div>
       </div>
-      <Toolbar v-model:search="search" class="mb-0 rounded-none border-0 bg-transparent" placeholder="搜索主机、IP、规则，支持正则">
+      <Toolbar v-model:search="search" class="mb-0 rounded-none border-0 bg-transparent" placeholder="搜索主机、IP、备注、规则，支持正则">
         <template #filters>
           <div class="col-span-full flex min-w-0 items-center gap-1.5 max-md:w-full">
             <Select :model-value="settings.sort" @update:model-value="value => changeSort(String(value) as ConnectionSort)">
@@ -85,6 +85,9 @@
       </div>
     </div>
 
+    <div v-if="notesError" role="alert" class="mb-3 flex flex-wrap items-center gap-2 text-xs text-warning-accent">
+      <span>设备备注暂未读取：{{ notesError }}</span><Button variant="ghost" class="min-h-11 px-2" @click="loadNotes">重试</Button>
+    </div>
     <p v-if="error && snapshot" role="alert" class="mb-4 rounded-lg border border-warning-accent/30 bg-warning-soft p-3 text-sm text-warning-accent">
       {{ error }} 以下为上次成功读取的连接。
     </p>
@@ -112,7 +115,7 @@
                   <ArrowDown v-else-if="settings.sort === column.key" class="size-3.5 shrink-0 text-primary-accent" /><ArrowUpDown v-else class="size-3 shrink-0 text-muted-foreground" />
                 </button>
               </th>
-              <th class="w-14" scope="col"><span class="cf-sr">操作</span></th>
+              <th class="w-28" scope="col"><span class="cf-sr">操作</span></th>
             </tr>
           </thead>
           <tbody>
@@ -125,7 +128,10 @@
                     <span v-if="row.closedAt" class="mr-1">已关闭 ·</span>{{ row.metadata.network.toUpperCase() }} · {{ row.metadata.type }}<template v-if="row.metadata.process"> · {{ row.metadata.process }}</template>
                   </div>
                 </template>
-                <div v-else-if="column.key === 'source'" class="truncate font-mono text-muted-foreground" :title="sourceLabel(row)">{{ sourceLabel(row) }}</div>
+                <div v-else-if="column.key === 'source'" :title="[sourceName(row), sourceLabel(row)].filter(Boolean).join(' · ')">
+                  <div v-if="sourceName(row)" class="mb-0.5 truncate text-foreground">{{ sourceName(row) }}</div>
+                  <div class="truncate font-mono text-muted-foreground">{{ sourceLabel(row) }}</div>
+                </div>
                 <template v-else-if="column.key === 'rule'">
                   <div class="truncate">{{ row.rule }}</div>
                   <div v-if="row.rulePayload" class="mt-0.5 truncate font-mono text-[11.5px] text-muted-foreground" :title="row.rulePayload">{{ row.rulePayload }}</div>
@@ -138,8 +144,20 @@
                 <template v-else-if="column.key === 'network'">{{ row.metadata.network.toUpperCase() }}</template>
                 <div v-else-if="column.key === 'process'" class="truncate font-mono" :title="row.metadata.processPath || row.metadata.process">{{ row.metadata.process || row.metadata.processPath || '—' }}</div>
               </td>
-              <td class="cf-table__right">
+              <td class="cf-table__right" @click.stop>
+                <div class="flex items-center justify-end">
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="size-11" :aria-label="`操作 ${row.target}`"><Ellipsis class="size-4" /></Button></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" class="max-w-[calc(100vw-24px)]">
+                    <DropdownMenuItem class="min-h-11" :disabled="!deviceAddress(row.metadata.sourceIP)" @select="noteIP = deviceAddress(row.metadata.sourceIP)"><Pencil class="size-4" />编辑来源设备备注</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem class="min-h-11" :disabled="!connectionDomains(row.metadata).length" @select="openRule(row, 'proxy')">加入代理规则集</DropdownMenuItem>
+                    <DropdownMenuItem class="min-h-11" :disabled="!connectionDomains(row.metadata).length" @select="openRule(row, 'direct')">加入直连规则集</DropdownMenuItem>
+                    <DropdownMenuLabel v-if="!connectionDomains(row.metadata).length" class="max-w-64 whitespace-normal text-xs font-normal text-muted-foreground">此连接没有记录域名，不能添加到域名规则集。</DropdownMenuLabel>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button v-if="!row.closedAt" variant="ghost" size="icon" class="size-11" :aria-label="`断开 ${row.target}`" title="断开" @click.stop="closeOne(row.id)"><X class="size-4" /></Button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -154,14 +172,17 @@
         </div>
       </div>
     </div>
-    <MihomoConnectionDetail :row="selected" @close="selectedId = ''" />
+    <DeviceNoteDialog v-if="noteIP" :key="agentId + noteIP" :agent-id="agentId" :ip="noteIP" @close="noteIP = ''" @saved="applyNotes" />
+    <ConnectionRuleDialog v-if="ruleAction" :key="agentId" :agent-id="agentId" :domains="ruleAction.domains" :target="ruleAction.target" @close="ruleAction = null" />
+    <MihomoConnectionDetail :row="selected" :source-name="selected ? sourceName(selected) : ''" @close="selectedId = ''" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, ArrowUpDown, Cable, ChevronLeft, ChevronRight, Columns3, Eraser, ListFilter, Loader2, TriangleAlert, X } from '@lucide/vue'
+import { ArrowDown, ArrowUp, ArrowUpDown, Cable, ChevronLeft, ChevronRight, Columns3, Ellipsis, Eraser, ListFilter, Loader2, Pencil, TriangleAlert, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { PopoverClose } from 'reka-ui'
@@ -178,7 +199,10 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import FormField from '@/components/common/FormField.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import MihomoConnectionDetail from './MihomoConnectionDetail.vue'
-import { mihomoPanelApi } from '@/api'
+import DeviceNoteDialog from './DeviceNoteDialog.vue'
+import ConnectionRuleDialog from './ConnectionRuleDialog.vue'
+import { connectionDomains, deviceAddress, deviceNote, type DeviceNotes } from '@/lib/device-notes'
+import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { formatBytes } from '@/lib/format'
 import {
@@ -200,6 +224,31 @@ const TREND_POINTS = 60
 
 const props = defineProps<{ agentId: string; active: boolean }>()
 
+const notes = ref<Record<string, string>>({})
+const notesError = ref('')
+const noteIP = ref('')
+const ruleAction = ref<{ domains: string[]; target: 'proxy' | 'direct' } | null>(null)
+const sourceName = (row: ConnectionRow) => deviceNote(notes.value, row.metadata.sourceIP)
+let notesEpoch = 0
+function applyNotes(catalog: DeviceNotes) {
+  notesEpoch++; notes.value = catalog.notes; notesError.value = ''
+}
+async function loadNotes() {
+  const generation = ++notesEpoch
+  const agentId = props.agentId
+  try {
+    const { data } = await clientToolsApi.notes(agentId)
+    if (generation !== notesEpoch || disposed) return
+    if (!data?.success) throw new Error('读取备注失败。')
+    notes.value = data.notes; notesError.value = ''
+  } catch (failure) {
+    if (generation === notesEpoch && !disposed) notesError.value = panelError(failure)
+  }
+}
+function openRule(row: ConnectionRow, target: 'proxy' | 'direct') {
+  const domains = connectionDomains(row.metadata)
+  if (domains.length) ruleAction.value = { domains, target }
+}
 const snapshot = ref<MihomoConnectionsSnapshot | null>(null)
 const error = ref('')
 const search = ref('')
@@ -244,7 +293,7 @@ const filterGroups = computed(() => {
   const options = (values: string[], selected: string[], compare = (a: string, b: string) => a.localeCompare(b)) =>
     [...new Set([...values, ...selected])].filter(Boolean).sort(compare).map(value => ({ value, label: value }))
   return [
-    { key: 'sources' as const, label: '来源', options: options(sources.value, filters.value.sources, compareSources) },
+    { key: 'sources' as const, label: '来源', options: options(sources.value, filters.value.sources, compareSources).map(option => ({ ...option, label: deviceNote(notes.value, option.value) ? `${deviceNote(notes.value, option.value)} · ${option.value}` : option.label })) },
     { key: 'networks' as const, label: '协议', options: options(all.map(connectionNetworkLabel), filters.value.networks) },
     { key: 'rules' as const, label: '规则', options: options(all.map(connectionRuleLabel), filters.value.rules) },
     { key: 'chains' as const, label: '链路', options: options(all.flatMap(row => row.chains), filters.value.chains) }
@@ -259,15 +308,15 @@ function focusFilters(event: Event) {
   event.preventDefault()
   document.getElementById('connection-filter-sources')?.focus()
 }
-const activeMatches = computed(() => filterConnections(activeRows.value, search.value, filters.value))
+const activeMatches = computed(() => filterConnections(activeRows.value, search.value, filters.value, sourceName))
 
 const rows = computed(() => {
   const list = view.value === 'active' ? activeMatches.value
-    : filterConnections(view.value === 'closed' ? closed.value : [...activeRows.value, ...closed.value], search.value, filters.value)
+    : filterConnections(view.value === 'closed' ? closed.value : [...activeRows.value, ...closed.value], search.value, filters.value, sourceName)
   return sortConnections(list, settings.value.sort, settings.value.direction, now.value)
 })
 const visibleColumns = computed(() => CONNECTION_COLUMNS.filter(column => settings.value.columns.includes(column.key)))
-const tableWidth = computed(() => visibleColumns.value.reduce((sum, column) => sum + column.width, 56))
+const tableWidth = computed(() => visibleColumns.value.reduce((sum, column) => sum + column.width, 112))
 function changeSort(key: ConnectionSort, toggle = false) {
   settings.value.direction = toggle && settings.value.sort === key
     ? settings.value.direction === 'asc' ? 'desc' : 'asc'
@@ -457,6 +506,10 @@ onUnmounted(() => {
   if (timer) clearTimeout(timer)
   controller?.abort()
 })
+watch(() => props.agentId, () => { notesEpoch++; notes.value = {}; notesError.value = ''; noteIP.value = ''; ruleAction.value = null; void loadNotes() })
+watch(() => props.active, active => { if (active) void loadNotes() })
+onMounted(loadNotes)
+onUnmounted(() => { notesEpoch++ })
 </script>
 
 <style scoped>

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
-import { mihomoPanelApi } from '@/api'
+import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { compareSources, connectionMatcher, INNER_SOURCE } from '@/types/mihomo'
 import { confirmDanger } from '@/lib/feedback'
 
-vi.mock('@/api', () => ({ mihomoPanelApi: { connections: vi.fn(), closeConnection: vi.fn(), closeAllConnections: vi.fn() } }))
+vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn() }, mihomoPanelApi: { connections: vi.fn(), closeConnection: vi.fn(), closeAllConnections: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirmDanger: vi.fn(), notify: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
 vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 
@@ -24,7 +24,7 @@ async function render() {
   await flushPromises()
   return { wrapper, state: (wrapper.vm as any).$.setupState }
 }
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear() })
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); vi.mocked(clientToolsApi.notes).mockResolvedValue({ data: { success: true, notes: {} } } as any) })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = '' })
 
 describe('connection helpers', () => {
@@ -198,4 +198,18 @@ describe('mihomo connection summary', () => {
     expect(state.summary.map((item: { label: string }) => item.label))
       .toEqual(['连接', '累计上传', '累计下载', '内存使用', '上传速度', '下载速度'])
   })
+})
+
+it('shows and searches shared device notes without polling the notes endpoint', async () => {
+  vi.mocked(clientToolsApi.notes).mockResolvedValue({ data: { success: true, notes: { '10.0.0.3': '工作电脑' } } } as any)
+  vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([
+    connection('a', 'www.example.com', '::ffff:10.0.0.3'), connection('b', 'www.example.com', '10.0.0.50')
+  ]))
+  const { wrapper, state } = await render()
+  expect(wrapper.text()).toContain('工作电脑')
+  state.search = '工作电脑'; await flushPromises()
+  expect(state.rows.map((row: any) => row.id)).toEqual(['a'])
+  vi.mocked(confirmDanger).mockResolvedValue(true); await state.closeAll()
+  expect(mihomoPanelApi.closeConnection).toHaveBeenCalledExactlyOnceWith('gw', 'a')
+  await state.load(); expect(clientToolsApi.notes).toHaveBeenCalledTimes(1)
 })

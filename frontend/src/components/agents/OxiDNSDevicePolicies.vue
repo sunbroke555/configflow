@@ -28,7 +28,7 @@
       <div class="mb-4 grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-start md:gap-y-2">
         <div class="min-w-0 md:contents">
           <p class="mb-2 mt-0 flex min-h-6 items-center text-xs text-muted-foreground md:col-start-1 md:row-start-1 md:mb-0 md:self-stretch">从查询记录选择</p>
-          <OxiDNSClientSelect class="md:col-start-1 md:row-start-2" :model-value="''" :agent-id="agentId" :recorder="recorder" range="all" :allow-all="false" placeholder="选择已有客户端…" @update:model-value="add" />
+          <OxiDNSClientSelect class="md:col-start-1 md:row-start-2" :model-value="''" :notes="state.device_notes || {}" :agent-id="agentId" :recorder="recorder" range="all" :allow-all="false" placeholder="选择已有客户端…" @update:model-value="add" />
           <p v-if="!recorder" class="mb-0 mt-1.5 text-xs text-muted-foreground md:col-start-1 md:row-start-3 md:mt-0">暂无可读取的查询记录，可手动添加 IP 或网段。</p>
         </div>
         <div class="min-w-0 md:contents">
@@ -95,6 +95,7 @@ const props = defineProps<{ agentId: string; recorder: string }>()
 const devicePolicyHelp = [
   '选择设备或填写 IP / 网段，再选择策略。其他设备继续使用原有规则。',
   '智能分流：按当前 DNS 规则处理。\n直连：使用本地 DNS 查询域名；是否走代理，仍取决于路由器的分流设置。',
+  '备注与同一配置空间的 Mihomo 来源设备共用，保存后即可显示；修改备注不会改变设备策略。',
   '先点「保存草稿」，再点「发布到当前设备」，设置才会生效。',
   '设备需使用这台 OxiDNS 作为 DNS，查询记录中应能看到设备自己的 IP。',
 ].join('\n\n')
@@ -161,7 +162,7 @@ function add(value: string) {
     return
   }
   if (rows.value.some(row => row.ip === ip)) { notify.info('此客户端 IP 或网段已在列表中。'); return }
-  rows.value.push({ ip, name: '', mode: 'smart' })
+  rows.value.push({ ip, name: state.value.device_notes?.[ip] || '', mode: 'smart' })
   newIP.value = ''
 }
 async function save() {

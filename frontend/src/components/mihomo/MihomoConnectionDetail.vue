@@ -51,7 +51,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatBytes } from '@/lib/format'
 import { sourceLabel, type ConnectionRow } from '@/types/mihomo'
 
-const props = defineProps<{ row: ConnectionRow | null }>()
+const props = defineProps<{ row: ConnectionRow | null; sourceName?: string }>()
 const emit = defineEmits<{ close: [] }>()
 const tab = ref('overview')
 watch(() => props.row?.id, () => { tab.value = 'overview' })
@@ -87,6 +87,7 @@ const sections = computed(() => {
     {
       title: '来源与目的',
       items: [
+        ...(props.sourceName ? [{ label: '设备备注', value: props.sourceName }] : []),
         { label: '源 IP', value: sourceLabel(row), mono: true },
         { label: '源端口', value: dash(meta.sourcePort), mono: true },
         { label: '主机', value: row.target, mono: true },

@@ -240,3 +240,14 @@ describe('OxiDNS device policy editing', () => {
     expect(wrapper.findAll('tbody tr')).toHaveLength(0)
   })
 })
+
+it('reuses a shared device note when adding a DNS policy', async () => {
+  vi.mocked(oxidnsDevicePolicyApi.get).mockResolvedValue(response({ ...state(), device_notes: { '192.168.50.51': '工作电脑' } }))
+  const wrapper = await render({ recorder: 'query_recorder' })
+  expect(wrapper.findComponent(OxiDNSClientSelect).props('notes')).toEqual({ '192.168.50.51': '工作电脑' })
+  await add(wrapper)
+  expect(wrapper.get('input[aria-label="192.168.50.51 备注"]').element.value).toBe('工作电脑')
+  await button(wrapper, '保存草稿').trigger('click'); await flushPromises()
+  expect(vi.mocked(oxidnsDevicePolicyApi.save).mock.lastCall?.[1].policies).toEqual([{ ip: '192.168.50.51', name: '工作电脑', mode: 'smart' }])
+  expect(agentApi.pushConfig).not.toHaveBeenCalled()
+})

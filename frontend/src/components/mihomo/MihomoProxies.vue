@@ -1,13 +1,22 @@
 <template>
   <div class="min-w-0">
     <Toolbar v-model:search="search" placeholder="搜索策略组或节点">
+      <template #search-actions>
+        <Button variant="outline" size="icon" class="size-11 shrink-0" aria-label="策略显示设置" title="设置" @click="settingsOpen = true"><Settings2 class="size-4" /></Button>
+      </template>
       <template #actions>
         <Button variant="outline" class="min-h-11" :disabled="!groups.length" @click="toggleAll">
           <ChevronsUpDown class="size-3.5" />{{ allExpanded ? '全部收起' : '全部展开' }}
         </Button>
-        <Button variant="outline" class="min-h-11" @click="settingsOpen = true"><Settings2 class="size-3.5" />设置</Button>
+        <Button variant="outline" class="min-h-11" :disabled="!allTestGroups.length || testing.size > 0 || nodeTesting.size > 0 || batchRunning" @click="testAll">
+          <Loader2 v-if="batchRunning" class="size-3.5 animate-spin" /><Zap v-else class="size-3.5" />全部分组测速
+        </Button>
       </template>
     </Toolbar>
+    <div v-if="batchRunning" role="status" class="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+      <span>已测 {{ batchDone }} / {{ batchTotal }} 组 · 依次测试，包含隐藏分组</span>
+      <Button variant="ghost" size="sm" class="min-h-11" :disabled="batchStop" @click="batchStop = true">{{ batchStop ? '当前分组结束后停止' : '停止后续测速' }}</Button>
+    </div>
     <MihomoProxySettings v-model:open="settingsOpen" :settings="settings" @update:settings="applySettings" />
 
     <LoadingRows v-if="loading && !groups.length" :rows="5" />
@@ -43,7 +52,7 @@
           </button>
           <Button v-if="group.fixed" variant="ghost" size="sm" class="min-h-11" :disabled="busy.has(group.name)" @click="unfix(group)">取消固定</Button>
           <Button variant="ghost" size="icon" class="size-11 shrink-0" :aria-label="`测速 ${group.name}`" :title="'测速'"
-            :disabled="testing.has(group.name)" @click="testGroup(group)">
+            :disabled="batchRunning || testing.has(group.name) || nodeTesting.size > 0" @click="testGroup(group)">
             <Loader2 v-if="testing.has(group.name)" class="size-4 animate-spin" />
             <Zap v-else class="size-4" />
           </Button>
@@ -52,16 +61,22 @@
           <div v-for="section in sectionsOf(group)" :key="section.title">
             <div v-if="settings.groupByProvider" class="mb-1.5 text-[11.5px] text-muted-foreground">{{ section.title }} · {{ section.members.length }}</div>
             <div class="grid gap-2" :style="{ gridTemplateColumns: `repeat(auto-fill, minmax(min(${settings.cardMinWidth}px, 100%), 1fr))` }">
-              <button v-for="member in section.members" :key="member" type="button"
-                class="flex min-h-11 min-w-0 flex-col justify-center rounded-lg border px-3 py-1.5 text-left transition-colors duration-200 focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default"
-                :class="member === group.now ? 'border-primary-accent/60 bg-primary-soft' : 'border-border bg-background hover:border-border-strong enabled:hover:bg-accent'"
-                :disabled="!canSwitch(group) || busy.has(group.name)" :aria-pressed="member === group.now" @click="select(group, member)">
-                <span class="truncate text-[13px] text-foreground" :title="member">{{ member }}</span>
-                <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
-                  <span>{{ proxies[member]?.type || '—' }}</span>
-                  <span class="num" :class="toneClass(delayOf(member, group))">{{ delayText(delayOf(member, group)) }}</span>
-                </span>
-              </button>
+              <div v-for="member in section.members" :key="member" class="flex min-w-0 items-center rounded-lg border transition-colors duration-200"
+                :class="member === group.now ? 'border-primary-accent/60 bg-primary-soft' : 'border-border bg-background hover:border-border-strong'">
+                <button type="button" class="flex min-h-11 min-w-0 flex-1 flex-col justify-center rounded-lg px-3 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default enabled:hover:bg-accent"
+                  :disabled="!canSwitch(group) || busy.has(group.name)" :aria-pressed="member === group.now" @click="select(group, member)">
+                  <span class="max-w-full truncate text-[13px] text-foreground" :title="member">{{ member }}</span>
+                  <span class="flex max-w-full flex-wrap items-center gap-x-2 text-[11.5px] text-muted-foreground">
+                    <span class="truncate" :title="proxies[member]?.type">{{ proxies[member]?.type || '—' }}</span>
+                    <span v-if="!canTestNode(member)" class="num whitespace-nowrap" :class="toneClass(delayOf(member, group))">{{ delayText(delayOf(member, group)) }}</span>
+                  </span>
+                </button>
+                <Button v-if="canTestNode(member)" variant="ghost" size="icon" class="h-auto min-h-11 min-w-11 w-auto shrink-0 flex-col gap-0.5 self-stretch px-1.5" :aria-label="`单节点测速 ${member}（${group.name}）`"
+                  :disabled="batchRunning || testing.size > 0 || nodeTesting.has(delayKey(member, group))" @click="testNode(member, group)">
+                  <Loader2 v-if="nodeTesting.has(delayKey(member, group))" class="size-3.5 animate-spin" /><Zap v-else class="size-3.5" />
+                  <span class="num whitespace-nowrap text-[11px] font-normal" :class="toneClass(delayOf(member, group))">{{ delayText(delayOf(member, group)) }}</span>
+                </Button>
+              </div>
             </div>
           </div>
           <p v-if="!sectionsOf(group).length" class="m-0 text-xs text-muted-foreground">没有可显示的节点{{ settings.hideUnavailable ? '（已隐藏不可用节点）' : '' }}。</p>
@@ -94,7 +109,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ArrowRight, ChevronRight, ChevronsUpDown, Loader2, Search, Settings2, TriangleAlert, Zap } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import Toolbar from '@/components/common/Toolbar.vue'
@@ -127,10 +142,20 @@ const error = ref('')
 const search = ref('')
 const expanded = ref(new Set<string>())
 const testing = reactive(new Set<string>())
+const nodeTesting = reactive(new Set<string>())
+const batchRunning = ref(false)
+const batchStop = ref(false)
+const batchDone = ref(0)
+const batchTotal = ref(0)
+let disposed = false
+let testEpoch = 0
+const delayKey = (name: string, group?: MihomoProxy) => JSON.stringify([name, group?.testUrl || ''])
+const canTestNode = (name: string) => !!proxies.value[name] && !GROUP_TYPES.has(proxies.value[name].type) && !['Reject', 'RejectDrop'].includes(proxies.value[name].type)
 const busy = reactive(new Set<string>())
 /** 本次会话里测速得到的延迟，优先于核心记录的历史 */
 const delays = reactive(new Map<string, number>())
 
+const allTestGroups = computed(() => orderedGroups(proxies.value, true))
 const groups = computed(() => orderedGroups(proxies.value, settings.value.showHiddenGroups))
 const visibleGroups = computed(() => {
   const keyword = search.value.trim().toLowerCase()
@@ -183,7 +208,7 @@ const canSwitch = (group: MihomoProxy) => SWITCHABLE_GROUP_TYPES.has(group.type)
 
 /** 成员是策略组时，延迟取它当前选中的节点 */
 function delayOf(name: string, group?: MihomoProxy, depth = 0): number | undefined {
-  if (delays.has(name)) return delays.get(name)
+  if (delays.has(delayKey(name, group))) return delays.get(delayKey(name, group))
   const proxy = proxies.value[name]
   if (!proxy) return undefined
   const own = latestDelay(proxy, group?.testUrl)
@@ -270,19 +295,63 @@ async function unfix(group: MihomoProxy) {
   }
 }
 
-async function testGroup(group: MihomoProxy) {
+async function testNode(name: string, group: MihomoProxy) {
+  const key = delayKey(name, group)
+  if (batchRunning.value || testing.size || nodeTesting.has(key)) return
+  const generation = testEpoch
+  const agentId = props.agentId
+  nodeTesting.add(key)
+  try {
+    const { data } = await mihomoPanelApi.proxyDelay(agentId, name, group.testUrl)
+    if (disposed || generation !== testEpoch) return
+    const delay = data.data?.delay
+    if (typeof delay !== 'number' || !Number.isFinite(delay) || delay < 0) throw new Error('测速结果无效，请重试。')
+    delays.set(key, delay)
+  } catch (failure) {
+    if (!disposed && generation === testEpoch) notify.error(`${name} 测速失败`, panelError(failure))
+  } finally { if (generation === testEpoch) nodeTesting.delete(key) }
+}
+
+async function testGroup(group: MihomoProxy, inBatch = false): Promise<boolean> {
+  if (testing.has(group.name) || nodeTesting.size || (batchRunning.value && !inBatch)) return false
+  const generation = testEpoch
+  const agentId = props.agentId
   testing.add(group.name)
   try {
-    const { data } = await mihomoPanelApi.groupDelay(props.agentId, group.name, group.testUrl)
+    const { data } = await mihomoPanelApi.groupDelay(agentId, group.name, group.testUrl)
+    if (disposed || generation !== testEpoch) return false
     const result: Record<string, number> = data.data || {}
-    for (const member of group.all || []) delays.set(member, result[member] ?? 0)
-    // 自动策略组测速后可能换了节点，刷新一次当前选择
-    if (group.type !== 'Selector') await load()
+    for (const member of group.all || []) delays.set(delayKey(member, group), result[member] ?? 0)
+    if (!inBatch && group.type !== 'Selector') await load()
+    return true
   } catch (failure) {
-    notify.error(`${group.name} 测速失败`, panelError(failure))
-  } finally {
-    testing.delete(group.name)
-  }
+    if (!disposed && generation === testEpoch) notify.error(`${group.name} 测速失败`, panelError(failure))
+    return false
+  } finally { if (generation === testEpoch) testing.delete(group.name) }
+}
+
+async function testAll() {
+  if (batchRunning.value || testing.size || nodeTesting.size) return
+  const queue = [...allTestGroups.value]
+  if (!queue.length) return
+  const generation = testEpoch
+  batchRunning.value = true
+  batchStop.value = false
+  batchDone.value = 0
+  batchTotal.value = queue.length
+  let failed = 0
+  try {
+    for (const group of queue) {
+      if (disposed || generation !== testEpoch || batchStop.value) break
+      const success = await testGroup(group, true)
+      if (disposed || generation !== testEpoch) return
+      if (!success) failed++
+      batchDone.value++
+    }
+    if (disposed || generation !== testEpoch) return
+    notify.info(batchStop.value ? '已停止后续测速' : '全部分组测速完成', `已测 ${batchDone.value} 组${failed ? `，${failed} 组失败` : ''}`)
+    await load()
+  } finally { if (generation === testEpoch) batchRunning.value = false }
 }
 
 async function updateProvider(provider: MihomoProvider) {
@@ -313,5 +382,10 @@ async function healthcheck(provider: MihomoProvider) {
 }
 
 watch(() => props.reloadToken, () => { delays.clear(); load() })
+watch(() => props.agentId, () => {
+  testEpoch++; epoch++; testing.clear(); nodeTesting.clear(); delays.clear(); proxies.value = {}; providers.value = []
+  batchRunning.value = false; batchStop.value = true; void load()
+})
+onUnmounted(() => { disposed = true; testEpoch++; epoch++; batchStop.value = true })
 onMounted(load)
 </script>
