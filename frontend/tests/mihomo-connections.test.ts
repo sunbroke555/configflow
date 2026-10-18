@@ -84,3 +84,12 @@ describe('mihomo connections', () => {
     expect(dialog?.textContent).toContain('IPv4')
   })
 })
+
+describe('mihomo connection summary', () => {
+  it('puts counters on the first row and trend metrics on the second', async () => {
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([]))
+    const { state } = await render()
+    expect(state.summary.map((item: { label: string }) => item.label))
+      .toEqual(['连接', '累计上传', '累计下载', '内存使用', '上传速度', '下载速度'])
+  })
+})
