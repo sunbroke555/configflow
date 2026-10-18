@@ -22,6 +22,9 @@ from backend.utils.sub_store_client import (
 from backend.utils.url_utils import safe_exception_details
 from backend.utils import subscription_health
 from backend.utils.subscription_filter import filter_subscription_items, validate_regex_filter
+from backend.utils.subscription_refresh import (
+    fetch_subscription_source, validate_refresh_interval, source_cache_metadata, remember_source_download,
+)
 
 # 由服务端计算、不属于订阅配置本身的字段；前端整对象回写时要剥掉，避免落进配置文件
 DERIVED_FIELDS = ('cached_node_count', 'cached_total_count', 'cached_updated_at', 'traffic', 'traffic_at', 'last_fetch')
@@ -50,6 +53,11 @@ def validate_subscription_fields(data):
     regex_error = validate_regex_filter(data.get('regex_filter'))
     if regex_error:
         return jsonify({'success': False, 'message': regex_error}), 400
+    if 'interval' in data:
+        try:
+            validate_refresh_interval(data['interval'])
+        except ValueError as exc:
+            return jsonify({'success': False, 'message': str(exc)}), 400
     return None
 
 
@@ -211,6 +219,7 @@ def fetch_subscription(sub_id):
     try:
         current_app.logger.info(f"尝试通过 Sub-Store 获取订阅: {sub['name']} (id: {sub_id})")
         fetch_result = get_subscription_proxies_yaml(sub_id, sub['url'], refresh=True)
+        fetch_result = remember_source_download(sub, fetch_result)
         yaml_text, source = fetch_result
         proxies = parse_proxies_from_yaml(yaml_text)
         nodes = proxies_to_nodes(proxies)
@@ -226,10 +235,7 @@ def fetch_subscription(sub_id):
         cache_payload = save_subscription_nodes(
             sub_id,
             nodes,
-            {
-                'subscription_name': sub.get('name'),
-                'url': sub.get('url')
-            }
+            source_cache_metadata(sub, fetch_result)
         )
         nodes = filter_subscription_items(sub, nodes)
         # 复用订阅正文请求的流量头，不为流量信息额外访问机场。
@@ -351,6 +357,7 @@ def get_all_subscription_proxies():
         all_proxies = []
         subscription_info = []
         prepared = {}
+        pending_cache_updates = []
 
         for sub in subscriptions:
             if not sub.get('enabled', True):
@@ -363,8 +370,12 @@ def get_all_subscription_proxies():
             # 通过 Sub-Store 获取 proxies
             proxies = []
             try:
-                yaml_text, _source = get_subscription_proxies_yaml(sub_id, sub_url)
-                proxies = filter_subscription_items(sub, parse_provider_proxies(yaml_text, name=sub_name))
+                result = fetch_subscription_source(sub, fetch=get_subscription_proxies_yaml)
+                yaml_text, _source = result
+                raw_proxies = parse_provider_proxies(yaml_text, name=sub_name)
+                proxies = filter_subscription_items(sub, raw_proxies)
+                if raw_proxies and _source != 'cache':
+                    pending_cache_updates.append((sub_id, proxies_to_nodes(raw_proxies), source_cache_metadata(sub, result)))
             except StrategyReferenceError:
                 # Invalid content is not a transport failure and must not use cache.
                 raise
@@ -410,6 +421,9 @@ def get_all_subscription_proxies():
             names = {p['name'] for p in all_proxies}
             combined_main['proxies'] = [p for p in combined_main.get('proxies', []) if p['name'] not in names] + all_proxies
             prepare_provider_bundle(config_data, combined_main, prepared=prepared)
+
+        from backend.utils.provider_delivery import commit_cache_updates
+        commit_cache_updates(pending_cache_updates)
 
         # 构建 YAML 响应
         yaml_data = {
@@ -522,7 +536,8 @@ def get_subscription_proxies(sub_id):
             if sub_url:
                 try:
                     current_app.logger.info(f"尝试获取最新配置: {sub_name} (id: {sub_id})")
-                    yaml_text, source = get_subscription_proxies_yaml(sub_id, sub_url)
+                    result = fetch_subscription_source(sub, fetch=get_subscription_proxies_yaml)
+                    yaml_text, source = result
                     from backend.utils.provider_delivery import parse_provider_proxies
                     raw_proxies = parse_provider_proxies(yaml_text, name=sub_name)
                     proxies = filter_subscription_items(sub, raw_proxies)
@@ -535,7 +550,7 @@ def get_subscription_proxies(sub_id):
                         convert_proxies_to_loon_text(proxies)
                     validate_subscription_delivery(proxies)
 
-                    if raw_proxies:
+                    if raw_proxies and source != 'cache':
                         # 更新本地缓存（转换为 node 格式存储，保留筛选前的原始节点）
                         nodes = proxies_to_nodes(raw_proxies)
                         for node in nodes:
@@ -543,10 +558,7 @@ def get_subscription_proxies(sub_id):
                             node['subscription_name'] = sub_name
                             if 'id' not in node:
                                 node['id'] = f"node_{uuid.uuid4().hex[:8]}"
-                        save_subscription_nodes(sub_id, nodes, {
-                            'subscription_name': sub_name,
-                            'url': sub_url
-                        })
+                        save_subscription_nodes(sub_id, nodes, source_cache_metadata(sub, result))
                         cache_updated = True
                         subscription_health.record_fetch(sub_id, ok=True, count=len(proxies))
                         if source == 'rendered_yaml':

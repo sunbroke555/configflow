@@ -11,6 +11,7 @@ Sub-Store API 参考:
 """
 import os
 import uuid
+from datetime import datetime, timezone
 from concurrent.futures import Future
 from threading import Lock
 from time import monotonic
@@ -41,9 +42,10 @@ _fetch_failures = {}
 class SubscriptionResult(tuple):
     """Keep the existing two-value API while carrying already-fetched traffic."""
 
-    def __new__(cls, text, source, traffic=None):
+    def __new__(cls, text, source, traffic=None, fetched_at=None):
         result = super().__new__(cls, (text, source))
         result.traffic = traffic
+        result.fetched_at = fetched_at or datetime.now(timezone.utc).isoformat()
         return result
 
 

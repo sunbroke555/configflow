@@ -29,6 +29,7 @@ from backend.routes import subscription_aggregations_bp as bp
 from backend.converters.mihomo import convert_node_to_mihomo
 from backend.utils.subscription_cache import load_subscription_cache
 from backend.utils.subscription_filter import filter_subscription_items
+from backend.utils.subscription_refresh import fetch_subscription_source, source_cache_metadata
 from backend.utils.sub_store_client import (
     get_subscription_proxies_yaml,
     parse_proxies_from_yaml,
@@ -121,7 +122,7 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
         subscriptions = config_data.get('subscriptions', [])
 
         def fetch_one_subscription(sub_id, sub):
-            """拉取单个订阅，返回 (sub_id, proxies 或 None, nodes_list)
+            """返回订阅内容、节点与需要提交的下载时间信息。
 
             单个订阅的失败被限制在本函数内：调用方只会看到 nodes_list 为
             空，不会中断其他订阅。
@@ -132,7 +133,9 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
             # 优先通过 Sub-Store 获取
             try:
                 logger.info(f"尝试通过 Sub-Store 获取订阅最新数据: '{sub['name']}'")
-                yaml_text, source = (subscription_fetch or get_subscription_proxies_yaml)(sub_id, sub['url'])
+                result = fetch_subscription_source(
+                    sub, fetch=subscription_fetch or get_subscription_proxies_yaml)
+                yaml_text, source = result
                 from backend.utils.provider_delivery import parse_provider_proxies
                 proxies = parse_provider_proxies(yaml_text, name=sub['name'])
 
@@ -146,7 +149,11 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
 
                 # Cache updates are deferred until the entire provider passes
                 # final topology validation; dry preflight never commits them.
-                if source == 'rendered_yaml':
+                if source == 'cache':
+                    logger.info("使用订阅 '%s' 的已有节点缓存", sub['name'])
+                elif source == 'source_cache':
+                    logger.info("复用订阅 '%s' 在更新间隔内的下载结果", sub['name'])
+                elif source == 'rendered_yaml':
                     logger.info(f"成功直接复用订阅 URL 返回的 Sub-Store YAML 并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
                 elif source == 'sub_store':
                     logger.info(f"成功通过 Sub-Store 转换订阅并更新缓存: '{sub['name']}', 节点数: {len(nodes_list)}")
@@ -171,7 +178,8 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
                     logger.error(f"订阅 '{sub['name']}' 既无法从 Sub-Store 获取也没有本地缓存")
                     nodes_list = []
 
-            return sub_id, proxies, nodes_list
+            metadata = source_cache_metadata(sub, result) if proxies is not None and source != 'cache' else None
+            return sub_id, proxies, nodes_list, metadata
 
         # 并发拉取各订阅：单个订阅经 Sub-Store 解析最长可耗数十秒，
         # 串行时一个慢/失败的订阅会拖长整个聚合，导致客户端（如 Mihomo
@@ -192,8 +200,8 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
                            for sub_id, sub in pending]
                 for future in as_completed(futures):
                     try:
-                        fetched_id, proxies, nodes_list = future.result()
-                        results[fetched_id] = (proxies, nodes_list)
+                        fetched_id, proxies, nodes_list, fetched = future.result()
+                        results[fetched_id] = (proxies, nodes_list, fetched)
                     except StrategyReferenceError:
                         raise
                     except Exception as e:
@@ -202,11 +210,12 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
 
         # 按聚合中配置的订阅顺序汇总，保证输出稳定
         for sub_id, _sub in pending:
-            proxies, nodes_list = results.get(sub_id, (None, []))
+            proxies, nodes_list, fetched = results.get(sub_id, (None, [], False))
             if proxies is not None:
                 sub_proxies_map[sub_id] = filter_subscription_items(_sub, proxies)
                 # 缓存保留订阅原始节点，订阅级筛选只作用于聚合输出
-                pending_cache_updates.append((sub_id, nodes_list, _sub))
+                if fetched:
+                    pending_cache_updates.append((sub_id, nodes_list, fetched))
             nodes_list = filter_subscription_items(_sub, nodes_list)
 
             # Validate cache/remote metadata before hashing names or converting.
@@ -293,8 +302,7 @@ def generate_aggregation_provider(aggregation: Dict[str, Any], *, config=None,
         'name': aggregation['name'],
         'file_path': None,
         'content': yaml_content,
-        'cache_updates': [(sub_id, nodes, {'subscription_name': sub['name'], 'url': sub.get('url')})
-                          for sub_id, nodes, sub in pending_cache_updates],
+        'cache_updates': pending_cache_updates,
         'subscription_node_counts': subscription_node_counts,
         'total_count': len(proxies)
     }

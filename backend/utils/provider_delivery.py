@@ -165,6 +165,7 @@ def _prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
     from backend.utils.dialer_references import validate_shapes
     from backend.converters.mihomo import convert_node_to_mihomo, IndentDumper
     from backend.utils.subscription_filter import filter_subscription_items
+    from backend.utils.subscription_refresh import fetch_subscription_source, source_cache_metadata
 
     fetch = fetch or get_subscription_proxies_yaml
     update = None
@@ -172,17 +173,18 @@ def _prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
     transport_error = None
     if sub.get('url'):
         try:
-            text, _source = fetch(sub['id'], sub['url'])
+            result = fetch_subscription_source(sub, fetch=fetch)
+            text, _source = result
             raw_proxies = parse_provider_proxies(text, name=sub.get('name', ''), path=source_path)
             proxies = filter_subscription_items(sub, raw_proxies)
             snapshot.validate(proxies, provider_name=sub['name'])
-            if raw_proxies:
+            if raw_proxies and _source != 'cache':
                 nodes = proxies_to_nodes(raw_proxies)
                 for node in nodes:
                     node['subscription_id'] = sub['id']
                     node['subscription_name'] = sub['name']
                     node.setdefault('id', f"node_{uuid.uuid4().hex[:8]}")
-                update = (sub['id'], nodes, {'subscription_name': sub['name'], 'url': sub['url']})
+                update = (sub['id'], nodes, source_cache_metadata(sub, result))
         except StrategyReferenceError:
             raise
         except Exception as exc:

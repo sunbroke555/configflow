@@ -131,6 +131,14 @@ def test_selected_provider_bytes_change_fingerprint_without_changing_main_yaml(c
         config['proxy_groups'][0].update(subscriptions=[], aggregations=['selected-aggregation'])
     original = prepare(config, 'mihomo')
     remote['provider'] = remote['provider'].replace('first.test', 'second.test')
+    # Upstream changes are intentionally invisible while the source interval
+    # is active, even when background content checks run repeatedly.
+    assert fingerprint(prepare(config, 'mihomo')) == fingerprint(original)
+    from backend.utils.subscription_refresh import _download_cache_path
+    cache_path = _download_cache_path(config['subscriptions'][0]['url'])
+    downloaded = repository.read_shared_json(cache_path)
+    downloaded['fetched_at'] = '2000-01-01T00:00:00+00:00'
+    repository.write_shared_json(cache_path, downloaded)
     current = prepare(config, 'mihomo')
     original_files, current_files = files(original), files(current)
     assert original_files['config.yaml'] == current_files['config.yaml']
