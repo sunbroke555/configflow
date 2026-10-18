@@ -68,11 +68,12 @@
                 <Button variant="outline" size="icon" class="size-11 shrink-0" aria-label="设置显示列" title="显示列"><Columns3 class="size-4" /></Button>
               </PopoverTrigger>
               <PopoverContent align="end" :collision-padding="12" class="w-72 max-h-(--reka-popover-content-available-height) overflow-y-auto" role="dialog" aria-label="显示列">
-                <div class="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">显示列<Button variant="ghost" class="min-h-11 px-2 font-normal" @click="settings.columns = [...DEFAULT_CONNECTION_COLUMNS]">恢复默认</Button></div>
-                <p class="mb-2 mt-0 text-xs leading-relaxed text-muted-foreground">窄窗口会自动收起次要列；点击连接可查看全部信息。</p>
+                <div class="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">显示列<Button variant="ghost" class="min-h-11 px-2 font-normal" @click="resetColumns">恢复默认</Button></div>
+                <p class="mb-2 mt-0 text-xs leading-relaxed text-muted-foreground">勾选后优先显示；空间不足会收起其他列，详情中仍可查看。</p>
                 <div class="grid grid-cols-2 gap-x-3">
                   <label v-for="column in CONNECTION_COLUMNS" :key="column.key" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px]">
-                    <Checkbox :model-value="settings.columns.includes(column.key)" :disabled="column.key === 'target'" @update:model-value="value => toggleColumn(column.key, !!value)" />{{ column.label }}
+                    <Checkbox :model-value="visibleColumnKeys.has(column.key)" :aria-label="column.label" :disabled="column.key === 'target'" @update:model-value="value => toggleColumn(column.key, !!value)" />{{ column.label }}
+                    <span v-if="settings.columns.includes(column.key) && !visibleColumnKeys.has(column.key)" class="ml-auto shrink-0 text-[11px] text-muted-foreground">收起</span>
                   </label>
                 </div>
               </PopoverContent>
@@ -338,7 +339,8 @@ const rows = computed(() => {
     : filterConnections(view.value === 'closed' ? closed.value : [...activeRows.value, ...closed.value], search.value, filters.value, sourceName)
   return sortConnections(list, settings.value.sort, settings.value.direction, now.value)
 })
-const visibleColumns = computed(() => connectionDisplayColumns(settings.value.columns, panelWidth.value || 1400, actionsWidth.value + 16))
+const visibleColumns = computed(() => connectionDisplayColumns(settings.value.columns, panelWidth.value || 1400, actionsWidth.value + 16, settings.value.preferredColumns))
+const visibleColumnKeys = computed(() => new Set(visibleColumns.value.map(column => column.key)))
 const hiddenColumnCount = computed(() => settings.value.columns.length - visibleColumns.value.length)
 const columnLabel = (key: ConnectionColumn) => CONNECTION_COLUMNS.find(column => column.key === key)!.label
 function columnStyle(column: typeof visibleColumns.value[number]) {
@@ -399,6 +401,14 @@ function changeSort(key: ConnectionSort, toggle = false) {
 function toggleColumn(key: ConnectionColumn, visible: boolean) {
   if (key === 'target') return
   settings.value.columns = CONNECTION_COLUMNS.filter(column => column.key === key ? visible : settings.value.columns.includes(column.key)).map(column => column.key)
+  const preferred = (settings.value.preferredColumns || []).filter(column => column !== key)
+  if (visible) preferred.push(key)
+  if (preferred.length) settings.value.preferredColumns = preferred
+  else delete settings.value.preferredColumns
+}
+function resetColumns() {
+  settings.value.columns = [...DEFAULT_CONNECTION_COLUMNS]
+  delete settings.value.preferredColumns
 }
 const viewOptions = computed<Array<{ value: ViewKey; label: string }>>(() => [
   { value: 'active', label: `活跃 (${activeRows.value.length})` },

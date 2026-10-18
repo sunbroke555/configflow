@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   CONNECTION_COLUMNS, CONNECTION_SETTINGS_KEY, DEFAULT_CONNECTION_COLUMNS, connectionDisplayColumns, emptyConnectionFilters, filterConnections,
-  loadConnectionTableSettings, saveConnectionTableSettings, sortConnections
+  loadConnectionTableSettings, saveConnectionTableSettings, sortConnections, type ConnectionColumn
 } from '@/lib/mihomo-connections'
 import type { ConnectionRow } from '@/types/mihomo'
 
@@ -74,6 +74,43 @@ describe('connection table preferences', () => {
     expect(narrow.reduce((sum, column) => sum + column.width, 76)).toBeLessThanOrEqual(800)
     expect(connectionDisplayColumns(selected, 375).map(column => column.key)).toEqual(selected)
     expect(selected).toHaveLength(CONNECTION_COLUMNS.length)
+  })
+
+  it.each([1200, 1300])('shows manually requested upload, start and process fields within a %ipx desktop panel', width => {
+    const selected = CONNECTION_COLUMNS.map(column => column.key)
+    const preferred: ConnectionColumn[] = []
+    for (const key of ['upload', 'start', 'process'] as ConnectionColumn[]) {
+      preferred.push(key)
+      const displayed = connectionDisplayColumns(selected, width, 92, preferred)
+      expect(displayed.map(column => column.key)).toEqual(expect.arrayContaining(['target', ...preferred]))
+      expect(displayed.reduce((sum, column) => sum + column.width, 92)).toBeLessThanOrEqual(width)
+    }
+    expect(selected).toEqual(CONNECTION_COLUMNS.map(column => column.key))
+  })
+
+  it.each([92, 116])('keeps the newest manual choice visible at the desktop boundary with %ipx reserved for controls', reserved => {
+    const selected = CONNECTION_COLUMNS.map(column => column.key)
+    const preferred: ConnectionColumn[] = []
+    for (const key of selected.filter(key => key !== 'target')) {
+      preferred.push(key)
+      const displayed = connectionDisplayColumns(selected, 741, reserved, preferred)
+      expect(displayed.map(column => column.key)).toEqual(expect.arrayContaining(['target', key]))
+      expect(displayed.reduce((sum, column) => sum + column.width, reserved)).toBeLessThanOrEqual(741)
+    }
+    // Mobile already has a labelled multi-line layout; it must not inherit desktop folding.
+    expect(connectionDisplayColumns(selected, 740, reserved, preferred).map(column => column.key)).toEqual(selected)
+  })
+
+  it('preserves manual priorities across visits and ignores invalid, duplicate or deselected priorities', () => {
+    const columns: ConnectionColumn[] = ['target', 'upload', 'start', 'process']
+    saveConnectionTableSettings({ sort: 'upload', direction: 'asc', columns, groupBy: 'source', preferredColumns: ['upload', 'start', 'process'] })
+    expect(loadConnectionTableSettings()).toMatchObject({ columns, preferredColumns: ['upload', 'start', 'process'], groupBy: 'source' })
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({
+      layoutVersion: 3, columns, preferredColumns: ['process', 'unknown', 'upload', 'start', 'upload', 'target', 'chain', null]
+    }))
+    expect(loadConnectionTableSettings().preferredColumns).toEqual(['process', 'start', 'upload'])
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ columns, preferredColumns: 'process' }))
+    expect(loadConnectionTableSettings().preferredColumns ?? []).toEqual([])
   })
 
   it('upgrades the previous compact preset and validates grouping preferences', () => {

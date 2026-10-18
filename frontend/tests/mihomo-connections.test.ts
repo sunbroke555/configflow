@@ -4,6 +4,7 @@ import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
 import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { compareSources, connectionMatcher, INNER_SOURCE } from '@/types/mihomo'
 import { confirmDanger } from '@/lib/feedback'
+import { CONNECTION_COLUMNS, CONNECTION_SETTINGS_KEY, DEFAULT_CONNECTION_COLUMNS } from '@/lib/mihomo-connections'
 
 vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn(), ruleTargets: vi.fn() }, mihomoPanelApi: { connections: vi.fn(), closeConnection: vi.fn(), closeAllConnections: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirmDanger: vi.fn(), notify: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
@@ -115,6 +116,104 @@ describe('mihomo connections', () => {
     expect(next.state.visibleColumns.map((column: any) => column.key)).not.toContain('upload')
     expect(next.state.filtering).toBe(false)
     expect(next.state.rows).toHaveLength(2)
+  })
+
+  it.each([
+    ['upload', '上传量'], ['start', '开始时间'], ['process', '进程']
+  ])('shows %s immediately when selected in a narrow desktop column menu', async (key, label) => {
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([connection('a', 'example.com', '10.0.0.3', { process: 'browser' })]))
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ layoutVersion: 3, columns: CONNECTION_COLUMNS.map(column => column.key) }))
+    const { wrapper, state } = await render()
+    state.panelWidth = 1200
+    await flushPromises()
+    expect(wrapper.find(`button[aria-label="按${label}排序"]`).exists()).toBe(false)
+    await wrapper.get('button[aria-label="设置显示列"]').trigger('click')
+    await flushPromises()
+    const checkbox = document.querySelector<HTMLElement>(`[role="checkbox"][aria-label="${label}"]`)
+      ?? Array.from(document.querySelectorAll('label')).find(item => item.textContent?.trim() === label)?.querySelector<HTMLElement>('[role="checkbox"]')
+    expect(checkbox).not.toBeNull()
+    checkbox!.click()
+    await flushPromises()
+    expect(wrapper.find(`button[aria-label="按${label}排序"]`).exists()).toBe(true)
+    expect(wrapper.find(`td[data-column="${key}"]`).exists()).toBe(true)
+    expect(checkbox!.getAttribute('aria-checked')).toBe('true')
+    const next = await render()
+    next.state.panelWidth = 1200
+    await flushPromises()
+    expect(next.wrapper.find(`td[data-column="${key}"]`).exists()).toBe(true)
+  })
+
+  it('matches column checkboxes to actual headers and retains preferences through resize', async () => {
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([connection('a', 'example.com', '10.0.0.3')]))
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ layoutVersion: 3, columns: CONNECTION_COLUMNS.map(column => column.key) }))
+    const { wrapper, state } = await render()
+    state.panelWidth = 1200
+    await flushPromises()
+    await wrapper.get('button[aria-label="设置显示列"]').trigger('click')
+    await flushPromises()
+    const columnCheckbox = (label: string) => {
+      const checkbox = document.querySelector<HTMLElement>(`[role="checkbox"][aria-label="${label}"]`)
+        ?? Array.from(document.querySelectorAll('label')).find(item => item.textContent?.trim() === label)?.querySelector<HTMLElement>('[role="checkbox"]')
+      expect(checkbox).not.toBeNull()
+      return checkbox!
+    }
+    const expectMenuMatchesHeaders = () => {
+      for (const { label } of CONNECTION_COLUMNS) {
+        expect(columnCheckbox(label).getAttribute('aria-checked')).toBe(String(wrapper.find(`button[aria-label="按${label}排序"]`).exists()))
+      }
+    }
+    expectMenuMatchesHeaders()
+    expect(columnCheckbox('进程').closest('label')?.textContent).toContain('收起')
+    for (const label of ['上传量', '开始时间', '进程']) {
+      const checkbox = columnCheckbox(label)
+      if (checkbox.getAttribute('aria-checked') === 'false') checkbox.click()
+      await flushPromises()
+      expect(wrapper.find(`button[aria-label="按${label}排序"]`).exists()).toBe(true)
+      expectMenuMatchesHeaders()
+    }
+    // Resizing may fold other fields, but it must never clear the selected preferences.
+    state.panelWidth = 741
+    await flushPromises()
+    expect(wrapper.find('td[data-column="process"]').exists()).toBe(true)
+    expectMenuMatchesHeaders()
+    state.panelWidth = 375
+    await flushPromises()
+    expect(wrapper.findAll('td[data-column]')).toHaveLength(CONNECTION_COLUMNS.length)
+    expectMenuMatchesHeaders()
+    columnCheckbox('开始时间').click()
+    await flushPromises()
+    expect(JSON.parse(localStorage.getItem(CONNECTION_SETTINGS_KEY)!).preferredColumns ?? []).not.toContain('start')
+    state.panelWidth = 2000
+    await flushPromises()
+    expect(wrapper.find('td[data-column="start"]').exists()).toBe(false)
+    expect(wrapper.findAll('td[data-column]')).toHaveLength(CONNECTION_COLUMNS.length - 1)
+    expectMenuMatchesHeaders()
+    const next = await render()
+    next.state.panelWidth = 2000
+    await flushPromises()
+    expect(next.wrapper.find('td[data-column="start"]').exists()).toBe(false)
+  })
+
+  it('restores the default columns without resetting grouping or sort preferences', async () => {
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([connection('a', 'example.com', '10.0.0.3')]))
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({
+      layoutVersion: 3, columns: CONNECTION_COLUMNS.map(column => column.key), preferredColumns: ['upload', 'start', 'process'],
+      sort: 'upload', direction: 'asc', groupBy: 'source'
+    }))
+    const { wrapper, state } = await render()
+    state.panelWidth = 2000
+    await flushPromises()
+    await wrapper.get('button[aria-label="设置显示列"]').trigger('click')
+    await flushPromises()
+    const reset = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.trim() === '恢复默认')
+    expect(reset).toBeDefined()
+    reset!.click()
+    await flushPromises()
+    expect(wrapper.findAll('thead button[aria-label$="排序"]').map(button => button.attributes('aria-label')))
+      .toEqual(CONNECTION_COLUMNS.filter(column => DEFAULT_CONNECTION_COLUMNS.includes(column.key)).map(column => `按${column.label}排序`))
+    expect(state.settings).toMatchObject({ sort: 'upload', direction: 'asc', groupBy: 'source' })
+    expect(JSON.parse(localStorage.getItem(CONNECTION_SETTINGS_KEY)!)).not.toHaveProperty('preferredColumns')
+    expect(wrapper.findAll('[data-group-id]')).toHaveLength(1)
   })
 
   it('keeps selected filters when a source disappears, and allows clearing an empty result', async () => {
