@@ -201,6 +201,7 @@ import { agentApi, generateApi, ruleSetApi, statsApi } from '@/api'
 import { createDeploymentId, useAgentDeployments } from '@/composables/useAgentDeployments'
 import { consumeAction } from '@/lib/actions'
 import { notify } from '@/lib/feedback'
+import { copyText } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/stores/live'
 
@@ -367,7 +368,7 @@ const generate = async () => {
 
 const copyOutput = async () => {
   try {
-    await navigator.clipboard.writeText(output.value)
+    await copyText(output.value)
     notify.success('已复制到剪贴板')
   } catch {
     notify.error('复制失败，请在面板中手动选择')

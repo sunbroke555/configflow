@@ -387,6 +387,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { copyText } from '@/lib/clipboard'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import api, { configApi, serverDomainApi, configTokenApi, ruleFetchProxyApi, dependenciesApi } from '@/api'
 import type { DependencyStatus } from '@/api'
@@ -499,7 +500,7 @@ const mcpUrl = computed(() => `${serverDomain.value.replace(/\/+$/, '')}/mcp`)
 
 const copyMcpUrl = async () => {
   try {
-    await navigator.clipboard.writeText(mcpUrl.value)
+    await copyText(mcpUrl.value)
     notify.success('MCP 地址已复制')
   } catch {
     notify.error('复制失败，请手动复制')

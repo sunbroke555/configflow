@@ -8,6 +8,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import FormField from '@/components/common/FormField.vue'
 import InfoNote from '@/components/common/InfoNote.vue'
 import { notify } from '@/lib/feedback'
+import { copyText } from '@/lib/clipboard'
 import type { Agent } from '@/types'
 
 defineProps<{ agent: Agent }>()
@@ -26,25 +27,7 @@ const pullCommand = computed(() => validImage.value ? `docker pull '${image.valu
 async function copyCommand(command: string) {
   if (!command) return
   try {
-    try {
-      await navigator.clipboard.writeText(command)
-    } catch {
-      const input = document.createElement('textarea')
-      input.value = command
-      input.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
-      // Keep the fallback within the dialog's focus scope.
-      const active = document.activeElement as HTMLElement | null
-      const host = active?.closest('[role="dialog"]') || document.body
-      host.appendChild(input)
-      try {
-        input.focus()
-        input.select()
-        if (!document.execCommand('copy')) throw new Error('Copy failed')
-      } finally {
-        input.remove()
-        active?.focus()
-      }
-    }
+    await copyText(command)
     notify.success('命令已复制，请到 Docker 宿主机执行')
   } catch {
     notify.error('复制失败，请手动选择并复制命令')

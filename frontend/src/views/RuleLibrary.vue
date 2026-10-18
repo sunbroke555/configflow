@@ -669,6 +669,7 @@ import ReorderBar from '@/components/shell/ReorderBar.vue'
 import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
 import { useProfileStore } from '@/stores/profile'
 import api from '@/api'
@@ -1369,17 +1370,10 @@ const copyRuleUrl = async (rule: RuleLibraryItem) => {
   }
 
   try {
-    await navigator.clipboard.writeText(url)
+    await copyText(url)
     notify.success('URL已复制到剪贴板')
-  } catch (err) {
-    // 降级方案
-    const input = document.createElement('input')
-    input.value = url
-    document.body.appendChild(input)
-    input.select()
-    document.execCommand('copy')
-    document.body.removeChild(input)
-    notify.success('URL已复制到剪贴板')
+  } catch {
+    notify.error('复制失败，请手动选择并复制地址')
   }
 }
 

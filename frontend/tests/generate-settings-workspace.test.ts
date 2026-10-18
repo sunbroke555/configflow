@@ -12,6 +12,8 @@ import { scopedRequests, setActiveProfileId } from '@/profileContext'
 vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
 
 const originalAdapter = api.defaults.adapter
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+const originalCopyCommand = Object.getOwnPropertyDescriptor(document, 'execCommand')
 const wrappers: ReturnType<typeof shallowMount>[] = []
 const initialConfig = '# Keep this comment\nmixed-port: 7890\n'
 const guard = (service: string, revision = 12) => ({
@@ -55,6 +57,34 @@ afterEach(() => {
   sessionStorage.clear()
   localStorage.clear()
   vi.restoreAllMocks()
+  if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard)
+  else delete (navigator as any).clipboard
+  if (originalCopyCommand) Object.defineProperty(document, 'execCommand', originalCopyCommand)
+  else delete (document as any).execCommand
+})
+
+it.each([true, false])('reports subscription and preview copy accurately on HTTP (accepted=%s)', async accepted => {
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+  const fallback = vi.fn(() => accepted)
+  Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback })
+  const wrapper = shallowMount(Generate)
+  wrappers.push(wrapper)
+  await flushPromises()
+  const url = 'http://example.test/api/config/workspace-profile/mihomo'
+  wrapper.getComponent(GenerateStudio).vm.$emit('copy', url, 'Mihomo')
+  await flushPromises()
+  expect(fallback).toHaveBeenCalledOnce()
+  expect(vi.mocked(notify.success).mock.calls.some(([message]) => String(message).includes('订阅链接已复制'))).toBe(accepted)
+  expect(vi.mocked(notify.error).mock.calls.some(([message]) => String(message).includes('复制失败'))).toBe(!accepted)
+  vi.mocked(notify.success).mockClear()
+  vi.mocked(notify.error).mockClear()
+  const draft = wrapper.vm as any
+  draft.previewContent = initialConfig
+  await draft.copyPreviewContent()
+  expect(fallback).toHaveBeenCalledTimes(2)
+  expect(notify.success).toHaveBeenCalledTimes(accepted ? 1 : 0)
+  expect(notify.error).toHaveBeenCalledTimes(accepted ? 0 : 1)
+  expect(draft.previewContent).toBe(initialConfig)
 })
 
 async function openSettings(target: string, label: string) {

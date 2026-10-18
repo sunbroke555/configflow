@@ -682,6 +682,7 @@ import InfoNote from '@/components/common/InfoNote.vue'
 import LabeledDivider from '@/components/common/LabeledDivider.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import { notify } from '@/lib/feedback'
+import { copyText } from '@/lib/clipboard'
 import { generateApi, customConfigApi, ruleApi, ruleSetApi, proxyGroupApi, serverDomainApi, configTokenApi, type PublishGuard } from '@/api'
 import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'
@@ -1352,36 +1353,13 @@ const LOG_LEVELS = [
   { value: 'error', label: 'Error（错误）', desc: '仅记录错误信息' }
 ]
 
-// 复制 URL 到剪贴板
-const copyUrl = (url: string, configType: string) => {
-  // 检查 Clipboard API 是否可用
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(() => {
-      notify.success(`${configType} 订阅链接已复制，请添加到客户端`)
-    }).catch(() => {
-      fallbackCopyUrl(url, configType)
-    })
-  } else {
-    // 降级到传统方法
-    fallbackCopyUrl(url, configType)
-  }
-}
-
-// 降级复制方法
-const fallbackCopyUrl = (text: string, configType: string) => {
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
+const copyUrl = async (url: string, configType: string) => {
   try {
-    document.execCommand('copy')
+    await copyText(url)
     notify.success(`${configType} 订阅链接已复制，请添加到客户端`)
-  } catch (err) {
+  } catch {
     notify.error('复制失败，请手动复制')
   }
-  document.body.removeChild(textarea)
 }
 
 const generateMihomo = async () => {
@@ -1648,35 +1626,13 @@ const previewConfig = async (type: ConfigType) => {
   }
 }
 
-const copyPreviewContent = () => {
-  // 检查 Clipboard API 是否可用
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(previewContent.value).then(() => {
-      notify.success('已复制到剪贴板')
-    }).catch(() => {
-      fallbackCopyPreview()
-    })
-  } else {
-    // 降级到传统方法
-    fallbackCopyPreview()
-  }
-}
-
-// 降级复制预览内容
-const fallbackCopyPreview = () => {
-  const textarea = document.createElement('textarea')
-  textarea.value = previewContent.value
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
+const copyPreviewContent = async () => {
   try {
-    document.execCommand('copy')
+    await copyText(previewContent.value)
     notify.success('已复制到剪贴板')
-  } catch (err) {
+  } catch {
     notify.error('复制失败，请手动复制预览内容')
   }
-  document.body.removeChild(textarea)
 }
 
 // ===== DNS 条目管理函数 =====

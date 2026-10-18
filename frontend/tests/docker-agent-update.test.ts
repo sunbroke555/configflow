@@ -78,3 +78,18 @@ it('supports clipboard fallback on HTTP deployments and reports copy failure hon
  expect(notify.error).toHaveBeenCalledWith('复制失败，请手动选择并复制命令')
  expect(document.querySelector('textarea')).toBeNull()
 })
+
+it('copies within the real dialog focus scope when the Clipboard API is absent', async () => {
+ Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+ const fallback = vi.fn(() => {
+  const field = document.activeElement as HTMLTextAreaElement
+  expect(field.closest('[role="dialog"]')).not.toBeNull()
+  expect(field.value.slice(field.selectionStart, field.selectionEnd)).toContain("docker compose pull 'agent'")
+  return true
+ })
+ Object.defineProperty(document, 'execCommand', { configurable: true, value: fallback })
+ await click('复制 Compose 命令')
+ expect(fallback).toHaveBeenCalledOnce()
+ expect(notify.success).toHaveBeenCalledWith('命令已复制，请到 Docker 宿主机执行')
+ expect(notify.error).not.toHaveBeenCalled()
+})
