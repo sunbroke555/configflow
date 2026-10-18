@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { notify } from '@/lib/feedback'
+import { ruleLocationDetails } from './fixtures/agent-failure'
 
 vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() } }))
 const wrappers: ReturnType<typeof mount>[] = []
@@ -45,6 +46,31 @@ describe('Agent failure diagnostics', () => {
     expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(false)
     expect(render({ status: 'succeeded' }).find('[aria-label="DNS 检查结果"]').exists()).toBe(false)
     expect(render({ status: 'succeeded', dns_checks: [] }).find('[aria-label="DNS 检查结果"]').exists()).toBe(false)
+  })
+  it('renders rule locations and untrusted content as selectable text and copies every line', async () => {
+    const details = `${ruleLocationDetails}\n出错内容：<script>alert(1)</script><img src=x onerror=alert(1)>\n${'长规则'.repeat(3000)}`
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const wrapper = render({ status: 'failed', error: '规则集内容无效', error_details: details })
+    expect(wrapper.get('pre').element.textContent).toBe(details)
+    expect(wrapper.find('script, img').exists()).toBe(false)
+    expect(wrapper.get('pre').classes()).toContain('whitespace-pre-wrap')
+    expect(wrapper.get('pre').classes()).toContain('overflow-y-auto')
+    await wrapper.get('[aria-label="复制发布失败详情"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(details)
+  })
+  it('does not invent a rule or line for errors that only identify a configuration field', () => {
+    const details = '配置文件：config.yaml\n配置项：proxy-groups[2].proxies[0]\n出错内容：missing-group\n原因：找不到引用的策略组'
+    const wrapper = render({ status: 'failed', error_details: details })
+    expect(wrapper.get('pre').element.textContent).toBe(details)
+    expect(wrapper.text()).not.toContain('行号')
+    expect(wrapper.text()).not.toContain('规则集')
+  })
+  it.each(['error', 'message'])('keeps all location lines from an older Agent %s without a details field', key => {
+    const wrapper = render({ status: 'failed', [key]: ruleLocationDetails })
+    expect(wrapper.get('pre').element.textContent).toBe(ruleLocationDetails)
+    expect(wrapper.get('p').text()).toBe('规则集：grok / 自定义')
   })
   it.each(['mihomo', 'mosdns', 'oxidns', 'surge'])('keeps full %s errors separately from rollback errors and collapsed by default', async service_type => {
     const primary = 'line 18: unknown plugin\n' + 'unbroken'.repeat(1500)

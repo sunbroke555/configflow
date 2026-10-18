@@ -40,6 +40,7 @@ _MESSAGES = {
     'Rule exceeds deployment file size limit': '规则文件超过发布大小限制，请检查规则源返回的内容。',
     'Invalid rule YAML payload': '规则文件的 YAML 内容格式不正确，请检查规则内容。',
     'Unrecognized MosDNS rule source content': '无法识别规则内容，请检查规则格式。',
+    'Invalid IP network in MosDNS ip_set rule source': 'IP 规则不是有效的 IP 地址或网段。',
     'MosDNS requires text rules; binary MRS is only supported by Mihomo': 'MosDNS 需要文本规则，MRS 二进制规则只能用于 Mihomo。',
     'MosDNS rule source is binary': 'MosDNS 规则源返回了二进制内容，请改用文本规则。',
     'Generated configuration must be a YAML mapping': '生成的配置格式不正确，请检查配置内容。',

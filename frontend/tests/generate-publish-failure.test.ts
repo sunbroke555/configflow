@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import GenerateStudio from '@/components/generate/GenerateStudio.vue'
 import { agentApi, generateApi, statsApi, ruleSetApi } from '@/api'
 import { notify } from '@/lib/feedback'
+import { ruleLocationDetails } from './fixtures/agent-failure'
 
 const live = vi.hoisted(() => ({ agents: [] as any[], start: vi.fn(), stop: vi.fn(), refresh: vi.fn() }))
 vi.mock('@/api', () => ({
@@ -57,10 +58,10 @@ describe('Generated config publication diagnostics', () => {
     expect(notify.success).not.toHaveBeenCalledWith('已推送到 1 台 Agent')
   })
   it.each(['mihomo', 'mosdns', 'oxidns'] as const)('shows %s terminal task details by the push controls', async service => {
-    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'failed', failed_stage: 'verifying', error: '配置校验失败', error_details: 'line 9: unknown target' } }) as any)
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'failed', failed_stage: 'verifying', error: '配置校验失败', error_details: ruleLocationDetails } }) as any)
     const wrapper = await render(service)
     expect(wrapper.get('[aria-label="配置发布结果"]').text()).toContain('失败步骤：校验中')
-    expect(wrapper.get('pre[tabindex="0"]').text()).toBe('line 9: unknown target')
+    expect(wrapper.get('pre[tabindex="0"]').element.textContent).toBe(ruleLocationDetails)
     expect(wrapper.get('a[href="/agents"]').text()).toContain('查看发布记录')
     expect(notify.error).toHaveBeenCalledWith('发布失败', '配置校验失败')
   })
@@ -71,10 +72,10 @@ describe('Generated config publication diagnostics', () => {
     expect(wrapper.get('pre[tabindex="0"]').text()).toBe('line 17: invalid policy')
     expect(notify.success).not.toHaveBeenCalledWith('已推送到 1 台 Agent')
   })
-  it('preserves an HTTP rejection even when no deployment id was assigned', async () => {
-    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成失败', error_details: 'invalid rule syntax' } } })
-    const wrapper = await render('mihomo')
-    expect(wrapper.get('pre[tabindex="0"]').text()).toBe('invalid rule syntax')
+  it.each(['mihomo', 'mosdns', 'oxidns', 'surge'] as const)('preserves a %s HTTP rejection even when no deployment id was assigned', async service => {
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成失败', error_details: ruleLocationDetails } } })
+    const wrapper = await render(service)
+    expect(wrapper.get('pre[tabindex="0"]').element.textContent).toBe(ruleLocationDetails)
     expect(wrapper.get('[aria-label="配置发布结果"]').text()).toContain('生成失败')
   })
 })

@@ -5,6 +5,65 @@ import json
 from backend.utils.dialer_references import DialerReferenceError, validate_emitted
 
 
+def _provider_context(exc, *, name='', path='', kind='订阅'):
+    """Keep validation exceptions outside the transport-fallback boundary."""
+    from backend.agents.deployment_locations import preparation_context
+    context = (kind, name, path)
+    contexts = getattr(exc, '_provider_contexts', ())
+    if not (name or path) or context in contexts:
+        wrapped = type(exc)(str(exc))
+        wrapped._provider_contexts = contexts
+    else:
+        wrapped = type(exc)(str(preparation_context(exc, name=name, path=path, kind=kind)))
+        wrapped._provider_contexts = (*contexts, context)
+    return wrapped
+
+
+def _shape_error(message, *field):
+    label = ''.join(f'[{item}]' if isinstance(item, int) else ('.' if index else '') + item
+                    for index, item in enumerate(field))
+    exc = DialerReferenceError(f'{message}\n字段：{label}')
+    exc.provider_field = field
+    return exc
+
+
+def _provider_source_error(exc, text, source_label):
+    """Resolve a known field only on failure; never guess a node's line number."""
+    import yaml
+    from backend.agents.deployment_locations import source_error
+    from backend.agents.diagnostics import failure_text
+    mark = getattr(exc, 'problem_mark', None)
+    field = getattr(exc, 'provider_field', ())
+    if field:
+        loader = yaml.SafeLoader(text)
+        try:
+            node = loader.get_single_node()
+            for item in field:
+                if isinstance(node, yaml.MappingNode) and isinstance(item, str):
+                    loader.flatten_mapping(node)
+                    node = next((value for key, value in reversed(node.value) if key.value == item), None)
+                elif isinstance(node, yaml.SequenceNode) and isinstance(item, int) and item < len(node.value):
+                    node = node.value[item]
+                else:
+                    node = None
+                if node is None:
+                    break
+            mark = node.start_mark if node is not None else None
+        except yaml.YAMLError:
+            pass
+        finally:
+            loader.dispose()
+    if isinstance(exc, yaml.YAMLError):
+        message, diagnostic = 'Provider YAML 内容无效', exc
+    else:
+        message, diagnostic = str(exc), None
+    detail = str(source_error(message, text,
+                line=mark.line + 1 if mark is not None else None,
+                column=mark.column + 1 if mark is not None else None, cause=diagnostic,
+                source_label=source_label))
+    return DialerReferenceError(failure_text(detail))
+
+
 @dataclass(frozen=True)
 class DeliverySnapshot:
     profile_id: str
@@ -47,36 +106,55 @@ class DeliverySnapshot:
 
 def validate_proxy_shapes(proxies):
     if not isinstance(proxies, list):
-        raise DialerReferenceError('Provider proxies 必须是数组')
-    for proxy in proxies:
+        raise _shape_error('Provider proxies 必须是数组', 'proxies')
+    for index, proxy in enumerate(proxies):
         if (not isinstance(proxy, dict) or not isinstance(proxy.get('name'), str)
                 or not proxy['name'].strip()):
-            raise DialerReferenceError('Provider 代理必须是含非空 name 的对象')
+            field = ('proxies', index, 'name') if isinstance(proxy, dict) and 'name' in proxy else ('proxies', index)
+            raise _shape_error('Provider 代理必须是含非空 name 的对象', *field)
         if 'proxies' in proxy and (not isinstance(proxy['proxies'], list) or
                 any(not isinstance(name, str) or not name.strip() for name in proxy['proxies'])):
-            raise DialerReferenceError('Provider proxies 引用必须是字符串数组')
+            raise _shape_error('Provider proxies 引用必须是字符串数组', 'proxies', index, 'proxies')
         if 'type' in proxy and not isinstance(proxy['type'], str):
-            raise DialerReferenceError('Provider type 必须是字符串')
+            raise _shape_error('Provider type 必须是字符串', 'proxies', index, 'type')
 
 
-def parse_provider_proxies(text):
-    """Reject malformed metadata before legacy field normalization can mask it."""
+def _load_provider_proxies(text, *, name='', path='', kind='订阅', source_label='本次准备的文件内容'):
     import yaml
-    from backend.utils.sub_store_client import parse_proxies_from_yaml
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         # Content errors must propagate through the transport-fallback boundary.
-        # Do not include provider bytes or parser excerpts in the public error.
-        raise DialerReferenceError('Provider YAML 内容无效') from exc
-    if not isinstance(data, dict):
-        raise DialerReferenceError('Provider 必须是 YAML 对象')
-    validate_proxy_shapes(data.get('proxies', []))
+        raise _provider_context(_provider_source_error(exc, text, source_label), name=name, path=path, kind=kind) from exc
+    try:
+        if not isinstance(data, dict):
+            raise DialerReferenceError('Provider 必须是 YAML 对象\n字段：文档根节点')
+        validate_proxy_shapes(data.get('proxies', []))
+    except DialerReferenceError as exc:
+        raise _provider_context(_provider_source_error(exc, text, source_label), name=name, path=path, kind=kind) from exc
+    return data.get('proxies', [])
+
+
+def parse_provider_proxies(text, *, name='', path=''):
+    """Reject malformed metadata before legacy field normalization can mask it."""
+    from backend.utils.sub_store_client import parse_proxies_from_yaml
+    _load_provider_proxies(text, name=name, path=path, source_label='本次订阅返回的内容')
     return parse_proxies_from_yaml(text)
 
 
 def prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
-                                  allow_transport_fallback=False):
+                                  allow_transport_fallback=False, source_path=''):
+    """Prepare a subscription without writes, retaining its name on failure."""
+    from backend.utils.strategy_references import StrategyReferenceError
+    try:
+        return _prepare_subscription_provider(sub, config, snapshot, fetch=fetch,
+                    allow_transport_fallback=allow_transport_fallback, source_path=source_path)
+    except StrategyReferenceError as exc:
+        raise _provider_context(exc, name=sub.get('name', ''), path=source_path) from exc
+
+
+def _prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
+                                   allow_transport_fallback=False, source_path=''):
     """Return exact validated output and staged cache update; never write here."""
     import uuid
     import yaml
@@ -91,10 +169,11 @@ def prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
     fetch = fetch or get_subscription_proxies_yaml
     update = None
     proxies = None
+    transport_error = None
     if sub.get('url'):
         try:
             text, _source = fetch(sub['id'], sub['url'])
-            raw_proxies = parse_provider_proxies(text)
+            raw_proxies = parse_provider_proxies(text, name=sub.get('name', ''), path=source_path)
             proxies = filter_subscription_items(sub, raw_proxies)
             snapshot.validate(proxies, provider_name=sub['name'])
             if raw_proxies:
@@ -106,14 +185,17 @@ def prepare_subscription_provider(sub, config, snapshot, *, fetch=None,
                 update = (sub['id'], nodes, {'subscription_name': sub['name'], 'url': sub['url']})
         except StrategyReferenceError:
             raise
-        except Exception:
+        except Exception as exc:
+            transport_error = exc
             proxies = None
     if proxies is None:
         cache = load_subscription_cache(sub['id'])
         if not cache or not cache.get('nodes'):
             if allow_transport_fallback and not snapshot.has_chains:
                 return {'content': '', 'cache_updates': []}
-            raise DialerReferenceError('订阅没有可用缓存或远程代理')
+            from backend.agents.diagnostics import failure_text
+            detail = ('\n原始诊断：' + failure_text(str(transport_error))) if transport_error is not None else ''
+            raise DialerReferenceError('订阅没有可用缓存或远程代理' + detail) from transport_error
         validate_shapes({'nodes': cache['nodes']}, require_ids=False)
         proxies = [p for n in filter_subscription_items(sub, cache['nodes'])
                    if (p := convert_node_to_mihomo(n))]
@@ -130,19 +212,12 @@ def validate_rendered_bundle(snapshot, providers):
     Never fetch/render again here: discovery and final validation must inspect
     the same bytes, including providers rendered before a late chain appeared.
     """
-    import yaml
     collections = []
     for provider in providers:
         content = provider['content']
         if content:
-            try:
-                data = yaml.safe_load(content)
-            except yaml.YAMLError as exc:
-                raise DialerReferenceError('Provider YAML 内容无效') from exc
-            if not isinstance(data, dict):
-                raise DialerReferenceError('Provider 必须是 YAML 对象')
-            proxies = data.get('proxies', [])
-            validate_proxy_shapes(proxies)
+            proxies = _load_provider_proxies(content, name=provider.get('name', ''),
+                        path=provider.get('local_path', ''), kind='节点来源')
         else:
             proxies = None
         collections.append(proxies)
@@ -150,7 +225,9 @@ def validate_rendered_bundle(snapshot, providers):
         p.get('dialer-proxy') is not None
         for proxies in collections if proxies is not None for p in proxies)
     if chains and any(proxies is None for proxies in collections):
-        raise DialerReferenceError('拨号拓扑不能使用未验证的 Provider URL fallback')
+        provider = next(provider for provider, proxies in zip(providers, collections) if proxies is None)
+        raise _provider_context(DialerReferenceError('拨号拓扑不能使用未验证的 Provider URL fallback'),
+                    name=provider.get('name', ''), path=provider.get('local_path', ''), kind='节点来源')
     # Provider-only activation also applies to the original main namespace.
     snapshot.validate([], force_chains=chains)
     main = json.loads(snapshot.main_json)
@@ -159,7 +236,10 @@ def validate_rendered_bundle(snapshot, providers):
         if proxies is None:
             continue
         name = provider.get('name')
-        snapshot.validate(proxies, force_chains=chains, provider_name=name)
+        try:
+            snapshot.validate(proxies, force_chains=chains, provider_name=name)
+        except DialerReferenceError as exc:
+            raise _provider_context(exc, name=name, path=provider.get('local_path', ''), kind='节点来源') from exc
         if name:
             payloads[name] = proxies
     if payloads:
@@ -241,6 +321,14 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
               _parse_structured_proxy_string(n['proxy_string']) is None}
 
     def materialize(url, name):
+        from backend.utils.strategy_references import StrategyReferenceError
+        try:
+            _materialize(url, name)
+        except StrategyReferenceError as exc:
+            kind = '订阅聚合' if '/aggregations/' in unquote(urlsplit(url).path) else '订阅'
+            raise _provider_context(exc, name=name, path=definitions[name].get('path', ''), kind=kind) from exc
+
+    def _materialize(url, name):
         if prepared and name in prepared:
             rendered[url] = {**prepared[name], 'name': name}
             return
@@ -250,7 +338,8 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
             sub = next(s for s in config.get('subscriptions', []) if s['id'] == id)
             value = prepare_subscription_provider(sub, config, snapshot,
                                                   fetch=partial(fetch_subscription, fetch=get_subscription_proxies_yaml),
-                                                  allow_transport_fallback=allow_transport_fallback)
+                                                  allow_transport_fallback=allow_transport_fallback,
+                                                  source_path=definitions[name].get('path', ''))
         elif '/aggregations/' in path:
             id = path.rsplit('/aggregations/', 1)[1].split('/')[0]
             agg = next(a for a in config.get('subscription_aggregations', []) if a['id'] == id)
@@ -268,9 +357,17 @@ def prepare_provider_bundle(config, main, *, requested=None, render_all=False, a
                     if f"/aggregations/{a['id']}/" in path), None)
         if render_all or snapshot.has_chains or name == requested_name or (agg and opaque.intersection(agg.get('nodes', []))):
             materialize(url, name)
-    import yaml
-    active = snapshot.has_chains or any(p.get('dialer-proxy') is not None for value in rendered.values()
-                                        for p in (yaml.safe_load(value['content']) or {}).get('proxies', []))
+    active = snapshot.has_chains
+    if not active:
+        for url, value in rendered.items():
+            if not value['content']:
+                continue
+            name = sources[url]
+            proxies = _load_provider_proxies(value['content'], name=name,
+                        path=definitions[name].get('path', ''), kind='节点来源')
+            if any(p.get('dialer-proxy') is not None for p in proxies):
+                active = True
+                break
     if active:
         for url, name in sources.items():
             if url not in rendered:

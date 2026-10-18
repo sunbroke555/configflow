@@ -929,6 +929,45 @@ def _profile_revision(profile_id):
         return None
 
 
+def _generated_config_failure(exc, content, service):
+    """Resolve generated-file coordinates only after an existing check fails."""
+    import yaml
+    from backend.agents.deployment_locations import preparation_context, source_error
+
+    issues = getattr(exc, 'issues', None)
+    mark = None
+    if issues:
+        first = next((issue for issue in issues if issue.get('severity', 'error') == 'error'), None)
+        path = first.get('path') if first else None
+        # A missing field has no line of its own. Keep its schema path in the
+        # original issue instead of pointing at an unrelated parent/source line.
+        if path:
+            try:
+                node = yaml.compose(content, Loader=yaml.SafeLoader)
+                for part in path:
+                    if isinstance(part, str) and isinstance(node, yaml.MappingNode):
+                        node = next((value for key, value in reversed(node.value)
+                                     if key.value == part), None)
+                    elif isinstance(part, int) and isinstance(node, yaml.SequenceNode) and 0 <= part < len(node.value):
+                        node = node.value[part]
+                    else:
+                        node = None
+                    if node is None:
+                        break
+                if node is not None:
+                    mark = node.start_mark
+            except yaml.YAMLError:
+                pass
+    error = source_error('生成配置 YAML 格式错误' if isinstance(exc, yaml.YAMLError) else str(exc), content,
+                         line=mark.line + 1 if mark else None,
+                         column=mark.column + 1 if mark else None,
+                         cause=exc if isinstance(exc, yaml.YAMLError) else None)
+    error = preparation_context(error, path='config.yaml（生成配置）', kind=f'{service} 配置')
+    if issues is not None:
+        error.issues = issues
+    return error
+
+
 def _prepare_transactional_content(agent, config_data, *, base_url='', deployment_id=None,
                                    prefer_cached=False, progress=None):
     """Materialize exactly the files used by a push, without publishing or saving caches."""
@@ -942,7 +981,10 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
         config_content = generate_mihomo_config(config_data, base_url=base_url,
                                                 sync_lan_hosts=True, preflight_providers=False,
                                                 region_probe=bool(agent.get('domain_discovery_enabled')))
-        main = yaml.safe_load(config_content)
+        try:
+            main = yaml.safe_load(config_content)
+        except yaml.YAMLError as exc:
+            raise _generated_config_failure(exc, config_content, 'Mihomo') from exc
         provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url, main_config=main)
         ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
         if provider_downloads:
@@ -961,11 +1003,14 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
         custom_files = get_mosdns_custom_files(config_data)
     elif service_type == 'oxidns':
         from backend.converters.oxidns import generate_oxidns_config, get_oxidns_ruleset_downloads, get_oxidns_custom_files
-        from backend.common.oxidns_validation import require_valid_document
+        from backend.common.oxidns_validation import OxidnsValidationError, require_valid_document
         config_content = generate_oxidns_config(config_data, base_url=base_url)
         # This covers both legacy template output and native drafts, before
         # downloading or uploading any candidate deployment resources.
-        require_valid_document(yaml.safe_load(config_content))
+        try:
+            require_valid_document(yaml.safe_load(config_content))
+        except (yaml.YAMLError, OxidnsValidationError) as exc:
+            raise _generated_config_failure(exc, config_content, 'OxiDNS') from exc
         ruleset_downloads = get_oxidns_ruleset_downloads(config_data, base_url=base_url)
         custom_files = get_oxidns_custom_files(config_data)
     else:

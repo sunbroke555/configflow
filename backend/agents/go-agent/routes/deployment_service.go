@@ -143,7 +143,25 @@ func startService(cfg *Config) error {
 	return nil
 }
 
-func validateStagedDeployment(cfg *Config, s *DeploymentState) error {
+func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
+	// Add file context to every validation error without doing any work on the
+	// successful path or changing the original error chain.
+	defer func() {
+		if result != nil {
+			_, details := deploymentErrorFields(result)
+			if !strings.Contains(details, "文件：") {
+				root := filepath.Join(deploymentPath(cfg, s.DeploymentID), "stage")
+				data := readDiagnosticFile(filepath.Join(root, s.Manifest.ConfigPath))
+				line := 0
+				if strings.Contains(result.Error(), "yaml:") {
+					if match := diagnosticLineNumber.FindStringSubmatch(result.Error()); match != nil {
+						line, _ = strconv.Atoi(match[1])
+					}
+				}
+				result = diagnosticLocation(result, s.Manifest.ConfigPath, "", "", line, data, true)
+			}
+		}
+	}()
 	if err := ValidateOxiDNSServiceDirectory(cfg); err != nil {
 		return err
 	}
@@ -201,21 +219,21 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) error {
 		for label, value := range providers {
 			provider, ok := value.(map[string]interface{})
 			if !ok {
-				return fmt.Errorf("invalid %s entry %s", kind, label)
+				return configurationLocation(fmt.Errorf("invalid %s entry %s", kind, label), s.Manifest.ConfigPath, data, kind, label)
 			}
 			if raw, ok := provider["path"].(string); ok && raw != "" {
 				rel, e := resolveStagedReference(cfg, root, raw)
 				if e != nil {
-					return e
+					return configurationLocation(e, s.Manifest.ConfigPath, data, kind, label, "path")
 				}
 				if !listed[rel] {
-					return fmt.Errorf("provider %s is missing from deployment", label)
+					return configurationLocation(fmt.Errorf("provider %s is missing from deployment", label), s.Manifest.ConfigPath, data, kind, label, "path")
 				}
 				if rel != raw {
 					provider["path"] = rel
 				}
 			} else if provider["type"] != "inline" {
-				return fmt.Errorf("provider %s requires a bundled local path", label)
+				return configurationLocation(fmt.Errorf("provider %s requires a bundled local path", label), s.Manifest.ConfigPath, data, kind, label)
 			}
 		}
 	}
@@ -276,7 +294,7 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) error {
 	cmd := exec.CommandContext(ctx, binaryPath, "-t", "-d", root, "-f", name)
 	cmd.Dir = root
 	if _, e = runDiagnosticCommand(ctx, cmd, "Mihomo configuration check", append(configurationDiagnosticSecrets(doc), cfg.Token)...); e != nil {
-		return e
+		return nativeConfigurationLocation(e, root, name, s.Manifest, true)
 	}
 	// Native checks can obtain missing Geo resources. Include those exact bytes
 	// in the effective transaction instead of losing them when staging ends.
@@ -332,16 +350,16 @@ func validateMosDNS(doc map[string]interface{}, stage string, m *DeploymentManif
 	for index, v := range plugins {
 		p, ok := v.(map[string]interface{})
 		if !ok {
-			return fmt.Errorf("invalid MosDNS plugin at index %d", index)
+			return pluginLocation(fmt.Errorf("invalid MosDNS plugin at index %d", index), stage, m, index)
 		}
 		kind, _ := p["type"].(string)
 		tag, _ := p["tag"].(string)
 		if kind == "" {
-			return fmt.Errorf("MosDNS plugin type missing at index %d (tag %q)", index, tag)
+			return pluginLocation(fmt.Errorf("MosDNS plugin type missing at index %d (tag %q)", index, tag), stage, m, index, "type")
 		}
 		if tag != "" {
 			if tags[tag] {
-				return fmt.Errorf("duplicate MosDNS plugin tag %q", tag)
+				return pluginLocation(fmt.Errorf("duplicate MosDNS plugin tag %q", tag), stage, m, index, "tag")
 			}
 			tags[tag] = true
 		}
@@ -350,17 +368,17 @@ func validateMosDNS(doc map[string]interface{}, stage string, m *DeploymentManif
 			continue
 		}
 		if values, ok := args["files"].([]interface{}); ok {
-			for _, value := range values {
+			for fileIndex, value := range values {
 				raw, ok := value.(string)
 				if !ok {
-					return fmt.Errorf("invalid MosDNS file reference")
+					return pluginLocation(fmt.Errorf("invalid MosDNS file reference"), stage, m, index, "args", "files", fileIndex)
 				}
 				rel := filepath.ToSlash(filepath.Clean(raw))
 				if !safeRelative(rel) || !listed[rel] {
-					return fmt.Errorf("MosDNS file must be bundled using a relative path")
+					return pluginLocation(fmt.Errorf("MosDNS file must be bundled using a relative path: %s", raw), stage, m, index, "args", "files", fileIndex)
 				}
 				if _, e := os.Stat(filepath.Join(stage, rel)); e != nil {
-					return fmt.Errorf("MosDNS file missing: %s", rel)
+					return pluginLocation(fmt.Errorf("MosDNS file missing: %s", rel), stage, m, index, "args", "files", fileIndex)
 				}
 			}
 		}

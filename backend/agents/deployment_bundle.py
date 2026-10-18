@@ -24,6 +24,7 @@ import requests
 import yaml
 
 from backend.agents.diagnostics import failure_text
+from backend.agents.deployment_locations import DeploymentPreparationError, preparation_context, source_error
 from backend.converters.mosdns import parse_clash_rule_value
 from backend.utils.rule_fetch import is_internal_rule_url, request_rule
 
@@ -32,10 +33,6 @@ MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_FILES = 4096
 MAX_RAW_CACHE_BYTES = 16 * 1024 * 1024
 MAX_RAW_CACHE_ENTRIES = 128
-
-
-class DeploymentPreparationError(ValueError):
-    """An artifact cannot be published as a complete deployment."""
 
 
 class RuleDownloadError(DeploymentPreparationError):
@@ -223,17 +220,29 @@ def convert_mosdns_rules(content, rule_type='domain_set'):
     if '\x00' in text:
         raise DeploymentPreparationError('MosDNS rule source is binary')
     lines = text.splitlines()
-    if 'payload:' in text:
+    yaml_payload = 'payload:' in text
+    if yaml_payload:
         try:
             document = yaml.safe_load(text)
             lines = document['payload']
-            if not isinstance(lines, list) or any(not isinstance(line, str) for line in lines):
+            if not isinstance(lines, list):
                 raise ValueError
-        except Exception:
-            raise DeploymentPreparationError('Invalid rule YAML payload') from None
+        except Exception as exc:
+            raise source_error('Invalid rule YAML payload', text, cause=exc,
+                               payload_index=-1 if not isinstance(exc, yaml.YAMLError) else None,
+                               source_label='转换前的规则内容') from None
+        invalid = next((index for index, line in enumerate(lines) if not isinstance(line, str)), None)
+        if invalid is not None:
+            raise source_error('Invalid rule YAML payload', text, payload_index=invalid,
+                               source_label='转换前的规则内容')
     converted = []
     mapping = {'DOMAIN': 'full', 'DOMAIN-SUFFIX': 'domain', 'DOMAIN-KEYWORD': 'keyword', 'DOMAIN-REGEX': 'regexp'}
-    for line in lines:
+
+    def invalid_line(message, index):
+        return source_error(message, text, line=None if yaml_payload else index + 1,
+                            payload_index=index if yaml_payload else None, source_label='转换前的规则内容')
+
+    for index, line in enumerate(lines):
         line = line.strip()
         if not line or line.startswith('#'):
             continue
@@ -248,7 +257,7 @@ def convert_mosdns_rules(content, rule_type='domain_set'):
             try:
                 ipaddress.ip_network(value, strict=False)
             except ValueError:
-                raise DeploymentPreparationError('Invalid IP network in MosDNS ip_set rule source') from None
+                raise invalid_line('Invalid IP network in MosDNS ip_set rule source', index) from None
             converted.append(value)
             continue
         if line.startswith('ip:'):
@@ -275,7 +284,7 @@ def convert_mosdns_rules(content, rule_type='domain_set'):
                 # Raw address/CIDR lists must not reach a domain_set either.
             except ValueError:
                 if '.' not in line or any(c.isspace() for c in line) or '<' in line or '>' in line:
-                    raise DeploymentPreparationError('Unrecognized MosDNS rule source content') from None
+                    raise invalid_line('Unrecognized MosDNS rule source content', index) from None
                 converted.append('full:' + line)
     return '\n'.join(converted).encode('utf-8')
 
@@ -288,12 +297,16 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
     service = agent.get('service_type', 'mihomo')
     if service not in ('mihomo', 'mosdns', 'oxidns'):
         raise DeploymentPreparationError('Unsupported transactional deployment service')
-    main = yaml.safe_load(config_content)
+    try:
+        main = yaml.safe_load(config_content)
+    except yaml.YAMLError as exc:
+        raise preparation_context(source_error('生成配置的 YAML 格式不正确', config_content, cause=exc),
+                                  name=service, path='config.yaml', kind='配置') from None
     if not isinstance(main, dict):
         raise DeploymentPreparationError('Generated configuration must be a YAML mapping')
     if service == 'oxidns' and main.get('include'):
         raise DeploymentPreparationError('OxiDNS deployment must inline included plugin definitions')
-    rule_types = {}
+    rule_types, rule_names = {}, {}
     if service in ('mosdns', 'oxidns'):
         for plugin in main.get('plugins', []):
             rule_type = plugin.get('type')
@@ -311,9 +324,11 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                 if path in rule_types and rule_types[path] != rule_type:
                     raise DeploymentPreparationError('MosDNS file is used by both domain_set and ip_set: ' + path)
                 rule_types[path] = rule_type
+                rule_names[path] = plugin.get('tag', '')
     files = {}
+    file_names = {}
 
-    def add(path, value, role, *, native=False):
+    def add_content(path, value, role, *, native=False):
         path = relative_path(path)
         if service == 'oxidns' and (path == 'state' or path.startswith('state/')):
             raise DeploymentPreparationError('OxiDNS runtime state cannot be managed by a deployment')
@@ -334,10 +349,21 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         files[path] = (value, role)
         return path
 
+    def add(path, value, role, *, native=False, name=''):
+        kind = '订阅' if role == 'provider' else '配置' if role == 'config' else '规则集' if role == 'rule' else '附加文件'
+        name = name or rule_names.get(str(path).removeprefix('./'), '')
+        try:
+            target = add_content(path, value, role, native=native)
+        except DeploymentPreparationError as exc:
+            raise preparation_context(exc, name=name, path=path, kind=kind) from None
+        if name:
+            file_names[target] = failure_text(str(name), limit=512)
+        return target
+
     for item in provider_downloads:
-        add(item['local_path'], item.get('content'), 'provider')
+        add(item.get('local_path'), item.get('content'), 'provider', name=item.get('name', ''))
     for item in custom_files:
-        add(item['path'], item.get('content'), 'custom', native=item.get('native', False))
+        add(item.get('path'), item.get('content'), 'custom', native=item.get('native', False), name=item.get('name', ''))
 
     # Use the final Mihomo configuration rather than reconstructing paths from
     # source suffixes; custom configuration can change provider format/path.
@@ -411,9 +437,10 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             explanation, _, details = str(exc).partition('\n')
             raise DeploymentPreparationError(
                 f'无法下载「{name}」规则集：{explanation}。本次发布已停止，设备仍使用原配置。'
+                + f'\n文件：{failure_text(str(item.get("local_path", "")))}'
                 + (f'\n{details}' if details else '')) from None
         except DeploymentPreparationError as exc:
-            raise DeploymentPreparationError(f"Rule {item.get('name', 'unnamed')}: {exc}") from None
+            raise preparation_context(exc, name=item.get('name', ''), path=item.get('local_path', '')) from None
         return item, value
     if progress is not None:
         progress(0, len(downloads))
@@ -422,7 +449,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             futures = (pool.submit(download, item) for item in downloads)
             for done, future in enumerate(as_completed(futures), 1):
                 item, value = future.result()
-                add(item['local_path'], value, 'rule')
+                add(item['local_path'], value, 'rule', name=item.get('name', ''))
                 if progress is not None:
                     progress(done, len(downloads))
     finally:
@@ -468,7 +495,8 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         'protocol_version': 1, 'deployment_id': deployment_id or uuid.uuid4().hex,
         'agent_id': agent['id'], 'profile_id': config.get('profile_id') or agent.get('profile_id') or get_default_profile_id(),
         'service_type': service, 'config_path': 'config.yaml',
-        'files': [{'path': path, 'size': len(value), 'sha256': hashlib.sha256(value).hexdigest(), 'role': role}
+        'files': [{'path': path, 'size': len(value), 'sha256': hashlib.sha256(value).hexdigest(), 'role': role,
+                   **({'name': file_names[path]} if path in file_names else {})}
                   for path, (value, role) in sorted(files.items())],
     }
     return _pack(manifest, files, hashlib.sha256(config_bytes).hexdigest()[:8])

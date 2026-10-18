@@ -216,9 +216,14 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
       if (disposed || current?.deployment_id !== task.deployment_id || terminal.has(current.status)) return
       if (error.response?.data?.deployment_id) track(agentId, error.response.data)
       else {
-        deployments[agentId] = { ...current, retrying: false, status: 'unknown', query_error: true }
+        const response = error.response?.data
+        deployments[agentId] = {
+          ...current, retrying: false, status: 'unknown', query_error: true,
+          message: response?.error || response?.message || current.message,
+          error_details: response?.error_details || current.error_details,
+        }
         schedule(agentId, 5000)
-        if (error.response) notify.error('重新提交未完成', error.response.data?.message)
+        if (error.response) notify.error('重新提交未完成', deploymentErrorSummary(deployments[agentId]))
       }
     } finally {
       const current = deployments[agentId]
