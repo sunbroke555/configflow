@@ -1,8 +1,8 @@
 <template>
   <div
-    class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3"
+    class="cf-toolbar mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3"
   >
-    <div v-if="searchable" class="relative min-w-0 flex-[1_1_240px]">
+    <div v-if="searchable" class="cf-toolbar-search relative min-w-0 flex-[1_1_240px]">
       <Search
         class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
         aria-hidden="true"
@@ -18,7 +18,7 @@
 
     <slot name="filters" />
 
-    <div v-if="$slots.actions" class="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-2">
+    <div v-if="$slots.actions" class="cf-toolbar-actions ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-2">
       <slot name="actions" />
     </div>
   </div>

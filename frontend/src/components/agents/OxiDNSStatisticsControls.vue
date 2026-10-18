@@ -1,5 +1,5 @@
 <template>
-  <div class="ml-auto flex min-w-0 max-w-full items-center gap-3">
+  <div class="ml-auto flex min-w-0 max-w-full items-center gap-3 max-sm:w-full max-sm:justify-between">
     <div class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
       <span class="hidden sm:inline">{{ statisticsLabel }}</span>
       <span class="sm:hidden">{{ statistics ? '本轮统计' : '统计重置不可用' }}</span>

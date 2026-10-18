@@ -41,18 +41,18 @@
         <Button variant="outline" class="min-h-11 md:col-start-3 md:row-start-2" :disabled="!newIP.trim() || rows.length >= 512" @click="add(newIP)"><Plus class="size-4" />添加策略</Button>
       </div>
       <div v-if="rows.length" class="cf-table-wrap">
-        <table class="cf-table w-full min-w-[540px]">
-          <thead><tr><th scope="col">客户端 IP / 网段</th><th scope="col">备注</th><th scope="col">策略</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead>
-          <tbody>
-            <tr v-for="(row, index) in rows" :key="row.ip">
-              <td class="font-mono text-xs">{{ row.ip }}</td>
-              <td><Input v-model="row.name" :aria-label="row.ip + ' 备注'" maxlength="80" placeholder="设备或网段名称（可选）" class="min-h-11 min-w-32" /></td>
-              <td>
+        <table class="cf-table cf-mobile-records policy-source-records w-full min-w-[540px]" role="table">
+          <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">客户端 IP / 网段</th><th role="columnheader" scope="col">备注</th><th role="columnheader" scope="col">策略</th><th role="columnheader" scope="col"><span class="sr-only">操作</span></th></tr></thead>
+          <tbody role="rowgroup">
+            <tr role="row" v-for="(row, index) in rows" :key="row.ip">
+              <td role="cell" class="cf-record-wide font-mono text-xs" data-label="客户端 IP / 网段">{{ row.ip }}</td>
+              <td role="cell" data-label="备注"><Input v-model="row.name" :aria-label="row.ip + ' 备注'" maxlength="80" placeholder="设备或网段名称（可选）" class="min-h-11 min-w-32" /></td>
+              <td role="cell" data-label="策略">
                 <Select v-model="row.mode"><SelectTrigger :aria-label="row.ip + ' 策略'" class="min-h-11 w-32"><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="smart">智能分流</SelectItem><SelectItem value="direct">直连</SelectItem></SelectContent>
                 </Select>
               </td>
-              <td><Button variant="ghost" size="icon" class="size-11" :aria-label="'移除 ' + row.ip" @click="rows.splice(index, 1)"><Trash2 class="size-4" /></Button></td>
+              <td role="cell" class="cf-record-wide text-right"><Button variant="ghost" size="icon" class="size-11" :aria-label="'移除 ' + row.ip" @click="rows.splice(index, 1)"><Trash2 class="size-4" /></Button></td>
             </tr>
           </tbody>
         </table>

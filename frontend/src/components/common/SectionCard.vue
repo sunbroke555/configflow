@@ -6,9 +6,9 @@
       padded && 'p-5 max-md:p-4'
     )"
   >
-    <header v-if="title || description || $slots.actions" :class="cn('flex flex-wrap items-center gap-3', padded ? 'mb-4' : 'px-5 pt-5 pb-3 max-md:px-4')">
+    <header v-if="title || description || $slots.actions" :class="cn('cf-section-header flex flex-wrap items-center gap-3', padded ? 'mb-4' : 'px-5 pt-5 pb-3 max-md:px-4')">
       <div class="min-w-0 flex-1">
-        <h2 v-if="title" class="m-0 flex items-center gap-2 text-[14px] font-semibold tracking-[-0.01em] text-foreground">
+        <h2 v-if="title" class="m-0 flex max-sm:flex-wrap items-center gap-2 text-[14px] font-semibold tracking-[-0.01em] text-foreground">
           <component v-if="icon" :is="icon" class="size-4 text-primary-accent" :stroke-width="2.2" aria-hidden="true" />
           {{ title }}
           <FieldHelp v-if="help" :label="title" :text="help" />
@@ -18,7 +18,7 @@
           {{ description }}
         </p>
       </div>
-      <div v-if="$slots.actions" class="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+      <div v-if="$slots.actions" class="cf-section-actions flex min-w-0 max-w-full flex-wrap items-center gap-2">
         <slot name="actions" />
       </div>
     </header>
