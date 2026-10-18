@@ -261,7 +261,8 @@ def test_missing_agent_tool_has_repair_hint_and_cannot_delete_inherited_temp(tmp
     result = run(script, env)
     assert result.returncode != 0
     assert "Agent 安装缺少工具：awk" in result.stderr
-    assert "系统包管理器补齐后重新运行" in result.stderr
+    assert "未找到支持的包管理器" in result.stderr
+    assert "请手动安装 gawk coreutils grep sed 后重新运行" in result.stderr
     assert "agent-download" not in events.read_text()
     assert inherited.read_text() == "keep me"
 

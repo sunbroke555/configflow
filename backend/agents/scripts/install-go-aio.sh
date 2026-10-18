@@ -95,6 +95,22 @@ stop_existing_agent() {
 [ "$(id -u)" -eq 0 ] || fail "请使用 root 用户运行此脚本"
 {init_detection}
 
+{agent_install_dependencies}
+{installation_description}
+echo "1) 安装或升级两个独立 Agent"
+echo "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
+echo "3) 取消"
+printf '请输入选项 [1-3]: '
+read -r choice < /dev/tty
+case "$choice" in
+    1)
+{agent_arch_detection}
+        agent_ensure_dependencies
+        ;;
+    2) ;;
+    *) exit 0 ;;
+esac
+
 # A legacy Agent owns a shared binary and directory. Do not guess how to split
 # its identity or let either installer delete another instance's state.
 [ ! -L "$AGENT_ROOT" ] || fail "Agent 根目录不能是符号链接：$AGENT_ROOT"
@@ -117,12 +133,6 @@ for service in mihomo oxidns; do
     fi
 done
 
-{installation_description}
-echo "1) 安装或升级两个独立 Agent"
-echo "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
-echo "3) 取消"
-printf '请输入选项 [1-3]: '
-read -r choice < /dev/tty
 case "$choice" in
     1) ;;
     2)
@@ -189,7 +199,6 @@ for service in mihomo oxidns; do
     fi
 done
 
-{agent_arch_detection}
 umask 077
 mkdir -p "$AGENT_ROOT"
 STAGE_DIR=$(mktemp -d "$AGENT_ROOT/.aio-install.XXXXXX")

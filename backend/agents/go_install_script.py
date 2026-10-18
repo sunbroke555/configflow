@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 
 INSTALL_GO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go.sh").read_text(encoding="utf-8")
 INSTALL_GO_AIO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go-aio.sh").read_text(encoding="utf-8")
+AGENT_INSTALL_DEPENDENCIES = (Path(__file__).parent / "scripts" / "agent-install-dependencies.sh").read_text(encoding="utf-8")
 AGENT_CORE_INSTALL_INTERFACE = "# ConfigFlow Agent + core installer interface: 1"
 _AGENT_INIT_DETECTION = '''if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
     INIT_SYSTEM="openrc"
@@ -119,6 +120,7 @@ def generate_go_agent_install_script(
         "config_json": json.dumps(cfg, ensure_ascii=True, indent=2),
         "binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
         "init_detection": _AGENT_INIT_DETECTION,
+        "agent_install_dependencies": AGENT_INSTALL_DEPENDENCIES,
         "core_install_phase": "",
         "agent_cleanup_trap": 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM',
     }
@@ -147,18 +149,6 @@ def generate_go_agent_install_script(
             "trap 'exit 129' HUP\n"
             "trap 'exit 130' INT\n"
             "trap 'exit 143' TERM\n"
-            '# Existing cores are skipped before core dependency installation.\n'
-            '# Check Agent prerequisites before downloading or writing its files.\n'
-            'for agent_tool in awk cat chmod cp grep head mkdir mktemp mv rm sed; do\n'
-            '    if ! command -v "$agent_tool" >/dev/null 2>&1; then\n'
-            '        echo "Agent 安装缺少工具：${agent_tool}。请使用系统包管理器补齐后重新运行。" >&2\n'
-            '        exit 1\n'
-            '    fi\n'
-            'done\n'
-            'if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then\n'
-            '    echo "Agent 安装需要 curl 或 wget，请使用系统包管理器安装后重新运行。" >&2\n'
-            '    exit 1\n'
-            'fi\n'
             f'CORE_BINARY={shlex.quote(service_binary or service_type)}\n'
             f'if [ ! -f /etc/{service_type}/config.yaml ] || [ ! -r /etc/{service_type}/config.yaml ] || ! command -v "$CORE_BINARY" >/dev/null 2>&1; then\n'
             f'    echo "{service_type} 核心缺少默认配置或可执行文件。请补齐 /etc/{service_type}/config.yaml 和核心程序；已有自定义部署请取消同时安装核心，并设置实际路径。" >&2\n'
@@ -287,7 +277,8 @@ else
     fail "需要 systemd 或 OpenRC 管理已安装的 Mihomo 和 OxiDNS。"
 fi''',
         "installation_description": 'echo "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。"',
-        "agent_arch_detection": agent_arch_detection,
+        "agent_arch_detection": "\n".join("        " + line for line in agent_arch_detection.splitlines()),
+        "agent_install_dependencies": AGENT_INSTALL_DEPENDENCIES,
         "core_phase_state": "",
         "core_cleanup_message": "",
         "core_install_phase": "",
@@ -298,7 +289,6 @@ fi''',
         replacements.update({
             "init_detection": _CORE_INIT_DETECTION,
             "installation_description": 'echo "选择安装时先补装缺少的 Mihomo 和 OxiDNS 核心，再安装两个独立 Agent；已有核心与配置保留。"',
-            "agent_arch_detection": "",
             "core_phase_state": "CORE_PHASE_COMPLETED=false\n",
             "core_cleanup_message": '''        if [ "$CORE_PHASE_COMPLETED" = true ]; then
             echo "Agent 安装未完成；两个核心的安装阶段已结束，已安装或原有的核心予以保留。修复上方 Agent 错误后可重新运行。" >&2
@@ -306,18 +296,10 @@ fi''',
 ''',
             # An unconditional subshell preserves set -e, unlike an if/&&/||
             # context, and isolates core variables, exit statements and traps.
-            "core_install_phase": agent_arch_detection + '\n'
-                + 'echo "先安装或保留两个核心，成功后继续安装两个 Agent。"\n'
+            "core_install_phase": 'echo "先安装或保留两个核心，成功后继续安装两个 Agent。"\n'
                 + '(\nset -- --core both\n' + generate_core_install_script().rstrip() + '\n)\n'
                 + 'CORE_PHASE_COMPLETED=true\n'
-                + '''# Existing cores can skip core dependency installation; check Agent tools.
-for agent_tool in cat chmod cp dirname basename grep head mkdir mktemp mv pwd readlink rm sed; do
-    command -v "$agent_tool" >/dev/null 2>&1 || fail "Agent 安装缺少工具：${agent_tool}。请使用系统包管理器补齐后重新运行。"
-done
-if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-    fail "Agent 安装需要 curl 或 wget，请使用系统包管理器安装后重新运行。"
-fi
-# Minimal systems may not yet have /opt, needed for physical path checks.
+                + '''# Minimal systems may not yet have /opt, needed for physical path checks.
 mkdir -p "$(dirname "$AGENT_ROOT")"
 ''',
         })

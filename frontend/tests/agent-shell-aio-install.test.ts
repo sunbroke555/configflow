@@ -5,7 +5,7 @@ import Agents from '@/views/Agents.vue'
 import api, { agentApi, profileApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { setActiveProfileId } from '@/profileContext'
-import { AGENT_CORE_INSTALL_INTERFACE, buildAgentCoreInstallCommand } from '@/lib/coreInstallCommand'
+import { AGENT_CORE_INSTALL_INTERFACE, buildAgentCoreInstallCommand, buildAgentInstallCommand, buildCoreInstallCommand } from '@/lib/coreInstallCommand'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -89,8 +89,11 @@ async function radio(value: string) {
   await flushPromises()
 }
 function generatedUrlParams() {
-  const command = [...document.querySelectorAll('textarea')].map(item => item.value).find(value => value.includes('curl -sSL'))!
-  return Object.fromEntries(new URL(command.match(/"([^"]+)"/)![1]!).searchParams)
+  const command = [...document.querySelectorAll('textarea')].map(item => item.value).find(value => value.includes('/api/agents/install-script?'))!
+  return Object.fromEntries(new URL(commandUrl(command)).searchParams)
+}
+function commandUrl(command: string) {
+  return command.match(/'(https?:\/\/[^']+)'/)![1]!
 }
 
 describe('Shell Mihomo + OxiDNS installation', () => {
@@ -194,6 +197,77 @@ describe('Shell Mihomo + OxiDNS installation', () => {
   })
 })
 
+describe('curl and wget installation commands', () => {
+  it.each([
+    { mode: 'single', type: 'mihomo', includeCore: false },
+    { mode: 'single', type: 'mosdns', includeCore: false },
+    { mode: 'single', type: 'oxidns', includeCore: true },
+    { mode: 'aio', type: 'aio', includeCore: false },
+    { mode: 'aio', type: 'aio', includeCore: true }
+  ])('switches $mode $type includeCore=$includeCore without requesting another script', async ({ mode, type, includeCore }) => {
+    if (mode === 'aio') await radio('aio')
+    else if (type !== 'mihomo') await radio(type)
+    if (includeCore) {
+      document.getElementById(mode === 'aio' ? 'aio-install-cores' : 'agent-install-core')!.click()
+      await flushPromises()
+      vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data: `#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho installed` } as any)
+    }
+    await click('生成安装命令')
+    const output = () => document.querySelector('[aria-label="一键安装命令"] textarea') as HTMLTextAreaElement
+    const curlCommand = output().value
+    const url = commandUrl(curlCommand)
+    const builder = includeCore ? buildAgentCoreInstallCommand : buildAgentInstallCommand
+    expect(curlCommand).toBe(builder(url, 'curl'))
+    expect(document.querySelector('[aria-label="安装命令下载方式"] [value="curl"]')?.getAttribute('aria-checked')).toBe('true')
+    expect(document.body.textContent).toContain('以 root 执行')
+    expect(document.querySelectorAll('[aria-label="一键安装命令"] textarea')).toHaveLength(1)
+    vi.mocked(Element.prototype.scrollIntoView).mockClear()
+
+    await radio('wget')
+    expect(output().value).toBe(builder(url, 'wget'))
+    expect(output().value).toContain(' && sh ')
+    expect(output().value).not.toMatch(/\|\s*(?:sudo\s+)?(?:ba)?sh/)
+    expect(agentApi.generateScript).toHaveBeenCalledTimes(1)
+    await radio('curl')
+    expect(output().value).toBe(curlCommand)
+    expect(agentApi.generateScript).toHaveBeenCalledTimes(1)
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    await input('agent-name', 'another-agent')
+    expect(document.querySelector('[aria-label="一键安装命令"]')).toBeNull()
+  })
+
+  it('switches the independent core downloader while retaining its selected core and preview', async () => {
+    await radio('aio')
+    await expand('仅安装核心')
+    await radio('oxidns')
+    await click('生成OxiDNS的安装命令')
+    const output = () => document.getElementById('core-install-command') as HTMLTextAreaElement
+    const curlCommand = output().value
+    const url = commandUrl(curlCommand)
+    expect(curlCommand).toBe(buildCoreInstallCommand(url, 'oxidns', 'curl'))
+    await radio('wget')
+    expect(output().value).toBe(buildCoreInstallCommand(url, 'oxidns', 'wget'))
+    expect(agentApi.generateCoreInstallScript).toHaveBeenCalledTimes(1)
+    await click('查看核心安装脚本')
+    expect((document.querySelector('[aria-label="OxiDNS的独立安装脚本"]') as HTMLTextAreaElement).value).toContain('cores-installed')
+    await click('关闭')
+    await click('生成安装脚本')
+    await radio('aio')
+    await expand('仅安装核心')
+    await click('生成OxiDNS的安装命令')
+    expect(output().value).toBe(curlCommand)
+    expect(document.querySelector('[aria-label="核心安装命令下载方式"] [value="curl"]')?.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it.each(['javascript:alert(1)', 'https://config.example.test/?token=abc', 'https://user:pass@config.example.test'])('rejects an invalid Agent-only installation URL: %s', async url => {
+    localStorage.setItem('serverDomain', url)
+    await click('生成安装命令')
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+    expect(notify.error).toHaveBeenCalledWith(expect.stringContaining('HTTP / HTTPS'))
+    expect(document.querySelector('textarea')).toBeNull()
+  })
+})
+
 describe('independent Mihomo + OxiDNS core installation', () => {
   it.each([{ target: 'mihomo', name: 'Mihomo' }, { target: 'oxidns', name: 'OxiDNS' }])('generates an independent command for only $name', async ({ target, name }) => {
     await input('agent-name', '')
@@ -240,7 +314,9 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
     expect(command).toContain("'https://config.example.test/api/agents/core-install-script'")
     expect(command).not.toMatch(/[\r\n]/)
-    expect(command).toContain('sh -c ')
+    expect(command).toContain('curl -fSL ')
+    expect(command).toContain(' && sh ')
+    expect(command).not.toContain('sh -c ')
     expect(command).not.toContain('/opt/custom')
     expect(command).not.toContain('agent_name')
     expect(document.body.textContent).toContain('生成安装命令')
@@ -256,7 +332,7 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     expect(agentApi.generateScript).toHaveBeenCalledTimes(1)
     await click('查看核心安装脚本')
     expect((document.querySelector('[aria-label="两个核心的独立安装脚本"]') as HTMLTextAreaElement).value).toContain('cores-installed')
-    expect(document.body.textContent).toContain('复制核心安装命令')
+    expect(document.getElementById('core-install-command')).not.toBeNull()
   })
 
   it('clears core output when switching to single-service or Docker modes', async () => {
@@ -402,7 +478,7 @@ describe('single Agent with its corresponding core', () => {
     Object.entries(expected).forEach(([key, value]) => { if (value !== '' || key === 'restart_command') params.set(key, String(value)) })
     // Object order is irrelevant to the endpoint, but the command must match the requested values.
     const command = commands()[0]!
-    const actualUrl = command.match(/ sh '([^']+)'$/)![1]!
+    const actualUrl = commandUrl(command)
     expect(Object.fromEntries(new URL(actualUrl).searchParams)).toEqual(Object.fromEntries(params))
     expect(command).toBe(buildAgentCoreInstallCommand(actualUrl))
     expect(commands()).toHaveLength(1)
@@ -532,7 +608,7 @@ describe('Shell AIO with both cores', () => {
     expect(agentApi.generateScript).toHaveBeenCalledExactlyOnceWith(expected)
     expect(commands()).toHaveLength(1)
     const command = commands()[0]!
-    const url = command.match(/ sh '([^']+)'$/)![1]!
+    const url = commandUrl(command)
     expect(Object.fromEntries(new URL(url).searchParams)).toEqual(Object.fromEntries(
       Object.entries(expected).filter(([, value]) => value !== '').map(([key, value]) => [key, String(value)])
     ))

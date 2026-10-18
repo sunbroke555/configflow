@@ -463,6 +463,7 @@
                 <p class="m-0">Agent 名称可使用字母、数字、短横线或下划线。生成命令不会注册 Agent，需在目标机器执行后才会接入面板。</p>
                 <template v-if="scriptForm.installType === 'shell'">
                   <p class="m-0">在目标机器以 root 身份执行，支持 systemd / OpenRC。勾选安装核心后，脚本先安装核心，成功后再安装 Agent；已有核心和配置会保留，仅补装缺少的核心。</p>
+                  <p class="m-0">默认使用 curl，也可切换 wget；完整下载成功后才执行。环境检测与依赖补装由脚本完成；如果两个下载工具都没有，请先安装 curl 或 wget。</p>
                   <p class="m-0 break-words">安装核心时使用 <code class="font-mono">/etc/{{ shellAio ? '{mihomo,oxidns}' : scriptForm.type }}/config.yaml</code>，程序位于 <code class="font-mono">/usr/local/bin</code>，服务名与核心同名。已有部署须与默认布局一致；自定义部署请取消勾选，并在高级配置中填写实际路径。</p>
                   <template v-if="shellAio">
                     <p class="m-0"><strong class="font-medium text-foreground">同机 DNS：</strong>OxiDNS <code class="font-mono">53</code> → Mihomo <code class="font-mono">127.0.0.1:1053</code>。发布 Mihomo 配置时自动将 DNS 监听和 TUN DNS 劫持端口调整为 <code class="font-mono">1053</code>。</p>
@@ -501,10 +502,17 @@
                   <p v-else class="m-0 text-[12px] leading-relaxed text-muted-foreground">Mihomo DNS 监听 1053，使用公共 DNS 上游。</p>
                   <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">以 root 执行，支持 systemd / OpenRC；自动补齐依赖，完整下载后安装。使用默认路径，不受高级配置影响。TUN 检测规则见安装说明。</p>
                   <template v-if="coreInstallCommand">
-                    <Button variant="outline" class="min-h-11" @click="copyAgentContent(coreInstallCommand, '核心安装命令已复制到剪贴板')">
-                      <Copy class="size-4" />复制核心安装命令
-                    </Button>
-                    <Textarea id="core-install-command" :model-value="coreInstallCommand" :aria-label="`${coreInstallLabel}的独立安装命令`" readonly :rows="6" class="max-h-56 bg-background/50 font-mono text-[11.5px]" />
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <RadioGroup v-model="installerDownloader" aria-label="核心安装命令下载方式" class="flex gap-2">
+                        <label v-for="downloader in INSTALLER_DOWNLOADERS" :key="downloader" :class="[chipClass(installerDownloader === downloader), 'min-h-11']">
+                          <RadioGroupItem :value="downloader" />{{ downloader }}
+                        </label>
+                      </RadioGroup>
+                      <Button variant="outline" class="min-h-11" @click="copyAgentContent(coreInstallCommand, '核心安装命令已复制到剪贴板')">
+                        <Copy class="size-4" />复制命令
+                      </Button>
+                    </div>
+                    <Textarea id="core-install-command" :model-value="coreInstallCommand" :aria-label="`${coreInstallLabel}的独立安装命令`" readonly :rows="3" class="max-h-48 bg-background/50 font-mono text-[11.5px]" />
                     <Collapsible>
                       <CollapsibleTrigger class="min-h-11 w-full text-left text-[12.5px] text-muted-foreground">查看核心安装脚本</CollapsibleTrigger>
                       <CollapsibleContent>
@@ -525,6 +533,11 @@
 
           <section v-if="installCommand || dockerComposeContent || dockerRunCommand" ref="installCommandSection" aria-label="一键安装命令" class="space-y-4">
             <LabeledDivider label="一键安装命令" />
+            <RadioGroup v-if="scriptForm.installType === 'shell'" v-model="installerDownloader" aria-label="安装命令下载方式" class="flex gap-2">
+              <label v-for="downloader in INSTALLER_DOWNLOADERS" :key="downloader" :class="[chipClass(installerDownloader === downloader), 'min-h-11']">
+                <RadioGroupItem :value="downloader" />{{ downloader }}
+              </label>
+            </RadioGroup>
             <div v-for="block in commandBlocks" :key="block.title" class="flex min-w-0 flex-col gap-2">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <span class="text-[12.5px] font-semibold text-foreground">{{ block.title }}</span>
@@ -706,7 +719,7 @@ import FlowMap, { type FlowColumn, type FlowEdge, type FlowTone } from '@/compon
 import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
-import { buildAgentCoreInstallCommand, buildCoreInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget } from '@/lib/coreInstallCommand'
+import { buildAgentInstallCommand, buildAgentCoreInstallCommand, buildCoreInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import { Motion } from 'motion-v'
 import {
@@ -838,15 +851,23 @@ const installCommandSection = ref<HTMLElement | null>(null)
 const installScript = ref('')
 const scriptLoading = ref(false)
 let scriptRequest = 0
-const installCommand = ref('')
-const installCommandAlpine = ref('')
-const coreInstallCommand = ref('')
+const INSTALLER_DOWNLOADERS = ['curl', 'wget'] as const
+const installerDownloader = ref<InstallerDownloader>('curl')
+const installScriptUrl = ref('')
+const installScriptIncludesCore = ref(false)
+const installCommand = computed(() => installScriptUrl.value
+  ? (installScriptIncludesCore.value ? buildAgentCoreInstallCommand : buildAgentInstallCommand)(installScriptUrl.value, installerDownloader.value)
+  : '')
+const coreInstallScriptUrl = ref('')
 const CORE_INSTALL_TARGETS = [
   { value: 'both', label: 'Mihomo + OxiDNS' },
   { value: 'mihomo', label: '仅 Mihomo' },
   { value: 'oxidns', label: '仅 OxiDNS' },
 ] as const
 const coreInstallTarget = ref<CoreInstallTarget>('both')
+const coreInstallCommand = computed(() => coreInstallScriptUrl.value
+  ? buildCoreInstallCommand(coreInstallScriptUrl.value, coreInstallTarget.value, installerDownloader.value)
+  : '')
 const coreInstallLabel = computed(() => coreInstallTarget.value === 'both' ? '两个核心' : coreInstallTarget.value === 'mihomo' ? 'Mihomo' : 'OxiDNS')
 const coreInstallScript = ref('')
 const coreInstallLoading = ref(false)
@@ -924,7 +945,7 @@ watch(() => [scriptForm.value.type, scriptForm.value.installType, scriptForm.val
 
 const resetCoreInstallCommand = () => {
   coreInstallRequest += 1
-  coreInstallCommand.value = ''
+  coreInstallScriptUrl.value = ''
   coreInstallScript.value = ''
   coreInstallLoading.value = false
 }
@@ -955,7 +976,7 @@ const generateCoreInstallCommand = async () => {
       throw new Error('安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试')
     }
     coreInstallScript.value = response.data
-    coreInstallCommand.value = buildCoreInstallCommand(baseUrl.toString(), coreInstallTarget.value)
+    coreInstallScriptUrl.value = baseUrl.toString()
     notify.success('核心安装命令已生成，请以 root 身份在目标机器执行')
   } catch (error: any) {
     if (request === coreInstallRequest) notify.error(error.response?.data?.message || error.message || '生成核心安装命令失败')
@@ -1588,26 +1609,11 @@ const scriptPanelOpen = ref(false)
 /** 生成结果按安装方式给出可复制的命令块，避免模板里重复四段几乎相同的结构 */
 const commandBlocks = computed(() => {
   if (scriptForm.value.installType === 'shell') {
-    if (combinedCoreInstall.value) return [{
-      title: 'Linux（systemd / OpenRC）', note: '以 root 身份执行，先安装核心，再安装 Agent',
-      value: installCommand.value, rows: 6, copy: copyCommand
+    return [{
+      title: 'Linux（systemd / OpenRC）',
+      note: combinedCoreInstall.value ? '以 root 执行；完整下载成功后，先安装核心，再安装 Agent。' : '以 root 执行；完整下载成功后安装 Agent。',
+      value: installCommand.value, rows: 3, copy: copyCommand
     }]
-    return [
-      {
-        title: 'Ubuntu / Debian / CentOS',
-        note: '使用 systemd',
-        value: installCommand.value,
-        rows: 3,
-        copy: copyCommand
-      },
-      {
-        title: 'Alpine Linux',
-        note: '使用 OpenRC',
-        value: installCommandAlpine.value,
-        rows: 3,
-        copy: copyCommandAlpine
-      }
-    ]
   }
   return [
     {
@@ -1738,8 +1744,7 @@ const showMetricsDetail = async (agent: any) => {
 // 安装类型变化时重置相关字段
 const onInstallTypeChange = () => {
   // 清空之前生成的命令
-  installCommand.value = ''
-  installCommandAlpine.value = ''
+  installScriptUrl.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
 
@@ -1759,8 +1764,7 @@ const onInstallTypeChange = () => {
 
 // Docker 模式变化时
 const onDockerModeChange = () => {
-  installCommand.value = ''
-  installCommandAlpine.value = ''
+  installScriptUrl.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
 
@@ -1816,7 +1820,8 @@ const handleGenerateScript = () => {
 const showGenerateScriptDialog = () => {
   // 清空其他值
   installScript.value = ''
-  installCommand.value = ''
+  installScriptUrl.value = ''
+  installerDownloader.value = 'curl'
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
   scriptPanelOpen.value = false
@@ -1827,7 +1832,6 @@ const showGenerateScriptDialog = () => {
   installHelpOpen.value = false
   coreOnlyPanelOpen.value = false
   dockerOptionsOpen.value = false
-  installCommandAlpine.value = ''
 
   // 打开对话框 - v-if 会确保表单完全重新渲染
   scriptDialogVisible.value = true
@@ -1838,8 +1842,7 @@ const resetForm = () => {
   scriptRequest += 1
   scriptLoading.value = false
   installScript.value = ''
-  installCommand.value = ''
-  installCommandAlpine.value = ''
+  installScriptUrl.value = ''
   dockerComposeContent.value = ''
   dockerRunCommand.value = ''
   scriptPanelOpen.value = false
@@ -1847,7 +1850,7 @@ const resetForm = () => {
 
 watch(scriptForm, resetForm, { deep: true, flush: 'sync' })
 watch(scriptDialogVisible, resetForm, { flush: 'sync' })
-watch([installCommand, dockerComposeContent, dockerRunCommand], async (commands) => {
+watch([installScriptUrl, dockerComposeContent, dockerRunCommand], async (commands) => {
   if (!commands.some(Boolean)) return
   await nextTick()
   installCommandSection.value?.scrollIntoView?.({ block: 'start', behavior: 'auto' })
@@ -1948,14 +1951,12 @@ const generateScript = async () => {
       notify.success('Docker 部署命令已生成，请复制到目标机器执行')
     } else {
       let serverUrl = localStorage.getItem('serverDomain') || window.location.origin
-      if (includeCore) {
-        let parsed: URL
-        try { parsed = new URL(serverUrl.trim()) } catch { throw new Error('服务地址无效，请先设置完整的 HTTP / HTTPS 地址') }
-        if (!['http:', 'https:'].includes(parsed.protocol) || parsed.search || parsed.hash || parsed.username || parsed.password) {
-          throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
-        }
-        serverUrl = parsed.toString().replace(/\/+$/, '')
+      let parsed: URL
+      try { parsed = new URL(serverUrl.trim()) } catch { throw new Error('服务地址无效，请先设置完整的 HTTP / HTTPS 地址') }
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.search || parsed.hash || parsed.username || parsed.password) {
+        throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
       }
+      serverUrl = parsed.toString().replace(/\/+$/, '')
       const form = { ...shellServiceSettings.value }
       const lifecycleParams: Record<string, string> = {}
       if (form.service_manager !== 'auto') lifecycleParams.service_manager = form.service_manager
@@ -2005,8 +2006,8 @@ const generateScript = async () => {
       const scriptUrl = `${serverUrl}/api/agents/install-script?${params.toString()}`
 
       installScript.value = response.data
-      installCommand.value = includeCore ? buildAgentCoreInstallCommand(scriptUrl) : `curl -sSL "${scriptUrl}" | sudo bash`
-      installCommandAlpine.value = includeCore ? '' : `curl -sSL "${scriptUrl}" | sh`
+      installScriptIncludesCore.value = includeCore
+      installScriptUrl.value = scriptUrl
 
       notify.success('安装命令已生成，请复制到目标机器执行')
     }
@@ -2032,7 +2033,6 @@ const copyAgentContent = async (text: string, message: string) => {
 }
 
 const copyCommand = () => copyAgentContent(installCommand.value, '命令已复制到剪贴板')
-const copyCommandAlpine = () => copyAgentContent(installCommandAlpine.value, 'Alpine 命令已复制到剪贴板')
 const copyDockerCompose = () => copyAgentContent(dockerComposeContent.value, 'Docker Compose 已复制到剪贴板')
 const copyDockerRun = () => copyAgentContent(dockerRunCommand.value, 'Docker Run 命令已复制到剪贴板')
 

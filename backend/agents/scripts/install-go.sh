@@ -14,6 +14,26 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 {init_detection}
 
+{agent_install_dependencies}
+echo "1) 安装或升级 Go Agent（包含事务发布与失败回滚）"
+echo "2) 卸载 Agent"
+echo "3) 取消"
+printf '请输入选项 [1-3]: '
+read -r choice < /dev/tty
+case "$choice" in
+    1)
+        case "$(uname -m)" in
+            x86_64|amd64) AGENT_ARCH="linux-amd64" ;;
+            aarch64|arm64) AGENT_ARCH="linux-arm64" ;;
+            armv7l|armhf) AGENT_ARCH="linux-armv7" ;;
+            *) echo "不支持的 CPU 架构"; exit 1 ;;
+        esac
+        agent_ensure_dependencies
+        ;;
+    2) ;;
+    *) exit 0 ;;
+esac
+
 # Remove only this installation's recovery dependency, retaining unrelated unit
 # settings and custom drop-ins. Joining continuations also handles edited units.
 remove_systemd_recovery_dependency() {
@@ -176,11 +196,6 @@ for other_config in "$AGENT_DIR"/config*.json; do
     fi
 done
 
-echo "1) 安装或升级 Go Agent（包含事务发布与失败回滚）"
-echo "2) 卸载 Agent"
-echo "3) 取消"
-printf '请输入选项 [1-3]: '
-read -r choice < /dev/tty
 case "$choice" in
     1) ;;
     2)
@@ -209,12 +224,6 @@ case "$choice" in
     *) exit 0 ;;
 esac
 
-case "$(uname -m)" in
-    x86_64|amd64) AGENT_ARCH="linux-amd64" ;;
-    aarch64|arm64) AGENT_ARCH="linux-arm64" ;;
-    armv7l|armhf) AGENT_ARCH="linux-armv7" ;;
-    *) echo "不支持的 CPU 架构"; exit 1 ;;
-esac
 {core_install_phase}BINARY_BASE={binary_download_url_shell}
 BINARY_URL="$BINARY_BASE/configflow-agent-$AGENT_ARCH"
 # /tmp is often mounted noexec. Stage beside the final executable so validation
