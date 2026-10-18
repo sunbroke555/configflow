@@ -112,6 +112,29 @@ describe('proxy panel settings', () => {
 
 
 describe('individual and all-group delay tests', () => {
+  it('shows text and progress while testing and restores the action after completion', async () => {
+    const pending: Array<(value: any) => void> = []
+    vi.mocked(mihomoPanelApi.groupDelay).mockImplementation(() => new Promise(resolve => pending.push(resolve)))
+    const { wrapper } = await render()
+    const button = wrapper.findAll('button').find(item => item.text() === '全部分组测速')!
+    await button.trigger('click')
+    await flushPromises()
+    expect(button.text()).toBe('正在测速…')
+    expect(button.attributes('aria-busy')).toBe('true')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[role="status"]').text()).toContain('已完成 0 / 4 组')
+    pending.shift()!({ data: { data: {} } })
+    await flushPromises()
+    expect(wrapper.get('[role="status"]').text()).toContain('已完成 1 / 4 组')
+    for (let i = 0; i < 3; i++) {
+      pending.shift()!({ data: { data: {} } })
+      await flushPromises()
+    }
+    expect(button.text()).toBe('全部分组测速')
+    expect(button.attributes('aria-busy')).toBe('false')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+  })
   it('tests a provider node without selecting it and isolates the test URL', async () => {
     const { wrapper, state } = await render()
     await wrapper.get('button[aria-label="单节点测速 Fast（Proxy）"]').trigger('click')

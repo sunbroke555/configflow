@@ -8,13 +8,13 @@
         <Button variant="outline" class="min-h-11" :disabled="!groups.length" @click="toggleAll">
           <ChevronsUpDown class="size-3.5" />{{ allExpanded ? '全部收起' : '全部展开' }}
         </Button>
-        <Button variant="outline" class="min-h-11" :disabled="!allTestGroups.length || testing.size > 0 || nodeTesting.size > 0 || batchRunning" @click="testAll">
-          <Loader2 v-if="batchRunning" class="size-3.5 animate-spin" /><Zap v-else class="size-3.5" />全部分组测速
+        <Button variant="outline" class="min-h-11" :aria-busy="batchRunning" :disabled="!allTestGroups.length || testing.size > 0 || nodeTesting.size > 0 || batchRunning" @click="testAll">
+          <Loader2 v-if="batchRunning" class="size-3.5 animate-spin" aria-hidden="true" /><Zap v-else class="size-3.5" aria-hidden="true" />{{ batchRunning ? '正在测速…' : '全部分组测速' }}
         </Button>
       </template>
     </Toolbar>
-    <div v-if="batchRunning" role="status" class="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-      <span>已测 {{ batchDone }} / {{ batchTotal }} 组 · 依次测试，包含隐藏分组</span>
+    <div v-if="batchRunning" role="status" aria-atomic="true" class="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+      <span>已完成 {{ batchDone }} / {{ batchTotal }} 组 · 依次测速，包含隐藏分组</span>
       <Button variant="ghost" size="sm" class="min-h-11" :disabled="batchStop" @click="batchStop = true">{{ batchStop ? '当前分组结束后停止' : '停止后续测速' }}</Button>
     </div>
     <MihomoProxySettings v-model:open="settingsOpen" :settings="settings" @update:settings="applySettings" />

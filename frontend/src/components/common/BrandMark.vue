@@ -6,7 +6,7 @@
     :class="busy && 'is-busy'"
     aria-hidden="true"
   >
-    <g class="brand-mark__rays" stroke="currentColor" stroke-linecap="round" fill="none">
+    <g class="brand-mark__rays" :class="busy && 'cf-loading-spin'" stroke="currentColor" stroke-linecap="round" fill="none">
       <path d="M16 16 L16 2.5" stroke-width="3.2" />
       <path d="M16 16 L25.5 6.5" stroke-width="2.4" />
       <path d="M16 16 L29.5 16" stroke-width="3.2" />
@@ -39,7 +39,8 @@ defineProps<{ busy?: boolean }>()
 }
 
 .is-busy .brand-mark__rays {
-  animation: brand-spin 1.6s linear infinite;
+  --cf-loading-spin-duration: 1.6s;
+  animation: brand-spin var(--cf-loading-spin-duration) linear infinite;
 }
 
 @keyframes brand-spin {
