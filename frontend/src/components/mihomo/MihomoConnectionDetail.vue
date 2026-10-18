@@ -49,17 +49,7 @@ import { computed, ref, watch } from 'vue'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatBytes } from '@/lib/format'
-import { sourceLabel, type MihomoConnection } from '@/types/mihomo'
-
-export interface ConnectionRow extends MihomoConnection {
-  raw: MihomoConnection
-  target: string
-  chain: string
-  upSpeed: number
-  downSpeed: number
-  /** 前端发现连接消失的时间（毫秒）；活跃连接为空 */
-  closedAt?: number
-}
+import { sourceLabel, type ConnectionRow } from '@/types/mihomo'
 
 const props = defineProps<{ row: ConnectionRow | null }>()
 const emit = defineEmits<{ close: [] }>()
