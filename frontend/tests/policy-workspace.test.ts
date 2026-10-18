@@ -1,3 +1,4 @@
+import { canReloadPage } from '@/lib/pageReloadGuard'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import PolicyRoutingPanel from '@/components/routers/PolicyRoutingPanel.vue'
@@ -47,6 +48,20 @@ async function click(w: VueWrapper, text: string) {
 }
 
 describe('one-place DNS and ROS workflow', () => {
+
+  it('preserves a source address still being entered before it reaches the saved draft', async () => {
+    const w = await setup()
+    expect(canReloadPage()).toBe(true)
+    const input = w.get<HTMLInputElement>('#policy-source-ip')
+    await input.setValue('192.0.2.')
+    expect(canReloadPage()).toBe(false)
+    expect(routerApi.savePolicySettings).not.toHaveBeenCalled()
+    expect(input.element.value).toBe('192.0.2.')
+    await input.setValue('')
+    expect(canReloadPage()).toBe(true)
+  })
+
+
   it('edits an existing source through the dialog and retains routing choices until explicit publish', async () => {
     const w = await setup()
     await w.get('[aria-label="编辑 192.0.2.105"]').trigger('click'); await flushPromises()

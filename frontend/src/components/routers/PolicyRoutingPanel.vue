@@ -140,6 +140,7 @@
   </SectionCard>
 </template>
 <script setup lang="ts">
+import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronUp, Info, Loader2, Network, Pencil, Plus, Trash2 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
@@ -175,6 +176,7 @@ const editing = computed(() => sourceEditorOpen.value || destinationEditorOpen.v
 const tabs = [{ value: 'sources', label: '来源设备' }, { value: 'settings', label: '规则集与网关' }, { value: 'preview', label: '发布预览' }, { value: 'objects', label: '已下发对象' }]
 const ruleOptions = computed(() => state.value?.rule_sets.map(rule => ({ value: rule.id, label: `${rule.name}（${rule.policy}）` })) || [])
 const newIP = ref(''), queryAgent = ref(''), recorder = ref(''), queryError = ref('')
+usePageReloadGuard(() => !!newIP.value.trim())
 const queryLoading = ref(false)
 const routeChangeCount = computed(() => preview.value?.router_plan.stages.reduce((count, stage) => count + (stage.enabled === false ? 0 : stage.ops.length), 0) || 0)
 let queryEpoch = 0

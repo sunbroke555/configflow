@@ -632,6 +632,7 @@ import HealthCheckFields from '@/components/HealthCheckFields.vue'
 import ReorderBar from '@/components/shell/ReorderBar.vue'
 import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
+import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import {
@@ -2116,6 +2117,7 @@ const strategyText = computed(() => {
 
 /* ---------- 保存管道里的改动 ---------- */
 const draftSaving = ref(false)
+usePageReloadGuard(() => draftDirty.value || draftSaving.value)
 const persistDraft = async (fromSelection = false): Promise<boolean> => {
   if (!viewActive || draftSaving.value || (selectionSwitchPending && !fromSelection)) return false
   const group = selected.value as any

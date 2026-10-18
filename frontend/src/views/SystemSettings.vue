@@ -387,6 +387,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import api, { configApi, serverDomainApi, configTokenApi, ruleFetchProxyApi, dependenciesApi } from '@/api'
 import type { DependencyStatus } from '@/api'
 
@@ -487,6 +488,13 @@ onBeforeUnmount(() => { dependenciesDisposed = true; clearTimeout(dependencyPoll
 
 const serverDomain = ref(window.location.origin)
 const configToken = ref('')
+const savedServerDomain = ref(serverDomain.value)
+const savedConfigToken = ref('')
+const savingSettings = ref(0)
+usePageReloadGuard(() => savingSettings.value > 0
+  || serverDomain.value !== savedServerDomain.value
+  || configToken.value !== savedConfigToken.value
+  || ruleFetchProxy.value.trim() !== savedRuleFetchProxy.value)
 const mcpUrl = computed(() => `${serverDomain.value.replace(/\/+$/, '')}/mcp`)
 
 const copyMcpUrl = async () => {
@@ -502,6 +510,7 @@ const loadConfigToken = async () => {
   try {
     const response = await configTokenApi.get()
     configToken.value = response.data.config_token || ''
+    savedConfigToken.value = configToken.value
   } catch {
     notify.error('加载访问令牌失败')
   }
@@ -516,6 +525,7 @@ const resetServerDomain = async () => {
   const ok = await confirm('是否将服务域名重置为当前浏览器地址？', { title: '重置服务域名' })
   if (!ok) return
 
+  savingSettings.value++
   try {
     const newDomain = window.location.origin
 
@@ -524,12 +534,15 @@ const resetServerDomain = async () => {
     })
 
     serverDomain.value = newDomain
+    savedServerDomain.value = newDomain
     localStorage.setItem('serverDomain', newDomain)
 
     notify.success('服务域名已重置为当前地址')
   } catch (error) {
     console.error('重置服务域名失败:', error)
     notify.error('重置服务域名失败')
+  } finally {
+    savingSettings.value--
   }
 }
 
@@ -539,21 +552,27 @@ const onServerDomainBlur = async () => {
     return
   }
 
+  const submitted = serverDomain.value
+  savingSettings.value++
   try {
     await serverDomainApi.update({
-      new_domain: serverDomain.value
+      new_domain: submitted
     })
+    savedServerDomain.value = submitted
     localStorage.setItem('serverDomain', serverDomain.value)
 
     notify.success(`服务域名已更新为：${serverDomain.value}`)
   } catch (error) {
     console.error('更新服务域名失败:', error)
     notify.error('更新服务域名失败')
+  } finally {
+    savingSettings.value--
   }
 }
 
 // 订阅聚合开关变化处理
 const onSubscriptionAggregationChange = async (value: boolean) => {
+  savingSettings.value++
   try {
     // 保存到后端
     await api.post('/settings/subscription-aggregation', {
@@ -572,17 +591,23 @@ const onSubscriptionAggregationChange = async (value: boolean) => {
     notify.error('更新订阅聚合设置失败')
     // 失败时恢复原值
     subscriptionAggregationEnabled.value = !value
+  } finally {
+    savingSettings.value--
   }
 }
 
 const generateToken = async () => {
+  savingSettings.value++
   try {
     const response = await configTokenApi.update({ generate: true })
     configToken.value = response.data.config_token
+    savedConfigToken.value = configToken.value
     notify.success('令牌已生成并保存')
   } catch (error) {
     console.error('生成令牌失败:', error)
     notify.error('生成令牌失败')
+  } finally {
+    savingSettings.value--
   }
 }
 
@@ -592,12 +617,17 @@ const onTokenBlur = async () => {
     return
   }
 
+  const submitted = configToken.value
+  savingSettings.value++
   try {
-    await configTokenApi.update({ token: configToken.value })
+    await configTokenApi.update({ token: submitted })
+    savedConfigToken.value = submitted
     notify.success('令牌已保存')
   } catch (error) {
     console.error('保存令牌失败:', error)
     notify.error('保存令牌失败')
+  } finally {
+    savingSettings.value--
   }
 }
 
@@ -608,13 +638,17 @@ const onClearToken = async () => {
   })
   if (!ok) return
 
+  savingSettings.value++
   try {
     await configTokenApi.delete()
     configToken.value = ''
+    savedConfigToken.value = ''
     notify.success('令牌已清除')
   } catch (error) {
     console.error('清除令牌失败:', error)
     notify.error('清除令牌失败')
+  } finally {
+    savingSettings.value--
   }
 }
 
@@ -631,6 +665,7 @@ const loadRuleFetchProxy = async () => {
 const onRuleFetchProxyBlur = async () => {
   const value = ruleFetchProxy.value.trim()
   if (value === savedRuleFetchProxy.value) return
+  savingSettings.value++
   try {
     const response = await ruleFetchProxyApi.update({ rule_fetch_proxy: value })
     savedRuleFetchProxy.value = response.data.rule_fetch_proxy
@@ -640,6 +675,8 @@ const onRuleFetchProxyBlur = async () => {
     // Axios errors contain the submitted URL, which may include credentials.
     const invalid = isAxiosError(error) && error.response?.status === 400
     notify.error(invalid ? '代理地址无效，请填写 HTTP/HTTPS 代理地址或留空' : '保存规则下载代理失败')
+  } finally {
+    savingSettings.value--
   }
 }
 
@@ -841,6 +878,7 @@ onMounted(async () => {
       try {
         const response = await serverDomainApi.get()
         serverDomain.value = response.data.server_domain?.trim() || window.location.origin
+        savedServerDomain.value = serverDomain.value
         localStorage.setItem('serverDomain', serverDomain.value)
       } catch {
         notify.error('加载服务域名失败')
