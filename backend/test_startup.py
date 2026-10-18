@@ -3,6 +3,7 @@ import configparser
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from unittest.mock import Mock
@@ -199,4 +200,6 @@ def test_supervisor_only_routes_the_app_through_startup():
 
 def test_image_installs_launcher_outside_the_replaceable_sources():
     dockerfile = (Path(__file__).resolve().parents[1] / 'docker' / 'Dockerfile').read_text()
-    assert 'COPY backend/startup.py /usr/local/bin/configflow-python-start.py' in dockerfile
+    # The launcher may be staged under /rootfs and copied to / as one layer.
+    assert re.search(r'^COPY backend/startup\.py (?:/rootfs)?/usr/local/bin/configflow-python-start\.py$', dockerfile, re.M)
+    assert 'COPY --link --from=app /rootfs/ /' in dockerfile
