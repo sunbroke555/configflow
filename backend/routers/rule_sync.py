@@ -134,21 +134,13 @@ class Downloads:
 
 
 def _save_manifest(profile_id, router, driver):
-    from backend.common.config import update_config_transaction
+    from backend.common.config import get_repository, reset_config_context
     manifest = getattr(driver, 'ros_policy_manifest', None)
     latest = find_router(config_for(profile_id), router['id'])
     if latest is not None and latest.get('ros_policy_state') == manifest:
         return
-    def mutate(config):
-        current = find_router(config, router['id'])
-        if current is None or current.get('endpoint') != router.get('endpoint'):
-            raise RouterError('路由器设置已变化，无法保存回读记录')
-        if manifest:
-            current['ros_policy_state'] = copy.deepcopy(manifest)
-        else:
-            current.pop('ros_policy_state', None)
-    if manifest != router.get('ros_policy_state'):
-        update_config_transaction(mutate, profile_id)
+    get_repository().save_router_publication(profile_id, router, manifest=manifest)
+    reset_config_context()
 
 
 def _cache_sources(config, router, contents):

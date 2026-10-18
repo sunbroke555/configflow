@@ -38,7 +38,7 @@ ROUTE_FIELDS = {
     'suppress-hw-offload', 'disabled', 'comment',
 }
 NAT_READ_ONLY = {'.id', 'dynamic', 'invalid', 'bytes', 'packets'}
-ROUTE_EVIDENCE_FIELDS = ROUTE_FIELDS | {'.id', 'immediate-gw', 'active', 'connect', 'ecmp', 'invalid'}
+ROUTE_EVIDENCE_FIELDS = ROUTE_FIELDS | {'.id', 'immediate-gw', 'active', 'inactive', 'connect', 'ecmp', 'invalid'}
 
 
 class MissingResource(RouterError):
@@ -166,16 +166,24 @@ class RouterOSDriver(RouterDriver):
                         pass
         state.nat_context = context
         for row in routes:
-            if str(row.get('comment') or '').startswith('cf-ros-policy-'):
-                continue
             dst = str(row.get('dst-address') or '')
             try:
                 dst = str(ipaddress.ip_network(dst, strict=False))
             except ValueError:
                 continue
+            active = _truthy(row['active']) if 'active' in row else None
+            if active is None and 'inactive' in row:
+                active = not _truthy(row['inactive'])
+            if _truthy(row.get('inactive')) or _truthy(row.get('invalid')):
+                active = False
+            try:
+                distance = int(row['distance'])
+            except (KeyError, TypeError, ValueError):
+                distance = None
             state.routes.append(RouteEntry(
                 id=str(row.get('.id', '')), dst=dst, gateway=str(row.get('gateway') or ''),
-                enabled=not _truthy(row.get('disabled')), comment=str(row.get('comment') or '')))
+                enabled=not _truthy(row.get('disabled')), comment=str(row.get('comment') or ''),
+                table=str(row.get('routing-table') or 'main'), active=active, distance=distance))
         for row in nats:
             if str(row.get('comment') or '').startswith('cf-ros-policy-'):
                 continue
@@ -487,6 +495,8 @@ class RouterOSDriver(RouterDriver):
                 values = {**original, 'dst-address': cidr, 'comment': op['comment'],
                           'place-before': row['.id']}
                 values.pop('dst-address-list', None)
+                if op.get('out_interface'):
+                    values['out-interface'] = op['out_interface']
                 changes.append({'method': 'PUT', 'path': NAT, 'values': values})
             return self._transaction(changes)
         if kind == 'nat_add':
@@ -503,6 +513,8 @@ class RouterOSDriver(RouterDriver):
                               'dst-address': cidr, 'comment': op['comment'], **position}
                     if source:
                         values['src-address'] = source
+                    if op.get('out_interface'):
+                        values['out-interface'] = op['out_interface']
                     changes.append({'method': 'PUT', 'path': NAT, 'values': values})
             return self._transaction(changes)
         raise RouterError(f'不支持的操作 {kind}')

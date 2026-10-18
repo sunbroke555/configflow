@@ -1,4 +1,5 @@
 """NAT exemption follows the router's actual source-NAT rules and proxy egress."""
+import copy
 import pytest
 
 from backend.routers.plan import build_plan
@@ -167,9 +168,18 @@ def test_uncertain_or_nonuniform_routes_cannot_claim_source_nat_is_unnecessary(a
         session.rows[ROUTES][0]['active'] = 'false'
     else:
         session.rows[ROUTES][0][attribute] = 'true'
-    _, _, report, plan = inspect(session)
+    before = copy.deepcopy(session.rows)
+    driver, _, report, plan = inspect(session)
     assert nat_item(report)['status'] == 'unknown'
-    assert plan['blockers']
+    result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+    if report['routes']['items'][0]['status'] == 'conflict':
+        # Skipping the destination must not change its forwarding or NAT,
+        # rather than blocking unrelated safe destinations.
+        assert result['ok'], result
+    else:
+        assert not result['ok']
+    assert session.rows == before
+    assert session.writes == []
 
 
 def test_disabled_interface_members_do_not_expand_wan_match():
@@ -303,4 +313,70 @@ def test_release_checks_empty_nat_stage_when_safety_changes_after_agent_apply(ch
     assert result['failed_stage'] == 'nat_bypass'
     assert any(item['stage'] == 'nat_bypass' and item['status'] == 'failed' for item in result['log'])
     assert agent.calls[-1] == ('remove', False)
+    assert session.writes == []
+
+
+def test_active_exact_route_with_disabled_backup_proves_lan_egress_without_mutation():
+    backup = {**ACTIVE_PROXY_ROUTE, '.id': '*backup', 'gateway': '192.168.0.9',
+              'immediate-gw': '192.168.0.9%wan', 'disabled': 'true', 'comment': 'manual-backup'}
+    session = nat_session(routes=[ACTIVE_PROXY_ROUTE, backup])
+    driver, _, report, plan = inspect(session)
+    assert report['routes']['items'][0]['status'] == 'synced'
+    assert nat_item(report)['status'] == 'not_required'
+    assert 'lan4' in nat_item(report)['detail']
+    assert plan['blockers'] == []
+    result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+    assert result['ok'], result
+    assert session.rows[ROUTES][1] == backup and session.writes == []
+
+
+def test_correct_specific_routes_share_exact_route_lan_egress():
+    specific = {**ACTIVE_PROXY_ROUTE, '.id': '*specific', 'dst-address': '198.18.1.0/24',
+                'comment': 'manual-specific'}
+    session = nat_session(routes=[ACTIVE_PROXY_ROUTE, specific])
+    driver, _, report, plan = inspect(session)
+    assert report['routes']['items'][0]['status'] == 'synced'
+    assert nat_item(report)['status'] == 'not_required'
+    result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+    assert result['ok'], result
+    assert session.rows[ROUTES][1] == specific and session.writes == []
+
+
+@pytest.mark.parametrize('uncertain', [None, 'different-interface', 'ecmp', 'invalid', 'inactive'])
+def test_shadowed_wrong_aggregate_proves_nat_only_from_complete_valid_uniform_subnets(uncertain):
+    wrong = {**ACTIVE_PROXY_ROUTE, 'gateway': '192.168.0.9', 'immediate-gw': '192.168.0.9%wan',
+             'comment': 'manual-wrong'}
+    left = {**ACTIVE_PROXY_ROUTE, '.id': '*left', 'dst-address': '198.18.0.0/17', 'comment': 'cf-left'}
+    right = {**ACTIVE_PROXY_ROUTE, '.id': '*right', 'dst-address': '198.18.128.0/17', 'comment': 'cf-right'}
+    if uncertain == 'different-interface':
+        right['immediate-gw'] = f'{GATEWAY}%wan'
+    elif uncertain:
+        right[uncertain] = 'true'
+    session = nat_session(routes=[wrong, left, right])
+    driver, _, report, plan = inspect(session)
+    assert nat_item(report)['status'] == ('unknown' if uncertain else 'not_required')
+    if uncertain in {'invalid', 'inactive'}:
+        assert report['routes']['items'][0]['status'] == 'conflict'
+        assert plan['checks']['routes'] == []
+    else:
+        assert bool(plan['blockers']) == bool(uncertain)
+    if uncertain is None:
+        assert report['routes']['items'][0]['status'] == 'synced'
+        assert report['routes']['extra'] == []
+        result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+        assert result['ok'], result
+    assert session.rows[ROUTES][0] == wrong and session.writes == []
+
+
+def test_absent_aggregate_wrong_specific_cannot_use_connected_gateway_as_nat_proof():
+    connected = {'.id': '*connected', 'dst-address': '192.168.0.0/24', 'gateway': 'lan4',
+                 'immediate-gw': 'lan4', 'active': 'true', 'connect': 'true'}
+    specific = {**ACTIVE_PROXY_ROUTE, '.id': '*specific', 'dst-address': '198.18.1.0/24',
+                'gateway': '192.168.0.9', 'immediate-gw': '192.168.0.9%wan',
+                'comment': 'manual-specific'}
+    session = nat_session(routes=[connected, specific])
+    _, _, report, plan = inspect(session)
+    assert report['routes']['items'][0]['status'] == 'conflict'
+    assert nat_item(report)['status'] == 'unknown'
+    assert next(stage['ops'] for stage in plan['stages'] if stage['key'] == 'routes') == []
     assert session.writes == []

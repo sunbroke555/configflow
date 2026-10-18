@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from backend.routers.base import (
     POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT, RouterState, as_dict, is_managed, managed_comment, policy_route,
-    policy_route_ok, stale_route_warning, stale_routes,
+    policy_route_ok, stale_route_warning, stale_routes, StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
 from backend.routers.report import _networks
@@ -104,6 +104,7 @@ def _lan_except(gateway: str) -> List[str]:
 
 def _route_ops(report: Dict[str, Any], state: RouterState, gateway: str, warnings: List[str]):
     ops, skipped = [], set()
+    route_index = StaticRouteIndex(state.routes)
     for item in report['routes']['items']:
         cidr = item['cidr']
         if item['status'] == 'missing':
@@ -111,11 +112,12 @@ def _route_ops(report: Dict[str, Any], state: RouterState, gateway: str, warning
             ops.append({'kind': 'route_add', 'cidr': cidr, 'gateway': gateway, 'comment': comment,
                         'summary': f'新增路由 {cidr} → {gateway}（备注 {comment}）'})
         elif item['status'] == 'adoptable':
-            route = next(route for route in state.routes
-                         if route.dst == cidr and route.enabled and route.gateway == gateway)
-            comment = managed_comment(route.comment)
-            ops.append({'kind': 'route_comment', 'id': route.id, 'cidr': cidr, 'comment': comment,
-                        'summary': f'接管路由 {cidr}（备注「{route.comment or "无"}」→「{comment}」）'})
+            for route in route_index.select(cidr, gateway).candidates:
+                if is_managed(route.comment):
+                    continue
+                comment = managed_comment(route.comment)
+                ops.append({'kind': 'route_comment', 'id': route.id, 'cidr': route.dst, 'comment': comment,
+                            'summary': f'接管路由 {route.dst}（备注「{route.comment or "无"}」→「{comment}」）'})
         elif item['status'] == 'conflict':
             skipped.add(cidr)
             warnings.append(f'{cidr}：{item["detail"]}。本次跳过该网段（路由、NAT、回流都不处理），请先手动处理')
@@ -190,7 +192,10 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
 
 def _nat_ops(report: Dict[str, Any], state: RouterState, gateway: str, skipped: set, vendor: str = ''):
     items = [item for item in report['nat_bypass']['items'] if item['cidr'] not in skipped]
-    rules = {rule.id: rule for rule in state.nat_bypass if rule.enabled}
+    check = (state.ros_policy_plan or {}).get('check') or {}
+    migrating = {item['id'] for item in check.get('migrations', [])
+                 if item['path'] == '/ip/firewall/nat'}
+    rules = {rule.id: rule for rule in state.nat_bypass if rule.enabled and rule.id not in migrating}
     missing = [item['cidr'] for item in items if item['status'] == 'missing']
     adopt_ids: List[str] = []
     for item in items:
@@ -239,6 +244,8 @@ def _nat_ops(report: Dict[str, Any], state: RouterState, gateway: str, skipped: 
 
     # When return routing is enabled, include the existing exemption scope too.
     exempt = [cidr for rule in rules.values() for cidr in rule.dst]
+    exempt += [item['values']['dst-address'] for item in check.get('replacements', [])
+               if item['path'] == '/ip/firewall/nat']
     exempt += [cidr for op in ops for cidr in op.get('add_dst') or op.get('dst') or []]
     return ops, exempt
 
@@ -304,6 +311,21 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         blockers.extend(ros_policy['blockers'])
         warnings.extend(ros_policy['warnings'])
         route_ops.extend(ros_policy['ops'])
+        previous = (desired.get('ros_policy', {}).get('previous') or {}).get('spec') or {}
+        from backend.routers.ros_policy import subtract
+        withdrawn = subtract(_networks(previous.get('destinations', [])),
+                             _networks([item['cidr'] for item in desired['ros_policy']['cidrs']]))
+        replacements = withdrawn + _networks([
+            item['config']['dst-address'] for item in (ros_policy.get('check') or {}).get('migrations', [])
+            if item['path'] == '/ip/route'])
+        if any(net.overlaps(old) for net in _networks(skipped) for old in replacements):
+            blockers.append('替代静态路由存在冲突，不能撤销仍在生效的来源策略，请先处理冲突')
+        for op in ros_policy['ops']:
+            op['static_checks'] = [{'cidr': item['cidr'], 'gateway': gateway}
+                                   for item in desired['proxy_cidrs']
+                                   if item['cidr'] not in skipped
+                                   and any(net.overlaps(old) for net in _networks([item['cidr']])
+                                           for old in replacements)]
     stale = stale_routes(state, gateway)
     if stale:
         warnings.append(stale_route_warning(stale, gateway))
@@ -329,11 +351,41 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                     for item in nat_items if item['status'] == 'unknown')
     nat_ops, exempt = _nat_ops(report, state, gateway, skipped, router.get('type', ''))
     proxy_cidrs = [entry['cidr'] for entry in desired['proxy_cidrs'] if entry['cidr'] not in skipped]
+    # A skipped destination is unchanged, not removed from the Agent's
+    # replacement set. Retain exactly its previously protected intersection.
+    current_return = (return_routing.get('managed') or {}).get('spec') or {}
+    retained_return = [
+        str(old if old.subnet_of(target) else target)
+        for old in _networks(current_return.get('proxy_dst', []))
+        for target in _networks(skipped) if old.overlaps(target)]
+    if ros_policy is not None:
+        for op in ros_policy['ops']:
+            if op.get('static_checks'):
+                if nat_ops:
+                    from backend.routers.routeros_nat import _egress
+                    interface, reason = _egress(op['static_checks'][0]['cidr'], gateway,
+                                                state.nat_context or {}, policy_routing=True)
+                    if interface is None:
+                        blockers.append('无法安全准备替代路径的 LAN NAT 保护：' + reason)
+                    else:
+                        for preparation in nat_ops:
+                            preparation['out_interface'] = interface
+                # NAT and return protection must precede activation of the
+                # replacement routes, not just withdrawal of the old policy.
+                op['summary'] += '；先准备 NAT 保护，再建立并回读替代静态路径'
+                op['prepare_static'] = nat_ops + [entry for entry in route_ops if entry is not op]
+                route_ops = [op]
+                op['static_nat_checks'] = {
+                    'nat_bypass': [item['cidr'] for item in nat_items
+                                   if item['status'] not in {'not_required', 'unknown'}],
+                    'nat_not_required': [{'cidr': item['cidr'], 'gateway': gateway}
+                                         for item in nat_items if item['status'] == 'not_required']}
+                nat_ops = []
     return_ops = []
     if manage_return:
         allocation = return_allocation(return_routing)
         policy_cidrs = [item['cidr'] for item in desired.get('ros_policy', {}).get('cidrs', [])]
-        spec = {'router_ip': upstream, 'proxy_dst': _collapse(proxy_cidrs + policy_cidrs + exempt),
+        spec = {'router_ip': upstream, 'proxy_dst': _collapse(proxy_cidrs + policy_cidrs + exempt + retained_return),
                 **{key: allocation[key] for key in RETURN_ALLOCATION_FIELDS},
                 'safety_version': RETURN_SAFETY_VERSION}
         return_ops = _return_op(return_routing, spec)
@@ -357,7 +409,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     checks = {
         'gateway': gateway,
         'routes': [] if policy else [{'cidr': cidr, 'gateway': gateway} for cidr in proxy_cidrs],
-        'removed_routes': [op['id'] for op in route_ops if op['kind'] == 'route_delete'],
+        'removed_routes': [entry['id'] for op in route_ops for entry in op.get('prepare_static', [op])
+                           if entry['kind'] == 'route_delete'],
         'nat_bypass': [item['cidr'] for item in nat_items if item['status'] not in {'not_required', 'unknown'}],
         'nat_not_required': [{'cidr': item['cidr'], 'gateway': gateway}
                              for item in nat_items if item['status'] == 'not_required'],

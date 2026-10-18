@@ -5,6 +5,7 @@ entries does not repeatedly download the entire list. Compensation checks the
 exact last-written configuration before touching a resource.
 """
 import copy
+import ipaddress
 import time
 from urllib.parse import quote
 
@@ -131,6 +132,13 @@ def restore(driver, op):
         delete_safe = False
     for step in op['steps']:
         try:
+            if step['action'] == 'operation':
+                # Keep the replacement protection if the old path could not
+                # be restored; report the incomplete rollback for inspection.
+                if failures:
+                    continue
+                driver.apply(step['undo'])
+                continue
             current = _read(driver, step['path'], step['id'])
             if step['action'] == 'delete':
                 if not delete_safe:
@@ -174,6 +182,35 @@ def restore(driver, op):
     return {}
 
 
+def _verify_replacement_nat(driver, op, resources):
+    previous = (op.get('previous') or {}).get('spec') or {}
+    if not previous.get('sources') or not op.get('static_checks'):
+        return
+    from backend.routers.routeros_nat import _egress, preserves_sources, RouteEgressIndex
+    state = driver.read_state()
+    live = snapshot(driver)
+    removing = {(item['path'], item['id']) for item in op['owned'] + op['migrations']}
+    policy = removing | {(item['path'], item['id']) for item in resources}
+    context = state.nat_context or {}
+    context['mangle'] = [row for row in live[MANGLE] if (MANGLE, row['.id']) not in policy]
+    route_index = RouteEgressIndex(context)
+    rows = [row for row in live[NAT] if (NAT, row['.id']) not in removing]
+    sources = [ipaddress.IPv4Network(value) for value in previous['sources']]
+    for check in op['static_checks']:
+        target = ipaddress.IPv4Network(check['cidr'])
+        destinations = []
+        for value in previous.get('destinations', []):
+            old = ipaddress.IPv4Network(value)
+            if old.overlaps(target):
+                destinations.append(old if old.subnet_of(target) else target)
+        if not destinations:
+            continue
+        interface, reason = _egress(check['cidr'], check['gateway'], context, route_index=route_index)
+        if interface is None or not preserves_sources(rows, sources, destinations, interface, context):
+            raise RouterError('替代静态 NAT 无法证明覆盖原策略的来源、目的及出口，保留原来源策略：'
+                              + check['cidr'] + (('；' + reason) if reason else ''))
+
+
 def apply(driver, op):
     live = snapshot(driver)
     # Ordinary static routes can be written earlier in the same stage. Their
@@ -189,11 +226,30 @@ def apply(driver, op):
     journal, resources = [], []
     ids = {path: {row['.id'] for row in rows} for path, rows in live.items()}
     try:
+        for preparation in op.get('prepare_static', []):
+            undo = driver.apply(preparation)
+            journal.append({'action': 'operation', 'undo': undo})
+        if op.get('static_checks'):
+            from backend.routers.base import is_managed, StaticRouteIndex
+            state = driver.read_state()
+            route_index = StaticRouteIndex(state.routes)
+            for check in op['static_checks']:
+                candidates = route_index.select(check['cidr'], check['gateway']).candidates
+                if not candidates or not all(is_managed(route.comment) for route in candidates):
+                    raise RouterError('替代静态路由尚未生效，保留原来源策略：' + check['cidr'])
+        if op.get('static_nat_checks'):
+            from backend.routers.release import verify_nat
+            verify_nat(op['static_nat_checks'], driver.read_state())
+            for path in (NAT, ROUTES):
+                ids[path].update(row['.id'] for row in driver._list(path))
         for entry in op['bundle']:
             resource = _create(driver, entry['path'], entry['values'], journal, ids)
             resources.append(resource)
             if entry['path'] == ROUTES:
                 check_route_egress(_read(driver, ROUTES, resource['id']), op['spec']['gateway'], op['spec']['egress_interface'])
+        for replacement in op.get('replacements', []):
+            _create(driver, replacement['path'], replacement['values'], journal, ids)
+        _verify_replacement_nat(driver, op, resources)
         for migration in op['migrations']:
             _delete(driver, migration, journal)
         # Reverse creation order: withdraw the old entry rule first, then its
@@ -239,7 +295,7 @@ def verify(driver, check):
     owned_keys = {(entry['path'], entry['id']) for entry in owned}
     if any(enabled(row) and row.get('action') == 'fasttrack-connection' for row in live[FILTER]):
         raise RouterError('发布期间出现 FastTrack，无法确认来源策略继续生效')
-    from backend.routers.routeros_nat import assess_nat, _egress
+    from backend.routers.routeros_nat import assess_nat, _egress, RouteEgressIndex
     state = driver.read_state()
     state.nat_context.update(
         mangle=[row for row in live[MANGLE] if (MANGLE, row['.id']) not in owned_keys],
@@ -248,7 +304,9 @@ def verify(driver, check):
            and row.get('action') in {'mark-routing', 'route', 'jump', 'accept', 'return'}
            for row in state.nat_context['mangle']):
         raise RouterError('发布期间出现其他 prerouting 分流或终止规则，请重新预览')
-    interface, reason = _egress(check['spec']['destinations'][0], check['spec']['gateway'], state.nat_context, policy_routing=True)
+    route_index = RouteEgressIndex(state.nat_context)
+    interface, reason = _egress(check['spec']['destinations'][0], check['spec']['gateway'], state.nat_context,
+                               policy_routing=True, route_index=route_index)
     if interface is None:
         raise RouterError('回读无法确认策略下一跳出口：' + reason)
     if check['spec'].get('egress_interface', interface) != interface:
@@ -258,7 +316,8 @@ def verify(driver, check):
             raise RouterError('策略下一跳出口在发布期间发生变化')
     else:
         for cidr in check['spec']['destinations']:
-            assessment = assess_nat(cidr, check['spec']['gateway'], state, policy_routing=True)
+            assessment = assess_nat(cidr, check['spec']['gateway'], state, policy_routing=True,
+                                    route_index=route_index)
             if assessment['status'] != 'not_required':
                 raise RouterError('策略流量不再能确认无需 NAT 免转换：' + assessment['detail'])
     for entry in owned:
@@ -266,5 +325,9 @@ def verify(driver, check):
             row = _read(driver, ROUTES, entry['id'])
             check_route_egress(row, check['spec']['gateway'], interface)
     for migration in check.get('migrations', []):
-        if any(row.get('.id') == migration['id'] for row in live[ROUTES]):
-            raise RouterError('应迁移的主表静态路由仍然存在')
+        if any(row.get('.id') == migration['id'] for row in live[migration['path']]):
+            raise RouterError('应迁移的受管路由或 NAT 免转换仍然存在')
+    for replacement in check.get('replacements', []):
+        expected = {key: value for key, value in replacement['values'].items() if key != 'place-before'}
+        if not any(_matches(row, expected) for row in live[replacement['path']]):
+            raise RouterError('迁移后应保留的 NAT 目的范围不完整')

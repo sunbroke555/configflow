@@ -5,7 +5,7 @@ import requests
 from flask import jsonify, request
 
 from backend.common.auth import require_auth
-from backend.common.config import get_config, save_config
+from backend.common.config import get_config, get_repository, reset_config_context, save_config
 from backend.routers.base import RouterConflictError, RouterError, as_dict
 from backend.routers.desired import compute_desired
 from backend.routers.dhcp_dns import dns_agent_settings
@@ -36,6 +36,19 @@ def _manual_sync_lock(function):
             if not acquired:
                 return jsonify(success=False, message='此路由器正在发布或同步，请稍后重试'), 409
             return function(router_id)
+    return wrapped
+
+
+def _router_settings_lock(function):
+    from functools import wraps
+    locked = _manual_sync_lock(function)
+
+    @wraps(function)
+    def wrapped(router_id):
+        # GET stays read-only; rule-sync POST acquires its own job lock.
+        if request.method in ('PUT', 'DELETE'):
+            return locked(router_id)
+        return function(router_id)
     return wrapped
 
 
@@ -88,35 +101,41 @@ def list_or_create_routers():
 
 @routers_bp.route('/<router_id>', methods=['PUT', 'DELETE'])
 @require_auth
+@_router_settings_lock
 def update_or_delete_router(router_id):
+    from backend.common.profile_context import resolve_profile_id
     config = get_config()
     existing = find_router(config, router_id)
     if existing is None:
         return _not_found()
     with router_operation_lock(existing):
+        reset_config_context()
         config = get_config()
-        existing = find_router(config, router_id)
-        if existing is None:
-            return _not_found()
-        others = [item for item in routers_of(config) if item.get('id') != router_id]
+        current = find_router(config, router_id)
+        if current != existing:
+            return jsonify(success=False, message='路由器设置已变化，请刷新后重试'), 409
+        existing = current
+        profile_id = resolve_profile_id()
         if request.method == 'DELETE':
-            _save_items(config, others)
+            if existing.get('ros_policy_state'):
+                return jsonify(success=False, message='请先清空策略路由选择并发布撤回，再删除路由器记录'), 409
+            get_repository().save_router_settings(profile_id, existing, None)
+            reset_config_context()
             return jsonify({'success': True})
         try:
             router = normalize(request.get_json(silent=True), existing)
         except RouterValidationError as error:
             return jsonify({'success': False, 'message': str(error)}), 400
-        if any(router.get(key) != existing.get(key) for key in ('type', 'endpoint', 'username', 'password')):
+        if any(router.get(key) != existing.get(key) for key in ('type', 'endpoint', 'username', 'password', 'verify_tls')):
             router.pop('last_probe', None)   # stale once the connection changes
-        index = next(i for i, item in enumerate(routers_of(config)) if item.get('id') == router_id)
-        items = routers_of(config)
-        items[index] = router
-        _save_items(config, items)
+        get_repository().save_router_settings(profile_id, existing, router)
+        reset_config_context()
         return jsonify({'success': True, 'router': public_view(router)})
 
 
 @routers_bp.route('/<router_id>/probe', methods=['POST'])
 @require_auth
+@_manual_sync_lock
 def probe_router(router_id):
     config = get_config()
     router = find_router(config, router_id)
@@ -230,17 +249,21 @@ def router_plan(router_id):
 @_manual_sync_lock
 def router_apply(router_id):
     """Run the previewed release. The plan is rebuilt and must match the preview's fingerprint."""
+    from backend.common.profile_context import resolve_profile_id
     config = get_config()
     router = find_router(config, router_id)
     if router is None:
         return _not_found()
     expected = str((request.get_json(silent=True) or {}).get('fingerprint') or '')
-    driver = _driver(router)
+    driver = None
     try:
         with router_operation_lock(router):
+            reset_config_context()
             config = get_config()
             if find_router(config, router_id) != router:
                 return jsonify({'success': False, 'message': '路由器设置在等待发布期间发生变化，请重新预览'}), 409
+            router = find_router(config, router_id)
+            driver = _driver(router)
             gateway_agent, desired, state, report = _inspect(config, router, driver)
             plan = build_plan(router, desired, state, report, report['return_routing'], driver)
             if plan['blockers']:
@@ -257,24 +280,21 @@ def router_apply(router_id):
                 agent_client = AgentReturnRouting(get_agent_manager(), gateway_agent)
             published_config = config
             result = execute(plan, driver, agent_client)
-            config = get_config()   # reload: the release may have taken a while
-            items = routers_of(config)
-            for item in items:
-                if item.get('id') == router_id:
-                    if hasattr(driver, 'ros_policy_manifest'):
-                        if driver.ros_policy_manifest:
-                            item['ros_policy_state'] = driver.ros_policy_manifest
-                        else:
-                            item.pop('ros_policy_state', None)
-                    item['last_release'] = {'at': _now(), 'ok': result['ok'], 'fingerprint': plan['fingerprint'],
-                                            'failed_stage': result.get('failed_stage', '')}
-            _save_items(config, items)
+            publication = {'last_release': {
+                'at': _now(), 'ok': result['ok'], 'fingerprint': plan['fingerprint'],
+                'failed_stage': result.get('failed_stage', ''),
+            }}
+            if hasattr(driver, 'ros_policy_manifest'):
+                publication['manifest'] = driver.ros_policy_manifest
+            get_repository().save_router_publication(resolve_profile_id(), router, **publication)
+            reset_config_context()
             if result['ok']:
                 _capture_sync(published_config, router, driver, desired)
     except RouterError as error:
         return jsonify({'success': False, 'message': str(error)}), 502
     finally:
-        driver.close()
+        if driver is not None:
+            driver.close()
 
     message = ''
     if not result['ok']:
@@ -314,12 +334,14 @@ def list_device_policy(router_id):
         return _not_found()
     if router['type'] != 'routeros':
         return jsonify({'success': False, 'message': '策略路由查看仅支持 RouterOS'}), 400
-    driver = _driver(router)
+    driver = None
     try:
         with router_operation_lock(router):
+            reset_config_context()
             current = find_router(get_config(), router_id)
             if current != router:
                 raise RouterConflictError('路由器设置已变化，请刷新后重试')
+            driver = _driver(current)
             objects = read_policy_objects(driver, router.get('ros_policy_state'))
         profile_id = resolve_profile_id()
         source_agents = [{'id': item['id'], 'name': item.get('name') or item['id']}
@@ -330,14 +352,18 @@ def list_device_policy(router_id):
                             'generated_at': _now()})
         response.headers['Cache-Control'] = 'no-store'
         return response
+    except RouterConflictError as error:
+        return jsonify({'success': False, 'message': str(error)}), 409
     except RouterError as error:
         return jsonify({'success': False, 'message': str(error)}), 502
     finally:
-        driver.close()
+        if driver is not None:
+            driver.close()
 
 
 @routers_bp.route('/<router_id>/policy-settings', methods=['GET', 'PUT'])
 @require_auth
+@_router_settings_lock
 def policy_settings(router_id):
     from backend.common.agent_manager import get_agent_manager
     from backend.common.config import get_default_profile_id, get_repository, update_config_transaction
@@ -360,6 +386,9 @@ def policy_settings(router_id):
                     not isinstance(body['base_url'], str):
                 return jsonify(success=False, message='策略路由设置格式无效'), 400
             with router_operation_lock(router):
+                reset_config_context()
+                if find_router(get_config(profile_id), router_id) != router:
+                    raise RouterConflictError('路由器设置已变化，请刷新后重试')
                 update_config_transaction(lambda config: save_workspace(
                     config, router_id, body, body['base_url']), profile_id)
         config = get_config(profile_id)
@@ -458,9 +487,14 @@ def _device_route_change(router_id, *, apply):
         normalize_request(payload)
     except RouteEditValidationError as error:
         return jsonify({'success': False, 'message': str(error)}), 400
-    driver = _driver(router)
+    driver = None
     try:
         with router_operation_lock(router):
+            reset_config_context()
+            current = find_router(get_config(), router_id)
+            if current != router:
+                raise RouterConflictError('路由器设置已变化，请刷新后重试')
+            driver = _driver(current)
             rows = read_routes(driver)
             plan = build_route_plan(router, rows, payload)
             if not apply:
@@ -478,7 +512,8 @@ def _device_route_change(router_id, *, apply):
     except RouterError as error:
         return jsonify({'success': False, 'message': str(error)}), 502
     finally:
-        driver.close()
+        if driver is not None:
+            driver.close()
 
 def _return_routing(agent):
     """Return-routing state reported by the proxy gateway's Agent (read-only)."""
@@ -496,6 +531,7 @@ def _return_routing(agent):
 
 @routers_bp.route('/<router_id>/rule-sync', methods=['GET', 'PUT', 'POST'])
 @require_auth
+@_router_settings_lock
 def router_rule_sync(router_id):
     from backend.common.profile_context import resolve_profile_id
     from backend.common.config import update_config_transaction
@@ -513,6 +549,9 @@ def router_rule_sync(router_id):
             if not isinstance(body, dict) or set(body) != {'auto_rule_sync', 'rule_sync_interval'}:
                 return jsonify(success=False, message='请提供同步开关和检查间隔'), 400
             with router_operation_lock(router):
+                reset_config_context()
+                if find_router(get_config(profile_id), router_id) != router:
+                    raise RouterConflictError('路由器设置已变化，请刷新后重试')
                 def mutate(config):
                     current = find_router(config, router_id)
                     if current is None:

@@ -231,6 +231,53 @@ def bundle_health(manifest, live):
                 raise RouterError('策略 NAT 免转换规则之前出现转换规则，请先核对规则顺序')
 
 
+def _nat_migrations(live, exclusions, owned_keys):
+    """Subtract policy-only destinations without broadening any other NAT matcher."""
+    from backend.routers.report import _networks
+    migrations, replacements = [], []
+    if not exclusions:
+        return migrations, replacements
+    for row in live[NAT]:
+        if (not enabled(row) or row.get('chain') != 'srcnat' or row.get('action') != 'accept'
+                or not is_managed(row.get('comment')) or str(row.get('comment', '')).startswith(PREFIX)
+                or (NAT, row.get('.id')) in owned_keys):
+            continue
+        selectors = []
+        for key in ('dst-address', 'dst-address-list'):
+            value = row.get(key)
+            if not value:
+                continue
+            if str(value).startswith('!'):
+                raise RouterError('受管 NAT 的反向目的条件无法安全拆分，请先核对：' + row['.id'])
+            values = ([value] if key == 'dst-address' else
+                      [item.get('address', '') for item in live[ADDRESSES]
+                       if enabled(item) and item.get('list') == value])
+            networks = []
+            for value in values:
+                parsed = _networks([value])
+                if not parsed:
+                    raise RouterError('受管 NAT 的目的地址无法安全拆分，请先核对：' + row['.id'])
+                networks.extend(parsed)
+            selectors.append(networks)
+        destinations = selectors[0] if selectors else [ipaddress.IPv4Network('0.0.0.0/0')]
+        if len(selectors) == 2:
+            destinations = [a if a.subnet_of(b) else b for a in selectors[0] for b in selectors[1]
+                            if a.overlaps(b)]
+        remaining = subtract(destinations, exclusions)
+        if remaining == list(ipaddress.collapse_addresses(destinations)):
+            continue
+        if row.get('dst-address-list'):
+            raise RouterError('列表型 NAT 免转换无法自动拆分并保持后续列表更新语义，请先核对：' + row['.id'])
+        if str(row.get('dynamic', 'false')).lower() in ('true', 'yes', '1'):
+            raise RouterError('动态 NAT 免转换规则不能迁移：' + row['.id'])
+        migrations.append({'path': NAT, 'id': row['.id'], 'config': config_row(row)})
+        values = {key: value for key, value in config_row(row).items() if key != 'dynamic'}
+        replacements.extend({'path': NAT, 'values': {**values, 'dst-address': str(network),
+                                                    'place-before': row['.id']}}
+                            for network in remaining)
+    return migrations, replacements
+
+
 def build(desired, state):
     """Build one guarded bundle operation and human-readable policy report."""
     request = desired['ros_policy']
@@ -263,7 +310,8 @@ def build(desired, state):
             result['blockers'].append('存在非 main VRF，无法安全确定策略路由作用范围')
     static_overlap = overlap_check(desired['proxy_cidrs'])
     policy_overlap = overlap_check(request['cidrs'])
-    policy_cidrs = {entry['cidr'] for entry in request['cidrs']}
+    policy_only = subtract([ipaddress.IPv4Network(entry['cidr']) for entry in request['cidrs']],
+                           [ipaddress.IPv4Network(entry['cidr']) for entry in desired['proxy_cidrs']])
     if any(static_overlap(entry['cidr']) for entry in request['cidrs']):
         result['warnings'].append('静态组与策略组包含重叠目的网段；命中策略时使用独立表，其他流量仍按主表路由转发')
 
@@ -278,21 +326,27 @@ def build(desired, state):
             continue
         if not overlaps:
             continue
-        # Moving a managed exact destination out of the static selection is an
-        # explicit mode change. Existing manual, broader and still-selected
-        # static routes remain valid for traffic that does not match the policy.
-        if (is_managed(row.get('comment')) and row['dst-address'] in policy_cidrs
+        # An obsolete managed aggregate must be removed too. The ordinary
+        # static plan establishes all still-selected coverage before this bundle.
+        if (is_managed(row.get('comment')) and not str(row.get('comment', '')).startswith(PREFIX)
                 and row.get('gateway') == desired.get('proxy_gateway')
-                and not static_overlap(row['dst-address'])
-                and str(row.get('dynamic', 'false')).lower() not in ('true', 'yes')):
+                and any(ipaddress.IPv4Network(row['dst-address']).overlaps(net) for net in policy_only)
+                and str(row.get('dynamic', 'false')).lower() not in ('true', 'yes', '1')):
             from backend.routers.routeros_routes import _entry
             if _entry(row, set())['editable']:
                 migrations.append({'path': ROUTES, 'id': row['.id'], 'config': config_row(row)})
                 continue
+            result['blockers'].append('受管主表路由无法安全迁移，请先核对：' + row['.id'])
         if ipaddress.IPv4Network(row['dst-address']).prefixlen:
             preserved.append(row)
     if preserved:
         result['warnings'].append(f'保留 {len(preserved)} 条与策略目的重叠的主表路由；未命中来源策略的流量仍按主表路由转发')
+    try:
+        nat_migrations, replacements = _nat_migrations(live, policy_only, owned_keys)
+    except RouterError as error:
+        result['blockers'].append(str(error))
+        return result
+    migrations.extend(nat_migrations)
 
     gateway = desired.get('proxy_gateway') or ''
     spec = {'sources': request['sources'], 'destinations': [item['cidr'] for item in request['cidrs']],
@@ -304,18 +358,21 @@ def build(desired, state):
     context = copy.deepcopy(state.nat_context)
     if context is not None:
         context['mangle'] = other_mangle
-        context['routes'] = [row for row in context['routes'] if row.get('.id') not in {x['id'] for x in migrations}]
-    from backend.routers.routeros_nat import assess_nat, _egress
+        route_ids = {item['id'] for item in migrations if item['path'] == ROUTES}
+        context['routes'] = [row for row in context['routes'] if row.get('.id') not in route_ids]
+    from backend.routers.routeros_nat import assess_nat, _egress, RouteEgressIndex
+    route_index = RouteEgressIndex(context)
     proxy_state = copy.copy(state)
     proxy_state.nat_context = context
     need_nat = False
     interface = None
     if request['selected'] and spec['destinations']:
-        interface, reason = _egress(spec['destinations'][0], gateway, context or {}, policy_routing=True)
+        interface, reason = _egress(spec['destinations'][0], gateway, context or {}, policy_routing=True,
+                                   route_index=route_index)
         if interface is None:
             result['blockers'].append('无法确认 Mihomo 的 LAN 出口：' + reason)
         for cidr in spec['destinations']:
-            assessment = assess_nat(cidr, gateway, proxy_state, policy_routing=True)
+            assessment = assess_nat(cidr, gateway, proxy_state, policy_routing=True, route_index=route_index)
             if assessment['status'] == 'unknown':
                 result['blockers'].append(f'{cidr}：{assessment["detail"]}')
                 break
@@ -332,7 +389,7 @@ def build(desired, state):
     result['evidence'] = stable(live)
     result['request'] = {key: value for key, value in request.items() if key != 'previous'}
     result['check'] = {'spec': spec if request['selected'] else None,
-                       'previous': previous, 'migrations': migrations}
+                       'previous': previous, 'migrations': migrations, 'replacements': replacements}
     if unchanged or result['blockers']:
         return result
     bundle = []
@@ -378,8 +435,10 @@ def build(desired, state):
     if need_nat:
         summary += '；仅为这些来源和目的网段添加 LAN 出口 NAT 免转换'
     if migrations:
-        summary += f'；迁移 {len(migrations)} 条受管主表静态路由'
+        summary += (f'；迁移 {sum(item["path"] == ROUTES for item in migrations)} 条受管主表路由'
+                    f'，收窄 {len(nat_migrations)} 条旧 NAT 免转换')
     result['ops'] = [{'kind': 'ros_policy_replace', 'bundle': bundle, 'previous': previous,
-                       'owned': owned, 'migrations': migrations, 'spec': spec if bundle else None,
+                       'owned': owned, 'migrations': migrations, 'replacements': replacements,
+                       'spec': spec if bundle else None,
                        'evidence': stable(live), 'summary': summary}]
     return result

@@ -8,7 +8,7 @@ from flask import request, jsonify, send_file
 from backend.routes import config_bp
 from backend.common.auth import require_auth, validate_token_or_jwt
 from backend.common.config import get_config, save_config, get_repository, reset_config_context, save_config_with_publish_guard
-from backend.common.config_repository import ProfileValidationError
+from backend.common.config_repository import ProfileInUse, ProfileValidationError
 from backend.common.profile_context import resolve_profile_id
 from backend.utils.logger import get_logger
 from backend.utils.strategy_references import StrategyReferenceError
@@ -236,6 +236,8 @@ def import_config():
         get_repository().import_all(request.json)
         reset_config_context()
         return jsonify({'success': True})
+    except ProfileInUse as e:
+        return jsonify({'success': False, 'message': str(e)}), 409
     except ProfileValidationError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -251,6 +253,8 @@ def reset_config():
         reset_config_context()
 
         return jsonify({'success': True, 'message': '配置已重置为默认值'})
+    except ProfileInUse as e:
+        return jsonify({'success': False, 'message': str(e)}), 409
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

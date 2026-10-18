@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -166,6 +166,8 @@ RESOURCE_FIELDS = SHARED_FIELDS[:3]
 PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers')
 BUILTIN_POLICIES = {'DIRECT', 'REJECT'}
 RULE_SOURCE_FIELDS = ('name', 'url', 'behavior', 'content', 'source_type', 'format')
+ROUTER_IDENTITY_FIELDS = ('type', 'endpoint')
+ROUTER_CONNECTION_FIELDS = (*ROUTER_IDENTITY_FIELDS, 'username', 'password', 'verify_tls')
 
 def _items_by_id(items, label):
     if not isinstance(items, list):
@@ -597,8 +599,62 @@ class ProfileRepository:
             self._document_cache = (signature, document)
         return document
 
+    @staticmethod
+    def _router_records(document):
+        records = {}
+        for profile_id, profile in document['profiles'].items():
+            routers = profile.get('routers') or {}
+            if not isinstance(routers, dict):
+                raise ProfileValidationError('路由器设置必须是对象')
+            for router_id, router in _items_by_id(routers.get('items', []), '路由器').items():
+                records[(profile_id, router_id)] = router
+        return records
+
     @contextmanager
-    def _document(self, write=False):
+    def _router_commit_guard(self, previous, proposed, locked_routers=(), policy_router=None):
+        """Protect device ownership under the document lock, through the disk write."""
+        from backend.routers.rule_sync_store import job_lock
+
+        old_routers = self._router_records(previous)
+        new_routers = self._router_records(proposed)
+        changed = {}
+        for key, old in old_routers.items():
+            new = new_routers.get(key)
+            connection_changed = new is None or any(
+                old.get(field) != new.get(field) for field in ROUTER_CONNECTION_FIELDS)
+            identity_changed = new is None or any(
+                old.get(field) != new.get(field) for field in ROUTER_IDENTITY_FIELDS)
+            manifest_changed = new is None or old.get('ros_policy_state') != new.get('ros_policy_state')
+            # Credentials may have expired on the same device. Keep its exact
+            # ownership receipt while allowing access to be repaired; every
+            # connection change still takes the publication lock below.
+            if old.get('ros_policy_state') and (
+                    identity_changed or (manifest_changed and key != policy_router)):
+                profile_id, router_id = key
+                raise ProfileInUse('路由器仍有已发布的策略路由；请先发布并核对撤回，再修改类型、地址或删除发布记录',
+                                   [{'kind': 'router', 'id': router_id, 'name': old.get('name', router_id),
+                                     'profile_id': profile_id,
+                                     'profile_name': previous['profiles'][profile_id]['name']}])
+            if connection_changed or manifest_changed:
+                changed[key] = old
+        # Never wait for a job while holding the document lock: a publisher may
+        # itself be waiting to persist its readback. A failed acquisition rejects
+        # the whole transaction, including first publication without a manifest.
+        with ExitStack() as jobs:
+            connections = set()
+            for (profile_id, router_id), router in changed.items():
+                if (profile_id, router_id) in locked_routers:
+                    continue
+                connection = (router.get('type'), str(router.get('endpoint') or '').rstrip('/'))
+                if connection in connections:
+                    continue
+                if not jobs.enter_context(job_lock(profile_id, router_id, router)):
+                    raise ProfileInUse('路由器正在发布或同步，不能替换连接或删除记录，请稍后重试')
+                connections.add(connection)
+            yield
+
+    @contextmanager
+    def _document(self, write=False, *, locked_routers=(), policy_router=None):
         nested = getattr(self._local, 'document', None)
         if nested is not None:
             if write:
@@ -607,6 +663,7 @@ class ProfileRepository:
             return
         with self._lock(self.initialization_lock_file):
             document = self._read_document_locked()
+            previous = document
             if write:
                 # Never expose the cached generation to a mutating transaction,
                 # including callbacks which fail before validation or commit.
@@ -618,8 +675,9 @@ class ProfileRepository:
                 if write:
                     self._ensure_rule_proxy_token(document['system'])
                     self._validate_document(document)
-                    with self._commit_guard():
-                        self._write_json(self.path, document)
+                    with self._router_commit_guard(previous, document, locked_routers, policy_router):
+                        with self._commit_guard():
+                            self._write_json(self.path, document)
             finally:
                 self._local.document = None
                 if write:
@@ -739,11 +797,12 @@ class ProfileRepository:
 
     def delete_profile(self, profile_id, new_default_id=None):
         """删除配置空间；删除默认配置时必须指定接任默认的配置空间（new_default_id）。"""
-        with self._lock(self._profile_operation_lock_path(profile_id)):
+        with self._lock(self._profile_operation_lock_path(profile_id)), ExitStack() as jobs:
             tombstone = None
             directory = self.profile_dir(profile_id)
+            locked_routers = set()
             try:
-                with self._document(write=True) as document:
+                with self._document(write=True, locked_routers=locked_routers) as document:
                     profile = self._profile(document, profile_id)
                     default_id = self._default_profile_id(document)
                     is_default = profile_id == default_id
@@ -758,6 +817,12 @@ class ProfileRepository:
                               for a in document['system']['agents'] if a.get('profile_id') == profile_id]
                     if usages:
                         raise ProfileInUse(f'配置 {profile["name"]} 仍被 Agent 使用', usages)
+                    # Keep job locks until after the document commits, and take
+                    # them before moving profile-local artifacts out of the way.
+                    without_profile = {'profiles': {key: value for key, value in document['profiles'].items()
+                                                    if key != profile_id}}
+                    jobs.enter_context(self._router_commit_guard(document, without_profile))
+                    locked_routers.update(key for key in self._router_records(document) if key[0] == profile_id)
                     if directory.exists():
                         self.migrations_dir.mkdir(exist_ok=True)
                         tombstone = self.migrations_dir / f'deleted-{profile_id}-{uuid.uuid4().hex}'
@@ -806,6 +871,51 @@ class ProfileRepository:
             revision = int(current['_revision']) + int(document['shared'].get('_revision', 0))
         saved = copy.deepcopy(current)
         return (saved, revision) if include_config_revision else saved
+
+    def save_router_settings(self, profile_id, expected_router, replacement):
+        """Commit PUT/DELETE while the caller holds this router's job_lock."""
+        router_id = expected_router['id']
+        key = (profile_id, router_id)
+        with self._document(write=True, locked_routers={key}) as document:
+            profile = self._profile(document, profile_id)
+            current = self._router_records(document).get(key)
+            if current != expected_router:
+                raise ProfileInUse('路由器设置已变化，请刷新后重试')
+            if replacement is not None and replacement.get('id') != router_id:
+                raise ProfileValidationError('不能修改路由器 ID')
+            items = profile['routers']['items']
+            index = next(index for index, item in enumerate(items) if item['id'] == router_id)
+            if replacement is None:
+                del items[index]
+            else:
+                items[index] = copy.deepcopy(replacement)
+            profile['_revision'] += 1
+            profile['updated_at'] = _now()
+
+    def save_router_publication(self, profile_id, expected_router, *, manifest=_MISSING, last_release=_MISSING):
+        """Persist verified readback/rollback under the caller's held job_lock.
+
+        This is the only existing-record write allowed to replace or clear an
+        active manifest. It cannot delete a router or alter its connection, and
+        unrelated edits made during the device operation are retained.
+        """
+        router_id = expected_router['id']
+        key = (profile_id, router_id)
+        with self._document(write=True, locked_routers={key}, policy_router=key) as document:
+            profile = self._profile(document, profile_id)
+            current = self._router_records(document).get(key)
+            if current is None or any(current.get(field) != expected_router.get(field)
+                                      for field in ROUTER_CONNECTION_FIELDS):
+                raise ProfileInUse('路由器连接已变化，无法保存发布回读记录')
+            if manifest is not _MISSING:
+                if manifest:
+                    current['ros_policy_state'] = copy.deepcopy(manifest)
+                else:
+                    current.pop('ros_policy_state', None)
+            if last_release is not _MISSING:
+                current['last_release'] = copy.deepcopy(last_release)
+            profile['_revision'] += 1
+            profile['updated_at'] = _now()
 
     def update_profile_fields(self, profile_id, fields, baseline=None, *, include_config_revision=False):
         if not isinstance(fields, dict) or (baseline is not None and not isinstance(baseline, dict)):

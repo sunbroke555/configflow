@@ -3,7 +3,7 @@
 Statuses per desired item:
 - ``synced``     managed by ConfigFlow and correct
 - ``adoptable``  correct but created manually; P1 adopts it (tags it) instead of recreating
-- ``conflict``   same destination exists but differs (wrong gateway / disabled)
+- ``conflict``   configured routes differ or effective forwarding uses another gateway
 - ``missing``    not present
 - ``not_required`` ROS forwarding cannot match any potential source-NAT rule
 - ``unknown``    ROS source-NAT requirement cannot be safely determined
@@ -14,9 +14,10 @@ from typing import Any, Dict, Iterable, List
 
 from backend.routers.base import (
     POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT, RouterState, as_dict, is_managed, policy_route, policy_route_ok,
+    StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
-from backend.routers.routeros_nat import assess_nat
+from backend.routers.routeros_nat import assess_nat, RouteEgressIndex
 
 
 def _networks(values: Iterable[str]) -> List[ipaddress.IPv4Network]:
@@ -86,34 +87,47 @@ def _route_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     gateway = desired.get('proxy_gateway') or ''
     desired_cidrs = {entry['cidr'] for entry in desired['proxy_cidrs']}
     items = []
+    required_route_ids = set()
+    route_index = StaticRouteIndex(state.routes)
     for entry in desired['proxy_cidrs']:
-        matches = [route for route in state.routes if route.dst == entry['cidr']]
-        good = [route for route in matches if route.enabled and gateway and route.gateway == gateway]
-        if any(is_managed(route.comment) for route in good):
+        matches = route_index.exact.get(entry['cidr'], [])
+        selection = route_index.select(entry['cidr'], gateway)
+        good = selection.candidates
+        required_route_ids.update(route.id for route in good)
+        if good and all(is_managed(route.comment) for route in good):
             status, detail = 'synced', ''
         elif good:
-            status, detail = 'adoptable', f'已有手工路由（{good[0].comment or "无备注"}），将直接接管'
+            status, detail = 'adoptable', '已有手工路由提供完整有效覆盖，将直接接管'
         elif matches:
             route = matches[0]
             reason = '已停用' if not route.enabled else f'下一跳为 {route.gateway}'
+            if any(route.enabled and route.gateway == gateway for route in matches):
+                reason = '未成为有效主路由，或存在可优先/等价转发到其他下一跳的路由'
             status, detail = 'conflict', f'同网段路由{reason}，期望下一跳 {gateway or "未知"}'
+        elif selection.conflict:
+            status, detail = 'conflict', f'更细网段存在可转发到其他下一跳的路由，期望下一跳 {gateway or "未知"}'
         else:
             status, detail = 'missing', ''
         items.append({'cidr': entry['cidr'], 'sources': entry['sources'], 'status': status, 'detail': detail,
                       'route_ids': [route.id for route in matches]})
     extra = [{'cidr': route.dst, 'gateway': route.gateway, 'route_id': route.id, 'comment': route.comment}
-             for route in state.routes if is_managed(route.comment) and route.dst not in desired_cidrs]
+             for route in state.routes
+             if route.table == 'main' and is_managed(route.comment) and route.dst not in desired_cidrs
+             and route.id not in required_route_ids
+             # Policy ownership is established by its manifest, not its name.
+             and not route.comment.startswith('cf-ros-policy-')]
     # Manual routes to the proxy gateway that ConfigFlow does not derive (e.g. public DNS
     # addresses routed for TUN DNS hijack) are informational, never touched.
     unmanaged_other = [{'cidr': route.dst, 'gateway': route.gateway, 'comment': route.comment, 'enabled': route.enabled}
                        for route in state.routes
-                       if gateway and route.gateway == gateway and not is_managed(route.comment)
+                       if route.table == 'main' and gateway and route.gateway == gateway and not is_managed(route.comment)
                        and route.dst not in desired_cidrs]
     return {'items': items, 'extra': extra, 'unmanaged_other': unmanaged_other}
 
 
 def _nat_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     rules = [rule for rule in state.nat_bypass if rule.enabled]
+    route_index = RouteEgressIndex(state.nat_context)
     items = []
     for entry in desired['proxy_cidrs']:
         target = ipaddress.IPv4Network(entry['cidr'])
@@ -123,7 +137,8 @@ def _nat_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
         elif covering:
             status, detail = 'adoptable', f'已被手工规则「{covering[0].comment or covering[0].id}」覆盖，将直接接管'
         elif state.nat_context is not None:
-            assessment = assess_nat(entry['cidr'], desired.get('proxy_gateway') or '', state)
+            assessment = assess_nat(entry['cidr'], desired.get('proxy_gateway') or '', state,
+                                    route_index=route_index)
             status, detail = assessment['status'], assessment['detail']
         else:
             status, detail = 'missing', '未发现覆盖该网段的 NAT 免转换规则，需结合源 NAT 配置确认是否影响客户端 IP'
@@ -137,12 +152,13 @@ def _nat_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
 def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     routes = _route_items(desired, state)
     if 'ros_policy' in desired:
-        from backend.routers.ros_policy import build, overlap_check
+        from backend.routers.ros_policy import build, ROUTES
         state.ros_policy_plan = build(desired, state)
-        policy_overlap = overlap_check(desired['ros_policy']['cidrs'])
-        # Policy migration owns these routes; the ordinary static cleanup must
-        # never delete them a second time or delete a conflicting manual route.
-        routes['extra'] = [item for item in routes['extra'] if not policy_overlap(item['cidr'])]
+        check = state.ros_policy_plan.get('check') or {}
+        migrating = {item['id'] for item in check.get('migrations', []) if item['path'] == ROUTES}
+        # Migration owns exact IDs, including superseded aggregates. All other
+        # obsolete managed main routes remain in ordinary static cleanup.
+        routes['extra'] = [item for item in routes['extra'] if item['route_id'] not in migrating]
     nat = _nat_items(desired, state)
     dns = build_dns_report(desired, state.dhcp_dns)
     summary: Dict[str, int] = {}

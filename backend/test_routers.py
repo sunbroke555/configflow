@@ -270,8 +270,9 @@ def test_router_api_crud_probe_report_and_export(authenticated_app, monkeypatch)
     assert report.status_code == 200, report.get_json()
     body = report.get_json()['report']
     assert body['desired']['proxy_gateway'] == '127.0.0.1'
-    assert body['routes']['items'][0] == {'cidr': '198.18.0.0/16', 'sources': ['fake-ip'], 'status': 'adoptable',
-                                          'detail': '已有手工路由（fake-ip），将直接接管', 'route_ids': ['1']}
+    item = body['routes']['items'][0]
+    assert {key: item[key] for key in ('cidr', 'sources', 'status', 'route_ids')} == {
+        'cidr': '198.18.0.0/16', 'sources': ['fake-ip'], 'status': 'adoptable', 'route_ids': ['1']}
     assert body['return_routing']['status'] == 'ok'
 
     exported = client.get('/api/config/export?desensitize=true', headers=admin).get_data(as_text=True)

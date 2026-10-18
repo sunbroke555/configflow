@@ -291,6 +291,8 @@ def test_release_writes_and_verifies_all_stages_then_has_no_remaining_changes():
     assert not result['rollback']
     assert release_plan(driver, status={**agent.status(), 'status': 'ok'})['empty']
     assert session.rows[ADDRESSES] == HOME_ADDRESSES
+    assert next(row for row in session.rows[ROUTES] if row['.id'] == '*2') == HOME_ROUTES[1]
+    assert not any(path == ROUTES + '/*2' for _, path, _ in session.writes)
 
 
 def test_later_release_expands_new_destination_for_every_original_source_fragment():
