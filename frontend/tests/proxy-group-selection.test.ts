@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { AxiosHeaders, type AxiosResponse } from 'axios'
 import ProxyGroups from '@/views/ProxyGroups.vue'
+import { canReloadPage } from '@/lib/pageReloadGuard'
 import { Checkbox } from '@/components/ui/checkbox'
 import api, { nodeApi, proxyGroupApi } from '@/api'
 import { setActiveProfileId } from '@/profileContext'
@@ -108,6 +109,23 @@ function unmount(wrapper: VueWrapper) {
 }
 
 describe('proxy group selection', () => {
+
+  it('preserves inline source drafts during automatic recovery until their save completes', async () => {
+    const pending = deferred<AxiosResponse<{ success: boolean }>>()
+    vi.mocked(proxyGroupApi.update).mockReturnValueOnce(pending.promise)
+    const wrapper = await render()
+    expect(canReloadPage()).toBe(true)
+    await edit(wrapper, 'Pending source draft')
+    expect(canReloadPage()).toBe(false)
+    await clickSave(wrapper)
+    expect(canReloadPage()).toBe(false)
+    pending.resolve(response({ success: true }))
+    await flushPromises()
+    expect(canReloadPage()).toBe(true)
+    expect(regex(wrapper).element.value).toBe('Pending source draft')
+  })
+
+
   it('keeps the current draft and scroll positions when the same group is selected', async () => {
     const wrapper = await render()
     await edit(wrapper)

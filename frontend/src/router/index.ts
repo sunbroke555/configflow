@@ -2,6 +2,7 @@ import { createRouter, createWebHistory, isNavigationFailure, NavigationFailureT
 import api from '@/api'
 import { checkNavigationAuth, invalidateAuthSession } from '@/authSession'
 import { notify } from '@/lib/feedback'
+import { clearRecoveryParameter, recoverPage, type RecoveryResult } from '@/lib/pageRecovery'
 
 // 扩展 RouteMeta 接口以支持自定义属性
 declare module 'vue-router' {
@@ -110,6 +111,7 @@ const routes = [
   }
 ]
 
+clearRecoveryParameter()
 const router = createRouter({
   history: createWebHistory(),
   routes
@@ -118,6 +120,8 @@ const router = createRouter({
 // Keep real waits (initial authentication, feature checks, lazy page imports)
 // visible without flashing a loading message on an ordinary page switch.
 let pendingNavigation: { to: RouteLocationNormalized; timer: ReturnType<typeof setTimeout>; toast?: string | number } | undefined
+let navigationVersion = 0
+export let pageLoadRecovery: Promise<RecoveryResult> | undefined
 const finishNavigation = (to?: RouteLocationNormalized) => {
   if (!pendingNavigation || (to && pendingNavigation.to !== to)) return
   clearTimeout(pendingNavigation.timer)
@@ -125,6 +129,7 @@ const finishNavigation = (to?: RouteLocationNormalized) => {
   pendingNavigation = undefined
 }
 const startNavigation = (to: RouteLocationNormalized) => {
+  navigationVersion++
   finishNavigation()
   const navigation = {
     to,
@@ -165,16 +170,31 @@ router.beforeEach(async (to) => {
 })
 
 router.afterEach((to, _from, failure) => {
+  // Component leave guards run before beforeEach. Even an aborted new click
+  // retires a version check started for an earlier destination.
+  if (isNavigationFailure(failure, NavigationFailureType.aborted)) navigationVersion++
   // Clicking the current page cancels an outstanding navigation, but Vue Router
   // skips beforeEach for that duplicated target. Retire the superseded wait now
   // so a late import result cannot leave a spinner or report an obsolete error.
-  if (isNavigationFailure(failure, NavigationFailureType.duplicated)) finishNavigation()
+  if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
+    navigationVersion++
+    finishNavigation()
+  }
   else finishNavigation(to)
 })
-router.onError((_error, to) => {
+router.onError((error, to) => {
   if (pendingNavigation?.to !== to) return
+  const version = navigationVersion
   finishNavigation(to)
-  notify.error('页面打开失败，请重试', '如果刚更新过版本，可以刷新页面后重试。')
+  pageLoadRecovery = recoverPage(error, to.fullPath, () => version === navigationVersion)
+  void pageLoadRecovery.then(result => {
+    if (version !== navigationVersion || result === 'reloading' || result === 'stale') return
+    if (result === 'blocked') {
+      notify.error('页面已更新，当前内容已保留', '请先保存正在编辑的内容或关闭编辑窗口，再重新打开目标页面。')
+    } else {
+      notify.error('页面打开失败，请重试', '可能正在更新或网络暂时不稳定，当前页面内容已保留。')
+    }
+  })
 })
 
 export default router

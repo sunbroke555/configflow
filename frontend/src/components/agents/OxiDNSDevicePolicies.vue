@@ -75,6 +75,7 @@
 </template>
 
 <script setup lang="ts">
+import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Loader2, Monitor, Plus, Trash2, Upload } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
@@ -114,6 +115,7 @@ const saving = ref(false)
 const publishing = ref(false)
 const error = ref('')
 const dirty = computed(() => !!state.value && JSON.stringify(rows.value) !== JSON.stringify(state.value.policies))
+usePageReloadGuard(() => publishing.value || !!newIP.value.trim())
 const { deployments, busy, track, beginSubmission, endSubmission, activate } = useAgentDeployments(() => emit('published'))
 const task = computed(() => deployments[props.agentId])
 let epoch = 0

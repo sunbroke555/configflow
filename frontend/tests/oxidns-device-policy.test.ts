@@ -3,6 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { agentApi, oxidnsDevicePolicyApi, oxidnsMonitorApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
+import { canReloadPage } from '@/lib/pageReloadGuard'
 import OxiDNSDevicePolicies from '@/components/agents/OxiDNSDevicePolicies.vue'
 import OxiDNSMonitor from '@/views/OxiDNSMonitor.vue'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
@@ -52,6 +53,28 @@ afterEach(() => {
 })
 
 describe('OxiDNS device policy editing', () => {
+
+  it('protects an IP still being entered and only the unacknowledged publish request', async () => {
+    let resolvePublish!: (value: any) => void
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(() => new Promise(resolve => { resolvePublish = resolve }))
+    const wrapper = await render()
+    expect(canReloadPage()).toBe(true)
+    const input = wrapper.get<HTMLInputElement>('#policy-client-ip')
+    await input.setValue('192.168.50.')
+    expect(canReloadPage()).toBe(false)
+    expect(input.element.value).toBe('192.168.50.')
+    await input.setValue('')
+    expect(canReloadPage()).toBe(true)
+    await button(wrapper, '发布到当前设备').trigger('click')
+    await flushPromises()
+    expect(canReloadPage()).toBe(false)
+    const deploymentId = vi.mocked(agentApi.pushConfig).mock.lastCall![1]
+    resolvePublish(response({ deployment_id: deploymentId, status: 'queued' }))
+    await flushPromises()
+    expect(canReloadPage()).toBe(true)
+  })
+
+
   it('shows progress while a slow publish request is pending and ignores its late accepted snapshot', async () => {
     vi.useFakeTimers()
     let resolvePublish!: (value: any) => void

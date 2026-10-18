@@ -148,6 +148,7 @@
 </template>
 
 <script setup lang="ts">
+import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import { computed, reactive, ref, watch } from 'vue'
 import { isAxiosError } from 'axios'
 import { Globe, Loader2, ScanSearch } from '@lucide/vue'
@@ -232,6 +233,7 @@ const portDraft = ref('')
 const routeDialog = reactive({ open: false, kind: 'service' as 'service' | 'domain', value: '', label: '', policy: '' })
 
 watch(() => props.region?.port, port => { portDraft.value = port ? String(port) : '' }, { immediate: true })
+usePageReloadGuard(() => saving.value || portDraft.value !== (props.region?.port ? String(props.region.port) : ''))
 
 const domainEntries = computed(() =>
   Object.entries(props.region?.domains || {}).sort((a, b) => b[1].checked_at.localeCompare(a[1].checked_at))
