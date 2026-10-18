@@ -20,6 +20,7 @@ from threading import Lock
 from urllib.parse import parse_qs, unquote, urlsplit
 import uuid
 
+import requests
 import yaml
 
 from backend.converters.mosdns import parse_clash_rule_value
@@ -34,6 +35,25 @@ MAX_RAW_CACHE_ENTRIES = 128
 
 class DeploymentPreparationError(ValueError):
     """An artifact cannot be published as a complete deployment."""
+
+
+class RuleDownloadError(DeploymentPreparationError):
+    """A rule source could not be fetched before contacting the Agent."""
+
+
+def _download_error_message(exc):
+    # Requests exceptions can contain rule tokens or proxy credentials.
+    if isinstance(exc, requests.exceptions.Timeout):
+        return '下载超时，请检查网络连接或稍后重试'
+    if isinstance(exc, requests.exceptions.ProxyError):
+        return '代理连接失败，请检查规则下载代理是否可用'
+    if isinstance(exc, requests.exceptions.SSLError):
+        return '无法建立 HTTPS 安全连接，请检查规则源及其证书'
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return '连接失败，请检查规则下载地址及网络连接'
+    if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
+        return f'下载服务器返回错误（HTTP {exc.response.status_code}），请检查规则下载地址或稍后重试'
+    return '下载失败，请检查规则下载地址及网络连接'
 
 
 @dataclass(frozen=True)
@@ -157,8 +177,7 @@ def _fetch_bytes(url, config):
     except DeploymentPreparationError:
         raise
     except Exception as exc:
-        # Exceptions from requests may include subscription or proxy credentials.
-        raise DeploymentPreparationError(f'Required rule download failed ({type(exc).__name__})') from None
+        raise RuleDownloadError(_download_error_message(exc)) from None
     finally:
         if response is not None:
             response.close()
@@ -385,6 +404,10 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             value = materialize_rule(item.get('url', ''), config, base_url,
                                      raw_mosdns=relative_path(item['local_path']) in rule_types,
                                      fetch_raw=fetch_raw)
+        except RuleDownloadError as exc:
+            name = item.get('name') or '未命名'
+            raise DeploymentPreparationError(
+                f'无法下载「{name}」规则集：{exc}。本次发布已停止，设备仍使用原配置。') from None
         except DeploymentPreparationError as exc:
             raise DeploymentPreparationError(f"Rule {item.get('name', 'unnamed')}: {exc}") from None
         return item, value
