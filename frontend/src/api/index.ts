@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { notify } from '@/lib/feedback'
+import { explainRequestError } from '@/lib/requestError'
 import router from '@/router'
 import { getAuthSessionGeneration, getAuthToken, invalidateAuthSession } from '@/authSession'
 import { beginScopedRequest, clearActiveProfileId, endScopedRequest, getActiveProfileId } from '@/profileContext'
@@ -68,6 +69,7 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
+    explainRequestError(error)
     if (error.config?.profileRequestTracked) endScopedRequest()
     const message = error.response?.data?.message
     if (error.response?.status === 404 && typeof message === 'string' && message.startsWith('Profile not found:')) {

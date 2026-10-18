@@ -157,9 +157,9 @@ def test_concurrent_failure_is_shared_and_does_not_poison_next_publication(monke
     (requests.exceptions.ChunkedEncodingError, '下载失败'),
     (ValueError, '下载失败'),
 ])
-def test_download_errors_explain_cause_without_exposing_request_details(monkeypatch, error, reason):
+def test_download_errors_retain_source_diagnostics_without_credentials(monkeypatch, error, reason):
     def fetch(*_args, **_kwargs):
-        raise error('https://user:password@rules.test/list?token=secret')
+        raise error('upstream E_SOURCE_42: https://user:password@rules.test/list?token=secret')
 
     monkeypatch.setattr(bundles, 'request_rule', fetch)
     with pytest.raises(bundles.DeploymentPreparationError) as exc:
@@ -168,7 +168,9 @@ def test_download_errors_explain_cause_without_exposing_request_details(monkeypa
     assert '无法下载「0」规则集' in message
     assert reason in message
     assert '本次发布已停止，设备仍使用原配置。' in message
-    for private in ('password', 'token', 'secret', 'rules.test'):
+    assert f'原始错误：{error.__name__}: upstream E_SOURCE_42:' in message
+    assert 'rules.test/list' in message
+    for private in ('password', 'secret', 'user:'):
         assert private not in message
 
 
@@ -183,6 +185,7 @@ def test_http_download_failure_shows_status_and_closes_response(monkeypatch, sta
     with pytest.raises(bundles.DeploymentPreparationError) as exc:
         raw_bundle([SOURCE_URL])
     assert f'HTTP {status}' in str(exc.value)
+    assert 'HTTPError:' in str(exc.value)
     assert 'password' not in str(exc.value)
     assert 'secret' not in str(exc.value)
     assert closed == [True]

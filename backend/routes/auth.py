@@ -15,17 +15,17 @@ def login():
         data = request.json
         username, password = data.get('username'), data.get('password')
         if not is_auth_enabled():
-            return jsonify({'success': False, 'message': 'Authentication is not enabled'}), 400
+            return jsonify({'success': False, 'message': '当前未开启登录验证。'}), 400
         if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
             return jsonify({'success': True, 'token': generate_token(username), 'username': username, 'expiresIn': JWT_EXPIRATION_HOURS * 3600})
-        return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
+        return jsonify({'success': False, 'message': '用户名或密码错误，请重新输入。'}), 401
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        return jsonify({'success': False, 'message': f'登录失败。原始错误：{e}'}), 500
 
 @auth_bp.route('/verify', methods=['GET'])
 @require_auth
 def verify():
-    return jsonify({'success': True, 'message': 'Token is valid'})
+    return jsonify({'success': True, 'message': '登录状态有效。'})
 
 def setup_before_request(app):
     @app.before_request
@@ -63,8 +63,8 @@ def setup_before_request(app):
             return None
         token = parse_bearer_token(request.headers.get('Authorization'))
         if token is None:
-            return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+            return jsonify({'success': False, 'message': '请先登录后再操作。'}), 401
         payload = verify_token(token)
         if not payload or (isinstance(payload, dict) and 'error' in payload):
-            return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
+            return jsonify({'success': False, 'message': '登录已失效，请重新登录。'}), 401
         return None

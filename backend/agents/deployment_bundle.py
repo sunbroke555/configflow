@@ -23,6 +23,7 @@ import uuid
 import requests
 import yaml
 
+from backend.agents.diagnostics import failure_text
 from backend.converters.mosdns import parse_clash_rule_value
 from backend.utils.rule_fetch import is_internal_rule_url, request_rule
 
@@ -177,7 +178,8 @@ def _fetch_bytes(url, config):
     except DeploymentPreparationError:
         raise
     except Exception as exc:
-        raise RuleDownloadError(_download_error_message(exc)) from None
+        details = failure_text(f'{type(exc).__name__}: {exc}')
+        raise RuleDownloadError(f'{_download_error_message(exc)}\n原始错误：{details}') from None
     finally:
         if response is not None:
             response.close()
@@ -406,8 +408,10 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                                      fetch_raw=fetch_raw)
         except RuleDownloadError as exc:
             name = item.get('name') or '未命名'
+            explanation, _, details = str(exc).partition('\n')
             raise DeploymentPreparationError(
-                f'无法下载「{name}」规则集：{exc}。本次发布已停止，设备仍使用原配置。') from None
+                f'无法下载「{name}」规则集：{explanation}。本次发布已停止，设备仍使用原配置。'
+                + (f'\n{details}' if details else '')) from None
         except DeploymentPreparationError as exc:
             raise DeploymentPreparationError(f"Rule {item.get('name', 'unnamed')}: {exc}") from None
         return item, value

@@ -135,20 +135,20 @@ def require_auth(f):
         # 认证已启用，检查 token
         token = parse_bearer_token(request.headers.get('Authorization'))
         if token is None:
-            return jsonify({'success': False, 'message': 'Unauthorized: Missing or invalid Authorization header'}), 401
+            return jsonify({'success': False, 'message': '缺少有效的登录凭据，请重新登录。'}), 401
 
         payload = verify_token(token)
 
         # 检查验证结果
         if not payload:
-            return jsonify({'success': False, 'message': 'Invalid or expired token'}), 401
+            return jsonify({'success': False, 'message': '登录已失效，请重新登录。'}), 401
 
         # 如果返回的是错误信息（字典包含 'error' 键）
         if isinstance(payload, dict) and 'error' in payload:
             if payload['error'] == 'expired':
-                return jsonify({'success': False, 'message': 'Token expired', 'error': 'token_expired'}), 401
+                return jsonify({'success': False, 'message': '登录已过期，请重新登录。', 'error': 'token_expired'}), 401
             else:
-                return jsonify({'success': False, 'message': f"Invalid token: {payload.get('detail', 'unknown error')}", 'error': 'token_invalid'}), 401
+                return jsonify({'success': False, 'message': f"登录凭据无效，请重新登录。原始错误：{payload.get('detail', 'unknown error')}", 'error': 'token_invalid'}), 401
 
         return f(*args, **kwargs)
     return decorated_function

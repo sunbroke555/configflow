@@ -11,8 +11,10 @@ from urllib.parse import urlsplit, urlunsplit
 from flask import request, jsonify, send_file
 
 from backend.agents.config_generator import generate_agent_config
+from backend.agents.deployment_messages import public_deployment_messages
 from backend.agents.manager import AgentDeploymentConflict
 from backend.agents.traffic_store import REPORT_MAX_CONTENT_LENGTH, clean_report, get_traffic_store
+from backend.agents.upgrade_messages import public_upgrade_state, upgrade_error_message
 from backend.agents.version import (
     LATEST_AGENT_VERSION,
     compare_versions,
@@ -143,12 +145,14 @@ def _public_agent(agent):
                                  for key, value in public['deployments'].items()}
     if isinstance(public.get('latest_deployment'), dict):
         public['latest_deployment'] = _public_deployment(public['latest_deployment'])
+    if isinstance(public.get('latest_upgrade'), dict):
+        public['latest_upgrade'] = public_upgrade_state(public['latest_upgrade'])
     return public
 
 
 def _public_deployment(record):
-    return {key: value for key, value in record.items()
-            if key not in ('prepared_content', 'oxidns_validation_receipt')}
+    return public_deployment_messages({key: value for key, value in record.items()
+                                      if key not in ('prepared_content', 'oxidns_validation_receipt')})
 
 
 def _agent_with_content_sync(agent, snapshots):
@@ -722,9 +726,9 @@ def update_agent_version(agent_id):
     from backend.agents.upgrades import start
     try:
         result = start(get_agent_manager(), agent_id)
-        return jsonify(result), 202 if result['status'] != 'failed' else 409
+        return jsonify(public_upgrade_state(result)), 202 if result['status'] != 'failed' else 409
     except ValueError as exc:
-        return jsonify({'success': False, 'message': str(exc)}), 409
+        return jsonify({'success': False, 'message': upgrade_error_message(str(exc))}), 409
 
 
 @bp.route('/<agent_id>/upgrade', methods=['GET'])
@@ -739,9 +743,9 @@ def get_agent_upgrade(agent_id):
     @require_auth
     def for_admin():
         try:
-            return jsonify(poll(manager, agent_id)), 200
+            return jsonify(public_upgrade_state(poll(manager, agent_id))), 200
         except ValueError as exc:
-            return jsonify({'success': False, 'message': str(exc)}), 404
+            return jsonify({'success': False, 'message': upgrade_error_message(str(exc))}), 404
     return for_admin()
 
 
@@ -758,7 +762,7 @@ def report_agent_upgrade(agent_id):
     try:
         return jsonify(report_legacy(manager, agent_id, request.get_json())), 200
     except (ValueError, TypeError, AttributeError):
-        return jsonify({'success': False, 'message': 'Invalid update report'}), 400
+        return jsonify({'success': False, 'message': 'Agent 上报的更新结果格式无效。'}), 400
 
 
 # Docker 相关路由（安装脚本生成）
@@ -962,10 +966,10 @@ def push_config_to_agent(agent_id):
     try:
         agent = agent_manager.get_agent_by_id(agent_id)
         if not agent:
-            return jsonify({'success': False, 'message': 'Agent not found'}), 404
+            return jsonify({'success': False, 'message': '找不到这台 Agent，请刷新设备列表。'}), 404
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
-            return jsonify({'success': False, 'message': 'Expected a JSON object'}), 400
+            return jsonify({'success': False, 'message': '发布请求格式无效，请重新提交。'}), 400
         base_url = data.get('base_url', '').strip()
         if not base_url:
             scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
@@ -992,7 +996,7 @@ def push_config_to_agent(agent_id):
                 config_data = deepcopy(get_config(profile_id))
                 config_revision = _profile_revision(profile_id)
         except ProfileRepositoryError as exc:
-            return jsonify({'success': False, 'message': f'Agent profile unavailable: {exc}'}), 409
+            return jsonify({'success': False, 'message': f'Agent 绑定的配置空间不可用。原始错误：{exc}'}), 409
         if legacy_revision_guard and data['expected_config_revision'] != config_revision:
             return jsonify(success=False, message='配置已改变，请重新预览后发布。'), 409
         service_type = agent.get('service_type', 'mihomo')
@@ -1017,14 +1021,14 @@ def push_config_to_agent(agent_id):
             if result.get('success'):
                 result['profile_id'] = profile_id
                 if restart:
-                    result['restart'] = ({'success': True, 'message': 'Restart delegated to agent after config is written'}
+                    result['restart'] = ({'success': True, 'message': '配置写入后由 Agent 执行重启。'}
                                          if self_restart else agent_manager.restart_agent_service(agent_id))
-            return jsonify(result), 200 if result.get('success') else result.get('http_status', 500)
+            return jsonify(_public_deployment(result)), 200 if result.get('success') else result.get('http_status', 500)
         if service_type not in ('mihomo', 'mosdns', 'oxidns'):
-            return jsonify({'success': False, 'message': 'Unsupported service type'}), 400
+            return jsonify({'success': False, 'message': '当前服务类型不支持配置发布。'}), 400
         activate = data.get('restart', True)
         if not isinstance(activate, bool):
-            return jsonify({'success': False, 'message': 'restart must be a boolean'}), 400
+            return jsonify({'success': False, 'message': '发布请求中的重启选项无效，请重新提交。'}), 400
         deployment_id = data.get('deployment_id') or uuid.uuid4().hex
         reservation = agent_manager.begin_deployment(agent_id, deployment_id)
         if isinstance(reservation, dict):
@@ -1084,7 +1088,7 @@ def push_config_to_agent(agent_id):
         if deployment_id:
             agent_manager.record_deployment(agent_id, deployment_id, result)
             result['deployment_id'] = deployment_id
-        return jsonify(result), 400
+        return jsonify(_public_deployment(result)), 400
     except Exception as exc:
         logger.error('Agent deployment preparation failed (%s)', type(exc).__name__)
         result = {'success': False, 'status': 'failed', 'failed_stage': 'preparing',
@@ -1093,7 +1097,7 @@ def push_config_to_agent(agent_id):
         if deployment_id:
             agent_manager.record_deployment(agent_id, deployment_id, result)
             result['deployment_id'] = deployment_id
-        return jsonify(result), 500
+        return jsonify(_public_deployment(result)), 500
     finally:
         if owns_preparation:
             agent_manager.finish_deployment_preparation(agent_id, deployment_id)

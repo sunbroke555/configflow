@@ -45,6 +45,13 @@ describe('Agent failure diagnostics', () => {
     expect(wrapper.find('details').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('失败步骤')
   })
+  it('shows the Chinese summary while retaining original errors and codes in details', () => {
+    const original = 'service start failed: exit status 7\nCORE_START_FAILED'
+    const wrapper = render({ status: 'failed', error: '服务启动失败，请查看设备上的核心日志。\n原始错误：service start failed', error_details: original })
+    expect(wrapper.get('p').text()).toBe('服务启动失败，请查看设备上的核心日志。')
+    expect(wrapper.get('pre').text()).toBe(original)
+    expect((wrapper.get('details').element as HTMLDetailsElement).open).toBe(false)
+  })
   it('preserves old multiline errors in details and keeps toast summaries short', () => {
     const error = `exit status 1\n${'long'.repeat(300)}`
     const wrapper = render({ status: 'failed', error })
