@@ -44,9 +44,39 @@ systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_pat
 
 单服务安装沿用 `configflow-agent` 系统服务。检测到另一核心的 Agent 配置时，会拒绝覆盖；同机管理 Mihomo 和 OxiDNS 请使用下述同机安装模式。Agent 端口与 DNS 核心端口应避免冲突。
 
+### 一键安装两个核心
+
+尚未安装核心时，在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，点击「生成两个核心的安装命令」。以 root 在目标 Linux 机器执行生成的命令；无需填写 Agent 名称。该脚本只安装 Mihomo 和 OxiDNS，不安装 Agent，也不向面板注册。核心安装完成后，再使用同一弹窗原有的 Agent 安装命令接入两个核心。
+
+脚本支持 systemd / OpenRC 以及 amd64、arm64、armv7。它从官方 GitHub 发行页下载固定版本的 [Mihomo v1.19.32](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32) 与 [OxiDNS v1.6.1 full](https://github.com/svenshi/oxidns/releases/tag/v1.6.1)，并按脚本内固定的 SHA256 校验；下载或校验失败时停止，不执行来源不明的程序。需要 `curl` 或 `wget`，以及 `tar`、`gzip`、`sha256sum` 等基础工具，缺少依赖时提示补装方法。
+
+| 项目 | 默认布局 |
+| --- | --- |
+| 核心程序 | `/usr/local/bin/mihomo`、`/usr/local/bin/oxidns` |
+| 配置文件 | `/etc/mihomo/config.yaml`、`/etc/oxidns/config.yaml` |
+| 系统服务 | `mihomo`、`oxidns`，安装后启动并加入开机启动 |
+| DNS 入口 | OxiDNS TCP/UDP `53`，转发到 `127.0.0.1:1053` |
+| Mihomo DNS | TCP/UDP `1053`，初始上游为 `223.5.5.5`、`119.29.29.29` |
+| TUN 与代理 | 初始不启用 TUN、不创建代理监听，也不配置代理节点 |
+
+初始配置用于直接 DNS 解析，不代表已配置代理分流；接入 Agent 后可从 ConfigFlow 发布所需规则、节点及 TUN 配置。脚本不修改系统 DNS、IPv4 转发、防火墙或 PVE 设备设置。Agent 弹窗中的自定义核心路径仅用于接管现有安装，不改变该独立脚本的默认布局。
+
+安装前检查 root 权限、系统架构、服务管理器、必要工具及 `53` / `1053` 端口。两套核心下载和配置校验完成后才落盘；失败时撤销本次创建的文件和服务，不覆盖已有核心或配置。若回滚无法停止服务或取消开机启动，则保留恢复所需文件并提示手动处理。检测到其他安装会保留并退出，提示使用 Agent 接入；重复运行本脚本完成的安装会跳过，保留后来修改的配置，也不重启服务。
+
+安装后检查服务状态。systemd 日志进入系统日志；OpenRC 日志保存在 `/etc/mihomo/mihomo.log`、`/etc/oxidns/oxidns.log`，启动失败会先显示最近日志。目标机有 `dig` 时同时验证两个端口的 UDP/TCP 解析；未安装 `dig` 时明确提示尚未验证实际解析，并给出查询命令。可以手动验证：
+
+```sh
+dig @127.0.0.1 -p 53 example.com
+dig @127.0.0.1 -p 53 example.com +tcp
+dig @127.0.0.1 -p 1053 example.com
+dig @127.0.0.1 -p 1053 example.com +tcp
+```
+
+脚本下载入口为 `/api/agents/core-install-script`，使用固定布局且不包含 Agent 身份信息。其命令与 `/api/agents/install-script` 的 Agent 安装命令相互独立。
+
 ### Shell 同机安装 Mihomo + OxiDNS
 
-在 Agent 安装弹窗选择 Shell 的「Mihomo + OxiDNS 同机」模式，生成一份脚本接入两个已安装的核心。支持 systemd 和 OpenRC；脚本安装的是 Go Agent，不负责下载核心、创建核心服务或迁移核心配置。安装前会验证两个核心的服务配置，并检查是否存在未完成的发布；任一检查失败时，不停止现有 Agent。
+在 Agent 安装弹窗选择 Shell 的「Mihomo + OxiDNS 同机」模式，生成一份脚本接入两个已安装的核心。支持 systemd 和 OpenRC；这份 Agent 脚本不负责下载核心、创建核心服务或迁移核心配置。尚未安装核心可先运行上方独立的双核心安装脚本。接入前会验证两个核心的服务配置，并检查是否存在未完成的发布；任一检查失败时，不停止现有 Agent。
 
 运行安装或卸载脚本期间，请暂停从面板发起新的配置发布和 Agent 升级；脚本的状态预检不代替跨进程的完整操作锁。
 

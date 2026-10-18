@@ -174,6 +174,23 @@ def _agent_with_content_sync(agent, snapshots):
     return public
 
 
+@bp.route('/core-install-script', methods=['GET'])
+def get_core_install_script():
+    """Download the standalone, fixed-layout Mihomo + OxiDNS installer."""
+    try:
+        from backend.agents.core_install_script import generate_core_install_script
+        script = generate_core_install_script()
+    except (OSError, ValueError):
+        logger.exception("生成双核心安装脚本失败")
+        return jsonify({'success': False, 'message': '核心安装脚本不可用，请更新 ConfigFlow 后重试。'}), 500
+    return script, 200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="install-mihomo-oxidns.sh"',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+    }
+
+
 @bp.route('/install-script', methods=['GET'])
 def get_install_script():
     """生成原生 Agent 安装脚本，支持单服务和 Mihomo + OxiDNS 同机。"""

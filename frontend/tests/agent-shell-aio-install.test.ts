@@ -5,10 +5,14 @@ import Agents from '@/views/Agents.vue'
 import api, { agentApi, profileApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { setActiveProfileId } from '@/profileContext'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
-  agentApi: { getAll: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), generateScript: vi.fn() },
+  agentApi: { getAll: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), generateScript: vi.fn(), generateCoreInstallScript: vi.fn() },
   profileApi: { list: vi.fn() }
 }))
 vi.mock('@/lib/feedback', () => ({
@@ -41,6 +45,7 @@ beforeEach(async () => {
   vi.mocked(agentApi.getAll).mockResolvedValue({ data: [] } as any)
   vi.mocked(profileApi.list).mockResolvedValue({ data: [{ id: 'default', name: 'Default' }] } as any)
   vi.mocked(agentApi.generateScript).mockResolvedValue({ data: '#!/bin/sh\necho installed' } as any)
+  vi.mocked(agentApi.generateCoreInstallScript).mockResolvedValue({ data: '#!/bin/sh\necho cores-installed' } as any)
   vi.mocked(api.get).mockResolvedValue({ data: 'docker output' } as any)
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/agents', component: { render: () => null } }] })
   await router.push('/agents')
@@ -159,5 +164,131 @@ describe('Shell Mihomo + OxiDNS installation', () => {
       enable_mihomo: true, enable_mosdns: false, enable_oxidns: true, mihomo_port: 8080, oxidns_port: 8082
     }) })
     expect(agentApi.generateScript).not.toHaveBeenCalled()
+  })
+})
+
+describe('independent Mihomo + OxiDNS core installation', () => {
+  it('generates the core command with an empty Agent name and default layout, independently of Agent settings', async () => {
+    await input('agent-name', '')
+    await radio('aio')
+    await click('核心服务高级配置')
+    await input('aio-mihomo-config-path', '/opt/custom/mihomo.yaml')
+    await input('oxidns-agent-port', '8080')
+    await click('生成两个核心的安装命令')
+    expect(agentApi.generateCoreInstallScript).toHaveBeenCalledExactlyOnceWith()
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+    expect(notify.warning).not.toHaveBeenCalled()
+    const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
+    expect(command).toContain("'https://config.example.test/api/agents/core-install-script'")
+    expect(command).not.toContain('/opt/custom')
+    expect(command).not.toContain('agent_name')
+    expect(document.body.textContent).toContain('TUN 初始关闭')
+    expect(document.body.textContent).toContain('高级配置只用于接管已有服务')
+    expect(document.body.textContent).toContain('生成安装命令')
+  })
+
+  it('preserves Agent output while generating a separate core command and script preview', async () => {
+    await radio('aio')
+    await click('生成安装命令')
+    const agentParams = generatedUrlParams()
+    await click('生成两个核心的安装命令')
+    expect(generatedUrlParams()).toEqual(agentParams)
+    expect(agentApi.generateScript).toHaveBeenCalledTimes(1)
+    await click('查看核心安装脚本')
+    expect((document.querySelector('[aria-label="两个核心的独立安装脚本"]') as HTMLTextAreaElement).value).toContain('cores-installed')
+    expect(document.body.textContent).toContain('复制核心安装命令')
+  })
+
+  it('clears core output when switching to single-service or Docker modes', async () => {
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    await radio('single')
+    expect(document.getElementById('core-install-command')).toBeNull()
+    await radio('aio')
+    expect(document.getElementById('core-install-command')).toBeNull()
+    await click('生成两个核心的安装命令')
+    await radio('docker')
+    await radio('shell')
+    expect(document.getElementById('core-install-command')).toBeNull()
+  })
+
+  it('ignores a completed request after the user switches modes and returns', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(agentApi.generateCoreInstallScript).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    expect(document.body.textContent).toContain('正在生成核心安装命令…')
+    await radio('single')
+    await radio('aio')
+    finish({ data: '#!/bin/sh\necho stale' })
+    await flushPromises()
+    expect(document.getElementById('core-install-command')).toBeNull()
+    expect(notify.success).not.toHaveBeenCalled()
+    await click('生成两个核心的安装命令')
+    expect(document.getElementById('core-install-command')).not.toBeNull()
+  })
+
+  it('discards a pending error after closing the dialog', async () => {
+    let fail!: (reason: any) => void
+    vi.mocked(agentApi.generateCoreInstallScript).mockReturnValueOnce(new Promise((_, reject) => { fail = reject }))
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    await click('关闭')
+    fail(new Error('stale error'))
+    await flushPromises()
+    expect(notify.error).not.toHaveBeenCalled()
+    await click('生成安装脚本')
+    await radio('aio')
+    expect(document.getElementById('core-install-command')).toBeNull()
+  })
+
+  it('shows request failure and permits retry without affecting Agent generation', async () => {
+    vi.mocked(agentApi.generateCoreInstallScript).mockRejectedValueOnce({ response: { data: { message: '核心安装文件尚未就绪' } } })
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    expect(notify.error).toHaveBeenCalledWith('核心安装文件尚未就绪')
+    expect(document.getElementById('core-install-command')).toBeNull()
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+    await click('生成两个核心的安装命令')
+    expect(document.getElementById('core-install-command')).not.toBeNull()
+  })
+
+  it.each(['javascript:alert(1)', 'https://config.example.test/?token=abc', 'https://user:pass@config.example.test'])('rejects an invalid installation service URL: %s', async baseUrl => {
+    localStorage.setItem('serverDomain', baseUrl)
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    expect(agentApi.generateCoreInstallScript).not.toHaveBeenCalled()
+    expect(notify.error).toHaveBeenCalledWith(expect.stringContaining('HTTP / HTTPS'))
+    expect(document.getElementById('core-install-command')).toBeNull()
+  })
+
+  it('does not present commands if an older server returns HTML instead of the script', async () => {
+    vi.mocked(agentApi.generateCoreInstallScript).mockResolvedValueOnce({ data: '<!doctype html><title>ConfigFlow</title>' } as any)
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    expect(notify.error).toHaveBeenCalledWith('服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新')
+    expect(document.getElementById('core-install-command')).toBeNull()
+  })
+
+  it('quotes special URL characters and executes only a successfully downloaded script', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'configflow-core-command-'))
+    const url = "https://config.example.test/base'$(printf_injected)/api/agents/core-install-script"
+    try {
+      localStorage.setItem('serverDomain', "https://config.example.test/base'$(printf_injected)/")
+      await radio('aio')
+      await click('生成两个核心的安装命令')
+      const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
+      const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, CORE_TEST_DIR: directory }
+      writeFileSync(join(directory, 'curl'), `#!/bin/sh\nprintf '%s' "$4" > "$CORE_TEST_DIR/url"\nprintf 'echo executed > "$CORE_TEST_DIR/result"\\n' > "$3"\nexit 22\n`, { mode: 0o755 })
+      expect(() => execFileSync('sh', ['-c', command], { env, stdio: 'pipe' })).toThrow()
+      expect(() => readFileSync(join(directory, 'result'), 'utf8')).toThrow()
+      expect(readFileSync(join(directory, 'url'), 'utf8')).toBe(url)
+      writeFileSync(join(directory, 'curl'), `#!/bin/sh\nprintf '%s' "$4" > "$CORE_TEST_DIR/url"\nprintf 'echo executed > "$CORE_TEST_DIR/result"\\n' > "$3"\n`, { mode: 0o755 })
+      execFileSync('sh', ['-c', command], { env, stdio: 'pipe' })
+      expect(readFileSync(join(directory, 'result'), 'utf8').trim()).toBe('executed')
+      expect(readFileSync(join(directory, 'url'), 'utf8')).toBe(url)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 })

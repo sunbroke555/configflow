@@ -376,6 +376,8 @@ export const agentApi = {
   uninstall: (id: string) => api.post(`/agents/${id}/uninstall`),
   generateScript: (params: AgentInstallScriptParams) =>
     api.get('/agents/install-script', { params, responseType: 'text' }),
+  generateCoreInstallScript: () =>
+    api.get('/agents/core-install-script', { responseType: 'text' }),
   generateDockerCompose: (params: any) =>
     api.get('/agents/docker-compose', { params, responseType: 'text' }),
   generateDockerRun: (params: any) =>

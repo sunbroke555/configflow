@@ -295,6 +295,31 @@
             </RadioGroup>
           </FormField>
 
+          <section v-if="shellAio" aria-labelledby="core-install-title" class="min-w-0 space-y-3 rounded-lg border border-border/70 bg-background/40 p-3">
+            <h3 id="core-install-title" class="m-0 text-[13px] font-semibold">先安装两个核心</h3>
+            <p class="m-0 text-[12.5px] text-muted-foreground">新机器可先一键安装 Mihomo 与 OxiDNS，并创建 systemd / OpenRC 服务。此命令不安装 Agent，无需填写下面的 Agent 信息。检测到已有核心或配置时会保留并停止安装；本脚本已完成的安装会跳过。</p>
+            <p class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">mihomo</code> / <code class="font-mono">oxidns</code>，配置目录 <code class="font-mono">/etc/mihomo</code> / <code class="font-mono">/etc/oxidns</code>，DNS 端口分别为 <code class="font-mono">1053</code> / <code class="font-mono">53</code>，TUN 初始关闭。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
+            <template v-if="coreInstallCommand">
+              <p class="m-0 text-[12.5px] font-medium">在目标机器以 root 身份执行；完成后，再生成下方的 Agent 安装命令。</p>
+              <Button variant="outline" class="min-h-11" @click="copyAgentContent(coreInstallCommand, '核心安装命令已复制到剪贴板')">
+                <Copy class="size-4" />
+                复制核心安装命令
+              </Button>
+              <Textarea id="core-install-command" :model-value="coreInstallCommand" aria-label="两个核心的独立安装命令" readonly :rows="8" class="max-h-56 bg-background/50 font-mono text-[11.5px]" />
+              <Collapsible>
+                <CollapsibleTrigger class="min-h-11 w-full text-left text-[12.5px] text-muted-foreground">查看核心安装脚本</CollapsibleTrigger>
+                <CollapsibleContent>
+                  <Textarea :model-value="coreInstallScript" aria-label="两个核心的独立安装脚本" readonly :rows="12" class="max-h-64 bg-background/50 font-mono text-[11.5px]" />
+                </CollapsibleContent>
+              </Collapsible>
+            </template>
+            <Button v-else variant="outline" class="min-h-11" :disabled="coreInstallLoading" @click="generateCoreInstallCommand">
+              <Loader2 v-if="coreInstallLoading" class="size-4 animate-spin" />
+              <Download v-else class="size-4" />
+              {{ coreInstallLoading ? '正在生成核心安装命令…' : '生成两个核心的安装命令' }}
+            </Button>
+          </section>
+
           <FormField v-if="scriptForm.installType === 'docker'" label="Docker 模式" :hint="dockerModeHint">
             <RadioGroup v-model="scriptForm.dockerMode" class="flex flex-wrap gap-2" @update:model-value="onDockerModeChange">
               <label
@@ -394,7 +419,7 @@
 
           <template v-if="shellAio">
             <InfoNote>
-              <p>请先在同一台机器安装 Mihomo 与 OxiDNS，并配置为 systemd / OpenRC 服务；脚本仅安装和接管两个 Agent。</p>
+              <p>未安装核心时，可先使用上方的独立核心安装命令。已有核心请确认已配置 systemd / OpenRC 服务；下方脚本仅安装和接管两个 Agent。</p>
               <p>DNS 端口分工：OxiDNS 使用 <code class="font-mono">53</code>，Mihomo 使用 <code class="font-mono">1053</code>。发布 Mihomo 配置时会自动调整 DNS 监听和 TUN DNS 劫持端口为 <code class="font-mono">1053</code>。</p>
               <p>请在 OxiDNS 中将远端 DNS 上游设置为 <code class="font-mono">127.0.0.1:1053</code>。使用 TUN 时，还需在系统准备 TUN 设备、权限及所需的 IPv4 转发设置。</p>
             </InfoNote>
@@ -867,6 +892,10 @@ const metricsDialogVisible = ref(false)
 const installScript = ref('')
 const installCommand = ref('')
 const installCommandAlpine = ref('')
+const coreInstallCommand = ref('')
+const coreInstallScript = ref('')
+const coreInstallLoading = ref(false)
+let coreInstallRequest = 0
 const dockerComposeContent = ref('')
 const dockerRunCommand = ref('')
 const logs = ref('')
@@ -914,6 +943,58 @@ const createScriptForm = () => ({
 })
 const scriptForm = ref(createScriptForm())
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
+
+const resetCoreInstallCommand = () => {
+  coreInstallRequest += 1
+  coreInstallCommand.value = ''
+  coreInstallScript.value = ''
+  coreInstallLoading.value = false
+}
+
+watch([shellAio, scriptDialogVisible], resetCoreInstallCommand, { flush: 'sync' })
+
+const generateCoreInstallCommand = async () => {
+  if (coreInstallLoading.value) return
+  const request = ++coreInstallRequest
+  coreInstallLoading.value = true
+  try {
+    let baseUrl: URL
+    try {
+      baseUrl = new URL((localStorage.getItem('serverDomain') || window.location.origin).trim())
+    } catch {
+      throw new Error('服务地址无效，请先设置完整的 HTTP / HTTPS 地址')
+    }
+    if (!['http:', 'https:'].includes(baseUrl.protocol) || baseUrl.search || baseUrl.hash || baseUrl.username || baseUrl.password) {
+      throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
+    }
+    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, '')}/api/agents/core-install-script`
+    const quotedUrl = `'${baseUrl.toString().replace(/'/g, `'"'"'`)}'`
+    const response = await agentApi.generateCoreInstallScript()
+    if (request !== coreInstallRequest || !shellAio.value || !scriptDialogVisible.value) return
+    if (typeof response.data !== 'string' || !response.data.trimStart().startsWith('#!')) {
+      throw new Error('服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新')
+    }
+    coreInstallScript.value = response.data
+    coreInstallCommand.value = `(
+  set -eu
+  core_script=$(mktemp)
+  trap 'rm -f "$core_script"' EXIT HUP INT TERM
+  if command -v curl >/dev/null 2>&1; then
+    curl -fSL --output "$core_script" ${quotedUrl}
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$core_script" ${quotedUrl}
+  else
+    echo '请先安装 curl 或 wget' >&2; exit 1
+  fi
+  sh "$core_script"
+)`
+    notify.success('核心安装命令已生成，请以 root 身份在目标机器执行')
+  } catch (error: any) {
+    if (request === coreInstallRequest) notify.error(error.response?.data?.message || error.message || '生成核心安装命令失败')
+  } finally {
+    if (request === coreInstallRequest) coreInstallLoading.value = false
+  }
+}
 
 const serviceTypeLabels: Record<Agent['service_type'], string> = {
   mihomo: 'Mihomo',
@@ -2373,6 +2454,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  resetCoreInstallCommand()
   stopAutoRefresh()
 })
 </script>
