@@ -20,6 +20,20 @@ export function connectionDomains(metadata: { host?: string; sniffHost?: string 
     } catch { return [] }
   }))]
 }
+/** Keep domain actions unchanged; IP-only connections use the recorded destination, never the source. */
+export function connectionRuleValues(metadata: { host?: string; sniffHost?: string; destinationIP?: string; dnsMode?: string }): string[] {
+  const domains = connectionDomains(metadata)
+  if (domains.length) return domains
+  // A synthetic address is not a stable destination rule.
+  if (metadata.dnsMode === 'fake-ip') return []
+  for (const value of [metadata.destinationIP, metadata.host, metadata.sniffHost]) {
+    if (!value || /[/%\s]/.test(value)) continue
+    const address = deviceAddress(value)
+    if (address) return [address]
+  }
+  return []
+}
+export type ConnectionRuleType = 'DOMAIN' | 'DOMAIN-SUFFIX' | 'IP-CIDR' | 'IP-CIDR6'
 export interface DeviceNotes {
   profile_id: string
   profile_name: string
@@ -31,9 +45,14 @@ export interface ConnectionRuleTarget {
   problem: string | null
   active: boolean
 }
+export interface ConnectionIPRuleTarget extends ConnectionRuleTarget {
+  behavior: 'classical' | 'ipcidr'
+  targets: ('direct' | 'proxy')[]
+}
 export interface ConnectionRuleTargets {
   profile_id: string
   profile_name: string
   direct: ConnectionRuleTarget | null
   proxy: ConnectionRuleTarget | null
+  ip_rulesets?: ConnectionIPRuleTarget[]
 }

@@ -3,7 +3,7 @@ import { compareSources, connectionMatcher, sourceLabel, type ConnectionRow } fr
 export const CONNECTION_COLUMNS = [
   { key: 'target', label: '主机' },
   { key: 'source', label: '来源' },
-  { key: 'network', label: '协议' },
+  { key: 'network', label: '类型' },
   { key: 'rule', label: '规则' },
   { key: 'chain', label: '链路' },
   { key: 'downSpeed', label: '下载速度' },
@@ -26,38 +26,38 @@ export const CONNECTION_SORT_OPTIONS = [
 ] as const
 
 export const DEFAULT_CONNECTION_COLUMNS: ConnectionColumn[] = [
-  'target', 'source', 'network', 'rule', 'chain', 'downSpeed', 'upSpeed', 'duration'
+  'target', 'source', 'network', 'rule', 'chain', 'downSpeed', 'upSpeed', 'download', 'upload', 'duration'
 ]
 
 const LEGACY_DEFAULT_COLUMNS: ConnectionColumn[] = ['target', 'source', 'rule', 'chain', 'downSpeed', 'upSpeed', 'download', 'upload', 'duration']
 
-/** Keep optional fields in the same compact columns instead of growing a horizontal table. */
-export function connectionDisplayColumns(selected: ConnectionColumn[]) {
-  const groups: Array<{ key: string; label: string; fields: ConnectionColumn[]; weight: number; numeric: boolean }> = [
-    { key: 'target', label: '主机', fields: ['target', 'network', 'process'], weight: 28, numeric: false },
-    { key: 'source', label: '来源设备', fields: ['source'], weight: 18, numeric: false },
-    { key: 'routing', label: '规则 / 链路', fields: ['rule', 'chain'], weight: 26, numeric: false },
-    { key: 'transfer', label: '实时速度', fields: ['downSpeed', 'upSpeed', 'download', 'upload'], weight: 20, numeric: true },
-    { key: 'time', label: '时长', fields: ['duration', 'start'], weight: 11, numeric: true }
-  ]
-  return groups.map(group => {
-    const fields = group.fields.filter(field => selected.includes(field))
-    let label = group.label
-    if (group.key === 'routing' && fields.length === 1) label = fields[0] === 'rule' ? '规则' : '链路'
-    if (group.key === 'transfer') {
-      const speed = fields.some(field => field === 'downSpeed' || field === 'upSpeed')
-      const traffic = fields.some(field => field === 'download' || field === 'upload')
-      label = speed && traffic ? '速度 / 流量' : traffic ? '流量' : '实时速度'
-    }
-    if (group.key === 'time') label = fields.includes('start') ? (fields.includes('duration') ? '时间' : '开始时间') : '时长'
-    return { ...group, fields, label, weight: group.key === 'time' && fields.includes('start') ? 19 : group.weight }
-  }).filter(group => group.fields.length)
+export const CONNECTION_GROUP_FIELDS = ['target', 'source', 'network', 'rule', 'chain'] as const
+export type ConnectionGroupField = typeof CONNECTION_GROUP_FIELDS[number]
+
+/** Independent columns; only low-priority fields fold away when the panel is narrow. */
+export function connectionDisplayColumns(selected: ConnectionColumn[], width = 1400, reservedWidth = 76) {
+  const sizes: Record<ConnectionColumn, number> = {
+    target: 180, source: 130, network: 110, rule: 150, chain: 220,
+    downSpeed: 90, upSpeed: 90, download: 85, upload: 85, duration: 80, start: 155, process: 130
+  }
+  const fields = CONNECTION_COLUMNS.filter(column => selected.includes(column.key)).map(column => ({
+    ...column, width: sizes[column.key], numeric: ['downSpeed', 'upSpeed', 'download', 'upload', 'duration', 'start'].includes(column.key)
+  }))
+  // Mobile uses a labelled grid, so every selected field remains available there.
+  if (width <= 740) return fields
+  for (const key of ['process', 'start', 'network', 'upload', 'download', 'chain', 'rule', 'source'] as ConnectionColumn[]) {
+    if (fields.reduce((sum, column) => sum + column.width, reservedWidth) <= width) break
+    const index = fields.findIndex(column => column.key === key)
+    if (index >= 0) fields.splice(index, 1)
+  }
+  return fields
 }
 
 export interface ConnectionTableSettings {
   sort: ConnectionSort
   direction: SortDirection
   columns: ConnectionColumn[]
+  groupBy?: ConnectionGroupField | null
 }
 export const CONNECTION_SETTINGS_KEY = 'configflow:mihomo-panel:connection-table'
 
@@ -69,19 +69,22 @@ export function loadConnectionTableSettings(): ConnectionTableSettings {
     if (!stored || typeof stored !== 'object') return defaults
     if (CONNECTION_SORT_OPTIONS.some(option => option.key === stored.sort)) defaults.sort = stored.sort
     if (stored.direction === 'asc' || stored.direction === 'desc') defaults.direction = stored.direction
+    if (CONNECTION_GROUP_FIELDS.includes(stored.groupBy)) defaults.groupBy = stored.groupBy
     if (Array.isArray(stored.columns)) {
       // 主机始终可见，保证连接详情的键盘入口不会被隐藏。
       defaults.columns = CONNECTION_COLUMNS.filter(column => column.key === 'target' || stored.columns.includes(column.key)).map(column => column.key)
       // Migrate the old default preset once; keep custom choices and future selections intact.
-      if (stored.layoutVersion !== 2 && defaults.columns.length === LEGACY_DEFAULT_COLUMNS.length &&
-        LEGACY_DEFAULT_COLUMNS.every(key => defaults.columns.includes(key))) defaults.columns = [...DEFAULT_CONNECTION_COLUMNS]
+      const compactDefault: ConnectionColumn[] = ['target', 'source', 'network', 'rule', 'chain', 'downSpeed', 'upSpeed', 'duration']
+      const oldPreset = stored.layoutVersion === 2 ? compactDefault : LEGACY_DEFAULT_COLUMNS
+      if (stored.layoutVersion !== 3 && defaults.columns.length === oldPreset.length &&
+        oldPreset.every(key => defaults.columns.includes(key))) defaults.columns = [...DEFAULT_CONNECTION_COLUMNS]
     }
   } catch { /* 禁用存储或旧数据损坏时使用默认表格。 */ }
   return defaults
 }
 
 export function saveConnectionTableSettings(settings: ConnectionTableSettings) {
-  try { window.localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ ...settings, layoutVersion: 2 })) } catch { /* 本次访问仍生效。 */ }
+  try { window.localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ ...settings, layoutVersion: 3 })) } catch { /* 本次访问仍生效。 */ }
 }
 
 export interface ConnectionFilters {
@@ -94,6 +97,7 @@ export interface ConnectionFilters {
 export const emptyConnectionFilters = (): ConnectionFilters => ({ sources: [], networks: [], rules: [], chains: [], exclude: '' })
 export const connectionRuleLabel = (row: ConnectionRow) => row.rulePayload ? `${row.rule}: ${row.rulePayload}` : row.rule
 export const connectionNetworkLabel = (row: ConnectionRow) => row.metadata.network.toUpperCase()
+export const connectionTypeLabel = (row: ConnectionRow) => [row.metadata.type, connectionNetworkLabel(row)].filter(Boolean).join(' · ')
 
 function searchableValues(row: ConnectionRow) {
   const meta = row.metadata
@@ -134,7 +138,7 @@ export function sortConnections(rows: ConnectionRow[], key: ConnectionSort, dire
       case 'duration': return connectionDuration(row, now)
       case 'source': return sourceLabel(row)
       case 'rule': return connectionRuleLabel(row)
-      case 'network': return connectionNetworkLabel(row)
+      case 'network': return connectionTypeLabel(row)
       case 'process': return row.metadata.process || row.metadata.processPath || ''
       case 'speed': return row.downSpeed + row.upSpeed
       case 'total': return row.download + row.upload

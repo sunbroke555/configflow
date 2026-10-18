@@ -379,7 +379,7 @@ export const clientToolsApi = {
   saveNote: (id: string, data: { profile_id: string; ip: string; name: string; previous_name: string }) =>
     api.put(`/agents/${encodeURIComponent(id)}/client-notes`, data),
   ruleTargets: (id: string) => api.get(`/agents/${encodeURIComponent(id)}/mihomo/rule-targets`),
-  addRule: (id: string, data: { profile_id: string; ruleset_id: string; target: 'direct' | 'proxy'; value: string; rule_type: 'DOMAIN' | 'DOMAIN-SUFFIX' }) =>
+  addRule: (id: string, data: { profile_id: string; ruleset_id: string; target: 'direct' | 'proxy'; value: string; rule_type: import('@/lib/device-notes').ConnectionRuleType }) =>
     api.post(`/agents/${encodeURIComponent(id)}/mihomo/rule-targets/apply`, data)
 }
 

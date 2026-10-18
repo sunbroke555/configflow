@@ -1,5 +1,5 @@
 <template>
-  <div class="min-w-0">
+  <div ref="panelElement" class="min-w-0 mihomo-connections">
     <div class="mb-4 grid grid-cols-3 gap-3 max-md:gap-2">
       <div v-for="item in summary" :key="item.label" class="flex min-w-0 flex-col rounded-xl border border-border bg-card px-4 py-3 max-md:px-3">
         <div class="truncate text-[12px] text-muted-foreground">{{ item.label }}</div>
@@ -69,7 +69,7 @@
               </PopoverTrigger>
               <PopoverContent align="end" :collision-padding="12" class="w-72 max-h-(--reka-popover-content-available-height) overflow-y-auto" role="dialog" aria-label="显示列">
                 <div class="mb-2 flex items-center justify-between gap-2 text-sm font-semibold">显示列<Button variant="ghost" class="min-h-11 px-2 font-normal" @click="settings.columns = [...DEFAULT_CONNECTION_COLUMNS]">恢复默认</Button></div>
-                <p class="mb-2 mt-0 text-xs leading-relaxed text-muted-foreground">相关信息合并显示；完整内容可点击连接查看。</p>
+                <p class="mb-2 mt-0 text-xs leading-relaxed text-muted-foreground">窄窗口会自动收起次要列；点击连接可查看全部信息。</p>
                 <div class="grid grid-cols-2 gap-x-3">
                   <label v-for="column in CONNECTION_COLUMNS" :key="column.key" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px]">
                     <Checkbox :model-value="settings.columns.includes(column.key)" :disabled="column.key === 'target'" @update:model-value="value => toggleColumn(column.key, !!value)" />{{ column.label }}
@@ -84,6 +84,22 @@
         <span>匹配 <span class="num text-foreground">{{ rows.length }}</span> 条连接<span v-if="filters.exclude.trim()"> · 已应用隐藏条件</span></span>
         <Button variant="ghost" class="min-h-11 px-2 text-xs" @click="clearFilters"><X class="size-3.5" />清除筛选</Button>
       </div>
+    </div>
+
+    <div class="connection-group-toolbar mb-3 flex min-w-0 flex-wrap items-center gap-2">
+      <Select :model-value="settings.groupBy || 'none'" @update:model-value="value => setGroup(String(value))">
+        <SelectTrigger class="w-40 min-h-9 max-md:min-h-11" aria-label="连接分组"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">不分组</SelectItem>
+          <SelectItem v-for="field in CONNECTION_GROUP_FIELDS" :key="field" :value="field">按{{ columnLabel(field) }}分组</SelectItem>
+        </SelectContent>
+      </Select>
+      <template v-if="settings.groupBy">
+        <span class="text-xs text-muted-foreground">{{ groups.length }} 组 · {{ rows.length }} 条连接</span>
+        <Button variant="ghost" size="sm" :disabled="!expanded.size" @click="expanded = new Set()">全部收起</Button>
+        <Button variant="ghost" size="sm" @click="setGroup('none')"><X class="size-3.5" />取消分组</Button>
+      </template>
+      <span v-if="hiddenColumnCount" class="ml-auto text-xs text-muted-foreground">已收起 {{ hiddenColumnCount }} 列 · 点击连接查看详情</span>
     </div>
 
     <div v-if="notesError" role="alert" class="mb-3 flex flex-wrap items-center gap-2 text-xs text-warning-accent">
@@ -105,82 +121,66 @@
     <div v-else class="connection-table-frame min-w-0 overflow-hidden rounded-xl border border-border bg-card">
       <div class="connection-table-scroll max-h-[min(65dvh,640px)] overflow-y-auto overscroll-contain" tabindex="0" role="region" aria-label="连接列表，点击连接查看完整详情">
         <table class="cf-table connection-table table-fixed">
-          <caption class="cf-sr">Mihomo 连接，点击表头切换排序，点击主机查看详情</caption>
+          <caption class="cf-sr">点击表头排序，点击分组按钮归类；分组中的速度和流量为合计，时长为最长连接时长。</caption>
           <thead>
             <tr>
-              <th v-for="column in visibleColumns" :key="column.key" scope="col" :style="{ width: `${100 * column.weight / columnWeight}%` }" :class="{ 'cf-table__right': column.numeric }"
-                :aria-sort="column.fields.some(field => field === settings.sort) ? settings.direction === 'asc' ? 'ascending' : 'descending' : 'none'">
-                <button v-if="column.fields.length === 1" type="button" class="connection-sort" :class="{ 'justify-end': column.numeric }"
-                  :aria-label="`按${columnLabel(column.fields[0])}排序`" @click="changeSort(column.fields[0], true)">
-                  {{ column.label }}<ArrowUp v-if="settings.sort === column.fields[0] && settings.direction === 'asc'" class="size-3.5 shrink-0" /><ArrowDown v-else-if="settings.sort === column.fields[0]" class="size-3.5 shrink-0" /><ArrowUpDown v-else class="size-3 shrink-0 text-muted-foreground" />
-                </button>
-                <DropdownMenu v-else>
-                  <DropdownMenuTrigger as-child>
-                    <button type="button" class="connection-sort" :class="{ 'justify-end': column.numeric }" :aria-label="`${column.label}排序选项`">
-                      {{ column.label }}<ArrowUp v-if="column.fields.some(field => field === settings.sort) && settings.direction === 'asc'" class="size-3.5 shrink-0" /><ArrowDown v-else-if="column.fields.some(field => field === settings.sort)" class="size-3.5 shrink-0" /><ArrowUpDown v-else class="size-3 shrink-0 text-muted-foreground" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent :align="column.numeric ? 'end' : 'start'">
-                    <DropdownMenuItem v-for="field in column.fields" :key="field" class="min-h-11" :aria-label="`按${columnLabel(field)}排序`" @select="changeSort(field, true)">
-                      {{ columnLabel(field) }}<ArrowUp v-if="settings.sort === field && settings.direction === 'asc'" class="ml-auto size-3.5" /><ArrowDown v-else-if="settings.sort === field" class="ml-auto size-3.5" />
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+              <th v-for="column in visibleColumns" :key="column.key" scope="col" :style="columnStyle(column)" :class="{ 'cf-table__right': column.numeric }"
+                :aria-sort="settings.sort === column.key ? settings.direction === 'asc' ? 'ascending' : 'descending' : 'none'">
+                <div class="connection-heading" :class="{ 'justify-end': column.numeric }">
+                  <button type="button" class="connection-sort" :data-active="settings.sort === column.key" :aria-label="'按' + column.label + '排序'" :title="column.label + ' · 再次点击切换升降序'" @click="changeSort(column.key, true)">
+                    <span>{{ column.label }}</span><ArrowUp v-if="settings.sort === column.key && settings.direction === 'asc'" class="size-3" /><ArrowDown v-else-if="settings.sort === column.key" class="size-3" /><ArrowUpDown v-else class="size-3 text-muted-foreground" />
+                  </button>
+                  <button v-if="isGroupField(column.key)" type="button" class="connection-group-toggle connection-icon" :data-active="settings.groupBy === column.key" :aria-pressed="settings.groupBy === column.key"
+                    :aria-label="(settings.groupBy === column.key ? '取消按' : '按') + column.label + '分组'" :title="(settings.groupBy === column.key ? '取消按' : '按') + column.label + '分组'" @click="toggleGroup(column.key)">
+                    <ZoomOut v-if="settings.groupBy === column.key" class="size-3.5" /><ZoomIn v-else class="size-3.5" />
+                  </button>
+                </div>
               </th>
               <th class="connection-actions cf-table__right" scope="col">操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in visibleRows" :key="row.id" :data-connection-id="row.id" class="cursor-pointer" :class="{ 'text-muted-foreground': row.closedAt }" @click="selectedId = row.id">
-              <td v-for="column in visibleColumns" :key="column.key" :data-column="column.key" :data-label="column.label" class="text-xs" :class="{ 'cf-table__right num': column.numeric }">
-                <template v-if="column.key === 'target'">
-                  <button type="button" class="block min-h-11 w-full rounded-sm text-left font-mono text-xs text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-                    :title="row.target" :aria-label="`查看 ${row.target} 的连接详情`" @click.stop="selectedId = row.id"><span class="connection-wrap">{{ row.target }}</span></button>
-                  <div class="connection-wrap text-[11.5px] text-muted-foreground" :title="row.metadata.type">
-                    <span v-if="row.closedAt" class="mr-1">已关闭 ·</span>{{ row.metadata.type }}<template v-if="column.fields.includes('network')"> · {{ connectionNetworkLabel(row) }}</template>
-                  </div>
-                  <div v-if="column.fields.includes('process')" class="connection-wrap mt-0.5 font-mono text-muted-foreground" :title="row.metadata.processPath || row.metadata.process">{{ row.metadata.process || row.metadata.processPath || '—' }}</div>
-                </template>
-                <div v-else-if="column.key === 'source'" :title="[sourceName(row), sourceLabel(row)].filter(Boolean).join(' · ')">
-                  <div v-if="sourceName(row)" class="connection-wrap mb-0.5 text-foreground">{{ sourceName(row) }}</div>
-                  <div class="connection-wrap font-mono text-muted-foreground">{{ sourceLabel(row) }}</div>
-                </div>
-                <div v-else-if="column.key === 'routing'" class="space-y-1">
-                  <div v-if="column.fields.includes('rule')" class="connection-wrap" :title="connectionRuleLabel(row)">{{ connectionRuleLabel(row) }}</div>
-                  <div v-if="column.fields.includes('chain')" class="connection-wrap text-muted-foreground" :title="row.chain">{{ row.chain || '—' }}</div>
-                </div>
-                <div v-else-if="column.key === 'transfer'" class="space-y-1">
-                  <div v-for="field in column.fields" :key="field" class="connection-transfer flex items-baseline justify-end gap-1.5" :aria-label="`${columnLabel(field)} ${transferText(row, field)}`" :title="columnLabel(field)">
-                    <span class="shrink-0 text-muted-foreground" aria-hidden="true">{{ field === 'download' || field === 'upload' ? (field === 'download' ? '下载' : '上传') : (field === 'downSpeed' ? '↓' : '↑') }}</span>
-                    <span class="min-w-0 break-all">{{ transferText(row, field) }}</span>
-                  </div>
-                </div>
-                <template v-else-if="column.key === 'time'">
-                  <div v-if="column.fields.includes('duration')">{{ durationText(row.start, row.closedAt) }}</div>
-                  <div v-if="column.fields.includes('start')" class="mt-0.5 break-words text-muted-foreground" :title="startText(row.start)">{{ startText(row.start) }}</div>
-                </template>
-              </td>
+            <template v-for="entry in visibleEntries" :key="entry.id">
+              <tr v-if="entry.kind === 'group'" class="connection-group-row" :data-group-id="entry.group.id">
+                <td v-for="column in visibleColumns" :key="column.key" :data-column="column.key" :data-label="column.label" :class="{ 'cf-table__right num': column.numeric }">
+                  <button v-if="column.key === 'target'" type="button" class="connection-group-label" :aria-expanded="expanded.has(entry.group.id)" :aria-label="(expanded.has(entry.group.id) ? '收起 ' : '展开 ') + entry.group.label + '（' + entry.group.members.length + ' 条连接）'" :title="groupTitle(entry.group)" @click="toggleExpanded(entry.group.id)">
+                    <ChevronDown v-if="expanded.has(entry.group.id)" class="size-3.5 shrink-0" /><ChevronRight v-else class="size-3.5 shrink-0" /><span class="truncate">{{ entry.group.label }}</span><span class="num shrink-0 text-muted-foreground">({{ entry.group.members.length }})</span><span class="shrink-0 text-xs text-muted-foreground">合计</span>
+                  </button>
+                  <span v-else class="connection-cell" :title="groupText(entry.group, column.key)">{{ groupText(entry.group, column.key) }}</span>
+                </td>
+                <td class="connection-actions cf-table__right"></td>
+              </tr>
+              <tr v-else-if="entry.kind === 'more'" class="connection-more-row">
+                <td :colspan="visibleColumns.length + 1"><Button variant="ghost" size="sm" @click="showMore(entry.group.id)">继续显示本组 · 剩余 {{ entry.group.members.length - memberLimit(entry.group.id) }} 条</Button></td>
+              </tr>
+              <tr v-else :data-connection-id="entry.row.id" :class="{ 'connection-child': entry.parent, 'is-disabled': entry.row.closedAt }" @click="selectedId = entry.row.id">
+                <td v-for="column in visibleColumns" :key="column.key" :data-column="column.key" :data-label="column.label" :class="{ 'cf-table__right num': column.numeric }">
+                  <button v-if="column.key === 'target'" type="button" class="connection-host font-mono" :title="entry.row.target" :aria-label="'查看 ' + entry.row.target + ' 的连接详情'" @click.stop="selectedId = entry.row.id"><span class="connection-cell">{{ entry.row.target }}</span></button>
+                  <span v-else class="connection-cell" :class="{ 'font-mono': column.key === 'source' && !sourceName(entry.row) }" :title="cellTitle(entry.row, column.key)">{{ cellText(entry.row, column.key) }}</span>
+                </td>
               <td class="connection-actions cf-table__right" @click.stop>
                 <div class="flex items-center justify-end">
                 <DropdownMenu>
-                  <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="size-11" :aria-label="`操作 ${row.target}`"><Ellipsis class="size-4" /></Button></DropdownMenuTrigger>
+                  <DropdownMenuTrigger as-child><Button variant="ghost" size="icon" class="connection-icon" :aria-label="`操作 ${entry.row.target}`"><Ellipsis class="size-4" /></Button></DropdownMenuTrigger>
                   <DropdownMenuContent align="end" class="max-w-[calc(100vw-24px)]">
-                    <DropdownMenuItem class="min-h-11" :disabled="!deviceAddress(row.metadata.sourceIP)" @select="noteIP = deviceAddress(row.metadata.sourceIP)"><Pencil class="size-4" />编辑来源设备备注</DropdownMenuItem>
+                    <DropdownMenuItem class="min-h-11" :disabled="!deviceAddress(entry.row.metadata.sourceIP)" @select="noteIP = deviceAddress(entry.row.metadata.sourceIP)"><Pencil class="size-4" />编辑来源设备备注</DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem class="min-h-11" :disabled="!connectionDomains(row.metadata).length" @select="openRule(row, 'proxy')">加入代理规则集</DropdownMenuItem>
-                    <DropdownMenuItem class="min-h-11" :disabled="!connectionDomains(row.metadata).length" @select="openRule(row, 'direct')">加入直连规则集</DropdownMenuItem>
-                    <DropdownMenuLabel v-if="!connectionDomains(row.metadata).length" class="max-w-64 whitespace-normal text-xs font-normal text-muted-foreground">此连接没有记录域名，不能添加到域名规则集。</DropdownMenuLabel>
+                    <DropdownMenuItem class="min-h-11" :disabled="!connectionRuleValues(entry.row.metadata).length" @select="openRule(entry.row, 'proxy')">加入代理规则集</DropdownMenuItem>
+                    <DropdownMenuItem class="min-h-11" :disabled="!connectionRuleValues(entry.row.metadata).length" @select="openRule(entry.row, 'direct')">加入直连规则集</DropdownMenuItem>
+                    <DropdownMenuLabel v-if="!connectionRuleValues(entry.row.metadata).length" class="max-w-64 whitespace-normal text-xs font-normal text-muted-foreground">此连接没有可用的域名或真实目标 IP。</DropdownMenuLabel>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <Button v-if="!row.closedAt" variant="ghost" size="icon" class="size-11" :aria-label="`断开 ${row.target}`" title="断开" @click.stop="closeOne(row.id)"><X class="size-4" /></Button>
+                <Button v-if="!entry.row.closedAt" variant="ghost" size="icon" class="connection-icon" :aria-label="`断开 ${entry.row.target}`" title="断开" @click.stop="closeOne(entry.row.id)"><X class="size-4" /></Button>
                 </div>
               </td>
-            </tr>
+
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
       <div class="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
-        <span class="num">共 {{ rows.length }} 条<span v-if="pageCount > 1"> · {{ (page - 1) * PAGE_SIZE + 1 }}–{{ Math.min(page * PAGE_SIZE, rows.length) }}</span></span>
+        <span class="num">共 {{ rows.length }} 条连接<span v-if="settings.groupBy"> · {{ groups.length }} 组</span><span v-if="pageCount > 1"> · {{ (page - 1) * PAGE_SIZE + 1 }}–{{ Math.min(page * PAGE_SIZE, pageTotal) }}{{ settings.groupBy ? ' 组' : '' }}</span></span>
         <div v-if="pageCount > 1" class="flex items-center gap-1">
           <Button variant="ghost" size="icon" class="size-11" aria-label="上一页连接" :disabled="page === 1" @click="page--"><ChevronLeft class="size-4" /></Button>
           <span class="num px-1">{{ page }} / {{ pageCount }}</span>
@@ -189,14 +189,15 @@
       </div>
     </div>
     <DeviceNoteDialog v-if="noteIP" :key="agentId + noteIP" :agent-id="agentId" :ip="noteIP" @close="noteIP = ''" @saved="applyNotes" />
-    <ConnectionRuleDialog v-if="ruleAction" :key="agentId" :agent-id="agentId" :domains="ruleAction.domains" :target="ruleAction.target" @close="ruleAction = null" />
+    <ConnectionRuleDialog v-if="ruleAction" :key="agentId" :agent-id="agentId" :values="ruleAction.values" :target="ruleAction.target" @close="ruleAction = null" />
     <MihomoConnectionDetail :row="selected" :source-name="selected ? sourceName(selected) : ''" @close="selectedId = ''" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, ArrowUpDown, Cable, ChevronLeft, ChevronRight, Columns3, Ellipsis, Eraser, ListFilter, Loader2, Pencil, TriangleAlert, X } from '@lucide/vue'
+import { useElementSize, useMediaQuery } from '@vueuse/core'
+import { ChevronDown, ZoomIn, ZoomOut, ArrowDown, ArrowUp, ArrowUpDown, Cable, ChevronLeft, ChevronRight, Columns3, Ellipsis, Eraser, ListFilter, Loader2, Pencil, TriangleAlert, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -217,7 +218,7 @@ import MultiSelect from '@/components/common/MultiSelect.vue'
 import MihomoConnectionDetail from './MihomoConnectionDetail.vue'
 import DeviceNoteDialog from './DeviceNoteDialog.vue'
 import ConnectionRuleDialog from './ConnectionRuleDialog.vue'
-import { connectionDomains, deviceAddress, deviceNote, type DeviceNotes } from '@/lib/device-notes'
+import { connectionRuleValues, deviceAddress, deviceNote, type DeviceNotes } from '@/lib/device-notes'
 import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { formatBytes } from '@/lib/format'
@@ -225,11 +226,13 @@ import {
   compareSources, panelError, sourceLabel, type ConnectionRow, type MihomoConnection, type MihomoConnectionsSnapshot
 } from '@/types/mihomo'
 import {
-  CONNECTION_COLUMNS, CONNECTION_SORT_OPTIONS, DEFAULT_CONNECTION_COLUMNS,
+  CONNECTION_COLUMNS, CONNECTION_SORT_OPTIONS, DEFAULT_CONNECTION_COLUMNS, CONNECTION_GROUP_FIELDS,
   connectionDisplayColumns, connectionNetworkLabel, connectionRuleLabel, defaultConnectionSortDirection, emptyConnectionFilters,
   filterConnections, loadConnectionTableSettings, saveConnectionTableSettings, sortConnections,
-  type ConnectionColumn, type ConnectionSort
+  type ConnectionColumn, type ConnectionSort, type ConnectionGroupField
 } from '@/lib/mihomo-connections'
+
+import { connectionText, groupConnections, type ConnectionGroup } from '@/lib/mihomo-connection-groups'
 
 type ViewKey = 'active' | 'closed' | 'all'
 const POLL_MS = 2000
@@ -239,11 +242,15 @@ const CLOSED_LIMIT = 500
 const TREND_POINTS = 60
 
 const props = defineProps<{ agentId: string; active: boolean }>()
+const panelElement = ref<HTMLElement | null>(null)
+const { width: panelWidth } = useElementSize(panelElement)
+const touchPointer = useMediaQuery('(pointer: coarse)')
+const actionsWidth = computed(() => touchPointer.value ? 100 : 76)
 
 const notes = ref<Record<string, string>>({})
 const notesError = ref('')
 const noteIP = ref('')
-const ruleAction = ref<{ domains: string[]; target: 'proxy' | 'direct' } | null>(null)
+const ruleAction = ref<{ values: string[]; target: 'proxy' | 'direct' } | null>(null)
 const sourceName = (row: ConnectionRow) => deviceNote(notes.value, row.metadata.sourceIP)
 let notesEpoch = 0
 function applyNotes(catalog: DeviceNotes) {
@@ -262,8 +269,8 @@ async function loadNotes() {
   }
 }
 function openRule(row: ConnectionRow, target: 'proxy' | 'direct') {
-  const domains = connectionDomains(row.metadata)
-  if (domains.length) ruleAction.value = { domains, target }
+  const values = connectionRuleValues(row.metadata)
+  if (values.length) ruleAction.value = { values, target }
 }
 const snapshot = ref<MihomoConnectionsSnapshot | null>(null)
 const error = ref('')
@@ -331,13 +338,58 @@ const rows = computed(() => {
     : filterConnections(view.value === 'closed' ? closed.value : [...activeRows.value, ...closed.value], search.value, filters.value, sourceName)
   return sortConnections(list, settings.value.sort, settings.value.direction, now.value)
 })
-const visibleColumns = computed(() => connectionDisplayColumns(settings.value.columns))
-const columnWeight = computed(() => visibleColumns.value.reduce((sum, column) => sum + column.weight, 0))
+const visibleColumns = computed(() => connectionDisplayColumns(settings.value.columns, panelWidth.value || 1400, actionsWidth.value + 16))
+const hiddenColumnCount = computed(() => settings.value.columns.length - visibleColumns.value.length)
 const columnLabel = (key: ConnectionColumn) => CONNECTION_COLUMNS.find(column => column.key === key)!.label
-function transferText(row: ConnectionRow, key: ConnectionColumn) {
-  if (key === 'downSpeed' || key === 'upSpeed') return row.closedAt ? '—' : speedText(row[key])
-  return key === 'download' || key === 'upload' ? formatBytes(row[key]) : '—'
+function columnStyle(column: typeof visibleColumns.value[number]) {
+  // Text columns share spare space; counters keep a predictable compact width.
+  if (column.numeric || column.key === 'network') return { width: `${column.width}px` }
+  const fixed = visibleColumns.value.filter(item => item.numeric || item.key === 'network').reduce((sum, item) => sum + item.width, actionsWidth.value)
+  const flexible = visibleColumns.value.filter(item => !item.numeric && item.key !== 'network')
+  const total = flexible.reduce((sum, item) => sum + item.width, 0)
+  const available = (panelWidth.value || 1400) - fixed - 16
+  return { width: `${Math.max(1, available * column.width / total)}px` }
 }
+function cellText(row: ConnectionRow, key: ConnectionColumn) {
+  if (key === 'downSpeed' || key === 'upSpeed') return row.closedAt ? '—' : speedText(row[key])
+  if (key === 'download' || key === 'upload') return formatBytes(row[key])
+  if (key === 'duration') return durationText(row.start, row.closedAt)
+  if (key === 'start') return startText(row.start)
+  return connectionText(row, key, sourceName)
+}
+function cellTitle(row: ConnectionRow, key: ConnectionColumn) {
+  return key === 'source' ? [sourceName(row), sourceLabel(row)].filter(Boolean).join(' · ') : cellText(row, key)
+}
+const isGroupField = (key: ConnectionColumn): key is ConnectionGroupField => (CONNECTION_GROUP_FIELDS as readonly string[]).includes(key)
+const expanded = ref(new Set<string>())
+const memberLimits = ref(new Map<string, number>())
+const groups = computed(() => settings.value.groupBy ? groupConnections(rows.value, settings.value.groupBy, settings.value.sort, settings.value.direction, now.value, sourceName) : [])
+function setGroup(key: string) {
+  settings.value.groupBy = isGroupField(key as ConnectionColumn) ? key as ConnectionGroupField : null
+  expanded.value = new Set(); memberLimits.value = new Map(); page.value = 1
+}
+function toggleGroup(key: ConnectionGroupField) { setGroup(settings.value.groupBy === key ? 'none' : key) }
+function toggleExpanded(id: string) {
+  const next = new Set(expanded.value)
+  if (next.has(id)) { next.delete(id); memberLimits.value.delete(id) } else next.add(id)
+  expanded.value = next
+}
+const memberLimit = (id: string) => memberLimits.value.get(id) || 20
+function showMore(id: string) { memberLimits.value.set(id, memberLimit(id) + 20) }
+function groupTitle(group: ConnectionGroup) {
+  return `${group.label} · ${group.members.length} 条连接\n下载 ${formatBytes(group.download)} · 上传 ${formatBytes(group.upload)}\n下载速度 ${speedText(group.downSpeed)} · 上传速度 ${speedText(group.upSpeed)} · 最长 ${elapsedText(group.duration)}`
+}
+function groupText(group: ConnectionGroup, key: ConnectionColumn) {
+  if (key === 'download' || key === 'upload') return formatBytes(group[key])
+  if (key === 'downSpeed' || key === 'upSpeed') return speedText(group[key])
+  if (key === 'duration') return `最长 ${elapsedText(group.duration)}`
+  if (key === 'start') return Number.isFinite(group.start) ? startText(new Date(group.start).toISOString()) : '—'
+  return group.values[key] || '—'
+}
+watch(groups, current => {
+  const ids = new Set(current.map(group => group.id))
+  for (const id of expanded.value) if (!ids.has(id)) { expanded.value.delete(id); memberLimits.value.delete(id) }
+})
 function changeSort(key: ConnectionSort, toggle = false) {
   settings.value.direction = toggle && settings.value.sort === key
     ? settings.value.direction === 'asc' ? 'desc' : 'asc'
@@ -356,8 +408,21 @@ const viewOptions = computed<Array<{ value: ViewKey; label: string }>>(() => [
 const selected = computed(() => selectedId.value
   ? activeRows.value.find(row => row.id === selectedId.value) || closed.value.find(row => row.id === selectedId.value) || null
   : null)
-const pageCount = computed(() => Math.max(1, Math.ceil(rows.value.length / PAGE_SIZE)))
-const visibleRows = computed(() => rows.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
+const pageTotal = computed(() => settings.value.groupBy ? groups.value.length : rows.value.length)
+const pageCount = computed(() => Math.max(1, Math.ceil(pageTotal.value / PAGE_SIZE)))
+type TableEntry = { kind: 'group'; id: string; group: ConnectionGroup } | { kind: 'more'; id: string; group: ConnectionGroup } | { kind: 'connection'; id: string; row: ConnectionRow; parent?: string }
+const visibleEntries = computed<TableEntry[]>(() => {
+  const begin = (page.value - 1) * PAGE_SIZE, end = page.value * PAGE_SIZE
+  if (!settings.value.groupBy) return rows.value.slice(begin, end).map(row => ({ kind: 'connection', id: row.id, row }))
+  const entries: TableEntry[] = []
+  for (const group of groups.value.slice(begin, end)) {
+    entries.push({ kind: 'group', id: group.id, group })
+    if (!expanded.value.has(group.id)) continue
+    entries.push(...group.members.slice(0, memberLimit(group.id)).map(row => ({ kind: 'connection' as const, id: row.id, row, parent: group.id })))
+    if (group.members.length > memberLimit(group.id)) entries.push({ kind: 'more', id: group.id + ':more', group })
+  }
+  return entries
+})
 watch([search, view, filters, () => settings.value.sort, () => settings.value.direction], () => { page.value = 1 }, { deep: true })
 watch(pageCount, count => { page.value = Math.min(page.value, count) })
 watch(settings, saveConnectionTableSettings, { deep: true })
@@ -387,7 +452,10 @@ function speedText(bytesPerSecond: number) {
 }
 
 function durationText(start: string, end = now.value) {
-  const seconds = Math.max(0, Math.floor((end - Date.parse(start)) / 1000))
+  return elapsedText(end - Date.parse(start))
+}
+function elapsedText(milliseconds: number) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000))
   if (!Number.isFinite(seconds)) return '—'
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
@@ -527,117 +595,60 @@ onUnmounted(() => {
   if (timer) clearTimeout(timer)
   controller?.abort()
 })
-watch(() => props.agentId, () => { notesEpoch++; notes.value = {}; notesError.value = ''; noteIP.value = ''; ruleAction.value = null; void loadNotes() })
+watch(() => props.agentId, () => { expanded.value = new Set(); memberLimits.value = new Map(); notesEpoch++; notes.value = {}; notesError.value = ''; noteIP.value = ''; ruleAction.value = null; void loadNotes() })
 watch(() => props.active, active => { if (active) void loadNotes() })
 onMounted(loadNotes)
 onUnmounted(() => { notesEpoch++ })
 </script>
 
 <style scoped>
-.connection-table-frame {
-  container-type: inline-size;
+.connection-table-frame { container-type: inline-size; }
+.connection-table-scroll { scrollbar-gutter: stable; }
+.connection-table { width: 100%; }
+.connection-table th { position: sticky; top: 0; z-index: 1; padding: 2px 6px; background: var(--card); white-space: nowrap; }
+.connection-table td { padding: 2px 6px; height: 36px; white-space: nowrap; }
+.connection-table .connection-actions { width: 76px; }
+.connection-heading { display: flex; align-items: center; gap: 2px; }
+.connection-sort, .connection-group-label { display: flex; min-width: 0; min-height: 28px; align-items: center; gap: 3px; border-radius: var(--radius-sm); color: inherit; }
+.connection-sort { white-space: nowrap; }
+.connection-sort svg { flex-shrink: 0; }
+.connection-icon { display: inline-flex; width: 28px; height: 28px; min-width: 28px; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
+.connection-sort[data-active='true'], .connection-group-toggle[data-active='true'], .connection-sort:hover { color: var(--primary-accent); }
+.connection-group-toggle[data-active='true'] { background: var(--primary-soft); }
+.connection-group-toggle:hover { background: var(--accent); }
+.connection-sort:focus-visible, .connection-group-label:focus-visible, .connection-group-toggle:focus-visible, .connection-host:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.connection-cell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connection-host { width: 100%; min-height: 28px; text-align: left; border-radius: var(--radius-sm); }
+.connection-host:hover { color: var(--primary-accent); }
+.connection-group-row { background: var(--secondary); }
+.connection-group-label { width: 100%; text-align: left; }
+.connection-child td:first-child { padding-left: 24px; }
+.connection-table-scroll:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.connection-filter-fields :deep([role='combobox']) { min-height: 44px; }
+@media (pointer: coarse) {
+  .connection-icon { width: 44px; min-width: 44px; height: 44px; }
+  .connection-sort, .connection-host, .connection-group-label { min-width: 44px; min-height: 44px; }
+  .connection-table .connection-actions { width: 100px; }
 }
-.connection-table-scroll {
-  scrollbar-gutter: stable;
-}
-.connection-table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 0 8px;
-  background: var(--card);
-  white-space: normal;
-}
-.connection-table td {
-  padding: 8px;
-  white-space: normal;
-}
-.connection-table .connection-actions {
-  width: 104px;
-}
-.connection-sort {
-  display: flex;
-  width: 100%;
-  min-height: 44px;
-  align-items: center;
-  gap: 4px;
-  border-radius: var(--radius-sm);
-  color: inherit;
-}
-.connection-sort:hover {
-  color: var(--primary-accent);
-}
-.connection-sort:focus-visible {
-  outline: 2px solid var(--ring);
-}
-.connection-wrap {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-.connection-table-scroll:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-}
-.connection-filter-fields :deep([role='combobox']) {
-  min-height: 44px;
-}
-/* Keep the same rows and actions on narrow panels, without horizontal scrolling. */
+/* The same records and actions reflow on narrow panels, with touch-friendly targets. */
 @container (max-width: 740px) {
-  .connection-table,
-  .connection-table tbody {
-    display: block;
-  }
-  .connection-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-  .connection-table tbody tr {
-    position: relative;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px 16px;
-    padding: 12px;
-    border-bottom: 1px solid var(--border);
-  }
-  .connection-table tbody tr:last-child {
-    border-bottom: 0;
-  }
-  .connection-table td {
-    display: block;
-    min-width: 0;
-    padding: 0;
-    border-bottom: 0;
-    text-align: left;
-  }
-  .connection-table td[data-column]::before {
-    content: attr(data-label);
-    display: block;
-    margin-bottom: 4px;
-    color: var(--muted-foreground);
-    font-family: var(--font-sans);
-    font-size: 11px;
-  }
-  .connection-table td[data-column='target'] {
-    grid-column: 1 / -1;
-    padding-right: 96px;
-  }
-  .connection-table td[data-column='target']::before {
-    display: none;
-  }
-  .connection-table td.connection-actions {
-    position: absolute;
-    top: 12px;
-    right: 8px;
-    width: 88px;
-  }
-  .connection-transfer {
-    justify-content: flex-start;
-  }
+  .connection-table, .connection-table tbody { display: block; }
+  .connection-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .connection-table tbody tr { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; padding: 12px; border-bottom: 1px solid var(--border); }
+  .connection-table tbody tr:last-child { border-bottom: 0; }
+  .connection-table td { display: block; height: auto; min-width: 0; padding: 0; border-bottom: 0; text-align: left; }
+  .connection-table td[data-column]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--muted-foreground); font-family: var(--font-sans); font-size: 11px; }
+  .connection-table td[data-column='target'] { grid-column: 1 / -1; padding-right: 88px; }
+  .connection-table td[data-column='target']::before { display: none; }
+  .connection-table td[data-column='chain'] { grid-column: 1 / -1; }
+  .connection-table td.connection-actions { position: absolute; top: 12px; right: 8px; width: 88px; }
+  .connection-icon { width: 44px; min-width: 44px; height: 44px; }
+  .connection-host, .connection-group-label { min-height: 44px; }
+  .connection-cell { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
+  .connection-table td[data-column='rule'] { grid-column: 1 / -1; }
+  .connection-table .connection-more-row { display: block; }
+  .connection-group-label { flex-wrap: wrap; }
+  .connection-group-row td[data-column='target'] { padding-right: 0; }
+  .connection-group-label .truncate { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 }
 </style>

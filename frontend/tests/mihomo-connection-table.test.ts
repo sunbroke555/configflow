@@ -65,13 +65,23 @@ describe('connection table preferences', () => {
     expect(loadConnectionTableSettings().columns).toEqual(['target', 'download', 'start'])
   })
 
-  it('keeps every selected field when grouping even a fully expanded layout', () => {
+  it('keeps independent columns on wide screens and folds secondary fields without changing preferences', () => {
     const selected = CONNECTION_COLUMNS.map(column => column.key)
-    const groups = connectionDisplayColumns(selected)
-    expect(groups).toHaveLength(5)
-    expect(groups.flatMap(group => group.fields).sort()).toEqual([...selected].sort())
-    expect(connectionDisplayColumns(['target', 'upSpeed', 'start']).map(group => group.fields))
-      .toEqual([['target'], ['upSpeed'], ['start']])
+    expect(connectionDisplayColumns(selected, 2000).map(column => column.key)).toEqual(selected)
+    const narrow = connectionDisplayColumns(selected, 800)
+    expect(narrow.map(column => column.key)).toContain('target')
+    expect(narrow.map(column => column.key)).not.toContain('process')
+    expect(narrow.reduce((sum, column) => sum + column.width, 76)).toBeLessThanOrEqual(800)
+    expect(connectionDisplayColumns(selected, 375).map(column => column.key)).toEqual(selected)
+    expect(selected).toHaveLength(CONNECTION_COLUMNS.length)
+  })
+
+  it('upgrades the previous compact preset and validates grouping preferences', () => {
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ layoutVersion: 2, columns: ['target', 'source', 'network', 'rule', 'chain', 'downSpeed', 'upSpeed', 'duration'], groupBy: 'source' }))
+    expect(loadConnectionTableSettings().columns).toEqual(DEFAULT_CONNECTION_COLUMNS)
+    expect(loadConnectionTableSettings().groupBy).toBe('source')
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ groupBy: '__proto__' }))
+    expect(loadConnectionTableSettings().groupBy).toBeUndefined()
   })
 
   it('validates stored fields and preserves the detail entry column', () => {
