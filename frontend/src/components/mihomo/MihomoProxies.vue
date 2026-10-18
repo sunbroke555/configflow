@@ -129,8 +129,10 @@ const props = defineProps<{ agentId: string; reloadToken: number }>()
 
 const proxies = ref<Record<string, MihomoProxy>>({})
 const providers = ref<MihomoProvider[]>([])
-/** 节点名 → 所属代理集合；default 是配置文件里直接写的节点 */
-const nodeProvider = ref(new Map<string, string>())
+/** 保留核心 /proxies 的节点，兼容旧核心将订阅节点一并返回的情况。 */
+const coreProxyNames = ref(new Set<string>())
+/** 同名节点可能来自多个代理集合，不能只保留最后一个来源。 */
+const nodeProviders = ref(new Map<string, Set<string>>())
 const settings = ref<ProxyPanelSettings>(loadProxySettings())
 const settingsOpen = ref(false)
 function applySettings(value: ProxyPanelSettings) {
@@ -197,8 +199,10 @@ function sectionsOf(group: MihomoProxy): Array<{ title: string; members: string[
   if (!settings.value.groupByProvider) return members.length ? [{ title: '', members }] : []
   const sections = new Map<string, string[]>()
   for (const member of members) {
+    const sources = [...(nodeProviders.value.get(member) || [])]
     const title = GROUP_TYPES.has(proxies.value[member]?.type || '') ? '策略组'
-      : nodeProvider.value.get(member) === 'default' || !nodeProvider.value.has(member) ? '配置节点' : nodeProvider.value.get(member) as string
+      : sources.length > 1 ? '多个代理集合'
+      : !sources.length || sources[0] === 'default' ? '配置节点' : sources[0]
     sections.set(title, [...(sections.get(title) || []), member])
   }
   return [...sections].map(([title, items]) => ({ title, members: items }))
@@ -243,9 +247,19 @@ async function load() {
     // /proxies 不含 proxy-providers 里的节点，合并进来才能显示策略组成员的类型和延迟
     const providerProxies = Object.fromEntries(Object.values(providerMap)
       .flatMap(provider => provider.proxies || []).map(proxy => [proxy.name, proxy]))
-    nodeProvider.value = new Map(Object.values(providerMap)
-      .flatMap(provider => (provider.proxies || []).map(proxy => [proxy.name, provider.name] as [string, string])))
-    proxies.value = { ...providerProxies, ...(proxyResult.data.data?.proxies || {}) }
+    const sources = new Map<string, Set<string>>()
+    for (const [providerName, provider] of Object.entries(providerMap)) {
+      // 普通节点会同时出现在 default 和各策略组的 Compatible 集合中，均属于配置节点。
+      const source = provider.vehicleType === 'Compatible' ? 'default' : providerName
+      for (const proxy of provider.proxies || []) {
+        if (!sources.has(proxy.name)) sources.set(proxy.name, new Set())
+        sources.get(proxy.name)!.add(source)
+      }
+    }
+    const coreProxies = proxyResult.data.data?.proxies || {}
+    coreProxyNames.value = new Set(Object.keys(coreProxies))
+    nodeProviders.value = sources
+    proxies.value = { ...providerProxies, ...coreProxies }
     providers.value = Object.values(providerMap).filter(provider => provider.vehicleType !== 'Compatible')
   } catch (failure) {
     if (requestEpoch === epoch) error.value = panelError(failure, '暂时无法读取策略组。')
@@ -302,7 +316,13 @@ async function testNode(name: string, group: MihomoProxy) {
   const agentId = props.agentId
   nodeTesting.add(key)
   try {
-    const { data } = await mihomoPanelApi.proxyDelay(agentId, name, group.testUrl)
+    const sources = [...(nodeProviders.value.get(name) || [])]
+    const inCore = coreProxyNames.value.has(name)
+    if (sources.length > 1) throw new Error('多个来源中存在同名节点，请使用所属策略组的分组测速。')
+    if (!inCore && !sources.length) throw new Error('找不到该节点，请刷新后重试。')
+    const { data } = await (inCore
+      ? mihomoPanelApi.proxyDelay(agentId, name, group.testUrl)
+      : mihomoPanelApi.providerProxyDelay(agentId, sources[0], name, group.testUrl))
     if (disposed || generation !== testEpoch) return
     const delay = data.data?.delay
     if (typeof delay !== 'number' || !Number.isFinite(delay) || delay < 0) throw new Error('测速结果无效，请重试。')
@@ -381,10 +401,14 @@ async function healthcheck(provider: MihomoProvider) {
   }
 }
 
-watch(() => props.reloadToken, () => { delays.clear(); load() })
+function resetTests() {
+  testEpoch++; testing.clear(); nodeTesting.clear(); delays.clear()
+  batchRunning.value = false; batchStop.value = true
+}
+watch(() => props.reloadToken, () => { resetTests(); void load() })
 watch(() => props.agentId, () => {
-  testEpoch++; epoch++; testing.clear(); nodeTesting.clear(); delays.clear(); proxies.value = {}; providers.value = []
-  batchRunning.value = false; batchStop.value = true; void load()
+  resetTests(); epoch++; proxies.value = {}; providers.value = []; coreProxyNames.value.clear(); nodeProviders.value.clear()
+  void load()
 })
 onUnmounted(() => { disposed = true; testEpoch++; epoch++; batchStop.value = true })
 onMounted(load)

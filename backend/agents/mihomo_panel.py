@@ -16,8 +16,8 @@ MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_NAME_LENGTH = 512
 DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204'
 
-# (resource, method) -> Agent path template. `{name}` comes from the `name`
-# query argument and is encoded as one path segment.
+# (resource, method) -> Agent path template. Names are independently encoded
+# as single path segments, including a provider name for its individual nodes.
 ROUTES = {
     ('version', 'GET'): 'version',
     ('configs', 'GET'): 'configs',
@@ -34,6 +34,7 @@ ROUTES = {
     ('providers/proxies', 'GET'): 'providers/proxies',
     ('providers/proxy', 'PUT'): 'providers/proxies/{name}',
     ('providers/proxy/healthcheck', 'GET'): 'providers/proxies/{name}/healthcheck',
+    ('providers/proxy/delay', 'GET'): 'providers/proxies/{provider}/{name}/healthcheck',
     ('providers/rules', 'GET'): 'providers/rules',
     ('providers/rule', 'PUT'): 'providers/rules/{name}',
     ('cache/fakeip/flush', 'POST'): 'cache/fakeip/flush',
@@ -43,7 +44,10 @@ ROUTES = {
     ('upgrade', 'POST'): 'upgrade',
 }
 # Core operations added after the first panel release need a newer Agent.
-RESOURCE_MIN_VERSION = {'configs/reload': '1.8.16-go', 'upgrade': '1.8.16-go'}
+RESOURCE_MIN_VERSION = {
+    'configs/reload': '1.8.16-go', 'upgrade': '1.8.16-go',
+    'providers/proxy/delay': '1.8.18-go',
+}
 RESOURCE_TIMEOUT = {'configs/reload': 70, 'upgrade': 200}
 MODES = ('rule', 'global', 'direct')
 
@@ -62,7 +66,7 @@ def _fail(code, status=502, message=None):
     return MonitorError(code, status, message or MESSAGES.get(code, MESSAGES['INVALID_RESPONSE']))
 
 
-def _agent(manager, agent_id, min_version=MIN_AGENT_VERSION):
+def _agent(manager, agent_id, min_version=MIN_AGENT_VERSION, feature=None):
     agent = manager.get_agent_by_id(agent_id)
     if not agent:
         raise _fail('AGENT_NOT_FOUND', 404, '未找到这台 Agent。')
@@ -73,13 +77,13 @@ def _agent(manager, agent_id, min_version=MIN_AGENT_VERSION):
     except (ValueError, TypeError, AttributeError):
         supported = False
     if not supported:
-        feature = 'Mihomo 面板' if min_version == MIN_AGENT_VERSION else '这个内核操作'
+        feature = feature or ('Mihomo 面板' if min_version == MIN_AGENT_VERSION else '这个内核操作')
         raise _fail('UPGRADE_REQUIRED', 409, f'请将此 Agent 升级到 {min_version} 或更新版本后使用{feature}。')
     return agent
 
 
-def _name(args):
-    name = args.get('name', '')
+def _name(args, key='name'):
+    name = args.get(key, '')
     if not isinstance(name, str) or not name or len(name) > MAX_NAME_LENGTH \
             or any(ord(c) < 32 for c in name):
         raise _fail('INVALID_REQUEST', 400)
@@ -122,8 +126,12 @@ def call(manager, agent_id, resource, method, args, body=None):
     template = ROUTES.get((resource, method))
     if template is None:
         raise _fail('NOT_ALLOWED', 404, '面板不支持这个操作。')
-    agent = _agent(manager, agent_id, RESOURCE_MIN_VERSION.get(resource, MIN_AGENT_VERSION))
-    path = template.replace('{name}', quote(_name(args), safe='')) if '{name}' in template else template
+    agent = _agent(manager, agent_id, RESOURCE_MIN_VERSION.get(resource, MIN_AGENT_VERSION),
+                   '订阅节点测速' if resource == 'providers/proxy/delay' else None)
+    path = template
+    for key in ('provider', 'name'):
+        if '{' + key + '}' in template:
+            path = path.replace('{' + key + '}', quote(_name(args, key), safe=''))
     params = _query(resource, args)
     payload = _body(resource, method, body)
     url = _agent_origin(agent) + '/api/mihomo/' + path
