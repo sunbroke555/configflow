@@ -75,7 +75,7 @@
 
 ### 🤖 Agent 远程管理
 - 一键生成安装脚本
-- 提供独立的 Mihomo + OxiDNS 双核心安装脚本，自动创建 systemd / OpenRC 服务与基础 DNS 配置；核心安装和 Agent 接入分别执行（[双核心安装](docs/AGENT_OXIDNS.md#一键安装两个核心)）
+- 提供独立的 Mihomo + OxiDNS 双核心安装脚本，自动创建 systemd / OpenRC 服务与基础 DNS 配置；首次安装检测 TUN 设备和权限，可用时自动开启，不可用时提示修复方法。核心安装和 Agent 接入分别执行（[双核心安装](docs/AGENT_OXIDNS.md#一键安装两个核心)）
 - Shell 支持 Mihomo + OxiDNS 同机接入，独立 Agent 默认端口 8080 / 8082，DNS 分工 1053 / 53（[安装说明](docs/AGENT_OXIDNS.md#shell-同机安装-mihomo--oxidns)）
 - Agent 发布前检查 DNS 监听冲突与同机上下游关系，面板保留检测结果和修复建议；当前解析失败与劫持风险只提醒，必要安装环境检测继续保留（[检测范围](docs/AGENT_OXIDNS.md#发布前-dns-检查)）
 - 自动注册与心跳监控

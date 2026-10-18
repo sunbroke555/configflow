@@ -57,13 +57,18 @@ systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_pat
 | 系统服务 | `mihomo`、`oxidns`，安装后启动并加入开机启动 |
 | DNS 入口 | OxiDNS TCP/UDP `53`，转发到 `127.0.0.1:1053` |
 | Mihomo DNS | TCP/UDP `1053`，初始上游为 `223.5.5.5`、`119.29.29.29` |
-| TUN 与代理 | 初始不启用 TUN、不创建代理监听，也不配置代理节点 |
+| TUN | 首次安装检查设备和权限，可用时开启；不可用时关闭并给出原因和修复方法 |
+| 代理 | 不创建代理监听或代理节点，初始流量按 `MATCH,DIRECT` 直连 |
 
-初始配置用于直接 DNS 解析，不代表已配置代理分流；接入 Agent 后可从 ConfigFlow 发布所需规则、节点及 TUN 配置。脚本不修改系统 DNS、IPv4 转发、防火墙或 PVE 设备设置。Agent 弹窗中的自定义核心路径仅用于接管现有安装，不改变该独立脚本的默认布局。
+TUN 检测不仅检查路径存在，还检查 `/dev/net/tun` 是正确的字符设备、可读写，以及当前进程具备 `CAP_NET_ADMIN` 网络管理权限。通过后，初始配置使用 `stack: mixed`、`auto-route: true`、`auto-detect-interface: true`、`auto-redirect: false`，设备名为 `configflow-tun`，DNS 劫持目标为 `any:1053` 和 `tcp://any:1053`；Mihomo 启动时会自动配置路由。无法确认可用时仍安装两个核心，但保持 `tun.enable: false`，并显示具体原因及开启步骤。服务启动后还会确认 TUN 网卡实际创建；若未创建，则关闭初始配置中的 TUN 并重新启动 DNS 服务，提示修复方法。
+
+初始配置可用于 DNS 解析和直连，不代表已配置代理分流；接入 Agent 后可从 ConfigFlow 发布所需规则、节点及 TUN 配置。作为旁路网关时，还需在实际转发流量的 LXC / VM 内持久开启 IPv4 转发，脚本会检查并提醒，但不写入 `/etc/resolv.conf`、IPv4 转发、防火墙或 PVE 设备设置；TUN 启用后核心会配置路由，并可能配置该网卡的系统 DNS。Agent 弹窗中的自定义核心路径仅用于接管现有安装，不改变该独立脚本的默认布局。
+
+若 TUN 未开启，请按安装输出修复设备与权限：PVE LXC 的设备直通在 **PVE 宿主机**设置，容器内检查 `/dev/net/tun` 及网络管理权限；普通 Linux 主机需检查 TUN 驱动与设备权限。修复后在现有 `/etc/mihomo/config.yaml` 的 `tun` 段将 `enable` 改为 `true`，再重启 Mihomo 服务。已接入 ConfigFlow 时，可在「Mihomo 基础配置」修改同一设置并保存发布。**发布使用面板草稿中的 TUN 设置，不继承安装时的检测结果**；若安装时关闭了 TUN 且尚未修复，首次发布前也需将草稿中的 `tun.enable` 设为 `false`。重复运行核心安装命令会保留已有配置，不会重新决定 TUN 开关。
 
 安装前检查 root 权限、系统架构、服务管理器、必要工具及 `53` / `1053` 端口。两套核心下载和配置校验完成后才落盘；失败时撤销本次创建的文件和服务，不覆盖已有核心或配置。若回滚无法停止服务或取消开机启动，则保留恢复所需文件并提示手动处理。检测到其他安装会保留并退出，提示使用 Agent 接入；重复运行本脚本完成的安装会跳过，保留后来修改的配置，也不重启服务。
 
-安装后检查服务状态。systemd 日志进入系统日志；OpenRC 日志保存在 `/etc/mihomo/mihomo.log`、`/etc/oxidns/oxidns.log`，启动失败会先显示最近日志。目标机有 `dig` 时同时验证两个端口的 UDP/TCP 解析；未安装 `dig` 时明确提示尚未验证实际解析，并给出查询命令。可以手动验证：
+安装后检查服务状态。systemd 日志进入系统日志；OpenRC 日志保存在 `/etc/mihomo/mihomo.log`、`/etc/oxidns/oxidns.log`，启动失败会先显示最近日志。目标机有 `dig` 时同时验证两个端口的 UDP/TCP 解析；未安装 `dig` 时明确提示尚未验证实际解析，并给出查询命令。TUN 环境检测与 DNS 查询不能证明完整的网关转发、代理分流或重启后状态，这些仍需在目标网络验证。可以手动验证：
 
 ```sh
 dig @127.0.0.1 -p 53 example.com
