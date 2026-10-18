@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  CONNECTION_SETTINGS_KEY, DEFAULT_CONNECTION_COLUMNS, emptyConnectionFilters, filterConnections,
-  loadConnectionTableSettings, sortConnections
+  CONNECTION_COLUMNS, CONNECTION_SETTINGS_KEY, DEFAULT_CONNECTION_COLUMNS, connectionDisplayColumns, emptyConnectionFilters, filterConnections,
+  loadConnectionTableSettings, saveConnectionTableSettings, sortConnections
 } from '@/lib/mihomo-connections'
 import type { ConnectionRow } from '@/types/mihomo'
 
@@ -55,6 +55,25 @@ describe('connection table sorting', () => {
 })
 
 describe('connection table preferences', () => {
+  it('migrates the old default layout but preserves deliberate and custom selections', () => {
+    const old = ['target', 'source', 'rule', 'chain', 'downSpeed', 'upSpeed', 'download', 'upload', 'duration']
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ sort: 'upload', direction: 'asc', columns: old }))
+    expect(loadConnectionTableSettings()).toEqual({ sort: 'upload', direction: 'asc', columns: DEFAULT_CONNECTION_COLUMNS })
+    saveConnectionTableSettings({ sort: 'upload', direction: 'asc', columns: old as any })
+    expect(loadConnectionTableSettings().columns).toEqual(old)
+    localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ columns: ['target', 'download', 'start'] }))
+    expect(loadConnectionTableSettings().columns).toEqual(['target', 'download', 'start'])
+  })
+
+  it('keeps every selected field when grouping even a fully expanded layout', () => {
+    const selected = CONNECTION_COLUMNS.map(column => column.key)
+    const groups = connectionDisplayColumns(selected)
+    expect(groups).toHaveLength(5)
+    expect(groups.flatMap(group => group.fields).sort()).toEqual([...selected].sort())
+    expect(connectionDisplayColumns(['target', 'upSpeed', 'start']).map(group => group.fields))
+      .toEqual([['target'], ['upSpeed'], ['start']])
+  })
+
   it('validates stored fields and preserves the detail entry column', () => {
     localStorage.setItem(CONNECTION_SETTINGS_KEY, JSON.stringify({ sort: 'bad', direction: false, columns: ['upload', 'upload', 'bad'] }))
     expect(loadConnectionTableSettings()).toEqual({ sort: 'recent', direction: 'desc', columns: ['target', 'upload'] })
