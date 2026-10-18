@@ -162,6 +162,22 @@ def test_core_phase_precedes_agent_with_isolated_state_and_identity(tmp_path, mo
     assert not list((tmp_path / 'agent').glob('.aio-install.*'))
 
 
+def test_new_combined_install_does_not_repeat_dns_setup_instructions(tmp_path, monkeypatch):
+    installer, env, _ = harness(tmp_path, monkeypatch, existing=False)
+    source = installer.read_text().replace(
+        '# The outer Agent phase must not inherit core variables or traps.',
+        'cf_fact core_mihomo_new yes\ncf_fact core_oxidns_new yes\n'
+        '# The outer Agent phase must not inherit core variables or traps.')
+    installer.write_text(source)
+    result = aio.run(installer, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'Mihomo Agent：端口 8080，服务已启动' in result.stdout
+    assert 'OxiDNS Agent：端口 8082，服务已启动' in result.stdout
+    assert '请核对 DNS 链路' not in result.stdout
+    assert '将 DNS 调整到 1053' not in result.stdout
+    assert '随后发布 OxiDNS 配置' not in result.stdout
+
+
 @pytest.mark.parametrize('manager', ['systemd', 'openrc'])
 @pytest.mark.parametrize('choice', ['2', '3'])
 def test_uninstall_and_cancel_skip_core_phase(tmp_path, monkeypatch, manager, choice):
@@ -242,7 +258,10 @@ def test_real_existing_core_skip_logic_preserves_both_cores(tmp_path, monkeypatc
     ]}
     result = aio.run(installer, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '跳过已有 mihomo' in result.stdout and '跳过已有 oxidns' in result.stdout
+    assert 'Mihomo：已有部署，已保留' in result.stdout
+    assert 'OxiDNS：已有部署，已保留' in result.stdout
+    details = aio.detail_output(result)
+    assert '跳过已有 mihomo' in details and '跳过已有 oxidns' in details
     for path, content in originals.items():
         assert path.read_bytes() == content
     log = (tmp_path / 'events').read_text().splitlines()

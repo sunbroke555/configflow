@@ -15,13 +15,14 @@ fi
 {init_detection}
 
 {agent_install_dependencies}
-echo "1) {installation_action}"
-echo "2) 卸载 Agent"
-echo "3) 取消"
-printf '请输入选项 [1-3]: '
+cf_ui "1) {installation_action}"
+cf_ui "2) 卸载 Agent"
+cf_ui "3) 取消"
+cf_prompt '请输入选项 [1-3]: '
 read -r choice < /dev/tty
 case "$choice" in
     1)
+        cf_step "检查安装环境与依赖"
         case "$(uname -m)" in
             x86_64|amd64) AGENT_ARCH="linux-amd64" ;;
             aarch64|arm64) AGENT_ARCH="linux-arm64" ;;
@@ -29,6 +30,7 @@ case "$choice" in
             *) echo "不支持的 CPU 架构"; exit 1 ;;
         esac
         agent_ensure_dependencies
+        cf_step_done "安装环境与依赖已就绪"
         ;;
     2) ;;
     *) exit 0 ;;
@@ -218,7 +220,7 @@ case "$choice" in
         rm -f /usr/local/bin/configflow-agent
         rm -rf "$AGENT_DIR"
         rm -f /var/log/configflow-agent.log /var/log/configflow-agent.log.* /etc/logrotate.d/configflow-agent
-        echo "Agent 已卸载，服务配置与发布备份已保留。"
+        cf_ui "Agent 已卸载，服务配置与发布备份已保留。"
         exit 0
         ;;
     *) exit 0 ;;
@@ -231,7 +233,7 @@ BINARY_URL="$BINARY_BASE/configflow-agent-$AGENT_ARCH"
 mkdir -p /usr/local/bin
 BINARY_TMP=$(mktemp /usr/local/bin/.configflow-agent.install.XXXXXX)
 {agent_cleanup_trap}
-echo "下载 Go Agent 二进制..."
+cf_step "下载并校验 Agent"
 # The download URL may carry credentials; do not print it.
 if command -v wget >/dev/null 2>&1; then
     if ! wget -q -O "$BINARY_TMP" "$BINARY_URL"; then
@@ -246,6 +248,7 @@ else
 fi
 chmod 755 "$BINARY_TMP"
 "$BINARY_TMP" -h >/dev/null 2>&1
+cf_step_done "Agent 下载与校验通过"
 
 
 mkdir -p "$AGENT_DIR"
@@ -274,16 +277,19 @@ else
 fi
 sed -i "s/__CONFIGFLOW_INIT__/$INIT_SYSTEM/g; s/__CONFIGFLOW_RESTART__/$RESTART/g; s/__CONFIGFLOW_AGENT_ID__/$EXISTING_ID/g; s/__CONFIGFLOW_TOKEN__/$EXISTING_TOKEN/g" "$CONFIG_FILE.new"
 # Validate OxiDNS's working directory before stopping an existing Agent.
+cf_step "检查核心接管与运行环境"
 "$BINARY_TMP" -config "$CONFIG_FILE.new" -validate-service
 # Report TUN, permissions, forwarding and listener conflicts with repair steps.
 # This check is read-only; an error leaves the previous Agent running.
-if "$BINARY_TMP" -config "$CONFIG_FILE.new" -check-environment; then
+if cf_environment_check "$BINARY_TMP" -config "$CONFIG_FILE.new" -check-environment; then
     :
 else
     environment_status=$?
     echo "若提示未知 -check-environment 参数，请更新 ConfigFlow 并重新构建/提供 1.8.19-go 或更高的 Agent 下载文件；否则按上方环境问题修复后重跑。" >&2
     exit "$environment_status"
 fi
+cf_step_done "核心接管与运行环境检查通过"
+cf_step "安装并启动 Agent 服务"
 # Stop the previous Go or legacy Shell Agent before replacing its binary/config.
 if [ "$INIT_SYSTEM" = "systemd" ]; then
     systemctl stop configflow-agent 2>/dev/null || true
@@ -293,10 +299,10 @@ fi
 # Existing journals belong to the old config root, which may differ from the
 # newly requested config_path. Report pending work before losing its reference.
 if [ -f "$CONFIG_FILE" ]; then
-    "$BINARY_TMP" -config "$CONFIG_FILE" -check-deployments
+    cf_deployment_check "$BINARY_TMP" -config "$CONFIG_FILE" -check-deployments
 fi
 # Report interrupted deployments without changing core files or services.
-"$BINARY_TMP" -config "$CONFIG_FILE.new" -check-deployments
+cf_deployment_check "$BINARY_TMP" -config "$CONFIG_FILE.new" -check-deployments
 remove_recovery_gate
 mv "$BINARY_TMP" /usr/local/bin/configflow-agent
 mv "$CONFIG_FILE.new" "$CONFIG_FILE"
@@ -373,4 +379,6 @@ SERVICEEOF
     rc-service configflow-agent start
     rc-service configflow-agent status
 fi
-echo "Go Agent 安装成功；Mihomo/MosDNS/OxiDNS 核心继续由原服务管理器管理。"
+cf_step_done "Agent 服务已启动"
+cf_fact agent_{service_type} "{service_label} Agent：端口 {agent_port}，服务已启动"
+cf_complete "安装完成"

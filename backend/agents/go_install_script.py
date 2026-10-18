@@ -4,6 +4,7 @@ import posixpath
 import re
 import shlex
 from pathlib import Path, PurePosixPath
+from backend.agents.install_output import with_install_output
 
 
 INSTALL_GO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go.sh").read_text(encoding="utf-8")
@@ -117,6 +118,8 @@ def generate_go_agent_install_script(
         "service_type": service_type,
         "service_unit": unit,
         "agent_name": agent_name,
+        "agent_port": str(cfg["agent_port"]),
+        "service_label": {"mihomo": "Mihomo", "oxidns": "OxiDNS", "mosdns": "MosDNS"}[service_type],
         "config_json": json.dumps(cfg, ensure_ascii=True, indent=2),
         "binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
         "init_detection": _AGENT_INIT_DETECTION,
@@ -175,7 +178,7 @@ def generate_go_agent_install_script(
     script = re.sub(r"\{(" + "|".join(replacements) + r")\}", lambda match: replacements[match.group(1)], INSTALL_GO_SCRIPT_TEMPLATE)
     if install_core:
         script = script.replace("#!/bin/sh\n", f"#!/bin/sh\n{AGENT_CORE_INSTALL_INTERFACE}\n", 1)
-    return script
+    return with_install_output(script)
 
 
 def generate_go_aio_install_script(
@@ -279,7 +282,7 @@ elif command -v systemctl >/dev/null 2>&1; then
 else
     fail "需要 systemd 或 OpenRC 管理已安装的 Mihomo 和 OxiDNS。"
 fi''',
-        "installation_description": 'echo "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。"',
+        "installation_description": 'cf_ui "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。"',
         "installation_action": "安装或升级两个独立 Agent",
         "agent_arch_detection": "\n".join("        " + line for line in agent_arch_detection.splitlines()),
         "agent_install_dependencies": AGENT_INSTALL_DEPENDENCIES,
@@ -292,7 +295,7 @@ fi''',
 
         replacements.update({
             "init_detection": _CORE_INIT_DETECTION,
-            "installation_description": 'echo "安装 Mihomo 与 OxiDNS，并自动安装管理 Agent；已有核心与配置保留。"',
+            "installation_description": 'cf_ui "安装 Mihomo 与 OxiDNS，并自动安装管理 Agent；已有核心与配置保留。"',
             "installation_action": "安装 Mihomo 与 OxiDNS 以及对应 Agent",
             "core_phase_state": "CORE_PHASE_COMPLETED=false\n",
             "core_cleanup_message": '''        if [ "$CORE_PHASE_COMPLETED" = true ]; then
@@ -312,4 +315,4 @@ mkdir -p "$(dirname "$AGENT_ROOT")"
                     lambda match: replacements[match.group(1)], INSTALL_GO_AIO_SCRIPT_TEMPLATE)
     if install_core:
         script = script.replace("#!/bin/sh\n", f"#!/bin/sh\n{AGENT_CORE_INSTALL_INTERFACE}\n", 1)
-    return script
+    return with_install_output(script)
