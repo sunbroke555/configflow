@@ -144,11 +144,11 @@
               <tr v-if="entry.kind === 'group'" class="connection-group-row" :data-group-id="entry.group.id">
                 <td v-for="column in visibleColumns" :key="column.key" :data-column="column.key" :data-label="column.label" :class="{ 'cf-table__right num': column.numeric }">
                   <button v-if="column.key === 'target'" type="button" class="connection-group-label" :aria-expanded="expanded.has(entry.group.id)" :aria-label="(expanded.has(entry.group.id) ? '收起 ' : '展开 ') + entry.group.label + '（' + entry.group.members.length + ' 条连接）'" :title="groupTitle(entry.group)" @click="toggleExpanded(entry.group.id)">
-                    <ChevronDown v-if="expanded.has(entry.group.id)" class="size-3.5 shrink-0" /><ChevronRight v-else class="size-3.5 shrink-0" /><span class="truncate">{{ entry.group.label }}</span><span class="num shrink-0 text-muted-foreground">({{ entry.group.members.length }})</span>
+                    <ChevronDown v-if="expanded.has(entry.group.id)" class="size-3.5 shrink-0" /><ChevronRight v-else class="size-3.5 shrink-0" /><span class="truncate">{{ entry.group.label }}</span><span class="num shrink-0 text-muted-foreground">({{ entry.group.members.length }})</span><span class="shrink-0 text-xs text-muted-foreground">合计</span>
                   </button>
                   <span v-else class="connection-cell" :title="groupText(entry.group, column.key)">{{ groupText(entry.group, column.key) }}</span>
                 </td>
-                <td class="connection-actions cf-table__right"><span class="text-xs text-muted-foreground">汇总</span></td>
+                <td class="connection-actions cf-table__right"></td>
               </tr>
               <tr v-else-if="entry.kind === 'more'" class="connection-more-row">
                 <td :colspan="visibleColumns.length + 1"><Button variant="ghost" size="sm" @click="showMore(entry.group.id)">继续显示本组 · 剩余 {{ entry.group.members.length - memberLimit(entry.group.id) }} 条</Button></td>
@@ -165,9 +165,9 @@
                   <DropdownMenuContent align="end" class="max-w-[calc(100vw-24px)]">
                     <DropdownMenuItem class="min-h-11" :disabled="!deviceAddress(entry.row.metadata.sourceIP)" @select="noteIP = deviceAddress(entry.row.metadata.sourceIP)"><Pencil class="size-4" />编辑来源设备备注</DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem class="min-h-11" :disabled="!connectionDomains(entry.row.metadata).length" @select="openRule(entry.row, 'proxy')">加入代理规则集</DropdownMenuItem>
-                    <DropdownMenuItem class="min-h-11" :disabled="!connectionDomains(entry.row.metadata).length" @select="openRule(entry.row, 'direct')">加入直连规则集</DropdownMenuItem>
-                    <DropdownMenuLabel v-if="!connectionDomains(entry.row.metadata).length" class="max-w-64 whitespace-normal text-xs font-normal text-muted-foreground">此连接没有记录域名，不能添加到域名规则集。</DropdownMenuLabel>
+                    <DropdownMenuItem class="min-h-11" :disabled="!connectionRuleValues(entry.row.metadata).length" @select="openRule(entry.row, 'proxy')">加入代理规则集</DropdownMenuItem>
+                    <DropdownMenuItem class="min-h-11" :disabled="!connectionRuleValues(entry.row.metadata).length" @select="openRule(entry.row, 'direct')">加入直连规则集</DropdownMenuItem>
+                    <DropdownMenuLabel v-if="!connectionRuleValues(entry.row.metadata).length" class="max-w-64 whitespace-normal text-xs font-normal text-muted-foreground">此连接没有可用的域名或真实目标 IP。</DropdownMenuLabel>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <Button v-if="!entry.row.closedAt" variant="ghost" size="icon" class="connection-icon" :aria-label="`断开 ${entry.row.target}`" title="断开" @click.stop="closeOne(entry.row.id)"><X class="size-4" /></Button>
@@ -189,7 +189,7 @@
       </div>
     </div>
     <DeviceNoteDialog v-if="noteIP" :key="agentId + noteIP" :agent-id="agentId" :ip="noteIP" @close="noteIP = ''" @saved="applyNotes" />
-    <ConnectionRuleDialog v-if="ruleAction" :key="agentId" :agent-id="agentId" :domains="ruleAction.domains" :target="ruleAction.target" @close="ruleAction = null" />
+    <ConnectionRuleDialog v-if="ruleAction" :key="agentId" :agent-id="agentId" :values="ruleAction.values" :target="ruleAction.target" @close="ruleAction = null" />
     <MihomoConnectionDetail :row="selected" :source-name="selected ? sourceName(selected) : ''" @close="selectedId = ''" />
   </div>
 </template>
@@ -218,7 +218,7 @@ import MultiSelect from '@/components/common/MultiSelect.vue'
 import MihomoConnectionDetail from './MihomoConnectionDetail.vue'
 import DeviceNoteDialog from './DeviceNoteDialog.vue'
 import ConnectionRuleDialog from './ConnectionRuleDialog.vue'
-import { connectionDomains, deviceAddress, deviceNote, type DeviceNotes } from '@/lib/device-notes'
+import { connectionRuleValues, deviceAddress, deviceNote, type DeviceNotes } from '@/lib/device-notes'
 import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { formatBytes } from '@/lib/format'
@@ -250,7 +250,7 @@ const actionsWidth = computed(() => touchPointer.value ? 100 : 76)
 const notes = ref<Record<string, string>>({})
 const notesError = ref('')
 const noteIP = ref('')
-const ruleAction = ref<{ domains: string[]; target: 'proxy' | 'direct' } | null>(null)
+const ruleAction = ref<{ values: string[]; target: 'proxy' | 'direct' } | null>(null)
 const sourceName = (row: ConnectionRow) => deviceNote(notes.value, row.metadata.sourceIP)
 let notesEpoch = 0
 function applyNotes(catalog: DeviceNotes) {
@@ -269,8 +269,8 @@ async function loadNotes() {
   }
 }
 function openRule(row: ConnectionRow, target: 'proxy' | 'direct') {
-  const domains = connectionDomains(row.metadata)
-  if (domains.length) ruleAction.value = { domains, target }
+  const values = connectionRuleValues(row.metadata)
+  if (values.length) ruleAction.value = { values, target }
 }
 const snapshot = ref<MihomoConnectionsSnapshot | null>(null)
 const error = ref('')
@@ -648,6 +648,7 @@ onUnmounted(() => { notesEpoch++ })
   .connection-table td[data-column='rule'] { grid-column: 1 / -1; }
   .connection-table .connection-more-row { display: block; }
   .connection-group-label { flex-wrap: wrap; }
+  .connection-group-row td[data-column='target'] { padding-right: 0; }
   .connection-group-label .truncate { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 }
 </style>

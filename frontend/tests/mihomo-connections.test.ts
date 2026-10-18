@@ -5,7 +5,7 @@ import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { compareSources, connectionMatcher, INNER_SOURCE } from '@/types/mihomo'
 import { confirmDanger } from '@/lib/feedback'
 
-vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn() }, mihomoPanelApi: { connections: vi.fn(), closeConnection: vi.fn(), closeAllConnections: vi.fn() } }))
+vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn(), ruleTargets: vi.fn() }, mihomoPanelApi: { connections: vi.fn(), closeConnection: vi.fn(), closeAllConnections: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirmDanger: vi.fn(), notify: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
 vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 
@@ -42,6 +42,14 @@ describe('connection helpers', () => {
 })
 
 describe('mihomo connections', () => {
+  it('opens rule creation for an IP-only connection using its destination', async () => {
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([connection('ip', '', '10.0.0.3', { destinationIP: '192.0.2.8' })]))
+    vi.mocked(clientToolsApi.ruleTargets).mockResolvedValue({ data: { success: true, profile_id: 'office', profile_name: 'Office', proxy: null, direct: null, ip_rulesets: [] } } as any)
+    const { state } = await render()
+    state.openRule(state.rows[0], 'proxy'); await flushPromises()
+    expect(state.ruleAction).toEqual({ values: ['192.0.2.8'], target: 'proxy' })
+    expect(document.body.textContent).toContain('IP-CIDR,192.0.2.8/32,no-resolve')
+  })
   it('shows memory and records connections that disappear as closed', async () => {
     vi.mocked(mihomoPanelApi.connections)
       .mockResolvedValueOnce(snapshot([connection('a', 'www.example.com', '10.0.0.3'), connection('b', '223.5.5.5', '')]))

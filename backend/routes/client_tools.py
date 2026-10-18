@@ -10,6 +10,7 @@ from backend.common.device_notes import normalize_name, read_notes, set_note
 from backend.common.oxidns_device_policy import normalize_client_range
 from backend.common.oxidns_settings import OxidnsSettingsError
 from backend.utils import domain_discovery_service as discovery
+from backend.utils import connection_rules
 
 
 def bound_profile(agent_id, services):
@@ -69,6 +70,7 @@ def rule_targets(agent_id):
     config = get_config(profile_id)
     settings = discovery.read_settings(config)
     return response({'profile_id': profile_id, 'profile_name': profile_label(profile_id),
+                     'ip_rulesets': connection_rules.ip_rule_targets(config),
                      **{target: discovery.ruleset_info(config, settings[target + '_ruleset'])
                         for target in ('direct', 'proxy')}})
 
@@ -83,7 +85,11 @@ def connection_rule(agent_id):
     if body['profile_id'] != profile_id:
         raise ProfileInUse('设备绑定的配置空间已改变，请重新打开后再保存。')
     if body['target'] not in ('direct', 'proxy') or not isinstance(body['ruleset_id'], str) or not body['ruleset_id']:
-        raise ProfileValidationError('请选择域名发现中已设置的默认规则集。')
+        raise ProfileValidationError('请选择有效的规则集和代理或直连目标。')
+    if body['rule_type'] in ('IP-CIDR', 'IP-CIDR6'):
+        return response(connection_rules.apply_ip(
+            profile_id, body['ruleset_id'], body['target'], body['value'], body['rule_type'],
+            before_write=lambda: check_binding(agent_id, profile_id, ('mihomo',))))
     entries = discovery.parse_apply_items([{key: body[key] for key in ('target', 'value', 'rule_type')}])
 
     def guard(infos=None):
