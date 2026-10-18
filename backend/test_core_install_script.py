@@ -191,7 +191,10 @@ for executable in (Path(os.environ['FIXTURE']) / 'unavailable-commands').iterdir
     unavailable.mkdir()
     for name in missing_commands:
         (commands / name).rename(unavailable / name)
-    env = dict(os.environ, PATH=str(commands), EVENTS=str(events), FIXTURE=str(tmp_path), ROOT=str(root), **options)
+    env = dict(os.environ)
+    # CI may export this globally; tests must observe what the installer sets.
+    env.pop("DEBIAN_FRONTEND", None)
+    env.update(PATH=str(commands), EVENTS=str(events), FIXTURE=str(tmp_path), ROOT=str(root), **options)
     return installer, env, root, events
 
 
