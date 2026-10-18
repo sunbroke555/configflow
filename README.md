@@ -228,7 +228,7 @@ config-flow/
 
 ## 📄 许可证
 
-本项目基于 [MIT License](LICENSE) 开源
+主应用基于 [MIT License](LICENSE) 开源。独立节点测速组件复用 Mihomo 协议实现，按 [GPLv3](backend/node-probe/LICENSE) 分发，部署与配置见[节点库代理延迟](docs/NODE_LATENCY.md)。
 
 ---
 

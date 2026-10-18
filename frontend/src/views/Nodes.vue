@@ -21,9 +21,9 @@
           <Plus class="size-4" />
           添加节点
         </Button>
-        <Button class="shadow-glow" :disabled="testing || reorder.active.value" @click="speedTest">
+        <Button class="shadow-glow" title="从 ConfigFlow 所在机器，经节点访问测试地址" :disabled="testing || reorder.active.value" @click="speedTest">
           <Zap :class="cn('size-4', testing && 'animate-pulse')" />
-          {{ testing ? '测速中…' : '全部测速' }}
+          {{ testing ? `正在测速… ${completedTests}/${totalTests}` : '全部测速' }}
         </Button>
       </template>
     </PageHeader>
@@ -123,7 +123,7 @@
           <TableHead>名称</TableHead>
           <TableHead class="w-28">协议</TableHead>
           <TableHead>地址</TableHead>
-          <TableHead class="w-24 text-right">延迟</TableHead>
+          <TableHead class="w-24 text-right">代理延迟</TableHead>
           <TableHead class="w-40">来源</TableHead>
           <TableHead class="w-40 text-right">操作</TableHead>
         </TableRow>
@@ -181,9 +181,9 @@
             :title="testedAtLabel(node.name)"
           >
             <Loader2 v-if="testingNames.has(node.name)" class="ml-auto size-3.5 animate-spin text-muted-foreground" />
-            <span v-else-if="unresolvedNames.has(node.name)" class="text-muted-foreground" title="无法从节点字符串解析出地址和端口">无法解析</span>
+            <span v-else-if="unresolvedNames.has(node.name)" class="text-muted-foreground" title="节点已删除或停用，请刷新后重试">不可用</span>
             <span v-else-if="latencyOf(node.name) === undefined" class="text-muted-foreground">未测速</span>
-            <template v-else-if="latencyOf(node.name) === null">超时</template>
+            <template v-else-if="latencyOf(node.name) === null">{{ failureLabel(node.name) }}</template>
             <template v-else>{{ latencyOf(node.name) }}<small class="ml-0.5 text-[10.5px] text-muted-foreground">ms</small></template>
           </TableCell>
           <TableCell class="truncate text-[12.5px] text-muted-foreground">
@@ -358,10 +358,10 @@
         </header>
 
         <div class="cf-reorder-mute mt-3 flex items-end justify-between gap-2">
-          <span :class="cn('font-display text-[26px] leading-none font-medium tracking-[-0.02em]', latencyTone(node.name))">
-            <template v-if="unresolvedNames.has(node.name)"><span class="text-[18px] text-muted-foreground" title="无法从节点字符串解析出地址和端口">无法解析</span></template>
+          <span :title="testedAtLabel(node.name)" :class="cn('font-display text-[26px] leading-none font-medium tracking-[-0.02em]', latencyTone(node.name))">
+            <template v-if="unresolvedNames.has(node.name)"><span class="text-[18px] text-muted-foreground" title="节点已删除或停用，请刷新后重试">不可用</span></template>
             <template v-else-if="latencyOf(node.name) === undefined"><span class="text-[18px] text-muted-foreground">未测速</span></template>
-            <template v-else-if="latencyOf(node.name) === null">超时</template>
+            <template v-else-if="latencyOf(node.name) === null">{{ failureLabel(node.name) }}</template>
             <template v-else>{{ latencyOf(node.name) }}<small class="ml-0.5 font-mono text-[10.5px] text-muted-foreground">ms</small></template>
           </span>
           <span class="min-w-0 text-right font-mono text-[10.5px] leading-snug text-muted-foreground">
@@ -370,7 +370,10 @@
           </span>
         </div>
 
-        <!-- 最近 14 次延迟：越快越高；超时画一截红色短柱 -->
+        <p v-if="latencyMap[node.name]?.error" class="mt-2 break-words text-xs text-destructive-accent">
+          {{ latencyMap[node.name]?.error }}
+        </p>
+        <!-- 最近 14 次代理延迟；失败画一截红色短柱 -->
         <div class="cf-reorder-mute mt-2 flex h-4 items-end gap-0.5" aria-hidden="true">
           <i
             v-for="(bar, i) in historyBars(node.name)"
@@ -1328,25 +1331,40 @@ const regionOptions = computed(() => {
   )
 })
 
-/* ---------- 延迟（服务端 TCP 握手，按节点名） ---------- */
+/* ---------- 代理延迟（独立组件经节点访问测试地址，按节点名） ---------- */
 interface LatencyRecord {
   latency: number | null
   tested_at?: string
   history?: Array<number | null>
+  error?: string
+  error_code?: string
+  url?: string
+  first_latency?: number
+  unified_delay?: boolean
 }
 const router = useRouter()
 const latencyMap = ref<Record<string, LatencyRecord>>({})
 const testing = ref(false)
+const completedTests = ref(0)
+const totalTests = ref(0)
+let latencyDisposed = false
 const testingNames = ref<Set<string>>(new Set())
 const flashNames = ref<Set<string>>(new Set())
-/** 最近一次测速中服务端解析不出 server:port 的节点 */
+/** 测试期间已删除或停用的节点 */
 const unresolvedNames = ref<Set<string>>(new Set())
 const viewingNode = ref<any>(null)
 
 const latencyOf = (name: string): number | null | undefined => latencyMap.value[name]?.latency
+const failureLabel = (name: string): string => latencyMap.value[name]?.error_code === 'timeout' ? '超时' : '失败'
 const testedAtLabel = (name: string): string | undefined => {
-  const at = latencyMap.value[name]?.tested_at
-  return at ? `测于 ${new Date(at).toLocaleString()}` : undefined
+  const entry = latencyMap.value[name]
+  if (!entry) return undefined
+  return [
+    entry.error,
+    entry.url && `ConfigFlow → 节点 → ${entry.url}`,
+    entry.first_latency != null && `首连 ${entry.first_latency}ms${entry.unified_delay ? ' · 当前显示统一延迟' : ''}`,
+    entry.tested_at && `测于 ${new Date(entry.tested_at).toLocaleString()}`,
+  ].filter(Boolean).join('\n')
 }
 const latencyTone = (name: string): string => {
   const v = latencyOf(name)
@@ -1370,61 +1388,46 @@ const loadLatency = async () => {
   }
 }
 
-/** 测速：请求一次拿到全部结果，再按网格距离从左上角波纹式逐个揭晓 */
+/** 每批五个，收到结果即展示；避免大批请求超时和虚假的揭晓进度。 */
 const runLatency = async (targets: any[]) => {
-  const names = targets.filter(n => n.enabled !== false).map(n => n.name)
+  const names = [...new Set<string>(targets.filter(n => n.enabled !== false).map(n => n.name))]
   if (!names.length || testing.value) return
   testing.value = true
+  completedTests.value = 0
+  totalTests.value = names.length
   testingNames.value = new Set(names)
+  const results: Record<string, LatencyRecord> = {}
+  const missing: string[] = []
   try {
-    const { data } = await nodeApi.testLatency(names)
-    const results: Record<string, LatencyRecord> = data?.results || {}
-    const missing: string[] = data?.missing || []
-    const unresolved = new Set(unresolvedNames.value)
-    names.forEach(name => unresolved.delete(name))
-    missing.forEach(name => unresolved.add(name))
-    unresolvedNames.value = unresolved
-    const grid = nodesContainer.value
-    const cols = Math.max(1, Math.round((grid?.clientWidth || 222) / 222))
-    const order = tileNodes.value.map(n => n.name)
-    await Promise.all(
-      names.map(
-        name =>
-          new Promise<void>(resolve => {
-            const i = Math.max(0, order.indexOf(name))
-            // 表格按行依次揭晓（封顶避免长列表等太久）；磁贴按网格距离波纹式揭晓
-            const delay = effectiveView.value === 'list'
-              ? 120 + Math.min(i, 20) * 60
-              : 120 + Math.hypot(Math.floor(i / cols), i % cols) * 110
-            window.setTimeout(() => {
-              if (results[name]) latencyMap.value = { ...latencyMap.value, [name]: results[name] }
-              const nextTesting = new Set(testingNames.value)
-              nextTesting.delete(name)
-              testingNames.value = nextTesting
-              flashNames.value = new Set([...flashNames.value, name])
-              window.setTimeout(() => {
-                const nextFlash = new Set(flashNames.value)
-                nextFlash.delete(name)
-                flashNames.value = nextFlash
-              }, 900)
-              resolve()
-            }, delay)
-          })
-      )
-    )
+    for (let offset = 0; offset < names.length; offset += 5) {
+      if (latencyDisposed) return
+      const batch = names.slice(offset, offset + 5)
+      const { data } = await nodeApi.testLatency(batch)
+      if (latencyDisposed) return
+      Object.assign(results, data?.results || {})
+      latencyMap.value = { ...latencyMap.value, ...data?.results }
+      missing.push(...(data?.missing || []))
+      const unresolved = new Set(unresolvedNames.value)
+      batch.forEach(name => unresolved.delete(name))
+      ;(data?.missing || []).forEach((name: string) => unresolved.add(name))
+      unresolvedNames.value = unresolved
+      completedTests.value += batch.length
+      testingNames.value = new Set(names.slice(offset + batch.length))
+    }
     const measured = Object.entries(results).filter(([, r]) => r.latency !== null)
-    const timeouts = Object.keys(results).length - measured.length
+    const failed = Object.keys(results).length - measured.length
     const best = measured.sort((a, b) => (a[1].latency as number) - (b[1].latency as number))[0]
     if (best) {
       notify.success(
         `测速完成 · 最快 ${best[0]} ${best[1].latency}ms`,
-        [timeouts && `${timeouts} 个超时`, missing.length && `${missing.length} 个无法解析地址`].filter(Boolean).join('，') || undefined
+        [failed && `${failed} 个失败`, missing.length && `${missing.length} 个已删除或停用`].filter(Boolean).join('，') || undefined
       )
     } else {
-      notify.warning('测速完成，没有节点可达', missing.length ? `${missing.length} 个无法解析地址` : undefined)
+      const reason = names.length === 1 ? results[names[0] ?? '']?.error : undefined
+      notify.warning('测速完成，没有节点通过测试', reason || (missing.length ? `${missing.length} 个已删除或停用` : '可在节点上查看失败原因'))
     }
   } catch (error: any) {
-    notify.error(error.response?.data?.message || '测速失败')
+    if (!latencyDisposed) notify.error(error.response?.data?.message || '测速失败', completedTests.value ? `已完成 ${completedTests.value}/${totalTests.value}，结果已保留` : undefined)
   } finally {
     testing.value = false
     testingNames.value = new Set()
@@ -1507,6 +1510,7 @@ watch(
 )
 
 onUnmounted(() => {
+  latencyDisposed = true
   window.removeEventListener('resize', syncNarrow)
 })
 </script>

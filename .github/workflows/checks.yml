@@ -54,3 +54,17 @@ jobs:
           go-version-file: backend/agents/go-agent/go.mod
           cache-dependency-path: backend/agents/go-agent/go.sum
       - run: go test ./...
+
+  node-probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/node-probe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/node-probe/go.mod
+          cache-dependency-path: backend/node-probe/go.sum
+      - run: go test -race ./...
+      - run: CGO_ENABLED=0 go build -trimpath -o configflow-node-probe .

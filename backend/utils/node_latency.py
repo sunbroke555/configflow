@@ -1,14 +1,19 @@
-"""节点延迟测试
+"""Real proxy latency through an independent, on-demand worker.
 
-从 ConfigFlow 服务端对节点的 server:port 发起 TCP 握手计时。
-测的是「服务端 → 节点入口」的连通与握手延迟，不经过代理协议本身，
-用于快速发现失联节点与粗排延迟；节点与订阅是共享资源，结果也全局保存最近若干次历史。
+The worker uses complete node credentials, never the running Mihomo controller.
+Legacy TCP results are excluded from proxy-latency history.
 """
-import socket
-import time
+import json
+import os
+import shutil
+import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional
+from urllib.parse import urlsplit
 
 from backend.common.config import get_repository, get_shared_config
 from backend.common.config_repository import ProfileRepositoryError
@@ -17,133 +22,186 @@ from backend.utils.subscription_cache import load_subscription_cache
 from backend.utils.subscription_filter import filter_subscription_items
 
 logger = get_logger(__name__)
-
 LATENCY_FILE = 'node_latency.json'
+METHOD = 'proxy_http_v1'
 HISTORY_SIZE = 14
-CONNECT_TIMEOUT = 3.0
-MAX_WORKERS = 32
-MAX_NODES = 500
+MAX_WORKERS = 5
+MAX_NODES = 20  # The UI sends batches of five, below ordinary HTTP timeouts.
+_test_lock = threading.Lock()
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+class ProbeUnavailable(RuntimeError):
+    pass
 
 
-def _endpoint_from_proxy_string(proxy_string: str) -> Optional[Tuple[str, int]]:
-    """从节点字符串解析 server/port，只用本地解析，不请求 Sub-Store。"""
-    if not proxy_string:
-        return None
+class ProbeBusy(RuntimeError):
+    pass
+
+
+def settings() -> Dict[str, Any]:
+    url = os.environ.get('CONFIGFLOW_NODE_TEST_URL', 'https://www.gstatic.com/generate_204').strip()
     try:
-        from backend.utils.subscription_parser import parse_uri_list
-
-        parsed = parse_uri_list(proxy_string)
-        if parsed:
-            item = parsed[0]
-            server, port = item.get('server'), item.get('port')
-            if server and port:
-                return str(server), int(port)
-    except Exception as exc:  # 解析器对异常格式会抛各种错误，逐个节点隔离
-        logger.debug('解析节点字符串失败: %s', exc)
-    try:
-        from backend.converters.mihomo import _parse_structured_proxy_string
-
-        structured = _parse_structured_proxy_string(proxy_string)
-        if structured and structured.get('server') and structured.get('port'):
-            return str(structured['server']), int(structured['port'])
-    except Exception as exc:
-        logger.debug('解析结构化节点失败: %s', exc)
-    return None
+        parsed = urlsplit(url)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError
+        _ = parsed.port
+        timeout = int(os.environ.get('CONFIGFLOW_NODE_TEST_TIMEOUT_MS', '5000'))
+        if not 500 <= timeout <= 10000:
+            raise ValueError
+    except ValueError as exc:
+        raise ProbeUnavailable('节点测速设置无效，请检查测试地址及超时（500–10000 毫秒）') from exc
+    return {'url': url, 'timeout_ms': timeout,
+            'unified_delay': os.environ.get('CONFIGFLOW_NODE_TEST_UNIFIED_DELAY', '1').lower() not in ('0', 'false')}
 
 
-def _endpoint_of(node: Dict[str, Any]) -> Optional[Tuple[str, int]]:
-    server, port = node.get('server'), node.get('port')
-    if server and port:
-        try:
-            return str(server), int(port)
-        except (TypeError, ValueError):
-            return None
-    return _endpoint_from_proxy_string(node.get('proxy_string') or '')
-
-
-def collect_candidates() -> Dict[str, Tuple[str, int]]:
-    """节点名 → (server, port)。节点库优先，其次是已启用订阅的缓存节点。"""
+def collect_candidates() -> Dict[str, Dict[str, Any]]:
+    """Preserve credentials and transport options; manual nodes win name collisions."""
     config = get_shared_config()
-    candidates: Dict[str, Tuple[str, int]] = {}
+    candidates = {}
+
+    def add(node):
+        if isinstance(node, dict) and node.get('enabled') is not False and node.get('name'):
+            candidates.setdefault(node['name'], node)
 
     for node in config.get('nodes', []):
-        if node.get('enabled') is False or not node.get('name'):
-            continue
-        endpoint = _endpoint_of(node)
-        if endpoint:
-            candidates.setdefault(node['name'], endpoint)
-
+        add(node)
     for sub in config.get('subscriptions', []):
         if sub.get('enabled') is False:
             continue
         cache = load_subscription_cache(sub.get('id', '')) or {}
         for node in filter_subscription_items(sub, cache.get('nodes', []) or []):
-            if not isinstance(node, dict) or not node.get('name'):
-                continue
-            endpoint = _endpoint_of(node)
-            if endpoint:
-                candidates.setdefault(node['name'], endpoint)
-
+            add(node)
     return candidates
 
 
-def tcp_latency(server: str, port: int, timeout: float = CONNECT_TIMEOUT) -> Optional[int]:
-    """TCP 握手耗时（毫秒），失败或超时返回 None。"""
-    started = time.perf_counter()
+def _proxy_of(node):
+    from backend.converters.mihomo import convert_node_to_mihomo
+    from backend.utils.proxy_utils import fix_proxy_fields
+
     try:
-        with socket.create_connection((server, port), timeout=timeout):
-            return max(1, round((time.perf_counter() - started) * 1000))
-    except (OSError, ValueError):
+        node = deepcopy(node)
+        if node.get('proxy_string') or 'params' in node:
+            proxy = convert_node_to_mihomo(node)
+        else:
+            proxy = node
+            fix_proxy_fields(proxy)
+        if not isinstance(proxy, dict) or not proxy.get('type'):
+            return None
+        proxy['name'] = node['name']
+        return proxy
+    except Exception:  # A malformed node must not prevent testing the others.
         return None
+
+
+def _probe_binary() -> str:
+    configured = os.environ.get('CONFIGFLOW_NODE_PROBE_BIN')
+    local = Path(__file__).resolve().parents[1] / 'node-probe' / 'configflow-node-probe'
+    paths = [configured] if configured else [
+        '/opt/configflow/node-probe/configflow-node-probe', str(local),
+        shutil.which('configflow-node-probe'),
+    ]
+    for path in paths:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return str(path)
+    raise ProbeUnavailable('独立测速组件未安装，请更新 ConfigFlow 镜像；源码部署请先构建 backend/node-probe')
+
+
+def _run_probe(proxies, options):
+    binary = _probe_binary()
+    payload = json.dumps({**options, 'nodes': proxies}, ensure_ascii=False)
+    if len(payload.encode()) > 8 * 1024 * 1024:
+        raise ValueError('本批节点配置过大，请减少每批节点数')
+    env = dict(os.environ)
+    env.setdefault('GOMAXPROCS', '2')
+    env.setdefault('GOMEMLIMIT', '128MiB')
+    budget = ((len(proxies) + MAX_WORKERS - 1) // MAX_WORKERS) * options['timeout_ms'] / 1000 + 5
+    try:
+        process = subprocess.run([binary], input=payload, capture_output=True, text=True,
+                                 timeout=budget, env=env)
+    except subprocess.TimeoutExpired as exc:
+        raise ProbeUnavailable('测速组件执行超时，已结束本批测试，请重试') from exc
+    except OSError as exc:
+        raise ProbeUnavailable('测速组件无法启动，请检查可执行权限和 CPU 架构') from exc
+    # Do not expose worker stderr or the input (both may contain node credentials).
+    if process.returncode:
+        raise ProbeUnavailable('测速组件异常退出，请检查组件版本后重试')
+    try:
+        response = json.loads(process.stdout)
+        if response['version'] != 1 or not isinstance(response['results'], list):
+            raise ValueError
+        results = {entry['name']: entry for entry in response['results']}
+        if set(results) != {proxy['name'] for proxy in proxies}:
+            raise ValueError
+        for entry in results.values():
+            latency = entry['latency']
+            if latency is not None and (type(latency) is not int or latency < 1):
+                raise ValueError
+            if latency is None and not entry.get('error'):
+                raise ValueError
+        return results
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ProbeUnavailable('测速组件返回了无效结果，请检查组件版本') from exc
 
 
 def load_results() -> Dict[str, Any]:
     try:
         data = get_repository().read_shared_json(LATENCY_FILE)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        return {name: entry for name, entry in data.items()
+                if isinstance(entry, dict) and entry.get('method') == METHOD}
     except (OSError, ValueError, ProfileRepositoryError):
         return {}
 
 
-def _save_results(results: Dict[str, Any]) -> None:
+def _save_results(results):
     try:
         get_repository().write_shared_json(LATENCY_FILE, results)
-    except (OSError, ProfileRepositoryError) as exc:
-        logger.error('写入节点延迟结果失败: %s', exc)
+    except (OSError, ProfileRepositoryError):
+        logger.error('写入节点延迟结果失败')
 
 
 def run_tests(names: Optional[Iterable[str]] = None) -> Dict[str, Any]:
-    """测试指定节点（为空则全部候选），合并进历史并返回本次结果。"""
+    if not _test_lock.acquire(blocking=False):
+        raise ProbeBusy('已有节点测速正在进行，请稍后重试')
+    try:
+        return _run_tests(names)
+    finally:
+        _test_lock.release()
+
+
+def _run_tests(names):
     candidates = collect_candidates()
-    wanted: List[str] = list(candidates) if names is None else [n for n in names if n in candidates]
-    wanted = wanted[:MAX_NODES]
-
-    measured: Dict[str, Optional[int]] = {}
+    requested = list(dict.fromkeys(candidates if names is None else names))
+    if len(requested) > MAX_NODES:
+        raise ValueError(f'单次最多测试 {MAX_NODES} 个节点，请分批测试')
+    wanted = [name for name in requested if name in candidates]
+    options = settings()
+    measured = {}
     if wanted:
+        _probe_binary()  # Fail before conversion if the component is missing.
         with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(wanted))) as pool:
-            for name, ms in zip(wanted, pool.map(lambda n: tcp_latency(*candidates[n]), wanted)):
-                measured[name] = ms
+            converted = list(pool.map(lambda name: _proxy_of(candidates[name]), wanted))
+        proxies = []
+        for name, proxy in zip(wanted, converted):
+            if proxy:
+                proxies.append(proxy)
+            else:
+                measured[name] = {'latency': None, 'error_code': 'config',
+                                  'error': '无法解析完整节点配置，请检查格式或 Sub-Store 服务'}
+        if proxies:
+            measured.update(_run_probe(proxies, options))
 
-    stamp = _now()
+    stamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     stored = load_results()
-    for name, ms in measured.items():
-        entry = stored.get(name) if isinstance(stored.get(name), dict) else {}
-        history = list(entry.get('history') or [])[-(HISTORY_SIZE - 1):]
-        history.append(ms)
-        stored[name] = {'latency': ms, 'tested_at': stamp, 'history': history}
-
-    # 已不存在的节点不再保留历史
-    for name in list(stored):
-        if name not in candidates:
-            stored.pop(name, None)
-
+    for name, measurement in measured.items():
+        entry = stored.get(name, {})
+        same_test = entry.get('url') == options['url'] and entry.get('unified_delay') == options['unified_delay']
+        history = list(entry.get('history') or [])[-(HISTORY_SIZE - 1):] if same_test else []
+        history.append(measurement['latency'])
+        stored[name] = {key: value for key, value in measurement.items() if key != 'name'}
+        stored[name].update(method=METHOD, tested_at=stamp, history=history, **options)
+    stored = {name: entry for name, entry in stored.items() if name in candidates}
     _save_results(stored)
-    return {
-        'tested_at': stamp,
-        'results': {name: stored[name] for name in measured},
-        'missing': [n for n in (names or []) if n not in candidates],
-    }
+    return {'tested_at': stamp, 'results': {name: stored[name] for name in measured},
+            'missing': [name for name in requested if name not in candidates], 'settings': options}

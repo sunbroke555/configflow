@@ -116,18 +116,29 @@ def reorder_nodes():
 @nodes_bp.route('/latency', methods=['GET', 'POST'])
 @require_auth
 def node_latency():
-    """节点延迟：GET 取最近结果，POST 发起测试（body.names 为空则测全部候选节点）"""
-    from backend.utils.node_latency import load_results, run_tests
+    """代理延迟：GET 取最近结果，POST 分批测试完整节点配置。"""
+    from backend.utils.node_latency import load_results, run_tests, ProbeBusy, ProbeUnavailable
 
     if request.method == 'GET':
         return jsonify({'success': True, 'results': load_results()})
 
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({'success': False, 'message': '请求必须是 JSON 对象'}), 400
     names = payload.get('names')
     if names is not None and (
         not isinstance(names, list) or not all(isinstance(n, str) for n in names)
     ):
         return jsonify({'success': False, 'message': 'names 必须是字符串数组'}), 400
 
-    outcome = run_tests(names)
+    try:
+        outcome = run_tests(names)
+    except ProbeBusy as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 409
+    except ProbeUnavailable as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 503
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
     return jsonify({'success': True, **outcome})

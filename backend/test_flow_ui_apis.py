@@ -1,6 +1,4 @@
 """新版界面依赖的后端接口：节点延迟、订阅健康与流量、规则命中定位、统计历史、配置修订号。"""
-import socket
-import threading
 
 from flask import Flask
 
@@ -17,68 +15,39 @@ def make_client(repository):
     return app.test_client()
 
 
-def _listening_port():
-    """本机起一个只接受连接的 TCP 端口，供延迟测试命中。"""
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("127.0.0.1", 0))
-    server.listen(16)
-    stop = threading.Event()
+def test_node_latency_preserves_full_proxy_config_and_results(tmp_path, monkeypatch):
+    repository = ProfileRepository(tmp_path)
+    repository.save_shared({"nodes": [
+        {"id": "n1", "name": "香港 01", "proxy_string":
+         '{"type":"trojan","server":"127.0.0.1","port":443,"password":"secret","sni":"test.example"}'},
+        {"id": "n2", "name": "失联节点", "type": "ss", "server": "127.0.0.1", "port": 1,
+         "params": {"cipher": "aes-128-gcm", "password": "secret2"}},
+        {"id": "n3", "name": "停用节点", "enabled": False, "proxy_string": "ss://invalid"},
+    ]})
+    client = make_client(repository)
+    monkeypatch.setattr(node_latency, '_probe_binary', lambda: '/unused/test-probe')
 
-    def accept_loop():
-        server.settimeout(0.2)
-        while not stop.is_set():
-            try:
-                conn, _ = server.accept()
-                conn.close()
-            except OSError:
-                continue
+    def probe(proxies, options):
+        assert options['url'].startswith('https://')
+        assert options['unified_delay'] is True
+        assert proxies[0]['password'] == 'secret'
+        assert proxies[0]['sni'] == 'test.example'
+        return {proxy['name']: {'latency': 88} if proxy['name'] == '香港 01' else
+                {'latency': None, 'error': '连接或请求超时', 'error_code': 'timeout'} for proxy in proxies}
 
-    thread = threading.Thread(target=accept_loop, daemon=True)
-    thread.start()
-    return server.getsockname()[1], lambda: (stop.set(), server.close())
-
-
-def _closed_port():
-    probe = socket.socket()
-    probe.bind(("127.0.0.1", 0))
-    port = probe.getsockname()[1]
-    probe.close()
-    return port
-
-
-def test_node_latency_measures_reachable_and_marks_unreachable(tmp_path):
-    port, shutdown = _listening_port()
-    try:
-        repository = ProfileRepository(tmp_path)
-        repository.save_shared({
-            "nodes": [
-                {"id": "n1", "name": "香港 01", "enabled": True,
-                 "proxy_string": "{\"name\": \"香港 01\", \"type\": \"ss\", \"server\": \"127.0.0.1\", "
-                                 f"\"port\": {port}, \"cipher\": \"aes-128-gcm\", \"password\": \"x\"}}"},
-                {"id": "n2", "name": "失联节点", "enabled": True,
-                 "proxy_string": "{\"name\": \"失联节点\", \"type\": \"ss\", \"server\": \"127.0.0.1\", "
-                                 f"\"port\": {_closed_port()}, \"cipher\": \"aes-128-gcm\", \"password\": \"x\"}}"},
-                {"id": "n3", "name": "停用节点", "enabled": False, "proxy_string": "ss://invalid"},
-            ]
-        })
-        client = make_client(repository)
-
-        response = client.post("/api/nodes/latency", json={})
-        body = response.get_json()
-
-        assert response.status_code == 200
-        assert set(body["results"]) == {"香港 01", "失联节点"}
-        assert isinstance(body["results"]["香港 01"]["latency"], int)
-        assert body["results"]["失联节点"]["latency"] is None
-
-        # 第二次测试追加历史，GET 返回落盘结果
-        client.post("/api/nodes/latency", json={"names": ["香港 01"]})
-        stored = client.get("/api/nodes/latency").get_json()["results"]
-        assert len(stored["香港 01"]["history"]) == 2
-        assert len(stored["失联节点"]["history"]) == 1
-    finally:
-        shutdown()
+    monkeypatch.setattr(node_latency, '_run_probe', probe)
+    response = client.post('/api/nodes/latency', json={})
+    body = response.get_json()
+    assert response.status_code == 200
+    assert set(body['results']) == {'香港 01', '失联节点'}
+    assert body['results']['香港 01']['latency'] == 88
+    assert body['results']['失联节点']['latency'] is None
+    assert body['results']['失联节点']['error_code'] == 'timeout'
+    assert b'secret' not in response.data
+    client.post('/api/nodes/latency', json={'names': ['香港 01']})
+    stored = client.get('/api/nodes/latency').get_json()['results']
+    assert len(stored['香港 01']['history']) == 2
+    assert len(stored['失联节点']['history']) == 1
 
 
 def test_node_latency_rejects_bad_names(tmp_path):
@@ -93,7 +62,10 @@ def test_node_latency_history_is_bounded(tmp_path, monkeypatch):
          "proxy_string": "{\"name\": \"A\", \"type\": \"ss\", \"server\": \"127.0.0.1\", \"port\": 1}"},
     ]})
     make_client(repository)
-    monkeypatch.setattr(node_latency, "tcp_latency", lambda server, port, timeout=0: 42)
+    monkeypatch.setattr(node_latency, '_probe_binary', lambda: '/unused/test-probe')
+    monkeypatch.setattr(node_latency, '_run_probe', lambda proxies, options: {
+        proxy['name']: {'latency': 42} for proxy in proxies
+    })
     for _ in range(node_latency.HISTORY_SIZE + 5):
         node_latency.run_tests()
     assert len(node_latency.load_results()["A"]["history"]) == node_latency.HISTORY_SIZE

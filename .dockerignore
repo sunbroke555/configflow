@@ -33,6 +33,7 @@ yarn-error.log*
 # Build outputs
 frontend/dist/
 backend/static/*
+backend/node-probe/configflow-node-probe
 !backend/static/agents/
 
 # Config and data files (will be created at runtime)
