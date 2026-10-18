@@ -129,15 +129,15 @@
       </button>
     </div>
 
-    <div class="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] items-start gap-3.5 max-[1180px]:grid-cols-[minmax(0,1fr)]">
+    <div class="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] items-stretch gap-3.5 max-[1180px]:grid-cols-[minmax(0,1fr)]">
       <!-- 事件流：系统日志实时尾随，新事件从顶部进入 -->
-      <SectionCard :padded="false" role="region" aria-label="事件流">
+      <SectionCard :padded="false" class="flex min-w-0 flex-col" role="region" aria-label="事件流">
         <header class="flex items-center gap-2.5 px-[18px] pt-4">
           <span class="live-dot" aria-hidden="true" />
-          <h2 class="m-0 text-[13.5px] font-semibold">事件流</h2>
+          <h2 class="m-0 flex min-h-7 items-center text-[13.5px] font-semibold">事件流</h2>
           <span class="ml-auto font-mono text-[12px] text-muted-foreground">{{ events.length }} 条</span>
         </header>
-        <div class="event-stream mt-2.5 h-[360px] overflow-hidden">
+        <div class="event-stream mt-2.5 h-[360px] grow overflow-hidden">
           <p v-if="!events.length" class="px-[18px] py-10 text-center text-[13px] text-muted-foreground">
             {{ eventsLoaded ? '还没有日志事件' : '正在读取日志…' }}
           </p>
@@ -169,7 +169,7 @@
       </SectionCard>
 
       <!-- 订阅健康：每个订阅最近 24 次拉取，柱高为节点数，颜色为结果 -->
-      <SectionCard :padded="false" role="region" aria-label="订阅健康">
+      <SectionCard :padded="false" class="flex min-w-0 flex-col" role="region" aria-label="订阅健康">
         <header class="flex items-center gap-2.5 px-[18px] pt-4">
           <h2 class="m-0 text-[13.5px] font-semibold">订阅健康 · 近 {{ HEALTH_SIZE }} 次拉取</h2>
           <Button
@@ -183,7 +183,7 @@
             <RefreshCw class="size-3.5" :class="healthLoading && 'animate-spin'" />
           </Button>
         </header>
-        <div class="px-[18px] pt-3.5 pb-[18px]">
+        <div class="flex flex-1 flex-col px-[18px] pt-3.5 pb-[18px]">
           <p v-if="!healthRows.length" class="py-6 text-center text-[13px] text-muted-foreground">还没有订阅</p>
           <div
             v-for="row in healthRows"
@@ -209,7 +209,7 @@
             </div>
           </div>
 
-          <div class="mt-3.5 grid grid-cols-2 gap-2">
+          <div class="mt-auto grid grid-cols-2 gap-2 pt-3.5">
             <button
               v-for="action in QUICK_ACTIONS"
               :key="action.id"
