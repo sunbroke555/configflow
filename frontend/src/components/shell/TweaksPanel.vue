@@ -78,6 +78,9 @@
             :options="[{ value: 'on', label: '流动' }, { value: 'off', label: '静止' }]"
             @update:model-value="v => (prefs.motion = v === 'on')"
           />
+          <p class="m-0 text-xs leading-relaxed text-muted-foreground">
+            {{ reduceMotion ? '系统已开启减少动态效果，加载状态仍会显示。' : '静止模式下，加载圈仍会转动。' }}
+          </p>
         </div>
 
         <div class="grid gap-1.5">
@@ -97,6 +100,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { SlidersHorizontal, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -105,6 +109,7 @@ import { usePreferences, type AccentName } from '@/stores/preferences'
 import { useThemeStore, type ThemePreference } from '@/stores/theme'
 
 const open = ref(false)
+const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
 
 const { prefs } = usePreferences()
 const { preference, setTheme: applyTheme } = useThemeStore()

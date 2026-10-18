@@ -593,7 +593,7 @@
   }
 }
 
-/* Tweaks：关闭动效时让 CSS 动画瞬间播完；关闭纹理时去掉颗粒与点阵。
+/* Tweaks：关闭装饰动效时让 CSS 动画瞬间播完；关闭纹理时去掉颗粒与点阵。
    不能用 animation-play-state: paused —— 弹层的进出场动画会停在首帧，
    reka-ui 等不到 animationend，菜单关不掉、对话框透明且整页无法点击。 */
 :root[data-motion='off'] *,
@@ -602,6 +602,15 @@
   animation-delay: 0s !important;
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
+}
+
+/* 加载圈表达正在处理，静止模式仍保留；系统减少动效时不启用此例外。
+   animate-spin 仅用于加载反馈，自定义加载动画用 cf-loading-spin 标记。 */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-motion='off'] :is(.animate-spin, .cf-loading-spin) {
+    animation-duration: var(--cf-loading-spin-duration, 1s) !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 :root[data-texture='off'] .paper-grain,
