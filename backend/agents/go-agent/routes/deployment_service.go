@@ -19,7 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var mihomoGeoAssets = []string{"Country.mmdb", "GeoIP.dat", "GeoSite.dat", "geoip.metadb", "geosite.dat", "geoip.dat", "ASN.mmdb"}
+var mihomoGeoAssets = []string{"Country.mmdb", "GeoIP.dat", "GeoSite.dat", "geoip.metadb", "geoip.db", "geosite.dat", "geoip.dat", "ASN.mmdb"}
 
 var errServiceTransition = errors.New("service startup or shutdown is in progress")
 
@@ -256,7 +256,7 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
 	}
 	// Existing independently installed Geo resources remain external to the bundle.
 	// Copy them for native validation so -t never reads a mutable live config tree.
-	for _, asset := range mihomoGeoAssets {
+	for _, asset := range mihomoGeoAssetNames(filepath.Dir(cfg.ConfigPath)) {
 		if _, e := os.Stat(filepath.Join(root, asset)); e == nil {
 			continue
 		}
@@ -294,11 +294,11 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
 	cmd := exec.CommandContext(ctx, binaryPath, "-t", "-d", root, "-f", name)
 	cmd.Dir = root
 	if _, e = runDiagnosticCommand(ctx, cmd, "Mihomo configuration check", append(configurationDiagnosticSecrets(doc), cfg.Token)...); e != nil {
-		return nativeConfigurationLocation(e, root, name, s.Manifest, true)
+		return nativeConfigurationLocation(mihomoResourceFailure(cfg, e), root, name, s.Manifest, true)
 	}
 	// Native checks can obtain missing Geo resources. Include those exact bytes
 	// in the effective transaction instead of losing them when staging ends.
-	for _, asset := range mihomoGeoAssets {
+	for _, asset := range mihomoGeoAssetNames(root) {
 		if listed[asset] {
 			continue
 		}
@@ -698,13 +698,13 @@ func carryPersistentGeoResources(cfg *Config, s *DeploymentState) (bool, error) 
 	}
 	known := map[string]bool{}
 	for _, asset := range mihomoGeoAssets {
-		known[asset] = true
+		known[strings.ToLower(asset)] = true
 	}
 	changed := false
 	root := filepath.Dir(cfg.ConfigPath)
 	stage := filepath.Join(deploymentPath(cfg, s.DeploymentID), "stage")
 	for _, file := range old.Files {
-		if file.Role != "resource" || !known[file.Path] || listed[file.Path] {
+		if file.Role != "resource" || !known[strings.ToLower(file.Path)] || listed[file.Path] {
 			continue
 		}
 		if e := rejectSymlinkPath(root, file.Path); e != nil {

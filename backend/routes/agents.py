@@ -1271,7 +1271,7 @@ def push_config_to_agent(agent_id):
             commit_provider_bundle(profile_id, prepared_providers)
         agent_manager.record_deployment(agent_id, deployment_id, {
             'status': 'preparing', 'message': '文件已准备，正在校验并连接设备'})
-        extra_data = {'deployment_bundle': bundle, 'activate': activate,
+        extra_data = {'deployment_bundle': bundle, 'activate': activate, 'resource_config': config_data,
                       'base_url': base_url, **{key: prepared[key] for key in
                       ('provider_downloads', 'ruleset_downloads', 'custom_files')}}
         result = agent_manager.push_config_to_agent(agent_id, prepared['config_content'], extra_data=extra_data,

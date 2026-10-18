@@ -34,11 +34,14 @@ func TestDiagnosticCommandMissingBinaryAndTimeout(t *testing.T) {
 	if !strings.Contains(summary, "no such file") || !strings.Contains(details, "missing-core") {
 		t.Fatalf("missing binary: %q %q", summary, details)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// An already-expired deadline is deterministic even when the runner cannot
+	// schedule a new process promptly. Output retention is exercised below,
+	// where cancellation starts only after the child has written its message.
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
 	defer cancel()
-	_, err = runDiagnosticCommand(ctx, exec.CommandContext(ctx, "sh", "-c", "printf 'waiting for geosite resource\n'; exec sleep 5"), "Mihomo configuration check")
+	_, err = runDiagnosticCommand(ctx, exec.CommandContext(ctx, "sh", "-c", "exec sleep 5"), "Mihomo configuration check")
 	summary, details = deploymentErrorFields(err)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(summary, "timed out") || !strings.Contains(details, "geosite resource") {
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(summary, "timed out") || !strings.Contains(details, "context deadline exceeded") {
 		t.Fatalf("timeout diagnostics: %q %q", summary, details)
 	}
 }
@@ -46,22 +49,47 @@ func TestDiagnosticCommandMissingBinaryAndTimeout(t *testing.T) {
 func TestDiagnosticPipesDoNotExtendTimeoutOrRejectSuccessfulParent(t *testing.T) {
 	for _, timeout := range []bool{false, true} {
 		t.Run(fmt.Sprint(timeout), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			command := exec.Command("sh", "-c", "sleep 2 & printf 'check completed\\n'; exit 0")
+			ready, signal, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ready.Close()
+			defer signal.Close()
+			// fd 3 acknowledges that stdout was written. Process startup time
+			// must not consume a 100ms deadline on a busy CI runner. The long
+			// lived child still holds stdout open to exercise WaitDelay.
+			command := exec.CommandContext(ctx, "sh", "-c", "sleep 5 & printf 'check completed\\n'; printf x >&3; exit 0")
 			var runContext context.Context
 			if timeout {
 				runContext = ctx
-				command = exec.CommandContext(ctx, "sh", "-c", "sleep 2 & printf 'waiting for child\\n'; wait")
+				command = exec.CommandContext(ctx, "sh", "-c", "sleep 5 & printf 'waiting for child\\n'; printf x >&3; wait")
 			}
-			start := time.Now()
-			_, err := runDiagnosticCommand(runContext, command, "native check")
-			if time.Since(start) > time.Second {
+			command.ExtraFiles = []*os.File{signal}
+			done := make(chan error, 1)
+			go func() {
+				_, err := runDiagnosticCommand(runContext, command, "native check")
+				done <- err
+			}()
+			if err := ready.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			var acknowledgement [1]byte
+			if _, err := ready.Read(acknowledgement[:]); err != nil {
+				t.Fatalf("child did not acknowledge output: %v", err)
+			}
+			if timeout {
+				cancel()
+			}
+			select {
+			case err = <-done:
+			case <-time.After(2 * time.Second):
 				t.Fatal("inherited pipe extended command timeout")
 			}
 			if timeout {
-				if !errors.Is(err, context.DeadlineExceeded) {
-					t.Fatalf("timeout lost: %v", err)
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation lost: %v", err)
 				}
 				_, detail := deploymentErrorFields(err)
 				if !strings.Contains(detail, "waiting for child") {

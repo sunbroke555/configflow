@@ -579,7 +579,7 @@
         <DialogHeader>
           <DialogTitle>GitHub 代理域名配置</DialogTitle>
           <DialogDescription>
-            配置后将在连通性测试、Mihomo 生成、MosDNS / OxiDNS 转换时自动使用代理域名。
+            面板下载 GitHub 资源时先尝试原始地址，失败后使用此备用地址。支持 https://gh-proxy.com 这样的镜像前缀；生成配置中的 GitHub 链接也会使用此设置。
           </DialogDescription>
         </DialogHeader>
 

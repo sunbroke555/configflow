@@ -122,29 +122,28 @@ def test_remote_classical_source_fetched_once_and_preserves_snapshot(repository,
 
 
 @pytest.mark.parametrize('proxy', ['', 'http://user:private-password@proxy.test:8080'])
-def test_underlying_transport_keeps_github_mirror_and_proxy(repository, monkeypatch, proxy):
+@pytest.mark.parametrize('source_fails', [False, True])
+def test_underlying_transport_tries_original_then_mirror_with_same_proxy(repository, monkeypatch, proxy, source_fails):
     config = repository.get_compat_config('office')
     config['system_config'].update({'rule_fetch_proxy': proxy, 'github_proxy_domain': 'https://mirror.test'})
+    source = 'https://raw.githubusercontent.com/example/rules/main/list'
     seen = []
     def fetch(self, url, **kwargs):
         seen.append((url, kwargs))
         response = requests.Response()
-        response.status_code = 200
+        response.status_code = 503 if source_fails and url == source else 200
         response._content = b'DOMAIN,transport.test'
         response._content_consumed = True
         return response
     monkeypatch.setattr('backend.utils.rule_fetch._RuleSession.get', fetch)
-    url = callback('https://raw.githubusercontent.com/example/rules/main/list')
+    url = callback(source)
     files = read_archive(build_mosdns_zip(config, 'plugins: []', [download(url)], []))
     assert files['rules/source.txt'] == 'full:transport.test'
-    assert len(seen) == 1
-    assert seen[0][0] == 'https://mirror.test/https://raw.githubusercontent.com/example/rules/main/list'
-    assert 'internal-secret' not in seen[0][0]
-    if proxy:
-        assert seen[0][1]['proxies'] == {'http': proxy, 'https': proxy}
-    else:
-        assert 'proxies' not in seen[0][1]
-    assert seen[0][1]['timeout'] == (3, 10)
+    assert [url for url, _ in seen] == [source] + (['https://mirror.test/' + source] if source_fails else [])
+    for url, options in seen:
+        assert 'internal-secret' not in url
+        assert options['proxies'] == {'http': proxy, 'https': proxy}
+        assert options['timeout'] == (3, 10)
 
 
 def test_local_cache_callback_resolves_original_url_without_self_http(repository, monkeypatch):

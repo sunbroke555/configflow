@@ -46,6 +46,55 @@ def minimal_bundle(agent, config, deployment_id='test-release'):
     return build_deployment_bundle(agent, config, 'mode: rule\nrules: [MATCH,DIRECT]', deployment_id=deployment_id)
 
 
+def test_panel_geo_download_failure_is_reported_before_upload(env, monkeypatch):
+    _, manager, agent, config = env
+    candidate = build_deployment_bundle(agent, config, 'rules: ["GEOSITE,cn,DIRECT"]')
+    def get(url, **kwargs):
+        return response({'success': True, 'deployment_protocols': [1], 'service_type': 'mihomo',
+                         'mihomo_resources': [], 'config_directory': '/custom/mihomo'})
+    monkeypatch.setattr('backend.agents.manager.requests.get', get)
+    def fail(*args, **kwargs):
+        raise requests.ConnectionError('EOF')
+    monkeypatch.setattr('backend.agents.deployment_bundle.request_rule', fail)
+    monkeypatch.setattr('backend.agents.manager.requests.post', lambda *_a, **_k: pytest.fail('must not upload failed resource'))
+    result = manager.publish_deployment(agent['id'], candidate, resource_config=config)
+    assert result['status'] == 'failed' and result['failed_stage'] == 'preparing'
+    assert 'GeoSite 下载失败' in result['message']
+    assert '/custom/mihomo/GeoSite.dat' in result['error_details']
+    assert 'EOF' in result['error_details']
+    assert manager.get_agent_by_id(agent['id'])['config_version'] == '0'
+
+
+def test_panel_geo_bundle_replay_keeps_profile_baseline_and_does_not_redownload(env, monkeypatch):
+    from backend.agents.deployment_bundle import deployment_content_fingerprint
+    _, manager, agent, config = env
+    candidate = build_deployment_bundle(agent, config, 'rules: ["GEOSITE,cn,DIRECT"]')
+    downloaded, uploads = [], []
+    def get(url, **kwargs):
+        if url.endswith('/capabilities'):
+            return response({'success': True, 'deployment_protocols': [1], 'service_type': 'mihomo',
+                             'mihomo_resources': [], 'config_directory': '/etc/mihomo'})
+        return response({'success': True, 'status': 'ready'})
+    def fetch(url, config):
+        downloaded.append(url)
+        return b'geo database'
+    def post(url, **kwargs):
+        uploads.append(kwargs['data'])
+        return response({'success': True, 'status': 'ready'}, 202)
+    monkeypatch.setattr('backend.agents.manager.requests.get', get)
+    monkeypatch.setattr('backend.agents.manager.requests.post', post)
+    monkeypatch.setattr('backend.agents.mihomo_resources._fetch_bytes', fetch)
+    assert manager.publish_deployment(agent['id'], candidate, activate=False, resource_config=config)['status'] == 'ready'
+    assert manager.publish_deployment(agent['id'], candidate, activate=False, resource_config=config)['status'] == 'ready'
+    assert len(downloaded) == len(uploads) == 1
+    with tarfile.open(fileobj=io.BytesIO(uploads[0]), mode='r:gz') as archive:
+        assert archive.extractfile('files/GeoSite.dat').read() == b'geo database'
+    state = manager.get_agent_by_id(agent['id'])['deployments'][candidate.manifest['deployment_id']]
+    assert state['source_sha256'] == candidate.sha256
+    assert state['sha256'] != candidate.sha256
+    assert state['prepared_content']['fingerprint'] == deployment_content_fingerprint(candidate.manifest)
+
+
 def test_bundle_preserves_binary_mrs_and_all_hashes(env, monkeypatch):
     _, _, agent, config = env
     original = b'\x00MRS\xff\xfe\x80\r\n'
