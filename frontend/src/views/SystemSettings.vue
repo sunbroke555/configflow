@@ -74,6 +74,7 @@
 
           <FormField
             label="访问令牌"
+            persistent-hint
             html-for="config-token"
             hint="所有配置共用此令牌，订阅链接需携带 ?token=xxx。修改后请更新客户端中的链接；清除令牌会关闭令牌保护。"
           >
@@ -110,6 +111,7 @@
 
           <FormField
             label="MCP"
+            persistent-hint
             html-for="mcp-url"
             hint="在 MCP 客户端中填写此地址，使用 Authorization: Bearer 加上访问令牌认证。此令牌同时授予 MCP 管理权限，请勿公开分享令牌或含令牌的订阅链接。"
           >

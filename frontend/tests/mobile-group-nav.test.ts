@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import { createMemoryHistory, createRouter, useRoute } from 'vue-router'
 import MobileGroupNav from '@/components/shell/MobileGroupNav.vue'
+import MobileTabBar from '@/components/shell/MobileTabBar.vue'
 import { NAV_GROUPS } from '@/navigation'
 
 // Keep the router, navigation and Sheet real. jsdom supplies no responsive
@@ -143,6 +144,30 @@ async function openMenu(wrapper: ReturnType<typeof mount>, group: string, curren
 }
 
 describe('mobile group navigation', () => {
+  it('keeps the configuration tab selected across its pages and still opens generation directly', async () => {
+    const { router } = await render('/generate')
+    const bar = mount(MobileTabBar, {
+      props: { activePath: '/generate' },
+      global: { plugins: [router], stubs: { Motion: true } }
+    })
+    wrappers.push(bar)
+    const configuration = bar.get('a[href="/generate"]')
+    expect(configuration.text()).toBe('配置')
+    for (const item of NAV_GROUPS.find(group => group.scope === 'profile')!.items) {
+      await router.push(item.path)
+      await bar.setProps({ activePath: item.path })
+      expect(configuration.attributes('aria-current')).toBe('page')
+      expect(bar.findAll('[aria-current="page"]')).toHaveLength(1)
+    }
+    await router.push('/routers')
+    await configuration.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/generate')
+    await bar.setProps({ activePath: '/nodes' })
+    expect(configuration.attributes('aria-current')).toBeUndefined()
+    expect(bar.get('a[href="/nodes"]').attributes('aria-current')).toBe('page')
+  })
+
   it.each([
     { path: '/subscriptions', group: '资源', current: '订阅来源', enabled: true, labels: ['订阅来源', '节点库', '订阅聚合', '规则库'] },
     { path: '/subscriptions', group: '资源', current: '订阅来源', enabled: false, labels: ['订阅来源', '节点库', '规则库'] },

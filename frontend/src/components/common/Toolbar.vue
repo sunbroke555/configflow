@@ -2,18 +2,21 @@
   <div
     class="cf-toolbar mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3"
   >
-    <div v-if="searchable" class="cf-toolbar-search relative min-w-0 flex-[1_1_240px]">
-      <Search
-        class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-        aria-hidden="true"
-      />
-      <Input
-        :model-value="search"
-        :placeholder="placeholder"
-        :aria-label="placeholder"
-        class="h-9 bg-background pl-8 text-[13px]"
-        @update:model-value="value => emit('update:search', String(value))"
-      />
+    <div v-if="searchable" class="cf-toolbar-search flex min-w-0 flex-[1_1_240px] items-center gap-2">
+      <div class="relative min-w-0 flex-1">
+        <Search
+          class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          :model-value="search"
+          :placeholder="placeholder"
+          :aria-label="placeholder"
+          class="h-9 bg-background pl-8 text-[13px]"
+          @update:model-value="value => emit('update:search', String(value))"
+        />
+      </div>
+      <slot name="search-actions" />
     </div>
 
     <slot name="filters" />

@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="上游路由">
+    <PageHeader title="上游路由" :mobile-help="routerPageHelp">
       <template #actions>
         <Button @click="openCreate">
           <Plus class="size-4" />
@@ -9,9 +9,8 @@
       </template>
     </PageHeader>
 
-    <p class="mt-0 mb-4 text-[12.5px] leading-relaxed text-muted-foreground">
-      在这里查看和调整主路由的分流设置。「差异报告」只检查，不会修改设备。
-      点「预览发布」查看具体改动，确认后再应用；如果发布失败，会尝试撤销本次改动，并显示结果。
+    <p class="mt-0 mb-4 hidden text-[12.5px] leading-relaxed text-muted-foreground md:block">
+      {{ routerPageHelp }}
     </p>
 
     <LoadingRows v-if="loading && !routers.length" :rows="3" />
@@ -175,7 +174,7 @@
     </SectionCard>
 
     <template v-if="report">
-      <SectionCard class="mt-4" :title="`差异报告 · ${reportRouter?.name}`" :description="`生成于 ${reportTime}`">
+      <SectionCard class="mt-4" :title="`差异报告 · ${reportRouter?.name}`" :description="`生成于 ${reportTime}`" persistent-description>
         <template #actions>
           <span :class="['chip', report.in_sync ? 'chip-ok' : 'chip-warn']">
             {{ report.in_sync ? '已全部同步' : reportSummary.unknown ? '存在待确认项' : '存在差异' }}
@@ -232,6 +231,7 @@
         class="mt-4"
         :padded="false"
         title="按设备和目标 IP 分流"
+        persistent-description
         :description="report.policy_routing.enabled
           ? '指定设备访问下表 IP 网段时，将流量交给 Mihomo 处理。修改后需发布到路由器才会生效。'
           : '本次未选择按设备分流的规则集。'"
@@ -370,6 +370,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
         class="mt-4"
         :padded="false"
         title="其他路由"
+        persistent-description
         :description="report.routes.mode === 'policy'
           ? '指向代理网关的静态路由会让 mihomo 自身流量回环：手工路由将迁入只增不删的策略路由「cf-mihomo-manual」后删除；多余项为 ConfigFlow 标记但已不再需要的网段。'
           : '指向代理网关但不由期望状态推导的手工路由不会被修改；多余项为 ConfigFlow 标记但已不再需要的路由。'"
@@ -498,7 +499,8 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               <Input id="router-username" v-model="form.username" class="bg-background/50" autocomplete="off" />
             </FormField>
             <div class="flex flex-col gap-1.5">
-              <Label for="router-password">密码</Label>
+              <!-- 与左侧用户名说明按钮的标签行保持同高，包括触屏尺寸。 -->
+              <Label for="router-password" class="min-h-6 max-md:min-h-11 pointer-coarse:min-h-11">密码</Label>
               <Input
                 id="router-password"
                 v-model="form.password"
@@ -616,6 +618,8 @@ import RouterOperationPreview from '@/components/routers/RouterOperationPreview.
 import { agentApi, routerApi, ruleApi, type StaticRouteChange, type StaticRouteItem, type StaticRoutePlan, type StaticRouteValues } from '@/api'
 import { activeProfileId, getActiveProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
+
+const routerPageHelp = '在这里查看和调整主路由的分流设置。「差异报告」只检查，不会修改设备。点「预览发布」查看具体改动，确认后再应用；如果发布失败，会尝试撤销本次改动，并显示结果。'
 
 type RouterType = 'ikuai' | 'routeros'
 type Status = 'synced' | 'adoptable' | 'conflict' | 'missing' | 'extra' | 'not_required' | 'unknown' | 'pending'

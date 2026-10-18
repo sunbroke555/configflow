@@ -21,7 +21,7 @@
       </template>
     </PageHeader>
 
-    <Toolbar v-model:search="keyword" placeholder="搜索订阅名称或地址…">
+    <Toolbar v-model:search="keyword" placeholder="搜索订阅名称或地址…" class="cf-toolbar-inline-actions">
       <template #filters>
         <Select v-model="statusFilter" :disabled="reorder.active.value">
           <SelectTrigger class="h-9 w-[132px] border-input bg-card text-[13px] dark:border-transparent" aria-label="按状态筛选">
@@ -36,7 +36,7 @@
         </Select>
       </template>
 
-      <template #actions>
+      <template v-if="!reorder.active.value || !isNarrow" #actions>
         <Button
           v-if="!reorder.active.value"
           variant="ghost"
@@ -48,7 +48,7 @@
           调整顺序
         </Button>
         <!-- 数据密集区默认表格，卡片作为可选视图 -->
-        <ViewToggle v-model="viewMode" class="max-[900px]:hidden" />
+        <ViewToggle v-if="!isNarrow" v-model="viewMode" />
       </template>
     </Toolbar>
 

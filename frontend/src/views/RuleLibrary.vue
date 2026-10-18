@@ -65,7 +65,7 @@
           </Select>
 
           <label
-            class="flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border/50 bg-background/40 px-3 text-[12.5px] text-muted-foreground"
+            class="flex min-h-9 max-md:min-h-11 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border/50 bg-background/40 px-3 py-1 text-[12.5px] text-muted-foreground"
           >
             <Checkbox
               :model-value="allSelected"
@@ -79,7 +79,7 @@
           </label>
         </template>
 
-        <template #actions>
+        <template v-if="selectedRules.length" #actions>
           <Button v-if="selectedRules.length" variant="outline" size="sm" @click="showReferenceDialog(selectedRules)">
             <Send class="size-3.5" />加入当前配置
           </Button>
