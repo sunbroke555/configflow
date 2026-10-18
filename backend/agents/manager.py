@@ -393,7 +393,7 @@ class AgentManager:
             # Never let an upstream response replace task ownership or identity.
             for key in ('status', 'message', 'error', 'error_details', 'failed_stage', 'rollback_error', 'rollback_error_details', 'config_version',
                         'config_revision', 'success', 'sha256', 'submitted', 'previous_running', 'health',
-                        'http_status', 'manual_rollback'):
+                        'http_status', 'manual_rollback', 'source_sha256'):
                 if key in updates:
                     state[key] = (failure_text(updates[key], (agent.get('token'),))
                                   if key in ('message', 'error', 'error_details', 'rollback_error', 'rollback_error_details')
@@ -657,7 +657,7 @@ class AgentManager:
                 state['oxidns_validation_receipt'] = deepcopy(validation_receipt)
         self._update_agents(remember)
 
-    def publish_deployment(self, agent_id, bundle, *, activate=True, config_revision=None, base_url=''):
+    def publish_deployment(self, agent_id, bundle, *, activate=True, config_revision=None, base_url='', resource_config=None):
         agent = self.get_agent_by_id(agent_id)
         if not agent:
             return {'success': False, 'message': 'Agent not found', 'http_status': 404}
@@ -682,19 +682,23 @@ class AgentManager:
             if previous.get('status') in ('failed', 'rolled_back') and not previous.get('submitted'):
                 return previous
             if previous.get('submitted'):
-                if previous.get('sha256') != bundle.sha256:
+                if previous.get('source_sha256', previous.get('sha256')) != bundle.sha256:
                     return {'success': False, 'deployment_id': deployment_id, 'http_status': 409,
                             'message': 'Deployment ID already belongs to different content'}
                 return self.get_deployment(agent_id, deployment_id)
+            content_bundle = bundle
+            if agent.get('service_type') == 'mihomo':
+                from .mihomo_resources import prepare_mihomo_resources
+                bundle = prepare_mihomo_resources(bundle, capability, resource_config or self.repository.get_compat_config(bundle.manifest['profile_id']))
             validation_receipt = None
             if agent.get('service_type') == 'oxidns':
                 from .oxidns_validation_receipt import validate_bundle
                 validation_receipt = validate_bundle(agent_id, bundle)
-            self._remember_deployment_content(agent_id, bundle, base_url, validation_receipt)
+            self._remember_deployment_content(agent_id, content_bundle, base_url, validation_receipt)
             # Persist before the request: a lost response can still be reconciled.
             self.record_deployment(agent_id, deployment_id, {
                 'success': True, 'status': 'uploading', 'submitted': True,
-                'sha256': bundle.sha256, 'config_version': bundle.config_version,
+                'sha256': bundle.sha256, 'source_sha256': content_bundle.sha256, 'config_version': bundle.config_version,
                 'config_revision': config_revision})
             result = self._deployment_request(agent, 'post', 'deployments', data=bundle.archive, timeout=(10, 120), headers={
                 'Content-Type': 'application/gzip', 'X-Deployment-ID': deployment_id,
@@ -713,7 +717,11 @@ class AgentManager:
                 'message': 'Upload outcome unknown; query deployment status' if submitted else 'Unable to query Agent deployment capabilities',
                 'error_details': failure_text(str(exc), (agent.get('token'),))})
         except ValueError as exc:
-            return self.record_deployment(agent_id, deployment_id, {'success': False, 'status': 'failed', 'message': str(exc)})
+            details = failure_text(str(exc), (agent.get('token'),))
+            return self.record_deployment(agent_id, deployment_id, {
+                'success': False, 'status': 'failed', 'failed_stage': 'preparing',
+                'message': details.splitlines()[0][:300] if details else '发布准备失败',
+                'error_details': details})
         finally:
             self.finish_deployment_preparation(agent_id, deployment_id)
 
@@ -755,7 +763,8 @@ class AgentManager:
             if bundle is None:
                 return {'success': False, 'message': 'A complete deployment bundle is required', 'http_status': 409}
             return self.publish_deployment(agent_id, bundle, activate=(extra_data or {}).get('activate', True),
-                                           config_revision=config_revision, base_url=(extra_data or {}).get('base_url', ''))
+                                           config_revision=config_revision, base_url=(extra_data or {}).get('base_url', ''),
+                                           resource_config=(extra_data or {}).get('resource_config'))
 
         # 构建 Agent 的 URL
         agent_url = f"http://{agent['host']}:{agent['port']}/api/config/update"

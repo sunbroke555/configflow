@@ -61,12 +61,12 @@ def rule_app(tmp_path, monkeypatch):
     ('/api/rule-library/cache', {'rule_ids': ['source']}, 'get'),
     ('/api/rule-library', {'id': 'new', 'name': 'New', 'source_type': 'url', 'url': SOURCE}, 'get'),
 ])
-def test_rule_library_fetches_use_global_proxy_and_one_mirror_prefix(rule_app, path, body, method):
+def test_rule_library_fetches_use_global_proxy_and_original_first(rule_app, path, body, method):
     app, _, calls = rule_app
     response = app.test_client().post(path, json=body, headers={'X-ConfigFlow-Profile': 'alpha'})
     assert response.status_code == 200
     assert len(calls) == 1
-    assert calls[0][0:2] == (method, MIRROR + SOURCE)
+    assert calls[0][0:2] == (method, SOURCE)
     assert calls[0][2]['proxies'] == {'http': PROXY, 'https': PROXY}
 
 
@@ -82,7 +82,7 @@ def test_local_refresh_and_ruleset_fallback_use_proxy(rule_app):
         assert get_ruleset_content({'name': 'Fallback', 'url': SOURCE}) == BODY
         assert get_ruleset_content({}, {'name': 'Library', 'source_type': 'url', 'url': SOURCE}) == BODY
     assert len(calls) == 3
-    assert all(url == MIRROR + SOURCE for _, url, _ in calls)
+    assert all(url == SOURCE for _, url, _ in calls)
     assert all(options['proxies'] == {'http': PROXY, 'https': PROXY} for _, _, options in calls)
 
 
@@ -92,7 +92,7 @@ def test_mosdns_conversion_uses_proxy_and_original_hostname(rule_app):
     response = app.test_client().get('/api/mosdns/rule-proxy', query_string={'url': SOURCE, 'token': token})
     assert response.status_code == 200
     assert response.get_data(as_text=True) == 'full:example.test'
-    assert calls[0][1] == MIRROR + SOURCE
+    assert calls[0][1] == SOURCE
     assert calls[0][2]['proxies'] == {'http': PROXY, 'https': PROXY}
 
 
@@ -109,7 +109,7 @@ def test_clearing_setting_affects_next_download(rule_app):
     client = app.test_client()
     assert client.post('/api/settings/rule-fetch-proxy', json={'rule_fetch_proxy': ''}).status_code == 200
     assert client.post('/api/rule-library/test-single', json={'url': SOURCE}).status_code == 200
-    assert 'proxies' not in calls[0][2]
+    assert calls[0][2]['proxies'] == {'http': '', 'https': ''}
 
 
 def test_proxy_failure_preserves_cache_and_redacts_errors(rule_app, monkeypatch, caplog):

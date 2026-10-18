@@ -239,7 +239,12 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 			w.WriteHeader(405)
 			return
 		}
-		JsonResponse(w, 200, map[string]interface{}{"success": true, "deployment_protocols": []int{1}, "return_routing_safety_protocols": []int{1}, "service_type": cfg.ServiceType, "config_path": filepath.Base(cfg.ConfigPath)})
+		result := map[string]interface{}{"success": true, "deployment_protocols": []int{1}, "return_routing_safety_protocols": []int{1}, "service_type": cfg.ServiceType, "config_path": filepath.Base(cfg.ConfigPath)}
+		if cfg.ServiceType == "mihomo" {
+			result["mihomo_resources"] = mihomoGeoAssetNames(filepath.Dir(cfg.ConfigPath))
+			result["config_directory"] = filepath.Dir(cfg.ConfigPath)
+		}
+		JsonResponse(w, 200, result)
 	}
 }
 func DeploymentUploadHandler(cfg *Config) http.HandlerFunc {

@@ -249,7 +249,7 @@ def test_authenticated_proxy_does_not_pass_credentials_to_origin(servers):
     assert 'Proxy-Authorization' not in origin.seen[0]['headers']
 
 
-def test_clearing_proxy_returns_to_existing_environment_route(servers, monkeypatch):
+def test_clearing_proxy_uses_direct_connection_despite_environment(servers, monkeypatch):
     origin = servers()
     configured, environment = servers(proxy=True), servers(proxy=True)
     monkeypatch.setenv('HTTP_PROXY', environment.url)
@@ -259,13 +259,32 @@ def test_clearing_proxy_returns_to_existing_environment_route(servers, monkeypat
     assert request_rule(origin.url + '/second', config_data=settings, timeout=3).status_code == 200
 
     assert [entry['url'] for entry in configured.seen] == [origin.url + '/first']
-    assert [entry['url'] for entry in environment.seen] == [origin.url + '/second']
+    assert environment.seen == []
+    assert [entry['url'] for entry in origin.seen] == ['/first', '/second']
 
 
 def test_empty_proxy_without_environment_connects_directly(servers):
     origin = servers()
     assert request_rule(origin.url + '/rules', config_data=config(), timeout=3).content == BODY
     assert len(origin.seen) == 1
+
+
+@pytest.mark.parametrize('use_proxy', [False, True])
+def test_github_fallback_uses_same_transport_for_both_real_requests(servers, monkeypatch, use_proxy):
+    origin, mirror, proxy = servers(), servers(), servers(proxy=True)
+    origin.routes['/rules/custom.yaml'] = (503, {}, b'unavailable')
+    original_resolve = socket.getaddrinfo
+    def resolve(host, *args, **kwargs):
+        return original_resolve('127.0.0.1' if host == 'raw.githubusercontent.com' else host, *args, **kwargs)
+    monkeypatch.setattr(socket, 'getaddrinfo', resolve)
+    source = f'http://raw.githubusercontent.com:{origin.server_port}/rules/custom.yaml'
+    settings = config(proxy.url if use_proxy else '')
+    settings['system_config']['github_proxy_domain'] = mirror.url
+    result = request_rule(source, config_data=settings, stream=True, max_bytes=1024, timeout=3)
+    assert result.content == BODY
+    assert [entry['url'] for entry in origin.seen] == ['/rules/custom.yaml']
+    assert [entry['url'] for entry in mirror.seen] == ['/' + source]
+    assert [entry['url'] for entry in proxy.seen] == ([source, mirror.url + '/' + source] if use_proxy else [])
 
 
 def test_proxy_error_does_not_retry_directly(servers):

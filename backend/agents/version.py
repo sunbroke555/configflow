@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.19-go"
+LATEST_AGENT_VERSION = "1.8.20-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.20-go": {
+        "date": "2026-10-18",
+        "features": [
+            "发布时向面板报告已有 Geo 资源，缺失资源由面板按原地址优先、GitHub 代理失败回退的顺序下载并随配置打包",
+            "Geo 下载失败显示具体资源、配置项和手动放置路径；避免非致命的指纹弃用日志遮蔽实际失败原因"
+        ]
+    },
     "1.8.19-go": {
         "date": "2026-10-18",
         "features": [

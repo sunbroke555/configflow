@@ -26,7 +26,7 @@ import yaml
 from backend.agents.diagnostics import failure_text
 from backend.agents.deployment_locations import DeploymentPreparationError, preparation_context, source_error
 from backend.converters.mosdns import parse_clash_rule_value
-from backend.utils.rule_fetch import is_internal_rule_url, request_rule
+from backend.utils.rule_fetch import RuleFetchError, is_internal_rule_url, request_rule
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -41,6 +41,8 @@ class RuleDownloadError(DeploymentPreparationError):
 
 def _download_error_message(exc):
     # Requests exceptions can contain rule tokens or proxy credentials.
+    if isinstance(exc, RuleFetchError):
+        return '原始地址及 GitHub 代理地址均下载失败；' + _download_error_message(exc.last_error)
     if isinstance(exc, requests.exceptions.Timeout):
         return '下载超时，请检查网络连接或稍后重试'
     if isinstance(exc, requests.exceptions.ProxyError):
@@ -164,7 +166,7 @@ def _fetch_bytes(url, config):
         raise DeploymentPreparationError('Required rule has no source URL')
     response = None
     try:
-        response = request_rule(url, timeout=(10, 60), config_data=config, stream=True)
+        response = request_rule(url, timeout=(10, 60), config_data=config, stream=True, max_bytes=MAX_FILE_BYTES)
         response.raise_for_status()
         value = bytearray()
         for chunk in response.iter_content(chunk_size=64 * 1024):
@@ -438,6 +440,8 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             raise DeploymentPreparationError(
                 f'无法下载「{name}」规则集：{explanation}。本次发布已停止，设备仍使用原配置。'
                 + f'\n文件：{failure_text(str(item.get("local_path", "")))}'
+                + '\n修复：更换该规则的下载地址，或检查「GitHub 代理域名」和「系统设置 → 规则下载代理」。'
+                + '\n也可手动下载后导入规则库的内容型规则，再重新发布。'
                 + (f'\n{details}' if details else '')) from None
         except DeploymentPreparationError as exc:
             raise preparation_context(exc, name=item.get('name', ''), path=item.get('local_path', '')) from None

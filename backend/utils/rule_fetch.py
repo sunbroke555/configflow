@@ -3,7 +3,7 @@
 Rule sources deliberately use normal hostname resolution, including Fake-IP
 networks. Only URL syntax is checked here; this is not a public-IP-only gate.
 """
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 import requests
 
 
@@ -90,7 +90,7 @@ def rule_request_options(url: str, config_data=None) -> dict:
     if is_internal_rule_url(url, config_data):
         return {'proxies': {'http': '', 'https': ''}}
     proxy = get_rule_fetch_proxy(config_data)
-    return {'proxies': {'http': proxy, 'https': proxy}} if proxy else {}
+    return {'proxies': {'http': proxy, 'https': proxy}}
 
 
 def _request_with_https_proxy(url, method, options, kwargs):
@@ -126,10 +126,10 @@ def _request_with_https_proxy(url, method, options, kwargs):
         return getattr(session, method)(url, **kwargs, **options)
 
 
-def request_rule(url: str, *, method='get', config_data=None, max_redirects=3, **kwargs):
+def _request_rule_once(url: str, *, method='get', config_data=None, max_redirects=3, **kwargs):
     """Fetch a rule by hostname and choose its proxy again on every redirect.
 
-    An empty setting preserves Requests' normal environment behavior. Explicit
+    An empty setting explicitly selects a direct connection. Explicit
     proxies never fall back to a direct connection. Internal API requests are
     direct and may only redirect within that origin's API paths.
     """
@@ -141,8 +141,7 @@ def request_rule(url: str, *, method='get', config_data=None, max_redirects=3, *
         raise ValueError('Rule requests only support GET and HEAD')
     kwargs['allow_redirects'] = False
     kwargs.setdefault('verify', True)
-    from backend.converters.mihomo import apply_github_proxy_domain
-    current = url if is_internal_rule_url(url, config_data) else apply_github_proxy_domain(url, config_data)
+    current = url
     for hop in range(max_redirects + 1):
         parsed = validate_rule_url(current)
         internal = is_internal_rule_url(current, config_data)
@@ -178,3 +177,87 @@ def request_rule(url: str, *, method='get', config_data=None, max_redirects=3, *
             current = target
         finally:
             response.close()
+
+
+class RuleFetchError(requests.RequestException):
+    """Both source and configured GitHub mirror failed, with safe diagnostics."""
+
+    def __init__(self, attempts, secrets=()):
+        from backend.agents.diagnostics import failure_text
+        self.attempts = attempts
+        self.last_error = attempts[-1][1]
+        super().__init__(failure_text('\n'.join(
+            f'{label}：{type(error).__name__}: {error}' for label, error in attempts), secrets))
+
+
+def github_download_candidates(url, config_data):
+    """Keep original paths intact, including GitHub Release assets.
+
+    Generated configurations may already contain this mirror's prefix. Unwrap
+    only that exact configured prefix and only when the remainder is GitHub.
+    """
+    from backend.converters.mihomo import apply_github_proxy_domain
+    if is_internal_rule_url(url, config_data):
+        return [('原始地址', url)]
+    mirror = rule_fetch_settings(config_data).get('github_proxy_domain', '')
+    if isinstance(mirror, str) and mirror.strip():
+        prefix = mirror.strip()
+        if not prefix.startswith(('http://', 'https://')):
+            prefix = 'https://' + prefix
+        prefix = prefix.rstrip('/') + '/'
+        if url.startswith(prefix):
+            original = url[len(prefix):]
+            if apply_github_proxy_domain(original, config_data) == url:
+                url = original
+    mirrored = apply_github_proxy_domain(url, config_data)
+    return [('原始地址', url)] + ([('GitHub 代理地址', mirrored)] if mirrored != url else [])
+
+
+def request_rule(url: str, *, method='get', config_data=None, max_redirects=3,
+                 max_bytes=None, **kwargs):
+    """Try the source first, then its configured GitHub mirror on failure.
+
+    The same explicit forward proxy (or direct transport when empty) applies
+    to both attempts. max_bytes consumes a bounded body inside the retry so a
+    broken stream is retried as well, never returning a partial resource.
+    """
+    if config_data is None:
+        from backend.common.config import get_system_config
+        config_data = get_system_config()
+    attempts = []
+    candidates = github_download_candidates(url, config_data)
+    for index, (label, candidate) in enumerate(candidates):
+        response = None
+        try:
+            response = _request_rule_once(candidate, method=method, config_data=config_data,
+                                          max_redirects=max_redirects, **kwargs)
+            # Keep the established response API for callers of a single URL.
+            if len(candidates) > 1 or max_bytes is not None:
+                response.raise_for_status()
+            if max_bytes is not None:
+                body = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise ValueError('Resource exceeds deployment file size limit')
+                response._content = bytes(body)
+                response._content_consumed = True
+            return response
+        except requests.RequestException as exc:
+            if response is not None:
+                response.close()
+            attempts.append((label, exc))
+            if index + 1 == len(candidates):
+                if len(attempts) == 1:
+                    raise
+                # A mirror embeds the original URL in its path. Redact
+                # source userinfo there too, not just the outer URL's host.
+                secrets = []
+                for _, source in candidates:
+                    parsed = urlsplit(source)
+                    secrets.extend(unquote(value) for value in (parsed.username, parsed.password) if value)
+                raise RuleFetchError(attempts, secrets) from None
+        except BaseException:
+            if response is not None:
+                response.close()
+            raise

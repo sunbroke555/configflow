@@ -34,7 +34,7 @@
           <FormField
             label="规则下载代理"
             html-for="rule-fetch-proxy"
-            hint="用于规则下载和连通性测试。支持 HTTP/HTTPS 代理地址，可包含用户名和密码；留空使用现有网络。此设置与「GitHub 代理域名」的镜像前缀独立。失去焦点时自动保存。"
+            hint="用于面板下载规则、发布所需的 Geo 数据和连通性测试。支持 HTTP/HTTPS 代理地址，可包含用户名和密码；留空直连。请求原始地址及 GitHub 备用地址时都会使用此代理。失去焦点时自动保存。"
           >
             <div class="flex items-center gap-1.5">
               <Input

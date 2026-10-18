@@ -239,7 +239,7 @@ func diagnosticFailure(summary string, cause error, output []byte, secrets ...st
 	if details == "" && errors.As(cause, &nested) {
 		details = redactKnown(nested.details)
 	}
-	reason := ""
+	reason, lastLine := "", ""
 	for _, line := range strings.Split(details, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "[earlier output") {
@@ -248,11 +248,17 @@ func diagnosticFailure(summary string, cause error, output []byte, secrets ...st
 		if reason != "" && (strings.HasPrefix(line, "exit status ") || line == "context deadline exceeded") {
 			continue
 		}
-		reason = line
 		lower := strings.ToLower(line)
-		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "fatal") || strings.Contains(lower, "invalid") {
-			break
+		if strings.HasPrefix(lower, "configuration file ") && strings.HasSuffix(lower, "test failed") {
+			continue
 		}
+		lastLine = line
+		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "fatal") || strings.Contains(lower, "invalid") {
+			reason = line
+		}
+	}
+	if reason == "" {
+		reason = lastLine
 	}
 	if cause != nil {
 		causeText := sanitizeDiagnostic(redactKnown(cause.Error()))

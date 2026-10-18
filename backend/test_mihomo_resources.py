@@ -1,0 +1,95 @@
+import hashlib
+import io
+import tarfile
+
+import pytest
+import requests
+import yaml
+
+from backend.agents.deployment_bundle import build_deployment_bundle, DeploymentPreparationError
+from backend.agents.mihomo_resources import prepare_mihomo_resources, required_geo_resources
+
+
+def bundle(document):
+    return build_deployment_bundle({'id': 'test', 'service_type': 'mihomo', 'profile_id': 'default'},
+                                   {'profile_id': 'default'}, yaml.safe_dump(document))
+
+
+def test_only_required_custom_geo_resource_is_bundled(monkeypatch):
+    seen = []
+    def fetch(url, config):
+        seen.append((url, config))
+        return b'geo database bytes'
+    monkeypatch.setattr('backend.agents.mihomo_resources._fetch_bytes', fetch)
+    original = bundle({'rules': ['GEOSITE,cn,DIRECT'], 'geox-url': {
+        'geosite': 'https://data.test/custom-name.bin', 'geoip': 'https://unused.test/other.dat'}})
+    settings = {'system_config': {'github_proxy_domain': 'https://gh-proxy.com'}}
+    prepared = prepare_mihomo_resources(original, {'mihomo_resources': [], 'config_directory': '/opt/mihomo'}, settings)
+    assert seen == [('https://data.test/custom-name.bin', settings)]
+    assert {item['path'] for item in prepared.manifest['files']} == {'config.yaml', 'GeoSite.dat'}
+    resource = next(item for item in prepared.manifest['files'] if item['role'] == 'resource')
+    with tarfile.open(fileobj=io.BytesIO(prepared.archive), mode='r:gz') as archive:
+        value = archive.extractfile('files/GeoSite.dat').read()
+    assert value == b'geo database bytes'
+    assert resource['sha256'] == hashlib.sha256(value).hexdigest()
+    assert original.config_version == prepared.config_version
+    assert len(original.manifest['files']) == 1
+
+
+@pytest.mark.parametrize('files', [['GeoSite.dat'], ['geosite.dat']])
+def test_manually_installed_geo_resource_needs_no_download(monkeypatch, files):
+    monkeypatch.setattr('backend.agents.mihomo_resources._fetch_bytes', lambda *_a: pytest.fail('must reuse local file'))
+    original = bundle({'rules': ['GEOSITE,cn,DIRECT']})
+    assert prepare_mihomo_resources(original, {'mihomo_resources': files}, {}) is original
+
+
+def test_old_agent_retains_compatibility_and_no_unneeded_download(monkeypatch):
+    monkeypatch.setattr('backend.agents.mihomo_resources._fetch_bytes', lambda *_a: pytest.fail('unexpected download'))
+    old = bundle({'rules': ['GEOSITE,cn,DIRECT']})
+    assert prepare_mihomo_resources(old, {}, {}) is old
+    no_geo = bundle({'rules': ['MATCH,DIRECT'], 'geox-url': {'geosite': 'https://unused.test/a'}})
+    assert prepare_mihomo_resources(no_geo, {'mihomo_resources': []}, {}) is no_geo
+
+
+@pytest.mark.parametrize('document, expected', [
+    ({'rules': ['GEOIP,private,DIRECT']}, []),
+    ({'rules': ['GEOIP,CN,DIRECT']}, ['mmdb']),
+    ({'rules': ['GEOIP,CN,DIRECT'], 'geodata-mode': True}, ['geoip']),
+    ({'sub-rules': {'nested': ['AND,((GEOSITE,cn),(IP-ASN,123)),DIRECT']}}, ['geosite', 'asn']),
+    ({'dns': {'enable': False, 'fallback': ['1.1.1.1'], 'fallback-filter': {'geosite': ['cn']}}}, []),
+    ({'dns': {'enable': True, 'fallback': ['1.1.1.1']}}, ['mmdb']),
+    ({'dns': {'enable': True, 'nameserver-policy': {'geosite:cn': '223.5.5.5'}}}, ['geosite']),
+    ({'dns': {'enable': True, 'fallback': ['1.1.1.1'], 'fallback-filter': {'geosite': ['cn'], 'geoip': False}}}, ['geosite']),
+    ({'dns': {'enable': True, 'enhanced-mode': 'fake-ip', 'fake-ip-filter-mode': 'rule', 'fake-ip-filter': ['GEOSITE,cn,real-ip']}}, ['geosite']),
+])
+def test_resource_selection(document, expected):
+    assert required_geo_resources(document, {}) == expected
+
+
+def test_classical_provider_and_mmdb_alias_are_recognized(monkeypatch):
+    document = {'rule-providers': {'nested': {'behavior': 'classical', 'path': './rules/a.yaml'}}}
+    assert required_geo_resources(document, {'rules/a.yaml': (b'payload: ["GEOSITE,cn"]', 'rule')}) == ['geosite']
+    monkeypatch.setattr('backend.agents.mihomo_resources._fetch_bytes', lambda *_a: pytest.fail('existing MMDB'))
+    original = bundle({'rules': ['GEOIP,CN,DIRECT']})
+    assert prepare_mihomo_resources(original, {'mihomo_resources': ['Country.mmdb']}, {}) is original
+
+
+def test_download_failure_names_resource_and_actual_manual_path(monkeypatch):
+    def fetch(*args, **kwargs):
+        raise requests.ConnectionError('EOF from https://user:password@source.test/data?token=secret')
+    monkeypatch.setattr('backend.agents.deployment_bundle.request_rule', fetch)
+    original = bundle({'rules': ['GEOSITE,cn,DIRECT'], 'geox-url': {'geosite': 'https://source.test/custom.dat'}})
+    with pytest.raises(DeploymentPreparationError) as caught:
+        prepare_mihomo_resources(original, {'mihomo_resources': [], 'config_directory': '/custom/mihomo'}, {})
+    text = str(caught.value)
+    for value in ('GeoSite 下载失败', 'geox-url.geosite', '/custom/mihomo/GeoSite.dat', 'GitHub 代理域名', '规则下载代理', '手动下载', 'EOF'):
+        assert value in text
+    assert 'password' not in text and 'secret' not in text
+    assert len(original.manifest['files']) == 1
+
+
+@pytest.mark.parametrize('content', [b'', b'<html>proxy error</html>'])
+def test_empty_and_html_responses_are_not_bundled(monkeypatch, content):
+    monkeypatch.setattr('backend.agents.mihomo_resources._fetch_bytes', lambda *_a: content)
+    with pytest.raises(DeploymentPreparationError, match='GeoSite 下载失败'):
+        prepare_mihomo_resources(bundle({'rules': ['GEOSITE,cn,DIRECT']}), {'mihomo_resources': []}, {})
