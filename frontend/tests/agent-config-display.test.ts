@@ -11,7 +11,7 @@ import { ruleLocationDetails } from './fixtures/agent-failure'
 // Keep the actual Agent cards, stores and deployment state; replace only HTTP.
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
-  agentApi: { getAll: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), bindProfile: vi.fn() },
+  agentApi: { getAll: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), bindProfile: vi.fn(), pushConfig: vi.fn() },
   profileApi: { list: vi.fn() }
 }))
 
@@ -82,6 +82,30 @@ async function render(item = agent(), profiles: Record<string, unknown>[] = [{ i
 }
 
 describe('Agent configuration status wording', () => {
+  it('polls real preparation steps before the push request returns', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolvePost!: (value: any) => void
+      let requestId = ''
+      vi.mocked(agentApi.pushConfig).mockImplementationOnce((_id, deploymentId) => {
+        requestId = deploymentId!
+        return new Promise(resolve => { resolvePost = resolve })
+      })
+      const events = [{ at: '2026-10-18T12:00:00Z', status: 'preparing', message: '正在校验规则集「本地服务」' }]
+      vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, deploymentId) => ({ data: {
+        deployment_id: deploymentId, status: 'preparing', message: events[0].message, events,
+      } }) as any)
+      const { wrapper, footer } = await render()
+      await footer.findAll('button').find(button => button.text() === '推送')!.trigger('click')
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(wrapper.get('[data-agent-operation-steps] [role="status"]').text()).toContain(events[0].message)
+      resolvePost({ data: { deployment_id: requestId, status: 'preparing', message: '请求已创建' } })
+      await flushPromises()
+      expect(wrapper.get('[data-agent-operation-steps] [role="status"]').text()).toContain(events[0].message)
+    } finally { vi.useRealTimers() }
+  })
   it('trusts matching complete contents even when revisions differ, keeping revisions only in the tooltip', async () => {
     const revision = 1234567890123
     const { wrapper, footer, title } = await render(agent({

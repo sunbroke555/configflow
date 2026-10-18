@@ -31,6 +31,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
   let epoch = 0, disposed = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let wake: (() => void) | undefined
+  const submissionObservers = new Set<() => void>()
   const context = () => ({ id: props.id, profile: props.profile, epoch })
   const current = (c: ReturnType<typeof context>) => !disposed && c.id === props.id && c.profile === props.profile && c.epoch === epoch
   const pause = () => new Promise<void>(resolve => { wake = resolve; timer = setTimeout(() => { timer = undefined; wake = undefined; resolve() }, 2000) })
@@ -107,6 +108,25 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
     row.status = task.pending ? 'unknown' : task.status
     row.message = task.error || task.message || deploymentStatusLabel(task)
   }
+  function observeSubmission(row: PolicyReleaseRow, c: ReturnType<typeof context>) {
+    let stopped = false, observed = false
+    let next: ReturnType<typeof setTimeout> | undefined
+    const stop = () => { stopped = true; clearTimeout(next); submissionObservers.delete(stop) }
+    const poll = async () => {
+      if (stopped || !current(c)) return
+      try {
+        const { data } = await agentApi.getDeployment(row.id, row.deployment_id!)
+        if (!stopped && current(c) && data.deployment_id === row.deployment_id) {
+          observed = true
+          updateTask(row, data)
+        }
+      } catch { /* The POST may not have registered its ID yet. */ }
+      if (!stopped && current(c) && !terminal.has(row.status)) next = setTimeout(poll, 2000)
+    }
+    submissionObservers.add(stop)
+    next = setTimeout(poll, 0)
+    return { stop, observed: () => observed }
+  }
   async function waitForAgent(row: PolicyReleaseRow, c: ReturnType<typeof context>) {
     // Uncertain requests are polled by their original id, never resubmitted.
     let activationSent = false
@@ -150,18 +170,22 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
         results.value.push(row)
         // Use the reactive row so progress is visible while awaiting a device.
         const live = results.value[results.value.length - 1]!
+        live.task = { deployment_id: row.deployment_id, status: 'preparing', request_pending: true, message: '正在提交发布请求，等待服务端报告步骤。' }
+        const observer = observeSubmission(live, c)
         try {
           const { data } = await agentApi.pushConfig(target.id, row.deployment_id, {
             expected_profile_id: snapshot.profile_id, expected_oxidns_revision: snapshot.oxidns_revision,
             expected_config_revision: snapshot.config_revision
           })
           if (!current(c)) return
-          updateTask(live, data)
+          if (!observer.observed() || (terminal.has(data.status) && !terminal.has(live.status))) updateTask(live, data)
         } catch (failure: any) {
           if (!current(c)) return
-          if (failure.response?.data?.deployment_id) updateTask(live, failure.response.data)
-          else { live.status = failure.response ? 'failed' : 'unknown'; live.message = message(failure); live.task = failure.response?.data }
-        }
+          if (!observer.observed()) {
+            if (failure.response?.data?.deployment_id) updateTask(live, failure.response.data)
+            else { live.status = failure.response ? 'failed' : 'unknown'; live.message = message(failure); live.task = failure.response?.data }
+          }
+        } finally { observer.stop() }
         if (!await waitForAgent(live, c)) throw new Error(`${target.name} 未确认发布成功，后续设备及 ROS 已暂停。请核对下方结果。`)
       }
       if (!current(c)) return
@@ -218,13 +242,14 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
   window.addEventListener('beforeunload', beforeUnload)
   watch(() => [props.id, props.profile], () => {
     epoch++
+    submissionObservers.forEach(stop => stop())
     if (timer) clearTimeout(timer)
     wake?.(); timer = undefined; wake = undefined
     state.value = null; tab.value = 'sources'; saving.value = false; publishing.value = false
     results.value = []; rosResult.value = null
     void load()
   }, { immediate: true })
-  onBeforeUnmount(() => { disposed = true; epoch++; if (timer) clearTimeout(timer); wake?.(); window.removeEventListener('beforeunload', beforeUnload) })
+  onBeforeUnmount(() => { disposed = true; epoch++; submissionObservers.forEach(stop => stop()); if (timer) clearTimeout(timer); wake?.(); window.removeEventListener('beforeunload', beforeUnload) })
   return { state, policies, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview, changes,
     results, rosResult, unresolved, blockers, canPublish, load, reload, canLeave, selectRules, saveAndPreview, publish, refreshResults }
 }

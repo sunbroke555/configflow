@@ -85,7 +85,7 @@ def required_geo_resources(document, files):
     return [key for key in GEO_RESOURCES if key in required]
 
 
-def prepare_mihomo_resources(bundle, capability, config):
+def prepare_mihomo_resources(bundle, capability, config, *, progress=None):
     """Reuse Agent-local assets, then fetch only missing required databases.
 
     Old Agents keep their existing native download behavior until upgraded.
@@ -108,13 +108,19 @@ def prepare_mihomo_resources(bundle, capability, config):
     for key in required_geo_resources(document, files):
         label, path, default_file, aliases = GEO_RESOURCES[key]
         if any(alias in existing for alias in aliases):
+            if progress is not None:
+                progress(f'复用已有 {label} 资源（{path}），不重复下载')
             continue
         url = sources.get(key, _DEFAULT_BASE + default_file)
         target = str(PurePosixPath(capability.get('config_directory') or 'Agent 配置目录') / path)
         try:
             if not isinstance(url, str) or not url.strip():
                 raise RuleDownloadError(f'geox-url.{key} 未填写有效下载地址')
+            if progress is not None:
+                progress(f'正在下载 {label} 资源：{path}')
             value = _fetch_bytes(url, config)
+            if progress is not None:
+                progress(f'正在检查 {path} 下载内容与文件大小')
             if not value or value.lstrip().lower().startswith((b'<!doctype html', b'<html')):
                 raise RuleDownloadError('下载结果为空或是网页，不是 Geo 数据文件')
         except RuleDownloadError as exc:
@@ -132,4 +138,6 @@ def prepare_mihomo_resources(bundle, capability, config):
         files[path] = (value, 'resource')
         manifest['files'].append({'path': path, 'name': label, 'role': 'resource',
                                   'size': len(value), 'sha256': hashlib.sha256(value).hexdigest()})
+        if progress is not None:
+            progress(f'{path} 已准备（{len(value):,} 字节），已计算发布用 SHA256')
     return _pack(manifest, files, bundle.config_version) if len(files) != len(bundle.manifest['files']) else bundle

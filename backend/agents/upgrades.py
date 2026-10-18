@@ -11,6 +11,8 @@ import uuid
 import requests
 
 from .version import get_latest_version
+from .diagnostics import failure_text
+from .operation_events import append_event, clean_events, event_time, merge_events
 
 TERMINAL = {'succeeded', 'failed', 'rolled_back', 'rollback_failed'}
 ARCHES = ('linux-amd64', 'linux-arm64', 'linux-armv7')
@@ -118,7 +120,7 @@ def _request(agent, method, path, **kwargs):
                                headers={'Authorization': 'Bearer ' + agent['token']}, timeout=5, **kwargs)
 
 
-def _save(manager, agent_id, update_id, patch):
+def _save(manager, agent_id, update_id, patch, *, only_queued=False):
     def update(agents):
         agent = next(item for item in agents if item['id'] == agent_id)
         state = agent.get('latest_upgrade') or {}
@@ -126,7 +128,25 @@ def _save(manager, agent_id, update_id, patch):
             raise ValueError('Upgrade ownership changed')
         if state.get('status') in TERMINAL - {'rollback_failed'}:
             return dict(state)
-        state.update(patch)
+        if only_queued and state.get('status') != 'queued':
+            return dict(state)
+        reported_at = event_time(patch.get('agent_updated_at')) if isinstance(patch.get('agent_updated_at'), str) else None
+        if reported_at and state.get('agent_updated_at') and reported_at < state['agent_updated_at']:
+            return dict(state)
+        incoming = clean_events(patch.get('events'), (agent.get('token'),), STAGES | {'unknown'})
+        events = merge_events(state.get('events'), incoming, secrets=(agent.get('token'),), statuses=STAGES | {'unknown'})
+        if patch.get('status') and 'message' not in patch:
+            state.pop('message', None)
+        for key, value in patch.items():
+            if key not in ('events', 'agent_updated_at'):
+                state[key] = failure_text(value, (agent.get('token'),), limit=2048) if key in ('error', 'message') else value
+        if reported_at:
+            state['agent_updated_at'] = reported_at
+        if (not incoming or incoming[-1]['status'] != state.get('status')
+                or events and events[-1]['status'] != state.get('status')):
+            events = append_event(events, state.get('status'), state.get('message') or state.get('error'),
+                                  secrets=(agent.get('token'),))
+        state['events'] = events
         state['updated_at'] = time.time()
         agent['latest_upgrade'] = state
         return dict(state)
@@ -160,10 +180,14 @@ def start(manager, agent_id):
              'previous_version': agent.get('version', ''), 'status': 'queued',
              'agent_id': agent_id, 'started_at': time.time(), 'updated_at': time.time(),
              'protocol': 2 if info else 1, 'artifacts': available}
+    state['message'] = f'正在提交 Agent {state["target_version"]} 更新请求' + (f'（{arch}）' if arch else '')
+    state['events'] = append_event([], 'queued', state['message'])
 
     def reserve(agents):
         current = next(item for item in agents if item['id'] == agent_id)
         previous = current.get('latest_upgrade') or {}
+        if previous.get('update_id') != (agent.get('latest_upgrade') or {}).get('update_id'):
+            raise ValueError('当前更新任务已改变，请刷新后查看最新结果')
         if previous and (previous.get('status') not in TERMINAL or previous.get('status') == 'rollback_failed'):
             raise ValueError('已有更新正在执行或等待恢复，请先查询结果')
         deployment = current.get('latest_deployment') or {}
@@ -185,8 +209,11 @@ def start(manager, agent_id):
     except requests.RequestException:
         # The response may have been lost after acceptance. Keep the same ID
         # pending and reconcile with the Agent instead of resubmitting a new job.
-        return _save(manager, agent_id, state['update_id'], {'status': 'checking', 'error': '请求结果待确认，正在查询 Agent'})
-    return _save(manager, agent_id, state['update_id'], {'status': 'downloading'})
+        return _save(manager, agent_id, state['update_id'], {'status': 'checking', 'error': '请求结果待确认，正在查询 Agent'}, only_queued=True)
+    # Acceptance alone does not prove that the independent worker is already
+    # downloading. A simultaneous poll may also have observed a later stage.
+    return _save(manager, agent_id, state['update_id'], {
+        'status': 'queued', 'message': f'Agent {state["target_version"]} 更新请求已送达，等待设备处理'}, only_queued=True)
 
 
 def poll(manager, agent_id):
@@ -204,20 +231,29 @@ def poll(manager, agent_id):
         except ValueError:
             pass
     try:
+        worker_patch = None
         response = _request(agent, 'GET', '/api/update') if state['protocol'] == 2 else None
         if response is not None and response.status_code == 200:
             result = response.json()
             if result.get('update_id') == state['update_id'] and result.get('agent_id') == agent_id and result.get('status') in STAGES:
+                worker_patch = {'status': result['status'], 'error': str(result.get('error', ''))[:2048],
+                                'events': result.get('events'), 'agent_updated_at': result.get('updated_at')}
+                if isinstance(result.get('message'), str):
+                    worker_patch['message'] = result['message']
                 if result['status'] != 'succeeded':
-                    return _save(manager, agent_id, state['update_id'], {
-                        'status': result['status'], 'error': str(result.get('error', ''))[:2048]})
+                    return _save(manager, agent_id, state['update_id'], worker_patch)
         info_response = _request(agent, 'GET', '/api/upgrade-info')
         if info_response.status_code == 200:
             info = info_response.json()
             if info.get('agent_id') == agent_id and info.get('version') == state['target_version'] and info.get('migration_ready') is True:
                 # Protocol 2 also needs the independent worker's final result.
                 if state['protocol'] == 1 or response.status_code == 200 and result.get('update_id') == state['update_id'] and result.get('status') == 'succeeded':
-                    return _save(manager, agent_id, state['update_id'], {'status': 'succeeded', 'error': ''})
+                    return _save(manager, agent_id, state['update_id'], {**(worker_patch or {}), 'status': 'succeeded', 'error': ''})
+        if worker_patch is not None and worker_patch['status'] == 'succeeded':
+            worker_patch.update(status='checking', message='Agent 已报告更新完成，正在确认版本、身份与迁移结果')
+            worker_patch['events'] = [entry for entry in clean_events(worker_patch['events'], statuses=STAGES)
+                                      if entry['status'] not in TERMINAL]
+            return _save(manager, agent_id, state['update_id'], worker_patch)
     except (requests.RequestException, ValueError):
         pass
     deadline = state['started_at'] + 600

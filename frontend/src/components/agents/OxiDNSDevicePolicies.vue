@@ -61,9 +61,9 @@
     </fieldset>
     <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
       <div class="min-w-0 text-xs text-muted-foreground" role="status" aria-live="polite">
-        <p class="m-0">{{ task ? deploymentStatusLabel(task) : submissionFailure ? '发布失败' : '草稿尚未在此处发布；运行状态以设备实际配置为准。' }}</p>
-        <AgentFailureDetails v-if="submissionFailure || task" :task="submissionFailure || task!" class="mt-1" />
-        <p v-if="task?.query_error" class="mb-0 mt-1 text-warning-accent">发布结果暂未确认，正在继续查询。可在 Agent 管理中查看记录。</p>
+        <AgentOperationSteps v-if="task" :task="task" :busy="busy(agentId)" />
+        <p v-else class="m-0">{{ submissionFailure ? '发布失败' : '草稿尚未在此处发布；运行状态以设备实际配置为准。' }}</p>
+        <AgentFailureDetails :show-progress-message="false" v-if="submissionFailure || task" :task="submissionFailure || task!" class="mt-1" />
         <p v-if="task?.status === 'ready'" class="mb-0 mt-1">待激活的是已上传的配置快照，不包含之后保存的草稿修改。</p>
       </div>
       <Button v-if="task?.status === 'ready'" class="min-h-11" :disabled="publishing" @click="activate(agentId)">应用并启动</Button>
@@ -87,10 +87,11 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import OxiDNSClientSelect from './OxiDNSClientSelect.vue'
 import AgentFailureDetails from './AgentFailureDetails.vue'
+import AgentOperationSteps from './AgentOperationSteps.vue'
 import { agentApi, oxidnsDevicePolicyApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
-import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import type { OxiDNSDevicePolicies, OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
 
 const props = defineProps<{ agentId: string; recorder: string }>()

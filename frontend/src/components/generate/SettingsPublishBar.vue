@@ -4,6 +4,7 @@ import { LoaderCircle, RefreshCw, Save, Upload } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { Button } from '@/components/ui/button'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
+import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 
@@ -304,11 +305,11 @@ onUnmounted(() => { disposed = true; session++ })
     </div>
     <div v-if="progressLabel" role="status" aria-live="polite" class="settings-publish-progress min-w-0 space-y-1 text-xs leading-relaxed" :class="progressClass">
       <p class="m-0 break-words">{{ progressLabel }}</p>
+      <AgentOperationSteps v-if="task" :task="task" :show-current="false" />
       <p v-if="visibleAttempt && !visibleAttempt.inherited && (task || synchronousResult !== 'idle')" class="m-0 break-words text-muted-foreground">
         本次发布到「{{ visibleAttempt.agentName }}」，仅包含本次保存的配置；后续修改需重新保存并发布。
       </p>
-      <AgentFailureDetails v-if="submissionFailure || task" :task="submissionFailure || task!" />
-      <p v-if="task?.query_error" class="m-0 text-warning-accent">暂时无法确认发布结果，正在继续查询，请勿重复提交。</p>
+      <AgentFailureDetails :show-progress-message="false" v-if="submissionFailure || task" :task="submissionFailure || task!" />
       <p v-if="unresolved && task?.status !== 'ready'" class="m-0">可以离开此页面；已提交的发布会继续执行，结果可在 Agent 页面查看。</p>
       <div v-if="task?.status === 'ready'" class="flex min-w-0 flex-wrap items-center gap-2">
         <span class="min-w-0 flex-1">待应用的是本次已校验的配置，不包含之后保存的草稿修改。</span>

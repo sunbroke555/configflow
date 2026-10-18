@@ -214,7 +214,7 @@ def test_admin_starts_upgrade_and_both_agent_protocols_can_download(
     response = client.post("/api/agents/" + agent["id"] + "/update", headers=admin, json={})
     assert response.status_code == 202
     state = response.get_json()
-    assert state["status"] == "downloading"
+    assert state["status"] == "queued"  # The HTTP receipt does not prove a download started.
     assert state["protocol"] == protocol
     assert submitted[0]["update_id"] == state["update_id"]
     assert submitted[0]["version"] == upgrades.get_latest_version()

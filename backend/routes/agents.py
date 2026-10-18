@@ -1092,13 +1092,16 @@ def _generated_config_failure(exc, content, service):
 
 
 def _prepare_transactional_content(agent, config_data, *, base_url='', deployment_id=None,
-                                   prefer_cached=False, progress=None):
+                                   prefer_cached=False, progress=None, detail_progress=None, phase_progress=None):
     """Materialize exactly the files used by a push, without publishing or saving caches."""
     import yaml
     from backend.agents.deployment_bundle import build_deployment_bundle
     from backend.utils.provider_delivery import prepare_provider_bundle
 
     service_type = agent.get('service_type', 'mihomo')
+    if phase_progress is not None:
+        service_name = {'mihomo': 'Mihomo', 'mosdns': 'MosDNS', 'oxidns': 'OxiDNS'}.get(service_type, service_type)
+        phase_progress(f'正在生成 {service_name} config.yaml 并检查基础配置', force=True)
     provider_downloads, custom_files, prepared_providers = [], [], []
     if service_type == 'mihomo':
         config_content = generate_mihomo_config(config_data, base_url=base_url,
@@ -1117,7 +1120,8 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
                                   if prefer_cached else None)
             prepared_providers = prepare_provider_bundle(config_data, main, render_all=True,
                                                          allow_transport_fallback=False,
-                                                         subscription_fetch=subscription_fetch)
+                                                         subscription_fetch=subscription_fetch,
+                                                         progress=phase_progress)
             provider_downloads = [{key: item[key] for key in ('name', 'url', 'local_path', 'content')}
                                   for item in prepared_providers]
     elif service_type == 'mosdns':
@@ -1142,7 +1146,8 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
                                      provider_downloads=provider_downloads,
                                      ruleset_downloads=ruleset_downloads,
                                      custom_files=custom_files, base_url=base_url,
-                                     deployment_id=deployment_id, progress=progress)
+                                     deployment_id=deployment_id, progress=progress, detail_progress=detail_progress,
+                                     phase_progress=(lambda message: phase_progress(message, force=True)) if phase_progress else None)
     return {'bundle': bundle, 'config_content': config_content, 'prepared_providers': prepared_providers,
             'provider_downloads': provider_downloads, 'ruleset_downloads': ruleset_downloads,
             'custom_files': custom_files}
@@ -1249,6 +1254,34 @@ def push_config_to_agent(agent_id):
         agent_manager.record_deployment(agent_id, deployment_id, {
             'status': 'preparing', 'message': '正在生成并检查配置'})
         last_progress_at = None
+        from threading import Lock
+        from backend.agents.operation_events import event_message
+        progress_lock = Lock()
+        last_detail_at = None
+        rule_detail_started = False
+
+        def preparation_detail(message, *, force=False):
+            nonlocal last_detail_at
+            # Rule workers run concurrently. Persist at most one object update
+            # per second, plus real phase boundaries and final completion.
+            with progress_lock:
+                now = time.monotonic()
+                if not force and last_detail_at is not None and now - last_detail_at < 1:
+                    return
+                agent_manager.record_deployment(agent_id, deployment_id, {
+                    'status': 'preparing', 'message': event_message(message, (agent.get('token'),))})
+                if not force:
+                    last_detail_at = now
+
+        def rule_detail(done, total, name, phase):
+            nonlocal rule_detail_started
+            if phase == 'preparing':
+                with progress_lock:
+                    first = not rule_detail_started
+                    rule_detail_started = True
+                preparation_detail(f'正在准备规则「{name}」（共 {total} 个文件）', force=first)
+            else:
+                preparation_detail(f'规则「{name}」已准备（{done}/{total}）', force=done == total)
 
         def rule_progress(done, total):
             nonlocal last_progress_at
@@ -1263,7 +1296,8 @@ def push_config_to_agent(agent_id):
             last_progress_at = now
 
         prepared = _prepare_transactional_content(agent, config_data, base_url=base_url,
-                                                   deployment_id=deployment_id, progress=rule_progress)
+                                                   deployment_id=deployment_id, progress=rule_progress,
+                                                   detail_progress=rule_detail, phase_progress=preparation_detail)
         bundle = prepared['bundle']
         prepared_providers = prepared['prepared_providers']
         # Publish caches only after all files and the exact graph are ready.
@@ -1289,7 +1323,8 @@ def push_config_to_agent(agent_id):
         if hasattr(exc, 'issues'):
             result['issues'] = exc.issues
         if deployment_id:
-            agent_manager.record_deployment(agent_id, deployment_id, result)
+            recorded = agent_manager.record_deployment(agent_id, deployment_id, result)
+            result['events'] = recorded.get('events', [])
             result['deployment_id'] = deployment_id
         return jsonify(_public_deployment(result)), 400
     except Exception as exc:
@@ -1298,7 +1333,8 @@ def push_config_to_agent(agent_id):
                   'message': 'Deployment preparation failed',
                   'error_details': failure_text(f'{type(exc).__name__}: {exc}', (agent.get('token'),))}
         if deployment_id:
-            agent_manager.record_deployment(agent_id, deployment_id, result)
+            recorded = agent_manager.record_deployment(agent_id, deployment_id, result)
+            result['events'] = recorded.get('events', [])
             result['deployment_id'] = deployment_id
         return jsonify(_public_deployment(result)), 500
     finally:

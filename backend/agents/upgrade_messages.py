@@ -5,6 +5,8 @@ Agent protocol unchanged so recovery and diagnostics retain the original data.
 Mihomo core errors use a separate path and must not pass through this formatter.
 """
 import re
+from .operation_events import clean_events
+from .diagnostics import failure_text
 
 
 _MESSAGES = {
@@ -133,5 +135,12 @@ def public_upgrade_state(state):
     """Localize a response copy; never rewrite the durable recovery journal."""
     result = dict(state)
     if result.get('error'):
-        result['error'] = upgrade_error_message(result['error'])
+        result['error'] = upgrade_error_message(failure_text(result['error']))
+    if result.get('message'):
+        result['message'] = failure_text(result['message'])
+    if 'events' in result:
+        result['events'] = clean_events(result['events'])
+        for event in result['events']:
+            if event['status'] in ('failed', 'rolled_back', 'rollback_failed') and event.get('message'):
+                event['message'] = upgrade_error_message(event['message'])
     return result

@@ -134,8 +134,9 @@
 
           <div v-if="pushResults.length" class="min-w-0 space-y-3 border-b border-border px-5 py-3" aria-label="配置发布结果">
             <div v-for="result in pushResults" :key="result.id" class="min-w-0 space-y-1 text-xs">
-              <p class="m-0 font-medium">{{ result.name }} · {{ result.task.deployment_id ? deploymentStatusLabel(result.task as AgentDeployment) : '发布失败' }}</p>
-              <AgentFailureDetails :task="result.task" />
+              <p class="m-0 font-medium">{{ result.name }}<template v-if="!result.task.deployment_id"> · 发布失败</template></p>
+              <AgentOperationSteps v-if="result.task.deployment_id" :task="result.task" :busy="deploymentBusy(result.id)" />
+              <AgentFailureDetails :show-progress-message="false" :task="result.task" />
               <RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">前往 Agent 查看发布记录</RouterLink>
             </div>
           </div>
@@ -205,8 +206,10 @@ import BrandMark from '@/components/common/BrandMark.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { agentApi, generateApi, ruleSetApi, statsApi } from '@/api'
-import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
+import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
+import { submitAgentRequests } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { consumeAction } from '@/lib/actions'
 import { notify } from '@/lib/feedback'
@@ -401,11 +404,11 @@ const pushTitle = computed(() => {
 
 // push-config 只是提交事务发布（202），必须轮询到终态；否则服务端任务停在中间状态，
 // 下一次推送会因「未完成的发布」被 409 拒绝。
-const { deployments, busy: deploymentBusy, track: trackDeployment } = useAgentDeployments(() => live.refresh())
+const { deployments, busy: deploymentBusy, track: trackDeployment, beginSubmission, endSubmission } = useAgentDeployments(() => live.refresh())
 const deploying = computed(() => pushTargets.value.some(a => deploymentBusy(a.id)))
 const pushResults = computed(() => Object.entries(pushedAgents.value).flatMap(([id, agent]) => {
   const task = submissionFailures.value[id] || deployments[id]
-  return agent.serviceType === active.value && live.boundAgents.value.some(bound => bound.id === id) && task && (['failed', 'rolled_back', 'rollback_failed', 'ready', 'unknown'].includes(task.status || 'failed') || task.dns_checks?.some(check => check.level !== 'pass'))
+  return agent.serviceType === active.value && live.boundAgents.value.some(bound => bound.id === id) && task
     ? [{ id, name: agent.name, task }] : []
 }))
 // 「已校验，待激活」需要在 Agent 页手动激活，这里没有激活入口，只给出指引。
@@ -414,20 +417,24 @@ watch(() => Object.entries(deployments).filter(([, task]) => task.status === 're
   notify.info('配置已校验，等待激活', '请到 Agent 页面激活本次发布')
 })
 
-type PushOutcome = 'submitted' | 'done' | 'failed'
+type PushOutcome = 'submitted' | 'done' | 'failed' | 'busy'
 
 const pushOne = async (agent: { id: string; name: string }): Promise<PushOutcome> => {
   delete submissionFailures.value[agent.id]
   pushedAgents.value[agent.id] = { name: agent.name, serviceType: active.value }
   const deploymentId = createDeploymentId()
-  deployments[agent.id] = { deployment_id: deploymentId, status: 'preparing' }
+  const transactional = active.value !== 'surge'
+  if (transactional && !beginSubmission(agent.id, deploymentId)) return 'busy'
   try {
     const { data } = await agentApi.pushConfig(agent.id, deploymentId)
-    if (data.deployment_id) {
-      trackDeployment(agent.id, data)
+    if (data.deployment_id === deploymentId && typeof data.status === 'string') {
+      endSubmission(agent.id, deploymentId, data)
       return 'submitted'
     }
-    delete deployments[agent.id]
+    if (transactional) {
+      endSubmission(agent.id, deploymentId, 'unknown')
+      return 'submitted'
+    }
     if (data?.success === false || data?.restart?.success === false) {
       submissionFailures.value[agent.id] = { ...data, error: data.restart?.success === false ? `配置已写入，但重启失败：${data.restart.message || '服务未确认启动。'}` : data.error || data.message, error_details: data.restart?.error_details || data.error_details }
       notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
@@ -437,15 +444,20 @@ const pushOne = async (agent: { id: string; name: string }): Promise<PushOutcome
   } catch (error: any) {
     // 409 携带的未完成任务同样跟踪到终态，旧任务收尾后即可再次推送。
     if (error.response?.data?.deployment_id) {
+      if (error.response.data.deployment_id === deploymentId) {
+        endSubmission(agent.id, deploymentId, error.response.data)
+        return 'submitted'
+      }
+      endSubmission(agent.id, deploymentId, 'rejected')
       trackDeployment(agent.id, error.response.data)
       if (error.response.status === 409) notify.warning(`「${agent.name}」上一次发布尚未结束，正在等待其完成后再推送`)
       return 'submitted'
     }
-    if (!error.response) {
-      trackDeployment(agent.id, { deployment_id: deploymentId, status: 'unknown' })
+    if (transactional && (!error.response || error.response.status >= 500)) {
+      endSubmission(agent.id, deploymentId, 'unknown')
       return 'submitted'
     }
-    delete deployments[agent.id]
+    if (transactional && endSubmission(agent.id, deploymentId, 'rejected')) return 'submitted'
     submissionFailures.value[agent.id] = { ...error.response?.data, error: error.response?.data?.error || error.response?.data?.message || '发布请求失败，请重试。' }
     notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
     return 'failed'
@@ -456,14 +468,12 @@ const pushToAgents = async () => {
   const targets = pushTargets.value.filter(a => !deploymentBusy(a.id))
   if (!targets.length || pushing.value) return
   pushing.value = true
-  const loadingToast = notify.loading('正在准备并上传发布文件...')
   try {
-    const outcomes = await Promise.all(targets.map(pushOne))
+    const outcomes = await submitAgentRequests(targets, pushOne)
     const done = outcomes.filter(o => o === 'done').length
     if (done) notify.success(`已推送到 ${done} 台 Agent`)
     // submitted 的结果由 useAgentDeployments 轮询到终态后提示。
   } finally {
-    notify.dismiss(loadingToast)
     pushing.value = false
     live.refresh()
   }

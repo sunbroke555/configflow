@@ -1,5 +1,6 @@
 """Display explanations only: preserve protocol states and original diagnostics."""
 import re
+from .operation_events import clean_events
 
 
 _MESSAGES = {
@@ -88,4 +89,7 @@ def public_deployment_messages(record):
     for key in ('message', 'error', 'rollback_error', 'rollback_message'):
         if key in result:
             result[key] = deployment_message(result[key])
+    if 'events' in result:
+        result['events'] = [{**event, **({'message': deployment_message(event['message'])} if event.get('message') else {})}
+                            for event in clean_events(result['events'])]
     return result
