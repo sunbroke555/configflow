@@ -69,11 +69,7 @@ func serviceCommand(cfg *Config, action string) ([]byte, error) {
 		return nil, fmt.Errorf("service manager is not configured")
 	}
 	cmd.Dir = filepath.Dir(cfg.ConfigPath)
-	out, e := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		return out, fmt.Errorf("service %s timed out", action)
-	}
-	return out, e
+	return runDiagnosticCommand(ctx, cmd, "service "+action, cfg.Token)
 }
 func serviceRunning(cfg *Config) (bool, error) {
 	if e := validateServiceLifecycle(cfg); e != nil {
@@ -93,7 +89,7 @@ func serviceRunning(cfg *Config) (bool, error) {
 				return false, nil
 			}
 		}
-		return false, fmt.Errorf("cannot determine service status")
+		return false, diagnosticFailure("cannot determine service status", e, out, cfg.Token)
 	}
 	if cfg.ServiceManager == "systemd" {
 		v := strings.TrimSpace(string(out))
@@ -104,13 +100,14 @@ func serviceRunning(cfg *Config) (bool, error) {
 	if e == nil {
 		return true, nil
 	}
-	if exit, ok := e.(*exec.ExitError); ok {
+	var exit *exec.ExitError
+	if errors.As(e, &exit) {
 		code := exit.ExitCode()
 		if (cfg.ServiceManager == "systemd" && code == 3) || (cfg.ServiceManager == "openrc" && code == 3) || (cfg.ServiceManager == "command" && (code == 1 || code == 3)) {
 			return false, nil
 		}
 	}
-	return false, fmt.Errorf("cannot determine service status")
+	return false, diagnosticFailure("cannot determine service status", e, out, cfg.Token)
 }
 func stopService(cfg *Config) error {
 	// Stop the manager even for EXITED/BACKOFF/activating: those states may have
@@ -118,16 +115,19 @@ func stopService(cfg *Config) error {
 	out, commandErr := serviceCommand(cfg, "stop")
 	running, e := serviceRunning(cfg)
 	if e != nil {
+		if commandErr != nil {
+			return diagnosticFailure("service stop failed; cannot confirm service status", commandErr, out, cfg.Token)
+		}
 		return e
 	}
 	if running {
-		return fmt.Errorf("service remains running after stop")
+		return diagnosticFailure("service remains running after stop", commandErr, out, cfg.Token)
 	}
 	if commandErr != nil {
 		if cfg.ServiceManager == "supervisor" && (strings.Contains(string(out), "NOT_RUNNING") || strings.Contains(string(out), "not running")) {
 			return nil
 		}
-		return fmt.Errorf("service stop failed")
+		return commandErr
 	}
 	return nil
 }
@@ -138,7 +138,7 @@ func startService(cfg *Config) error {
 		}
 	}
 	if _, e := serviceCommand(cfg, "start"); e != nil {
-		return fmt.Errorf("service start failed")
+		return e
 	}
 	return nil
 }
@@ -156,7 +156,7 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) error {
 	if cfg.ServiceType == "mihomo" && (os.Getenv("ENABLE_MOSDNS") == "true" || os.Getenv("ENABLE_OXIDNS") == "true") {
 		modified, e := modifyMihomoConfig(string(data))
 		if e != nil {
-			return fmt.Errorf("invalid Mihomo configuration")
+			return diagnosticFailure("invalid Mihomo configuration", e, nil)
 		}
 		data = []byte(modified)
 		if e = durableWrite(name, data, 0600); e != nil {
@@ -175,7 +175,7 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) error {
 	}
 	var doc map[string]interface{}
 	if e = yaml.Unmarshal(data, &doc); e != nil || len(doc) == 0 {
-		return fmt.Errorf("configuration must be a nonempty YAML mapping")
+		return diagnosticFailure("configuration must be a nonempty YAML mapping", e, nil)
 	}
 	if cfg.ServiceType == "mosdns" {
 		if e = validateMosDNS(doc, root, s.Manifest); e != nil {
@@ -275,12 +275,8 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binaryPath, "-t", "-d", root, "-f", name)
 	cmd.Dir = root
-	// Native output can contain credentials and full URLs; retain only exit status.
-	if e = cmd.Run(); e != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("Mihomo configuration check timed out")
-		}
-		return fmt.Errorf("Mihomo configuration check failed")
+	if _, e = runDiagnosticCommand(ctx, cmd, "Mihomo configuration check", append(configurationDiagnosticSecrets(doc), cfg.Token)...); e != nil {
+		return e
 	}
 	// Native checks can obtain missing Geo resources. Include those exact bytes
 	// in the effective transaction instead of losing them when staging ends.
@@ -333,19 +329,19 @@ func validateMosDNS(doc map[string]interface{}, stage string, m *DeploymentManif
 	for _, f := range m.Files {
 		listed[f.Path] = true
 	}
-	for _, v := range plugins {
+	for index, v := range plugins {
 		p, ok := v.(map[string]interface{})
 		if !ok {
-			return fmt.Errorf("invalid MosDNS plugin")
+			return fmt.Errorf("invalid MosDNS plugin at index %d", index)
 		}
 		kind, _ := p["type"].(string)
 		tag, _ := p["tag"].(string)
 		if kind == "" {
-			return fmt.Errorf("MosDNS plugin type missing")
+			return fmt.Errorf("MosDNS plugin type missing at index %d (tag %q)", index, tag)
 		}
 		if tag != "" {
 			if tags[tag] {
-				return fmt.Errorf("duplicate MosDNS plugin tag")
+				return fmt.Errorf("duplicate MosDNS plugin tag %q", tag)
 			}
 			tags[tag] = true
 		}
@@ -398,7 +394,7 @@ func deploymentProbe(cfg *Config) error {
 	}
 	var doc map[string]interface{}
 	if e = yaml.Unmarshal(data, &doc); e != nil {
-		return fmt.Errorf("cannot parse active configuration")
+		return diagnosticFailure("cannot parse active configuration", e, nil)
 	}
 	url := cfg.HealthURL
 	secret := ""
@@ -422,7 +418,7 @@ func deploymentProbe(cfg *Config) error {
 		defer cancel()
 		req, e := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if e != nil {
-			return fmt.Errorf("invalid health URL")
+			return diagnosticFailure("invalid health URL", e, nil)
 		}
 		if secret != "" {
 			req.Header.Set("Authorization", "Bearer "+secret)
@@ -433,7 +429,7 @@ func deploymentProbe(cfg *Config) error {
 		client := http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(r *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
 		resp, e := client.Do(req)
 		if e != nil {
-			return fmt.Errorf("service HTTP health probe failed")
+			return diagnosticFailure("service HTTP health probe failed", e, nil)
 		}
 		resp.Body.Close()
 		client.CloseIdleConnections()
@@ -501,7 +497,7 @@ func mihomoRuntimeProbe(doc map[string]interface{}) error {
 			}
 			req, e := http.NewRequest(http.MethodGet, "http://"+loopbackAddress(controller)+endpoint, nil)
 			if e != nil {
-				return fmt.Errorf("invalid Mihomo controller address")
+				return diagnosticFailure("invalid Mihomo controller address", e, nil)
 			}
 			if secret != "" {
 				req.Header.Set("Authorization", "Bearer "+secret)
@@ -509,7 +505,7 @@ func mihomoRuntimeProbe(doc map[string]interface{}) error {
 			client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(r *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
 			resp, e := client.Do(req)
 			if e != nil {
-				return fmt.Errorf("Mihomo provider initialization probe failed")
+				return diagnosticFailure("Mihomo provider initialization probe failed", e, nil)
 			}
 			var response struct {
 				Providers map[string]json.RawMessage `json:"providers"`
@@ -518,7 +514,7 @@ func mihomoRuntimeProbe(doc map[string]interface{}) error {
 			resp.Body.Close()
 			client.CloseIdleConnections()
 			if e != nil || resp.StatusCode != 200 {
-				return fmt.Errorf("Mihomo provider status unavailable")
+				return diagnosticFailure(fmt.Sprintf("Mihomo provider status unavailable (HTTP %d)", resp.StatusCode), e, nil)
 			}
 			for name := range expected {
 				if _, ok := response.Providers[name]; !ok {
@@ -539,7 +535,7 @@ func mihomoRuntimeProbe(doc map[string]interface{}) error {
 	for _, key := range []string{"mixed-port", "port", "socks-port"} {
 		if port, ok := doc[key].(int); ok && port > 0 {
 			if e := probeMihomoProxy(net.JoinHostPort(bind, strconv.Itoa(port)), key); e != nil {
-				return fmt.Errorf("Mihomo %s proxy handshake failed", key)
+				return diagnosticFailure(fmt.Sprintf("Mihomo %s proxy handshake failed", key), e, nil)
 			}
 		}
 	}
@@ -547,7 +543,7 @@ func mihomoRuntimeProbe(doc map[string]interface{}) error {
 		if device, ok := tun["device"].(string); ok && device != "" {
 			iface, e := net.InterfaceByName(device)
 			if e != nil || iface.Flags&net.FlagUp == 0 {
-				return fmt.Errorf("Mihomo TUN interface is unavailable")
+				return diagnosticFailure(fmt.Sprintf("Mihomo TUN interface %q is unavailable", device), e, nil)
 			}
 		}
 	}
@@ -600,7 +596,7 @@ func dnsHealthQuery(address, name string) error {
 	// an absolute name avoids search-domain or system resolver fallbacks.
 	addresses, e := resolver.LookupIP(ctx, "ip4", name+".")
 	if e != nil || len(addresses) == 0 {
-		return fmt.Errorf("DNS probe received no successful address answer")
+		return diagnosticFailure("DNS probe received no successful address answer", e, nil)
 	}
 	return nil
 }

@@ -1,13 +1,17 @@
 import { onUnmounted, reactive } from 'vue'
 import { agentApi } from '@/api'
 import { notify } from '@/lib/feedback'
+import { deploymentErrorSummary } from '@/lib/agentFailure'
 
 export interface AgentDeployment {
   deployment_id: string
   status: string
   message?: string
   error?: string
+  error_details?: string
+  failed_stage?: string
   rollback_error?: string
+  rollback_error_details?: string
   config_version?: string
   config_revision?: number
   profile_id?: string
@@ -141,7 +145,7 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
           notify.success(task.manual_rollback ? '手动回滚成功，发布前配置已恢复并通过服务检查' : '配置发布成功，服务检查已通过')
           onSuccess()
         } else {
-          notify.error(deploymentLabels[task.status], task.error || task.message)
+          notify.error(deploymentLabels[task.status], deploymentErrorSummary(task))
         }
       }
       announced.add(key)
@@ -214,7 +218,7 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
     } catch (error: any) {
       if (error.response?.data?.deployment_id) track(agentId, error.response.data)
       else {
-        deployments[agentId] = { ...task, status: 'unknown', query_error: true }
+        deployments[agentId] = { ...task, status: 'unknown', query_error: true, message: error.response?.data?.message, error_details: error.response?.data?.error_details }
         schedule(agentId)
       }
     }
@@ -226,7 +230,7 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
     clearTimeout(timers.get(agentId))
     const rejectedKeyPrefix = `${agentId}:${deploymentId}:rollback_rejected:`
     for (const key of announced) if (key.startsWith(rejectedKeyPrefix)) announced.delete(key)
-    deployments[agentId] = { ...task, manual_rollback: true, rollback_rejected: false, rollback_message: undefined, status: 'rolling_back', query_error: false }
+    deployments[agentId] = { ...task, manual_rollback: true, rollback_rejected: false, rollback_message: undefined, rollback_error_details: undefined, status: 'rolling_back', query_error: false }
     try {
       const { data } = await agentApi.rollbackDeployment(agentId, deploymentId)
       if (!disposed) track(agentId, { ...data, manual_rollback: true })
@@ -235,10 +239,11 @@ export function useAgentDeployments(onSuccess: () => void, shouldAnnounce: (agen
       if (error.response?.data?.deployment_id && error.response?.data?.manual_rollback) {
         track(agentId, error.response.data)
       } else if (error.response && error.response.status >= 400 && error.response.status < 500) {
-        deployments[agentId] = task
-        notify.error('无法手动回滚', error.response.data?.message || '当前部署没有可用备份，或另一个操作正在进行。')
+        const reason = error.response.data?.message || '当前部署没有可用备份，或另一个操作正在进行。'
+        deployments[agentId] = { ...task, rollback_rejected: true, rollback_message: reason, rollback_error_details: error.response.data?.rollback_error_details || error.response.data?.error_details }
+        notify.error('无法手动回滚', deploymentErrorSummary({ error: reason }))
       } else {
-        deployments[agentId] = { ...task, manual_rollback: true, rollback_rejected: false, rollback_message: undefined, status: 'unknown', query_error: true }
+        deployments[agentId] = { ...task, manual_rollback: true, rollback_rejected: false, rollback_message: undefined, rollback_error_details: error.response?.data?.rollback_error_details || error.response?.data?.error_details, status: 'unknown', query_error: true }
         schedule(agentId, 0)
       }
     }

@@ -311,39 +311,140 @@ backup_config() {
     fi
 }
 
+# 只保留有界、脱敏后的重启诊断；不依赖 jq/python，也不将原始输出写入日志。
+restart_diagnostic_output() {
+    CF_DIAGNOSTIC_TOKEN="$TOKEN" CF_DIAGNOSTIC_COMMAND="$RESTART_CMD" \
+        LC_ALL=C awk -v mode="$1" -v http_file="$2" '
+        BEGIN {
+            marker = "[output truncated]\n"
+            retained_limit = 8192 - length(marker)
+        }
+        function replace_literal(value, secret, position, result) {
+            if (secret == "") return value
+            result = ""
+            while ((position = index(value, secret)) > 0) {
+                result = result substr(value, 1, position - 1) "[REDACTED]"
+                value = substr(value, position + length(secret))
+            }
+            return result value
+        }
+        function keep(line, lower, boundary) {
+            line = replace_literal(line, ENVIRON["CF_DIAGNOSTIC_TOKEN"])
+            line = replace_literal(line, ENVIRON["CF_DIAGNOSTIC_COMMAND"])
+            gsub(/[[:alpha:]][[:alnum:]+.-]*:\/\/[^[:space:]<>"\047]+/, "[URL REDACTED]", line)
+            lower = tolower(line)
+            # 多行凭据没有可靠的结束标记，后续输出保守隐藏。
+            if (hidden_value) {
+                line = "[REDACTED: credential value]"
+            } else if (lower ~ /(^|[^a-z0-9])(password|passwd|pwd|secret|token|authorization|authentication|credential|credentials|auth|bearer|basic|api[_ -]?key|access[_ -]?key|private[_ -]?key)([^a-z0-9]|$)/) {
+                hidden_value = (line ~ /[:=][[:space:]]*[|>{]?[[:space:]]*$/)
+                line = "[REDACTED: credential field]"
+            }
+            gsub(/[[:cntrl:]]/, " ", line)
+            # 脱敏后保留最近完整行，避免截断 UTF-8，并保留末尾的实际失败原因。
+            # 持续消费管道，保留真实命令退出码。
+            if (length(line) > retained_limit) {
+                truncated = 1
+                return
+            }
+            while (length(result) + length(line) + (result != "" ? 1 : 0) > retained_limit) {
+                boundary = index(result, "\n")
+                result = boundary ? substr(result, boundary + 1) : ""
+                truncated = 1
+            }
+            if (result != "") result = result "\n"
+            result = result line
+        }
+        {
+            if (mode == "url") {
+                if (seen) keep(previous)
+                previous = $0
+                seen = 1
+            } else keep($0)
+        }
+        END {
+            if (mode == "url") {
+                if (previous ~ /^[0-9][0-9][0-9]$/) print previous > http_file
+                else if (seen) keep(previous)
+            }
+            if (truncated) result = marker result
+            printf "%s", result
+        }'
+}
+
+restart_diagnostic_json() {
+    LC_ALL=C awk '
+        BEGIN { printf "\"" }
+        {
+            if (NR > 1) printf "\\n"
+            for (i = 1; i <= length($0); i++) {
+                c = substr($0, i, 1)
+                if (c == "\\") printf "\\\\"
+                else if (c == "\"") printf "\\\""
+                else if (c ~ /[[:cntrl:]]/) printf " "
+                else printf "%s", c
+            }
+        }
+        END { printf "\"" }'
+}
+
 # 重启服务
 restart_service() {
     log "执行服务重启操作"
+    RESTART_ERROR_DETAILS=""
+    local diagnostic_dir=$(mktemp -d 2>/dev/null)
+    local output=""
+    local exit_code=0
+    local http_code="000"
 
-    # 判断是 URL 还是命令
+    # 判断是 URL 还是命令；诊断临时目录不可用时仍按原逻辑执行。
     if echo "$RESTART_CMD" | grep -qE '^https?://'; then
-        # URL 方式：使用 curl 发送请求
         log "检测到 URL，使用 curl 发送重启请求"
-        local response=$(curl -s -w "\n%{http_code}" --connect-timeout 10 --max-time 30 -X POST "$RESTART_CMD" 2>&1)
-        local http_code=$(echo "$response" | tail -n1)
-        local body=$(echo "$response" | sed '$d')
-
-        log "重启请求响应: HTTP状态码=$http_code, 响应长度=${#body}"
-
+        if [ -n "$diagnostic_dir" ] && [ -d "$diagnostic_dir" ]; then
+            output=$({
+                curl -sS -w "\n%{http_code}" --connect-timeout 10 --max-time 30 -X POST "$RESTART_CMD"
+                printf '%s' "$?" > "$diagnostic_dir/exit"
+            } 2>&1 | restart_diagnostic_output url "$diagnostic_dir/http")
+            exit_code=$(cat "$diagnostic_dir/exit" 2>/dev/null)
+            http_code=$(cat "$diagnostic_dir/http" 2>/dev/null)
+        else
+            http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 -X POST "$RESTART_CMD" 2>/dev/null)
+            exit_code=$?
+        fi
+        [ -z "$http_code" ] && http_code="000"
+        [ -n "$diagnostic_dir" ] && rm -rf "$diagnostic_dir"
+        log "重启请求响应: HTTP状态码=$http_code"
         if [ "$http_code" = "200" ] || [ "$http_code" = "204" ]; then
             log "服务重启成功 (URL方式)"
             return 0
-        else
-            log_error "服务重启失败 (URL方式), HTTP状态码: $http_code"
-            return 1
         fi
+        RESTART_ERROR_DETAILS="HTTP status: $http_code; curl exit code: $exit_code"
+        log_error "服务重启失败 (URL方式), HTTP状态码: $http_code"
     else
-        # 命令方式：直接执行命令
         log "检测到命令，直接执行"
-        # 丢弃命令输出，日志只保留固定描述，避免命令输出泄露敏感信息
-        if eval "$RESTART_CMD" >/dev/null 2>&1; then
+        if [ -n "$diagnostic_dir" ] && [ -d "$diagnostic_dir" ]; then
+            output=$({
+                (eval "$RESTART_CMD")
+                printf '%s' "$?" > "$diagnostic_dir/exit"
+            } 2>&1 | restart_diagnostic_output command "")
+            exit_code=$(cat "$diagnostic_dir/exit" 2>/dev/null)
+            rm -rf "$diagnostic_dir"
+        else
+            eval "$RESTART_CMD" >/dev/null 2>&1
+            exit_code=$?
+        fi
+        if [ "$exit_code" = "0" ]; then
             log "服务重启成功 (命令方式)"
             return 0
-        else
-            log_error "服务重启失败 (命令方式)"
-            return 1
         fi
+        RESTART_ERROR_DETAILS="Command exit code: ${exit_code:-unknown}"
+        log_error "服务重启失败 (命令方式)"
     fi
+    if [ -n "$output" ]; then
+        RESTART_ERROR_DETAILS="$RESTART_ERROR_DETAILS
+$output"
+    fi
+    return 1
 }
 
 # HTTP 服务器（处理 API 请求）
@@ -634,8 +735,9 @@ handle_http_request() {
                             printf "\r\n"
                             printf "%s" "$response_body"
                         else
-                            local response_body='{"success":false,"message":"Restart failed"}'
-                            local response_length=${#response_body}
+                            local details_json=$(printf '%s' "$RESTART_ERROR_DETAILS" | restart_diagnostic_json)
+                            local response_body="{\"success\":false,\"message\":\"Restart failed\",\"error_details\":$details_json}"
+                            local response_length=$(printf '%s' "$response_body" | LC_ALL=C wc -c | tr -d '[:space:]')
                             printf "HTTP/1.1 500 Internal Server Error\r\n"
                             printf "Content-Type: application/json\r\n"
                             printf "Content-Length: %d\r\n" "$response_length"

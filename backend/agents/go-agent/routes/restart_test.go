@@ -26,7 +26,7 @@ func TestFailedSecretCommandDoesNotLeakLogsOutputOrError(t *testing.T) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previousWriter) })
 
-	output, err := executeURLCommand("printf " + outputSecret + "; false # " + commandSecret)
+	output, err := executeURLCommand("printf 'invalid listen address; password=" + outputSecret + "'; false # " + commandSecret)
 	if err == nil {
 		t.Fatal("executeURLCommand unexpectedly succeeded")
 	}
@@ -45,12 +45,15 @@ func TestFailedSecretCommandDoesNotLeakLogsOutputOrError(t *testing.T) {
 			t.Fatalf("failed command leaked %q: logs=%q err=%q", secret, logs.String(), err.Error())
 		}
 	}
+	if !strings.Contains(err.Error(), "invalid listen address") {
+		t.Fatalf("useful failure reason missing: %v", err)
+	}
 }
 
 func TestRestartHandlerDoesNotReturnFailedCommandOutput(t *testing.T) {
 	const commandSecret = "handler-command-secret"
 	const outputSecret = "handler-output-secret"
-	cfg := &Config{ConfigPath: filepath.Join(t.TempDir(), "config.yaml"), RestartCommand: "printf " + outputSecret + "; false # " + commandSecret}
+	cfg := &Config{ConfigPath: filepath.Join(t.TempDir(), "config.yaml"), RestartCommand: "printf 'failed to bind port; token=" + outputSecret + "'; false # " + commandSecret}
 	request := httptest.NewRequest(http.MethodPost, "/restart", nil)
 	recorder := httptest.NewRecorder()
 
@@ -65,7 +68,7 @@ func TestRestartHandlerDoesNotReturnFailedCommandOutput(t *testing.T) {
 			t.Fatalf("restart response leaked %q: %s", secret, body)
 		}
 	}
-	if strings.Contains(body, "output") {
-		t.Fatalf("restart response exposed output field: %s", body)
+	if !strings.Contains(body, "error_details") || !strings.Contains(body, "failed to bind port") {
+		t.Fatalf("restart response lost useful diagnostic: %s", body)
 	}
 }

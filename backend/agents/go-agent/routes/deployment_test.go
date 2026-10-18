@@ -338,7 +338,8 @@ func TestDeploymentNativeFailureAndLiveSymlinkLeaveOldRunning(t *testing.T) {
 			os.WriteFile(filepath.Join(root, "running"), nil, 0600)
 			files := map[string][]byte{"config.yaml": []byte("mode: rule\n")}
 			if scenario == "native" {
-				os.WriteFile(cfg.ServiceBinary, []byte("#!/bin/sh\necho native-credential-secret\nexit 1\n"), 0700)
+				files["config.yaml"] = []byte("mode: rule\nsecret: native-credential-secret\n")
+				os.WriteFile(cfg.ServiceBinary, []byte("#!/bin/sh\necho 'ERROR invalid provider native-credential-secret'\nexit 1\n"), 0700)
 			} else {
 				outside := t.TempDir()
 				os.Symlink(outside, filepath.Join(root, "ruleset"))
@@ -355,8 +356,11 @@ func TestDeploymentNativeFailureAndLiveSymlinkLeaveOldRunning(t *testing.T) {
 			if _, e := os.Stat(filepath.Join(root, "running")); e != nil {
 				t.Fatal("old service was stopped")
 			}
-			if strings.Contains(s.Error, "credential-secret") {
+			if strings.Contains(s.Error+s.ErrorDetails, "credential-secret") {
 				t.Fatal("native output leaked")
+			}
+			if scenario == "native" && !strings.Contains(s.ErrorDetails, "invalid provider") {
+				t.Fatal("useful native failure details missing")
 			}
 		})
 	}

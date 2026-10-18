@@ -245,3 +245,15 @@ describe('one-place DNS and ROS workflow', () => {
     expect(w.text()).toContain('New profile'); expect(w.text()).not.toContain('家庭 · 共用来源设备')
   })
 })
+
+describe('DNS publication diagnostics in routing workspace', () => {
+  it('preserves target and rollback errors and still pauses ROS after a DNS failure', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'rollback_failed', error: '配置校验失败', error_details: 'unknown sequence target', rollback_error: '服务恢复失败', rollback_error_details: 'listen :53 failed' } }) as any)
+    const w = await setup()
+    await click(w, '保存并预览')
+    await click(w, '确认发布')
+    expect(w.findAll('pre').map(item => item.text())).toEqual(['unknown sequence target', 'listen :53 failed'])
+    expect(agentApi.pushConfig).toHaveBeenCalledOnce()
+    expect(routerApi.apply).not.toHaveBeenCalled()
+  })
+})

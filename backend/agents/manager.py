@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 import requests
 from .metrics_history import MetricsHistory
+from .diagnostics import failure_text, response_failure
 
 
 def _constant_time_ascii_equal(provided: Any, expected: Any) -> bool:
@@ -377,15 +378,33 @@ class AgentManager:
                 # newer terminal result. Never regress a confirmed transaction.
                 return state.copy()
             if updates.get('status') and updates.get('status') != 'unknown' and not updates.get('http_status'):
+                if state.get('status') == 'unknown':
+                    # Transport diagnostics describe an unconfirmed outcome,
+                    # not the next confirmed Agent stage or failure.
+                    for field in ('error_details', 'rollback_error_details'):
+                        if field not in updates:
+                            state.pop(field, None)
                 state.pop('http_status', None)
                 if 'message' not in updates:
                     state.pop('message', None)
+            for summary, details in (('error', 'error_details'), ('rollback_error', 'rollback_error_details')):
+                if summary in updates and updates[summary] != state.get(summary) and details not in updates:
+                    state.pop(details, None)
             # Never let an upstream response replace task ownership or identity.
-            for key in ('status', 'message', 'error', 'failed_stage', 'rollback_error', 'config_version',
+            for key in ('status', 'message', 'error', 'error_details', 'failed_stage', 'rollback_error', 'rollback_error_details', 'config_version',
                         'config_revision', 'success', 'sha256', 'submitted', 'previous_running', 'health',
                         'http_status', 'manual_rollback'):
                 if key in updates:
-                    state[key] = updates[key]
+                    state[key] = (failure_text(updates[key], (agent.get('token'),))
+                                  if key in ('message', 'error', 'error_details', 'rollback_error', 'rollback_error_details')
+                                  else updates[key])
+            if updates.get('status') in ('ready', 'succeeded'):
+                for field in ('error', 'error_details', 'failed_stage', 'rollback_error', 'rollback_error_details'):
+                    if field not in updates:
+                        state.pop(field, None)
+            if updates.get('status') == 'rolled_back' and not updates.get('rollback_error'):
+                state.pop('rollback_error', None)
+                state.pop('rollback_error_details', None)
             state['updated_at'] = datetime.now().isoformat()
             is_latest = (agent.get('latest_deployment') or {}).get('deployment_id') == deployment_id
             if (state.get('status') == 'succeeded' and is_latest
@@ -436,6 +455,11 @@ class AgentManager:
                 result['success'] = False
                 result['http_status'] = response.status_code
             busy = response.status_code == 409 and result.get('message') == 'another service operation is in progress'
+            # Rejected activation/rollback responses can return immediately
+            # without record_deployment; sanitize those at the same boundary.
+            for field in ('message', 'error', 'error_details', 'rollback_error', 'rollback_error_details', 'rollback_message', 'failed_stage'):
+                if field in result:
+                    result[field] = failure_text(result[field], (agent.get('token'),))
             response.close()
             remaining = deadline - time.monotonic()
             if not retry_busy or not busy or attempt == 20 or remaining <= 0:
@@ -561,6 +585,8 @@ class AgentManager:
             state.pop('http_status', None)
             state.pop('rollback_rejected', None)
             state.pop('rollback_message', None)
+            state.pop('rollback_error', None)
+            state.pop('rollback_error_details', None)
             agent['latest_deployment'] = state.copy()
             return state.copy()
 
@@ -591,7 +617,13 @@ class AgentManager:
             task = current['deployments'][deployment_id]
             if task.get('status') in ('rolling_back', 'unknown') and task.get('manual_rollback'):
                 task.update(status='succeeded', success=True, rollback_rejected=True,
-                            rollback_message=rejection.get('message', 'Rollback was rejected by Agent'))
+                            rollback_message=failure_text(rejection.get('message', 'Rollback was rejected by Agent'), (current.get('token'),)))
+                details = rejection.get('rollback_error_details') or rejection.get('error_details')
+                task.pop('rollback_error', None)
+                if details:
+                    task['rollback_error_details'] = failure_text(details, (current.get('token'),))
+                else:
+                    task.pop('rollback_error_details', None)
                 for field in ('manual_rollback', 'http_status', 'message'):
                     task.pop(field, None)
                 if (current.get('latest_deployment') or {}).get('deployment_id') == deployment_id:
@@ -664,13 +696,14 @@ class AgentManager:
             elif not isinstance(result.get('status'), str):
                 result = {'success': True, 'status': 'unknown', 'message': 'Upload accepted; awaiting valid Agent status'}
             return self.record_deployment(agent_id, deployment_id, result)
-        except requests.RequestException:
+        except requests.RequestException as exc:
             agent = self.get_agent_by_id(agent_id)
             state = agent.get('deployments', {}).get(deployment_id, {})
             submitted = state.get('submitted', False)
             return self.record_deployment(agent_id, deployment_id, {
                 'success': submitted, 'status': 'unknown' if submitted else 'failed',
-                'message': 'Upload outcome unknown; query deployment status' if submitted else 'Unable to query Agent deployment capabilities'})
+                'message': 'Upload outcome unknown; query deployment status' if submitted else 'Unable to query Agent deployment capabilities',
+                'error_details': failure_text(str(exc), (agent.get('token'),))})
         except ValueError as exc:
             return self.record_deployment(agent_id, deployment_id, {'success': False, 'status': 'failed', 'message': str(exc)})
         finally:
@@ -748,7 +781,12 @@ class AgentManager:
             )
 
             if response.status_code == 200:
-                result = response.json()
+                try:
+                    result = response.json()
+                except (ValueError, TypeError):
+                    result = None
+                if not isinstance(result, dict):
+                    return response_failure(response, fallback='Invalid Agent response', secrets=(agent.get('token'),))
                 # 更新配置版本
                 if result.get('success'):
                     def update_version(agents):
@@ -764,12 +802,13 @@ class AgentManager:
                     self._update_agents(update_version)
                     return {'success': True, 'message': 'Config pushed successfully'}
                 else:
-                    return {'success': False, 'message': result.get('message', 'Unknown error')}
+                    return response_failure(response, fallback='Config update failed', secrets=(agent.get('token'),))
             else:
-                return {'success': False, 'message': f'HTTP {response.status_code}'}
+                return response_failure(response, fallback=f'HTTP {response.status_code}', secrets=(agent.get('token'),))
 
         except requests.exceptions.RequestException as e:
-            return {'success': False, 'message': f'Connection error: {str(e)}'}
+            return {'success': False, 'message': 'Unable to connect to Agent',
+                    'error_details': failure_text(str(e), (agent.get('token'),))}
 
     def restart_agent_service(self, agent_id: str) -> Dict[str, Any]:
         """
@@ -800,12 +839,21 @@ class AgentManager:
             )
 
             if response.status_code == 200:
-                return response.json()
+                try:
+                    result = response.json()
+                except (ValueError, TypeError):
+                    result = None
+                if not isinstance(result, dict):
+                    return response_failure(response, fallback='Invalid Agent response', secrets=(agent.get('token'),))
+                if result.get('success'):
+                    return result
+                return response_failure(response, fallback='Restart failed', secrets=(agent.get('token'),))
             else:
-                return {'success': False, 'message': f'HTTP {response.status_code}'}
+                return response_failure(response, fallback=f'HTTP {response.status_code}', secrets=(agent.get('token'),))
 
         except requests.exceptions.RequestException as e:
-            return {'success': False, 'message': f'Connection error: {str(e)}'}
+            return {'success': False, 'message': 'Unable to connect to Agent',
+                    'error_details': failure_text(str(e), (agent.get('token'),))}
 
     def get_agent_status(self, agent_id: str) -> Dict[str, Any]:
         """

@@ -132,6 +132,13 @@
             </div>
           </div>
 
+          <div v-if="pushResults.length" class="min-w-0 space-y-3 border-b border-border px-5 py-3" aria-label="配置发布结果">
+            <div v-for="result in pushResults" :key="result.id" class="min-w-0 space-y-1 text-xs">
+              <p class="m-0 font-medium">{{ result.name }} · {{ result.task.deployment_id ? deploymentStatusLabel(result.task as AgentDeployment) : '发布失败' }}</p>
+              <AgentFailureDetails :task="result.task" />
+              <RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">前往 Agent 查看发布记录</RouterLink>
+            </div>
+          </div>
           <div class="relative">
             <pre
               ref="codeEl"
@@ -190,7 +197,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { Check, ChevronRight, Copy, Loader2, Play, Send, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -198,7 +205,9 @@ import BrandMark from '@/components/common/BrandMark.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { agentApi, generateApi, ruleSetApi, statsApi } from '@/api'
-import { createDeploymentId, useAgentDeployments } from '@/composables/useAgentDeployments'
+import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
+import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { consumeAction } from '@/lib/actions'
 import { notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
@@ -377,6 +386,8 @@ const copyOutput = async () => {
 
 /* ---------- 推送：当前配置空间里同类型且在线的 Agent ---------- */
 const pushing = ref(false)
+const submissionFailures = ref<Record<string, Partial<AgentDeployment>>>({})
+const pushedAgents = ref<Record<string, { name: string; serviceType: string }>>({})
 const pushTargets = computed(() =>
   active.value === 'loon'
     ? []
@@ -392,6 +403,11 @@ const pushTitle = computed(() => {
 // 下一次推送会因「未完成的发布」被 409 拒绝。
 const { deployments, busy: deploymentBusy, track: trackDeployment } = useAgentDeployments(() => live.refresh())
 const deploying = computed(() => pushTargets.value.some(a => deploymentBusy(a.id)))
+const pushResults = computed(() => Object.entries(pushedAgents.value).flatMap(([id, agent]) => {
+  const task = submissionFailures.value[id] || deployments[id]
+  return agent.serviceType === active.value && live.boundAgents.value.some(bound => bound.id === id) && task && ['failed', 'rolled_back', 'rollback_failed', 'ready', 'unknown'].includes(task.status || 'failed')
+    ? [{ id, name: agent.name, task }] : []
+}))
 // 「已校验，待激活」需要在 Agent 页手动激活，这里没有激活入口，只给出指引。
 watch(() => Object.entries(deployments).filter(([, task]) => task.status === 'ready').map(([id]) => id).join(','), ids => {
   if (!ids) return
@@ -401,6 +417,8 @@ watch(() => Object.entries(deployments).filter(([, task]) => task.status === 're
 type PushOutcome = 'submitted' | 'done' | 'failed'
 
 const pushOne = async (agent: { id: string; name: string }): Promise<PushOutcome> => {
+  delete submissionFailures.value[agent.id]
+  pushedAgents.value[agent.id] = { name: agent.name, serviceType: active.value }
   const deploymentId = createDeploymentId()
   deployments[agent.id] = { deployment_id: deploymentId, status: 'preparing' }
   try {
@@ -410,6 +428,11 @@ const pushOne = async (agent: { id: string; name: string }): Promise<PushOutcome
       return 'submitted'
     }
     delete deployments[agent.id]
+    if (data?.success === false || data?.restart?.success === false) {
+      submissionFailures.value[agent.id] = { ...data, error: data.restart?.success === false ? `配置已写入，但重启失败：${data.restart.message || '服务未确认启动。'}` : data.error || data.message, error_details: data.restart?.error_details || data.error_details }
+      notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
+      return 'failed'
+    }
     return 'done'
   } catch (error: any) {
     // 409 携带的未完成任务同样跟踪到终态，旧任务收尾后即可再次推送。
@@ -423,7 +446,8 @@ const pushOne = async (agent: { id: string; name: string }): Promise<PushOutcome
       return 'submitted'
     }
     delete deployments[agent.id]
-    notify.error(`「${agent.name}」配置发布失败`, error.response?.data?.message)
+    submissionFailures.value[agent.id] = { ...error.response?.data, error: error.response?.data?.error || error.response?.data?.message || '发布请求失败，请重试。' }
+    notify.error(`「${agent.name}」配置发布失败`, deploymentErrorSummary(submissionFailures.value[agent.id]))
     return 'failed'
   }
 }

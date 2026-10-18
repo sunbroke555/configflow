@@ -125,7 +125,8 @@
             <ul class="m-0 list-none divide-y divide-border p-0">
               <li v-for="row in results" :key="row.id" class="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 py-3 text-sm sm:grid-cols-[11rem_7rem_minmax(0,1fr)]">
                 <span class="min-w-0 break-words font-medium">{{ row.name }}</span><span class="text-xs" :class="row.status === 'succeeded' ? 'text-success-accent' : 'text-warning-accent'">{{ resultStatus(row.status) }}</span>
-                <p v-if="row.message" class="col-span-2 m-0 break-words text-xs text-muted-foreground sm:col-span-1">{{ row.message }}</p>
+                <AgentFailureDetails v-if="row.task" :task="row.task" class="col-span-2 min-w-0 sm:col-span-1" />
+                <p v-else-if="row.message" class="col-span-2 m-0 break-words text-xs text-muted-foreground sm:col-span-1">{{ row.message }}</p>
               </li>
             </ul>
             <ul v-if="rosResult" class="m-0 space-y-1 pl-5 text-xs"><li v-for="(entry, index) in [...(rosResult.log || []), ...(rosResult.rollback || [])]" :key="index">{{ entry.summary }} · {{ entry.status }}</li></ul>
@@ -155,6 +156,7 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import FormField from '@/components/common/FormField.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
+import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import PolicyRoutingObjects from './PolicyRoutingObjects.vue'
 import PolicySourceEditor from './PolicySourceEditor.vue'
 import PolicyDestinationEditor from './PolicyDestinationEditor.vue'

@@ -37,3 +37,12 @@ describe('Agent deployment history rollback availability', () => {
     expect(document.body.textContent).not.toContain('发布失败，已回滚')
   })
 })
+
+describe('Agent deployment history diagnostics', () => {
+  it('renders persisted publication and rollback diagnostics independently', async () => {
+    await render({ progress: { ...latest, status: 'rollback_failed', error: '配置校验失败', failed_stage: 'verifying', error_details: 'line 17: missing group', rollback_error: '服务恢复失败', rollback_error_details: 'failed to bind :53' } })
+    expect(document.body.textContent).toContain('失败步骤：校验中')
+    expect([...document.querySelectorAll('pre')].map(element => element.textContent)).toEqual(['line 17: missing group', 'failed to bind :53'])
+    expect([...document.querySelectorAll('details')].every(element => !element.open)).toBe(true)
+  })
+})

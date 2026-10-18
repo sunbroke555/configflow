@@ -3,6 +3,7 @@ import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { LoaderCircle, RefreshCw, Save, Upload } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { Button } from '@/components/ui/button'
+import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 
@@ -25,6 +26,7 @@ const selectedId = ref('')
 const loading = ref(false)
 const loadError = ref('')
 const error = ref('')
+const submissionFailure = ref<Partial<AgentDeployment> | null>(null)
 const phase = ref<'idle' | 'saving' | 'checking' | 'submitting'>('idle')
 const attempt = ref<Attempt | null>(null)
 const synchronousResult = ref<'idle' | 'done' | 'unknown'>('idle')
@@ -152,6 +154,7 @@ function selectTarget(value: unknown) {
   attempt.value = null
   synchronousResult.value = 'idle'
   error.value = ''
+  submissionFailure.value = null
   restorePending()
 }
 
@@ -161,6 +164,7 @@ async function saveAndPublish() {
     profileId: props.profileId, serviceType: props.serviceType, saved: false }
   attempt.value = current
   error.value = ''
+  submissionFailure.value = null
   synchronousResult.value = 'idle'
   phase.value = 'saving'
   try {
@@ -190,7 +194,8 @@ async function saveAndPublish() {
       if (current.serviceType === 'surge') {
         if (!stillCurrent(current)) return
         if (data?.success !== true || data?.restart?.success === false) {
-          error.value = `草稿已保存，发布失败：${data?.restart?.message || data?.message || '目标设备未确认应用成功。'}`
+          error.value = data?.restart?.success === false ? '草稿已保存，配置已写入，但重启失败。' : '草稿已保存，发布失败。'
+          submissionFailure.value = { ...data, error: data?.restart?.message || data?.error || data?.message || '目标设备未确认应用成功。', error_details: data?.restart?.error_details || data?.error_details }
         } else synchronousResult.value = 'done'
       } else if (data?.deployment_id === current.deploymentId && typeof data?.status === 'string') {
         endSubmission(current.agentId, current.deploymentId, data)
@@ -200,10 +205,13 @@ async function saveAndPublish() {
       }
     } catch (failure: any) {
       if (disposed) return
+      if (stillCurrent(current) && !failure.response?.data?.deployment_id && failure.response?.data?.error_details) {
+        submissionFailure.value = { ...failure.response.data, message: messageOf(failure) }
+      }
       if (current.serviceType === 'surge') {
         if (!stillCurrent(current)) return
         if (!failure.response || failure.response.status >= 500) synchronousResult.value = 'unknown'
-        else error.value = `草稿已保存，发布失败：${messageOf(failure)}`
+        else { error.value = '草稿已保存，发布失败。'; submissionFailure.value = { ...failure.response.data, error: messageOf(failure) } }
       } else if (failure.response?.data?.deployment_id) {
         const result = failure.response.data as AgentDeployment
         if (result.deployment_id === current.deploymentId) endSubmission(current.agentId, current.deploymentId, result)
@@ -217,7 +225,8 @@ async function saveAndPublish() {
         }
       } else if (!failure.response || failure.response.status >= 500) endSubmission(current.agentId, current.deploymentId, 'unknown')
       else if (!endSubmission(current.agentId, current.deploymentId, 'rejected') && stillCurrent(current)) {
-        error.value = `草稿已保存，发布失败：${messageOf(failure)}`
+        error.value = '草稿已保存，发布失败。'
+        submissionFailure.value = { ...failure.response.data, error: messageOf(failure) }
       }
     } finally { pendingPosts.delete(current.agentId) }
   } catch (failure) {
@@ -231,6 +240,7 @@ async function activateSaved() {
   if (!current || task.value?.status !== 'ready' || phase.value !== 'idle' || props.disabled) return
   phase.value = 'checking'
   error.value = ''
+  submissionFailure.value = null
   try {
     if (await verifyTarget(current) && stillCurrent(current)) await activate(current.agentId)
   } catch (failure) {
@@ -248,6 +258,7 @@ watch(() => [props.open, props.profileId, props.serviceType] as const, () => {
   phase.value = 'idle'
   attempt.value = null
   error.value = ''
+  submissionFailure.value = null
   synchronousResult.value = 'idle'
   if (props.open) void loadTargets()
 }, { immediate: true, flush: 'sync' })
@@ -296,7 +307,7 @@ onUnmounted(() => { disposed = true; session++ })
       <p v-if="visibleAttempt && !visibleAttempt.inherited && (task || synchronousResult !== 'idle')" class="m-0 break-words text-muted-foreground">
         本次发布到「{{ visibleAttempt.agentName }}」，仅包含本次保存的配置；后续修改需重新保存并发布。
       </p>
-      <p v-if="task?.message || task?.error || task?.rollback_error" class="m-0 break-words">{{ [task.error || task.message, task.rollback_error].filter(Boolean).join('；') }}</p>
+      <AgentFailureDetails v-if="submissionFailure || task" :task="submissionFailure || task!" />
       <p v-if="task?.query_error" class="m-0 text-warning-accent">暂时无法确认发布结果，正在继续查询，请勿重复提交。</p>
       <p v-if="unresolved && task?.status !== 'ready'" class="m-0">可以离开此页面；已提交的发布会继续执行，结果可在 Agent 页面查看。</p>
       <div v-if="task?.status === 'ready'" class="flex min-w-0 flex-wrap items-center gap-2">

@@ -59,21 +59,23 @@ type deploymentBackup struct {
 	SHA256         string `json:"sha256,omitempty"`
 }
 type DeploymentState struct {
-	Success          bool                `json:"success"`
-	DeploymentID     string              `json:"deployment_id"`
-	Status           string              `json:"status"`
-	ArchiveSHA256    string              `json:"archive_sha256"`
-	ConfigVersion    string              `json:"config_version,omitempty"`
-	Error            string              `json:"error,omitempty"`
-	FailedStage      string              `json:"failed_stage,omitempty"`
-	RollbackError    string              `json:"rollback_error,omitempty"`
-	UpdatedAt        string              `json:"updated_at"`
-	Manifest         *DeploymentManifest `json:"-"`
-	WasRunning       bool                `json:"was_running"`
-	Backups          []deploymentBackup  `json:"backups,omitempty"`
-	BackupComplete   bool                `json:"backup_complete"`
-	PreviousManifest json.RawMessage     `json:"previous_manifest,omitempty"`
-	ManualRollback   bool                `json:"manual_rollback,omitempty"`
+	Success              bool                `json:"success"`
+	DeploymentID         string              `json:"deployment_id"`
+	Status               string              `json:"status"`
+	ArchiveSHA256        string              `json:"archive_sha256"`
+	ConfigVersion        string              `json:"config_version,omitempty"`
+	Error                string              `json:"error,omitempty"`
+	ErrorDetails         string              `json:"error_details,omitempty"`
+	FailedStage          string              `json:"failed_stage,omitempty"`
+	RollbackError        string              `json:"rollback_error,omitempty"`
+	RollbackErrorDetails string              `json:"rollback_error_details,omitempty"`
+	UpdatedAt            string              `json:"updated_at"`
+	Manifest             *DeploymentManifest `json:"-"`
+	WasRunning           bool                `json:"was_running"`
+	Backups              []deploymentBackup  `json:"backups,omitempty"`
+	BackupComplete       bool                `json:"backup_complete"`
+	PreviousManifest     json.RawMessage     `json:"previous_manifest,omitempty"`
+	ManualRollback       bool                `json:"manual_rollback,omitempty"`
 }
 
 func deploymentRoot(cfg *Config) string {
@@ -151,6 +153,18 @@ func syncDirectory(name string) error {
 	return f.Sync()
 }
 func saveDeployment(cfg *Config, s *DeploymentState, status string) error {
+	if cfg.Token != "" {
+		for _, value := range []*string{&s.Error, &s.ErrorDetails, &s.RollbackError, &s.RollbackErrorDetails} {
+			*value = strings.ReplaceAll(*value, cfg.Token, "[REDACTED]")
+		}
+	}
+	if status == "succeeded" {
+		s.Error, s.ErrorDetails, s.FailedStage = "", "", ""
+		s.RollbackError, s.RollbackErrorDetails = "", ""
+	}
+	if status == "rolled_back" || status == "recovery_pending" {
+		s.RollbackError, s.RollbackErrorDetails = "", ""
+	}
 	s.Status = status
 	s.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.Success = (s.ManualRollback && status == "rolled_back") || (status != "failed" && status != "rolled_back" && status != "rollback_failed")
@@ -209,7 +223,12 @@ func deploymentBlocked(cfg *Config) error {
 	return nil
 }
 func deploymentFailure(w http.ResponseWriter, code int, err error) {
-	JsonResponse(w, code, map[string]interface{}{"success": false, "message": err.Error()})
+	message, details := deploymentErrorFields(err)
+	response := map[string]interface{}{"success": false, "message": message}
+	if details != "" {
+		response["error_details"] = details
+	}
+	JsonResponse(w, code, response)
 }
 func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -287,7 +306,7 @@ func DeploymentUploadHandler(cfg *Config) http.HandlerFunc {
 		}
 		fail := func(err error) {
 			s.FailedStage = s.Status
-			s.Error = err.Error()
+			s.Error, s.ErrorDetails = deploymentErrorFields(err)
 			_ = saveDeployment(cfg, s, "failed")
 			cleanupDeployments(cfg, s.DeploymentID)
 			deploymentFailure(w, 400, err)
@@ -394,7 +413,7 @@ func DeploymentHandler(cfg *Config) http.HandlerFunc {
 			defer release()
 			if e := loadEffectiveManifest(cfg, s); e != nil {
 				s.FailedStage = s.Status
-				s.Error = e.Error()
+				s.Error, s.ErrorDetails = deploymentErrorFields(e)
 				_ = saveDeployment(cfg, s, "failed")
 				return
 			}
@@ -422,7 +441,7 @@ func hashFile(name string) (string, int64, error) {
 func prepareDeployment(cfg *Config, s *DeploymentState, activate bool) {
 	fail := func(e error) {
 		s.FailedStage = s.Status
-		s.Error = e.Error()
+		s.Error, s.ErrorDetails = deploymentErrorFields(e)
 		_ = saveDeployment(cfg, s, "failed")
 		cleanupDeployments(cfg, s.DeploymentID)
 	}
@@ -832,7 +851,7 @@ func replaceDeployment(cfg *Config, s *DeploymentState) error {
 func activateDeployment(cfg *Config, s *DeploymentState) {
 	failBefore := func(e error) {
 		s.FailedStage = s.Status
-		s.Error = e.Error()
+		s.Error, s.ErrorDetails = deploymentErrorFields(e)
 		_ = saveDeployment(cfg, s, "failed")
 		cleanupDeployments(cfg, s.DeploymentID)
 	}
@@ -883,9 +902,13 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 		return
 	}
 	s.WasRunning = running
+	var reloadErr error
 	fail := func(e error) {
+		if reloadErr != nil {
+			e = withPreviousDiagnostic("OxiDNS reload and fallback restart failed", reloadErr, e)
+		}
 		s.FailedStage = s.Status
-		s.Error = e.Error()
+		s.Error, s.ErrorDetails = deploymentErrorFields(e)
 		rollbackDeployment(cfg, s, true)
 		cleanupDeployments(cfg, s.DeploymentID)
 	}
@@ -927,6 +950,7 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 			return
 		}
 		if e = reloader.reload(cfg); e != nil {
+			reloadErr = e
 			// The core keeps serving its previous plugins; apply the candidate
 			// the usual way so the health check and rollback still decide.
 			log.Printf("OxiDNS release %s: reload failed (%v), restarting", s.DeploymentID, e)
@@ -981,11 +1005,12 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 	cleanupDeployments(cfg, s.DeploymentID)
 }
 func rollbackDeployment(cfg *Config, s *DeploymentState, start bool) {
+	s.RollbackError, s.RollbackErrorDetails = "", ""
 	// Persist intent before rollback writes so an interrupted rollback is retried.
 	_ = saveDeployment(cfg, s, "rolling_back")
 	rollbackErr := func(e error) {
 		s.ConfigVersion = ""
-		s.RollbackError = e.Error()
+		s.RollbackError, s.RollbackErrorDetails = deploymentErrorFields(e)
 		_ = saveDeployment(cfg, s, "rollback_failed")
 	}
 	if start {
@@ -1069,7 +1094,7 @@ func rollbackDeployment(cfg *Config, s *DeploymentState, start bool) {
 			s.ConfigVersion = digest[:8]
 		}
 	}
-	s.RollbackError = ""
+	s.RollbackError, s.RollbackErrorDetails = "", ""
 	status := "rolled_back"
 	if !start && s.WasRunning {
 		status = "recovery_pending"
@@ -1112,13 +1137,17 @@ func RecoverDeployments(cfg *Config, startService bool) error {
 		switch s.Status {
 		case "recovery_pending":
 			if startService {
+				var startupErr error
 				if running, e := serviceRunning(cfg); e == nil && !running {
-					_ = startServiceForRecovery(cfg)
+					startupErr = startServiceForRecovery(cfg)
 				}
 				// STARTING/activating is normal during boot. Let the bounded
 				// health window wait for readiness instead of stranding recovery.
 				if e := checkDeploymentHealth(cfg); e != nil {
-					s.RollbackError = e.Error()
+					if startupErr != nil {
+						e = withPreviousDiagnostic("restored service startup and health check failed", startupErr, e)
+					}
+					s.RollbackError, s.RollbackErrorDetails = deploymentErrorFields(e)
 					_ = saveDeployment(cfg, s, "rollback_failed")
 					return fmt.Errorf("restored service health failed")
 				}
@@ -1127,13 +1156,15 @@ func RecoverDeployments(cfg *Config, startService bool) error {
 				}
 			}
 		case "stopping", "backing_up", "replacing", "reloading", "starting", "checking", "rolling_back", "rollback_failed":
-			s.Error = "deployment interrupted before successful confirmation"
+			if s.Error == "" {
+				s.Error, s.ErrorDetails = "deployment interrupted before successful confirmation", ""
+			}
 			rollbackDeployment(cfg, s, startService)
 			if s.Status == "rollback_failed" {
 				return fmt.Errorf("deployment %s recovery failed: %s", s.DeploymentID, s.RollbackError)
 			}
 		case "receiving", "verifying":
-			s.Error = "deployment interrupted before activation"
+			s.Error, s.ErrorDetails = "deployment interrupted before activation", ""
 			if e = saveDeployment(cfg, s, "failed"); e != nil {
 				return e
 			}

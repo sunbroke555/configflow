@@ -61,8 +61,8 @@
     </fieldset>
     <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
       <div class="min-w-0 text-xs text-muted-foreground" role="status" aria-live="polite">
-        <p class="m-0">{{ task ? deploymentStatusLabel(task) : '草稿尚未在此处发布；运行状态以设备实际配置为准。' }}</p>
-        <p v-if="task?.error || task?.message" class="mb-0 mt-1 break-words">{{ task.error || task.message }}</p>
+        <p class="m-0">{{ task ? deploymentStatusLabel(task) : submissionFailure ? '发布失败' : '草稿尚未在此处发布；运行状态以设备实际配置为准。' }}</p>
+        <AgentFailureDetails v-if="submissionFailure || task" :task="submissionFailure || task!" class="mt-1" />
         <p v-if="task?.query_error" class="mb-0 mt-1 text-warning-accent">发布结果暂未确认，正在继续查询。可在 Agent 管理中查看记录。</p>
         <p v-if="task?.status === 'ready'" class="mb-0 mt-1">待激活的是已上传的配置快照，不包含之后保存的草稿修改。</p>
       </div>
@@ -86,10 +86,11 @@ import LoadingRows from '@/components/common/LoadingRows.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import OxiDNSClientSelect from './OxiDNSClientSelect.vue'
+import AgentFailureDetails from './AgentFailureDetails.vue'
 import { agentApi, oxidnsDevicePolicyApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
-import { createDeploymentId, deploymentStatusLabel, useAgentDeployments } from '@/composables/useAgentDeployments'
+import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import type { OxiDNSDevicePolicies, OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
 
 const props = defineProps<{ agentId: string; recorder: string }>()
@@ -115,6 +116,7 @@ const loading = ref(false)
 const saving = ref(false)
 const publishing = ref(false)
 const error = ref('')
+const submissionFailure = ref<Partial<AgentDeployment> | null>(null)
 const dirty = computed(() => !!state.value && JSON.stringify(rows.value) !== JSON.stringify(state.value.policies))
 usePageReloadGuard(() => publishing.value || !!newIP.value.trim())
 const { deployments, busy, track, beginSubmission, endSubmission, activate } = useAgentDeployments(() => emit('published'))
@@ -139,6 +141,7 @@ async function load() {
   const generation = ++epoch
   loading.value = true
   error.value = ''
+  submissionFailure.value = null
   try {
     const { data } = await oxidnsDevicePolicyApi.get(props.agentId, { signal: current.signal })
     if (disposed || generation !== epoch) return
@@ -172,6 +175,7 @@ async function save() {
   const id = props.agentId
   saving.value = true
   error.value = ''
+  submissionFailure.value = null
   try {
     const { data } = await oxidnsDevicePolicyApi.save(id, { profile_id: state.value.profile_id, revision: state.value.revision, policies: rows.value })
     if (disposed || id !== props.agentId) return
@@ -191,14 +195,21 @@ async function publish() {
   if (!beginSubmission(id, deploymentId)) return
   publishing.value = true
   error.value = ''
+  submissionFailure.value = null
   try {
     const { data } = await agentApi.pushConfig(id, deploymentId, expected)
     if (!disposed) endSubmission(id, deploymentId, data)
   } catch (failure: any) {
     if (disposed) return
+    if (id === props.agentId && !failure.response?.data?.deployment_id && failure.response?.data?.error_details) {
+      submissionFailure.value = { ...failure.response.data, message: messageOf(failure) }
+    }
     if (failure.response?.data?.deployment_id) endSubmission(id, deploymentId, failure.response.data)
     else if (!failure.response || failure.response.status >= 500) endSubmission(id, deploymentId, 'unknown')
-    else if (!endSubmission(id, deploymentId, 'rejected')) error.value = messageOf(failure)
+    else if (!endSubmission(id, deploymentId, 'rejected')) {
+      error.value = '发布失败，请查看下方原因。'
+      submissionFailure.value = { ...failure.response.data, error: messageOf(failure) }
+    }
   } finally { publishing.value = false }
 }
 function beforeUnload(event: BeforeUnloadEvent) {

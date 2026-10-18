@@ -46,10 +46,22 @@ func TestDNSAnswersAcceptsAnyReplyWithMatchingID(t *testing.T) {
 	if err := dnsAnswers(udpResponder(t, nxdomain)); err != nil {
 		t.Fatalf("NXDOMAIN must count as answering: %v", err)
 	}
-	var seen []byte
-	addr := udpResponder(t, func(q []byte) []byte { seen = q; return nil })
+	queries := make(chan []byte, 1)
+	addr := udpResponder(t, func(q []byte) []byte {
+		select {
+		case queries <- q:
+		default:
+		}
+		return nil
+	})
 	if err := dnsAnswers(addr); err == nil {
 		t.Fatal("silent server must fail")
+	}
+	var seen []byte
+	select {
+	case seen = <-queries:
+	default:
+		t.Fatal("silent server received no query")
 	}
 	if len(seen) < 12 || string(seen[12:]) != "\x13configflow-watchdog\x07invalid\x00\x00\x01\x00\x01" {
 		t.Fatalf("unexpected query encoding: %q", seen)
