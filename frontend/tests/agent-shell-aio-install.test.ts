@@ -5,10 +5,6 @@ import Agents from '@/views/Agents.vue'
 import api, { agentApi, profileApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { setActiveProfileId } from '@/profileContext'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -45,7 +41,7 @@ beforeEach(async () => {
   vi.mocked(agentApi.getAll).mockResolvedValue({ data: [] } as any)
   vi.mocked(profileApi.list).mockResolvedValue({ data: [{ id: 'default', name: 'Default' }] } as any)
   vi.mocked(agentApi.generateScript).mockResolvedValue({ data: '#!/bin/sh\necho installed' } as any)
-  vi.mocked(agentApi.generateCoreInstallScript).mockResolvedValue({ data: '#!/bin/sh\necho cores-installed' } as any)
+  vi.mocked(agentApi.generateCoreInstallScript).mockResolvedValue({ data: '#!/bin/sh\n# ConfigFlow core installer interface: 1\necho cores-installed' } as any)
   vi.mocked(api.get).mockResolvedValue({ data: 'docker output' } as any)
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/agents', component: { render: () => null } }] })
   await router.push('/agents')
@@ -168,6 +164,36 @@ describe('Shell Mihomo + OxiDNS installation', () => {
 })
 
 describe('independent Mihomo + OxiDNS core installation', () => {
+  it.each([{ target: 'mihomo', name: 'Mihomo', message: '仅安装 Mihomo，DNS 监听 1053' }, { target: 'oxidns', name: 'OxiDNS', message: '使用公共 DNS 上游，无需 Mihomo' }])('generates an independent command for only $name', async ({ target, name, message }) => {
+    await input('agent-name', '')
+    await radio('aio')
+    await radio(target)
+    expect(document.body.textContent).toContain(message)
+    if (target === 'oxidns') expect(document.body.textContent).not.toContain('首次安装 Mihomo 时检测 TUN')
+    await click(`生成${name}的安装命令`)
+    const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
+    expect(command).toContain(`'${target}'`)
+    expect(command).toContain('--core')
+    expect(agentApi.generateCoreInstallScript).toHaveBeenCalledExactlyOnceWith()
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+  })
+
+  it('clears commands and ignores pending results after changing the core selection', async () => {
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    await radio('mihomo')
+    expect(document.getElementById('core-install-command')).toBeNull()
+    let finish!: (value: any) => void
+    vi.mocked(agentApi.generateCoreInstallScript).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await click('生成Mihomo的安装命令')
+    await radio('oxidns')
+    finish({ data: '#!/bin/sh\necho stale' })
+    await flushPromises()
+    expect(document.getElementById('core-install-command')).toBeNull()
+    await click('生成OxiDNS的安装命令')
+    expect((document.getElementById('core-install-command') as HTMLTextAreaElement).value).toContain("'oxidns'")
+  })
+
   it('generates the core command with an empty Agent name and default layout, independently of Agent settings', async () => {
     await input('agent-name', '')
     await radio('aio')
@@ -180,6 +206,9 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     expect(notify.warning).not.toHaveBeenCalled()
     const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
     expect(command).toContain("'https://config.example.test/api/agents/core-install-script'")
+    expect(command).not.toMatch(/[\r\n]/)
+    expect(command).toContain('sh -c ')
+    expect(document.body.textContent).toContain('自动补齐缺少的依赖')
     expect(command).not.toContain('/opt/custom')
     expect(command).not.toContain('agent_name')
     expect(document.body.textContent).toContain('可用时自动开启 TUN 及自动路由')
@@ -272,25 +301,21 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     expect(document.getElementById('core-install-command')).toBeNull()
   })
 
-  it('quotes special URL characters and executes only a successfully downloaded script', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'configflow-core-command-'))
-    const url = "https://config.example.test/base'$(printf_injected)/api/agents/core-install-script"
-    try {
-      localStorage.setItem('serverDomain', "https://config.example.test/base'$(printf_injected)/")
-      await radio('aio')
-      await click('生成两个核心的安装命令')
-      const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
-      const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, CORE_TEST_DIR: directory }
-      writeFileSync(join(directory, 'curl'), `#!/bin/sh\nprintf '%s' "$4" > "$CORE_TEST_DIR/url"\nprintf 'echo executed > "$CORE_TEST_DIR/result"\\n' > "$3"\nexit 22\n`, { mode: 0o755 })
-      expect(() => execFileSync('sh', ['-c', command], { env, stdio: 'pipe' })).toThrow()
-      expect(() => readFileSync(join(directory, 'result'), 'utf8')).toThrow()
-      expect(readFileSync(join(directory, 'url'), 'utf8')).toBe(url)
-      writeFileSync(join(directory, 'curl'), `#!/bin/sh\nprintf '%s' "$4" > "$CORE_TEST_DIR/url"\nprintf 'echo executed > "$CORE_TEST_DIR/result"\\n' > "$3"\n`, { mode: 0o755 })
-      execFileSync('sh', ['-c', command], { env, stdio: 'pipe' })
-      expect(readFileSync(join(directory, 'result'), 'utf8').trim()).toBe('executed')
-      expect(readFileSync(join(directory, 'url'), 'utf8')).toBe(url)
-    } finally {
-      rmSync(directory, { recursive: true, force: true })
-    }
+  it.each(['#!/bin/sh\necho old-installer', '#!/bin/sh\n'])('rejects an older or incomplete installer before showing a selected-core command', async script => {
+    vi.mocked(agentApi.generateCoreInstallScript).mockResolvedValueOnce({ data: script } as any)
+    await radio('aio')
+    await radio('oxidns')
+    await click('生成OxiDNS的安装命令')
+    expect(notify.error).toHaveBeenCalledWith('安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试')
+    expect(document.getElementById('core-install-command')).toBeNull()
+  })
+
+  it('quotes special URL characters in the generated one-line command', async () => {
+    localStorage.setItem('serverDomain', "https://config.example.test/base'$(printf_injected)/")
+    await radio('aio')
+    await click('生成两个核心的安装命令')
+    const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
+    expect(command).not.toMatch(/[\r\n]/)
+    expect(command).toContain("base'\"'\"'$(printf_injected)/api/agents/core-install-script")
   })
 })

@@ -1,4 +1,5 @@
 #!/bin/sh
+# ConfigFlow core installer interface: 1
 # Standalone core installer. Never installs or registers a ConfigFlow Agent.
 set -eu
 umask 022
@@ -16,6 +17,12 @@ START_ATTEMPTED=""
 INIT_SYSTEM=""
 TUN_ENABLED=false
 TUN_REASON=""
+DEPENDENCIES_ATTEMPTED=false
+CORE_SELECTION=both
+NEW_CORES=""
+NEW_MIHOMO=false
+NEW_OXIDNS=false
+DNS_PORTS=""
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 exists() { [ -e "$1" ] || [ -L "$1" ]; }
@@ -40,9 +47,16 @@ cleanup() {
             for path in $CREATED_DIRS; do rm -rf "$path"; done
             if [ -n "$CREATED_FILES" ] && [ "$INIT_SYSTEM" = systemd ]; then systemctl daemon-reload; fi
         else
-            printf '%s\n' '回滚未完成：核心停止或取消开机启动失败。为避免删除仍运行服务的文件，已保留本次核心、配置及服务文件。请先手动停止 mihomo/oxidns 并取消开机启动，再检查这些文件；本脚本不会自动覆盖残留安装。' >&2
+            printf '%s\n' "回滚未完成：核心停止或取消开机启动失败。为避免删除仍运行服务的文件，已保留本次核心、配置及服务文件。请先手动停止本次新装服务（${NEW_CORES}）并取消其开机启动，再检查这些文件；已有的其他核心不在本次回滚范围。本脚本不会自动覆盖残留安装。" >&2
         fi
-        if [ "$cleanup_status" -ne 0 ]; then printf '%s\n' '安装失败；已尝试撤销本次创建和启动的核心，请同时检查上方回滚结果。' >&2; fi
+        if [ "$cleanup_status" -ne 0 ]; then
+            if [ -n "$CREATED_FILES$CREATED_DIRS$START_ATTEMPTED$ENABLE_ATTEMPTED" ]; then
+                printf '%s\n' '安装失败；已尝试撤销本次创建和启动的核心，请同时检查上方回滚结果。' >&2
+            else
+                printf '%s\n' '安装已停止；尚未修改核心、配置或服务。' >&2
+            fi
+            if [ "$DEPENDENCIES_ATTEMPTED" = true ]; then printf '%s\n' '包管理器安装的系统依赖会保留，不会随核心回滚而卸载。' >&2; fi
+        fi
     fi
     [ -z "$STAGE" ] || rm -rf "$STAGE"
     if [ "$LOCKED" = true ]; then rm -f "$LOCK/pid"; rmdir "$LOCK"; fi
@@ -53,15 +67,19 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --core)
+            [ "$#" -ge 2 ] || fail '缺少 --core 参数：请选择 both、mihomo 或 oxidns。'
+            CORE_SELECTION=$2; shift 2 ;;
+        --core=*) CORE_SELECTION=${1#--core=}; shift ;;
+        *) fail "不支持的参数：$1。用法：sh install-cores.sh [--core both|mihomo|oxidns]。" ;;
+    esac
+done
+case "$CORE_SELECTION" in both) REQUESTED_CORES='mihomo oxidns' ;; mihomo|oxidns) REQUESTED_CORES=$CORE_SELECTION ;; *) fail '无效的 --core 参数：请选择 both、mihomo 或 oxidns。' ;; esac
+
 [ "$(id -u)" -eq 0 ] || fail '请使用 root 运行，例如 sudo sh install-cores.sh。'
 [ "$(uname -s)" = Linux ] || fail '仅支持 Linux（systemd 或 OpenRC）。'
-for dependency in awk cat chmod cp gzip mkdir mktemp mv rm rmdir sed sha256sum sleep tail tar; do
-    command -v "$dependency" >/dev/null 2>&1 || fail "缺少依赖 ${dependency}。Debian/Ubuntu: apt-get install curl gzip tar coreutils gawk；Alpine: apk add curl gzip tar coreutils gawk。安装依赖后重试。"
-done
-if command -v curl >/dev/null 2>&1; then DOWNLOAD=curl
-elif command -v wget >/dev/null 2>&1; then DOWNLOAD=wget
-else fail '需要 curl 或 wget。Debian/Ubuntu: apt-get install curl；Alpine: apk add curl。'; fi
-
 case "$(uname -m)" in
     x86_64|amd64)
         MIHOMO_ASSET=mihomo-linux-amd64-v1-v1.19.32.gz
@@ -90,44 +108,103 @@ else fail '需要正在使用的 systemd 或 OpenRC；容器请先配置 init �
 for directory in /run /etc /usr/local /usr/local/bin "$UNIT_DIR"; do
     [ -d "$directory" ] && [ ! -L "$directory" ] || fail "安装目录缺失或为符号链接：${directory}。请先准备正常目录后重试。"
 done
+unit_path() {
+    if [ "$INIT_SYSTEM" = systemd ]; then printf '%s/%s.service' "$UNIT_DIR" "$1"; else printf '%s/%s' "$UNIT_DIR" "$1"; fi
+}
+receipt="configflow-standalone-cores-v1:$INIT_SYSTEM"
+for service in $REQUESTED_CORES; do
+    existing_core=""
+    for path in "/usr/local/bin/$service" "/etc/$service" "/etc/systemd/system/$service.service" "/etc/systemd/system/$service.service.d" "/run/systemd/system/$service.service" "/usr/lib/systemd/system/$service.service" "/lib/systemd/system/$service.service" "/etc/init.d/$service" "/run/$service.pid"; do
+        if exists "$path"; then existing_core=$path; break; fi
+    done
+    if [ -z "${existing_core}" ] && command -v "$service" >/dev/null 2>&1; then existing_core="PATH 中的 $service"; fi
+    if [ -z "${existing_core}" ] && [ "$INIT_SYSTEM" = systemd ]; then
+        load_state=$(systemctl show "$service.service" --property=LoadState --value) || fail "无法检查已有 $service 服务，请检查 systemd 是否正常运行。"
+        if [ "$load_state" != not-found ]; then existing_core="systemd $service 服务（${load_state}）"; fi
+    fi
+    if [ -n "${existing_core}" ]; then
+        printf '%s\n' "跳过已有 ${service}：${existing_core}。保留程序、配置和服务，不升级或重启；尚未验证其完整性与运行状态，残留文件也会跳过。需要管理时请使用 Agent 接入。"
+    else
+        NEW_CORES="${NEW_CORES:+${NEW_CORES} }$service"
+        if [ "$service" = mihomo ]; then NEW_MIHOMO=true; DNS_PORTS="${DNS_PORTS:+$DNS_PORTS }1053"
+        else NEW_OXIDNS=true; DNS_PORTS="${DNS_PORTS:+$DNS_PORTS }53"; fi
+    fi
+done
+if [ -z "${NEW_CORES}" ]; then
+    printf '%s\n' '所选核心均已有程序、配置或服务，本次全部跳过；未下载、升级或重启核心。'
+    COMMITTED=true
+    exit 0
+fi
+
+# Resolve only missing tools, after rejecting unsupported systems. Package
+# transactions remain managed by the distribution and are never rolled back
+# together with the two cores.
+add_package() {
+    case " ${PACKAGES} " in *" $1 "*) ;; *) PACKAGES="${PACKAGES:+${PACKAGES} }$1" ;; esac
+}
+collect_missing_dependencies() {
+    MISSING_DEPENDENCIES=""
+    PACKAGES=""
+    for dependency in awk cat chmod cp gzip mkdir mktemp mv rm rmdir sed sha256sum sleep tail tar; do
+        if ! command -v "$dependency" >/dev/null 2>&1; then
+            MISSING_DEPENDENCIES="${MISSING_DEPENDENCIES:+${MISSING_DEPENDENCIES} }$dependency"
+            case "$dependency" in
+                awk) add_package gawk ;;
+                gzip|sed|tar) add_package "$dependency" ;;
+                *) add_package coreutils ;;
+            esac
+        fi
+    done
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        MISSING_DEPENDENCIES="${MISSING_DEPENDENCIES:+${MISSING_DEPENDENCIES} }curl/wget"
+        add_package curl
+        add_package ca-certificates
+    fi
+}
+install_dependencies() {
+    if command -v apk >/dev/null 2>&1; then
+        package_manager=apk
+    elif command -v apt-get >/dev/null 2>&1; then
+        package_manager=apt-get
+    elif command -v dnf >/dev/null 2>&1; then
+        package_manager=dnf
+    elif command -v yum >/dev/null 2>&1; then
+        package_manager=yum
+    elif command -v pacman >/dev/null 2>&1; then
+        package_manager=pacman
+    elif command -v zypper >/dev/null 2>&1; then
+        package_manager=zypper
+    else
+        fail "缺少依赖：${MISSING_DEPENDENCIES}。未找到支持的包管理器（apk、apt-get、dnf、yum、pacman、zypper）；请手动安装 ${PACKAGES} 后重新运行。"
+    fi
+    printf '%s\n' "缺少依赖：${MISSING_DEPENDENCIES}；使用 ${package_manager} 安装 ${PACKAGES}。"
+    DEPENDENCIES_ATTEMPTED=true
+    case "${package_manager}" in
+        apk) apk add --no-cache "$@" ;;
+        apt-get) apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" ;;
+        dnf|yum) "${package_manager}" install -y "$@" ;;
+        # Never refresh only package indexes (-Sy): Arch requires a complete
+        # system upgrade when synchronizing an outdated installation.
+        pacman) pacman -S --needed --noconfirm "$@" ;;
+        zypper) zypper --non-interactive install --no-recommends "$@" ;;
+    esac
+}
+collect_missing_dependencies
+if [ -n "${MISSING_DEPENDENCIES}" ]; then
+    # PACKAGES contains only the fixed package names listed above.
+    if ! install_dependencies ${PACKAGES}; then
+        fail "系统依赖安装失败，尚未下载或安装核心。请检查网络、软件源及包管理器锁，完成系统更新后重新运行；Arch 请先运行 pacman -Syu。缺少的依赖：${MISSING_DEPENDENCIES}。"
+    fi
+    collect_missing_dependencies
+    [ -z "${MISSING_DEPENDENCIES}" ] || fail "包管理器执行后仍缺少依赖：${MISSING_DEPENDENCIES}。请检查 PATH，手动安装 ${PACKAGES} 后重试；尚未下载或安装核心。"
+fi
+if command -v curl >/dev/null 2>&1; then DOWNLOAD=curl; else DOWNLOAD=wget; fi
+
 if ! mkdir "$LOCK" 2>/dev/null; then
     fail "另一个核心安装可能正在运行：${LOCK}。请等待完成；若为中断残留，确认其中 pid 对应进程已退出后删除此锁目录再重试。"
 fi
 LOCKED=true
 printf '%s\n' "$$" > "$LOCK/pid"
-
-unit_path() {
-    if [ "$INIT_SYSTEM" = systemd ]; then printf '%s/%s.service' "$UNIT_DIR" "$1"; else printf '%s/%s' "$UNIT_DIR" "$1"; fi
-}
-receipt="configflow-standalone-cores-v1:$INIT_SYSTEM"
-complete=true
-for service in mihomo oxidns; do
-    service_complete=true
-    for path in "/usr/local/bin/$service" "/etc/$service/config.yaml" "/etc/$service/.configflow-core-install" "$(unit_path "$service")"; do
-        if [ ! -f "$path" ] || [ -L "$path" ]; then service_complete=false; fi
-    done
-    [ -x "/usr/local/bin/$service" ] || service_complete=false
-    if [ "$service_complete" = true ]; then
-        expected_receipt=$(printf '%s\n' "$receipt"; sha256sum "/usr/local/bin/$service" "$(unit_path "$service")") || fail '无法核对已有安装记录，请检查核心文件权限。'
-        [ "$(cat "/etc/$service/.configflow-core-install")" = "$expected_receipt" ] || service_complete=false
-    fi
-    [ "$service_complete" = true ] || complete=false
-done
-if [ "$complete" = true ]; then
-    printf '%s\n' '检测到本脚本已完成的双核心安装，保留现有程序、配置与服务并跳过；不会升级或重启。需要面板管理时，请另行安装/接入 Agent。'
-    COMMITTED=true
-    exit 0
-fi
-for service in mihomo oxidns; do
-    for path in "/usr/local/bin/$service" "/etc/$service" "/etc/systemd/system/$service.service" "/etc/systemd/system/$service.service.d" "/run/systemd/system/$service.service" "/usr/lib/systemd/system/$service.service" "/lib/systemd/system/$service.service" "/etc/init.d/$service" "/run/$service.pid"; do
-        ! exists "$path" || fail "发现已有核心、配置或服务：${path}。为保留现有部署，本次未修改；请使用 Agent 接入，或自行备份并移除旧安装后重试。"
-    done
-    if command -v "$service" >/dev/null 2>&1; then fail "PATH 中已有 $service 核心，请使用 Agent 接入现有安装。"; fi
-    if [ "$INIT_SYSTEM" = systemd ]; then
-        load_state=$(systemctl show "$service.service" --property=LoadState --value) || fail "无法检查已有 $service 服务，请检查 systemd 是否正常运行。"
-        [ "$load_state" = not-found ] || fail "已有 $service 服务（状态 ${load_state}），请使用 Agent 接入现有安装。"
-    fi
-done
 
 check_ports() {
     proc_files=""
@@ -136,8 +213,8 @@ check_ports() {
     done
     [ -r /proc/net/tcp ] && [ -r /proc/net/udp ] || fail '无法读取 /proc/net/tcp 或 udp，不能检查 DNS 端口，请挂载容器 /proc 后重试。'
     # Any IPv4/IPv6 listener on these ports can conflict with a wildcard bind.
-    if ! awk 'FNR > 1 {split($2, addr, ":"); port=toupper(addr[2]); if ((port == "0035" || port == "041D") && (FILENAME ~ /udp/ || $4 == "0A")) {print "已占用 DNS 端口：" $2 " (" FILENAME ")"; conflict=1}} END {exit conflict ? 1 : 0}' $proc_files; then
-        fail '53 或 1053 端口被占用。请用 ss -lntup 检查并调整已有 DNS 服务的监听地址/端口，再重试；本脚本不会关闭系统 DNS 服务。'
+    if ! awk -v mihomo="$NEW_MIHOMO" -v oxidns="$NEW_OXIDNS" 'FNR > 1 {split($2, addr, ":"); port=toupper(addr[2]); if (((port == "0035" && oxidns == "true") || (port == "041D" && mihomo == "true")) && (FILENAME ~ /udp/ || $4 == "0A")) {print "已占用 DNS 端口：" $2 " (" FILENAME ")"; conflict=1}} END {exit conflict ? 1 : 0}' $proc_files; then
+        fail "DNS 端口被占用（本次安装需要：${DNS_PORTS}）。请用 ss -lntup 检查并调整已有 DNS 服务的监听地址/端口，再重试；本脚本不会关闭系统 DNS 服务。"
     fi
 }
 check_ports
@@ -203,27 +280,38 @@ check_tun_environment() {
             '旁路网关修复：在该 Linux/LXC 内执行 sysctl -w net.ipv4.ip_forward=1，并把 net.ipv4.ip_forward=1 写入 /etc/sysctl.d/99-configflow-forward.conf；检查其他 sysctl 文件是否将其改回 0，重启后用 sysctl net.ipv4.ip_forward 验证。PVE 仅做二层网桥时不因此需要开启宿主机转发。'
     fi
 }
-check_tun_environment
+if [ "$NEW_MIHOMO" = true ]; then check_tun_environment; fi
 STAGE=$(mktemp -d /tmp/configflow-cores.XXXXXX)
 chmod 700 "$STAGE"
-mkdir "$STAGE/mihomo" "$STAGE/oxidns"
+for service in ${NEW_CORES}; do mkdir "$STAGE/$service"; done
 download() {
     if [ "$DOWNLOAD" = curl ]; then
-        curl --fail --location --connect-timeout 15 --max-time 300 --retry 2 --output "$2" "$1" || fail "下载失败：$1。请检查到 GitHub 的网络后重试。"
+        curl --fail --location --connect-timeout 15 --max-time 300 --retry 2 --output "$2" "$1" || fail "下载失败：$1。请检查到 GitHub 的网络和系统时间；若证书验证失败，请安装或修复 ca-certificates / 自定义 CA 信任后重试，不要关闭证书校验。"
     else
-        wget -T 60 -O "$2" "$1" || fail "下载失败：$1。请检查到 GitHub 的网络后重试。"
+        wget -T 60 -O "$2" "$1" || fail "下载失败：$1。请检查到 GitHub 的网络和系统时间；若证书验证失败，请安装或修复 ca-certificates / 自定义 CA 信任后重试，不要关闭证书校验。"
     fi
 }
-printf '%s\n' "下载官方 Mihomo $MIHOMO_VERSION 和 OxiDNS $OXIDNS_VERSION full，并校验固定 SHA256。"
-download "https://github.com/MetaCubeX/mihomo/releases/download/$MIHOMO_VERSION/$MIHOMO_ASSET" "$STAGE/mihomo.gz"
-download "https://github.com/svenshi/oxidns/releases/download/$OXIDNS_VERSION/$OXIDNS_ASSET" "$STAGE/oxidns.tar.gz"
-printf '%s  %s\n' "$MIHOMO_SHA" "$STAGE/mihomo.gz" "$OXIDNS_SHA" "$STAGE/oxidns.tar.gz" > "$STAGE/download.sha256"
+printf '%s\n' "本次下载并安装：${NEW_CORES}。使用官方 Mihomo $MIHOMO_VERSION / OxiDNS $OXIDNS_VERSION full 发布文件，并校验固定 SHA256。"
+: > "$STAGE/download.sha256"
+if [ "$NEW_MIHOMO" = true ]; then
+    download "https://github.com/MetaCubeX/mihomo/releases/download/$MIHOMO_VERSION/$MIHOMO_ASSET" "$STAGE/mihomo.gz"
+    printf '%s  %s\n' "$MIHOMO_SHA" "$STAGE/mihomo.gz" >> "$STAGE/download.sha256"
+fi
+if [ "$NEW_OXIDNS" = true ]; then
+    download "https://github.com/svenshi/oxidns/releases/download/$OXIDNS_VERSION/$OXIDNS_ASSET" "$STAGE/oxidns.tar.gz"
+    printf '%s  %s\n' "$OXIDNS_SHA" "$STAGE/oxidns.tar.gz" >> "$STAGE/download.sha256"
+fi
 sha256sum -c "$STAGE/download.sha256" || fail '下载文件的 SHA256 不匹配，已停止安装；请重新下载，不要跳过校验。'
-gzip -dc "$STAGE/mihomo.gz" > "$STAGE/mihomo-bin" || fail 'Mihomo 压缩包解压失败。'
-# Only extract the verified core executable, never upstream sample configs/UI.
-tar -xzf "$STAGE/oxidns.tar.gz" -C "$STAGE/oxidns" oxidns || fail 'OxiDNS 压缩包解压失败。'
-[ -f "$STAGE/oxidns/oxidns" ] && [ ! -L "$STAGE/oxidns/oxidns" ] || fail 'OxiDNS 包内核心文件无效。'
-chmod 755 "$STAGE/mihomo-bin" "$STAGE/oxidns/oxidns"
+if [ "$NEW_MIHOMO" = true ]; then
+    gzip -dc "$STAGE/mihomo.gz" > "$STAGE/mihomo-bin" || fail 'Mihomo 压缩包解压失败。'
+    chmod 755 "$STAGE/mihomo-bin"
+fi
+if [ "$NEW_OXIDNS" = true ]; then
+    # Only extract the verified core executable, never upstream sample configs/UI.
+    tar -xzf "$STAGE/oxidns.tar.gz" -C "$STAGE/oxidns" oxidns || fail 'OxiDNS 压缩包解压失败。'
+    [ -f "$STAGE/oxidns/oxidns" ] && [ ! -L "$STAGE/oxidns/oxidns" ] || fail 'OxiDNS 包内核心文件无效。'
+    chmod 755 "$STAGE/oxidns/oxidns"
+fi
 write_mihomo_bootstrap() {
 cat > "$STAGE/mihomo/config.yaml" <<MIHOMO_CONFIG
 # Direct bootstrap; TUN follows the installation environment probe.
@@ -259,7 +347,11 @@ rules:
   - MATCH,DIRECT
 MIHOMO_CONFIG
 }
-write_mihomo_bootstrap
+if [ "$NEW_MIHOMO" = true ]; then
+    write_mihomo_bootstrap
+    "$STAGE/mihomo-bin" -t -d "$STAGE/mihomo" -f "$STAGE/mihomo/config.yaml" || fail 'Mihomo 初始配置校验失败，未安装核心。'
+fi
+if [ "$NEW_OXIDNS" = true ]; then
 cat > "$STAGE/oxidns/config.yaml" <<'OXIDNS_CONFIG'
 log:
   level: info
@@ -285,8 +377,15 @@ plugins:
       listen: 0.0.0.0:53
       entry: main_sequence
 OXIDNS_CONFIG
-"$STAGE/mihomo-bin" -t -d "$STAGE/mihomo" -f "$STAGE/mihomo/config.yaml" || fail 'Mihomo 初始配置校验失败，未安装核心。'
-"$STAGE/oxidns/oxidns" check -c "$STAGE/oxidns/config.yaml" -d "$STAGE/oxidns" || fail 'OxiDNS 初始配置校验失败，未安装核心。'
+    if [ "$CORE_SELECTION" = oxidns ]; then
+        awk '{if ($0 == "        - addr: udp://127.0.0.1:1053") {print "        - addr: udp://223.5.5.5"; print "        - addr: udp://119.29.29.29"} else print}' "$STAGE/oxidns/config.yaml" > "$STAGE/oxidns/standalone.yaml"
+        mv "$STAGE/oxidns/standalone.yaml" "$STAGE/oxidns/config.yaml"
+        printf '%s\n' '仅安装 OxiDNS：初始上游为公共 DNS 223.5.5.5 / 119.29.29.29。若要搭配已有 Mihomo 形成 AIO，请选择 --core both；该模式保留已有 Mihomo 并将新 OxiDNS 上游设为 127.0.0.1:1053。'
+    else
+        printf '%s\n' 'AIO DNS 分工：新 OxiDNS 监听 53，上游为 127.0.0.1:1053；已有 Mihomo 不会被修改，请确认它已在 1053 提供 DNS 服务。'
+    fi
+    "$STAGE/oxidns/oxidns" check -c "$STAGE/oxidns/config.yaml" -d "$STAGE/oxidns" || fail 'OxiDNS 初始配置校验失败，未安装核心。'
+fi
 # Recheck after downloads/validation, before touching persistent core resources.
 check_ports
 
@@ -297,7 +396,7 @@ write_new_file() {
     CREATED_FILES="$new_target $CREATED_FILES"
     cp "$new_source" "$new_target" || fail "写入失败：$new_target"
 }
-for service in mihomo oxidns; do
+for service in ${NEW_CORES}; do
     mkdir "/etc/$service" || fail "无法新建 /etc/${service}；请检查权限或并行操作。"
     CREATED_DIRS="/etc/$service $CREATED_DIRS"
     write_new_file "$STAGE/$service/config.yaml" "/etc/$service/config.yaml"
@@ -352,7 +451,7 @@ show_service_logs() {
     fi
 }
 if [ "$INIT_SYSTEM" = systemd ]; then systemctl daemon-reload || fail 'systemd 加载新服务失败。'; fi
-for service in mihomo oxidns; do
+for service in ${NEW_CORES}; do
     ENABLE_ATTEMPTED="$service $ENABLE_ATTEMPTED"
     if [ "$INIT_SYSTEM" = systemd ]; then systemctl enable "$service" || fail "$service 设置开机启动失败。"
     else rc-update add "$service" default || fail "$service 设置开机启动失败。"; fi
@@ -361,7 +460,7 @@ for service in mihomo oxidns; do
     else rc-service "$service" start || { show_service_logs "$service"; fail "$service 启动失败，请查看上方错误。"; }; fi
 done
 sleep 2
-for service in mihomo oxidns; do
+for service in ${NEW_CORES}; do
     if [ "$INIT_SYSTEM" = systemd ]; then systemctl is-active --quiet "$service" || { show_service_logs "$service"; fail "$service 启动后未保持运行，请查看服务日志。"; }
     else rc-service "$service" status || { show_service_logs "$service"; fail "$service 启动后未保持运行，请查看服务日志。"; }; fi
 done
@@ -417,29 +516,41 @@ if [ "$TUN_ENABLED" = true ]; then
     fi
 fi
 if command -v dig >/dev/null 2>&1; then
-    for port in 1053 53; do
+    for port in $DNS_PORTS; do
+        if [ "$port" = 53 ] && [ "$CORE_SELECTION" = both ]; then
+            dns_failure_guidance='请确认已有或本次安装的 Mihomo 在 127.0.0.1:1053 提供 DNS，且其上游可达。已有核心保持原样。'
+        else
+            dns_failure_guidance='请检查公共 DNS 上游 223.5.5.5 / 119.29.29.29 是否可达。已有核心保持原样。'
+        fi
         for transport in +notcp +tcp; do
             result="$STAGE/dns-$port-${transport#+}.txt"
-            dig @127.0.0.1 -p "$port" example.com A "$transport" +time=2 +tries=1 > "$result" 2>&1 || { cat "$result" >&2; fail "DNS 查询失败：$port ${transport}，已停止安装。"; }
+            dig @127.0.0.1 -p "$port" example.com A "$transport" +time=2 +tries=1 > "$result" 2>&1 || { cat "$result" >&2; fail "DNS 查询失败：$port ${transport}，已停止安装。${dns_failure_guidance}"; }
             cat "$result"
             if ! awk '/status: NOERROR,/ {status=1} /ANSWER: [1-9][0-9]*,/ {answer=1} END {exit (status && answer) ? 0 : 1}' "$result"; then
-                fail "DNS 查询未获得有效答案：$port ${transport}，请检查上游 223.5.5.5/119.29.29.29 是否可达。"
+                fail "DNS 查询未获得有效答案：$port ${transport}。${dns_failure_guidance}"
             fi
         done
     done
-    printf '%s\n' '两套核心的 UDP/TCP DNS 查询均已通过。'
+    printf '%s\n' "本次新装核心（${NEW_CORES}）的 UDP/TCP DNS 查询均已通过。"
 else
-    printf '%s\n' '服务已启动，实际 DNS 解析尚未验证（未安装 dig）。可安装 dnsutils（Debian/Ubuntu）或 bind-tools（Alpine）后运行：' \
-        'dig @127.0.0.1 -p 53 example.com; dig @127.0.0.1 -p 53 example.com +tcp' \
-        'dig @127.0.0.1 -p 1053 example.com; dig @127.0.0.1 -p 1053 example.com +tcp'
+    printf '%s\n' '服务已启动，实际 DNS 解析尚未验证（未安装 dig）。可安装 dnsutils（Debian/Ubuntu）或 bind-tools（Alpine）后运行：'
+    for port in $DNS_PORTS; do printf '%s\n' "dig @127.0.0.1 -p $port example.com; dig @127.0.0.1 -p $port example.com +tcp"; done
 fi
-for service in mihomo oxidns; do
+for service in ${NEW_CORES}; do
     printf '%s\n' "$receipt" > "$STAGE/receipt"
     sha256sum "/usr/local/bin/$service" "$(unit_path "$service")" >> "$STAGE/receipt" || fail '无法保存安装记录。'
     write_new_file "$STAGE/receipt" "/etc/$service/.configflow-core-install"
 done
 COMMITTED=true
-printf '%s\n' 'Mihomo 与 OxiDNS 已分别安装并设置开机启动。OxiDNS 53 → Mihomo 1053 → 公共 DNS。' \
-    '配置：/etc/mihomo/config.yaml、/etc/oxidns/config.yaml。当前没有代理节点，流量按 DIRECT 直连。' \
-    '本脚本只安装两个核心；如需面板管理，请继续使用独立的 Agent 接入安装。'
-printf '%s\n' "安装结果：tun.enable=${TUN_ENABLED}。首次从面板发布前，请检查 Mihomo 基础配置的 tun.enable 与本次检测结果一致；发布以面板配置为准。"
+for service in ${NEW_CORES}; do printf '%s\n' "${service} 已安装并设置开机启动，配置：/etc/$service/config.yaml。"; done
+if [ "$NEW_OXIDNS" = true ]; then
+    if [ "$CORE_SELECTION" = both ]; then printf '%s\n' 'DNS 分工：OxiDNS 53 → Mihomo 1053 → 上游 DNS；已有核心的配置保持原样。'
+    else printf '%s\n' '独立 OxiDNS：53 → 公共 DNS 223.5.5.5 / 119.29.29.29。'; fi
+elif [ "$CORE_SELECTION" = both ]; then
+    printf '%s\n' '已有 OxiDNS 的上游保持原样。要使用 AIO DNS 链路，请在其配置中将远端 DNS 上游设为 127.0.0.1:1053，再通过 Agent 发布或自行重启 OxiDNS。'
+fi
+if [ "$NEW_MIHOMO" = true ]; then
+    printf '%s\n' '新 Mihomo 在 1053 提供 DNS，当前没有代理节点，流量按 DIRECT 直连。'
+    printf '%s\n' "安装结果：tun.enable=${TUN_ENABLED}。首次从面板发布前，请检查 Mihomo 基础配置的 tun.enable 与本次检测结果一致；发布以面板配置为准。"
+fi
+printf '%s\n' '本脚本只安装所选的缺失核心；如需面板管理，请继续使用独立的 Agent 接入安装。'

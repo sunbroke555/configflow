@@ -46,29 +46,39 @@ systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_pat
 
 ### 一键安装两个核心
 
-尚未安装核心时，在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，点击「生成两个核心的安装命令」。以 root 在目标 Linux 机器执行生成的命令；无需填写 Agent 名称。该脚本只安装 Mihomo 和 OxiDNS，不安装 Agent，也不向面板注册。核心安装完成后，再使用同一弹窗原有的 Agent 安装命令接入两个核心。
+在 Agent 安装弹窗选择 Shell →「Mihomo + OxiDNS 同机」，可选择安装两个核心、仅 Mihomo 或仅 OxiDNS，再生成对应命令。以 root 在目标 Linux 机器粘贴执行这一行命令；无需填写 Agent 名称。命令优先使用已有的 curl，也支持只有 wget 的机器；先完整下载脚本，下载成功后才执行，结束时清理临时文件。没有下载工具时，先通过系统包管理器安装 curl 和 ca-certificates；缺少临时文件工具时补装 coreutils。该脚本只安装所选核心，不安装 Agent，也不向面板注册。
 
-脚本支持 systemd / OpenRC 以及 amd64、arm64、armv7。它从官方 GitHub 发行页下载固定版本的 [Mihomo v1.19.32](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32) 与 [OxiDNS v1.6.1 full](https://github.com/svenshi/oxidns/releases/tag/v1.6.1)，并按脚本内固定的 SHA256 校验；下载或校验失败时停止，不执行来源不明的程序。需要 `curl` 或 `wget`，以及 `tar`、`gzip`、`sha256sum` 等基础工具，缺少依赖时提示补装方法。
+| 安装选择 | 新建核心的初始 DNS 配置 |
+| --- | --- |
+| 两个核心（默认） | OxiDNS `53` → Mihomo `127.0.0.1:1053` → 公共 DNS；已有核心会跳过，仅补装缺少的核心 |
+| 仅 Mihomo | Mihomo `1053` → 公共 DNS，不安装或操作 OxiDNS |
+| 仅 OxiDNS | OxiDNS `53` → 公共 DNS，可独立运行，不依赖或操作 Mihomo |
+
+**已有 Mihomo、需要补装与它协作的 OxiDNS 时，保持默认的两个核心选项即可。** 现有 Mihomo 的程序、配置和服务保持原样，需要自行确认它已提供 `127.0.0.1:1053` DNS。若现有服务占用了 `53`，先调整其监听设置再安装 OxiDNS；脚本不会自动迁移现有 DNS。单独安装 OxiDNS 时的公共上游为 `223.5.5.5`、`119.29.29.29`，后续可在面板修改上游。已有 OxiDNS、后来补装 Mihomo 时，也会保留原来的 OxiDNS 上游；要组成同机链路，需自行将其上游设置为 `127.0.0.1:1053`。核心安装完成后，再使用原有的 Agent 安装入口接入。
+
+脚本支持 systemd / OpenRC 以及 amd64、arm64、armv7。它从官方 GitHub 发行页下载所需的固定版本 [Mihomo v1.19.32](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32) 或 [OxiDNS v1.6.1 full](https://github.com/svenshi/oxidns/releases/tag/v1.6.1)，并按脚本内固定的 SHA256 校验；下载或校验失败时停止，不执行不完整或未经校验的文件。
+
+缺少 `tar`、`gzip`、`sha256sum` 等必要工具时自动补装，支持 Debian/Ubuntu 的 apt-get、Alpine 的 apk、Fedora/RHEL 系列的 dnf/yum、Arch 的 pacman 和 openSUSE 的 zypper。仅在缺工具时安装对应依赖，不执行整机升级，也不自动安装或更换服务管理器。包管理器失败或安装后工具仍缺失时停止并提示处理方法；新增依赖包不会随核心安装失败而卸载。现有 curl/wget 继续使用其证书和自定义信任设置，TLS 验证失败时停止并提示检查系统时间、ca-certificates 和自定义 CA，不关闭证书验证。
 
 | 项目 | 默认布局 |
 | --- | --- |
 | 核心程序 | `/usr/local/bin/mihomo`、`/usr/local/bin/oxidns` |
 | 配置文件 | `/etc/mihomo/config.yaml`、`/etc/oxidns/config.yaml` |
-| 系统服务 | `mihomo`、`oxidns`，安装后启动并加入开机启动 |
-| DNS 入口 | OxiDNS TCP/UDP `53`，转发到 `127.0.0.1:1053` |
+| 系统服务 | 本次新装的 `mihomo` / `oxidns` 启动并加入开机启动，已有服务保持原样 |
+| DNS 入口 | OxiDNS TCP/UDP `53`，同机模式转发到 `127.0.0.1:1053`，单独安装则使用公共上游 |
 | Mihomo DNS | TCP/UDP `1053`，初始上游为 `223.5.5.5`、`119.29.29.29` |
 | TUN | 首次安装检查设备和权限，可用时开启；不可用时关闭并给出原因和修复方法 |
 | 代理 | 不创建代理监听或代理节点，初始流量按 `MATCH,DIRECT` 直连 |
 
-TUN 检测不仅检查路径存在，还检查 `/dev/net/tun` 是正确的字符设备、可读写，以及当前进程具备 `CAP_NET_ADMIN` 网络管理权限。通过后，初始配置使用 `stack: mixed`、`auto-route: true`、`auto-detect-interface: true`、`auto-redirect: false`，设备名为 `configflow-tun`，DNS 劫持目标为 `any:1053` 和 `tcp://any:1053`；Mihomo 启动时会自动配置路由。无法确认可用时仍安装两个核心，但保持 `tun.enable: false`，并显示具体原因及开启步骤。服务启动后还会确认 TUN 网卡实际创建；若未创建，则关闭初始配置中的 TUN 并重新启动 DNS 服务，提示修复方法。
+仅对本次新装的 Mihomo 检查 TUN：不仅检查路径存在，还检查 `/dev/net/tun` 是正确的字符设备、可读写，以及当前进程具备 `CAP_NET_ADMIN` 网络管理权限。通过后，初始配置使用 `stack: mixed`、`auto-route: true`、`auto-detect-interface: true`、`auto-redirect: false`，设备名为 `configflow-tun`，DNS 劫持目标为 `any:1053` 和 `tcp://any:1053`；Mihomo 启动时会自动配置路由。无法确认可用时继续安装，但保持 `tun.enable: false`，并显示具体原因及开启步骤。服务启动后还会确认 TUN 网卡实际创建；若未创建，则关闭初始配置中的 TUN 并重新启动 DNS 服务，提示修复方法。
 
 初始配置可用于 DNS 解析和直连，不代表已配置代理分流；接入 Agent 后可从 ConfigFlow 发布所需规则、节点及 TUN 配置。作为旁路网关时，还需在实际转发流量的 LXC / VM 内持久开启 IPv4 转发，脚本会检查并提醒，但不写入 `/etc/resolv.conf`、IPv4 转发、防火墙或 PVE 设备设置；TUN 启用后核心会配置路由，并可能配置该网卡的系统 DNS。Agent 弹窗中的自定义核心路径仅用于接管现有安装，不改变该独立脚本的默认布局。
 
 若 TUN 未开启，请按安装输出修复设备与权限：PVE LXC 的设备直通在 **PVE 宿主机**设置，容器内检查 `/dev/net/tun` 及网络管理权限；普通 Linux 主机需检查 TUN 驱动与设备权限。修复后在现有 `/etc/mihomo/config.yaml` 的 `tun` 段将 `enable` 改为 `true`，再重启 Mihomo 服务。已接入 ConfigFlow 时，可在「Mihomo 基础配置」修改同一设置并保存发布。**发布使用面板草稿中的 TUN 设置，不继承安装时的检测结果**；若安装时关闭了 TUN 且尚未修复，首次发布前也需将草稿中的 `tun.enable` 设为 `false`。重复运行核心安装命令会保留已有配置，不会重新决定 TUN 开关。
 
-安装前检查 root 权限、系统架构、服务管理器、必要工具及 `53` / `1053` 端口。两套核心下载和配置校验完成后才落盘；失败时撤销本次创建的文件和服务，不覆盖已有核心或配置。若回滚无法停止服务或取消开机启动，则保留恢复所需文件并提示手动处理。检测到其他安装会保留并退出，提示使用 Agent 接入；重复运行本脚本完成的安装会跳过，保留后来修改的配置，也不重启服务。
+安装前检查 root 权限、系统架构、服务管理器、必要工具，以及本次新装核心所需的端口：Mihomo `1053`、OxiDNS `53`。所需核心下载和配置校验完成后才落盘；失败时只撤销本次创建的文件和服务，不覆盖或停止已有核心。若回滚无法停止服务或取消开机启动，则保留恢复所需文件并提示手动处理。所选核心都已存在时直接跳过，不下载或安装依赖，也不重启服务；“跳过”不表示已有服务已通过健康检查。仅在预检失败、尚未创建核心资源时，明确提示未修改核心，不再显示已执行回滚。
 
-安装后检查服务状态。systemd 日志进入系统日志；OpenRC 日志保存在 `/etc/mihomo/mihomo.log`、`/etc/oxidns/oxidns.log`，启动失败会先显示最近日志。目标机有 `dig` 时同时验证两个端口的 UDP/TCP 解析；未安装 `dig` 时明确提示尚未验证实际解析，并给出查询命令。TUN 环境检测与 DNS 查询不能证明完整的网关转发、代理分流或重启后状态，这些仍需在目标网络验证。可以手动验证：
+安装后检查本次新装服务的状态。systemd 日志进入系统日志；OpenRC 日志保存在 `/etc/mihomo/mihomo.log`、`/etc/oxidns/oxidns.log`，启动失败会先显示最近日志。目标机有 `dig` 时验证本次新装核心端口的 UDP/TCP 解析；未安装 `dig` 时明确提示尚未验证实际解析，并给出查询命令。TUN 环境检测与 DNS 查询不能证明完整的网关转发、代理分流或重启后状态，这些仍需在目标网络验证。按已安装核心手动验证：
 
 ```sh
 dig @127.0.0.1 -p 53 example.com
@@ -77,7 +87,7 @@ dig @127.0.0.1 -p 1053 example.com
 dig @127.0.0.1 -p 1053 example.com +tcp
 ```
 
-脚本下载入口为 `/api/agents/core-install-script`，使用固定布局且不包含 Agent 身份信息。其命令与 `/api/agents/install-script` 的 Agent 安装命令相互独立。
+脚本下载入口为 `/api/agents/core-install-script`，使用固定布局且不包含 Agent 身份信息。已下载脚本可用 `sh install-cores.sh --core mihomo` 或 `sh install-cores.sh --core oxidns` 单独安装；省略参数或传 `--core both` 为同机协作模式。生成命令时及下载完成后都会检查脚本接口标记，旧版不支持选择核心的脚本会被拒绝，避免忽略参数而安装错误的核心。其命令与 `/api/agents/install-script` 的 Agent 安装命令相互独立。
 
 ### Shell 同机安装 Mihomo + OxiDNS
 

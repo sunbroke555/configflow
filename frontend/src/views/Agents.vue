@@ -296,28 +296,40 @@
           </FormField>
 
           <section v-if="shellAio" aria-labelledby="core-install-title" class="min-w-0 space-y-3 rounded-lg border border-border/70 bg-background/40 p-3">
-            <h3 id="core-install-title" class="m-0 text-[13px] font-semibold">先安装两个核心</h3>
-            <p class="m-0 text-[12.5px] text-muted-foreground">新机器可先一键安装 Mihomo 与 OxiDNS，并创建 systemd / OpenRC 服务。此命令不安装 Agent，无需填写下面的 Agent 信息。检测到已有核心或配置时会保留并停止安装；本脚本已完成的安装会跳过。</p>
-            <p class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">mihomo</code> / <code class="font-mono">oxidns</code>，配置目录 <code class="font-mono">/etc/mihomo</code> / <code class="font-mono">/etc/oxidns</code>，DNS 端口分别为 <code class="font-mono">1053</code> / <code class="font-mono">53</code>。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
-            <p class="m-0 text-[12.5px] text-muted-foreground">首次安装检测 TUN 设备和权限：可用时自动开启 TUN 及自动路由；不可用时保持关闭，并提示修复和开启方法。初始流量直连，尚无代理节点。作为网关时还需开启 IPv4 转发，脚本会提示但不会修改转发设置。后续发布前请检查面板草稿中的 TUN 开关。</p>
+            <h3 id="core-install-title" class="m-0 text-[13px] font-semibold">先安装核心</h3>
+            <p class="m-0 text-[12.5px] text-muted-foreground">可一起安装 Mihomo 与 OxiDNS，也可只安装其中一个，目标机器需使用 systemd / OpenRC。此命令不安装 Agent，无需填写下面的 Agent 信息。已有核心和配置会保留，仅补装缺少的核心；已有服务是否正常需另行确认。</p>
+            <p class="m-0 text-[12.5px] text-muted-foreground">命令会自动补齐缺少的依赖，兼容 curl 或 wget，完整下载成功后再执行安装脚本。</p>
+            <RadioGroup v-model="coreInstallTarget" aria-label="要安装的核心" class="flex flex-wrap gap-2">
+              <label v-for="option in CORE_INSTALL_TARGETS" :key="option.value" :class="[chipClass(coreInstallTarget === option.value), 'min-h-11']">
+                <RadioGroupItem :value="option.value" />
+                {{ option.label }}
+              </label>
+            </RadioGroup>
+            <p v-if="coreInstallTarget === 'both'" class="m-0 text-[12.5px] text-muted-foreground">同机 DNS：OxiDNS 53 → Mihomo 1053。已有 Mihomo 时仍可选择此项，仅补装 OxiDNS，并使用 <code class="font-mono">127.0.0.1:1053</code> 作为上游；请确认已有 Mihomo 的 DNS 监听端口。</p>
+            <p v-else-if="coreInstallTarget === 'oxidns'" class="m-0 text-[12.5px] text-muted-foreground">独立 DNS：OxiDNS 监听 53，使用公共 DNS 上游，无需 Mihomo。接入 Agent 后可在面板修改上游；若要使用同机 Mihomo，请选择「Mihomo + OxiDNS」。</p>
+            <p v-else class="m-0 text-[12.5px] text-muted-foreground">仅安装 Mihomo，DNS 监听 1053，使用公共 DNS 上游；不安装 OxiDNS。</p>
+            <p v-if="coreInstallTarget === 'both'" class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">mihomo</code> / <code class="font-mono">oxidns</code>，配置目录 <code class="font-mono">/etc/mihomo</code> / <code class="font-mono">/etc/oxidns</code>，DNS 端口分别为 <code class="font-mono">1053</code> / <code class="font-mono">53</code>。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
+            <p v-else class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认服务名 <code class="font-mono">{{ coreInstallTarget }}</code>，配置目录 <code class="font-mono">/etc/{{ coreInstallTarget }}</code>。下方高级配置只用于接管已有服务，不会改变此安装布局。</p>
+            <p v-if="coreInstallTarget !== 'oxidns'" class="m-0 text-[12.5px] text-muted-foreground">首次安装 Mihomo 时检测 TUN 设备和权限：可用时自动开启 TUN 及自动路由；不可用时保持关闭，并提示修复和开启方法。初始流量直连，尚无代理节点。作为网关时还需开启 IPv4 转发，脚本会提示但不会修改转发设置。后续发布前请检查面板草稿中的 TUN 开关。</p>
             <template v-if="coreInstallCommand">
               <p class="m-0 text-[12.5px] font-medium">在目标机器以 root 身份执行；完成后，再生成下方的 Agent 安装命令。</p>
               <Button variant="outline" class="min-h-11" @click="copyAgentContent(coreInstallCommand, '核心安装命令已复制到剪贴板')">
                 <Copy class="size-4" />
                 复制核心安装命令
               </Button>
-              <Textarea id="core-install-command" :model-value="coreInstallCommand" aria-label="两个核心的独立安装命令" readonly :rows="8" class="max-h-56 bg-background/50 font-mono text-[11.5px]" />
+              <Textarea id="core-install-command" :model-value="coreInstallCommand" :aria-label="`${coreInstallLabel}的独立安装命令`" readonly :rows="8" class="max-h-56 bg-background/50 font-mono text-[11.5px]" />
               <Collapsible>
                 <CollapsibleTrigger class="min-h-11 w-full text-left text-[12.5px] text-muted-foreground">查看核心安装脚本</CollapsibleTrigger>
                 <CollapsibleContent>
-                  <Textarea :model-value="coreInstallScript" aria-label="两个核心的独立安装脚本" readonly :rows="12" class="max-h-64 bg-background/50 font-mono text-[11.5px]" />
+                  <p class="mt-0 text-[12px] text-muted-foreground">这是通用安装脚本；上方命令会传入当前选择的核心，请复制上方命令执行。</p>
+                  <Textarea :model-value="coreInstallScript" :aria-label="`${coreInstallLabel}的独立安装脚本`" readonly :rows="12" class="max-h-64 bg-background/50 font-mono text-[11.5px]" />
                 </CollapsibleContent>
               </Collapsible>
             </template>
             <Button v-else variant="outline" class="min-h-11" :disabled="coreInstallLoading" @click="generateCoreInstallCommand">
               <Loader2 v-if="coreInstallLoading" class="size-4 animate-spin" />
               <Download v-else class="size-4" />
-              {{ coreInstallLoading ? '正在生成核心安装命令…' : '生成两个核心的安装命令' }}
+              {{ coreInstallLoading ? '正在生成核心安装命令…' : `生成${coreInstallLabel}的安装命令` }}
             </Button>
           </section>
 
@@ -766,6 +778,7 @@ import FlowMap, { type FlowColumn, type FlowEdge, type FlowTone } from '@/compon
 import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
+import { buildCoreInstallCommand, CORE_INSTALL_INTERFACE, type CoreInstallTarget } from '@/lib/coreInstallCommand'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import { Motion } from 'motion-v'
 import {
@@ -894,6 +907,13 @@ const installScript = ref('')
 const installCommand = ref('')
 const installCommandAlpine = ref('')
 const coreInstallCommand = ref('')
+const CORE_INSTALL_TARGETS = [
+  { value: 'both', label: 'Mihomo + OxiDNS' },
+  { value: 'mihomo', label: '仅 Mihomo' },
+  { value: 'oxidns', label: '仅 OxiDNS' },
+] as const
+const coreInstallTarget = ref<CoreInstallTarget>('both')
+const coreInstallLabel = computed(() => coreInstallTarget.value === 'both' ? '两个核心' : coreInstallTarget.value === 'mihomo' ? 'Mihomo' : 'OxiDNS')
 const coreInstallScript = ref('')
 const coreInstallLoading = ref(false)
 let coreInstallRequest = 0
@@ -952,7 +972,7 @@ const resetCoreInstallCommand = () => {
   coreInstallLoading.value = false
 }
 
-watch([shellAio, scriptDialogVisible], resetCoreInstallCommand, { flush: 'sync' })
+watch([shellAio, scriptDialogVisible, coreInstallTarget], resetCoreInstallCommand, { flush: 'sync' })
 
 const generateCoreInstallCommand = async () => {
   if (coreInstallLoading.value) return
@@ -969,26 +989,16 @@ const generateCoreInstallCommand = async () => {
       throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
     }
     baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, '')}/api/agents/core-install-script`
-    const quotedUrl = `'${baseUrl.toString().replace(/'/g, `'"'"'`)}'`
     const response = await agentApi.generateCoreInstallScript()
     if (request !== coreInstallRequest || !shellAio.value || !scriptDialogVisible.value) return
     if (typeof response.data !== 'string' || !response.data.trimStart().startsWith('#!')) {
       throw new Error('服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新')
     }
+    if (response.data.split('\n', 2)[1] !== CORE_INSTALL_INTERFACE) {
+      throw new Error('安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试')
+    }
     coreInstallScript.value = response.data
-    coreInstallCommand.value = `(
-  set -eu
-  core_script=$(mktemp)
-  trap 'rm -f "$core_script"' EXIT HUP INT TERM
-  if command -v curl >/dev/null 2>&1; then
-    curl -fSL --output "$core_script" ${quotedUrl}
-  elif command -v wget >/dev/null 2>&1; then
-    wget -O "$core_script" ${quotedUrl}
-  else
-    echo '请先安装 curl 或 wget' >&2; exit 1
-  fi
-  sh "$core_script"
-)`
+    coreInstallCommand.value = buildCoreInstallCommand(baseUrl.toString(), coreInstallTarget.value)
     notify.success('核心安装命令已生成，请以 root 身份在目标机器执行')
   } catch (error: any) {
     if (request === coreInstallRequest) notify.error(error.response?.data?.message || error.message || '生成核心安装命令失败')
