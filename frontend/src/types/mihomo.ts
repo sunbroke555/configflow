@@ -38,6 +38,13 @@ export interface MihomoConnection {
     processPath?: string
     sniffHost?: string
     remoteDestination?: string
+    inboundName?: string
+    inboundUser?: string
+    inboundIP?: string
+    inboundPort?: string
+    dnsMode?: string
+    specialProxy?: string
+    specialRules?: string
   }
   upload: number
   download: number
@@ -120,4 +127,32 @@ export function orderedGroups(proxies: Record<string, MihomoProxy>): MihomoProxy
 
 export function panelError(failure: any, fallback = '请求失败，请重试。'): string {
   return failure?.response?.data?.message || failure?.message || fallback
+}
+
+/** Mihomo 自身发起的连接（如 DNS 上游、测速）没有来源 IP，与常见面板一致显示为 Inner */
+export const INNER_SOURCE = 'Inner'
+export const sourceLabel = (connection: MihomoConnection) => connection.metadata.sourceIP || INNER_SOURCE
+
+/** 编译搜索词：是合法正则时按正则（忽略大小写）匹配，否则按普通文本包含匹配 */
+export function connectionMatcher(keyword: string): (value: string | undefined) => boolean {
+  const text = keyword.trim()
+  if (!text) return () => true
+  try {
+    const pattern = new RegExp(text, 'i')
+    return value => !!value && pattern.test(value)
+  } catch {
+    const lower = text.toLowerCase()
+    return value => !!value && value.toLowerCase().includes(lower)
+  }
+}
+
+/** IPv4 按数值排序，其余（IPv6、Inner）排在后面按字典序 */
+export function compareSources(a: string, b: string): number {
+  const v4 = (ip: string) => /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip.split('.').reduce((sum, part) => sum * 256 + Number(part), 0) : null
+  if (a === INNER_SOURCE || b === INNER_SOURCE) return a === b ? 0 : a === INNER_SOURCE ? -1 : 1
+  const [x, y] = [v4(a), v4(b)]
+  if (x !== null && y !== null) return x - y
+  if (x !== null) return -1
+  if (y !== null) return 1
+  return a.localeCompare(b)
 }
