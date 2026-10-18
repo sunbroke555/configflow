@@ -2,11 +2,13 @@
   <div>
     <PageHeader title="域名发现">
       <template #actions>
-        <Segmented v-model="days" :options="DAY_OPTIONS" label="时间范围" @update:model-value="loadDomains" />
-        <Button variant="outline" class="border-border/60 bg-background/40" :disabled="refreshing || loading" @click="reload">
-          <RefreshCw class="size-4" :class="(refreshing || loading) && 'animate-spin'" />
-          刷新
-        </Button>
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <Segmented v-model="days" :options="DAY_OPTIONS" label="时间范围" @update:model-value="loadDomains" />
+          <Button variant="outline" class="ml-auto border-border/60 bg-background/40" :disabled="refreshing || loading" @click="reload">
+            <RefreshCw class="size-4" :class="(refreshing || loading) && 'animate-spin'" />
+            刷新
+          </Button>
+        </div>
       </template>
     </PageHeader>
 

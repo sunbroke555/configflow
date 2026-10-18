@@ -2,22 +2,24 @@
   <div>
     <PageHeader title="日志">
       <template #actions>
-        <div class="flex flex-wrap gap-1.5" role="group" aria-label="按级别筛选">
-          <button
-            v-for="level in LEVELS"
-            :key="level"
-            type="button"
-            class="chip font-mono"
-            :aria-pressed="levelsOn.has(level)"
-            @click="toggleLevel(level)"
-          >
-            {{ level }}
-          </button>
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap gap-1.5" role="group" aria-label="按级别筛选">
+            <button
+              v-for="level in LEVELS"
+              :key="level"
+              type="button"
+              class="chip font-mono"
+              :aria-pressed="levelsOn.has(level)"
+              @click="toggleLevel(level)"
+            >
+              {{ level }}
+            </button>
+          </div>
+          <Button variant="outline" class="ml-auto border-border/60 bg-background/40" @click="togglePause">
+            <component :is="paused ? Play : Pause" class="size-4" />
+            {{ paused ? '继续' : '暂停' }}
+          </Button>
         </div>
-        <Button variant="outline" class="border-border/60 bg-background/40" @click="togglePause">
-          <component :is="paused ? Play : Pause" class="size-4" />
-          {{ paused ? '继续' : '暂停' }}
-        </Button>
       </template>
     </PageHeader>
 

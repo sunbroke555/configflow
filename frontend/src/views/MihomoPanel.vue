@@ -20,11 +20,15 @@
         </Select>
       </template>
       <template v-if="agentId" #actions>
-        <Segmented :model-value="mode" :options="MODE_OPTIONS" label="代理模式" :disabled="!coreVersion || modeSaving" @update:model-value="changeMode" />
-        <MihomoCoreActions :agent-id="agentId" :disabled="!coreVersion && !statusError" @changed="reloadAll" />
-        <Button variant="outline" class="min-h-11" :disabled="statusLoading" @click="reloadAll">
-          <RefreshCw class="size-4" :class="{ 'animate-spin': statusLoading }" />刷新
-        </Button>
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <Segmented :model-value="mode" :options="MODE_OPTIONS" label="代理模式" :disabled="!coreVersion || modeSaving" @update:model-value="changeMode" />
+          <div class="ml-auto flex shrink-0 items-center gap-2">
+            <MihomoCoreActions :agent-id="agentId" :disabled="!coreVersion && !statusError" @changed="reloadAll" />
+            <Button variant="outline" class="min-h-11" :disabled="statusLoading" @click="reloadAll">
+              <RefreshCw class="size-4" :class="{ 'animate-spin': statusLoading }" />刷新
+            </Button>
+          </div>
+        </div>
       </template>
     </PageHeader>
 

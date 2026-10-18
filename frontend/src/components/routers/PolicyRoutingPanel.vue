@@ -62,15 +62,16 @@
       </TabsContent>
       <TabsContent value="settings" class="m-0 px-5 pb-5 max-md:px-4">
         <fieldset class="m-0 grid min-w-0 gap-5 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="locked">
-          <div class="space-y-2"><Label for="policy-gateway">代理网关（mihomo）</Label>
+          <FormField label="代理网关（mihomo）" html-for="policy-gateway" hint="这台 ROS 的策略路由与静态代理路由共用此网关。">
             <Select :model-value="settings.proxy_gateway_agent_id || '__none__'" :disabled="locked" @update:model-value="value => settings.proxy_gateway_agent_id = value === '__none__' ? '' : String(value)">
               <SelectTrigger id="policy-gateway" class="min-h-11"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent><SelectItem value="__none__">不关联</SelectItem><SelectItem v-for="agent in state.gateways" :key="agent.id" :value="agent.id">{{ agent.name }}（{{ agent.host }}）</SelectItem></SelectContent>
-            </Select><p class="m-0 text-xs text-muted-foreground">这台 ROS 的策略路由与静态代理路由共用此网关。</p>
-          </div>
+            </Select>
+          </FormField>
           <div class="space-y-2"><div class="flex flex-wrap items-center justify-between gap-2"><Label for="policy-destinations">使用策略路由的 IP 规则集</Label><Button variant="ghost" class="min-h-11" :disabled="locked" @click="editDestinations()"><Pencil class="size-4" />编辑规则内容</Button></div><MultiSelect :model-value="settings.ros_policy_rule_sets" :options="ruleOptions" trigger-id="policy-destinations" placeholder="不使用策略路由" @update:model-value="value => selectRules('ros_policy_rule_sets', value)" /></div>
-          <div class="space-y-2"><Label for="policy-static-destinations">使用静态路由的 IP 规则集</Label><MultiSelect :model-value="settings.ip_rule_sets" :options="ruleOptions" trigger-id="policy-static-destinations" placeholder="仅 fake-ip 网段" @update:model-value="value => selectRules('ip_rule_sets', value)" /></div>
-          <p class="m-0 text-xs text-muted-foreground">同一规则集只能选择一种方式，移入另一组时自动移出原组。fake-ip 始终使用静态路由。取消选择后，需保存并确认发布才会清理对应的受管对象。</p>
+          <FormField label="使用静态路由的 IP 规则集" html-for="policy-static-destinations" hint="同一规则集只能选择一种方式，移入另一组时自动移出原组。fake-ip 始终使用静态路由。取消选择后，需保存并确认发布才会清理对应的受管对象。">
+            <MultiSelect :model-value="settings.ip_rule_sets" :options="ruleOptions" trigger-id="policy-static-destinations" placeholder="仅 fake-ip 网段" @update:model-value="value => selectRules('ip_rule_sets', value)" />
+          </FormField>
         </fieldset>
       </TabsContent>
       <TabsContent value="preview" class="m-0 px-5 pb-5 max-md:px-4">
@@ -150,6 +151,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import FormField from '@/components/common/FormField.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
 import PolicyRoutingObjects from './PolicyRoutingObjects.vue'

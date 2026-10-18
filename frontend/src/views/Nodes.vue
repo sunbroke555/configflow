@@ -30,7 +30,7 @@
 
     <Toolbar v-model:search="keyword" placeholder="搜索名称、地址或备注…">
 
-      <template #actions>
+      <template #search-actions>
         <Button
           v-if="nodes.length > 0"
           variant="ghost"
@@ -40,6 +40,8 @@
         >
           {{ isAllSelected ? '取消全选' : '全选' }}
         </Button>
+      </template>
+      <template v-if="selectedNodeIds.size > 0 || !isNarrow" #actions>
         <Button
           v-if="selectedNodeIds.size > 0"
           variant="outline"
@@ -50,18 +52,20 @@
           <Trash2 class="size-3.5" />
           删除 {{ selectedNodeIds.size }} 项
         </Button>
-        <ViewToggle v-model="viewMode" class="max-md:hidden" />
+        <ViewToggle v-if="!isNarrow" v-model="viewMode" />
       </template>
     </Toolbar>
 
     <!-- 地区 / 协议筛选：点一次只看这一类，再点取消 -->
-    <div v-if="!reorder.active.value && (nodes.length || subNodes.length)" class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2">
-      <div class="flex flex-wrap gap-1.5" role="group" aria-label="按来源筛选">
+    <div v-if="!reorder.active.value && (nodes.length || subNodes.length)" class="cf-node-filters mb-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+      <div class="cf-node-filter-row flex flex-wrap gap-1.5" role="group" aria-label="按来源筛选">
+        <span class="cf-node-filter-label" aria-hidden="true">来源</span>
         <button type="button" class="chip" :aria-pressed="sourceFilter === 'all'" @click="sourceFilter = 'all'">全部来源</button>
         <button type="button" class="chip" :aria-pressed="sourceFilter === 'manual'" @click="sourceFilter = 'manual'">手动节点</button>
         <button type="button" class="chip" :aria-pressed="sourceFilter === 'subscription'" @click="sourceFilter = 'subscription'">订阅节点</button>
       </div>
-      <div class="flex flex-wrap gap-1.5" role="group" aria-label="按地区筛选">
+      <div class="cf-node-filter-row flex flex-wrap gap-1.5" role="group" aria-label="按地区筛选">
+        <span class="cf-node-filter-label" aria-hidden="true">地区</span>
         <button type="button" class="chip" :aria-pressed="!regionFilter" @click="regionFilter = null">全部</button>
         <button
           v-for="region in regionOptions"
@@ -74,7 +78,8 @@
           {{ region.name }}
         </button>
       </div>
-      <div class="ml-auto flex flex-wrap gap-1.5" role="group" aria-label="按协议筛选">
+      <div class="cf-node-filter-row ml-auto flex flex-wrap gap-1.5" role="group" aria-label="按协议筛选">
+        <span class="cf-node-filter-label" aria-hidden="true">协议</span>
         <button
           v-for="p in protocolOptions"
           :key="p"

@@ -62,6 +62,27 @@ function closeOnEscape(event: KeyboardEvent) {
   overflow-wrap: anywhere;
 }
 
+.cf-compact-help {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+@media (max-width: 767px) {
+  /* 32px 标签行，保留 44px 点击区；相邻控件至少留出 6px 间距。 */
+  .cf-compact-help {
+    position: relative;
+    width: var(--cf-touch, 44px);
+    height: 32px;
+  }
+
+  .cf-compact-help .field-help-trigger {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}
+
 @media (max-width: 767px), (pointer: coarse) {
   .field-help-trigger {
     width: var(--cf-touch, 44px);

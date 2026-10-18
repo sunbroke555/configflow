@@ -10,11 +10,13 @@
       <div class="min-w-0 flex-1">
         <h2 v-if="title" class="m-0 flex max-sm:flex-wrap items-center gap-2 text-[14px] font-semibold tracking-[-0.01em] text-foreground">
           <component v-if="icon" :is="icon" class="size-4 text-primary-accent" :stroke-width="2.2" aria-hidden="true" />
-          {{ title }}
-          <FieldHelp v-if="help" :label="title" :text="help" />
+          <span class="min-w-0 break-words">{{ title }}</span>
+          <span v-if="helpText" class="cf-compact-help">
+            <FieldHelp :label="title" :text="helpText" />
+          </span>
           <slot name="title-extra" />
         </h2>
-        <p v-if="description" class="mt-1 mb-0 text-[12px] leading-relaxed text-muted-foreground">
+        <p v-if="description && !descriptionInHelp" class="mt-1 mb-0 text-[12px] leading-relaxed text-muted-foreground">
           {{ description }}
         </p>
       </div>
@@ -28,15 +30,18 @@
 </template>
 
 <script setup lang="ts">
-import type { Component } from 'vue'
+import { computed, type Component } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { cn } from '@/lib/utils'
 import FieldHelp from './FieldHelp.vue'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     title?: string
     description?: string
     help?: string
+    /** 时间、结果或重要警告不应收进说明。 */
+    persistentDescription?: boolean
     icon?: Component
     /** 内容自带内边距时（例如整块是表格）传 false */
     padded?: boolean
@@ -44,4 +49,8 @@ withDefaults(
   }>(),
   { padded: true, interactive: false }
 )
+
+const mobile = useMediaQuery('(max-width: 767px)')
+const descriptionInHelp = computed(() => mobile.value && !!props.title && !props.persistentDescription)
+const helpText = computed(() => [...new Set([descriptionInHelp.value ? props.description : '', props.help].filter(Boolean))].join('\n\n'))
 </script>

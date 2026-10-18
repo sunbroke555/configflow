@@ -46,7 +46,7 @@
 
     <!-- 命中模拟：后端按真实规则与规则集内容逐条匹配，前端按顺序扫描到命中行 -->
     <SectionCard v-if="!reorder.active.value && allRules.length" :padded="false" class="mb-3.5 overflow-hidden">
-      <form class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3.5 p-5 max-md:grid-cols-[minmax(0,1fr)] max-md:p-4" @submit.prevent="simulate()">
+      <form class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3.5 p-5 max-md:p-4" @submit.prevent="simulate()">
         <label class="min-w-0">
           <span class="mb-2 block font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase">命中模拟</span>
           <Input
@@ -63,7 +63,7 @@
           <Play v-else class="size-4" />
           模拟
         </Button>
-        <div class="col-span-full flex min-h-10 flex-wrap items-center gap-2 text-[13.5px] text-muted-foreground max-md:col-span-1">
+        <div class="col-span-full flex min-h-10 flex-wrap items-center gap-2 text-[13.5px] text-muted-foreground">
           <template v-if="simRunning">
             <span class="live-dot" aria-hidden="true" />
             <span class="font-mono">逐条匹配 {{ simQuery.trim() }} …</span>
@@ -111,6 +111,8 @@
 
     <!-- ===== 列表视图 ===== -->
     <SectionCard v-else-if="viewMode === 'list'" :padded="false">
+      <div class="max-w-full overflow-x-auto" role="region" aria-label="策略规则列表" tabindex="0">
+      <div class="min-w-[680px]">
       <div
         class="flex items-center gap-2.5 border-b border-border px-4 py-3 font-mono text-[10.5px] tracking-[0.12em] text-muted-foreground uppercase"
         aria-hidden="true"
@@ -275,6 +277,8 @@
         </div>
       </div>
 
+      </div>
+      </div>
       <Separator />
       <p class="m-0 px-4 py-2.5 text-xs text-muted-foreground">共 {{ displayList.length }} 项</p>
     </SectionCard>
