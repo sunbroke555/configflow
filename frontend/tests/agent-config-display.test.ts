@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import Agents from '@/views/Agents.vue'
-import { agentApi, profileApi } from '@/api'
+import api, { agentApi, profileApi } from '@/api'
 import { setActiveProfileId } from '@/profileContext'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
 import { Select } from '@/components/ui/select'
@@ -191,6 +191,70 @@ describe('Agent configuration status wording', () => {
     finishRefresh({ data: [agent({ profile_id: 'second', content_sync: { status: 'changed' } })] })
     await flushPromises()
     expect(footer.text()).toContain('有变更，待推送')
+  })
+})
+
+describe('Docker installation choices', () => {
+  it('generates Mihomo + OxiDNS AIO commands while retaining standalone MosDNS and existing Agents', async () => {
+    const existing = agent()
+    const { wrapper } = await render(existing)
+    vi.mocked(api.get).mockImplementation(async path => ({ data: path.endsWith('compose') ? 'generated-compose' : 'generated-run' }) as any)
+    const click = async (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector)
+      expect(element).not.toBeNull()
+      element!.click()
+      await flushPromises()
+    }
+    const generate = async () => {
+      const button = Array.from(document.querySelectorAll('button')).find(item => item.textContent?.trim() === '生成 Docker 部署命令')
+      expect(button).toBeDefined()
+      button!.click()
+      await flushPromises()
+    }
+    await wrapper.findAll('button').find(button => button.text() === '生成安装脚本')!.trigger('click')
+    await flushPromises()
+    await click('[role="radio"][value="docker"]')
+    await click('[role="radio"][value="aio"]')
+    const dialog = document.querySelector('[role="dialog"]')!
+    const name = dialog.querySelector<HTMLInputElement>('#agent-name')!
+    name.value = 'new-aio'
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    expect(dialog.textContent).toContain('Agent + Mihomo + OxiDNS')
+    expect(dialog.textContent).not.toContain('MosDNS Agent')
+    const port = (label: string) => Array.from(dialog.querySelectorAll('span'))
+      .find(item => item.textContent?.trim() === label)?.parentElement?.querySelector<HTMLInputElement>('input')
+    expect(port('Mihomo Agent')?.value).toBe('8080')
+    expect(port('OxiDNS Agent')?.value).toBe('8082')
+    port('OxiDNS Agent')!.value = '8182'
+    port('OxiDNS Agent')!.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    await generate()
+    for (const endpoint of ['/agents/docker-agent-compose', '/agents/docker-agent-run']) {
+      expect(api.get).toHaveBeenCalledWith(endpoint, { params: expect.objectContaining({
+        enable_mihomo: true, enable_oxidns: true, enable_mosdns: false,
+        mihomo_port: 8080, oxidns_port: 8182, data_dir: './aio_data'
+      }) })
+    }
+    expect(Array.from(dialog.querySelectorAll('textarea')).map(input => input.value))
+      .toEqual(expect.arrayContaining(['generated-compose', 'generated-run']))
+    vi.mocked(api.get).mockClear()
+    await click('[role="radio"][value="mosdns"]')
+    expect(port('MosDNS Agent')?.value).toBe('8081')
+    expect(port('OxiDNS Agent')).toBeUndefined()
+    await generate()
+    for (const endpoint of ['/agents/docker-agent-compose', '/agents/docker-agent-run']) {
+      expect(api.get).toHaveBeenCalledWith(endpoint, { params: expect.objectContaining({
+        enable_mihomo: false, enable_oxidns: false, enable_mosdns: true,
+        mosdns_port: 8081, data_dir: './mosdns_data'
+      }) })
+    }
+    expect(api.post).not.toHaveBeenCalled()
+    expect(api.put).not.toHaveBeenCalled()
+    expect(api.delete).not.toHaveBeenCalled()
+    expect(agentApi.bindProfile).not.toHaveBeenCalled()
+    expect(wrapper.get('footer').text()).toContain('已同步')
+    expect(existing.service_type).toBe('mosdns')
   })
 })
 
