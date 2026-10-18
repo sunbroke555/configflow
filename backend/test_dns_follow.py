@@ -142,6 +142,53 @@ def follow_env(tmp_path, monkeypatch):
     config_store.set_repository(previous)
 
 
+def test_options_suggest_each_mihomo_host_without_management_ports_or_tokens(follow_env):
+    env = follow_env
+    other = env.manager.register_agent({'name': 'Other Mihomo', 'host': '192.168.0.3', 'port': 27647,
+                                        'service_type': 'mihomo'})
+    disabled = env.manager.register_agent({'name': 'Disabled Mihomo', 'host': '192.168.0.4',
+                                           'service_type': 'mihomo'})
+    env.manager.update_agent(disabled['id'], {'enabled': False})
+
+    result = dns_follow.options(env.manager, env.target_id)
+
+    assert result['sources'] == [
+        {'id': env.source_id, 'name': 'Mihomo', 'suggested_address': 'mihomo.test'},
+        {'id': other['id'], 'name': 'Other Mihomo', 'suggested_address': '192.168.0.3'},
+    ]
+    assert 'oxidns.test' not in str(result['sources'])
+    for agent in env.manager.get_all_agents():
+        assert agent['token'] not in str(result)
+    assert env.calls == []
+
+
+@pytest.mark.parametrize(('host', 'expected'), [
+    ('192.168.0.3', '192.168.0.3'),
+    ('mihomo.example.test', 'mihomo.example.test'),
+    ('2001:db8::3', '2001:db8::3'),
+    ('[2001:db8::3]', '2001:db8::3'),
+])
+def test_options_suggest_valid_source_host(follow_env, host, expected):
+    env = follow_env
+    env.manager.update_agent(env.source_id, {'host': host})
+
+    assert dns_follow.options(env.manager, env.target_id)['sources'][0]['suggested_address'] == expected
+
+
+@pytest.mark.parametrize('host', [
+    None, '', '127.0.0.1', '::1', '[::1]', '0.0.0.0', '::', '224.0.0.1', 'ff02::1', 'localhost',
+    '192.168.0.3:27647', '[2001:db8::3]:27647', 'http://192.168.0.3:27647',
+    'reader:private-password@mihomo.test', 'mihomo.test/api', '[mihomo.test]',
+])
+def test_options_leave_unusable_source_host_for_manual_entry(follow_env, host):
+    env = follow_env
+    env.manager.update_agent(env.source_id, {'host': host})
+
+    assert dns_follow.options(env.manager, env.target_id)['sources'] == [
+        {'id': env.source_id, 'name': 'Mihomo', 'suggested_address': ''},
+    ]
+
+
 def test_binding_draft_edits_and_failed_source_do_not_publish(follow_env):
     env = follow_env
     env.bind()

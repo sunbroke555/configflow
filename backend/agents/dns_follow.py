@@ -126,6 +126,17 @@ def _network_host(value):
     return value
 
 
+def _suggested_network_host(agent):
+    # Management addresses are a starting point, not proof of DNS reachability.
+    host = agent.get('host')
+    try:
+        if isinstance(host, str) and host.startswith('[') and host.endswith(']'):
+            host = str(ipaddress.IPv6Address(host[1:-1]))
+        return _network_host(host)
+    except ValueError:
+        return ''
+
+
 def _request(manager, agent, path, **kwargs):
     try:
         result = manager._deployment_request(agent, 'get', path, **kwargs)
@@ -157,7 +168,8 @@ def options(manager, target_id):
             continue
         upstreams.append({'tag': tag, 'index': index, 'address': failure_text(entry['addr'])})
     return {'success': True, 'binding': target.get('dns_follow'), 'state': target.get('dns_follow_state'),
-            'sources': [{'id': agent['id'], 'name': agent.get('name', agent['id'])}
+            'sources': [{'id': agent['id'], 'name': agent.get('name', agent['id']),
+                         'suggested_address': _suggested_network_host(agent)}
                         for agent in manager.get_all_agents()
                         if agent.get('service_type') == 'mihomo' and agent.get('enabled', True)],
             'upstreams': upstreams}

@@ -29,7 +29,7 @@ export interface AgentDNSFollowOptions {
   success: boolean
   binding: AgentDNSFollowBinding | null
   state: AgentDNSFollowState | null
-  sources: { id: string; name: string }[]
+  sources: { id: string; name: string; suggested_address?: string }[]
   upstreams: { tag: string; index: number; address: string }[]
   message?: string
 }

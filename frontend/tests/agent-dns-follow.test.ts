@@ -14,7 +14,7 @@ const binding = {
   id: 'binding-1', source_agent_id: 'mihomo-1', upstream_tag: 'forward_remote', upstream_index: 1,
   connection: 'auto', source_profile_id: 'default', target_profile_id: 'dns', after_deployment_id: 'older',
 }
-const sources = [{ id: 'mihomo-1', name: '家庭 Mihomo' }]
+const sources = [{ id: 'mihomo-1', name: '家庭 Mihomo', suggested_address: '192.168.0.3' }]
 const upstreams = [
   { tag: 'forward_remote', index: 0, address: 'udp://9.9.9.9:53' },
   { tag: 'forward_remote', index: 1, address: 'tcp://127.0.0.1:1053' },
@@ -80,20 +80,84 @@ describe('explicit Mihomo DNS follow binding', () => {
     expect(wrapper.text()).not.toContain('同步失败')
   })
 
-  it('requires an explicit network address and never fills it from the management host', async () => {
+  it('prefills the selected source address and submits manual edits without the Agent management port', async () => {
     const wrapper = render({ host: 'agent-proxy.example', port: 8080 })
     await click('跟随 Mihomo DNS')
     await choose(wrapper, 0, 'mihomo-1')
     await choose(wrapper, 1, JSON.stringify(['forward_remote', 1]))
     await choose(wrapper, 2, 'network')
     const field = document.getElementById('dns-follow-address-oxi-1') as HTMLInputElement
-    expect(field.value).toBe('')
-    expect(button('开启自动同步并发布').disabled).toBe(true)
+    expect(field.value).toBe('192.168.0.3')
+    expect(button('开启自动同步并发布').disabled).toBe(false)
     field.value = ' 2001:db8::123 '
     field.dispatchEvent(new Event('input', { bubbles: true }))
     await flushPromises()
+    await choose(wrapper, 2, 'auto')
+    await choose(wrapper, 2, 'network')
+    expect((document.getElementById('dns-follow-address-oxi-1') as HTMLInputElement).value).toBe(' 2001:db8::123 ')
     await submit()
     expect(agentApi.setDNSFollow).toHaveBeenCalledWith('oxi-1', expect.objectContaining({ connection: 'network', address: '2001:db8::123' }))
+  })
+
+  it('updates untouched suggestions when switching sources, but preserves a manual address', async () => {
+    vi.mocked(agentApi.getDNSFollow).mockResolvedValue({ data: options({ sources: [
+      ...sources, { id: 'mihomo-2', name: '另一台 Mihomo', suggested_address: 'mihomo.lan' },
+    ] }) } as any)
+    const wrapper = render()
+    await click('跟随 Mihomo DNS')
+    await choose(wrapper, 2, 'network')
+    const field = document.getElementById('dns-follow-address-oxi-1') as HTMLInputElement
+    await choose(wrapper, 0, 'mihomo-1')
+    expect(field.value).toBe('192.168.0.3')
+    await choose(wrapper, 0, 'mihomo-2')
+    expect(field.value).toBe('mihomo.lan')
+    field.value = '192.168.1.20'
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    await choose(wrapper, 0, 'mihomo-1')
+    expect(field.value).toBe('192.168.1.20')
+    await choose(wrapper, 1, JSON.stringify(['forward_remote', 0]))
+    await submit()
+    expect(agentApi.setDNSFollow).toHaveBeenCalledWith('oxi-1', expect.objectContaining({
+      source_agent_id: 'mihomo-1', connection: 'network', address: '192.168.1.20',
+    }))
+  })
+
+  it('clears a previous suggestion when the new source has no usable address and allows manual entry', async () => {
+    vi.mocked(agentApi.getDNSFollow).mockResolvedValue({ data: options({ sources: [
+      ...sources, { id: 'mihomo-2', name: '无建议地址' },
+    ] }) } as any)
+    const wrapper = render({ host: 'target-agent.example', port: 8080 })
+    await click('跟随 Mihomo DNS')
+    await choose(wrapper, 0, 'mihomo-1')
+    await choose(wrapper, 1, JSON.stringify(['forward_remote', 0]))
+    await choose(wrapper, 2, 'network')
+    await choose(wrapper, 0, 'mihomo-2')
+    const field = document.getElementById('dns-follow-address-oxi-1') as HTMLInputElement
+    expect(field.value).toBe('')
+    expect(button('开启自动同步并发布').disabled).toBe(true)
+    field.value = '192.168.0.4'
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    expect(button('开启自动同步并发布').disabled).toBe(false)
+  })
+
+  it('restores the saved network address when reopening instead of overwriting it with a suggestion', async () => {
+    const saved = { ...binding, connection: 'network', address: '192.168.1.20' }
+    vi.mocked(agentApi.getDNSFollow).mockResolvedValue({ data: options({ binding: saved }) } as any)
+    render({ dns_follow: saved })
+    await click('设置')
+    let field = document.getElementById('dns-follow-address-oxi-1') as HTMLInputElement
+    expect(field.value).toBe('192.168.1.20')
+    field.value = '192.168.0.3'
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    await click('关闭')
+    await click('设置')
+    field = document.getElementById('dns-follow-address-oxi-1') as HTMLInputElement
+    expect(field.value).toBe('192.168.1.20')
+    await submit()
+    expect(agentApi.setDNSFollow).toHaveBeenCalledWith('oxi-1', expect.objectContaining({ address: '192.168.1.20' }))
   })
 
   it('shows backend validation failures and retains the form for correction', async () => {

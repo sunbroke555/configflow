@@ -39,10 +39,18 @@ const canSave = computed(() => !!options.value && !loading.value && !busy.value 
 const sourceLabel = computed(() => options.value?.sources.find(item => item.id === binding.value?.source_agent_id)?.name || props.sourceName || 'Mihomo')
 const shownState = computed<AgentDNSFollowState>(() => state.value || { status: 'waiting', message: '等待 Mihomo 下一次发布成功。' })
 const upstreamKey = (item: { tag: string; index: number }) => JSON.stringify([item.tag, item.index])
+const suggestedAddress = (id: string) => options.value?.sources.find(item => item.id === id)?.suggested_address || ''
 const errorMessage = (failure: any) => failure?.response?.data?.message || failure?.message || '操作失败，请重试。'
 let generation = 0
 let disposed = false
 onUnmounted(() => { disposed = true; generation++ })
+
+watch(source, (next, previous) => {
+  if (loading.value) return
+  if (!address.value.trim() || address.value.trim() === suggestedAddress(previous)) {
+    address.value = suggestedAddress(next)
+  }
+}, { flush: 'sync' })
 
 function acceptState(data: { binding?: AgentDNSFollowBinding | null; state?: AgentDNSFollowState | null }) {
   if ('binding' in data) binding.value = data.binding || null
@@ -63,7 +71,7 @@ async function load() {
     source.value = data.binding?.source_agent_id || ''
     upstream.value = data.binding ? upstreamKey({ tag: data.binding.upstream_tag, index: data.binding.upstream_index }) : ''
     connection.value = data.binding?.connection || 'auto'
-    address.value = data.binding?.address || ''
+    address.value = data.binding?.address ?? suggestedAddress(source.value)
   } catch (failure) {
     if (!disposed && current === generation) error.value = errorMessage(failure)
   } finally {
@@ -159,7 +167,7 @@ async function run(kind: 'save' | 'remove' | 'retry') {
                 </SelectContent>
               </Select>
             </FormField>
-            <FormField v-if="connection === 'network'" label="Mihomo DNS 地址" :html-for="`dns-follow-address-${agent.id}`" hint="填写 OxiDNS 能访问的 IP 或主机名；端口自动跟随，无需填写。">
+            <FormField v-if="connection === 'network'" label="Mihomo DNS 地址" :html-for="`dns-follow-address-${agent.id}`" hint="默认使用所选 Agent 地址，可修改为 OxiDNS 能访问的地址；端口自动跟随。">
               <Input :id="`dns-follow-address-${agent.id}`" v-model="address" class="min-h-11 font-mono" placeholder="192.168.0.3" autocomplete="off" spellcheck="false" />
             </FormField>
           </fieldset>
