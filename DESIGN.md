@@ -79,6 +79,7 @@ Claude 暖色系的「配置流」控制台：炭黑 / 象牙底 + 陶土橙主�
 - **数据展示**：`StatTile`、`Sparkline`、`AnimatedNumber`、`StatusDot`、`.chip`（`chip-acc / ok / warn / bad / sky`）
 - **选择**：`Segmented`（定一个参数）、`ViewToggle`（列表 / 卡片切换）、`MultiSelect`、`button.chip[aria-pressed]`（筛选：点完列表变短）
 - **反馈**：只走 `@/lib/feedback`：`notify.*`（vue-sonner 轻提示）、`confirm()` / `confirmDanger()` / `choose()`（由 App.vue 里的 `ConfirmHost` 渲染）。不要在页面里单独挂确认框
+- **发布进度**：Agent 卡片与设置页底部共用 `AgentDeploymentStatus`，状态标题为 13px 半粗并配图标：进行中用主色，成功用绿色，待操作 / 待确认 / 恢复中用警告色，失败用红色。手动回滚成功用绿色，发布失败后自动回滚仍用红色。重要操作说明用正文色，普通说明用次要文字色；进度内容不随离线卡片降低透明度
 - **图标**：`@lucide/vue`，常规 16px（`size-4`），按钮内 14px（`size-3.5`）；纯图标按钮必须有 `aria-label`
 - **表格**：数据密集的区域用 `.cf-table` / `.cf-table-wrap` 列表，不要做成卡片墙；宽表在自身容器内横向滚动。表头与该列内容保持同向对齐，右侧操作列的表头用 `text-right`；默认对齐放在组件层，允许列上的对齐类覆盖
 

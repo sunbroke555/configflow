@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { LoaderCircle, RefreshCw, Save, Upload } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { Button } from '@/components/ui/button'
+import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -77,9 +78,14 @@ const progressLabel = computed(() => {
   if (task.value.status === 'succeeded') return `${prefix}${visibleAttempt.value?.inherited ? '成功' : '发布成功，服务检查已通过。'}`
   return `${prefix}${deploymentStatusLabel(task.value)}`
 })
-const progressClass = computed(() => error.value || ['failed', 'rolled_back', 'rollback_failed'].includes(task.value?.status || '')
-  ? 'text-destructive-accent' : task.value?.status === 'succeeded' || synchronousResult.value === 'done'
-    ? 'text-success-accent' : 'text-muted-foreground')
+const progressTask = computed<AgentDeployment | undefined>(() => {
+  if (phase.value === 'saving' || phase.value === 'checking') return { deployment_id: '', status: 'preparing' }
+  if (error.value) return { deployment_id: '', status: 'failed' }
+  if (synchronousResult.value === 'done') return { deployment_id: '', status: 'succeeded' }
+  if (synchronousResult.value === 'unknown') return { deployment_id: '', status: 'unknown' }
+  if (phase.value === 'submitting' && !task.value) return { deployment_id: '', status: 'preparing' }
+  return task.value
+})
 const messageOf = (failure: any) => failure?.response?.data?.message || failure?.message || '请稍后重试。'
 const stillCurrent = (current: Attempt) => !disposed && props.open && session === current.session
   && props.profileId === current.profileId && props.serviceType === current.serviceType
@@ -306,8 +312,8 @@ onUnmounted(() => { disposed = true; session++ })
       <span class="min-w-0 flex-1 break-words">{{ loadError }}</span>
       <Button type="button" variant="ghost" class="min-h-11 shrink-0" :disabled="loading || working" @click="loadTargets"><RefreshCw class="size-3.5" aria-hidden="true" />重试读取</Button>
     </div>
-    <div v-if="progressLabel" role="status" aria-live="polite" class="settings-publish-progress min-w-0 space-y-1 text-xs leading-relaxed" :class="progressClass">
-      <p class="m-0 break-words">{{ progressLabel }}</p>
+    <div v-if="progressLabel && progressTask" role="status" aria-live="polite" class="settings-publish-progress min-w-0 space-y-1 text-xs leading-relaxed text-foreground">
+      <AgentDeploymentStatus :task="progressTask">{{ progressLabel }}</AgentDeploymentStatus>
       <p v-if="task?.status === 'succeeded' && hasDNSFollowers" class="m-0 break-words text-muted-foreground" data-dns-follow-hint>
         后台会继续处理已绑定的 OxiDNS；<RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">到 Agent 页面查看同步结果或重试</RouterLink>。
       </p>
@@ -321,7 +327,7 @@ onUnmounted(() => { disposed = true; session++ })
         <span class="min-w-0 flex-1">待应用的是本次已校验的配置，不包含之后保存的草稿修改。</span>
         <Button type="button" variant="outline" class="min-h-11" :disabled="disabled || phase !== 'idle'" @click="activateSaved">应用并启动</Button>
       </div>
-      <p v-if="blockedRecovery" class="m-0">请先到 Agent 页面处理回滚结果，确认服务恢复后再发布。</p>
+      <p v-if="blockedRecovery" class="m-0 text-destructive-accent">请先到 Agent 页面处理回滚结果，确认服务恢复后再发布。</p>
     </div>
   </div>
 </template>

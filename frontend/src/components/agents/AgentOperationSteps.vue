@@ -46,7 +46,7 @@ const eventTime = (value: string) => {
         <Loader2 v-if="busy" class="size-3.5 shrink-0 animate-spin text-primary-accent" aria-hidden="true" />
         <span class="min-w-0 break-words">{{ task.query_error ? '上次报告：' : '' }}{{ label }}</span>
       </p>
-      <p v-if="message && message !== label" class="m-0 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{{ message }}</p>
+      <p v-if="message && message !== label" class="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]" :class="kind === 'deployment' ? 'text-foreground' : 'text-muted-foreground'">{{ message }}</p>
       <p v-if="connectionMessage" class="m-0 text-warning-accent [overflow-wrap:anywhere]">{{ connectionMessage }}</p>
     </div>
     <details class="min-w-0 rounded-md border border-border bg-background/50 text-foreground">

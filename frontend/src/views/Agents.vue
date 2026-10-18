@@ -65,7 +65,7 @@
           v-bind="listItem(index)"
           :class="cn(
             'relative flex flex-col overflow-hidden rounded-[18px] border border-border bg-card/90 p-[18px] shadow-surface',
-            agent.status !== 'online' && 'opacity-80'
+            agent.status !== 'online' && !deployments[agent.id] && 'opacity-80'
           )"
         >
           <header class="flex items-center gap-2.5">
@@ -156,8 +156,9 @@
             class="mb-3 rounded-xl border border-border bg-background/50 p-3 text-[12.5px]"
             aria-live="polite"
           >
-            <AgentOperationSteps :task="deployments[agent.id]" :busy="deploymentBusy(agent.id)" />
-            <p v-if="deployments[agent.id].not_recorded && !deployments[agent.id].manual_rollback" class="mt-1 mb-0 text-muted-foreground">后端暂未记录此发布，正在继续查询。可使用原发布编号重新提交。</p>
+            <AgentDeploymentStatus :task="deployments[agent.id]" />
+            <AgentOperationSteps :task="deployments[agent.id]" :busy="deploymentBusy(agent.id)" :show-current="false" />
+            <p v-if="deployments[agent.id].not_recorded && !deployments[agent.id].manual_rollback" class="mt-1 mb-0 text-warning-accent">后端暂未记录此发布，正在继续查询。可使用原发布编号重新提交。</p>
             <AgentFailureDetails :show-progress-message="false" :task="deployments[agent.id]" class="mt-1" />
             <Button v-if="deployments[agent.id].status === 'ready'" variant="outline" size="sm" class="mt-2" @click="activateDeployment(agent.id)">应用并启动</Button>
             <Button v-if="deployments[agent.id].status === 'rollback_failed'" variant="outline" size="sm" class="mt-2" @click="refreshDeployment(agent.id)">查询恢复状态</Button>
@@ -795,6 +796,7 @@ import type { Agent } from '@/types'
 import { useProfileStore } from '@/stores/profile'
 import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentDeploymentHistory from '@/components/agents/AgentDeploymentHistory.vue'
+import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
