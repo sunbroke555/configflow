@@ -12,14 +12,7 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "请使用 root 用户运行此脚本"
     exit 1
 fi
-if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
-    INIT_SYSTEM="openrc"
-elif command -v systemctl >/dev/null 2>&1; then
-    INIT_SYSTEM="systemd"
-else
-    echo "需要 systemd 或 OpenRC；自定义运行环境请显式配置停止、启动、状态命令。"
-    exit 1
-fi
+{init_detection}
 
 # Remove only this installation's recovery dependency, retaining unrelated unit
 # settings and custom drop-ins. Joining continuations also handles edited units.
@@ -222,13 +215,13 @@ case "$(uname -m)" in
     armv7l|armhf) AGENT_ARCH="linux-armv7" ;;
     *) echo "不支持的 CPU 架构"; exit 1 ;;
 esac
-BINARY_BASE={binary_download_url_shell}
+{core_install_phase}BINARY_BASE={binary_download_url_shell}
 BINARY_URL="$BINARY_BASE/configflow-agent-$AGENT_ARCH"
 # /tmp is often mounted noexec. Stage beside the final executable so validation
 # works and replacement is an atomic rename on the same filesystem.
 mkdir -p /usr/local/bin
 BINARY_TMP=$(mktemp /usr/local/bin/.configflow-agent.install.XXXXXX)
-trap 'rm -f "$BINARY_TMP"' EXIT HUP INT TERM
+{agent_cleanup_trap}
 echo "下载 Go Agent 二进制..."
 # The download URL may carry credentials; do not print it.
 if command -v wget >/dev/null 2>&1; then

@@ -209,6 +209,16 @@ def get_install_script():
 
         # agent_type: 'go' (默认) 或 'shell'
         agent_type = request.args.get('agent_type', 'go').lower().strip()
+        install_core_value = request.args.get('install_core', 'false')
+        if install_core_value not in ('true', 'false'):
+            raise ValueError('install_core 必须为 true 或 false')
+        install_core = install_core_value == 'true'
+        if install_core:
+            if service_type not in ('mihomo', 'oxidns') or agent_type != 'go':
+                raise ValueError('仅单服务 Mihomo 或 OxiDNS Go Agent 支持同时安装核心')
+            # Preserve strict validation instead of Flask's integer converter
+            # silently replacing an invalid explicit value with the default.
+            agent_port = request.args.get('port', '8080')
 
         logger.info(f"生成安装脚本请求 - 名称: {agent_name}, 类型: {service_type}, 端口: {agent_port}, Agent类型: {agent_type}")
 
@@ -285,6 +295,7 @@ def get_install_script():
                     'service_manager', 'service_unit', 'service_binary', 'stop_command',
                     'start_command', 'status_command', 'health_url', 'health_dns_address', 'health_dns_name')},
                 deployment_health_timeout=request.args.get('deployment_health_timeout', 30, type=int),
+                install_core=install_core,
             )
 
         logger.info(f"安装脚本生成成功，长度: {len(script)} 字符")

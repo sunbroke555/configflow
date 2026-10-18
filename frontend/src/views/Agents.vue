@@ -363,6 +363,19 @@
             </RadioGroup>
           </FormField>
 
+          <section v-if="singleCoreSupported" class="min-w-0 space-y-2 rounded-lg border border-border/70 bg-background/40 p-3">
+            <label for="agent-install-core" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px] font-medium">
+              <Checkbox id="agent-install-core" v-model="scriptForm.installCore" aria-describedby="agent-install-core-note" />
+              同时安装 {{ scriptForm.type === 'mihomo' ? 'Mihomo' : 'OxiDNS' }} 核心
+            </label>
+            <p id="agent-install-core-note" class="m-0 text-[12.5px] text-muted-foreground">勾选后生成一条命令，先安装对应核心，成功后再安装 Agent。生成命令不会注册 Agent；请在目标机器以 root 身份执行，支持 systemd / OpenRC。</p>
+            <template v-if="singleCoreInstall">
+              <p class="m-0 break-words text-[12.5px] text-muted-foreground">使用默认配置 <code class="font-mono">/etc/{{ scriptForm.type }}/config.yaml</code>、服务名 <code class="font-mono">{{ scriptForm.type }}</code>、程序 <code class="font-mono">/usr/local/bin/{{ scriptForm.type }}</code>，自动识别服务管理方式。已有核心会保留，须与此布局一致；自定义部署请取消勾选后填写实际设置。</p>
+              <p v-if="scriptForm.type === 'mihomo'" class="m-0 text-[12.5px] text-muted-foreground">Mihomo DNS 监听 1053，使用公共 DNS 上游。首次安装检测 TUN 设备与权限，可用时开启 TUN 和自动路由；不可用时保持关闭并提示修复。初始流量直连，作为网关仍需准备 IPv4 转发。</p>
+              <p v-else class="m-0 text-[12.5px] text-muted-foreground">OxiDNS 监听 53，使用公共 DNS 上游，独立运行且不依赖 Mihomo。接入后可在面板修改上游。</p>
+            </template>
+          </section>
+
           <FormField v-if="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single'" label="Agent 端口" html-for="agent-port">
             <Input
               id="agent-port"
@@ -473,13 +486,13 @@
             <FormField label="配置文件路径" html-for="agent-config-path" hint="填写配置在目标机器上的保存位置，须包含文件名。">
               <Input
                 id="agent-config-path"
-                v-model="scriptForm.config_path"
+                :model-value="singleServiceSettings.config_path" :disabled="singleCoreInstall" @update:model-value="scriptForm.config_path = String($event ?? '')"
                 class="bg-background/50 font-mono"
                 placeholder="/etc/mihomo/config.yaml"
               />
             </FormField>
 
-            <InfoNote v-if="scriptForm.type === 'oxidns'">
+            <InfoNote v-if="scriptForm.type === 'oxidns' && !singleCoreInstall">
               <p>OxiDNS 服务的 <code class="font-mono">-d</code> 工作目录必须与配置文件所在目录一致。例如配置填写 <code class="font-mono">/opt/oxidns/config.yaml</code>，服务使用 <code class="font-mono">-d /opt/oxidns</code>。</p>
               <p>官方 Debian 默认的 <code class="font-mono">/etc</code> 配置与 <code class="font-mono">/var/lib</code> 工作目录分离布局暂不支持，安装器会在停止原 Agent 前拒绝安装。请先调整服务及规则资源布局，再填写实际配置路径。Docker 已自动保持目录一致。</p>
             </InfoNote>
@@ -491,7 +504,7 @@
             >
               <Input
                 id="agent-restart"
-                v-model="scriptForm.restart_command"
+                :model-value="singleServiceSettings.restart_command" :disabled="singleCoreInstall" @update:model-value="scriptForm.restart_command = String($event ?? '')"
                 class="bg-background/50 font-mono"
                 placeholder="留空自动识别"
               />
@@ -503,7 +516,7 @@
               </CollapsibleTrigger>
               <CollapsibleContent class="space-y-4 border-t border-border/60 p-3">
                 <FormField label="服务管理方式" hint="默认自动识别；自行启动的服务可选择自定义命令。">
-                  <Select v-model="scriptForm.service_manager">
+                  <Select :model-value="singleServiceSettings.service_manager" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_manager = String($event ?? '')">
                     <SelectTrigger class="bg-background/50"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="auto">自动识别 systemd / OpenRC</SelectItem>
@@ -514,12 +527,12 @@
                   </Select>
                 </FormField>
                 <FormField label="服务名称" html-for="agent-service-unit" hint="留空使用 mihomo、mosdns 或 oxidns；可填写自定义 systemd 单元或 OpenRC 服务名。">
-                  <Input id="agent-service-unit" v-model="scriptForm.service_unit" class="bg-background/50 font-mono" :placeholder="scriptForm.type" />
+                  <Input id="agent-service-unit" :model-value="singleServiceSettings.service_unit" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_unit = String($event ?? '')" class="bg-background/50 font-mono" :placeholder="scriptForm.type" />
                 </FormField>
                 <FormField label="内核程序路径" html-for="agent-service-binary" hint="用于配置检查，应指向正在运行的同一个 Mihomo / MosDNS / OxiDNS 程序；留空按程序名查找。">
-                  <Input id="agent-service-binary" v-model="scriptForm.service_binary" class="bg-background/50 font-mono" :placeholder="`/usr/local/bin/${scriptForm.type}`" />
+                  <Input id="agent-service-binary" :model-value="singleServiceSettings.service_binary" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_binary = String($event ?? '')" class="bg-background/50 font-mono" :placeholder="`/usr/local/bin/${scriptForm.type}`" />
                 </FormField>
-                <template v-if="scriptForm.service_manager === 'command' || scriptForm.restart_command.trim()">
+                <template v-if="!singleCoreInstall && (scriptForm.service_manager === 'command' || scriptForm.restart_command.trim())">
                   <FormField label="停止命令" html-for="agent-service-stop" hint="应等待服务完全停止后再退出。">
                     <Input id="agent-service-stop" v-model="scriptForm.stop_command" class="bg-background/50 font-mono" placeholder="例如：/opt/service/control stop" />
                   </FormField>
@@ -616,9 +629,10 @@
             </Collapsible>
           </template>
 
-          <Button v-else class="w-full" @click="generateScript">
-            <FileText class="size-4" />
-            {{ scriptForm.installType === 'docker' ? '生成 Docker 部署命令' : '生成安装命令' }}
+          <Button v-else class="min-h-11 w-full" :disabled="scriptLoading" @click="generateScript">
+            <Loader2 v-if="scriptLoading" class="size-4 animate-spin" />
+            <FileText v-else class="size-4" />
+            {{ scriptLoading ? '正在生成安装命令…' : scriptForm.installType === 'docker' ? '生成 Docker 部署命令' : '生成安装命令' }}
           </Button>
         </div>
 
@@ -778,7 +792,7 @@ import FlowMap, { type FlowColumn, type FlowEdge, type FlowTone } from '@/compon
 import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
-import { buildCoreInstallCommand, CORE_INSTALL_INTERFACE, type CoreInstallTarget } from '@/lib/coreInstallCommand'
+import { buildAgentCoreInstallCommand, buildCoreInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget } from '@/lib/coreInstallCommand'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import { Motion } from 'motion-v'
 import {
@@ -803,6 +817,7 @@ import {
 } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
@@ -904,6 +919,8 @@ const lifecyclePanelOpen = ref(false)
 const logsDialogVisible = ref(false)
 const metricsDialogVisible = ref(false)
 const installScript = ref('')
+const scriptLoading = ref(false)
+let scriptRequest = 0
 const installCommand = ref('')
 const installCommandAlpine = ref('')
 const coreInstallCommand = ref('')
@@ -934,6 +951,7 @@ const logsPaneRef = ref<HTMLElement | null>(null)
 const createScriptForm = () => ({
   installType: 'shell',
   shellMode: 'single',
+  installCore: false,
   dockerMode: 'mihomo', // mihomo, mosdns, oxidns, aio
   name: '',
   type: 'mihomo',
@@ -964,6 +982,19 @@ const createScriptForm = () => ({
 })
 const scriptForm = ref(createScriptForm())
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
+const singleCoreSupported = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && ['mihomo', 'oxidns'].includes(scriptForm.value.type))
+const singleCoreInstall = computed(() => singleCoreSupported.value && scriptForm.value.installCore)
+// The displayed defaults do not overwrite the user's existing-service settings.
+const singleServiceSettings = computed(() => singleCoreInstall.value ? {
+  ...scriptForm.value,
+  config_path: `/etc/${scriptForm.value.type}/config.yaml`, restart_command: '',
+  service_manager: 'auto', service_unit: scriptForm.value.type,
+  service_binary: `/usr/local/bin/${scriptForm.value.type}`,
+  stop_command: '', start_command: '', status_command: ''
+} : scriptForm.value)
+watch(() => [scriptForm.value.type, scriptForm.value.installType, scriptForm.value.shellMode], () => {
+  scriptForm.value.installCore = false
+}, { flush: 'sync' })
 
 const resetCoreInstallCommand = () => {
   coreInstallRequest += 1
@@ -1631,6 +1662,10 @@ const scriptPanelOpen = ref(false)
 /** 生成结果按安装方式给出可复制的命令块，避免模板里重复四段几乎相同的结构 */
 const commandBlocks = computed(() => {
   if (scriptForm.value.installType === 'shell') {
+    if (singleCoreInstall.value) return [{
+      title: 'Linux（systemd / OpenRC）', note: '以 root 身份执行，先安装核心，再安装 Agent',
+      value: installCommand.value, rows: 6, copy: copyCommand
+    }]
     return [
       {
         title: 'Ubuntu / Debian / CentOS',
@@ -1871,6 +1906,8 @@ const showGenerateScriptDialog = () => {
 
 // 重置表单
 const resetForm = () => {
+  scriptRequest += 1
+  scriptLoading.value = false
   installScript.value = ''
   installCommand.value = ''
   installCommandAlpine.value = ''
@@ -1879,8 +1916,12 @@ const resetForm = () => {
   scriptPanelOpen.value = false
 }
 
+watch(scriptForm, resetForm, { deep: true, flush: 'sync' })
+watch(scriptDialogVisible, resetForm, { flush: 'sync' })
+
 // 生成安装脚本
 const generateScript = async () => {
+  if (scriptLoading.value) return
   if (!scriptForm.value.name.trim()) {
     notify.warning('请输入 Agent 名称')
     return
@@ -1892,7 +1933,7 @@ const generateScript = async () => {
       notify.warning('Agent 名称只能包含字母、数字、短横线或下划线')
       return
     }
-    const form = scriptForm.value
+    const form = singleServiceSettings.value
     const configPaths = shellAio.value ? [form.mihomoConfigPath, form.oxidnsConfigPath] : [form.config_path]
     if (configPaths.some(path => path.trim() && !path.trim().match(/\.\w+$/))) {
       lifecyclePanelOpen.value = shellAio.value
@@ -1909,6 +1950,14 @@ const generateScript = async () => {
         return
       }
     } else {
+      if (singleCoreInstall.value && (!Number.isInteger(form.port) || form.port < 1024 || form.port > 65535)) {
+        notify.warning('Agent 端口应为 1024 到 65535 之间的整数')
+        return
+      }
+      if (singleCoreInstall.value && form.type === 'mihomo' && form.port === 1053) {
+        notify.warning('Mihomo DNS 使用 1053，请为 Agent 选择其他端口')
+        return
+      }
       const unit = (form.service_unit.trim() || form.type).replace(/\.service$/, '')
       const restart = form.restart_command.trim()
       const standardRestart = !restart || [
@@ -1923,6 +1972,9 @@ const generateScript = async () => {
     }
   }
 
+  const request = ++scriptRequest
+  const includeCore = singleCoreInstall.value
+  scriptLoading.value = true
   const loadingToast = notify.loading(scriptForm.value.installType === 'docker' ? '正在生成 Docker 部署命令...' : '正在生成安装命令...')
 
   try {
@@ -1952,12 +2004,21 @@ const generateScript = async () => {
         api.get('/agents/docker-agent-run', { params: dockerParams })
       ])
 
+      if (request !== scriptRequest || !scriptDialogVisible.value) return
       dockerComposeContent.value = composeResponse.data
       dockerRunCommand.value = runResponse.data
       notify.success('Docker 部署命令已生成，请复制到目标机器执行')
     } else {
-      const serverUrl = localStorage.getItem('serverDomain') || window.location.origin
-      const form = scriptForm.value
+      let serverUrl = localStorage.getItem('serverDomain') || window.location.origin
+      if (includeCore) {
+        let parsed: URL
+        try { parsed = new URL(serverUrl.trim()) } catch { throw new Error('服务地址无效，请先设置完整的 HTTP / HTTPS 地址') }
+        if (!['http:', 'https:'].includes(parsed.protocol) || parsed.search || parsed.hash || parsed.username || parsed.password) {
+          throw new Error('请将服务地址设置为不含账号、查询参数或片段的 HTTP / HTTPS 地址')
+        }
+        serverUrl = parsed.toString().replace(/\/+$/, '')
+      }
+      const form = { ...singleServiceSettings.value }
       const lifecycleParams: Record<string, string> = {}
       if (form.service_manager !== 'auto') lifecycleParams.service_manager = form.service_manager
       for (const key of ['service_unit', 'service_binary', 'stop_command', 'start_command', 'status_command'] as const) {
@@ -1985,10 +2046,14 @@ const generateScript = async () => {
         config_path: form.config_path.trim(),
         restart_command: form.restart_command.trim(),
         server_url: serverUrl,
-        ...lifecycleParams
+        ...lifecycleParams,
+        ...(includeCore ? { install_core: true } : {})
       }
       const response = await agentApi.generateScript(shellParams)
-      installScript.value = response.data
+      if (request !== scriptRequest || !scriptDialogVisible.value) return
+      if (includeCore && (typeof response.data !== 'string' || !response.data.startsWith('#!') || response.data.split('\n', 2)[1] !== AGENT_CORE_INSTALL_INTERFACE)) {
+        throw new Error('安装脚本版本不支持同时安装核心，请更新 ConfigFlow 后重试')
+      }
 
       // Preview and one-click installation use exactly the same parameters.
       const params = new URLSearchParams()
@@ -2000,18 +2065,19 @@ const generateScript = async () => {
 
       const scriptUrl = `${serverUrl}/api/agents/install-script?${params.toString()}`
 
-      // 生成一键命令 - 标准 Linux
-      installCommand.value = `curl -sSL "${scriptUrl}" | sudo bash`
-
-      // 生成一键命令 - Alpine Linux
-      installCommandAlpine.value = `curl -sSL "${scriptUrl}" | sh`
+      installScript.value = response.data
+      installCommand.value = includeCore ? buildAgentCoreInstallCommand(scriptUrl) : `curl -sSL "${scriptUrl}" | sudo bash`
+      installCommandAlpine.value = includeCore ? '' : `curl -sSL "${scriptUrl}" | sh`
 
       notify.success('安装命令已生成，请复制到目标机器执行')
     }
   } catch (error: any) {
-    const errorMsg = error.response?.data?.message || error.message || '生成脚本失败'
-    notify.error(errorMsg)
+    if (request === scriptRequest) {
+      const errorMsg = error.response?.data?.message || error.message || '生成脚本失败'
+      notify.error(errorMsg)
+    }
   } finally {
+    if (request === scriptRequest) scriptLoading.value = false
     notify.dismiss(loadingToast)
   }
 }

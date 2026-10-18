@@ -340,7 +340,7 @@ export interface AgentInstallScriptParams {
   name: string; type: string; port?: number; agent_ip?: string; config_path?: string;
   restart_command?: string; server_url?: string; service_manager?: string;
   service_unit?: string; service_binary?: string; stop_command?: string;
-  start_command?: string; status_command?: string;
+  start_command?: string; status_command?: string; install_core?: boolean;
   mihomo_agent_port?: number; oxidns_agent_port?: number;
   mihomo_config_path?: string; oxidns_config_path?: string;
   mihomo_service_unit?: string; oxidns_service_unit?: string;

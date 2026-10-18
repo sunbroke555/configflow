@@ -1,15 +1,24 @@
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`
 export type CoreInstallTarget = 'both' | 'mihomo' | 'oxidns'
 export const CORE_INSTALL_INTERFACE = '# ConfigFlow core installer interface: 1'
+export const AGENT_CORE_INSTALL_INTERFACE = '# ConfigFlow Agent + core installer interface: 1'
 
 /** Download to a private file before execution, even on minimal Linux images. */
 export function buildCoreInstallCommand(url: string, target: CoreInstallTarget = 'both'): string {
   if (!['both', 'mihomo', 'oxidns'].includes(target)) throw new Error('请选择要安装的核心')
+  return buildInstallBootstrap(url, CORE_INSTALL_INTERFACE, '安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试。', target)
+}
+
+export function buildAgentCoreInstallCommand(url: string): string {
+  return buildInstallBootstrap(url, AGENT_CORE_INSTALL_INTERFACE, '安装脚本版本不支持同时安装核心，请更新 ConfigFlow 后重试。')
+}
+
+function buildInstallBootstrap(url: string, marker: string, versionError: string, target?: CoreInstallTarget): string {
   const bootstrap = [
     'set -eu;',
-    'core_url=$1; core_target=$2;',
+    'core_url=$1; core_target=${2-};',
     'core_fail() { printf "%s\\n" "$*" >&2; exit 1; };',
-    '[ "$(id -u)" = 0 ] || core_fail "请以 root 身份执行核心安装命令。";',
+    '[ "$(id -u)" = 0 ] || core_fail "请以 root 身份执行安装命令。";',
     '[ "$(uname -s)" = Linux ] || core_fail "仅支持 Linux（systemd 或 OpenRC）。";',
     'set --;',
     'if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then set -- "$@" curl ca-certificates; fi;',
@@ -34,10 +43,10 @@ export function buildCoreInstallCommand(url: string, target: CoreInstallTarget =
     'core_script=$(mktemp) || core_fail "无法创建临时文件，请检查临时目录权限和剩余空间。";',
     'if [ "$core_downloader" = curl ]; then curl -fSL --output "$core_script" "$core_url" || core_fail "下载失败，未执行安装脚本。请检查网络、面板地址及 ca-certificates / 自定义证书信任配置。";',
     'else wget -O "$core_script" "$core_url" || core_fail "下载失败，未执行安装脚本。请检查网络、面板地址及 ca-certificates / 自定义证书信任配置。"; fi;',
-    '{ IFS= read -r core_shebang && IFS= read -r core_interface; } < "$core_script" || core_fail "安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试。";',
-    'case "$core_shebang" in "#!"*) ;; *) core_fail "服务未返回有效的核心安装脚本，请确认 ConfigFlow 已更新。";; esac;',
-    `[ "$core_interface" = ${shellQuote(CORE_INSTALL_INTERFACE)} ] || core_fail "安装脚本版本不支持单核心选择，请更新 ConfigFlow 后重试。";`,
-    'sh "$core_script" --core "$core_target"',
+    `{ IFS= read -r core_shebang && IFS= read -r core_interface; } < "$core_script" || core_fail ${shellQuote(versionError)};`,
+    'case "$core_shebang" in "#!"*) ;; *) core_fail "服务未返回有效的安装脚本，请确认 ConfigFlow 已更新。";; esac;',
+    `[ "$core_interface" = ${shellQuote(marker)} ] || core_fail ${shellQuote(versionError)};`,
+    target ? 'sh "$core_script" --core "$core_target"' : 'sh "$core_script"',
   ].join(' ')
-  return `sh -c ${shellQuote(bootstrap)} sh ${shellQuote(url)} ${shellQuote(target)}`
+  return `sh -c ${shellQuote(bootstrap)} sh ${shellQuote(url)}${target ? ` ${shellQuote(target)}` : ''}`
 }

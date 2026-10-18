@@ -8,6 +8,23 @@ from pathlib import Path, PurePosixPath
 
 INSTALL_GO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go.sh").read_text(encoding="utf-8")
 INSTALL_GO_AIO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go-aio.sh").read_text(encoding="utf-8")
+AGENT_CORE_INSTALL_INTERFACE = "# ConfigFlow Agent + core installer interface: 1"
+_AGENT_INIT_DETECTION = '''if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+    INIT_SYSTEM="openrc"
+elif command -v systemctl >/dev/null 2>&1; then
+    INIT_SYSTEM="systemd"
+else
+    echo "需要 systemd 或 OpenRC；自定义运行环境请显式配置停止、启动、状态命令。"
+    exit 1
+fi'''
+_CORE_INIT_DETECTION = '''if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    INIT_SYSTEM="systemd"
+elif [ -x /sbin/openrc-run ] && command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+    INIT_SYSTEM="openrc"
+else
+    echo "需要正在使用的 systemd 或 OpenRC；容器请先配置 init 服务管理器。" >&2
+    exit 1
+fi'''
 
 
 def generate_go_agent_install_script(
@@ -29,6 +46,7 @@ def generate_go_agent_install_script(
     health_dns_address: str = "",
     health_dns_name: str = "",
     deployment_health_timeout: int = 30,
+    install_core: bool = False,
 ) -> str:
     """Generate an installer with explicit service lifecycle and deployment checks.
 
@@ -37,6 +55,8 @@ def generate_go_agent_install_script(
     """
     if service_type not in ("mihomo", "mosdns", "oxidns"):
         raise ValueError("Go Agent transactional deployment supports mihomo, mosdns and oxidns")
+    if not isinstance(install_core, bool):
+        raise ValueError("install_core 必须为 true 或 false")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", agent_name):
         raise ValueError("Invalid agent name: use letters, numbers, hyphens or underscores")
     if not 1 <= int(agent_port) <= 65535:
@@ -51,6 +71,18 @@ def generate_go_agent_install_script(
     standard_restart = not restart_command or restart_command in (
         f"systemctl restart {unit}", f"systemctl restart {unit}.service", f"rc-service {unit} restart",
     )
+    if install_core:
+        if service_type not in ("mihomo", "oxidns"):
+            raise ValueError("仅单服务 Mihomo 或 OxiDNS Go Agent 支持同时安装核心")
+        if (config_path not in (None, "", f"/etc/{service_type}/config.yaml") or
+                unit != service_type or service_manager or not standard_restart or
+                service_binary not in ("", service_type, f"/usr/local/bin/{service_type}") or
+                any((stop_command, start_command, status_command))):
+            raise ValueError("同时安装核心需要默认配置路径、服务名、核心路径和自动识别服务管理器，不能使用自定义启停命令")
+        if isinstance(agent_port, bool) or not re.fullmatch(r"[0-9]+", str(agent_port)):
+            raise ValueError("Invalid Agent port")
+        if int(agent_port) == (1053 if service_type == "mihomo" else 53):
+            raise ValueError("Agent 端口不能与所安装核心的 DNS 监听端口相同")
     if not service_manager:
         service_manager = "__CONFIGFLOW_INIT__" if standard_restart else "command"
     if service_manager == "command" and not all((stop_command, start_command, status_command)):
@@ -86,10 +118,71 @@ def generate_go_agent_install_script(
         "agent_name": agent_name,
         "config_json": json.dumps(cfg, ensure_ascii=True, indent=2),
         "binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
+        "init_detection": _AGENT_INIT_DETECTION,
+        "core_install_phase": "",
+        "agent_cleanup_trap": 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM',
     }
+    if install_core:
+        from backend.agents.core_install_script import generate_core_install_script
+
+        # Keep the core installer's variables, umask, traps and exit statements
+        # inside a subshell. In particular, do not place this in an if/&&/||
+        # condition: that would disable its set -e failure handling.
+        replacements["core_install_phase"] = (
+            f'echo "先安装或保留 {service_type} 核心，成功后继续安装 Agent。"\n'
+            '(\n'
+            f'set -- --core {service_type}\n'
+            + generate_core_install_script().rstrip() + '\n)\n'
+            'BINARY_TMP=""\n'
+            'configflow_agent_cleanup() {\n'
+            '    agent_status=$?\n'
+            '    trap - 0 HUP INT TERM\n'
+            '    if [ -n "${BINARY_TMP:-}" ]; then rm -f "$BINARY_TMP" || true; fi\n'
+            '    if [ "$agent_status" -ne 0 ]; then\n'
+            f'        echo "Agent 安装未完成；{service_type} 核心安装阶段已结束，已安装或原有的核心予以保留。修复上方 Agent 错误后可重新运行。" >&2\n'
+            '    fi\n'
+            '    exit "$agent_status"\n'
+            '}\n'
+            'trap configflow_agent_cleanup 0\n'
+            "trap 'exit 129' HUP\n"
+            "trap 'exit 130' INT\n"
+            "trap 'exit 143' TERM\n"
+            '# Existing cores are skipped before core dependency installation.\n'
+            '# Check Agent prerequisites before downloading or writing its files.\n'
+            'for agent_tool in awk cat chmod cp grep head mkdir mktemp mv rm sed; do\n'
+            '    if ! command -v "$agent_tool" >/dev/null 2>&1; then\n'
+            '        echo "Agent 安装缺少工具：${agent_tool}。请使用系统包管理器补齐后重新运行。" >&2\n'
+            '        exit 1\n'
+            '    fi\n'
+            'done\n'
+            'if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then\n'
+            '    echo "Agent 安装需要 curl 或 wget，请使用系统包管理器安装后重新运行。" >&2\n'
+            '    exit 1\n'
+            'fi\n'
+            f'CORE_BINARY={shlex.quote(service_binary or service_type)}\n'
+            f'if [ ! -f /etc/{service_type}/config.yaml ] || [ ! -r /etc/{service_type}/config.yaml ] || ! command -v "$CORE_BINARY" >/dev/null 2>&1; then\n'
+            f'    echo "{service_type} 核心缺少默认配置或可执行文件。请补齐 /etc/{service_type}/config.yaml 和核心程序；已有自定义部署请取消同时安装核心，并设置实际路径。" >&2\n'
+            '    exit 1\n'
+            'fi\n'
+            'if [ "$INIT_SYSTEM" = systemd ]; then\n'
+            f'    core_unit_state=$(systemctl show {service_type}.service --property=LoadState --value)\n'
+            '    if [ "$core_unit_state" != loaded ]; then\n'
+            f'        echo "{service_type} 默认服务未正确加载，请先修复 {service_type}.service；已有自定义服务请取消同时安装核心并填写实际服务名。" >&2\n'
+            '        exit 1\n'
+            '    fi\n'
+            f'elif [ ! -x /etc/init.d/{service_type} ]; then\n'
+            f'    echo "缺少可执行的 /etc/init.d/{service_type} 服务，请先补齐；已有自定义服务请取消同时安装核心并填写实际服务名。" >&2\n'
+            '    exit 1\n'
+            'fi\n'
+        )
+        replacements["init_detection"] = _CORE_INIT_DETECTION
+        replacements["agent_cleanup_trap"] = "# The Agent cleanup trap above preserves the completed core phase."
     # Single pass: values containing braces must remain literal, especially JSON
     # commands and URLs. The config heredoc is quoted to disable shell expansion.
-    return re.sub(r"\{(" + "|".join(replacements) + r")\}", lambda match: replacements[match.group(1)], INSTALL_GO_SCRIPT_TEMPLATE)
+    script = re.sub(r"\{(" + "|".join(replacements) + r")\}", lambda match: replacements[match.group(1)], INSTALL_GO_SCRIPT_TEMPLATE)
+    if install_core:
+        script = script.replace("#!/bin/sh\n", f"#!/bin/sh\n{AGENT_CORE_INSTALL_INTERFACE}\n", 1)
+    return script
 
 
 def generate_go_aio_install_script(

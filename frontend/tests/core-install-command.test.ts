@@ -4,14 +4,15 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildCoreInstallCommand, type CoreInstallTarget } from '@/lib/coreInstallCommand'
+import { AGENT_CORE_INSTALL_INTERFACE, buildAgentCoreInstallCommand, buildCoreInstallCommand, type CoreInstallTarget } from '@/lib/coreInstallCommand'
 
 const directories: string[] = []
 const quotedUrl = "https://config.example.test/base'$(printf_injected)`ignored`/core-install-script"
 const packageManagers = ['apt-get', 'apk', 'dnf', 'yum', 'pacman', 'zypper'] as const
 type PackageManager = typeof packageManagers[number]
 
-function fixture(options: { downloader?: 'curl' | 'wget' | 'none'; missingTempTools?: boolean; manager?: PackageManager; uid?: string; os?: string } = {}) {
+function fixture(options: { downloader?: 'curl' | 'wget' | 'none'; missingTempTools?: boolean; manager?: PackageManager; uid?: string; os?: string; combined?: boolean } = {}) {
+  const interfaceMarker = options.combined ? AGENT_CORE_INSTALL_INTERFACE : '# ConfigFlow core installer interface: 1'
   const directory = mkdtempSync(join(tmpdir(), 'configflow-bootstrap-'))
   directories.push(directory)
   const bin = join(directory, 'bin')
@@ -29,9 +30,9 @@ core_url=${downloader === 'curl' ? '$4' : '$3'}
 printf '%s' "$core_url" > "$CORE_TEST_DIR/url"
 case "\${CORE_TEST_HEADER_MODE:-current}" in
   old) printf '%s\\n' '#!/bin/sh' > "$core_output";;
-  truncated) printf '%s\\n%s' '#!/bin/sh' '# ConfigFlow core installer interface: 1' > "$core_output"; exit 0;;
+  truncated) printf '%s\\n%s' '#!/bin/sh' '${interfaceMarker}' > "$core_output"; exit 0;;
   future) printf '%s\\n' '#!/bin/sh' '# ConfigFlow core installer interface: 2' > "$core_output";;
-  *) printf '%s\\n' '#!/bin/sh' '# ConfigFlow core installer interface: 1' > "$core_output";;
+  *) printf '%s\\n' '#!/bin/sh' '${interfaceMarker}' > "$core_output";;
 esac
 printf '%s\\n' 'printf "%s\\n" executed > "$CORE_TEST_DIR/result"' >> "$core_output"
 printf '%s\\n' 'printf "%s\\n" "$*" > "$CORE_TEST_DIR/arguments"' >> "$core_output"
@@ -64,7 +65,7 @@ done
     directory,
     run(extraEnv: Record<string, string> = {}, target: CoreInstallTarget = 'both') {
       // PATH contains only test doubles: package operations can never touch the host.
-      return spawnSync('/bin/sh', ['-c', buildCoreInstallCommand(quotedUrl, target)], {
+      return spawnSync('/bin/sh', ['-c', options.combined ? buildAgentCoreInstallCommand(quotedUrl) : buildCoreInstallCommand(quotedUrl, target)], {
         env: { PATH: bin, CORE_TEST_DIR: directory, ...extraEnv }, encoding: 'utf8', timeout: 5000,
       })
     },
@@ -208,5 +209,50 @@ describe('standalone core installer bootstrap', () => {
     expect(result.stderr).toContain(expected)
     expect(test.exists('packages')).toBe(false)
     expect(test.exists('url')).toBe(false)
+  })
+})
+
+
+describe('combined Agent and core installer bootstrap', () => {
+  it.each(['curl', 'wget'] as const)('fully downloads via %s and runs without core arguments', downloader => {
+    const test = fixture({ combined: true, downloader })
+    const command = buildAgentCoreInstallCommand(quotedUrl)
+    expect(command).not.toMatch(/[\r\n]/)
+    expect(spawnSync('/bin/sh', ['-n', '-c', command]).status).toBe(0)
+    expect(test.run().status).toBe(0)
+    expect(test.read('url')).toBe(quotedUrl)
+    expect(test.read('arguments')).toBe('\n')
+    expect(test.exists('result')).toBe(true)
+    expect(test.exists('download')).toBe(false)
+  })
+
+  it('installs missing fetch dependencies before the combined download', () => {
+    const test = fixture({ combined: true, downloader: 'none', manager: 'apk' })
+    expect(test.run().status).toBe(0)
+    expect(test.read('packages')).toContain('curl ca-certificates')
+    expect(test.exists('result')).toBe(true)
+  })
+
+  it.each(['curl', 'wget'] as const)('does not execute failed %s downloads', downloader => {
+    const test = fixture({ combined: true, downloader })
+    expect(test.run({ CORE_TEST_DOWNLOAD_STATUS: '22' }).status).not.toBe(0)
+    expect(test.exists('result')).toBe(false)
+    expect(test.exists('download')).toBe(false)
+  })
+
+  it.each(['old', 'truncated', 'future'])('rejects a %s interface and removes it', mode => {
+    const test = fixture({ combined: true })
+    const result = test.run({ CORE_TEST_HEADER_MODE: mode })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('安装脚本版本不支持同时安装核心')
+    expect(test.exists('result')).toBe(false)
+    expect(test.exists('download')).toBe(false)
+  })
+
+  it('preserves combined installer failure and cleans up the temporary file', () => {
+    const test = fixture({ combined: true })
+    expect(test.run({ CORE_TEST_INSTALL_STATUS: '19' }).status).toBe(19)
+    expect(test.exists('result')).toBe(true)
+    expect(test.exists('download')).toBe(false)
   })
 })

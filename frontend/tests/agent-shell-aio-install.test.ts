@@ -5,6 +5,7 @@ import Agents from '@/views/Agents.vue'
 import api, { agentApi, profileApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { setActiveProfileId } from '@/profileContext'
+import { AGENT_CORE_INSTALL_INTERFACE, buildAgentCoreInstallCommand } from '@/lib/coreInstallCommand'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -317,5 +318,141 @@ describe('independent Mihomo + OxiDNS core installation', () => {
     const command = (document.getElementById('core-install-command') as HTMLTextAreaElement).value
     expect(command).not.toMatch(/[\r\n]/)
     expect(command).toContain("base'\"'\"'$(printf_injected)/api/agents/core-install-script")
+  })
+})
+
+
+describe('single Agent with its corresponding core', () => {
+  const combinedScript = `#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho installed`
+  async function selectCore() {
+    const checkbox = document.getElementById('agent-install-core')!
+    expect(checkbox).toBeTruthy()
+    checkbox.click()
+    await flushPromises()
+  }
+  function commands() { return [...document.querySelectorAll('textarea')].map(element => element.value) }
+
+  it('defaults to Agent only and hides the option for MosDNS, Docker, and Shell AIO', async () => {
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe('false')
+    await radio('mosdns')
+    expect(document.getElementById('agent-install-core')).toBeNull()
+    await radio('oxidns')
+    expect(document.getElementById('agent-install-core')).not.toBeNull()
+    await selectCore()
+    await radio('aio')
+    expect(document.getElementById('agent-install-core')).toBeNull()
+    await radio('single')
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe('false')
+    await radio('docker')
+    expect(document.getElementById('agent-install-core')).toBeNull()
+  })
+
+  it.each(['mihomo', 'oxidns'])('generates one matching combined script and command for %s', async type => {
+    if (type !== 'mihomo') await radio(type)
+    await input('agent-port', '18080')
+    await selectCore()
+    vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data: combinedScript } as any)
+    await click('生成安装命令')
+    const expected = {
+      name: 'home-proxy', type, port: 18080, agent_ip: '', config_path: `/etc/${type}/config.yaml`,
+      restart_command: '', server_url: 'https://config.example.test',
+      service_unit: type, service_binary: `/usr/local/bin/${type}`, install_core: true
+    }
+    expect(agentApi.generateScript).toHaveBeenCalledExactlyOnceWith(expected)
+    const params = new URLSearchParams()
+    Object.entries(expected).forEach(([key, value]) => { if (value !== '' || key === 'restart_command') params.set(key, String(value)) })
+    // Object order is irrelevant to the endpoint, but the command must match the requested values.
+    const command = commands()[0]!
+    const actualUrl = command.match(/ sh '([^']+)'$/)![1]!
+    expect(Object.fromEntries(new URL(actualUrl).searchParams)).toEqual(Object.fromEntries(params))
+    expect(command).toBe(buildAgentCoreInstallCommand(actualUrl))
+    expect(commands()).toHaveLength(1)
+    expect(document.body.textContent).toContain('Linux（systemd / OpenRC）')
+    expect(document.body.textContent).not.toContain('Ubuntu / Debian / CentOS')
+    expect(document.body.textContent).toContain(type === 'mihomo' ? '首次安装检测 TUN 设备与权限' : '独立运行且不依赖 Mihomo')
+    await click('查看完整安装脚本')
+    expect(commands()).toContain(combinedScript)
+    expect(agentApi.generateCoreInstallScript).not.toHaveBeenCalled()
+  })
+
+  it.each(['53', '1053', '18080.5', '65536'])('rejects an invalid or conflicting combined Agent port %s before requesting a script', async port => {
+    await selectCore()
+    await input('agent-port', port)
+    await click('生成安装命令')
+    expect(agentApi.generateScript).not.toHaveBeenCalled()
+    expect(notify.warning).toHaveBeenCalledWith(port === '1053' ? 'Mihomo DNS 使用 1053，请为 Agent 选择其他端口' : 'Agent 端口应为 1024 到 65535 之间的整数')
+    expect(commands()).toEqual([])
+  })
+
+  it('shows locked defaults while preserving and restoring custom service settings', async () => {
+    await input('agent-config-path', '/opt/custom/main.yaml')
+    await input('agent-restart', '/opt/custom/control restart')
+    await click('服务管理高级配置（可选）')
+    await input('agent-service-unit', 'custom-core')
+    await input('agent-service-binary', '/opt/custom/mihomo')
+    await input('agent-service-stop', '/opt/custom/control stop')
+    await input('agent-service-start', '/opt/custom/control start')
+    await input('agent-service-status', '/opt/custom/control status')
+    await selectCore()
+    for (const [id, value] of Object.entries({ 'agent-config-path': '/etc/mihomo/config.yaml', 'agent-restart': '', 'agent-service-unit': 'mihomo', 'agent-service-binary': '/usr/local/bin/mihomo' })) {
+      const element = document.getElementById(id) as HTMLInputElement
+      expect(element.value).toBe(value)
+      expect(element.disabled).toBe(true)
+    }
+    expect(document.getElementById('agent-service-stop')).toBeNull()
+    vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data: combinedScript } as any)
+    await click('生成安装命令')
+    expect(vi.mocked(agentApi.generateScript).mock.calls[0]![0]).not.toHaveProperty('stop_command')
+    await selectCore()
+    expect(commands()).toEqual([])
+    expect((document.getElementById('agent-config-path') as HTMLInputElement).value).toBe('/opt/custom/main.yaml')
+    expect((document.getElementById('agent-config-path') as HTMLInputElement).disabled).toBe(false)
+    await click('生成安装命令')
+    expect(vi.mocked(agentApi.generateScript).mock.calls[1]![0]).toMatchObject({
+      config_path: '/opt/custom/main.yaml', restart_command: '/opt/custom/control restart',
+      service_unit: 'custom-core', service_binary: '/opt/custom/mihomo', stop_command: '/opt/custom/control stop',
+      start_command: '/opt/custom/control start', status_command: '/opt/custom/control status'
+    })
+    expect(vi.mocked(agentApi.generateScript).mock.calls[1]![0]).not.toHaveProperty('install_core')
+  })
+
+  it.each(['#!/bin/sh\necho old-agent', '<html>old server</html>', '#!/bin/sh\n# ConfigFlow core installer interface: 1\n'])('rejects unsupported combined preview %s', async data => {
+    await selectCore()
+    vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data } as any)
+    await click('生成安装命令')
+    expect(commands()).toEqual([])
+    expect(notify.error).toHaveBeenCalledWith('安装脚本版本不支持同时安装核心，请更新 ConfigFlow 后重试')
+  })
+
+  it.each(['toggle', 'type', 'mode', 'name', 'close'])('discards a pending combined preview after changing %s', async change => {
+    await selectCore()
+    let finish!: (response: any) => void
+    vi.mocked(agentApi.generateScript).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await click('生成安装命令')
+    if (change === 'toggle') await selectCore()
+    if (change === 'type') await radio('oxidns')
+    if (change === 'mode') await radio('aio')
+    if (change === 'name') await input('agent-name', 'another-agent')
+    if (change === 'close') await click('关闭')
+    finish({ data: combinedScript })
+    await flushPromises()
+    expect(commands()).toEqual([])
+    expect(notify.success).not.toHaveBeenCalled()
+  })
+
+  it('discards stale errors and clears successful output when the Agent port changes', async () => {
+    await selectCore()
+    let reject!: (reason: any) => void
+    vi.mocked(agentApi.generateScript).mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+    await click('生成安装命令')
+    await input('agent-port', '18081')
+    reject(new Error('stale error'))
+    await flushPromises()
+    expect(notify.error).not.toHaveBeenCalled()
+    vi.mocked(agentApi.generateScript).mockResolvedValueOnce({ data: combinedScript } as any)
+    await click('生成安装命令')
+    expect(commands()).toHaveLength(1)
+    await input('agent-port', '18082')
+    expect(commands()).toEqual([])
   })
 })
