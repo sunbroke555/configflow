@@ -341,7 +341,7 @@
                 />
               </div>
               <div
-                v-if="scriptForm.dockerMode === 'mosdns' || scriptForm.dockerMode === 'aio'"
+                v-if="scriptForm.dockerMode === 'mosdns'"
                 class="flex items-center gap-2"
               >
                 <span class="w-32 shrink-0 text-[12.5px] text-muted-foreground">MosDNS Agent</span>
@@ -354,7 +354,7 @@
                 />
               </div>
               <div
-                v-if="scriptForm.dockerMode === 'oxidns'"
+                v-if="scriptForm.dockerMode === 'oxidns' || scriptForm.dockerMode === 'aio'"
                 class="flex items-center gap-2"
               >
                 <span class="w-32 shrink-0 text-[12.5px] text-muted-foreground">OxiDNS Agent</span>
@@ -1418,7 +1418,7 @@ const dockerModeHint = computed(
       mihomo: '内置 Mihomo，一个容器运行 Agent + Mihomo。',
       oxidns: '内置 OxiDNS，一个容器运行 Agent + OxiDNS。',
       mosdns: '内置 MosDNS，一个容器运行 Agent + MosDNS。',
-      aio: '内置 Mihomo + MosDNS，一个容器同时运行三者。'
+      aio: '一个容器运行 Agent + Mihomo + OxiDNS。'
     })[scriptForm.value.dockerMode as string] ?? ''
 )
 
@@ -1453,10 +1453,10 @@ const DOCKER_NOTES: Record<string, { title: string; lines: string[] }> = {
   aio: {
     title: 'Docker All-in-One Agent 使用说明',
     lines: [
-      '镜像内置 Mihomo 与 MosDNS，可同时运行多个服务',
-      'Mihomo Agent 端口 8080，MosDNS Agent 端口 8081',
-      '可通过环境变量 ENABLE_MIHOMO / ENABLE_MOSDNS 控制启用哪些服务',
-      '会自动创建 ./mihomo 与 ./mosdns 目录存储配置文件'
+      'Mihomo 负责代理，OxiDNS 负责 DNS 解析',
+      'Agent 默认端口：Mihomo 8080，OxiDNS 8082',
+      '可通过环境变量 ENABLE_MIHOMO / ENABLE_OXIDNS 控制启用哪些服务',
+      '配置保存在 ./aio_data/mihomo 与 ./aio_data/oxidns 目录'
     ]
   }
 }
@@ -1763,9 +1763,9 @@ const generateScript = async () => {
         agent_ip: scriptForm.value.agent_ip || '',
         network_mode: scriptForm.value.networkMode,
         enable_mihomo: scriptForm.value.dockerMode === 'mihomo' || scriptForm.value.dockerMode === 'aio',
-        enable_oxidns: scriptForm.value.dockerMode === 'oxidns',
+        enable_oxidns: scriptForm.value.dockerMode === 'oxidns' || scriptForm.value.dockerMode === 'aio',
         oxidns_port: scriptForm.value.oxidnsAgentPort,
-        enable_mosdns: scriptForm.value.dockerMode === 'mosdns' || scriptForm.value.dockerMode === 'aio',
+        enable_mosdns: scriptForm.value.dockerMode === 'mosdns',
         mihomo_port: scriptForm.value.mihomoAgentPort,
         mosdns_port: scriptForm.value.mosdnsAgentPort,
         // 根据模式设置数据目录
