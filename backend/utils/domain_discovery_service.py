@@ -23,6 +23,7 @@ from backend.utils.domain_probe import (
 from backend.utils.logger import get_logger
 from backend.utils.rule_matcher import is_valid_domain, is_valid_ip, match_domain, parse_rule_line
 from backend.utils.rule_utils import save_rule_to_local
+from backend.utils.ruleset_content import validate_domain_content, read_rule_payload, append_rule_lines, remove_rule_payload
 from backend.utils.url_utils import safe_exception_details
 
 logger = get_logger(__name__)
@@ -577,8 +578,10 @@ def apply_domains(profile_id, entries, *, source='manual', evidence=None, now=No
             item = library.get(info['id'])
             if ruleset_problem(item) is not None:
                 raise ProfileValidationError('默认规则集已被修改，请刷新后重试')
+            validate_domain_content(item)
             content = item.get('content', '') or ''
-            existing = [parsed for parsed in (parse_rule_line(line) for line in content.splitlines()) if parsed]
+            lines, payload = read_rule_payload(content)
+            existing = [parsed for parsed in (parse_rule_line(line) for line in lines) if parsed]
             new_lines = []
             for entry in (entry for entry in entries if entry['target'] == target):
                 if _covered(existing, entry['rule_type'], entry['value']):
@@ -588,8 +591,7 @@ def apply_domains(profile_id, entries, *, source='manual', evidence=None, now=No
                 new_lines.append(format_ruleset_line(item.get('behavior', 'classical'), entry['rule_type'], entry['value']))
                 added.append({**entry, 'ruleset': item.get('name'), 'ruleset_id': item.get('id')})
             if new_lines:
-                prefix = content if not content or content.endswith('\n') else content + '\n'
-                item['content'] = prefix + '\n'.join(new_lines) + '\n'
+                item['content'] = append_rule_lines(content, new_lines, payload)
                 updated_items.append(item)
 
     update_shared_config_transaction(append_lines)
@@ -667,15 +669,13 @@ def undo_domain(profile_id, value, target):
         item = next((item for item in shared.get('rule_library', []) if item.get('id') == ruleset_id), None)
         if item is None or item.get('source_type') != 'content':
             return
-        kept = []
-        for line in (item.get('content') or '').splitlines():
+        def matches(line):
             parsed = parse_rule_line(line)
-            if parsed and parsed[0] in ('DOMAIN', 'DOMAIN-SUFFIX') and parsed[1].lower() == value:
-                removed_lines.append(line.strip())
-                continue
-            kept.append(line)
+            return bool(parsed and parsed[0] in ('DOMAIN', 'DOMAIN-SUFFIX') and parsed[1].lower() == value)
+        content, removed = remove_rule_payload(item.get('content') or '', matches)
+        removed_lines.extend(line.strip() for line in removed)
         if removed_lines:
-            item['content'] = '\n'.join(kept) + ('\n' if kept else '')
+            item['content'] = content
             updated_items.append(item)
 
     update_shared_config_transaction(remove_lines)

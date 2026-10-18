@@ -1,9 +1,6 @@
 """Append a connection destination or its selected subnet to a shared IP rule set."""
 import ipaddress
-import json
-import re
 
-import yaml
 
 from backend.common.config import get_repository, update_shared_config_transaction
 from backend.common.config_repository import ProfileValidationError
@@ -12,6 +9,7 @@ from backend.common.oxidns_settings import OxidnsSettingsError
 from backend.utils import domain_discovery_service as discovery
 from backend.utils.rule_matcher import parse_rule_line
 from backend.utils.rule_utils import save_rule_to_local
+from backend.utils.ruleset_content import read_rule_payload as _content_lines, append_rule_payload as _append
 
 
 def ip_rule_targets(config):
@@ -42,38 +40,6 @@ def _destination_network(value, rule_type):
     except (ValueError, OxidnsSettingsError):
         raise ProfileValidationError('请选择有效的目标 IP 或网段，IPv4 使用 IP-CIDR，IPv6 使用 IP-CIDR6。') from None
 
-
-def _content_lines(content):
-    """Read payload YAML as well as text; retain the document for a lossless append."""
-    if re.search(r'^\s*payload\s*:', content, re.MULTILINE) or content.lstrip().startswith('{'):
-        try:
-            document = yaml.safe_load(content)
-            node = yaml.compose(content)
-            if not isinstance(document, dict) or not isinstance(document.get('payload'), list):
-                raise ValueError()
-            key, payload = next((key, value) for key, value in node.value if key.value == 'payload')
-            if payload.start_mark.index < key.end_mark.index:
-                raise ValueError()  # Do not edit an aliased sequence elsewhere in the document.
-            if not all(isinstance(line, str) for line in document['payload']):
-                raise ValueError()
-            return document['payload'], payload
-        except (yaml.YAMLError, ValueError, StopIteration, AttributeError):
-            raise ProfileValidationError('规则集的 payload 格式无法读取，请先在规则仓库检查内容。') from None
-    return content.splitlines(), None
-
-
-def _append(content, line, payload):
-    if payload is None:
-        return content + ('' if not content or content.endswith('\n') else '\n') + line + '\n'
-    # Insert into the existing sequence, preserving comments and surrounding YAML.
-    quoted = json.dumps(line)
-    if payload.flow_style:
-        index = payload.value[-1].end_mark.index if payload.value else payload.end_mark.index - 1
-        return content[:index] + (', ' if payload.value else '') + quoted + content[index:]
-    index = payload.end_mark.index
-    prefix, suffix = content[:index], content[index:]
-    indent = ' ' * payload.start_mark.column
-    return prefix + ('' if prefix.endswith('\n') else '\n') + indent + '- ' + quoted + '\n' + suffix
 
 
 def apply_ip(profile_id, ruleset_id, target, value, rule_type, before_write):
