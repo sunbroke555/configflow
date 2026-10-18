@@ -149,3 +149,29 @@ def node_latency():
     except ValueError as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
     return jsonify({'success': True, **outcome})
+
+
+@nodes_bp.route('/latency/settings', methods=['GET', 'POST'])
+@require_auth
+def node_latency_settings():
+    """Persistent DNS for the standalone node-library probe only."""
+    from backend.common.config import get_system_config, save_system_config
+    from backend.utils.node_latency import dns_settings, normalize_dns_servers
+
+    if request.method == 'GET':
+        try:
+            return jsonify({'success': True, 'dns_servers': dns_settings()})
+        except ValueError as exc:
+            return jsonify({'success': False, 'message': str(exc)}), 400
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or 'dns_servers' not in payload:
+        return jsonify({'success': False, 'message': '请提供测速 DNS 列表，留空使用系统 DNS'}), 400
+    try:
+        servers = normalize_dns_servers(payload['dns_servers'])
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+    config_data = get_system_config()
+    config_data.setdefault('system_config', {})['node_test_dns'] = servers
+    save_system_config(config_data)
+    return jsonify({'success': True, 'dns_servers': servers})

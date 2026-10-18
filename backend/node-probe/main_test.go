@@ -446,7 +446,7 @@ func TestHTTPSWorkerProcess(t *testing.T) {
 		if err := json.Unmarshal(output, &response); err != nil {
 			t.Fatalf("%s: %v", output, err)
 		}
-		if response.Version != 2 || len(response.Results) != 1 {
+		if response.Version != 3 || len(response.Results) != 1 {
 			t.Fatal(string(output))
 		}
 		item := response.Results[0]

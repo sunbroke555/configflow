@@ -29,6 +29,7 @@ type request struct {
 	URL          string           `json:"url"`
 	TimeoutMS    int              `json:"timeout_ms"`
 	UnifiedDelay bool             `json:"unified_delay"`
+	DNSServers   []string         `json:"dns_servers,omitempty"`
 	Nodes        []map[string]any `json:"nodes"`
 }
 
@@ -46,6 +47,16 @@ func failure(name, code, message string) result {
 
 // Never return core error strings: protocol errors can contain node credentials.
 func connectionFailure(name string, err error) result {
+	// Some core adapters (VMess/VLESS) flatten the dialer's error with %s.
+	// Recognize only our fixed DNS suffixes in that case; never display the
+	// adapter error itself, which can include private node details.
+	if errors.Is(err, errProxyDNSFakeIP) || strings.HasSuffix(err.Error(), errProxyDNSFakeIP.Error()) {
+		return failure(name, "dns_fake_ip", "节点服务器域名被解析为 Fake-IP；请在节点库测速设置中指定返回真实 IP 的 DNS，或将节点域名加入 fake-ip-filter")
+	}
+	var dnsError *proxyDNSError
+	if errors.As(err, &dnsError) || strings.HasSuffix(err.Error(), proxyDNSErrorMessage) {
+		return failure(name, "dns", "节点服务器域名解析失败，请检查测速 DNS 设置及网络")
+	}
 	var timeout net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
 		return failure(name, "timeout", "连接或请求超时")
@@ -75,6 +86,9 @@ func measure(ctx context.Context, node map[string]any, target string, unified bo
 	}
 	if chain, ok := node["dialer-proxy"]; ok && chain != nil && chain != "" {
 		return failure(name, "chain", "此节点依赖代理链，请在已配置该链的 Mihomo 中测试")
+	}
+	if server, _ := node["server"].(string); isCommonFakeIP(server) {
+		return connectionFailure(name, errProxyDNSFakeIP)
 	}
 	p, err := adapter.ParseProxy(node)
 	if err != nil {
@@ -196,12 +210,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "invalid input")
 		os.Exit(2)
 	}
+	if err := configureProxyDNS(input.DNSServers); err != nil {
+		fmt.Fprintln(os.Stderr, "invalid node test DNS: use IPv4 or IPv4:port")
+		os.Exit(3)
+	}
 	results, err := execute(input)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 2, "results": results}); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 3, "results": results}); err != nil {
 		os.Exit(1)
 	}
 }

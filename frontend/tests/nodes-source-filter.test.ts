@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import Nodes from '@/views/Nodes.vue'
+import NodeLatencySettings from '@/components/nodes/NodeLatencySettings.vue'
 import api, { nodeApi } from '@/api'
 import { notify } from '@/lib/feedback'
 
@@ -176,6 +177,16 @@ it('表格中的订阅预览节点保持只读，不能编辑、删除或选中'
   expect(row.text()).toContain('测试订阅')
 })
 
+it('保存测速设置后刷新显示的测速历史', async () => {
+  vi.mocked(nodeApi.latency).mockResolvedValueOnce({ data: { results: { [storedKey('manual-hk')]: { latency: 123 } } } } as any)
+  await render('card')
+  expect(wrapper!.get('[data-name="香港 手动"]').text()).toContain('123')
+  wrapper!.findComponent(NodeLatencySettings).vm.$emit('saved')
+  await flushPromises()
+  expect(nodeApi.latency).toHaveBeenCalledTimes(2)
+  expect(wrapper!.get('[data-name="香港 手动"]').text()).toContain('未测速')
+})
+
 it('代理测速每批最多二十个并展示真实进度，失败保留原因，已停用节点不测试', async () => {
   const records = Array.from({ length: 22 }, (_, i) => ({
     id: `node-${i}`, name: `node-${i}`, enabled: i !== 21, type: 'trojan', server: 'example.invalid', port: 443, params: { password: 'secret' }
@@ -192,6 +203,7 @@ it('代理测速每批最多二十个并展示真实进度，失败保留原因�
   expect(nodeApi.testLatency).toHaveBeenCalledTimes(1)
   expect(nodeApi.testLatency).toHaveBeenNthCalledWith(1, records.slice(0, 20).map(node => storedKey(node.id)))
   expect(wrapper!.text()).toContain('正在测速… 0/21')
+  expect(wrapper!.findAll('button').find(button => button.text() === '测速设置')!.attributes('disabled')).toBeDefined()
   expect(wrapper!.get('button[title="从 ConfigFlow 所在机器，经节点访问测试地址"]').attributes('disabled')).toBeDefined()
   const results = Object.fromEntries(records.slice(0, 20).map(node => [storedKey(node.id), { latency: 150 }]))
   finishFirst({ data: { results, missing: [] } })
@@ -205,6 +217,7 @@ it('代理测速每批最多二十个并展示真实进度，失败保留原因�
   expect(failed).toContain('代理认证失败')
   expect(failed).not.toContain('超时')
   expect(wrapper!.text()).toContain('全部测速')
+  expect(wrapper!.findAll('button').find(button => button.text() === '测速设置')!.attributes('disabled')).toBeUndefined()
   expect(nodeApi.testLatency).toHaveBeenCalledTimes(2)
   expect(wrapper!.get('button[title="从 ConfigFlow 所在机器，经节点访问测试地址"]').attributes('disabled')).toBeUndefined()
 })

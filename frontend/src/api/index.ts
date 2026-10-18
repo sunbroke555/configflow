@@ -111,6 +111,8 @@ export const nodeApi = {
   delete: (id: string) => api.delete(`/nodes/${id}`),
   /** 最近一次代理延迟结果（按节点来源与身份） */
   latency: () => api.get('/nodes/latency'),
+  latencySettings: () => api.get<{ success: boolean; dns_servers: string[] }>('/nodes/latency/settings'),
+  saveLatencySettings: (dns_servers: string[]) => api.post<{ success: boolean; dns_servers: string[] }>('/nodes/latency/settings', { dns_servers }),
   /** 通过独立组件测试代理延迟；每批最多 20 个节点 */
   testLatency: (keys: string[]) => api.post('/nodes/latency', { keys }, { timeout: 120000 }),
   /** 用内置 Sub-Store 把 Surge / Loon 节点行（如 snell）转成结构化节点，按行返回 */
