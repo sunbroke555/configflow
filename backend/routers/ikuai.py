@@ -9,7 +9,7 @@ import base64
 import hashlib
 import ipaddress
 from typing import Any, Dict, List, Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin, urlsplit
 
 import requests
 
@@ -92,6 +92,54 @@ def _address_field(value: Any) -> Dict[str, Any]:
     return {key: value.get(key) if isinstance(value.get(key), list) else [] for key in ('custom', 'object')}
 
 
+def _origin(url: str) -> str:
+    """Only show the management origin; redirects can contain login secrets."""
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        if parsed.scheme not in ('http', 'https') or not host:
+            return ''
+        host = f'[{host}]' if ':' in host else host
+        port = parsed.port
+        if port is not None and port != (443 if parsed.scheme == 'https' else 80):
+            host = f'{host}:{port}'
+        return f'{parsed.scheme}://{host}'
+    except ValueError:
+        return ''
+
+
+def _http_error(response: requests.Response, url: str) -> str:
+    status = response.status_code
+    code = f'（HTTP {status}）'
+    if status in (301, 302, 303, 307, 308):
+        location = response.headers.get('Location', '')
+        try:
+            target = _origin(urljoin(url, location)) if location else ''
+        except ValueError:
+            target = ''
+        if target and target != _origin(url):
+            return (f'iKuai 要求跳转到 {target}{code}。'
+                    '请核对浏览器打开的管理地址，在「编辑路由器」中修改地址后重试。')
+        return (f'iKuai 将请求转到了其他页面{code}。请在浏览器打开管理页面，'
+                '核对最终地址的协议和端口；若地址无误，请检查管理入口或反向代理的跳转设置。')
+    reasons = {
+        401: '身份验证未通过，请检查用户名、密码，以及管理入口是否另有登录验证',
+        403: '拒绝访问，请检查账号的管理员权限和管理页面的访问限制',
+        404: '未找到管理接口，请检查管理地址和端口，并确认使用的是 iKuai 4.x',
+        405: '管理接口不接受此请求，请检查管理地址，以及反向代理是否允许接口请求',
+        408: '等待请求超时，请检查网络连接后重试',
+        429: '请求过于频繁，请稍后再试',
+        502: '管理入口未能连接后端服务，请检查 iKuai 管理服务或反向代理',
+        503: '管理服务暂时不可用，请稍后再试',
+        504: '管理入口等待后端响应超时，请检查 iKuai 管理服务或反向代理',
+    }
+    reason = reasons.get(status)
+    if reason is None:
+        reason = ('管理服务发生错误，请确认浏览器能否正常打开管理页面，稍后重试'
+                  if status >= 500 else '请求未成功，请检查管理地址、端口和管理入口设置')
+    return f'iKuai {reason}{code}。'
+
+
 class IKuaiDriver(RouterDriver):
     vendor = 'ikuai'
     supports_write = True
@@ -109,13 +157,25 @@ class IKuaiDriver(RouterDriver):
         self.session.close()
 
     def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f'{self.endpoint}{path}'
         try:
-            response = self.session.post(f'{self.endpoint}{path}', json=payload,
+            response = self.session.post(url, json=payload,
                                          timeout=TIMEOUT, allow_redirects=False)
-        except requests.RequestException as error:
-            raise RouterError(f'无法连接 iKuai：{error.__class__.__name__}') from None
+        except requests.exceptions.SSLError:
+            raise RouterError('iKuai HTTPS 连接失败：请检查证书是否可信、是否过期，'
+                              '以及管理地址和 HTTPS 端口是否正确。') from None
+        except requests.ConnectTimeout:
+            raise RouterError(f'连接 iKuai 超时（{TIMEOUT} 秒）：请检查管理地址、端口，'
+                              '以及 ConfigFlow 所在主机到路由器的网络是否畅通。') from None
+        except requests.Timeout:
+            raise RouterError(f'等待 iKuai 响应超时（{TIMEOUT} 秒）：请检查网络连接和路由器负载，稍后重试。') from None
+        except requests.ConnectionError:
+            raise RouterError('无法连接 iKuai 管理服务：请检查地址、端口和域名解析，'
+                              '确认管理服务已开启，并允许 ConfigFlow 所在主机访问。') from None
+        except requests.RequestException:
+            raise RouterError('与 iKuai 通信失败：请检查管理地址、端口和网络连接，稍后重试。') from None
         if response.status_code != 200:
-            raise RouterError(f'iKuai 返回 HTTP {response.status_code}')
+            raise RouterError(_http_error(response, url))
         try:
             data = response.json()
         except ValueError:

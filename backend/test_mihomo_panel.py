@@ -220,3 +220,15 @@ def test_provider_node_route_requires_admin_and_keeps_provider_healthcheck(authe
     panel.call(Manager(), 'mihomo', 'providers/proxy/healthcheck', 'GET', MultiDict({'name': 'Airport'}))
     assert calls[-1]['url'].endswith('/providers/proxies/Airport/healthcheck')
     assert calls[-1]['params'] == {}
+
+
+@pytest.mark.parametrize('message', [
+    'download failed: dial tcp: i/o timeout',
+    'Agent download connection failed',
+])
+def test_core_upgrade_errors_keep_original_text(calls, message):
+    calls.replies.append(Response({'message': message}, status=500))
+    with pytest.raises(MonitorError) as exc:
+        panel.call(Manager({**AGENT, 'version': '1.8.16-go'}), 'mihomo', 'upgrade', 'POST', MultiDict())
+    assert exc.value.code == 'CORE_ERROR'
+    assert exc.value.message == message

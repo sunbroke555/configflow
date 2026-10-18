@@ -360,6 +360,10 @@ def test_rule_download_failure_is_reported_without_pushing_to_agent(env, monkeyp
     recorded = client.get(f'/api/agents/{agent["id"]}/deployments/download-failure').json
     assert recorded['status'] == 'failed'
     assert recorded['message'] == result.json['message']
+    assert recorded['error_details'] == result.json['error_details']
+    assert 'ConnectionError:' in result.json['error_details']
+    assert 'rules.test/list' in result.json['error_details']
+    assert 'token=secret' not in result.json['error_details']
     assert not manager._preparation_running(agent['id'], 'download-failure')
 
 
