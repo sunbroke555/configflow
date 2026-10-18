@@ -1,6 +1,6 @@
 # 快速开始
 
-- [ConfigFlow + RouterOS 安装指南](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) - 5 步完成 NAS 管理端与 RouterOS 代理、DNS 服务安装
+- [ConfigFlow + RouterOS 安装指南](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) - NAS 管理端与 RouterOS 服务安装，按页面下发路由和设备分流；附手动配置
 - [通用安装与入门指南](install_guide.md) - 普通 Docker/NAS 快速开始，不适用于 RouterOS Container
 
 ---
@@ -262,7 +262,7 @@ services:
 - [MCP 服务](module/mcp.md) - 通过 MCP 用 AI 客户端操作平台
 
 ### 部署文档
-- [ConfigFlow + RouterOS 安装指南](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) - NAS 运行 ConfigFlow，RouterOS 运行 Mihomo 和 OxiDNS
+- [ConfigFlow + RouterOS 安装指南](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) - NAS 运行 ConfigFlow，RouterOS 运行 Mihomo 和 OxiDNS，通过管理页面下发路由
 - [通用部署指南](module/deployment.md) - 普通 Docker / Docker Compose；不要直接用于 RouterOS Container
 ---
 
