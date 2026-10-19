@@ -38,7 +38,7 @@ func adaptNativeAIODNS(cfg *Config, content string) (string, error) {
 	if tun["enable"] != true || tun["auto-redirect"] != true {
 		return content, nil
 	}
-	address, err := agentLANIPv4(cfg)
+	addresses, err := agentLANIPv4s(cfg)
 	if err != nil {
 		return "", fmt.Errorf("原生 AIO 启用 TUN 自动重定向时为 OxiDNS 排除本机 DNS 失败：%w", err)
 	}
@@ -62,7 +62,11 @@ func adaptNativeAIODNS(cfg *Config, content string) (string, error) {
 		}
 		existing = append(existing, prefix.Masked())
 	}
-	for _, value := range []string{"127.0.0.0/8", address.To4().String() + "/32"} {
+	requiredExclusions := []string{"127.0.0.0/8"}
+	for _, address := range addresses {
+		requiredExclusions = append(requiredExclusions, address.String()+"/32")
+	}
+	for _, value := range requiredExclusions {
 		required := netip.MustParsePrefix(value)
 		covered := false
 		for _, prefix := range existing {

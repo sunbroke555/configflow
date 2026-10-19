@@ -71,6 +71,22 @@ func TestNativeAIODNSUsesAutomaticAddress(t *testing.T) {
 	}
 }
 
+func TestNativeAIODNSCoversAllAutomaticAddressesWithoutWideningRoutes(t *testing.T) {
+	stubAgentIPv4s(t, func() ([]string, error) { return []string{"10.0.0.2", "192.168.8.2", "192.168.9.2"}, nil })
+	got, err := adaptNativeAIODNS(&Config{NativeAIO: true}, "tun: {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8]}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := []interface{}{"10.0.0.0/8", "127.0.0.0/8", "192.168.8.2/32", "192.168.9.2/32"}
+	if !reflect.DeepEqual(doc["tun"].(map[string]interface{})["route-exclude-address"], want) {
+		t.Fatalf("automatic protection missed an address or widened its prefix: %s", got)
+	}
+}
+
 func TestNativeAIODNSPreservesYAMLAliasesAndMergeKeys(t *testing.T) {
 	for _, test := range []struct{ name, yaml string }{
 		{"exclusion-alias", "custom-exclusions: &excluded [10.0.0.0/8]\ntun: {enable: true, auto-redirect: true, route-exclude-address: *excluded}\n"},
