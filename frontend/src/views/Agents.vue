@@ -80,6 +80,8 @@
           <header class="flex items-center gap-2.5">
             <span
               :class="cn('size-[9px] shrink-0 rounded-full', agent.status === 'online' ? 'agent-pulse bg-success-accent' : 'bg-muted-foreground/60')"
+              role="img"
+              :aria-label="agent.status === 'online' ? '在线' : '离线'"
               :title="agent.status === 'online' ? '在线' : '离线'"
             />
             <p class="font-display m-0 min-w-0 flex-1 truncate text-[19px] font-medium" :title="agent.name">{{ agent.name }}</p>
@@ -109,14 +111,32 @@
               </i>
               <b class="text-right font-mono font-medium text-foreground/80">{{ agent.system_metrics ? metric.text : '—' }}</b>
             </div>
-            <div v-if="agent.system_metrics || agent.service_type === 'oxidns'" class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-              <template v-if="agent.system_metrics">
-                <span>↑ {{ flowsOf(agent)[0].value }}</span>
-                <span>↓ {{ flowsOf(agent)[1].value }}</span>
-              </template>
-              <Button variant="ghost" size="sm" class="-my-1 ml-auto min-h-11 px-1.5 text-[11px] md:h-6 md:min-h-6" @click="agent.service_type === 'oxidns' ? router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns') : showMetricsDetail(agent)">
-                <ChartLine class="size-3" />
-                {{ agent.service_type === 'oxidns' ? 'DNS 监控' : '监控' }}
+            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 font-mono text-[11px] text-muted-foreground">
+              <div class="flex min-w-0 flex-wrap gap-x-3">
+                <span class="whitespace-nowrap">↑ {{ agent.system_metrics ? flowsOf(agent)[0].value : '—' }}</span>
+                <span class="whitespace-nowrap">↓ {{ agent.system_metrics ? flowsOf(agent)[1].value : '—' }}</span>
+              </div>
+              <Button
+                v-if="agent.service_type === 'oxidns'"
+                variant="outline"
+                size="sm"
+                class="border-border-strong bg-secondary/60 font-sans text-xs text-foreground"
+                :aria-label="`查看 ${agent.name} 的 DNS 监控`"
+                @click="router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns')"
+              >
+                <ChartLine class="size-3.5" />
+                DNS 监控
+              </Button>
+              <Button
+                v-else-if="agent.system_metrics"
+                variant="outline"
+                size="sm"
+                class="border-border-strong bg-secondary/60 font-sans text-xs text-foreground"
+                :aria-label="`查看 ${agent.name} 的系统监控`"
+                @click="showMetricsDetail(agent)"
+              >
+                <ChartLine class="size-3.5" />
+                系统监控
               </Button>
             </div>
           </div>
@@ -125,7 +145,7 @@
             配置空间
             <Select
               :model-value="agent.profile_id || defaultProfileId"
-              :disabled="bindingAgentId === agent.id || profileBindingBlocked(agent.id)"
+              :disabled="bindingAgentId === agent.id || settingsLoadingAgentId === agent.id || profileBindingBlocked(agent.id)"
               @update:model-value="value => handleAgentProfileChange(agent, String(value))"
             >
               <SelectTrigger class="h-7 min-w-0 flex-1 bg-background/50 text-[12px]" :aria-label="`${agent.name} 绑定的配置空间`">
@@ -214,10 +234,22 @@
               {{ syncOf(agent).label }}
             </span>
             <Button
+              v-if="supportsAgentSettings(agent.service_type)"
+              variant="outline"
+              size="sm"
+              :aria-label="`设置 ${agent.name} 的配置`"
+              :title="`编辑「${profileStore.profileName(agent.profile_id || defaultProfileId)}」中的 ${serviceTypeLabels[agent.service_type]} 配置`"
+              :disabled="Boolean(settingsLoadingAgentId) || bindingAgentId === agent.id"
+              @click="openAgentSettings(agent)"
+            >
+              <Loader2 v-if="settingsLoadingAgentId === agent.id" class="size-3.5 animate-spin" />
+              <Settings v-else class="size-3.5" />
+              设置
+            </Button>
+            <Button
               v-if="agent.status === 'online'"
               variant="outline"
               size="sm"
-              class="h-[30px]"
               :disabled="pushingIds.has(agent.id) || upgradeBusy(agent.id) || deploymentBusy(agent.id) || deployments[agent.id]?.status === 'rollback_failed'"
               @click="pushConfig(agent)"
             >
@@ -225,10 +257,9 @@
               <Send v-else class="size-3.5" />
               推送
             </Button>
-            <span v-else class="chip">离线 {{ formatTime(agent.last_heartbeat) }}</span>
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
-                <Button variant="ghost" size="icon-sm" class="size-[30px]" :aria-label="`${agent.name} 的更多操作`">
+                <Button variant="ghost" size="icon-sm" :aria-label="`${agent.name} 的更多操作`">
                   <MoreHorizontal class="size-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -243,7 +274,7 @@
                 </DropdownMenuItem>
                 <DropdownMenuItem v-if="agent.system_metrics" @select="showMetricsDetail(agent)">
                   <ChartLine class="size-4" />
-                  监控详情
+                  系统监控
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   :disabled="upgradeBusy(agent.id) || deploymentBusy(agent.id) || deployments[agent.id]?.status === 'rollback_failed'"
@@ -268,6 +299,14 @@
       </div>
     </template>
 
+    <component
+      :is="agentSettingsEditor"
+      v-if="agentSettings && agentSettingsEditor"
+      :key="agentSettings.agentId + ':' + agentSettings.profileId"
+      :agent-settings="agentSettings"
+      @ready="settingsLoadingAgentId = null"
+      @close="closeAgentSettings"
+    />
     <DockerAgentUpdateDialog v-if="dockerUpdateAgent" :agent="dockerUpdateAgent" @close="dockerUpdateAgent = null" @refresh="loadAgents" />
     <AgentDeploymentHistory v-if="deploymentHistoryAgent" :agent="deploymentHistoryAgent" :progress="deployments[deploymentHistoryAgent.id]" :busy="deploymentBusy(deploymentHistoryAgent.id)" :blocked="upgradeBusy(deploymentHistoryAgent.id) || pushingIds.has(deploymentHistoryAgent.id) || rollbackConfirming" @close="deploymentHistoryAgentId = null" @rollback="requestRollback(deploymentHistoryAgent, $event)" />
 
@@ -720,7 +759,7 @@
 <script setup lang="ts">
 import { useChartPalette, withAlpha } from '@/lib/chartPalette'
 import PageHeader from '@/components/common/PageHeader.vue'
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMediaQuery } from '@vueuse/core'
 import BrandMark from '@/components/common/BrandMark.vue'
@@ -730,6 +769,7 @@ import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
 import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
+import { supportsAgentSettings, type AgentSettingsContext } from '@/lib/agentSettings'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import { Motion } from 'motion-v'
 import {
@@ -747,6 +787,7 @@ import {
   ScrollText,
   Send,
   Server,
+  Settings,
   Trash2,
   TriangleAlert,
   Upload,
@@ -869,6 +910,46 @@ const queryUpgrade = async (agentId: string) => {
 }
 const { profiles, refreshProfiles, defaultProfileId } = useProfileStore()
 const bindingAgentId = ref<string | null>(null)
+const agentSettings = ref<AgentSettingsContext | null>(null)
+const agentSettingsEditor = shallowRef<typeof import('./Generate.vue')['default']>()
+const settingsLoadingAgentId = ref<string | null>(null)
+let settingsPageActive = true
+
+const openAgentSettings = async (agent: Agent) => {
+  if (settingsLoadingAgentId.value || agentSettings.value || bindingAgentId.value === agent.id || !supportsAgentSettings(agent.service_type)) return
+  settingsLoadingAgentId.value = agent.id
+  try {
+    // Refresh both sources before capturing the scope: another tab may have
+    // rebound the device or changed the default for an older unbound Agent.
+    const [response, currentProfiles, editor] = await Promise.all([
+      agentApi.getAll(), refreshProfiles(), import('./Generate.vue')
+    ])
+    if (!settingsPageActive) return
+    const current = (response.data as Agent[]).find(item => item.id === agent.id)
+    if (!current) throw new Error('此 Agent 已不存在，请刷新列表。')
+    if (!supportsAgentSettings(current.service_type)) throw new Error('此 Agent 的软件类型暂不支持配置设置。')
+    const profileId = current.profile_id || defaultProfileId.value
+    const profile = currentProfiles.find(item => item.id === profileId)
+    if (!profile) throw new Error('此 Agent 绑定的配置空间已不存在，请重新绑定后再设置。')
+    agentSettingsEditor.value = editor.default
+    agentSettings.value = {
+      agentId: current.id, agentName: current.name, serviceType: current.service_type,
+      profileId: profile.id, profileName: profile.name,
+    }
+  } catch (error: any) {
+    if (settingsPageActive) {
+      settingsLoadingAgentId.value = null
+      notify.error('打开配置设置失败', error.response?.data?.message || error.message || '请稍后重试。')
+    }
+  }
+}
+
+const closeAgentSettings = () => {
+  agentSettings.value = null
+  settingsLoadingAgentId.value = null
+  void loadAgents()
+  void refreshProfiles().catch(() => undefined)
+}
 const scriptDialogVisible = ref(false)
 const dockerUpdateAgent = ref<Agent | null>(null)
 const lifecyclePanelOpen = ref(false)
@@ -2528,6 +2609,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   resetCoreInstallCommand()
+  settingsPageActive = false
   stopAutoRefresh()
 })
 </script>

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
-import api, { profileApi, proxyGroupApi } from '@/api'
+import api, { customConfigApi, generateApi, profileApi, proxyGroupApi } from '@/api'
 import { useProfileStore } from '@/stores/profile'
 import { activeProfileId, beginScopedRequest, endScopedRequest, scopedRequests, setActiveProfileId } from '@/profileContext'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
@@ -96,6 +97,67 @@ describe('local profile switching and request ownership', () => {
   it('releases a rejected scoped request rather than locking selection', async () => {
     api.defaults.adapter = async config => { throw { config, response: { status: 409, data: { message: 'Referenced resource' } } } }
     await expect(proxyGroupApi.update('group', { name: 'Updated' }, 'default')).rejects.toMatchObject({ response: { status: 409 } })
+    expect(scopedRequests.value).toBe(0)
+  })
+
+  it.each([
+    ['header', () => customConfigApi.getMihomo('removed')],
+    ['path', () => generateApi.previewMihomo('removed')],
+    ['query', () => api.get('/rules', { params: { profile: 'removed' } })],
+  ] as const)('preserves the active profile when an explicit %s selects a missing profile', async (_selection, request) => {
+    setActiveProfileId('second')
+    const requests: string[] = []
+    api.defaults.adapter = async config => {
+      requests.push(config.url || '')
+      if (config.url === '/profiles') return response(config, [{ id: 'default', name: 'Default' }])
+      throw { config, response: { status: 404, data: { message: 'Profile not found: removed' } } }
+    }
+
+    await expect(request()).rejects.toMatchObject({ response: { status: 404 } })
+    await flushPromises()
+
+    expect(activeProfileId.value).toBe('second')
+    expect(sessionStorage.getItem('configflow.activeProfile')).toBe('second')
+    expect(requests).not.toContain('/profiles')
+    expect(scopedRequests.value).toBe(0)
+  })
+
+  it('recovers the current profile when that profile is missing', async () => {
+    setActiveProfileId('second')
+    const requests: string[] = []
+    api.defaults.adapter = async config => {
+      requests.push(config.url || '')
+      if (config.url === '/profiles') return response(config, [{ id: 'default', name: 'Default', is_default: true }])
+      throw { config, response: { status: 404, data: { message: 'Profile not found: second' } } }
+    }
+
+    await expect(customConfigApi.getMihomo()).rejects.toMatchObject({ response: { status: 404 } })
+    await flushPromises()
+
+    expect(activeProfileId.value).toBe('default')
+    expect(sessionStorage.getItem('configflow.activeProfile')).toBeNull()
+    expect(requests.filter(path => path === '/profiles')).toHaveLength(1)
+    expect(scopedRequests.value).toBe(0)
+  })
+
+  it('ignores a missing-profile response after the user has selected another profile', async () => {
+    let rejectRequest!: () => void
+    const requests: string[] = []
+    api.defaults.adapter = config => {
+      requests.push(config.url || '')
+      if (config.url === '/profiles') return Promise.resolve(response(config, [{ id: 'default', name: 'Default' }]))
+      return new Promise((_resolve, reject) => {
+        rejectRequest = () => reject({ config, response: { status: 404, data: { message: 'Profile not found: default' } } })
+      })
+    }
+    const pending = customConfigApi.getMihomo()
+    setActiveProfileId('second')
+    rejectRequest()
+    await expect(pending).rejects.toMatchObject({ response: { status: 404 } })
+    await flushPromises()
+
+    expect(activeProfileId.value).toBe('second')
+    expect(requests).not.toContain('/profiles')
     expect(scopedRequests.value).toBe(0)
   })
 

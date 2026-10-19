@@ -13,7 +13,7 @@
     @save="save"
   >
     <template #footer="{ disabled }">
-      <SettingsPublishBar :open="open" :profile-id="profileId" service-type="oxidns" :disabled="disabled" :save="() => save(false)" @save-draft="save()" />
+      <SettingsPublishBar :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId" service-type="oxidns" :disabled="disabled" :save="() => save(false)" @save-draft="save()" />
     </template>
     <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 md:p-5" @input.capture="markEdited">
       <p v-if="contextLabel" class="m-0 break-words text-xs text-muted-foreground">{{ contextLabel }}</p>
@@ -102,7 +102,7 @@ import { Button } from '@/components/ui/button'
 import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
 
-const props = defineProps<{ open: boolean; profileId: string; initialFeature?: string; contextLabel?: string; backLabel?: string }>()
+const props = defineProps<{ open: boolean; profileId: string; preferredAgentId?: string; initialFeature?: string; contextLabel?: string; backLabel?: string }>()
 const emit = defineEmits<{ (event: 'update:open', value: boolean): void; (event: 'saved'): void }>()
 const settings = ref<Record<string, any> | null>(null)
 const rules = ref<any[]>([])

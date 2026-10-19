@@ -161,6 +161,65 @@ describe('settings save and publish', () => {
     expect(agentApi.pushConfig).toHaveBeenCalledWith('two', expect.any(String), guard())
   })
 
+  it('preselects the requested agent among several devices in the same profile and service', async () => {
+    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS' })]))
+    const wrapper = await render({ preferredAgentId: 'two' })
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('two')
+    expect(publishButton(wrapper).attributes('disabled')).toBeUndefined()
+    await publish(wrapper)
+    expect(agentApi.pushConfig).toHaveBeenCalledOnce()
+    expect(agentApi.pushConfig).toHaveBeenCalledWith('two', expect.any(String), guard())
+  })
+
+  it.each([
+    { unavailable: [] },
+    { unavailable: [agent({ profile_id: 'home' })] },
+    { unavailable: [agent({ service_type: 'mihomo' })] },
+  ])('requires an explicit choice when the requested agent is absent from the current scope (%j)', async ({ unavailable }) => {
+    vi.mocked(agentApi.getAll).mockResolvedValue(response([...unavailable, agent({ id: 'two', name: '书房 DNS' })]))
+    const save = vi.fn().mockResolvedValue(guard())
+    const wrapper = await render({ preferredAgentId: 'one', save })
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('')
+    expect(wrapper.text()).toContain('原目标设备不可用于此配置空间的 OxiDNS 配置')
+    expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '保存草稿').attributes('disabled')).toBeUndefined()
+    await publish(wrapper)
+    expect(save).not.toHaveBeenCalled()
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+    await button(wrapper, '保存草稿').trigger('click')
+    expect(wrapper.emitted('save-draft')).toHaveLength(1)
+    await choose(wrapper, 'two')
+    expect(wrapper.text()).not.toContain('原目标设备不可用于')
+    await publish(wrapper)
+    expect(agentApi.pushConfig).toHaveBeenCalledOnce()
+    expect(agentApi.pushConfig).toHaveBeenCalledWith('two', expect.any(String), guard())
+  })
+
+  it.each([{ status: 'offline' }, { enabled: false }])('preserves an unavailable preferred device instead of selecting an online alternative (%j)', async change => {
+    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent(change), agent({ id: 'two', name: '书房 DNS' })]))
+    const save = vi.fn().mockResolvedValue(guard())
+    const wrapper = await render({ preferredAgentId: 'one', save })
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('one')
+    expect(wrapper.text()).toContain(change.enabled === false ? '已禁用' : '离线')
+    expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '保存草稿').attributes('disabled')).toBeUndefined()
+    await publish(wrapper)
+    expect(save).not.toHaveBeenCalled()
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+  })
+
+  it('applies the preferred target after retrying an initial list failure', async () => {
+    vi.mocked(agentApi.getAll)
+      .mockRejectedValueOnce(new Error('网络错误'))
+      .mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS' })]))
+    const wrapper = await render({ preferredAgentId: 'two' })
+    await button(wrapper, '重试读取').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('two')
+    await publish(wrapper)
+    expect(agentApi.pushConfig).toHaveBeenCalledWith('two', expect.any(String), guard())
+  })
+
   it.each([{ status: 'offline' }, { enabled: false }])('keeps offline or disabled targets unavailable (%j)', async extra => {
     vi.mocked(agentApi.getAll).mockResolvedValue(response([agent(extra)]))
     const wrapper = await render()
@@ -192,7 +251,30 @@ describe('settings save and publish', () => {
     expect(wrapper.text()).toContain('目标设备的绑定、类型或在线状态已改变')
   })
 
-  it.each([{ open: false }, { profileId: 'home' }, { serviceType: 'mihomo' }])('does not continue from a late save after the settings context changes (%j)', async changed => {
+  it.each([undefined, 'one'])('does not fall back to the sole remaining target after a binding changes during save (preferred: %s)', async preferredAgentId => {
+    const replacement = agent({ id: 'two', name: '书房 DNS' })
+    vi.mocked(agentApi.getAll)
+      .mockResolvedValueOnce(response([agent(), replacement]))
+      .mockResolvedValue(response([agent({ profile_id: 'home' }), replacement]))
+    const save = vi.fn().mockResolvedValue(guard())
+    const wrapper = await render({ preferredAgentId, save })
+    if (!preferredAgentId) await choose(wrapper, 'one')
+    await publish(wrapper)
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('')
+    expect(wrapper.text()).toContain('目标设备的绑定、类型或在线状态已改变')
+    expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
+    await publish(wrapper)
+    expect(save).toHaveBeenCalledOnce()
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+    await choose(wrapper, 'two')
+    await publish(wrapper)
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(agentApi.pushConfig).toHaveBeenCalledOnce()
+    expect(agentApi.pushConfig).toHaveBeenCalledWith('two', expect.any(String), guard())
+  })
+
+  it.each([{ open: false }, { profileId: 'home' }, { serviceType: 'mihomo' }, { preferredAgentId: 'two' }])('does not continue from a late save after the settings context changes (%j)', async changed => {
     const saved = deferred<PublishGuard>()
     const wrapper = await render({ save: vi.fn(() => saved.promise) })
     await publish(wrapper)
@@ -341,6 +423,23 @@ describe('settings save and publish', () => {
     await flushPromises()
     expect(agentApi.activateDeployment).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('未激活：目标设备的绑定、类型或在线状态已改变')
+  })
+
+  it('allows an explicit replacement when the preferred device with a ready snapshot is rebound', async () => {
+    const replacement = agent({ id: 'two', name: '书房 DNS' })
+    vi.mocked(agentApi.getAll)
+      .mockResolvedValueOnce(response([agent({ latest_deployment: { deployment_id: 'old-ready', profile_id: 'office', status: 'ready' } }), replacement]))
+      .mockResolvedValue(response([agent({ profile_id: 'home' }), replacement]))
+    const wrapper = await render({ preferredAgentId: 'one' })
+    await button(wrapper, '应用并启动').trigger('click')
+    await flushPromises()
+    expect(agentApi.activateDeployment).not.toHaveBeenCalled()
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('')
+    expect(wrapper.getComponent(Select).props('disabled')).toBe(false)
+    expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
+    await choose(wrapper, 'two')
+    await publish(wrapper)
+    expect(agentApi.pushConfig).toHaveBeenCalledWith('two', expect.any(String), guard())
   })
 
   it('does not restore a ready candidate created for a different service type', async () => {

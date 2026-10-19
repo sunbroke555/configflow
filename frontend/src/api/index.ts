@@ -73,7 +73,11 @@ api.interceptors.response.use(
     if (error.config?.profileRequestTracked) endScopedRequest()
     const message = error.response?.data?.message
     if (error.response?.status === 404 && typeof message === 'string' && message.startsWith('Profile not found:')) {
-      void recoverFromMissingProfile().catch(() => undefined)
+      // Use the server-resolved profile: an explicit path/query can override the
+      // header, and an Agent editor can belong to a different space than the shell.
+      if (message === `Profile not found: ${getActiveProfileId()}`) {
+        void recoverFromMissingProfile().catch(() => undefined)
+      }
     } else if (
       error.response?.status === 401
       && error.config?.authSessionToken
