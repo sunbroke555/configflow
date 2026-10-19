@@ -223,6 +223,24 @@ def get_core_install_script():
     }
 
 
+@bp.route('/gateway-network-probe.sh', methods=['GET'])
+def get_gateway_network_probe():
+    """Download a fixed, public, read-only Linux network probe without credentials."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'agents', 'scripts', 'detect-gateway-network.sh')
+    try:
+        with open(path, encoding='utf-8') as source:
+            script = source.read()
+    except OSError:
+        logger.exception('读取网关网络检测脚本失败')
+        return jsonify({'success': False, 'message': '网络检测脚本暂时不可用，请更新 ConfigFlow 后重试。'}), 503
+    return script, 200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="detect-gateway-network.sh"',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+    }
+
+
 _INSTALL_COMMAND_FIELDS = frozenset({
     'name', 'type', 'port', 'agent_ip', 'config_path', 'restart_command', 'server_url',
     'agent_type', 'install_core', 'service_manager', 'service_unit', 'service_binary',

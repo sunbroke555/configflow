@@ -1,17 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, inject, provide } from 'vue'
 import GatewayInstallWizard from '@/components/agents/GatewayInstallWizard.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import { Checkbox } from '@/components/ui/checkbox'
 import { gatewayOnboardingApi } from '@/api/gatewayOnboarding'
 import { linuxGatewayApi } from '@/api/linuxGateway'
 import { gatewayEnvironmentErrors, installationMatches } from '@/lib/gatewayOnboarding'
+import { buildGatewayNetworkProbeCommand } from '@/lib/gatewayNetworkDetection'
 vi.mock('@/api/gatewayOnboarding', () => ({ gatewayOnboardingApi: { get: vi.fn(), preview: vi.fn(), save: vi.fn(), create: vi.fn(), sessions: vi.fn(), session: vi.fn(), publish: vi.fn() } }))
 vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: { status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() } }))
 const response = (data: unknown) => ({ data }) as any
+const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+const writeText = vi.fn()
 const spec = { interface: 'eth0', address: '192.168.1.2', lan_cidr: '192.168.1.0/24', upstream_gateway: '192.168.1.1' }
+const probeResult = (network = spec) => JSON.stringify({ version: 1, ...network })
+const networkInputs = { interface: 'interface', address: 'address', cidr: 'lan_cidr', upstream: 'upstream_gateway' } as const
+function expectNetwork(wrapper: ReturnType<typeof shallowMount>, network = spec) {
+  for (const [id, field] of Object.entries(networkInputs)) expect(wrapper.get(`#onboarding-${id}`).element).toHaveProperty('value', network[field])
+}
 const settings = { rule_set_ids: ['ip'], direct_rule_set_ids: ['cn'], proxy_rule_set_ids: ['global'], local_dns: 'https://223.5.5.5/dns-query' }
 const config = () => ({ profile_id: 'office', config_revision: 7, settings, fake_ip_range: '198.18.0.0/16', oxidns_mode: 'template', warnings: [], blockers: [], can_prepare: true,
   ip_candidates: [{ id: 'ip', name: 'Telegram IP', behavior: 'ipcidr', available: true, enabled: true }],
@@ -22,11 +30,20 @@ const session = (phase = 'waiting', extra = {}) => ({ id: 'installation-1', prof
 }) as any
 const workspaceStub = defineComponent({ name: 'SettingsWorkspace', props: ['open', 'dirty', 'busy'], emits: ['update:open'], setup(_props, { slots }) { return () => h('section', [slots.default?.(), slots.footer?.()]) } })
 const buttonStub = defineComponent({ name: 'Button', setup(_props, { slots, attrs }) { return () => h('button', attrs, slots.default?.()) } })
+const selectTabKey = Symbol('selectTab')
+const tabsStub = defineComponent({ name: 'Tabs', props: ['modelValue'], emits: ['update:modelValue'], setup(_props, { slots, emit }) {
+  provide(selectTabKey, (value: string) => emit('update:modelValue', value))
+  return () => h('div', slots.default?.())
+} })
+const tabsTriggerStub = defineComponent({ name: 'TabsTrigger', props: ['value', 'disabled'], setup(props, { slots, attrs }) {
+  const select = inject<(value: string) => void>(selectTabKey)!
+  return () => h('button', { ...attrs, type: 'button', role: 'tab', disabled: props.disabled, onClick: () => { if (!props.disabled) select(props.value) } }, slots.default?.())
+} })
 const wrappers: ReturnType<typeof shallowMount>[] = []
 function button(wrapper: ReturnType<typeof shallowMount>, text: string) { return wrapper.findAll('button').find(item => item.text() === text)! }
-function stepButton(wrapper: ReturnType<typeof shallowMount>, index: number) { return wrapper.get('ol[aria-label="安装步骤"]').findAll('button')[index] }
+function stepButton(wrapper: ReturnType<typeof shallowMount>, index: number) { return wrapper.get('[data-gateway-steps]').findAll('[role="tab"]')[index] }
 async function render() {
-  const wrapper = shallowMount(GatewayInstallWizard, { props: { open: true, profileId: 'office', profileName: '办公室' }, global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, Textarea: false } } })
+  const wrapper = shallowMount(GatewayInstallWizard, { props: { open: true, profileId: 'office', profileName: '办公室' }, global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Tabs: tabsStub, TabsTrigger: tabsTriggerStub, Input: false, Textarea: false } } })
   wrappers.push(wrapper); await flushPromises(); return wrapper
 }
 async function fillEnvironment(wrapper: ReturnType<typeof shallowMount>) {
@@ -41,6 +58,8 @@ async function prepare(wrapper: ReturnType<typeof shallowMount>) {
 function deferred<T>() { let resolve!: (data: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { resolve, promise } }
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.clear()
+  writeText.mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
   vi.mocked(gatewayOnboardingApi.get).mockResolvedValue(response(config()))
   vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: null }))
   vi.mocked(gatewayOnboardingApi.preview).mockResolvedValue(response({ success: true, ready: true, blockers: [], warnings: [], changes: ['启用选择性网关', '配置 OxiDNS'] }))
@@ -53,11 +72,23 @@ beforeEach(() => {
   vi.mocked(linuxGatewayApi.apply).mockResolvedValue(response({ success: true, managed: { active: true } }))
   vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, managed: { active: false } }))
 })
-afterEach(() => { wrappers.splice(0).forEach(item => item.unmount()); vi.useRealTimers(); localStorage.clear() })
+afterEach(() => {
+  wrappers.splice(0).forEach(item => item.unmount()); vi.useRealTimers(); localStorage.clear()
+  if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
+  else delete (navigator as any).clipboard
+})
 describe('gateway installation wizard', () => {
   it('does no writes on entry, and validates environment before continuing', async () => {
     const wrapper = await render()
-    expect(button(wrapper, '下一步：选择规则').attributes('disabled')).toBeDefined()
+    expect(button(wrapper, '下一步：选择规则').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).toContain('尚未读取网络信息')
+    expect(wrapper.text()).not.toContain('请补全或修正以下信息')
+    for (const id of ['name', 'server']) expect(wrapper.get(`#onboarding-${id}`).element.closest('details')).toBeNull()
+    for (const id of Object.keys(networkInputs)) expect(wrapper.get(`#onboarding-${id}`).element.closest('details')).toHaveProperty('open', false)
+    for (const message of gatewayEnvironmentErrors('home-gateway', 'http://localhost:3000', { interface: '', address: '', lan_cidr: '', upstream_gateway: '' })) expect(wrapper.text()).not.toContain(message)
+    await button(wrapper, '下一步：选择规则').trigger('click'); await flushPromises()
+    expect(wrapper.find('section[aria-label="设备与网络"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('请补全或修正以下信息')
     expect(gatewayOnboardingApi.save).not.toHaveBeenCalled()
     expect(gatewayOnboardingApi.create).not.toHaveBeenCalled()
     expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
@@ -65,6 +96,73 @@ describe('gateway installation wizard', () => {
     expect(wrapper.text()).toContain('自动包含 fake-IP 网段')
     expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
     expect(button(wrapper, '保存并生成安装命令').attributes('disabled')).toBeDefined()
+  })
+  it('shows and copies the read-only network detection command for the current server', async () => {
+    const wrapper = await render()
+    const serverUrl = 'https://configflow.example.test'
+    await wrapper.get('#onboarding-server').setValue(serverUrl); await flushPromises()
+    expect(wrapper.get('#onboarding-network-command').element).toHaveProperty('value', buildGatewayNetworkProbeCommand(serverUrl))
+    expect(wrapper.get('#onboarding-network-command').attributes('readonly')).toBeDefined()
+    await button(wrapper, '复制检测命令').trigger('click'); await flushPromises()
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(buildGatewayNetworkProbeCommand(serverUrl))
+    expect(gatewayOnboardingApi.preview).not.toHaveBeenCalled()
+    expect(gatewayOnboardingApi.save).not.toHaveBeenCalled()
+    expect(gatewayOnboardingApi.create).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
+  })
+  it('automatically fills all network fields from a complete detection result', async () => {
+    const wrapper = await render()
+    await wrapper.get('#onboarding-server').setValue('https://configflow.example.test')
+    await wrapper.get('#onboarding-network-result').setValue(probeResult()); await flushPromises()
+    expectNetwork(wrapper)
+    expect(wrapper.text()).not.toContain('尚未读取网络信息')
+    await button(wrapper, '下一步：选择规则').trigger('click'); await flushPromises()
+    expect(wrapper.find('section[aria-label="分流规则"]').exists()).toBe(true)
+    expect(gatewayOnboardingApi.create).not.toHaveBeenCalled()
+  })
+  it('keeps manually corrected network fields when detection output is invalid', async () => {
+    const wrapper = await render()
+    await wrapper.get('#onboarding-network-result').setValue(probeResult()); await flushPromises()
+    await wrapper.get('#onboarding-address').setValue('192.168.1.9')
+    const corrected = { ...spec, address: '192.168.1.9' }
+    for (const invalid of ['{', 'not JSON', JSON.stringify({ version: 2, ...spec }), probeResult({ ...spec, address: '127.0.0.1' })]) {
+      await wrapper.get('#onboarding-network-result').setValue(invalid); await flushPromises()
+      expectNetwork(wrapper, corrected)
+    }
+    expect(gatewayOnboardingApi.save).not.toHaveBeenCalled()
+    expect(gatewayOnboardingApi.create).not.toHaveBeenCalled()
+  })
+  it.each(['profile', 'reopen'])('clears detected network data and ignores queued input on %s', async (transition) => {
+    const wrapper = await render()
+    const previousInput = wrapper.get('#onboarding-network-result')
+    const queuedInput = previousInput.setValue(probeResult())
+    if (transition === 'profile') await wrapper.setProps({ profileId: 'home', profileName: '家里' })
+    else {
+      await wrapper.setProps({ open: false })
+      await wrapper.setProps({ open: true })
+    }
+    await queuedInput; await flushPromises()
+    expectNetwork(wrapper, { interface: '', address: '', lan_cidr: '', upstream_gateway: '' })
+    expect(wrapper.get('#onboarding-network-result').element).toHaveProperty('value', '')
+    expect(wrapper.text()).toContain('尚未读取网络信息')
+    expect(wrapper.text()).not.toContain('请补全或修正以下信息')
+    expect(gatewayOnboardingApi.create).not.toHaveBeenCalled()
+  })
+  it('keeps a restored installation network when an old detection input arrives late', async () => {
+    const wrapper = await render()
+    const previousInput = wrapper.getComponent('#onboarding-network-result')
+    await wrapper.setProps({ open: false })
+    const restored = { interface: 'enp1s0', address: '192.168.20.2', lan_cidr: '192.168.20.0/24', upstream_gateway: '192.168.20.1' }
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('waiting', { network: restored }) }))
+    await wrapper.setProps({ open: true }); await flushPromises()
+    previousInput.vm.$emit('update:modelValue', probeResult()); await flushPromises()
+    expect(wrapper.find('section[aria-label="安装核心"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain(restored.address)
+    await button(wrapper, '重新准备安装').trigger('click'); await flushPromises()
+    expectNetwork(wrapper, restored)
+    expect(gatewayOnboardingApi.create).not.toHaveBeenCalled()
+    expect(gatewayOnboardingApi.publish).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
   })
   it('prefills the service address from system settings', async () => {
     vi.mocked(gatewayOnboardingApi.get).mockResolvedValue(response({ ...config(), server_url: 'https://configflow.example.test' }))
@@ -92,7 +190,7 @@ describe('gateway installation wizard', () => {
   })
   it('allows correcting network information immediately after creating a session', async () => {
     const wrapper = await render(); await prepare(wrapper)
-    await button(wrapper, '修改安装信息 / 准备另一台设备').trigger('click'); await flushPromises()
+    await button(wrapper, '重新准备安装').trigger('click'); await flushPromises()
     expect(wrapper.get('#onboarding-address').element).toHaveProperty('value', spec.address)
     expect(wrapper.get('#onboarding-interface').element).toHaveProperty('value', spec.interface)
     expect(gatewayOnboardingApi.create).toHaveBeenCalledTimes(1)

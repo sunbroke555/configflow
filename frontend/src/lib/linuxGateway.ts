@@ -21,7 +21,7 @@ function ipv4(value: string): number | null {
 export function gatewaySpecErrors(draft: LinuxGatewaySpec): string[] {
   const spec = cleanGatewaySpec(draft)
   const errors: string[] = []
-  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}$/.test(spec.interface) || spec.interface === 'lo') errors.push('填写实际 LAN 网卡名，例如 eth0 或 enp1s0，不能使用回环网卡 lo。')
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}$/.test(spec.interface) || spec.interface === 'lo') errors.push('LAN 网卡名需为 1–15 个字母、数字、下划线、短横线或点，不能以短横线或点开头，也不能使用 lo。')
   const address = ipv4(spec.address)
   const gateway = ipv4(spec.upstream_gateway)
   if (address === null) errors.push('Linux 地址需要填写 IPv4 地址，不带端口或掩码。')

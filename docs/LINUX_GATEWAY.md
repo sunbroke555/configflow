@@ -59,13 +59,16 @@ apk add ca-certificates curl iproute2 nftables tar gzip coreutils
 
 ## 第 1 步：设备与网络
 
-打开 **Agent → 生成安装脚本**，选择 **Linux 选择性网关**，点击“开始或继续网关安装”。核对顶部的配置空间，然后填写：
+打开 **Agent → 生成安装脚本**，选择 **Linux 选择性网关**，点击“开始或继续网关安装”。核对顶部的配置空间，填写设备名称和服务地址：
 
 - 设备名称，例如 `home-gateway`；两个 Agent 将分别命名为 `home-gateway-mihomo` 和 `home-gateway-oxidns`。
-- Linux 固定 IPv4、LAN 网卡名、LAN 网段、主路由 IPv4。
 - Linux 能访问的 ConfigFlow 地址；如果系统设置已经填写服务地址，必须使用同一地址。旧值为 `localhost` 时先在系统设置修正，再回到向导重新读取。
 
-不确定网卡与地址时，在 Linux 查看 `ip -4 addr`；查看默认出口使用 `ip -4 route show default`。最终应用前，Agent 会再次把所填值与机器实际网络核对，发现不一致不会应用。
+复制页面上的检测命令，在目标 Linux 终端执行，再将输出的 JSON 粘贴回页面。网卡名、Linux IPv4、主路由和 LAN 网段会自动填入。需要纠正时，可以展开手动填写。
+
+检测只读取默认路由和网卡地址，无需 root，不修改网络，也不需要先安装 Agent。命令需要 `curl`、`ip` 和 `awk`；脚本由当前 ConfigFlow 的 `/api/agents/gateway-network-probe.sh` 提供，不包含登录或安装凭据。网卡名没有 `eth` 或 `enp` 前缀限制，`ens18`、`br0`、`bond0.10` 等名称均可使用。
+
+检测要求只有一个 IPv4 默认出口，且出口网卡只有一个 IPv4 地址；出现多个出口或地址时会报错。地址仍需提前在主路由保留，或在 Linux 配为静态地址。最终应用前，Agent 会再次核对实际网络，发现不一致不会应用。
 
 ## 第 2 步：分流规则与两份配置
 

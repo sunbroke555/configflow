@@ -36,6 +36,7 @@ def setup_before_request(app):
             '/api/auth/status', '/api/auth/login', '/api/config/mihomo', '/api/config/surge', '/api/config/loon', '/api/config/mosdns', '/api/config/oxidns',
             '/api/mosdns/rule-proxy',
             '/api/agents/register', '/api/agents/install-script', '/api/agents/core-install-script', '/api/agents/docker-compose', '/api/agents/docker-run',
+            '/api/agents/gateway-network-probe.sh',
             '/api/agents/docker-mihomo-compose', '/api/agents/docker-mihomo-run', '/api/agents/docker-mosdns-compose',
             '/api/agents/docker-mosdns-run', '/api/version', '/', '/mcp',
         }
