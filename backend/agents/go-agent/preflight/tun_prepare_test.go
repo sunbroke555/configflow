@@ -242,23 +242,80 @@ func TestPrepareTUNHealthyModularDeviceStillGetsBootPersistence(t *testing.T) {
 	}
 }
 
+func TestPrepareTUNOpenRCLoadedModuleWithoutModprobeCannotClaimPersistence(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, alreadyPersistent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("legacy=%v/persistent=%v", legacy, alreadyPersistent), func(t *testing.T) {
+				f := newTUNPrepareFixture()
+				f.commands["modprobe"] = false
+				moduleFile := tunModulesFile
+				if legacy {
+					f.files["/etc/init.d/modules"] = []byte("#!/sbin/openrc-run\ncat /etc/modules | while read m; do modprobe $m; done\n")
+					moduleFile = "/etc/modules"
+					f.files[moduleFile] = []byte("# administrator list\nvirtio_net\n")
+				}
+				if alreadyPersistent {
+					f.files[moduleFile] = append(f.files[moduleFile], []byte("tun\n")...)
+					f.files["/etc/runlevels/boot/modules"] = append([]byte(nil), f.files["/etc/init.d/modules"]...)
+				}
+				before := make(map[string][]byte, len(f.files))
+				for path, content := range f.files {
+					before[path] = append([]byte(nil), content...)
+				}
+				cfg := tunPrepareConfig(t, "tun: {enable: true}", "openrc")
+				report := prepareTUNWithProbe(cfg, f.probe())
+				assertTUNReport(t, report, true, "OpenRC modules 开机加载需要 modprobe")
+				assertTUNReport(t, report, true, "请安装 kmod 或修复 PATH 后重试")
+				assertTUNReport(t, report, true, "未完成开机持久化")
+				if len(f.writes) != 0 || len(f.calls) != 0 {
+					t.Fatalf("missing modprobe changed host: calls=%v writes=%v", f.calls, f.writes)
+				}
+				if len(f.files) != len(before) {
+					t.Fatalf("missing modprobe added or removed files: %v", f.files)
+				}
+				for path, content := range before {
+					if !bytes.Equal(f.files[path], content) {
+						t.Fatalf("missing modprobe changed %s", path)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPrepareTUNSystemdLoadedModuleDoesNotRequireModprobe(t *testing.T) {
+	f := newTUNPrepareFixture()
+	f.commands["modprobe"] = false
+	cfg := tunPrepareConfig(t, "tun: {enable: true}", "systemd")
+	assertTUNReport(t, prepareTUNWithProbe(cfg, f.probe()), false, "开机加载配置")
+	if strings.Join(f.calls, "\n") != "systemctl show systemd-modules-load.service --property=LoadState --value" {
+		t.Fatalf("systemd used unexpected module loader: %v", f.calls)
+	}
+	if len(f.writes) != 1 || string(f.files[tunModulesFile]) != tunModulesContent {
+		t.Fatalf("systemd module persistence missing: %v %v", f.writes, f.files)
+	}
+}
+
 func TestPrepareTUNBuiltinNeedsNoModulePersistence(t *testing.T) {
 	for _, source := range []string{"builtin-index", "modinfo"} {
-		t.Run(source, func(t *testing.T) {
-			f := newTUNPrepareFixture()
-			f.files["/proc/modules"] = []byte("other 100 0 - Live 0\n")
-			if source == "builtin-index" {
-				f.files["/lib/modules/6.12.0-test/modules.builtin"] = []byte("kernel/drivers/net/tun.ko\n")
-			} else {
-				f.commands["modinfo"] = true
-				f.runOutput["modinfo -F filename tun"] = []byte("(builtin)\n")
-			}
-			cfg := tunPrepareConfig(t, "tun: {enable: true}", "systemd")
-			assertTUNReport(t, prepareTUNWithProbe(cfg, f.probe()), false, "内置")
-			if len(f.writes) != 0 || strings.Contains(strings.Join(f.calls, " "), "modprobe") {
-				t.Fatalf("builtin mutated: %v %v", f.calls, f.writes)
-			}
-		})
+		for _, manager := range []string{"systemd", "openrc"} {
+			t.Run(source+"/"+manager, func(t *testing.T) {
+				f := newTUNPrepareFixture()
+				f.commands["modprobe"] = false
+				f.files["/proc/modules"] = []byte("other 100 0 - Live 0\n")
+				if source == "builtin-index" {
+					f.files["/lib/modules/6.12.0-test/modules.builtin"] = []byte("kernel/drivers/net/tun.ko\n")
+				} else {
+					f.commands["modinfo"] = true
+					f.runOutput["modinfo -F filename tun"] = []byte("(builtin)\n")
+				}
+				cfg := tunPrepareConfig(t, "tun: {enable: true}", manager)
+				assertTUNReport(t, prepareTUNWithProbe(cfg, f.probe()), false, "内置")
+				if len(f.writes) != 0 || strings.Contains(strings.Join(f.calls, " "), "modprobe") {
+					t.Fatalf("builtin mutated: %v %v", f.calls, f.writes)
+				}
+			})
+		}
 	}
 }
 
@@ -287,6 +344,7 @@ func TestPrepareTUNContainersNeverLoadOrPersistHostModule(t *testing.T) {
 		for _, available := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/available=%v", tc.name, available), func(t *testing.T) {
 				f := newTUNPrepareFixture()
+				f.commands["modprobe"] = false
 				f.files[tc.path] = []byte(tc.value)
 				if !available {
 					delete(f.modes, "/dev/net/tun")

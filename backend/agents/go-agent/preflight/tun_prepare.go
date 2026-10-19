@@ -372,6 +372,11 @@ func persistTUNModule(probe tunPrepareProbe, manager string) error {
 	path := tunModulesFile
 	var openrcScript []byte
 	if manager == "openrc" {
+		// A currently loaded module can make /dev/net/tun usable even when
+		// the command needed by OpenRC's modules service is absent at boot.
+		if _, err := probe.lookPath("modprobe"); err != nil {
+			return fmt.Errorf("OpenRC modules 开机加载需要 modprobe，请安装 kmod 或修复 PATH 后重试")
+		}
 		var err error
 		openrcScript, err = probe.readFile("/etc/init.d/modules")
 		if err != nil {

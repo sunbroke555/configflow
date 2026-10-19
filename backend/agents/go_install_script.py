@@ -272,6 +272,7 @@ else
 fi
 cf_step_done "TUN 准备完成（具体处理结果见日志）"''' if manage_tun else "",
         "ipv4_forwarding_functions": INSTALL_GO_AIO_FORWARDING if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_dependencies": " sysctl cmp ln" if manage_ipv4_forwarding else "",
         "ipv4_forwarding_notice": 'cf_ui "普通 Shell 同机安装将自动开启并持久化当前 Linux 的 IPv4 转发。"' if manage_ipv4_forwarding else "",
         "ipv4_forwarding_prepare": "prepare_ipv4_forwarding" if manage_ipv4_forwarding else "",
         "ipv4_forwarding_ownership": "check_ipv4_forwarding_ownership" if manage_ipv4_forwarding else "",

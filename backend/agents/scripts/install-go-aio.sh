@@ -110,7 +110,7 @@ case "$choice" in
     1)
         cf_step "检查安装环境与依赖"
 {agent_arch_detection}
-        agent_ensure_dependencies
+        agent_ensure_dependencies{ipv4_forwarding_dependencies}
         cf_step_done "安装环境与依赖已就绪"
         ;;
     2) ;;

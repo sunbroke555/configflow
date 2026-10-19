@@ -20,7 +20,7 @@ check_ipv4_forwarding_ownership() {
     # A gateway journal owns its own original values and recovery. Do not add a
     # competing boot hook when an existing gateway is reinstalled as ordinary AIO.
     if [ -e "$AGENT_ROOT/mihomo/linux-gateway.json" ] || [ -L "$AGENT_ROOT/mihomo/linux-gateway.json" ]; then
-        fail "检测到 Linux 选择性网关的网络记录，请使用原网关安装入口管理；普通同机安装不会接管其转发设置。"
+        fail "检测到 Linux 选择性网关的网络记录，网关恢复记录未清理。请使用原网关入口管理；如需卸载，请先恢复客户端的网关和 DNS，再恢复所选设备网络。普通同机安装不会接管其转发设置。"
     fi
     [ ! -L "$AGENT_ROOT/mihomo/enable-ipv4-forwarding.sh" ] || fail "IPv4 转发启动脚本不能是符号链接。"
     [ ! -e "$AGENT_ROOT/mihomo/enable-ipv4-forwarding.sh" ] || [ -f "$AGENT_ROOT/mihomo/enable-ipv4-forwarding.sh" ] || fail "IPv4 转发启动脚本路径不是普通文件。"

@@ -12,6 +12,7 @@ from backend.test_agent_native_aio_install import (
     harness,
     run,
 )
+from backend.test_agent_install_dependencies import isolate_dependencies
 
 
 SCRIPTS = Path(__file__).parent / "agents" / "scripts"
@@ -29,6 +30,15 @@ def shell_function(filename, name):
 @pytest.mark.parametrize("missing_tool", ["sysctl", "cmp", "ln"])
 def test_missing_forwarding_prerequisite_fails_before_stopping_agents(tmp_path, manager, missing_tool):
     installer, env, units = harness(tmp_path, manager)
+    # All commands initially exist, so dependency installation completes. The
+    # later environment check simulates a command disappearing before use.
+    isolate_dependencies(tmp_path, env, package_manager=None)
+    env["MISSING_TOOL_READY"] = str(tmp_path / "missing-tool-ready")
+    agent = Path(env["FAKE_AGENT"])
+    marker = "if '-check-environment' in args:\n"
+    assert marker in agent.read_text()
+    agent.write_text(agent.read_text().replace(
+        marker, marker + "    open(os.environ['MISSING_TOOL_READY'], 'w').close()\n", 1))
     before = {
         path: path.read_bytes()
         for directory in (tmp_path / "agent", units)
@@ -39,7 +49,7 @@ def test_missing_forwarding_prerequisite_fails_before_stopping_agents(tmp_path, 
     # redirected to the harness's proc file and strict sysctl mock.
     source = installer.read_text()
     discovery_override = '''command() {
-    if [ "$#" -eq 2 ] && [ "$1" = -v ] && [ "$2" = "$MISSING_TOOL" ]; then
+    if [ -f "$MISSING_TOOL_READY" ] && [ "$#" -eq 2 ] && [ "$1" = -v ] && [ "$2" = "$MISSING_TOOL" ]; then
         return 127
     fi
     /bin/sh -c 'command "$@"' sh "$@"
