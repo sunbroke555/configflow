@@ -8,6 +8,7 @@ from backend.common.oxidns_common import apply_common_settings, read_common_sett
 from backend.common.oxidns_editor import prepare_editor
 from backend.common.oxidns_settings import OxidnsSettingsError
 from backend.common.oxidns_validation import validate_settings
+from backend.converters.oxidns import generate_oxidns_config
 
 
 def prepared(**values):
@@ -120,7 +121,9 @@ def test_disable_cache_dump_wins_over_simultaneous_parameter_edits(changes):
     settings = prepared(cache_dump_enabled=True)
     disabled = apply(settings, changes)
     assert plugin(disabled, 'lazy_cache')['args'].get('dump_file') is None
+    assert 'dump_interval' not in plugin(disabled, 'lazy_cache')['args']
     assert read_common_settings(disabled, {})['values']['cache_dump_enabled'] is False
+    assert read_common_settings(disabled, {})['values']['cache_dump_interval'] == 900
     assert_valid(disabled)
     restored = apply(disabled, {'cache_dump_enabled': True})
     args = plugin(restored, 'lazy_cache')['args']
@@ -133,6 +136,7 @@ def test_cache_dump_file_edit_while_disabled_does_not_enable_writes():
     settings = apply(prepared(cache_dump_enabled=True), {'cache_dump_enabled': False})
     changed = apply(settings, {'cache_dump_file': './state/next.dump', 'cache_dump_interval': 600})
     assert plugin(changed, 'lazy_cache')['args'].get('dump_file') is None
+    assert 'dump_interval' not in plugin(changed, 'lazy_cache')['args']
     assert_valid(changed)
     restored = apply(changed, {'cache_dump_enabled': True})
     args = plugin(restored, 'lazy_cache')['args']
@@ -141,12 +145,74 @@ def test_cache_dump_file_edit_while_disabled_does_not_enable_writes():
     assert_valid(restored)
 
 
-@pytest.mark.parametrize('empty', ['', None])
+@pytest.mark.parametrize('empty', ['', None, '  '])
 def test_clearing_cache_dump_file_does_not_leave_an_empty_runtime_path(empty):
     settings = apply(prepared(cache_dump_enabled=True), {'cache_dump_file': empty})
     assert plugin(settings, 'lazy_cache')['args'].get('dump_file') is None
+    assert 'dump_interval' not in plugin(settings, 'lazy_cache')['args']
     assert read_common_settings(settings, {})['values']['cache_dump_enabled'] is False
     assert_valid(settings)
+
+
+@pytest.mark.parametrize('interval', [913, None])
+def test_cache_dump_disable_restore_preserves_custom_or_omitted_interval(interval):
+    settings = prepared(cache_dump_enabled=True, cache_dump_file='./state/custom.dump')
+    settings = apply(settings, {'cache_dump_interval': interval})
+    before = plugin(settings, 'lazy_cache')
+    disabled = apply(settings, {'cache_dump_enabled': False})
+    disabled = apply(disabled, {'cache_dump_enabled': False})
+    assert set(plugin(disabled, 'lazy_cache')['args']).isdisjoint({'dump_file', 'dump_interval'})
+    projection = read_common_settings(disabled, {})['values']
+    assert projection['cache_dump_file'] == './state/custom.dump'
+    assert projection['cache_dump_interval'] == interval
+    rendered = yaml.safe_load(generate_oxidns_config({'oxidns': disabled}))
+    runtime_cache = next(item for item in rendered['plugins'] if item['tag'] == 'lazy_cache')
+    assert set(runtime_cache['args']).isdisjoint({'dump_file', 'dump_interval'})
+    assert '_common_disabled' not in rendered
+    assert_valid(disabled)
+    restored = apply(disabled, {'cache_dump_enabled': True})
+    assert plugin(restored, 'lazy_cache') == before
+    assert_valid(restored)
+
+
+def test_cache_dump_edit_while_main_cache_is_disabled_does_not_restore_plugin():
+    settings = prepared(cache_dump_enabled=True)
+    disabled = apply(settings, {'cache_enabled': False, 'cache_dump_enabled': False})
+    edited_off = apply(disabled, {'cache_dump_interval': 711, 'cache_dump_file': './state/edited.dump'})
+    assert not any(item['tag'] == 'lazy_cache' for item in document(edited_off)['plugins'])
+    assert_valid(edited_off)
+    cache_on = apply(edited_off, {'cache_enabled': True})
+    assert set(plugin(cache_on, 'lazy_cache')['args']).isdisjoint({'dump_file', 'dump_interval'})
+    restored = apply(cache_on, {'cache_dump_enabled': True})
+    assert plugin(restored, 'lazy_cache')['args']['dump_interval'] == 711
+    assert plugin(restored, 'lazy_cache')['args']['dump_file'] == './state/edited.dump'
+    assert_valid(restored)
+
+
+def test_reset_interval_while_dump_disabled_uses_core_default_after_reenable():
+    settings = apply(prepared(cache_dump_enabled=True), {'cache_dump_enabled': False})
+    settings = apply(settings, {'cache_dump_interval': None})
+    restored = apply(settings, {'cache_dump_enabled': True})
+    assert plugin(restored, 'lazy_cache')['args']['dump_file']
+    assert 'dump_interval' not in plugin(restored, 'lazy_cache')['args']
+    assert_valid(restored)
+
+
+def test_unrelated_edit_preserves_explicit_native_inactive_dump_interval():
+    settings = edited(prepared(), lambda value: next(
+        item for item in value['plugins'] if item['tag'] == 'lazy_cache')['args'].update(dump_interval=917))
+    changed = apply(settings, {'cache_size': 2000})
+    assert plugin(changed, 'lazy_cache')['args']['dump_interval'] == 917
+
+
+@pytest.mark.parametrize('args', [123, 'unfinished', ['unfinished']])
+def test_parked_dump_options_do_not_break_projection_of_unfinished_native_args(args):
+    settings = apply(prepared(cache_dump_enabled=True), {'cache_dump_enabled': False})
+    settings = edited(settings, lambda value: next(
+        item for item in value['plugins'] if item['tag'] == 'lazy_cache').update(args=args))
+    state = read_common_settings(settings, {})
+    assert state['capabilities']['cache_dump_enabled']['editable'] is False
+    assert state['values']['cache_dump_enabled'] is False
 
 
 @pytest.mark.parametrize('empty', ['', None])

@@ -627,6 +627,11 @@ def _read(document, settings, config):
     cache = ctx.stored_args('lazy_cache')
     values['cache_dump_enabled'] = bool(isinstance(cache, dict) and cache.get('dump_file'))
     capabilities['cache_dump_enabled'] = ctx.allowed('lazy_cache')
+    if not values['cache_dump_enabled'] and isinstance(cache, dict):
+        # Disabled options remain editable drafts without leaking into runtime YAML.
+        for field in ('cache_dump_file', 'cache_dump_interval'):
+            if field in ctx.parked and field.removeprefix('cache_') not in cache:
+                values[field] = deepcopy(ctx.parked[field])
     remote = ctx.sequence('remote_dns')
     ttl_items = [(index, item) for index, item in enumerate(remote or []) if isinstance(item, dict) and str(item.get('exec', '')).startswith('ttl ')]
     values['remote_ttl'] = 0
@@ -675,10 +680,11 @@ def _read(document, settings, config):
     capabilities['adguard.mode'] = ctx.allowed('adguard_block')
     values['adguard']['enabled'], capabilities['adguard.enabled'] = _adguard_state(ctx)
     hosts = ctx.args('custom_hosts')
-    paths = hosts.get('files', []) if isinstance(hosts, dict) and isinstance(hosts.get('files', []), list) else []
+    files = hosts.get('files', []) if isinstance(hosts, dict) else None
+    paths = files if isinstance(files, list) else []
     values['custom_hosts'] = settings.get('custom_hosts', '') if './rules/custom_hosts.txt' in paths or 'rules/custom_hosts.txt' in paths else ''
     _, capabilities['custom_hosts'] = ctx.call_state('custom_hosts', ('sequence_main',))
-    if ctx.sequence('sequence_main') is None or (paths and paths not in (['./rules/custom_hosts.txt'], ['rules/custom_hosts.txt'])):
+    if ctx.sequence('sequence_main') is None or not isinstance(files, list) or (paths and paths not in (['./rules/custom_hosts.txt'], ['rules/custom_hosts.txt'])):
         capabilities['custom_hosts'] = _cap(False, 'Hosts 使用自定义文件或处理链，请在完整参数中编辑', 'custom_hosts')
     try:
         from backend.common.oxidns_common_routing import read_routing
@@ -793,16 +799,22 @@ def _patch_cache_dump(ctx, changes):
     enabled = changes.get('cache_dump_enabled', bool(args.get('dump_file')))
     if args.get('dump_file'):
         ctx.park('cache_dump_file', args['dump_file'])
-    if 'cache_dump_file' in changes:
-        ctx.park('cache_dump_file', changes['cache_dump_file'])
+    if args.get('dump_file') or 'dump_interval' in args:
+        # None also preserves an explicitly omitted interval (the core default).
+        ctx.park('cache_dump_interval', args.get('dump_interval'))
+    for field in ('cache_dump_file', 'cache_dump_interval'):
+        if field in changes:
+            ctx.park(field, changes[field])
     if enabled:
         path = changes.get('cache_dump_file', args.get('dump_file') or ctx.parked.get('cache_dump_file') or _DEFAULTS['cache_dump_file'])
-        _put(args, ('dump_file',), path or None)
-        args.setdefault('dump_interval', _DEFAULTS['cache_dump_interval'])
-    else:
+        enabled = bool(isinstance(path, str) and path.strip())
+        if enabled:
+            args['dump_file'] = path
+            interval = ctx.parked.get('cache_dump_interval', _DEFAULTS['cache_dump_interval'])
+            _put(args, ('dump_interval',), interval)
+    if not enabled:
         args.pop('dump_file', None)
-    if 'cache_dump_interval' in changes:
-        _put(args, ('dump_interval',), changes['cache_dump_interval'])
+        args.pop('dump_interval', None)
 
 
 def _patch_tls(ctx, changes):
@@ -961,14 +973,21 @@ def _patch_resources(ctx, changes, config, base_url):
                 index = next((i for i, item in enumerate(main) if item.get('exec') not in ('metrics_collector metrics', '$query_recorder', 'prefer_ipv4') and not str(item.get('matches', [''])[0] if item.get('matches') else '').startswith('qtype ')), 0)
                 main[index:index] = [{'exec': '$custom_hosts'}, {'matches': ['has_resp'], 'exec': 'accept'}]
         else:
-            main = ctx.sequence('sequence_main')
-            index = next((i for i, item in enumerate(main) if item == {'exec': '$custom_hosts'}), None)
-            if index is not None:
-                main.pop(index)
-                if index < len(main) and main[index] == {'matches': ['has_resp'], 'exec': 'accept'}:
-                    main.pop(index)
             if ctx.plugin('custom_hosts'):
-                ctx.args('custom_hosts')['files'] = []
+                args = ctx.args('custom_hosts')
+                args['files'] = []
+                # The common field owns the managed file, not native inline rules.
+                if args.get('entries') in (None, []):
+                    if args.get('entries') is None:
+                        args.pop('entries', None)
+                    main = ctx.sequence('sequence_main')
+                    index = next((i for i, item in enumerate(main) if item == {'exec': '$custom_hosts'}), None)
+                    if index is not None:
+                        main.pop(index)
+                        if index < len(main) and main[index] == {'matches': ['has_resp'], 'exec': 'accept'}:
+                            main.pop(index)
+                    if not reference_locations(ctx.doc, ['custom_hosts']):
+                        ctx.park_plugin('custom_hosts')
         referenced = ctx.resource_paths()
         ctx.settings['custom_hosts'] = previous_content if not content.strip() and 'rules/custom_hosts.txt' in referenced else content
     if not any(field.startswith('adguard.') for field in changes):

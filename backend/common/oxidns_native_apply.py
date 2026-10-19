@@ -123,6 +123,72 @@ def _shape_reference(candidate, targets, message):
     return []
 
 
+def _stop_removed_cache_dump(current, before, candidate, config, base_url, notices):
+    """A removed dump path disables persistence, not the cache executor."""
+    previous = before.get('lazy_cache')
+    cache = _plugins(candidate).get('lazy_cache')
+    if not previous or not cache or previous.get('type') != 'cache' or cache.get('type') != 'cache':
+        return current, candidate
+    old_args, args = previous.get('args'), cache.get('args')
+    if not isinstance(old_args, dict) or not isinstance(args, dict):
+        return current, candidate
+    old_path, path = old_args.get('dump_file'), args.get('dump_file')
+    if not isinstance(old_path, str) or not old_path.strip() or not (
+            path is None or isinstance(path, str) and not path.strip()):
+        return current, candidate
+    working = deepcopy(candidate)
+    holder = _plugins(working)['lazy_cache']['args']
+    # The old path was removed from the form already. Restore it only inside the
+    # lifecycle transaction so common off can park both options before removing
+    # them. A simultaneously edited interval (including null) takes precedence.
+    holder['dump_file'] = old_path
+    if 'dump_interval' not in holder and 'dump_interval' in old_args:
+        holder['dump_interval'] = deepcopy(old_args['dump_interval'])
+    current['native_config'] = yaml.safe_dump(working, allow_unicode=True, sort_keys=False)
+    try:
+        current = apply_common_settings(current, {'cache_dump_enabled': False}, config, base_url)['settings']
+    except OxidnsSettingsError as exc:
+        raise OxidnsReferenceError(str(exc), _shape_reference(candidate, {'lazy_cache'}, str(exc))) from None
+    notices.append('已停用缓存持久化并移除保存路径和间隔；缓存处理链保持不变，参数已暂存')
+    return current, load_native_yaml(current['native_config'])
+
+
+def _stop_empty_hosts(current, before, candidate, config, base_url, notices):
+    """An explicit last-source removal withdraws only the standard Hosts chain."""
+    previous = before.get('custom_hosts')
+    hosts = _plugins(candidate).get('custom_hosts')
+    if not previous or not hosts or previous.get('type') != 'hosts' or hosts.get('type') != 'hosts':
+        return current, candidate
+    old_args, args = previous.get('args'), hosts.get('args')
+    if not isinstance(old_args, dict) or args is not None and not isinstance(args, dict):
+        return current, candidate
+    args = args or {}
+    if not any(isinstance(old_args.get(field), list) and old_args[field] for field in ('files', 'entries')):
+        return current, candidate
+    if any(args.get(field) is not None and args.get(field) != [] for field in ('files', 'entries')):
+        return current, candidate
+    if candidate.get('include'):
+        raise OxidnsReferenceError('配置包含 include，不能自动移除 Hosts 处理链', [
+            {'path': ['include'], 'tag': 'custom_hosts', 'reason': '请先确认附加文件中的共享引用'}])
+    _reject_references(candidate, {'custom_hosts'})
+    working = deepcopy(candidate)
+    holder = _plugins(working)['custom_hosts']
+    if holder.get('args') is None:
+        holder['args'] = {}
+    # Null source fields are an explicit removal here, not custom data. Keep
+    # parked options valid without restoring any source the user withdrew.
+    for field in ('files', 'entries'):
+        if holder['args'].get(field) is None:
+            holder['args'].pop(field, None)
+    current['native_config'] = yaml.safe_dump(working, allow_unicode=True, sort_keys=False)
+    try:
+        current = apply_common_settings(current, {'custom_hosts': ''}, config, base_url)['settings']
+    except OxidnsSettingsError as exc:
+        raise OxidnsReferenceError(str(exc), _shape_reference(candidate, {'custom_hosts'}, str(exc))) from None
+    notices.append('Hosts 来源已清空，已移除空插件及标准调用；已撤回的来源不会在恢复时重新加入')
+    return current, load_native_yaml(current['native_config'])
+
+
 def _merge_missing(default, explicit):
     """Standard-entry intent supplies defaults only for omitted object fields."""
     if isinstance(default, dict) and isinstance(explicit, dict):
@@ -393,7 +459,12 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         working = deepcopy(candidate)
         for tag in removed & targets:
             if tag in old:
-                working.setdefault('plugins', []).append(deepcopy(old[tag]))
+                restored = deepcopy(old[tag])
+                if tag == 'custom_hosts' and restored.get('type') == 'hosts' and isinstance(restored.get('args'), dict):
+                    # Whole-plugin deletion is explicit. Common Hosts clearing
+                    # otherwise preserves inline rules and their live call.
+                    restored['args'].update(files=[], entries=[])
+                working.setdefault('plugins', []).append(restored)
         current['native_config'] = yaml.safe_dump(working, allow_unicode=True, sort_keys=False)
         try:
             result = apply_common_settings(current, changes, config, base_url)
@@ -407,9 +478,8 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         else:
             current = result['settings']
             candidate = load_native_yaml(current['native_config'])
-        # Hosts are a resource field rather than a feature switch; common clear
-        # removes the call/file but retains an empty definition. Explicit form
-        # deletion removes that now-unused definition too.
+        # Keep explicit removal authoritative even when a common field leaves a
+        # reusable definition; the original Hosts definition is parked below.
         candidate['plugins'] = [item for item in candidate.get('plugins', []) if item.get('tag') not in removed]
         if 'custom_hosts' in removed:
             parked = current.setdefault('_common_disabled', {})
@@ -422,6 +492,9 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
 
     if additions:
         current, candidate = _activate(current, candidate, additions, standard_add, config, base_url, notices)
+
+    current, candidate = _stop_removed_cache_dump(current, old, candidate, config, base_url, notices)
+    current, candidate = _stop_empty_hosts(current, old, candidate, config, base_url, notices)
 
     # This also protects deletion of custom executors. We do not repair arbitrary
     # native chains, but point to their exact remaining references in the form.
