@@ -58,7 +58,7 @@ def test_worker_gets_stdin_json_and_no_credentials_in_command(repository, monkey
         assert payload['nodes'][0]['password'] == 'secret'
         assert payload['nodes'][0]['name'] == NODE_A
         assert kwargs['timeout'] == 10
-        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 2, 'results': [
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 3, 'results': [
             {'name': NODE_A, 'latency': 99, 'first_latency': 250}]}))
     monkeypatch.setattr(latency.subprocess, 'run', run)
     result = latency.run_tests(['A'])['results']['A']
@@ -80,9 +80,9 @@ def test_subscription_cache_keeps_protocol_options_and_distinct_sources(reposito
     assert proxy['password'] == 'cached-secret' and proxy['sni'] == 'tls.invalid'
 
 
-@pytest.mark.parametrize('output', ['not JSON', '{}', '{"version":2,"results":[]}',
-    json.dumps({'version': 2, 'results': [{'name': NODE_A, 'latency': True}]}),
-    json.dumps({'version': 2, 'results': [{'name': NODE_A, 'latency': None}]})])
+@pytest.mark.parametrize('output', ['not JSON', '{}', '{"version":3,"results":[]}',
+    json.dumps({'version': 3, 'results': [{'name': NODE_A, 'latency': True}]}),
+    json.dumps({'version': 3, 'results': [{'name': NODE_A, 'latency': None}]})])
 def test_invalid_worker_output_does_not_replace_history(repository, monkeypatch, output):
     monkeypatch.setattr(latency.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=output))
     with pytest.raises(latency.ProbeUnavailable):
@@ -102,11 +102,25 @@ def test_worker_timeout_releases_lock_and_preserves_results(repository, monkeypa
     assert latency.load_results() == {}
 
 
-def test_old_worker_is_rejected_without_replacing_current_history(repository, monkeypatch):
+def test_invalid_worker_dns_is_explained_without_leaking_settings(repository, monkeypatch):
     previous = {NODE_A: {'latency': 100, 'history': [100], 'method': latency.METHOD}}
     repository.write_shared_json(latency.LATENCY_FILE, previous)
     monkeypatch.setattr(latency.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(
-        returncode=0, stdout=json.dumps({'version': 1, 'results': [{'name': 'A', 'latency': 1}]})))
+        returncode=3, stdout='', stderr='https://user:secret@invalid-dns.example'))
+    response = make_client(repository).post('/api/nodes/latency', json={'names': ['A']})
+    assert response.status_code == 503
+    assert '节点测速 DNS 设置无效' in response.get_json()['message']
+    assert 'secret' not in response.get_data(as_text=True)
+    assert 'invalid-dns.example' not in response.get_data(as_text=True)
+    assert latency.load_results() == previous
+
+
+@pytest.mark.parametrize('old_version', [1, 2])
+def test_old_worker_is_rejected_without_replacing_current_history(repository, monkeypatch, old_version):
+    previous = {NODE_A: {'latency': 100, 'history': [100], 'method': latency.METHOD}}
+    repository.write_shared_json(latency.LATENCY_FILE, previous)
+    monkeypatch.setattr(latency.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps({'version': old_version, 'results': [{'name': 'A', 'latency': 1}]})))
     response = make_client(repository).post('/api/nodes/latency', json={'names': ['A']})
     assert response.status_code == 503
     assert '版本不匹配' in response.get_json()['message']
@@ -122,7 +136,7 @@ def test_full_batch_uses_one_probe_timeout_and_preserves_every_result(repository
         payload = json.loads(kwargs['input'])
         calls.append(payload)
         assert kwargs['timeout'] == payload['timeout_ms'] / 1000 + 5
-        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 2, 'results': [
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 3, 'results': [
             {'name': node['name'], 'latency': None, 'error_code': 'timeout', 'error': '连接或请求超时'}
             for node in payload['nodes']]}))
 
@@ -324,3 +338,62 @@ def test_invalid_url_is_rejected(monkeypatch, url):
     monkeypatch.setenv('CONFIGFLOW_NODE_TEST_URL', url)
     with pytest.raises(latency.ProbeUnavailable):
         latency.settings()
+
+
+def test_dns_settings_persist_without_changing_nodes_or_other_settings(repository):
+    system = config.get_system_config()
+    system.setdefault('system_config', {})['rule_fetch_proxy'] = 'http://127.0.0.1:7890'
+    config.save_system_config(system)
+    original_system = config.get_system_config()
+    original_shared = repository.get_shared()
+    client = make_client(repository)
+    assert client.get('/api/nodes/latency/settings').get_json()['dns_servers'] == []
+    response = client.post('/api/nodes/latency/settings', json={
+        'dns_servers': [' 192.0.2.53 ', '192.0.2.53:53', '127.0.0.1:5353']})
+    assert response.status_code == 200
+    assert response.get_json()['dns_servers'] == ['192.0.2.53', '127.0.0.1:5353']
+    expected = original_system
+    expected.setdefault('system_config', {})['node_test_dns'] = ['192.0.2.53', '127.0.0.1:5353']
+    persisted = repository.get_system()
+    assert {k: v for k, v in persisted.items() if k != '_revision'} == {
+        k: v for k, v in expected.items() if k != '_revision'}
+    assert repository.get_shared() == original_shared
+    # A new repository/client reloads the setting from disk, without process env.
+    fresh = ProfileRepository(repository.data_dir)
+    assert make_client(fresh).get('/api/nodes/latency/settings').get_json()['dns_servers'] == expected['system_config']['node_test_dns']
+
+
+@pytest.mark.parametrize('value', [None, '192.0.2.53', [None], [''], ['dns.example'],
+    ['https://user:secret@dns.example/query'], ['192.0.2.53:0'], ['192.0.2.53:65536'],
+    ['192.0.2.53:abc'], ['::1'], ['0.0.0.0'], ['224.0.0.1'], ['192.0.2.53'] * 5])
+def test_invalid_dns_settings_preserve_saved_value(repository, value):
+    client = make_client(repository)
+    assert client.post('/api/nodes/latency/settings', json={'dns_servers': ['127.0.0.1:5353']}).status_code == 200
+    response = client.post('/api/nodes/latency/settings', json={'dns_servers': value})
+    assert response.status_code == 400
+    assert 'secret' not in response.get_data(as_text=True)
+    assert client.get('/api/nodes/latency/settings').get_json()['dns_servers'] == ['127.0.0.1:5353']
+
+
+def test_saved_dns_reaches_worker_and_changing_it_starts_new_history(repository, monkeypatch):
+    client = make_client(repository)
+    payloads = []
+    def probe(command, **kwargs):
+        payloads.append(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 3, 'results': [
+            {'name': NODE_A, 'latency': 10}]}))
+    monkeypatch.setattr(latency.subprocess, 'run', probe)
+    assert client.post('/api/nodes/latency', json={'names': ['A']}).status_code == 200
+    assert payloads[-1]['dns_servers'] == []
+    assert client.post('/api/nodes/latency/settings', json={'dns_servers': ['192.0.2.53']}).status_code == 200
+    result = client.post('/api/nodes/latency', json={'names': ['A']}).get_json()['results']['A']
+    assert payloads[-1]['dns_servers'] == ['192.0.2.53']
+    assert payloads[-1]['nodes'][0]['server'] == 'example.invalid'
+    assert result['dns_servers'] == ['192.0.2.53']
+    assert result['history'] == [10]
+    result = client.post('/api/nodes/latency', json={'names': ['A']}).get_json()['results']['A']
+    assert result['history'] == [10, 10]
+    assert client.post('/api/nodes/latency/settings', json={'dns_servers': []}).status_code == 200
+    result = client.post('/api/nodes/latency', json={'names': ['A']}).get_json()['results']['A']
+    assert payloads[-1]['dns_servers'] == []
+    assert result['history'] == [10]

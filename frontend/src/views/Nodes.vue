@@ -21,6 +21,7 @@
           <Plus class="size-4" />
           添加节点
         </Button>
+        <NodeLatencySettings :disabled="testing || reorder.active.value" @saved="loadLatency" />
         <Button class="shadow-glow" title="从 ConfigFlow 所在机器，经节点访问测试地址" :disabled="testing || reorder.active.value" @click="speedTest">
           <Zap :class="cn('size-4', testing && 'animate-pulse')" />
           {{ testing ? `正在测速… ${completedTests}/${totalTests}` : '全部测速' }}
@@ -548,6 +549,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import Toolbar from '@/components/common/Toolbar.vue'
 import ViewToggle from '@/components/common/ViewToggle.vue'
+import NodeLatencySettings from '@/components/nodes/NodeLatencySettings.vue'
 import ReorderBar from '@/components/shell/ReorderBar.vue'
 import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'

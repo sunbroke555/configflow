@@ -5,6 +5,18 @@ vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('node latency API identity', () => {
+  it('reads node latency settings from their dedicated endpoint', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { success: true, dns_servers: [] } })
+    await nodeApi.latencySettings()
+    expect(get).toHaveBeenCalledWith('/nodes/latency/settings')
+  })
+
+  it('saves only the DNS list without changing node or device settings', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { success: true, dns_servers: [] } })
+    await nodeApi.saveLatencySettings(['192.0.2.1:5353'])
+    expect(post).toHaveBeenCalledExactlyOnceWith('/nodes/latency/settings', { dns_servers: ['192.0.2.1:5353'] })
+  })
+
   it('posts opaque source keys without reducing them to display names', async () => {
     const result = { data: { results: {} } }
     const post = vi.spyOn(api, 'post').mockResolvedValue(result)
