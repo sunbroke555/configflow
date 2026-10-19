@@ -94,7 +94,7 @@
             · 心跳 {{ formatTime(agent.last_heartbeat) }}
           </p>
 
-          <!-- 资源占用与实时网络速率，共用对齐的标签、横条和数值列 -->
+          <!-- 资源占用使用百分比；网络速率单独展示趋势。 -->
           <div class="mt-4 mb-3 grid grid-cols-[44px_minmax(0,1fr)_max-content] gap-2.5 max-sm:mt-3 max-sm:gap-2">
             <div
               v-for="metric in metricsOf(agent)"
@@ -112,6 +112,7 @@
               <b class="whitespace-nowrap text-right font-mono font-medium text-foreground/80">{{ agent.system_metrics ? metric.text : '—' }}</b>
             </div>
           </div>
+          <AgentTraffic :agent="agent" :now="trafficNow" />
           <div class="mb-3.5 flex items-center justify-end gap-2">
             <Button
               variant="outline"
@@ -804,6 +805,7 @@ import { getAgentConfigSync } from '@/lib/agentConfigSync'
 import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
 import { supportsAgentSettings, type AgentSettingsContext } from '@/lib/agentSettings'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
+import AgentTraffic from '@/components/agents/AgentTraffic.vue'
 import GatewayInstallWizard from '@/components/agents/GatewayInstallWizard.vue'
 import { Motion } from 'motion-v'
 import {
@@ -1557,11 +1559,14 @@ const trafficChartOption = computed(() => {
 
 // 加载 Agent 列表
 let agentsLoadGeneration = 0
+const trafficNow = ref(Date.now())
 const loadAgents = async () => {
+  trafficNow.value = Date.now()
   const generation = ++agentsLoadGeneration
   try {
     const { data } = await agentApi.getAll()
     if (generation !== agentsLoadGeneration) return
+    trafficNow.value = Date.now()
     agents.value = data
     for (const agent of agents.value) {
       if (agent.latest_upgrade) trackUpgrade(agent.id, agent.latest_upgrade)
@@ -1796,16 +1801,9 @@ const commandBlocks = computed(() => {
   ]
 })
 
-/** 卡片内的资源占用与网络速率条 */
+/** 卡片内的资源占用条 */
 const metricsOf = (agent: any) => {
   const m = agent.system_metrics || {}
-  const network = m.network || {}
-  const speed = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
-  const upload = speed(network.speed_sent)
-  const download = speed(network.speed_recv)
-  // Agent 未上报链路带宽；上下行共用自动扩展的参考刻度，不表示带宽利用率。
-  const networkScale = 2 ** Math.ceil(Math.log2(Math.max(1024 * 1024, upload ?? 0, download ?? 0)))
-  const networkDetail = `速率条参考刻度：${formatSpeed(networkScale)}，非带宽利用率`
   return [
     {
       label: 'CPU',
@@ -1827,20 +1825,6 @@ const metricsOf = (agent: any) => {
       text: formatPercent(m.disk?.used_percent),
       color: getProgressColor(m.disk?.used_percent),
       detail: `${formatBytes(m.disk?.used)} / ${formatBytes(m.disk?.total)}`
-    },
-    {
-      label: '上传',
-      percent: ((upload ?? 0) / networkScale) * 100,
-      text: upload === undefined ? '—' : formatSpeed(upload),
-      color: 'var(--primary-accent)',
-      detail: networkDetail
-    },
-    {
-      label: '下载',
-      percent: ((download ?? 0) / networkScale) * 100,
-      text: download === undefined ? '—' : formatSpeed(download),
-      color: 'var(--success-accent)',
-      detail: networkDetail
     }
   ]
 }

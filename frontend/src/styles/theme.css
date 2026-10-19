@@ -156,6 +156,10 @@
 
 /* ---------- 几何与字体：4px 网格，圆角单一来源 ---------- */
 :root {
+  /* 网络方向是分类色，不随流量高低切换为告警色。 */
+  --chart-upload: var(--info-accent);
+  --chart-download: color-mix(in srgb, var(--info-accent) 50%, var(--success-accent));
+
   --radius: 0.625rem;
   --radius-xs: calc(var(--radius) * 0.5);
   --radius-sm: calc(var(--radius) * 0.75);
