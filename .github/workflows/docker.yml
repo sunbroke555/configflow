@@ -18,6 +18,11 @@ on:
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 
+# 同一分支 / tag 只保留最新一次构建，新推送会取消还在排队或运行中的旧构建
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY_DOCKERHUB: docker.io
   IMAGE_NAME: ${{ vars.DOCKERHUB_NAMESPACE || 'thsrite' }}/config-flow
