@@ -173,10 +173,11 @@ def test_invalid_upstream_yaml_is_not_silently_dropped(upstream):
         document({'local_dns': upstream})
 
 
-def test_empty_fallback_inherits_configured_local_upstreams():
+def test_empty_fallback_disables_backup_without_inheriting_local_upstreams():
     local = '- addr: udp://192.0.2.10:5353\n- addr: tls://dns.test\n  dial_addr: 192.0.2.11\n'
     p = plugins({'local_dns': local})
-    assert p['forward_fallback']['args']['upstreams'] == p['forward_local']['args']['upstreams']
+    assert not {'forward_fallback', 'fallback_dns', 'fallback'} & p.keys()
+    assert p['proxy_dns_seq']['args'] == [{'exec': 'goto remote_dns'}]
     assert p['forward_local']['args']['upstreams'][1]['dial_addr'] == '192.0.2.11'
     override = plugins({'local_dns': local, 'fallback_dns': 'udp://192.0.2.12'})
     assert override['forward_fallback']['args']['upstreams'] == [{'addr': 'udp://192.0.2.12'}]

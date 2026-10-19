@@ -6,7 +6,7 @@
         <slot name="navigation"><h3 class="text-sm font-semibold max-sm:sr-only">配置编辑</h3></slot>
         <FieldHelp label="完整配置" text="常用设置、完整参数和 YAML 编辑同一份配置，共用一次保存。切换入口或分组不会改写配置，也不会丢失未完成的输入。只有主动添加或修改的参数才写入配置；未知字段和原生值类型均保留。表单修改后会重新整理 YAML 注释和排版。" />
       </div>
-      <OxidnsEditorModeToggle :model-value="mode" :disabled="disabled" :options="[{ value: 'common', label: '常用设置', disabled: Boolean(slots.common) && formDraftError }, { value: 'full', label: '完整参数' }, { value: 'yaml', label: 'YAML', disabled: mode !== 'yaml' && formDraftError }]" label="配置编辑方式" @update:model-value="switchMode" />
+      <OxidnsEditorModeToggle :model-value="mode" :disabled="disabled || syncing" :options="[{ value: 'common', label: '常用设置', disabled: Boolean(slots.common) && (formDraftError || syncError) }, { value: 'full', label: '完整参数' }, { value: 'yaml', label: 'YAML', disabled: mode !== 'yaml' && (formDraftError || syncError) }]" label="配置编辑方式" @update:model-value="switchMode" />
     </div>
     <Textarea v-if="mode === 'yaml'" :model-value="draft" :disabled="disabled" :rows="20" aria-label="OxiDNS 完整配置 YAML" :aria-invalid="Boolean(error)" class="min-h-0 min-w-0 flex-1 resize-none font-mono text-xs" @update:model-value="editYaml(String($event))" />
     <div v-show="mode === 'common'" class="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -76,12 +76,22 @@
         <div class="border-t border-border p-3"><OxidnsParameterPicker :fields="pluginChoices" label="移动端原生插件" button-text="添加插件" :disabled="disabled || nonListPlugins" @select="addPlugin" /></div>
       </SheetContent>
     </Sheet>
-    <div v-if="error" class="flex shrink-0 flex-wrap items-center gap-2"><p role="alert" class="min-w-0 break-words text-sm text-destructive-accent">{{ error }}</p><Button v-if="formDraftError && invalidScopeId && mode !== 'yaml'" variant="outline" size="sm" @click="selectScope(invalidScopeId)">返回未完成输入</Button></div>
+    <p v-if="syncing" role="status" class="shrink-0 text-sm text-muted-foreground">正在同步配置依赖…</p>
+    <p v-else-if="linkedChange && !error" role="status" class="shrink-0 break-words text-sm text-muted-foreground">{{ linkedChange }}</p>
+    <div v-if="error" class="flex shrink-0 flex-wrap items-center gap-2">
+      <p role="alert" class="min-w-0 break-words text-sm text-destructive-accent">{{ error }}</p>
+      <Button v-if="formDraftError && invalidScopeId && mode !== 'yaml'" variant="outline" size="sm" @click="selectScope(invalidScopeId)">返回未完成输入</Button>
+      <template v-if="syncError">
+        <Button v-for="(reference, index) in references" :key="index" variant="outline" size="sm" class="min-h-11" :disabled="disabled" @click="locateIssue(reference.path)">查看引用 {{ index + 1 }}</Button>
+        <Button variant="outline" size="sm" class="min-h-11" :disabled="disabled" @click="commit">重试同步</Button>
+        <Button variant="ghost" size="sm" class="min-h-11" :disabled="disabled" @click="discardNativeChanges">撤销未同步修改</Button>
+      </template>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, useSlots, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useSlots, watch } from 'vue'
 import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, PanelLeft, Plus, Trash2 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -93,12 +103,13 @@ import OxidnsSchemaValueEditor from './OxidnsSchemaValueEditor.vue'
 import OxidnsParameterPicker from './OxidnsParameterPicker.vue'
 import OxidnsConfigNavigation, { type OxidnsNavigationItem } from './OxidnsConfigNavigation.vue'
 import { oxidnsFeatureCategories, getOxidnsGlobalCategory, getOxidnsPluginCategory } from '@/lib/oxidnsFeatureNavigation'
-import { appendConfigEntry, configNodeToValue, defaultConfigNode, parseConfigDocument, serializeConfigDocument, valueToConfigNode, type ConfigValueNode } from '@/lib/oxidnsConfigEditor'
+import { appendConfigEntry, configNodeToValue, defaultConfigNode, parseConfigDocument, reconcileConfigNode, serializeConfigDocument, valueToConfigNode, type ConfigValueNode } from '@/lib/oxidnsConfigEditor'
 import { oxidnsGlobalSchema, oxidnsPluginCatalog, type OxidnsSchema } from '@/lib/oxidnsSchema'
+import { needsOxidnsReconciliation, type OxidnsNativeChangeResult, type OxidnsNativeReference } from '@/lib/oxidnsNativeChanges'
 
 type EditorView = 'common' | 'full' | 'yaml'
-const props = withDefaults(defineProps<{ modelValue: string; disabled?: boolean; initialView?: EditorView }>(), { disabled: false, initialView: 'common' })
-const emit = defineEmits<{ (event: 'update:modelValue', value: string): void; (event: 'error', message: string): void; (event: 'view', value: EditorView): void }>()
+const props = withDefaults(defineProps<{ modelValue: string; disabled?: boolean; initialView?: EditorView; reconcile?: (before: string, after: string, renames?: Record<string, string>) => Promise<OxidnsNativeChangeResult> }>(), { disabled: false, initialView: 'common' })
+const emit = defineEmits<{ (event: 'update:modelValue', value: string): void; (event: 'error', message: string): void; (event: 'view', value: EditorView): void; (event: 'pending', value: boolean): void }>()
 const slots = useSlots()
 const tree = ref(valueToConfigNode({}))
 const globalTree = ref(valueToConfigNode({}))
@@ -106,15 +117,30 @@ const draft = ref('')
 const mode = ref<EditorView>(props.initialView)
 const commonSection = ref<OxidnsCommonSection>('runtime')
 const error = ref('')
+const linkedChange = ref('')
+const syncing = ref(false)
+const syncError = ref(false)
+const references = ref<OxidnsNativeReference[]>([])
+let syncVersion = 0
+function setSyncing(value: boolean) { syncing.value = value; emit('pending', value) }
 const formDraftError = ref(false)
 const invalidScopeId = ref('')
 const selectedId = ref('category:runtime')
 const directoryOpen = ref(false)
 const formScroll = ref<HTMLElement>()
 let lastEmitted: string | undefined
+let acceptedTags = new Map<string, string>()
 const plugins = computed(() => tree.value.entries.find(entry => entry.key === 'plugins' && entry.value.type === 'array'))
 const nonListPlugins = computed(() => tree.value.entries.some(entry => entry.key === 'plugins' && entry.value.type !== 'array'))
 const scalarField = (node: ConfigValueNode, key: string) => node.entries.find(entry => entry.key === key)?.value.scalar ?? ''
+function rememberTags() { acceptedTags = new Map((plugins.value?.value.items ?? []).map(node => [node.id, scalarField(node, 'tag')])) }
+function renamedTags() {
+  return Object.fromEntries((plugins.value?.value.items ?? []).flatMap(node => {
+    const previous = acceptedTags.get(node.id)
+    const current = scalarField(node, 'tag')
+    return previous && current && previous !== current ? [[previous, current]] : []
+  }))
+}
 const pluginDefinition = (node: ConfigValueNode) => oxidnsPluginCatalog.find(plugin => plugin.type === scalarField(node, 'type'))
 const pluginChoices = [...oxidnsPluginCatalog.map(plugin => ({ key: plugin.type, schema: { type: 'string' as const, label: plugin.label, help: plugin.help } })), { key: '__custom__', schema: { type: 'string' as const, label: '自定义类型', help: '用于更新版本或第三方插件，添加后手动填写类型及参数。' } }]
 function pluginSchema(node: ConfigValueNode): OxidnsSchema {
@@ -272,9 +298,13 @@ function locateIssue(path: Array<string | number>) {
 }
 function syncGlobals() { globalTree.value = { ...tree.value, entries: tree.value.entries.filter(entry => entry !== plugins.value) } }
 function replaceTree(text: string) {
+  linkedChange.value = ''
+  syncError.value = false
+  references.value = []
   const identity = selectedScope.value?.identity
   const overview = selectedId.value === 'plugins' || isCategory(selectedId.value) ? selectedId.value : undefined
   tree.value = parseConfigDocument(text)
+  rememberTags()
   syncGlobals()
   selectedId.value = overview || [...directory.value.scopes.values()].find(scope => scope.identity === identity)?.id || 'category:runtime'
   formDraftError.value = false
@@ -292,16 +322,56 @@ function firstInvalidNode(node: ConfigValueNode): string {
   }
   return node.id
 }
-function commit() {
-  try { draft.value = serializeConfigDocument(tree.value); formDraftError.value = false; invalidScopeId.value = ''; publish(draft.value) }
+async function commit() {
+  const version = ++syncVersion
+  linkedChange.value = ''
+  const retry = syncError.value || syncing.value
+  syncError.value = false
+  references.value = []
+  let candidate: string
+  try {
+    candidate = serializeConfigDocument(tree.value)
+    formDraftError.value = false
+    invalidScopeId.value = ''
+  }
   catch (failure: any) {
+    setSyncing(false)
     const invalidId = firstInvalidNode(tree.value)
     invalidScopeId.value = directory.value.scopes.has(invalidId) ? invalidId : 'globals'
     formDraftError.value = true
     report(failure.message || '请修正配置内容。')
     return
   }
-  try { validate(); report() } catch (failure: any) { report(failure.message || '请修正配置内容。') }
+  if (props.reconcile && (retry || needsOxidnsReconciliation(configNodeToValue(parseConfigDocument(draft.value)), configNodeToValue(tree.value)))) {
+    setSyncing(true)
+    report()
+    try {
+      const renames = renamedTags()
+      const result = await props.reconcile(draft.value, candidate, Object.keys(renames).length ? renames : undefined)
+      if (version !== syncVersion) return
+      const value = configNodeToValue(parseConfigDocument(result.native_config))
+      reconcileConfigNode(tree.value, value)
+      syncGlobals()
+      candidate = result.native_config
+      linkedChange.value = result.notices?.join(' ') || ''
+    } catch (failure: any) {
+      if (version !== syncVersion) return
+      syncError.value = true
+      const data = failure.response?.data
+      references.value = Array.isArray(data?.references) ? data.references.filter((item: any) => Array.isArray(item.path)) : []
+      report(data?.message || failure.message || '同步配置依赖失败，请重试。')
+      return
+    } finally { if (version === syncVersion) setSyncing(false) }
+  }
+  draft.value = candidate
+  rememberTags()
+  publish(candidate)
+  report()
+}
+function discardNativeChanges() {
+  ++syncVersion
+  setSyncing(false)
+  parseDraft()
 }
 function commitGlobals() {
   const plugin = plugins.value
@@ -310,12 +380,12 @@ function commitGlobals() {
   syncGlobals()
 }
 function switchMode(next: EditorView) {
-  if (props.disabled || next === mode.value) return
-  if (next === 'common' && slots.common && formDraftError.value) return
+  if (props.disabled || syncing.value || next === mode.value) return
+  if (next === 'common' && slots.common && (formDraftError.value || syncError.value)) return
   if (next !== 'yaml' && mode.value === 'yaml') {
     // Valid YAML already updated the shared tree; avoid recreating IDs just for a view change.
     try { parseConfigDocument(draft.value) } catch { parseDraft(); return }
-  } else if (next === 'yaml' && formDraftError.value) return
+  } else if (next === 'yaml' && (formDraftError.value || syncError.value)) return
   mode.value = next
 }
 function showFull(target?: string) {
@@ -406,10 +476,13 @@ function removeSelectedScope() {
 }
 watch(() => props.modelValue, text => {
   if (text === lastEmitted) { lastEmitted = undefined; return }
+  ++syncVersion
+  setSyncing(false)
   lastEmitted = undefined
   draft.value = text ?? ''
   if (!parseDraft()) {
     try { parseConfigDocument(draft.value) } catch { mode.value = 'yaml' }
   }
 }, { immediate: true })
+onBeforeUnmount(() => { ++syncVersion })
 </script>

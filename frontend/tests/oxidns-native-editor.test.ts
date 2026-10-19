@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { JSON_SCHEMA, load } from 'js-yaml'
+import { dump, JSON_SCHEMA, load } from 'js-yaml'
 import OxidnsNativeEditor from '@/components/generate/OxidnsNativeEditor.vue'
 import OxidnsSchemaValueEditor from '@/components/generate/OxidnsSchemaValueEditor.vue'
 import OxidnsParameterPicker from '@/components/generate/OxidnsParameterPicker.vue'
@@ -37,8 +37,8 @@ vi.mock('@/lib/oxidnsSchema', () => ({
 
 const wrappers: VueWrapper[] = []
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
-function render(modelValue = 'plugins: []\n') {
-  const wrapper = mount(OxidnsNativeEditor, { props: { modelValue, initialView: 'full' } })
+function render(modelValue = 'plugins: []\n', reconcile?: (before: string, after: string, renames?: Record<string, string>) => Promise<{native_config: string; notices?: string[]}>) {
+  const wrapper = mount(OxidnsNativeEditor, { props: { modelValue, initialView: 'full', reconcile } })
   wrappers.push(wrapper)
   return wrapper
 }
@@ -85,7 +85,137 @@ function selectedId(wrapper: VueWrapper) { return wrapper.getComponent(OxidnsCon
 function model(wrapper: VueWrapper): any { return load(wrapper.emitted('update:modelValue')!.at(-1)![0] as string, { schema: JSON_SCHEMA }) }
 function error(wrapper: VueWrapper): string { return wrapper.emitted('error')!.at(-1)![0] as string }
 
+function backupDocument() {
+  return { plugins: [
+    { tag: 'forward_fallback', type: 'forward', args: { upstreams: [{ addr: '192.0.2.53' }, { addr: '192.0.2.54' }] } },
+    { tag: 'fallback_dns', type: 'sequence', args: [{ exec: '$forward_fallback' }, { matches: ['!has_resp'], exec: 'reject 3' }] },
+    { tag: 'fallback', type: 'fallback', args: { primary: 'remote_dns', secondary: 'fallback_dns', threshold: 500 } },
+    { tag: 'proxy_dns_seq', type: 'sequence', args: [{ exec: '$fallback' }, { exec: 'accept' }] },
+    { tag: 'remote_dns', type: 'sequence', args: [{ exec: '$forward_remote' }] },
+    { tag: 'forward_remote', type: 'forward', args: { upstreams: [{ addr: '192.0.2.3:1053' }] } },
+    { tag: 'forward_local', type: 'forward', args: { upstreams: [{ addr: '192.0.2.53' }] } },
+    { tag: 'china_dns', type: 'sequence', args: [{ exec: '$forward_local' }] },
+  ] }
+}
+
 describe('complete OxiDNS editor', () => {
+  it('uses the shared lifecycle result when a managed plugin is removed', async () => {
+    const original = backupDocument()
+    const repaired = backupDocument()
+    repaired.plugins = repaired.plugins.filter(p => !['forward_fallback', 'fallback_dns', 'fallback'].includes(p.tag))
+    repaired.plugins.find(p => p.tag === 'proxy_dns_seq')!.args = [{exec: 'goto remote_dns'}]
+    const reconcile = vi.fn().mockResolvedValue({native_config: dump(repaired), notices: ['已停用代理 DNS 回退']})
+    const wrapper = render(dump(original), reconcile)
+    await navigate(wrapper, 'forward_fallback')
+    await wrapper.get('[aria-label="删除原生插件 1"]').trigger('click')
+    await flushPromises()
+    expect(reconcile).toHaveBeenCalledOnce()
+    expect(load(reconcile.mock.calls[0][0])).toEqual(original)
+    const proposed: any = load(reconcile.mock.calls[0][1])
+    expect(proposed.plugins.some((p: any) => p.tag === 'forward_fallback')).toBe(false)
+    expect(proposed.plugins.find((p: any) => p.tag === 'proxy_dns_seq')).toEqual(original.plugins[3])
+    expect(model(wrapper)).toEqual(repaired)
+    expect(wrapper.get('[role="status"]').text()).toContain('停用代理 DNS 回退')
+    expect(wrapper.emitted('pending')!.map(event => event[0]).slice(-2)).toEqual([true, false])
+    expect(error(wrapper)).toBe('')
+  })
+
+  it('locates a shared reference in the candidate and lets the form repair it', async () => {
+    const original = backupDocument()
+    original.plugins.push({tag: 'custom', type: 'sequence', args: [{exec: '$forward_fallback'}]})
+    const reconcile = vi.fn().mockRejectedValueOnce({response: {data: {
+      message: '不能自动删除共享插件', references: [{path: ['plugins', 7, 'args', 0, 'exec'], tag: 'forward_fallback'}],
+    }}}).mockImplementation(async (_before, candidate) => ({native_config: candidate}))
+    const wrapper = render(dump(original), reconcile)
+    await navigate(wrapper, 'forward_fallback')
+    await wrapper.get('[aria-label="删除原生插件 1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(error(wrapper)).toContain('共享插件')
+    await click(wrapper, '查看引用 1')
+    const field = wrapper.get('[aria-label="插件 8.args[1].exec 值"]')
+    expect((field.element as HTMLInputElement).value).toBe('$forward_fallback')
+    await field.setValue('$forward_remote')
+    await flushPromises()
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(model(wrapper).plugins.at(-1).args[0].exec).toBe('$forward_remote')
+    expect(error(wrapper)).toBe('')
+  })
+
+  it('keeps failed edits local, supports retry and undo without YAML', async () => {
+    const reconcile = vi.fn().mockRejectedValue(new Error('网络不可用'))
+    const wrapper = render(dump(backupDocument()), reconcile)
+    await navigate(wrapper, 'forward_fallback')
+    await wrapper.get('[aria-label="删除原生插件 1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    await click(wrapper, '重试同步')
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    await click(wrapper, 'YAML')
+    expect(wrapper.find('textarea[aria-label="OxiDNS 完整配置 YAML"]').exists()).toBe(false)
+    await click(wrapper, '撤销未同步修改')
+    expect(error(wrapper)).toBe('')
+    expect(navigationItems(wrapper).some(item => item.label === 'forward_fallback')).toBe(true)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
+  it('ignores late dependency responses after an external configuration replaces the draft', async () => {
+    let resolve!: (result: {native_config: string}) => void
+    const reconcile = vi.fn(() => new Promise<{native_config: string}>(done => {resolve = done}))
+    const wrapper = render(dump(backupDocument()), reconcile)
+    await navigate(wrapper, 'forward_fallback')
+    await wrapper.get('[aria-label="删除原生插件 1"]').trigger('click')
+    await wrapper.setProps({modelValue: 'plugins: [{tag: different, type: sequence, args: []}]'})
+    resolve({native_config: 'plugins: []'})
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(navigationItems(wrapper).some(item => item.label === 'different')).toBe(true)
+  })
+
+  it('keeps newer typing when dependency requests finish out of order', async () => {
+    const requests: Array<{candidate: string; resolve: (result: {native_config: string}) => void}> = []
+    const reconcile = vi.fn((_before: string, candidate: string) => new Promise<{native_config: string}>(resolve => requests.push({candidate, resolve})))
+    const wrapper = render(dump(backupDocument()), reconcile)
+    await navigate(wrapper, 'forward_fallback')
+    await wrapper.get('[aria-label="插件 1.args.upstreams 删除条目 1"]').trigger('click')
+    const field = wrapper.get('[aria-label="插件 1.args.upstreams[1].addr 值"]')
+    await field.setValue('192.0.2.9')
+    expect(requests).toHaveLength(2)
+    requests[1].resolve({native_config: requests[1].candidate})
+    await flushPromises()
+    requests[0].resolve({native_config: requests[0].candidate})
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toHaveLength(1)
+    expect(model(wrapper).plugins[0].args.upstreams).toEqual([{addr: '192.0.2.9'}])
+    expect(wrapper.get('[aria-label="插件 1.args.upstreams[1].addr 值"]').element).toBe(field.element)
+  })
+
+  it('preserves explicit rename intent while another field changes before synchronization finishes', async () => {
+    const requests: Array<{candidate: string; resolve: (result: {native_config: string}) => void}> = []
+    const reconcile = vi.fn((_before: string, candidate: string, _renames?: Record<string, string>) => new Promise<{native_config: string}>(resolve => requests.push({candidate, resolve})))
+    const wrapper = render('plugins: [{tag: original, type: forward, args: {concurrent: 1}}]', reconcile)
+    await navigate(wrapper, 'original')
+    await wrapper.get('[aria-label="插件 1.tag 值"]').setValue('renamed')
+    await wrapper.get('[aria-label="插件 1.args.concurrent 值"]').setValue('4')
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(reconcile.mock.calls[1][2]).toEqual({original: 'renamed'})
+    requests[1].resolve({native_config: requests[1].candidate})
+    await flushPromises()
+    requests[0].resolve({native_config: requests[0].candidate})
+    await flushPromises()
+    expect(model(wrapper).plugins[0]).toMatchObject({tag: 'renamed', args: {concurrent: 4}})
+  })
+
+  it('does not repair or rewrite native YAML on load or YAML edits', async () => {
+    const original = backupDocument()
+    original.plugins[0].args = { upstreams: [] }
+    const wrapper = render(dump(original))
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    await click(wrapper, 'YAML')
+    await wrapper.get('[aria-label="OxiDNS 完整配置 YAML"]').setValue(dump(original) + '# manual\n')
+    expect(model(wrapper)).toEqual(original)
+  })
+
   it('does not emit defaults or rewrite comments on navigation or mode changes; preserves unknown fields when edited', async () => {
     const original = '# retained until a form edit\nfuture: {off: false, zero: 0, empty: "", nullish: null}\nplugins:\n  - tag: custom\n    type: future_type\n    args: {list: [0, false, "", null]}\n    future_flag: true\n'
     const wrapper = render(original)

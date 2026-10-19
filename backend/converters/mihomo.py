@@ -813,6 +813,8 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     discovery = logical_config.get('domain_discovery') or {}
     if region_probe:
         inject_region_probe(mihomo_config, int(discovery.get('region_probe_port') or DEFAULT_REGION_PROBE_PORT))
+    from backend.utils.mihomo_listeners import validate_listener_policies
+    validate_listener_policies(mihomo_config)
     # 转换为 YAML
     return yaml.dump(
         mihomo_config,

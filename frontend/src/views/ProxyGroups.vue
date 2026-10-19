@@ -1510,8 +1510,8 @@ const toggleGroupEnabled = async (group: ProxyGroup) => {
   const previous = !group.enabled
   savingStatus.value[group.id] = true
   try {
-    await proxyGroupApi.update(group.id, group, profileId)
-    notify.success(group.enabled ? '已启用' : '已禁用')
+    const response = await proxyGroupApi.update(group.id, group, profileId)
+    notify.success(response?.data?.message || (group.enabled ? '已启用' : '已禁用'))
   } catch (error: any) {
     notify.error(error?.response?.data?.message || '更新状态失败')
     group.enabled = previous
@@ -1763,8 +1763,8 @@ const saveGroup = async () => {
       const original = proxyGroups.value.find(group => group.id === saveData.id)
       const delete_fields = ['url-test', 'fallback', 'load-balance'].includes(saveData.type || '')
         ? healthKeys.filter(key => original?.[key] !== undefined && saveData[key] === undefined) : []
-      await proxyGroupApi.update(saveData.id!, { ...saveData, ...(delete_fields.length ? { delete_fields } : {}) }, profileId)
-      notify.success('更新成功')
+      const response = await proxyGroupApi.update(saveData.id!, { ...saveData, ...(delete_fields.length ? { delete_fields } : {}) }, profileId)
+      notify.success(response?.data?.message || '更新成功')
     } else {
       await proxyGroupApi.create(saveData, profileId)
       notify.success('添加成功')
@@ -1785,10 +1785,10 @@ const deleteGroup = async (row: ProxyGroup) => {
   }
 
   try {
-    const ok = await confirmDanger('确定从当前配置中删除该策略组吗？删除后无法恢复。若规则或其他策略组仍在使用它，请先修改这些设置。', { title: '删除策略组' })
+    const ok = await confirmDanger('确定从当前配置中删除该策略组吗？删除后无法恢复。固定使用它的 Mihomo 入口将恢复各自的规则路由；若规则或其他策略组仍在使用它，请先修改这些设置。', { title: '删除策略组' })
     if (!ok) return
-    await proxyGroupApi.delete(row.id, profileId)
-    notify.success('删除成功')
+    const response = await proxyGroupApi.delete(row.id, profileId)
+    notify.success(response?.data?.message || '删除成功')
     loadProxyGroups()
   } catch (error: any) {
     notify.error(error?.response?.data?.message || '删除失败')

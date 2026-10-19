@@ -285,3 +285,10 @@ def profile_read_oxidns_common_settings(profile_id):
 def profile_apply_oxidns_common_settings(profile_id):
     from backend.routes.oxidns import apply_oxidns_common_settings
     return apply_oxidns_common_settings()
+
+
+@profiles_bp.route('/<profile_id>/oxidns/native-settings/apply', methods=['POST'])
+@require_auth
+def profile_apply_oxidns_native_settings(profile_id):
+    from backend.routes.oxidns import apply_oxidns_native_settings
+    return apply_oxidns_native_settings()

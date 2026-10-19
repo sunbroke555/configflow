@@ -247,7 +247,8 @@ def test_filter_toggle_never_rewrites_unknown_files():
     assert not read['capabilities']['adguard.urls']['editable']
     assert read['capabilities']['adguard.enabled']['editable']
     off = apply(settings, {'adguard.enabled': False})
-    assert plugin(doc(off['settings']), 'adguard_rules') == plugin(doc(settings), 'adguard_rules')
+    assert not any(item['tag'] == 'adguard_rules' for item in doc(off['settings'])['plugins'])
+    assert off['settings']['_common_disabled']['adguard_rules'] == plugin(doc(settings), 'adguard_rules')
     on = apply(off['settings'], {'adguard.enabled': True})
     assert plugin(doc(on['settings']), 'adguard_rules') == plugin(doc(settings), 'adguard_rules')
 
@@ -332,7 +333,8 @@ def test_disabling_last_rule_update_job_removes_cron_and_restores_its_settings()
         disabled = apply(enabled, {'rule_update.enabled': False})
         assert enabled == before
         expected = deepcopy(original)
-        expected['plugins'].remove(plugin(expected, 'rules_cron'))
+        expected['plugins'] = [item for item in expected['plugins'] if item['tag'] not in
+                               ('rules_cron', 'rules_download', 'rules_reload', 'rules_refresh')]
         assert doc(disabled['settings']) == expected
         assert disabled['values']['rule_update']['enabled'] is False
         assert not [issue for issue in validate_native_config(doc(disabled['settings'])) if issue['severity'] == 'error']

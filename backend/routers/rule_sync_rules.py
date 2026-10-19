@@ -116,6 +116,7 @@ def classify(content, behavior='classical'):
 
 
 def selected_sources(config, router):
+    from backend.routers.desired import rule_source_issue
     selected = list(dict.fromkeys(static_rule_sets(router) + (router.get('ros_policy_rule_sets') or [])))
     if len(selected) > 128:
         raise RouterError('自动同步每台路由器最多支持 128 个规则集')
@@ -125,8 +126,9 @@ def selected_sources(config, router):
     for rule_id in selected:
         item = rules.get(rule_id)
         source = library.get((item or {}).get('library_rule_id'))
-        if item is None or source is None or item.get('enabled') is False or source.get('enabled') is False:
-            raise RouterError('所选规则集缺失或已停用，请重新手动预览发布')
+        issue = rule_source_issue(item, source, require_library=True)
+        if issue:
+            raise RouterError(f'{issue}，请重新手动预览发布')
         result[rule_id] = (item, source)
     if not result:
         raise RouterError('没有选择需要同步的 IP 规则集')

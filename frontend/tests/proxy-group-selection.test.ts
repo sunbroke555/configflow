@@ -303,6 +303,28 @@ describe('proxy group selection', () => {
     expect(feedback.choose).not.toHaveBeenCalled()
   })
 
+  it('explains when deleting a group restores a listener to its rule routing', async () => {
+    const message = '已保存；1 个 Mihomo 入口已解除固定策略，恢复各自的规则路由。'
+    vi.mocked(proxyGroupApi.delete).mockImplementation(async id => {
+      groups = groups.filter(item => item.id !== id)
+      return response({ success: true, message, listener_changes: ['listeners[0].proxy'] })
+    })
+    const wrapper = await render()
+    await wrapper.get('button[aria-label="删除 Alpha"]').trigger('click')
+    await flushPromises()
+    expect(feedback.notify.success).toHaveBeenCalledWith(message)
+    expect(feedback.confirmDanger.mock.calls[0][0]).toContain('固定使用它的 Mihomo 入口将恢复各自的规则路由')
+  })
+
+  it('shows the linked listener change when disabling a group', async () => {
+    const message = '已保存；1 个 Mihomo 入口已解除固定策略，恢复各自的规则路由。'
+    vi.mocked(proxyGroupApi.update).mockResolvedValue(response({ success: true, message }))
+    const wrapper = await render()
+    await wrapper.get('button[aria-label="停用 Alpha"]').trigger('click')
+    await flushPromises()
+    expect(feedback.notify.success).toHaveBeenCalledWith(message)
+  })
+
   it.each(['follow', 'no-sources'])('ignores the old preview when switching to a %s group', async kind => {
     groups[1] = group('Beta', kind === 'follow' ? { follow_group: 'alpha' } : { subscriptions: [] })
     const oldPreview = deferred<AxiosResponse>()

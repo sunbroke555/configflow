@@ -7,7 +7,7 @@
     size="wide"
     :dirty="dirty"
     :busy="saving"
-    :save-disabled="loading || editorLocked || projecting || !settings || Boolean(loadError) || Boolean(editorError)"
+    :save-disabled="loading || editorLocked || nativePending || projecting || !settings || Boolean(loadError) || Boolean(editorError)"
     save-label="保存草稿"
     @update:open="emit('update:open', $event)"
     @save="save"
@@ -29,9 +29,9 @@
             <FieldHelp label="旧草稿备份" text="旧版快捷模板和完整配置分别保存。当前已载入原来生效的配置，另一份未生效的完整配置已保留在备份中，可下载查看或复制所需参数。保存后备份仍保留。" />
           </div>
         </div>
-        <OxidnsNativeEditor ref="nativeEditor" v-show="tab === 'config'" v-model="settings.native_config" :disabled="editorLocked" @view="nativeView = $event" @error="editorErrors.native_config = $event">
+        <OxidnsNativeEditor ref="nativeEditor" v-show="tab === 'config'" :model-value="settings.native_config" :reconcile="reconcileNative" :disabled="editorLocked" @update:model-value="acceptNativeConfig" @pending="nativeSyncPending" @view="nativeView = $event" @error="editorErrors.native_config = $event">
           <template #navigation>
-            <OxidnsEditorModeToggle v-model="tab" :options="contentTabs" label="OxiDNS 设置内容" :disabled="editorLocked" />
+            <OxidnsEditorModeToggle v-model="tab" :options="contentTabs" label="OxiDNS 设置内容" :disabled="editorLocked || nativePending || Boolean(editorErrors.native_config)" />
             <template v-if="settings.legacy_native_config">
               <Button variant="ghost" size="icon" class="size-11" :disabled="saving" aria-label="旧草稿备份" @click="downloadLegacy"><Download class="size-3.5" /></Button>
               <FieldHelp label="旧草稿备份" text="旧版快捷模板和完整配置分别保存。当前已载入原来生效的配置，另一份未生效的完整配置已保留在备份中，可下载查看或复制所需参数。保存后备份仍保留。" />
@@ -47,7 +47,7 @@
           </template>
         </OxidnsNativeEditor>
         <div ref="filesPanel" v-show="tab === 'files'" class="min-h-0 flex-1 overflow-y-auto">
-          <OxidnsFilesEditor v-model="settings.additional_files" :disabled="editorLocked" @error="editorErrors.additional_files = $event" />
+          <OxidnsFilesEditor v-model="settings.additional_files" :disabled="editorLocked || nativePending" @error="editorErrors.additional_files = $event" />
         </div>
         <div v-if="applyError" class="flex shrink-0 flex-wrap items-center gap-2">
           <p role="alert" class="min-w-0 flex-1 break-words text-sm text-destructive-accent">{{ applyError }}</p>
@@ -72,7 +72,7 @@
             <p class="border-t border-border py-2 text-muted-foreground">草稿可以保存；发布必须通过规则检查和目标 OxiDNS 核心检查。</p>
             <ul class="space-y-1 border-t border-border py-2" aria-label="配置检查问题">
               <li v-for="(issue, index) in validationIssues" :key="index">
-                <button type="button" class="flex min-h-11 w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:opacity-50" :class="issue.severity === 'error' ? 'text-destructive-accent' : 'text-warning-accent'" :disabled="editorLocked || Boolean(editorError)" :aria-label="`定位${issue.severity === 'error' ? '错误' : '提示'} ${index + 1}`" @click="locateValidationIssue(issue)">
+                <button type="button" class="flex min-h-11 w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:opacity-50" :class="issue.severity === 'error' ? 'text-destructive-accent' : 'text-warning-accent'" :disabled="editorLocked || nativePending || Boolean(editorError)" :aria-label="`定位${issue.severity === 'error' ? '错误' : '提示'} ${index + 1}`" @click="locateValidationIssue(issue)">
                   <span class="break-words">{{ issue.message }}</span><code class="break-all text-[11px] text-muted-foreground">{{ issue.source ? `${issue.source} · ` : '' }}{{ formatOxidnsIssuePath(issue.path) }}</code>
                 </button>
               </li>
@@ -124,6 +124,9 @@ const commonKey = ref(0)
 const projecting = ref(false)
 const projectionError = ref('')
 const applying = ref(false)
+const nativePending = ref(false)
+let reconciledNative: Record<string, any> | undefined
+let nativeRequest = 0
 const applyError = ref('')
 const pending = ref<Record<string, unknown>>({})
 const pendingCount = computed(() => Object.keys(pending.value).length)
@@ -138,8 +141,36 @@ const validationError = ref('')
 const validationSource = computed(() => settings.value ? JSON.stringify(settings.value) : '')
 const savedSource = ref('')
 const editedInput = ref(false)
-const dirty = computed(() => Boolean(settings.value) && (validationSource.value !== savedSource.value || applying.value || Boolean(pendingCount.value) || (editedInput.value && Boolean(editorError.value))))
+const dirty = computed(() => Boolean(settings.value) && (validationSource.value !== savedSource.value || applying.value || nativePending.value || Boolean(pendingCount.value) || (editedInput.value && Boolean(editorError.value))))
 function markEdited() { if (!loading.value) editedInput.value = true }
+function nativeSyncPending(value: boolean) { nativePending.value = value; if (value) markEdited() }
+async function reconcileNative(before: string, candidate: string, renames?: Record<string, string>) {
+  const request = ++nativeRequest
+  const version = loadVersion
+  const profileId = props.profileId
+  if (!settings.value || settings.value.native_config !== before) throw new Error('配置已变化，请撤销未同步修改后重新编辑。')
+  const source = JSON.stringify(settings.value)
+  const response = await oxidnsApi.applyNativeSettings(settings.value, candidate, profileId, renames)
+  if (request !== nativeRequest || version !== loadVersion || profileId !== props.profileId || !props.open || JSON.stringify(settings.value) !== source) {
+    throw new Error('当前配置已切换，本次同步结果已忽略。')
+  }
+  // Keep the candidate local until the editor accepts this exact response.
+  reconciledNative = response.data
+  return { native_config: response.data.settings.native_config, notices: response.data.notices }
+}
+function acceptNativeConfig(text: string) {
+  if (!settings.value) return
+  if (reconciledNative?.settings.native_config === text) {
+    ++projectionVersion
+    projectionSource = text
+    commonValues.value = reconciledNative.values
+    commonCapabilities.value = reconciledNative.capabilities
+    projecting.value = false
+    projectionError.value = ''
+    settings.value = reconciledNative.settings
+  } else settings.value.native_config = text
+  reconciledNative = undefined
+}
 const validatedSource = ref('')
 const validationErrors = computed(() => validationIssues.value.filter(issue => issue.severity === 'error'))
 const validationWarnings = computed(() => validationIssues.value.filter(issue => issue.severity === 'warning'))
@@ -189,7 +220,7 @@ async function validateDraft(): Promise<boolean> {
   }
 }
 async function locateValidationIssue(issue: OxidnsValidationIssue) {
-  if (editorLocked.value || editorError.value) return
+  if (editorLocked.value || nativePending.value || editorError.value) return
   const path = issue.source?.replace(/^\.\//, '')
   if ((path && path !== 'config.yaml') || issue.path[0] === 'additional_files') {
     tab.value = 'files'
@@ -210,6 +241,9 @@ async function locateValidationIssue(issue: OxidnsValidationIssue) {
 
 function clearTimer() { if (changeTimer) clearTimeout(changeTimer); changeTimer = undefined }
 function resetCommon() {
+  ++nativeRequest
+  nativePending.value = false
+  reconciledNative = undefined
   clearTimer()
   ++projectionVersion
   ++commonKey.value
@@ -332,7 +366,7 @@ function downloadLegacy() {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 async function save(close = true): Promise<PublishGuard | null> {
-  if (!settings.value || loading.value || loadError.value || editorLocked.value || projecting.value || editorError.value) return null
+  if (!settings.value || loading.value || loadError.value || editorLocked.value || nativePending.value || projecting.value || editorError.value) return null
   saving.value = true
   const version = loadVersion
   const profileId = props.profileId

@@ -127,10 +127,12 @@ def handle_proxy_group(group_id):
     """Single-profile transaction: validate references before any write."""
     from werkzeug.exceptions import Conflict, NotFound
     from backend.utils.dialer_references import incoming_dialers, DialerReferenceError
+    from backend.utils.mihomo_listeners import relink_group_listeners, ListenerReferenceError
 
     group_data = request.get_json() if request.method == 'PUT' else None
     if request.method == 'PUT' and not isinstance(group_data, dict):
         return jsonify({'success': False, 'message': '策略组请求必须是 JSON 对象'}), 400
+    listener_changes = []
 
     def mutate(profile):
         groups = profile.setdefault('proxy_groups', [])
@@ -167,6 +169,9 @@ def handle_proxy_group(group_id):
                           (group_id in g.get('include_groups', []) or g.get('follow_group') == group_id)]
             if rules or dependents or incoming_dialers(profile, 'group', group_id):
                 raise Conflict('策略组仍被规则或其他策略组引用，请先修改引用后再删除或禁用')
+        if removing or original.get('name') != group_data.get('name'):
+            listener_changes[:] = relink_group_listeners(
+                profile, original.get('name'), None if removing else group_data.get('name'))
         if request.method == 'DELETE':
             groups.remove(original)
         else:
@@ -184,11 +189,17 @@ def handle_proxy_group(group_id):
 
     try:
         update_config_transaction(mutate)
-    except (DialerReferenceError, CandidateValidationError) as exc:
+    except (DialerReferenceError, CandidateValidationError, ListenerReferenceError) as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
     except (Conflict, NotFound) as exc:
         return jsonify({'success': False, 'message': exc.description}), exc.code
-    return jsonify({'success': True, **({'data': group_data} if group_data is not None else {})})
+    result = {'success': True, **({'data': group_data} if group_data is not None else {})}
+    if listener_changes:
+        removing = request.method == 'DELETE' or not group_data.get('enabled', True)
+        result['listener_changes'] = listener_changes
+        result['message'] = (f'已保存；{len(listener_changes)} 个 Mihomo 入口已解除固定策略，恢复各自的规则路由。'
+                             if removing else f'已保存；已同步更新 {len(listener_changes)} 个 Mihomo 入口的固定策略名称。')
+    return jsonify(result)
 
 
 @proxy_groups_bp.route('/preview-regex', methods=['POST'])

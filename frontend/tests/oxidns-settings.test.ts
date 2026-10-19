@@ -12,7 +12,7 @@ import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() },
-  oxidnsApi: { getSettings: vi.fn(), saveSettings: vi.fn(), prepareEditor: vi.fn(), readCommonSettings: vi.fn(), applyCommonSettings: vi.fn(), validateSettings: vi.fn() },
+  oxidnsApi: { getSettings: vi.fn(), saveSettings: vi.fn(), prepareEditor: vi.fn(), readCommonSettings: vi.fn(), applyCommonSettings: vi.fn(), applyNativeSettings: vi.fn(), validateSettings: vi.fn() },
   ruleApi: { getAll: vi.fn() }, ruleSetApi: { getAll: vi.fn() }
 }))
 const wrappers: ReturnType<typeof mount>[] = []
@@ -47,6 +47,10 @@ beforeEach(() => {
     if ('worker_threads' in changes) document.runtime.worker_threads = changes.worker_threads
     settings.native_config = dumpYaml(document)
     return { data: { settings, ...projection(settings) } } as any
+  })
+  vi.mocked(oxidnsApi.applyNativeSettings).mockImplementation(async (value: any, native_config, _profileId?: string, _renames?: Record<string, string>) => {
+    const settings = {...JSON.parse(JSON.stringify(value)), native_config}
+    return {data: {settings, ...projection(settings), notices: []}} as any
   })
   vi.mocked(ruleApi.getAll).mockResolvedValue({ data: [{ id: 'direct', name: 'Direct rule', itemType: 'rule' }] } as any)
   vi.mocked(ruleSetApi.getAll).mockResolvedValue({ data: [] } as any)
@@ -96,6 +100,20 @@ const savedPayload = () => vi.mocked(oxidnsApi.saveSettings).mock.calls.at(-1)?.
 const views = () => document.querySelector('[aria-label="配置编辑方式"]')!
 const worker = '#oxi-worker_threads'
 const yamlInput = '[aria-label="OxiDNS 完整配置 YAML"]'
+
+async function removeNativePlugin(wrapper: ReturnType<typeof mount>, tag: string) {
+  await click('完整参数', views())
+  const navigation = wrapper.getComponent(OxidnsNativeEditor).getComponent(OxidnsConfigNavigation)
+  const flatten = (items: any[]): any[] => items.flatMap(item => [item, ...flatten(item.children || [])])
+  const item = flatten(navigation.props('items')).find(item => item.label === tag && !item.available)
+  expect(item, `native plugin ${tag}`).toBeDefined()
+  navigation.vm.$emit('select', item.id)
+  await flushPromises()
+  const remove = document.querySelector<HTMLButtonElement>('[aria-label^="删除原生插件 "]')
+  expect(remove).not.toBeNull()
+  remove!.click()
+  await flushPromises()
+}
 
 describe('unified OxiDNS profile settings', () => {
   it('saves and publishes the returned version without closing the editor or marking unsaved changes', async () => {
@@ -161,6 +179,64 @@ describe('unified OxiDNS profile settings', () => {
     await flushPromises()
     expect(wrapper.emitted('update:open')).toBeUndefined()
     expect((document.querySelector(worker) as HTMLInputElement).value).toBe('')
+  })
+
+  it.each([
+    ['cache_size', 'cache_enabled'],
+    ['probe_cache_size', 'probe_cache_enabled'],
+    ['cache_dump_interval', 'cache_dump_enabled'],
+  ])('synchronizes and saves disabling %s despite its unfinished draft', async (field, toggle) => {
+    const initial = settings()
+    const doc = loadYaml(initial.native_config) as any
+    doc.plugins = [
+      {tag: 'lazy_cache', type: 'cache', args: {size: 10240, lazy_cache_ttl: 300, dump_file: 'state/cache.dump', dump_interval: 600}},
+      {tag: 'probe_cache', type: 'cache', args: {size: 2048}},
+      {tag: 'main', type: 'sequence', args: [{exec: '$lazy_cache'}, {exec: '$probe_cache'}, {exec: 'reject 0'}]},
+    ]
+    initial.native_config = dumpYaml(doc)
+    const cacheProjection = (settings: any) => {
+      const plugins = (loadYaml(settings.native_config) as any).plugins
+      const main = plugins.find((plugin: any) => plugin.tag === 'lazy_cache')
+      const probe = plugins.find((plugin: any) => plugin.tag === 'probe_cache')
+      return {values: {...projection(settings).values, cache_enabled: Boolean(main), cache_size: main?.args.size, cache_lazy_ttl: main?.args.lazy_cache_ttl,
+        probe_cache_enabled: Boolean(probe), probe_cache_size: probe?.args.size, cache_dump_enabled: Boolean(main?.args.dump_file), cache_dump_file: main?.args.dump_file, cache_dump_interval: main?.args.dump_interval}, capabilities: {}}
+    }
+    vi.mocked(oxidnsApi.getSettings).mockResolvedValue({data: initial} as any)
+    vi.mocked(oxidnsApi.readCommonSettings).mockImplementation(async value => ({data: cacheProjection(value)}) as any)
+    vi.mocked(oxidnsApi.applyCommonSettings).mockImplementation(async (value: any, changes) => {
+      const updated = JSON.parse(JSON.stringify(value))
+      const document = loadYaml(updated.native_config) as any
+      for (const [key, tag] of [['cache_enabled', 'lazy_cache'], ['probe_cache_enabled', 'probe_cache']]) {
+        if (changes[key] === false) {
+          document.plugins = document.plugins.filter((plugin: any) => plugin.tag !== tag)
+          document.plugins.find((plugin: any) => plugin.tag === 'main').args = document.plugins.find((plugin: any) => plugin.tag === 'main').args.filter((step: any) => step.exec !== `$${tag}`)
+        }
+      }
+      if (changes.cache_dump_enabled === false) {
+        const args = document.plugins.find((plugin: any) => plugin.tag === 'lazy_cache').args
+        delete args.dump_file
+        delete args.dump_interval
+      }
+      updated.native_config = dumpYaml(document)
+      return {data: {settings: updated, ...cacheProjection(updated)}} as any
+    })
+    const wrapper = await render()
+    await click('缓存')
+    await input(`#oxi-${field}`, '')
+    expect(button('保存草稿').disabled).toBe(true)
+    expect(oxidnsApi.applyCommonSettings).not.toHaveBeenCalled()
+
+    ;(document.getElementById(`oxi-${toggle}`) as HTMLButtonElement).click(); await flushPromises()
+    await new Promise(resolve => setTimeout(resolve, 180)); await flushPromises(); await settleValidation()
+    expect(oxidnsApi.applyCommonSettings).toHaveBeenCalledExactlyOnceWith(expect.any(Object), {[toggle]: false}, 'oxi-profile')
+    expect((document.getElementById(`oxi-${field}`) as HTMLInputElement).value).toBe('')
+    expect(button('保存草稿').disabled).toBe(false)
+    await click('保存草稿')
+    expect(oxidnsApi.saveSettings).toHaveBeenCalledOnce()
+    expect(cacheProjection(savedPayload()).values[toggle as 'cache_enabled' | 'probe_cache_enabled' | 'cache_dump_enabled']).toBe(false)
+    expect((loadYaml(savedPayload().native_config) as any).unknown).toEqual(doc.unknown)
+    expect(savedPayload().native_config).not.toMatch(/(?:size|dump_interval): 0/)
+    expect(wrapper.findComponent(SettingsWorkspace).props('dirty')).toBe(false)
   })
 
   it('edits one document in all views and saves once to the chosen profile', async () => {
@@ -312,6 +388,182 @@ describe('unified OxiDNS profile settings', () => {
     expect(oxidnsApi.saveSettings).not.toHaveBeenCalled()
     await click('保存草稿')
     expect((loadYaml(savedPayload().native_config) as any).runtime.worker_threads).toBe(3)
+  })
+
+  it('saves all settings metadata returned by native deletion and dependency reconciliation', async () => {
+    const original = {...settings(), extension_settings: {keep: false}, common_editor_state: {existing: {value: 0}}}
+    const doc = loadYaml(original.native_config) as any
+    const cache = {tag: 'lazy_cache', type: 'cache', args: {size: 10240, lazy_cache_ttl: 300}}
+    doc.plugins = [cache, {tag: 'main', type: 'sequence', args: [{exec: '$lazy_cache'}, {exec: 'reject 0'}]}]
+    original.native_config = dumpYaml(doc)
+    const result = {...original, native_config: dumpYaml({...doc, plugins: [{tag: 'main', type: 'sequence', args: [{exec: 'reject 0'}]}]}),
+      common_editor_state: {...original.common_editor_state, parked_plugins: {lazy_cache: cache}}}
+    const common = {...projection(result), values: {...projection(result).values, cache_enabled: false}}
+    vi.mocked(oxidnsApi.getSettings).mockResolvedValue({data: original} as any)
+    vi.mocked(oxidnsApi.applyNativeSettings).mockResolvedValueOnce({data: {settings: result, ...common, notices: ['已停用主缓存并移除执行引用。']}} as any)
+    const wrapper = await render()
+    await removeNativePlugin(wrapper, 'lazy_cache'); await settleValidation()
+    expect(oxidnsApi.applyNativeSettings).toHaveBeenCalledOnce()
+    expect(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0].slice(0, 3)).toEqual([expect.objectContaining({native_config: original.native_config}), expect.any(String), 'oxi-profile'])
+    expect(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0][3] ?? {}).toEqual({})
+    const candidate = loadYaml(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0][1]) as any
+    expect(candidate.plugins.map((plugin: any) => plugin.tag)).toEqual(['main'])
+    expect(candidate.plugins[0].args[0]).toEqual({exec: '$lazy_cache'})
+    expect(wrapper.getComponent(OxidnsNativeEditor).props('modelValue')).toBe(result.native_config)
+    expect(document.body.textContent).toContain('已停用主缓存并移除执行引用')
+    await click('常用设置', views())
+    expect(wrapper.getComponent(OxidnsCommonSettings).props('values')).toEqual(common.values)
+    expect(oxidnsApi.readCommonSettings).toHaveBeenCalledOnce()
+    await click('保存草稿')
+    expect(savedPayload()).toEqual(result)
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+  })
+
+  it('blocks saving and publishing while native synchronization is pending and protects its dirty draft', async () => {
+    let resolveApply!: (value: any) => void
+    vi.mocked(oxidnsApi.applyNativeSettings).mockImplementationOnce(() => new Promise(resolve => { resolveApply = resolve }))
+    const wrapper = await render()
+    await removeNativePlugin(wrapper, 'main')
+    expect(oxidnsApi.applyNativeSettings).toHaveBeenCalledOnce()
+    expect(wrapper.getComponent(OxidnsNativeEditor).props('modelValue')).toBe(config)
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    expect(button('保存草稿').disabled).toBe(true)
+    expect(button('保存并发布').disabled).toBe(true)
+    wrapper.getComponent(SettingsWorkspace).vm.$emit('save')
+    await click('保存并发布')
+    expect(oxidnsApi.saveSettings).not.toHaveBeenCalled()
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+    ;(document.querySelector('[aria-label="返回生成工作台"]') as HTMLButtonElement).click(); await flushPromises()
+    expect(confirmState.open).toBe(true)
+    settleConfirm('cancel'); await flushPromises()
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+
+    const applied = {...settings(), native_config: vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0][1]}
+    resolveApply({data: {settings: applied, ...projection(applied), notices: []}})
+    await flushPromises(); await settleValidation()
+    expect(button('保存草稿').disabled).toBe(false)
+    expect(button('保存并发布').disabled).toBe(false)
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    await click('保存草稿')
+    expect((loadYaml(savedPayload().native_config) as any).plugins).toEqual([])
+  })
+
+  it('keeps the latest native metadata when concurrent responses resolve in reverse order in one tick', async () => {
+    const resolvers: Array<(value: any) => void> = []
+    vi.mocked(oxidnsApi.applyNativeSettings).mockImplementation(() => new Promise(resolve => { resolvers.push(resolve) }))
+    const wrapper = await render()
+    const native = wrapper.getComponent(OxidnsNativeEditor)
+    const reconcile = native.props('reconcile') as (before: string, candidate: string, renames?: Record<string, string>) => Promise<{native_config: string; notices?: string[]}>
+    const older = {...settings(), native_config: config.replace('worker_threads: 8', 'worker_threads: 3').replace('tag: main', 'tag: old_main'), common_editor_state: {revision: 'older'}}
+    const latest = {...settings(), native_config: config.replace('worker_threads: 8', 'worker_threads: 4').replace('tag: main', 'tag: new_main'),
+      common_editor_state: {revision: 'latest', preserved: {empty: '', off: false}}, extension_settings: {value: 0}}
+    const first = reconcile(config, older.native_config, {main: 'old_main'})
+    const second = reconcile(config, latest.native_config, {main: 'new_main'})
+    const outcomes = Promise.allSettled([first, second])
+    expect(oxidnsApi.applyNativeSettings).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[1]).toEqual([expect.objectContaining({native_config: config}), latest.native_config, 'oxi-profile', {main: 'new_main'}])
+    // Both callbacks run before the editor accepts the winning text. A shared
+    // response slot must not let the older response replace its full metadata.
+    resolvers[1]({data: {settings: latest, ...projection(latest), notices: ['最新联动']}})
+    resolvers[0]({data: {settings: older, ...projection(older), notices: ['过期联动']}})
+    const [stale, current] = await outcomes
+    expect(stale.status).toBe('rejected')
+    expect(current.status).toBe('fulfilled')
+    if (current.status !== 'fulfilled') throw new Error('Expected the latest native response')
+    native.vm.$emit('update:modelValue', current.value.native_config)
+    await flushPromises(); await settleValidation()
+    expect(wrapper.getComponent(OxidnsCommonSettings).props('values').worker_threads).toBe(4)
+    await click('保存草稿')
+    expect(savedPayload()).toEqual(latest)
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+  })
+
+  it('blocks validation navigation and attached-file edits during native synchronization', async () => {
+    const file = {path: 'plugins/cache.yaml', content: 'plugins: []', encoding: 'text'}
+    const original = {...settings(), additional_files: [file]}
+    vi.mocked(oxidnsApi.getSettings).mockResolvedValue({data: original} as any)
+    vi.mocked(oxidnsApi.validateSettings).mockResolvedValue({data: {valid: false, issues: [{path: ['plugins'], source: file.path, code: 'invalid_structure', message: '附加文件待调整', severity: 'error'}]}} as any)
+    let resolveApply!: (value: any) => void
+    vi.mocked(oxidnsApi.applyNativeSettings).mockImplementationOnce(() => new Promise(resolve => { resolveApply = resolve }))
+    const wrapper = await render()
+    const locate = () => document.querySelector<HTMLButtonElement>('[aria-label="定位错误 1"]')!
+    const pathInput = () => document.querySelector<HTMLInputElement>('[aria-label="文件 1 路径"]')!
+    expect(locate().disabled).toBe(false)
+    await removeNativePlugin(wrapper, 'main')
+    expect(locate().disabled).toBe(true)
+    expect(pathInput().disabled).toBe(true)
+    locate().click(); await flushPromises()
+    expect(button('附加文件').getAttribute('aria-pressed')).toBe('false')
+    expect(pathInput().value).toBe(file.path)
+
+    const applied = {...original, native_config: vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0][1]}
+    resolveApply({data: {settings: applied, ...projection(applied), notices: []}})
+    await flushPromises(); await settleValidation()
+    expect(locate().disabled).toBe(false)
+    expect(pathInput().disabled).toBe(false)
+    locate().click(); await flushPromises()
+    expect(button('附加文件').getAttribute('aria-pressed')).toBe('true')
+    expect(document.activeElement).toBe(pathInput())
+    await click('保存草稿')
+    expect(savedPayload().additional_files).toEqual([file])
+  })
+
+  it('retries a failed native synchronization without saving the previous document', async () => {
+    vi.mocked(oxidnsApi.applyNativeSettings).mockRejectedValueOnce({response: {data: {message: '配置依赖同步暂时失败'}}})
+    const wrapper = await render()
+    await removeNativePlugin(wrapper, 'main')
+    expect(document.body.textContent).toContain('配置依赖同步暂时失败')
+    expect(wrapper.getComponent(OxidnsNativeEditor).props('modelValue')).toBe(config)
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    expect(button('保存草稿').disabled).toBe(true)
+    expect(button('保存并发布').disabled).toBe(true)
+    expect(oxidnsApi.saveSettings).not.toHaveBeenCalled()
+    const candidate = vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0][1]
+    await click('重试同步'); await settleValidation()
+    expect(oxidnsApi.applyNativeSettings).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[1][1]).toBe(candidate)
+    expect(button('保存草稿').disabled).toBe(false)
+    expect(document.body.textContent).not.toContain('配置依赖同步暂时失败')
+    await click('保存草稿')
+    expect(savedPayload().native_config).toBe(candidate)
+  })
+
+  it('discards a failed native edit while retaining earlier synchronized changes', async () => {
+    const wrapper = await render()
+    await input(worker, '4')
+    const synchronized = wrapper.getComponent(OxidnsNativeEditor).props('modelValue')
+    vi.mocked(oxidnsApi.applyNativeSettings).mockRejectedValueOnce({response: {data: {message: '存在无法自动调整的引用'}}})
+    await removeNativePlugin(wrapper, 'main')
+    expect(button('保存草稿').disabled).toBe(true)
+    await click('撤销未同步修改')
+    expect(wrapper.getComponent(OxidnsNativeEditor).props('modelValue')).toBe(synchronized)
+    expect(document.body.textContent).not.toContain('存在无法自动调整的引用')
+    expect(button('保存草稿').disabled).toBe(false)
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    await click('保存草稿')
+    expect((loadYaml(savedPayload().native_config) as any)).toMatchObject({runtime: {worker_threads: 4}, plugins: [{tag: 'main'}]})
+    expect(oxidnsApi.applyNativeSettings).toHaveBeenCalledOnce()
+  })
+
+  it('ignores native synchronization responses from a previously selected profile', async () => {
+    let resolveApply!: (value: any) => void
+    vi.mocked(oxidnsApi.applyNativeSettings).mockImplementationOnce(() => new Promise(resolve => { resolveApply = resolve }))
+    const wrapper = await render()
+    await removeNativePlugin(wrapper, 'main')
+    const candidate = vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0][1]
+    const next = {...settings(), native_config: config.replace('worker_threads: 8', 'worker_threads: 6'), common_editor_state: {profile: 'next'}}
+    vi.mocked(oxidnsApi.getSettings).mockResolvedValue({data: next} as any)
+    await wrapper.setProps({profileId: 'next-profile'}); await flushPromises()
+    const stale = {...settings(), native_config: candidate, common_editor_state: {profile: 'old'}}
+    resolveApply({data: {settings: stale, ...projection(stale), notices: ['过期联动提示']}})
+    await flushPromises(); await settleValidation()
+    expect((document.querySelector(worker) as HTMLInputElement).value).toBe('6')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+    expect(button('保存草稿').disabled).toBe(false)
+    expect(document.body.textContent).not.toContain('过期联动提示')
+    expect(document.body.textContent).not.toContain('当前配置已切换')
+    await click('保存草稿')
+    expect(oxidnsApi.saveSettings).toHaveBeenCalledExactlyOnceWith(next, 'next-profile')
   })
 
   it('keeps TLS controls and the saved draft consistent after off/on clicks share one patch', async () => {
