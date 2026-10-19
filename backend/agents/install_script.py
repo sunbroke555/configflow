@@ -13,6 +13,12 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_DIR = os.path.join(CURRENT_DIR, "scripts")
 
 
+def _cli_output_script() -> str:
+    """Embed the shared output helper so downloaded scripts remain standalone."""
+    with open(os.path.join(SCRIPTS_DIR, "cli-output.sh"), encoding="utf-8") as source:
+        return source.read()
+
+
 def validate_agent_name(name: str) -> None:
     """验证 Agent 名称安全性"""
     if not re.match(r'^[a-zA-Z0-9_-]+$', name):
@@ -44,6 +50,7 @@ def generate_lightweight_install_script(
 
         with open(agent_script_path, "r", encoding="utf-8") as f:
             agent_content = f.read()
+        cli_output = _cli_output_script()
     except Exception as e:
         logger.error(f"Error reading template files: {e}")
         return f"#!/bin/sh\n# Error reading template files: {str(e)}"
@@ -68,12 +75,10 @@ def generate_lightweight_install_script(
     # 设置服务名称
     service_name = service_type
 
-    # 替换变量
-    # 1. 注入 agent.sh 内容
-    script = install_template.replace("{agent_shell_content}", agent_content)
-
-    # 2. 替换配置变量
+    # One pass prevents user values from expanding code/template placeholders.
     replacements = {
+        "{cli_output}": cli_output,
+        "{agent_shell_content}": agent_content,
         "{server_url}": server_url,
         "{agent_name}": agent_name,
         "{agent_host}": agent_ip, # 暂时使用 agent_ip 作为 host
@@ -85,10 +90,11 @@ def generate_lightweight_install_script(
         "{restart_command}": restart_command
     }
 
-    for key, value in replacements.items():
-        script = script.replace(key, str(value))
-
-    return script
+    return re.sub(
+        "|".join(re.escape(key) for key in replacements),
+        lambda match: str(replacements[match.group(0)]),
+        install_template,
+    )
 
 
 def generate_docker_agent_compose(
@@ -326,4 +332,14 @@ docker run -d \\
     cmd += """
   thsrite/config-flow-agent:latest
 """
-    return cmd
+    # This is a user-run installer, unlike the long-running Docker entrypoint.
+    # Capture Docker progress/container output in the same log as other installers.
+    cmd = cmd.replace("docker run -d", 'cf_run "启动 Docker Agent" docker run -d', 1)
+    header, body = cmd.split("\n", 1)
+    return (
+        header + "\n" + _cli_output_script()
+        + '\ncf_verbose_options "$@"\ncf_init "Docker Agent 安装" || exit $?\nset -e\n'
+        + body
+        + f'cf_notice "容器：{container_name}"\n'
+        + 'cf_result "Docker Agent 安装完成"\n'
+    )

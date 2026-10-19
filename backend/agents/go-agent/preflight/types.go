@@ -4,11 +4,13 @@
 package preflight
 
 import (
+	"agent/clioutput"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -61,11 +63,106 @@ func (r Report) PrintPreparation(out io.Writer) {
 	r.print(out, true)
 }
 
-func (r Report) print(out io.Writer, preparation bool) {
+// PrintWithOptions separates complete evidence from the short operator-facing
+// report. It does not run checks, mutate their outcomes, or change exit status.
+func (r Report) PrintWithOptions(out io.Writer, options clioutput.Options, preparation bool) {
+	if options.Details != nil {
+		r.print(options.Details, preparation)
+	}
+	if options.Verbose {
+		r.printDetailed(out, preparation, !options.Nested)
+		return
+	}
+	if !options.Nested {
+		if preparation {
+			fmt.Fprint(out, "\nConfigFlow · TUN 安装准备\n\n")
+		} else {
+			fmt.Fprint(out, "\nConfigFlow · 环境检查（只读）\n\n")
+		}
+	}
+	passed, warnings, failures := 0, 0, 0
+	for _, check := range r {
+		switch check.Level {
+		case "warn":
+			warnings++
+		case "error":
+			failures++
+		default:
+			passed++
+			if summary := compactPass(check); summary != "" {
+				clioutput.Row(out, options, "pass", summary)
+			}
+			continue
+		}
+		fmt.Fprintln(out)
+		clioutput.Row(out, options, check.Level, check.Name)
+		clioutput.Wrap(out, "    原因：", check.Message, options.Width)
+		if check.Fix != "" {
+			clioutput.Wrap(out, "    处理方法：", check.Fix, options.Width)
+		}
+	}
+	fmt.Fprintln(out)
+	operation, completed := "环境检查", "通过"
 	if preparation {
-		fmt.Fprintln(out, "TUN 安装准备（本机可加载驱动并设置开机加载；容器仅检查设备）")
-	} else {
-		fmt.Fprintln(out, "安装前环境检查（仅检测，不自动修改系统）")
+		operation, completed = "TUN 准备", "完成"
+	}
+	level, summary := "pass", fmt.Sprintf("%s%s · %d 项通过", operation, completed, passed)
+	if failures > 0 {
+		level = "error"
+		summary = fmt.Sprintf("%s未通过 · %d 项错误，%d 项提醒，%d 项通过", operation, failures, warnings, passed)
+	} else if warnings > 0 {
+		level = "warn"
+		summary = fmt.Sprintf("%s完成 · %d 项通过，%d 项提醒", operation, passed, warnings)
+	}
+	clioutput.Row(out, options, level, summary)
+	if !options.Nested && !preparation {
+		clioutput.Wrap(out, "  范围：", "当前环境与接口归属；未验证流量转发或重启后的状态。", options.Width)
+	}
+}
+
+var tunRuntimeSummary = regexp.MustCompile(`Mihomo 核心 PID ([0-9]+) 正持有内核 TUN/TAP 接口 (.+?)，`)
+
+// Keep just the facts useful at a glance. All permission checks, port evidence,
+// and qualifications remain in the private log and verbose report.
+func compactPass(check Check) string {
+	switch check.Name {
+	case "TUN 实际启动":
+		if match := tunRuntimeSummary.FindStringSubmatch(check.Message); len(match) == 3 {
+			return "TUN  " + match[2] + " · Mihomo PID " + match[1] + " 已持有"
+		}
+		return "TUN  " + firstClause(check.Message)
+	case "IPv4 转发":
+		return "IPv4 转发  已开启"
+	case "IPv4 转发持久化":
+		return "IPv4 转发  已找到持久化开启设置"
+	case "Mihomo 服务权限":
+		if strings.Contains(check.Message, "当前配置未启用 TUN") {
+			return "TUN  当前配置未启用"
+		}
+	case "TUN 自动准备":
+		return "TUN  " + firstClause(check.Message)
+	}
+	return ""
+}
+
+func firstClause(value string) string {
+	if i := strings.IndexAny(value, "；。"); i >= 0 {
+		return value[:i]
+	}
+	return value
+}
+
+func (r Report) print(out io.Writer, preparation bool) {
+	r.printDetailed(out, preparation, true)
+}
+
+func (r Report) printDetailed(out io.Writer, preparation, heading bool) {
+	if heading {
+		if preparation {
+			fmt.Fprintln(out, "TUN 安装准备（本机可加载驱动并设置开机加载；容器仅检查设备）")
+		} else {
+			fmt.Fprintln(out, "环境检查（只读，不自动修改系统）")
+		}
 	}
 	warnings, failures := 0, 0
 	for _, check := range r {
@@ -84,13 +181,13 @@ func (r Report) print(out io.Writer, preparation bool) {
 		}
 	}
 	if preparation && failures > 0 {
-		fmt.Fprintf(out, "TUN 准备未完成（%d 项错误，%d 项提醒）；安装已停止，请按上方结果处理后重跑。已成功加载的驱动不会卸载。\n", failures, warnings)
+		fmt.Fprintf(out, "TUN 准备未完成（%d 项错误，%d 项提醒）；请按上方结果处理后重新执行。已成功加载的驱动不会卸载。\n", failures, warnings)
 	} else if preparation {
 		fmt.Fprintf(out, "TUN 准备完成（%d 项提醒）；继续检查核心权限、网络和端口。实际核心运行与重启后的状态仍需验证。\n", warnings)
 	} else if failures > 0 {
-		fmt.Fprintf(out, "环境检查未通过（%d 项错误，%d 项提醒）；安装已停止，请处理后重跑脚本。\n", failures, warnings)
+		fmt.Fprintf(out, "环境检查未通过（%d 项错误，%d 项提醒）；请处理上述问题后重新检查。\n", failures, warnings)
 	} else {
-		fmt.Fprintf(out, "未发现阻止安装的环境问题（%d 项提醒）。检测结果仅代表当前状态；服务启动及重启后的实际效果仍需验证。\n", warnings)
+		fmt.Fprintf(out, "环境检查完成（%d 项提醒）。检测结果仅代表当前状态；流量转发与重启后的实际效果仍需验证。\n", warnings)
 	}
 }
 

@@ -32,6 +32,7 @@ const forwardingFix = "仅当此 Linux/LXC 承担旁路网关或路由转发时�
 type systemProbe struct {
 	goos     string
 	readFile func(string) ([]byte, error)
+	readDir  func(string) ([]os.DirEntry, error)
 	stat     func(string) (os.FileInfo, error)
 	glob     func(string) ([]string, error)
 	tun      func(string) (uint32, error)
@@ -40,7 +41,7 @@ type systemProbe struct {
 
 func defaultSystemProbe() systemProbe {
 	return systemProbe{
-		goos: runtime.GOOS, readFile: os.ReadFile, stat: os.Stat, glob: filepath.Glob, tun: systemTunFeatures,
+		goos: runtime.GOOS, readFile: os.ReadFile, readDir: os.ReadDir, stat: os.Stat, glob: filepath.Glob, tun: systemTunFeatures,
 		showUnit: func(unit string) ([]byte, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
@@ -262,17 +263,21 @@ func inspectCoreService(probe systemProbe, cfg Config, state tunState) ([]Check,
 		return []Check{{Name: name, Level: "pass", Message: "当前配置未启用 TUN；不以 TUN 服务权限作为安装前提。"}}, false
 	}
 	if cfg.ServiceManager == "openrc" {
-		return []Check{{Name: name, Level: "warn", Message: "核心由 OpenRC 管理；尚未取得并验证其实际运行 PID，无法确认核心获得的能力与设备访问权限。当前检查进程的权限不能代表核心服务。", Fix: openRCTunCapabilityFix}}, false
+		return []Check{{Name: name, Level: "warn", Message: "核心由 OpenRC 管理；尚未取得并验证其实际运行 PID，无法确认核心获得的能力与设备访问权限。当前检查进程的权限不能代表核心服务。", Fix: openRCTunCapabilityFix},
+			tunRuntimeWarning("未取得 OpenRC 管理的 Mihomo 核心 PID，无法读取其持有的 TUN 接口。", openRCTunCapabilityFix)}, false
 	}
 	if cfg.ServiceManager != "systemd" {
-		return []Check{{Name: name, Level: "warn", Message: "当前服务管理方式未提供可验证的核心 PID，无法确认核心实际获得的能力与设备访问权限；当前检查进程的权限不能代表核心服务。", Fix: tunCapabilityFix}}, false
+		return []Check{{Name: name, Level: "warn", Message: "当前服务管理方式未提供可验证的核心 PID，无法确认核心实际获得的能力与设备访问权限；当前检查进程的权限不能代表核心服务。", Fix: tunCapabilityFix},
+			tunRuntimeWarning("当前服务管理方式未提供可验证的 Mihomo 核心 PID，无法读取其持有的 TUN 接口。", tunCapabilityFix)}, false
 	}
 	if cfg.ServiceUnit == "" {
-		return []Check{{Name: name, Level: "warn", Message: "未指定 Mihomo systemd 服务单元，无法读取核心实际获得的能力与设备访问权限；当前检查进程的权限不能代表核心服务。", Fix: systemdTunCapabilityFix}}, false
+		return []Check{{Name: name, Level: "warn", Message: "未指定 Mihomo systemd 服务单元，无法读取核心实际获得的能力与设备访问权限；当前检查进程的权限不能代表核心服务。", Fix: systemdTunCapabilityFix},
+			tunRuntimeWarning("未指定 Mihomo systemd 服务单元，无法确定核心 PID 并检查其 TUN 接口。", systemdTunCapabilityFix)}, false
 	}
 	data, err := probe.showUnit(cfg.ServiceUnit)
 	if err != nil {
-		return []Check{{Name: name, Level: "warn", Message: "无法读取 Mihomo systemd 服务的权限与隔离配置，不能确认核心能够访问 TUN。", Fix: systemdTunCapabilityFix}}, false
+		return []Check{{Name: name, Level: "warn", Message: "无法读取 Mihomo systemd 服务的权限与隔离配置，不能确认核心能够访问 TUN。", Fix: systemdTunCapabilityFix},
+			tunRuntimeWarning("无法读取 Mihomo systemd 服务信息，无法确定核心 PID 并检查其 TUN 接口。", systemdTunCapabilityFix)}, false
 	}
 	properties := systemdProperties(data)
 	var checks []Check
@@ -316,7 +321,7 @@ func inspectCoreService(probe systemProbe, cfg Config, state tunState) ([]Check,
 	if properties["PrivateNetwork"] == "yes" || properties["NetworkNamespacePath"] != "" {
 		checks = append(checks, Check{Name: "Mihomo 网络隔离", Level: "warn", Message: "核心服务使用独立网络命名空间；外部检查的路由和 ip_forward 不代表服务内部状态，不能确认可承担 LAN 旁路网关。", Fix: "核对服务的 PrivateNetwork/NetworkNamespacePath 和预期网络拓扑，在对应网络命名空间内验证转发。"})
 	}
-	checks = append(checks, Check{Name: "TUN 实际启动", Level: "warn", Message: "本检查未在核心服务的权限和安全策略上下文中创建 TUN；服务启动、设备策略及路由效果仍需实际验证。"})
+	checks = append(checks, inspectCoreTUNRuntime(probe, pid))
 	return checks, coreHasCapability
 }
 

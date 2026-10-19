@@ -13,12 +13,12 @@ from backend.agents.install_output import with_install_output
 SHELLS = [path for name in ("sh", "dash", "bash") if (path := shutil.which(name))]
 
 
-def run_script(tmp_path, body, shell, **overrides):
+def run_script(tmp_path, body, shell, *, args=(), **overrides):
     script = tmp_path / "install.sh"
     script.write_text(with_install_output("#!/bin/sh\n" + body))
     env = dict(os.environ, CONFIGFLOW_INSTALL_LOG_DIR=str(tmp_path),
                TEST_EVENTS=str(tmp_path / "events"), **overrides)
-    return subprocess.run([shell, str(script)], env=env, input="1\n", text=True,
+    return subprocess.run([shell, str(script), *args], env=env, input="1\n", text=True,
                           capture_output=True, timeout=10)
 
 
@@ -45,15 +45,16 @@ cf_note direct '没有节点，当前直连'
 cf_complete '安装完成'
 ''', shell)
     assert result.returncode == 0, result.stderr
-    assert '1) 安装\n请选择: [1] 下载核心' in result.stdout
-    assert '安装完成\n  Mihomo：运行中' in result.stdout
-    assert '没有节点，当前直连' in result.stdout
+    assert '1) 安装\n请选择: \n[进行] 下载核心' in result.stdout
+    assert '  Mihomo：运行中' in result.stdout
+    assert '完成 · 有提醒：安装完成' in result.stderr
+    assert '没有节点，当前直连' in result.stderr
     assert 'raw-' not in result.stdout + result.stderr
     assert '\n  yes\n' not in result.stdout
     log = log_file(tmp_path)
     assert 'raw-download-progress' in log.read_text()
     assert 'raw-stderr-detail' in log.read_text()
-    assert '安装完成\n  Mihomo：运行中' in log.read_text()
+    assert log.read_text().index('Mihomo：运行中') < log.read_text().index('完成 · 有提醒：安装完成')
     assert stat.S_IMODE(log.stat().st_mode) == 0o600
     assert stat.S_IMODE(log.parent.stat().st_mode) == 0o700
 
@@ -74,7 +75,7 @@ cf_complete '安装完成'
     assert f'[失败] 启动服务（退出码 {code}）' in result.stderr
     assert '修复建议：检查服务配置' in result.stderr
     assert '安装完成' not in result.stdout
-    assert str(log_file(tmp_path)) in result.stderr
+    assert str(log_file(tmp_path)) in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("shell", SHELLS)
@@ -96,7 +97,7 @@ exit 19
     assert (tmp_path / "events").read_text() == "core-cleanup\nparent-cleanup\n"
     assert '核心安装完成' not in result.stdout
     assert result.stderr.count('[失败]') == 1
-    assert ('[2] 安装 Agent' in result.stdout) == (not core_fails)
+    assert ('[进行] 安装 Agent' in result.stdout) == (not core_fails)
     log_file(tmp_path)
 
 
@@ -150,9 +151,10 @@ cf_note forwarding 'IPv4 转发：当前已开启；重启后是否保持尚未�
 cf_complete '安装完成'
 ''', SHELLS[0], TEST_PREFLIGHT=str(preflight))
     assert result.returncode == 0, result.stderr
-    assert 'IPv4 转发：当前已开启' in result.stdout
+    assert 'IPv4 转发：当前已开启' in result.stderr
     assert '承担网关转发时请检查' not in result.stdout
-    assert ('TUN：预检未验证' in result.stdout) == (not verified)
+    assert 'TUN 实际启动：未验证实际接口' in result.stderr
+    assert '预检未验证核心实际创建接口' not in result.stdout + result.stderr
     assert 'raw-environment-details' not in result.stdout
     assert 'raw-environment-details' in log_file(tmp_path).read_text()
 
@@ -177,5 +179,76 @@ cf_complete '安装完成'
         assert '[失败] 运行检查' in result.stderr
         assert '安装完成' not in result.stdout
     elif helper == 'cf_deployment_check':
-        assert '存在需要处理的发布记录' in result.stdout
+        assert '发布记录需要处理：recover-needed' in result.stderr
     assert 'recover-needed' in log_file(tmp_path).read_text()
+
+
+@pytest.mark.parametrize('shell', SHELLS)
+def test_verbose_option_replays_details_once_and_final_result_is_last(tmp_path, shell):
+    result = run_script(tmp_path, '''set -eu
+cf_step '检查环境'
+printf 'unique-stdout-detail\\n'
+printf 'unique-stderr-detail\\n' >&2
+cf_step_done '检查完成'
+cf_fact service_mihomo 'Mihomo：已保留'
+cf_note existing '已有配置继续使用'
+cf_complete '安装完成'
+''', shell, args=('--verbose',))
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert output.count('unique-stdout-detail') == 1
+    assert output.count('unique-stderr-detail') == 1
+    assert '完成 · 有提醒：安装完成' in result.stderr
+    log = log_file(tmp_path).read_text()
+    assert log.index('Mihomo：已保留') < log.index('完成 · 有提醒：安装完成')
+    assert log.rstrip().endswith('完整日志：' + str(log_file(tmp_path)))
+    assert '\x1b' not in output
+
+
+@pytest.mark.parametrize('verbose', [False, True])
+def test_agent_shared_log_and_report_fd_keep_real_tun_result(tmp_path, verbose):
+    preflight = tmp_path / 'preflight'
+    preflight.write_text('''#!/bin/sh
+printf '%s\\n' '[通过] TUN 实际启动：Mihomo 核心 PID 123 正持有内核 TUN/TAP 接口 tun0，TUN probe detail: fdinfo and target net/dev verified' >> "$CONFIGFLOW_LOG_FILE"
+printf '%s\\n' '[通过] TUN tun0 · Mihomo PID 123 已持有' >&3
+''')
+    preflight.chmod(0o755)
+    result = run_script(tmp_path, '''set -eu
+cf_step '检查环境'
+cf_environment_check "$TEST_PREFLIGHT"
+cf_complete '安装完成'
+''', SHELLS[0], args=('--verbose',) if verbose else (), TEST_PREFLIGHT=str(preflight))
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert output.count('TUN tun0 · Mihomo PID 123 已持有') == 1
+    assert 'TUN：tun0 · Mihomo PID 123 已持有' in result.stdout
+    assert result.stdout.index('TUN：tun0 · Mihomo PID 123 已持有') < result.stdout.index('[通过] 安装完成')
+    assert ('TUN probe detail:' in output) == verbose
+    assert 'TUN probe detail:' in log_file(tmp_path).read_text()
+    assert '预检未验证核心实际创建接口' not in output
+
+
+@pytest.mark.parametrize('shell', SHELLS)
+def test_external_nested_installer_reuses_log_and_defers_completion(tmp_path, shell):
+    child = tmp_path / 'child.sh'
+    child.write_text(with_install_output('''#!/bin/sh
+set -eu
+cf_step '子安装阶段'
+echo child-raw-detail
+cf_fact service_mihomo 'Mihomo：运行中'
+cf_complete '子安装完成'
+'''))
+    result = run_script(tmp_path, '''set -eu
+sh "$TEST_CHILD"
+cf_step '父安装后续阶段'
+cf_complete '全部安装完成'
+''', shell, args=('--verbose',), TEST_CHILD=str(child))
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert output.count('ConfigFlow ·') == 1
+    assert output.count('完整日志：') == 1
+    assert output.count('child-raw-detail') == 1
+    assert '子安装完成' not in output
+    assert 'Mihomo：运行中' in output
+    assert '全部安装完成' in output
+    log_file(tmp_path)

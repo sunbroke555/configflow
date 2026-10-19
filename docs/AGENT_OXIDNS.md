@@ -65,6 +65,29 @@ Mihomo 和 OxiDNS 的 Agent 卡片分别提供「规则库自动同步」和「�
 
 ## 本机安装
 
+### 终端提示与完整日志
+
+
+从 `1.8.31-go` 起，安装、更新、卸载和 Agent 一次性检查统一使用分阶段提示。默认显示关键结果、提醒和错误；环境检查重点显示实际 TUN 接口及核心 PID、IPv4 转发和检查总数。通过项的完整依据保存在日志中，失败项仍直接显示原因和处理方法。TUN 检查只读取核心进程及其网络命名空间，不创建接口或重启核心。
+
+Shell 单服务、同机双 Agent、仅安装核心、核心与 Agent 联合安装、网关安装、旧版 Shell Agent 和生成的 Docker Run 脚本使用同一套输出；嵌套安装共享一份日志。每次执行结束都会显示真实的完整日志路径，默认位于 `/var/log/configflow/`，权限为 `0600`；目录不可写时会明确提示备用位置。可用 `CONFIGFLOW_LOG_DIR=/可写目录` 指定日志目录。卸载不会删除本次安装器日志。若系统连备用日志也无法创建，会明确提示并直接显示原始输出，以便继续补齐安装依赖。后台服务日志和 HTTP 响应不套用终端排版。
+
+在下载的脚本或一次性 Agent 命令后添加 `--verbose`，即可展开详细诊断；脚本在阶段边界回显已收集的详情。交互终端使用颜色区分状态，管道输出和设置 `NO_COLOR` 时使用纯文本。
+
+```sh
+sh install.sh --verbose
+
+# 独立、只读环境检查
+/opt/configflow-agent/mihomo/configflow-agent \
+  -config /opt/configflow-agent/mihomo/config.json \
+  -check-environment --verbose
+
+# 完整解压离线更新包后，在包目录运行
+sh update-agent.sh mihomo --verbose
+```
+
+离线更新器 `backend/agents/scripts/update-agent.sh` 支持原生同机 systemd 部署；发布包内包含共享输出模块、版本和校验清单。更新会备份并替换对应 Agent，取得更新及核心操作锁，只启停 Agent 服务，并反复核对核心 PID 和启动时间。发现自定义服务联动、未完成发布或核心进程变化时停止更新；Agent 启动失败会尝试恢复备份。更新成功后的环境检查是只读检查，其失败不会撤销已完成的 Agent 更新。
+
 Agent 安装页面选择 OxiDNS，默认核心配置路径 `/etc/oxidns/config.yaml`、服务名 `oxidns`、二进制 `oxidns`。使用官方便携安装布局时，请把配置路径改为实际路径，例如 `/opt/oxidns/config.yaml`。核心服务的 `-d` 工作目录必须与配置文件所在目录一致；systemd 安装和每次发布均检查此条件。官方 Debian 包采用 `/etc/oxidns` 配置、`/var/lib/oxidns` 工作目录的分离布局，需先调整核心服务与资源布局再接入，安装器会明确拒绝直接覆盖该布局。OpenRC 或自定义命令由管理员保证同目录运行。
 
 systemd 检查也会核对 `-c`/`--config` 实际文件与 Agent 的 `config_path`，避免同目录中的两个文件造成“推送成功但服务仍使用旧配置”。相对配置路径按 OxiDNS 的实际工作目录解析；省略 `-c` 时按 `config.yaml` 检查。

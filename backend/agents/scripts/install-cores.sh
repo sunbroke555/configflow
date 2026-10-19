@@ -69,6 +69,7 @@ trap 'exit 143' TERM
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --verbose|-v) shift ;;
         --core)
             [ "$#" -ge 2 ] || fail '缺少 --core 参数：请选择 both、mihomo 或 oxidns。'
             CORE_SELECTION=$2; shift 2 ;;

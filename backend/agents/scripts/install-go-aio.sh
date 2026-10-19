@@ -1,6 +1,9 @@
 #!/bin/sh
 # ConfigFlow native Mihomo + OxiDNS: manage existing cores with isolated Agents.
 set -eu
+for cf_argument do
+    case "$cf_argument" in --verbose|-v) ;; *) cf_error "未知参数：$cf_argument"; exit 2 ;; esac
+done
 
 AGENT_ROOT="/opt/configflow-agent"
 MIHOMO_CONFIG_PATH={mihomo_config_path_shell}
@@ -101,10 +104,12 @@ stop_existing_agent() {
 {installation_description}
 {tun_prepare_notice}
 {ipv4_forwarding_notice}
-cf_ui "1) {installation_action}"
-cf_ui "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
-cf_ui "3) 取消"
-cf_prompt '请输入选项 [1-3]: '
+if [ "${_CF_NESTED:-0}" -eq 0 ]; then
+    cf_ui "1) {installation_action}"
+    cf_ui "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
+    cf_ui "3) 取消"
+    cf_prompt '请输入选项 [1-3]: '
+fi
 read -r choice < /dev/tty
 case "$choice" in
     1)
@@ -113,8 +118,8 @@ case "$choice" in
         agent_ensure_dependencies{ipv4_forwarding_dependencies}
         cf_step_done "安装环境与依赖已就绪"
         ;;
-    2) ;;
-    *) exit 0 ;;
+    2) cf_step "卸载 Agent" ;;
+    *) cf_complete "已取消"; exit 0 ;;
 esac
 
 # A legacy Agent owns a shared binary and directory. Do not guess how to split
@@ -183,11 +188,11 @@ case "$choice" in
             rm -f "$AGENT_LOG" "$AGENT_LOG".* "/etc/logrotate.d/$AGENT_UNIT"
         done
         if [ "$INIT_SYSTEM" = systemd ]; then systemctl daemon-reload; else rc-update -u; fi
-        cf_ui "两个 Agent 已卸载；核心服务、配置及发布记录未改动。"
+        cf_complete "两个 Agent 已卸载；核心服务、配置及发布记录未改动。"
         {ipv4_forwarding_uninstall}
         exit 0
         ;;
-    *) exit 0 ;;
+    *) cf_complete "已取消"; exit 0 ;;
 esac
 
 {ipv4_forwarding_ownership}
@@ -230,7 +235,7 @@ else
     fail "安装阶段需要 wget 或 curl 下载二进制"
 fi
 chmod 755 "$BINARY_TMP"
-"$BINARY_TMP" -h >/dev/null 2>&1
+"$BINARY_TMP" -h >/dev/null
 cat > "$STAGE_DIR/mihomo-config.json" <<'CONFIGFLOW_MIHOMO_JSON_EOF'
 {mihomo_config_json}
 CONFIGFLOW_MIHOMO_JSON_EOF

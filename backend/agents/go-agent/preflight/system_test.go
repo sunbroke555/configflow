@@ -22,6 +22,13 @@ type systemFixture struct {
 
 type fixtureDevice struct{ mode os.FileMode }
 
+type systemDirectoryEntry struct{ name string }
+
+func (e systemDirectoryEntry) Name() string               { return e.name }
+func (e systemDirectoryEntry) IsDir() bool                { return false }
+func (e systemDirectoryEntry) Type() os.FileMode          { return 0 }
+func (e systemDirectoryEntry) Info() (os.FileInfo, error) { return nil, os.ErrNotExist }
+
 func (f fixtureDevice) Name() string       { return "tun" }
 func (f fixtureDevice) Size() int64        { return 0 }
 func (f fixtureDevice) Mode() os.FileMode  { return f.mode }
@@ -34,6 +41,9 @@ func healthySystemFixture() *systemFixture {
 		files: map[string][]byte{
 			"/proc/self/status":                []byte("Uid:\t0\t0\t0\t0\nCapEff:\t0000000000001000\n"),
 			"/proc/42/status":                  []byte("CapEff:\t0000000000001000\n"),
+			"/proc/42/stat":                    []byte("42 (mihomo) S " + strings.Repeat("0 ", 18) + "123\n"),
+			"/proc/42/fdinfo/7":                []byte("pos:\t0\niff:\tMeta\n"),
+			"/proc/42/net/dev":                 []byte("  Meta: " + strings.Repeat("0 ", 16) + "\n"),
 			"/proc/sys/net/ipv4/ip_forward":    []byte("1\n"),
 			"/etc/sysctl.d/99-configflow.conf": []byte("net.ipv4.ip_forward=1\n"),
 		},
@@ -58,6 +68,18 @@ func (f *systemFixture) probe() systemProbe {
 				return data, nil
 			}
 			return nil, os.ErrNotExist
+		},
+		readDir: func(directory string) ([]os.DirEntry, error) {
+			if err := f.fileErr[directory]; err != nil {
+				return nil, err
+			}
+			var entries []os.DirEntry
+			for path := range f.files {
+				if filepath.Dir(path) == directory {
+					entries = append(entries, systemDirectoryEntry{name: filepath.Base(path)})
+				}
+			}
+			return entries, nil
 		},
 		stat: func(path string) (os.FileInfo, error) {
 			if mode, ok := f.devices[path]; ok {
@@ -249,10 +271,13 @@ func TestSystemCoreServiceSeparatesCapabilitiesAndSandbox(t *testing.T) {
 			t.Fatalf("known core restriction did not block enabled TUN: %+v", got)
 		}
 	}
-	for _, name := range []string{"Mihomo 设备隔离", "Mihomo 网络隔离", "TUN 实际启动"} {
+	for _, name := range []string{"Mihomo 设备隔离", "Mihomo 网络隔离"} {
 		if got := namedSystemCheck(t, checks, name); got.Level != "warn" {
 			t.Fatalf("sandbox uncertainty not reported: %+v", got)
 		}
+	}
+	if got := namedSystemCheck(t, checks, "TUN 实际启动"); got.Level != "pass" || !strings.Contains(got.Message, "Meta") {
+		t.Fatalf("verified core-owned interface was replaced with a generic sandbox warning: %+v", got)
 	}
 	if got := namedSystemCheck(t, checks, "当前进程 CAP_NET_ADMIN"); got.Level != "pass" {
 		t.Fatalf("confused installer and core permissions: %+v", got)
@@ -278,6 +303,7 @@ func TestSystemCoreMissingPIDOrDroppedCapabilityIsUncertain(t *testing.T) {
 				wantCheck = "Mihomo 服务权限"
 			case "exited":
 				delete(fixture.files, "/proc/42/status")
+				delete(fixture.files, "/proc/42/stat")
 				delete(fixture.devices, "/proc/42/root/dev/net/tun")
 			}
 			checks := systemChecksWithProbe([]Config{cfg}, fixture.probe())
@@ -375,6 +401,52 @@ func TestSystemTUNListenersRequireDeviceAndCapabilities(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSystemTUNListenerInspectsActualCoreInterfaceReadOnly(t *testing.T) {
+	for _, content := range []string{
+		"listeners: [{name: tun-in, type: tun, stack: mixed}]\n",
+		"tun: {enable: false}\nlisteners: [{name: tun-in, type: tun}]\n",
+	} {
+		for _, held := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/held=%t", strings.Split(content, "\n")[0], held), func(t *testing.T) {
+				cfg := fixtureMihomo(t, false)
+				if err := os.WriteFile(cfg.ConfigPath, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+				fixture := healthySystemFixture()
+				if !held {
+					// Keep Meta in net/dev: its mere presence must not establish
+					// that the current Mihomo core owns the interface.
+					delete(fixture.files, "/proc/42/fdinfo/7")
+				}
+				probe := fixture.probe()
+				readDirectory := probe.readDir
+				fdScans := 0
+				probe.readDir = func(path string) ([]os.DirEntry, error) {
+					if path == "/proc/42/fdinfo" {
+						fdScans++
+					}
+					return readDirectory(path)
+				}
+				checks := systemChecksWithProbe([]Config{cfg}, probe)
+				check := namedSystemCheck(t, checks, "TUN 实际启动")
+				if fdScans != 1 {
+					t.Fatalf("active TUN listener skipped actual ownership inspection: %d scans", fdScans)
+				}
+				if held {
+					if check.Level != "pass" || !strings.Contains(check.Message, "Meta") || !strings.Contains(check.Message, "42") {
+						t.Fatalf("listener's live core-owned interface not confirmed: %+v", check)
+					}
+				} else if check.Level != "warn" || !strings.Contains(check.Message, "TUN") || check.Fix == "" {
+					t.Fatalf("unowned interface incorrectly passed or lost repair advice: %+v", check)
+				}
+				if after, err := os.ReadFile(cfg.ConfigPath); err != nil || string(after) != content {
+					t.Fatalf("read-only listener check changed core configuration: %v", err)
+				}
+			})
+		}
 	}
 }
 

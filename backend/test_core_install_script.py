@@ -213,7 +213,7 @@ for executable in (Path(os.environ['FIXTURE']) / 'unavailable-commands').iterdir
 
 def run(installer, env, *args):
     result = subprocess.run(["sh", str(installer), *args], env=env, text=True, errors="replace", capture_output=True, timeout=30, start_new_session=True)
-    log_match = re.search(r"详细日志[：:]\s*([^\r\n]+)", result.stdout + result.stderr)
+    log_match = re.search(r"完整日志[：:]\s*([^\r\n]+)", result.stdout + result.stderr)
     result.log_path = Path(log_match[1].strip()) if log_match else None
     # Minimal systems without mktemp deliberately fall back to raw output until
     # dependencies are installed; all ordinary fixtures inspect the saved log.
@@ -700,8 +700,8 @@ def test_default_output_summarizes_every_core_selection_and_keeps_verbose_log(tm
     assert "下载安装" in result.stdout
     assert "验证新装核心的 DNS" in result.stdout
     assert "UDP/TCP 查询均通过" in result.stdout
-    assert "核心安装完成" in result.stdout
-    assert "详细日志：" in result.stdout
+    assert "核心安装完成" in result.stdout + result.stderr
+    assert "完整日志：" in result.stdout
     assert "HEADER" not in result.stdout
     assert "初始上游为公共 DNS" not in result.stdout
     assert "首次从面板发布前" not in result.stdout
@@ -711,15 +711,15 @@ def test_default_output_summarizes_every_core_selection_and_keeps_verbose_log(tm
     if selected in ("both", "mihomo"):
         assert "Mihomo：新装" in result.stdout
         assert "TUN：已启用" in result.stdout
-        assert "DIRECT 直连" in result.stdout
-        assert "重启后是否保持尚未确认" in result.stdout
+        assert "DIRECT 直连" in result.stdout + result.stderr
+        assert "重启后是否保持尚未确认" in result.stdout + result.stderr
     if selected in ("both", "oxidns"):
         assert "OxiDNS：新装" in result.stdout
     if selected == "oxidns":
         assert "TUN：" not in result.stdout
         assert "IPv4 转发" not in result.stdout
         assert "DIRECT 直连" not in result.stdout
-    assert "如需面板管理，请继续安装对应 Agent" in result.stdout
+    assert "如需面板管理，请继续安装对应 Agent" in result.stdout + result.stderr
 
 
 def test_existing_core_summary_does_not_claim_dns_or_tun_success(tmp_path):
@@ -741,8 +741,8 @@ def test_tun_runtime_fallback_summary_is_clear_and_preserves_detailed_repair_hel
     result = run(installer, env, "--core", "mihomo")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "TUN：已关闭" in result.stdout
-    assert "TUN 未启用" in result.stdout
-    assert "修复步骤见详细日志" in result.stdout
+    assert "TUN 未启用" in result.stdout + result.stderr
+    assert "修复步骤见详细日志" in result.stdout + result.stderr
     assert "TUN：已启用" not in result.stdout
     assert "UDP/TCP 查询通过" in result.stdout
     assert "pct set <CTID> --devN" not in result.stdout

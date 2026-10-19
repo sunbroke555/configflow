@@ -15,6 +15,7 @@ import shlex
 from urllib.parse import urlsplit
 
 from .go_install_script import generate_go_aio_install_script
+from .install_output import with_install_output
 
 _TEMPLATE = (Path(__file__).parent / 'scripts' / 'install-gateway.sh').read_text(encoding='utf-8')
 CORE_RELEASES = {
@@ -128,4 +129,4 @@ def generate_gateway_install_script(
             asset = release['linux-' + arch]
             values[f'{service}_{arch}_url_shell'] = shlex.quote(asset['url'])
             values[f'{service}_{arch}_sha_shell'] = shlex.quote(asset['sha256'])
-    return re.sub(r'\{(' + '|'.join(values) + r')\}', lambda m: values[m.group(1)], _TEMPLATE)
+    return with_install_output(re.sub(r'\{(' + '|'.join(values) + r')\}', lambda m: values[m.group(1)], _TEMPLATE))
