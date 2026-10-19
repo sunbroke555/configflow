@@ -42,9 +42,9 @@ func assertOriginalDNSDocument(t *testing.T, cfg *Config, got, original []byte) 
 	if err := yaml.Unmarshal(original, &expected); err != nil {
 		t.Fatal(err)
 	}
-	// Native AIO adds only the host exclusions needed to reach OxiDNS. Every
-	// original DNS value, omitted/null field and other TUN entry must survive.
-	if tun, ok := expected["tun"].(map[string]interface{}); ok && cfg.NativeAIO && tun["enable"] == true {
+	// Native AIO adds host exclusions only when TUN auto-redirect is enabled.
+	// Every original DNS value, omitted/null field and other TUN entry survives.
+	if tun, ok := expected["tun"].(map[string]interface{}); ok && cfg.NativeAIO && tun["enable"] == true && tun["auto-redirect"] == true {
 		tun["route-exclude-address"] = []interface{}{"127.0.0.0/8", cfg.AgentIP + "/32"}
 	}
 	if !reflect.DeepEqual(actual, expected) {
@@ -92,6 +92,7 @@ func TestAIOPublishesOriginalMihomoDNSConfiguration(t *testing.T) {
 	fixtures := []struct{ name, content string }{
 		{"53", "# Keep my listen address and port.\ndns: {enable: true, listen: '127.0.0.2:53'}\ntun: {enable: true, dns-hijack: ['any:53', 'tcp://any:53']}\n"},
 		{"custom-ports", "dns: {enable: true, listen: '127.0.0.2:5353'}\ntun: {enable: true, auto-route: false, dns-hijack: ['any:5353', 'tcp://any:7874', '192.0.2.1:5533']}\n"},
+		{"auto-redirect", "dns: {enable: true, listen: '127.0.0.2:5353'}\ntun: {enable: true, auto-route: true, auto-redirect: true, auto-detect-interface: false, dns-hijack: ['any:5353', 'tcp://any:7874']}\n"},
 		{"ipv6-listen", "dns: {enable: true, listen: '[::1]:7874'}\ntun: {enable: true, dns-hijack: ['[2001:db8::1]:5533']}\n"},
 		{"disabled", "dns: {enable: false, listen: '127.0.0.1:53'}\ntun: {enable: false, dns-hijack: ['any:53', 'tcp://any:53']}\n"},
 		{"missing", "mode: rule\n"},
