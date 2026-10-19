@@ -268,7 +268,8 @@
                 <CircleArrowUp v-else class="size-3.5" />
                 更新到 {{ dep.latest_version }}
               </Button>
-              <Badge v-else-if="dep.current_version && dep.latest_version" variant="success">已是最新</Badge>
+              <Badge v-else-if="dep.has_update" variant="warning">有新版本</Badge>
+              <Badge v-else-if="dep.current_version && dep.latest_version && !dep.check_error" variant="success">已是最新</Badge>
               <span v-if="dep.check_error" class="max-w-[22rem] text-[12px] text-destructive-accent">{{ dep.check_error }}</span>
               <span
                 v-else-if="dep.update.state === 'failed'"

@@ -138,7 +138,7 @@
           <b class="font-display text-[42px] leading-none font-medium tracking-[-0.03em] text-foreground max-md:text-[32px]">
             <AnimatedNumber :value="kpi.value" />
           </b>
-          <span class="truncate font-mono text-[11.5px] text-success-accent">{{ kpi.delta }}</span>
+          <span class="truncate font-mono text-[11.5px] text-muted-foreground">{{ kpi.delta }}</span>
         </span>
         <Sparkline :data="kpi.series" :color="kpi.color" class="mt-2 h-[38px] w-full" :title="kpi.seriesLabel" />
       </button>
@@ -166,8 +166,6 @@
               <span
                 :class="cn(
                   'grid size-[22px] place-items-center rounded-[7px] bg-secondary text-muted-foreground',
-                  event.tone === 'acc' && 'bg-primary-soft text-primary-accent',
-                  event.tone === 'ok' && 'text-success-accent',
                   event.tone === 'warn' && 'text-warning-accent',
                   event.tone === 'err' && 'text-destructive-accent'
                 )"
@@ -539,7 +537,7 @@ interface StreamEvent {
   task: string
   message: string
   tag: string
-  tone: 'acc' | 'ok' | 'warn' | 'err' | ''
+  tone: 'warn' | 'err' | ''
   icon: typeof Activity
 }
 
@@ -552,9 +550,9 @@ const classify = (logger: string, message: string, level: string): Pick<StreamEv
   const text = `${logger} ${message}`.toLowerCase()
   if (level === 'ERROR' || level === 'CRITICAL') return { task: '错误', tone: 'err', icon: TriangleAlert }
   if (level === 'WARNING') return { task: '警告', tone: 'warn', icon: TriangleAlert }
-  if (text.includes('subscription') || text.includes('订阅')) return { task: '订阅', tone: 'acc', icon: Link2 }
-  if (text.includes('generate') || text.includes('生成')) return { task: '生成', tone: 'acc', icon: Download }
-  if (text.includes('agent')) return { task: 'Agent', tone: 'ok', icon: Server }
+  if (text.includes('subscription') || text.includes('订阅')) return { task: '订阅', tone: '', icon: Link2 }
+  if (text.includes('generate') || text.includes('生成')) return { task: '生成', tone: '', icon: Download }
+  if (text.includes('agent')) return { task: 'Agent', tone: '', icon: Server }
   if (text.includes('rule') || text.includes('规则')) return { task: '规则', tone: '', icon: FileCode2 }
   return { task: '系统', tone: '', icon: Activity }
 }

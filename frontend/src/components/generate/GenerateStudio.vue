@@ -570,7 +570,7 @@ onUnmounted(() => {
   left: 12px;
   width: 2px;
   height: 0;
-  background: var(--primary);
+  background: var(--success-accent);
   transition: height 0.5s var(--ease-flow);
 }
 
@@ -590,9 +590,9 @@ onUnmounted(() => {
 }
 
 .gen-step.done .gen-bullet {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-foreground);
+  border-color: var(--success-accent);
+  background: var(--success-soft);
+  color: var(--success-accent);
 }
 
 .gen-step.fail .gen-bullet {

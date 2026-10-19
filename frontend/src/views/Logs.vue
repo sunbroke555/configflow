@@ -422,7 +422,7 @@ onUnmounted(() => {
 }
 
 .lv-INFO {
-  color: #97ad73;
+  color: inherit;
 }
 
 .lv-WARNING {

@@ -20,7 +20,8 @@ const props = defineProps<ToasterProps>()
     v-bind="props"
   >
     <template #success-icon>
-      <CircleCheckIcon class="size-4 text-primary" />
+      <!-- 反色底使用状态色本身，避免当前主题的 accent 在反色底上对比不足。 -->
+      <CircleCheckIcon class="size-4 text-success" />
     </template>
     <template #info-icon>
       <InfoIcon class="size-4 text-info" />

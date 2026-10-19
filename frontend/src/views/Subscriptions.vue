@@ -137,7 +137,7 @@
           </TableCell>
           <TableCell class="whitespace-nowrap text-muted-foreground">{{ lastUpdated(sub) }}</TableCell>
           <TableCell>
-            <Badge :variant="statusTone(subscriptionStatus[sub.id])">{{ statusText(sub) }}</Badge>
+            <Badge :variant="statusTone(subscriptionStatus[sub.id])" :title="subscriptionStatus[sub.id]?.error">{{ statusText(sub) }}</Badge>
           </TableCell>
           <TableCell class="cf-reorder-mute text-right">
             <div class="flex items-center justify-end gap-0.5">
@@ -254,6 +254,9 @@
               <span v-if="traffic(sub).ratio > 0.8" class="chip chip-bad">余量不足</span>
               <span v-if="subscriptionStatus[sub.id]?.status === 'error'" class="chip chip-bad" :title="subscriptionStatus[sub.id]?.error">
                 拉取失败
+              </span>
+              <span v-if="subscriptionStatus[sub.id]?.status === 'cache'" class="chip chip-warn" :title="subscriptionStatus[sub.id]?.error">
+                拉取失败，已使用缓存
               </span>
               <span v-if="!sub.enabled" class="chip">已停用</span>
             </div>
@@ -587,7 +590,7 @@ const revealedUrls = ref<Record<string, boolean>>({})
 
 // 订阅状态管理
 interface SubscriptionStatusItem {
-  status: 'idle' | 'loading' | 'success' | 'error'
+  status: 'idle' | 'loading' | 'success' | 'cache' | 'error'
   count?: number
   error?: string
   updatedAt?: string | null
@@ -615,7 +618,8 @@ const typeTone = (type: string) => typeToneMap[type] || 'secondary'
 // 节点获取状态标签配色
 const statusTone = (status?: SubscriptionStatusItem) => {
   if (!status || status.status === 'idle') return 'secondary' as const
-  if (status.status === 'loading') return 'warning' as const
+  if (status.status === 'loading') return 'brand' as const
+  if (status.status === 'cache') return 'warning' as const
   if (status.status === 'success') return 'success' as const
   return 'danger' as const
 }
@@ -661,13 +665,21 @@ const loadSubscriptions = async (keepStatus = false) => {
     subscriptions.value = data
     // 初始化订阅状态；刷新时保留刚拿到的失败状态，避免被缓存值覆盖
     subscriptions.value.forEach(sub => {
-      if (keepStatus && subscriptionStatus.value[sub.id]?.status === 'error') return
+      if (keepStatus && ['error', 'cache'].includes(subscriptionStatus.value[sub.id]?.status ?? '')) return
       if (revealedUrls.value[sub.id] === undefined) {
         revealedUrls.value[sub.id] = false
       }
       const cachedCount = typeof sub.cached_node_count === 'number' ? sub.cached_node_count : null
       const updatedAt = sub.cached_updated_at ?? null
-      if (cachedCount !== null) {
+      const lastFetchStatus = (sub as any).last_fetch?.status
+      if (lastFetchStatus === 'cache' || lastFetchStatus === 'fail') {
+        subscriptionStatus.value[sub.id] = {
+          status: lastFetchStatus === 'cache' ? 'cache' : 'error',
+          count: cachedCount ?? undefined,
+          updatedAt,
+          error: lastFetchStatus === 'cache' ? '拉取失败，已使用缓存' : '拉取失败'
+        }
+      } else if (cachedCount !== null) {
         subscriptionStatus.value[sub.id] = {
           status: 'success',
           count: cachedCount,
@@ -711,7 +723,8 @@ const fetchAllSubscriptionsInBackground = async () => {
           sub.cached_total_count = data.total_count ?? sub.cached_total_count
           sub.cached_updated_at = updatedAt
           subscriptionStatus.value[sub.id] = {
-            status: 'success',
+            status: data.from_cache ? 'cache' : 'success',
+            error: data.from_cache ? '拉取失败，已使用缓存' : undefined,
             count: cachedCount,
             updatedAt
           }
@@ -745,8 +758,14 @@ const pullOne = async (sub: Subscription) => {
     const { data } = await subscriptionApi.fetch(sub.id, true)
     if (!data.success) throw new Error(data.message || '拉取失败')
     const count = data.cached_count ?? (data.nodes?.length || 0)
-    subscriptionStatus.value[sub.id] = { status: 'success', count, updatedAt: data.cached_updated_at ?? null }
-    notify.success(data.from_cache ? `「${sub.name}」拉取失败，已使用缓存` : `「${sub.name}」已更新 · ${count} 节点`)
+    subscriptionStatus.value[sub.id] = {
+      status: data.from_cache ? 'cache' : 'success',
+      error: data.from_cache ? '拉取失败，已使用缓存' : undefined,
+      count,
+      updatedAt: data.cached_updated_at ?? null
+    }
+    if (data.from_cache) notify.warning(`「${sub.name}」拉取失败，已使用缓存`)
+    else notify.success(`「${sub.name}」已更新 · ${count} 节点`)
   } catch (error: any) {
     const message = error.response?.data?.message || error.message || '拉取失败'
     subscriptionStatus.value[sub.id] = { status: 'error', error: message, count: previous?.count, updatedAt: previous?.updatedAt }
@@ -911,12 +930,15 @@ const fetchSubscription = async (row: Subscription) => {
       row.cached_total_count = data.total_count ?? row.cached_total_count
       row.cached_updated_at = updatedAt
       subscriptionStatus.value[row.id] = {
-        status: 'success',
+        status: data.from_cache ? 'cache' : 'success',
+        error: data.from_cache ? '拉取失败，已使用缓存' : undefined,
         count: cachedCount,
         updatedAt
       }
 
-      if (previewNodes.value.length === 0) {
+      if (data.from_cache) {
+        notify.warning(`「${row.name}」拉取失败，已使用缓存`)
+      } else if (previewNodes.value.length === 0) {
         notify.warning('未解析到任何节点')
       }
     } else {
@@ -1024,7 +1046,7 @@ const matchesStatus = (sub: Subscription): boolean => {
   if (statusFilter.value === 'all') return true
   if (statusFilter.value === 'enabled') return !!sub.enabled
   if (statusFilter.value === 'disabled') return !sub.enabled
-  return subscriptionStatus.value[sub.id]?.status === 'error'
+  return ['error', 'cache'].includes(subscriptionStatus.value[sub.id]?.status ?? '')
 }
 
 /* ---------- 表格列展示 ---------- */
@@ -1054,6 +1076,7 @@ const statusText = (sub: Subscription): string => {
   const st = subscriptionStatus.value[sub.id]?.status
   if (st === 'loading') return '获取中'
   if (st === 'success') return '正常'
+  if (st === 'cache') return '使用缓存'
   if (st === 'error') return '获取失败'
   return sub.enabled ? '未获取' : '已停用'
 }
@@ -1111,9 +1134,11 @@ const emptyText = computed(() =>
 
 const dotTone = (sub: Subscription): string => {
   if (!sub.enabled) return 'bg-muted-foreground'
-  return subscriptionStatus.value[sub.id]?.status === 'error'
-    ? 'bg-warning-accent'
-    : 'bg-success-accent'
+  const status = subscriptionStatus.value[sub.id]?.status
+  if (status === 'error') return 'bg-destructive-accent'
+  if (status === 'cache') return 'bg-warning-accent'
+  if (status === 'loading') return 'bg-primary-accent'
+  return status === 'success' ? 'bg-success-accent' : 'bg-muted-foreground'
 }
 
 const handleSaveOrder = async () => {

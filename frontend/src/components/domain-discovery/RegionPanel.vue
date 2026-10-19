@@ -56,7 +56,7 @@
                 <span class="block max-w-[140px] truncate" :title="target.name">{{ targetLabel(target) }}</span>
                 <span
                   class="block font-mono text-[11px] font-normal"
-                  :class="exitMismatch(target) ? 'text-warning-accent' : 'text-muted-foreground'"
+                  :class="target.error ? 'text-destructive-accent' : exitMismatch(target) ? 'text-warning-accent' : 'text-muted-foreground'"
                   :title="exitTitle(target)"
                 >{{ exitText(target) }}</span>
               </th>
@@ -218,13 +218,13 @@ const VERDICT_LABELS: Record<DomainRegionEntry['verdict'], string> = {
   suspected: '疑似区域限制', all_restricted: '各地区都受限', no_difference: '无地区差异', unreachable: '无法访问'
 }
 const VERDICT_CLASSES: Record<DomainRegionEntry['verdict'], string> = {
-  suspected: 'chip-warn', all_restricted: 'chip-bad', no_difference: 'chip-ok', unreachable: ''
+  suspected: 'chip-warn', all_restricted: 'chip-bad', no_difference: 'chip-ok', unreachable: 'chip-bad'
 }
 const DOMAIN_STATE_LABELS: Record<DomainTargetResult['state'], string> = {
   ok: '正常', restricted: '受限', denied: '拒绝', error: '失败'
 }
 const DOMAIN_STATE_CLASSES: Record<DomainTargetResult['state'], string> = {
-  ok: 'chip-ok', restricted: 'chip-bad', denied: 'chip-warn', error: ''
+  ok: 'chip-ok', restricted: 'chip-bad', denied: 'chip-warn', error: 'chip-bad'
 }
 
 const saving = ref(false)
