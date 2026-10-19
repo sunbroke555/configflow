@@ -125,7 +125,17 @@ async function openViewer(event: MouseEvent) {
 }
 function restoreFocus(event: Event) {
   event.preventDefault()
-  nextTick(() => (returnFocus?.isConnected && returnFocus.getClientRects().length ? returnFocus : host.value)?.focus({ preventScroll: true }))
+  nextTick(() => {
+    const visible = (element: HTMLElement | null | undefined) => element?.isConnected && element.getClientRects().length
+    if (visible(returnFocus)) return returnFocus!.focus({ preventScroll: true })
+    if (visible(host.value)) return host.value!.focus({ preventScroll: true })
+    // A responsive details section may collapse while the fullscreen dialog is
+    // open. Return to its visible summary rather than a now-hidden trigger.
+    for (let details = host.value?.closest('details:not([open])'); details; details = details.parentElement?.closest('details:not([open])')) {
+      const summary = details.querySelector<HTMLElement>(':scope > summary')
+      if (visible(summary)) return summary!.focus({ preventScroll: true })
+    }
+  })
 }
 function measureViewport() {
   if (!viewport.value) return

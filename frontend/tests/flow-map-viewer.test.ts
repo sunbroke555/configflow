@@ -58,7 +58,10 @@ beforeEach(() => {
   vi.stubGlobal('CSS', { escape: (value: string) => value })
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function () { return geometry(this) })
-  vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function () { return [geometry(this)] as unknown as DOMRectList })
+  vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function () {
+    const hiddenInDetails = this.tagName !== 'SUMMARY' && this.closest('details:not([open])')
+    return (hiddenInDetails ? [] : [geometry(this)]) as unknown as DOMRectList
+  })
   for (const [property, dimension] of [['clientWidth', 'width'], ['clientHeight', 'height'], ['offsetWidth', 'width'], ['offsetHeight', 'height']] as const) {
     vi.spyOn(HTMLElement.prototype, property, 'get').mockImplementation(function () { return geometry(this)[dimension] })
   }
@@ -103,6 +106,24 @@ function pointer(target: EventTarget, type: string, id: number, x: number, y: nu
 function physicalClick(target: Element) { target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })) }
 
 describe('FlowMapViewer mobile interaction', () => {
+  it('returns focus to a visible summary if its details section collapsed while fullscreen', async () => {
+    const wrapper = await render()
+    const details = document.createElement('details')
+    details.open = true
+    const summary = document.createElement('summary')
+    summary.textContent = '下发拓扑'
+    details.append(summary, wrapper.element)
+    document.body.append(details)
+    await open()
+    details.open = false
+    await click('关闭全屏图')
+    expect(document.activeElement).toBe(summary)
+    details.open = true
+    await open()
+    expect(document.querySelectorAll('canvas')).toHaveLength(1)
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
   it('opens one accessible full map, retains nodes and restores trigger focus on Escape', async () => {
     const wrapper = await render()
     expect(document.querySelectorAll('canvas')).toHaveLength(1)
