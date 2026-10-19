@@ -72,7 +72,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: '系统',
     items: [
       { path: '/system-settings', label: '系统设置', icon: 'Setting' },
-      { path: '/profiles', label: '配置空间', icon: 'Setting' },
+      { path: '/profiles', label: '配置空间', icon: 'Boxes' },
       { path: '/agents', label: 'Agent', icon: 'Monitor' },
       { path: '/logs', label: '日志', icon: 'Tickets' }
     ]
