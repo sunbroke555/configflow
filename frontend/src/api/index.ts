@@ -470,6 +470,8 @@ export const mihomoPanelApi = {
   groupDelay: (id: string, name: string, url?: string, timeout = 5000) =>
     api.get(mihomoPath(id, 'group/delay'), { params: { name, url, timeout }, timeout: 45000 }),
   connections: (id: string, options: { signal?: AbortSignal } = {}) => api.get(mihomoPath(id, 'connections'), options),
+  /** Agent 端聚合的实时流向（Agent 1.8.26-go+） */
+  flow: (id: string, options: { signal?: AbortSignal } = {}) => api.get(mihomoPath(id, 'flow'), options),
   closeConnection: (id: string, connectionId: string) => api.delete(mihomoPath(id, 'connection'), mihomoName(connectionId)),
   closeAllConnections: (id: string) => api.delete(mihomoPath(id, 'connections')),
   rules: (id: string) => api.get(mihomoPath(id, 'rules')),

@@ -232,3 +232,19 @@ def test_core_upgrade_errors_keep_original_text(calls, message):
         panel.call(Manager({**AGENT, 'version': '1.8.16-go'}), 'mihomo', 'upgrade', 'POST', MultiDict())
     assert exc.value.code == 'CORE_ERROR'
     assert exc.value.message == message
+
+
+def test_live_flow_needs_newer_agent_and_forwards_without_params(calls):
+    with pytest.raises(MonitorError) as exc:
+        panel.call(Manager({**AGENT, 'version': '1.8.25-go'}), 'mihomo', 'flow', 'GET', MultiDict())
+    assert exc.value.code == 'UPGRADE_REQUIRED'
+    assert '1.8.26-go' in exc.value.message and '实时流量' in exc.value.message
+    assert calls == []
+
+    calls.replies.append(Response({'interval': 2.0, 'paths': []}))
+    result = panel.call(Manager({**AGENT, 'version': '1.8.26-go'}), 'mihomo', 'flow', 'GET',
+                        MultiDict({'url': 'http://ignored'}))
+    assert result['data'] == {'interval': 2.0, 'paths': []}
+    assert calls[0]['method'] == 'GET'
+    assert calls[0]['url'].endswith('/api/mihomo/flow')
+    assert calls[0]['params'] == {} and calls[0]['data'] is None

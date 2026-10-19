@@ -45,6 +45,8 @@ var mihomoPanelRoutes = []mihomoPanelRoute{
 	{regexp.MustCompile(`^proxies/` + panelSegment + `/delay$`), "GET", []string{"url", "timeout"}},
 	{regexp.MustCompile(`^group/` + panelSegment + `/delay$`), "GET", []string{"url", "timeout"}},
 	{regexp.MustCompile(`^connections$`), "GET DELETE", nil},
+	// 由 Agent 自己聚合，不转发到控制接口
+	{regexp.MustCompile(`^flow$`), "GET", nil},
 	{regexp.MustCompile(`^connections/` + panelSegment + `$`), "DELETE", nil},
 	{regexp.MustCompile(`^rules$`), "GET", nil},
 	{regexp.MustCompile(`^providers/proxies$`), "GET", nil},
@@ -80,6 +82,7 @@ func mihomoPanelFail(w http.ResponseWriter, status int, code, message string) {
 
 func mihomoPanelHandler(cfg *Config) http.HandlerFunc {
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	flow := newMihomoFlowSampler()
 	return func(w http.ResponseWriter, r *http.Request) {
 		if cfg.ServiceType != "mihomo" {
 			mihomoPanelFail(w, http.StatusBadRequest, "WRONG_SERVICE", "mihomo panel requires a mihomo agent")
@@ -119,6 +122,10 @@ func mihomoPanelHandler(cfg *Config) http.HandlerFunc {
 		controller, err := resolveMihomoController(cfg.ConfigPath)
 		if err != nil {
 			mihomoPanelFail(w, http.StatusConflict, "CONTROLLER_UNAVAILABLE", "mihomo controller unavailable: "+err.Error())
+			return
+		}
+		if path == "flow" {
+			flow.serve(r.Context(), w, client, controller)
 			return
 		}
 		if reload || upgrading {
