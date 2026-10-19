@@ -30,10 +30,10 @@
         class="cf-app-topbar glass-strong sticky top-0 z-20 flex h-(--cf-topbar-h) shrink-0 items-center gap-3 border-b border-border/60 px-7 pt-[env(safe-area-inset-top)] max-[900px]:gap-2 max-[900px]:px-3"
         style="box-sizing: content-box"
       >
-        <!-- 移动端没有侧栏，品牌放在顶栏 -->
+        <!-- 平板没有侧栏，保留品牌；手机用底栏总览回首页，顶栏优先留给当前空间。 -->
         <router-link
           to="/dashboard"
-          class="group hidden min-w-0 shrink items-center gap-2 text-foreground no-underline max-[900px]:flex max-[900px]:min-h-11 max-[900px]:min-w-11"
+          class="group hidden min-w-0 shrink items-center gap-2 text-foreground no-underline min-[640px]:max-[900px]:flex max-[900px]:min-h-11 max-[900px]:min-w-11"
           aria-label="ConfigFlow 首页"
         >
           <BrandMark class="size-6 text-primary" />
@@ -60,7 +60,7 @@
 
         <ProfileSwitcher class="cf-mobile-profile hidden max-[900px]:flex" />
 
-        <div class="cf-topbar-actions ml-auto flex min-w-0 items-center gap-1.5">
+        <div class="cf-topbar-actions ml-auto flex min-w-0 items-center gap-1.5 max-sm:shrink-0 max-sm:gap-0">
           <!-- 实时吞吐：已绑定在线 Agent 心跳上报的网卡速率，没有上报时整块隐藏 -->
           <div
             v-if="liveThroughput"
@@ -99,6 +99,7 @@
           <Button
             variant="ghost"
             size="icon-sm"
+            class="max-sm:hidden"
             :title="theme === 'dark' ? '切换到浅色' : '切换到深色'"
             :aria-label="theme === 'dark' ? '切换到浅色' : '切换到深色'"
             @click="toggleTheme"
@@ -146,7 +147,7 @@
       >
         <div
           :class="route.path === '/mihomo' ? 'max-w-none' : 'max-w-(--cf-content-max)'"
-          class="mx-auto px-8 pt-7 pb-12 max-[900px]:px-4 max-[900px]:pt-4 max-[900px]:pb-[calc(env(safe-area-inset-bottom)+var(--cf-tabbar-h)+40px)]"
+          class="mx-auto px-8 pt-7 pb-12 max-[900px]:px-4 max-[900px]:pt-4 max-[900px]:pb-[calc(env(safe-area-inset-bottom)+var(--cf-tabbar-h)+16px)] max-sm:px-3 max-sm:pt-2"
         >
           <!-- 不做整页过渡：out-in 会在两页之间留一帧空白，观感是闪一下。
                进场动效交给页面内的卡片与列表逐项播放。 -->

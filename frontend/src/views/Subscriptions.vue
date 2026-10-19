@@ -179,7 +179,7 @@
     <div
       v-else
       ref="subscriptionsContainer"
-      class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3.5 max-md:grid-cols-1"
+      class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3.5 max-md:grid-cols-1 max-md:gap-2"
     >
       <Motion
         v-for="(sub, index) in visibleSubscriptions"
@@ -188,7 +188,7 @@
         :data-id="sub.id"
         data-reorder-item
         :class="cn(
-          'relative overflow-hidden rounded-[18px] border border-border bg-card/90 p-5 shadow-surface transition-[transform,border-color] duration-350 ease-(--ease-flow) hover:-translate-y-[3px] hover:border-border-strong max-md:p-4',
+          'relative overflow-hidden rounded-[18px] border border-border bg-card/90 p-5 shadow-surface transition-[transform,border-color] duration-350 ease-(--ease-flow) hover:-translate-y-[3px] hover:border-border-strong max-md:p-3',
           !sub.enabled && 'opacity-60'
         )"
       >
@@ -199,11 +199,11 @@
           aria-hidden="true"
         />
 
-        <div class="card-header flex items-center gap-4">
+        <div class="card-header flex items-center gap-4 max-md:gap-2">
           <span v-if="reorder.active.value" class="text-xs tabular-nums text-muted-foreground">{{ index + 1 }}</span>
 
           <!-- 流量环：subscription-userinfo 的已用比例；服务商不提供时显示不计量 -->
-          <div v-if="!reorder.active.value" class="card-stats relative size-24 shrink-0">
+          <div v-if="!reorder.active.value" class="card-stats relative size-24 shrink-0 max-md:size-16">
             <svg viewBox="0 0 96 96" class="size-full -rotate-90" aria-hidden="true">
               <defs>
                 <linearGradient :id="`ring-${index}`" x1="0" y1="0" x2="1" y2="1">
@@ -227,7 +227,7 @@
             </svg>
             <div class="absolute inset-0 grid place-content-center text-center">
               <template v-if="traffic(sub).metered">
-                <b class="font-display text-[24px] leading-none font-medium">
+                <b class="font-display text-[24px] leading-none font-medium max-md:text-[20px]">
                   {{ Math.round(traffic(sub).ratio * 100) }}<small class="text-[12px]">%</small>
                 </b>
                 <span class="mt-0.5 font-mono text-[10px] text-muted-foreground">已用</span>
@@ -273,7 +273,7 @@
         </div>
 
         <template v-if="!reorder.active.value">
-          <div class="card-section mt-[18px] grid grid-cols-3 border-t border-border pt-3.5">
+          <div class="card-section mt-[18px] grid grid-cols-3 border-t border-border pt-3.5 max-md:mt-2 max-md:pt-2">
             <div>
               <small class="block text-[11px] text-muted-foreground">节点</small>
               <b class="font-mono text-[15px] font-medium">
@@ -294,7 +294,7 @@
             </div>
           </div>
 
-          <div class="card-actions mt-4 flex items-center gap-2">
+          <div class="card-actions mt-4 flex items-center gap-2 max-md:mt-2">
             <span class="mr-auto min-w-0 truncate text-[11.5px] text-muted-foreground">
               上次拉取 · {{ lastFetchText(sub) }}
             </span>
@@ -342,7 +342,7 @@
       <button
         v-if="!reorder.active.value && !keyword && statusFilter === 'all'"
         type="button"
-        class="grid min-h-[250px] cursor-pointer place-content-center gap-2.5 rounded-[18px] border border-dashed border-border-strong bg-transparent text-center text-muted-foreground transition-colors hover:border-primary-accent/50 hover:text-primary-accent focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        class="grid min-h-[250px] cursor-pointer place-content-center gap-2.5 rounded-[18px] border border-dashed border-border-strong bg-transparent text-center text-muted-foreground transition-colors hover:border-primary-accent/50 hover:text-primary-accent focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-md:min-h-16 max-md:grid-flow-col max-md:items-center max-md:gap-2"
         @click="showAddDialog"
       >
         <Link2 class="mx-auto size-7" :stroke-width="1.75" />

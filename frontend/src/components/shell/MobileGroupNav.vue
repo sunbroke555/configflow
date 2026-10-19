@@ -3,7 +3,7 @@
   <nav
     v-if="group && activeItem && items.length > 1"
     ref="navContainer"
-    class="mb-5 hidden min-w-0 max-[900px]:block"
+    class="mb-5 hidden min-w-0 max-[900px]:block max-sm:mb-2"
     aria-label="分组内页面"
   >
     <div
@@ -34,7 +34,7 @@
         <button
           v-show="!showTabs"
           type="button"
-          class="flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2 text-left text-[13px] font-medium text-foreground transition-colors hover:border-primary-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          class="flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2 text-left text-[13px] font-medium text-foreground transition-colors hover:border-primary-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring max-sm:gap-2 max-sm:border-transparent max-sm:bg-transparent max-sm:px-0 max-sm:hover:bg-muted/60"
           :aria-label="`切换${group.tabLabel}页面，当前${activeItem.label}`"
         >
           <component :is="iconOf(activeItem.icon)" class="size-4 shrink-0 text-primary-accent" :stroke-width="2" aria-hidden="true" />

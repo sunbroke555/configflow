@@ -1,5 +1,5 @@
 <template>
-  <SectionCard :padded="false" class="mb-5 grid min-w-0 md:grid-cols-[152px_minmax(0,1fr)]" aria-label="配置生成工作台">
+  <SectionCard :padded="false" class="mb-5 grid min-w-0 max-md:mb-3 md:grid-cols-[152px_minmax(0,1fr)]" aria-label="配置生成工作台">
     <aside class="min-w-0 border-b border-border bg-background/30 md:border-r md:border-b-0">
       <div class="hidden p-2 md:block">
         <h2 class="m-0 px-3 pt-2 pb-3 text-xs font-medium text-muted-foreground">生成软件</h2>
@@ -19,10 +19,10 @@
           </Button>
         </nav>
       </div>
-      <div class="p-4 md:hidden">
-        <label for="generate-software" class="mb-2 block text-xs font-medium text-muted-foreground">生成软件</label>
+      <div class="flex items-center gap-2 p-3 md:hidden">
+        <label for="generate-software" class="shrink-0 text-xs font-medium text-muted-foreground">生成软件</label>
         <Select v-model="active" :disabled="running">
-          <SelectTrigger id="generate-software" class="min-h-11 w-full bg-card" aria-label="生成软件">
+          <SelectTrigger id="generate-software" class="min-h-11 min-w-0 flex-1 bg-card" aria-label="生成软件">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -39,7 +39,7 @@
 
     <div class="@container/studio min-w-0">
       <section v-if="current" class="border-b border-border" :aria-label="`${current.title} 配置编辑`">
-        <div class="flex flex-wrap items-center justify-between gap-x-5 gap-y-3 px-5 py-4">
+        <div class="flex flex-wrap items-center justify-between gap-x-5 gap-y-3 px-5 py-4 max-md:gap-2 max-md:p-3">
           <div class="min-w-0">
             <h2 class="m-0 flex items-center gap-2 text-sm font-semibold">
               <component :is="current.icon" class="size-4 text-primary-accent" aria-hidden="true" />
@@ -65,12 +65,12 @@
       </section>
 
       <div class="grid grid-cols-[minmax(0,1fr)] @min-[720px]/studio:grid-cols-[260px_minmax(0,1fr)]">
-        <section class="order-2 min-w-0 border-t border-border p-5 @min-[720px]/studio:order-none @min-[720px]/studio:border-t-0 @min-[720px]/studio:border-r" role="list" aria-label="生成步骤">
+        <section class="order-2 min-w-0 border-t border-border p-5 max-md:p-3 @min-[720px]/studio:order-none @min-[720px]/studio:border-t-0 @min-[720px]/studio:border-r" role="list" aria-label="生成步骤">
           <div
             v-for="(step, i) in steps"
             :key="step.title"
             role="listitem"
-            :class="cn('gen-step relative grid grid-cols-[26px_1fr] gap-3 pb-5 last:pb-0', stepState(i))"
+            :class="cn('gen-step relative grid grid-cols-[26px_1fr] gap-3 pb-5 max-md:gap-2 max-md:pb-2 last:pb-0', stepState(i))"
           >
             <span
               class="gen-bullet grid size-[26px] place-items-center rounded-full border-[1.5px] border-border-strong bg-card font-mono text-[11px] text-muted-foreground transition-all duration-300"
@@ -87,7 +87,7 @@
         </section>
 
         <section class="min-w-0 overflow-hidden" aria-label="生成结果">
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-5 py-3">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-5 py-3 max-md:gap-2 max-md:px-3 max-md:py-2">
             <div class="flex min-w-max flex-1 items-center gap-2.5">
               <span class="flex shrink-0 gap-1.5" aria-hidden="true">
                 <i class="size-2.5 rounded-full bg-accent" /><i class="size-2.5 rounded-full bg-accent" /><i class="size-2.5 rounded-full bg-accent" />
@@ -143,7 +143,8 @@
           <div class="relative">
             <pre
               ref="codeEl"
-              class="gen-code m-0 h-[520px] overflow-auto bg-background/70 py-4 font-mono text-[12.5px] leading-[1.7] max-md:h-[60dvh]"
+              class="gen-code m-0 h-[520px] overflow-auto bg-background/70 py-4 font-mono text-[12.5px] leading-[1.7] max-md:py-3"
+              :class="lines.length ? 'max-md:h-[60dvh]' : running ? 'max-md:h-40' : 'max-md:hidden'"
               :aria-busy="running"
             ><span
               v-for="(line, i) in lines"
@@ -155,7 +156,7 @@
 
             <div
               v-if="!lines.length && !running"
-              class="absolute inset-0 grid place-content-center gap-2.5 bg-background/70 px-4 text-center text-muted-foreground"
+              class="absolute inset-0 grid place-content-center gap-2.5 bg-background/70 px-4 text-center text-muted-foreground max-md:relative max-md:min-h-40 max-md:py-4"
             >
               <BrandMark class="mx-auto size-11 text-primary" />
               <b class="font-display text-[24px] font-medium text-foreground/80">{{ error ? '生成失败' : '准备就绪' }}</b>
@@ -165,7 +166,7 @@
         </section>
       </div>
 
-      <footer v-if="current" class="grid min-w-0 items-center gap-3 border-t border-border px-5 py-4 @min-[720px]/studio:grid-cols-[220px_minmax(0,1fr)] @min-[720px]/studio:gap-5" aria-label="订阅地址">
+      <footer v-if="current" class="grid min-w-0 items-center gap-3 border-t border-border px-5 py-4 max-md:gap-2 max-md:p-3 @min-[720px]/studio:grid-cols-[220px_minmax(0,1fr)] @min-[720px]/studio:gap-5" aria-label="订阅地址">
         <div class="min-w-0">
           <h3 class="m-0 flex items-center gap-2 text-[13px] font-semibold">
             <component :is="current.icon" class="size-4 shrink-0 text-primary-accent" aria-hidden="true" />

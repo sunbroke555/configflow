@@ -14,7 +14,7 @@
         <p class="m-0 truncate text-[12px] font-medium tracking-[0.02em] text-muted-foreground">
           {{ label }}
         </p>
-        <p class="font-display mt-2.5 mb-0 flex max-sm:flex-wrap items-baseline gap-1 text-[38px] leading-none tracking-[-0.03em] text-foreground max-md:text-[30px] max-sm:text-[26px]">
+        <p class="font-display mt-2.5 max-sm:mt-2 mb-0 flex max-sm:flex-wrap items-baseline gap-1 text-[38px] leading-none tracking-[-0.03em] text-foreground max-md:text-[30px] max-sm:text-[26px]">
           <AnimatedNumber class="max-w-full break-all" :value="value" :precision="precision" />
           <span v-if="unit" class="font-sans text-[13px] font-medium tracking-normal text-muted-foreground">{{ unit }}</span>
         </p>
@@ -29,7 +29,7 @@
       </div>
     </div>
 
-    <div v-if="hint || $slots.default" class="relative mt-3 flex items-center gap-2 text-[11.5px] text-muted-foreground">
+    <div v-if="hint || $slots.default" class="relative mt-3 max-sm:mt-2 flex items-center gap-2 text-[11.5px] text-muted-foreground">
       <slot>{{ hint }}</slot>
     </div>
   </div>

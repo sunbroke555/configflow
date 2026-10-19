@@ -315,22 +315,27 @@ body {
   }
 
   .cf-app-topbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
+    gap: 0;
     height: auto;
-    padding-bottom: var(--cf-sp-3);
-    padding-top: calc(env(safe-area-inset-top) + var(--cf-sp-2));
+    padding-bottom: var(--cf-sp-1);
+    padding-top: calc(env(safe-area-inset-top) + var(--cf-sp-1));
   }
 
   .cf-mobile-profile {
-    order: 3;
-    grid-column: 1 / -1;
-    width: 100%;
+    flex: 1 1 0%;
+    min-width: 0;
   }
 
   .cf-page-header {
-    align-items: stretch;
-    gap: var(--cf-sp-3);
+    align-items: center;
+    gap: var(--cf-sp-2);
+    margin-bottom: var(--cf-sp-3);
+  }
+
+  .cf-page-header > h1,
+  .cf-page-heading {
+    flex: 1 1 auto;
   }
 
   .cf-page-heading {
@@ -338,67 +343,63 @@ body {
   }
 
   .cf-page-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
+    display: flex;
+    flex: 0 1 auto;
+    width: auto;
+    margin-left: auto;
+    gap: var(--cf-sp-1) var(--cf-sp-2);
   }
 
   /* 菜单触发器会覆盖 data-slot，但仍是按钮，应与其它操作并列。 */
   .cf-page-actions > button {
-    width: 100%;
-    min-width: 0;
+    flex: 1 1 auto;
+    min-width: var(--cf-touch);
     padding-inline: var(--cf-sp-3);
   }
 
-  .cf-page-actions > :not(button),
-  .cf-page-actions > :only-child {
-    grid-column: 1 / -1;
-  }
-
   .cf-page-actions > [role='group'] {
-    justify-self: end;
+    margin-left: auto;
   }
 
-  .cf-section-header > :first-child {
-    flex-basis: 100%;
-  }
-
-  .cf-section-actions {
-    width: 100%;
-  }
-
-  .cf-section-actions > [data-slot='button'] {
-    flex: 1 1 auto;
-  }
-
-  .cf-toolbar {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .cf-section-header {
     gap: var(--cf-sp-2);
   }
 
-  .cf-toolbar-search,
+  .cf-section-header > :first-child {
+    flex-basis: 10rem;
+  }
+
+  .cf-section-actions {
+    margin-left: auto;
+    gap: var(--cf-sp-1);
+  }
+
+  .cf-toolbar {
+    display: flex;
+    gap: var(--cf-sp-2);
+    padding: var(--cf-sp-2);
+    margin-bottom: var(--cf-sp-3);
+  }
+
+  .cf-toolbar-search {
+    flex: 1 1 180px;
+  }
+
+  .cf-toolbar-has-filters .cf-toolbar-search {
+    flex-basis: 100%;
+  }
+
   .cf-toolbar-actions {
-    grid-column: 1 / -1;
-    width: 100%;
+    gap: var(--cf-sp-1);
   }
 
   .cf-toolbar > [role='combobox'] {
-    width: 100%;
+    flex: 1 1 120px;
+    width: auto;
     min-width: 0;
   }
 
-  .cf-toolbar-actions > [data-slot='button'] {
-    flex: 1 1 auto;
-  }
-
-  .cf-toolbar-inline-actions > .cf-toolbar-actions {
-    grid-column: auto;
-  }
-
   .cf-toolbar > [role='radiogroup'] {
-    grid-column: 1 / -1;
-    justify-self: start;
     min-width: 0;
     max-width: 100%;
     overflow-x: auto;

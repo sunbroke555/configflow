@@ -1,6 +1,6 @@
 <template>
   <nav
-    class="glass-strong fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+10px)] z-30 hidden h-[62px] grid-cols-5 gap-1 rounded-[20px] border border-border-strong p-1.5 shadow-overlay max-[900px]:grid"
+    class="glass-strong fixed inset-x-0 bottom-0 z-30 hidden h-[calc(var(--cf-tabbar-h)+env(safe-area-inset-bottom))] grid-cols-5 gap-1 border-t border-border-strong px-2 pt-1 pb-[calc(env(safe-area-inset-bottom)+4px)] max-[900px]:grid"
     aria-label="主导航"
   >
     <component
@@ -10,7 +10,7 @@
       :to="tab.path"
       :type="tab.path ? undefined : 'button'"
       :class="cn(
-        'relative flex min-h-11 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-[14px] border-0 bg-transparent px-0 text-[10.5px] font-semibold no-underline transition-colors duration-200 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+        'relative flex min-h-11 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-lg border-0 bg-transparent px-0 text-[10.5px] font-semibold no-underline transition-colors duration-200 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
         isActive(tab) ? 'text-primary-accent' : 'text-muted-foreground'
       )"
       :aria-current="isActive(tab) ? 'page' : undefined"
@@ -19,7 +19,7 @@
       <Motion
         v-if="isActive(tab)"
         layout-id="tab-active"
-        class="absolute inset-0 rounded-[14px] bg-primary-soft"
+        class="absolute inset-0 rounded-lg bg-primary-soft"
         :transition="SPRING"
         aria-hidden="true"
       />

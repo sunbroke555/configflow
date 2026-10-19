@@ -1,14 +1,15 @@
 <template>
-  <div :class="cn('flex min-w-0 items-center gap-1', rail && 'w-full gap-1.5')">
+  <div :class="cn('flex min-w-0 items-center gap-1', rail ? 'w-full gap-1.5' : 'max-sm:gap-0')">
     <Select v-model="selectedProfileId" :disabled="loading || scopedRequests > 0" @update:model-value="handleChange">
       <SelectTrigger
         :class="cn(
           'gap-2 border-border/60 bg-background/40 text-[13px] font-medium transition-colors hover:border-border-strong',
           rail
             ? 'h-auto! min-w-0 flex-1 rounded-xl bg-card/70 px-2.5 py-2'
-            : 'h-8 w-[190px] max-sm:w-full max-sm:flex-1'
+            : 'h-8 w-[190px] max-sm:w-full max-sm:flex-1 max-sm:gap-1.5 max-sm:px-2'
         )"
         aria-label="当前配置空间"
+        :title="currentLabel"
       >
         <span
           v-if="rail"
@@ -17,7 +18,7 @@
         >
           {{ initial }}
         </span>
-        <Boxes v-else class="size-4 shrink-0 text-primary-accent" />
+        <Boxes v-else class="size-4 shrink-0 text-primary-accent max-[359px]:hidden" />
         <span v-if="rail" class="flex min-w-0 flex-1 flex-col text-left leading-tight">
           <SelectValue :class="cn('truncate text-[13px] font-semibold', !currentLabel && 'text-muted-foreground')">
             {{ currentLabel || '选择配置空间' }}

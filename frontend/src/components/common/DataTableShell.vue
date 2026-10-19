@@ -8,7 +8,7 @@
     </div>
     <template v-if="footer">
       <Separator />
-      <p class="m-0 bg-muted px-5 py-3 text-xs text-muted-foreground max-md:px-4">{{ footer }}</p>
+      <p class="m-0 bg-muted px-5 py-3 text-xs text-muted-foreground max-md:px-4 max-sm:px-3 max-sm:py-2">{{ footer }}</p>
     </template>
   </SectionCard>
 </template>

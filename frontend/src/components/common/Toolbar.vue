@@ -1,6 +1,7 @@
 <template>
   <div
     class="cf-toolbar mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3"
+    :class="{ 'cf-toolbar-has-filters': !!$slots.filters }"
   >
     <div v-if="searchable" class="cf-toolbar-search flex min-w-0 flex-[1_1_240px] items-center gap-2">
       <div class="relative min-w-0 flex-1">
