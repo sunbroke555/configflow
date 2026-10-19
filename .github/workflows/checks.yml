@@ -1,7 +1,6 @@
 name: Regression checks
 
 on:
-  pull_request:
   workflow_dispatch:
   workflow_call:
 
@@ -9,8 +8,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: regression-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   backend-tests:
