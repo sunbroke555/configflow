@@ -60,10 +60,21 @@
       <EmptyState v-else :icon="Monitor" title="尚未添加设备策略" description="从已有客户端中选择，或输入 IP / CIDR 网段。添加后可选择智能分流或直连。" />
     </fieldset>
     <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-      <div class="min-w-0 text-xs text-muted-foreground" role="status" aria-live="polite">
-        <AgentOperationSteps v-if="task" :task="task" :busy="busy(agentId)" />
-        <p v-else class="m-0">{{ submissionFailure ? '发布失败' : '草稿尚未在此处发布；运行状态以设备实际配置为准。' }}</p>
-        <AgentFailureDetails :show-progress-message="false" v-if="submissionFailure || task" :task="submissionFailure || task!" class="mt-1" />
+      <div class="min-w-0 flex-1 divide-y divide-border/70 text-xs text-muted-foreground max-sm:basis-full" aria-label="设备策略发布进度">
+        <AgentDeploymentStatus v-if="task" :task="task" compact>
+          <template v-if="taskNeedsNotice" #notice>
+            <AgentOperationSteps :task="task" :show-current="false" :show-steps="false" />
+            <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="submissionFailure || task" />
+          </template>
+          <template #details>
+            <AgentOperationSteps :task="task" :show-current="false" :show-message="!taskNeedsNotice" embedded />
+          </template>
+        </AgentDeploymentStatus>
+        <AgentStatusRow v-else-if="submissionFailure" label="配置推送" status="失败" tone="danger">
+          <template #notice><AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="submissionFailure" /></template>
+        </AgentStatusRow>
+        <p v-else class="m-0">草稿尚未在此处发布；运行状态以设备实际配置为准。</p>
+        <AgentDNSChecks :checks="(submissionFailure || task)?.dns_checks" :checked-at="(submissionFailure || task)?.dns_checked_at" compact />
         <p v-if="task?.status === 'ready'" class="mb-0 mt-1">待激活的是已上传的配置快照，不包含之后保存的草稿修改。</p>
       </div>
       <Button v-if="task?.status === 'ready'" class="min-h-11" :disabled="publishing" @click="activate(agentId)">应用并启动</Button>
@@ -88,10 +99,13 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import OxiDNSClientSelect from './OxiDNSClientSelect.vue'
 import AgentFailureDetails from './AgentFailureDetails.vue'
 import AgentOperationSteps from './AgentOperationSteps.vue'
+import AgentDeploymentStatus from './AgentDeploymentStatus.vue'
+import AgentDNSChecks from './AgentDNSChecks.vue'
+import AgentStatusRow from './AgentStatusRow.vue'
 import { agentApi, oxidnsDevicePolicyApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
-import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { createDeploymentId, deploymentNeedsNotice, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import type { OxiDNSDevicePolicies, OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
 
 const props = defineProps<{ agentId: string; recorder: string }>()
@@ -122,6 +136,7 @@ const dirty = computed(() => !!state.value && JSON.stringify(rows.value) !== JSO
 usePageReloadGuard(() => publishing.value || !!newIP.value.trim())
 const { deployments, busy, track, beginSubmission, endSubmission, activate } = useAgentDeployments(() => emit('published'))
 const task = computed(() => deployments[props.agentId])
+const taskNeedsNotice = computed(() => !!task.value && (deploymentNeedsNotice(task.value) || !!submissionFailure.value))
 let epoch = 0
 let disposed = false
 let controller: AbortController | undefined

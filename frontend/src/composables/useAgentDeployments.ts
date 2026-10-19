@@ -61,6 +61,11 @@ export function deploymentStatusLabel(task: AgentDeployment) {
   return deploymentLabels[task.status] || task.status
 }
 
+export const deploymentNeedsNotice = (task: AgentDeployment) =>
+  !['succeeded', 'rolled_back'].includes(task.status) || (task.status === 'rolled_back' && !task.manual_rollback)
+  || !!(task.query_error || task.pending || task.not_recorded || task.retrying || task.rollback_rejected
+    || task.error || task.error_details || task.rollback_error || task.rollback_error_details || task.rollback_message)
+
 export function createDeploymentId() {
   // LAN HTTP installations do not expose crypto.randomUUID (secure-context only).
   const bytes = crypto.getRandomValues(new Uint8Array(16))

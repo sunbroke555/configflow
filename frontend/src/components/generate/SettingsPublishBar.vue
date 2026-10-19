@@ -7,8 +7,10 @@ import { Button } from '@/components/ui/button'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
+import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { createDeploymentId, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { createDeploymentId, deploymentNeedsNotice, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 
 type ServiceType = 'mihomo' | 'mosdns' | 'oxidns' | 'surge'
 type Agent = { id: string; name: string; profile_id?: string; service_type: string; status?: string; enabled?: boolean; latest_deployment?: AgentDeployment; dns_follow?: { source_agent_id: string } | null }
@@ -75,17 +77,22 @@ const progressLabel = computed(() => {
   if (phase.value === 'submitting' && !task.value) return '草稿已保存，正在推送配置…'
   if (!task.value) return ''
   const prefix = visibleAttempt.value?.inherited ? '设备上次发布：' : '草稿已保存，'
+  if (task.value.query_error || task.value.pending || task.value.not_recorded) return `${prefix}发布结果待确认。`
   if (task.value.status === 'succeeded') return `${prefix}${visibleAttempt.value?.inherited ? '成功' : '发布成功，服务检查已通过。'}`
   return `${prefix}${deploymentStatusLabel(task.value)}`
 })
 const progressTask = computed<AgentDeployment | undefined>(() => {
-  if (phase.value === 'saving' || phase.value === 'checking') return { deployment_id: '', status: 'preparing' }
-  if (error.value) return { deployment_id: '', status: 'failed' }
-  if (synchronousResult.value === 'done') return { deployment_id: '', status: 'succeeded' }
-  if (synchronousResult.value === 'unknown') return { deployment_id: '', status: 'unknown' }
-  if (phase.value === 'submitting' && !task.value) return { deployment_id: '', status: 'preparing' }
+  if (phase.value === 'saving' || phase.value === 'checking' || error.value || synchronousResult.value !== 'idle') return undefined
   return task.value
 })
+const progressNeedsNotice = computed(() => !!progressTask.value && (deploymentNeedsNotice(progressTask.value) || !!submissionFailure.value))
+const stageStatus = computed(() => phase.value === 'saving' ? '保存草稿' : phase.value === 'checking' ? '确认设备'
+  : error.value ? '失败' : synchronousResult.value === 'done' ? '已推送'
+    : synchronousResult.value === 'unknown' ? '待确认' : '推送中')
+const stageTone = computed(() => error.value ? 'danger' : synchronousResult.value === 'done' ? 'success'
+  : synchronousResult.value === 'unknown' ? 'warning' : 'progress')
+const scopeMessage = computed(() => visibleAttempt.value && !visibleAttempt.value.inherited && (task.value || synchronousResult.value !== 'idle')
+  ? `本次发布到「${visibleAttempt.value.agentName}」，仅包含本次保存的配置；后续修改需重新保存并发布。` : '')
 const messageOf = (failure: any) => failure?.response?.data?.message || failure?.message || '请稍后重试。'
 const stillCurrent = (current: Attempt) => !disposed && props.open && session === current.session
   && props.profileId === current.profileId && props.serviceType === current.serviceType
@@ -312,16 +319,37 @@ onUnmounted(() => { disposed = true; session++ })
       <span class="min-w-0 flex-1 break-words">{{ loadError }}</span>
       <Button type="button" variant="ghost" class="min-h-11 shrink-0" :disabled="loading || working" @click="loadTargets"><RefreshCw class="size-3.5" aria-hidden="true" />重试读取</Button>
     </div>
-    <div v-if="progressLabel && progressTask" role="status" aria-live="polite" class="settings-publish-progress min-w-0 space-y-1 text-xs leading-relaxed text-foreground">
-      <AgentDeploymentStatus :task="progressTask">{{ progressLabel }}</AgentDeploymentStatus>
+    <div v-if="progressLabel" aria-label="配置发布进度" class="settings-publish-progress min-w-0 divide-y divide-border/70 text-xs leading-relaxed text-foreground">
+      <AgentDeploymentStatus v-if="progressTask" :task="progressTask" label="配置发布" compact>
+        <template v-if="progressNeedsNotice" #notice>
+          <p class="m-0 break-words">{{ progressLabel }}</p>
+          <AgentOperationSteps :task="progressTask" :show-current="false" :show-steps="false" />
+          <p v-if="scopeMessage" class="m-0 break-words text-muted-foreground">{{ scopeMessage }}</p>
+          <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="submissionFailure || progressTask" />
+        </template>
+        <template #details>
+          <template v-if="!progressNeedsNotice">
+            <p class="m-0 break-words">{{ progressLabel }}</p>
+            <p v-if="scopeMessage" class="m-0 break-words">{{ scopeMessage }}</p>
+          </template>
+          <AgentOperationSteps :task="progressTask" :show-current="false" :show-message="!progressNeedsNotice" embedded />
+        </template>
+      </AgentDeploymentStatus>
+      <AgentStatusRow v-else label="配置发布" :status="stageStatus" :tone="stageTone">
+        <template v-if="stageTone !== 'success'" #notice>
+          <p class="m-0 break-words">{{ progressLabel }}</p>
+          <p v-if="scopeMessage" class="m-0 break-words text-muted-foreground">{{ scopeMessage }}</p>
+          <AgentFailureDetails v-if="submissionFailure" :show-progress-message="false" :showDNSChecks="false" :task="submissionFailure" />
+        </template>
+        <template v-if="stageTone === 'success'" #default>
+          <p class="m-0 break-words">{{ progressLabel }}</p>
+          <p v-if="scopeMessage" class="m-0 break-words">{{ scopeMessage }}</p>
+        </template>
+      </AgentStatusRow>
+      <AgentDNSChecks :checks="(submissionFailure || task)?.dns_checks" :checked-at="(submissionFailure || task)?.dns_checked_at" compact />
       <p v-if="task?.status === 'succeeded' && hasDNSFollowers" class="m-0 break-words text-muted-foreground" data-dns-follow-hint>
         后台会继续处理已绑定的 OxiDNS；<RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">到 Agent 页面查看同步结果或重试</RouterLink>。
       </p>
-      <AgentOperationSteps v-if="task" :task="task" :show-current="false" />
-      <p v-if="visibleAttempt && !visibleAttempt.inherited && (task || synchronousResult !== 'idle')" class="m-0 break-words text-muted-foreground">
-        本次发布到「{{ visibleAttempt.agentName }}」，仅包含本次保存的配置；后续修改需重新保存并发布。
-      </p>
-      <AgentFailureDetails :show-progress-message="false" v-if="submissionFailure || task" :task="submissionFailure || task!" />
       <p v-if="unresolved && task?.status !== 'ready'" class="m-0">可以离开此页面；已提交的发布会继续执行，结果可在 Agent 页面查看。</p>
       <div v-if="task?.status === 'ready'" class="flex min-w-0 flex-wrap items-center gap-2">
         <span class="min-w-0 flex-1">待应用的是本次已校验的配置，不包含之后保存的草稿修改。</span>

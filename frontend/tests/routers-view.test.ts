@@ -518,6 +518,14 @@ describe('routers view', () => {
     expect(routerApi.apply).toHaveBeenCalledWith('router_1', 'dns123')
     expect(document.body.textContent).toContain('DHCP DNS · 回读校验通过')
     expect(document.body.textContent).toContain('发布完成')
+    const status = new DOMWrapper(document.querySelector('[data-agent-status-row="路由器发布"]')!)
+    expect(status.attributes('data-tone')).toBe('success')
+    expect(status.find('[data-status-notice]').exists()).toBe(false)
+    expect(status.find('[data-status-details]').isVisible()).toBe(false)
+    await status.find('button').trigger('click')
+    expect(status.find('[data-status-details]').isVisible()).toBe(true)
+    expect(status.find('[data-status-details]').text()).toContain('DHCP DNS · 回读校验通过')
+    expect(status.find('details').exists()).toBe(false)
   })
 
   it.each(['ikuai', 'routeros'])('keeps account guidance behind its field help when editing %s', async (type) => {
@@ -721,6 +729,44 @@ describe('routers view', () => {
     expect(text).toContain('已撤销：配置回流规则')
     expect(text).not.toContain('发布失败，已回滚')
     expect(text).not.toContain('发布失败，已撤销已完成的变更')
+    const status = new DOMWrapper(document.querySelector('[data-agent-status-row="路由器发布"]')!)
+    expect(status.attributes('data-tone')).toBe('danger')
+    expect(status.find('[data-status-details]').isVisible()).toBe(false)
+    const notice = status.find('[data-status-notice]')
+    expect(notice.isVisible()).toBe(true)
+    expect(notice.text()).toContain('回读校验失败')
+    expect(notice.text()).toContain('撤销失败：新增代理路由（连接中断）')
+    expect(notice.text()).not.toContain('已撤销：配置回流规则')
+    await status.find('button').trigger('click')
+    expect(status.find('[data-status-details]').isVisible()).toBe(true)
+    expect(status.find('[data-status-details]').text()).toContain('回滚记录 · 2')
+  })
+
+  it('keeps release warnings visible when successful records are collapsed', async () => {
+    vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, report: REPORT } } as any)
+    vi.mocked(routerApi.plan).mockResolvedValue({ data: { success: true, plan: {
+      blockers: [], warnings: [], fingerprint: 'warning-release', empty: false,
+      stages: [{ key: 'routes', title: '主路由代理路由', ops: [{ kind: 'route_add', summary: '新增路由' }] }]
+    } } } as any)
+    vi.mocked(routerApi.apply).mockResolvedValue({ data: { success: true, result: {
+      ok: true, rollback: [], log: [
+        { stage: 'routes', summary: '回读校验通过', status: 'verified' },
+        { stage: 'routes', summary: '已有冲突网段保持不变，请检查', status: 'warning' }
+      ]
+    } } } as any)
+    const wrapper = await mountRouter()
+    buttonInDocument('差异报告').click()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('预览发布'))!.trigger('click')
+    await flushPromises()
+    buttonInDocument('确认发布').click()
+    await flushPromises()
+    const status = new DOMWrapper(document.querySelector('[data-agent-status-row="路由器发布"]')!)
+    expect(status.attributes('data-tone')).toBe('warning')
+    expect(status.text()).toContain('发布完成，需处理')
+    expect(status.find('[data-status-notice]').isVisible()).toBe(true)
+    expect(status.find('[data-status-notice]').text()).toContain('已有冲突网段保持不变，请检查')
+    expect(status.find('[data-status-details]').isVisible()).toBe(false)
   })
 })
 
@@ -743,6 +789,11 @@ describe('route release automatic reload protection', () => {
     await flushPromises()
     buttonInDocument('确认发布').click()
     await flushPromises()
+    const status = new DOMWrapper(document.querySelector('[data-agent-status-row="路由器发布"]')!)
+    expect(status.attributes('data-tone')).toBe('progress')
+    expect(status.text()).toContain('发布中')
+    expect(status.find('[data-status-notice]').isVisible()).toBe(true)
+    expect(status.find('[data-status-details]').exists()).toBe(false)
     buttonInDocument('取消').click()
     await flushPromises()
     try {
