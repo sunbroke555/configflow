@@ -105,6 +105,14 @@ app.register_blueprint(mcp_bp)
 # 设置全局认证中间件
 setup_before_request(app)
 
+@app.before_request
+def start_agent_rule_sync():
+    # Lazy per-process startup also works with preloaded WSGI workers. The loop
+    # remains active without an open UI; Agent heartbeats start it after boot.
+    from backend.agents.rule_sync import start_loop
+    start_loop()
+
+
 # 应用初始化标志（确保只初始化一次）
 _app_initialized = False
 

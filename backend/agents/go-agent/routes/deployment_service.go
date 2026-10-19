@@ -475,7 +475,8 @@ func deploymentProbe(cfg *Config) error {
 	if (cfg.ServiceType == "mosdns" || cfg.ServiceType == "oxidns") && dnsAddress == "" {
 		return fmt.Errorf("configure health_dns_address for DNS verification")
 	}
-	if cfg.ServiceType == "mihomo" && url == "" && dnsAddress == "" {
+	unixController, _ := doc["external-controller-unix"].(string)
+	if cfg.ServiceType == "mihomo" && url == "" && dnsAddress == "" && unixController == "" {
 		// Without a controller, probe an enabled proxy listener. The process status
 		// stability window and native validation complement this socket check.
 		port := 0
@@ -500,6 +501,13 @@ func deploymentProbe(cfg *Config) error {
 }
 
 func mihomoRuntimeProbe(doc map[string]interface{}) error {
+	controller, _ := doc["external-controller"].(string)
+	unixController, _ := doc["external-controller-unix"].(string)
+	if controller == "" && unixController != "" {
+		if err := mihomoUnixControllerProbe(doc); err != nil {
+			return err
+		}
+	}
 	if controller, ok := doc["external-controller"].(string); ok && controller != "" {
 		secret, _ := doc["secret"].(string)
 		for kind, endpoint := range map[string]string{"proxy-providers": "/providers/proxies", "rule-providers": "/providers/rules"} {

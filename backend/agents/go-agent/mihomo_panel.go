@@ -107,6 +107,7 @@ func mihomoPanelHandler(cfg *Config) http.HandlerFunc {
 		}
 		reload := path == "configs" && r.Method == http.MethodPut
 		upgrading := path == "upgrade"
+		providerUpdate := r.Method == http.MethodPut && (strings.HasPrefix(path, "providers/rules/") || strings.HasPrefix(path, "providers/proxies/"))
 		var body []byte
 		if reload {
 			body = []byte(mihomoPanelReloadBody)
@@ -128,8 +129,9 @@ func mihomoPanelHandler(cfg *Config) http.HandlerFunc {
 			flow.serve(r.Context(), w, client, controller)
 			return
 		}
-		if reload || upgrading {
-			// 改变内核运行状态的操作与配置推送、服务重启共用服务操作锁
+		if reload || upgrading || providerUpdate {
+			// Native provider refreshes replace managed files, so they serialize
+			// with deployments and rule snapshots as well as reloads/upgrades.
 			release, err := routes.AcquireServiceOperation(toRoutesConfig(cfg))
 			if err != nil {
 				mihomoPanelFail(w, http.StatusConflict, "SERVICE_BUSY", err.Error())

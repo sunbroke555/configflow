@@ -1,6 +1,7 @@
 package main
 
 import (
+	"agent/routes"
 	"context"
 	"io"
 	"net/http"
@@ -9,17 +10,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func newMihomoPanelFixture(t *testing.T, core http.HandlerFunc) http.HandlerFunc {
 	t.Helper()
+	_, handler := newMihomoPanelConfigFixture(t, core)
+	return handler
+}
+
+func newMihomoPanelConfigFixture(t *testing.T, core http.HandlerFunc) (*Config, http.HandlerFunc) {
+	t.Helper()
 	server := httptest.NewServer(core)
 	t.Cleanup(server.Close)
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	os.WriteFile(configPath, []byte("external-controller: "+strings.TrimPrefix(server.URL, "http://")+"\nsecret: s3cret\n"), 0600)
-	return mihomoPanelHandler(&Config{ServiceType: "mihomo", ConfigPath: configPath})
+	cfg := &Config{ServiceType: "mihomo", ConfigPath: configPath}
+	return cfg, mihomoPanelHandler(cfg)
 }
 
 func TestMihomoPanelForwardsAllowedRequests(t *testing.T) {
@@ -230,4 +239,64 @@ func TestMihomoPanelUpgradeDropsQueryAndBody(t *testing.T) {
 	if recorder.Code != http.StatusOK || seen != "POST /upgrade " {
 		t.Fatalf("got %d, forwarded %q", recorder.Code, seen)
 	}
+}
+
+func TestMihomoPanelProviderUpdatesShareOperationLockAndReleaseOnFailure(t *testing.T) {
+	for _, kind := range []string{"rules", "proxies"} {
+		t.Run(kind, func(t *testing.T) {
+			var cfg *Config
+			var calls atomic.Int32
+			var heldDuringRequest atomic.Bool
+			var handler http.HandlerFunc
+			cfg, handler = newMihomoPanelConfigFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if release, err := routes.AcquireServiceOperation(toRoutesConfig(cfg)); err != nil {
+					heldDuringRequest.Store(true)
+				} else {
+					release()
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+			})
+			release, err := routes.AcquireServiceOperation(toRoutesConfig(cfg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			busy := httptest.NewRecorder()
+			handler(busy, httptest.NewRequest(http.MethodPut, "/api/mihomo/providers/"+kind+"/test", strings.NewReader("{}")))
+			release()
+			if busy.Code != http.StatusConflict || !strings.Contains(busy.Body.String(), "SERVICE_BUSY") || calls.Load() != 0 {
+				t.Fatalf("provider update overlapped an active operation: %d %s", busy.Code, busy.Body.String())
+			}
+			failed := httptest.NewRecorder()
+			handler(failed, httptest.NewRequest(http.MethodPut, "/api/mihomo/providers/"+kind+"/test", strings.NewReader("{}")))
+			if failed.Code != http.StatusInternalServerError || calls.Load() != 1 || !heldDuringRequest.Load() {
+				t.Fatalf("provider update did not hold the service lock: %d %s", failed.Code, failed.Body.String())
+			}
+			release, err = routes.AcquireServiceOperation(toRoutesConfig(cfg))
+			if err != nil {
+				t.Fatalf("failed provider update leaked its operation lock: %v", err)
+			}
+			release()
+		})
+	}
+}
+
+func TestMihomoPanelProviderUnreachableReleasesOperationLock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Close()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("external-controller: "+strings.TrimPrefix(server.URL, "http://")+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{ServiceType: "mihomo", ConfigPath: configPath}
+	w := httptest.NewRecorder()
+	mihomoPanelHandler(cfg)(w, httptest.NewRequest(http.MethodPut, "/api/mihomo/providers/rules/test", strings.NewReader("{}")))
+	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "CORE_UNREACHABLE") {
+		t.Fatalf("unexpected unreachable controller response: %d %s", w.Code, w.Body.String())
+	}
+	release, err := routes.AcquireServiceOperation(toRoutesConfig(cfg))
+	if err != nil {
+		t.Fatalf("unreachable controller leaked the operation lock: %v", err)
+	}
+	release()
 }

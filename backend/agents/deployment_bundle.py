@@ -62,6 +62,7 @@ class DeploymentBundle:
     archive: bytes
     sha256: str
     config_version: str
+    comparison_config: dict | None = None
 
 
 def relative_path(value):
@@ -320,7 +321,7 @@ def convert_mosdns_rules(content, rule_type='domain_set'):
 
 def build_deployment_bundle(agent, config, config_content, *, provider_downloads=(),
                             ruleset_downloads=(), custom_files=(), base_url='', deployment_id=None,
-                            progress=None, detail_progress=None, phase_progress=None):
+                            progress=None, detail_progress=None, phase_progress=None, pinned_files=()):
     """Pack the exact generated graph and all its managed file references."""
     config = deepcopy(config)
     service = agent.get('service_type', 'mihomo')
@@ -394,6 +395,14 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
     for item in custom_files:
         add(item.get('path'), item.get('content'), 'custom', native=item.get('native', False), name=item.get('name', ''))
 
+    # Trusted bytes from the last confirmed deployment keep disabled rule
+    # scopes and unrelated resources unchanged during an automatic rule edit.
+    pinned_paths = set()
+    for item in pinned_files:
+        if item.get('role') not in ('rule', 'custom', 'provider'):
+            raise DeploymentPreparationError('Invalid pinned deployment file role')
+        pinned_paths.add(add(item['path'], item['content'], item['role'], native=True))
+
     if service == 'mihomo' and config.get('mihomo', {}).get('linux_gateway', {}).get('enabled'):
         from backend.common.linux_gateway import _routing_mark_path
         for path, (content, role) in files.items():
@@ -423,6 +432,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             if not definition.get('url'):
                 raise DeploymentPreparationError(f'Rule provider {name} references an unbundled local file; use a managed rule source')
             downloads.append({'name': name, 'url': definition['url'], 'local_path': path})
+    downloads = [item for item in downloads if relative_path(item['local_path']) not in pinned_paths]
     # Share only original response bytes within this captured deployment. A
     # classical source may feed both domain and IP files through different
     # local callbacks; conversion and per-file/total limits still run for each
@@ -551,7 +561,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
     return _pack(manifest, files, hashlib.sha256(config_bytes).hexdigest()[:8])
 
 
-def _pack(manifest, files, config_version):
+def _pack(manifest, files, config_version, *, comparison_config=None):
     archive = io.BytesIO()
     with gzip.GzipFile(fileobj=archive, mode='wb', mtime=0) as compressed, \
             tarfile.open(fileobj=compressed, mode='w', format=tarfile.PAX_FORMAT) as tar:
@@ -563,7 +573,7 @@ def _pack(manifest, files, config_version):
             member.mode = 0o600
             tar.addfile(member, io.BytesIO(value))
     content = archive.getvalue()
-    return DeploymentBundle(manifest, content, hashlib.sha256(content).hexdigest(), config_version)
+    return DeploymentBundle(manifest, content, hashlib.sha256(content).hexdigest(), config_version, comparison_config)
 
 
 def retarget_config_path(bundle, config_path):
@@ -585,4 +595,7 @@ def retarget_config_path(bundle, config_path):
             if old_path == current:
                 item['path'] = path
             files[item['path']] = (archive.extractfile('files/' + old_path).read(), item['role'])
-    return _pack(manifest, files, bundle.config_version)
+    comparison = deepcopy(bundle.comparison_config)
+    if comparison:
+        comparison['path'] = path
+    return _pack(manifest, files, bundle.config_version, comparison_config=comparison)

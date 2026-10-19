@@ -234,7 +234,9 @@
             </Button>
           </div>
 
-          <footer class="mt-auto flex items-center gap-2 border-t border-border pt-3.5 max-sm:pt-2">
+          <AgentRuleSync v-if="['mihomo', 'oxidns'].includes(agent.service_type)" :agent-id="agent.id" />
+
+          <footer class="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3.5 max-sm:pt-2">
             <span
               :class="cn('mr-auto min-w-0 text-[12px]', syncOf(agent).tone === 'success' ? 'text-success-accent' : syncOf(agent).tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground')"
               :title="syncOf(agent).title"
@@ -265,6 +267,9 @@
               <Send v-else class="size-3.5" />
               推送
             </Button>
+            <OxiDNSRuleUpdate v-if="agent.service_type === 'oxidns'" :agent-id="agent.id"
+              :disabled="agent.status !== 'online' || pushingIds.has(agent.id) || upgradeBusy(agent.id) || deploymentBusy(agent.id) || deployments[agent.id]?.status === 'rollback_failed'"
+              @updated="loadAgents" />
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
                 <Button variant="ghost" size="icon-sm" :aria-label="`${agent.name} 的更多操作`">
@@ -883,6 +888,8 @@ import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentUpgradeStatus from '@/components/agents/AgentUpgradeStatus.vue'
+import OxiDNSRuleUpdate from '@/components/agents/OxiDNSRuleUpdate.vue'
+import AgentRuleSync from '@/components/agents/AgentRuleSync.vue'
 import { submitAgentRequests } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { upgradeLabels, useAgentUpgrades } from '@/composables/useAgentUpgrades'
