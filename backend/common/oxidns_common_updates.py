@@ -5,7 +5,7 @@ import yaml
 
 from backend.common.oxidns_common_routing import ROUTING_FIELDS, _references, resource_downloads
 from backend.common.oxidns_native import load_native_yaml, native_document
-from backend.common.oxidns_settings import OxidnsSettingsError
+from backend.common.oxidns_settings import OxidnsSettingsError, get_default_oxidns_settings
 from backend.common.oxidns_validation import schemas
 from backend.common.oxidns_references import reference_locations
 
@@ -63,13 +63,37 @@ def _restore(ctx, tag):
 
 
 def prepare_rule_update(ctx, changes, config, base_url=''):
-    """Restore parked options before explicit enabling, using only current targets."""
-    if changes.get('rule_update.enabled') is not True:
+    """Keep manual updates available for live subscriptions, independently of cron."""
+    if not _relevant(changes):
         return
-    if any(tag in ctx.included_tags for tag in _PIPELINE):
-        raise OxidnsSettingsError('规则更新流水线来自 include 文件，请在完整参数或附加文件中调整')
+    if any(tag in ctx.included_tags or ctx.alias_capability(tag) for tag in _PIPELINE):
+        if changes.get('rule_update.enabled') is True:
+            raise OxidnsSettingsError('规则更新流水线来自 include 文件或已重命名，请在完整参数或附加文件中调整')
+        return
     document = _document(ctx)
     desired = resource_downloads(document, ctx.settings, config, base_url)
+    if not desired:
+        return
+    # Do not introduce a second update plan alongside custom native executors.
+    custom = any(ctx.plugin(tag) and ctx.plugin(tag).get('type') != kind for tag, kind in _PIPELINE.items())
+    if not all(ctx.plugin(tag) for tag in _PIPELINE):
+        # Imported YAML may rename only part of a chain, without editor alias
+        # metadata. A custom sequence can also reuse both standard executors.
+        custom = custom or any(item.get('type') in ('download', 'reload_provider') and item.get('tag') not in _PIPELINE
+                               for item in document.get('plugins', []))
+        kinds = {item.get('tag'): item.get('type') for item in document.get('plugins', [])}
+        for item in document.get('plugins', []):
+            steps = item.get('args')
+            if item.get('type') != 'sequence' or item.get('tag') == 'rules_refresh' or not isinstance(steps, list) or len(steps) != 2:
+                continue
+            refs = [step.get('exec', '') if isinstance(step, dict) and set(step) == {'exec'} else '' for step in steps]
+            if all(isinstance(ref, str) and ref.startswith('$') for ref in refs) and \
+                    [kinds.get(ref[1:]) for ref in refs] == ['download', 'reload_provider']:
+                custom = True
+    if custom:
+        if changes.get('rule_update.enabled') is True:
+            raise OxidnsSettingsError('已有自定义规则更新插件，请在完整参数中配置其定时任务，不能重复创建更新链')
+        return
     restored_download = _restore(ctx, 'rules_download')
     restored_reload = _restore(ctx, 'rules_reload')
     restored_refresh = _restore(ctx, 'rules_refresh')
@@ -97,6 +121,10 @@ def prepare_rule_update(ctx, changes, config, base_url=''):
         refresh['args'] = deepcopy(_REFRESH)
     if refresh and refresh.get('type') == 'sequence' and refresh.get('args') == _DOWNLOAD_ONLY and reload and reload.get('args'):
         refresh['args'] = deepcopy(_REFRESH)
+    defaults = get_default_oxidns_settings()['rule_update']['args']
+    ctx.ensure('rules_download', {'timeout': defaults['timeout'], 'downloads': desired}, 'download')
+    ctx.ensure('rules_reload', _providers(document, []), 'reload_provider')
+    ctx.ensure('rules_refresh', _REFRESH, 'sequence')
 
 
 def _managed_jobs(cron):
@@ -186,30 +214,8 @@ def finish_rule_updates(ctx, changes, config, base_url=''):
     """Suspend an empty owned pipeline without deleting independent user jobs."""
     if not _relevant(changes):
         return
-    # Turning off the managed scheduler also suspends its unused executors.
-    # Otherwise incomplete options keep failing validation despite the switch
-    # being off. Independent jobs/callers continue to own their live pipeline.
-    if any(field.startswith('rule_update.') for field in changes):
-        try:
-            jobs = _managed_jobs(ctx.plugin('rules_cron'))
-            refresh = ctx.plugin('rules_refresh')
-            targets = {tag for tag in _PIPELINE if ctx.plugin(tag) is not None}
-            recognizable = all(ctx.plugin(tag).get('type') == _PIPELINE[tag] for tag in targets)
-            recognizable = recognizable and (not refresh or refresh.get('args') in (_REFRESH, _DOWNLOAD_ONLY, []))
-            if not jobs and targets and recognizable and not _external_references(ctx, targets, []):
-                download = ctx.plugin('rules_download')
-                if download and isinstance(download.get('args'), dict) and isinstance(download['args'].get('downloads'), list):
-                    managed = {_path(item) for item in resource_downloads(_document(ctx), ctx.settings, config, base_url)}
-                    historical = ctx.parked.get('rules_download_managed_paths', [])
-                    if isinstance(historical, list):
-                        managed.update(path for path in historical if isinstance(path, str))
-                    ctx.park('rules_download_managed_paths', sorted(path for path in managed if path is not None))
-                    ctx.park('rules_download_custom_entries', [item for item in download['args']['downloads'] if _path(item) not in managed])
-                _stop_pipeline(ctx)
-                return
-        except OxidnsSettingsError:
-            # A custom cron/refresh is not owned by the common switch.
-            pass
+    # A disabled scheduler still has a manual caller through the Agent API.
+    # Only withdrawn resources or an explicitly empty chain suspend executors.
     download = ctx.plugin('rules_download')
     reload = ctx.plugin('rules_reload')
     refresh = ctx.plugin('rules_refresh')
@@ -235,3 +241,16 @@ def finish_rule_updates(ctx, changes, config, base_url=''):
             ctx.plugin('rules_reload')['args'] = providers
             if refresh and refresh.get('type') == 'sequence' and refresh.get('args') == _DOWNLOAD_ONLY:
                 refresh['args'] = deepcopy(_REFRESH)
+
+
+def prepare_native_rule_updates(document, settings, config, base_url=''):
+    """Add manual-update capability to a rendered copy, never the saved draft."""
+    if any(item.get('type') in ('download', 'reload_provider') or item.get('tag') in _PIPELINE
+           for item in document.get('plugins', [])):
+        return document
+    from backend.common.oxidns_common import _Context
+    rendered = deepcopy(document)
+    current = deepcopy(settings)
+    current['native_config'] = yaml.safe_dump(rendered, allow_unicode=True, sort_keys=False)
+    prepare_rule_update(_Context(rendered, current), {'rule_update.enabled': False}, config, base_url)
+    return rendered

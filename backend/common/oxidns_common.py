@@ -906,8 +906,6 @@ def _park_disabled_features(ctx, changes):
 
 
 def _patch_rule_update(ctx, changes, config, base_url):
-    from backend.common.oxidns_common_updates import prepare_rule_update
-    prepare_rule_update(ctx, changes, config, base_url)
     if ctx.plugin('rules_cron') is None and (changes.get('rule_update.enabled') is True or 'rule_update.args.timezone' in changes):
         parked = ctx.parked.get('rules_cron')
         if (isinstance(parked, dict) and parked.get('tag') == 'rules_cron' and parked.get('type') == 'cron'
@@ -1093,6 +1091,8 @@ def apply_common_settings(settings, changes, config, base_url=''):
     if any(field.startswith('dynamic_domain_set.') for field in changes):
         _patch_dynamic(ctx, changes)
     _patch_resources(ctx, changes, config, base_url)
+    from backend.common.oxidns_common_updates import prepare_rule_update
+    prepare_rule_update(ctx, changes, config, base_url)
     if any(field.startswith('rule_update.') for field in changes):
         _patch_rule_update(ctx, changes, config, base_url)
     _patch_cache_dump(ctx, changes)

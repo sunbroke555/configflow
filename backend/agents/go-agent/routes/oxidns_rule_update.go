@@ -44,7 +44,7 @@ type oxRuleUpdater struct {
 }
 
 func oxRuleNotConfigured() *oxMonitorError {
-	return oxMonitorFail(http.StatusConflict, "RULE_UPDATE_NOT_CONFIGURED", "Enable native rule updates and publish the configuration before updating rules")
+	return oxMonitorFail(http.StatusConflict, "RULE_UPDATE_NOT_CONFIGURED", "Configure downloadable rules and republish the OxiDNS configuration, then retry")
 }
 
 // Discover an unconditional, two-step download -> reload_provider sequence.

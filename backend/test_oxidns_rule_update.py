@@ -80,6 +80,17 @@ def test_failed_download_never_becomes_success_and_has_safe_actionable_message(c
     assert 'secret' not in json.dumps(result)
 
 
+def test_missing_update_config_points_to_downloadable_rules_not_scheduling(calls):
+    _, replies = calls
+    replies[:] = [(409, {'success': False, 'code': 'RULE_UPDATE_NOT_CONFIGURED',
+                        'message': 'Enable native rule updates and publish the configuration'})]
+    with pytest.raises(MonitorError) as error:
+        updates.call(Manager(), 'dns', 'POST')
+    assert error.value.code == 'RULE_UPDATE_NOT_CONFIGURED'
+    assert error.value.status == 409
+    assert error.value.message == '请先配置可下载的规则并重新发布 OxiDNS 配置，然后重试。'
+
+
 @pytest.mark.parametrize('agent,agent_id,code', [
     (AGENT, 'missing', 'AGENT_NOT_FOUND'),
     ({**AGENT, 'service_type': 'mihomo'}, 'dns', 'WRONG_SERVICE'),

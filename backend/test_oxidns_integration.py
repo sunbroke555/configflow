@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import tarfile
 import zipfile
 
 import pytest
@@ -180,7 +181,10 @@ def test_preview_subscription_and_complete_zip_match_selected_profile(oxidns_app
     assert preview.status_code == 200, preview.get_json()
     public = client.get('/api/config/office/oxidns?token=admin-token', headers={'X-ConfigFlow-Profile': 'missing'})
     assert public.status_code == 200
-    assert yaml.safe_load(public.get_data()) == yaml.safe_load(preview.get_json()['content'])
+    from backend.common.config_export import sanitize_external_payload
+    # Manual update URLs now exist even with scheduling off. The public config
+    # is executable, while the human-readable preview still redacts credentials.
+    assert sanitize_external_payload(yaml.safe_load(public.get_data())) == yaml.safe_load(preview.get_json()['content'])
     assert yaml.safe_load(public.get_data())['runtime']['worker_threads'] == 3
     download = client.post('/api/profiles/office/generate/oxidns', json={})
     assert download.status_code == 200, download.get_data(as_text=True)[:100] if download.is_json else ''
@@ -205,6 +209,46 @@ def test_rule_deletion_atomically_cleans_both_targets(oxidns_app):
     for engine in ('mosdns', 'oxidns'):
         assert profile[engine]['direct_rules'] == []
         assert profile[engine]['direct_rulesets'] == []
+
+
+def test_legacy_native_manual_update_is_prepared_for_render_archive_and_agent_without_timer(oxidns_app):
+    from backend.common.oxidns_editor import prepare_editor
+    from backend.routes.agents import _prepare_transactional_content
+    app, repository = oxidns_app
+    config = repository.get_compat_config('office')
+    settings = prepare_editor(config['oxidns'], config, 'http://config.test')
+    legacy = yaml.safe_load(settings['native_config'])
+    legacy['plugins'] = [item for item in legacy['plugins'] if item['tag'] not in
+                         ('rules_download', 'rules_reload', 'rules_refresh', 'rules_cron')]
+    settings['native_config'] = '# existing native configuration\n' + yaml.safe_dump(legacy, sort_keys=False)
+    repository.save_profile('office', {'oxidns': settings})
+    before = copy.deepcopy(repository.get_profile('office'))
+    client = app.test_client()
+    rendered = client.post('/api/profiles/office/oxidns/render', json={'settings': settings})
+    assert rendered.status_code == 200, rendered.get_json()
+    expected = yaml.safe_load(rendered.get_json()['config'])
+    plugins = {item['tag']: item for item in expected['plugins']}
+    assert 'rules_cron' not in plugins
+    assert plugins['rules_download']['args']['downloads']
+    assert plugins['rules_reload']['args']
+    assert plugins['rules_refresh']['args'] == [{'exec': '$rules_download'}, {'exec': '$rules_reload'}]
+    assert [item for item in expected['plugins'] if item['tag'] not in
+            ('rules_download', 'rules_reload', 'rules_refresh')] == legacy['plugins']
+    download = client.post('/api/profiles/office/generate/oxidns', json={})
+    assert download.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(download.data)) as archive:
+        assert yaml.safe_load(archive.read('config.yaml')) == expected
+    agent = {'id': 'manual-update-fixture', 'service_type': 'oxidns', 'profile_id': 'office'}
+    prepared = _prepare_transactional_content(agent, repository.get_compat_config('office'), base_url='http://config.test')
+    assert yaml.safe_load(prepared['config_content']) == expected
+    with tarfile.open(fileobj=io.BytesIO(prepared['bundle'].archive), mode='r:gz') as archive:
+        # Agent delivery also adds its existing local DNS watchdog listener.
+        deployed = yaml.safe_load(archive.extractfile('files/config.yaml').read())
+        delivered_plugins = {item['tag']: item for item in deployed['plugins']}
+        assert 'rules_cron' not in delivered_plugins
+        for tag in ('rules_download', 'rules_reload', 'rules_refresh'):
+            assert delivered_plugins[tag] == plugins[tag]
+    assert repository.get_profile('office') == before
 
 
 def test_invalid_rule_selection_cannot_be_persisted(oxidns_app):
@@ -286,10 +330,11 @@ def test_subscription_token_works_with_global_login_wall_enabled(oxidns_app, mon
         assert response.status_code == 200
 
 
-def test_rule_update_preview_redacts_only_capability_urls_and_full_download_keeps_them(oxidns_app):
+@pytest.mark.parametrize('scheduled', [False, True])
+def test_rule_update_preview_redacts_only_capability_urls_and_full_download_keeps_them(oxidns_app, scheduled):
     app, repository = oxidns_app
     profile = repository.get_profile('office')
-    profile['oxidns']['rule_update'] = {'enabled': True}
+    profile['oxidns']['rule_update'] = {'enabled': scheduled}
     repository.save_profile('office', profile)
     config = repository.get_compat_config('office')
     private_token = config['system_config']['rule_proxy_token']

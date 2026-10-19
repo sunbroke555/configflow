@@ -64,6 +64,26 @@ def _reopen(settings):
 
 
 @pytest.mark.parametrize('source', ['adguard', 'routing'])
+def test_subscriptions_create_and_restore_manual_updates_without_scheduling(source):
+    settings = prepare_editor({}, CONFIG, 'http://config.test')
+    changes = _resources(source, True)
+    if source == 'adguard':
+        changes['adguard.enabled'] = True
+    active = _patch(settings, changes)
+    for _ in range(2):
+        document = native_document(active)
+        assert _plugin(document, 'rules_download')['args']['downloads']
+        assert _plugin(document, 'rules_reload')['args']
+        assert _plugin(document, 'rules_refresh')['args'] == [{'exec': '$rules_download'}, {'exec': '$rules_reload'}]
+        assert all(item['tag'] != 'rules_cron' for item in document['plugins'])
+        assert read_common_settings(active, CONFIG)['values']['rule_update']['enabled'] is False
+        inactive = _patch(active, _resources(source, False))
+        assert not any(item['tag'] in ('rules_download', 'rules_reload', 'rules_refresh', 'rules_cron')
+                       for item in native_document(inactive)['plugins'])
+        active = _patch(_reopen(inactive), changes)
+
+
+@pytest.mark.parametrize('source', ['adguard', 'routing'])
 @pytest.mark.parametrize('disable_together', [False, True])
 def test_last_subscription_removal_and_reenable_produce_valid_native_configs(source, disable_together):
     original = _prepared(source)
@@ -191,13 +211,14 @@ def test_removing_rule_and_its_last_custom_reference_removes_unused_provider():
 
 
 @pytest.mark.parametrize('field,value', [('timeout', '23s'), ('outbound', 'direct'), ('socks5', 'socks5://127.0.0.1:1080')])
-def test_updater_argument_edit_before_enable_is_parked_and_restored(field, value):
+def test_manual_download_options_are_live_without_enabling_schedule(field, value):
     settings = prepare_editor({'adguard': {'enabled': True, 'urls': [URL]}}, CONFIG, 'http://config.test')
     if field == 'outbound':
         settings = _edit(settings, lambda d: d.update(network={'outbound': {'profiles': {'direct': {'proxy': 'direct'}}}}))
     result = _patch(settings, {f'rule_update.args.{field}': value})
     document = native_document(result)
-    assert all(item['tag'] != 'rules_download' for item in document['plugins'])
+    assert _plugin(document, 'rules_download')['args'][field] == value
+    assert all(item['tag'] != 'rules_cron' for item in document['plugins'])
     restored = _patch(_reopen(result), {'rule_update.enabled': True})
     document = native_document(restored)
     assert _plugin(document, 'rules_download')['args'][field] == value

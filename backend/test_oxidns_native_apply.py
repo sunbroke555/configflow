@@ -205,14 +205,15 @@ def test_common_switch_rejects_bare_executor_reference(field, tag):
         apply(settings, {field: False})
 
 
-def test_disabled_updater_parks_invalid_options_and_restores_them_for_explicit_edit():
+def test_disabling_scheduler_still_validates_live_manual_download_options():
     settings = prepared(adguard={'enabled': True, 'urls': ['https://example.test/filters']}, rule_update={'enabled': True})
     disabled = apply(settings, {'rule_update.enabled': False, 'rule_update.args.timeout': 'unfinished'})
-    assert validate_settings(disabled['settings'])['valid']
+    assert not validate_settings(disabled['settings'])['valid']
     assert disabled['values']['rule_update']['args']['timeout'] == 'unfinished'
     changed = apply(disabled['settings'], {'rule_update.args.timeout': '17s'})
     assert validate_settings(changed['settings'])['valid']
-    assert not any(item['tag'] == 'rules_download' for item in doc(changed['settings'])['plugins'])
+    assert plugin(doc(changed['settings']), 'rules_download')['args']['timeout'] == '17s'
+    assert not any(item['tag'] == 'rules_cron' for item in doc(changed['settings'])['plugins'])
     restored = apply(changed['settings'], {'rule_update.enabled': True})
     assert plugin(doc(restored['settings']), 'rules_download')['args']['timeout'] == '17s'
     assert validate_settings(restored['settings'])['valid']
@@ -226,13 +227,28 @@ def test_disabling_scheduler_keeps_executors_used_by_an_independent_caller():
     assert validate_settings(result['settings'])['valid']
 
 
-def test_full_form_can_disable_an_updater_with_incomplete_arguments():
+def test_deleting_cron_preserves_manual_pipeline_and_reports_incomplete_arguments():
     settings = prepared(adguard={'enabled': True, 'urls': ['https://example.test/filters']}, rule_update={'enabled': True})
     settings = edited(settings, lambda d: plugin(d, 'rules_download')['args'].update(timeout=''))
     assert not validate_settings(settings)['valid']
     result = delete(settings, 'rules_cron')
-    assert validate_settings(result['settings'])['valid']
+    assert not validate_settings(result['settings'])['valid']
     assert result['values']['rule_update']['enabled'] is False
+    assert plugin(doc(result['settings']), 'rules_download')['args']['timeout'] == ''
+
+
+@pytest.mark.parametrize('remove_plugin', [True, False])
+def test_full_form_removes_only_schedule_and_keeps_manual_updates(remove_plugin):
+    settings = prepared(adguard={'enabled': True, 'urls': ['https://example.test/filters']}, rule_update={'enabled': True})
+    original = doc(settings)
+    result = delete(settings, 'rules_cron') if remove_plugin else change(
+        settings, lambda d: plugin(d, 'rules_cron')['args'].update(jobs=[]))
+    document = doc(result['settings'])
+    assert validate_settings(result['settings'])['valid']
+    assert not result['values']['rule_update']['enabled']
+    assert not any(item['tag'] == 'rules_cron' for item in document['plugins'])
+    for tag in ('rules_download', 'rules_reload', 'rules_refresh'):
+        assert plugin(document, tag) == plugin(original, tag)
 
 
 def test_withdrawn_source_is_not_restored_after_editing_a_disabled_pipeline():

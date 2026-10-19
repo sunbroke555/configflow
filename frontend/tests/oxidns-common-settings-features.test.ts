@@ -36,6 +36,48 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
   })
 
+  it('edits shared download settings while scheduled rule updates remain disabled', async () => {
+    const original = values()
+    const wrapper = await render({ values: original, initialFeature: 'rule_update' })
+    expect(wrapper.get('#oxi-enable-rule_update').attributes('aria-checked')).toBe('false')
+    expect(wrapper.find('[id="oxi-rule_update.args.schedule"]').exists()).toBe(false)
+    expect(wrapper.find('[id="oxi-rule_update.args.timezone"]').exists()).toBe(false)
+    for (const [field, value] of [['timeout', '90s'], ['outbound', 'rules_proxy'], ['socks5', '127.0.0.1:1080']]) {
+      const path = `rule_update.args.${field}`
+      expect(wrapper.get(`[id="oxi-${path}"]`).isVisible()).toBe(true)
+      await input(`oxi-${path}`, value)
+      expect(lastChange(wrapper)).toEqual({ [path]: value })
+      expect(wrapper.get('#oxi-enable-rule_update').attributes('aria-checked')).toBe('false')
+    }
+    expect(wrapper.emitted('change')).toHaveLength(3)
+    expect(original.rule_update).toEqual({ enabled: false, args: {} })
+  })
+
+  it('keeps download errors active while ignoring only schedule errors when rule scheduling is disabled', async () => {
+    const wrapper = await render({ values: { ...values(), rule_update: { enabled: true, args: { schedule: '30 3 * * *', timezone: 'Asia/Shanghai', timeout: '60s' } } }, initialFeature: 'rule_update' })
+    const fields = wrapper.findAllComponents(OxidnsFields).find(field => field.props('fields').some((item: any) => item.path === 'rule_update.args.timeout'))!
+    expect(wrapper.get('[id="oxi-rule_update.args.schedule"]').isVisible()).toBe(true)
+    expect(wrapper.get('[id="oxi-rule_update.args.timezone"]').isVisible()).toBe(true)
+    fields.vm.$emit('error', 'rule_update.args.schedule', 'Cron 无效')
+    fields.vm.$emit('error', 'rule_update.args.timezone', '时区无效')
+    await flushPromises()
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('Cron 无效')
+    await wrapper.get('#oxi-enable-rule_update').trigger('click')
+    expect(lastChange(wrapper)).toEqual({ 'rule_update.enabled': false })
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
+    expect(wrapper.find('[id="oxi-rule_update.args.schedule"]').exists()).toBe(false)
+    expect(wrapper.find('[id="oxi-rule_update.args.timezone"]').exists()).toBe(false)
+    for (const field of ['timeout', 'outbound', 'socks5']) {
+      fields.vm.$emit('error', `rule_update.args.${field}`, `${field} 无效`)
+      await flushPromises()
+      expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe(`${field} 无效`)
+      fields.vm.$emit('error', `rule_update.args.${field}`, '')
+    }
+    await wrapper.get('#oxi-enable-rule_update').trigger('click')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('Cron 无效')
+    expect((wrapper.get('[id="oxi-rule_update.args.schedule"]').element as HTMLInputElement).value).toBe('30 3 * * *')
+  })
+
   it.each([
     ['cache_size', 'cache_enabled'],
     ['cache_lazy_ttl', 'cache_enabled'],

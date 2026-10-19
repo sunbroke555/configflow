@@ -36,7 +36,7 @@
             <CollapsibleContent force-mount class="space-y-4 border-t border-border p-3 data-[state=closed]:hidden">
               <div v-if="isCustom(`${feature.key}.enabled`)" class="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"><span>自定义配置</span><FieldHelp :label="`${feature.title}配置状态`" :text="capability(`${feature.key}.enabled`)?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability(`${feature.key}.enabled`)?.target || feature.key)">完整参数<ChevronRight class="size-3.5" /></Button></div>
               <div v-else class="flex min-h-11 items-center gap-3"><Switch :id="`oxi-enable-${feature.key}`" :model-value="Boolean(read(`${feature.key}.enabled`))" :disabled="disabled" @update:model-value="change(`${feature.key}.enabled`, $event)" /><Label :for="`oxi-enable-${feature.key}`">启用{{ feature.title }}</Label></div>
-              <OxidnsFields v-show="read(`${feature.key}.enabled`) && !isCustom(`${feature.key}.enabled`)" :settings="draft" :fields="feature.fields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+              <OxidnsFields v-show="feature.key === 'rule_update' || (read(`${feature.key}.enabled`) && !isCustom(`${feature.key}.enabled`))" :settings="draft" :fields="featureFields(feature)" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
             </CollapsibleContent>
           </Collapsible>
         </TabsContent>
@@ -105,6 +105,10 @@ function capability(path: string): OxidnsFieldCapability | undefined {
   while (parts.length) { const found = props.capabilities[parts.join('.')]; if (found) return found; parts.pop() }
 }
 const isCustom = (path: string) => capability(path)?.editable === false
+const ruleDownloadFields = new Set(['rule_update.args.timeout', 'rule_update.args.outbound', 'rule_update.args.socks5'])
+const featureFields = (feature: typeof featureGroups[number]) => feature.key === 'rule_update'
+  ? feature.fields.filter(field => ruleDownloadFields.has(field.path) || (read('rule_update.enabled') && !isCustom('rule_update.enabled')))
+  : feature.fields
 const ruleOptions = (group: typeof ruleGroups[number]) => {
   const opposite = selectedRules(group.opposite)
   const selected = selectedRules(group.key)
@@ -134,7 +138,7 @@ const cacheErrorDependencies: Record<string, string[]> = {
 function activeError() {
   return Object.entries(errors).find(([path, message]) => message && !isCustom(path)
     && !(cacheErrorDependencies[path] || []).some(dependency => !read(dependency))
-    && !featureGroups.some(feature => path.startsWith(`${feature.key}.`) && !path.endsWith('.enabled') && !read(`${feature.key}.enabled`)))?.[1] || ''
+    && !featureGroups.some(feature => path.startsWith(`${feature.key}.`) && !path.endsWith('.enabled') && !ruleDownloadFields.has(path) && !read(`${feature.key}.enabled`)))?.[1] || ''
 }
 function reportErrors() { emit('error', activeError()) }
 function setError(path: string, message: string) { errors[path] = message; reportErrors() }

@@ -56,6 +56,7 @@ func TestOxiDNSRuleRequestTransportErrors(t *testing.T) {
 	}
 }
 
+// Manual updates need only a download -> reload sequence, without a cron plugin.
 const oxRuleTestPlugins = `
   - {tag: domains, type: domain_set, args: {files: [rules/domains.txt]}}
   - {tag: addresses, type: ip_set, args: {files: [rules/addresses.txt]}}
@@ -166,7 +167,7 @@ func (f *oxRuleFixture) mutations() []string {
 	return calls
 }
 
-func TestOxiDNSRuleUpdateSuccessAndIdle(t *testing.T) {
+func TestOxiDNSRuleUpdateManualWithoutCron(t *testing.T) {
 	f := newOxRuleFixture(t, oxRuleTestPlugins, nil)
 	if task := f.wait(t); task.Status != "idle" || task.Phase != "idle" || task.ID != "" {
 		t.Fatalf("unexpected idle state: %+v", task)
@@ -179,9 +180,19 @@ func TestOxiDNSRuleUpdateSuccessAndIdle(t *testing.T) {
 	if task.Status != "succeeded" || task.Phase != "done" || task.ID == "" || task.Downloaded != 2 || task.Reloaded != 2 {
 		t.Fatalf("unexpected final state: %+v", task)
 	}
-	want := []string{"POST /api/plugins/rules_download/download", "POST /api/plugins/domains/reload", "POST /api/plugins/addresses/reload"}
-	if !reflect.DeepEqual(f.mutations(), want) {
-		t.Fatalf("wrong operation order: %v", f.mutations())
+	want := []string{
+		"GET /api/reload/status",
+		"GET /api/plugins/rules_download/downloads",
+		"POST /api/plugins/rules_download/download",
+		"GET /api/reload/status",
+		"POST /api/plugins/domains/reload",
+		"POST /api/plugins/addresses/reload",
+		"GET /api/reload/status",
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Fatalf("wrong manual update requests: %v", f.calls)
 	}
 }
 

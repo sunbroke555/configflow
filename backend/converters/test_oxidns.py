@@ -146,16 +146,204 @@ def test_invalid_or_nonportable_custom_config_rejected(custom):
         document({'custom_config': custom})
 
 
-def test_native_rule_update_lists_converted_downloads_and_targeted_providers():
+@pytest.mark.parametrize('scheduled', [False, True])
+def test_native_rule_update_lists_converted_downloads_and_targeted_providers(scheduled):
     config = {'system_config': {'rule_proxy_token': 'fixture-token'},
-        'oxidns': {'rule_update': {'enabled': True}, 'direct_rulesets': ['a']},
+        'oxidns': {'rule_update': {'enabled': scheduled}, 'direct_rulesets': ['a']},
         'rule_configs': [{'id': 'a', 'name': 'test', 'itemType': 'ruleset', 'behavior': 'classical', 'url': 'https://rules.test/list'}]}
     doc = yaml.safe_load(generate_oxidns_config(config, 'https://config.test'))
     p = {item['tag']: item for item in doc['plugins']}
     assert len(p['rules_download']['args']['downloads']) == 2
     assert p['rules_reload']['args'] == ['$rules_domain_1', '$rules_ip_1']
-    assert p['rules_cron']['args']['jobs'][0]['executors'] == ['$rules_refresh']
-    assert p['rules_cron']['args']['jobs'][0]['schedule'] == '30 3 * * *'
+    assert p['rules_refresh']['args'] == [{'exec': '$rules_download'}, {'exec': '$rules_reload'}]
+    if scheduled:
+        assert p['rules_cron']['args']['jobs'][0]['executors'] == ['$rules_refresh']
+        assert p['rules_cron']['args']['jobs'][0]['schedule'] == '30 3 * * *'
+    else:
+        assert 'rules_cron' not in p
+
+
+def test_default_manual_update_chain_supports_adguard_subscriptions_without_cron():
+    p = plugins({'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']}})
+    assert p['rules_download']['args']['downloads'][0]['url'] == 'https://rules.test/adguard.txt'
+    assert p['rules_reload']['args'] == ['$adguard_rules']
+    assert p['rules_refresh']['args'] == [{'exec': '$rules_download'}, {'exec': '$rules_reload'}]
+    assert 'rules_cron' not in p
+
+
+@pytest.mark.parametrize('settings,rules', [
+    ({}, []),
+    ({'direct_rules': ['a']}, [rule('a', 'example.test')]),
+    ({'adguard': {'enabled': True, 'content': '||ads.test^'}}, []),
+    ({}, [{'id': 'unused', 'itemType': 'ruleset', 'url': 'https://rules.test/unused'}]),
+])
+def test_no_downloads_produce_no_empty_update_chain(settings, rules):
+    p = plugins(settings, rules)
+    assert not {'rules_download', 'rules_reload', 'rules_refresh', 'rules_cron'} & p.keys()
+    with pytest.raises(OxidnsSettingsError, match='定时更新需要至少一个规则订阅'):
+        plugins({**settings, 'rule_update': {'enabled': True}}, rules)
+
+
+@pytest.mark.parametrize('args', [
+    {'timeout': 'not-a-duration'}, {'timeout': False},
+    {'socks5': 'missing-port'}, {'socks5': False},
+    {'outbound': '   '}, {'outbound': []},
+])
+def test_manual_download_options_are_validated_with_scheduling_disabled(args):
+    with pytest.raises(OxidnsSettingsError):
+        plugins({'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']},
+                 'rule_update': {'enabled': False, 'args': args}})
+
+
+def test_manual_download_keeps_zero_timeout_and_ignores_inactive_schedule_fields():
+    p = plugins({'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']},
+                 'rule_update': {'enabled': False, 'args': {
+                     'timeout': 0, 'socks5': '127.0.0.1:1080', 'outbound': '',
+                     'schedule': 'unfinished', 'timezone': 'not-a-timezone'}}})
+    assert p['rules_download']['args']['timeout'] == 0
+    assert p['rules_download']['args']['socks5'] == '127.0.0.1:1080'
+    assert 'outbound' not in p['rules_download']['args']
+    assert 'rules_cron' not in p
+
+
+@pytest.mark.parametrize('prefix', ['rules', 'custom'])
+def test_custom_update_chain_is_preserved_without_adding_another_or_enabling_cron(prefix):
+    settings = {'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']}}
+    path = get_oxidns_ruleset_downloads({'oxidns': settings})[0]['local_path']
+    custom = [
+        {'tag': f'{prefix}_download', 'type': 'download', 'args': {'timeout': '19s', 'downloads': [
+            {'url': 'https://rules.test/adguard.txt', 'dir': './rules', 'filename': path.rsplit('/', 1)[-1]}]}},
+        {'tag': f'{prefix}_reload', 'type': 'reload_provider', 'args': ['$adguard_rules']},
+        {'tag': f'{prefix}_refresh', 'type': 'sequence', 'args': [
+            {'exec': f'${prefix}_download'}, {'exec': f'${prefix}_reload'}]},
+    ]
+    settings['custom_config'] = yaml.safe_dump({'plugins': custom})
+    p = plugins(settings)
+    assert [item for item in p.values() if item['type'] in ('download', 'reload_provider')] == custom[:2]
+    assert p[f'{prefix}_refresh'] == custom[2]
+    assert 'rules_cron' not in p
+    if prefix != 'rules':
+        assert not {'rules_download', 'rules_reload', 'rules_refresh'} & p.keys()
+    with pytest.raises(OxidnsSettingsError, match='已有自定义下载或重载插件'):
+        plugins({**settings, 'rule_update': {'enabled': True}})
+
+
+@pytest.mark.parametrize('custom', [
+    {'tag': 'custom_download', 'type': 'download', 'args': {'downloads': [
+        {'url': 'https://rules.test/custom.txt', 'dir': './rules', 'filename': 'custom.txt'}]}},
+    {'tag': 'custom_reload', 'type': 'reload_provider', 'args': ['$adguard_rules']},
+    {'tag': 'rules_refresh', 'type': 'sequence', 'args': [{'exec': 'accept'}]},
+])
+def test_custom_maintenance_executors_do_not_receive_an_implicit_standard_chain(custom):
+    settings = {'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']},
+                'custom_config': yaml.safe_dump({'plugins': [custom]})}
+    p = plugins(settings)
+    assert p[custom['tag']] == custom
+    assert not ({'rules_download', 'rules_reload', 'rules_refresh', 'rules_cron'} - {custom['tag']}) & p.keys()
+    with pytest.raises(OxidnsSettingsError, match='已有自定义下载或重载插件'):
+        plugins({**settings, 'rule_update': {'enabled': True}})
+
+
+def native_rule_fixture():
+    config = {'system_config': {'server_domain': 'https://config.test', 'rule_proxy_token': 'fixture-token'},
+              'rule_configs': [{'id': 'a', 'itemType': 'ruleset', 'behavior': 'domain', 'url': 'https://rules.test/list'}],
+              'oxidns': {'direct_rulesets': ['a'], 'rule_update': {'enabled': False}}}
+    path = get_oxidns_ruleset_downloads(config)[0]['local_path']
+    native = {'runtime': {'worker_threads': 3}, 'future': {'keep': [False, None, 0]}, 'plugins': [
+        {'tag': 'domains', 'type': 'domain_set', 'args': {'files': [path]}}]}
+    config['oxidns'].update(config_mode='native', native_config='# saved native draft\n' + yaml.safe_dump(native))
+    return config, native
+
+
+def include_native_plugins(config, native):
+    config['oxidns']['additional_files'] = [{'path': 'plugins.yaml', 'encoding': 'text',
+                                            'content': yaml.safe_dump({'plugins': native['plugins']})}]
+    config['oxidns']['native_config'] = yaml.safe_dump({**native, 'include': ['plugins.yaml'], 'plugins': []})
+
+
+@pytest.mark.parametrize('included', [False, True])
+def test_native_generation_adds_manual_capability_without_changing_saved_draft(included):
+    config, native = native_rule_fixture()
+    if included:
+        include_native_plugins(config, native)
+    before = deepcopy(config)
+    rendered = generate_oxidns_config(config)
+    generated = yaml.safe_load(rendered)
+    p = {item['tag']: item for item in generated['plugins']}
+    assert set(p) == {'domains', 'rules_download', 'rules_reload', 'rules_refresh'}
+    assert p['domains'] == native['plugins'][0]
+    assert p['rules_reload']['args'] == ['$domains']
+    assert p['rules_refresh']['args'] == [{'exec': '$rules_download'}, {'exec': '$rules_reload'}]
+    assert len(p['rules_download']['args']['downloads']) == 1
+    assert generated['runtime'] == native['runtime'] and generated['future'] == native['future']
+    assert config == before
+    assert generate_oxidns_config(config) == rendered
+    deployed = deepcopy(config)
+    deployed['oxidns']['native_config'] = rendered
+    assert generate_oxidns_config(deployed) == rendered
+
+
+@pytest.mark.parametrize('timeout', ['17s', 'unfinished'])
+def test_native_generation_restores_and_validates_parked_download_options(timeout):
+    config, _ = native_rule_fixture()
+    config['oxidns']['_common_disabled'] = {
+        'rules_download': {'tag': 'rules_download', 'type': 'download', 'args': {'timeout': timeout, 'downloads': []}},
+        'rules_reload': {'tag': 'rules_reload', 'type': 'reload_provider', 'args': ['$withdrawn', '$domains']},
+        'rules_refresh': {'tag': 'rules_refresh', 'type': 'sequence', 'args': []},
+        'rules_cron': {'tag': 'rules_cron', 'type': 'cron', 'args': {'jobs': []}},
+    }
+    before = deepcopy(config)
+    if timeout == 'unfinished':
+        with pytest.raises(OxidnsSettingsError, match='timeout'):
+            generate_oxidns_config(config)
+    else:
+        p = {item['tag']: item for item in yaml.safe_load(generate_oxidns_config(config))['plugins']}
+        assert p['rules_download']['args']['timeout'] == timeout
+        assert len(p['rules_download']['args']['downloads']) == 1
+        assert p['rules_reload']['args'] == ['$domains']
+        assert 'rules_cron' not in p
+    assert config == before
+
+
+@pytest.mark.parametrize('included', [False, True])
+@pytest.mark.parametrize('prefix', ['rules', 'custom'])
+def test_native_generation_keeps_existing_update_chain_without_adding_another(prefix, included):
+    config, native = native_rule_fixture()
+    native['plugins'].extend([
+        {'tag': f'{prefix}_download', 'type': 'download', 'args': {'downloads': [
+            {'url': 'https://rules.test/list', 'dir': 'rules', 'filename': 'custom.txt'}]}},
+        {'tag': f'{prefix}_reload', 'type': 'reload_provider', 'args': ['$domains']},
+        {'tag': f'{prefix}_refresh', 'type': 'sequence', 'args': [
+            {'exec': f'${prefix}_download'}, {'exec': f'${prefix}_reload'}]},
+    ])
+    config['oxidns']['native_config'] = yaml.safe_dump(native)
+    if included:
+        include_native_plugins(config, native)
+    before = deepcopy(config)
+    assert yaml.safe_load(generate_oxidns_config(config)) == native
+    assert config == before
+
+
+@pytest.mark.parametrize('tag', ['rules_download', 'rules_reload', 'rules_refresh'])
+def test_native_generation_does_not_claim_existing_standard_tags(tag):
+    config, native = native_rule_fixture()
+    native['plugins'].append({'tag': tag, 'type': 'sequence', 'args': [{'exec': 'return'}]})
+    include_native_plugins(config, native)
+    before = deepcopy(config)
+    assert yaml.safe_load(generate_oxidns_config(config)) == native
+    assert config == before
+
+
+@pytest.mark.parametrize('unmanaged_file', [False, True])
+def test_native_generation_without_referenced_downloads_does_not_add_a_chain(unmanaged_file):
+    config, native = native_rule_fixture()
+    native['plugins'][0]['args'] = {'files': ['rules/private.txt']} if unmanaged_file else {'exps': ['domain:example.test']}
+    config['oxidns']['native_config'] = yaml.safe_dump(native)
+    if unmanaged_file:
+        config['oxidns']['additional_files'] = [{'path': 'rules/private.txt', 'encoding': 'text', 'content': 'domain:example.test\n'}]
+    before = deepcopy(config)
+    assert yaml.safe_load(generate_oxidns_config(config)) == native
+    assert config == before
 
 
 def test_explicit_domain_rule_wins_over_old_learned_classification():

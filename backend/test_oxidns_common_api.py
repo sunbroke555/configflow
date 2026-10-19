@@ -74,6 +74,9 @@ def test_disabling_rule_updates_after_enabling_keeps_draft_renderable(oxidns_app
     for document in (yaml.safe_load(disabled_draft['native_config']),
                      yaml.safe_load(rendered.get_json()['config'])):
         assert not any(plugin.get('tag') == 'rules_cron' for plugin in document['plugins'])
+        for tag in ('rules_download', 'rules_reload', 'rules_refresh'):
+            assert next(plugin for plugin in document['plugins'] if plugin['tag'] == tag) == next(
+                plugin for plugin in enabled_document['plugins'] if plugin['tag'] == tag)
         assert all(plugin['args']['jobs'] for plugin in document['plugins']
                    if plugin.get('type') == 'cron')
     assert rendered.headers['Cache-Control'] == 'no-store'

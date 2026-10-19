@@ -333,8 +333,7 @@ def test_disabling_last_rule_update_job_removes_cron_and_restores_its_settings()
         disabled = apply(enabled, {'rule_update.enabled': False})
         assert enabled == before
         expected = deepcopy(original)
-        expected['plugins'] = [item for item in expected['plugins'] if item['tag'] not in
-                               ('rules_cron', 'rules_download', 'rules_reload', 'rules_refresh')]
+        expected['plugins'] = [item for item in expected['plugins'] if item['tag'] != 'rules_cron']
         assert doc(disabled['settings']) == expected
         assert disabled['values']['rule_update']['enabled'] is False
         assert not [issue for issue in validate_native_config(doc(disabled['settings'])) if issue['severity'] == 'error']
@@ -379,6 +378,36 @@ def test_disabling_rule_update_repairs_legacy_empty_cron():
     assert not any(item['tag'] == 'rules_cron' for item in doc(result['settings'])['plugins'])
     assert not [issue for issue in validate_native_config(doc(result['settings'])) if issue['severity'] == 'error']
     assert settings == before
+
+
+@pytest.mark.parametrize('renamed', [
+    ('rules_download', 'rules_reload', 'rules_refresh'),
+    ('rules_download', 'rules_refresh'),
+    ('rules_refresh',),
+])
+def test_imported_custom_updater_does_not_get_a_second_managed_chain(renamed):
+    settings = prepared(adguard={'enabled': True, 'urls': ['https://example.test/filter.txt']})
+    for tag in renamed:
+        settings['native_config'] = settings['native_config'].replace(tag, tag.replace('rules_', 'custom_'))
+    before = deepcopy(settings)
+    changed = apply(settings, {'adguard.mode': 'refused'})['settings']
+    assert not any(item['tag'] in (*renamed, 'rules_cron') for item in doc(changed)['plugins'])
+    disabled = apply(settings, {'rule_update.enabled': False})['settings']
+    assert doc(disabled) == doc(settings)
+    with pytest.raises(OxidnsSettingsError, match='自定义规则更新'):
+        apply(settings, {'rule_update.enabled': True})
+    assert settings == before
+
+
+def test_resource_edit_does_not_overwrite_an_unrelated_standard_tag_collision():
+    settings = prepared(adguard={'enabled': True, 'urls': ['https://example.test/filter.txt']})
+    settings = edited(settings, lambda d: d.update(plugins=[p for p in d['plugins']
+        if p['tag'] not in ('rules_download', 'rules_reload', 'rules_refresh')]))
+    settings = edited(settings, lambda d: d['plugins'].append(
+        {'tag': 'rules_refresh', 'type': 'forward', 'args': {'upstreams': [{'addr': 'udp://192.0.2.53'}]}}))
+    changed = apply(settings, {'adguard.mode': 'refused'})['settings']
+    assert plugin(doc(changed), 'rules_refresh') == plugin(doc(settings), 'rules_refresh')
+    assert not any(item['tag'] in ('rules_download', 'rules_reload', 'rules_cron') for item in doc(changed)['plugins'])
 
 
 def test_rule_update_reads_actual_job_and_preserves_other_jobs(oxidns_app):
