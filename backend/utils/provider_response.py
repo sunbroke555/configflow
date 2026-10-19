@@ -53,6 +53,18 @@ def _copy(response):
     return Response(response.get_data(), status=response.status_code, headers=list(response.headers))
 
 
+def requested_filters():
+    """Validate per-group text-provider filters before fetching or publishing data."""
+    if not any(key in request.args for key in ('regex', 'exclude_regex')):
+        return None
+    from backend.utils.group_candidates import CandidateValidationError, filter_candidates
+    if request.args.get('format') not in ('surge', 'loon'):
+        raise CandidateValidationError('来源正则筛选仅支持 Surge/Loon 格式')
+    filters = (request.args.get('regex', ''), request.args.get('exclude_regex', ''))
+    filter_candidates([], *filters)
+    return filters
+
+
 def serve_provider(kind, item_id, profile_id, config_data, render):
     """Return ``render()``'s response, or the last good content once the client would time out.
 
@@ -61,7 +73,8 @@ def serve_provider(kind, item_id, profile_id, config_data, render):
     """
     fallback = not request.args.get('format')
     digest = hashlib.sha256(json.dumps(config_data, sort_keys=True, default=str).encode()).hexdigest()
-    key = (kind, profile_id, item_id, request.args.get('format') or '', digest)
+    key = (kind, profile_id, item_id, request.args.get('format') or '',
+           request.args.get('regex', ''), request.args.get('exclude_regex', ''), digest)
     app = current_app._get_current_object()
     environ = dict(request.environ)
 

@@ -536,6 +536,13 @@ def get_aggregation_provider(agg_id):
         logger.error("聚合操作失败: %s", safe_exception_details(e))
         return jsonify({'success': False, 'message': '聚合操作失败'}), 500
 
+    from backend.utils.group_candidates import CandidateValidationError, filter_candidates
+    from backend.utils.provider_response import requested_filters
+    try:
+        filters = requested_filters()
+    except CandidateValidationError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+
     def render():
         try:
             # 生成 provider 文件（优先从URL获取订阅新数据并更新缓存，失败则使用本地缓存）
@@ -546,13 +553,16 @@ def get_aggregation_provider(agg_id):
                 provider_data = yaml.safe_load(result['content'])
                 proxies = provider_data.get('proxies', [])
                 from backend.converters.surge import convert_proxies_to_surge_text
-                surge_text = convert_proxies_to_surge_text(proxies)
+                surge_text = convert_proxies_to_surge_text(
+                    filter_candidates(proxies, *filters) if filters else proxies)
                 return Response(surge_text, mimetype='text/plain')
 
             if request.args.get('format') == 'loon':
                 provider_data = yaml.safe_load(result['content'])
                 from backend.converters.loon import convert_proxies_to_loon_text
-                loon_text = convert_proxies_to_loon_text(provider_data.get('proxies', []))
+                proxies = provider_data.get('proxies', [])
+                loon_text = convert_proxies_to_loon_text(
+                    filter_candidates(proxies, *filters) if filters else proxies)
                 return Response(loon_text, mimetype='text/plain')
 
             # Serve the exact validated snapshot, not a concurrently replaced artifact.

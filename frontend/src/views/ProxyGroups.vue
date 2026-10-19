@@ -236,9 +236,11 @@
           <div class="flex min-w-0 flex-col gap-2.5">
             <div class="font-mono text-[10.5px] tracking-[0.14em] text-muted-foreground uppercase">筛选</div>
             <div class="flex flex-1 flex-col gap-2 rounded-[14px] border border-border bg-background/60 p-3">
+              <Label for="draft-regex">保留正则</Label>
               <div class="relative">
                 <span class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 font-mono text-primary-accent">/</span>
                 <Input
+                  id="draft-regex"
                   v-model="draft.regex"
                   class="pl-7 font-mono text-[13px]"
                   spellcheck="false"
@@ -247,6 +249,17 @@
                   aria-label="正则过滤"
                 />
               </div>
+              <Label for="draft-exclude-regex">排除正则</Label>
+              <Input
+                id="draft-exclude-regex"
+                v-model="draft.excludeRegex"
+                class="font-mono text-[13px]"
+                spellcheck="false"
+                placeholder="如 广告|剩余流量|到期"
+                :disabled="!!selected.follow_group || draftSaving"
+                aria-label="排除正则"
+              />
+              <p class="m-0 text-[11.5px] text-muted-foreground">排除匹配的节点，留空则不排除。</p>
               <p class="m-0 min-h-4 text-[11.5px] text-destructive-accent" :class="!preview.error && 'max-sm:hidden'">{{ preview.error }}</p>
               <div class="flex items-baseline gap-2">
                 <b class="font-display text-[38px] leading-none font-medium"><AnimatedNumber :value="preview.nodes.length" /></b>
@@ -286,7 +299,7 @@
                   <span class="min-w-0 [overflow-wrap:anywhere]">{{ node.name }}</span>
                 </span>
                 <span v-if="!preview.nodes.length && !preview.loading" class="text-[12.5px] text-muted-foreground">
-                  {{ selected.follow_group ? '跟随策略组不单独筛选节点。' : draft.sources.length ? '没有节点命中这个正则。' : '先选择至少一个来源。' }}
+                  {{ selected.follow_group ? '跟随策略组不单独筛选节点。' : draft.sources.length ? '没有节点符合当前筛选条件。' : '先选择至少一个来源。' }}
                 </span>
               </div>
             </div>
@@ -442,13 +455,13 @@
               />
             </div>
             <div v-if="form.subscriptions && form.subscriptions.length" class="flex flex-col gap-1.5">
-              <Label for="group-regex">正则过滤</Label>
+              <Label for="group-regex">保留正则</Label>
               <div class="flex items-center gap-2">
                 <Input
                   id="group-regex"
                   v-model="form.regex"
                   class="bg-background/50 font-mono"
-                  placeholder="可选，过滤订阅节点名称"
+                  placeholder="不填则保留全部订阅节点"
                 />
                 <Button
                   variant="outline"
@@ -460,6 +473,14 @@
                   预览
                 </Button>
               </div>
+              <Label for="group-exclude-regex">排除正则</Label>
+              <Input
+                id="group-exclude-regex"
+                v-model="form.exclude_regex"
+                class="bg-background/50 font-mono"
+                placeholder="如 广告|剩余流量|到期"
+              />
+              <p class="m-0 text-[12px] text-muted-foreground">先保留匹配的节点，再排除匹配的节点；排除正则留空则不排除。</p>
             </div>
           </template>
 
@@ -485,13 +506,13 @@
             v-if="enabledSources.includes('aggregation') && form.aggregations && form.aggregations.length"
             class="flex flex-col gap-1.5"
           >
-            <Label for="group-agg-regex">正则过滤</Label>
+            <Label for="group-agg-regex">保留正则</Label>
             <div class="flex items-center gap-2">
               <Input
                 id="group-agg-regex"
                 v-model="form.aggregation_regex"
                 class="bg-background/50 font-mono"
-                placeholder="可选，过滤聚合节点名称"
+                placeholder="不填则保留全部聚合节点"
               />
               <Button
                 variant="outline"
@@ -503,8 +524,15 @@
                 预览
               </Button>
             </div>
+            <Label for="group-agg-exclude-regex">排除正则</Label>
+            <Input
+              id="group-agg-exclude-regex"
+              v-model="form.aggregation_exclude_regex"
+              class="bg-background/50 font-mono"
+              placeholder="如 广告|剩余流量|到期"
+            />
             <p class="m-0 text-[12px] text-muted-foreground">
-              此正则应用于聚合中的节点，不使用聚合自带的正则过滤器。
+              对聚合筛选后的节点继续筛选：先保留，再排除；排除正则留空则不排除。
             </p>
           </div>
 
@@ -784,7 +812,9 @@ const form = ref<Partial<ProxyGroup>>({
   interval: 300,
   subscriptions: [],
   regex: '',
+  exclude_regex: '',
   aggregation_regex: '',
+  aggregation_exclude_regex: '',
   manual_nodes: [],
   aggregations: [],
   include_groups: [],
@@ -990,6 +1020,7 @@ const handleFollowChange = (checked: boolean) => {
     form.value.include_groups = []
     form.value.subscriptions = []
     form.value.regex = ''
+    form.value.exclude_regex = ''
   } else {
     // 取消跟随时，清除跟随策略
     form.value.follow_group = undefined
@@ -1007,6 +1038,7 @@ watch(enabledSources, (newSources) => {
   if (!newSources.includes('aggregation')) {
     form.value.aggregations = []
     form.value.aggregation_regex = ''
+    form.value.aggregation_exclude_regex = ''
   }
   // 如果取消勾选"策略"，清空引用策略列表
   if (!newSources.includes('strategy')) {
@@ -1016,6 +1048,7 @@ watch(enabledSources, (newSources) => {
   if (!newSources.includes('subscription')) {
     form.value.subscriptions = []
     form.value.regex = ''
+    form.value.exclude_regex = ''
   }
   // 如果取消勾选"跟随"，清空跟随策略
   if (!newSources.includes('follow')) {
@@ -1360,15 +1393,11 @@ const getPreviewSourceLabel = (node: any) => {
 
 const previewRegexMatches = async (source: 'subscription' | 'aggregation') => {
   const regex = source === 'subscription' ? form.value.regex : form.value.aggregation_regex
+  const excludeRegex = source === 'subscription' ? form.value.exclude_regex : form.value.aggregation_exclude_regex
   const sourceIds = source === 'subscription' ? (form.value.subscriptions || []) : (form.value.aggregations || [])
 
   if (!sourceIds.length) {
     notify.warning(source === 'subscription' ? '请先选择订阅' : '请先选择聚合')
-    return
-  }
-
-  if (!regex || !regex.trim()) {
-    notify.warning('请先输入正则表达式')
     return
   }
 
@@ -1381,8 +1410,8 @@ const previewRegexMatches = async (source: 'subscription' | 'aggregation') => {
 
   try {
     const payload = source === 'subscription'
-      ? { source, regex, subscriptions: sourceIds }
-      : { source, regex, aggregations: sourceIds }
+      ? { source, regex: regex || '.*', exclude_regex: excludeRegex || '', subscriptions: sourceIds }
+      : { source, regex: regex || '.*', exclude_regex: excludeRegex || '', aggregations: sourceIds }
     const { data } = await proxyGroupApi.previewRegex(payload, profileId)
 
     if (data.success) {
@@ -1402,15 +1431,11 @@ const previewRegexMatches = async (source: 'subscription' | 'aggregation') => {
 
 const previewSavedRegexMatches = async (group: ProxyGroup, source: 'subscription' | 'aggregation') => {
   const regex = source === 'subscription' ? group.regex : group.aggregation_regex
+  const excludeRegex = source === 'subscription' ? group.exclude_regex : group.aggregation_exclude_regex
   const sourceIds = source === 'subscription' ? (group.subscriptions || []) : (group.aggregations || [])
 
   if (!sourceIds.length) {
     notify.warning(source === 'subscription' ? '该策略组没有订阅来源' : '该策略组没有聚合来源')
-    return
-  }
-
-  if (!regex || !regex.trim()) {
-    notify.warning('该策略组没有配置正则表达式')
     return
   }
 
@@ -1423,8 +1448,8 @@ const previewSavedRegexMatches = async (group: ProxyGroup, source: 'subscription
 
   try {
     const payload = source === 'subscription'
-      ? { source, regex, subscriptions: sourceIds }
-      : { source, regex, aggregations: sourceIds }
+      ? { source, regex: regex || '.*', exclude_regex: excludeRegex || '', subscriptions: sourceIds }
+      : { source, regex: regex || '.*', exclude_regex: excludeRegex || '', aggregations: sourceIds }
     const { data } = await proxyGroupApi.previewRegex(payload, profileId)
 
     if (data.success) {
@@ -1510,7 +1535,9 @@ const showAddDialog = async () => {
     enabled: true,
     subscriptions: [],
     regex: '',
+    exclude_regex: '',
     aggregation_regex: '',
+    aggregation_exclude_regex: '',
     manual_nodes: [],
     aggregations: [],
     include_groups: [],
@@ -1665,7 +1692,9 @@ const editGroup = async (row: ProxyGroup) => {
     enabled: row.enabled !== undefined ? row.enabled : true,
     subscriptions,
     regex: row.regex || '',
+    exclude_regex: row.exclude_regex || '',
     aggregation_regex: row.aggregation_regex || '',
+    aggregation_exclude_regex: row.aggregation_exclude_regex || '',
     manual_nodes,
     aggregations: group_aggregations,
     include_groups,
@@ -1741,6 +1770,7 @@ const saveGroup = async () => {
     if (!enabledSources.value.includes('subscription')) {
       saveData.subscriptions = []
       saveData.regex = ''
+      saveData.exclude_regex = ''
     }
     if (!enabledSources.value.includes('node')) {
       saveData.manual_nodes = []
@@ -1748,6 +1778,7 @@ const saveGroup = async () => {
     if (!enabledSources.value.includes('aggregation')) {
       saveData.aggregations = []
       saveData.aggregation_regex = ''
+      saveData.aggregation_exclude_regex = ''
     }
     if (!enabledSources.value.includes('strategy')) {
       saveData.include_groups = []
@@ -1908,10 +1939,11 @@ const selectedKey = ref<string>('')
 const selected = computed(() => proxyGroups.value.find(g => keyOf(g) === selectedKey.value) || null)
 
 type SourceKind = 'subscription' | 'aggregation'
-const draft = ref<{ kind: SourceKind; sources: string[]; regex: string }>({
+const draft = ref<{ kind: SourceKind; sources: string[]; regex: string; excludeRegex: string }>({
   kind: 'subscription',
   sources: [],
-  regex: ''
+  regex: '',
+  excludeRegex: ''
 })
 
 /** 有聚合引用的策略组按聚合筛选，否则按订阅筛选，与生成配置时的取数口径一致 */
@@ -1923,7 +1955,8 @@ const draftFrom = (group: ProxyGroup) => {
   return {
     kind,
     sources: [...((kind === 'aggregation' ? (group as any).aggregations : group.subscriptions) || [])],
-    regex: (kind === 'aggregation' ? (group as any).aggregation_regex : group.regex) || ''
+    regex: (kind === 'aggregation' ? group.aggregation_regex : group.regex) || '',
+    excludeRegex: (kind === 'aggregation' ? group.aggregation_exclude_regex : group.exclude_regex) || ''
   }
 }
 
@@ -1936,7 +1969,7 @@ const applyGroupSelection = async (group: ProxyGroup | null): Promise<boolean> =
   clearTimeout(previewTimer)
   preview.value = { nodes: [], total: 0, loading: false, error: '' }
   selectedKey.value = group ? keyOf(group) : ''
-  draft.value = group ? draftFrom(group) : { kind: 'subscription', sources: [], regex: '' }
+  draft.value = group ? draftFrom(group) : { kind: 'subscription', sources: [], regex: '', excludeRegex: '' }
   groupPickerOpen.value = false
   await nextTick()
   if (!viewActive || version !== selectionVersion) return false
@@ -1992,6 +2025,7 @@ const draftDirty = computed(() => {
   const base = draftFrom(selected.value)
   return (
     base.regex !== draft.value.regex ||
+    base.excludeRegex !== draft.value.excludeRegex ||
     base.sources.length !== draft.value.sources.length ||
     base.sources.some(id => !draft.value.sources.includes(id))
   )
@@ -2036,10 +2070,11 @@ const preview = ref<{ nodes: any[]; total: number; loading: boolean; error: stri
   error: ''
 })
 
-const requestPreview = async (kind: SourceKind, sources: string[], regex: string) => {
+const requestPreview = async (kind: SourceKind, sources: string[], regex: string, excludeRegex: string) => {
   const { data } = await proxyGroupApi.previewRegex({
     source: kind,
     regex: regex || '.*',
+    exclude_regex: excludeRegex,
     ...(kind === 'aggregation' ? { aggregations: sources } : { subscriptions: sources })
   }, profileId)
   return data
@@ -2060,7 +2095,7 @@ const refreshPreview = () => {
   preview.value = { ...preview.value, loading: true, error: '' }
   previewTimer = window.setTimeout(async () => {
     try {
-      const data = await requestPreview(draft.value.kind, draft.value.sources, draft.value.regex)
+      const data = await requestPreview(draft.value.kind, draft.value.sources, draft.value.regex, draft.value.excludeRegex)
       if (!viewActive || seq !== previewSeq) return
       preview.value = { nodes: data.nodes || [], total: data.total_candidates || 0, loading: false, error: '' }
       if (!draftDirty.value) matchCounts.value = { ...matchCounts.value, [keyOf(group)]: data.count ?? 0 }
@@ -2071,7 +2106,7 @@ const refreshPreview = () => {
   }, 280)
 }
 
-watch([selectedKey, () => draft.value.sources, () => draft.value.regex], refreshPreview, { deep: true })
+watch([selectedKey, () => draft.value.sources, () => draft.value.regex, () => draft.value.excludeRegex], refreshPreview, { deep: true })
 
 /* ---------- 每个策略组的命中数（列表右侧），限并发逐个计算 ---------- */
 const matchCounts = ref<Record<string, number>>({})
@@ -2084,7 +2119,7 @@ const computeMatchCounts = async () => {
       const d = draftFrom(group)
       if (!d.sources.length) continue
       try {
-        const data = await requestPreview(d.kind, d.sources, d.regex)
+        const data = await requestPreview(d.kind, d.sources, d.regex, d.excludeRegex)
         if (!viewActive) return
         matchCounts.value = { ...matchCounts.value, [keyOf(group)]: data.count ?? 0 }
       } catch {
@@ -2128,13 +2163,13 @@ const persistDraft = async (fromSelection = false): Promise<boolean> => {
     notify.error('请先解决预览错误，再保存改动')
     return false
   }
-  const snapshot = { kind: draft.value.kind, sources: [...draft.value.sources], regex: draft.value.regex }
+  const snapshot = { kind: draft.value.kind, sources: [...draft.value.sources], regex: draft.value.regex, excludeRegex: draft.value.excludeRegex }
   const savedCount = !preview.value.loading ? preview.value.nodes.length : null
   draftSaving.value = true
   const patch =
     snapshot.kind === 'aggregation'
-      ? { aggregations: [...snapshot.sources], aggregation_regex: snapshot.regex }
-      : { subscriptions: [...snapshot.sources], regex: snapshot.regex }
+      ? { aggregations: [...snapshot.sources], aggregation_regex: snapshot.regex, aggregation_exclude_regex: snapshot.excludeRegex }
+      : { subscriptions: [...snapshot.sources], regex: snapshot.regex, exclude_regex: snapshot.excludeRegex }
   try {
     await proxyGroupApi.update(group.id, { ...group, ...patch }, profileId)
     if (!viewActive) return false

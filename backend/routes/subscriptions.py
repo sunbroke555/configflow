@@ -499,6 +499,13 @@ def get_subscription_proxies(sub_id):
         current_app.logger.error("获取订阅代理列表失败: %s", safe_exception_details(e))
         return jsonify({'success': False, 'message': '获取订阅代理列表失败'}), 500
 
+    from backend.utils.group_candidates import CandidateValidationError, filter_candidates
+    from backend.utils.provider_response import requested_filters
+    try:
+        filters = requested_filters()
+    except CandidateValidationError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+
     def render():
         try:
             from backend.utils.provider_delivery import DeliverySnapshot
@@ -622,12 +629,16 @@ def get_subscription_proxies(sub_id):
                 surge_text = convert_proxies_to_surge_text(proxies)
                 if not cache_updated:
                     validate_subscription_delivery(proxies)
+                if filters:
+                    surge_text = convert_proxies_to_surge_text(filter_candidates(proxies, *filters))
                 return Response(surge_text, mimetype='text/plain')
             if request.args.get('format') == 'loon':
                 from backend.converters.loon import convert_proxies_to_loon_text
                 loon_text = convert_proxies_to_loon_text(proxies)
                 if not cache_updated:
                     validate_subscription_delivery(proxies)
+                if filters:
+                    loon_text = convert_proxies_to_loon_text(filter_candidates(proxies, *filters))
                 return Response(loon_text, mimetype='text/plain')
             if not cache_updated:
                 validate_subscription_delivery(proxies)

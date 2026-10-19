@@ -62,6 +62,7 @@ export interface ProxyGroup {
   chain?: { entry: { type: 'node' | 'group'; id: string }; exit: { type: 'node' | 'group'; id: string } }
   aggregations?: string[]
   aggregation_regex?: string
+  aggregation_exclude_regex?: string
   follow_group?: string
   proxies_order?: { type: string; id: string }[]
   proxy_order?: string
@@ -72,6 +73,7 @@ export interface ProxyGroup {
   interval?: number
   subscriptions?: string[]    // 订阅来源
   regex?: string              // 正则过滤规则
+  exclude_regex?: string      // 排除匹配的订阅节点
   manual_nodes?: string[]     // 手动选择的节点
   include_groups?: string[]   // 引用的策略组
   strategy?: 'round-robin' | 'consistent-hashing' | 'sticky-sessions'  // 负载均衡策略

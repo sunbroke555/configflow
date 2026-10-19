@@ -4,6 +4,8 @@ Engine-native use/include-all are deliberately not managed sources. Legacy
 empty records remain readable; new writes must have a consumed source.
 """
 from copy import deepcopy
+import hashlib
+import re
 
 class CandidateValidationError(ValueError):
     """Controlled write-validation error, distinct from repository conflicts."""
@@ -12,6 +14,47 @@ class CandidateValidationError(ValueError):
 SOURCE_FIELDS = ('manual_nodes', 'subscriptions', 'aggregations', 'include_groups',
                  'follow_group', 'source', 'proxies', 'proxies_order')
 HEALTH_FIELDS = ('url', 'interval', 'timeout', 'lazy', 'expected-status', 'tolerance')
+FILTER_FIELDS = ('regex', 'aggregation_regex', 'exclude_regex', 'aggregation_exclude_regex')
+
+
+def filter_candidates(items, include='', exclude=''):
+    """Apply name filters without changing source records or their ordering."""
+    patterns = []
+    for value in (include, exclude):
+        if value is not None and not isinstance(value, str):
+            raise CandidateValidationError('正则筛选必须是字符串或 null')
+        try:
+            patterns.append(re.compile(value.strip()) if value and value.strip() else None)
+        except re.error as exc:
+            raise CandidateValidationError('正则表达式无效') from exc
+    keep, remove = patterns
+    return [item for item in items
+            if (keep is None or keep.search(item.get('name', '')))
+            and (remove is None or not remove.search(item.get('name', '')))]
+
+
+def _filter_value(group, field):
+    value = group.get(field)
+    return value.strip() if isinstance(value, str) else ''
+
+
+def managed_providers(group, config):
+    """Return provider resources together with their source-specific filters."""
+    selection = managed_members(group)
+    aggregation_ids = list(selection['aggregations'])
+    for kind, ident in selection['members']:
+        if kind == 'aggregation' and ident not in aggregation_ids:
+            aggregation_ids.append(ident)
+    aggregations = [item for ident in aggregation_ids
+                    for item in config.get('subscription_aggregations', [])
+                    if item.get('id') == ident and item.get('enabled', True)]
+    covered = {ident for agg in aggregations for ident in agg.get('subscriptions', [])}
+    subscriptions = [item for ident in selection['subscriptions'] if ident not in covered
+                     for item in config.get('subscriptions', []) if item.get('id') == ident]
+    return [(item, _filter_value(group, 'regex'), _filter_value(group, 'exclude_regex'))
+            for item in subscriptions] + [
+                (item, _filter_value(group, 'aggregation_regex'),
+                 _filter_value(group, 'aggregation_exclude_regex')) for item in aggregations]
 
 
 def managed_members(group):
@@ -71,11 +114,77 @@ def render_members(group, config):
 
 
 def validate_filters(group, original=None):
-    for field in ('regex', 'aggregation_regex'):
+    for field in FILTER_FIELDS:
         if group.get(field) is not None and not isinstance(group[field], str):
             # Unchanged legacy values are allowed only for final merged records.
             if original is None or field not in original or type(original[field]) is not type(group[field]) or original[field] != group[field]:
                 raise CandidateValidationError(f'{field} 必须是字符串或 null')
+        if field in ('exclude_regex', 'aggregation_exclude_regex') and _filter_value(group, field):
+            try:
+                re.compile(_filter_value(group, field))
+            except re.error as exc:
+                raise CandidateValidationError(f'{field} 正则表达式无效') from exc
+
+
+def lower_group_provider_filters(config, main):
+    """Keep managed exclusions scoped to each live provider, never manual nodes.
+
+    Private definitions retain the original URL, so refreshes and bundled
+    provider delivery use the same source bytes. Existing inclusion-only groups
+    retain their historical rendering.
+    """
+    providers = main.get('proxy-providers', {})
+    groups = {group['name']: group for group in main.get('proxy-groups', [])}
+    sources = {group.get('id'): group for group in config.get('proxy_groups', [])}
+    occupied = set(providers) | set(groups) | {node['name'] for node in main.get('proxies', [])}
+    clones = {}
+    for record in config.get('proxy_groups', []):
+        group = groups.get(record['name'])
+        if group is None:
+            continue
+        source = sources.get(record.get('follow_group'), record)
+        if not any(_filter_value(source, field) for field in ('exclude_regex', 'aggregation_exclude_regex')):
+            continue
+        selections = {item['name']: (include, exclude)
+                      for item, include, exclude in managed_providers(source, config)}
+        selected = [(name, *selections[name]) for name in group.get('use', [])
+                    if name in selections and name in providers]
+        if not selected:
+            continue
+        # A shared include stays at group level to preserve Mihomo's backtick
+        # bucket ordering, including when the group becomes a chain exit.
+        includes = {include for _, include, _ in selected}
+        shared_include = next(iter(includes)) if len(includes) == 1 else None
+        group.pop('filter', None)
+        if shared_include:
+            group['filter'] = shared_include
+        use = []
+        for original, include, exclude in selected:
+            provider_include = include if shared_include is None else ''
+            if not provider_include and not exclude:
+                use.append(original)
+                continue
+            key = (original, provider_include, exclude)
+            if key not in clones:
+                base = f"{source['name']}_{original}_筛选"
+                name, suffix = base, 2
+                while name in occupied:
+                    name = f'{base} ({suffix})'
+                    suffix += 1
+                occupied.add(name)
+                provider = deepcopy(providers[original])
+                digest = hashlib.sha256(repr(key).encode()).hexdigest()[:20]
+                provider['path'] = f'./providers/group_filter_{digest}.yaml'
+                if provider_include:
+                    provider['filter'] = provider_include
+                if exclude:
+                    # Backticks in a managed regex are literal name characters.
+                    provider['exclude-filter'] = re.sub(
+                        r'(\\*)`', lambda match: match[1][:len(match[1]) // 2 * 2] + r'\x60', exclude)
+                providers[name] = provider
+                clones[key] = name
+            use.append(clones[key])
+        group['use'] = use
 
 
 def validate_candidates(group, profile, shared, *, original=None):

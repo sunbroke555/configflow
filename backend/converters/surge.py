@@ -1,5 +1,4 @@
 """Surge 配置生成器"""
-import re
 import os
 from typing import Dict, Any, List
 from backend.utils.subscription_parser import parse_uri_list
@@ -847,6 +846,9 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
                 'include_groups': include_groups,
                 'subscriptions': subscriptions,
                 'regex': followed_group.get('regex', ''),
+                'exclude_regex': followed_group.get('exclude_regex', ''),
+                'aggregation_regex': followed_group.get('aggregation_regex', ''),
+                'aggregation_exclude_regex': followed_group.get('aggregation_exclude_regex', ''),
                 'proxies_order': followed_group.get('proxies_order', []),
                 'proxy_order': followed_group.get('proxy_order', 'nodes_first'),
                 'url': followed_group.get('url'),  # 跟随测试URL
@@ -977,6 +979,10 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
                 sub_url = f"{effective_base_url}{profile_api_path(config_data, f'/subscriptions/{sub_id}/proxies')}"
                 # 如果配置了令牌，添加到 URL
                 query = {'format': 'surge'}
+                for field in ('regex', 'exclude_regex'):
+                    pattern = (group.get(field) or '').strip()
+                    if pattern:
+                        query[field] = pattern
                 if config_token:
                     query['token'] = config_token
                 sub_url = append_url_query(sub_url, query)
@@ -992,6 +998,10 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
                 agg_url = f"{effective_base_url}{profile_api_path(config_data, f'/aggregations/{agg_id}/provider')}"
                 # 如果配置了令牌，添加到 URL
                 query = {'format': 'surge'}
+                for field in ('regex', 'exclude_regex'):
+                    pattern = (group.get(f'aggregation_{field}') or '').strip()
+                    if pattern:
+                        query[field] = pattern
                 if config_token:
                     query['token'] = config_token
                 agg_url = append_url_query(agg_url, query)
@@ -1043,15 +1053,11 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
     else:
         return None
 
-    # 添加 policy-path 参数
-    # 若策略组配置了 regex（地区过滤），转换为 Surge 的 policy-regex-filter，
-    # 使各地区策略组在同一订阅源下按节点名正则过滤，与 Mihomo 的 filter 行为一致
+    # 每条 policy-path 在服务端独立过滤，保持来源隔离并支持订阅动态刷新。
+    # 全组 policy-regex-filter 无法表达订阅和聚合的不同筛选条件。
     if policy_paths:
-        regex_filter = (group.get('regex') or '').strip()
         for policy_path in policy_paths:
             group_line += f", policy-path = {policy_path}"
-            if regex_filter:
-                group_line += f", policy-regex-filter = {regex_filter}"
             group_line += ", update-interval = 86400"
 
     logger.debug(f"Group '{name}' final line: {group_line}")
@@ -1078,18 +1084,10 @@ def get_proxy_group_nodes(group: Dict[str, Any], config_data: Dict[str, Any]) ->
         ]
         logger.debug(f"Found {len(subscription_nodes)} matching nodes")
 
-        # 应用正则过滤
-        regex_pattern = group.get('regex', '')
-        if regex_pattern:
-            try:
-                regex = re.compile(regex_pattern)
-                subscription_nodes = [
-                    node for node in subscription_nodes
-                    if regex.search(node['name'])
-                ]
-            except re.error:
-                # 正则表达式无效，不过滤
-                pass
+        from backend.utils.group_candidates import filter_candidates
+        subscription_nodes = filter_candidates(
+            subscription_nodes, include=group.get('regex'), exclude=group.get('exclude_regex'),
+        )
 
         # 添加到结果列表
         result_nodes.extend([node['name'] for node in subscription_nodes])
