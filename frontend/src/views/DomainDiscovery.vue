@@ -211,6 +211,10 @@
               <ScanSearch class="size-3.5" />
               探测
             </Button>
+            <Button size="sm" variant="outline" :disabled="probing" title="读取首页标题识别网站，一次最多 30 个" @click="identifySelected">
+              <Globe class="size-3.5" />
+              识别网站
+            </Button>
             <Button v-if="adoptableSelected.length" size="sm" variant="outline" :disabled="applying" @click="adoptSelected">
               <Sparkles class="size-3.5" />
               采纳建议 {{ adoptableSelected.length }}
@@ -1060,6 +1064,30 @@ const startRegionCheck = async (payload: { services: boolean; domains?: string[]
 }
 
 const probeSelected = () => startProbe([...selected.value].slice(0, 100))
+
+const WEBSITE_BATCH_LIMIT = 30
+const identifySelected = async () => {
+  // 优先识别还没有任何结果的域名
+  const known = (domain: string) => {
+    const website = items.value.find(item => item.domain === domain)?.website
+    return !!(website?.note || website?.service || website?.page)
+  }
+  const domains = [...selected.value].sort((a, b) => Number(known(a)) - Number(known(b))).slice(0, WEBSITE_BATCH_LIMIT)
+  try {
+    const { data } = await api.post('/domain-discovery/website/identify', { domains })
+    probeJob.value = data.job
+    scheduleProbePoll()
+    if (selected.value.size > domains.length) notify.info(`一次最多识别 ${WEBSITE_BATCH_LIMIT} 个，本次先识别前 ${domains.length} 个`)
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 409 && error.response.data?.job) {
+      probeJob.value = error.response.data.job
+      scheduleProbePoll()
+      notify.info('已有探测任务在运行，完成后再试')
+      return
+    }
+    notify.error(errorMessage(error, '无法开始网站识别'))
+  }
+}
 
 const adoptSelected = () => apply(adoptableSelected.value.map(item => ({
   value: item.domain,
