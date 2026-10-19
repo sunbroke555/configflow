@@ -2,6 +2,7 @@ package routes
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +51,23 @@ func TestNativeAIODNSMergesHostExclusions(t *testing.T) {
 				t.Fatalf("host exclusion adaptation is not idempotent: %v\n%s", err, again)
 			}
 		})
+	}
+}
+
+func TestNativeAIODNSUsesAutomaticAddress(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) { return "192.168.0.33", nil })
+	cfg := &Config{NativeAIO: true}
+	got, err := adaptNativeAIODNS(cfg, "tun: {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8]}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := []interface{}{"10.0.0.0/8", "127.0.0.0/8", "192.168.0.33/32"}
+	if !reflect.DeepEqual(doc["tun"].(map[string]interface{})["route-exclude-address"], want) || cfg.AgentIP != "" {
+		t.Fatalf("automatic address was not merged or was persisted: %s; agent_ip=%q", got, cfg.AgentIP)
 	}
 }
 
@@ -107,11 +125,19 @@ func TestNativeAIODNSPreservesYAMLAliasesAndMergeKeys(t *testing.T) {
 }
 
 func TestNativeAIODNSOnlyRequiresAddressForEnabledAutoRedirect(t *testing.T) {
+	detections := 0
+	stubAgentIPv4(t, func() (string, error) {
+		detections++
+		return "", errors.New("no LAN interface")
+	})
 	for _, input := range []string{"mode: rule\n", "tun: {}\n", "tun: {enable: false, auto-redirect: true}\n", "tun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: {enabled: true}\n", "marker: &marker {enabled: true}\ntun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: *marker\n", "marker: &marker {enabled: true}\ntun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: {<<: *marker}\n"} {
 		got, err := adaptNativeAIODNS(&Config{NativeAIO: true}, input)
 		if err != nil || got != input {
 			t.Fatalf("inactive or gateway TUN changed: %v\n%s", err, got)
 		}
+	}
+	if detections != 0 {
+		t.Fatal("inactive or gateway TUN triggered native address detection")
 	}
 	for _, address := range []string{"", "0.0.0.0", "127.0.0.1", "169.254.0.1", "224.0.0.1", "255.255.255.255", "::1", "2001:db8::1", "example.com", "192.168.0.33/24"} {
 		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true, AgentIP: address}, "tun: {enable: true, auto-redirect: true}\n"); err == nil || !strings.Contains(err.Error(), "agent_ip") {
@@ -136,6 +162,10 @@ func TestNativeAIODNSOnlyRequiresAddressForEnabledAutoRedirect(t *testing.T) {
 }
 
 func TestNativeAIODNSInactiveSwitchesPreserveConfiguration(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) {
+		t.Error("inactive auto-redirect must not detect a LAN address")
+		return "", errors.New("no LAN interface")
+	})
 	values := []string{"true", "false", "null", "missing"}
 	for _, enable := range values {
 		for _, redirect := range values {
@@ -275,6 +305,7 @@ func TestNativeAIODNSPublicationProtectsHostOnEveryPublish(t *testing.T) {
 }
 
 func TestNativeAIODNSInvalidAddressFailsBeforeActivation(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) { return "", errors.New("no LAN interface") })
 	cfg := testDeploymentConfig(t)
 	cfg.NativeAIO = true
 	old := "mode: direct\n"

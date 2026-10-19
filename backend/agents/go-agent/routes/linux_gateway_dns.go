@@ -2,8 +2,6 @@ package routes
 
 import (
 	"fmt"
-	"net"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,9 +19,9 @@ func adaptGatewayDNS(cfg *Config, content string) (string, error) {
 	if marker["enabled"] != true {
 		return content, nil
 	}
-	address := net.ParseIP(strings.TrimSpace(cfg.AgentIP))
-	if address == nil || address.To4() == nil || !address.IsGlobalUnicast() || address.IsLoopback() {
-		return "", fmt.Errorf("选择性网关需要 Agent 配置中的有效 LAN IPv4 地址，才能为 OxiDNS 排除网关 DNS；请重新运行安装向导")
+	address, err := agentLANIPv4(cfg)
+	if err != nil {
+		return "", fmt.Errorf("为 OxiDNS 排除网关 DNS 时失败：%w", err)
 	}
 	tun, tunOK := doc["tun"].(map[string]interface{})
 	dns, dnsOK := doc["dns"].(map[string]interface{})

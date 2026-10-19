@@ -2,9 +2,7 @@ package routes
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,9 +38,9 @@ func adaptNativeAIODNS(cfg *Config, content string) (string, error) {
 	if tun["enable"] != true || tun["auto-redirect"] != true {
 		return content, nil
 	}
-	address := net.ParseIP(strings.TrimSpace(cfg.AgentIP))
-	if address == nil || address.To4() == nil || !address.IsGlobalUnicast() || address.IsLoopback() {
-		return "", fmt.Errorf("原生 AIO 启用 TUN 自动重定向时需要 Agent 配置中的有效 LAN IPv4 地址，才能为 OxiDNS 排除本机 DNS；请检查 agent_ip 或重新运行安装向导")
+	address, err := agentLANIPv4(cfg)
+	if err != nil {
+		return "", fmt.Errorf("原生 AIO 启用 TUN 自动重定向时为 OxiDNS 排除本机 DNS 失败：%w", err)
 	}
 	var excluded []interface{}
 	if tun["route-exclude-address"] != nil {
