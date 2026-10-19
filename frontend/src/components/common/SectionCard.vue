@@ -1,12 +1,12 @@
 <template>
   <section
     :class="cn(
-      'relative overflow-hidden rounded-[18px] border border-border bg-card/90 shadow-surface transition-[border-color,transform] duration-350 ease-(--ease-flow)',
+      'relative overflow-hidden rounded-[18px] max-sm:rounded-xl border border-border bg-card/90 shadow-surface transition-[border-color,transform] duration-350 ease-(--ease-flow)',
       interactive && 'hover:-translate-y-[3px] hover:border-border-strong',
-      padded && 'p-5 max-md:p-4'
+      padded && 'p-5 max-md:p-4 max-sm:p-3'
     )"
   >
-    <header v-if="title || description || $slots.actions" :class="cn('cf-section-header flex flex-wrap items-center gap-3', padded ? 'mb-4' : 'px-5 pt-5 pb-3 max-md:px-4')">
+    <header v-if="title || description || $slots.actions" :class="cn('cf-section-header flex flex-wrap items-center gap-3', padded ? 'mb-4 max-sm:mb-3' : 'px-5 pt-5 pb-3 max-md:px-4 max-sm:px-3 max-sm:pt-3')">
       <div class="min-w-0 flex-1">
         <h2 v-if="title" class="m-0 flex max-sm:flex-wrap items-center gap-2 text-[14px] font-semibold tracking-[-0.01em] text-foreground">
           <component v-if="icon" :is="icon" class="size-4 text-primary-accent" :stroke-width="2.2" aria-hidden="true" />

@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+  <div class="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center max-sm:gap-2 max-sm:px-4 max-sm:py-8">
     <div
       class="flex size-11 items-center justify-center rounded-lg bg-muted text-muted-foreground"
     >

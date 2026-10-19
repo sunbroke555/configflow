@@ -2,17 +2,38 @@
   <div>
     <PageHeader title="配置空间">
       <template #actions>
-        <Button variant="outline" class="border-border/60 bg-background/40" @click="pickImportFile">
-          <Upload class="size-4" />
-          导入备份到当前
-        </Button>
-        <Button variant="outline" class="border-border/60 bg-background/40" @click="openClientImport">
-          <FileInput class="size-4" />
-          导入客户端配置
-        </Button>
-        <Button @click="openCreate">
+        <DropdownMenu v-if="isPhone">
+          <DropdownMenuTrigger as-child>
+            <Button variant="outline" class="border-border/60 bg-background/40" aria-label="导入配置">
+              <Upload class="size-4" />
+              导入
+              <ChevronDown class="size-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem @select="pickImportFile">
+              <Upload class="size-4" />
+              导入备份到当前
+            </DropdownMenuItem>
+            <DropdownMenuItem @select="openClientImport">
+              <FileInput class="size-4" />
+              导入客户端配置
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <template v-else>
+          <Button variant="outline" class="border-border/60 bg-background/40" @click="pickImportFile">
+            <Upload class="size-4" />
+            导入备份到当前
+          </Button>
+          <Button variant="outline" class="border-border/60 bg-background/40" @click="openClientImport">
+            <FileInput class="size-4" />
+            导入客户端配置
+          </Button>
+        </template>
+        <Button aria-label="新建配置空间" @click="openCreate">
           <Plus class="size-4" />
-          新建配置空间
+          {{ isPhone ? '新建' : '新建配置空间' }}
         </Button>
         <input ref="importInput" type="file" accept="application/json,.json" hidden @change="importProfile" />
       </template>
@@ -33,13 +54,13 @@
       </EmptyState>
     </SectionCard>
 
-    <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4 max-md:grid-cols-1">
+    <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4 max-md:grid-cols-1 max-sm:gap-2">
       <Motion
         v-for="(profile, index) in profiles"
         :key="profile.id"
         v-bind="listItem(index)"
         :class="[
-          'group relative flex flex-col gap-4 overflow-hidden rounded-[18px] border bg-card/90 p-5 shadow-surface transition-colors duration-200 hover:border-border-strong',
+          'group relative flex flex-col gap-4 overflow-hidden rounded-[18px] border bg-card/90 p-5 shadow-surface transition-colors duration-200 hover:border-border-strong max-sm:gap-2 max-sm:rounded-xl max-sm:p-3',
           profile.id === activeProfileId
             ? 'border-primary-accent'
             : 'border-border'
@@ -48,7 +69,7 @@
         <header class="flex items-start justify-between gap-3">
           <div class="flex min-w-0 flex-1 items-center gap-3">
             <span
-              class="relative grid size-10 shrink-0 place-items-center rounded-xl border border-border/50 bg-background/50 text-primary-accent"
+              class="relative grid size-10 shrink-0 place-items-center rounded-xl border border-border/50 bg-background/50 text-primary-accent max-sm:size-8"
             >
               <span
                 class="absolute inset-0 rounded-xl bg-primary-soft"
@@ -57,7 +78,7 @@
               <Boxes class="relative size-5" :stroke-width="2" aria-hidden="true" />
             </span>
             <div class="min-w-0">
-              <p class="m-0 truncate text-[15px] font-semibold tracking-[-0.01em] text-foreground">
+              <p class="m-0 truncate text-[15px] font-semibold tracking-[-0.01em] text-foreground" :title="profile.name">
                 {{ profile.name }}
               </p>
               <p class="mt-0.5 mb-0 flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted-foreground">
@@ -73,7 +94,7 @@
           </Badge>
         </header>
 
-        <p class="m-0 min-h-10 break-words text-[12.5px] leading-relaxed text-muted-foreground">
+        <p class="m-0 min-h-10 break-words text-[12.5px] leading-relaxed text-muted-foreground max-sm:min-h-0">
           {{ profile.description || '暂无说明' }}
         </p>
 
@@ -82,7 +103,7 @@
         </Button>
         <p v-else class="m-0 text-xs text-muted-foreground">暂无 Agent 绑定</p>
 
-        <footer class="mt-auto flex flex-wrap items-center gap-2 border-0 border-t border-dashed border-border/50 pt-4">
+        <footer class="mt-auto flex flex-wrap items-center gap-2 border-0 border-t border-dashed border-border/50 pt-4 max-sm:pt-2">
           <Button
             v-if="profile.id !== activeProfileId"
             size="sm"
@@ -92,7 +113,7 @@
             <CircleCheck class="size-3.5" />
             使用
           </Button>
-          <span v-else class="text-[12.5px] font-medium text-muted-foreground">当前正在使用</span>
+          <span v-else class="text-[12.5px] font-medium text-muted-foreground max-sm:hidden">当前正在使用</span>
 
           <div class="ml-auto flex items-center gap-1">
             <Button variant="ghost" size="icon-sm" title="编辑" aria-label="编辑" @click="openEdit(profile)">
@@ -357,9 +378,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { Motion } from 'motion-v'
 import {
   Boxes,
+  ChevronDown,
   CircleCheck,
   Copy,
   Download,
@@ -374,6 +397,12 @@ import {
 } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import {
   Dialog,
   DialogContent,
@@ -404,6 +433,7 @@ import { listItem } from '@/lib/motion'
 import { isDefaultProfile, useProfileStore, type Profile } from '@/stores/profile'
 
 const profileStore = useProfileStore()
+const isPhone = useMediaQuery('(max-width: 639px)')
 const { profiles, loading, scopedRequests, activeProfileId, refreshProfiles, switchProfile } = profileStore
 const dialogVisible = ref(false)
 const saving = ref(false)

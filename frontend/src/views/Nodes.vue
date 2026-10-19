@@ -3,8 +3,25 @@
 
     <PageHeader title="节点库">
       <template #actions>
+        <DropdownMenu v-if="isPhone">
+          <DropdownMenuTrigger as-child>
+            <Button variant="outline" size="icon" aria-label="节点库更多操作">
+              <MoreHorizontal class="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem @select="showBatchAddDialog">
+              <FilePlus2 class="size-4" />
+              批量添加
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="!reorder.active.value" :disabled="nodes.length < 2" @select="reorder.enter">
+              <ArrowUpDown class="size-4" />
+              调整顺序
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button
-          v-if="!reorder.active.value"
+          v-if="!isPhone && !reorder.active.value"
           variant="outline"
           class="border-border/60 bg-background/40"
           :disabled="nodes.length < 2"
@@ -13,18 +30,18 @@
           <ArrowUpDown class="size-4" />
           调整顺序
         </Button>
-        <Button variant="outline" class="border-border/60 bg-background/40" @click="showBatchAddDialog">
+        <Button v-if="!isPhone" variant="outline" class="border-border/60 bg-background/40" @click="showBatchAddDialog">
           <FilePlus2 class="size-4" />
           批量添加
         </Button>
-        <Button variant="outline" class="border-border/60 bg-background/40" @click="showAddDialog">
+        <Button variant="outline" class="border-border/60 bg-background/40" aria-label="添加节点" @click="showAddDialog">
           <Plus class="size-4" />
-          添加节点
+          {{ isPhone ? '添加' : '添加节点' }}
         </Button>
         <NodeLatencySettings :disabled="testing || reorder.active.value" @saved="loadLatency" />
-        <Button class="shadow-glow" title="从 ConfigFlow 所在机器，经节点访问测试地址" :disabled="testing || reorder.active.value" @click="speedTest">
+        <Button class="shadow-glow" title="从 ConfigFlow 所在机器，经节点访问测试地址" :disabled="testing || reorder.active.value" :aria-label="testing ? `正在测速… ${completedTests}/${totalTests}` : '全部测速'" @click="speedTest">
           <Zap :class="cn('size-4', testing && 'animate-pulse')" />
-          {{ testing ? `正在测速… ${completedTests}/${totalTests}` : '全部测速' }}
+          {{ testing ? `正在测速… ${completedTests}/${totalTests}` : isPhone ? '测速' : '全部测速' }}
         </Button>
       </template>
     </PageHeader>
@@ -492,6 +509,7 @@
 
 <script setup lang="ts">
 import { onUnmounted, watch, ref, computed, onMounted, nextTick } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { Motion } from 'motion-v'
 import {
   ArrowUpDown,
@@ -1255,6 +1273,7 @@ watch(viewMode, mode => {
 
 // 节点表格列多，窄屏不可读，移动端一律用卡片
 const isNarrow = ref(false)
+const isPhone = useMediaQuery('(max-width: 639px)')
 const syncNarrow = () => {
   isNarrow.value = window.matchMedia('(max-width: 900px)').matches
 }

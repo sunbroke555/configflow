@@ -1,5 +1,5 @@
 <template>
-  <div :class="cn('flex min-w-0 items-center gap-1', rail && 'w-full', compact && 'justify-center')">
+  <div :class="cn('flex min-w-0 items-center gap-1', rail ? 'w-full' : 'max-sm:gap-0', compact && 'justify-center')">
     <Select v-model="selectedProfileId" :disabled="loading || scopedRequests > 0" @update:model-value="handleChange">
       <SelectTrigger
         :class="cn(
@@ -8,7 +8,7 @@
             ? compact
               ? 'size-11! shrink-0 justify-center gap-0 rounded-lg border-transparent bg-transparent p-0 shadow-none hover:bg-accent [&>svg]:hidden'
               : 'h-11! min-w-0 flex-1 rounded-lg bg-card/50 px-2.5 py-0 shadow-none'
-            : 'h-8 w-[190px] max-sm:w-full max-sm:flex-1'
+            : 'h-8 w-[190px] max-sm:w-full max-sm:flex-1 max-sm:gap-1.5 max-sm:px-2'
         )"
         aria-label="当前配置空间"
         :aria-description="currentLabel || '选择配置空间'"
@@ -21,7 +21,7 @@
         >
           {{ initial }}
         </span>
-        <Boxes v-else class="size-4 shrink-0 text-primary-accent" />
+        <Boxes v-else class="size-4 shrink-0 text-primary-accent max-[359px]:hidden" />
         <SelectValue :class="cn('min-w-0 flex-1 truncate text-left', rail && 'text-[13px] font-medium', compact && 'cf-sr', !currentLabel && 'text-muted-foreground')">
           <span class="min-w-0 truncate">{{ currentLabel || '选择配置空间' }}</span>
         </SelectValue>
