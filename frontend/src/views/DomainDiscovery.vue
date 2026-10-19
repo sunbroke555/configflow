@@ -396,7 +396,7 @@
                   <span v-else-if="!host.uncovered" class="chip">已被规则覆盖</span>
                   <span
                     v-if="region?.domains[host.host]"
-                    :class="['chip', region.domains[host.host].verdict === 'suspected' ? 'chip-warn' : '']"
+                    :class="['chip', REGION_VERDICT_CLASSES[region.domains[host.host].verdict]]"
                     :title="regionTitle(region.domains[host.host])"
                   >{{ REGION_VERDICT_LABELS[region.domains[host.host].verdict] }}</span>
                   <span v-if="host.probe" class="text-muted-foreground" :title="host.probe.reasons.join('；')">
@@ -614,6 +614,9 @@ const VIEW_OPTIONS: Array<{ value: View; label: string }> = [
 const REGION_VERDICT_LABELS: Record<DomainRegionEntry['verdict'], string> = {
   suspected: '疑似区域限制', all_restricted: '各地区都受限', no_difference: '无地区差异', unreachable: '地区检测失败'
 }
+const REGION_VERDICT_CLASSES: Record<DomainRegionEntry['verdict'], string> = {
+  suspected: 'chip-warn', all_restricted: 'chip-bad', no_difference: 'chip-ok', unreachable: 'chip-bad'
+}
 const TAG_LABELS: Record<Tag, string> = { uncovered: '未覆盖', failing: '直连失败', pending: '待部署', ignored: '已忽略' }
 const TAG_CLASSES: Record<Tag, string> = { uncovered: 'chip-acc', failing: 'chip-bad', pending: 'chip-sky', ignored: '' }
 const STATUS_LABELS: Record<string, string> = {
@@ -773,8 +776,11 @@ const emptyDescription = computed(() => {
   return ''
 })
 
-const statusTone = (status: string) =>
-  status === 'running' ? 'success' : status === 'no_data' ? 'muted' : 'warning'
+const statusTone = (status: string) => {
+  if (status === 'running') return 'success'
+  if (['auth_failed', 'unreachable'].includes(status)) return 'danger'
+  return status === 'no_data' ? 'muted' : 'warning'
+}
 
 const routeText = (route: Route) => {
   // 全局 / 直连模式或指定了出口的入站不经过规则匹配，rule 为空

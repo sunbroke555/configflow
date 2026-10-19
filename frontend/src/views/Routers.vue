@@ -1009,7 +1009,9 @@ onBeforeUnmount(closePanels)
 
 const returnTone = computed(() => {
   const state = report.value?.return_routing
-  if (!state || state.status !== 'ok') return 'muted'
+  if (!state || ['disabled', 'unlinked'].includes(state.status)) return 'muted'
+  if (state.status === 'unavailable') return 'danger'
+  if (state.status !== 'ok') return 'warning'
   return state.return_tables?.length && state.fwmark_rules?.length ? 'success' : 'warning'
 })
 const returnLabel = computed(() => {

@@ -109,7 +109,7 @@ const needsAttention = computed(() => ['paused', 'failed'].includes(state.value?
 const statusLabel = computed(() => running.value || needsAttention.value || settings.value?.auto_rule_sync
   ? labels[state.value?.status || 'waiting'] || '待核对'
   : '自动同步已关闭')
-const tone = computed(() => needsAttention.value ? 'text-warning-accent' : !settings.value?.auto_rule_sync && !running.value
+const tone = computed(() => state.value?.status === 'failed' ? 'text-destructive-accent' : needsAttention.value ? 'text-warning-accent' : !settings.value?.auto_rule_sync && !running.value
   ? 'text-muted-foreground' : state.value?.status === 'synced' ? 'text-success-accent' : 'text-foreground')
 const statusNote = computed(() => {
   const current = state.value

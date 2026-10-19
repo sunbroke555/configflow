@@ -261,6 +261,32 @@ describe('shared rule library', () => {
     expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.value).toBe('example.com')
     expect((wrapper.vm as any).$.setupState.savingRule).toBe(false)
   })
+
+  it.each([
+    [2, 'success', '成功导入 2 条规则'],
+    [1, 'warning', '批量导入完成：成功 1 条，失败 1 条'],
+    [0, 'error', '批量导入失败，2 条规则均未导入']
+  ] as const)('reports batch import feedback for %i successful rules', async (successCount, tone, message) => {
+    for (const kind of ['success', 'warning', 'error'] as const) vi.spyOn(notify, kind).mockImplementation(() => 0)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    for (let index = 0; index < 2; index++) {
+      if (index < successCount) network.post.mockResolvedValueOnce({ data: { success: true } })
+      else network.post.mockRejectedValueOnce(new Error('Import failed'))
+    }
+    await render(RuleLibrary)
+    await menuAction('批量导入')
+    const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
+    input.value = 'first: { type: http, behavior: domain, url: "https://first.test/rules" }\nsecond: { type: http, behavior: domain, url: "https://second.test/rules" }'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    await clickText('导入')
+    expect(network.post.mock.calls.filter(([path]) => path === '/rule-library')).toHaveLength(2)
+    expect(notify[tone]).toHaveBeenCalledWith(message)
+    for (const other of ['success', 'warning', 'error'] as const) {
+      if (other !== tone) expect(notify[other]).not.toHaveBeenCalled()
+    }
+  })
+
   it('keeps a shared source draft when switching profiles and writes shared fields only', async () => {
     network.state.library[0]!.policy = 'legacy-profile-policy'
     const wrapper = await render(RuleLibrary)

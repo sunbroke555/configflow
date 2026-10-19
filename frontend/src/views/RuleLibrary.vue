@@ -1178,7 +1178,10 @@ const processBatchImport = async () => {
       }
     }
 
-    notify.success(`成功导入 ${successCount} 条规则`)
+    const failCount = rules.length - successCount
+    if (failCount === 0) notify.success(`成功导入 ${successCount} 条规则`)
+    else if (successCount === 0) notify.error(`批量导入失败，${failCount} 条规则均未导入`)
+    else notify.warning(`批量导入完成：成功 ${successCount} 条，失败 ${failCount} 条`)
     batchImportDialogVisible.value = false
     loadRuleLibrary()
   } catch (error) {
