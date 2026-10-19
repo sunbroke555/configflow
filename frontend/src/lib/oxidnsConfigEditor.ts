@@ -105,6 +105,38 @@ export function serializeConfigDocument(node: ConfigValueNode) {
   return dump(configNodeToValue(node), { schema: JSON_SCHEMA, noRefs: true, lineWidth: -1, sortKeys: false })
 }
 
+/** Apply server-side linked edits without replacing unchanged input identities. */
+export function reconcileConfigNode(node: ConfigValueNode, value: any) {
+  const next = valueToConfigNode(value)
+  const merge = (current: ConfigValueNode, proposed: ConfigValueNode, key = '') => {
+    if (current.type !== proposed.type) {
+      Object.assign(current, proposed, { id: current.id })
+      return
+    }
+    current.scalar = proposed.scalar
+    if (current.type === 'object') {
+      current.entries = proposed.entries.map(entry => {
+        const existing = current.entries.find(item => item.key === entry.key)
+        if (!existing) return entry
+        merge(existing.value, entry.value, entry.key)
+        return existing
+      })
+    } else if (current.type === 'array') {
+      const tag = (item: ConfigValueNode) => item.entries.find(entry => entry.key === 'tag')?.value.scalar
+      const used = new Set<ConfigValueNode>()
+      current.items = proposed.items.map((item, index) => {
+        const existing = key === 'plugins' && tag(item)
+          ? current.items.find(candidate => !used.has(candidate) && tag(candidate) === tag(item)) : current.items[index]
+        if (!existing) return item
+        used.add(existing)
+        merge(existing, item)
+        return existing
+      })
+    }
+  }
+  merge(node, next)
+}
+
 export function appendConfigEntry(node: ConfigValueNode, prefix = 'parameter', value: unknown = '') {
   const used = new Set(node.entries.map(entry => entry.key))
   let key = prefix

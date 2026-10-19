@@ -30,7 +30,7 @@ export const coreFields: OxidnsField[] = [
   toggle('metrics_enabled', '轻量指标', '收集请求数量、耗时等汇总指标，供 API / WebUI 展示；不保存逐条查询历史。'),
   toggle('aggregate_rules', '合并相邻同策略规则', '将同类、相邻且转发目标相同的规则合并，减少规则插件数量，同时保留直连 / 代理的原始优先级顺序。'),
   { path: 'block_qtypes', label: '屏蔽查询类型', type: 'numbers', wide: true, hint: '对选定类型直接返回空成功响应。65 为 HTTPS，255 为 ANY；删除全部条目则不屏蔽。', documentation: { href: 'https://oxidns.org/dns-codes/#qtype-%E6%9F%A5%E8%AF%A2%E7%B1%BB%E5%9E%8B', label: '查询类型表' } },
-  { path: 'default_forward', label: '未匹配时转发到', hint: '请求未命中域名、动态规则或响应 IP 规则时使用的最终上游。选择代理 DNS 时也会使用备用 DNS 机制。', options: [{ value: 'forward_remote', label: '代理 DNS' }, { value: 'forward_local', label: '直连 DNS' }] }
+  { path: 'default_forward', label: '未匹配时转发到', hint: '请求未命中域名、动态规则或响应 IP 规则时使用的最终上游。选择代理 DNS 时，按备用 DNS 设置决定是否使用回退。', options: [{ value: 'forward_remote', label: '代理 DNS' }, { value: 'forward_local', label: '直连 DNS' }] }
 ]
 
 export const upstreamFields: OxidnsField[] = [
@@ -39,10 +39,10 @@ export const upstreamFields: OxidnsField[] = [
   { path: 'remote_dns', label: '代理 DNS / 外部 Fake-IP 上游', type: 'upstreams', wide: true, placeholder: 'udp://192.0.2.53:1053', emptyHint: '未配置条目，使用默认代理上游。', hint: '用于代理分流；Fake-IP 需由外部上游提供，名称本身不会启用网络代理。留空使用 Cloudflare / Google DoH；域名上游可配置 bootstrap 或 dial_addr 避免解析环路。' },
   number('remote_concurrent', '代理并发数', 1, upstreamConcurrencyHint),
   number('remote_ttl', '代理响应 TTL（秒）', 0, '将代理 DNS 分支的响应 TTL 固定为此值，控制客户端缓存时长；0 保留原 TTL。备用分支的响应不做此改写。'),
-  { path: 'fallback_dns', label: '备用 DNS', type: 'upstreams', wide: true, emptyHint: '未配置条目，继承直连 DNS。', hint: '代理 DNS 迟迟未返回时的兜底上游；留空继承直连 DNS，因此可能返回真实 IP。已有 SERVFAIL、NXDOMAIN 等 DNS 响应不保证触发备用。' },
-  number('fallback_concurrent', '备用并发数', 1, upstreamConcurrencyHint),
-  number('fallback_threshold', '触发备用等待时间（毫秒）', 1, '主分支等待超过此时长后启用备用竞争；主分支执行失败或没有响应时可提前启用。500 毫秒即 0.5 秒。'),
-  toggle('always_standby', '同时请求备用上游', '开启后主备同时查询，但备用结果需等阈值到达或主分支失败后才能采用；减少切换等待，也会增加查询量。关闭时按需启动备用。')
+  { path: 'fallback_dns', label: '备用 DNS', type: 'upstreams', wide: true, emptyHint: '未配置备用地址，不使用代理 DNS 回退。添加有效上游后自动启用，直连 DNS 不变。', hint: '添加有效上游后自动启用回退；删除最后一个地址会关闭回退，代理分流只使用代理上游，直连 DNS 不变。仍有地址时继续使用剩余上游，不会继承直连 DNS。已有 SERVFAIL、NXDOMAIN 等 DNS 响应不保证触发备用。' },
+  number('fallback_concurrent', '备用并发数', 1, `启用代理 DNS 回退时生效。${upstreamConcurrencyHint}`),
+  number('fallback_threshold', '触发备用等待时间（毫秒）', 1, '启用代理 DNS 回退时，主分支等待超过此时长后启用备用竞争；主分支执行失败或没有响应时可提前启用。500 毫秒即 0.5 秒。'),
+  toggle('always_standby', '同时请求备用上游', '仅在启用代理 DNS 回退时生效。开启后主备同时查询，但备用结果需等阈值到达或主分支失败后才能采用；关闭时按需启动备用。')
 ]
 
 export const cacheFields: OxidnsField[] = [

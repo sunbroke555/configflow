@@ -247,7 +247,8 @@ def test_filter_toggle_never_rewrites_unknown_files():
     assert not read['capabilities']['adguard.urls']['editable']
     assert read['capabilities']['adguard.enabled']['editable']
     off = apply(settings, {'adguard.enabled': False})
-    assert plugin(doc(off['settings']), 'adguard_rules') == plugin(doc(settings), 'adguard_rules')
+    assert not any(item['tag'] == 'adguard_rules' for item in doc(off['settings'])['plugins'])
+    assert off['settings']['_common_disabled']['adguard_rules'] == plugin(doc(settings), 'adguard_rules')
     on = apply(off['settings'], {'adguard.enabled': True})
     assert plugin(doc(on['settings']), 'adguard_rules') == plugin(doc(settings), 'adguard_rules')
 
@@ -332,7 +333,8 @@ def test_disabling_last_rule_update_job_removes_cron_and_restores_its_settings()
         disabled = apply(enabled, {'rule_update.enabled': False})
         assert enabled == before
         expected = deepcopy(original)
-        expected['plugins'].remove(plugin(expected, 'rules_cron'))
+        expected['plugins'] = [item for item in expected['plugins'] if item['tag'] not in
+                               ('rules_cron', 'rules_download', 'rules_reload', 'rules_refresh')]
         assert doc(disabled['settings']) == expected
         assert disabled['values']['rule_update']['enabled'] is False
         assert not [issue for issue in validate_native_config(doc(disabled['settings'])) if issue['severity'] == 'error']
@@ -422,3 +424,21 @@ def test_included_feature_cannot_be_overwritten_by_a_new_root_plugin():
     result = apply(settings, {'worker_threads': 3})
     assert doc(result['settings'])['plugins'] == []
     assert result['settings']['additional_files'] == settings['additional_files']
+
+
+@pytest.mark.parametrize('content', ['', 'full:current.test 192.0.2.20\n'])
+def test_explicit_hosts_edit_invalidates_content_parked_by_native_deletion(content):
+    settings = prepared()
+    settings['_common_disabled'] = {'native_hosts_source': 'full:withdrawn.test 192.0.2.10\n'}
+    before = deepcopy(settings)
+    result = apply(settings, {'custom_hosts': content})
+    assert 'native_hosts_source' not in result['settings']['_common_disabled']
+    assert result['settings']['custom_hosts'] == content
+    assert settings == before
+
+
+def test_unrelated_common_edit_preserves_hosts_content_for_explicit_restoration():
+    settings = prepared()
+    settings['_common_disabled'] = {'native_hosts_source': 'full:restore.test 192.0.2.10\n'}
+    result = apply(settings, {'worker_threads': 3})
+    assert result['settings']['_common_disabled']['native_hosts_source'] == settings['_common_disabled']['native_hosts_source']

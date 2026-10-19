@@ -138,6 +138,52 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('error')?.at(-1)?.[0]).not.toBe('')
   })
 
+  it('keeps remaining fallback addresses and sends an empty list only after removing the last', async () => {
+    const original = {...values(), fallback_dns: '- addr: tcp://192.0.2.54:1053\n- addr: tcp://192.0.2.55:1053\n'}
+    const wrapper = await render({values: original})
+    await click('DNS 上游')
+    await wrapper.get('[aria-label="删除备用 DNS第 1 项"]').trigger('click')
+    await flushPromises()
+    const remaining = (lastChange(wrapper) as {fallback_dns: string}).fallback_dns
+    expect(remaining).not.toContain('192.0.2.54')
+    expect(remaining).toContain('192.0.2.55')
+    await wrapper.setProps({values: {...original, fallback_dns: remaining}})
+    expect(wrapper.find('[aria-label="备用 DNS第 1 项地址"]').exists()).toBe(true)
+
+    await wrapper.get('[aria-label="删除备用 DNS第 1 项"]').trigger('click')
+    await flushPromises()
+    expect(lastChange(wrapper)).toEqual({fallback_dns: ''})
+    await wrapper.setProps({values: {...original, fallback_dns: ''}})
+    expect(wrapper.get('section[aria-label="备用 DNS"]').text()).toContain('未配置备用地址，不使用代理 DNS 回退')
+    expect(wrapper.emitted('change')).toHaveLength(2)
+    expect(original.fallback_dns).toContain('192.0.2.54')
+    expect((wrapper.get('#oxi-local_dns').element as HTMLInputElement).value).toBe('192.0.2.53')
+    expect(wrapper.find('#oxi-fallback_enabled').exists()).toBe(false)
+  })
+
+  it('adds a valid fallback address through the list without an extra switch or changing direct DNS', async () => {
+    const wrapper = await render()
+    await click('DNS 上游')
+    const section = wrapper.get('section[aria-label="备用 DNS"]')
+    await section.findAll('button').find(button => button.text().trim() === '添加上游')!.trigger('click')
+    expect(wrapper.emitted('change')).toBeUndefined()
+    await input('oxi-fallback_dns', 'tcp://192.0.2.54:1053')
+    expect(lastChange(wrapper)).toEqual({fallback_dns: expect.stringContaining('tcp://192.0.2.54:1053')})
+    expect(wrapper.find('#oxi-fallback_enabled').exists()).toBe(false)
+    expect(wrapper.emitted('change')).toHaveLength(1)
+    expect((wrapper.get('#oxi-local_dns').element as HTMLInputElement).value).toBe('192.0.2.53')
+  })
+
+  it('leaves custom fallback chains read-only and links to their native plugin', async () => {
+    const wrapper = await render({capabilities: {fallback_dns: {editable: false, reason: '代理执行链包含自定义步骤', target: 'proxy_dns_seq'}}})
+    await click('DNS 上游')
+    expect(wrapper.find('section[aria-label="备用 DNS"]').exists()).toBe(false)
+    expect(document.querySelector('[aria-label="备用 DNS配置状态说明"]')).not.toBeNull()
+    await click('完整参数')
+    expect(wrapper.emitted('navigate')?.at(-1)).toEqual(['proxy_dns_seq'])
+    expect(wrapper.emitted('change')).toBeUndefined()
+  })
+
   it('edits only actual custom matches and rejects paused metadata in YAML', async () => {
     const wrapper = await render({values: {...values(), custom_matches: [{matches: 'qtype 65', exec: 'reject 0'}]}})
     await click('高级')
@@ -173,6 +219,57 @@ describe('OxiDNS current common settings', () => {
     ;(document.getElementById('oxi-enable-query_recorder') as HTMLButtonElement).click(); await flushPromises()
     expect((document.getElementById('oxi-query_recorder.args.retention_days') as HTMLInputElement).value).toBe('')
     expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
+  })
+
+  it.each([
+    ['cache_size', 'cache_enabled'],
+    ['cache_lazy_ttl', 'cache_enabled'],
+    ['probe_cache_size', 'probe_cache_enabled'],
+    ['cache_dump_interval', 'cache_dump_enabled'],
+    ['cache_dump_interval', 'cache_enabled'],
+  ])('retains invalid %s without blocking %s from being disabled', async (field, toggle) => {
+    const original = {...values(), cache_enabled: true, cache_size: 10240, cache_lazy_ttl: 300, probe_cache_enabled: true, probe_cache_size: 2048, cache_dump_enabled: true, cache_dump_file: 'state/cache.dump', cache_dump_interval: 600}
+    const wrapper = await render({values: original})
+    await click('缓存')
+    await input(`oxi-${field}`, '')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
+    expect(wrapper.emitted('change')).toBeUndefined()
+
+    await wrapper.get(`#oxi-${toggle}`).trigger('click')
+    expect(lastChange(wrapper)).toEqual({[toggle]: false})
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
+    await wrapper.setProps({values: {...original, [toggle]: false}})
+    expect((wrapper.get(`#oxi-${field}`).element as HTMLInputElement).value).toBe('')
+
+    await wrapper.get(`#oxi-${toggle}`).trigger('click')
+    expect(lastChange(wrapper)).toEqual({[toggle]: true})
+    expect((wrapper.get(`#oxi-${field}`).element as HTMLInputElement).value).toBe('')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
+    expect(wrapper.emitted('change')).toHaveLength(2)
+  })
+
+  it('keeps independent probe errors active when disabling the main cache', async () => {
+    const wrapper = await render({values: {...values(), cache_enabled: true, cache_size: 10240, probe_cache_enabled: true, probe_cache_size: 2048}})
+    await click('缓存')
+    await input('oxi-cache_size', '')
+    await input('oxi-probe_cache_size', '')
+    await wrapper.get('#oxi-cache_enabled').trigger('click')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('探测缓存条目数')
+    await wrapper.get('#oxi-probe_cache_enabled').trigger('click')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
+  })
+
+  it('updates cache error dependencies when the current projection changes externally', async () => {
+    const original = {...values(), cache_enabled: true, cache_size: 10240}
+    const wrapper = await render({values: original})
+    await click('缓存')
+    await input('oxi-cache_size', '')
+    await wrapper.setProps({values: {...original, cache_enabled: false}})
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
+    await wrapper.setProps({values: original})
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
+    expect((wrapper.get('#oxi-cache_size').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.emitted('change')).toBeUndefined()
   })
 
   it('applies only editable performance fields and separately disables navigation', async () => {

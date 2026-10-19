@@ -196,6 +196,20 @@ def _forward(text, defaults):
     return result
 
 
+def _fallback_upstreams(text):
+    """An empty backup is disabled, never an implicit copy of local DNS."""
+    if not text.strip():
+        return []
+    if text.lstrip().startswith(('-', '[', '{', 'addr:')) or text.strip() in ('null', '~'):
+        try:
+            value = yaml.safe_load(text)
+        except yaml.YAMLError:
+            raise OxidnsSettingsError('DNS 上游 YAML 语法无效') from None
+        if value is None or value == []:
+            return []
+    return _forward(text, [])
+
+
 def generate_oxidns_config(config_data, base_url=''):
     s = _settings(config_data)
     if s['config_mode'] == 'native':
@@ -255,11 +269,13 @@ def generate_oxidns_config(config_data, base_url=''):
         # This cache ends with the child sequence. It must capture the domestic
         # probe, never the final proxy/Fake-IP answer from its parent sequence.
         add('local_probe_cache', 'cache', {'size': s['probe_cache_size'], 'short_circuit': False})
+    fallback_upstreams = _fallback_upstreams(s['fallback_dns'])
     for name, defaults in (('local', ['udp://223.5.5.5', 'udp://119.29.29.29']),
-                           ('remote', ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query']),
-                           ('fallback', ['udp://223.5.5.5', 'udp://119.29.29.29'])):
+                           ('remote', ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'])):
         add(f'forward_{name}', 'forward', {'concurrent': s[f'{name}_concurrent'],
-            'upstreams': _forward(s['fallback_dns'] or s['local_dns'] if name == 'fallback' else s[f'{name}_dns'], defaults)})
+            'upstreams': _forward(s[f'{name}_dns'], defaults)})
+    if fallback_upstreams:
+        add('forward_fallback', 'forward', {'concurrent': s['fallback_concurrent'], 'upstreams': fallback_upstreams})
     dynamic = s['dynamic_domain_set']
     if dynamic['enabled']:
         add('dynamic_domains', 'dynamic_domain_set', deepcopy(dynamic['args']))
@@ -294,10 +310,12 @@ def generate_oxidns_config(config_data, base_url=''):
     if s['remote_ttl']:
         remote.append({'exec': f'ttl {s["remote_ttl"]}'})
     add('remote_dns', 'sequence', remote)
-    add('fallback_dns', 'sequence', [{'exec': '$forward_fallback'}, {'matches': ['!has_resp'], 'exec': 'reject 3'}])
-    add('fallback', 'fallback', {'primary': 'remote_dns', 'secondary': 'fallback_dns',
-        'threshold': s['fallback_threshold'], 'always_standby': s['always_standby']})
-    add('proxy_dns_seq', 'sequence', [{'exec': '$fallback'}, {'exec': 'accept'}])
+    if fallback_upstreams:
+        add('fallback_dns', 'sequence', [{'exec': '$forward_fallback'}, {'matches': ['!has_resp'], 'exec': 'reject 3'}])
+        add('fallback', 'fallback', {'primary': 'remote_dns', 'secondary': 'fallback_dns',
+            'threshold': s['fallback_threshold'], 'always_standby': s['always_standby']})
+    add('proxy_dns_seq', 'sequence', [{'exec': '$fallback'}, {'exec': 'accept'}] if fallback_upstreams
+        else [{'exec': 'goto remote_dns'}])
     requery = [{'exec': 'drop_resp'}]
     direct_ip = deepcopy(real_wrappers)
     add('default_direct_ip', 'sequence', deepcopy(real_wrappers) + [{'exec': 'accept'}])

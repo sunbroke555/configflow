@@ -11,6 +11,7 @@ import yaml
 from backend.common.oxidns_editor import prepare_editor, _same
 from backend.common.oxidns_native import load_native_yaml, native_document, relative_resource, resource_references
 from backend.common.oxidns_settings import get_default_oxidns_settings, normalize_oxidns_settings, OxidnsSettingsError
+from backend.common.oxidns_references import reference_locations, reference_reason
 
 _MISSING = object()
 _DEFAULTS = get_default_oxidns_settings()
@@ -167,7 +168,17 @@ class _Context:
     def plugin(self, tag):
         return self.by_tag.get(tag)
 
+    def alias_capability(self, tag):
+        aliases = self.parked.get('renamed_plugins', {})
+        alias = aliases.get(tag) if isinstance(aliases, dict) else None
+        if isinstance(alias, str) and alias != tag and self.plugin(alias):
+            return _cap(False, f'受管插件已重命名为「{alias}」，请在完整参数中编辑自定义配置', alias)
+        return None
+
     def allowed(self, tag, kind=None):
+        alias = self.alias_capability(tag)
+        if alias:
+            return alias
         if tag in self.included_tags:
             return _cap(False, '此插件来自 include 文件，请在完整参数或附加文件中编辑', tag)
         plugin = self.plugin(tag)
@@ -183,6 +194,9 @@ class _Context:
         return ({} if plugin.get('args') is None else plugin['args']) if plugin else {}
 
     def stored_args(self, tag):
+        alias = self.alias_capability(tag)
+        if alias and self.plugin(tag) is None:
+            return self.args(alias['target'])
         plugin = self.plugin(tag) or self.parked.get(tag)
         if isinstance(plugin, dict) and plugin.get('tag') == tag and plugin.get('type') == _TAG_TYPES.get(tag, 'sequence'):
             return plugin.get('args') or {}
@@ -230,7 +244,8 @@ class _Context:
     def call_state(self, tag, chains):
         capability = self.allowed(tag)
         if not capability['editable']:
-            return False, capability
+            alias = self.alias_capability(tag)
+            return bool(alias and reference_locations(self.doc, [alias['target']], dynamic=False)), capability
         if self.doc.get('include'):
             return False, _cap(False, '配置包含外部执行链，请在完整参数中调整功能调用', tag)
         expected = {'exec': f'${tag}'}
@@ -248,10 +263,13 @@ class _Context:
                         counts[plugin['tag']] += 1
                     else:
                         custom = True
-        total_references = sum(_reference_count(plugin.get('args'), tag) for plugin in self.plugins)
-        if total_references != sum(counts.values()):
-            custom = True
-            any_call = bool(total_references)
+        remaining = deepcopy(self.doc)
+        for plugin in remaining.get('plugins', []):
+            if plugin.get('tag') in counts and isinstance(plugin.get('args'), list):
+                plugin['args'] = [item for item in plugin['args'] if item != expected]
+        references = reference_locations(remaining, [tag])
+        if references:
+            return any_call or any(item['tag'] == tag for item in references), _cap(False, reference_reason(references), tag)
         if custom or any(count > 1 for count in counts.values()) or (any_call and not all(count == 1 for count in counts.values())):
             return any_call, _cap(False, '功能使用了自定义或部分接入的执行链，请在完整参数中调整调用', tag)
         if any(self.sequence(chain) is None for chain in chains):
@@ -296,6 +314,127 @@ class _Context:
                 items[:] = [item for item in items if item != expected]
         if saved or 'feature_calls' in self.parked:
             self.park('feature_calls', saved)
+
+
+_FALLBACK_PLUGINS = ('forward_fallback', 'fallback_dns', 'fallback')
+_FALLBACK_FIELDS = {'fallback_dns', 'fallback_concurrent',
+                    'fallback_threshold', 'always_standby'}
+_FALLBACK_ON = [{'exec': '$fallback'}, {'exec': 'accept'}]
+_FALLBACK_OFF = [{'exec': 'goto remote_dns'}]
+_FALLBACK_SECONDARY = [{'exec': '$forward_fallback'}, {'matches': ['!has_resp'], 'exec': 'reject 3'}]
+_FALLBACK_REASON = '代理回退使用了自定义执行链、额外引用或 include，请在完整参数中调整，不能自动切换'
+_FALLBACK_DYNAMIC_REFERENCE_REASON = '执行链包含未展开的环境变量引用，请在完整参数中确认引用后调整备用 DNS'
+
+
+def _fallback_has_dynamic_references(value):
+    """Environment expansion can hide references from the literal tag scanner.
+
+    Restrict this guard to reference-bearing fields and positional argument
+    strings: credentials and forward upstream addresses may still use env vars.
+    """
+    return bool(reference_locations(value))
+
+
+def _fallback_state(ctx):
+    """Recognize only the owned primary/secondary graph before moving plugins.
+
+    Bare references (for example another fallback's secondary or a server's
+    entry) matter as much as $tag calls. The conservative reference scanner also
+    protects future/custom plugin arguments that the schema does not yet know.
+    """
+    from backend.common.oxidns_common_routing import _references
+    calls = ctx.sequence('proxy_dns_seq')
+    enabled = _same(calls, _FALLBACK_ON)
+    for tag in (*_FALLBACK_PLUGINS, 'proxy_dns_seq', 'remote_dns'):
+        alias = ctx.alias_capability(tag)
+        if alias:
+            return enabled, alias
+    denied = _cap(False, _FALLBACK_REASON, 'proxy_dns_seq')
+    if _fallback_has_dynamic_references(ctx.doc):
+        return enabled, _cap(False, _FALLBACK_DYNAMIC_REFERENCE_REASON, 'proxy_dns_seq')
+    if (ctx.doc.get('include') or ctx.sequence('remote_dns') is None or
+            not any(_same(calls, expected) for expected in
+                    (_FALLBACK_ON, _FALLBACK_OFF, [{'exec': '$remote_dns'}, {'exec': 'accept'}]))):
+        return enabled, denied
+    if any(sum(item.get('tag') == tag for item in ctx.plugins) > 1
+           for tag in (*_FALLBACK_PLUGINS, 'proxy_dns_seq', 'remote_dns')):
+        return enabled, denied
+    kinds = {'forward_fallback': 'forward', 'fallback_dns': 'sequence', 'fallback': 'fallback'}
+    for tag in _FALLBACK_PLUGINS:
+        plugin = ctx.plugin(tag)
+        if enabled and plugin is None:
+            return enabled, denied
+        plugin = plugin or ctx.parked.get(tag)
+        if plugin is None:
+            continue
+        if not isinstance(plugin, dict) or plugin.get('tag') != tag or plugin.get('type') != kinds[tag]:
+            return enabled, denied
+        args = plugin.get('args')
+        if tag == 'fallback_dns':
+            if not _same(args, _FALLBACK_SECONDARY):
+                return enabled, denied
+        elif not isinstance(args, dict):
+            return enabled, denied
+        elif tag == 'fallback' and (args.get('primary') != 'remote_dns' or args.get('secondary') != 'fallback_dns'):
+            return enabled, denied
+        elif tag == 'forward_fallback' and not isinstance(args.get('upstreams', []), list):
+            return enabled, denied
+    # Remove only the known owned edges, then reject any remaining reference to
+    # a plugin that disabling would park. Include top-level extension fields.
+    remaining = deepcopy(ctx.doc)
+    for plugin in remaining.get('plugins', []):
+        tag = plugin.pop('tag', None)
+        plugin.pop('type', None)
+        if tag == 'proxy_dns_seq':
+            plugin.pop('args', None)
+        elif tag == 'fallback_dns':
+            plugin.pop('args', None)
+        elif tag == 'fallback' and isinstance(plugin.get('args'), dict):
+            plugin['args'].pop('primary', None)
+            plugin['args'].pop('secondary', None)
+    if any(_references(remaining, tag) for tag in _FALLBACK_PLUGINS):
+        return enabled, denied
+    return enabled, _cap(target='proxy_dns_seq')
+
+
+def _prepare_fallback(ctx, changes):
+    if not set(changes) & _FALLBACK_FIELDS:
+        return None
+    enabled, capability = _fallback_state(ctx)
+    if not capability['editable']:
+        raise OxidnsSettingsError(_FALLBACK_REASON)
+    requested = enabled
+    if 'fallback_dns' in changes:
+        try:
+            value = changes['fallback_dns']
+            upstreams = yaml.safe_load(value) if value and value.strip() else []
+        except yaml.YAMLError:
+            raise OxidnsSettingsError('DNS 上游 YAML 语法无效') from None
+        upstreams = [] if upstreams is None else upstreams
+        if not isinstance(upstreams, list) or any(not isinstance(item, dict) for item in upstreams):
+            raise OxidnsSettingsError('DNS 上游必须为参数对象数组')
+        requested = bool(upstreams)
+    # Restore before parameter patches, then park again if disabled. This keeps
+    # edits to disabled options without accidentally activating an empty forward.
+    ctx.ensure('forward_fallback', {'upstreams': [], 'concurrent': 1})
+    ctx.ensure('fallback_dns', _FALLBACK_SECONDARY)
+    ctx.ensure('fallback', {'primary': 'remote_dns', 'secondary': 'fallback_dns',
+                            'threshold': 500, 'always_standby': False})
+    return requested
+
+
+def _finish_fallback(ctx, enabled):
+    if enabled is None:
+        return
+    upstreams = ctx.args('forward_fallback').get('upstreams', [])
+    if enabled and (not isinstance(upstreams, list) or not upstreams or any(
+            not isinstance(item, dict) or not isinstance(item.get('addr'), str) or not item['addr'].strip()
+            for item in upstreams)):
+        raise OxidnsSettingsError('启用代理回退前请先填写备用 DNS 地址')
+    ctx.plugin('proxy_dns_seq')['args'] = deepcopy(_FALLBACK_ON if enabled else _FALLBACK_OFF)
+    if not enabled:
+        for tag in _FALLBACK_PLUGINS:
+            ctx.park_plugin(tag)
 
 
 def _direct_read(ctx, values, capabilities):
@@ -357,6 +496,15 @@ def _dynamic_state(ctx):
            and _get(plugin, ('args', 'provider')) == 'dynamic_domains' for plugin in ctx.plugins):
         return True, None, _cap(False, '动态域名集还被自定义学习器引用，请在完整参数中调整', 'dynamic_domains')
     matches = [item for item in items if isinstance(item, dict) and any('$dynamic_domains' in str(match) for match in _matches(item))]
+    remaining = deepcopy(ctx.doc)
+    for plugin in remaining.get('plugins', []):
+        if plugin.get('tag') == 'sequence_main' and isinstance(plugin.get('args'), list):
+            plugin['args'] = [item for item in plugin['args'] if item not in matches]
+        if plugin.get('tag') == 'learn_classified_domain' and plugin.get('type') == 'learn_domain' and isinstance(plugin.get('args'), dict):
+            plugin['args'].pop('provider', None)
+    extra = reference_locations(remaining, ['dynamic_domains'])
+    if extra:
+        return bool(matches) or any(item['tag'] == 'dynamic_domains' for item in extra), None, _cap(False, reference_reason(extra), 'dynamic_domains')
     references = sum(_tag_mentions(plugin.get('args'), 'dynamic_domains') for plugin in ctx.plugins)
     if references != len(matches):
         return bool(references), None, _cap(False, '动态域名集还被其他执行链引用，请在完整参数中调整', 'dynamic_domains')
@@ -368,23 +516,25 @@ def _dynamic_state(ctx):
 
 
 def _cron_job(ctx):
+    alias = next((cap for tag in ('rules_cron', 'rules_download', 'rules_reload', 'rules_refresh')
+                  if (cap := ctx.alias_capability(tag))), None)
     args = ctx.args('rules_cron')
     jobs = args.get('jobs', []) if isinstance(args, dict) else None
     if not isinstance(jobs, list):
         return None, _cap(False, '定时任务使用了自定义值类型，请在完整参数中编辑', 'rules_cron')
     matching = [job for job in jobs if isinstance(job, dict) and (job.get('name') == 'refresh_rules' or '$rules_refresh' in (job.get('executors') if isinstance(job.get('executors'), list) else []))]
     if not matching:
-        return None, ctx.allowed('rules_cron')
+        return None, alias or ctx.allowed('rules_cron')
     if len(matching) != 1 or matching[0].get('name') != 'refresh_rules' or matching[0].get('executors') != ['$rules_refresh']:
         return None, _cap(False, '规则更新任务使用了自定义执行器，请在完整参数中编辑', 'rules_cron')
-    return matching[0], ctx.allowed('rules_cron')
+    return matching[0], alias or ctx.allowed('rules_cron')
 
 
 def _resources(ctx):
     from backend.converters.oxidns import _tag
     source = ctx.settings.get('adguard')
     source = source if isinstance(source, dict) else {}
-    args = ctx.args('adguard_rules')
+    args = ctx.stored_args('adguard_rules')
     files = args.get('files', []) if isinstance(args, dict) else None
     urls = source.get('urls', [])
     urls = urls if isinstance(urls, list) else []
@@ -399,6 +549,36 @@ def _resources(ctx):
     return [known[path] for path in paths if path in known], 'rules/adguard-custom.txt' in paths, cap
 
 
+def _adguard_state(ctx):
+    call = {'matches': ['question $adguard_rules'], 'exec': 'goto adguard_reject'}
+    main = ctx.sequence('sequence_main')
+    enabled = call in (main or [])
+    for tag in ('adguard_rules', 'adguard_reject', 'adguard_block'):
+        alias = ctx.alias_capability(tag)
+        if alias:
+            return bool(reference_locations(ctx.doc, [alias['target']], dynamic=False)), alias
+    denied = _cap(False, '自定义过滤链请在完整参数中调整', 'adguard_rules')
+    reject = ctx.plugin('adguard_reject')
+    if (main is None or ctx.doc.get('include') or
+            (reject and (reject.get('type') != 'sequence' or reject.get('args') != [{'exec': '$adguard_block'}, {'exec': 'accept'}])) or
+            not ctx.allowed('adguard_block')['editable'] or not ctx.allowed('adguard_rules')['editable']):
+        return enabled, denied
+    if (main or []).count(call) > 1:
+        return enabled, denied
+    remaining = deepcopy(ctx.doc)
+    for item in remaining.get('plugins', []):
+        if item.get('tag') == 'sequence_main':
+            item['args'] = [entry for entry in item['args'] if entry != call]
+        elif item.get('tag') == 'adguard_reject':
+            item.pop('args', None)
+        elif item.get('tag') == 'rules_reload' and item.get('type') == 'reload_provider' and isinstance(item.get('args'), list):
+            item['args'] = [entry for entry in item['args'] if entry != '$adguard_rules']
+    refs = reference_locations(remaining, ['adguard_rules', 'adguard_reject', 'adguard_block'])
+    if refs:
+        return enabled or any(item['tag'] is not None for item in refs), _cap(False, reference_reason(refs), 'adguard_rules')
+    return enabled, _cap(target='adguard_rules')
+
+
 def _read(document, settings, config):
     ctx = _Context(document, settings)
     values = _neutral(_DEFAULTS)
@@ -411,12 +591,18 @@ def _read(document, settings, config):
             values[feature]['args']['tls'] = None
     for name in ('local', 'remote', 'fallback'):
         tag = f'forward_{name}'
-        upstreams = _get(ctx.args(tag), ('upstreams',))
+        upstreams = _get(ctx.stored_args(tag) if name == 'fallback' else ctx.args(tag), ('upstreams',))
         cap = ctx.allowed(tag)
         if upstreams is not _MISSING and not isinstance(upstreams, list):
             cap = _cap(False, '上游使用了自定义值类型，请在完整参数中编辑', tag)
         values[f'{name}_dns'] = '' if upstreams is _MISSING else yaml.safe_dump(upstreams, allow_unicode=True, sort_keys=False)
         capabilities[f'{name}_dns'] = cap
+    fallback_enabled, fallback_capability = _fallback_state(ctx)
+    if not fallback_enabled and fallback_capability['editable']:
+        values['fallback_dns'] = ''
+    if not fallback_capability['editable']:
+        for field in _FALLBACK_FIELDS:
+            capabilities[field] = fallback_capability
     udp = ctx.args('server_udp')
     tcp = ctx.plugin('server_tcp')
     values['listen'] = udp.get('listen') if isinstance(udp, dict) else None
@@ -481,18 +667,13 @@ def _read(document, settings, config):
         capabilities[f'rule_update.args.{key}'] = cap
     urls, has_content, resources_cap = _resources(ctx)
     source = settings.get('adguard') if isinstance(settings.get('adguard'), dict) else {}
-    values['adguard'].update(urls=urls, content=source.get('content', '') if has_content else '', mode=_get(ctx.args('adguard_block'), ('mode',)))
+    values['adguard'].update(urls=urls, content=source.get('content', '') if has_content else '', mode=_get(ctx.stored_args('adguard_block'), ('mode',)))
     if values['adguard']['mode'] is _MISSING:
         values['adguard']['mode'] = None
     for field in ('adguard.urls', 'adguard.content'):
         capabilities[field] = resources_cap
     capabilities['adguard.mode'] = ctx.allowed('adguard_block')
-    adguard_items = [item for item in (ctx.sequence('sequence_main') or []) if isinstance(item, dict) and ('adguard_reject' in str(item.get('exec', '')) or '$adguard_rules' in str(item.get('matches', '')))]
-    adguard_references = sum(_tag_mentions(plugin.get('args'), 'adguard_rules') + _tag_mentions(plugin.get('args'), 'adguard_reject') for plugin in ctx.plugins if plugin.get('type') != 'reload_provider')
-    values['adguard']['enabled'] = bool(adguard_references)
-    reject = ctx.plugin('adguard_reject')
-    reject_safe = reject is None or (reject.get('type') == 'sequence' and reject.get('args') == [{'exec': '$adguard_block'}, {'exec': 'accept'}])
-    capabilities['adguard.enabled'] = _cap(ctx.sequence('sequence_main') is not None and not document.get('include') and adguard_references == 2 * len(adguard_items) and reject_safe and ctx.allowed('adguard_block')['editable'] and ctx.allowed('adguard_rules')['editable'] and (not adguard_items or adguard_items == [{'matches': ['question $adguard_rules'], 'exec': 'goto adguard_reject'}]), '自定义过滤链请在完整参数中调整', 'adguard_rules')
+    values['adguard']['enabled'], capabilities['adguard.enabled'] = _adguard_state(ctx)
     hosts = ctx.args('custom_hosts')
     paths = hosts.get('files', []) if isinstance(hosts, dict) and isinstance(hosts.get('files', []), list) else []
     values['custom_hosts'] = settings.get('custom_hosts', '') if './rules/custom_hosts.txt' in paths or 'rules/custom_hosts.txt' in paths else ''
@@ -557,7 +738,7 @@ def _patch_direct(ctx, field, value):
     holder = ctx.doc if tag is None else ctx.ensure(tag, _default_args(tag))['args']
     if field == 'cache_lazy_ttl' and value == 0:
         value = None
-    if field in ('log.file', 'rule_update.args.outbound', 'rule_update.args.socks5') and value == '':
+    if field in ('log.file', 'rule_update.args.timeout', 'rule_update.args.outbound', 'rule_update.args.socks5') and value == '':
         value = None
     if field == 'log.max_files' and value is not None and _get(holder, ('log', 'rotation', 'type')) in (_MISSING, None):
         _put(holder, ('log', 'rotation', 'type'), 'never')
@@ -705,7 +886,7 @@ def _park_disabled_features(ctx, changes):
         _, _, cap = _dynamic_state(ctx)
         if not cap['editable']:
             return
-        if not any(_tag_mentions(plugin.get('args'), 'learn_classified_domain') for plugin in ctx.plugins):
+        if not reference_locations(ctx.doc, ['learn_classified_domain']):
             ctx.park_plugin('learn_classified_domain')
         enabled, _, cap = _dynamic_state(ctx)
         if not enabled and cap['editable']:
@@ -767,6 +948,9 @@ def _patch_rule_update(ctx, changes, config, base_url):
 def _patch_resources(ctx, changes, config, base_url):
     from backend.converters.oxidns import _tag, _hosts_file_content
     if 'custom_hosts' in changes:
+        # A direct resource edit supersedes content parked by native deletion.
+        # Re-adding the feature must not revive a mapping the user withdrew.
+        ctx.parked.pop('native_hosts_source', None)
         content = changes['custom_hosts'] or ''
         previous_content = ctx.settings.get('custom_hosts', '')
         if content.strip():
@@ -796,6 +980,8 @@ def _patch_resources(ctx, changes, config, base_url):
     old_resource = deepcopy(resource)
     urls = changes.get('adguard.urls', urls)
     content = changes.get('adguard.content', resource.get('content', '') if has_content else '') or ''
+    if changes.get('adguard.enabled') and isinstance(ctx.parked.get('adguard_rules'), dict):
+        ctx.ensure('adguard_rules')
     if any(not isinstance(url, str) or not re.match(r'^https?://', url) for url in urls):
         raise OxidnsSettingsError('AdGuard 订阅必须为 HTTP(S) URL')
     if any(field in changes for field in ('adguard.urls', 'adguard.content')) or (changes.get('adguard.enabled') and not ctx.plugin('adguard_rules')):
@@ -826,7 +1012,14 @@ def _patch_resources(ctx, changes, config, base_url):
                 main.insert(index, call)
         else:
             main[:] = [item for item in main if item != call]
-    if any(field in changes for field in ('adguard.urls', 'adguard.content')) and ctx.plugin('rules_download'):
+    active, capability = _adguard_state(ctx)
+    if not active and capability['editable']:
+        for tag in ('adguard_rules', 'adguard_reject', 'adguard_block'):
+            ctx.park_plugin(tag)
+        reload = ctx.plugin('rules_reload')
+        if reload and reload.get('type') == 'reload_provider' and isinstance(reload.get('args'), list):
+            reload['args'] = [entry for entry in reload['args'] if entry != '$adguard_rules']
+    if any(field in changes for field in ('adguard.urls', 'adguard.content', 'adguard.enabled')) and ctx.plugin('rules_download'):
         from backend.common.oxidns_common_routing import resource_downloads
         downloader = ctx.plugin('rules_download')
         reload = ctx.plugin('rules_reload')
@@ -845,7 +1038,7 @@ def _patch_resources(ctx, changes, config, base_url):
                 output.append(entry)
                 desired.pop(location)
         downloader['args']['downloads'] = output + list(desired.values())
-        if reload and '$adguard_rules' not in reload['args']:
+        if reload and ctx.plugin('adguard_rules') and '$adguard_rules' not in reload['args']:
             reload['args'].append('$adguard_rules')
 
 
@@ -870,6 +1063,7 @@ def apply_common_settings(settings, changes, config, base_url=''):
     if routing_changes:
         document, current = apply_routing(document, current, config, routing_changes, base_url)
     ctx = _Context(document, current)
+    fallback_enabled = _prepare_fallback(ctx, changes)
     if 'api.enabled' in changes:
         _patch_api(ctx, 'api.enabled', changes['api.enabled'])
     # Enable first so simultaneous argument edits modify the newly created node.
@@ -899,6 +1093,8 @@ def apply_common_settings(settings, changes, config, base_url=''):
                 upstreams = yaml.safe_load(value) if value and value.strip() else []
             except yaml.YAMLError:
                 raise OxidnsSettingsError('DNS 上游 YAML 语法无效') from None
+            if field == 'fallback_dns' and upstreams is None:
+                upstreams = []
             if not isinstance(upstreams, list) or any(not isinstance(item, dict) for item in upstreams):
                 raise OxidnsSettingsError('DNS 上游必须为参数对象数组')
             ctx.ensure('forward_' + field.split('_')[0])['args']['upstreams'] = upstreams
@@ -931,6 +1127,7 @@ def apply_common_settings(settings, changes, config, base_url=''):
                     items.pop(index)
             elif value:
                 items.append({'exec': f'ttl {value}'})
+    _finish_fallback(ctx, fallback_enabled)
     _park_disabled_features(ctx, changes)
     from backend.common.oxidns_common_updates import finish_rule_updates
     finish_rule_updates(ctx, changes, config, base_url)

@@ -15,6 +15,19 @@ DEFAULT_FAKE_IP_RANGE = '198.18.0.1/16'
 BUILTIN_NON_PROXY = {'DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE'}
 
 
+def rule_source_issue(item, library_rule, *, require_library=False):
+    """Shared activation rules for manual previews and automatic refreshes."""
+    if item is None:
+        return '所选规则集已不存在'
+    if item.get('enabled') is False:
+        return '规则集在策略规则中已停用'
+    if (item.get('library_rule_id') or require_library) and library_rule is None:
+        return '共享规则库条目已不存在'
+    if item.get('library_enabled') is False or (library_rule is not None and library_rule.get('enabled') is False):
+        return '共享规则库条目已停用'
+    return ''
+
+
 def fake_ip_network(config: Dict[str, Any]) -> ipaddress.IPv4Network:
     """Return the fake-ip network from the mihomo base config (default 198.18.0.0/16)."""
     value = DEFAULT_FAKE_IP_RANGE
@@ -97,13 +110,14 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
             incomplete(f'所选规则集 {rule_id} 已不存在，已忽略')
             continue
         name = str(item.get('name') or item.get('id') or '规则集')
-        if item.get('enabled') is False:
-            incomplete(f'规则集「{name}」在策略规则中已停用，未计入')
+        library_rule = library.get(item.get('library_rule_id'))
+        issue = rule_source_issue(item, library_rule)
+        if issue:
+            incomplete(f'规则集「{name}」：{issue}，未计入；取消对应路由选择后可预览撤回')
             continue
         policy = str(item.get('policy') or '')
         if policy in BUILTIN_NON_PROXY or policy in direct_groups:
             warnings.append(f'规则集「{name}」的策略是 {policy}（不走代理），仍按勾选计入，请确认')
-        library_rule = library.get(item.get('library_rule_id'))
         try:
             content = content_loader(item, library_rule) or ''
         except Exception:  # noqa: BLE001 - a broken rule source must not break the report

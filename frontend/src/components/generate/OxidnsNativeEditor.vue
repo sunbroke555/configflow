@@ -6,7 +6,7 @@
         <slot name="navigation"><h3 class="text-sm font-semibold max-sm:sr-only">配置编辑</h3></slot>
         <FieldHelp label="完整配置" text="常用设置、完整参数和 YAML 编辑同一份配置，共用一次保存。切换入口或分组不会改写配置，也不会丢失未完成的输入。只有主动添加或修改的参数才写入配置；未知字段和原生值类型均保留。表单修改后会重新整理 YAML 注释和排版。" />
       </div>
-      <OxidnsEditorModeToggle :model-value="mode" :disabled="disabled" :options="[{ value: 'common', label: '常用设置', disabled: Boolean(slots.common) && formDraftError }, { value: 'full', label: '完整参数' }, { value: 'yaml', label: 'YAML', disabled: mode !== 'yaml' && formDraftError }]" label="配置编辑方式" @update:model-value="switchMode" />
+      <OxidnsEditorModeToggle :model-value="mode" :disabled="disabled || syncing" :options="[{ value: 'common', label: '常用设置', disabled: Boolean(slots.common) && (formDraftError || syncError) }, { value: 'full', label: '完整参数' }, { value: 'yaml', label: 'YAML', disabled: mode !== 'yaml' && (formDraftError || syncError) }]" label="配置编辑方式" @update:model-value="switchMode" />
     </div>
     <Textarea v-if="mode === 'yaml'" :model-value="draft" :disabled="disabled" :rows="20" aria-label="OxiDNS 完整配置 YAML" :aria-invalid="Boolean(error)" class="min-h-0 min-w-0 flex-1 resize-none font-mono text-xs" @update:model-value="editYaml(String($event))" />
     <div v-show="mode === 'common'" class="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -15,9 +15,10 @@
     <div v-if="mode === 'full'" class="grid min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border md:grid-cols-[256px_minmax(0,1fr)]">
       <aside class="hidden min-h-0 min-w-0 flex-col border-r border-border bg-muted/30 md:flex">
         <OxidnsConfigNavigation :items="navigationItems" :selected-id="selectedId" :disabled="disabled" class="min-h-0 flex-1 overflow-y-auto p-2" @select="selectScope" />
-        <div class="flex shrink-0 items-center gap-1 border-t border-border p-2">
-          <OxidnsParameterPicker :fields="pluginChoices" label="原生插件" button-text="添加插件" :disabled="disabled || nonListPlugins" @select="addPlugin" />
-          <FieldHelp label="添加原生插件" text="选择功能后直接进入表单；只创建 tag、type 和空参数。填写参数后，还需在监听入口或执行链中引用插件，才会参与 DNS 处理。" />
+        <div class="flex shrink-0 flex-wrap items-center gap-1 border-t border-border p-2">
+          <OxidnsParameterPicker :fields="standardChoices" label="标准功能" button-text="添加 / 恢复功能" :disabled="disabled || nonListPlugins || !reconcile" @select="addStandardFeature" />
+          <OxidnsParameterPicker :fields="pluginChoices" label="原生插件" button-text="添加自定义实例" :disabled="disabled || nonListPlugins" @select="addPlugin" />
+          <FieldHelp label="添加原生插件" :text="pluginAdditionHelp" />
         </div>
       </aside>
       <div ref="formScroll" class="min-h-0 min-w-0 overflow-y-auto p-3 md:p-5" aria-label="当前配置分组">
@@ -31,15 +32,15 @@
           <div class="flex flex-wrap items-center gap-1.5">
             <h4 class="text-sm font-semibold">{{ selectedCategory.label }}</h4>
             <FieldHelp :label="selectedCategory.label" :text="selectedCategory.help" />
-            <OxidnsParameterPicker v-if="categoryPluginChoices.length" :fields="categoryPluginChoices" :label="selectedCategory.label" button-text="添加实例" :disabled="disabled || nonListPlugins" class="ml-auto" @select="addPlugin" />
+            <OxidnsParameterPicker v-if="categoryPluginChoices.length" :fields="categoryPluginChoices" :label="selectedCategory.label" button-text="添加自定义实例" :disabled="disabled || nonListPlugins" class="ml-auto" @select="addPlugin" />
           </div>
-          <p class="text-xs text-muted-foreground">选择已配置项继续编辑，或点击带加号的功能添加配置。</p>
+          <p class="text-xs text-muted-foreground">标准功能自动补齐依赖和执行引用；自定义实例需在监听入口或执行序列表单中配置引用。</p>
           <div class="divide-y divide-border rounded-md border border-border">
             <div v-for="item in categoryItems" :key="item.id" class="flex min-w-0 items-center gap-1 px-2">
               <button type="button" class="flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:opacity-50" :aria-label="`${item.available ? '添加' : '编辑'} ${item.label}`" :disabled="disabled || item.disabled" @click="selectScope(item.id)">
                 <Plus v-if="item.available" class="size-4 shrink-0 text-primary-accent" />
                 <span class="min-w-0 flex-1"><span class="block break-words text-xs font-medium">{{ item.label }}</span><code v-if="item.code" class="mt-0.5 block break-all text-[11px] text-muted-foreground">{{ item.code }}</code></span>
-                <span class="shrink-0 text-[11px] text-muted-foreground">{{ item.available ? '未配置' : '查看' }}</span><ChevronRight v-if="!item.available" class="size-3.5 shrink-0" />
+                <span class="shrink-0 text-[11px] text-muted-foreground">{{ item.available ? item.id.startsWith('add:standard:') ? '添加 / 恢复' : item.id.startsWith('add:plugin:') ? '自定义实例' : '未配置' : '查看' }}</span><ChevronRight v-if="!item.available" class="size-3.5 shrink-0" />
               </button>
               <FieldHelp v-if="item.help" :label="`${item.label}功能`" :text="item.help" />
             </div>
@@ -58,6 +59,7 @@
           <Button variant="ghost" size="icon" class="oxi-native-icon" :disabled="disabled || selectedPluginIndex === (plugins?.value.items.length ?? 0) - 1" :aria-label="`下移原生插件 ${selectedPluginIndex + 1}`" @click="movePlugin(selectedPluginIndex, 1)"><ArrowDown class="size-3.5" /></Button>
           <Button variant="ghost" size="icon" class="oxi-native-icon text-muted-foreground hover:text-destructive-accent" :disabled="disabled" :aria-label="`删除原生插件 ${selectedPluginIndex + 1}`" @click="removePlugin(selectedPluginIndex)"><Trash2 class="size-3.5" /></Button>
         </div>
+            <p v-if="selectedPluginIndex >= 0 && !selectedManagedPlugin" class="basis-full text-xs text-muted-foreground">自定义实例需在监听入口或执行序列表单中配置引用，才会参与 DNS 处理。已有手工引用会保留。</p>
             </div>
           </template>
         </OxidnsSchemaValueEditor>
@@ -65,7 +67,7 @@
           <p v-if="nonListPlugins" class="text-xs text-warning-accent">plugins 不是列表，已保留在全局参数中；请修正类型后添加插件。</p>
           <p v-else-if="!plugins?.value.items.length" class="text-xs text-muted-foreground">尚无插件。选择类型添加，或切换 YAML 粘贴完整配置。</p>
           <button v-for="(plugin, index) in plugins?.value.items ?? []" :key="plugin.id" type="button" class="flex min-h-11 w-full min-w-0 items-center gap-3 rounded-md border border-border px-3 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:opacity-50" :disabled="disabled" @click="selectScope(plugin.id)"><span class="num text-xs text-muted-foreground">{{ index + 1 }}</span><span class="min-w-0 flex-1"><span class="block truncate font-mono text-xs">{{ scalarField(plugin, 'tag') || `插件 ${index + 1}` }}</span><span class="block text-xs text-muted-foreground">{{ scalarField(plugin, 'type') || '未指定类型' }}</span></span><ChevronRight class="size-4 shrink-0" /></button>
-          <OxidnsParameterPicker :fields="pluginChoices" label="插件总览" button-text="添加插件" :disabled="disabled || nonListPlugins" @select="addPlugin" />
+          <div class="flex flex-wrap gap-2"><OxidnsParameterPicker :fields="standardChoices" label="总览标准功能" button-text="添加 / 恢复功能" :disabled="disabled || nonListPlugins || !reconcile" @select="addStandardFeature" /><OxidnsParameterPicker :fields="pluginChoices" label="插件总览" button-text="添加自定义实例" :disabled="disabled || nonListPlugins" @select="addPlugin" /></div>
         </div>
       </div>
     </div>
@@ -73,15 +75,25 @@
       <SheetContent side="left" class="z-[60] w-[min(320px,calc(100vw-2rem))] gap-2" aria-describedby="oxi-directory-description">
         <SheetHeader><SheetTitle>配置目录</SheetTitle><SheetDescription id="oxi-directory-description">选择分组后直接编辑，当前草稿会保留。</SheetDescription></SheetHeader>
         <OxidnsConfigNavigation :items="navigationItems" :selected-id="selectedId" :disabled="disabled" class="min-h-0 flex-1 overflow-y-auto px-2" @select="selectScope" />
-        <div class="border-t border-border p-3"><OxidnsParameterPicker :fields="pluginChoices" label="移动端原生插件" button-text="添加插件" :disabled="disabled || nonListPlugins" @select="addPlugin" /></div>
+        <div class="flex flex-wrap gap-2 border-t border-border p-3"><OxidnsParameterPicker :fields="standardChoices" label="移动端标准功能" button-text="添加 / 恢复功能" content-class="z-[70]" :disabled="disabled || nonListPlugins || !reconcile" @select="addStandardFeature" /><OxidnsParameterPicker :fields="pluginChoices" label="移动端原生插件" button-text="添加自定义实例" content-class="z-[70]" :disabled="disabled || nonListPlugins" @select="addPlugin" /></div>
       </SheetContent>
     </Sheet>
-    <div v-if="error" class="flex shrink-0 flex-wrap items-center gap-2"><p role="alert" class="min-w-0 break-words text-sm text-destructive-accent">{{ error }}</p><Button v-if="formDraftError && invalidScopeId && mode !== 'yaml'" variant="outline" size="sm" @click="selectScope(invalidScopeId)">返回未完成输入</Button></div>
+    <p v-if="syncing" role="status" class="shrink-0 text-sm text-muted-foreground">正在同步配置依赖…</p>
+    <p v-else-if="linkedChange && !error" role="status" class="shrink-0 break-words text-sm text-muted-foreground">{{ linkedChange }}</p>
+    <div v-if="error" class="flex shrink-0 flex-wrap items-center gap-2">
+      <p role="alert" class="min-w-0 break-words text-sm text-destructive-accent">{{ error }}</p>
+      <Button v-if="formDraftError && invalidScopeId && mode !== 'yaml'" variant="outline" size="sm" @click="selectScope(invalidScopeId)">返回未完成输入</Button>
+      <template v-if="syncError">
+        <Button v-for="(reference, index) in references" :key="index" variant="outline" size="sm" class="min-h-11" :disabled="disabled" @click="locateIssue(reference.path)">查看引用 {{ index + 1 }}</Button>
+        <Button variant="outline" size="sm" class="min-h-11" :disabled="disabled" @click="commit">重试同步</Button>
+        <Button variant="ghost" size="sm" class="min-h-11" :disabled="disabled" @click="discardNativeChanges">撤销未同步修改</Button>
+      </template>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, useSlots, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useSlots, watch } from 'vue'
 import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, PanelLeft, Plus, Trash2 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -93,12 +105,13 @@ import OxidnsSchemaValueEditor from './OxidnsSchemaValueEditor.vue'
 import OxidnsParameterPicker from './OxidnsParameterPicker.vue'
 import OxidnsConfigNavigation, { type OxidnsNavigationItem } from './OxidnsConfigNavigation.vue'
 import { oxidnsFeatureCategories, getOxidnsGlobalCategory, getOxidnsPluginCategory } from '@/lib/oxidnsFeatureNavigation'
-import { appendConfigEntry, configNodeToValue, defaultConfigNode, parseConfigDocument, serializeConfigDocument, valueToConfigNode, type ConfigValueNode } from '@/lib/oxidnsConfigEditor'
+import { appendConfigEntry, configNodeToValue, defaultConfigNode, parseConfigDocument, reconcileConfigNode, serializeConfigDocument, valueToConfigNode, type ConfigValueNode } from '@/lib/oxidnsConfigEditor'
 import { oxidnsGlobalSchema, oxidnsPluginCatalog, type OxidnsSchema } from '@/lib/oxidnsSchema'
+import { needsOxidnsReconciliation, type OxidnsNativeChangeResult, type OxidnsNativeReference } from '@/lib/oxidnsNativeChanges'
 
 type EditorView = 'common' | 'full' | 'yaml'
-const props = withDefaults(defineProps<{ modelValue: string; disabled?: boolean; initialView?: EditorView }>(), { disabled: false, initialView: 'common' })
-const emit = defineEmits<{ (event: 'update:modelValue', value: string): void; (event: 'error', message: string): void; (event: 'view', value: EditorView): void }>()
+const props = withDefaults(defineProps<{ modelValue: string; disabled?: boolean; initialView?: EditorView; reconcile?: (before: string, after: string, renames?: Record<string, string>, standardAdd?: string[]) => Promise<OxidnsNativeChangeResult> }>(), { disabled: false, initialView: 'common' })
+const emit = defineEmits<{ (event: 'update:modelValue', value: string): void; (event: 'error', message: string): void; (event: 'view', value: EditorView): void; (event: 'pending', value: boolean): void }>()
 const slots = useSlots()
 const tree = ref(valueToConfigNode({}))
 const globalTree = ref(valueToConfigNode({}))
@@ -106,16 +119,53 @@ const draft = ref('')
 const mode = ref<EditorView>(props.initialView)
 const commonSection = ref<OxidnsCommonSection>('runtime')
 const error = ref('')
+const linkedChange = ref('')
+const syncing = ref(false)
+const syncError = ref(false)
+const references = ref<OxidnsNativeReference[]>([])
+let syncVersion = 0
+function setSyncing(value: boolean) { syncing.value = value; emit('pending', value) }
 const formDraftError = ref(false)
 const invalidScopeId = ref('')
 const selectedId = ref('category:runtime')
 const directoryOpen = ref(false)
 const formScroll = ref<HTMLElement>()
 let lastEmitted: string | undefined
+const acceptedTags = ref(new Map<string, string>())
+const pendingStandardAdds = new Map<string, string>()
 const plugins = computed(() => tree.value.entries.find(entry => entry.key === 'plugins' && entry.value.type === 'array'))
 const nonListPlugins = computed(() => tree.value.entries.some(entry => entry.key === 'plugins' && entry.value.type !== 'array'))
 const scalarField = (node: ConfigValueNode, key: string) => node.entries.find(entry => entry.key === key)?.value.scalar ?? ''
+function rememberTags() { acceptedTags.value = new Map((plugins.value?.value.items ?? []).map(node => [node.id, scalarField(node, 'tag')])) }
+function renamedTags() {
+  return Object.fromEntries((plugins.value?.value.items ?? []).flatMap(node => {
+    const previous = acceptedTags.value.get(node.id)
+    const current = scalarField(node, 'tag')
+    return previous && current && previous !== current ? [[previous, current]] : []
+  }))
+}
 const pluginDefinition = (node: ConfigValueNode) => oxidnsPluginCatalog.find(plugin => plugin.type === scalarField(node, 'type'))
+const standardFeatures = [
+  {tag: 'lazy_cache', type: 'cache', label: '主缓存'},
+  {tag: 'local_probe_cache', type: 'cache', label: '国内探测缓存'},
+  {tag: 'query_recorder', type: 'query_recorder', label: '查询记录'},
+  {tag: 'ip_selector', type: 'ip_selector', label: 'IP 优选'},
+  {tag: 'ros_address_list', type: 'ros_address_list', label: 'RouterOS 地址列表'},
+  {tag: 'ros_route', type: 'ros_route', label: 'RouterOS 主机路由'},
+  {tag: 'dynamic_domains', type: 'dynamic_domain_set', label: '动态域名集'},
+  {tag: 'learn_classified_domain', type: 'learn_domain', label: '域名学习'},
+  {tag: 'adguard_rules', type: 'adguard_rule', label: 'AdGuard 规则'},
+  {tag: 'rules_download', type: 'download', label: '规则自动更新'},
+  {tag: 'custom_hosts', type: 'hosts', label: '自定义 Hosts'},
+  {tag: 'forward_fallback', type: 'forward', label: '代理 DNS 备用上游'},
+]
+const managedPluginTags = new Set([...standardFeatures.map(feature => feature.tag),
+  'forward_local', 'forward_remote', 'fallback', 'fallback_dns', 'adguard_block', 'adguard_reject',
+  'server_udp', 'server_tcp', 'rules_reload', 'rules_refresh', 'rules_cron', 'china_dns', 'direct_ip',
+  'default_direct_ip', 'sequence_main', 'remote_dns', 'local_probe', 'proxy_dns_seq', 'ip_requery_proxy',
+])
+const pluginAdditionHelp = '标准功能使用固定标识，优先恢复保留的参数并自动补齐依赖和执行引用；无法安全联动时会说明原因。代理 DNS 备用地址不会恢复，需填写有效地址后才启用。自定义实例只创建插件，需在监听入口或执行序列表单中配置引用。'
+const standardChoices = computed(() => standardFeatures.filter(feature => ![...acceptedTags.value.values()].includes(feature.tag) && !(plugins.value?.value.items ?? []).some(node => scalarField(node, 'tag') === feature.tag)).map(feature => ({key: feature.tag, schema: {type: 'string' as const, label: feature.label, help: feature.tag === 'forward_fallback' ? '填写有效备用地址后启用回退；不会恢复已删除的地址，直连 DNS 不变。' : `添加或恢复${feature.label}，自动补齐标准依赖和执行引用；保留的参数会恢复到表单。`}})))
 const pluginChoices = [...oxidnsPluginCatalog.map(plugin => ({ key: plugin.type, schema: { type: 'string' as const, label: plugin.label, help: plugin.help } })), { key: '__custom__', schema: { type: 'string' as const, label: '自定义类型', help: '用于更新版本或第三方插件，添加后手动填写类型及参数。' } }]
 function pluginSchema(node: ConfigValueNode): OxidnsSchema {
   return { type: 'object', help: pluginDefinition(node)?.help || '自定义插件类型。全部原生字段都会保留，请按对应文档设置参数。', properties: {
@@ -125,7 +175,7 @@ function pluginSchema(node: ConfigValueNode): OxidnsSchema {
   } }
 }
 type NavigationItem = OxidnsNavigationItem
-type AddAction = { kind: 'global'; path: string[] } | { kind: 'plugin'; type: string }
+type AddAction = { kind: 'global'; path: string[] } | { kind: 'plugin'; type: string } | {kind: 'standard'; tag: string}
 interface Scope { id: string; node: ConfigValueNode; schema?: OxidnsSchema; label: string; title: string; nativePath: string; parentId?: string; ownerId?: string; global: boolean; pluginRoot?: boolean; documentation: string; identity: string }
 // Navigation and forms share nodes, including unfinished inputs. Navigation never serializes them.
 const directory = computed(() => {
@@ -194,12 +244,18 @@ const directory = computed(() => {
     if (scope) scope.parentId = group.id
   }
   for (const item of pluginItems) category(getOxidnsPluginCategory(scalarField(scopes.get(item.id)!.node, 'type'))).children!.push(item)
+  for (const choice of standardChoices.value) {
+    const feature = standardFeatures.find(feature => feature.tag === choice.key)!
+    const id = `add:standard:${feature.tag}`
+    additions.set(id, {kind: 'standard', tag: feature.tag})
+    category(getOxidnsPluginCategory(feature.type)).children!.push({id, label: `${feature.label} · 标准功能`, code: feature.tag, help: choice.schema.help, available: true, disabled: nonListPlugins.value || !props.reconcile})
+  }
   const configuredTypes = new Set((plugins.value?.value.items ?? []).map(node => scalarField(node, 'type')))
   for (const definition of oxidnsPluginCatalog) {
     if (configuredTypes.has(definition.type)) continue
     const id = `add:plugin:${definition.type}`
     additions.set(id, { kind: 'plugin', type: definition.type })
-    category(getOxidnsPluginCategory(definition.type)).children!.push({ id, label: definition.label, code: definition.type, help: definition.help, available: true, disabled: nonListPlugins.value })
+    category(getOxidnsPluginCategory(definition.type)).children!.push({ id, label: definition.label, code: definition.type, help: `自定义实例：${definition.help} 需在监听入口或执行序列表单中配置引用。`, available: true, disabled: nonListPlugins.value })
   }
   for (const item of categories) {
     const available = item.children!.filter(child => child.available).length
@@ -217,6 +273,7 @@ const categoryItems = computed(() => navigationItems.value.find(item => item.id 
 const categoryPluginChoices = computed(() => pluginChoices.filter(choice => getOxidnsPluginCategory(choice.key) === selectedCategory.value?.id))
 const isCategory = (id: string) => oxidnsFeatureCategories.some(category => id === `category:${category.id}`)
 const selectedScope = computed(() => directory.value.scopes.get(selectedId.value))
+const selectedManagedPlugin = computed(() => selectedScope.value?.pluginRoot && managedPluginTags.has(scalarField(selectedScope.value.node, 'tag')))
 const usesReverseLookupDefaults = computed(() => {
   const scope = selectedScope.value
   const args = scope?.node.entries.find(entry => entry.key === 'args')?.value
@@ -239,7 +296,9 @@ function selectScope(id: string) {
   if (props.disabled) return
   const addition = directory.value.additions.get(id)
   if (addition) {
-    addition.kind === 'plugin' ? addPlugin(addition.type) : addGlobalFeature(addition.path)
+    if (addition.kind === 'standard') addStandardFeature(addition.tag)
+    else if (addition.kind === 'plugin') addPlugin(addition.type)
+    else addGlobalFeature(addition.path)
     return
   }
   if (id !== 'plugins' && !isCategory(id) && !directory.value.scopes.has(id)) return
@@ -272,9 +331,14 @@ function locateIssue(path: Array<string | number>) {
 }
 function syncGlobals() { globalTree.value = { ...tree.value, entries: tree.value.entries.filter(entry => entry !== plugins.value) } }
 function replaceTree(text: string) {
+  pendingStandardAdds.clear()
+  linkedChange.value = ''
+  syncError.value = false
+  references.value = []
   const identity = selectedScope.value?.identity
   const overview = selectedId.value === 'plugins' || isCategory(selectedId.value) ? selectedId.value : undefined
   tree.value = parseConfigDocument(text)
+  rememberTags()
   syncGlobals()
   selectedId.value = overview || [...directory.value.scopes.values()].find(scope => scope.identity === identity)?.id || 'category:runtime'
   formDraftError.value = false
@@ -292,16 +356,58 @@ function firstInvalidNode(node: ConfigValueNode): string {
   }
   return node.id
 }
-function commit() {
-  try { draft.value = serializeConfigDocument(tree.value); formDraftError.value = false; invalidScopeId.value = ''; publish(draft.value) }
+async function commit() {
+  const version = ++syncVersion
+  linkedChange.value = ''
+  const retry = syncError.value || syncing.value
+  syncError.value = false
+  references.value = []
+  let candidate: string
+  try {
+    candidate = serializeConfigDocument(tree.value)
+    formDraftError.value = false
+    invalidScopeId.value = ''
+  }
   catch (failure: any) {
+    setSyncing(false)
     const invalidId = firstInvalidNode(tree.value)
     invalidScopeId.value = directory.value.scopes.has(invalidId) ? invalidId : 'globals'
     formDraftError.value = true
     report(failure.message || '请修正配置内容。')
     return
   }
-  try { validate(); report() } catch (failure: any) { report(failure.message || '请修正配置内容。') }
+  if (props.reconcile && (retry || needsOxidnsReconciliation(configNodeToValue(parseConfigDocument(draft.value)), configNodeToValue(tree.value)))) {
+    setSyncing(true)
+    report()
+    try {
+      const renames = renamedTags()
+      const standardAdd = (plugins.value?.value.items ?? []).filter(node => pendingStandardAdds.get(node.id) === scalarField(node, 'tag') && standardFeatures.some(feature => feature.tag === scalarField(node, 'tag') && feature.type === scalarField(node, 'type'))).map(node => scalarField(node, 'tag'))
+      const result = await props.reconcile(draft.value, candidate, Object.keys(renames).length ? renames : undefined, standardAdd.length ? standardAdd : undefined)
+      if (version !== syncVersion) return
+      const value = configNodeToValue(parseConfigDocument(result.native_config))
+      reconcileConfigNode(tree.value, value)
+      syncGlobals()
+      candidate = result.native_config
+      linkedChange.value = result.notices?.join(' ') || ''
+    } catch (failure: any) {
+      if (version !== syncVersion) return
+      syncError.value = true
+      const data = failure.response?.data
+      references.value = Array.isArray(data?.references) ? data.references.filter((item: any) => Array.isArray(item.path)) : []
+      report(data?.message || failure.message || '同步配置依赖失败，请重试。')
+      return
+    } finally { if (version === syncVersion) setSyncing(false) }
+  }
+  draft.value = candidate
+  pendingStandardAdds.clear()
+  rememberTags()
+  publish(candidate)
+  report()
+}
+function discardNativeChanges() {
+  ++syncVersion
+  setSyncing(false)
+  parseDraft()
 }
 function commitGlobals() {
   const plugin = plugins.value
@@ -310,12 +416,12 @@ function commitGlobals() {
   syncGlobals()
 }
 function switchMode(next: EditorView) {
-  if (props.disabled || next === mode.value) return
-  if (next === 'common' && slots.common && formDraftError.value) return
+  if (props.disabled || syncing.value || next === mode.value) return
+  if (next === 'common' && slots.common && (formDraftError.value || syncError.value)) return
   if (next !== 'yaml' && mode.value === 'yaml') {
     // Valid YAML already updated the shared tree; avoid recreating IDs just for a view change.
     try { parseConfigDocument(draft.value) } catch { parseDraft(); return }
-  } else if (next === 'yaml' && formDraftError.value) return
+  } else if (next === 'yaml' && (formDraftError.value || syncError.value)) return
   mode.value = next
 }
 function showFull(target?: string) {
@@ -357,10 +463,24 @@ function addPlugin(selectedType: string) {
   const definition = oxidnsPluginCatalog.find(plugin => plugin.type === type)
   const target = plugins.value ?? appendConfigEntry(tree.value, 'plugins', [])
   const used = new Set(target.value.items.map(plugin => scalarField(plugin, 'tag')))
-  const base = type || 'custom'
+  const base = managedPluginTags.has(type) ? `${type}_custom` : type || 'custom'
   let tag = base
   for (let i = 2; used.has(tag); i++) tag = `${base}_${i}`
   const plugin = valueToConfigNode({ tag, type, args: configNodeToValue(defaultConfigNode(definition?.args.type ?? 'object')) })
+  target.value.items.push(plugin)
+  syncGlobals()
+  selectedId.value = plugin.id
+  directoryOpen.value = false
+  commit()
+  nextTick(() => { if (formScroll.value) formScroll.value.scrollTop = 0 })
+}
+function addStandardFeature(tag: string) {
+  if (props.disabled || nonListPlugins.value || !props.reconcile) return
+  const feature = standardFeatures.find(feature => feature.tag === tag)
+  if (!feature || !standardChoices.value.some(choice => choice.key === tag)) return
+  const target = plugins.value ?? appendConfigEntry(tree.value, 'plugins', [])
+  const plugin = valueToConfigNode({tag, type: feature.type, args: {}})
+  pendingStandardAdds.set(plugin.id, tag)
   target.value.items.push(plugin)
   syncGlobals()
   selectedId.value = plugin.id
@@ -406,10 +526,13 @@ function removeSelectedScope() {
 }
 watch(() => props.modelValue, text => {
   if (text === lastEmitted) { lastEmitted = undefined; return }
+  ++syncVersion
+  setSyncing(false)
   lastEmitted = undefined
   draft.value = text ?? ''
   if (!parseDraft()) {
     try { parseConfigDocument(draft.value) } catch { mode.value = 'yaml' }
   }
 }, { immediate: true })
+onBeforeUnmount(() => { ++syncVersion })
 </script>

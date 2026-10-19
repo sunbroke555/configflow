@@ -125,3 +125,18 @@ def apply_oxidns_common_settings():
         return _editor_response(apply_common_settings(value['settings'], value.get('changes'), get_config(), base_url))
     except OxidnsSettingsError as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
+
+
+@oxidns_bp.route('/native-settings/apply', methods=['POST'])
+@require_auth
+def apply_oxidns_native_settings():
+    """Reconcile an explicit complete-form edit without saving the draft."""
+    from backend.common.oxidns_native_apply import apply_native_settings
+    try:
+        value, base_url = _editor_request()
+        return _editor_response(apply_native_settings(value['settings'], value.get('native_config'), get_config(), base_url, value.get('renames'), value.get('standard_add')))
+    except OxidnsSettingsError as exc:
+        payload = {'success': False, 'message': str(exc)}
+        if getattr(exc, 'references', None):
+            payload['references'] = exc.references
+        return _editor_response(payload), 400

@@ -7,6 +7,7 @@ from backend.common.oxidns_common_routing import ROUTING_FIELDS, _references, re
 from backend.common.oxidns_native import load_native_yaml, native_document
 from backend.common.oxidns_settings import OxidnsSettingsError
 from backend.common.oxidns_validation import schemas
+from backend.common.oxidns_references import reference_locations
 
 _PIPELINE = {'rules_download': 'download', 'rules_reload': 'reload_provider', 'rules_refresh': 'sequence'}
 _REFRESH = [{'exec': '$rules_download'}, {'exec': '$rules_reload'}]
@@ -82,6 +83,10 @@ def prepare_rule_update(ctx, changes, config, base_url=''):
         historical = historical if isinstance(historical, list) else []
         old = {_path(item): item for item in [*historical, *download['args'].get('downloads', [])] if _path(item) is not None}
         download['args']['downloads'] = [deepcopy(old.get(_path(item), item)) for item in desired]
+        custom = ctx.parked.get('rules_download_custom_entries', [])
+        if isinstance(custom, list):
+            present = {_path(item) for item in download['args']['downloads']}
+            download['args']['downloads'].extend(deepcopy(item) for item in custom if _path(item) is not None and _path(item) not in present)
     reload = ctx.plugin('rules_reload')
     if restored_reload:
         if not isinstance(reload.get('args'), list):
@@ -108,6 +113,8 @@ def _managed_jobs(cron):
 
 def _external_references(ctx, targets, managed_jobs):
     document = _document(ctx)
+    if reference_locations(document):
+        return True
     external = {key: value for key, value in document.items() if key != 'plugins'}
     for tag in targets:
         if _references(external, tag):
@@ -179,6 +186,30 @@ def finish_rule_updates(ctx, changes, config, base_url=''):
     """Suspend an empty owned pipeline without deleting independent user jobs."""
     if not _relevant(changes):
         return
+    # Turning off the managed scheduler also suspends its unused executors.
+    # Otherwise incomplete options keep failing validation despite the switch
+    # being off. Independent jobs/callers continue to own their live pipeline.
+    if any(field.startswith('rule_update.') for field in changes):
+        try:
+            jobs = _managed_jobs(ctx.plugin('rules_cron'))
+            refresh = ctx.plugin('rules_refresh')
+            targets = {tag for tag in _PIPELINE if ctx.plugin(tag) is not None}
+            recognizable = all(ctx.plugin(tag).get('type') == _PIPELINE[tag] for tag in targets)
+            recognizable = recognizable and (not refresh or refresh.get('args') in (_REFRESH, _DOWNLOAD_ONLY, []))
+            if not jobs and targets and recognizable and not _external_references(ctx, targets, []):
+                download = ctx.plugin('rules_download')
+                if download and isinstance(download.get('args'), dict) and isinstance(download['args'].get('downloads'), list):
+                    managed = {_path(item) for item in resource_downloads(_document(ctx), ctx.settings, config, base_url)}
+                    historical = ctx.parked.get('rules_download_managed_paths', [])
+                    if isinstance(historical, list):
+                        managed.update(path for path in historical if isinstance(path, str))
+                    ctx.park('rules_download_managed_paths', sorted(path for path in managed if path is not None))
+                    ctx.park('rules_download_custom_entries', [item for item in download['args']['downloads'] if _path(item) not in managed])
+                _stop_pipeline(ctx)
+                return
+        except OxidnsSettingsError:
+            # A custom cron/refresh is not owned by the common switch.
+            pass
     download = ctx.plugin('rules_download')
     reload = ctx.plugin('rules_reload')
     refresh = ctx.plugin('rules_refresh')

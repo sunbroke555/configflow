@@ -78,7 +78,6 @@ const coreFields = sourceCoreFields.map(field => ({ ...field, hint: field.hint?.
 const upstreamDescriptions: Record<string, string> = {
   local_dns: '用于直连分流和响应 IP 探测。逐条添加当前使用的上游地址，展开可设置连接参数，也可切换 YAML 编辑完整上游对象。',
   remote_dns: '用于代理分流；Fake-IP 由外部上游提供。填写当前使用的上游地址；域名上游可配置 bootstrap 或 dial_addr 避免解析环路。',
-  fallback_dns: '代理 DNS 迟迟未返回时的兜底上游，填写实际使用的备用地址。已有 SERVFAIL、NXDOMAIN 等 DNS 响应不保证触发备用。',
 }
 const upstreamFields = sourceUpstreamFields.map(field => upstreamDescriptions[field.path] ? { ...field, hint: upstreamDescriptions[field.path], emptyHint: '尚未配置上游，点击添加上游填写地址。' } : field)
 const tabs = [{ value: 'core', label: '核心设置' }, { value: 'rules', label: '分流规则' }, { value: 'upstreams', label: 'DNS 上游' }, { value: 'cache', label: '缓存' }, { value: 'features', label: '特色功能' }, { value: 'access', label: 'WebUI / 日志' }, { value: 'advanced', label: '高级' }]
@@ -86,9 +85,9 @@ const hostFields: OxidnsField[] = [{ path: 'custom_hosts', label: '自定义 Hos
 const positionFields: OxidnsField[] = [{ path: 'custom_match_position', label: '自定义匹配位置', hint: '决定自定义匹配与自动域名分流规则的先后顺序。放在前面可优先覆盖自动规则；放在后面则在自动域名规则未结束请求时执行，仍早于动态域名集和 IP 分流判断。', options: [{ value: 'head', label: '在自动规则之前' }, { value: 'tail', label: '在自动规则之后' }] }]
 const ruleGroups = [
   { key: 'direct_rulesets', opposite: 'proxy_rulesets', label: '直连规则集', sets: true, hint: '选择整组域名或 IP 规则，命中后使用直连 DNS。同一规则集不能同时归入代理分组。' },
-  { key: 'proxy_rulesets', opposite: 'direct_rulesets', label: '代理规则集', sets: true, hint: '选择整组域名或 IP 规则，命中后进入代理 DNS 与备用 DNS 流程。' },
+  { key: 'proxy_rulesets', opposite: 'direct_rulesets', label: '代理规则集', sets: true, hint: '选择整组域名或 IP 规则，命中后使用代理 DNS；启用代理 DNS 回退时才会使用备用上游。' },
   { key: 'direct_rules', opposite: 'proxy_rules', label: '直连规则', sets: false, hint: '选择单独添加的域名或 IP 规则，命中后使用直连 DNS。与规则集一起按原有顺序参与分流。' },
-  { key: 'proxy_rules', opposite: 'direct_rules', label: '代理规则', sets: false, hint: '选择单独添加的域名或 IP 规则，命中后进入代理 DNS 与备用 DNS 流程。' },
+  { key: 'proxy_rules', opposite: 'direct_rules', label: '代理规则', sets: false, hint: '选择单独添加的域名或 IP 规则，命中后使用代理 DNS；启用代理 DNS 回退时才会使用备用上游。' },
 ]
 const read = (path: string): unknown => path.split('.').reduce<unknown>((value, key) =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, draft)
@@ -125,8 +124,17 @@ function change(path: string, value: unknown) {
   reportErrors()
   emit('change', { [path]: value === undefined ? null : clone(value) })
 }
+const cacheErrorDependencies: Record<string, string[]> = {
+  cache_size: ['cache_enabled'],
+  cache_lazy_ttl: ['cache_enabled'],
+  probe_cache_size: ['probe_cache_enabled'],
+  cache_dump_file: ['cache_enabled', 'cache_dump_enabled'],
+  cache_dump_interval: ['cache_enabled', 'cache_dump_enabled'],
+}
 function activeError() {
-  return Object.entries(errors).find(([path, message]) => message && !isCustom(path) && !featureGroups.some(feature => path.startsWith(`${feature.key}.`) && !path.endsWith('.enabled') && !read(`${feature.key}.enabled`)))?.[1] || ''
+  return Object.entries(errors).find(([path, message]) => message && !isCustom(path)
+    && !(cacheErrorDependencies[path] || []).some(dependency => !read(dependency))
+    && !featureGroups.some(feature => path.startsWith(`${feature.key}.`) && !path.endsWith('.enabled') && !read(`${feature.key}.enabled`)))?.[1] || ''
 }
 function reportErrors() { emit('error', activeError()) }
 function setError(path: string, message: string) { errors[path] = message; reportErrors() }
@@ -151,6 +159,7 @@ watch(() => props.values, value => {
     } else if (path) write(path, after)
   }
   sync(draft, value)
+  reportErrors()
 }, { deep: true })
 onUnmounted(() => emit('error', ''))
 </script>
