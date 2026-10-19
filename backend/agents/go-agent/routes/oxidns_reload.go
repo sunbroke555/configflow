@@ -68,7 +68,7 @@ func prepareOxiDNSReload(cfg *Config, s *DeploymentState, running bool) *oxidnsR
 		return nil
 	}
 	skip := func(reason string) *oxidnsReloader {
-		log.Printf("OxiDNS release %s: restart instead of reload (%s)", s.DeploymentID, reason)
+		log.Printf("OxiDNS release %s: native reload unavailable (%s)", s.DeploymentID, reason)
 		return nil
 	}
 	api, apiErr := loadOxiDNSMonitorConfig(cfg)

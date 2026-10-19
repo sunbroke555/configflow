@@ -1,5 +1,6 @@
 """DNS following publishes only explicit bindings and reconciles exact transactions."""
 from copy import deepcopy
+import hashlib
 import io
 import tarfile
 
@@ -222,6 +223,35 @@ def test_confirmed_publication_changes_only_selected_upstream_and_is_idempotent(
     assert len(env.uploads) == 1
     listener_calls = [call for call in env.calls if call[2] == 'dns/listener']
     assert listener_calls[0][3]['params']['deployment_id'] == 'source-next'
+
+
+def test_dns_follow_preserves_rule_sync_baseline_for_confirmed_configuration(follow_env, monkeypatch):
+    from backend.agents import rule_sync_store
+
+    env = follow_env
+    original_request = env.request
+
+    def request(agent, method, path, **kwargs):
+        result = original_request(agent, method, path, **kwargs)
+        if agent['id'] == env.target_id and method == 'post' and path == 'deployments':
+            with tarfile.open(fileobj=io.BytesIO(kwargs['data']), mode='r:gz') as archive:
+                digest = hashlib.sha256(archive.extractfile('files/config.yaml').read()).hexdigest()
+            result['config_version'] = digest
+            env.remote[(agent['id'], kwargs['headers']['X-Deployment-ID'])]['config_version'] = digest
+        return result
+
+    monkeypatch.setattr(AgentManager, '_deployment_request', lambda _self, *args, **kwargs: request(*args, **kwargs))
+    env.bind()
+    env.publish_source()
+    env.advance('succeeded')
+
+    receipt = rule_sync_store.load(env.repository, env.agent())
+    assert receipt is not None
+    assert receipt['manifest']['deployment_id'] == env.uploads[0][0]
+    source_document = yaml.safe_load(receipt['source']['oxidns']['native_config'])
+    assert source_document == env.uploaded_document()
+    assert source_document['plugins'][0]['args']['upstreams'][1]['addr'] == 'udp://127.0.0.1:2053'
+    assert 'agents' not in receipt['source']
 
 
 def test_lost_child_response_reconciles_after_restart_without_duplicate_upload(follow_env):

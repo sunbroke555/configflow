@@ -414,7 +414,8 @@ def _run(manager, target, source, binding, source_state):
         _set_job(manager, target_id, job)
         _state(manager, target_id, 'publishing', 'Mihomo 已更新，正在校验并发布 OxiDNS')
         manager.publish_deployment(target_id, candidate['bundle'], activate=True,
-                                   config_revision=revision, base_url=base_url, resource_config=config)
+                                   config_revision=revision, base_url=base_url, resource_config=config,
+                                   source_snapshot=config)
     finally:
         manager.finish_deployment_preparation(target_id, child_id)
     _resume(manager, manager.get_agent_by_id(target_id))

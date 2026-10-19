@@ -18,6 +18,9 @@ from backend.routes import auth as auth_routes
 @pytest.fixture
 def authenticated_app(tmp_path, monkeypatch):
     # Run backend.app itself: blueprint-only tests omit the global JWT gate.
+    # A request must not leave a daemon reconciliation loop reading whichever
+    # temporary repository a later test installs into the process globals.
+    monkeypatch.setattr('backend.agents.rule_sync.start_loop', lambda: None)
     for module in (auth_module, auth_routes):
         monkeypatch.setattr(module, "ADMIN_USERNAME", "upgrade-admin")
         monkeypatch.setattr(module, "ADMIN_PASSWORD", "upgrade-test-password")

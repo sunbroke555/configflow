@@ -42,14 +42,32 @@ type DeploymentFile struct {
 	Role   string `json:"role"`
 }
 type DeploymentManifest struct {
-	ProtocolVersion int              `json:"protocol_version"`
-	DeploymentID    string           `json:"deployment_id"`
-	AgentID         string           `json:"agent_id"`
-	ProfileID       interface{}      `json:"profile_id"`
-	ServiceType     string           `json:"service_type"`
-	ConfigPath      string           `json:"config_path"`
-	Files           []DeploymentFile `json:"files"`
+	ProtocolVersion int         `json:"protocol_version"`
+	DeploymentID    string      `json:"deployment_id"`
+	AgentID         string      `json:"agent_id"`
+	ProfileID       interface{} `json:"profile_id"`
+	ServiceType     string      `json:"service_type"`
+	ConfigPath      string      `json:"config_path"`
+	// ReloadOnly refuses candidate activation when native hot reload is not
+	// available. Rollback may still restart the previous service for recovery.
+	ReloadOnly bool             `json:"reload_only,omitempty"`
+	Files      []DeploymentFile `json:"files"`
 }
+
+func (m *DeploymentManifest) UnmarshalJSON(data []byte) error {
+	// null must not silently disable the no-restart contract. Older manifests
+	// omit the flag; a supplied flag must be an actual JSON boolean.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if flag, exists := fields["reload_only"]; exists && string(flag) != "true" && string(flag) != "false" {
+		return fmt.Errorf("reload_only must be a boolean")
+	}
+	type plainManifest DeploymentManifest
+	return json.Unmarshal(data, (*plainManifest)(m))
+}
+
 type deploymentBackup struct {
 	UID            int    `json:"uid"`
 	GID            int    `json:"gid"`
@@ -240,6 +258,8 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 			return
 		}
 		result := map[string]interface{}{"success": true, "deployment_protocols": []int{1}, "return_routing_safety_protocols": []int{1}, "service_type": cfg.ServiceType, "config_path": filepath.Base(cfg.ConfigPath)}
+		result["reload_only_protocols"] = []int{1}
+		result["rule_sync_snapshot_protocols"] = []int{1}
 		if cfg.ServiceType == "mihomo" {
 			result["mihomo_resources"] = mihomoGeoAssetNames(filepath.Dir(cfg.ConfigPath))
 			result["config_directory"] = filepath.Dir(cfg.ConfigPath)
@@ -924,7 +944,11 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 	var reloadErr error
 	fail := func(e error) {
 		if reloadErr != nil {
-			e = withPreviousDiagnostic("OxiDNS reload and fallback restart failed", reloadErr, e)
+			coreName := "OxiDNS"
+			if cfg.ServiceType == "mihomo" {
+				coreName = "Mihomo"
+			}
+			e = withPreviousDiagnostic(coreName+" reload and fallback restart failed", reloadErr, e)
 		}
 		s.FailedStage = s.Status
 		s.Error, s.ErrorDetails = deploymentErrorFields(deploymentStageLocation(e, cfg, s.Status))
@@ -933,7 +957,11 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 	}
 	// Live files are untouched until replacement; while the service keeps
 	// running, earlier failures need no rollback.
-	reloader := prepareOxiDNSReload(cfg, s, running)
+	reloader := prepareDeploymentReload(cfg, s, running)
+	if reloader == nil && s.Manifest.ReloadOnly {
+		failBefore(fmt.Errorf("native hot reload is unavailable; reload-only deployment cannot activate"))
+		return
+	}
 	failUnchanged := fail
 	if reloader != nil {
 		failUnchanged = failBefore
@@ -969,10 +997,16 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 			return
 		}
 		if e = reloader.reload(cfg); e != nil {
+			if s.Manifest.ReloadOnly {
+				// Do not activate the candidate by restarting. Recovery restores the
+				// previous files and may restart to resolve an uncertain core state.
+				fail(fmt.Errorf("native hot reload failed: %w", e))
+				return
+			}
 			reloadErr = e
-			// The core keeps serving its previous plugins; apply the candidate
-			// the usual way so the health check and rollback still decide.
-			log.Printf("OxiDNS release %s: reload failed (%v), restarting", s.DeploymentID, e)
+			// A manual deployment may resolve a failed or uncertain reload by
+			// applying the candidate through the usual stop/start health checks.
+			log.Printf("%s release %s: reload failed (%v), restarting", cfg.ServiceType, s.DeploymentID, e)
 			reloader = nil
 			if e = saveDeployment(cfg, s, "stopping"); e != nil {
 				fail(e)

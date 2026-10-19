@@ -1233,6 +1233,28 @@ def _prepare_content_bundle(agent, config_data, *, base_url='', deployment_id=No
                                           deployment_id=deployment_id, prefer_cached=True)['bundle']
 
 
+@bp.route('/<agent_id>/rule-sync', methods=['GET', 'PUT'])
+@require_auth
+def agent_rule_sync(agent_id):
+    """Independent per-device rule scopes; never trust an active-profile header."""
+    from backend.agents.rule_sync import configure, status
+    manager = get_agent_manager()
+    try:
+        if request.method == 'PUT':
+            if request.args or request.content_length and request.content_length > 1024:
+                return jsonify(success=False, message='规则同步设置无效'), 400
+            result = configure(manager, agent_id, request.get_json(silent=True))
+        else:
+            result = status(manager, agent_id)
+        response = jsonify(result)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except KeyError:
+        return jsonify(success=False, message='未找到这台 Agent'), 404
+    except ValueError as error:
+        return jsonify(success=False, message=str(error)), 400
+
+
 @bp.route('/<agent_id>/push-config', methods=['POST'])
 @require_auth
 def push_config_to_agent(agent_id):
@@ -1381,6 +1403,7 @@ def push_config_to_agent(agent_id):
         agent_manager.record_deployment(agent_id, deployment_id, {
             'status': 'preparing', 'message': '文件已准备，正在校验并连接设备'})
         extra_data = {'deployment_bundle': bundle, 'activate': activate, 'resource_config': config_data,
+                      'source_snapshot': config_data,
                       'base_url': base_url, **{key: prepared[key] for key in
                       ('provider_downloads', 'ruleset_downloads', 'custom_files')}}
         result = agent_manager.push_config_to_agent(agent_id, prepared['config_content'], extra_data=extra_data,
@@ -1664,6 +1687,35 @@ def mihomo_panel(agent_id, resource):
 @require_auth
 def get_oxidns_overview(agent_id):
     return _oxidns_monitor_response('overview', agent_id, request.args)
+
+
+@bp.route('/<agent_id>/oxidns/rules/update', methods=['GET', 'POST'])
+@require_auth
+def update_oxidns_rules(agent_id):
+    from backend.agents import oxidns_rule_update
+    from backend.agents.oxidns_monitor import MonitorError
+
+    try:
+        # Only the operation itself is exposed, never arbitrary core paths,
+        # credentials, plugin tags or download URLs supplied by a browser.
+        if request.args or (request.content_length or 0) > 1024:
+            raise oxidns_rule_update._fail('INVALID_REQUEST', 400)
+        raw = request.stream.read(1025)
+        if len(raw) > 1024 or request.method == 'GET' and raw:
+            raise oxidns_rule_update._fail('INVALID_REQUEST', 400)
+        if raw:
+            try:
+                valid = request.is_json and json.loads(raw) == {}
+            except (ValueError, UnicodeError, RecursionError):
+                valid = False
+            if not valid:
+                raise oxidns_rule_update._fail('INVALID_REQUEST', 400)
+        data, status = oxidns_rule_update.call(get_agent_manager(), agent_id, request.method)
+    except MonitorError as exc:
+        data, status = {'success': False, 'code': exc.code, 'message': exc.message}, exc.status
+    response = jsonify(data)
+    response.headers['Cache-Control'] = 'no-store'
+    return response, status
 
 
 @bp.route('/<agent_id>/oxidns/dashboard/reset', methods=['POST'])

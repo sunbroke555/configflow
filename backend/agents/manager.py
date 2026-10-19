@@ -143,7 +143,7 @@ class AgentManager:
                     # 管理端设置的开关，重新注册不能把它清掉
                     'domain_discovery_enabled': existing_agent.get('domain_discovery_enabled', False),
                 }
-                for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job'):
+                for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job', 'rule_sync'):
                     if field in existing_agent:
                         updated_agent[field] = deepcopy(existing_agent[field])
                 if existing_agent.get('gateway_installation_id'):
@@ -753,7 +753,11 @@ class AgentManager:
         """Persist trusted preparation metadata, never fields from an Agent response."""
         from .deployment_bundle import deployment_content_fingerprint
         manifest = bundle.manifest
-        prepared = {'fingerprint': deployment_content_fingerprint(manifest),
+        comparison_manifest = deepcopy(manifest)
+        if bundle.comparison_config:
+            comparison_manifest['files'] = [bundle.comparison_config if item['role'] == 'config' else item
+                                             for item in manifest['files']]
+        prepared = {'fingerprint': deployment_content_fingerprint(comparison_manifest),
                     'profile_id': manifest['profile_id'], 'service_type': manifest['service_type'],
                     'config_path': manifest['config_path'], 'base_url': base_url}
         def remember(agents):
@@ -767,7 +771,8 @@ class AgentManager:
                 state['oxidns_validation_receipt'] = deepcopy(validation_receipt)
         self._update_agents(remember)
 
-    def publish_deployment(self, agent_id, bundle, *, activate=True, config_revision=None, base_url='', resource_config=None):
+    def publish_deployment(self, agent_id, bundle, *, activate=True, config_revision=None, base_url='',
+                           resource_config=None, source_snapshot=None):
         agent = self.get_agent_by_id(agent_id)
         if not agent:
             return {'success': False, 'message': 'Agent not found', 'http_status': 404}
@@ -788,6 +793,10 @@ class AgentManager:
                 return self.record_deployment(agent_id, deployment_id, {
                     'success': False, 'status': 'failed', 'http_status': 409,
                     'message': 'Agent does not support transactional deployments; upgrade the Shell-installed or Docker Agent first'})
+            if bundle.manifest.get('reload_only') and 1 not in capability.get('reload_only_protocols', []):
+                return self.record_deployment(agent_id, deployment_id, {
+                    'success': False, 'status': 'failed', 'http_status': 409,
+                    'message': '请升级 Agent 到 1.8.30-go 或更新版本后使用规则自动热加载'})
             from .deployment_bundle import retarget_config_path
             bundle = retarget_config_path(bundle, capability.get('config_path', 'config.yaml'))
             previous = self.get_agent_by_id(agent_id).get('deployments', {}).get(deployment_id, {})
@@ -803,7 +812,7 @@ class AgentManager:
                 from .mihomo_resources import prepare_mihomo_resources
                 self.record_deployment(agent_id, deployment_id, {
                     'status': 'preparing', 'message': '正在检查并准备 Mihomo Geo 资源'})
-                bundle = prepare_mihomo_resources(bundle, capability, resource_config or self.repository.get_compat_config(bundle.manifest['profile_id']),
+                bundle = prepare_mihomo_resources(bundle, capability, resource_config or source_snapshot or self.repository.get_compat_config(bundle.manifest['profile_id']),
                     progress=lambda message: self.record_deployment(agent_id, deployment_id, {'status': 'preparing', 'message': message}))
             validation_receipt = None
             if agent.get('service_type') == 'oxidns':
@@ -812,6 +821,12 @@ class AgentManager:
                     'status': 'preparing', 'message': '正在校验 OxiDNS 配置与规则文件'})
                 validation_receipt = validate_bundle(agent_id, bundle)
             self._remember_deployment_content(agent_id, content_bundle, base_url, validation_receipt)
+            if source_snapshot is not None and agent.get('service_type') in ('mihomo', 'oxidns'):
+                from .rule_sync_store import capture
+                # Geo databases are Agent-carried resources, omitted by the
+                # managed snapshot API and the profile content fingerprint.
+                capture(self.repository, agent_id, content_bundle, source_snapshot, base_url,
+                        comparison_config=content_bundle.comparison_config)
             # Persist before the request: a lost response can still be reconciled.
             self.record_deployment(agent_id, deployment_id, {
                 'success': True, 'status': 'uploading', 'submitted': True,
@@ -882,7 +897,8 @@ class AgentManager:
                 return {'success': False, 'message': 'A complete deployment bundle is required', 'http_status': 409}
             return self.publish_deployment(agent_id, bundle, activate=(extra_data or {}).get('activate', True),
                                            config_revision=config_revision, base_url=(extra_data or {}).get('base_url', ''),
-                                           resource_config=(extra_data or {}).get('resource_config'))
+                                           resource_config=(extra_data or {}).get('resource_config'),
+                                           source_snapshot=(extra_data or {}).get('source_snapshot'))
 
         # 构建 Agent 的 URL
         agent_url = f"http://{agent['host']}:{agent['port']}/api/config/update"

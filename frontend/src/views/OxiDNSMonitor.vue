@@ -34,6 +34,7 @@
           </div>
         </div>
         <p v-if="openingSettings" role="status" class="m-0 w-full text-xs text-primary-accent sm:hidden">正在打开设置…</p>
+        <OxiDNSRuleUpdate :agent-id="agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
       </template>
     </PageHeader>
     <p v-if="settingsError" role="alert" class="mb-4 break-words text-sm text-destructive-accent">{{ settingsError }}</p>
@@ -114,6 +115,7 @@ import OxiDNSStatisticsControls from '@/components/agents/OxiDNSStatisticsContro
 import OxiDNSQueryTable from '@/components/agents/OxiDNSQueryTable.vue'
 import OxiDNSQueryDetail from '@/components/agents/OxiDNSQueryDetail.vue'
 import OxiDNSDevicePolicies from '@/components/agents/OxiDNSDevicePolicies.vue'
+import OxiDNSRuleUpdate from '@/components/agents/OxiDNSRuleUpdate.vue'
 import { useOxiDNSMonitor } from '@/composables/useOxiDNSMonitor'
 import { oxidnsMonitorPath, rememberOxiDNSDevice, useOxiDNSDevices } from '@/composables/useOxiDNSDevices'
 import { monitorNumber, type OxiDNSQuery } from '@/types/oxidnsMonitor'
