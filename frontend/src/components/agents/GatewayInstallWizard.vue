@@ -37,6 +37,7 @@ const networkProbeError = ref('')
 const networkProbeApplied = ref(false)
 const environmentAttempted = ref(false)
 const search = ref('')
+const ruleCategory = ref('rule_set_ids')
 const configurationPreview = ref<GatewayConfigurationPreview | null>(null)
 const configurationPreviewKey = ref('')
 const savedConfiguration = ref<{ key: string; revision: number } | null>(null)
@@ -78,15 +79,16 @@ const configReady = computed(() => configurationPreview.value?.ready === true &&
 const localDnsWarning = computed(() => settings.local_dns === config.value?.settings.local_dns
   ? config.value?.field_warnings?.local_dns || '' : '')
 const configLists = computed(() => [
-  { field: 'rule_set_ids' as const, title: '接管的真实 IP', hint: '选需要交给 Mihomo 的 IP 集合，例如 Telegram；只使用 fake-IP 时可留空。', rows: config.value?.ip_candidates || [] },
-  { field: 'direct_rule_set_ids' as const, title: '直连域名', hint: '由 OxiDNS 的加密上游解析，返回真实 IP。', rows: config.value?.domain_candidates || [] },
-  { field: 'proxy_rule_set_ids' as const, title: '代理域名', hint: '由 Mihomo 返回 fake-IP，出口沿用策略规则。', rows: config.value?.domain_candidates || [] },
+  { field: 'rule_set_ids' as const, title: '应用连接', hint: '只用浏览器访问网站：通常不用选。\n还要让 Telegram 等应用通过网关代理：勾选对应规则集。', help: '有些应用会直接连接 IP，不经过域名解析，需要选择对应的 IP 规则集才能交给 Mihomo。启用网关后，fake-IP 流量会自动接管，留空不会关闭它。接管后仍按 Mihomo 的规则和策略组决定代理或直连；选择 DIRECT 的规则不会强制走代理。', rows: config.value?.ip_candidates || [] },
+  { field: 'direct_rule_set_ids' as const, title: '直连域名', hint: '选择不需要代理的网站规则，例如国内网站。', help: '所选域名由下方的直连 DNS 解析，返回真实 IP。普通连接由 Linux 直接转发；命中已选 IP 接管范围的连接仍会进入 Mihomo。', rows: config.value?.domain_candidates || [] },
+  { field: 'proxy_rule_set_ids' as const, title: '代理域名', hint: '选择需要交给 Mihomo 处理的网站规则，例如国外网站。', help: '所选域名交给 Mihomo 获取 fake-IP，无需再选择对应的应用 IP 规则集。实际代理或直连仍由 Mihomo 的规则和策略组决定。', rows: config.value?.domain_candidates || [] },
 ].map(list => {
   const rows: LinuxGatewayCandidate[] = [...list.rows, ...settings[list.field].filter(id => !list.rows.some(row => row.id === id)).map(id => ({
     id, name: `已移除的规则集（${id}）`, behavior: '', available: false, enabled: false, reason: '此关联已失效，请取消勾选后重新检查。',
   }))]
   return { ...list, rows, visibleRows: rows.filter(row => `${row.name} ${row.policy || ''}`.toLowerCase().includes(search.value.trim().toLowerCase())) }
 }))
+const hasRuleCandidates = computed(() => configLists.value.some(list => list.rows.length > 0))
 const hostAgent = computed(() => installation.value?.agents.mihomo)
 const installationBlocked = computed(() => !!(installation.value?.config_changed || installation.value?.target_changed || (installation.value?.expired && installation.value?.phase === 'waiting')))
 const canNetwork = computed(() => !installationBlocked.value && installation.value?.phase === 'published' && !!hostAgent.value && installationMatches(installation.value, props.profileId))
@@ -345,7 +347,7 @@ watch(() => networkStatus.value?.managed, managed => { if (managed?.active || ma
 watch(settingsKey, () => { configurationPreview.value = null; savedConfiguration.value = null })
 watch(() => [props.open, props.profileId] as const, () => {
   generation++; stopPolling(); installation.value = null; config.value = null; configurationPreview.value = null; savedConfiguration.value = null
-  networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false; error.value = ''; pollError.value = ''; resumed.value = false; search.value = ''
+  networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false; error.value = ''; pollError.value = ''; resumed.value = false; search.value = ''; ruleCategory.value = 'rule_set_ids'
   loading.value = false; action.value = ''; refreshPending.value = false; baseline.value = ''; step.value = 0
   resetNetworkProbe()
   Object.assign(network, emptyGatewaySpec()); name.value = 'home-gateway'
@@ -463,24 +465,40 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
         </section>
 
         <section v-else-if="step === 1" class="space-y-4" aria-label="分流规则">
-          <div><h2 class="m-0 text-lg font-semibold">分流规则</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">选择接管 IP、直连和代理域名。将更新「{{ profileName }}」共用的 Mihomo 与 OxiDNS 配置。</p></div>
-          <FormField label="搜索规则集" html-for="onboarding-search"><Input id="onboarding-search" v-model="search" class="min-h-11" placeholder="按名称或策略搜索" /></FormField>
-          <div v-for="list in configLists" :key="list.field" class="min-w-0 space-y-2">
-            <h3 class="m-0 text-sm font-semibold">{{ list.title }} <span class="num ml-1 font-normal text-muted-foreground">{{ settings[list.field].length }} 项</span></h3>
-            <p class="m-0 text-xs text-muted-foreground">{{ list.hint }}</p>
-            <div class="max-h-48 overflow-y-auto rounded-md border border-border">
-              <label v-for="item in list.visibleRows" :key="item.id" class="flex min-h-11 cursor-pointer items-start gap-3 border-b border-border px-3 py-2.5 last:border-b-0 hover:bg-muted" :class="{ 'opacity-70': !item.available && !settings[list.field].includes(item.id) }">
-                <Checkbox :model-value="settings[list.field].includes(item.id)" :disabled="busy || (!item.available && !settings[list.field].includes(item.id))" class="mt-0.5 shrink-0" @update:model-value="toggle(list.field, item.id, $event)" />
-                <span class="min-w-0 space-y-0.5"><span class="block break-all text-sm font-medium">{{ item.name }}</span><span class="block break-words text-xs text-muted-foreground">{{ item.policy ? `策略：${item.policy} · ` : '' }}{{ item.reason || item.description || item.behavior }}</span></span>
-              </label>
-              <p v-if="!list.rows.length" class="m-0 p-3 text-xs text-muted-foreground">先到「规则库」添加，再在此空间的「策略规则」引用并启用，然后重新打开向导。</p>
-              <p v-else-if="!list.visibleRows.length" class="m-0 p-3 text-xs text-muted-foreground" role="status">没有匹配的规则集。已选规则会保留。</p>
+          <div><h2 class="m-0 text-lg font-semibold">分流规则</h2><p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">保存后将更新「{{ profileName }}」内共用的 Mihomo 与 OxiDNS 配置。</p></div>
+          <Tabs v-model="ruleCategory" class="min-w-0 gap-3" data-gateway-rule-picker>
+            <div class="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <TabsList class="h-11 w-full shrink-0 sm:w-auto" aria-label="规则类别">
+                <TabsTrigger v-for="list in configLists" :key="list.field" :value="list.field" :aria-label="`${list.title}，已选 ${settings[list.field].length} 个规则集`" class="min-h-11 px-2 text-xs sm:px-3">
+                  {{ list.title }}<span class="num text-xs">{{ settings[list.field].length }}</span>
+                </TabsTrigger>
+              </TabsList>
+              <Input id="onboarding-search" v-model="search" aria-label="搜索规则集" class="min-h-11 w-full sm:max-w-64" placeholder="搜索名称或策略" />
             </div>
+            <TabsContent v-for="list in configLists" :key="list.field" :value="list.field" class="mt-0 min-w-0 space-y-2">
+              <template v-if="ruleCategory === list.field">
+                <div class="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <div class="flex min-h-8 items-center gap-1 text-xs"><span class="text-muted-foreground">已选 <span class="num">{{ settings[list.field].length }}</span> 个规则集<template v-if="list.field === 'rule_set_ids'"> · 可选</template></span><span class="cf-compact-help"><FieldHelp :label="list.title" :text="list.help" /></span></div>
+                </div>
+                <p class="m-0 whitespace-pre-line text-xs leading-relaxed text-muted-foreground">{{ list.hint }}</p>
+                <div class="max-h-56 overflow-y-auto rounded-md border border-border">
+                  <label v-for="item in list.visibleRows" :key="item.id" class="flex min-h-11 cursor-pointer items-start gap-3 border-b border-border px-3 py-2.5 last:border-b-0 hover:bg-muted" :class="{ 'opacity-70': !item.available && !settings[list.field].includes(item.id) }">
+                    <Checkbox :model-value="settings[list.field].includes(item.id)" :disabled="busy || (!item.available && !settings[list.field].includes(item.id))" class="mt-0.5 shrink-0" @update:model-value="toggle(list.field, item.id, $event)" />
+                    <span class="min-w-0 flex-1 space-y-0.5"><span class="block break-words text-sm font-medium [overflow-wrap:anywhere]">{{ item.name }}</span><span v-if="item.reason || item.policy" class="block break-words text-xs leading-relaxed" :class="item.reason ? 'text-warning-accent' : 'text-muted-foreground'">{{ item.reason || `策略：${item.policy}` }}</span><span v-if="item.behavior === 'classical' && item.description" class="block break-words text-xs leading-relaxed text-muted-foreground">{{ item.description }}</span></span>
+                  </label>
+                  <p v-if="!hasRuleCandidates" class="m-0 p-3 text-xs leading-relaxed text-muted-foreground">先到「规则库」添加，再在此空间的「策略规则」引用并启用，然后重新打开向导。</p>
+                  <p v-else-if="!list.rows.length" class="m-0 p-3 text-xs text-muted-foreground">{{ list.field === 'rule_set_ids' ? '暂无可选的 IP 规则集，可留空继续。' : '暂无可选的域名规则集。' }}</p>
+                  <p v-else-if="!list.visibleRows.length" class="m-0 p-3 text-xs text-muted-foreground" role="status">没有匹配的规则集。已选规则会保留。</p>
+                </div>
+              </template>
+            </TabsContent>
+          </Tabs>
+          <div class="border-t border-border pt-3">
+            <FormField label="直连网站使用的 DNS" html-for="onboarding-dns" hint="默认地址可直接使用。每行填一个地址，无需加 - addr:。" help="用于查询直连网站的真实 IP。此网关方案要求使用 IPv4 地址的加密 DNS（DoH / DoT），避免普通 DNS 的 53 端口被 Mihomo 再次接管，造成解析循环。直接填写 https://223.5.5.5/dns-query 即可；也支持带 addr 的 YAML 上游配置。" persistent-hint>
+              <Textarea id="onboarding-dns" v-model="settings.local_dns" :disabled="busy" :aria-describedby="localDnsWarning ? 'onboarding-dns-warning' : undefined" class="min-h-16 font-mono text-xs" :rows="2" placeholder="https://223.5.5.5/dns-query" />
+              <p v-if="localDnsWarning" id="onboarding-dns-warning" class="m-0 text-xs leading-relaxed text-warning-accent" role="status">{{ localDnsWarning }}</p>
+            </FormField>
           </div>
-          <FormField label="直连加密 DNS" html-for="onboarding-dns" hint="每行一个 IPv4 地址的 DoH / DoT；普通 53 端口可能回环。" persistent-hint>
-            <Textarea id="onboarding-dns" v-model="settings.local_dns" :disabled="busy" :aria-describedby="localDnsWarning ? 'onboarding-dns-warning' : undefined" class="min-h-20 font-mono text-xs" :rows="2" />
-            <p v-if="localDnsWarning" id="onboarding-dns-warning" class="m-0 text-xs leading-relaxed text-warning-accent" role="status">{{ localDnsWarning }}</p>
-          </FormField>
           <div v-if="config?.oxidns_mode === 'native'" class="space-y-1">
             <label class="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium"><Checkbox v-model="settings.confirm_template_conversion" :disabled="busy" aria-describedby="onboarding-conversion-help" class="shrink-0" /><span>允许转换为 OxiDNS 模板</span></label>
             <p id="onboarding-conversion-help" class="mt-0 mb-0 ml-6 text-xs leading-relaxed text-muted-foreground">仅在原生配置无法保留时替换解析流程，并备份原配置；未勾选则停止。</p>
