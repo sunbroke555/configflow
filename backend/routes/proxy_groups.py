@@ -121,6 +121,50 @@ def handle_proxy_groups():
         return jsonify({'success': True, 'data': group})
 
 
+@proxy_groups_bp.route('/batch-health-url', methods=['PUT'])
+@require_auth
+def update_batch_health_url():
+    """Change only selected ordinary groups' probe URLs in one transaction."""
+    from werkzeug.exceptions import BadRequest, NotFound
+    from backend.utils.health_check import GROUP_HEALTH_TYPES, validate_health
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'success': False, 'message': '批量测速地址请求必须是 JSON 对象'}), 400
+    group_ids = payload.get('ids')
+    if (not isinstance(group_ids, list) or not group_ids
+            or any(not isinstance(ident, str) or not ident.strip() for ident in group_ids)
+            or len(set(group_ids)) != len(group_ids)):
+        return jsonify({'success': False, 'message': 'ids 必须是非空且不重复的策略组 ID 字符串数组'}), 400
+    url = payload.get('url')
+    try:
+        validate_health({'url': url})
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+
+    def mutate(profile):
+        groups = {group.get('id'): group for group in profile.get('proxy_groups', [])}
+        selected = []
+        for group_id in group_ids:
+            group = groups.get(group_id)
+            if group is None:
+                raise NotFound(f'策略组不存在：{group_id}')
+            if group.get('follow_group'):
+                raise BadRequest(f'策略组「{group.get("name", group_id)}」跟随其他组，请修改其来源组的测速地址')
+            if group.get('type') not in GROUP_HEALTH_TYPES:
+                raise BadRequest(f'策略组「{group.get("name", group_id)}」不支持节点测速')
+            selected.append(group)
+        for group in selected:
+            group['url'] = url
+
+    try:
+        saved = update_config_transaction(mutate)
+    except (BadRequest, NotFound) as exc:
+        return jsonify({'success': False, 'message': exc.description}), exc.code
+    groups = {group['id']: group for group in saved['proxy_groups']}
+    return jsonify({'success': True, 'data': [groups[group_id] for group_id in group_ids]})
+
+
 @proxy_groups_bp.route('/<group_id>', methods=['DELETE', 'PUT'])
 @require_auth
 def handle_proxy_group(group_id):

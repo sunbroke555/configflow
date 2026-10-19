@@ -16,7 +16,7 @@ from backend.converters.common import ruleset_format
 
 logger = get_logger(__name__)
 
-DEFAULT_TEST_URL = 'http://www.gstatic.com/generate_204'
+DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204'
 
 # https://nsloon.app/docs/Policy/
 LOON_BUILTIN_POLICIES = {'DIRECT', 'REJECT', 'REJECT-DROP', 'REJECT-IMG', 'REJECT-DICT', 'REJECT-ARRAY'}
@@ -48,7 +48,7 @@ DEFAULT_GENERAL = [
     'dns-server = system,223.5.5.5,119.29.29.29',
     'doh-server = https://dns.alidns.com/dns-query',
     'hijack-dns = *:53',
-    'proxy-test-url = http://www.gstatic.com/generate_204',
+    'proxy-test-url = https://www.gstatic.com/generate_204',
     'internet-test-url = http://wifi.vivo.com.cn/generate_204',
     'test-timeout = 5',
     'interface-mode = auto',

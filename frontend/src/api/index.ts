@@ -151,6 +151,7 @@ export const proxyGroupApi = {
   getAll: (profileId?: string) => api.get('/proxy-groups', profileOptions(profileId)),
   create: (data: unknown, profileId?: string) => api.post('/proxy-groups', data, profileOptions(profileId)),
   update: (id: string, data: unknown, profileId?: string) => api.put(`/proxy-groups/${id}`, data, profileOptions(profileId)),
+  batchHealthUrl: (data: { ids: string[]; url: string }, profileId?: string) => api.put('/proxy-groups/batch-health-url', data, profileOptions(profileId)),
   delete: (id: string, profileId?: string) => api.delete(`/proxy-groups/${id}`, profileOptions(profileId)),
   previewRegex: (data: unknown, profileId?: string) => api.post('/proxy-groups/preview-regex', data, profileOptions(profileId))
 }

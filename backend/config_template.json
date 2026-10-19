@@ -558,7 +558,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300
     },
     {
@@ -575,7 +575,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300
     },
     {
@@ -592,7 +592,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300
     },
     {
@@ -609,7 +609,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300
     },
     {
@@ -626,7 +626,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300
     },
     {
@@ -643,7 +643,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300
     },
     {
@@ -660,7 +660,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300,
       "strategy": "round-robin",
       "lazy": true
@@ -679,7 +679,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300,
       "strategy": "round-robin",
       "lazy": true
@@ -698,7 +698,7 @@
       "aggregations": [],
       "include_groups": [],
       "proxies_order": [],
-      "url": "http://www.gstatic.com/generate_204",
+      "url": "https://www.gstatic.com/generate_204",
       "interval": 300,
       "strategy": "round-robin",
       "lazy": true

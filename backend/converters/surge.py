@@ -125,8 +125,8 @@ def generate_surge_config(config_data: Dict[str, Any], base_url: str = '') -> st
         general = [
             '[General]',
             'loglevel = notify',
-            'internet-test-url = http://www.gstatic.com/generate_204',
-            'proxy-test-url = http://www.gstatic.com/generate_204',
+            'internet-test-url = https://www.gstatic.com/generate_204',
+            'proxy-test-url = https://www.gstatic.com/generate_204',
             'test-timeout = 3',
             'skip-proxy = localhost, *.local, injections.adguard.org, local.adguard.org, captive.apple.com, guzzoni.apple.com, 0.0.0.0/8, 10.0.0.0/8, 17.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.168.0.0/16, 192.88.99.0/24, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4, 255.255.255.255/32',
             'dns-server = 223.5.5.5, 119.29.29.29, system',
@@ -297,7 +297,7 @@ def generate_surge_config(config_data: Dict[str, Any], base_url: str = '') -> st
         all_proxy_names = [node['name'] for node in config_data.get('nodes', []) if node.get('enabled', True)]
         if all_proxy_names:
             proxy_groups.append(f"Proxy = select, {', '.join(all_proxy_names)}")
-            proxy_groups.append(f"Auto = url-test, {', '.join(all_proxy_names)}, url = http://www.gstatic.com/generate_204, interval = 300")
+            proxy_groups.append(f"Auto = url-test, {', '.join(all_proxy_names)}, url = https://www.gstatic.com/generate_204, interval = 300")
 
     sections.append('\n'.join(proxy_groups))
 
@@ -1011,28 +1011,28 @@ def convert_proxy_group_to_surge(group: Dict[str, Any], config_data: Dict[str, A
         if proxy_list:
             group_line += f", {proxy_list}"
     elif group_type == 'url-test':
-        url = group.get('url', 'http://www.gstatic.com/generate_204')
+        url = group.get('url', 'https://www.gstatic.com/generate_204')
         interval = group.get('interval', 300)
         group_line = f"{name} = url-test"
         if proxy_list:
             group_line += f", {proxy_list}"
         group_line += f", url = {url}, interval = {interval}"
     elif group_type == 'fallback':
-        url = group.get('url', 'http://www.gstatic.com/generate_204')
+        url = group.get('url', 'https://www.gstatic.com/generate_204')
         interval = group.get('interval', 300)
         group_line = f"{name} = fallback"
         if proxy_list:
             group_line += f", {proxy_list}"
         group_line += f", url = {url}, interval = {interval}"
     elif group_type == 'load-balance':
-        url = group.get('url', 'http://www.gstatic.com/generate_204')
+        url = group.get('url', 'https://www.gstatic.com/generate_204')
         interval = group.get('interval', 300)
         group_line = f"{name} = load-balance"
         if proxy_list:
             group_line += f", {proxy_list}"
         group_line += f", url = {url}, interval = {interval}"
     elif group_type == 'smart':
-        url = group.get('url', 'http://www.gstatic.com/generate_204')
+        url = group.get('url', 'https://www.gstatic.com/generate_204')
         interval = group.get('interval', 300)
         group_line = f"{name} = smart"
         if proxy_list:

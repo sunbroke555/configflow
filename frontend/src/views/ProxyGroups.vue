@@ -6,6 +6,13 @@
       class="shrink-0"
     >
       <template #actions>
+        <BatchHealthUrlDialog
+          v-if="!reorder.active.value"
+          :groups="proxyGroups"
+          :profile-id="profileId"
+          :disabled="draftSaving || Object.values(savingStatus).some(Boolean)"
+          @updated="applyBatchHealthUrl"
+        />
         <Button
           v-if="!reorder.active.value"
           variant="outline"
@@ -628,6 +635,7 @@
 </template>
 
 <script setup lang="ts">
+import BatchHealthUrlDialog from '@/components/BatchHealthUrlDialog.vue'
 import HealthCheckFields from '@/components/HealthCheckFields.vue'
 import ReorderBar from '@/components/shell/ReorderBar.vue'
 import DragHandle from '@/components/shell/DragHandle.vue'
@@ -696,6 +704,15 @@ import Sortable from 'sortablejs'
 const profileId = getActiveProfileId()
 const profileRequest = { headers: { 'X-ConfigFlow-Profile': profileId } }
 const proxyGroups = ref<ProxyGroup[]>([])
+let groupLoadVersion = 0
+const applyBatchHealthUrl = ({ ids, url }: { ids: string[]; url: string }) => {
+  // A list request started before this save must not restore stale probe URLs.
+  ++groupLoadVersion
+  const updatedIds = new Set(ids)
+  for (const group of proxyGroups.value) {
+    if (updatedIds.has(group.id)) group.url = url
+  }
+}
 const nodes = ref<ProxyNode[]>([])
 const subscriptions = ref<Subscription[]>([])
 const aggregations = ref<any[]>([])
@@ -763,7 +780,7 @@ const expandedCards = ref<Set<string>>(new Set()) // 展开的卡片ID集合
 const form = ref<Partial<ProxyGroup>>({
   name: '',
   type: 'select',
-  url: 'http://www.gstatic.com/generate_204',
+  url: 'https://www.gstatic.com/generate_204',
   interval: 300,
   subscriptions: [],
   regex: '',
@@ -1426,8 +1443,10 @@ const previewSavedRegexMatches = async (group: ProxyGroup, source: 'subscription
 }
 
 const loadProxyGroups = async () => {
+  const version = ++groupLoadVersion
   try {
     const { data } = await proxyGroupApi.getAll(profileId)
+    if (!viewActive || version !== groupLoadVersion) return
 
     // 修复缺少 ID 的策略组
     let needsSave = false
@@ -1460,7 +1479,7 @@ const loadProxyGroups = async () => {
       }
     }
   } catch (error) {
-    notify.error('加载策略组列表失败')
+    if (viewActive && version === groupLoadVersion) notify.error('加载策略组列表失败')
   }
 }
 

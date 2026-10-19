@@ -1,4 +1,4 @@
-"""Health-check configuration: new opt-in values, unchanged legacy output."""
+"""Health-check configuration: HTTPS defaults, preserved explicit legacy values."""
 from copy import deepcopy
 
 import pytest
@@ -26,9 +26,9 @@ def test_provider_opt_in_empty_object_uses_new_defaults():
     }
 
 
-def test_legacy_provider_values_are_not_migrated():
+def test_legacy_provider_uses_https_default_and_preserves_explicit_url():
     assert build_provider_health_check({}) == {
-        'enable': True, 'url': 'http://www.gstatic.com/generate_204',
+        'enable': True, 'url': 'https://www.gstatic.com/generate_204',
         'interval': 300, 'lazy': True,
     }
     assert build_provider_health_check({'health_check_url': 'http://old.test/check'})['url'] == 'http://old.test/check'

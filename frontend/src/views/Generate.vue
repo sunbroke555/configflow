@@ -1571,8 +1571,8 @@ const customConfigDescription = computed(() => {
 const getCustomConfigPlaceholder = () => {
   const placeholders = {
     mihomo: '输入自定义 YAML 配置，例如：\nmixed-port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\nexternal-controller: 127.0.0.1:9090\ndns:\n  enable: true\n  listen: 0.0.0.0:53\n  enhanced-mode: fake-ip',
-    surge: '输入自定义配置，例如：\n[General]\nloglevel = notify\ninternet-test-url = http://www.gstatic.com/generate_204\nproxy-test-url = http://www.gstatic.com/generate_204\nskip-proxy = 127.0.0.1, 192.168.0.0/16, 10.0.0.0/8\n\n# 代理将自动生成在 [Proxy] 部分\n# 策略组将自动生成在 [Proxy Group] 部分\n# 规则将自动生成在 [Rule] 部分',
-    loon: '输入自定义配置，例如：\n[General]\nip-mode = dual\ndns-server = system, 223.5.5.5\nproxy-test-url = http://www.gstatic.com/generate_204\nskip-proxy = 192.168.0.0/16, 10.0.0.0/8, localhost, *.local\n\n[Plugin]\n# 插件链接, tag=名称, enabled=true\n\n# 节点、订阅、策略组和规则将自动生成',
+    surge: '输入自定义配置，例如：\n[General]\nloglevel = notify\ninternet-test-url = https://www.gstatic.com/generate_204\nproxy-test-url = https://www.gstatic.com/generate_204\nskip-proxy = 127.0.0.1, 192.168.0.0/16, 10.0.0.0/8\n\n# 代理将自动生成在 [Proxy] 部分\n# 策略组将自动生成在 [Proxy Group] 部分\n# 规则将自动生成在 [Rule] 部分',
+    loon: '输入自定义配置，例如：\n[General]\nip-mode = dual\ndns-server = system, 223.5.5.5\nproxy-test-url = https://www.gstatic.com/generate_204\nskip-proxy = 192.168.0.0/16, 10.0.0.0/8, localhost, *.local\n\n[Plugin]\n# 插件链接, tag=名称, enabled=true\n\n# 节点、订阅、策略组和规则将自动生成',
     mosdns: '输入自定义 YAML 配置，例如：\nlog:\n  level: info\n  file: ./mosdns.log\n\nservers:\n  - addr: 127.0.0.1:53\n    protocol: udp\n\n# data_providers 和 plugins 将自动生成'
   }
   return placeholders[currentConfigType.value]
