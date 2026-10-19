@@ -764,6 +764,9 @@ class ProfileRepository:
             if profile_id in document['profiles']:
                 raise ProfileExists(profile_id)
             profile = copy.deepcopy(self._profile(document, clone_from)) if clone_from else self._empty_profile(profile_id, name)
+            if clone_from:
+                # Router credentials, sync settings and ownership belong to the source devices.
+                profile['routers'] = {'items': []}
             profile.update(id=profile_id, name=name.strip(), description=str(metadata.get('description') or ''),
                            created_at=_now(), updated_at=_now(), _revision=0)
             document['profiles'][profile_id] = profile

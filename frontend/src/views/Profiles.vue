@@ -485,7 +485,7 @@ const submit = async () => {
 const clone = async (profile: Profile) => {
   const id = await prompt({
     title: `复制 ${profile.name}`,
-    description: '填写新副本的标识 ID。副本可单独设置策略和规则，资源仍与其他配置空间共用。',
+    description: '填写新副本的标识 ID。保留策略、规则和模板，共用资源；不复制路由器接入信息及自动同步设置。',
     defaultValue: `${profile.id}-copy`,
     confirmText: '创建副本',
     validate: value =>
