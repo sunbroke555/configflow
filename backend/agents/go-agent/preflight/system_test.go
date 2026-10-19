@@ -397,3 +397,101 @@ func TestSystemMalformedTUNListenerDoesNotClaimDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemOpenRCPermissionsDoNotRecommendSystemdOptions(t *testing.T) {
+	for _, mode := range []string{"healthy", "device-denied", "installer-capability-missing", "installer-capability-unreadable"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := healthySystemFixture()
+			cfg := fixtureMihomo(t, true)
+			cfg.ServiceManager = "openrc"
+			switch mode {
+			case "device-denied":
+				fixture.tunErr = os.ErrPermission
+			case "installer-capability-missing":
+				fixture.files["/proc/self/status"] = []byte("Uid:\t0\t0\t0\t0\nCapEff:\t0\nCapBnd:\t0\n")
+			case "installer-capability-unreadable":
+				fixture.fileErr["/proc/self/status"] = os.ErrPermission
+			}
+			probe := fixture.probe()
+			probe.showUnit = func(string) ([]byte, error) {
+				t.Fatal("OpenRC diagnostic invoked systemctl")
+				return nil, nil
+			}
+			checks := systemChecksWithProbe([]Config{cfg}, probe)
+			for _, check := range checks {
+				text := check.Message + " " + check.Fix
+				for _, systemdOnly := range []string{"systemd", "systemctl", "CapabilityBoundingSet", "AmbientCapabilities", "DeviceAllow", "PrivateDevices"} {
+					if strings.Contains(text, systemdOnly) {
+						t.Fatalf("OpenRC report recommends %s: %+v", systemdOnly, check)
+					}
+				}
+			}
+			service := namedSystemCheck(t, checks, "Mihomo 服务权限")
+			if service.Level != "warn" || !strings.Contains(service.Message, "尚未取得并验证") || !strings.Contains(service.Message, "不能代表核心服务") {
+				t.Fatalf("OpenRC service permissions inferred from checking process: %+v", service)
+			}
+			for _, expected := range []string{"/etc/init.d/", "/etc/conf.d/", "command_user", "capabilities", "/proc/<PID>/status", "CapEff", "/dev/net/tun"} {
+				if !strings.Contains(service.Fix, expected) {
+					t.Fatalf("missing OpenRC guidance %q: %+v", expected, service)
+				}
+			}
+			if mode == "installer-capability-missing" {
+				check := namedSystemCheck(t, checks, "当前进程 CAP_NET_ADMIN")
+				if check.Level == "pass" || !strings.Contains(check.Message, "未持有") {
+					t.Fatalf("root incorrectly implied CAP_NET_ADMIN: %+v", check)
+				}
+			}
+		})
+	}
+}
+
+func TestSystemNonSystemdCoreDoesNotQueryUnitOrInferEffectiveCapability(t *testing.T) {
+	for _, manager := range []string{"openrc", "custom", ""} {
+		t.Run(manager, func(t *testing.T) {
+			cfg := fixtureMihomo(t, true)
+			cfg.ServiceManager = manager
+			probe := healthySystemFixture().probe()
+			probe.showUnit = func(string) ([]byte, error) {
+				t.Fatal("non-systemd service invoked systemctl")
+				return nil, nil
+			}
+			checks, verifiedCapability := inspectCoreService(probe, cfg, tunEnabled)
+			if verifiedCapability {
+				t.Fatal("checking process capability substituted for an unidentified core process")
+			}
+			check := namedSystemCheck(t, checks, "Mihomo 服务权限")
+			if check.Level != "warn" || strings.Contains(check.Message+check.Fix, "systemd") {
+				t.Fatalf("inaccurate service-manager diagnostic: %+v", check)
+			}
+		})
+	}
+}
+
+func TestSystemSystemdPermissionFailuresKeepApplicableGuidance(t *testing.T) {
+	for _, mode := range []string{"unit-unreadable", "unit-unspecified", "bounding-capability-missing"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := healthySystemFixture()
+			cfg := fixtureMihomo(t, true)
+			wantName := "Mihomo 服务权限"
+			switch mode {
+			case "unit-unreadable":
+				fixture.unitErr = os.ErrPermission
+			case "unit-unspecified":
+				cfg.ServiceUnit = ""
+			case "bounding-capability-missing":
+				fixture.unit = strings.ReplaceAll(fixture.unit, "cap_net_admin ", "")
+				wantName += "上限"
+			}
+			checks, _ := inspectCoreService(fixture.probe(), cfg, tunEnabled)
+			check := namedSystemCheck(t, checks, wantName)
+			for _, required := range []string{"CapabilityBoundingSet", "AmbientCapabilities", "DeviceAllow", "CapEff"} {
+				if !strings.Contains(check.Fix, required) {
+					t.Fatalf("systemd diagnostic lost %q: %+v", required, check)
+				}
+			}
+			if strings.Contains(check.Fix, "command_user") {
+				t.Fatalf("systemd diagnostic recommends OpenRC options: %+v", check)
+			}
+		})
+	}
+}

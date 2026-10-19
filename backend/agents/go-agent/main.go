@@ -24,10 +24,17 @@ func main() {
 	recoverAndExit := flag.Bool("recover-and-exit", false, "Recover interrupted deployments with service lifecycle, then exit without registration")
 	validateService := flag.Bool("validate-service", false, "Validate OxiDNS service working directory without registration or mutation")
 	checkEnvironment := flag.Bool("check-environment", false, "Inspect native installation TUN, permissions, IPv4 forwarding and port occupancy without changing the system")
+	prepareTUN := flag.Bool("prepare-tun", false, "Prepare enabled TUN for native AIO: load the local driver and persist it, or explain required container host changes")
 	environmentPeerConfig := flag.String("environment-peer-config", "", "Peer Agent candidate configuration for a joint native AIO environment check")
 
 	// 解析命令行参数
 	flag.Parse()
+	if *prepareTUN && (*configPath == "" || *printVersion || *upgradeWorker != "" || *cleanupOnly ||
+		*checkDeployments || *requireCleanDeployments || *recoverOnly || *recoverAndExit ||
+		*validateService || *checkEnvironment || *environmentPeerConfig != "") {
+		fmt.Fprintln(os.Stderr, "-prepare-tun 必须明确指定 -config，不能与其他操作参数一起使用。")
+		os.Exit(2)
+	}
 	if *printVersion {
 		fmt.Println(upgrade.Version)
 		return
@@ -65,6 +72,20 @@ func main() {
 	}
 
 	log.Printf("Using config file: %s", *configPath)
+	if *prepareTUN {
+		candidate, err := preflight.LoadConfig(*configPath)
+		var report preflight.Report
+		if err != nil {
+			report = preflight.Report{{Name: "安装配置", Level: "error", Message: err.Error(), Fix: "核对 Mihomo 安装参数并重新生成脚本。"}}
+		} else {
+			report = preflight.PrepareTUN(candidate)
+		}
+		report.PrintPreparation(os.Stdout)
+		if report.HasErrors() {
+			os.Exit(1)
+		}
+		return
+	}
 	if *checkEnvironment {
 		paths := []string{*configPath}
 		if *environmentPeerConfig != "" {

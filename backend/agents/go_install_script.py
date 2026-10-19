@@ -9,6 +9,7 @@ from backend.agents.install_output import with_install_output
 
 INSTALL_GO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go.sh").read_text(encoding="utf-8")
 INSTALL_GO_AIO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go-aio.sh").read_text(encoding="utf-8")
+INSTALL_GO_AIO_FORWARDING = (Path(__file__).parent / "scripts" / "aio-ipv4-forwarding.sh").read_text(encoding="utf-8")
 AGENT_INSTALL_DEPENDENCIES = (Path(__file__).parent / "scripts" / "agent-install-dependencies.sh").read_text(encoding="utf-8")
 AGENT_CORE_INSTALL_INTERFACE = "# ConfigFlow Agent + core installer interface: 1"
 _AGENT_INIT_DETECTION = '''if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
@@ -199,14 +200,22 @@ def generate_go_aio_install_script(
     verified_agent_path: str = "",
     installation_id: str = "",
     installation_token: str = "",
+    manage_ipv4_forwarding: bool = True,
+    manage_tun: bool = True,
 ) -> str:
     """Manage two isolated native Agents, optionally installing missing cores.
 
     Core installation is opt-in and uses the canonical installer in an isolated
     phase. Agent failures retain completed cores and restart previous Agents.
+    Ordinary AIO prepares enabled TUN and persists IPv4 forwarding; the selective
+    gateway installer opts out because it manages its own network lifecycle.
     """
     if not isinstance(install_core, bool):
         raise ValueError("install_core 必须为 true 或 false")
+    if not isinstance(manage_ipv4_forwarding, bool):
+        raise ValueError("manage_ipv4_forwarding must be a boolean")
+    if not isinstance(manage_tun, bool):
+        raise ValueError("manage_tun must be a boolean")
     if not isinstance(non_interactive, bool):
         raise ValueError("non_interactive must be a boolean")
     if verified_agent_path and verified_agent_path != "$GATEWAY_STAGE/configflow-agent":
@@ -251,6 +260,28 @@ def generate_go_aio_install_script(
         raise ValueError("Core configurations require separate directories for deployment journals")
     replacements = {"binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
                     "mihomo_agent_port": str(ports[0]), "oxidns_agent_port": str(ports[1])}
+    replacements.update({
+        "tun_prepare_notice": 'cf_ui "Mihomo 已启用 TUN 时，自动检查运行环境；本机加载 TUN 驱动并设置开机加载，容器缺少设备时给出宿主机处理提示。"' if manage_tun else "",
+        "tun_prepare": '''cf_step "准备 TUN 驱动与开机加载"
+if "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json" -prepare-tun; then
+    :
+else
+    tun_status=$?
+    echo "TUN 准备未完成。若提示未知 -prepare-tun 参数，请使用包含 TUN 自动准备功能的新 Agent 构建；否则按上方原因处理后重跑。现有 Agent 尚未停止。" >&2
+    exit "$tun_status"
+fi
+cf_step_done "TUN 准备完成（具体处理结果见日志）"''' if manage_tun else "",
+        "ipv4_forwarding_functions": INSTALL_GO_AIO_FORWARDING if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_dependencies": " sysctl cmp ln" if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_notice": 'cf_ui "普通 Shell 同机安装将自动开启并持久化当前 Linux 的 IPv4 转发。"' if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_prepare": "prepare_ipv4_forwarding" if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_ownership": "check_ipv4_forwarding_ownership" if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_hook": "install_ipv4_forwarding_hook" if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_apply": "persist_ipv4_forwarding" if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_cleanup": 'cleanup_ipv4_forwarding "$cleanup_status"' if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_summary": "summarize_ipv4_forwarding" if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_uninstall": 'cf_ui "IPv4 转发及其 sysctl.d 持久化设置保留，避免影响仍在运行的核心。"' if manage_ipv4_forwarding else "",
+    })
     for service, port, path, unit, binary in zip(
         ("mihomo", "oxidns"), ports, paths,
         (mihomo_service_unit, oxidns_service_unit),

@@ -1,5 +1,6 @@
 // Package preflight inspects the local environment before native Agent installation.
-// It does not start services, bind ports, create interfaces or change kernel settings.
+// Run is read-only. Explicit PrepareTUN may load the driver and persist module
+// loading, but neither operation starts cores, binds ports or creates interfaces.
 package preflight
 
 import (
@@ -51,7 +52,21 @@ func (r Report) HasErrors() bool {
 // Print keeps values on one line, so a filename cannot forge another result or
 // inject terminal control sequences. Repair instructions are explanatory only.
 func (r Report) Print(out io.Writer) {
-	fmt.Fprintln(out, "安装前环境检查（仅检测，不自动修改系统）")
+	r.print(out, false)
+}
+
+// PrintPreparation deliberately distinguishes the opt-in installer mutation
+// from the read-only environment report.
+func (r Report) PrintPreparation(out io.Writer) {
+	r.print(out, true)
+}
+
+func (r Report) print(out io.Writer, preparation bool) {
+	if preparation {
+		fmt.Fprintln(out, "TUN 安装准备（本机可加载驱动并设置开机加载；容器仅检查设备）")
+	} else {
+		fmt.Fprintln(out, "安装前环境检查（仅检测，不自动修改系统）")
+	}
 	warnings, failures := 0, 0
 	for _, check := range r {
 		label := "通过"
@@ -68,7 +83,11 @@ func (r Report) Print(out io.Writer) {
 			fmt.Fprintf(out, "  处理方法：%s\n", printable(check.Fix))
 		}
 	}
-	if failures > 0 {
+	if preparation && failures > 0 {
+		fmt.Fprintf(out, "TUN 准备未完成（%d 项错误，%d 项提醒）；安装已停止，请按上方结果处理后重跑。已成功加载的驱动不会卸载。\n", failures, warnings)
+	} else if preparation {
+		fmt.Fprintf(out, "TUN 准备完成（%d 项提醒）；继续检查核心权限、网络和端口。实际核心运行与重启后的状态仍需验证。\n", warnings)
+	} else if failures > 0 {
 		fmt.Fprintf(out, "环境检查未通过（%d 项错误，%d 项提醒）；安装已停止，请处理后重跑脚本。\n", failures, warnings)
 	} else {
 		fmt.Fprintf(out, "未发现阻止安装的环境问题（%d 项提醒）。检测结果仅代表当前状态；服务启动及重启后的实际效果仍需验证。\n", warnings)

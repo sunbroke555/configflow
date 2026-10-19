@@ -136,19 +136,27 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 - 安装脚本保留现有核心配置。从 `1.8.23-go` 起，Mihomo Agent 发布时保留 DNS 监听地址、端口、整组 `tun.dns-hijack` 及 DNS/TUN 开关，不再强制改为 `1053`，未配置的字段也不会补入。首次安装提供 `1053` 默认值；已有 Agent 需升级后才会采用新的发布规则。
 - Agent `1.8.27-go` 引入普通 Shell 同机发布的本机地址排除；从 `1.8.28-go` 起，仅当 `tun.enable: true` 和 `tun.auto-redirect: true` 同时满足时，才在 `tun.route-exclude-address` 中自动合并 `127.0.0.0/8` 和当前 Agent LAN IPv4 的 `/32` 地址，并保留用户已有排除规则。例如 Agent 地址为 `192.168.0.33` 时，会加入 `192.168.0.33/32`，使发往本机 OxiDNS 的查询避开 Mihomo 自动重定向。任一开关关闭或未配置时，不添加或移除排除项，保留用户原配置。排除按目的地址匹配，不需要添加客户端 IP；Agent 地址变化后，后续发布使用当前地址。此适配继续保留用户配置的 DNS 监听、端口、整组 `dns-hijack`、`auto-route` 与 `auto-detect-interface`，不会自动开启这些设置，不用于 Docker、单服务或 Linux 选择性网关。`auto-redirect` 要求 `auto-route` 开启，由 Mihomo 原生校验检查；`auto-detect-interface` 不影响是否添加排除项。升级 Agent 本身不会重写正在运行的核心配置，需要再发布一次 Mihomo 配置后生效。
 - OxiDNS 的监听和上游沿用用户配置。需要 Mihomo 处理远程解析时，将远程上游对应到 Mihomo 实际的 DNS 监听地址和端口（新装默认 `127.0.0.1:1053`）。Mihomo 上游不应再指回 OxiDNS，以免形成循环。发布前检查实际监听冲突和上下游关系；明确冲突会阻止发布，TUN 对目标端口 `53` 的劫持风险只提示，不自动改写。
-- TUN 可继续使用，但 `/dev/net/tun`、网络管理权限及路由需要在运行核心的系统中准备。承担网关转发的 LXC / VM 需在该系统持久开启 IPv4 转发；安装脚本不会修改 PVE、RouterOS 或系统转发设置。OxiDNS 上游是否经过 TUN 仍由 Mihomo 路由与规则决定，DNS 端口分工不等于上游绕行配置。
+- 普通 Shell 同机安装在检查通过、两个 Agent 启动成功后，自动开启当前系统的 `net.ipv4.ip_forward=1`，写入专用 `/etc/sysctl.d/99-configflow-aio-forward.conf`。Mihomo Agent 的 systemd `ExecStartPre` 或 OpenRC `start_pre` 会在开机/服务启动时再次检查；已为 `1` 时不重复切换。此行为不用于单服务、Docker 或选择性网关安装向导，后者仍在最后的网络应用步骤开启转发。
+- 安装前按实际命令检查 `sysctl`、`cmp`、`ln`，已有工具（包括 Alpine 的 BusyBox 命令）直接使用。缺少时只补装对应的软件包：Debian/Alpine 的 `sysctl` 使用 `procps`，Arch 使用 `procps-ng`；`cmp` 使用 `diffutils`，`ln` 使用 `coreutils`。同一软件包不会重复加入安装列表；补装后重新检查命令是否可用，安装失败或仍缺工具时在停止现有 Agent 前退出。取消或卸载不会触发补装。
+- 无需按虚拟机品牌分支：物理机、VM、LXC 都检查实际运行核心的 Linux、systemd/OpenRC、sysctl 和当前网络命名空间的写权限。权限不足、`/proc/sys` 只读或持久化失败时，安装会失败并说明原因，不报告已完成；不会自动修改 PVE 宿主机或提升容器权限。已有选择性网关网络记录的设备应继续使用原网关入口，避免两套恢复机制争用。
+- 同名持久化文件若不属于安装器会拒绝覆盖；已有其他 sysctl 配置不重写，也不执行 `sysctl --system`。首次从 `0` 变为 `1` 会产生 Linux 正常的主机/路由模式切换副作用；开启全局转发不等于验证了接口、防火墙或完整转发链路。卸载 Agent 时保留转发持久化文件，因为两个核心继续运行。若其他服务之后覆盖此参数，应排查对应服务。
+- 普通 Shell 同机安装会先读取 Mihomo 配置，仅在顶层 `tun.enable: true` 或启用的 `listeners: type: tun` 入口需要 TUN 时准备驱动。物理机、QEMU/KVM 等虚拟机缺少驱动时尝试本机 `modprobe tun`，随后验证 `/dev/net/tun` 字符设备及驱动能力；加载成功后设置开机加载。不会仅凭内核名称含 `virt` 就认定为 LXC，也不会自动开启配置中的 TUN。
+- 容器内不加载共享内核模块：已有可访问 TUN 时继续检查，缺失或受限时按检测到的 LXC、Docker/Podman 等环境给出宿主机加载驱动、设备映射和权限提示。只有使用 PVE 管理 LXC 时才适用 `pct` 操作；不自动提升容器权限、修改宿主机或创建替代设备节点。
+- TUN 模块使用专用 `/etc/modules-load.d/99-configflow-tun.conf` 持久化；OpenRC 会核对本机 `modules` 服务支持的配置格式并确认加入 boot runlevel，老式服务使用 `/etc/modules` 时保留原内容、幂等追加。内核已内置 TUN 时不需要模块加载项。重复执行不会重复添加；遇到配置冲突或写入失败会明确退出。后续安装失败或卸载 Agent 不卸载已加载的 TUN，也不清除其开机加载配置，避免影响仍在运行的核心。
+- TUN 需要本机加载时仍需提供 `modprobe`；OpenRC 的模块式驱动即使当前已可用，持久化前也会检查此命令，避免开机无法加载。缺失时明确提示安装 `kmod` 或修复 PATH；当前不会自动补装 `kmod`，也不会为容器、关闭的 TUN 或内核内置驱动强制安装它。
+- TUN 准备不修改核心服务权限、IPv6、NAT、防火墙、RouterOS 或核心 YAML，也不重启核心。OxiDNS 上游是否经过 TUN 仍由 Mihomo 路由与规则决定，端口适配不等于上游绕行配置。
 
-已有单服务 Agent 时，同机安装会明确拒绝共享布局；先卸载原 Agent（保留核心及核心配置），再运行同机脚本。保留原 Agent 时不要直接混用两种安装方式。运行当前安装脚本前，需要更新 ConfigFlow 并提供 `1.8.19-go` 或更高版本的 Go Agent 二进制。
+已有单服务 Agent 时，同机安装会明确拒绝共享布局；先卸载原 Agent（保留核心及核心配置），再运行同机脚本。保留原 Agent 时不要直接混用两种安装方式。运行当前安装脚本前，需要同步更新 ConfigFlow，并提供包含 `-prepare-tun` 的 Agent `1.8.29-go` 或更高版本；旧二进制不支持该参数时会退出，不能只更新脚本。
 
 ### 安装前环境检测
 
-从 `1.8.19-go` 起，Shell 单服务及同机安装都会在停止旧 Agent、替换其程序和配置之前进行环境检测。同机模式一次检查两个 Agent，输出「通过 / 提醒 / 失败」及对应处理方法；出现失败时退出安装。检测不会自动开放权限、修改转发设置、停止占用端口的程序或更改 PVE 配置。
+从 `1.8.19-go` 起，Shell 单服务及同机安装都会在停止旧 Agent、替换其程序和配置之前进行环境检测。同机模式一次检查两个 Agent，输出「通过 / 提醒 / 失败」及对应处理方法；出现失败时退出安装。单独运行 `-check-environment` 仍然只读。普通 Shell 同机安装在检测前单独准备已启用的 TUN，检查通过后自动开启并持久化 IPv4 转发；单服务、独立核心、Docker 与选择性网关入口不调用这套自动准备。`-prepare-tun` 不能与只读检查参数混用。
 
 | 检查 | 判定与处理 |
 | --- | --- |
 | TUN 设备 | 检查 `/dev/net/tun` 是否为可访问的 TUN 字符设备，读取驱动能力；当前 Mihomo 配置通过顶层 `tun` 或 `listeners` 启用 TUN 时，明确不可用会阻止安装。未启用 TUN 时提示，不阻止 DNS / 普通代理用途。 |
-| 网络权限 | 检查网络管理能力和可见的核心服务权限限制；不把 root 身份直接当作 TUN 可用。不能确认服务启动环境时明确提示。 |
-| IPv4 转发 | 显示当前 `net.ipv4.ip_forward`，检查可见的持久化配置。关闭或存在覆盖风险时提示如何修复；纯 DNS 或本机代理不强制开启。作为旁路网关时需先完成提示中的转发设置。 |
+| 网络权限 | 检查网络管理能力和可见的核心服务权限限制；不把 root 身份直接当作 TUN 可用。systemd 检查对应服务限制；OpenRC 提示核对 `/etc/init.d/`、`/etc/conf.d/` 的启动用户、能力设置及实际核心 PID 的 `CapEff`，不套用 systemd 专用参数。不能确认核心进程权限时明确提示。 |
+| IPv4 转发 | 显示当前 `net.ipv4.ip_forward`，检查可见的持久化配置。普通 Shell 同机安装随后自动开启并持久化；单服务和独立环境检查只报告状态与修复建议。 |
 | 端口占用 | 联合核对 Agent 的 TCP 端口及 DNS 的 UDP/TCP 监听；Mihomo、OxiDNS 均按实际配置读取，不将自定义端口当作 `1053` 检查。确认是本实例已有进程监听时允许重装，外部或无法确认归属的占用会阻止安装。 |
 
 检测以当前核心配置为依据，不会提前启用 TUN，也不会创建测试网卡或修改路由。PVE LXC 缺少 TUN 时，提示在 **PVE 宿主机**检查模块、为容器添加 `/dev/net/tun` 设备；IPv4 转发在实际承担路由的 **LXC / VM 内**检查和持久化。设备存在、能力检查通过不代表已验证完整流量链路；安装后仍应验证 DNS、网关流量与重启后的状态。
@@ -166,7 +174,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 只检测单服务时使用对应 Agent 的实际程序和配置路径，并省略 `-environment-peer-config`。检查只读取状态；存在失败项时退出码为 `1`。
 
-修复提示依据：[Linux TUN/TAP 驱动](https://kernel.org/doc/html/v5.19/networking/tuntap.html)、[PVE 设备直通参数](https://github.com/proxmox/pve-docs/blob/master/generated/pct.1-synopsis.adoc)、[systemd sysctl 配置优先级](https://www.freedesktop.org/software/systemd/man/257/sysctl.d.html)。持久化配置只能证明发现了设置，不能保证之后没有其他服务覆盖，需在维护时重启验证。
+修复提示依据：[Linux TUN/TAP 驱动](https://kernel.org/doc/html/v5.19/networking/tuntap.html)、[PVE 设备直通参数](https://github.com/proxmox/pve-docs/blob/master/generated/pct.1-synopsis.adoc)、[systemd 模块加载格式](https://www.freedesktop.org/software/systemd/man/latest/modules-load.d.html)、[OpenRC modules 服务](https://github.com/OpenRC/openrc/blob/master/init.d/modules.in)、[systemd 容器检测实现](https://github.com/systemd/systemd/blob/main/src/basic/virt.c)、[systemd sysctl 配置优先级](https://www.freedesktop.org/software/systemd/man/257/sysctl.d.html)。持久化配置只能证明发现了设置，不能保证之后没有其他服务覆盖，需在维护时重启验证。
 
 ## Docker
 
