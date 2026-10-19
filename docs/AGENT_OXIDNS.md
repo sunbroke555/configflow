@@ -134,7 +134,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 - 两套 Agent 使用独立的 `configflow-agent-mihomo` / `configflow-agent-oxidns` 系统服务、`/opt/configflow-agent/mihomo` / `/opt/configflow-agent/oxidns` 目录和二进制，升级及远程卸载互不删除对方的文件。重跑同机脚本会保留对应 Agent 身份。
 - 安装脚本保留现有核心配置。从 `1.8.23-go` 起，Mihomo Agent 发布时保留 DNS 监听地址、端口、整组 `tun.dns-hijack` 及 DNS/TUN 开关，不再强制改为 `1053`，未配置的字段也不会补入。首次安装提供 `1053` 默认值；已有 Agent 需升级后才会采用新的发布规则。
-- 从 Agent `1.8.27-go` 起，普通 Shell 同机模式发布 Mihomo 配置时，若 TUN 已启用，会在 `tun.route-exclude-address` 中自动合并 `127.0.0.0/8` 和当前 Agent LAN IPv4 的 `/32` 地址，并保留用户已有排除规则。例如 Agent 地址为 `192.168.0.33` 时，会加入 `192.168.0.33/32`，使发往本机 OxiDNS 的查询避开 Mihomo 自动重定向。排除按目的地址匹配，不需要添加客户端 IP；Agent 地址变化后，后续发布使用当前地址。此适配继续保留用户配置的 DNS 监听、端口和整组 `dns-hijack`，不会自动启用 DNS 或 TUN，不用于 Docker、单服务或 Linux 选择性网关。升级 Agent 本身不会重写正在运行的核心配置，需要再发布一次 Mihomo 配置后生效。
+- Agent `1.8.27-go` 引入普通 Shell 同机发布的本机地址排除；从 `1.8.28-go` 起，仅当 `tun.enable: true` 和 `tun.auto-redirect: true` 同时满足时，才在 `tun.route-exclude-address` 中自动合并 `127.0.0.0/8` 和当前 Agent LAN IPv4 的 `/32` 地址，并保留用户已有排除规则。例如 Agent 地址为 `192.168.0.33` 时，会加入 `192.168.0.33/32`，使发往本机 OxiDNS 的查询避开 Mihomo 自动重定向。任一开关关闭或未配置时，不添加或移除排除项，保留用户原配置。排除按目的地址匹配，不需要添加客户端 IP；Agent 地址变化后，后续发布使用当前地址。此适配继续保留用户配置的 DNS 监听、端口、整组 `dns-hijack`、`auto-route` 与 `auto-detect-interface`，不会自动开启这些设置，不用于 Docker、单服务或 Linux 选择性网关。`auto-redirect` 要求 `auto-route` 开启，由 Mihomo 原生校验检查；`auto-detect-interface` 不影响是否添加排除项。升级 Agent 本身不会重写正在运行的核心配置，需要再发布一次 Mihomo 配置后生效。
 - OxiDNS 的监听和上游沿用用户配置。需要 Mihomo 处理远程解析时，将远程上游对应到 Mihomo 实际的 DNS 监听地址和端口（新装默认 `127.0.0.1:1053`）。Mihomo 上游不应再指回 OxiDNS，以免形成循环。发布前检查实际监听冲突和上下游关系；明确冲突会阻止发布，TUN 对目标端口 `53` 的劫持风险只提示，不自动改写。
 - 普通 Shell 同机安装在检查通过、两个 Agent 启动成功后，自动开启当前系统的 `net.ipv4.ip_forward=1`，写入专用 `/etc/sysctl.d/99-configflow-aio-forward.conf`。Mihomo Agent 的 systemd `ExecStartPre` 或 OpenRC `start_pre` 会在开机/服务启动时再次检查；已为 `1` 时不重复切换。此行为不用于单服务、Docker 或选择性网关安装向导，后者仍在最后的网络应用步骤开启转发。
 - 安装前按实际命令检查 `sysctl`、`cmp`、`ln`，已有工具（包括 Alpine 的 BusyBox 命令）直接使用。缺少时只补装对应的软件包：Debian/Alpine 的 `sysctl` 使用 `procps`，Arch 使用 `procps-ng`；`cmp` 使用 `diffutils`，`ln` 使用 `coreutils`。同一软件包不会重复加入安装列表；补装后重新检查命令是否可用，安装失败或仍缺工具时在停止现有 Agent 前退出。取消或卸载不会触发补装。
@@ -146,7 +146,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 - TUN 需要本机加载时仍需提供 `modprobe`；OpenRC 的模块式驱动即使当前已可用，持久化前也会检查此命令，避免开机无法加载。缺失时明确提示安装 `kmod` 或修复 PATH；当前不会自动补装 `kmod`，也不会为容器、关闭的 TUN 或内核内置驱动强制安装它。
 - TUN 准备不修改核心服务权限、IPv6、NAT、防火墙、RouterOS 或核心 YAML，也不重启核心。OxiDNS 上游是否经过 TUN 仍由 Mihomo 路由与规则决定，端口适配不等于上游绕行配置。
 
-已有单服务 Agent 时，同机安装会明确拒绝共享布局；先卸载原 Agent（保留核心及核心配置），再运行同机脚本。保留原 Agent 时不要直接混用两种安装方式。运行当前安装脚本前，需要同步更新 ConfigFlow，并提供包含 `-prepare-tun` 的 Agent `1.8.28-go` 或更高版本；旧二进制不支持该参数时会退出，不能只更新脚本。
+已有单服务 Agent 时，同机安装会明确拒绝共享布局；先卸载原 Agent（保留核心及核心配置），再运行同机脚本。保留原 Agent 时不要直接混用两种安装方式。运行当前安装脚本前，需要同步更新 ConfigFlow，并提供包含 `-prepare-tun` 的 Agent `1.8.29-go` 或更高版本；旧二进制不支持该参数时会退出，不能只更新脚本。
 
 ### 安装前环境检测
 

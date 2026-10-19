@@ -1,16 +1,24 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.28-go"
+LATEST_AGENT_VERSION = "1.8.29-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
-    "1.8.28-go": {
+    "1.8.29-go": {
         "date": "2026-10-19",
         "features": [
             "普通 Shell 同机安装自动开启并持久化 IPv4 转发，systemd/OpenRC 启动时验证恢复",
             "已启用 TUN 时识别本机与容器环境，本机自动加载驱动并设置开机加载，容器设备缺失时给出宿主机处理提示",
-            "OpenRC 权限诊断适配服务脚本与实际进程能力，保留只读环境检查"
+            "普通同机安装按需补装 sysctl、cmp、ln，兼容 Debian、Alpine、Arch，已有工具跳过并在补装后复查",
+            "OpenRC 权限诊断适配服务脚本与实际进程能力，模块持久化前检查开机加载命令，保留只读环境检查"
+        ]
+    },
+    "1.8.28-go": {
+        "date": "2026-10-19",
+        "features": [
+            "普通 Shell 同机发布仅在 TUN 和 auto-redirect 同时开启时自动合并本机排除地址；任一关闭或未配置时，保留用户原有配置及排除项，不要求本机地址适配",
+            "保留 auto-route 与 auto-detect-interface 原值，不自动开启路由或重定向；继续由 Mihomo 原生校验检查配置合法性"
         ]
     },
     "1.8.27-go": {

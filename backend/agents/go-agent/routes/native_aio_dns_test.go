@@ -55,14 +55,14 @@ func TestNativeAIODNSMergesHostExclusions(t *testing.T) {
 
 func TestNativeAIODNSPreservesYAMLAliasesAndMergeKeys(t *testing.T) {
 	for _, test := range []struct{ name, yaml string }{
-		{"exclusion-alias", "custom-exclusions: &excluded [10.0.0.0/8]\ntun: {enable: true, route-exclude-address: *excluded}\n"},
-		{"exclusion-anchor", "tun: {enable: true, route-exclude-address: &excluded [10.0.0.0/8]}\ncustom-exclusions: *excluded\n"},
+		{"exclusion-alias", "custom-exclusions: &excluded [10.0.0.0/8]\ntun: {enable: true, auto-redirect: true, route-exclude-address: *excluded}\n"},
+		{"exclusion-anchor", "tun: {enable: true, auto-redirect: true, route-exclude-address: &excluded [10.0.0.0/8]}\ncustom-exclusions: *excluded\n"},
 		{"tun-alias", "custom-tun: &tun {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8], dns-hijack: [any:53]}\ntun: *tun\n"},
 		{"tun-anchor", "tun: &tun {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8], dns-hijack: [any:53]}\ncustom-tun: *tun\n"},
 		{"tun-merge", "custom-tun: &tun {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8], dns-hijack: [any:53]}\ntun: {<<: *tun, stack: system}\n"},
-		{"top-level-merge", "custom-defaults: &defaults {tun: {enable: true, route-exclude-address: [10.0.0.0/8]}}\n<<: *defaults\n"},
-		{"enable-alias", "custom-enabled: &enabled true\ntun: {enable: *enabled, route-exclude-address: [10.0.0.0/8]}\n"},
-		{"dns-anchor", "dns: &dns {enable: true, listen: '127.0.0.1:53'}\ncustom-dns: *dns\ntun: {enable: true, route-exclude-address: [10.0.0.0/8]}\n"},
+		{"top-level-merge", "custom-defaults: &defaults {tun: {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8]}}\n<<: *defaults\n"},
+		{"enable-alias", "custom-enabled: &enabled true\ntun: {enable: *enabled, auto-redirect: *enabled, route-exclude-address: [10.0.0.0/8]}\n"},
+		{"dns-anchor", "dns: &dns {enable: true, listen: '127.0.0.1:53'}\ncustom-dns: *dns\ntun: {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8]}\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := "mode: rule\n" + test.yaml
@@ -106,20 +106,20 @@ func TestNativeAIODNSPreservesYAMLAliasesAndMergeKeys(t *testing.T) {
 	}
 }
 
-func TestNativeAIODNSOnlyRequiresAddressForEnabledTUN(t *testing.T) {
-	for _, input := range []string{"mode: rule\n", "tun: {}\n", "tun: {enable: false, auto-redirect: true}\n", "tun: {enable: true}\nx-configflow-linux-gateway: {enabled: true}\n", "marker: &marker {enabled: true}\ntun: {enable: true}\nx-configflow-linux-gateway: *marker\n", "marker: &marker {enabled: true}\ntun: {enable: true}\nx-configflow-linux-gateway: {<<: *marker}\n"} {
+func TestNativeAIODNSOnlyRequiresAddressForEnabledAutoRedirect(t *testing.T) {
+	for _, input := range []string{"mode: rule\n", "tun: {}\n", "tun: {enable: false, auto-redirect: true}\n", "tun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: {enabled: true}\n", "marker: &marker {enabled: true}\ntun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: *marker\n", "marker: &marker {enabled: true}\ntun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: {<<: *marker}\n"} {
 		got, err := adaptNativeAIODNS(&Config{NativeAIO: true}, input)
 		if err != nil || got != input {
 			t.Fatalf("inactive or gateway TUN changed: %v\n%s", err, got)
 		}
 	}
 	for _, address := range []string{"", "0.0.0.0", "127.0.0.1", "169.254.0.1", "224.0.0.1", "255.255.255.255", "::1", "2001:db8::1", "example.com", "192.168.0.33/24"} {
-		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true, AgentIP: address}, "tun: {enable: true}\n"); err == nil || !strings.Contains(err.Error(), "agent_ip") {
+		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true, AgentIP: address}, "tun: {enable: true, auto-redirect: true}\n"); err == nil || !strings.Contains(err.Error(), "agent_ip") {
 			t.Fatalf("missing/invalid host address %q did not give actionable failure: %v", address, err)
 		}
 	}
 	for _, exclusions := range []string{"192.168.0.33/32", "{}", "[invalid]", "[false]", "[{}]"} {
-		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true, AgentIP: "192.168.0.33"}, "tun: {enable: true, route-exclude-address: "+exclusions+"}\n"); err == nil {
+		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true, AgentIP: "192.168.0.33"}, "tun: {enable: true, auto-redirect: true, route-exclude-address: "+exclusions+"}\n"); err == nil {
 			t.Fatalf("invalid exclusion list accepted: %s", exclusions)
 		}
 	}
@@ -129,8 +129,96 @@ func TestNativeAIODNSOnlyRequiresAddressForEnabledTUN(t *testing.T) {
 		}
 	}
 	for _, marker := range []string{"null", "false", "[]", "{enabled: false}", "{enabled: 'true'}"} {
-		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true}, "tun: {enable: true}\nx-configflow-linux-gateway: "+marker); err == nil || !strings.Contains(err.Error(), "agent_ip") {
+		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true}, "tun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: "+marker); err == nil || !strings.Contains(err.Error(), "agent_ip") {
 			t.Fatalf("non-gateway marker bypassed native address validation: %s (%v)", marker, err)
+		}
+	}
+}
+
+func TestNativeAIODNSInactiveSwitchesPreserveConfiguration(t *testing.T) {
+	values := []string{"true", "false", "null", "missing"}
+	for _, enable := range values {
+		for _, redirect := range values {
+			if enable == "true" && redirect == "true" {
+				continue
+			}
+			for _, withExclusions := range []bool{false, true} {
+				t.Run(fmt.Sprintf("enable-%s/redirect-%s/exclusions-%t", enable, redirect, withExclusions), func(t *testing.T) {
+					cfg := testDeploymentConfig(t)
+					cfg.NativeAIO = true
+					input := "# Preserve this comment and the exact YAML formatting.\nmode: direct\ndns: {enable: false, listen: '127.0.0.1:5353'}\ntun:\n  auto-route: false\n  auto-detect-interface: false\n"
+					if enable != "missing" {
+						input += "  enable: " + enable + " # User's TUN switch\n"
+					}
+					if redirect != "missing" {
+						input += "  auto-redirect: " + redirect + " # User's redirect switch\n"
+					}
+					if withExclusions {
+						input += "  route-exclude-address: [10.0.0.0/8, 127.0.0.0/8, 192.168.0.33/32] # Keep existing exclusions\n"
+					}
+					for _, address := range []string{"", "not-an-ip"} {
+						cfg.AgentIP = address
+						got, err := adaptNativeAIODNS(cfg, input)
+						if err != nil || got != input {
+							t.Fatalf("inactive redirect changed bytes or required AgentIP %q: %v\n%s", address, err, got)
+						}
+					}
+					// The rest of staging serializes YAML; its values must still be
+					// identical, including omitted fields and preexisting exclusions.
+					cfg.AgentIP = ""
+					state := submitBundle(t, cfg, "inactive-redirect", map[string][]byte{"config.yaml": []byte(input)}, false)
+					if state.Status != "ready" {
+						t.Fatalf("inactive redirect publication failed: %+v", state)
+					}
+					if err := loadEffectiveManifest(cfg, state); err != nil {
+						t.Fatalf("staged content does not match its manifest: %v", err)
+					}
+					data, err := os.ReadFile(filepath.Join(deploymentPath(cfg, state.DeploymentID), "stage", "config.yaml"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var actual, expected map[string]interface{}
+					if err := yaml.Unmarshal(data, &actual); err != nil {
+						t.Fatal(err)
+					}
+					if err := yaml.Unmarshal([]byte(input), &expected); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(actual, expected) {
+						t.Fatalf("inactive redirect staging changed configuration:\n%s", data)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestNativeAIODNSDoesNotGateOnOtherTUNOptions(t *testing.T) {
+	// Core validation owns auto-route's dependency rules. Host protection must
+	// only inspect enable/auto-redirect and preserve all other TUN options.
+	for _, option := range []string{"auto-route", "auto-detect-interface"} {
+		for _, value := range []string{"true", "false", "null", "missing"} {
+			t.Run(option+"/"+value, func(t *testing.T) {
+				input := "tun:\n  enable: true\n  auto-redirect: true\n"
+				if value != "missing" {
+					input += "  " + option + ": " + value + "\n"
+				}
+				got, err := adaptNativeAIODNS(&Config{NativeAIO: true, AgentIP: "192.168.0.33"}, input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var actual, expected map[string]interface{}
+				if err := yaml.Unmarshal([]byte(input), &expected); err != nil {
+					t.Fatal(err)
+				}
+				if err := yaml.Unmarshal([]byte(got), &actual); err != nil {
+					t.Fatal(err)
+				}
+				expected["tun"].(map[string]interface{})["route-exclude-address"] = []interface{}{"127.0.0.0/8", "192.168.0.33/32"}
+				if !reflect.DeepEqual(actual, expected) {
+					t.Fatalf("host protection gated on or changed %s: %s", option, got)
+				}
+			})
 		}
 	}
 }
