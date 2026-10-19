@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import { Select } from '@/components/ui/select'
 import { agentApi } from '@/api'
 import { notify } from '@/lib/feedback'
@@ -31,7 +32,7 @@ function render(overrides: Record<string, unknown> = {}) {
   return wrapper
 }
 function button(text: string) {
-  const found = Array.from(document.querySelectorAll('button')).find(item => item.textContent?.trim() === text)
+  const found = Array.from(document.querySelectorAll('button')).find(item => item.textContent?.trim() === text || item.getAttribute('aria-label') === text)
   expect(found, `button ${text}`).toBeTruthy()
   return found!
 }
@@ -75,7 +76,7 @@ describe('explicit Mihomo DNS follow binding', () => {
       source_agent_id: 'mihomo-1', upstream_tag: 'forward_remote', upstream_index: 1, connection: 'auto',
     })
     expect(wrapper.emitted('changed')).toHaveLength(1)
-    expect(wrapper.text()).toContain('等待 Mihomo 发布')
+    expect(wrapper.text()).toContain('等待发布')
     expect(agentApi.retryDNSFollow).not.toHaveBeenCalled()
     expect(wrapper.text()).not.toContain('同步失败')
   })
@@ -184,8 +185,8 @@ describe('explicit Mihomo DNS follow binding', () => {
     await click('停止跟随')
     expect(agentApi.removeDNSFollow).toHaveBeenCalledWith('oxi-1')
     expect(agentApi.setDNSFollow).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('跟随 Mihomo DNS')
-    expect(wrapper.text()).not.toContain('等待 Mihomo 发布')
+    expect(wrapper.text()).toContain('未开启')
+    expect(wrapper.text()).not.toContain('等待发布')
   })
 
   it('explains empty upstreams instead of selecting another DNS service or making up an endpoint', async () => {
@@ -200,11 +201,38 @@ describe('explicit Mihomo DNS follow binding', () => {
 })
 
 describe('DNS follow results and retry', () => {
+  it('keeps successful follow information behind one expandable row and retains its complete source, endpoint and timeline', async () => {
+    const address = 'udp://mihomo-dns-with-a-long-hostname.internal.example:1053'
+    const wrapper = render({ dns_follow: binding, dns_follow_state: {
+      status: 'succeeded', source_deployment_id: 'published', address,
+      message: 'Mihomo 已更新，OxiDNS 上游地址未变化，无需再次发布。',
+      events: [{ at: '2026-10-19T01:00:00Z', status: 'succeeded', message: '已确认 OxiDNS 上游地址一致。' }],
+    } })
+    const row = wrapper.findComponent(AgentStatusRow)
+    const toggle = row.get('[aria-expanded]')
+    expect(toggle.text()).toContain('DNS 联动')
+    expect(toggle.text()).toContain('已同步')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    const endpoint = wrapper.findAll('p').find(item => item.text() === address)!
+    expect(endpoint.exists()).toBe(true)
+    expect(endpoint.isVisible()).toBe(false)
+    expect(wrapper.get('ol').isVisible()).toBe(false)
+    expect(button('设置')).toBeTruthy()
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(endpoint.isVisible()).toBe(true)
+    expect(row.text()).toContain('跟随 家庭 Mihomo DNS')
+    expect(row.text()).toContain('无需再次发布')
+    expect(wrapper.get('ol').isVisible()).toBe(true)
+    expect(wrapper.find('details').exists()).toBe(false)
+    expect(agentApi.getDNSFollow).not.toHaveBeenCalled()
+  })
+
   it('does not claim Mihomo was updated when binding validation fails before a new publish', () => {
     const wrapper = render({ dns_follow: binding, dns_follow_state: {
       status: 'failed', message: 'DNS 联动暂不可用：Mihomo 来源已删除，请重新绑定。',
     } })
-    expect(wrapper.text()).toContain('OxiDNS 同步失败')
+    expect(wrapper.text()).toContain('同步失败')
     expect(wrapper.text()).toContain('Mihomo 来源已删除')
     expect(wrapper.text()).not.toContain('Mihomo 已更新')
   })
@@ -216,7 +244,8 @@ describe('DNS follow results and retry', () => {
     } })
     expect(wrapper.text()).toContain('Mihomo 已更新，OxiDNS 同步失败')
     expect(wrapper.text()).toContain('OxiDNS 有其他未发布修改')
-    expect(wrapper.get('details').attributes('open')).toBeUndefined()
+    expect(wrapper.findAll('p').find(item => item.text().startsWith('Mihomo 已更新，OxiDNS 同步失败'))!.isVisible()).toBe(true)
+    expect(wrapper.findComponent(AgentStatusRow).get('[aria-expanded]').attributes('aria-expanded')).toBe('false')
     let resolve!: (value: any) => void
     vi.mocked(agentApi.retryDNSFollow).mockImplementationOnce(() => new Promise(done => { resolve = done }))
     button('重试同步').click()
@@ -225,7 +254,7 @@ describe('DNS follow results and retry', () => {
     resolve({ data: { success: true, binding, state: { status: 'preparing', source_deployment_id: 'mihomo-publish-2', message: '正在确认已生效的 Mihomo DNS' } } })
     await flushPromises()
     expect(agentApi.retryDNSFollow).toHaveBeenCalledExactlyOnceWith('oxi-1')
-    expect(wrapper.text()).toContain('Mihomo 已更新')
+    expect(wrapper.text()).toContain('准备同步')
     expect(wrapper.text()).toContain('正在确认已生效的 Mihomo DNS')
     expect(wrapper.text()).not.toContain('重试同步')
     expect(wrapper.text()).not.toContain('OxiDNS DNS 同步完成')
@@ -242,7 +271,7 @@ describe('DNS follow results and retry', () => {
     await wrapper.setProps({ agent: agent({ dns_follow: binding, dns_follow_state: {
       status: 'succeeded', source_deployment_id: 'published', address: 'tcp://127.0.0.1:2053', message: 'OxiDNS 已通过健康检查。',
     } }) })
-    expect(wrapper.text()).toContain('OxiDNS DNS 同步完成')
+    expect(wrapper.text()).toContain('已同步')
     expect(wrapper.text()).toContain('tcp://127.0.0.1:2053')
     expect(wrapper.text()).not.toContain('重试同步')
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
@@ -252,8 +281,9 @@ describe('DNS follow results and retry', () => {
     const wrapper = render({ dns_follow: binding, dns_follow_state: {
       status: 'publishing', source_deployment_id: 'published', message: '暂时无法确认 OxiDNS 发布结果，正在继续查询。',
     } })
-    expect(wrapper.text()).toContain('Mihomo 已更新')
+    expect(wrapper.text()).toContain('正在同步')
     expect(wrapper.text()).toContain('正在继续查询')
+    expect(wrapper.findAll('p').find(item => item.text().startsWith('暂时无法确认 OxiDNS 发布结果'))!.isVisible()).toBe(true)
     expect(wrapper.text()).not.toContain('OxiDNS DNS 同步完成')
     expect(wrapper.text()).not.toContain('重试同步')
     expect(agentApi.retryDNSFollow).not.toHaveBeenCalled()

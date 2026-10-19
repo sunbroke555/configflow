@@ -25,6 +25,18 @@ function render(task: Record<string, unknown>) {
 }
 
 describe('Agent failure diagnostics', () => {
+  it('can separate DNS checks without hiding failure summaries, steps or copyable details', async () => {
+    const wrapper = render({ status: 'failed', failed_stage: 'verifying', error: '配置检查失败', error_details: 'line 18: unknown plugin', dns_checks: [{ name: 'DNS 监听', level: 'error', message: '端口冲突' }] })
+    expect(wrapper.find('[aria-label="DNS 检查结果"]').exists()).toBe(true)
+    await wrapper.setProps({ showDNSChecks: false })
+    expect(wrapper.find('[aria-label="DNS 检查结果"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('配置检查失败')
+    expect(wrapper.text()).toContain('失败步骤：校验中')
+    expect(wrapper.get('pre').text()).toBe('line 18: unknown plugin')
+    expect(wrapper.find('[aria-label="复制发布失败详情"]').exists()).toBe(true)
+    await wrapper.setProps({ task: { status: 'succeeded', dns_checks: [{ name: 'DNS', level: 'pass', message: '通过' }] } })
+    expect(wrapper.find('div').exists()).toBe(false)
+  })
   it('shows DNS issues and repair suggestions without hiding them in error details', () => {
     const wrapper = render({ deployment_id: 'dns-error', status: 'failed', dns_checked_at: '2026-10-18T09:00:00Z', dns_checks: [
       { name: 'DNS 监听', level: 'error', message: '0.0.0.0:53 已被占用', fix: '更改冲突程序的监听端口' },

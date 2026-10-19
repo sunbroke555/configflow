@@ -8,12 +8,18 @@ import { getAgentConfigSync } from '@/lib/agentConfigSync'
 import { Select } from '@/components/ui/select'
 import { ruleLocationDetails } from './fixtures/agent-failure'
 
-// Keep the actual Agent cards, stores and deployment state; replace only HTTP.
+// Keep the actual Agent cards, stores and deployment state; mock their HTTP requests.
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
   agentApi: { getAll: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), bindProfile: vi.fn(), pushConfig: vi.fn() },
   profileApi: { list: vi.fn() }
 }))
+// jsdom does not complete the card entrance animation. Keep the real Motion
+// wrapper and all card interactions, but start in the displayed state.
+vi.mock('@/lib/motion', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/motion')>()
+  return { ...actual, listItem: (index: number) => ({ ...actual.listItem(index), initial: false }) }
+})
 
 const wrappers: ReturnType<typeof mount>[] = []
 const mediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
@@ -118,7 +124,7 @@ describe('Agent configuration status wording', () => {
     expect(title()).toContain(`当前配置修订号：v${revision + 1}`)
     expect(title()).toContain('hash-current')
     expect(title()).toContain('完整文件')
-    expect(wrapper.text()).toContain('上次配置推送：成功')
+    expect(wrapper.get('[data-agent-status-row="配置推送"] > div > button').text()).toBe('配置推送成功')
     expect(wrapper.text()).not.toContain('发布成功')
   })
 
@@ -128,7 +134,7 @@ describe('Agent configuration status wording', () => {
     expect(footer.text()).not.toContain('已同步')
     expect(title()).toContain('已推送修订号：v43')
     expect(title()).toContain('当前配置修订号：v43')
-    expect(wrapper.text()).toContain('上次配置推送：成功')
+    expect(wrapper.get('[data-agent-status-row="配置推送"] > div > button').text()).toBe('配置推送成功')
   })
 
   it('uses the content comparison after a rebind instead of inferring from profile identity', async () => {
@@ -308,6 +314,34 @@ describe('deployment progress precedes the content comparison', () => {
 })
 
 describe('Agent card diagnostics', () => {
+  it('keeps successful operation details collapsed while DNS warning reasons remain visible', async () => {
+    const { wrapper } = await render(agent({
+      latest_deployment: deployment({
+        message: '配置已应用，服务检查通过',
+        dns_checks: [{ name: 'DNS 劫持范围', level: 'warn', message: 'any:53 可能绕过 OxiDNS', fix: '核对路由与劫持规则' }],
+      }),
+      latest_upgrade: { update_id: 'upgrade-success', status: 'succeeded', target_version: '1.8.24-go', previous_version: '1.8.23-go', message: '身份与迁移检查通过' },
+    }))
+    const publication = wrapper.get('[data-agent-status-row="配置推送"]')
+    const dns = wrapper.get('[data-agent-status-row="DNS 检查"]')
+    const upgrade = wrapper.get('[data-agent-status-row="Agent 更新"]')
+    expect(publication.get('[data-status-details]').isVisible()).toBe(false)
+    expect(upgrade.get('[data-status-details]').isVisible()).toBe(false)
+    expect(dns.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(dns.get('[data-status-notice]').text()).toContain('any:53 可能绕过 OxiDNS')
+    expect(dns.get('[data-status-details]').isVisible()).toBe(false)
+    await publication.get('button[aria-expanded]').trigger('click')
+    expect(publication.get('[data-status-details]').isVisible()).toBe(true)
+    expect(publication.get('[data-status-details]').text()).toContain('配置已应用，服务检查通过')
+    expect(publication.find('details').exists()).toBe(false)
+  })
+
+  it('retains the DNS monitor entry when an OxiDNS Agent has not reported system metrics', async () => {
+    const { wrapper } = await render(agent({ service_type: 'oxidns', system_metrics: undefined }))
+    const monitor = wrapper.findAll('button').find(button => button.text() === 'DNS 监控')!
+    expect(monitor.isVisible()).toBe(true)
+  })
+
   it.each(['mihomo', 'mosdns', 'oxidns'])('shows %s publication and rollback failure details in its card', async service_type => {
     const { wrapper } = await render(agent({ service_type, latest_deployment: deployment({ status: 'rollback_failed', error: '配置检查失败', error_details: ruleLocationDetails, rollback_error: '旧服务启动失败', rollback_error_details: 'permission denied' }) }))
     expect(wrapper.findAll('pre').map(item => item.element.textContent)).toContain(ruleLocationDetails)

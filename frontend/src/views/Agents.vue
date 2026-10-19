@@ -65,7 +65,7 @@
           v-bind="listItem(index)"
           :class="cn(
             'relative flex flex-col overflow-hidden rounded-[18px] border border-border bg-card/90 p-[18px] shadow-surface',
-            agent.status !== 'online' && !deployments[agent.id] && 'opacity-80'
+            agent.status !== 'online' && !deployments[agent.id] && !upgrades[agent.id] && !agent.dns_follow && 'opacity-80'
           )"
         >
           <header class="flex items-center gap-2.5">
@@ -82,16 +82,6 @@
             · {{ agent.deployment_method === 'shell' ? 'shell' : agent.deployment_method === 'docker' ? 'docker' : agent.deployment_method || '—' }}
             · 心跳 {{ formatTime(agent.last_heartbeat) }}
           </p>
-
-          <Button
-            v-if="agent.service_type === 'oxidns'"
-            variant="outline"
-            class="mt-3 min-h-11 self-start"
-            @click="router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns')"
-          >
-            <ChartLine class="size-4" />
-            DNS 监控
-          </Button>
 
           <!-- 资源占用：CPU / 内存 / 磁盘 -->
           <div class="my-4 grid gap-2.5">
@@ -110,12 +100,14 @@
               </i>
               <b class="text-right font-mono font-medium text-foreground/80">{{ agent.system_metrics ? metric.text : '—' }}</b>
             </div>
-            <div v-if="agent.system_metrics" class="flex gap-4 font-mono text-[11px] text-muted-foreground">
-              <span>↑ {{ flowsOf(agent)[0].value }}</span>
-              <span>↓ {{ flowsOf(agent)[1].value }}</span>
-              <Button variant="ghost" size="sm" class="-my-1 ml-auto h-6 px-1.5 text-[11px]" @click="showMetricsDetail(agent)">
+            <div v-if="agent.system_metrics || agent.service_type === 'oxidns'" class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
+              <template v-if="agent.system_metrics">
+                <span>↑ {{ flowsOf(agent)[0].value }}</span>
+                <span>↓ {{ flowsOf(agent)[1].value }}</span>
+              </template>
+              <Button variant="ghost" size="sm" class="-my-1 ml-auto min-h-11 px-1.5 text-[11px] md:h-6 md:min-h-6" @click="agent.service_type === 'oxidns' ? router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns') : showMetricsDetail(agent)">
                 <ChartLine class="size-3" />
-                监控
+                {{ agent.service_type === 'oxidns' ? 'DNS 监控' : '监控' }}
               </Button>
             </div>
           </div>
@@ -138,54 +130,54 @@
             </Select>
           </div>
 
-          <AgentDNSFollow
-            v-if="agent.service_type === 'oxidns'"
-            :agent="agent"
-            :source-name="agents.find(item => item.id === agent.dns_follow?.source_agent_id)?.name"
-            :blocked="deploymentBusy(agent.id) || upgradeBusy(agent.id) || pushingIds.has(agent.id)"
-            @changed="loadAgents"
-          />
+          <div class="mb-3 min-w-0 divide-y divide-border/70 border-t border-border/70">
+            <AgentStatusRow v-if="submissionFailures[agent.id]" label="推送请求" status="失败" tone="danger">
+              <template #notice>
+                <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="submissionFailures[agent.id]" />
+                <AgentDNSChecks :checks="submissionFailures[agent.id].dns_checks" :checked-at="submissionFailures[agent.id].dns_checked_at" compact />
+              </template>
+            </AgentStatusRow>
+            <!-- 成功记录收起；正在执行的步骤、失败原因与恢复操作始终可见。 -->
+            <AgentDeploymentStatus v-if="deployments[agent.id]" :task="deployments[agent.id]" compact>
+              <template v-if="deploymentNeedsNotice(deployments[agent.id])" #notice>
+                <AgentOperationSteps :task="deployments[agent.id]" :busy="deploymentBusy(agent.id)" :show-current="false" :show-steps="false" />
+                <p v-if="deployments[agent.id].not_recorded && !deployments[agent.id].manual_rollback" class="m-0 text-warning-accent">后端暂未记录此发布，正在继续查询。可使用原发布编号重新提交。</p>
+                <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="deployments[agent.id]" />
+                <Button v-if="deployments[agent.id].status === 'ready'" variant="outline" size="sm" class="min-h-11" @click="activateDeployment(agent.id)">应用并启动</Button>
+                <Button v-if="deployments[agent.id].status === 'rollback_failed'" variant="outline" size="sm" class="min-h-11" @click="refreshDeployment(agent.id)">查询恢复状态</Button>
+                <Button v-if="!deployments[agent.id].manual_rollback && (deployments[agent.id].not_recorded || deployments[agent.id].retrying)" variant="outline" size="sm" class="min-h-11" :disabled="deployments[agent.id].retrying" @click="retryDeployment(agent.id)">{{ deployments[agent.id].retrying ? '正在重新提交…' : '重试同一次发布' }}</Button>
+              </template>
+              <template #details>
+                <AgentOperationSteps :task="deployments[agent.id]" :busy="deploymentBusy(agent.id)" :show-current="false" :show-message="!deploymentNeedsNotice(deployments[agent.id])" embedded />
+              </template>
+            </AgentDeploymentStatus>
+            <AgentDNSChecks v-if="deployments[agent.id]" :key="deployments[agent.id].deployment_id" :checks="deployments[agent.id].dns_checks" :checked-at="deployments[agent.id].dns_checked_at" compact />
 
-          <div v-if="submissionFailures[agent.id]" class="mt-3 min-w-0 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
-            <p class="mb-1 mt-0 text-xs font-medium text-destructive-accent">发布失败</p>
-            <AgentFailureDetails :show-progress-message="false" :task="submissionFailures[agent.id]" />
+            <AgentDNSFollow
+              v-if="agent.service_type === 'oxidns'"
+              :agent="agent"
+              :source-name="agents.find(item => item.id === agent.dns_follow?.source_agent_id)?.name"
+              :blocked="deploymentBusy(agent.id) || upgradeBusy(agent.id) || pushingIds.has(agent.id)"
+              @changed="loadAgents"
+            />
+
+            <AgentUpgradeStatus v-if="upgrades[agent.id]" :task="upgrades[agent.id]" :busy="upgradeBusy(agent.id)">
+              <template #actions>
+                <Button v-if="!upgrades[agent.id].update_id && upgrades[agent.id].status === 'unknown'" variant="outline" size="sm" class="min-h-11" :disabled="upgradeQuerying.has(agent.id)" @click="retryUnconfirmedUpgrade(agent.id)">重新确认并提交更新</Button>
+                <Button
+                  v-if="upgradeBusy(agent.id)"
+                  variant="outline"
+                  size="sm"
+                  class="min-h-11"
+                  :disabled="upgradeQuerying.has(agent.id)"
+                  @click="queryUpgrade(agent.id)"
+                >
+                  <Loader2 v-if="upgradeQuerying.has(agent.id)" class="size-3.5 animate-spin" />
+                  {{ upgradeQuerying.has(agent.id) ? '正在查询…' : '查询更新结果' }}
+                </Button>
+              </template>
+            </AgentUpgradeStatus>
           </div>
-          <!-- 事务发布与在线更新的进度：结果由 useAgentDeployments / useAgentUpgrades 轮询 -->
-          <section
-            v-if="deployments[agent.id]"
-            class="mb-3 rounded-xl border border-border bg-background/50 p-3 text-[12.5px]"
-            aria-live="polite"
-          >
-            <AgentDeploymentStatus :task="deployments[agent.id]" />
-            <AgentOperationSteps :task="deployments[agent.id]" :busy="deploymentBusy(agent.id)" :show-current="false" />
-            <p v-if="deployments[agent.id].not_recorded && !deployments[agent.id].manual_rollback" class="mt-1 mb-0 text-warning-accent">后端暂未记录此发布，正在继续查询。可使用原发布编号重新提交。</p>
-            <AgentFailureDetails :show-progress-message="false" :task="deployments[agent.id]" class="mt-1" />
-            <Button v-if="deployments[agent.id].status === 'ready'" variant="outline" size="sm" class="mt-2" @click="activateDeployment(agent.id)">应用并启动</Button>
-            <Button v-if="deployments[agent.id].status === 'rollback_failed'" variant="outline" size="sm" class="mt-2" @click="refreshDeployment(agent.id)">查询恢复状态</Button>
-            <Button v-if="!deployments[agent.id].manual_rollback && (deployments[agent.id].not_recorded || deployments[agent.id].retrying)" variant="outline" size="sm" class="mt-2" :disabled="deployments[agent.id].retrying" @click="retryDeployment(agent.id)">{{ deployments[agent.id].retrying ? '正在重新提交…' : '重试同一次发布' }}</Button>
-          </section>
-
-          <section
-            v-if="upgrades[agent.id]"
-            class="mb-3 rounded-xl border border-border bg-background/50 p-3 text-[12.5px]"
-            aria-live="polite"
-          >
-            <AgentOperationSteps :task="upgrades[agent.id]" kind="upgrade" :busy="upgradeBusy(agent.id)" />
-            <p v-if="upgrades[agent.id].target_version" class="mt-1 mb-0 text-muted-foreground">目标版本：{{ upgrades[agent.id].target_version }}</p>
-            <p v-if="upgrades[agent.id].error" class="mt-1 mb-0 break-words text-destructive-accent">{{ upgrades[agent.id].error }}</p>
-            <Button v-if="!upgrades[agent.id].update_id && upgrades[agent.id].status === 'unknown'" variant="outline" size="sm" class="mt-2 min-h-11" :disabled="upgradeQuerying.has(agent.id)" @click="retryUnconfirmedUpgrade(agent.id)">重新确认并提交更新</Button>
-            <Button
-              v-if="upgradeBusy(agent.id)"
-              variant="outline"
-              size="sm"
-              class="mt-2"
-              :disabled="upgradeQuerying.has(agent.id)"
-              @click="queryUpgrade(agent.id)"
-            >
-              <Loader2 v-if="upgradeQuerying.has(agent.id)" class="size-3.5 animate-spin" />
-              {{ upgradeQuerying.has(agent.id) ? '正在查询…' : '查询更新结果' }}
-            </Button>
-          </section>
 
           <div v-if="agent.has_update" class="mb-3 flex items-center gap-2 rounded-xl border border-primary-accent/30 bg-primary-soft/40 px-3 py-2 text-[12px]">
             <span class="min-w-0 flex-1 text-muted-foreground">
@@ -800,6 +792,9 @@ import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
+import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import AgentUpgradeStatus from '@/components/agents/AgentUpgradeStatus.vue'
 import { submitAgentRequests } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { upgradeLabels, useAgentUpgrades } from '@/composables/useAgentUpgrades'
@@ -811,6 +806,11 @@ import VChart from 'vue-echarts'
 
 // Register ECharts components
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
+
+const deploymentNeedsNotice = (task: AgentDeployment) =>
+  !['succeeded', 'rolled_back'].includes(task.status) || (task.status === 'rolled_back' && !task.manual_rollback)
+  || !!(task.query_error || task.pending || task.not_recorded || task.retrying || task.rollback_rejected
+    || task.error || task.error_details || task.rollback_error || task.rollback_error_details || task.rollback_message)
 
 const agents = ref<Agent[]>([])
 const { deployments, busy: deploymentBusy, track: trackDeployment, beginSubmission, endSubmission, refresh: refreshDeployment, activate: activateDeployment, retryPublish: retryDeployment, rollback: rollbackDeployment } = useAgentDeployments(() => { void loadAgents() })
