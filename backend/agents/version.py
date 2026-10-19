@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.27-go"
+LATEST_AGENT_VERSION = "1.8.28-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.28-go": {
+        "date": "2026-10-19",
+        "features": [
+            "普通 Shell 同机发布仅在 TUN 和 auto-redirect 同时开启时自动合并本机排除地址；任一关闭或未配置时，保留用户原有配置及排除项，不要求本机地址适配",
+            "保留 auto-route 与 auto-detect-interface 原值，不自动开启路由或重定向；继续由 Mihomo 原生校验检查配置合法性"
+        ]
+    },
     "1.8.27-go": {
         "date": "2026-10-19",
         "features": [
