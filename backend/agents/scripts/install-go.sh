@@ -201,6 +201,11 @@ done
 case "$choice" in
     1) ;;
     2)
+        # Preserve the only ownership/recovery record while gateway rules exist.
+        if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
+            echo "请先恢复客户端的网关和 DNS，再到 Linux 网关设置中恢复所选设备网络；网关恢复记录未清理，不能卸载 Agent。" >&2
+            exit 1
+        fi
         # Restore before removing the only binary able to recover the journal.
         if [ -f "$CONFIG_FILE" ] && [ -x /usr/local/bin/configflow-agent ]; then
             /usr/local/bin/configflow-agent -config "$CONFIG_FILE" -recover-and-exit
@@ -208,11 +213,21 @@ case "$choice" in
         remove_recovery_gate
         if [ "$INIT_SYSTEM" = "systemd" ]; then
             systemctl stop configflow-agent 2>/dev/null || true
+            if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
+                systemctl start configflow-agent 2>/dev/null || true
+                echo "卸载期间出现网关恢复记录；已保留 Agent，请先恢复客户端和所选设备网络。" >&2
+                exit 1
+            fi
             systemctl disable configflow-agent 2>/dev/null || true
             rm -f /etc/systemd/system/configflow-agent.service
             systemctl daemon-reload
         else
             rc-service configflow-agent stop 2>/dev/null || true
+            if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
+                rc-service configflow-agent start 2>/dev/null || true
+                echo "卸载期间出现网关恢复记录；已保留 Agent，请先恢复客户端和所选设备网络。" >&2
+                exit 1
+            fi
             rc-update del configflow-agent default 2>/dev/null || true
             rm -f /etc/init.d/configflow-agent
             rc-update -u

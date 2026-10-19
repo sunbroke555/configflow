@@ -1,0 +1,12 @@
+{
+  "artifact_restored": true,
+  "core_and_agent_files_unchanged": true,
+  "elapsed_seconds": 6.07,
+  "network_unchanged_both_namespaces": true,
+  "no_forwarding_journal": true,
+  "returncode": 1,
+  "session_id": "c6366135eece424eb454f36f91e1c53d",
+  "success": true,
+  "ui_command_only": true,
+  "waiting_for_browser_retry": true
+}

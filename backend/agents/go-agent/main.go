@@ -155,6 +155,7 @@ func main() {
 	startDiskCleanup(cfg)
 	StartHeartbeatLoop(cfg)
 	routes.ReapplyReturnRouting(toRoutesConfig(cfg))
+	routes.ReapplyLinuxGateway(toRoutesConfig(cfg))
 	routes.StartDNSWatchdog(toRoutesConfig(cfg))
 
 	// 4. 在前台启动 API 服务器 (这是一个阻塞操作)

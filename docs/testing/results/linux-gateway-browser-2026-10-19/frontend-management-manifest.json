@@ -1,0 +1,28 @@
+{
+  "kind": "configflow-disposable-gateway-ui",
+  "pid": 57540,
+  "started_at": "2026-10-19T07:10:45.393Z",
+  "status": "stopped",
+  "frontend_url": "http://127.0.0.1:13001",
+  "login_url": "http://127.0.0.1:13001/login",
+  "api_proxy_target": "http://127.0.0.1:18000",
+  "proxy_prefix": "/api",
+  "workspace": "/private/tmp/configflow-gateway-lab-frontend-LZSHSC",
+  "source_root": "<checkout>/frontend",
+  "input_root": "/private/tmp/configflow-gateway-lab-frontend-udt35C/frontend",
+  "parent_snapshot_sha256": "dc335b29f11192ff4cdc3399d24001c8b3eeb2643aeedfbe62e44220c34d35bf",
+  "refreshed_files": [
+    "src/components/generate/LinuxGatewaySettings.vue"
+  ],
+  "snapshot_root": "/private/tmp/configflow-gateway-lab-frontend-LZSHSC/frontend",
+  "snapshot_sha256": "a659bfea796559355a056d339e5539f75b952a126080556fc5efad9e17235b97",
+  "snapshot_file_count": 313,
+  "source_manifest": "/private/tmp/configflow-gateway-lab-frontend-LZSHSC/source-manifest.json",
+  "dependency_directory": "<checkout>/frontend/node_modules",
+  "hmr": false,
+  "file_watching": false,
+  "original_product_config": "<checkout>/frontend/vite.config.mts",
+  "product_config": "/private/tmp/configflow-gateway-lab-frontend-LZSHSC/frontend/vite.config.mts",
+  "stopped_at": "2026-10-19T07:13:20.898Z",
+  "stop_reason": "SIGTERM"
+}

@@ -1,0 +1,51 @@
+{
+  "agent_ids_preserved": true,
+  "core_bytes_permissions_ownership_mtime_and_pids_preserved": true,
+  "elapsed_seconds": 2.18,
+  "gateway_session_count_after": 2,
+  "gateway_session_count_before": 2,
+  "interactive_selection": "1: keep existing configuration",
+  "lab_url_adapter": {
+    "agent_heartbeat_lifecycle": "Ordinary mode persists the copied window.origin server URL http://127.0.0.1:13001. After the temporary gateway-loopback relay was closed, these two Agents could no longer reach the isolated backend for heartbeats; the final UI therefore reported 0/2 online. Keeping the experimental relay running would be required for continued heartbeats. The verified core files/processes and gateway network remained unchanged.",
+    "forward": "192.0.2.1:8000",
+    "host_network_modified": false,
+    "listen": "cfgl-gateway 127.0.0.1:13001",
+    "persisted_agent_server_urls": {
+      "mihomo": "http://127.0.0.1:13001",
+      "oxidns": "http://127.0.0.1:13001"
+    },
+    "product_command_modified": false,
+    "purpose": "The copied ordinary UI command uses window.origin http://127.0.0.1:13001. The disposable gateway namespace needs a local relay to reach the same backend.",
+    "removed_after_install": true
+  },
+  "listeners_unchanged_after_relay_removed": true,
+  "network_nft_routes_sysctl_unchanged_both_namespaces": true,
+  "no_forwarding_journal_or_managed_table": true,
+  "no_new_gateway_session": true,
+  "original_ui_command_sha256": "7473e2b5d1b8576d66b2f78f9eec7d8cc9c3ae0f72009e96bd6b9c25a27aec43",
+  "original_ui_command_unmodified": true,
+  "probe": {
+    "mode": "ordinary",
+    "probes": [
+      {
+        "baseline": null,
+        "ip_forward": "0",
+        "managed_table_absent": true,
+        "name": "ordinary",
+        "unselected_connection_rejected": true
+      }
+    ],
+    "success": true
+  },
+  "root_network_matches_initial": true,
+  "side_effect_boundary": {
+    "agent_identity_preserved": true,
+    "core_config_binaries_units_metadata_unchanged": true,
+    "core_services_not_restarted": true,
+    "gateway_sessions_and_network_unchanged": true,
+    "ordinary_agent_service_updates_allowed": true
+  },
+  "success": true,
+  "temporary_relay_only_gateway_loopback": true,
+  "temporary_relay_removed": true
+}

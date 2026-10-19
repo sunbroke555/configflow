@@ -21,6 +21,7 @@ func RestartService(cfg *Config) ([]byte, error) {
 	log.Print("Executing restart command")
 	output, err := executeURLCommand(restartCommand, cfg.Token)
 	if err == nil {
+		ReconcileLinuxGateway(cfg)
 		return output, nil
 	}
 
@@ -33,6 +34,7 @@ func RestartService(cfg *Config) ([]byte, error) {
 		if startErr != nil {
 			return nil, withPreviousDiagnostic("Restart and start both failed", err, startErr)
 		}
+		ReconcileLinuxGateway(cfg)
 		return output, nil
 	}
 
@@ -78,6 +80,7 @@ func RestartHandler(cfg *Config) http.HandlerFunc {
 				}
 
 				log.Println("Service started successfully.")
+				ReconcileLinuxGateway(cfg)
 				JsonResponse(w, http.StatusOK, map[string]string{"success": "true", "message": "Service started (was not running)"})
 				return
 			}
@@ -87,6 +90,7 @@ func RestartHandler(cfg *Config) http.HandlerFunc {
 		}
 
 		log.Println("Service restarted successfully.")
+		ReconcileLinuxGateway(cfg)
 		JsonResponse(w, http.StatusOK, map[string]string{"success": "true", "message": "Service restarted"})
 	}
 }

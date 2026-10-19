@@ -44,11 +44,16 @@ def setup_before_request(app):
         # snapshots without a panel JWT. Snapshot creation still requires login.
         if request.endpoint in {'agents.download_agent_binary', 'agents.download_install_command'}:
             return None
+        # The gateway installer authenticates a short-lived session capability.
+        if request.endpoint in {'agents.gateway_installation_script', 'agents.gateway_installation_enroll'}:
+            return None
         # These routes validate their own Agent credentials (or, for upgrade
         # status, an admin JWT). Do not require a JWT before their checks run.
         if request.endpoint in {
             'agents.agent_heartbeat', 'agents.agent_traffic_report', 'agents.get_agent_config',
             'agents.get_agent_upgrade', 'agents.report_agent_upgrade',
+            'custom_config.linux_gateway_rule_provider', 'profiles.linux_gateway_rule_provider',
+            'custom_config.linux_gateway_source_provider', 'profiles.linux_gateway_source_provider',
         }:
             return None
         profile_public_patterns = (

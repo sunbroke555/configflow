@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "vm_initial_network_unchanged": true,
+  "vm_root_nsswitch_unchanged": true,
+  "lab_namespaces_and_units_stopped": true,
+  "ssh_tunnel_closed": true,
+  "qemu_exited": true,
+  "host_default_route_unchanged": true,
+  "host_interface_inventory_unchanged": true,
+  "private_workspace_retained_for_review": false,
+  "host_api_and_vm_ssh_listeners_closed": true,
+  "backend_and_guest_relay_stopped_before_namespace_cleanup": true,
+  "four_test_services_stopped_and_disabled": true,
+  "recorded_qemu_and_tunnel_pids_absent": true,
+  "private_workspace_deleted": true,
+  "private_vm_disk_credentials_keys_commands_deleted": true
+}

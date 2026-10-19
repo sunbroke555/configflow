@@ -478,9 +478,22 @@ def register_agent():
             logger.error("Failed to parse JSON data")
             return jsonify({'success': False, 'message': 'Invalid JSON data'}), 400
 
+        # A gateway installer gets a short-lived capability for exactly these
+        # two service identities. Never reveal the global registration key.
+        installation_id = agent_data.pop('installation_id', None)
+        installation_token = agent_data.pop('installation_token', None)
+        installation_profile = None
+        if installation_id is not None or installation_token is not None:
+            from backend.agents.gateway_installation import registration_profile, InstallationError
+            try:
+                installation_profile = registration_profile(get_repository(), installation_id, installation_token, agent_data)
+            except InstallationError as exc:
+                return jsonify(success=False, message=str(exc)), exc.status
+            agent_data['profile_id'] = installation_profile
+
         # 可选的注册密钥验证
         registration_key = os.environ.get('AGENT_REGISTRATION_KEY', '')
-        if registration_key:
+        if registration_key and installation_profile is None:
             provided_key = agent_data.get('registration_key', '')
             if provided_key != registration_key:
                 logger.warning("Agent 注册被拒绝：注册密钥不匹配")
@@ -510,7 +523,7 @@ def register_agent():
                 is_docker_ip = True
 
         # 如果是 Docker 容器 IP 或没有提供 host，使用客户端 IP
-        if not agent_host or is_docker_ip:
+        if installation_profile is None and (not agent_host or is_docker_ip):
             agent_data['host'] = client_ip
 
         logger.info("Agent注册字段: %s", _registration_log_fields(agent_data))
@@ -522,12 +535,23 @@ def register_agent():
         )
 
         # host 已按真实客户端 IP 归一化后，才允许 Manager 做 name/host 匹配。
-        result = agent_manager.register_agent(agent_data, existing_token=existing_token)
+        if installation_profile is not None:
+            from backend.agents.gateway_installation import register as register_installation, InstallationError
+            try:
+                result = register_installation(get_repository(), agent_manager, installation_id,
+                                               installation_token, agent_data, existing_token)
+            except InstallationError as exc:
+                return jsonify(success=False, message=str(exc)), exc.status
+        else:
+            result = agent_manager.register_agent(agent_data, existing_token=existing_token)
 
         response_data = {'success': True, **result}
         logger.info(f"注册成功: {result.get('id')}")
 
         return jsonify(response_data), 200
+
+    except AgentDeploymentConflict as exc:
+        return jsonify(success=False, message=str(exc)), 409
 
     except PermissionError:
         return jsonify({'success': False, 'message': 'Unauthorized'}), 401
@@ -1129,6 +1153,9 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
     from backend.utils.provider_delivery import prepare_provider_bundle
 
     service_type = agent.get('service_type', 'mihomo')
+    if service_type == 'mihomo' and (config_data.get('mihomo', {}).get('linux_gateway') or {}).get('enabled'):
+        from backend.agents.linux_gateway import require_gateway_agent
+        require_gateway_agent(agent)
     if phase_progress is not None:
         service_name = {'mihomo': 'Mihomo', 'mosdns': 'MosDNS', 'oxidns': 'OxiDNS'}.get(service_type, service_type)
         phase_progress(f'正在生成 {service_name} config.yaml 并检查基础配置', force=True)

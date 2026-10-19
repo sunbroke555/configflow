@@ -195,6 +195,10 @@ def generate_go_aio_install_script(
     mihomo_service_binary: str = "mihomo",
     oxidns_service_binary: str = "oxidns",
     install_core: bool = False,
+    non_interactive: bool = False,
+    verified_agent_path: str = "",
+    installation_id: str = "",
+    installation_token: str = "",
 ) -> str:
     """Manage two isolated native Agents, optionally installing missing cores.
 
@@ -203,6 +207,18 @@ def generate_go_aio_install_script(
     """
     if not isinstance(install_core, bool):
         raise ValueError("install_core 必须为 true 或 false")
+    if not isinstance(non_interactive, bool):
+        raise ValueError("non_interactive must be a boolean")
+    if verified_agent_path and verified_agent_path != "$GATEWAY_STAGE/configflow-agent":
+        raise ValueError("Preverified Agent binary is only supported inside the gateway installer")
+    if verified_agent_path and not non_interactive:
+        raise ValueError("Preverified Agent requires non-interactive installation")
+    if bool(installation_id) != bool(installation_token):
+        raise ValueError("Installation id and token must be supplied together")
+    if installation_id and not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", installation_id):
+        raise ValueError("Invalid installation id")
+    if installation_token and not re.fullmatch(r"[A-Za-z0-9_.-]{16,512}", installation_token):
+        raise ValueError("Invalid installation token")
     if not isinstance(agent_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", agent_name):
         raise ValueError("Invalid agent name: use letters, numbers, hyphens or underscores")
     ports = []
@@ -262,6 +278,9 @@ def generate_go_aio_install_script(
             "heartbeat_interval": 30, "deployment_health_timeout": 30,
             "agent_id": "__CONFIGFLOW_AGENT_ID__", "token": "__CONFIGFLOW_TOKEN__",
         }
+        if installation_id:
+            cfg["installation_id"] = installation_id
+            cfg["installation_token"] = installation_token
         replacements[f"{service}_config_json"] = json.dumps(cfg, ensure_ascii=True, indent=2)
         replacements[f"{service}_config_path_shell"] = shlex.quote(path)
         replacements[f"{service}_service_unit_shell"] = shlex.quote(unit)
@@ -311,8 +330,15 @@ fi''',
 mkdir -p "$(dirname "$AGENT_ROOT")"
 ''',
         })
+    template = INSTALL_GO_AIO_SCRIPT_TEMPLATE
+    if non_interactive:
+        template = template.replace('read -r choice < /dev/tty', 'choice=1 # Gateway setup already selected install in the web wizard')
+    if verified_agent_path:
+        start = template.index('if command -v wget >/dev/null 2>&1; then\n    wget -q -O "$BINARY_TMP"')
+        end = template.index('\nchmod 755 "$BINARY_TMP"', start)
+        template = template[:start] + 'cp "$GATEWAY_STAGE/configflow-agent" "$BINARY_TMP"' + template[end:]
     script = re.sub(r"\{(" + "|".join(replacements) + r")\}",
-                    lambda match: replacements[match.group(1)], INSTALL_GO_AIO_SCRIPT_TEMPLATE)
+                    lambda match: replacements[match.group(1)], template)
     if install_core:
         script = script.replace("#!/bin/sh\n", f"#!/bin/sh\n{AGENT_CORE_INSTALL_INTERFACE}\n", 1)
     return with_install_output(script)

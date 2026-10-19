@@ -1,0 +1,270 @@
+{
+  "probe": {
+    "mode": "active",
+    "probes": [
+      {
+        "http": {
+          "at": 1792393079.3992505,
+          "destination_ip": "203.0.113.10",
+          "event": "http_request",
+          "path": "/hold/direct-94bfb29f68c2409080faedd49c00b242",
+          "source_ip": "192.0.2.2"
+        },
+        "mihomo_connections": [],
+        "name": "direct",
+        "socks_connections": []
+      },
+      {
+        "http": {
+          "at": 1792393085.414692,
+          "destination_ip": "203.0.113.20",
+          "event": "http_request",
+          "path": "/hold/selected-ip-602b7567198c46bcba6ef7d6db96476d",
+          "source_ip": "203.0.113.20"
+        },
+        "mihomo_connections": [
+          {
+            "chains": [
+              "LAB-SOCKS",
+              "LAB-PROXY"
+            ],
+            "metadata": {
+              "destinationGeoIP": null,
+              "destinationIP": "203.0.113.20",
+              "destinationIPASN": "",
+              "destinationPort": "18080",
+              "dnsMode": "normal",
+              "dscp": 0,
+              "host": "",
+              "inboundIP": "192.0.2.2",
+              "inboundName": "DEFAULT-TUN",
+              "inboundPort": "36303",
+              "inboundUser": "",
+              "network": "tcp",
+              "process": "",
+              "processPath": "",
+              "rematchName": "",
+              "remoteDestination": "203.0.113.2",
+              "sniffHost": "",
+              "sourceGeoIP": null,
+              "sourceIP": "192.0.2.100",
+              "sourceIPASN": "",
+              "sourcePort": "54660",
+              "specialProxy": "",
+              "specialRules": "",
+              "type": "Redir",
+              "uid": 0
+            },
+            "rule": "RuleSet"
+          }
+        ],
+        "name": "selected-ip",
+        "socks_connections": [
+          {
+            "at": 1792393085.4143276,
+            "destination_ip": "203.0.113.20",
+            "event": "socks_connect",
+            "host": "203.0.113.20",
+            "port": 18080
+          }
+        ]
+      },
+      {
+        "answers": {
+          "tcp": [
+            "104.20.23.154",
+            "172.66.147.243"
+          ],
+          "udp": [
+            "172.66.147.243",
+            "104.20.23.154"
+          ]
+        },
+        "direct_domain": "example.com",
+        "fake_ip": "198.18.0.6",
+        "fresh_probe_domain": "19bfdb43fe12481c836cdd3f39fab34e.proxy.lab.invalid",
+        "fresh_probe_fake_ip": "198.18.0.5",
+        "ip_doh_tls_packets": 16,
+        "mihomo_dns_dnat_after": {
+          "inet/output/70": {
+            "bytes": 0,
+            "packets": 0
+          },
+          "inet/prerouting/91": {
+            "bytes": 0,
+            "packets": 0
+          }
+        },
+        "mihomo_dns_dnat_before": {
+          "inet/output/70": {
+            "bytes": 0,
+            "packets": 0
+          },
+          "inet/prerouting/91": {
+            "bytes": 0,
+            "packets": 0
+          }
+        },
+        "name": "dns-through-oxidns",
+        "packet_evidence": {
+          "oxidns_to_mihomo": {
+            "queries": [
+              {
+                "destination": "127.0.0.1",
+                "destination_port": 1053,
+                "id": 10,
+                "kind": "dns",
+                "name": "19bfdb43fe12481c836cdd3f39fab34e.proxy.lab.invalid",
+                "qtype": 1,
+                "rcode": 0,
+                "response": false,
+                "source": "127.0.0.1",
+                "source_port": 36812,
+                "transport": "udp"
+              }
+            ],
+            "replies": [
+              {
+                "destination": "127.0.0.1",
+                "destination_port": 36812,
+                "id": 10,
+                "kind": "dns",
+                "name": "19bfdb43fe12481c836cdd3f39fab34e.proxy.lab.invalid",
+                "qtype": 1,
+                "rcode": 0,
+                "response": true,
+                "source": "127.0.0.1",
+                "source_port": 1053,
+                "transport": "udp"
+              }
+            ]
+          },
+          "tcp": {
+            "queries": [
+              {
+                "destination": "192.0.2.2",
+                "destination_port": 53,
+                "id": 62555,
+                "kind": "dns",
+                "name": "example.com",
+                "qtype": 1,
+                "rcode": 0,
+                "response": false,
+                "source": "192.0.2.100",
+                "source_port": 43168,
+                "transport": "tcp"
+              }
+            ],
+            "replies": [
+              {
+                "destination": "192.0.2.100",
+                "destination_port": 43168,
+                "id": 62555,
+                "kind": "dns",
+                "name": "example.com",
+                "qtype": 1,
+                "rcode": 0,
+                "response": true,
+                "source": "192.0.2.2",
+                "source_port": 53,
+                "transport": "tcp"
+              }
+            ]
+          },
+          "udp": {
+            "queries": [
+              {
+                "destination": "192.0.2.2",
+                "destination_port": 53,
+                "id": 35805,
+                "kind": "dns",
+                "name": "example.com",
+                "qtype": 1,
+                "rcode": 0,
+                "response": false,
+                "source": "192.0.2.100",
+                "source_port": 46695,
+                "transport": "udp"
+              }
+            ],
+            "replies": [
+              {
+                "destination": "192.0.2.100",
+                "destination_port": 46695,
+                "id": 35805,
+                "kind": "dns",
+                "name": "example.com",
+                "qtype": 1,
+                "rcode": 0,
+                "response": true,
+                "source": "192.0.2.2",
+                "source_port": 53,
+                "transport": "udp"
+              }
+            ]
+          }
+        },
+        "pcap": "/var/lib/configflow-gateway-lab/dns-cb708608df14472e9572165d4c168a07.pcap",
+        "proxy_domain": "proxy.lab.invalid"
+      },
+      {
+        "http": {
+          "at": 1792393091.9991293,
+          "destination_ip": "203.0.113.30",
+          "event": "http_request",
+          "path": "/hold/fake-ip-80265fa03bd5464f988cec1ebac171e7",
+          "source_ip": "203.0.113.30"
+        },
+        "mihomo_connections": [
+          {
+            "chains": [
+              "LAB-SOCKS",
+              "LAB-PROXY"
+            ],
+            "metadata": {
+              "destinationGeoIP": null,
+              "destinationIP": "",
+              "destinationIPASN": "",
+              "destinationPort": "18080",
+              "dnsMode": "fake-ip",
+              "dscp": 0,
+              "host": "proxy.lab.invalid",
+              "inboundIP": "192.0.2.2",
+              "inboundName": "DEFAULT-TUN",
+              "inboundPort": "36303",
+              "inboundUser": "",
+              "network": "tcp",
+              "process": "",
+              "processPath": "",
+              "rematchName": "",
+              "remoteDestination": "203.0.113.2",
+              "sniffHost": "",
+              "sourceGeoIP": null,
+              "sourceIP": "192.0.2.100",
+              "sourceIPASN": "",
+              "sourcePort": "45602",
+              "specialProxy": "",
+              "specialRules": "",
+              "type": "Redir",
+              "uid": 0
+            },
+            "rule": "RuleSet"
+          }
+        ],
+        "name": "fake-ip",
+        "socks_connections": [
+          {
+            "at": 1792393091.998516,
+            "destination_ip": "203.0.113.30",
+            "event": "socks_connect",
+            "host": "proxy.lab.invalid",
+            "port": 18080
+          }
+        ]
+      }
+    ],
+    "success": true
+  },
+  "root_network_unchanged": true,
+  "success": true
+}

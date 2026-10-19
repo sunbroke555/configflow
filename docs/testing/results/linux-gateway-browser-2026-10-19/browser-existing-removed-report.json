@@ -1,0 +1,19 @@
+{
+  "no_forwarding_journal": true,
+  "preapply_network_exactly_restored": true,
+  "probe": {
+    "mode": "removed",
+    "probes": [
+      {
+        "baseline": "browser-existing-preapply",
+        "ip_forward": "0",
+        "managed_table_absent": true,
+        "name": "removed",
+        "unselected_connection_rejected": true
+      }
+    ],
+    "success": true
+  },
+  "root_network_unchanged": true,
+  "success": true
+}

@@ -1022,6 +1022,7 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 		return
 	}
 	cleanupDeployments(cfg, s.DeploymentID)
+	ReconcileLinuxGateway(cfg)
 }
 func rollbackDeployment(cfg *Config, s *DeploymentState, start bool) {
 	s.RollbackError, s.RollbackErrorDetails = "", ""
@@ -1120,6 +1121,8 @@ func rollbackDeployment(cfg *Config, s *DeploymentState, start bool) {
 	}
 	if e := saveDeployment(cfg, s, status); e != nil {
 		rollbackErr(e)
+	} else if status == "rolled_back" {
+		ReconcileLinuxGateway(cfg)
 	}
 }
 

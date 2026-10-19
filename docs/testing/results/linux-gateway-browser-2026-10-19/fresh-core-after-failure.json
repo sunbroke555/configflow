@@ -1,0 +1,12 @@
+{
+  "/etc/mihomo/.configflow-gateway-core-v1": null,
+  "/etc/mihomo/config.yaml": null,
+  "/etc/oxidns/.configflow-gateway-core-v1": null,
+  "/etc/oxidns/config.yaml": null,
+  "/etc/systemd/system/mihomo.service": null,
+  "/etc/systemd/system/oxidns.service": null,
+  "/opt/configflow-agent/mihomo/config.json": null,
+  "/opt/configflow-agent/oxidns/config.json": null,
+  "/usr/local/bin/mihomo": null,
+  "/usr/local/bin/oxidns": null
+}

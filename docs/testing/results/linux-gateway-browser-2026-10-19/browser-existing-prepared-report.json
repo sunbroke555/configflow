@@ -1,0 +1,17 @@
+{
+  "agent_ids": {
+    "mihomo": "agent_1792392689304_61a167",
+    "oxidns": "agent_1792392689456_f793eb"
+  },
+  "core_files_and_metadata_unchanged": true,
+  "network_unchanged": true,
+  "no_session_or_install_command_executed": true,
+  "only_lab_ownership_markers_moved": true,
+  "service_pids": {
+    "configflow-agent-mihomo": 3659,
+    "configflow-agent-oxidns": 3741,
+    "mihomo": 4039,
+    "oxidns": 4673
+  },
+  "success": true
+}

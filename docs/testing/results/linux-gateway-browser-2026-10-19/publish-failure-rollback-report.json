@@ -1,0 +1,34 @@
+{
+  "bootstrap_bytes_and_permissions_restored": true,
+  "failed_stage": "starting",
+  "fault_removed": true,
+  "healthy_services_not_restarted": true,
+  "managed_file_checks": [
+    {
+      "original_existed": true,
+      "path": "config.yaml",
+      "restored": true
+    },
+    {
+      "original_existed": false,
+      "path": "rules/rule_70f50f13bac996e2_domain.txt",
+      "restored": true
+    },
+    {
+      "original_existed": false,
+      "path": "rules/rule_73d85a7b0c7b1ea8_domain.txt",
+      "restored": true
+    }
+  ],
+  "no_forwarding_journal": true,
+  "ready_for_browser_retry": true,
+  "real_start_failure": true,
+  "rollback_status": "rolled_back",
+  "services_healthy": {
+    "configflow-agent-mihomo": 3659,
+    "configflow-agent-oxidns": 3741,
+    "mihomo": 4039,
+    "oxidns": 4106
+  },
+  "success": true
+}

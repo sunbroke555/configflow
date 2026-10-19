@@ -1,0 +1,1516 @@
+{
+  "links": [
+    {
+      "addr_info": [
+        {
+          "family": "inet",
+          "label": "lo",
+          "local": "127.0.0.1",
+          "prefixlen": 8,
+          "scope": "host"
+        }
+      ],
+      "flags": [
+        "LOOPBACK",
+        "UP",
+        "LOWER_UP"
+      ],
+      "ifname": "lo",
+      "mtu": 65536
+    },
+    {
+      "addr_info": [
+        {
+          "family": "inet",
+          "label": "lan0",
+          "local": "192.0.2.2",
+          "prefixlen": 24,
+          "scope": "global"
+        }
+      ],
+      "flags": [
+        "BROADCAST",
+        "MULTICAST",
+        "UP",
+        "LOWER_UP"
+      ],
+      "ifname": "lan0",
+      "mtu": 1500
+    },
+    {
+      "addr_info": [
+        {
+          "broadcast": "198.18.0.3",
+          "family": "inet",
+          "label": "Mihomo",
+          "local": "198.18.0.1",
+          "prefixlen": 30,
+          "scope": "global"
+        }
+      ],
+      "flags": [
+        "POINTOPOINT",
+        "MULTICAST",
+        "NOARP",
+        "UP",
+        "LOWER_UP"
+      ],
+      "ifname": "Mihomo",
+      "mtu": 9000
+    }
+  ],
+  "nft": {
+    "nftables": [
+      {
+        "table": {
+          "family": "inet",
+          "name": "mihomo"
+        }
+      },
+      {
+        "chain": {
+          "family": "inet",
+          "hook": "output",
+          "name": "output",
+          "policy": "accept",
+          "prio": -150,
+          "table": "mihomo",
+          "type": "nat"
+        }
+      },
+      {
+        "chain": {
+          "family": "inet",
+          "hook": "output",
+          "name": "output_udp_icmp",
+          "policy": "accept",
+          "prio": -150,
+          "table": "mihomo",
+          "type": "route"
+        }
+      },
+      {
+        "chain": {
+          "family": "inet",
+          "hook": "prerouting",
+          "name": "prerouting",
+          "policy": "accept",
+          "prio": -99,
+          "table": "mihomo",
+          "type": "nat"
+        }
+      },
+      {
+        "chain": {
+          "family": "inet",
+          "hook": "prerouting",
+          "name": "prerouting_udp_icmp",
+          "policy": "accept",
+          "prio": -98,
+          "table": "mihomo",
+          "type": "filter"
+        }
+      },
+      {
+        "set": {
+          "elem": [
+            {
+              "prefix": {
+                "addr": "198.18.0.0",
+                "len": 16
+              }
+            },
+            "203.0.113.20"
+          ],
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "inet4_route_address_set",
+          "table": "mihomo",
+          "type": "ipv4_addr"
+        }
+      },
+      {
+        "set": {
+          "elem": [
+            {
+              "prefix": {
+                "addr": "127.0.0.0",
+                "len": 8
+              }
+            },
+            {
+              "prefix": {
+                "addr": "192.0.2.0",
+                "len": 24
+              }
+            },
+            {
+              "prefix": {
+                "addr": "198.18.0.0",
+                "len": 30
+              }
+            }
+          ],
+          "family": "inet",
+          "flags": [
+            "interval"
+          ],
+          "name": "inet4_local_address_set",
+          "table": "mihomo",
+          "type": "ipv4_addr"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "op": "==",
+                "right": 8228
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "127.0.0.0",
+                        "len": 8
+                      }
+                    },
+                    "192.0.2.2"
+                  ]
+                }
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "oifname"
+                  }
+                },
+                "op": "!=",
+                "right": "lo"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    "tcp",
+                    "udp"
+                  ]
+                }
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "th"
+                  }
+                },
+                "op": "==",
+                "right": 53
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "dnat": {
+                "addr": "198.18.0.2",
+                "family": "ip"
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": "@inet4_local_address_set"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "!=",
+                "right": "@inet4_route_address_set"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "tcp option": {
+                    "name": "mptcp"
+                  }
+                },
+                "op": "==",
+                "right": true
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "redirect": {
+                "port": 39131
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "!=",
+                "right": {
+                  "set": [
+                    "icmp",
+                    "udp",
+                    "ipv6-icmp"
+                  ]
+                }
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "op": "==",
+                "right": 8228
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                },
+                "op": "==",
+                "right": 8228
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "127.0.0.0",
+                        "len": 8
+                      }
+                    },
+                    "192.0.2.2"
+                  ]
+                }
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": "@inet4_local_address_set"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "!=",
+                "right": "@inet4_route_address_set"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "tcp option": {
+                    "name": "mptcp"
+                  }
+                },
+                "op": "==",
+                "right": true
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "output_udp_icmp",
+          "expr": [
+            {
+              "mangle": {
+                "key": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "value": 8227
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                }
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "Mihomo"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    {
+                      "prefix": {
+                        "addr": "127.0.0.0",
+                        "len": 8
+                      }
+                    },
+                    "192.0.2.2"
+                  ]
+                }
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "saddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": "@inet4_local_address_set"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": {
+                  "set": [
+                    "tcp",
+                    "udp"
+                  ]
+                }
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "dport",
+                    "protocol": "th"
+                  }
+                },
+                "op": "==",
+                "right": 53
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "dnat": {
+                "addr": "198.18.0.2",
+                "family": "ip"
+              }
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "==",
+                "right": "@inet4_local_address_set"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "payload": {
+                    "field": "daddr",
+                    "protocol": "ip"
+                  }
+                },
+                "op": "!=",
+                "right": "@inet4_route_address_set"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "tcp option": {
+                    "name": "mptcp"
+                  }
+                },
+                "op": "==",
+                "right": true
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "drop": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "op": "==",
+                "right": "ipv4"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "==",
+                "right": "tcp"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "redirect": {
+                "port": 39131
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting",
+          "expr": [
+            {
+              "mangle": {
+                "key": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "value": 8227
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                }
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "op": "!=",
+                "right": {
+                  "set": [
+                    "icmp",
+                    "udp",
+                    "ipv6-icmp"
+                  ]
+                }
+              }
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "==",
+                "right": "Mihomo"
+              }
+            },
+            {
+              "counter": {}
+            },
+            {
+              "return": null
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "meta": {
+                    "key": "iifname"
+                  }
+                },
+                "op": "!=",
+                "right": "Mihomo"
+              }
+            },
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                },
+                "op": "==",
+                "right": 8227
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                }
+              }
+            },
+            {
+              "counter": {}
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      },
+      {
+        "rule": {
+          "chain": "prerouting_udp_icmp",
+          "expr": [
+            {
+              "match": {
+                "left": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                },
+                "op": "!=",
+                "right": 8227
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                },
+                "value": 8228
+              }
+            },
+            {
+              "mangle": {
+                "key": {
+                  "ct": {
+                    "key": "mark"
+                  }
+                },
+                "value": {
+                  "meta": {
+                    "key": "mark"
+                  }
+                }
+              }
+            },
+            {
+              "counter": {}
+            }
+          ],
+          "family": "inet",
+          "table": "mihomo"
+        }
+      }
+    ]
+  },
+  "routes": [
+    {
+      "dev": "Mihomo",
+      "dst": "0.0.0.0/2",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "64.0.0.0/3",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "96.0.0.0/4",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "112.0.0.0/5",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "120.0.0.0/6",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "124.0.0.0/7",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "126.0.0.0/8",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "128.0.0.0/2",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.0.0/23",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.0/31",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.3",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.4/30",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.8/29",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.16/28",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.32/27",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.64/26",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.2.128/25",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.3.0/24",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.4.0/22",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.8.0/21",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.16.0/20",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.32.0/19",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.64.0/18",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.0.128.0/17",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.1.0.0/16",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.2.0.0/15",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.4.0.0/14",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.8.0.0/13",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.16.0.0/12",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.32.0.0/11",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.64.0.0/10",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "192.128.0.0/9",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "193.0.0.0/8",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "194.0.0.0/7",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "196.0.0.0/6",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "200.0.0.0/5",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "208.0.0.0/4",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "224.0.0.0/3",
+      "flags": [],
+      "gateway": "198.18.0.2",
+      "table": "2022"
+    },
+    {
+      "dev": "lan0",
+      "dst": "default",
+      "flags": [],
+      "gateway": "192.0.2.1"
+    },
+    {
+      "dev": "lan0",
+      "dst": "192.0.2.0/24",
+      "flags": [],
+      "prefsrc": "192.0.2.2",
+      "protocol": "kernel",
+      "scope": "link"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "198.18.0.0/30",
+      "flags": [],
+      "prefsrc": "198.18.0.1",
+      "protocol": "kernel",
+      "scope": "link"
+    },
+    {
+      "dev": "lo",
+      "dst": "127.0.0.0/8",
+      "flags": [],
+      "prefsrc": "127.0.0.1",
+      "protocol": "kernel",
+      "scope": "host",
+      "table": "local",
+      "type": "local"
+    },
+    {
+      "dev": "lo",
+      "dst": "127.0.0.1",
+      "flags": [],
+      "prefsrc": "127.0.0.1",
+      "protocol": "kernel",
+      "scope": "host",
+      "table": "local",
+      "type": "local"
+    },
+    {
+      "dev": "lo",
+      "dst": "127.255.255.255",
+      "flags": [],
+      "prefsrc": "127.0.0.1",
+      "protocol": "kernel",
+      "scope": "link",
+      "table": "local",
+      "type": "broadcast"
+    },
+    {
+      "dev": "lan0",
+      "dst": "192.0.2.2",
+      "flags": [],
+      "prefsrc": "192.0.2.2",
+      "protocol": "kernel",
+      "scope": "host",
+      "table": "local",
+      "type": "local"
+    },
+    {
+      "dev": "lan0",
+      "dst": "192.0.2.255",
+      "flags": [],
+      "prefsrc": "192.0.2.2",
+      "protocol": "kernel",
+      "scope": "link",
+      "table": "local",
+      "type": "broadcast"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "198.18.0.1",
+      "flags": [],
+      "prefsrc": "198.18.0.1",
+      "protocol": "kernel",
+      "scope": "host",
+      "table": "local",
+      "type": "local"
+    },
+    {
+      "dev": "Mihomo",
+      "dst": "198.18.0.3",
+      "flags": [],
+      "prefsrc": "198.18.0.1",
+      "protocol": "kernel",
+      "scope": "link",
+      "table": "local",
+      "type": "broadcast"
+    }
+  ],
+  "rules": [
+    {
+      "priority": 0,
+      "src": "all",
+      "table": "local"
+    },
+    {
+      "fwmark": "0x2024",
+      "goto": 9002,
+      "priority": 9000,
+      "src": "all"
+    },
+    {
+      "fwmark": "0x2023",
+      "priority": 9001,
+      "src": "all",
+      "table": "2022"
+    },
+    {
+      "nop": null,
+      "priority": 9002,
+      "src": "all"
+    },
+    {
+      "priority": 32766,
+      "src": "all",
+      "table": "main"
+    },
+    {
+      "priority": 32767,
+      "src": "all",
+      "table": "default"
+    },
+    {
+      "priority": 32768,
+      "src": "all",
+      "table": "2022"
+    }
+  ],
+  "sysctls": {
+    "net/ipv4/conf/Mihomo/accept_local": "0",
+    "net/ipv4/conf/Mihomo/accept_redirects": "1",
+    "net/ipv4/conf/Mihomo/forwarding": "0",
+    "net/ipv4/conf/Mihomo/rp_filter": "2",
+    "net/ipv4/conf/Mihomo/send_redirects": "1",
+    "net/ipv4/conf/all/accept_local": "0",
+    "net/ipv4/conf/all/accept_redirects": "1",
+    "net/ipv4/conf/all/forwarding": "0",
+    "net/ipv4/conf/all/rp_filter": "0",
+    "net/ipv4/conf/all/send_redirects": "1",
+    "net/ipv4/conf/default/accept_local": "0",
+    "net/ipv4/conf/default/accept_redirects": "1",
+    "net/ipv4/conf/default/forwarding": "0",
+    "net/ipv4/conf/default/rp_filter": "2",
+    "net/ipv4/conf/default/send_redirects": "1",
+    "net/ipv4/conf/lan0/accept_local": "0",
+    "net/ipv4/conf/lan0/accept_redirects": "1",
+    "net/ipv4/conf/lan0/forwarding": "0",
+    "net/ipv4/conf/lan0/rp_filter": "2",
+    "net/ipv4/conf/lan0/send_redirects": "1",
+    "net/ipv4/conf/lo/accept_local": "0",
+    "net/ipv4/conf/lo/accept_redirects": "1",
+    "net/ipv4/conf/lo/forwarding": "0",
+    "net/ipv4/conf/lo/rp_filter": "2",
+    "net/ipv4/conf/lo/send_redirects": "1",
+    "net/ipv4/ip_forward": "0"
+  }
+}

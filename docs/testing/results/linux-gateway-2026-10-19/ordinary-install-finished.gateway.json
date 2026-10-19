@@ -1,0 +1,150 @@
+{
+  "links": [
+    {
+      "addr_info": [
+        {
+          "family": "inet",
+          "label": "lo",
+          "local": "127.0.0.1",
+          "prefixlen": 8,
+          "scope": "host"
+        }
+      ],
+      "flags": [
+        "LOOPBACK",
+        "UP",
+        "LOWER_UP"
+      ],
+      "ifname": "lo",
+      "mtu": 65536
+    },
+    {
+      "addr_info": [
+        {
+          "family": "inet",
+          "label": "lan0",
+          "local": "192.0.2.2",
+          "prefixlen": 24,
+          "scope": "global"
+        }
+      ],
+      "flags": [
+        "BROADCAST",
+        "MULTICAST",
+        "UP",
+        "LOWER_UP"
+      ],
+      "ifname": "lan0",
+      "mtu": 1500
+    }
+  ],
+  "nft": {
+    "nftables": []
+  },
+  "routes": [
+    {
+      "dev": "lan0",
+      "dst": "default",
+      "flags": [],
+      "gateway": "192.0.2.1"
+    },
+    {
+      "dev": "lan0",
+      "dst": "192.0.2.0/24",
+      "flags": [],
+      "prefsrc": "192.0.2.2",
+      "protocol": "kernel",
+      "scope": "link"
+    },
+    {
+      "dev": "lo",
+      "dst": "127.0.0.0/8",
+      "flags": [],
+      "prefsrc": "127.0.0.1",
+      "protocol": "kernel",
+      "scope": "host",
+      "table": "local",
+      "type": "local"
+    },
+    {
+      "dev": "lo",
+      "dst": "127.0.0.1",
+      "flags": [],
+      "prefsrc": "127.0.0.1",
+      "protocol": "kernel",
+      "scope": "host",
+      "table": "local",
+      "type": "local"
+    },
+    {
+      "dev": "lo",
+      "dst": "127.255.255.255",
+      "flags": [],
+      "prefsrc": "127.0.0.1",
+      "protocol": "kernel",
+      "scope": "link",
+      "table": "local",
+      "type": "broadcast"
+    },
+    {
+      "dev": "lan0",
+      "dst": "192.0.2.2",
+      "flags": [],
+      "prefsrc": "192.0.2.2",
+      "protocol": "kernel",
+      "scope": "host",
+      "table": "local",
+      "type": "local"
+    },
+    {
+      "dev": "lan0",
+      "dst": "192.0.2.255",
+      "flags": [],
+      "prefsrc": "192.0.2.2",
+      "protocol": "kernel",
+      "scope": "link",
+      "table": "local",
+      "type": "broadcast"
+    }
+  ],
+  "rules": [
+    {
+      "priority": 0,
+      "src": "all",
+      "table": "local"
+    },
+    {
+      "priority": 32766,
+      "src": "all",
+      "table": "main"
+    },
+    {
+      "priority": 32767,
+      "src": "all",
+      "table": "default"
+    }
+  ],
+  "sysctls": {
+    "net/ipv4/conf/all/accept_local": "0",
+    "net/ipv4/conf/all/accept_redirects": "1",
+    "net/ipv4/conf/all/forwarding": "0",
+    "net/ipv4/conf/all/rp_filter": "0",
+    "net/ipv4/conf/all/send_redirects": "1",
+    "net/ipv4/conf/default/accept_local": "0",
+    "net/ipv4/conf/default/accept_redirects": "1",
+    "net/ipv4/conf/default/forwarding": "0",
+    "net/ipv4/conf/default/rp_filter": "2",
+    "net/ipv4/conf/default/send_redirects": "1",
+    "net/ipv4/conf/lan0/accept_local": "0",
+    "net/ipv4/conf/lan0/accept_redirects": "1",
+    "net/ipv4/conf/lan0/forwarding": "0",
+    "net/ipv4/conf/lan0/rp_filter": "2",
+    "net/ipv4/conf/lan0/send_redirects": "1",
+    "net/ipv4/conf/lo/accept_local": "0",
+    "net/ipv4/conf/lo/accept_redirects": "1",
+    "net/ipv4/conf/lo/forwarding": "0",
+    "net/ipv4/conf/lo/rp_filter": "2",
+    "net/ipv4/conf/lo/send_redirects": "1",
+    "net/ipv4/ip_forward": "0"
+  }
+}

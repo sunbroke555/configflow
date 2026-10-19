@@ -1,0 +1,3 @@
+debian-13-genericcloud-arm64.qcow2
+SHA512 0199ea72dd82e84264fda5068c5756412c778f395fca6748a186f2d0a34f524fe406e87339bda0b7f71aa9bab066b9850cde44cd1650116f389dc3f786cb232b
+Official Debian SHA512SUMS match

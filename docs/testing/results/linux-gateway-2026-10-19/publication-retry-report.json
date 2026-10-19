@@ -1,0 +1,262 @@
+{
+  "api_origin": "http://192.0.2.1:8000",
+  "cases": {
+    "publication_failure_and_retry": {
+      "failed_oxidns_deployment_id": "554d4f73595f432896f7eb30af106960",
+      "forwarding_remains_explicit": true,
+      "mihomo_deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+      "mihomo_task_and_process_and_files_preserved": true,
+      "old_oxidns_files_and_health_restored": true,
+      "real_systemd_failure": true,
+      "requires_explicit_retry": true,
+      "retry_oxidns_deployment_id": "dc84186bd7314e46b7a01e45d76ee9dc",
+      "same_session_retry": true,
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f",
+      "success": true
+    }
+  },
+  "events": [
+    {
+      "at": "2026-10-19T06:32:40.397639+00:00",
+      "label": "publish-retry-start",
+      "report": "/tmp/configflow-gateway-lab-run-pk1osu10/report.json"
+    },
+    {
+      "at": "2026-10-19T06:32:40.575104+00:00",
+      "elapsed_seconds": 0.13,
+      "label": "snapshot-pk1osu10-retry-before",
+      "log": "/tmp/configflow-gateway-lab-run-pk1osu10/snapshot-pk1osu10-retry-before.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:40.590438+00:00",
+      "dns_answers": [
+        "198.18.0.6"
+      ],
+      "label": "baseline-cores-healthy",
+      "processes": {
+        "mihomo": 15042,
+        "oxidns": 15070
+      }
+    },
+    {
+      "at": "2026-10-19T06:32:41.657552+00:00",
+      "elapsed_seconds": 0.95,
+      "label": "retry-existing-core-attach",
+      "log": "/tmp/configflow-gateway-lab-run-pk1osu10/retry-existing-core-attach.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:41.661521+00:00",
+      "deployments": {},
+      "label": "session-progress",
+      "phase": "enrolled",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:41.979594+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "preparing"
+        },
+        "oxidns": {
+          "deployment_id": "554d4f73595f432896f7eb30af106960",
+          "status": "preparing"
+        }
+      },
+      "label": "fault-publication-progress",
+      "phase": "publishing",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:42.987232+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "verifying",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "554d4f73595f432896f7eb30af106960",
+          "status": "preparing"
+        }
+      },
+      "label": "fault-publication-progress",
+      "phase": "publishing",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:45.004598+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "554d4f73595f432896f7eb30af106960",
+          "status": "verifying",
+          "success": true
+        }
+      },
+      "label": "fault-publication-progress",
+      "phase": "publishing",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:47.016539+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "554d4f73595f432896f7eb30af106960",
+          "error": "service start failed",
+          "status": "rolling_back",
+          "success": true
+        }
+      },
+      "label": "fault-publication-progress",
+      "phase": "publishing",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:49.028805+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "554d4f73595f432896f7eb30af106960",
+          "error": "service start failed",
+          "status": "rolled_back",
+          "success": false
+        }
+      },
+      "label": "fault-publication-progress",
+      "phase": "publish_failed",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:49.046627+00:00",
+      "dns_answers": [
+        "198.18.0.4"
+      ],
+      "label": "automatic-rollback-healthy",
+      "processes": {
+        "mihomo": 15871,
+        "oxidns": 15906
+      }
+    },
+    {
+      "at": "2026-10-19T06:32:49.197995+00:00",
+      "dns_answers": [
+        "198.18.0.4"
+      ],
+      "label": "failure-condition-removed",
+      "processes": {
+        "mihomo": 15871,
+        "oxidns": 15906
+      }
+    },
+    {
+      "at": "2026-10-19T06:32:49.221947+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "dc84186bd7314e46b7a01e45d76ee9dc",
+          "status": "preparing"
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:51.236162+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "dc84186bd7314e46b7a01e45d76ee9dc",
+          "status": "verifying",
+          "success": true
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:53.252447+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "4fea8c314c704eadac711406d2dde6f3",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "dc84186bd7314e46b7a01e45d76ee9dc",
+          "status": "succeeded",
+          "success": true
+        }
+      },
+      "label": "session-progress",
+      "phase": "published",
+      "session_id": "46fb8bf8163e461eb6238d9588bff90f"
+    },
+    {
+      "at": "2026-10-19T06:32:53.273765+00:00",
+      "dns_answers": [
+        "198.18.0.4"
+      ],
+      "label": "same-session-retry-healthy",
+      "processes": {
+        "mihomo": 15871,
+        "oxidns": 15985
+      }
+    },
+    {
+      "at": "2026-10-19T06:32:53.431817+00:00",
+      "elapsed_seconds": 0.15,
+      "label": "snapshot-pk1osu10-retry-after",
+      "log": "/tmp/configflow-gateway-lab-run-pk1osu10/snapshot-pk1osu10-retry-after.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:53.482604+00:00",
+      "elapsed_seconds": 0.05,
+      "label": "compare-pk1osu10-retry-after",
+      "log": "/tmp/configflow-gateway-lab-run-pk1osu10/compare-pk1osu10-retry-after.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:53.482990+00:00",
+      "label": "publish-retry-complete",
+      "report": "/tmp/configflow-gateway-lab-run-pk1osu10/report.json"
+    }
+  ],
+  "finished_at": "2026-10-19T06:32:53.482954+00:00",
+  "limitations": [
+    "This run covers Debian ARM64/systemd, not OpenRC or amd64."
+  ],
+  "output": "/tmp/configflow-gateway-lab-run-pk1osu10",
+  "platform": {
+    "machine": "aarch64",
+    "uname": "6.12.113+deb13-cloud-arm64"
+  },
+  "started_at": "2026-10-19T06:32:40.397308+00:00",
+  "success": true
+}

@@ -1,0 +1,21 @@
+{
+  "all_python_shell_source_hashes_match": true,
+  "mismatch": [],
+  "count": 10,
+  "agent_sha256": "2260ebdff871c227856534beb7df09954729fd88e1dcb30b3a7407e077ea48ab",
+  "platform": "Linux-6.12.113+deb13-cloud-arm64-aarch64-with-glibc2.41",
+  "debian": "13.7",
+  "nft": "nftables v1.1.3 (Commodore Bullmoose #4)",
+  "python": "3.13.5",
+  "binary_sha256": {
+    "mihomo": "c80df2ca5159567804da883401e0118908fc1155e05df2baf3dbd4d3ecfc3754",
+    "oxidns": "df6e341909906eff183a1d6e507be7821007e421a9494acc24c97c2a21eca5bd"
+  },
+  "unexpected_fault_dropins": [],
+  "gateway_journal_absent": true,
+  "versions": {
+    "mihomo": "Mihomo Meta v1.19.32 linux arm64 with go1.26.8 Wed Sep 30 16:55:22 UTC 2026\nUse tags: with_gvisor",
+    "oxidns": "oxidns 1.6.1 (full)",
+    "agent": "1.8.20-go"
+  }
+}

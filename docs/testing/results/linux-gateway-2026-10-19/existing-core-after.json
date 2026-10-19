@@ -1,0 +1,50 @@
+{
+  "/etc/mihomo/config.yaml": {
+    "gid": 0,
+    "mode": 384,
+    "mtime_ns": 1792391491734151060,
+    "sha256": "53e1dd6ccf3fbb87a3a94e3287dee64caa317431662f538823c96be2f05bce47",
+    "size": 2776,
+    "uid": 0
+  },
+  "/etc/oxidns/config.yaml": {
+    "gid": 0,
+    "mode": 384,
+    "mtime_ns": 1792391494138405418,
+    "sha256": "673dc7f10702608c14ba449867d2b4d89814eea6afc6d1909099294e8943616d",
+    "size": 2288,
+    "uid": 0
+  },
+  "/etc/systemd/system/mihomo.service": {
+    "gid": 0,
+    "mode": 420,
+    "mtime_ns": 1792391484441383285,
+    "sha256": "7107821d1d0a7befb1d04e92edcf8b7895e7e2407705cb44f087565a468992fe",
+    "size": 359,
+    "uid": 0
+  },
+  "/etc/systemd/system/oxidns.service": {
+    "gid": 0,
+    "mode": 420,
+    "mtime_ns": 1792391484445383705,
+    "sha256": "5ad76722909a453743c5cee80dd9d0e9bef98e8a0083d3a8621a52550e4aa0df",
+    "size": 365,
+    "uid": 0
+  },
+  "/usr/local/bin/mihomo": {
+    "gid": 0,
+    "mode": 493,
+    "mtime_ns": 1792391484437382866,
+    "sha256": "c80df2ca5159567804da883401e0118908fc1155e05df2baf3dbd4d3ecfc3754",
+    "size": 57409662,
+    "uid": 0
+  },
+  "/usr/local/bin/oxidns": {
+    "gid": 0,
+    "mode": 493,
+    "mtime_ns": 1792391484445383705,
+    "sha256": "df6e341909906eff183a1d6e507be7821007e421a9494acc24c97c2a21eca5bd",
+    "size": 3955652,
+    "uid": 0
+  }
+}

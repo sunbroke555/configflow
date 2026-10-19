@@ -1,0 +1,24 @@
+{
+  "agent_ids": {
+    "mihomo": "agent_1792392689304_61a167",
+    "oxidns": "agent_1792392689456_f793eb"
+  },
+  "agents_online": true,
+  "command_sha256": "62ec77c0aa7c7d8030399b47c0d5ceb9d0a117f7e25649282d57a94d3eb5ac5e",
+  "elapsed_seconds": 11.5,
+  "network_matches_initial_both_namespaces": true,
+  "no_forwarding_journal": true,
+  "no_forwarding_table": true,
+  "phase": "enrolled",
+  "returncode": 0,
+  "same_browser_command": true,
+  "service_pids": {
+    "configflow-agent-mihomo": 3659,
+    "configflow-agent-oxidns": 3741,
+    "mihomo": 3443,
+    "oxidns": 3490
+  },
+  "session_id": "c6366135eece424eb454f36f91e1c53d",
+  "success": true,
+  "tun_enabled": false
+}

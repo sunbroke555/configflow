@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.24-go"
+LATEST_AGENT_VERSION = "1.8.25-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.25-go": {
+        "date": "2026-10-19",
+        "features": [
+            "新增 Linux 选择性网关安装向导，安装或接入 Mihomo、OxiDNS 与双 Agent，按顺序发布配置并检查、应用和撤销转发",
+            "自动接管 fake-IP 与勾选 IP 规则集，独立保存网络归属与恢复状态，普通安装和用户 DNS 配置保持原有行为"
+        ]
+    },
     "1.8.24-go": {
         "date": "2026-10-19",
         "features": [

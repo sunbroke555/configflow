@@ -77,6 +77,7 @@
 
 ### 🤖 Agent 远程管理
 - 一键生成安装脚本
+- Agent 安装入口可选 Linux 选择性网关：填写网络信息、勾选 IP / 域名规则、安装或接入 Mihomo 与 OxiDNS、按顺序发布，再预览和应用转发；fake-IP 自动包含，生成工作台保留后续管理入口（[安装与使用说明](docs/LINUX_GATEWAY.md)）
 - Shell 单服务和同机安装均可勾选同时安装核心，用一条命令先安装或补齐 Mihomo / OxiDNS，再安装对应 Agent；默认不勾选，已有核心保持原样（[单服务安装](docs/AGENT_OXIDNS.md#单服务同时安装核心)、[同机安装](docs/AGENT_OXIDNS.md#shell-同机安装-mihomo--oxidns)）
 - 提供独立的核心安装命令，可选择 Mihomo、OxiDNS 或两者；自动补装缺少的依赖，保留已有核心，只安装所选范围内缺少的核心并创建 systemd / OpenRC 服务。首次安装 Mihomo 时检测 TUN，可用时自动开启，不可用时提示修复方法。核心安装和 Agent 接入分别执行（[核心安装](docs/AGENT_OXIDNS.md#一键安装两个核心)）
 - Shell 支持 Mihomo + OxiDNS 同机接入，独立 Agent 默认端口 8080 / 8082，初始 DNS 端口 1053 / 53，发布时保留用户自定义端口（[安装说明](docs/AGENT_OXIDNS.md#shell-同机安装-mihomo--oxidns)）

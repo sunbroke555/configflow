@@ -22,12 +22,14 @@ func init() {
 }
 
 type RegisterRequest struct {
-	Name             string `json:"name"`
-	Host             string `json:"host"`
-	Port             int    `json:"port"`
-	ServiceType      string `json:"service_type"`
-	DeploymentMethod string `json:"deployment_method"`
-	Version          string `json:"version"`
+	Name              string `json:"name"`
+	Host              string `json:"host"`
+	Port              int    `json:"port"`
+	ServiceType       string `json:"service_type"`
+	DeploymentMethod  string `json:"deployment_method"`
+	Version           string `json:"version"`
+	InstallationID    string `json:"installation_id,omitempty"`
+	InstallationToken string `json:"installation_token,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -94,14 +96,27 @@ func (c *Config) handleRegisterResponse(regResp *RegisterResponse) error {
 		return fmt.Errorf("registration failed: server returned success=false")
 	}
 
+	if regResp.ID == "" || (regResp.Token == "" && c.Token == "") {
+		return fmt.Errorf("registration response is missing Agent credentials")
+	}
+	previousID, previousToken := c.AgentID, c.Token
+	previousInstallationID, previousInstallationToken := c.InstallationID, c.InstallationToken
+
 	log.Printf("Registration successful! Agent ID: %s", regResp.ID)
 	c.AgentID = regResp.ID
 	if regResp.Token != "" {
 		c.Token = regResp.Token
 	}
 
+	// Enrollment uses the durable Agent credential from here on. Never let an
+	// expired one-time installation capability block a later re-registration.
+	c.InstallationID = ""
+	c.InstallationToken = ""
+
 	log.Printf("Saving configuration...")
 	if err := c.Save(); err != nil {
+		c.AgentID, c.Token = previousID, previousToken
+		c.InstallationID, c.InstallationToken = previousInstallationID, previousInstallationToken
 		log.Printf("Failed to save configuration: %v", err)
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
@@ -130,12 +145,14 @@ func (c *Config) RegisterAgent() error {
 		c.AgentName, hostIP, c.AgentPort, c.ServiceType)
 
 	reqBody := RegisterRequest{
-		Name:             c.AgentName,
-		Host:             hostIP,
-		Port:             c.AgentPort,
-		ServiceType:      c.ServiceType,
-		DeploymentMethod: c.DeploymentMethod,
-		Version:          AgentVersion,
+		Name:              c.AgentName,
+		Host:              hostIP,
+		Port:              c.AgentPort,
+		ServiceType:       c.ServiceType,
+		DeploymentMethod:  c.DeploymentMethod,
+		Version:           AgentVersion,
+		InstallationID:    c.InstallationID,
+		InstallationToken: c.InstallationToken,
 	}
 
 	// 发送注册请求

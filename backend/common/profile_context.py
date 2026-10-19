@@ -125,7 +125,8 @@ def install_profile_context(app) -> None:
                         target = sanitized.get('settings') if request.method == 'POST' else sanitized
                         if isinstance(original, dict) and isinstance(target, dict):
                             for key in ('native_config', 'additional_files', 'template_settings',
-                                        'template_base_config', 'legacy_native_config', '_common_disabled'):
+                                        'template_base_config', 'legacy_native_config', '_common_disabled',
+                                        'gateway_onboarding_native_backup'):
                                 if key in original:
                                     target[key] = original[key]
                     if endpoint in ('oxidns.read_oxidns_common_settings', 'profiles.profile_read_oxidns_common_settings',
