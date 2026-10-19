@@ -8,7 +8,7 @@ from backend.agents.manager import AgentManager
 from backend.test_region_check import env  # 共用已隔离的配置 / Agent fixture
 from backend.utils import domain_discovery_service as service
 from backend.utils.region_check import RegionStore, get_region_store
-from backend.utils.website_identity import PAGE_MARKERS, known_service, page_identity
+from backend.utils.website_identity import PAGE_MARKERS, known_service, page_identity, site_title
 
 
 def test_known_service_requires_domain_boundary():
@@ -33,6 +33,19 @@ def test_page_metadata_attribute_order_entities_and_path_redaction():
     assert entry['description'] == 'Documentation & help'
     assert entry['final_host'] == 'docs.example.com'
     assert 'secret' not in str(entry)
+
+
+@pytest.mark.parametrize('title,name', [
+    ('HHCLUB :: 登录 - Powered by NexusPHP', 'HHCLUB'),
+    ('Login - GitHub', 'GitHub'),
+    ('首页 - 某站 - Powered by Discuz!', '某站'),
+    ('Cloud Monitoring as a Service | Datadog', 'Cloud Monitoring as a Service | Datadog'),
+    ('Wi-Fi Home', 'Wi-Fi Home'),
+    ('登录', '登录'),
+])
+def test_site_title_drops_page_names_and_powered_by(title, name):
+    assert site_title(title) == name
+    assert page_identity({'status': 200, 'markers': {'title': title}}, 'example.com', 'now')['name'] == name
 
 
 @pytest.mark.parametrize('result,reason', [
@@ -103,6 +116,18 @@ def test_identify_preconditions_and_invalid_input(env):
     for payload in ([], {'domain': '../bad', 'note': 'x'}, {'domain': 'example.com', 'note': 12},
                     {'domain': 'example.com', 'note': 'x' * 201}):
         assert client.put('/api/domain-discovery/website/note', json=payload).status_code == 400
+
+
+def test_batch_identify_skips_unobserved_domains(env, monkeypatch):
+    client, _, agent, auth, _ = env
+    _report(client, agent, auth)
+    monkeypatch.setattr(AgentManager, 'region_check', lambda self, selected, payload: {'results': [
+        {'id': item['id'], 'status': 200, 'markers': {'title': 'Example'}} for item in payload['requests']]})
+    job = service.start_website_job('default', ['example.com', 'unobserved.test'], wait=True)
+    assert job['status'] == 'done'
+    assert [error['host'] for error in job['errors']] == ['unobserved.test']
+    too_many = {'domains': [f'd{i}.test' for i in range(service.WEBSITE_BATCH_LIMIT + 1)]}
+    assert client.post('/api/domain-discovery/website/identify', json=too_many).status_code == 400
 
 
 def test_cached_websites_and_notes_do_not_cross_profiles(env):

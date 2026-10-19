@@ -16,6 +16,20 @@ PAGE_MARKERS = {
 }
 
 
+# 标题里常见的页面名 / 程序署名，如 NexusPHP 的「站名 :: 登录 - Powered by NexusPHP」
+_TITLE_SEPARATOR = r'(?:\s*::\s*|\s+[|\-–—·]\s+)'
+_TITLE_NOISE = r'(?:用户登录|会员登录|登录|登入|注册|首页|主页|log\s*in|sign\s*in|home|powered\s+by\s+[^|:]+)'
+
+
+def site_title(title):
+    cleaned, previous = title, None
+    while cleaned != previous:
+        previous = cleaned
+        cleaned = re.sub(rf'(?i){_TITLE_SEPARATOR}{_TITLE_NOISE}\s*$', '', cleaned)
+        cleaned = re.sub(rf'(?i)^{_TITLE_NOISE}{_TITLE_SEPARATOR}', '', cleaned)
+    return cleaned.strip() or title
+
+
 def clean_text(value, limit=200):
     return re.sub(r'\s+', ' ', unescape(re.sub(r'<[^>]*>', '', value or ''))).strip()[:limit]
 
@@ -63,7 +77,7 @@ def page_identity(result, host, checked_at):
     if re.search(r'(?i)^(?:access denied|forbidden|not found|error|404|403|502|503)\b', title):
         identity['reason'] = '返回错误页，无法识别'
         return identity
-    identity['name'] = _meta_content(markers.get('site')) or title
+    identity['name'] = _meta_content(markers.get('site')) or site_title(title)
     identity['description'] = _meta_content(markers.get('description'))
     # 不保留 URL 路径和查询参数，避免把重定向中的令牌写进缓存。
     try:

@@ -454,6 +454,9 @@ def save_website_note(profile_id, payload):
     return {'domain': domain, 'note': note.strip()}
 
 
+WEBSITE_BATCH_LIMIT = 30
+
+
 def website_candidates(domain, host):
     """先试主域名和 www 首页，最后才用流量最多的子域：后者常是 API / 资源域名，首页没有网站名称。"""
     candidates = []
@@ -468,8 +471,8 @@ def start_website_job(profile_id, values, *, wait=False):
     from backend.utils.website_identity import PAGE_MARKERS, page_identity
 
     values = _clean_values(values)
-    if len(values) > 10:
-        raise ProfileValidationError('一次最多识别 10 个域名')
+    if len(values) > WEBSITE_BATCH_LIMIT:
+        raise ProfileValidationError(f'一次最多识别 {WEBSITE_BATCH_LIMIT} 个域名')
     config = get_config(profile_id)
     settings = read_settings(config)
     agents = _region_agents(profile_id)
@@ -477,7 +480,7 @@ def start_website_job(profile_id, values, *, wait=False):
         raise ProbeError(f'需要开启域名发现且版本不低于 {MIN_REGION_AGENT_VERSION} 的 Agent')
     # 只允许识别当前配置空间真实采集到的域名，并从实际采集该域名的 Agent 发请求。
     store = get_traffic_store()
-    plans = []
+    plans, missing = [], []
     summaries = [(agent, summarize([(agent, store.load(agent['id']))], days=7, view='all', ignored=()))
                  for agent in agents]
     for value in values:
@@ -488,10 +491,13 @@ def start_website_job(profile_id, values, *, wait=False):
                 plans.append((agent, value, host))
                 break
         else:
-            raise ProfileValidationError(f'{value} 没有可用 Agent 最近采集的记录')
+            missing.append(value)
+    # 批量识别时跳过个别没有采集记录的域名，全部缺失才拒绝
+    if not plans:
+        raise ProfileValidationError(f'{missing[0]} 没有可用 Agent 最近采集的记录')
 
     def run(progress):
-        errors = []
+        errors = [{'host': value, 'message': '没有可用 Agent 最近 7 天采集的记录'} for value in missing]
         progress(0, len(plans))
         for index, (agent, value, host) in enumerate(plans):
             try:
