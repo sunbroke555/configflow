@@ -128,11 +128,11 @@
               variant="outline"
               size="sm"
               class="border-border-strong bg-secondary/60 text-xs text-foreground"
-              :aria-label="`查看 ${agent.name} 的 DNS 监控`"
+              :aria-label="`查看 ${agent.name} 的 OxiDNS 面板`"
               @click="router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns')"
             >
               <ChartLine class="size-3.5" />
-              DNS 监控
+              OxiDNS 面板
             </Button>
             <Button
               v-if="agent.service_type === 'mihomo'"
