@@ -19,6 +19,7 @@ export interface GatewayOnboardingConfig {
   domain_candidates: LinuxGatewayCandidate[]
   fake_ip_range: string
   oxidns_mode?: string
+  field_warnings?: { local_dns?: string }
   warnings: string[]
   blockers: string[]
   can_prepare: boolean

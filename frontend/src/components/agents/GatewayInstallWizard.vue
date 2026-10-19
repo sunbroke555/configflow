@@ -4,12 +4,17 @@ import { Check, Copy, LoaderCircle, RefreshCw } from '@lucide/vue'
 import { gatewayOnboardingApi, type GatewayConfigurationPreview, type GatewayInstallation, type GatewayOnboardingConfig, type GatewayOnboardingSettings } from '@/api/gatewayOnboarding'
 import { linuxGatewayApi, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewayStatus } from '@/api/linuxGateway'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySpecKey } from '@/lib/linuxGateway'
-import { gatewayEnvironmentErrors, installationHostMatches, installationMatches, installationPhaseLabel, onboardingSettingsKey } from '@/lib/gatewayOnboarding'
+import { gatewayEnvironmentErrors, installationHostMatches, installationMatches, onboardingSettingsKey } from '@/lib/gatewayOnboarding'
 import { buildGatewayNetworkProbeCommand, parseGatewayNetworkProbe } from '@/lib/gatewayNetworkDetection'
+import { copyText } from '@/lib/clipboard'
 import { notify } from '@/lib/feedback'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
+import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import FormField from '@/components/common/FormField.vue'
+import FieldHelp from '@/components/common/FieldHelp.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -70,6 +75,8 @@ const networkProbeCommand = computed(() => {
 })
 const hasNetworkDetails = computed(() => Object.values(network).some(value => value.trim()))
 const configReady = computed(() => configurationPreview.value?.ready === true && configurationPreviewKey.value === settingsKey.value)
+const localDnsWarning = computed(() => settings.local_dns === config.value?.settings.local_dns
+  ? config.value?.field_warnings?.local_dns || '' : '')
 const configLists = computed(() => [
   { field: 'rule_set_ids' as const, title: '接管的真实 IP', hint: '选需要交给 Mihomo 的 IP 集合，例如 Telegram；只使用 fake-IP 时可留空。', rows: config.value?.ip_candidates || [] },
   { field: 'direct_rule_set_ids' as const, title: '直连域名', hint: '由 OxiDNS 的加密上游解析，返回真实 IP。', rows: config.value?.domain_candidates || [] },
@@ -314,16 +321,6 @@ async function startAnotherInstallation() {
   } catch (failure) { if (current(captured)) { config.value = null; error.value = gatewayErrorMessage(failure) } }
   finally { if (current(captured)) loading.value = false }
 }
-async function copyToClipboard(text: string) {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
-  const field = document.createElement('textarea')
-  field.value = text; field.setAttribute('readonly', ''); field.style.position = 'fixed'; field.style.opacity = '0'
-  document.body.appendChild(field)
-  try {
-    field.select()
-    if (!document.execCommand('copy')) throw new Error('无法复制')
-  } finally { field.remove() }
-}
 async function copyNetworkCommand() {
   if (!props.open || locked.value || busy.value || step.value !== 0) return
   const captured = token()
@@ -331,13 +328,13 @@ async function copyNetworkCommand() {
   let command: string
   try { command = buildGatewayNetworkProbeCommand(serverUrl.value) }
   catch (failure) { networkProbeError.value = gatewayErrorMessage(failure); return }
-  try { await copyToClipboard(command); if (current(captured)) notify.success('检测命令已复制，请在目标 Linux 执行。') }
+  try { await copyText(command); if (current(captured)) notify.success('检测命令已复制，请在目标 Linux 执行。') }
   catch { if (current(captured)) notify.error('复制失败，请选中检测命令手动复制。') }
 }
 async function copyCommand() {
   if (!installation.value?.command || installation.value.expired) return
   const captured = token()
-  try { await copyToClipboard(installation.value.command); if (current(captured)) notify.success('安装命令已复制。') }
+  try { await copyText(installation.value.command); if (current(captured)) notify.success('安装命令已复制。') }
   catch { if (current(captured)) notify.error('复制失败，请选中安装命令手动复制。') }
 }
 watch(step, () => { void nextTick(() => {
@@ -379,15 +376,16 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
           {{ error }}<Button v-if="!config && !installation" variant="ghost" class="min-h-11" :disabled="busy" @click="load">重新读取</Button>
         </div>
         <p v-if="pollError" class="m-0 break-words text-sm text-warning-accent" role="alert">{{ pollError }}</p>
-        <div v-if="installationBlocked" role="alert" class="rounded-lg border border-warning/30 bg-warning-soft p-3 text-sm text-warning-accent">
+        <div v-if="installationBlocked" role="alert" class="space-y-1 border-l-2 border-destructive-accent pl-3 text-xs leading-relaxed">
+          <p class="m-0 font-medium text-destructive-accent">安装已暂停</p>
           <p class="m-0">{{ installation?.target_changed ? '设备绑定或身份已改变。' : installation?.config_changed ? '配置空间在安装后有修改。' : '安装凭据已过期。' }} 已停止发布与转发操作，请重新准备安装。</p>
         </div>
-        <div v-if="installation" class="border-b border-border pb-3">
-          <div class="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-            <p class="m-0 min-w-0 break-words text-sm">{{ resumed ? '已恢复' : '安装目标' }} · <strong class="font-medium">{{ installation.name }}</strong> <span class="font-mono text-xs text-muted-foreground">{{ network.address }}</span></p>
-            <Button variant="ghost" class="min-h-11 px-2 text-xs" :disabled="busy" @click="startAnotherInstallation">重新准备安装</Button>
+        <div v-if="installation" class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2">
+          <p class="m-0 mr-auto min-w-0 break-words text-xs text-muted-foreground">{{ resumed ? '已恢复' : '安装目标' }} · <strong class="font-medium text-foreground">{{ installation.name }}</strong> <span class="font-mono">{{ network.address }}</span></p>
+          <div class="flex shrink-0 items-center">
+            <Button variant="ghost" size="sm" class="px-2 text-xs" :disabled="busy" @click="startAnotherInstallation">重新准备安装</Button>
+            <FieldHelp label="重新准备安装" text="返回设备与网络重新准备；不会撤销已安装的服务或已提交的发布。" />
           </div>
-          <p class="m-0 text-xs text-muted-foreground">重新准备不会撤销已安装的服务或已提交的发布。</p>
         </div>
 
         <TabsContent :value="String(step)" as-child>
@@ -408,16 +406,16 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
             <p class="m-0 text-xs leading-relaxed text-muted-foreground">在目标 Linux 执行命令，再粘贴输出，自动读取网卡、地址和网关。检测不会修改网络。</p>
             <div class="grid min-w-0 gap-3 sm:grid-cols-2">
               <div class="min-w-0 space-y-1.5">
-                <div class="flex min-h-11 items-center justify-between gap-2">
+                <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
                   <label for="onboarding-network-command" class="text-xs font-medium">1. 在 Linux 执行</label>
-                  <Button class="min-h-11 shrink-0 px-3 text-xs" :disabled="busy || locked" @click="copyNetworkCommand"><Copy class="size-3.5" />复制检测命令</Button>
+                  <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs text-muted-foreground" aria-label="复制检测命令" :disabled="busy || locked || !networkProbeCommand" @click="copyNetworkCommand"><Copy class="size-3.5" aria-hidden="true" />复制</Button>
                 </div>
                 <Textarea id="onboarding-network-command" :model-value="networkProbeCommand" readonly :rows="3" class="h-28 min-h-28 max-h-28 resize-none font-mono text-xs" placeholder="先填写 Linux 能访问的服务地址" />
               </div>
               <div class="min-w-0 space-y-1.5">
-                <div class="flex min-h-11 items-center justify-between gap-2">
+                <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
                   <label for="onboarding-network-result" class="text-xs font-medium">2. 粘贴检测结果</label>
-                  <Button v-if="networkProbeResult.trim() && !networkProbeApplied" variant="ghost" class="min-h-11 shrink-0 px-2 text-xs" :disabled="busy || locked" @click="applyNetworkProbe">填入网络信息</Button>
+                  <Button v-if="networkProbeResult.trim() && !networkProbeApplied" variant="ghost" size="sm" class="shrink-0 px-2 text-xs" :disabled="busy || locked" @click="applyNetworkProbe">填入网络信息</Button>
                   <span v-else-if="networkProbeApplied" class="flex items-center gap-1 text-xs text-success-accent" role="status"><Check class="size-3.5" />已填入</span>
                 </div>
                 <Textarea id="onboarding-network-result" :model-value="networkProbeResult" :disabled="busy || locked" :rows="3" class="h-28 min-h-28 max-h-28 resize-none font-mono text-xs" placeholder="粘贴终端输出的整段 JSON，自动填入网络信息" spellcheck="false" @update:model-value="updateNetworkProbeResult" />
@@ -466,7 +464,6 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
 
         <section v-else-if="step === 1" class="space-y-4" aria-label="分流规则">
           <div><h2 class="m-0 text-lg font-semibold">分流规则</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">选择接管 IP、直连和代理域名。将更新「{{ profileName }}」共用的 Mihomo 与 OxiDNS 配置。</p></div>
-          <p class="m-0 text-xs text-muted-foreground">自动包含 fake-IP 网段 <code class="break-all font-mono">{{ config?.fake_ip_range || '由 Mihomo 配置决定' }}</code>。未选中的 IP 走 Linux 直连转发。</p>
           <FormField label="搜索规则集" html-for="onboarding-search"><Input id="onboarding-search" v-model="search" class="min-h-11" placeholder="按名称或策略搜索" /></FormField>
           <div v-for="list in configLists" :key="list.field" class="min-w-0 space-y-2">
             <h3 class="m-0 text-sm font-semibold">{{ list.title }} <span class="num ml-1 font-normal text-muted-foreground">{{ settings[list.field].length }} 项</span></h3>
@@ -480,92 +477,125 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
               <p v-else-if="!list.visibleRows.length" class="m-0 p-3 text-xs text-muted-foreground" role="status">没有匹配的规则集。已选规则会保留。</p>
             </div>
           </div>
-          <FormField label="直连加密 DNS" html-for="onboarding-dns" hint="可填写多行。请使用加密 DNS，普通 53 端口上游可能形成回环。" persistent-hint><Textarea id="onboarding-dns" v-model="settings.local_dns" :disabled="busy" class="min-h-20 font-mono text-xs" :rows="2" /></FormField>
+          <FormField label="直连加密 DNS" html-for="onboarding-dns" hint="每行一个 IPv4 地址的 DoH / DoT；普通 53 端口可能回环。" persistent-hint>
+            <Textarea id="onboarding-dns" v-model="settings.local_dns" :disabled="busy" :aria-describedby="localDnsWarning ? 'onboarding-dns-warning' : undefined" class="min-h-20 font-mono text-xs" :rows="2" />
+            <p v-if="localDnsWarning" id="onboarding-dns-warning" class="m-0 text-xs leading-relaxed text-warning-accent" role="status">{{ localDnsWarning }}</p>
+          </FormField>
+          <div v-if="config?.oxidns_mode === 'native'" class="space-y-1">
+            <label class="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium"><Checkbox v-model="settings.confirm_template_conversion" :disabled="busy" aria-describedby="onboarding-conversion-help" class="shrink-0" /><span>允许转换为 OxiDNS 模板</span></label>
+            <p id="onboarding-conversion-help" class="mt-0 mb-0 ml-6 text-xs leading-relaxed text-muted-foreground">仅在原生配置无法保留时替换解析流程，并备份原配置；未勾选则停止。</p>
+          </div>
           <details class="border-b border-border text-xs">
-            <summary class="min-h-11 cursor-pointer content-center py-2 font-medium">将修改哪些设置</summary>
-            <p class="mt-1 mb-3 leading-relaxed text-muted-foreground">OxiDNS 在 53 端口服务局域网，代理与后备 DNS 指向 Mihomo 的 127.0.0.1:1053。Mihomo 启用 fake-IP 和选择性 TUN；未知域名交给 Mihomo 处理。</p>
+            <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">网关说明</summary>
+            <ul class="mt-1 mb-3 list-disc space-y-2 pl-5 leading-relaxed text-muted-foreground">
+              <li>仅支持 Linux + nftables 的 IPv4 网关；客户端需停用 IPv6，或另行配置 IPv6 路由。</li>
+              <li>接管网段须为 /8 至 /32，拒绝 /0、/1 等过大范围。</li>
+              <li>自动包含 fake-IP 网段 <code class="break-all font-mono">{{ config?.fake_ip_range || '由 Mihomo 配置决定' }}</code>。未选中的 IP 走 Linux 直连转发。</li>
+              <li>Mihomo 使用 rule / fake-IP 模式和选择性 TUN；实际出口由规则顺序及策略组当前选择决定。</li>
+              <li>OxiDNS 在 53 端口服务局域网，代理、后备 DNS 和未知域名交给 Mihomo（<code class="break-all font-mono">127.0.0.1:1053</code>）。</li>
+              <li>直连 DNS 使用 IP 地址的 DoH / DoT；普通 53 端口可能被自动接管，形成回环。</li>
+            </ul>
           </details>
-          <label v-if="config?.oxidns_mode === 'native'" class="flex min-h-11 cursor-pointer items-start gap-3 text-xs leading-relaxed"><Checkbox v-model="settings.confirm_template_conversion" :disabled="busy" class="mt-0.5 shrink-0" /><span>无法保留原生 OxiDNS 配置时，允许转换为向导模板。转换会替换原生解析流程；未勾选时会停止并说明原因。</span></label>
-          <div v-if="config?.warnings?.length || config?.blockers?.length" class="space-y-2 text-xs text-warning-accent"><p v-for="item in [...(config?.warnings || []), ...(config?.blockers || [])]" :key="item" class="m-0 break-words">{{ item }}</p></div>
+          <div v-if="config?.warnings?.length || config?.blockers?.length" class="space-y-3 text-xs leading-relaxed">
+            <div v-if="config?.blockers?.length" role="alert">
+              <p class="m-0 font-medium text-destructive-accent">当前配置需处理</p>
+              <ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in config.blockers" :key="item" class="break-words">{{ item }}</li></ul>
+            </div>
+            <div v-if="config?.warnings?.length" role="status">
+              <p class="m-0 font-medium text-warning-accent">当前配置提醒</p>
+              <ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in config.warnings" :key="item" class="break-words">{{ item }}</li></ul>
+            </div>
+          </div>
           <Button variant="outline" class="min-h-11" :disabled="busy || !config" @click="previewConfiguration"><LoaderCircle v-if="action === 'preview-config'" class="size-4 animate-spin" />检查配置与代理出口</Button>
-          <div v-if="configurationPreview" class="space-y-2 border-t border-border pt-3 text-sm" role="status">
-            <p class="m-0 font-semibold" :class="configReady ? 'text-success-accent' : 'text-warning-accent'">{{ configReady ? '配置检查通过，可以生成安装命令' : '请先处理以下问题' }}</p>
-            <ul v-if="configurationPreview.blockers?.length" class="my-1 list-disc space-y-1 pl-5 text-warning-accent"><li v-for="item in configurationPreview.blockers" :key="item">{{ item }}</li></ul>
-            <p v-for="item in configurationPreview.warnings || []" :key="item" class="m-0 text-xs text-warning-accent">{{ item }}</p>
+          <div v-if="configurationPreview" class="space-y-3 border-t border-border pt-3 text-sm" role="status">
+            <p class="m-0 font-semibold" :class="configReady ? 'text-success-accent' : 'text-destructive-accent'">{{ configReady ? '配置检查通过，可以生成安装命令' : '请先处理以下问题' }}</p>
+            <div v-if="configurationPreview.blockers?.length" class="text-xs leading-relaxed" role="alert">
+              <p class="m-0 font-medium text-destructive-accent">阻断问题</p>
+              <ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in configurationPreview.blockers" :key="item" class="break-words">{{ item }}</li></ul>
+            </div>
+            <div v-if="configurationPreview.warnings?.length" class="text-xs leading-relaxed">
+              <p class="m-0 font-medium text-warning-accent">检查提醒</p>
+              <ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in configurationPreview.warnings" :key="item" class="break-words">{{ item }}</li></ul>
+            </div>
             <details v-if="configurationPreview.changes?.length" class="text-xs text-muted-foreground"><summary class="min-h-11 cursor-pointer content-center py-2">查看配置变更</summary><ul class="mt-0 mb-2 list-disc space-y-1 pl-5"><li v-for="item in configurationPreview.changes" :key="item">{{ item }}</li></ul></details>
           </div>
         </section>
 
         <section v-else-if="step === 2" class="space-y-4" aria-label="安装核心">
-          <div><h2 class="m-0 text-lg font-semibold">安装核心与 Agent</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">在目标 Linux 执行命令。已有标准安装会先校验并保留，缺少的服务会自动安装。</p></div>
-          <p class="m-0 text-xs text-warning-accent">安装命令含临时凭据，请勿公开分享。完成检查前，请勿修改客户端网关或 DNS。</p>
-          <FormField label="安装命令" html-for="onboarding-command"><Textarea id="onboarding-command" :model-value="installation?.command || ''" readonly :rows="4" class="min-h-28 max-h-48 font-mono text-xs" /></FormField>
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <Button class="min-h-11" :disabled="!installation?.command || installation.expired" @click="copyCommand"><Copy class="size-4" />复制安装命令</Button>
-            <span class="text-xs text-muted-foreground">使用 root，或按提示输入 sudo 密码。</span>
-          </div>
-          <p class="m-0 break-words text-xs text-muted-foreground">{{ commandExpiry }}</p>
-          <div class="space-y-3 border-y border-border py-3 text-sm">
-            <p class="m-0 font-semibold">{{ installation ? installationPhaseLabel(installation.phase) : '等待安装记录' }}</p>
-            <p v-if="installation?.message" class="m-0 break-words text-xs text-muted-foreground">{{ installation.message }}</p>
-            <div v-for="service in (['mihomo', 'oxidns'] as const)" :key="service" class="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              <p class="m-0 font-medium">{{ service === 'mihomo' ? 'Mihomo' : 'OxiDNS' }} Agent</p>
-              <p class="m-0 min-w-0 break-words text-xs text-muted-foreground">{{ installation?.agents[service]?.name || '等待登记' }} · {{ installation?.agents[service]?.status || '未登记' }}</p>
+          <div><h2 class="m-0 text-lg font-semibold">安装核心与 Agent</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">在目标 Linux 执行命令，等待两项 Agent 登记。</p></div>
+          <div class="min-w-0 space-y-1.5">
+            <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+              <label for="onboarding-command" class="text-xs font-medium">安装命令</label>
+              <Button variant="ghost" size="sm" class="px-2 text-xs" aria-label="复制安装命令" :disabled="!installation?.command || installation.expired" @click="copyCommand"><Copy class="size-3.5" aria-hidden="true" />复制</Button>
             </div>
+            <Textarea id="onboarding-command" :model-value="installation?.command || ''" readonly :rows="4" class="min-h-28 max-h-48 font-mono text-xs" />
+            <div class="flex flex-wrap gap-x-3 gap-y-1 text-xs leading-relaxed text-muted-foreground"><p class="m-0">使用 root，或按提示输入 sudo 密码。</p><p class="m-0 break-words">{{ commandExpiry }}</p></div>
           </div>
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <Button variant="outline" class="min-h-11" :disabled="refreshPending || busy" @click="refreshInstallation"><RefreshCw class="size-4" :class="{ 'animate-spin': refreshPending }" />检查安装进度</Button>
-            <span class="text-xs text-muted-foreground">登记成功后，进入发布步骤。</span>
+          <p class="m-0 text-xs leading-relaxed">安装命令含临时凭据，请勿公开分享。完成检查前，请勿修改客户端网关或 DNS。</p>
+          <div class="divide-y divide-border border-y border-border">
+            <AgentStatusRow v-for="service in (['mihomo', 'oxidns'] as const)" :key="service" :label="`${service === 'mihomo' ? 'Mihomo' : 'OxiDNS'} Agent`" :status="!installation?.agents[service] ? '等待登记' : installation.agents[service]?.status === 'online' ? '在线' : installation.agents[service]?.status === 'offline' ? '离线' : installation.agents[service]?.status || '已登记'" :tone="installation?.agents[service]?.status === 'online' ? 'success' : installation?.agents[service]?.status === 'offline' ? 'warning' : 'neutral'">
+              <template v-if="installation?.agents[service]?.name" #default><p class="m-0">设备：{{ installation.agents[service]?.name }}</p></template>
+            </AgentStatusRow>
           </div>
-          <details class="text-xs text-muted-foreground"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium">安装失败时</summary><p class="mt-1 mb-0 leading-relaxed">按终端提示处理后，在同一台 Linux 重跑原命令。凭据过期再重新准备安装；系统没有 sudo 时，先切换 root。已完成登记则直接继续发布，无需重装。</p></details>
+          <p v-if="installation?.message" class="m-0 break-words text-xs text-muted-foreground" role="status">{{ installation.message }}</p>
+          <Button variant="outline" class="min-h-11" :disabled="refreshPending || busy" @click="refreshInstallation"><RefreshCw class="size-4" :class="{ 'animate-spin': refreshPending }" />检查安装进度</Button>
+          <details class="border-b border-border text-xs">
+            <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">安装说明与排错</summary>
+            <div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p class="m-0">已有标准安装会先校验并保留，缺少的服务会自动安装；登记完成后进入发布步骤。</p><p class="m-0">失败时按终端提示处理，在同一台 Linux 重跑原命令。凭据过期再重新准备；没有 sudo 时先切换 root。已完成登记可继续发布，无需重装。</p></div>
+          </details>
         </section>
 
         <section v-else-if="step === 3" class="space-y-4" aria-label="发布并检查">
           <div><h2 class="m-0 text-lg font-semibold">发布配置</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">先发布并检查 Mihomo，再发布 OxiDNS；失败时会停止。</p></div>
           <div class="divide-y divide-border border-y border-border">
-            <div v-for="service in (['mihomo', 'oxidns'] as const)" :key="service" class="space-y-2 py-3">
-              <div class="flex min-w-0 flex-wrap items-baseline justify-between gap-2"><h3 class="m-0 text-sm font-semibold">{{ service === 'mihomo' ? 'Mihomo' : 'OxiDNS' }}</h3><span class="min-w-0 break-words text-xs text-muted-foreground">{{ installation?.agents[service]?.name }}</span></div>
-              <AgentDeploymentStatus v-if="installation?.deployments[service]" :task="installation.deployments[service]!" />
-              <p v-else class="m-0 text-xs text-muted-foreground">{{ service === 'oxidns' ? '等待 Mihomo 健康检查通过' : '已登记，等待发布' }}</p>
+            <div v-for="service in (['mihomo', 'oxidns'] as const)" :key="service" class="min-w-0">
+              <AgentDeploymentStatus v-if="installation?.deployments[service]" :task="installation.deployments[service]!" :label="service === 'mihomo' ? 'Mihomo' : 'OxiDNS'" compact>
+                <template #notice><AgentFailureDetails :task="installation.deployments[service]!" :show-progress-message="installation.deployments[service]?.status !== 'succeeded'" :showDNSChecks="false" /></template>
+                <template #details><p class="m-0">设备：{{ installation.agents[service]?.name }}</p><p v-if="installation.deployments[service]?.status === 'succeeded' && installation.deployments[service]?.message" class="m-0">{{ installation.deployments[service]?.message }}</p></template>
+              </AgentDeploymentStatus>
+              <AgentStatusRow v-else :label="service === 'mihomo' ? 'Mihomo' : 'OxiDNS'" :status="service === 'oxidns' ? '等待 Mihomo 检查通过' : '等待发布'" tone="neutral" />
+              <AgentDNSChecks :checks="installation?.deployments[service]?.dns_checks" :checked-at="installation?.deployments[service]?.dns_checked_at" compact />
             </div>
           </div>
-          <p v-if="installation?.error || installation?.message" class="m-0 break-words text-sm" :class="installation?.phase === 'publish_failed' ? 'text-warning-accent' : 'text-muted-foreground'" role="status">{{ installation.error || installation.message }}</p>
+          <p v-if="installation?.error || installation?.message" class="m-0 break-words text-xs leading-relaxed" :class="installation?.phase === 'publish_failed' ? 'text-destructive-accent' : 'text-muted-foreground'" :role="installation?.phase === 'publish_failed' ? 'alert' : 'status'">{{ installation.error || installation.message }}</p>
           <div class="flex flex-wrap gap-2"><Button class="min-h-11" :disabled="busy || installationBlocked || !installation || !['enrolled', 'publishing', 'publish_failed'].includes(installation.phase)" @click="publish"><LoaderCircle v-if="action === 'publish'" class="size-4 animate-spin" />{{ installation?.phase === 'publish_failed' ? '处理后继续发布' : installation?.phase === 'publishing' ? '继续确认发布' : '按顺序发布两项配置' }}</Button><Button variant="outline" class="min-h-11" :disabled="refreshPending || busy" @click="refreshInstallation"><RefreshCw class="size-4" />刷新进度</Button></div>
-          <p class="m-0 text-xs leading-relaxed text-muted-foreground">关闭窗口后发布仍会继续，重新打开可查看进度。失败时在 Agent 查看原因，处理后继续发布，无需重装。</p>
+          <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">发布说明与排错</summary><p class="mt-1 mb-3 leading-relaxed text-muted-foreground">关闭窗口后发布仍会继续，重新打开可查看进度。失败时在 Agent 查看原因，处理后继续发布，无需重装。</p></details>
         </section>
 
         <section v-else class="space-y-4" aria-label="启用与验证">
           <div><h2 class="m-0 text-lg font-semibold">{{ networkRemoved ? '网关转发已撤销' : activeNetwork ? '验证客户端' : '启用网关转发' }}</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">{{ networkRemoved ? '请恢复客户端接入前的设置。' : activeNetwork ? '先测试一台设备，再接入其他客户端。' : '服务检查已通过。先检查实际网络，再应用转发。' }}</p></div>
-          <dl class="m-0 grid grid-cols-2 gap-3 border-y border-border py-3 text-xs sm:grid-cols-4"><div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr }}</dd></div></dl>
-          <p v-if="networkStatus?.unsupported_reason || networkStatus?.config_error || networkStatus?.detection_error || networkStatus?.managed?.error" role="alert" class="m-0 text-sm text-warning-accent">{{ networkStatus.unsupported_reason || networkStatus.config_error || networkStatus.detection_error || networkStatus.managed?.error }}</p>
-          <div class="flex flex-wrap gap-2"><Button variant="outline" class="min-h-11" :disabled="!canNetwork || busy" @click="previewNetwork"><LoaderCircle v-if="action === 'preview-network'" class="size-4 animate-spin" />检查并预览转发</Button><Button class="min-h-11" :disabled="!canApply" @click="applyNetwork"><LoaderCircle v-if="action === 'apply'" class="size-4 animate-spin" />应用网关转发</Button></div>
-          <div v-if="networkPreview" class="space-y-2 border-t border-border pt-3 text-sm" role="status">
-            <p class="m-0 font-semibold" :class="networkPreview.ready ? 'text-success-accent' : 'text-warning-accent'">{{ networkPreview.ready ? '检查通过，等待应用' : '请处理以下检查结果' }}</p>
-            <p v-for="item in [...(networkPreview.blockers || []), ...(networkPreview.warnings || [])]" :key="item" class="m-0 break-words text-xs text-warning-accent">{{ item }}</p>
-            <ul v-if="networkPreview.commands?.length" class="my-1 list-disc space-y-1 pl-5 text-xs text-muted-foreground"><li v-for="item in networkPreview.commands" :key="item" class="break-words">{{ item }}</li></ul>
+          <div class="divide-y divide-border border-y border-border">
+            <AgentStatusRow label="网关转发" :status="networkRemoved ? '已撤销' : activeNetwork ? '已启用' : networkStatus?.managed?.pending ? '待确认' : '未启用'" :tone="networkRemoved || activeNetwork ? 'success' : networkStatus?.managed?.pending ? 'warning' : 'neutral'">
+              <template v-if="networkStatus?.unsupported_reason || networkStatus?.config_error || networkStatus?.detection_error || networkStatus?.managed?.error" #notice><p role="alert" class="m-0 text-destructive-accent">{{ networkStatus.unsupported_reason || networkStatus.config_error || networkStatus.detection_error || networkStatus.managed?.error }}</p></template>
+            </AgentStatusRow>
+            <dl class="m-0 grid grid-cols-2 gap-3 py-3 text-xs sm:grid-cols-4"><div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr }}</dd></div></dl>
           </div>
-          <p v-if="activeNetwork" class="m-0 flex items-center gap-2 text-sm font-medium text-success-accent" role="status"><Check class="size-4 shrink-0" />网关转发已启用</p>
+          <div class="flex flex-wrap gap-2"><Button variant="outline" class="min-h-11" :disabled="!canNetwork || busy" @click="previewNetwork"><LoaderCircle v-if="action === 'preview-network'" class="size-4 animate-spin" />检查并预览转发</Button><Button class="min-h-11" :disabled="!canApply" @click="applyNetwork"><LoaderCircle v-if="action === 'apply'" class="size-4 animate-spin" />应用网关转发</Button></div>
+          <div v-if="networkPreview" class="space-y-3 border-t border-border pt-3 text-sm" role="status">
+            <p class="m-0 font-semibold" :class="networkPreview.ready ? 'text-success-accent' : 'text-destructive-accent'">{{ networkPreview.ready ? '检查通过，等待应用' : '请处理以下检查结果' }}</p>
+            <div v-if="networkPreview.blockers?.length" class="text-xs leading-relaxed" role="alert"><p class="m-0 font-medium text-destructive-accent">阻断问题</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in networkPreview.blockers" :key="item" class="break-words">{{ item }}</li></ul></div>
+            <div v-if="networkPreview.warnings?.length" class="text-xs leading-relaxed"><p class="m-0 font-medium text-warning-accent">检查提醒</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in networkPreview.warnings" :key="item" class="break-words">{{ item }}</li></ul></div>
+            <details v-if="networkPreview.commands?.length" class="text-xs text-muted-foreground"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">查看网络操作</summary><ul class="mt-0 mb-2 list-disc space-y-1 pl-5"><li v-for="item in networkPreview.commands" :key="item" class="break-words">{{ item }}</li></ul></details>
+          </div>
           <div v-if="activeNetwork" class="space-y-3">
             <h3 class="m-0 text-sm font-semibold">客户端接入检查</h3>
-            <ol class="m-0 list-decimal space-y-2 pl-5 text-sm leading-relaxed">
+            <ol class="m-0 list-decimal space-y-2 pl-5 text-xs leading-relaxed">
               <li>记下测试设备原来的网关、DNS、IPv6 和安全 DNS 设置。将 <strong>网关</strong> 和 <strong>DNS</strong> 都填为 <code class="font-mono">{{ network.address }}</code>，设备 IP 保持在原网段。</li>
               <li>暂时关闭测试设备的 IPv6、浏览器安全 DNS 和系统私有 DNS，避免绕过分流。</li>
               <li>分别访问直连站点和代理域名，在 Mihomo 连接列表确认代理访问。</li>
-              <li>测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</li>
             </ol>
           </div>
-          <div v-else-if="networkRemoved" class="space-y-2 text-sm" role="status">
-            <p class="m-0 font-medium text-success-accent">请恢复客户端原来的设置</p>
+          <div v-else-if="networkRemoved" class="space-y-2 text-xs" role="status">
             <p class="m-0 leading-relaxed">恢复原网关和 DNS（原来自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS。修改过主路由 DHCP 时，也恢复原值。</p>
-            <p class="m-0 text-xs leading-relaxed text-muted-foreground">核心和已发布配置仍保留。撤销转发不会关闭 Mihomo TUN；要停用，请到「生成工作台 → Mihomo → Linux 网关」关闭模式，再保存并发布。</p>
+            <p class="m-0 leading-relaxed text-muted-foreground">核心和已发布配置仍保留。撤销转发不会关闭 Mihomo TUN；要停用，请到「生成工作台 → Mihomo → Linux 网关」关闭模式，再保存并发布。</p>
           </div>
-          <p v-else class="m-0 text-xs leading-relaxed text-muted-foreground">应用成功后再修改客户端。接入前记下原网关、DNS、IPv6 和安全 DNS 设置，以便恢复。</p>
-          <div class="space-y-2 border-t border-border pt-3 text-xs text-muted-foreground">
-            <p v-if="activeNetwork || networkStatus?.managed?.pending" class="m-0">撤销前，请先恢复客户端原来的网关与 DNS。</p>
+          <p v-else class="m-0 text-xs leading-relaxed">应用成功后再修改客户端。接入前记下原网关、DNS、IPv6 和安全 DNS 设置，以便恢复。</p>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
             <Button v-if="activeNetwork || networkStatus?.managed?.pending" variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="removeNetwork">撤销本次网关转发</Button>
+            <p v-if="activeNetwork || networkStatus?.managed?.pending" class="m-0">撤销前，先恢复客户端原来的网关与 DNS。</p>
             <Button v-else variant="ghost" class="min-h-11 px-2" :disabled="busy || !canInspectNetwork" @click="inspectNetwork">重新读取网络状态</Button>
-            <p class="m-0 leading-relaxed">后续管理：生成工作台 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p>
           </div>
+          <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">生成工作台 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
         </section>
         </TabsContent>
       </Tabs>

@@ -329,14 +329,14 @@ def apply_linux_gateway(mihomo, config, base_url=''):
                                                 'profile_id': config.get('profile_id', '')}
 
 
-def gateway_editor_state(config):
+def gateway_editor_state(config, *, include_guidance=True):
     settings = gateway_settings(config)
     warnings = [
         '仅支持 Linux + nftables 的 IPv4 选择性网关；客户端需停用 IPv6 或另行配置 IPv6 路由。',
         'OxiDNS 直连上游请使用带 IP 地址的 DoH / DoT（例如 https://223.5.5.5/dns-query）；普通 UDP/TCP 53 可能被 auto-redirect 接管。',
         '这里只决定哪些 IP 进入 Mihomo；启用后使用 rule 模式，实际出口仍由规则顺序及策略组当前选择决定。',
         'IPv4 接管网段须为 /8 至 /32；/0、/1 等超大范围会被拒绝，避免意外接管全网。',
-    ]
+    ] if include_guidance else []
     try:
         fake_range = fake_ip_network(_base_config(config))
     except LinuxGatewayError as exc:

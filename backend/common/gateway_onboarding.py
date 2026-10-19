@@ -277,7 +277,8 @@ def _proxy_prerequisites(config, document=None):
 
 
 def gateway_onboarding_state(config, revision, base_url=''):
-    state = gateway_editor_state(config)
+    # The wizard presents usage guidance next to its fields and in its help panel.
+    state = gateway_editor_state(config, include_guidance=False)
     blockers = []
     conversion = False
     try:
@@ -291,6 +292,7 @@ def gateway_onboarding_state(config, revision, base_url=''):
     proxy = values.get('proxy_rulesets') or []
     local = values.get('local_dns') or DEFAULT_LOCAL_DNS
     warnings = list(state['warnings'])
+    field_warnings = {}
     server_url = config.get('system_config', {}).get('server_domain', '') or ''
     try:
         server_host = urlsplit(server_url).hostname or ''
@@ -301,7 +303,7 @@ def gateway_onboarding_state(config, revision, base_url=''):
     try:
         _local_upstreams(local)
     except (GatewayOnboardingError, OxidnsSettingsError):
-        warnings.append('现有直连 DNS 不适合网关模式；请改为 IP 地址的 DoH / DoT，推荐 https://223.5.5.5/dns-query。')
+        field_warnings['local_dns'] = '当前 DNS 不适用于网关，请改用 IP 地址的 DoH / DoT，例如 https://223.5.5.5/dns-query。'
     if settings.get('config_mode') == 'native' and not blockers:
         try:
             _check_native_dns_path(settings, allow_disabled_fallback=True)
@@ -324,7 +326,7 @@ def gateway_onboarding_state(config, revision, base_url=''):
                          'direct_rule_set_ids': direct, 'proxy_rule_set_ids': proxy, 'local_dns': local},
             'gateway_enabled': state['settings']['enabled'], 'ip_candidates': state['candidates'],
             'domain_candidates': _domain_candidates(config, direct + proxy), 'fake_ip_range': state['fake_ip_range'],
-            'oxidns_mode': settings.get('config_mode', 'template'), 'warnings': warnings,
+            'oxidns_mode': settings.get('config_mode', 'template'), 'warnings': warnings, 'field_warnings': field_warnings,
             'blockers': blockers, 'can_prepare': not blockers, 'template_conversion_available': conversion,
             'proxy_prerequisites': prerequisites}
 

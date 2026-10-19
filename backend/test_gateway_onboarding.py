@@ -403,6 +403,27 @@ def test_state_exposes_callback_address_and_warns_about_system_loopback():
     assert config == before
 
 
+def test_state_keeps_actionable_warnings_and_attaches_dns_warning_to_its_field():
+    from backend.common.linux_gateway import gateway_editor_state
+
+    config = snapshot()
+    config['oxidns']['local_dns'] = 'udp://192.168.1.1:53'
+    config['mihomo']['linux_gateway'] = {'enabled': True, 'rule_set_ids': ['deleted-rule']}
+    before = deepcopy(config)
+
+    state = gateway_onboarding_state(config, 3)
+
+    assert 'DoH / DoT' in state['field_warnings']['local_dns']
+    assert any('deleted-rule' in warning for warning in state['warnings'])
+    assert not any('Linux + nftables' in warning or 'DNS' in warning for warning in state['warnings'])
+    # The existing gateway editor retains its usage guidance.
+    assert any('Linux + nftables' in warning for warning in gateway_editor_state(config)['warnings'])
+    assert config == before
+
+    config['oxidns']['local_dns'] = DEFAULT_LOCAL_DNS
+    assert gateway_onboarding_state(config, 3)['field_warnings'] == {}
+
+
 @pytest.mark.parametrize('value', ['- addr: [broken', '- wrong: https://223.5.5.5/dns-query', '- addr: null'])
 def test_bad_dns_yaml_returns_form_error_not_server_failure(onboarding_app, value):
     client, repository = onboarding_app
