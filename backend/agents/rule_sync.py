@@ -115,8 +115,17 @@ def prepare_candidate(agent, source, baseline, settings, deployment_id):
     pinned = [{'path': path, 'content': value, 'role': role} for path, (value, role) in previous.items()
               if role != 'config' and (role != 'rule' or not settings['library']
                     or (service == 'oxidns' and not path.startswith('rules/rule_')))]
+    local_dns_watchdog = True
+    if service == 'oxidns':
+        from backend.common.dns_watchdog import ensure_local_dns_watchdog
+        document = yaml.safe_load(previous[base_bundle.manifest['config_path']][0])
+        # Rule-only publication must retain the deployed listener graph. Old
+        # deployments acquire the local watchdog response on their next full
+        # publication; adding it here would cross the rule isolation boundary.
+        local_dns_watchdog = ensure_local_dns_watchdog(document) == document
     candidate = build_deployment_bundle(agent, source, content, ruleset_downloads=downloads,
-                pinned_files=pinned, base_url=base_url, deployment_id=deployment_id)
+                pinned_files=pinned, base_url=base_url, deployment_id=deployment_id,
+                local_dns_watchdog=local_dns_watchdog)
     candidate = retarget_config_path(candidate, base_bundle.manifest['config_path'])
     comparison = next(item for item in candidate.manifest['files'] if item['role'] == 'config')
     candidate = isolate_rule_bundle(base_bundle, candidate, service)

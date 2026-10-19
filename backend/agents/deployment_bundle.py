@@ -319,10 +319,23 @@ def convert_mosdns_rules(content, rule_type='domain_set'):
     return '\n'.join(converted).encode('utf-8')
 
 
+def render_deployment_config(main, service, *, local_dns_watchdog=True):
+    """Render the delivered main file without materializing remote resources."""
+    if local_dns_watchdog and service in ('mosdns', 'oxidns'):
+        from backend.common.dns_watchdog import ensure_local_dns_watchdog
+        try:
+            main = ensure_local_dns_watchdog(main)
+        except ValueError as exc:
+            raise preparation_context(DeploymentPreparationError(str(exc)),
+                                      name=service, path='config.yaml', kind='配置') from None
+    return yaml.safe_dump(main, allow_unicode=True, sort_keys=False).encode('utf-8')
+
+
 def build_deployment_bundle(agent, config, config_content, *, provider_downloads=(),
                             ruleset_downloads=(), custom_files=(), base_url='', deployment_id=None,
-                            progress=None, detail_progress=None, phase_progress=None, pinned_files=()):
-    """Pack the exact generated graph and all its managed file references."""
+                            progress=None, detail_progress=None, phase_progress=None, pinned_files=(),
+                            local_dns_watchdog=True):
+    """Pack the delivered graph, local DNS probe and all managed references."""
     config = deepcopy(config)
     service = agent.get('service_type', 'mihomo')
     if service not in ('mihomo', 'mosdns', 'oxidns'):
@@ -545,7 +558,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                 if path not in files:
                     raise DeploymentPreparationError('MosDNS references an unbundled file: ' + path)
                 paths[index] = './' + path
-    config_bytes = yaml.safe_dump(main, allow_unicode=True, sort_keys=False).encode('utf-8')
+    config_bytes = render_deployment_config(main, service, local_dns_watchdog=local_dns_watchdog)
     add('config.yaml', config_bytes, 'config')
     from backend.common.config import get_default_profile_id
     manifest = {

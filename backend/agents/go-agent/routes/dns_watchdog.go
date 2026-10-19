@@ -3,12 +3,14 @@ package routes
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -24,9 +26,10 @@ const watchdogProbeName = "configflow-watchdog.invalid."
 
 // watchdogTarget is what gets probed; String never includes the secret.
 type watchdogTarget struct {
-	kind    string // "dns" or "http"
-	address string
-	secret  string
+	kind     string // "dns" or "http"
+	address  string
+	secret   string
+	revision [sha256.Size]byte // failures must never carry across configuration changes
 }
 
 func (t watchdogTarget) String() string { return t.kind + "://" + t.address }
@@ -46,10 +49,12 @@ type serviceWatchdog struct {
 	restart func(cfg *Config) ([]byte, error)
 	now     func() time.Time
 
-	consecutive int
-	restarts    []time.Time
-	pausedUntil time.Time
-	gaveUp      bool
+	consecutive  int
+	restarts     []time.Time
+	pausedUntil  time.Time
+	gaveUp       bool
+	lastTarget   watchdogTarget
+	pausedReason string
 }
 
 func newDNSWatchdog(cfg *Config) *serviceWatchdog {
@@ -97,15 +102,24 @@ func (w *serviceWatchdog) tick() string {
 		w.consecutive = 0
 		return "busy"
 	}
-	release()
 	if running, err := w.running(w.cfg); err != nil || !running {
+		release()
 		// Crashes are the service manager's job; a stopped service stays stopped.
 		w.consecutive = 0
 		return "not-running"
 	}
 	target, err := watchdogTargetFor(w.cfg)
+	release()
 	if err != nil {
-		return "no-address"
+		return w.pause(err)
+	}
+	if w.pausedReason != "" {
+		log.Printf("Watchdog: %s probe available again", w.cfg.ServiceType)
+		w.pausedReason = ""
+	}
+	if target != w.lastTarget {
+		w.consecutive = 0
+		w.lastTarget = target
 	}
 	if err = w.probe(target); err == nil {
 		if w.consecutive > 0 {
@@ -139,6 +153,21 @@ func (w *serviceWatchdog) tick() string {
 		return "busy"
 	}
 	defer release()
+	// A deployment may have completed while the probe was waiting. Recheck the
+	// exact configuration under the operation lock before acting on its failure.
+	current, err := watchdogTargetFor(w.cfg)
+	if err != nil {
+		return w.pause(err)
+	}
+	if current != target {
+		w.consecutive = 0
+		w.lastTarget = current
+		return "configuration-changed"
+	}
+	if running, err := w.running(w.cfg); err != nil || !running {
+		w.consecutive = 0
+		return "not-running"
+	}
 	log.Printf("Watchdog: %s is running but not answering, restarting %s", target, w.cfg.ServiceType)
 	w.restarts = append(w.restarts, now)
 	w.consecutive = 0
@@ -150,33 +179,40 @@ func (w *serviceWatchdog) tick() string {
 	return "restarted"
 }
 
-// watchdogTargetFor picks what to probe: mihomo's external controller (or its
-// DNS listener when no controller is configured), otherwise the DNS listener.
-func watchdogTargetFor(cfg *Config) (watchdogTarget, error) {
-	if cfg.ServiceType != "mihomo" {
-		address, err := watchdogDNSAddress(cfg)
-		return watchdogTarget{kind: "dns", address: address}, err
+func (w *serviceWatchdog) pause(err error) string {
+	w.consecutive = 0
+	w.lastTarget = watchdogTarget{}
+	if reason := err.Error(); reason != w.pausedReason {
+		log.Printf("Watchdog: %s probe paused: %s", w.cfg.ServiceType, reason)
+		w.pausedReason = reason
 	}
+	return "probe-unavailable"
+}
+
+// A DNS probe is safe only when this exact active configuration handles the
+// reserved name locally, before any upstream or other user-supplied executor.
+func watchdogTargetFor(cfg *Config) (watchdogTarget, error) {
 	data, err := os.ReadFile(cfg.ConfigPath)
 	if err != nil {
-		return watchdogTarget{}, err
+		return watchdogTarget{}, fmt.Errorf("cannot read active configuration")
 	}
 	var doc map[string]interface{}
-	if err = yaml.Unmarshal(data, &doc); err != nil {
-		return watchdogTarget{}, err
+	if err = yaml.Unmarshal(data, &doc); err != nil || len(doc) == 0 {
+		return watchdogTarget{}, fmt.Errorf("cannot parse active configuration")
 	}
-	if controller, _ := doc["external-controller"].(string); controller != "" {
-		secret, _ := doc["secret"].(string)
-		return watchdogTarget{kind: "http", address: loopbackAddress(controller), secret: secret}, nil
-	}
-	if dns, _ := doc["dns"].(map[string]interface{}); dns != nil {
-		if enabled, _ := dns["enable"].(bool); enabled {
-			if listen, _ := dns["listen"].(string); listen != "" {
-				return watchdogTarget{kind: "dns", address: loopbackAddress(listen)}, nil
-			}
+	revision := sha256.Sum256(data)
+	if cfg.ServiceType == "mihomo" {
+		if controller, _ := doc["external-controller"].(string); controller != "" {
+			secret, _ := doc["secret"].(string)
+			return watchdogTarget{kind: "http", address: loopbackAddress(controller), secret: secret, revision: revision}, nil
 		}
+		return watchdogTarget{}, fmt.Errorf("no external-controller; unguarded DNS fallback is disabled")
 	}
-	return watchdogTarget{}, fmt.Errorf("no external-controller or dns.listen")
+	if cfg.ServiceType != "oxidns" && cfg.ServiceType != "mosdns" {
+		return watchdogTarget{}, fmt.Errorf("unsupported service type")
+	}
+	address, err := guardedWatchdogDNSAddress(cfg, doc)
+	return watchdogTarget{kind: "dns", address: address, revision: revision}, err
 }
 
 func probeWatchdogTarget(t watchdogTarget) error {
@@ -208,31 +244,88 @@ func controllerAnswers(address, secret string) error {
 	return nil
 }
 
-// watchdogDNSAddress is the configured health address or the first UDP listener.
+// watchdogDNSAddress never trusts a health address independently of the core's
+// actual local UDP listeners and the entry sequence that handles their queries.
 func watchdogDNSAddress(cfg *Config) (string, error) {
+	target, err := watchdogTargetFor(cfg)
+	if err == nil && target.kind != "dns" {
+		return "", fmt.Errorf("no guarded DNS target")
+	}
+	return target.address, err
+}
+
+func guardedWatchdogDNSAddress(cfg *Config, doc map[string]interface{}) (string, error) {
+	if include := doc["include"]; include != nil {
+		values, ok := include.([]interface{})
+		if !ok || len(values) != 0 {
+			return "", fmt.Errorf("included DNS configuration cannot be checked for a local probe rule")
+		}
+	}
+	healthAddress := ""
 	if cfg.HealthDNSAddress != "" {
-		return loopbackAddress(cfg.HealthDNSAddress), nil
-	}
-	data, err := os.ReadFile(cfg.ConfigPath)
-	if err != nil {
-		return "", err
-	}
-	var doc map[string]interface{}
-	if err = yaml.Unmarshal(data, &doc); err != nil {
-		return "", err
+		var err error
+		healthAddress, err = oxMonitorLocalAddress(loopbackAddress(cfg.HealthDNSAddress))
+		if err != nil {
+			return "", fmt.Errorf("health_dns_address is not a supported local IP endpoint")
+		}
 	}
 	plugins, _ := doc["plugins"].([]interface{})
+	byTag := map[string]map[string]interface{}{}
 	for _, value := range plugins {
-		plugin, _ := value.(map[string]interface{})
+		plugin, ok := value.(map[string]interface{})
+		if !ok {
+			return "", fmt.Errorf("unsupported DNS plugin configuration")
+		}
+		if tag, _ := plugin["tag"].(string); tag != "" {
+			if byTag[tag] != nil {
+				return "", fmt.Errorf("ambiguous DNS plugin tags")
+			}
+			byTag[tag] = plugin
+		}
+	}
+	var selected map[string]interface{}
+	address := ""
+	for _, value := range plugins {
+		plugin := value.(map[string]interface{})
 		if plugin["type"] != "udp_server" {
 			continue
 		}
 		args, _ := plugin["args"].(map[string]interface{})
-		if listen, _ := args["listen"].(string); listen != "" {
-			return loopbackAddress(listen), nil
+		listen, _ := args["listen"].(string)
+		local, err := oxMonitorLocalAddress(loopbackAddress(listen))
+		if err != nil {
+			return "", fmt.Errorf("UDP listener is not a supported local IP endpoint")
 		}
+		if healthAddress != "" && local != healthAddress {
+			continue
+		}
+		if selected != nil {
+			if local == address {
+				return "", fmt.Errorf("ambiguous UDP listener address")
+			}
+			continue
+		}
+		selected, address = args, local
 	}
-	return "", fmt.Errorf("no udp_server listener")
+	if selected == nil {
+		return "", fmt.Errorf("no UDP listener matches the local health address")
+	}
+	entry, _ := selected["entry"].(string)
+	sequence := byTag[entry]
+	steps, _ := sequence["args"].([]interface{})
+	if sequence["type"] != "sequence" || len(steps) == 0 || !isWatchdogLocalRule(steps[0]) {
+		return "", fmt.Errorf("UDP entry lacks the first local watchdog rule; publish the configuration to enable probing")
+	}
+	return address, nil
+}
+
+func isWatchdogLocalRule(value interface{}) bool {
+	rule, ok := value.(map[string]interface{})
+	if !ok || len(rule) != 2 || rule["exec"] != "reject 3" {
+		return false
+	}
+	matches, _ := rule["matches"].([]interface{})
+	return len(matches) == 1 && matches[0] == "qname full:"+strings.TrimSuffix(watchdogProbeName, ".")
 }
 
 // dnsAnswers sends one UDP query and accepts any well-formed reply with the

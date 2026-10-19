@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 import requests
 import yaml
 
-from backend.agents.deployment_bundle import deployment_content_fingerprint
+from backend.agents.deployment_bundle import deployment_content_fingerprint, render_deployment_config
 from backend.agents.diagnostics import failure_text
 from backend.agents.operation_events import append_event
 from backend.common.oxidns_editor import prepare_editor
@@ -234,8 +234,10 @@ def disable(manager, target_id):
     return {'success': True, 'binding': None, 'state': None}
 
 
-def _state(manager, target_id, status, message, **fields):
+def _state(manager, target_id, status, message, *, before_save=None, **fields):
     def save(agents):
+        if before_save is not None:
+            before_save(agents)
         target = next(item for item in agents if item['id'] == target_id)
         secrets = tuple(item.get('token') for item in agents)
         state = target.setdefault('dns_follow_state', {})
@@ -270,6 +272,79 @@ def retry(manager, target_id):
 def _prepare(agent, config, base_url, deployment_id):
     from backend.routes.agents import _prepare_transactional_content
     return _prepare_transactional_content(agent, config, base_url=base_url, deployment_id=deployment_id)
+
+
+def _generated_main(config, baseline):
+    from backend.converters.oxidns import generate_oxidns_config
+    return yaml.safe_load(generate_oxidns_config(config, base_url=baseline.get('base_url', '')))
+
+
+def _matches_applied_config(target, config, baseline):
+    """Prove the draft upstream belongs to the confirmed live main file.
+
+    A binding can be created from an unpublished draft. Its address alone is
+    not evidence of the installed address. Only a full main-file digest, plus
+    dns/active's device verification, permits skipping resource downloads.
+    """
+    version = baseline.get('config_version')
+    if (not isinstance(version, str) or not re.fullmatch(r'[0-9a-f]{64}', version)
+            or target.get('config_version') != version):
+        return False
+    main = _generated_main(config, baseline)
+    # Existing publications may predate the local watchdog. Both renderings
+    # retain the bound upstream; a no-op does not need to add the local probe.
+    return any(hashlib.sha256(render_deployment_config(
+        main, 'oxidns', local_dns_watchdog=watchdog)).hexdigest() == version
+        for watchdog in (False, True))
+
+
+def _matches_applied_bundle(bundle, config, baseline):
+    if deployment_content_fingerprint(bundle.manifest) == baseline['fingerprint']:
+        return True
+    # A full publication adds the local probe, but the confirmed baseline may
+    # predate it. Compare the original rendering with the SAME materialized
+    # resources so a guard migration cannot hide draft edits or rule changes.
+    legacy_main = render_deployment_config(_generated_main(config, baseline), 'oxidns', local_dns_watchdog=False)
+    manifest = deepcopy(bundle.manifest)
+    for item in manifest['files']:
+        if item['path'] == manifest['config_path']:
+            item.update(sha256=hashlib.sha256(legacy_main).hexdigest(), size=len(legacy_main))
+    return deployment_content_fingerprint(manifest) == baseline['fingerprint']
+
+
+def _check_ownership(manager, agents, target, source, binding, source_id, baseline):
+    """Reject stale decisions after Agent calls or resource preparation."""
+    current_source = next((item for item in agents if item['id'] == source['id']), None)
+    current_target = next((item for item in agents if item['id'] == target['id']), None)
+    for current, previous, service in ((current_source, source, 'mihomo'), (current_target, target, 'oxidns')):
+        if not current or current.get('service_type') != service or not current.get('enabled', True):
+            raise FollowError(f'{service} Agent 不存在、已停用或类型不符')
+        if any(current.get(key) != previous.get(key) for key in ('host', 'port', 'token')):
+            raise FollowError('Agent 连接信息已改变，请重试 DNS 联动')
+    if (_profile(manager, current_source) != binding['source_profile_id']
+            or _profile(manager, current_target) != binding['target_profile_id']
+            or current_target.get('dns_follow') != binding):
+        raise FollowError('Agent 的配置绑定已改变，请重新设置 DNS 联动')
+    latest = current_source.get('latest_deployment') or {}
+    if (latest.get('deployment_id') != source_id or latest.get('status') != 'succeeded'
+            or latest.get('manual_rollback')):
+        raise FollowError('Mihomo 已开始新的发布或回滚，请等待最新结果后重试')
+    latest_target = current_target.get('latest_deployment') or {}
+    previous_target = target.get('latest_deployment') or {}
+    if (current_target.get('applied_content') != baseline
+            or current_target.get('config_version') != target.get('config_version')
+            or any(latest_target.get(key) != previous_target.get(key)
+                   for key in ('deployment_id', 'status', 'manual_rollback'))
+            or (latest_target and latest_target.get('status') not in _TERMINAL)):
+        raise FollowError('OxiDNS 发布基准已变化，请重试')
+
+
+def _finish_unchanged(manager, target, source, binding, source_id, baseline, address):
+    # Validate and record success under the same store transaction. Otherwise a
+    # newer binding or deployment could arrive between the check and the write.
+    _state(manager, target['id'], 'succeeded', 'Mihomo 已更新，OxiDNS 上游地址未变化，无需再次发布',
+           before_save=lambda agents: _check_ownership(manager, agents, target, source, binding, source_id, baseline),
+           target_deployment_id=None, address=address)
 
 
 def _endpoint(manager, target, source, binding, deployment_id, entry):
@@ -374,14 +449,17 @@ def _run(manager, target, source, binding, source_state):
     active = _request(manager, target, 'dns/active', params={'deployment_id': baseline.get('deployment_id')})
     if active.get('agent_id') != target_id or active.get('deployment_id') != baseline.get('deployment_id'):
         raise FollowError('OxiDNS 当前配置与最后成功发布不一致，请先手动发布并确认')
+    if entry['addr'] == address and _matches_applied_config(target, config, baseline):
+        _finish_unchanged(manager, target, source, binding, source_id, baseline, address)
+        return
     _state(manager, target_id, 'preparing', '正在核对 OxiDNS 配置与规则文件是否存在未发布修改')
     prepared = _prepare(target, config, base_url, child_id)
-    if deployment_content_fingerprint(prepared['bundle'].manifest) != baseline['fingerprint']:
+    if not _matches_applied_bundle(prepared['bundle'], config, baseline):
         raise FollowError('OxiDNS 有其他未发布的配置或规则变化，请先手动发布这些修改，再重试联动')
     scheme, endpoint = address.split('://', 1)
     _state(manager, target_id, 'preparing', f'正在同步 OxiDNS 上游为 {endpoint}（{scheme.upper()}）', address=address)
     if entry['addr'] == address:
-        _state(manager, target_id, 'succeeded', 'Mihomo 已更新，OxiDNS 上游地址未变化，无需再次发布', target_deployment_id=None)
+        _finish_unchanged(manager, target, source, binding, source_id, baseline, address)
         return
     original_settings_digest = _digest(config.get('oxidns', {}))
     entry['addr'] = address
@@ -397,13 +475,7 @@ def _run(manager, target, source, binding, source_state):
         raise FollowError('OxiDNS 规则文件在准备期间发生变化，请先手动发布后重试')
     # No profile writes during preparation. Re-read ownership immediately before
     # reservation; latest source is also rechecked to avoid publishing stale jobs.
-    current_source = _agent(manager, source['id'], 'mihomo')
-    latest = current_source.get('latest_deployment') or {}
-    if latest.get('deployment_id') != source_id or latest.get('status') != 'succeeded' or latest.get('manual_rollback'):
-        raise FollowError('Mihomo 已开始新的发布或回滚，请等待最新结果后重试')
-    current_target = _agent(manager, target_id, 'oxidns')
-    if current_target.get('applied_content') != baseline:
-        raise FollowError('OxiDNS 发布基准已变化，请重试')
+    _check_ownership(manager, manager.get_all_agents(), target, source, binding, source_id, baseline)
     result = manager.begin_deployment(target_id, child_id)
     if not result.get('success') or result.get('existing'):
         raise FollowError(result.get('message') or 'OxiDNS 还有其他发布任务，请等待结果后重试')

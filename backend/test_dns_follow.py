@@ -56,8 +56,10 @@ class FollowEnvironment:
         if method == 'post' and path == 'deployments':
             ident = kwargs['headers']['X-Deployment-ID']
             status = self.target_status if agent['id'] == self.target_id else 'succeeded'
+            with tarfile.open(fileobj=io.BytesIO(kwargs['data']), mode='r:gz') as archive:
+                config_version = hashlib.sha256(archive.extractfile('files/config.yaml').read()).hexdigest()
             result = {'success': status != 'failed', 'status': status,
-                      'config_version': f'config-{ident}'}
+                      'config_version': config_version}
             if status == 'failed':
                 result.update(message='OxiDNS service failed to start', error_details='port already in use')
             self.remote[(agent['id'], ident)] = result
@@ -487,6 +489,368 @@ def test_unchanged_address_skips_child_deployment(follow_env):
     assert env.uploads == []
 
 
+def test_unchanged_address_does_not_prepare_or_download_rules(follow_env, monkeypatch):
+    env = follow_env
+    env.bind()
+    env.listener.update(port=1053, listen='0.0.0.0:1053')
+    env.publish_source()
+    before = env.repository.get_profile('default')['oxidns']
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        calls.append(True)
+        raise requests.exceptions.SSLError('UNEXPECTED_EOF_WHILE_READING')
+
+    monkeypatch.setattr(dns_follow, '_prepare', unavailable)
+    monkeypatch.setattr('backend.agents.deployment_bundle.request_rule', unavailable)
+    dns_follow.tick(env.manager)
+
+    assert env.state()['status'] == 'succeeded', env.state()
+    assert env.state()['target_deployment_id'] is None
+    assert env.state()['address'] == 'udp://127.0.0.1:1053'
+    assert calls == []
+    assert env.uploads == []
+    assert env.repository.get_profile('default')['oxidns'] == before
+    assert any(call[2] == 'dns/listener' for call in env.calls)
+    assert any(call[2] == 'dns/active' for call in env.calls)
+
+
+@pytest.mark.parametrize(('with_dns_server', 'address_changed', 'legacy_baseline', 'baseline_digest', 'outage'), [
+    pytest.param(False, False, False, 'full', True, id='unchanged'),
+    pytest.param(True, False, False, 'full', True, id='unchanged-with-watchdog'),
+    pytest.param(False, True, False, 'full', True, id='changed'),
+    pytest.param(True, True, False, 'full', True, id='changed-with-watchdog'),
+    pytest.param(True, False, True, 'full', True, id='unchanged-legacy-without-watchdog'),
+    pytest.param(True, True, True, 'full', True, id='changed-legacy-retries-after-tls-outage'),
+    pytest.param(True, False, True, 'short', False, id='unchanged-legacy-short-digest'),
+    pytest.param(True, False, True, 'missing', False, id='unchanged-legacy-missing-digest'),
+    pytest.param(True, True, True, 'short', False, id='changed-legacy-short-digest'),
+    pytest.param(True, True, True, 'missing', False, id='changed-legacy-missing-digest'),
+])
+def test_apple_tls_outage_skipped_only_for_unchanged_address(
+        follow_env, monkeypatch, with_dns_server, address_changed, legacy_baseline, baseline_digest, outage):
+    from backend.agents import deployment_bundle
+    from backend.common.dns_watchdog import ensure_local_dns_watchdog
+
+    env = follow_env
+    url = 'https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Apple/Apple.list'
+    rule_id = 'apple'
+    path = './rules/rule_' + hashlib.sha256(rule_id.encode()).hexdigest()[:16] + '_domain.txt'
+    settings = deepcopy(env.repository.get_profile('default')['oxidns'])
+    document = yaml.safe_load(settings['native_config'])
+    document['plugins'].append({'tag': 'apple', 'type': 'domain_set', 'args': {'files': [path]}})
+    if with_dns_server:
+        document['plugins'].append({'tag': 'dns', 'type': 'udp_server',
+                                    'args': {'listen': '127.0.0.1:5353', 'entry': 'forward_remote'}})
+    settings.update(native_config=yaml.safe_dump(document, sort_keys=False), direct_rulesets=[rule_id])
+    env.repository.save_shared({'rule_library': [{
+        'id': 'apple-library', 'name': 'Apple', 'source_type': 'url',
+        'behavior': 'domain', 'url': url, 'enabled': True,
+    }]})
+    env.repository.save_profile('default', {'oxidns': settings, 'rule_configs': [{
+        'id': rule_id, 'itemType': 'ruleset', 'enabled': True,
+        'library_rule_id': 'apple-library', 'policy': 'DIRECT',
+    }]})
+    downloads = []
+    offline = False
+
+    def fetch(source, **kwargs):
+        downloads.append(source)
+        if offline:
+            raise requests.exceptions.SSLError('UNEXPECTED_EOF_WHILE_READING')
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'DOMAIN-SUFFIX,apple.com\n'
+        response._content_consumed = True
+        return response
+
+    monkeypatch.setattr(deployment_bundle, 'request_rule', fetch)
+    config, revision = env.repository.get_publish_snapshot('default')
+    with monkeypatch.context() as previous_release:
+        if legacy_baseline:
+            # The prior release delivered valid DNS server configurations
+            # before local liveness rules became part of the bundle renderer.
+            previous_release.setattr('backend.common.dns_watchdog.ensure_local_dns_watchdog',
+                                     lambda document: document)
+        prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
+                                                  deployment_id='target-apple-baseline')
+    result = env.manager.publish_deployment(env.target_id, prepared['bundle'], config_revision=revision,
+                                            base_url='https://config.test', resource_config=config)
+    assert result['status'] == 'succeeded', result
+    assert downloads == [url]
+    published = env.uploaded_document()
+    if legacy_baseline:
+        assert published['plugins'][-1]['args']['entry'] == 'forward_remote'
+        assert not any(plugin.get('tag', '').startswith('cf_watchdog_') for plugin in published['plugins'])
+    if baseline_digest != 'full':
+        def replace_digest(agents):
+            target = next(item for item in agents if item['id'] == env.target_id)
+            version = target['applied_content']['config_version']
+            value = version[:8] if baseline_digest == 'short' else ''
+            target['applied_content']['config_version'] = value
+            target['config_version'] = value
+        env.manager._update_agents(replace_digest)
+    env.uploads.clear()
+    downloads.clear()
+    offline = outage
+    env.bind()
+    if not address_changed:
+        env.listener.update(port=1053, listen='0.0.0.0:1053')
+    env.publish_source()
+    dns_follow.tick(env.manager)
+
+    if not address_changed:
+        assert env.uploads == []
+        assert env.state()['status'] == 'succeeded', env.state()
+        assert env.state()['target_deployment_id'] is None
+        assert downloads == ([] if baseline_digest == 'full' else [url])
+        return
+
+    if outage:
+        assert env.uploads == []
+        assert env.state()['status'] == 'failed', env.state()
+        assert '无法下载「Apple」规则集' in env.state()['message']
+        assert 'HTTPS' in env.state()['message']
+        assert downloads == [url]
+        offline = False
+        dns_follow.retry(env.manager, env.target_id)
+        env.advance('succeeded')
+    else:
+        assert env.state()['status'] == 'succeeded', env.state()
+    expected = ensure_local_dns_watchdog(published)
+    expected['plugins'][0]['args']['upstreams'][1]['addr'] = 'udp://127.0.0.1:2053'
+    assert env.uploaded_document() == expected
+    assert len(env.uploads) == 1
+    assert downloads == [url] * (3 if outage else 2)
+
+
+def test_unpublished_bound_address_cannot_be_mistaken_for_live_noop(follow_env, monkeypatch):
+    env = follow_env
+    settings = deepcopy(env.repository.get_profile('default')['oxidns'])
+    document = yaml.safe_load(settings['native_config'])
+    document['plugins'][0]['args']['upstreams'][1]['addr'] = 'udp://127.0.0.1:2053'
+    settings['native_config'] = yaml.safe_dump(document, sort_keys=False)
+    env.repository.save_profile('default', {'oxidns': settings})
+    env.bind()
+    env.publish_source()
+    prepare = dns_follow._prepare
+    calls = []
+
+    def record_prepare(*args, **kwargs):
+        calls.append(True)
+        return prepare(*args, **kwargs)
+
+    monkeypatch.setattr(dns_follow, '_prepare', record_prepare)
+    dns_follow.tick(env.manager)
+
+    assert env.state()['status'] == 'failed', env.state()
+    assert '未发布' in env.state()['message']
+    assert calls == [True]
+    assert env.uploads == []
+    assert env.repository.get_profile('default')['oxidns']['native_config'] == settings['native_config']
+
+
+def test_unchanged_address_still_requires_verified_running_device(follow_env, monkeypatch):
+    env = follow_env
+    env.bind()
+    env.listener.update(port=1053, listen='0.0.0.0:1053')
+    env.active_matches = False
+    env.publish_source()
+
+    def unexpected_prepare(*args, **kwargs):
+        pytest.fail('Invalid live baseline must be rejected before preparation')
+
+    monkeypatch.setattr(dns_follow, '_prepare', unexpected_prepare)
+    dns_follow.tick(env.manager)
+
+    assert env.state()['status'] == 'failed'
+    assert '已发布版本不一致' in env.state()['message']
+    assert env.uploads == []
+
+
+@pytest.mark.parametrize('change', [
+    'source_deployment', 'source_rollback', 'source_status', 'source_profile',
+    'source_disabled', 'source_type', 'target_baseline', 'target_deployment',
+    'target_version', 'target_profile', 'target_disabled', 'target_type',
+    'binding_id', 'binding_content',
+])
+@pytest.mark.parametrize(('legacy_digest', 'address_changed'), [
+    pytest.param(False, False, id='verified-digest-noop'),
+    pytest.param(True, False, id='legacy-digest-noop'),
+    pytest.param(False, True, id='changed-address-publication'),
+])
+def test_unchanged_address_rechecks_ownership_after_agent_verification(
+        follow_env, monkeypatch, change, legacy_digest, address_changed):
+    env = follow_env
+    env.bind()
+    if not address_changed:
+        env.listener.update(port=1053, listen='0.0.0.0:1053')
+    env.publish_source()
+    if legacy_digest:
+        def use_legacy_digest(agents):
+            target = next(item for item in agents if item['id'] == env.target_id)
+            target['applied_content']['config_version'] = 'legacy-target-baseline'
+            target['config_version'] = 'legacy-target-baseline'
+        env.manager._update_agents(use_legacy_digest)
+    original_request = env.request
+
+    def request(agent, method, path, **kwargs):
+        result = original_request(agent, method, path, **kwargs)
+        if path == 'dns/active':
+            # Model a restored store or older worker bypassing the normal
+            # follow reservation: a response alone cannot authorize success.
+            def replace(agents):
+                source = next(item for item in agents if item['id'] == env.source_id)
+                target = next(item for item in agents if item['id'] == env.target_id)
+                if change == 'source_deployment':
+                    source['latest_deployment']['deployment_id'] = 'source-newer'
+                elif change == 'source_rollback':
+                    source['latest_deployment']['manual_rollback'] = True
+                elif change == 'source_status':
+                    source['latest_deployment']['status'] = 'starting'
+                elif change == 'source_profile':
+                    source['profile_id'] = 'other'
+                elif change == 'source_disabled':
+                    source['enabled'] = False
+                elif change == 'source_type':
+                    source['service_type'] = 'mosdns'
+                elif change == 'target_baseline':
+                    target['applied_content']['deployment_id'] = 'target-newer'
+                elif change == 'target_deployment':
+                    target['latest_deployment']['deployment_id'] = 'target-newer'
+                elif change == 'target_version':
+                    target['config_version'] = '0' * 64
+                elif change == 'target_profile':
+                    target['profile_id'] = 'other'
+                elif change == 'target_disabled':
+                    target['enabled'] = False
+                elif change == 'target_type':
+                    target['service_type'] = 'mosdns'
+                elif change == 'binding_id':
+                    target['dns_follow']['id'] = 'replacement-binding'
+                elif change == 'binding_content':
+                    target['dns_follow']['upstream_index'] = 0
+            env.manager._update_agents(replace)
+        return result
+
+    monkeypatch.setattr(AgentManager, '_deployment_request', lambda _self, *args, **kwargs: request(*args, **kwargs))
+    dns_follow.tick(env.manager)
+
+    assert env.state()['status'] == 'failed', env.state()
+    assert '无需再次发布' not in env.state()['message']
+    assert env.uploads == []
+
+
+@pytest.mark.parametrize('legacy_digest', [False, True])
+def test_noop_rechecks_binding_when_success_is_about_to_be_saved(follow_env, monkeypatch, legacy_digest):
+    env = follow_env
+    env.bind()
+    env.listener.update(port=1053, listen='0.0.0.0:1053')
+    env.publish_source()
+    if legacy_digest:
+        def use_legacy_digest(agents):
+            target = next(item for item in agents if item['id'] == env.target_id)
+            target['applied_content']['config_version'] = 'legacy-target-baseline'
+            target['config_version'] = 'legacy-target-baseline'
+        env.manager._update_agents(use_legacy_digest)
+    save_state = dns_follow._state
+    replacements = []
+
+    def replace_before_success(manager, target_id, status, message, **fields):
+        if status == 'succeeded' and fields.get('target_deployment_id') is None:
+            def replace(agents):
+                target = next(item for item in agents if item['id'] == env.target_id)
+                target['dns_follow']['upstream_index'] = 0
+            env.manager._update_agents(replace)
+            replacements.append(True)
+        return save_state(manager, target_id, status, message, **fields)
+
+    monkeypatch.setattr(dns_follow, '_state', replace_before_success)
+    dns_follow.tick(env.manager)
+
+    assert replacements == [True]
+    assert env.state()['status'] == 'failed', env.state()
+    assert '配置绑定已改变' in env.state()['message']
+    assert env.agent()['dns_follow']['upstream_index'] == 0
+    assert env.uploads == []
+
+
+def test_unchanged_native_include_uses_expanded_main_digest_without_preparation(follow_env, monkeypatch):
+    env = follow_env
+    settings = deepcopy(env.repository.get_profile('default')['oxidns'])
+    document = yaml.safe_load(settings['native_config'])
+    document['include'] = ['plugins/listener.yaml']
+    settings['native_config'] = yaml.safe_dump(document, sort_keys=False)
+    settings['additional_files'] = [{
+        'path': 'plugins/listener.yaml', 'encoding': 'text',
+        'content': yaml.safe_dump({'plugins': [{
+            'tag': 'included_dns', 'type': 'udp_server',
+            'args': {'listen': '127.0.0.1:5353', 'entry': 'forward_remote'},
+        }]}, sort_keys=False),
+    }]
+    env.repository.save_profile('default', {'oxidns': settings})
+    config, revision = env.repository.get_publish_snapshot('default')
+    prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
+                                               deployment_id='target-native-include')
+    result = env.manager.publish_deployment(env.target_id, prepared['bundle'], config_revision=revision,
+                                            base_url='https://config.test', resource_config=config)
+    assert result['status'] == 'succeeded', result
+    published = env.uploaded_document()
+    assert 'include' not in published
+    assert any(plugin.get('tag') == 'included_dns' for plugin in published['plugins'])
+    assert any(plugin.get('tag', '').startswith('cf_watchdog_') for plugin in published['plugins'])
+    env.uploads.clear()
+    env.bind()
+    env.listener.update(port=1053, listen='0.0.0.0:1053')
+    env.publish_source()
+    before = deepcopy(env.repository.get_profile('default')['oxidns'])
+
+    def unexpected_preparation(*args, **kwargs):
+        pytest.fail('An unchanged expanded native document must not prepare or download rules')
+
+    monkeypatch.setattr(dns_follow, '_prepare', unexpected_preparation)
+    monkeypatch.setattr('backend.agents.deployment_bundle.request_rule', unexpected_preparation)
+    dns_follow.tick(env.manager)
+
+    assert env.state()['status'] == 'succeeded', env.state()
+    assert env.state()['target_deployment_id'] is None
+    assert env.uploads == []
+    assert env.repository.get_profile('default')['oxidns'] == before
+
+
+@pytest.mark.parametrize('version', ['legacy', 'short', 'missing', 'mismatch'])
+def test_unchanged_address_without_digest_evidence_uses_full_baseline_check(follow_env, monkeypatch, version):
+    env = follow_env
+    env.bind()
+    env.listener.update(port=1053, listen='0.0.0.0:1053')
+    env.publish_source()
+
+    def replace(agents):
+        target = next(item for item in agents if item['id'] == env.target_id)
+        if version == 'mismatch':
+            target['config_version'] = '0' * 64
+        else:
+            previous = target['applied_content']['config_version']
+            value = {'legacy': 'config-target-baseline', 'short': previous[:8], 'missing': ''}[version]
+            target['applied_content']['config_version'] = value
+            target['config_version'] = value
+
+    env.manager._update_agents(replace)
+    prepare = dns_follow._prepare
+    calls = []
+
+    def record_prepare(*args, **kwargs):
+        calls.append(True)
+        return prepare(*args, **kwargs)
+
+    monkeypatch.setattr(dns_follow, '_prepare', record_prepare)
+    dns_follow.tick(env.manager)
+
+    assert env.state()['status'] == 'succeeded', env.state()
+    assert calls == [True]
+    assert env.uploads == []
+
+
 def test_error_state_redacts_agent_tokens_and_url_credentials(follow_env):
     env = follow_env
     env.bind()
@@ -622,19 +986,26 @@ def test_source_profile_change_during_preparation_invalidates_binding(follow_env
     assert env.state()['status'] == 'failed'
 
 
-def test_changed_managed_resource_blocks_automatic_publication(follow_env):
+@pytest.mark.parametrize('legacy_baseline', [False, True])
+def test_changed_managed_resource_blocks_automatic_publication(follow_env, monkeypatch, legacy_baseline):
     env = follow_env
     settings = deepcopy(env.repository.get_profile('default')['oxidns'])
     document = yaml.safe_load(settings['native_config'])
     document['plugins'].append({'tag': 'domains', 'type': 'domain_set',
                                 'args': {'files': ['rules/domains.txt']}})
+    document['plugins'].append({'tag': 'dns', 'type': 'udp_server',
+                                'args': {'listen': '127.0.0.1:5353', 'entry': 'forward_remote'}})
     settings.update(native_config=yaml.safe_dump(document), additional_files=[{
         'path': 'rules/domains.txt', 'encoding': 'text', 'content': 'full:before.example.test\n',
     }])
     env.repository.save_profile('default', {'oxidns': settings})
     config, revision = env.repository.get_publish_snapshot('default')
-    prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
-                                               deployment_id='baseline-with-resource')
+    with monkeypatch.context() as previous_release:
+        if legacy_baseline:
+            previous_release.setattr('backend.common.dns_watchdog.ensure_local_dns_watchdog',
+                                     lambda document: document)
+        prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
+                                                   deployment_id='baseline-with-resource')
     result = env.manager.publish_deployment(env.target_id, prepared['bundle'], config_revision=revision,
                                             base_url='https://config.test', resource_config=config)
     assert result['status'] == 'succeeded'

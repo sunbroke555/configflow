@@ -1,7 +1,10 @@
 package routes
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -73,15 +76,61 @@ func TestDNSAnswersAcceptsAnyReplyWithMatchingID(t *testing.T) {
 }
 
 func TestWatchdogDNSAddress(t *testing.T) {
-	dir := t.TempDir()
-	cfg := &Config{ConfigPath: filepath.Join(dir, "config.yaml")}
-	os.WriteFile(cfg.ConfigPath, []byte("plugins:\n  - tag: tcp\n    type: tcp_server\n    args: {listen: 0.0.0.0:5300}\n  - tag: udp\n    type: udp_server\n    args: {listen: 0.0.0.0:53}\n"), 0600)
-	if got, err := watchdogDNSAddress(cfg); err != nil || got != "127.0.0.1:53" {
-		t.Fatalf("got %q %v", got, err)
+	base := guardedWatchdogConfig("0.0.0.0:53")
+	for _, service := range []string{"oxidns", "mosdns"} {
+		for _, test := range []struct {
+			name, config, health, want string
+		}{
+			{"first-udp", base, "", "127.0.0.1:53"},
+			{"matching-override", base, "127.0.0.1:53", "127.0.0.1:53"},
+			{"wildcard-override", base, "0.0.0.0:53", "127.0.0.1:53"},
+			{"ipv6", guardedWatchdogConfig("[::]:53"), "[::1]:53", "[::1]:53"},
+			{"empty-includes", "include: []\n" + base, "", "127.0.0.1:53"},
+			{"second-listener", base + "  - {tag: another, type: udp_server, args: {listen: '127.0.0.1:1053', entry: main}}\n", "127.0.0.1:1053", "127.0.0.1:1053"},
+			{"different-override-port", base, "127.0.0.1:5353", ""},
+			{"remote-override", base, "192.0.2.123:53", ""},
+			{"hostname-override", base, "localhost:53", ""},
+			{"remote-listener", guardedWatchdogConfig("192.0.2.123:53"), "", ""},
+			{"hostname-listener", guardedWatchdogConfig("localhost:53"), "", ""},
+			{"zero-port", guardedWatchdogConfig("127.0.0.1:0"), "", ""},
+			{"missing-guard", strings.Replace(base, "qname full:configflow-watchdog.invalid", "qname full:other.invalid", 1), "", ""},
+			{"suffix-match", strings.Replace(base, "qname full:", "qname domain:", 1), "", ""},
+			{"wrong-response", strings.Replace(base, "reject 3", "reject 2", 1), "", ""},
+			{"extra-condition", strings.Replace(base, "invalid']", "invalid', 'qtype 1']", 1), "", ""},
+			{"extra-rule-field", strings.Replace(base, "exec: 'reject 3'", "exec: 'reject 3', custom: true", 1), "", ""},
+			{"guard-not-first", strings.Replace(base, "    args:\n", "    args:\n      - {exec: '$upstream'}\n", 1), "", ""},
+			{"unknown-entry", strings.ReplaceAll(base, "entry: main", "entry: other"), "", ""},
+			{"non-sequence-entry", strings.Replace(base, "type: sequence", "type: forward", 1), "", ""},
+			{"duplicate-tags", base + "  - {tag: main, type: sequence, args: []}\n", "", ""},
+			{"duplicate-listener", base + "  - {tag: another, type: udp_server, args: {listen: '127.0.0.1:53', entry: main}}\n", "", ""},
+			{"includes", "include: [more.yaml]\n" + base, "", ""},
+			{"missing-listener", "plugins: []\n", "127.0.0.1:53", ""},
+			{"broken-yaml", "plugins: [", "127.0.0.1:53", ""},
+		} {
+			t.Run(service+"/"+test.name, func(t *testing.T) {
+				cfg := &Config{ServiceType: service, ConfigPath: filepath.Join(t.TempDir(), "config.yaml"), HealthDNSAddress: test.health}
+				writeWatchdogConfig(t, cfg, test.config)
+				got, err := watchdogDNSAddress(cfg)
+				if test.want == "" {
+					if err == nil {
+						t.Fatalf("unsafe configuration accepted: %q", got)
+					}
+				} else if err != nil || got != test.want {
+					t.Fatalf("got %q, %v; want %q", got, err, test.want)
+				}
+			})
+		}
 	}
-	cfg.HealthDNSAddress = "10.0.0.6:53"
-	if got, _ := watchdogDNSAddress(cfg); got != "10.0.0.6:53" {
-		t.Fatalf("health_dns_address must win, got %q", got)
+}
+
+func guardedWatchdogConfig(listen string) string {
+	return fmt.Sprintf("plugins:\n  - tag: main\n    type: sequence\n    args:\n      - {matches: ['qname full:configflow-watchdog.invalid'], exec: 'reject 3'}\n      - {exec: '$upstream'}\n  - {tag: tcp, type: tcp_server, args: {listen: '0.0.0.0:5300', entry: main}}\n  - {tag: udp, type: udp_server, args: {listen: %q, entry: main}}\n", listen)
+}
+
+func writeWatchdogConfig(t *testing.T, cfg *Config, content string) {
+	t.Helper()
+	if err := os.WriteFile(cfg.ConfigPath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -97,8 +146,8 @@ func TestWatchdogTargetForMihomo(t *testing.T) {
 		t.Fatal("target must not print its secret")
 	}
 	os.WriteFile(cfg.ConfigPath, []byte("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n"), 0600)
-	if target, _ = watchdogTargetFor(cfg); target.kind != "dns" || target.address != "127.0.0.1:1053" {
-		t.Fatalf("without a controller mihomo falls back to its DNS listener: %+v", target)
+	if target, err = watchdogTargetFor(cfg); err == nil {
+		t.Fatalf("unguarded mihomo DNS fallback must stay disabled: %+v", target)
 	}
 	os.WriteFile(cfg.ConfigPath, []byte("mode: rule\n"), 0600)
 	if _, err = watchdogTargetFor(cfg); err == nil {
@@ -134,7 +183,8 @@ type watchdogFakes struct {
 
 func newTestWatchdog(t *testing.T, f *watchdogFakes) *serviceWatchdog {
 	t.Helper()
-	cfg := &Config{ServiceType: "oxidns", HealthDNSAddress: "127.0.0.1:53"}
+	cfg := &Config{ServiceType: "oxidns", ConfigPath: filepath.Join(t.TempDir(), "config.yaml"), HealthDNSAddress: "127.0.0.1:53"}
+	writeWatchdogConfig(t, cfg, guardedWatchdogConfig("127.0.0.1:53"))
 	w := newDNSWatchdog(cfg)
 	w.now = func() time.Time { return f.now }
 	w.probe = func(watchdogTarget) error {
@@ -236,6 +286,103 @@ func TestWatchdogRestartBudget(t *testing.T) {
 	}
 	if f.restarts != 4 {
 		t.Fatalf("budget must refill after the window, restarts=%d", f.restarts)
+	}
+}
+
+func TestWatchdogPausesUnsafeConfigurationsWithoutProbingAndResumes(t *testing.T) {
+	f := &watchdogFakes{now: time.Unix(1000, 0), running: true}
+	w := newTestWatchdog(t, f)
+	w.tick()
+	w.tick()
+	writeWatchdogConfig(t, w.cfg, strings.Replace(guardedWatchdogConfig("127.0.0.1:53"), "reject 3", "reject 2", 1))
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	probe := w.probe
+	w.probe = func(watchdogTarget) error {
+		t.Fatal("an unsafe configuration must not send even one DNS probe")
+		return nil
+	}
+	for i := 0; i < 4; i++ {
+		if got := w.tick(); got != "probe-unavailable" || w.consecutive != 0 {
+			t.Fatalf("unsafe configuration: got %s, failures=%d", got, w.consecutive)
+		}
+	}
+	if count := strings.Count(logs.String(), "probe paused:"); count != 1 {
+		t.Fatalf("unchanged pause reason must log once, got %d: %s", count, logs.String())
+	}
+	writeWatchdogConfig(t, w.cfg, guardedWatchdogConfig("127.0.0.1:53"))
+	w.probe = probe
+	if got := w.tick(); got != "failing" || w.consecutive != 1 || f.restarts != 0 {
+		t.Fatalf("new publication must resume with a fresh failure count: %s, failures=%d, restarts=%d", got, w.consecutive, f.restarts)
+	}
+	if strings.Count(logs.String(), "probe available again") != 1 {
+		t.Fatalf("resume was not logged: %s", logs.String())
+	}
+}
+
+func TestWatchdogUnreadableConfigurationAndMihomoFallbackNeverProbe(t *testing.T) {
+	for _, scenario := range []string{"missing", "invalid", "mihomo-dns-only"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := &watchdogFakes{now: time.Unix(1000, 0), running: true}
+			w := newTestWatchdog(t, f)
+			w.consecutive = 2
+			switch scenario {
+			case "missing":
+				if err := os.Remove(w.cfg.ConfigPath); err != nil {
+					t.Fatal(err)
+				}
+			case "invalid":
+				writeWatchdogConfig(t, w.cfg, "plugins: [")
+			case "mihomo-dns-only":
+				w.cfg.ServiceType = "mihomo"
+				writeWatchdogConfig(t, w.cfg, "dns: {enable: true, listen: '127.0.0.1:53'}\n")
+			}
+			w.probe = func(watchdogTarget) error {
+				t.Fatal("unavailable safe target must never be probed")
+				return nil
+			}
+			if got := w.tick(); got != "probe-unavailable" || w.consecutive != 0 || f.restarts != 0 {
+				t.Fatalf("got %s, failures=%d, restarts=%d", got, w.consecutive, f.restarts)
+			}
+		})
+	}
+}
+
+func TestWatchdogConfigurationChangesResetFailures(t *testing.T) {
+	f := &watchdogFakes{now: time.Unix(1000, 0), running: true}
+	w := newTestWatchdog(t, f)
+	w.tick()
+	w.tick()
+	writeWatchdogConfig(t, w.cfg, guardedWatchdogConfig("127.0.0.1:53")+"# new publication\n")
+	if got := w.tick(); got != "failing" || w.consecutive != 1 || f.restarts != 0 {
+		t.Fatalf("old failures carried into new publication: %s, failures=%d, restarts=%d", got, w.consecutive, f.restarts)
+	}
+}
+
+func TestWatchdogRechecksConfigurationAndRunningStateBeforeRestart(t *testing.T) {
+	for _, scenario := range []string{"new-publication", "removed-guard", "stopped"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := &watchdogFakes{now: time.Unix(1000, 0), running: true}
+			w := newTestWatchdog(t, f)
+			w.tick()
+			w.tick()
+			w.probe = func(watchdogTarget) error {
+				switch scenario {
+				case "new-publication":
+					writeWatchdogConfig(t, w.cfg, guardedWatchdogConfig("127.0.0.1:53")+"# new publication\n")
+				case "removed-guard":
+					writeWatchdogConfig(t, w.cfg, "plugins: []\n")
+				case "stopped":
+					f.running = false
+				}
+				return errors.New("timeout")
+			}
+			if got := w.tick(); got == "restarted" || f.restarts != 0 || w.consecutive != 0 {
+				t.Fatalf("stale failure restarted changed service: %s, failures=%d, restarts=%d", got, w.consecutive, f.restarts)
+			}
+		})
 	}
 }
 

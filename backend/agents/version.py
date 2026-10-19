@@ -1,10 +1,18 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.31-go"
+LATEST_AGENT_VERSION = "1.8.32-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.32-go": {
+        "date": "2026-10-20",
+        "features": [
+            "OxiDNS / MosDNS 发布时自动补充本地 DNS 存活应答，兼容已有原生配置和自定义入口，无需用户添加规则",
+            "看门狗仅探测已确认本地应答的实际 UDP 入口，旧配置重新发布后自动启用，避免远程 DNS 超时导致误重启",
+            "配置变化重置探测失败计数，重启前再次核实服务和配置；Mihomo 无控制接口时不再使用可能依赖上游的 DNS 探测"
+        ]
+    },
     "1.8.31-go": {
         "date": "2026-10-19",
         "features": [
