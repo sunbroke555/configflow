@@ -11,14 +11,16 @@ import (
 	"agent/internal/localip"
 )
 
-// getLocalIP 尝试从本机活动 LAN 接口获取有效 IPv4 地址。
+var detectLocalIPv4 = localip.Detect
+
+// getLocalIP 优先使用 LAN IPv4，兼容仅有 VPN 或点对点接口的注册。
 func getLocalIP() (string, error) {
-	ip, err := localip.Detect()
+	ip, err := detectLocalIPv4()
 	if err != nil {
-		log.Printf("Failed to detect local LAN IPv4 address: %v", err)
+		log.Printf("Failed to detect local IPv4 address: %v", err)
 		return "", err
 	}
-	log.Printf("Found local LAN IPv4 address: %s", ip)
+	log.Printf("Found local IPv4 address: %s", ip)
 	return ip, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -135,8 +136,13 @@ func (c *Config) RegisterAgent() error {
 	if hostIP == "" {
 		localIP, err := getLocalIP()
 		if err != nil {
-			log.Printf("Warning: could not get local IP: %v. Falling back to agent_host.", err)
-			localIP = c.AgentHost
+			// A wildcard listener is not an address the server can connect to.
+			// Empty Host lets the server use the registration request's source IP.
+			localIP = ""
+			if fallback := net.ParseIP(strings.TrimSpace(c.AgentHost)); fallback != nil && fallback.IsGlobalUnicast() && !fallback.IsLoopback() {
+				localIP = fallback.String()
+			}
+			log.Printf("Warning: could not get local IP: %v. Using registration fallback %q (empty means request source IP).", err, localIP)
 		}
 		hostIP = localIP
 	}
