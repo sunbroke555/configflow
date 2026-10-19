@@ -156,7 +156,7 @@
               :disabled="bindingAgentId === agent.id || settingsLoadingAgentId === agent.id || profileBindingBlocked(agent.id)"
               @update:model-value="value => handleAgentProfileChange(agent, String(value))"
             >
-              <SelectTrigger class="h-7 min-w-0 flex-1 bg-background/50 text-[12px]" :aria-label="`${agent.name} 绑定的配置空间`">
+              <SelectTrigger class="agent-profile-select h-7 min-w-0 flex-1 text-[12px] font-medium" :aria-label="`${agent.name} 绑定的配置空间`">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent class="glass-strong">
@@ -2644,6 +2644,42 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.agent-profile-select {
+  color: var(--foreground);
+  background: var(--popover);
+  border-color: var(--border-strong);
+  cursor: pointer;
+  transition: background-color 200ms var(--ease-tech), border-color 200ms var(--ease-tech);
+}
+
+.agent-profile-select :deep(svg) {
+  color: var(--primary-accent);
+  opacity: 1;
+}
+
+.agent-profile-select:not(:disabled):hover,
+.agent-profile-select:not(:disabled)[data-state='open'] {
+  background: var(--primary-soft);
+  border-color: var(--primary-accent);
+}
+
+.agent-profile-select:focus-visible {
+  border-color: var(--primary-accent);
+  outline: 2px solid var(--primary-accent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.agent-profile-select:disabled {
+  color: var(--muted-foreground);
+  background: var(--muted);
+  cursor: not-allowed;
+}
+
+.agent-profile-select:disabled :deep(svg) {
+  color: var(--muted-foreground);
+}
+
 @media (width < 640px) {
   .agents-page-header :deep(.cf-page-actions) {
     width: 100%;
