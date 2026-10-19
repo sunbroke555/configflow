@@ -1,0 +1,17 @@
+{
+  "default_route_fields_compared": [
+    "destination",
+    "mask",
+    "gateway",
+    "interface",
+    "flags"
+  ],
+  "default_route_unchanged": true,
+  "interface_inventory_unchanged": true,
+  "qemu_running": false,
+  "lab_ssh_port_listening": false,
+  "vm_disks_deleted": true,
+  "host_network_backend": "QEMU user networking; no host TAP or bridge",
+  "checked_at_utc": "2026-10-19T06:34:20Z",
+  "lab_private_keys_and_boot_seed_deleted": true
+}

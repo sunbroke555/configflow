@@ -1,0 +1,19 @@
+{
+  "freshSession": "c6366135eece424eb454f36f91e1c53d",
+  "existingSession": "c231a70cdcae465bbdeea74b28fe75e5",
+  "navigation3to4": true,
+  "navigation3to5": true,
+  "resumeAfterClose": true,
+  "emptySearchPreservesSelection": true,
+  "mobileRules": {
+    "clientWidth": 375,
+    "minButtonHeight": 44,
+    "scrollWidth": 375
+  },
+  "continueEditingPreservesDraft": true,
+  "discardRestoresOriginalSession": true,
+  "ordinaryDockerGeneratedOnly": true,
+  "ordinaryDockerHasGatewayCommand": false,
+  "managementGuidanceVerified": true,
+  "postFinalSnapshotErrors": []
+}

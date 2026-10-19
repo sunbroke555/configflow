@@ -1,0 +1,52 @@
+{
+  "success": true,
+  "at": "2026-10-19T07:13:50.185191+00:00",
+  "frontend_port": 13001,
+  "loopback_listener_closed": true,
+  "final_pid": 57540,
+  "final_pid_stopped": true,
+  "exported_snapshots": [
+    {
+      "snapshot_sha256": "dc335b29f11192ff4cdc3399d24001c8b3eeb2643aeedfbe62e44220c34d35bf",
+      "pid": 54098,
+      "status": "stopped",
+      "exports": [
+        {
+          "file": "frontend-main-manifest.json",
+          "sha256": "80bab22c97b652303df71d559927759a0805ab13454b3274d36502cc20a7b2a1"
+        },
+        {
+          "file": "frontend-main-source-manifest.json",
+          "sha256": "ae970b407e14772506ff885e969039c48946b0394532502e9ce02025053a6497"
+        }
+      ]
+    },
+    {
+      "snapshot_sha256": "a659bfea796559355a056d339e5539f75b952a126080556fc5efad9e17235b97",
+      "pid": 57540,
+      "status": "stopped",
+      "exports": [
+        {
+          "file": "frontend-management-manifest.json",
+          "sha256": "a893e9c2fdc7a4850f5231d0b3ffa88d6f84e14a469abe1411eb851f3caf4811"
+        },
+        {
+          "file": "frontend-management-source-manifest.json",
+          "sha256": "346b053b08e64b9aff10360f1870bc1842b284c357862f75cf3bdb9a5064e371"
+        }
+      ]
+    }
+  ],
+  "removed_temporary_workspaces": [
+    "/private/tmp/configflow-gateway-lab-frontend-4SXVfh",
+    "/private/tmp/configflow-gateway-lab-frontend-BdEY12",
+    "/private/tmp/configflow-gateway-lab-frontend-FNRuC0",
+    "/private/tmp/configflow-gateway-lab-frontend-LZSHSC",
+    "/private/tmp/configflow-gateway-lab-frontend-QkfvCM",
+    "/private/tmp/configflow-gateway-lab-frontend-d0LRSc",
+    "/private/tmp/configflow-gateway-lab-frontend-iObl5j",
+    "/private/tmp/configflow-gateway-lab-frontend-udt35C"
+  ],
+  "repository_node_modules_preserved": true,
+  "published_metadata_paths_redacted": true
+}

@@ -1,0 +1,1024 @@
+{
+  "api_origin": "http://192.0.2.1:8000",
+  "cases": {
+    "checksum_failure_retry": {
+      "failure_observed": true,
+      "no_core_or_network_changes_on_failure": true,
+      "same_session_retry_succeeded": true
+    },
+    "existing_gateway_forwarding": {
+      "pre_apply_ip_forward": "0",
+      "probes": {
+        "mode": "active",
+        "probes": [
+          {
+            "http": {
+              "at": 1792391526.4066203,
+              "destination_ip": "203.0.113.10",
+              "event": "http_request",
+              "path": "/hold/direct-a41ba6bf574a4e0a9b9b172f1f635d5a",
+              "source_ip": "192.0.2.2",
+              "token": "[REDACTED]"
+            },
+            "mihomo_connections": [],
+            "name": "direct",
+            "socks_connections": []
+          },
+          {
+            "http": {
+              "at": 1792391532.4534783,
+              "destination_ip": "203.0.113.20",
+              "event": "http_request",
+              "path": "/hold/selected-ip-75db5d62a5f04e309d6446d022ac23d3",
+              "source_ip": "203.0.113.20",
+              "token": "[REDACTED]"
+            },
+            "mihomo_connections": [
+              {
+                "chains": [
+                  "LAB-SOCKS",
+                  "LAB-PROXY"
+                ],
+                "metadata": {
+                  "destinationGeoIP": null,
+                  "destinationIP": "203.0.113.20",
+                  "destinationIPASN": "",
+                  "destinationPort": "18080",
+                  "dnsMode": "normal",
+                  "dscp": 0,
+                  "host": "",
+                  "inboundIP": "192.0.2.2",
+                  "inboundName": "DEFAULT-TUN",
+                  "inboundPort": "39131",
+                  "inboundUser": "",
+                  "network": "tcp",
+                  "process": "",
+                  "processPath": "",
+                  "rematchName": "",
+                  "remoteDestination": "203.0.113.2",
+                  "sniffHost": "",
+                  "sourceGeoIP": null,
+                  "sourceIP": "192.0.2.100",
+                  "sourceIPASN": "",
+                  "sourcePort": "52178",
+                  "specialProxy": "",
+                  "specialRules": "",
+                  "type": "Redir",
+                  "uid": 0
+                },
+                "rule": "RuleSet"
+              }
+            ],
+            "name": "selected-ip",
+            "socks_connections": [
+              {
+                "at": 1792391532.4513927,
+                "destination_ip": "203.0.113.20",
+                "event": "socks_connect",
+                "host": "203.0.113.20",
+                "port": 18080
+              }
+            ]
+          },
+          {
+            "answers": {
+              "tcp": [
+                "172.66.147.243",
+                "104.20.23.154"
+              ],
+              "udp": [
+                "172.66.147.243",
+                "104.20.23.154"
+              ]
+            },
+            "direct_domain": "example.com",
+            "fake_ip": "198.18.0.6",
+            "fresh_probe_domain": "9f0a83e3b2534cefbf3fb81fb7e1a68a.proxy.lab.invalid",
+            "fresh_probe_fake_ip": "198.18.0.5",
+            "ip_doh_tls_packets": 0,
+            "mihomo_dns_dnat_after": {
+              "inet/output/8": {
+                "bytes": 0,
+                "packets": 0
+              },
+              "inet/prerouting/29": {
+                "bytes": 0,
+                "packets": 0
+              }
+            },
+            "mihomo_dns_dnat_before": {
+              "inet/output/8": {
+                "bytes": 0,
+                "packets": 0
+              },
+              "inet/prerouting/29": {
+                "bytes": 0,
+                "packets": 0
+              }
+            },
+            "name": "dns-through-oxidns",
+            "packet_evidence": {
+              "oxidns_to_mihomo": {
+                "queries": [
+                  {
+                    "destination": "127.0.0.1",
+                    "destination_port": 1053,
+                    "id": 1,
+                    "kind": "dns",
+                    "name": "9f0a83e3b2534cefbf3fb81fb7e1a68a.proxy.lab.invalid",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": false,
+                    "source": "127.0.0.1",
+                    "source_port": 46727,
+                    "transport": "udp"
+                  }
+                ],
+                "replies": [
+                  {
+                    "destination": "127.0.0.1",
+                    "destination_port": 46727,
+                    "id": 1,
+                    "kind": "dns",
+                    "name": "9f0a83e3b2534cefbf3fb81fb7e1a68a.proxy.lab.invalid",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": true,
+                    "source": "127.0.0.1",
+                    "source_port": 1053,
+                    "transport": "udp"
+                  }
+                ]
+              },
+              "tcp": {
+                "queries": [
+                  {
+                    "destination": "192.0.2.2",
+                    "destination_port": 53,
+                    "id": 16952,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": false,
+                    "source": "192.0.2.100",
+                    "source_port": 58544,
+                    "transport": "tcp"
+                  }
+                ],
+                "replies": [
+                  {
+                    "destination": "192.0.2.100",
+                    "destination_port": 58544,
+                    "id": 16952,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": true,
+                    "source": "192.0.2.2",
+                    "source_port": 53,
+                    "transport": "tcp"
+                  }
+                ]
+              },
+              "udp": {
+                "queries": [
+                  {
+                    "destination": "192.0.2.2",
+                    "destination_port": 53,
+                    "id": 18971,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": false,
+                    "source": "192.0.2.100",
+                    "source_port": 34421,
+                    "transport": "udp"
+                  }
+                ],
+                "replies": [
+                  {
+                    "destination": "192.0.2.100",
+                    "destination_port": 34421,
+                    "id": 18971,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": true,
+                    "source": "192.0.2.2",
+                    "source_port": 53,
+                    "transport": "udp"
+                  }
+                ]
+              }
+            },
+            "pcap": "/var/lib/configflow-gateway-lab/dns-ac5c1028395e4f778c446b6599b7e32d.pcap",
+            "proxy_domain": "proxy.lab.invalid"
+          },
+          {
+            "http": {
+              "at": 1792391538.9958043,
+              "destination_ip": "203.0.113.30",
+              "event": "http_request",
+              "path": "/hold/fake-ip-ccade76344b243c8897dd2e45980cab9",
+              "source_ip": "203.0.113.30",
+              "token": "[REDACTED]"
+            },
+            "mihomo_connections": [
+              {
+                "chains": [
+                  "LAB-SOCKS",
+                  "LAB-PROXY"
+                ],
+                "metadata": {
+                  "destinationGeoIP": null,
+                  "destinationIP": "",
+                  "destinationIPASN": "",
+                  "destinationPort": "18080",
+                  "dnsMode": "fake-ip",
+                  "dscp": 0,
+                  "host": "proxy.lab.invalid",
+                  "inboundIP": "192.0.2.2",
+                  "inboundName": "DEFAULT-TUN",
+                  "inboundPort": "39131",
+                  "inboundUser": "",
+                  "network": "tcp",
+                  "process": "",
+                  "processPath": "",
+                  "rematchName": "",
+                  "remoteDestination": "203.0.113.2",
+                  "sniffHost": "",
+                  "sourceGeoIP": null,
+                  "sourceIP": "192.0.2.100",
+                  "sourceIPASN": "",
+                  "sourcePort": "47400",
+                  "specialProxy": "",
+                  "specialRules": "",
+                  "type": "Redir",
+                  "uid": 0
+                },
+                "rule": "RuleSet"
+              }
+            ],
+            "name": "fake-ip",
+            "socks_connections": [
+              {
+                "at": 1792391538.9932177,
+                "destination_ip": "203.0.113.30",
+                "event": "socks_connect",
+                "host": "proxy.lab.invalid",
+                "port": 18080
+              }
+            ]
+          }
+        ],
+        "success": true
+      },
+      "remove_restored_exact_pre_apply_network": true,
+      "removed_probes": {
+        "mode": "removed",
+        "probes": [
+          {
+            "baseline": "965hsdbv-existing-published-before-apply",
+            "ip_forward": "0",
+            "managed_table_absent": true,
+            "name": "removed",
+            "unselected_connection_rejected": true
+          }
+        ],
+        "success": true
+      },
+      "success": true
+    },
+    "existing_standard_core_attach": {
+      "agent_ids_preserved": true,
+      "core_hashes_and_metadata_preserved_before_publish": true,
+      "renamed_installation": true,
+      "success": true
+    },
+    "fresh_install": {
+      "agent_ids": {
+        "mihomo": "agent_1792391487409_171425",
+        "oxidns": "agent_1792391487547_eb5231"
+      },
+      "network_unchanged_before_publish": true,
+      "success": true,
+      "tun_enabled": false
+    },
+    "new_gateway_forwarding": {
+      "pre_apply_ip_forward": "0",
+      "probes": {
+        "mode": "active",
+        "probes": [
+          {
+            "http": {
+              "at": 1792391498.2381916,
+              "destination_ip": "203.0.113.10",
+              "event": "http_request",
+              "path": "/hold/direct-dd35a043d2dc47a5909c3dbe0a8edded",
+              "source_ip": "192.0.2.2",
+              "token": "[REDACTED]"
+            },
+            "mihomo_connections": [],
+            "name": "direct",
+            "socks_connections": []
+          },
+          {
+            "http": {
+              "at": 1792391504.2549024,
+              "destination_ip": "203.0.113.20",
+              "event": "http_request",
+              "path": "/hold/selected-ip-fabc358424b1462d960edf72730bf0e6",
+              "source_ip": "203.0.113.20",
+              "token": "[REDACTED]"
+            },
+            "mihomo_connections": [
+              {
+                "chains": [
+                  "LAB-SOCKS",
+                  "LAB-PROXY"
+                ],
+                "metadata": {
+                  "destinationGeoIP": null,
+                  "destinationIP": "203.0.113.20",
+                  "destinationIPASN": "",
+                  "destinationPort": "18080",
+                  "dnsMode": "normal",
+                  "dscp": 0,
+                  "host": "",
+                  "inboundIP": "192.0.2.2",
+                  "inboundName": "DEFAULT-TUN",
+                  "inboundPort": "36651",
+                  "inboundUser": "",
+                  "network": "tcp",
+                  "process": "",
+                  "processPath": "",
+                  "rematchName": "",
+                  "remoteDestination": "203.0.113.2",
+                  "sniffHost": "",
+                  "sourceGeoIP": null,
+                  "sourceIP": "192.0.2.100",
+                  "sourceIPASN": "",
+                  "sourcePort": "60998",
+                  "specialProxy": "",
+                  "specialRules": "",
+                  "type": "Redir",
+                  "uid": 0
+                },
+                "rule": "RuleSet"
+              }
+            ],
+            "name": "selected-ip",
+            "socks_connections": [
+              {
+                "at": 1792391504.2540848,
+                "destination_ip": "203.0.113.20",
+                "event": "socks_connect",
+                "host": "203.0.113.20",
+                "port": 18080
+              }
+            ]
+          },
+          {
+            "answers": {
+              "tcp": [
+                "172.66.147.243",
+                "104.20.23.154"
+              ],
+              "udp": [
+                "172.66.147.243",
+                "104.20.23.154"
+              ]
+            },
+            "direct_domain": "example.com",
+            "fake_ip": "198.18.0.6",
+            "fresh_probe_domain": "cc3c75dbe12e4038af258afe3f2fe0a8.proxy.lab.invalid",
+            "fresh_probe_fake_ip": "198.18.0.5",
+            "ip_doh_tls_packets": 0,
+            "mihomo_dns_dnat_after": {
+              "inet/output/8": {
+                "bytes": 0,
+                "packets": 0
+              },
+              "inet/prerouting/29": {
+                "bytes": 0,
+                "packets": 0
+              }
+            },
+            "mihomo_dns_dnat_before": {
+              "inet/output/8": {
+                "bytes": 0,
+                "packets": 0
+              },
+              "inet/prerouting/29": {
+                "bytes": 0,
+                "packets": 0
+              }
+            },
+            "name": "dns-through-oxidns",
+            "packet_evidence": {
+              "oxidns_to_mihomo": {
+                "queries": [
+                  {
+                    "destination": "127.0.0.1",
+                    "destination_port": 1053,
+                    "id": 2,
+                    "kind": "dns",
+                    "name": "cc3c75dbe12e4038af258afe3f2fe0a8.proxy.lab.invalid",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": false,
+                    "source": "127.0.0.1",
+                    "source_port": 45655,
+                    "transport": "udp"
+                  }
+                ],
+                "replies": [
+                  {
+                    "destination": "127.0.0.1",
+                    "destination_port": 45655,
+                    "id": 2,
+                    "kind": "dns",
+                    "name": "cc3c75dbe12e4038af258afe3f2fe0a8.proxy.lab.invalid",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": true,
+                    "source": "127.0.0.1",
+                    "source_port": 1053,
+                    "transport": "udp"
+                  }
+                ]
+              },
+              "tcp": {
+                "queries": [
+                  {
+                    "destination": "192.0.2.2",
+                    "destination_port": 53,
+                    "id": 35422,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": false,
+                    "source": "192.0.2.100",
+                    "source_port": 57168,
+                    "transport": "tcp"
+                  }
+                ],
+                "replies": [
+                  {
+                    "destination": "192.0.2.100",
+                    "destination_port": 57168,
+                    "id": 35422,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": true,
+                    "source": "192.0.2.2",
+                    "source_port": 53,
+                    "transport": "tcp"
+                  }
+                ]
+              },
+              "udp": {
+                "queries": [
+                  {
+                    "destination": "192.0.2.2",
+                    "destination_port": 53,
+                    "id": 19485,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": false,
+                    "source": "192.0.2.100",
+                    "source_port": 36174,
+                    "transport": "udp"
+                  }
+                ],
+                "replies": [
+                  {
+                    "destination": "192.0.2.100",
+                    "destination_port": 36174,
+                    "id": 19485,
+                    "kind": "dns",
+                    "name": "example.com",
+                    "qtype": 1,
+                    "rcode": 0,
+                    "response": true,
+                    "source": "192.0.2.2",
+                    "source_port": 53,
+                    "transport": "udp"
+                  }
+                ]
+              }
+            },
+            "pcap": "/var/lib/configflow-gateway-lab/dns-1a477b42c6b341d5bd1cca7c91c55c09.pcap",
+            "proxy_domain": "proxy.lab.invalid"
+          },
+          {
+            "http": {
+              "at": 1792391510.8030162,
+              "destination_ip": "203.0.113.30",
+              "event": "http_request",
+              "path": "/hold/fake-ip-2a1e531127a2421f874322bc4dfea8f8",
+              "source_ip": "203.0.113.30",
+              "token": "[REDACTED]"
+            },
+            "mihomo_connections": [
+              {
+                "chains": [
+                  "LAB-SOCKS",
+                  "LAB-PROXY"
+                ],
+                "metadata": {
+                  "destinationGeoIP": null,
+                  "destinationIP": "",
+                  "destinationIPASN": "",
+                  "destinationPort": "18080",
+                  "dnsMode": "fake-ip",
+                  "dscp": 0,
+                  "host": "proxy.lab.invalid",
+                  "inboundIP": "192.0.2.2",
+                  "inboundName": "DEFAULT-TUN",
+                  "inboundPort": "36651",
+                  "inboundUser": "",
+                  "network": "tcp",
+                  "process": "",
+                  "processPath": "",
+                  "rematchName": "",
+                  "remoteDestination": "203.0.113.2",
+                  "sniffHost": "",
+                  "sourceGeoIP": null,
+                  "sourceIP": "192.0.2.100",
+                  "sourceIPASN": "",
+                  "sourcePort": "37180",
+                  "specialProxy": "",
+                  "specialRules": "",
+                  "type": "Redir",
+                  "uid": 0
+                },
+                "rule": "RuleSet"
+              }
+            ],
+            "name": "fake-ip",
+            "socks_connections": [
+              {
+                "at": 1792391510.8019803,
+                "destination_ip": "203.0.113.30",
+                "event": "socks_connect",
+                "host": "proxy.lab.invalid",
+                "port": 18080
+              }
+            ]
+          }
+        ],
+        "success": true
+      },
+      "remove_restored_exact_pre_apply_network": true,
+      "removed_probes": {
+        "mode": "removed",
+        "probes": [
+          {
+            "baseline": "965hsdbv-new-published-before-apply",
+            "ip_forward": "0",
+            "managed_table_absent": true,
+            "name": "removed",
+            "unselected_connection_rejected": true
+          }
+        ],
+        "success": true
+      },
+      "success": true
+    },
+    "ordinary_mode": {
+      "network_and_core_files_unchanged": true,
+      "probes": {
+        "mode": "ordinary",
+        "probes": [
+          {
+            "baseline": null,
+            "ip_forward": "0",
+            "managed_table_absent": true,
+            "name": "ordinary",
+            "unselected_connection_rejected": true
+          }
+        ],
+        "success": true
+      },
+      "success": true
+    }
+  },
+  "events": [
+    {
+      "at": "2026-10-19T06:31:06.591645+00:00",
+      "label": "start",
+      "report": "/tmp/configflow-gateway-lab-run-965hsdbv/report.json"
+    },
+    {
+      "at": "2026-10-19T06:31:06.718988+00:00",
+      "elapsed_seconds": 0.13,
+      "label": "snapshot-965hsdbv-before-install",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-before-install.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:14.824561+00:00",
+      "elapsed_seconds": 8.01,
+      "label": "checksum-failure",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/checksum-failure.log",
+      "returncode": 1
+    },
+    {
+      "at": "2026-10-19T06:31:15.159537+00:00",
+      "elapsed_seconds": 0.33,
+      "label": "snapshot-965hsdbv-after-checksum-failure",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-after-checksum-failure.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:15.198275+00:00",
+      "elapsed_seconds": 0.04,
+      "label": "compare-965hsdbv-after-checksum-failure",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-after-checksum-failure.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:29.461162+00:00",
+      "elapsed_seconds": 14.26,
+      "label": "fresh-install",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/fresh-install.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:29.467279+00:00",
+      "deployments": {},
+      "label": "session-progress",
+      "phase": "enrolled",
+      "session_id": "4311d1b5fdd94e7fb342ee0477052bd8"
+    },
+    {
+      "at": "2026-10-19T06:31:29.603135+00:00",
+      "elapsed_seconds": 0.14,
+      "label": "snapshot-965hsdbv-installed-not-published",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-installed-not-published.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:29.637555+00:00",
+      "elapsed_seconds": 0.03,
+      "label": "compare-965hsdbv-installed-not-published",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-installed-not-published.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:30.281597+00:00",
+      "elapsed_seconds": 0.6,
+      "label": "ordinary-aio-install",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/ordinary-aio-install.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:30.418427+00:00",
+      "elapsed_seconds": 0.14,
+      "label": "snapshot-965hsdbv-ordinary-install-finished",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-ordinary-install-finished.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:30.454562+00:00",
+      "elapsed_seconds": 0.04,
+      "label": "compare-965hsdbv-ordinary-install-finished",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-ordinary-install-finished.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:31.629821+00:00",
+      "elapsed_seconds": 1.14,
+      "label": "ordinary-does-not-forward",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/ordinary-does-not-forward.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:31.668620+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "ea5bb66e0fc5468692ad075ae723d286",
+          "status": "preparing"
+        },
+        "oxidns": {
+          "deployment_id": "43869dc15d57431b86c6d24655621bd6",
+          "status": "preparing"
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "4311d1b5fdd94e7fb342ee0477052bd8"
+    },
+    {
+      "at": "2026-10-19T06:31:33.675152+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "ea5bb66e0fc5468692ad075ae723d286",
+          "status": "verifying",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "43869dc15d57431b86c6d24655621bd6",
+          "status": "preparing"
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "4311d1b5fdd94e7fb342ee0477052bd8"
+    },
+    {
+      "at": "2026-10-19T06:31:35.687543+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "ea5bb66e0fc5468692ad075ae723d286",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "43869dc15d57431b86c6d24655621bd6",
+          "status": "verifying",
+          "success": true
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "4311d1b5fdd94e7fb342ee0477052bd8"
+    },
+    {
+      "at": "2026-10-19T06:31:37.698942+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "ea5bb66e0fc5468692ad075ae723d286",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "43869dc15d57431b86c6d24655621bd6",
+          "status": "succeeded",
+          "success": true
+        }
+      },
+      "label": "session-progress",
+      "phase": "published",
+      "session_id": "4311d1b5fdd94e7fb342ee0477052bd8"
+    },
+    {
+      "at": "2026-10-19T06:31:37.831804+00:00",
+      "elapsed_seconds": 0.13,
+      "label": "snapshot-965hsdbv-new-published-before-apply",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-new-published-before-apply.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:37.991102+00:00",
+      "elapsed_seconds": 0.12,
+      "label": "snapshot-965hsdbv-new-preview-only",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-new-preview-only.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:38.024834+00:00",
+      "elapsed_seconds": 0.03,
+      "label": "compare-965hsdbv-new-preview-only",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-new-preview-only.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:38.169533+00:00",
+      "elapsed_seconds": 0.1,
+      "label": "snapshot-965hsdbv-new-applied",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-new-applied.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:56.831103+00:00",
+      "elapsed_seconds": 18.66,
+      "label": "new-active-probes",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/new-active-probes.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:57.033472+00:00",
+      "elapsed_seconds": 0.14,
+      "label": "snapshot-965hsdbv-new-removed",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-new-removed.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:57.078322+00:00",
+      "elapsed_seconds": 0.04,
+      "label": "compare-965hsdbv-new-removed",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-new-removed.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:58.241324+00:00",
+      "elapsed_seconds": 1.16,
+      "label": "new-removed-probes",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/new-removed-probes.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:58.432075+00:00",
+      "elapsed_seconds": 0.15,
+      "label": "snapshot-965hsdbv-existing-core-before-install",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-existing-core-before-install.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:59.563569+00:00",
+      "elapsed_seconds": 1.02,
+      "label": "existing-core-attach",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/existing-core-attach.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:59.567047+00:00",
+      "deployments": {},
+      "label": "session-progress",
+      "phase": "enrolled",
+      "session_id": "1a090b7f35164eed8671d7d7fe1e2714"
+    },
+    {
+      "at": "2026-10-19T06:31:59.707002+00:00",
+      "elapsed_seconds": 0.14,
+      "label": "snapshot-965hsdbv-existing-core-installed",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-existing-core-installed.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:59.742240+00:00",
+      "elapsed_seconds": 0.03,
+      "label": "compare-965hsdbv-existing-core-installed",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-existing-core-installed.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:31:59.812395+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "abe5ebed9126474aa33656b37ffcb5fe",
+          "status": "preparing"
+        },
+        "oxidns": {
+          "deployment_id": "c1938bf975c146618ff47634b70d34c2",
+          "status": "preparing"
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "1a090b7f35164eed8671d7d7fe1e2714"
+    },
+    {
+      "at": "2026-10-19T06:32:01.825554+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "abe5ebed9126474aa33656b37ffcb5fe",
+          "status": "verifying",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "c1938bf975c146618ff47634b70d34c2",
+          "status": "preparing"
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "1a090b7f35164eed8671d7d7fe1e2714"
+    },
+    {
+      "at": "2026-10-19T06:32:03.838018+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "abe5ebed9126474aa33656b37ffcb5fe",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "c1938bf975c146618ff47634b70d34c2",
+          "status": "verifying",
+          "success": true
+        }
+      },
+      "label": "session-progress",
+      "phase": "publishing",
+      "session_id": "1a090b7f35164eed8671d7d7fe1e2714"
+    },
+    {
+      "at": "2026-10-19T06:32:05.852831+00:00",
+      "deployments": {
+        "mihomo": {
+          "deployment_id": "abe5ebed9126474aa33656b37ffcb5fe",
+          "status": "succeeded",
+          "success": true
+        },
+        "oxidns": {
+          "deployment_id": "c1938bf975c146618ff47634b70d34c2",
+          "status": "succeeded",
+          "success": true
+        }
+      },
+      "label": "session-progress",
+      "phase": "published",
+      "session_id": "1a090b7f35164eed8671d7d7fe1e2714"
+    },
+    {
+      "at": "2026-10-19T06:32:05.985296+00:00",
+      "elapsed_seconds": 0.13,
+      "label": "snapshot-965hsdbv-existing-published-before-apply",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-existing-published-before-apply.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:06.121775+00:00",
+      "elapsed_seconds": 0.1,
+      "label": "snapshot-965hsdbv-existing-preview-only",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-existing-preview-only.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:06.156393+00:00",
+      "elapsed_seconds": 0.03,
+      "label": "compare-965hsdbv-existing-preview-only",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-existing-preview-only.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:06.339933+00:00",
+      "elapsed_seconds": 0.11,
+      "label": "snapshot-965hsdbv-existing-applied",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-existing-applied.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:25.019305+00:00",
+      "elapsed_seconds": 18.68,
+      "label": "existing-active-probes",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/existing-active-probes.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:25.274075+00:00",
+      "elapsed_seconds": 0.19,
+      "label": "snapshot-965hsdbv-existing-removed",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-existing-removed.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:25.351006+00:00",
+      "elapsed_seconds": 0.07,
+      "label": "compare-965hsdbv-existing-removed",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-existing-removed.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:26.486849+00:00",
+      "elapsed_seconds": 1.14,
+      "label": "existing-removed-probes",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/existing-removed-probes.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:26.614569+00:00",
+      "elapsed_seconds": 0.13,
+      "label": "snapshot-965hsdbv-finished",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/snapshot-965hsdbv-finished.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:26.648344+00:00",
+      "elapsed_seconds": 0.03,
+      "label": "compare-965hsdbv-finished",
+      "log": "/tmp/configflow-gateway-lab-run-965hsdbv/compare-965hsdbv-finished.log",
+      "returncode": 0
+    },
+    {
+      "at": "2026-10-19T06:32:26.649252+00:00",
+      "label": "complete",
+      "report": "/tmp/configflow-gateway-lab-run-965hsdbv/report.json"
+    }
+  ],
+  "finished_at": "2026-10-19T06:32:26.649236+00:00",
+  "gateway_network_removed": true,
+  "limitations": [
+    "This run covers Debian ARM64/systemd, not OpenRC or amd64."
+  ],
+  "output": "/tmp/configflow-gateway-lab-run-965hsdbv",
+  "platform": {
+    "machine": "aarch64",
+    "uname": "6.12.113+deb13-cloud-arm64"
+  },
+  "root_namespace_unchanged": true,
+  "started_at": "2026-10-19T06:31:06.591360+00:00",
+  "success": true
+}

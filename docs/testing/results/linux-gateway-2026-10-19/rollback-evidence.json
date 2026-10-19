@@ -1,0 +1,10 @@
+{
+  "deployment_id": "554d4f73595f432896f7eb30af106960",
+  "status": "rolled_back",
+  "stage": null,
+  "failed_stage": "starting",
+  "backup_complete": true,
+  "was_running": true,
+  "error": "service start failed",
+  "rollback_error": null
+}

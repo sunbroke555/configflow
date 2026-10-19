@@ -1,0 +1,18 @@
+{
+  "failed_oxidns_task_id": "ad8fd1c820264aa18ff69cbc22f5dcc2",
+  "mihomo_task_id": "72092f3803214352a6be119de40eed36",
+  "mihomo_task_pid_files_preserved": true,
+  "new_successful_oxidns_task_id": "8df8d465368f4ffb856cb11d109ae440",
+  "no_forwarding_journal_or_managed_table": true,
+  "phase": "published",
+  "preapply_baseline": "browser-new-preapply",
+  "ready_for_browser_preview_apply": true,
+  "root_network_unchanged": true,
+  "service_pids": {
+    "configflow-agent-mihomo": 3659,
+    "configflow-agent-oxidns": 3741,
+    "mihomo": 4039,
+    "oxidns": 4673
+  },
+  "success": true
+}

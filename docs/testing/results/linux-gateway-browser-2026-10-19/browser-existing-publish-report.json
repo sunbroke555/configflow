@@ -1,0 +1,20 @@
+{
+  "deployments": {
+    "mihomo": {
+      "deployment_id": "9826f3de826449809fdea3dfbbfec2e5",
+      "status": "succeeded",
+      "success": true
+    },
+    "oxidns": {
+      "deployment_id": "8c82d1956ff640dea10e1e5cff6f8e2f",
+      "status": "succeeded",
+      "success": true
+    }
+  },
+  "no_forwarding_journal_or_managed_table": true,
+  "phase": "published",
+  "preapply_baseline": "browser-existing-preapply",
+  "ready_for_browser_preview_apply": true,
+  "root_network_unchanged": true,
+  "success": true
+}

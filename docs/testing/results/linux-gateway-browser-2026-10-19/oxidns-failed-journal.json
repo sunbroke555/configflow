@@ -1,0 +1,38 @@
+{
+  "archive_sha256": "f0a5050d27778c49e693ca3ce95498e93742130b86260a83f6acd9547f420899",
+  "backup_complete": true,
+  "backups": [
+    {
+      "existed": true,
+      "gid": 0,
+      "mode": 384,
+      "ownership_known": true,
+      "path": "config.yaml",
+      "sha256": "71b11ab629d3cc1fd386f9c3dc959c3057ed9634909586b68f606085e514c2b8",
+      "uid": 0
+    },
+    {
+      "existed": false,
+      "gid": 0,
+      "mode": 0,
+      "ownership_known": false,
+      "path": "rules/rule_70f50f13bac996e2_domain.txt",
+      "uid": 0
+    },
+    {
+      "existed": false,
+      "gid": 0,
+      "mode": 0,
+      "ownership_known": false,
+      "path": "rules/rule_73d85a7b0c7b1ea8_domain.txt",
+      "uid": 0
+    }
+  ],
+  "deployment_id": "ad8fd1c820264aa18ff69cbc22f5dcc2",
+  "error": "service start failed",
+  "failed_stage": "starting",
+  "status": "rolled_back",
+  "success": false,
+  "updated_at": "2026-10-19T06:52:02.56505292Z",
+  "was_running": true
+}

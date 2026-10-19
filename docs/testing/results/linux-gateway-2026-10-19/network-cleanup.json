@@ -1,0 +1,25 @@
+{
+  "success": true,
+  "initial_namespace_unchanged": true,
+  "initial_nsswitch_unchanged": true,
+  "namespaces_remaining": "",
+  "ownership_marked_cleaned": true,
+  "services": {
+    "mihomo": {
+      "active": false,
+      "enabled": false
+    },
+    "oxidns": {
+      "active": false,
+      "enabled": false
+    },
+    "configflow-agent-mihomo": {
+      "active": false,
+      "enabled": false
+    },
+    "configflow-agent-oxidns": {
+      "active": false,
+      "enabled": false
+    }
+  }
+}

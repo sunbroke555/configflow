@@ -1,0 +1,196 @@
+{
+  "agent_ids": {
+    "mihomo": "agent_1792392689304_61a167",
+    "oxidns": "agent_1792392689456_f793eb"
+  },
+  "core_files": {
+    "/etc/mihomo/config.yaml": {
+      "gid": 0,
+      "mode": 384,
+      "mtime_ns": 1792393598239783687,
+      "sha256": "e334d9e90c98e0cf23a7903f1c9ab7c9aca6e5906633b94a1778725acaff87a9",
+      "size": 2776,
+      "uid": 0
+    },
+    "/etc/oxidns/config.yaml": {
+      "gid": 0,
+      "mode": 384,
+      "mtime_ns": 1792393600636031832,
+      "sha256": "673dc7f10702608c14ba449867d2b4d89814eea6afc6d1909099294e8943616d",
+      "size": 2288,
+      "uid": 0
+    },
+    "/etc/systemd/system/mihomo.service": {
+      "gid": 0,
+      "mode": 420,
+      "mtime_ns": 1792392686324364934,
+      "sha256": "7107821d1d0a7befb1d04e92edcf8b7895e7e2407705cb44f087565a468992fe",
+      "size": 359,
+      "uid": 0
+    },
+    "/etc/systemd/system/oxidns.service": {
+      "gid": 0,
+      "mode": 420,
+      "mtime_ns": 1792392686328364814,
+      "sha256": "5ad76722909a453743c5cee80dd9d0e9bef98e8a0083d3a8621a52550e4aa0df",
+      "size": 365,
+      "uid": 0
+    },
+    "/usr/local/bin/mihomo": {
+      "gid": 0,
+      "mode": 493,
+      "mtime_ns": 1792392686320365053,
+      "sha256": "c80df2ca5159567804da883401e0118908fc1155e05df2baf3dbd4d3ecfc3754",
+      "size": 57409662,
+      "uid": 0
+    },
+    "/usr/local/bin/oxidns": {
+      "gid": 0,
+      "mode": 493,
+      "mtime_ns": 1792392686328364814,
+      "sha256": "df6e341909906eff183a1d6e507be7821007e421a9494acc24c97c2a21eca5bd",
+      "size": 3955652,
+      "uid": 0
+    }
+  },
+  "core_pids": {
+    "mihomo": 7417,
+    "oxidns": 7460
+  },
+  "listeners": {
+    "gateway": [
+      {
+        "local": "*:8080",
+        "peer": "*:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "*:8082",
+        "peer": "*:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "0.0.0.0:43573",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "0.0.0.0:53",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "127.0.0.1:1053",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "192.0.2.2:9090",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "198.18.0.1:33161",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "0.0.0.0:53",
+        "peer": "0.0.0.0:*",
+        "protocol": "udp",
+        "state": "UNCONN"
+      },
+      {
+        "local": "127.0.0.1:1053",
+        "peer": "0.0.0.0:*",
+        "protocol": "udp",
+        "state": "UNCONN"
+      }
+    ],
+    "root": [
+      {
+        "local": "0.0.0.0:22",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "0.0.0.0:5355",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "127.0.0.1:18000",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "127.0.0.53%lo:53",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "127.0.0.54:53",
+        "peer": "0.0.0.0:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "[::]:22",
+        "peer": "[::]:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "[::]:5355",
+        "peer": "[::]:*",
+        "protocol": "tcp",
+        "state": "LISTEN"
+      },
+      {
+        "local": "0.0.0.0:5355",
+        "peer": "0.0.0.0:*",
+        "protocol": "udp",
+        "state": "UNCONN"
+      },
+      {
+        "local": "10.0.2.15%enp0s1:68",
+        "peer": "0.0.0.0:*",
+        "protocol": "udp",
+        "state": "UNCONN"
+      },
+      {
+        "local": "127.0.0.53%lo:53",
+        "peer": "0.0.0.0:*",
+        "protocol": "udp",
+        "state": "UNCONN"
+      },
+      {
+        "local": "127.0.0.54:53",
+        "peer": "0.0.0.0:*",
+        "protocol": "udp",
+        "state": "UNCONN"
+      },
+      {
+        "local": "[::]:5355",
+        "peer": "[::]:*",
+        "protocol": "udp",
+        "state": "UNCONN"
+      }
+    ]
+  },
+  "sessions": [
+    "c231a70cdcae465bbdeea74b28fe75e5.json",
+    "c6366135eece424eb454f36f91e1c53d.json"
+  ]
+}

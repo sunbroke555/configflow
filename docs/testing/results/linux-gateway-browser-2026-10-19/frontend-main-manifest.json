@@ -1,0 +1,23 @@
+{
+  "kind": "configflow-disposable-gateway-ui",
+  "pid": 54098,
+  "started_at": "2026-10-19T06:53:26.675Z",
+  "status": "stopped",
+  "frontend_url": "http://127.0.0.1:13001",
+  "login_url": "http://127.0.0.1:13001/login",
+  "api_proxy_target": "http://127.0.0.1:18000",
+  "proxy_prefix": "/api",
+  "workspace": "/private/tmp/configflow-gateway-lab-frontend-udt35C",
+  "source_root": "<checkout>/frontend",
+  "snapshot_root": "/private/tmp/configflow-gateway-lab-frontend-udt35C/frontend",
+  "snapshot_sha256": "dc335b29f11192ff4cdc3399d24001c8b3eeb2643aeedfbe62e44220c34d35bf",
+  "snapshot_file_count": 313,
+  "source_manifest": "/private/tmp/configflow-gateway-lab-frontend-udt35C/source-manifest.json",
+  "dependency_directory": "<checkout>/frontend/node_modules",
+  "hmr": false,
+  "file_watching": false,
+  "original_product_config": "<checkout>/frontend/vite.config.mts",
+  "product_config": "/private/tmp/configflow-gateway-lab-frontend-udt35C/frontend/vite.config.mts",
+  "stopped_at": "2026-10-19T07:10:42.286Z",
+  "stop_reason": "SIGTERM"
+}

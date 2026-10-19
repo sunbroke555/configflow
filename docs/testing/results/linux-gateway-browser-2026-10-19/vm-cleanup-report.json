@@ -1,0 +1,6 @@
+{
+  "success": true,
+  "initial_namespace_unchanged": true,
+  "initial_nsswitch_unchanged": true,
+  "artifacts": "/var/lib/configflow-gateway-lab"
+}

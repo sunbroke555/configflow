@@ -1,0 +1,36 @@
+{
+  "agent_ids": {
+    "mihomo": "agent_1792392689304_61a167",
+    "oxidns": "agent_1792392689456_f793eb"
+  },
+  "agent_ids_preserved": true,
+  "agents_online": true,
+  "core_bytes_permissions_ownership_mtime_and_pids_preserved": true,
+  "core_pids": {
+    "mihomo": 4039,
+    "oxidns": 4673
+  },
+  "elapsed_seconds": 1.11,
+  "network_unchanged_both_namespaces": true,
+  "no_external_core_downloads": true,
+  "no_forwarding_journal": true,
+  "passive_curl_audit": [
+    {
+      "origin": "http://192.0.2.1:8000",
+      "path": "/api/agents/gateway-installations/c231a70cdcae465bbdeea74b28fe75e5/script"
+    },
+    {
+      "origin": "http://192.0.2.1:8000",
+      "path": "/api/agents/download/configflow-agent-linux-arm64"
+    },
+    {
+      "origin": "http://192.0.2.1:8000",
+      "path": "/api/agents/gateway-installations/c231a70cdcae465bbdeea74b28fe75e5/enroll"
+    }
+  ],
+  "phase": "enrolled",
+  "ready_for_browser_publish": true,
+  "same_browser_command": true,
+  "session_id": "c231a70cdcae465bbdeea74b28fe75e5",
+  "success": true
+}

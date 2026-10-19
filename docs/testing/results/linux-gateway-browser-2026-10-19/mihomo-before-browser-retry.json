@@ -1,0 +1,22 @@
+{
+  "deployment_id": "72092f3803214352a6be119de40eed36",
+  "files": {
+    "/etc/mihomo/.configflow-deployments/active-manifest.json": {
+      "gid": 0,
+      "mode": 384,
+      "mtime_ns": 1792392719995740205,
+      "sha256": "db01d9778a6c767adb933f594f2de2290eafab71ce4f6e05e9e0df3d88ce9142",
+      "size": 913,
+      "uid": 0
+    },
+    "/etc/mihomo/config.yaml": {
+      "gid": 0,
+      "mode": 384,
+      "mtime_ns": 1792392718427754679,
+      "sha256": "e334d9e90c98e0cf23a7903f1c9ab7c9aca6e5906633b94a1778725acaff87a9",
+      "size": 2776,
+      "uid": 0
+    }
+  },
+  "pid": 4039
+}

@@ -1,0 +1,191 @@
+{
+  "source": "Browser-driven disposable Linux VM verification",
+  "session_operations": "Prepared, created, published, applied and revoked only by browser user actions; VM worker performed real installation and probes.",
+  "sanitization": "Credential fields, request tokens and copied installer command omitted. No private script, key, credential file or raw session response is included.",
+  "files": [
+    {
+      "file": "after-navigation.json",
+      "sha256": "24f3b30ebc0bf10fc3ce359f61d7fe5be4582918d1a5669b1f1d39715ab6f4ab"
+    },
+    {
+      "file": "before-navigation.json",
+      "sha256": "12e1ef5946393d4f6a539402d4bf5be981c976d720a6ca6c67828a5936323524"
+    },
+    {
+      "file": "browser-existing-active-report.json",
+      "sha256": "a0ab385145d716b637410a7e6f66c26c3f0651f4d2c2f9948a4e6e4d01c82eef"
+    },
+    {
+      "file": "browser-existing-active.gateway.json",
+      "sha256": "a37e669b51ea25aba4de21c91f242afcd45eeef9d69d2c1cac74f8d79aec8c0c"
+    },
+    {
+      "file": "browser-existing-active.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-existing-before.gateway.json",
+      "sha256": "56cbedf8f462e81f0b4d044d8d8c73dd04a454d81cdb87d245b9b4932e69395a"
+    },
+    {
+      "file": "browser-existing-before.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-existing-core-after.json",
+      "sha256": "60882f326689e287dac5a766ffc6e4daa28c463adff8b6d31ecef2400a30afca"
+    },
+    {
+      "file": "browser-existing-core-before.json",
+      "sha256": "3dca70f796593c4fb64df3dcd0074111be529e8a9d4734002c21e108c6369ba1"
+    },
+    {
+      "file": "browser-existing-install-report.json",
+      "sha256": "f396c30bffacc855e2229aead7952023e114159b66c4c3d59b767a57e6d080ac"
+    },
+    {
+      "file": "browser-existing-installed.gateway.json",
+      "sha256": "56cbedf8f462e81f0b4d044d8d8c73dd04a454d81cdb87d245b9b4932e69395a"
+    },
+    {
+      "file": "browser-existing-installed.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-existing-preapply.gateway.json",
+      "sha256": "8a6d6775c5223c24eddd861dcec6cea9076a843c987ebbe444109b37f2d27d33"
+    },
+    {
+      "file": "browser-existing-preapply.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-existing-prepared-report.json",
+      "sha256": "bf75971fe491135c98dcd118289f5e2aac0ca05e7766226930635cd7734821a6"
+    },
+    {
+      "file": "browser-existing-publish-report.json",
+      "sha256": "e3a39387182d56ac3dd05d3efff7aff069771a1c30485b8f17b249b028b4ac1a"
+    },
+    {
+      "file": "browser-existing-removed-report.json",
+      "sha256": "37cdfc97024270f30c93ea57b3d953af76bf35bcce34458df1d63139fca0b805"
+    },
+    {
+      "file": "browser-existing-removed.gateway.json",
+      "sha256": "8a6d6775c5223c24eddd861dcec6cea9076a843c987ebbe444109b37f2d27d33"
+    },
+    {
+      "file": "browser-existing-removed.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-new-active-report.json",
+      "sha256": "b1f832d7d2dad7f47afafb7ea3f998a8dd28d8085dac3562e2ff551c4f52303f"
+    },
+    {
+      "file": "browser-new-preapply.gateway.json",
+      "sha256": "56cbedf8f462e81f0b4d044d8d8c73dd04a454d81cdb87d245b9b4932e69395a"
+    },
+    {
+      "file": "browser-new-preapply.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-new-removed-report.json",
+      "sha256": "05c181c69d2250b7e61e49d990019a5fa8183977a87545b6b79e636a65186e9b"
+    },
+    {
+      "file": "browser-new-removed.gateway.json",
+      "sha256": "56cbedf8f462e81f0b4d044d8d8c73dd04a454d81cdb87d245b9b4932e69395a"
+    },
+    {
+      "file": "browser-new-removed.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-ordinary-after.gateway.json",
+      "sha256": "8a6d6775c5223c24eddd861dcec6cea9076a843c987ebbe444109b37f2d27d33"
+    },
+    {
+      "file": "browser-ordinary-after.json",
+      "sha256": "ef62d34c2958dd7b66eb7e9069810b2a047d4286b49f4cbd40b0c97c970cafe5"
+    },
+    {
+      "file": "browser-ordinary-after.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-ordinary-before.gateway.json",
+      "sha256": "8a6d6775c5223c24eddd861dcec6cea9076a843c987ebbe444109b37f2d27d33"
+    },
+    {
+      "file": "browser-ordinary-before.json",
+      "sha256": "ef62d34c2958dd7b66eb7e9069810b2a047d4286b49f4cbd40b0c97c970cafe5"
+    },
+    {
+      "file": "browser-ordinary-before.root.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "browser-ordinary-report.json",
+      "sha256": "ee4e5795f40ccef0e2ea20cbfafac773c19b7d4bc25eaac2351798b8f58c84e9"
+    },
+    {
+      "file": "browser-publish-retry-report.json",
+      "sha256": "795a3815ae194d35385dcdfd3ea981b5cb56580f6d3c6a6fab0a5e206b4db0f6"
+    },
+    {
+      "file": "checksum-failure-report.json",
+      "sha256": "7293e390f4a9c26141e2a0f433eb436780e6f015fa2c6570ab0748eb7af0dae9"
+    },
+    {
+      "file": "final-browser-checks.json",
+      "sha256": "5629dc7e4c6fc65552231d7099fd57e3c24240dd9521a2cdd6df6544829d5ba8"
+    },
+    {
+      "file": "final-cleanup-report.json",
+      "sha256": "486ae99b261cdfdef452d93ef7dff3bcafff33c8781041729e62578093323439"
+    },
+    {
+      "file": "fresh-core-after-failure.json",
+      "sha256": "dd278b02ac87855b733b93038d27fe1b1c0d7a404528d418f24a2e276b3e399a"
+    },
+    {
+      "file": "fresh-core-before.json",
+      "sha256": "dd278b02ac87855b733b93038d27fe1b1c0d7a404528d418f24a2e276b3e399a"
+    },
+    {
+      "file": "fresh-install-report.json",
+      "sha256": "96dfd7f18329a391c85c1f519d5bc35e45562ff19b52755cb843a7bf7d3d8318"
+    },
+    {
+      "file": "mihomo-before-browser-retry.json",
+      "sha256": "881db3d8140bb25e46b9bb15ecb4b6f613a98689c2c747165bb9feb9baad4cd5"
+    },
+    {
+      "file": "mobile-rule-metrics.json",
+      "sha256": "1728caefa7ade7b01b73fef8394c9aa57039e2239733102abab7ed62d4b5701e"
+    },
+    {
+      "file": "oxidns-failed-journal.json",
+      "sha256": "32a9b7615d10ece4b883ef399b77c8415ab8b1091dda2eb8e7102f2fb1bde991"
+    },
+    {
+      "file": "publish-failure-rollback-report.json",
+      "sha256": "f45d64a294494fad65e37e9bc3f2a34d004140ad5c3db7592b74ec3a2b867252"
+    },
+    {
+      "file": "root-after-cleanup.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "root-before.json",
+      "sha256": "d4536537c83fd9018eb7c1ac79665b113754ed4fbbfcd268e0458461f12a9647"
+    },
+    {
+      "file": "vm-cleanup-report.json",
+      "sha256": "c02ac9cec3ddf0beac3ff99338dc84ee5baec2a434015daa0b87622bcdbf90f6"
+    }
+  ]
+}
