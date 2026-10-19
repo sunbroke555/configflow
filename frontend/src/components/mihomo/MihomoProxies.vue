@@ -29,7 +29,7 @@
       <EmptyState :icon="Search" :title="search ? '没有匹配的策略组' : '暂无策略组'" :description="search ? '换个关键词试试。' : 'Mihomo 配置中没有可展示的策略组。'" />
     </SectionCard>
 
-    <div v-else class="grid min-w-0 gap-3 xl:grid-cols-2" :class="{ 'select-none': settings.disableTextSelection }">
+    <div v-else class="grid min-w-0 items-start gap-3 xl:grid-cols-2" :class="{ 'select-none': settings.disableTextSelection }">
       <section v-for="group in visibleGroups" :key="group.name" class="min-w-0 rounded-xl border border-border bg-card shadow-surface">
         <header class="flex min-w-0 items-center gap-2 p-2 pl-4">
           <button type="button" class="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring"
