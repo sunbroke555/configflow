@@ -24,7 +24,9 @@ const (
 )
 
 const tunDeviceFix = "普通 Linux/虚拟机先检查内核 TUN 驱动（modprobe tun）。PVE LXC 应先在 PVE 宿主机执行 modprobe tun，检查 pct config <CTID> 的空闲 devN 槽，再用 pct set <CTID> --devN /dev/net/tun 添加设备（例如未占用的 dev0）；完整停止并启动容器后，在容器内重新检查。不要改为特权容器或放宽整个设备目录权限。"
-const tunCapabilityFix = "检查容器是否保留 CAP_NET_ADMIN，以及 Mihomo 服务的 CapabilityBoundingSet 是否包含 CAP_NET_ADMIN；非 root 服务还需核对 AmbientCapabilities 或程序文件能力。设备受限制时，核对 DeviceAllow=/dev/net/tun rw。保留其他必要权限，按现有服务配置做最小调整。"
+const tunCapabilityFix = "分别核对当前检查进程与 Mihomo 核心进程的 /proc/<PID>/status 中 CapEff、CapBnd 和启动权限；UID 为 root 不能证明具有 CAP_NET_ADMIN。若运行在容器内，还需核对容器保留的能力及 /dev/net/tun 的设备访问策略。按实际服务管理方式做最小调整。"
+const systemdTunCapabilityFix = "检查 Mihomo 服务的 CapabilityBoundingSet 是否包含 CAP_NET_ADMIN；非 root 服务还需核对 AmbientCapabilities 或程序文件能力，并以核心进程的 CapEff 确认实际能力。设备受限制时，核对 DeviceAllow=/dev/net/tun rw。若运行在容器内，还需核对容器保留的能力。保留其他必要权限，按现有服务配置做最小调整。"
+const openRCTunCapabilityFix = "核对 /etc/init.d/ 中对应的 Mihomo 服务脚本与 /etc/conf.d/ 配置，包括 command_user、capabilities 及其启动命令；从该服务实际运行进程的 /proc/<PID>/status 读取 CapEff，确认 CAP_NET_ADMIN，并核对该进程对 /dev/net/tun 的设备访问权限。UID 为 root 不能证明具备该能力；若运行在容器内，还需核对容器保留的能力和设备映射。"
 const forwardingFix = "仅当此 Linux/LXC 承担旁路网关或路由转发时，在该系统内执行 sysctl -w net.ipv4.ip_forward=1，并把 net.ipv4.ip_forward=1 写入 /etc/sysctl.d/99-configflow-forward.conf；同时处理报告中的冲突设置及后加载文件，避免被改回 0。重启后用 sysctl net.ipv4.ip_forward 再验证。PVE 仅做二层网桥时不因此需要开启宿主机转发。"
 
 type systemProbe struct {
@@ -178,7 +180,7 @@ func inspectTunDevice(probe systemProbe, state tunState) Check {
 		check.Message = "/dev/net/tun 不是字符设备，不能作为 TUN 使用。"
 	} else if features, err := probe.tun("/dev/net/tun"); err != nil {
 		check.Message = "TUN 字符设备存在，但当前进程打开设备或读取驱动能力失败；设备映射、cgroup 或安全策略可能限制访问。"
-		check.Fix += " 同时检查核心服务的 DeviceAllow 与设备访问策略。"
+		check.Fix += " 同时核对核心服务的启动用户、设备映射及访问策略；检查进程的访问结果不能代表核心进程。"
 	} else if features&1 == 0 { // IFF_TUN, shared by supported Linux architectures.
 		check.Message = "设备可打开，但驱动没有报告 IFF_TUN 支持。"
 	} else {
@@ -259,44 +261,50 @@ func inspectCoreService(probe systemProbe, cfg Config, state tunState) ([]Check,
 	if state == tunDisabled {
 		return []Check{{Name: name, Level: "pass", Message: "当前配置未启用 TUN；不以 TUN 服务权限作为安装前提。"}}, false
 	}
-	if cfg.ServiceManager != "systemd" || cfg.ServiceUnit == "" {
-		return []Check{{Name: name, Level: "warn", Message: "未通过 systemd 识别核心进程，无法确认核心实际获得的能力与设备访问权限；当前检查进程的权限不能代表核心服务。", Fix: tunCapabilityFix}}, false
+	if cfg.ServiceManager == "openrc" {
+		return []Check{{Name: name, Level: "warn", Message: "核心由 OpenRC 管理；尚未取得并验证其实际运行 PID，无法确认核心获得的能力与设备访问权限。当前检查进程的权限不能代表核心服务。", Fix: openRCTunCapabilityFix}}, false
+	}
+	if cfg.ServiceManager != "systemd" {
+		return []Check{{Name: name, Level: "warn", Message: "当前服务管理方式未提供可验证的核心 PID，无法确认核心实际获得的能力与设备访问权限；当前检查进程的权限不能代表核心服务。", Fix: tunCapabilityFix}}, false
+	}
+	if cfg.ServiceUnit == "" {
+		return []Check{{Name: name, Level: "warn", Message: "未指定 Mihomo systemd 服务单元，无法读取核心实际获得的能力与设备访问权限；当前检查进程的权限不能代表核心服务。", Fix: systemdTunCapabilityFix}}, false
 	}
 	data, err := probe.showUnit(cfg.ServiceUnit)
 	if err != nil {
-		return []Check{{Name: name, Level: "warn", Message: "无法读取 Mihomo systemd 服务的权限与隔离配置，不能确认核心能够访问 TUN。", Fix: tunCapabilityFix}}, false
+		return []Check{{Name: name, Level: "warn", Message: "无法读取 Mihomo systemd 服务的权限与隔离配置，不能确认核心能够访问 TUN。", Fix: systemdTunCapabilityFix}}, false
 	}
 	properties := systemdProperties(data)
 	var checks []Check
 	coreHasCapability := false
 	if bound, present := properties["CapabilityBoundingSet"]; !present {
-		checks = append(checks, Check{Name: name + "上限", Level: "warn", Message: "服务没有返回 CapabilityBoundingSet，无法确认能力上限。", Fix: tunCapabilityFix})
+		checks = append(checks, Check{Name: name + "上限", Level: "warn", Message: "服务没有返回 CapabilityBoundingSet，无法确认能力上限。", Fix: systemdTunCapabilityFix})
 	} else if !hasNamedCapability(bound, "cap_net_admin") {
-		checks = append(checks, Check{Name: name + "上限", Level: "error", Message: "Mihomo 已启用 TUN，但服务的 CapabilityBoundingSet 未包含 CAP_NET_ADMIN。", Fix: tunCapabilityFix})
+		checks = append(checks, Check{Name: name + "上限", Level: "error", Message: "Mihomo 已启用 TUN，但服务的 CapabilityBoundingSet 未包含 CAP_NET_ADMIN。", Fix: systemdTunCapabilityFix})
 	} else {
 		checks = append(checks, Check{Name: name + "上限", Level: "pass", Message: "服务 CapabilityBoundingSet 允许 CAP_NET_ADMIN；能力上限本身不等于已授予有效能力。"})
 	}
 	pid, _ := strconv.Atoi(properties["MainPID"])
 	if pid <= 0 {
-		checks = append(checks, Check{Name: "Mihomo 运行权限", Level: "warn", Message: "未取得运行中的核心 PID，无法验证实际 CapEff 或服务内的 TUN 设备视图。", Fix: tunCapabilityFix})
+		checks = append(checks, Check{Name: "Mihomo 运行权限", Level: "warn", Message: "未取得运行中的核心 PID，无法验证实际 CapEff 或服务内的 TUN 设备视图。", Fix: systemdTunCapabilityFix})
 	} else {
 		status, readErr := probe.readFile(fmt.Sprintf("/proc/%d/status", pid))
 		mask, parseErr := capabilityMask(status, "CapEff")
 		if readErr != nil || parseErr != nil {
-			checks = append(checks, Check{Name: "Mihomo 运行权限", Level: "warn", Message: "无法读取核心进程的有效能力，不能用安装进程的权限推断核心权限。", Fix: tunCapabilityFix})
+			checks = append(checks, Check{Name: "Mihomo 运行权限", Level: "warn", Message: "无法读取核心进程的有效能力，不能用安装进程的权限推断核心权限。", Fix: systemdTunCapabilityFix})
 		} else if mask&netAdminCapability == 0 {
-			checks = append(checks, Check{Name: "Mihomo 运行权限", Level: "warn", Message: "运行中的核心未持有有效 CAP_NET_ADMIN；它可能已降权，无法据此确认重启后能重新创建 TUN。", Fix: tunCapabilityFix})
+			checks = append(checks, Check{Name: "Mihomo 运行权限", Level: "warn", Message: "运行中的核心未持有有效 CAP_NET_ADMIN；它可能已降权，无法据此确认重启后能重新创建 TUN。", Fix: systemdTunCapabilityFix})
 		} else {
 			coreHasCapability = true
 			checks = append(checks, Check{Name: "Mihomo 运行权限", Level: "pass", Message: "当前核心进程持有有效 CAP_NET_ADMIN。"})
 		}
 		device, statErr := probe.stat(fmt.Sprintf("/proc/%d/root/dev/net/tun", pid))
 		if readErr != nil {
-			checks = append(checks, Check{Name: "Mihomo 设备视图", Level: "warn", Message: "核心 PID 已退出或无法检查，不能确认运行服务内的 TUN 设备视图。", Fix: tunCapabilityFix})
+			checks = append(checks, Check{Name: "Mihomo 设备视图", Level: "warn", Message: "核心 PID 已退出或无法检查，不能确认运行服务内的 TUN 设备视图。", Fix: systemdTunCapabilityFix})
 		} else if os.IsNotExist(statErr) || statErr == nil && device.Mode()&os.ModeCharDevice == 0 {
 			checks = append(checks, Check{Name: "Mihomo 设备视图", Level: "error", Message: "已启用 TUN，但当前核心进程的文件系统视图内没有 TUN 字符设备。", Fix: "检查服务 PrivateDevices、RootDirectory/RootImage 和设备绑定；仅向该服务提供 /dev/net/tun，并核对 DeviceAllow。"})
 		} else if statErr != nil {
-			checks = append(checks, Check{Name: "Mihomo 设备视图", Level: "warn", Message: "无法读取核心服务内的设备视图，不能确认服务能够访问 /dev/net/tun。", Fix: tunCapabilityFix})
+			checks = append(checks, Check{Name: "Mihomo 设备视图", Level: "warn", Message: "无法读取核心服务内的设备视图，不能确认服务能够访问 /dev/net/tun。", Fix: systemdTunCapabilityFix})
 		} else {
 			checks = append(checks, Check{Name: "Mihomo 设备视图", Level: "pass", Message: "当前核心进程的文件系统视图内可见 TUN 字符设备；设备访问策略仍可能限制打开。"})
 		}

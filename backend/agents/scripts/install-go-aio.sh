@@ -13,6 +13,7 @@ STAGE_DIR=""
 RESTART_ON_FAILURE=""
 {core_phase_state}cleanup() {
     cleanup_status=$?
+    {ipv4_forwarding_cleanup}
     if [ "$cleanup_status" -ne 0 ]; then
 {core_cleanup_message}        for stopped_service in $RESTART_ON_FAILURE; do
             if [ "$INIT_SYSTEM" = systemd ]; then
@@ -31,6 +32,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 fail() { echo "$*" >&2; exit 1; }
+{ipv4_forwarding_functions}
 json_string() {
     sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' "$1" | head -n 1
 }
@@ -97,6 +99,8 @@ stop_existing_agent() {
 
 {agent_install_dependencies}
 {installation_description}
+{tun_prepare_notice}
+{ipv4_forwarding_notice}
 cf_ui "1) {installation_action}"
 cf_ui "2) 卸载两个 Agent（保留两个核心、核心配置及发布记录）"
 cf_ui "3) 取消"
@@ -138,6 +142,7 @@ done
 case "$choice" in
     1) ;;
     2)
+        {ipv4_forwarding_ownership}
         # Check BOTH journals before stopping either Agent. Do not auto-recover
         # a core merely because its management Agent is being removed.
         for service in mihomo oxidns; do
@@ -154,6 +159,7 @@ case "$choice" in
             select_service "$service"
             stop_existing_agent
         done
+        {ipv4_forwarding_ownership}
         for service in mihomo oxidns; do
             select_service "$service"
             if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
@@ -178,11 +184,13 @@ case "$choice" in
         done
         if [ "$INIT_SYSTEM" = systemd ]; then systemctl daemon-reload; else rc-update -u; fi
         cf_ui "两个 Agent 已卸载；核心服务、配置及发布记录未改动。"
+        {ipv4_forwarding_uninstall}
         exit 0
         ;;
     *) exit 0 ;;
 esac
 
+{ipv4_forwarding_ownership}
 {core_install_phase}# Read-only core checks precede even the Agent download. The existing service
 # manager remains the only owner of each core process.
 cf_step "检查核心接管与下载 Agent"
@@ -249,6 +257,10 @@ for service in mihomo oxidns; do
 done
 cf_step_done "核心接管检查与 Agent 下载校验通过"
 
+# Only explicitly enabled TUN is prepared. Keep a loaded module if a later
+# check fails: unloading it could disrupt an existing core using the driver.
+{tun_prepare}
+
 # Inspect the pair together so the environment check can distinguish their
 # listeners from unrelated port owners. Diagnostics include repair guidance;
 # the check never changes capabilities, forwarding or either core config.
@@ -262,6 +274,8 @@ else
     exit "$environment_status"
 fi
 cf_step_done "运行环境检查通过"
+
+{ipv4_forwarding_prepare}
 
 # Both candidates, existing roots and environment passed. No Agent is stopped earlier.
 cf_step "安装并启动 Agent 服务"
@@ -280,6 +294,7 @@ for service in mihomo oxidns; do
     fi
     "$BINARY_TMP" -config "$STAGE_DIR/$SERVICE-config.json" -require-clean-deployments
 done
+{ipv4_forwarding_ownership}
 for service in mihomo oxidns; do
     select_service "$service"
     mkdir -p "$AGENT_DIR"
@@ -289,6 +304,9 @@ for service in mihomo oxidns; do
     mv "$AGENT_DIR/.configflow-agent.new" "$AGENT_BINARY"
     mv "$STAGE_DIR/$SERVICE-config.json" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
+    IPV4_SYSTEMD_PRE=""
+    IPV4_OPENRC_PRE=""
+    {ipv4_forwarding_hook}
     if command -v logrotate >/dev/null 2>&1; then
         mkdir -p /etc/logrotate.d
         cat > "/etc/logrotate.d/$AGENT_UNIT" <<LOGEOF
@@ -313,6 +331,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$AGENT_DIR
+$IPV4_SYSTEMD_PRE
 ExecStart=$AGENT_BINARY -config $CONFIG_FILE
 StandardOutput=append:$AGENT_LOG
 StandardError=append:$AGENT_LOG
@@ -338,6 +357,7 @@ depend() {
     after firewall
 }
 start_pre() {
+    $IPV4_OPENRC_PRE
     checkpath --directory --mode 0755 /var/log
     checkpath --file --mode 0644 --owner root:root "$AGENT_LOG"
 }
@@ -358,8 +378,10 @@ for service in mihomo oxidns; do
         rc-service "$AGENT_UNIT" status
     fi
 done
+{ipv4_forwarding_apply}
 RESTART_ON_FAILURE=""
 cf_step_done "两个 Agent 服务已启动"
+{ipv4_forwarding_summary}
 cf_fact agent_mihomo "Mihomo Agent：端口 {mihomo_agent_port}，服务已启动"
 cf_fact agent_oxidns "OxiDNS Agent：端口 {oxidns_agent_port}，服务已启动"
 if [ "$(cf_fact_read core_mihomo_new)" != yes ] || [ "$(cf_fact_read core_oxidns_new)" != yes ]; then

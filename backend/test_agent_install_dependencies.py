@@ -14,7 +14,7 @@ from backend import test_aio_agent_core_install as aio_core
 from backend import test_single_agent_core_install as single
 
 
-TOOLS = "awk basename cat chmod cp dirname grep head mkdir mktemp mv readlink rm sed wc".split()
+TOOLS = "awk basename cat chmod cmp cp dirname grep head ln mkdir mktemp mv readlink rm sed wc".split()
 
 
 def isolate_dependencies(tmp_path, env, missing=(), package_manager="apk"):

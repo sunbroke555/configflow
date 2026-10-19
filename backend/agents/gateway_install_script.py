@@ -111,6 +111,8 @@ def generate_gateway_install_script(
         mihomo_service_binary='/usr/local/bin/mihomo', oxidns_service_binary='/usr/local/bin/oxidns',
         non_interactive=True, verified_agent_path='$GATEWAY_STAGE/configflow-agent',
         installation_id=installation_id, installation_token=enrollment_token if installation_id else "",
+        manage_ipv4_forwarding=False,
+        manage_tun=False,
     )
     values = {
         'aio_script': aio,

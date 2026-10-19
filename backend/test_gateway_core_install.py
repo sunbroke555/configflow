@@ -43,6 +43,7 @@ def test_opt_in_does_not_change_ordinary_aio_and_sh_syntax(tmp_path):
     assert 'read -r choice < /dev/tty' in ordinary
     assert 'installation_token' not in ordinary
     assert 'configflow-gateway' not in ordinary
+    assert '-prepare-tun' in ordinary
     script = generate()
     assert 'read -r choice < /dev/tty' not in script
     assert '"installation_id": "install-session-0123456789"' in script
@@ -53,6 +54,9 @@ def test_opt_in_does_not_change_ordinary_aio_and_sh_syntax(tmp_path):
     assert result.returncode == 0, result.stderr
     assert 'releases/latest' not in script
     assert 'sysctl -w' not in script
+    assert 'enable-ipv4-forwarding.sh' not in script
+    assert '99-configflow-aio-forward.conf' not in script
+    assert '-prepare-tun' not in script
     assert 'nft add' not in script
     assert 'curl | sh' not in script
 
@@ -90,6 +94,9 @@ if args == ['-h']: raise SystemExit()
 if args == ['-version']: print(os.environ.get('AGENT_VERSION','1.8.25-go')); raise SystemExit()
 cfg=json.load(open(args[args.index('-config')+1]))
 with open(os.environ['EVENTS'],'a') as f: f.write('agent-check '+cfg['service_type']+' '+args[-1]+'\\n')
+if '-prepare-tun' in args:
+ with open(os.environ['EVENTS'],'a') as f: f.write('prepare-tun:'+cfg['service_type']+'\\n')
+ raise SystemExit('Gateway installation must not prepare TUN')
 if cfg['service_type'] == os.environ.get('FAIL_AGENT_CHECK'): raise SystemExit(42)
 '''
     raw_agent = agent.encode()
@@ -171,6 +178,9 @@ if os.environ.get('CORRUPT')==src.name: out.write_bytes(b'bad checksum')
     mocks={'id':'#!/bin/sh\necho 0\n','uname':f'#!/bin/sh\nif [ "$1" = -s ]; then echo Linux; else echo {architecture}; fi\n',
            'curl':curl,'ip':'#!/bin/sh\nexit 0\n','nft':'#!/bin/sh\n[ "${FAIL_NFT:-}" != yes ]\n',
            'ss':'#!/bin/sh\nif [ -n "${BUSY_PORT:-}" ]; then echo "udp UNCONN 0 0 0.0.0.0:$BUSY_PORT 0.0.0.0:*"; fi\n',
+           'sysctl':'#!/bin/sh\nprintf "forbidden-sysctl %s\\n" "$*" >> "$EVENTS"\nexit 98\n',
+           'modprobe':'#!/bin/sh\nprintf "forbidden-modprobe %s\\n" "$*" >> "$EVENTS"\nexit 97\n',
+           'mknod':'#!/bin/sh\nprintf "forbidden-mknod %s\\n" "$*" >> "$EVENTS"\nexit 97\n',
            'sleep':'#!/bin/sh\nexit 0\n'}
     mocks.update({'systemctl':manager_code} if manager=='systemd' else {'rc-service':manager_code,'rc-update':manager_code})
     for name,body in mocks.items():
@@ -190,6 +200,11 @@ def test_new_install_validates_before_mutation_registers_and_never_applies_forwa
     log=events.read_text()
     assert log.index('core-check mihomo')<log.index('core-check oxidns')<log.index('enable' if manager=='systemd' else 'rc-update -u')
     assert (tmp_path/'ip_forward').read_text()=='0\n'
+    assert 'forbidden-sysctl' not in log
+    assert 'prepare-tun:' not in log
+    assert 'forbidden-modprobe' not in log and 'forbidden-mknod' not in log
+    assert not (tmp_path/'etc/sysctl.d/99-configflow-aio-forward.conf').exists()
+    assert not (tmp_path/'opt/configflow-agent/mihomo/enable-ipv4-forwarding.sh').exists()
     assert 'enable: false' in (tmp_path/'etc/mihomo/config.yaml').read_text()
     assert '127.0.0.1:53' in (tmp_path/'etc/oxidns/config.yaml').read_text()
     assert '0.0.0.0:53' not in (tmp_path/'etc/oxidns/config.yaml').read_text()

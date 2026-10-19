@@ -229,8 +229,13 @@ check_ports
 show_tun_disabled_guidance() {
     printf '%s\n' "TUN 初始配置保持关闭：$TUN_REASON" \
         '普通 Linux/虚拟机：先检查内核 TUN 驱动（modprobe tun），确认 /dev/net/tun 为 10:200 字符设备且可读写。' \
-        'PVE LXC：在 PVE 宿主机执行 modprobe tun，检查 pct config <CTID> 的空闲 devN 槽，再用 pct set <CTID> --devN /dev/net/tun 添加设备（例如空闲的 dev0）；完整停止并启动容器后，在容器内复查。不要改为特权容器或放宽整个设备目录权限。' \
-        '权限：保留容器的 CAP_NET_ADMIN；核对 Mihomo 服务的 CapabilityBoundingSet、DeviceAllow=/dev/net/tun rw 及设备隔离策略。若接口重名，确认已有接口的归属后更改 Mihomo 的 tun.device。' \
+        'PVE LXC：在 PVE 宿主机执行 modprobe tun，检查 pct config <CTID> 的空闲 devN 槽，再用 pct set <CTID> --devN /dev/net/tun 添加设备（例如空闲的 dev0）；完整停止并启动容器后，在容器内复查。不要改为特权容器或放宽整个设备目录权限。'
+    if [ "$INIT_SYSTEM" = openrc ]; then
+        printf '%s\n' '权限（OpenRC）：核对 /etc/init.d/mihomo 与 /etc/conf.d/mihomo 的 command_user、capabilities 和启动命令，以实际核心进程 /proc/<PID>/status 的 CapEff 确认 CAP_NET_ADMIN，并检查该进程对 /dev/net/tun 的访问权限；root 身份不能证明具备该能力。若运行在容器内，还需核对容器保留的能力和设备映射。'
+    else
+        printf '%s\n' '权限（systemd）：保留容器的 CAP_NET_ADMIN；核对 Mihomo 服务的 CapabilityBoundingSet、DeviceAllow=/dev/net/tun rw 及设备隔离策略，并以实际核心进程的 CapEff 确认能力；非 root 服务还需核对 AmbientCapabilities 或程序文件能力。'
+    fi
+    printf '%s\n' '若接口重名，确认已有接口的归属后更改 Mihomo 的 tun.device。' \
         '修复后：在面板的 Mihomo 基础配置中设置 tun.enable: true，核对 DNS 监听、dns-hijack 及同机 DNS 上下游关系后保存并发布；未接入 Agent 时修改 /etc/mihomo/config.yaml 并重启 mihomo 服务。发布保留自定义端口；重复运行本安装脚本会保留已有配置，不会自动开启 TUN。'
     cf_fact tun 'TUN：已关闭'
     cf_note tun "TUN 未启用：${TUN_REASON}修复步骤见详细日志。"
