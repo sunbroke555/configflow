@@ -64,7 +64,7 @@ RUN npm run build
 # ==============================================================================
 FROM node:24-bookworm-slim AS node-runtime
 
-# Node 与 Sub-Store bundle 很少变化，合成最终镜像中独立的一层，应用代码更新时可直接复用
+# 准备 Node 与 Sub-Store bundle，随后与其他内置程序合并为一个运行组件层。
 FROM --platform=$BUILDPLATFORM python:3.11-slim AS sub-store
 # 内置 Sub-Store 后端版本（https://github.com/sub-store-org/Sub-Store/releases），可在线更新
 ARG SUB_STORE_VERSION=2.42.3
@@ -72,8 +72,15 @@ COPY --from=node-runtime /usr/local/bin/node /rootfs/usr/local/bin/node
 ADD --chmod=644 https://github.com/sub-store-org/Sub-Store/releases/download/${SUB_STORE_VERSION}/sub-store.bundle.js /rootfs/opt/sub-store/sub-store.bundle.js
 RUN echo "${SUB_STORE_VERSION}" > /rootfs/opt/sub-store/VERSION
 
+# 内置程序及许可证合为一层；应用代码更新时复用，任一程序更新时整体替换。
+FROM scratch AS runtime-assets
+COPY --from=sub-store /rootfs/ /rootfs/
+COPY --from=go-builder /dist/ /rootfs/opt/configflow/static/agents/
+COPY --from=node-probe-builder /dist/ /rootfs/opt/configflow/node-probe/
+COPY backend/node-probe/LICENSE backend/node-probe/NOTICE /rootfs/opt/configflow/node-probe/
+
 # ==============================================================================
-# Stage 4: 组装应用文件（后端源码、前端、Agent、配置与脚本），在最终镜像中只占一层
+# Stage 4: 组装应用文件（后端运行源码、前端、配置与脚本），在最终镜像中只占一层
 # ==============================================================================
 FROM --platform=$BUILDPLATFORM python:3.11-slim AS app
 
@@ -88,17 +95,18 @@ COPY docker/nginx.conf /rootfs/etc/nginx/nginx.conf
 COPY docker/supervisord.conf /rootfs/etc/supervisor/conf.d/supervisord.conf
 COPY --chmod=755 docker/sub-store-start.sh docker/configflow-start.sh /rootfs/usr/local/bin/
 COPY --chmod=755 docker/auto_update.py /rootfs/usr/local/bin/configflow-auto-update.py
-COPY --from=go-builder /dist/ /rootfs/opt/configflow/static/agents/
-COPY --from=node-probe-builder /dist/ /rootfs/opt/configflow/node-probe/
-COPY backend/node-probe/LICENSE backend/node-probe/NOTICE /rootfs/opt/configflow/node-probe/
 COPY --from=frontend-builder /app/frontend/dist /rootfs/usr/share/nginx/html
 
-# 写入版本号；预编译字节码，容器首次启动免去编译开销；预压缩前端资源供 nginx gzip_static 直接发送。
+# 移除测试及 Go 构建源码后再编译字节码，避免将开发文件及其缓存带入运行镜像。
+# 写入版本号；预压缩前端资源供 nginx gzip_static 直接发送。
 # Fingerprint the sources the bundled frontend/Agent came from, so auto-update
-# without a toolchain refuses commits that would mix versions.
+# without a toolchain refuses commits that would mix versions. These bind mounts
+# retain the complete build inputs even though runtime source copies are pruned.
 RUN --mount=type=bind,source=frontend,target=/tmp/image-src/frontend \
     --mount=type=bind,source=backend/agents/go-agent,target=/tmp/image-src/go-agent \
     --mount=type=bind,source=backend/node-probe,target=/tmp/image-src/node-probe \
+    find /rootfs/app/backend -type f \( -name 'test_*.py' -o -name 'conftest.py' \) -delete && \
+    rm -rf /rootfs/app/backend/agents/go-agent /rootfs/app/backend/node-probe && \
     sed -i "s/__version__ = \"dev\"/__version__ = \"${VERSION}\"/" /rootfs/app/backend/version.py && \
     python3 -m compileall -q /rootfs/app/backend && \
     find /rootfs/usr/share/nginx/html -type f -size +1k \
@@ -110,29 +118,31 @@ RUN --mount=type=bind,source=frontend,target=/tmp/image-src/frontend \
 
 # ==============================================================================
 # Stage 5: 最终镜像（源码部署）
-# 层次按变化频率从低到高：系统包 → Python 依赖 → Node/Sub-Store → 应用文件
+# 运行依赖、内置程序、应用各占一层；应用更新时复用依赖与程序层。
 # ==============================================================================
 FROM python:3.11-slim AS runtime
 
-WORKDIR /app
-
-# 安装系统依赖、配置权限
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends nginx supervisor ca-certificates libstdc++6 && \
-    rm -rf /var/lib/apt/lists/* && \
-    (groupadd -r nginx || true) && (useradd -r -g nginx -s /sbin/nologin -d /nonexistent nginx || true) && \
-    mkdir -p /data /var/log/supervisor /var/cache/nginx /var/log/nginx /etc/supervisor/conf.d && \
-    chown -R nginx:nginx /var/cache/nginx && \
-    rm -rf /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default /etc/nginx/conf.d/default.conf /usr/share/nginx/html/*
-
-# 安装 Python 依赖（依赖清单只挂载不复制，不额外产生镜像层）
+# Supervisor 复用镜像内的 Python，避免 apt 再安装一套系统 Python。
+# 依赖清单只挂载不复制，pip 缓存保留在构建器中，不写入镜像。
 RUN --mount=type=bind,source=backend/requirements.txt,target=/tmp/requirements.txt \
     --mount=type=cache,target=/root/.cache/pip \
-    pip install --disable-pip-version-check -r /tmp/requirements.txt && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nginx ca-certificates libstdc++6 && \
+    rm -rf /var/lib/apt/lists/* && \
+    (groupadd -r nginx || true) && (useradd -r -g nginx -s /sbin/nologin -d /nonexistent nginx || true) && \
+    mkdir -p /app /data /var/log/supervisor /var/cache/nginx /var/log/nginx /etc/supervisor/conf.d && \
+    chown -R nginx:nginx /var/cache/nginx && \
+    rm -rf /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default /etc/nginx/conf.d/default.conf /usr/share/nginx/html/* && \
+    pip install --disable-pip-version-check -r /tmp/requirements.txt supervisor==4.3.0 && \
+    ln -s /usr/local/bin/supervisord /usr/bin/supervisord && \
+    ln -s /usr/local/bin/supervisorctl /usr/bin/supervisorctl && \
     sha256sum /tmp/requirements.txt | cut -d' ' -f1 > /app/.image-requirements.sha256
 
-COPY --link --from=sub-store /rootfs/ /
+COPY --link --from=runtime-assets /rootfs/ /
 COPY --link --from=app /rootfs/ /
+
+# 保持既有运行工作目录，兼容容器内命令及部署方式。
+WORKDIR /app
 
 ENV DATA_DIR=/data TZ=Asia/Shanghai \
     SUB_STORE_BACKEND_API_HOST=127.0.0.1 \
