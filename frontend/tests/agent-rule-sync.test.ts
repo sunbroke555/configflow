@@ -20,7 +20,7 @@ function deferred() {
 }
 const toggle = (wrapper: VueWrapper, label: string) => wrapper.get(`[role="switch"][aria-label="${label}"]`)
 async function render(agentId = 'one') {
-  const wrapper = mount(AgentRuleSync, { props: { agentId } })
+  const wrapper = mount(AgentRuleSync, { props: { agentId }, attachTo: document.body })
   wrappers.push(wrapper)
   await flushPromises()
   return wrapper
@@ -28,20 +28,41 @@ async function render(agentId = 'one') {
 beforeEach(() => {
   vi.useFakeTimers()
   vi.resetAllMocks()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.mocked(api.get).mockResolvedValue(response())
   vi.mocked(api.put).mockImplementation(async (_path, settings) => response(enabled({ settings })))
 })
-afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
+afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''; vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('per-Agent automatic rule synchronization controls', () => {
   it('shows separate disabled-by-default switches without polling disabled synchronization', async () => {
     const wrapper = await render()
     expect(toggle(wrapper, '规则库自动同步').attributes('aria-checked')).toBe('false')
     expect(toggle(wrapper, '单条规则自动同步').attributes('aria-checked')).toBe('false')
-    expect(wrapper.text()).toContain('仅新增未引用的规则库条目不会触发同步')
+    expect(wrapper.text()).not.toContain('仅新增未引用的规则库条目不会触发同步')
     await vi.advanceTimersByTimeAsync(30000)
     expect(api.get).toHaveBeenCalledTimes(1)
     expect(api.put).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['规则库自动同步', '同步已启用引用的规则集内容及新增引用。仅新增未引用的规则库条目不会触发同步。'],
+    ['单条规则自动同步', '同步已选内嵌规则。'],
+  ])('shows %s help without toggling either switch or saving settings', async (label, help) => {
+    const wrapper = await render()
+    const button = wrapper.get(`button[aria-label="${label}说明"]`)
+    expect(button.element.closest('label')).toBeNull()
+    expect(document.querySelector('[data-field-help-content]')).toBeNull()
+    await button.trigger('click')
+    await flushPromises()
+    expect(document.querySelector('[data-field-help-content]')?.textContent).toContain(help)
+    expect(button.attributes('aria-expanded')).toBe('true')
+    expect(toggle(wrapper, '规则库自动同步').attributes('aria-checked')).toBe('false')
+    expect(toggle(wrapper, '单条规则自动同步').attributes('aria-checked')).toBe('false')
+    expect(api.put).not.toHaveBeenCalled()
+    await button.trigger('click')
+    await flushPromises()
+    expect(document.querySelector('[data-field-help-content]')).toBeNull()
   })
 
   it('saves each switch immediately while retaining the other switch and using the encoded Agent ID', async () => {

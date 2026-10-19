@@ -1,17 +1,23 @@
 <template>
-  <section class="mb-3 min-w-0" aria-label="规则自动同步">
+  <section class="mb-3 min-w-0" aria-label="规则同步">
+    <div class="flex min-h-8 min-w-0 items-center justify-between gap-2">
+      <span class="text-[13px] font-semibold">规则同步</span>
+      <slot name="actions" />
+    </div>
     <div class="flex min-w-0 flex-wrap items-center gap-x-4">
-      <label v-for="option in options" :key="option.key" :for="`${controlId}-${option.key}`"
-        class="flex min-h-11 min-w-0 cursor-pointer items-center gap-2 text-xs" :class="saving || !loaded ? 'cursor-wait text-muted-foreground' : 'text-foreground'">
-        <Switch :id="`${controlId}-${option.key}`" :aria-label="option.label" :model-value="settings[option.key]"
-          :disabled="saving || !loaded" @update:model-value="value => save(option.key, Boolean(value))" />
-        {{ option.label }}
-      </label>
+      <div v-for="option in options" :key="option.key" class="flex min-w-0 items-center gap-1">
+        <label :for="`${controlId}-${option.key}`"
+          class="flex min-h-11 min-w-0 cursor-pointer items-center gap-2 text-xs" :class="saving || !loaded ? 'cursor-wait text-muted-foreground' : 'text-foreground'">
+          <Switch :id="`${controlId}-${option.key}`" :aria-label="option.label" :model-value="settings[option.key]"
+            :disabled="saving || !loaded" @update:model-value="value => save(option.key, Boolean(value))" />
+          {{ option.label }}
+        </label>
+        <FieldHelp :label="option.label" :text="option.help" />
+      </div>
       <span v-if="saving || (!loaded && reading)" role="status" class="flex min-h-11 items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 class="size-3.5 animate-spin" />{{ saving ? '正在保存…' : '读取设置…' }}
       </span>
     </div>
-    <p class="m-0 text-xs leading-5 text-muted-foreground">规则库：同步已启用引用的规则集内容及新增引用；单条规则：同步已选内嵌规则。仅新增未引用的规则库条目不会触发同步。</p>
     <p v-if="loaded && !baselineReady" class="mt-1 mb-0 text-xs leading-5 text-warning-accent">{{ baselineHint }}</p>
     <p v-if="loaded" role="status" aria-live="polite" class="mt-1 mb-0 flex min-w-0 items-start gap-1.5 text-xs leading-5" :class="stateTone">
       <Loader2 v-if="state.status === 'running'" class="mt-0.5 size-3.5 shrink-0 animate-spin" />
@@ -29,13 +35,15 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Loader2 } from '@lucide/vue'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
+import FieldHelp from '@/components/common/FieldHelp.vue'
 import { notify } from '@/lib/feedback'
 import { agentRuleSyncApi, type AgentRuleSyncResponse, type AgentRuleSyncSettings, type AgentRuleSyncState } from '@/api/agentRuleSync'
 
 const props = defineProps<{ agentId: string }>()
 const baselineHint = '先成功发布一次配置，建立自动同步基线'
-const options: { key: keyof AgentRuleSyncSettings; label: string }[] = [
-  { key: 'library', label: '规则库自动同步' }, { key: 'rules', label: '单条规则自动同步' },
+const options: { key: keyof AgentRuleSyncSettings; label: string; help: string }[] = [
+  { key: 'library', label: '规则库自动同步', help: '同步已启用引用的规则集内容及新增引用。仅新增未引用的规则库条目不会触发同步。' },
+  { key: 'rules', label: '单条规则自动同步', help: '同步已选内嵌规则。' },
 ]
 const controlId = computed(() => `agent-rule-sync-${encodeURIComponent(props.agentId)}`)
 const settings = ref<AgentRuleSyncSettings>({ library: false, rules: false })

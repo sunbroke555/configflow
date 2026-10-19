@@ -74,7 +74,7 @@
           v-bind="listItem(index)"
           :class="cn(
             'relative flex flex-col overflow-hidden rounded-[18px] border border-border bg-card/90 p-[18px] shadow-surface max-sm:p-3',
-            agent.status !== 'online' && !deployments[agent.id] && !upgrades[agent.id] && !agent.dns_follow && 'opacity-80'
+            agent.status !== 'online' && !deployments[agent.id] && !upgrades[agent.id] && !agent.dns_follow && !ruleUpdateRefs[agent.id]?.hasStatus && 'opacity-80'
           )"
         >
           <header class="flex items-center gap-2.5">
@@ -198,6 +198,9 @@
               @changed="loadAgents"
             />
 
+            <OxiDNSRuleUpdate v-if="agent.service_type === 'oxidns'" :ref="instance => setRuleUpdateRef(agent.id, instance)"
+              :agent-id="agent.id" presentation="card" :disabled="ruleUpdateBlocked(agent)" @updated="loadAgents" />
+
             <AgentUpgradeStatus v-if="upgrades[agent.id]" :task="upgrades[agent.id]" :busy="upgradeBusy(agent.id)">
               <template #actions>
                 <Button v-if="!upgrades[agent.id].update_id && upgrades[agent.id].status === 'unknown'" variant="outline" size="sm" class="min-h-11" :disabled="upgradeQuerying.has(agent.id)" @click="retryUnconfirmedUpgrade(agent.id)">重新确认并提交更新</Button>
@@ -234,11 +237,21 @@
             </Button>
           </div>
 
-          <AgentRuleSync v-if="['mihomo', 'oxidns'].includes(agent.service_type)" :agent-id="agent.id" />
+          <AgentRuleSync v-if="['mihomo', 'oxidns'].includes(agent.service_type)" :agent-id="agent.id">
+            <template v-if="agent.service_type === 'oxidns'" #actions>
+              <Button type="button" variant="outline" size="sm" class="shrink-0"
+                :disabled="ruleUpdateBlocked(agent) || !ruleUpdateRefs[agent.id] || ruleUpdateRefs[agent.id]?.busy"
+                @click="ruleUpdateRefs[agent.id]?.act()">
+                <Loader2 v-if="ruleUpdateRefs[agent.id]?.busy" class="size-3.5 animate-spin" />
+                <RefreshCw v-else class="size-3.5" />
+                {{ ruleUpdateRefs[agent.id]?.actionLabel || '更新规则' }}
+              </Button>
+            </template>
+          </AgentRuleSync>
 
-          <footer class="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3.5 max-sm:pt-2">
+          <footer class="mt-auto flex items-center gap-2 border-t border-border pt-3.5 max-sm:pt-2">
             <span
-              :class="cn('mr-auto min-w-0 text-[12px]', syncOf(agent).tone === 'success' ? 'text-success-accent' : syncOf(agent).tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground')"
+              :class="cn('mr-auto min-w-0 flex-1 truncate text-[12px]', syncOf(agent).tone === 'success' ? 'text-success-accent' : syncOf(agent).tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground')"
               :title="syncOf(agent).title"
             >
               {{ syncOf(agent).label }}
@@ -267,9 +280,6 @@
               <Send v-else class="size-3.5" />
               推送
             </Button>
-            <OxiDNSRuleUpdate v-if="agent.service_type === 'oxidns'" :agent-id="agent.id"
-              :disabled="agent.status !== 'online' || pushingIds.has(agent.id) || upgradeBusy(agent.id) || deploymentBusy(agent.id) || deployments[agent.id]?.status === 'rollback_failed'"
-              @updated="loadAgents" />
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
                 <Button variant="ghost" size="icon-sm" :aria-label="`${agent.name} 的更多操作`">
@@ -799,7 +809,7 @@
 <script setup lang="ts">
 import { useChartPalette, withAlpha } from '@/lib/chartPalette'
 import PageHeader from '@/components/common/PageHeader.vue'
-import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick, watch, type ComponentPublicInstance } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMediaQuery } from '@vueuse/core'
 import BrandMark from '@/components/common/BrandMark.vue'
@@ -904,6 +914,13 @@ use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent
 
 
 const agents = ref<Agent[]>([])
+const ruleUpdateRefs = ref<Record<string, InstanceType<typeof OxiDNSRuleUpdate> | null>>({})
+function setRuleUpdateRef(id: string, instance: Element | ComponentPublicInstance | null) {
+  ruleUpdateRefs.value[id] = instance as InstanceType<typeof OxiDNSRuleUpdate> | null
+}
+function ruleUpdateBlocked(agent: Agent) {
+  return agent.status !== 'online' || pushingIds.value.has(agent.id) || upgradeBusy(agent.id) || deploymentBusy(agent.id) || deployments[agent.id]?.status === 'rollback_failed'
+}
 const { deployments, busy: deploymentBusy, track: trackDeployment, beginSubmission, endSubmission, refresh: refreshDeployment, activate: activateDeployment, retryPublish: retryDeployment, rollback: rollbackDeployment } = useAgentDeployments(() => { void loadAgents() })
 const deploymentHistoryAgentId = ref<string | null>(null)
 const deploymentHistoryAgent = computed(() => agents.value.find(agent => agent.id === deploymentHistoryAgentId.value))
