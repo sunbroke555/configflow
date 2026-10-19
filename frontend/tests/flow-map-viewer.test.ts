@@ -58,10 +58,9 @@ beforeEach(() => {
   vi.stubGlobal('CSS', { escape: (value: string) => value })
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function () { return geometry(this) })
-  vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function () {
-    const hiddenInDetails = this.tagName !== 'SUMMARY' && this.closest('details:not([open])')
-    return (hiddenInDetails ? [] : [geometry(this)]) as unknown as DOMRectList
-  })
+  // Chromium can retain rects for content inside closed details, despite that
+  // content being invisible and unable to receive focus.
+  vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function () { return [geometry(this)] as unknown as DOMRectList })
   for (const [property, dimension] of [['clientWidth', 'width'], ['clientHeight', 'height'], ['offsetWidth', 'width'], ['offsetHeight', 'height']] as const) {
     vi.spyOn(HTMLElement.prototype, property, 'get').mockImplementation(function () { return geometry(this)[dimension] })
   }
@@ -116,6 +115,7 @@ describe('FlowMapViewer mobile interaction', () => {
     document.body.append(details)
     await open()
     details.open = false
+    expect(button('全屏查看下发拓扑').getClientRects()).toHaveLength(1)
     await click('关闭全屏图')
     expect(document.activeElement).toBe(summary)
     details.open = true

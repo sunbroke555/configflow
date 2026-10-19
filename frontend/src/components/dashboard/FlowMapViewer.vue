@@ -126,7 +126,16 @@ async function openViewer(event: MouseEvent) {
 function restoreFocus(event: Event) {
   event.preventDefault()
   nextTick(() => {
-    const visible = (element: HTMLElement | null | undefined) => element?.isConnected && element.getClientRects().length
+    const visible = (element: HTMLElement | null | undefined) => {
+      if (!element?.isConnected || !element.getClientRects().length) return false
+      if (typeof element.checkVisibility === 'function' && !element.checkVisibility()) return false
+      // Closed details can retain layout rects even though its content cannot
+      // receive focus. Check every ancestor for browsers without checkVisibility.
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor instanceof HTMLDetailsElement && !ancestor.open && !ancestor.querySelector(':scope > summary')?.contains(element)) return false
+      }
+      return true
+    }
     if (visible(returnFocus)) return returnFocus!.focus({ preventScroll: true })
     if (visible(host.value)) return host.value!.focus({ preventScroll: true })
     // A responsive details section may collapse while the fullscreen dialog is
