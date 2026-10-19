@@ -20,7 +20,7 @@ function deferred() {
   return { promise: new Promise<any>((yes, no) => { resolve = yes; reject = no }), resolve: (v: any) => resolve(v), reject: (v: any) => reject(v) }
 }
 async function render(props = {}) {
-  const wrapper = mount(OxiDNSRuleUpdate, { props: { agentId: 'one', ...props } })
+  const wrapper = mount(OxiDNSRuleUpdate, { attachTo: document.body, props: { agentId: 'one', ...props } })
   wrappers.push(wrapper)
   await flushPromises()
   return wrapper
@@ -31,9 +31,66 @@ beforeEach(() => {
   vi.mocked(api.get).mockResolvedValue(response(task()))
   vi.mocked(api.post).mockResolvedValue(response(task('running')))
 })
-afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.useRealTimers() })
+afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''; vi.useRealTimers() })
 
 describe('OxiDNS rule update', () => {
+  it('keeps card progress visible from submission through completion while its action lives elsewhere', async () => {
+    const pending = deferred()
+    vi.mocked(api.post).mockReturnValueOnce(pending.promise)
+    const wrapper = await render({ presentation: 'card' })
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(wrapper.find('[data-agent-status-row]').exists()).toBe(false)
+    const controller = wrapper.vm as unknown as { act: () => Promise<void>; busy: boolean }
+    const submitting = controller.act()
+    await flushPromises()
+    expect(wrapper.get('[data-agent-status-row="规则更新"]').text()).toContain('正在提交')
+    await controller.act()
+    expect(api.post).toHaveBeenCalledTimes(1)
+    pending.resolve(response(task('running')))
+    await submitting
+    expect(controller.busy).toBe(true)
+    expect(wrapper.get('[data-status-notice]').text()).toContain('下载 0/2 · 热重载 0/1')
+    vi.mocked(api.get).mockResolvedValueOnce(done())
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.get('[data-agent-status-row]').attributes('data-tone')).toBe('success')
+    expect(wrapper.get('[data-status-details]').isVisible()).toBe(false)
+    await wrapper.get('button[aria-label="规则更新：已完成"]').trigger('click')
+    expect(wrapper.get('[data-status-details]').isVisible()).toBe(true)
+    expect(wrapper.get('[data-status-details]').text()).toContain('下载 2/2 · 热重载 1/1')
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+
+  it('keeps uncertain card results and read-only recovery available beside the status', async () => {
+    const wrapper = await render({ presentation: 'card' })
+    await (wrapper.vm as unknown as { act: () => Promise<void> }).act()
+    vi.mocked(api.get).mockResolvedValueOnce(response(task('failed', {
+      code: 'RULE_UPDATE_UNKNOWN', downloaded: 2, message: '暂时无法确认规则更新结果。',
+    })))
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.get('[data-agent-status-row]').attributes('data-tone')).toBe('warning')
+    expect(wrapper.get('[role="alert"]').text()).toContain('暂时无法确认')
+    expect(wrapper.findAll('button').some(button => button.text() === '重新尝试更新')).toBe(true)
+    vi.mocked(api.get).mockResolvedValueOnce(done())
+    await wrapper.findAll('button').find(button => button.text() === '查询更新结果')!.trigger('click')
+    await flushPromises()
+    expect(api.post).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-agent-status-row]').attributes('data-tone')).toBe('success')
+  })
+
+  it('shows a failed card update and its retry without requiring expanded details', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce(response(task('failed', {
+      code: 'RELOAD_FAILED', downloaded: 2, message: '部分规则热重载失败。',
+    })))
+    const wrapper = await render({ presentation: 'card' })
+    expect(wrapper.get('[data-agent-status-row]').attributes('data-tone')).toBe('danger')
+    expect(wrapper.get('[data-status-notice]').text()).toContain('部分规则热重载失败')
+    expect(wrapper.find('[data-status-details]').exists()).toBe(false)
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+    expect(api.post).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-agent-status-row]').attributes('data-tone')).toBe('progress')
+  })
+
   it('starts the encoded agent endpoint and waits for completed download and reload before reporting success', async () => {
     const wrapper = await render({ agentId: 'host/one' })
     await wrapper.get('button').trigger('click')

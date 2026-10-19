@@ -1,8 +1,24 @@
 <template>
-  <div class="contents">
+  <template v-if="presentation === 'card'">
+    <AgentStatusRow v-if="hasStatus" :key="task?.id || 'submitting'" label="规则更新" :status="cardStatus" :tone="cardTone">
+      <template v-if="cardTone === 'success'" #default>
+        <p class="m-0 num">{{ progress }}</p>
+      </template>
+      <template v-else #notice>
+        <p v-if="task && task.status !== 'idle'" class="m-0 num text-muted-foreground">{{ progress }}</p>
+        <p v-if="error" role="alert" class="m-0" :class="cardTone === 'warning' ? 'text-warning-accent' : 'text-destructive-accent'">{{ error }}</p>
+        <div v-if="!busy && (needsCheck || error || task?.status === 'failed')" class="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" class="min-h-11" :disabled="disabled || !agentId" @click="act">{{ needsCheck ? '查询更新结果' : '重新更新' }}</Button>
+          <Button v-if="needsCheck" type="button" variant="ghost" size="sm" class="min-h-11" :disabled="disabled || !agentId"
+            title="先查询当前任务，未运行时才重新提交更新" @click="retry">重新尝试更新</Button>
+        </div>
+      </template>
+    </AgentStatusRow>
+  </template>
+  <div v-else class="contents">
     <Button type="button" variant="outline" size="sm" class="min-h-11 shrink-0" :disabled="disabled || busy || !agentId" @click="act">
       <Loader2 v-if="busy" class="size-3.5 animate-spin" /><RefreshCw v-else class="size-3.5" />
-      {{ busy ? task?.status === 'running' || submitting ? '更新规则中…' : '查询更新状态…' : needsCheck ? '查询更新结果' : '更新规则' }}
+      {{ actionLabel }}
     </Button>
     <Button v-if="needsCheck && !busy" type="button" variant="ghost" size="sm" class="min-h-11 shrink-0"
       :disabled="disabled || !agentId" title="先查询当前任务，未运行时才重新提交更新" @click="retry">重新尝试更新</Button>
@@ -18,16 +34,27 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Loader2, RefreshCw } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import { oxidnsRuleUpdateApi, type OxiDNSRuleUpdateResponse, type OxiDNSRuleUpdateTask } from '@/api/oxidnsRuleUpdate'
 import { notify } from '@/lib/feedback'
 
-const props = defineProps<{ agentId: string; disabled?: boolean }>()
+const props = defineProps<{ agentId: string; disabled?: boolean; presentation?: 'toolbar' | 'card' }>()
 const emit = defineEmits<{ updated: [] }>()
 const task = ref<OxiDNSRuleUpdateTask | null>(null)
 const error = ref('')
 const busy = ref(false)
 const submitting = ref(false)
 const needsCheck = ref(false)
+const actionLabel = computed(() => busy.value ? task.value?.status === 'running' || submitting.value ? '更新规则中…' : '查询更新状态…' : needsCheck.value ? '查询更新结果' : '更新规则')
+const hasStatus = computed(() => Boolean(submitting.value || needsCheck.value || error.value || (task.value && task.value.status !== 'idle')))
+const cardStatus = computed(() => {
+  if (submitting.value) return '正在提交'
+  if (busy.value) return task.value?.status === 'running' ? task.value.phase === 'reloading' ? '正在热重载' : '正在下载' : '正在查询'
+  if (needsCheck.value) return '待确认'
+  if (error.value || task.value?.status === 'failed') return '失败'
+  return '已完成'
+})
+const cardTone = computed(() => busy.value ? 'progress' : needsCheck.value ? 'warning' : error.value || task.value?.status === 'failed' ? 'danger' : 'success')
 let generation = 0
 let controller: AbortController | undefined
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -217,4 +244,6 @@ watch(() => props.agentId, id => {
   if (id) void check(generation, true)
 }, { immediate: true })
 onBeforeUnmount(() => { generation++; clearTimer(); controller?.abort() })
+// The card places the action beside rule sync controls and progress in its status area.
+defineExpose({ act, busy, actionLabel, hasStatus })
 </script>
