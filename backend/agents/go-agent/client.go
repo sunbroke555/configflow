@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -129,15 +130,14 @@ func (c *Config) handleRegisterResponse(regResp *RegisterResponse) error {
 func (c *Config) RegisterAgent() error {
 	log.Println("Agent not registered. Attempting to register...")
 
-	localIP, err := getLocalIP()
-	if err != nil {
-		log.Printf("Warning: could not get local IP: %v. Falling back to agent_host.", err)
-		localIP = c.AgentHost
-	}
-
 	// 优先使用配置中的 AgentIP
-	hostIP := c.AgentIP
+	hostIP := strings.TrimSpace(c.AgentIP)
 	if hostIP == "" {
+		localIP, err := getLocalIP()
+		if err != nil {
+			log.Printf("Warning: could not get local IP: %v. Falling back to agent_host.", err)
+			localIP = c.AgentHost
+		}
 		hostIP = localIP
 	}
 

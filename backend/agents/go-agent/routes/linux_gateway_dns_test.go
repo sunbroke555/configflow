@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 )
 
 func TestGatewayDNSPreservesOxiDNSAndOrdinaryMode(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) { return "", errors.New("no LAN interface") })
 	input := "mode: rule\ndns: {enable: true, listen: '0.0.0.0:1053'}\ntun: {enable: true, auto-redirect: true, dns-hijack: [any:1053]}\n"
 	cfg := &Config{AgentIP: "192.0.2.2"}
 	ordinary, err := adaptGatewayDNS(cfg, input)

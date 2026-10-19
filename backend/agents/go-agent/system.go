@@ -2,32 +2,24 @@ package main
 
 import (
 	"fmt"
-	"net"
-	"os/exec"
-	"os"
 	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"agent/internal/localip"
 )
 
-// getLocalIP 尝试获取本机的一个有效的非回环IP地址
+// getLocalIP 尝试从本机活动 LAN 接口获取有效 IPv4 地址。
 func getLocalIP() (string, error) {
-	addrs, err := net.InterfaceAddrs()
+	ip, err := localip.Detect()
 	if err != nil {
-		log.Printf("Failed to get network interface addresses: %v", err)
+		log.Printf("Failed to detect local LAN IPv4 address: %v", err)
 		return "", err
 	}
-	for _, address := range addrs {
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				ip := ipnet.IP.String()
-				log.Printf("Found local IP: %s", ip)
-				return ip, nil
-			}
-		}
-	}
-	log.Printf("No non-loopback IP found, using localhost")
-	return "127.0.0.1", nil
+	log.Printf("Found local LAN IPv4 address: %s", ip)
+	return ip, nil
 }
 
 // checkServiceWithSystemctl 使用 systemctl 检查服务状态
@@ -160,14 +152,14 @@ func getServiceStatus(serviceName string) string {
 // executeCommand 执行一个shell命令
 func executeCommand(command string) ([]byte, error) {
 	log.Printf("Executing shell command: %s", command)
-	
+
 	// 特殊处理 supervisorctl 命令，确保使用正确的配置文件路径
 	if strings.Contains(command, "supervisorctl") && !strings.Contains(command, "-c") {
 		// 在命令中添加配置文件路径
 		command = strings.Replace(command, "supervisorctl", "supervisorctl -c /etc/supervisor/supervisord.conf", 1)
 		log.Printf("Modified supervisorctl command: %s", command)
 	}
-	
+
 	cmd := exec.Command("sh", "-c", command)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -182,7 +174,7 @@ func executeCommand(command string) ([]byte, error) {
 // writeLogToFile 将日志写入指定文件
 func writeLogToFile(message, logFile string) {
 	log.Printf("Writing log message to file: %s", logFile)
-	
+
 	// 确保日志目录存在
 	logDir := filepath.Dir(logFile)
 	log.Printf("Ensuring log directory exists: %s", logDir)

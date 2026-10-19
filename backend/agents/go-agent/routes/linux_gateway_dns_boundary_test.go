@@ -1,15 +1,40 @@
 package routes
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
+func TestAIOPublicationWithoutLANIPv4KeepsLiveConfiguration(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) { return "", errors.New("no active LAN interface") })
+	cfg := testDeploymentConfig(t)
+	cfg.NativeAIO = true
+	live := []byte("mode: direct\n")
+	if err := os.WriteFile(cfg.ConfigPath, live, 0600); err != nil {
+		t.Fatal(err)
+	}
+	input := []byte("dns: {enable: true}\ntun: {enable: true, auto-redirect: true}\n")
+	state := submitBundle(t, cfg, "no-lan-ip", map[string][]byte{"config.yaml": input}, true)
+	if state.Status != "failed" || state.FailedStage != "verifying" || !strings.Contains(state.Error, "no active LAN interface") {
+		t.Fatalf("unexpected failure: %+v", state)
+	}
+	data, err := os.ReadFile(cfg.ConfigPath)
+	if err != nil || string(data) != string(live) {
+		t.Fatalf("failed verification changed live configuration: %q, %v", data, err)
+	}
+}
+
 func TestGatewayDNSStagingDoesNotEnableOrdinaryDNSOrTUN(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) {
+		t.Error("disabled TUN must not need a LAN address")
+		return "", nil
+	})
 	t.Setenv("ENABLE_MOSDNS", "false")
 	t.Setenv("ENABLE_OXIDNS", "false")
 	for _, nativeAIO := range []bool{false, true} {
@@ -48,6 +73,77 @@ func TestGatewayDNSStagingDoesNotEnableOrdinaryDNSOrTUN(t *testing.T) {
 			}
 			if _, err := os.Stat(cfg.ConfigPath); !os.IsNotExist(err) {
 				t.Fatalf("staging wrote live configuration: %v", err)
+			}
+		})
+	}
+}
+
+func TestAIOPublicationUsesAutomaticLANIPv4WithEmptySavedAddress(t *testing.T) {
+	t.Setenv("ENABLE_MOSDNS", "false")
+	t.Setenv("ENABLE_OXIDNS", "false")
+	originalVersion := gatewayCoreVersion
+	t.Cleanup(func() { gatewayCoreVersion = originalVersion })
+	gatewayCoreVersion = func(string) (string, error) { return "Mihomo Meta v1.19.32 linux arm64", nil }
+	for _, gateway := range []bool{false, true} {
+		name := "native-aio"
+		if gateway {
+			name = "gateway"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := testDeploymentConfig(t)
+			cfg.NativeAIO = true
+			cfg.AgentIP = ""
+			currentIP := "192.168.8.2"
+			stubAgentIPv4(t, func() (string, error) { return currentIP, nil })
+			input := `mode: rule
+dns: {enable: true, nameserver: ['https://223.5.5.5/dns-query']}
+tun: {enable: true, auto-route: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8]}
+`
+			if gateway {
+				input += `rule-providers:
+  cf_gateway_fake_ip: {type: inline, behavior: ipcidr, payload: [198.18.0.0/16]}
+x-configflow-linux-gateway: {enabled: true, version: 1, profile_id: gateway-test}
+`
+			}
+			for _, id := range []string{"first", "address-changed"} {
+				if id == "address-changed" {
+					currentIP = "192.168.8.3"
+				}
+				// Exercise the actual upload/verification path; native AIO also
+				// activates through the test core without touching system networking.
+				activate := !gateway
+				state := submitBundle(t, cfg, id, map[string][]byte{"config.yaml": []byte(input)}, activate)
+				wantStatus := "ready"
+				if activate {
+					wantStatus = "succeeded"
+				}
+				if state.Status != wantStatus {
+					t.Fatalf("automatic IP publication failed: %+v", state)
+				}
+				if !activate {
+					if err := loadEffectiveManifest(cfg, state); err != nil {
+						t.Fatalf("adapted stage no longer matches manifest: %v", err)
+					}
+				}
+				path := filepath.Join(deploymentPath(cfg, state.DeploymentID), "stage", "config.yaml")
+				if activate {
+					path = cfg.ConfigPath
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc map[string]interface{}
+				if err := yaml.Unmarshal(data, &doc); err != nil {
+					t.Fatal(err)
+				}
+				wantExcluded := []interface{}{"127.0.0.0/8", currentIP + "/32"}
+				if !gateway {
+					wantExcluded = append([]interface{}{"10.0.0.0/8"}, wantExcluded...)
+				}
+				if !reflect.DeepEqual(doc["tun"].(map[string]interface{})["route-exclude-address"], wantExcluded) || cfg.AgentIP != "" {
+					t.Fatalf("automatic address was lost, stale or persisted: %s; agent_ip=%q", data, cfg.AgentIP)
+				}
 			}
 		})
 	}
