@@ -51,8 +51,8 @@
                   <component :is="node.icon" v-if="node.icon" class="size-3.5" :stroke-width="2" />
                 </span>
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate text-[12.5px] font-semibold text-foreground">{{ node.title }}</span>
-                  <span v-if="node.meta" class="block truncate font-mono text-[10.5px] text-muted-foreground">
+                  <span :class="cn('block text-[12.5px] font-semibold text-foreground', readableLabels ? 'whitespace-normal [overflow-wrap:anywhere]' : 'truncate')">{{ node.title }}</span>
+                  <span v-if="node.meta" :class="cn('block font-mono text-[10.5px] text-muted-foreground', readableLabels ? 'whitespace-normal [overflow-wrap:anywhere]' : 'truncate')">
                     {{ node.meta }}
                   </span>
                 </span>
@@ -123,6 +123,8 @@ const props = withDefaults(
     edges: FlowEdge[]
     height?: number
     minWidth?: number
+    /** 放大查看时显示完整名称和地址，桌面与缩略图保留紧凑单行。 */
+    readableLabels?: boolean
     /** 粒子密度倍率 */
     density?: number
     /** 自定义列宽，如 '1fr 1.2fr' */
@@ -220,8 +222,12 @@ const layout = () => {
   const R = el.getBoundingClientRect()
   if (!R.width) return
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
-  W = R.width
-  H = R.height
+  // A viewer can scale the entire map. Keep the canvas in the map's local
+  // coordinates, then let the shared DOM transform scale nodes and edges once.
+  W = el.offsetWidth || R.width
+  H = el.offsetHeight || R.height
+  const scaleX = R.width / W
+  const scaleY = R.height / H
   cv.width = Math.round(W * dpr)
   cv.height = Math.round(H * dpr)
   cv.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -234,8 +240,8 @@ const layout = () => {
     const A = rectOf(edge.from)
     const B = rectOf(edge.to)
     if (!A || !B) continue
-    const p0: Point = [A.right - R.left, A.top + A.height / 2 - R.top]
-    const p3: Point = [B.left - R.left, B.top + B.height / 2 - R.top]
+    const p0: Point = [(A.right - R.left) / scaleX, (A.top + A.height / 2 - R.top) / scaleY]
+    const p3: Point = [(B.left - R.left) / scaleX, (B.top + B.height / 2 - R.top) / scaleY]
     const dx = (p3[0] - p0[0]) * 0.55
     const old = prev.get(`${edge.from}>${edge.to}`)
     next.push({
@@ -281,7 +287,7 @@ const burst = (to: string, count = 12) => {
   }
   requestDraw()
 }
-defineExpose({ burst })
+defineExpose({ burst, refreshLayout: () => requestDraw(true) })
 
 const markHit = (id: string, now: number) => {
   if (now - (hitAt.get(id) || 0) < 380) return
@@ -490,7 +496,7 @@ watch(() => prefs.value.density, () => requestDraw(), { flush: 'post' })
 watch(focus, () => requestDraw(), { flush: 'post' })
 // 节点或边变化后等 DOM 更新完再重算几何
 watch(
-  () => [props.columns, props.edges, props.height, props.minWidth, props.columnsTemplate, props.gapX],
+  () => [props.columns, props.edges, props.height, props.minWidth, props.columnsTemplate, props.gapX, props.readableLabels],
   () => requestDraw(true),
   { deep: true, flush: 'post' }
 )

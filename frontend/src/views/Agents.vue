@@ -46,18 +46,19 @@
         <SectionCard :padded="false" class="max-sm:mt-2" role="region" aria-label="下发拓扑">
           <FlowMap
             ref="topology"
+            label="下发拓扑"
             :columns="topoColumns"
             :edges="topoEdges"
             :height="Math.max(260, agents.length * 72)"
-            :min-width="isNarrow ? 560 : 640"
+            :min-width="640"
             columns-template="minmax(0,1fr) minmax(0,1.2fr)"
-            :gap-x="isNarrow ? 90 : 200"
+            :gap-x="200"
           >
             <template #node="{ node }">
               <span v-if="node.kind === 'hub'" class="group flex flex-col items-start p-[18px]">
                 <BrandMark class="size-10 text-primary" :busy="pushingAll" />
                 <span class="font-display mt-2.5 text-[22px] font-medium">ConfigFlow</span>
-                <span class="mt-1 text-[10.5px] text-muted-foreground" :title="`当前配置修订号：${activeRevision === undefined ? '暂未获取' : `v${activeRevision}`}`">
+                <span class="mt-1 max-w-full text-[10.5px] text-muted-foreground [overflow-wrap:anywhere]" :title="`当前配置修订号：${activeRevision === undefined ? '暂未获取' : `v${activeRevision}`}`">
                   配置空间 · {{ activeProfileName }}
                 </span>
               </span>
@@ -723,7 +724,8 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMediaQuery } from '@vueuse/core'
 import BrandMark from '@/components/common/BrandMark.vue'
-import FlowMap, { type FlowColumn, type FlowEdge, type FlowTone } from '@/components/dashboard/FlowMap.vue'
+import FlowMap from '@/components/dashboard/FlowMapViewer.vue'
+import type { FlowColumn, FlowEdge, FlowTone } from '@/components/dashboard/FlowMap.vue'
 import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
