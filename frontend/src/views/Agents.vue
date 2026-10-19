@@ -94,8 +94,43 @@
             · 心跳 {{ formatTime(agent.last_heartbeat) }}
           </p>
 
+          <div class="mt-3 flex items-center gap-2" data-agent-monitor-actions>
+            <Button
+              variant="outline"
+              size="sm"
+              class="min-w-0 flex-1 border-border-strong bg-secondary/60 text-xs text-foreground only:flex-none"
+              :aria-label="`查看 ${agent.name} 的系统监控`"
+              @click="showMetricsDetail(agent)"
+            >
+              <ChartLine class="size-3.5" />
+              系统监控
+            </Button>
+            <Button
+              v-if="agent.service_type === 'oxidns'"
+              variant="outline"
+              size="sm"
+              class="min-w-0 flex-1 border-border-strong bg-secondary/60 text-xs text-foreground only:flex-none"
+              :aria-label="`查看 ${agent.name} 的 OxiDNS 面板`"
+              @click="router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns')"
+            >
+              <ChartLine class="size-3.5" />
+              OxiDNS 面板
+            </Button>
+            <Button
+              v-if="agent.service_type === 'mihomo'"
+              variant="outline"
+              size="sm"
+              class="min-w-0 flex-1 border-border-strong bg-secondary/60 text-xs text-foreground only:flex-none"
+              :aria-label="`查看 ${agent.name} 的 Mihomo 面板`"
+              @click="router.push({ name: 'MihomoPanel', query: { agent: agent.id } })"
+            >
+              <ChartLine class="size-3.5" />
+              Mihomo 面板
+            </Button>
+          </div>
+
           <!-- 资源占用使用百分比；网络速率单独展示趋势。 -->
-          <div class="mt-4 mb-3 grid grid-cols-[44px_minmax(0,1fr)_max-content] gap-2.5 max-sm:mt-3 max-sm:gap-2">
+          <div class="my-3 grid grid-cols-[44px_minmax(0,1fr)_max-content] gap-2.5 max-sm:gap-2">
             <div
               v-for="metric in metricsOf(agent)"
               :key="metric.label"
@@ -113,40 +148,6 @@
             </div>
           </div>
           <AgentTraffic :agent="agent" :now="trafficNow" />
-          <div class="mb-3.5 flex items-center justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              class="border-border-strong bg-secondary/60 text-xs text-foreground"
-              :aria-label="`查看 ${agent.name} 的系统监控`"
-              @click="showMetricsDetail(agent)"
-            >
-              <ChartLine class="size-3.5" />
-              系统监控
-            </Button>
-            <Button
-              v-if="agent.service_type === 'oxidns'"
-              variant="outline"
-              size="sm"
-              class="border-border-strong bg-secondary/60 text-xs text-foreground"
-              :aria-label="`查看 ${agent.name} 的 OxiDNS 面板`"
-              @click="router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns')"
-            >
-              <ChartLine class="size-3.5" />
-              OxiDNS 面板
-            </Button>
-            <Button
-              v-if="agent.service_type === 'mihomo'"
-              variant="outline"
-              size="sm"
-              class="border-border-strong bg-secondary/60 text-xs text-foreground"
-              :aria-label="`查看 ${agent.name} 的 Mihomo 面板`"
-              @click="router.push({ name: 'MihomoPanel', query: { agent: agent.id } })"
-            >
-              <ChartLine class="size-3.5" />
-              Mihomo 面板
-            </Button>
-          </div>
 
           <div class="mb-3.5 flex items-center gap-2 text-[11.5px] text-muted-foreground">
             配置空间
