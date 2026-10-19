@@ -227,7 +227,7 @@ def test_clearing_hosts_removes_managed_references_and_retains_other_source_cons
     settings = prepared(custom_hosts='full:one.test 192.0.2.1\n')
     result = apply(settings, {'custom_hosts': ''})
     document = doc(result['settings'])
-    assert plugin(document, 'custom_hosts')['args']['files'] == []
+    assert not any(item['tag'] == 'custom_hosts' for item in document['plugins'])
     assert {'exec': '$custom_hosts'} not in plugin(document, 'sequence_main')['args']
     assert result['settings']['custom_hosts'] == ''
     reenabled = apply(result['settings'], {'custom_hosts': 'full:two.test 192.0.2.2\n'})
