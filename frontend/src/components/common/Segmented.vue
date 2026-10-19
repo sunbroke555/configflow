@@ -20,7 +20,7 @@
         :aria-checked="option.value === modelValue"
         :disabled="disabled"
         :class="cn(
-          'relative z-1 h-[30px] cursor-pointer rounded-[9px] px-3.5 text-[13px] whitespace-nowrap transition-colors duration-250 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50',
+          'relative z-1 h-[30px] cursor-pointer rounded-[9px] px-3.5 text-[13px] whitespace-nowrap transition-colors duration-250 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 max-sm:px-3',
           block && 'flex-1 px-2',
           option.value === modelValue ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
         )"
@@ -73,12 +73,13 @@ watch(() => [props.modelValue, props.options], () => nextTick(place), { deep: tr
   .cf-segmented {
     border: 0;
     background: transparent;
-    padding: 6px 0;
+    padding: 3px 0;
   }
 
   .cf-segmented-options {
-    height: 32px;
-    border-radius: var(--radius-lg);
+    height: 38px;
+    padding-inline: 3px;
+    border-radius: var(--radius-xl);
     background: var(--secondary);
     box-shadow: inset 0 0 0 1px var(--border);
   }
@@ -88,9 +89,7 @@ watch(() => [props.modelValue, props.options], () => nextTick(place), { deep: tr
     flex-shrink: 0;
     height: var(--cf-touch);
     min-width: var(--cf-touch);
-    margin-block: -6px;
-    padding-inline: 10px;
-    font-size: 12.5px;
+    margin-block: -3px;
   }
 
   [data-segment]:focus-visible {
@@ -102,8 +101,6 @@ watch(() => [props.modelValue, props.options], () => nextTick(place), { deep: tr
   .cf-segmented-thumb {
     top: 2px;
     bottom: 2px;
-    border-radius: var(--radius-sm);
-    box-shadow: 0 0 0 1px var(--border-strong);
   }
 }
 </style>
