@@ -228,11 +228,13 @@ def test_api_profile_isolation_auth_and_runtime_updates(gateway_app):
     before = repository.get_profile('default')
     state = client.get('/api/custom-config/linux-gateway', headers=headers)
     assert state.status_code == 200 and state.json['settings']['enabled'] is True
+    assert state.json['warnings'] == []
     response = client.post('/api/custom-config/linux-gateway', headers=headers,
                            json={'enabled': True, 'rule_set_ids': ['r']})
     assert response.status_code == 200, response.json
     assert response.json['publish_guard']['expected_profile_id'] == 'home'
     assert response.json['publish_guard']['expected_service_type'] == 'mihomo'
+    assert response.json['warnings'] == []
     assert repository.get_profile('default') == before
     url = '/api/profiles/home/linux-gateway/rules/r'
     assert client.get(url).status_code == 401
@@ -248,6 +250,9 @@ def test_api_profile_isolation_auth_and_runtime_updates(gateway_app):
     assert payload('/api/profiles/home/linux-gateway/source/r') == ['9.9.9.9/32']
     repository.update_profile_transaction('home', lambda profile: profile['rule_configs'][0].update(enabled=False))
     assert payload() == []
+    warnings = client.get('/api/custom-config/linux-gateway', headers=headers).json['warnings']
+    assert warnings and any('Renamed' in warning for warning in warnings)
+    assert not any('Linux + nftables' in warning for warning in warnings)
     assert payload('/api/profiles/home/linux-gateway/source/r') == []
     assert payload('/api/profiles/default/linux-gateway/rules/r') == ['9.9.9.9/32']
     repository.update_shared_transaction(lambda shared: shared['rule_library'][0].update(enabled=False))
