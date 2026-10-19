@@ -27,13 +27,13 @@ beforeEach(() => {
   vi.mocked(statsApi.getOverview).mockResolvedValue({ data: { success: true, data: {} } } as any)
   vi.mocked(ruleSetApi.getAll).mockResolvedValue({ data: [] } as any)
 })
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
-async function render(service: keyof typeof labels) {
-  live.agents = [{ id: service, name: `${labels[service]} test`, service_type: service }]
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals() })
+async function render(service: keyof typeof labels, agents = [{ id: service as string, name: `${labels[service]} test`, service_type: service as string }]) {
+  live.agents = agents
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: icon }, { path: '/agents', component: icon }] })
   await router.push('/')
   const targets = Object.entries(labels).map(([key, title]) => ({ key: key as keyof typeof labels, title, icon, desc: '', url: '', urlDisplay: '', actions: [] }))
-  const wrapper = mount(GenerateStudio, { props: { targets }, global: { plugins: [router] } })
+  const wrapper = mount(GenerateStudio, { props: { targets }, global: { plugins: [router] }, attachTo: document.body })
   wrappers.push(wrapper)
   if (service !== 'mihomo') await button(wrapper, labels[service]).trigger('click')
   await button(wrapper, '生成').trigger('click')
@@ -46,6 +46,72 @@ async function render(service: keyof typeof labels) {
 }
 
 describe('Generated config publication diagnostics', () => {
+  it('lists separate device outcomes with one shared history link and a single disclosure for successful logs', async () => {
+    const completedName = '家庭网络与办公设备的长名称主网关'
+    const tasks: Record<string, Record<string, unknown>> = {
+      home: { status: 'succeeded', message: '配置校验、重载和服务检查均通过。', events: [
+        { at: '2026-10-19T01:00:00Z', status: 'verifying', message: '校验 home.yaml' },
+        { at: '2026-10-19T01:00:03Z', status: 'succeeded', message: '服务检查通过' },
+      ] },
+      office: { status: 'preparing', message: '正在下载规则集「办公服务」（2/3）', events: [
+        { at: '2026-10-19T01:00:00Z', status: 'preparing', message: '正在下载规则集「办公服务」（2/3）' },
+      ] },
+      standby: { status: 'ready', message: '配置已校验，请到 Agent 页面激活本次发布。' },
+    }
+    vi.mocked(agentApi.pushConfig).mockImplementation(async (id, deploymentId) => ({ data: { deployment_id: deploymentId, ...tasks[id] } }) as any)
+    const wrapper = await render('mihomo', [
+      { id: 'home', name: completedName, service_type: 'mihomo' },
+      { id: 'office', name: '办公网关', service_type: 'mihomo' },
+      { id: 'standby', name: '备用网关', service_type: 'mihomo' },
+    ])
+    const result = wrapper.get('[aria-label="配置发布结果"]')
+    expect(agentApi.pushConfig).toHaveBeenCalledTimes(3)
+    expect(result.findAll('a[href="/agents"]')).toHaveLength(1)
+    expect(result.get('a[href="/agents"]').element.closest('[data-agent-status-row]')).toBeNull()
+
+    const completed = result.get(`[data-agent-status-row="${completedName}"]`)
+    expect(completed.get('button[aria-expanded]').attributes('aria-label')).toBe(`${completedName}：成功`)
+    expect(completed.get('[data-status-details]').isVisible()).toBe(false)
+    expect(completed.find('[data-status-notice]').exists()).toBe(false)
+    expect(completed.get('ol').isVisible()).toBe(false)
+    await completed.get('button[aria-expanded]').trigger('click')
+    expect(completed.get('[data-status-details]').isVisible()).toBe(true)
+    expect(completed.get('ol').isVisible()).toBe(true)
+    expect(completed.get('ol').text()).toContain('校验 home.yaml')
+    expect(completed.get('ol').text()).toContain('服务检查通过')
+    expect(completed.find('details, summary').exists()).toBe(false)
+
+    const running = result.get('[data-agent-status-row="办公网关"]')
+    expect(running.get('button[aria-expanded]').text()).toContain('准备文件')
+    expect(running.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(running.get('[data-status-notice]').text()).toContain('正在下载规则集「办公服务」（2/3）')
+    expect(running.get('[data-status-details]').isVisible()).toBe(false)
+    expect(running.get('ol').isVisible()).toBe(false)
+    const ready = result.get('[data-agent-status-row="备用网关"]')
+    expect(ready.get('button[aria-expanded]').text()).toContain('待激活')
+    expect(ready.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(ready.get('[data-status-notice]').text()).toContain('请到 Agent 页面激活')
+    expect(ready.get('[data-status-details]').isVisible()).toBe(false)
+  })
+
+  it('keeps a pending report visibly unconfirmed without opening the recorded steps', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: {
+      deployment_id: deploymentId, status: 'checking', pending: true,
+      message: '等待 Agent 回执，暂未确认服务启动。',
+      events: [{ at: '2026-10-19T01:00:00Z', status: 'starting', message: '正在启动服务' }],
+    } }) as any)
+    const wrapper = await render('mihomo')
+    const row = wrapper.get('[data-agent-status-row="Mihomo test"]')
+    expect(row.get('button[aria-expanded]').attributes('aria-label')).toBe('Mihomo test：待确认')
+    expect(row.attributes('data-tone')).toBe('warning')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.get('[data-status-notice]').text()).toContain('等待 Agent 回执，暂未确认服务启动')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
+    expect(row.get('ol').isVisible()).toBe(false)
+    expect(notify.success).not.toHaveBeenCalledWith('配置发布成功，服务检查已通过')
+    expect(notify.success).not.toHaveBeenCalledWith('已推送到 1 台 Agent')
+  })
+
   it('shows real preparation objects while POST is pending and does not regress to its older response', async () => {
     let resolvePost!: (value: any) => void
     let requestId = ''
@@ -64,6 +130,8 @@ describe('Generated config publication diagnostics', () => {
     const progress = wrapper.get('[aria-label="配置发布结果"]')
     expect(progress.get('[role="status"]').text()).toContain('正在下载规则集「海外服务」')
     expect(progress.findAll('li')).toHaveLength(1)
+    expect(progress.get('[role="status"]').isVisible()).toBe(true)
+    expect(progress.get('[data-status-details]').isVisible()).toBe(false)
     expect(notify.loading).not.toHaveBeenCalled()
     resolvePost({ data: { deployment_id: requestId, status: 'preparing', message: '请求已创建' } })
     await flushPromises()
@@ -77,6 +145,17 @@ describe('Generated config publication diagnostics', () => {
     expect(result.text()).toContain('成功')
     expect(result.text()).toContain('警告 · DNS 解析')
     expect(result.text()).toContain('修复建议：检查 DNS 上游')
+    const publication = result.get('[data-agent-status-row="Mihomo test"]')
+    const dns = result.get('[data-agent-status-row="DNS 检查"]')
+    expect(publication.get('[data-status-details]').isVisible()).toBe(false)
+    expect(dns.element.closest('[data-status-details]')).toBeNull()
+    expect(dns.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(dns.get('[data-status-notice]').text()).toContain('当前 DNS 查询超时')
+    expect(dns.get('[data-status-details]').isVisible()).toBe(false)
+    await dns.get('button[aria-expanded]').trigger('click')
+    expect(dns.get('[data-status-details]').isVisible()).toBe(true)
+    expect(dns.get('[data-status-details]').text()).toContain('修复建议：检查 DNS 上游')
+    expect(publication.get('[data-status-details]').isVisible()).toBe(false)
     expect(notify.warning).toHaveBeenCalledExactlyOnceWith('配置已发布，DNS 检查有提醒', '当前 DNS 查询超时')
     expect(notify.success).not.toHaveBeenCalledWith('配置发布成功，服务检查已通过')
     expect(notify.success).not.toHaveBeenCalledWith('已推送到 1 台 Agent')
@@ -85,6 +164,12 @@ describe('Generated config publication diagnostics', () => {
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_agent, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'failed', failed_stage: 'verifying', error: '配置校验失败', error_details: ruleLocationDetails } }) as any)
     const wrapper = await render(service)
     expect(wrapper.get('[aria-label="配置发布结果"]').text()).toContain('失败步骤：校验中')
+    const row = wrapper.get(`[data-agent-status-row="${labels[service]} test"]`)
+    expect(row.get('button[aria-expanded]').attributes('aria-label')).toBe(`${labels[service]} test：失败`)
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.get('[data-status-notice]').text()).toContain('失败步骤：校验中')
+    expect(row.get('[data-status-notice]').findAll('p').find(item => item.text() === '配置校验失败')?.isVisible()).toBe(true)
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
     expect(wrapper.get('pre[tabindex="0"]').element.textContent).toBe(ruleLocationDetails)
     expect(wrapper.get('a[href="/agents"]').text()).toContain('查看发布记录')
     expect(notify.error).toHaveBeenCalledWith('发布失败', '配置校验失败')
@@ -101,5 +186,9 @@ describe('Generated config publication diagnostics', () => {
     const wrapper = await render(service)
     expect(wrapper.get('pre[tabindex="0"]').element.textContent).toBe(ruleLocationDetails)
     expect(wrapper.get('[aria-label="配置发布结果"]').text()).toContain('生成失败')
+    const row = wrapper.get(`[data-agent-status-row="${labels[service]} test"]`)
+    expect(row.attributes('data-tone')).toBe('danger')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.find('[aria-expanded], [data-agent-operation-steps], [aria-label="步骤记录"]').exists()).toBe(false)
   })
 })

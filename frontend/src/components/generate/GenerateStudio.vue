@@ -138,12 +138,30 @@
             </div>
           </div>
 
-          <div v-if="pushResults.length" class="min-w-0 space-y-3 border-b border-border px-5 py-3" aria-label="配置发布结果">
-            <div v-for="result in pushResults" :key="result.id" class="min-w-0 space-y-1 text-xs">
-              <p class="m-0 font-medium">{{ result.name }}<template v-if="!result.task.deployment_id"> · 发布失败</template></p>
-              <AgentOperationSteps v-if="result.task.deployment_id" :task="result.task" :busy="deploymentBusy(result.id)" />
-              <AgentFailureDetails :show-progress-message="false" :task="result.task" />
-              <RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">前往 Agent 查看发布记录</RouterLink>
+          <div v-if="pushResults.length" class="min-w-0 border-b border-border px-5 py-2 max-sm:px-3" aria-label="配置发布结果">
+            <div class="min-w-0 divide-y divide-border/70">
+              <div v-for="result in pushResults" :key="result.id" class="min-w-0" :data-publish-agent="result.id">
+                <AgentDeploymentStatus v-if="result.deployment" :task="result.deployment" :label="result.name" compact>
+                  <template v-if="deploymentNeedsNotice(result.deployment)" #notice>
+                    <AgentOperationSteps :task="result.deployment" :show-current="false" :show-steps="false" />
+                    <p v-if="result.deployment.not_recorded && !result.deployment.manual_rollback" class="m-0 text-warning-accent">后端暂未记录此发布，正在继续查询。可前往 Agent 页面重试同一次发布。</p>
+                    <p v-if="result.deployment.status === 'ready'" class="m-0 text-warning-accent">请前往 Agent 页面应用并启动。</p>
+                    <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="result.deployment" />
+                  </template>
+                  <template #details>
+                    <AgentOperationSteps :task="result.deployment" :show-current="false" :show-message="!deploymentNeedsNotice(result.deployment)" embedded />
+                  </template>
+                </AgentDeploymentStatus>
+                <AgentStatusRow v-else :label="result.name" status="失败" tone="danger">
+                  <template #notice>
+                    <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="result.task" />
+                  </template>
+                </AgentStatusRow>
+                <AgentDNSChecks :key="result.task.deployment_id" class="ml-6" :checks="result.task.dns_checks" :checked-at="result.task.dns_checked_at" compact />
+              </div>
+            </div>
+            <div class="flex justify-end border-t border-border/70">
+              <RouterLink class="inline-flex min-h-11 items-center gap-1 rounded-md text-xs text-primary-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" to="/agents">前往 Agent 查看发布记录<ChevronRight class="size-3.5" aria-hidden="true" /></RouterLink>
             </div>
           </div>
           <div class="relative">
@@ -218,6 +236,9 @@ import { agentApi, generateApi, ruleSetApi, statsApi } from '@/api'
 import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
+import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import { submitAgentRequests } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { consumeAction } from '@/lib/actions'
@@ -417,10 +438,16 @@ const pushTitle = computed(() => {
 // 下一次推送会因「未完成的发布」被 409 拒绝。
 const { deployments, busy: deploymentBusy, track: trackDeployment, beginSubmission, endSubmission } = useAgentDeployments(() => live.refresh())
 const deploying = computed(() => pushTargets.value.some(a => deploymentBusy(a.id)))
+const deploymentNeedsNotice = (task: AgentDeployment) =>
+  !['succeeded', 'rolled_back'].includes(task.status) || (task.status === 'rolled_back' && !task.manual_rollback)
+  || !!(task.query_error || task.pending || task.not_recorded || task.retrying || task.rollback_rejected
+    || task.error || task.error_details || task.rollback_error || task.rollback_error_details || task.rollback_message)
 const pushResults = computed(() => Object.entries(pushedAgents.value).flatMap(([id, agent]) => {
-  const task = submissionFailures.value[id] || deployments[id]
+  const failure = submissionFailures.value[id]
+  const deployment = failure ? undefined : deployments[id]
+  const task = failure || deployment
   return agent.serviceType === active.value && live.boundAgents.value.some(bound => bound.id === id) && task
-    ? [{ id, name: agent.name, task }] : []
+    ? [{ id, name: agent.name, task, deployment }] : []
 }))
 // 「已校验，待激活」需要在 Agent 页手动激活，这里没有激活入口，只给出指引。
 watch(() => Object.entries(deployments).filter(([, task]) => task.status === 'ready').map(([id]) => id).join(','), ids => {

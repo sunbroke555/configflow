@@ -32,8 +32,8 @@ const presentation = computed(() => ({
         @click="$slots.default && (expanded = !expanded)"
       >
         <component :is="presentation.icon" class="size-4 shrink-0" :class="[presentation.text, tone === 'progress' && 'animate-spin motion-reduce:animate-none']" aria-hidden="true" />
-        <span class="shrink-0 text-foreground">{{ label }}</span>
-        <span class="ml-auto min-w-0 break-words text-right" :class="presentation.text" aria-live="polite" aria-atomic="true" :aria-label="`${label}：${status}`">{{ status }}</span>
+        <span class="min-w-0 text-foreground [overflow-wrap:anywhere]">{{ label }}</span>
+        <span class="ml-auto max-w-[50%] shrink-0 break-words text-right" :class="presentation.text" aria-live="polite" aria-atomic="true" :aria-label="`${label}：${status}`">{{ status }}</span>
         <ChevronRight v-if="$slots.default" class="size-3.5 shrink-0 text-muted-foreground" :class="expanded && 'rotate-90'" aria-hidden="true" />
       </component>
       <slot name="actions" />

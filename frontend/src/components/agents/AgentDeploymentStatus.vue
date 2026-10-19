@@ -4,8 +4,8 @@ import { CircleCheck, CircleX, Loader2, TriangleAlert } from '@lucide/vue'
 import { deploymentStatusLabel, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentStatusRow from './AgentStatusRow.vue'
 
-const props = defineProps<{ task: AgentDeployment; compact?: boolean }>()
-const label = computed(() => props.task.request_pending ? '提交请求'
+const props = defineProps<{ task: AgentDeployment; compact?: boolean; label?: string }>()
+const statusLabel = computed(() => props.task.request_pending ? '提交请求'
   : `${props.task.query_error ? '上次报告：' : ''}${deploymentStatusLabel(props.task)}`)
 const tone = computed(() => {
   const task = props.task
@@ -39,12 +39,12 @@ const compactLabel = computed(() => {
 </script>
 
 <template>
-  <AgentStatusRow v-if="compact" :label="task.manual_rollback || task.rollback_rejected ? '配置回滚' : '配置推送'" :status="compactLabel" :tone="tone">
+  <AgentStatusRow v-if="compact" :label="props.label || (task.manual_rollback || task.rollback_rejected ? '配置回滚' : '配置推送')" :status="compactLabel" :tone="tone">
     <template v-if="$slots.notice" #notice><slot name="notice" /></template>
     <slot name="details" />
   </AgentStatusRow>
   <p v-else class="m-0 flex min-w-0 items-start gap-2 text-[13px] font-semibold leading-relaxed" :class="presentation.text">
     <component :is="presentation.icon" class="mt-0.5 size-4 shrink-0" :class="{ 'animate-spin': tone === 'progress' }" aria-hidden="true" />
-    <span class="min-w-0 break-words"><slot>{{ label }}</slot></span>
+    <span class="min-w-0 break-words"><slot>{{ statusLabel }}</slot></span>
   </p>
 </template>
