@@ -8,6 +8,7 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Boxes,
   ChevronRight,
   Download,
   FileText,
@@ -38,6 +39,7 @@ import {
 const MAP: Record<string, LucideIcon> = {
   DataAnalysis: LayoutDashboard,
   Files: Layers,
+  Boxes,
   Link: Link2,
   Connection: Network,
   Share: Share2,

@@ -1,51 +1,55 @@
 <template>
-  <div :class="cn('flex min-w-0 items-center gap-1', rail ? 'w-full gap-1.5' : 'max-sm:gap-0')">
+  <div :class="cn('flex min-w-0 items-center gap-1', rail ? 'w-full' : 'max-sm:gap-0', compact && 'justify-center')">
     <Select v-model="selectedProfileId" :disabled="loading || scopedRequests > 0" @update:model-value="handleChange">
       <SelectTrigger
         :class="cn(
           'gap-2 border-border/60 bg-background/40 text-[13px] font-medium transition-colors hover:border-border-strong',
           rail
-            ? 'h-auto! min-w-0 flex-1 rounded-xl bg-card/70 px-2.5 py-2'
+            ? compact
+              ? 'size-11! shrink-0 justify-center gap-0 rounded-lg border-transparent bg-transparent p-0 shadow-none hover:bg-accent [&>svg]:hidden'
+              : 'h-11! min-w-0 flex-1 rounded-lg bg-card/50 px-2.5 py-0 shadow-none'
             : 'h-8 w-[190px] max-sm:w-full max-sm:flex-1 max-sm:gap-1.5 max-sm:px-2'
         )"
         aria-label="当前配置空间"
-        :title="currentLabel"
+        :aria-description="currentLabel || '选择配置空间'"
+        :title="currentLabel || '选择配置空间'"
       >
         <span
           v-if="rail"
-          class="font-display grid size-7 shrink-0 place-items-center rounded-lg bg-primary-soft text-[14px] text-primary-accent"
+          :class="cn('font-display grid shrink-0 place-items-center rounded-md bg-primary-soft text-[13px] text-primary-accent', compact ? 'size-7' : 'size-6')"
           aria-hidden="true"
         >
           {{ initial }}
         </span>
         <Boxes v-else class="size-4 shrink-0 text-primary-accent max-[359px]:hidden" />
-        <span v-if="rail" class="flex min-w-0 flex-1 flex-col text-left leading-tight">
-          <SelectValue :class="cn('truncate text-[13px] font-semibold', !currentLabel && 'text-muted-foreground')">
-            {{ currentLabel || '选择配置空间' }}
-          </SelectValue>
-          <span class="text-[11px] font-normal text-muted-foreground">配置空间</span>
-        </span>
-        <SelectValue v-else :class="cn('truncate', !currentLabel && 'text-muted-foreground')">
-          {{ currentLabel || '选择配置空间' }}
+        <SelectValue :class="cn('min-w-0 flex-1 truncate text-left', rail && 'text-[13px] font-medium', compact && 'cf-sr', !currentLabel && 'text-muted-foreground')">
+          <span class="min-w-0 truncate">{{ currentLabel || '选择配置空间' }}</span>
         </SelectValue>
       </SelectTrigger>
-      <SelectContent :align="rail ? 'start' : 'end'" class="glass-strong min-w-[220px]">
-        <SelectItem v-for="profile in profiles" :key="profile.id" :value="profile.id">
+      <SelectContent :align="rail ? 'start' : 'end'" class="glass-strong w-[min(300px,calc(100vw-2rem))] min-w-0 max-w-[calc(100vw-2rem)] [&_[data-reka-select-viewport]]:min-w-0">
+        <SelectItem
+          v-for="profile in profiles"
+          :key="profile.id"
+          :value="profile.id"
+          :text-value="profile.name || profile.id"
+          class="[&>span:last-child]:min-w-0 [&>span:last-child]:flex-1"
+        >
           <span
             class="font-display grid size-6 shrink-0 place-items-center rounded-md bg-primary-soft text-[12px] text-primary-accent"
             aria-hidden="true"
           >
             {{ initialOf(profile.name || profile.id) }}
           </span>
-          <span class="flex flex-col leading-snug">
-            <span class="text-[13px] font-medium">{{ profile.name }}</span>
-            <span class="font-mono text-[11px] text-muted-foreground">{{ profile.id }}</span>
+          <span class="flex min-w-0 flex-1 flex-col leading-snug">
+            <span class="truncate text-[13px] font-medium" :title="profile.name || profile.id">{{ profile.name || profile.id }}</span>
+            <span class="truncate font-mono text-[11px] text-muted-foreground" :title="profile.id">{{ profile.id }}</span>
           </span>
         </SelectItem>
       </SelectContent>
     </Select>
 
     <Button
+      v-if="!rail"
       variant="ghost"
       size="icon-sm"
       class="shrink-0 text-primary-accent"
@@ -73,8 +77,9 @@ import {
 } from '@/components/ui/select'
 import { useProfileStore } from '@/stores/profile'
 
-const props = defineProps<{ variant?: 'bar' | 'rail' }>()
+const props = defineProps<{ variant?: 'bar' | 'rail'; collapsed?: boolean }>()
 const rail = computed(() => props.variant === 'rail')
+const compact = computed(() => rail.value && props.collapsed)
 
 const router = useRouter()
 const profileStore = useProfileStore()
