@@ -3,8 +3,14 @@
 Rule sources deliberately use normal hostname resolution, including Fake-IP
 networks. Only URL syntax is checked here; this is not a public-IP-only gate.
 """
+import errno
+from http.client import IncompleteRead, RemoteDisconnected
+import ssl
+import time
 from urllib.parse import unquote, urljoin, urlsplit
 import requests
+from urllib3.exceptions import InvalidChunkLength, ProtocolError, TimeoutError as Urllib3TimeoutError
+from urllib3.util.ssl_match_hostname import CertificateError
 
 
 class _RuleSession(requests.Session):
@@ -213,26 +219,56 @@ def github_download_candidates(url, config_data):
     return [('原始地址', url)] + ([('GitHub 代理地址', mirrored)] if mirrored != url else [])
 
 
-def request_rule(url: str, *, method='get', config_data=None, max_redirects=3,
-                 max_bytes=None, **kwargs):
-    """Try the source first, then its configured GitHub mirror on failure.
+def _is_transient_disconnect(error):
+    """Recognize interrupted connections through Requests/urllib3 wrappers.
 
-    The same explicit forward proxy (or direct transport when empty) applies
-    to both attempts. max_bytes consumes a bounded body inside the retry so a
-    broken stream is retried as well, never returning a partial resource.
+    Do not retry all SSLError/ConnectionError instances: certificate failures,
+    DNS errors, refused connections and timeouts keep their existing behavior.
     """
-    if config_data is None:
-        from backend.common.config import get_system_config
-        config_data = get_system_config()
-    attempts = []
-    candidates = github_download_candidates(url, config_data)
-    for index, (label, candidate) in enumerate(candidates):
+    pending, seen = [error], set()
+    disconnected = False
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        message = str(current).upper()
+        # Certificate errors take precedence even if another wrapper mentions
+        # an EOF/reset. Never relax TLS verification to recover a connection.
+        if (isinstance(current, (ssl.SSLCertVerificationError, CertificateError))
+                or 'CERTIFICATE_VERIFY_FAILED' in message
+                or 'CERTIFICATE VERIFY FAILED' in message
+                or 'HOSTNAME MISMATCH' in message):
+            return False
+        if isinstance(current, (requests.exceptions.Timeout, Urllib3TimeoutError, TimeoutError,
+                                requests.exceptions.HTTPError, requests.exceptions.ContentDecodingError,
+                                InvalidChunkLength)):
+            return False
+        if (isinstance(current, (ssl.SSLEOFError, ConnectionResetError,
+                                 ConnectionAbortedError, BrokenPipeError,
+                                 RemoteDisconnected, IncompleteRead))
+                or (isinstance(current, OSError)
+                    and current.errno in (errno.ECONNRESET, errno.ECONNABORTED, errno.EPIPE))
+                or (isinstance(current, (requests.exceptions.SSLError, ssl.SSLError))
+                    and ('UNEXPECTED_EOF_WHILE_READING' in message
+                         or 'EOF OCCURRED IN VIOLATION OF PROTOCOL' in message))
+                or (isinstance(current, ProtocolError)
+                    and current.args == ('Response ended prematurely',))):
+            disconnected = True
+        children = list(current.args)
+        children.extend(getattr(current, name, None)
+                        for name in ('reason', 'original_error', '__cause__', '__context__'))
+        pending.extend(child for child in children if isinstance(child, BaseException))
+    return disconnected
+
+
+def _request_rule_with_retries(url, *, check_status, max_bytes, **kwargs):
+    delays = (1, 2)
+    for attempt in range(len(delays) + 1):
         response = None
         try:
-            response = _request_rule_once(candidate, method=method, config_data=config_data,
-                                          max_redirects=max_redirects, **kwargs)
-            # Keep the established response API for callers of a single URL.
-            if len(candidates) > 1 or max_bytes is not None:
+            response = _request_rule_once(url, **kwargs)
+            if check_status:
                 response.raise_for_status()
             if max_bytes is not None:
                 body = bytearray()
@@ -243,9 +279,39 @@ def request_rule(url: str, *, method='get', config_data=None, max_redirects=3,
                 response._content = bytes(body)
                 response._content_consumed = True
             return response
-        except requests.RequestException as exc:
+        except BaseException as exc:
             if response is not None:
                 response.close()
+            if (not isinstance(exc, requests.RequestException)
+                    or attempt == len(delays) or not _is_transient_disconnect(exc)):
+                raise
+            time.sleep(delays[attempt])
+
+
+def request_rule(url: str, *, method='get', config_data=None, max_redirects=3,
+                 max_bytes=None, **kwargs):
+    """Try the source first, then its configured GitHub mirror on failure.
+
+    The same explicit forward proxy (or direct transport when empty) applies
+    to every attempt. Each candidate retries transient disconnects after 1s
+    and 2s, with unchanged certificate checks and per-request timeouts.
+    max_bytes consumes a bounded body inside the retry so a broken stream is
+    retried as well, never returning a partial resource. Without max_bytes,
+    a streamed response remains lazy; errors after returning belong to its caller.
+    """
+    if config_data is None:
+        from backend.common.config import get_system_config
+        config_data = get_system_config()
+    attempts = []
+    candidates = github_download_candidates(url, config_data)
+    for index, (label, candidate) in enumerate(candidates):
+        try:
+            # Keep the established response API for callers of a single URL.
+            return _request_rule_with_retries(
+                candidate, method=method, config_data=config_data, max_redirects=max_redirects,
+                check_status=len(candidates) > 1 or max_bytes is not None,
+                max_bytes=max_bytes, **kwargs)
+        except requests.RequestException as exc:
             attempts.append((label, exc))
             if index + 1 == len(candidates):
                 if len(attempts) == 1:
@@ -257,7 +323,3 @@ def request_rule(url: str, *, method='get', config_data=None, max_redirects=3,
                     parsed = urlsplit(source)
                     secrets.extend(unquote(value) for value in (parsed.username, parsed.password) if value)
                 raise RuleFetchError(attempts, secrets) from None
-        except BaseException:
-            if response is not None:
-                response.close()
-            raise
