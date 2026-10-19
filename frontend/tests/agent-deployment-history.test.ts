@@ -33,7 +33,9 @@ describe('Agent deployment history rollback availability', () => {
   })
   it('shows completed manual rollback as success without offering it again', async () => {
     await render({ progress: { ...latest, status: 'rolled_back', manual_rollback: true } })
-    expect(document.body.textContent).toContain('手动回滚成功')
+    const status = document.querySelector('[data-agent-status-row="配置回滚"]')!
+    expect(status.getAttribute('data-tone')).toBe('success')
+    expect(status.querySelector('button')?.textContent).toContain('成功')
     expect(document.body.textContent).not.toContain('回滚到发布前')
     expect(document.body.textContent).not.toContain('发布失败，已回滚')
   })
@@ -44,18 +46,39 @@ describe('Agent deployment history diagnostics', () => {
     const events = [{ at: '2026-10-18T12:00:00Z', status: 'uploading', message: '上传配置和 3 个规则文件' },
       { at: '2026-10-18T12:00:01Z', status: 'succeeded', message: 'OxiDNS 配置已应用并通过 DNS 检查' }]
     await render({ agent: { ...agent, latest_deployment: { ...latest, events }, deployments: {} } })
-    const details = document.querySelector('details')!
-    expect(details.open).toBe(false)
+    const row = document.querySelector('[data-agent-status-row="配置推送"]')!
+    const details = row.querySelector<HTMLElement>('[data-status-details]')!
+    expect(details.style.display).toBe('none')
     expect(details.textContent).toContain('上传配置和 3 个规则文件')
     expect(details.querySelectorAll('li')).toHaveLength(2)
-    details.open = true
+    expect(details.querySelector('details')).toBeNull()
+    row.querySelector<HTMLButtonElement>('button')!.click()
+    await flushPromises()
+    expect(details.style.display).not.toBe('none')
     expect(details.textContent).toContain('OxiDNS 配置已应用并通过 DNS 检查')
   })
   it('keeps DNS warnings and their fixes visible in successful release history', async () => {
     await render({ progress: { ...latest, dns_checks: [{ name: 'DNS 劫持', level: 'warn', message: 'any:53 可能绕过 OxiDNS', fix: '检查劫持规则' }] } })
     const report = document.querySelector('[aria-label="DNS 检查结果"]')!
-    expect(report.textContent).toContain('警告 · DNS 劫持')
-    expect(report.textContent).toContain('修复建议：检查劫持规则')
+    expect(report.querySelector('[data-status-notice]')?.textContent).toContain('警告 · DNS 劫持')
+    const details = report.querySelector<HTMLElement>('[data-status-details]')!
+    expect(details.style.display).toBe('none')
+    report.querySelector<HTMLButtonElement>('button')!.click()
+    await flushPromises()
+    expect(details.style.display).not.toBe('none')
+    expect(details.textContent).toContain('修复建议：检查劫持规则')
+  })
+  it('retains record identity and revision while an unconfirmed prior success stays a visible warning', async () => {
+    await render({ progress: { ...latest, config_revision: 42, query_error: true, message: '最近已完成服务检查' } })
+    const row = [...document.querySelectorAll('tbody tr')].find(row => row.textContent?.includes(latest.deployment_id))!
+    expect(row.textContent).toContain('修订 42')
+    expect(row.textContent).toContain(new Date(latest.updated_at).toLocaleString())
+    expect(row.textContent).toContain('最新记录')
+    const status = row.querySelector('[data-agent-status-row="配置推送"]')!
+    expect(status.getAttribute('data-tone')).toBe('warning')
+    expect(status.querySelector('button')?.textContent).toContain('待确认')
+    expect(status.querySelector('[data-status-notice]')?.textContent).toContain('暂时无法取得最新状态')
+    expect(status.querySelector<HTMLElement>('[data-status-details]')?.style.display).toBe('none')
   })
   it('renders persisted publication and rollback diagnostics independently', async () => {
     await render({ progress: { ...latest, status: 'rollback_failed', error: '配置校验失败', failed_stage: 'verifying', error_details: ruleLocationDetails, rollback_error: '服务恢复失败', rollback_error_details: 'failed to bind :53' } })

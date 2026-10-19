@@ -233,7 +233,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import SectionCard from '@/components/common/SectionCard.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import { agentApi, generateApi, ruleSetApi, statsApi } from '@/api'
-import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { createDeploymentId, deploymentNeedsNotice, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
@@ -438,10 +438,6 @@ const pushTitle = computed(() => {
 // 下一次推送会因「未完成的发布」被 409 拒绝。
 const { deployments, busy: deploymentBusy, track: trackDeployment, beginSubmission, endSubmission } = useAgentDeployments(() => live.refresh())
 const deploying = computed(() => pushTargets.value.some(a => deploymentBusy(a.id)))
-const deploymentNeedsNotice = (task: AgentDeployment) =>
-  !['succeeded', 'rolled_back'].includes(task.status) || (task.status === 'rolled_back' && !task.manual_rollback)
-  || !!(task.query_error || task.pending || task.not_recorded || task.retrying || task.rollback_rejected
-    || task.error || task.error_details || task.rollback_error || task.rollback_error_details || task.rollback_message)
 const pushResults = computed(() => Object.entries(pushedAgents.value).flatMap(([id, agent]) => {
   const failure = submissionFailures.value[id]
   const deployment = failure ? undefined : deployments[id]

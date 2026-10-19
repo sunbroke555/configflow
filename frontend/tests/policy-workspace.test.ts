@@ -35,9 +35,9 @@ beforeEach(() => {
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'succeeded' } }) as any)
   vi.mocked(routerApi.apply).mockResolvedValue({ data: { success: true, result: { ok: true, log: [], rollback: [] } } } as any)
 })
-afterEach(async () => { wrappers.splice(0).forEach(w => w.unmount()); await flushPromises(); vi.useRealTimers(); vi.clearAllMocks() })
+afterEach(async () => { wrappers.splice(0).forEach(w => w.unmount()); await flushPromises(); document.body.innerHTML = ''; vi.useRealTimers(); vi.clearAllMocks() })
 async function setup() {
-  const wrapper = mount(PolicyRoutingPanel, { props: { id: 'ros', name: 'ROS', profile: 'office' } })
+  const wrapper = mount(PolicyRoutingPanel, { attachTo: document.body, props: { id: 'ros', name: 'ROS', profile: 'office' } })
   wrappers.push(wrapper); await flushPromises(); return wrapper
 }
 async function click(w: VueWrapper, text: string) {
@@ -64,7 +64,10 @@ describe('one-place DNS and ROS workflow', () => {
     await click(wrapper, '保存并预览'); await click(wrapper, '确认发布')
     await vi.advanceTimersByTimeAsync(0)
     await flushPromises()
-    expect(wrapper.get('[aria-label="发布结果"]').text()).toContain(events[0].message)
+    const result = wrapper.get('[data-publish-target="dns1"]')
+    expect(result.get('[data-status-notice]').text()).toContain(events[0].message)
+    expect(result.get('[data-status-details]').isVisible()).toBe(false)
+    expect(result.find('details').exists()).toBe(false)
     expect(agentApi.pushConfig).toHaveBeenCalledTimes(1)
     expect(routerApi.apply).not.toHaveBeenCalled()
     resolvePost({ data: { deployment_id: requestId, status: 'preparing', message: '请求已创建' } })
@@ -216,6 +219,64 @@ describe('one-place DNS and ROS workflow', () => {
     await click(w, '保存并预览'); await click(w, '确认发布')
     expect(agentApi.pushConfig).not.toHaveBeenCalled(); expect(routerApi.apply).toHaveBeenCalledOnce()
   })
+  it('keeps successful target rows compact and associates ROS logs with the ROS disclosure', async () => {
+    vi.mocked(routerApi.apply).mockResolvedValueOnce({ data: { success: true, result: { ok: true,
+      log: [{ summary: '来源 NAS：更新目的地址列表', status: 'applied' }], rollback: [],
+    } } } as any)
+    const w = await setup()
+    await click(w, '保存并预览'); await click(w, '确认发布')
+    const dns = w.get('[data-publish-target="dns1"]')
+    expect(dns.get('[data-agent-status-row]').attributes('data-tone')).toBe('success')
+    expect(dns.find('[data-status-notice]').exists()).toBe(false)
+    expect(dns.get('[data-status-details]').isVisible()).toBe(false)
+    expect(dns.find('details').exists()).toBe(false)
+    const ros = w.get('[data-publish-target="ros"]')
+    expect(ros.get('[data-agent-status-row]').attributes('data-tone')).toBe('success')
+    expect(ros.get('[data-status-details]').isVisible()).toBe(false)
+    expect(ros.find('[data-agent-operation-steps]').exists()).toBe(false)
+    await ros.get('button').trigger('click')
+    expect(ros.get('[data-status-details]').isVisible()).toBe(true)
+    expect(ros.text()).toContain('来源 NAS：更新目的地址列表 · applied')
+    expect(ros.text()).toContain('写入及回读校验通过')
+  })
+  it('keeps a ROS failure visible and folds its publication and rollback logs into that row', async () => {
+    vi.mocked(routerApi.apply).mockResolvedValueOnce({ data: { success: false, message: 'ROS 发布失败', result: { ok: false,
+      log: [{ summary: '来源 NAS：回读发现目的地址列表不一致', status: 'failed' }],
+      rollback: [{ summary: '来源 NAS：恢复旧规则被设备拒绝', status: 'failed' }],
+    } } } as any)
+    const w = await setup()
+    await click(w, '保存并预览'); await click(w, '确认发布')
+    const ros = w.get('[data-publish-target="ros"]')
+    expect(ros.get('[data-agent-status-row]').attributes('data-tone')).toBe('danger')
+    expect(ros.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(ros.get('[data-status-notice]').text()).toContain('ROS 发布失败')
+    expect(ros.get('[data-status-notice]').text()).toContain('发布：来源 NAS：回读发现目的地址列表不一致')
+    expect(ros.get('[data-status-notice]').text()).toContain('回滚：来源 NAS：恢复旧规则被设备拒绝')
+    expect(ros.get('[data-status-details]').isVisible()).toBe(false)
+    await ros.get('button').trigger('click')
+    expect(ros.get('[data-status-details]').isVisible()).toBe(true)
+    expect(ros.text()).toContain('ROS 发布记录')
+    expect(ros.text()).toContain('ROS 回滚记录')
+    expect(ros.get('[data-status-details]').text()).toContain('来源 NAS：恢复旧规则被设备拒绝 · failed')
+    expect(ros.find('[data-agent-operation-steps]').exists()).toBe(false)
+  })
+  it('shows ROS warnings beside a completed row without assigning them to successful DNS targets', async () => {
+    vi.mocked(routerApi.apply).mockResolvedValueOnce({ data: { success: true, result: { ok: true,
+      log: [{ summary: '来源 NAS：地址已存在，保留已有项', status: 'warning' }], rollback: [],
+    } } } as any)
+    const w = await setup()
+    await click(w, '保存并预览'); await click(w, '确认发布')
+    const ros = w.get('[data-publish-target="ros"]')
+    expect(ros.get('[data-agent-status-row]').attributes('data-tone')).toBe('warning')
+    expect(ros.get('button').text()).toContain('发布完成，有提醒')
+    expect(ros.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(ros.get('[data-status-notice]').text()).toContain('发布：来源 NAS：地址已存在，保留已有项')
+    expect(ros.get('[data-status-details]').isVisible()).toBe(false)
+    const dns = w.get('[data-publish-target="dns1"]')
+    expect(dns.get('[data-agent-status-row]').attributes('data-tone')).toBe('success')
+    expect(dns.find('[data-status-notice]').exists()).toBe(false)
+    expect(dns.text()).not.toContain('地址已存在')
+  })
   it('rechecks an empty ROS preview after DNS publishing and preserves success for earlier targets', async () => {
     const preview = vi.mocked(routerApi.previewPolicySettings).getMockImplementation()!
     vi.mocked(routerApi.previewPolicySettings).mockImplementation(async (...args) => {
@@ -232,7 +293,7 @@ describe('one-place DNS and ROS workflow', () => {
     expect(routerApi.apply.mock.invocationCallOrder[0]).toBeGreaterThan(agentApi.pushConfig.mock.invocationCallOrder[1]!)
     expect(w.text()).toContain('设备配置已变化，请重新预览')
     expect(w.text()).toContain('已完成的 OxiDNS 发布结果保留')
-    const rows = w.get('[aria-label="发布结果"]').findAll('li')
+    const rows = w.get('[aria-label="发布结果"]').findAll('[data-publish-target]')
     expect(rows[0]!.text()).toContain('成功')
     expect(rows[1]!.text()).toContain('成功')
     expect(rows[2]!.text()).toContain('失败')
@@ -270,6 +331,33 @@ describe('one-place DNS and ROS workflow', () => {
 })
 
 describe('DNS publication diagnostics in routing workspace', () => {
+  it('shows a rejected request without inventing a deployment or step history', async () => {
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成配置失败', error_details: 'invalid match on line 7' } } })
+    const w = await setup()
+    await click(w, '保存并预览'); await click(w, '确认发布')
+    const result = w.get('[data-publish-target="dns1"]')
+    expect(result.get('[data-agent-status-row]').attributes('data-tone')).toBe('danger')
+    expect(result.get('[data-status-notice]').text()).toContain('生成配置失败')
+    expect(result.get('pre').text()).toBe('invalid match on line 7')
+    expect(result.find('[data-agent-operation-steps]').exists()).toBe(false)
+    expect(agentApi.pushConfig).toHaveBeenCalledOnce()
+    expect(routerApi.apply).not.toHaveBeenCalled()
+  })
+  it('keeps a stale ready task unconfirmed after activation loses contact', async () => {
+    vi.useFakeTimers()
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'ready', message: '已校验配置' } }) as any)
+    vi.mocked(agentApi.activateDeployment).mockRejectedValueOnce(new Error('network timeout'))
+    const w = await setup()
+    await click(w, '保存并预览'); await click(w, '确认发布')
+    const result = w.get('[data-publish-target="dns1"]')
+    expect(result.get('[data-agent-status-row]').attributes('data-tone')).toBe('warning')
+    expect(result.get('button').text()).toContain('待确认')
+    expect(result.get('[data-status-notice]').text()).toContain('network timeout')
+    expect(result.get('[data-status-notice]').text()).toContain('暂时无法取得最新状态')
+    expect(w.findAll('button').some(button => button.text() === '核对发布结果')).toBe(true)
+    expect(agentApi.activateDeployment).toHaveBeenCalledOnce()
+    expect(routerApi.apply).not.toHaveBeenCalled()
+  })
   it('continues after DNS warnings and keeps them visible when all selected targets finish', async () => {
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'succeeded', dns_checks: [{ name: 'DNS 劫持', level: 'warn', message: 'any:53 可能绕过 OxiDNS', fix: '检查劫持规则' }] } }) as any)
     const w = await setup()

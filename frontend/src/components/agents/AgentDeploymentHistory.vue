@@ -18,9 +18,16 @@
                 <div v-if="record.deployment_id === latestId" class="mt-1 text-xs text-primary-accent">最新记录</div>
               </td>
               <td role="cell" data-label="结果" class="cf-record-wide max-w-[280px] align-top max-sm:max-w-none">
-                <AgentOperationSteps :task="record" :busy="busy && record.deployment_id === latestId" />
-                <AgentFailureDetails :show-progress-message="false" :task="record" class="mt-1" />
-                <p v-if="record.query_error" class="mt-1 text-xs text-muted-foreground">正在查询 Agent 确认结果。</p>
+                <AgentDeploymentStatus :task="record" compact>
+                  <template v-if="deploymentNeedsNotice(record)" #notice>
+                    <AgentOperationSteps :task="record" :show-current="false" :show-steps="false" />
+                    <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="record" />
+                  </template>
+                  <template #details>
+                    <AgentOperationSteps :task="record" :show-current="false" :show-message="!deploymentNeedsNotice(record)" embedded />
+                  </template>
+                </AgentDeploymentStatus>
+                <AgentDNSChecks :key="record.deployment_id" :checks="record.dns_checks" :checked-at="record.dns_checked_at" compact />
               </td>
               <td role="cell" class="cf-record-wide text-right align-top">
                 <Button v-if="record.deployment_id === latestId && record.status === 'succeeded'" variant="outline" size="sm" class="min-h-11 whitespace-nowrap" :disabled="blocked || busy || agent.status !== 'online'" @click="emit('rollback', record)">回滚到发布前</Button>
@@ -39,10 +46,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Agent } from '@/types'
-import { type AgentDeployment } from '@/composables/useAgentDeployments'
+import { deploymentNeedsNotice, type AgentDeployment } from '@/composables/useAgentDeployments'
 import EmptyState from '@/components/common/EmptyState.vue'
 import AgentFailureDetails from './AgentFailureDetails.vue'
 import AgentOperationSteps from './AgentOperationSteps.vue'
+import AgentDeploymentStatus from './AgentDeploymentStatus.vue'
+import AgentDNSChecks from './AgentDNSChecks.vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 

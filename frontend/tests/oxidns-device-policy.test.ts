@@ -15,7 +15,7 @@ vi.mock('@/api', () => ({
   oxidnsMonitorApi: { overview: vi.fn(), clients: vi.fn(), queries: vi.fn() },
   agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }
 }))
-vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
 const wrappers: VueWrapper[] = []
 let scrollDescriptor: PropertyDescriptor | undefined
 const response = (data: any) => ({ data } as any)
@@ -93,7 +93,7 @@ describe('OxiDNS device policy editing', () => {
     await button(wrapper, '发布中…').trigger('click')
     expect(agentApi.pushConfig).toHaveBeenCalledOnce()
     await vi.advanceTimersByTimeAsync(0)
-    expect(wrapper.text()).toContain('提交请求')
+    expect(wrapper.get('[data-agent-status-row="配置推送"] button[aria-expanded]').attributes('aria-label')).toBe('配置推送：提交中')
     expect(wrapper.text()).not.toContain('发布结果暂未确认')
     await vi.advanceTimersByTimeAsync(2000)
     expect(wrapper.text()).toContain('上传中')
@@ -104,7 +104,7 @@ describe('OxiDNS device policy editing', () => {
     expect(wrapper.text()).toContain('启动检查')
     expect(wrapper.text()).not.toContain('校验中')
     await vi.advanceTimersByTimeAsync(2000)
-    expect(wrapper.text()).toContain('上次配置推送：成功')
+    expect(wrapper.get('[data-agent-status-row="配置推送"] button[aria-expanded]').attributes('aria-label')).toBe('配置推送：成功')
     expect(button(wrapper, '发布到当前设备').attributes('disabled')).toBeUndefined()
     expect(wrapper.emitted('published')).toHaveLength(1)
   })
@@ -120,7 +120,7 @@ describe('OxiDNS device policy editing', () => {
     await vi.advanceTimersByTimeAsync(0)
     rejectPublish(new Error('request timed out'))
     await flushPromises()
-    expect(wrapper.text()).toContain('上次配置推送：成功')
+    expect(wrapper.get('[data-agent-status-row="配置推送"] button[aria-expanded]').attributes('aria-label')).toBe('配置推送：成功')
     expect(wrapper.text()).not.toContain('结果待确认')
     expect(button(wrapper, '发布到当前设备').attributes('disabled')).toBeUndefined()
     expect(wrapper.emitted('published')).toHaveLength(1)
@@ -149,7 +149,7 @@ describe('OxiDNS device policy editing', () => {
     await button(wrapper, '发布到当前设备').trigger('click')
     await flushPromises()
     expect(agentApi.pushConfig).toHaveBeenCalledWith('one', expect.any(String), { expected_profile_id: 'office', expected_oxidns_revision: 'v2' })
-    expect(wrapper.text()).toContain('上次配置推送：成功')
+    expect(wrapper.get('[data-agent-status-row="配置推送"] button[aria-expanded]').attributes('aria-label')).toBe('配置推送：成功')
   })
   it('selects existing clients without an all-clients option and prevents duplicates', async () => {
     vi.mocked(oxidnsMonitorApi.clients).mockResolvedValue(response({ success: true, clients: [{ ip: '192.168.50.50', count: 4 }], sample_limited: false }))
@@ -277,6 +277,64 @@ it('reuses a shared device note when adding a DNS policy', async () => {
 })
 
 describe('OxiDNS device-policy publication diagnostics', () => {
+  it('preserves late server diagnostics beside a deployment already confirmed by polling', async () => {
+    vi.useFakeTimers()
+    let rejectPublish!: (error: any) => void
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectPublish = reject }))
+    vi.mocked(agentApi.getDeployment).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
+    const wrapper = await render()
+    await button(wrapper, '发布到当前设备').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(0)
+    rejectPublish({ response: { status: 503, data: { message: '返回响应时连接中断', error_details: 'connection closed after service check' } } })
+    await flushPromises()
+    const row = wrapper.get('[data-agent-status-row="配置推送"]')
+    expect(row.get('button[aria-expanded]').attributes('aria-label')).toBe('配置推送：成功')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.get('[data-status-notice] pre').text()).toBe('connection closed after service check')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
+  })
+
+  it('opens successful steps directly while DNS warnings remain visible and independently collapsed', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({
+      deployment_id: deploymentId, status: 'succeeded', message: '设备策略已生效',
+      events: [{ at: '2026-10-19T01:00:00Z', status: 'verifying', message: '校验设备策略配置' }],
+      dns_checks: [{ name: 'DNS 上游', level: 'warn', message: '上游解析有超时', fix: '检查上游连接' }],
+    }))
+    const wrapper = await render()
+    await button(wrapper, '发布到当前设备').trigger('click')
+    await flushPromises()
+    const row = wrapper.get('[data-agent-status-row="配置推送"]')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
+    expect(row.find('[data-status-notice]').exists()).toBe(false)
+    const dns = wrapper.get('[data-agent-status-row="DNS 检查"]')
+    expect(dns.element.closest('[data-status-details]')).toBeNull()
+    expect(dns.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(dns.get('[data-status-notice]').text()).toContain('上游解析有超时')
+    expect(dns.get('[data-status-details]').isVisible()).toBe(false)
+    await row.get('button[aria-expanded]').trigger('click')
+    expect(row.get('ol').isVisible()).toBe(true)
+    expect(row.get('ol').text()).toContain('校验设备策略配置')
+    expect(row.find('details, summary').exists()).toBe(false)
+    expect(dns.get('[data-status-details]').isVisible()).toBe(false)
+  })
+
+  it('leaves a ready snapshot actionable while its recorded steps are collapsed', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'ready', message: '设备策略配置已校验' }))
+    vi.mocked(agentApi.activateDeployment).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
+    const wrapper = await render()
+    await button(wrapper, '发布到当前设备').trigger('click')
+    await flushPromises()
+    const row = wrapper.get('[data-agent-status-row="配置推送"]')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.get('[data-status-notice]').text()).toContain('设备策略配置已校验')
+    expect(button(wrapper, '应用并启动').isVisible()).toBe(true)
+    await button(wrapper, '应用并启动').trigger('click')
+    await flushPromises()
+    expect(agentApi.activateDeployment).toHaveBeenCalledWith('one', vi.mocked(agentApi.pushConfig).mock.lastCall![1])
+  })
+
   it('shows target validation and rollback details directly in the device policy panel', async () => {
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'rollback_failed', failed_stage: 'verifying', error: '配置校验失败', error_details: 'plugin resolver: unknown option', rollback_error: '启动失败', rollback_error_details: 'cannot bind :53' }))
     const wrapper = await render()
@@ -284,6 +342,10 @@ describe('OxiDNS device-policy publication diagnostics', () => {
     await flushPromises()
     expect(wrapper.findAll('pre').map(item => item.text())).toEqual(['plugin resolver: unknown option', 'cannot bind :53'])
     expect(wrapper.text()).toContain('失败步骤：校验中')
+    const row = wrapper.get('[data-agent-status-row="配置推送"]')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.get('[data-status-notice]').text()).toContain('配置校验失败')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
   })
   it('keeps rejection details even when no deployment was created', async () => {
     vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '生成失败', error_details: ruleLocationDetails } } })
@@ -292,5 +354,9 @@ describe('OxiDNS device-policy publication diagnostics', () => {
     await flushPromises()
     expect(wrapper.get('pre').element.textContent).toBe(ruleLocationDetails)
     expect(wrapper.text()).toContain('生成失败')
+    const row = wrapper.get('[data-agent-status-row="配置推送"]')
+    expect(row.attributes('data-tone')).toBe('danger')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.find('[aria-expanded], [data-agent-operation-steps]').exists()).toBe(false)
   })
 })

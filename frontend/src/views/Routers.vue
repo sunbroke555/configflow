@@ -443,15 +443,32 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             </li>
           </ol>
 
-          <div v-if="releaseResult" class="flex flex-col gap-1.5">
-            <p class="m-0 font-semibold">{{ releaseStatus }}</p>
-            <ul class="m-0 flex list-none flex-col gap-1 p-0">
-              <li v-for="(entry, index) in [...releaseResult.log, ...releaseResult.rollback]" :key="index" class="flex items-start gap-2">
-                <span :class="['chip shrink-0', LOG_STATUS[entry.status]?.chip || 'chip-acc']">{{ LOG_STATUS[entry.status]?.label || entry.status }}</span>
-                <span>{{ stageTitle(entry.stage) }} · {{ entry.summary }}</span>
-              </li>
-            </ul>
-          </div>
+          <AgentStatusRow
+            v-if="applying || releaseResult"
+            label="路由器发布"
+            :status="applying ? '发布中' : releaseStatus"
+            :tone="applying ? 'progress' : !releaseResult?.ok ? 'danger' : releaseNotices.length ? 'warning' : 'success'"
+          >
+            <template v-if="applying || releaseNotices.length" #notice>
+              <p v-if="applying" class="m-0 text-muted-foreground">正在发布并回读校验，请等待结果。</p>
+              <ul v-else class="m-0 flex list-none flex-col gap-1.5 p-0">
+                <li v-for="(entry, index) in releaseNotices" :key="index" :class="entry.status === 'failed' ? 'text-destructive-accent' : 'text-warning-accent'">
+                  {{ entry.phase }} · {{ stageTitle(entry.stage) }}：{{ entry.summary }}
+                </li>
+              </ul>
+            </template>
+            <template v-if="releaseLogs.length" #default>
+              <div v-for="group in releaseLogs" :key="group.label" class="space-y-2">
+                <p class="m-0 font-medium">{{ group.label }} · {{ group.entries.length }}</p>
+                <ul class="m-0 flex list-none flex-col gap-1.5 p-0">
+                  <li v-for="(entry, index) in group.entries" :key="index" class="flex min-w-0 items-start gap-2">
+                    <span :class="['chip shrink-0', LOG_STATUS[entry.status]?.chip || 'chip-acc']">{{ LOG_STATUS[entry.status]?.label || entry.status }}</span>
+                    <span class="min-w-0">{{ stageTitle(entry.stage) }} · {{ entry.summary }}</span>
+                  </li>
+                </ul>
+              </div>
+            </template>
+          </AgentStatusRow>
         </div>
 
         <DialogFooter>
@@ -612,6 +629,7 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import StatusDot from '@/components/common/StatusDot.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import PolicyRoutingPanel from '@/components/routers/PolicyRoutingPanel.vue'
 import RouterRuleSync from '@/components/routers/RouterRuleSync.vue'
 import RouterOperationPreview from '@/components/routers/RouterOperationPreview.vue'
@@ -749,11 +767,19 @@ let inspectionRevision = 0
 const releaseStatus = computed(() => {
   const result = releaseResult.value
   if (!result) return ''
-  if (result.ok) return '发布完成'
+  if (result.ok) return releaseNotices.value.length ? '发布完成，需处理' : '发布完成'
   if (result.rollback.some(entry => entry.status === 'failed')) return '发布失败，回滚未完成'
   if (result.rollback.length) return '发布失败，已撤销已完成的变更'
   return '发布失败，请检查下方记录'
 })
+
+const releaseLogs = computed(() => releaseResult.value ? [
+  { label: '发布记录', entries: releaseResult.value.log },
+  { label: '回滚记录', entries: releaseResult.value.rollback }
+].filter(group => group.entries.length) : [])
+const releaseNotices = computed(() => releaseLogs.value.flatMap(group => group.entries
+  .filter(entry => entry.status === 'failed' || entry.status === 'warning')
+  .map(entry => ({ ...entry, phase: group.label === '回滚记录' ? '回滚' : '发布' }))))
 
 const emptyForm = () => ({
   name: '',

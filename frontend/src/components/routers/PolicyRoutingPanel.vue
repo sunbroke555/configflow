@@ -123,16 +123,42 @@
           <section v-if="results.length" class="space-y-3 border-t border-border pt-4" role="status" aria-live="polite" aria-label="发布结果">
             <h3 class="m-0 text-sm font-semibold">发布结果</h3>
             <ul class="m-0 list-none divide-y divide-border p-0">
-              <li v-for="row in results" :key="row.id" class="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 py-3 text-sm sm:grid-cols-[11rem_7rem_minmax(0,1fr)]">
-                <span class="min-w-0 break-words font-medium">{{ row.name }}</span><span class="text-xs" :class="row.status === 'succeeded' ? 'text-success-accent' : 'text-warning-accent'">{{ resultStatus(row.status) }}</span>
-                <div v-if="row.task" class="col-span-2 min-w-0 space-y-1 sm:col-span-1">
-                  <AgentOperationSteps :task="row.task" :show-current="false" />
-                  <AgentFailureDetails :show-progress-message="false" :task="row.task" />
-                </div>
-                <p v-else-if="row.message" class="col-span-2 m-0 break-words text-xs text-muted-foreground sm:col-span-1">{{ row.message }}</p>
+              <li v-for="row in releaseRows" :key="row.id" class="min-w-0" :data-publish-target="row.id">
+                <AgentDeploymentStatus v-if="row.deployment" :task="row.deployment" :label="row.name" compact>
+                  <template v-if="deploymentNeedsNotice(row.deployment)" #notice>
+                    <AgentOperationSteps :task="row.deployment" :show-current="false" :show-steps="false" />
+                    <p v-if="row.status === 'unknown' && row.message && row.message !== row.deployment.message" class="m-0 text-warning-accent">{{ row.message }}</p>
+                    <AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="row.deployment" />
+                  </template>
+                  <template #details>
+                    <AgentOperationSteps :task="row.deployment" :show-current="false" :show-message="!deploymentNeedsNotice(row.deployment)" embedded />
+                  </template>
+                </AgentDeploymentStatus>
+                <AgentStatusRow v-else :label="row.name" :status="isROSRow(row) && row.status === 'succeeded' && rosNotices.length ? '发布完成，有提醒' : resultStatus(row.status)" :tone="isROSRow(row) && row.status === 'succeeded' && rosNotices.length ? 'warning' : resultTone(row.status)">
+                  <template v-if="(row.status !== 'succeeded' && (row.message || row.task)) || (isROSRow(row) && rosNotices.length)" #notice>
+                    <p v-if="row.status !== 'succeeded' && row.message && row.message !== row.task?.error && row.message !== row.task?.message" class="m-0" :class="resultTone(row.status) === 'danger' ? 'text-destructive-accent' : resultTone(row.status) === 'warning' ? 'text-warning-accent' : 'text-foreground'">{{ row.message }}</p>
+                    <AgentFailureDetails v-if="row.task" :showDNSChecks="false" :task="row.task" />
+                    <ul v-if="isROSRow(row) && rosNotices.length" class="m-0 list-none space-y-1 p-0">
+                      <li v-for="(entry, index) in rosNotices" :key="index" :class="entry.status === 'failed' ? 'text-destructive-accent' : 'text-warning-accent'">{{ entry.phase }}：{{ entry.summary }}</li>
+                    </ul>
+                  </template>
+                  <template v-if="(row.status === 'succeeded' && row.message) || hasROSLogs(row)" #default>
+                    <p v-if="row.status === 'succeeded' && row.message" class="m-0">{{ row.message }}</p>
+                    <template v-if="hasROSLogs(row)">
+                      <div v-if="rosResult.log?.length" class="min-w-0">
+                        <p class="mb-1 mt-0 font-medium">ROS 发布记录</p>
+                        <ul class="m-0 list-none space-y-1 p-0"><li v-for="(entry, index) in rosResult.log" :key="index" class="[overflow-wrap:anywhere]">{{ entry.summary }} · {{ entry.status }}</li></ul>
+                      </div>
+                      <div v-if="rosResult.rollback?.length" class="min-w-0">
+                        <p class="mb-1 mt-0 font-medium">ROS 回滚记录</p>
+                        <ul class="m-0 list-none space-y-1 p-0"><li v-for="(entry, index) in rosResult.rollback" :key="index" class="[overflow-wrap:anywhere]">{{ entry.summary }} · {{ entry.status }}</li></ul>
+                      </div>
+                    </template>
+                  </template>
+                </AgentStatusRow>
+                <AgentDNSChecks :key="row.task?.deployment_id" :checks="row.task?.dns_checks" :checked-at="row.task?.dns_checked_at" compact />
               </li>
             </ul>
-            <ul v-if="rosResult" class="m-0 space-y-1 pl-5 text-xs"><li v-for="(entry, index) in [...(rosResult.log || []), ...(rosResult.rollback || [])]" :key="index">{{ entry.summary }} · {{ entry.status }}</li></ul>
             <Button v-if="unresolved" variant="outline" class="min-h-11" :disabled="publishing" @click="refreshResults">核对发布结果</Button>
           </section>
         </div>
@@ -161,12 +187,15 @@ import MultiSelect from '@/components/common/MultiSelect.vue'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
+import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import PolicyRoutingObjects from './PolicyRoutingObjects.vue'
 import PolicySourceEditor from './PolicySourceEditor.vue'
 import PolicyDestinationEditor from './PolicyDestinationEditor.vue'
 import RouterOperationPreview from './RouterOperationPreview.vue'
-import { usePolicyRoutingWorkspace } from '@/composables/usePolicyRoutingWorkspace'
-import { deploymentLabels } from '@/composables/useAgentDeployments'
+import { usePolicyRoutingWorkspace, type PolicyReleaseRow } from '@/composables/usePolicyRoutingWorkspace'
+import { deploymentLabels, deploymentNeedsNotice } from '@/composables/useAgentDeployments'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
 import { sourcePolicyIndex } from '@/lib/policySourceEditor'
 import { notify } from '@/lib/feedback'
@@ -246,7 +275,29 @@ async function canLeave() {
   return canLeaveWorkspace()
 }
 async function close() { if (await canLeave()) emit('close') }
-const resultStatus = (status: string) => status === 'succeeded' ? '成功' : deploymentLabels[status] || status
+const releaseRows = computed(() => results.value.map(row => {
+  const task = row.task
+  // Network failures can leave a last-known task while the workspace waits for
+  // confirmation. Preserve that task and its steps without claiming its result.
+  const deployment = task?.deployment_id && task.status ? {
+    ...task, deployment_id: task.deployment_id, status: task.status,
+    query_error: task.query_error || (row.status === 'unknown' && task.status !== 'unknown'),
+  } : undefined
+  return { ...row, deployment }
+}))
+const isROSRow = (row: PolicyReleaseRow) => !row.deployment_id && row.id === props.id
+const hasROSLogs = (row: PolicyReleaseRow) => isROSRow(row) && !!(rosResult.value?.log?.length || rosResult.value?.rollback?.length)
+const rosNotices = computed(() => [
+  { phase: '发布', entries: rosResult.value?.log || [] },
+  { phase: '回滚', entries: rosResult.value?.rollback || [] },
+].flatMap(group => group.entries
+  .filter((entry: { status: string }) => entry.status === 'failed' || entry.status === 'warning')
+  .map((entry: { summary: string; status: string }) => ({ ...entry, phase: group.phase }))))
+const resultStatus = (status: string) => ({ succeeded: '成功', failed: '失败', unknown: '待确认', waiting: '等待中', skipped: '已跳过' } as Record<string, string>)[status] || deploymentLabels[status] || status
+const resultTone = (status: string) => status === 'succeeded' ? 'success'
+  : ['failed', 'rolled_back', 'rollback_failed'].includes(status) ? 'danger'
+  : ['unknown', 'ready', 'recovery_pending', 'rolling_back'].includes(status) ? 'warning'
+  : ['waiting', 'skipped'].includes(status) ? 'neutral' : 'progress'
 onBeforeUnmount(() => { queryEpoch++; emit('busy', false) })
 defineExpose({ canLeave })
 </script>

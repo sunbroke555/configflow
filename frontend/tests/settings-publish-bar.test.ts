@@ -11,7 +11,7 @@ vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() },
 }))
-vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
 const wrappers: VueWrapper[] = []
 const response = (data: any) => ({ data } as any)
 const guard = (extra: Partial<PublishGuard> = {}): PublishGuard => ({ expected_profile_id: 'office', expected_service_type: 'oxidns', expected_config_revision: 7, ...extra })
@@ -59,6 +59,66 @@ afterEach(() => {
 })
 
 describe('settings save and publish', () => {
+  it('uses real preflight stages without inventing deployment steps before submission', async () => {
+    const saved = deferred<PublishGuard>()
+    const checked = deferred<any>()
+    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent()])).mockImplementationOnce(() => checked.promise)
+    const wrapper = await render({ save: vi.fn(() => saved.promise) })
+    await publish(wrapper)
+    const row = wrapper.get('[data-agent-status-row="配置发布"]')
+    expect(row.text()).toContain('保存草稿')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.get('[data-status-notice]').text()).toContain('正在保存草稿…')
+    expect(row.find('[data-agent-operation-steps], [aria-expanded]').exists()).toBe(false)
+    saved.resolve(guard())
+    await flushPromises()
+    expect(row.text()).toContain('确认设备')
+    expect(row.get('[data-status-notice]').text()).toContain('草稿已保存，正在确认目标设备…')
+    expect(row.find('[data-agent-operation-steps], [aria-expanded]').exists()).toBe(false)
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+    checked.resolve(response([agent()]))
+    await flushPromises()
+    expect(agentApi.pushConfig).toHaveBeenCalledWith('one', expect.any(String), guard())
+  })
+
+  it('collapses successful scope and steps once while keeping DNS warnings in a separate visible row', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({
+      deployment_id: deploymentId, status: 'succeeded', message: '服务检查均通过。',
+      events: [{ at: '2026-10-19T01:00:00Z', status: 'verifying', message: '校验 oxidns.yaml' }],
+      dns_checks: [{ name: 'DNS 上游', level: 'warn', message: '部分 DNS 请求超时', fix: '检查上游连接' }],
+    }))
+    const wrapper = await render()
+    await publish(wrapper)
+    const row = wrapper.get('[data-agent-status-row="配置发布"]')
+    expect(row.get('button[aria-expanded]').attributes('aria-label')).toBe('配置发布：成功')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
+    expect(row.find('[data-status-notice]').exists()).toBe(false)
+    const dns = wrapper.get('[data-agent-status-row="DNS 检查"]')
+    expect(dns.element.closest('[data-status-details]')).toBeNull()
+    expect(dns.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(dns.get('[data-status-notice]').text()).toContain('部分 DNS 请求超时')
+    expect(dns.get('[data-status-details]').isVisible()).toBe(false)
+    await row.get('button[aria-expanded]').trigger('click')
+    expect(row.get('ol').isVisible()).toBe(true)
+    expect(row.get('ol').text()).toContain('校验 oxidns.yaml')
+    expect(row.find('details, summary').exists()).toBe(false)
+    expect(row.get('[data-status-details]').text()).toContain('草稿已保存，发布成功，服务检查已通过。')
+    expect(row.get('[data-status-details]').text()).toContain('本次发布到「客厅 DNS」，仅包含本次保存的配置')
+    expect(dns.get('[data-status-details]').isVisible()).toBe(false)
+  })
+
+  it('keeps a pending success snapshot unconfirmed in both its heading and visible notice', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded', pending: true }))
+    const wrapper = await render()
+    await publish(wrapper)
+    const row = wrapper.get('[data-agent-status-row="配置发布"]')
+    expect(row.get('button[aria-expanded]').attributes('aria-label')).toBe('配置发布：待确认')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.get('[data-status-notice]').text()).toContain('草稿已保存，发布结果待确认。')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
+    expect(row.text()).not.toContain('发布成功')
+  })
+
   it.each([
     ['succeeded', true, true],
     ['succeeded', false, false],
@@ -314,6 +374,8 @@ describe('settings save and publish', () => {
     await publish(wrapper)
     expect(wrapper.text()).toContain('已校验，待激活')
     expect(wrapper.text()).toContain('不包含之后保存的草稿修改')
+    expect(wrapper.get('[data-status-details]').isVisible()).toBe(false)
+    expect(button(wrapper, '应用并启动').isVisible()).toBe(true)
     expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
     await button(wrapper, '应用并启动').trigger('click')
     await flushPromises()
@@ -393,6 +455,13 @@ describe('settings save and publish', () => {
     await publish(wrapper)
     expect(wrapper.text()).toContain('草稿已保存，配置已推送。')
     expect(wrapper.text()).not.toContain('服务检查已通过')
+    const row = wrapper.get('[data-agent-status-row="配置发布"]')
+    expect(row.get('button[aria-expanded]').attributes('aria-label')).toBe('配置发布：已推送')
+    expect(row.get('[data-status-details]').isVisible()).toBe(false)
+    expect(row.find('[data-agent-operation-steps]').exists()).toBe(false)
+    await row.get('button[aria-expanded]').trigger('click')
+    expect(row.get('[data-status-details]').isVisible()).toBe(true)
+    expect(row.get('[data-status-details]').text()).toContain('草稿已保存，配置已推送。')
     await vi.advanceTimersByTimeAsync(5000)
     expect(agentApi.getDeployment).not.toHaveBeenCalled()
     expect(publishButton(wrapper).attributes('disabled')).toBeUndefined()
@@ -450,6 +519,10 @@ describe('Settings publication failure details', () => {
     const wrapper = await render({ serviceType, save: vi.fn().mockResolvedValue(guard({ expected_service_type: serviceType })) })
     await publish(wrapper)
     expect(wrapper.get('pre').element.textContent).toBe(ruleLocationDetails)
+    const row = wrapper.get('[data-agent-status-row="配置发布"]')
+    expect(row.attributes('data-tone')).toBe('danger')
+    expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+    expect(row.find('[data-agent-operation-steps], [aria-expanded]').exists()).toBe(false)
     await wrapper.setProps({ open: false })
     await wrapper.setProps({ open: true })
     await flushPromises()
@@ -464,4 +537,20 @@ it('shows server diagnostics while a 5xx publication result remains uncertain', 
   expect(wrapper.text()).toContain('结果待确认')
   expect(wrapper.get('pre').text()).toBe('response ended while checking startup')
   expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
+})
+
+it('preserves late server diagnostics even when polling already confirmed the deployment', async () => {
+  const post = deferred<any>()
+  vi.mocked(agentApi.pushConfig).mockImplementationOnce(() => post.promise)
+  vi.mocked(agentApi.getDeployment).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
+  const wrapper = await render()
+  await publish(wrapper)
+  await vi.advanceTimersByTimeAsync(0)
+  post.reject({ response: { status: 503, data: { message: '返回响应时连接中断', error_details: 'connection closed after service check' } } })
+  await flushPromises()
+  const row = wrapper.get('[data-agent-status-row="配置发布"]')
+  expect(row.get('button[aria-expanded]').attributes('aria-label')).toBe('配置发布：成功')
+  expect(row.get('[data-status-notice]').isVisible()).toBe(true)
+  expect(row.get('[data-status-notice] pre').text()).toBe('connection closed after service check')
+  expect(row.get('[data-status-details]').isVisible()).toBe(false)
 })

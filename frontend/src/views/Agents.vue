@@ -796,7 +796,7 @@ import { agentApi, type AgentInstallScriptParams } from '@/api'
 import api from '@/api'
 import type { Agent } from '@/types'
 import { useProfileStore } from '@/stores/profile'
-import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { createDeploymentId, deploymentNeedsNotice, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentDeploymentHistory from '@/components/agents/AgentDeploymentHistory.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
@@ -817,10 +817,6 @@ import VChart from 'vue-echarts'
 // Register ECharts components
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, TitleComponent, CanvasRenderer])
 
-const deploymentNeedsNotice = (task: AgentDeployment) =>
-  !['succeeded', 'rolled_back'].includes(task.status) || (task.status === 'rolled_back' && !task.manual_rollback)
-  || !!(task.query_error || task.pending || task.not_recorded || task.retrying || task.rollback_rejected
-    || task.error || task.error_details || task.rollback_error || task.rollback_error_details || task.rollback_message)
 
 const agents = ref<Agent[]>([])
 const { deployments, busy: deploymentBusy, track: trackDeployment, beginSubmission, endSubmission, refresh: refreshDeployment, activate: activateDeployment, retryPublish: retryDeployment, rollback: rollbackDeployment } = useAgentDeployments(() => { void loadAgents() })
