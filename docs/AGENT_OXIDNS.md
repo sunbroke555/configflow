@@ -134,6 +134,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 - 两套 Agent 使用独立的 `configflow-agent-mihomo` / `configflow-agent-oxidns` 系统服务、`/opt/configflow-agent/mihomo` / `/opt/configflow-agent/oxidns` 目录和二进制，升级及远程卸载互不删除对方的文件。重跑同机脚本会保留对应 Agent 身份。
 - 安装脚本保留现有核心配置。从 `1.8.23-go` 起，Mihomo Agent 发布时保留 DNS 监听地址、端口、整组 `tun.dns-hijack` 及 DNS/TUN 开关，不再强制改为 `1053`，未配置的字段也不会补入。首次安装提供 `1053` 默认值；已有 Agent 需升级后才会采用新的发布规则。
+- 从 Agent `1.8.26-go` 起，普通 Shell 同机模式发布 Mihomo 配置时，若 TUN 已启用，会在 `tun.route-exclude-address` 中自动合并 `127.0.0.0/8` 和当前 Agent LAN IPv4 的 `/32` 地址，并保留用户已有排除规则。例如 Agent 地址为 `192.168.0.33` 时，会加入 `192.168.0.33/32`，使发往本机 OxiDNS 的查询避开 Mihomo 自动重定向。排除按目的地址匹配，不需要添加客户端 IP；Agent 地址变化后，后续发布使用当前地址。此适配继续保留用户配置的 DNS 监听、端口和整组 `dns-hijack`，不会自动启用 DNS 或 TUN，不用于 Docker、单服务或 Linux 选择性网关。升级 Agent 本身不会重写正在运行的核心配置，需要再发布一次 Mihomo 配置后生效。
 - OxiDNS 的监听和上游沿用用户配置。需要 Mihomo 处理远程解析时，将远程上游对应到 Mihomo 实际的 DNS 监听地址和端口（新装默认 `127.0.0.1:1053`）。Mihomo 上游不应再指回 OxiDNS，以免形成循环。发布前检查实际监听冲突和上下游关系；明确冲突会阻止发布，TUN 对目标端口 `53` 的劫持风险只提示，不自动改写。
 - TUN 可继续使用，但 `/dev/net/tun`、网络管理权限及路由需要在运行核心的系统中准备。承担网关转发的 LXC / VM 需在该系统持久开启 IPv4 转发；安装脚本不会修改 PVE、RouterOS 或系统转发设置。OxiDNS 上游是否经过 TUN 仍由 Mihomo 路由与规则决定，DNS 端口分工不等于上游绕行配置。
 

@@ -22,6 +22,9 @@ func aioPublicationConfig(t *testing.T, mode string) *Config {
 	t.Setenv("ENABLE_MOSDNS", "false")
 	cfg := testDeploymentConfig(t)
 	cfg.NativeAIO = mode == "native"
+	if cfg.NativeAIO {
+		cfg.AgentIP = "192.168.0.33"
+	}
 	if mode == "docker-oxidns" {
 		t.Setenv("ENABLE_OXIDNS", "true")
 	} else if mode == "docker-mosdns" {
@@ -30,7 +33,7 @@ func aioPublicationConfig(t *testing.T, mode string) *Config {
 	return cfg
 }
 
-func assertOriginalDNSDocument(t *testing.T, got, original []byte) {
+func assertOriginalDNSDocument(t *testing.T, cfg *Config, got, original []byte) {
 	t.Helper()
 	var actual, expected map[string]interface{}
 	if err := yaml.Unmarshal(got, &actual); err != nil {
@@ -39,8 +42,11 @@ func assertOriginalDNSDocument(t *testing.T, got, original []byte) {
 	if err := yaml.Unmarshal(original, &expected); err != nil {
 		t.Fatal(err)
 	}
-	// Mihomo already normalizes bundled provider paths by serializing YAML.
-	// DNS values, omitted/null fields and extra TUN entries must survive it.
+	// Native AIO adds only the host exclusions needed to reach OxiDNS. Every
+	// original DNS value, omitted/null field and other TUN entry must survive.
+	if tun, ok := expected["tun"].(map[string]interface{}); ok && cfg.NativeAIO && tun["enable"] == true {
+		tun["route-exclude-address"] = []interface{}{"127.0.0.0/8", cfg.AgentIP + "/32"}
+	}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("DNS configuration changed:\n%s", got)
 	}
@@ -58,7 +64,7 @@ func assertDeploymentOriginal(t *testing.T, cfg *Config, state *DeploymentState,
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertOriginalDNSDocument(t, published, original)
+	assertOriginalDNSDocument(t, cfg, published, original)
 	digest, size, err := hashFile(name)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +107,7 @@ func TestAIOPublishesOriginalMihomoDNSConfiguration(t *testing.T) {
 				checked := false
 				useDNSCheck(t, func(candidate preflight.DNSCandidate, _ preflight.DNSOptions) preflight.Report {
 					checked = true
-					assertOriginalDNSDocument(t, candidate.Content, original)
+					assertOriginalDNSDocument(t, cfg, candidate.Content, original)
 					return nil
 				})
 				activate := fixture.name == "custom-ports"
@@ -121,7 +127,7 @@ func TestAIODNSPreservesCandidateThroughReadyActivation(t *testing.T) {
 	calls := 0
 	useDNSCheck(t, func(candidate preflight.DNSCandidate, _ preflight.DNSOptions) preflight.Report {
 		calls++
-		assertOriginalDNSDocument(t, candidate.Content, content)
+		assertOriginalDNSDocument(t, cfg, candidate.Content, content)
 		return nil
 	})
 	s := submitBundle(t, cfg, "preserved-ready", map[string][]byte{"config.yaml": content}, false)

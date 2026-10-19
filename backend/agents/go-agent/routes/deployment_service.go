@@ -172,7 +172,11 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
 		return e
 	}
 	if cfg.ServiceType == "mihomo" {
-		modified, err := adaptGatewayDNS(cfg, string(data))
+		modified, err := adaptNativeAIODNS(cfg, string(data))
+		if err != nil {
+			return err
+		}
+		modified, err = adaptGatewayDNS(cfg, modified)
 		if err != nil {
 			return err
 		}

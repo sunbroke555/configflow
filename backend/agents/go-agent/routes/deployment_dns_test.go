@@ -108,9 +108,10 @@ func TestDeploymentDNSRechecksReadyCandidateBeforeActivation(t *testing.T) {
 func TestDeploymentDNSUsesOriginalAIOPorts(t *testing.T) {
 	cfg := testDeploymentConfig(t)
 	cfg.NativeAIO = true
+	cfg.AgentIP = "192.168.0.33"
 	content := "dns: {enable: true, listen: '127.0.0.2:5353'}\ntun: {enable: true, dns-hijack: ['any:5353', 'tcp://any:5353']}\n"
 	useDNSCheck(t, func(candidate preflight.DNSCandidate, _ preflight.DNSOptions) preflight.Report {
-		assertOriginalDNSDocument(t, candidate.Content, []byte(content))
+		assertOriginalDNSDocument(t, cfg, candidate.Content, []byte(content))
 		if !candidate.Config.NativeAIO {
 			t.Error("DNS check must retain AIO identity")
 		}
