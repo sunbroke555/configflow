@@ -19,7 +19,7 @@ func adaptGatewayDNS(cfg *Config, content string) (string, error) {
 	if marker["enabled"] != true {
 		return content, nil
 	}
-	address, err := agentLANIPv4(cfg)
+	addresses, err := agentLANIPv4s(cfg)
 	if err != nil {
 		return "", fmt.Errorf("为 OxiDNS 排除网关 DNS 时失败：%w", err)
 	}
@@ -28,7 +28,11 @@ func adaptGatewayDNS(cfg *Config, content string) (string, error) {
 	if !tunOK || !dnsOK {
 		return "", fmt.Errorf("选择性网关配置缺少 tun 或 dns 对象")
 	}
-	tun["route-exclude-address"] = []string{"127.0.0.0/8", address.String() + "/32"}
+	excluded := []string{"127.0.0.0/8"}
+	for _, address := range addresses {
+		excluded = append(excluded, address.String()+"/32")
+	}
+	tun["route-exclude-address"] = excluded
 	tun["dns-hijack"] = []string{}
 	dns["listen"] = "127.0.0.1:1053"
 	result, err := yaml.Marshal(doc)

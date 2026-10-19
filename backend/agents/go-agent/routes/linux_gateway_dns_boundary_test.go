@@ -93,8 +93,8 @@ func TestAIOPublicationUsesAutomaticLANIPv4WithEmptySavedAddress(t *testing.T) {
 			cfg := testDeploymentConfig(t)
 			cfg.NativeAIO = true
 			cfg.AgentIP = ""
-			currentIP := "192.168.8.2"
-			stubAgentIPv4(t, func() (string, error) { return currentIP, nil })
+			currentIPs := []string{"192.168.8.2", "192.168.9.2"}
+			stubAgentIPv4s(t, func() ([]string, error) { return currentIPs, nil })
 			input := `mode: rule
 dns: {enable: true, nameserver: ['https://223.5.5.5/dns-query']}
 tun: {enable: true, auto-route: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8]}
@@ -107,7 +107,7 @@ x-configflow-linux-gateway: {enabled: true, version: 1, profile_id: gateway-test
 			}
 			for _, id := range []string{"first", "address-changed"} {
 				if id == "address-changed" {
-					currentIP = "192.168.8.3"
+					currentIPs = []string{"192.168.8.3", "192.168.9.3"}
 				}
 				// Exercise the actual upload/verification path; native AIO also
 				// activates through the test core without touching system networking.
@@ -137,7 +137,10 @@ x-configflow-linux-gateway: {enabled: true, version: 1, profile_id: gateway-test
 				if err := yaml.Unmarshal(data, &doc); err != nil {
 					t.Fatal(err)
 				}
-				wantExcluded := []interface{}{"127.0.0.0/8", currentIP + "/32"}
+				wantExcluded := []interface{}{"127.0.0.0/8"}
+				for _, ip := range currentIPs {
+					wantExcluded = append(wantExcluded, ip+"/32")
+				}
 				if !gateway {
 					wantExcluded = append([]interface{}{"10.0.0.0/8"}, wantExcluded...)
 				}

@@ -892,6 +892,10 @@ func activateDeployment(cfg *Config, s *DeploymentState) {
 		failBefore(e)
 		return
 	}
+	if e := validateDeploymentAgentIPs(cfg, s); e != nil {
+		failBefore(e)
+		return
+	}
 	if changed, e := carryPersistentGeoResources(cfg, s); e != nil {
 		failBefore(e)
 		return

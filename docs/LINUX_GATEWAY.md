@@ -103,7 +103,9 @@ Mihomo 缺少 DNS 上游时会补入默认加密上游；已有非循环上游�
 
 开启网关后，生成输出使用 `auto-route`、`auto-redirect` 和 `route-address-set`。旧的 `route-address` / 排除地址从本模式输出中移除，避免与选择范围交叉限制。`routing-mark`、旧的 `tun.include-interface` / `exclude-interface` 或 MAC / UID 等过滤会阻止启用，需先在基础配置中核对并处理。不要手改生成的 `cf_gateway_` provider 或网关标记。
 
-发布到目标 Agent 时，会自动把这台 Linux 的 LAN IPv4 `/32` 和回环网段加入 `route-exclude-address`，让客户端访问网关 53 端口时进入 OxiDNS。Mihomo 的 `auto-redirect` 有独立的 53 端口接管规则，仅修改 `dns-hijack` 端口不足以保护 OxiDNS。Agent 优先使用显式 `agent_ip`；留空时，每次发布都会从本机活动网络接口自动获取有效 IPv4，已注册的旧 Agent 也无需重新注册。无法获取有效地址或显式地址无效时，仍会阻止发布并提示检查接口或填写 `agent_ip`。普通原生 AIO 开启 TUN 自动重定向时也会补充本机 DNS 排除项，并保留已有排除地址。手动部署生成文件时，也必须补入实际网关 IP 的 `/32` 排除项。
+发布到目标 Agent 时，会自动把这台 Linux 的 LAN IPv4 `/32` 和回环网段加入 `route-exclude-address`，让客户端访问网关 53 端口时进入 OxiDNS。Mihomo 的 `auto-redirect` 有独立的 53 端口接管规则，仅修改 `dns-hijack` 端口不足以保护 OxiDNS。Agent 优先使用显式 `agent_ip`；留空时，每次发布都会从本机活动网络接口获取全部符合条件的 IPv4，为每个地址添加精确 `/32` 排除项，避免多网卡或地址别名漏排除。已注册的旧 Agent 无需重新注册。无法获取有效地址或显式地址无效时，仍会阻止发布并提示检查接口或填写 `agent_ip`。
+
+激活已准备的配置之前，会再次检查当前地址是否被候选配置覆盖；如果期间 IP 变化而产生漏排除，会在停止服务或替换文件之前拒绝激活，提示重新发布。普通原生 AIO 开启 TUN 自动重定向时也会补充本机 DNS 排除项，并保留已有排除地址。手动部署生成文件时，也必须补入实际网关 IP 的 `/32` 排除项。
 
 ## 第 3 步：安装核心和 Agent
 
