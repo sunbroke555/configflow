@@ -1,15 +1,21 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.26-go"
+LATEST_AGENT_VERSION = "1.8.27-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
-    "1.8.26-go": {
+    "1.8.27-go": {
         "date": "2026-10-19",
         "features": [
             "普通 Shell 同机发布 Mihomo 配置时，为已启用的 TUN 自动合并回环网段与当前 Agent LAN IPv4 排除地址，保留用户已有排除规则，避免本机 OxiDNS 查询被自动重定向截获",
             "保留用户 DNS 监听、端口、dns-hijack 与开关；升级后下一次发布生效，Docker、单服务与 Linux 选择性网关沿用原有行为"
+        ]
+    },
+    "1.8.26-go": {
+        "date": "2026-10-19",
+        "features": [
+            "数据统计新增实时流量视图：Mihomo Agent 对当前连接做字节差分，按来源设备、命中规则、策略组和出口节点聚合实时速率"
         ]
     },
     "1.8.25-go": {

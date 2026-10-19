@@ -38,9 +38,17 @@
       部分数据未能加载，显示结果可能不完整。点击「刷新」重试。
     </p>
 
-    <!-- 配置流向图：订阅 → 节点池 → 策略组 → 规则 → 输出 → Agent，全部由真实数据生成 -->
-    <SectionCard :padded="false" class="mb-5 max-sm:mb-3" role="region" aria-label="配置流向">
+    <!-- 流向图：配置流向（订阅 → 节点池 → 策略组 → 规则 → 输出 → Agent）与 Mihomo 实时流量两个视图 -->
+    <SectionCard :padded="false" class="mb-5 max-sm:mb-3" role="region" :aria-label="flowView === 'live' ? '实时流量' : '配置流向'">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/60 px-5 py-2.5 max-md:px-4 max-sm:px-3">
+        <Segmented v-model="flowView" :options="FLOW_VIEWS" label="流向视图" />
+        <span class="text-[12px] text-muted-foreground max-md:hidden">
+          {{ flowView === 'live' ? 'Mihomo 当前连接的实时速率' : '配置之间的引用关系' }}
+        </span>
+      </div>
+      <LiveFlow v-if="flowView === 'live'" :agents="liveAgents" />
       <FlowMap
+        v-else
         label="配置流向"
         :columns="flowColumns"
         :edges="flowEdges"
@@ -86,7 +94,13 @@
           </span>
         </template>
       </FlowMap>
-      <footer class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-5 py-3 text-[12px] text-muted-foreground max-md:px-4 max-sm:gap-x-3 max-sm:px-3 max-sm:py-2">
+      <footer v-if="flowView === 'live'" class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-5 py-3 text-[12px] text-muted-foreground max-md:px-4 max-sm:gap-x-3 max-sm:px-3 max-sm:py-2">
+        <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-primary-accent" />设备 → 规则</span>
+        <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-accent-2" />规则 → 策略</span>
+        <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-success-accent" />策略 → 出口</span>
+        <span class="ml-auto max-md:hidden">粒子越密流量越大 · 每 3 秒采样 · 点击进入连接列表</span>
+      </footer>
+      <footer v-else class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-5 py-3 text-[12px] text-muted-foreground max-md:px-4 max-sm:gap-x-3 max-sm:px-3 max-sm:py-2">
         <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-primary-accent" />订阅 → 节点</span>
         <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-accent-2" />策略 → 规则</span>
         <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-success-accent" />下发 → Agent</span>
@@ -229,7 +243,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { nodeApi, proxyGroupApi, ruleSetApi, statsApi, subscriptionApi } from '@/api'
 import {
@@ -251,8 +265,10 @@ import { Button } from '@/components/ui/button'
 import AnimatedNumber from '@/components/common/AnimatedNumber.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import Sparkline from '@/components/common/Sparkline.vue'
+import Segmented from '@/components/common/Segmented.vue'
 import FlowMap from '@/components/dashboard/FlowMapViewer.vue'
 import type { FlowColumn, FlowEdge, FlowNode } from '@/components/dashboard/FlowMap.vue'
+import LiveFlow from '@/components/dashboard/LiveFlow.vue'
 import { ACTION_LABEL, runAction, type AppAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { regionOf } from '@/lib/regions'
@@ -303,6 +319,26 @@ const flowDensity = computed(() => {
   const total = t.up + t.down
   return Math.min(2.6, Math.max(0.5, 0.6 + Math.log10(total / 1024 + 1) * 0.35))
 })
+
+/* ---------- 流向视图切换：选择记在本机浏览器 ---------- */
+type FlowView = 'config' | 'live'
+const FLOW_VIEWS: Array<{ value: FlowView; label: string }> = [
+  { value: 'config', label: '配置流向' },
+  { value: 'live', label: '实时流量' }
+]
+const FLOW_VIEW_KEY = 'configflow:dashboard:flow-view'
+const readFlowView = (): FlowView => {
+  try { return localStorage.getItem(FLOW_VIEW_KEY) === 'live' ? 'live' : 'config' } catch { return 'config' }
+}
+const flowView = ref<FlowView>(readFlowView())
+watch(flowView, value => {
+  try { localStorage.setItem(FLOW_VIEW_KEY, value) } catch { /* 存储不可用时只在本次会话内生效 */ }
+})
+
+/** 实时流量只取绑定当前配置空间、在线的 Mihomo Agent */
+const liveAgents = computed(() =>
+  boundAgents.value.filter(a => (a.service_type || 'mihomo') === 'mihomo' && live.isOnline(a))
+)
 
 /** 每列最多展示的节点数，超出折叠为「+N」 */
 const COLUMN_LIMIT = { subs: 4, groups: 6, agents: 5 }
