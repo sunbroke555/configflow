@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.32-go"
+LATEST_AGENT_VERSION = "1.8.33-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.33-go": {
+        "date": "2026-10-20",
+        "features": [
+            "心跳使用独立短连接，TUN 重载或网络变化后下一轮自动重新建连，避免反复复用失效连接导致 Agent 持续离线",
+            "心跳响应读取超时或截断按失败处理，保留旧服务端空响应兼容性"
+        ]
+    },
     "1.8.32-go": {
         "date": "2026-10-20",
         "features": [
