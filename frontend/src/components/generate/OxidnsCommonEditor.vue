@@ -1,6 +1,6 @@
 <template>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border" aria-label="OxiDNS 常用设置">
-    <div class="grid shrink-0 grid-cols-4 gap-1 border-b border-border bg-muted/30 p-2" role="group" aria-label="常用设置分类">
+    <div class="oxi-common-categories grid shrink-0 grid-cols-4 gap-1 border-b border-border bg-muted/30 p-2" role="group" aria-label="常用设置分类">
       <button v-for="section in sections" :key="section.id" type="button" class="min-h-11 rounded-md px-1 text-xs sm:px-3 font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-primary-accent disabled:opacity-50" :class="section.id === sectionId ? 'bg-primary-soft text-primary-accent' : 'text-muted-foreground'" :aria-pressed="section.id === sectionId" :disabled="disabled" @click="emit('update:sectionId', section.id)">{{ section.label }}</button>
     </div>
     <div class="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto p-3 md:p-5">
@@ -76,3 +76,60 @@ const missing = computed(() => props.sectionId === 'runtime'
   : pluginChoices.value.filter(choice => !props.pluginNodes.some(plugin => scalarField(plugin, 'type') === choice.key)).map(choice => ({ key: choice.key, label: choice.schema.label, help: choice.schema.help })))
 function addMissing(key: string) { props.sectionId === 'runtime' ? emit('addGlobal', [key]) : emit('addPlugin', key) }
 </script>
+
+<style scoped>
+@media (width < 640px) {
+  .oxi-common-categories {
+    position: relative;
+    isolation: isolate;
+    height: var(--cf-touch);
+    border: 0;
+    padding-block: 0;
+    background: transparent;
+  }
+
+  .oxi-common-categories::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset-inline: 0;
+    top: calc((var(--cf-touch) - var(--cf-choice-track)) / 2);
+    height: var(--cf-choice-track);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in oklab, var(--muted) 30%, transparent);
+    pointer-events: none;
+  }
+
+  .oxi-common-categories button {
+    position: relative;
+    isolation: isolate;
+    height: var(--cf-touch);
+    background: transparent;
+  }
+
+  .oxi-common-categories button::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset-inline: 0;
+    top: calc((var(--cf-touch) - var(--cf-choice-selected)) / 2);
+    height: var(--cf-choice-selected);
+    border-radius: inherit;
+    pointer-events: none;
+  }
+
+  .oxi-common-categories button[aria-pressed='true']::before {
+    background: var(--primary-soft);
+  }
+
+  .oxi-common-categories button[aria-pressed='false']:hover::before {
+    background: var(--accent);
+  }
+
+  .oxi-common-categories button:focus-visible {
+    outline: 2px solid var(--primary-accent);
+    outline-offset: -2px;
+    box-shadow: none;
+  }
+}
+</style>

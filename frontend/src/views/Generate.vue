@@ -71,7 +71,7 @@
       @save="saveMosdnsSettings()"
     >
         <Tabs v-model="mosdnsActiveTab" :inert="savingMosdnsSettings" class="min-h-0 min-w-0 flex-1 gap-0 overflow-hidden">
-          <TabsList class="h-auto min-h-11 w-full shrink-0 justify-start gap-1 overflow-x-auto rounded-none border-b border-border bg-card px-4 py-2 md:px-5">
+          <TabsList variant="strip" class="h-auto min-h-11 w-full shrink-0 justify-start gap-1 overflow-x-auto rounded-none border-b border-border bg-card px-4 py-2 md:px-5">
             <TabsTrigger value="rules" class="min-h-9 shrink-0 text-xs max-md:min-h-11">规则配置</TabsTrigger>
             <TabsTrigger value="cache" class="min-h-9 shrink-0 text-xs max-md:min-h-11">缓存</TabsTrigger>
             <TabsTrigger value="dns" class="min-h-9 shrink-0 text-xs max-md:min-h-11">DNS 服务器</TabsTrigger>

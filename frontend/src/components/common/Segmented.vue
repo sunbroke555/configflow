@@ -73,11 +73,11 @@ watch(() => [props.modelValue, props.options], () => nextTick(place), { deep: tr
   .cf-segmented {
     border: 0;
     background: transparent;
-    padding: 3px 0;
+    padding: calc((var(--cf-touch) - var(--cf-choice-track)) / 2) 0;
   }
 
   .cf-segmented-options {
-    height: 38px;
+    height: var(--cf-choice-track);
     padding-inline: 3px;
     border-radius: var(--radius-xl);
     background: var(--secondary);
@@ -89,7 +89,7 @@ watch(() => [props.modelValue, props.options], () => nextTick(place), { deep: tr
     flex-shrink: 0;
     height: var(--cf-touch);
     min-width: var(--cf-touch);
-    margin-block: -3px;
+    margin-block: calc((var(--cf-choice-track) - var(--cf-touch)) / 2);
   }
 
   [data-segment]:focus-visible {
@@ -99,8 +99,8 @@ watch(() => [props.modelValue, props.options], () => nextTick(place), { deep: tr
   }
 
   .cf-segmented-thumb {
-    top: 2px;
-    bottom: 2px;
+    top: calc((var(--cf-choice-track) - var(--cf-choice-selected)) / 2);
+    bottom: calc((var(--cf-choice-track) - var(--cf-choice-selected)) / 2);
   }
 }
 </style>
