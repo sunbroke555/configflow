@@ -290,7 +290,7 @@ def real_source():
     return source
 
 
-def real_baseline(source, service, *, pinned_files=()):
+def real_baseline(source, service, *, pinned_files=(), local_dns_watchdog=True):
     """Exercise the production converters and materializer with offline fixtures."""
     from backend.agents.deployment_bundle import build_deployment_bundle, retarget_config_path, DeploymentBundle
     agent = {'id': 'agent', 'profile_id': 'home', 'service_type': service}
@@ -308,7 +308,8 @@ def real_baseline(source, service, *, pinned_files=()):
         providers, rules, custom = [], get_oxidns_ruleset_downloads(source), get_oxidns_custom_files(source)
     value = build_deployment_bundle(agent, source, content, provider_downloads=providers,
                                    ruleset_downloads=rules, custom_files=custom, pinned_files=pinned_files,
-                                   base_url='https://config.test', deployment_id='baseline')
+                                   base_url='https://config.test', deployment_id='baseline',
+                                   local_dns_watchdog=local_dns_watchdog)
     value = retarget_config_path(value, 'installed.yml')
     digest = next(item['sha256'] for item in value.manifest['files'] if item['role'] == 'config')
     # Receipts can store the complete core-reported digest, unlike the short
@@ -407,6 +408,49 @@ def test_prepare_candidate_real_oxidns_native_graph_with_offline_adguard(change,
     else:
         assert _rule_path(current['rule_configs'][0], 'domain') in str(actual)
     assert candidate.manifest['config_path'] == 'installed.yml'
+
+
+@pytest.mark.parametrize('guarded', [False, True])
+@pytest.mark.parametrize('mode', ['template', 'native'])
+def test_rule_sync_preserves_watchdog_migration_boundary(guarded, mode, monkeypatch):
+    from backend.agents.rule_sync import prepare_candidate
+    from backend.common.dns_watchdog import ensure_local_dns_watchdog
+    no_network(monkeypatch)
+    base = real_source()
+    if mode == 'native':
+        base = native(base)
+        document = yaml.safe_load(base['oxidns']['native_config'])
+        # A native listener may directly invoke an executor. Its generated
+        # watchdog wrapper must remain stable during subsequent rule updates.
+        document['plugins'].append({'tag': 'custom_udp', 'type': 'udp_server',
+                                    'args': {'listen': '127.0.0.1:15353', 'entry': 'forward_local'}})
+        base['oxidns']['native_config'] = yaml.safe_dump(document, sort_keys=False)
+    original_source = deepcopy(base)
+    agent, receipt = real_baseline(base, 'oxidns', local_dns_watchdog=guarded)
+    previous = unpack_document(receipt['bundle'])
+    assert (ensure_local_dns_watchdog(previous) == previous) is guarded
+    current = deepcopy(base)
+    current['rule_configs'][1]['value'] = 'new-inline.test'
+    settings = {'library': False, 'rules': True}
+    projected = project_rule_changes(base, current, settings, service_type='oxidns')
+
+    candidate = prepare_candidate(agent, projected, receipt, settings, 'watchdog-rule-sync')
+
+    actual = unpack_document(candidate)
+    assert 'full:new-inline.test' in str(actual)
+    assert (ensure_local_dns_watchdog(actual) == actual) is guarded
+    assert candidate.manifest['reload_only'] is True
+    assert base == original_source
+    old_plugins = {plugin['tag']: plugin for plugin in previous['plugins']}
+    new_plugins = {plugin['tag']: plugin for plugin in actual['plugins']}
+    for tag, plugin in old_plugins.items():
+        if tag != 'sequence_main' and not tag.startswith('rules_domain_'):
+            assert new_plugins[tag] == plugin
+    # An ordinary publication always completes migration, including after an
+    # old deployment has accepted a rule-only update without the local guard.
+    _, published = real_baseline(projected, 'oxidns')
+    document = unpack_document(published['bundle'])
+    assert ensure_local_dns_watchdog(document) == document
 
 
 def test_prepare_candidate_mihomo_new_rule_cannot_smuggle_an_unpublished_group(monkeypatch):

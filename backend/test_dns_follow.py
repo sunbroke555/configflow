@@ -515,15 +515,22 @@ def test_unchanged_address_does_not_prepare_or_download_rules(follow_env, monkey
     assert any(call[2] == 'dns/active' for call in env.calls)
 
 
-@pytest.mark.parametrize(('with_dns_server', 'address_changed'), [
-    pytest.param(False, False, id='unchanged'),
-    pytest.param(True, False, id='unchanged-with-dns-server'),
-    pytest.param(False, True, id='changed'),
-    pytest.param(True, True, id='changed-with-dns-server'),
+@pytest.mark.parametrize(('with_dns_server', 'address_changed', 'legacy_baseline', 'baseline_digest', 'outage'), [
+    pytest.param(False, False, False, 'full', True, id='unchanged'),
+    pytest.param(True, False, False, 'full', True, id='unchanged-with-watchdog'),
+    pytest.param(False, True, False, 'full', True, id='changed'),
+    pytest.param(True, True, False, 'full', True, id='changed-with-watchdog'),
+    pytest.param(True, False, True, 'full', True, id='unchanged-legacy-without-watchdog'),
+    pytest.param(True, True, True, 'full', True, id='changed-legacy-retries-after-tls-outage'),
+    pytest.param(True, False, True, 'short', False, id='unchanged-legacy-short-digest'),
+    pytest.param(True, False, True, 'missing', False, id='unchanged-legacy-missing-digest'),
+    pytest.param(True, True, True, 'short', False, id='changed-legacy-short-digest'),
+    pytest.param(True, True, True, 'missing', False, id='changed-legacy-missing-digest'),
 ])
 def test_apple_tls_outage_skipped_only_for_unchanged_address(
-        follow_env, monkeypatch, with_dns_server, address_changed):
+        follow_env, monkeypatch, with_dns_server, address_changed, legacy_baseline, baseline_digest, outage):
     from backend.agents import deployment_bundle
+    from backend.common.dns_watchdog import ensure_local_dns_watchdog
 
     env = follow_env
     url = 'https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Apple/Apple.list'
@@ -559,41 +566,62 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
 
     monkeypatch.setattr(deployment_bundle, 'request_rule', fetch)
     config, revision = env.repository.get_publish_snapshot('default')
-    prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
-                                              deployment_id='target-apple-baseline')
+    with monkeypatch.context() as previous_release:
+        if legacy_baseline:
+            # The prior release delivered valid DNS server configurations
+            # before local liveness rules became part of the bundle renderer.
+            previous_release.setattr('backend.common.dns_watchdog.ensure_local_dns_watchdog',
+                                     lambda document: document)
+        prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
+                                                  deployment_id='target-apple-baseline')
     result = env.manager.publish_deployment(env.target_id, prepared['bundle'], config_revision=revision,
                                             base_url='https://config.test', resource_config=config)
     assert result['status'] == 'succeeded', result
     assert downloads == [url]
     published = env.uploaded_document()
+    if legacy_baseline:
+        assert published['plugins'][-1]['args']['entry'] == 'forward_remote'
+        assert not any(plugin.get('tag', '').startswith('cf_watchdog_') for plugin in published['plugins'])
+    if baseline_digest != 'full':
+        def replace_digest(agents):
+            target = next(item for item in agents if item['id'] == env.target_id)
+            version = target['applied_content']['config_version']
+            value = version[:8] if baseline_digest == 'short' else ''
+            target['applied_content']['config_version'] = value
+            target['config_version'] = value
+        env.manager._update_agents(replace_digest)
     env.uploads.clear()
     downloads.clear()
-    offline = True
+    offline = outage
     env.bind()
     if not address_changed:
         env.listener.update(port=1053, listen='0.0.0.0:1053')
     env.publish_source()
     dns_follow.tick(env.manager)
 
-    assert env.uploads == []
     if not address_changed:
+        assert env.uploads == []
         assert env.state()['status'] == 'succeeded', env.state()
         assert env.state()['target_deployment_id'] is None
-        assert downloads == []
+        assert downloads == ([] if baseline_digest == 'full' else [url])
         return
 
-    assert env.state()['status'] == 'failed', env.state()
-    assert '无法下载「Apple」规则集' in env.state()['message']
-    assert 'HTTPS' in env.state()['message']
-    assert downloads == [url]
-    offline = False
-    dns_follow.retry(env.manager, env.target_id)
-    env.advance('succeeded')
-    expected = deepcopy(published)
+    if outage:
+        assert env.uploads == []
+        assert env.state()['status'] == 'failed', env.state()
+        assert '无法下载「Apple」规则集' in env.state()['message']
+        assert 'HTTPS' in env.state()['message']
+        assert downloads == [url]
+        offline = False
+        dns_follow.retry(env.manager, env.target_id)
+        env.advance('succeeded')
+    else:
+        assert env.state()['status'] == 'succeeded', env.state()
+    expected = ensure_local_dns_watchdog(published)
     expected['plugins'][0]['args']['upstreams'][1]['addr'] = 'udp://127.0.0.1:2053'
     assert env.uploaded_document() == expected
     assert len(env.uploads) == 1
-    assert downloads == [url] * 3
+    assert downloads == [url] * (3 if outage else 2)
 
 
 def test_unpublished_bound_address_cannot_be_mistaken_for_live_noop(follow_env, monkeypatch):
@@ -770,6 +798,7 @@ def test_unchanged_native_include_uses_expanded_main_digest_without_preparation(
     published = env.uploaded_document()
     assert 'include' not in published
     assert any(plugin.get('tag') == 'included_dns' for plugin in published['plugins'])
+    assert any(plugin.get('tag', '').startswith('cf_watchdog_') for plugin in published['plugins'])
     env.uploads.clear()
     env.bind()
     env.listener.update(port=1053, listen='0.0.0.0:1053')
@@ -957,19 +986,26 @@ def test_source_profile_change_during_preparation_invalidates_binding(follow_env
     assert env.state()['status'] == 'failed'
 
 
-def test_changed_managed_resource_blocks_automatic_publication(follow_env):
+@pytest.mark.parametrize('legacy_baseline', [False, True])
+def test_changed_managed_resource_blocks_automatic_publication(follow_env, monkeypatch, legacy_baseline):
     env = follow_env
     settings = deepcopy(env.repository.get_profile('default')['oxidns'])
     document = yaml.safe_load(settings['native_config'])
     document['plugins'].append({'tag': 'domains', 'type': 'domain_set',
                                 'args': {'files': ['rules/domains.txt']}})
+    document['plugins'].append({'tag': 'dns', 'type': 'udp_server',
+                                'args': {'listen': '127.0.0.1:5353', 'entry': 'forward_remote'}})
     settings.update(native_config=yaml.safe_dump(document), additional_files=[{
         'path': 'rules/domains.txt', 'encoding': 'text', 'content': 'full:before.example.test\n',
     }])
     env.repository.save_profile('default', {'oxidns': settings})
     config, revision = env.repository.get_publish_snapshot('default')
-    prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
-                                               deployment_id='baseline-with-resource')
+    with monkeypatch.context() as previous_release:
+        if legacy_baseline:
+            previous_release.setattr('backend.common.dns_watchdog.ensure_local_dns_watchdog',
+                                     lambda document: document)
+        prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
+                                                   deployment_id='baseline-with-resource')
     result = env.manager.publish_deployment(env.target_id, prepared['bundle'], config_revision=revision,
                                             base_url='https://config.test', resource_config=config)
     assert result['status'] == 'succeeded'

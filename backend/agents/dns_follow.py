@@ -274,6 +274,11 @@ def _prepare(agent, config, base_url, deployment_id):
     return _prepare_transactional_content(agent, config, base_url=base_url, deployment_id=deployment_id)
 
 
+def _generated_main(config, baseline):
+    from backend.converters.oxidns import generate_oxidns_config
+    return yaml.safe_load(generate_oxidns_config(config, base_url=baseline.get('base_url', '')))
+
+
 def _matches_applied_config(target, config, baseline):
     """Prove the draft upstream belongs to the confirmed live main file.
 
@@ -285,9 +290,26 @@ def _matches_applied_config(target, config, baseline):
     if (not isinstance(version, str) or not re.fullmatch(r'[0-9a-f]{64}', version)
             or target.get('config_version') != version):
         return False
-    from backend.converters.oxidns import generate_oxidns_config
-    main = yaml.safe_load(generate_oxidns_config(config, base_url=baseline.get('base_url', '')))
-    return hashlib.sha256(render_deployment_config(main)).hexdigest() == version
+    main = _generated_main(config, baseline)
+    # Existing publications may predate the local watchdog. Both renderings
+    # retain the bound upstream; a no-op does not need to add the local probe.
+    return any(hashlib.sha256(render_deployment_config(
+        main, 'oxidns', local_dns_watchdog=watchdog)).hexdigest() == version
+        for watchdog in (False, True))
+
+
+def _matches_applied_bundle(bundle, config, baseline):
+    if deployment_content_fingerprint(bundle.manifest) == baseline['fingerprint']:
+        return True
+    # A full publication adds the local probe, but the confirmed baseline may
+    # predate it. Compare the original rendering with the SAME materialized
+    # resources so a guard migration cannot hide draft edits or rule changes.
+    legacy_main = render_deployment_config(_generated_main(config, baseline), 'oxidns', local_dns_watchdog=False)
+    manifest = deepcopy(bundle.manifest)
+    for item in manifest['files']:
+        if item['path'] == manifest['config_path']:
+            item.update(sha256=hashlib.sha256(legacy_main).hexdigest(), size=len(legacy_main))
+    return deployment_content_fingerprint(manifest) == baseline['fingerprint']
 
 
 def _check_ownership(manager, agents, target, source, binding, source_id, baseline):
@@ -432,7 +454,7 @@ def _run(manager, target, source, binding, source_state):
         return
     _state(manager, target_id, 'preparing', '正在核对 OxiDNS 配置与规则文件是否存在未发布修改')
     prepared = _prepare(target, config, base_url, child_id)
-    if deployment_content_fingerprint(prepared['bundle'].manifest) != baseline['fingerprint']:
+    if not _matches_applied_bundle(prepared['bundle'], config, baseline):
         raise FollowError('OxiDNS 有其他未发布的配置或规则变化，请先手动发布这些修改，再重试联动')
     scheme, endpoint = address.split('://', 1)
     _state(manager, target_id, 'preparing', f'正在同步 OxiDNS 上游为 {endpoint}（{scheme.upper()}）', address=address)
