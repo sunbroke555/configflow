@@ -50,6 +50,15 @@ async function search(value: string) {
 }
 
 describe('OxiDNS parameter picker', () => {
+  it('supports a local popover layer above a containing sheet', async () => {
+    const wrapper = render()
+    await wrapper.setProps({contentClass: 'z-[70]'})
+    await open(wrapper)
+    const popover = document.querySelector('[aria-label="转发上游 参数选择"]')!
+    expect(popover.classList.contains('z-[70]')).toBe(true)
+    expect(popover.classList.contains('z-50')).toBe(false)
+    expect(options()).toHaveLength(3)
+  })
   it('identifies the destination scope without affecting search or parameter selection', async () => {
     const wrapper = render()
     await wrapper.setProps({ scopeTitle: '日志轮转' })

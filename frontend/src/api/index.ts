@@ -331,7 +331,7 @@ export const oxidnsApi = {
   prepareEditor: (settings: unknown, profileId?: string) => api.post('/oxidns/editor', { settings, base_url: getBaseUrl() }, profileOptions(profileId)),
   readCommonSettings: (settings: unknown, profileId?: string) => api.post('/oxidns/common-settings', { settings, base_url: getBaseUrl() }, profileOptions(profileId)),
   applyCommonSettings: (settings: unknown, changes: Record<string, unknown>, profileId?: string) => api.post('/oxidns/common-settings/apply', { settings, changes, base_url: getBaseUrl() }, profileOptions(profileId)),
-  applyNativeSettings: (settings: unknown, native_config: string, profileId?: string, renames?: Record<string, string>) => api.post('/oxidns/native-settings/apply', { settings, native_config, renames, base_url: getBaseUrl() }, profileOptions(profileId))
+  applyNativeSettings: (settings: unknown, native_config: string, profileId?: string, renames?: Record<string, string>, standard_add?: string[]) => api.post('/oxidns/native-settings/apply', { settings, native_config, renames, standard_add, base_url: getBaseUrl() }, profileOptions(profileId))
 }
 
 // 配置导入导出

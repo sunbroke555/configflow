@@ -144,13 +144,13 @@ const editedInput = ref(false)
 const dirty = computed(() => Boolean(settings.value) && (validationSource.value !== savedSource.value || applying.value || nativePending.value || Boolean(pendingCount.value) || (editedInput.value && Boolean(editorError.value))))
 function markEdited() { if (!loading.value) editedInput.value = true }
 function nativeSyncPending(value: boolean) { nativePending.value = value; if (value) markEdited() }
-async function reconcileNative(before: string, candidate: string, renames?: Record<string, string>) {
+async function reconcileNative(before: string, candidate: string, renames?: Record<string, string>, standardAdd?: string[]) {
   const request = ++nativeRequest
   const version = loadVersion
   const profileId = props.profileId
   if (!settings.value || settings.value.native_config !== before) throw new Error('配置已变化，请撤销未同步修改后重新编辑。')
   const source = JSON.stringify(settings.value)
-  const response = await oxidnsApi.applyNativeSettings(settings.value, candidate, profileId, renames)
+  const response = await oxidnsApi.applyNativeSettings(settings.value, candidate, profileId, renames, standardAdd)
   if (request !== nativeRequest || version !== loadVersion || profileId !== props.profileId || !props.open || JSON.stringify(settings.value) !== source) {
     throw new Error('当前配置已切换，本次同步结果已忽略。')
   }

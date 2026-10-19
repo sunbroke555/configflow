@@ -9,7 +9,7 @@ from backend.common.oxidns_editor import prepare_editor
 from backend.common.oxidns_native_apply import apply_native_settings
 from backend.common.oxidns_references import OxidnsReferenceError
 from backend.common.oxidns_validation import validate_settings
-from backend.converters.oxidns import get_oxidns_ruleset_downloads
+from backend.converters.oxidns import get_oxidns_ruleset_downloads, get_oxidns_custom_files
 from backend.test_oxidns_common import prepared, apply, doc, plugin, edited
 from backend.test_oxidns_integration import oxidns_app
 
@@ -296,3 +296,117 @@ def test_native_apply_api_roundtrips_credentials_capability_urls_and_parked_meta
     assert '[REDACTED]' not in result['settings']['native_config']
     assert response.headers['Cache-Control'] == 'no-store'
     assert repository.get_profile('office') == before
+
+
+@pytest.mark.parametrize('intent', ['lazy_cache', [1], ['lazy_cache', 'lazy_cache'], ['unknown'], ['forward_local'], ['query_recorder']])
+def test_invalid_standard_add_intent_is_rejected_without_mutating_settings(intent):
+    settings = prepared()
+    candidate = doc(settings)
+    candidate['plugins'].append({'tag': 'query_recorder', 'type': 'cache', 'args': {}})
+    original = deepcopy(settings)
+    with pytest.raises(ValueError, match='standard_add|标准功能'):
+        apply_native_settings(settings, yaml.safe_dump(candidate), {}, standard_add=intent)
+    assert settings == original
+
+
+@pytest.mark.parametrize('args', [{}, None, {'size': None, 'future': [0, False, None]}])
+def test_raw_canonical_addition_keeps_explicit_empty_and_null_arguments(args):
+    settings = apply(prepared(), {'cache_enabled': False})['settings']
+    result = change(settings, lambda d: d['plugins'].append({'tag': 'lazy_cache', 'type': 'cache', 'args': deepcopy(args)}))
+    assert plugin(doc(result['settings']), 'lazy_cache')['args'] == args
+    assert plugin(doc(result['settings']), 'china_dns')['args'].count({'exec': '$lazy_cache'}) == 1
+
+
+@pytest.mark.parametrize('standard', [False, True])
+def test_hosts_native_roundtrip_restores_resource_bytes_and_exact_main_pair(standard):
+    settings = prepared(custom_hosts='full:roundtrip.test 192.0.2.19\n')
+    source = get_oxidns_custom_files({'oxidns': settings})
+    definition = deepcopy(plugin(doc(settings), 'custom_hosts'))
+    disabled = delete(settings, 'custom_hosts')['settings']
+    assert get_oxidns_custom_files({'oxidns': disabled}) == []
+    candidate = doc(disabled)
+    candidate['plugins'].append({**definition, 'args': {}} if standard else definition)
+    result = apply_native_settings(disabled, yaml.safe_dump(candidate), {}, standard_add=['custom_hosts'] if standard else None)
+    assert get_oxidns_custom_files({'oxidns': result['settings']}) == source
+    assert plugin(doc(result['settings']), 'sequence_main') == plugin(doc(settings), 'sequence_main')
+    assert 'native_hosts_source' not in result['settings']['_common_disabled']
+
+
+def test_raw_hosts_addition_preserves_private_files_and_inline_entries():
+    settings = prepared()
+    settings['additional_files'] = [{'path': 'rules/private-hosts.txt', 'content': 'full:file.test 192.0.2.30\n', 'encoding': 'text'}]
+    definition = {'tag': 'custom_hosts', 'type': 'hosts', 'args': {
+        'files': ['./rules/private-hosts.txt'], 'entries': ['full:inline.test 192.0.2.31'], 'short_circuit': False}}
+    result = change(settings, lambda d: d['plugins'].append(deepcopy(definition)))
+    assert plugin(doc(result['settings']), 'custom_hosts') == definition
+    main = plugin(doc(result['settings']), 'sequence_main')['args']
+    index = main.index({'exec': '$custom_hosts'})
+    assert main[index + 1] == {'matches': ['has_resp'], 'exec': 'accept'}
+    assert result['settings']['custom_hosts'] == ''
+    assert get_oxidns_custom_files({'oxidns': result['settings']}) == get_oxidns_custom_files({'oxidns': settings})
+    assert validate_settings(result['settings'])['valid']
+
+
+def test_standard_hosts_restore_recovers_inline_rules_without_a_common_source():
+    definition = {'tag': 'custom_hosts', 'type': 'hosts', 'args': {'entries': ['full:inline.test 192.0.2.31'], 'short_circuit': False}}
+    settings = change(prepared(), lambda d: d['plugins'].append(deepcopy(definition)))['settings']
+    assert settings['custom_hosts'] == ''
+    settings = delete(settings, 'custom_hosts')['settings']
+    candidate = doc(settings)
+    candidate['plugins'].append({'tag': 'custom_hosts', 'type': 'hosts', 'args': {}})
+    result = apply_native_settings(settings, yaml.safe_dump(candidate), {}, standard_add=['custom_hosts'])
+    assert plugin(doc(result['settings']), 'custom_hosts') == definition
+    assert plugin(doc(result['settings']), 'sequence_main')['args'].count({'exec': '$custom_hosts'}) == 1
+    assert validate_settings(result['settings'])['valid']
+
+
+@pytest.mark.parametrize('replacement', ['', 'full:new.test 192.0.2.32\n'])
+def test_common_hosts_edit_invalidates_native_parked_source_before_standard_restore(replacement):
+    settings = delete(prepared(custom_hosts='full:old.test 192.0.2.31\n'), 'custom_hosts')['settings']
+    settings = apply(settings, {'custom_hosts': replacement})['settings']
+    if replacement:
+        settings = delete(settings, 'custom_hosts')['settings']
+    elif any(item['tag'] == 'custom_hosts' for item in doc(settings)['plugins']):
+        settings = delete(settings, 'custom_hosts')['settings']
+    candidate = doc(settings)
+    candidate['plugins'].append({'tag': 'custom_hosts', 'type': 'hosts', 'args': {}})
+    result = apply_native_settings(settings, yaml.safe_dump(candidate), {}, standard_add=['custom_hosts'])
+    files = get_oxidns_custom_files({'oxidns': result['settings']})
+    assert 'full:old.test' not in str(files)
+    if replacement:
+        assert any('full:new.test' in item['content'] for item in files)
+
+
+@pytest.mark.parametrize('prefix', ['/api/oxidns', '/api/profiles/office/oxidns'])
+def test_standard_add_api_restores_parked_values_without_persisting(oxidns_app, prefix):
+    app, repository = oxidns_app
+    settings = prepared(query_recorder={'enabled': True, 'args': {'path': './state/private-log.db', 'max_entries': 321}})
+    settings = delete(settings, 'query_recorder')['settings']
+    candidate = doc(settings)
+    candidate['plugins'].append({'tag': 'query_recorder', 'type': 'query_recorder', 'args': {}})
+    before = deepcopy(repository.get_profile('office'))
+    response = app.test_client().post(prefix + '/native-settings/apply?profile=office', json={
+        'settings': settings, 'native_config': yaml.safe_dump(candidate), 'standard_add': ['query_recorder']})
+    assert response.status_code == 200, response.get_json()
+    result = response.get_json()
+    assert plugin(doc(result['settings']), 'query_recorder')['args']['path'] == './state/private-log.db'
+    assert plugin(doc(result['settings']), 'sequence_main')['args'].count({'exec': '$query_recorder'}) == 1
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert repository.get_profile('office') == before
+
+
+def test_standard_batch_restores_adguard_resource_before_restarting_updater():
+    settings = prepared(adguard={'enabled': True, 'urls': ['https://example.test/live']}, rule_update={'enabled': True})
+    original = doc(settings)
+    settings = delete(settings, 'adguard_rules')['settings']
+    candidate = doc(settings)
+    candidate['plugins'].extend([
+        {'tag': 'adguard_rules', 'type': 'adguard_rule', 'args': {}},
+        {'tag': 'rules_download', 'type': 'download', 'args': {}},
+    ])
+    result = apply_native_settings(settings, yaml.safe_dump(candidate), {}, standard_add=['adguard_rules', 'rules_download'])
+    for tag in ('adguard_rules', 'adguard_reject', 'rules_download', 'rules_reload', 'rules_refresh', 'rules_cron'):
+        assert plugin(doc(result['settings']), tag) == plugin(original, tag)
+    assert result['values']['adguard']['enabled'] is True
+    assert result['values']['rule_update']['enabled'] is True
+    assert validate_settings(result['settings'])['valid']

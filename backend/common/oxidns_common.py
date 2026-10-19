@@ -948,6 +948,9 @@ def _patch_rule_update(ctx, changes, config, base_url):
 def _patch_resources(ctx, changes, config, base_url):
     from backend.converters.oxidns import _tag, _hosts_file_content
     if 'custom_hosts' in changes:
+        # A direct resource edit supersedes content parked by native deletion.
+        # Re-adding the feature must not revive a mapping the user withdrew.
+        ctx.parked.pop('native_hosts_source', None)
         content = changes['custom_hosts'] or ''
         previous_content = ctx.settings.get('custom_hosts', '')
         if content.strip():

@@ -134,7 +134,7 @@ def apply_oxidns_native_settings():
     from backend.common.oxidns_native_apply import apply_native_settings
     try:
         value, base_url = _editor_request()
-        return _editor_response(apply_native_settings(value['settings'], value.get('native_config'), get_config(), base_url, value.get('renames')))
+        return _editor_response(apply_native_settings(value['settings'], value.get('native_config'), get_config(), base_url, value.get('renames'), value.get('standard_add')))
     except OxidnsSettingsError as exc:
         payload = {'success': False, 'message': str(exc)}
         if getattr(exc, 'references', None):

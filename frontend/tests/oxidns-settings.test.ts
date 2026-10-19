@@ -48,7 +48,7 @@ beforeEach(() => {
     settings.native_config = dumpYaml(document)
     return { data: { settings, ...projection(settings) } } as any
   })
-  vi.mocked(oxidnsApi.applyNativeSettings).mockImplementation(async (value: any, native_config, _profileId?: string, _renames?: Record<string, string>) => {
+  vi.mocked(oxidnsApi.applyNativeSettings).mockImplementation(async (value: any, native_config, _profileId?: string, _renames?: Record<string, string>, _standardAdd?: string[]) => {
     const settings = {...JSON.parse(JSON.stringify(value)), native_config}
     return {data: {settings, ...projection(settings), notices: []}} as any
   })
@@ -419,6 +419,27 @@ describe('unified OxiDNS profile settings', () => {
     expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
   })
 
+  it('passes explicit standard restoration intent and saves restored parameters with returned metadata', async () => {
+    const cache = {tag: 'lazy_cache', type: 'cache', args: {size: 4096, lazy_cache_ttl: 900, extension: false}}
+    const original = {...settings(), common_editor_state: {parked_plugins: {lazy_cache: cache}, unrelated: {keep: false}}}
+    const doc = loadYaml(original.native_config) as any
+    doc.plugins = [cache, {tag: 'main', type: 'sequence', args: [{exec: '$lazy_cache'}, {exec: 'reject 0'}]}]
+    const restored = {...original, native_config: dumpYaml(doc), common_editor_state: {unrelated: {keep: false}}}
+    vi.mocked(oxidnsApi.getSettings).mockResolvedValue({data: original} as any)
+    vi.mocked(oxidnsApi.applyNativeSettings).mockResolvedValueOnce({data: {settings: restored, ...projection(restored), notices: ['已恢复主缓存及原参数']}} as any)
+    const wrapper = await render()
+    await click('完整参数', views())
+    wrapper.getComponent(OxidnsNativeEditor).getComponent(OxidnsConfigNavigation).vm.$emit('select', 'add:standard:lazy_cache')
+    await flushPromises(); await settleValidation()
+    expect(oxidnsApi.applyNativeSettings).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({native_config: original.native_config, common_editor_state: original.common_editor_state}), expect.any(String), 'oxi-profile', undefined, ['lazy_cache'])
+    const candidate = loadYaml(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[0][1]) as any
+    expect(candidate.plugins.at(-1)).toEqual({tag: 'lazy_cache', type: 'cache', args: {}})
+    expect(document.body.textContent).toContain('已恢复主缓存及原参数')
+    expect((document.querySelector('[aria-label="插件 1.args.size 值"]') as HTMLInputElement).value).toBe('4096')
+    await click('保存草稿')
+    expect(savedPayload()).toEqual(restored)
+  })
+
   it('blocks saving and publishing while native synchronization is pending and protects its dirty draft', async () => {
     let resolveApply!: (value: any) => void
     vi.mocked(oxidnsApi.applyNativeSettings).mockImplementationOnce(() => new Promise(resolve => { resolveApply = resolve }))
@@ -461,7 +482,7 @@ describe('unified OxiDNS profile settings', () => {
     const second = reconcile(config, latest.native_config, {main: 'new_main'})
     const outcomes = Promise.allSettled([first, second])
     expect(oxidnsApi.applyNativeSettings).toHaveBeenCalledTimes(2)
-    expect(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[1]).toEqual([expect.objectContaining({native_config: config}), latest.native_config, 'oxi-profile', {main: 'new_main'}])
+    expect(vi.mocked(oxidnsApi.applyNativeSettings).mock.calls[1]).toEqual([expect.objectContaining({native_config: config}), latest.native_config, 'oxi-profile', {main: 'new_main'}, undefined])
     // Both callbacks run before the editor accepts the winning text. A shared
     // response slot must not let the older response replace its full metadata.
     resolvers[1]({data: {settings: latest, ...projection(latest), notices: ['最新联动']}})

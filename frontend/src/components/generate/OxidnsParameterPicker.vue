@@ -13,6 +13,7 @@ const props = withDefaults(defineProps<{
   buttonText?: string
   scopeTitle?: string
   compactMobile?: boolean
+  contentClass?: string
 }>(), { buttonText: '添加参数' })
 
 const emit = defineEmits<{ select: [key: string] }>()
@@ -50,6 +51,7 @@ function select(key: string) {
       align="start"
       :collision-padding="12"
       class="w-[28rem] max-w-[min(calc(100vw-1.5rem),var(--reka-popover-content-available-width))] overflow-hidden p-0 shadow-overlay"
+      :class="contentClass"
       :aria-label="`${label} 参数选择`"
     >
       <div v-if="scopeTitle" class="flex h-9 min-w-0 items-center gap-1 border-b border-border px-3 text-xs text-muted-foreground">

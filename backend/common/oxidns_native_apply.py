@@ -8,7 +8,7 @@ import re
 
 import yaml
 
-from backend.common.oxidns_common import apply_common_settings, read_common_settings, _TAG_TYPES
+from backend.common.oxidns_common import apply_common_settings, read_common_settings, _TAG_TYPES, _Context
 from backend.common.oxidns_editor import prepare_editor, _same
 from backend.common.oxidns_native import load_native_yaml, TAG
 from backend.common.oxidns_references import OxidnsReferenceError, reference_locations
@@ -19,6 +19,9 @@ _FEATURES = {'lazy_cache': 'cache_enabled', 'local_probe_cache': 'probe_cache_en
 _FALLBACK = {'forward_fallback', 'fallback_dns', 'fallback'}
 _ADGUARD = {'adguard_rules', 'adguard_block', 'adguard_reject'}
 _UPDATER = {'rules_download', 'rules_reload', 'rules_refresh', 'rules_cron'}
+_DYNAMIC = {'dynamic_domains', 'learn_classified_domain'}
+_ADDITIONS = set(_FEATURES) | _DYNAMIC | _ADGUARD | _UPDATER | _FALLBACK | {'custom_hosts'}
+_STANDARD = set(_FEATURES) | _DYNAMIC | {'adguard_rules', 'rules_download', 'custom_hosts', 'forward_fallback'}
 _WRAPPERS = ('china_dns', 'direct_ip', 'default_direct_ip')
 _MANAGED = set(_TAG_TYPES) | set(_WRAPPERS) | {
     'sequence_main', 'remote_dns', 'local_probe', 'proxy_dns_seq', 'ip_requery_proxy',
@@ -120,7 +123,159 @@ def _shape_reference(candidate, targets, message):
     return []
 
 
-def apply_native_settings(settings, native_config, config, base_url='', renames=None):
+def _merge_missing(default, explicit):
+    """Standard-entry intent supplies defaults only for omitted object fields."""
+    if isinstance(default, dict) and isinstance(explicit, dict):
+        return {**deepcopy(default), **{key: _merge_missing(default.get(key), value) for key, value in explicit.items()}}
+    return deepcopy(explicit)
+
+
+def _addition_targets(added):
+    targets = set(added)
+    for group in (_DYNAMIC, _ADGUARD, _UPDATER, _FALLBACK):
+        if added & group:
+            targets.update(group)
+    return targets
+
+
+def _activate(current, candidate, added, standard_add, config, base_url, notices):
+    """Connect canonical additions using common lifecycle, without guessing custom tags."""
+    proposed = _plugins(candidate)
+    additions = {tag for tag in added & _ADDITIONS if proposed[tag].get('type') == _TAG_TYPES.get(tag, 'sequence')}
+    if not additions:
+        return current, candidate
+    targets = _addition_targets(additions)
+    if candidate.get('include'):
+        raise OxidnsReferenceError('配置包含 include，不能自动接入标准功能', [{'path': ['include'], 'tag': None, 'reason': '附加文件中可能存在共享引用'}])
+    refs = reference_locations(_mask_owned(candidate, targets), targets)
+    # Masking owned nodes must not hide unresolved executors inside a new node.
+    refs += [item for item in reference_locations(candidate) if item not in refs]
+    if refs:
+        raise OxidnsReferenceError('不能自动接入共享或自定义处理链，请先调整引用', refs)
+    explicit = {tag: deepcopy(proposed[tag]) for tag in additions}
+    working = deepcopy(candidate)
+    parked = current.setdefault('_common_disabled', {})
+    if not isinstance(parked, dict):
+        raise OxidnsSettingsError('暂存参数结构无效，请先在完整参数中修正')
+    # A dedicated standard-entry action may restore omitted options. Ordinary
+    # native additions retain their exact args, including null/empty values.
+    for tag in standard_add & additions:
+        if tag == 'forward_fallback':
+            saved = parked.get(tag, {})
+            saved = saved if isinstance(saved, dict) and saved.get('type') == 'forward' else {'tag': tag, 'type': 'forward', 'args': {}}
+            saved = deepcopy(saved)
+            if not isinstance(saved.get('args'), dict):
+                saved['args'] = {}
+            saved['args']['upstreams'] = []  # Empty never revives parked DNS.
+            proposed[tag].clear()
+            proposed[tag].update(_merge_missing(saved, explicit[tag]))
+    working = deepcopy(candidate)
+    working['plugins'] = [item for item in working['plugins'] if item['tag'] not in standard_add - {'forward_fallback'}]
+
+    changes = {_FEATURES[tag]: True for tag in additions & set(_FEATURES)}
+    if additions & _DYNAMIC:
+        changes['dynamic_domain_set.enabled'] = True
+        if 'learn_classified_domain' in additions:
+            changes['dynamic_domain_set.learn'] = True
+    if additions & _ADGUARD:
+        changes['adguard.enabled'] = True
+        if additions & _UPDATER or 'adguard_rules' in standard_add:
+            # Resource providers must exist before the updater computes its live
+            # download targets; a batch can restore both standard entries.
+            current['native_config'] = yaml.safe_dump(working, allow_unicode=True, sort_keys=False)
+            try:
+                current = apply_common_settings(current, {'adguard.enabled': True}, config, base_url)['settings']
+            except OxidnsSettingsError as exc:
+                raise OxidnsReferenceError(str(exc), _shape_reference(candidate, _ADGUARD, str(exc))) from None
+            working = load_native_yaml(current['native_config'])
+            if 'adguard_rules' in standard_add:
+                provider = _plugins(working)['adguard_rules']
+                restored = _merge_missing(provider, explicit['adguard_rules'])
+                provider.clear()
+                provider.update(restored)
+    if additions & _UPDATER:
+        from backend.common.oxidns_common_routing import resource_downloads
+        from backend.common.oxidns_common_updates import _path, _REFRESH, _DOWNLOAD_ONLY
+        available = resource_downloads(working, current, config, base_url)
+        if not available:
+            raise OxidnsReferenceError('规则定时更新需要当前配置引用至少一个可下载订阅', _shape_reference(candidate, additions & _UPDATER, '请先添加当前使用的订阅源'))
+        refresh = proposed.get('rules_refresh')
+        if refresh and refresh.get('args') not in (_REFRESH, _DOWNLOAD_ONLY):
+            raise OxidnsReferenceError('规则更新包含自定义步骤，不能自动接入定时任务', _shape_reference(candidate, {'rules_refresh'}, '请在执行序列表单配置更新调用'))
+        download = proposed.get('rules_download')
+        stored_paths = parked.get('rules_download_managed_paths', [])
+        historical = {path for path in stored_paths if isinstance(path, str)} if isinstance(stored_paths, list) else set()
+        desired = {_path(item) for item in available}
+        if download and isinstance(download.get('args'), dict) and isinstance(download['args'].get('downloads'), list):
+            if any(_path(item) in historical - desired for item in download['args']['downloads']):
+                raise OxidnsReferenceError('新增下载插件仍包含已撤回的受管资源，请先删除旧下载条目', _shape_reference(candidate, {'rules_download'}, '下载目标已经不再被当前配置引用'))
+        # An added cron already has its job, but its dependencies may be parked.
+        # Let common enabling recreate them before restoring the explicit job.
+        if 'rules_cron' in additions:
+            cron = next((item for item in working['plugins'] if item['tag'] == 'rules_cron'), None)
+            if cron and isinstance(cron.get('args'), dict) and isinstance(cron['args'].get('jobs'), list):
+                jobs = cron['args']['jobs']
+                if any(isinstance(job, dict) and job.get('name') == 'refresh_rules' and job.get('executors') == ['$rules_refresh'] for job in jobs):
+                    cron['args']['jobs'] = [job for job in jobs if not (isinstance(job, dict) and job.get('name') == 'refresh_rules')]
+        changes['rule_update.enabled'] = True
+    if additions & _FALLBACK:
+        backup = next((item for item in working['plugins'] if item['tag'] == 'forward_fallback'), {})
+        args = backup.get('args')
+        if isinstance(args, dict) and _upstreams_state(args.get('upstreams')) == 'ready':
+            changes['fallback_dns'] = yaml.safe_dump(args['upstreams'], allow_unicode=True, sort_keys=False)
+        else:
+            notices.append('备用 DNS 地址尚未填写，已保留表单草稿，未接入代理回退链')
+
+    current['native_config'] = yaml.safe_dump(working, allow_unicode=True, sort_keys=False)
+    if changes:
+        try:
+            current = apply_common_settings(current, changes, config, base_url)['settings']
+        except OxidnsSettingsError as exc:
+            raise OxidnsReferenceError(str(exc), _shape_reference(candidate, targets, str(exc))) from None
+        working = load_native_yaml(current['native_config'])
+    active = _plugins(working)
+    for tag, value in explicit.items():
+        if tag == 'custom_hosts':
+            continue
+        if tag in active:
+            restored = _merge_missing(active[tag], value) if tag in standard_add else value
+            if tag == 'forward_fallback' and tag in standard_add:
+                restored = deepcopy(proposed[tag])
+            active[tag].clear()
+            active[tag].update(deepcopy(restored))
+
+    if 'custom_hosts' in additions:
+        ctx = _Context(working, current)
+        _, capability = ctx.call_state('custom_hosts', ('sequence_main',))
+        if not capability['editable']:
+            raise OxidnsReferenceError(capability['reason'], _shape_reference(candidate, {'custom_hosts'}, capability['reason']))
+        source = ctx.parked.get('native_hosts_source')
+        defaults = ctx.parked.get('custom_hosts', {'tag': 'custom_hosts', 'type': 'hosts', 'args': {'files': []}})
+        value = _merge_missing(defaults, explicit['custom_hosts']) if 'custom_hosts' in standard_add else explicit['custom_hosts']
+        host = ctx.ensure('custom_hosts', {}, 'hosts')
+        host.clear()
+        host.update(deepcopy(value))
+        args = host.get('args')
+        paths = args.get('files', []) if isinstance(args, dict) else []
+        if isinstance(source, str) and any(path in ('./rules/custom_hosts.txt', 'rules/custom_hosts.txt') for path in paths):
+            current['custom_hosts'] = source
+        ctx.parked.pop('native_hosts_source', None)
+        main = ctx.sequence('sequence_main')
+        call, accept = {'exec': '$custom_hosts'}, {'matches': ['has_resp'], 'exec': 'accept'}
+        if call in main:
+            index = main.index(call)
+            if main[index + 1:index + 2] != [accept]:
+                raise OxidnsReferenceError('Hosts 使用了自定义返回处理，请在完整参数中调整', _shape_reference(candidate, {'custom_hosts'}, 'Hosts 调用后需要明确的响应处理'))
+        else:
+            index = next((i for i, item in enumerate(main) if item.get('exec') not in ('metrics_collector metrics', '$query_recorder', 'prefer_ipv4') and not str(item.get('matches', [''])[0] if item.get('matches') else '').startswith('qtype ')), 0)
+            main[index:index] = [call, accept]
+    current['native_config'] = yaml.safe_dump(working, allow_unicode=True, sort_keys=False)
+    if changes or 'custom_hosts' in additions:
+        notices.append('已接入新增的标准功能，并同步恢复所需依赖和处理链')
+    return current, working
+
+
+def apply_native_settings(settings, native_config, config, base_url='', renames=None, standard_add=None):
     if not isinstance(native_config, str):
         raise OxidnsSettingsError('native_config 必须为 YAML 文本')
     current = prepare_editor(settings, config, base_url)
@@ -135,12 +290,19 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
     if renames is not None and (not isinstance(renames, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in renames.items())):
         raise OxidnsSettingsError('renames 必须为原 tag 到新 tag 的文本映射')
     renames = deepcopy(renames or {})
+    if standard_add is not None and (not isinstance(standard_add, list) or any(not isinstance(tag, str) for tag in standard_add) or len(set(standard_add)) != len(standard_add)):
+        raise OxidnsSettingsError('standard_add 必须为不重复的标准功能 tag 数组')
+    standard_add = set(standard_add or [])
+    if any(tag not in _STANDARD or tag not in added or proposed[tag].get('type') != _TAG_TYPES.get(tag, 'sequence') for tag in standard_add):
+        raise OxidnsSettingsError('标准功能新增必须对应唯一、类型正确且尚不存在的标准插件')
     if len(set(renames.values())) != len(renames) or any(tag not in removed or new not in added for tag, new in renames.items()):
         raise OxidnsSettingsError('重命名映射必须对应唯一的原插件和新增 tag，不能覆盖现有插件')
     for tag in sorted(removed - set(renames)):
-        matches = [name for name in added - set(renames.values()) if _same(_without_tag(old[tag]), _without_tag(proposed[name]))]
+        matches = [name for name in added - set(renames.values()) - standard_add if _same(_without_tag(old[tag]), _without_tag(proposed[name]))]
         if len(matches) == 1 and sum(_same(_without_tag(old[other]), _without_tag(proposed[matches[0]])) for other in removed - set(renames)) == 1:
             renames[tag] = matches[0]
+    if standard_add & set(renames.values()):
+        raise OxidnsSettingsError('标准功能新增不能同时作为插件重命名目标')
     if any(not new or len(new) > 64 or not TAG.fullmatch(new) or new.startswith(('qs.exec.', 'qs.match.', 'qs.cron.')) or old[tag].get('type') != proposed[new].get('type') for tag, new in renames.items()):
         raise OxidnsSettingsError('重命名需要有效的非空 tag，并保持插件类型；请继续在完整参数中填写')
     if removed and any(not name.strip() for name in added):
@@ -172,6 +334,9 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
             if tag in _MANAGED and not originals:
                 aliases[tag] = new
         proposed = _plugins(candidate)
+
+    additions = (added - set(renames.values())) & _ADDITIONS
+    additions = {tag for tag in additions if proposed[tag].get('type') == _TAG_TYPES.get(tag, 'sequence')}
 
     changes, targets = {}, set()
     for tag in removed:
@@ -206,9 +371,10 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         if previous_state == 'ready' and next_state == 'empty':
             changes['fallback_dns'] = ''
             targets.update(_FALLBACK)
-        elif previous_state != 'ready' and next_state == 'ready':
-            changes['fallback_dns'] = yaml.safe_dump(backup['args']['upstreams'], allow_unicode=True, sort_keys=False)
-            targets.update(_FALLBACK)
+        elif previous_state != 'ready' and next_state == 'ready' and 'forward_fallback' not in renames.values():
+            additions.add('forward_fallback')
+    if removed & _addition_targets(additions):
+        raise OxidnsReferenceError('同一次修改不能删除标准功能的依赖并重新启用该功能，请分步调整', _shape_reference(candidate, additions, '新增功能仍需要本次删除的依赖'))
     cron = proposed.get('rules_cron')
     previous_cron = old.get('rules_cron')
     if cron and previous_cron and isinstance(cron.get('args'), dict) and isinstance(previous_cron.get('args'), dict):
@@ -234,7 +400,7 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         except OxidnsSettingsError as exc:
             # The form may have explicitly removed all affected calls already.
             # Such a native repair needs no guessing about a custom chain.
-            if removed and not reference_locations(candidate, removed):
+            if removed and not additions and not reference_locations(candidate, removed):
                 current['native_config'] = yaml.safe_dump(candidate, allow_unicode=True, sort_keys=False)
             else:
                 raise OxidnsReferenceError(str(exc), _shape_reference(candidate, targets, str(exc))) from None
@@ -245,9 +411,17 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         # removes the call/file but retains an empty definition. Explicit form
         # deletion removes that now-unused definition too.
         candidate['plugins'] = [item for item in candidate.get('plugins', []) if item.get('tag') not in removed]
+        if 'custom_hosts' in removed:
+            parked = current.setdefault('_common_disabled', {})
+            parked['custom_hosts'] = deepcopy(old['custom_hosts'])
+            if isinstance(settings.get('custom_hosts'), str) and settings['custom_hosts'].strip():
+                parked['native_hosts_source'] = settings['custom_hosts']
         notices.append('已同步停用关联功能、处理链和受管资源；可恢复参数已保留')
     else:
         current['native_config'] = native_config
+
+    if additions:
+        current, candidate = _activate(current, candidate, additions, standard_add, config, base_url, notices)
 
     # This also protects deletion of custom executors. We do not repair arbitrary
     # native chains, but point to their exact remaining references in the form.
@@ -256,7 +430,7 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         if refs:
             original_refs = reference_locations(_mask_owned(original_candidate, targets), removed)
             raise OxidnsReferenceError('删除后仍有插件引用，请在完整参数中调整', original_refs or refs)
-    if changes or renames:
+    if changes or renames or additions:
         current['native_config'] = yaml.safe_dump(candidate, allow_unicode=True, sort_keys=False)
     projection = read_common_settings(current, config, base_url)
     return {'settings': current, **projection, 'notices': notices}

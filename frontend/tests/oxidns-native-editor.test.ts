@@ -27,6 +27,9 @@ vi.mock('@/lib/oxidnsSchema', () => ({
     } },
   } },
   oxidnsPluginCatalog: [
+    {type: 'cache', category: 'executor', label: 'DNS 缓存', help: '缓存 DNS 响应', args: {type: 'object', properties: {size: {type: 'number', help: '缓存容量'}}}},
+    {type: 'query_recorder', category: 'executor', label: '查询记录', help: '记录 DNS 查询', args: {type: 'object', properties: {path: {type: 'string', help: '记录文件'}}}},
+    {type: 'fallback', category: 'executor', label: '主备回退', help: '主备执行器', args: {type: 'object', properties: {primary: {type: 'string', help: '主执行器'}}}},
     { type: 'forward', category: 'executor', label: '转发', help: '向上游转发查询', documentation: 'https://oxidns.org/plugin-reference/executor/resolution/', args: { type: 'object', label: '参数', help: '转发参数', properties: {
       concurrent: { type: 'number', label: '并发数', help: '并发上游数', default: 1 },
       upstreams: { type: 'array', help: '上游列表', items: { type: 'object', help: '单个上游', properties: { addr: { type: 'string', help: '上游地址' }, enable_pipeline: { type: 'boolean', help: '连接流水线', default: false } } } },
@@ -37,7 +40,7 @@ vi.mock('@/lib/oxidnsSchema', () => ({
 
 const wrappers: VueWrapper[] = []
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
-function render(modelValue = 'plugins: []\n', reconcile?: (before: string, after: string, renames?: Record<string, string>) => Promise<{native_config: string; notices?: string[]}>) {
+function render(modelValue = 'plugins: []\n', reconcile?: (before: string, after: string, renames?: Record<string, string>, standardAdd?: string[]) => Promise<{native_config: string; notices?: string[]}>) {
   const wrapper = mount(OxidnsNativeEditor, { props: { modelValue, initialView: 'full', reconcile } })
   wrappers.push(wrapper)
   return wrapper
@@ -99,6 +102,138 @@ function backupDocument() {
 }
 
 describe('complete OxiDNS editor', () => {
+  it('offers separate standard main/probe cache entries and applies the shared restored parameters', async () => {
+    const restored = {plugins: [{tag: 'lazy_cache', type: 'cache', args: {size: 4096, extension: false}}, {tag: 'main', type: 'sequence', args: [{exec: '$lazy_cache'}]}]}
+    const reconcile = vi.fn().mockResolvedValue({native_config: dump(restored), notices: ['主缓存已恢复']})
+    const wrapper = render('plugins: []', reconcile)
+    const standard = wrapper.findAllComponents(OxidnsParameterPicker).find(picker => picker.props('label') === '标准功能')!
+    expect(standard.props('buttonText')).toBe('添加 / 恢复功能')
+    expect(standard.props('fields')).toEqual(expect.arrayContaining([
+      expect.objectContaining({key: 'lazy_cache', schema: expect.objectContaining({label: '主缓存'})}),
+      expect.objectContaining({key: 'local_probe_cache', schema: expect.objectContaining({label: '国内探测缓存'})}),
+    ]))
+    expect(wrapper.findAllComponents(OxidnsParameterPicker).find(picker => picker.props('label') === '原生插件')!.props('buttonText')).toBe('添加自定义实例')
+    await pick(wrapper, '标准功能', 'lazy_cache')
+    expect(reconcile.mock.calls[0][3]).toEqual(['lazy_cache'])
+    expect(load(reconcile.mock.calls[0][1])).toEqual({plugins: [{tag: 'lazy_cache', type: 'cache', args: {}}]})
+    expect(model(wrapper)).toEqual(restored)
+    expect(standard.props('fields').some((field: any) => field.key === 'lazy_cache')).toBe(false)
+    expect(standard.props('fields').some((field: any) => field.key === 'local_probe_cache')).toBe(true)
+    await pick(wrapper, '原生插件', 'sequence')
+    expect(reconcile.mock.calls.at(-1)![3]).toBeUndefined()
+  })
+
+  it('places both mobile addition menus above their directory sheet', async () => {
+    const wrapper = render('plugins: []', vi.fn(async (_before, candidate) => ({native_config: candidate})))
+    await wrapper.get('[aria-label="目录"]').trigger('click'); await flushPromises()
+    const pickers = wrapper.findAllComponents(OxidnsParameterPicker)
+    for (const label of ['移动端标准功能', '移动端原生插件']) expect(pickers.find(picker => picker.props('label') === label)!.props('contentClass')).toBe('z-[70]')
+    expect(pickers.find(picker => picker.props('label') === '标准功能')!.props('contentClass')).toBeUndefined()
+  })
+
+  it('retains standard intent across retry and clears it when the failed draft is discarded', async () => {
+    const reconcile = vi.fn().mockRejectedValue(new Error('联动不可用'))
+    const wrapper = render('plugins: []', reconcile)
+    await navigate(wrapper, 'add:standard:query_recorder')
+    expect(error(wrapper)).toContain('联动不可用')
+    await click(wrapper, '重试同步')
+    expect(reconcile.mock.calls.map(call => call[3])).toEqual([['query_recorder'], ['query_recorder']])
+    await click(wrapper, '撤销未同步修改')
+    expect(navigationItems(wrapper).find(item => item.id === 'add:standard:query_recorder')?.available).toBe(true)
+    reconcile.mockImplementation(async (_before, candidate) => ({native_config: candidate}))
+    await pick(wrapper, '原生插件', 'query_recorder')
+    expect(reconcile.mock.calls.at(-1)![3]).toBeUndefined()
+    expect(model(wrapper).plugins).toEqual([{tag: 'query_recorder_custom', type: 'query_recorder', args: {}}])
+    expect(wrapper.text()).toContain('自定义实例需在监听入口或执行序列表单中配置引用')
+  })
+
+  it('accumulates multiple pending standard additions and keeps later form typing in the candidate', async () => {
+    const requests: Array<{candidate: string; resolve: (result: {native_config: string}) => void}> = []
+    const reconcile = vi.fn((_before: string, candidate: string, _renames?: Record<string, string>, _standardAdd?: string[]) => new Promise<{native_config: string}>(resolve => requests.push({candidate, resolve})))
+    const wrapper = render('plugins: []', reconcile)
+    await pick(wrapper, '标准功能', 'lazy_cache')
+    await pick(wrapper, '标准功能', 'local_probe_cache')
+    await pick(wrapper, '插件 2.args', 'size')
+    await wrapper.get('[aria-label="插件 2.args.size 值"]').setValue('4096')
+    expect(reconcile.mock.calls.at(-1)![3]).toEqual(['lazy_cache', 'local_probe_cache'])
+    const latest = requests.at(-1)!
+    latest.resolve({native_config: latest.candidate}); await flushPromises()
+    for (const request of requests.slice(0, -1)) request.resolve({native_config: request.candidate})
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toHaveLength(1)
+    expect(model(wrapper).plugins[1]).toEqual({tag: 'local_probe_cache', type: 'cache', args: {size: 4096}})
+  })
+
+  it.each(['delete', 'rename'])('drops standard intent after a pending new node is changed by %s', async action => {
+    const requests: Array<{candidate: string; resolve: (result: {native_config: string}) => void}> = []
+    const reconcile = vi.fn((_before: string, candidate: string, _renames?: Record<string, string>, _standardAdd?: string[]) => new Promise<{native_config: string}>(resolve => requests.push({candidate, resolve})))
+    const wrapper = render('plugins: []', reconcile)
+    await pick(wrapper, '标准功能', 'lazy_cache')
+    if (action === 'delete') await wrapper.get('[aria-label="删除原生插件 1"]').trigger('click')
+    else await wrapper.get('[aria-label="插件 1.tag 值"]').setValue('lazy_cache_custom')
+    expect(reconcile.mock.calls.at(-1)![3]).toBeUndefined()
+    expect(reconcile.mock.calls.at(-1)![2]).toBeUndefined()
+    requests.at(-1)!.resolve({native_config: requests.at(-1)!.candidate}); await flushPromises()
+    requests[0].resolve({native_config: requests[0].candidate}); await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toHaveLength(1)
+    expect(model(wrapper).plugins).toEqual(action === 'delete' ? [] : [{tag: 'lazy_cache_custom', type: 'cache', args: {}}])
+  })
+
+  it('offers standard restoration only after its pending deletion is accepted', async () => {
+    const requests: Array<{candidate: string; resolve: (result: {native_config: string}) => void; reject: (error: unknown) => void}> = []
+    const reconcile = vi.fn((_before: string, candidate: string, _renames?: Record<string, string>, _standardAdd?: string[]) => new Promise<{native_config: string}>((resolve, reject) => requests.push({candidate, resolve, reject})))
+    const original = {plugins: [{tag: 'lazy_cache', type: 'cache', args: {size: 8192, extension: false}}, {tag: 'main', type: 'sequence', args: [{exec: '$lazy_cache'}]}]}
+    const baseline = dump(original)
+    const wrapper = render(baseline, reconcile)
+    await navigate(wrapper, 'lazy_cache')
+    await wrapper.get('[aria-label="删除原生插件 1"]').trigger('click'); await flushPromises()
+    const standard = wrapper.findAllComponents(OxidnsParameterPicker).find(picker => picker.props('label') === '标准功能')!
+    expect(standard.props('fields').some((field: any) => field.key === 'lazy_cache')).toBe(false)
+    expect(navigationItems(wrapper).some(item => item.id === 'add:standard:lazy_cache')).toBe(false)
+    expect(standard.props('fields').some((field: any) => field.key === 'local_probe_cache')).toBe(true)
+    standard.vm.$emit('select', 'lazy_cache'); await flushPromises()
+    expect(reconcile).toHaveBeenCalledOnce()
+    expect(reconcile.mock.calls[0][0]).toBe(baseline)
+    expect((load(requests[0].candidate) as any).plugins.some((plugin: any) => plugin.tag === 'lazy_cache')).toBe(false)
+
+    const removed = dump({plugins: [{tag: 'main', type: 'sequence', args: []}]})
+    requests[0].resolve({native_config: removed}); await flushPromises()
+    expect(standard.props('fields').some((field: any) => field.key === 'lazy_cache')).toBe(true)
+    await pick(wrapper, '标准功能', 'lazy_cache')
+    expect(reconcile.mock.calls[1][0]).toBe(removed)
+    expect((load(requests[1].candidate) as any).plugins.find((plugin: any) => plugin.tag === 'lazy_cache')).toEqual({tag: 'lazy_cache', type: 'cache', args: {}})
+    expect(reconcile.mock.calls[1].slice(2)).toEqual([undefined, ['lazy_cache']])
+    requests[1].resolve({native_config: baseline}); await flushPromises()
+    await navigate(wrapper, 'lazy_cache')
+    expect((wrapper.get('[aria-label="插件 1.args.size 值"]').element as HTMLInputElement).value).toBe('8192')
+    expect(error(wrapper)).toBe('')
+    expect(model(wrapper)).toEqual(original)
+    expect(wrapper.emitted('update:modelValue')).toHaveLength(2)
+  })
+
+  it('does not fill backup addresses or overwrite an occupied standard tag', async () => {
+    const reconcile = vi.fn(async (_before: string, candidate: string, _renames?: Record<string, string>, _standardAdd?: string[]) => ({native_config: candidate}))
+    const original = {plugins: [{tag: 'lazy_cache', type: 'forward', args: {upstreams: [{addr: '192.0.2.53'}]}}]}
+    const wrapper = render(dump(original), reconcile)
+    const choices = () => wrapper.findAllComponents(OxidnsParameterPicker).find(picker => picker.props('label') === '标准功能')!.props('fields')
+    expect(choices().some((field: any) => field.key === 'lazy_cache')).toBe(false)
+    await pick(wrapper, '标准功能', 'forward_fallback')
+    expect(reconcile.mock.calls[0][3]).toEqual(['forward_fallback'])
+    expect(model(wrapper).plugins).toEqual([...original.plugins, {tag: 'forward_fallback', type: 'forward', args: {}}])
+    expect(wrapper.findAll('[role="switch"]')).toHaveLength(0)
+  })
+
+  it('keeps custom fallback instances away from managed helper tags without requesting standard activation', async () => {
+    const reconcile = vi.fn(async (_before: string, candidate: string, _renames?: Record<string, string>, _standardAdd?: string[]) => ({native_config: candidate}))
+    const wrapper = render('plugins: []', reconcile)
+    await pick(wrapper, '原生插件', 'fallback')
+    expect(model(wrapper)).toEqual({plugins: [{tag: 'fallback_custom', type: 'fallback', args: {}}]})
+    expect(reconcile.mock.calls[0][3]).toBeUndefined()
+    expect(navigationItems(wrapper).find(item => item.id === 'add:standard:forward_fallback')?.available).toBe(true)
+    await pick(wrapper, '原生插件', 'fallback')
+    expect(model(wrapper).plugins[1].tag).toBe('fallback_custom_2')
+  })
+
   it('uses the shared lifecycle result when a managed plugin is removed', async () => {
     const original = backupDocument()
     const repaired = backupDocument()
@@ -527,7 +662,7 @@ describe('complete OxiDNS editor', () => {
   it('adds and re-adds a plugin from its category while preserving same-type instances and YAML order', async () => {
     const wrapper = render('plugins: [{tag: first, type: forward, args: {concurrent: 0}}, {tag: sequence, type: future_plugin, args: false}, {tag: second, type: forward, args: {}}]')
     const groups = wrapper.getComponent(OxidnsConfigNavigation).props('items')
-    expect(groups.find((item: NavigationItem) => item.id === 'category:upstreams').children.map((item: NavigationItem) => item.label)).toEqual(['first', 'second'])
+    expect(groups.find((item: NavigationItem) => item.id === 'category:upstreams').children.filter((item: NavigationItem) => !item.available).map((item: NavigationItem) => item.label)).toEqual(['first', 'second'])
     expect(groups.find((item: NavigationItem) => item.id === 'category:advanced').children.some((item: NavigationItem) => item.label === 'sequence')).toBe(true)
     expect(navigationItems(wrapper).some(item => item.id === 'add:plugin:forward')).toBe(false)
     await navigate(wrapper, 'add:plugin:sequence')

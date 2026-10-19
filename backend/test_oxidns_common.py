@@ -424,3 +424,21 @@ def test_included_feature_cannot_be_overwritten_by_a_new_root_plugin():
     result = apply(settings, {'worker_threads': 3})
     assert doc(result['settings'])['plugins'] == []
     assert result['settings']['additional_files'] == settings['additional_files']
+
+
+@pytest.mark.parametrize('content', ['', 'full:current.test 192.0.2.20\n'])
+def test_explicit_hosts_edit_invalidates_content_parked_by_native_deletion(content):
+    settings = prepared()
+    settings['_common_disabled'] = {'native_hosts_source': 'full:withdrawn.test 192.0.2.10\n'}
+    before = deepcopy(settings)
+    result = apply(settings, {'custom_hosts': content})
+    assert 'native_hosts_source' not in result['settings']['_common_disabled']
+    assert result['settings']['custom_hosts'] == content
+    assert settings == before
+
+
+def test_unrelated_common_edit_preserves_hosts_content_for_explicit_restoration():
+    settings = prepared()
+    settings['_common_disabled'] = {'native_hosts_source': 'full:restore.test 192.0.2.10\n'}
+    result = apply(settings, {'worker_threads': 3})
+    assert result['settings']['_common_disabled']['native_hosts_source'] == settings['_common_disabled']['native_hosts_source']
