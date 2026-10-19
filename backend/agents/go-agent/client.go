@@ -4,6 +4,7 @@ import (
 	"agent/upgrade"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -227,7 +228,18 @@ func (c *Config) createHeartbeatRequest() ([]byte, error) {
 	return jsonData, nil
 }
 
-var heartbeatHTTPClient = &http.Client{Timeout: 10 * time.Second}
+func newHeartbeatHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Heartbeats are infrequent and may cross a TUN reload. A connection can
+	// remain established while no longer delivering responses, especially with
+	// HTTP/2. Give each heartbeat its own connection so the next scheduled
+	// attempt can recover without restarting the Agent. Do not change the
+	// shared transport used by registration and other requests.
+	transport.DisableKeepAlives = true
+	return &http.Client{Transport: transport, Timeout: 10 * time.Second}
+}
+
+var heartbeatHTTPClient = newHeartbeatHTTPClient()
 
 // sendHeartbeatRequest 发送心跳请求到服务器
 func (c *Config) sendHeartbeatRequest(jsonData []byte) error {
@@ -255,8 +267,22 @@ func (c *Config) sendHeartbeatRequest(jsonData []byte) error {
 		var result struct {
 			DomainDiscoveryEnabled bool `json:"domain_discovery_enabled"`
 		}
-		// 旧服务端不返回该字段，解码失败或缺省都视为关闭
-		_ = json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&result)
+		// Older servers may return an empty body or omit the optional field.
+		// Read the complete, bounded response: a valid JSON prefix alone does
+		// not prove that the response finished before the heartbeat deadline.
+		const maxResponseBytes = 64 * 1024
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+		if err != nil {
+			return safeURLFailure("failed to read heartbeat response from", heartbeatURL, err)
+		}
+		if len(body) > maxResponseBytes {
+			return safeURLFailure("failed to read heartbeat response from", heartbeatURL, errors.New("heartbeat response exceeds size limit"))
+		}
+		if len(bytes.TrimSpace(body)) != 0 {
+			if err := json.Unmarshal(body, &result); err != nil {
+				return safeURLFailure("failed to decode heartbeat response from", heartbeatURL, err)
+			}
+		}
 		domainDiscovery.SetEnabled(c, result.DomainDiscoveryEnabled)
 
 		status := c.managedServiceStatus()
