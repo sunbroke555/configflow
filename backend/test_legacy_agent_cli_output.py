@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -47,15 +48,21 @@ def _legacy_harness(tmp_path, manager="systemd"):
         "https://config.example/?token=never-log-registration-token",
         "legacy-test", "mihomo",
     )
-    for original, replacement in (
-        ("/opt/configflow-agent", str(tmp_path / "agent")),
-        ("/var/log", str(tmp_path / "logs")),
-        ("/etc/", str(tmp_path / "etc") + "/"),
-        ("/run/", str(tmp_path / "run") + "/"),
-        ("/tmp/", str(tmp_path / "tmp") + "/"),
-        ("/dev/tty", "/dev/stdin"),
-    ):
-        source = source.replace(original, replacement)
+    replacements = {
+        "/opt/configflow-agent": str(tmp_path / "agent"),
+        "/var/log": str(tmp_path / "logs"),
+        "/etc/": str(tmp_path / "etc") + "/",
+        "/run/": str(tmp_path / "run") + "/",
+        "/tmp/": str(tmp_path / "tmp") + "/",
+        "/dev/tty": "/dev/stdin",
+    }
+    # Match only the original script, never /tmp prefixes introduced by a
+    # previous replacement when pytest's sandbox is itself below /tmp.
+    source = re.sub(
+        "|".join(re.escape(prefix) for prefix in replacements),
+        lambda match: replacements[match.group(0)],
+        source,
+    )
     script = tmp_path / "install.sh"
     script.write_text(source, encoding="utf-8")
     for directory in ("etc/systemd/system", "etc/init.d", "etc/logrotate.d", "run", "tmp", "logs", "bin"):
@@ -108,9 +115,23 @@ def _log(tmp_path):
     return logs[0], logs[0].read_text(encoding="utf-8")
 
 
+@pytest.fixture(params=["pytest", "linux-tmp"])
+def legacy_tmp_path(request, tmp_path):
+    if request.param == "pytest":
+        yield tmp_path
+    else:
+        # Keep the literal /tmp prefix: resolving it on macOS yields /private/tmp
+        # and would miss re-expansion of sandbox paths by the /tmp/ mapping.
+        with tempfile.TemporaryDirectory(prefix="configflow-legacy-cli-", dir="/tmp") as directory:
+            sandbox = Path(directory)
+            assert str(sandbox).startswith("/tmp/")
+            yield sandbox
+
+
 @pytest.mark.parametrize("manager", ["systemd", "openrc"])
 @pytest.mark.parametrize("verbose", [False, True])
-def test_legacy_install_has_concise_output_full_log_and_valid_generated_files(tmp_path, manager, verbose):
+def test_legacy_install_has_concise_output_full_log_and_valid_generated_files(legacy_tmp_path, manager, verbose):
+    tmp_path = legacy_tmp_path
     script, env = _legacy_harness(tmp_path, manager)
     syntax = subprocess.run(["sh", "-n", str(script)], text=True, capture_output=True)
     assert syntax.returncode == 0, syntax.stderr
@@ -137,7 +158,8 @@ def test_legacy_install_has_concise_output_full_log_and_valid_generated_files(tm
         assert "depend() {" in init.read_text()
 
 
-def test_legacy_uninstall_keeps_operation_log_and_only_controls_agent(tmp_path):
+def test_legacy_uninstall_keeps_operation_log_and_only_controls_agent(legacy_tmp_path):
+    tmp_path = legacy_tmp_path
     script, env = _legacy_harness(tmp_path)
     (tmp_path / "agent").mkdir()
     (tmp_path / "agent/config.json").write_text('{"token":"never-log-registration-token"}')
@@ -153,7 +175,8 @@ def test_legacy_uninstall_keeps_operation_log_and_only_controls_agent(tmp_path):
     assert not re.search(r"(?:systemctl|rc-service).*\b(?:mihomo|mosdns|oxidns)\b", events)
 
 
-def test_legacy_failure_preserves_exit_code_and_shows_command_detail(tmp_path):
+def test_legacy_failure_preserves_exit_code_and_shows_command_detail(legacy_tmp_path):
+    tmp_path = legacy_tmp_path
     script, env = _legacy_harness(tmp_path)
     env["FAIL_START"] = "1"
     result = _run(script, env)
