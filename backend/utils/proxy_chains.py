@@ -240,7 +240,12 @@ def lower_chain_providers(runtime, main):
                     {'pattern': f'^(?!{re.escape(order_tag)})(?=[\\s\\S]*?(?:{pattern}))([\\s\\S]*)$',
                      'target': f'{order_tag}{rank + 1}_${re.compile(pattern).groups + 1}'}
                     for rank, pattern in enumerate(patterns)]
-            provider.update(excluded)
+            for key, value in excluded.items():
+                if key == 'exclude-filter' and provider.get(key):
+                    if value:
+                        provider[key] += '`' + value
+                else:
+                    provider[key] = value
             providers[name] = provider
             use.append(name)
         if use:

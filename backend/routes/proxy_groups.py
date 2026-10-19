@@ -10,7 +10,7 @@ from backend.common.config_repository import ProfileRepositoryError
 from backend.utils.reorder import resolve_new_order
 from backend.utils.subscription_cache import load_subscription_cache
 from backend.utils.subscription_filter import filter_subscription_items
-from backend.utils.group_candidates import CandidateValidationError
+from backend.utils.group_candidates import CandidateValidationError, filter_candidates
 
 
 @proxy_groups_bp.route('/health-defaults', methods=['GET'])
@@ -83,7 +83,8 @@ def _clean_group_fields(group):
     if group.get('type') != 'load-balance':
         group.pop('strategy', None)
     if group.get('type') == 'chain':
-        for field in ('subscriptions', 'regex', 'manual_nodes', 'aggregations', 'aggregation_regex',
+        for field in ('subscriptions', 'regex', 'exclude_regex', 'manual_nodes',
+                      'aggregations', 'aggregation_regex', 'aggregation_exclude_regex',
                       'include_groups', 'follow_group', 'proxies', 'source', 'source_type',
                       'proxies_order', 'url', 'interval', 'strategy', 'lazy', 'use',
                       'include_all', 'include-all'):
@@ -249,23 +250,36 @@ def handle_proxy_group(group_id):
 @proxy_groups_bp.route('/preview-regex', methods=['POST'])
 @require_auth
 def preview_proxy_group_regex():
-    """Preview nodes matched by a proxy-group regex without saving config."""
+    """Preview retained nodes after inclusion and exclusion, without saving config."""
     try:
         config_data = get_shared_config()
         payload = request.get_json() or {}
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'message': '预览请求必须是 JSON 对象'}), 400
         source = payload.get('source')
-        regex_text = (payload.get('regex') or '').strip()
+        patterns = {}
+        for field, label in (('regex', '正则表达式'), ('exclude_regex', '排除正则')):
+            value = payload.get(field)
+            if value is not None and not isinstance(value, str):
+                return jsonify({'success': False, 'message': f'{label}必须是字符串'}), 400
+            patterns[field] = (value or '').strip()
+        regex_text = patterns['regex']
+        exclude_text = patterns['exclude_regex']
 
         if source not in ['subscription', 'aggregation']:
             return jsonify({'success': False, 'message': 'Invalid preview source'}), 400
 
-        if not regex_text:
+        if not regex_text and not exclude_text:
             return jsonify({'success': False, 'message': '请输入正则表达式'}), 400
 
         try:
-            regex = re.compile(regex_text)
+            regex = re.compile(regex_text) if regex_text else None
         except re.error as exc:
             return jsonify({'success': False, 'message': f'正则表达式无效: {exc}'}), 400
+        try:
+            exclude_regex = re.compile(exclude_text) if exclude_text else None
+        except re.error as exc:
+            return jsonify({'success': False, 'message': f'排除正则无效: {exc}'}), 400
 
         candidates = []
         # 节点库按来源展示时保留不同订阅中的同名节点；策略组预览仍默认按名去重。
@@ -298,21 +312,25 @@ def preview_proxy_group_regex():
                     continue
 
                 agg_name = agg.get('name', agg_id)
+                aggregation_nodes = []
                 for sub_id in agg.get('subscriptions', []):
                     sub = next((s for s in subscriptions if s.get('id') == sub_id and s.get('enabled', True)), None)
                     if not sub:
                         continue
                     nodes = _get_subscription_nodes(config_data, sub_id)
-                    candidates.extend(_add_source_meta(nodes, 'aggregation', agg_id, agg_name))
+                    aggregation_nodes.extend(_add_source_meta(nodes, 'aggregation', agg_id, agg_name))
 
                 manual_nodes = _get_manual_nodes(config_data, agg.get('nodes', []))
-                candidates.extend(_add_source_meta(manual_nodes, 'aggregation', agg_id, agg_name))
+                aggregation_nodes.extend(_add_source_meta(manual_nodes, 'aggregation', agg_id, agg_name))
+                candidates.extend(filter_candidates(aggregation_nodes, agg.get('regex_filter') or ''))
 
         matched = []
         seen_names = set()
         for node in candidates:
             name = node.get('name', '')
-            if not name or not regex.search(name):
+            if not name or (regex and not regex.search(name)):
+                continue
+            if exclude_regex and exclude_regex.search(name):
                 continue
             key = (node.get('source_id'), name) if deduplicate_by_source else name
             if key in seen_names:
@@ -339,6 +357,8 @@ def preview_proxy_group_regex():
             response['imported_node_ids'] = imported_node_ids
         return jsonify(response)
 
+    except CandidateValidationError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
     except Exception as exc:
         return jsonify({'success': False, 'message': str(exc)}), 500
 

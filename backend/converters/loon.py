@@ -99,6 +99,9 @@ def _effective_group(group: Dict[str, Any], config_data: Dict[str, Any]) -> Opti
         'include_groups': followed.get('include_groups', []),
         'subscriptions': followed.get('subscriptions', []),
         'regex': followed.get('regex', ''),
+        'exclude_regex': followed.get('exclude_regex', ''),
+        'aggregation_regex': followed.get('aggregation_regex', ''),
+        'aggregation_exclude_regex': followed.get('aggregation_exclude_regex', ''),
         'proxies_order': followed.get('proxies_order', []),
         'proxy_order': followed.get('proxy_order', 'nodes_first'),
         'url': followed.get('url'),
@@ -235,8 +238,9 @@ def generate_loon_config(config_data: Dict[str, Any], base_url: str = '') -> str
     remote_names = {}
     remote_lines = ['[Remote Proxy]']
 
-    def remote_name(kind: str, resource_id: str) -> Optional[str]:
-        key = (kind, resource_id)
+    def remote_name(kind: str, resource_id: str, exclude_regex: str = '') -> Optional[str]:
+        # 同一来源可以在不同策略组中采用不同排除条件，必须分别订阅。
+        key = (kind, resource_id, exclude_regex)
         if key in remote_names:
             return remote_names[key]
         if kind == 'subscription':
@@ -251,6 +255,8 @@ def generate_loon_config(config_data: Dict[str, Any], base_url: str = '') -> str
             return None
         name = allocator.allocate(resource.get('name', ''), '订阅' if kind == 'subscription' else '聚合')
         query = {'format': 'loon'}
+        if exclude_regex:
+            query['exclude_regex'] = exclude_regex
         if config_token:
             query['token'] = config_token
         url = append_url_query(f"{effective_base_url}{profile_api_path(config_data, path)}", query)
@@ -274,13 +280,21 @@ def generate_loon_config(config_data: Dict[str, Any], base_url: str = '') -> str
                 members.append(('strategy', ref))
 
         _, aggregation_ids, _, subscriptions = _group_sources(group)
-        remotes = [remote_name('subscription', sid) for sid in subscriptions]
-        remotes += [remote_name('aggregation', aid) for aid in aggregation_ids]
-        remotes = [r for r in remotes if r]
-        if remotes:
-            regex = (group.get('regex') or '').strip()
+        # 两种来源独立筛选，手动节点和策略引用保持原样。
+        # 排除条件交给本服务的动态订阅接口，正向筛选沿用 Loon NameRegex。
+        for kind, resource_ids, prefix in (
+            ('subscription', subscriptions, ''),
+            ('aggregation', aggregation_ids, 'aggregation_'),
+        ):
+            regex = (group.get(f'{prefix}regex') or '').strip()
+            exclude_regex = (group.get(f'{prefix}exclude_regex') or '').strip()
+            remotes = [remote_name(kind, resource_id, exclude_regex) for resource_id in resource_ids]
+            remotes = [remote for remote in remotes if remote]
+            if not remotes:
+                continue
             if regex:
-                filter_name = allocator.allocate(f"{group['name']}-筛选", '筛选')
+                suffix = '筛选' if kind == 'subscription' else '聚合筛选'
+                filter_name = allocator.allocate(f"{group['name']}-{suffix}", suffix)
                 escaped = regex.replace('"', '\\"')
                 filter_lines.append(f'{filter_name} = NameRegex,{",".join(remotes)},FilterKey="{escaped}"')
                 members.append(filter_name)

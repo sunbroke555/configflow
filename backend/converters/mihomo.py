@@ -798,6 +798,8 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                 rules.append(f"RULE-SET,{ruleset_name},{policy}")
 
     mihomo_config['rules'] = rules
+    from backend.utils.group_candidates import lower_group_provider_filters
+    lower_group_provider_filters(config_data, mihomo_config)
     from backend.utils.proxy_chains import lower_chain_providers
     lower_chain_providers(config_data, mihomo_config)
 
