@@ -146,12 +146,12 @@ export const featureGroups: Array<{ key: string; title: string; hint: string; fi
     text('ros_route.args.gateway6', 'IPv6 网关', 'IPv6 主机路由使用的 RouterOS 网关表达式；留空忽略 IPv6 地址，两个地址族的网关至少填一个。'),
     number('ros_route.args.distance', '路由距离', 1, '写入受管路由的 distance；相同目标前缀下，较小的距离通常具有更高优先级，需与已有路由策略协调。')
   ] },
-  { key: 'rule_update', title: '原生规则定时更新', hint: '生成 cron、download 与 provider reload 任务。逐文件更新成功后重载，下载失败的文件保留旧版，不提供整批回滚。与外部维护脚本同时更新同一规则目录会冲突，请只启用一套更新方式。', fields: [
+  { key: 'rule_update', title: '原生规则定时更新', hint: '在设备上定时下载并热重载规则，与 ConfigFlow 规则库自动同步独立；关闭后仍可在 Agent 页面手动更新。下载失败的文件保留旧版，不提供整批回滚；Agent 手动更新会在全部下载成功后才热重载。请勿同时使用外部脚本更新同一规则目录。', fields: [
     text('rule_update.args.schedule', 'Cron（五段）', '依次为分、时、日、月、星期；例如 30 3 * * * 表示按下方时区每天 03:30 更新。'),
     text('rule_update.args.timezone', '时区', '执行 Cron 使用的 IANA 时区，例如 Asia/Shanghai；用于确定定时任务的实际触发时间。'),
-    text('rule_update.args.timeout', '下载超时', '单个规则下载允许等待的时长，例如 60s 或 2m；文件按顺序下载，总耗时可能超过单次超时。'),
-    text('rule_update.args.outbound', '出站配置标签', '引用高级配置 network.outbound.profiles 中的标签，复用其解析器与代理；留空使用 OxiDNS 默认出站。'),
-    text('rule_update.args.socks5', 'SOCKS5 代理', '规则下载专用代理，例如 192.168.0.1:1080 或 用户名:密码@主机:端口；填写后覆盖出站配置的代理，留空沿用出站配置。')
+    text('rule_update.args.timeout', '下载超时', '手动与定时更新共用。单个规则下载允许等待的时长，例如 60s 或 2m；文件按顺序下载，总耗时可能超过单次超时。'),
+    text('rule_update.args.outbound', '出站配置标签', '手动与定时更新共用。引用高级配置 network.outbound.profiles 中的标签，复用其解析器与代理；留空使用 OxiDNS 默认出站。'),
+    text('rule_update.args.socks5', 'SOCKS5 代理', '手动与定时更新共用。规则下载专用代理，例如 192.168.0.1:1080 或 用户名:密码@主机:端口；填写后覆盖出站配置的代理，留空沿用出站配置。')
   ] }
 ]
 

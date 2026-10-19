@@ -213,7 +213,11 @@ def _fallback_upstreams(text):
 def generate_oxidns_config(config_data, base_url=''):
     s = _settings(config_data)
     if s['config_mode'] == 'native':
-        return yaml.safe_dump(native_document(s), allow_unicode=True, sort_keys=False)
+        from backend.common.oxidns_common_updates import prepare_native_rule_updates
+        from backend.common.oxidns_validation import require_valid_document
+        document = prepare_native_rule_updates(native_document(s), s, config_data, base_url)
+        require_valid_document(document)
+        return yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
     try:
         custom = yaml.safe_load(s['custom_config']) if s['custom_config'].strip() else {}
     except yaml.YAMLError:
@@ -366,12 +370,26 @@ def generate_oxidns_config(config_data, base_url=''):
     if s['tcp_enabled']:
         add('server_tcp', 'tcp_server', {'listen': s['listen'], 'entry': 'sequence_main'})
 
-    if s['rule_update']['enabled']:
-        downloads = get_oxidns_ruleset_downloads(config_data, base_url)
-        if not downloads:
-            raise OxidnsSettingsError('定时更新需要至少一个规则订阅')
+    downloads = get_oxidns_ruleset_downloads(config_data, base_url)
+    custom_updates = any(isinstance(plugin, dict) and (plugin.get('type') in ('download', 'reload_provider')
+                         or plugin.get('tag') in ('rules_download', 'rules_reload', 'rules_refresh'))
+                         for plugin in extra_plugins)
+    if s['rule_update']['enabled'] and custom_updates:
+        raise OxidnsSettingsError('已有自定义下载或重载插件，请在高级 YAML 中配置规则定时更新，不能自动创建第二条维护链')
+    if s['rule_update']['enabled'] and not downloads:
+        raise OxidnsSettingsError('定时更新需要至少一个规则订阅')
+    if downloads and not custom_updates:
         update = s['rule_update']['args']
-        args = {key: update[key] for key in ('timeout', 'outbound', 'socks5') if update.get(key)}
+        args = {key: update[key] for key in ('timeout', 'outbound', 'socks5')
+                if update.get(key) is not None and update.get(key) != ''}
+        # The downloader remains callable when cron is off, so its live options
+        # must be valid independently of the inactive scheduling fields.
+        from backend.common.oxidns_validation import OxidnsValidationError, schemas, validate_schema
+        fields = schemas()[1]['download']['properties']
+        issues = [issue for key, value in args.items() for issue in
+                  validate_schema(value, fields[key], ['plugins', len(plugins), 'args', key])]
+        if any(issue['severity'] == 'error' for issue in issues):
+            raise OxidnsValidationError(issues)
         args['downloads'] = [{'url': item['url'], 'dir': str(PurePosixPath(item['local_path']).parent),
                               'filename': PurePosixPath(item['local_path']).name} for item in downloads]
         add('rules_download', 'download', args)
@@ -381,10 +399,12 @@ def generate_oxidns_config(config_data, base_url=''):
         add('rules_reload', 'reload_provider', providers)
         # Native downloads are atomic per file, not across the whole ruleset.
         # A failed item retains its old file; provider reload then reads the
-        # successful updates plus retained files. Keep this feature opt-in.
+        # successful updates plus retained files. Only scheduling is opt-in;
+        # the maintenance chain is also used by explicit manual updates.
         add('rules_refresh', 'sequence', [{'exec': '$rules_download'}, {'exec': '$rules_reload'}])
-        add('rules_cron', 'cron', {'timezone': update['timezone'], 'jobs': [{
-            'name': 'refresh_rules', 'schedule': update['schedule'], 'executors': ['$rules_refresh']}]})
+        if s['rule_update']['enabled']:
+            add('rules_cron', 'cron', {'timezone': update['timezone'], 'jobs': [{
+                'name': 'refresh_rules', 'schedule': update['schedule'], 'executors': ['$rules_refresh']}]})
     plugins.extend(deepcopy(extra_plugins))
     tags = set()
     for plugin in plugins:

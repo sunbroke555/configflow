@@ -49,7 +49,7 @@ const statusText = computed(() => {
 const messages: Record<string, string> = {
   UPGRADE_REQUIRED: '请将此 Agent 升级到 1.8.30-go 或更新版本后使用更新规则。',
   API_NOT_CONFIGURED: '请在 OxiDNS 设置中启用管理 API 并发布一次。',
-  RULE_UPDATE_NOT_CONFIGURED: '请在 OxiDNS 设置中开启原生规则定时更新并发布一次。',
+  RULE_UPDATE_NOT_CONFIGURED: '请先配置可下载的规则并重新发布 OxiDNS 配置，然后重试。',
   CORE_UPDATE_UNSUPPORTED: '当前 OxiDNS 核心不支持规则更新接口，请升级核心后重试。',
   SERVICE_BUSY: 'Agent 正在执行其他操作，请等待完成后重试。',
   RULE_UPDATE_BUSY: '此设备正在更新规则，请等待当前更新完成。',

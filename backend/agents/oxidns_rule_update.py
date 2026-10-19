@@ -25,7 +25,7 @@ MESSAGES = {
     'API_NOT_CONFIGURED': 'OxiDNS 管理 API 未启用，请在设置中启用并发布一次。',
     'TLS_UNSUPPORTED': '规则更新暂不支持当前 OxiDNS API 的 TLS 配置。',
     'CONFIG_UNSUPPORTED': '当前 OxiDNS 配置无法用于更新规则，请检查管理 API 和规则更新配置。',
-    'RULE_UPDATE_NOT_CONFIGURED': '请先在 OxiDNS 设置中开启原生规则定时更新并发布一次，之后即可单独更新规则。',
+    'RULE_UPDATE_NOT_CONFIGURED': '请先配置可下载的规则并重新发布 OxiDNS 配置，然后重试。',
     'RULE_UPDATE_AMBIGUOUS': '发现多条规则更新链，无法确定更新目标，请检查 OxiDNS 规则更新配置。',
     'CORE_UPDATE_UNSUPPORTED': '当前 OxiDNS 核心不支持原生规则更新接口，请升级核心后重试。',
     'CORE_UNREACHABLE': '暂时无法连接 OxiDNS 管理 API，请检查核心运行状态。',

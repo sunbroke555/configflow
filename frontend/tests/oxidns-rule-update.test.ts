@@ -263,14 +263,17 @@ describe('OxiDNS rule update', () => {
     expect(notify.success).not.toHaveBeenCalled()
   })
 
-  it('shows missing-plugin and old-Agent errors without starting any other operation', async () => {
+  it('points missing update configuration to downloadable rules and republishing without requiring a schedule', async () => {
     const wrapper = await render()
-    vi.mocked(api.post).mockRejectedValueOnce({ response: { status: 409, data: { message: '未找到规则维护插件，请先在设置中启用并发布。' } } })
+    vi.mocked(api.post).mockRejectedValueOnce({ response: { status: 409, data: { code: 'RULE_UPDATE_NOT_CONFIGURED' } } })
     await wrapper.get('button').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toContain('未找到规则维护插件')
+    expect(wrapper.get('[role="alert"]').text()).toBe('请先配置可下载的规则并重新发布 OxiDNS 配置，然后重试。')
     expect(notify.success).not.toHaveBeenCalled()
     expect(wrapper.get('button').attributes('disabled')).toBeUndefined()
+    expect(api.get).toHaveBeenCalledTimes(1)
+    expect(api.post).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('updated')).toBeUndefined()
   })
 
   it('prevents updates while the device is offline or busy', async () => {

@@ -428,7 +428,7 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
             # Respect a user who already rewired a download-only pipeline.
             if tag == 'rules_cron' or reference_locations(candidate, [tag], dynamic=False):
                 changes['rule_update.enabled'] = False
-                targets.update(_UPDATER - {'rules_cron'})
+                targets.update({'rules_cron'} if tag == 'rules_cron' else _UPDATER - {'rules_cron'})
     backup = proposed.get('forward_fallback')
     if backup and backup.get('type') == 'forward' and isinstance(backup.get('args'), dict):
         previous = old.get('forward_fallback', {}).get('args', {})
@@ -447,7 +447,7 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         previous_jobs, jobs = previous_cron['args'].get('jobs', []), cron['args'].get('jobs', [])
         if isinstance(previous_jobs, list) and isinstance(jobs, list) and any(isinstance(job, dict) and job.get('name') == 'refresh_rules' for job in previous_jobs) and not any(isinstance(job, dict) and (job.get('name') == 'refresh_rules' or job.get('executors') == ['$rules_refresh']) for job in jobs):
             changes['rule_update.enabled'] = False
-            targets.update(_UPDATER - {'rules_cron'})
+            targets.add('rules_cron')
 
     original_candidate = deepcopy(candidate)
     if targets:
@@ -478,6 +478,11 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         else:
             current = result['settings']
             candidate = load_native_yaml(current['native_config'])
+            if removed & (_UPDATER - {'rules_cron'}) and targets & (_UPDATER - {'rules_cron'}):
+                # Explicitly deleting the update capability still withdraws its
+                # owned edges; deleting only cron leaves manual updates intact.
+                from backend.common.oxidns_common_updates import _stop_pipeline
+                _stop_pipeline(_Context(candidate, current))
         # Keep explicit removal authoritative even when a common field leaves a
         # reusable definition; the original Hosts definition is parked below.
         candidate['plugins'] = [item for item in candidate.get('plugins', []) if item.get('tag') not in removed]
