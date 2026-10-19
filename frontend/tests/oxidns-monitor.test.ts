@@ -512,7 +512,7 @@ describe('OxiDNS monitor display', () => {
   it('highlights the dedicated OxiDNS navigation entry in overview scope', () => {
     expect(navigationPath('/agents/oxi-13/oxidns')).toBe('/oxidns')
     expect(scopeOfPath('/agents/oxi-13/oxidns')).toBe('overview')
-    expect(labelOfPath('/agents/oxi-13/oxidns')).toBe('OxiDNS 监控')
+    expect(labelOfPath('/agents/oxi-13/oxidns')).toBe('OxiDNS 面板')
     expect(navigationPath('/agents')).toBe('/agents')
     expect(navigationPath('/agents/oxi-13/unrelated')).toBe('/agents/oxi-13/unrelated')
   })

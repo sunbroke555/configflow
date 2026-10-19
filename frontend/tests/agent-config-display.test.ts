@@ -368,9 +368,9 @@ describe('Agent card diagnostics', () => {
     expect(publication.find('details').exists()).toBe(false)
   })
 
-  it('retains the DNS monitor entry when an OxiDNS Agent has not reported system metrics', async () => {
+  it('retains the OxiDNS panel entry when an Agent has not reported system metrics', async () => {
     const { wrapper } = await render(agent({ service_type: 'oxidns', system_metrics: undefined }))
-    const monitor = wrapper.findAll('button').find(button => button.text() === 'DNS 监控')!
+    const monitor = wrapper.findAll('button').find(button => button.text() === 'OxiDNS 面板')!
     expect(monitor.isVisible()).toBe(true)
   })
 

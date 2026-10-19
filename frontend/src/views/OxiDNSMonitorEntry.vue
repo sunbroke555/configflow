@@ -1,6 +1,6 @@
 <template>
   <div class="min-w-0">
-    <PageHeader title="OxiDNS 监控">
+    <PageHeader title="OxiDNS 面板">
       <template #actions>
         <Button variant="outline" class="min-h-11" :disabled="loading" @click="openPreferredDevice">
           <RefreshCw class="size-4" :class="{ 'animate-spin': loading }" />刷新
@@ -44,7 +44,7 @@ async function openPreferredDevice() {
     rememberOxiDNSDevice(selected.id)
     await router.replace(oxidnsMonitorPath(selected.id))
   } catch (failure: any) {
-    if (!disposed) error.value = failure?.message || '暂时无法打开监控页面，请重试。'
+    if (!disposed) error.value = failure?.message || '暂时无法打开 OxiDNS 面板，请重试。'
   }
 }
 onMounted(openPreferredDevice)

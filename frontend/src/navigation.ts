@@ -29,7 +29,7 @@ export const NAV_GROUPS: NavGroup[] = [
     tabIcon: 'DataAnalysis',
     items: [
       { path: '/dashboard', label: '数据统计', icon: 'DataAnalysis' },
-      { path: '/oxidns', label: 'DNS 监控', icon: 'Monitor' },
+      { path: '/oxidns', label: 'OxiDNS 面板', icon: 'Monitor' },
       { path: '/mihomo', label: 'Mihomo 面板', icon: 'Gauge' }
     ]
   },
@@ -93,5 +93,5 @@ export const groupOfScope = (scope: NavScope): NavGroup | undefined =>
   NAV_GROUPS.find(group => group.scope === scope)
 
 export const labelOfPath = (path: string): string | undefined =>
-  navigationPath(path) !== path ? 'OxiDNS 监控' :
+  navigationPath(path) !== path ? 'OxiDNS 面板' :
     NAV_GROUPS.flatMap(group => group.items).find(item => item.path === path)?.label

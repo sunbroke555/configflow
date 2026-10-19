@@ -94,51 +94,57 @@
             · 心跳 {{ formatTime(agent.last_heartbeat) }}
           </p>
 
-          <!-- 资源占用：CPU / 内存 / 磁盘 -->
-          <div class="my-4 grid gap-2.5 max-sm:my-3 max-sm:gap-2">
+          <!-- 资源占用与实时网络速率，共用对齐的标签、横条和数值列 -->
+          <div class="mt-4 mb-3 grid grid-cols-[44px_minmax(0,1fr)_max-content] gap-2.5 max-sm:mt-3 max-sm:gap-2">
             <div
               v-for="metric in metricsOf(agent)"
               :key="metric.label"
-              class="grid grid-cols-[44px_1fr_44px] items-center gap-2.5 text-[11.5px] text-muted-foreground"
+              class="col-span-3 grid grid-cols-subgrid items-center gap-2.5 text-[11.5px] text-muted-foreground"
               :title="metric.detail || undefined"
             >
               {{ metric.label }}
-              <i class="block h-1.5 overflow-hidden rounded-full bg-accent">
+              <i class="block h-1.5 overflow-hidden rounded-full bg-accent" aria-hidden="true">
                 <span
                   class="block h-full rounded-full transition-[width] duration-1000 ease-(--ease-flow)"
-                  :style="{ width: `${agent.system_metrics ? Math.min(100, metric.percent) : 0}%`, background: metric.color }"
+                  :style="{ width: `${agent.system_metrics ? Math.min(100, metric.percent) : 0}%`, minWidth: metric.percent > 0 ? '2px' : undefined, background: metric.color }"
                 />
               </i>
-              <b class="text-right font-mono font-medium text-foreground/80">{{ agent.system_metrics ? metric.text : '—' }}</b>
+              <b class="whitespace-nowrap text-right font-mono font-medium text-foreground/80">{{ agent.system_metrics ? metric.text : '—' }}</b>
             </div>
-            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 font-mono text-[11px] text-muted-foreground">
-              <div class="flex min-w-0 flex-wrap gap-x-3">
-                <span class="whitespace-nowrap">↑ {{ agent.system_metrics ? flowsOf(agent)[0].value : '—' }}</span>
-                <span class="whitespace-nowrap">↓ {{ agent.system_metrics ? flowsOf(agent)[1].value : '—' }}</span>
-              </div>
-              <Button
-                v-if="agent.service_type === 'oxidns'"
-                variant="outline"
-                size="sm"
-                class="border-border-strong bg-secondary/60 font-sans text-xs text-foreground"
-                :aria-label="`查看 ${agent.name} 的 DNS 监控`"
-                @click="router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns')"
-              >
-                <ChartLine class="size-3.5" />
-                DNS 监控
-              </Button>
-              <Button
-                v-else-if="agent.system_metrics"
-                variant="outline"
-                size="sm"
-                class="border-border-strong bg-secondary/60 font-sans text-xs text-foreground"
-                :aria-label="`查看 ${agent.name} 的系统监控`"
-                @click="showMetricsDetail(agent)"
-              >
-                <ChartLine class="size-3.5" />
-                系统监控
-              </Button>
-            </div>
+          </div>
+          <div class="mb-3.5 flex items-center justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              class="border-border-strong bg-secondary/60 text-xs text-foreground"
+              :aria-label="`查看 ${agent.name} 的系统监控`"
+              @click="showMetricsDetail(agent)"
+            >
+              <ChartLine class="size-3.5" />
+              系统监控
+            </Button>
+            <Button
+              v-if="agent.service_type === 'oxidns'"
+              variant="outline"
+              size="sm"
+              class="border-border-strong bg-secondary/60 text-xs text-foreground"
+              :aria-label="`查看 ${agent.name} 的 OxiDNS 面板`"
+              @click="router.push('/agents/' + encodeURIComponent(agent.id) + '/oxidns')"
+            >
+              <ChartLine class="size-3.5" />
+              OxiDNS 面板
+            </Button>
+            <Button
+              v-if="agent.service_type === 'mihomo'"
+              variant="outline"
+              size="sm"
+              class="border-border-strong bg-secondary/60 text-xs text-foreground"
+              :aria-label="`查看 ${agent.name} 的 Mihomo 面板`"
+              @click="router.push({ name: 'MihomoPanel', query: { agent: agent.id } })"
+            >
+              <ChartLine class="size-3.5" />
+              Mihomo 面板
+            </Button>
           </div>
 
           <div class="mb-3.5 flex items-center gap-2 text-[11.5px] text-muted-foreground">
@@ -1667,20 +1673,6 @@ const formatSpeed = (bytesPerSec: number | undefined) => {
 // 格式化网络速度（别名）
 const formatNetworkSpeed = formatSpeed
 
-// 格式化字节数（短格式，用于卡片显示）
-const formatBytesShort = (bytes: number | undefined) => {
-  if (bytes === undefined || bytes === null) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let size = bytes
-  let unitIndex = 0
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024
-    unitIndex++
-  }
-  // 使用较少的小数位使显示更紧凑
-  return `${size.toFixed(1)} ${units[unitIndex]}`
-}
-
 // 获取进度条颜色
 const getProgressColor = (percent: number | undefined) => {
   if (percent === undefined || percent === null) return chartPalette.value.primary
@@ -1804,9 +1796,16 @@ const commandBlocks = computed(() => {
   ]
 })
 
-/** 卡片内的三条资源占用条 */
+/** 卡片内的资源占用与网络速率条 */
 const metricsOf = (agent: any) => {
   const m = agent.system_metrics || {}
+  const network = m.network || {}
+  const speed = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+  const upload = speed(network.speed_sent)
+  const download = speed(network.speed_recv)
+  // Agent 未上报链路带宽；上下行共用自动扩展的参考刻度，不表示带宽利用率。
+  const networkScale = 2 ** Math.ceil(Math.log2(Math.max(1024 * 1024, upload ?? 0, download ?? 0)))
+  const networkDetail = `速率条参考刻度：${formatSpeed(networkScale)}，非带宽利用率`
   return [
     {
       label: 'CPU',
@@ -1828,18 +1827,21 @@ const metricsOf = (agent: any) => {
       text: formatPercent(m.disk?.used_percent),
       color: getProgressColor(m.disk?.used_percent),
       detail: `${formatBytes(m.disk?.used)} / ${formatBytes(m.disk?.total)}`
+    },
+    {
+      label: '上传',
+      percent: ((upload ?? 0) / networkScale) * 100,
+      text: upload === undefined ? '—' : formatSpeed(upload),
+      color: 'var(--primary-accent)',
+      detail: networkDetail
+    },
+    {
+      label: '下载',
+      percent: ((download ?? 0) / networkScale) * 100,
+      text: download === undefined ? '—' : formatSpeed(download),
+      color: 'var(--success-accent)',
+      detail: networkDetail
     }
-  ]
-}
-
-/** 卡片内的网络速率与累计流量 */
-const flowsOf = (agent: any) => {
-  const net = agent.system_metrics?.network || {}
-  return [
-    { label: '↑ 上传', value: formatSpeed(net.speed_sent) },
-    { label: '↓ 下载', value: formatSpeed(net.speed_recv) },
-    { label: '↑ 已发送', value: formatBytesShort(net.bytes_sent) },
-    { label: '↓ 已接收', value: formatBytesShort(net.bytes_recv) }
   ]
 }
 

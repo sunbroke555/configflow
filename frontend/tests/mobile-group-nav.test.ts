@@ -315,11 +315,11 @@ describe('mobile group navigation', () => {
     expect(router.currentRoute.value.path).toBe('/subscriptions')
   })
 
-  it('opens OxiDNS monitoring below the dashboard in the overview menu', async () => {
+  it('opens the OxiDNS panel below the dashboard in the overview menu', async () => {
     const { wrapper, router } = await render('/dashboard')
     const menu = await openMenu(wrapper, '总览', '数据统计')
     const links = Array.from(menu.querySelectorAll('a'))
-    expect(links.map(link => link.textContent?.trim())).toEqual(['数据统计', 'DNS 监控', 'Mihomo 面板'])
+    expect(links.map(link => link.textContent?.trim())).toEqual(['数据统计', 'OxiDNS 面板', 'Mihomo 面板'])
     links[1]!.click()
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/oxidns')

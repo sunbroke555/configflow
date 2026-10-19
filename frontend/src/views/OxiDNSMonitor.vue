@@ -1,6 +1,6 @@
 <template>
   <div class="min-w-0">
-    <PageHeader title="OxiDNS 监控" class="oxidns-monitor-header">
+    <PageHeader title="OxiDNS 面板" class="oxidns-monitor-header">
       <template #title-extra>
         <Select :model-value="agentId" :disabled="!devices?.length || switchingDevice" @update:model-value="switchDevice(String($event))">
           <SelectTrigger class="min-h-11 w-auto min-w-0 max-w-32 sm:max-w-48" aria-label="监控设备" :title="currentDevice?.name || currentDevice?.id">
@@ -70,7 +70,7 @@
         <template v-if="tab !== 'devices' && !overview">
           <LoadingRows v-if="overviewLoading" :rows="5" />
           <SectionCard v-else>
-            <EmptyState :icon="TriangleAlert" title="暂时无法读取 OxiDNS 监控" :description="overviewError || '等待核心返回监控数据。'">
+            <EmptyState :icon="TriangleAlert" title="暂时无法读取 OxiDNS 数据" :description="overviewError || '等待核心返回监控数据。'">
               <Button variant="outline" class="min-h-11" :disabled="overviewLoading" @click="refresh(true)">重试</Button>
             </EmptyState>
           </SectionCard>
@@ -92,7 +92,7 @@
     </template>
     <OxiDNSQueryDetail v-if="selectedRecord" :agent-id="agentId" :record-id="selectedRecord.id" :recorder="recorder" @close="selectedRecord = null" />
     <OxidnsSettings v-if="settingsEditor" :open="true" :profile-id="settingsEditor.profileId" :context-label="settingsEditor.label"
-      :initial-feature="settingsEditor.initialFeature" back-label="返回 OxiDNS 监控" @update:open="value => { if (!value) settingsEditor = null }" />
+      :initial-feature="settingsEditor.initialFeature" back-label="返回 OxiDNS 面板" @update:open="value => { if (!value) settingsEditor = null }" />
   </div>
 </template>
 <script setup lang="ts">
