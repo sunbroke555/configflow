@@ -144,7 +144,7 @@ describe('individual and all-group delay tests', () => {
     expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
     expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(123)
     expect(state.delayOf('Fast', { ...PROXIES.Proxy, testUrl: 'https://different.test' })).toBe(40)
-    expect(wrapper.find('button[aria-label="单节点测速 Auto（Proxy）"]').exists()).toBe(false)
+    expect(wrapper.find('button[aria-label="当前出口测速 Auto（Proxy）"]').exists()).toBe(true)
   })
   it('keeps ordinary node tests on the existing endpoint', async () => {
     const { wrapper, state } = await render()
@@ -153,6 +153,214 @@ describe('individual and all-group delay tests', () => {
     expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledWith('gw', 'Slow', undefined)
     expect(mihomoPanelApi.providerProxyDelay).not.toHaveBeenCalled()
     expect(state.delayOf('Slow', PROXIES.Proxy)).toBe(123)
+  })
+  it.each(['URLTest', 'Selector'])('tests the current provider exit of a nested %s card without bubbling or switching', async type => {
+    const testUrl = 'https://parent.test/generate_204?key=a%20b&check=1'
+    const parent = { ...PROXIES.Proxy, now: 'Slow', testUrl }
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: {
+      ...PROXIES,
+      Proxy: parent,
+      Auto: { ...PROXIES.Auto, type, all: ['Nested'], now: 'Nested', history: history(900), testUrl: 'https://auto.test' },
+      Nested: { name: 'Nested', type: 'Selector', all: ['Fast'], now: 'Fast', testUrl: 'https://nested.test' }
+    } } } } as any)
+    const { wrapper, state } = await render()
+    const button = wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]')
+    const bubbled = vi.fn()
+    button.element.parentElement!.addEventListener('click', bubbled)
+    await button.trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.providerProxyDelay).toHaveBeenCalledExactlyOnceWith('gw', 'sub', 'Fast', testUrl)
+    expect(mihomoPanelApi.proxyDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.groupDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.connections).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.closeConnection).not.toHaveBeenCalled()
+    expect(bubbled).not.toHaveBeenCalled()
+    expect(state.proxies.Proxy.now).toBe('Slow')
+    expect(state.delayOf('Fast', parent)).toBe(123)
+    expect(state.delayOf('Auto', parent)).toBe(123)
+    expect(button.text()).toBe('123 ms')
+    expect(state.delayOf('Fast', { ...parent, testUrl: 'https://different.test' })).toBe(40)
+    expect(state.delayOf('Auto', { ...parent, testUrl: 'https://different.test' })).toBe(900)
+  })
+  it.each(['Slow', 'DIRECT'])('tests the current core exit %s through the single-node endpoint', async target => {
+    const testUrl = 'https://parent.test/generate_204'
+    const parent = { ...PROXIES.Proxy, testUrl }
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: {
+      ...PROXIES, Proxy: parent,
+      Auto: { ...PROXIES.Auto, all: [target], now: target },
+      DIRECT: { name: 'DIRECT', type: 'Direct' }
+    } } } } as any)
+    const { wrapper, state } = await render()
+    await wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]').trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledExactlyOnceWith('gw', target, testUrl)
+    expect(mihomoPanelApi.providerProxyDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.groupDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.closeConnection).not.toHaveBeenCalled()
+    expect(state.delayOf(target, parent)).toBe(123)
+    expect(state.delayOf('Auto', parent)).toBe(123)
+  })
+  it.each(['LoadBalance', 'Relay'])('tests a native %s group without now through the single-item core endpoint', async type => {
+    const testUrl = 'https://parent.test/generate_204'
+    const parent = { ...PROXIES.Proxy, testUrl }
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: {
+      ...PROXIES, Proxy: parent, Auto: { ...PROXIES.Auto, type, now: undefined }
+    } } } } as any)
+    const { state } = await render()
+    expect(state.canTestNode('Auto')).toBe(true)
+    await state.testNode('Auto', parent)
+    expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledExactlyOnceWith('gw', 'Auto', testUrl)
+    expect(mihomoPanelApi.providerProxyDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.groupDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.closeConnection).not.toHaveBeenCalled()
+    expect(state.delayOf('Auto', parent)).toBe(123)
+    expect(notify.error).not.toHaveBeenCalled()
+  })
+  it('follows a changed group exit without reusing the previous exit result', async () => {
+    const { wrapper, state } = await render()
+    const button = wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]')
+    await button.trigger('click')
+    await flushPromises()
+    expect(button.text()).toBe('123 ms')
+    state.proxies.Auto = { ...state.proxies.Auto, now: 'Slow' }
+    await flushPromises()
+    expect(button.text()).toBe('600 ms')
+    expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(123)
+    vi.mocked(mihomoPanelApi.proxyDelay).mockResolvedValueOnce({ data: { data: { delay: 85 } } } as any)
+    await button.trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledExactlyOnceWith('gw', 'Slow', undefined)
+    expect(button.text()).toBe('85 ms')
+    expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(123)
+  })
+  it('stores an in-flight result on its original exit when the group changes exit', async () => {
+    let resolve!: (value: any) => void
+    vi.mocked(mihomoPanelApi.providerProxyDelay).mockImplementationOnce(() => new Promise(yes => { resolve = yes }))
+    const { wrapper, state } = await render()
+    const button = wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]')
+    await button.trigger('click')
+    state.proxies.Auto = { ...state.proxies.Auto, now: 'Slow' }
+    await flushPromises()
+    expect(button.text()).toBe('600 ms')
+    resolve({ data: { data: { delay: 77 } } })
+    await flushPromises()
+    expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(77)
+    expect(state.delayOf('Slow', PROXIES.Proxy)).toBe(600)
+    expect(state.delayOf('Auto', PROXIES.Proxy)).toBe(600)
+    expect(button.text()).toBe('600 ms')
+    expect(button.attributes('aria-busy')).toBe('false')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(state.nodeTesting.size).toBe(0)
+    expect(mihomoPanelApi.providerProxyDelay).toHaveBeenCalledTimes(1)
+    expect(mihomoPanelApi.proxyDelay).not.toHaveBeenCalled()
+  })
+  it('lets a group result replace the earlier exit test without following the child to a new exit', async () => {
+    const parent = { ...PROXIES.Proxy, all: ['Auto'] }
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: { ...PROXIES, Proxy: parent } } } } as any)
+    vi.mocked(mihomoPanelApi.groupDelay).mockResolvedValueOnce({ data: { data: { Auto: 500 } } } as any)
+    const { wrapper, state } = await render()
+    const button = wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]')
+    await state.testNode('Auto', parent)
+    expect(state.delayOf('Auto', parent)).toBe(123)
+    await state.testGroup(parent)
+    await flushPromises()
+    expect(mihomoPanelApi.groupDelay).toHaveBeenCalledExactlyOnceWith('gw', 'Proxy', undefined)
+    expect(state.delayOf('Fast', parent)).toBe(123)
+    expect(button.text()).toBe('500 ms')
+    state.proxies.Auto = { ...state.proxies.Auto, now: 'Slow' }
+    await flushPromises()
+    expect(button.text()).toBe('600 ms')
+    expect(state.delayOf('Fast', parent)).toBe(123)
+  })
+  it.each([
+    { reason: 'both members return delays', result: { Auto: 500, Fast: 80 }, autoDelay: 500, fastDelay: 80 },
+    { reason: 'the direct member is missing', result: { Auto: 500 }, autoDelay: 500, fastDelay: 0 },
+    { reason: 'the child group is missing', result: { Fast: 80 }, autoDelay: 0, fastDelay: 80 }
+  ])('keeps batch results independent for members sharing an exit when $reason', async ({ result, autoDelay, fastDelay }) => {
+    const parent = { ...PROXIES.Proxy, all: ['Auto', 'Fast'] }
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: { ...PROXIES, Proxy: parent } } } } as any)
+    vi.mocked(mihomoPanelApi.groupDelay).mockResolvedValueOnce({ data: { data: result } } as any)
+    const { state } = await render()
+    await state.testGroup(parent)
+    expect(state.delayOf('Auto', parent)).toBe(autoDelay)
+    expect(state.delayOf('Fast', parent)).toBe(fastDelay)
+    await state.testNode('Fast', parent)
+    expect(state.delayOf('Auto', parent)).toBe(123)
+    expect(state.delayOf('Fast', parent)).toBe(123)
+  })
+  it('discards only changed exits from an in-flight group result', async () => {
+    const parent = { ...PROXIES.Proxy, all: ['Auto', 'Slow'] }
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: { ...PROXIES, Proxy: parent } } } } as any)
+    let resolve!: (value: any) => void
+    vi.mocked(mihomoPanelApi.groupDelay).mockImplementationOnce(() => new Promise(yes => { resolve = yes }))
+    const { state } = await render()
+    await state.testNode('Auto', parent)
+    const pending = state.testGroup(parent)
+    state.proxies.Auto = { ...state.proxies.Auto, now: 'Dead' }
+    resolve({ data: { data: { Auto: 500, Slow: 55 } } })
+    await pending
+    expect(state.delayOf('Auto', parent)).toBe(0)
+    expect(state.delayOf('Dead', parent)).toBe(0)
+    expect(state.delayOf('Fast', parent)).toBe(123)
+    expect(state.delayOf('Slow', parent)).toBe(55)
+    expect(state.testing.size).toBe(0)
+    expect(notify.error).not.toHaveBeenCalled()
+  })
+  it.each([
+    { reason: 'Selector without now', auto: { type: 'Selector', now: undefined }, error: '策略组没有可用的当前出口，请刷新后重试。' },
+    { reason: 'URLTest without now', auto: { type: 'URLTest', now: undefined }, error: '策略组没有可用的当前出口，请刷新后重试。' },
+    { reason: 'a cyclic now chain', auto: { now: 'Proxy' }, error: '策略组没有可用的当前出口，请刷新后重试。' },
+    { reason: 'a missing exit', auto: { now: 'Missing' }, error: '找不到该节点，请刷新后重试。' },
+    { reason: 'a rejected exit', auto: { now: 'REJECT' }, error: '当前出口拒绝连接，无法测速。' }
+  ])('does not send a request for $reason', async ({ auto, error }) => {
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: {
+      ...PROXIES, Auto: { ...PROXIES.Auto, ...auto }, REJECT: { name: 'REJECT', type: 'Reject' }
+    } } } } as any)
+    const { wrapper, state } = await render()
+    const button = wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]')
+    await button.trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.proxyDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.providerProxyDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.groupDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.closeConnection).not.toHaveBeenCalled()
+    expect(notify.error).toHaveBeenCalledWith('Auto 测速失败', error)
+    expect(state.nodeTesting.size).toBe(0)
+    expect(state.delays.size).toBe(0)
+    expect(button.attributes('aria-busy')).toBe('false')
+    expect(button.attributes('disabled')).toBeUndefined()
+  })
+  it('shows pending state for a group exit and recovers after failure without duplicate requests', async () => {
+    let reject!: (reason: any) => void
+    vi.mocked(mihomoPanelApi.providerProxyDelay).mockImplementationOnce(() => new Promise((_yes, no) => { reject = no }))
+    const { wrapper, state } = await render()
+    const button = wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]')
+    await button.trigger('click')
+    expect(button.attributes('aria-busy')).toBe('true')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('button[aria-label="测速 Proxy"]').attributes('disabled')).toBeDefined()
+    await state.testNode('Auto', PROXIES.Proxy)
+    expect(mihomoPanelApi.providerProxyDelay).toHaveBeenCalledTimes(1)
+    reject({ response: { status: 504, data: { message: 'exit timed out' } } })
+    await flushPromises()
+    expect(notify.error).toHaveBeenCalledWith('Auto 测速失败', 'exit timed out')
+    expect(button.attributes('aria-busy')).toBe('false')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('button[aria-label="测速 Proxy"]').attributes('disabled')).toBeUndefined()
+    expect(button.text()).toBe('40 ms')
+    expect(state.nodeTesting.size).toBe(0)
+    expect(state.delays.size).toBe(0)
+    await button.trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.providerProxyDelay).toHaveBeenCalledTimes(2)
+    expect(button.text()).toBe('123 ms')
+    expect(mihomoPanelApi.groupDelay).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
+    expect(mihomoPanelApi.closeConnection).not.toHaveBeenCalled()
   })
   it('tests DIRECT normally and displays a zero delay as a timeout', async () => {
     vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: {

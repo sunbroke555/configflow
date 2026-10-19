@@ -71,8 +71,11 @@
                     <span v-if="!canTestNode(member)" class="num whitespace-nowrap" :class="toneClass(delayOf(member, group))">{{ delayText(delayOf(member, group)) }}</span>
                   </span>
                 </button>
-                <Button v-if="canTestNode(member)" variant="ghost" size="icon" class="h-auto min-h-11 min-w-11 w-auto shrink-0 flex-col gap-0.5 self-stretch px-1.5" :aria-label="`单节点测速 ${member}（${group.name}）`"
-                  :disabled="batchRunning || testing.size > 0 || nodeTesting.has(delayKey(member, group))" @click="testNode(member, group)">
+                <Button v-if="canTestNode(member)" variant="ghost" size="icon" class="h-auto min-h-11 min-w-11 w-auto shrink-0 flex-col gap-0.5 self-stretch px-1.5 text-muted-foreground"
+                  :aria-label="`${GROUP_TYPES.has(proxies[member]?.type || '') ? '当前出口测速' : '单节点测速'} ${member}（${group.name}）`"
+                  :title="GROUP_TYPES.has(proxies[member]?.type || '') ? '测试当前出口的延迟' : '测速'"
+                  :aria-busy="nodeTesting.has(delayKey(member, group))"
+                  :disabled="batchRunning || testing.size > 0 || nodeTesting.has(delayKey(member, group))" @click.stop="testNode(member, group)">
                   <Loader2 v-if="nodeTesting.has(delayKey(member, group))" class="size-3.5 animate-spin" /><Zap v-else class="size-3.5" />
                   <span class="num whitespace-nowrap text-[11px] font-normal" :class="toneClass(delayOf(member, group))">{{ delayText(delayOf(member, group)) }}</span>
                 </Button>
@@ -152,10 +155,11 @@ const batchTotal = ref(0)
 let disposed = false
 let testEpoch = 0
 const delayKey = (name: string, group?: MihomoProxy) => JSON.stringify([name, group?.testUrl || ''])
-const canTestNode = (name: string) => !!proxies.value[name] && !GROUP_TYPES.has(proxies.value[name].type) && !['Reject', 'RejectDrop'].includes(proxies.value[name].type)
+const canTestNode = (name: string) => !!proxies.value[name] && !['Reject', 'RejectDrop'].includes(proxies.value[name].type)
 const busy = reactive(new Set<string>())
 /** 本次会话里测速得到的延迟，优先于核心记录的历史 */
-const delays = reactive(new Map<string, number>())
+const delays = reactive(new Map<string, { delay: number; target: string; revision: number }>())
+let delayRevision = 0
 
 const allTestGroups = computed(() => orderedGroups(proxies.value, true))
 const groups = computed(() => orderedGroups(proxies.value, settings.value.showHiddenGroups))
@@ -212,7 +216,13 @@ const canSwitch = (group: MihomoProxy) => SWITCHABLE_GROUP_TYPES.has(group.type)
 
 /** 成员是策略组时，延迟取它当前选中的节点 */
 function delayOf(name: string, group?: MihomoProxy, depth = 0): number | undefined {
-  if (delays.has(delayKey(name, group))) return delays.get(delayKey(name, group))
+  // 只读取当前出口的结果；单项与整组测试取较新一批，同批优先保留本卡片的结果。
+  const target = finalNode(proxies.value, name)
+  const ownResult = delays.get(delayKey(name, group))
+  const targetResult = delays.get(delayKey(target, group))
+  let cached = ownResult?.target === target ? ownResult : undefined
+  if (targetResult?.target === target && (!cached || targetResult.revision > cached.revision)) cached = targetResult
+  if (cached) return cached.delay
   const proxy = proxies.value[name]
   if (!proxy) return undefined
   const own = latestDelay(proxy, group?.testUrl)
@@ -316,17 +326,24 @@ async function testNode(name: string, group: MihomoProxy) {
   const agentId = props.agentId
   nodeTesting.add(key)
   try {
-    const sources = [...(nodeProviders.value.get(name) || [])]
-    const inCore = coreProxyNames.value.has(name)
+    const target = finalNode(proxies.value, name)
+    const proxy = proxies.value[target]
+    if (!proxy) throw new Error('找不到该节点，请刷新后重试。')
+    // 负载均衡和链式代理没有固定 now，由核心通过单项端点测量实际出站。
+    const nativeRoute = !proxy.now && ['LoadBalance', 'Relay'].includes(proxy.type)
+    if (GROUP_TYPES.has(proxy.type) && !nativeRoute) throw new Error('策略组没有可用的当前出口，请刷新后重试。')
+    if (['Reject', 'RejectDrop'].includes(proxy.type)) throw new Error('当前出口拒绝连接，无法测速。')
+    const sources = [...(nodeProviders.value.get(target) || [])]
+    const inCore = coreProxyNames.value.has(target)
     if (sources.length > 1) throw new Error('多个来源中存在同名节点，请使用所属策略组的分组测速。')
     if (!inCore && !sources.length) throw new Error('找不到该节点，请刷新后重试。')
     const { data } = await (inCore
-      ? mihomoPanelApi.proxyDelay(agentId, name, group.testUrl)
-      : mihomoPanelApi.providerProxyDelay(agentId, sources[0], name, group.testUrl))
+      ? mihomoPanelApi.proxyDelay(agentId, target, group.testUrl)
+      : mihomoPanelApi.providerProxyDelay(agentId, sources[0], target, group.testUrl))
     if (disposed || generation !== testEpoch) return
     const delay = data.data?.delay
     if (typeof delay !== 'number' || !Number.isFinite(delay) || delay < 0) throw new Error('测速结果无效，请重试。')
-    delays.set(key, delay)
+    delays.set(delayKey(target, group), { delay, target, revision: ++delayRevision })
   } catch (failure) {
     if (!disposed && generation === testEpoch) notify.error(`${name} 测速失败`, panelError(failure))
   } finally { if (generation === testEpoch) nodeTesting.delete(key) }
@@ -336,12 +353,17 @@ async function testGroup(group: MihomoProxy, inBatch = false): Promise<boolean> 
   if (testing.has(group.name) || nodeTesting.size || (batchRunning.value && !inBatch)) return false
   const generation = testEpoch
   const agentId = props.agentId
+  const targets = (group.all || []).map(member => ({ member, target: finalNode(proxies.value, member) }))
   testing.add(group.name)
   try {
     const { data } = await mihomoPanelApi.groupDelay(agentId, group.name, group.testUrl)
     if (disposed || generation !== testEpoch) return false
     const result: Record<string, number> = data.data || {}
-    for (const member of group.all || []) delays.set(delayKey(member, group), result[member] ?? 0)
+    const revision = ++delayRevision
+    for (const { member, target } of targets) {
+      if (finalNode(proxies.value, member) !== target) continue
+      delays.set(delayKey(member, group), { delay: result[member] ?? 0, target, revision })
+    }
     if (!inBatch && group.type !== 'Selector') await load()
     return true
   } catch (failure) {
