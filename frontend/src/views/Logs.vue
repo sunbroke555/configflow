@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="日志">
+    <PageHeader title="日志" class="logs-page-header">
       <template #actions>
         <div class="flex w-full flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap gap-1.5" role="group" aria-label="按级别筛选">
@@ -15,9 +15,9 @@
               {{ level }}
             </button>
           </div>
-          <Button variant="outline" class="ml-auto border-border/60 bg-background/40" @click="togglePause">
+          <Button variant="outline" class="ml-auto border-border/60 bg-background/40 max-sm:size-11 max-sm:shrink-0 max-sm:gap-0" :aria-label="paused ? '继续日志尾随' : '暂停日志尾随'" :title="paused ? '继续日志尾随' : '暂停日志尾随'" @click="togglePause">
             <component :is="paused ? Play : Pause" class="size-4" />
-            {{ paused ? '继续' : '暂停' }}
+            <span class="max-sm:sr-only">{{ paused ? '继续' : '暂停' }}</span>
           </Button>
         </div>
       </template>
@@ -38,23 +38,23 @@
       </template>
 
       <template #actions>
-        <Button variant="ghost" size="sm" :disabled="loading" @click="reload()">
+        <Button variant="ghost" size="sm" class="max-sm:size-11 max-sm:gap-0 max-sm:px-0" aria-label="刷新日志" title="刷新日志" :disabled="loading" @click="reload()">
           <RefreshCw class="size-3.5" :class="loading && 'animate-spin'" />
-          刷新
+          <span class="max-sm:sr-only">刷新</span>
         </Button>
-        <Button variant="ghost" size="sm" title="滚动到底部" @click="scrollToBottom">
+        <Button variant="ghost" size="sm" class="max-sm:size-11 max-sm:gap-0 max-sm:px-0" aria-label="滚动到底部" title="滚动到底部" @click="scrollToBottom">
           <ArrowDownToLine class="size-3.5" />
-          到底部
+          <span class="max-sm:sr-only">到底部</span>
         </Button>
-        <Button variant="ghost" size="sm" class="text-destructive-accent hover:bg-destructive-soft" @click="clearLogs">
+        <Button variant="ghost" size="sm" class="text-destructive-accent hover:bg-destructive-soft max-sm:size-11 max-sm:gap-0 max-sm:px-0" aria-label="清空日志" title="清空日志" @click="clearLogs">
           <Trash2 class="size-3.5" />
-          清空
+          <span class="max-sm:sr-only">清空</span>
         </Button>
       </template>
     </Toolbar>
 
     <div v-if="logInfo || totalLines" class="mb-3 flex flex-wrap items-center gap-1.5">
-      <span v-if="logInfo" class="chip font-mono"><FileText class="size-3" aria-hidden="true" />{{ logInfo.path }}</span>
+      <span v-if="logInfo" class="chip min-w-0 max-w-full font-mono" :title="logInfo.path"><FileText class="size-3 shrink-0" aria-hidden="true" /><span class="truncate">{{ logInfo.path }}</span></span>
       <span v-if="logInfo" class="chip font-mono">{{ logInfo.size_mb }} MB</span>
       <span class="chip font-mono">总行数 {{ totalLines }}</span>
       <span v-if="visibleLines.length !== lines.length" class="chip chip-acc font-mono">显示 {{ visibleLines.length }}</span>
@@ -329,6 +329,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+@media (width < 640px) {
+  .logs-page-header :deep(.cf-page-actions) {
+    flex-grow: 1;
+  }
+}
+
 /* 终端常暗：两套主题下都用同一组暖炭色 */
 .terminal {
   background: #141312;

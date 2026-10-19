@@ -44,8 +44,9 @@
             <h2 class="m-0 flex items-center gap-2 text-sm font-semibold">
               <component :is="current.icon" class="size-4 text-primary-accent" aria-hidden="true" />
               {{ current.title }} 配置
+              <span v-if="isPhone" class="cf-compact-help"><FieldHelp :label="`${current.title} 配置`" :text="current.desc" /></span>
             </h2>
-            <p class="mt-1 mb-0 text-xs text-muted-foreground">{{ current.desc }}</p>
+            <p v-if="!isPhone" class="mt-1 mb-0 text-xs text-muted-foreground">{{ current.desc }}</p>
           </div>
           <div class="flex flex-wrap items-center gap-2" role="group" :aria-label="`${current.title} 配置操作`">
             <Button
@@ -87,17 +88,21 @@
         </section>
 
         <section class="min-w-0 overflow-hidden" aria-label="生成结果">
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-5 py-3 max-md:gap-2 max-md:px-3 max-md:py-2">
-            <div class="flex min-w-max flex-1 items-center gap-2.5">
-              <span class="flex shrink-0 gap-1.5" aria-hidden="true">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-5 py-3 max-md:gap-2 max-md:px-3 max-md:py-2" role="group" aria-label="生成和导出操作">
+            <div class="flex min-w-max flex-1 items-center gap-2.5 max-sm:min-w-0">
+              <span class="flex shrink-0 gap-1.5 max-sm:hidden" aria-hidden="true">
                 <i class="size-2.5 rounded-full bg-accent" /><i class="size-2.5 rounded-full bg-accent" /><i class="size-2.5 rounded-full bg-accent" />
               </span>
-              <span class="whitespace-nowrap font-mono text-[12px] text-muted-foreground">{{ fileName }}</span>
+              <span class="truncate font-mono text-[12px] text-muted-foreground" :title="fileName">{{ fileName }}</span>
               <span v-if="lines.length && !running" class="whitespace-nowrap font-mono text-[11px] text-muted-foreground">· {{ lines.length }} 行</span>
             </div>
-            <div class="flex flex-wrap items-center gap-1.5 max-sm:w-full" role="group" aria-label="生成和导出操作">
+            <Button v-if="isPhone" size="sm" class="min-h-11 shadow-glow" :disabled="running" @click="generate">
+              <Play class="size-3.5" />
+              生成
+            </Button>
+            <div class="flex flex-wrap items-center gap-1.5 max-sm:w-full max-sm:gap-1 max-sm:[&>button]:flex-1 max-sm:[&>button]:px-1 max-sm:[&>button]:text-[13px]">
               <Button variant="ghost" size="sm" class="min-h-11" :disabled="!output || running" @click="copyOutput">
-                <Copy class="size-3.5" />
+                <Copy v-if="!isPhone" class="size-3.5" />
                 复制
               </Button>
               <Button
@@ -106,11 +111,12 @@
                 variant="outline"
                 size="sm"
                 class="min-h-11"
+                :aria-busy="action.loading || undefined"
                 :disabled="action.loading"
                 @click="action.run"
               >
                 <Loader2 v-if="action.loading" class="size-3.5 animate-spin" />
-                <component :is="action.icon" v-else class="size-3.5" />
+                <component :is="action.icon" v-else-if="!isPhone" class="size-3.5" />
                 {{ action.label }}
               </Button>
               <Button
@@ -122,10 +128,10 @@
                 @click="pushToAgents"
               >
                 <Loader2 v-if="pushing || deploying" class="size-3.5 animate-spin" />
-                <Send v-else class="size-3.5" />
+                <Send v-else-if="!isPhone" class="size-3.5" />
                 推送
               </Button>
-              <Button size="sm" class="min-h-11 shadow-glow" :disabled="running" @click="generate">
+              <Button v-if="!isPhone" size="sm" class="min-h-11 shadow-glow" :disabled="running" @click="generate">
                 <Play class="size-3.5" />
                 生成
               </Button>
@@ -199,6 +205,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { RouterLink, useRouter } from 'vue-router'
 import { Check, ChevronRight, Copy, Loader2, Play, Send, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
@@ -206,6 +213,7 @@ import { Input } from '@/components/ui/input'
 import BrandMark from '@/components/common/BrandMark.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import SectionCard from '@/components/common/SectionCard.vue'
+import FieldHelp from '@/components/common/FieldHelp.vue'
 import { agentApi, generateApi, ruleSetApi, statsApi } from '@/api'
 import { createDeploymentId, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
@@ -217,6 +225,8 @@ import { notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/stores/live'
+
+const isPhone = useMediaQuery('(max-width: 639px)')
 
 type TargetKey = 'mihomo' | 'surge' | 'loon' | 'mosdns' | 'oxidns'
 

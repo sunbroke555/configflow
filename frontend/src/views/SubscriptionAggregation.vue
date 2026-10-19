@@ -55,7 +55,7 @@
         :data-id="aggregation.id"
         data-reorder-item
         :class="[
-          'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border border-border bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong',
+          'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border border-border bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
           !aggregation.enabled && 'opacity-60'
         ]"
       >
@@ -157,7 +157,7 @@
           </div>
         </div>
 
-        <footer class="cf-reorder-mute mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3">
+        <footer class="cf-reorder-mute mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2">
           <Button variant="ghost" size="sm" @click="handlePreviewNodes(aggregation)">
             <Eye class="size-3.5" />
             预览节点

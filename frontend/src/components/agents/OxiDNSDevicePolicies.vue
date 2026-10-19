@@ -31,14 +31,14 @@
           <OxiDNSClientSelect class="md:col-start-1 md:row-start-2" :model-value="''" :notes="state.device_notes || {}" :agent-id="agentId" :recorder="recorder" range="all" :allow-all="false" placeholder="选择已有客户端…" @update:model-value="add" />
           <p v-if="!recorder" class="mb-0 mt-1.5 text-xs text-muted-foreground md:col-start-1 md:row-start-3 md:mt-0">暂无可读取的查询记录，可手动添加 IP 或网段。</p>
         </div>
-        <div class="min-w-0 md:contents">
-          <div class="mb-2 flex min-h-6 items-center gap-1 md:col-start-2 md:row-start-1 md:mb-0 md:self-stretch">
+        <div class="min-w-0 max-md:grid max-md:grid-cols-[minmax(0,1fr)_auto] max-md:items-center max-md:gap-x-2 md:contents">
+          <div class="mb-2 flex min-h-6 items-center gap-1 max-md:col-span-2 md:col-start-2 md:row-start-1 md:mb-0 md:self-stretch">
             <label for="policy-client-ip" class="text-xs text-muted-foreground">手动添加 IP / 网段</label>
             <FieldHelp label="手动添加 IP / 网段" :text="clientRangeHelp" />
           </div>
           <Input id="policy-client-ip" v-model="newIP" class="min-h-11 font-mono md:col-start-2 md:row-start-2" placeholder="192.168.50.0/24 或 IPv6" @keydown.enter.prevent="add(newIP)" />
+          <Button variant="outline" class="min-h-11 md:col-start-3 md:row-start-2" :disabled="!newIP.trim() || rows.length >= 512" @click="add(newIP)"><Plus class="size-4" /><span>添加<span class="max-sm:sr-only">策略</span></span></Button>
         </div>
-        <Button variant="outline" class="min-h-11 md:col-start-3 md:row-start-2" :disabled="!newIP.trim() || rows.length >= 512" @click="add(newIP)"><Plus class="size-4" />添加策略</Button>
       </div>
       <div v-if="rows.length" class="cf-table-wrap">
         <table class="cf-table cf-mobile-records policy-source-records w-full min-w-[540px]" role="table">

@@ -127,7 +127,7 @@
 
       <SectionCard title="备份与恢复" :icon="Archive" class="min-w-0">
         <div class="flex flex-col gap-4">
-          <div class="grid grid-cols-2 gap-2 max-[480px]:grid-cols-1 [&_button]:h-auto [&_button]:min-h-9 [&_button]:min-w-0 [&_button]:whitespace-normal">
+          <div class="grid grid-cols-2 gap-2 max-sm:[&_button]:min-h-11 max-sm:[&_button]:gap-1.5 max-sm:[&_button]:px-2 [&_button]:h-auto [&_button]:min-h-9 [&_button]:min-w-0 [&_button]:whitespace-normal">
             <Button variant="outline" class="border-border/60 bg-background/40" @click="exportConfig">
               <Upload class="size-4" />
               导出全部数据

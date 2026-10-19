@@ -391,6 +391,7 @@ body {
   }
 
   .cf-toolbar-actions {
+    margin-left: 0;
     gap: var(--cf-sp-1);
   }
 

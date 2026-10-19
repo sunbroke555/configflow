@@ -10,12 +10,12 @@
     <LoadingRows v-if="loading && !state" :rows="4" />
     <p v-if="error" role="alert" class="m-0 break-words px-5 pb-4 text-sm text-destructive-accent">{{ error }}</p>
     <Tabs v-if="state" v-model="tab" class="min-w-0 gap-0">
-      <div class="px-5 pb-4 max-md:px-4">
+      <div class="px-5 pb-4 max-md:px-4 max-sm:px-3">
         <TabsList class="h-auto w-full flex-wrap justify-start max-sm:grid max-sm:grid-cols-2 sm:w-auto" aria-label="策略路由设置">
           <TabsTrigger v-for="item in tabs" :key="item.value" :value="item.value" class="min-h-11 px-3">{{ item.label }}</TabsTrigger>
         </TabsList>
       </div>
-      <TabsContent value="sources" class="m-0 px-5 pb-4 max-md:px-4">
+      <TabsContent value="sources" class="m-0 px-5 pb-4 max-md:px-4 max-sm:px-3">
         <div class="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
           <span>{{ state.profile_name }} · 共用来源设备</span>
           <FieldHelp label="来源设备" text="智能分流 IPv4 地址或网段参与 ROS 策略路由；更具体的直连例外和 mihomo 自身会被排除。直连设备仍按主表中的静态路由转发。IPv6 策略只作用于 OxiDNS。" />
@@ -60,7 +60,7 @@
           <EmptyState v-else :icon="Network" title="尚未添加来源设备" description="添加需要智能分流的客户端 IP 或网段，也可为更具体的地址设置直连例外。" />
         </fieldset>
       </TabsContent>
-      <TabsContent value="settings" class="m-0 px-5 pb-5 max-md:px-4">
+      <TabsContent value="settings" class="m-0 px-5 pb-5 max-md:px-4 max-sm:px-3">
         <fieldset class="m-0 grid min-w-0 gap-5 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="locked">
           <FormField label="代理网关（mihomo）" html-for="policy-gateway" hint="这台 ROS 的策略路由与静态代理路由共用此网关。">
             <Select :model-value="settings.proxy_gateway_agent_id || '__none__'" :disabled="locked" @update:model-value="value => settings.proxy_gateway_agent_id = value === '__none__' ? '' : String(value)">
@@ -74,7 +74,7 @@
           </FormField>
         </fieldset>
       </TabsContent>
-      <TabsContent value="preview" class="m-0 px-5 pb-5 max-md:px-4">
+      <TabsContent value="preview" class="m-0 px-5 pb-5 max-md:px-4 max-sm:px-3">
         <div class="space-y-5">
           <fieldset class="m-0 min-w-0 border-0 p-0" :disabled="locked">
             <legend class="mb-3 flex items-center gap-2 text-sm font-semibold">

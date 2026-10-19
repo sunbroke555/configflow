@@ -106,11 +106,11 @@
         <Button size="sm" :disabled="routeLoading || routeBusy || Boolean(routeError)" @click="openRouteEditor()"><Plus class="size-3.5" />新增路由</Button>
         <Button size="sm" variant="ghost" :disabled="routeBusy" @click="closeRouteManager">收起路由列表</Button>
       </template>
-      <p class="m-0 px-5 pb-4 text-[12px] leading-relaxed text-muted-foreground max-md:px-4">
+      <p class="m-0 px-5 pb-4 text-[12px] leading-relaxed text-muted-foreground max-md:px-4 max-sm:px-3">
         此处只修改选中的静态路由。带 cf 标记的路由可能被后续自动发布调整；NAT、DHCP DNS 和 mihomo 回流配置不随手工操作变化。
       </p>
-      <p v-if="routeBusy" role="status" class="m-0 flex items-center gap-2 px-5 pb-4 text-[12px] text-muted-foreground max-md:px-4"><Loader2 class="size-3.5 animate-spin" />正在准备或执行路由变更…</p>
-      <p v-if="routeError" role="alert" class="m-0 break-words px-5 pb-4 text-[12.5px] text-destructive-accent max-md:px-4">{{ routeError }}</p>
+      <p v-if="routeBusy" role="status" class="m-0 flex items-center gap-2 px-5 pb-4 text-[12px] text-muted-foreground max-md:px-4 max-sm:px-3"><Loader2 class="size-3.5 animate-spin" />正在准备或执行路由变更…</p>
+      <p v-if="routeError" role="alert" class="m-0 break-words px-5 pb-4 text-[12.5px] text-destructive-accent max-md:px-4 max-sm:px-3">{{ routeError }}</p>
       <LoadingRows v-if="routeLoading" :rows="3" />
       <div v-else-if="routeRows.length" class="cf-table-wrap">
         <table class="cf-table min-w-[920px]">
@@ -243,7 +243,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
 
 「已同步」表示路由器配置与当前设置一致，不代表已测试上网是否正常。ROS 内部通过地址列表、Mangle 标记规则和独立路由表实现分流。"
       >
-        <div class="flex flex-col gap-2 px-5 pb-4 text-[12.5px] max-md:px-4">
+        <div class="flex flex-col gap-2 px-5 pb-4 text-[12.5px] max-md:px-4 max-sm:px-3">
           <p v-if="report.policy_routing.enabled" class="m-0 text-muted-foreground">
             设备范围来自当前配置空间的 OxiDNS「智能分流」设置。
           </p>
@@ -285,7 +285,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             </tbody>
           </table>
         </div>
-        <p v-if="report.nat_bypass.disabled_rules.length" class="m-0 px-5 pb-4 text-[12px] text-muted-foreground max-md:px-4">
+        <p v-if="report.nat_bypass.disabled_rules.length" class="m-0 px-5 pb-4 text-[12px] text-muted-foreground max-md:px-4 max-sm:px-3">
           另有 {{ report.nat_bypass.disabled_rules.length }} 条已停用的免转换规则：
           {{ report.nat_bypass.disabled_rules.map(disabledNatRuleLabel).join('、') }}
         </p>
@@ -335,7 +335,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
         <template #actions>
           <StatusDot :tone="dhcpDnsStatus.tone" :label="dhcpDnsStatus.label" />
         </template>
-        <div class="flex flex-col gap-2 px-5 pb-4 text-[12.5px] max-md:px-4">
+        <div class="flex flex-col gap-2 px-5 pb-4 text-[12.5px] max-md:px-4 max-sm:px-3">
           <p v-if="dhcpDns.message" class="m-0 text-muted-foreground">{{ dhcpDns.message }}</p>
           <p v-if="dhcpDns.target_dns" class="m-0">
             目标 DNS：<span class="font-mono">{{ dhcpDns.target_dns }}</span>
@@ -360,7 +360,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             </tbody>
           </table>
         </div>
-        <p v-if="dhcpDns.status !== 'disabled'" class="m-0 px-5 pb-4 text-[12px] leading-relaxed text-muted-foreground max-md:px-4">
+        <p v-if="dhcpDns.status !== 'disabled'" class="m-0 px-5 pb-4 text-[12px] leading-relaxed text-muted-foreground max-md:px-4 max-sm:px-3">
           发布会将 DNS 列表替换为所选服务器，不保留旧备用 DNS。终端在 DHCP 续租或重新联网后获得新 DNS。
         </p>
       </SectionCard>

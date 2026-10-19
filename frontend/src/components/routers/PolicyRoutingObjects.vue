@@ -1,6 +1,6 @@
 <template>
   <div class="min-w-0">
-    <div class="flex flex-wrap items-center justify-between gap-2 px-5 pb-3 max-md:px-4">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-5 pb-3 max-md:px-4 max-sm:px-3">
       <span class="text-xs text-muted-foreground">{{ collectedAt ? `读取于 ${collectedAt}` : '' }}</span>
       <div class="cf-section-actions flex flex-wrap gap-2">
         <Button variant="outline" class="min-h-11" :disabled="disabled || !sourcesEditable" @click="emit('add-source')"><Plus class="size-4" />新增来源</Button>
@@ -11,14 +11,14 @@
     <p v-if="error" role="alert" class="px-5 text-sm text-destructive-accent">{{ error }}</p>
     <LoadingRows v-if="loading" :rows="4" />
     <template v-else-if="data">
-        <p class="m-0 px-5 pb-3 text-xs text-muted-foreground max-md:px-4">编辑会打开对应来源或规则集，修改后需保存并预览发布。下表仍显示设备上的已下发对象；不会直接修改 ROS 字段。</p>
+        <p class="m-0 px-5 pb-3 text-xs text-muted-foreground max-md:px-4 max-sm:px-3">编辑会打开对应来源或规则集，修改后需保存并预览发布。下表仍显示设备上的已下发对象；不会直接修改 ROS 字段。</p>
         <template v-if="data.objects.length">
-          <div class="flex flex-wrap gap-2 border-t border-border px-5 py-3 max-md:px-4" role="group" aria-label="策略对象类型">
+          <div class="flex flex-wrap gap-2 border-t border-border px-5 py-3 max-md:px-4 max-sm:px-3" role="group" aria-label="策略对象类型">
             <Button v-for="group in groups" :key="group.key" size="sm" class="min-h-11" :variant="kind === group.key ? 'secondary' : 'ghost'" :aria-pressed="kind === group.key" @click="kind = group.key">
               {{ group.label }} <span class="num">{{ data.objects.filter(item => item.kind === group.key).length }}</span>
             </Button>
           </div>
-          <div class="px-5 pb-3 max-md:px-4"><Input v-model="search" class="min-h-11 max-w-md" aria-label="搜索策略对象" placeholder="搜索名称、地址或动作…" /></div>
+          <div class="px-5 pb-3 max-md:px-4 max-sm:px-3"><Input v-model="search" class="min-h-11 max-w-md" aria-label="搜索策略对象" placeholder="搜索名称、地址或动作…" /></div>
           <div v-if="filtered.length" class="cf-table-wrap">
             <table class="cf-table min-w-[720px]">
               <thead><tr><th>名称 / 链</th><th>地址 / 动作</th><th>状态</th><th>实际配置</th><th class="text-right">操作</th></tr></thead>
@@ -45,7 +45,7 @@
             </table>
           </div>
           <EmptyState v-else :icon="ListFilter" title="没有匹配的对象" description="此分类下没有记录，或没有符合搜索条件的对象。" />
-          <div v-if="filtered.length" class="flex flex-wrap items-center justify-end gap-2 px-5 py-3 text-xs max-md:px-4">
+          <div v-if="filtered.length" class="flex flex-wrap items-center justify-end gap-2 px-5 py-3 text-xs max-md:px-4 max-sm:px-3">
             <span class="num text-muted-foreground">共 {{ filtered.length }} 项 · 第 {{ page }} / {{ pages }} 页</span>
             <Button size="sm" variant="outline" class="min-h-11" :disabled="page === 1" @click="page--">上一页</Button>
             <Button size="sm" variant="outline" class="min-h-11" :disabled="page >= pages" @click="page++">下一页</Button>

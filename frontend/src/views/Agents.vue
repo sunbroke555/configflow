@@ -3,15 +3,16 @@
 
     <PageHeader
       title="Agent"
+      class="agents-page-header"
     >
       <template #actions>
-        <Button variant="outline" class="border-border/60 bg-background/40" @click="loadAgents">
+        <Button variant="outline" class="border-border/60 bg-background/40 max-sm:size-11 max-sm:shrink-0 max-sm:gap-0" aria-label="刷新 Agent" title="刷新 Agent" @click="loadAgents">
           <RefreshCw class="size-4" />
-          刷新
+          <span class="max-sm:sr-only">刷新</span>
         </Button>
         <Button variant="outline" class="border-border/60 bg-background/40" @click="handleGenerateScript">
           <FileText class="size-4" />
-          生成安装脚本
+          <span><span class="max-sm:sr-only">生成</span>安装脚本</span>
         </Button>
         <Button class="shadow-glow" :disabled="pushingAll || !onlineCount" @click="pushAll">
           <Loader2 v-if="pushingAll" class="size-4 animate-spin" />
@@ -36,27 +37,34 @@
 
     <template v-else>
       <!-- 拓扑：ConfigFlow → 各 Agent，每台设备一条下发通道 -->
-      <SectionCard :padded="false" class="mb-3.5" role="region" aria-label="下发拓扑">
-        <FlowMap
-          ref="topology"
-          :columns="topoColumns"
-          :edges="topoEdges"
-          :height="Math.max(260, agents.length * 72)"
-          :min-width="isNarrow ? 560 : 640"
-          columns-template="minmax(0,1fr) minmax(0,1.2fr)"
-          :gap-x="isNarrow ? 90 : 200"
-        >
-          <template #node="{ node }">
-            <span v-if="node.kind === 'hub'" class="group flex flex-col items-start p-[18px]">
-              <BrandMark class="size-10 text-primary" :busy="pushingAll" />
-              <span class="font-display mt-2.5 text-[22px] font-medium">ConfigFlow</span>
-              <span class="mt-1 text-[10.5px] text-muted-foreground" :title="`当前配置修订号：${activeRevision === undefined ? '暂未获取' : `v${activeRevision}`}`">
-                配置空间 · {{ activeProfileName }}
+      <details :open="!isNarrow" class="group/topology mb-3.5" data-agent-topology>
+        <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-xl border border-border bg-card px-3 text-[13px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden [&::-webkit-details-marker]:hidden">
+          <span>下发拓扑</span>
+          <span class="ml-auto text-xs font-normal text-muted-foreground">{{ agents.length }} 台 · {{ onlineCount }} 在线</span>
+          <ChevronDown class="size-4 shrink-0 text-muted-foreground transition-transform group-open/topology:rotate-180" aria-hidden="true" />
+        </summary>
+        <SectionCard :padded="false" class="max-sm:mt-2" role="region" aria-label="下发拓扑">
+          <FlowMap
+            ref="topology"
+            :columns="topoColumns"
+            :edges="topoEdges"
+            :height="Math.max(260, agents.length * 72)"
+            :min-width="isNarrow ? 560 : 640"
+            columns-template="minmax(0,1fr) minmax(0,1.2fr)"
+            :gap-x="isNarrow ? 90 : 200"
+          >
+            <template #node="{ node }">
+              <span v-if="node.kind === 'hub'" class="group flex flex-col items-start p-[18px]">
+                <BrandMark class="size-10 text-primary" :busy="pushingAll" />
+                <span class="font-display mt-2.5 text-[22px] font-medium">ConfigFlow</span>
+                <span class="mt-1 text-[10.5px] text-muted-foreground" :title="`当前配置修订号：${activeRevision === undefined ? '暂未获取' : `v${activeRevision}`}`">
+                  配置空间 · {{ activeProfileName }}
+                </span>
               </span>
-            </span>
-          </template>
-        </FlowMap>
-      </SectionCard>
+            </template>
+          </FlowMap>
+        </SectionCard>
+      </details>
 
       <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3.5 max-md:grid-cols-1">
         <Motion
@@ -64,7 +72,7 @@
           :key="agent.id"
           v-bind="listItem(index)"
           :class="cn(
-            'relative flex flex-col overflow-hidden rounded-[18px] border border-border bg-card/90 p-[18px] shadow-surface',
+            'relative flex flex-col overflow-hidden rounded-[18px] border border-border bg-card/90 p-[18px] shadow-surface max-sm:p-3',
             agent.status !== 'online' && !deployments[agent.id] && !upgrades[agent.id] && !agent.dns_follow && 'opacity-80'
           )"
         >
@@ -84,7 +92,7 @@
           </p>
 
           <!-- 资源占用：CPU / 内存 / 磁盘 -->
-          <div class="my-4 grid gap-2.5">
+          <div class="my-4 grid gap-2.5 max-sm:my-3 max-sm:gap-2">
             <div
               v-for="metric in metricsOf(agent)"
               :key="metric.label"
@@ -197,7 +205,7 @@
             </Button>
           </div>
 
-          <footer class="mt-auto flex items-center gap-2 border-t border-border pt-3.5">
+          <footer class="mt-auto flex items-center gap-2 border-t border-border pt-3.5 max-sm:pt-2">
             <span
               :class="cn('mr-auto min-w-0 text-[12px]', syncOf(agent).tone === 'success' ? 'text-success-accent' : syncOf(agent).tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground')"
               :title="syncOf(agent).title"
@@ -2464,7 +2472,7 @@ const stopAutoRefresh = () => {
 
 /* ---------- 拓扑与配置版本 ---------- */
 const topology = ref<InstanceType<typeof FlowMap> | null>(null)
-const isNarrow = useMediaQuery('(max-width: 640px)')
+const isNarrow = useMediaQuery('(max-width: 639px)')
 const profileStore = useProfileStore()
 
 const revisionOf = (profileId?: string) => {
@@ -2523,6 +2531,18 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+@media (width < 640px) {
+  .agents-page-header :deep(.cf-page-actions) {
+    width: 100%;
+    margin-left: 0;
+    gap: var(--cf-sp-1);
+  }
+
+  .agents-page-header :deep(.cf-page-actions > button:first-child) {
+    flex: 0 0 var(--cf-touch);
+  }
+}
+
 .agent-pulse {
   animation: agent-ping 2s infinite;
 }

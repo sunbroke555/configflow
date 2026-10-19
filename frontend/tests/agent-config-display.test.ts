@@ -22,13 +22,14 @@ vi.mock('@/lib/motion', async importOriginal => {
 })
 
 const wrappers: ReturnType<typeof mount>[] = []
+let narrowViewport = false
 const mediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
 const scrollDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
 const canvasDescriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')
 
 beforeAll(() => {
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: (query: string) => ({
-    matches: query.includes('prefers-reduced-motion'), media: query,
+    matches: query.includes('prefers-reduced-motion') || (narrowViewport && query === '(max-width: 639px)'), media: query,
     addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn()
   }) })
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
@@ -46,6 +47,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
+  narrowViewport = false
   vi.clearAllMocks()
   setActiveProfileId('default')
 })
@@ -86,6 +88,36 @@ async function render(item = agent(), profiles: Record<string, unknown>[] = [{ i
   const footer = wrapper.get('footer')
   return { wrapper, footer, title: () => footer.get('[title]').attributes('title') }
 }
+
+describe('Agent topology disclosure', () => {
+  it('starts collapsed on phones and toggles the original map without hiding device status', async () => {
+    narrowViewport = true
+    const { wrapper } = await render([
+      agent(),
+      agent({ id: 'offline-agent', name: 'Offline test', status: 'offline' })
+    ] as any)
+    const details = wrapper.get('details[data-agent-topology]')
+    const element = details.element as HTMLDetailsElement
+    const map = details.get('canvas').element
+    expect(element.open).toBe(false)
+    expect(details.get('summary').text()).toContain('2 台 · 1 在线')
+    expect(wrapper.get('footer').text()).toContain('已同步')
+
+    await details.get('summary').trigger('click')
+    expect(element.open).toBe(true)
+    expect(details.get('canvas').element).toBe(map)
+    expect(details.text()).toContain('Offline test')
+
+    await details.get('summary').trigger('click')
+    expect(element.open).toBe(false)
+    expect(wrapper.get('footer').text()).toContain('已同步')
+  })
+
+  it('starts expanded on desktop', async () => {
+    const { wrapper } = await render()
+    expect((wrapper.get('details[data-agent-topology]').element as HTMLDetailsElement).open).toBe(true)
+  })
+})
 
 describe('Agent configuration status wording', () => {
   it('polls real preparation steps before the push request returns', async () => {
