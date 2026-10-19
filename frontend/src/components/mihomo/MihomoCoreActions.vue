@@ -1,8 +1,8 @@
 <template>
   <DropdownMenu>
     <DropdownMenuTrigger as-child>
-      <Button variant="outline" class="min-h-11" :disabled="disabled || !!running">
-        <Loader2 v-if="running" class="size-4 animate-spin" /><Cpu v-else class="size-4" />{{ running || '内核' }}
+      <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" :disabled="disabled || !!running" :aria-label="running || '内核操作'" :title="running || '内核操作'" :aria-busy="!!running">
+        <Loader2 v-if="running" class="size-4 animate-spin" /><Cpu v-else class="size-4" /><span class="max-sm:sr-only">{{ running || '内核' }}</span>
       </Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="end" class="min-w-[180px]">
@@ -17,7 +17,7 @@
 </template>
 
 <script setup lang="ts">
-import { onUnmounted, ref } from 'vue'
+import { onUnmounted, ref, watch } from 'vue'
 import { ArrowUpCircle, Cpu, Eraser, FileCog, Loader2, Power } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,10 +29,11 @@ import { panelError } from '@/types/mihomo'
 
 const props = defineProps<{ agentId: string; disabled?: boolean }>()
 /** 内核状态可能已变化（重载、重启、更新后），父组件据此刷新版本、模式和各标签数据 */
-const emit = defineEmits<{ changed: [] }>()
+const emit = defineEmits<{ changed: []; 'status-change': [status: string] }>()
 
 /** 正在执行的操作名，同一时间只允许一个内核操作 */
 const running = ref('')
+watch(running, status => emit('status-change', status))
 let disposed = false
 onUnmounted(() => { disposed = true })
 

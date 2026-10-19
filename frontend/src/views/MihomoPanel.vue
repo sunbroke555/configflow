@@ -1,6 +1,6 @@
 <template>
   <div class="min-w-0">
-    <PageHeader title="Mihomo 面板">
+    <PageHeader title="Mihomo 面板" class="mihomo-panel-header">
       <template #title-extra>
         <Select :model-value="agentId" :disabled="!devices?.length" @update:model-value="selectDevice(String($event))">
           <SelectTrigger class="min-h-11 w-auto min-w-0 max-w-32 sm:max-w-48" aria-label="Mihomo 设备" :title="currentDevice?.name || currentDevice?.id">
@@ -21,17 +21,19 @@
       </template>
       <template v-if="agentId" #actions>
         <div class="flex w-full flex-wrap items-center justify-between gap-2">
-          <Segmented :model-value="mode" :options="MODE_OPTIONS" label="代理模式" :disabled="!coreVersion || modeSaving" @update:model-value="changeMode" />
-          <div class="ml-auto flex shrink-0 items-center gap-2">
-            <MihomoCoreActions :agent-id="agentId" :disabled="!coreVersion && !statusError" @changed="reloadAll" />
-            <Button variant="outline" class="min-h-11" :disabled="statusLoading" @click="reloadAll">
-              <RefreshCw class="size-4" :class="{ 'animate-spin': statusLoading }" />刷新
+          <Segmented class="shrink-0 max-sm:[&_[data-segment]]:min-w-11 max-sm:[&_[data-segment]]:px-2" :model-value="mode" :options="MODE_OPTIONS" label="代理模式" :disabled="!coreVersion || modeSaving" @update:model-value="changeMode" />
+          <div class="ml-auto flex shrink-0 items-center gap-2 max-sm:gap-1">
+            <MihomoCoreActions :agent-id="agentId" :disabled="!coreVersion && !statusError" @changed="reloadAll" @status-change="coreActionStatus = $event" />
+            <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" aria-label="刷新面板" title="刷新面板" :aria-busy="statusLoading" :disabled="statusLoading" @click="reloadAll">
+              <RefreshCw class="size-4" :class="{ 'animate-spin': statusLoading }" /><span class="max-sm:sr-only">刷新</span>
             </Button>
-            <Button variant="outline" class="min-h-11" :disabled="openingSettings || !currentDevice" @click="openSettings">
-              <Loader2 v-if="openingSettings" class="size-4 animate-spin" /><Settings v-else class="size-4" />{{ openingSettings ? '正在打开…' : '设置' }}
+            <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" :aria-label="openingSettings ? '正在打开设置…' : 'Mihomo 设置'" :title="openingSettings ? '正在打开设置…' : 'Mihomo 设置'" :aria-busy="openingSettings" :disabled="openingSettings || !currentDevice" @click="openSettings">
+              <Loader2 v-if="openingSettings" class="size-4 animate-spin" /><Settings v-else class="size-4" /><span class="max-sm:sr-only">{{ openingSettings ? '正在打开…' : '设置' }}</span>
             </Button>
           </div>
         </div>
+        <p v-if="coreActionStatus" role="status" class="m-0 w-full break-words text-xs text-primary-accent sm:hidden">{{ coreActionStatus }}</p>
+        <p v-if="openingSettings" role="status" class="m-0 w-full text-xs text-primary-accent sm:hidden">正在打开设置…</p>
       </template>
     </PageHeader>
     <p v-if="settingsError" role="alert" class="mb-4 break-words text-sm text-destructive-accent">{{ settingsError }}</p>
@@ -48,12 +50,12 @@
     </SectionCard>
     <SectionCard v-else-if="!agentId" :padded="false"><LoadingRows :rows="3" /></SectionCard>
     <template v-else>
-      <div class="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted-foreground">
+      <div class="mb-5 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted-foreground max-sm:mb-2 max-sm:gap-x-3 max-sm:gap-y-1">
         <StatusDot v-if="currentDevice?.status === 'offline'" tone="muted" label="Agent 离线" />
         <StatusDot v-else-if="coreVersion" tone="success" label="核心运行中" />
         <StatusDot v-else-if="statusError" tone="warning" label="无法连接核心" />
         <span v-if="currentDevice?.host" class="min-w-0 break-all font-mono">{{ currentDevice.host }}</span>
-        <span v-if="coreVersion" class="font-mono">Mihomo {{ coreVersion }}</span>
+        <span v-if="coreVersion" class="min-w-0 break-all font-mono">Mihomo {{ coreVersion }}</span>
       </div>
 
       <SectionCard v-if="statusError && !coreVersion">
@@ -63,7 +65,7 @@
         </EmptyState>
       </SectionCard>
       <Tabs v-else :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
-        <TabsList class="mb-4 min-h-11">
+        <TabsList class="mb-4 min-h-11 max-sm:mb-0">
           <TabsTrigger value="proxies" class="min-h-11 px-4">策略</TabsTrigger>
           <TabsTrigger value="connections" class="min-h-11 px-4">连接</TabsTrigger>
           <TabsTrigger value="rules" class="min-h-11 px-4">规则</TabsTrigger>
@@ -128,6 +130,7 @@ const upgradeRequired = ref(false)
 const reloadToken = ref(0)
 const settingsEditor = ref<{ profileId: string; label: string } | null>(null)
 const openingSettings = ref(false)
+const coreActionStatus = ref('')
 const settingsError = ref('')
 let settingsRequest = 0
 let disposed = false
@@ -249,3 +252,19 @@ onMounted(() => {
 })
 onUnmounted(() => { disposed = true })
 </script>
+
+<style scoped>
+@media (width < 640px) {
+  .mihomo-panel-header :deep(.cf-page-heading) {
+    flex-basis: 100%;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: var(--cf-sp-2);
+  }
+
+  .mihomo-panel-header :deep(.cf-page-actions) {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+</style>

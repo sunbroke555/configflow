@@ -1,14 +1,14 @@
 <template>
   <div class="min-w-0">
-    <Toolbar v-model:search="search" placeholder="搜索策略组或节点">
+    <Toolbar v-model:search="search" class="mihomo-proxy-toolbar" placeholder="搜索策略组或节点">
       <template #search-actions>
         <Button variant="outline" size="icon" class="size-11 shrink-0" aria-label="策略显示设置" title="设置" @click="settingsOpen = true"><Settings2 class="size-4" /></Button>
       </template>
       <template #actions>
-        <Button variant="outline" class="min-h-11" :disabled="!groups.length" @click="toggleAll">
+        <Button variant="outline" class="min-h-11 max-sm:gap-1 max-sm:px-2 max-sm:text-[13px]" :disabled="!groups.length" @click="toggleAll">
           <ChevronsUpDown class="size-3.5" />{{ allExpanded ? '全部收起' : '全部展开' }}
         </Button>
-        <Button variant="outline" class="min-h-11" :aria-busy="batchRunning" :disabled="!allTestGroups.length || testing.size > 0 || nodeTesting.size > 0 || batchRunning" @click="testAll">
+        <Button variant="outline" class="min-h-11 max-sm:gap-1 max-sm:px-2 max-sm:text-[13px]" :aria-busy="batchRunning" :disabled="!allTestGroups.length || testing.size > 0 || nodeTesting.size > 0 || batchRunning" @click="testAll">
           <Loader2 v-if="batchRunning" class="size-3.5 animate-spin" aria-hidden="true" /><Zap v-else class="size-3.5" aria-hidden="true" />{{ batchRunning ? '正在测速…' : '全部分组测速' }}
         </Button>
       </template>
@@ -413,3 +413,18 @@ watch(() => props.agentId, () => {
 onUnmounted(() => { disposed = true; testEpoch++; epoch++; batchStop.value = true })
 onMounted(load)
 </script>
+
+<style scoped>
+@media (width < 640px) {
+  .mihomo-proxy-toolbar :deep(.cf-toolbar-search) {
+    flex-basis: 100%;
+  }
+
+  .mihomo-proxy-toolbar :deep(.cf-toolbar-actions) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    margin-left: 0;
+  }
+}
+</style>
