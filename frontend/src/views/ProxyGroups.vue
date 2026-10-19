@@ -1,5 +1,5 @@
 <template>
-  <div class="proxy-groups-page" :class="reorder.active.value && 'cf-reordering'">
+  <div class="proxy-groups-page">
 
     <PageHeader
       title="策略组"
@@ -7,18 +7,16 @@
     >
       <template #actions>
         <BatchHealthUrlDialog
-          v-if="!reorder.active.value"
           :groups="proxyGroups"
           :profile-id="profileId"
           :disabled="draftSaving || Object.values(savingStatus).some(Boolean)"
           @updated="applyBatchHealthUrl"
         />
         <Button
-          v-if="!reorder.active.value"
           variant="outline"
           class="border-border/60 bg-background/40"
-          :disabled="proxyGroups.length < 2"
-          @click="reorder.enter"
+          :disabled="proxyGroups.length < 2 || draftSaving || Object.values(savingStatus).some(Boolean)"
+          @click="reorderOpen = true"
         >
           <ArrowUpDown class="size-4" />
           调整顺序
@@ -30,15 +28,12 @@
       </template>
     </PageHeader>
 
-    <div class="shrink-0">
-    <ReorderBar
-      :active="reorder.active.value"
-      :saving="reorder.saving.value"
-      :announcement="reorder.announcement.value"
-      @cancel="reorder.cancel"
-      @save="handleSaveOrder"
+    <ProxyGroupOrderDialog
+      v-model:open="reorderOpen"
+      :groups="proxyGroups"
+      :save-order="persistGroupOrder"
+      @saved="applyGroupOrder"
     />
-    </div>
 
     <SectionCard v-if="!proxyGroups.length" :padded="false">
       <EmptyState
@@ -55,7 +50,6 @@
 
     <div v-else class="group-workspace grid min-h-0 grid-cols-[280px_minmax(0,1fr)] gap-3.5 max-[1180px]:grid-cols-[minmax(0,1fr)] max-sm:gap-2">
       <Button
-        v-show="!reorder.active.value"
         variant="outline"
         class="hidden h-auto min-h-11 w-full min-w-0 justify-between gap-3 bg-card px-3 py-2.5 max-[1180px]:flex"
         aria-haspopup="dialog"
@@ -68,27 +62,15 @@
         <ChevronDown class="size-4 shrink-0" />
       </Button>
       <!-- 左：策略组列表 -->
-      <SectionCard :padded="false" class="group-list-card flex min-h-0 flex-col p-2" :class="!reorder.active.value && 'max-[1180px]:hidden'">
-        <div ref="groupsContainer" class="group-list min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]" role="list" aria-label="策略组">
+      <SectionCard :padded="false" class="group-list-card flex min-h-0 flex-col p-2 max-[1180px]:hidden">
+        <div class="group-list min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]" role="list" aria-label="策略组">
           <div
-            v-for="(group, cfIndex) in proxyGroups"
+            v-for="group in proxyGroups"
             :key="group.id || group.name"
             :data-name="group.name"
-            data-reorder-item
             role="listitem"
             class="group/row mb-0.5 flex items-center gap-1"
           >
-            <DragHandle
-              v-if="reorder.active.value"
-              :label="group.name || group.id"
-              :index="cfIndex"
-              :total="proxyGroups.length"
-              :position="reorder.positionLabel(cfIndex)"
-              :grabbed="reorder.grabbedIndex.value === cfIndex"
-              @up="reorder.moveUp(cfIndex)"
-              @down="reorder.moveDown(cfIndex)"
-              @keydown="reorder.onHandleKeydown($event, cfIndex)"
-            />
             <button
               type="button"
               :title="group.name"
@@ -119,7 +101,6 @@
               </span>
             </button>
             <Button
-              v-if="!reorder.active.value"
               variant="ghost"
               size="icon-sm"
               class="shrink-0 opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100 max-md:opacity-100"
@@ -130,7 +111,6 @@
               <span class="sr-only">编辑</span>
             </Button>
             <Button
-              v-if="!reorder.active.value"
               variant="ghost"
               size="icon-sm"
               class="shrink-0 text-destructive-accent opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-destructive-soft focus-visible:opacity-100 max-md:opacity-100"
@@ -145,7 +125,7 @@
       </SectionCard>
 
       <!-- 右：来源 → 筛选 → 命中节点 -->
-      <SectionCard v-if="selected" :padded="false" class="group-detail-card flex min-h-0 min-w-0 flex-col" :class="reorder.active.value && 'max-[1180px]:hidden'" role="region" aria-label="策略组详情">
+      <SectionCard v-if="selected" :padded="false" class="group-detail-card flex min-h-0 min-w-0 flex-col" role="region" aria-label="策略组详情">
         <header class="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-border px-[18px] py-4 max-sm:gap-2 max-sm:px-3 max-sm:py-2">
           <h2 class="m-0 min-w-0 break-words text-[13.5px] font-semibold [overflow-wrap:anywhere]">{{ selected.name }}</h2>
           <span v-if="selected.follow_group" class="chip chip-warn">跟随</span>
@@ -665,9 +645,7 @@
 <script setup lang="ts">
 import BatchHealthUrlDialog from '@/components/BatchHealthUrlDialog.vue'
 import HealthCheckFields from '@/components/HealthCheckFields.vue'
-import ReorderBar from '@/components/shell/ReorderBar.vue'
-import DragHandle from '@/components/shell/DragHandle.vue'
-import { useReorder } from '@/composables/useReorder'
+import ProxyGroupOrderDialog from '@/components/ProxyGroupOrderDialog.vue'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
@@ -791,7 +769,7 @@ const subscriptionOptions = computed(() =>
 
 const orderPanelOpen = ref(false)
 
-const groupsContainer = ref<HTMLElement | null>(null)
+const reorderOpen = ref(false)
 const groupDetailsBody = ref<HTMLElement | null>(null)
 const matchedNodesContainer = ref<HTMLElement | null>(null)
 const groupPickerOpen = ref(false)
@@ -1908,27 +1886,26 @@ watch(orderPanelOpen, open => {
   }
 })
 
-/* ---------- 统一拖动排序 ---------- */
-const reorder = useReorder<any>({
-  items: proxyGroups,
-  container: groupsContainer,
-  labelOf: group => group.name || group.id,
-  // 按 id 提交，服务端在存量数据上重排
-  persist: async items => {
-    await api.post('/proxy-groups/reorder', {
-      ids: items.map(item => item.id),
-      position: 'top'
-    }, profileRequest)
-  }
-})
+/* ---------- 策略组排序：弹窗保存成功后才更新主列表 ---------- */
+const persistGroupOrder = async (ordered: ProxyGroup[]): Promise<void> => {
+  // 只提交 ID，避免排序覆盖来源、正则等配置；沿用进入页面时的配置空间。
+  ++groupLoadVersion
+  await api.post('/proxy-groups/reorder', {
+    ids: ordered.map(group => group.id),
+    position: 'top'
+  }, profileRequest)
+}
 
-const handleSaveOrder = async () => {
-  try {
-    await reorder.save()
-    notify.success('顺序已保存')
-  } catch (error) {
-    notify.error('保存顺序失败，顺序已还原')
-  }
+const applyGroupOrder = (ordered: ProxyGroup[]) => {
+  if (!viewActive) return
+  ++groupLoadVersion
+  const current = new Map(proxyGroups.value.map(group => [group.id, group]))
+  const orderedIds = new Set(ordered.map(group => group.id))
+  proxyGroups.value = [
+    ...ordered.map(group => current.get(group.id) || group),
+    ...proxyGroups.value.filter(group => !orderedIds.has(group.id))
+  ]
+  notify.success('顺序已保存')
 }
 
 /* ================================================================
