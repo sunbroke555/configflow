@@ -12,6 +12,21 @@ const render = (props: Record<string, unknown>) => {
 }
 
 describe('observed operation steps', () => {
+  it('can show the actual operation object without duplicating its timeline in the visible notice', () => {
+    const message = '正在下载规则集「海外服务」（2/3）'
+    const wrapper = render({ task: { status: 'preparing', message, events: [{ at: '2026-10-19T01:00:00Z', status: 'preparing', message }] }, busy: true, showCurrent: false, showSteps: false })
+    expect(wrapper.get('[role="status"]').text()).toBe(message)
+    expect(wrapper.find('details, ol, [aria-label="步骤记录"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('准备文件')
+  })
+  it('embeds recorded steps without a second disclosure or duplicated current message', () => {
+    const wrapper = render({ task: { status: 'succeeded', message: '已完成服务检查', events: [{ at: '2026-10-19T01:00:00Z', status: 'checking', message: '检查配置发布后的 DNS 响应' }] }, embedded: true, showCurrent: false, showMessage: false })
+    expect(wrapper.find('details, summary, [role="status"]').exists()).toBe(false)
+    expect(wrapper.get('[aria-label="步骤记录"]').attributes('tabindex')).toBe('0')
+    expect(wrapper.get('ol').text()).toContain('检查配置发布后的 DNS 响应')
+    expect(wrapper.text()).toContain('步骤记录 · 1')
+    expect(wrapper.text()).not.toContain('已完成服务检查')
+  })
   it('shows actual download objects and keeps only recorded stages in collapsed details', () => {
     const events = [
       { at: '2026-10-18T12:00:00Z', status: 'preparing', message: '正在下载订阅「家庭节点」' },

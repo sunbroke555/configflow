@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { Link2, Loader2, RefreshCw } from '@lucide/vue'
+import { Loader2, RefreshCw } from '@lucide/vue'
 import { agentApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import FormField from '@/components/common/FormField.vue'
 import AgentOperationSteps from './AgentOperationSteps.vue'
+import AgentStatusRow from './AgentStatusRow.vue'
 import type { Agent } from '@/types'
 import type { AgentDNSFollowBinding, AgentDNSFollowInput, AgentDNSFollowOptions, AgentDNSFollowState } from '@/types/agentDNSFollow'
 
@@ -38,6 +39,13 @@ const canSave = computed(() => !!options.value && !loading.value && !busy.value 
   && (connection.value === 'auto' || !!address.value.trim()))
 const sourceLabel = computed(() => options.value?.sources.find(item => item.id === binding.value?.source_agent_id)?.name || props.sourceName || 'Mihomo')
 const shownState = computed<AgentDNSFollowState>(() => state.value || { status: 'waiting', message: '等待 Mihomo 下一次发布成功。' })
+const statusLabel = computed(() => ({
+  waiting: '等待发布', preparing: '准备同步', publishing: '正在同步', succeeded: '已同步', failed: '同步失败',
+})[shownState.value.status])
+const statusTone = computed(() => shownState.value.status === 'succeeded' ? 'success'
+  : shownState.value.status === 'failed' ? 'danger'
+  : following.value || action.value === 'retry' ? 'progress' : 'neutral')
+const showNotice = computed(() => following.value || shownState.value.status === 'failed')
 const upstreamKey = (item: { tag: string; index: number }) => JSON.stringify([item.tag, item.index])
 const suggestedAddress = (id: string) => options.value?.sources.find(item => item.id === id)?.suggested_address || ''
 const errorMessage = (failure: any) => failure?.response?.data?.message || failure?.message || '操作失败，请重试。'
@@ -119,21 +127,30 @@ async function run(kind: 'save' | 'remove' | 'retry') {
 </script>
 
 <template>
-  <section class="mb-3 min-w-0" data-agent-dns-follow>
-    <div v-if="binding" class="min-w-0 rounded-xl border border-border bg-background/50 p-3 text-xs">
-      <div class="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-1">
-        <p class="m-0 flex min-w-0 items-center gap-1.5 font-medium"><Link2 class="size-3.5 shrink-0 text-primary-accent" /><span class="min-w-0 break-words">跟随 {{ sourceLabel }} DNS</span></p>
-        <Button variant="ghost" size="sm" class="min-h-11" :disabled="!!action" @click="open = true">设置</Button>
+  <section class="min-w-0" data-agent-dns-follow>
+    <AgentStatusRow v-if="binding" label="DNS 联动" :status="statusLabel" :tone="statusTone">
+      <template #actions>
+        <Button variant="ghost" size="sm" class="min-h-11 text-xs" :disabled="!!action" @click="open = true">设置</Button>
+      </template>
+      <template v-if="showNotice || (error && !open)" #notice>
+        <p v-if="showNotice && shownState.message" class="m-0 whitespace-pre-wrap text-xs leading-relaxed [overflow-wrap:anywhere]" :class="shownState.status === 'failed' ? 'text-destructive-accent' : 'text-foreground'">{{ shownState.message }}</p>
+        <Button v-if="shownState.status === 'failed'" variant="outline" size="sm" class="mt-2 min-h-11" :disabled="busy" @click="run('retry')">
+          <Loader2 v-if="action === 'retry'" class="size-3.5 animate-spin" /><RefreshCw v-else class="size-3.5" />{{ action === 'retry' ? '正在提交…' : '重试同步' }}
+        </Button>
+        <p v-if="error && !open" role="alert" class="mb-0 mt-2 whitespace-pre-wrap text-xs text-destructive-accent [overflow-wrap:anywhere]">{{ error }}</p>
+      </template>
+      <div class="min-w-0 space-y-2 text-xs leading-relaxed text-muted-foreground">
+        <p class="m-0 [overflow-wrap:anywhere]">跟随 {{ sourceLabel }} DNS</p>
+        <p v-if="!showNotice && shownState.message" class="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{{ shownState.message }}</p>
+        <p v-if="shownState.address" class="m-0 font-mono [overflow-wrap:anywhere]">{{ shownState.address }}</p>
+        <AgentOperationSteps :task="shownState" kind="dns-follow" :busy="following || action === 'retry'" embedded :show-current="false" :show-message="false" />
       </div>
-      <p v-if="shownState.source_deployment_id && shownState.status !== 'waiting' && shownState.status !== 'failed'" class="mb-2 mt-0 text-success-accent">Mihomo 已更新</p>
-      <AgentOperationSteps :task="shownState" kind="dns-follow" :busy="following || action === 'retry'" />
-      <p v-if="shownState.address" class="mb-0 mt-2 break-all font-mono text-muted-foreground">{{ shownState.address }}</p>
-      <Button v-if="shownState.status === 'failed'" variant="outline" size="sm" class="mt-2 min-h-11" :disabled="busy" @click="run('retry')">
-        <Loader2 v-if="action === 'retry'" class="size-3.5 animate-spin" /><RefreshCw v-else class="size-3.5" />{{ action === 'retry' ? '正在提交…' : '重试同步' }}
-      </Button>
-      <p v-if="error && !open" role="alert" class="mb-0 mt-2 whitespace-pre-wrap text-destructive-accent [overflow-wrap:anywhere]">{{ error }}</p>
-    </div>
-    <Button v-else variant="outline" class="min-h-11" @click="open = true"><Link2 class="size-4" />跟随 Mihomo DNS</Button>
+    </AgentStatusRow>
+    <AgentStatusRow v-else label="DNS 联动" status="未开启" tone="neutral">
+      <template #actions>
+        <Button variant="ghost" size="sm" class="min-h-11 text-xs" aria-label="跟随 Mihomo DNS" @click="open = true">设置</Button>
+      </template>
+    </AgentStatusRow>
 
     <Dialog :open="open" @update:open="value => { if (!action) open = value }">
       <DialogContent class="max-w-[560px]">

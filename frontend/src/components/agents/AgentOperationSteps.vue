@@ -11,7 +11,10 @@ const props = withDefaults(defineProps<{
   kind?: 'deployment' | 'upgrade' | 'dns-follow'
   busy?: boolean
   showCurrent?: boolean
-}>(), { kind: 'deployment', showCurrent: true })
+  showMessage?: boolean
+  showSteps?: boolean
+  embedded?: boolean
+}>(), { kind: 'deployment', showCurrent: true, showMessage: true, showSteps: true })
 const label = computed(() => props.task.request_pending ? '提交请求' : props.kind === 'dns-follow'
   ? dnsFollowLabels[props.task.status || 'waiting'] || props.task.status : props.kind === 'upgrade'
   ? upgradeLabels[props.task.status || 'unknown'] || props.task.status
@@ -41,17 +44,18 @@ const eventTime = (value: string) => {
 
 <template>
   <div class="min-w-0 space-y-1 text-xs leading-relaxed" data-agent-operation-steps>
-    <div aria-live="polite" role="status" class="min-w-0 space-y-1">
+    <div v-if="showCurrent || showMessage" aria-live="polite" role="status" class="min-w-0 space-y-1">
       <p v-if="showCurrent" class="m-0 flex min-w-0 items-center gap-2 font-medium text-foreground">
         <Loader2 v-if="busy" class="size-3.5 shrink-0 animate-spin text-primary-accent" aria-hidden="true" />
         <span class="min-w-0 break-words">{{ task.query_error ? '上次报告：' : '' }}{{ label }}</span>
       </p>
-      <p v-if="message && message !== label" class="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]" :class="kind === 'deployment' ? 'text-foreground' : 'text-muted-foreground'">{{ message }}</p>
-      <p v-if="connectionMessage" class="m-0 text-warning-accent [overflow-wrap:anywhere]">{{ connectionMessage }}</p>
+      <p v-if="showMessage && message && message !== label" class="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]" :class="kind === 'deployment' ? 'text-foreground' : 'text-muted-foreground'">{{ message }}</p>
+      <p v-if="showMessage && connectionMessage" class="m-0 text-warning-accent [overflow-wrap:anywhere]">{{ connectionMessage }}</p>
     </div>
-    <details class="min-w-0 rounded-md border border-border bg-background/50 text-foreground">
-      <summary class="min-h-11 cursor-pointer px-3 py-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">步骤详情<span v-if="events.length" class="ml-1 font-normal text-muted-foreground">（{{ events.length }}）</span></summary>
-      <div class="max-h-64 min-w-0 overflow-y-auto border-t border-border p-3" tabindex="0">
+    <component :is="embedded ? 'div' : 'details'" v-if="showSteps" class="min-w-0 text-foreground" :class="!embedded && 'rounded-md border border-border bg-background/50'">
+      <summary v-if="!embedded" class="min-h-11 cursor-pointer px-3 py-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">步骤详情<span v-if="events.length" class="ml-1 font-normal text-muted-foreground">（{{ events.length }}）</span></summary>
+      <p v-else class="mb-2 mt-0 font-medium text-muted-foreground">步骤记录<span v-if="events.length"> · {{ events.length }}</span></p>
+      <div class="max-h-64 min-w-0 overflow-y-auto" :class="!embedded && 'border-t border-border p-3'" tabindex="0" aria-label="步骤记录">
         <ol v-if="events.length" class="m-0 list-none space-y-3 p-0">
           <li v-for="(event, index) in events" :key="`${index}:${event.at}:${event.status}`" class="min-w-0 border-l-2 border-border-strong pl-3">
             <p class="m-0 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1"><span class="font-medium">{{ eventLabel(event) }}</span><time class="font-mono text-[11px] text-muted-foreground" :datetime="event.at">{{ eventTime(event.at) }}</time></p>
@@ -60,6 +64,6 @@ const eventTime = (value: string) => {
         </ol>
         <p v-else class="m-0 text-muted-foreground">{{ task.request_pending ? '请求已提交，等待服务端返回步骤记录。' : kind === 'dns-follow' ? '暂无同步步骤记录，仅显示后台已确认的状态。' : '此任务未提供步骤记录，仅能显示已报告的状态；旧版 Agent 更新后可记录后续任务的详细步骤。' }}</p>
       </div>
-    </details>
+    </component>
   </div>
 </template>

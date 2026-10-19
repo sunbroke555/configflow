@@ -8,7 +8,7 @@ import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { deploymentLabels, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentDNSChecks from './AgentDNSChecks.vue'
 
-const props = withDefaults(defineProps<{ task: Partial<AgentDeployment>; showProgressMessage?: boolean }>(), { showProgressMessage: true })
+const props = withDefaults(defineProps<{ task: Partial<AgentDeployment>; showProgressMessage?: boolean; showDNSChecks?: boolean }>(), { showProgressMessage: true, showDNSChecks: true })
 const failed = computed(() => !!props.task.error || !!props.task.error_details || !!props.task.rollback_error || !!props.task.rollback_error_details || ['failed', 'rollback_failed'].includes(props.task.status || '') || (props.task.status === 'rolled_back' && !props.task.manual_rollback))
 const sections = computed(() => [
   { key: 'publish', label: '发布失败详情', summary: props.task.error || ((props.showProgressMessage || failed.value) ? props.task.message : '') || '', details: props.task.error_details || '' },
@@ -30,7 +30,7 @@ async function copy(text: string) {
 </script>
 
 <template>
-  <div v-if="sections.length || stage || task.dns_checks?.length" class="min-w-0 space-y-1 text-xs leading-relaxed [overflow-wrap:anywhere]" :class="failed ? 'text-destructive-accent' : 'text-muted-foreground'">
+  <div v-if="sections.length || stage || (showDNSChecks && task.dns_checks?.length)" class="min-w-0 space-y-1 text-xs leading-relaxed [overflow-wrap:anywhere]" :class="failed ? 'text-destructive-accent' : 'text-muted-foreground'">
     <p v-if="stage" class="m-0">失败步骤：{{ stage }}</p>
     <div v-for="section in sections" :key="section.key" class="min-w-0">
       <p v-if="section.short" class="m-0">{{ section.key === 'rollback' ? '回滚：' : '' }}{{ section.short }}</p>
@@ -42,6 +42,6 @@ async function copy(text: string) {
         </div>
       </details>
     </div>
-    <AgentDNSChecks :key="task.deployment_id" :checks="task.dns_checks" :checked-at="task.dns_checked_at" />
+    <AgentDNSChecks v-if="showDNSChecks" :key="task.deployment_id" :checks="task.dns_checks" :checked-at="task.dns_checked_at" />
   </div>
 </template>
