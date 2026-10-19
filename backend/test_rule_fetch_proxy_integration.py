@@ -71,7 +71,42 @@ class RecordingServer(ThreadingHTTPServer):
         self.host_overrides = {}
         self.required_auth = None
         self.reject = False
+        self.tls_context = None
+        self.handshake_failures = 0
+        self.partial_body_failures = 0
+        self.chunked_faults = None
+        self.accepted_connections = 0
         self.url = f'http://127.0.0.1:{self.server_port}'
+
+    def get_request(self):
+        connection, address = super().get_request()
+        self.accepted_connections += 1
+        if self.tls_context is None:
+            return connection, address
+        try:
+            if self.handshake_failures:
+                self.handshake_failures -= 1
+                connection.settimeout(3)
+                # Consume ClientHello before closing, producing a TLS EOF
+                # rather than a TCP reset caused by unread incoming bytes.
+                header = bytearray()
+                while len(header) < 5:
+                    chunk = connection.recv(5 - len(header))
+                    if not chunk:
+                        raise ConnectionAbortedError('Incomplete ClientHello')
+                    header.extend(chunk)
+                remaining = int.from_bytes(header[3:5], 'big')
+                while remaining:
+                    chunk = connection.recv(remaining)
+                    if not chunk:
+                        raise ConnectionAbortedError('Incomplete ClientHello')
+                    remaining -= len(chunk)
+                connection.shutdown(socket.SHUT_WR)
+                raise ConnectionAbortedError('Injected TLS handshake EOF')
+            return self.tls_context.wrap_socket(connection, server_side=True), address
+        except BaseException:
+            connection.close()
+            raise
 
 
 class RecordingHandler(BaseHTTPRequestHandler):
@@ -85,7 +120,7 @@ class RecordingHandler(BaseHTTPRequestHandler):
             'method': self.command, 'url': self.path, 'headers': dict(self.headers),
         })
 
-    def reply(self, status, body=b'', headers=None):
+    def reply(self, status, body=b'', headers=None, *, truncate=False):
         self.send_response(status)
         for key, value in (headers or {}).items():
             self.send_header(key, value)
@@ -93,7 +128,8 @@ class RecordingHandler(BaseHTTPRequestHandler):
         self.send_header('Connection', 'close')
         self.end_headers()
         if self.command != 'HEAD':
-            self.wfile.write(body)
+            self.wfile.write(body[:min(len(body) - 1, 64 * 1024 + 11)] if truncate else body)
+            self.wfile.flush()
         self.close_connection = True
 
     def proxy_allowed(self):
@@ -105,6 +141,21 @@ class RecordingHandler(BaseHTTPRequestHandler):
             self.reply(502, b'Proxy unavailable')
             return False
         return True
+
+    def reply_chunked(self, body, fault):
+        self.send_response(200)
+        self.send_header('Transfer-Encoding', 'chunked')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(f'{len(body):x}\r\n'.encode() + body + b'\r\n')
+        if fault == 'invalid_length':
+            self.wfile.write(b'not-a-chunk-length\r\n')
+        elif fault != 'eof':
+            self.wfile.write(b'0\r\n\r\n')
+        # The EOF case ends cleanly between chunks, without the required zero
+        # chunk. urllib3 raises ProtocolError, without an IncompleteRead cause.
+        self.wfile.flush()
+        self.close_connection = True
 
     def do_CONNECT(self):
         self.record()
@@ -134,7 +185,13 @@ class RecordingHandler(BaseHTTPRequestHandler):
         self.record()
         if not self.server.proxy:
             status, headers, body = self.server.routes.get(self.path, (200, {}, BODY))
-            self.reply(status, body, headers)
+            if self.server.chunked_faults is not None:
+                self.reply_chunked(body, self.server.chunked_faults.pop(0))
+                return
+            truncate = bool(self.server.partial_body_failures)
+            if truncate:
+                self.server.partial_body_failures -= 1
+            self.reply(status, body, headers, truncate=truncate)
             return
         if not self.proxy_allowed():
             return
@@ -166,12 +223,14 @@ class RecordingHandler(BaseHTTPRequestHandler):
 def servers(local_certificate):
     running = []
 
-    def start(*, proxy=False, tls=False):
+    def start(*, proxy=False, tls=False, handshake_failures=0, partial_body_failures=0):
         server = RecordingServer(proxy=proxy)
+        server.handshake_failures = handshake_failures
+        server.partial_body_failures = partial_body_failures
         if tls:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(*local_certificate)
-            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.tls_context = context
             server.url = server.url.replace('http:', 'https:', 1)
         thread = threading.Thread(target=server.serve_forever,
                                   kwargs={'poll_interval': 0.02}, daemon=True)
@@ -213,14 +272,19 @@ def test_get_and_head_use_configured_http_or_https_proxy(
 
 
 @pytest.mark.parametrize('origin_tls', [False, True])
-def test_untrusted_https_proxy_certificate_is_rejected(servers, origin_tls):
+@pytest.mark.filterwarnings('error::urllib3.exceptions.InsecureRequestWarning')
+def test_untrusted_https_proxy_certificate_is_rejected(servers, origin_tls, monkeypatch):
     origin, proxy = servers(tls=origin_tls), servers(proxy=True, tls=True)
+    delays = []
+    monkeypatch.setattr('backend.utils.rule_fetch.time.sleep', delays.append)
 
     with pytest.raises((requests.exceptions.ProxyError, requests.exceptions.SSLError)):
         request_rule(origin.url + '/rules', config_data=config(proxy.url), timeout=3)
 
     assert origin.seen == []
     assert proxy.seen == []
+    assert proxy.accepted_connections == 1
+    assert delays == []
 
 
 @pytest.mark.parametrize('bundle_variable', ['REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE'])
@@ -394,3 +458,133 @@ def test_proxy_resolves_source_without_local_fake_ip_preflight(servers, monkeypa
     assert local_resolutions == []
     assert proxy.seen[0]['url'] == url
     assert len(origin.seen) == 1
+
+
+@pytest.mark.parametrize('failure_at', ['origin', 'https_proxy'])
+@pytest.mark.filterwarnings('error::urllib3.exceptions.InsecureRequestWarning')
+def test_tls_handshake_eof_retries_same_source_with_backoff(
+        servers, local_certificate, monkeypatch, failure_at):
+    from backend.utils import rule_fetch
+
+    origin = servers(tls=True, handshake_failures=2 if failure_at == 'origin' else 0)
+    proxy = servers(proxy=True, tls=True, handshake_failures=2) if failure_at == 'https_proxy' else None
+    delays = []
+    monkeypatch.setattr('backend.utils.rule_fetch.time.sleep', delays.append)
+    failures = []
+    request_once = rule_fetch._request_rule_once
+
+    def record_failure(*args, **kwargs):
+        try:
+            return request_once(*args, **kwargs)
+        except requests.RequestException as error:
+            failures.append(error)
+            raise
+
+    monkeypatch.setattr(rule_fetch, '_request_rule_once', record_failure)
+
+    response = request_rule(origin.url + '/rules', config_data=config(proxy.url if proxy else ''),
+                            verify=local_certificate[0], stream=True, max_bytes=1024, timeout=3)
+
+    assert response.content == BODY
+    assert delays == [1, 2]
+    assert len(failures) == 2
+    assert all(isinstance(error, (requests.exceptions.SSLError, requests.exceptions.ProxyError))
+               and 'EOF' in str(error).upper() for error in failures)
+    assert [entry['url'] for entry in origin.seen] == ['/rules']
+    failing_server = proxy or origin
+    assert failing_server.accepted_connections == 3
+    assert failing_server.handshake_failures == 0
+    if proxy:
+        assert [(entry['method'], entry['url']) for entry in proxy.seen] == [
+            ('CONNECT', urlsplit(origin.url).netloc)]
+        assert origin.accepted_connections == 1
+
+
+@pytest.mark.parametrize('https_proxy', [False, True])
+@pytest.mark.filterwarnings('error::urllib3.exceptions.InsecureRequestWarning')
+def test_interrupted_tls_body_retries_without_partial_content(
+        servers, local_certificate, monkeypatch, https_proxy):
+    origin = servers(tls=True, partial_body_failures=2)
+    proxy = servers(proxy=True, tls=True) if https_proxy else None
+    # Larger than iter_content's chunk size: the first attempt has already
+    # yielded a complete chunk before its declared response body is cut short.
+    complete = BODY * 8192
+    origin.routes['/rules'] = (200, {}, complete)
+    delays = []
+    monkeypatch.setattr('backend.utils.rule_fetch.time.sleep', delays.append)
+
+    response = request_rule(origin.url + '/rules', config_data=config(proxy.url if proxy else ''),
+                            verify=local_certificate[0], stream=True,
+                            max_bytes=len(complete), timeout=3)
+
+    assert response.content == complete
+    assert delays == [1, 2]
+    assert [entry['url'] for entry in origin.seen] == ['/rules'] * 3
+    assert origin.accepted_connections == 3
+    if proxy:
+        assert [(entry['method'], entry['url']) for entry in proxy.seen] == [
+            ('CONNECT', urlsplit(origin.url).netloc)] * 3
+
+
+@pytest.mark.parametrize('https_proxy', [False, True])
+@pytest.mark.filterwarnings('error::urllib3.exceptions.InsecureRequestWarning')
+def test_untrusted_origin_certificate_is_not_retried_or_bypassed(
+        servers, local_certificate, monkeypatch, https_proxy):
+    origin = servers(tls=True)
+    proxy = servers(proxy=True, tls=True) if https_proxy else None
+    delays = []
+    monkeypatch.setattr('backend.utils.rule_fetch.time.sleep', delays.append)
+    if proxy:
+        # Trust only the HTTPS proxy's TLS layer, leaving the origin certificate
+        # untrusted. This exercises certificate failure after a successful tunnel.
+        context = ssl.create_default_context(cafile=local_certificate[0])
+        original = requests.adapters.HTTPAdapter.proxy_manager_for
+
+        def trusted_proxy(self, proxy_url, **kwargs):
+            kwargs['proxy_ssl_context'] = context
+            return original(self, proxy_url, **kwargs)
+
+        monkeypatch.setattr(requests.adapters.HTTPAdapter, 'proxy_manager_for', trusted_proxy)
+
+    with pytest.raises(requests.exceptions.SSLError):
+        request_rule(origin.url + '/rules', config_data=config(proxy.url if proxy else ''),
+                     stream=True, max_bytes=1024, timeout=3)
+
+    assert origin.seen == []
+    assert origin.accepted_connections == 1
+    assert delays == []
+    if proxy:
+        assert [(entry['method'], entry['url']) for entry in proxy.seen] == [
+            ('CONNECT', urlsplit(origin.url).netloc)]
+
+
+@pytest.mark.parametrize('https_proxy', [False, True])
+@pytest.mark.parametrize('fault', ['eof', 'invalid_length'])
+@pytest.mark.filterwarnings('error::urllib3.exceptions.InsecureRequestWarning')
+def test_chunked_eof_is_retried_but_invalid_length_is_not(
+        servers, local_certificate, monkeypatch, https_proxy, fault):
+    origin = servers(tls=True)
+    proxy = servers(proxy=True, tls=True) if https_proxy else None
+    origin.chunked_faults = ['eof', 'eof', None] if fault == 'eof' else ['invalid_length']
+    delays = []
+    monkeypatch.setattr('backend.utils.rule_fetch.time.sleep', delays.append)
+    options = dict(config_data=config(proxy.url if proxy else ''),
+                   verify=local_certificate[0], stream=True, max_bytes=len(BODY), timeout=3)
+
+    if fault == 'eof':
+        response = request_rule(origin.url + '/rules', **options)
+        assert response.content == BODY
+        assert delays == [1, 2]
+        expected_attempts = 3
+    else:
+        with pytest.raises(requests.exceptions.ChunkedEncodingError, match='InvalidChunkLength'):
+            request_rule(origin.url + '/rules', **options)
+        assert delays == []
+        expected_attempts = 1
+
+    assert [entry['url'] for entry in origin.seen] == ['/rules'] * expected_attempts
+    assert origin.accepted_connections == expected_attempts
+    assert origin.chunked_faults == []
+    if proxy:
+        assert [(entry['method'], entry['url']) for entry in proxy.seen] == [
+            ('CONNECT', urlsplit(origin.url).netloc)] * expected_attempts
