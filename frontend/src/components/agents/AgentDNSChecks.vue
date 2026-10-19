@@ -6,6 +6,27 @@ import type { AgentDNSCheck } from '@/composables/useAgentDeployments'
 const props = withDefaults(defineProps<{ checks?: AgentDNSCheck[]; checkedAt?: string; compact?: boolean }>(), { compact: false })
 const issues = computed(() => props.checks?.filter(check => check.level !== 'pass') || [])
 const passed = computed(() => props.checks?.filter(check => check.level === 'pass') || [])
+const passedSummary = computed(() => {
+  const groups = new Map<string, { name: string; message: string; protocols: string[] }>()
+  return passed.value.flatMap(check => {
+    const binding = check.name.match(/^(.+) (tcp|udp)\/(\d+)$/)
+    if (!binding) return [{ ...check, protocols: [] }]
+    const [, name, protocol, port] = binding
+    const key = JSON.stringify([name, port, check.message, check.fix])
+    const previous = groups.get(key)
+    if (previous && !previous.protocols.includes(protocol)) {
+      previous.protocols.push(protocol)
+      previous.name = `${name} ${previous.protocols.join('/').toUpperCase()} ${port}`
+      return []
+    }
+    // The shared report note already explains the scope of this known probe result.
+    const message = name === 'DNS 当前解析' && check.message === '当前受管监听解析正常；此结果不代表待发布配置已生效'
+      ? '当前受管监听解析正常' : check.message
+    const summary = { name: check.name, message, protocols: [protocol] }
+    groups.set(key, summary)
+    return [summary]
+  })
+})
 const errors = computed(() => issues.value.filter(check => check.level === 'error'))
 const statusLabel = computed(() => errors.value.length ? `${errors.value.length} 项错误`
   : issues.value.length ? `${issues.value.length} 项提醒` : `${passed.value.length} 项通过`)
@@ -31,10 +52,10 @@ const checkedTime = computed(() => {
       </template>
       <div class="min-w-0 space-y-2 text-muted-foreground">
         <ul v-if="repairs.length" class="m-0 list-none space-y-2 p-0">
-          <li v-for="(check, index) in repairs" :key="`${check.name}:${index}`" class="whitespace-pre-wrap"><span class="font-medium">{{ check.name }} · 修复建议：</span>{{ check.fix }}</li>
+          <li v-for="(check, index) in repairs" :key="`${check.name}:${index}`" class="whitespace-pre-wrap"><span class="font-medium"><template v-if="issues.length > 1">{{ check.name }} · </template>修复建议：</span>{{ check.fix }}</li>
         </ul>
         <ul v-if="passed.length" class="m-0 list-none space-y-2 p-0">
-          <li v-for="(check, index) in passed" :key="`${check.name}:${index}`" class="whitespace-pre-wrap"><span class="font-medium">{{ check.name }}：</span>{{ check.message }}</li>
+          <li v-for="(check, index) in passedSummary" :key="`${check.name}:${index}`" class="whitespace-pre-wrap"><span class="font-medium">{{ check.name }}：</span>{{ check.message }}</li>
         </ul>
         <p class="m-0">解析探测针对检查时运行的 DNS 服务；新配置仍需发布后的服务检查。<time v-if="checkedTime" :datetime="checkedAt" class="mt-1 block">检查时间：{{ checkedTime }}</time></p>
       </div>
@@ -53,7 +74,7 @@ const checkedTime = computed(() => {
       <details v-if="passed.length" class="min-w-0">
         <summary class="flex min-h-11 cursor-pointer items-center font-medium text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">{{ issues.length ? '查看通过项目' : 'DNS 检查' }} · {{ passed.length }} 项通过</summary>
         <ul class="m-0 list-none space-y-2 p-0 pb-2 text-muted-foreground">
-          <li v-for="(check, index) in passed" :key="`${check.name}:${index}`" class="whitespace-pre-wrap"><span class="font-medium">{{ check.name }}：</span>{{ check.message }}</li>
+          <li v-for="(check, index) in passedSummary" :key="`${check.name}:${index}`" class="whitespace-pre-wrap"><span class="font-medium">{{ check.name }}：</span>{{ check.message }}</li>
         </ul>
       </details>
       <p class="m-0 text-muted-foreground">解析探测针对检查时运行的 DNS 服务；新配置仍需发布后的服务检查。<time v-if="checkedTime" :datetime="checkedAt" class="mt-1 block">检查时间：{{ checkedTime }}</time></p>

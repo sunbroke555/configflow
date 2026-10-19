@@ -84,4 +84,58 @@ describe('compact DNS checks', () => {
     expect(wrapper.get('time').element.closest('details')).toBeNull()
     expect(wrapper.get('section').classes()).toContain('border')
   })
+
+  it.each([true, false])('summarizes matching TCP/UDP results without changing the check count (compact=%s)', async compact => {
+    const checks: AgentDNSCheck[] = ['tcp', 'udp'].flatMap(protocol => [
+      { name: `mihomo DNS ${protocol}/1053`, level: 'pass', message: '监听属于当前受管核心，可继续发布配置' },
+      { name: `DNS 当前解析 ${protocol}/1053`, level: 'pass', message: '当前受管监听解析正常；此结果不代表待发布配置已生效' },
+    ])
+    const original = structuredClone(checks)
+    const wrapper = render(checks, compact)
+    const toggle = wrapper.get(compact ? '[aria-expanded]' : 'summary')
+    expect(toggle.text()).toContain('4 项通过')
+    if (compact) await toggle.trigger('click')
+    else (wrapper.get('details').element as HTMLDetailsElement).open = true
+    expect(wrapper.findAll('li').map(item => item.text())).toEqual([
+      'mihomo DNS TCP/UDP 1053：监听属于当前受管核心，可继续发布配置',
+      'DNS 当前解析 TCP/UDP 1053：当前受管监听解析正常',
+    ])
+    expect(wrapper.text()).not.toContain('此结果不代表待发布配置已生效')
+    expect(wrapper.text().match(/新配置仍需发布后的服务检查/g)).toHaveLength(1)
+    expect(wrapper.get('time').attributes('datetime')).toBe('2026-10-19T01:00:00Z')
+    expect(checks).toEqual(original)
+  })
+
+  it.each([
+    { name: 'mihomo DNS udp/53' },
+    { name: 'oxidns DNS udp/1053' },
+    { name: 'mihomo DNS udp/1053', message: '当前没有重叠的监听占用' },
+    { name: 'mihomo DNS udp/1053', fix: '来自新版 Agent 的附加说明' },
+    { name: 'mihomo DNS tcp/1053' },
+  ])('retains distinct results or repeated same-protocol bindings: %j', other => {
+    const first: AgentDNSCheck = { name: 'mihomo DNS tcp/1053', level: 'pass', message: '监听属于当前受管核心，可继续发布配置' }
+    const second = { ...first, ...other }
+    const wrapper = render([first, second])
+    expect(wrapper.findAll('li').map(item => item.text())).toEqual([
+      `${first.name}：${first.message}`, `${second.name}：${second.message}`,
+    ])
+  })
+
+  it('preserves unknown probe messages and keeps a failed protocol separate from a passing one', async () => {
+    const message = '当前受管监听解析正常；新版 Agent 的额外诊断说明'
+    const wrapper = render([
+      { name: 'DNS 当前解析 tcp/1053', level: 'pass', message },
+      { name: 'DNS 当前解析 udp/1053', level: 'warn', message: 'UDP 查询超时', fix: '检查 UDP 上游连接' },
+    ])
+    const issue = wrapper.get('[data-status-notice]')
+    expect(issue.isVisible()).toBe(true)
+    expect(issue.text()).toContain('UDP 查询超时')
+    expect(wrapper.get('[aria-expanded]').text()).toContain('1 项提醒')
+    await wrapper.get('[aria-expanded]').trigger('click')
+    const details = wrapper.get('[data-status-details]')
+    expect(details.text()).toContain(`DNS 当前解析 tcp/1053：${message}`)
+    expect(details.text()).toContain('修复建议：检查 UDP 上游连接')
+    expect(details.text()).not.toContain('DNS 当前解析 udp/1053')
+    expect(wrapper.text().match(/DNS 当前解析 udp\/1053/g)).toHaveLength(1)
+  })
 })
