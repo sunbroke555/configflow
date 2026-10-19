@@ -91,7 +91,8 @@ def harness(tmp_path, manager="systemd", existing=True, **options):
     (tmp_path / "ip_forward").write_text("0\n")
     events = tmp_path / "events"
     agent = tmp_path / "fake-agent"
-    agent.write_text(f'''#!{sys.executable}
+    # These subprocess mocks use only stdlib; do not initialize site per call.
+    agent.write_text(f'''#!{sys.executable} -S
 import json, os, sys
 args = sys.argv[1:]
 if args == ['-h']:
@@ -136,13 +137,13 @@ if cfg['service_type'] == os.environ.get('FAIL_JOURNAL_AFTER_STOP') and '-requir
         raise SystemExit(47)
 ''')
     agent.chmod(0o755)
-    manager_mock = '''printf '%s %s\n' "$(basename "$0")" "$*" >> "$EVENTS"
+    manager_mock = '''printf '%s %s\n' "${0##*/}" "$*" >> "$EVENTS"
 case "$*" in
     *--property=LoadState*) printf 'loaded\n' ;;
 esac
-case "$(basename "$0"):$*" in
+case "${0##*/}:$*" in
     systemctl:"start configflow-agent-"*|rc-service:configflow-agent-*" start")
-        if [ "$(basename "$0")" = systemctl ]; then service="$2"; else service="$1"; fi
+        if [ "${0##*/}" = systemctl ]; then service="$2"; else service="$1"; fi
         [ "${FAIL_AGENT_START:-}" != "$service" ] || exit 49
         if [ "$service" = configflow-agent-mihomo ] && [ -f "$FORWARD_HELPER" ]; then
             /bin/sh "$FORWARD_HELPER"
@@ -155,7 +156,7 @@ case "$(basename "$0"):$*" in
         fi
         ;;
 esac
-case "$(basename "$0"):$*" in
+case "${0##*/}:$*" in
     systemctl:"stop configflow-agent-mihomo"|rc-service:"configflow-agent-mihomo stop")
         if [ "${RACE_GATEWAY_RECORD:-}" = stop ]; then
             printf '{"owner":"gateway"}\n' > "$GATEWAY_RECORD"
@@ -163,7 +164,7 @@ case "$(basename "$0"):$*" in
         ;;
 esac
 '''
-    sysctl_mock = f'''#!{sys.executable}
+    sysctl_mock = f'''#!{sys.executable} -S
 import os, sys
 from pathlib import Path
 args = sys.argv[1:]

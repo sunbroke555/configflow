@@ -311,7 +311,12 @@ describe('short installation links', () => {
     expect(notify.error).toHaveBeenCalledWith('当前服务不支持短安装链接，请更新 ConfigFlow 后重试')
   })
 
-  it.each([0, Math.floor(Date.now() / 1000) - 1, 'tomorrow', undefined])('rejects expired or missing expiry %s', async expires_at => {
+  it.each([
+    [0, 0],
+    ['expired', Math.floor(Date.now() / 1000) - 1],
+    ['tomorrow', 'tomorrow'],
+    [undefined, undefined],
+  ])('rejects expired or missing expiry %s', async (_label, expires_at) => {
     vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse('#!/bin/sh\necho installed', { expires_at }) as any)
     await click('生成安装命令')
     expect(document.querySelector('textarea')).toBeNull()

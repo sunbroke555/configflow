@@ -46,7 +46,8 @@ def isolate_dependencies(tmp_path, env, missing=(), package_manager="apk"):
         (commands / tool).rename(unavailable / tool)
     if package_manager:
         manager = commands / package_manager
-        manager.write_text(f'''#!{sys.executable}
+        # This mock needs only stdlib, even when the test runner uses a venv.
+        manager.write_text(f'''#!{sys.executable} -S
 import json, os, sys
 from pathlib import Path
 with open(os.environ['PACKAGE_EVENTS'], 'a') as log:

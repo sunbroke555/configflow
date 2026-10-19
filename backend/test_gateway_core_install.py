@@ -73,7 +73,8 @@ def host(tmp_path, monkeypatch, manager='systemd', architecture='x86_64'):
     commands = tmp_path / 'commands'
     assets.mkdir()
     commands.mkdir()
-    shebang = '#!' + sys.executable + '\n'
+    # The fake commands use only stdlib; skip site initialization per process.
+    shebang = '#!' + sys.executable + ' -S\n'
     core = shebang + '''import os,sys
 from pathlib import Path
 kind=Path(sys.argv[0]).name

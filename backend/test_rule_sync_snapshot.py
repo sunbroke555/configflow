@@ -313,7 +313,7 @@ def test_network_errors_are_sanitized(monkeypatch, snapshot, error):
     assert 'private' not in str(failure.value)
 
 
-@pytest.mark.parametrize('body', [b'', b'private-invalid-gzip', gzip.compress(b'private-invalid-tar')])
+@pytest.mark.parametrize('body', [b'', b'private-invalid-gzip', gzip.compress(b'private-invalid-tar', mtime=0)])
 def test_malformed_archives_are_sanitized(monkeypatch, snapshot, body):
     _serve(monkeypatch, body)
     with pytest.raises(ValueError, match='无法验证设备当前规则快照') as failure:
