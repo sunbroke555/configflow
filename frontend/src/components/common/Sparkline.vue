@@ -1,19 +1,24 @@
 <template>
-  <canvas ref="canvas" class="block" aria-hidden="true" />
+  <canvas ref="canvas" class="block" :style="canvasStyle" aria-hidden="true" />
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { usePreferences } from '@/stores/preferences'
 
 /**
- * 迷你趋势线：只画真实序列，少于两个点时只画一条基线，不补造数据。
+ * 迷你趋势线：默认等距绘制；提供 timestamps 后按真实时间绘制，缺失样本断线。
  * 颜色取语义 token 名（如 --primary-accent），主题与强调色切换后自动重画。
  */
 const props = withDefaults(
   defineProps<{
-    data: number[]
+    data: (number | null)[]
+    timestamps?: number[]
+    timeRange?: [number, number]
+    min?: number
+    max?: number
+    maxGap?: number
     color?: string
     fill?: boolean
   }>(),
@@ -23,6 +28,13 @@ const props = withDefaults(
 const canvas = ref<HTMLCanvasElement | null>(null)
 const { theme } = useThemeStore()
 const { prefs } = usePreferences()
+// Let CSS resolve derived color-mix tokens before passing colors to Canvas.
+const canvasStyle = computed(() => ({
+  color: props.color.startsWith('--') ? `var(${props.color})` : props.color,
+  borderColor: 'var(--border-strong)'
+}))
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+type Point = { x: number; value: number }
 
 const draw = () => {
   const cv = canvas.value
@@ -37,13 +49,41 @@ const draw = () => {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, rect.width, rect.height)
 
-  const cs = getComputedStyle(document.documentElement)
-  const color = cs.getPropertyValue(props.color).trim() || '#d97757'
+  const cs = getComputedStyle(cv)
+  const color = cs.color
   const W = rect.width
   const H = rect.height - 2
+  const timed = props.timestamps !== undefined
+  const times = props.timestamps?.slice(0, props.data.length).filter(finite) || []
+  const explicitRange = props.timeRange
+  const [start, end] = explicitRange && finite(explicitRange[0]) && finite(explicitRange[1]) && explicitRange[1] > explicitRange[0]
+    ? explicitRange
+    : times.length ? [Math.min(...times), Math.max(...times)] : [0, 0]
+  const maxGap = finite(props.maxGap) && props.maxGap >= 0 ? props.maxGap : Infinity
+  const segments: Point[][] = []
+  let segment: Point[] = []
+  let previousTime: number | undefined
+  const split = () => { segment = []; previousTime = undefined }
 
-  if (props.data.length < 2) {
-    ctx.strokeStyle = cs.getPropertyValue('--border-strong').trim() || 'rgba(128,128,128,.3)'
+  props.data.forEach((value, index) => {
+    const time = props.timestamps?.[index]
+    if (!finite(value) || (timed && (!finite(time) || time < start || time > end))) {
+      split()
+      return
+    }
+    if (timed && finite(time) && previousTime !== undefined && (time <= previousTime || time - previousTime > maxGap)) split()
+    if (!segment.length) segments.push(segment)
+    segment.push({
+      x: timed && finite(time) ? (end > start ? (time - start) / (end - start) * W : W / 2)
+        : index / Math.max(1, props.data.length - 1) * W,
+      value
+    })
+    previousTime = time
+  })
+
+  // Keep the original one-sample baseline for callers without timestamps.
+  if (!segments.length || (!timed && props.data.length < 2)) {
+    ctx.strokeStyle = cs.borderTopColor
     ctx.lineWidth = 1
     ctx.setLineDash([3, 4])
     ctx.beginPath()
@@ -53,52 +93,64 @@ const draw = () => {
     return
   }
 
-  const min = Math.min(...props.data)
-  const max = Math.max(...props.data)
-  const xy = (v: number, i: number): [number, number] => [
-    (i / (props.data.length - 1)) * W,
-    H - ((v - min) / (max - min || 1)) * (H - 4) + 1
-  ]
-
-  ctx.beginPath()
-  props.data.forEach((v, i) => {
-    const [x, y] = xy(v, i)
-    if (i) ctx.lineTo(x, y)
-    else ctx.moveTo(x, y)
-  })
+  const values = segments.flatMap(points => points.map(point => point.value))
+  const min = finite(props.min) ? props.min : Math.min(...values)
+  const max = Math.max(min, finite(props.max) ? props.max : Math.max(...values))
+  const y = (value: number) => H - Math.max(0, Math.min(1, (value - min) / (max - min || 1))) * Math.max(0, H - 4) + 1
+  const path = (points: Point[]) => {
+    ctx.beginPath()
+    points.forEach((point, index) => {
+      if (index) ctx.lineTo(point.x, y(point.value))
+      else ctx.moveTo(point.x, y(point.value))
+    })
+  }
+  ctx.setLineDash([])
+  ctx.fillStyle = color
   ctx.strokeStyle = color
   ctx.lineWidth = 1.5
   ctx.lineJoin = 'round'
-  ctx.stroke()
-
-  if (props.fill) {
-    ctx.lineTo(W, H + 2)
-    ctx.lineTo(0, H + 2)
-    ctx.closePath()
-    const grad = ctx.createLinearGradient(0, 0, 0, H)
-    grad.addColorStop(0, `${color}55`)
-    grad.addColorStop(1, `${color}00`)
-    ctx.fillStyle = grad
-    ctx.fill()
-  }
-
-  const [lx, ly] = xy(props.data[props.data.length - 1], props.data.length - 1)
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.arc(lx - 2, ly, 2.5, 0, Math.PI * 2)
-  ctx.fill()
+  segments.forEach((points, index) => {
+    const last = points[points.length - 1]
+    if (points.length > 1) {
+      if (props.fill) {
+        path(points)
+        ctx.lineTo(last.x, H + 2)
+        ctx.lineTo(points[0].x, H + 2)
+        ctx.closePath()
+        ctx.globalAlpha = 0.14
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+      path(points)
+      ctx.stroke()
+    }
+    if (points.length === 1 || index === segments.length - 1) {
+      ctx.beginPath()
+      ctx.arc(last.x - (!timed && points.length > 1 ? 2 : 0), y(last.value), 2.5, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  })
 }
 
 let observer: ResizeObserver | null = null
+let themeFrame: number | undefined
 
 onMounted(() => {
   draw()
-  observer = new ResizeObserver(draw)
-  if (canvas.value) observer.observe(canvas.value)
+  if (typeof ResizeObserver !== 'undefined') {
+    observer = new ResizeObserver(draw)
+    if (canvas.value) observer.observe(canvas.value)
+  }
 })
 
-onUnmounted(() => observer?.disconnect())
+onUnmounted(() => {
+  observer?.disconnect()
+  if (themeFrame !== undefined) cancelAnimationFrame(themeFrame)
+})
 
-watch(() => [props.data, props.color], draw, { deep: true })
-watch([theme, () => prefs.value.accent], () => requestAnimationFrame(draw))
+watch(() => [props.data, props.timestamps, props.timeRange, props.min, props.max, props.maxGap, props.color, props.fill], draw, { deep: true, flush: 'post' })
+watch([theme, () => prefs.value.accent], () => {
+  if (themeFrame !== undefined) cancelAnimationFrame(themeFrame)
+  themeFrame = requestAnimationFrame(() => { themeFrame = undefined; draw() })
+}, { flush: 'post' })
 </script>
