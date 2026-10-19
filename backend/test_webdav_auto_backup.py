@@ -51,8 +51,10 @@ def dav(tmp_path, monkeypatch):
 
 def test_enabled_auto_backup_uploads_the_complete_committed_document(dav):
     repository, settings, uploaded, completed, _, worker = dav
-    repository.update_system_transaction(lambda system: system.update(backup=settings))
-    repository.save_profile('default', {'mihomo': {'custom_config': 'mixed-port: 7891'}})
+    # Queue both commits before the worker runs, regardless of disk/scheduler speed.
+    with worker._condition:
+        repository.update_system_transaction(lambda system: system.update(backup=settings))
+        repository.save_profile('default', {'mihomo': {'custom_config': 'mixed-port: 7891'}})
     assert completed.wait(3), 'Enabling auto_backup must back up a saved configuration'
     wait_idle(worker)
     assert len(uploaded) == 1
@@ -151,9 +153,10 @@ def test_slow_upload_does_not_block_saves_and_pending_changes_coalesce_to_latest
 
 def test_disabling_auto_backup_before_pending_upload_cancels_it(dav):
     repository, settings, uploaded, _, _, worker = dav
-    worker.delay = 0.1
-    repository.update_system_transaction(lambda system: system.update(backup=settings))
-    repository.update_system_transaction(lambda system: system['backup'].update(auto_backup=False))
+    # Keep the upload pending until disabling auto-backup has committed.
+    with worker._condition:
+        repository.update_system_transaction(lambda system: system.update(backup=settings))
+        repository.update_system_transaction(lambda system: system['backup'].update(auto_backup=False))
     wait_idle(worker)
     assert uploaded == []
 
@@ -165,8 +168,10 @@ def test_upload_failure_preserves_saved_config_cleans_temp_file_and_does_not_ret
         paths.append(local_path)
         raise OSError('remote failure containing secret')
     monkeypatch.setattr(clients.Client, 'upload_sync', fail)
-    repository.update_system_transaction(lambda system: system.update(backup=settings))
-    repository.save_profile('default', {'mihomo': {'custom_config': 'saved despite upload failure'}})
+    # Exercise one failed upload without racing the debounce deadline.
+    with worker._condition:
+        repository.update_system_transaction(lambda system: system.update(backup=settings))
+        repository.save_profile('default', {'mihomo': {'custom_config': 'saved despite upload failure'}})
     wait_idle(worker)
     assert len(paths) == 1
     assert not Path(paths[0]).exists()
