@@ -1,10 +1,18 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.30-go"
+LATEST_AGENT_VERSION = "1.8.31-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.31-go": {
+        "date": "2026-10-19",
+        "features": [
+            "统一核心和 Agent 安装、更新、卸载及环境检查的终端提示，简洁摘要、完整日志与 --verbose 详细模式覆盖所有脚本入口",
+            "只读核对 Mihomo 核心实际持有的 TUN 接口，兼容顶层 tun 和 listeners TUN 配置，显示实际通过状态或具体原因",
+            "离线更新只启停对应 Agent，保留核心配置并核对核心 PID 与启动时间，失败恢复 Agent 备份"
+        ]
+    },
     "1.8.30-go": {
         "date": "2026-10-19",
         "features": [

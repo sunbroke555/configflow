@@ -1,6 +1,9 @@
 #!/bin/sh
 # ConfigFlow Linux gateway installation. No forwarding or TUN interception here.
 set -eu
+for cf_argument do
+    case "$cf_argument" in --verbose|-v) ;; *) cf_error "未知参数：$cf_argument"; exit 2 ;; esac
+done
 umask 077
 GATEWAY_STAGE=""
 GATEWAY_LOCK=""
@@ -28,7 +31,7 @@ download() {
     fi
 }
 verified_download() {
-    download "$1" "$3" || fail "下载失败：$1；请检查访问 GitHub/ConfigFlow 的网络后重跑。"
+    download "$1" "$3" || fail "下载失败；请检查访问 GitHub/ConfigFlow 的网络后重跑。"
     printf '%s  %s\n' "$2" "$3" | sha256sum -c - >/dev/null || fail '下载文件 SHA256 不匹配；本次未执行下载文件，请重新生成安装命令。'
 }
 select_core() {
@@ -89,6 +92,7 @@ case "$(uname -m)" in
         ;;
     *) fail '目前网关一体安装支持 x86_64 / arm64；不支持当前 CPU 架构。' ;;
 esac
+cf_step "检查网关安装环境"
 [ -n "$AGENT_SHA" ] || fail "ConfigFlow 服务器未提供 $GATEWAY_ARCH 的 Agent 构建，请更新服务器的 Agent 下载文件后重新生成命令。"
 if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
     GATEWAY_INIT=openrc
@@ -100,7 +104,7 @@ fi
 for dependency in ip nft ss tar gzip sha256sum awk sed grep mktemp readlink head cmp; do need "$dependency"; done
 command -v curl >/dev/null 2>&1 || need wget
 [ -c /dev/net/tun ] || fail '缺少 /dev/net/tun。请先在宿主机/LXC 配置中开放 TUN，再重跑；安装器不会修改宿主机权限。'
-nft -j list ruleset >/dev/null 2>&1 || fail '无法读取 nftables，缺少 CAP_NET_ADMIN 或内核 nftables 支持；请检查宿主机/LXC 权限。'
+nft -j list ruleset >/dev/null || fail '无法读取 nftables，缺少 CAP_NET_ADMIN 或内核 nftables 支持；请检查宿主机/LXC 权限。'
 [ -r /proc/sys/net/ipv4/ip_forward ] || fail '无法读取 IPv4 转发设置，请检查内核网络命名空间。'
 for directory in /etc /usr/local /usr/local/bin /opt /opt/configflow-agent /run; do
     [ ! -L "$directory" ] || fail "安装目录不能是符号链接：$directory"
@@ -139,7 +143,7 @@ GATEWAY_LOCK=/run/configflow-gateway-install.lock
 GATEWAY_STAGE=$(mktemp -d /tmp/configflow-gateway.XXXXXX)
 export GATEWAY_STAGE
 BINARY_BASE={binary_download_url_shell}
-echo '正在核验现有核心，并下载需要补装的固定版本核心及 Agent，尚未修改系统服务...'
+cf_step "校验核心并下载所需程序"
 if [ "$MIHOMO_DOWNLOAD" -eq 1 ]; then
     verified_download "$MIHOMO_URL" "$MIHOMO_SHA" "$GATEWAY_STAGE/mihomo.gz"
 fi
@@ -162,7 +166,7 @@ if [ "$OXIDNS_DOWNLOAD" -eq 1 ]; then
     "$GATEWAY_STAGE/oxidns" --version | grep -F "${OXIDNS_VERSION#v}" >/dev/null || fail 'OxiDNS 下载版本与固定版本不一致。'
 fi
 chmod 755 "$GATEWAY_STAGE/configflow-agent"
-"$GATEWAY_STAGE/configflow-agent" -h >/dev/null 2>&1 || fail 'Agent 无法在当前系统运行；请重新构建匹配版本。'
+"$GATEWAY_STAGE/configflow-agent" -h >/dev/null || fail 'Agent 无法在当前系统运行；请重新构建匹配版本。'
 agent_version=$("$GATEWAY_STAGE/configflow-agent" -version)
 printf '%s\n' "$agent_version" | awk -F '[-.]' '/^[0-9]+\.[0-9]+\.[0-9]+(-go)?$/ && ($1>1 || ($1==1 && ($2>8 || ($2==8 && $3>=25)))) {ok=1} END {exit !ok}' || fail '网关向导需要 Agent 1.8.25-go 或更新，请更新服务器的 Agent 构建并重新生成命令。'
 cat > "$GATEWAY_STAGE/mihomo.yaml" <<'CONFIGFLOW_GATEWAY_MIHOMO_BOOTSTRAP'
@@ -237,10 +241,12 @@ for core in mihomo oxidns; do
         "$CHECK_BINARY" check -c "$CHECK_CONFIG" -d "$CHECK_DIR" || fail 'OxiDNS 现有或引导配置校验失败；尚未安装或覆盖核心。'
     fi
 done
+cf_success "下载与核心配置校验通过"
+cf_step "安装或保留核心服务"
 for core in mihomo oxidns; do
     select_core "$core"
     if [ ! -f "$CORE_MARKER" ] && [ -f "$CORE_CONFIG" ]; then
-        echo "保留并接入已有 $core 核心、配置和服务。"
+        cf_fact "service_$core" "保留并接入已有 ${core} 核心、配置和服务。"
         continue
     fi
     GATEWAY_CHANGED=1
@@ -323,6 +329,7 @@ done
 cat > "$GATEWAY_STAGE/install-agents.sh" <<'CONFIGFLOW_GATEWAY_AIO_SCRIPT'
 {aio_script}
 CONFIGFLOW_GATEWAY_AIO_SCRIPT
+cf_step "安装两个 Agent"
 sh "$GATEWAY_STAGE/install-agents.sh"
 
 ENROLLMENT_URL={enrollment_url_shell}
@@ -333,7 +340,7 @@ if [ -n "$ENROLLMENT_URL" ]; then
         case "$value" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; esac
         printf '%s' "$value"
     }
-    echo '等待两个 Agent 注册并安全绑定到安装向导...'
+    cf_step '等待 Agent 注册并绑定安装向导'
     ready=0
     attempt=0
     while [ "$attempt" -lt 60 ]; do
@@ -360,5 +367,6 @@ if [ -n "$ENROLLMENT_URL" ]; then
     fi
     grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$GATEWAY_STAGE/enrollment-result.json" || fail '服务器未确认安装绑定，请回到网页刷新安装状态。'
 fi
-echo '核心及两个 Agent 已就绪。请回到 ConfigFlow 安装向导，继续发布 Mihomo、发布 OxiDNS，再检查并应用网关转发。'
-echo '安装脚本未写入 TUN/转发配置，原有配置已保留；完成网页验证前不要修改客户端网关/DNS。'
+cf_fact next_steps '请回到 ConfigFlow 安装向导，继续发布 Mihomo、发布 OxiDNS，再检查并应用网关转发。'
+cf_note gateway '安装脚本未写入 TUN/转发配置，原有配置已保留；完成网页验证前不要修改客户端网关/DNS。'
+cf_complete '核心及两个 Agent 已就绪'

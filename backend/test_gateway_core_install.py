@@ -41,7 +41,8 @@ def test_invalid_input_rejected(params):
 def test_opt_in_does_not_change_ordinary_aio_and_sh_syntax(tmp_path):
     ordinary = generate_go_aio_install_script('https://cf.test', 'ordinary')
     assert 'read -r choice < /dev/tty' in ordinary
-    assert 'installation_token' not in ordinary
+    # The report helper recognizes secret names; ordinary config has no enrollment key.
+    assert '"installation_token":' not in ordinary
     assert 'configflow-gateway' not in ordinary
     assert '-prepare-tun' in ordinary
     script = generate()

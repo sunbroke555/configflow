@@ -2,6 +2,9 @@
 # ConfigFlow Go Agent: native Shell installation, systemd / OpenRC.
 # Service: {service_type}; Agent: {agent_name}
 set -eu
+for cf_argument do
+    case "$cf_argument" in --verbose|-v) ;; *) cf_error "未知参数：$cf_argument"; exit 2 ;; esac
+done
 
 AGENT_DIR="/opt/configflow-agent"
 CONFIG_FILE="$AGENT_DIR/config-{service_type}.json"
@@ -32,8 +35,8 @@ case "$choice" in
         agent_ensure_dependencies
         cf_step_done "安装环境与依赖已就绪"
         ;;
-    2) ;;
-    *) exit 0 ;;
+    2) cf_step "卸载 Agent" ;;
+    *) cf_complete "已取消"; exit 0 ;;
 esac
 
 # Remove only this installation's recovery dependency, retaining unrelated unit
@@ -235,10 +238,10 @@ case "$choice" in
         rm -f /usr/local/bin/configflow-agent
         rm -rf "$AGENT_DIR"
         rm -f /var/log/configflow-agent.log /var/log/configflow-agent.log.* /etc/logrotate.d/configflow-agent
-        cf_ui "Agent 已卸载，服务配置与发布备份已保留。"
+        cf_complete "Agent 已卸载，服务配置与发布备份已保留。"
         exit 0
         ;;
-    *) exit 0 ;;
+    *) cf_complete "已取消"; exit 0 ;;
 esac
 
 {core_install_phase}BINARY_BASE={binary_download_url_shell}
@@ -262,7 +265,7 @@ else
     echo "安装阶段需要 wget 或 curl 下载二进制"; exit 1
 fi
 chmod 755 "$BINARY_TMP"
-"$BINARY_TMP" -h >/dev/null 2>&1
+"$BINARY_TMP" -h >/dev/null
 cf_step_done "Agent 下载与校验通过"
 
 

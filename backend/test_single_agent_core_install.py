@@ -189,8 +189,8 @@ def run(script, env, choice="1"):
 
 
 def detail_output(result):
-    path = next(line.removeprefix("详细日志：") for line in result.stdout.splitlines()
-                if line.startswith("详细日志："))
+    path = next(line.removeprefix("完整日志：") for line in result.stdout.splitlines()
+                if line.startswith("完整日志："))
     return Path(path).read_text()
 
 
@@ -221,7 +221,7 @@ def test_single_agent_only_prints_progress_and_service_summary(tmp_path, monkeyp
     assert "检查核心接管与运行环境" in result.stdout
     assert "安装并启动 Agent 服务" in result.stdout
     assert f"{label} Agent：端口 8080，服务已启动" in result.stdout
-    assert "安装完成" in result.stdout and "详细日志：" in result.stdout
+    assert "安装完成" in result.stdout + result.stderr and "完整日志：" in result.stdout
     assert "verbose-environment-detail-for-log-only" not in result.stdout + result.stderr
     assert "verbose-environment-detail-for-log-only" in detail_output(result)
     assert "core --core" not in events.read_text()
@@ -237,8 +237,8 @@ def test_single_agent_pending_publication_remains_visible_in_success_summary(tmp
     env["PENDING_DEPLOYMENT"] = "yes"
     result = run(script, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "安装完成" in result.stdout
-    assert result.stdout.count("存在需要处理的发布记录") == 1
+    assert "安装完成" in result.stdout + result.stderr
+    assert result.stderr.count("发布记录需要处理：pending publication; inspect its journal") == 1
     assert "Deployment check requires attention:" not in result.stdout + result.stderr
     details = detail_output(result)
     expected_checks = 2 if existing else 1

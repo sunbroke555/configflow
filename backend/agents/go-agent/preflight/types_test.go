@@ -1,6 +1,7 @@
 package preflight
 
 import (
+	"agent/clioutput"
 	"bytes"
 	"encoding/json"
 	"os"
@@ -8,6 +9,30 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestCompactReportRetainsRuntimeFactsAndCompleteEvidence(t *testing.T) {
+	report := Report{
+		{Name: "TUN 设备", Level: "pass", Message: "设备可以打开并读取 TUNGETFEATURES；未创建接口。"},
+		{Name: "TUN 实际启动", Level: "pass", Message: "Mihomo 核心 PID 35445 正持有内核 TUN/TAP 接口 Meta，已确认接口存在于该进程的网络命名空间；不代表路由验证。"},
+		{Name: "IPv4 转发", Level: "pass", Message: "当前 net.ipv4.ip_forward=1；不代表重启后开启。"},
+		{Name: "IPv4 转发持久化", Level: "warn", Message: "未找到持久化设置。", Fix: "检查 /etc/sysctl.d/。"},
+	}
+	var terminal, details bytes.Buffer
+	report.PrintWithOptions(&terminal, clioutput.Options{Details: &details}, false)
+	for _, value := range []string{"Meta", "35445", "3 项通过，1 项提醒", "未找到持久化设置", "检查 /etc/sysctl.d/"} {
+		if !strings.Contains(terminal.String(), value) {
+			t.Fatalf("missing key result %q: %s", value, terminal.String())
+		}
+	}
+	if strings.Contains(terminal.String(), "TUNGETFEATURES") || !strings.Contains(details.String(), "TUNGETFEATURES") || !strings.Contains(details.String(), "网络命名空间") {
+		t.Fatalf("incorrect evidence separation: terminal=%q log=%q", terminal.String(), details.String())
+	}
+	var verbose bytes.Buffer
+	report.PrintWithOptions(&verbose, clioutput.Options{Verbose: true}, false)
+	if !strings.Contains(verbose.String(), "TUNGETFEATURES") || !strings.Contains(verbose.String(), "处理方法") {
+		t.Fatalf("verbose lost full detail: %s", verbose.String())
+	}
+}
 
 func TestReportShowsAllFailuresAndRepairsWithoutTerminalInjection(t *testing.T) {
 	report := Report{

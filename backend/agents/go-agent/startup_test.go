@@ -75,7 +75,7 @@ func TestStrictNativeAIOPreflightRejectsPendingAgentUpdate(t *testing.T) {
 		cmd.Env = append(os.Environ(), "CONFIGFLOW_STARTUP_TEST_HELPER=1")
 		output, err := cmd.CombinedOutput()
 		cancel()
-		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 || !strings.Contains(string(output), "Agent update requires completion") {
+		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 || !strings.Contains(string(output), "Agent 更新记录需要处理") {
 			t.Fatalf("pending Agent update did not block install: %v\n%s", err, output)
 		}
 		if got, err := os.ReadFile(journalPath); err != nil || string(got) != journal {
@@ -175,7 +175,11 @@ func TestAgentStartupOnlyInspectsInterruptedDeployments(t *testing.T) {
 						t.Fatalf("inspection must not block startup: %v\n%s", err, output.String())
 					}
 				}
-				if !strings.Contains(output.String(), "Deployment check requires attention") || !strings.Contains(output.String(), "-recover-and-exit") {
+				warning := "发布记录需要处理"
+				if mode == "normal" {
+					warning = "Deployment check requires attention"
+				}
+				if !strings.Contains(output.String(), warning) || !strings.Contains(output.String(), "-recover-and-exit") {
 					t.Fatalf("missing actionable startup warning: %s", output.String())
 				}
 				for path, want := range files {

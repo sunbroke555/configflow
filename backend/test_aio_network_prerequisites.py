@@ -1,11 +1,13 @@
 """Network setup regressions, with all installer effects confined to temp files."""
 
+import os
 from pathlib import Path
 import re
 import subprocess
 
 import pytest
 
+from backend.agents.install_output import with_install_output
 from backend.test_agent_native_aio_install import (
     FORWARD_CONFIG,
     detail_output,
@@ -88,29 +90,39 @@ def test_forwarding_summary_only_replaces_resolved_warning_and_preserves_log(tmp
         (tmp_path / name).write_text(content)
     original_log = "检查时的原始状态\n" + "".join(warnings.values())
     (tmp_path / "install.log").write_text(original_log)
-    source = "\n".join([
+    source = with_install_output("#!/bin/sh\n" + "\n".join([
         "set -eu",
-        (SCRIPTS / "install-output.sh").read_text(),
         shell_function("aio-ipv4-forwarding.sh", "summarize_ipv4_forwarding"),
-        'CF_OUTPUT_ACTIVE=true; CF_OUTPUT_DIR="$1"; CF_OUTPUT_LOG="$1/install.log"',
+        'for note in "$1"/note.*; do cp "$note" "$CF_OUTPUT_DIR/"; done',
+        'cat "$1/install.log"',
+        'cp "$CONFIGFLOW_LOG_FILE" "$1/log-before-summary"',
         "summarize_ipv4_forwarding",
-    ])
+        'cp "$CONFIGFLOW_LOG_FILE" "$1/log-after-summary"',
+    ]))
+    env = dict(os.environ, CONFIGFLOW_LOG_DIR=str(tmp_path / "logs"), CONFIGFLOW_VERBOSE="0")
+    for key in ("CONFIGFLOW_CLI_ACTIVE", "CONFIGFLOW_LOG_FILE", "CONFIGFLOW_LOG_STATE_DIR",
+                "CONFIGFLOW_LOG_CURSOR", "CONFIGFLOW_REPORT_FD", "CONFIGFLOW_REPORT_NESTED"):
+        env.pop(key, None)
     result = subprocess.run(["/bin/sh", "-c", source, "summary-test", str(tmp_path)],
-                            text=True, capture_output=True, timeout=10)
+                            env=env, text=True, capture_output=True, timeout=10)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert not (tmp_path / "note.environment_1").exists()
+    logs = list((tmp_path / "logs").glob("configflow-install.*/install.log"))
+    assert len(logs) == 1
+    report_dir = logs[0].parent
+    assert not (report_dir / "note.environment_1").exists()
     for name, content in warnings.items():
         if name not in ("note.environment_1", "note.forwarding"):
-            assert (tmp_path / name).read_text() == content
-    summary = (tmp_path / "note.forwarding").read_text()
+            assert (report_dir / name).read_text() == content
+    summary = (report_dir / "note.forwarding").read_text()
     assert "已设置持久化" in summary
     assert "尚未实际重启验证" in summary
     assert "其他配置或服务覆盖风险" in summary
     assert "原检查结果见详细日志" in summary
     assert "当前为 0" not in summary
-    assert "已开启并持久化" in (tmp_path / "fact.ipv4_forwarding").read_text()
-    assert (tmp_path / "install.log").read_text() == original_log
+    assert "已开启并持久化" in (report_dir / "fact.ipv4_forwarding").read_text()
+    assert (tmp_path / "log-before-summary").read_bytes() == (tmp_path / "log-after-summary").read_bytes()
+    assert original_log in logs[0].read_text()
 
 
 @pytest.mark.parametrize("manager", ["systemd", "openrc"])
@@ -128,12 +140,13 @@ def test_successful_aio_install_does_not_repeat_resolved_forwarding_warning(tmp_
     result = run(installer, env)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
     assert (tmp_path / "ip_forward").read_text() == "1\n"
-    assert "IPv4 转发已开启并持久化" in result.stdout
-    assert "尚未实际重启验证" in result.stdout
-    assert "其他配置或服务覆盖风险" in result.stdout
-    assert "当前 net.ipv4.ip_forward=0" not in result.stdout
-    assert "DNS 检查：仍需核对客户端入口。" in result.stdout
+    assert "IPv4 转发已开启并持久化" in output
+    assert "尚未实际重启验证" in output
+    assert "其他配置或服务覆盖风险" in output
+    assert "当前 net.ipv4.ip_forward=0" not in output
+    assert "DNS 检查：仍需核对客户端入口。" in output
     log = detail_output(result)
     for message in (resolved, unrelated, persistent_risk):
         assert message in log
