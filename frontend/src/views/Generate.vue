@@ -1,15 +1,16 @@
 <template>
   <div class="min-w-0 [overflow-wrap:anywhere]">
-    <PageHeader title="配置生成" />
+    <PageHeader v-if="!agentSettings" title="配置生成" />
 
     <!-- ===== 生成工作台：目标切换 + 编译步骤 + 代码面板 ===== -->
-    <GenerateStudio :targets="studioTargets" @copy="copyUrl" />
+    <GenerateStudio v-if="!agentSettings" :targets="studioTargets" @copy="copyUrl" />
 
     <!-- ===== 自定义基础配置 ===== -->
     <SettingsWorkspace
       v-model:open="customConfigDialogVisible"
       :title="getCustomConfigDialogTitle()"
       :description="customConfigDescription"
+      :back-label="settingsBackLabel"
       :dirty="customConfigDirty"
       :busy="savingCustomConfig"
       size="wide"
@@ -17,7 +18,8 @@
       @save="saveCustomConfig()"
     >
       <MihomoSyncInterval v-if="currentConfigType === 'mihomo'" v-model="mihomoSyncInterval" :inert="savingCustomConfig" />
-      <div :inert="savingCustomConfig" class="min-h-0 min-w-0 flex-1 p-4 md:p-5">
+      <div :inert="savingCustomConfig" class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4 md:p-5">
+        <p v-if="settingsContextLabel" class="m-0 shrink-0 break-words text-xs text-muted-foreground">{{ settingsContextLabel }}</p>
         <YamlEditor
           v-model="customConfigContent"
           class="h-full min-h-0"
@@ -28,6 +30,7 @@
         <SettingsPublishBar
           :open="customConfigDialogVisible"
           :profile-id="profileId"
+          :preferred-agent-id="agentSettings?.agentId"
           :service-type="currentConfigType"
           :disabled="disabled"
           :save="() => saveCustomConfig(false)"
@@ -58,18 +61,26 @@
       </DialogContent>
     </Dialog>
 
-    <OxidnsSettings v-model:open="oxidnsSettingsDialogVisible" :profile-id="profileId" />
+    <OxidnsSettings
+      v-model:open="oxidnsSettingsDialogVisible"
+      :profile-id="profileId"
+      :preferred-agent-id="agentSettings?.agentId"
+      :context-label="settingsContextLabel"
+      :back-label="settingsBackLabel"
+    />
 
     <!-- ===== MosDNS 设置 ===== -->
     <SettingsWorkspace
       v-model:open="mosdnsSettingsDialogVisible"
       title="MosDNS 设置"
       description="设置当前配置空间的域名解析规则、DNS 服务器、缓存和日志，用于生成 MosDNS 配置。"
+      :back-label="settingsBackLabel"
       :dirty="mosdnsSettingsDirty"
       :busy="savingMosdnsSettings"
       size="form"
       @save="saveMosdnsSettings()"
     >
+        <p v-if="settingsContextLabel" class="m-0 shrink-0 break-words px-4 pt-3 text-xs text-muted-foreground md:px-5">{{ settingsContextLabel }}</p>
         <Tabs v-model="mosdnsActiveTab" :inert="savingMosdnsSettings" class="min-h-0 min-w-0 flex-1 gap-0 overflow-hidden">
           <TabsList variant="strip" class="h-auto min-h-11 w-full shrink-0 justify-start gap-1 overflow-x-auto rounded-none border-b border-border bg-card px-4 py-2 md:px-5">
             <TabsTrigger value="rules" class="min-h-9 shrink-0 text-xs max-md:min-h-11">规则配置</TabsTrigger>
@@ -549,6 +560,7 @@
           <SettingsPublishBar
             :open="mosdnsSettingsDialogVisible"
             :profile-id="profileId"
+            :preferred-agent-id="agentSettings?.agentId"
             service-type="mosdns"
             :disabled="disabled"
             :save="() => saveMosdnsSettings(false)"
@@ -691,14 +703,26 @@ import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'
 import type { RuleSet } from '@/types'
 import { activeProfileId } from '@/profileContext'
+import type { AgentSettingsContext } from '@/lib/agentSettings'
 import * as yaml from 'js-yaml'
 import Sortable from 'sortablejs'
 
 // DNS 条目接口定义
 
+// Agent editors keep the bound space for their entire lifetime, independently
+// of the global space switcher. A new entry mounts a new editor session.
+const props = defineProps<{ agentSettings?: AgentSettingsContext }>()
+const emit = defineEmits<{ ready: []; close: [] }>()
 const cfProfileStore = useProfileStore()
-const profileId = activeProfileId.value
+const profileId = props.agentSettings?.profileId ?? activeProfileId.value
 const profileOptions = { headers: { 'X-ConfigFlow-Profile': profileId } }
+const settingsBackLabel = props.agentSettings ? '返回 Agent 列表' : '返回生成工作台'
+const settingsContextLabel = computed(() => {
+  const context = props.agentSettings
+  if (!context) return ''
+  const service = { mihomo: 'Mihomo', mosdns: 'MosDNS', oxidns: 'OxiDNS', surge: 'Surge' }[context.serviceType]
+  return `设备「${context.agentName}」 · 配置空间「${context.profileName}」。同空间的 ${service} 设备共用此配置；保存草稿不会下发。`
+})
 let pageActive = true
 onBeforeUnmount(() => { pageActive = false })
 
@@ -1569,12 +1593,13 @@ const showCustomConfigDialog = async (type: ConfigType) => {
       mosdns: customConfigApi.getMosdns
     }
     const response = await apiMap[type](profileId)
+    if (!pageActive) return
     customConfigContent.value = response.data.config || ''
     customConfigSavedContent.value = customConfigContent.value
     if (type === 'mihomo') mihomoSyncInterval.value = mihomoSavedSyncInterval.value = response.data.provider_update_interval ?? 3600
     customConfigDialogVisible.value = true
   } catch (error) {
-    notify.error('加载自定义配置失败')
+    if (pageActive) notify.error('加载自定义配置失败')
   }
 }
 
@@ -1872,6 +1897,7 @@ const showMosdnsSettingsDialog = async () => {
 
     // 加载缓存配置
     const cacheResponse = await api.get('/mosdns/cache-settings', profileOptions)
+    if (!pageActive) return
     mosdnsCacheEnabled.value = cacheResponse.data.cache_enabled !== undefined ? Boolean(cacheResponse.data.cache_enabled) : true
     mosdnsCacheSize.value = Number(cacheResponse.data.cache_size ?? 10240)
     mosdnsCacheLazyTtl.value = Number(cacheResponse.data.cache_lazy_ttl ?? 21600)
@@ -1890,7 +1916,7 @@ const showMosdnsSettingsDialog = async () => {
     initDnsSortable()
   } catch (error) {
     console.error('加载 MosDNS 设置失败', error)
-    notify.error('加载 MosDNS 设置失败')
+    if (pageActive) notify.error('加载 MosDNS 设置失败')
   }
 }
 
@@ -1956,7 +1982,23 @@ const saveMosdnsSettings = async (close = true): Promise<PublishGuard | null> =>
   }
 }
 
+const agentEditorOpen = computed(() => customConfigDialogVisible.value || mosdnsSettingsDialogVisible.value || oxidnsSettingsDialogVisible.value)
+watch(agentEditorOpen, (open, wasOpen) => {
+  if (props.agentSettings && wasOpen && !open) emit('close')
+})
+
 onMounted(async () => {
+  if (props.agentSettings) {
+    const service = props.agentSettings.serviceType
+    if (service === 'oxidns') oxidnsSettingsDialogVisible.value = true
+    else if (service === 'mosdns') await showMosdnsSettingsDialog()
+    else await showCustomConfigDialog(service)
+    if (pageActive) {
+      if (agentEditorOpen.value) emit('ready')
+      else emit('close')
+    }
+    return
+  }
   // 从后端加载服务域名配置
   try {
     const response = await serverDomainApi.get()

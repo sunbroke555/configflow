@@ -21,6 +21,7 @@ const props = defineProps<{
   open: boolean
   profileId: string
   serviceType: ServiceType
+  preferredAgentId?: string
   disabled?: boolean
   save: () => Promise<PublishGuard | null>
 }>()
@@ -28,6 +29,7 @@ const emit = defineEmits<{ 'save-draft': [] }>()
 const agents = ref<Agent[]>([])
 const profiles = ref<Profile[]>([])
 const selectedId = ref('')
+const targetUnavailable = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const error = ref('')
@@ -38,6 +40,7 @@ const synchronousResult = ref<'idle' | 'done' | 'unknown'>('idle')
 const pendingPosts = reactive(new Set<string>())
 const submittedScopes = new Map<string, { profileId: string; serviceType: ServiceType }>()
 let session = 0
+let targetsInitialized = false
 let disposed = false
 const terminal = new Set(['succeeded', 'failed', 'rolled_back', 'rollback_failed'])
 const { deployments, busy, track, beginSubmission, endSubmission, activate } = useAgentDeployments(() => {}, (agentId, task) => {
@@ -106,8 +109,19 @@ async function readTargets() {
 function updateTargets(data: { agents: Agent[]; profiles: Profile[] }) {
   agents.value = data.agents
   profiles.value = data.profiles
-  selectedId.value = candidates.value.some(agent => agent.id === selectedId.value) ? selectedId.value
-    : candidates.value.length === 1 ? candidates.value[0].id : ''
+  if (!targetsInitialized) {
+    selectedId.value = props.preferredAgentId
+      ? candidates.value.find(agent => agent.id === props.preferredAgentId)?.id || ''
+      : candidates.value.length === 1 ? candidates.value[0].id : ''
+    targetUnavailable.value = !!props.preferredAgentId && !selectedId.value
+    targetsInitialized = true
+  } else if (selectedId.value && !candidates.value.some(agent => agent.id === selectedId.value)) {
+    // Losing a target must require another explicit choice, even when only one device remains.
+    selectedId.value = ''
+    targetUnavailable.value = true
+    attempt.value = null
+    synchronousResult.value = 'idle'
+  }
 }
 
 function restorePending() {
@@ -168,6 +182,7 @@ async function verifyTarget(current: Attempt) {
 function selectTarget(value: unknown) {
   if (working.value) return
   selectedId.value = String(value || '')
+  targetUnavailable.value = false
   attempt.value = null
   synchronousResult.value = 'idle'
   error.value = ''
@@ -265,11 +280,13 @@ async function activateSaved() {
   } finally { if (stillCurrent(current)) phase.value = 'idle' }
 }
 
-watch(() => [props.open, props.profileId, props.serviceType] as const, () => {
+watch(() => [props.open, props.profileId, props.serviceType, props.preferredAgentId] as const, () => {
   session++
   agents.value = []
   profiles.value = []
   selectedId.value = ''
+  targetUnavailable.value = false
+  targetsInitialized = false
   loading.value = false
   loadError.value = ''
   phase.value = 'idle'
@@ -288,7 +305,7 @@ onUnmounted(() => { disposed = true; session++ })
       <div class="min-w-0 flex-1 space-y-1.5 text-xs text-muted-foreground">
         <p class="m-0 break-words">配置空间：<span class="font-medium text-foreground">{{ profileName }}</span></p>
         <p v-if="loading" class="m-0" role="status">正在读取目标设备…</p>
-        <div v-else-if="candidates.length > 1" class="flex min-w-0 items-center gap-2">
+        <div v-else-if="candidates.length > 1 || (candidates.length && !selected)" class="flex min-w-0 items-center gap-2">
           <span class="shrink-0">发布到</span>
           <Select :model-value="selectedId" :disabled="working || disabled" @update:model-value="selectTarget">
             <SelectTrigger class="min-h-11 w-full min-w-0 max-w-sm [&_[data-slot=select-value]]:min-w-0" aria-label="发布目标设备">
@@ -302,7 +319,8 @@ onUnmounted(() => { disposed = true; session++ })
           </Select>
         </div>
         <p v-else-if="selected" class="m-0 break-words">发布到：<span class="font-medium text-foreground">{{ selected.name }}</span>{{ selected.enabled === false ? '（已禁用）' : selected.status !== 'online' ? '（离线）' : '' }}</p>
-        <p v-else-if="!loadError" class="m-0 break-words">此配置空间尚未绑定 {{ serviceLabel }} 设备，可先保存草稿。</p>
+        <p v-else-if="!loadError && !targetUnavailable" class="m-0 break-words">此配置空间尚未绑定 {{ serviceLabel }} 设备，可先保存草稿。</p>
+        <p v-if="!loading && !loadError && targetUnavailable" class="m-0 break-words text-warning-accent" role="status">原目标设备不可用于此配置空间的 {{ serviceLabel }} 配置，请重新选择设备；仍可保存草稿。</p>
       </div>
       <div class="grid min-w-0 shrink-0 grid-cols-2 gap-2 sm:flex">
         <Button type="button" variant="outline" class="min-h-11 min-w-0 px-3" :disabled="disabled || phase !== 'idle'" @click="emit('save-draft')">

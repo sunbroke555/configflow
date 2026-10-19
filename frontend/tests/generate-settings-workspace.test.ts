@@ -6,8 +6,10 @@ import Generate from '@/views/Generate.vue'
 import GenerateStudio from '@/components/generate/GenerateStudio.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
+import OxidnsSettings from '@/components/generate/OxidnsSettings.vue'
+import type { AgentSettingsContext } from '@/lib/agentSettings'
 import { notify } from '@/lib/feedback'
-import { scopedRequests, setActiveProfileId } from '@/profileContext'
+import { activeProfileId, scopedRequests, setActiveProfileId } from '@/profileContext'
 
 vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
 
@@ -21,11 +23,99 @@ const guard = (service: string, revision = 12) => ({
 })
 const WorkspaceStub = defineComponent({
   name: 'SettingsWorkspace',
-  props: ['open', 'title', 'description', 'dirty', 'busy', 'size', 'saveLabel'],
+  props: ['open', 'title', 'description', 'dirty', 'busy', 'size', 'saveLabel', 'backLabel'],
   emits: ['save', 'update:open'],
   setup(props, { slots }) {
     return () => h('section', [slots.default?.(), slots.footer?.({ disabled: props.busy })])
   }
+})
+
+describe('Agent settings use the bound space without switching the global space', () => {
+  const context = (serviceType: AgentSettingsContext['serviceType']): AgentSettingsContext => ({
+    agentId: 'bedroom-agent', agentName: '卧室设备', profileId: 'bedroom', profileName: '卧室空间', serviceType,
+  })
+  const renderAgentSettings = (service: AgentSettingsContext['serviceType']) => {
+    const wrapper = shallowMount(Generate, {
+      props: { agentSettings: context(service) }, global: { stubs: { SettingsWorkspace: WorkspaceStub } },
+    })
+    wrappers.push(wrapper)
+    return wrapper
+  }
+
+  it.each([
+    ['mihomo', 'getMihomo', 'saveMihomo'], ['surge', 'getSurge', 'saveSurge'], ['mosdns', 'getMosdns', 'saveMosdns'],
+  ] as const)('loads and saves %s to its captured space even if the global space changes', async (service, read, save) => {
+    const get = vi.spyOn(api, 'get')
+    const post = vi.spyOn(api, 'post')
+    const wrapper = renderAgentSettings(service)
+    await flushPromises()
+    expect(wrapper.findComponent(GenerateStudio).exists()).toBe(false)
+    expect(customConfigApi[read]).toHaveBeenCalledExactlyOnceWith('bedroom')
+    expect(activeProfileId.value).toBe('workspace-profile')
+    expect(wrapper.emitted('ready')).toHaveLength(1)
+    expect(wrapper.emitted('close')).toBeUndefined()
+    const workspace = wrapper.findAllComponents(SettingsWorkspace).find(item => item.props('open'))!
+    expect(workspace.props('backLabel')).toBe('返回 Agent 列表')
+    expect(workspace.text()).toContain('卧室空间')
+    expect(workspace.text()).toContain('共用此配置')
+    expect(workspace.getComponent(SettingsPublishBar).props()).toMatchObject({ profileId: 'bedroom', preferredAgentId: 'bedroom-agent', serviceType: service })
+    setActiveProfileId('another-space')
+    workspace.vm.$emit('save')
+    await flushPromises()
+    if (service === 'mosdns') {
+      expect(ruleApi.getAll).toHaveBeenCalledWith('bedroom')
+      expect(ruleSetApi.getAll).toHaveBeenCalledWith('bedroom')
+      for (const call of get.mock.calls.filter(([url]) => url.startsWith('/mosdns/'))) {
+        expect(call[1]).toEqual({ headers: { 'X-ConfigFlow-Profile': 'bedroom' } })
+      }
+      expect(customConfigApi.saveMosdns).not.toHaveBeenCalled()
+      expect(post).toHaveBeenCalledExactlyOnceWith('/mosdns/settings', expect.objectContaining({
+        custom_config: initialConfig,
+      }), { headers: { 'X-ConfigFlow-Profile': 'bedroom' } })
+    } else {
+      expect(customConfigApi[save]).toHaveBeenCalledExactlyOnceWith({
+        config: initialConfig, ...(service === 'mihomo' ? { provider_update_interval: 3600 } : {}),
+      }, 'bedroom')
+    }
+    expect(activeProfileId.value).toBe('another-space')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('passes the same fixed context and target into the OxiDNS editor', async () => {
+    const wrapper = renderAgentSettings('oxidns')
+    await flushPromises()
+    const editor = wrapper.getComponent(OxidnsSettings)
+    expect(editor.props()).toMatchObject({ open: true, profileId: 'bedroom', preferredAgentId: 'bedroom-agent', backLabel: '返回 Agent 列表' })
+    expect(editor.props('contextLabel')).toContain('卧室空间')
+    setActiveProfileId('another-space')
+    await nextTick()
+    expect(editor.props('profileId')).toBe('bedroom')
+    editor.vm.$emit('update:open', false)
+    await nextTick()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('ends a failed initial load without opening an empty editable draft', async () => {
+    vi.mocked(customConfigApi.getMihomo).mockRejectedValueOnce(new Error('missing profile'))
+    const wrapper = renderAgentSettings('mihomo')
+    await flushPromises()
+    expect(wrapper.emitted('ready')).toBeUndefined()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(wrapper.findAllComponents(SettingsWorkspace).some(item => item.props('open'))).toBe(false)
+    expect(notify.error).toHaveBeenCalledWith('加载自定义配置失败')
+  })
+
+  it('does not reopen or report ready when loading finishes after leaving Agents', async () => {
+    const pending = deferred<any>()
+    vi.mocked(customConfigApi.getMihomo).mockReturnValueOnce(pending.promise)
+    const wrapper = renderAgentSettings('mihomo')
+    wrapper.unmount()
+    wrappers.splice(wrappers.indexOf(wrapper), 1)
+    pending.resolve({ data: { config: initialConfig } })
+    await flushPromises()
+    expect(wrapper.emitted('ready')).toBeUndefined()
+    expect(wrapper.emitted('close')).toBeUndefined()
+  })
 })
 function deferred<T>() {
   let resolve!: (value: T) => void
