@@ -7,7 +7,7 @@
       </div>
       <div class="flex items-center gap-2">
         <OxidnsEditorModeToggle :model-value="mode" :options="[{ value: 'entries', label: '条目' }, { value: 'yaml', label: 'YAML' }]" label="自定义匹配编辑模式" :disabled="disabled" @update:model-value="changeMode" />
-        <Button v-if="mode === 'entries'" type="button" variant="outline" size="sm" class="h-9 text-xs max-sm:h-[50px] pointer-coarse:h-[50px]" :disabled="disabled" @click="addItem">
+        <Button v-if="mode === 'entries'" type="button" variant="outline" size="sm" class="h-9 text-xs max-sm:h-11 sm:pointer-coarse:h-[50px]" :disabled="disabled" @click="addItem">
           <Plus class="size-3.5" />添加匹配项
         </Button>
       </div>

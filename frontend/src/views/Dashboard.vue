@@ -41,10 +41,11 @@
     <!-- 配置流向图：订阅 → 节点池 → 策略组 → 规则 → 输出 → Agent，全部由真实数据生成 -->
     <SectionCard :padded="false" class="mb-5 max-sm:mb-3" role="region" aria-label="配置流向">
       <FlowMap
+        label="配置流向"
         :columns="flowColumns"
         :edges="flowEdges"
         :height="flowHeight"
-        :min-width="isNarrow ? 780 : 980"
+        :min-width="980"
         :density="flowDensity"
       >
         <template #node="{ node }">
@@ -230,7 +231,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useMediaQuery } from '@vueuse/core'
 import api, { nodeApi, proxyGroupApi, ruleSetApi, statsApi, subscriptionApi } from '@/api'
 import {
   Activity,
@@ -251,7 +251,8 @@ import { Button } from '@/components/ui/button'
 import AnimatedNumber from '@/components/common/AnimatedNumber.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import Sparkline from '@/components/common/Sparkline.vue'
-import FlowMap, { type FlowColumn, type FlowEdge, type FlowNode } from '@/components/dashboard/FlowMap.vue'
+import FlowMap from '@/components/dashboard/FlowMapViewer.vue'
+import type { FlowColumn, FlowEdge, FlowNode } from '@/components/dashboard/FlowMap.vue'
 import { ACTION_LABEL, runAction, type AppAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { regionOf } from '@/lib/regions'
@@ -302,9 +303,6 @@ const flowDensity = computed(() => {
   const total = t.up + t.down
   return Math.min(2.6, Math.max(0.5, 0.6 + Math.log10(total / 1024 + 1) * 0.35))
 })
-
-/** 窄屏下流向图压缩宽高，在卡片内横向滑动查看 */
-const isNarrow = useMediaQuery('(max-width: 640px)')
 
 /** 每列最多展示的节点数，超出折叠为「+N」 */
 const COLUMN_LIMIT = { subs: 4, groups: 6, agents: 5 }
@@ -433,7 +431,7 @@ const flowEdges = computed<FlowEdge[]>(() => {
 /** 列中节点越多，画布越高 */
 const flowHeight = computed(() => {
   const most = Math.max(...flowColumns.value.map(c => (c.key === 'pool' ? 4 : c.nodes.length)))
-  return Math.max(isNarrow.value ? 300 : 340, most * (isNarrow.value ? 58 : 66))
+  return Math.max(340, most * 66)
 })
 
 

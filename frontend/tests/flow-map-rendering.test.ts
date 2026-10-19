@@ -145,6 +145,33 @@ function burst(wrapper: VueWrapper, count = 12) {
 }
 
 describe('FlowMap rendering lifecycle', () => {
+  it('keeps canvas edges in local coordinates when its viewer scales and pans the map', async () => {
+    let scale = 0.3
+    let offset = 16
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(500)
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(220)
+    vi.mocked(Element.prototype.getBoundingClientRect).mockImplementation(function (this: Element) {
+      const id = this.getAttribute('data-fid')
+      const x = id === 'b' || id === 'd' ? 220 : 20
+      const y = id === 'c' || id === 'd' ? 120 : 40
+      return new DOMRect(offset + (id ? x : 0) * scale, offset + (id ? y : 0) * scale, (id ? 100 : 500) * scale, (id ? 40 : 220) * scale)
+    })
+    const wrapper = await render()
+    await step()
+    expect(wrapper.get('canvas').element.width).toBe(500 * Math.min(window.devicePixelRatio || 1, 2))
+    expect(ctx.moveTo).toHaveBeenCalledWith(120, 60)
+    expect(ctx.bezierCurveTo).toHaveBeenCalledWith(175, 60, 165, 60, 220, 60)
+    scale = 2
+    offset = -180
+    ctx.moveTo.mockClear()
+    ctx.bezierCurveTo.mockClear()
+    ;(wrapper.vm as unknown as { refreshLayout(): void }).refreshLayout()
+    await step()
+    expect(ctx.moveTo).toHaveBeenCalledWith(120, 60)
+    expect(ctx.bezierCurveTo).toHaveBeenCalledWith(175, 60, 165, 60, 220, 60)
+    expect(frames.size).toBe(0)
+  })
+
   it('draws a static map once and coalesces layout, data, theme and focus changes', async () => {
     const wrapper = await render()
     expect(frames.size).toBe(1)

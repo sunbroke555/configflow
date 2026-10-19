@@ -1,7 +1,7 @@
 <template>
   <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border" aria-label="OxiDNS 常用设置">
     <Tabs v-model="tab" class="flex min-h-0 flex-1 flex-col gap-0">
-      <TabsList class="h-auto w-full shrink-0 justify-start gap-0.5 overflow-x-auto rounded-none border-b border-border bg-muted/30 p-2">
+      <TabsList variant="strip" class="h-auto w-full shrink-0 justify-start gap-0.5 overflow-x-auto rounded-none border-b border-border bg-muted/30 p-2">
         <TabsTrigger v-for="item in tabs" :key="item.value" :value="item.value" class="h-11 min-h-11 flex-none px-3 text-xs md:flex-1" :disabled="disabled">{{ item.label }}</TabsTrigger>
       </TabsList>
       <div class="min-h-0 min-w-0 flex-1 overflow-y-auto p-3 md:p-5">

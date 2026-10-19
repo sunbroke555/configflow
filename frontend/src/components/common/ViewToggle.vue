@@ -1,6 +1,6 @@
 <template>
   <div
-    class="flex h-9 max-md:h-auto shrink-0 items-center gap-0.5 rounded-lg border border-border bg-muted p-0.5"
+    class="cf-view-toggle flex h-9 max-md:h-auto shrink-0 items-center gap-0.5 rounded-lg border border-border bg-muted p-0.5"
     role="group"
     aria-label="视图切换"
   >
@@ -35,3 +35,67 @@ const OPTIONS = [
   { value: 'card' as const, label: '卡片视图', icon: LayoutGrid }
 ]
 </script>
+
+<style scoped>
+@media (width < 640px) {
+  .cf-view-toggle {
+    position: relative;
+    isolation: isolate;
+    height: var(--cf-touch);
+    border: 0;
+    padding-block: 0;
+    background: transparent;
+    overflow: visible;
+  }
+
+  .cf-view-toggle::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset-inline: 0;
+    top: calc((var(--cf-touch) - var(--cf-choice-track)) / 2);
+    height: var(--cf-choice-track);
+    border: 1px solid var(--border);
+    border-radius: inherit;
+    background: var(--muted);
+    pointer-events: none;
+  }
+
+  /* The button retains its full hit area around the shorter visual surface. */
+  .cf-view-toggle button {
+    position: relative;
+    isolation: isolate;
+    width: var(--cf-touch);
+    height: var(--cf-touch);
+    border: 0;
+    background: transparent;
+  }
+
+  .cf-view-toggle button::before {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset-inline: 0;
+    top: calc((var(--cf-touch) - var(--cf-choice-selected)) / 2);
+    height: var(--cf-choice-selected);
+    border: 1px solid transparent;
+    border-radius: inherit;
+    transition: inherit;
+    pointer-events: none;
+  }
+
+  .cf-view-toggle button[aria-pressed='true']::before {
+    border-color: var(--primary-accent);
+    background: var(--primary-soft);
+  }
+
+  .cf-view-toggle button[aria-pressed='false']:hover::before {
+    background: var(--accent);
+  }
+
+  [data-theme='dark'] .cf-view-toggle button[aria-pressed='true']::before {
+    border-color: transparent;
+    background: var(--card);
+  }
+}
+</style>
