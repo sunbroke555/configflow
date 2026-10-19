@@ -23,7 +23,8 @@ def linux_gateway_settings(profile_id=None):
             settings = validate_gateway_selection(config, value.get('settings', value))
             config.setdefault('mihomo', {})['linux_gateway'] = settings
             guard = save_config_with_publish_guard(config, 'mihomo')
-        result = gateway_editor_state(config)
+        # Static usage guidance is presented in the editor's expandable help.
+        result = gateway_editor_state(config, include_guidance=False)
         if guard is not None:
             result.update(success=True, publish_guard=guard)
         response = jsonify(result)

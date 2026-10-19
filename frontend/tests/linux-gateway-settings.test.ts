@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import LinuxGatewaySettings from '@/components/generate/LinuxGatewaySettings.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
 import { Switch } from '@/components/ui/switch'
@@ -9,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Select } from '@/components/ui/select'
 import { agentApi, profileApi } from '@/api'
 import { linuxGatewayApi } from '@/api/linuxGateway'
-import { confirm } from '@/lib/feedback'
+import { confirm, notify } from '@/lib/feedback'
 import { gatewaySpecErrors } from '@/lib/linuxGateway'
 
 vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn() }, profileApi: { list: vi.fn() } }))
@@ -21,6 +22,9 @@ vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(),
 const spec = { interface: 'eth0', address: '192.168.1.2', lan_cidr: '192.168.1.0/24', upstream_gateway: '192.168.1.1' }
 const guard = { expected_profile_id: 'office', expected_service_type: 'mihomo', expected_config_revision: 10 }
 const response = (data: unknown) => ({ data }) as any
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+const originalExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand')
+const writeText = vi.fn()
 const config = (enabled = false) => ({
   settings: { enabled, rule_set_ids: ['telegram', 'disabled'] }, fake_ip_range: '198.18.0.1/16', refresh_interval: 300, warnings: [],
   candidates: [
@@ -32,34 +36,42 @@ const hostStatus = () => ({ success: true, enabled_in_config: true, detection: {
 const agent = (id = 'one', extra = {}) => ({ id, name: id, profile_id: 'office', service_type: 'mihomo', status: 'online', enabled: true, deployment_method: 'shell', ...extra })
 const workspaceStub = defineComponent({
   name: 'SettingsWorkspace', props: ['open', 'dirty', 'busy'], emits: ['save', 'update:open'],
-  setup(props, { slots }) { return () => h('section', [slots.default?.(), slots.footer?.({ disabled: props.busy })]) },
+  setup(props, { slots }) { return () => h('section', { role: 'dialog', 'data-state': props.open ? 'open' : 'closed' }, [slots.default?.(), slots.footer?.({ disabled: props.busy })]) },
 })
 const buttonStub = defineComponent({
   name: 'Button', setup(_props, { slots, attrs }) { return () => h('button', attrs, slots.default?.()) },
 })
 const wrappers: ReturnType<typeof shallowMount>[] = []
+const attachedRoots: HTMLElement[] = []
 
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-async function render(enabled = false) {
+async function render(enabled = false, attached = false) {
   vi.mocked(linuxGatewayApi.get).mockResolvedValue(response(config(enabled)))
+  let attachTo: HTMLElement | undefined
+  if (attached) {
+    attachTo = document.createElement('div'); document.body.appendChild(attachTo); attachedRoots.push(attachTo)
+  }
   const wrapper = shallowMount(LinuxGatewaySettings, {
+    attachTo,
     props: { open: true, profileId: 'office' },
-    global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false } },
+    global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, AgentStatusRow: false } },
   })
   wrappers.push(wrapper)
   await flushPromises()
   return wrapper
 }
 function button(wrapper: ReturnType<typeof shallowMount>, label: string) {
-  return wrapper.findAll('button').find(item => item.text() === label)!
+  return wrapper.findAll('button').find(item => item.attributes('aria-label') === label || item.text() === label)!
 }
 
 beforeEach(() => {
   vi.resetAllMocks()
+  writeText.mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
   vi.mocked(agentApi.getAll).mockResolvedValue(response([agent()]))
   vi.mocked(profileApi.list).mockResolvedValue(response([{ id: 'office', name: '办公室' }]))
   vi.mocked(linuxGatewayApi.status).mockResolvedValue(response(hostStatus()))
@@ -69,7 +81,14 @@ beforeEach(() => {
   vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, managed: { active: false } }))
   vi.mocked(confirm).mockResolvedValue(true)
 })
-afterEach(() => { wrappers.splice(0).forEach(item => item.unmount()) })
+afterEach(() => {
+  wrappers.splice(0).forEach(item => item.unmount())
+  attachedRoots.splice(0).forEach(root => root.remove())
+  if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard)
+  else delete (navigator as any).clipboard
+  if (originalExecCommand) Object.defineProperty(document, 'execCommand', originalExecCommand)
+  else delete (document as any).execCommand
+})
 
 describe('Linux gateway opt-in workflow', () => {
   it('stays off by default and neither mode switches nor saves execute host networking', async () => {
@@ -118,7 +137,7 @@ describe('Linux gateway opt-in workflow', () => {
     await button(wrapper, '应用网关网络').trigger('click')
     await flushPromises()
     expect(linuxGatewayApi.apply).toHaveBeenCalledExactlyOnceWith('one', 'office', { ...spec, address: '192.168.1.3' })
-    expect(wrapper.text()).toContain('已应用 ConfigFlow 网关网络')
+    expect(wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === '网络状态')?.props()).toMatchObject({ status: '已应用', tone: 'success' })
   })
 
   it('does not reuse a preview after a rule selection changes', async () => {
@@ -138,6 +157,70 @@ describe('Linux gateway opt-in workflow', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('请先发布 Mihomo 网关配置')
     expect(button(wrapper, '应用网关网络').attributes('disabled')).toBeDefined()
+  })
+
+  describe('operation notes clipboard fallback', () => {
+    async function setupCopy(failure?: 'false' | 'throws') {
+      const commands = ['创建 ConfigFlow 网关转发表', '设置 LAN 接口 eth0 的转发规则']
+      vi.mocked(linuxGatewayApi.preview).mockResolvedValue(response({ ...hostStatus(), ready: true,
+        blockers: [], warnings: [], commands, spec }))
+      const wrapper = await render(true, true)
+      await button(wrapper, '预览并检查').trigger('click'); await flushPromises()
+      const copyButton = wrapper.get('button[aria-label="复制操作说明"]')
+      const details = copyButton.element.closest('details')
+      if (details) details.open = true
+      const dialog = wrapper.get('[role="dialog"]').element
+      const focusTarget = copyButton.element as HTMLButtonElement
+      focusTarget.focus()
+      const trap = () => { if (!dialog.contains(document.activeElement)) focusTarget.focus() }
+      document.addEventListener('focusin', trap)
+      const previousTextareas = document.querySelectorAll('textarea').length
+      const selections: { insideDialog: boolean; text: string }[] = []
+      const execCommand = vi.fn(() => {
+        const active = document.activeElement
+        selections.push({ insideDialog: dialog.contains(active), text: active instanceof HTMLTextAreaElement
+          ? active.value.slice(active.selectionStart, active.selectionEnd) : '' })
+        if (failure === 'throws') throw new Error('Clipboard denied')
+        return failure !== 'false'
+      })
+      Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+      vi.mocked(notify.success).mockClear(); vi.mocked(notify.error).mockClear()
+      return { copyButton, expected: commands.join('\n'), execCommand, selections, focusTarget, previousTextareas,
+        cleanup: () => document.removeEventListener('focusin', trap) }
+    }
+
+    it.each(['unavailable', 'rejected'])('copies complete operation notes inside the dialog when clipboard is %s', async modern => {
+      const state = await setupCopy()
+      if (modern === 'unavailable') Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+      else writeText.mockRejectedValue(new Error('Permission denied'))
+      try {
+        await state.copyButton.trigger('click'); await flushPromises()
+        expect(state.execCommand).toHaveBeenCalledExactlyOnceWith('copy')
+        expect(state.selections).toEqual([{ insideDialog: true, text: state.expected }])
+        expect(document.querySelectorAll('textarea')).toHaveLength(state.previousTextareas)
+        expect(document.activeElement).toBe(state.focusTarget)
+        expect(notify.success).toHaveBeenCalledOnce()
+        expect(notify.error).not.toHaveBeenCalled()
+        if (modern === 'rejected') expect(writeText).toHaveBeenCalledExactlyOnceWith(state.expected)
+        else expect(writeText).not.toHaveBeenCalled()
+        expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
+        expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
+      } finally { state.cleanup() }
+    })
+
+    it.each(['false', 'throws'] as const)('reports failure without success when selection copy %s', async failure => {
+      const state = await setupCopy(failure)
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+      try {
+        await state.copyButton.trigger('click'); await flushPromises()
+        expect(state.execCommand).toHaveBeenCalledExactlyOnceWith('copy')
+        expect(state.selections).toEqual([{ insideDialog: true, text: state.expected }])
+        expect(notify.error).toHaveBeenCalledOnce()
+        expect(notify.success).not.toHaveBeenCalled()
+        expect(document.querySelectorAll('textarea')).toHaveLength(state.previousTextareas)
+        expect(document.activeElement).toBe(state.focusTarget)
+      } finally { state.cleanup() }
+    })
   })
 
   it('clears host inputs and ignores late detection after switching devices', async () => {
