@@ -36,6 +36,8 @@ type Config struct {
 	AgentServiceUnit        string `json:"agent_service_unit,omitempty"`
 	NativeAIO               bool   `json:"native_aio,omitempty"`
 	Token                   string `json:"token,omitempty"`
+	InstallationID          string `json:"installation_id,omitempty"`
+	InstallationToken       string `json:"installation_token,omitempty"`
 
 	// 监控功能配置（使用指针以区分未设置和 false）
 	EnableMetrics *bool `json:"enable_metrics,omitempty"` // 是否启用系统监控，默认 true
@@ -102,6 +104,12 @@ func (c *Config) Save() error {
 	}
 	for key, value := range current {
 		values[key] = value
+	}
+	if c.InstallationID == "" {
+		delete(values, "installation_id")
+	}
+	if c.InstallationToken == "" {
+		delete(values, "installation_token")
 	}
 	data, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {

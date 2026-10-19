@@ -45,6 +45,10 @@ def register_blueprints(app):
     from backend.routes.logs import logs_bp  # 日志路由
     from backend.routes.stats import stats_bp  # 统计路由
     from backend.routes import profiles
+    from backend.routes import linux_gateway
+    from backend.routes import linux_gateway_agents
+    from backend.routes import gateway_installations
+    from backend.routes import gateway_onboarding
     from backend.routes.domain_discovery import domain_discovery_bp
     from backend.routes import routers
 

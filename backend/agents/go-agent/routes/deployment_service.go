@@ -171,6 +171,13 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
 	if e != nil {
 		return e
 	}
+	if cfg.ServiceType == "mihomo" {
+		modified, err := adaptGatewayDNS(cfg, string(data))
+		if err != nil {
+			return err
+		}
+		data = []byte(modified)
+	}
 	var doc map[string]interface{}
 	if e = yaml.Unmarshal(data, &doc); e != nil || len(doc) == 0 {
 		return diagnosticFailure("configuration must be a nonempty YAML mapping", e, nil)
@@ -186,6 +193,9 @@ func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
 	}
 	if cfg.ServiceType != "mihomo" {
 		return fmt.Errorf("unsupported service type")
+	}
+	if e = checkLinuxGatewayCore(cfg, doc); e != nil {
+		return e
 	}
 	listed := map[string]bool{}
 	for _, f := range s.Manifest.Files {

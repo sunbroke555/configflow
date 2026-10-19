@@ -1,0 +1,39 @@
+import api, { type PublishGuard } from '@/api'
+
+export interface LinuxGatewaySettings { enabled: boolean; rule_set_ids: string[] }
+export interface LinuxGatewayCandidate {
+  id: string; name: string; behavior: string; policy?: string; enabled: boolean
+  library_enabled?: boolean; available: boolean; selected?: boolean; description?: string; reason?: string
+}
+export interface LinuxGatewayConfig {
+  success?: boolean; settings: LinuxGatewaySettings; candidates: LinuxGatewayCandidate[]
+  fake_ip_range: string; warnings: string[]; refresh_interval?: number; publish_guard?: PublishGuard
+}
+export interface LinuxGatewaySpec { interface: string; address: string; lan_cidr: string; upstream_gateway: string }
+export interface LinuxGatewayManaged { active: boolean; pending?: boolean; healthy?: boolean; error?: string; spec?: LinuxGatewaySpec; applied_at?: string }
+export interface LinuxGatewayStatus {
+  success: boolean; message?: string; enabled_in_config?: boolean; supported?: boolean
+  detection_error?: string; config_error?: string; unsupported_reason?: string
+  detection?: { interfaces?: Array<{ name: string; addresses?: string[] }>; default_routes?: unknown[]; suggested?: Partial<LinuxGatewaySpec> }
+  managed: LinuxGatewayManaged
+}
+export interface LinuxGatewayPreview extends LinuxGatewayStatus {
+  ready: boolean; blockers: string[]; warnings: string[]; commands: string[]; spec: LinuxGatewaySpec
+}
+
+const scope = (profileId: string) => ({ headers: { 'X-ConfigFlow-Profile': profileId } })
+const hostPath = (id: string, action: string) => `/agents/${encodeURIComponent(id)}/linux-gateway/${action}`
+const hostScope = (profileId: string) => ({ ...scope(profileId), params: { profile_id: profileId }, timeout: 60000 })
+
+export const linuxGatewayApi = {
+  get: (profileId: string) => api.get<LinuxGatewayConfig>('/custom-config/linux-gateway', scope(profileId)),
+  save: (profileId: string, settings: LinuxGatewaySettings) =>
+    api.post<LinuxGatewayConfig>('/custom-config/linux-gateway', settings, scope(profileId)),
+  status: (agentId: string, profileId: string) => api.get<LinuxGatewayStatus>(hostPath(agentId, 'status'), hostScope(profileId)),
+  preview: (agentId: string, profileId: string, spec: LinuxGatewaySpec) =>
+    api.post<LinuxGatewayPreview>(hostPath(agentId, 'preview'), spec, hostScope(profileId)),
+  apply: (agentId: string, profileId: string, spec: LinuxGatewaySpec) =>
+    api.post<LinuxGatewayStatus>(hostPath(agentId, 'apply'), spec, hostScope(profileId)),
+  remove: (agentId: string, profileId: string) =>
+    api.post<LinuxGatewayStatus>(hostPath(agentId, 'remove'), {}, hostScope(profileId)),
+}

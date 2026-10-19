@@ -113,6 +113,8 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 ### Shell 同机安装 Mihomo + OxiDNS
 
+需要同时配置客户端网关与 DNS 时，在 **Agent → 生成安装脚本** 中选择 **Linux 选择性网关**，按 [五步安装向导](LINUX_GATEWAY.md) 完成网络填写、规则选择、核心安装或接入、发布及转发。网关模式需要 Agent `1.8.25-go` 或更新；以下普通安装方式继续保留，不自动启用网关转发。
+
 在 Agent 安装弹窗选择 Shell 的「Mihomo + OxiDNS 同机」模式，可勾选「同时安装 Mihomo 与 OxiDNS 核心」，用一条命令先安装或补齐两个核心，再安装两个独立 Agent。默认不勾选，继续接管已安装的核心；此时也可展开「仅安装核心」生成独立命令。两种方式均支持 systemd 和 OpenRC。
 
 勾选时使用 `/etc/mihomo/config.yaml`、`/etc/oxidns/config.yaml`，核心程序位于 `/usr/local/bin`，服务名为 `mihomo` 和 `oxidns`；高级配置暂时锁定，取消勾选后恢复原值。新装核心的 DNS 链路为 OxiDNS `53` → Mihomo `127.0.0.1:1053`，Mihomo 沿用 TUN 自动检测。已有核心和配置会跳过并保留；新 OxiDNS 的默认上游仍为 `1053`，已有 Mihomo 使用自定义端口时需自行同步上游设置，发布不会替用户迁移端口。已有 OxiDNS 的上游也会保留。两个 Agent 的端口不能占用新装核心的 `53` / `1053`，也不能相同。

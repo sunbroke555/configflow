@@ -77,6 +77,7 @@ class AgentManager:
         self,
         agent_data: Dict[str, Any],
         existing_token: Optional[str] = None,
+        installation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         注册新的 Agent
@@ -105,6 +106,14 @@ class AgentManager:
             if existing_agent:
                 if not _constant_time_ascii_equal(existing_token, existing_agent.get('token')):
                     raise PermissionError('Unauthorized')
+                if (installation_id and existing_agent.get('gateway_installation_id') == installation_id
+                        and requested_profile_id != existing_agent.get('profile_id')):
+                    raise AgentDeploymentConflict('Installation Agent profile changed; prepare a new installation')
+                if (requested_profile_id and requested_profile_id != (existing_agent.get('profile_id') or self.repository.default_profile_id())
+                        and (_upgrade_busy(existing_agent) or any(
+                            task.get('status') not in ('succeeded', 'failed', 'rolled_back')
+                            for task in existing_agent.get('deployments', {}).values()))):
+                    raise AgentDeploymentConflict('Agent has an unfinished deployment or upgrade; recover it before changing profile')
                 if _dns_follow_busy(agents, existing_agent['id']) and (
                         agent_data.get('service_type', 'mihomo') != existing_agent.get('service_type')
                         or (requested_profile_id and requested_profile_id != existing_agent.get('profile_id'))
@@ -137,6 +146,8 @@ class AgentManager:
                 for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job'):
                     if field in existing_agent:
                         updated_agent[field] = deepcopy(existing_agent[field])
+                if existing_agent.get('gateway_installation_id'):
+                    updated_agent['gateway_installation_id'] = existing_agent['gateway_installation_id']
                 agents[agents.index(existing_agent)] = updated_agent
                 return {'id': agent_id, 'status': 'online', 'is_new': False}
 
@@ -158,6 +169,11 @@ class AgentManager:
                 'enabled': True,
                 'created_at': datetime.now().isoformat(),
             }
+            if installation_id:
+                # Trusted caller metadata, never read from registration JSON.
+                # Persist with the identity so a lost response can be replayed
+                # by that same short-lived installation capability only.
+                agent['gateway_installation_id'] = installation_id
             agents.append(agent)
             return {
                 'id': agent_id,
@@ -765,6 +781,8 @@ class AgentManager:
                 raise ValueError('Agent profile changed during preparation')
             if agent.get('service_type', 'mihomo') != bundle.manifest['service_type']:
                 raise ValueError('Agent service type changed during preparation')
+            from .linux_gateway import require_gateway_bundle_agent
+            require_gateway_bundle_agent(agent, bundle)
             capability = self._deployment_request(agent, 'get', 'capabilities', timeout=5)
             if 1 not in capability.get('deployment_protocols', []) or capability.get('service_type') != agent.get('service_type'):
                 return self.record_deployment(agent_id, deployment_id, {

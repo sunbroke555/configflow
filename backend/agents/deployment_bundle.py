@@ -199,6 +199,33 @@ def materialize_rule(url, config, base_url, *, depth=0, raw_mosdns=False, fetch_
                                  raw_mosdns=raw_mosdns, fetch_raw=fetch_raw)
         # The final consuming plugin chooses domain/IP conversion for bundles.
         return value if raw_mosdns else convert_mosdns_rules(value)
+    # Gateway callbacks must use this publication's immutable snapshot, never a
+    # second HTTP request that could observe another draft/profile revision.
+    if internal:
+        from backend.common.linux_gateway import (
+            LinuxGatewayError, gateway_provider_yaml, gateway_source_yaml, provider_path,
+        )
+        prefix = urlsplit(settings['server_domain']).path.rstrip('/')
+        path = unquote(parsed.path)
+        selected = config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', [])
+        for rule_id in selected:
+            for source in (False, True):
+                expected = unquote(provider_path(config, rule_id, source=source))
+                if path not in (expected, prefix + expected):
+                    continue
+                def load_source(item, library):
+                    rule_source = library or item
+                    content = materialize_rule(rule_source.get('url', ''), config, base_url,
+                                               depth=depth + 1, fetch_raw=fetch_raw)
+                    try:
+                        return content.decode('utf-8-sig')
+                    except UnicodeError:
+                        raise DeploymentPreparationError('Gateway rules must be UTF-8 text') from None
+                try:
+                    render = gateway_source_yaml if source else gateway_provider_yaml
+                    return render(config, rule_id, content_loader=load_source).encode('utf-8')
+                except LinuxGatewayError as exc:
+                    raise DeploymentPreparationError(str(exc)) from None
     rule = _local_rule(url, config, base_url)
     if rule is not None:
         if rule.get('source_type') == 'content':
@@ -366,6 +393,18 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         add(item.get('local_path'), item.get('content'), 'provider', name=item.get('name', ''))
     for item in custom_files:
         add(item.get('path'), item.get('content'), 'custom', native=item.get('native', False), name=item.get('name', ''))
+
+    if service == 'mihomo' and config.get('mihomo', {}).get('linux_gateway', {}).get('enabled'):
+        from backend.common.linux_gateway import _routing_mark_path
+        for path, (content, role) in files.items():
+            if role != 'provider':
+                continue
+            try:
+                provider = yaml.safe_load(content)
+            except (yaml.YAMLError, UnicodeError, RecursionError):
+                raise DeploymentPreparationError('选择性网关无法检查订阅节点，请先修复 Provider YAML') from None
+            if _routing_mark_path(provider):
+                raise DeploymentPreparationError('选择性网关与订阅节点中的 routing-mark 冲突，请移除后重新发布')
 
     # Use the final Mihomo configuration rather than reconstructing paths from
     # source suffixes; custom configuration can change provider format/path.

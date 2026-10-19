@@ -746,6 +746,10 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     if rule_providers:
         mihomo_config['rule-providers'] = rule_providers
 
+    # 网关只改生成结果；默认关闭时不触碰既有配置。
+    from backend.common.linux_gateway import apply_linux_gateway
+    apply_linux_gateway(mihomo_config, config_data, effective_base_url)
+
     # 添加规则（按照 rule_configs 数组的顺序）
     rules = []
 
@@ -843,6 +847,13 @@ def get_mihomo_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
     Returns:
         下载列表，格式：[{'name': 'ruleset名称', 'url': 'URL', 'local_path': './ruleset/xxx.list'}]
     """
+    # 网关派生 provider 与普通选中 provider 必须使用生成结果中的稳定 ID URL。
+    from backend.common.linux_gateway import gateway_settings
+    if gateway_settings(config_data)['enabled']:
+        main = yaml.safe_load(generate_mihomo_config(config_data, base_url, preflight_providers=False))
+        return [{'name': name, 'url': provider['url'], 'local_path': provider['path']}
+                for name, provider in main.get('rule-providers', {}).items()
+                if provider.get('type') == 'http' and provider.get('url')]
     downloads = []
 
     # 获取系统配置

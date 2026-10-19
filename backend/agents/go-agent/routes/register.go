@@ -17,6 +17,9 @@ func RegisterRoutes(mux *http.ServeMux, cfg *Config) {
 	mux.HandleFunc("/api/dns/active", AuthMiddleware(cfg, DNSActiveHandler(cfg)))
 	mux.HandleFunc("/api/dns/peer", AuthMiddleware(cfg, DNSPeerHandler(cfg)))
 	mux.HandleFunc("/api/return-routing", AuthMiddleware(cfg, ReturnRoutingHandler(cfg)))
+	for _, action := range []string{"status", "preview", "apply", "remove"} {
+		mux.HandleFunc("/api/linux-gateway/"+action, AuthMiddleware(cfg, LinuxGatewayHandler(cfg, action)))
+	}
 	mux.HandleFunc("/api/deployments", AuthMiddleware(cfg, DeploymentUploadHandler(cfg)))
 	mux.HandleFunc("/api/deployments/", AuthMiddleware(cfg, DeploymentHandler(cfg)))
 	// 注册健康检查路由

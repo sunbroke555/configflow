@@ -310,6 +310,15 @@
     <DockerAgentUpdateDialog v-if="dockerUpdateAgent" :agent="dockerUpdateAgent" @close="dockerUpdateAgent = null" @refresh="loadAgents" />
     <AgentDeploymentHistory v-if="deploymentHistoryAgent" :agent="deploymentHistoryAgent" :progress="deployments[deploymentHistoryAgent.id]" :busy="deploymentBusy(deploymentHistoryAgent.id)" :blocked="upgradeBusy(deploymentHistoryAgent.id) || pushingIds.has(deploymentHistoryAgent.id) || rollbackConfirming" @close="deploymentHistoryAgentId = null" @rollback="requestRollback(deploymentHistoryAgent, $event)" />
 
+    <GatewayInstallWizard
+      v-if="gatewayInstallContext"
+      :open="true"
+      :profile-id="gatewayInstallContext.profileId"
+      :profile-name="gatewayInstallContext.profileName"
+      @update:open="value => !value && closeGatewayInstaller()"
+      @agents-changed="loadAgents"
+    />
+
     <!-- ===== 生成安装脚本 ===== -->
     <Dialog v-model:open="scriptDialogVisible">
       <DialogContent class="flex max-w-[760px] flex-col overflow-hidden">
@@ -319,6 +328,21 @@
         </DialogHeader>
 
         <div class="cf-focus-gutter flex max-h-[65dvh] min-h-0 flex-col gap-5 overflow-y-auto">
+          <FormField label="使用模式" hint="普通模式保持原有安装方式；网关模式引导安装 Mihomo、OxiDNS 和两个 Agent。">
+            <RadioGroup v-model="installationMode" class="flex flex-wrap gap-2" aria-label="使用模式">
+              <label :class="[chipClass(installationMode === 'ordinary'), 'min-h-11']"><RadioGroupItem value="ordinary" />普通模式</label>
+              <label :class="[chipClass(installationMode === 'gateway'), 'min-h-11']"><RadioGroupItem value="gateway" />Linux 选择性网关</label>
+            </RadioGroup>
+          </FormField>
+          <div v-if="installationMode === 'gateway'" class="space-y-4 rounded-lg border border-border bg-muted p-4">
+            <div class="space-y-2 text-sm leading-relaxed">
+              <p class="m-0 font-semibold">从一台 Linux 开始，按步骤装好网关</p>
+              <p class="m-0 text-muted-foreground">填写网络信息 → 选择分流规则 → 一条命令安装核心和 Agent → 发布并检查服务 → 应用转发。主路由不需要静态路由。</p>
+              <p class="m-0 break-words text-muted-foreground">本次固定使用配置空间「{{ activeProfileName }}」。建议使用专用配置空间，已有设备也会共用此空间的 Mihomo 和 OxiDNS 配置。</p>
+            </div>
+            <Button class="min-h-11" @click="openGatewayInstaller">开始或继续网关安装</Button>
+          </div>
+          <template v-else>
           <div class="space-y-4">
             <FormField label="安装类型" :help="installTypeHint">
               <RadioGroup v-model="scriptForm.installType" class="flex gap-2" @update:model-value="onInstallTypeChange">
@@ -604,16 +628,19 @@
               </CollapsibleContent>
             </Collapsible>
           </section>
+          </template>
         </div>
 
         <DialogFooter class="shrink-0 flex-row items-center justify-end gap-2 border-t border-border/60 pt-4">
           <Button variant="outline" class="min-h-11" @click="scriptDialogVisible = false">关闭</Button>
+          <template v-if="installationMode === 'ordinary'">
           <Button v-if="installCommand || dockerComposeContent || dockerRunCommand" variant="outline" class="min-h-11" @click="resetForm">重新生成</Button>
           <Button v-else class="min-h-11" :disabled="scriptLoading" @click="generateScript">
             <Loader2 v-if="scriptLoading" class="size-4 animate-spin" />
             <FileText v-else class="size-4" />
             {{ scriptLoading ? '正在生成安装命令…' : scriptForm.installType === 'docker' ? '生成 Docker 部署命令' : '生成安装命令' }}
           </Button>
+          </template>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -771,6 +798,7 @@ import { getAgentConfigSync } from '@/lib/agentConfigSync'
 import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
 import { supportsAgentSettings, type AgentSettingsContext } from '@/lib/agentSettings'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
+import GatewayInstallWizard from '@/components/agents/GatewayInstallWizard.vue'
 import { Motion } from 'motion-v'
 import {
   ChartLine,
@@ -947,6 +975,16 @@ const closeAgentSettings = () => {
   void refreshProfiles().catch(() => undefined)
 }
 const scriptDialogVisible = ref(false)
+const installationMode = ref<'ordinary' | 'gateway'>('ordinary')
+const gatewayInstallContext = ref<{ profileId: string; profileName: string } | null>(null)
+const openGatewayInstaller = () => {
+  gatewayInstallContext.value = { profileId: profileStore.activeProfileId.value, profileName: activeProfileName.value }
+  scriptDialogVisible.value = false
+}
+const closeGatewayInstaller = () => {
+  gatewayInstallContext.value = null
+  void loadAgents()
+}
 const dockerUpdateAgent = ref<Agent | null>(null)
 const lifecyclePanelOpen = ref(false)
 const installHelpOpen = ref(false)
@@ -1953,6 +1991,7 @@ const handleGenerateScript = () => {
 
 // 显示生成脚本对话框
 const showGenerateScriptDialog = () => {
+  installationMode.value = 'ordinary'
   // 清空其他值
   installScript.value = ''
   installScriptUrl.value = ''

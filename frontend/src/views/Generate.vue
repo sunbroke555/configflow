@@ -5,6 +5,8 @@
     <!-- ===== 生成工作台：目标切换 + 编译步骤 + 代码面板 ===== -->
     <GenerateStudio v-if="!agentSettings" :targets="studioTargets" @copy="copyUrl" />
 
+    <LinuxGatewaySettings v-model:open="linuxGatewayDialogVisible" :profile-id="profileId" />
+
     <!-- ===== 自定义基础配置 ===== -->
     <SettingsWorkspace
       v-model:open="customConfigDialogVisible"
@@ -645,6 +647,7 @@
 <script setup lang="ts">
 import PageHeader from '@/components/common/PageHeader.vue'
 import OxidnsSettings from '@/components/generate/OxidnsSettings.vue'
+import LinuxGatewaySettings from '@/components/generate/LinuxGatewaySettings.vue'
 import GenerateStudio from '@/components/generate/GenerateStudio.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import MihomoSyncInterval from '@/components/generate/MihomoSyncInterval.vue'
@@ -715,6 +718,7 @@ const props = defineProps<{ agentSettings?: AgentSettingsContext }>()
 const emit = defineEmits<{ ready: []; close: [] }>()
 const cfProfileStore = useProfileStore()
 const profileId = props.agentSettings?.profileId ?? activeProfileId.value
+const linuxGatewayDialogVisible = ref(false)
 const profileOptions = { headers: { 'X-ConfigFlow-Profile': profileId } }
 const settingsBackLabel = props.agentSettings ? '返回 Agent 列表' : '返回生成工作台'
 const settingsContextLabel = computed(() => {
@@ -1240,6 +1244,7 @@ const targets = computed(() => [
     urlDisplay: mihomoUrlDisplay.value,
     actions: [
       { label: '基础配置', group: 'settings' as const, icon: Pencil, run: () => showCustomConfigDialog('mihomo') },
+      { label: 'Linux 网关', group: 'settings' as const, icon: Network, run: () => { linuxGatewayDialogVisible.value = true } },
       { label: '预览', icon: Eye, loading: mihomoPreviewLoading.value, run: () => previewConfig('mihomo') },
       { label: '下载', group: 'export' as const, icon: Download, primary: true, loading: mihomoLoading.value, run: generateMihomo }
     ]

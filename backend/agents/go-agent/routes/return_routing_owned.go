@@ -575,6 +575,11 @@ func ApplyReturnRouting(cfg *Config, input ReturnRoutingSpec) (map[string]interf
 		return nil, err
 	}
 	defer unlock()
+	if gateway, err := loadGatewayState(cfg); err != nil {
+		return nil, err
+	} else if gateway != nil && (gateway.Active || gateway.Pending) {
+		return nil, fmt.Errorf("Linux 选择性网关已启用或尚未完成，请先撤销网关再配置自动回流")
+	}
 	spec, err := prepareSpec(cfg, input)
 	if err != nil {
 		return nil, err
