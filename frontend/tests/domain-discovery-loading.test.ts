@@ -13,6 +13,7 @@ type Handler = (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>
 let domainHandler: Handler
 let agentHandler: Handler
 let probeHandler: Handler
+let settingsHandler: Handler
 const requests: InternalAxiosRequestConfig[] = []
 const wrappers: VueWrapper[] = []
 const originalAdapter = api.defaults.adapter
@@ -33,6 +34,12 @@ const domainsPayload = (domain = 'existing.test', overrides: Record<string, unkn
     domain, tags: ['uncovered'], conns: 3, fails: 0, fail_kinds: {}, routes: [], hosts: [],
     last_seen: '2026-10-11T12:00:00Z', pending_rule: null, suggestion: null
   }] : [], sniff_coverage: 1, ...agentsPayload(), ...overrides
+})
+const settingsPayload = (configured = false, overrides: Record<string, unknown> = {}) => ({
+  direct: configured ? { id: 'direct', name: 'Direct', behavior: 'domain', active: true, problem: null, references: [{ policy: 'DIRECT' }] } : null,
+  proxy: configured ? { id: 'proxy', name: 'Proxy', behavior: 'domain', active: true, problem: null, references: [{ policy: 'Proxy' }] } : null,
+  ignored: [], candidates: [], policies: [], auto_probe: false, auto_apply: false,
+  auto_apply_min_confidence: 80, confidence_choices: [80], probe_path: configured ? 'Proxy' : null, ...overrides
 })
 const requestCount = (url: string) => requests.filter(config => config.url === `/domain-discovery/${url}`).length
 const timeout = (config: InternalAxiosRequestConfig) => new AxiosError('timeout', 'ECONNABORTED', config)
@@ -59,15 +66,13 @@ beforeEach(() => {
   domainHandler = async config => response(config, domainsPayload())
   agentHandler = async config => response(config, agentsPayload())
   probeHandler = async config => response(config, { job: { id: 'probe-one', kind: 'probe', status: 'done', done: 1, total: 1, errors: [] } })
+  settingsHandler = async config => response(config, settingsPayload())
   api.defaults.adapter = async config => {
     requests.push(config)
     if (config.url === '/domain-discovery/domains') return domainHandler(config)
     if (config.url === '/domain-discovery/agents') return agentHandler(config)
     if (config.url === '/domain-discovery/probe/probe-one') return probeHandler(config)
-    if (config.url === '/domain-discovery/settings') return response(config, {
-      direct: null, proxy: null, ignored: [], candidates: [], policies: [], auto_probe: false,
-      auto_apply: false, auto_apply_min_confidence: 80, confidence_choices: [80], probe_path: null
-    })
+    if (config.url === '/domain-discovery/settings') return settingsHandler(config)
     if (config.url === '/domain-discovery/ignore') return response(config, { success: true })
     if (config.url === '/domain-discovery/history') return response(config, { items: [] })
     if (config.url === '/domain-discovery/region') return response(config, { enabled: false, domains: {}, services: [] })
@@ -113,6 +118,51 @@ function setHidden(hidden: boolean) {
 }
 
 describe('domain discovery request and empty states', () => {
+  it('summarizes healthy mobile settings and reopens the same controls without loading them again', async () => {
+    settingsHandler = async config => response(config, settingsPayload(true, { auto_probe: true, auto_apply: true }))
+    const wrapper = await render()
+    const summary = wrapper.get('button[aria-controls="domain-discovery-configuration"]')
+    expect(summary.attributes('aria-expanded')).toBe('false')
+    expect(summary.text()).toContain('采集中 1 台')
+    expect(summary.text()).toContain('直连 / 代理规则集就绪')
+    expect(summary.text()).toContain('自动探测已开启')
+    expect(summary.text()).toContain('自动采纳 ≥ 80')
+    const control = wrapper.get('[aria-label="自动采纳建议"]').element
+    await summary.trigger('click')
+    expect(summary.attributes('aria-expanded')).toBe('true')
+    await summary.trigger('click')
+    expect(summary.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[aria-label="自动采纳建议"]').element).toBe(control)
+    expect(requestCount('settings')).toBe(1)
+    expect(requestCount('agents')).toBe(1)
+  })
+
+  it.each(['missing ruleset', 'inactive ruleset', 'unwritable ruleset', 'missing probe path', 'collector failed', 'unsupported collector'])('keeps configuration needing attention expanded: %s', async issue => {
+    const data = settingsPayload(true)
+    if (issue === 'missing ruleset') data.direct = null
+    if (issue === 'inactive ruleset') data.proxy!.active = false
+    if (issue === 'unwritable ruleset') Object.assign(data.proxy!, { problem: '规则集不可写入' })
+    if (issue === 'missing probe path') data.probe_path = null
+    settingsHandler = async config => response(config, data)
+    if (issue === 'collector failed') agentHandler = async config => response(config, agentsPayload([agent({ status: 'unreachable' })]))
+    if (issue === 'unsupported collector') agentHandler = async config => response(config, agentsPayload([agent({ supported: false })]))
+    const wrapper = await render()
+    expect(wrapper.find('button[aria-controls="domain-discovery-configuration"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('采集设备')
+    expect(wrapper.text()).toContain('默认规则集')
+  })
+
+  it('reveals retained settings when a refresh fails instead of leaving the error inside a collapsed section', async () => {
+    settingsHandler = async config => response(config, settingsPayload(true))
+    const wrapper = await render()
+    expect(wrapper.get('button[aria-controls="domain-discovery-configuration"]').attributes('aria-expanded')).toBe('false')
+    settingsHandler = async config => { throw timeout(config) }
+    await click(wrapper, '刷新')
+    expect(wrapper.find('button[aria-controls="domain-discovery-configuration"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('保留上次默认规则集设置')
+    expect(wrapper.text()).toContain('请求超时')
+  })
+
   it('shows existing collection devices even when the first domain request times out', async () => {
     domainHandler = async config => { throw timeout(config) }
     const wrapper = await render()

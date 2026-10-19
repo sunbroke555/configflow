@@ -1,10 +1,10 @@
 <template>
   <div>
-    <PageHeader title="域名发现">
+    <PageHeader title="域名发现" class="domain-discovery-header">
       <template #actions>
-        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+        <div class="flex w-full flex-wrap items-center justify-between gap-2 max-sm:justify-start">
           <Segmented v-model="days" :options="DAY_OPTIONS" label="时间范围" @update:model-value="loadDomains" />
-          <Button variant="outline" class="ml-auto border-border/60 bg-background/40" :disabled="refreshing || loading" @click="reload">
+          <Button variant="outline" class="ml-auto border-border/60 bg-background/40 max-sm:ml-0" :disabled="refreshing || loading" @click="reload">
             <RefreshCw class="size-4" :class="(refreshing || loading) && 'animate-spin'" />
             刷新
           </Button>
@@ -12,7 +12,26 @@
       </template>
     </PageHeader>
 
-    <div class="mb-4 grid gap-4 lg:grid-cols-2">
+    <button
+      v-if="configurationReady"
+      type="button"
+      class="mb-3 flex min-h-11 w-full items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-ring sm:hidden"
+      :aria-expanded="configurationOpen"
+      aria-controls="domain-discovery-configuration"
+      @click="configurationOpen = !configurationOpen"
+    >
+      <span class="min-w-0 flex-1">
+        <span class="block text-[13px] font-medium">采集与规则设置</span>
+        <span class="mt-0.5 block text-[12px] text-muted-foreground">采集中 {{ enabledAgents.length }} 台 · 直连 / 代理规则集就绪</span>
+        <span v-if="settings?.auto_probe || settings?.auto_apply" class="mt-0.5 block text-[12px] text-muted-foreground">
+          <template v-if="settings.auto_probe">自动探测已开启</template>
+          <template v-if="settings.auto_apply">{{ settings.auto_probe ? ' · ' : '' }}自动采纳 ≥ {{ settings.auto_apply_min_confidence }}</template>
+        </span>
+      </span>
+      <ChevronRight class="size-4 shrink-0 text-muted-foreground transition-transform" :class="configurationOpen && 'rotate-90'" aria-hidden="true" />
+    </button>
+
+    <div id="domain-discovery-configuration" class="mb-4 grid gap-4 lg:grid-cols-2" :class="configurationReady && !configurationOpen && 'max-sm:hidden'" @focusin="configurationOpen = true">
       <!-- 采集设备 -->
       <SectionCard title="采集设备" description="开启后，Agent 会把本机 Mihomo 访问过的域名、命中规则和直连失败汇总上报（只含域名，不含网址路径和设备 IP，保留 7 天）。" :icon="Radar">
         <p v-if="agentsError && agentsLoaded" role="alert" class="mb-3 text-[12.5px] text-warning-accent">{{ agentsError }}，保留上次采集设备状态。</p>
@@ -31,9 +50,9 @@
           <li
             v-for="agent in agents"
             :key="agent.id"
-            class="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-border bg-background/40 px-3 py-2.5"
+            class="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-border bg-background/40 px-3 py-2.5 max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-y-1"
           >
-            <div class="min-w-0 flex-[1_1_160px]">
+            <div class="min-w-0 flex-[1_1_160px] max-sm:col-start-1">
               <p class="m-0 truncate text-[13px] font-medium text-foreground" :title="agent.name">{{ agent.name || agent.id }}</p>
               <p class="m-0 mt-0.5 text-[11.5px] text-muted-foreground">
                 <template v-if="!agent.supported">Agent {{ agent.version || '版本未知' }}，需要升级到 {{ minAgentVersion }}</template>
@@ -45,8 +64,8 @@
                 <template v-else>未开启</template>
               </p>
             </div>
-            <StatusDot v-if="agent.enabled" :tone="statusTone(agent.status)" :label="STATUS_LABELS[agent.status] || agent.status" />
-            <div class="flex items-center gap-1">
+            <StatusDot v-if="agent.enabled" class="max-sm:col-start-1" :tone="statusTone(agent.status)" :label="STATUS_LABELS[agent.status] || agent.status" />
+            <div class="flex items-center gap-1 max-sm:col-start-2 max-sm:row-span-2 max-sm:row-start-1">
               <Button
                 v-if="agent.last_report"
                 variant="ghost"
@@ -58,12 +77,14 @@
               >
                 <Eraser class="size-3.5" />
               </Button>
-              <Switch
-                :model-value="agent.enabled"
-                :disabled="togglingAgent === agent.id || (!agent.supported && !agent.enabled)"
-                :aria-label="`${agent.enabled ? '关闭' : '开启'} ${agent.name} 的域名发现`"
-                @update:model-value="value => toggleAgent(agent, Boolean(value))"
-              />
+              <label class="flex cursor-pointer items-center justify-center max-md:min-h-11 max-md:min-w-11">
+                <Switch
+                  :model-value="agent.enabled"
+                  :disabled="togglingAgent === agent.id || (!agent.supported && !agent.enabled)"
+                  :aria-label="`${agent.enabled ? '关闭' : '开启'} ${agent.name} 的域名发现`"
+                  @update:model-value="value => toggleAgent(agent, Boolean(value))"
+                />
+              </label>
             </div>
           </li>
         </ul>
@@ -71,6 +92,7 @@
 
       <!-- 默认规则集 -->
       <SectionCard title="默认规则集" description="「加入直连 / 加入代理」会把域名追加到这两个规则集。规则集需要在策略规则里启用，并位于兜底规则之前。" :icon="ListPlus">
+        <p v-if="settingsError && settings" role="alert" class="mb-3 text-[12.5px] text-warning-accent">{{ settingsError }}，保留上次默认规则集设置。</p>
         <EmptyState v-if="settingsError && !settings" title="默认规则集读取失败" :description="settingsError" :icon="TriangleAlert">
           <Button variant="outline" size="sm" @click="loadSettings">重试</Button>
         </EmptyState>
@@ -155,12 +177,14 @@
                     <SelectItem v-for="choice in settings.confidence_choices" :key="choice" :value="String(choice)">≥ {{ choice }}</SelectItem>
                   </SelectContent>
                 </Select>
-                <Switch
-                  :model-value="settings.auto_apply"
-                  :disabled="savingSettings || !settings.auto_probe"
-                  aria-label="自动采纳建议"
-                  @update:model-value="value => saveAutomation({ auto_apply: Boolean(value) })"
-                />
+                <label class="flex cursor-pointer items-center justify-center max-md:min-h-11 max-md:min-w-11">
+                  <Switch
+                    :model-value="settings.auto_apply"
+                    :disabled="savingSettings || !settings.auto_probe"
+                    aria-label="自动采纳建议"
+                    @update:model-value="value => saveAutomation({ auto_apply: Boolean(value) })"
+                  />
+                </label>
               </div>
             </div>
           </div>
@@ -300,7 +324,7 @@
               <div class="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
-                  class="inline-flex items-center gap-1 rounded-sm font-mono text-[13px] text-foreground hover:text-primary-accent focus-visible:outline-2 focus-visible:outline-ring"
+                  class="inline-flex items-center gap-1 rounded-sm font-mono text-[13px] text-foreground hover:text-primary-accent focus-visible:outline-2 focus-visible:outline-ring max-md:min-h-11"
                   :aria-expanded="expanded.has(item.domain)"
                   :aria-label="`${expanded.has(item.domain) ? '收起' : '展开'} ${item.domain} 的子域`"
                   @click="toggleExpanded(item.domain)"
@@ -718,6 +742,15 @@ const missingTargets = computed<Target[]>(() =>
 )
 
 const enabledAgents = computed(() => agents.value.filter(agent => agent.enabled))
+const configurationOpen = ref(false)
+const configurationReady = computed(() => {
+  const current = settings.value
+  if (!agentsLoaded.value || agentsError.value || settingsError.value || !current || !enabledAgents.value.length) return false
+  if (agents.value.some(agent => !agent.supported || !agent.probe_supported)) return false
+  if (enabledAgents.value.some(agent => agent.status !== 'running' || !agent.last_report)) return false
+  if (TARGETS.some(target => !current[target]?.active || current[target]?.problem)) return false
+  return Boolean(current.probe_path)
+})
 
 const emptyTitle = computed(() => {
   if (!agentsLoaded.value) return '等待采集设备状态'
@@ -1185,3 +1218,11 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
+
+<style scoped>
+@media (width < 640px) {
+  .domain-discovery-header :deep(.cf-page-actions) {
+    flex-grow: 1;
+  }
+}
+</style>

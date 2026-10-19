@@ -1,7 +1,7 @@
 <template>
-  <div class="oxidns-overview min-w-0 space-y-4">
+  <div class="oxidns-overview min-w-0 space-y-4 max-sm:space-y-3">
     <p v-if="overview.statistics?.partial" class="m-0 text-xs leading-relaxed text-warning-accent">部分指标缺少基线或插件已重新计数，本轮统计可能不完整；无法确认的值显示「—」。</p>
-    <div class="grid min-w-0 grid-cols-2 gap-3 xl:grid-cols-3">
+    <div class="grid min-w-0 grid-cols-2 gap-3 max-sm:gap-2 xl:grid-cols-3">
       <OxiDNSMetric label="DNS 请求" :value="overview.metrics.requests_total" :hint="periodLabel" />
       <OxiDNSMetric label="近期请求速率" :value="qps" unit="次/秒" :precision="2" :hint="qps === null ? '采样中，需两次数据计算' : '最近两次采样之间的平均值'" />
       <OxiDNSMetric label="平均响应时间" :value="overview.metrics.avg_latency_ms" unit="ms" :precision="2" :hint="periodLabel" />
@@ -28,7 +28,7 @@
       <SectionCard v-if="!rankings" :padded="false">
         <EmptyState title="暂无法统计请求排行" :description="rankingsUnavailableReason" />
       </SectionCard>
-      <div v-else class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
+      <div v-else class="grid min-w-0 grid-cols-1 gap-4 max-sm:gap-3 lg:grid-cols-3">
         <OxiDNSRankingTable title="客户端排行" name-label="客户端" :entries="rankings.clients.rows.map(row => ({ name: row.key, count: row.count }))"
           empty-title="暂无客户端请求" empty-description="当前统计范围内还没有客户端查询记录。" />
         <OxiDNSRankingTable title="请求域名排行" name-label="域名" :entries="rankings.domains.rows.map(row => ({ name: row.key, count: row.count }))"

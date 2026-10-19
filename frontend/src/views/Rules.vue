@@ -46,9 +46,9 @@
 
     <!-- 命中模拟：后端按真实规则与规则集内容逐条匹配，前端按顺序扫描到命中行 -->
     <SectionCard v-if="!reorder.active.value && allRules.length" :padded="false" class="mb-3.5 overflow-hidden">
-      <form class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3.5 p-5 max-md:p-4" @submit.prevent="simulate()">
+      <form class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3.5 p-5 max-md:p-4 max-sm:gap-2 max-sm:p-3" @submit.prevent="simulate()">
         <label class="min-w-0">
-          <span class="mb-2 block font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase">命中模拟</span>
+          <span class="mb-2 block font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase max-sm:mb-1">命中模拟</span>
           <Input
             v-model="simQuery"
             class="h-[46px] font-mono text-[16px]"
@@ -63,7 +63,7 @@
           <Play v-else class="size-4" />
           模拟
         </Button>
-        <div class="col-span-full flex min-h-10 flex-wrap items-center gap-2 text-[13.5px] text-muted-foreground">
+        <div class="col-span-full flex min-h-10 flex-wrap items-center gap-2 text-[13.5px] text-muted-foreground" :class="!simRunning && !simResult && !simSamples.length && 'max-sm:hidden'">
           <template v-if="simRunning">
             <span class="live-dot" aria-hidden="true" />
             <span class="font-mono">逐条匹配 {{ simQuery.trim() }} …</span>
@@ -297,7 +297,7 @@
         data-reorder-item
         :data-id="item.uniqueId"
         :class="[
-          'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong',
+          'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
           item.isGroup ? 'border-warning-accent/35' : 'border-border/35',
           item.isExpandedGroupItem && 'border-primary-accent/30',
           !item.isGroup && !item.enabled && 'dark:opacity-60'
@@ -329,7 +329,7 @@
             <Badge variant="secondary" class="min-w-0 max-w-full text-[10.5px]" :title="item.policy"><span class="truncate">{{ item.policy }}</span></Badge>
           </div>
 
-          <footer class="mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3">
+          <footer class="mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2">
             <Button variant="ghost" size="sm" @click.stop="showGroupRenameDialog(item)">
               <Pencil class="size-3.5" />
               重命名
@@ -408,7 +408,7 @@
             </p>
           </div>
 
-          <footer class="cf-reorder-mute mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3">
+          <footer class="cf-reorder-mute mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2">
             <Badge variant="secondary" class="min-w-0 max-w-[150px] text-[10.5px]" :title="item.policy"><span class="truncate">{{ item.policy }}</span></Badge>
             <Button variant="ghost" size="icon-sm" class="ml-auto" title="编辑" aria-label="编辑" @click="editItem(item)">
               <Pencil class="size-4" />

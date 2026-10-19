@@ -8,7 +8,7 @@
       <div v-if="!region" class="py-2"><LoadingRows :rows="2" /></div>
       <div v-else class="flex flex-col gap-3">
         <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <label class="flex items-center gap-2 text-[13px]">
+          <label class="flex items-center gap-2 text-[13px] max-md:min-h-11">
             <Switch
               :model-value="region.enabled"
               :disabled="saving"
@@ -29,7 +29,7 @@
               @blur="savePort"
             />
           </label>
-          <div class="ml-auto flex items-center gap-2">
+          <div class="ml-auto flex items-center gap-2 max-sm:ml-0">
             <Button :disabled="!region.enabled || busy" @click="emit('check', { services: true })">
               <Loader2 v-if="busy" class="size-4 animate-spin" />
               <ScanSearch v-else class="size-4" />
@@ -85,12 +85,12 @@
 
     <SectionCard v-if="domainEntries.length" title="域名地区差异" description="在域名列表里点「检测地区差异」的结果。这是启发式判断：根据状态码 451、受限提示文字和跳转到地区不可用页面来识别。" :padded="false">
       <ul class="m-0 flex list-none flex-col divide-y divide-border p-0">
-        <li v-for="[host, entry] in domainEntries" :key="host" class="flex flex-col gap-2 px-5 py-3 max-md:px-4">
+        <li v-for="[host, entry] in domainEntries" :key="host" class="flex flex-col gap-2 px-5 py-3 max-md:px-4 max-sm:px-3">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="font-mono text-[13px]">{{ host }}</span>
+            <span class="min-w-0 break-all font-mono text-[13px]">{{ host }}</span>
             <span :class="['chip', VERDICT_CLASSES[entry.verdict]]">{{ VERDICT_LABELS[entry.verdict] }}</span>
             <span class="text-[11.5px] text-muted-foreground">{{ relativeTime(entry.checked_at) }}</span>
-            <Button size="sm" variant="ghost" class="ml-auto" @click="openRoute('domain', host, host)">指定走向</Button>
+            <Button size="sm" variant="ghost" class="ml-auto max-sm:ml-0" @click="openRoute('domain', host, host)">指定走向</Button>
           </div>
           <div class="flex flex-wrap gap-1.5">
             <span
@@ -106,7 +106,7 @@
 
     <SectionCard v-if="regionalRulesets.length" title="地区规则集" description="「指定走向」写入的规则集，按策略组区分，位于默认代理规则集之前。" :padded="false">
       <ul class="m-0 flex list-none flex-col divide-y divide-border p-0">
-        <li v-for="[policy, info] in regionalRulesets" :key="policy" class="flex flex-wrap items-center gap-2 px-5 py-2.5 text-[13px] max-md:px-4">
+        <li v-for="[policy, info] in regionalRulesets" :key="policy" class="flex flex-wrap items-center gap-2 px-5 py-2.5 text-[13px] max-md:px-4 max-sm:px-3">
           <span class="font-medium">{{ policy }}</span>
           <span class="text-muted-foreground">{{ info?.name || '规则集已删除' }}</span>
           <span v-if="info && !info.active" class="chip chip-warn">未在当前配置启用</span>

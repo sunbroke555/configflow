@@ -1,6 +1,6 @@
 <template>
-  <Button variant="outline" class="border-border/60 bg-background/40" :disabled="disabled" @click="openSettings">
-    <Settings2 class="size-4" />测速设置
+  <Button variant="outline" class="border-border/60 bg-background/40 max-sm:size-11 max-sm:px-0" aria-label="测速设置" title="测速设置" :disabled="disabled" @click="openSettings">
+    <Settings2 class="size-4" /><span class="max-sm:hidden">测速设置</span>
   </Button>
   <Dialog :open="open" @update:open="value => { if (!saving) open = value }">
     <DialogContent class="max-w-md" :show-close-button="!saving" @escape-key-down="event => { if (saving) event.preventDefault() }" @interact-outside="event => { if (saving) event.preventDefault() }">

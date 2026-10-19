@@ -1,6 +1,6 @@
 <template>
   <div class="min-w-0">
-    <PageHeader title="OxiDNS 监控">
+    <PageHeader title="OxiDNS 监控" class="oxidns-monitor-header">
       <template #title-extra>
         <Select :model-value="agentId" :disabled="!devices?.length || switchingDevice" @update:model-value="switchDevice(String($event))">
           <SelectTrigger class="min-h-11 w-auto min-w-0 max-w-32 sm:max-w-48" aria-label="监控设备" :title="currentDevice?.name || currentDevice?.id">
@@ -20,15 +20,20 @@
         </Select>
       </template>
       <template #actions>
-        <label class="flex min-h-11 items-center gap-2 text-[13px] text-muted-foreground">
-          <Switch v-model="autoRefresh" aria-label="每 10 秒自动刷新监控" />自动刷新 · 10 秒
-        </label>
-        <Button variant="outline" class="min-h-11" :disabled="overviewLoading || queriesLoading || devicesLoading" @click="refreshAll">
-          <RefreshCw class="size-4" :class="{ 'animate-spin': overviewLoading || queriesLoading || devicesLoading }" />刷新
-        </Button>
-        <Button variant="outline" class="min-h-11" :disabled="openingSettings || switchingDevice || !currentDevice" @click="openSettings()">
-          <Loader2 v-if="openingSettings" class="size-4 animate-spin" /><Settings v-else class="size-4" />{{ openingSettings ? '正在打开…' : '设置' }}
-        </Button>
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <label class="flex min-h-11 items-center gap-2 text-[13px] text-muted-foreground">
+            <Switch v-model="autoRefresh" aria-label="每 10 秒自动刷新监控" />自动刷新 · 10 秒
+          </label>
+          <div class="ml-auto flex shrink-0 items-center gap-2 max-sm:gap-1">
+            <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" aria-label="刷新监控" title="刷新监控" :aria-busy="overviewLoading || queriesLoading || devicesLoading" :disabled="overviewLoading || queriesLoading || devicesLoading" @click="refreshAll">
+              <RefreshCw class="size-4" :class="{ 'animate-spin': overviewLoading || queriesLoading || devicesLoading }" /><span class="max-sm:sr-only">刷新</span>
+            </Button>
+            <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" :aria-label="openingSettings ? '正在打开设置…' : 'OxiDNS 设置'" :title="openingSettings ? '正在打开设置…' : 'OxiDNS 设置'" :aria-busy="openingSettings" :disabled="openingSettings || switchingDevice || !currentDevice" @click="openSettings()">
+              <Loader2 v-if="openingSettings" class="size-4 animate-spin" /><Settings v-else class="size-4" /><span class="max-sm:sr-only">{{ openingSettings ? '正在打开…' : '设置' }}</span>
+            </Button>
+          </div>
+        </div>
+        <p v-if="openingSettings" role="status" class="m-0 w-full text-xs text-primary-accent sm:hidden">正在打开设置…</p>
       </template>
     </PageHeader>
     <p v-if="settingsError" role="alert" class="mb-4 break-words text-sm text-destructive-accent">{{ settingsError }}</p>
@@ -42,7 +47,7 @@
       </EmptyState>
     </SectionCard>
     <template v-else>
-      <div v-if="currentDevice || overview" class="cf-monitor-status mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted-foreground">
+      <div v-if="currentDevice || overview" class="cf-monitor-status oxidns-monitor-status mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted-foreground">
         <StatusDot v-if="currentDevice?.status === 'offline'" tone="muted" label="Agent 离线" />
         <StatusDot v-if="overview" :tone="coreRunning ? 'success' : 'warning'" :label="coreRunning ? '核心运行中' : '核心状态：' + overview.core.status" />
         <span v-if="currentDevice?.host" class="min-w-0 break-all font-mono" aria-label="当前设备 IP">{{ currentDevice.host }}</span>
@@ -54,7 +59,7 @@
         {{ overviewError }} 保留上次成功读取的数据，采样时间见上方。
       </p>
       <Tabs :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
-        <div class="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div class="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 max-sm:mb-2 max-sm:gap-y-1">
           <TabsList class="min-h-11 shrink-0 max-sm:grid max-sm:h-auto max-sm:w-full max-sm:grid-cols-3">
             <TabsTrigger value="overview" class="min-h-11 px-4 max-sm:px-2">运行概览</TabsTrigger>
             <TabsTrigger value="queries" class="min-h-11 px-4 max-sm:px-2">查询记录</TabsTrigger>
@@ -206,3 +211,24 @@ const uptime = computed(() => {
   return Math.floor(seconds / 86400) + ' 天 ' + Math.floor(seconds % 86400 / 3600) + ' 小时'
 })
 </script>
+
+<style scoped>
+@media (width < 640px) {
+  .oxidns-monitor-header :deep(.cf-page-heading) {
+    flex-basis: 100%;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: var(--cf-sp-2);
+  }
+
+  .oxidns-monitor-header :deep(.cf-page-actions) {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .oxidns-monitor-status {
+    margin-bottom: var(--cf-sp-2);
+    gap: var(--cf-sp-1) var(--cf-sp-3);
+  }
+}
+</style>

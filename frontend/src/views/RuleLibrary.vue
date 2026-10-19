@@ -270,7 +270,7 @@
           :data-id="rule.id"
           data-reorder-item
           :class="[
-            'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border bg-card/90 p-4 shadow-surface transition-colors duration-200 hover:border-border-strong',
+            'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border bg-card/90 p-4 shadow-surface transition-colors duration-200 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
             selectedRules.includes(rule.id) ? 'border-primary-accent' : 'border-border',
             !rule.enabled && 'dark:opacity-60'
           ]"
@@ -337,15 +337,17 @@
             </a>
           </div>
 
-          <footer class="cf-reorder-mute mt-auto flex items-center gap-0.5 border-0 border-t border-border/50 pt-3">
+          <footer class="cf-reorder-mute mt-auto flex items-center gap-0.5 border-0 border-t border-border/50 pt-3 max-sm:pt-2">
             <Button
               v-if="rule.source_type === 'content'"
               variant="ghost"
               size="sm"
+              :aria-label="`向 ${rule.name} 添加规则`"
+              title="添加规则"
               @click="showAddRuleToSetDialog(rule)"
             >
               <Plus class="size-3.5" />
-              添加规则
+              <span class="max-sm:hidden">添加规则</span>
             </Button>
             <Button variant="ghost" size="icon-sm" title="加入当前配置" :aria-label="`将 ${rule.name} 加入当前配置`" @click="showReferenceDialog([rule.id])">
               <Send class="size-4" />

@@ -1,15 +1,15 @@
 <template>
   <div>
-    <header class="relative mb-5 flex flex-wrap items-end gap-4 max-md:mb-4">
+    <header class="relative mb-5 flex flex-wrap items-end gap-4 max-md:mb-4 max-sm:mb-3 max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-2">
       <div class="min-w-0 flex-[1_1_260px]">
-        <div class="mb-2 flex items-center gap-2 font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase">
+        <div class="mb-2 flex min-w-0 items-center gap-2 font-mono text-[11px] tracking-[0.14em] text-muted-foreground uppercase">
           <span class="live-dot" aria-hidden="true" />
-          实时流向 · <span class="normal-case">{{ profileName }}</span>
+          <span class="shrink-0">实时流向 ·</span> <span class="truncate normal-case" :title="profileName">{{ profileName }}</span>
         </div>
         <h1 class="font-display m-0 text-[34px] leading-[1.12] text-foreground max-md:text-[26px]">数据统计</h1>
       </div>
       <!-- 实时吞吐：来自已绑定且在线的 Agent 心跳上报的网卡速率；没有上报时不显示 -->
-      <div v-if="throughputItems.length" class="flex items-end gap-7 max-md:w-full max-md:gap-5">
+      <div v-if="throughputItems.length" class="flex items-end gap-7 max-md:w-full max-md:gap-5 max-sm:col-span-2 max-sm:row-start-2">
         <div v-for="item in throughputItems" :key="item.label" class="text-right max-md:text-left">
           <div class="font-mono text-[10.5px] tracking-[0.12em] text-muted-foreground uppercase">{{ item.label }}</div>
           <div :class="cn('font-display text-[40px] leading-none max-md:text-[28px]', item.accent && 'text-primary-accent')">
@@ -20,7 +20,7 @@
       <Button
         variant="outline"
         size="sm"
-        class="border-border/70 bg-card/60 max-md:absolute max-md:top-6 max-md:right-0 max-md:size-9 max-md:px-0"
+        class="border-border/70 bg-card/60 max-md:absolute max-md:top-6 max-md:right-0 max-md:size-11 max-md:px-0 max-sm:static max-sm:col-start-2 max-sm:row-start-1 max-sm:self-end"
         :disabled="loading"
         aria-label="刷新"
         @click="loadAllData"
@@ -39,7 +39,7 @@
     </p>
 
     <!-- 配置流向图：订阅 → 节点池 → 策略组 → 规则 → 输出 → Agent，全部由真实数据生成 -->
-    <SectionCard :padded="false" class="mb-5" role="region" aria-label="配置流向">
+    <SectionCard :padded="false" class="mb-5 max-sm:mb-3" role="region" aria-label="配置流向">
       <FlowMap
         :columns="flowColumns"
         :edges="flowEdges"
@@ -85,7 +85,7 @@
           </span>
         </template>
       </FlowMap>
-      <footer class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-5 py-3 text-[12px] text-muted-foreground max-md:px-4">
+      <footer class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/60 px-5 py-3 text-[12px] text-muted-foreground max-md:px-4 max-sm:gap-x-3 max-sm:px-3 max-sm:py-2">
         <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-primary-accent" />订阅 → 节点</span>
         <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-accent-2" />策略 → 规则</span>
         <span class="flex items-center gap-1.5"><i class="h-0.5 w-4 rounded-full bg-success-accent" />下发 → Agent</span>
@@ -95,12 +95,12 @@
     </SectionCard>
 
     <!-- KPI：数字 + 说明 + 真实趋势（计数快照 / 会话内吞吐采样） -->
-    <div class="mb-5 grid grid-cols-4 gap-3.5 max-[1180px]:grid-cols-2 max-md:gap-2.5" role="region" aria-label="关键指标">
+    <div class="mb-5 grid grid-cols-4 gap-3.5 max-[1180px]:grid-cols-2 max-md:gap-2.5 max-sm:mb-3 max-sm:gap-2" role="region" aria-label="关键指标">
       <button
         v-for="kpi in kpis"
         :key="kpi.label"
         type="button"
-        class="group relative overflow-hidden rounded-[18px] border border-border bg-card/90 px-[18px] pt-4 pb-3 text-left shadow-surface transition-[transform,border-color] duration-350 ease-(--ease-flow) hover:-translate-y-[3px] hover:border-border-strong focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        class="group relative overflow-hidden rounded-[18px] border border-border bg-card/90 px-[18px] pt-4 pb-3 text-left shadow-surface transition-[transform,border-color] duration-350 ease-(--ease-flow) hover:-translate-y-[3px] hover:border-border-strong focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:p-3"
         @click="router.push(kpi.route)"
       >
         <span class="flex items-center gap-2 text-[12.5px] text-muted-foreground">
@@ -129,23 +129,23 @@
       </button>
     </div>
 
-    <div class="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] items-stretch gap-3.5 max-[1180px]:grid-cols-[minmax(0,1fr)]">
+    <div class="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] items-stretch gap-3.5 max-[1180px]:grid-cols-[minmax(0,1fr)] max-sm:gap-3">
       <!-- 事件流：系统日志实时尾随，新事件从顶部进入 -->
       <SectionCard :padded="false" class="flex min-w-0 flex-col" role="region" aria-label="事件流">
-        <header class="flex items-center gap-2.5 px-[18px] pt-4">
+        <header class="flex items-center gap-2.5 px-[18px] pt-4 max-sm:px-3 max-sm:pt-3">
           <span class="live-dot" aria-hidden="true" />
           <h2 class="m-0 flex min-h-7 items-center text-[13.5px] font-semibold">事件流</h2>
           <span class="ml-auto font-mono text-[12px] text-muted-foreground">{{ events.length }} 条</span>
         </header>
-        <div class="event-stream mt-2.5 h-[360px] grow overflow-hidden">
-          <p v-if="!events.length" class="px-[18px] py-10 text-center text-[13px] text-muted-foreground">
+        <div :class="cn('event-stream mt-2.5 h-[360px] grow overflow-hidden', !events.length && 'max-sm:h-auto max-sm:grow-0')">
+          <p v-if="!events.length" class="px-[18px] py-10 text-center text-[13px] max-sm:px-3 max-sm:py-6 text-muted-foreground">
             {{ eventsLoaded ? '还没有日志事件' : '正在读取日志…' }}
           </p>
           <TransitionGroup name="event" tag="div">
             <div
               v-for="event in events"
               :key="event.key"
-              class="grid grid-cols-[62px_22px_minmax(0,1fr)_auto] items-center gap-2.5 border-t border-border/70 px-[18px] py-2.5 first:border-t-0"
+              class="grid grid-cols-[62px_22px_minmax(0,1fr)_auto] items-center gap-2.5 border-t border-border/70 px-[18px] py-2.5 first:border-t-0 max-sm:gap-2 max-sm:px-3"
             >
               <time class="font-mono text-[11px] text-muted-foreground">{{ event.time }}</time>
               <span
@@ -170,7 +170,7 @@
 
       <!-- 订阅健康：每个订阅最近 24 次拉取，柱高为节点数，颜色为结果 -->
       <SectionCard :padded="false" class="flex min-w-0 flex-col" role="region" aria-label="订阅健康">
-        <header class="flex items-center gap-2.5 px-[18px] pt-4">
+        <header class="flex items-center gap-2.5 px-[18px] pt-4 max-sm:px-3 max-sm:pt-3">
           <h2 class="m-0 text-[13.5px] font-semibold">订阅健康 · 近 {{ HEALTH_SIZE }} 次拉取</h2>
           <Button
             variant="ghost"
@@ -183,7 +183,7 @@
             <RefreshCw class="size-3.5" :class="healthLoading && 'animate-spin'" />
           </Button>
         </header>
-        <div class="flex flex-1 flex-col px-[18px] pt-3.5 pb-[18px]">
+        <div class="flex flex-1 flex-col px-[18px] pt-3.5 pb-[18px] max-sm:p-3">
           <p v-if="!healthRows.length" class="py-6 text-center text-[13px] text-muted-foreground">还没有订阅</p>
           <div
             v-for="row in healthRows"
@@ -214,7 +214,7 @@
               v-for="action in QUICK_ACTIONS"
               :key="action.id"
               type="button"
-              class="flex flex-col items-start gap-2 rounded-xl border border-border bg-background/60 p-3 text-left text-[12.5px] text-muted-foreground transition-[transform,border-color,color] duration-250 ease-(--ease-flow) hover:-translate-y-0.5 hover:border-primary-accent/45 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+              class="flex flex-col items-start gap-2 rounded-xl border border-border bg-background/60 p-3 text-left text-[12.5px] text-muted-foreground transition-[transform,border-color,color] duration-250 ease-(--ease-flow) hover:-translate-y-0.5 hover:border-primary-accent/45 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:min-h-11 max-sm:flex-row max-sm:items-center max-sm:gap-2 max-sm:p-2"
               @click="runAction(router, action.id)"
             >
               <component :is="action.icon" class="size-[18px] text-primary-accent" :stroke-width="1.75" aria-hidden="true" />

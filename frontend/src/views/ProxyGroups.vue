@@ -46,7 +46,7 @@
       </EmptyState>
     </SectionCard>
 
-    <div v-else class="group-workspace grid min-h-0 grid-cols-[280px_minmax(0,1fr)] gap-3.5 max-[1180px]:grid-cols-[minmax(0,1fr)]">
+    <div v-else class="group-workspace grid min-h-0 grid-cols-[280px_minmax(0,1fr)] gap-3.5 max-[1180px]:grid-cols-[minmax(0,1fr)] max-sm:gap-2">
       <Button
         v-show="!reorder.active.value"
         variant="outline"
@@ -139,7 +139,7 @@
 
       <!-- 右：来源 → 筛选 → 命中节点 -->
       <SectionCard v-if="selected" :padded="false" class="group-detail-card flex min-h-0 min-w-0 flex-col" :class="reorder.active.value && 'max-[1180px]:hidden'" role="region" aria-label="策略组详情">
-        <header class="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-border px-[18px] py-4">
+        <header class="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-border px-[18px] py-4 max-sm:gap-2 max-sm:px-3 max-sm:py-2">
           <h2 class="m-0 min-w-0 break-words text-[13.5px] font-semibold [overflow-wrap:anywhere]">{{ selected.name }}</h2>
           <span v-if="selected.follow_group" class="chip chip-warn">跟随</span>
           <span v-else class="chip chip-acc font-mono">{{ selected.type }}</span>
@@ -174,7 +174,7 @@
 
         <div ref="groupDetailsBody" class="group-detail-body min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
         <!-- 代理链：前置 → 落地，没有来源与正则 -->
-        <div v-if="selected.type === 'chain'" class="flex flex-col gap-3 p-5 max-md:p-4">
+        <div v-if="selected.type === 'chain'" class="flex flex-col gap-3 p-5 max-md:p-4 max-sm:p-3">
           <div class="flex flex-wrap items-center gap-2 text-[13px]">
             <template v-if="selected.chain">
               <span class="chip font-mono">{{ entryLabel(selected.chain.entry) }}</span>
@@ -188,7 +188,7 @@
           </p>
         </div>
 
-        <div v-else class="pipe grid grid-cols-[minmax(0,0.9fr)_34px_minmax(0,1.1fr)_34px_minmax(0,1.5fr)] items-stretch p-5 max-md:grid-cols-[minmax(0,1fr)] max-md:gap-2 max-md:p-4">
+        <div v-else class="pipe grid grid-cols-[minmax(0,0.9fr)_34px_minmax(0,1.1fr)_34px_minmax(0,1.5fr)] items-stretch p-5 max-md:grid-cols-[minmax(0,1fr)] max-md:gap-2 max-md:p-4 max-sm:gap-3 max-sm:p-3">
           <!-- 来源 -->
           <div class="flex min-w-0 flex-col gap-2.5">
             <div class="font-mono text-[10.5px] tracking-[0.14em] text-muted-foreground uppercase">来源</div>
@@ -223,7 +223,7 @@
             </div>
           </div>
 
-          <div class="pipe-link" aria-hidden="true" />
+          <div class="pipe-link max-sm:hidden" aria-hidden="true" />
 
           <!-- 筛选 -->
           <div class="flex min-w-0 flex-col gap-2.5">
@@ -240,7 +240,7 @@
                   aria-label="正则过滤"
                 />
               </div>
-              <p class="m-0 min-h-4 text-[11.5px] text-destructive-accent">{{ preview.error }}</p>
+              <p class="m-0 min-h-4 text-[11.5px] text-destructive-accent" :class="!preview.error && 'max-sm:hidden'">{{ preview.error }}</p>
               <div class="flex items-baseline gap-2">
                 <b class="font-display text-[38px] leading-none font-medium"><AnimatedNumber :value="preview.nodes.length" /></b>
                 <span class="font-mono text-[11.5px] text-muted-foreground">/ {{ preview.total }} 节点</span>
@@ -256,7 +256,7 @@
             </div>
           </div>
 
-          <div class="pipe-link" aria-hidden="true" />
+          <div class="pipe-link max-sm:hidden" aria-hidden="true" />
 
           <!-- 命中节点 -->
           <div class="flex min-w-0 flex-col gap-2.5">
@@ -289,7 +289,7 @@
 
         <footer
           v-if="draftDirty && selected.type !== 'chain'"
-          class="flex shrink-0 flex-wrap items-center gap-2 border-t border-border px-5 py-3 text-[12.5px] text-muted-foreground"
+          class="flex shrink-0 flex-wrap items-center gap-2 border-t border-border px-5 py-3 text-[12.5px] text-muted-foreground max-sm:px-3 max-sm:py-2"
         >
           来源或正则有改动，保存后进入配置
           <Button variant="ghost" size="sm" class="ml-auto min-h-11" :disabled="draftSaving" @click="resetDraft">还原</Button>
