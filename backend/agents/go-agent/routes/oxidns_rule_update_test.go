@@ -1,7 +1,9 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +17,44 @@ import (
 	"testing"
 	"time"
 )
+
+type oxRuleTransportError struct{ timeout bool }
+
+func (e oxRuleTransportError) Error() string   { return "core transport failed" }
+func (e oxRuleTransportError) Timeout() bool   { return e.timeout }
+func (e oxRuleTransportError) Temporary() bool { return false }
+
+type oxRuleRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f oxRuleRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestOxiDNSRuleRequestTransportErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"client_timeout_without_deadline_sentinel", oxRuleTransportError{timeout: true}, http.StatusGatewayTimeout, "RULE_UPDATE_UNKNOWN"},
+		{"context_deadline", context.DeadlineExceeded, http.StatusGatewayTimeout, "RULE_UPDATE_UNKNOWN"},
+		{"network_failure", oxRuleTransportError{}, http.StatusBadGateway, "CORE_UNREACHABLE"},
+		{"other_failure", errors.New("connection refused"), http.StatusBadGateway, "CORE_UNREACHABLE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: oxRuleRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Body != nil {
+					r.Body.Close()
+				}
+				return nil, test.err
+			})}
+			var result interface{}
+			err := oxRuleRequest(context.Background(), client, &oxMonitorConfig{endpoint: "http://127.0.0.1:1"}, http.MethodPost, "/api/plugins/rules_download/download", &result)
+			if err == nil || err.status != test.status || err.code != test.code {
+				t.Fatalf("transport failure classified incorrectly: %+v", err)
+			}
+		})
+	}
+}
 
 const oxRuleTestPlugins = `
   - {tag: domains, type: domain_set, args: {files: [rules/domains.txt]}}

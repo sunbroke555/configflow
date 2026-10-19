@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -164,7 +165,10 @@ func oxRuleRequest(ctx context.Context, client *http.Client, api *oxMonitorConfi
 	}
 	response, err := client.Do(req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		var networkError net.Error
+		// Client.Timeout does not wrap context.DeadlineExceeded on every supported Go version.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+			(errors.As(err, &networkError) && networkError.Timeout()) {
 			return oxMonitorFail(http.StatusGatewayTimeout, "RULE_UPDATE_UNKNOWN", "The core request timed out; its outcome could not be confirmed")
 		}
 		return oxMonitorFail(http.StatusBadGateway, "CORE_UNREACHABLE", "Cannot reach the OxiDNS API")
