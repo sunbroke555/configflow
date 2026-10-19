@@ -14,7 +14,9 @@ vi.mock('@/api', () => ({
   subscriptionApi: { getAll: api.subscriptions, health: api.health },
   proxyGroupApi: { getAll: api.groups, previewRegex: api.preview },
   ruleSetApi: { getAll: api.rules },
-  nodeApi: { getAll: api.nodes, latency: api.latency }
+  nodeApi: { getAll: api.nodes, latency: api.latency },
+  mihomoPanelApi: { flow: vi.fn() },
+  clientToolsApi: { notes: vi.fn() }
 }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@/stores/profile', async () => {
@@ -26,7 +28,7 @@ vi.mock('@/stores/live', async () => {
   return {
     formatRate: vi.fn(),
     useLive: () => ({
-      boundAgents: ref([]), downHistory: ref([]), throughput: ref(null), onlineCount: ref(0), speedOf: vi.fn(),
+      boundAgents: ref([]), downHistory: ref([]), throughput: ref(null), onlineCount: ref(0), speedOf: vi.fn(), isOnline: vi.fn(),
       refresh: api.liveRefresh, start: api.liveStart, stop: api.liveStop
     })
   }
@@ -51,7 +53,7 @@ function visibility(value: boolean) {
 
 async function render() {
   wrapper = mount(Dashboard, { global: { stubs: {
-    FlowMap: true, Sparkline: true, AnimatedNumber: true,
+    FlowMap: { template: '<div data-test="config-map" />' }, LiveFlow: { template: '<div data-test="live-map" />' }, Segmented: true, Sparkline: true, AnimatedNumber: true,
     SectionCard: { template: '<section><slot /></section>' }
   } } })
   await flushPromises()
@@ -84,6 +86,24 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.useRealTimers()
+})
+
+describe('dashboard flow view', () => {
+  it('switches between the config and live views and remembers the choice', async () => {
+    localStorage.clear()
+    const view = await render()
+    expect(view.find('[data-test="config-map"]').exists()).toBe(true)
+    expect(view.find('[data-test="live-map"]').exists()).toBe(false)
+    view.getComponent({ name: 'Segmented' }).vm.$emit('update:modelValue', 'live')
+    await flushPromises()
+    expect(view.find('[data-test="live-map"]').exists()).toBe(true)
+    expect(view.find('[data-test="config-map"]').exists()).toBe(false)
+    expect(localStorage.getItem('configflow:dashboard:flow-view')).toBe('live')
+    wrapper!.unmount()
+    const again = await render()
+    expect(again.find('[data-test="live-map"]').exists()).toBe(true)
+    localStorage.clear()
+  })
 })
 
 describe('dashboard polling', () => {

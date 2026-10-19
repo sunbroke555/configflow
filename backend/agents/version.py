@@ -1,10 +1,16 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.25-go"
+LATEST_AGENT_VERSION = "1.8.26-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.26-go": {
+        "date": "2026-10-19",
+        "features": [
+            "数据统计新增实时流量视图：Mihomo Agent 对当前连接做字节差分，按来源设备、命中规则、策略组和出口节点聚合实时速率"
+        ]
+    },
     "1.8.25-go": {
         "date": "2026-10-19",
         "features": [
@@ -40,7 +46,7 @@ VERSION_CHANGELOG = {
             "步骤记录随更新任务持久保存，面板可查看详情；旧 Agent 继续显示已观察到的更新状态"
         ]
     },
-    "1.8.20-go": {
+    "1.8.26-go": {
         "date": "2026-10-18",
         "features": [
             "发布时向面板报告已有 Geo 资源，缺失资源由面板按原地址优先、GitHub 代理失败回退的顺序下载并随配置打包",

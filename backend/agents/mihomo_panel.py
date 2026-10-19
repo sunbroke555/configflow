@@ -30,6 +30,8 @@ ROUTES = {
     ('connections', 'GET'): 'connections',
     ('connections', 'DELETE'): 'connections',
     ('connection', 'DELETE'): 'connections/{name}',
+    # Agent-side aggregated live traffic (source → rule → policy → outlet).
+    ('flow', 'GET'): 'flow',
     ('rules', 'GET'): 'rules',
     ('providers/proxies', 'GET'): 'providers/proxies',
     ('providers/proxy', 'PUT'): 'providers/proxies/{name}',
@@ -47,7 +49,9 @@ ROUTES = {
 RESOURCE_MIN_VERSION = {
     'configs/reload': '1.8.16-go', 'upgrade': '1.8.16-go',
     'providers/proxy/delay': '1.8.18-go',
+    'flow': '1.8.26-go',
 }
+RESOURCE_FEATURE = {'providers/proxy/delay': '订阅节点测速', 'flow': '实时流量'}
 RESOURCE_TIMEOUT = {'configs/reload': 70, 'upgrade': 200}
 MODES = ('rule', 'global', 'direct')
 
@@ -127,7 +131,7 @@ def call(manager, agent_id, resource, method, args, body=None):
     if template is None:
         raise _fail('NOT_ALLOWED', 404, '面板不支持这个操作。')
     agent = _agent(manager, agent_id, RESOURCE_MIN_VERSION.get(resource, MIN_AGENT_VERSION),
-                   '订阅节点测速' if resource == 'providers/proxy/delay' else None)
+                   RESOURCE_FEATURE.get(resource))
     path = template
     for key in ('provider', 'name'):
         if '{' + key + '}' in template:
