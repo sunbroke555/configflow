@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { groupConnections } from '@/lib/mihomo-connection-groups'
 import type { ConnectionRow } from '@/types/mihomo'

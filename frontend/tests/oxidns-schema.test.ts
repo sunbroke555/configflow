@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { oxidnsGlobalSchema, oxidnsPluginCatalog, oxidnsSchemaSource, oxidnsSchemaVersion, oxidnsUpstreamSchema, type OxidnsSchema } from '../src/lib/oxidnsSchema';
 

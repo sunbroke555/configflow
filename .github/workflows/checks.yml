@@ -8,9 +8,18 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  backend:
+  backend-tests:
+    name: backend tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
@@ -21,11 +30,85 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - run: python -m pip install -r backend/requirements.txt pytest pytest-subtests pytest-xdist
-      - run: python -m pytest backend -q -n 4 --dist=worksteal --durations=15
+      - name: Verify shard tooling
+        run: python -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Run complete backend shard
+        run: >-
+          python scripts/ci/shard_tests.py backend
+          --shard ${{ matrix.shard }}/2
+          --durations .github/ci/backend-durations.json
+          --plan .ci-results/backend-${{ matrix.shard }}.json
+          -- -q -n 4 --dist=worksteal --durations=15
+          --junitxml=.ci-results/backend-${{ matrix.shard }}.xml
         env:
           DATA_DIR: ${{ runner.temp }}/configflow-test-data
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-results-${{ matrix.shard }}
+          path: .ci-results/backend-*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
-  frontend:
+  # Keep the existing required check name while requiring every shard to pass.
+  backend:
+    if: ${{ always() }}
+    needs: backend-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all backend shards
+        env:
+          TEST_RESULT: ${{ needs.backend-tests.result }}
+        run: test "$TEST_RESULT" = success
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: backend-results-*
+          path: .ci-results
+          merge-multiple: true
+      - name: Verify complete, non-overlapping test coverage
+        run: >-
+          python scripts/ci/shard_tests.py validate
+          --expected .ci-results/backend-1.json --expected-key all_nodeids
+          --inventory-key all_nodeids
+          --shard-key selected_nodeids
+          .ci-results/backend-1.json .ci-results/backend-2.json
+
+  frontend-tests:
+    name: frontend tests (${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Run complete frontend shard
+        run: >-
+          npm test -- --shard=${{ matrix.shard }}/2
+          --reporter=default --reporter=json
+          --outputFile=../.ci-results/frontend-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-results-${{ matrix.shard }}
+          path: .ci-results/frontend-*.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  frontend-build:
+    name: frontend types and build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,9 +121,45 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - name: Collect complete frontend test inventory
+        run: |
+          mkdir -p ../.ci-results
+          npx vitest list --filesOnly --json > ../.ci-results/frontend-all.json
       - run: npm run typecheck
-      - run: npm test
       - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-inventory
+          path: .ci-results/frontend-all.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  frontend:
+    if: ${{ always() }}
+    needs: [frontend-tests, frontend-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all frontend checks
+        env:
+          TEST_RESULT: ${{ needs.frontend-tests.result }}
+          BUILD_RESULT: ${{ needs.frontend-build.result }}
+        run: |
+          test "$TEST_RESULT" = success
+          test "$BUILD_RESULT" = success
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frontend-*
+          path: .ci-results
+          merge-multiple: true
+      - name: Verify complete, non-overlapping test coverage
+        run: >-
+          python scripts/ci/shard_tests.py validate
+          --expected .ci-results/frontend-all.json --expected-key file
+          --shard-key testResults.name
+          --path-prefix frontend/tests
+          .ci-results/frontend-1.json .ci-results/frontend-2.json
 
   agent:
     runs-on: ubuntu-latest

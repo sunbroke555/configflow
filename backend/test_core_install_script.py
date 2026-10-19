@@ -44,7 +44,7 @@ def harness(tmp_path, manager="systemd", **options):
         (root / "sys/class/net/configflow-tun").mkdir()
     events = tmp_path / "events"
     events.touch()
-    fake_core = f'''#!{sys.executable}
+    fake_core = f'''#!{sys.executable} -S
 import os, sys
 from pathlib import Path
 name = 'mihomo' if '-t' in sys.argv else 'oxidns'
@@ -72,24 +72,34 @@ if os.environ.get('FAIL_VALIDATE') == name: raise SystemExit(29)
     installer = tmp_path / "install.sh"
     installer.write_text(source)
     command_bodies = {
-        "id": "print(os.environ.get('FAKE_UID', '0'))",
-        "uname": "print(os.environ.get('OS_NAME', 'Linux') if sys.argv[1] == '-s' else os.environ.get('ARCH', 'x86_64'))",
-        "sleep": """from pathlib import Path
-if os.environ.get('LATE_TUN_READY') and sys.argv[1] == '1':
-    root = Path(os.environ['ROOT'])
-    counter = root / 'run/tun-wait-count'
-    count = int(counter.read_text()) + 1 if counter.exists() else 1
-    counter.write_text(str(count))
-    if count >= int(os.environ['LATE_TUN_READY']):
-        interface = root / 'sys/class/net/configflow-tun'
-        interface.mkdir(parents=True, exist_ok=True)
-        (interface / 'tun_flags').write_text('0x1001')
-        (interface / 'flags').write_text('0x1001')
-        fdinfo = root / 'proc/12345/fdinfo'
-        fdinfo.mkdir(parents=True, exist_ok=True)
-        (fdinfo / '8').write_text('iff: configflow-tun')
+        "id": """#!/bin/sh
+printf '%s\\n' "${FAKE_UID-0}"
 """,
-        "stat": "print(os.environ.get('DEVICE_NUMBER', 'a:c8'))",
+        "uname": """#!/bin/sh
+set -eu
+if [ "$1" = -s ]; then printf '%s\\n' "${OS_NAME-Linux}"; else printf '%s\\n' "${ARCH-x86_64}"; fi
+""",
+        "sleep": """#!/bin/sh
+set -eu
+if [ -n "${LATE_TUN_READY-}" ] && [ "$1" = 1 ]; then
+    counter="$ROOT/run/tun-wait-count"
+    count=0
+    if [ -f "$counter" ]; then IFS= read -r count < "$counter" || [ -n "$count" ]; fi
+    count=$((count + 1))
+    printf '%s' "$count" > "$counter"
+    if [ "$count" -ge "$LATE_TUN_READY" ]; then
+        interface="$ROOT/sys/class/net/configflow-tun"
+        fdinfo="$ROOT/proc/12345/fdinfo"
+        mkdir -p "$interface" "$fdinfo"
+        printf '0x1001' > "$interface/tun_flags"
+        printf '0x1001' > "$interface/flags"
+        printf 'iff: configflow-tun' > "$fdinfo/8"
+    fi
+fi
+""",
+        "stat": """#!/bin/sh
+printf '%s\\n' "${DEVICE_NUMBER-a:c8}"
+""",
         "curl": """import shutil
 with open(os.environ['EVENTS'], 'a') as log: log.write('download ' + sys.argv[-1] + '\\n')
 if os.environ.get('FAIL_DOWNLOAD'): raise SystemExit(22)
@@ -182,7 +192,10 @@ for executable in (Path(os.environ['FIXTURE']) / 'unavailable-commands').iterdir
         command_bodies[name] = "with open(os.environ['EVENTS'], 'a') as log: log.write('FORBIDDEN ' + os.path.basename(sys.argv[0]) + '\\n')\nraise SystemExit(99)"
     for name, body in command_bodies.items():
         executable = commands / name
-        executable.write_text(f"#!{sys.executable}\nimport os, sys\n" + body + "\n")
+        # Fixed replies and the simulated clock need no Python process. The
+        # remaining fake commands use only stdlib, without site initialization.
+        executable.write_text(body if body.startswith("#!") else
+                              f"#!{sys.executable} -S\nimport os, sys\n" + body + "\n")
         executable.chmod(0o755)
     for name in ("awk", "cat", "chmod", "cp", "gzip", "mkdir", "mktemp", "mv", "rm", "rmdir", "sed", "sleep", "tail", "tar", "sh"):
         if not (commands / name).exists():

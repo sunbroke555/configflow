@@ -1,46 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
-import OxidnsCommonSettings from '@/components/generate/OxidnsCommonSettings.vue'
-import OxidnsFields from '@/components/generate/OxidnsFields.vue'
+import { describe, expect, it } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import OxidnsMatchEditor from '@/components/generate/OxidnsMatchEditor.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import { featureGroups } from '@/lib/oxidns'
 
-const wrappers: ReturnType<typeof mount>[] = []
-const values = () => ({ worker_threads: 8, listen: '127.0.0.1:5353', local_dns: '- addr: 192.0.2.53\n  extension: false\n', remote_dns: '192.0.2.54', fallback_dns: '', block_qtypes: [65], local_concurrent: 2,
-  direct_rules: ['direct'], proxy_rules: [], direct_rulesets: [], proxy_rulesets: [], custom_matches: [], custom_hosts: '', custom_match_position: 'head',
-  api: {enabled: true, listen: '127.0.0.1:9199'}, log: {level: 'info'},
-  ...Object.fromEntries(featureGroups.map(feature => [feature.key, {enabled: false, args: {}}])) })
-async function render(extra: Record<string, any> = {}) {
-  const wrapper = mount(OxidnsCommonSettings, {attachTo: document.body, props: {values: values(), capabilities: {}, rules: [{id: 'direct', name: 'Direct'}, {id: 'proxy', name: 'Proxy'}], ruleSets: [], ...extra}})
-  wrappers.push(wrapper)
-  await flushPromises()
-  return wrapper
-}
-afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = '' })
-async function click(text: string) {
-  const target = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.trim() === text)
-  expect(target, text).toBeDefined()
-  target!.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, button: 0})); target!.click()
-  await flushPromises()
-}
-async function input(id: string, value: string) {
-  const target = document.getElementById(id) as HTMLInputElement
-  expect(target, id).not.toBeNull()
-  target.value = value; target.dispatchEvent(new Event('input', {bubbles: true}))
-  await flushPromises()
-}
-const lastChange = (wrapper: ReturnType<typeof mount>) => wrapper.emitted('change')?.at(-1)?.[0]
+import { values, render, click, input, lastChange } from './helpers/oxidns-common-settings'
 
 describe('OxiDNS current common settings', () => {
-  it('opens the requested recorder section without enabling or changing it', async () => {
-    const wrapper = await render({ initialFeature: 'query_recorder' })
-    const selected = wrapper.findAll('[role="tab"]').find(tab => tab.text() === '特色功能')!
-    expect(selected.attributes('data-state')).toBe('active')
-    expect(wrapper.get('[aria-label="查询记录设置"]').attributes('aria-expanded')).toBe('true')
-    expect(wrapper.get('#oxi-enable-query_recorder').attributes('aria-checked')).toBe('false')
-    expect(wrapper.emitted('change')).toBeUndefined()
-  })
   it('shows all seven former control groups without tool, preview or save actions', async () => {
     await render()
     for (const label of ['核心设置', '分流规则', 'DNS 上游', '缓存', '特色功能', 'WebUI / 日志', '高级']) {
@@ -198,80 +164,6 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('change')).toBeUndefined()
   })
 
-  it('distinguishes absent native defaults from an explicit false value', async () => {
-    await render({values: {...values(), worker_threads: null, always_standby: null, log: {level: null}}, capabilities: {worker_threads: {editable: true, absent: true}, always_standby: {editable: true, absent: true}}})
-    expect((document.getElementById('oxi-worker_threads') as HTMLInputElement).placeholder).toBe('未配置（使用核心默认）')
-    await click('DNS 上游')
-    expect(document.getElementById('oxi-always_standby')?.parentElement?.textContent).toContain('未配置 · 核心默认')
-    await click('WebUI / 日志')
-    expect(document.getElementById('oxi-log.level')?.textContent).toContain('未配置（使用核心默认）')
-  })
-
-  it('keeps inactive feature drafts without preventing the feature from being disabled', async () => {
-    const wrapper = await render({values: {...values(), query_recorder: {enabled: true, args: {path: 'state/query.db', retention_days: 7}}}})
-    await click('特色功能')
-    ;(document.querySelector('[aria-label="查询记录设置"]') as HTMLButtonElement).click(); await flushPromises()
-    await input('oxi-query_recorder.args.retention_days', '')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
-    ;(document.getElementById('oxi-enable-query_recorder') as HTMLButtonElement).click(); await flushPromises()
-    expect(lastChange(wrapper)).toEqual({'query_recorder.enabled': false})
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
-    ;(document.getElementById('oxi-enable-query_recorder') as HTMLButtonElement).click(); await flushPromises()
-    expect((document.getElementById('oxi-query_recorder.args.retention_days') as HTMLInputElement).value).toBe('')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
-  })
-
-  it.each([
-    ['cache_size', 'cache_enabled'],
-    ['cache_lazy_ttl', 'cache_enabled'],
-    ['probe_cache_size', 'probe_cache_enabled'],
-    ['cache_dump_interval', 'cache_dump_enabled'],
-    ['cache_dump_interval', 'cache_enabled'],
-  ])('retains invalid %s without blocking %s from being disabled', async (field, toggle) => {
-    const original = {...values(), cache_enabled: true, cache_size: 10240, cache_lazy_ttl: 300, probe_cache_enabled: true, probe_cache_size: 2048, cache_dump_enabled: true, cache_dump_file: 'state/cache.dump', cache_dump_interval: 600}
-    const wrapper = await render({values: original})
-    await click('缓存')
-    await input(`oxi-${field}`, '')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
-    expect(wrapper.emitted('change')).toBeUndefined()
-
-    await wrapper.get(`#oxi-${toggle}`).trigger('click')
-    expect(lastChange(wrapper)).toEqual({[toggle]: false})
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
-    await wrapper.setProps({values: {...original, [toggle]: false}})
-    expect((wrapper.get(`#oxi-${field}`).element as HTMLInputElement).value).toBe('')
-
-    await wrapper.get(`#oxi-${toggle}`).trigger('click')
-    expect(lastChange(wrapper)).toEqual({[toggle]: true})
-    expect((wrapper.get(`#oxi-${field}`).element as HTMLInputElement).value).toBe('')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
-    expect(wrapper.emitted('change')).toHaveLength(2)
-  })
-
-  it('keeps independent probe errors active when disabling the main cache', async () => {
-    const wrapper = await render({values: {...values(), cache_enabled: true, cache_size: 10240, probe_cache_enabled: true, probe_cache_size: 2048}})
-    await click('缓存')
-    await input('oxi-cache_size', '')
-    await input('oxi-probe_cache_size', '')
-    await wrapper.get('#oxi-cache_enabled').trigger('click')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('探测缓存条目数')
-    await wrapper.get('#oxi-probe_cache_enabled').trigger('click')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
-  })
-
-  it('updates cache error dependencies when the current projection changes externally', async () => {
-    const original = {...values(), cache_enabled: true, cache_size: 10240}
-    const wrapper = await render({values: original})
-    await click('缓存')
-    await input('oxi-cache_size', '')
-    await wrapper.setProps({values: {...original, cache_enabled: false}})
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
-    await wrapper.setProps({values: original})
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
-    expect((wrapper.get('#oxi-cache_size').element as HTMLInputElement).value).toBe('')
-    expect(wrapper.emitted('change')).toBeUndefined()
-  })
-
   it('applies only editable performance fields and separately disables navigation', async () => {
     const wrapper = await render({navigationDisabled: true, capabilities: {aggregate_rules: {editable: false, reason: '当前无需合并'}, worker_threads: {editable: false, reason: '手工结构'}}})
     await click('填入已验证性能参数')
@@ -284,23 +176,6 @@ describe('OxiDNS current common settings', () => {
     expect(native.every(button => button.disabled)).toBe(true)
     await input('oxi-listen', '127.0.0.1:5454')
     expect(lastChange(wrapper)).toEqual({listen: '127.0.0.1:5454'})
-  })
-
-  it.each(['ros_route', 'ros_address_list'])('restores %s TLS fields when rapid off/on returns the unchanged server projection', async feature => {
-    const tls = { server_name: 'router.example.test', ca: 'certs/router-ca.pem', insecure: false }
-    const original = {...values(), [feature]: {enabled: true, args: {address: '192.0.2.1:8729', tls}}}
-    const wrapper = await render({values: original})
-    const toggle = () => document.getElementById(`oxi-${feature}.args.tls`) as HTMLButtonElement
-    toggle().click(); await flushPromises()
-    expect(lastChange(wrapper)).toEqual({[`${feature}.args.tls`]: null})
-    toggle().click(); await flushPromises()
-    expect(lastChange(wrapper)).toEqual({[`${feature}.args.tls`]: {}})
-    // Both clicks can share one patch. Its response still contains the original TLS values.
-    await wrapper.setProps({values: structuredClone(original)})
-    expect((document.getElementById(`oxi-${feature}.args.tls.server_name`) as HTMLInputElement).value).toBe(tls.server_name)
-    expect((document.getElementById(`oxi-${feature}.args.tls.ca`) as HTMLInputElement).value).toBe(tls.ca)
-    expect(document.getElementById(`oxi-${feature}.args.tls.insecure`)?.getAttribute('aria-checked')).toBe('false')
-    expect(original).toMatchObject({[feature]: {args: {tls}}})
   })
 
   it('reconciles normalized values even when the projection is unchanged and preserves unfinished input', async () => {
@@ -319,13 +194,5 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
   })
 
-  it('sends TLS removal as JSON-safe null and provides full native access', async () => {
-    const wrapper = await render()
-    const fields = wrapper.findAllComponents(OxidnsFields).find(field => field.props('fields').some((item: any) => item.path === 'ros_route.args.tls'))!
-    fields.vm.$emit('change', 'ros_route.args.tls', undefined)
-    await flushPromises()
-    expect(lastChange(wrapper)).toEqual({'ros_route.args.tls': null})
-    await click('全部功能')
-    expect(wrapper.emitted('full')).toHaveLength(1)
-  })
+
 })

@@ -10,8 +10,9 @@ vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn(), ruleTargets: vi.fn()
 vi.mock('@/lib/feedback', () => ({ confirmDanger: vi.fn(), notify: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
 vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 
+let connectionStart: string
 const connection = (id: string, host: string, sourceIP: string, extra: Record<string, unknown> = {}) => ({
-  id, upload: 100, download: 200, start: new Date(Date.now() - 5000).toISOString(), chains: ['HK', 'Proxy'],
+  id, upload: 100, download: 200, start: connectionStart, chains: ['HK', 'Proxy'],
   rule: 'RuleSet', rulePayload: 'telegram',
   metadata: { network: 'tcp', type: 'Redir', sourceIP, sourcePort: '5000', destinationIP: '1.1.1.1', destinationPort: '443', host, ...extra }
 })
@@ -25,7 +26,7 @@ async function render() {
   await flushPromises()
   return { wrapper, state: (wrapper.vm as any).$.setupState }
 }
-beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); vi.mocked(clientToolsApi.notes).mockResolvedValue({ data: { success: true, notes: {} } } as any) })
+beforeEach(() => { connectionStart = new Date(Date.now() - 5000).toISOString(); vi.clearAllMocks(); localStorage.clear(); vi.mocked(clientToolsApi.notes).mockResolvedValue({ data: { success: true, notes: {} } } as any) })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = '' })
 
 describe('connection helpers', () => {
@@ -262,7 +263,7 @@ describe('mihomo connections', () => {
     await wrapper.get('button[aria-label="展开 same.example:443（2 条连接）"]').trigger('click')
     expect(wrapper.findAll('[data-connection-id]')).toHaveLength(2)
     expect(wrapper.findAll('button[aria-label="断开 same.example:443"]')).toHaveLength(2)
-    await wrapper.findAll('button[aria-label="断开 same.example:443"]')[0].trigger('click')
+    await wrapper.get('[data-connection-id="a"] button[aria-label="断开 same.example:443"]').trigger('click')
     await flushPromises()
     expect(mihomoPanelApi.closeConnection).toHaveBeenCalledExactlyOnceWith('gw', 'a')
     expect(state.groups.find((g: any) => g.label === 'same.example:443').members).toHaveLength(1)

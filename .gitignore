@@ -61,4 +61,5 @@ private_key.pem
 /backend/agents/go-agent/test_metrics.go
 
 .bosun-uploads/
+/.ci-results/
 /providers/
