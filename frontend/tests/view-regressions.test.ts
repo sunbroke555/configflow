@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { AxiosHeaders } from 'axios'
 import type { Agent } from '@/types'
 import ProxyGroups from '@/views/ProxyGroups.vue'
@@ -110,7 +110,15 @@ describe('real view regressions with synthetic API data', () => {
   await clickText('回滚到发布前')
   await clickText('回滚并重启')
   expect(agentApi.rollbackDeployment).toHaveBeenCalledExactlyOnceWith('oxi', 'current-release')
-  expect(document.body.textContent).toContain('正在恢复发布前配置')
+  const rollbackRows = [...document.querySelectorAll('[data-agent-status-row="配置回滚"]')]
+  expect(rollbackRows).toHaveLength(2) // Agent card and open deployment history.
+  for (const element of rollbackRows) {
+   const row = new DOMWrapper(element)
+   expect(row.attributes('data-tone')).toBe('warning')
+   expect(row.get('button[aria-label="配置回滚：恢复中"]').isVisible()).toBe(true)
+   expect(row.get('[data-status-details]').isVisible()).toBe(false)
+  }
+  expect([...document.querySelectorAll('button')].some(button => button.textContent?.trim() === '回滚到发布前')).toBe(false)
  })
 
  it.each(['mihomo', 'mosdns', 'oxidns'])('Docker %s update opens guidance without starting a binary upgrade', async service_type => {
