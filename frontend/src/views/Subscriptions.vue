@@ -759,7 +759,7 @@ const providerDefaults = ref<Record<string, any>>({})
 const impactProfiles = ref('')
 const healthError = ref('')
 const providerHealth = computed({
-  get: () => form.value.health_check ? { ...form.value.health_check } : { enable: true, url: form.value.health_check_url || 'http://www.gstatic.com/generate_204', interval: 300, lazy: true },
+  get: () => form.value.health_check ? { ...form.value.health_check } : { enable: true, url: form.value.health_check_url || 'https://www.gstatic.com/generate_204', interval: 300, lazy: true },
   set: (value: Record<string, any>) => { form.value.health_check = value }
 })
 const showAddDialog = async () => {

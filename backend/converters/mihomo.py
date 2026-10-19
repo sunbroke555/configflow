@@ -142,7 +142,7 @@ def split_rules_and_rulesets(config_data: Dict[str, Any]) -> tuple:
 
 
 # Provider 健康检查默认地址
-DEFAULT_HEALTH_CHECK_URL = 'http://www.gstatic.com/generate_204'
+DEFAULT_HEALTH_CHECK_URL = 'https://www.gstatic.com/generate_204'
 
 
 def build_provider_health_check(source: Dict[str, Any]) -> Dict[str, Any]:
@@ -680,7 +680,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                     'name': 'Auto',
                     'type': 'url-test',
                     'proxies': all_proxy_names,
-                    'url': 'http://www.gstatic.com/generate_204',
+                    'url': 'https://www.gstatic.com/generate_204',
                     'interval': 300,
                     'tolerance': 100,
                     'lazy': True
