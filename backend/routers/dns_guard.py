@@ -33,6 +33,9 @@ NETWATCH_FIELDS = ('name', 'host', 'port', 'type', 'interval', 'timeout', 'start
                    'down-script', 'comment', 'disabled')
 # Pause only after the outage survives this long (at least two 10 s probes).
 PAUSE_CONFIRM = '15s'
+# Bypass networks this small are expanded into addresses for the resume flush.
+SMALL_EXEMPT_PREFIX = 30
+MAX_EXEMPT_HOSTS = 64
 RUNTIME_FIELDS = {'dynamic', 'invalid', 'bytes', 'packets', 'creation-time'}
 STAGE_TITLE = 'DNS 劫持'
 PATH_NAMES = {ADDRESSES: '放行地址', NAT: 'NAT', FILTER: '防火墙', NETWATCH: 'Netwatch'}
@@ -216,6 +219,21 @@ def resources(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
     return items
 
 
+def _exempt_hosts(bypass: List[str]) -> List[str]:
+    """Single addresses the resume flush must keep, from the collapsed list.
+
+    collapse_addresses merges adjacent hosts (OxiDNS .2 and mihomo .3 become
+    .2/31), so expand small networks back into addresses. Larger networks
+    cannot be matched by a plain address comparison and stay unprotected.
+    """
+    hosts = []
+    for cidr in bypass:
+        network = ipaddress.IPv4Network(cidr)
+        if network.prefixlen >= SMALL_EXEMPT_PREFIX:
+            hosts.extend(str(address) for address in network)
+    return hosts[:MAX_EXEMPT_HOSTS]
+
+
 def _netwatch_script(spec: Dict[str, Any], event: str) -> str:
     """Toggle the hijack pair and drop port-53 flows still bound to the old path.
 
@@ -230,9 +248,8 @@ def _netwatch_script(spec: Dict[str, Any], event: str) -> str:
         stale = f'dst-port=53 and dstnat and reply-src-address={agent}'
     else:
         toggle = f'/ip firewall nat enable [find comment="{HIJACK_COMMENT}"]'
-        hosts = [cidr.split('/')[0] for cidr in spec['bypass'] if cidr.endswith('/32')]
         stale = ' and '.join(['dst-port=53 and !dstnat', f'dst-address!={agent}']
-                             + [f'src-address!={host}' for host in hosts])
+                             + [f'src-address!={host}' for host in _exempt_hosts(spec['bypass'])])
     flush = (f':foreach c in=[/ip firewall connection find where {stale}] do={{'
              ':do {/ip firewall connection remove $c} on-error={}}')
     if event == 'down':
