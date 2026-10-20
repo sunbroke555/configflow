@@ -670,13 +670,13 @@
 
     <!-- ===== Agent 日志 ===== -->
     <Dialog v-model:open="logsDialogVisible">
-      <DialogContent class="max-w-[900px]">
+      <DialogContent class="max-w-[1100px]">
         <DialogHeader>
           <DialogTitle>Agent 日志 · {{ currentAgent?.name }}</DialogTitle>
           <DialogDescription>日志位置由 Agent 按本机的服务配置自动查找。清空会删除所选文件中的全部日志，且无法恢复。</DialogDescription>
         </DialogHeader>
 
-        <div class="flex flex-col gap-3">
+        <div class="flex min-w-0 flex-col gap-3">
           <div class="flex flex-wrap items-center gap-2">
             <Select v-model="selectedLogSource" :disabled="logSourcesLoading" @update:model-value="value => onLogSourceChange(String(value))">
               <SelectTrigger class="h-9 w-[260px] bg-background/50 text-[13px] max-sm:w-full">
@@ -713,10 +713,11 @@
             {{ currentLogLocation }}
           </p>
 
-          <pre
+          <AgentLogLines
             ref="logsPaneRef"
-            class="m-0 max-h-[46dvh] overflow-auto rounded-lg border border-border/50 bg-background/45 p-3 font-mono text-[11.5px] leading-[1.7] whitespace-pre-wrap text-foreground/85"
-          >{{ logsLoading && !logs ? '正在读取日志…' : logs || '该日志暂无内容' }}</pre>
+            :text="logs"
+            :notice="logsNotice || (logsLoading && !logs ? '正在读取日志…' : '')"
+          />
         </div>
 
         <DialogFooter>
@@ -817,6 +818,7 @@ import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFA
 import { supportsAgentSettings, type AgentSettingsContext } from '@/lib/agentSettings'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import AgentTraffic from '@/components/agents/AgentTraffic.vue'
+import AgentLogLines from '@/components/agents/AgentLogLines.vue'
 import GatewayInstallWizard from '@/components/agents/GatewayInstallWizard.vue'
 import { Motion } from 'motion-v'
 import {
@@ -1048,6 +1050,7 @@ let coreInstallRequest = 0
 const dockerComposeContent = ref('')
 const dockerRunCommand = ref('')
 const logs = ref('')
+const logsNotice = ref('')
 const logSources = ref<AgentLogSource[]>([])
 const logSourcesLoading = ref(false)
 const logsLoading = ref(false)
@@ -1057,7 +1060,7 @@ const currentAgent = ref<Agent | null>(null)
 const currentMetricsAgent = ref<Agent | null>(null)
 const metricsHistory = ref<any[]>([])
 const metricsLoading = ref(false)
-const logsPaneRef = ref<HTMLElement | null>(null)
+const logsPaneRef = ref<InstanceType<typeof AgentLogLines> | null>(null)
 
 const createScriptForm = () => ({
   installType: 'shell',
@@ -2404,12 +2407,14 @@ const canClearLog = computed(() => {
 const viewLogs = async (agent: Agent) => {
   currentAgent.value = agent
   logs.value = ''
+  logsNotice.value = ''
   logSources.value = []
   selectedLogSource.value = ''
   customLogPath.value = ''
   logsDialogVisible.value = true
   await loadLogSources()
-  await loadLogs()
+  // 来源列表读取失败时保留失败原因，不被「请输入自定义日志路径」覆盖
+  if (!logsNotice.value) await loadLogs()
 }
 
 // 读取 Agent 解析出的日志来源，默认选中第一个可读来源
@@ -2424,7 +2429,7 @@ const loadLogSources = async () => {
   } catch (error: any) {
     logSources.value = []
     selectedLogSource.value = 'custom'
-    logs.value = `获取日志来源失败: ${error.response?.data?.message || error.message || '未知错误'}`
+    logsNotice.value = `获取日志来源失败: ${error.response?.data?.message || error.message || '未知错误'}`
   } finally {
     logSourcesLoading.value = false
   }
@@ -2435,12 +2440,13 @@ const loadLogs = async () => {
   if (!currentAgent.value || !selectedLogSource.value) return
 
   const source = currentLogSource.value
+  logsNotice.value = ''
   if (selectedLogSource.value === 'custom' && !customLogPath.value) {
-    logs.value = '请输入自定义日志路径'
+    logsNotice.value = '请输入自定义日志路径'
     return
   }
   if (source?.kind === 'unavailable') {
-    logs.value = source.path ? `${source.note}\n${source.path}` : source.note || '该日志不可读'
+    logsNotice.value = source.path ? `${source.note}\n${source.path}` : source.note || '该日志不可读'
     return
   }
 
@@ -2453,29 +2459,26 @@ const loadLogs = async () => {
     if (data.success) {
       logs.value = [data.logs, data.error_logs].filter(Boolean).join('\n')
     } else {
-      logs.value = `获取日志失败: ${data.message}`
+      logsNotice.value = `获取日志失败: ${data.message}`
     }
 
     // 等待DOM更新后滚动到底部
     await nextTick()
     scrollToBottom()
   } catch (error: any) {
-    logs.value = `获取日志失败: ${error.response?.data?.message || error.message || '未知错误'}`
+    logsNotice.value = `获取日志失败: ${error.response?.data?.message || error.message || '未知错误'}`
   } finally {
     logsLoading.value = false
   }
 }
 
 // 滚动到日志底部
-const scrollToBottom = () => {
-  const pane = logsPaneRef.value
-  if (pane) pane.scrollTop = pane.scrollHeight
-}
+const scrollToBottom = () => logsPaneRef.value?.scrollToBottom()
 
 // 刷新日志
 const refreshLogs = async () => {
   await loadLogs()
-  if (!logs.value.startsWith('获取日志失败')) notify.success('日志已刷新')
+  if (!logsNotice.value) notify.success('日志已刷新')
 }
 
 // 清空日志
@@ -2512,6 +2515,7 @@ const clearLogs = async () => {
 const onLogSourceChange = async (value: string) => {
   selectedLogSource.value = value
   logs.value = ''
+  logsNotice.value = ''
   if (value !== 'custom') {
     customLogPath.value = ''
     await loadLogs()
