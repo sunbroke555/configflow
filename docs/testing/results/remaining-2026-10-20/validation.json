@@ -1,0 +1,18 @@
+{
+  "kind": "测试记录完整性校验；本次PR仅文档/证据，不代表重跑后续主线产品套件",
+  "case_count": 36,
+  "counts": {
+    "passed": 34,
+    "failed": 0,
+    "na": 2,
+    "running": 0,
+    "pending": 0
+  },
+  "embedded_snapshot_equals_json": true,
+  "step_lengths_match": true,
+  "passed_cases_all_steps_checked": true,
+  "old_expectations_archived": 6,
+  "known_sensitive_values_scanned": 15,
+  "product_code_changed": false,
+  "screenshots": "真实页面截图，未公开安装能力URL或凭据；原始私有证据不提交"
+}

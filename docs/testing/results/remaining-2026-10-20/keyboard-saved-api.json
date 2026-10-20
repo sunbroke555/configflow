@@ -1,0 +1,302 @@
+[
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-01",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组02－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-00",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组01－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-02",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组03－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-03",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组04－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-04",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组05－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-05",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组06－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-06",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组07－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-07",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组08－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-08",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组09－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-09",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组10－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-10",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组11－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-11",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组12－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-12",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组13－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-13",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组14－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-14",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组15－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-15",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组16－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-16",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组17－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-17",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组18－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-18",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组19－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-19",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组20－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-20",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组21－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-21",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组22－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-22",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组23－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-23",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组24－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  },
+  {
+    "aggregations": [],
+    "enabled": true,
+    "id": "remaining-mobile-24",
+    "manual_nodes": [
+      "DIRECT",
+      "REJECT"
+    ],
+    "name": "手机排序长名称测试组25－用于验证窄屏列表换行和按钮可达",
+    "subscriptions": [],
+    "type": "select"
+  }
+]

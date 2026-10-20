@@ -1,0 +1,16 @@
+{
+  "unit": "configflow-remaining-sites-b5605e7f.service",
+  "disable_stop_returncode": 0,
+  "unit_removed": true,
+  "directory_removed": true,
+  "http80_closed": true,
+  "unit_load_state": "LoadState=not-found\n",
+  "original_service_states_and_pids_unchanged": true,
+  "original_services_active": true,
+  "routes_unchanged": true,
+  "final_requests_log": "requests-final.jsonl",
+  "temporary_http_only": true,
+  "eth0_raw_json_unchanged": false,
+  "eth0_configuration_unchanged": true,
+  "eth0_runtime_only_difference": "IPv6 RA valid/preferred lifetimes refreshed; addresses, prefix, flags, link and state unchanged"
+}

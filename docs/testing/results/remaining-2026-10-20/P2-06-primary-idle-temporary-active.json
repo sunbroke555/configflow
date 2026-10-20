@@ -1,0 +1,134 @@
+{
+  "samples": [
+    {
+      "at": "2026-10-20T11:28:22.112466+00:00",
+      "time": 15071.73874425,
+      "agents": {
+        "primary": {
+          "connections": null,
+          "downloadTotal": 65078207,
+          "memory": 0,
+          "uploadTotal": 19160
+        },
+        "temporary": {
+          "connections": [
+            {
+              "chains": [
+                "DIRECT"
+              ],
+              "download": 7274680,
+              "id": "8728daa3-0529-4778-ae56-42f1de0158e0",
+              "metadata": {
+                "destinationGeoIP": null,
+                "destinationIP": "192.168.0.101",
+                "destinationIPASN": "",
+                "destinationPort": "14825",
+                "dnsMode": "normal",
+                "dscp": 0,
+                "host": "",
+                "inboundIP": "127.0.0.1",
+                "inboundName": "DEFAULT-MIXED",
+                "inboundPort": "17890",
+                "inboundUser": "",
+                "network": "tcp",
+                "process": "",
+                "processPath": "",
+                "rematchName": "",
+                "remoteDestination": "192.168.0.101",
+                "sniffHost": "",
+                "sourceGeoIP": null,
+                "sourceIP": "127.0.0.3",
+                "sourceIPASN": "",
+                "sourcePort": "58695",
+                "specialProxy": "",
+                "specialRules": "",
+                "type": "HTTP",
+                "uid": 0
+              },
+              "providerChains": [
+                ""
+              ],
+              "rule": "",
+              "rulePayload": "",
+              "start": "2026-10-20T11:27:06.643935568Z",
+              "upload": 137
+            }
+          ],
+          "downloadTotal": 9890911,
+          "memory": 0,
+          "uploadTotal": 23298
+        }
+      }
+    },
+    {
+      "at": "2026-10-20T11:28:25.151712+00:00",
+      "time": 15074.7778935,
+      "agents": {
+        "primary": {
+          "connections": null,
+          "downloadTotal": 65078207,
+          "memory": 0,
+          "uploadTotal": 19160
+        },
+        "temporary": {
+          "connections": [
+            {
+              "chains": [
+                "DIRECT"
+              ],
+              "download": 7569592,
+              "id": "8728daa3-0529-4778-ae56-42f1de0158e0",
+              "metadata": {
+                "destinationGeoIP": null,
+                "destinationIP": "192.168.0.101",
+                "destinationIPASN": "",
+                "destinationPort": "14825",
+                "dnsMode": "normal",
+                "dscp": 0,
+                "host": "",
+                "inboundIP": "127.0.0.1",
+                "inboundName": "DEFAULT-MIXED",
+                "inboundPort": "17890",
+                "inboundUser": "",
+                "network": "tcp",
+                "process": "",
+                "processPath": "",
+                "rematchName": "",
+                "remoteDestination": "192.168.0.101",
+                "sniffHost": "",
+                "sourceGeoIP": null,
+                "sourceIP": "127.0.0.3",
+                "sourceIPASN": "",
+                "sourcePort": "58695",
+                "specialProxy": "",
+                "specialRules": "",
+                "type": "HTTP",
+                "uid": 0
+              },
+              "providerChains": [
+                ""
+              ],
+              "rule": "",
+              "rulePayload": "",
+              "start": "2026-10-20T11:27:06.643935568Z",
+              "upload": 137
+            }
+          ],
+          "downloadTotal": 10185823,
+          "memory": 0,
+          "uploadTotal": 23298
+        }
+      }
+    }
+  ],
+  "rates": {
+    "primary": {
+      "active_connections": 0,
+      "download_bytes_per_second": 0.0
+    },
+    "temporary": {
+      "active_connections": 1,
+      "download_bytes_per_second": 97037.68
+    }
+  }
+}

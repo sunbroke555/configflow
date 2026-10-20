@@ -1,0 +1,8 @@
+[
+  {
+    "level": "error",
+    "message": "NotAllowedError Failed to execute 'writeText' on 'Clipboard': The Clipboard API has been blocked because of a permissions policy applied to the current document. See https://crbug.com/414348233 for more details.",
+    "timestamp": "2026-10-20T11:04:01.914Z",
+    "url": "http://127.0.0.1:14833/__clipboard_probe__"
+  }
+]

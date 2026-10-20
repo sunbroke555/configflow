@@ -1,0 +1,338 @@
+{
+  "P1-02": {
+    "updatedAt": "2026-10-20T11:12:03.764722+00:00",
+    "reason": "区分同一编辑会话的未完成输入和已保存关闭功能后的新会话；新会话恢复上次有效容量是现有设计，并非丢失仍在编辑的空值。",
+    "originalCase": {
+      "id": "P1-02",
+      "priority": "P1",
+      "title": "缓存关掉后，空着的缓存参数不挡住保存",
+      "precondition": "测试空间 → OxiDNS 设置 → 常用设置 → 缓存。先记下主缓存、国内探测缓存的开关和条目数。",
+      "steps": [
+        "开启主缓存，把“主缓存条目数”清空，再关闭主缓存，点保存草稿。",
+        "重新开启主缓存。",
+        "填回一个有效主缓存条目数；把“探测缓存条目数”清空，再关闭“启用国内探测缓存”并保存。",
+        "重新开启国内探测缓存，让条目数保持为空；只关闭主缓存，再尝试保存。",
+        "恢复两个缓存原来的值和开关，再保存。"
+      ],
+      "expected": "只校验仍开启的功能；重新开启后继续检查原来没填完的参数。",
+      "prs": [
+        {
+          "number": 239,
+          "url": "https://github.com/thsrite/configflow/pull/239"
+        }
+      ],
+      "recordTemplate": "待测；实际结果：________；证据：________。",
+      "kind": "网页操作",
+      "stepExpected": [
+        "可以保存，不再要求填写已经关闭的主缓存条目数。",
+        "未完成的输入仍在；此时空值应提示需要补齐，不能直接当作有效配置。",
+        "关闭的探测缓存不阻挡保存。",
+        "保存仍被探测缓存的空值阻止，并指向这个字段。关闭主缓存不能掩盖它的错误。",
+        "没有校验错误，测试数据已清理。"
+      ],
+      "stepCommands": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    "originalResult": {
+      "status": "failed",
+      "notes": "判定说明：这是清单预期与现有设计的差异，目前不列为已确认代码缺陷。\n做了什么：分别清空主缓存和探测缓存容量，关闭对应功能后保存；再检查启用功能时的空值校验，最后恢复原容量和开关。\n结果：关闭的缓存不会挡住保存；探测缓存仍开启却没有容量时，即使关闭主缓存也会正确禁止保存。\n与清单不一致的地方：第 2 步如果先保存、关闭设置再重开，重新启用主缓存会恢复上次有效容量 10240，而不是保留空输入。同一个编辑窗口内关闭再开启，则空输入仍在并会提示补齐。此差异已记录，尚不能直接认定为代码回归。",
+      "evidence": "真实网页操作；校验截图：results/lxc-2026-10-20/p1-02-probe-validation.png。容量已恢复主缓存 10240、探测缓存 2048，两者均开启。",
+      "steps": [
+        true,
+        false,
+        true,
+        true,
+        true
+      ],
+      "updatedAt": "2026-10-20T09:03:56.287495+00:00",
+      "classification": "expectation_difference"
+    }
+  },
+  "P1-05": {
+    "updatedAt": "2026-10-20T11:12:03.764722+00:00",
+    "reason": "受管插件改成自定义名称后，常用卡片按设计暂停编辑，完整参数与 YAML 仍保留容量和同步引用；恢复标准名称后恢复常用编辑。",
+    "originalCase": {
+      "id": "P1-05",
+      "priority": "P1",
+      "title": "删除、恢复缓存插件后，参数和调用都正确",
+      "precondition": "测试空间 → OxiDNS 设置。使用标准主缓存插件，先把“主缓存条目数”设为 4096 并保存。\n后面只在完整参数表单删改插件，YAML 用来查看结果。",
+      "steps": [
+        "切到完整参数，删除标准主缓存插件。",
+        "通过添加／恢复功能恢复主缓存。",
+        "查看 china_dns 等原本调用主缓存的标准执行链。",
+        "把主缓存插件的 tag 改成 manual_cache，查看执行链和 YAML。",
+        "切回常用设置核对容量，再回完整参数核对名称；最后恢复原名称。"
+      ],
+      "expected": "恢复不丢容量，删除不留悬空引用，改名能同步到调用方。",
+      "prs": [
+        {
+          "number": 239,
+          "url": "https://github.com/thsrite/configflow/pull/239"
+        }
+      ],
+      "recordTemplate": "待测；实际结果：________；证据：________。",
+      "kind": "网页操作",
+      "stepExpected": [
+        "标准执行链里对这个插件的调用也被清理，不留下找不到插件的引用。",
+        "容量还是 4096，不是被重置成默认值。",
+        "恢复的主缓存重新接入执行链，不是只创建了一个从未使用的插件。",
+        "明确引用这个插件的位置同步改名，没有残留旧 tag。",
+        "三种视图显示同一份配置。自己新增的自定义插件需要手工接入执行链，不属于本项自动恢复范围。"
+      ],
+      "stepCommands": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    "originalResult": {
+      "status": "failed",
+      "notes": "判定说明：这是清单预期与现有设计的差异，目前不列为已确认代码缺陷。\n独立实例14811（无核心）：浏览器删除主缓存后调用清干净，恢复容量4096且china_dns重新调用；改名manual_cache后引用同步、无旧tag。第5步常用设置无法核对容量：显示“暂不可编辑”，提示受管插件已重命名，请在完整参数编辑自定义配置；与清单“三种视图显示同一份配置”预期不符。已恢复lazy_cache并保存，容量仍4096。",
+      "evidence": "docs/testing/results/lxc-2026-10-20/drafts-cache-evidence.json；drafts-cache-restored-4096.png；drafts-cache-renamed-common-unavailable.png；drafts-cache-*.yaml",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        false
+      ],
+      "updatedAt": "2026-10-20T09:03:56.288212+00:00",
+      "classification": "expectation_difference"
+    }
+  },
+  "P1-06": {
+    "updatedAt": "2026-10-20T11:12:03.764722+00:00",
+    "reason": "同步中的正常界面禁止切换空间，不能用不存在的入口强行制造跨空间迟到响应。现场测阻止切换及恢复后隔离；旧响应失效保护另由回归测试覆盖。",
+    "originalCase": {
+      "id": "P1-06",
+      "priority": "P1",
+      "title": "同步配置失败时，刚输入的内容不能丢",
+      "precondition": "测试 OxiDNS 配置；浏览器开发者工具的 Network 可切为 Slow 3G。\n由开发人员先准备“自定义执行链仍引用某插件”的配置，作为删除失败场景。没有这份配置就不要猜测删除哪个插件。",
+      "steps": [
+        "切到 Slow 3G，在完整参数中修改一个标准插件，观察配置依赖同步期间的保存／发布按钮。",
+        "尝试删除准备好的、仍被自定义执行链引用的插件。",
+        "点“查看引用”定位使用处，再点“撤销”取消刚才未同步的删除。",
+        "再次制造相同错误，修正引用后点“重试”。",
+        "在 Slow 3G 下再发起一次同步，立即切换到另一个测试空间。"
+      ],
+      "expected": "同步中不能提交；失败有原因、草稿保留，撤销和重试可用，切空间不会串数据。",
+      "prs": [
+        {
+          "number": 239,
+          "url": "https://github.com/thsrite/configflow/pull/239"
+        }
+      ],
+      "recordTemplate": "待测；实际结果：________；证据：________。",
+      "kind": "需要故障测试环境",
+      "stepExpected": [
+        "同步尚未完成时，不能保存或发布这份中间状态。",
+        "出现具体引用位置或原因，不是悄悄成功；刚输入的草稿仍能看到。",
+        "能找到阻止删除的位置；只撤销未完成的修改，不清空其他已经同步的编辑。",
+        "这次可以完成依赖同步，草稿不用从头填写。",
+        "旧空间的迟到响应不能覆盖新空间。结束后把 Network 恢复 No throttling。"
+      ],
+      "stepCommands": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    "originalResult": {
+      "status": "na",
+      "notes": "独立实例14811（无核心）：用部署层10/15秒延迟等效慢网，已测同步中禁用保存、共享引用报具体位置、查看引用、撤销保留线程4、修正引用及503后重试成功。第5步未覆盖：慢同步中即使离开并放弃修改，“当前配置空间”仍禁用，响应完成后才允许切换，无法从正常浏览器操作制造迟到响应跨空间。已取消延迟/故障；不冒充全通过。",
+      "evidence": "docs/testing/results/lxc-2026-10-20/drafts-sync-evidence.json；drafts-sync-pending-buttons.png；drafts-sync-delete-reference-error.png；drafts-sync-reference-location.png；drafts-sync-corrected-retry-error.png；drafts-sync-retry-success.png；drafts-sync-fixed.yaml",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        false
+      ],
+      "updatedAt": "2026-10-20T08:42:40.883487+00:00",
+      "classification": "partial_or_na"
+    }
+  },
+  "P1-14": {
+    "updatedAt": "2026-10-20T11:12:03.764722+00:00",
+    "reason": "现版网关向导已使用登记后的 Agent 自动检测，不再复制脚本或粘贴 JSON；保持正常、歧义、坏响应和跨空间隔离的验证目标。",
+    "originalCase": {
+      "id": "P1-14",
+      "priority": "P1",
+      "title": "网关检测能填对地址，坏结果不覆盖原输入",
+      "precondition": "准备只有一个 IPv4 默认出口、且该出口只有一个 IPv4 的 Linux 测试机；需要 ip、curl、awk。\n本项只做向导第一步的网络检测，不安装、不应用网关。",
+      "steps": [
+        "打开 Linux 选择性网关向导，在第一步复制网络检测命令，到目标 Linux 终端执行。",
+        "把整段 JSON 粘贴回向导。",
+        "在目标机运行下面两条只读命令，与向导展开后的手动字段对照。",
+        "记下当前输入，改为粘贴“这不是JSON”。",
+        "若另有多默认出口／多 LAN 地址的测试机，在那台机器执行检测并粘贴。",
+        "关闭向导，换一个测试空间再打开。"
+      ],
+      "expected": "正常数据填得准；坏数据、歧义数据有提示且不乱写。检测不修改 IP 或路由。",
+      "prs": [
+        {
+          "number": 245,
+          "url": "https://github.com/thsrite/configflow/pull/245"
+        }
+      ],
+      "recordTemplate": "待测；实际结果：________；证据：________。",
+      "kind": "网页＋终端",
+      "stepExpected": [
+        "命令输出一段 JSON；不会要求先安装 Agent，也不会修改网络。",
+        "自动填入网卡、Linux IPv4、主路由地址和 LAN 网段。",
+        "网卡、地址、默认网关和网段一一对应。",
+        "明确提示格式错误，原来正确的字段没有被覆盖。",
+        "提示无法唯一确定，允许手填；不会随便选第一个地址。",
+        "不带入上一空间尚未提交的检测内容。"
+      ],
+      "stepCommands": [
+        "",
+        "",
+        "ip -4 addr show\nip -4 route show",
+        "",
+        "",
+        ""
+      ]
+    },
+    "originalResult": {
+      "status": "na",
+      "notes": "待测版已改为安装登记后由Agent自动检测，不再有复制检测命令/粘贴JSON入口，旧步骤1/2/4不适用，不算产品故障。已实测现版：自动识别eth0、192.168.0.36、主路由192.168.0.1和192.168.0.0/24，与目标ip只读输出一致；临时增加经ARP确认空闲的第二地址.242后重新检测明确提示不能确定，原字段保留，随后删除别名并恢复单地址检测。关闭向导换空间后主机IP为空，未带入未提交的.246。",
+      "evidence": "docs/testing/results/lxc-2026-10-20/gateway-autodetection.png；gateway-ambiguous-detection.png；gateway-profile-isolation.png",
+      "steps": [
+        false,
+        false,
+        true,
+        false,
+        true,
+        true
+      ],
+      "updatedAt": "2026-10-20T08:49:10.907978+00:00",
+      "classification": "partial_or_na"
+    }
+  },
+  "P2-02": {
+    "updatedAt": "2026-10-20T11:12:03.764722+00:00",
+    "reason": "移除的网络检测复制入口不再作为现版步骤；保留两个实际复制入口，并用本机 Permissions-Policy 真实拒绝现代剪贴板 API 验证回退。",
+    "originalCase": {
+      "id": "P2-02",
+      "priority": "P2",
+      "title": "HTTP 页面里的复制按钮能复制完整命令",
+      "precondition": "通过局域网 http:// 地址打开 ConfigFlow。打开一个纯文本编辑器。\n本项只复制和粘贴，不执行安装命令。",
+      "steps": [
+        "打开网关向导，复制第一步的检测命令，粘贴到文本编辑器。",
+        "在已有安装会话中复制安装命令，再粘贴到编辑器。",
+        "进入生成工作台的网关操作说明，复制命令并粘贴。",
+        "如果浏览器允许控制剪贴板权限，临时拒绝剪贴板 API 后再复制一次。"
+      ],
+      "expected": "每个入口的粘贴内容都完整；失败如实提示。",
+      "prs": [
+        {
+          "number": 247,
+          "url": "https://github.com/thsrite/configflow/pull/247"
+        }
+      ],
+      "recordTemplate": "待测；实际结果：________；证据：________。",
+      "kind": "网页操作",
+      "stepExpected": [
+        "开头、每一行和末尾都与页面一致，不是空内容或旧剪贴板文字。",
+        "弹窗内也能复制，多行内容没有截断。",
+        "这一入口同样得到完整命令；复制动作不开始安装或应用网络。",
+        "能回退复制则内容正确；真正失败必须提示失败，不能成功提示和旧剪贴板同时出现。完成后恢复权限。"
+      ],
+      "stepCommands": [
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    "originalResult": {
+      "status": "na",
+      "notes": "已通过真实局域网HTTP页面检查现有两个入口：安装向导复制命令128字符与显示内容逐字相等；生成工作台网关预览中复制操作说明333字符与显示文本逐字相等，剪贴板已从安装命令变成操作说明，复制不执行安装或应用网络。旧第1步检测命令入口在待测版已移除；IAB不暴露剪贴板权限控制，拒绝API权限分支未覆盖。本项按旧清单部分不适用，不把未测步骤勾成通过。",
+      "evidence": "docs/testing/results/lxc-2026-10-20/gateway-copy-evidence.json",
+      "steps": [
+        false,
+        true,
+        true,
+        false
+      ],
+      "updatedAt": "2026-10-20T08:56:41.184729+00:00",
+      "classification": "partial_or_na"
+    }
+  },
+  "P2-08": {
+    "updatedAt": "2026-10-20T11:27:14.376200+00:00",
+    "reason": "排序界面的提示为“空格或Esc放下”；Esc释放抓取，取消按钮才放弃整次未保存顺序。源码与真实键盘行为一致，原清单将Esc描述为撤销本次移动有误。手机五步分别用未准备和已真实发布的隔离会话查看，不为布局检查重新安装/发布/应用。",
+    "originalCase": {
+      "id": "P2-08",
+      "priority": "P2",
+      "title": "手机和键盘能完成网关、排序、监控操作",
+      "precondition": "浏览器开发者工具切到宽度 375px 的手机视图。测试空间准备长策略组名和较长列表。\n深色、浅色各做一轮。网关只查看步骤，不应用生产网络。",
+      "steps": [
+        "打开网关向导，逐步切换五个步骤，展开／收起说明。",
+        "打开“策略组 → 调整顺序”，上下滚动长列表。",
+        "在桌面用 Tab 聚焦某一组拖柄，按空格开始、方向键移动、再按空格完成；再做一次并按 Esc 取消。",
+        "在手机视图打开 Agent 页面，查看曲线并点系统监控、Mihomo／OxiDNS 面板。",
+        "换另一种明暗主题，重复以上操作。"
+      ],
+      "expected": "375px 下主要操作可用，键盘能完成或取消排序；长内容不会遮住按钮。",
+      "prs": [
+        {
+          "number": 245,
+          "url": "https://github.com/thsrite/configflow/pull/245"
+        },
+        {
+          "number": 247,
+          "url": "https://github.com/thsrite/configflow/pull/247"
+        },
+        {
+          "number": 248,
+          "url": "https://github.com/thsrite/configflow/pull/248"
+        },
+        {
+          "number": 258,
+          "url": "https://github.com/thsrite/configflow/pull/258"
+        }
+      ],
+      "recordTemplate": "待测；实际结果：________；证据：________。",
+      "kind": "网页操作",
+      "stepExpected": [
+        "页面不横向滚动，当前步骤能看见，必填字段和真实错误不藏在帮助里。",
+        "手机上弹窗全屏；列表可滚动，底部取消／保存始终能操作。",
+        "键盘可以移动；Esc 取消本次拖动，不乱改原顺序。",
+        "按钮能点，不被遮住；打开正确设备，长名称也能阅读。",
+        "文字、按钮状态和错误仍清楚，没有横向溢出。"
+      ],
+      "stepCommands": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    "originalResult": {
+      "status": "na",
+      "notes": "网关分支已在真实1280px标签页查看五步与帮助展开/收起，浅色深色均检查：页面宽度与scrollWidth均1280，无横向溢出，当前步骤及nft归属错误可见；键盘Enter切到安装步骤、右方向键聚焦发布步骤、空格选中，再Enter返回启用步骤有效。IAB不提供375px独立模拟能力，未改变共享窗口尺寸，因此不声称通过375px手机布局；排序与手机监控分支本工作代理未覆盖。",
+      "evidence": "docs/testing/results/lxc-2026-10-20/gateway-desktop-ui.json；gateway-dark-pending.png；gateway-light-pending.png",
+      "steps": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "updatedAt": "2026-10-20T08:58:20.282506+00:00",
+      "classification": "partial_or_na"
+    }
+  }
+}

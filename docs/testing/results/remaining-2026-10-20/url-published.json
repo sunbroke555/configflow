@@ -1,0 +1,244 @@
+{
+  "label": "url-published",
+  "scope": "真实注册Agent，正式prepare/activate后的读取；不直接重载核心",
+  "agent_id": "agent_1792492525522_5364b4",
+  "live_groups": [
+    {
+      "expected-status": "204",
+      "interval": 222,
+      "lazy": false,
+      "name": "B-测速测试组",
+      "proxies": [
+        "DIRECT"
+      ],
+      "timeout": 2345,
+      "tolerance": 50,
+      "type": "url-test",
+      "url": "http://192.168.0.101:14825/health-b",
+      "use": [
+        "手测四→五节点订阅"
+      ]
+    },
+    {
+      "expected-status": "204",
+      "interval": 111,
+      "lazy": false,
+      "name": "A-测速测试组",
+      "proxies": [
+        "DIRECT",
+        "香港02"
+      ],
+      "timeout": 1234,
+      "tolerance": 50,
+      "type": "url-test",
+      "url": "http://192.168.0.101:14825/health-a-new",
+      "use": [
+        "A-测速测试组_手测香港聚合_筛选"
+      ]
+    }
+  ],
+  "live_providers": {
+    "A-测速测试组_手测香港聚合_筛选": {
+      "exclude-filter": "01",
+      "health-check": {
+        "enable": false,
+        "expected-status": "204",
+        "interval": 300,
+        "lazy": true,
+        "timeout": 5000,
+        "url": "http://192.168.0.101:14825/health-aggregation"
+      },
+      "interval": 3600,
+      "path": "providers/group_filter_71f85033e317e25fbfba.yaml",
+      "type": "http",
+      "url": "http://192.168.0.101:14812/api/profiles/default/aggregations/agg_69107a0a/provider?token=[REDACTED]"
+    },
+    "手测四→五节点订阅": {
+      "health-check": {
+        "enable": false,
+        "expected-status": "204",
+        "interval": 300,
+        "lazy": true,
+        "timeout": 5000,
+        "url": "http://192.168.0.101:14825/health-provider"
+      },
+      "interval": 3600,
+      "path": "providers/手测四→五节点订阅.yaml",
+      "type": "http",
+      "url": "http://192.168.0.101:14812/api/profiles/default/subscriptions/manual-sub/proxies?token=[REDACTED]"
+    },
+    "手测香港聚合": {
+      "health-check": {
+        "enable": false,
+        "expected-status": "204",
+        "interval": 300,
+        "lazy": true,
+        "timeout": 5000,
+        "url": "http://192.168.0.101:14825/health-aggregation"
+      },
+      "interval": 3600,
+      "path": "providers/手测香港聚合.yaml",
+      "type": "http",
+      "url": "http://192.168.0.101:14812/api/profiles/default/aggregations/agg_69107a0a/provider?token=[REDACTED]"
+    }
+  },
+  "provider_file_sha256": {
+    "providers/手测四→五节点订阅.yaml": "bef8ab46560cd548c730034a16f6ebc06d103ce814059a6d104abe3cac0ed478",
+    "providers/group_filter_71f85033e317e25fbfba.yaml": "e9e8b618bcb1534e2ec96aea27f8636d0e730ac041a0f2c85552cb2bd8a40182",
+    "providers/手测香港聚合.yaml": "e9e8b618bcb1534e2ec96aea27f8636d0e730ac041a0f2c85552cb2bd8a40182"
+  },
+  "live_provider_definitions_sha256": "b157202929e5f10b352d3b87a8a461ba7d357797ae75cabe5107164f5ee8ad34",
+  "safety": {
+    "mixed-port": 17890,
+    "external-controller": "127.0.0.1:19091",
+    "dns": {
+      "enable": false
+    },
+    "tun": {
+      "enable": false
+    },
+    "allow-lan": false,
+    "bind-address": "127.0.0.1"
+  },
+  "runtime_groups": [
+    {
+      "all": [
+        "DIRECT",
+        "香港02",
+        "香港02",
+        "香港03"
+      ],
+      "expectedStatus": "204",
+      "name": "A-测速测试组",
+      "now": "DIRECT",
+      "testUrl": "http://192.168.0.101:14825/health-a-new",
+      "type": "URLTest"
+    },
+    {
+      "all": [
+        "DIRECT",
+        "香港01",
+        "香港02",
+        "日本01",
+        "广告",
+        "香港03"
+      ],
+      "expectedStatus": "204",
+      "name": "B-测速测试组",
+      "now": "DIRECT",
+      "testUrl": "http://192.168.0.101:14825/health-b",
+      "type": "URLTest"
+    }
+  ],
+  "runtime_provider_candidates": {
+    "A-测速测试组": [
+      {
+        "name": "DIRECT",
+        "type": "Direct"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      }
+    ],
+    "A-测速测试组_手测香港聚合_筛选": [
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "香港03",
+        "type": "Http"
+      }
+    ],
+    "B-测速测试组": [
+      {
+        "name": "DIRECT",
+        "type": "Direct"
+      }
+    ],
+    "default": [
+      {
+        "name": "DIRECT",
+        "type": "Direct"
+      },
+      {
+        "name": "REJECT",
+        "type": "Reject"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "B-测速测试组",
+        "type": "URLTest"
+      },
+      {
+        "name": "A-测速测试组",
+        "type": "URLTest"
+      }
+    ],
+    "手测四→五节点订阅": [
+      {
+        "name": "香港01",
+        "type": "Http"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "日本01",
+        "type": "Http"
+      },
+      {
+        "name": "广告",
+        "type": "Http"
+      },
+      {
+        "name": "香港03",
+        "type": "Http"
+      }
+    ],
+    "手测香港聚合": [
+      {
+        "name": "香港01",
+        "type": "Http"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "香港03",
+        "type": "Http"
+      }
+    ]
+  },
+  "deployments": [
+    {
+      "created_at": "2026-10-20T18:43:22.218061",
+      "deployment_id": "04196a4a-9031-43ba-a8c8-2e07b3214392",
+      "service_type": "mihomo",
+      "status": "failed",
+      "updated_at": "2026-10-20T18:43:22.247188"
+    },
+    {
+      "created_at": "2026-10-20T18:47:06.484147",
+      "deployment_id": "ac73d5f0-3f93-4d75-a02e-c141d17e24c6",
+      "service_type": "mihomo",
+      "status": "succeeded",
+      "updated_at": "2026-10-20T18:47:08.527495"
+    },
+    {
+      "created_at": "2026-10-20T18:44:39.225539",
+      "deployment_id": "dd739965-7430-451e-863c-3c8fa39fdc06",
+      "service_type": "mihomo",
+      "status": "succeeded",
+      "updated_at": "2026-10-20T18:44:41.255620"
+    }
+  ],
+  "redaction": "从原始真实API/运行配置逐字段提取候选、组/provider定义和部署状态；删除无关Agent完整状态、网络地址快照与监控历史；原始私有文件SHA记录如下。",
+  "private_source_sha256": "ce78efc319214d78325d1a85c583153f9697c5b29935195c4db4185c2c177c27"
+}

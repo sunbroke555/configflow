@@ -1,0 +1,225 @@
+{
+  "samples": [
+    {
+      "at": "2026-10-20T11:27:37.436974+00:00",
+      "monotonic": 15027.063068875,
+      "agents": {
+        "primary": {
+          "connections": [
+            {
+              "chains": [
+                "DIRECT"
+              ],
+              "download": 983224,
+              "id": "7b3e4774-bd73-4a0c-a05f-f6483a0185e2",
+              "metadata": {
+                "destinationGeoIP": null,
+                "destinationIP": "192.168.0.101",
+                "destinationIPASN": "",
+                "destinationPort": "14825",
+                "dnsMode": "normal",
+                "dscp": 0,
+                "host": "",
+                "inboundIP": "127.0.0.1",
+                "inboundName": "DEFAULT-MIXED",
+                "inboundPort": "7890",
+                "inboundUser": "",
+                "network": "tcp",
+                "process": "",
+                "processPath": "",
+                "rematchName": "",
+                "remoteDestination": "192.168.0.101",
+                "sniffHost": "",
+                "sourceGeoIP": null,
+                "sourceIP": "127.0.0.2",
+                "sourceIPASN": "",
+                "sourcePort": "35063",
+                "specialProxy": "",
+                "specialRules": "",
+                "type": "HTTP",
+                "uid": 0
+              },
+              "providerChains": [
+                ""
+              ],
+              "rule": "",
+              "rulePayload": "",
+              "start": "2026-10-20T11:27:06.642257676Z",
+              "upload": 135
+            }
+          ],
+          "downloadTotal": 64291775,
+          "memory": 0,
+          "uploadTotal": 19160
+        },
+        "temporary": {
+          "connections": [
+            {
+              "chains": [
+                "DIRECT"
+              ],
+              "download": 2949304,
+              "id": "8728daa3-0529-4778-ae56-42f1de0158e0",
+              "metadata": {
+                "destinationGeoIP": null,
+                "destinationIP": "192.168.0.101",
+                "destinationIPASN": "",
+                "destinationPort": "14825",
+                "dnsMode": "normal",
+                "dscp": 0,
+                "host": "",
+                "inboundIP": "127.0.0.1",
+                "inboundName": "DEFAULT-MIXED",
+                "inboundPort": "17890",
+                "inboundUser": "",
+                "network": "tcp",
+                "process": "",
+                "processPath": "",
+                "rematchName": "",
+                "remoteDestination": "192.168.0.101",
+                "sniffHost": "",
+                "sourceGeoIP": null,
+                "sourceIP": "127.0.0.3",
+                "sourceIPASN": "",
+                "sourcePort": "58695",
+                "specialProxy": "",
+                "specialRules": "",
+                "type": "HTTP",
+                "uid": 0
+              },
+              "providerChains": [
+                ""
+              ],
+              "rule": "",
+              "rulePayload": "",
+              "start": "2026-10-20T11:27:06.643935568Z",
+              "upload": 137
+            }
+          ],
+          "downloadTotal": 5565535,
+          "memory": 0,
+          "uploadTotal": 23298
+        }
+      }
+    },
+    {
+      "at": "2026-10-20T11:27:40.477491+00:00",
+      "monotonic": 15030.1036015,
+      "agents": {
+        "primary": {
+          "connections": [
+            {
+              "chains": [
+                "DIRECT"
+              ],
+              "download": 1081528,
+              "id": "7b3e4774-bd73-4a0c-a05f-f6483a0185e2",
+              "metadata": {
+                "destinationGeoIP": null,
+                "destinationIP": "192.168.0.101",
+                "destinationIPASN": "",
+                "destinationPort": "14825",
+                "dnsMode": "normal",
+                "dscp": 0,
+                "host": "",
+                "inboundIP": "127.0.0.1",
+                "inboundName": "DEFAULT-MIXED",
+                "inboundPort": "7890",
+                "inboundUser": "",
+                "network": "tcp",
+                "process": "",
+                "processPath": "",
+                "rematchName": "",
+                "remoteDestination": "192.168.0.101",
+                "sniffHost": "",
+                "sourceGeoIP": null,
+                "sourceIP": "127.0.0.2",
+                "sourceIPASN": "",
+                "sourcePort": "35063",
+                "specialProxy": "",
+                "specialRules": "",
+                "type": "HTTP",
+                "uid": 0
+              },
+              "providerChains": [
+                ""
+              ],
+              "rule": "",
+              "rulePayload": "",
+              "start": "2026-10-20T11:27:06.642257676Z",
+              "upload": 135
+            }
+          ],
+          "downloadTotal": 64390079,
+          "memory": 0,
+          "uploadTotal": 19160
+        },
+        "temporary": {
+          "connections": [
+            {
+              "chains": [
+                "DIRECT"
+              ],
+              "download": 3244216,
+              "id": "8728daa3-0529-4778-ae56-42f1de0158e0",
+              "metadata": {
+                "destinationGeoIP": null,
+                "destinationIP": "192.168.0.101",
+                "destinationIPASN": "",
+                "destinationPort": "14825",
+                "dnsMode": "normal",
+                "dscp": 0,
+                "host": "",
+                "inboundIP": "127.0.0.1",
+                "inboundName": "DEFAULT-MIXED",
+                "inboundPort": "17890",
+                "inboundUser": "",
+                "network": "tcp",
+                "process": "",
+                "processPath": "",
+                "rematchName": "",
+                "remoteDestination": "192.168.0.101",
+                "sniffHost": "",
+                "sourceGeoIP": null,
+                "sourceIP": "127.0.0.3",
+                "sourceIPASN": "",
+                "sourcePort": "58695",
+                "specialProxy": "",
+                "specialRules": "",
+                "type": "HTTP",
+                "uid": 0
+              },
+              "providerChains": [
+                ""
+              ],
+              "rule": "",
+              "rulePayload": "",
+              "start": "2026-10-20T11:27:06.643935568Z",
+              "upload": 137
+            }
+          ],
+          "downloadTotal": 5860447,
+          "memory": 0,
+          "uploadTotal": 23298
+        }
+      }
+    }
+  ],
+  "calculated_rates": {
+    "primary": {
+      "download_bytes_per_second": 32331.18,
+      "elapsed_seconds": 3.041,
+      "sources": [
+        "127.0.0.2"
+      ]
+    },
+    "temporary": {
+      "download_bytes_per_second": 96993.53,
+      "elapsed_seconds": 3.041,
+      "sources": [
+        "127.0.0.3"
+      ]
+    }
+  },
+  "rate_source": "Mihomo /connections total deltas; no flow sampler API used"
+}

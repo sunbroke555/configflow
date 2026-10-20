@@ -1,0 +1,61 @@
+{
+  "at": "2026-10-20T11:31:15.285282+00:00",
+  "status": "passed",
+  "scope": "仅停止精确自有流量客户端、原生systemd units、远端目录、本地14812/14825进程；未调用通用卸载器；14810仅删自有新Agent后台记录",
+  "stopped_local_processes": [
+    {
+      "resource": "fixture",
+      "pid": 45898,
+      "port": 14825,
+      "listener_closed": true
+    },
+    {
+      "resource": "app",
+      "pid": 99159,
+      "port": 14812,
+      "listener_closed": true
+    }
+  ],
+  "remote": {
+    "at": "2026-10-20T11:30:39.258407+00:00",
+    "removed_units": [
+      "configflow-remaining-groups-e7ee2f74-agent.service",
+      "configflow-remaining-groups-e7ee2f74-mihomo.service"
+    ],
+    "unit_files_absent": true,
+    "directory_absent": true,
+    "ports": {
+      "17890": "free",
+      "18084": "free",
+      "19091": "free",
+      "17995": "free"
+    },
+    "core_config_sha256": {
+      "/etc/mihomo/config.yaml": "84ed444981f71196f9064de1f56f897a2e81e9057dfa34767e48d967bc40dbe1",
+      "/etc/oxidns/config.yaml": "03d8869df297956b2652d37f2883b8fa07e3cc5a36f313fad868c6ad04d012ab"
+    },
+    "shared_binary_exists": true,
+    "shared_binary_sha256": "6de241191ca39f9ac1cd6e3194fc9303c19055d3549c8bdb4ff1349c89173819",
+    "original_services": "MainPID=87\nId=mihomo.service\nActiveState=active\n\nMainPID=89\nId=oxidns.service\nActiveState=active\n\nMainPID=5944\nId=configflow-agent-mihomo.service\nActiveState=active\n\nMainPID=4637\nId=configflow-agent-oxidns.service\nActiveState=active\n"
+  },
+  "checks": {
+    "original_four_service_pids_unchanged": true,
+    "addresses_unchanged": true,
+    "routes_unchanged": true,
+    "both_original_core_configs_unchanged_cleanup": true,
+    "original_mihomo_config_unchanged_since_migration": true,
+    "shared_mihomo_binary_unchanged": true,
+    "only_owned_id_removed": true,
+    "other_agent_identity_unchanged": true,
+    "temporary_core_config_unchanged_during_monitoring": true
+  },
+  "network_normalization": "仅忽略IPv6 RA valid_life_time/preferred_life_time/expires寿命倒计时",
+  "hash_scope": "两原核心配置在清理前后相同；原Mihomo另与Agent迁移前基线相同；未声称OxiDNS为开测最初hash基线",
+  "retained": [
+    "本地全部证据JSON/截图引用",
+    "本地私有Agent/config/unit备份",
+    "14812隔离workspace /tmp/configflow-gateway-lab-remaining-groups-4at5ee6g"
+  ],
+  "deleted_registered_agent_id": "agent_1792494905625_021678",
+  "root_owned_browser_tabs": "未操作root的tab8；由root自行关闭"
+}

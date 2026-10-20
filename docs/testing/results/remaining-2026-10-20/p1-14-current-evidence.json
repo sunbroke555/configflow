@@ -1,0 +1,36 @@
+{
+  "case": "P1-14",
+  "source_commit": "3f38649",
+  "actual_ui_scope": "root正常IAB：14811真实主程序+仅本地HTTP Agent协议夹具，非Linux实机采集",
+  "做了什么": "打开enrolled现有会话自动检测，展开四字段；保留值后让Agent HTTP响应变成invalid JSON，再点击重新自动检测",
+  "结果": "页面真实提示Agent返回网关数据无法解析，请刷新设备状态；四字段保留，API存储网络仍与expected逐字段相同；session phase仍enrolled，无发布记录。",
+  "stored_network": {
+    "address": "192.168.0.101",
+    "interface": "fixture-lan0",
+    "lan_cidr": "192.168.0.0/24",
+    "upstream_gateway": "192.168.0.1"
+  },
+  "stored_network_matches_valid_fixture": true,
+  "bad_agent_status_requests": [
+    {
+      "path": "/api/agents/agent_1792492737008_73e946/linux-gateway/status",
+      "method": "GET",
+      "profile": "remaining-gateway",
+      "status": 502,
+      "delay_seconds": 0,
+      "elapsed_ms": 7,
+      "time": 1792494149.311925
+    }
+  ],
+  "no_network_update_after_bad_status": true,
+  "agent_fixture_received_only_GET": true,
+  "mode_restored": "valid",
+  "actual_linux_scope": "单LAN/多地址实际采集、ip命令只读对应、跨空间清空沿用原.36真实手测；此坏响应补测不能宣称Linux网卡故障注入。",
+  "screenshots": [
+    "../root-ui/gateway-auto-valid.png",
+    "../root-ui/gateway-invalid-response-preserved.png"
+  ],
+  "updated_checklist": "复制检测命令/粘贴JSON旧入口已移除；改为已有已登记会话的Agent自动检测、只读网络对照、坏响应不覆盖、歧义提示、空间隔离。",
+  "session_private_sha256": "25100a629a72b643d23d754e2c806cd6b07c13c914e0e0a78fc2d4d0accfee38",
+  "no_install_publish_or_apply": true
+}

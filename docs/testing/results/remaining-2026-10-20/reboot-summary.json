@@ -1,0 +1,150 @@
+{
+  "systemctl_reboot_ssh_returncode": 255,
+  "before_boot_id": "e57ae69a-408c-4815-b485-f9ea8459f803",
+  "after_boot_id": "96510e65-1dc9-4d43-8343-0c4f9680785e",
+  "boot_id_changed": true,
+  "before_uptime": "7347.24 7347.24",
+  "after_uptime": "3.31 3.31",
+  "before_services": {
+    "configflow-agent-mihomo": "MainPID=3760\nExecMainStartTimestamp=Tue 2026-10-20 10:00:03 UTC\nActiveState=active\n",
+    "configflow-agent-oxidns": "MainPID=3371\nExecMainStartTimestamp=Tue 2026-10-20 09:55:03 UTC\nActiveState=active\n",
+    "mihomo": "MainPID=3489\nExecMainStartTimestamp=Tue 2026-10-20 09:55:57 UTC\nActiveState=active\n",
+    "oxidns": "MainPID=3510\nExecMainStartTimestamp=Tue 2026-10-20 09:55:59 UTC\nActiveState=active\n"
+  },
+  "after_services": {
+    "configflow-agent-mihomo": "MainPID=144\nExecMainStartTimestamp=Tue 2026-10-20 10:37:23 UTC\nActiveState=active\n",
+    "configflow-agent-oxidns": "MainPID=145\nExecMainStartTimestamp=Tue 2026-10-20 10:37:23 UTC\nActiveState=active\n",
+    "mihomo": "MainPID=199\nExecMainStartTimestamp=Tue 2026-10-20 10:37:24 UTC\nActiveState=active\n",
+    "oxidns": "MainPID=200\nExecMainStartTimestamp=Tue 2026-10-20 10:37:24 UTC\nActiveState=active\n"
+  },
+  "post_reboot_gateway_status": {
+    "detection": {
+      "default_routes": [
+        {
+          "gateway": "192.168.0.1",
+          "interface": "eth0"
+        }
+      ],
+      "interfaces": [
+        {
+          "addresses": [
+            "192.168.0.36/24"
+          ],
+          "name": "eth0"
+        },
+        {
+          "addresses": [
+            "198.18.0.1/30"
+          ],
+          "name": "Mihomo"
+        }
+      ],
+      "suggested": {
+        "address": "192.168.0.36",
+        "interface": "eth0",
+        "lan_cidr": "192.168.0.0/24",
+        "upstream_gateway": "192.168.0.1"
+      }
+    },
+    "enabled_in_config": true,
+    "managed": {
+      "active": true,
+      "applied_at": "2026-10-20T10:37:26Z",
+      "healthy": true,
+      "pending": false,
+      "spec": {
+        "address": "192.168.0.36",
+        "interface": "eth0",
+        "lan_cidr": "192.168.0.0/24",
+        "upstream_gateway": "192.168.0.1"
+      }
+    },
+    "success": true,
+    "supported": true
+  },
+  "post_reboot_http_status": 200,
+  "manual_apply_used_after_reboot": false,
+  "ssh_disconnect_stderr": "Connection to 192.168.0.36 closed by remote host.\n",
+  "before_table_handle": 17,
+  "after_table_handle": 4,
+  "after_journal_pinned": true,
+  "postboot_client": {
+    "ssh_returncode": 0,
+    "results": [
+      {
+        "host": "example.com",
+        "port": 80,
+        "time": 1792492740.1519723,
+        "answers": [
+          "172.66.147.243",
+          "104.20.23.154"
+        ],
+        "success": true,
+        "status_line": "HTTP/1.1 200 OK",
+        "local": [
+          "192.168.0.241",
+          60282
+        ]
+      },
+      {
+        "host": "example.net",
+        "port": 80,
+        "time": 1792492740.830447,
+        "answers": [
+          "198.18.0.4"
+        ],
+        "success": true,
+        "status_line": "HTTP/1.1 200 OK",
+        "local": [
+          "192.168.0.241",
+          44634
+        ]
+      },
+      {
+        "host": "1.1.1.1",
+        "port": 80,
+        "time": 1792492741.747394,
+        "answers": [
+          "1.1.1.1"
+        ],
+        "success": true,
+        "status_line": "HTTP/1.1 301 Moved Permanently",
+        "local": [
+          "192.168.0.241",
+          49854
+        ]
+      },
+      {
+        "host": "192.168.0.101",
+        "port": 14824,
+        "time": 1792492741.8534641,
+        "answers": [
+          "192.168.0.101"
+        ],
+        "success": true,
+        "status_line": "HTTP/1.0 200 OK",
+        "local": [
+          "192.168.0.241",
+          59696
+        ]
+      }
+    ],
+    "stderr": ""
+  },
+  "postboot_socks_events": [
+    {
+      "time": 1792492741.262518,
+      "source": "192.168.0.36",
+      "destination": "example.net",
+      "port": 80,
+      "connected": true
+    },
+    {
+      "time": 1792492741.80398,
+      "source": "192.168.0.36",
+      "destination": "1.1.1.1",
+      "port": 80,
+      "connected": true
+    }
+  ]
+}

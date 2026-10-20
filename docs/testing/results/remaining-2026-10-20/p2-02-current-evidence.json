@@ -1,0 +1,63 @@
+{
+  "case": "P2-02",
+  "source_commit": "3f38649",
+  "status": "现版真实HTTP复制入口和实际现代API拒权后回退均通过；旧已移除入口单列差异",
+  "做了什么": [
+    "root正常IAB新tab打开127.0.0.1:14833权限策略探针；isSecureContext为true，真实点击现代writeText一次",
+    "浏览器真实NotAllowedError，原始console异常message明确permissions policy blocked；没有覆盖window/navigator/execCommand，没有模拟权限返回",
+    "同origin登录字节相同的真实产品，打开remaining-gateway现有会话安装核心页，先设置旧剪贴板marker，点击原产品复制安装命令按钮",
+    "读回剪贴板与页面显示命令逐字相等、不是旧marker，产品toast安装命令已复制；原剪贴板已由root恢复",
+    "关闭临时proxy tab并停止仅loopback14833代理；14811与14831/14832夹具仍健康"
+  ],
+  "实际复制核对": {
+    "secureContext": true,
+    "permissionsPolicyBlocksModernClipboard": true,
+    "exactMatch": true,
+    "notOldMarker": true,
+    "displayLength": 128,
+    "clipboardLength": 128,
+    "sha256": "845a0748b10ef9fec24bc4d71dabb39b0df1c8a59b34450309df1a673abffb07"
+  },
+  "代理原样性": {
+    "HTML_JS_API_4响应逐字相同": true,
+    "identity_evidence": "clipboard-proxy-byte-identity.json",
+    "permissions_policy": "clipboard-write=(), clipboard-read=()",
+    "scope": "仅独立回环部署响应头限制现代API，不改变原14811响应头或浏览器持久权限"
+  },
+  "实际拒权证据": {
+    "NotAllowedError": true,
+    "console明确permissions_policy": true,
+    "log": "../root-ui/clipboard-policy-browser-log.json",
+    "screenshots": [
+      "../root-ui/clipboard-real-policy-denial.png"
+    ]
+  },
+  "既有真实入口证据": "原gateway-copy-evidence.json保留LAN HTTP安装命令128字符/网关说明333字符逐字相同；相关copyText与入口文件在952fc97和3f38649间字节相同",
+  "清单修订": "删除“向导第一步复制检测命令”旧入口，保留现版安装命令、网关操作说明复制；可用正规部署Permissions-Policy实际拒绝现代API后验证fallback。此次不需要CUA提供权限切换接口。",
+  "范围边界": "本轮实际拒权回退覆盖现版安装命令入口；网关操作说明正常HTTP复制沿用既有真实证据，拒权行为的相同copyText路径另有定向单测。命令正文与临时capability不输出、不公开；仅保留长度/SHA/布尔值。",
+  "cleanup": {
+    "proxy_pid": 6152,
+    "port_14833_closed": true,
+    "app_14811_healthy": true,
+    "browser_permission_preferences_changed": false,
+    "agent_fixture_healthy_after_proxy_stop": [
+      {
+        "service": "mihomo",
+        "port": 14831,
+        "HTTP": 200,
+        "success": true
+      },
+      {
+        "service": "oxidns",
+        "port": 14832,
+        "HTTP": 200,
+        "success": true
+      }
+    ]
+  },
+  "primary_sources": [
+    "https://www.w3.org/TR/secure-contexts/",
+    "https://developer.chrome.com/docs/privacy-security/permissions-policy",
+    "https://web.dev/articles/async-clipboard"
+  ]
+}

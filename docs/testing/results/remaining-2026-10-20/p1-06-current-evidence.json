@@ -1,0 +1,34 @@
+{
+  "case": "P1-06",
+  "source_commit": "3f38649",
+  "actual_browser": "root正常IAB真实表单操作；未改浏览器state",
+  "做了什么": "A删除标准主缓存发起真实native apply；12秒部署层延迟内返回并放弃；当前配置空间明确disabled；请求结束后才切B并重开设置",
+  "实际结果": {
+    "同步中空间选择被阻止": true,
+    "A和B已保存settings完全等于准备基线": {
+      "remaining-oxi-a": true,
+      "remaining-oxi-b": true
+    },
+    "A线程": 8,
+    "B线程": 6,
+    "A和B主缓存容量": 4096,
+    "A和B主缓存TTL": 900,
+    "浏览器截图": "../root-ui/draft-space-blocked-pending.png",
+    "实际慢请求": [
+      {
+        "path": "/api/oxidns/native-settings/apply",
+        "method": "POST",
+        "profile": "remaining-oxi-a",
+        "status": 200,
+        "delay_seconds": 12,
+        "elapsed_ms": 12048,
+        "time": 1792493452.805745
+      }
+    ],
+    "延迟已恢复0": true,
+    "B哨兵截图": "../root-ui/draft-b-after-late-response.png"
+  },
+  "清单修订": "第5步改为：同步未完成时尝试正常离开并放弃，空间选择应继续禁止；响应结束后可切换新空间且内容正确。当前UI不允许旧步骤强行同步中跨空间。",
+  "证据边界": "浏览器没有在请求未完成时成功切空间，不能写成已经手测过“跨空间后迟到回包”。真正改变profile后的迟到回包丢弃由oxidns-settings-native-sync/profile-context组件单测证明；两类证据分开记录。",
+  "targeted_tests": "Node24.19前端8文件154项通过，包含旧profile迟到回包忽略与请求期间两次切换拦截；后端190项通过"
+}

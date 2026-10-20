@@ -1,0 +1,9 @@
+{
+  "secureContext": true,
+  "permissionsPolicyBlocksModernClipboard": true,
+  "exactMatch": true,
+  "notOldMarker": true,
+  "displayLength": 128,
+  "clipboardLength": 128,
+  "sha256": "845a0748b10ef9fec24bc4d71dabb39b0df1c8a59b34450309df1a673abffb07"
+}

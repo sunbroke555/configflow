@@ -1,0 +1,31 @@
+{
+  "case": "P1-10",
+  "status": "passed",
+  "operation": "沿用已实测网页1—5步；根IAB手动拉取4节点后正式管理发布，网页刷新真实远程provider；HTTP源增加香港03后网页拉取5节点，再在Mihomo面板分别点击原订阅、聚合、A专属筛选provider更新。",
+  "result": "真实Agent prepare/activate成功。Mihomo API四→五：A从[DIRECT,香港02,香港02]变为[DIRECT,香港02,香港02,香港03]；B从[DIRECT,香港01,香港02,日本01,广告]变为[DIRECT,香港01,香港02,日本01,广告,香港03]。源/聚合/A专属筛选节点数由4/2/1变为5/3/2；manual香港02保留；live组配置与provider定义不变。",
+  "covered_steps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "pending_steps": [],
+  "limitations": [
+    "无Surge/Loon，明确不适用第7步",
+    "实际发布最终A使用香港聚合加组内exclude01，含手动香港02；前5步的直接订阅正则UI证据沿用原实测",
+    "节点为不可达HTTP夹具，只验真实Mihomo载入/候选/刷新，不宣称网络测速或代理可用"
+  ],
+  "evidence": [
+    "initial-managed-deployment.json",
+    "initial-four.json",
+    "source-five-ready.json",
+    "refreshed-five.json"
+  ],
+  "setup_notes": "初次手动拉取因HTTP夹具缺UTF8 charset产生ReaderError，已修复夹具响应头并经网页真实拉取成功，未注入缓存。",
+  "not_applicable_steps": [
+    7
+  ],
+  "scope": "用户实际使用的Mihomo分支；无Surge/Loon，第7步不适用"
+}
