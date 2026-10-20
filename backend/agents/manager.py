@@ -1073,7 +1073,37 @@ class AgentManager:
         except requests.exceptions.RequestException as e:
             return {'success': False, 'message': f'Connection error: {str(e)}'}
 
-    def get_agent_logs(self, agent_id: str, lines: int = 100, log_path: str = '') -> Dict[str, Any]:
+    def get_agent_log_sources(self, agent_id: str) -> Dict[str, Any]:
+        """
+        获取 Agent 本机解析出的日志来源
+
+        旧版 Agent 没有该接口时返回 legacy=True，由前端退回自动检测。
+        """
+        agent = self.get_agent_by_id(agent_id)
+        if not agent:
+            return {'success': False, 'message': 'Agent not found'}
+
+        agent_url = f"http://{agent['host']}:{agent['port']}/api/logs/sources"
+
+        try:
+            response = requests.get(
+                agent_url,
+                headers={
+                    'Authorization': f'Bearer {agent["token"]}'
+                },
+                timeout=5
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            if response.status_code == 404:
+                return {'success': True, 'legacy': True, 'sources': []}
+            return {'success': False, 'message': f'HTTP {response.status_code}'}
+
+        except requests.exceptions.RequestException as e:
+            return {'success': False, 'message': f'Connection error: {str(e)}'}
+
+    def get_agent_logs(self, agent_id: str, lines: int = 100, log_path: str = '', source: str = '') -> Dict[str, Any]:
         """
         获取 Agent 日志
 
@@ -1081,6 +1111,7 @@ class AgentManager:
             agent_id: Agent ID
             lines: 日志行数
             log_path: 可选的自定义日志路径
+            source: 可选的日志来源 ID（来自 get_agent_log_sources）
 
         Returns:
             Dict: 日志内容
@@ -1089,11 +1120,12 @@ class AgentManager:
         if not agent:
             return {'success': False, 'message': 'Agent not found'}
 
-        # 构建 URL,包含可选的日志路径参数
+        # 构建 URL,包含可选的日志来源或路径参数
+        from urllib.parse import quote
         agent_url = f"http://{agent['host']}:{agent['port']}/api/logs?lines={lines}"
-        if log_path:
-            # URL 编码日志路径
-            from urllib.parse import quote
+        if source:
+            agent_url += f"&source={quote(source)}"
+        elif log_path:
             agent_url += f"&log_path={quote(log_path)}"
 
         try:
@@ -1113,13 +1145,14 @@ class AgentManager:
         except requests.exceptions.RequestException as e:
             return {'success': False, 'message': f'Connection error: {str(e)}'}
 
-    def clear_agent_log(self, agent_id: str, log_path: str) -> Dict[str, Any]:
+    def clear_agent_log(self, agent_id: str, log_path: str = '', source: str = '') -> Dict[str, Any]:
         """
         清空 Agent 指定日志文件
 
         Args:
             agent_id: Agent ID
             log_path: 日志文件路径
+            source: 日志来源 ID，优先于 log_path
 
         Returns:
             Dict: 操作结果
@@ -1133,7 +1166,7 @@ class AgentManager:
         try:
             response = requests.post(
                 agent_url,
-                json={'log_path': log_path},
+                json={'source': source} if source else {'log_path': log_path},
                 headers={
                     'Authorization': f'Bearer {agent["token"]}'
                 },

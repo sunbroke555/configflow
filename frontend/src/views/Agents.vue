@@ -673,75 +673,69 @@
       <DialogContent class="max-w-[900px]">
         <DialogHeader>
           <DialogTitle>Agent 日志 · {{ currentAgent?.name }}</DialogTitle>
-          <DialogDescription>选择此 Agent 机器上的日志文件查看内容。清空会删除所选文件中的全部日志，且无法恢复。</DialogDescription>
+          <DialogDescription>日志位置由 Agent 按本机的服务配置自动查找。清空会删除所选文件中的全部日志，且无法恢复。</DialogDescription>
         </DialogHeader>
 
         <div class="flex flex-col gap-3">
           <div class="flex flex-wrap items-center gap-2">
-            <Select v-model="selectedLogPath" @update:model-value="value => onLogPathChange(String(value))">
-              <SelectTrigger class="h-9 w-[260px] bg-background/50 text-[13px]">
-                <SelectValue placeholder="选择日志文件" />
+            <Select v-model="selectedLogSource" :disabled="logSourcesLoading" @update:model-value="value => onLogSourceChange(String(value))">
+              <SelectTrigger class="h-9 w-[260px] bg-background/50 text-[13px] max-sm:w-full">
+                <SelectValue placeholder="选择日志" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem v-for="opt in logPathOptions" :key="opt.value" :value="opt.value">
-                  {{ opt.label }}
+                <SelectItem v-for="source in logSources" :key="source.id" :value="source.id">
+                  {{ source.label }}{{ source.kind === 'unavailable' ? '（不可读）' : '' }}
                 </SelectItem>
                 <SelectItem value="custom">自定义路径…</SelectItem>
               </SelectContent>
             </Select>
 
-            <template v-if="selectedLogPath === 'custom'">
+            <template v-if="selectedLogSource === 'custom'">
               <Input
                 v-model="customLogPath"
-                class="w-[300px] bg-background/50 font-mono"
+                class="w-[300px] bg-background/50 font-mono max-sm:w-full"
                 placeholder="/var/log/your-file.log"
-                @keyup.enter="validateAndLoadCustomPath"
+                @keyup.enter="loadLogs"
               />
               <Button
                 variant="outline"
                 class="border-border/60 bg-background/40"
-                :disabled="validatingPath"
-                @click="validateAndLoadCustomPath"
+                :disabled="logsLoading"
+                @click="loadLogs"
               >
-                <Loader2 v-if="validatingPath" class="size-4 animate-spin" />
+                <Loader2 v-if="logsLoading" class="size-4 animate-spin" />
                 查看日志
               </Button>
             </template>
           </div>
 
+          <p v-if="currentLogLocation" class="m-0 break-all font-mono text-[12px] text-muted-foreground">
+            {{ currentLogLocation }}
+          </p>
+
           <pre
             ref="logsPaneRef"
             class="m-0 max-h-[46dvh] overflow-auto rounded-lg border border-border/50 bg-background/45 p-3 font-mono text-[11.5px] leading-[1.7] whitespace-pre-wrap text-foreground/85"
-          >{{ logs || '暂无日志' }}</pre>
+          >{{ logsLoading && !logs ? '正在读取日志…' : logs || '该日志暂无内容' }}</pre>
         </div>
 
-        <DialogFooter class="sm:justify-between">
-          <label
-            v-if="isMainAgentLog"
-            class="flex items-center gap-2 text-[12.5px] text-muted-foreground"
+        <DialogFooter>
+          <Button variant="outline" @click="logsDialogVisible = false">关闭</Button>
+          <Button
+            variant="outline"
+            class="border-destructive-accent/30 bg-destructive-soft/40 text-destructive-accent"
+            :disabled="!canClearLog"
+            :title="canClearLog ? undefined : '系统日志（journald）和不可读的来源不能在这里清空'"
+            @click="clearLogs"
           >
-            <Switch
-              :model-value="loggingEnabled"
-              :disabled="togglingLogging"
-              @update:model-value="value => toggleLogging(Boolean(value))"
-            />
-            {{ loggingEnabled ? '日志已启用' : '日志已禁用' }}
-          </label>
-          <div class="flex items-center gap-2">
-            <Button variant="outline" @click="logsDialogVisible = false">关闭</Button>
-            <Button
-              variant="outline"
-              class="border-destructive-accent/30 bg-destructive-soft/40 text-destructive-accent"
-              @click="clearLogs"
-            >
-              <Trash2 class="size-4" />
-              清空
-            </Button>
-            <Button @click="refreshLogs">
-              <RefreshCw class="size-4" />
-              刷新
-            </Button>
-          </div>
+            <Trash2 class="size-4" />
+            清空
+          </Button>
+          <Button :disabled="logsLoading" @click="refreshLogs">
+            <Loader2 v-if="logsLoading" class="size-4 animate-spin" />
+            <RefreshCw v-else class="size-4" />
+            刷新
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -874,7 +868,6 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import EmptyState from '@/components/common/EmptyState.vue'
 import FormField from '@/components/common/FormField.vue'
@@ -886,7 +879,7 @@ import StatusDot from '@/components/common/StatusDot.vue'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
-import { agentApi, type AgentInstallScriptParams } from '@/api'
+import { agentApi, type AgentInstallScriptParams, type AgentLogSource } from '@/api'
 import api from '@/api'
 import type { Agent } from '@/types'
 import { useProfileStore } from '@/stores/profile'
@@ -1055,11 +1048,11 @@ let coreInstallRequest = 0
 const dockerComposeContent = ref('')
 const dockerRunCommand = ref('')
 const logs = ref('')
-const selectedLogPath = ref('/var/log/configflow-agent.log')
+const logSources = ref<AgentLogSource[]>([])
+const logSourcesLoading = ref(false)
+const logsLoading = ref(false)
+const selectedLogSource = ref('')
 const customLogPath = ref('')
-const loggingEnabled = ref(true)
-const togglingLogging = ref(false)
-const validatingPath = ref(false)
 const currentAgent = ref<Agent | null>(null)
 const currentMetricsAgent = ref<Agent | null>(null)
 const metricsHistory = ref<any[]>([])
@@ -2390,66 +2383,75 @@ const deleteAgent = async (agent: Agent) => {
   }
 }
 
-// 根据 Agent 类型动态生成日志选项
-const logPathOptions = computed(() => {
-  const common = [
-    { label: '主 Agent 日志', value: '/var/log/configflow-agent.log' },
-    { label: 'Supervisor 主日志', value: '/var/log/supervisor/supervisord.log' },
-  ]
-  const mihomo = [
-    { label: 'Mihomo 输出日志', value: '/var/log/supervisor/mihomo.log' },
-    { label: 'Mihomo 错误日志', value: '/var/log/supervisor/mihomo.err.log' },
-  ]
-  const mosdns = [
-    { label: 'MosDNS 错误日志', value: '/etc/mosdns/mosdns.err.log' },
-  ]
-  const oxidns = [
-    { label: 'OxiDNS 输出日志', value: '/var/log/supervisor/oxidns.log' },
-    { label: 'OxiDNS 错误日志', value: '/var/log/supervisor/oxidns.err.log' }
-  ]
-  const type = currentAgent.value?.service_type
-  if (type === 'oxidns') return [...common, ...oxidns]
-  if (type === 'mihomo') return [...common, ...mihomo]
-  if (type === 'mosdns') return [...common, ...mosdns]
-  return [...common, ...mihomo, ...mosdns]
+// 旧版 Agent 不提供日志来源列表时，退回由 Agent 自动检测
+const LEGACY_LOG_SOURCE: AgentLogSource = { id: 'auto', label: '自动检测', kind: 'auto', clearable: false }
+
+const currentLogSource = computed(() => logSources.value.find(source => source.id === selectedLogSource.value))
+
+const currentLogLocation = computed(() => {
+  const source = currentLogSource.value
+  if (!source) return ''
+  if (source.kind === 'journal') return `journalctl -u ${source.unit}`
+  return source.path || ''
 })
 
-// 判断是否为主 Agent 日志
-const isMainAgentLog = computed(() => {
-  return selectedLogPath.value === '/var/log/configflow-agent.log' && customLogPath.value === ''
+const canClearLog = computed(() => {
+  if (selectedLogSource.value === 'custom') return Boolean(customLogPath.value)
+  return Boolean(currentLogSource.value?.clearable)
 })
 
 // 查看日志
 const viewLogs = async (agent: Agent) => {
   currentAgent.value = agent
-  selectedLogPath.value = '/var/log/configflow-agent.log'
+  logs.value = ''
+  logSources.value = []
+  selectedLogSource.value = ''
   customLogPath.value = ''
   logsDialogVisible.value = true
-  await loadLoggingConfig()
+  await loadLogSources()
   await loadLogs()
+}
+
+// 读取 Agent 解析出的日志来源，默认选中第一个可读来源
+const loadLogSources = async () => {
+  if (!currentAgent.value) return
+  logSourcesLoading.value = true
+  try {
+    const { data } = await agentApi.getLogSources(currentAgent.value.id)
+    const sources: AgentLogSource[] = data.legacy ? [LEGACY_LOG_SOURCE] : data.sources || []
+    logSources.value = sources
+    selectedLogSource.value = (sources.find(source => source.kind !== 'unavailable') || sources[0])?.id || 'custom'
+  } catch (error: any) {
+    logSources.value = []
+    selectedLogSource.value = 'custom'
+    logs.value = `获取日志来源失败: ${error.response?.data?.message || error.message || '未知错误'}`
+  } finally {
+    logSourcesLoading.value = false
+  }
 }
 
 // 加载日志
 const loadLogs = async () => {
-  if (!currentAgent.value) return
+  if (!currentAgent.value || !selectedLogSource.value) return
 
+  const source = currentLogSource.value
+  if (selectedLogSource.value === 'custom' && !customLogPath.value) {
+    logs.value = '请输入自定义日志路径'
+    return
+  }
+  if (source?.kind === 'unavailable') {
+    logs.value = source.path ? `${source.note}\n${source.path}` : source.note || '该日志不可读'
+    return
+  }
+
+  logsLoading.value = true
   try {
-    // 确定要读取的日志路径
-    let logPath = ''
-    if (selectedLogPath.value === 'custom') {
-      if (!customLogPath.value) {
-        logs.value = '请输入自定义日志路径'
-        return
-      }
-      logPath = customLogPath.value
-    } else {
-      logPath = selectedLogPath.value
-    }
-
-    // 调用 API 获取日志
-    const { data } = await agentApi.getLogs(currentAgent.value.id, 200, logPath)
+    const params = selectedLogSource.value === 'custom'
+      ? { logPath: customLogPath.value }
+      : source?.kind === 'auto' ? {} : { source: selectedLogSource.value }
+    const { data } = await agentApi.getLogs(currentAgent.value.id, 200, params)
     if (data.success) {
-      logs.value = data.logs || '暂无日志'
+      logs.value = [data.logs, data.error_logs].filter(Boolean).join('\n')
     } else {
       logs.value = `获取日志失败: ${data.message}`
     }
@@ -2459,7 +2461,8 @@ const loadLogs = async () => {
     scrollToBottom()
   } catch (error: any) {
     logs.value = `获取日志失败: ${error.response?.data?.message || error.message || '未知错误'}`
-    notify.error('获取日志失败')
+  } finally {
+    logsLoading.value = false
   }
 }
 
@@ -2471,25 +2474,13 @@ const scrollToBottom = () => {
 
 // 刷新日志
 const refreshLogs = async () => {
-  const loadingToast = notify.loading('正在刷新日志...')
-
-  try {
-    await loadLogs()
-    notify.success('日志刷新成功')
-  } finally {
-    notify.dismiss(loadingToast)
-  }
+  await loadLogs()
+  if (!logs.value.startsWith('获取日志失败')) notify.success('日志已刷新')
 }
 
 // 清空日志
 const clearLogs = async () => {
-  if (!currentAgent.value) return
-
-  let logPath = selectedLogPath.value === 'custom' ? customLogPath.value : selectedLogPath.value
-  if (!logPath) {
-    notify.warning('请先选择日志文件')
-    return
-  }
+  if (!currentAgent.value || !canClearLog.value) return
 
   const ok = await confirmDanger('确定要清空该日志文件吗？此操作不可恢复。', {
     title: '清空日志',
@@ -2500,7 +2491,10 @@ const clearLogs = async () => {
   const loadingToast = notify.loading('正在清空日志...')
 
   try {
-    const { data } = await agentApi.clearLog(currentAgent.value.id, logPath)
+    const target = selectedLogSource.value === 'custom'
+      ? { logPath: customLogPath.value }
+      : { source: selectedLogSource.value }
+    const { data } = await agentApi.clearLog(currentAgent.value.id, target)
     if (data.success) {
       notify.success('日志已清空')
       await loadLogs()
@@ -2514,75 +2508,13 @@ const clearLogs = async () => {
   }
 }
 
-// 日志路径切换
-const onLogPathChange = async (newPath: string) => {
-  // 确保 selectedLogPath 已更新
-  selectedLogPath.value = newPath
-  if (newPath !== 'custom') {
+// 日志来源切换
+const onLogSourceChange = async (value: string) => {
+  selectedLogSource.value = value
+  logs.value = ''
+  if (value !== 'custom') {
     customLogPath.value = ''
     await loadLogs()
-  }
-}
-
-// 验证并加载自定义路径
-const validateAndLoadCustomPath = async () => {
-  if (!currentAgent.value || !customLogPath.value) {
-    notify.warning('请输入日志路径')
-    return
-  }
-
-  validatingPath.value = true
-  try {
-    const { data } = await agentApi.validateLogPath(currentAgent.value.id, customLogPath.value)
-
-    if (data.success && data.valid) {
-      notify.success('路径验证成功')
-      await loadLogs()
-    } else {
-      notify.error(data.error || '路径验证失败')
-      logs.value = `路径验证失败: ${data.error || '未知错误'}`
-    }
-  } catch (error: any) {
-    notify.error('路径验证失败')
-    logs.value = `路径验证失败: ${error.response?.data?.message || error.message}`
-  } finally {
-    validatingPath.value = false
-  }
-}
-
-// 加载日志配置状态
-const loadLoggingConfig = async () => {
-  if (!currentAgent.value) return
-
-  try {
-    const { data } = await agentApi.getLoggingConfig(currentAgent.value.id)
-    if (data.success) {
-      loggingEnabled.value = data.enabled !== false // 默认为 true
-    }
-  } catch (error: any) {
-    console.error('获取日志配置失败:', error)
-  }
-}
-
-// 切换日志开关
-const toggleLogging = async (enabled: boolean) => {
-  if (!currentAgent.value) return
-
-  togglingLogging.value = true
-  try {
-    const { data } = await agentApi.setLoggingConfig(currentAgent.value.id, enabled)
-
-    if (data.success) {
-      notify.success(enabled ? '日志已启用' : '日志已禁用')
-    } else {
-      notify.error('修改日志开关失败')
-      loggingEnabled.value = !enabled // 回滚状态
-    }
-  } catch (error: any) {
-    notify.error('设置日志开关失败')
-    loggingEnabled.value = !enabled // 回滚状态
-  } finally {
-    togglingLogging.value = false
   }
 }
 
