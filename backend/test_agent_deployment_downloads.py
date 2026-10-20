@@ -103,6 +103,36 @@ def test_callback_aliases_download_one_source_for_each_domain_and_ip_consumer(
         assert item['sha256'] == hashlib.sha256(files[item['path']]).hexdigest()
 
 
+@pytest.mark.parametrize('service', ['mosdns', 'oxidns'])
+def test_empty_rule_proxy_part_matches_bytes_devices_refresh(monkeypatch, service):
+    # Native rule updates store rule-proxy's response as the live baseline.
+    # Bundled bytes must be identical, or DNS follow sees an unpublished change.
+    from backend.converters.mosdns import convert_rule_content_for_mosdns
+    snapshot = config()
+    snapshot['rule_library'] = [{'id': 'shared', 'name': 'Shared', 'source_type': 'url', 'url': SOURCE_URL}]
+    original = 'DOMAIN-SUFFIX,example.test\nDOMAIN,exact.test'
+    monkeypatch.setattr(bundles, 'request_rule', lambda *_a, **_k: response(original.encode()))
+    main = {'plugins': [
+        {'tag': 'domains', 'type': 'domain_set', 'args': {'files': ['./rules/domains.txt']}},
+        {'tag': 'ips', 'type': 'ip_set', 'args': {'files': ['./rules/ips.txt']}},
+        {'tag': 'direct_ips', 'type': 'ip_set', 'args': {'files': ['./rules/direct-ips.txt']}},
+    ]}
+    proxied = lambda part: BASE_URL + '/api/profiles/default/mosdns/rule-proxy?' + urlencode({
+        'url': BASE_URL + '/api/profiles/default/rule-library/content/shared', 'part': part})
+    downloads = [{'name': 'domain', 'local_path': './rules/domains.txt', 'url': proxied('domain')},
+                 {'name': 'ip', 'local_path': './rules/ips.txt', 'url': proxied('ip')},
+                 {'name': 'direct', 'local_path': './rules/direct-ips.txt', 'url': SOURCE_URL}]
+    bundle = bundles.build_deployment_bundle(
+        {'id': 'fixture', 'service_type': service, 'profile_id': 'default'}, snapshot,
+        yaml.safe_dump(main), ruleset_downloads=downloads, base_url=BASE_URL)
+    files = contents(bundle)
+    for path, part in (('rules/domains.txt', 'domain'), ('rules/ips.txt', 'ip')):
+        assert files[path] == convert_rule_content_for_mosdns(original, part).encode()
+    assert files['rules/ips.txt'] == b'# no ip rules'
+    # A source the device downloads directly is not rewritten by rule-proxy.
+    assert files['rules/direct-ips.txt'] == b''
+
+
 def test_concurrent_consumers_share_binary_response_and_report_progress_on_caller(monkeypatch):
     synchronize_consumers(monkeypatch)
     original = b'\x00MRS\xff\xfe\x80\r\n'

@@ -80,7 +80,7 @@ def _native_projection(base, current, projected, settings):
     """Edit only a recognizable native routing graph, preserving its surroundings."""
     from backend.common.oxidns_native import load_native_yaml
     from backend.common.oxidns_common_routing import (
-        _analyze, _new_name, _references, resource_downloads,
+        _analyze, _references, place_routing_groups, resource_downloads,
     )
     from backend.converters.oxidns import _routing_groups
 
@@ -130,23 +130,10 @@ def _native_projection(base, current, projected, settings):
                 or any(_references(plugin, tag) for plugin in document['plugins']
                        if plugin.get('tag') not in old_tags | {'sequence_main', 'rules_reload'})):
             raise RuleSyncProjectionError('OxiDNS 规则 Provider 被自定义插件共用，无法安全自动替换；请手动发布。')
-    occupied = {plugin['tag'] for plugin in document['plugins']} - old_tags
-    additions = []
-    for part, entries in groups.items():
-        for group in entries:
-            group['tag'] = _new_name(group['tag'], occupied)
-            additions.append({'tag': group['tag'], 'type': 'domain_set' if part == 'domain' else 'ip_set',
-                              'args': deepcopy(group['args'])})
     result = deepcopy(document)
-    insertion = min((index for index, plugin in enumerate(result['plugins']) if plugin['tag'] in old_tags),
-                    default=next(index for index, plugin in enumerate(result['plugins']) if plugin['tag'] == 'sequence_main'))
-    updated_plugins = []
-    for index, plugin in enumerate(result['plugins']):
-        if index == insertion:
-            updated_plugins.extend(additions)
-        if plugin['tag'] not in old_tags:
-            updated_plugins.append(plugin)
-    result['plugins'] = updated_plugins
+    # Same naming and placement as the editor: DNS follow compares the draft
+    # it edited with the bytes rule sync deployed.
+    result['plugins'], groups = place_routing_groups(result['plugins'], old_groups, groups)
     plugins = {plugin['tag']: plugin for plugin in result['plugins']}
     domain = [{'matches': [f'qname ${group["tag"]}'],
                'exec': 'goto china_dns' if group['route'] == 'direct' else 'goto proxy_dns_seq'} for group in groups['domain']]
