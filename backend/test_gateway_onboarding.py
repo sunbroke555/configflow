@@ -37,7 +37,10 @@ def snapshot():
                        'source_type': 'content', 'content': '+.direct.test'},
                       {'id': 'lib-proxy', 'name': 'Proxy Domains', 'behavior': 'domain',
                        'source_type': 'content', 'content': '+.proxy.test'}])
-    value['system_config'].update(server_domain='https://config.example', config_token='subscription-token')
+    # Real repositories provision this internal capability separately from the
+    # subscription token; direct converter fixtures need the same prerequisite.
+    value['system_config'].update(server_domain='https://config.example', config_token='subscription-token',
+                                  rule_proxy_token='test-internal-rule-proxy-token')
     value['mihomo']['custom_config'] = 'mixed-port: 7890\nlog-level: warning\n'
     return value
 
