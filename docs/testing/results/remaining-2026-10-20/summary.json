@@ -11,7 +11,8 @@
     "mergePerformedByThisRun": false,
     "upstreamMainObserved": "2d8eb67",
     "upstreamMainFullRetest": false,
-    "publicEvidence": "results/remaining-2026-10-20/summary.json"
+    "publicEvidence": "results/remaining-2026-10-20/summary.json",
+    "evidencePullRequest": "https://github.com/thsrite/configflow/pull/284"
   },
   "counts": {
     "passed": 34,
@@ -185,5 +186,17 @@
   "cleanup": "本轮临时App/协议夹具14811/14812/14813/14825/14831/14832/14833、独占HTTP80、额外Mihomo/Agent单位与目录、测试流量及新增后台Agent已清理。自建手机排序空间已删除，default导出前后完全一致。.35原四服务PID及两核心配置摘要保持，.36四服务正常、网关正式撤销、7个系统参数与原网络恢复。路由器sniffer32字段完整恢复且停止，PVE/路由器无网络配置变更。本机仅保留主隔离14810与手测报告38743；本地私有证据保留。",
   "plan_history": "checklist-plan-history.json",
   "public_evidence_policy": "只提交脱敏摘要、可公开测试配置摘录和不含安装命令的截图。原始包头、设备公网地址、私有manifest/登录凭据、安装能力URL及原始配置备份均保留本地。单项JSON中未列入artifact-index的原始交叉引用属于私有/既有证据，不表示一并公开。",
-  "current_checklist_cases": "checklist-current-cases.json"
+  "current_checklist_cases": "checklist-current-cases.json",
+  "environment": {
+    "appBuild": "952fc97（原清单）→3f38649（四修复及本轮补测）",
+    "agentBuild": "3f38649；实际二进制SHA256 90725b66601116d0539b036fc64fab27490223bd242ae7d437628f48cd8592e4",
+    "testSpace": "产品写入/发布只用独立临时实例与.35/.36隔离LXC；公网诊断另外只读PVE/主路由包头与状态",
+    "testAgent": ".35：Mihomo + OxiDNS；.36：Mihomo + OxiDNS（专用 LXC）",
+    "deployment": "主程序：Mac 冻结源码与独立临时数据；设备：.35 Debian 13.1 / .36 Debian 12 LXC",
+    "testDate": "2026-10-20",
+    "tester": "Codex",
+    "agentVersion": "1.8.34-go",
+    "browser": "Codex内置浏览器；实测375×812手机与1280×900桌面，浅/深主题和真实键盘操作"
+  },
+  "cumulative_result_note": "34项为两轮累计结果；本轮补测固定3f38649，其余沿用原清单现场记录，不声称所有36项都在本轮重新执行。"
 }
