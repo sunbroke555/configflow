@@ -13,7 +13,7 @@ from backend.routers.plan import (
     RETURN_ALLOCATION_FIELDS, RETURN_SAFETY_VERSION, return_allocation, return_safety_blockers,
 )
 from backend.routers.report import _networks
-from backend.routers.routeros_nat import assess_nat, assess_bypass, RouteEgressIndex
+from backend.routers.routeros_nat import assess_bypass, RouteEgressIndex
 
 
 class ReleaseError(Exception):
@@ -86,7 +86,10 @@ def verify_nat(checks: Dict[str, Any], state: RouterState) -> None:
     if uncovered:
         raise RouterError(f'回读校验失败：{", ".join(uncovered)} 没有被受管 NAT 免转换规则覆盖')
     for check in checks.get('nat_not_required') or []:
-        assessment = assess_nat(check['cidr'], check['gateway'], state, route_index=route_index)
+        # Re-prove with the preview's assessment: the egress-only check alone
+        # rejects LAN-egress rules (e.g. DNS hairpins) that the ordered-chain
+        # simulation shows cannot translate client traffic to this CIDR.
+        assessment = assess_bypass(check['cidr'], check['gateway'], state, route_index=route_index)
         if assessment['status'] != 'not_required':
             raise RouterError(f'回读校验失败：{check["cidr"]} 无法继续确认无需 NAT 免转换。{assessment["detail"]}')
 
