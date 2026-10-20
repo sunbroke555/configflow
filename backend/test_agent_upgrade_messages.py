@@ -18,6 +18,7 @@ from backend.test_agent_upgrade_auth import (  # noqa: F401
     ('candidate version or executable validation failed', '新版 Agent 无法运行或版本不符'),
     ('Agent did not confirm expected version, identity and migration readiness', '未能确认 Agent 的版本'),
     ('another Agent update or service operation is active', '请等待完成后再试'),
+    ('an OxiDNS rule update is in progress', 'OxiDNS 正在更新规则'),
     ('deployment previous-job requires rollback recovery', '配置发布尚未完成恢复'),
     ('OpenRC supervise-daemon is required for recoverable updates', '设备缺少 OpenRC'),
     ('cannot infer custom lifecycle; configure service_manager and service_unit before upgrading', '请先配置 service_manager 和 service_unit'),

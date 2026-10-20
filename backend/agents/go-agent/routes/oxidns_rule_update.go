@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -59,6 +60,12 @@ type oxRuleUpdater struct {
 	requestTimeout time.Duration
 	roundTimeout   time.Duration
 }
+
+// oxRuleUpdatesRunning lets other lock users explain why the Agent is busy:
+// a rule update holds the service lock for its whole download round.
+var oxRuleUpdatesRunning atomic.Int32
+
+func oxRuleUpdateRunning() bool { return oxRuleUpdatesRunning.Load() > 0 }
 
 func oxRuleNotConfigured() *oxMonitorError {
 	return oxMonitorFail(http.StatusConflict, "RULE_UPDATE_NOT_CONFIGURED", "Configure downloadable rules and republish the OxiDNS configuration, then retry")
@@ -359,6 +366,7 @@ func (updater *oxRuleUpdater) run(cfg *Config, plan *oxRuleUpdatePlan, selection
 		// A terminal observation also means the Agent service lock was released.
 		updater.mu.Lock()
 		defer updater.mu.Unlock()
+		oxRuleUpdatesRunning.Add(-1)
 		release()
 		updater.task.Status, updater.task.Phase, updater.task.Code = finalStatus, "done", finalCode
 	}()
@@ -528,6 +536,7 @@ func (updater *oxRuleUpdater) handler(cfg *Config) http.HandlerFunc {
 		}
 		updater.change(func(current *oxRuleUpdateTask) { *current = task })
 		accepted = true
+		oxRuleUpdatesRunning.Add(1)
 		go updater.run(cfg, plan, selection, release)
 		JsonResponse(w, http.StatusAccepted, map[string]interface{}{"success": true, "task": task})
 	}

@@ -185,6 +185,10 @@ func TestOxiDNSRuleUpdateManualWithoutCron(t *testing.T) {
 	if task.Status != "succeeded" || task.Phase != "done" || task.ID == "" || task.Downloaded != 2 || task.Reloaded != 2 {
 		t.Fatalf("unexpected final state: %+v", task)
 	}
+	// A stale marker would blame later busy replies on a finished rule update.
+	if oxRuleUpdateRunning() {
+		t.Fatal("finished rule update still marked as running")
+	}
 	want := []string{
 		"GET /api/reload/status",
 		"GET /api/plugins/rules_download/downloads",

@@ -4,7 +4,32 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// The watchdog and the cleanup ticker start together, so every cleanup round
+// meets a watchdog tick holding the lock for a few milliseconds.
+func TestCleanupDiskWaitsOutBriefLockHolder(t *testing.T) {
+	cfg := &Config{ConfigPath: filepath.Join(t.TempDir(), "config.yaml")}
+	if err := saveDeployment(cfg, &DeploymentState{DeploymentID: "done"}, "succeeded"); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(deploymentPath(cfg, "done"), "bundle.tar.gz")
+	if err := os.WriteFile(bundle, []byte("payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := AcquireServiceOperation(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(150*time.Millisecond, release)
+	if err := CleanupDisk(cfg); err != nil {
+		t.Fatalf("cleanup gave up on a brief lock holder: %v", err)
+	}
+	if _, err := os.Stat(bundle); !os.IsNotExist(err) {
+		t.Fatalf("terminal payload kept: %v", err)
+	}
+}
 
 func TestCleanupDiskPreservesRecovery(t *testing.T) {
 	cfg := &Config{ConfigPath: filepath.Join(t.TempDir(), "config.yaml")}
@@ -31,6 +56,9 @@ func TestCleanupDiskPreservesRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	previousWait := cleanupLockWait
+	cleanupLockWait = 300 * time.Millisecond
+	defer func() { cleanupLockWait = previousWait }()
 	if err := CleanupDisk(cfg); err == nil {
 		t.Fatal("cleanup ignored operation lock")
 	}

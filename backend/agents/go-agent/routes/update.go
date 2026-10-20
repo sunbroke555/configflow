@@ -4,6 +4,7 @@ import (
 	"agent/upgrade"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +27,9 @@ type UpdateResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
+
+var updateLockWait = 2 * time.Second
+var errRuleUpdateBusy = errors.New("an OxiDNS rule update is in progress")
 
 // HandleUpdate returns a durable task. Its worker has a separate system service.
 func HandleUpdate(cfg *Config) http.HandlerFunc {
@@ -53,10 +57,11 @@ func HandleUpdate(cfg *Config) http.HandlerFunc {
 			deploymentFailure(w, 400, fmt.Errorf("invalid update request"))
 			return
 		}
-		release, err := acquireServiceOperation(cfg, true)
-		for deadline := time.Now().Add(2 * time.Second); err == errDeploymentBusy && time.Now().Before(deadline); {
-			time.Sleep(100 * time.Millisecond)
-			release, err = acquireServiceOperation(cfg, true)
+		release, err := waitServiceOperation(cfg, true, updateLockWait)
+		if err == errDeploymentBusy && oxRuleUpdateRunning() {
+			// A rule update keeps the lock for about a minute; name it so the
+			// admin waits for it instead of guessing which operation is running.
+			err = errRuleUpdateBusy
 		}
 		if err != nil {
 			deploymentFailure(w, 409, err)
