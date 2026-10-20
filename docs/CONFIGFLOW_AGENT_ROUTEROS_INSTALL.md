@@ -20,7 +20,7 @@
 | 设备 / 服务 | 示例地址 | 用途 |
 |---|---|---|
 | RouterOS | `192.168.50.254` | 网关、DHCP |
-| NAS | `192.168.50.100:5801` | ConfigFlow 管理页面 |
+| NAS | `192.168.50.100:5010` | ConfigFlow 管理页面 |
 | Mihomo | `192.168.50.28` | 代理服务；DNS 端口 `1053` |
 | OxiDNS | `192.168.50.251` | 客户端 DNS；端口 `53` |
 | 测试设备 | `192.168.50.50` | 首次验证，建议固定地址 |
@@ -36,7 +36,7 @@ services:
   config-flow:
     image: thsrite/config-flow:latest
     ports:
-      - "5801:80"
+      - "5010:80"
     volumes:
       - ./data:/data
     environment:
@@ -55,7 +55,9 @@ docker compose pull
 docker compose up -d
 ```
 
-打开 `http://192.168.50.100:5801`，使用刚设置的账号登录。看到管理页面即可继续；`data` 文件夹需要长期保留。Sub-Store 已内置，无需另装。
+打开 `http://192.168.50.100:5010`，使用刚设置的账号登录。`data` 文件夹需要长期保留，Sub-Store 已内置，无需另装。
+
+先在「系统 → 系统设置」将「服务域名」设为 `http://192.168.50.100:5010`，生成并保存「访问令牌」，确保容器能取得配置和规则。令牌同时授权 MCP，含令牌的配置链接不要公开分享。
 
 ## 2. 安装 Mihomo 和 OxiDNS 服务
 
@@ -63,7 +65,7 @@ docker compose up -d
 
 按文末 [补充一：容器安装](#container-install) 完成安装，再回到这里继续。可以使用 WinBox，也可以使用命令行；任选一种，不要重复创建。路由和设备分流在后续步骤通过 ConfigFlow 下发，不在此时手动添加。
 
-回到 ConfigFlow 的 **Agent 管理**，应看到 `mihomo-main`、`oxidns` 两条在线记录。Agent 自动注册，无需手工填写 Token。
+回到 ConfigFlow 的 **系统 → Agent**，应看到 `mihomo-main`、`oxidns` 两条在线记录。Agent 自动注册，无需手工填写 Token。
 
 > Agent 管理端口是 `8080 / 8082`，不是 DNS 端口。RouterOS 容器使用各自的 IP，不需要 Docker 端口映射。
 
@@ -71,9 +73,9 @@ docker compose up -d
 
 ### Mihomo：设置代理配置
 
-1. 在「订阅管理」添加订阅，或在「节点管理」导入节点。
-2. 创建一个配置空间，设置策略组和分流规则。
-3. 在「Agent 管理」中，将 Mihomo Agent 绑定到该配置空间。
+1. 在「共享资源 → 订阅来源」添加订阅并手动更新一次，或在「共享资源 → 节点库」导入节点。
+2. 在「系统 → 配置空间」新建并选择空间，在「策略组」选择资源，在「策略规则」设置去向；新增规则在顶部，调整后保存并将 `MATCH` 放最后。
+3. 在「系统 → Agent」中，将 Mihomo Agent 绑定到该配置空间。
 4. 检查以下设置并保存。
 
 | 设置 | 值 |
@@ -134,6 +136,8 @@ fake-IP 网段不能与已有 LAN、VPN 网络重叠。
 - 初次安装只添加测试设备，不要直接填整个内网。
 
 在 **规则集与网关** 中确认代理网关为 `mihomo-main`，将 Telegram、Twitter、Google 等需要按目标 IP 分流的规则集放入 **使用策略路由的 IP 规则集**；**使用静态路由的 IP 规则集** 保持留空。
+
+这里的来源分流仅创建 IPv4 策略；更具体的直连来源会作为例外，Mihomo 网关本身会排除。IPv6 设备策略仍属于 OxiDNS，不会因此创建 RouterOS IPv6 策略路由。直连来源仍遵循 RouterOS 主路由表，不能用它绕过已有手动静态路由。
 
 这样，fake-IP 路由由 ConfigFlow 自动添加；所选 IP 规则集只对列为「智能分流」的设备生效，无需自己创建策略路由和路由表。域名规则继续在 Mihomo、OxiDNS 中使用，不用放进这里。
 
@@ -196,7 +200,7 @@ curl --noproxy '*' --resolve "www.google.com:443:${FAKE_IP}" \
 2. 打开 **策略路由 → 来源设备**，添加其他需要使用的设备或网段，选择「智能分流」或「直连」。需要长期按设备分流时，建议在 DHCP 中为这些设备固定 IP。
 3. 在 **发布预览** 中选中 OxiDNS 发布目标，点击 **保存并预览**。
 4. 确认 DHCP 网段是预期的 `192.168.50.0/24`、DNS 将设为 `192.168.50.251`，并核对设备范围和其他变更。
-5. 点击 **确认发布**，等待所有目标显示成功。
+5. 点击 **确认发布**，等待所有目标显示成功。DHCP DNS 只更新包含所选 Mihomo 网关的唯一已启用网段；找不到或存在多个候选时会阻止，不会新建 DHCP 网段。写入会替换原 DNS 列表，不保留旧备用地址。
 6. 让客户端断开重连或续租，检查实际获得的 DNS，再次测试直连网站、代理网站和相关应用。
 
 **只调整 DNS，客户端网关始终保留 RouterOS 地址。** 手动指定 DNS 的设备需单独修改。若存在自定义 DHCP DNS 选项，先按页面提示处理；多个内网网段不要直接套用本文示例。
@@ -301,7 +305,7 @@ bye
 {
     :local lanBridge "bridge1"
     :local gateway "192.168.50.254"
-    :local serverUrl "http://192.168.50.100:5801"
+    :local serverUrl "http://192.168.50.100:5010"
     :local mainIP "192.168.50.28"
     :local dnsIP "192.168.50.251"
     :local prefix "/24"
@@ -398,7 +402,7 @@ bye
 
 | Key | `cf-main` | `cf-dns` |
 |---|---|---|
-| `SERVER_URL` | `http://192.168.50.100:5801` | `http://192.168.50.100:5801` |
+| `SERVER_URL` | `http://192.168.50.100:5010` | `http://192.168.50.100:5010` |
 | `SERVICE_TYPE` | `mihomo` | `oxidns` |
 | `AGENT_NAME` | `mihomo-main` | `oxidns` |
 | `AGENT_IP` | `192.168.50.28` | `192.168.50.251` |
@@ -540,3 +544,12 @@ bye
 - 分别验证正常访问、主实例停用后的新请求，以及主实例恢复后的访问；每次重新下发路由后，也检查手动备用路由仍然存在。
 
 备用实例不会自动接管已缓存的主实例 fake-IP 或已有连接；只有一个 OxiDNS 时，DNS 服务本身也不具备冗余。
+
+## 实现与命令参考
+
+- 页面和发布顺序：[上游路由页面](../frontend/src/views/Routers.vue)、[设备分流工作区](../frontend/src/components/routers/PolicyRoutingPanel.vue)、[发布协调](../backend/routers/release.py)。
+- 路由器写入与 DHCP 范围：[RouterOS REST 驱动](../backend/routers/routeros.py)、[DHCP DNS 选择与校验](../backend/routers/dhcp_dns.py)。
+- 镜像环境变量与持久化：[Agent 镜像](../docker/Dockerfile.agent)、[单服务启动脚本](../docker/docker-agent-entrypoint-service.sh)。
+- RouterOS 命令以目标版本为准，参考 [Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Files](https://help.mikrotik.com/docs/spaces/ROS/pages/2555971/Files)、[REST API](https://manual.mikrotik.com/docs/developer-guides/rest-api/)；镜像按架构导出参考 [Docker image save](https://docs.docker.com/reference/cli/docker/image/save/#platform)。
+
+本文核对了 ConfigFlow 的页面、驱动、镜像参数和官方命令说明，不能代替目标 RouterOS 版本上的安装及单设备网络验证。

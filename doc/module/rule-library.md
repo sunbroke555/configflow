@@ -1,169 +1,83 @@
-# 规则仓库
+# 规则库
 
-规则仓库是所有配置共用的规则来源目录，集中保存名称、URL/内容与格式。各配置通过 `library_rule_id` 引用，分别保存策略目标、启用状态与顺序；来源更新会动态作用于全部引用者，不复制来源字段到各配置。
+规则库是所有配置共用的来源目录，保存规则的名称、URL 或正文。每个配置在「策略规则」引用来源，并分别指定策略、启用状态和顺序。
 
-操作区中，内容类型规则集的「添加规则」使用加号并排在第一位；「加入当前配置」使用纸飞机发送图标，将规则集加入当前配置的策略规则。列表、卡片和批量加入入口使用一致的图标含义。
+## 添加一个自己的域名集合
 
-## 规则下载代理
+1. 打开「共享资源 → 规则库」，点击添加。
+2. 名称填写「公司内网」，来源选择「规则内容」，类型选择 `domain`。
+3. 粘贴需要的域名，保存。
+4. 点击「加入当前配置」，选择目标策略；也可回到「策略规则 → 更多 → 添加规则集」选择来源。
+5. 在当前配置调整匹配顺序，再生成或发布。
 
-在「系统设置 → 服务配置 → 规则下载代理」填写 HTTP/HTTPS 代理地址，例如 `http://192.168.0.3:7890`，失去焦点后自动保存。所有配置空间共用此设置，后续规则下载、缓存更新、连通性测试、MosDNS 转换与后端推送预下载都会使用它，无需修改系统或 Docker DNS。
+内容保存在 ConfigFlow 的配置文档中，不需要另建数据库。以下是内容示例，实际域名按自己的网络替换：
 
-支持 `http://用户名:密码@主机:端口`，用户名和密码中的特殊字符需要 URL 编码。代理必须能从 ConfigFlow 容器访问；容器中的 `127.0.0.1` 指容器自身。代理不可用时不会自动改走直连；已有的规则缓存兜底逻辑保持不变。清空并保存后恢复现有网络方式，包括原有环境代理设置。
-
-「GitHub 代理域名」仍是下载地址的镜像前缀，可与规则下载代理同时使用。自身 API 回调绕过外部代理，远程规则使用正常域名解析，兼容 Fake-IP 与内网规则地址，并继续校验 HTTPS 证书。本设置只控制 ConfigFlow 后端拉取，不会设置订阅解析服务、客户端或远端 Agent 自行下载时的代理。
-
-完整备份包含代理设置；脱敏导出会移除代理地址及其中的凭据。
-
-## 主要功能
-
-### 1. 规则类型
-
-支持三种规则集类型：
-
-**domain（域名规则）**
-- 包含域名列表的规则集
-- 支持精确域名和域名后缀匹配
-- 最常用的规则类型
-
-**ipcidr（IP段规则）**
-- 包含 IP 地址段（CIDR）的规则集
-- 用于基于 IP 的分流
-- 支持 IPv4 和 IPv6
-
-**classical（传统规则）**
-- 包含多种规则类型混合的规则集
-- 兼容 Clash 传统规则格式
-- 可以包含 DOMAIN、DOMAIN-SUFFIX、IP-CIDR 等多种规则
-
-### 2. 规则来源类型
-
-**URL 类型**
-- 从远程 URL 获取规则内容
-- 支持标准的 Clash rule-provider 格式
-- 适合使用开源规则集
-
-**内容类型**
-- 直接在界面中编辑规则内容
-- 规则内容存储在本地数据库
-- 适合自定义规则集
-
-### 3. 添加规则
-
-**添加 URL 类型规则：**
-```
-名称：微信直连
-类型：domain
-来源：URL
-URL：https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/wechat.txt
+```yaml
+payload:
+  - '+.office.example'
+  - 'git.office.example'
 ```
 
-**添加内容类型规则：**
-```
-名称：公司内网
-类型：domain
-来源：content
-内容：
-  - company.com
-  - internal.company.com
-  - mail.company.com
-```
+## 三种规则类型
 
-### 4. 批量导入规则
+| 类型 | 内容 | 用途 |
+| --- | --- | --- |
+| `domain` | 域名及其匹配表达式 | 网站分流 |
+| `ipcidr` | IPv4 / IPv6 地址段 | IP 分流 |
+| `classical` | `DOMAIN-SUFFIX`、`IP-CIDR` 等规则行 | 混合条件集合 |
 
-支持从 YAML 格式的 rule-providers 配置批量导入。
+来源可以选择 URL，也可以直接编辑内容。URL 必须返回与所选类型相符的规则；代理与 DNS 目标可转换的内容不同，不能把任意二进制或任意客户端规则视为通用文本。
 
-**YAML 格式示例：**
+## 导入已有 rule-providers
+
+页面「批量导入」支持带 `rule-providers` 的 YAML。下面只展示结构，`example.com` 是占位地址，使用前换成真实规则来源：
+
 ```yaml
 rule-providers:
-  reject:
+  office:
     type: http
     behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/reject.txt"
-    interval: 86400
-
-  proxy:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/proxy.txt"
-    interval: 86400
-
-  direct:
-    type: http
-    behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/direct.txt"
-    interval: 86400
+    url: "https://example.com/office.yaml"
 ```
 
-导入后会自动创建三个规则：`reject`、`proxy`、`direct`
+导入后检查名称、类型和来源，再加入当前配置。库中排序只影响共享列表的展示顺序，不决定配置里的匹配优先级。
 
-### 5. 规则引用跟踪
+## 编辑与删除的影响
 
-每个规则会显示被哪些规则配置引用：
-- 显示引用数量
-- 点击可查看引用详情
-- 删除被引用的规则会返回 `409` 并列出配置名称，必须先在相应配置移除引用
+| 操作 | 影响 |
+| --- | --- |
+| 改正文或来源 URL | 影响所有引用该来源的配置；设备获取新内容仍受刷新或同步方式控制 |
+| 当前配置更改目标策略 | 只影响该配置，其他配置可使用同一来源走不同策略 |
+| 停用共享来源 | 引用它的生成配置不再使用该来源 |
+| 删除当前配置的引用 | 保留共享来源 |
+| 删除共享来源 | 仍被配置引用时拒绝删除并列出引用者 |
+| 调整共享顺序 | 进入调整顺序后保存，不改变各配置的规则顺序 |
 
-### 6. 规则管理操作
+「添加规则」用于往内容型规则集增加条目；「加入当前配置」用于建立引用，两种操作不同。
 
-**编辑规则**
-- 修改规则名称
-- 修改规则 URL 或内容
-- 修改规则类型
+## 下载、连通性和代理
 
-**删除规则**
-- 删除规则会同时删除规则文件
-- 被任何配置引用时拒绝删除，不自动清理其他配置的规则编排
+可对 URL 来源测试连通性或下载缓存。连通只表示当前请求结果，不证明正文格式正确，也不代表已经发布到设备。批量操作以页面的逐项结果为准。
 
-**启用/禁用规则**
-- 禁用规则不会出现在生成的配置中
-- 可以暂时禁用而不删除
+下载受限时，到「系统设置 → 服务配置 → 规则下载代理」填写面板所在环境能访问的 HTTP/HTTPS 代理，移开输入框后保存。例如：
 
-**拖拽排序**
-- 调整规则在仓库中的显示顺序
-- 不影响规则配置中的优先级
-
-## 使用场景
-
-**场景1：使用开源规则集**
-```
-1. 添加 Loyalsoldier 规则集合
-   - 直连规则：https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/direct.txt
-   - 代理规则：https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/proxy.txt
-   - 拒绝规则：https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/reject.txt
-
-2. 在规则配置中引用
-   - 创建规则集，从仓库选择
-   - 配置对应的策略
+```text
+http://192.168.1.20:7890
 ```
 
-**场景2：自定义企业规则**
-```
-名称：公司内网域名
-类型：domain
-来源：content
-内容：
-  - gitlab.company.local
-  - jenkins.company.local
-  - nexus.company.local
-  - wiki.company.local
-```
+- 这是全部配置共用的后端下载设置，覆盖规则下载、缓存更新、测试、DNS 转换与推送前准备。
+- 支持带用户名和密码的代理，特殊字符需 URL 编码；完整备份会包含该设置，脱敏导出会移除。
+- 容器内 `127.0.0.1` 表示容器自身，不代表 NAS 宿主机。
+- 代理不可用时不会自动改走直连；已有缓存能否使用按当前缓存规则判断。
+- 清空后恢复原网络方式，原有环境代理仍可能生效。
+- GitHub 代理域名属于下载地址前缀，可与此设置同时使用；不会改变客户端、外部 Sub-Store 或 Agent 自行下载时的网络设置。
 
-**场景3：批量导入规则**
-```yaml
-# 准备好 rule-providers YAML 配置
-rule-providers:
-  google:
-    behavior: domain
-    url: "https://example.com/google.txt"
+## 什么时候会更新到设备
 
-  telegram:
-    behavior: domain
-    url: "https://example.com/telegram.txt"
+修改面板规则库不等于所有设备立即生效。现有引用的内容由核心刷新、手动更新规则，或已开启的 Agent 规则自动同步处理；新增引用、顺序或策略变化需要相应发布。
 
-  streaming:
-    behavior: domain
-    url: "https://example.com/streaming.txt"
+详见 [Agent 规则自动同步](../../docs/AGENT_OXIDNS.md#每台-agent-的规则自动同步)。
 
-# 点击批量导入，粘贴上述YAML
-# 系统会自动创建三个规则
-```
+## 实现参考
+
+[规则库页面](../../frontend/src/views/RuleLibrary.vue)、[规则库接口](../../backend/routes/rule_library.py)、[下载与代理处理](../../backend/utils/rule_fetch.py)、[共享资源和引用](../../backend/common/config_repository.py)。

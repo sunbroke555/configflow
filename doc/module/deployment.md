@@ -1,24 +1,142 @@
-# 部署指南
+# Docker / NAS 部署指南
 
-本文档提供详细的 Docker 和 Docker Compose 部署说明。
+本文适用于普通 Docker 主机。RouterOS Container 请使用 [专门安装指南](../../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md)。
 
-## 前提条件
+镜像包含前端、Python 后端、Sub-Store 和节点测速组件。准备好 Docker 与 Compose 后，按下面四步操作。
 
-ConfigFlow 依赖 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 进行订阅解析和节点格式转换。镜像已内置 Sub-Store 后端（仅监听容器内 `127.0.0.1:3001`，数据保存在 `/data/sub-store`），自动使用，无需另外部署或配置地址；可在「系统设置 → 第三方依赖」检测并在线更新。
-
-## Docker 单独部署
-
-### 快速开始
-
-镜像统一使用 `latest`，无需选择版本。先填写自己的管理员用户名、随机密码和随机密钥：
+## 1. 准备目录和账号
 
 ```bash
-CF_ADMIN_USER='replace-with-your-admin-user'
-CF_ADMIN_PASSWORD='replace-with-a-random-password'
-CF_JWT_SECRET='replace-with-at-least-32-random-chars'
+mkdir -p configflow
+cd configflow
+```
+
+在这个目录创建 `compose.yaml`。将下面密码和密钥替换为自己的随机值，密钥建议至少 32 位；用户名也可修改。
+
+```yaml
+services:
+  config-flow:
+    image: thsrite/config-flow:latest
+    container_name: config-flow
+    ports:
+      - "5010:80"
+    volumes:
+      - ./data:/data
+    environment:
+      DATA_DIR: /data
+      TZ: Asia/Shanghai
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: "replace-with-a-strong-password"
+      JWT_SECRET_KEY: "replace-with-at-least-32-random-characters"
+    restart: unless-stopped
+```
+
+`5010` 是浏览器访问的端口，右侧 `80` 保持不变。端口冲突时只改左侧，例如 `5011:80`。
+
+`./data` 相对于部署文件所在目录解析。NAS 用户可以换成明确的绝对路径，例如 `/volume1/docker/configflow/data:/data`，路径必须按自己的设备填写。
+
+## 2. 启动并打开页面
+
+在部署文件所在目录执行：
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d
+docker compose ps
+```
+
+| 部署位置 | 访问地址 |
+| --- | --- |
+| 当前电脑 | `http://localhost:5010` |
+| NAS / 服务器 | `http://设备IP:5010`，例如 `http://192.168.1.10:5010` |
+
+使用部署文件中的账号和密码登录。只有用户名、密码都设置完整才开启登录验证；本例已开启。
+
+## 3. 填写设备能访问的地址
+
+进入「系统 → 系统设置」：
+
+1. 「服务域名」填写完整地址，例如 `http://192.168.1.10:5010`。其他设备不能使用浏览器自己的 `localhost`。
+2. 生成并保存「访问令牌」，之后通过页面复制配置 URL。
+3. 按 [第一次使用](../../README.md#第一次使用) 添加资源并生成配置。
+
+访问令牌同时授权 MCP 管理工具，含令牌的订阅链接需要像密码一样保管。
+
+Sub-Store 默认按需启动，空闲约 5 分钟后停止；第一次转换需要等待就绪。在「第三方依赖」可检查、更新或切换为常驻模式。无需另外开放容器内部的 `3001` 端口。
+
+## 4. 认识数据目录
+
+当前配置格式为 schema 5，主要目录如下。部分目录按需创建，不要求首次启动就全部出现。
+
+```text
+data/
+├── config.json          # 系统、共享资源和全部配置空间
+├── config.json.bak      # 配置备份文件
+├── shared/              # 共享订阅和规则缓存
+├── profiles/<id>/       # 每个配置的生成文件、Provider 和转换规则
+├── sub-store/           # 内置 Sub-Store 数据及在线更新组件
+├── migrations/          # 迁移快照与删除配置时的保留数据
+└── app.log              # 服务日志，路径可由 LOG_FILE 调整
+```
+
+旧实例还可能保留 `system.json`、旧 `profiles/<id>/config.json` 等文件。不要只看根配置就清理旧数据；迁移和恢复需要保留完整目录。
+
+## 常用操作
+
+所有命令均在部署文件所在目录执行。
+
+| 操作 | 命令 |
+| --- | --- |
+| 查看状态 | `docker compose ps` |
+| 查看最近日志 | `docker compose logs --tail=100 config-flow` |
+| 持续查看日志 | `docker compose logs -f config-flow`，按 Ctrl+C 退出查看 |
+| 停止 | `docker compose stop` |
+| 启动 | `docker compose start` |
+| 重启 | `docker compose restart` |
+| 修改环境变量后重新创建容器 | `docker compose up -d` |
+
+`restart` 不会应用部署文件中新改的环境变量，也不会拉取新镜像。
+
+## 备份与升级
+
+1. 在「系统设置」导出全部数据，并记录当前镜像版本或摘要。
+2. 停服后复制整个实际挂载的数据目录。
+3. 确认备份成功，再更新镜像。
+
+本例使用相对路径 `./data`：
+
+```bash
+docker compose stop
+cp -a ./data "./data-backup-$(date +%Y%m%d-%H%M%S)"
+```
+
+确认复制完成后执行：
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs --tail=100 config-flow
+```
+
+`latest` 是可变化的标签，不代表已核实包含某个修复。重要实例应记录可回退的版本或摘要，并先用数据副本验证。
+
+旧版多配置必须完整备份 `system.json`、`profiles/`、`.bak` 和缓存，不能只备份根 `config.json`。完整 JSON 导出也不包含主机上所有运行文件。迁移边界和恢复方法见 [升级、备份与恢复](../design/multi-config-management.md#升级备份与恢复)。
+
+仓库的 Compose 文件位于 `docker/docker-compose.yml`；它的 `./data` 指向 `docker/` 下的数据目录。改用它之前，明确指定原数据路径。
+
+## 不使用 Compose 时
+
+以下是另一种独立部署方式，与上面的 Compose 二选一。先进入准备保存数据的目录，并替换三个变量：
+
+```bash
+CF_ADMIN_USER='admin'
+CF_ADMIN_PASSWORD='replace-with-a-strong-password'
+CF_JWT_SECRET='replace-with-at-least-32-random-characters'
+
 docker run --pull=always -d \
   --name config-flow \
-  -p 80:80 \
+  -p 5010:80 \
   -v "$(pwd)/data:/data" \
   -e ADMIN_USERNAME="$CF_ADMIN_USER" \
   -e ADMIN_PASSWORD="$CF_ADMIN_PASSWORD" \
@@ -26,320 +144,19 @@ docker run --pull=always -d \
   thsrite/config-flow:latest
 ```
 
-访问 `http://localhost` 即可使用。
+后续重新创建容器时保留原账号、密钥、端口和绝对数据路径。Compose 会把这些设置保存到文件中，更便于维护。
 
-> 认证是可选的：不设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 即无需登录直接使用；设置后才开启登录，此时请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值。
+## 常见问题
 
-### 参数说明
+| 现象 | 检查方法 |
+| --- | --- |
+| 容器启动失败 | 查看日志，检查 `5010` 是否被占用以及挂载目录权限 |
+| 本机能打开，其他设备打不开 | 使用主机实际 IP，检查主机防火墙和端口；容器内部 `5001` 不是本例对外端口 |
+| 更新后配置变空 | 先检查 `docker inspect config-flow` 中的 Mounts 是否仍指向原数据目录，保留现有文件并查看迁移日志 |
+| Sub-Store 显示休眠 | 按需模式下属正常状态；转换任务会唤醒，失败时在第三方依赖查看原因 |
+| 旧版还有 sub-store 服务 | 当前镜像内置组件，旧独立服务及 `SUB_STORE_URL` 环境变量不再使用 |
+| 需要详细日志或调整线程 | 参阅 [README 部署参数](../../README.md#部署参数)；`DEBUG` 会启用开发调试模式 |
 
-**端口映射：**
-- `-p 80:80` - 将容器的 80 端口映射到宿主机
-- 容器内部 Nginx 暴露 80 端口，Flask API 运行在内部 5001 端口
-- 自定义端口：`-p 8080:80` 映射到 8080 端口
+## 实现参考
 
-**数据持久化：**
-- `-v $(pwd)/data:/data` - 挂载数据目录
-- 配置数据存储在 `/data/config.json`
-- 规则文件存储在 `/data/rules/`
-- 数据持久化确保重启容器不丢失数据
-
-**容器管理：**
-- `--name config-flow` - 容器名称
-- `-d` - 后台运行
-
-### 常用操作
-
-```bash
-# 查看状态
-docker ps | grep config-flow
-
-# 查看日志
-docker logs config-flow
-docker logs -f config-flow  # 实时日志
-
-# 容器管理
-docker stop config-flow
-docker start config-flow
-docker restart config-flow
-
-# 删除容器
-docker stop config-flow
-docker rm config-flow
-
-# 更新版本
-CF_ADMIN_USER='replace-with-your-admin-user'
-CF_ADMIN_PASSWORD='replace-with-a-random-password'
-CF_JWT_SECRET='replace-with-at-least-32-random-chars'
-docker stop config-flow
-docker rm config-flow
-docker pull thsrite/config-flow:latest
-docker run -d --name config-flow -p 80:80 -v "$(pwd)/data:/data" \
-  -e ADMIN_USERNAME="$CF_ADMIN_USER" \
-  -e ADMIN_PASSWORD="$CF_ADMIN_PASSWORD" \
-  -e JWT_SECRET_KEY="$CF_JWT_SECRET" \
-  thsrite/config-flow:latest
-```
-
-### 自定义端口
-
-```bash
-CF_ADMIN_USER='replace-with-your-admin-user'
-CF_ADMIN_PASSWORD='replace-with-a-random-password'
-CF_JWT_SECRET='replace-with-at-least-32-random-chars'
-
-# 8080 端口
-docker run --pull=always -d --name config-flow -p 8080:80 -v "$(pwd)/data:/data" \
-  -e ADMIN_USERNAME="$CF_ADMIN_USER" \
-  -e ADMIN_PASSWORD="$CF_ADMIN_PASSWORD" \
-  -e JWT_SECRET_KEY="$CF_JWT_SECRET" \
-  thsrite/config-flow:latest
-
-# 3000 端口
-docker run --pull=always -d --name config-flow -p 3000:80 -v "$(pwd)/data:/data" \
-  -e ADMIN_USERNAME="$CF_ADMIN_USER" \
-  -e ADMIN_PASSWORD="$CF_ADMIN_PASSWORD" \
-  -e JWT_SECRET_KEY="$CF_JWT_SECRET" \
-  thsrite/config-flow:latest
-```
-
-## Docker Compose 部署（推荐）
-
-Docker Compose 适合长期维护和管理。
-
-### 快速开始
-
-**1. 创建 docker-compose.yml**
-
-镜像默认使用 `latest`，只需填写管理员用户名、随机密码和随机密钥：
-
-```yaml
-version: '3.8'
-
-services:
-  config-flow:
-    image: thsrite/config-flow:latest
-    container_name: config-flow
-    ports:
-      - "80:80"
-    volumes:
-      - ./data:/data
-    environment:
-      - ADMIN_USERNAME=replace-with-your-admin-user
-      - ADMIN_PASSWORD=replace-with-a-random-password
-      - JWT_SECRET_KEY=replace-with-at-least-32-random-chars
-    restart: unless-stopped
-```
-
-**2. 启动服务**
-
-```bash
-docker-compose pull
-docker-compose up -d
-```
-
-访问 `http://localhost` 即可使用。
-
-> 认证是可选的：不设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 即无需登录直接使用；设置后才开启登录，此时请使用随机管理员密码和至少 32 个随机字符的 `JWT_SECRET_KEY`。
-> 镜像已内置 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 后端并自动使用，无需另外部署或配置地址；可在「系统设置 → 第三方依赖」检测并在线更新。
-> 从旧版升级：compose 中的 `sub-store` 服务和 `SUB_STORE_URL` 环境变量已不再使用，可以删除。
-
-### 配置说明
-
-- **version**: Docker Compose 文件格式版本
-- **image**: 默认使用 `thsrite/config-flow:latest`；执行 `pull` 获取最新镜像，不会自动更新正在运行的容器
-- **ports**: 端口映射，格式为 `宿主机:容器`
-- **volumes**: 数据目录挂载，支持相对路径或绝对路径
-- **restart**: 重启策略
-  - `unless-stopped`: 除非手动停止，否则自动重启
-  - `always`: 始终重启
-  - `no`: 不自动重启
-  - `on-failure`: 仅失败时重启
-
-### 常用操作
-
-```bash
-# 启动服务
-docker-compose pull
-docker-compose up -d
-
-# 查看状态
-docker-compose ps
-
-# 查看日志
-docker-compose logs
-docker-compose logs -f  # 实时日志
-
-# 服务管理
-docker-compose stop
-docker-compose start
-docker-compose restart
-
-# 停止并删除
-docker-compose down
-
-# 更新版本
-docker-compose pull
-docker-compose up -d
-```
-
-### 配置示例
-
-**自定义端口：**
-```yaml
-version: '3.8'
-
-services:
-  config-flow:
-    image: thsrite/config-flow:latest
-    container_name: config-flow
-    ports:
-      - "8080:80"  # 使用 8080 端口
-    volumes:
-      - ./data:/data
-    environment:
-      - ADMIN_USERNAME=replace-with-your-admin-user
-      - ADMIN_PASSWORD=replace-with-a-random-password
-      - JWT_SECRET_KEY=replace-with-at-least-32-random-chars
-    restart: unless-stopped
-```
-
-**绝对路径挂载：**
-```yaml
-version: '3.8'
-
-services:
-  config-flow:
-    image: thsrite/config-flow:latest
-    container_name: config-flow
-    ports:
-      - "80:80"
-    volumes:
-      - /opt/config-flow/data:/data  # 绝对路径
-    environment:
-      - ADMIN_USERNAME=replace-with-your-admin-user
-      - ADMIN_PASSWORD=replace-with-a-random-password
-      - JWT_SECRET_KEY=replace-with-at-least-32-random-chars
-    restart: unless-stopped
-```
-
-## 部署验证
-
-### 1. 检查容器状态
-
-```bash
-# Docker
-docker ps | grep config-flow
-
-# Docker Compose
-docker-compose ps
-```
-
-确认状态为 `Up`
-
-### 2. 检查端口
-
-```bash
-netstat -tuln | grep 80
-# 或
-ss -tuln | grep 80
-```
-
-### 3. 访问界面
-
-- 本地：`http://localhost` 或 `http://localhost:端口号`
-- 远程：`http://服务器IP` 或 `http://服务器IP:端口号`
-
-### 4. 检查数据目录
-
-```bash
-ls -la data/
-```
-
-应该看到：
-```
-data/
-├── config.json    # 配置文件
-└── rules/         # 规则目录
-```
-
-## 故障排查
-
-### 容器无法启动
-
-**检查端口占用：**
-```bash
-netstat -tuln | grep 80
-lsof -i :80
-```
-
-**解决方案：**
-```bash
-CF_ADMIN_USER='replace-with-your-admin-user'
-CF_ADMIN_PASSWORD='replace-with-a-random-password'
-CF_JWT_SECRET='replace-with-at-least-32-random-chars'
-# 修改映射端口
-docker run --pull=always -d --name config-flow -p 8080:80 -v "$(pwd)/data:/data" \
-  -e ADMIN_USERNAME="$CF_ADMIN_USER" \
-  -e ADMIN_PASSWORD="$CF_ADMIN_PASSWORD" \
-  -e JWT_SECRET_KEY="$CF_JWT_SECRET" \
-  thsrite/config-flow:latest
-```
-
-**检查 Docker 服务：**
-```bash
-systemctl status docker
-```
-
-### 无法访问界面
-
-**检查日志：**
-```bash
-docker logs config-flow
-```
-
-**检查防火墙（CentOS/RHEL）：**
-```bash
-firewall-cmd --list-ports
-firewall-cmd --add-port=80/tcp --permanent
-firewall-cmd --reload
-```
-
-**检查防火墙（Ubuntu/Debian）：**
-```bash
-ufw status
-ufw allow 80/tcp
-```
-
-### 数据丢失
-
-**确认挂载：**
-```bash
-docker inspect config-flow | grep Mounts -A 10
-```
-
-**解决方案：**
-- 始终使用 `-v` 挂载数据目录
-- 定期备份 `data/config.json`
-- 使用 Web 界面"导出配置"功能
-
-## 生产环境建议
-
-### 安全配置
-- 配置 HTTPS（使用 Nginx/Caddy 反向代理）
-- 添加访问认证
-- 限制 IP 访问范围
-
-### 性能优化
-- 使用 SSD 存储数据
-- 定期清理 Docker 日志
-- 设置容器资源限制
-
-### 监控告警
-- 配置 Docker 健康检查
-- 设置日志收集
-- 添加服务监控
-
-### 备份策略
-- 定期备份 data 目录
-- 使用配置导出功能
-- 保留多版本备份
+[部署示例](../../docker/docker-compose.yml)、[镜像构建](../../docker/Dockerfile)、[Nginx 端口与代理](../../docker/nginx.conf)、[配置存储](../../backend/common/config_repository.py)、[Sub-Store 运行模式](../../backend/utils/sub_store_runtime.py)。

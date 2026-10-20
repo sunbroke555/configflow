@@ -1,86 +1,56 @@
-# Config Flow 安装与入门指南
+# 安装与入门指南
 
-> 本文适用于普通 Docker / Docker Compose 主机。如果要在 RouterOS 上运行代理和 DNS 服务，请阅读 [ConfigFlow + RouterOS 安装指南](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md)。
+普通 Docker / NAS 主机按下文操作。RouterOS Container 请阅读 [ConfigFlow + RouterOS](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md)。
 
-## 开始之前
-- 确认机器上已安装 Docker（Windows、macOS、Linux 均适用）。
-- 预留一个可访问的端口，例如 `80`，便于浏览器访问。
-- 建议准备一个空文件夹，用来保存 Config Flow 的数据备份。
+## 启动面板
 
----
+1. 安装 Docker 和 Docker Compose，准备一个长期保存数据的目录。
+2. 在该目录新建 `compose.yaml`，粘贴下面内容，替换登录密码和随机密钥。
 
-## 快速部署
-> 目标：把服务跑起来，确保能打开页面。
-
-在准备好的文件夹中创建 `docker-compose.yml`。镜像默认使用 `latest`，只需填写管理员用户名、随机密码和随机密钥：
 ```yaml
-version: '3.8'
 services:
   config-flow:
     image: thsrite/config-flow:latest
+    container_name: config-flow
     ports:
-      - "80:80"
+      - "5010:80"
     volumes:
       - ./data:/data
     environment:
-      - ADMIN_USERNAME=replace-with-your-admin-user
-      - ADMIN_PASSWORD=replace-with-a-random-password
-      - JWT_SECRET_KEY=replace-with-at-least-32-random-chars
+      DATA_DIR: /data
+      TZ: Asia/Shanghai
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: "replace-with-a-strong-password"
+      JWT_SECRET_KEY: "replace-with-at-least-32-random-characters"
     restart: unless-stopped
 ```
 
-不要把固定示例密钥或真实密码直接复制到生产环境。设置管理员认证后，首次登录即应确认密码已由随机值生成；`JWT_SECRET_KEY` 后续变更会使现有登录会话失效。
+3. 在文件所在目录执行：
 
-执行 `docker-compose pull && docker-compose up -d`，拉取最新镜像并启动服务。
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d
+```
 
-启动完成后：
-- 访问 `http://localhost`，出现登录页说明部署成功。
-- `./data` 保存 ConfigFlow 数据（含内置 Sub-Store 数据 `./data/sub-store`），方便以后迁移或备份。
+4. 当前电脑访问 `http://localhost:5010`；NAS 或服务器使用 `http://设备IP:5010`。
+5. 登录后在「系统设置」填写设备能访问的「服务域名」，生成并保存「访问令牌」。
 
-> 认证是可选的：不设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 即无需登录直接使用；设置后才开启登录，此时请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值。
-> 镜像已内置 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 后端并自动使用，无需另外部署或配置地址；可在「系统设置 → 第三方依赖」检测并在线更新，也可切换运行模式。默认按需启动，仅在订阅解析或节点转换确实需要时唤醒；任务结束后空闲 5 分钟自动停止。首次转换需等待启动就绪，后台任务也会自动唤醒。需要持续可用时可选「常驻运行」。运行中的转换、清理和在线更新不会被空闲停止打断；外部 Sub-Store 的启停由其部署环境管理。
-> 从旧版升级：compose 中的 `sub-store` 服务和 `SUB_STORE_URL` 环境变量已不再使用，可以删除。
+镜像已内置 Sub-Store 和节点测速组件。Sub-Store 默认按需启动，休眠时会在转换任务中自动唤醒，无需单独安装。
 
----
+## 完成第一份配置
 
-## 首次配置流程
-> 目标：导入资源、设置策略、生成第一份配置。
+按顺序操作：新建并选择配置空间 → 添加订阅并手动更新 → 创建引用订阅的策略组 → 添加规则并把 `MATCH` 排在最后 → 生成、下载并导入客户端。
 
-1. **导入资源**
-   - 「订阅管理」：添加机场订阅链接。
-   - 「节点管理」：适合逐条录入或批量导入单个节点。
-   - 在顶部选择当前配置，资源在下一步的策略组中直接引用。
-2. **整理策略**
-   - 在「策略管理」按用途建立策略组，例如“办公直连”“全局代理”。
-   - 需要分流的规则，可提前在「规则仓库」整理常用规则集。
-3. **生成配置**
-   - 进入「规则配置」，把规则与策略组关联。
-   - 前往「配置生成」，选择目标格式（Mihomo / Surge / MosDNS），预览后下载并导入客户端。
+每一步的填写示例见 [README 第一次使用](../README.md#第一次使用)。手动节点在策略组的「节点」来源中选择；共享资源不会自动加入每个新配置。
 
-完成以上三步，就能在客户端看到新的连接策略。
+## 后续维护
 
-> 提示：新建配置不会自动使用全部共享资源；先在策略组直接选择资源并编排规则。需要「前置 → 落地」时新增代理链类型（仅 Mihomo），原节点仍可单独使用。共享资源修改会影响所有引用者。
+- 部署文件和 `data` 目录需要长期保留。重装或换主机前，停服复制完整数据目录。
+- 修改部署文件中的环境变量后执行 `docker compose up -d`，仅重启容器不会应用修改。
+- 更新镜像前记录当前版本并确认备份成功，不只备份根 `config.json`。
+- 完整部署参数、故障排查和升级命令见 [部署指南](module/deployment.md)。
 
----
+## 实现参考
 
-## 功能速览
-- **订阅管理**：统一管理多个订阅源，通过 Sub-Store 解析订阅和转换节点格式。
-- **节点管理**：支持常见协议，批量导入、启停，通过 Sub-Store 自动转换节点格式。
-- **策略管理**：URL-Test、Fallback、Load-Balance 等策略，支持从订阅、节点中选择，支持跟随其他策略组（复用其他策略组的策略）。
-- **规则仓库与规则配置**：集中维护规则集，并按顺序控制流量去向。
-- **配置生成**：预览与下载当前配置；完整 JSON 备份、脱敏导出、恢复与重置统一位于「系统设置」，作用于整个系统。
-
----
-
-## 常见问题
-**Q：没有 Docker 经验怎么办？** 安装 Docker Desktop 或 Docker Engine 后，直接复制上面的命令即可运行。
-
-**Q：想让其他人访问该服务？** 启动命令中的 `-p 80:80` 可调整为服务器对外端口，例如 `-p 8080:80`，再开放防火墙即可。
-
-**Q：换电脑或重装系统会丢配置吗？** 不会，`data` 文件夹已经挂载在本地，复制该文件夹即可恢复。
-
-**Q：如何升级？** 先备份完整数据目录（包括 `system.json`、`profiles/` 和 `.bak`，不能只备份根 `config.json`），确认 Compose 的 `/data` 仍挂载原宿主机目录，再执行 `docker-compose pull && docker-compose up -d`。旧版多配置会自动迁移并保留 Agent 绑定；遇到迁移错误请保留原数据和日志，不要重置。详见[升级、备份与恢复](design/multi-config-management.md#升级备份与恢复)。
-
----
-
-现在就启动 Config Flow，完成部署与首份配置，后续即可根据业务需要继续拓展规则和策略。
+[Compose 配置](../docker/docker-compose.yml)、[页面导航](../frontend/src/navigation.ts)、[配置仓库](../backend/common/config_repository.py)。
