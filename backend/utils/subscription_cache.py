@@ -43,12 +43,18 @@ def save_subscription_nodes(
         payload['metadata'] = metadata
         if metadata.get('fetched_at'):
             payload['updated_at'] = metadata['fetched_at']
+    previous = load_subscription_cache(sub_id)
     try:
         get_repository().write_shared_json(
             os.path.join('subscribes', os.path.basename(cache_path)), payload,
         )
     except OSError as exc:
         logger.error("写入订阅缓存失败 (%s): %s", sub_id, exc)
+        return payload
+    if previous is not None and previous.get('count') != payload['count']:
+        from backend.utils.logger import log_text
+        logger.info("订阅 %s 节点数变化：%s → %s", log_text((metadata or {}).get('subscription_name') or sub_id),
+                    previous.get('count'), payload['count'])
     return payload
 
 

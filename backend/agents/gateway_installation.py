@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import fcntl
 import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,7 @@ from backend.agents.linux_gateway import _spec
 from backend.agents.oxidns_monitor import MonitorError
 from backend.agents.manager import _constant_time_ascii_equal, _upgrade_busy, _dns_follow_busy
 
+logger = logging.getLogger(__name__)
 SERVICES = ('mihomo', 'oxidns')
 SESSION_TTL = 24 * 60 * 60
 PUBLISH_TIMEOUT = 300
@@ -185,6 +187,7 @@ def create(repository, manager, body):
         session['script'] = _script(session)
         _ensure_short_download(session)
         _write(repository, session)
+    logger.info('已创建网关安装 %s（目标 %s）', session['name'], session['network']['address'])
     return public(repository, manager, session)
 
 
@@ -345,6 +348,7 @@ def enroll(repository, manager, session_id, token, body):
         session['agent_ids'] = found
         if session['phase'] == 'waiting':
             session.update(phase='enrolled', message='两个核心和 Agent 已登记。继续按顺序发布配置。')
+            logger.info('网关安装 %s：Mihomo 和 OxiDNS Agent 已登记', session['name'])
         _write(repository, session)
     return {'success': True, 'message': '安装登记完成，请回到 ConfigFlow 向导继续发布。'}
 
@@ -567,12 +571,15 @@ def run_publication(repository, manager, session_id, *, pause=time.sleep):
             final = _read(repository, session_id)
             final.update(phase='published', message='Mihomo 和 OxiDNS 均已发布并通过健康检查，现在可以预览网关转发。')
             _write(repository, final)
+        logger.info('网关安装 %s：Mihomo 和 OxiDNS 均已发布并通过健康检查', session['name'])
     except Exception as exc:
         with _locked(repository, session_id):
             final = _read(repository, session_id)
             message = str(exc) if isinstance(exc, (InstallationError, ValueError)) else '发布暂未完成，请检查设备状态后继续；已保存任务编号。'
             final.update(phase='publish_failed', message=message[:1200])
             _write(repository, final)
+        from backend.utils.logger import log_text
+        logger.warning('网关安装 %s 发布未完成：%s', final.get('name', session_id[:8]), log_text(message, 300))
 
 
 def publish(repository, manager, session_id, body, app):
@@ -610,6 +617,7 @@ def publish(repository, manager, session_id, body, app):
                     for service in SERVICES}
             session.update(phase='publishing', message='开始按顺序发布 Mihomo 和 OxiDNS；任一步失败都会停止后续操作。')
             _write(repository, session)
+            logger.info('网关安装 %s：开始按顺序发布 Mihomo 和 OxiDNS', session['name'])
     except Exception:
         lease.close()
         raise

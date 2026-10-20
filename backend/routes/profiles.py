@@ -6,6 +6,13 @@ from backend.common.auth import require_auth
 from backend.common.config import get_repository
 from backend.common.config_export import sanitize_config_for_output
 from backend.routes import profiles_bp
+from backend.utils.logger import client_ip, get_logger, log_text
+
+logger = get_logger(__name__)
+
+
+def _profile_label(profile):
+    return f"{log_text(profile.get('name') or profile.get('id'))}（{log_text(profile.get('id'), 64)}）"
 
 
 @profiles_bp.route('', methods=['GET', 'POST'])
@@ -17,7 +24,10 @@ def handle_profiles():
 
     data = request.get_json(silent=True) or {}
     clone_from = data.pop('clone_from', None)
-    return jsonify(repository.create_profile(data, clone_from=clone_from)), 201
+    profile = repository.create_profile(data, clone_from=clone_from)
+    logger.info('已创建配置空间 %s%s', _profile_label(profile),
+                f'，复制自 {log_text(clone_from, 64)}' if clone_from else '')
+    return jsonify(profile), 201
 
 
 @profiles_bp.route('/import-client', methods=['POST'])
@@ -53,6 +63,7 @@ def import_client_profile():
         return jsonify({'success': True, 'summary': result['summary'], 'warnings': result['warnings']})
     result = repository.import_client_profile(
         {'id': data.get('id'), 'name': name, 'description': data.get('description') or ''}, build)
+    logger.info('已从 %s 客户端配置导入配置空间 %s', log_text(data.get('client_type'), 32), _profile_label(result['profile']))
     return jsonify({'success': True, 'profile': result['profile'], 'summary': result['summary'],
                     'warnings': result['warnings']}), 201
 
@@ -64,9 +75,16 @@ def handle_profile(profile_id):
     if request.method == 'GET':
         return jsonify(repository._profile_metadata(profile_id))
     if request.method == 'PUT':
-        return jsonify(repository.update_profile(profile_id, request.get_json(silent=True) or {}))
+        profile = repository.update_profile(profile_id, request.get_json(silent=True) or {})
+        logger.info('已修改配置空间 %s', _profile_label(profile))
+        return jsonify(profile)
     body = request.get_json(silent=True) or {}
+    try:
+        profile = repository._profile_metadata(profile_id)
+    except Exception:
+        profile = {'id': profile_id}
     repository.delete_profile(profile_id, request.args.get('new_default') or body.get('new_default'))
+    logger.info('已删除配置空间 %s', _profile_label(profile))
     return '', 204
 
 
@@ -74,7 +92,9 @@ def handle_profile(profile_id):
 @require_auth
 def clone_profile(profile_id):
     data = request.get_json(silent=True) or {}
-    return jsonify(get_repository().clone_profile(profile_id, data)), 201
+    profile = get_repository().clone_profile(profile_id, data)
+    logger.info('已复制配置空间 %s → %s', log_text(profile_id, 64), _profile_label(profile))
+    return jsonify(profile), 201
 
 
 @profiles_bp.route('/<profile_id>/agents', methods=['GET'])
@@ -97,6 +117,8 @@ def rebind_profile_agents(profile_id):
             profile_id, data.get('target_profile_id'), data.get('agent_ids'))
     except AgentDeploymentConflict as error:
         return jsonify({'success': False, 'message': str(error)}), 409
+    logger.info('已将 %d 个 Agent 从配置空间 %s 改绑到 %s', len(result['agents']),
+                log_text(profile_id, 64), log_text(data.get('target_profile_id'), 64))
     return jsonify({'success': True, **result})
 
 
@@ -104,6 +126,7 @@ def rebind_profile_agents(profile_id):
 @require_auth
 def export_profile(profile_id):
     response = jsonify(sanitize_config_for_output(get_repository().export_profile(profile_id)))
+    logger.info('已导出配置空间 %s，来源 %s', log_text(profile_id, 64), client_ip())
     response.headers['Content-Disposition'] = f'attachment; filename={profile_id}.json'
     return response
 
@@ -115,6 +138,7 @@ def import_profile(profile_id):
     if not isinstance(data, dict):
         return jsonify({'success': False, 'message': '请求数据必须是 JSON 对象'}), 400
     get_repository().import_profile(profile_id, data)
+    logger.info('已向配置空间 %s 导入配置，来源 %s', log_text(profile_id, 64), client_ip())
     return jsonify({'success': True, 'profile_id': profile_id})
 
 

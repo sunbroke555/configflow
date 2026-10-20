@@ -18,6 +18,7 @@ import uuid
 
 import yaml
 
+from . import presence_log
 from . import rule_sync_store as store
 from .rule_sync_snapshot import fetch_snapshot
 from .version import compare_versions
@@ -172,6 +173,17 @@ def prepare_candidate(agent, source, baseline, settings, deployment_id):
     return _pack(manifest, store.bundle_files(candidate), candidate.config_version, comparison_config=comparison)
 
 
+_STATE_LEVELS = {'running': logging.INFO, 'succeeded': logging.INFO,
+                 'failed': logging.WARNING, 'blocked': logging.WARNING}
+
+
+def _log_state(agent, agent_id, status, message):
+    """Each transition once; pending/idle bookkeeping stays at DEBUG."""
+    from backend.utils.logger import log_text
+    logger.log(_STATE_LEVELS.get(status, logging.DEBUG), 'Agent %s 规则自动同步：%s',
+               log_text(agent.get('name') or agent_id), log_text(message, 300))
+
+
 class RuleSyncWorker:
     def __init__(self, manager, *, clock=time.time, prepare=prepare_candidate):
         self.manager = manager
@@ -185,6 +197,8 @@ class RuleSyncWorker:
                     if key != 'updated_at'}
         if previous != state:
             _update(self.manager, agent_id, state=state)
+            if (previous.get('status'), previous.get('message')) != (status, message):
+                _log_state(agent, agent_id, status, message)
 
     def run(self, agent_id):
         # Multiple web workers can start the loop; one device operation at a
@@ -438,6 +452,10 @@ def start_loop():
                 manager = get_agent_manager()
                 pending = {key: value for key, value in pending.items() if not value.done()}
                 agents = manager.get_all_agents()
+                try:
+                    presence_log.observe(agents)
+                except Exception as error:
+                    logger.debug('Agent presence logging failed (%s)', type(error).__name__)
                 if agents:
                     cursor %= len(agents)
                     agents = agents[cursor:] + agents[:cursor]

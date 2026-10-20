@@ -234,7 +234,12 @@ def disable(manager, target_id):
     return {'success': True, 'binding': None, 'state': None}
 
 
+_LOG_LEVELS = {'preparing': logging.INFO, 'succeeded': logging.INFO, 'failed': logging.WARNING}
+
+
 def _state(manager, target_id, status, message, *, before_save=None, **fields):
+    names = []
+
     def save(agents):
         if before_save is not None:
             before_save(agents)
@@ -242,10 +247,17 @@ def _state(manager, target_id, status, message, *, before_save=None, **fields):
         secrets = tuple(item.get('token') for item in agents)
         state = target.setdefault('dns_follow_state', {})
         message_safe = failure_text(message, secrets)
+        names.append((target.get('name') or target_id, (state.get('status'), state.get('message'))))
         state.update(fields, status=status, message=message_safe, updated_at=_now())
         state['events'] = append_event(state.get('events'), status, message_safe, secrets=secrets)
         return deepcopy(state)
-    return manager._update_agents(save)
+    result = manager._update_agents(save)
+    if names and names[-1][1] != (result.get('status'), result.get('message')):
+        # A persistent error repeats every round; record only its first occurrence.
+        from backend.utils.logger import log_text
+        _logger.log(_LOG_LEVELS.get(status, logging.DEBUG), 'OxiDNS %s DNS 联动：%s',
+                    log_text(names[-1][0]), log_text(result.get('message', ''), 300))
+    return result
 
 
 def retry(manager, target_id):

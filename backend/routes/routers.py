@@ -22,8 +22,14 @@ from backend.routers.store import (
     RouterValidationError, find_router, normalize, public_view, routers_of, static_rule_sets,
 )
 from backend.routes import routers_bp
+from backend.utils.logger import get_logger, log_text
 
 DRIVERS = {'ikuai': IKuaiDriver, 'routeros': RouterOSDriver}
+logger = get_logger(__name__)
+
+
+def _label(router):
+    return log_text(router.get('name') or router.get('id'))
 
 
 def _manual_sync_lock(function):
@@ -96,6 +102,7 @@ def list_or_create_routers():
     except RouterValidationError as error:
         return jsonify({'success': False, 'message': str(error)}), 400
     _save_items(config, routers_of(config) + [router])
+    logger.info('已添加主路由 %s（%s）', _label(router), router['type'])
     return jsonify({'success': True, 'router': public_view(router)})
 
 
@@ -121,6 +128,7 @@ def update_or_delete_router(router_id):
                 return jsonify(success=False, message='请先清空策略路由选择并发布撤回，再删除路由器记录'), 409
             get_repository().save_router_settings(profile_id, existing, None)
             reset_config_context()
+            logger.info('已删除主路由记录 %s', _label(existing))
             return jsonify({'success': True})
         try:
             router = normalize(request.get_json(silent=True), existing)
@@ -130,6 +138,11 @@ def update_or_delete_router(router_id):
             router.pop('last_probe', None)   # stale once the connection changes
         get_repository().save_router_settings(profile_id, existing, router)
         reset_config_context()
+        changed = sorted(key for key in set(router) | set(existing)
+                         if key not in ('last_probe', 'password') and router.get(key) != existing.get(key))
+        if router.get('password') != existing.get('password'):
+            changed.append('password')
+        logger.info('已修改主路由 %s 的设置：%s', _label(router), '、'.join(changed) or '无变化')
         return jsonify({'success': True, 'router': public_view(router)})
 
 
@@ -267,19 +280,25 @@ def router_apply(router_id):
             gateway_agent, desired, state, report = _inspect(config, router, driver)
             plan = build_plan(router, desired, state, report, report['return_routing'], driver)
             if plan['blockers']:
+                logger.warning('主路由 %s 发布被阻止：%s', _label(router), '；'.join(plan['blockers']))
                 return jsonify({'success': False, 'message': '；'.join(plan['blockers']), 'plan': plan}), 409
             if not expected or plan['fingerprint'] != expected:
+                logger.warning('主路由 %s 发布被拒绝：预览后状态已变化，需要重新预览', _label(router))
                 return jsonify({'success': False, 'message': '路由器、Agent 或期望状态在预览后发生了变化，请重新预览',
                                 'plan': plan}), 409
             if plan['empty']:
                 _capture_sync(config, router, driver, desired)
+                logger.info('主路由 %s 发布：没有需要写入的变更', _label(router))
                 return jsonify({'success': True, 'result': {'ok': True, 'log': [], 'rollback': []}, 'plan': plan})
             agent_client = None
             if router.get('manage_return_routing') is True:
                 from backend.common.agent_manager import get_agent_manager
                 agent_client = AgentReturnRouting(get_agent_manager(), gateway_agent)
             published_config = config
+            changes = sum(len(stage['ops']) for stage in plan['stages'])
+            logger.info('开始发布到主路由 %s：%d 项变更', _label(router), changes)
             result = execute(plan, driver, agent_client)
+            _log_release(router, changes, result)
             publication = {'last_release': {
                 'at': _now(), 'ok': result['ok'], 'fingerprint': plan['fingerprint'],
                 'failed_stage': result.get('failed_stage', ''),
@@ -291,6 +310,7 @@ def router_apply(router_id):
             if result['ok']:
                 _capture_sync(published_config, router, driver, desired)
     except RouterError as error:
+        logger.warning('主路由 %s 发布中止：%s', _label(router), error)
         return jsonify({'success': False, 'message': str(error)}), 502
     finally:
         if driver is not None:
@@ -303,6 +323,23 @@ def router_apply(router_id):
         message = f'阶段「{result["failed_stage"]}」失败，{detail}'
     return jsonify({'success': result['ok'], 'result': result, 'plan': plan, 'message': message}), \
         200 if result['ok'] else 502
+
+
+def _log_release(router, changes, result):
+    label = _label(router)
+    for entry in result['log']:
+        if entry['status'] in ('warning', 'manual'):
+            logger.warning('主路由 %s 发布提示（%s）：%s', label, entry['stage'], entry['summary'])
+    if result['ok']:
+        logger.info('主路由 %s 发布完成：%d 项变更已写入并通过回读校验', label, changes)
+        return
+    failure = next((entry['summary'] for entry in reversed(result['log']) if entry['status'] == 'failed'), '')
+    logger.error('主路由 %s 发布失败：阶段「%s」%s', label, result['failed_stage'], failure)
+    failed = [entry['summary'] for entry in result['rollback'] if entry['status'] == 'failed']
+    if failed:
+        logger.error('主路由 %s 回滚未完成：%s', label, '；'.join(failed))
+    elif result['rollback']:
+        logger.warning('主路由 %s 已逆序撤销 %d 项已完成的变更', label, len(result['rollback']))
 
 
 @routers_bp.route('/<router_id>/routes', methods=['GET'])
@@ -503,6 +540,7 @@ def _device_route_change(router_id, *, apply):
             if not isinstance(fingerprint, str) or fingerprint != plan['fingerprint']:
                 return jsonify({'success': False, 'message': '操作内容或路由状态已变化，请重新预览后确认'}), 409
             result = execute_route_plan(driver, rows, plan)
+            logger.info('主路由 %s：%s%s', _label(current), plan['summary'], '' if result['changed'] else '（没有变化）')
             return jsonify({'success': True, 'result': result,
                             'message': '路由变更已写入并通过回读校验' if result['changed'] else '路由没有变化'})
     except RouteEditValidationError as error:
@@ -510,6 +548,8 @@ def _device_route_change(router_id, *, apply):
     except RouterConflictError as error:
         return jsonify({'success': False, 'message': str(error)}), 409
     except RouterError as error:
+        if apply:
+            logger.warning('主路由 %s 静态路由变更失败：%s', _label(router), error)
         return jsonify({'success': False, 'message': str(error)}), 502
     finally:
         if driver is not None:

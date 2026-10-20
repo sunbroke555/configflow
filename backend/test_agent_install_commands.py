@@ -12,6 +12,9 @@ from backend.agents import install_command_store as store
 from backend.agents.core_install_script import generate_core_install_script
 from backend.common import auth, config
 from backend.routes.agents import bp
+# These modules add routes to bp; import them before it is first registered,
+# or a later register_blueprints() in the same process cannot extend it.
+from backend.routes import client_tools, gateway_installations, linux_gateway_agents  # noqa: F401
 from backend.routes.auth import setup_before_request
 
 

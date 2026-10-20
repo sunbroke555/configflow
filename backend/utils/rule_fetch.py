@@ -5,12 +5,16 @@ networks. Only URL syntax is checked here; this is not a public-IP-only gate.
 """
 import errno
 from http.client import IncompleteRead, RemoteDisconnected
+import logging
 import ssl
 import time
 from urllib.parse import unquote, urljoin, urlsplit
 import requests
 from urllib3.exceptions import InvalidChunkLength, ProtocolError, TimeoutError as Urllib3TimeoutError
 from urllib3.util.ssl_match_hostname import CertificateError
+
+
+logger = logging.getLogger(__name__)
 
 
 class _RuleSession(requests.Session):
@@ -285,6 +289,9 @@ def _request_rule_with_retries(url, *, check_status, max_bytes, **kwargs):
             if (not isinstance(exc, requests.RequestException)
                     or attempt == len(delays) or not _is_transient_disconnect(exc)):
                 raise
+            from backend.utils.url_utils import safe_url_for_log
+            logger.info('规则下载连接中断（%s），%s 秒后重试第 %d 次：%s', type(exc).__name__,
+                        delays[attempt], attempt + 1, safe_url_for_log(url))
             time.sleep(delays[attempt])
 
 
@@ -313,6 +320,10 @@ def request_rule(url: str, *, method='get', config_data=None, max_redirects=3,
                 max_bytes=max_bytes, **kwargs)
         except requests.RequestException as exc:
             attempts.append((label, exc))
+            if index + 1 < len(candidates):
+                from backend.utils.url_utils import safe_url_for_log
+                logger.warning('规则下载失败（%s），改用%s：%s', type(exc).__name__,
+                               candidates[index + 1][0], safe_url_for_log(url))
             if index + 1 == len(candidates):
                 if len(attempts) == 1:
                     raise

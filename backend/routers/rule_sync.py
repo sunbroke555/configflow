@@ -254,7 +254,21 @@ def sync(profile_id, router_id, download=None):
         finally:
             if driver is not None:
                 driver.close()
+        _log_outcome(router, receipt)
         return store.public(receipt, True)
+
+
+def _log_outcome(router, receipt):
+    from backend.utils.logger import get_logger, log_text
+    logger = get_logger(__name__)
+    label = log_text(router.get('name') or router.get('id'))
+    if receipt.get('status') == 'synced':
+        logger.info('主路由 %s 远程规则同步完成：新增 %s 条，删除 %s 条', label,
+                    receipt.get('added', 0), receipt.get('removed', 0))
+    elif receipt.get('status') == 'paused':
+        logger.error('主路由 %s 远程规则同步已暂停，需要手动预览发布：%s', label, receipt.get('message', ''))
+    else:
+        logger.warning('主路由 %s 远程规则同步失败，将按间隔重试：%s', label, receipt.get('message', ''))
 
 
 def run_round(download=None):
@@ -279,8 +293,10 @@ def run_round(download=None):
                     continue
                 try:
                     sync(profile['id'], router['id'], download)
-                except RouterError:
-                    pass
+                except RouterError as error:
+                    from backend.utils.logger import get_logger, log_text
+                    get_logger(__name__).info('主路由 %s 本轮远程规则同步已跳过：%s',
+                                              log_text(router.get('name') or router['id']), error)
         finally:
             reset_config_context()
 
@@ -314,6 +330,9 @@ def start_job(profile_id, router_id):
             if receipt.get('status') == 'queued':
                 receipt.update(status='failed', message=str(error), checked_at=now())
                 store.write(profile_id, router_id, receipt)
+            from backend.utils.logger import get_logger, log_text
+            get_logger(__name__).warning('主路由 %s 手动触发的远程规则同步未执行：%s',
+                                         log_text((router or {}).get('name') or router_id), error)
         finally:
             reset_config_context()
             _worker.release()

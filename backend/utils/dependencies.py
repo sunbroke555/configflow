@@ -294,7 +294,7 @@ def _install_release(release):
         running = _wait_for_version(target)
         if running and parse_version(running) == parse_version(target):
             shutil.rmtree(backup_dir, ignore_errors=True)
-            logger.info('Sub-Store 已在线更新到 %s', target)
+            logger.info('Sub-Store 已在线更新：%s → %s', previous_version or '内置版本', target)
             _set_state('success', f'Sub-Store 已更新到 {target}')
             return
 
@@ -316,6 +316,7 @@ def _install_release(release):
                 if not restored or (previous_version and parse_version(restored) != parse_version(previous_version)):
                     raise DependencyUpdateError('原版本仍未就绪')
                 detail += f'；已回滚到 {restored}'
+                logger.info('Sub-Store 已回滚到 %s', restored)
             except Exception as rollback_error:
                 logger.warning('Sub-Store 回滚失败: %s', safe_exception_details(rollback_error))
                 detail += '；回滚未完成，请检查容器日志'

@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
@@ -154,7 +155,9 @@ def test_mihomo_provider_log_redacts_config_token(caplog, token):
     config = _provider_config()
     config["system_config"]["config_token"] = token
 
-    generate_mihomo_config(config)
+    # Provider URLs are logged at DEBUG; redaction must hold at every level.
+    with caplog.at_level(logging.DEBUG, logger="backend.converters.mihomo"):
+        generate_mihomo_config(config)
 
     logs = caplog.text
     assert token not in logs

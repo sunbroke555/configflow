@@ -1,6 +1,7 @@
 """配置管理路由"""
 import json
 import io
+import logging
 import re
 from urllib.parse import quote
 from flask import request, jsonify, send_file
@@ -10,7 +11,7 @@ from backend.common.auth import require_auth, validate_token_or_jwt
 from backend.common.config import get_config, save_config, get_repository, reset_config_context, save_config_with_publish_guard
 from backend.common.config_repository import ProfileInUse, ProfileValidationError
 from backend.common.profile_context import resolve_profile_id
-from backend.utils.logger import get_logger
+from backend.utils.logger import client_ip, get_logger
 from backend.utils.strategy_references import StrategyReferenceError
 
 logger = get_logger(__name__)
@@ -212,6 +213,27 @@ def get_profile_mosdns_config(profile_id):
     return get_mosdns_config()
 
 
+_CONFIG_PULL_PATH = re.compile(
+    r'^/api/config/(?:(?P<profile>[A-Za-z0-9][A-Za-z0-9_-]{0,63})/)?(?P<target>mihomo|surge|loon|mosdns|oxidns)(?:/[^/]+)?$')
+
+
+def register_config_pull_log(app):
+    """Client subscriptions are the only evidence a device actually fetched its config."""
+    from backend.common.internal_call import is_internal_call
+
+    @app.after_request
+    def log_config_pull(response):
+        # The query string carries the config token and is never logged.
+        match = _CONFIG_PULL_PATH.match(request.path) if request.method == 'GET' else None
+        if match and not is_internal_call():
+            from backend.utils.logger import log_text
+            logger.log(logging.INFO if response.status_code < 400 else logging.WARNING,
+                       '配置被拉取：%s（配置空间 %s），HTTP %s，来源 %s，客户端 %s', match['target'],
+                       match['profile'] or '默认', response.status_code, client_ip(),
+                       log_text(request.headers.get('User-Agent') or '-', 80))
+        return response
+
+
 @config_bp.route('/export', methods=['GET'])
 @require_auth
 def export_config():
@@ -219,6 +241,7 @@ def export_config():
     desensitize = request.args.get('desensitize', 'false').lower() == 'true'
     export_data = get_repository().export_all(desensitize=desensitize)
     payload = json.dumps(export_data, ensure_ascii=False, indent=2).encode('utf-8')
+    logger.info('已导出全部配置%s，来源 %s', '（脱敏）' if desensitize else '', client_ip())
     return send_file(
         io.BytesIO(payload),
         as_attachment=True,
@@ -235,6 +258,7 @@ def import_config():
             return jsonify({'success': False, 'message': '请求数据必须是 JSON 对象'}), 400
         get_repository().import_all(request.json)
         reset_config_context()
+        logger.info('已导入全部配置（覆盖现有配置），来源 %s', client_ip())
         return jsonify({'success': True})
     except ProfileInUse as e:
         return jsonify({'success': False, 'message': str(e)}), 409
@@ -251,6 +275,7 @@ def reset_config():
     try:
         get_repository().reset_all()
         reset_config_context()
+        logger.warning('全部配置已重置为默认值，来源 %s', client_ip())
 
         return jsonify({'success': True, 'message': '配置已重置为默认值'})
     except ProfileInUse as e:

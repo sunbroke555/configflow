@@ -34,7 +34,7 @@ def describe_webdav_error(error):
     return detail
 
 
-def upload_backup(snapshot, settings):
+def upload_backup(snapshot, settings, trigger='手动'):
     """Upload an export_all snapshot; temporary files are removed on every outcome."""
     from webdav3.client import Client
 
@@ -67,7 +67,9 @@ def upload_backup(snapshot, settings):
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.json', delete=False) as handle:
             temporary = handle.name
             json.dump(snapshot, handle, ensure_ascii=False, indent=2)
+        size = os.path.getsize(temporary)
         client.upload_sync(remote_path=directory + filename, local_path=temporary)
+        logger.info('WebDAV %s备份完成：%s%s（%.1f KB）', trigger, directory, filename, size / 1024)
         return filename
     finally:
         if temporary is not None and os.path.exists(temporary):
@@ -127,7 +129,7 @@ class _AutoBackupWorker:
                 snapshot = repository.export_all()
                 settings = snapshot['system'].get('backup', {})
                 if settings.get('auto_backup'):
-                    upload_backup(snapshot, settings)
+                    upload_backup(snapshot, settings, trigger='自动')
             except Exception as error:
                 logger.warning('WebDAV 自动备份失败（%s）；已保存的配置不受影响',
                                describe_webdav_error(error))

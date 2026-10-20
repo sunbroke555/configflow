@@ -4,6 +4,9 @@ from flask import request, jsonify
 from backend.routes import auth_bp
 from backend.common.internal_call import is_internal_call
 from backend.common.auth import is_auth_enabled, generate_token, parse_bearer_token, verify_token, require_auth, ADMIN_USERNAME, ADMIN_PASSWORD, JWT_EXPIRATION_HOURS
+from backend.utils.logger import client_ip, get_logger, log_text
+
+logger = get_logger(__name__)
 
 @auth_bp.route('/status', methods=['GET'])
 def auth_status():
@@ -17,7 +20,9 @@ def login():
         if not is_auth_enabled():
             return jsonify({'success': False, 'message': '当前未开启登录验证。'}), 400
         if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            logger.info('登录成功：用户 %s，来源 %s', log_text(username), client_ip())
             return jsonify({'success': True, 'token': generate_token(username), 'username': username, 'expiresIn': JWT_EXPIRATION_HOURS * 3600})
+        logger.warning('登录失败：用户名或密码错误，用户 %s，来源 %s', log_text(username), client_ip())
         return jsonify({'success': False, 'message': '用户名或密码错误，请重新输入。'}), 401
     except Exception as e:
         return jsonify({'success': False, 'message': f'登录失败。原始错误：{e}'}), 500
