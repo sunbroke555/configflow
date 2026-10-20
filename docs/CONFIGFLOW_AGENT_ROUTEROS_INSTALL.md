@@ -205,7 +205,34 @@ curl --noproxy '*' --resolve "www.google.com:443:${FAKE_IP}" \
 
 **只调整 DNS，客户端网关始终保留 RouterOS 地址。** 手动指定 DNS 的设备需单独修改。若存在自定义 DHCP DNS 选项，先按页面提示处理；多个内网网段不要直接套用本文示例。
 
-确认上网正常后，在 WinBox 的 **Container** 中为 Mihomo 和 OxiDNS 两个容器开启 **Start On Boot**。至此安装完成，无需额外添加全网 DNS 劫持规则。
+确认上网正常后，在 WinBox 的 **Container** 中为 Mihomo 和 OxiDNS 两个容器开启 **Start On Boot**。普通安装到这里即可；有些设备会忽略 DHCP 下发的 DNS，再按需设置下面的可选功能。
+
+<a id="dns-guard"></a>
+
+### 可选：强制局域网 DNS 走 OxiDNS
+
+如果设备自己指定了 `8.8.8.8` 等外部 DNS，可让 RouterOS 把它经过路由器的普通 DNS 查询转给 OxiDNS。**该功能默认关闭，仅支持 RouterOS。** 请先完成单设备测试，再开启：
+
+1. 编辑 RouterOS 接入设置，先选择 **DHCP DNS 服务器（OxiDNS Agent）**。
+2. 开启 **强制局域网 DNS 走 OxiDNS**，按下表选择附加选项。
+3. 保存后进入「发布预览」，点击 **保存并预览**，核对入口网段、OxiDNS 地址、放行设备和将增删的规则。
+4. 点击 **确认发布**，等待成功。只保存不会下发规则；测试设备手动指定外部 DNS 后，再检查查询是否到达 OxiDNS。
+
+| 选项 | 默认值 | 怎么选 |
+| --- | --- | --- |
+| 强制局域网 DNS 走 OxiDNS | 关闭 | 开启后转发对应 LAN 入口的 IPv4 UDP / TCP 53 查询；目的地为路由器自身的查询不在此范围 |
+| 拦截加密 DNS（853 端口） | 关闭 | 按需拦截 TCP / UDP 853；不会把加密内容转换成普通 DNS |
+| OxiDNS 故障时自动暂停 | 开启 | 每 10 秒检查 OxiDNS 的 TCP 53 能否连接，失败时暂停 DNS 转发规则，恢复后重新启用 |
+| 放行设备 | 空 | 每行填写一个 IPv4 或网段，最多 64 项；OxiDNS 和已选 Mihomo 网关自动放行 |
+
+注意以下范围和限制：
+
+- **只作用于识别到的一个 LAN 入口。** 系统根据通往 OxiDNS 的主路由表直连路由确定网段和接口；多网段 / VLAN 不会自动全部覆盖，无法唯一识别时会阻止发布。
+- **不会拦截 IPv6 或 HTTPS 加密 DNS（DoH，通常为 443 端口）。** 严格指定主机名的 Android「私人 DNS」在拦截 853 后可能直接失败，需要改为自动或关闭，再测试。
+- **“自动暂停”不是备用 DNS。** 它只检查 TCP 端口连通性，不验证 DNS 回答；暂停时仅关闭 53 转发规则，不恢复 DHCP 原值、不更换客户端 DNS，也不解除可选的 853 拦截。仍直接使用故障 OxiDNS 的设备需要另行恢复 DNS。
+- **被转发的查询可能显示为路由器 IP。** 为保证同网段回包经过路由器，会同时设置源地址转换；OxiDNS 按设备分流时需核对实际查询来源。正常直接访问同网段 OxiDNS 的设备不经过这条转发链。
+
+关闭功能后，仍需保存、预览并确认发布，才会移除它管理的规则。系统不自动删除已有的手工 DNS 规则；受管规则被外部改动时会阻止覆盖，先按提示核对。
 
 ## 日常使用
 
@@ -223,6 +250,8 @@ curl --noproxy '*' --resolve "www.google.com:443:${FAKE_IP}" \
 | 预览提示冲突，无法发布 | 先核对现有路由、分流和 FastTrack 设置，不要重复添加或直接删除旧规则 |
 | DNS 能解析，但代理网站打不开 | 路由是否发布成功、Mihomo 是否正常运行、代理节点是否可用 |
 | 只有部分设备不生效 | 设备实际 DNS 和 IP、来源设备策略是否已发布、浏览器安全 DNS / 其他代理 |
+| 开启强制 DNS 后仍有设备绕过 | 检查是否走同一 IPv4 LAN 入口、是否在放行范围，以及是否使用 IPv6 或 DoH；详见上方可选功能 |
+| 开启 853 拦截后设备无法解析 | 检查是否启用了严格的「私人 DNS」，先改为自动或关闭再测试 |
 | 发布失败或结果待确认 | 查看本次发布结果，核实设备状态后再操作；Agent 配置可在发布记录中使用「回滚到发布前」 |
 | 全网启用后无法上网 | 先将 RouterOS 的 DHCP DNS 恢复为安装前记录的值，让客户端重新获取租约 |
 
@@ -549,6 +578,7 @@ bye
 
 - 页面和发布顺序：[上游路由页面](../frontend/src/views/Routers.vue)、[设备分流工作区](../frontend/src/components/routers/PolicyRoutingPanel.vue)、[发布协调](../backend/routers/release.py)。
 - 路由器写入与 DHCP 范围：[RouterOS REST 驱动](../backend/routers/routeros.py)、[DHCP DNS 选择与校验](../backend/routers/dhcp_dns.py)。
+- 可选的 DNS 转发、放行与故障暂停：[强制 DNS 规则](../backend/routers/dns_guard.py)。
 - 镜像环境变量与持久化：[Agent 镜像](../docker/Dockerfile.agent)、[单服务启动脚本](../docker/docker-agent-entrypoint-service.sh)。
 - RouterOS 命令以目标版本为准，参考 [Container](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container)、[Files](https://help.mikrotik.com/docs/spaces/ROS/pages/2555971/Files)、[REST API](https://manual.mikrotik.com/docs/developer-guides/rest-api/)；镜像按架构导出参考 [Docker image save](https://docs.docker.com/reference/cli/docker/image/save/#platform)。
 
