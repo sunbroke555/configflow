@@ -1,0 +1,37 @@
+{
+  "scope": "实际产品HTML/版本/JS入口及已保存B配置API响应逐字一致，仅部署响应头增加拒权",
+  "responses": [
+    {
+      "path": "/login",
+      "body_identical": true,
+      "bytes": 952,
+      "sha256": "9560541907029a4e083bf48288a1db16837ee55e42a77d18735584df7a0b512a",
+      "source_policy": null,
+      "proxy_policy": "clipboard-write=(), clipboard-read=()"
+    },
+    {
+      "path": "/frontend-version.json",
+      "body_identical": true,
+      "bytes": 37,
+      "sha256": "d68d3b03783e028b3bd8a9e09a2eb1f22e5138a3e464ef46f5596ebb45da5089",
+      "source_policy": null,
+      "proxy_policy": "clipboard-write=(), clipboard-read=()"
+    },
+    {
+      "path": "/assets/index-DalITlqt.js",
+      "body_identical": true,
+      "bytes": 616094,
+      "sha256": "c67ce19893551258f1d135f3ebba8853b265e3b1c426a90c08501f6be75db06f",
+      "source_policy": null,
+      "proxy_policy": "clipboard-write=(), clipboard-read=()"
+    },
+    {
+      "path": "/api/oxidns/settings",
+      "body_identical": true,
+      "bytes": 9149,
+      "sha256": "efe60f5585eda4b228d83726bee2d6e55ab0d8b2c57a50d0ccc9a4b262c0bd0b",
+      "source_policy": null,
+      "proxy_policy": "clipboard-write=(), clipboard-read=()"
+    }
+  ]
+}

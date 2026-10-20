@@ -1,0 +1,348 @@
+{
+  "operation": "root IAB全选32点击识别，前2已识别保持；新30通过真实Agent专用入口抓取只有带噪title的HTTP页面",
+  "result": "passed",
+  "new_cleaned_names": [
+    {
+      "host": "remain-site03.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site03.test",
+      "name": "剩余实采站03",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site04.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site04.test",
+      "name": "剩余实采站04",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site05.test",
+      "checked_at": "2026-10-20T19:02:51",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site05.test",
+      "name": "剩余实采站05",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site06.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site06.test",
+      "name": "剩余实采站06",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site07.test",
+      "checked_at": "2026-10-20T19:02:51",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site07.test",
+      "name": "剩余实采站07",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site08.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site08.test",
+      "name": "剩余实采站08",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site09.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site09.test",
+      "name": "剩余实采站09",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site10.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site10.test",
+      "name": "剩余实采站10",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site11.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site11.test",
+      "name": "剩余实采站11",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site12.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site12.test",
+      "name": "剩余实采站12",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site13.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site13.test",
+      "name": "剩余实采站13",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site14.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site14.test",
+      "name": "剩余实采站14",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site15.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site15.test",
+      "name": "剩余实采站15",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site16.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site16.test",
+      "name": "剩余实采站16",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site17.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site17.test",
+      "name": "剩余实采站17",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site18.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site18.test",
+      "name": "剩余实采站18",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site19.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site19.test",
+      "name": "剩余实采站19",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site20.test",
+      "checked_at": "2026-10-20T19:02:51",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site20.test",
+      "name": "剩余实采站20",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site21.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site21.test",
+      "name": "剩余实采站21",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site22.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site22.test",
+      "name": "剩余实采站22",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site23.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site23.test",
+      "name": "剩余实采站23",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site24.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site24.test",
+      "name": "剩余实采站24",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site25.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site25.test",
+      "name": "剩余实采站25",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site26.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site26.test",
+      "name": "剩余实采站26",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site27.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site27.test",
+      "name": "剩余实采站27",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site28.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site28.test",
+      "name": "剩余实采站28",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site29.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site29.test",
+      "name": "剩余实采站29",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site30.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site30.test",
+      "name": "剩余实采站30",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site31.test",
+      "checked_at": "2026-10-20T19:02:50",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site31.test",
+      "name": "剩余实采站31",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    },
+    {
+      "host": "remain-site32.test",
+      "checked_at": "2026-10-20T19:02:49",
+      "description": "ConfigFlow title-only fixture",
+      "final_host": "remain-site32.test",
+      "name": "剩余实采站32",
+      "reason": "",
+      "source": "page",
+      "status": 200
+    }
+  ],
+  "old_meta_pages_unchanged": true,
+  "actual_http_short_gets": 30,
+  "processed_domains": [
+    "remain-site03.test",
+    "remain-site04.test",
+    "remain-site05.test",
+    "remain-site06.test",
+    "remain-site07.test",
+    "remain-site08.test",
+    "remain-site09.test",
+    "remain-site10.test",
+    "remain-site11.test",
+    "remain-site12.test",
+    "remain-site13.test",
+    "remain-site14.test",
+    "remain-site15.test",
+    "remain-site16.test",
+    "remain-site17.test",
+    "remain-site18.test",
+    "remain-site19.test",
+    "remain-site20.test",
+    "remain-site21.test",
+    "remain-site22.test",
+    "remain-site23.test",
+    "remain-site24.test",
+    "remain-site25.test",
+    "remain-site26.test",
+    "remain-site27.test",
+    "remain-site28.test",
+    "remain-site29.test",
+    "remain-site30.test",
+    "remain-site31.test",
+    "remain-site32.test"
+  ],
+  "active_job": null,
+  "active_site_connections": 0,
+  "markers_evidence": "当前实际部署fixture已无og:site_name，title保留“ :: 登录 - Powered by Test”；30结果有新版本description并清除标题噪声。原始region markers未持久化，不虚构抓取原始响应。",
+  "evidence": [
+    "P2-07-all32-named-domains.json",
+    "P2-07-title-only-http-readonly.json",
+    "P2-07-title-only-job-polls.json"
+  ]
+}

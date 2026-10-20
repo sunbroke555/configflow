@@ -1,0 +1,53 @@
+{
+  "operation": "经root明确授权，仅将自有临时Agent的32及其www子域采集条目暂移除，模拟已选中记录失效；不是自然采集失败，不写伪报告",
+  "agent_id": "agent_1792492525522_5364b4",
+  "target": "remain-site32.test",
+  "removed_entries": {
+    "2026-10-20": {
+      "remain-site32.test": {
+        "first_seen": "2026-10-20T18:56:17",
+        "last_seen": "2026-10-20T18:56:17",
+        "by_route": {
+          "\t\tdirect\tDIRECT": {
+            "conns": 1,
+            "fails": 0,
+            "fail_kinds": {},
+            "zero_dl": 0,
+            "up": 126,
+            "down": 77197
+          }
+        },
+        "ports": {
+          "80": 1
+        }
+      }
+    }
+  },
+  "traffic_backup": "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/groups/missing-record-private-backup/traffic.json",
+  "regions_backup": "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/groups/missing-record-private-backup/regions.json",
+  "traffic_before_sha256": "9e6da51ac54c2305885d521ead103ca97718a3aa33d2066cb85af93c0ec2dc0d",
+  "traffic_after_sha256": "e2a909f79f7ae76b722ab4225a5389c4fb462726bc1cd991ac5d38cc1883f10e",
+  "regions_backup_sha256": "279dfd82f145652bce2b5d6a24b32b044760b5e04856daad8cdd6f7cbd8f98c7",
+  "other31_domains_exactly_unchanged": true,
+  "source_status_unchanged": true,
+  "remaining_domains": 31,
+  "mutation_at": "2026-10-20T11:11:18.254972+00:00",
+  "observed_last_report": "2026-10-20T19:11:17",
+  "restore_pending": false,
+  "restoration": {
+    "operation": "缺记录两分支后，仅精确恢复原32采集条目；基于最新文件合并，不整文件覆盖；regions完全不写",
+    "result": "restored",
+    "added_hosts": [
+      "remain-site32.test"
+    ],
+    "merged_with_new_target_stats": [],
+    "other31_records_exactly_preserved": true,
+    "current_status_preserved": true,
+    "regions_bytes_unchanged": true,
+    "site31_new_identification_preserved": true,
+    "domain_count": 32,
+    "at": "2026-10-20T11:13:23.475676+00:00",
+    "before_sha256": "e2a909f79f7ae76b722ab4225a5389c4fb462726bc1cd991ac5d38cc1883f10e",
+    "after_sha256": "644903c2b54cf15e95f255ef749b0f9e3446726aa6ef1c01b2e1b867c61f5860"
+  }
+}

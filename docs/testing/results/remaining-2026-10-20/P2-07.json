@@ -1,0 +1,55 @@
+{
+  "case": "P2-07",
+  "status": "passed",
+  "scope": "真实1.8.34-go受管Agent采集 + 自有HTTP可控站点 + 网页批量识别；缺记录分支为明确标注、可恢复的单域故障夹具",
+  "steps": [
+    {
+      "step": 1,
+      "operation": "网页选01/02识别；此前32个域名由真实Mihomo连接经Agent自行上报，全部port80和真实AgentID已核对",
+      "result": "01/02实际HTTP200抓取，名称为剩余实采站01/02。此两条含og:site_name，未用来证明title清理。",
+      "passed": true
+    },
+    {
+      "step": 2,
+      "operation": "网页全选32，其中01/02已识别，点击识别",
+      "result": "UI显示0/30并提示本批30上限；实际HTTP短GET仅03…32恰30次，原01/02结果不变。",
+      "passed": true
+    },
+    {
+      "step": 3,
+      "operation": "自有fixture移除og:site_name，只保留带“ :: 登录 - Powered by Test”的title；网页上述未知30条再抓取",
+      "result": "30条真实HTTP200，名称全部为剩余实采站NN，没有登录/Powered by；title-only新版本description也匹配。",
+      "passed": true
+    },
+    {
+      "step": 4,
+      "operation": "完整备份唯一临时Agent真实traffic/regions，只临时移除32采集记录；网页保留32并加选31，点击识别",
+      "result": "网页已选2、任务0/1；终态API显示31在19:12:14重新真实识别成功，HTTP80仅31有1次请求，32仍缺记录。瞬时部分失败toast未截图，不声称已捕获该终态提示。",
+      "passed": true
+    },
+    {
+      "step": 5,
+      "operation": "同一明确缺记录夹具下，先在网页仅选32执行识别",
+      "result": "网页显示remain-site32.test 没有可用 Agent 最近采集的记录，保存截图。之后才加31验证部分成功。",
+      "passed": true
+    }
+  ],
+  "restoration": "仅恢复32原记录，其他31最新统计/status及regions字节保持，31新识别结果保留；数据重回32域，未整文件覆盖。",
+  "evidence": [
+    "P2-07-real-traffic.json",
+    "P2-07-real-collection-confirmed.json",
+    "P2-07-first-two-real-identification.json",
+    "P2-07-title-only-real-identification.json",
+    "P2-07-title-only-http-readonly.json",
+    "P2-07-missing-fault-fixture.json",
+    "P2-07-partial-missing-domain-readonly.json",
+    "P2-07-partial-actual-http.json",
+    "P2-07-fault-restoration.json",
+    "../root-ui/sites-only-missing.png"
+  ],
+  "limitations": [
+    "使用明确标注的自有HTTP站点夹具，实际流量/Agent采集/真实Agent抓取均已验证，不声称是公网网站识别质量验收",
+    "Agent原始region markers不持久化，仅保留实际HTTP日志、当前无meta的title模板及最终page结果",
+    "未捕获部分失败瞬时终态toast，不伪造截图或API错误响应原文"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "case": "P2-06",
+  "status": "passed",
+  "completed_at": "2026-10-20T11:32:15.837658+00:00",
+  "scope": "真实14810同一配置空间的两台实际Mihomo；原core仅使用既有7890入口，新增临时受管core17890，迁移只重启临时Agent，不从14810发布配置。受控HTTP源真实传输，不声明等于网卡总量。",
+  "notes": "真实UI原→临时→原可切换127.0.0.2约32KB/s与127.0.0.3约96KB/s；仅停原端客户端后原端无流量而临时仍有流量。14812迁走Agent后自然离线，UI准确显示没有在线Mihomo。读取失败沿用上一轮真实停Agent但核心继续运行的截图。配置流向刷新保留；全部自有资源已清理。",
+  "steps": [
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "step_details": [
+    {
+      "step": 1,
+      "operation": "先进入实时流量，再启动两路HTTP下载，按实际连接核对来源/规则/策略/出口/速率。",
+      "result": "原端source127.0.0.2经7890、临时source127.0.0.3经17890，实际DIRECT。API下载增量32331.18与96993.53B/s；UI显示未知规则、DIRECT策略及出口，符合内核未填rule的真实结果。首采样提示沿用root确认的旧run步骤1，本轮补真实双core下载和UI。",
+      "evidence": [
+        "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/root-ui/multi-agent-primary.png",
+        "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/root-ui/multi-agent-temporary.png",
+        "P2-06-connections-started.json",
+        "P2-06-real-rates.json"
+      ]
+    },
+    {
+      "step": 2,
+      "operation": "只停止自有primary下载客户端，保留temporary客户端；UI与连接API再采样。",
+      "result": "原端0活跃连接、0B/s；临时1连接约97037.68B/s，UI原端无流量、临时仍93.6KB/s，未停原core/Agent。",
+      "evidence": [
+        "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/root-ui/multi-agent-primary-idle.png",
+        "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/root-ui/multi-agent-temporary-still-active.png",
+        "P2-06-primary-idle-temporary-active.json"
+      ]
+    },
+    {
+      "step": 3,
+      "operation": "同一14810/default页面点击原Agent→临时Agent→原Agent。",
+      "result": "来源127.0.0.2/约32KB/s与127.0.0.3/约96KB/s对应切换，回切仍为各自真实连接。",
+      "evidence": [
+        "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/root-ui/multi-agent-primary.png",
+        "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/root-ui/multi-agent-temporary.png"
+      ]
+    },
+    {
+      "step": 4,
+      "operation": "临时Agent真实迁出14812后，让旧实例自然达到无在线Mihomo；读取失败引用此前真实停Agent测试。",
+      "result": "本轮UI明确没有在线的Mihomo Agent及上线后显示说明。旧截图明确暂时读不到实时流量，与0流量、无设备分别提示；读取失败本轮未再次停原Agent。",
+      "evidence": [
+        "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/root-ui/multi-agent-no-online.png",
+        "/Users/sunbroke/program/configflow/docs/testing/results/lxc-2026-10-20/p2-06-agent-read-failed.png"
+      ]
+    },
+    {
+      "step": 5,
+      "operation": "root UI切回配置流向并刷新网页。",
+      "result": "root确认刷新仍保留配置流向选择，未强制切回实时流量。",
+      "evidence_source": "root实际IAB操作确认"
+    }
+  ],
+  "limits": [
+    "HTTP源为明确测试夹具，传输/连接/内核API均真实；规则为空时页面显示未知，不冒充命中规则。",
+    "首采样提示与读取失败分支复用旧run已完成证据；本轮新增自然无在线设备、双Agent实际切换及独立停流。",
+    "本轮临时core TUN/DNS/nativeAIO关闭，测试没有变更原core配置、网络或现有四服务。"
+  ],
+  "evidence": [
+    "P2-06-migration-complete.json",
+    "P2-06-real-rates.json",
+    "P2-06-primary-idle-temporary-active.json",
+    "P2-06-flows-ended.json",
+    "final-cleanup.json"
+  ]
+}

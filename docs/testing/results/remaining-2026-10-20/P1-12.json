@@ -1,0 +1,25 @@
+{
+  "case": "P1-12",
+  "status": "passed",
+  "operation": "根IAB批量框取消B，仅A应用新URL，然后网页正式Agent发布；读取实际Mihomo /group和live配置",
+  "result": "根IAB只改A后正式发布succeeded。真实核心A testUrl=health-a-new，B=health-b；除A URL外，全部live组定义相同，A/B interval111/222、timeout1234/2345、来源/手动节点、providers定义及运行节点名/类型保持。正式完整发布重新生成provider文件，其字节hash与此前HTTP刷新缓存不同，未以hash不变作为通过证据。",
+  "covered_steps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "pending_steps": [],
+  "limitations": [
+    "前1—5步使用已有真实网页证据，本轮补完整管理发布第6步",
+    "不可达源节点只用于载入配置与候选验证，不宣称代理可连接"
+  ],
+  "evidence": [
+    "url-managed-deployment.json",
+    "refreshed-five.json",
+    "url-published.json",
+    "P1-12-comparison.json"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "scope": "仅清理自建手机/键盘测试空间",
+  "profile": "remaining-mobile-20261020",
+  "delete_status": 204,
+  "default_export_before_sha": "c2dc762fe2c3531e1d25bd1165d3edb024edb57924a5f441fa29a4ce5e7e86aa",
+  "default_export_after_sha": "c2dc762fe2c3531e1d25bd1165d3edb024edb57924a5f441fa29a4ce5e7e86aa",
+  "default_unchanged": true,
+  "profile_absent": true,
+  "backup": "私有备份保留，不公开配置内容",
+  "time": "2026-10-20T11:29:00.676399+00:00"
+}

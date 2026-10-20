@@ -1,0 +1,202 @@
+{
+  "date": "2026-10-20",
+  "source": {
+    "sourceCommit": "3f38649",
+    "agentVersion": "1.8.34-go",
+    "agentSha256": "90725b66601116d0539b036fc64fab27490223bd242ae7d437628f48cd8592e4",
+    "productChangesThisFollowup": false,
+    "productionDeployed": false,
+    "originalFixPullRequest": 280,
+    "originalFixPullRequestMergedAt": "2026-10-20T10:16:52Z",
+    "mergePerformedByThisRun": false,
+    "upstreamMainObserved": "2d8eb67",
+    "upstreamMainFullRetest": false,
+    "publicEvidence": "results/remaining-2026-10-20/summary.json",
+    "evidencePullRequest": "https://github.com/thsrite/configflow/pull/284"
+  },
+  "counts": {
+    "passed": 34,
+    "failed": 0,
+    "na": 2,
+    "running": 0,
+    "pending": 0
+  },
+  "scope": "本次继续补测的12项；计数包含此前完整36项清单。测试网页在本机保留，逐项新旧记录均存档。",
+  "followup_product_changes": false,
+  "new_confirmed_product_issues": [],
+  "normal_linked_publish": "原修复轮已实际验证DNS上游不变跳过OxiDNS下载/子发布、端口1053→1153触发真实联动并通过DNS查询；本轮新增真实受管Mihomo候选刷新与测速URL发布成功。没有对后续主线变更声称已完成相同现场验收。",
+  "results": {
+    "P0-07": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：保持隔离.36网关启用，执行真正systemctl reboot，记录SSH断开、容器启动标识、运行时间与四服务PID；重连后不手动应用，观察自动恢复，再用隔离客户端验证DNS、直连、代理与选中IP分流，最后正式撤销。\n结果：确实重启，boot_id变化；重连初次未恢复，约2秒后自动健康。重启后的DNS和四种HTTP路径成功，撤销恢复7个系统参数、原地址及默认路由，临时表/journal/客户端清除，四服务正常。\n公网超时诊断：局域网对照16/16成功；三轮公网对照共120次，原网关与测试网关均出现失败。同步包头显示部分预期ACK/响应首段在PVE物理WAN接收观察点已未见；没有发现所观察虚拟网桥/测试网关/路由器软件内部对应丢包。仍不能唯一排除NIC/offload、光猫、线路、ISP或远端，需要外部可控端点或WAN外侧镜像才能继续唯一归因。测试抓包已停，路由器sniffer32字段完整恢复，未改网络/DNS/防火墙配置。",
+      "evidence_description": "results/remaining-2026-10-20/reboot-summary.json、public-timeout-summary.json、router-sniffer-restore-public.json"
+    },
+    "P1-02": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：真实网页在同一设置窗口清空主缓存，关闭再开启；随后关闭保存、重开设置；再分别检查探测缓存关闭与仍开启的空值校验。\n结果：同一窗口空值保留并阻止保存；关闭后可保存，新会话恢复有效容量4096。探测缓存仍开启时，关闭主缓存也不能绕过其空值校验。已恢复主缓存4096、TTL900、探测缓存2048，两者开启，另一空间未改变。\n清单修订：原第2步混淆了同一编辑会话和保存关闭后的新会话，原步骤与结果已留存，不将设计差异认作修复。",
+      "evidence_description": "results/remaining-2026-10-20/p1-02-05-current-evidence.json、cache-same-session-empty.png、cache-new-session-restored.png、probe-invalid-main-disabled.png"
+    },
+    "P1-05": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：网页完整参数删除并恢复标准主缓存；改名manual_cache，在可见YAML逐项核对tag、容量和调用；检查常用卡片保护，最后恢复lazy_cache并保存。\n结果：恢复容量4096，执行链重新接入；改名后调用同步，无旧tag残留。常用卡片明确暂不可编辑并提供完整参数入口，完整参数与YAML保留容量。恢复标准名称后正常编辑，保存后无测试名称残留，另一空间不变。\n清单修订：原第5步要求自定义重命名后常用卡片仍可直接编辑，与受管插件保护设计不符；旧描述已存档。",
+      "evidence_description": "results/remaining-2026-10-20/p1-02-05-current-evidence.json、cache-renamed-visible.yaml、cache-renamed-common-protected.png"
+    },
+    "P1-06": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：保留此前删除共享引用、查看引用、撤销、修正及失败重试的真实网页结果；本轮给依赖同步响应加12秒延迟，离开并确认放弃修改，检查空间选择；结束后切到空间B核对。\n结果：请求未结束时空间选择仍禁用；结束后恢复。B仍为线程6、缓存4096、TTL900，A/B已保存设置摘要均与本轮基线一致。延迟已撤销。组件回归另覆盖旧空间响应失效，不声称在网页强行完成了被禁用的切换。\n清单修订：末步改为验证实际入口的切换保护及结束后隔离，旧步骤留存。",
+      "evidence_description": "results/remaining-2026-10-20/p1-06-current-evidence.json、draft-space-blocked-pending.png、draft-b-after-late-response.png"
+    },
+    "P1-08": {
+      "status": "na",
+      "steps": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "notes": "本项需要可任意修改、与家庭上网隔离的真实RouterOS/CHR，先成功发布再测试停用与撤回。用户暂时没有这类环境，因此保留未测，不用Debian LXC或占位记录冒充通过。另项公网诊断虽按授权读取生产主路由包头和状态，但没有对其发布/撤回规则，不能替代本项。",
+      "evidence_description": "缺隔离RouterOS/CHR；生产主路由仅用于另项获授权的只读诊断，不用于本项规则测试。"
+    },
+    "P1-10": {
+      "status": "na",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false
+      ],
+      "notes": "继续补测记录：\n做了什么：网页从真实测试源拉取 4 节点后，正式发布到独立受管 Mihomo，再把来源加为 5 节点并在实际面板分别更新订阅、聚合和 A 专属筛选提供器。\n结果：A 从 DIRECT、手动香港02、来源香港02，增加匹配的香港03；B 从完整 4 节点增加香港03，保留所有来源节点；来源／聚合／A筛选数量从 4/2/1 变为 5/3/2，原手动节点没有被组内排除删掉。Mihomo 第六步已补齐，前五步原网页验证保留。\n环境限制：用户确认没有 Surge/Loon，本轮只完成 Mihomo 分支，第七步继续明确未覆盖；测试节点用于验证配置与候选，不声明代理网络可用。",
+      "evidence_description": "results/remaining-2026-10-20/P1-10.json、initial-four.json、refreshed-five.json"
+    },
+    "P1-12": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：在网页取消 B 的勾选，只把 A 的测速 URL 改为测试新地址，然后从正式 Agent 页面发布到独立受管 Mihomo；读取真实运行核心和配置对照。\n结果：正式发布成功，设备 A 使用新 URL，B 保留旧 URL；两个组原间隔、超时、来源、手动节点与提供器定义保持不变。前五步原网页草稿／非法值／断网重试证据保留，本轮补齐实际设备发布。此临时核心关闭 TUN/DNS，不影响 .35 原有核心和网络。",
+      "evidence_description": "results/remaining-2026-10-20/P1-12.json、P1-12-comparison.json"
+    },
+    "P1-14": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：保留此前真实.36自动检测与第二LAN地址歧义测试；本轮在只读Agent协议故障夹具先取得有效字段，再让响应变为非法JSON并点击重新自动检测。\n结果：网页明确提示“Agent返回的网关数据无法解析”，四个原字段保持不变；故障后没有网络设置提交、部署或目标写入。夹具已恢复有效响应。真实多地址测试的临时地址此前已删除。\n清单修订：现版为登记后的Agent自动检测；坏响应来自协议夹具，不冒充真实Linux网络检测。旧复制/粘贴步骤已留存。",
+      "evidence_description": "results/remaining-2026-10-20/p1-14-current-evidence.json、gateway-auto-valid.png、gateway-invalid-response-preserved.png；此前真实.36证据保留"
+    },
+    "P2-02": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：此前在真实局域网HTTP网页逐字核对安装命令128字符和网关操作说明333字符。本轮只在本机测试代理加拒绝剪贴板策略，先观察真实NotAllowedError，再点同源产品的复制安装命令。\n结果：现代API确实被浏览器拒绝；产品仍回退成功，剪贴板128字符与当前显示逐字相等且不是旧标记，成功提示准确。没有替换浏览器API，原剪贴板已恢复，本机代理已停止；复制未执行安装或应用网络。\n清单修订：已移除的旧检测命令入口改为核对现版入口，原步骤留存。",
+      "evidence_description": "results/remaining-2026-10-20/p2-02-current-evidence.json、clipboard-product-fallback.json、clipboard-real-policy-denial.png"
+    },
+    "P2-06": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：仅把独占临时Mihomo Agent真实登记到14810，与原Mihomo同属default；分别从127.0.0.2/.3通过两个实际核心下载自有HTTP流，网页手动选原设备→临时设备→原设备。仅停原侧测试下载，再比较两个选择；切配置流向后刷新。最后在迁走Agent、自然0/1离线的14812查看实时页。\n结果：原设备来源.2、约32KB/s；临时设备来源.3、约96KB/s，选择与连接API一致。停原侧下载后原页明确无流量，临时仍约93.6KB/s；配置流向刷新后保持。自然无在线设备时明确“没有在线的Mihomo Agent”，与此前实际“暂时读不到实时流量”的读取失败提示不同。原核心配置摘要、四服务PID不变，临时流量、核心/Agent和后台记录已精确清理。\n范围：本轮补齐真实同实例双Mihomo选择及无在线提示，读取失败沿用此前真实隔离现场证据；未改原核心、网络或生产服务。",
+      "evidence_description": "results/remaining-2026-10-20/P2-06.json、P2-06-real-rates.json、multi-agent-primary.png、multi-agent-temporary.png、multi-agent-no-online.png；此前p2-06-agent-read-failed.png"
+    },
+    "P2-07": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：通过真实Mihomo产生32个域名的连接，等真实Agent自行上报；网页先识别2项，再全选32项。站点后30项只保留带登录/Powered by后缀的标题。随后完整备份、仅临时移除32号域名的真实采集记录，分别测试仅缺记录及31+32混合识别，最后精准恢复。\n结果：首2项正常；第二批提示上限30，实际只请求未知03～32共30项，名称后缀全部清理。仅32号明确报无近期采集记录；混合任务仍真实完成31号识别，32号缺记录未阻止它。瞬时部分失败toast未截图，不伪造该终态提示。32号已恢复，其他31项统计和新识别结果未被覆盖。\n范围：网页与真实Agent采集/抓取链路已测；站点是自有HTTP夹具，缺记录是明确标注的单域故障夹具。",
+      "evidence_description": "results/remaining-2026-10-20/P2-07.json、P2-07-title-only-real-identification.json、P2-07-fault-restoration.json、sites-only-missing.png"
+    },
+    "P2-08": {
+      "status": "passed",
+      "steps": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "notes": "继续补测记录：\n做了什么：浏览器实际切到375×812，浅/深主题检查网关5步（前2步用未准备草稿，后3步用真实.36已发布会话，只查看）、25个长名称排序组的首尾及固定按钮、Agent曲线/系统监控/正确Mihomo与OxiDNS面板。桌面两主题均用Tab、空格、方向键和Esc排序，并保存或取消。\n结果：文档宽度375，无横向溢出；当前步骤、空名称错误和底部按钮可见可用；列表滚到末尾仍能操作保存/取消。键盘保存确实生效；Esc按界面提示“放下”，取消会丢弃临时顺序。监控打开对应设备，四种面板两主题均检查。退出向导已放弃未保存输入，未重新安装/发布/应用网络。主题已恢复跟随系统。\n清单修订：原Esc“取消本次移动”与界面提示及实现不符，旧步骤留存；没有因此改产品行为。",
+      "evidence_description": "results/remaining-2026-10-20/P2-08.json、mobile-gateway-step5-light.png、mobile-sort-light-bottom.png、keyboard-light-escape-drops.png、mobile-oxidns-light.png"
+    }
+  },
+  "limitations": [
+    "P1-08缺可任意修改且与家庭上网隔离的真实RouterOS/CHR；未用生产主路由代测。",
+    "P1-10的Mihomo六步已实际验证；Surge/Loon客户端第7步因无环境未测。",
+    "公网超时在原网关对照同样复现；预期包在物理WAN接收观察点未见，仍无法唯一归因NIC/offload、光猫或更外部链路。需可控公网端点或WAN外侧镜像。",
+    "本轮冻结3f38649产品源码与1.8.34-go实际二进制，未宣称后续合并#281–283已完成本轮全套验收。",
+    "六处清单预期按现版明确流程修订，原步骤、原判定和修订原因完整留存于checklistPlanHistory。"
+  ],
+  "cleanup": "本轮临时App/协议夹具14811/14812/14813/14825/14831/14832/14833、独占HTTP80、额外Mihomo/Agent单位与目录、测试流量及新增后台Agent已清理。自建手机排序空间已删除，default导出前后完全一致。.35原四服务PID及两核心配置摘要保持，.36四服务正常、网关正式撤销、7个系统参数与原网络恢复。路由器sniffer32字段完整恢复且停止，PVE/路由器无网络配置变更。本机仅保留主隔离14810与手测报告38743；本地私有证据保留。",
+  "plan_history": "checklist-plan-history.json",
+  "public_evidence_policy": "只提交脱敏摘要、可公开测试配置摘录和不含安装命令的截图。原始包头、设备公网地址、私有manifest/登录凭据、安装能力URL及原始配置备份均保留本地。单项JSON中未列入artifact-index的原始交叉引用属于私有/既有证据，不表示一并公开。",
+  "current_checklist_cases": "checklist-current-cases.json",
+  "environment": {
+    "appBuild": "952fc97（原清单）→3f38649（四修复及本轮补测）",
+    "agentBuild": "3f38649；实际二进制SHA256 90725b66601116d0539b036fc64fab27490223bd242ae7d437628f48cd8592e4",
+    "testSpace": "产品写入/发布只用独立临时实例与.35/.36隔离LXC；公网诊断另外只读PVE/主路由包头与状态",
+    "testAgent": ".35：Mihomo + OxiDNS；.36：Mihomo + OxiDNS（专用 LXC）",
+    "deployment": "主程序：Mac 冻结源码与独立临时数据；设备：.35 Debian 13.1 / .36 Debian 12 LXC",
+    "testDate": "2026-10-20",
+    "tester": "Codex",
+    "agentVersion": "1.8.34-go",
+    "browser": "Codex内置浏览器；实测375×812手机与1280×900桌面，浅/深主题和真实键盘操作"
+  },
+  "cumulative_result_note": "34项为两轮累计结果；本轮补测固定3f38649，其余沿用原清单现场记录，不声称所有36项都在本轮重新执行。"
+}

@@ -1,0 +1,20 @@
+{
+  "proxy_pid": 6152,
+  "port_14833_closed": true,
+  "app_14811_healthy": true,
+  "browser_permission_preferences_changed": false,
+  "agent_fixture_healthy_after_proxy_stop": [
+    {
+      "service": "mihomo",
+      "port": 14831,
+      "HTTP": 200,
+      "success": true
+    },
+    {
+      "service": "oxidns",
+      "port": 14832,
+      "HTTP": 200,
+      "success": true
+    }
+  ]
+}

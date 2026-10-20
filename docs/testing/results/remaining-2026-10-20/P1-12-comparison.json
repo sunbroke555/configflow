@@ -1,0 +1,118 @@
+{
+  "operation": "根IAB批量框取消B，仅A应用新URL，然后网页正式Agent发布；读取实际Mihomo /group和live配置",
+  "result": "passed",
+  "runtime_test_urls": {
+    "A-测速测试组": "http://192.168.0.101:14825/health-a-new",
+    "GLOBAL": "",
+    "B-测速测试组": "http://192.168.0.101:14825/health-b"
+  },
+  "only_A_url_changed": true,
+  "interval_timeout_sources_unchanged": true,
+  "provider_definitions_unchanged": true,
+  "provider_file_hashes_unchanged": false,
+  "safety": {
+    "mixed-port": 17890,
+    "external-controller": "127.0.0.1:19091",
+    "dns": {
+      "enable": false
+    },
+    "tun": {
+      "enable": false
+    },
+    "allow-lan": false,
+    "bind-address": "127.0.0.1"
+  },
+  "deployment": "url-managed-deployment.json",
+  "evidence": [
+    "refreshed-five.json",
+    "url-published.json"
+  ],
+  "runtime_provider_candidate_names_types_unchanged": true,
+  "provider_file_hash_note": "正式完整发布重新生成provider文件，与此前Mihomo HTTP刷新写入的缓存字节hash不同。仅认定provider定义和真实运行节点名/类型不变；未声称文件字节完全相同。",
+  "runtime_provider_candidates": {
+    "A-测速测试组": [
+      {
+        "name": "DIRECT",
+        "type": "Direct"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      }
+    ],
+    "A-测速测试组_手测香港聚合_筛选": [
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "香港03",
+        "type": "Http"
+      }
+    ],
+    "B-测速测试组": [
+      {
+        "name": "DIRECT",
+        "type": "Direct"
+      }
+    ],
+    "default": [
+      {
+        "name": "DIRECT",
+        "type": "Direct"
+      },
+      {
+        "name": "REJECT",
+        "type": "Reject"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "B-测速测试组",
+        "type": "URLTest"
+      },
+      {
+        "name": "A-测速测试组",
+        "type": "URLTest"
+      }
+    ],
+    "手测四→五节点订阅": [
+      {
+        "name": "香港01",
+        "type": "Http"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "日本01",
+        "type": "Http"
+      },
+      {
+        "name": "广告",
+        "type": "Http"
+      },
+      {
+        "name": "香港03",
+        "type": "Http"
+      }
+    ],
+    "手测香港聚合": [
+      {
+        "name": "香港01",
+        "type": "Http"
+      },
+      {
+        "name": "香港02",
+        "type": "Http"
+      },
+      {
+        "name": "香港03",
+        "type": "Http"
+      }
+    ]
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "time": "2026-10-20T11:29:15.145693+00:00",
+  "source_commit": "3f38649",
+  "scope": "仅本worker独立本地主程序与只读Agent协议夹具；无真实核心、未实际远端部署",
+  "saved_configuration_before_stop": [
+    {
+      "profile": "remaining-oxi-a",
+      "worker_threads": 8,
+      "saved_cache_values": {
+        "cache_enabled": true,
+        "cache_size": 4096,
+        "cache_lazy_ttl": 900,
+        "probe_cache_enabled": true,
+        "probe_cache_size": 2048
+      },
+      "cache_plugins": [
+        {
+          "tag": "local_probe_cache",
+          "size": 2048,
+          "lazy_cache_ttl": null
+        },
+        {
+          "tag": "lazy_cache",
+          "size": 4096,
+          "lazy_cache_ttl": 900
+        }
+      ],
+      "cache_executor_references": [
+        {
+          "path": ".plugins[2].args[0].exec",
+          "exec": "$lazy_cache"
+        },
+        {
+          "path": ".plugins[3].args[0].exec",
+          "exec": "$local_probe_cache"
+        }
+      ],
+      "renamed_plugin_aliases": {},
+      "baseline_settings_sha256": "807ed9a71f2a9b95015711e6c226b06d99de9780f230818410a7851c5122cff1",
+      "final_settings_sha256": "a8a5b8c7d8e70aeab4c363ff15a50f2f2b2292d969f85288883884fba011dc19",
+      "full_settings_equal_initial_baseline": false,
+      "full_settings_equal_after_cache_ui": true,
+      "expected_final_values_match": true
+    },
+    {
+      "profile": "remaining-oxi-b",
+      "worker_threads": 6,
+      "saved_cache_values": {
+        "cache_enabled": true,
+        "cache_size": 4096,
+        "cache_lazy_ttl": 900,
+        "probe_cache_enabled": true,
+        "probe_cache_size": 2048
+      },
+      "cache_plugins": [
+        {
+          "tag": "lazy_cache",
+          "size": 4096,
+          "lazy_cache_ttl": 900
+        },
+        {
+          "tag": "local_probe_cache",
+          "size": 2048,
+          "lazy_cache_ttl": null
+        }
+      ],
+      "cache_executor_references": [
+        {
+          "path": ".plugins[4].args[0].exec",
+          "exec": "$lazy_cache"
+        },
+        {
+          "path": ".plugins[5].args[0].exec",
+          "exec": "$local_probe_cache"
+        }
+      ],
+      "renamed_plugin_aliases": {},
+      "baseline_settings_sha256": "efe60f5585eda4b228d83726bee2d6e55ab0d8b2c57a50d0ccc9a4b262c0bd0b",
+      "final_settings_sha256": "efe60f5585eda4b228d83726bee2d6e55ab0d8b2c57a50d0ccc9a4b262c0bd0b",
+      "full_settings_equal_initial_baseline": true,
+      "full_settings_equal_after_cache_ui": true,
+      "expected_final_values_match": true
+    }
+  ],
+  "baseline_note": "A经过真实删除/恢复/重命名/还原保存，插件顺序/生命周期元数据允许变化，完整JSON未冒称恢复初始字节；最终保存配置与after-cache UI确认版本完全一致。B完整保存配置哈希始终与初始基线一致。",
+  "fixture_mode": "valid",
+  "native_apply_delay_seconds": 0.0,
+  "services": [
+    {
+      "pid": 99436,
+      "signal": "SIGTERM"
+    },
+    {
+      "pid": 160,
+      "signal": "SIGTERM"
+    },
+    {
+      "pid": 6152,
+      "already_stopped": true
+    }
+  ],
+  "ports_closed": {
+    "14811": true,
+    "14831": true,
+    "14832": true,
+    "14833": true
+  },
+  "own_background_processes_remaining": [],
+  "gateway_before_stop": {
+    "gateway_phase": "enrolled",
+    "gateway_deployments": {},
+    "target_changed": false,
+    "config_changed": false,
+    "fixture_methods_seen": [
+      "GET"
+    ],
+    "fixture_request_count": 15
+  },
+  "remote_deployment_performed": false,
+  "other_workers_or_remote_services_signaled": false,
+  "untouched_ports": [
+    14810,
+    38743
+  ],
+  "private_workspace_retained": "/tmp/configflow-gateway-lab-remaining-drafts-eu4cek2c",
+  "private_workspace_exists": true,
+  "local_evidence_retained": "/Users/sunbroke/.codex/tmp/configflow-remaining-20261020/drafts",
+  "private_credentials_retained_not_public": true,
+  "cleanup_complete_for_this_worker": true,
+  "browser_cleanup": "root已关闭剪贴板代理tab并恢复原剪贴板；本轮worker未创建浏览器窗口，未触碰用户/其他worker页签。"
+}

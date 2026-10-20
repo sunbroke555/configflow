@@ -1,0 +1,44 @@
+{
+  "operation": "root IAB先仅32识别得到无可用记录错误；再保留32加选31点击，网页显示0/1，本次只读等待31真实访问完成",
+  "root_ui_full_missing_message": "remain-site32.test 没有可用 Agent 最近采集的记录",
+  "root_ui_selection": 2,
+  "root_ui_planned": 1,
+  "site31_before": {
+    "source": "page",
+    "host": "remain-site31.test",
+    "checked_at": "2026-10-20T19:02:50",
+    "name": "剩余实采站31",
+    "description": "ConfigFlow title-only fixture",
+    "reason": "",
+    "status": 200,
+    "final_host": "remain-site31.test"
+  },
+  "site31_after": {
+    "checked_at": "2026-10-20T19:12:14",
+    "description": "ConfigFlow title-only fixture",
+    "final_host": "remain-site31.test",
+    "host": "remain-site31.test",
+    "name": "剩余实采站31",
+    "reason": "",
+    "source": "page",
+    "status": 200
+  },
+  "site32_still_missing": true,
+  "job_finished": true,
+  "polls": [
+    {
+      "at": "2026-10-20T11:12:52.210086+00:00",
+      "job": null,
+      "site31_page": {
+        "checked_at": "2026-10-20T19:12:14",
+        "description": "ConfigFlow title-only fixture",
+        "final_host": "remain-site31.test",
+        "host": "remain-site31.test",
+        "name": "剩余实采站31",
+        "reason": "",
+        "source": "page",
+        "status": 200
+      }
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-20",
+  "source_commit": "3f38649",
+  "agent_version": "1.8.34-go",
+  "scope": "隔离客户端对照原网关和测试网关；补充虚拟化宿主、路由器 LAN/WAN、物理 WAN 包头同步观察。",
+  "result": "公网偶发超时在原网关对照中也复现。同步失败样本的预期 ACK 或响应首段在物理 WAN 接收观察点未见；未发现已观察 guest、软件网桥或路由器软件转发内部的对应丢包。现有证据不能唯一定位具体设备或运营商。",
+  "controlled_lan": {
+    "baseline_gateway": {
+      "passed": 8,
+      "failed": 0
+    },
+    "test_gateway": {
+      "passed": 8,
+      "failed": 0
+    }
+  },
+  "public_rounds": [
+    {
+      "name": "初次成对对照",
+      "requests": 48,
+      "baseline_gateway": {
+        "passed": 22,
+        "failed": 2
+      },
+      "test_gateway": {
+        "passed": 22,
+        "failed": 2
+      }
+    },
+    {
+      "name": "同步外部观察",
+      "requests": 48,
+      "baseline_gateway": {
+        "passed": 21,
+        "failed": 3
+      },
+      "test_gateway": {
+        "passed": 23,
+        "failed": 1
+      }
+    },
+    {
+      "name": "逐请求硬件计数补测",
+      "requests": 24,
+      "passed": 22,
+      "failed": 2,
+      "failed_gateways": [
+        "baseline_gateway",
+        "test_gateway"
+      ]
+    }
+  ],
+  "verified_failed_flows": [
+    "测试网关失败样本完成握手。请求经测试网关和主路由 NAT 后，多次出现在物理 WAN 发送观察点；没有在 WAN 接收观察点看到对应数据 ACK 或 HTTP 响应。",
+    "原网关对照失败样本在物理 WAN 只见响应末尾 5 字节和 FIN，其序号跨过前 847 字节；这些可见包头在路由器 WAN/LAN 和客户端间一致。",
+    "硬件计数补测的两个失败样本中，WAN missed/fifo/CRC/errors、队列丢包、TX errors/timeout、softnet dropped 和物理 RX dropped 增量均为零。历史累计 missed/fifo=265 不能认定为本次根因。"
+  ],
+  "limits": [
+    "AF_PACKET 发送记录仅证明报文提交到网卡的观察点，不能证明实际在线路上传输成功。",
+    "物理 WAN RX 未见预期包，仍不能唯一排除网卡、offload、光猫、物理链路、ISP/CGNAT 或远端；计数为零也不能绝对排除未计数的异常。",
+    "进一步唯一归因需要可控公网端点或 WAN/光猫外部镜像。现有同 LAN 环境不能补足这一观察点。",
+    "连接与读取各设 3.5 秒期限；比例只描述本轮实验，不代表长期可用性。"
+  ],
+  "safety": {
+    "payload_saved": false,
+    "product_code_changed": false,
+    "packages_installed": false,
+    "network_dns_firewall_offload_configuration_changed": false,
+    "temporary_router_sniffer_original_configuration_restored": true,
+    "gateway_formal_remove_http": 200,
+    "original_seven_sysctls_restored": true,
+    "temporary_client_namespace_removed": true
+  },
+  "evidence": [
+    "external-observation/external-analysis.json",
+    "external-observation/failed-flow-hop-evidence.json",
+    "external-observation/hardware-results.json",
+    "router-sniffer-restore-public.json"
+  ],
+  "redaction": "公开摘要不含凭据、设备公网地址、内部地址、MAC、请求正文或包 payload；原始包头和设备状态保存在私有证据目录。"
+}

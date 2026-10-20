@@ -1,0 +1,340 @@
+{
+  "operation": "32并发真实HTTP /hold经临时Mihomo读取20秒；只等待真实Agent下一轮traffic-report，随后GET域名发现API核对",
+  "result": "真实采集前提已满足，等待根IAB执行网站批量识别",
+  "status": "ready_for_ui",
+  "source_agent_id": "agent_1792492525522_5364b4",
+  "last_real_report": "2026-10-20T18:56:17",
+  "expected_domains": 32,
+  "all_ports_80": true,
+  "all_from_real_agent": true,
+  "all_unidentified": true,
+  "rows": [
+    {
+      "domain": "remain-site01.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site02.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site03.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site04.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site05.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site06.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site07.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site08.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site09.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site10.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site11.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site12.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site13.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site14.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site15.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site16.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site17.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site18.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site19.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site20.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site21.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site22.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site23.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site24.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site25.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site26.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site27.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site28.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site29.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site30.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site31.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    },
+    {
+      "domain": "remain-site32.test",
+      "port": 80,
+      "agent_ids": [
+        "agent_1792492525522_5364b4"
+      ],
+      "conns": 1,
+      "down": 77197,
+      "unidentified": true
+    }
+  ],
+  "no_store_or_report_writes": true,
+  "not_identified_via_api": true,
+  "evidence": [
+    "P2-07-real-traffic.json",
+    "P2-07-report-polls.json",
+    "P2-07-real-captured-domains.json"
+  ]
+}

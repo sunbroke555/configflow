@@ -1,0 +1,16 @@
+{
+  "operation": "缺记录两分支后，仅精确恢复原32采集条目；基于最新文件合并，不整文件覆盖；regions完全不写",
+  "result": "restored",
+  "added_hosts": [
+    "remain-site32.test"
+  ],
+  "merged_with_new_target_stats": [],
+  "other31_records_exactly_preserved": true,
+  "current_status_preserved": true,
+  "regions_bytes_unchanged": true,
+  "site31_new_identification_preserved": true,
+  "domain_count": 32,
+  "at": "2026-10-20T11:13:23.475676+00:00",
+  "before_sha256": "e2a909f79f7ae76b722ab4225a5389c4fb462726bc1cd991ac5d38cc1883f10e",
+  "after_sha256": "644903c2b54cf15e95f255ef749b0f9e3446726aa6ef1c01b2e1b867c61f5860"
+}

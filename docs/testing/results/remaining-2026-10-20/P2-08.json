@@ -1,0 +1,69 @@
+{
+  "case": "P2-08",
+  "scope": "真实浏览器375×812手机布局 + 1280×900桌面键盘；冻结3f38649源码；只在隔离环境操作",
+  "gateway": {
+    "steps_1_2": "无Agent绑定的临时空间中查看设备表单、空设备名校验及分流规则；不保存安装会话；退出明确放弃输入。",
+    "steps_3_4_5": "沿用真实.36已完成发布的会话，浅/深主题查看安装、双核心成功状态、未启用转发及实际网卡/默认路由；不重新发布、不预览/应用、不重准备。",
+    "themes": [
+      "象牙",
+      "炭黑"
+    ],
+    "viewport": {
+      "width": 375,
+      "height": 812
+    },
+    "observed_document_scroll_width": 375,
+    "notes": "步骤导航自身可横向滚动以显示当前步骤，文档不横向溢出。安装命令含临时凭据，截图未公开。"
+  },
+  "sorting": {
+    "groups": 25,
+    "long_names": true,
+    "mobile_both_themes": "滚到首尾，弹窗全屏，底部保存/取消固定可达。",
+    "keyboard_both_themes": "Tab聚焦首个手柄；Space→Down→Space后保存，真实UI成功；另次Space→Down→Esc放下，保存按钮仍可用；Cancel放弃临时顺序。",
+    "saved_first_ids_after_dark": [
+      "remaining-mobile-01",
+      "remaining-mobile-00"
+    ],
+    "saved_first_ids_after_light": [
+      "remaining-mobile-00",
+      "remaining-mobile-01"
+    ],
+    "escape_semantics": "Esc释放抓取并保留未保存临时位置；Cancel才丢弃编辑。与页面提示和源码一致，旧清单预期已留存修订。"
+  },
+  "monitoring": {
+    "both_themes": [
+      "Agent曲线",
+      "正确Mihomo系统监控",
+      "正确Mihomo面板",
+      "正确OxiDNS面板"
+    ],
+    "agent_mihomo": "agent_1792483642712_02f3d3",
+    "agent_oxidns": "agent_1792483642696_5d0b85",
+    "observed_scroll_width": 375
+  },
+  "restoration": {
+    "gateway_input": "已放弃，未生成安装命令/执行安装或写入实际网络。",
+    "theme": "root14810已恢复跟随系统。",
+    "temporary_profile": "已精确删除自建remaining-mobile-20261020，私有导出保留；default导出前后完全一致。"
+  },
+  "evidence": [
+    "mobile-gateway-step1-light-error.png",
+    "mobile-gateway-step2-light.png",
+    "mobile-gateway-step1-dark.png",
+    "mobile-gateway-step2-dark.png",
+    "mobile-gateway-step4-light.png",
+    "mobile-gateway-step4-dark.png",
+    "mobile-gateway-step5-light.png",
+    "mobile-gateway-step5-dark.png",
+    "mobile-sort-light-bottom.png",
+    "mobile-sort-dark-bottom.png",
+    "keyboard-saved-api.json",
+    "keyboard-light-escape-drops.png",
+    "mobile-monitor-light.png",
+    "mobile-monitor-dark.png",
+    "mobile-mihomo-light.png",
+    "mobile-mihomo-dark.png",
+    "mobile-oxidns-light.png",
+    "mobile-oxidns-dark.png"
+  ]
+}

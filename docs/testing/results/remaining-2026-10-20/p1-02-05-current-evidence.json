@@ -1,0 +1,156 @@
+{
+  "source_commit": "3f38649",
+  "P1-02": {
+    "status": "现版行为实测通过；保留原步骤预期差异",
+    "做了什么": "root在同A会话清空主容量→关→开，确认空值和整数错误仍保留且保存禁用；关闭后保存，再新会话开启恢复4096。探测缓存同样验证，关闭主缓存不掩盖探测空值错误。",
+    "结果": "最终主4096/TTL900、探测2048且两开已保存；A线程8/B线程6；B完整settings仍与基线一致。",
+    "清单修订": "拆分同编辑会话关/开与保存关闭后新会话重开两种生命周期。原第2步紧接保存关闭却要求未同步空字符串继续保留不符合现版有效值持久化。",
+    "源码依据": [
+      "OxidnsFields.vue:updateNumber无效数字只留numberDrafts/numberErrors，不write；onUnmounted清本地字段错误",
+      "OxidnsCommonSettings.vue:cacheErrorDependencies/activeError只忽略已关闭功能错误，不能掩盖仍开探测缓存错误",
+      "OxidnsSettings.vue:保存后关闭，load/resetCommon增加commonKey重建编辑器；backend/oxidns_common.py:stored_args保留停用前有效参数"
+    ]
+  },
+  "P1-05": {
+    "status": "现版行为实测通过；保留原公共卡显示预期差异",
+    "做了什么": "root删标准lazy_cache→添加恢复并核容量4096和检查通过→改manual_cache→观察引用同步toast及可见YAML；常用卡明确暂不可编辑/完整参数入口；恢复lazy_cache保存。",
+    "结果": "可见YAML manual_cache容量4096/TTL900，有明确$manual_cache调用，旧lazy_cache tag/调用均无；最终savedAPI是lazy_cache4096/TTL900，manual_cache tag/调用/别名均无残留。",
+    "可见YAML引用路径": [
+      ".plugins[2].args[0].exec"
+    ],
+    "可见YAML只提取的cache": {
+      "tag": "manual_cache",
+      "size": 4096,
+      "lazy_cache_ttl": 900
+    },
+    "清单修订": "改名后常用卡应明示自定义/暂不可编辑并能进入完整参数；容量及引用在完整参数与YAML保持一致，不能强求公共卡仍有可编辑容量框。",
+    "源码依据": [
+      "backend/common/oxidns_common.py:alias_capability显式返回editable=False并提示受管插件已重命名",
+      "backend/common/oxidns_native_apply.py:_common_disabled.renamed_plugins跟踪改名且重写明确引用，保留参数",
+      "frontend/OxidnsFields.vue:capability.editable===false渲染暂不可编辑+完整参数入口；OxidnsCommonSettings.vue明确自定义结构请完整参数编辑"
+    ],
+    "限制": "本次tooltip文字未捕捉，不写作新手测证据；具体提示文字由源码与既有旧手测截图支持。"
+  },
+  "final_saved_excerpt": [
+    {
+      "id": "remaining-oxi-a",
+      "scope": "已保存配置，不读取浏览器未保存状态",
+      "settings_sha256": "a8a5b8c7d8e70aeab4c363ff15a50f2f2b2292d969f85288883884fba011dc19",
+      "native_sha256": "45bd9d5c112d40ad0e1dece9ac81fee70e69ec0ce4375da6cd4f3d865d94fdd7",
+      "worker_threads": 8,
+      "cache_plugins": [
+        {
+          "tag": "local_probe_cache",
+          "size": 2048,
+          "lazy_cache_ttl": null
+        },
+        {
+          "tag": "lazy_cache",
+          "size": 4096,
+          "lazy_cache_ttl": 900
+        }
+      ],
+      "cache_executor_references": [
+        {
+          "path": ".plugins[2].args[0].exec",
+          "exec": "$lazy_cache"
+        },
+        {
+          "path": ".plugins[3].args[0].exec",
+          "exec": "$local_probe_cache"
+        }
+      ],
+      "renamed_plugin_aliases": {},
+      "common_projection": {
+        "cache_enabled": true,
+        "cache_size": 4096,
+        "cache_lazy_ttl": 900,
+        "probe_cache_enabled": true,
+        "probe_cache_size": 2048
+      },
+      "common_capabilities": {
+        "cache_enabled": {
+          "editable": true,
+          "target": "lazy_cache"
+        },
+        "cache_size": {
+          "editable": true,
+          "target": "lazy_cache"
+        },
+        "cache_lazy_ttl": {
+          "editable": true,
+          "target": "lazy_cache"
+        },
+        "probe_cache_enabled": {
+          "editable": true,
+          "target": "local_probe_cache"
+        },
+        "probe_cache_size": {
+          "editable": true,
+          "target": "local_probe_cache"
+        }
+      }
+    },
+    {
+      "id": "remaining-oxi-b",
+      "scope": "已保存配置，不读取浏览器未保存状态",
+      "settings_sha256": "efe60f5585eda4b228d83726bee2d6e55ab0d8b2c57a50d0ccc9a4b262c0bd0b",
+      "native_sha256": "1c4db881414bb727cb02d65c3090517a5c7ab75a47daea1a476aad6a4568312f",
+      "worker_threads": 6,
+      "cache_plugins": [
+        {
+          "tag": "lazy_cache",
+          "size": 4096,
+          "lazy_cache_ttl": 900
+        },
+        {
+          "tag": "local_probe_cache",
+          "size": 2048,
+          "lazy_cache_ttl": null
+        }
+      ],
+      "cache_executor_references": [
+        {
+          "path": ".plugins[4].args[0].exec",
+          "exec": "$lazy_cache"
+        },
+        {
+          "path": ".plugins[5].args[0].exec",
+          "exec": "$local_probe_cache"
+        }
+      ],
+      "renamed_plugin_aliases": {},
+      "common_projection": {
+        "cache_enabled": true,
+        "cache_size": 4096,
+        "cache_lazy_ttl": 900,
+        "probe_cache_enabled": true,
+        "probe_cache_size": 2048
+      },
+      "common_capabilities": {
+        "cache_enabled": {
+          "editable": true,
+          "target": "lazy_cache"
+        },
+        "cache_size": {
+          "editable": true,
+          "target": "lazy_cache"
+        },
+        "cache_lazy_ttl": {
+          "editable": true,
+          "target": "lazy_cache"
+        },
+        "probe_cache_enabled": {
+          "editable": true,
+          "target": "local_probe_cache"
+        },
+        "probe_cache_size": {
+          "editable": true,
+          "target": "local_probe_cache"
+        }
+      }
+    }
+  ],
+  "visible_yaml_evidence": "../root-ui/cache-renamed-visible.yaml",
+  "snapshot_evidence": "snapshot-after-cache.json"
+}
