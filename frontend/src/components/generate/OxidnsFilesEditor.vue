@@ -3,7 +3,7 @@
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-1">
         <h3 class="text-sm font-medium">附加文件 <span class="num text-muted-foreground">{{ files.length }}</span></h3>
-        <FieldHelp label="附加文件" text="随完整下载和 Agent 发布一起打包的规则、证书、脚本或 include 配置。路径相对 OxiDNS 工作目录，例如 certs/server.pem。state/ 保留给运行数据，不能覆盖。单文件最多 16 MiB，总计 64 MiB。绝对路径和环境变量引用由目标机器提供，不会自动上传。" />
+        <FieldHelp label="附加文件" :text="optionHelp('配置需要规则、证书、脚本或 include 文件时上传。', '文件随完整下载和 Agent 发布打包，路径相对工作目录。单文件限 16 MiB，总计 64 MiB；state/ 禁用。绝对路径及环境变量引用的文件需自行准备。')" />
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <OxidnsEditorModeToggle :model-value="mode" :options="[{ value: 'form', label: '文件' }, { value: 'yaml', label: 'YAML' }]" label="附加文件编辑模式" :disabled="disabled || importing" @update:model-value="switchMode" />
@@ -19,13 +19,13 @@
         <div class="flex min-w-0 items-center gap-2 p-2">
           <CollapsibleTrigger type="button" class="flex size-9 shrink-0 items-center justify-center rounded-md hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent max-sm:size-11" :aria-label="`展开文件 ${index + 1}`"><ChevronDown class="size-4 group-data-[state=open]:rotate-180" /></CollapsibleTrigger>
           <Input v-model="file.path" :aria-label="`文件 ${index + 1} 路径`" placeholder="例如 rules/custom.txt" class="h-9 min-w-0 flex-1 font-mono text-xs max-sm:h-11" :disabled="disabled || importing" @update:model-value="commit" />
-          <FieldHelp :label="`文件 ${index + 1} 路径`" text="配置中引用同一路径。使用相对路径，不含 ../；不能使用 config.yaml、state/ 或 ConfigFlow 内部目录。上传后可修改目录和文件名。" />
+          <FieldHelp :label="`文件 ${index + 1} 路径`" :text="optionHelp('上传后需要设置文件的部署位置或修改文件名。', '配置中应引用同一路径，使用不含 ../ 的相对路径。不能使用 config.yaml、state/ 或 ConfigFlow 内部目录，以免覆盖主配置及运行数据。')" />
           <Button type="button" variant="ghost" size="icon" class="size-9 shrink-0 text-destructive-accent max-sm:size-11" :disabled="disabled || importing" :aria-label="`删除文件 ${index + 1}`" @click="files.splice(index, 1); commit()"><Trash2 class="size-4" /></Button>
         </div>
         <CollapsibleContent class="space-y-3 border-t border-border p-3">
           <div class="flex flex-wrap items-center gap-2">
             <span class="text-xs text-muted-foreground">{{ file.encoding === 'base64' ? '二进制文件（Base64）' : 'UTF-8 文本' }}</span>
-            <FieldHelp :label="`文件 ${index + 1} 内容`" text="文本可直接编辑；二进制文件保留为 Base64，发布时还原原始字节。证书私钥属于敏感内容，会随配置保存和发布。include 文件可填写 plugins 和 include；发布时按官方顺序展开到主配置。" />
+            <FieldHelp :label="`文件 ${index + 1} 内容`" :text="optionHelp('需要修改文本或随配置发布二进制文件时使用。', '文本可直接编辑，二进制以 Base64 保存，发布时还原。私钥也会随配置保存和发布；include 支持 plugins 和 include，按官方顺序展开到主配置。')" />
           </div>
           <Textarea v-model="file.content" :aria-label="`文件 ${index + 1} 内容`" :rows="8" class="font-mono text-xs" :disabled="disabled || importing" spellcheck="false" @update:model-value="commit" />
         </CollapsibleContent>
@@ -45,6 +45,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import { optionHelp } from '@/lib/optionCopy'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 
 export interface OxidnsManagedFile { path: string; content: string; encoding: 'text' | 'base64' }

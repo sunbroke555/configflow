@@ -11,7 +11,7 @@
       <p v-if="error" role="alert" class="m-0 break-words text-sm text-destructive-accent">{{ error }}</p>
       <p v-if="loading" role="status" class="m-0 text-sm text-muted-foreground">正在读取测速设置…</p>
       <form v-else-if="loaded" class="space-y-4" @submit.prevent="save">
-        <FormField label="测速 DNS" html-for="node-latency-dns" hint="填写 IPv4 或 IPv4:端口，多个地址用逗号或换行分隔；留空使用系统 DNS。" persistent-hint>
+        <FormField label="测速 DNS" html-for="node-latency-dns" hint="测速解析异常时可指定，留空使用系统 DNS。" :help="optionHelp('节点域名解析为 Fake-IP，或测速需要独立 DNS 时填写。', '只影响节点库测速，不改系统或设备 DNS。填 IPv4 或 IPv4:端口，多个用逗号或换行分隔；应选能返回真实 IP 的 DNS。')" persistent-hint>
           <Textarea id="node-latency-dns" v-model="dns" class="min-h-24 font-mono" :disabled="saving || disabled" :rows="3" placeholder="留空使用系统 DNS" spellcheck="false" />
         </FormField>
         <p class="m-0 text-xs leading-relaxed text-muted-foreground">若节点域名被解析为 Fake-IP，请指定能返回真实 IP 的 DNS。</p>
@@ -34,6 +34,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { notify } from '@/lib/feedback'
+import { optionHelp } from '@/lib/optionCopy'
 
 const props = defineProps<{ disabled?: boolean }>()
 const emit = defineEmits<{ saved: [] }>()

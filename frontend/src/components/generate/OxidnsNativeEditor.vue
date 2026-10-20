@@ -4,7 +4,7 @@
       <div class="flex items-center gap-1">
         <Button v-if="mode === 'full'" variant="outline" class="min-h-11 max-sm:w-11 max-sm:px-0 md:hidden" aria-label="目录" @click="directoryOpen = true"><PanelLeft class="size-4" /><span class="max-sm:sr-only">目录</span></Button>
         <slot name="navigation"><h3 class="text-sm font-semibold max-sm:sr-only">配置编辑</h3></slot>
-        <FieldHelp label="完整配置" text="常用设置、完整参数和 YAML 编辑同一份配置，共用一次保存。切换入口或分组不会改写配置，也不会丢失未完成的输入。只有主动添加或修改的参数才写入配置；未知字段和原生值类型均保留。表单修改后会重新整理 YAML 注释和排版。" />
+        <FieldHelp label="完整配置" :text="optionHelp('需要编辑常用设置之外的参数，或直接编写 YAML。', '三种入口编辑同一配置，统一保存；切换不丢草稿。仅主动修改的参数会写入，未知字段和值类型保留；表单修改会重新整理注释和排版。')" />
       </div>
       <OxidnsEditorModeToggle :model-value="mode" :disabled="disabled || syncing" :options="[{ value: 'common', label: '常用设置', disabled: Boolean(slots.common) && (formDraftError || syncError) }, { value: 'full', label: '完整参数' }, { value: 'yaml', label: 'YAML', disabled: mode !== 'yaml' && (formDraftError || syncError) }]" label="配置编辑方式" @update:model-value="switchMode" />
     </div>
@@ -51,7 +51,7 @@
           <template #header>
             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             <h4 class="min-w-0 flex-1 basis-24 break-all text-sm font-semibold">{{ selectedScope.title }}</h4>
-            <span v-if="usesReverseLookupDefaults" class="text-[11px] font-normal text-muted-foreground">使用默认参数</span><FieldHelp v-if="usesReverseLookupDefaults" label="反向查询缓存默认参数" text="args: {} 合法。OxiDNS 会使用容量 65535、TTL 7200 秒、handle_ptr: false。需要直接回答 PTR 查询时添加并开启 handle_ptr；插件还需在执行链中引用才参与处理。" />
+            <span v-if="usesReverseLookupDefaults" class="text-[11px] font-normal text-muted-foreground">使用默认参数</span><FieldHelp v-if="usesReverseLookupDefaults" label="反向查询缓存默认参数" :text="optionHelp('反查缓存使用空参数 args: {}，仍是合法配置。', '默认容量 65535、TTL 7200 秒，不直接回答 PTR。需要时开启 handle_ptr；插件还需在执行链中引用才参与处理。')" />
             <FieldHelp :label="`${selectedScope.title}分组`" :text="selectedScope.schema?.help || '扩展分组，所有原生字段和值类型均保留。'" />
             <a :href="selectedScope.documentation" target="_blank" rel="noopener noreferrer" class="ml-auto inline-flex min-h-9 shrink-0 items-center gap-1 text-xs text-primary-accent underline-offset-4 hover:underline max-md:min-h-11">文档<ExternalLink class="size-3" /></a>
         <div v-if="selectedPluginIndex >= 0" class="flex shrink-0 items-center gap-0.5">
@@ -99,6 +99,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import { optionHelp } from '@/lib/optionCopy'
 import OxidnsCommonEditor, { type OxidnsCommonSection } from './OxidnsCommonEditor.vue'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import OxidnsSchemaValueEditor from './OxidnsSchemaValueEditor.vue'
@@ -164,9 +165,9 @@ const managedPluginTags = new Set([...standardFeatures.map(feature => feature.ta
   'server_udp', 'server_tcp', 'rules_reload', 'rules_refresh', 'rules_cron', 'china_dns', 'direct_ip',
   'default_direct_ip', 'sequence_main', 'remote_dns', 'local_probe', 'proxy_dns_seq', 'ip_requery_proxy',
 ])
-const pluginAdditionHelp = '标准功能使用固定标识，优先恢复保留的参数并自动补齐依赖和执行引用；无法安全联动时会说明原因。代理 DNS 备用地址不会恢复，需填写有效地址后才启用。自定义实例只创建插件，需在监听入口或执行序列表单中配置引用。'
+const pluginAdditionHelp = optionHelp('日常新增优先用标准功能；需要独立参数时添加自定义实例。', '标准功能恢复保留参数并补齐依赖，无法联动会说明；备用 DNS 地址不恢复，需重新填写。自定义实例只创建插件，还需手动配置执行引用。')
 const standardChoices = computed(() => standardFeatures.filter(feature => ![...acceptedTags.value.values()].includes(feature.tag) && !(plugins.value?.value.items ?? []).some(node => scalarField(node, 'tag') === feature.tag)).map(feature => ({key: feature.tag, schema: {type: 'string' as const, label: feature.label, help: feature.tag === 'forward_fallback' ? '填写有效备用地址后启用回退；不会恢复已删除的地址，直连 DNS 不变。' : `添加或恢复${feature.label}，自动补齐标准依赖和执行引用；保留的参数会恢复到表单。`}})))
-const pluginChoices = [...oxidnsPluginCatalog.map(plugin => ({ key: plugin.type, schema: { type: 'string' as const, label: plugin.label, help: plugin.help } })), { key: '__custom__', schema: { type: 'string' as const, label: '自定义类型', help: '用于更新版本或第三方插件，添加后手动填写类型及参数。' } }]
+const pluginChoices = [...oxidnsPluginCatalog.map(plugin => ({ key: plugin.type, schema: { type: 'string' as const, label: plugin.label, hint: plugin.hint, help: plugin.help } })), { key: '__custom__', schema: { type: 'string' as const, label: '自定义类型', help: '用于更新版本或第三方插件，添加后手动填写类型及参数。' } }]
 function pluginSchema(node: ConfigValueNode): OxidnsSchema {
   return { type: 'object', help: pluginDefinition(node)?.help || '自定义插件类型。全部原生字段都会保留，请按对应文档设置参数。', properties: {
     tag: { type: 'string', label: '唯一标识', help: '其他插件通过 $tag 引用此插件。标识不得与其他插件重复。' },

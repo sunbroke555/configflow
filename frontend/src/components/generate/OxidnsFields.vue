@@ -1,6 +1,6 @@
 <template>
   <div class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
-    <FormField v-for="field in visibleFields" :key="field.path" :label="field.label" :html-for="`oxi-${field.path}`" :help="field.hint" :documentation="field.documentation" :class="field.wide && 'sm:col-span-2'">
+    <FormField v-for="field in visibleFields" :key="field.path" :label="field.label" :html-for="`oxi-${field.path}`" :hint="field.help ? field.hint : undefined" :help="field.help || field.hint" :documentation="field.documentation" :class="field.wide && 'sm:col-span-2'">
       <div v-if="capability(field.path)?.editable === false" class="flex min-h-11 min-w-0 items-center gap-1 text-xs text-muted-foreground">
         <span>暂不可编辑</span><FieldHelp :label="`${field.label}配置状态`" :text="capability(field.path)?.reason || '当前配置使用自定义结构，请在完整参数中编辑。'" />
         <Button variant="ghost" type="button" class="ml-auto min-h-11 shrink-0 text-xs" :disabled="disabled || navigationDisabled" @click="emit('navigate', capability(field.path)?.target || field.path)">完整参数<ChevronRight class="size-3.5" /></Button>

@@ -3,7 +3,7 @@
     <div class="flex min-w-0 flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-1">
         <h3 class="text-sm font-semibold">基础配置扩展</h3>
-        <FieldHelp label="基础配置扩展" text="添加额外的全局参数和插件，参数可展开为对象或列表逐项填写。核心模板管理的字段以页面设置为准。切换 YAML 保留字段和值，逐项修改后会重新整理注释与排版；无效文本保留为草稿，修正后才能保存或切回逐项编辑。最终配置可通过预览和 Agent 检查确认。" />
+        <FieldHelp label="基础配置扩展" :text="optionHelp('模板设置之外，还需要添加全局参数或自定义插件。', '支持逐项和 YAML 编辑，模板字段以页面设置为准。切换保留值，表单修改会整理注释排版；无效文本保留为草稿，修正后才能保存和切回表单。')" />
       </div>
       <OxidnsEditorModeToggle :model-value="mode" :options="[{ value: 'form', label: '逐项编辑' }, { value: 'yaml', label: 'YAML', disabled: mode === 'form' && Boolean(error) }]" label="基础配置编辑模式" @update:model-value="switchMode" />
     </div>
@@ -16,7 +16,7 @@
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-1">
             <h4 class="text-sm font-medium">全局参数 <span class="text-muted-foreground num">{{ globals.length }}</span></h4>
-            <FieldHelp label="全局参数" text="添加 OxiDNS 配置顶层的扩展字段。字段名需符合核心文档；对象可继续添加子字段，列表可添加条目。模板管理的核心字段应在对应设置页修改。" />
+            <FieldHelp label="全局参数" :text="optionHelp('核心文档提供了模板表单中没有的顶层参数时使用。', '按官方字段名添加参数，对象可继续添加子字段，列表可逐条填写。由模板管理的核心字段应回到对应设置页修改，避免生成时被模板设置覆盖。')" />
           </div>
           <Button type="button" variant="outline" class="min-h-11" @click="appendConfigEntry(tree); commit()"><Plus class="size-3.5" />添加全局参数</Button>
         </div>
@@ -34,7 +34,7 @@
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-1">
             <h4 class="text-sm font-medium">自定义插件 <span class="text-muted-foreground num">{{ plugins?.value.items.length ?? 0 }}</span></h4>
-            <FieldHelp label="自定义插件" text="每个插件通常包含 tag（唯一标识）、type（插件类型）和 args（参数对象）。参数按插件文档填写；仅定义插件不会自动参与解析，可在自定义匹配中用 $tag 引用执行器。" />
+            <FieldHelp label="自定义插件" :text="optionHelp('需要添加模板之外的处理动作，且知道对应插件参数。', '填写 tag 唯一名称、type 类型和 args 参数。仅定义插件不会自动参与解析，执行器还需在自定义匹配中用 $tag 引用，参数按插件文档填写。')" />
           </div>
           <Button type="button" variant="outline" class="min-h-11" :disabled="nonListPlugins" @click="addPlugin"><Plus class="size-3.5" />添加插件</Button>
         </div>
@@ -63,6 +63,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import OxidnsValueEditor from './OxidnsValueEditor.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import { optionHelp } from '@/lib/optionCopy'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import { appendConfigEntry, parseConfigDocument, serializeConfigDocument, valueToConfigNode } from '@/lib/oxidnsConfigEditor'
 

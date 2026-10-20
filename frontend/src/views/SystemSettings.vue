@@ -10,7 +10,8 @@
           <FormField
             label="服务域名"
             html-for="server-domain"
-            hint="填写可访问本服务的地址，用于生成规则链接、MosDNS / OxiDNS 规则转换地址、Agent 安装脚本和配置订阅链接。"
+            hint="填写设备能访问的服务地址，用于生成链接。"
+            :help="optionHelp('客户端或 Agent 需要通过链接访问本服务时设置。', '规则、配置订阅、规则转换和安装脚本链接都会使用此地址。填写设备实际能访问的完整地址；仅本机可用的地址无法供其他设备使用。')"
           >
             <div class="flex items-center gap-1.5">
               <Input
@@ -36,7 +37,8 @@
           <FormField
             label="规则下载代理"
             html-for="rule-fetch-proxy"
-            hint="用于面板下载规则、发布所需的 Geo 数据和连通性测试。支持 HTTP/HTTPS 代理地址，可包含用户名和密码；留空直连。请求原始地址及 GitHub 备用地址时都会使用此代理。失去焦点时自动保存。"
+            hint="规则下载受限时填写代理，留空直接连接。"
+            :help="optionHelp('面板下载规则、Geo 数据或测试连通性需要代理时填写。', '支持含账号密码的 HTTP/HTTPS 代理，原始及 GitHub 备用地址均使用它；留空直连。移开输入焦点即保存，不修改设备代理。')"
           >
             <div class="flex items-center gap-1.5">
               <Input
@@ -78,7 +80,8 @@
             label="访问令牌"
             persistent-hint
             html-for="config-token"
-            hint="所有配置共用此令牌，订阅链接需携带 ?token=xxx。修改后请更新客户端中的链接；清除令牌会关闭令牌保护。"
+            hint="修改后需更新客户端链接；清空会取消保护。"
+            :help="optionHelp('需要限制配置订阅链接的访问者时设置，所有配置共用。', '链接需携带 ?token=xxx，修改令牌后旧链接失效。此令牌同时授予 MCP 管理权限，不应公开分享；清空后取消令牌保护。')"
           >
             <div class="flex items-center gap-1.5">
               <Input
@@ -115,7 +118,8 @@
             label="MCP"
             persistent-hint
             html-for="mcp-url"
-            hint="在 MCP 客户端中填写此地址，使用 Authorization: Bearer 加上访问令牌认证。此令牌同时授予 MCP 管理权限，请勿公开分享令牌或含令牌的订阅链接。"
+            hint="连接 AI 管理工具；令牌含管理权限，请勿公开。"
+            :help="optionHelp('希望通过支持 MCP 的 AI 客户端管理本服务时使用。', '填写此地址，以 Authorization: Bearer 加访问令牌认证。与订阅共用的令牌拥有管理权限，请勿公开令牌或含令牌的订阅链接。')"
           >
             <div class="flex items-center gap-1.5">
               <Input id="mcp-url" :model-value="mcpUrl" readonly class="min-w-0 bg-background/50 font-mono" />
@@ -391,6 +395,7 @@ import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
+import { optionHelp } from '@/lib/optionCopy'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import api, { configApi, serverDomainApi, configTokenApi, ruleFetchProxyApi, dependenciesApi } from '@/api'
 import type { DependencyStatus } from '@/api'

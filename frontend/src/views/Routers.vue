@@ -506,7 +506,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               </SelectContent>
             </Select>
           </div>
-          <FormField :label="embedded ? '管理地址（必填）' : '管理地址'" html-for="router-endpoint" :help="form.type === 'routeros' ? routerHelp.endpointROS : routerHelp.endpointIkuai">
+          <FormField :label="embedded ? '管理地址（必填）' : '管理地址'" html-for="router-endpoint" v-bind="form.type === 'routeros' ? routerCopy.endpointROS : routerCopy.endpointIkuai">
             <Input
               id="router-endpoint"
               v-model="form.endpoint"
@@ -534,9 +534,9 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
           <div class="flex items-center gap-2">
             <Switch id="router-verify-tls" :model-value="form.verify_tls" @update:model-value="value => (form.verify_tls = Boolean(value))" />
             <Label for="router-verify-tls">校验 HTTPS 证书</Label>
-            <FieldHelp label="校验 HTTPS 证书" :text="routerHelp.tls" />
+            <FieldHelp label="校验 HTTPS 证书" :text="routerCopy.tls.help" />
           </div>
-          <FormField v-if="!setupDraftSession" label="代理网关（mihomo Agent）" html-for="router-gateway" :help="form.type === 'routeros' ? routerHelp.gatewayROS : routerHelp.gateway">
+          <FormField v-if="!setupDraftSession" label="代理网关（mihomo Agent）" html-for="router-gateway" v-bind="form.type === 'routeros' ? routerCopy.gatewayROS : routerCopy.gateway">
             <Select v-model="form.proxy_gateway_agent_id">
               <SelectTrigger id="router-gateway" class="w-full bg-background/50"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent>
@@ -554,7 +554,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             <div class="flex min-h-11 items-center justify-between gap-3">
               <div class="flex min-w-0 items-center gap-1">
                 <Label for="router-return-routing">自动配置回流</Label>
-                <FieldHelp label="自动配置回流" :text="routerHelp.returnRouting" />
+                <FieldHelp label="自动配置回流" :text="routerCopy.returnRouting.help" />
               </div>
               <Switch
                 id="router-return-routing"
@@ -563,18 +563,19 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               />
             </div>
           </div>
-          <FormField :label="form.type === 'routeros' ? '使用静态路由的 IP 规则集' : '按 IP 路由给 mihomo 的规则集'" html-for="router-ip-rule-sets" :help="routerHelp.staticRules">
+          <FormField :label="form.type === 'routeros' ? '使用静态路由的 IP 规则集' : '按 IP 路由给 mihomo 的规则集'" html-for="router-ip-rule-sets" v-bind="routerCopy.staticRules">
             <div class="[&_[role=combobox]]:min-h-11">
               <MultiSelect :model-value="form.ip_rule_sets" trigger-id="router-ip-rule-sets" :options="ruleSetOptions" placeholder="仅 fake-ip 网段" @update:model-value="selectStaticRuleSets" />
             </div>
           </FormField>
-          <FormField v-if="form.type === 'routeros'" label="使用策略路由的 IP 规则集" html-for="router-policy-rule-sets" :help="routerHelp.policyRules">
+          <FormField v-if="form.type === 'routeros'" label="使用策略路由的 IP 规则集" html-for="router-policy-rule-sets" v-bind="routerCopy.policyRules">
             <div class="[&_[role=combobox]]:min-h-11">
               <MultiSelect :model-value="form.ros_policy_rule_sets" trigger-id="router-policy-rule-sets" :options="ruleSetOptions" placeholder="不使用策略路由" @update:model-value="selectPolicyRuleSets" />
             </div>
           </FormField>
+          <p v-if="form.type === 'routeros'" class="m-0 text-xs leading-relaxed text-muted-foreground">取消规则集后，需保存、预览并确认发布，才会清理对应的受管规则。</p>
           </component>
-          <FormField v-if="!setupDraftSession" label="DHCP DNS 服务器（OxiDNS Agent）" html-for="router-dns" :help="routerHelp.dns">
+          <FormField v-if="!setupDraftSession" label="DHCP DNS 服务器（OxiDNS Agent）" html-for="router-dns" v-bind="routerCopy.dns">
             <Select v-model="form.dns_agent_id">
               <SelectTrigger id="router-dns" class="w-full bg-background/50"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent class="max-w-[calc(100vw-2rem)]">
@@ -644,6 +645,7 @@ import { agentApi, routerApi as baseRouterApi, ruleApi, type StaticRouteChange, 
 import { setupApi } from '@/api/setup'
 import { activeProfileId as selectedProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
+import { routerCopy } from '@/lib/routerCopy'
 import { usePageReloadGuard, withPageReloadBlocked } from '@/lib/pageReloadGuard'
 
 const props = defineProps<{ embedded?: boolean; profileId?: string; setupAgents?: { mihomo: string; oxidns: string }; setupDraftSession?: string }>()
@@ -710,17 +712,6 @@ interface AgentItem {
 }
 
 const NONE = '__none__'
-const routerHelp = {
-  endpointROS: '填写路由器管理地址。RouterOS 7.1+ 支持 HTTPS（www-ssl）；HTTP（www）需要 7.9+。',
-  endpointIkuai: '填写 iKuai 4.x 的管理地址，例如 http://192.168.1.1。',
-  tls: '使用 HTTPS 时校验证书的有效性和签发机构；使用 HTTP 时此选项不生效。',
-  gateway: '选择用于代理转发的 mihomo Agent，其地址将作为静态代理路由的下一跳。',
-  gatewayROS: '选择用于代理转发的 mihomo Agent。这个网关同时用于本路由器的静态代理路由和来源策略路由。',
-  returnRouting: '用于需要将回复经主路由返回的网络，默认关闭。关闭只停止管理，已有回流规则会保留。',
-  staticRules: 'fake-ip 网段始终包含。只勾选客户端直接连 IP、不经过 DNS 的规则集（如 Telegram）；其余流量经 OxiDNS 解析成 fake-ip 后自然进入 mihomo。',
-  policyRules: '两组独立选择，同一规则集只能使用一种方式；选到另一组时自动移出原组。fake-ip 始终使用静态路由。取消选择后停止下发该规则集，保存后需预览并发布才生效。\n\n来源取当前配置空间已保存的 OxiDNS 设备策略，仅包含显式设为智能分流的 IPv4 地址或网段；保留更具体的直连例外并排除 Mihomo 自身。请同步发布 OxiDNS 设备策略。',
-  dns: '选择后，将包含所选 mihomo 网关的唯一 DHCP 网段的 DNS 列表替换为此服务器，不保留旧备用 DNS。默认不关联，不修改现有 DNS；终端续租或重新联网后获得新 DNS。'
-}
 const STATUS: Record<Status, { label: string; chip: string }> = {
   synced: { label: '已同步', chip: 'chip-ok' },
   adoptable: { label: '可接管', chip: 'chip-sky' },

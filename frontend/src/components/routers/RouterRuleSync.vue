@@ -1,5 +1,5 @@
 <template>
-  <SectionCard :title="`规则同步 · ${name}`" :help="syncHelp">
+  <SectionCard :title="`规则同步 · ${name}`" description="定时同步已发布规则的 IP 变化，保留手工路由。" :help="syncHelp">
     <template #actions>
       <Button variant="outline" class="min-h-11" :disabled="loading || saving || disabled" @click="load"><RefreshCw class="size-4" />刷新状态</Button>
       <Button variant="outline" class="min-h-11" :disabled="saving || disabled || running" @click="emit('preview')">预览发布</Button>
@@ -41,6 +41,10 @@
           <tbody><tr v-for="rule in state.rules" :key="rule.id"><td>{{ rule.name }}<span v-if="rule.source_type !== 'url'" class="ml-2 text-xs text-muted-foreground">本地</span></td><td class="text-right num">{{ rule.ip_count }}</td><td class="text-right num">{{ rule.domain_count }}</td><td class="text-right num">{{ rule.ignored_count }}</td><td class="font-mono text-xs">{{ rule.version }}</td><td class="font-mono text-xs">{{ rule.synced_version || '—' }}</td></tr></tbody>
         </table>
       </div>
+      <details class="text-xs leading-relaxed text-muted-foreground">
+        <summary class="min-h-11 cursor-pointer content-center rounded-sm py-2 outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">同步范围与暂停条件</summary>
+        <div class="space-y-2 pb-2"><p v-for="note in syncDetails" :key="note" class="m-0">{{ note }}</p></div>
+      </details>
       <details v-if="logEntries.length" class="group/sync-log overflow-hidden rounded-xl border border-border">
         <summary class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 py-3 hover:bg-muted/50 [&::-webkit-details-marker]:hidden">
           <ChevronRight class="size-4 shrink-0 text-muted-foreground group-open/sync-log:rotate-90" aria-hidden="true" />
@@ -84,6 +88,7 @@ import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { routerApi, type RouterRuleSyncSettings, type RouterRuleSyncState } from '@/api'
 import { notify } from '@/lib/feedback'
+import { optionHelp } from '@/lib/optionCopy'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 const props = defineProps<{ id: string; name: string; profile: string; disabled?: boolean }>()
 const emit = defineEmits<{ preview: []; busy: [value: boolean] }>()
@@ -97,13 +102,14 @@ const logEntries = computed(() => (state.value?.log || []).map(item => {
   return { label: match[1], content: match[2], icon: added ? Plus : Minus,
     tone: added ? 'text-success-accent' : 'text-warning-accent', isAddress: true }
 }))
-const syncHelp = [
+const syncHelp = optionHelp('规则集已选中且成功发布到 ROS，希望自动跟进远程 IP 变化。', '仅同步新增和删除的 IP：静态组更新路由，策略组更新地址列表。域名不转 IP，手工规则不接管；异常时暂停保留旧规则，关闭不删已发布规则。')
+const syncDetails = [
   '开启后，按所选频率检查这台 ROS 已选中并成功发布过的远程规则集，只同步其中 IP 的新增和删除。',
   '静态路由规则集更新路由；策略路由规则集更新目的地址列表。域名不会转成 IP 下发，未登记的手工路由不会被自动接管或删除。',
   '规则格式不对，或某个规则集原有的可用 IP 全部消失时，会暂停同步，保留 ROS 上的原规则。',
   '修改来源设备、规则集选择、网关或其他设置后，需要重新「预览发布」。关闭自动同步不会删除已发布的规则。',
   '这里只显示 ROS 的同步结果。Mihomo、OxiDNS 的更新仍按各自的刷新或发布流程进行。',
-].join('\n\n')
+]
 const labels: Record<string, string> = { synced: '已同步', waiting: '等待首次发布', queued: '等待同步', running: '正在同步', paused: '已暂停，需核对', failed: '同步失败' }
 const needsAttention = computed(() => ['paused', 'failed'].includes(state.value?.status || ''))
 const statusLabel = computed(() => running.value || needsAttention.value || settings.value?.auto_rule_sync

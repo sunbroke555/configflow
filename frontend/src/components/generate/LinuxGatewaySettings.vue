@@ -10,6 +10,8 @@ import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import { gatewayCopy } from '@/lib/gatewayCopy'
+import { optionHelp } from '@/lib/optionCopy'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -377,15 +379,16 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
           </div>
 
           <section aria-labelledby="gateway-rules" class="space-y-3">
-            <h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2>
+            <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 选择性网关" :text="optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用设备网络；IPv6 需另行处理。')" /></div>
             <label for="linux-gateway-enabled" class="flex min-h-11 cursor-pointer items-center justify-between gap-4 border-b border-border pb-3">
               <span><span class="block text-sm font-medium">启用 Linux 选择性网关</span><span class="mt-1 block text-xs text-muted-foreground">切换只在本页试用。预览并保存后才更新草稿，设备网络需单独应用。</span></span>
               <Switch id="linux-gateway-enabled" v-model="settings.enabled" :disabled="busy" />
             </label>
             <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span>先恢复客户端和设备网络，再保存并发布已关闭模式的 Mihomo 配置。</p>
             <div class="space-y-2">
-              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">应用连接（可选）</h3><span class="cf-compact-help"><FieldHelp label="应用连接" :text="`有些应用会直接连接 IP，不经过域名解析，需要选择对应的 IP 规则集才能交给 Mihomo。启用网关后会自动包含 fake-IP 网段 ${fakeIPRange || '（由 Mihomo DNS 配置确定）'}，留空不会关闭 fake-IP 接管。实际代理或直连仍由 Mihomo 的规则和策略组决定。`" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
-              <p class="m-0 text-xs leading-relaxed text-muted-foreground">只用浏览器访问网站：通常不用选。<br />还要让 Telegram 等应用通过网关代理：勾选对应规则集。</p>
+              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">应用连接（可选）</h3><span class="cf-compact-help"><FieldHelp label="应用连接" :text="gatewayCopy.applications.help" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
+              <p class="m-0 text-xs leading-relaxed text-muted-foreground">{{ gatewayCopy.applications.hint }}</p>
+              <p v-if="fakeIPRange" class="m-0 text-xs text-muted-foreground">自动接管的临时地址范围（fake-IP）：<span class="font-mono">{{ fakeIPRange }}</span></p>
               <Input v-model="search" aria-label="搜索可接管的 IP 规则集" placeholder="搜索规则集名称或策略" class="min-h-11" :disabled="busy" />
               <div class="max-h-64 overflow-y-auto rounded-md border border-border">
                 <label v-for="item in rows" :key="item.id" :for="`gateway-rule-${item.id}`" class="flex min-h-11 cursor-pointer items-start gap-3 border-b border-border px-3 py-2.5 last:border-b-0 hover:bg-accent/40">
@@ -442,10 +445,10 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                 </AgentStatusRow>
               </div>
               <div class="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-                <FormField label="LAN 网卡" html-for="gateway-interface" hint="连接客户端与主路由的网卡，如 ens18、br0。"><Input id="gateway-interface" v-model="network.interface" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="ens18" autocomplete="off" /></FormField>
-                <FormField label="Linux 局域网 IPv4" html-for="gateway-address" hint="固定地址，客户端将用作网关和 DNS。"><Input id="gateway-address" v-model="network.address" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="192.168.1.2" inputmode="decimal" /></FormField>
-                <FormField label="LAN 网段（CIDR）" html-for="gateway-cidr" hint="填写网段地址，例如 192.168.1.0/24。"><Input id="gateway-cidr" v-model="network.lan_cidr" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="192.168.1.0/24" /></FormField>
-                <FormField label="上游主路由 IPv4" html-for="gateway-upstream" hint="Linux 的默认网关。此处不会修改设备 IP 或默认路由。"><Input id="gateway-upstream" v-model="network.upstream_gateway" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="192.168.1.1" inputmode="decimal" /></FormField>
+                <FormField label="LAN 网卡" html-for="gateway-interface" v-bind="gatewayCopy.interface"><Input id="gateway-interface" v-model="network.interface" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="ens18" autocomplete="off" /></FormField>
+                <FormField label="Linux 局域网 IPv4" html-for="gateway-address" v-bind="gatewayCopy.address"><Input id="gateway-address" v-model="network.address" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="192.168.1.2" inputmode="decimal" /></FormField>
+                <FormField label="LAN 网段（CIDR）" html-for="gateway-cidr" v-bind="gatewayCopy.cidr"><Input id="gateway-cidr" v-model="network.lan_cidr" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="192.168.1.0/24" /></FormField>
+                <FormField label="上游主路由 IPv4" html-for="gateway-upstream" v-bind="gatewayCopy.upstream"><Input id="gateway-upstream" v-model="network.upstream_gateway" :disabled="busy || !status" class="min-h-11 font-mono" placeholder="192.168.1.1" inputmode="decimal" /></FormField>
               </div>
               <div v-if="status && errors.length" class="text-xs leading-relaxed" role="alert"><p class="m-0 font-medium text-destructive-accent">请修正网络信息</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5"><li v-for="error in errors" :key="error">{{ error }}</li></ul></div>
               <p v-if="!configured" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">先保存并发布。</span>开启模式并保存规则设置，再发布 Mihomo；有未保存修改时不能预览或应用网络。</p>

@@ -104,7 +104,7 @@
 
               <LabeledDivider label="直连规则配置" />
 
-              <FormField label="直连规则集" hint="使用国内 DNS；已选为代理规则集的项目不能重复选择。">
+              <FormField label="直连规则集" hint="整组网站或 IP 命中后，使用国内 DNS 查询。" :help="optionHelp('希望为整组网站或 IP 指定国内 DNS 时选择。', '与规则一起按既定顺序参与分流，命中后使用国内上游。同一规则集不能同时归入代理分组；需要国外 DNS 的项目应选到另一组。')">
                 <MultiSelect
                   v-model="mosdnsDirectRulesets"
                   :options="directRulesetOptions"
@@ -112,7 +112,7 @@
                 />
               </FormField>
 
-              <FormField label="直连规则" hint="使用国内 DNS；已选为代理规则的项目不能重复选择。">
+              <FormField label="直连规则" hint="单条网站或 IP 规则命中后，使用国内 DNS。" :help="optionHelp('只需为个别网站或 IP 指定国内 DNS，而非整组规则。', '所选规则命中后使用国内上游，与规则集按既定顺序共同参与分流。同一规则不能同时归入代理分组，选择前先确定希望使用的查询方式。')">
                 <MultiSelect
                   v-model="mosdnsDirectRules"
                   :options="directRuleOptions"
@@ -122,7 +122,7 @@
 
               <LabeledDivider label="代理规则配置" />
 
-              <FormField label="代理规则集" hint="使用国外 DNS；已选为直连规则集的项目不能重复选择。">
+              <FormField label="代理规则集" hint="整组网站或 IP 命中后，使用国外 DNS 查询。" :help="optionHelp('希望为整组网站或 IP 指定国外 DNS 时选择。', '所选规则集命中后使用国外上游，并按当前配置的备用机制处理超时。同一规则集不能同时归入直连分组；查询方式不等于自动设置网络代理。')">
                 <MultiSelect
                   v-model="mosdnsProxyRulesets"
                   :options="proxyRulesetOptions"
@@ -130,7 +130,7 @@
                 />
               </FormField>
 
-              <FormField label="代理规则" hint="使用国外 DNS；已选为直连规则的项目不能重复选择。">
+              <FormField label="代理规则" hint="单条网站或 IP 规则命中后，使用国外 DNS。" :help="optionHelp('希望为个别网站或 IP 指定国外 DNS 时选择。', '命中后使用国外上游，与规则集按既定顺序参与分流。同一规则不能同时归入直连分组；仅选择 DNS 不会替设备启用网络代理。')">
                 <MultiSelect
                   v-model="mosdnsProxyRules"
                   :options="proxyRuleOptions"
@@ -140,7 +140,7 @@
 
               <LabeledDivider label="自定义 Match" />
 
-              <FormField label="插入位置" hint="选择自定义 match 在自动生成的规则匹配之前或之后执行。">
+              <FormField label="插入位置" hint="选择自定义匹配先执行，或让自动规则优先。" :help="optionHelp('已经添加自定义匹配，需要决定它和自动规则的先后。', '放在自动规则之前，可先尝试自己的条件和动作；放在之后，则先让自动规则处理。顺序会影响命中结果，应按希望的优先级选择。')">
                 <Select v-model="mosdnsCustomMatchPosition">
                   <SelectTrigger class="w-full bg-background/50">
                     <SelectValue />
@@ -213,7 +213,7 @@
                     </div>
                   </div>
 
-                  <FormField label="匹配条件" hint="支持 MosDNS sequence 的 matches 格式，自动忽略空行。">
+                  <FormField label="匹配条件" hint="每行填写一个条件，空行会被自动忽略。" :help="optionHelp('需要按域名、类型等条件自定义 MosDNS 处理流程。', '使用 MosDNS sequence 的 matches 格式，每行一个表达式，空行自动忽略。应按核心支持的语法填写，条件决定何时执行对应动作。')">
                     <Textarea
                       v-model="item.matchesText"
                       class="bg-background/50 font-mono text-[12px]"
@@ -250,7 +250,7 @@
               </FormField>
 
               <template v-if="mosdnsCacheEnabled">
-                <FormField label="size" html-for="cache-size" hint="缓存条目数量（建议 10240 起）。">
+                <FormField label="缓存条目数（size）" html-for="cache-size" hint="保存更多查询结果，同时占用更多设备内存。" :help="optionHelp('已开启 MosDNS 缓存，希望减少重复向上游查询。', '设置最多保存的查询条目数，建议从 10240 起。数量不是字节数，增大能容纳更多域名结果，但也会增加内存占用，应结合设备资源调整。')">
                   <Input
                     id="cache-size"
                     v-model.number="mosdnsCacheSize"
@@ -262,7 +262,7 @@
                   />
                 </FormField>
 
-                <FormField label="lazy_cache_ttl" html-for="cache-ttl" hint="缓存过期后的延迟删除时间（秒）。">
+                <FormField label="过期缓存保留秒数（lazy_cache_ttl）" html-for="cache-ttl" hint="延后删除过期缓存，按秒设置额外保留时间。" :help="optionHelp('MosDNS 缓存已开启，希望在结果过期后继续保留一段时间。', '这是缓存过期后的延迟删除时长，单位为秒。与正常有效期分开设置，不等于让上游返回的 DNS 记录在客户端永久有效。')">
                   <Input
                     id="cache-ttl"
                     v-model.number="mosdnsCacheLazyTtl"
@@ -283,9 +283,10 @@
 
                 <template v-if="mosdnsCacheDumpEnabled">
                   <FormField
-                    label="dump_file"
+                    label="缓存文件（dump_file）"
                     html-for="cache-dump-file"
-                    hint="缓存文件的保存位置，相对于 MosDNS 配置目录。"
+                    hint="填写缓存保存位置，相对路径从配置目录开始。"
+                    :help="optionHelp('已开启将缓存保存到文件，需要指定快照位置时填写。', '文件位于 MosDNS 运行设备，使用相对路径时，以配置文件所在目录为起点。填写可写入的位置，如 ./cache.dump，供重启后恢复缓存。')"
                   >
                     <Input
                       id="cache-dump-file"
@@ -295,7 +296,7 @@
                     />
                   </FormField>
 
-                  <FormField label="dump_interval" html-for="cache-dump-interval" hint="缓存保存间隔（秒）。">
+                  <FormField label="保存间隔秒数（dump_interval）" html-for="cache-dump-interval" hint="控制缓存保存频率，越频繁则磁盘写入越多。" :help="optionHelp('缓存已开启，且选择了将缓存保存到文件时生效。', '按此秒数定期保存缓存快照。缩短可减少停止前尚未保存的缓存，但会增加磁盘写入；不改变 DNS 查询结果本身的有效期。')">
                     <Input
                       id="cache-dump-interval"
                       v-model.number="mosdnsCacheDumpInterval"
@@ -383,8 +384,9 @@
                         />
                       </FormField>
                       <FormField
-                        label="Bootstrap"
-                        :hint="!isDomainAddr(entry.addr) && entry.addr ? '仅域名地址或 DoH/DoT 地址需要 Bootstrap' : ''"
+                        label="引导 DNS（Bootstrap）"
+                        hint="帮助找到上游服务器，普通 IP 地址无需填写。"
+                        :help="optionHelp('上游使用域名或加密 DNS 地址，且此输入框可用时填写。', '先通过此 DNS 找到上游地址，避免解析上游时依赖自身形成循环。普通 IP 地址不使用此项；是否写入配置以当前上游格式为准。')"
                       >
                         <Input
                           v-model="entry.bootstrap"
@@ -393,10 +395,12 @@
                           :disabled="!isDomainAddr(entry.addr)"
                         />
                       </FormField>
+                      <FormField label="连接流水线（Pipeline）" hint="上游支持时，复用同一连接发送多个查询。" :help="optionHelp('上游支持 TCP / DoT 的多查询复用，希望减少连接开销。', '允许在一条连接上同时发送多个 DNS 查询。并非所有上游都兼容，使用前应确认支持；UDP 查询不会因此变成 TCP 查询。')">
                       <label class="flex cursor-pointer items-center gap-2 text-[13px] text-muted-foreground">
                         <Checkbox v-model="entry.enable_pipeline" />
-                        启用 Pipeline
+                        启用连接复用
                       </label>
+                      </FormField>
                     </template>
 
                     <template v-else>
@@ -547,6 +551,7 @@
                 label="API 监听地址"
                 html-for="mosdns-api-addr"
                 hint="格式 IP:端口，例如 0.0.0.0:8338 或 127.0.0.1:8338。"
+                :help="optionHelp('已启用 MosDNS API，需指定从哪里访问管理接口。', '填写 IP:端口。127.0.0.1:8338 仅本机访问，0.0.0.0:8338 接收所有 IPv4 网卡的连接；其他设备还需能访问此端口。')"
               >
                 <Input
                   id="mosdns-api-addr"
@@ -701,6 +706,7 @@ import LabeledDivider from '@/components/common/LabeledDivider.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import { notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
+import { optionHelp } from '@/lib/optionCopy'
 import { generateApi, customConfigApi, ruleApi, ruleSetApi, proxyGroupApi, serverDomainApi, configTokenApi, type PublishGuard } from '@/api'
 import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'

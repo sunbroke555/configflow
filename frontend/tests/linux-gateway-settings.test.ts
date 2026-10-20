@@ -5,7 +5,6 @@ import LinuxGatewaySettings from '@/components/generate/LinuxGatewaySettings.vue
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
-import FieldHelp from '@/components/common/FieldHelp.vue'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select } from '@/components/ui/select'
@@ -232,7 +231,7 @@ describe('Linux gateway opt-in workflow', () => {
     const wrapper = await render()
     expect(wrapper.getComponent(Switch).props('modelValue')).toBe(false)
     expect(button(wrapper, '预览并检查').attributes('disabled')).toBeDefined()
-    expect(wrapper.getComponent(FieldHelp).props('text')).toContain('自动包含 fake-IP 网段 198.18.0.1/16')
+    expect(wrapper.text()).toContain('自动接管的临时地址范围（fake-IP）：198.18.0.1/16')
     wrapper.getComponent(Switch).vm.$emit('update:modelValue', true)
     await flushPromises()
     expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
