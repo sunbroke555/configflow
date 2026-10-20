@@ -6,6 +6,7 @@ import StatusDot from '@/components/common/StatusDot.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import { Select } from '@/components/ui/select'
 import { routerApi, agentApi, ruleApi } from '@/api'
+import { setupApi } from '@/api/setup'
 import { NAV_GROUPS, scopeOfPath } from '@/navigation'
 import { activeProfileId } from '@/profileContext'
 import { notify } from '@/lib/feedback'
@@ -19,6 +20,7 @@ vi.mock('@/api', () => ({
   ruleApi: { getAll: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn() }
 }))
 vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn() }, confirmDanger: vi.fn(), confirm: vi.fn(), confirmState: { resolve: null }, settleConfirm: vi.fn() }))
+vi.mock('@/api/setup', () => ({ setupApi: { get: vi.fn(), saveRouterDraft: vi.fn() } }))
 
 const wrappers: VueWrapper[] = []
 beforeEach(() => {
@@ -72,18 +74,66 @@ const toggleHelp = async (label: string) => {
   return document.querySelector<HTMLElement>('[data-field-help-content]')
 }
 
-const mountRouter = async (router: Record<string, unknown> | null = ROUTER, agents: Record<string, unknown>[] = []) => {
+const mountRouter = async (router: Record<string, unknown> | null = ROUTER, agents: Record<string, unknown>[] = [], props = {}) => {
   vi.mocked(routerApi.list).mockResolvedValue({ data: { success: true, routers: router ? [router] : [] } } as any)
   vi.mocked(agentApi.getAll).mockResolvedValue({ data: agents } as any)
   vi.mocked(ruleApi.getAll).mockResolvedValue({ data: [] } as any)
   vi.mocked(routerApi.policySettings).mockResolvedValue({ data: { success: true, workspace: { profile_id: 'default', profile_name: '默认配置', revision: 'one', oxidns_revision: 'dns-one', router: { id: 'router_1', name: '主路由', ip_rule_sets: [], ros_policy_rule_sets: ['telegram'], proxy_gateway_agent_id: 'a1' }, sources: { policies: [], editable: true, reason: '' }, source_agents: [], gateways: [], rule_sets: [] } } } as any)
-  const wrapper = mount(Routers, { attachTo: document.body })
+  const wrapper = mount(Routers, { attachTo: document.body, props })
   wrappers.push(wrapper)
   await flushPromises()
   return wrapper
 }
 
 describe('routers view', () => {
+  it('allows saving an early setup connection without changing profile settings or contacting the router', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: {} } as never)
+    vi.mocked(setupApi.saveRouterDraft).mockImplementation(async () => {
+      vi.mocked(setupApi.get).mockResolvedValue({ data: { router_draft: { ...ROUTER, proxy_gateway_agent_id: '', manage_return_routing: false, last_probe: undefined } } } as never)
+      return { data: {} } as never
+    })
+    const wrapper = await mountRouter(null, [], { embedded: true, profileId: 'setup-profile', setupDraftSession: 'setup-session' })
+    expect(routerApi.list).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find(button => button.text().includes('添加路由器'))!.trigger('click'); await flushPromises()
+    expect(document.body.querySelector('#router-gateway')).toBeNull()
+    expect(document.body.querySelector('#router-dns')).toBeNull()
+    expect(document.body.textContent).toContain('安装后自动关联本次 Mihomo + OxiDNS')
+    for (const [id, value] of [['router-name', '主路由'], ['router-endpoint', 'http://192.0.2.1'], ['router-username', 'admin'], ['router-password', 'private']]) {
+      await new DOMWrapper(document.querySelector<HTMLInputElement>(`#${id}`)!).setValue(value)
+    }
+    buttonInDocument('保存到向导').click(); await flushPromises()
+    expect(setupApi.saveRouterDraft).toHaveBeenCalledWith('setup-session', expect.objectContaining({ password: 'private', proxy_gateway_agent_id: '', dns_agent_id: '' }))
+    expect(wrapper.text()).toContain('已保存，待安装')
+    expect(wrapper.text()).not.toContain('差异报告')
+    expect(wrapper.text()).not.toContain('探测')
+    for (const api of [routerApi.create, routerApi.update, routerApi.probe, routerApi.report, routerApi.apply]) expect(api).not.toHaveBeenCalled()
+    await wrapper.get('button[aria-label="编辑"]').trigger('click'); await flushPromises()
+    expect((document.querySelector('#router-password') as HTMLInputElement).value).toBe('')
+    expect((document.querySelector('#router-password') as HTMLInputElement).placeholder).toBe('留空则保持不变')
+  })
+
+  it('pins embedded setup to its profile and preselects the installed pair across sidebar changes', async () => {
+    vi.mocked(routerApi.create).mockResolvedValue({ data: { success: true } } as any)
+    const wrapper = await mountRouter(null, [
+      { id: 'new-m', name: 'New Mihomo', host: '192.0.2.10', service_type: 'mihomo', profile_id: 'setup-profile' },
+      { id: 'new-o', name: 'New OxiDNS', host: '192.0.2.10', service_type: 'oxidns', profile_id: 'setup-profile' },
+      { id: 'other', name: 'Other', host: '192.0.2.11', service_type: 'mihomo', profile_id: 'other-profile' }
+    ], { embedded: true, profileId: 'setup-profile', setupAgents: { mihomo: 'new-m', oxidns: 'new-o' } })
+    expect(routerApi.list).toHaveBeenCalledWith('setup-profile')
+    expect(ruleApi.getAll).toHaveBeenCalledWith('setup-profile')
+    await wrapper.findAll('button').find(button => button.text().includes('添加路由器'))!.trigger('click')
+    await flushPromises()
+    activeProfileId.value = 'other-profile'
+    await flushPromises()
+    for (const [id, value] of [['router-name', 'Guide router'], ['router-endpoint', 'http://192.0.2.1'], ['router-username', 'admin'], ['router-password', 'private']]) {
+      await new DOMWrapper(document.querySelector<HTMLInputElement>(`#${id}`)!).setValue(value)
+    }
+    buttonInDocument('保存').click()
+    await flushPromises()
+    expect(routerApi.create).toHaveBeenCalledWith(expect.objectContaining({ proxy_gateway_agent_id: 'new-m', dns_agent_id: 'new-o' }), 'setup-profile')
+    expect(wrapper.emitted('busy')?.some(event => event[0] === true)).toBe(true)
+  })
+
   it('opens the unified policy workspace without opening another editor or publishing', async () => {
     await mountRouter({ ...ROUTER, type: 'routeros', ros_policy_rule_sets: ['telegram'] })
     buttonInDocument('策略路由').click()

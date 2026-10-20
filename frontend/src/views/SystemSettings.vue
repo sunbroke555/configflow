@@ -1,6 +1,8 @@
 <template>
   <div class="min-w-0 [overflow-wrap:anywhere]">
-    <PageHeader title="系统设置" />
+    <PageHeader title="系统设置">
+      <template #actions><Button as-child variant="outline" class="min-h-11"><RouterLink to="/setup">首次使用向导</RouterLink></Button></template>
+    </PageHeader>
     <!-- ===== 服务配置 / 配置管理 ===== -->
     <div class="grid grid-cols-2 gap-3 max-[1100px]:grid-cols-1">
       <SectionCard title="服务配置" :icon="Settings" class="min-w-0">

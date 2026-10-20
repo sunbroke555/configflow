@@ -360,7 +360,7 @@
           <div v-if="installationMode === 'gateway'" class="space-y-4 rounded-lg border border-border bg-muted p-4">
             <div class="space-y-2 text-sm leading-relaxed">
               <p class="m-0 font-semibold">从一台 Linux 开始，按步骤装好网关</p>
-              <p class="m-0 text-muted-foreground">填写网络信息 → 选择分流规则 → 一条命令安装核心和 Agent → 发布并检查服务 → 应用转发。主路由不需要静态路由。</p>
+              <p class="m-0 text-muted-foreground">选择分流规则 → 一条命令安装核心和 Agent → 自动检测网络 → 发布并检查服务 → 应用转发。主路由不需要静态路由。</p>
               <p class="m-0 break-words text-muted-foreground">本次固定使用配置空间「{{ activeProfileName }}」。建议使用专用配置空间，已有设备也会共用此空间的 Mihomo 和 OxiDNS 配置。</p>
             </div>
             <Button class="min-h-11" @click="openGatewayInstaller">开始或继续网关安装</Button>

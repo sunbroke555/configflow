@@ -6,7 +6,8 @@
         type="button"
         role="combobox"
         :aria-expanded="open"
-        class="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 text-left text-[13px] transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
+        :disabled="disabled"
+        class="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 text-left text-[13px] transition-colors hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 max-sm:min-h-11 pointer-coarse:min-h-11 motion-reduce:transition-none"
       >
         <span v-if="!selected.length" class="min-w-0 flex-1 whitespace-normal break-words text-muted-foreground">{{ placeholder }}</span>
         <span v-else class="flex min-w-0 flex-1 flex-wrap gap-1">
@@ -52,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Check, ChevronsUpDown } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -78,6 +79,7 @@ const props = withDefaults(
     placeholder?: string
     searchPlaceholder?: string
     maxVisible?: number
+    disabled?: boolean
   }>(),
   { placeholder: '请选择', searchPlaceholder: '搜索…', maxVisible: 6 }
 )
@@ -85,6 +87,7 @@ const props = withDefaults(
 const emit = defineEmits<{ (e: 'update:modelValue', value: string[]): void }>()
 
 const open = ref(false)
+watch(() => props.disabled, disabled => { if (disabled) open.value = false })
 
 const selected = computed(() =>
   props.modelValue
@@ -96,6 +99,7 @@ const visibleSelected = computed(() => selected.value.slice(0, props.maxVisible)
 const hiddenCount = computed(() => Math.max(0, selected.value.length - props.maxVisible))
 
 const toggle = (value: string): void => {
+  if (props.disabled) return
   const next = props.modelValue.includes(value)
     ? props.modelValue.filter(item => item !== value)
     : [...props.modelValue, value]

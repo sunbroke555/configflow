@@ -54,7 +54,7 @@ function visibility(value: boolean) {
 async function render() {
   wrapper = mount(Dashboard, { global: { stubs: {
     FlowMap: { template: '<div data-test="config-map" />' }, LiveFlow: { template: '<div data-test="live-map" />' }, Segmented: true, Sparkline: true, AnimatedNumber: true,
-    SectionCard: { template: '<section><slot /></section>' }
+    SectionCard: { template: '<section><slot /></section>' }, SetupEntry: true
   } } })
   await flushPromises()
   return wrapper

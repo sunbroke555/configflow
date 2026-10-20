@@ -23,12 +23,12 @@ from backend.converters.mihomo import generate_mihomo_config, _default_mihomo_te
 DEFAULT_LOCAL_DNS = 'https://223.5.5.5/dns-query'
 DNS_TARGET = '127.0.0.1:1053'
 INPUT_FIELDS = {'rule_set_ids', 'direct_rule_set_ids', 'proxy_rule_set_ids', 'local_dns',
-                'confirm_template_conversion', 'expected_config_revision'}
+                'confirm_template_conversion', 'expected_config_revision', 'default_forward'}
 GATEWAY_CHANGES = [
     '启用当前配置空间的 Linux 选择性网关；fake-IP 网段始终接管，真实 IP 只接管勾选的规则集。',
     'Mihomo 使用 rule / fake-IP 模式，DNS 监听 127.0.0.1:1053；保留现有规则顺序、策略组和节点。',
     'OxiDNS 在 0.0.0.0:53 同时监听 UDP / TCP，优先 IPv4；直连使用所填 IP 地址 DoH / DoT。',
-    'OxiDNS 代理上游和备用上游均为 127.0.0.1:1053，未匹配域名默认交给 Mihomo。',
+    'OxiDNS 代理和备用上游均为 127.0.0.1:1053；未匹配域名使用已选择的默认 DNS。',
     '只保存两份配置草稿；后续分别发布并检查核心，再显式应用主机转发。',
 ]
 
@@ -238,6 +238,8 @@ def _input(value):
         raise GatewayOnboardingError('confirm_template_conversion 必须为布尔值')
     if 'expected_config_revision' in result and (type(result['expected_config_revision']) is not int or result['expected_config_revision'] < 0):
         raise GatewayOnboardingError('配置版本无效，请刷新安装向导')
+    if result.get('default_forward', 'forward_remote') not in ('forward_remote', 'forward_local'):
+        raise GatewayOnboardingError('请选择有效的未匹配域名 DNS')
     _local_upstreams(result.get('local_dns'))
     return result
 
@@ -270,8 +272,10 @@ def _proxy_prerequisites(config, document=None):
     active_rules = [item for item in config.get('rule_configs', []) if item.get('enabled', True) and item.get('library_enabled', True)]
     ready = any(item.get('policy') in reachable for item in active_rules)
     catchall = next((item for item in active_rules if item.get('itemType') == 'rule' and item.get('rule_type') == 'MATCH'), None)
-    if not catchall or catchall.get('policy') not in reachable:
-        warnings.append('当前没有指向可用代理策略的 MATCH 兜底规则；未知域名虽获得 fake-IP，实际出口仍可能直连，请按你的需求在规则页设置。')
+    if not catchall:
+        warnings.append('当前未配置 Mihomo MATCH 漏网规则，请在规则页确认未匹配连接的处理方式。')
+    elif catchall.get('policy') not in reachable and catchall.get('policy') != 'DIRECT':
+        warnings.append('Mihomo MATCH 漏网规则未指向可用代理策略或 DIRECT，请确认未匹配连接的处理方式。')
     warnings.append('策略组可动态选择 DIRECT；此检查仅确认存在代理出口，无法保证每次连接一定走代理。')
     return {'ready': ready, 'policies': policies, 'warnings': warnings, 'verified': True}
 
@@ -323,7 +327,8 @@ def gateway_onboarding_state(config, revision, base_url=''):
         warnings.append('请先准备代理节点或订阅、策略组及对应规则；预览会检查生成配置中的代理出口。')
     return {'profile_id': config.get('profile_id'), 'config_revision': revision, 'server_url': server_url,
             'settings': {'rule_set_ids': state['settings']['rule_set_ids'],
-                         'direct_rule_set_ids': direct, 'proxy_rule_set_ids': proxy, 'local_dns': local},
+                         'direct_rule_set_ids': direct, 'proxy_rule_set_ids': proxy, 'local_dns': local,
+                         'default_forward': values.get('default_forward', 'forward_remote')},
             'gateway_enabled': state['settings']['enabled'], 'ip_candidates': state['candidates'],
             'domain_candidates': _domain_candidates(config, direct + proxy), 'fake_ip_range': state['fake_ip_range'],
             'oxidns_mode': settings.get('config_mode', 'template'), 'warnings': warnings, 'field_warnings': field_warnings,
@@ -409,7 +414,8 @@ def prepare_gateway_onboarding(config, value, base_url=''):
         _prepare_mihomo_dns(candidate)
         changes = {'listen': '0.0.0.0:53', 'tcp_enabled': True, 'prefer_ipv4': True,
                    'local_dns': value['local_dns'], 'remote_dns': DNS_TARGET, 'fallback_dns': DNS_TARGET,
-                   'default_forward': 'forward_remote', 'direct_rulesets': value['direct_rule_set_ids'],
+                   'default_forward': value.get('default_forward', 'forward_remote'),
+                   'direct_rulesets': value['direct_rule_set_ids'],
                    'proxy_rulesets': value['proxy_rule_set_ids']}
         if settings['config_mode'] == 'native':
             native_changes = {**changes, **{key: yaml.safe_dump(_forward(changes[key], []), allow_unicode=True, sort_keys=False)
@@ -462,11 +468,12 @@ def assert_gateway_onboarding_ready(config, base_url='', *, local_addresses=()):
         raise GatewayOnboardingError('请先在安装向导预览并保存网关配置')
     try:
         settings, values = _oxidns_values(config, base_url)
-        required = {'listen': '0.0.0.0:53', 'tcp_enabled': True, 'prefer_ipv4': True,
-                    'default_forward': 'forward_remote'}
+        required = {'listen': '0.0.0.0:53', 'tcp_enabled': True, 'prefer_ipv4': True}
         if any(type(values.get(key)) is not type(expected) or values.get(key) != expected
                for key, expected in required.items()):
             raise GatewayOnboardingError('已保存的 OxiDNS 监听、IPv4 或默认分流不符合安装方案，请重新预览并保存')
+        if values.get('default_forward') not in ('forward_local', 'forward_remote'):
+            raise GatewayOnboardingError('已保存的 OxiDNS 默认 DNS 无效，请重新预览并保存')
         _local_upstreams(values.get('local_dns'))
         for key in ('remote_dns', 'fallback_dns'):
             upstreams = _forward(values.get(key) or '', [])

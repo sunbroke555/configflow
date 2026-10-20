@@ -13,6 +13,7 @@ declare module 'vue-router' {
 }
 
 const routes = [
+  { path: '/setup', name: 'Setup', component: () => import('@/views/Setup.vue') },
   {
     path: '/login',
     name: 'Login',

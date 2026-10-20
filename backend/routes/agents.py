@@ -504,7 +504,8 @@ def register_agent():
         if installation_id is not None or installation_token is not None:
             from backend.agents.gateway_installation import registration_profile, InstallationError
             try:
-                installation_profile = registration_profile(get_repository(), installation_id, installation_token, agent_data)
+                installation_profile = registration_profile(get_repository(), installation_id, installation_token, agent_data,
+                                                            fallback_host=request.remote_addr)
             except InstallationError as exc:
                 return jsonify(success=False, message=str(exc)), exc.status
             agent_data['profile_id'] = installation_profile

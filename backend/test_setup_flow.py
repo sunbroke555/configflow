@@ -1,0 +1,534 @@
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+import yaml
+from flask import Flask
+
+from backend.common import config as config_store
+from backend.common.config_repository import ProfileRepository
+from backend.common.setup_presets import builtin_rule_catalog, recommended_domain_rules
+from backend.routes import register_blueprints
+from backend.utils.subscription_cache import save_subscription_nodes
+
+SESSION = 'a' * 32
+NODE = {'id': 'node', 'name': 'Test node', 'type': 'ss', 'server': '192.0.2.1',
+        'port': 443, 'cipher': 'aes-128-gcm', 'password': 'private'}
+DOMAIN_RULE = {'id': 'work', 'name': '工作域名', 'behavior': 'domain', 'format': 'yaml',
+               'source_type': 'content', 'content': 'payload:\n  - +.work.test', 'enabled': True}
+
+
+@pytest.fixture
+def setup_api(tmp_path):
+    repository = ProfileRepository(tmp_path)
+    previous = config_store._repository
+    config_store.set_repository(repository)
+    app = Flask(__name__)
+    register_blueprints(app)
+    yield app.test_client(), repository
+    config_store.set_repository(previous)
+
+
+def start(client, goal='router'):
+    response = client.post('/api/setup', json={'id': SESSION, 'name': '新手配置', 'goal': goal})
+    assert response.status_code == 200, response.json
+    return response.json
+
+
+def test_suggestion_is_read_only_and_creation_resumes_the_same_profile(setup_api):
+    client, repository = setup_api
+    before = repository.export_all()
+    assert client.get('/api/setup').json['suggested']
+    assert repository.export_all() == before
+    first = start(client)
+    token = repository.get_system()['system_config']['config_token']
+    assert start(client)['profile_id'] == first['profile_id']
+    assert repository.get_system()['system_config']['config_token'] == token
+    assert len(repository.list_profiles()) == 2
+    assert client.get('/api/setup').json['sessions'][0]['id'] == SESSION
+    assert repository.get_profile('default') == before['profiles']['default']
+
+
+def test_sources_are_idempotent_and_bad_subscription_cannot_complete(setup_api):
+    client, repository = setup_api
+    start(client)
+    body = {'url': 'https://subscription.test/list?token=private'}
+    for _ in range(2):
+        response = client.post(f'/api/setup/{SESSION}/source', json=body)
+        assert response.status_code == 200, response.json
+    assert len(repository.get_shared()['subscriptions']) == 1
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={})
+    assert response.status_code == 400
+    assert '可用节点' in response.json['message']
+    assert client.post(f'/api/setup/{SESSION}/finish', json={}).status_code == 409
+
+
+@pytest.mark.parametrize('goal', ['router', 'gateway'])
+def test_prepare_is_resumable_scoped_and_has_a_real_proxy_exit(setup_api, goal):
+    client, repository = setup_api
+    old = repository.get_profile('default')
+    session = start(client, goal)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    response = client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    assert response.status_code == 200
+    for _ in range(2):
+        response = client.post(f'/api/setup/{SESSION}/prepare', json={'template': 'basic'})
+        assert response.status_code == 200, response.json
+    profile = repository.get_profile(session['profile_id'])
+    assert profile['_revision'] == 1
+    assert profile['proxy_groups'][0]['manual_nodes'] == ['node']
+    assert profile['rule_configs'][-1]['policy'] == '代理选择'
+    assert yaml.safe_load(profile['mihomo']['custom_config'])['dns']['listen'] == '127.0.0.1:1053'
+    assert repository.get_profile('default') == old
+    response = client.post(f'/api/setup/{SESSION}/finish', json={})
+    assert response.status_code == 409
+    assert profile['oxidns']['remote_dns'] == '127.0.0.1:1053'
+    assert profile['oxidns']['listen'] == '0.0.0.0:53'
+    assert profile['oxidns']['local_dns'] == 'https://223.5.5.5/dns-query'
+    assert client.get(f'/api/setup/{SESSION}').json['local_dns'] == profile['oxidns']['local_dns']
+
+
+def test_subscription_cache_and_manual_profile_changes_are_checked(setup_api):
+    client, repository = setup_api
+    session = start(client)
+    client.post(f'/api/setup/{SESSION}/source', json={'url': 'https://subscription.test/list'})
+    save_subscription_nodes('setup_sub_' + SESSION, [NODE])
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={}).status_code == 200
+    repository.save_profile(session['profile_id'], {'mihomo': {'custom_config': 'mixed-port: 9999'}})
+    before = repository.export_all()
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={}).status_code == 409
+    assert repository.export_all() == before
+    assert client.post(f'/api/setup/{SESSION}/finish', json={}).status_code == 409
+
+
+def test_invalid_requests_cannot_skip_steps_or_target_other_profiles(setup_api):
+    client, repository = setup_api
+    start(client)
+    before = repository.export_all()
+    assert client.patch(f'/api/setup/{SESSION}', json={'step': 5}).status_code == 400
+    assert client.patch(f'/api/setup/{SESSION}', json={'profile_id': 'default'}).status_code == 400
+    assert client.patch(f'/api/setup/{SESSION}', json={'router_id': 'unrelated'}).status_code == 409
+    assert client.post(f'/api/setup/{SESSION}/source', json={'url': 'file:///etc/passwd'}).status_code == 400
+    assert client.post('/api/setup', json=[]).status_code == 400
+    assert repository.export_all() == before
+
+
+def test_setup_apis_require_administrator_authentication(setup_api, monkeypatch):
+    client, _ = setup_api
+    monkeypatch.setattr('backend.common.auth.is_auth_enabled', lambda: True)
+    assert client.get('/api/setup').status_code == 401
+    assert client.post('/api/setup', json={'id': SESSION, 'name': 'test', 'goal': 'router'}).status_code == 401
+
+
+@pytest.fixture
+def installed(setup_api, monkeypatch):
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    client.post(f'/api/setup/{SESSION}/prepare', json={})
+    profile_id = session['profile_id']
+    revision = repository.config_revision(profile_id)
+    agents = {service: {'id': service, 'name': service, 'host': '192.0.2.10',
+                       'profile_id': profile_id, 'service_type': service} for service in ('mihomo', 'oxidns')}
+    repository.update_system_transaction(lambda system: system.update(agents=list(agents.values())))
+    gateway = {'id': 'installation', 'phase': 'published', 'target_changed': False, 'agents': agents}
+    def latest(*_):
+        return {'session': {**gateway, 'config_changed': repository.config_revision(profile_id) != revision}}
+    monkeypatch.setattr('backend.common.agent_manager.get_agent_manager', lambda: object())
+    monkeypatch.setattr('backend.agents.gateway_installation.latest', latest)
+    managed = {'active': True, 'healthy': True}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', lambda *_: {'managed': managed})
+    return client, repository, profile_id, gateway, managed
+
+
+ROUTER_DRAFT = {'name': 'Main', 'type': 'ikuai', 'endpoint': 'http://192.0.2.1',
+                'username': 'admin', 'password': 'draft-secret'}
+
+
+def test_early_router_settings_are_private_and_do_not_invalidate_installation(installed):
+    client, repository, profile_id, _, _ = installed
+    before = repository.export_all()
+    response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT})
+    assert response.status_code == 200, response.json
+    draft = response.json['router_draft']
+    assert draft['has_password'] and 'password' not in draft
+    assert response.json['step'] == response.json['max_step'] == 3
+    assert repository.export_all() == before
+    path = repository.data_dir / 'setup-sessions' / f'{SESSION}.json'
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert 'draft-secret' in path.read_text()
+    for response in (client.get(f'/api/setup/{SESSION}'), client.get('/api/setup'),
+                     client.post('/api/setup', json={'id': SESSION, 'name': '新手配置', 'goal': 'router'}),
+                     client.patch(f'/api/setup/{SESSION}', json={'step': 3})):
+        assert response.status_code == 200
+        assert 'draft-secret' not in response.get_data(as_text=True)
+    response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': {**ROUTER_DRAFT, 'name': 'Renamed', 'password': ''}})
+    assert response.json['router_draft']['id'] == draft['id']
+    assert response.json['router_draft']['has_password']
+    assert repository.export_all() == before
+    assert client.post(f'/api/setup/{SESSION}/router-draft', json={'router': None}).status_code == 200
+    assert 'router_draft' not in client.get(f'/api/setup/{SESSION}').json
+    assert 'draft-secret' not in path.read_text()
+
+
+def test_router_draft_attaches_only_after_healthy_installation_and_is_idempotent(installed):
+    client, repository, profile_id, _, managed = installed
+    response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT})
+    router_id = response.json['router_draft']['id']
+    managed['healthy'] = False
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409
+    assert repository.get_profile(profile_id)['routers']['items'] == []
+    assert 'router_draft' in client.get(f'/api/setup/{SESSION}').json
+    managed['healthy'] = True
+    for _ in range(2):
+        response = client.post(f'/api/setup/{SESSION}/check', json={})
+        assert response.status_code == 200, response.json
+        assert response.json['step'] == 4
+        assert response.json['router_id'] == router_id
+        assert 'router_draft' not in response.json
+    routers = repository.get_profile(profile_id)['routers']['items']
+    assert len(routers) == 1
+    assert routers[0]['proxy_gateway_agent_id'] == 'mihomo'
+    assert routers[0]['dns_agent_id'] == 'oxidns'
+    assert routers[0]['password'] == 'draft-secret'
+    assert client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT}).status_code == 409
+
+
+def test_router_draft_retries_after_interruption_between_profile_and_session_commits(installed, monkeypatch):
+    client, repository, profile_id, _, _ = installed
+    client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT})
+    from backend.common import setup_flow
+    write = setup_flow.write
+    def interrupted_write(repo, session):
+        if session['step'] == 4:
+            raise OSError('simulated interrupted session commit')
+        return write(repo, session)
+    monkeypatch.setattr(setup_flow, 'write', interrupted_write)
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 500
+    assert len(repository.get_profile(profile_id)['routers']['items']) == 1
+    monkeypatch.setattr(setup_flow, 'write', write)
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200, response.json
+    assert 'router_draft' not in response.json
+    assert len(repository.get_profile(profile_id)['routers']['items']) == 1
+
+
+@pytest.mark.parametrize('change', [{'proxy_gateway_agent_id': 'other'}, {'dns_agent_id': 'other'},
+                                   {'auto_rule_sync': True}, {'unknown': True}, {'endpoint': 'file:///etc/passwd'}])
+def test_router_draft_rejects_invalid_or_premature_links(installed, change):
+    client, repository, _, _, _ = installed
+    before = repository.export_all()
+    assert client.post(f'/api/setup/{SESSION}/router-draft', json={'router': {**ROUTER_DRAFT, **change}}).status_code == 400
+    assert repository.export_all() == before
+    assert 'router_draft' not in client.get(f'/api/setup/{SESSION}').json
+
+
+def test_installation_check_requires_both_services_and_healthy_forwarding(installed):
+    client, _, _, gateway, managed = installed
+    managed['healthy'] = False
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409
+    managed['healthy'] = True
+    gateway['target_changed'] = True
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409
+    gateway['target_changed'] = False
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200, response.json
+    assert response.json['step'] == 4
+    assert response.json['route_instructions']['routes'][0]['cidr'] == '198.18.0.0/16'
+    assert response.json['route_instructions']['dns'] == '192.0.2.10'
+
+
+def test_manual_router_completion_requires_explicit_acknowledgements(installed):
+    client, _, _, _, _ = installed
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 200
+    assert client.post(f'/api/setup/{SESSION}/finish', json={}).status_code == 409
+    response = client.post(f'/api/setup/{SESSION}/finish', json={'router_mode': 'manual', 'ack_routes': True, 'ack_dns': True})
+    assert response.status_code == 200, response.json
+    assert response.json['router_verification'] == 'manual'
+    assert response.json['completed']
+
+
+def test_router_receipts_do_not_invalidate_core_checks_but_core_edits_do(installed, monkeypatch):
+    client, repository, profile_id, _, _ = installed
+    client.post(f'/api/setup/{SESSION}/check', json={})
+    from backend.routers.store import normalize
+    router = normalize({'name': 'Main', 'type': 'ikuai', 'endpoint': 'http://192.0.2.1',
+                        'username': 'admin', 'password': 'private',
+                        'proxy_gateway_agent_id': 'mihomo', 'dns_agent_id': 'oxidns'})
+    repository.save_profile(profile_id, {'routers': {'items': [router]}})
+    closed = []
+    monkeypatch.setattr('backend.routes.routers._driver', lambda _: SimpleNamespace(close=lambda: closed.append(True)))
+    monkeypatch.setattr('backend.routes.routers._inspect', lambda *_: (None, {}, {}, {'return_routing': {}}))
+    plan = {'empty': False, 'blockers': []}
+    monkeypatch.setattr('backend.routers.plan.build_plan', lambda *_: plan)
+    body = {'router_mode': 'managed', 'router_id': router['id']}
+    assert client.post(f'/api/setup/{SESSION}/finish', json=body).status_code == 409
+    plan['empty'] = True
+    response = client.post(f'/api/setup/{SESSION}/finish', json=body)
+    assert response.status_code == 200, response.json
+    assert response.json['router_verification'] == 'verified'
+    assert len(closed) == 2
+    repository.save_profile(profile_id, {'mihomo': {'custom_config': 'mixed-port: 9999'}})
+    assert client.post(f'/api/setup/{SESSION}/finish', json=body).status_code == 409
+
+
+@pytest.mark.parametrize('dns_fallback', ['mihomo', 'direct'])
+@pytest.mark.parametrize('traffic_fallback', ['proxy', 'direct'])
+def test_dns_and_connection_fallbacks_are_independent_through_installation(setup_api, dns_fallback, traffic_fallback):
+    from backend.common.gateway_onboarding import gateway_onboarding_state, prepare_gateway_onboarding, assert_gateway_onboarding_ready
+    from backend.converters.oxidns import generate_oxidns_config
+    from backend.converters.mihomo import generate_mihomo_config
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    local_dns = 'https://223.6.6.6/dns-query\ntls://223.5.5.5:853'
+    choices = {'dns_fallback': dns_fallback, 'traffic_fallback': traffic_fallback, 'local_dns': f'  {local_dns}\n',
+               'domain_rules': {'direct': ['builtin:direct'], 'proxy': ['builtin:proxy']}}
+    for _ in range(2):
+        response = client.post(f'/api/setup/{SESSION}/prepare', json=choices)
+        assert response.status_code == 200, response.json
+        assert response.json['dns_fallback'] == dns_fallback
+        assert response.json['traffic_fallback'] == traffic_fallback
+        assert response.json['local_dns'] == local_dns
+    assert client.get(f'/api/setup/{SESSION}').json['local_dns'] == local_dns
+    config, revision = repository.get_publish_snapshot(session['profile_id'])
+    assert repository.get_profile(session['profile_id'])['_revision'] == 1
+    assert len(repository.get_shared()['rule_library']) == len(builtin_rule_catalog())
+    expected_forward = 'forward_remote' if dns_fallback == 'mihomo' else 'forward_local'
+    expected_policy = '代理选择' if traffic_fallback == 'proxy' else 'DIRECT'
+    assert config['oxidns']['default_forward'] == expected_forward
+    assert config['oxidns']['local_dns'] == local_dns
+    assert config['oxidns']['direct_rulesets'] == ['setup_builtin_direct']
+    assert config['oxidns']['proxy_rulesets'] == ['setup_builtin_proxy']
+    assert config['rule_configs'][-1]['policy'] == expected_policy
+    state = gateway_onboarding_state(config, revision)
+    assert state['settings']['default_forward'] == expected_forward
+    assert state['settings']['local_dns'] == local_dns
+    prepared, report = prepare_gateway_onboarding(config, state['settings'], base_url='https://config.test')
+    assert report['ready'], report
+    assert assert_gateway_onboarding_ready(prepared, base_url='https://config.test')['ready']
+    assert prepared['oxidns']['default_forward'] == expected_forward
+    assert prepared['oxidns']['local_dns'] == local_dns
+    assert prepared['rule_configs'] == config['rule_configs']
+    assert not any('MATCH' in warning for warning in report['warnings'])
+    document = yaml.safe_load(generate_mihomo_config(prepared))
+    assert document['rules'][-1] == 'MATCH,' + expected_policy
+    assert any(rule.startswith('RULE-SET,') and rule.endswith(',代理选择') for rule in document['rules'])
+    dns_document = yaml.safe_load(generate_oxidns_config(prepared, 'https://config.test'))
+    forward = next(plugin for plugin in dns_document['plugins'] if plugin['tag'] == 'forward_local')
+    assert [upstream['addr'] for upstream in forward['args']['upstreams']] == local_dns.splitlines()
+    main = next(plugin for plugin in dns_document['plugins'] if plugin['tag'] == 'sequence_main')
+    assert main['args'][-1]['exec'] == ('goto proxy_dns_seq' if dns_fallback == 'mihomo' else 'goto china_dns')
+
+
+def test_removed_proxy_mode_and_invalid_fallbacks_do_not_mutate_configuration(setup_api):
+    client, repository = setup_api
+    start(client)
+    before = repository.export_all()
+    for body in ({'template': 'proxy'}, {'dns_fallback': 'proxy'}, {'traffic_fallback': 'mihomo'}, {'dns_fallback': []}):
+        response = client.post(f'/api/setup/{SESSION}/prepare', json=body)
+        assert response.status_code == 400, response.json
+    assert repository.export_all() == before
+
+
+@pytest.mark.parametrize('local_dns', ['', '  ', None, [], '223.5.5.5',
+                                     'https://127.0.0.1/dns-query', 'tls://223.5.5.5:53',
+                                     'https://dns.example/dns-query'])
+def test_invalid_direct_dns_does_not_change_profile_presets_or_session(setup_api, local_dns):
+    client, repository = setup_api
+    start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    before = repository.export_all()
+    session = client.get(f'/api/setup/{SESSION}').json
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'local_dns': local_dns})
+    assert response.status_code == 400, response.json
+    assert '直连 DNS' in response.json['message']
+    assert repository.export_all() == before
+    assert client.get(f'/api/setup/{SESSION}').json == session
+
+
+def test_domain_choices_are_read_only_and_only_offer_enabled_supported_domain_rules(setup_api):
+    client, repository = setup_api
+    entries = [DOMAIN_RULE,
+               {**DOMAIN_RULE, 'id': 'disabled', 'name': '停用', 'enabled': False},
+               {**DOMAIN_RULE, 'id': 'ips', 'name': 'IP', 'behavior': 'ipcidr'},
+               {**DOMAIN_RULE, 'id': 'mrs', 'name': 'MRS', 'format': 'mrs'},
+               {'id': 'setup_dns_cn', 'name': '旧预设', 'url': 'https://example.test/old-cn', 'behavior': 'domain'},
+               {'id': 'existing_direct', 'name': '已有直连规则', 'url': builtin_rule_catalog()['builtin:direct']['url'], 'behavior': 'classical'}]
+    repository.update_shared_transaction(lambda shared: shared['rule_library'].extend(deepcopy(entries)))
+    before = repository.export_all()
+    options = client.get('/api/setup').json['domain_rules']
+    assert [item['id'] for item in options if item['source'] != 'builtin'] == ['library:work']
+    assert any(item['id'] == 'builtin:telegram' and item['behavior'] == 'classical' for item in options)
+    assert not any(item['id'] in ('builtin:fakeip_filter', 'builtin:private_ip') for item in options)
+    assert repository.export_all() == before
+
+
+def test_old_two_preset_choices_use_template_sources_without_extra_rule_library(setup_api):
+    client, repository = setup_api
+    start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': {
+        'direct': ['preset:direct'], 'proxy': ['preset:proxy']}})
+    assert response.status_code == 200, response.json
+    assert response.json['domain_rules'] == {'direct': ['builtin:chinamax'], 'proxy': ['builtin:proxy']}
+    assert len(repository.get_shared()['rule_library']) == len(builtin_rule_catalog())
+
+
+@pytest.mark.parametrize('selections', [
+    {'direct': ['library:work'], 'proxy': ['builtin:proxy']},
+    {'direct': [], 'proxy': ['library:work', 'builtin:direct']},
+    {'direct': [], 'proxy': []},
+])
+def test_selected_domain_rules_reach_both_core_configs_and_installer(setup_api, selections):
+    from backend.common.gateway_onboarding import gateway_onboarding_state, prepare_gateway_onboarding
+    from backend.converters.oxidns import generate_oxidns_config
+    from backend.converters.mihomo import generate_mihomo_config
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared.update(
+        nodes=[deepcopy(NODE)], rule_library=[deepcopy(DOMAIN_RULE)]))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    before_rule = deepcopy(repository.get_shared()['rule_library'][0])
+    for _ in range(2):
+        response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+        assert response.status_code == 200, response.json
+        assert response.json['domain_rules'] == selections
+    assert client.get(f'/api/setup/{SESSION}').json['domain_rules'] == selections
+    snapshot, revision = repository.get_publish_snapshot(session['profile_id'])
+    profile = repository.get_profile(session['profile_id'])
+    assert profile['_revision'] == 1
+    assert repository.get_shared()['rule_library'][0] == before_rule
+    assert profile['oxidns']['rule_update']['enabled'] == bool(selections['direct'] or selections['proxy'])
+    assert len(repository.get_shared()['rule_library']) == 1 + len(builtin_rule_catalog())
+    rules = {item['id']: item for item in snapshot['rule_configs'] if item['itemType'] == 'ruleset'}
+    for route in ('direct', 'proxy'):
+        ids = snapshot['oxidns'][route + '_rulesets']
+        assert len(ids) == len(selections[route])
+        assert all(rules[identity]['policy'] == ('DIRECT' if route == 'direct' else '代理选择') for identity in ids)
+    state = gateway_onboarding_state(snapshot, revision)
+    candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
+    assert report['ready'], report
+    assert candidate['oxidns']['direct_rulesets'] == snapshot['oxidns']['direct_rulesets']
+    assert candidate['oxidns']['proxy_rulesets'] == snapshot['oxidns']['proxy_rulesets']
+    mihomo = yaml.safe_load(generate_mihomo_config(candidate, base_url='https://config.test'))
+    assert len([rule for rule in mihomo['rules'] if rule.startswith('RULE-SET,')]) == len(rules)
+    dns = yaml.safe_load(generate_oxidns_config(candidate, 'https://config.test'))
+    assert any(plugin['tag'] == 'forward_local' for plugin in dns['plugins'])
+
+
+@pytest.mark.parametrize('selections', [None, [], {}, {'direct': [], 'proxy': 'builtin:proxy'},
+                                      {'direct': ['builtin:direct'], 'proxy': ['builtin:direct']},
+                                      {'direct': ['library:missing'], 'proxy': []},
+                                      {'direct': ['library:disabled'], 'proxy': []}])
+def test_invalid_domain_selections_do_not_create_presets_or_change_drafts(setup_api, selections):
+    client, repository = setup_api
+    start(client)
+    repository.update_shared_transaction(lambda shared: shared.update(
+        nodes=[deepcopy(NODE)], rule_library=[{**DOMAIN_RULE, 'id': 'disabled', 'enabled': False}]))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    before = repository.export_all()
+    session = client.get(f'/api/setup/{SESSION}').json
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+    assert response.status_code in (400, 409), response.json
+    assert repository.export_all() == before
+    assert client.get(f'/api/setup/{SESSION}').json == session
+
+
+def test_builtin_library_comes_only_from_the_original_template(setup_api):
+    import json
+    from backend.common.resource import get_backend_resource
+    catalog = builtin_rule_catalog()
+    with open(get_backend_resource('config_template.json'), encoding='utf-8') as handle:
+        template = json.load(handle)
+    by_name = {item['name']: item for item in catalog.values()}
+    assert len(catalog) == len(template['rule_library']) == 25
+    assert by_name.keys() == {item['name'] for item in template['rule_library']}
+    for item in template['rule_library']:
+        field = 'content' if item.get('source_type') == 'content' else 'url'
+        assert by_name[item['name']][field] == item[field]
+    assert not {'OpenAI', 'Gemini', 'Claude', 'Copilot', 'SteamCN', 'Custom_Direct', 'Custom_Proxy', 'Custom_IP_Proxy'} & by_name.keys()
+    template_library = {item['id']: item for item in template['rule_library']}
+    assert list(by_name) == [template_library[rule['library_rule_id']]['name']
+                             for rule in template['rule_configs'] if rule.get('itemType') == 'ruleset']
+    client, repository = setup_api
+    before = repository.export_all()
+    index = client.get('/api/setup').json
+    assert index['recommended_domain_rules'] == recommended_domain_rules()
+    assert [len(index['recommended_domain_rules'][route]) for route in ('direct', 'proxy')] == [7, 18]
+    assert repository.export_all() == before
+
+
+def test_recommended_classical_library_is_ready_and_existing_sources_are_not_duplicated(setup_api):
+    from backend.common.gateway_onboarding import gateway_onboarding_state, prepare_gateway_onboarding, assert_gateway_onboarding_ready
+    from backend.converters.oxidns import get_oxidns_ruleset_downloads
+    client, repository = setup_api
+    existing = {'id': 'existing_telegram', 'name': 'Telegram', 'behavior': 'classical',
+                'url': builtin_rule_catalog()['builtin:telegram']['url'].replace('/refs/heads/', '/')}
+    custom = {**DOMAIN_RULE, 'id': 'personal', 'name': '我的自定义'}
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[existing, custom]))
+    session = start(client)
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    for _ in range(2):
+        response = client.post(f'/api/setup/{SESSION}/prepare', json={})
+        assert response.status_code == 200, response.json
+        assert response.json['domain_rules'] == recommended_domain_rules()
+    shared = repository.get_shared()['rule_library']
+    assert shared[:2] == [existing, custom]
+    assert len(shared) == len(builtin_rule_catalog()) + 1
+    profile = repository.get_profile(session['profile_id'])
+    assert profile['_revision'] == 1
+    assert any(rule.get('library_rule_id') == existing['id'] for rule in profile['rule_configs'])
+    assert not any(rule.get('library_rule_id') == custom['id'] for rule in profile['rule_configs'])
+    snapshot, revision = repository.get_publish_snapshot(session['profile_id'])
+    assert [rule['name'] for rule in snapshot['rule_configs'] if rule['itemType'] == 'ruleset'] == [item['name'] for item in builtin_rule_catalog().values()]
+    state = gateway_onboarding_state(snapshot, revision)
+    candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
+    assert report['ready'], report
+    assert assert_gateway_onboarding_ready(candidate, base_url='https://config.test')['ready']
+    downloads = get_oxidns_ruleset_downloads(candidate, 'https://config.test')
+    assert any(item['local_path'].endswith('_domain.txt') for item in downloads)
+    assert any(item['local_path'].endswith('_ip.txt') for item in downloads)
+    assert len(downloads) > 30
+    index = client.get('/api/setup').json
+    telegram = next(item for item in index['domain_rules'] if item['id'] == 'builtin:telegram')
+    assert 'library:existing_telegram' in telegram['aliases']
+    assert not any(item['id'] == 'library:existing_telegram' for item in index['domain_rules'])
+    # An older saved library identity is still accepted and resolves to the same source.
+    result = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': {'direct': [], 'proxy': ['library:existing_telegram']}})
+    assert result.status_code == 200, result.json
+    assert result.json['domain_rules'] == {'direct': [], 'proxy': ['builtin:telegram']}
+
+
+def test_disabled_existing_builtin_source_is_not_cloned_or_reenabled(setup_api):
+    client, repository = setup_api
+    telegram = {key: value for key, value in builtin_rule_catalog()['builtin:telegram'].items() if key not in ('default_route', '_template_order')}
+    telegram.update(id='disabled_telegram', enabled=False)
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(telegram)]))
+    session = start(client)
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    index = client.get('/api/setup').json
+    assert 'builtin:telegram' not in index['recommended_domain_rules']['proxy']
+    assert not any(item['id'] == 'builtin:telegram' for item in index['domain_rules'])
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={})
+    assert response.status_code == 200, response.json
+    shared = repository.get_shared()['rule_library']
+    assert len(shared) == len(builtin_rule_catalog())
+    assert shared[0] == telegram
+    assert not any(rule.get('library_rule_id') == telegram['id'] for rule in repository.get_profile(session['profile_id'])['rule_configs'])
+
+
+def test_original_first_start_library_is_reused_without_a_second_copy(tmp_path):
+    from backend.common.setup_presets import ensure_builtin_library, domain_rule_options
+    repository = ProfileRepository(tmp_path / 'first-start', default_config_factory=config_store.get_default_config,
+                                   initial_config_factory=config_store._get_initial_config)
+    before = repository.export_all()
+    resolved = ensure_builtin_library(repository)
+    assert len(resolved) == 25
+    assert len(repository.get_shared()['rule_library']) == 25
+    assert repository.export_all() == before
+    assert all(item['source'] == 'builtin' for item in domain_rule_options(repository))

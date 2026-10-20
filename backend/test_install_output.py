@@ -7,10 +7,56 @@ import subprocess
 
 import pytest
 
-from backend.agents.install_output import with_install_output
+from backend.agents.install_output import with_install_output, with_root_privileges
 
 
 SHELLS = [path for name in ("sh", "dash", "bash") if (path := shutil.which(name))]
+
+
+@pytest.mark.parametrize('shell', SHELLS)
+@pytest.mark.parametrize('root', [False, True])
+@pytest.mark.parametrize('exit_code', [0, 19])
+def test_downloaded_installer_handles_privileges_without_losing_stdin_args_or_exit_status(tmp_path, shell, root, exit_code):
+    commands = tmp_path / 'commands'
+    commands.mkdir()
+    (commands / 'sh').symlink_to(shell)
+    for name, body in {
+        'id': 'if [ "$TEST_IS_ROOT" = yes ]; then printf "0\\n"; else printf "1000\\n"; fi',
+        'sudo': 'printf "sudo\\n" >> "$TEST_EVENTS"; TEST_IS_ROOT=yes; export TEST_IS_ROOT; exec "$@"',
+    }.items():
+        command = commands / name
+        command.write_text('#!/bin/sh\n' + body + '\n')
+        command.chmod(0o755)
+    source = with_root_privileges('''#!/bin/sh
+# ConfigFlow test installer
+set -eu
+trap 'printf "cleanup\\n" >> "$TEST_EVENTS"' 0
+IFS= read -r answer
+printf '%s\\n' "$answer" "$1" "$2" >> "$TEST_EVENTS"
+exit ''' + str(exit_code) + '\n')
+    assert source.splitlines()[1] == '# ConfigFlow test installer'
+    script = tmp_path / 'install.sh'
+    script.write_text(source)
+    result = subprocess.run([shell, str(script), 'argument with spaces', '--verbose'],
+        env={'PATH': str(commands), 'TEST_EVENTS': str(tmp_path / 'events'), 'TEST_IS_ROOT': 'yes' if root else 'no'},
+        input='terminal-input\n', text=True, capture_output=True, timeout=5)
+    assert result.returncode == exit_code, result.stderr
+    assert (tmp_path / 'events').read_text() == ('' if root else 'sudo\n') + 'terminal-input\nargument with spaces\n--verbose\ncleanup\n'
+
+
+def test_downloaded_installer_missing_sudo_stops_before_installation(tmp_path):
+    commands = tmp_path / 'commands'
+    commands.mkdir()
+    identity = commands / 'id'
+    identity.write_text('#!/bin/sh\nprintf "1000\\n"\n')
+    identity.chmod(0o755)
+    script = tmp_path / 'install.sh'
+    script.write_text(with_root_privileges('#!/bin/sh\nprintf unexpected > "$TEST_EVENTS"\n'))
+    result = subprocess.run(['/bin/sh', str(script)], env={'PATH': str(commands), 'TEST_EVENTS': str(tmp_path / 'events')},
+        text=True, capture_output=True, timeout=5)
+    assert result.returncode == 1
+    assert 'root' in result.stderr and 'sudo' in result.stderr
+    assert not (tmp_path / 'events').exists()
 
 
 def run_script(tmp_path, body, shell, *, args=(), **overrides):

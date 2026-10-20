@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -114,8 +115,9 @@ def _saved_snapshot(repository, session):
     if revision != session['config_revision']:
         raise InstallationError('配置已在其他页面修改，请重新预览并保存安装设置后创建新安装会话。', 409)
     from backend.common.gateway_onboarding import assert_gateway_onboarding_ready
+    address = session['network'].get('address')
     assert_gateway_onboarding_ready(config, base_url=session['server_url'],
-                                    local_addresses=(session['network']['address'],))
+                                    local_addresses=(address,) if address else ())
     configured_url = config.get('system_config', {}).get('server_domain', '').strip().rstrip('/')
     if configured_url and configured_url != session['server_url']:
         raise InstallationError('安装地址需与系统设置中的服务地址一致，核心会使用该地址持续下载规则。请先在系统设置确认 Linux 可访问的地址，再重新准备安装。', 409)
@@ -123,7 +125,7 @@ def _saved_snapshot(repository, session):
 
 
 def create(repository, manager, body):
-    allowed = {'profile_id', 'name', 'server_url', 'network', 'config_revision', 'mihomo_agent_port', 'oxidns_agent_port'}
+    allowed = {'profile_id', 'name', 'server_url', 'network', 'config_revision', 'mihomo_agent_port', 'oxidns_agent_port', 'auto_network', 'agent_ip'}
     if not isinstance(body, dict) or set(body) - allowed:
         raise InstallationError('安装参数无效。')
     profile_id = body.get('profile_id')
@@ -133,10 +135,24 @@ def create(repository, manager, body):
     name = body.get('name', '')
     if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,48}', name):
         raise InstallationError('设备名称使用 1–48 个字母、数字、短横线或下划线。')
-    try:
-        network = _spec(body.get('network'))
-    except MonitorError as exc:
-        raise InstallationError(exc.message) from None
+    auto_network = body.get('auto_network', False)
+    if type(auto_network) is not bool:
+        raise InstallationError('auto_network 必须为布尔值。')
+    if auto_network:
+        if 'network' in body:
+            raise InstallationError('自动识别网络时只需填写可选的 Agent IP。')
+        requested_ip = body.get('agent_ip', '')
+        if not isinstance(requested_ip, str):
+            raise InstallationError('Agent IP 必须是 IPv4 地址或留空。')
+        requested_ip = _host_ipv4(requested_ip.strip()) if requested_ip.strip() else ''
+        network = {'address': requested_ip, 'interface': '', 'lan_cidr': '', 'upstream_gateway': ''}
+    else:
+        if 'agent_ip' in body:
+            raise InstallationError('手动网络模式请使用完整网络参数。')
+        try:
+            network = _spec(body.get('network'))
+        except MonitorError as exc:
+            raise InstallationError(exc.message) from None
     ports = {service: body.get(service + '_agent_port', default) for service, default in zip(SERVICES, (8080, 8082))}
     if any(type(port) is not int or not 1024 <= port <= 65535 or port == 1053 for port in ports.values()) or len(set(ports.values())) != 2:
         raise InstallationError('两个 Agent 需要不同的 1024–65535 端口，不能占用 Mihomo DNS 1053。')
@@ -146,6 +162,8 @@ def create(repository, manager, body):
                'token': secrets.token_urlsafe(32), 'created_at': _iso(now), 'expires': now + SESSION_TTL,
                'phase': 'waiting', 'agent_ids': {}, 'registered': {}, 'deployments': {},
                'message': '安装命令已准备，请在目标 Linux 执行后回到这里。'}
+    if auto_network:
+        session.update(auto_network=True, requested_ip=requested_ip)
     _saved_snapshot(repository, session)
     # Resolve all immutable, checksum-verified downloads before handing a command
     # to the user. Generating this script has no host-side effects.
@@ -155,12 +173,17 @@ def create(repository, manager, body):
         os.chmod(lock.name, 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         current = latest(repository, manager, profile_id)['session']
-        if current and not current['expired']:
+        if current and not current['expired'] and not current['target_changed']:
             previous = _read(repository, current['id'])
-            if all(previous.get(key) == session[key] for key in (
-                    'profile_id', 'config_revision', 'name', 'server_url', 'network', 'ports')):
+            keys = ('profile_id', 'config_revision', 'name', 'server_url', 'ports')
+            same_target = (bool(previous.get('auto_network')) == auto_network and
+                (previous.get('requested_ip') == requested_ip if auto_network else previous.get('network') == network))
+            if same_target and all(previous.get(key) == session[key] for key in keys):
+                if _ensure_short_download(previous):
+                    _write(repository, previous)
                 return public(repository, manager, previous)
         session['script'] = _script(session)
+        _ensure_short_download(session)
         _write(repository, session)
     return public(repository, manager, session)
 
@@ -176,10 +199,25 @@ def _script(session):
     )
 
 
+def _ensure_short_download(session):
+    """Reuse the ordinary AIO install-link store and its bounded lifetime."""
+    if session.get('download_path'):
+        return False
+    from backend.agents.install_command_store import save_install_script, InstallCommandStoreFull
+    from backend.agents.install_output import with_root_privileges
+    try:
+        token, _ = save_install_script(with_root_privileges(session['script']), expires_at=int(session['expires']))
+    except InstallCommandStoreFull:
+        raise InstallationError('可用安装链接已达上限，请使用已生成的命令或等待旧链接过期。', 503) from None
+    session['download_path'] = '/api/agents/i/' + token
+    return True
+
+
 def script(repository, session_id, token):
     session = _read(repository, session_id)
     _authorized(session, token)
-    return session['script']
+    from backend.agents.install_output import with_root_privileges
+    return with_root_privileges(session['script'])
 
 
 def _match_agent(session, agent, service, *, require_profile=True):
@@ -190,12 +228,37 @@ def _match_agent(session, agent, service, *, require_profile=True):
         raise InstallationError('设备身份、地址、服务类型或配置空间已改变，请检查本次安装目标。', 409)
 
 
-def registration_profile(repository, session_id, token, data):
+def _host_ipv4(value):
+    try:
+        address = ipaddress.IPv4Address(value)
+        if address.is_loopback or address.is_multicast or address.is_unspecified or address.is_link_local or str(address) == '255.255.255.255':
+            raise ValueError
+    except (ValueError, TypeError):
+        raise InstallationError('安装主机需要可访问的 LAN IPv4 地址。') from None
+    return str(address)
+
+
+def _registration_target(session, data, existing_agents=()):
+    if session.get('auto_network') and not session['network']['address']:
+        owned_hosts = {agent.get('host') for agent in existing_agents
+                       if agent.get('gateway_installation_id') == session['id']}
+        if len(owned_hosts) > 1:
+            raise InstallationError('本次安装的两个 Agent 地址不一致，请检查安装主机。', 409)
+        host = _host_ipv4(data.get('host'))
+        if owned_hosts and host not in owned_hosts:
+            raise InstallationError('本次安装已在另一台主机登记，不能更换地址。', 409)
+        session['network']['address'] = host
+
+
+def registration_profile(repository, session_id, token, data, fallback_host=None):
     session = _read(repository, session_id)
     _authorized(session, token)
     service = data.get('service_type')
     if service not in SERVICES:
         raise InstallationError('安装凭据只能注册本次指定的 Mihomo / OxiDNS。', 403)
+    if session.get('auto_network') and not data.get('host'):
+        data['host'] = _host_ipv4(fallback_host)
+    _registration_target(session, data)
     _match_agent(session, data, service, require_profile=False)
     return session['profile_id']
 
@@ -210,6 +273,9 @@ def register(repository, manager, session_id, token, data, existing_token=None):
     with _locked(repository, session_id):
         session = _read(repository, session_id)
         registration_profile(repository, session_id, token, data)
+        # Pin the first reported address under the installation lock. Retain
+        # the ownership marker as proof even after a lost registration receipt.
+        _registration_target(session, data, manager._agents())
         service = data['service_type']
         existing = next((agent for agent in manager._agents()
                          if agent.get('name') == data['name'] and agent.get('host') == data['host']), None)
@@ -236,6 +302,8 @@ def enroll(repository, manager, session_id, token, body):
     with _locked(repository, session_id):
         session = _read(repository, session_id)
         _authorized(session, token)
+        if not session['network']['address']:
+            raise InstallationError('请先等待两个 Agent 通过本次安装命令登记。', 409)
         def bind(agents):
             found = {}
             # Verify both proofs and all busy guards under one repository lock;
@@ -284,6 +352,8 @@ def enroll(repository, manager, session_id, token, body):
 def public(repository, manager, session):
     result = {key: deepcopy(session[key]) for key in ('id', 'profile_id', 'config_revision', 'name', 'network', 'phase', 'created_at', 'deployments', 'message')}
     result['success'] = True
+    result['server_url'] = session['server_url']
+    result['auto_network'] = session.get('auto_network', False)
     result['expires_at'] = _iso(session['expires'])
     result['expired'] = time.time() >= session['expires']
     result['agents'] = {}
@@ -304,6 +374,7 @@ def public(repository, manager, session):
             result['target_changed'] = True
     if not result['expired']:
         url = session['server_url'] + '/api/agents/gateway-installations/' + session['id'] + '/script?' + urlencode({'token': session['token']})
+        result['download_url'] = session['server_url'] + session['download_path'] if session.get('download_path') else url
         # Download to a private temp file; a failed transfer never executes a
         # partial script. sudo is conditional so Alpine/root works as well.
         result['command'] = "sh -c " + shlex.quote('set -eu; f=$(mktemp); trap \'rm -f "$f"\' EXIT; curl -fSL ' + shlex.quote(url)
@@ -351,6 +422,78 @@ def _pair(repository, manager, session):
             raise InstallationError('设备已开始另一项发布，请重新准备本次安装。', 409)
         agents[service] = agent
     return agents
+
+
+def _resolve_auto_network(repository, manager, session):
+    """Read the exact registered host; never run a separate user-side probe."""
+    if not session.get('auto_network') or session['network'].get('interface'):
+        return
+    from backend.agents import linux_gateway
+    agents = _pair(repository, manager, session)
+    try:
+        status = linux_gateway.call(manager, agents['mihomo']['id'], 'status', 'GET', session['profile_id'])
+        if not status.get('success') or status.get('supported') is not True or status.get('detection_error'):
+            raise InstallationError(status.get('detection_error') or status.get('unsupported_reason') or '暂时无法自动读取安装主机的网络，请检查 Agent 后重试。', 409)
+    except MonitorError as exc:
+        raise InstallationError(exc.message, exc.status) from None
+    try:
+        detection = status.get('detection')
+        network = _spec(detection.get('suggested') if isinstance(detection, dict) else None)
+    except MonitorError:
+        raise InstallationError('无法自动确认主机的 LAN 网络或唯一默认路由，请检查主机网络后重试。', 409) from None
+    if network['address'] != session['network']['address']:
+        raise InstallationError('自动识别的 LAN 地址与 Agent 登记地址不同，请检查多网卡或默认路由后重试。', 409)
+    _pair(repository, manager, session)
+    candidate = {**session, 'network': network}
+    _saved_snapshot(repository, candidate)
+    session['network'] = network
+
+
+def update_network(repository, manager, session_id, body):
+    """Read/confirm the enrolled host's network without changing host networking."""
+    automatic = isinstance(body, dict) and set(body) == {'auto_network'} and body['auto_network'] is True
+    if not automatic and (not isinstance(body, dict) or set(body) != {'network'}):
+        raise InstallationError('请选择自动检测，或提交完整网络参数。')
+    from backend.agents import linux_gateway
+    import ipaddress
+    with _locked(repository, session_id):
+        session = _read(repository, session_id)
+        if session['phase'] not in ('enrolled', 'publish_failed', 'published'):
+            raise InstallationError('请等待设备登记完成，发布过程中不能修改网络参数。', 409)
+        agents = _pair(repository, manager, session)
+        try:
+            status = linux_gateway.call(manager, agents['mihomo']['id'], 'status', 'GET', session['profile_id'])
+            if not status.get('success') or status.get('supported') is not True or status.get('detection_error'):
+                raise InstallationError(status.get('detection_error') or status.get('unsupported_reason') or '无法读取主机网络。', 409)
+            detection = status.get('detection')
+            if not isinstance(detection, dict):
+                raise InstallationError('Agent 未返回有效网络检测结果，请重试。', 409)
+            network = _spec(detection.get('suggested') if automatic else body['network'])
+        except MonitorError as exc:
+            raise InstallationError('自动检测无法确认网络，请在高级选项填写实际网络参数。' if automatic else exc.message, 409 if automatic else exc.status) from None
+        if network['address'] != session['network']['address']:
+            raise InstallationError('Linux IP 必须与本次已登记设备一致，不能切换目标主机。', 409)
+        routes = detection.get('default_routes') or []
+        try:
+            matching_address = any(
+                interface.get('name') == network['interface'] and any(
+                    str(ipaddress.ip_interface(address).ip) == network['address'] and
+                    str(ipaddress.ip_interface(address).network) == network['lan_cidr']
+                    for address in interface.get('addresses', []))
+                for interface in detection.get('interfaces', []))
+            matching_route = isinstance(routes, list) and len(routes) == 1 and routes[0].get('interface') == network['interface'] and routes[0].get('gateway') == network['upstream_gateway']
+        except (ValueError, TypeError, AttributeError):
+            matching_address = matching_route = False
+        if not matching_address or not matching_route:
+            raise InstallationError('参数与主机实际网卡、地址或唯一默认路由不一致；向导不会修改主机 IP 或默认路由。', 409)
+        managed = status.get('managed') or {}
+        if (managed.get('active') or managed.get('pending')) and network != session['network']:
+            raise InstallationError('请先恢复客户端设置并撤销本次转发，再修改网络参数。', 409)
+        _pair(repository, manager, session)
+        _saved_snapshot(repository, {**session, 'network': network})
+        session.update(network=network, auto_network=automatic)
+        _write(repository, session)
+        return public(repository, manager, session)
 
 
 def _publish_service(repository, manager, session, service):
@@ -448,6 +591,7 @@ def publish(repository, manager, session_id, body, app):
         with _locked(repository, session_id):
             session = _read(repository, session_id)
             _pair(repository, manager, session)
+            _resolve_auto_network(repository, manager, session)
             if session['phase'] == 'published':
                 lease.close()
                 return public(repository, manager, session)

@@ -50,6 +50,12 @@ def gateway_installation_status(session_id):
     return _respond(lambda: installations.get(get_repository(), get_agent_manager(), session_id))
 
 
+@agents_bp.route('/gateway-installations/<session_id>/network', methods=['POST'])
+@require_auth
+def gateway_installation_network(session_id):
+    return _respond(lambda: installations.update_network(get_repository(), get_agent_manager(), session_id, _body()))
+
+
 @agents_bp.route('/gateway-installations/<session_id>/publish', methods=['POST'])
 @require_auth
 def gateway_installation_publish(session_id):

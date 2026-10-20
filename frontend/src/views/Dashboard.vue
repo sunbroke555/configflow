@@ -30,6 +30,8 @@
       </Button>
     </header>
 
+    <SetupEntry />
+
     <p
       v-if="loadFailed"
       role="alert"
@@ -272,6 +274,7 @@ import { cn } from '@/lib/utils'
 import { regionOf } from '@/lib/regions'
 import { formatRate, useLive } from '@/stores/live'
 import { useProfileStore } from '@/stores/profile'
+import SetupEntry from '@/components/setup/SetupEntry.vue'
 
 const router = useRouter()
 const profileStore = useProfileStore()

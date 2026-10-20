@@ -3,10 +3,12 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Check, Copy, LoaderCircle, RefreshCw } from '@lucide/vue'
 import { gatewayOnboardingApi, type GatewayConfigurationPreview, type GatewayInstallation, type GatewayOnboardingConfig, type GatewayOnboardingSettings } from '@/api/gatewayOnboarding'
 import { linuxGatewayApi, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewayStatus } from '@/api/linuxGateway'
-import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySpecKey } from '@/lib/linuxGateway'
+import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
+import { setupServerError } from '@/lib/setupFlow'
+import type { SetupGoal } from '@/api/setup'
 import { gatewayEnvironmentErrors, installationHostMatches, installationMatches, onboardingSettingsKey } from '@/lib/gatewayOnboarding'
-import { buildGatewayNetworkProbeCommand, parseGatewayNetworkProbe } from '@/lib/gatewayNetworkDetection'
 import { copyText } from '@/lib/clipboard'
+import { buildInstallCommand } from '@/lib/coreInstallCommand'
 import { notify } from '@/lib/feedback'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
@@ -15,26 +17,26 @@ import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import GatewayNetworkFields from '@/components/agents/GatewayNetworkFields.vue'
+import GatewayClientInstructions from '@/components/agents/GatewayClientInstructions.vue'
+import GatewayDetectedNetwork from '@/components/agents/GatewayDetectedNetwork.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-const props = defineProps<{ open: boolean; profileId: string; profileName: string }>()
-const emit = defineEmits<{ 'update:open': [value: boolean]; 'agents-changed': [] }>()
+const props = defineProps<{ open: boolean; profileId: string; profileName: string; embedded?: boolean; goal?: SetupGoal }>()
+const emit = defineEmits<{ 'update:open': [value: boolean]; 'agents-changed': []; completed: []; busy: [value: boolean] }>()
 const steps = ['设备与网络', '分流规则', '安装核心', '发布并检查', '启用与验证']
 const step = ref(0)
 const contentPane = ref<HTMLElement | null>(null)
 const environmentErrorPanel = ref<HTMLElement | null>(null)
 const config = ref<GatewayOnboardingConfig | null>(null)
-const settings = reactive<GatewayOnboardingSettings>({ rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query' })
+const settings = reactive<GatewayOnboardingSettings>({ rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query', default_forward: 'forward_remote' })
 const network = reactive(emptyGatewaySpec())
 const name = ref('home-gateway')
 const serverUrl = ref('')
-const networkProbeResult = ref('')
-const networkProbeError = ref('')
-const networkProbeApplied = ref(false)
 const environmentAttempted = ref(false)
 const search = ref('')
 const ruleCategory = ref('rule_set_ids')
@@ -57,6 +59,8 @@ let generation = 0
 let disposed = false
 let poll: ReturnType<typeof setTimeout> | undefined
 const busy = computed(() => loading.value || !!action.value)
+const installCommand = computed(() => installation.value?.expired ? '' : installation.value?.download_url
+  ? buildInstallCommand(installation.value.download_url) : installation.value?.command || '')
 const locked = computed(() => !!installation.value)
 const availableStep = computed(() => !installation.value ? step.value : installation.value.phase === 'published' ? 4 : installation.value.phase === 'waiting' ? 2 : 3)
 const commandExpiry = computed(() => {
@@ -69,12 +73,14 @@ const commandExpiry = computed(() => {
 const settingsKey = computed(() => onboardingSettingsKey(settings))
 const allDraftKey = computed(() => JSON.stringify([name.value, serverUrl.value, gatewaySpecKey(network), settingsKey.value]))
 const dirty = computed(() => !locked.value && !!baseline.value && allDraftKey.value !== baseline.value)
-const environmentErrors = computed(() => gatewayEnvironmentErrors(name.value, serverUrl.value, network))
-const networkProbeCommand = computed(() => {
-  try { return buildGatewayNetworkProbeCommand(serverUrl.value) }
-  catch { return '' }
+const automaticNetwork = computed(() => ![network.interface, network.lan_cidr, network.upstream_gateway].some(value => value.trim()))
+const environmentErrors = computed(() => {
+  if (!automaticNetwork.value) return gatewayEnvironmentErrors(name.value, serverUrl.value, network)
+  const errors = [setupServerError(serverUrl.value)].filter(Boolean)
+  if (network.address && (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(network.address) || network.address.split('.').some(part => Number(part) > 255))) errors.push('请输入有效 IPv4 地址，或留空自动获取。')
+  if (!/^[A-Za-z0-9_-]{1,48}$/.test(name.value)) errors.push('设备名称需为 1–48 个字母、数字、短横线或下划线。')
+  return errors
 })
-const hasNetworkDetails = computed(() => Object.values(network).some(value => value.trim()))
 const configReady = computed(() => configurationPreview.value?.ready === true && configurationPreviewKey.value === settingsKey.value)
 const localDnsWarning = computed(() => settings.local_dns === config.value?.settings.local_dns
   ? config.value?.field_warnings?.local_dns || '' : '')
@@ -91,35 +97,20 @@ const configLists = computed(() => [
 const hasRuleCandidates = computed(() => configLists.value.some(list => list.rows.length > 0))
 const hostAgent = computed(() => installation.value?.agents.mihomo)
 const installationBlocked = computed(() => !!(installation.value?.config_changed || installation.value?.target_changed || (installation.value?.expired && installation.value?.phase === 'waiting')))
-const canNetwork = computed(() => !installationBlocked.value && installation.value?.phase === 'published' && !!hostAgent.value && installationMatches(installation.value, props.profileId))
+const networkDirty = computed(() => !!installation.value && gatewaySpecKey(network) !== gatewaySpecKey(installation.value.network))
+const canNetwork = computed(() => !installationBlocked.value && !networkDirty.value && installation.value?.phase === 'published' && !!hostAgent.value && installationMatches(installation.value, props.profileId))
 const canInspectNetwork = computed(() => installationHostMatches(installation.value, props.profileId))
 const hostKey = computed(() => JSON.stringify([installation.value?.id, props.profileId, hostAgent.value?.id, gatewaySpecKey(network)]))
 const canApply = computed(() => canNetwork.value && !busy.value && networkPreview.value?.ready === true && networkPreviewKey.value === hostKey.value)
-const activeNetwork = computed(() => networkStatus.value?.managed?.active === true)
+const managedNetwork = computed(() => !!(networkStatus.value?.managed?.active || networkStatus.value?.managed?.pending))
+const activeNetwork = computed(() => networkStatus.value?.success === true && networkStatus.value.managed?.active === true && networkStatus.value.managed.healthy === true && !networkStatus.value.managed.pending)
+const visibleNetworkWarnings = computed(() => (networkPreview.value?.warnings || []).filter(value => props.goal !== 'router' || !value.includes('切换一台客户端的网关')))
 const token = () => ({ generation, profileId: props.profileId })
 const current = (value: ReturnType<typeof token>) => !disposed && props.open && value.generation === generation && value.profileId === props.profileId
 const storageKey = () => `configflow.gateway-installation.${props.profileId}`
 const settingsBody = (): GatewayOnboardingSettings => ({ ...settings, rule_set_ids: [...settings.rule_set_ids], direct_rule_set_ids: [...settings.direct_rule_set_ids], proxy_rule_set_ids: [...settings.proxy_rule_set_ids], expected_config_revision: config.value?.config_revision })
 
 function stopPolling() { if (poll) clearTimeout(poll); poll = undefined }
-function resetNetworkProbe() {
-  networkProbeResult.value = ''; networkProbeError.value = ''; networkProbeApplied.value = false; environmentAttempted.value = false
-}
-function applyNetworkProbe() {
-  if (!props.open || locked.value || busy.value || step.value !== 0) return
-  networkProbeError.value = ''; networkProbeApplied.value = false
-  if (!networkProbeResult.value.trim()) return
-  try {
-    const detected = parseGatewayNetworkProbe(networkProbeResult.value)
-    Object.assign(network, detected)
-    networkProbeApplied.value = true
-  } catch (failure) { networkProbeError.value = gatewayErrorMessage(failure) }
-}
-function updateNetworkProbeResult(value: string | number) {
-  if (!props.open || locked.value || busy.value || step.value !== 0) return
-  networkProbeResult.value = String(value)
-  applyNetworkProbe()
-}
 function continueToRules() {
   if (busy.value || !config.value || locked.value) return
   environmentAttempted.value = true
@@ -136,14 +127,14 @@ function selectStep(value: string | number) {
 }
 function schedulePoll() {
   stopPolling()
-  if (!props.open || !installation.value || installation.value.phase === 'published' || installation.value.phase === 'publish_failed') return
+  if (!props.open || !installation.value || installation.value.phase === 'published' || installation.value.phase === 'publish_failed' || installation.value.phase === 'enrolled') return
   poll = setTimeout(() => { void refreshInstallation() }, 4000)
 }
 function acceptInstallation(value: GatewayInstallation, restore = false) {
   if (!value?.id || value.profile_id !== props.profileId || !value.network || !value.agents || !value.deployments || (!installationMatches(value, props.profileId) && !value.target_changed) || (installation.value && installation.value.id !== value.id)) throw new Error('安装记录与当前配置空间或目标设备不一致，已停止操作。')
   const phaseChanged = installation.value?.phase !== value.phase
   installation.value = value
-  resetNetworkProbe()
+  environmentAttempted.value = false
   Object.assign(network, value.network)
   name.value = value.name
   if (value.server_url) serverUrl.value = value.server_url
@@ -156,18 +147,44 @@ function acceptInstallation(value: GatewayInstallation, restore = false) {
   emit('agents-changed')
   schedulePoll()
 }
+async function detectNetwork(automatic = true) {
+  if (busy.value || !installation.value || installationBlocked.value || !canInspectNetwork.value) return
+  if (!automatic && gatewaySpecErrors(network).length) { error.value = gatewaySpecErrors(network).join('；'); return }
+  const captured = token(), id = installation.value.id
+  action.value = 'detect'; error.value = ''; networkPreview.value = null
+  try {
+    if (automatic) {
+      const { data } = await linuxGatewayApi.status(installation.value.agents.mihomo!.id, captured.profileId)
+      if (!current(captured) || installation.value?.id !== id) return
+      networkStatus.value = data
+      if (!data.success) throw new Error(data.message || '暂时无法读取主机网络。')
+    }
+    const { data } = await gatewayOnboardingApi.network(id, captured.profileId, automatic ? { auto_network: true } : { network: cleanGatewaySpec(network) })
+    if (!current(captured) || installation.value?.id !== id) return
+    acceptInstallation(data)
+    notify.success(automatic ? '网络检测完成。' : '网络参数已按主机实际状态核对并保存。')
+  } catch (failure) { if (current(captured)) error.value = gatewayErrorMessage(failure, true) }
+  finally { if (current(captured)) action.value = '' }
+}
+async function generatePreparedInstallation() {
+  if (busy.value || locked.value || !config.value) return
+  environmentAttempted.value = true
+  if (environmentErrors.value.length) return
+  const captured = token()
+  await previewConfiguration()
+  if (current(captured) && configReady.value) await createInstallation()
+  else if (current(captured) && configurationPreview.value?.blockers?.length) error.value = configurationPreview.value.blockers.join('；')
+}
 async function load() {
   const captured = token()
   loading.value = true
   error.value = ''
-  const initialServerUrl = serverUrl.value
   const [configResponse, sessionsResponse] = await Promise.allSettled([
     gatewayOnboardingApi.get(captured.profileId), gatewayOnboardingApi.sessions(captured.profileId),
   ])
   if (!current(captured)) return
   if (configResponse.status === 'fulfilled') {
     config.value = configResponse.value.data
-    if (config.value.server_url && serverUrl.value === initialServerUrl) serverUrl.value = config.value.server_url
     Object.assign(settings, config.value.settings)
     baseline.value = allDraftKey.value
   } else error.value = gatewayErrorMessage(configResponse.reason)
@@ -218,7 +235,7 @@ async function createInstallation() {
     }
     if (key !== settingsKey.value) throw new Error('配置已保存，但表单已改变，请重新检查后继续。')
     // Retrying a lost create response must reuse the saved revision and server idempotency.
-    const { data } = await gatewayOnboardingApi.create({ profile_id: captured.profileId, name: name.value.trim(), server_url: serverUrl.value.trim().replace(/\/$/, ''), network: cleanGatewaySpec(network), config_revision: savedConfiguration.value!.revision })
+    const { data } = await gatewayOnboardingApi.create({ profile_id: captured.profileId, name: name.value.trim(), server_url: serverUrl.value.trim().replace(/\/$/, ''), ...(automaticNetwork.value ? { auto_network: true, agent_ip: network.address.trim() } : { network: cleanGatewaySpec(network) }), config_revision: savedConfiguration.value!.revision })
     if (!current(captured)) return
     acceptInstallation(data)
     baseline.value = allDraftKey.value
@@ -239,7 +256,7 @@ async function refreshInstallation() {
   finally { if (current(captured)) { refreshPending.value = false; schedulePoll() } }
 }
 async function publish() {
-  if (busy.value || installationBlocked.value || !installation.value || !['enrolled', 'publishing', 'publish_failed'].includes(installation.value.phase)) return
+  if (busy.value || networkDirty.value || gatewaySpecErrors(network).length || installationBlocked.value || !installation.value || !['enrolled', 'publishing', 'publish_failed'].includes(installation.value.phase)) return
   const captured = token(), id = installation.value.id
   action.value = 'publish'; error.value = ''
   try {
@@ -286,6 +303,7 @@ async function applyNetwork() {
     if (!current(captured) || key !== hostKey.value) return
     networkStatus.value = data
     if (!data.success) throw new Error(data.message || '转发应用失败，请检查设备状态。')
+    if (!activeNetwork.value) throw new Error(data.managed?.error || '转发尚未确认健康，请重新读取网络状态，暂不切换客户端。')
     networkRemoved.value = false
     notify.success('网关转发已启用。请先用一台客户端完成连接验证。')
   } catch (failure) { if (current(captured)) error.value = gatewayErrorMessage(failure, true) }
@@ -303,6 +321,7 @@ async function removeNetwork() {
     if (!current(captured) || hostAgent.value?.id !== agentId) return
     networkStatus.value = data
     if (!data.success) throw new Error(data.message || '恢复未完成，请检查设备状态。')
+    if (data.managed?.active || data.managed?.pending) throw new Error(data.managed.error || '撤销结果尚未确认，请重新读取网络状态。')
     networkRemoved.value = true
     notify.success('本向导管理的转发已撤销，请恢复客户端原来的网关与 DNS 设置。')
   } catch (failure) { if (current(captured)) error.value = gatewayErrorMessage(failure, true) }
@@ -312,7 +331,8 @@ async function startAnotherInstallation() {
   if (busy.value) return
   stopPolling(); installation.value = null; networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false
   configurationPreview.value = null; savedConfiguration.value = null; resumed.value = false; step.value = 0; error.value = ''; pollError.value = ''
-  resetNetworkProbe()
+  environmentAttempted.value = false
+  Object.assign(network, emptyGatewaySpec(), { address: network.address })
   try { localStorage.removeItem(storageKey()) } catch { /* The original installation remains on the server. */ }
   const captured = token()
   loading.value = true
@@ -323,20 +343,10 @@ async function startAnotherInstallation() {
   } catch (failure) { if (current(captured)) { config.value = null; error.value = gatewayErrorMessage(failure) } }
   finally { if (current(captured)) loading.value = false }
 }
-async function copyNetworkCommand() {
-  if (!props.open || locked.value || busy.value || step.value !== 0) return
-  const captured = token()
-  networkProbeError.value = ''
-  let command: string
-  try { command = buildGatewayNetworkProbeCommand(serverUrl.value) }
-  catch (failure) { networkProbeError.value = gatewayErrorMessage(failure); return }
-  try { await copyText(command); if (current(captured)) notify.success('检测命令已复制，请在目标 Linux 执行。') }
-  catch { if (current(captured)) notify.error('复制失败，请选中检测命令手动复制。') }
-}
 async function copyCommand() {
-  if (!installation.value?.command || installation.value.expired) return
+  if (!installCommand.value) return
   const captured = token()
-  try { await copyText(installation.value.command); if (current(captured)) notify.success('安装命令已复制。') }
+  try { await copyText(installCommand.value); if (current(captured)) notify.success('安装命令已复制。') }
   catch { if (current(captured)) notify.error('复制失败，请选中安装命令手动复制。') }
 }
 watch(step, () => { void nextTick(() => {
@@ -345,24 +355,32 @@ watch(step, () => { void nextTick(() => {
 }) })
 watch(() => networkStatus.value?.managed, managed => { if (managed?.active || managed?.pending) networkRemoved.value = false })
 watch(settingsKey, () => { configurationPreview.value = null; savedConfiguration.value = null })
+let autoDetectionAttempt = ''
+watch(() => [installation.value?.id, installation.value?.phase, busy.value] as const, () => {
+  if (busy.value || !installation.value?.auto_network || installation.value.phase !== 'enrolled' || installation.value.network.interface || autoDetectionAttempt === installation.value.id) return
+  autoDetectionAttempt = installation.value.id
+  void detectNetwork()
+})
+watch(busy, value => emit('busy', value), { immediate: true })
 watch(() => [props.open, props.profileId] as const, () => {
+  autoDetectionAttempt = ''
   generation++; stopPolling(); installation.value = null; config.value = null; configurationPreview.value = null; savedConfiguration.value = null
   networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false; error.value = ''; pollError.value = ''; resumed.value = false; search.value = ''; ruleCategory.value = 'rule_set_ids'
   loading.value = false; action.value = ''; refreshPending.value = false; baseline.value = ''; step.value = 0
-  resetNetworkProbe()
+  environmentAttempted.value = false
   Object.assign(network, emptyGatewaySpec()); name.value = 'home-gateway'
-  Object.assign(settings, { rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query', confirm_template_conversion: false })
-  try { serverUrl.value = localStorage.getItem('serverDomain') || window.location.origin } catch { serverUrl.value = window.location.origin }
+  Object.assign(settings, { rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query', default_forward: 'forward_remote', confirm_template_conversion: false })
+  serverUrl.value = window.location.origin
   if (props.open) void load()
 }, { immediate: true, flush: 'sync' })
-onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
+onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy', false) })
 </script>
 
 <template>
-  <SettingsWorkspace :open="open" title="安装 Linux 网关" description="安装 Mihomo、OxiDNS 与 Agent，检查后启用转发。" back-label="返回 Agent 列表" :dirty="dirty" :busy="busy" size="form" @update:open="emit('update:open', $event)">
+  <SettingsWorkspace :open="open" :inline="embedded" title="安装 Linux 网关" description="安装 Mihomo、OxiDNS 与 Agent，检查后启用转发。" back-label="返回 Agent 列表" :dirty="dirty" :busy="busy" size="form" @update:open="emit('update:open', $event)">
     <div ref="contentPane" class="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain" data-gateway-install-wizard>
-      <Tabs :model-value="String(step)" activation-mode="manual" class="mx-auto w-full min-w-0 max-w-3xl gap-4 p-3 sm:p-5" @update:model-value="selectStep">
-        <div class="min-w-0 space-y-2">
+      <Tabs :model-value="String(step)" activation-mode="manual" class="mx-auto w-full min-w-0 max-w-3xl gap-5" :class="embedded ? '' : 'p-3 sm:p-5'" @update:model-value="selectStep">
+        <div v-if="!embedded" class="min-w-0 space-y-2">
           <div class="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <p class="m-0 min-w-0 break-words">配置空间 · <span class="font-medium text-foreground">{{ profileName }}</span></p>
             <span>IPv4 · 单网卡</span>
@@ -378,73 +396,47 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
           {{ error }}<Button v-if="!config && !installation" variant="ghost" class="min-h-11" :disabled="busy" @click="load">重新读取</Button>
         </div>
         <p v-if="pollError" class="m-0 break-words text-sm text-warning-accent" role="alert">{{ pollError }}</p>
+        <div v-if="embedded && (configurationPreview?.warnings || config?.warnings)?.length" class="space-y-1 text-xs text-warning-accent" role="status"><p v-for="warning in (configurationPreview?.warnings || config?.warnings)" :key="warning" class="m-0">{{ warning }}</p></div>
         <div v-if="installationBlocked" role="alert" class="space-y-1 border-l-2 border-destructive-accent pl-3 text-xs leading-relaxed">
           <p class="m-0 font-medium text-destructive-accent">安装已暂停</p>
           <p class="m-0">{{ installation?.target_changed ? '设备绑定或身份已改变。' : installation?.config_changed ? '配置空间在安装后有修改。' : '安装凭据已过期。' }} 已停止发布与转发操作，请重新准备安装。</p>
         </div>
         <div v-if="installation" class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2">
-          <p class="m-0 mr-auto min-w-0 break-words text-xs text-muted-foreground">{{ resumed ? '已恢复' : '安装目标' }} · <strong class="font-medium text-foreground">{{ installation.name }}</strong> <span class="font-mono">{{ network.address }}</span></p>
+          <p class="m-0 mr-auto min-w-0 break-words text-xs text-muted-foreground">{{ resumed ? '已恢复' : '安装目标' }} · <strong class="font-medium text-foreground">{{ embedded ? (goal === 'router' ? '主路由分流' : '网关分流') : installation.name }}</strong> <span class="font-mono">{{ network.address }}</span></p>
           <div class="flex shrink-0 items-center">
             <Button variant="ghost" size="sm" class="px-2 text-xs" :disabled="busy" @click="startAnotherInstallation">重新准备安装</Button>
             <FieldHelp label="重新准备安装" text="返回设备与网络重新准备；不会撤销已安装的服务或已提交的发布。" />
           </div>
         </div>
 
+        <section v-if="installation && ['enrolled', 'publish_failed'].includes(installation.phase)" class="flex flex-col gap-3 border-b border-border pb-4" aria-label="网络检测">
+          <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="m-0 text-sm font-semibold">网络检测</h3><Button variant="outline" size="sm" :disabled="busy || installationBlocked" @click="detectNetwork()">{{ action === 'detect' ? '正在检测…' : '重新自动检测' }}</Button></div>
+          <p v-if="!installation.network.interface" class="m-0 text-xs text-muted-foreground">设备已登记，正在确认实际网卡、网段和上游网关；检测失败可在高级选项修正。</p>
+          <dl v-else class="m-0 grid grid-cols-2 gap-3 text-xs"><div><dt class="text-muted-foreground">Linux IPv4</dt><dd class="m-0 font-mono">{{ installation.network.address }}</dd></div><div><dt class="text-muted-foreground">主路由</dt><dd class="m-0 font-mono">{{ installation.network.upstream_gateway }}</dd></div><div><dt class="text-muted-foreground">LAN 网卡</dt><dd class="m-0 font-mono">{{ installation.network.interface }}</dd></div><div><dt class="text-muted-foreground">LAN 网段</dt><dd class="m-0 font-mono">{{ installation.network.lan_cidr }}</dd></div></dl>
+          <details><summary class="min-h-11 cursor-pointer content-center text-sm font-medium">高级选项：手动修改网络</summary><GatewayNetworkFields :model-value="network" :disabled="busy" @update:model-value="Object.assign(network, $event)" /><Button class="mt-3 min-h-11" :disabled="busy || installationBlocked || !!gatewaySpecErrors(network).length" @click="detectNetwork(false)">核对并保存网络参数</Button></details>
+          <GatewayDetectedNetwork v-if="networkStatus?.detection" :detection="networkStatus.detection" />
+          <p v-if="networkDirty" class="m-0 text-xs text-warning-accent">网络参数有修改，请核对并保存后再发布。</p>
+        </section>
         <TabsContent :value="String(step)" as-child>
         <section v-if="step === 0" :key="`${profileId}:${open}`" class="space-y-4" aria-label="设备与网络">
           <div>
-            <h2 class="m-0 text-lg font-semibold">设备与网络</h2>
-            <p class="mt-1 mb-0 text-sm text-muted-foreground">Linux 需使用固定 IP，并与主路由在同一网段。</p>
+            <h2 v-if="!embedded" class="m-0 text-lg font-semibold">设备与网络</h2>
+            <p class="mt-1 mb-0 text-sm text-muted-foreground">{{ embedded ? (goal === 'router' ? '沿用已保存的规则与 DNS。安装登记后自动检测网络，启用成功后再接入主路由。' : '沿用已保存的规则与 DNS。安装登记后自动检测网络，启用成功后再切换客户端。') : '安装登记后自动检测网络。Linux 需使用固定 IP，并与主路由在同一网段。' }}</p>
           </div>
           <div class="grid min-w-0 gap-3 sm:grid-cols-2">
-            <FormField label="设备名称" html-for="onboarding-name"><Input id="onboarding-name" v-model="name" class="min-h-11" placeholder="home-gateway" :disabled="busy" /></FormField>
-            <FormField label="ConfigFlow 服务地址" html-for="onboarding-server"><Input id="onboarding-server" v-model="serverUrl" class="min-h-11 font-mono text-xs" placeholder="http://192.168.1.10:8000" :disabled="locked" /></FormField>
+            <FormField v-if="!embedded" label="设备名称" html-for="onboarding-name" help="用于命名这台 Linux 上的 Mihomo 和 OxiDNS Agent，不会修改 Linux 的主机名。"><Input id="onboarding-name" v-model="name" class="min-h-11" placeholder="home-gateway" :disabled="busy" /></FormField>
+            <FormField label="主机 IP（可选）" :html-for="embedded ? 'setup-agent-ip' : 'onboarding-address'" help="留空由 Agent 自动识别 LAN IPv4。安装登记后自动读取网卡、网段和默认网关；需要手动指定时再展开高级选项。"><Input :id="embedded ? 'setup-agent-ip' : 'onboarding-address'" v-model="network.address" :disabled="busy" class="min-h-11 font-mono" placeholder="留空则自动获取" /></FormField>
+            <FormField label="ConfigFlow 服务地址" html-for="onboarding-server" help="默认取浏览器当前访问的协议、主机和端口。目标 Linux 必须能访问此地址；从本机回环地址访问时，请改为局域网 IP 或域名。核心持续下载规则使用系统设置中的服务地址，两者需要一致。"><Input id="onboarding-server" v-model="serverUrl" class="min-h-11 font-mono text-xs" placeholder="http://192.168.1.10:8000" :disabled="locked" /></FormField>
           </div>
-          <div class="space-y-2 border-t border-border pt-4">
-            <div class="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 class="m-0 text-sm font-semibold">检测网络</h3>
-              <span v-if="!hasNetworkDetails" class="text-xs text-muted-foreground" role="status">尚未读取网络信息</span>
-            </div>
-            <p class="m-0 text-xs leading-relaxed text-muted-foreground">在目标 Linux 执行命令，再粘贴输出，自动读取网卡、地址和网关。检测不会修改网络。</p>
-            <div class="grid min-w-0 gap-3 sm:grid-cols-2">
-              <div class="min-w-0 space-y-1.5">
-                <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
-                  <label for="onboarding-network-command" class="text-xs font-medium">1. 在 Linux 执行</label>
-                  <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs text-muted-foreground" aria-label="复制检测命令" :disabled="busy || locked || !networkProbeCommand" @click="copyNetworkCommand"><Copy class="size-3.5" aria-hidden="true" />复制</Button>
-                </div>
-                <Textarea id="onboarding-network-command" :model-value="networkProbeCommand" readonly :rows="3" class="h-28 min-h-28 max-h-28 resize-none font-mono text-xs" placeholder="先填写 Linux 能访问的服务地址" />
-              </div>
-              <div class="min-w-0 space-y-1.5">
-                <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
-                  <label for="onboarding-network-result" class="text-xs font-medium">2. 粘贴检测结果</label>
-                  <Button v-if="networkProbeResult.trim() && !networkProbeApplied" variant="ghost" size="sm" class="shrink-0 px-2 text-xs" :disabled="busy || locked" @click="applyNetworkProbe">填入网络信息</Button>
-                  <span v-else-if="networkProbeApplied" class="flex items-center gap-1 text-xs text-success-accent" role="status"><Check class="size-3.5" />已填入</span>
-                </div>
-                <Textarea id="onboarding-network-result" :model-value="networkProbeResult" :disabled="busy || locked" :rows="3" class="h-28 min-h-28 max-h-28 resize-none font-mono text-xs" placeholder="粘贴终端输出的整段 JSON，自动填入网络信息" spellcheck="false" @update:model-value="updateNetworkProbeResult" />
-              </div>
-            </div>
-            <p v-if="networkProbeError" class="m-0 break-words text-xs leading-relaxed text-destructive-accent" role="alert">{{ networkProbeError }} 已有网络信息未更改。</p>
-          </div>
-          <dl v-if="hasNetworkDetails" class="m-0 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-border py-3 text-xs sm:grid-cols-4" aria-label="读取的网络信息">
-            <div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address || '未填写' }}</dd></div>
-            <div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway || '未填写' }}</dd></div>
-            <div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface || '未填写' }}</dd></div>
-            <div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr || '未填写' }}</dd></div>
-          </dl>
           <details class="border-b border-border text-sm">
-            <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">手动填写或修改</summary>
-            <div class="grid min-w-0 gap-3 pt-1 pb-4 sm:grid-cols-2">
-              <FormField label="Linux 的固定 IPv4" html-for="onboarding-address"><Input id="onboarding-address" v-model="network.address" :disabled="busy" class="min-h-11 font-mono" placeholder="192.168.1.2" /></FormField>
-              <FormField label="主路由 IPv4" html-for="onboarding-upstream"><Input id="onboarding-upstream" v-model="network.upstream_gateway" :disabled="busy" class="min-h-11 font-mono" placeholder="192.168.1.1" /></FormField>
-              <FormField label="LAN 网卡名" html-for="onboarding-interface"><Input id="onboarding-interface" v-model="network.interface" :disabled="busy" class="min-h-11 font-mono" placeholder="例如 ens18、br0" /></FormField>
-              <FormField label="LAN 网段" html-for="onboarding-cidr"><Input id="onboarding-cidr" v-model="network.lan_cidr" :disabled="busy" class="min-h-11 font-mono" placeholder="192.168.1.0/24" /></FormField>
-            </div>
+            <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">高级选项：手动指定网络</summary>
+            <GatewayNetworkFields :model-value="network" :disabled="busy" hide-address class="pt-1 pb-4" @update:model-value="Object.assign(network, $event)" />
           </details>
           <details class="border-b border-border text-sm">
             <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">安装要求</summary>
             <div class="space-y-3 pt-1 pb-4 text-xs leading-relaxed text-muted-foreground">
               <p class="m-0">支持 x86_64 / ARM64，systemd / OpenRC（含 Alpine）。需要 root 或 sudo、<code>/dev/net/tun</code> 和网络管理权限，不支持普通受限容器。</p>
-              <p class="m-0">在主路由保留 Linux 的 IP，或为 Linux 设置静态 IP。向导不会修改设备 IP 或默认路由，主路由无需添加静态路由。</p>
+              <p class="m-0">在主路由保留 Linux 的 IP，或为 Linux 设置静态 IP。向导不会修改设备 IP 或默认路由。{{ goal === 'router' ? '本方案需要在主路由添加静态路由与 DNS，客户端网关保持主路由。' : '网关方案通过修改客户端网关接入，主路由无需添加静态路由。' }}</p>
               <div>
                 <p class="mt-0 mb-1 font-medium text-foreground">缺少依赖时</p>
                 <p class="my-1">Debian / Ubuntu：</p>
@@ -510,7 +502,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
               <li>接管网段须为 /8 至 /32，拒绝 /0、/1 等过大范围。</li>
               <li>自动包含 fake-IP 网段 <code class="break-all font-mono">{{ config?.fake_ip_range || '由 Mihomo 配置决定' }}</code>。未选中的 IP 走 Linux 直连转发。</li>
               <li>Mihomo 使用 rule / fake-IP 模式和选择性 TUN；实际出口由规则顺序及策略组当前选择决定。</li>
-              <li>OxiDNS 在 53 端口服务局域网，代理、后备 DNS 和未知域名交给 Mihomo（<code class="break-all font-mono">127.0.0.1:1053</code>）。</li>
+              <li>OxiDNS 在 53 端口服务局域网，代理和后备 DNS 交给 Mihomo；未匹配域名使用已保存的默认 DNS，Mihomo 地址为（<code class="break-all font-mono">127.0.0.1:1053</code>）。</li>
               <li>直连 DNS 使用 IP 地址的 DoH / DoT；普通 53 端口可能被自动接管，形成回环。</li>
             </ul>
           </details>
@@ -544,9 +536,9 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
           <div class="min-w-0 space-y-1.5">
             <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
               <label for="onboarding-command" class="text-xs font-medium">安装命令</label>
-              <Button variant="ghost" size="sm" class="px-2 text-xs" aria-label="复制安装命令" :disabled="!installation?.command || installation.expired" @click="copyCommand"><Copy class="size-3.5" aria-hidden="true" />复制</Button>
+              <Button variant="ghost" size="sm" class="px-2 text-xs" aria-label="复制安装命令" :disabled="!installCommand" @click="copyCommand"><Copy class="size-3.5" aria-hidden="true" />复制</Button>
             </div>
-            <Textarea id="onboarding-command" :model-value="installation?.command || ''" readonly :rows="4" class="min-h-28 max-h-48 font-mono text-xs" />
+            <Textarea id="onboarding-command" :model-value="installCommand" readonly :rows="3" class="min-h-24 max-h-48 font-mono text-xs" />
             <div class="flex flex-wrap gap-x-3 gap-y-1 text-xs leading-relaxed text-muted-foreground"><p class="m-0">使用 root，或按提示输入 sudo 密码。</p><p class="m-0 break-words">{{ commandExpiry }}</p></div>
           </div>
           <p class="m-0 text-xs leading-relaxed">安装命令含临时凭据，请勿公开分享。完成检查前，请勿修改客户端网关或 DNS。</p>
@@ -576,41 +568,36 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
             </div>
           </div>
           <p v-if="installation?.error || installation?.message" class="m-0 break-words text-xs leading-relaxed" :class="installation?.phase === 'publish_failed' ? 'text-destructive-accent' : 'text-muted-foreground'" :role="installation?.phase === 'publish_failed' ? 'alert' : 'status'">{{ installation.error || installation.message }}</p>
-          <div class="flex flex-wrap gap-2"><Button class="min-h-11" :disabled="busy || installationBlocked || !installation || !['enrolled', 'publishing', 'publish_failed'].includes(installation.phase)" @click="publish"><LoaderCircle v-if="action === 'publish'" class="size-4 animate-spin" />{{ installation?.phase === 'publish_failed' ? '处理后继续发布' : installation?.phase === 'publishing' ? '继续确认发布' : '按顺序发布两项配置' }}</Button><Button variant="outline" class="min-h-11" :disabled="refreshPending || busy" @click="refreshInstallation"><RefreshCw class="size-4" />刷新进度</Button></div>
+          <div class="flex flex-wrap gap-2"><Button class="min-h-11" :disabled="busy || networkDirty || !!gatewaySpecErrors(network).length || installationBlocked || !installation || !['enrolled', 'publishing', 'publish_failed'].includes(installation.phase)" @click="publish"><LoaderCircle v-if="action === 'publish'" class="size-4 animate-spin" />{{ installation?.phase === 'publish_failed' ? '处理后继续发布' : installation?.phase === 'publishing' ? '继续确认发布' : '按顺序发布两项配置' }}</Button><Button variant="outline" class="min-h-11" :disabled="refreshPending || busy" @click="refreshInstallation"><RefreshCw class="size-4" />刷新进度</Button></div>
           <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">发布说明与排错</summary><p class="mt-1 mb-3 leading-relaxed text-muted-foreground">关闭窗口后发布仍会继续，重新打开可查看进度。失败时在 Agent 查看原因，处理后继续发布，无需重装。</p></details>
         </section>
 
         <section v-else class="space-y-4" aria-label="启用与验证">
-          <div><h2 class="m-0 text-lg font-semibold">{{ networkRemoved ? '网关转发已撤销' : activeNetwork ? '验证客户端' : '启用网关转发' }}</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">{{ networkRemoved ? '请恢复客户端接入前的设置。' : activeNetwork ? '先测试一台设备，再接入其他客户端。' : '服务检查已通过。先检查实际网络，再应用转发。' }}</p></div>
+          <div><h2 class="m-0 text-lg font-semibold">{{ networkRemoved ? '网关转发已撤销' : activeNetwork ? '验证客户端' : goal === 'router' ? '启用 Linux 转发' : '启用网关转发' }}</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">{{ networkRemoved ? '请恢复客户端接入前的设置。' : activeNetwork ? '先测试一台设备，再接入其他客户端。' : '服务检查已通过。先检查实际网络，再应用转发。' }}</p></div>
           <div class="divide-y divide-border border-y border-border">
-            <AgentStatusRow label="网关转发" :status="networkRemoved ? '已撤销' : activeNetwork ? '已启用' : networkStatus?.managed?.pending ? '待确认' : '未启用'" :tone="networkRemoved || activeNetwork ? 'success' : networkStatus?.managed?.pending ? 'warning' : 'neutral'">
+            <AgentStatusRow :label="goal === 'router' ? 'Linux 转发' : '网关转发'" :status="networkRemoved ? '已撤销' : activeNetwork ? '已启用' : managedNetwork ? '待确认' : '未启用'" :tone="networkRemoved || activeNetwork ? 'success' : managedNetwork ? 'warning' : 'neutral'">
               <template v-if="networkStatus?.unsupported_reason || networkStatus?.config_error || networkStatus?.detection_error || networkStatus?.managed?.error" #notice><p role="alert" class="m-0 text-destructive-accent">{{ networkStatus.unsupported_reason || networkStatus.config_error || networkStatus.detection_error || networkStatus.managed?.error }}</p></template>
             </AgentStatusRow>
             <dl class="m-0 grid grid-cols-2 gap-3 py-3 text-xs sm:grid-cols-4"><div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr }}</dd></div></dl>
           </div>
+          <GatewayDetectedNetwork v-if="networkStatus?.detection" :detection="networkStatus.detection" />
+          <details class="border-b border-border text-sm"><summary class="min-h-11 cursor-pointer content-center font-medium">高级选项：手动修改网络</summary><p class="m-0 pb-3 text-xs text-muted-foreground">只选择主机实际已有的网络参数；不会修改 Linux 的 IP 或默认路由。转发启用期间需先撤销再修改。</p><GatewayNetworkFields :model-value="network" :disabled="busy || managedNetwork" @update:model-value="Object.assign(network, $event)" /><div class="flex flex-wrap gap-2 py-3"><Button variant="outline" :disabled="busy || managedNetwork || installationBlocked" @click="detectNetwork()">重新自动检测</Button><Button :disabled="busy || managedNetwork || installationBlocked || !!gatewaySpecErrors(network).length" @click="detectNetwork(false)">核对并保存网络参数</Button></div><p v-if="networkDirty" class="m-0 pb-3 text-xs text-warning-accent">网络参数有修改，请保存后重新预览转发。</p></details>
           <div class="flex flex-wrap gap-2"><Button variant="outline" class="min-h-11" :disabled="!canNetwork || busy" @click="previewNetwork"><LoaderCircle v-if="action === 'preview-network'" class="size-4 animate-spin" />检查并预览转发</Button><Button class="min-h-11" :disabled="!canApply" @click="applyNetwork"><LoaderCircle v-if="action === 'apply'" class="size-4 animate-spin" />应用网关转发</Button></div>
           <div v-if="networkPreview" class="space-y-3 border-t border-border pt-3 text-sm" role="status">
             <p class="m-0 font-semibold" :class="networkPreview.ready ? 'text-success-accent' : 'text-destructive-accent'">{{ networkPreview.ready ? '检查通过，等待应用' : '请处理以下检查结果' }}</p>
             <div v-if="networkPreview.blockers?.length" class="text-xs leading-relaxed" role="alert"><p class="m-0 font-medium text-destructive-accent">阻断问题</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in networkPreview.blockers" :key="item" class="break-words">{{ item }}</li></ul></div>
-            <div v-if="networkPreview.warnings?.length" class="text-xs leading-relaxed"><p class="m-0 font-medium text-warning-accent">检查提醒</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in networkPreview.warnings" :key="item" class="break-words">{{ item }}</li></ul></div>
+            <div v-if="visibleNetworkWarnings.length" class="text-xs leading-relaxed"><p class="m-0 font-medium text-warning-accent">检查提醒</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in visibleNetworkWarnings" :key="item" class="break-words">{{ item }}</li></ul></div>
             <details v-if="networkPreview.commands?.length" class="text-xs text-muted-foreground"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">查看网络操作</summary><ul class="mt-0 mb-2 list-disc space-y-1 pl-5"><li v-for="item in networkPreview.commands" :key="item" class="break-words">{{ item }}</li></ul></details>
           </div>
-          <div v-if="activeNetwork" class="space-y-3">
-            <h3 class="m-0 text-sm font-semibold">客户端接入检查</h3>
-            <ol class="m-0 list-decimal space-y-2 pl-5 text-xs leading-relaxed">
-              <li>记下测试设备原来的网关、DNS、IPv6 和安全 DNS 设置。将 <strong>网关</strong> 和 <strong>DNS</strong> 都填为 <code class="font-mono">{{ network.address }}</code>，设备 IP 保持在原网段。</li>
-              <li>暂时关闭测试设备的 IPv6、浏览器安全 DNS 和系统私有 DNS，避免绕过分流。</li>
-              <li>分别访问直连站点和代理域名，在 Mihomo 连接列表确认代理访问。</li>
-            </ol>
-          </div>
+          <GatewayClientInstructions v-if="activeNetwork && !embedded" :address="network.address" />
           <div v-else-if="networkRemoved" class="space-y-2 text-xs" role="status">
             <p class="m-0 leading-relaxed">恢复原网关和 DNS（原来自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS。修改过主路由 DHCP 时，也恢复原值。</p>
             <p class="m-0 leading-relaxed text-muted-foreground">核心和已发布配置仍保留。撤销转发不会关闭 Mihomo TUN；要停用，请到「生成工作台 → Mihomo → Linux 网关」关闭模式，再保存并发布。</p>
           </div>
-          <p v-else class="m-0 text-xs leading-relaxed">应用成功后再修改客户端。接入前记下原网关、DNS、IPv6 和安全 DNS 设置，以便恢复。</p>
+          <p v-else-if="!activeNetwork" class="m-0 text-xs leading-relaxed">应用成功后再修改客户端。接入前记下原网关、DNS、IPv6 和安全 DNS 设置，以便恢复。</p>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
-            <Button v-if="activeNetwork || networkStatus?.managed?.pending" variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="removeNetwork">撤销本次网关转发</Button>
-            <p v-if="activeNetwork || networkStatus?.managed?.pending" class="m-0">撤销前，先恢复客户端原来的网关与 DNS。</p>
+            <Button v-if="managedNetwork" variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="removeNetwork">撤销本次网关转发</Button>
+            <p v-if="managedNetwork" class="m-0">撤销前，先恢复客户端原来的网关与 DNS。</p>
             <Button v-else variant="ghost" class="min-h-11 px-2" :disabled="busy || !canInspectNetwork" @click="inspectNetwork">重新读取网络状态</Button>
           </div>
           <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">生成工作台 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
@@ -619,7 +606,12 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling() })
       </Tabs>
     </div>
     <template #footer>
-      <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
+      <div v-if="embedded" class="flex flex-wrap items-center gap-2">
+        <Button v-if="!locked" class="min-h-11" :disabled="busy || !config || !!pollError" @click="generatePreparedInstallation"><LoaderCircle v-if="busy" class="size-4 animate-spin" />生成安装命令</Button>
+        <Button v-else-if="activeNetwork" class="min-h-11" :disabled="busy" @click="emit('completed')">{{ goal === 'router' ? '继续接入主路由' : '继续设置测试客户端' }}</Button>
+        <span v-else class="text-xs text-muted-foreground">{{ step === 4 ? (goal === 'router' ? '检查并启用转发后，再接入主路由。' : '检查并启用转发后，才能接入客户端。') : '请在目标 Linux 执行命令，完成登记后继续发布与检查。' }}</span>
+      </div>
+      <div v-else class="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <p class="m-0 shrink-0 text-xs text-muted-foreground"><span class="num">{{ step + 1 }} / 5</span><span class="hidden sm:inline"> · {{ steps[step] }}</span></p>
         <div class="ml-auto flex min-w-0 flex-wrap justify-end gap-2">
           <Button v-if="step === 1 && !locked" variant="outline" class="min-h-11" :disabled="busy" @click="step = 0">上一步</Button>

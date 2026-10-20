@@ -130,6 +130,25 @@ def test_link_expires_at_24_hours_and_is_pruned(client, admin, monkeypatch):
     assert snapshot_count() == 0
 
 
+def test_scoped_links_can_expire_earlier_without_extending_installation_capabilities(client, monkeypatch):
+    now = int(store.time.time())
+    monkeypatch.setattr(store.time, 'time', lambda: now)
+    token, expires = store.save_install_script('#!/bin/sh\nexit 0\n', expires_at=now + 60)
+    assert expires == now + 60
+    monkeypatch.setattr(store.time, 'time', lambda: now + 59)
+    assert store.load_install_script(token)
+    monkeypatch.setattr(store.time, 'time', lambda: now + 60)
+    assert store.load_install_script(token) is None
+
+
+@pytest.mark.parametrize('deadline', [0, -1, True, 'later', 86401])
+def test_invalid_scoped_link_lifetimes_do_not_write_snapshots(client, monkeypatch, deadline):
+    monkeypatch.setattr(store.time, 'time', lambda: 100)
+    with pytest.raises(ValueError):
+        store.save_install_script('#!/bin/sh\nexit 0\n', expires_at=deadline + 100 if type(deadline) is int else deadline)
+    assert snapshot_count() == 0
+
+
 def test_capacity_preserves_existing_links_and_recovers_after_expiry(client, admin, monkeypatch):
     monkeypatch.setattr(store, 'MAX_SNAPSHOTS', 2)
     now = store.time.time()

@@ -293,13 +293,13 @@ export interface RouterRuleSyncState {
 interface RouterRuleSyncResponse { success: boolean; settings: RouterRuleSyncSettings; sync: RouterRuleSyncState }
 
 export const routerApi = {
-  list: () => api.get('/routers'),
-  create: (data: unknown) => api.post('/routers', data),
+  list: (profileId = getActiveProfileId()) => api.get('/routers', profileOptions(profileId)),
+  create: (data: unknown, profileId = getActiveProfileId()) => api.post('/routers', data, profileOptions(profileId)),
   update: (id: string, data: unknown, profileId = getActiveProfileId()) => api.put(`/routers/${id}`, data, profileOptions(profileId)),
-  remove: (id: string) => api.delete(`/routers/${id}`),
-  probe: (id: string) => api.post(`/routers/${id}/probe`, null, { timeout: 60000 }),
-  report: (id: string) => api.get(`/routers/${id}/report`, { timeout: 90000 }),
-  plan: (id: string) => api.post(`/routers/${id}/plan`, null, { timeout: 90000 }),
+  remove: (id: string, profileId = getActiveProfileId()) => api.delete(`/routers/${id}`, profileOptions(profileId)),
+  probe: (id: string, profileId = getActiveProfileId()) => api.post(`/routers/${id}/probe`, null, { ...profileOptions(profileId), timeout: 60000 }),
+  report: (id: string, profileId = getActiveProfileId()) => api.get(`/routers/${id}/report`, { ...profileOptions(profileId), timeout: 90000 }),
+  plan: (id: string, profileId = getActiveProfileId()) => api.post(`/routers/${id}/plan`, null, { ...profileOptions(profileId), timeout: 90000 }),
   apply: (id: string, fingerprint: string, profileId = getActiveProfileId()) =>
     api.post(`/routers/${id}/apply`, { fingerprint }, { ...profileOptions(profileId), timeout: 300000 }),
   routes: (id: string, profileId = getActiveProfileId()) =>

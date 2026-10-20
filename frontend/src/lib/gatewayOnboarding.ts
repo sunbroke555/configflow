@@ -16,6 +16,7 @@ export const onboardingSettingsKey = (settings: GatewayOnboardingSettings) => JS
   rule_set_ids: [...new Set(settings.rule_set_ids)].sort(),
   direct_rule_set_ids: [...new Set(settings.direct_rule_set_ids)].sort(),
   proxy_rule_set_ids: [...new Set(settings.proxy_rule_set_ids)].sort(),
+  default_forward: settings.default_forward || 'forward_remote',
   local_dns: settings.local_dns.trim(), confirm_template_conversion: settings.confirm_template_conversion === true,
 })
 export function installationHostMatches(session: GatewayInstallation | null, profileId: string): boolean {
