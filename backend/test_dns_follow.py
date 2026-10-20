@@ -580,7 +580,8 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
     assert downloads == [url]
     published = env.uploaded_document()
     if legacy_baseline:
-        assert published['plugins'][-1]['args']['entry'] == 'forward_remote'
+        # Managed sequence plugins may follow the listener in emitted YAML.
+        assert next(plugin for plugin in published['plugins'] if plugin['tag'] == 'dns')['args']['entry'] == 'forward_remote'
         assert not any(plugin.get('tag', '').startswith('cf_watchdog_') for plugin in published['plugins'])
     if baseline_digest != 'full':
         def replace_digest(agents):

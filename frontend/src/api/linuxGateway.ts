@@ -8,6 +8,14 @@ export interface LinuxGatewayCandidate {
 export interface LinuxGatewayConfig {
   success?: boolean; settings: LinuxGatewaySettings; candidates: LinuxGatewayCandidate[]
   fake_ip_range: string; warnings: string[]; refresh_interval?: number; publish_guard?: PublishGuard
+  config_revision: number; restore_point: LinuxGatewayRestorePoint | null
+}
+export interface LinuxGatewayRestorePoint { id: string; created_at: string }
+export interface LinuxGatewayDraftGuard { expected_config_revision: number; preview_token: string }
+export interface LinuxGatewayDraftPreview {
+  success: boolean; action: 'save' | 'restore'; config_revision: number; preview_token: string
+  changes: Array<{ path: string; before: string; after: string }>; warnings: string[]
+  restore_point: LinuxGatewayRestorePoint | null
 }
 export interface LinuxGatewaySpec { interface: string; address: string; lan_cidr: string; upstream_gateway: string }
 export interface LinuxGatewayManaged { active: boolean; pending?: boolean; healthy?: boolean; error?: string; spec?: LinuxGatewaySpec; applied_at?: string }
@@ -27,8 +35,14 @@ const hostScope = (profileId: string) => ({ ...scope(profileId), params: { profi
 
 export const linuxGatewayApi = {
   get: (profileId: string) => api.get<LinuxGatewayConfig>('/custom-config/linux-gateway', scope(profileId)),
-  save: (profileId: string, settings: LinuxGatewaySettings) =>
-    api.post<LinuxGatewayConfig>('/custom-config/linux-gateway', settings, scope(profileId)),
+  save: (profileId: string, settings: LinuxGatewaySettings, guard?: LinuxGatewayDraftGuard) =>
+    api.post<LinuxGatewayConfig>('/custom-config/linux-gateway', guard ? { settings, ...guard } : settings, scope(profileId)),
+  previewDraft: (profileId: string, settings: LinuxGatewaySettings, revision: number) =>
+    api.post<LinuxGatewayDraftPreview>('/custom-config/linux-gateway/preview', { settings, expected_config_revision: revision }, scope(profileId)),
+  previewRestore: (profileId: string, revision: number) =>
+    api.post<LinuxGatewayDraftPreview>('/custom-config/linux-gateway/restore/preview', { expected_config_revision: revision }, scope(profileId)),
+  restoreDraft: (profileId: string, guard: LinuxGatewayDraftGuard) =>
+    api.post<LinuxGatewayConfig>('/custom-config/linux-gateway/restore', guard, scope(profileId)),
   status: (agentId: string, profileId: string) => api.get<LinuxGatewayStatus>(hostPath(agentId, 'status'), hostScope(profileId)),
   preview: (agentId: string, profileId: string, spec: LinuxGatewaySpec) =>
     api.post<LinuxGatewayPreview>(hostPath(agentId, 'preview'), spec, hostScope(profileId)),

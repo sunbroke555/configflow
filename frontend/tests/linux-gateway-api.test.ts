@@ -8,6 +8,27 @@ const originalAdapter = api.defaults.adapter
 afterEach(() => { api.defaults.adapter = originalAdapter })
 
 describe('Linux gateway HTTP boundary', () => {
+  it('scopes draft previews and guarded saves/restores separately from host operations', async () => {
+    const requests: any[] = []
+    api.defaults.adapter = async config => {
+      requests.push({ ...config, data: JSON.parse(config.data) })
+      return { data: { success: true }, status: 200, statusText: 'OK', headers: {}, config }
+    }
+    const settings = { enabled: true, rule_set_ids: ['r'] }
+    const guard = { expected_config_revision: 10, preview_token: 'preview' }
+    await linuxGatewayApi.previewDraft('space', settings, 10)
+    await linuxGatewayApi.save('space', settings, guard)
+    await linuxGatewayApi.previewRestore('space', 10)
+    await linuxGatewayApi.restoreDraft('space', guard)
+    expect(requests.map(item => item.headers['X-ConfigFlow-Profile'])).toEqual(Array(4).fill('space'))
+    expect(requests.map(item => item.url)).toEqual([
+      '/custom-config/linux-gateway/preview', '/custom-config/linux-gateway',
+      '/custom-config/linux-gateway/restore/preview', '/custom-config/linux-gateway/restore',
+    ])
+    expect(requests.map(item => item.data)).toEqual([
+      { settings, expected_config_revision: 10 }, { settings, ...guard }, { expected_config_revision: 10 }, guard,
+    ])
+  })
   it('keeps profile scope in headers/query and sends only the strict network fields to the bridge', async () => {
     const requests: any[] = []
     api.defaults.adapter = async request => {
