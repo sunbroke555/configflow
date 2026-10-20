@@ -783,9 +783,9 @@ class AgentManager:
             return task.copy()
         return self._update_agents(cancel)
 
-    def _remember_deployment_content(self, agent_id, bundle, base_url, validation_receipt=None):
+    def _remember_deployment_content(self, agent_id, bundle, base_url, validation_receipt=None, source=None):
         """Persist trusted preparation metadata, never fields from an Agent response."""
-        from .deployment_bundle import deployment_content_fingerprint
+        from .deployment_bundle import deployment_content_digests, deployment_content_fingerprint
         manifest = bundle.manifest
         comparison_manifest = deepcopy(manifest)
         if bundle.comparison_config:
@@ -793,7 +793,12 @@ class AgentManager:
                                              for item in manifest['files']]
         prepared = {'fingerprint': deployment_content_fingerprint(comparison_manifest),
                     'profile_id': manifest['profile_id'], 'service_type': manifest['service_type'],
-                    'config_path': manifest['config_path'], 'base_url': base_url}
+                    'config_path': manifest['config_path'], 'base_url': base_url,
+                    # Explain later drift: which files changed, and whether the draft did.
+                    'files': deployment_content_digests(comparison_manifest)}
+        if source is not None and manifest['service_type'] == 'oxidns':
+            from .dns_follow import settings_digest
+            prepared['settings_digest'] = settings_digest(source)
         def remember(agents):
             agent = next(item for item in agents if item['id'] == agent_id)
             state = agent['deployments'][manifest['deployment_id']]
@@ -854,7 +859,8 @@ class AgentManager:
                 self.record_deployment(agent_id, deployment_id, {
                     'status': 'preparing', 'message': '正在校验 OxiDNS 配置与规则文件'})
                 validation_receipt = validate_bundle(agent_id, bundle)
-            self._remember_deployment_content(agent_id, content_bundle, base_url, validation_receipt)
+            self._remember_deployment_content(agent_id, content_bundle, base_url, validation_receipt,
+                                              source_snapshot if source_snapshot is not None else resource_config)
             if source_snapshot is not None and agent.get('service_type') in ('mihomo', 'oxidns'):
                 from .rule_sync_store import capture
                 # Geo databases are Agent-carried resources, omitted by the

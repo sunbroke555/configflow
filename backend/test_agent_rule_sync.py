@@ -14,7 +14,9 @@ import requests
 import yaml
 
 from backend.agents import rule_sync, rule_sync_store as store
-from backend.agents.deployment_bundle import _pack, build_deployment_bundle, deployment_content_fingerprint
+from backend.agents.deployment_bundle import (
+    _pack, build_deployment_bundle, deployment_content_digests, deployment_content_fingerprint,
+)
 from backend.agents.manager import AgentManager
 from backend.common import config as config_module
 from backend.test_agent_deployments import env  # noqa: F401
@@ -239,6 +241,8 @@ def test_adapted_main_uses_confirmed_live_version_without_changing_desired_finge
     comparison['files'] = [original_entry if entry['role'] == 'config' else entry for entry in comparison['files']]
     expected = deployment_content_fingerprint(comparison)
     assert current['applied_content']['fingerprint'] == expected
+    # Drift explanations compare per-file digests; they must advance together.
+    assert current['applied_content']['files'] == deployment_content_digests(comparison)
     assert current['applied_content']['fingerprint'] != deployment_content_fingerprint(manifest)
     manager.record_deployment(agent['id'], original.manifest['deployment_id'], {'status': 'succeeded'})
     assert manager.get_agent_by_id(agent['id'])['applied_content']['fingerprint'] == expected

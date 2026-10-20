@@ -78,6 +78,17 @@ def relative_path(value):
     return path.as_posix()
 
 
+def deployment_content_digests(manifest):
+    """Per-file digests behind deployment_content_fingerprint, to explain drift.
+
+    Keys match the fingerprint's canonical paths: the main file is
+    ``config.yaml`` whatever its installed name.
+    """
+    deployment_content_fingerprint(manifest)  # same validation as the fingerprint
+    return {('config.yaml' if item['role'] == 'config' else item['path']): item['sha256'].lower()
+            for item in manifest['files']}
+
+
 def deployment_content_fingerprint(manifest):
     """Identify all materialized delivery bytes, independently of a transaction.
 

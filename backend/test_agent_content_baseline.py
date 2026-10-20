@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from backend.agents.deployment_bundle import deployment_content_fingerprint
+from backend.agents.deployment_bundle import deployment_content_digests, deployment_content_fingerprint
 from backend.agents.manager import AgentManager
 from backend.common.config_repository import ProfileRepository
 from backend.test_agent_deployments import env, minimal_bundle, response
@@ -49,6 +49,7 @@ def test_ready_does_not_promote_and_success_uses_agent_final_config_hash(env, mo
     assert prepared == {
         'fingerprint': deployment_content_fingerprint(bundle.manifest), 'profile_id': 'default',
         'service_type': 'mihomo', 'config_path': 'installed.conf', 'base_url': 'https://config.test',
+        'files': deployment_content_digests(bundle.manifest),
     }
     applied = complete(manager, agent, 'content-ready')
     assert applied['config_version'] == 'f' * 64

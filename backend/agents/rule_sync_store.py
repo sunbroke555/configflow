@@ -9,7 +9,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 
-from .deployment_bundle import DeploymentBundle, deployment_content_fingerprint
+from .deployment_bundle import DeploymentBundle, deployment_content_digests, deployment_content_fingerprint
 
 
 def root_for(repository, agent_id):
@@ -115,11 +115,12 @@ def advance_content(repository, agent, source, bundle):
             comparison_manifest['files'] = [comparison if item['role'] == 'config' else item
                                             for item in comparison_manifest['files']]
         fingerprint = deployment_content_fingerprint(comparison_manifest)
-        current['applied_content']['fingerprint'] = fingerprint
+        files = deployment_content_digests(comparison_manifest)
+        current['applied_content'].update(fingerprint=fingerprint, files=files)
         deployment_id = current['applied_content']['deployment_id']
         for state in (current.get('deployments', {}).get(deployment_id), current.get('latest_deployment')):
             if state and state.get('deployment_id') == deployment_id and state.get('prepared_content'):
-                state['prepared_content']['fingerprint'] = fingerprint
+                state['prepared_content'].update(fingerprint=fingerprint, files=files)
         outcome['accepted'] = True
     repository.update_system_transaction(acknowledge)
     return outcome['accepted']
