@@ -62,16 +62,10 @@ func confirmedDNSDeployment(cfg *Config, id string, allFiles bool) ([]byte, erro
 	if hex.EncodeToString(digest[:]) != configFile.SHA256 || int64(len(content)) != configFile.Size {
 		return nil, fmt.Errorf("设备配置在发布后被修改，请先重新发布配置再同步 DNS")
 	}
-	if allFiles {
-		for _, file := range manifest.Files {
-			info, err := os.Lstat(filepath.Join(filepath.Dir(cfg.ConfigPath), file.Path))
-			if err != nil || !info.Mode().IsRegular() || info.Size() != file.Size {
-				return nil, fmt.Errorf("设备受管文件在发布后被修改或缺失，请先重新发布配置再同步 DNS")
-			}
-		}
-		if verifyManifestFiles(filepath.Dir(cfg.ConfigPath), &manifest) != nil {
-			return nil, fmt.Errorf("设备受管文件在发布后被修改或缺失，请先重新发布配置再同步 DNS")
-		}
+	// Rule files OxiDNS refreshed itself are not edits; the follow publication
+	// replaces them with the server's bytes anyway.
+	if allFiles && verifyActiveManagedFiles(filepath.Dir(cfg.ConfigPath), &manifest, content) != nil {
+		return nil, fmt.Errorf("设备受管文件在发布后被修改或缺失，请先重新发布配置再同步 DNS")
 	}
 	return content, nil
 }

@@ -122,6 +122,39 @@ func TestManualRollbackRefusesCorruptBackupAndLiveDriftBeforeStopping(t *testing
 	}
 }
 
+// Cores refresh HTTP rule providers on their own interval. That is not an
+// external edit, so it must not block rolling the publication back.
+func TestManualRollbackAcceptsCoreRefreshedRuleProvider(t *testing.T) {
+	config := []byte("mode: rule\nrule-providers:\n  geo:\n    type: http\n    url: https://config.test/geo\n    path: ./rules/geo.list\n")
+	for _, test := range []struct {
+		name, path string
+		want       int
+	}{
+		{"refreshed provider", "rules/geo.list", 202},
+		{"edited unrelated rule", "rules/manual.list", 409},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testDeploymentConfig(t)
+			root := filepath.Dir(cfg.ConfigPath)
+			first := submitBundle(t, cfg, "refresh-first", map[string][]byte{"config.yaml": []byte("mode: global\n")}, true)
+			next := submitBundle(t, cfg, "refresh-next", map[string][]byte{"config.yaml": config,
+				"rules/geo.list": []byte("DOMAIN,old.test"), "rules/manual.list": []byte("DOMAIN,keep.test")}, true)
+			if first.Status != "succeeded" || next.Status != "succeeded" {
+				t.Fatal(first, next)
+			}
+			os.WriteFile(filepath.Join(root, test.path), []byte("DOMAIN,new.test"), 0600)
+			if w := requestRollback(cfg, "refresh-next"); w.Code != test.want {
+				t.Fatalf("rollback after %s: %d %s", test.name, w.Code, w.Body)
+			}
+			if test.want == 202 {
+				if result := waitRollback(t, cfg, "refresh-next"); result.Status != "rolled_back" {
+					t.Fatalf("rollback did not complete: %+v", result)
+				}
+			}
+		})
+	}
+}
+
 func TestManualRollbackFailedHealthRetainsJournalAndRecovers(t *testing.T) {
 	cfg := testDeploymentConfig(t)
 	root := filepath.Dir(cfg.ConfigPath)

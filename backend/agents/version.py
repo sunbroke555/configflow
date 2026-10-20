@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.37-go"
+LATEST_AGENT_VERSION = "1.8.38-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.38-go": {
+        "date": "2026-10-20",
+        "features": [
+            "OxiDNS 原生规则更新、规则自动同步或定时下载刷新规则文件后，DNS 联动不再误判为设备受管文件被修改",
+            "Mihomo 自动刷新 HTTP 规则集后仍可手动回滚；主配置及其他受管文件的外部修改照常拦截"
+        ]
+    },
     "1.8.37-go": {
         "date": "2026-10-20",
         "features": [

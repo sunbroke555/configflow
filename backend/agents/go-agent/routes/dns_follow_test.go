@@ -31,7 +31,13 @@ func confirmedDNSFixture(t *testing.T, cfg *Config, content string, files map[st
 		if err != nil {
 			t.Fatal(err)
 		}
-		manifest.Files = append(manifest.Files, DeploymentFile{Path: name, Size: size, SHA256: digest})
+		role := "custom"
+		if name == filepath.Base(cfg.ConfigPath) {
+			role = "config"
+		} else if strings.HasPrefix(name, "rules/") {
+			role = "rule"
+		}
+		manifest.Files = append(manifest.Files, DeploymentFile{Path: name, Size: size, SHA256: digest, Role: role})
 	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
@@ -227,6 +233,100 @@ func TestDNSFollowActiveVerifiesEveryManagedFile(t *testing.T) {
 				t.Fatalf("active verification: %d %s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// OxiDNS rewrites its download targets on scheduled, manual and rule-sync
+// refreshes without a new publication. Only those rule files may change.
+func TestDNSFollowActiveAcceptsCoreRefreshedRuleFiles(t *testing.T) {
+	config := `plugins:
+- tag: rules_download
+  type: download
+  args:
+    downloads:
+    - {url: "https://config.test/a", dir: rules, filename: refreshed.txt}
+    - {url: "https://config.test/b", dir: ./rules, filename: attachment.txt}
+- tag: rules_reload
+  type: reload_provider
+  args: [$refreshed]
+`
+	for _, test := range []struct {
+		name string
+		edit func(t *testing.T, root string)
+		want int
+	}{
+		{"refreshed rule bytes", func(t *testing.T, root string) {
+			writeTestFile(t, filepath.Join(root, "rules/refreshed.txt"), "# no ip rules")
+		}, 200},
+		{"rule not downloaded by the core", func(t *testing.T, root string) {
+			writeTestFile(t, filepath.Join(root, "rules/inline.txt"), "manual edit")
+		}, 409},
+		{"download target published as an attachment", func(t *testing.T, root string) {
+			writeTestFile(t, filepath.Join(root, "rules/attachment.txt"), "manual edit")
+		}, 409},
+		{"refreshed rule missing", func(t *testing.T, root string) {
+			if err := os.Remove(filepath.Join(root, "rules/refreshed.txt")); err != nil {
+				t.Fatal(err)
+			}
+		}, 409},
+		{"refreshed rule replaced by a symlink", func(t *testing.T, root string) {
+			target := filepath.Join(t.TempDir(), "outside.txt")
+			writeTestFile(t, target, "outside")
+			name := filepath.Join(root, "rules/refreshed.txt")
+			if err := os.Remove(name); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, name); err != nil {
+				t.Fatal(err)
+			}
+		}, 409},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testDeploymentConfig(t)
+			cfg.ServiceType, cfg.Token = "oxidns", "private-agent-token"
+			cfg.HealthURL, cfg.HealthDNSAddress = "http://127.0.0.1:1", "127.0.0.1:1"
+			confirmedDNSFixture(t, cfg, config, map[string]string{
+				"rules/refreshed.txt": "", "rules/inline.txt": "full:inline.test", "rules/attachment.txt": "full:a.test"})
+			// The attachment shares a download target but was published as a
+			// custom file; its bytes remain owned by the publication.
+			markManifestRole(t, cfg, "rules/attachment.txt", "custom")
+			test.edit(t, filepath.Dir(cfg.ConfigPath))
+			w := callDNSRoute(t, cfg, "/api/dns/active?deployment_id=dns-source", cfg.Token)
+			if w.Code != test.want {
+				t.Fatalf("active verification: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func writeTestFile(t *testing.T, name, value string) {
+	t.Helper()
+	if err := os.WriteFile(name, []byte(value), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func markManifestRole(t *testing.T, cfg *Config, name, role string) {
+	t.Helper()
+	path := filepath.Join(deploymentRoot(cfg), "active-manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest DeploymentManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for i := range manifest.Files {
+		if manifest.Files[i].Path == name {
+			manifest.Files[i].Role = role
+		}
+	}
+	if data, err = json.Marshal(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := durableWrite(path, data, 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 

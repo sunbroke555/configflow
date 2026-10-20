@@ -70,7 +70,13 @@ func validateManualRollback(cfg *Config, s *DeploymentState) error {
 		return fmt.Errorf("only the current active deployment can be rolled back")
 	}
 	// External edits must not be silently overwritten under an outdated label.
-	if err := verifyManifestFiles(root, &active); err != nil {
+	// The configuration itself is verified strictly, so it is safe to read the
+	// refreshable rule targets from it; core refreshes are not external edits.
+	config, err := os.ReadFile(filepath.Join(root, active.ConfigPath))
+	if err != nil {
+		return fmt.Errorf("active managed files changed since deployment; refusing rollback")
+	}
+	if err := verifyActiveManagedFiles(root, &active, config); err != nil {
 		return fmt.Errorf("active managed files changed since deployment; refusing rollback")
 	}
 	configBackup := false
