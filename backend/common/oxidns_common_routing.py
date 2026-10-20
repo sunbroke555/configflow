@@ -5,6 +5,7 @@ inputs are only retained as resource sources; they never supply displayed values
 Unrecognized routing is left for the complete editor instead of being regenerated.
 """
 from copy import deepcopy
+from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 import re
 
@@ -317,6 +318,32 @@ def resource_downloads(document, settings, config, base_url=''):
     return desired
 
 
+def resource_readers(document):
+    """Conservative resource consumers, including unknown plugin fields."""
+    def strings(value):
+        if isinstance(value, str):
+            if '/' in value or '${' in value or any(char in value for char in '*?['):
+                yield value
+        elif isinstance(value, dict):
+            for item in value.values(): yield from strings(item)
+        elif isinstance(value, list):
+            for item in value: yield from strings(item)
+    return list(strings({**{key: value for key, value in document.items() if key != 'plugins'},
+                         'plugins': [p for p in document.get('plugins', []) if p.get('type') != 'download']}))
+
+
+def resource_is_read(path, readers):
+    for reference in readers:
+        if '${' in reference or fnmatchcase(path, reference.removeprefix('./')) or reference.endswith('/' + path):
+            return True
+        # Absolute patterns may refer to the same resource under the target's
+        # installation directory, whose prefix is not known while editing.
+        if reference.startswith('/') and any(fnmatchcase(path, reference[index + 1:])
+                                              for index, char in enumerate(reference) if char == '/'):
+            return True
+    return False
+
+
 def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
     plugins = _plugins(document)
     download = plugins.get('rules_download')
@@ -355,6 +382,7 @@ def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
         if local in known_paths:
             desired_entries[local] = item
     output = []
+    readers = resource_readers(document)
     for entry in download['args']['downloads']:
         location = path(entry)
         if location not in known_paths:
@@ -363,6 +391,8 @@ def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
             # Preserve per-download extensions and explicit URL overrides.
             output.append(entry)
             desired_entries.pop(location)
+        elif resource_is_read(location, readers):
+            output.append(entry)
     output.extend(desired_entries.values())
     download['args']['downloads'] = output
 

@@ -3,8 +3,11 @@ from copy import deepcopy
 
 import yaml
 
-from backend.common.oxidns_common_routing import ROUTING_FIELDS, _references, resource_downloads
-from backend.common.oxidns_native import load_native_yaml, native_document
+from backend.common.oxidns_common_routing import (
+    ROUTING_FIELDS, _references, resource_downloads, _catalog, resource_readers, resource_is_read,
+)
+from backend.common.oxidns_native import load_native_yaml, native_document, resource_references, relative_resource
+from backend.converters.oxidns import _rule_path, _tag
 from backend.common.oxidns_settings import OxidnsSettingsError, get_default_oxidns_settings
 from backend.common.oxidns_validation import schemas
 from backend.common.oxidns_references import reference_locations
@@ -34,6 +37,58 @@ def _path(entry):
     if not isinstance(entry, dict) or not isinstance(entry.get('dir'), str) or not isinstance(entry.get('filename'), str):
         return None
     return (entry['dir'].rstrip('/') + '/' + entry['filename']).removeprefix('./')
+
+
+def reconcile_native_withdrawals(before, candidate, original_settings, settings, config):
+    """Withdraw proven managed targets, retaining every other reader/download.
+
+    Compare actual resource references, including supplied include files. A
+    filename prefix alone never establishes ownership; neither custom download
+    plugins nor unrelated entries in the standard downloader are edited.
+    """
+    def expanded(document, values):
+        return native_document({**values, 'native_config': yaml.safe_dump(document)},
+                               validate_arguments=False) if document.get('include') else document
+
+    try:
+        previous = expanded(before, original_settings)
+        current = expanded(candidate, settings)
+        old_paths = {relative_resource(path) for path in resource_references(previous)}
+        references = resource_references(current)
+        live = {relative_resource(path) for path in references}
+    except OxidnsSettingsError:
+        # Complete-form drafts may contain unfinished unrelated resource fields.
+        # Without a proven reference set, leave every download untouched.
+        return 0, False
+    # Unexpanded paths could still consume one of the withdrawn files.
+    if any('${' in path for path in references):
+        return 0, False
+    paths = {_rule_path(record['item'], part).removeprefix('./')
+             for record in _catalog(config)[0].values() if record['suffix'] == 'rulesets'
+             for part in record['parts']}
+    adguard = original_settings.get('adguard', {})
+    paths.update(f'rules/{_tag("adguard", url)}.txt' for url in adguard.get('urls', [])
+                 if isinstance(url, str))
+    withdrawn = (old_paths - live) & paths
+    # Future/custom plugins may name their input differently (e.g. rule_path).
+    # Literal readers remain protected; download destinations are writers.
+    readers = [*references, *resource_readers(current)]
+    withdrawn = {path for path in withdrawn if not resource_is_read(path, readers)}
+    downloader = next((p for p in candidate.get('plugins', []) if p.get('tag') == 'rules_download'), None)
+    if not withdrawn or not downloader or downloader.get('type') != 'download':
+        return 0, False
+    args = downloader.get('args')
+    if not isinstance(args, dict) or not isinstance(args.get('downloads'), list):
+        return 0, False  # Leave unfinished/custom native values to their editor.
+    prior = deepcopy(candidate)
+    retained = [item for item in args['downloads'] if _path(item) not in withdrawn]
+    removed = len(args['downloads']) - len(retained)
+    args['downloads'] = retained
+    # Reuse the common editor's conservative empty-pipeline lifecycle. It keeps
+    # user jobs/downloads, and refuses unknown executor edges atomically.
+    from backend.common.oxidns_common import _Context
+    finish_rule_updates(_Context(candidate, settings), {'direct_rulesets': []}, config)
+    return removed, candidate != prior
 
 
 def _providers(document, existing):

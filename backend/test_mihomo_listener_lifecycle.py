@@ -113,3 +113,81 @@ def test_listener_edit_does_not_change_shared_yaml_alias_or_unrelated_document()
     original = deepcopy(unrelated)
     assert relink_group_listeners(unrelated, 'Pinned') == []
     assert unrelated == original
+
+
+@pytest.mark.parametrize('action', ['rename', 'disable', 'delete'])
+def test_group_edits_preserve_all_base_yaml_comments_after_save(environment, action):
+    repo, client = environment
+    source = ''.join(f'# User explanation {i}\n' for i in range(230)) + '''mixed-port: 7890 # mixed port
+listeners:
+  # inbound explanation
+  - name: 'personal' # listener name
+    type: mixed
+    proxy: "Pinned" # fixed policy explanation
+    # rule explanation
+    rule: lan-rules
+    port: 17890 # listener port
+sub-rules: {lan-rules: [MATCH,DIRECT]} # sub-rule explanation
+'''
+    repo.update_profile_transaction('default', lambda p: p['mihomo'].update(custom_config=source))
+    response = client.delete('/api/proxy-groups/g') if action == 'delete' else client.put(
+        '/api/proxy-groups/g', json={'name': 'Renamed'} if action == 'rename' else {'enabled': False})
+    assert response.status_code == 200, response.json
+    result = repo.get_profile('default')['mihomo']['custom_config']
+    for comment in [*(f'# User explanation {i}' for i in range(230)), '# mixed port',
+                    '# inbound explanation', '# listener name', '# fixed policy explanation',
+                    '# rule explanation', '# listener port', '# sub-rule explanation']:
+        assert comment in result
+    expected = yaml.safe_load(source)
+    if action == 'rename': expected['listeners'][0]['proxy'] = 'Renamed'
+    else: expected['listeners'][0].pop('proxy')
+    assert yaml.safe_load(result) == expected
+    assert yaml.safe_load(generate_mihomo_config(repo.get_compat_config('default'), preflight_providers=False))['listeners'] == expected['listeners']
+
+
+@pytest.mark.parametrize('new_name', [None, 'Renamed # : "quoted"', 'false', 'on', 'No', '012'])
+@pytest.mark.parametrize('source', [
+    '# top\nshared: &base {name: pinned, type: mixed, proxy: Pinned} # base\nlisteners: [*base] # list\n',
+    '# top\nlisteners: [&base {name: pinned, type: mixed, proxy: Pinned}] # list\nshared: *base # shared\n',
+    '# top\nshared: &base {name: pinned, type: mixed, proxy: Pinned} # base\nlisteners:\n- <<: *base # merge\n  port: 17890 # port\n',
+    '# top\nlisteners: [{proxy: Pinned, name: pinned}] # list\n',
+    '# top\nlisteners: &all [{name: pinned, proxy: Pinned}] # list\nshared: *all # shared\n',
+    '# top\nlisteners: [{name: pinned, proxy: &policy Pinned}] # list\nshared: *policy # shared\n',
+    '# top\nlisteners: [{proxy: Pinned, # policy note\n name: pinned}] # list\n',
+])
+def test_comment_edits_keep_alias_consumers_and_flow_or_merge_semantics(source, new_name):
+    profile = {'mihomo': {'custom_config': source}}
+    expected = deepcopy(yaml.safe_load(source))
+    expected['listeners'] = list(expected['listeners'])
+    expected['listeners'][0] = deepcopy(expected['listeners'][0])
+    if new_name is None: expected['listeners'][0].pop('proxy')
+    else: expected['listeners'][0]['proxy'] = new_name
+    assert relink_group_listeners(profile, 'Pinned', new_name) == ['listeners[0].proxy']
+    result = profile['mihomo']['custom_config']
+    assert yaml.safe_load(result) == expected
+    for comment in ('# top', '# base', '# list', '# shared', '# merge', '# port', '# policy note'):
+        if comment in source: assert comment in result
+
+
+def test_comment_edit_keeps_scalar_types_literal_content_and_windows_newlines():
+    source = ('# header\r\nlegacy: {enabled: on, number: 012, flag: false, empty: null}\r\n'
+              'script: |\r\n  # This is string content\r\n  proxy: Pinned\r\n'
+              'listeners:\r\n- {name: pinned, proxy: "Pinned", type: mixed}\r\n')
+    profile = {'mihomo': {'custom_config': source}}
+    expected = yaml.safe_load(source)
+    expected['listeners'][0]['proxy'] = 'Renamed'
+    relink_group_listeners(profile, 'Pinned', 'Renamed')
+    result = profile['mihomo']['custom_config']
+    assert yaml.safe_load(result) == expected
+    assert '# header' in result and '# This is string content' in result
+    assert '\n' not in result.replace('\r\n', '')
+
+
+def test_roundtrip_failure_does_not_partially_rename_or_rewrite_profile(environment, monkeypatch):
+    repo, client = environment
+    before = repo.export_all()
+    def fail(*args, **kwargs): raise ValueError('unsafe YAML edit')
+    monkeypatch.setattr('backend.utils.commented_mihomo.edit_listener_targets', fail)
+    response = client.put('/api/proxy-groups/g', json={'name': 'Renamed'})
+    assert response.status_code == 400
+    assert repo.export_all() == before

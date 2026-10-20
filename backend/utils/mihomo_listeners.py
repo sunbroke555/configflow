@@ -64,8 +64,13 @@ def relink_group_listeners(profile, old_name, new_name=None):
         changed.append(f'listeners[{index}].proxy')
     if changed:
         document['listeners'] = replacements
-        profile.setdefault('mihomo', {})['custom_config'] = yaml.safe_dump(
-            document, allow_unicode=True, sort_keys=False)
+        from backend.utils.commented_mihomo import edit_listener_targets, YAMLError as CommentedYamlError
+        try:
+            updated = edit_listener_targets(source, [index for index, listener in enumerate(listeners)
+                                                     if listener.get('proxy') == old_name], new_name, document)
+        except (CommentedYamlError, ValueError, TypeError, RecursionError) as error:
+            raise ListenerReferenceError('无法安全保留 Mihomo 基础配置的注释与引用，原配置已保留') from error
+        profile.setdefault('mihomo', {})['custom_config'] = updated
     return changed
 
 
