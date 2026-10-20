@@ -1,0 +1,62 @@
+{
+  "success": true,
+  "tests": [
+    {
+      "operation": "invalid/nonlocal agent_ip rejected",
+      "value": "not-an-ip",
+      "activate": false,
+      "core_unchanged": true,
+      "message": "原生 AIO 启用 TUN 自动重定向时为 OxiDNS 排除本机 DNS 失败：Agent 配置中的 agent_ip 不是有效的 LAN IPv4；请填写本机地址或留空自动获取",
+      "status": "failed"
+    },
+    {
+      "operation": "invalid/nonlocal agent_ip rejected",
+      "value": "not-an-ip",
+      "activate": true,
+      "core_unchanged": true,
+      "message": "原生 AIO 启用 TUN 自动重定向时为 OxiDNS 排除本机 DNS 失败：Agent 配置中的 agent_ip 不是有效的 LAN IPv4；请填写本机地址或留空自动获取",
+      "status": "failed"
+    },
+    {
+      "operation": "invalid/nonlocal agent_ip rejected",
+      "value": "192.0.2.123",
+      "activate": false,
+      "core_unchanged": true,
+      "message": "原生 AIO 启用 TUN 自动重定向时为 OxiDNS 排除本机 DNS 失败：Agent 配置中的 agent_ip（192.0.2.123）不属于当前本机 LAN IPv4；请填写本机地址或留空后重新发布",
+      "status": "failed"
+    },
+    {
+      "operation": "invalid/nonlocal agent_ip rejected",
+      "value": "192.0.2.123",
+      "activate": true,
+      "core_unchanged": true,
+      "message": "原生 AIO 启用 TUN 自动重定向时为 OxiDNS 排除本机 DNS 失败：Agent 配置中的 agent_ip（192.0.2.123）不属于当前本机 LAN IPv4；请填写本机地址或留空后重新发布",
+      "status": "failed"
+    },
+    {
+      "operation": "empty IP automatic detection",
+      "status": "succeeded",
+      "not_written_back": true,
+      "tun_not_lan": true
+    },
+    {
+      "operation": "new LAN IP after prepare rejects old candidate",
+      "status": "failed",
+      "core_unchanged": true,
+      "message": "待激活配置未排除当前本机 LAN IPv4（192.168.99.35）的 DNS；网络地址可能已变化，请重新发布配置"
+    },
+    {
+      "operation": "fresh prepare and activate with explicit IP and two LAN IPs",
+      "status": "succeeded",
+      "both_lans_protected": true,
+      "custom_cidr_preserved": true,
+      "after_failed_no_409": true,
+      "both_lan_udp_tcp_dns": true
+    }
+  ],
+  "cleanup": {
+    "temporary_address_removed": true,
+    "agent_config_restored": true,
+    "normal_publish_succeeded": true
+  }
+}

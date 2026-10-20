@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "unchanged_upstream_outage_no_download": true,
+  "unchanged_no_target_deployment": true,
+  "target_bytes_and_pid_unchanged": true,
+  "changed_upstream_real_child_succeeded": true,
+  "changed_udp_tcp_dns": true,
+  "listener_restored": true,
+  "binding_disabled_after_test": true
+}

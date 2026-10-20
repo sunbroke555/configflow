@@ -1,0 +1,57 @@
+{
+  "任务": "P2-04规则库批量导入修复回归",
+  "源码提交": "3f38649",
+  "主程序": "http://192.168.0.101:14810",
+  "真实HTTP源": "http://192.168.0.101:14823",
+  "条目前缀": "fix-import-6ba67ed334",
+  "隔离范围": "仅操作此前缀共享规则；未修改默认配置；不访问.35/.36",
+  "浏览器执行": "worker IAB连接不可用；root接续在自身正常IAB独立页签完成表单，worker逐轮只读核对API与缓存",
+  "空间说明": "共享规则库回归不需要配置组合写入；native新建空间表单未保存，未创建manual-import-fix",
+  "状态": "三组真实HTTP导入、刷新重开与补充混合toast回归通过；自有条目/缓存/闲置锁已清理、14823已停",
+  "基线": {
+    "目录": "before.json",
+    "默认配置": "default-profile-baseline.json"
+  },
+  "时间": 1792490505.585418,
+  "已完成": [
+    {
+      "组": "全成功",
+      "做了什么": "主线程IAB表单粘贴2条真实HTTP200源并提交，提示成功导入2条规则",
+      "结果": "仅2目录项和2cache；缓存内容匹配源；原库/原cache哈希不变",
+      "证据": "all-success-verification.json"
+    },
+    {
+      "组": "混合成功失败",
+      "做了什么": "表单提交1条2秒延迟HTTP200和1条HTTP503源",
+      "结果": "仅成功项新增目录和cache；失败项两者均无；原库/原cache不变",
+      "限制": "延迟组未留住短toast；已追加不同名称的混合组，import-mixed.png完整保存部分成功提示，实际数据持久化亦独立核对。",
+      "证据": "mixed-verification.json"
+    },
+    {
+      "组": "全失败",
+      "做了什么": "表单导入2条真实503来源",
+      "结果": "准确显示批量导入失败，2条规则均未导入；目录/cache均无新增；刷新重开仍仅先前3成功项",
+      "截图": "import-all-failed.png / import-reopened.png",
+      "证据": "all-failed-verification.json"
+    },
+    {
+      "组": "混合提示补充",
+      "做了什么": "使用不同名称再次导入1条200与1条503真实来源",
+      "结果": "显示批量导入完成：成功1条，失败1条；仅成功项新增目录/cache",
+      "截图": "import-mixed.png",
+      "证据": "mixed-feedback-verification.json"
+    },
+    {
+      "组": "清理",
+      "做了什么": "仅API删除4个自有success记录与缓存，清理4个自有闲置cache lock，SIGTERM停止14823源",
+      "结果": "自有目录/cache均0；原始目录摘要与原缓存2文件哈希保持基线；未删除root规则",
+      "证据": "import-cleanup.json / import-service-cleanup.json"
+    }
+  ],
+  "最终自有条目数": 0,
+  "原始规则目录摘要": "9a760830ca8714b3ddff0a1d905a93a52c634441483339e497eceb7f5ef1e048",
+  "原始缓存文件数量": 2,
+  "最终校验": "import-cleanup.json",
+  "并行排除": "root所有fix-refresh-set-20261020及default规则联动编辑由root独占，不纳入本用例不改动校验",
+  "浏览器清理限制": "root自行关闭IAB测试页签；worker native新窗口绑定异常已按root指示保留不动，manual-import-fix未保存创建，可能存在14810空表单窗口"
+}

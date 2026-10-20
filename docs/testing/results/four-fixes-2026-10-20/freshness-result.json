@@ -1,0 +1,30 @@
+{
+  "success": true,
+  "old_cache_sha256": "b911fdbdcc2d200449e8ac049bf30384fcda198c6fa2621f8e3f40126fd9a3b9",
+  "old_cache_content": "full:old-fix.test",
+  "live_content_before_and_after_failure": "full:new-fix.test",
+  "cache_unchanged": true,
+  "core_pid": 89,
+  "core_start_unchanged": true,
+  "failure": {
+    "code": "DOWNLOAD_FAILED",
+    "download_total": 1,
+    "downloaded": 0,
+    "id": "bd244770fa0ea021cf22ad5762042556",
+    "message": "规则下载未全部成功，本次未执行热重载，请检查 OxiDNS 日志。",
+    "phase": "done",
+    "reload_total": 1,
+    "reloaded": 0,
+    "status": "failed"
+  },
+  "recovered": {
+    "download_total": 1,
+    "downloaded": 1,
+    "id": "0da6e1ddff3fc709250c9d47c391a4ab",
+    "phase": "done",
+    "reload_total": 1,
+    "reloaded": 1,
+    "status": "succeeded"
+  },
+  "ui_running_leave_return_and_failure_verified": true
+}

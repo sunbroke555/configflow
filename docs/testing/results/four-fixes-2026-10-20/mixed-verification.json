@@ -1,0 +1,28 @@
+{
+  "case": "mixed",
+  "checks": {
+    "仅预期成功条目入库且缓存内容准确": true,
+    "失败条目无新增缓存文件": true,
+    "原始规则目录摘要一致": true,
+    "原始缓存文件哈希一致": true,
+    "默认配置静态文件哈希一致": true
+  },
+  "passed": true,
+  "new_cache_files": [
+    "by-id/18ad556ce97cd1d8397b66a3593962e0575ab7d7328de1d6d45b2d2f7e10745d.list",
+    "by-id/c543ed677c454bc8d0e00b6b74c7905356aabba6b020d4b2bf02c8e67a2f891b.list",
+    "by-id/df6de6b30a92661dcea14c7891c026cd095b4307dfbbe03c2083d33e049a9a57.list"
+  ],
+  "own_names": [
+    "fix-import-6ba67ed334-all-one",
+    "fix-import-6ba67ed334-all-two",
+    "fix-import-6ba67ed334-mixed-ok"
+  ],
+  "parallel_exclusion": {
+    "root_rule_names": [
+      "fix-refresh-set-20261020"
+    ],
+    "default_profile_unchanged": true,
+    "reason": "root已提前说明本轮并行规则freshness与编辑联动测试有意新增fix-refresh-set-20261020并修改default配置，不属于本导入用例"
+  }
+}

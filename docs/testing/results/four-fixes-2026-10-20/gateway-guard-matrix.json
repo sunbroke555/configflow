@@ -1,0 +1,7 @@
+{
+  "result": "passed",
+  "same_name_no_journal": "409拒绝且原表未变",
+  "active_managed_extra_rule": "apply/remove均409且所有资源保留",
+  "precise_cleanup": "仅按已验证comment和handle删除自有测试规则/自定义表",
+  "final_remove": "200，未改其它表"
+}

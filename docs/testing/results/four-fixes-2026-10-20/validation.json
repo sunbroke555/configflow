@@ -1,0 +1,65 @@
+{
+  "product_source_commit": "3f38649",
+  "agent_version": "1.8.34-go",
+  "test_assertion_note": "最终后端全量包含更新后的502/禁止缓存回退/脱敏回归断言。",
+  "checks": [
+    {
+      "command": "python -m pytest -q backend",
+      "result": "7285 passed, 80 skipped, 9 subtests passed",
+      "seconds": 705.38
+    },
+    {
+      "command": "npm test -- --reporter=dot",
+      "node": "24.19.0",
+      "locked_dependencies": "npm ci",
+      "result": "125 test files / 1818 tests passed",
+      "seconds": 169.78
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "passed"
+    },
+    {
+      "command": "npm run build",
+      "result": "passed",
+      "warning": "Existing bundle chunk size warning"
+    },
+    {
+      "command": "go test ./...",
+      "result": "all packages passed; routes 133.012s"
+    },
+    {
+      "command": "gateway targeted go test -race",
+      "result": "passed",
+      "seconds": 8.657
+    },
+    {
+      "command": "LAN/publication targeted go test -race",
+      "result": "passed",
+      "seconds": 25.114
+    },
+    {
+      "command": "GOOS=linux GOARCH=amd64/arm64 CGO_ENABLED=0 go build -trimpath",
+      "result": "both architectures built"
+    }
+  ],
+  "isolation": [
+    "192.168.0.35 Debian13 LXC ordinary native AIO",
+    "192.168.0.36 Debian12 LXC with original nftables1.0.6"
+  ],
+  "normal_linked_publish": {
+    "same_upstream": "succeeded, no target deployment, no OxiDNS source reads, target config/rules/PID unchanged",
+    "changed_upstream": "1053→1153 real listener; linked child succeeded; UDP/TCP DNS passed; restored1053",
+    "confirmed_manifest_guard": "Native rule updates modify deployed files; a full publish is required to establish a current baseline before DNS follow. Guard refusal was verified, not bypassed."
+  },
+  "production_deployed": false,
+  "historical_failures_resolved": [
+    "Inherited frontend deps had outdated vue-tsc/Node26; rebuilt only managed worktree deps from lock with Node24.",
+    "Initial backend suite retained one old500 assertion; updated to502/no-cache-fallback/redaction then full suite passed."
+  ],
+  "remaining_limits": [
+    "Gateway LXC host reboot not performed; only Agent restart and automated kernel resource loss/rebuild regressions.",
+    "Unselected IP external HTTP had intermittent timeouts; successful gateway/direct comparisons and synchronous packet headers are recorded, cause of failed attempts unconfirmed.",
+    "Hard termination between initial cache creation and catalog commit can leave an orphan; same-ID overwrite is conservatively rejected."
+  ]
+}
