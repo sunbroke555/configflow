@@ -5,6 +5,7 @@ import yaml
 
 from backend.common.oxidns_common_routing import (
     ROUTING_FIELDS, _references, resource_downloads, _catalog, resource_readers, resource_is_read,
+    replace_download_entries,
 )
 from backend.common.oxidns_native import load_native_yaml, native_document, resource_references, relative_resource
 from backend.converters.oxidns import _rule_path, _tag
@@ -83,7 +84,7 @@ def reconcile_native_withdrawals(before, candidate, original_settings, settings,
     prior = deepcopy(candidate)
     retained = [item for item in args['downloads'] if _path(item) not in withdrawn]
     removed = len(args['downloads']) - len(retained)
-    args['downloads'] = retained
+    replace_download_entries(downloader, retained)
     # Reuse the common editor's conservative empty-pipeline lifecycle. It keeps
     # user jobs/downloads, and refuses unknown executor edges atomically.
     from backend.common.oxidns_common import _Context
