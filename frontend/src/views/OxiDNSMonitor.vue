@@ -20,12 +20,11 @@
         </Select>
       </template>
       <template #actions>
-        <div class="flex w-full flex-wrap items-center gap-2 max-sm:gap-1">
-          <label class="mr-auto flex min-h-11 items-center gap-2 text-[13px] text-muted-foreground">
+        <div class="flex w-full flex-wrap items-center justify-between gap-2">
+          <label class="flex min-h-11 items-center gap-2 text-[13px] text-muted-foreground">
             <Switch v-model="autoRefresh" aria-label="每 10 秒自动刷新监控" />自动刷新 · 10 秒
           </label>
-          <OxiDNSRuleUpdate :agent-id="agentId" size="default" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
-          <div class="flex shrink-0 items-center gap-2 max-sm:gap-1">
+          <div class="ml-auto flex shrink-0 items-center gap-2 max-sm:gap-1">
             <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" aria-label="刷新监控" title="刷新监控" :aria-busy="overviewLoading || queriesLoading || devicesLoading" :disabled="overviewLoading || queriesLoading || devicesLoading" @click="refreshAll">
               <RefreshCw class="size-4" :class="{ 'animate-spin': overviewLoading || queriesLoading || devicesLoading }" /><span class="max-sm:sr-only">刷新</span>
             </Button>
@@ -54,7 +53,10 @@
         <span v-if="currentDevice?.host" class="min-w-0 break-all font-mono" aria-label="当前设备 IP">{{ currentDevice.host }}</span>
         <span v-if="overview?.core.version" class="font-mono">OxiDNS {{ overview.core.version }}</span>
         <span v-if="overview">已运行 {{ uptime }}</span>
-        <span v-if="overview" class="ml-auto text-xs">采样 {{ sampleTime }}</span>
+        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 sm:ml-auto">
+          <OxiDNSRuleUpdate :agent-id="agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
+          <span v-if="overview" class="text-xs">采样 {{ sampleTime }}</span>
+        </div>
       </div>
       <p v-if="overviewError && overview" role="alert" class="mb-4 rounded-lg border border-warning-accent/30 bg-warning-soft p-3 text-sm text-warning-accent">
         {{ overviewError }} 保留上次成功读取的数据，采样时间见上方。

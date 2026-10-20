@@ -337,7 +337,7 @@ describe('OxiDNS rule update', () => {
     const wrapper = await render({ disabled: true })
     await wrapper.get('button').trigger('click')
     expect(api.post).not.toHaveBeenCalled()
-    expect(wrapper.get('button').classes()).toContain('min-h-11')
+    expect(wrapper.get('button').classes()).toContain('max-sm:min-h-11')
   })
 
   it('identifies the first released Agent version supporting rule updates', async () => {
