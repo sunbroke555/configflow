@@ -151,7 +151,8 @@ def test_native_inline_update_preserves_custom_dns_and_other_draft_changes():
     after = {plugin['tag']: plugin for plugin in result['plugins']}
     assert before['forward_local'] == after['forward_local']
     assert result['log'] == doc['log']
-    assert 'full:new-inline.test' in str(after['rules_domain_1'])
+    # A changed provider is renamed beside the old one, as the editor does.
+    assert any('full:new-inline.test' in str(plugin) for tag, plugin in after.items() if tag.startswith('rules_domain_'))
     assert rule_change_kind(base, current, 'oxidns', {'rules': True}) == 'structure'
 
 
@@ -217,6 +218,29 @@ def test_native_download_and_reload_follow_new_selected_sources():
     plugins = {plugin['tag']: plugin for plugin in unpack_document(isolated)['plugins']}
     assert len(plugins['rules_download']['args']['downloads']) == 2
     assert len(plugins['rules_reload']['args']) == 2
+
+
+@pytest.mark.parametrize('changes', [
+    {'proxy_rules': ['single'], 'direct_rules': []},
+    {'direct_rulesets': ['set-a'], 'proxy_rulesets': ['set-b', 'set-c']},
+    {'direct_rulesets': ['set-c']},
+])
+def test_native_projection_reproduces_routing_edit_saved_in_draft(changes):
+    # DNS follow compares the rendered draft with the deployed bytes. A routing
+    # edit saved in the draft and then published by rule sync must therefore
+    # keep the draft's provider tags and plugin order, not rename or regroup.
+    from backend.common.oxidns_common import apply_common_settings
+    template = fixture()
+    add_set(template)
+    add_set(template, 'c')
+    template['oxidns'].update(proxy_rulesets=['set-b'], direct_rulesets=['set-a', 'set-c'])
+    base = native(template)
+    current = deepcopy(base)
+    current['oxidns'] = apply_common_settings(base['oxidns'], changes, base)['settings']
+    draft = yaml.safe_load(current['oxidns']['native_config'])
+    assert draft != yaml.safe_load(base['oxidns']['native_config'])
+    projected = project_rule_changes(base, current, {'library': True, 'rules': True})
+    assert yaml.safe_load(projected['oxidns']['native_config']) == draft
 
 
 def test_mihomo_bundle_cannot_publish_nodes_dns_or_refetched_subscription_bytes():
@@ -444,7 +468,7 @@ def test_rule_sync_preserves_watchdog_migration_boundary(guarded, mode, monkeypa
     old_plugins = {plugin['tag']: plugin for plugin in previous['plugins']}
     new_plugins = {plugin['tag']: plugin for plugin in actual['plugins']}
     for tag, plugin in old_plugins.items():
-        if tag != 'sequence_main' and not tag.startswith('rules_domain_'):
+        if tag not in ('sequence_main', 'rules_reload') and not tag.startswith('rules_domain_'):
             assert new_plugins[tag] == plugin
     # An ordinary publication always completes migration, including after an
     # old deployment has accepted a rule-only update without the local guard.

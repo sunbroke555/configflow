@@ -25,7 +25,7 @@ import yaml
 
 from backend.agents.diagnostics import failure_text
 from backend.agents.deployment_locations import DeploymentPreparationError, preparation_context, source_error
-from backend.converters.mosdns import parse_clash_rule_value
+from backend.converters.mosdns import RULE_PARTS, empty_rule_part, parse_clash_rule_value
 from backend.utils.rule_fetch import RuleFetchError, is_internal_rule_url, request_rule
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -239,6 +239,19 @@ def materialize_rule(url, config, base_url, *, depth=0, raw_mosdns=False, fetch_
     return fetch_raw(url) if fetch_raw is not None else _fetch_bytes(url, config)
 
 
+def _empty_rule_text(url):
+    """Bytes a device receives for an empty part when it refreshes this URL.
+
+    Native rule updates store rule-proxy's response; a publication must carry
+    the same bytes, or the content baseline differs after every refresh.
+    """
+    parsed = urlsplit(url or '')
+    if not parsed.path.endswith(('/mosdns/rule-proxy', '/oxidns/rule-proxy')):
+        return b''
+    part = parse_qs(parsed.query).get('part', [None])[0]
+    return empty_rule_part(part).encode('utf-8') if part in RULE_PARTS else b''
+
+
 def convert_mosdns_rules(content, rule_type='domain_set'):
     """Convert text for the final MosDNS domain_set or ip_set consumer."""
     if rule_type not in ('domain_set', 'ip_set'):
@@ -371,7 +384,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
     files = {}
     file_names = {}
 
-    def add_content(path, value, role, *, native=False):
+    def add_content(path, value, role, *, native=False, empty=b''):
         path = relative_path(path)
         if service == 'oxidns' and (path == 'state' or path.startswith('state/')):
             raise DeploymentPreparationError('OxiDNS runtime state cannot be managed by a deployment')
@@ -382,7 +395,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         # particular, a bare domain is a suffix rule, not MosDNS's full: rule.
         # Only downloaded/shared rule sources go through the rule converter.
         if path in rule_types and not (service == 'oxidns' and native):
-            value = convert_mosdns_rules(value, rule_types[path])
+            value = convert_mosdns_rules(value, rule_types[path]) or empty
         if len(value) > MAX_FILE_BYTES:
             raise DeploymentPreparationError('Deployment file exceeds size limit')
         if path in files:
@@ -392,11 +405,11 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         files[path] = (value, role)
         return path
 
-    def add(path, value, role, *, native=False, name=''):
+    def add(path, value, role, *, native=False, name='', empty=b''):
         kind = '订阅' if role == 'provider' else '配置' if role == 'config' else '规则集' if role == 'rule' else '附加文件'
         name = name or rule_names.get(str(path).removeprefix('./'), '')
         try:
-            target = add_content(path, value, role, native=native)
+            target = add_content(path, value, role, native=native, empty=empty)
         except DeploymentPreparationError as exc:
             raise preparation_context(exc, name=name, path=path, kind=kind) from None
         if name:
@@ -517,7 +530,8 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             futures = (pool.submit(download, item) for item in downloads)
             for done, future in enumerate(as_completed(futures), 1):
                 item, value = future.result()
-                add(item['local_path'], value, 'rule', name=item.get('name', ''))
+                add(item['local_path'], value, 'rule', name=item.get('name', ''),
+                    empty=_empty_rule_text(item.get('url', '')))
                 if detail_progress is not None:
                     detail_progress(done, len(downloads), item.get('name') or '未命名', 'prepared')
                 elif progress is not None:

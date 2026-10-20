@@ -327,11 +327,16 @@ def _ruleset_files(config_data: Dict[str, Any], effective_base_url: str,
     return files
 
 
+def empty_rule_part(part: str) -> str:
+    """rule-proxy 对空拆分部分返回的内容；发布包须与设备刷新得到的字节一致"""
+    return f"# no {part} rules"
+
+
 def _join_rule_lines(lines: List[str], part: str = None) -> str:
     # 拆分后某部分为空时（如混合规则集没有 IP 行）返回注释行：
     # Agent 预获取把空内容视为失败并回退到 URL 下载，非空可直接落盘；MosDNS 会忽略注释
     if not lines and part:
-        return f"# no {part} rules"
+        return empty_rule_part(part)
     return '\n'.join(lines)
 
 

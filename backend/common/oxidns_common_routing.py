@@ -286,6 +286,40 @@ def _new_name(preferred, occupied):
     return result
 
 
+def place_routing_groups(plugins, old, expected, external=frozenset()):
+    """Tag and insert routing providers; return the new plugin list and groups.
+
+    Rule sync replays draft routing edits with this too, so the deployed YAML
+    stays byte-identical to the draft: unchanged providers keep tag and
+    position, and fresh tags avoid the old ones still present at edit time.
+    """
+    occupied = {plugin.get('tag') for plugin in plugins}
+    retained, additions = set(), []
+    groups = {'domain': [], 'ip': []}
+    for part, entries in expected.items():
+        for group in entries:
+            kind = 'domain_set' if part == 'domain' else 'ip_set'
+            previous = next((candidate for candidate in old if candidate['tag'] not in retained and
+                             candidate['provider']['type'] == kind and _same(candidate['args'], group['args'])), None)
+            if previous:
+                tag = previous['tag']
+                retained.add(tag)
+            else:
+                tag = _new_name(group['tag'], occupied)
+                additions.append({'tag': tag, 'type': kind, 'args': deepcopy(group['args'])})
+            groups[part].append({**deepcopy(group), 'tag': tag})
+    removable = {group['tag'] for group in old} - retained - set(external)
+    insertion = min((index for index, plugin in enumerate(plugins) if plugin.get('tag') in removable),
+                    default=next(i for i, plugin in enumerate(plugins) if plugin.get('tag') == 'sequence_main'))
+    placed = []
+    for index, plugin in enumerate(plugins):
+        if index == insertion:
+            placed.extend(additions)
+        if plugin.get('tag') not in removable:
+            placed.append(plugin)
+    return placed, groups
+
+
 def resource_downloads(document, settings, config, base_url=''):
     """Download descriptors for actual provider references, without core validation."""
     referenced = {relative_resource(path) for path in resource_references(document)}
@@ -477,31 +511,7 @@ def apply_routing(document, settings, config, changes, base_url=''):
                     _references(values['custom_matches'], group['tag']) or
                     any(_references(plugin, group['tag']) for plugin in result['plugins']
                         if plugin.get('tag') not in ('sequence_main', 'rules_reload', group['tag']))}
-        occupied = set(_plugins(result))
-        retained, additions = set(), []
-        groups = {'domain': [], 'ip': []}
-        for part, entries in expected.items():
-            for group in entries:
-                kind = 'domain_set' if part == 'domain' else 'ip_set'
-                previous = next((candidate for candidate in old if candidate['tag'] not in retained and
-                                 candidate['provider']['type'] == kind and _same(candidate['args'], group['args'])), None)
-                if previous:
-                    tag = previous['tag']
-                    retained.add(tag)
-                else:
-                    tag = _new_name(group['tag'], occupied)
-                    additions.append({'tag': tag, 'type': kind, 'args': deepcopy(group['args'])})
-                groups[part].append({**deepcopy(group), 'tag': tag})
-        removable = {group['tag'] for group in old} - retained - external
-        insertion = min((index for index, plugin in enumerate(result['plugins']) if plugin.get('tag') in removable),
-                        default=next(i for i, plugin in enumerate(result['plugins']) if plugin.get('tag') == 'sequence_main'))
-        plugins = []
-        for index, plugin in enumerate(result['plugins']):
-            if index == insertion:
-                plugins.extend(additions)
-            if plugin.get('tag') not in removable:
-                plugins.append(plugin)
-        result['plugins'] = plugins
+        result['plugins'], groups = place_routing_groups(result['plugins'], old, expected, external)
         for key in SELECTORS:
             previous = result_settings.get(key)
             result_settings[key] = deepcopy(previous) if isinstance(previous, list) else []
