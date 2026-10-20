@@ -417,3 +417,13 @@ def test_resume_flush_keeps_exempt_hosts_and_tolerates_expired_flows():
     assert 'dst-port=53 and !dstnat and dst-address!=10.0.0.2 and src-address!=10.0.0.2 and src-address!=10.0.0.4]' in script
     assert '10.0.0.48' not in script  # networks cannot be matched by a plain address comparison
     assert ':do {/ip firewall connection remove $c} on-error={}' in script
+
+
+def test_resume_flush_keeps_hosts_merged_by_collapsing():
+    # OxiDNS 192.168.0.2 and mihomo 192.168.0.3 collapse into 192.168.0.2/31.
+    spec = {'agent': '192.168.0.2', 'interface': 'lan4', 'network': '192.168.0.0/24', 'block_dot': False,
+            'failover': True, 'bypass': ['192.168.0.2/31', '192.168.0.8/30', '192.168.0.64/26']}
+    script = next(item for item in dns_guard.resources(spec) if item['role'] == 'netwatch')['values']['up-script']
+    for host in ('192.168.0.2', '192.168.0.3', '192.168.0.8', '192.168.0.11'):
+        assert f'src-address!={host} ' in script or f'src-address!={host}]' in script
+    assert '192.168.0.64' not in script
