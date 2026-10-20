@@ -20,11 +20,12 @@
         </Select>
       </template>
       <template #actions>
-        <div class="flex w-full flex-wrap items-center justify-between gap-2">
-          <label class="flex min-h-11 items-center gap-2 text-[13px] text-muted-foreground">
+        <div class="flex w-full flex-wrap items-center gap-2 max-sm:gap-1">
+          <label class="mr-auto flex min-h-11 items-center gap-2 text-[13px] text-muted-foreground">
             <Switch v-model="autoRefresh" aria-label="每 10 秒自动刷新监控" />自动刷新 · 10 秒
           </label>
-          <div class="ml-auto flex shrink-0 items-center gap-2 max-sm:gap-1">
+          <OxiDNSRuleUpdate :agent-id="agentId" size="default" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
+          <div class="flex shrink-0 items-center gap-2 max-sm:gap-1">
             <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" aria-label="刷新监控" title="刷新监控" :aria-busy="overviewLoading || queriesLoading || devicesLoading" :disabled="overviewLoading || queriesLoading || devicesLoading" @click="refreshAll">
               <RefreshCw class="size-4" :class="{ 'animate-spin': overviewLoading || queriesLoading || devicesLoading }" /><span class="max-sm:sr-only">刷新</span>
             </Button>
@@ -34,7 +35,6 @@
           </div>
         </div>
         <p v-if="openingSettings" role="status" class="m-0 w-full text-xs text-primary-accent sm:hidden">正在打开设置…</p>
-        <OxiDNSRuleUpdate :agent-id="agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
       </template>
     </PageHeader>
     <p v-if="settingsError" role="alert" class="mb-4 break-words text-sm text-destructive-accent">{{ settingsError }}</p>
