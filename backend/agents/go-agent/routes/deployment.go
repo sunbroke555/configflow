@@ -137,6 +137,18 @@ func acquireServiceOperation(cfg *Config, updating bool) (func(), error) {
 	}
 	return func() { unix.Flock(fd, unix.LOCK_UN); unix.Close(fd) }, nil
 }
+
+// waitServiceOperation retries only lock contention. Brief holders such as the
+// DNS watchdog tick on the same schedule as other periodic work and must not
+// make it fail every round.
+func waitServiceOperation(cfg *Config, updating bool, wait time.Duration) (func(), error) {
+	release, err := acquireServiceOperation(cfg, updating)
+	for deadline := time.Now().Add(wait); err == errDeploymentBusy && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+		release, err = acquireServiceOperation(cfg, updating)
+	}
+	return release, err
+}
 func durableWrite(name string, data []byte, mode os.FileMode) error {
 	if err := durableMkdirAll(filepath.Dir(name), 0700); err != nil {
 		return err

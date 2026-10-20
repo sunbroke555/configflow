@@ -21,6 +21,7 @@ _MESSAGES = {
     'unsupported Agent architecture': '当前设备的处理器架构不支持在线更新。',
     'another Agent update or service operation is active': '已有 Agent 更新或服务操作正在执行，请等待完成后再试。',
     'another service operation is in progress': '已有服务操作正在执行，请等待完成后再试。',
+    'an OxiDNS rule update is in progress': 'OxiDNS 正在更新规则，通常约 1 分钟，完成后再更新 Agent。',
     'Agent update requires completion or recovery': '上次 Agent 更新尚未结束，请先查询结果或完成恢复。',
     'previous Agent update requires completion or recovery': '上次 Agent 更新尚未结束，请先查询结果或完成恢复。',
     'valid update ID, target version, SHA-256 and bounded size are required': '更新请求缺少有效的任务编号、版本或文件校验信息，请刷新页面后重试。',

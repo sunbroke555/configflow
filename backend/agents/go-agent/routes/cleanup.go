@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+var cleanupLockWait = 5 * time.Second
 
 // CleanupDisk only discards reproducible payloads of terminal transactions.
 // Keep journals, manifests and backups for diagnosis; never touch live data.
 func CleanupDisk(cfg *Config) error {
-	release, err := AcquireServiceOperation(cfg)
+	// The cleanup ticker starts with the DNS watchdog and every round lines up
+	// with a watchdog tick; wait out that brief hold instead of skipping.
+	release, err := waitServiceOperation(cfg, false, cleanupLockWait)
 	if err != nil {
 		return err
 	}
