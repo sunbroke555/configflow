@@ -117,6 +117,31 @@ def sanitize_external_payload(
     return _sanitize_with_secrets(payload, _external_payload_secrets(system_config))
 
 
+def redact_secrets_in_text(text: str) -> str:
+    """Hide credentials inside multi-line text such as Agent logs.
+
+    The response hook replaces any string containing a credential as a whole,
+    which blanks an entire log for one rule download URL. Replace only the
+    credential and its URL-encoded forms; a line that still decodes to one is
+    hidden on its own.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    secrets = _external_payload_secrets()
+    if not _contains_encoded_secret(text, secrets):
+        return text
+    ordered = sorted(secrets, key=len, reverse=True)
+    lines = []
+    for line in text.splitlines(keepends=True):
+        for secret in ordered:
+            for variant in {secret, urllib.parse.quote(secret, safe=""), urllib.parse.quote_plus(secret)}:
+                line = line.replace(variant, _REDACTED)
+        if _contains_encoded_secret(line, secrets):
+            line = _REDACTED + ("\n" if line.endswith("\n") else "")
+        lines.append(line)
+    return "".join(lines)
+
+
 def _sanitize_with_secrets(payload, secrets, *, sort_dict_keys=False):
     """Sanitize with one request-local credential snapshot."""
 
