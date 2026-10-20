@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-10-20T20:13:52",
+  "plan": {
+    "blockers": [],
+    "checks": {
+      "gateway": "192.0.2.1",
+      "nat_bypass": [],
+      "nat_not_required": [
+        {
+          "cidr": "1.0.0.254/32",
+          "gateway": "192.0.2.1"
+        },
+        {
+          "cidr": "198.18.0.0/16",
+          "gateway": "192.0.2.1"
+        }
+      ],
+      "removed_routes": [],
+      "routes": [
+        {
+          "cidr": "1.0.0.254/32",
+          "gateway": "192.0.2.1"
+        },
+        {
+          "cidr": "198.18.0.0/16",
+          "gateway": "192.0.2.1"
+        }
+      ]
+    },
+    "empty": false,
+    "fingerprint": "48c1c54881d74b09",
+    "script": "",
+    "stages": [
+      {
+        "enabled": false,
+        "key": "return_routing",
+        "manual": false,
+        "note": "未启用自动配置回流：本次跳过，已有回流规则保留，不新增、修改或删除。",
+        "ops": [],
+        "title": "mihomo 回流规则"
+      },
+      {
+        "key": "routes",
+        "manual": false,
+        "ops": [
+          {
+            "cidr": "1.0.0.254/32",
+            "comment": "cf-P1-08 临时IP规则集",
+            "gateway": "192.0.2.1",
+            "kind": "route_add",
+            "summary": "新增路由 1.0.0.254/32 → 192.0.2.1（备注 cf-P1-08 临时IP规则集）"
+          },
+          {
+            "cidr": "198.18.0.0/16",
+            "comment": "cf-fake-ip",
+            "gateway": "192.0.2.1",
+            "kind": "route_add",
+            "summary": "新增路由 198.18.0.0/16 → 192.0.2.1（备注 cf-fake-ip）"
+          }
+        ],
+        "title": "主路由代理路由"
+      },
+      {
+        "key": "nat_bypass",
+        "manual": false,
+        "ops": [],
+        "title": "主路由 NAT 免转换"
+      },
+      {
+        "enabled": false,
+        "key": "dhcp_dns",
+        "manual": false,
+        "note": "未选择 DHCP DNS 服务器：本次保留现有 DNS 配置。",
+        "ops": [],
+        "title": "DHCP DNS"
+      }
+    ],
+    "warnings": []
+  },
+  "success": true
+}

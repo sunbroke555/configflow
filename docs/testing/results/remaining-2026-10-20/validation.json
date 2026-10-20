@@ -2,9 +2,9 @@
   "kind": "测试记录完整性校验；本次PR仅文档/证据，不代表重跑后续主线产品套件",
   "case_count": 36,
   "counts": {
-    "passed": 34,
+    "passed": 35,
     "failed": 0,
-    "na": 2,
+    "na": 1,
     "running": 0,
     "pending": 0
   },

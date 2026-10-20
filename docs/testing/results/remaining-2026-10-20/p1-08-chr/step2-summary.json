@@ -1,0 +1,8 @@
+{
+  "sync_status": "paused",
+  "message": "规则集在策略规则中已停用，请重新手动预览发布",
+  "source_gets_before": 1,
+  "source_gets_after": 1,
+  "chr_state_unchanged": true,
+  "manual_preview": "仅提示待撤回，没有当成有效IP；未执行确认发布。"
+}

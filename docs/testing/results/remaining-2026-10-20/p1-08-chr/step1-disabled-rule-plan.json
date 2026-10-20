@@ -1,0 +1,69 @@
+{
+  "generated_at": "2026-10-20T20:15:32",
+  "plan": {
+    "blockers": [],
+    "checks": {
+      "gateway": "192.0.2.1",
+      "nat_bypass": [],
+      "nat_not_required": [
+        {
+          "cidr": "198.18.0.0/16",
+          "gateway": "192.0.2.1"
+        }
+      ],
+      "removed_routes": [
+        "*80000002"
+      ],
+      "routes": [
+        {
+          "cidr": "198.18.0.0/16",
+          "gateway": "192.0.2.1"
+        }
+      ]
+    },
+    "empty": false,
+    "fingerprint": "174f6ec8f43dc4d4",
+    "script": "",
+    "stages": [
+      {
+        "enabled": false,
+        "key": "return_routing",
+        "manual": false,
+        "note": "未启用自动配置回流：本次跳过，已有回流规则保留，不新增、修改或删除。",
+        "ops": [],
+        "title": "mihomo 回流规则"
+      },
+      {
+        "key": "routes",
+        "manual": false,
+        "ops": [
+          {
+            "cidr": "1.0.0.254/32",
+            "id": "*80000002",
+            "kind": "route_delete",
+            "summary": "删除不再需要的受管路由 1.0.0.254/32 → 192.0.2.1"
+          }
+        ],
+        "title": "主路由代理路由"
+      },
+      {
+        "key": "nat_bypass",
+        "manual": false,
+        "ops": [],
+        "title": "主路由 NAT 免转换"
+      },
+      {
+        "enabled": false,
+        "key": "dhcp_dns",
+        "manual": false,
+        "note": "未选择 DHCP DNS 服务器：本次保留现有 DNS 配置。",
+        "ops": [],
+        "title": "DHCP DNS"
+      }
+    ],
+    "warnings": [
+      "规则集「P1-08 临时IP规则集」：规则集在策略规则中已停用，未计入；取消对应路由选择后可预览撤回"
+    ]
+  },
+  "success": true
+}

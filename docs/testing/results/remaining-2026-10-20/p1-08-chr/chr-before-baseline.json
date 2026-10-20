@@ -1,0 +1,60 @@
+{
+  "/system/identity": {
+    "name": "cf-p108-6293x56k"
+  },
+  "/ip/route": [
+    {
+      ".id": "*80000001",
+      "active": "true",
+      "comment": "manual-p108-sentinel",
+      "distance": "1",
+      "dst-address": "1.0.0.252/32",
+      "dynamic": "false",
+      "gateway": "192.0.2.1",
+      "immediate-gw": "192.0.2.1%ether1",
+      "inactive": "false",
+      "routing-table": "main",
+      "scope": "30",
+      "static": "true",
+      "target-scope": "10"
+    },
+    {
+      ".id": "*20183020",
+      "active": "true",
+      "connect": "true",
+      "distance": "0",
+      "dst-address": "192.0.2.0/30",
+      "dynamic": "true",
+      "gateway": "ether1",
+      "immediate-gw": "ether1",
+      "inactive": "false",
+      "local-address": "192.0.2.2%ether1",
+      "routing-table": "main",
+      "scope": "10",
+      "target-scope": "5"
+    }
+  ],
+  "/ip/firewall/address-list": [
+    {
+      ".id": "*1",
+      "address": "9.9.9.254",
+      "comment": "manual-p108-sentinel",
+      "creation-time": "2026-10-20 12:13:52",
+      "disabled": "false",
+      "dynamic": "false",
+      "list": "manual-p108-do-not-touch"
+    }
+  ],
+  "/ip/firewall/nat": [],
+  "/routing/table": [
+    {
+      ".id": "*0",
+      "dynamic": "true",
+      "fib": "",
+      "invalid": "false",
+      "name": "main"
+    }
+  ],
+  "/ip/firewall/mangle": [],
+  "/routing/rule": []
+}

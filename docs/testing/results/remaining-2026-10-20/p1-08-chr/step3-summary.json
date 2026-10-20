@@ -1,0 +1,7 @@
+{
+  "status": "paused",
+  "message": "共享规则库条目已停用，请重新手动预览发布",
+  "source_requests_unchanged": true,
+  "chr_state_unchanged": true,
+  "note": "恢复空间规则并正式重建基准后，真实自动刷新曾新增/删除各1条；再停用共享来源，两条入口均识别来源失效。"
+}

@@ -12,12 +12,21 @@
     "upstreamMainObserved": "2d8eb67",
     "upstreamMainFullRetest": false,
     "publicEvidence": "results/remaining-2026-10-20/summary.json",
-    "evidencePullRequest": "https://github.com/thsrite/configflow/pull/284"
+    "evidencePullRequest": "https://github.com/thsrite/configflow/pull/284",
+    "P1-08": {
+      "sourceCommit": "3f38649",
+      "routerOS": "7.23.8 long-term CHR",
+      "stepsPassed": 5,
+      "VM109Deleted": true,
+      "mode": "静态IP路由选择；下一跳仅用元数据夹具，不测代理转发；立即同步触发同一后台任务，未等待15分钟自然定时触发",
+      "productionWrites": false,
+      "extraAutomationPassed": 50
+    }
   },
   "counts": {
-    "passed": 34,
+    "passed": 35,
     "failed": 0,
-    "na": 2,
+    "na": 1,
     "running": 0,
     "pending": 0
   },
@@ -77,16 +86,16 @@
       "evidence_description": "results/remaining-2026-10-20/p1-06-current-evidence.json、draft-space-blocked-pending.png、draft-b-after-late-response.png"
     },
     "P1-08": {
-      "status": "na",
+      "status": "passed",
       "steps": [
-        false,
-        false,
-        false,
-        false,
-        false
+        true,
+        true,
+        true,
+        true,
+        true
       ],
-      "notes": "本项需要可任意修改、与家庭上网隔离的真实RouterOS/CHR，先成功发布再测试停用与撤回。用户暂时没有这类环境，因此保留未测，不用Debian LXC或占位记录冒充通过。另项公网诊断虽按授权读取生产主路由包头和状态，但没有对其发布/撤回规则，不能替代本项。",
-      "evidence_description": "缺隔离RouterOS/CHR；生产主路由仅用于另项获授权的只读诊断，不用于本项规则测试。"
+      "notes": "做了什么：在PVE新建独立CHR 7.23.8（VM109），只连私有网桥；使用独立ConfigFlow 3f38649和本地可控HTTP规则，先经网页正式发布建立真实RouterOS同步基准，再完整执行五步。\n结果：1.停用空间规则，预览明确已停用、未计入，只列待撤回项；2.立即同步触发同一自动任务后暂停，零规则下载、设备配置不变；3.停用共享来源也得到同样保护；4.重新启用并正式发布后恢复已同步，新旧IP正确替换，有效来源真实自动刷新曾新增/删除各1条；5.来源保持停用，网页取消选择并确认撤回，只删除对应受管IP路由，手工路由和自定义地址列表逐字段保留。空选择时明确无可同步规则，拒绝启动任务，零下载、无路由复活。\n恢复：VM109、LVM磁盘、备用qcow2、私有网桥、临时目录、SSH隧道、测试App/HTTP源和两端下载镜像均已删除；原PVE虚拟机PID、默认路由保持，未改主路由或线上服务。\n范围：本项实测静态IP路由选择分支；代理下一跳是明确标注的元数据夹具，未用它冒充代理流量测试。“立即同步”触发生产代码的同一同步任务，未等待15分钟定时器自然触发。相关来源激活/同步回归另有50项通过；没有把模拟RouterOS结果替代本次真实CHR结果。",
+      "evidence_description": "results/remaining-2026-10-20/p1-08-chr/summary.json、step1-disabled-rule-preview.png、step2-disabled-rule-sync-paused.png、step3-library-disabled-sync-paused.png、step4-reenabled-publish-success.png、step5-withdraw-success.png、cleanup-remote.json"
     },
     "P1-10": {
       "status": "na",
@@ -177,20 +186,19 @@
     }
   },
   "limitations": [
-    "P1-08缺可任意修改且与家庭上网隔离的真实RouterOS/CHR；未用生产主路由代测。",
     "P1-10的Mihomo六步已实际验证；Surge/Loon客户端第7步因无环境未测。",
     "公网超时在原网关对照同样复现；预期包在物理WAN接收观察点未见，仍无法唯一归因NIC/offload、光猫或更外部链路。需可控公网端点或WAN外侧镜像。",
     "本轮冻结3f38649产品源码与1.8.34-go实际二进制，未宣称后续合并#281–283已完成本轮全套验收。",
     "六处清单预期按现版明确流程修订，原步骤、原判定和修订原因完整留存于checklistPlanHistory。"
   ],
-  "cleanup": "本轮临时App/协议夹具14811/14812/14813/14825/14831/14832/14833、独占HTTP80、额外Mihomo/Agent单位与目录、测试流量及新增后台Agent已清理。自建手机排序空间已删除，default导出前后完全一致。.35原四服务PID及两核心配置摘要保持，.36四服务正常、网关正式撤销、7个系统参数与原网络恢复。路由器sniffer32字段完整恢复且停止，PVE/路由器无网络配置变更。本机仅保留主隔离14810与手测报告38743；本地私有证据保留。",
+  "cleanup": "本轮临时App/协议夹具14811/14812/14813/14825/14831/14832/14833、独占HTTP80、额外Mihomo/Agent单位与目录、测试流量及新增后台Agent已清理。自建手机排序空间已删除，default导出前后完全一致。.35原四服务PID及两核心配置摘要保持，.36四服务正常、网关正式撤销、7个系统参数与原网络恢复。路由器sniffer32字段完整恢复且停止，PVE/路由器无网络配置变更。本机仅保留主隔离14810与手测报告38743；本地私有证据保留。 P1-08另建CHR VM109及私有网桥已完成真实测试并删除；详见p1-08-chr/cleanup-remote.json、cleanup-local.json。",
   "plan_history": "checklist-plan-history.json",
   "public_evidence_policy": "只提交脱敏摘要、可公开测试配置摘录和不含安装命令的截图。原始包头、设备公网地址、私有manifest/登录凭据、安装能力URL及原始配置备份均保留本地。单项JSON中未列入artifact-index的原始交叉引用属于私有/既有证据，不表示一并公开。",
   "current_checklist_cases": "checklist-current-cases.json",
   "environment": {
     "appBuild": "952fc97（原清单）→3f38649（四修复及本轮补测）",
     "agentBuild": "3f38649；实际二进制SHA256 90725b66601116d0539b036fc64fab27490223bd242ae7d437628f48cd8592e4",
-    "testSpace": "产品写入/发布只用独立临时实例与.35/.36隔离LXC；公网诊断另外只读PVE/主路由包头与状态",
+    "testSpace": "产品写入/发布只用独立临时实例与.35/.36隔离LXC；公网诊断另外只读PVE/主路由包头与状态；P1-08使用PVE独立CHR私有网桥，测试后已删除",
     "testAgent": ".35：Mihomo + OxiDNS；.36：Mihomo + OxiDNS（专用 LXC）",
     "deployment": "主程序：Mac 冻结源码与独立临时数据；设备：.35 Debian 13.1 / .36 Debian 12 LXC",
     "testDate": "2026-10-20",
@@ -198,5 +206,5 @@
     "agentVersion": "1.8.34-go",
     "browser": "Codex内置浏览器；实测375×812手机与1280×900桌面，浅/深主题和真实键盘操作"
   },
-  "cumulative_result_note": "34项为两轮累计结果；本轮补测固定3f38649，其余沿用原清单现场记录，不声称所有36项都在本轮重新执行。"
+  "cumulative_result_note": "35项为累计结果；本次新增P1-08真实隔离CHR手测，其余沿用前轮已记录的现场结果。补测固定3f38649，不声称所有36项都在同一轮重新执行。"
 }

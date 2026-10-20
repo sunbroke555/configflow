@@ -129,8 +129,8 @@
       "sha256": "65d5b5dc8f35fe2edf0ecd5ea0b42451063b6f8cd339112e7296da7e5a1fe145"
     },
     "final-checklist-summary.png": {
-      "bytes": 59186,
-      "sha256": "95ae1e090a17e142373b509b13805c50ecf2d777820f72b614c2ff0cd51569d3"
+      "bytes": 100449,
+      "sha256": "5e27c92a75d3ab9691a025a5317a8fb051232eaaff9e61dfe68e5d86fe8a4bd9"
     },
     "gateway-auto-valid.png": {
       "bytes": 46064,
@@ -317,8 +317,8 @@
       "sha256": "aefa88bc79e5e4d3831903db3f07dfe63e4a9927f39c6a89db115990eed82cfc"
     },
     "summary.json": {
-      "bytes": 16452,
-      "sha256": "c0763b7088a8d749da20468bfb2f4e5731ca793e1ffc9665a5192946cc866b36"
+      "bytes": 18125,
+      "sha256": "a5c1696e2f44fdf0f351fadce07624aacfc9f48b5eded2660b5e82e6d84bcde0"
     },
     "url-published.json": {
       "bytes": 6369,
@@ -326,11 +326,16 @@
     },
     "validation.json": {
       "bytes": 559,
-      "sha256": "d2d1b5017f06f562df51840fa65fec528c27d6d736ce537955dd749c4244d728"
+      "sha256": "075388161ce6a3f9dc25a264d76dd697402702edf147eb9149f0757a12fa4a8c"
     }
   },
   "known_sensitive_values_scanned": 15,
   "credential_patterns_checked": true,
   "screenshots": "排除安装命令页面；公开图片经实际页面观察，展示测试配置与结果。",
-  "raw_private_evidence_included": false
+  "raw_private_evidence_included": false,
+  "supplementary_directories": {
+    "p1-08-chr/artifact-index.json": {
+      "sha256": "757b4e9a818af5977633bd5fc4d90d8d0e89cdac82ded778009b631e8d08ee30"
+    }
+  }
 }

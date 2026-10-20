@@ -1,0 +1,27 @@
+{
+  "post_http": 409,
+  "post_response": {
+    "message": "请开启自动同步，并先手动预览发布一次",
+    "success": false
+  },
+  "get_response": {
+    "settings": {
+      "auto_rule_sync": true,
+      "rule_sync_interval": 15
+    },
+    "success": true,
+    "sync": {
+      "added": 0,
+      "checked_at": "2026-10-20T12:20:14+00:00",
+      "enabled": true,
+      "log": [],
+      "message": "本次发布未建立自动同步基准：没有选择需要同步的 IP 规则集",
+      "ready": false,
+      "removed": 0,
+      "rules": [],
+      "status": "waiting",
+      "synced_at": null,
+      "updated_at": null
+    }
+  }
+}

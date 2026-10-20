@@ -1,0 +1,41 @@
+{
+  "settings": {
+    "auto_rule_sync": true,
+    "rule_sync_interval": 15
+  },
+  "success": true,
+  "sync": {
+    "added": 1,
+    "checked_at": "2026-10-20T12:17:22+00:00",
+    "enabled": true,
+    "log": [
+      {
+        "status": "ok",
+        "summary": "新增 1.0.0.253/32"
+      },
+      {
+        "status": "ok",
+        "summary": "删除 1.0.0.254/32"
+      }
+    ],
+    "message": "远程规则已核对，ROS 已同步",
+    "ready": true,
+    "removed": 1,
+    "rules": [
+      {
+        "domain_count": 0,
+        "id": "p108-rule-6293x56k",
+        "ignored_count": 0,
+        "invalid_count": 0,
+        "ip_count": 1,
+        "name": "P1-08 临时IP规则集",
+        "source_type": "url",
+        "synced_version": "dd28e43782a7",
+        "version": "dd28e43782a7"
+      }
+    ],
+    "status": "synced",
+    "synced_at": "2026-10-20T12:17:23+00:00",
+    "updated_at": "2026-10-20T12:17:22+00:00"
+  }
+}

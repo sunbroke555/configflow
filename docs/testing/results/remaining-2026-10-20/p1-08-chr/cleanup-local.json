@@ -1,0 +1,28 @@
+{
+  "stopped": [
+    {
+      "resource": "app",
+      "pid": 48770
+    },
+    {
+      "resource": "source",
+      "pid": 49085
+    },
+    {
+      "resource": "tunnel",
+      "pid": 48994
+    }
+  ],
+  "ports_closed": {
+    "14840": true,
+    "14842": true,
+    "14841": true
+  },
+  "private_workspace_removed": true,
+  "downloaded_mac_image_deleted": true,
+  "existing_main_and_report_kept": {
+    "14810": true,
+    "38743": true
+  },
+  "scope": "仅本次P1-08资源；本地脱敏与私有诊断证据保留。"
+}

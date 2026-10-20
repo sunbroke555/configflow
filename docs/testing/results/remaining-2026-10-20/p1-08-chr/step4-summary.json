@@ -1,0 +1,7 @@
+{
+  "status": "synced",
+  "current_rule_ip": "1.0.0.251/32",
+  "old_ip_absent": true,
+  "custom_route_preserved": true,
+  "operations": "网页启用共享来源后预览不再有停用警告；确认发布完成并重建基准；立即检查可正常同步。"
+}

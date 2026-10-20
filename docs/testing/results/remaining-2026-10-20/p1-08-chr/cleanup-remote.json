@@ -1,0 +1,48 @@
+{
+  "vmid": 109,
+  "name": "cf-p108-6293x56k",
+  "vm_deleted": true,
+  "lvm_disk_deleted": true,
+  "unused_qcow2_deleted": true,
+  "bridge_deleted": true,
+  "bridge_members_before_delete": [],
+  "downloaded_images_deleted": true,
+  "remote_directory_deleted": true,
+  "original_vm_pids_unchanged": true,
+  "original_vm_pids": {
+    "100": "1739",
+    "101": "1483309",
+    "102": "0",
+    "106": "0",
+    "107": "2151",
+    "1001": "0"
+  },
+  "default_route_unchanged": true,
+  "test_route_absent": true,
+  "bridge_names": [
+    "vmbr0",
+    "vmbr1",
+    "fwbr112i0"
+  ],
+  "routes": [
+    {
+      "dst": "default",
+      "gateway": "192.168.0.1",
+      "dev": "vmbr0",
+      "protocol": "kernel",
+      "flags": [
+        "onlink"
+      ]
+    },
+    {
+      "dst": "192.168.0.0/24",
+      "dev": "vmbr0",
+      "protocol": "kernel",
+      "scope": "link",
+      "prefsrc": "192.168.0.6",
+      "flags": []
+    }
+  ],
+  "existing_production_vm_or_container_changed": false,
+  "production_router_contacted_for_writes": false
+}

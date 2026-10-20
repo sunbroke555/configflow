@@ -1,0 +1,35 @@
+{
+  "/system/identity": {
+    "name": "cf-p108-6293x56k"
+  },
+  "/ip/route": [
+    {
+      ".id": "*20183020",
+      "active": "true",
+      "connect": "true",
+      "distance": "0",
+      "dst-address": "192.0.2.0/30",
+      "dynamic": "true",
+      "gateway": "ether1",
+      "immediate-gw": "ether1",
+      "inactive": "false",
+      "local-address": "192.0.2.2%ether1",
+      "routing-table": "main",
+      "scope": "10",
+      "target-scope": "5"
+    }
+  ],
+  "/ip/firewall/address-list": [],
+  "/ip/firewall/nat": [],
+  "/routing/table": [
+    {
+      ".id": "*0",
+      "dynamic": "true",
+      "fib": "",
+      "invalid": "false",
+      "name": "main"
+    }
+  ],
+  "/ip/firewall/mangle": [],
+  "/routing/rule": []
+}

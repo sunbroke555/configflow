@@ -1,0 +1,20 @@
+{
+  "operation": "来源保持停用；网页明确取消静态路由选择、保存、预览并确认撤回；再检查空选择自动同步保护。",
+  "managed_test_ips_removed": true,
+  "fake_ip_retained": true,
+  "manual_route_unchanged": true,
+  "custom_address_list_unchanged": true,
+  "library_still_disabled": true,
+  "selection_empty": true,
+  "no_selection_sync_status": "waiting",
+  "no_selection_sync_ready": false,
+  "no_selection_sync_post_http": 409,
+  "no_selection_sync_message": "本次发布未建立自动同步基准：没有选择需要同步的 IP 规则集",
+  "source_downloads_after_withdraw": 0,
+  "chr_state_unchanged_after_check": true,
+  "routes": [
+    "1.0.0.252/32",
+    "192.0.2.0/30",
+    "198.18.0.0/16"
+  ]
+}

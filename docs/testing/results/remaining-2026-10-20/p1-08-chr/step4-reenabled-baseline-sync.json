@@ -1,0 +1,32 @@
+{
+  "settings": {
+    "auto_rule_sync": true,
+    "rule_sync_interval": 15
+  },
+  "success": true,
+  "sync": {
+    "added": 0,
+    "checked_at": null,
+    "enabled": true,
+    "log": [],
+    "message": "已建立成功发布的同步基准",
+    "ready": true,
+    "removed": 0,
+    "rules": [
+      {
+        "domain_count": 0,
+        "id": "p108-rule-6293x56k",
+        "ignored_count": 0,
+        "invalid_count": 0,
+        "ip_count": 1,
+        "name": "P1-08 临时IP规则集",
+        "source_type": "url",
+        "synced_version": "c742239b7af9",
+        "version": "c742239b7af9"
+      }
+    ],
+    "status": "synced",
+    "synced_at": "2026-10-20T12:18:53+00:00",
+    "updated_at": "2026-10-20T12:18:53+00:00"
+  }
+}

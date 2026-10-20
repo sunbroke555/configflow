@@ -1,0 +1,55 @@
+{
+  "case": "P1-08",
+  "status": "passed",
+  "sourceCommit": "3f38649",
+  "routerOS": "7.23.8 (long-term) CHR",
+  "steps": [
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "notes": "做了什么：在PVE新建独立CHR 7.23.8（VM109），只连私有网桥；使用独立ConfigFlow 3f38649和本地可控HTTP规则，先经网页正式发布建立真实RouterOS同步基准，再完整执行五步。\n结果：1.停用空间规则，预览明确已停用、未计入，只列待撤回项；2.立即同步触发同一自动任务后暂停，零规则下载、设备配置不变；3.停用共享来源也得到同样保护；4.重新启用并正式发布后恢复已同步，新旧IP正确替换，有效来源真实自动刷新曾新增/删除各1条；5.来源保持停用，网页取消选择并确认撤回，只删除对应受管IP路由，手工路由和自定义地址列表逐字段保留。空选择时明确无可同步规则，拒绝启动任务，零下载、无路由复活。\n恢复：VM109、LVM磁盘、备用qcow2、私有网桥、临时目录、SSH隧道、测试App/HTTP源和两端下载镜像均已删除；原PVE虚拟机PID、默认路由保持，未改主路由或线上服务。\n范围：本项实测静态IP路由选择分支；代理下一跳是明确标注的元数据夹具，未用它冒充代理流量测试。“立即同步”触发生产代码的同一同步任务，未等待15分钟定时器自然触发。相关来源激活/同步回归另有50项通过；没有把模拟RouterOS结果替代本次真实CHR结果。",
+  "test_environment": {
+    "vmid": 109,
+    "vcpu": 1,
+    "memory_mib": 512,
+    "disk_mib": 128,
+    "bridge": "cfp108br",
+    "bridge_only_member": "tap109i0",
+    "family_bridge_connected": false,
+    "CHR_default_route": false,
+    "RouterOS_REST": "经SSH隧道到私有VM，真实Driver读写回读；没有替换/模拟RouterOS响应",
+    "next_hop": "192.0.2.1；明确标注的元数据夹具，只供路由目标；不宣称运行实际代理服务",
+    "source": "本机可控HTTP测试规则，实际下载",
+    "scheduler": "网页立即同步触发同一后台任务；未等待15分钟自然定时触发"
+  },
+  "automated_regression": {
+    "command": "python -m pytest backend/test_router_source_activation.py backend/test_router_rule_sync.py -q --disable-warnings",
+    "passed": 50,
+    "elapsed_seconds": 0.73,
+    "sourceCommit": "3f38649",
+    "scope": "来源激活判断与同步自动化；与真实CHR手测证据分列"
+  },
+  "cleanup": {
+    "VM_and_disks_deleted": true,
+    "bridge_deleted": true,
+    "downloaded_images_both_hosts_deleted": true,
+    "local_processes_and_workspace_removed": true,
+    "original_PVE_VM_pids_and_default_route_unchanged": true,
+    "production_router_writes": false,
+    "production_deployment": false
+  },
+  "evidence": [
+    "baseline-plan.json",
+    "baseline-sync.json",
+    "step1-disabled-rule-plan.json",
+    "step2-summary.json",
+    "step3-summary.json",
+    "step4-summary.json",
+    "step5-summary.json",
+    "cleanup-remote.json",
+    "cleanup-local.json"
+  ]
+}

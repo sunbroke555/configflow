@@ -1,0 +1,8 @@
+{
+  "status": "synced",
+  "added": 1,
+  "removed": 1,
+  "old_ip_absent": true,
+  "new_ip_present": true,
+  "sentinel_preserved": true
+}

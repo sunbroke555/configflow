@@ -1,0 +1,11 @@
+{
+  "plan_blockers": [],
+  "plan_warnings": [
+    "规则集「P1-08 临时IP规则集」：规则集在策略规则中已停用，未计入；取消对应路由选择后可预览撤回"
+  ],
+  "test_ip_excluded": true,
+  "router_state_unchanged": true,
+  "source_gets_before_sync": 1,
+  "operation": "网页停用策略规则，仅看预览不确认发布；远程HTTP夹具改成.253，等待自动同步检查。",
+  "manual_semantics": "静态路由预览以明确警告展示待撤回项，不把它当有效来源；不声称确认按钮禁用。"
+}
