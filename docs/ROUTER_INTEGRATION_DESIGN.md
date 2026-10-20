@@ -203,7 +203,7 @@ RouterOS 行同时提供“策略路由”入口：`GET /api/routers/<id>/policy
 | srcnat 回包（UDP / TCP） | 源为局域网网段、目的为 OxiDNS:53、出口为同一接口的 masquerade，追加在 NAT 末尾 |
 | dstnat 劫持（UDP / TCP） | 入口接口上、来源不在放行列表、目的不是 OxiDNS 且不是路由器本机的 53 端口查询 dst-nat 到 OxiDNS:53，放在 NAT 列表最前 |
 | filter 853（可选） | TCP reject（tcp-reset）、UDP drop，放在 filter 列表最前 |
-| Netwatch（默认开启） | 每 10 秒检测 OxiDNS 的 TCP 53，故障时停用、恢复时启用备注为 `cf-dnsguard:hijack` 的规则；不修改路由器自身 DNS |
+| Netwatch（默认开启） | 每 10 秒检测 OxiDNS 的 TCP 53（超时 2 秒，开机后 30 秒开始检测）。持续 15 秒无应答才停用、恢复时立即启用备注为 `cf-dnsguard:hijack` 的规则；切换时清除仍走旧路径的 53 端口连接；不修改路由器自身 DNS |
 
 回包规则不依赖 `connection-nat-state`（部分 7.x 的 NAT 不支持）。因正常客户端在同一网段直达 OxiDNS、不经过路由器，该规则只会匹配被劫持的查询。
 
@@ -213,7 +213,9 @@ RouterOS 行同时提供“策略路由”入口：`GET /api/routers/<id>/policy
 
 **报告**：`dns_guard` 段给出状态（未开启 / 已同步 / 待更新 / 待确认）、每个对象的作用与状态，以及被 Netwatch 暂停的劫持规则；路由器上其他 53 端口 dst-nat / redirect 规则以警告列出，不自动删除。
 
-已知限制：RouterOS 先处理 mangle 再做 dstnat，若写死的 DNS 地址恰在来源策略路由的目的网段内，这类查询会按策略送往 mihomo 并由其应答。
+**故障切换细节**：RouterOS 的连接跟踪会让同一源端口的后续查询沿用首次的 NAT 决定（UDP 流最长约 3 分钟）。暂停时删除被转给 OxiDNS 的 53 端口连接，恢复时删除暂停期间直连其他 DNS 的连接（放行列表中的单个地址除外），使固定源端口的客户端立即改走新路径；删除约 1 秒后生效，恰在途中的查询可能需要客户端重试一次。Netwatch 自带的 `startup-delay` 默认 5 分钟，这里改为 30 秒，缩短路由器与 OxiDNS 同时重启时的无 DNS 时间。
+
+已知限制：Netwatch 只检测 TCP 53 能否连接，OxiDNS 仍在运行但解析异常（如上游失效）时不会暂停劫持。RouterOS 先处理 mangle 再做 dstnat，若写死的 DNS 地址恰在来源策略路由的目的网段内，这类查询会按策略送往 mihomo 并由其应答。
 
 ## 5. mihomo Agent 回流规则
 
