@@ -345,6 +345,7 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
     if not isinstance(native_config, str):
         raise OxidnsSettingsError('native_config 必须为 YAML 文本')
     current = prepare_editor(settings, config, base_url)
+    original_settings = deepcopy(current)
     before = load_native_yaml(current['native_config'])
     candidate = load_native_yaml(native_config)
     old, proposed = _plugins(before), _plugins(candidate)
@@ -501,6 +502,11 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
     current, candidate = _stop_removed_cache_dump(current, old, candidate, config, base_url, notices)
     current, candidate = _stop_empty_hosts(current, old, candidate, config, base_url, notices)
 
+    from backend.common.oxidns_common_updates import reconcile_native_withdrawals
+    pruned, withdrawal_changed = reconcile_native_withdrawals(before, candidate, original_settings, current, config)
+    if pruned:
+        notices.append(f'已清理 {pruned} 条不再被引用的受管规则下载；自定义和共享资源已保留')
+
     # This also protects deletion of custom executors. We do not repair arbitrary
     # native chains, but point to their exact remaining references in the form.
     if removed:
@@ -508,7 +514,7 @@ def apply_native_settings(settings, native_config, config, base_url='', renames=
         if refs:
             original_refs = reference_locations(_mask_owned(original_candidate, targets), removed)
             raise OxidnsReferenceError('删除后仍有插件引用，请在完整参数中调整', original_refs or refs)
-    if changes or renames or additions:
+    if changes or renames or additions or withdrawal_changed:
         current['native_config'] = yaml.safe_dump(candidate, allow_unicode=True, sort_keys=False)
     projection = read_common_settings(current, config, base_url)
     return {'settings': current, **projection, 'notices': notices}
