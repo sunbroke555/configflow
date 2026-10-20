@@ -79,7 +79,8 @@
           </SectionCard>
         </template>
         <TabsContent value="overview"><OxiDNSOverviewPanel v-if="overview" :overview="overview" :qps="qps" :recorder="recorder" :resetting="resettingStatistics"
-          @recorder="selectRecorder" /></TabsContent>
+          :agent-id="agentId" :device-name="currentDevice?.name || agentId" :cache-disabled="switchingDevice || currentDevice?.status !== 'online'"
+          @recorder="selectRecorder" @cache-flushed="id => { if (id === agentId) refresh(true) }" /></TabsContent>
         <TabsContent value="queries">
           <SectionCard v-if="overview && !overview.recorders.length">
             <EmptyState :icon="Search" title="尚未启用查询记录" description="打开此 Agent 所属配置空间的查询记录设置，启用并保存草稿后，发布到此 Agent 生效。">

@@ -57,15 +57,18 @@
       </div>
     </SectionCard>
 
-    <SectionCard title="缓存统计" :help="periodLabel + '。命中包含新鲜与过期缓存，命中率按缓存查找次数计算；条目数为当前值。'" :padded="false">
-      <template v-if="overview.caches.length > 1" #actions>
-        <Select v-model="selectedCache">
-          <SelectTrigger class="min-h-11 w-[160px] max-w-full sm:w-[180px]" aria-label="选择缓存实例"><SelectValue /></SelectTrigger>
+    <SectionCard title="缓存统计" :help="periodLabel + '。命中包含新鲜与过期缓存，命中率按缓存查找次数计算；条目数为当前值。'" :padded="false"
+      :actions-class="overview.caches.length > 1 ? 'max-sm:ml-0 max-sm:w-full max-sm:flex-nowrap' : undefined">
+      <template v-if="overview.caches.length" #actions>
+        <Select v-if="overview.caches.length > 1" v-model="selectedCache">
+          <SelectTrigger class="min-h-11 w-[160px] max-w-full max-sm:w-auto max-sm:min-w-0 max-sm:flex-1 sm:w-[180px]" aria-label="选择缓存实例"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="__all__">全部缓存</SelectItem>
             <SelectItem v-for="cache in overview.caches" :key="cache.tag" :value="'cache:' + cache.tag">{{ cache.tag }}</SelectItem>
           </SelectContent>
         </Select>
+        <OxiDNSCacheFlush v-if="agentId" :agent-id="agentId" :device-name="deviceName || agentId" :target="selectedTag"
+          :disabled="cacheDisabled" @flushed="emit('cacheFlushed', $event)" />
       </template>
       <EmptyState v-if="!overview.caches.length" title="暂无缓存统计" description="当前核心没有返回缓存实例的统计数据。" />
       <div v-else class="cf-table-wrap" tabindex="0" role="region" aria-label="缓存实例统计">
@@ -114,9 +117,13 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import OxiDNSMetric from './OxiDNSMetric.vue'
 import OxiDNSRankingTable from './OxiDNSRankingTable.vue'
+import OxiDNSCacheFlush from './OxiDNSCacheFlush.vue'
 import { formatMonitorNumber, monitorNumber, type OxiDNSOverview, type OxiDNSRankings } from '@/types/oxidnsMonitor'
-const props = defineProps<{ overview: OxiDNSOverview; qps: number | null; recorder?: string; resetting?: boolean }>()
-defineEmits<{ recorder: [value: string] }>()
+const props = defineProps<{
+  overview: OxiDNSOverview; qps: number | null; recorder?: string; resetting?: boolean
+  agentId?: string; deviceName?: string; cacheDisabled?: boolean
+}>()
+const emit = defineEmits<{ recorder: [value: string]; cacheFlushed: [agentId: string] }>()
 const periodLabel = computed(() => props.overview.statistics ? '自本轮统计开始以来' : '自核心启动以来')
 const rankings = computed<OxiDNSRankings | null>(() => props.overview.rankings && 'success' in props.overview.rankings && props.overview.rankings.success === true ? props.overview.rankings : null)
 const rankingSampleDescription = computed(() => {

@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.35-go"
+LATEST_AGENT_VERSION = "1.8.36-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.36-go": {
+        "date": "2026-10-20",
+        "features": [
+            "OxiDNS 面板支持清理 DNS 缓存，按已部署配置中的缓存插件类型识别实例，改名后的缓存同样可用",
+            "只清理本机配置中存在的缓存实例，发布、重启或恢复期间不执行清理，部分失败时报告已完成的实例"
+        ]
+    },
     "1.8.35-go": {
         "date": "2026-10-20",
         "features": [

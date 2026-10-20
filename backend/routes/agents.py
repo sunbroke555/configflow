@@ -1719,6 +1719,41 @@ def update_oxidns_rules(agent_id):
     return response, status
 
 
+@bp.route('/<agent_id>/oxidns/cache', methods=['GET'])
+@bp.route('/<agent_id>/oxidns/cache/flush', methods=['POST'])
+@require_auth
+def oxidns_cache(agent_id):
+    from backend.agents import oxidns_cache as caches
+    from backend.agents.oxidns_monitor import MonitorError
+
+    try:
+        # The browser names only cache tags of this one Agent; the Agent
+        # rechecks them against its own deployed configuration.
+        if request.args or (request.content_length or 0) > 16 * 1024:
+            raise caches._fail('INVALID_REQUEST', 400)
+        raw = request.stream.read(16 * 1024 + 1)
+        tags = None
+        if request.method == 'GET':
+            if raw:
+                raise caches._fail('INVALID_REQUEST', 400)
+        else:
+            try:
+                body = json.loads(raw) if request.is_json and len(raw) <= 16 * 1024 else None
+            except (ValueError, UnicodeError, RecursionError):
+                body = None
+            if not isinstance(body, dict) or set(body) != {'tags'} or not caches.valid_request_tags(body['tags']):
+                raise caches._fail('INVALID_REQUEST', 400)
+            tags = body['tags']
+        data, status = caches.call(get_agent_manager(), agent_id, request.method, tags), 200
+    except MonitorError as exc:
+        data, status = {'success': False, 'code': exc.code, 'message': exc.message}, exc.status
+        if hasattr(exc, 'flushed'):
+            data['flushed'] = exc.flushed
+    response = jsonify(data)
+    response.headers['Cache-Control'] = 'no-store'
+    return response, status
+
+
 @bp.route('/<agent_id>/oxidns/dashboard/reset', methods=['POST'])
 @require_auth
 def reset_oxidns_dashboard(agent_id):

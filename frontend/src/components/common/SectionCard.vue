@@ -20,7 +20,7 @@
           {{ description }}
         </p>
       </div>
-      <div v-if="$slots.actions" class="cf-section-actions flex min-w-0 max-w-full flex-wrap items-center gap-2">
+      <div v-if="$slots.actions" :class="cn('cf-section-actions flex min-w-0 max-w-full flex-wrap items-center gap-2', actionsClass)">
         <slot name="actions" />
       </div>
     </header>
@@ -45,6 +45,8 @@ const props = withDefaults(
     icon?: Component
     /** 内容自带内边距时（例如整块是表格）传 false */
     padded?: boolean
+    /** 操作区的额外布局类，例如手机上让筛选与操作独占一行 */
+    actionsClass?: string
     interactive?: boolean
   }>(),
   { padded: true, interactive: false }
