@@ -6,6 +6,7 @@ from flask import jsonify, request
 
 from backend.common.auth import require_auth
 from backend.common.config import get_config, get_repository, reset_config_context, save_config
+from backend.routers import dns_guard
 from backend.routers.base import RouterConflictError, RouterError, as_dict
 from backend.routers.desired import compute_desired
 from backend.routers.dhcp_dns import dns_agent_settings
@@ -19,7 +20,7 @@ from backend.routers.route_editor import (
 )
 from backend.routers.routeros import RouterOSDriver
 from backend.routers.store import (
-    RouterValidationError, find_router, normalize, public_view, routers_of, static_rule_sets,
+    RouterValidationError, find_router, guard_settings, normalize, public_view, routers_of, static_rule_sets,
 )
 from backend.routes import routers_bp
 from backend.utils.logger import get_logger, log_text
@@ -126,6 +127,8 @@ def update_or_delete_router(router_id):
         if request.method == 'DELETE':
             if existing.get('ros_policy_state'):
                 return jsonify(success=False, message='请先清空策略路由选择并发布撤回，再删除路由器记录'), 409
+            if existing.get('dns_guard_state'):
+                return jsonify(success=False, message='请先关闭强制 DNS 并发布撤销，再删除路由器记录'), 409
             get_repository().save_router_settings(profile_id, existing, None)
             reset_config_context()
             logger.info('已删除主路由记录 %s', _label(existing))
@@ -182,7 +185,13 @@ def _inspect(config, router, driver, content_loader=None):
     desired.update(dns_agent_settings(dns_id, _agent(dns_id) if dns_id else None))
     if router['type'] == 'routeros' and (policy_sets or router.get('ros_policy_state')):
         driver.ros_policy_manifest = router.get('ros_policy_state')
+    guard = dns_guard.relevant(router)
+    if guard:
+        driver.dns_guard_manifest = router.get('dns_guard_state')
     state = driver.read_state()
+    if guard:
+        desired['dns_guard'] = {'settings': guard_settings(router), 'previous': router.get('dns_guard_state')}
+        state.dns_guard = dns_guard.snapshot(driver)
     if router['type'] == 'routeros' and (policy_sets or router.get('ros_policy_state')):
         from backend.routers.ros_policy import inspect_desired, snapshot, owned_rows, MANGLE, RULES, VRFS, ROUTES
         desired['ros_policy'] = inspect_desired(config, router, desired,
@@ -305,6 +314,8 @@ def router_apply(router_id):
             }}
             if hasattr(driver, 'ros_policy_manifest'):
                 publication['manifest'] = driver.ros_policy_manifest
+            if hasattr(driver, 'dns_guard_manifest'):
+                publication['dns_guard'] = driver.dns_guard_manifest
             get_repository().save_router_publication(resolve_profile_id(), router, **publication)
             reset_config_context()
             if result['ok']:

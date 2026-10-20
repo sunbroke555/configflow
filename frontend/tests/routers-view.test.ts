@@ -897,4 +897,66 @@ describe('route release automatic reload protection', () => {
       await flushPromises()
     }
   })
+
+  it('requires the DHCP DNS Agent before the DNS guard can be enabled', async () => {
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros', dns_agent_id: '' })
+    await wrapper.find('button[aria-label="编辑"]').trigger('click')
+    await flushPromises()
+    const toggle = document.body.querySelector<HTMLButtonElement>('#router-dns-guard')!
+    expect(toggle.disabled).toBe(true)
+    expect(document.body.textContent).toContain('先选择上方的 DHCP DNS 服务器才能开启')
+    expect(document.body.querySelector('#router-dns-guard-bypass')).toBeNull()
+  })
+
+  it('saves the DNS guard with every bypass device the user listed', async () => {
+    vi.mocked(routerApi.update).mockResolvedValue({ data: { success: true } } as any)
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros', dns_agent_id: 'dns1',
+      dns_guard: { enabled: true, block_dot: false, failover: true, bypass: ['192.0.2.50/32'] } })
+    await wrapper.find('button[aria-label="编辑"]').trigger('click')
+    await flushPromises()
+    const bypass = new DOMWrapper(document.body.querySelector<HTMLTextAreaElement>('#router-dns-guard-bypass')!)
+    expect((bypass.element as HTMLTextAreaElement).value).toBe('192.0.2.50/32')
+    await bypass.setValue('192.0.2.50\n192.0.2.64/28, 192.0.2.70')
+    buttonInDocument('保存').click()
+    await flushPromises()
+    expect(routerApi.update).toHaveBeenCalledWith('router_1', expect.objectContaining({ dns_guard: {
+      enabled: true, block_dot: false, failover: true, bypass: ['192.0.2.50', '192.0.2.64/28', '192.0.2.70'] } }))
+  })
+
+  it('turns the guard off when the router is no longer RouterOS', async () => {
+    vi.mocked(routerApi.update).mockResolvedValue({ data: { success: true } } as any)
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros', dns_agent_id: 'dns1',
+      dns_guard: { enabled: true, block_dot: true, failover: true, bypass: [] } })
+    await wrapper.find('button[aria-label="编辑"]').trigger('click')
+    await flushPromises()
+    const component = wrapper.findAllComponents({ name: 'Routers' })[0] ?? wrapper
+    ;(component.vm as any).form.type = 'ikuai'
+    await flushPromises()
+    expect(document.body.querySelector('#router-dns-guard')).toBeNull()
+    buttonInDocument('保存').click()
+    await flushPromises()
+    expect(routerApi.update).toHaveBeenCalledWith('router_1', expect.objectContaining({
+      type: 'ikuai', dns_guard: expect.objectContaining({ enabled: false }) }))
+  })
+
+  it('shows owned DNS guard objects, a Netwatch pause and existing hijack warnings', async () => {
+    vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, generated_at: '2026-10-17T10:00:00', report: {
+      ...REPORT, in_sync: true,
+      dns_guard: { enabled: true, status: 'synced', message: 'OxiDNS 暂时没有应答，Netwatch 已自动暂停劫持；恢复后自动重新启用。',
+        blockers: [], warnings: ['路由器上已有其他 53 端口的 dst-nat / redirect 规则（cf-dns hijack udp）。'],
+        items: [
+          { role: 'bypass:192.0.2.53/32', object: '放行地址', detail: '不劫持 192.0.2.53/32', status: 'synced', paused: false },
+          { role: 'hijack-udp', object: 'NAT', detail: 'UDP 53 端口查询转给 192.0.2.53（入口 bridge）', status: 'synced', paused: true }
+        ] }
+    } } } as any)
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros', dns_agent_id: 'dns1' })
+    await wrapper.findAll('button').find(button => button.text().includes('差异报告'))!.trigger('click')
+    await flushPromises()
+    const card = wrapper.findAllComponents(SectionCard).find(section => section.props('title') === '强制 DNS')!
+    expect(card.findComponent(StatusDot).props()).toMatchObject({ label: '已同步', tone: 'success' })
+    expect(card.text()).toContain('Netwatch 已自动暂停劫持')
+    expect(card.text()).toContain('cf-dns hijack udp')
+    expect(card.findAll('tbody tr')).toHaveLength(2)
+    expect(card.findAll('tbody tr')[1].text()).toContain('已暂停')
+  })
 })

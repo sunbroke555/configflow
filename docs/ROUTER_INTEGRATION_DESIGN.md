@@ -1,6 +1,6 @@
 # ConfigFlow 接入上游软路由（RouterOS / iKuai）
 
-状态：P0 接入与差异报告、P1 分阶段发布及 DHCP DNS 下发、单条静态路由管理、ROS 远程规则增量同步已实现。本文以当前实现为准；未实现的能力列在第 9 节。
+状态：P0 接入与差异报告、P1 分阶段发布及 DHCP DNS 下发、单条静态路由管理、ROS 远程规则增量同步、ROS 强制 DNS（DNS 劫持）已实现。本文以当前实现为准；未实现的能力列在第 9 节。
 
 ## 1. 目标与范围
 
@@ -44,6 +44,12 @@ routers:
       ros_policy_rule_sets: []    # ROS 专用，独立选择策略路由规则集；默认空，与上方互斥
       auto_rule_sync: false      # ROS 远程规则更新后自动同步，默认关闭
       rule_sync_interval: 60     # 分钟，可选 15/30/60/180/360/720/1440
+      dns_guard:                 # ROS 专用，强制局域网 DNS 走 OxiDNS；缺省等同全部关闭
+        enabled: false
+        block_dot: false         # 拦截 853（DoT / DoQ）
+        failover: true           # Netwatch 在 OxiDNS 无应答时暂停劫持
+        bypass: []               # 额外放行的 IPv4 地址或网段
+      dns_guard_state: ...       # 只读，最近一次发布写入的对象 ID 与回读配置
 ```
 
 编辑时密码留空保持不变。前端接口返回 `has_password`，不返回密码；脱敏导出移除密码，并隐藏用户名与管理地址。当前尚未实现独立的 `secret_ref` 凭据模型。
@@ -60,7 +66,7 @@ routers:
 | 回流标记的目的范围（开启时） | 期望代理网段与发布后已有 NAT 免转换目的网段的并集 |
 | 回流下一跳（开启时） | 路由器管理地址中的 IPv4 地址 |
 
-始终需要关联 mihomo Agent 配置，以获取代理路由下一跳和 DHCP 目标网段。自动配置回流关闭时，不读取 mihomo Agent 回流状态，不要求该 Agent 在线，也不要求路由器管理地址本身是 IPv4；路由器接口仍须可连接。开启后，路由器管理地址不是 IPv4、mihomo Agent 离线或无法读取回流状态会阻止发布。关联 OxiDNS 后，DHCP DNS 下发另要求所选 OxiDNS Agent 有效、在线且 host 为 IPv4。`dns_agent_id` 不触发 DNS 劫持或 DHCP 静态绑定写入。
+始终需要关联 mihomo Agent 配置，以获取代理路由下一跳和 DHCP 目标网段。自动配置回流关闭时，不读取 mihomo Agent 回流状态，不要求该 Agent 在线，也不要求路由器管理地址本身是 IPv4；路由器接口仍须可连接。开启后，路由器管理地址不是 IPv4、mihomo Agent 离线或无法读取回流状态会阻止发布。关联 OxiDNS 后，DHCP DNS 下发另要求所选 OxiDNS Agent 有效、在线且 host 为 IPv4。仅选择 `dns_agent_id` 不会触发 DNS 劫持或 DHCP 静态绑定写入；DNS 劫持需在 RouterOS 上另行开启（见 4.6）。
 
 ## 4. 路由器写入
 
@@ -183,6 +189,32 @@ RouterOS 行同时提供“策略路由”入口：`GET /api/routers/<id>/policy
 
 应用内的手工路由写入和自动发布按路由器连接串行执行。写入前还会比较稳定配置快照，写入后回读；失败时仅在最新快照仍可确认属于本次变更时补偿。设备 API 没有条件写入机制，无法彻底消除外部程序在检查后瞬间修改的竞争；身份或最终状态不明时保留现场并报告补偿未完成，不猜测删除或覆盖外部变更。
 
+### 4.6 强制 DNS（RouterOS）
+
+写死公共 DNS 的设备会绕过 DHCP 下发的 OxiDNS。开启「强制局域网 DNS 走 OxiDNS」后，RouterOS 把局域网发往其他地址的 53 端口查询转给 DHCP DNS 所选的 OxiDNS。实现位于 `backend/routers/dns_guard.py`，仅 IPv4，仅 RouterOS。
+
+**前提**：必须已选择 DHCP DNS 的 OxiDNS Agent，并沿用其校验（在线、IPv4 host）；OxiDNS 必须位于路由器唯一的活动直连网段内，入口接口与局域网网段由该直连路由推导；OxiDNS 地址不能落在代理目的网段内。缺任一条件、存在代理路由冲突，或保留名称（地址列表 `cf-dnsguard-bypass`、Netwatch `cf-dnsguard`）已被其他对象占用时阻止发布。
+
+**写入对象**（按顺序创建）：
+
+| 对象 | 内容 |
+|---|---|
+| 放行地址列表 `cf-dnsguard-bypass` | OxiDNS、mihomo 网关及用户填写的放行项 |
+| srcnat 回包（UDP / TCP） | 源为局域网网段、目的为 OxiDNS:53、出口为同一接口的 masquerade，追加在 NAT 末尾 |
+| dstnat 劫持（UDP / TCP） | 入口接口上、来源不在放行列表、目的不是 OxiDNS 且不是路由器本机的 53 端口查询 dst-nat 到 OxiDNS:53，放在 NAT 列表最前 |
+| filter 853（可选） | TCP reject（tcp-reset）、UDP drop，放在 filter 列表最前 |
+| Netwatch（默认开启） | 每 10 秒检测 OxiDNS 的 TCP 53，故障时停用、恢复时启用备注为 `cf-dnsguard:hijack` 的规则；不修改路由器自身 DNS |
+
+回包规则不依赖 `connection-nat-state`（部分 7.x 的 NAT 不支持）。因正常客户端在同一网段直达 OxiDNS、不经过路由器，该规则只会匹配被劫持的查询。
+
+**归属**：对象只通过 `dns_guard_state` 中的设备 ID 与写入后回读的配置识别；`cf-dnsguard:` 备注仅供人工辨认。受管对象被外部修改时保留现场并阻止发布；Netwatch 切换劫持规则的停用状态不算修改。设置变化时先删除旧受管对象，再按顺序创建新对象；删除或创建失败时逆序恢复，被恢复的对象获得新 ID 后清单随之更新。关闭开关后只删除清单中核实过的对象，手工规则保留。
+
+**NAT 判断**：已核实归属的回包规则只转换发往 OxiDNS:53 的查询，判断代理路径是否需要 NAT 免转换时不计入，避免为它额外生成免转换规则；未能核实归属时仍按普通源 NAT 规则保守判断。
+
+**报告**：`dns_guard` 段给出状态（未开启 / 已同步 / 待更新 / 待确认）、每个对象的作用与状态，以及被 Netwatch 暂停的劫持规则；路由器上其他 53 端口 dst-nat / redirect 规则以警告列出，不自动删除。
+
+已知限制：RouterOS 先处理 mangle 再做 dstnat，若写死的 DNS 地址恰在来源策略路由的目的网段内，这类查询会按策略送往 mihomo 并由其应答。
+
 ## 5. mihomo Agent 回流规则
 
 回流规则应用在 **mihomo 主机**，由 Go Agent 管理，不写到 iKuai 或 RouterOS 上。“自动配置回流”适用于需要将回复经主路由返回的网络，默认关闭。
@@ -231,14 +263,15 @@ RouterOS 指纹还包含 NAT 判定依据（路由出口、NAT 条件、策略�
 2. 主路由代理静态路由。
 3. 主路由 NAT 免转换。
 4. DHCP DNS，仅在关联 OxiDNS Agent 时管理。
+5. 强制 DNS（RouterOS），仅在开启或仍有已发布对象需要撤销时出现。
 
-两种路由器的计划都保留四个阶段。回流默认跳过，未关联 OxiDNS 时 DHCP DNS 也跳过；被关闭的阶段带 `enabled: false`、空操作列表和说明 `note`，明确本次不管理且保留原有配置。即使整个计划没有变更，预览仍展示该说明。按上述顺序自动执行已启用且有变更的阶段。
+两种路由器的计划都保留前四个阶段；强制 DNS 阶段只在用到时加入，未使用的路由器计划与报告保持不变。回流默认跳过，未关联 OxiDNS 时 DHCP DNS 也跳过；被关闭的阶段带 `enabled: false`、空操作列表和说明 `note`，明确本次不管理且保留原有配置。即使整个计划没有变更，预览仍展示该说明。按上述顺序自动执行已启用且有变更的阶段。
 
 需撤销旧来源策略或迁移旧聚合路由时，第二阶段内部先准备 LAN 出口限定的静态 NAT，再建立并验证替代静态路径，最后撤销旧资源；这些 NAT 写入与路由操作共用该事务的回滚日志，不等到第三阶段才补保护。阶段完成后仍按统一检查回读最终路由与 NAT 状态。
 
 RouterOS 存在“无需免转换”网段时，即使 NAT 阶段没有写入，也会重新读取出口与源 NAT 条件，确认判断仍成立。开启回流后，即使该阶段没有变更，也会在执行后续路由器操作前重新校验受管配置和安全检查结果。每个有变更的阶段完成后回读校验，通过才继续。失败时停止后续阶段，并尝试按相反顺序撤销已完成操作；回流开启时，NAT 免转换先于回流规则撤销。回流关闭时，不进行回流校验或回滚，也不因缺少回流状态而阻止路由器配置发布。
 
-DHCP DNS 最后应用，若其写入或回读失败，先撤销本次 DNS 变更，再按相反顺序撤销此前已完成的阶段。
+DHCP DNS 在路由器阶段中靠后应用，若其写入或回读失败，先撤销本次 DNS 变更，再按相反顺序撤销此前已完成的阶段。强制 DNS 写入前同样重新确认代理路由与 NAT，被劫持的设备会立即拿到 fake-ip。
 
 ### 6.3 当前回读校验
 
@@ -246,6 +279,7 @@ DHCP DNS 最后应用，若其写入或回读失败，先撤销本次 DNS 变更
 - 路由阶段：RouterOS 期望 CIDR 必须在 `main` 表中有符合有效性与竞争路由判定的受管路由，其他表的同网段路由不能满足校验；iKuai 两条端口分流的源排除、下一跳、协议、优先级与目的网段与计划一致。应删除的路由不再存在。iKuai 另查当前路由表，配置之外指向 mihomo 的内核残留路由记为“需处理”。
 - NAT 阶段：需要显式免转换的期望 CIDR 被启用的受管规则目的网段覆盖；`not_required` 必须根据最新读取的配置再次成立。对本次实际管理的网段，`unknown` 在计划阶段阻止发布；因路由冲突明确跳过的网段不修改其路由或 NAT，并保留已有回流保护。
 - DHCP DNS 阶段：目标网段的 DNS 列表与所选 OxiDNS 地址一致；写入及恢复均保留 DHCP 网关、地址池和租期等其他配置。
+- 强制 DNS 阶段：清单中的对象全部存在、配置与回读一致、角色与计划一致；劫持规则之前没有其他启用的 53 端口 dstnat 规则。
 
 RouterOS 驱动还逐项回读实际写入字段，并检查新 NAT 规则相对于指定规则的位置；扩充时保留的源地址、接口、协议等条件也纳入这层检查。
 
@@ -299,7 +333,7 @@ ROS 回读成功后才更新本次下载的共享缓存。Mihomo/OxiDNS 的订�
 
 | 后续能力 | 说明 |
 |---|---|
-| DNS 劫持 | 需要排除 OxiDNS、mihomo 和路由器自身，避免查询环路 |
+| DNS 劫持的 IPv6 与 iKuai 支持 | RouterOS IPv4 已实现（见 4.6）；IPv6 与 iKuai 尚未覆盖 |
 | DHCP 静态绑定 | DHCP DNS 下发已实现；静态绑定仍需手工维护 |
 | 全量漂移检测与变化通知 | 自动同步只定时核对已登记的 ROS 规则；全量持续监测和主动通知尚未实现 |
 | 代理网关故障切换 | 尚无 `fail_open` / `fail_closed` 配置和自动恢复流程 |
@@ -317,6 +351,7 @@ ROS 回读成功后才更新本次下载的共享缓存。Mihomo/OxiDNS 的订�
 - `backend/routers/desired.py`、`backend/routers/report.py`：期望状态与差异。
 - `backend/routers/plan.py`、`backend/routers/release.py`：计划、分阶段执行、回读与撤销。
 - `backend/routers/store.py`：接入记录和脱敏视图。
+- `backend/routers/dns_guard.py`：RouterOS 强制 DNS 的期望对象、归属、写入与回滚。
 - `frontend/src/views/Routers.vue`：接入、报告和确认发布界面。
 
 ## 旧版无归属回流状态的处理

@@ -1,11 +1,13 @@
 """Profile-scoped router definitions (``profile['routers']['items']``)."""
+import copy
 import secrets
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 ROUTER_TYPES = ('ikuai', 'routeros')
 EDITABLE_FIELDS = ('name', 'type', 'endpoint', 'username', 'verify_tls', 'proxy_gateway_agent_id', 'dns_agent_id',
-                   'ip_rule_sets', 'manage_return_routing', 'ros_policy_rule_sets', 'auto_rule_sync', 'rule_sync_interval')
+                   'ip_rule_sets', 'manage_return_routing', 'ros_policy_rule_sets', 'auto_rule_sync', 'rule_sync_interval',
+                   'dns_guard')
 
 
 class RouterValidationError(ValueError):
@@ -37,8 +39,14 @@ def public_view(router: Dict[str, Any]) -> Dict[str, Any]:
     result['rule_sync_interval'] = router.get('rule_sync_interval', 60)
     result['ros_policy_rule_sets'] = list(router.get('ros_policy_rule_sets') or [])
     result['ip_rule_sets'] = static_rule_sets(router)
+    result['dns_guard'] = guard_settings(router)
     result['has_password'] = bool(router.get('password'))
     return result
+
+
+def guard_settings(router: Dict[str, Any]) -> Dict[str, Any]:
+    from backend.routers.dns_guard import DEFAULTS
+    return copy.deepcopy({**DEFAULTS, **(router.get('dns_guard') or {})})
 
 
 def normalize(payload: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -90,6 +98,15 @@ def normalize(payload: Dict[str, Any], existing: Optional[Dict[str, Any]] = None
     router['ros_policy_rule_sets'] = list(dict.fromkeys(policy_sets))
     if existing and existing.get('ros_policy_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
         raise RouterValidationError('请先清空策略路由选择并发布撤销，再修改路由器类型或管理地址')
+    from backend.routers.dns_guard import SettingsError, normalize_settings
+    try:
+        guard = normalize_settings(router.get('dns_guard'), router['type'], router['dns_agent_id'])
+    except SettingsError as error:
+        raise RouterValidationError(str(error)) from None
+    if guard['enabled'] or 'dns_guard' in router:
+        router['dns_guard'] = guard
+    if existing and existing.get('dns_guard_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
+        raise RouterValidationError('请先关闭强制 DNS 并发布撤销，再修改路由器类型或管理地址')
 
     if not router['name']:
         raise RouterValidationError('请填写名称')
@@ -114,7 +131,7 @@ def redact_routers(routers: Any) -> Any:
     for item in routers.get('items') or []:
         if isinstance(item, dict):
             clean = {key: value for key, value in item.items()
-                     if key not in ('password', 'last_probe', 'last_release', 'ros_policy_state')}
+                     if key not in ('password', 'last_probe', 'last_release', 'ros_policy_state', 'dns_guard_state')}
             if clean.get('username'):
                 clean['username'] = '[REDACTED]'
             if clean.get('endpoint'):

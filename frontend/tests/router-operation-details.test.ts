@@ -53,4 +53,21 @@ describe('reviewable release operation details', () => {
     await w.setProps({ op: { kind: 'route_add', summary: '新预览', cidr: '198.51.100.0/24', gateway: '192.0.2.4' } })
     expect(w.findAll('dd')).toHaveLength(0); expect(w.text()).toContain('新预览')
   })
+
+  it('lists DNS guard objects in creation order and only previously owned objects for removal', () => {
+    const create = [
+      { role: 'hairpin-udp', path: '/ip/firewall/nat', values: { chain: 'srcnat', action: 'masquerade', 'dst-address': '192.0.2.53' } },
+      { role: 'hijack-udp', path: '/ip/firewall/nat', top: true, values: { chain: 'dstnat', 'to-addresses': '192.0.2.53' } }
+    ]
+    const owned = [{ role: 'bypass:192.0.2.53/32', path: address, id: '*1', config: { list: 'cf-dnsguard-bypass' } },
+      { role: 'netwatch', path: '/tool/netwatch', id: '*2', config: { host: '192.0.2.53', port: '53' } }]
+    const groups = operationDetails({ kind: 'dns_guard_replace', summary: '更新', spec: {}, create, owned })
+    expect(groups.find(g => g.title === '新建对象')!.rows.map(row => row.label)).toEqual(['NAT · hairpin-udp', 'NAT · hijack-udp'])
+    expect(groups.find(g => g.title === '新建对象')!.rows[1].value).toContain('转发到地址 · to-addresses: 192.0.2.53')
+    expect(groups.find(g => g.title === '删除旧受管对象')!.rows.map(row => row.label)).toEqual(['Netwatch · netwatch', '放行地址 · bypass:192.0.2.53/32'])
+    const withdrawal = operationDetails({ kind: 'dns_guard_replace', summary: '撤销', spec: null, create: [], owned })
+    expect(withdrawal.map(g => g.title)).toEqual(['删除旧受管对象'])
+    expect(withdrawal[0].note).toContain('关闭强制 DNS')
+  })
 })
+

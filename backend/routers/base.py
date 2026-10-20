@@ -241,6 +241,9 @@ class RouterState:
     active_routes: Optional[List[RouteEntry]] = None
     ros_policy: Optional[Dict[str, Any]] = None
     ros_policy_plan: Optional[Dict[str, Any]] = None
+    # RouterOS DNS guard: live rows by REST path, and the plan built from them.
+    dns_guard: Optional[Dict[str, Any]] = None
+    dns_guard_plan: Optional[Dict[str, Any]] = None
 
 
 class RouterDriver:

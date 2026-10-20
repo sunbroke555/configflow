@@ -36,10 +36,14 @@ def controls(config, router):
     from backend.routes.routers import _agent
     from backend.routers.desired import fake_ip_network
     sources = selected_sources(config, router)
+    fields = ['id', 'type', 'endpoint', 'username', 'password', 'verify_tls', 'proxy_gateway_agent_id',
+              'dns_agent_id', 'manage_return_routing', 'ip_rule_sets', 'ros_policy_rule_sets']
+    if (router.get('dns_guard') or {}).get('enabled') is True:
+        # Added only while enabled, so existing baselines keep their digest. The
+        # guard's manifest changes only through a manual release, not settings.
+        fields.append('dns_guard')
     return digest({
-        'router': {key: router.get(key) for key in ('id', 'type', 'endpoint', 'username', 'password',
-                    'verify_tls', 'proxy_gateway_agent_id', 'dns_agent_id', 'manage_return_routing',
-                    'ip_rule_sets', 'ros_policy_rule_sets')},
+        'router': {key: router.get(key) for key in fields},
         'agents': [{key: (agent or {}).get(key) for key in ('id', 'host', 'service_type', 'profile_id')}
                    for agent in (_agent(router.get('proxy_gateway_agent_id')), _agent(router.get('dns_agent_id')))],
         'sources': {rule_id: {'item': {key: item.get(key) for key in

@@ -172,6 +172,8 @@ BUILTIN_POLICIES = {'DIRECT', 'REJECT'}
 RULE_SOURCE_FIELDS = ('name', 'url', 'behavior', 'content', 'source_type', 'format')
 ROUTER_IDENTITY_FIELDS = ('type', 'endpoint')
 ROUTER_CONNECTION_FIELDS = (*ROUTER_IDENTITY_FIELDS, 'username', 'password', 'verify_tls')
+# Device ownership receipts; only a publication under the router's lock may change them.
+ROUTER_MANIFEST_FIELDS = ('ros_policy_state', 'dns_guard_state')
 
 def _items_by_id(items, label):
     if not isinstance(items, list):
@@ -628,17 +630,19 @@ class ProfileRepository:
                 old.get(field) != new.get(field) for field in ROUTER_CONNECTION_FIELDS)
             identity_changed = new is None or any(
                 old.get(field) != new.get(field) for field in ROUTER_IDENTITY_FIELDS)
-            manifest_changed = new is None or old.get('ros_policy_state') != new.get('ros_policy_state')
+            manifest_changed = new is None or any(
+                old.get(field) != new.get(field) for field in ROUTER_MANIFEST_FIELDS)
             # Credentials may have expired on the same device. Keep its exact
             # ownership receipt while allowing access to be repaired; every
             # connection change still takes the publication lock below.
-            if old.get('ros_policy_state') and (
-                    identity_changed or (manifest_changed and key != policy_router)):
-                profile_id, router_id = key
-                raise ProfileInUse('路由器仍有已发布的策略路由；请先发布并核对撤回，再修改类型、地址或删除发布记录',
-                                   [{'kind': 'router', 'id': router_id, 'name': old.get('name', router_id),
-                                     'profile_id': profile_id,
-                                     'profile_name': previous['profiles'][profile_id]['name']}])
+            for field, label in (('ros_policy_state', '策略路由'), ('dns_guard_state', '强制 DNS 规则')):
+                field_changed = new is None or old.get(field) != new.get(field)
+                if old.get(field) and (identity_changed or (field_changed and key != policy_router)):
+                    profile_id, router_id = key
+                    raise ProfileInUse(f'路由器仍有已发布的{label}；请先发布并核对撤回，再修改类型、地址或删除发布记录',
+                                       [{'kind': 'router', 'id': router_id, 'name': old.get('name', router_id),
+                                         'profile_id': profile_id,
+                                         'profile_name': previous['profiles'][profile_id]['name']}])
             if connection_changed or manifest_changed:
                 changed[key] = old
         # Never wait for a job while holding the document lock: a publisher may
@@ -921,7 +925,8 @@ class ProfileRepository:
             profile['_revision'] += 1
             profile['updated_at'] = _now()
 
-    def save_router_publication(self, profile_id, expected_router, *, manifest=_MISSING, last_release=_MISSING):
+    def save_router_publication(self, profile_id, expected_router, *, manifest=_MISSING, dns_guard=_MISSING,
+                                last_release=_MISSING):
         """Persist verified readback/rollback under the caller's held job_lock.
 
         This is the only existing-record write allowed to replace or clear an
@@ -936,11 +941,13 @@ class ProfileRepository:
             if current is None or any(current.get(field) != expected_router.get(field)
                                       for field in ROUTER_CONNECTION_FIELDS):
                 raise ProfileInUse('路由器连接已变化，无法保存发布回读记录')
-            if manifest is not _MISSING:
-                if manifest:
-                    current['ros_policy_state'] = copy.deepcopy(manifest)
+            for field, value in (('ros_policy_state', manifest), ('dns_guard_state', dns_guard)):
+                if value is _MISSING:
+                    continue
+                if value:
+                    current[field] = copy.deepcopy(value)
                 else:
-                    current.pop('ros_policy_state', None)
+                    current.pop(field, None)
             if last_release is not _MISSING:
                 current['last_release'] = copy.deepcopy(last_release)
             profile['_revision'] += 1

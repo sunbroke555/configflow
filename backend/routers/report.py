@@ -190,4 +190,13 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
         if policy['ops'] and not policy['items']:
             summary['pending'] = summary.get('pending', 0) + 1
         result['in_sync'] = in_sync and not policy['ops'] and not policy['blockers']
+    if 'dns_guard' in desired:
+        from backend.routers.dns_guard import build as build_guard, report as guard_report
+        state.dns_guard_plan = build_guard(desired, state)
+        guard = result['dns_guard'] = guard_report(state.dns_guard_plan)
+        if guard['status'] != 'disabled':
+            summary[guard['status']] = summary.get(guard['status'], 0) + 1
+        result['in_sync'] = (result['in_sync'] and guard['status'] in {'disabled', 'synced'}
+                             and not guard['blockers'] and not state.dns_guard_plan['ops'])
+    result['desired'].pop('dns_guard', None)
     return result

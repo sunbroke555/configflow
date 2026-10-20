@@ -7,6 +7,8 @@ Stages run in this order (see docs/ROUTER_INTEGRATION_DESIGN.md §6.2):
 2. ``routes``         - router static routes for proxy CIDRs to the gateway.
 3. ``nat_bypass``     - exempt proxy CIDRs from source NAT so mihomo sees client IPs.
 4. ``dhcp_dns``       - optionally replace DNS in the gateway's DHCP network.
+5. ``dns_guard``      - RouterOS only, opt-in: send hard-coded LAN DNS to OxiDNS.
+                       Present only while enabled or while objects remain owned.
 
 Manual objects that already do the right thing are adopted (re-commented with the
 managed prefix), never recreated. Conflicting routes are skipped and reported.
@@ -35,6 +37,7 @@ STAGE_TITLES = {
     'routes': '主路由代理路由',
     'nat_bypass': '主路由 NAT 免转换',
     'dhcp_dns': 'DHCP DNS',
+    'dns_guard': 'DNS 劫持',
 }
 
 
@@ -393,6 +396,14 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                 'safety_version': RETURN_SAFETY_VERSION}
         return_ops = _return_op(return_routing, spec)
 
+    guard = state.dns_guard_plan
+    guard_ops = []
+    if guard is not None:
+        blockers.extend(guard['blockers'])
+        warnings.extend(guard['warnings'])
+        guard_ops = guard['ops']
+        if skipped and guard['spec']:
+            blockers.append('存在代理路由冲突，请先处理冲突再启用强制 DNS，避免被劫持的设备拿到 fake-ip 后无法访问')
     manual = driver is not None and not driver.supports_write
     stages = [
         {'key': 'return_routing', 'title': STAGE_TITLES['return_routing'], 'manual': False, 'ops': return_ops,
@@ -409,6 +420,11 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
          'note': ('仅更新所选 mihomo 网关所在的唯一 DHCP 网段；替换原 DNS 列表，客户端续租或重新连接后生效。'
                   if manage_dns else '未选择 DHCP DNS 服务器：本次保留现有 DNS 配置。')},
     ]
+    if guard is not None:
+        stages.append({
+            'key': 'dns_guard', 'title': STAGE_TITLES['dns_guard'], 'manual': manual, 'ops': guard_ops,
+            'note': ('局域网设备发往其他地址的 53 端口查询转给 OxiDNS；先写放行与回包规则，再启用劫持。'
+                     if guard['spec'] else '已关闭强制 DNS：只删除本功能已核实归属的对象，手工规则保留。')})
     checks = {
         'gateway': gateway,
         'routes': [] if policy else [{'cidr': cidr, 'gateway': gateway} for cidr in proxy_cidrs],
@@ -424,11 +440,13 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         checks['ros_policy'] = ros_policy['check']
     if manage_return:
         checks['return_routing'] = dict(spec)
+    if guard is not None:
+        checks['dns_guard'] = {'roles': guard['roles']}
     if manage_dns and dns['status'] in {'synced', 'pending'}:
         item = dns['items'][0]
         checks['dhcp_dns'] = {'id': item['id'], 'network': item['network'], 'gateway': gateway,
                               'dns': item['desired_dns']}
-    script = driver.render_script(route_ops + nat_ops + dns_ops) if manual else ''
+    script = driver.render_script(route_ops + nat_ops + dns_ops + guard_ops) if manual else ''
     evidence = {'context': state.nat_context, 'address_sets': state.address_sets} if state.nat_context is not None else None
     if ros_policy is not None:
         evidence = {'nat': evidence, 'ros_policy': ros_policy.get('evidence'), 'request': ros_policy.get('request')}

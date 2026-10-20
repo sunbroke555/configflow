@@ -25,6 +25,8 @@ PERMISSION_HELP = (
 )
 ROUTES = '/ip/route'
 NAT = '/ip/firewall/nat'
+FILTER = '/ip/firewall/filter'
+NETWATCH = '/tool/netwatch'
 DHCP_NETWORKS = '/ip/dhcp-server/network'
 DHCP_SERVERS = '/ip/dhcp-server'
 DHCP_LEASES = '/ip/dhcp-server/lease'
@@ -37,7 +39,7 @@ ROUTE_FIELDS = {
     'check-gateway', 'distance', 'scope', 'target-scope', 'vrf-interface',
     'suppress-hw-offload', 'disabled', 'comment',
 }
-NAT_READ_ONLY = {'.id', 'dynamic', 'invalid', 'bytes', 'packets'}
+NAT_READ_ONLY = {'.id', 'dynamic', 'invalid', 'bytes', 'packets', 'creation-time'}
 ROUTE_EVIDENCE_FIELDS = ROUTE_FIELDS | {'.id', 'immediate-gw', 'active', 'inactive', 'connect', 'ecmp', 'invalid'}
 
 
@@ -137,15 +139,22 @@ class RouterOSDriver(RouterDriver):
             state.address_sets.setdefault(str(row.get('list') or ''), []).append(str(row.get('address') or ''))
         routes = self._list(ROUTES)
         nats = self._list(NAT)
+        assessed = nats
+        if getattr(self, 'dns_guard_manifest', None):
+            # Proven DNS guard hairpins only translate queries to OxiDNS:53, never
+            # proxy-path traffic, so source-NAT assessment disregards them.
+            from backend.routers.dns_guard import owned_hairpins
+            hairpins = owned_hairpins(self.dns_guard_manifest, nats)
+            assessed = [row for row in nats if str(row.get('.id')) not in hairpins]
         context = {
             'routes': [{key: value for key, value in row.items() if key in ROUTE_EVIDENCE_FIELDS}
                        for row in routes],
             'rules': [{key: value for key, value in row.items() if key not in {'bytes', 'packets'}}
-                      for row in nats],
+                      for row in assessed],
             'routing_rules': None, 'mangle': None, 'vrfs': None,
             'interface_lists': None, 'interface_members': None,
         }
-        scoped = [row for row in nats if row.get('chain') == 'srcnat' and not _truthy(row.get('disabled'))
+        scoped = [row for row in assessed if row.get('chain') == 'srcnat' and not _truthy(row.get('disabled'))
                   and (row.get('out-interface') or row.get('out-interface-list'))]
         if scoped:
             # Main-table routes alone cannot prove an egress when policy routing
@@ -185,7 +194,7 @@ class RouterOSDriver(RouterDriver):
                 enabled=not _truthy(row.get('disabled')), comment=str(row.get('comment') or ''),
                 table=str(row.get('routing-table') or 'main'), active=active, distance=distance))
         for row in nats:
-            if str(row.get('comment') or '').startswith('cf-ros-policy-'):
+            if str(row.get('comment') or '').startswith(('cf-ros-policy-', 'cf-dnsguard:')):
                 continue
             if row.get('chain') != 'srcnat' or row.get('action') != 'accept':
                 continue
@@ -320,6 +329,10 @@ class RouterOSDriver(RouterDriver):
             return {key: value for key, value in row.items() if key in ROUTE_FIELDS}
         if path == DHCP_NETWORKS:
             return _dhcp_network_attributes(row)
+        if path == NETWATCH:
+            # Probe status, counters and timestamps change on their own.
+            from backend.routers.dns_guard import NETWATCH_FIELDS
+            return {key: row[key] for key in NETWATCH_FIELDS if key in row}
         # Preserve *all* NAT matchers, including negated source lists, interface
         # lists, ports, connection marks and IPsec policy. An allowlist could
         # silently broaden a rule when a firmware adds a new matcher.
@@ -408,7 +421,7 @@ class RouterOSDriver(RouterDriver):
             self._request(method, resource, values)
             return {'path': path, 'id': row_id, 'values': values}
         if method == 'DELETE':
-            if path == NAT:
+            if path in (NAT, FILTER):
                 index = rows.index(row)
                 if index + 1 < len(rows):
                     original['place-before'] = rows[index + 1]['.id']
@@ -466,6 +479,9 @@ class RouterOSDriver(RouterDriver):
         if kind in ('ros_policy_replace', 'ros_policy_restore'):
             from backend.routers import ros_policy_write
             return (ros_policy_write.apply if kind == 'ros_policy_replace' else ros_policy_write.restore)(self, op)
+        if kind in ('dns_guard_replace', 'dns_guard_restore'):
+            from backend.routers import dns_guard
+            return (dns_guard.apply if kind == 'dns_guard_replace' else dns_guard.restore)(self, op)
         if kind == 'ros_restore':
             return self._restore(op['changes'])
         if kind == 'dhcp_dns_update':
