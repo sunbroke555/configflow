@@ -20,7 +20,9 @@ from urllib.parse import urlsplit
 import requests
 import yaml
 
-from backend.agents.deployment_bundle import deployment_content_fingerprint, render_deployment_config
+from backend.agents.deployment_bundle import (
+    deployment_content_digests, deployment_content_fingerprint, render_deployment_config,
+)
 from backend.agents.diagnostics import failure_text
 from backend.agents.operation_events import append_event
 from backend.common.oxidns_editor import prepare_editor
@@ -43,6 +45,11 @@ def _now():
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def settings_digest(config):
+    """Identify the OxiDNS draft a publication was prepared from."""
+    return _digest(config.get('oxidns', {}))
 
 
 @contextmanager
@@ -324,6 +331,33 @@ def _matches_applied_bundle(bundle, config, baseline):
     return deployment_content_fingerprint(manifest) == baseline['fingerprint']
 
 
+UNPUBLISHED_CHANGES = 'OxiDNS 有其他未发布的配置或规则变化，请先手动发布这些修改，再重试联动'
+
+
+def _drift_message(bundle, config, baseline):
+    """Say why a regenerated bundle differs, as far as the baseline can prove.
+
+    Only an unchanged OxiDNS draft rules out the user's own edits. Baselines
+    recorded before per-file digests existed keep the original message.
+    """
+    recorded = baseline.get('files')
+    if (not isinstance(recorded, dict) or not baseline.get('settings_digest')
+            or baseline['settings_digest'] != settings_digest(config)):
+        return UNPUBLISHED_CHANGES
+    current = deployment_content_digests(bundle.manifest)
+    legacy_main = render_deployment_config(_generated_main(config, baseline), 'oxidns', local_dns_watchdog=False)
+    main_changed = recorded.get('config.yaml') not in (current['config.yaml'], hashlib.sha256(legacy_main).hexdigest())
+    rules = sorted(path for path in set(recorded) | set(current)
+                   if path != 'config.yaml' and recorded.get(path) != current.get(path))
+    if not main_changed:
+        example = f'，如 {rules[0]}' if rules else ''
+        return (f'OxiDNS 设置没有修改，但 {len(rules)} 个规则文件与上次发布不同{example}：规则源内容有更新。'
+                '请手动发布一次 OxiDNS；如已开启规则自动同步，等同步完成后重试联动即可')
+    extra = f'，另有 {len(rules)} 个规则文件不同' if rules else ''
+    return (f'OxiDNS 设置没有修改，但生成的主配置与上次发布不同{extra}：通常是 ConfigFlow 更新改变了生成方式，'
+            '或引用的规则集、策略组有变化。请手动发布一次 OxiDNS 建立新的基准，再重试联动')
+
+
 def _check_ownership(manager, agents, target, source, binding, source_id, baseline):
     """Reject stale decisions after Agent calls or resource preparation."""
     current_source = next((item for item in agents if item['id'] == source['id']), None)
@@ -467,7 +501,7 @@ def _run(manager, target, source, binding, source_state):
     _state(manager, target_id, 'preparing', '正在核对 OxiDNS 配置与规则文件是否存在未发布修改')
     prepared = _prepare(target, config, base_url, child_id)
     if not _matches_applied_bundle(prepared['bundle'], config, baseline):
-        raise FollowError('OxiDNS 有其他未发布的配置或规则变化，请先手动发布这些修改，再重试联动')
+        raise FollowError(_drift_message(prepared['bundle'], config, baseline))
     scheme, endpoint = address.split('://', 1)
     _state(manager, target_id, 'preparing', f'正在同步 OxiDNS 上游为 {endpoint}（{scheme.upper()}）', address=address)
     if entry['addr'] == address:

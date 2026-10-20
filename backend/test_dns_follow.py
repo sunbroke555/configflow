@@ -308,6 +308,72 @@ def test_unpublished_target_changes_block_automatic_publication(follow_env):
     assert yaml.safe_load(env.repository.get_profile('default')['oxidns']['native_config']) == document
 
 
+def _regenerated_differently(monkeypatch):
+    """A ConfigFlow update that renders the same draft differently."""
+    from backend.converters import oxidns as converter
+    original = converter.generate_oxidns_config
+
+    def generate(config, **kwargs):
+        document = yaml.safe_load(original(config, **kwargs))
+        document['runtime']['worker_threads'] = 3
+        return yaml.safe_dump(document, sort_keys=False)
+
+    monkeypatch.setattr(converter, 'generate_oxidns_config', generate)
+
+
+def test_generator_change_without_draft_edits_is_explained(follow_env, monkeypatch):
+    env = follow_env
+    env.bind()
+    assert env.agent()['applied_content']['settings_digest']
+    _regenerated_differently(monkeypatch)
+    env.publish_source()
+    state = env.advance('failed')
+    assert env.uploads == []
+    assert 'OxiDNS 设置没有修改' in state['message'] and '主配置' in state['message']
+    assert 'ConfigFlow 更新' in state['message'] and '规则文件' not in state['message']
+
+
+def test_rule_file_drift_without_draft_edits_is_explained(follow_env, monkeypatch):
+    env = follow_env
+    settings = deepcopy(env.repository.get_profile('default')['oxidns'])
+    document = yaml.safe_load(settings['native_config'])
+    document['plugins'].append({'tag': 'domains', 'type': 'domain_set', 'args': {'files': ['rules/domains.txt']}})
+    settings.update(native_config=yaml.safe_dump(document), additional_files=[{
+        'path': 'rules/domains.txt', 'encoding': 'text', 'content': 'full:example.test\n'}])
+    env.repository.save_profile('default', {'oxidns': settings})
+    config, revision = env.repository.get_publish_snapshot('default')
+    prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
+                                               deployment_id='baseline-with-rules')
+    env.manager.publish_deployment(env.target_id, prepared['bundle'], config_revision=revision,
+                                   base_url='https://config.test', resource_config=config)
+    # The device recorded other bytes for the rule file, e.g. before a source refresh.
+    def drift(agents):
+        applied = next(item for item in agents if item['id'] == env.target_id)['applied_content']
+        applied['files']['rules/domains.txt'] = '0' * 64
+        applied['fingerprint'] = 'f' * 64
+    env.manager._update_agents(drift)
+    env.uploads.clear()
+    env.bind()
+    env.publish_source()
+    state = env.advance('failed')
+    assert env.uploads == []
+    assert 'OxiDNS 设置没有修改' in state['message']
+    assert '1 个规则文件' in state['message'] and 'rules/domains.txt' in state['message']
+    assert '主配置' not in state['message']
+
+
+def test_baseline_without_file_digests_keeps_the_original_message(follow_env, monkeypatch):
+    env = follow_env
+    def legacy(agents):
+        next(item for item in agents if item['id'] == env.target_id)['applied_content'].pop('files')
+    env.manager._update_agents(legacy)
+    env.bind()
+    _regenerated_differently(monkeypatch)
+    env.publish_source()
+    state = env.advance('failed')
+    assert state['message'].endswith(dns_follow.UNPUBLISHED_CHANGES)
+
+
 def test_changed_device_baseline_blocks_automatic_publication(follow_env):
     env = follow_env
     env.bind()
