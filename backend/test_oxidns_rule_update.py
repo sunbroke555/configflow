@@ -172,3 +172,28 @@ def test_route_rejects_injected_or_invalid_payloads(authenticated_app, monkeypat
     assert response.status_code == 400
     assert response.get_json()['code'] == 'INVALID_REQUEST'
     assert response.headers['Cache-Control'] == 'no-store'
+
+
+def test_targeted_paths_require_new_agent_and_are_sent_as_a_list(calls):
+    seen, _ = calls
+    with pytest.raises(MonitorError) as error:
+        updates.call(Manager(), 'dns', 'POST', paths=['rules/a.txt'])
+    assert error.value.code == 'UPGRADE_REQUIRED' and seen == []
+    manager = Manager({**AGENT, 'version': '1.8.35-go'})
+    for invalid in ([], 'rules/a.txt', [''], [1]):
+        with pytest.raises(MonitorError):
+            updates.call(manager, 'dns', 'POST', paths=invalid)
+    with pytest.raises(MonitorError):
+        updates.call(manager, 'dns', 'GET', paths=['rules/a.txt'])
+    assert seen == []
+    result, status = updates.call(manager, 'dns', 'POST', paths=['rules/a.txt', 'rules/b.txt'])
+    assert status == 202 and result['task']['status'] == 'running'
+    assert json.loads(seen[0]['data']) == {'paths': ['rules/a.txt', 'rules/b.txt']}
+
+
+def test_unknown_target_is_reported_as_a_conflict(calls):
+    _, replies = calls
+    replies[:] = [(409, {'success': False, 'code': 'RULE_UPDATE_TARGET_UNKNOWN'})]
+    with pytest.raises(MonitorError) as error:
+        updates.call(Manager({**AGENT, 'version': '1.8.35-go'}), 'dns', 'POST', paths=['rules/a.txt'])
+    assert error.value.code == 'RULE_UPDATE_TARGET_UNKNOWN' and error.value.status == 409

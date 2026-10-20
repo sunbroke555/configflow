@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.34-go"
+LATEST_AGENT_VERSION = "1.8.35-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.35-go": {
+        "date": "2026-10-20",
+        "features": [
+            "OxiDNS 规则自动同步只下载并热重载有变化的规则文件，按下载清单定位后逐项调用原生下载接口，只重载引用这些文件的规则集",
+            "手动「更新规则」和原生定时更新仍为全量；旧版 Agent 或无法定位的文件自动改为全量更新"
+        ]
+    },
     "1.8.34-go": {
         "date": "2026-10-20",
         "features": [

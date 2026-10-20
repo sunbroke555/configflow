@@ -500,3 +500,73 @@ def test_adapted_device_dns_is_preserved_without_a_false_pending_badge(monkeypat
     manager = SimpleNamespace(_update_agents=lambda function: function([managed]))
     AgentManager._remember_deployment_content(manager, agent['id'], candidate, 'https://config.test')
     assert state['prepared_content']['fingerprint'] == deployment_content_fingerprint(expected['bundle'].manifest)
+
+
+def remote_sets(service):
+    """Two selected remote rule sets with offline baseline bytes."""
+    base = real_source()
+    base['rule_library'][0].update(source_type='url', url='https://offline.test/a.list')
+    base['rule_library'][0].pop('content')
+    add_set(base)
+    base['rule_library'][1].update(source_type='url', url='https://offline.test/b.list')
+    base['rule_library'][1].pop('content')
+    base['oxidns']['direct_rulesets'].append('set-b')
+    base = project_rule_changes(base, base, {'library': True, 'rules': True}, service_type=service)
+    paths = {}
+    for identity, name in (('set-a', 'A'), ('set-b', 'B')):
+        item = next(entry for entry in base['rule_configs'] if entry['id'] == identity)
+        paths[identity] = (f'ruleset/{name}.list' if service == 'mihomo'
+                           else _rule_path(item, 'domain').removeprefix('./'))
+    payload = (lambda name: f'{name}.test\n'.encode()) if service == 'mihomo' else (
+        lambda name: f'full:{name}.test\n'.encode())
+    pinned = [{'path': paths['set-a'], 'content': payload('live-a'), 'role': 'rule'},
+              {'path': paths['set-b'], 'content': payload('live-b'), 'role': 'rule'}]
+    return base, paths, pinned
+
+
+@pytest.mark.parametrize('service', ['mihomo', 'oxidns'])
+def test_prepare_candidate_library_scope_reuses_unchanged_rule_files(service, monkeypatch):
+    from backend.agents import deployment_bundle
+    from backend.agents.rule_sync import prepare_candidate
+    no_network(monkeypatch)
+    base, paths, pinned = remote_sets(service)
+    agent, receipt = real_baseline(base, service, pinned_files=pinned)
+    fetched = []
+    monkeypatch.setattr(deployment_bundle, '_fetch_bytes', lambda url, _config: fetched.append(url) or b'new-a.test\n')
+    current = deepcopy(base)
+    current['rule_configs'][-1]['value'] = 'new-inline.test'
+    settings = {'library': True, 'rules': True}
+    projected = project_rule_changes(base, current, settings, service_type=service)
+    candidate = prepare_candidate(agent, projected, receipt, settings, 'structure-only')
+    files, original = read_bundle_files(candidate), read_bundle_files(receipt['bundle'])
+    assert fetched == []
+    assert all(files[path] == original[path] for path in paths.values())
+    assert 'new-inline.test' in str(unpack_document(candidate))
+
+    # Only the edited source is downloaded again; the other keeps live bytes.
+    current['rule_library'][0]['url'] = 'https://offline.test/new-a.list'
+    projected = project_rule_changes(base, current, settings, service_type=service)
+    candidate = prepare_candidate(agent, projected, receipt, settings, 'one-source')
+    files = read_bundle_files(candidate)
+    assert fetched == ['https://offline.test/new-a.list']
+    assert files[paths['set-b']] == original[paths['set-b']]
+    assert b'new-a.test' in files[paths['set-a']][0]
+
+
+def test_rule_source_fingerprint_follows_local_callbacks_without_fetching():
+    from backend.agents.rule_sync_projection import rule_source_fingerprint, unchanged_rule_paths
+    base = fixture()
+    current = deepcopy(base)
+    current['rule_library'][0]['content'] = 'new.test'
+    local = 'https://config.test/api/profiles/home/rule-library/content/lib-a'
+    proxy = 'https://config.test/api/profiles/home/mosdns/rule-proxy?url=%2Fapi%2Fprofiles%2Fhome%2Frule-library%2Fcontent%2Flib-a&part=domain'
+    for url in (local, proxy, '/api/profiles/home/rules/local/A'):
+        before = rule_source_fingerprint(url, base, 'https://config.test')
+        assert before is not None and before != rule_source_fingerprint(url, current, 'https://config.test')
+    assert rule_source_fingerprint('https://rules.test/a.list', base, '') == ['url', 'https://rules.test/a.list']
+    assert rule_source_fingerprint('https://config.test/api/profiles/home/linux-gateway/rules/x', base, '') is None
+    entries = [{'url': local, 'local_path': './ruleset/A.list'},
+               {'url': 'https://rules.test/b.list', 'local_path': './ruleset/B.list'}]
+    assert unchanged_rule_paths(entries, entries, base, current, 'https://config.test') == {'ruleset/B.list'}
+    moved = [{**entries[1], 'url': 'https://rules.test/moved.list'}]
+    assert unchanged_rule_paths(entries, moved, base, base, 'https://config.test') == set()

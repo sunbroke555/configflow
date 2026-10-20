@@ -826,3 +826,76 @@ def test_scheduler_rotates_devices_while_one_worker_remains_pending(sync_env, mo
         thread_targets[0]()
     assert submitted.count(identities[0]) == 1
     assert set(submitted) == set(identities)
+
+
+def test_content_refresh_updates_only_changed_mihomo_providers(sync_env, monkeypatch):
+    repository, manager, agent, source, _ = sync_env
+    from backend.agents import mihomo_panel
+    document = {'mode': 'rule', 'rule-providers': {
+        name: {'type': 'http', 'behavior': 'domain', 'format': 'text', 'path': f'./ruleset/{name}.list',
+               'url': f'https://config.test/api/profiles/default/rule-library/content/{identity}'}
+        for name, identity in (('selected', 'lib-a'), ('other', 'lib-unused'))},
+        'rules': ['RULE-SET,selected,DIRECT', 'RULE-SET,other,DIRECT', 'MATCH,DIRECT']}
+    bundle = build_deployment_bundle(agent, source, yaml.safe_dump(document), deployment_id='two-providers',
+                                     base_url='https://config.test')
+    agent, _ = enroll(manager, agent, source, bundle)
+    calls = []
+    monkeypatch.setattr(mihomo_panel, 'call', lambda *args: calls.append(args) or {'success': True})
+    edit_library(repository, 'new.test')
+    worker, now = worker_for(manager)
+    worker.run(agent['id'])
+    tick(worker, now, agent['id'])
+    assert [entry[4] for entry in calls] == [{'name': 'selected'}]
+    assert rule_sync.status(manager, agent['id'])['state']['status'] == 'succeeded'
+
+
+def targeted_oxidns(sync_env, version):
+    repository, manager, agent, source, bundle = as_oxidns(sync_env)
+    repository.update_system_transaction(lambda system: system.setdefault('system_config', {}).update(
+        rule_proxy_token='proxy-token'))
+    source, _ = repository.get_publish_snapshot('default')
+    agent = update_agent(manager, agent['id'], version=version)
+    agent, bundle = enroll(manager, agent, source, artifact(agent, source, 'ox-targeted'))
+    return repository, manager, agent
+
+
+def test_native_content_refresh_sends_only_changed_files_to_new_agents(sync_env, monkeypatch):
+    repository, manager, agent = targeted_oxidns(sync_env, '1.8.35-go')
+    from backend.agents import oxidns_rule_update
+    from backend.converters.oxidns import _rule_path
+    calls, responses = [], [native_task('idle'), native_task(), native_task('succeeded')]
+    def call(_target, _identity, method, paths=None):
+        calls.append((method, paths))
+        return responses.pop(0), 202 if method == 'POST' else 200
+    monkeypatch.setattr(oxidns_rule_update, 'call', call)
+    edit_library(repository)
+    worker, now = worker_for(manager)
+    worker.run(agent['id'])
+    tick(worker, now, agent['id'])
+    expected = _rule_path({'id': 'set-a'}, 'domain').removeprefix('./')
+    assert calls == [('GET', None), ('POST', [expected])]
+    assert '1 个有变化的规则文件' in rule_sync.status(manager, agent['id'])['state']['message']
+    tick(worker, now, agent['id'])
+    assert source_for(manager, agent['id'])['rule_library'][0]['content'] == 'new.test'
+    assert rule_sync.status(manager, agent['id'])['state']['status'] == 'succeeded'
+
+
+@pytest.mark.parametrize('version', ['1.8.34-go', '1.8.35-go'])
+def test_native_content_refresh_falls_back_to_full_update(sync_env, monkeypatch, version):
+    repository, manager, agent = targeted_oxidns(sync_env, version)
+    from backend.agents import oxidns_rule_update
+    from backend.agents.oxidns_monitor import MonitorError
+    calls, responses = [], [native_task('idle'), native_task()]
+    def call(_target, _identity, method, paths=None):
+        calls.append((method, paths))
+        if paths:
+            raise MonitorError('RULE_UPDATE_TARGET_UNKNOWN', 409)
+        return responses.pop(0), 202 if method == 'POST' else 200
+    monkeypatch.setattr(oxidns_rule_update, 'call', call)
+    edit_library(repository)
+    worker, now = worker_for(manager)
+    worker.run(agent['id'])
+    tick(worker, now, agent['id'])
+    assert calls[-1] == ('POST', None)
+    assert len([entry for entry in calls if entry[0] == 'POST']) == (2 if version == '1.8.35-go' else 1)
+    assert rule_sync.status(manager, agent['id'])['state']['status'] == 'running'
