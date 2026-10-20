@@ -1,0 +1,13 @@
+{
+  "source_pid": 58121,
+  "signal": "SIGTERM",
+  "own_cache_remaining_files": [],
+  "port_14823_closed": true,
+  "removed_own_idle_lock_files": [
+    "by-id/df6de6b30a92661dcea14c7891c026cd095b4307dfbbe03c2083d33e049a9a57.list.lock",
+    "by-id/18ad556ce97cd1d8397b66a3593962e0575ab7d7328de1d6d45b2d2f7e10745d.list.lock",
+    "by-id/c543ed677c454bc8d0e00b6b74c7905356aabba6b020d4b2bf02c8e67a2f891b.list.lock",
+    "by-id/278dce75eb4a2537afda1392840cd5e3aa70a5b405952c18e22649efad7945d2.list.lock"
+  ],
+  "browser_cleanup": "root IAB test tab由root关闭；worker native临时窗口绑定不稳定，按root指示未操作，可能保留14810空的新建空间表单窗口；该空间未保存创建"
+}

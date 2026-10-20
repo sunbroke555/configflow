@@ -1,0 +1,94 @@
+{
+  "source_commit": "3f38649",
+  "agent_version": "1.8.34-go",
+  "nft_version": "Debian 12 original nftables 1.0.6",
+  "result": "兼容性修复与归属保护实机回归通过",
+  "做了什么与结果": [
+    "真实浏览器创建新安装会话，现有wget下载正式脚本；脚本校验新SHA并安装两个Agent成功，原Agent ID、核心PID、核心配置和旧pending journal保持不变。",
+    "旧pending现场用正式remove接口返回200，旧表与journal清除，forwarding恢复0。",
+    "正式自动识别eth0/.36/24和上游.1，按顺序发布Mihomo/OxiDNS均成功；浏览器显示两设备DNS检查各4项通过。",
+    "新建网关200且healthy；重复应用后内核对象JSON和句柄未变；重启Mihomo Agent后仍healthy且原对象不变。",
+    "真实隔离客户端.241经.36网关与DNS：直连example.com得真实IP和HTTP200且无SOCKS事件；代理example.net得198.18.0.4 fakeIP及HTTP200且SOCKS记录.36连接example.net；选中1.1.1.1走SOCKS并返回HTTP301。",
+    "未选IP按.1与.36做三目标对照，均得到200/200/301；另一次同步捕获证明.241经.36到1.0.0.1的HTTP301与响应回到.36，SOCKS无该次事件。",
+    "无journal同名自定义表apply409且资源未变；活动表加自有规则后apply/remove均409，原表和其它表完整保留；按已验证marker/handle精确删测试规则后正常撤销200。",
+    "最终恢复所有7个记录sysctl、原地址和默认路由，删除自有namespace/ipvlan/resolver与两张自定义测试表，保留四服务运行和新Agent。"
+  ],
+  "limits": [
+    "初次未选IP请求及一次后续单独重试曾超时；成功与失败记录均保留。同步捕获的一次请求成功，未捕获到失败请求，不能据此归因或宣称公网连接长期稳定。",
+    "未重启.36整机；仅验证Agent重启恢复，内核表重建另有Go回归覆盖。"
+  ],
+  "tail": {
+    "all_recorded_sysctls_restored": true,
+    "ip_forward": 0,
+    "eth0": "192.168.0.36/24",
+    "default_gateway": "192.168.0.1",
+    "journal_absent": true,
+    "managed_nft_table_absent": true,
+    "custom_test_tables_absent": true,
+    "client_namespace_deleted": true,
+    "parent_35_network_unchanged": true,
+    "four_services": "active",
+    "local_ports": {
+      "14813": "closed",
+      "14814": "closed"
+    },
+    "local_processes_stopped": true
+  },
+  "runtime": {
+    "agents": {
+      "mihomo": {
+        "id": "agent_1792485956485_e62a6b",
+        "version": "1.8.34-go",
+        "final_pid": 3760
+      },
+      "oxidns": {
+        "id": "agent_1792485956672_5444ec",
+        "version": "1.8.34-go",
+        "final_pid": 3371
+      }
+    },
+    "cores": {
+      "mihomo": {
+        "version": "v1.19.32",
+        "before_and_after_installer_pid": 1506,
+        "after_formal_publish_final_pid": 3489
+      },
+      "oxidns": {
+        "version": "1.6.1",
+        "before_and_after_installer_pid": 1569,
+        "after_formal_publish_final_pid": 3510
+      }
+    },
+    "note": "正式安装更新Agent期间核心PID不变；后续正式发布按服务生命周期变更核心PID，最终四服务active。"
+  },
+  "private_evidence_retained_locally": [
+    "formal-install-summary.json",
+    "legacy-before.json",
+    "legacy-remove.json",
+    "legacy-after-remote.txt",
+    "publish-result.json",
+    "repeat-apply-identity.json",
+    "agent-restart-replay.json",
+    "client-via-gateway-dns.txt",
+    "client-http-routing.json",
+    "client-ab-192.168.0.1.json",
+    "client-ab-192.168.0.36.json",
+    "client-unselected-live-http.json",
+    "client-unselected-live-packet-headers.json",
+    "guard-matrix-summary.json",
+    "final-gateway-remove.json",
+    "final-runtime-baseline.txt",
+    "client-final-cleanup.txt",
+    "gateway-enabled.png",
+    "gateway-revoked.png",
+    "go-validation.json",
+    "local-cleanup.json",
+    "client-unselected-live-socks-window.json"
+  ],
+  "public_evidence": [
+    "gateway-guard-matrix.json",
+    "gateway-enabled.png",
+    "gateway-revoked.png",
+    "go-validation.json"
+  ]
+}

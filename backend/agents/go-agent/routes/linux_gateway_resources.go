@@ -124,18 +124,12 @@ func checkGatewayOwnership(state *gatewayState, all []map[string]interface{}, re
 	if len(actual) != len(state.NFT) {
 		return fmt.Errorf("受管 nftables 表已被外部修改，保留现有规则")
 	}
-	used := make([]bool, len(actual))
-	for _, expected := range state.NFT {
-		matched := false
-		for i, object := range actual {
-			if !used[i] && gatewayOwnedResourceEqual(expected, object) {
-				used[i], matched = true, true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("受管 nftables 资源归属或内容变化，保留现有规则")
-		}
+	expected := state.NFT
+	if gatewayInitialNFTReadback(state, actual) {
+		expected = gatewayNFTWithoutObjectComments(expected)
+	}
+	if !gatewayNFTListsEqual(expected, actual, gatewayOwnedResourceEqual) {
+		return fmt.Errorf("受管 nftables 资源归属、内容或规则顺序变化，保留现有规则")
 	}
 	return nil
 }
@@ -507,6 +501,11 @@ func applyLinuxGateway(cfg *Config, spec LinuxGatewaySpec, profileID string) err
 		return err
 	}
 	if len(gatewayNFTObjects(objects)) == 0 {
+		// A reboot can remove the kernel table while retaining an active
+		// journal. This is a fresh creation, not a read-back of pinned objects.
+		// Persist that phase before submitting the transaction so an interrupted
+		// recreation can use the same narrowly proven pending recovery path.
+		state.Active, state.AppliedAt = false, ""
 		state.NFT = gatewayDesiredNFT(state)
 		if err := saveGatewayState(cfg, state); err != nil {
 			return err

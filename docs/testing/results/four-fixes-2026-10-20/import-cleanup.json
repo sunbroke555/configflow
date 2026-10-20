@@ -1,0 +1,20 @@
+{
+  "case": "cleanup",
+  "checks": {
+    "仅预期成功条目入库且缓存内容准确": true,
+    "失败条目无新增缓存文件": true,
+    "原始规则目录摘要一致": true,
+    "原始缓存文件哈希一致": true,
+    "默认配置静态文件哈希一致": true
+  },
+  "passed": true,
+  "new_cache_files": [],
+  "own_names": [],
+  "parallel_exclusion": {
+    "root_rule_names": [
+      "fix-refresh-set-20261020"
+    ],
+    "default_profile_unchanged": false,
+    "reason": "root已提前说明本轮并行规则freshness与编辑联动测试有意新增fix-refresh-set-20261020并修改default配置，不属于本导入用例"
+  }
+}

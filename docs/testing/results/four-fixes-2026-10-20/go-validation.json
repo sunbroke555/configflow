@@ -1,0 +1,13 @@
+{
+  "source_commit": "3f38649",
+  "go_test_all": {
+    "result": "passed",
+    "routes_seconds": 133.012
+  },
+  "gateway_race": {
+    "result": "passed",
+    "seconds": 8.657,
+    "command": "go test -race ./routes -run 'TestLinuxGateway|TestGatewayDNS' -count=1"
+  },
+  "diff_check": "passed"
+}

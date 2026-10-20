@@ -143,7 +143,10 @@ def test_mosdns_rule_proxy_request_exception_response_does_not_leak(monkeypatch,
     monkeypatch.setattr(mosdns, "apply_github_proxy_domain", lambda url, config: url)
     monkeypatch.setattr(mosdns, "_validate_remote_url", lambda url: None)
     monkeypatch.setattr(mosdns, "_fetch_remote_content", lambda url: (_ for _ in ()).throw(exc))
-    monkeypatch.setattr(mosdns, "_load_cached_rule_content_for_url", lambda url: "")
+    def reject_cache_fallback(_url):
+        pytest.fail("online refresh must not serve a stale cache after an upstream failure")
+
+    monkeypatch.setattr(mosdns, "_load_cached_rule_content_for_url", reject_cache_fallback)
     app = Flask(__name__)
 
     with app.test_request_context(
@@ -152,8 +155,10 @@ def test_mosdns_rule_proxy_request_exception_response_does_not_leak(monkeypatch,
         response, status = mosdns.mosdns_rule_proxy()
 
     body = response.get_data(as_text=True)
-    assert status == 500
-    assert "Failed to fetch original URL" in body
+    assert status == 502
+    assert response.json["success"] is False
+    assert response.json["code"] == "RULE_SOURCE_UNAVAILABLE"
+    assert response.headers["Cache-Control"] == "no-store"
     for forbidden in ("dynamic-request-secret", "secret-fragment", "upstream.test"):
         assert forbidden not in body
     for forbidden in ("dynamic-request-secret", "secret-fragment"):

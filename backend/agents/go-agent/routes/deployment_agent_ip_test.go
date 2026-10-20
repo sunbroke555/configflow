@@ -142,3 +142,62 @@ func TestDeploymentAgentIPCoverageOnlyChecksRequiredModes(t *testing.T) {
 		})
 	}
 }
+
+func TestReadyActivationRevalidatesExplicitAgentIPAndEveryCurrentLAN(t *testing.T) {
+	for _, change := range []string{"second-lan-added", "explicit-ip-removed", "enumeration-failed", "legacy-candidate"} {
+		t.Run(change, func(t *testing.T) {
+			addresses := []string{"192.168.8.2"}
+			var detectionErr error
+			stubAgentIPv4s(t, func() ([]string, error) { return addresses, detectionErr })
+			cfg := testDeploymentConfig(t)
+			cfg.NativeAIO, cfg.AgentIP = change != "legacy-candidate", "192.168.8.2"
+			root := filepath.Dir(cfg.ConfigPath)
+			cfg.StopCommand = "printf 'stop\\n' >> lifecycle-actions; rm -f running"
+			cfg.StartCommand = "printf 'start\\n' >> lifecycle-actions; touch running"
+			live := []byte("mode: direct\n")
+			writeActivationFixture(t, cfg.ConfigPath, live, 0600)
+			writeActivationFixture(t, filepath.Join(root, "running"), nil, 0600)
+			// An older candidate may only have trusted agent_ip. Prepare the
+			// same immutable bytes without native adaptation to model it.
+			const input = "mode: rule\ntun: {enable: true, auto-redirect: true, route-exclude-address: [127.0.0.0/8, 192.168.8.2/32]}\n"
+			state := submitBundle(t, cfg, "ready-explicit-ip", map[string][]byte{"config.yaml": []byte(input)}, false)
+			if state.Status != "ready" {
+				t.Fatalf("prepare failed: %+v", state)
+			}
+			stage := filepath.Join(deploymentPath(cfg, state.DeploymentID), "stage", "config.yaml")
+			prepared, err := os.ReadFile(stage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.NativeAIO = true
+			addresses = []string{"192.168.8.2", "192.168.8.3"}
+			if change == "explicit-ip-removed" {
+				addresses = []string{"192.168.8.3"}
+			} else if change == "enumeration-failed" {
+				detectionErr = errors.New("LAN enumeration failed")
+			}
+			if err := loadEffectiveManifest(cfg, state); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateDeploymentAgentIPs(cfg, state); err == nil {
+				t.Fatal("explicit Agent IP bypassed current LAN validation")
+			}
+			if data, err := os.ReadFile(stage); err != nil || !bytes.Equal(data, prepared) {
+				t.Fatalf("address guard changed immutable stage: %q, %v", data, err)
+			}
+			state = activateReadyCandidate(t, cfg, state.DeploymentID)
+			if state.Status != "failed" || state.FailedStage != "verifying" || !strings.Contains(state.Error, "重新发布") {
+				t.Fatalf("unsafe explicit-IP activation was not rejected: %+v", state)
+			}
+			if data, err := os.ReadFile(cfg.ConfigPath); err != nil || !bytes.Equal(data, live) {
+				t.Fatalf("rejected activation changed live bytes: %q, %v", data, err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "running")); err != nil {
+				t.Fatalf("rejected activation stopped service: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "lifecycle-actions")); !os.IsNotExist(err) {
+				t.Fatalf("rejected activation ran a lifecycle command: %v", err)
+			}
+		})
+	}
+}

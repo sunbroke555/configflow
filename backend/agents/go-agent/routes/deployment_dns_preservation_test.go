@@ -24,6 +24,7 @@ func aioPublicationConfig(t *testing.T, mode string) *Config {
 	cfg.NativeAIO = mode == "native"
 	if cfg.NativeAIO {
 		cfg.AgentIP = "192.168.0.33"
+		stubAgentIPv4(t, func() (string, error) { return "192.168.0.33", nil })
 	}
 	if mode == "docker-oxidns" {
 		t.Setenv("ENABLE_OXIDNS", "true")

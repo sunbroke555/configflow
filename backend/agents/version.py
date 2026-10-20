@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.33-go"
+LATEST_AGENT_VERSION = "1.8.34-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.34-go": {
+        "date": "2026-10-20",
+        "features": [
+            "发布和激活前核实 Agent IP 属于当前本机，并保护全部 LAN IPv4，防止错误地址绕过同机 DNS 排除",
+            "兼容 Debian 12 nftables 1.0.6 的表与链注释缺失，保留严格归属、规则顺序和资源身份校验，支持恢复旧版未完成网关任务"
+        ]
+    },
     "1.8.33-go": {
         "date": "2026-10-20",
         "features": [

@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Ready candidates may outlive their automatically detected LAN addresses.
+// Ready candidates may outlive their LAN snapshot, including an explicit Agent IP.
 // Check coverage before any activation work, without adapting immutable staged
 // bytes to an address that was not present when the candidate was prepared.
 func validateDeploymentAgentIPs(cfg *Config, state *DeploymentState) error {

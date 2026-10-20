@@ -11,8 +11,12 @@ import (
 // transaction. In particular, nft serializes ct state {established,related}
 // with op == even when its JSON input used op in.
 func realGatewayNFT(t *testing.T, state *gatewayState) []map[string]interface{} {
+	return gatewayNFTFixture(t, state, "1.1.3")
+}
+
+func gatewayNFTFixture(t *testing.T, state *gatewayState, version string) []map[string]interface{} {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/linux_gateway_nft_1.1.3.json")
+	raw, err := os.ReadFile("testdata/linux_gateway_nft_" + version + ".json")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -270,10 +270,16 @@ describe('shared rule library', () => {
     for (const kind of ['success', 'warning', 'error'] as const) vi.spyOn(notify, kind).mockImplementation(() => 0)
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     for (let index = 0; index < 2; index++) {
-      if (index < successCount) network.post.mockResolvedValueOnce({ data: { success: true } })
-      else network.post.mockRejectedValueOnce(new Error('Import failed'))
+      network.post.mockImplementationOnce(async (_path, body) => {
+        if (index >= successCount) {
+          throw { response: { status: 502, data: { success: false, message: '规则源下载失败，未添加规则，请检查来源后重试' } } }
+        }
+        const created = structuredClone(body!)
+        network.state.library.push(created)
+        return { data: { success: true, data: created } }
+      })
     }
-    await render(RuleLibrary)
+    const wrapper = await render(RuleLibrary)
     await menuAction('批量导入')
     const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
     input.value = 'first: { type: http, behavior: domain, url: "https://first.test/rules" }\nsecond: { type: http, behavior: domain, url: "https://second.test/rules" }'
@@ -284,6 +290,46 @@ describe('shared rule library', () => {
     expect(notify[tone]).toHaveBeenCalledWith(message)
     for (const other of ['success', 'warning', 'error'] as const) {
       if (other !== tone) expect(notify[other]).not.toHaveBeenCalled()
+    }
+    // The refreshed catalog must agree with the feedback, including a batch
+    // where no source was committed. Existing custom sources remain visible.
+    expect(network.state.library.map(rule => rule.name)).toEqual(['Shared domains', ...['first', 'second'].slice(0, successCount)])
+    expect(wrapper.text()).toContain('Shared domains')
+    for (const [index, name] of ['first', 'second'].entries()) {
+      const labels = wrapper.findAll(`button[aria-label="编辑 ${name}"]`)
+      expect(labels).toHaveLength(index < successCount ? 1 : 0)
+    }
+  })
+
+  it.each([
+    [['pending', 'pending'], '批量导入：成功 0 条，失败 0 条，保存结果待确认 2 条；请核对列表，勿重复导入'],
+    [['success', 'failed', 'pending'], '批量导入：成功 1 条，失败 1 条，保存结果待确认 1 条；请核对列表，勿重复导入']
+  ] as const)('keeps uncertain creations separate from failed imports: %j', async (outcomes, message) => {
+    for (const tone of ['success', 'warning', 'error'] as const) vi.spyOn(notify, tone).mockImplementation(() => 0)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    for (const outcome of outcomes) {
+      network.post.mockImplementationOnce(async (_path, body) => {
+        if (outcome !== 'failed') network.state.library.push(structuredClone(body!))
+        if (outcome !== 'success') {
+          throw { isAxiosError: true, response: { status: outcome === 'pending' ? 503 : 502,
+            data: { success: false, confirmation_required: outcome === 'pending' } } }
+        }
+        return { data: { success: true } }
+      })
+    }
+    const wrapper = await render(RuleLibrary)
+    await menuAction('批量导入')
+    const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
+    input.value = outcomes.map((_, index) => `source${index}: { type: http, behavior: domain, url: "https://source${index}.test/rules" }`).join('\n')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    await clickText('导入')
+
+    expect(notify.warning).toHaveBeenCalledWith(message)
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(notify.error).not.toHaveBeenCalled()
+    for (const [index, outcome] of outcomes.entries()) {
+      expect(wrapper.findAll(`button[aria-label="编辑 source${index}"]`)).toHaveLength(outcome === 'failed' ? 0 : 1)
     }
   })
 

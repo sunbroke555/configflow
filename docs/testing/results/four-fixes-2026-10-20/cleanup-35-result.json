@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "settings_restored_exactly": true,
+  "mihomo_base_restored_exactly": true,
+  "temporary_reference_and_library_removed": true,
+  "dns_follow_binding_disabled": true,
+  "four_services_active": true,
+  "core_pids_and_start_unchanged": true,
+  "mihomo_pid": 87,
+  "oxidns_pid": 89,
+  "temporary_lan_and_namespace_removed": true,
+  "normal_both_publishes_succeeded": true,
+  "dns": [
+    {
+      "tcp": false,
+      "success": true
+    },
+    {
+      "tcp": true,
+      "success": true
+    }
+  ],
+  "source_server_stopped": true
+}

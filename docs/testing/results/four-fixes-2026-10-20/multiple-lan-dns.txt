@@ -1,0 +1,88 @@
+
+; <<>> DiG 9.20.11-4-Debian <<>> +time=4 +tries=1 @192.168.99.35 example.com A
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 14433
+;; flags: qr aa rd ra ad; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+; COOKIE: 6bf73a7e3911fbd2 (echoed)
+;; QUESTION SECTION:
+;example.com.			IN	A
+
+;; ANSWER SECTION:
+example.com.		1	IN	A	198.18.0.6
+
+;; Query time: 1 msec
+;; SERVER: 192.168.99.35#53(192.168.99.35) (UDP)
+;; WHEN: Tue Oct 20 09:57:07 UTC 2026
+;; MSG SIZE  rcvd: 79
+
+
+; <<>> DiG 9.20.11-4-Debian <<>> +tcp +time=4 +tries=1 @192.168.99.35 example.com A
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 31494
+;; flags: qr aa rd ra ad; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+; COOKIE: e10bd483ca055f5f (echoed)
+;; QUESTION SECTION:
+;example.com.			IN	A
+
+;; ANSWER SECTION:
+example.com.		1	IN	A	198.18.0.6
+
+;; Query time: 1 msec
+;; SERVER: 192.168.99.35#53(192.168.99.35) (TCP)
+;; WHEN: Tue Oct 20 09:57:07 UTC 2026
+;; MSG SIZE  rcvd: 79
+
+
+; <<>> DiG 9.20.11-4-Debian <<>> +time=4 +tries=1 @192.168.0.35 example.com A
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 14368
+;; flags: qr aa rd ra ad; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+; COOKIE: 3cfacf2430ca46d4 (echoed)
+;; QUESTION SECTION:
+;example.com.			IN	A
+
+;; ANSWER SECTION:
+example.com.		1	IN	A	198.18.0.6
+
+;; Query time: 0 msec
+;; SERVER: 192.168.0.35#53(192.168.0.35) (UDP)
+;; WHEN: Tue Oct 20 09:57:07 UTC 2026
+;; MSG SIZE  rcvd: 79
+
+
+; <<>> DiG 9.20.11-4-Debian <<>> +tcp +time=4 +tries=1 @192.168.0.35 example.com A
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1081
+;; flags: qr aa rd ra ad; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+; COOKIE: ddb942dcb90b9d84 (echoed)
+;; QUESTION SECTION:
+;example.com.			IN	A
+
+;; ANSWER SECTION:
+example.com.		1	IN	A	198.18.0.6
+
+;; Query time: 0 msec
+;; SERVER: 192.168.0.35#53(192.168.0.35) (TCP)
+;; WHEN: Tue Oct 20 09:57:07 UTC 2026
+;; MSG SIZE  rcvd: 79
+
