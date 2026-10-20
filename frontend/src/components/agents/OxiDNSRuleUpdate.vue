@@ -16,11 +16,11 @@
     </AgentStatusRow>
   </template>
   <div v-else class="contents">
-    <Button type="button" variant="outline" size="sm" class="min-h-11 shrink-0" :disabled="disabled || busy || !agentId" @click="act">
-      <Loader2 v-if="busy" class="size-3.5 animate-spin" /><RefreshCw v-else class="size-3.5" />
+    <Button type="button" variant="outline" :size="size" class="min-h-11 shrink-0" :disabled="disabled || busy || !agentId" @click="act">
+      <Loader2 v-if="busy" :class="[iconClass, 'animate-spin']" /><RefreshCw v-else :class="iconClass" />
       {{ actionLabel }}
     </Button>
-    <Button v-if="needsCheck && !busy" type="button" variant="ghost" size="sm" class="min-h-11 shrink-0"
+    <Button v-if="needsCheck && !busy" type="button" variant="ghost" :size="size" class="min-h-11 shrink-0"
       :disabled="disabled || !agentId" title="先查询当前任务，未运行时才重新提交更新" @click="retry">重新尝试更新</Button>
     <p v-if="statusText || error" :role="error || task?.status === 'failed' ? 'alert' : 'status'" aria-live="polite"
       class="order-last m-0 w-full min-w-0 basis-full break-words text-xs leading-5"
@@ -38,7 +38,8 @@ import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import { oxidnsRuleUpdateApi, type OxiDNSRuleUpdateResponse, type OxiDNSRuleUpdateTask } from '@/api/oxidnsRuleUpdate'
 import { notify } from '@/lib/feedback'
 
-const props = defineProps<{ agentId: string; disabled?: boolean; presentation?: 'toolbar' | 'card' }>()
+const props = withDefaults(defineProps<{ agentId: string; disabled?: boolean; presentation?: 'toolbar' | 'card'; size?: 'sm' | 'default' }>(), { size: 'sm' })
+const iconClass = computed(() => props.size === 'sm' ? 'size-3.5' : 'size-4')
 const emit = defineEmits<{ updated: [] }>()
 const task = ref<OxiDNSRuleUpdateTask | null>(null)
 const error = ref('')
