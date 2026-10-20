@@ -15,9 +15,10 @@
       </template>
     </AgentStatusRow>
   </template>
-  <div v-else class="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1">
+  <!-- Phones keep the actions in the parent row and give progress its own line. -->
+  <div v-else class="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 max-sm:contents">
     <p v-if="statusText || error" :role="error || task?.status === 'failed' ? 'alert' : 'status'" aria-live="polite"
-      class="m-0 min-w-0 break-words text-xs leading-5"
+      class="m-0 min-w-0 break-words text-xs leading-5 max-sm:order-last max-sm:basis-full"
       :class="error || task?.status === 'failed' ? needsCheck ? 'text-warning-accent' : 'text-destructive-accent' : task?.status === 'succeeded' ? 'text-success-accent' : 'text-muted-foreground'">
       <span v-if="statusText" class="num">{{ statusText }}</span><span v-if="error">{{ statusText ? ' · ' : '' }}{{ error }}</span>
     </p>
