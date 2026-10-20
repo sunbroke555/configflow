@@ -9,9 +9,9 @@ from flask import request, jsonify
 from flask import Blueprint
 from backend.common.auth import require_auth
 from backend.common.config import get_shared_config, save_shared_config, update_shared_config_transaction, get_config, get_repository, get_system_config, save_system_config
-from backend.common.config_repository import ProfileRepositoryError
+from backend.common.config_repository import ProfileRepositoryError, RuleLibraryCreationUncertain
 from backend.utils.reorder import resolve_new_order
-from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local, rule_cache_filename
+from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local, rule_cache_filename, read_rule_source_content
 from backend.utils.logger import get_logger
 from backend.utils.rule_fetch import request_rule
 from backend.utils.url_utils import safe_exception_details
@@ -102,9 +102,13 @@ def handle_rule_library():
 
     elif request.method == 'POST':
         rule = request.json
-        from backend.common.config_repository import ProfileValidationError
+        from backend.common.config_repository import ProfileValidationError, ProfileExists
         if not isinstance(rule, dict):
             raise ProfileValidationError('规则库请求必须是 JSON 对象')
+        if not isinstance(rule.get('id'), str) or not rule['id']:
+            raise ProfileValidationError('规则库条目必须有 ID')
+        if any(item['id'] == rule['id'] for item in config_data.get('rule_library', [])):
+            raise ProfileExists('规则库 ID 已存在，请刷新后重试')
         validate_domain_content(rule)
 
         # 根据 source_type 清理字段
@@ -118,10 +122,21 @@ def handle_rule_library():
             if 'content' in rule:
                 del rule['content']
 
-        update_shared_config_transaction(
-            lambda shared: shared.setdefault('rule_library', []).append(rule)
-        )
-        save_rule_to_local(rule)
+        import requests
+        try:
+            content = read_rule_source_content(rule)
+        except requests.RequestException:
+            return jsonify({'success': False, 'message': '规则源下载失败，未添加规则，请检查来源后重试'}), 502
+        if content is None:
+            raise ProfileValidationError('请提供有效的规则来源和订阅地址')
+        try:
+            get_repository().create_rule_library_item(rule, content)
+        except RuleLibraryCreationUncertain as error:
+            logger.exception('New rule source storage result requires confirmation')
+            return jsonify({'success': False, 'confirmation_required': True, 'message': str(error)}), 503
+        except OSError:
+            logger.exception('Failed to commit new rule source and cache')
+            return jsonify({'success': False, 'message': '规则保存失败，未添加规则，请稍后重试'}), 500
         return jsonify({'success': True, 'data': rule})
 
 

@@ -129,22 +129,11 @@ func loadGatewayState(cfg *Config) (*gatewayState, error) {
 	if !regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}$`).MatchString(state.TunDevice) {
 		return nil, fmt.Errorf("网关状态 TUN 设备无效")
 	}
-	expected := gatewayDesiredNFT(&state)
-	if len(state.NFT) != len(expected) {
+	if len(state.NFT) != len(gatewayDesiredNFT(&state)) {
 		return nil, fmt.Errorf("网关 journal 的 nftables 资源清单不完整")
 	}
-	used := make([]bool, len(state.NFT))
-	for _, planned := range expected {
-		found := false
-		for i, actual := range state.NFT {
-			if !used[i] && gatewayNormalizedResourceEqual(planned, actual) {
-				used[i], found = true, true
-				break
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("网关 journal 资源与参数不一致，保留现有配置")
-		}
+	if !gatewayJournalNFTValid(&state) {
+		return nil, fmt.Errorf("网关 journal 资源或规则顺序与参数不一致，保留现有配置")
 	}
 	for key, value := range state.Original {
 		if _, exists := gatewayStateSysctls(&state)[key]; !exists || (value != "0" && value != "1") {

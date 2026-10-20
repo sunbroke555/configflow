@@ -10,18 +10,22 @@ import (
 
 var detectAgentIPv4s = localip.DetectAll
 
-// Resolve at publication time, including for already registered Agents whose
-// config intentionally leaves agent_ip empty. Do not persist an automatically
-// detected address: DHCP and interface availability can change between publishes.
+// Resolve the complete local LAN snapshot at publication and activation time.
+// An explicit agent_ip must belong to that snapshot; it cannot replace the
+// other addresses that need DNS protection. Do not persist detected addresses:
+// DHCP and interface availability can change between publishes.
 func agentLANIPv4s(cfg *Config) ([]net.IP, error) {
 	value := strings.TrimSpace(cfg.AgentIP)
-	values := []string{value}
-	if value == "" {
-		detected, err := detectAgentIPv4s()
-		if err != nil {
-			return nil, fmt.Errorf("自动获取本机 LAN IPv4 失败：%w；请检查网络接口或在 Agent 配置中填写 agent_ip", err)
+	var explicit net.IP
+	if value != "" {
+		explicit = net.ParseIP(value)
+		if explicit == nil || explicit.To4() == nil || !explicit.IsGlobalUnicast() || explicit.IsLoopback() {
+			return nil, fmt.Errorf("Agent 配置中的 agent_ip 不是有效的 LAN IPv4；请填写本机地址或留空自动获取")
 		}
-		values = detected
+	}
+	values, err := detectAgentIPv4s()
+	if err != nil {
+		return nil, fmt.Errorf("获取本机 LAN IPv4 失败：%w；请检查网络接口和 Agent 配置中的 agent_ip", err)
 	}
 	if len(values) == 0 {
 		return nil, fmt.Errorf("无法获得有效的本机 LAN IPv4；请检查 Agent 配置中的 agent_ip 和网络接口")
@@ -38,6 +42,9 @@ func agentLANIPv4s(cfg *Config) ([]net.IP, error) {
 			addresses = append(addresses, address)
 			seen[address.String()] = true
 		}
+	}
+	if explicit != nil && !seen[explicit.String()] {
+		return nil, fmt.Errorf("Agent 配置中的 agent_ip（%s）不属于当前本机 LAN IPv4；请填写本机地址或留空后重新发布", value)
 	}
 	return addresses, nil
 }

@@ -17,6 +17,7 @@ func TestGatewayDNSPreservesOxiDNSAndOrdinaryMode(t *testing.T) {
 	if err != nil || ordinary != input {
 		t.Fatalf("ordinary publication changed: %v", err)
 	}
+	stubAgentIPv4(t, func() (string, error) { return "192.0.2.2", nil })
 	input += "x-configflow-linux-gateway: {enabled: true, version: 1}\n"
 	got, err := adaptGatewayDNS(cfg, input)
 	if err != nil {
@@ -35,6 +36,7 @@ func TestGatewayDNSPreservesOxiDNSAndOrdinaryMode(t *testing.T) {
 	if err != nil || again != got {
 		t.Fatalf("gateway adaptation is not idempotent: %v", err)
 	}
+	stubAgentIPv4(t, func() (string, error) { return "", errors.New("no LAN interface") })
 	for _, address := range []string{"", "0.0.0.0", "127.0.0.1", "::1", "example.com"} {
 		if _, err := adaptGatewayDNS(&Config{AgentIP: address}, input); err == nil {
 			t.Fatalf("accepted invalid gateway address %q", address)

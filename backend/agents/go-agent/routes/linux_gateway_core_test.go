@@ -46,6 +46,7 @@ func TestLinuxGatewayOldCoreBlockedBeforeDeploymentChangesLiveService(t *testing
 	gatewayCoreVersion = func(string) (string, error) { return "Mihomo Meta v1.18.5 linux arm64", nil }
 	cfg := testDeploymentConfig(t)
 	cfg.AgentIP = "192.0.2.2"
+	stubAgentIPv4(t, func() (string, error) { return cfg.AgentIP, nil })
 	before := []byte("mode: direct\n")
 	if err := os.WriteFile(cfg.ConfigPath, before, 0600); err != nil {
 		t.Fatal(err)

@@ -38,6 +38,10 @@ class ProfileExists(ProfileRepositoryError, ValueError):
     """Raised when a profile identifier is already in use."""
 
 
+class RuleLibraryCreationUncertain(ProfileRepositoryError):
+    """A new rule may have committed despite a storage/rollback failure."""
+
+
 class ProfileInUse(ProfileRepositoryError, ValueError):
     """A resource/profile mutation would invalidate an existing dependency."""
 
@@ -962,6 +966,61 @@ class ProfileRepository:
     def get_shared(self):
         with self._document() as document:
             return copy.deepcopy(document['shared'])
+
+    def create_rule_library_item(self, rule, content):
+        """Commit a new source and its prepared cache, never replace an existing ID.
+
+        Fetching happens before this method. Keep the cache lock through the
+        document commit so a failed commit can remove only this creation's file,
+        before another writer can publish data at the same resource identity.
+        """
+        from backend.utils.rule_utils import rule_cache_filename
+
+        _items_by_id([rule], 'rule_library')
+        if not isinstance(content, str):
+            raise ProfileValidationError('规则内容必须是文本')
+        path = self.shared_path(os.path.join('rules', rule_cache_filename(rule)))
+        preserve_cache = False
+        owns_cache = False
+
+        def remove_uncommitted_cache():
+            if not preserve_cache:
+                path.unlink(missing_ok=True)
+
+        with ExitStack() as artifacts:
+            try:
+                with self._document(write=True) as document:
+                    shared = document['shared']
+                    if any(item['id'] == rule['id'] for item in shared['rule_library']):
+                        raise ProfileExists('规则库 ID 已存在，请刷新后重试')
+                    artifacts.enter_context(self._lock(path.with_name(path.name + '.lock')))
+                    # A previous/orphaned cache also belongs to an existing identity;
+                    # importing a new source must not overwrite its custom bytes.
+                    if path.exists() or path.with_name(path.name + '.bak').exists():
+                        raise ProfileExists('规则缓存已存在，请使用新的规则 ID')
+                    owns_cache = True
+                    artifacts.callback(remove_uncommitted_cache)
+                    shared['rule_library'].append(copy.deepcopy(rule))
+                    shared['_revision'] += 1
+                    self._write_atomic(path, content)
+            except Exception as error:
+                if owns_cache:
+                    # The document guard normally restores the old generation.
+                    # If that restoration also failed after replace(), retain the
+                    # cache for any possibly committed source. Read the atomic
+                    # file directly: taking the document lock while holding the
+                    # cache lock would invert the order used above.
+                    try:
+                        current = self._read_json(self.path)
+                        preserve_cache = any(item.get('id') == rule['id']
+                                             for item in current['shared']['rule_library'])
+                    except Exception:
+                        preserve_cache = True
+                    if preserve_cache:
+                        raise RuleLibraryCreationUncertain('规则保存结果待确认，请刷新列表核对，勿重复导入') from error
+                raise
+            preserve_cache = True
+        return copy.deepcopy(rule)
 
     def update_shared_transaction(self, updater):
         with self._document(write=True) as document:

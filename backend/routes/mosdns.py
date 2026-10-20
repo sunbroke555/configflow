@@ -540,17 +540,23 @@ def mosdns_rule_proxy():
                 original_content = _fetch_remote_content(fetch_url)
             except requests.exceptions.RequestException as e:
                 logger.warning(
-                    "远程拉取规则失败，尝试使用本地缓存兜底: %s %s",
+                    "在线规则更新失败，保留设备现有规则: %s %s",
                     safe_url_for_log(original_url),
                     safe_exception_details(e),
                 )
-                original_content = _load_cached_rule_content_for_url(original_url)
-                if not original_content:
-                    return jsonify({'success': False, 'message': 'Failed to fetch original URL'}), 500
+                # Runtime downloaders treat HTTP 200 as a successful refresh.
+                # The shared library cache may predate the rules already loaded
+                # by the device, so serving it here can silently roll them back.
+                # Offline archives/full releases have their own cache policy.
+                response = jsonify(success=False, code='RULE_SOURCE_UNAVAILABLE',
+                    message='规则源暂时不可用，未返回旧缓存；请恢复规则源后重试。')
+                response.headers['Cache-Control'] = 'no-store'
+                return response, 502
 
         # 格式转换（Clash/List/YAML -> mosdns），按 part 拆分域名 / IP
         converted_content = convert_rule_content_for_mosdns(original_content, part)
-        return converted_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+        return converted_content, 200, {'Content-Type': 'text/plain; charset=utf-8',
+                                       'Cache-Control': 'no-store'}
 
     except ValueError as e:
         logger.warning("MosDNS rule-proxy rejected request: %s", safe_exception_details(e))

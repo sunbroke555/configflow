@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 )
 
 func TestNativeAIODNSMergesHostExclusions(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) { return "192.168.0.33", nil })
 	for _, test := range []struct {
 		name, exclusions string
 		want             []string
@@ -88,6 +90,7 @@ func TestNativeAIODNSCoversAllAutomaticAddressesWithoutWideningRoutes(t *testing
 }
 
 func TestNativeAIODNSPreservesYAMLAliasesAndMergeKeys(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) { return "192.168.0.33", nil })
 	for _, test := range []struct{ name, yaml string }{
 		{"exclusion-alias", "custom-exclusions: &excluded [10.0.0.0/8]\ntun: {enable: true, auto-redirect: true, route-exclude-address: *excluded}\n"},
 		{"exclusion-anchor", "tun: {enable: true, auto-redirect: true, route-exclude-address: &excluded [10.0.0.0/8]}\ncustom-exclusions: *excluded\n"},
@@ -142,8 +145,12 @@ func TestNativeAIODNSPreservesYAMLAliasesAndMergeKeys(t *testing.T) {
 
 func TestNativeAIODNSOnlyRequiresAddressForEnabledAutoRedirect(t *testing.T) {
 	detections := 0
+	addressAvailable := false
 	stubAgentIPv4(t, func() (string, error) {
 		detections++
+		if addressAvailable {
+			return "192.168.0.33", nil
+		}
 		return "", errors.New("no LAN interface")
 	})
 	for _, input := range []string{"mode: rule\n", "tun: {}\n", "tun: {enable: false, auto-redirect: true}\n", "tun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: {enabled: true}\n", "marker: &marker {enabled: true}\ntun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: *marker\n", "marker: &marker {enabled: true}\ntun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: {<<: *marker}\n"} {
@@ -160,6 +167,7 @@ func TestNativeAIODNSOnlyRequiresAddressForEnabledAutoRedirect(t *testing.T) {
 			t.Fatalf("missing/invalid host address %q did not give actionable failure: %v", address, err)
 		}
 	}
+	addressAvailable = true
 	for _, exclusions := range []string{"192.168.0.33/32", "{}", "[invalid]", "[false]", "[{}]"} {
 		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true, AgentIP: "192.168.0.33"}, "tun: {enable: true, auto-redirect: true, route-exclude-address: "+exclusions+"}\n"); err == nil {
 			t.Fatalf("invalid exclusion list accepted: %s", exclusions)
@@ -170,6 +178,7 @@ func TestNativeAIODNSOnlyRequiresAddressForEnabledAutoRedirect(t *testing.T) {
 			t.Fatalf("invalid config/TUN mapping accepted: %q", input)
 		}
 	}
+	addressAvailable = false
 	for _, marker := range []string{"null", "false", "[]", "{enabled: false}", "{enabled: 'true'}"} {
 		if _, err := adaptNativeAIODNS(&Config{NativeAIO: true}, "tun: {enable: true, auto-redirect: true}\nx-configflow-linux-gateway: "+marker); err == nil || !strings.Contains(err.Error(), "agent_ip") {
 			t.Fatalf("non-gateway marker bypassed native address validation: %s (%v)", marker, err)
@@ -240,6 +249,7 @@ func TestNativeAIODNSInactiveSwitchesPreserveConfiguration(t *testing.T) {
 }
 
 func TestNativeAIODNSDoesNotGateOnOtherTUNOptions(t *testing.T) {
+	stubAgentIPv4(t, func() (string, error) { return "192.168.0.33", nil })
 	// Core validation owns auto-route's dependency rules. Host protection must
 	// only inspect enable/auto-redirect and preserve all other TUN options.
 	for _, option := range []string{"auto-route", "auto-detect-interface"} {
@@ -276,8 +286,16 @@ func TestNativeAIODNSPublicationProtectsHostOnEveryPublish(t *testing.T) {
 			t.Setenv("ENABLE_MOSDNS", fmt.Sprint(mode == "docker-mosdns"))
 			cfg := testDeploymentConfig(t)
 			cfg.NativeAIO = mode == "native"
+			currentAddress := ""
+			stubAgentIPv4(t, func() (string, error) {
+				if mode != "native" {
+					t.Error("ordinary publication must not enumerate LAN addresses")
+				}
+				return currentAddress, nil
+			})
 			input := "mode: rule\ndns: {enable: false, listen: '0.0.0.0:5353'}\ntun: {enable: true, auto-route: true, auto-redirect: true, dns-hijack: [any:5353, 'tcp://any:7874'], route-exclude-address: [10.0.0.0/8]}\n"
 			for i, address := range []string{"192.168.0.33", "192.168.0.44"} {
+				currentAddress = address
 				cfg.AgentIP = address
 				state := submitBundle(t, cfg, fmt.Sprintf("aio-host-%d", i), map[string][]byte{"config.yaml": []byte(input)}, true)
 				if state.Status != "succeeded" {
@@ -341,5 +359,78 @@ func TestNativeAIODNSInvalidAddressFailsBeforeActivation(t *testing.T) {
 	}
 	if data, err := os.ReadFile(running); err != nil || string(data) != "still running" {
 		t.Fatalf("failed adaptation stopped or restarted the service: %v %s", err, data)
+	}
+}
+
+func TestNativeAIODNSRejectsNonlocalExplicitAddressBeforeMutatingLive(t *testing.T) {
+	for _, activate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("activate-%t", activate), func(t *testing.T) {
+			stubAgentIPv4(t, func() (string, error) { return "192.168.8.2", nil })
+			cfg := testDeploymentConfig(t)
+			cfg.NativeAIO, cfg.AgentIP = true, "192.168.8.99"
+			root := filepath.Dir(cfg.ConfigPath)
+			cfg.StopCommand = "printf 'stop\\n' >> lifecycle-actions; rm -f running"
+			cfg.StartCommand = "printf 'start\\n' >> lifecycle-actions; touch running"
+			live := []byte("mode: direct\n")
+			writeActivationFixture(t, cfg.ConfigPath, live, 0600)
+			writeActivationFixture(t, filepath.Join(root, "running"), nil, 0600)
+			state := submitBundle(t, cfg, "nonlocal-explicit-ip", map[string][]byte{
+				"config.yaml": []byte("mode: rule\ntun: {enable: true, auto-redirect: true}\n"),
+			}, activate)
+			if state.Status != "failed" || !strings.Contains(state.Error, "不属于当前本机") {
+				t.Fatalf("publication trusted a nonlocal Agent IP: %+v", state)
+			}
+			if data, err := os.ReadFile(cfg.ConfigPath); err != nil || !bytes.Equal(data, live) {
+				t.Fatalf("rejected publication changed live bytes: %q, %v", data, err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "running")); err != nil {
+				t.Fatalf("rejected publication stopped service: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "lifecycle-actions")); !os.IsNotExist(err) {
+				t.Fatalf("rejected publication ran a lifecycle command: %v", err)
+			}
+			if cfg.AgentIP != "192.168.8.99" {
+				t.Fatalf("verification overwrote configured Agent IP: %q", cfg.AgentIP)
+			}
+		})
+	}
+}
+
+func TestNativeAIODNSPublicationCoversAllLANsWithExplicitAddress(t *testing.T) {
+	for _, explicit := range []string{"192.168.8.2", "10.0.0.2"} {
+		t.Run(explicit, func(t *testing.T) {
+			stubAgentIPv4s(t, func() ([]string, error) {
+				return []string{"192.168.8.2", "10.0.0.2", "192.168.9.2"}, nil
+			})
+			cfg := testDeploymentConfig(t)
+			cfg.NativeAIO, cfg.AgentIP = true, explicit
+			const input = "dns: {enable: false, listen: '127.0.0.2:5353'}\ntun: {enable: true, auto-redirect: true, route-exclude-address: [10.0.0.0/8]}\n"
+			state := submitBundle(t, cfg, "explicit-multiple-lans", map[string][]byte{"config.yaml": []byte(input)}, false)
+			if state.Status != "ready" {
+				t.Fatalf("explicit local address blocked preparation: %+v", state)
+			}
+			prepared, err := os.ReadFile(filepath.Join(deploymentPath(cfg, state.DeploymentID), "stage", "config.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]interface{}
+			if err := yaml.Unmarshal(prepared, &doc); err != nil {
+				t.Fatal(err)
+			}
+			want := []interface{}{"10.0.0.0/8", "127.0.0.0/8", "192.168.8.2/32", "192.168.9.2/32"}
+			if !reflect.DeepEqual(doc["tun"].(map[string]interface{})["route-exclude-address"], want) {
+				t.Fatalf("explicit Agent IP hid other LANs or widened exclusions: %s", prepared)
+			}
+			state = activateReadyCandidate(t, cfg, state.DeploymentID)
+			if state.Status != "succeeded" {
+				t.Fatalf("complete explicit-IP LAN snapshot failed activation: %+v", state)
+			}
+			if data, err := os.ReadFile(cfg.ConfigPath); err != nil || !bytes.Equal(data, prepared) {
+				t.Fatalf("activation changed immutable candidate: %q, %v", data, err)
+			}
+			if cfg.AgentIP != explicit {
+				t.Fatalf("detected address persisted over explicit setting: %q", cfg.AgentIP)
+			}
+		})
 	}
 }

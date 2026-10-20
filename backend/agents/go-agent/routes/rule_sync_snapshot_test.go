@@ -183,6 +183,7 @@ func TestRuleSyncSnapshotUsesConfirmedAgentEffectiveNativeAIOConfig(t *testing.T
 	cfg.Token = "snapshot-secret"
 	cfg.NativeAIO = true
 	cfg.AgentIP = "192.168.50.2"
+	stubAgentIPv4(t, func() (string, error) { return "192.168.50.2", nil })
 	uploaded := []byte(render("rules: ['DOMAIN,new.test,DIRECT']\ntun: {enable: true, auto-redirect: true}\n"))
 	state := submitBundle(t, cfg, "native-aio-snapshot", map[string][]byte{"config.yaml": uploaded}, true, func(manifest *DeploymentManifest) {
 		manifest.ProfileID = "profile-1"

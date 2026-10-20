@@ -159,6 +159,7 @@ func TestGatewayDNSOverridesNativeAIOOnlyInMarkedStagedBundle(t *testing.T) {
 	cfg := testDeploymentConfig(t)
 	cfg.NativeAIO = true
 	cfg.AgentIP = "192.0.2.2"
+	stubAgentIPv4(t, func() (string, error) { return cfg.AgentIP, nil })
 	input := `mode: rule
 dns: {enable: true, listen: '0.0.0.0:1053', nameserver: ['https://223.5.5.5/dns-query']}
 tun: {enable: true, auto-route: true, auto-redirect: true, route-address-set: [cf_gateway_fake_ip], dns-hijack: [any:1053]}

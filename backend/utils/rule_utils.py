@@ -70,61 +70,39 @@ def rule_cache_read_path(rule, library=None, *, rules_dir=None):
     return legacy if os.path.exists(legacy) else path
 
 
-def save_rule_to_local(rule: Dict[str, Any]) -> str:
-    """将共享规则原始内容按规则 ID 保存到共享缓存。
-
-    Args:
-        rule: 规则字典
-
-    Returns:
-        保存的文件名
-    """
+def read_rule_source_content(rule: Dict[str, Any]) -> str | None:
+    """Read a source without publishing its catalog entry or cache."""
     import requests
     from backend.utils.logger import get_logger
 
     logger = get_logger(__name__)
-
-    rule_name = rule.get('name', 'unnamed')
-    filename = rule_cache_filename(rule)
-    rules_dir = get_rules_dir()
-    filepath = os.path.join(rules_dir, filename)
-
-    # 确保目录存在
-    os.makedirs(rules_dir, exist_ok=True)
-
     source_type = rule.get('source_type', 'url')
-
     if source_type == 'content':
-        # 直接保存内容
-        content = rule.get('content', '')
-        get_repository().write_shared_text(
-            os.path.join('rules', filename),
-            content,
-        )
-        logger.info(f"Saved rule content to {filepath}")
-
-    elif source_type == 'url':
-        # 从 URL 下载内容
+        return rule.get('content', '')
+    if source_type == 'url':
         url = rule.get('url', '')
         if not url:
-            logger.warning(f"Rule '{rule_name}' has no URL, skipping save")
-            return filename
-
+            logger.warning("Rule '%s' has no URL, skipping save", rule.get('name', 'unnamed'))
+            return None
         try:
             logger.info(f"Fetching rule content from {safe_url_for_log(url)}")
             response = request_rule(url, timeout=10)
             response.raise_for_status()
-
-            get_repository().write_shared_text(
-                os.path.join('rules', filename),
-                response.text,
-            )
-
-            logger.info(f"Downloaded and saved rule from {safe_url_for_log(url)} to {filepath}")
-
+            return response.text
         except (requests.RequestException, ValueError) as e:
             logger.error(f"Failed to download rule from {safe_url_for_log(url)}")
             # 调用方可能将异常写入 HTTP 响应或日志，不能携带代理凭据。
             raise requests.RequestException(f'Rule download failed ({type(e).__name__})') from None
+    return None
 
+
+def save_rule_to_local(rule: Dict[str, Any]) -> str:
+    """Refresh an existing source cache, retaining it when downloading fails."""
+    from backend.utils.logger import get_logger
+
+    filename = rule_cache_filename(rule)
+    content = read_rule_source_content(rule)
+    if content is not None:
+        get_repository().write_shared_text(os.path.join('rules', filename), content)
+        get_logger(__name__).info("Saved rule content to %s", os.path.join(get_rules_dir(), filename))
     return filename

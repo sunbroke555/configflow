@@ -1169,17 +1169,22 @@ const processBatchImport = async () => {
     }
 
     let successCount = 0
+    let unconfirmedCount = 0
     for (const rule of rules) {
       try {
         await api.post('/rule-library', rule)
         successCount++
       } catch (error) {
+        if (isAxiosError<{ confirmation_required?: boolean }>(error) && error.response?.data?.confirmation_required) {
+          unconfirmedCount++
+        }
         console.error(`导入规则 ${rule.name} 失败:`, error)
       }
     }
 
-    const failCount = rules.length - successCount
-    if (failCount === 0) notify.success(`成功导入 ${successCount} 条规则`)
+    const failCount = rules.length - successCount - unconfirmedCount
+    if (unconfirmedCount > 0) notify.warning(`批量导入：成功 ${successCount} 条，失败 ${failCount} 条，保存结果待确认 ${unconfirmedCount} 条；请核对列表，勿重复导入`)
+    else if (failCount === 0) notify.success(`成功导入 ${successCount} 条规则`)
     else if (successCount === 0) notify.error(`批量导入失败，${failCount} 条规则均未导入`)
     else notify.warning(`批量导入完成：成功 ${successCount} 条，失败 ${failCount} 条`)
     batchImportDialogVisible.value = false

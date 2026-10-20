@@ -21,7 +21,7 @@ func stubAgentIPv4s(t *testing.T, detect func() ([]string, error)) {
 	t.Cleanup(func() { detectAgentIPv4s = original })
 }
 
-func TestAgentLANIPv4UsesAutomaticAddressOnlyWhenUnspecified(t *testing.T) {
+func TestAgentLANIPv4DoesNotPersistAutomaticAddress(t *testing.T) {
 	for _, explicit := range []string{"", "  "} {
 		t.Run("automatic-"+explicit, func(t *testing.T) {
 			stubAgentIPv4(t, func() (string, error) { return "192.168.8.2", nil })
@@ -33,13 +33,9 @@ func TestAgentLANIPv4UsesAutomaticAddressOnlyWhenUnspecified(t *testing.T) {
 		})
 	}
 	stubAgentIPv4(t, func() (string, error) {
-		t.Error("explicit agent_ip must not trigger automatic detection")
+		t.Error("malformed agent_ip must fail without interface enumeration")
 		return "192.168.8.2", nil
 	})
-	ips, err := agentLANIPv4s(&Config{AgentIP: " 192.168.8.3 "})
-	if err != nil || len(ips) != 1 || ips[0].String() != "192.168.8.3" {
-		t.Fatalf("explicit address lost priority: %v, %v", ips, err)
-	}
 	for _, invalid := range []string{"0.0.0.0", "127.0.0.1", "::1", "2001:db8::1", "169.254.1.2", "224.0.0.1", "example.com"} {
 		if _, err := agentLANIPv4s(&Config{AgentIP: invalid}); err == nil {
 			t.Fatalf("invalid explicit address %q silently fell back", invalid)
@@ -75,5 +71,45 @@ func TestAgentLANIPv4IncludesEveryAutomaticAddressOnce(t *testing.T) {
 	ips, err := agentLANIPv4s(&Config{})
 	if err != nil || len(ips) != 2 || ips[0].String() != "192.168.8.2" || ips[1].String() != "10.0.0.2" {
 		t.Fatalf("automatic addresses were lost or duplicated: %v, %v", ips, err)
+	}
+}
+
+func TestAgentLANIPv4ValidatesExplicitAddressAndKeepsAllLANs(t *testing.T) {
+	calls := 0
+	stubAgentIPv4s(t, func() ([]string, error) {
+		calls++
+		return []string{"192.168.8.2", "10.0.0.2", "192.168.8.2"}, nil
+	})
+	for _, explicit := range []string{"192.168.8.2", " 10.0.0.2 "} {
+		cfg := &Config{AgentIP: explicit}
+		ips, err := agentLANIPv4s(cfg)
+		if err != nil || len(ips) != 2 || ips[0].String() != "192.168.8.2" || ips[1].String() != "10.0.0.2" {
+			t.Errorf("explicit address %q lost real LAN coverage: %v, %v", explicit, ips, err)
+		}
+		if cfg.AgentIP != explicit {
+			t.Errorf("address verification persisted a detected value: %q", cfg.AgentIP)
+		}
+		if calls != 1 {
+			t.Errorf("address verification enumerated interfaces %d times", calls)
+		}
+		calls = 0
+	}
+	if _, err := agentLANIPv4s(&Config{AgentIP: "192.168.8.99"}); err == nil || !strings.Contains(err.Error(), "agent_ip") {
+		t.Fatalf("nonlocal explicit address was not rejected clearly: %v", err)
+	}
+}
+
+func TestAgentLANIPv4CannotTrustExplicitAddressWhenEnumerationFails(t *testing.T) {
+	for _, detected := range [][]string{nil, {"192.168.8.2", "127.0.0.1"}} {
+		t.Run("invalid-snapshot", func(t *testing.T) {
+			stubAgentIPv4s(t, func() ([]string, error) { return detected, nil })
+			if _, err := agentLANIPv4s(&Config{AgentIP: "192.168.8.2"}); err == nil {
+				t.Fatalf("explicit address bypassed invalid LAN snapshot: %v", detected)
+			}
+		})
+	}
+	stubAgentIPv4s(t, func() ([]string, error) { return nil, errors.New("interface enumeration failed") })
+	if _, err := agentLANIPv4s(&Config{AgentIP: "192.168.8.2"}); err == nil || !strings.Contains(err.Error(), "interface enumeration failed") {
+		t.Fatalf("explicit address bypassed interface enumeration failure: %v", err)
 	}
 }
