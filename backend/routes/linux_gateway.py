@@ -2,34 +2,81 @@
 from flask import jsonify, make_response, request
 
 from backend.common.auth import require_auth, validate_token_or_jwt
-from backend.common.config import get_config, save_config_with_publish_guard
+from backend.common.config import get_config, get_repository, reset_config_context
+from backend.common.profile_context import resolve_profile_id
 from backend.common.linux_gateway import (
-    LinuxGatewayError, gateway_editor_state, gateway_provider_yaml, gateway_source_yaml, validate_gateway_selection,
+    LinuxGatewayError, gateway_editor_state, gateway_provider_yaml, gateway_source_yaml,
 )
 from backend.routes import custom_config_bp, profiles_bp
+from backend.common.linux_gateway_draft import (
+    check_preview, check_revision, prepare_restore, prepare_settings,
+    preview_draft, remember_original, restore_summary,
+)
+
+
+def _response(value):
+    response = jsonify(value)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @profiles_bp.route('/<profile_id>/custom-config/linux-gateway', methods=['GET', 'POST'])
 @custom_config_bp.route('/linux-gateway', methods=['GET', 'POST'])
+@profiles_bp.route('/<profile_id>/custom-config/linux-gateway/preview', methods=['POST'])
+@custom_config_bp.route('/linux-gateway/preview', methods=['POST'])
+@profiles_bp.route('/<profile_id>/custom-config/linux-gateway/restore/preview', methods=['POST'])
+@custom_config_bp.route('/linux-gateway/restore/preview', methods=['POST'])
+@profiles_bp.route('/<profile_id>/custom-config/linux-gateway/restore', methods=['POST'])
+@custom_config_bp.route('/linux-gateway/restore', methods=['POST'])
 @require_auth
 def linux_gateway_settings(profile_id=None):
-    config = get_config()
+    repository = get_repository()
+    profile_id = resolve_profile_id(profile_id)
     try:
         guard = None
+        config, revision = repository.get_publish_snapshot(profile_id)
         if request.method == 'POST':
             value = request.get_json(silent=True)
             if not isinstance(value, dict):
                 raise LinuxGatewayError('Linux 网关设置必须是 JSON 对象')
-            settings = validate_gateway_selection(config, value.get('settings', value))
-            config.setdefault('mihomo', {})['linux_gateway'] = settings
-            guard = save_config_with_publish_guard(config, 'mihomo')
+            restore = '/linux-gateway/restore' in request.path
+            action = 'restore' if restore else 'save'
+            def prepare(current):
+                return prepare_restore(current) if restore else prepare_settings(current, value.get('settings', value))
+
+            if request.path.endswith('/preview'):
+                check_revision(value.get('expected_config_revision'), revision)
+                return _response(preview_draft(config, prepare(config), revision, action, request.url_root.rstrip('/')))
+
+            committed = {}
+            def update(current):
+                current_revision = repository.config_revision(profile_id)
+                # Old integrations keep their request shape. The browser always
+                # supplies both guards; restore always requires a fresh preview.
+                guarded = restore or 'expected_config_revision' in value or 'preview_token' in value
+                if guarded:
+                    check_revision(value.get('expected_config_revision'), current_revision)
+                candidate = prepare(current)
+                if guarded:
+                    check_preview(value, preview_draft(current, candidate, current_revision, action, request.url_root.rstrip('/')))
+                if not restore:
+                    remember_original(current, candidate)
+                for key in ('mihomo', 'oxidns'):
+                    if key in candidate:
+                        current[key] = candidate[key]
+                committed.update(current)
+
+            _, revision = repository.update_profile_transaction(profile_id, update, include_config_revision=True)
+            reset_config_context()
+            config = committed
+            guard = {'expected_profile_id': profile_id, 'expected_service_type': 'mihomo',
+                     'expected_config_revision': revision}
         # Static usage guidance is presented in the editor's expandable help.
         result = gateway_editor_state(config, include_guidance=False)
+        result.update(config_revision=revision, restore_point=restore_summary(config))
         if guard is not None:
             result.update(success=True, publish_guard=guard)
-        response = jsonify(result)
-        response.headers['Cache-Control'] = 'no-store'
-        return response
+        return _response(result)
     except LinuxGatewayError as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
 

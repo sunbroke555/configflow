@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Check, Copy, LoaderCircle, Network, RefreshCw, RotateCcw } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
-import { linuxGatewayApi, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewaySettings, type LinuxGatewayStatus } from '@/api/linuxGateway'
+import { linuxGatewayApi, type LinuxGatewayConfig, type LinuxGatewayDraftPreview, type LinuxGatewayRestorePoint, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewaySettings, type LinuxGatewayStatus } from '@/api/linuxGateway'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySettingsKey, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
 import { confirm, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
@@ -38,6 +38,12 @@ const preview = ref<LinuxGatewayPreview | null>(null)
 const previewKey = ref('')
 const loading = ref(false)
 const saving = ref(false)
+const configRevision = ref(0)
+const restorePoint = ref<LinuxGatewayRestorePoint | null>(null)
+const draftReview = ref<LinuxGatewayDraftPreview | null>(null)
+const reviewKey = ref('')
+const draftAction = ref<'' | 'preview' | 'restore'>('')
+const draftError = ref('')
 const networkAction = ref<'' | 'status' | 'preview' | 'apply' | 'remove'>('')
 const loadError = ref('')
 const targetError = ref('')
@@ -63,7 +69,7 @@ const networkState = computed(() => {
 })
 const configDirty = computed(() => gatewaySettingsKey(settings) !== gatewaySettingsKey(savedSettings.value))
 const networkDirty = computed(() => !!selectedAgentId.value && gatewaySpecKey(network) !== networkBaseline.value)
-const busy = computed(() => loading.value || saving.value || !!networkAction.value)
+const busy = computed(() => loading.value || saving.value || !!networkAction.value || !!draftAction.value)
 const configured = computed(() => savedSettings.value.enabled && settings.enabled && !configDirty.value)
 const errors = computed(() => gatewaySpecErrors(network))
 const currentPreviewKey = computed(() => JSON.stringify([props.profileId, selectedAgentId.value, gatewaySpecKey(network), gatewaySettingsKey(settings)]))
@@ -81,6 +87,50 @@ const capture = () => ({ session, hostSession, profileId: props.profileId, agent
 const current = (token: ReturnType<typeof capture>, host = false) => !disposed && props.open && token.session === session
   && token.profileId === props.profileId && (!host || (token.hostSession === hostSession && token.agentId === selectedAgentId.value))
 
+function acceptConfig(data: LinuxGatewayConfig) {
+  Object.assign(settings, { enabled: data.settings.enabled, rule_set_ids: [...data.settings.rule_set_ids] })
+  savedSettings.value = { enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids] }
+  configRevision.value = data.config_revision
+  restorePoint.value = data.restore_point || null
+  if (data.candidates) candidates.value = data.candidates
+  if (data.warnings) warnings.value = data.warnings
+  if (data.fake_ip_range) fakeIPRange.value = data.fake_ip_range
+  refreshInterval.value = data.refresh_interval || 300
+  draftReview.value = null
+  preview.value = null
+  networkResult.value = ''
+}
+
+async function reviewDraft(action: 'save' | 'restore', token: ReturnType<typeof capture>) {
+  const key = gatewaySettingsKey(settings)
+  const { data } = action === 'restore'
+    ? await linuxGatewayApi.previewRestore(token.profileId, configRevision.value)
+    : await linuxGatewayApi.previewDraft(token.profileId, { enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids] }, configRevision.value)
+  if (!current(token) || key !== gatewaySettingsKey(settings)) throw new Error('设置页面或试用内容已改变，请重新预览。')
+  if (data.success === false) throw new Error((data as any).message || '配置预览失败')
+  draftReview.value = data
+  reviewKey.value = key
+  return data
+}
+
+async function previewDraft() {
+  if (busy.value) return
+  const token = capture()
+  draftAction.value = 'preview'
+  draftReview.value = null
+  draftError.value = ''
+  try { await reviewDraft('save', token) }
+  catch (error) { if (current(token)) draftError.value = gatewayErrorMessage(error) }
+  finally { if (current(token)) draftAction.value = '' }
+}
+
+async function reloadDraft() {
+  if (busy.value) return
+  const token = capture()
+  if (configDirty.value && !await confirm('重新读取会放弃本页未保存的试用设置。', { title: '重新读取草稿？', confirmText: '放弃试用并读取' })) return
+  if (current(token) && !busy.value) await load()
+}
+
 async function load() {
   const token = capture()
   loading.value = true
@@ -91,13 +141,7 @@ async function load() {
   ])
   if (!current(token)) return
   if (configResult.status === 'fulfilled') {
-    const data = configResult.value.data
-    Object.assign(settings, { enabled: data.settings.enabled, rule_set_ids: [...data.settings.rule_set_ids] })
-    savedSettings.value = { enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids] }
-    candidates.value = data.candidates || []
-    fakeIPRange.value = data.fake_ip_range
-    warnings.value = data.warnings || []
-    refreshInterval.value = data.refresh_interval || 300
+    acceptConfig(configResult.value.data)
   } else loadError.value = gatewayErrorMessage(configResult.reason)
   if (profilesResult.status === 'fulfilled') profiles.value = profilesResult.value.data
   if (agentsResult.status === 'fulfilled' && profilesResult.status === 'fulfilled') {
@@ -108,25 +152,57 @@ async function load() {
 }
 
 async function save(): Promise<PublishGuard | null> {
-  if (loading.value || saving.value || loadError.value) throw new Error('配置尚未就绪，请重试读取后再保存。')
+  if (busy.value || loadError.value) throw new Error('配置尚未就绪，请重试读取后再保存。')
   const token = capture()
   const draft = { enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids] }
   saving.value = true
+  draftError.value = ''
   try {
-    const { data } = await linuxGatewayApi.save(token.profileId, draft)
+    const review = draftReview.value?.action === 'save' && reviewKey.value === gatewaySettingsKey(draft)
+      ? draftReview.value : await reviewDraft('save', token)
+    const approved = await confirm(`将保存当前网关设置，生成配置有 ${review.changes.length} 项变更。基础 YAML 保持原样；首次更改会保留试用前的 Mihomo、OxiDNS 草稿供恢复。`, {
+      title: '保存网关草稿？', confirmText: '确认保存',
+    })
+    if (!approved || !current(token) || gatewaySettingsKey(draft) !== gatewaySettingsKey(settings)) return null
+    const { data } = await linuxGatewayApi.save(token.profileId, draft, {
+      expected_config_revision: review.config_revision, preview_token: review.preview_token,
+    })
     if (!current(token)) throw new Error('设置页面已关闭或配置空间已改变。')
     if (data.success === false) throw new Error((data as any).message || '保存失败')
-    savedSettings.value = draft
-    if (data.candidates) candidates.value = data.candidates
-    if (data.warnings) warnings.value = data.warnings
-    if (data.fake_ip_range) fakeIPRange.value = data.fake_ip_range
-    preview.value = null
-    networkResult.value = ''
+    acceptConfig(data)
     return data.publish_guard || null
   } catch (error) {
-    if (current(token)) notify.error(`保存网关配置失败：${gatewayErrorMessage(error)}`)
+    if (current(token)) { draftReview.value = null; draftError.value = gatewayErrorMessage(error); notify.error(`保存网关配置失败：${draftError.value}`) }
     throw error
   } finally { if (current(token)) saving.value = false }
+}
+
+async function restoreDraft() {
+  if (busy.value || !restorePoint.value) return
+  const token = capture()
+  const key = gatewaySettingsKey(settings)
+  draftAction.value = 'restore'
+  draftError.value = ''
+  try {
+    if (draftReview.value?.action !== 'restore' || reviewKey.value !== key) {
+      await reviewDraft('restore', token)
+      return
+    }
+    const review = draftReview.value
+    const approved = await confirm(`将恢复快照中的 Mihomo 和 OxiDNS 草稿，撤销快照之后对这两份草稿的修改${configDirty.value ? '，并放弃本页未保存的试用设置' : ''}。请核对页面中的 ${review.changes.length} 项变更。恢复后需要另行发布才能在设备生效。`, {
+      title: '恢复试用前草稿？', confirmText: '确认恢复草稿', danger: true,
+    })
+    if (!approved || !current(token) || key !== gatewaySettingsKey(settings)) return
+    const { data } = await linuxGatewayApi.restoreDraft(token.profileId, {
+      expected_config_revision: review.config_revision, preview_token: review.preview_token,
+    })
+    if (!current(token)) return
+    if (data.success === false) throw new Error((data as any).message || '恢复失败')
+    acceptConfig(data)
+    notify.success('Mihomo、OxiDNS 草稿已恢复。请按需另行发布到设备。')
+  } catch (error) {
+    if (current(token)) { draftReview.value = null; draftError.value = gatewayErrorMessage(error); notify.error(`恢复草稿失败：${draftError.value}`) }
+  } finally { if (current(token)) draftAction.value = '' }
 }
 
 async function reloadTargets() {
@@ -145,7 +221,8 @@ async function reloadTargets() {
 }
 
 async function saveDraft() {
-  try { await save(); if (props.open && !disposed) notify.success('网关草稿已保存。请发布 Mihomo，再继续配置设备网络。') }
+  const token = capture()
+  try { const guard = await save(); if (guard && current(token)) notify.success('网关草稿已保存。请发布 Mihomo，再继续配置设备网络。') }
   catch { /* The save callback also supplies feedback for SettingsPublishBar. */ }
 }
 
@@ -253,6 +330,11 @@ watch(() => [props.open, props.profileId], () => {
   hostSession++
   loading.value = false
   saving.value = false
+  draftAction.value = ''
+  draftReview.value = null
+  draftError.value = ''
+  restorePoint.value = null
+  configRevision.value = 0
   networkAction.value = ''
   selectedAgentId.value = ''
   status.value = null
@@ -277,12 +359,13 @@ watch(selectedAgentId, () => {
   if (props.open && selectedAgentId.value) void loadStatus(true)
 }, { flush: 'sync' })
 watch(currentPreviewKey, () => { preview.value = null; previewKey.value = '' }, { flush: 'sync' })
+watch(() => gatewaySettingsKey(settings), () => { draftReview.value = null; reviewKey.value = ''; draftError.value = '' }, { flush: 'sync' })
 onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
 </script>
 
 
 <template>
-  <SettingsWorkspace :open="open" title="Linux 选择性网关" description="设置接管规则，检查并应用所选 Linux 的网络转发。" :dirty="configDirty || networkDirty" :busy="busy" :save-disabled="!!loadError || loading" size="form" @update:open="emit('update:open', $event)" @save="saveDraft">
+  <SettingsWorkspace :open="open" title="Linux 选择性网关" description="试用并预览配置变更，保存后再发布或应用设备网络。" :dirty="configDirty || networkDirty" :busy="busy" :save-disabled="!!loadError || loading || (configDirty && draftReview?.action !== 'save')" size="form" @update:open="emit('update:open', $event)" @save="saveDraft">
     <div class="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain [overflow-wrap:anywhere]">
       <div class="mx-auto w-full min-w-0 max-w-3xl space-y-4 p-3 sm:p-5">
         <div v-if="loading" role="status" class="flex items-center gap-2 py-4 text-sm text-muted-foreground"><LoaderCircle class="size-4 animate-spin" />正在读取网关配置…</div>
@@ -296,7 +379,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
           <section aria-labelledby="gateway-rules" class="space-y-3">
             <h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2>
             <label for="linux-gateway-enabled" class="flex min-h-11 cursor-pointer items-center justify-between gap-4 border-b border-border pb-3">
-              <span><span class="block text-sm font-medium">启用 Linux 选择性网关</span><span class="mt-1 block text-xs text-muted-foreground">保存仅更新 Mihomo 配置，设备网络需单独应用。</span></span>
+              <span><span class="block text-sm font-medium">启用 Linux 选择性网关</span><span class="mt-1 block text-xs text-muted-foreground">切换只在本页试用。预览并保存后才更新草稿，设备网络需单独应用。</span></span>
               <Switch id="linux-gateway-enabled" v-model="settings.enabled" :disabled="busy" />
             </label>
             <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span>先恢复客户端和设备网络，再保存并发布已关闭模式的 Mihomo 配置。</p>
@@ -314,6 +397,32 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
               <p class="m-0 text-xs text-muted-foreground">修改选择后，请在底部保存并发布 Mihomo。</p>
             </div>
             <div v-if="warnings.length" class="text-xs leading-relaxed" role="status"><p class="m-0 font-medium text-warning-accent">配置提醒</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="warning in warnings" :key="warning">{{ warning }}</li></ul></div>
+          </section>
+
+          <section aria-labelledby="gateway-draft" class="space-y-3 border-t border-border pt-4">
+            <div><h2 id="gateway-draft" class="m-0 text-lg font-semibold">配置试用与恢复</h2><p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">先预览，再明确保存。网关设置会参与生成；原有基础 YAML 保留，关闭网关即可按原基础配置生成。</p></div>
+            <div class="flex flex-wrap gap-2">
+              <Button variant="outline" class="min-h-11" :disabled="busy" @click="previewDraft"><LoaderCircle v-if="draftAction === 'preview'" class="size-4 animate-spin" />预览配置变更</Button>
+              <Button v-if="restorePoint" variant="outline" class="min-h-11" :disabled="busy" @click="restoreDraft"><LoaderCircle v-if="draftAction === 'restore'" class="size-4 animate-spin" /><RotateCcw v-else class="size-4" />{{ draftReview?.action === 'restore' ? '恢复这份草稿' : '预览恢复变更' }}</Button>
+            </div>
+            <p v-if="restorePoint" class="m-0 text-xs leading-relaxed text-muted-foreground">已保留试用前草稿 · <time :datetime="restorePoint.created_at">{{ new Date(restorePoint.created_at).toLocaleString() }}</time>。恢复会撤销之后对 Mihomo、OxiDNS 草稿的修改，请先核对差异。</p>
+            <p v-else class="m-0 text-xs leading-relaxed text-muted-foreground">首次保存变更时会保留当前 Mihomo、OxiDNS 草稿；后续保存沿用这份快照。</p>
+            <p v-if="draftError" role="alert" class="m-0 text-xs leading-relaxed text-destructive-accent">{{ draftError }}<Button variant="ghost" class="ml-1 min-h-11" :disabled="busy" @click="reloadDraft">重新读取已保存草稿</Button></p>
+            <div v-if="draftReview" class="space-y-2" aria-live="polite">
+              <p class="m-0 text-sm font-medium">{{ draftReview.action === 'restore' ? '恢复预览 · 尚未恢复' : '试用预览 · 尚未保存' }} · <span class="num">{{ draftReview.changes.length }}</span> 项变更</p>
+              <p class="m-0 text-xs text-muted-foreground">{{ draftReview.action === 'restore' ? '核对后点击「恢复这份草稿」。只恢复草稿，需要另行发布到设备。' : '核对下方差异后，在底部保存草稿或保存并发布。OxiDNS 草稿不变。' }}</p>
+              <p v-for="warning in draftReview.warnings" :key="warning" class="m-0 text-xs text-warning-accent">{{ warning }}</p>
+              <div v-if="draftReview.changes.length" class="max-h-80 min-w-0 overflow-auto rounded-md border border-border">
+                <dl class="m-0 divide-y divide-border">
+                  <div v-for="change in draftReview.changes" :key="change.path" class="space-y-2 p-3 text-xs">
+                    <dt class="break-all font-mono font-semibold">{{ change.path }}</dt>
+                    <dd class="m-0 grid min-w-0 gap-2 sm:grid-cols-2"><div class="min-w-0"><span class="text-muted-foreground">当前</span><pre class="mt-1 mb-0 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ change.before }}</pre></div><div class="min-w-0"><span class="text-primary-accent">{{ draftReview.action === 'restore' ? '恢复后' : '保存后' }}</span><pre class="mt-1 mb-0 whitespace-pre-wrap break-all font-mono leading-relaxed">{{ change.after }}</pre></div></dd>
+                  </div>
+                </dl>
+              </div>
+              <p v-else class="m-0 text-xs text-muted-foreground">生成配置没有变化。</p>
+            </div>
+            <p v-else class="m-0 text-xs text-muted-foreground" role="status">{{ configDirty ? '当前有未保存的试用设置。' : '可以直接试用开关和接管规则。' }}点击「预览配置变更」后可保存；关闭页面可放弃试用。</p>
           </section>
 
           <section aria-labelledby="gateway-network" class="space-y-3 border-t border-border pt-4">
@@ -410,6 +519,6 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
         </template>
       </div>
     </div>
-    <template #footer="{ disabled }"><SettingsPublishBar :open="open" :profile-id="profileId" service-type="mihomo" :disabled="disabled || !!loadError || loading" :save="save" @save-draft="saveDraft" /></template>
+    <template #footer="{ disabled }"><SettingsPublishBar :open="open" :profile-id="profileId" service-type="mihomo" :disabled="disabled || !!loadError || loading || (configDirty && draftReview?.action !== 'save')" :save="save" @save-draft="saveDraft" /></template>
   </SettingsWorkspace>
 </template>

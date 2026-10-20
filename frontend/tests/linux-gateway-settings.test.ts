@@ -14,9 +14,10 @@ import { linuxGatewayApi } from '@/api/linuxGateway'
 import { confirm, notify } from '@/lib/feedback'
 import { gatewaySpecErrors } from '@/lib/linuxGateway'
 
-vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn() }, profileApi: { list: vi.fn() } }))
+vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, profileApi: { list: vi.fn() } }))
 vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: {
   get: vi.fn(), save: vi.fn(), status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn(),
+  previewDraft: vi.fn(), previewRestore: vi.fn(), restoreDraft: vi.fn(),
 } }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
 
@@ -27,12 +28,18 @@ const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard'
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand')
 const writeText = vi.fn()
 const config = (enabled = false) => ({
+  config_revision: 9, restore_point: null,
   settings: { enabled, rule_set_ids: ['telegram', 'disabled'] }, fake_ip_range: '198.18.0.1/16', refresh_interval: 300, warnings: [],
   candidates: [
     { id: 'telegram', name: 'Telegram 已改名', behavior: 'ipcidr', enabled: true, available: true, policy: '国外代理' },
     { id: 'disabled', name: '已停用 IP 集合', behavior: 'classical', enabled: false, available: false },
   ],
 })
+const draftPreview = (action: 'save' | 'restore' = 'save') => ({
+  success: true, action, config_revision: 9, preview_token: 'reviewed-config', restore_point: null,
+  changes: [{ path: 'Mihomo.dns.listen', before: '0.0.0.0:53', after: '127.0.0.1:1053' }], warnings: [],
+})
+const draftGuard = { expected_config_revision: 9, preview_token: 'reviewed-config' }
 const hostStatus = () => ({ success: true, enabled_in_config: true, detection: { suggested: { ...spec } }, managed: { active: false } })
 const agent = (id = 'one', extra = {}) => ({ id, name: id, profile_id: 'office', service_type: 'mihomo', status: 'online', enabled: true, deployment_method: 'shell', ...extra })
 const workspaceStub = defineComponent({
@@ -50,8 +57,8 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-async function render(enabled = false, attached = false) {
-  vi.mocked(linuxGatewayApi.get).mockResolvedValue(response(config(enabled)))
+async function render(enabled = false, attached = false, extra = {}, realPublish = false) {
+  vi.mocked(linuxGatewayApi.get).mockResolvedValue(response({ ...config(enabled), ...extra }))
   let attachTo: HTMLElement | undefined
   if (attached) {
     attachTo = document.createElement('div'); document.body.appendChild(attachTo); attachedRoots.push(attachTo)
@@ -59,7 +66,7 @@ async function render(enabled = false, attached = false) {
   const wrapper = shallowMount(LinuxGatewaySettings, {
     attachTo,
     props: { open: true, profileId: 'office' },
-    global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, AgentStatusRow: false } },
+    global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, AgentStatusRow: false, ...(realPublish ? { SettingsPublishBar: false } : {}) } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -74,9 +81,15 @@ beforeEach(() => {
   writeText.mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
   vi.mocked(agentApi.getAll).mockResolvedValue(response([agent()]))
+  vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, id) => response({ deployment_id: id, status: 'succeeded' }))
+  vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, id) => response({ deployment_id: id, status: 'uploading' }))
+  vi.mocked(agentApi.activateDeployment).mockImplementation(async (_id, id) => response({ deployment_id: id, status: 'succeeded' }))
   vi.mocked(profileApi.list).mockResolvedValue(response([{ id: 'office', name: '办公室' }]))
   vi.mocked(linuxGatewayApi.status).mockResolvedValue(response(hostStatus()))
-  vi.mocked(linuxGatewayApi.save).mockImplementation(async (_profile, settings) => response({ success: true, settings, publish_guard: guard }))
+  vi.mocked(linuxGatewayApi.save).mockImplementation(async (_profile, settings) => response({ ...config(), success: true, settings, config_revision: 10, publish_guard: guard }))
+  vi.mocked(linuxGatewayApi.previewDraft).mockResolvedValue(response(draftPreview()))
+  vi.mocked(linuxGatewayApi.previewRestore).mockResolvedValue(response(draftPreview('restore')))
+  vi.mocked(linuxGatewayApi.restoreDraft).mockResolvedValue(response({ ...config(), success: true, config_revision: 10 }))
   vi.mocked(linuxGatewayApi.preview).mockResolvedValue(response({ ...hostStatus(), ready: true, blockers: [], warnings: [], commands: ['nft list ruleset'], spec }))
   vi.mocked(linuxGatewayApi.apply).mockResolvedValue(response({ success: true, managed: { active: true, healthy: true, spec } }))
   vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, managed: { active: false } }))
@@ -92,6 +105,129 @@ afterEach(() => {
 })
 
 describe('Linux gateway opt-in workflow', () => {
+  it('previews local settings offline without saving or changing host networking, then invalidates edited previews', async () => {
+    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent('one', { status: 'offline' })]))
+    const wrapper = await render()
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', true)
+    await flushPromises()
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.previewDraft).toHaveBeenCalledWith('office', { enabled: true, rule_set_ids: ['telegram', 'disabled'] }, 9)
+    expect(wrapper.text()).toContain('试用预览 · 尚未保存')
+    expect(wrapper.text()).toContain('127.0.0.1:1053')
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(false)
+    expect(linuxGatewayApi.save).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.status).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
+    wrapper.findAllComponents(Checkbox)[0].vm.$emit('update:modelValue', false)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('试用预览 · 尚未保存')
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+  })
+
+  it('canceling the explicit save leaves the trial dirty and does not claim success', async () => {
+    const wrapper = await render()
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', true)
+    vi.mocked(confirm).mockResolvedValue(false)
+    await flushPromises()
+    await wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft')
+    await flushPromises()
+    expect(linuxGatewayApi.save).not.toHaveBeenCalled()
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+  })
+
+  it('keeps a stale-save conflict visible without discarding the local trial', async () => {
+    const wrapper = await render()
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', true)
+    vi.mocked(linuxGatewayApi.save).mockRejectedValue({ response: { status: 409, data: { message: '配置或共享资源已更新，请重新打开' } } })
+    await flushPromises()
+    await expect(wrapper.getComponent(SettingsPublishBar).props('save')()).rejects.toBeTruthy()
+    expect(wrapper.text()).toContain('配置或共享资源已更新')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+    expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
+  })
+
+  it('ignores draft preview responses after closing or changing profiles', async () => {
+    const pending = deferred<any>()
+    vi.mocked(linuxGatewayApi.previewDraft).mockImplementationOnce(() => pending.promise)
+    const wrapper = await render()
+    await button(wrapper, '预览配置变更').trigger('click')
+    await wrapper.setProps({ profileId: 'other' })
+    pending.resolve(response(draftPreview()))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('试用预览 · 尚未保存')
+    expect(notify.error).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.save).not.toHaveBeenCalled()
+  })
+
+  it('does not save to the old profile after switching during confirmation', async () => {
+    const pending = deferred<boolean>()
+    const wrapper = await render()
+    vi.mocked(confirm).mockImplementationOnce(() => pending.promise)
+    const saving = wrapper.getComponent(SettingsPublishBar).props('save')()
+    await flushPromises()
+    await wrapper.setProps({ profileId: 'other' })
+    pending.resolve(true)
+    expect(await saving).toBeNull()
+    expect(linuxGatewayApi.save).not.toHaveBeenCalled()
+  })
+
+  it('previews recovery before allowing confirmation, supports cancellation and never publishes or applies networking', async () => {
+    const wrapper = await render(true, false, { restore_point: { id: 'snapshot', created_at: '2026-10-20T01:00:00Z' } })
+    await button(wrapper, '预览恢复变更').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('恢复预览 · 尚未恢复')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.restoreDraft).not.toHaveBeenCalled()
+    vi.mocked(confirm).mockResolvedValueOnce(false)
+    await button(wrapper, '恢复这份草稿').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.restoreDraft).not.toHaveBeenCalled()
+    await button(wrapper, '恢复这份草稿').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.restoreDraft).toHaveBeenCalledExactlyOnceWith('office', draftGuard)
+    expect(wrapper.getComponent(Switch).props('modelValue')).toBe(false)
+    expect(wrapper.findAll('button').some(item => item.text() === '预览恢复变更')).toBe(false)
+    expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+  })
+
+  it('blocks a stale recovery without losing the original saved state', async () => {
+    const wrapper = await render(true, false, { restore_point: { id: 'snapshot', created_at: '2026-10-20T01:00:00Z' } })
+    await button(wrapper, '预览恢复变更').trigger('click'); await flushPromises()
+    vi.mocked(linuxGatewayApi.restoreDraft).mockRejectedValueOnce(new Error('配置已更新，请重新预览'))
+    await button(wrapper, '恢复这份草稿').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('配置已更新，请重新预览')
+    expect(wrapper.getComponent(Switch).props('modelValue')).toBe(true)
+    expect(notify.success).not.toHaveBeenCalled()
+  })
+
+  it('continues normal save-and-publish with exactly the committed revision after preview', async () => {
+    const wrapper = await render(false, false, {}, true)
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', true)
+    await flushPromises()
+    expect(button(wrapper, '保存并发布').attributes('disabled')).toBeDefined()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    await button(wrapper, '保存并发布').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.save).toHaveBeenCalledExactlyOnceWith('office', { enabled: true, rule_set_ids: ['telegram', 'disabled'] }, draftGuard)
+    expect(agentApi.pushConfig).toHaveBeenCalledExactlyOnceWith('one', expect.any(String), guard)
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(false)
+  })
+
+  it('keeps ready-candidate activation available after saving clears the draft preview', async () => {
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, id) => response({ deployment_id: id, status: 'ready' }))
+    const wrapper = await render(false, false, {}, true)
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', true)
+    await flushPromises()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    await button(wrapper, '保存并发布').trigger('click'); await flushPromises()
+    expect(wrapper.text()).not.toContain('试用预览 · 尚未保存')
+    const activate = button(wrapper, '应用并启动')
+    expect(activate.attributes('disabled')).toBeUndefined()
+    await activate.trigger('click'); await flushPromises()
+    expect(agentApi.activateDeployment).toHaveBeenCalledWith('one', expect.any(String))
+  })
+
   it('stays off by default and neither mode switches nor saves execute host networking', async () => {
     const wrapper = await render()
     expect(wrapper.getComponent(Switch).props('modelValue')).toBe(false)
@@ -103,7 +239,7 @@ describe('Linux gateway opt-in workflow', () => {
     expect(button(wrapper, '预览并检查').attributes('disabled')).toBeDefined()
     expect(await wrapper.getComponent(SettingsPublishBar).props('save')()).toEqual(guard)
     await flushPromises()
-    expect(linuxGatewayApi.save).toHaveBeenCalledWith('office', { enabled: true, rule_set_ids: ['telegram', 'disabled'] })
+    expect(linuxGatewayApi.save).toHaveBeenCalledWith('office', { enabled: true, rule_set_ids: ['telegram', 'disabled'] }, draftGuard)
     expect(linuxGatewayApi.preview).not.toHaveBeenCalled()
     expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
     expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
@@ -119,7 +255,7 @@ describe('Linux gateway opt-in workflow', () => {
     boxes[1].vm.$emit('update:modelValue', false)
     await flushPromises()
     await wrapper.getComponent(SettingsPublishBar).props('save')()
-    expect(linuxGatewayApi.save).toHaveBeenLastCalledWith('office', { enabled: true, rule_set_ids: ['telegram'] })
+    expect(linuxGatewayApi.save).toHaveBeenLastCalledWith('office', { enabled: true, rule_set_ids: ['telegram'] }, draftGuard)
   })
 
   it('requires successful preview of the current host inputs before explicit apply', async () => {

@@ -1095,6 +1095,9 @@ class ProfileRepository:
                     profile['routers'] = redact_routers(profile['routers'])
                 for engine in ('mihomo', 'surge', 'mosdns'):
                     profile[engine]['custom_config'] = ''
+                # Recovery snapshots contain the original opaque YAML and DNS
+                # credentials. Human-shareable exports must omit them entirely.
+                profile['mihomo'].pop('linux_gateway_restore_point', None)
                 if isinstance(profile.get('loon'), dict):
                     profile['loon']['custom_config'] = ''
             result = sanitize_external_payload(result, system_config)
