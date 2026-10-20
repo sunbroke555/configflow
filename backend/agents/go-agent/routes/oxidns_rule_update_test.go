@@ -80,6 +80,7 @@ type oxRuleFixture struct {
 	handler http.HandlerFunc
 	mu      sync.Mutex
 	calls   []string
+	bodies  []string
 }
 
 func newOxRuleFixture(t *testing.T, plugins string, override func(http.ResponseWriter, *http.Request) bool) *oxRuleFixture {
@@ -94,7 +95,11 @@ func newOxRuleFixture(t *testing.T, plugins string, override func(http.ResponseW
 		}
 		if r.Method == http.MethodPost {
 			body, _ := io.ReadAll(r.Body)
-			if string(body) != "{}" || r.Header.Get("Content-Type") != "application/json" {
+			fixture.mu.Lock()
+			fixture.bodies = append(fixture.bodies, string(body))
+			fixture.mu.Unlock()
+			targeted := r.URL.Path == "/api/plugins/rules_download/download" && (string(body) == `{"index":0}` || string(body) == `{"index":1}`)
+			if (string(body) != "{}" && !targeted) || r.Header.Get("Content-Type") != "application/json" {
 				t.Errorf("unexpected core request body: %q", body)
 			}
 		}
@@ -418,5 +423,103 @@ func TestOxiDNSRuleUpdateOnlyExplicitSafeChains(t *testing.T) {
 				t.Fatalf("chain validity: %v", err)
 			}
 		})
+	}
+}
+
+func TestOxiDNSRuleUpdateTargetsRequestedFiles(t *testing.T) {
+	f := newOxRuleFixture(t, oxRuleTestPlugins, func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/plugins/rules_download/download" {
+			fmt.Fprint(w, `{"ok":true,"total":1,"succeeded":1,"failed":0}`)
+			return true
+		}
+		return false
+	})
+	w := f.request("POST", "/api/oxidns/rules/update", `{"paths":["./rules/addresses.txt"]}`)
+	if w.Code != 202 || !strings.Contains(w.Body.String(), `"download_total":1`) || !strings.Contains(w.Body.String(), `"reload_total":1`) {
+		t.Fatalf("targeted update not accepted: %d %s", w.Code, w.Body.String())
+	}
+	task := f.wait(t)
+	if task.Status != "succeeded" || task.Downloaded != 1 || task.DownloadTotal != 1 || task.Reloaded != 1 || task.ReloadTotal != 1 {
+		t.Fatalf("unexpected targeted result: %+v", task)
+	}
+	want := []string{"POST /api/plugins/rules_download/download", "POST /api/plugins/addresses/reload"}
+	if got := f.mutations(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("targeted update touched other items: %v", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.bodies[0] != `{"index":1}` {
+		t.Fatalf("wrong download index: %v", f.bodies)
+	}
+}
+
+func TestOxiDNSRuleUpdateTargetedFailureKeepsGoingWithoutReload(t *testing.T) {
+	var downloads atomic.Int32
+	f := newOxRuleFixture(t, oxRuleTestPlugins, func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/plugins/rules_download/download" {
+			return false
+		}
+		if downloads.Add(1) == 1 {
+			fmt.Fprint(w, `{"ok":false,"total":1,"succeeded":0,"failed":1}`)
+		} else {
+			fmt.Fprint(w, `{"ok":true,"total":1,"succeeded":1,"failed":0}`)
+		}
+		return true
+	})
+	if w := f.request("POST", "/api/oxidns/rules/update", `{"paths":["rules/domains.txt","rules/addresses.txt"]}`); w.Code != 202 {
+		t.Fatalf("not accepted: %s", w.Body.String())
+	}
+	task := f.wait(t)
+	if task.Status != "failed" || task.Code != "DOWNLOAD_FAILED" || task.Downloaded != 1 || task.DownloadTotal != 2 || task.Reloaded != 0 {
+		t.Fatalf("incorrect targeted failure: %+v", task)
+	}
+	want := []string{"POST /api/plugins/rules_download/download", "POST /api/plugins/rules_download/download"}
+	if got := f.mutations(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("failed item stopped others or reloaded: %v", got)
+	}
+}
+
+func TestOxiDNSRuleUpdateRejectsUnknownOrChangedTargets(t *testing.T) {
+	f := newOxRuleFixture(t, oxRuleTestPlugins, nil)
+	w := f.request("POST", "/api/oxidns/rules/update", `{"paths":["rules/other.txt"]}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "RULE_UPDATE_TARGET_UNKNOWN") || len(f.calls) != 0 {
+		t.Fatalf("unknown target was accepted: %d %s %v", w.Code, w.Body.String(), f.calls)
+	}
+	f = newOxRuleFixture(t, oxRuleTestPlugins, func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/api/plugins/rules_download/downloads" {
+			return false
+		}
+		fmt.Fprint(w, `{"ok":true,"running":false,"downloads":[{"index":0,"path":"/etc/oxidns/rules/domains.txt"},{"index":1,"path":"/etc/oxidns/rules/replaced.txt"}]}`)
+		return true
+	})
+	w = f.request("POST", "/api/oxidns/rules/update", `{"paths":["rules/addresses.txt"]}`)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "SNAPSHOT_CHANGED") || len(f.mutations()) != 0 {
+		t.Fatalf("changed runtime target was accepted: %d %s", w.Code, w.Body.String())
+	}
+	if w := f.request("POST", "/api/oxidns/rules/update", `{"paths":["rules/domains.txt"]}`); w.Code != 202 {
+		t.Fatalf("matching absolute runtime path rejected: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestOxiDNSRuleUpdateRejectsInvalidPathRequests(t *testing.T) {
+	f := newOxRuleFixture(t, oxRuleTestPlugins, nil)
+	for _, body := range []string{
+		`{"paths":[]}`,
+		`{"paths":"rules/domains.txt"}`,
+		`{"paths":[""]}`,
+		`{"paths":["/etc/oxidns/rules/domains.txt"]}`,
+		`{"paths":["../rules/domains.txt"]}`,
+		`{"paths":["rules\\domains.txt"]}`,
+		`{"paths":["."]}`,
+		`{"paths":[1]}`,
+		`{"paths":["rules/domains.txt"],"url":"https://evil.test"}`,
+		`{"index":0}`,
+	} {
+		if w := f.request("POST", "/api/oxidns/rules/update", body); w.Code != 400 {
+			t.Errorf("accepted invalid targeted request %s: %d", body, w.Code)
+		}
+	}
+	if len(f.calls) != 0 {
+		t.Fatal("invalid request reached core")
 	}
 }

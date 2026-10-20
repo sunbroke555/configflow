@@ -42,7 +42,7 @@ import { agentRuleSyncApi, type AgentRuleSyncResponse, type AgentRuleSyncSetting
 const props = defineProps<{ agentId: string }>()
 const baselineHint = '先成功发布一次配置，建立自动同步基线'
 const options: { key: keyof AgentRuleSyncSettings; label: string; help: string }[] = [
-  { key: 'library', label: '规则库自动同步', help: '同步已启用引用的规则集内容及新增引用。仅新增未引用的规则库条目不会触发同步。' },
+  { key: 'library', label: '规则库自动同步', help: '同步已启用引用的规则集内容及新增引用，只下载有变化的规则文件。仅新增未引用的规则库条目不会触发同步。' },
   { key: 'rules', label: '单条规则自动同步', help: '同步已选内嵌规则。' },
 ]
 const controlId = computed(() => `agent-rule-sync-${encodeURIComponent(props.agentId)}`)

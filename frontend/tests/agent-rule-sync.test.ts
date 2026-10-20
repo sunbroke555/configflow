@@ -46,7 +46,7 @@ describe('per-Agent automatic rule synchronization controls', () => {
   })
 
   it.each([
-    ['规则库自动同步', '同步已启用引用的规则集内容及新增引用。仅新增未引用的规则库条目不会触发同步。'],
+    ['规则库自动同步', '同步已启用引用的规则集内容及新增引用，只下载有变化的规则文件。仅新增未引用的规则库条目不会触发同步。'],
     ['单条规则自动同步', '同步已选内嵌规则。'],
   ])('shows %s help without toggling either switch or saving settings', async (label, help) => {
     const wrapper = await render()

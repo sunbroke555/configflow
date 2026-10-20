@@ -2,6 +2,8 @@
 
 This bridge exposes one fixed operation. Core addresses, credentials, plugin
 tags and download targets are resolved by the Agent from its deployed config.
+Newer Agents also accept a list of deployed rule files to refresh; they still
+resolve each file against the deployed download list themselves.
 """
 import json
 import re
@@ -12,6 +14,8 @@ from .oxidns_monitor import MonitorError, _agent_origin
 from .version import compare_versions
 
 MIN_AGENT_VERSION = '1.8.30-go'
+PATHS_MIN_AGENT_VERSION = '1.8.35-go'
+MAX_PATHS = 1000
 MAX_RESPONSE_BYTES = 16 * 1024
 
 MESSAGES = {
@@ -26,6 +30,7 @@ MESSAGES = {
     'TLS_UNSUPPORTED': '规则更新暂不支持当前 OxiDNS API 的 TLS 配置。',
     'CONFIG_UNSUPPORTED': '当前 OxiDNS 配置无法用于更新规则，请检查管理 API 和规则更新配置。',
     'RULE_UPDATE_NOT_CONFIGURED': '请先配置可下载的规则并重新发布 OxiDNS 配置，然后重试。',
+    'RULE_UPDATE_TARGET_UNKNOWN': '要更新的规则文件不在设备的下载清单中，请重新发布 OxiDNS 配置后重试。',
     'RULE_UPDATE_AMBIGUOUS': '发现多条规则更新链，无法确定更新目标，请检查 OxiDNS 规则更新配置。',
     'CORE_UPDATE_UNSUPPORTED': '当前 OxiDNS 核心不支持原生规则更新接口，请升级核心后重试。',
     'CORE_UNREACHABLE': '暂时无法连接 OxiDNS 管理 API，请检查核心运行状态。',
@@ -62,6 +67,14 @@ def _agent(manager, agent_id):
     return agent
 
 
+def supports_paths(agent):
+    """Whether the Agent can refresh selected files instead of every download."""
+    try:
+        return compare_versions(agent.get('version', '0'), PATHS_MIN_AGENT_VERSION) >= 0
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def _task(value):
     if not isinstance(value, dict):
         raise _fail('INVALID_RESPONSE')
@@ -90,10 +103,15 @@ def _task(value):
     return result
 
 
-def call(manager, agent_id, method):
-    if method not in ('GET', 'POST'):
+def call(manager, agent_id, method, paths=None):
+    if method not in ('GET', 'POST') or (paths is not None and (
+            method != 'POST' or not isinstance(paths, list) or not 0 < len(paths) <= MAX_PATHS
+            or any(not isinstance(path, str) or not path for path in paths))):
         raise _fail('INVALID_REQUEST', 400)
     agent = _agent(manager, agent_id)
+    if paths is not None and not supports_paths(agent):
+        raise _fail('UPGRADE_REQUIRED', 409)
+    payload = json.dumps({'paths': paths}) if paths is not None else '{}'
     try:
         url = _agent_origin(agent) + '/api/oxidns/rules/update'
         headers = {'Authorization': 'Bearer ' + agent['token'], 'Accept': 'application/json'}
@@ -101,7 +119,7 @@ def call(manager, agent_id, method):
             headers['Content-Type'] = 'application/json'
         with requests.Session() as session:
             session.trust_env = False
-            with session.request(method, url, data='{}' if method == 'POST' else None,
+            with session.request(method, url, data=payload if method == 'POST' else None,
                                  headers=headers, timeout=(3, 15), allow_redirects=False,
                                  stream=True) as response:
                 status = response.status_code

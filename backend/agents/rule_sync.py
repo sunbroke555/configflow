@@ -94,6 +94,43 @@ def _unchanged(manager, agent, settings, *, deployment_id=None):
                     deployment_id))
 
 
+def _reusable_rule_paths(service, previous, config_path, baseline, source, content, downloads, base_url):
+    """Deployed rule files the candidate would otherwise download unchanged.
+
+    Their live bytes are kept instead of fetching every referenced rule set for
+    a single structural edit. Any doubt about a file's source means download.
+    """
+    from .rule_sync_projection import mihomo_rule_entries, unchanged_rule_paths
+    try:
+        if service == 'mihomo':
+            old = mihomo_rule_entries(yaml.safe_load(previous[config_path][0]))
+            new = mihomo_rule_entries(yaml.safe_load(content))
+        else:
+            from backend.converters.oxidns import get_oxidns_ruleset_downloads
+            old, new = get_oxidns_ruleset_downloads(baseline['source'], base_url=base_url), downloads
+        paths = unchanged_rule_paths(old, new, baseline['source'], source, base_url)
+    except Exception as error:  # an unreadable baseline only disables reuse
+        logger.info('Rule sync reuse unavailable (%s)', type(error).__name__)
+        return set()
+    return {path for path in paths if path in previous and previous[path][1] == 'rule'}
+
+
+def _changed_rule_paths(baseline, source):
+    """OxiDNS rule files whose source differs from the baseline, or None."""
+    from backend.converters.oxidns import get_oxidns_ruleset_downloads
+    from .deployment_bundle import relative_path
+    from .rule_sync_projection import unchanged_rule_paths
+    base_url = baseline.get('base_url', '')
+    try:
+        old = get_oxidns_ruleset_downloads(baseline['source'], base_url=base_url)
+        new = get_oxidns_ruleset_downloads(source, base_url=base_url)
+        unchanged = unchanged_rule_paths(old, new, baseline['source'], source, base_url)
+    except Exception as error:  # fall back to the native full refresh
+        logger.info('Rule sync file selection unavailable (%s)', type(error).__name__)
+        return None
+    return sorted({relative_path(item['local_path']) for item in new} - unchanged) or None
+
+
 def prepare_candidate(agent, source, baseline, settings, deployment_id):
     """Generate rule artifacts while pinning every non-rule delivery byte."""
     from .deployment_bundle import build_deployment_bundle, retarget_config_path, _pack
@@ -112,8 +149,10 @@ def prepare_candidate(agent, source, baseline, settings, deployment_id):
         from backend.converters.oxidns import generate_oxidns_config, get_oxidns_ruleset_downloads
         content = generate_oxidns_config(source, base_url=base_url)
         downloads = get_oxidns_ruleset_downloads(source, base_url=base_url)
+    reusable = (_reusable_rule_paths(service, previous, base_bundle.manifest['config_path'], baseline,
+                                     source, content, downloads, base_url) if settings['library'] else set())
     pinned = [{'path': path, 'content': value, 'role': role} for path, (value, role) in previous.items()
-              if role != 'config' and (role != 'rule' or not settings['library']
+              if role != 'config' and (role != 'rule' or not settings['library'] or path in reusable
                     or (service == 'oxidns' and not path.startswith('rules/rule_')))]
     local_dns_watchdog = True
     if service == 'oxidns':
@@ -286,10 +325,18 @@ class RuleSyncWorker:
         if agent['service_type'] == 'mihomo':
             from .mihomo_panel import call
             main = yaml.safe_load(store.bundle_files(baseline['bundle'])[baseline['bundle'].manifest['config_path']][0])
+            from .deployment_bundle import relative_path
+            from .rule_sync_projection import mihomo_rule_entries, unchanged_rule_paths
             providers = main.get('rule-providers') or {}
             if not providers or any(item.get('type') != 'http' for item in providers.values()):
                 return self._publish(agent, settings, baseline, source, key)
-            for name in providers:
+            entries = mihomo_rule_entries(main)
+            unchanged = unchanged_rule_paths(entries, entries, baseline['source'], source, baseline.get('base_url', ''))
+            # Refresh only providers whose served source changed; an edit that
+            # cannot be attributed (or was reverted) refreshes all of them.
+            names = [name for name, item in providers.items()
+                     if relative_path(item['path']) not in unchanged] or list(providers)
+            for name in names:
                 if not _unchanged(self.manager, agent, settings):
                     return
                 call(self.manager, agent_id, 'providers/rule', 'PUT', {'name': name})
@@ -302,11 +349,23 @@ class RuleSyncWorker:
                 self._state(agent_id, 'pending', '等待已有规则更新完成后同步最新内容',
                             key=key, noticed_at=self.clock() - POLL_SECONDS)
                 return
-            result, _ = call(self.manager, agent_id, 'POST')
+            from .oxidns_monitor import MonitorError
+            from .oxidns_rule_update import supports_paths
+            paths = _changed_rule_paths(baseline, source) if supports_paths(agent) else None
+            try:
+                result, _ = call(self.manager, agent_id, 'POST', paths=paths) if paths else call(
+                    self.manager, agent_id, 'POST')
+            except MonitorError as error:
+                # A customised download chain may name files differently.
+                if not paths or error.code != 'RULE_UPDATE_TARGET_UNKNOWN':
+                    raise
+                paths = None
+                result, _ = call(self.manager, agent_id, 'POST')
             task = result['task']
             task_id = task['id']
             if task['status'] == 'running':
-                self._state(agent_id, 'running', '正在下载并热重载已引用的规则集', key=key,
+                self._state(agent_id, 'running', f'正在下载并热重载 {len(paths)} 个有变化的规则文件' if paths
+                            else '正在下载并热重载已引用的规则集', key=key,
                             native_task=task_id, noticed_at=self.clock() - POLL_SECONDS)
                 return
             if task['status'] != 'succeeded':

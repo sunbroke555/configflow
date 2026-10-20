@@ -10,11 +10,12 @@ import io
 import json
 import re
 import tarfile
+from urllib.parse import parse_qs, urlsplit
 
 import yaml
 
 from .deployment_bundle import (
-    DeploymentPreparationError, _pack, deployment_content_fingerprint, relative_path,
+    DeploymentPreparationError, _local_rule, _pack, deployment_content_fingerprint, relative_path,
 )
 
 
@@ -263,6 +264,70 @@ def rule_change_kind(base, current, service_type, settings):
     if rule_signature(base, service_type, include_content=False) == rule_signature(projected, service_type, include_content=False):
         return 'content'
     return 'structure'
+
+
+def rule_source_fingerprint(url, config, base_url, *, depth=0):
+    """Describe what a rule URL serves in ``config`` without fetching it.
+
+    Mirrors the resolution of ``materialize_rule``: an external URL stands for
+    itself, local callbacks resolve to the rule library entry they serve. Returns
+    None when the source cannot be identified, so callers refresh the file.
+    """
+    from backend.utils.rule_fetch import is_internal_rule_url
+    if depth > 3 or not isinstance(url, str) or not url:
+        return None
+    parsed = urlsplit(url)
+    settings = {**config.get('system_config', {}),
+                'server_domain': config.get('system_config', {}).get('server_domain') or base_url}
+    if parsed.scheme or parsed.netloc:
+        if not is_internal_rule_url(url, {'system_config': settings}):
+            return ['url', url]
+    if parsed.path.endswith(('/mosdns/rule-proxy', '/oxidns/rule-proxy')):
+        inner = rule_source_fingerprint(parse_qs(parsed.query).get('url', [''])[0], config, base_url, depth=depth + 1)
+        return inner and ['proxy', inner]
+    try:
+        rule = _local_rule(url, config, base_url)
+    except DeploymentPreparationError:
+        return None
+    # Gateway and other generated callbacks depend on more than one entry.
+    if rule is None:
+        return None
+    shape = [rule.get('format'), rule.get('behavior')]
+    if rule.get('source_type') == 'content':
+        return ['content', *shape, hashlib.sha256(str(rule.get('content', '')).encode()).hexdigest()]
+    source = rule.get('url', '')
+    inner = None if source == url else rule_source_fingerprint(source, config, base_url, depth=depth + 1)
+    return inner and ['library', *shape, inner]
+
+
+def unchanged_rule_paths(old_entries, new_entries, base, current, base_url):
+    """Rule files whose download URL and served source are identical.
+
+    Entries are ``{'url', 'local_path'}`` download descriptors generated from
+    ``base`` and ``current`` respectively. A file absent from either side, or
+    with an unidentifiable source, is never reported as unchanged.
+    """
+    old = {}
+    for item in old_entries:
+        old.setdefault(relative_path(item['local_path']), set()).add(item.get('url'))
+    result = set()
+    for item in new_entries:
+        path = relative_path(item['local_path'])
+        if old.get(path) != {item.get('url')}:
+            continue
+        before = rule_source_fingerprint(item.get('url'), base, base_url)
+        if before is not None and before == rule_source_fingerprint(item.get('url'), current, base_url):
+            result.add(path)
+    duplicates = [relative_path(item['local_path']) for item in new_entries]
+    return {path for path in result if duplicates.count(path) == 1}
+
+
+def mihomo_rule_entries(document):
+    """HTTP rule-provider download descriptors of a Mihomo main document."""
+    return [{'name': name, 'url': provider['url'], 'local_path': provider['path']}
+            for name, provider in ((document or {}).get('rule-providers') or {}).items()
+            if isinstance(provider, dict) and provider.get('type') == 'http'
+            and isinstance(provider.get('url'), str) and isinstance(provider.get('path'), str)]
 
 
 def read_bundle_files(bundle):
