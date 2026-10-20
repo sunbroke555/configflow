@@ -28,6 +28,7 @@ OxiDNS 使用 Go Agent 的 deployment protocol 1，与 MosDNS 保留为两个独
 | 全部本机 LAN IPv4 排除保护 | `1.8.34-go` |
 | OxiDNS 自动同步增量下载 | `1.8.35-go` |
 | OxiDNS 清理缓存 | `1.8.36-go` |
+| 核心刷新规则后继续 DNS 联动和手动回滚 | `1.8.38-go` |
 
 最低版本只说明该项能力的起点，建议面板与 Agent 使用包含后续修复的配套版本。更新日志见 [版本定义](../backend/agents/version.py)。
 
@@ -73,7 +74,9 @@ ConfigFlow 与两个 Go Agent 更新至支持此功能的版本（Agent `1.8.24-
 
 地址未变且完整主配置摘要与已确认发布一致时，核实设备正在运行的受管文件后即可完成，不重新下载远程规则，规则源暂时不可用不会拖累这次联动。此判断兼容加入本地看门狗前后的配置；旧记录缺少完整摘要时仍执行完整配置与规则核对。地址变化时继续准备并校验全部发布资源。完成前会再次核对两端发布记录和绑定，期间发生新发布、回滚或绑定变化时不会误报成功；未发布的其他规则修改不会因此下发或标为已发布。
 
-卡片分别显示 Mihomo 与 OxiDNS 的结果和步骤。OxiDNS 同步失败会保留原因，可在处理问题后点击 **重试同步**；网络中断导致结果未确认时继续查询原任务，不新建重复发布。需要同步地址时，若 OxiDNS 草稿有其他未发布修改，会提示先处理这些差异；设备文件被手工修改、绑定上游被编辑或移动时同样会阻止联动。成功发布后仅在草稿未被同时修改时更新面板草稿；并发编辑会保留并提示核对。
+卡片分别显示 Mihomo 与 OxiDNS 的结果和步骤。OxiDNS 同步失败会保留原因，可在处理问题后点击 **重试同步**；网络中断导致结果未确认时继续查询原任务，不新建重复发布。需要同步地址时，若 OxiDNS 草稿有其他未发布修改，会提示先处理这些差异；设备主配置或其他严格校验的受管文件被修改、绑定上游被编辑或移动时同样会阻止联动。成功发布后仅在草稿未被同时修改时更新面板草稿；并发编辑会保留并提示核对。
+
+Agent `1.8.38-go` 起，OxiDNS 原生定时下载、手动更新或规则自动同步刷新已发布的下载规则后，不再仅因规则内容变化而阻止联动。可刷新的范围和文件检查条件见下文；主配置的校验仍保持严格。
 
 同一个 OxiDNS 配置仅允许一个自动联动写入方；需要独立跟随的设备应使用独立配置。停止跟随保留现有配置；执行中的联动须先确认结果才能修改或解除绑定。
 
@@ -81,7 +84,11 @@ ConfigFlow 与两个 Go Agent 更新至支持此功能的版本（Agent `1.8.24-
 
 Agent 页面“发布记录”中的“回滚到发布前”用于恢复最近成功发布前的备份。服务端入口为 `POST /api/agents/{agent_id}/deployments/{deployment_id}/rollback`，通过原部署状态接口轮询结果。已受理任务保留相同部署 ID，带 `manual_rollback: true`，状态从 `rolling_back` 进入 `rolled_back`；此时 `success: true`。自动失败回滚仍用 `success: false` 区分。
 
-只允许当前配置方案下最新且仍在运行清单中的成功部署。Agent 在停止服务前检查操作锁、备份摘要、实际配置路径及当前文件摘要。较旧发布、缺失备份、正在升级或被外部任务改写的配置/规则会拒绝回滚并说明原因。若每日规则更新任务已改写规则，需先处理该差异；不能用旧发布记录覆盖未知更改。
+只允许当前配置方案下最新且仍在运行清单中的成功部署。Agent 在停止服务前检查操作锁、备份摘要、实际配置路径及当前受管文件。较旧发布、缺失备份、正在升级或主配置等受严格校验的文件被改写时，会拒绝回滚并说明原因。
+
+Agent `1.8.38-go` 起，**核心正常刷新规则后仍可回滚**：已发布清单中标为规则、且由当前配置的 OxiDNS `download` 或 Mihomo HTTP `rule-providers` 引用为下载目标的文件，允许内容变化。文件仍须存在、为普通文件且路径不含符号链接。主配置、附加文件和其他规则仍检查原始摘要；该兼容不放宽这些文件的检查。旧 Agent 可能仍因规则刷新而拒绝，建议先升级。
+
+**回滚恢复的是发布前备份的规则，不会保留发布后刷新的规则版本。** 需要最新规则时，在确认旧配置恢复健康后，再按该配置支持的方式更新。
 
 回滚恢复受管理文件及发布前的服务启动状态，并对原本运行的服务重新执行健康检查。备份中的旧服务无法恢复健康时状态为 `rollback_failed`，保留恢复记录并阻止新的发布；Agent 启动时只检查并提示，不会自动停止核心或重试恢复；修复原因后需显式处理恢复记录。成功回滚会清除 ConfigFlow 的“当前方案已同步”标记，因为恢复的文件可能来自接入 ConfigFlow 之前。
 
@@ -262,11 +269,23 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 - 默认映射 DNS UDP/TCP 53 及 Agent 8082；管理 API 9199 需要配置认证、监听地址和端口映射。
 - WebUI 文件在 `/usr/share/oxidns/webui`，在 OxiDNS API 设置中填写该路径。
 - Docker 同时启用 Mihomo 与 OxiDNS 时，首次创建 Mihomo 配置使用 DNS `1053`；已有配置和后续发布保留用户设置。MosDNS 与 OxiDNS 默认均使用 53，同一容器安装入口会拒绝同时启用二者；分别用实例与不同端口部署。
-- 核心日志写入 `/var/log/supervisor/oxidns.log` 与 `oxidns.err.log`。原生运行优先读取配置中的日志文件，否则读取 OxiDNS systemd journal。
+- 镜像默认将核心日志写入 `/var/log/supervisor/oxidns.log` 与 `oxidns.err.log`；实际位置以当前服务配置和日志来源列表为准。
 
 Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，例如 `http://192.168.1.10:5010`。Agent 对外注册地址也必须可由面板访问，Docker 端口映射须与页面填写一致。
 
 若已有外部规则更新定时任务，选择由外部任务或 OxiDNS 原生定时更新负责规则，避免两个任务同时写同一组文件。
+
+## 查看 Agent 和核心日志
+
+1. 在 **系统 → Agent** 找到设备，打开卡片上的「日志」。
+2. 在「选择日志」中选择要排查的来源：Agent 自身日志用于查看注册、发布等操作；Mihomo / OxiDNS / MosDNS 核心日志用于查看服务运行错误。
+3. 先看来源旁的路径和说明，再查看日志内容。通常不用手填路径；只有已有自定义日志文件时，才选择「自定义路径…」。
+
+新版 Agent 按设备实际的 systemd、OpenRC 或 Supervisor 服务配置查找标准输出和错误日志；OxiDNS / MosDNS 还会读取主配置中的 `log.file`。同一设备可以出现多个来源，缺失的文件或不能读取的输出会显示原因；容器只向标准输出写日志时，可能需要在宿主机使用 `docker logs`。旧 Agent 没有来源列表时，页面保留「自动检测」。
+
+面板会将可识别的敏感凭据替换为 `[REDACTED]`，保留其余日志；无法安全保留的单行会整行隐藏。看到该标记时，不必把真实令牌补回日志或截图。
+
+**systemd journal 只能查看，不能在页面清空。** 只有允许清空的日志文件才提供该操作，清空会删除整个所选文件的日志，无法恢复。OxiDNS 的查询历史属于独立功能，不是这里的核心日志。
 
 ## 日常 DNS 监控
 
@@ -332,4 +351,4 @@ OXIDNS_TEST_BINARY=/path/to/oxidns go test ./routes -run '^TestOxiDNSNativeDashb
 
 ## 实现参考
 
-[安装与发布入口](../backend/routes/agents.py)、[事务部署](../backend/agents/go-agent/routes/deployment.go)、[DNS 检查](../backend/agents/go-agent/routes/deployment_dns.go)、[自动同步](../backend/agents/rule_sync.py)、[同机 DNS 适配](../backend/agents/go-agent/routes/native_aio_dns.go)、[本地看门狗](../backend/agents/go-agent/routes/dns_watchdog.go)、[缓存清理](../backend/agents/go-agent/routes/oxidns_cache.go)。
+[安装与发布入口](../backend/routes/agents.py)、[事务部署](../backend/agents/go-agent/routes/deployment.go)、[可刷新的规则范围](../backend/agents/go-agent/routes/refreshable_rules.go)、[日志来源识别](../backend/agents/go-agent/routes/log_sources.go)、[DNS 检查](../backend/agents/go-agent/routes/deployment_dns.go)、[自动同步](../backend/agents/rule_sync.py)、[同机 DNS 适配](../backend/agents/go-agent/routes/native_aio_dns.go)、[本地看门狗](../backend/agents/go-agent/routes/dns_watchdog.go)、[缓存清理](../backend/agents/go-agent/routes/oxidns_cache.go)。
