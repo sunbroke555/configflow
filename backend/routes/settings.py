@@ -8,6 +8,7 @@ from backend.common.config import get_repository, get_system_config, save_system
 from backend.common.config_export import contains_internal_rule_proxy_token
 from backend.version import get_version_info
 from backend.utils.rule_fetch import normalize_rule_fetch_proxy
+from backend.utils.webdav_backup import describe_webdav_error
 
 
 @settings_bp.route('/settings/rule-fetch-proxy', methods=['GET', 'POST'])
@@ -153,6 +154,25 @@ def get_version():
     return jsonify(get_version_info())
 
 
+_BACKUP_TEXT_FIELDS = ('webdav_url', 'webdav_username', 'webdav_password', 'webdav_path')
+
+
+def _backup_request_data():
+    data = request.get_json(silent=True)
+    message = None
+    if not isinstance(data, dict) or not data:
+        message = '请求体必须是非空 JSON 对象，请使用 Content-Type: application/json'
+    elif not any(key in data for key in (*_BACKUP_TEXT_FIELDS, 'auto_backup')):
+        message = '请提供 WebDAV 备份配置字段'
+    elif any(key in data and not isinstance(data[key], str) for key in _BACKUP_TEXT_FIELDS):
+        message = 'WebDAV 地址、用户名、密码和路径必须是字符串'
+    elif 'auto_backup' in data and not isinstance(data['auto_backup'], bool):
+        message = 'auto_backup 必须是布尔值'
+    if message:
+        return None, (jsonify({'success': False, 'message': message}), 400)
+    return data, None
+
+
 @settings_bp.route('/backup/config', methods=['GET', 'POST'])
 @require_auth
 def backup_config():
@@ -172,17 +192,14 @@ def backup_config():
 
     elif request.method == 'POST':
         # 保存备份配置
-        data = request.json
-        if 'backup' not in config_data:
-            config_data['backup'] = {}
-
-        config_data['backup']['webdav_url'] = data.get('webdav_url', '')
-        config_data['backup']['webdav_username'] = data.get('webdav_username', '')
-        # 只在密码不是脱敏字符时更新
-        if data.get('webdav_password') != '******':
-            config_data['backup']['webdav_password'] = data.get('webdav_password', '')
-        config_data['backup']['webdav_path'] = data.get('webdav_path', '/config-flow-backup/')
-        config_data['backup']['auto_backup'] = data.get('auto_backup', False)
+        data, error = _backup_request_data()
+        if error is not None:
+            return error
+        backup = config_data.setdefault('backup', {})
+        # 部分更新保留未提交字段；掩码表示沿用已保存的密码。
+        for key in (*_BACKUP_TEXT_FIELDS, 'auto_backup'):
+            if key in data and not (key == 'webdav_password' and data[key] == '******'):
+                backup[key] = data[key]
 
         save_system_config(config_data)
         return jsonify({'success': True, 'message': '备份配置已保存'})
@@ -192,11 +209,13 @@ def backup_config():
 @require_auth
 def test_backup():
     """测试 WebDAV 连接"""
+    data, error = _backup_request_data()
+    if error is not None:
+        return error
     try:
         from webdav3.client import Client
 
         config_data = get_system_config()
-        data = request.json
         webdav_url = data.get('webdav_url', '').rstrip('/')
         webdav_username = data.get('webdav_username', '')
         webdav_password = data.get('webdav_password', '')
@@ -239,22 +258,28 @@ def test_backup():
                     try:
                         client.mkdir(current_path)
                     except Exception as mkdir_error:
-                        return jsonify({'success': False, 'message': f'无法创建目录 {current_path}：{str(mkdir_error)}'}), 400
+                        detail = describe_webdav_error(mkdir_error)
+                        current_app.logger.warning('WebDAV 目录创建失败：%s', detail)
+                        return jsonify({'success': False, 'message': f'无法创建目录 {current_path}：{detail}'}), 400
 
         return jsonify({'success': True, 'message': 'WebDAV 连接测试成功'})
 
     except Exception as e:
-        return jsonify({'success': False, 'message': f'连接测试失败：{str(e)}'}), 500
+        detail = describe_webdav_error(e)
+        current_app.logger.error('WebDAV 连接测试失败：%s', detail)
+        return jsonify({'success': False, 'message': f'连接测试失败：{detail}'}), 500
 
 
 @settings_bp.route('/backup/now', methods=['POST'])
 @require_auth
 def backup_now():
     """立即备份配置到 WebDAV"""
+    data, error = _backup_request_data()
+    if error is not None:
+        return error
     try:
         from backend.utils.webdav_backup import upload_backup, WebDAVConfigurationError
 
-        data = dict(request.json)
         if data.get('webdav_password') == '******':
             data['webdav_password'] = get_system_config().get('backup', {}).get('webdav_password', '')
         try:
@@ -264,7 +289,10 @@ def backup_now():
         return jsonify({'success': True, 'message': f'备份成功：{filename}'})
 
     except Exception as e:
-        return jsonify({'success': False, 'message': f'备份失败：{str(e)}。请检查父级目录是否存在。'}), 500
+        # 保留异常类型与 HTTP 状态，避免远端异常正文携带凭证。
+        detail = describe_webdav_error(e)
+        current_app.logger.error('WebDAV 手动备份失败：%s', detail)
+        return jsonify({'success': False, 'message': f'备份失败：{detail}'}), 500
 
 
 @settings_bp.route('/settings/subscription-aggregation', methods=['GET', 'POST'])

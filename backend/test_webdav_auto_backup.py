@@ -253,6 +253,100 @@ def test_manual_backup_reuses_full_export_masked_password_and_nested_directory_c
     assert not Path(uploaded[0][2]).exists()
 
 
+@pytest.fixture
+def backup_api(dav):
+    from flask import Flask
+    from backend.common import config as config_store
+    from backend.routes import register_blueprints
+
+    repository, settings, _, _, _, _ = dav
+    repository.update_system_transaction(
+        lambda system: system.update(backup={**settings, 'auto_backup': False}))
+    previous = config_store._repository
+    config_store.set_repository(repository)
+    try:
+        app = Flask(__name__)
+        register_blueprints(app)
+        yield app.test_client()
+    finally:
+        config_store.set_repository(previous)
+
+
+@pytest.mark.parametrize('endpoint', ['config', 'test', 'now'])
+@pytest.mark.parametrize('request_options', [
+    {},
+    {'data': '{}', 'content_type': 'text/plain'},
+    {'data': '{', 'content_type': 'application/json'},
+    {'data': 'null', 'content_type': 'application/json'},
+    {'json': []},
+    {'json': [['webdav_url', 'https://dav.test']]},
+    {'json': 'not an object'},
+    {'json': {}},
+    {'json': {'webdav_url': None}},
+    {'json': {'auto_backup': 'false'}},
+    {'json': {'unrecognized': True}},
+])
+def test_invalid_backup_requests_preserve_saved_configuration(backup_api, dav, endpoint, request_options):
+    repository, _, uploaded, _, _, _ = dav
+    before = repository.export_all()
+    response = backup_api.post(f'/api/backup/{endpoint}', **request_options)
+    assert response.status_code == 400
+    assert response.json['success'] is False
+    assert '父级目录' not in response.json['message']
+    assert repository.export_all() == before
+    assert uploaded == []
+
+
+def test_partial_backup_settings_update_preserves_credentials_and_masked_password(backup_api, dav):
+    repository, _, _, _, _, _ = dav
+    before = repository.get_system()['backup']
+    response = backup_api.post('/api/backup/config', json={
+        'webdav_path': '/new-backups/', 'webdav_password': '******'})
+    assert response.status_code == 200
+    assert repository.get_system()['backup'] == {**before, 'webdav_path': '/new-backups/'}
+
+
+@pytest.mark.parametrize('endpoint', ['test', 'now'])
+def test_backup_remote_errors_report_http_status_without_secrets(backup_api, dav, monkeypatch, caplog, endpoint):
+    _, settings, _, _, clients, _ = dav
+
+    class RemoteError(Exception):
+        code = 403
+
+    def fail(*args, **kwargs):
+        raise RemoteError('https://user:private-password@dav.test/ private-response-body')
+
+    monkeypatch.setattr(clients.Client, 'check' if endpoint == 'test' else 'upload_sync', fail)
+    response = backup_api.post(f'/api/backup/{endpoint}', json=settings)
+    assert response.status_code == 500
+    assert 'HTTP 403' in response.json['message']
+    assert 'HTTP 403' in caplog.text
+    for secret in ('private-password', 'private-response-body'):
+        assert secret not in response.get_data(as_text=True)
+        assert secret not in caplog.text
+
+
+def test_directory_creation_error_preserves_http_status_without_secrets(dav, monkeypatch, caplog):
+    repository, settings, _, _, clients, worker = dav
+
+    class RemoteError(Exception):
+        code = 403
+
+    def fail(*args, **kwargs):
+        raise RemoteError('private-password private-response-body')
+
+    monkeypatch.setattr(clients.Client, 'check', lambda self, path: path == '/')
+    monkeypatch.setattr(clients.Client, 'mkdir', fail, raising=False)
+    with pytest.raises(webdav_backup.WebDAVConfigurationError) as error:
+        webdav_backup.upload_backup(repository.export_all(), settings)
+    assert 'private-password' not in str(error.value)
+    repository.update_system_transaction(lambda system: system.update(backup=settings))
+    wait_idle(worker)
+    assert 'HTTP 403' in caplog.text
+    assert 'private-password' not in caplog.text
+    assert 'private-response-body' not in caplog.text
+
+
 def test_thread_start_failure_does_not_disable_future_auto_backups(dav, monkeypatch):
     repository, settings, uploaded, _, _, worker = dav
     original = threading.Thread.start
