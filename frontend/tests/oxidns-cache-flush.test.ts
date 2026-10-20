@@ -27,30 +27,27 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = '' })
 
 describe('OxiDNS cache flush', () => {
-  it('flushes every configured cache of the named device after confirmation', async () => {
+  it('flushes every cache configured on the selected device after confirmation', async () => {
     const wrapper = await render()
-    expect(wrapper.get('button').attributes('aria-label')).toBe('清理全部缓存')
-    expect(wrapper.get('button span').classes()).toContain('max-sm:sr-only')
+    expect(wrapper.get('button').text()).toBe('清理缓存')
+    expect(wrapper.get('button').classes()).toContain('max-sm:min-h-11')
     await wrapper.get('button').trigger('click')
     await flushPromises()
     expect(api.get).toHaveBeenCalledWith('/agents/one/oxidns/cache')
-    expect(vi.mocked(confirm).mock.calls[0][0]).toContain('「客厅 DNS」上主缓存（lazy_cache）、renamed_probe')
+    expect(vi.mocked(confirm).mock.calls[0][0]).toContain('「客厅 DNS」的全部 DNS 缓存（主缓存、renamed_probe）')
     expect(api.post).toHaveBeenCalledWith('/agents/one/oxidns/cache/flush', { tags: ['lazy_cache', 'renamed_probe'] })
-    expect(notify.success).toHaveBeenCalledWith('已清理缓存', '「客厅 DNS」：主缓存（lazy_cache）、renamed_probe')
+    expect(notify.success).toHaveBeenCalledWith('已清理缓存', '「客厅 DNS」的 DNS 缓存已清空。')
     expect(wrapper.emitted('flushed')).toEqual([['one']])
   })
 
-  it('flushes only the selected cache and refuses one missing from the deployed config', async () => {
-    const wrapper = await render({ target: 'renamed_probe' })
+  it('explains a configuration without caches instead of asking to confirm', async () => {
+    vi.mocked(api.get).mockResolvedValueOnce(listed([]))
+    const wrapper = await render()
     await wrapper.get('button').trigger('click')
     await flushPromises()
-    expect(api.post).toHaveBeenCalledWith('/agents/one/oxidns/cache/flush', { tags: ['renamed_probe'] })
-    await wrapper.setProps({ target: 'gone_cache' })
-    await wrapper.get('button').trigger('click')
-    await flushPromises()
-    expect(api.post).toHaveBeenCalledTimes(1)
-    expect(confirm).toHaveBeenCalledTimes(1)
-    expect(notify.warning).toHaveBeenCalledWith('没有可清理的缓存', expect.stringContaining('gone_cache'))
+    expect(confirm).not.toHaveBeenCalled()
+    expect(api.post).not.toHaveBeenCalled()
+    expect(notify.warning).toHaveBeenCalledWith('没有可清理的缓存', '「客厅 DNS」当前配置没有缓存插件。')
   })
 
   it('never flushes another device when the view switches before confirmation', async () => {
@@ -71,9 +68,10 @@ describe('OxiDNS cache flush', () => {
     const wrapper = await render()
     await wrapper.get('button').trigger('click')
     await flushPromises()
-    expect(wrapper.get('button').attributes('aria-busy')).toBe('true')
+    expect(wrapper.get('button').text()).toBe('清理缓存中…')
     await wrapper.setProps({ agentId: 'two', deviceName: '书房 DNS' })
-    expect(wrapper.get('button').attributes('aria-busy')).toBe('false')
+    expect(wrapper.get('button').text()).toBe('清理缓存')
+    expect(wrapper.get('button').attributes('disabled')).toBeUndefined()
     request.resolve({ data: { success: true, flushed: ['lazy_cache', 'renamed_probe'] } })
     await flushPromises()
     expect(notify.success).toHaveBeenCalledWith('已清理缓存', expect.stringContaining('客厅 DNS'))
@@ -86,7 +84,7 @@ describe('OxiDNS cache flush', () => {
     const wrapper = await render()
     await wrapper.get('button').trigger('click')
     await flushPromises()
-    expect(notify.error).toHaveBeenCalledWith('清理缓存未全部完成', '清理缓存失败，请检查 OxiDNS 日志后重试。 已清理：主缓存（lazy_cache）。')
+    expect(notify.error).toHaveBeenCalledWith('清理缓存未全部完成', '清理缓存失败，请检查 OxiDNS 日志后重试。 已清理：主缓存。')
     expect(wrapper.emitted('flushed')).toEqual([['one']])
   })
 

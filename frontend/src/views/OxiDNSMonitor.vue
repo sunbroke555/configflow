@@ -53,8 +53,10 @@
         <span v-if="currentDevice?.host" class="min-w-0 break-all font-mono" aria-label="当前设备 IP">{{ currentDevice.host }}</span>
         <span v-if="overview?.core.version" class="font-mono">OxiDNS {{ overview.core.version }}</span>
         <span v-if="overview">已运行 {{ uptime }}</span>
-        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 sm:ml-auto">
+        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 max-sm:col-span-2 sm:ml-auto">
           <OxiDNSRuleUpdate :agent-id="agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
+          <OxiDNSCacheFlush :agent-id="agentId" :device-name="currentDevice?.name || agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'"
+            @flushed="id => { if (id === agentId) refresh(true) }" />
           <span v-if="overview" class="text-xs">采样 {{ sampleTime }}</span>
         </div>
       </div>
@@ -79,8 +81,7 @@
           </SectionCard>
         </template>
         <TabsContent value="overview"><OxiDNSOverviewPanel v-if="overview" :overview="overview" :qps="qps" :recorder="recorder" :resetting="resettingStatistics"
-          :agent-id="agentId" :device-name="currentDevice?.name || agentId" :cache-disabled="switchingDevice || currentDevice?.status !== 'online'"
-          @recorder="selectRecorder" @cache-flushed="id => { if (id === agentId) refresh(true) }" /></TabsContent>
+          @recorder="selectRecorder" /></TabsContent>
         <TabsContent value="queries">
           <SectionCard v-if="overview && !overview.recorders.length">
             <EmptyState :icon="Search" title="尚未启用查询记录" description="打开此 Agent 所属配置空间的查询记录设置，启用并保存草稿后，发布到此 Agent 生效。">
@@ -120,6 +121,7 @@ import OxiDNSQueryTable from '@/components/agents/OxiDNSQueryTable.vue'
 import OxiDNSQueryDetail from '@/components/agents/OxiDNSQueryDetail.vue'
 import OxiDNSDevicePolicies from '@/components/agents/OxiDNSDevicePolicies.vue'
 import OxiDNSRuleUpdate from '@/components/agents/OxiDNSRuleUpdate.vue'
+import OxiDNSCacheFlush from '@/components/agents/OxiDNSCacheFlush.vue'
 import { useOxiDNSMonitor } from '@/composables/useOxiDNSMonitor'
 import { oxidnsMonitorPath, rememberOxiDNSDevice, useOxiDNSDevices } from '@/composables/useOxiDNSDevices'
 import { monitorNumber, type OxiDNSQuery } from '@/types/oxidnsMonitor'
