@@ -31,12 +31,37 @@ func GetLogsHandler(cfg *Config) http.HandlerFunc {
 			}
 		}
 
-		// 如果指定了 log_path，直接读取该文件
-		if logPath := r.URL.Query().Get("log_path"); logPath != "" {
-			logs := readLogFile(logPath, lines)
+		// 按来源读取：路径由本机实际的服务定义解析
+		if sourceID := r.URL.Query().Get("source"); sourceID != "" {
+			source, ok := findLogSource(cfg, sourceID)
+			if !ok {
+				JsonResponse(w, http.StatusOK, map[string]interface{}{"success": false, "message": "未知的日志来源: " + sourceID})
+				return
+			}
+			logs, err := ReadLogSource(source, lines)
+			if err != nil {
+				JsonResponse(w, http.StatusOK, map[string]interface{}{"success": false, "message": err.Error(), "source": source})
+				return
+			}
 			JsonResponse(w, http.StatusOK, map[string]interface{}{
 				"success":      true,
-				"logs":         escapeLogsForJSON(logs),
+				"logs":         logs,
+				"source":       source,
+				"service_name": cfg.ServiceName,
+			})
+			return
+		}
+
+		// 如果指定了 log_path，直接读取该文件
+		if logPath := r.URL.Query().Get("log_path"); logPath != "" {
+			logs, err := ReadLogSource(LogSource{Kind: "file", Path: logPath}, lines)
+			if err != nil {
+				JsonResponse(w, http.StatusOK, map[string]interface{}{"success": false, "message": err.Error()})
+				return
+			}
+			JsonResponse(w, http.StatusOK, map[string]interface{}{
+				"success":      true,
+				"logs":         logs,
 				"service_name": cfg.ServiceName,
 			})
 			return
@@ -54,6 +79,16 @@ func GetLogsHandler(cfg *Config) http.HandlerFunc {
 	}
 }
 
+// LogSourcesHandler 列出本机可读的日志来源
+func LogSourcesHandler(cfg *Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		JsonResponse(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"sources": ResolveLogSources(cfg),
+		})
+	}
+}
+
 // ClearLogHandler 清空指定日志文件
 func ClearLogHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -67,20 +102,41 @@ func ClearLogHandler(cfg *Config) http.HandlerFunc {
 
 		var req struct {
 			LogPath string `json:"log_path"`
+			Source  string `json:"source"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LogPath == "" {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.LogPath == "" && req.Source == "") {
 			JsonResponse(w, http.StatusBadRequest, map[string]interface{}{
 				"success": false,
-				"message": "log_path is required",
+				"message": "source or log_path is required",
 			})
 			return
 		}
+		if req.Source != "" {
+			source, ok := findLogSource(cfg, req.Source)
+			if !ok || !source.Clearable {
+				JsonResponse(w, http.StatusOK, map[string]interface{}{
+					"success": false,
+					"message": "该日志来源不支持清空",
+				})
+				return
+			}
+			req.LogPath = source.Path
+		}
 
 		// 检查文件是否存在
-		if _, err := os.Stat(req.LogPath); os.IsNotExist(err) {
+		info, err := os.Stat(req.LogPath)
+		if os.IsNotExist(err) {
 			JsonResponse(w, http.StatusOK, map[string]interface{}{
 				"success": true,
 				"message": "日志文件不存在，无需清空",
+			})
+			return
+		}
+		// 只清空普通的日志文件，避免误清配置或设备文件
+		if err != nil || !info.Mode().IsRegular() || !strings.Contains(filepath.Base(req.LogPath), ".log") {
+			JsonResponse(w, http.StatusOK, map[string]interface{}{
+				"success": false,
+				"message": "只能清空文件名包含 .log 的普通文件",
 			})
 			return
 		}

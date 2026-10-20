@@ -378,6 +378,22 @@ export interface InstallCommandResult {
   expires_at: number
 }
 
+// Agent 按本机服务配置解析出的日志来源；auto 表示旧版 Agent 的自动检测
+export interface AgentLogSource {
+  id: string
+  label: string
+  kind: 'file' | 'journal' | 'unavailable' | 'auto'
+  path?: string
+  unit?: string
+  clearable: boolean
+  note?: string
+}
+
+export interface AgentLogTarget {
+  source?: string
+  logPath?: string
+}
+
 export const agentApi = {
   getAll: () => api.get('/agents'),
   create: (data: any) => api.post('/agents', data),
@@ -391,17 +407,17 @@ export const agentApi = {
   delete: (id: string) => api.delete(`/agents/${id}`),
   restart: (id: string) => api.post(`/agents/${id}/restart`),
   getStatus: (id: string) => api.get(`/agents/${id}/status`),
-  getLogs: (id: string, lines: number = 100, logPath: string = '') => {
+  getLogSources: (id: string) => api.get(`/agents/${id}/logs/sources`),
+  getLogs: (id: string, lines: number = 100, target: AgentLogTarget = {}) => {
     const params = new URLSearchParams({ lines: lines.toString() })
-    if (logPath) {
-      params.append('log_path', logPath)
+    if (target.source) {
+      params.append('source', target.source)
+    } else if (target.logPath) {
+      params.append('log_path', target.logPath)
     }
     return api.get(`/agents/${id}/logs?${params.toString()}`)
   },
-  clearLog: (id: string, logPath: string) => api.post(`/agents/${id}/logs/clear`, { log_path: logPath }),
-  validateLogPath: (id: string, path: string) => api.post(`/agents/${id}/logs/validate`, { path }),
-  getLoggingConfig: (id: string) => api.get(`/agents/${id}/config/logging`),
-  setLoggingConfig: (id: string, enabled: boolean) => api.post(`/agents/${id}/config/logging`, { enabled }),
+  clearLog: (id: string, target: AgentLogTarget) => api.post(`/agents/${id}/logs/clear`, target.source ? { source: target.source } : { log_path: target.logPath }),
   pushConfig: (id: string, deploymentId?: string, expected?: PublishGuard | { expected_profile_id: string; expected_oxidns_revision: string; expected_config_revision?: number }) => api.post(`/agents/${id}/push-config`, {
     base_url: getBaseUrl(), deployment_id: deploymentId, ...expected
   }, { timeout: 120000 }),

@@ -866,8 +866,21 @@ def get_agent_logs(agent_id):
     try:
         lines = request.args.get('lines', 100, type=int)
         log_path = request.args.get('log_path', '')  # 可选的自定义日志路径
+        source = request.args.get('source', '')  # Agent 解析出的日志来源
         agent_manager = get_agent_manager()
-        result = agent_manager.get_agent_logs(agent_id, lines, log_path=log_path)
+        result = agent_manager.get_agent_logs(agent_id, lines, log_path=log_path, source=source)
+        return jsonify(result), 200 if result.get('success') else 500
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/<agent_id>/logs/sources', methods=['GET'])
+@require_auth
+def get_agent_log_sources(agent_id):
+    """获取 Agent 本机可读的日志来源"""
+    try:
+        agent_manager = get_agent_manager()
+        result = agent_manager.get_agent_log_sources(agent_id)
         return jsonify(result), 200 if result.get('success') else 500
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -880,12 +893,13 @@ def clear_agent_log(agent_id):
     try:
         data = request.get_json() or {}
         log_path = data.get('log_path', '')
+        source = data.get('source', '')
 
-        if not log_path:
+        if not log_path and not source:
             return jsonify({'success': False, 'message': '日志路径不能为空'}), 400
 
         agent_manager = get_agent_manager()
-        result = agent_manager.clear_agent_log(agent_id, log_path)
+        result = agent_manager.clear_agent_log(agent_id, log_path, source=source)
         return jsonify(result), 200 if result.get('success') else 500
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
