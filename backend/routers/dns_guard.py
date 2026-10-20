@@ -29,8 +29,10 @@ MANIFEST_VERSION = 1
 MAX_BYPASS = 64
 DEFAULTS = {'enabled': False, 'block_dot': False, 'failover': True, 'bypass': []}
 # Netwatch replies carry probe counters and timestamps; only these are configuration.
-NETWATCH_FIELDS = ('name', 'host', 'port', 'type', 'interval', 'timeout', 'up-script', 'down-script',
-                   'comment', 'disabled')
+NETWATCH_FIELDS = ('name', 'host', 'port', 'type', 'interval', 'timeout', 'startup-delay', 'up-script',
+                   'down-script', 'comment', 'disabled')
+# Pause only after the outage survives this long (at least two 10 s probes).
+PAUSE_CONFIRM = '15s'
 RUNTIME_FIELDS = {'dynamic', 'invalid', 'bytes', 'packets', 'creation-time'}
 STAGE_TITLE = 'DNS 劫持'
 PATH_NAMES = {ADDRESSES: '放行地址', NAT: 'NAT', FILTER: '防火墙', NETWATCH: 'Netwatch'}
@@ -205,12 +207,38 @@ def resources(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
                 'chain': 'forward', 'in-interface': spec['interface'], 'protocol': protocol, 'dst-port': '853',
                 'src-address-list': '!' + BYPASS_LIST, **action, 'comment': PREFIX + 'dot', 'disabled': 'false'}})
     if spec['failover']:
-        script = '/ip firewall nat {} [find comment="' + HIJACK_COMMENT + '"]'
         items.append({'role': 'netwatch', 'path': NETWATCH, 'values': {
             'name': NETWATCH_NAME, 'host': spec['agent'], 'port': '53', 'type': 'tcp-conn', 'interval': '10s',
-            'up-script': script.format('enable'), 'down-script': script.format('disable'),
+            # RouterOS waits 5 minutes after boot by default; OxiDNS may share the host.
+            'timeout': '2s', 'startup-delay': '30s',
+            'up-script': _netwatch_script(spec, 'up'), 'down-script': _netwatch_script(spec, 'down'),
             'comment': PREFIX + 'netwatch', 'disabled': 'false'}})
     return items
+
+
+def _netwatch_script(spec: Dict[str, Any], event: str) -> str:
+    """Toggle the hijack pair and drop port-53 flows still bound to the old path.
+
+    Conntrack keeps a client's NAT decision for as long as the same source port
+    keeps talking (up to the 3 min UDP stream timeout). Without the flush such
+    clients keep querying a dead OxiDNS after a pause, or keep bypassing it
+    after a resume. Each removal tolerates flows that expired meanwhile.
+    """
+    agent = spec['agent']
+    if event == 'down':
+        toggle = f'/ip firewall nat disable [find comment="{HIJACK_COMMENT}"]'
+        stale = f'dst-port=53 and dstnat and reply-src-address={agent}'
+    else:
+        toggle = f'/ip firewall nat enable [find comment="{HIJACK_COMMENT}"]'
+        hosts = [cidr.split('/')[0] for cidr in spec['bypass'] if cidr.endswith('/32')]
+        stale = ' and '.join(['dst-port=53 and !dstnat', f'dst-address!={agent}']
+                             + [f'src-address!={host}' for host in hosts])
+    flush = (f':foreach c in=[/ip firewall connection find where {stale}] do={{'
+             ':do {/ip firewall connection remove $c} on-error={}}')
+    if event == 'down':
+        return (f':delay {PAUSE_CONFIRM}; :if ([/tool netwatch get [find name="{NETWATCH_NAME}"] status] = "down") '
+                f'do={{{toggle}; {flush}}}')
+    return f'{toggle}; {flush}'
 
 
 def _matches(item: Dict[str, Any], row: Dict[str, Any], failover: bool) -> bool:
@@ -305,7 +333,7 @@ def _describe(item: Dict[str, Any]) -> str:
         return f'{values["protocol"].upper()} 53 端口查询转给 {values["to-addresses"]}（入口 {values["in-interface"]}）'
     if role.startswith('dot'):
         return f'{values["protocol"].upper()} 853 端口{"拒绝" if values["action"] == "reject" else "丢弃"}'
-    return f'每 10 秒检测 {values["host"]}:53，故障时暂停劫持'
+    return f'每 10 秒检测 {values["host"]}:53，持续 {PAUSE_CONFIRM} 无应答时暂停劫持，切换时清除旧的 53 端口连接'
 
 
 def report(plan: Dict[str, Any]) -> Dict[str, Any]:

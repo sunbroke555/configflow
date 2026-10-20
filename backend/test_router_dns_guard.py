@@ -194,7 +194,12 @@ def test_enable_writes_owned_objects_without_a_broken_hijack_window():
         'bridge', OXIDNS, '!' + BYPASS_LIST, '!' + OXIDNS)
     hairpin = guard_rows(session, NAT)[-1]
     assert (hairpin['src-address'], hairpin['dst-address'], hairpin['out-interface']) == ('10.0.0.0/24', OXIDNS, 'bridge')
-    assert session.rows[NETWATCH][0]['down-script'] == '/ip firewall nat disable [find comment="cf-dnsguard:hijack"]'
+    watch = session.rows[NETWATCH][0]
+    assert (watch['startup-delay'], watch['timeout'], watch['interval']) == ('30s', '2s', '10s')
+    assert watch['down-script'].startswith(':delay 15s; :if ([/tool netwatch get [find name="cf-dnsguard"] status] = "down")')
+    assert '/ip firewall nat disable [find comment="cf-dnsguard:hijack"]' in watch['down-script']
+    assert f'dst-port=53 and dstnat and reply-src-address={OXIDNS}' in watch['down-script']
+    assert watch['up-script'].startswith('/ip firewall nat enable [find comment="cf-dnsguard:hijack"]; ')
     assert session.rows[NAT][3] == WAN_MASQUERADE | {'bytes': session.rows[NAT][3]['bytes'],
                                                      'packets': session.rows[NAT][3]['packets']}
 
@@ -403,3 +408,12 @@ def test_manual_disable_without_netwatch_is_reported_as_an_outside_edit():
     report, plan = preview(driver, item)
     assert any('外部修改' in blocker for blocker in plan['blockers'])
     assert report['dns_guard']['status'] == 'unknown'
+
+
+def test_resume_flush_keeps_exempt_hosts_and_tolerates_expired_flows():
+    spec = {'agent': OXIDNS, 'interface': 'bridge', 'network': '10.0.0.0/24', 'block_dot': False, 'failover': True,
+            'bypass': ['10.0.0.2/32', '10.0.0.4/32', '10.0.0.48/28']}
+    script = next(item for item in dns_guard.resources(spec) if item['role'] == 'netwatch')['values']['up-script']
+    assert 'dst-port=53 and !dstnat and dst-address!=10.0.0.2 and src-address!=10.0.0.2 and src-address!=10.0.0.4]' in script
+    assert '10.0.0.48' not in script  # networks cannot be matched by a plain address comparison
+    assert ':do {/ip firewall connection remove $c} on-error={}' in script
