@@ -27,10 +27,10 @@
           </CollapsibleTrigger>
           <CollapsibleContent force-mount class="data-[state=closed]:hidden col-span-2 col-start-1 row-start-3 mt-1 min-w-0 border-t border-border px-2 pt-3 pb-2">
             <div class="grid min-w-0 gap-3 sm:grid-cols-2">
-            <FormField v-for="key in ['bootstrap', 'dial_addr']" :key="key" :label="key === 'bootstrap' ? 'Bootstrap DNS' : '连接地址（dial_addr）'" :help="key === 'bootstrap' ? '当上游地址使用域名时，用此 DNS 查询上游服务器的 IP，例如 223.5.5.5:53；避免依赖本机 DNS 形成解析环路。上游已经是 IP 时无需填写；同时填写 dial_addr 时以后者为准。' : '直接指定连接上游的 IP，同时保留原域名用于 TLS 证书和 HTTP Host 校验。无需再解析上游域名；填写后优先于 bootstrap。'">
+            <FormField v-for="key in ['bootstrap', 'dial_addr']" :key="key" :label="key === 'bootstrap' ? '引导 DNS（bootstrap）' : '连接地址（dial_addr）'" v-bind="upstreamCopy[key]">
               <Input :model-value="upstreamField(row.value, key)" :aria-label="`${label}第 ${index + 1} 项 ${key}`" :placeholder="key === 'bootstrap' ? '例如 223.5.5.5:53' : '例如 1.1.1.1:443'" class="h-9 min-w-0 font-mono text-xs max-sm:min-h-11 pointer-coarse:min-h-11" @update:model-value="editUpstream(index, key, String($event))" />
             </FormField>
-            <FormField class="sm:col-span-2 sm:flex-row sm:items-center sm:justify-between" label="连接流水线（enable_pipeline）" help="允许在同一条 TCP / DoT 连接上同时发送多个 DNS 查询，减少并发时的连接开销。UDP 不受此项影响。先用 OxiDNS 的 probe upstream 检查上游兼容性，再启用；核心默认值为关闭。">
+            <FormField class="sm:col-span-2" label="连接流水线（enable_pipeline）" hint="上游兼容时，复用同一连接发送多个查询。" :help="optionHelp('仅 TCP / DoT 上游支持；先用 probe upstream 检查兼容性。', '同一连接可同时发送多个查询，减少并发连接开销。UDP 不受影响，核心默认关闭；不兼容的上游开启后可能无法正常查询。')">
               <Select :model-value="pipeline(row.value)" @update:model-value="editUpstream(index, 'enable_pipeline', $event === 'default' ? undefined : $event === 'true')">
                 <SelectTrigger class="h-9 w-full sm:w-40 max-sm:min-h-11 pointer-coarse:min-h-11" :aria-label="`${label}第 ${index + 1} 项连接流水线（enable_pipeline）`"><SelectValue /></SelectTrigger>
                 <SelectContent><SelectItem value="default">核心默认</SelectItem><SelectItem value="true">启用</SelectItem><SelectItem value="false">关闭</SelectItem></SelectContent>
@@ -63,6 +63,12 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import OxidnsUpstreamExtras from './OxidnsUpstreamExtras.vue'
 import { encodeEntries, entryYaml, parseEntryModel, parseEntryYaml, type EntryKind, type EntryValue } from '@/lib/oxidnsEntries'
+import { optionCopy, optionHelp } from '@/lib/optionCopy'
+
+const upstreamCopy: Record<string, ReturnType<typeof optionCopy>> = {
+  bootstrap: optionCopy('上游使用域名时，先用此 DNS 找到它的 IP。', '上游地址包含域名，需要避免依赖自身 DNS 形成循环查询。', '填写 IP:端口，如 223.5.5.5:53。上游已用 IP 时无需填写；同时指定连接地址 dial_addr 时，优先使用连接地址。'),
+  dial_addr: optionCopy('直接指定上游 IP，同时保留域名进行身份验证。', '已知上游真实 IP，希望跳过域名解析或避免解析循环。', '连接指定 IP，但仍使用原域名核对 TLS 证书和 HTTP Host。此项优先于 bootstrap，不会将加密连接中的域名身份改成 IP。'),
+}
 
 const props = defineProps<{ modelValue: unknown; kind: EntryKind; label: string; id: string; placeholder?: string; emptyHint?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string | EntryValue[]]; validity: [valid: boolean]; error: [message: string] }>()

@@ -1,6 +1,7 @@
 <template>
   <SectionCard :title="`策略路由 · ${name}`" class="mt-4 min-w-0" :padded="false"
-    help="在这里编辑当前配置空间共用的来源设备、规则集与网关。保存只更新草稿；预览列出 OxiDNS 和 ROS 的变更，确认后按目标依次发布。">
+    description="指定哪些设备访问哪些 IP 时，交给代理网关。"
+    :help="optionHelp('使用 RouterOS，且希望按设备区分哪些目标连接需转发。', '来源设备、规则集和网关在当前空间共用。保存只更新草稿，预览会列出 OxiDNS 和 ROS 的变更；确认发布后才按顺序应用。')">
     <template #actions>
       <span v-if="dirty" class="text-xs text-warning-accent">未保存</span>
       <Button variant="outline" class="min-h-11" :disabled="locked || editing" @click="reload">重新载入</Button>
@@ -18,7 +19,7 @@
       <TabsContent value="sources" class="m-0 px-5 pb-4 max-md:px-4 max-sm:px-3">
         <div class="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
           <span>{{ state.profile_name }} · 共用来源设备</span>
-          <FieldHelp label="来源设备" text="智能分流 IPv4 地址或网段参与 ROS 策略路由；更具体的直连例外和 mihomo 自身会被排除。直连设备仍按主表中的静态路由转发。IPv6 策略只作用于 OxiDNS。" />
+          <FieldHelp label="来源设备" :text="optionHelp('仅智能分流的 IPv4 设备或网段参与 ROS 策略路由。', '更具体的直连例外及 Mihomo 自身会被排除。直连设备仍遵循主表静态路由；IPv6 策略仅作用于 OxiDNS，不会建立 ROS IPv6 策略。')" />
         </div>
         <p v-if="!state.sources.editable" role="alert" class="rounded-md bg-warning-soft p-3 text-sm text-warning-accent">{{ state.sources.reason }}</p>
         <fieldset class="m-0 min-w-0 space-y-4 border-0 p-0" :disabled="locked || !state.sources.editable">
@@ -26,7 +27,7 @@
             <div v-if="state.source_agents.length" class="min-w-0 space-y-2">
               <div class="flex min-h-5 items-center gap-2">
                 <span class="text-sm font-medium">从查询记录选择客户端</span>
-                <FieldHelp label="已有客户端" text="读取所选 OxiDNS 的查询记录。选择 IP 后加入下方来源列表；也可以手动添加 IP 或网段。" />
+                <FieldHelp label="已有客户端" :text="optionHelp('设备已经通过所选 OxiDNS 查询过域名，且有查询记录。', '从历史记录选择 IP，加入下方来源列表，再为它指定策略。没有查询记录的设备也可手动填写 IP 或网段，不必等它出现在列表里。')" />
               </div>
               <div class="grid min-w-0 gap-2" :class="state.source_agents.length > 1 ? 'sm:grid-cols-2' : ''">
                 <Select v-if="state.source_agents.length > 1" v-model="queryAgent" :disabled="locked || !state.sources.editable">
@@ -62,16 +63,17 @@
       </TabsContent>
       <TabsContent value="settings" class="m-0 px-5 pb-5 max-md:px-4 max-sm:px-3">
         <fieldset class="m-0 grid min-w-0 gap-5 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="locked">
-          <FormField label="代理网关（mihomo）" html-for="policy-gateway" hint="这台 ROS 的策略路由与静态代理路由共用此网关。">
+          <FormField label="代理网关（mihomo）" html-for="policy-gateway" v-bind="routerCopy.gatewayROS">
             <Select :model-value="settings.proxy_gateway_agent_id || '__none__'" :disabled="locked" @update:model-value="value => settings.proxy_gateway_agent_id = value === '__none__' ? '' : String(value)">
               <SelectTrigger id="policy-gateway" class="min-h-11"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent><SelectItem value="__none__">不关联</SelectItem><SelectItem v-for="agent in state.gateways" :key="agent.id" :value="agent.id">{{ agent.name }}（{{ agent.host }}）</SelectItem></SelectContent>
             </Select>
           </FormField>
           <div class="space-y-2"><div class="flex flex-wrap items-center justify-between gap-2"><Label for="policy-destinations">使用策略路由的 IP 规则集</Label><Button variant="ghost" class="min-h-11" :disabled="locked" @click="editDestinations()"><Pencil class="size-4" />编辑规则内容</Button></div><MultiSelect :model-value="settings.ros_policy_rule_sets" :options="ruleOptions" trigger-id="policy-destinations" placeholder="不使用策略路由" @update:model-value="value => selectRules('ros_policy_rule_sets', value)" /></div>
-          <FormField label="使用静态路由的 IP 规则集" html-for="policy-static-destinations" hint="同一规则集只能选择一种方式，移入另一组时自动移出原组。fake-ip 始终使用静态路由。取消选择后，需保存并确认发布才会清理对应的受管对象。">
+          <FormField label="使用静态路由的 IP 规则集" html-for="policy-static-destinations" v-bind="routerCopy.staticRules">
             <MultiSelect :model-value="settings.ip_rule_sets" :options="ruleOptions" trigger-id="policy-static-destinations" placeholder="仅 fake-ip 网段" @update:model-value="value => selectRules('ip_rule_sets', value)" />
           </FormField>
+          <p class="m-0 text-xs leading-relaxed text-muted-foreground">两组规则集互斥，移入一组会自动移出另一组。取消后需保存并确认发布，才会清理对应的受管规则。</p>
         </fieldset>
       </TabsContent>
       <TabsContent value="preview" class="m-0 px-5 pb-5 max-md:px-4 max-sm:px-3">
@@ -79,7 +81,7 @@
           <fieldset class="m-0 min-w-0 border-0 p-0" :disabled="locked">
             <legend class="mb-3 flex items-center gap-2 text-sm font-semibold">
               OxiDNS 发布目标
-              <FieldHelp label="OxiDNS 发布目标" text="选中的设备将接收当前配置空间的完整已保存配置，包含其他草稿改动。未选中的设备保持现状；全部取消时只发布 ROS。" />
+              <FieldHelp label="OxiDNS 发布目标" :text="optionHelp('希望把当前空间的设备策略同步到指定 OxiDNS 时选择。', '选中的设备接收完整已保存配置，包含其他草稿改动，并非只更新设备策略。未选设备保持现状；全部取消时只发布 ROS。')" />
             </legend>
             <div class="flex flex-wrap gap-2">
               <label v-for="agent in state.source_agents" :key="agent.id" class="flex min-h-11 max-w-full max-sm:w-full cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors" :class="targets.includes(agent.id) ? 'border-primary-accent/30 bg-primary-soft' : 'border-border hover:bg-muted'">
@@ -182,6 +184,8 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import { optionHelp } from '@/lib/optionCopy'
+import { routerCopy } from '@/lib/routerCopy'
 import FormField from '@/components/common/FormField.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'

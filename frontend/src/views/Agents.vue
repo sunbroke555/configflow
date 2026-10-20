@@ -351,7 +351,7 @@
         </DialogHeader>
 
         <div class="cf-focus-gutter flex max-h-[65dvh] min-h-0 flex-col gap-5 overflow-y-auto">
-          <FormField label="使用模式" hint="普通模式保持原有安装方式；网关模式引导安装 Mihomo、OxiDNS 和两个 Agent。">
+          <FormField label="使用模式" hint="管理已有服务选普通，让局域网分流选网关。" :help="optionHelp('只管理服务选普通模式；需要让局域网设备通过 Linux 分流选网关。', '网关向导安装 Mihomo、OxiDNS 和两个 Agent，检查后再启用转发。仅支持 Linux 的 IPv4 网关，客户端也需按指引接入。')">
             <RadioGroup v-model="installationMode" class="flex flex-wrap gap-2" aria-label="使用模式">
               <label :class="[chipClass(installationMode === 'ordinary'), 'min-h-11']"><RadioGroupItem value="ordinary" />普通模式</label>
               <label :class="[chipClass(installationMode === 'gateway'), 'min-h-11']"><RadioGroupItem value="gateway" />Linux 选择性网关</label>
@@ -367,7 +367,7 @@
           </div>
           <template v-else>
           <div class="space-y-4">
-            <FormField label="安装类型" :help="installTypeHint">
+            <FormField label="安装类型" v-bind="installTypeCopy">
               <RadioGroup v-model="scriptForm.installType" class="flex gap-2" @update:model-value="onInstallTypeChange">
                 <label v-for="option in INSTALL_TYPES" :key="option.value" :class="[chipClass(scriptForm.installType === option.value), 'min-h-11']">
                   <RadioGroupItem :value="option.value" />
@@ -376,7 +376,7 @@
               </RadioGroup>
             </FormField>
 
-            <FormField v-if="scriptForm.installType === 'shell'" label="Shell 模式">
+            <FormField v-if="scriptForm.installType === 'shell'" label="Shell 模式" hint="只管理一个服务，或在同机管理代理与 DNS。" :help="optionHelp('只需一种服务选单服务；代理与 DNS 同机运行选同机模式。', '同机模式分别登记 Mihomo 和 OxiDNS Agent，可管理两项服务。是否补装核心由下方开关决定，选择同机模式不会自动启用网关转发。')">
               <RadioGroup v-model="scriptForm.shellMode" class="flex flex-wrap gap-2" @update:model-value="resetForm">
                 <label v-for="option in SHELL_MODES" :key="option.value" :class="[chipClass(scriptForm.shellMode === option.value), 'min-h-11']">
                   <RadioGroupItem :value="option.value" />
@@ -394,7 +394,7 @@
               </RadioGroup>
             </FormField>
 
-            <FormField v-if="scriptForm.installType === 'docker'" label="Docker 模式" :help="dockerModeHint">
+            <FormField v-if="scriptForm.installType === 'docker'" label="Docker 模式" v-bind="dockerModeCopy">
               <RadioGroup v-model="scriptForm.dockerMode" class="flex flex-wrap gap-2" @update:model-value="onDockerModeChange">
                 <label v-for="option in DOCKER_MODES" :key="option.value" :class="[chipClass(scriptForm.dockerMode === option.value), 'min-h-11']">
                   <RadioGroupItem :value="option.value" />
@@ -466,10 +466,10 @@
                   <FormField label="OxiDNS 服务名称" html-for="aio-oxidns-service-unit">
                     <Input id="aio-oxidns-service-unit" :model-value="aioServiceSettings.oxidnsServiceUnit" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsServiceUnit = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="oxidns" />
                   </FormField>
-                  <FormField label="Mihomo 内核程序路径" html-for="aio-mihomo-service-binary" help="填写现有服务使用的程序名或绝对路径。">
+                  <FormField label="Mihomo 内核程序路径" html-for="aio-mihomo-service-binary" v-bind="serviceBinaryCopy">
                     <Input id="aio-mihomo-service-binary" :model-value="aioServiceSettings.mihomoServiceBinary" :disabled="aioCoreInstall" @update:model-value="scriptForm.mihomoServiceBinary = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="mihomo" />
                   </FormField>
-                  <FormField label="OxiDNS 内核程序路径" html-for="aio-oxidns-service-binary" help="填写现有服务使用的程序名或绝对路径。">
+                  <FormField label="OxiDNS 内核程序路径" html-for="aio-oxidns-service-binary" v-bind="serviceBinaryCopy">
                     <Input id="aio-oxidns-service-binary" :model-value="aioServiceSettings.oxidnsServiceBinary" :disabled="aioCoreInstall" @update:model-value="scriptForm.oxidnsServiceBinary = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="oxidns" />
                   </FormField>
                 </div>
@@ -485,11 +485,11 @@
               </CollapsibleTrigger>
               <CollapsibleContent class="space-y-4 pb-4">
                 <p v-if="singleCoreInstall" class="m-0 text-[12px] text-muted-foreground">同时安装核心时使用默认路径；接管自定义部署请取消勾选。</p>
-                <FormField label="配置文件路径" html-for="agent-config-path" help="填写目标机器上的完整配置路径，须包含文件名。">
+                <FormField label="配置文件路径" html-for="agent-config-path" hint="填写目标设备上实际使用的配置文件完整路径。" :help="optionHelp('接管已有核心，且配置不在默认位置时填写。', '使用目标设备上的完整路径，必须含文件名，如 /etc/mihomo/config.yaml。Agent 按此位置管理配置，应与现有服务实际读取的位置一致。')">
                   <Input id="agent-config-path" :model-value="singleServiceSettings.config_path" :disabled="singleCoreInstall" @update:model-value="scriptForm.config_path = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
                 </FormField>
                 <p v-if="scriptForm.type === 'oxidns' && !singleCoreInstall" class="m-0 text-[12px] leading-relaxed text-muted-foreground">OxiDNS 的 <code class="font-mono">-d</code> 工作目录须与配置文件所在目录一致；分离布局暂不支持，详见安装说明。</p>
-                <FormField label="重启命令（可选）" html-for="agent-restart" help="留空自动识别 systemd / OpenRC；自定义命令需同时提供停止、启动及状态检查命令。">
+                <FormField label="重启命令（可选）" html-for="agent-restart" hint="标准系统服务可留空，自定义部署再填写。" :help="optionHelp('现有服务无法通过标准系统服务方式管理时填写。', '留空会自动识别 systemd / OpenRC。自定义重启命令还需配套停止、启动和状态检查命令，让 Agent 能确认切换结果及处理失败。')">
                   <Input id="agent-restart" :model-value="singleServiceSettings.restart_command" :disabled="singleCoreInstall" @update:model-value="scriptForm.restart_command = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="留空自动识别" />
                 </FormField>
                 <div class="grid gap-4 sm:grid-cols-2">
@@ -504,21 +504,21 @@
                       </SelectContent>
                     </Select>
                   </FormField>
-                  <FormField label="服务名称" html-for="agent-service-unit" help="留空使用核心名称，也可填写自定义 systemd 单元或 OpenRC 服务名。">
+                  <FormField label="服务名称" html-for="agent-service-unit" hint="服务使用自定义名称时填写，默认可留空。" :help="optionHelp('已有系统服务名称与核心名称不同，如自定义安装时填写。', '填写实际 systemd 单元或 OpenRC 服务名，Agent 会用它管理服务。留空使用核心名称；此处不是设备备注，也不会重命名已有服务。')">
                     <Input id="agent-service-unit" :model-value="singleServiceSettings.service_unit" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_unit = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" :placeholder="scriptForm.type" />
                   </FormField>
                 </div>
-                <FormField label="内核程序路径" html-for="agent-service-binary" help="应指向现有服务使用的程序；留空按程序名查找。">
+                <FormField label="内核程序路径" html-for="agent-service-binary" v-bind="serviceBinaryCopy">
                   <Input id="agent-service-binary" :model-value="singleServiceSettings.service_binary" :disabled="singleCoreInstall" @update:model-value="scriptForm.service_binary = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" :placeholder="`/usr/local/bin/${scriptForm.type}`" />
                 </FormField>
                 <template v-if="!singleCoreInstall && (scriptForm.service_manager === 'command' || scriptForm.restart_command.trim())">
-                  <FormField label="停止命令" html-for="agent-service-stop" help="应等待服务完全停止后再退出。">
+                  <FormField label="停止命令" html-for="agent-service-stop" hint="填写能停止服务并等待其完全退出的命令。" :help="optionHelp('使用自定义服务管理命令时，需提供可靠的停止操作。', '命令必须等服务完全停止后再退出，让 Agent 确认旧进程已结束。仅发送停止信号就返回，可能使后续启动与旧进程冲突。')">
                     <Input id="agent-service-stop" v-model="scriptForm.stop_command" class="min-h-11 bg-background/50 font-mono" placeholder="例如：/opt/service/control stop" />
                   </FormField>
                   <FormField label="启动命令" html-for="agent-service-start">
                     <Input id="agent-service-start" v-model="scriptForm.start_command" class="min-h-11 bg-background/50 font-mono" placeholder="例如：/opt/service/control start" />
                   </FormField>
-                  <FormField label="状态检查命令" html-for="agent-service-status" help="服务运行时退出码为 0，未运行时为非 0。">
+                  <FormField label="状态检查命令" html-for="agent-service-status" hint="通过命令结果，告诉 Agent 服务是否正在运行。" :help="optionHelp('使用自定义命令管理服务，需要检查启动和停止结果。', '服务运行时命令退出码必须为 0，未运行时为非 0。Agent 根据退出码判断状态，不依靠输出文字；应检查实际核心进程。')">
                     <Input id="agent-service-status" v-model="scriptForm.status_command" class="min-h-11 bg-background/50 font-mono" placeholder="例如：/opt/service/control status" />
                   </FormField>
                 </template>
@@ -535,7 +535,7 @@
                 <FormField label="Docker 镜像" html-for="docker-image">
                   <Input id="docker-image" v-model="scriptForm.dockerImage" class="min-h-11 bg-background/50 font-mono" placeholder="留空使用官方镜像" />
                 </FormField>
-                <FormField label="网络模式" help="host 直接访问主机网络；bridge 通过端口映射访问。">
+                <FormField label="网络模式" hint="共享主机网络，或用端口映射访问容器服务。" :help="optionHelp('使用 Docker 安装，需决定设备如何访问容器内服务。', 'host 直接使用主机网络，bridge 通过端口映射访问。使用 bridge 时需确认所需端口已映射；切换网络方式不代表自动配置局域网网关。')">
                   <RadioGroup v-model="scriptForm.networkMode" class="flex flex-wrap gap-2">
                     <label v-for="option in networkModeOptions" :key="option.value" :class="[chipClass(scriptForm.networkMode === option.value), 'min-h-11']">
                       <RadioGroupItem :value="option.value" />
@@ -817,6 +817,7 @@ import FlowMap from '@/components/dashboard/FlowMapViewer.vue'
 import type { FlowColumn, FlowEdge, FlowTone } from '@/components/dashboard/FlowMap.vue'
 import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
+import { optionCopy, optionHelp } from '@/lib/optionCopy'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
 import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
 import { supportsAgentSettings, type AgentSettingsContext } from '@/lib/agentSettings'
@@ -1738,20 +1739,22 @@ const DOCKER_MODES = [
   { value: 'aio', label: 'All-in-One（三合一）' }
 ]
 
-const installTypeHint = computed(() =>
+const serviceBinaryCopy = optionCopy('指向现有服务使用的核心程序，默认可留空。', '接管已有核心，或程序不在默认搜索位置时填写。', '可用程序名或绝对路径，必须与现有服务实际使用的核心一致。留空按程序名查找；同时安装核心时使用默认路径，无需自行填写。')
+
+const installTypeCopy = computed(() =>
   scriptForm.value.installType === 'shell'
-    ? '将 Agent 安装为目标机器上的系统服务。'
-    : '用 Docker 运行 Agent，无需另行安装 Mihomo / MosDNS / OxiDNS。'
+    ? optionCopy('直接在 Linux 上安装，也可管理已有核心服务。', '目标使用 Linux，且希望直接管理系统中的核心服务。', '将 Agent 安装为系统服务，可接管已有核心。Mihomo 和 OxiDNS 可按需勾选补装；是否同机管理两项服务，由下方 Shell 模式决定。')
+    : optionCopy('用容器同时运行 Agent 和所选核心服务。', '目标设备能运行 Docker，且希望使用容器部署。', '镜像内置所选核心，无需另装 Mihomo、MosDNS 或 OxiDNS。按下方模式选择单项核心或三合一，并核对网络模式和访问端口。')
 )
 
-const dockerModeHint = computed(
+const dockerModeCopy = computed(
   () =>
     ({
-      mihomo: '内置 Mihomo，一个容器运行 Agent + Mihomo。',
-      oxidns: '内置 OxiDNS，一个容器运行 Agent + OxiDNS。',
-      mosdns: '内置 MosDNS，一个容器运行 Agent + MosDNS。',
-      aio: '一个容器运行 Agent + Mihomo + OxiDNS。'
-    })[scriptForm.value.dockerMode as string] ?? ''
+      mihomo: optionCopy('需要代理服务时选用，容器已内置 Mihomo。', '只需要代理核心及其管理 Agent，希望通过容器运行。', '同一容器运行 Agent 和 Mihomo，不必另装核心。可接收和更新配置；不会同时部署独立的 OxiDNS 或 MosDNS 服务。'),
+      oxidns: optionCopy('需要域名解析服务时选用，容器已内置 OxiDNS。', '希望通过容器运行 OxiDNS，并由 Agent 管理配置。', '同一容器包含 Agent 和 OxiDNS，无需另装核心。它提供 DNS 解析服务；是否需要代理核心，取决于实际分流方案。'),
+      mosdns: optionCopy('使用 MosDNS 解析方案时选用，容器内置核心。', '现有配置面向 MosDNS，且希望通过容器部署。', '同一容器运行 Agent 和 MosDNS，可接收配置并管理服务。无需在宿主机另装 MosDNS，不会自动附带 Mihomo 代理核心。'),
+      aio: optionCopy('代理和 DNS 同机运行，一个容器即可部署。', '希望在同一容器内同时运行 Mihomo 与 OxiDNS。', '同一容器运行 Agent + Mihomo + OxiDNS。不会自动完成宿主机网关转发；如需选择性网关，请使用专用安装向导。')
+    })[scriptForm.value.dockerMode as 'mihomo' | 'oxidns' | 'mosdns' | 'aio']
 )
 
 const DOCKER_NOTES: Record<string, { title: string; lines: string[] }> = {

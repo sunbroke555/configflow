@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import type { OxidnsSchema } from '@/lib/oxidnsSchema'
+import FieldHelp from '@/components/common/FieldHelp.vue'
 
 const props = withDefaults(defineProps<{
   fields: Array<{ key: string; schema: OxidnsSchema }>
@@ -80,8 +81,10 @@ function select(key: string) {
               <span class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span class="text-sm font-medium">{{ field.schema.label || field.key }}</span>
                 <code v-if="field.schema.label && !field.schema.label.includes(field.key)" class="break-all text-xs text-muted-foreground">{{ field.key }}</code>
+                <FieldHelp v-if="field.schema.hint" :label="`${field.schema.label || field.key}用途`" :text="field.schema.help" content-class="z-[80]" />
               </span>
-              <span class="whitespace-normal break-words text-xs leading-relaxed text-muted-foreground">{{ field.schema.help }}</span>
+              <span class="whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground">{{ field.schema.hint || field.schema.help }}</span>
+              <span v-if="field.schema.hint" class="hidden" aria-hidden="true">{{ field.schema.help }}</span>
             </CommandItem>
           </CommandGroup>
         </CommandList>

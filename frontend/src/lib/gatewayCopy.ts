@@ -1,0 +1,28 @@
+import { optionCopy } from './optionCopy'
+
+export const gatewayCopy = {
+  applications: optionCopy('应用直接连接 IP 时，选择对应规则集。',
+    '应用直接连接 IP、不先查询域名时使用，如 Telegram。',
+    '所选 IP 的连接交给 Mihomo，仍按其规则决定代理或直连。fake-IP 流量自动接管，无需勾选；留空也不会关闭它。'),
+  directDomains: optionCopy('无需代理的网站，可选择对应的域名规则。',
+    '希望网站使用直连 DNS 查询真实地址时选择。',
+    '普通连接由 Linux 直接转发；如果目标 IP 同时属于已选的应用接管范围，连接仍交给 Mihomo，由其规则决定出口。'),
+  proxyDomains: optionCopy('需交给代理处理的网站，选择对应域名规则。',
+    '希望网站连接交给 Mihomo 处理时选择。',
+    '域名查询由 Mihomo 返回临时地址（fake-IP），连接会自动被接管，无需再选对应 IP 规则集；最终出口仍由 Mihomo 规则决定。'),
+  localDNS: optionCopy('默认地址可直接使用，每行填写一个地址。',
+    '用于查询直连网站的真实 IP；本方案需填 IPv4 地址形式的加密 DNS。',
+    '支持 DoH / DoT，避免普通 DNS 的 53 端口被重复接管而循环查询。每行一个地址，无需 - addr:；也支持 addr 格式的 YAML。'),
+  interface: optionCopy('选择连接主路由和局域网设备的网卡。',
+    'Linux 有多张网卡时，选择与手机、电脑和主路由相连的一张。',
+    '网关通过此网卡接收和转发流量，名称可参考检测结果，如 ens18 或 br0。选择网卡不会替你修改设备的 IP 地址。'),
+  address: optionCopy('填写固定地址，供设备作为网关和 DNS。',
+    '先为 Linux 保留固定的局域网 IPv4，避免重启后地址变化。',
+    '网关启用后，手机或电脑通过这个地址上网和查询域名。此处只填写现有地址，不会修改 Linux 的 IP；先测试一台设备再推广。'),
+  cidr: optionCopy('填写需要接入网关的局域网地址范围。',
+    '让网关识别哪些局域网设备需要使用转发服务。',
+    '填写网段而非单台设备 IP，如 192.168.1.0/24，表示该网段的地址范围。应与 Linux 的局域网地址一致，可参考自动检测结果。'),
+  upstream: optionCopy('填写这台 Linux 原本使用的主路由地址。',
+    'Linux 通过主路由上网时，填写主路由的局域网 IPv4。',
+    '此地址用于核对转发方向，应与 Linux 现有默认网关一致。这里不会修改设备 IP 或默认路由；地址不符时先检查实际网络设置。'),
+}

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import OxidnsParameterPicker from '@/components/generate/OxidnsParameterPicker.vue'
 import type { OxidnsSchema } from '@/lib/oxidnsSchema'
+import { optionCopy } from '@/lib/optionCopy'
 
 const fields: Array<{ key: string; schema: OxidnsSchema }> = [
   { key: 'enable_pipeline', schema: { type: 'boolean', label: '连接流水线（enable_pipeline）', help: '让 TCP / DoT 单连接同时承载多个查询；需上游支持。' } },
@@ -50,6 +51,29 @@ async function search(value: string) {
 }
 
 describe('OxiDNS parameter picker', () => {
+  it('opens layered help without selecting an option and searches its hidden details', async () => {
+    const wrapper = render()
+    const copy = optionCopy('上游兼容时，在同一连接发送多个查询。', '使用 TCP / DoT，且上游支持连接复用时开启。', '减少并发连接开销；UDP 不受影响，默认关闭。')
+    await wrapper.setProps({ contentClass: 'z-[70]', fields: [{ key: 'enable_pipeline', schema: { type: 'boolean', label: '连接复用', ...copy } }] })
+    await open(wrapper)
+    expect(options()[0].textContent).toContain(copy.hint)
+    const help = options()[0].querySelector<HTMLButtonElement>('button[aria-label="连接复用用途说明"]')!
+    help.click()
+    await flushPromises()
+    expect(document.querySelector('[data-field-help-content]')?.textContent).toContain('【适用条件】')
+    expect(document.querySelector('[data-field-help-content]')?.textContent).toContain('【工作原理】')
+    expect(document.querySelector('[data-field-help-content]')?.classList.contains('z-[80]')).toBe(true)
+    expect(document.querySelector('[data-field-help-content]')?.classList.contains('z-[60]')).toBe(false)
+    expect(wrapper.emitted('select')).toBeUndefined()
+    help.click()
+    await flushPromises()
+    await search('UDP')
+    expect(options()).toHaveLength(1)
+    options()[0].click()
+    await flushPromises()
+    expect(wrapper.emitted('select')).toEqual([['enable_pipeline']])
+  })
+
   it('supports a local popover layer above a containing sheet', async () => {
     const wrapper = render()
     await wrapper.setProps({contentClass: 'z-[70]'})

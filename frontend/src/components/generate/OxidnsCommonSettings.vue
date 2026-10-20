@@ -9,14 +9,14 @@
           <div class="flex flex-wrap items-center gap-1">
             <h3 class="mr-auto text-sm font-semibold">核心设置</h3>
             <Button variant="outline" type="button" class="min-h-11 text-xs" :disabled="disabled || !canApplyPerformance || Boolean(activeError())" @click="applyPerformance">填入已验证性能参数</Button>
-            <FieldHelp label="已验证性能参数" :text="canApplyPerformance ? '将可编辑的性能参数填入当前草稿，包括 2 个工作线程、300 秒 lazy cache、2048 条国内探测缓存及上游并发与备用等待设置。仅修改当前结构支持的项目；上游地址、规则选择及自定义参数保留，最后统一保存。' : '当前性能设置使用自定义结构，请通过完整参数编辑。'" />
+            <FieldHelp label="已验证性能参数" :text="canApplyPerformance ? optionHelp('想使用已验证的一组性能参数，且当前结构支持编辑。', '填入 2 线程、300 秒过期缓存保留、2048 条探测缓存及并发和备用参数。保留上游地址、规则及自定义参数，仅改草稿，需统一保存。') : '当前性能设置使用自定义结构，请通过完整参数编辑。'" />
           </div>
           <OxidnsFields :settings="draft" :fields="coreFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
         <TabsContent force-mount value="rules" class="mt-0 space-y-5 data-[state=inactive]:hidden">
-          <div class="flex items-center gap-1"><h3 class="text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" text="选择参与当前配置分流的规则，按规则管理中的顺序执行。修改会同步当前执行链和规则资源。若当前执行链已有无法对应的手工结构，可通过完整参数编辑。" /></div>
+          <div class="flex items-center gap-1"><h3 class="text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" :text="optionHelp('希望不同网站或 IP 使用不同的 DNS 时设置。', '选中的规则按规则管理中的顺序执行，并同步处理流程和规则资源。已有无法对应的手工流程时，请到完整参数编辑，避免覆盖自定义逻辑。')" /></div>
           <div class="grid min-w-0 gap-4 sm:grid-cols-2">
-            <FormField v-for="group in ruleGroups" :key="group.key" :label="group.label" :help="group.hint">
+            <FormField v-for="group in ruleGroups" :key="group.key" :label="group.label" :hint="group.hint" :help="group.help">
               <div v-if="isCustom(group.key)" class="flex min-h-11 items-center gap-1 text-xs text-muted-foreground"><span>暂不可编辑</span><FieldHelp :label="`${group.label}配置状态`" :text="capability(group.key)?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability(group.key)?.target || group.key)">完整参数<ChevronRight class="size-3.5" /></Button></div>
               <fieldset v-else class="min-w-0 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="disabled"><MultiSelect :model-value="selectedRules(group.key)" :options="ruleOptions(group)" :placeholder="`选择${group.label}`" @update:model-value="change(group.key, $event)" /></fieldset>
             </FormField>
@@ -30,9 +30,10 @@
           <Collapsible v-for="feature in featureGroups" :key="feature.key" :default-open="feature.key === initialFeature" class="group rounded-lg border border-border bg-card">
             <div class="relative flex min-h-12 items-center justify-between gap-2 px-3 py-3 text-sm font-medium">
               <CollapsibleTrigger type="button" :aria-label="`${feature.title}设置`" :disabled="disabled" class="absolute inset-0 cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:opacity-50" />
-              <span class="pointer-events-none flex min-w-0 flex-1 items-center gap-1"><span class="min-w-0">{{ feature.title }}</span><span class="pointer-events-auto relative z-10"><FieldHelp :label="feature.title" :text="feature.hint" /></span></span>
+              <span class="pointer-events-none flex min-w-0 flex-1 items-center gap-1"><span class="min-w-0">{{ feature.title }}</span><span class="pointer-events-auto relative z-10"><FieldHelp :label="feature.title" :text="feature.help" /></span></span>
               <span class="chip pointer-events-none shrink-0" :class="!isCustom(`${feature.key}.enabled`) && read(`${feature.key}.enabled`) ? 'chip-ok' : ''">{{ isCustom(`${feature.key}.enabled`) ? '自定义配置' : read(`${feature.key}.enabled`) ? '已启用' : '未启用' }}</span><ChevronDown class="pointer-events-none size-4 shrink-0 text-muted-foreground group-data-[state=open]:rotate-180" />
             </div>
+            <p class="m-0 px-3 pb-3 text-xs leading-relaxed text-muted-foreground">{{ feature.hint }}</p>
             <CollapsibleContent force-mount class="space-y-4 border-t border-border p-3 data-[state=closed]:hidden">
               <div v-if="isCustom(`${feature.key}.enabled`)" class="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"><span>自定义配置</span><FieldHelp :label="`${feature.title}配置状态`" :text="capability(`${feature.key}.enabled`)?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability(`${feature.key}.enabled`)?.target || feature.key)">完整参数<ChevronRight class="size-3.5" /></Button></div>
               <div v-else class="flex min-h-11 items-center gap-3"><Switch :id="`oxi-enable-${feature.key}`" :model-value="Boolean(read(`${feature.key}.enabled`))" :disabled="disabled" @update:model-value="change(`${feature.key}.enabled`, $event)" /><Label :for="`oxi-enable-${feature.key}`">启用{{ feature.title }}</Label></div>
@@ -49,13 +50,14 @@
         </TabsContent>
       </div>
     </Tabs>
-    <div class="flex shrink-0 items-center gap-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground"><span>编辑当前配置，最后统一保存</span><FieldHelp label="常用设置同步" text="这里显示当前配置的实际值。修改后同步到完整参数和 YAML；原生插件、未展示的参数与附加文件都会保留。使用自定义结构的项目请通过完整参数编辑。" /><Button type="button" variant="ghost" class="ml-auto min-h-11 shrink-0 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">全部功能<ChevronRight class="size-3.5" /></Button></div>
+    <div class="flex shrink-0 items-center gap-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground"><span>编辑当前配置，最后统一保存</span><FieldHelp label="常用设置同步" :text="optionHelp('希望通过表单修改现有配置，无需反复切换编辑入口。', '这里展示实际配置值，修改会同步到完整参数和 YAML。原生插件、未展示参数及附加文件均保留；自定义结构请到完整参数编辑。')" /><Button type="button" variant="ghost" class="ml-auto min-h-11 shrink-0 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">全部功能<ChevronRight class="size-3.5" /></Button></div>
   </section>
 </template>
 <script setup lang="ts">
 import { reactive, ref, watch, computed, onUnmounted } from 'vue'
 import { ChevronDown, ChevronRight } from '@lucide/vue'
 import { apiFields, applyVerifiedOxidnsTemplate, cacheFields, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
+import { optionCopy, optionHelp } from '@/lib/optionCopy'
 import OxidnsFields, { type OxidnsFieldCapability } from './OxidnsFields.vue'
 import OxidnsMatchEditor from './OxidnsMatchEditor.vue'
 import FormField from '@/components/common/FormField.vue'
@@ -74,20 +76,20 @@ const draft = reactive<Record<string, any>>(clone(props.values))
 const errors = reactive<Record<string, string>>({})
 const tab = ref(featureGroups.some(feature => feature.key === props.initialFeature) ? 'features' : 'core')
 const customReason = '当前配置使用自定义结构，请通过完整参数编辑，现有内容会保留。'
-const coreFields = sourceCoreFields.map(field => ({ ...field, hint: field.hint?.replace('已验证模板为 2', '已验证配置使用 2 个线程') }))
-const upstreamDescriptions: Record<string, string> = {
-  local_dns: '用于直连分流和响应 IP 探测。逐条添加当前使用的上游地址，展开可设置连接参数，也可切换 YAML 编辑完整上游对象。',
-  remote_dns: '用于代理分流；Fake-IP 由外部上游提供。填写当前使用的上游地址；域名上游可配置 bootstrap 或 dial_addr 避免解析环路。',
+const coreFields = sourceCoreFields
+const upstreamDescriptions: Record<string, ReturnType<typeof optionCopy>> = {
+  local_dns: optionCopy('为直连网站查询真实地址，也用于 IP 分流。', '需要设置当前配置中直连查询和响应 IP 探测的上游。', '逐条添加正在使用的地址，展开可调整连接参数，也可切换 YAML 编辑完整上游对象。这里编辑现有配置，不会因清空列表自动补入默认地址。'),
+  remote_dns: optionCopy('设置代理分流的查询上游，临时地址由它提供。', '需要调整代理分流所用上游，Fake-IP 须由外部上游提供。', '逐条填写当前上游。域名地址可用引导 DNS 或指定连接 IP，避免循环解析；标为代理 DNS 不会自动让连接走代理。'),
 }
-const upstreamFields = sourceUpstreamFields.map(field => upstreamDescriptions[field.path] ? { ...field, hint: upstreamDescriptions[field.path], emptyHint: '尚未配置上游，点击添加上游填写地址。' } : field)
+const upstreamFields = sourceUpstreamFields.map(field => upstreamDescriptions[field.path] ? { ...field, ...upstreamDescriptions[field.path], emptyHint: '尚未配置上游，点击添加上游填写地址。' } : field)
 const tabs = [{ value: 'core', label: '核心设置' }, { value: 'rules', label: '分流规则' }, { value: 'upstreams', label: 'DNS 上游' }, { value: 'cache', label: '缓存' }, { value: 'features', label: '特色功能' }, { value: 'access', label: 'WebUI / 日志' }, { value: 'advanced', label: '高级' }]
-const hostFields: OxidnsField[] = [{ path: 'custom_hosts', label: '自定义 Hosts', type: 'lines', wide: true, placeholder: 'full:example.com 192.0.2.10 2001:db8::10', hint: '每条填写域名规则和一个或多个 IP；支持 IPv4、IPv6。可切换 YAML 批量编辑。' }]
-const positionFields: OxidnsField[] = [{ path: 'custom_match_position', label: '自定义匹配位置', hint: '决定自定义匹配与自动域名分流规则的先后顺序。放在前面可优先覆盖自动规则；放在后面则在自动域名规则未结束请求时执行，仍早于动态域名集和 IP 分流判断。', options: [{ value: 'head', label: '在自动规则之前' }, { value: 'tail', label: '在自动规则之后' }] }]
+const hostFields: OxidnsField[] = [{ path: 'custom_hosts', label: '自定义 Hosts', type: 'lines', wide: true, placeholder: 'full:example.com 192.0.2.10 2001:db8::10', ...optionCopy('为指定域名固定返回地址，支持双栈查询。', '希望手动指定某个域名的查询结果，而非交给上游解析。', '每条填写域名规则和一个或多个 IP，支持 IPv4、IPv6。可逐条编辑，也可切换 YAML 批量填写，地址应按希望的匹配范围设置。') }]
+const positionFields: OxidnsField[] = [{ path: 'custom_match_position', label: '自定义匹配位置', ...optionCopy('选择自定义规则先执行，还是让自动规则优先。', '已有自定义匹配，需要决定它与自动域名规则的先后。', '放在前面可优先覆盖自动规则；放在后面仅在自动域名规则未结束请求时执行，但仍早于动态域名集和响应 IP 分流。'), options: [{ value: 'head', label: '在自动规则之前' }, { value: 'tail', label: '在自动规则之后' }] }]
 const ruleGroups = [
-  { key: 'direct_rulesets', opposite: 'proxy_rulesets', label: '直连规则集', sets: true, hint: '选择整组域名或 IP 规则，命中后使用直连 DNS。同一规则集不能同时归入代理分组。' },
-  { key: 'proxy_rulesets', opposite: 'direct_rulesets', label: '代理规则集', sets: true, hint: '选择整组域名或 IP 规则，命中后使用代理 DNS；启用代理 DNS 回退时才会使用备用上游。' },
-  { key: 'direct_rules', opposite: 'proxy_rules', label: '直连规则', sets: false, hint: '选择单独添加的域名或 IP 规则，命中后使用直连 DNS。与规则集一起按原有顺序参与分流。' },
-  { key: 'proxy_rules', opposite: 'direct_rules', label: '代理规则', sets: false, hint: '选择单独添加的域名或 IP 规则，命中后使用代理 DNS；启用代理 DNS 回退时才会使用备用上游。' },
+  { key: 'direct_rulesets', opposite: 'proxy_rulesets', label: '直连规则集', sets: true, ...optionCopy('整组网站或 IP 命中后，使用直连 DNS 查询。', '希望一整组域名或 IP 通过直连 DNS 查询时选择。', '规则按原有顺序参与分流，命中后使用已配置的直连上游。同一规则集不能同时归入代理分组，需要代理的项目应放到另一组。') },
+  { key: 'proxy_rulesets', opposite: 'direct_rulesets', label: '代理规则集', sets: true, ...optionCopy('整组网站或 IP 命中后，使用代理 DNS 查询。', '希望一整组域名或 IP 使用代理分流上游时选择。', '命中后使用代理 DNS，只有启用代理 DNS 回退时才使用备用上游。同一规则集不能同时归入直连分组，仍按原有顺序匹配。') },
+  { key: 'direct_rules', opposite: 'proxy_rules', label: '直连规则', sets: false, ...optionCopy('单条网站或 IP 规则命中后，使用直连 DNS。', '只需指定个别域名或 IP 的查询方式，而非选择整组规则。', '命中后使用已配置的直连 DNS，与规则集一起按规则管理中的原有顺序参与分流。同一规则不能同时归入代理分组。') },
+  { key: 'proxy_rules', opposite: 'direct_rules', label: '代理规则', sets: false, ...optionCopy('单条网站或 IP 规则命中后，使用代理 DNS。', '希望为个别域名或 IP 指定代理分流上游时选择。', '与规则集一起按原有顺序匹配，命中后使用代理 DNS。只有启用回退时才使用备用上游，同一规则不能同时归入直连分组。') },
 ]
 const read = (path: string): unknown => path.split('.').reduce<unknown>((value, key) =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, draft)

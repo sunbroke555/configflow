@@ -2,8 +2,9 @@
 import { ref } from 'vue'
 import { CircleHelp } from '@lucide/vue'
 import { TooltipContent, TooltipPortal, TooltipProvider, TooltipRoot, TooltipTrigger } from 'reka-ui'
+import { cn } from '@/lib/utils'
 
-defineProps<{ label: string; text: string }>()
+defineProps<{ label: string; text: string; contentClass?: string }>()
 
 const open = ref(false)
 
@@ -42,7 +43,7 @@ function closeOnEscape(event: KeyboardEvent) {
           :hide-when-detached="true"
           :aria-label="text"
           data-field-help-content
-          class="field-help-content z-[60] w-max overflow-y-auto overscroll-contain rounded-md border border-border-strong bg-popover px-3 py-2 text-xs font-normal leading-relaxed whitespace-pre-line text-popover-foreground shadow-overlay"
+          :class="cn('field-help-content z-[60] w-max overflow-y-auto overscroll-contain rounded-md border border-border-strong bg-popover px-3 py-2 text-xs font-normal leading-relaxed whitespace-pre-line text-popover-foreground shadow-overlay', contentClass)"
           @escape-key-down="closeOnEscape"
           @click.stop
           @pointerdown.stop

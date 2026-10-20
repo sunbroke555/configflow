@@ -32,7 +32,7 @@
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-1">
               <span class="text-xs font-medium">匹配条件</span>
-              <FieldHelp :label="`匹配项 ${index + 1} 条件`" text="每条填写一段 OxiDNS 匹配表达式，例如 qname full:example.com 匹配完整域名，qtype 1 匹配 A 查询。多条条件之间是“并且”；没有条件时，该条目对所有到达此处的请求生效。" />
+              <FieldHelp :label="`匹配项 ${index + 1} 条件`" :text="optionHelp('需要限制某条动作在哪些请求上生效时填写。', '每条一个表达式，如 qname full:example.com 匹配域名，qtype 1 匹配 A 查询。多条件须全部满足；不填则对所有到达此处的请求生效。')" />
             </div>
             <Button type="button" variant="ghost" size="sm" class="min-h-11" :aria-label="`为匹配项 ${index + 1} 添加条件`" :disabled="disabled" @click="addCondition(item)"><Plus class="size-3.5" />添加条件</Button>
           </div>
@@ -41,7 +41,7 @@
             <Button type="button" variant="ghost" size="icon" class="size-11 shrink-0 text-muted-foreground" :aria-label="`删除匹配项 ${index + 1} 条件 ${conditionIndex + 1}`" :disabled="disabled" @click="removeCondition(item, conditionIndex)"><Trash2 class="size-4" /></Button>
           </div>
         </div>
-        <FormField label="执行动作" :html-for="`${item.key}-action`" help="条件全部满足后执行。直连、代理或备用会跳转到对应 DNS 序列；拒绝返回 NXDOMAIN，空响应返回 NOERROR 且不含答案。自定义动作可引用已定义插件，如 $my_plugin，或填写 goto 序列名。">
+        <FormField label="执行动作" :html-for="`${item.key}-action`" hint="条件全部满足时，使用所选 DNS 或返回指定应答。" :help="optionHelp('同一匹配项的条件全部满足后，执行所选动作。', '直连、代理、备用进入对应 DNS 流程；拒绝返回 NXDOMAIN，空响应返回无答案的 NOERROR。自定义可用 $插件名 或 goto 序列名。')">
           <Select :model-value="item.customAction ? 'custom' : String(item.data.exec)" :disabled="disabled" @update:model-value="setAction(item, String($event))">
             <SelectTrigger :id="`${item.key}-action`" class="min-h-11 w-full" :aria-label="`匹配项 ${index + 1} 执行动作`"><SelectValue placeholder="选择执行动作" /></SelectTrigger>
             <SelectContent>
@@ -68,6 +68,7 @@ import { dump, JSON_SCHEMA, load } from 'js-yaml'
 import { ChevronDown, ChevronUp, Plus, Trash2 } from '@lucide/vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import { optionHelp } from '@/lib/optionCopy'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

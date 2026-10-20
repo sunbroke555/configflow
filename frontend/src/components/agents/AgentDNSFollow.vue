@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { Loader2, RefreshCw } from '@lucide/vue'
 import { agentApi } from '@/api'
 import { notify } from '@/lib/feedback'
+import { optionHelp } from '@/lib/optionCopy'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -168,14 +169,14 @@ async function run(kind: 'save' | 'remove' | 'retry') {
               </Select>
               <p v-if="!options.sources.length" class="m-0 text-xs text-warning-accent">请先接入一个 Mihomo Agent。</p>
             </FormField>
-            <FormField label="OxiDNS 上游" :html-for="`dns-follow-upstream-${agent.id}`" hint="仅更新选中的这一条上游。">
+            <FormField label="OxiDNS 上游" :html-for="`dns-follow-upstream-${agent.id}`" hint="只联动选中的上游，其他查询服务器保持原样。" :help="optionHelp('已配置并发布 OxiDNS，且列表中有可绑定的 UDP / TCP 上游。', '选中这一条后，让其跟随目标 Mihomo DNS。其他上游不被修改；列表为空时先配置并发布 OxiDNS，再重新选择绑定项。')">
               <Select v-model="upstream" :disabled="busy">
                 <SelectTrigger :id="`dns-follow-upstream-${agent.id}`" class="min-h-11 w-full" aria-label="OxiDNS 上游"><SelectValue placeholder="选择要跟随的上游" /></SelectTrigger>
                 <SelectContent class="max-w-(--reka-select-content-available-width)"><SelectItem v-for="item in options.upstreams" :key="upstreamKey(item)" :value="upstreamKey(item)" class="min-h-11 whitespace-normal [overflow-wrap:anywhere]">{{ item.tag }} · {{ item.index + 1 }} · {{ item.address }}</SelectItem></SelectContent>
               </Select>
               <p v-if="!options.upstreams.length" class="m-0 text-xs text-warning-accent">当前配置没有可绑定的 UDP / TCP 上游，请先配置并发布 OxiDNS。</p>
             </FormField>
-            <FormField label="连接方式" :html-for="`dns-follow-connection-${agent.id}`" hint="同一 PVE 的不同 LXC / 虚拟机请选择指定网络地址。">
+            <FormField label="连接方式" :html-for="`dns-follow-connection-${agent.id}`" hint="服务在不同容器或虚拟机中时，指定网络地址。" :help="optionHelp('两服务位于同一 LXC 或三合一容器时，可用自动验证。', '同一 PVE 上的不同 LXC 或虚拟机仍属于不同网络环境，应选指定网络地址。OxiDNS 必须能够访问该地址，不能仅因同一宿主机就选同容器。')">
               <Select v-model="connection" :disabled="busy">
                 <SelectTrigger :id="`dns-follow-connection-${agent.id}`" class="min-h-11 w-full" aria-label="连接方式"><SelectValue /></SelectTrigger>
                 <SelectContent class="max-w-(--reka-select-content-available-width)">
@@ -184,7 +185,7 @@ async function run(kind: 'save' | 'remove' | 'retry') {
                 </SelectContent>
               </Select>
             </FormField>
-            <FormField v-if="connection === 'network'" label="Mihomo DNS 地址" :html-for="`dns-follow-address-${agent.id}`" hint="默认使用所选 Agent 地址，可修改为 OxiDNS 能访问的地址；端口自动跟随。">
+            <FormField v-if="connection === 'network'" label="Mihomo DNS 地址" :html-for="`dns-follow-address-${agent.id}`" hint="填写 OxiDNS 可访问的地址，端口自动跟随。" :help="optionHelp('两服务通过网络连接，默认 Agent 地址不一定能直接访问。', '默认采用所选 Mihomo Agent 的地址，也可改成 OxiDNS 能访问的地址。DNS 端口会自动跟随 Mihomo，不必在此手动追踪端口变化。')">
               <Input :id="`dns-follow-address-${agent.id}`" v-model="address" class="min-h-11 font-mono" placeholder="192.168.0.3" autocomplete="off" spellcheck="false" />
             </FormField>
           </fieldset>

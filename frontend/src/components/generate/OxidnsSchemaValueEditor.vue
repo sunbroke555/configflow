@@ -76,6 +76,7 @@
             <Button v-if="!focused" type="button" variant="ghost" size="icon" class="oxi-native-icon shrink-0 text-muted-foreground hover:text-destructive-accent" :disabled="disabled" :aria-label="`${label} 删除字段 ${entry.key}`" @click="removeEntry(index)"><Trash2 class="size-3.5" /></Button>
           </template>
         </OxidnsSchemaValueEditor>
+        <p v-if="knownField(entry.key)?.hint" class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{{ knownField(entry.key)?.hint }}</p>
         <div v-if="!focused && complex(entry.value) && !inlineEntry(entry.key, entry.value) && !isOpen(entry.id)" class="ml-10 text-[11px] text-muted-foreground num">{{ countSummary(entry.value) }}</div>
       </div>
       </template>
