@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 import { oxidnsMonitorApi } from '@/api'
 import { emptyQueryFilters, monitorNumber, type OxiDNSOverview, type OxiDNSQueries, type OxiDNSQueryFilters } from '@/types/oxidnsMonitor'
+import { oxiDNSQueryTimeRange, useOxiDNSClock } from '@/composables/useOxiDNSClock'
 
 const messageOf = (error: any) => error?.response?.data?.message || error?.message || '读取失败，请稍后重试。'
 const checked = <T>(data: T): T => {
@@ -12,6 +13,7 @@ const MAX_RATE_SAMPLE_GAP = 30
 
 export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
   const overview = ref<OxiDNSOverview | null>(null)
+  const queryClock = useOxiDNSClock(computed(() => overview.value?.collected_at))
   const overviewLoading = ref(false)
   const overviewError = ref('')
   const resettingStatistics = ref(false)
@@ -40,9 +42,9 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
   let rangeUntil: number | undefined
 
   function resetQueryRange() {
-    const now = Date.now()
-    rangeUntil = now
-    rangeSince = filters.value.range === 'all' ? undefined : now - (filters.value.range === '1h' ? 3600000 : 86400000)
+    const bounds = oxiDNSQueryTimeRange(filters.value.range, queryClock.now())
+    rangeUntil = bounds.until_ms
+    rangeSince = bounds.since_ms
   }
   async function loadQueries(force = false) {
     if (disposed || !recorder.value || !overview.value?.recorders.includes(recorder.value)) return
@@ -250,6 +252,6 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
     if (timer) clearInterval(timer)
     document.removeEventListener('visibilitychange', onVisible)
   })
-  return { overview, overviewLoading, overviewError, resettingStatistics, resetError, resetStatistics, qps, queries, queriesLoading, queriesError, recorder,
+  return { overview, overviewLoading, overviewError, resettingStatistics, resetError, resetStatistics, clockSkewMs: queryClock.skewMs, qps, queries, queriesLoading, queriesError, recorder,
     filters, page, hasNext, autoRefresh, refresh, loadQueries, selectRecorder, applyFilters, nextPage, previousPage }
 }

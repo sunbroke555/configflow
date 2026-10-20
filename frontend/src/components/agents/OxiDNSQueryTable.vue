@@ -21,12 +21,13 @@
         </template>
       </Toolbar>
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div class="min-w-0 text-xs text-muted-foreground"><span>客户端 IP</span><OxiDNSClientSelect class="mt-1.5" :model-value="draft.client_ip" :agent-id="agentId" :recorder="recorder" :range="draft.range" @update:model-value="selectClient" /></div>
+        <div class="min-w-0 text-xs text-muted-foreground"><span>客户端 IP</span><OxiDNSClientSelect class="mt-1.5" :model-value="draft.client_ip" :agent-id="agentId" :recorder="recorder" :range="draft.range" :collected-at="collectedAt" @update:model-value="selectClient" /></div>
         <label class="text-xs text-muted-foreground">查询类型<Input v-model="draft.qtype" class="mt-1.5 min-h-11 bg-card font-mono" placeholder="例如 A、AAAA" /></label>
         <label class="text-xs text-muted-foreground">响应码<Input v-model="draft.rcode" class="mt-1.5 min-h-11 bg-card font-mono" placeholder="例如 NOERROR" /></label>
         <label class="text-xs text-muted-foreground">匹配器标签<Input v-model="draft.matcher_tag" class="mt-1.5 min-h-11 bg-card font-mono" placeholder="按实际执行标签查询" /></label>
       </div>
     </form>
+    <p v-if="clockSkewMs != null && Math.abs(clockSkewMs) >= 300000" role="status" class="m-0 text-xs text-warning-accent">浏览器与 DNS 设备的时钟相差较大，查询范围已按 DNS 设备时间计算。请核对两端的系统时间。</p>
     <p v-if="error" class="m-0 rounded-lg border border-warning-accent/30 bg-warning-soft px-3 py-2.5 text-sm text-warning-accent" role="alert">
       {{ error }}<span v-if="data"> 保留上次成功读取的结果。</span>
       <Button variant="ghost" class="ml-2 min-h-11" :disabled="loading" @click="emit('retry')">重试</Button>
@@ -35,7 +36,7 @@
     <EmptyState v-else-if="!data && error" title="查询记录读取失败" description="请检查核心连接后重试。" />
     <EmptyState v-else-if="data && !data.records.length" :icon="Search" :title="hasNext ? '这一页暂无匹配的查询记录' : '没有匹配的查询记录'" :description="hasNext ? '还有更早的记录，可点击下一页继续查找。' : '可以调整时间范围或筛选条件。查询记录由核心记录器提供。'" />
     <DataTableShell v-else-if="data" :footer="'本页 ' + data.records.length + ' 条 · 第 ' + page + ' 页'">
-      <TableHeader><TableRow><TableHead>时间</TableHead><TableHead>查询</TableHead><TableHead>客户端</TableHead><TableHead>结果</TableHead><TableHead>解析来源</TableHead><TableHead class="text-right">耗时</TableHead><TableHead class="text-right">详情</TableHead></TableRow></TableHeader>
+      <TableHeader><TableRow><TableHead><span class="inline-flex items-center gap-1">时间<FieldHelp label="查询时间" :text="`按浏览器时区（${queryTimeZone()}）显示。最近 1 小时和最近 24 小时按 DNS 设备的采样时间计算，翻页时保留原时间范围。全部时间不设起止限制。`" /></span></TableHead><TableHead>查询</TableHead><TableHead>客户端</TableHead><TableHead>结果</TableHead><TableHead>解析来源</TableHead><TableHead class="text-right">耗时</TableHead><TableHead class="text-right">详情</TableHead></TableRow></TableHeader>
       <TableBody>
         <TableRow v-for="record in data.records" :key="record.id">
           <TableCell class="num text-xs">{{ formatQueryTime(record.created_at_ms) }}</TableCell>
@@ -77,16 +78,18 @@ import Toolbar from '@/components/common/Toolbar.vue'
 import DataTableShell from '@/components/common/DataTableShell.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
+import FieldHelp from '@/components/common/FieldHelp.vue'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
 import { useOxiDNSQuerySources } from '@/composables/useOxiDNSQuerySources'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { formatDNSType, formatDNSCode, formatMonitorNumber, formatQueryTime, monitorNumber, type OxiDNSQueries, type OxiDNSQuery, type OxiDNSQueryFilters } from '@/types/oxidnsMonitor'
+import { formatDNSType, formatDNSCode, formatMonitorNumber, formatQueryTime, queryTimeZone, monitorNumber, type OxiDNSQueries, type OxiDNSQuery, type OxiDNSQueryFilters } from '@/types/oxidnsMonitor'
 const props = defineProps<{
   agentId: string; recorders: string[]; recorder: string; instanceId?: string | null; filters: OxiDNSQueryFilters; data: OxiDNSQueries | null
   loading: boolean; error: string; page: number; hasNext: boolean
+  collectedAt?: string; clockSkewMs?: number | null
 }>()
 const emit = defineEmits<{
   filter: [value: OxiDNSQueryFilters]; recorder: [value: string]; detail: [value: OxiDNSQuery]
