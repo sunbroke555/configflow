@@ -16,11 +16,16 @@ const labels: Record<string, string> = {
   'dst-address-type': '目的地址类型', 'out-interface': '出口接口', 'in-interface': '入口接口',
   'out-interface-list': '出口接口列表', 'in-interface-list': '入口接口列表',
   'src-port': '源端口', 'dst-port': '目的端口', protocol: '协议', passthrough: '继续后续规则',
-  disabled: '停用', fib: '加入转发表', comment: '备注', cidr: '目的网段', id: '对象 ID', network: 'DHCP 网段', dns: 'DNS 列表', 'dns-server': 'DNS 列表'
+  disabled: '停用', fib: '加入转发表', comment: '备注', cidr: '目的网段', id: '对象 ID', network: 'DHCP 网段', dns: 'DNS 列表', 'dns-server': 'DNS 列表',
+  'to-addresses': '转发到地址', 'to-ports': '转发到端口', 'reject-with': '拒绝方式', host: '检测地址', port: '端口',
+  type: '检测方式', interval: '检测间隔', 'up-script': '恢复时执行', 'down-script': '故障时执行'
 }
 const pathNames: Record<string, string> = {
   '/ip/firewall/address-list': '地址列表', '/ip/firewall/mangle': 'Mangle', '/routing/table': '路由表',
   '/ip/route': '下一跳路由', '/ip/firewall/nat': 'NAT 免转换'
+}
+const guardPathNames: Record<string, string> = {
+  '/ip/firewall/address-list': '放行地址', '/ip/firewall/nat': 'NAT', '/ip/firewall/filter': '防火墙', '/tool/netwatch': 'Netwatch'
 }
 const safeFields = (value: unknown): DetailRow[] => Object.entries(record(value))
   .filter(([key, value]) => !/password|secret|token|authorization/i.test(key) && (value === null || typeof value !== 'object' || Array.isArray(value)))
@@ -45,7 +50,7 @@ function objectRow(value: unknown, creating: boolean): DetailRow {
   return { label: `${pathNames[String(item.path)] || text(item.path)}${identity ? ` · ${identity}` : ''}`, value: valuesOf(fields) }
 }
 export function hasOperationDetails(op: RouterPlanOperation) {
-  return ['ros_policy_replace', 'return_routing_apply', 'route_add', 'route_delete', 'route_comment',
+  return ['ros_policy_replace', 'dns_guard_replace', 'return_routing_apply', 'route_add', 'route_delete', 'route_comment',
     'nat_add', 'nat_update', 'dhcp_dns_update', 'policy_route_add', 'policy_route_update', 'policy_route_delete'].includes(op.kind || '')
 }
 export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
@@ -63,6 +68,16 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     add('删除旧受管对象', [...list(op.owned)].reverse().map(value => objectRow(value, false)),
       bundle.length ? '新策略启用成功后，按以下顺序清理旧受管对象；其他程序和手工对象不在此列表中。' : '本次撤销策略，仅删除以下已核实归属的对象。')
     add('迁移主表静态路由', list(op.migrations).map(value => objectRow(value, false)), '新策略启用后删除下列受管主表路由，改由来源策略匹配。')
+  } else if (op.kind === 'dns_guard_replace') {
+    const guardRow = (value: unknown, fields: unknown): DetailRow => {
+      const item = record(value)
+      return { label: `${guardPathNames[String(item.path)] || text(item.path)} · ${text(item.role)}`, value: valuesOf(fields) }
+    }
+    add('新建对象', list(op.create).map(value => guardRow(value, record(value).values)),
+      '按列表顺序创建：先写放行与回包规则，再启用劫持；劫持与 853 规则放在各自列表最前。')
+    add('删除旧受管对象', [...list(op.owned)].reverse().map(value => guardRow(value, record(value).config)),
+      list(op.create).length ? '先按以下顺序删除本功能上次创建的对象，再创建新对象；手工规则不在此列表中。'
+        : '关闭强制 DNS，仅删除以下已核实归属的对象。')
   } else if (op.kind === 'return_routing_apply') {
     const before = record(op.previous), after = record(op.spec)
     groups.push(changedFields('回流参数', before, after, ['router_ip', 'mark', 'table', 'priority']))

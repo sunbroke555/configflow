@@ -110,6 +110,10 @@ def _return_rule_matches(rule: Dict[str, Any], expected: Dict[str, Any]) -> bool
 
 
 def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRouting) -> None:
+    if stage == 'dns_guard':
+        from backend.routers.dns_guard import verify
+        verify(driver, checks['dns_guard'])
+        return
     if stage == 'dhcp_dns':
         verify_dns(checks['dhcp_dns'], driver.read_dhcp_dns())
         return
@@ -192,6 +196,9 @@ def execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -
                 elif current == 'dhcp_dns' and plan.get('checks', {}).get('dhcp_dns'):
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认 DHCP DNS 与所选服务器一致', 'status': 'verified'})
+                elif current == 'dns_guard' and plan.get('checks', {}).get('dns_guard', {}).get('roles'):
+                    _verify(current, plan['checks'], driver, agent)
+                    record({'stage': current, 'summary': '回读确认强制 DNS 规则与计划一致', 'status': 'verified'})
                 continue
             if stage['manual']:
                 record({'stage': current, 'summary': '需要在路由器上手动导入脚本', 'status': 'manual'})
@@ -203,6 +210,11 @@ def execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -
                 _verify('routes', plan['checks'], driver, agent)
                 _verify('nat_bypass', plan['checks'], driver, agent)
                 checked_dns_target(plan['checks']['dhcp_dns'], driver.read_dhcp_dns())
+            if current == 'dns_guard' and plan['checks']['dns_guard']['roles']:
+                # Hijacked clients receive fake-ip answers at once; the proxy
+                # routes and their NAT protection must already be in place.
+                _verify('routes', plan['checks'], driver, agent)
+                _verify('nat_bypass', plan['checks'], driver, agent)
             for op in stage['ops']:
                 undo = _apply(op, driver, agent)
                 done.append((current, op, undo))

@@ -369,6 +369,42 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
       </SectionCard>
 
       <SectionCard
+        v-if="dnsGuard"
+        class="mt-4"
+        :padded="false"
+        title="强制 DNS"
+        description="写死公共 DNS 的设备，其 53 端口查询经路由器转给 OxiDNS；只管理本功能创建并核实归属的对象。"
+      >
+        <template #actions>
+          <StatusDot :tone="dnsGuardStatus.tone" :label="dnsGuardStatus.label" />
+        </template>
+        <div class="flex flex-col gap-2 px-5 pb-4 text-[12.5px] max-md:px-4 max-sm:px-3">
+          <p v-if="dnsGuard.message" class="m-0 text-muted-foreground">{{ dnsGuard.message }}</p>
+          <ul v-if="dnsGuard.blockers.length || dnsGuard.warnings.length" class="m-0 list-disc pl-5 text-warning-accent">
+            <li v-for="blocker in dnsGuard.blockers" :key="blocker">{{ blocker }}</li>
+            <li v-for="warning in dnsGuard.warnings" :key="warning">{{ warning }}</li>
+          </ul>
+        </div>
+        <div v-if="dnsGuard.items.length" class="cf-table-wrap">
+          <table class="cf-table min-w-[560px]">
+            <thead>
+              <tr><th>对象</th><th>作用</th><th>状态</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in dnsGuard.items" :key="item.role">
+                <td class="whitespace-nowrap">{{ item.object }}</td>
+                <td class="min-w-[240px] whitespace-normal break-words font-mono text-[12px]">{{ item.detail }}</td>
+                <td>
+                  <span v-if="item.paused" class="chip chip-warn">已暂停</span>
+                  <span v-else :class="['chip', statusInfo(item.status).chip]">{{ statusInfo(item.status).label }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+
+      <SectionCard
         v-if="report.routes.unmanaged_other.length || report.routes.extra.length"
         class="mt-4"
         :padded="false"
@@ -586,6 +622,41 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               </SelectContent>
             </Select>
           </FormField>
+          <template v-if="form.type === 'routeros' && !setupDraftSession">
+            <div class="flex flex-col gap-1.5">
+              <div class="flex min-h-11 items-center justify-between gap-3">
+                <div class="flex min-w-0 items-center gap-1">
+                  <Label for="router-dns-guard">强制局域网 DNS 走 OxiDNS</Label>
+                  <FieldHelp label="强制局域网 DNS 走 OxiDNS" :text="routerCopy.dnsGuard.help" />
+                </div>
+                <Switch
+                  id="router-dns-guard"
+                  :disabled="form.dns_agent_id === NONE"
+                  :model-value="form.dns_guard.enabled"
+                  @update:model-value="value => (form.dns_guard.enabled = Boolean(value))"
+                />
+              </div>
+              <p class="m-0 text-xs leading-relaxed text-muted-foreground">
+                {{ form.dns_agent_id === NONE ? '先选择上方的 DHCP DNS 服务器才能开启。' : routerCopy.dnsGuard.hint }}
+              </p>
+            </div>
+            <template v-if="form.dns_guard.enabled">
+              <div v-for="option in guardOptions" :key="option.key" class="flex min-h-11 items-center justify-between gap-3 pl-3">
+                <div class="flex min-w-0 items-center gap-1">
+                  <Label :for="`router-dns-guard-${option.key}`">{{ option.label }}</Label>
+                  <FieldHelp :label="option.label" :text="option.copy.help" />
+                </div>
+                <Switch
+                  :id="`router-dns-guard-${option.key}`"
+                  :model-value="form.dns_guard[option.key]"
+                  @update:model-value="value => (form.dns_guard[option.key] = Boolean(value))"
+                />
+              </div>
+              <FormField label="放行设备" html-for="router-dns-guard-bypass" class="pl-3" v-bind="routerCopy.dnsGuardBypass">
+                <Textarea id="router-dns-guard-bypass" v-model="guardBypassText" :rows="3" class="font-mono" placeholder="每行一个，如 192.168.0.50 或 192.168.0.64/28" />
+              </FormField>
+            </template>
+          </template>
         </form>
 
         <DialogFooter>
@@ -700,8 +771,25 @@ interface RouterItem {
   dns_agent_id: string
   ip_rule_sets?: string[]
   ros_policy_rule_sets?: string[]
+  dns_guard?: DnsGuardSettings
   has_password: boolean
   last_probe?: { ok: boolean; version?: string; message?: string; at: string }
+}
+
+interface DnsGuardSettings {
+  enabled: boolean
+  block_dot: boolean
+  failover: boolean
+  bypass: string[]
+}
+
+interface DnsGuardReport {
+  enabled: boolean
+  status: 'disabled' | 'synced' | 'pending' | 'unknown'
+  message: string
+  items: { role: string; object: string; detail: string; status: 'synced' | 'pending'; paused: boolean }[]
+  blockers: string[]
+  warnings: string[]
 }
 
 interface AgentItem {
@@ -724,6 +812,17 @@ const STATUS: Record<Status, { label: string; chip: string }> = {
 }
 const statusInfo = (status: string) => STATUS[status as Status] || STATUS.unknown
 const disabledNatRuleLabel = (rule: { comment?: string; rule_id: string }) => rule.comment || rule.rule_id
+const DNS_GUARD_STATUS = {
+  disabled: { label: '未开启', tone: 'muted' },
+  synced: { label: '已同步', tone: 'success' },
+  pending: { label: '待更新', tone: 'warning' },
+  unknown: { label: '待确认', tone: 'warning' }
+} as const
+const guardDefaults = (): DnsGuardSettings => ({ enabled: false, block_dot: false, failover: true, bypass: [] })
+const guardOptions = [
+  { key: 'block_dot', label: '拦截加密 DNS（853 端口）', copy: routerCopy.dnsGuardDot },
+  { key: 'failover', label: 'OxiDNS 故障时自动暂停', copy: routerCopy.dnsGuardFailover }
+] as const
 const DHCP_DNS_STATUS = {
   disabled: { label: '未关联', tone: 'muted' },
   synced: { label: '已同步', tone: 'success' },
@@ -771,6 +870,8 @@ const report = ref<any>(null)
 const reportSummary = computed(() => (report.value?.summary || {}) as ReportSummary)
 const dhcpDns = computed(() => report.value?.dhcp_dns as DhcpDnsReport | undefined)
 const dhcpDnsStatus = computed(() => DHCP_DNS_STATUS[dhcpDns.value?.status || 'disabled'])
+const dnsGuard = computed(() => report.value?.dns_guard as DnsGuardReport | undefined)
+const dnsGuardStatus = computed(() => DNS_GUARD_STATUS[dnsGuard.value?.status || 'disabled'])
 const reportRouter = ref<RouterItem | null>(null)
 const reportTime = ref('')
 const reportLoading = ref(false)
@@ -809,9 +910,13 @@ const emptyForm = () => ({
   manage_return_routing: false,
   dns_agent_id: NONE,
   ip_rule_sets: [] as string[],
-  ros_policy_rule_sets: [] as string[]
+  ros_policy_rule_sets: [] as string[],
+  dns_guard: guardDefaults()
 })
 const form = reactive(emptyForm())
+const guardBypassText = ref('')
+// The guard targets the DHCP DNS Agent; without one it cannot stay enabled.
+watch(() => form.dns_agent_id, value => { if (value === NONE) form.dns_guard.enabled = false })
 
 const typeLabel = (type: RouterType) => (type === 'routeros' ? 'RouterOS' : 'iKuai')
 const ruleSetOptions = computed(() =>
@@ -1077,6 +1182,7 @@ const openCreate = async () => {
   policyRouter.value = null
   syncRouter.value = null
   Object.assign(form, emptyForm())
+  guardBypassText.value = ''
   if (props.embedded) form.name = '主路由'
   if (props.setupAgents && !props.setupDraftSession) Object.assign(form, { proxy_gateway_agent_id: props.setupAgents.mihomo, dns_agent_id: props.setupAgents.oxidns })
   editingId.value = ''
@@ -1099,8 +1205,10 @@ const openEdit = async (router: RouterItem) => {
     manage_return_routing: router.manage_return_routing === true,
     dns_agent_id: router.dns_agent_id || NONE,
     ip_rule_sets: (router.ip_rule_sets || []).filter(id => router.type !== 'routeros' || !router.ros_policy_rule_sets?.includes(id)),
-    ros_policy_rule_sets: [...(router.ros_policy_rule_sets || [])]
+    ros_policy_rule_sets: [...(router.ros_policy_rule_sets || [])],
+    dns_guard: { ...guardDefaults(), ...router.dns_guard, bypass: [...(router.dns_guard?.bypass || [])] }
   })
+  guardBypassText.value = (router.dns_guard?.bypass || []).join('\n')
   editingId.value = router.id
   editingHasPassword.value = router.has_password
   dialogVisible.value = true
@@ -1127,8 +1235,14 @@ const clearInspection = (routerId?: string) => {
 const submit = async () => {
   if (saving.value) return
   saving.value = true
+  const { dns_guard: guard, ...fields } = form
   const payload = {
-    ...form,
+    ...fields,
+    // Setup drafts link the DNS Agent later; only RouterOS can keep the guard on.
+    ...(props.setupDraftSession ? {} : { dns_guard: {
+      ...guard, enabled: form.type === 'routeros' && guard.enabled,
+      bypass: guardBypassText.value.split(/[\s,，]+/).map(item => item.trim()).filter(Boolean)
+    } }),
     ros_policy_rule_sets: form.type === 'routeros' ? [...form.ros_policy_rule_sets] : [],
     manage_return_routing: form.manage_return_routing === true,
     proxy_gateway_agent_id: form.proxy_gateway_agent_id === NONE ? '' : form.proxy_gateway_agent_id,
