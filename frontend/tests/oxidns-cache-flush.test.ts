@@ -30,7 +30,9 @@ describe('OxiDNS cache flush', () => {
   it('flushes every cache configured on the selected device after confirmation', async () => {
     const wrapper = await render()
     expect(wrapper.get('button').text()).toBe('清理缓存')
-    expect(wrapper.get('button').classes()).toContain('max-sm:min-h-11')
+    expect(wrapper.get('button').attributes('aria-label')).toBe('清理缓存')
+    expect(wrapper.get('button').classes()).toEqual(expect.arrayContaining(['min-h-11', 'max-sm:size-11']))
+    expect(wrapper.get('button span').classes()).toContain('max-sm:sr-only')
     await wrapper.get('button').trigger('click')
     await flushPromises()
     expect(api.get).toHaveBeenCalledWith('/agents/one/oxidns/cache')

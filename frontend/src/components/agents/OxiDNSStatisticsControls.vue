@@ -1,6 +1,7 @@
 <template>
-  <div class="ml-auto flex min-w-0 max-w-full items-center gap-3 max-sm:w-full max-sm:justify-between">
-    <div class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+  <!-- Joins the panel's action row; the row owns alignment and wrapping. -->
+  <div class="contents">
+    <div class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground max-sm:mr-auto">
       <span class="hidden sm:inline">{{ statisticsLabel }}</span>
       <span class="sm:hidden">{{ statistics ? '本轮统计' : '统计重置不可用' }}</span>
       <FieldHelp label="统计周期" :text="statisticsLabel + '\n' + statisticsNote" />

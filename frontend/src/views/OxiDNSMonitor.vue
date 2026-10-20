@@ -53,24 +53,24 @@
         <span v-if="currentDevice?.host" class="min-w-0 break-all font-mono" aria-label="当前设备 IP">{{ currentDevice.host }}</span>
         <span v-if="overview?.core.version" class="font-mono">OxiDNS {{ overview.core.version }}</span>
         <span v-if="overview">已运行 {{ uptime }}</span>
-        <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 max-sm:col-span-2 sm:ml-auto">
-          <OxiDNSRuleUpdate :agent-id="agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
-          <OxiDNSCacheFlush :agent-id="agentId" :device-name="currentDevice?.name || agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'"
-            @flushed="id => { if (id === agentId) refresh(true) }" />
-          <span v-if="overview" class="text-xs">采样 {{ sampleTime }}</span>
-        </div>
+        <span v-if="overview" class="ml-auto text-xs">采样 {{ sampleTime }}</span>
       </div>
       <p v-if="overviewError && overview" role="alert" class="mb-4 rounded-lg border border-warning-accent/30 bg-warning-soft p-3 text-sm text-warning-accent">
         {{ overviewError }} 保留上次成功读取的数据，采样时间见上方。
       </p>
       <Tabs :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
-        <div class="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 max-sm:mb-2 max-sm:gap-y-1">
+        <div class="mb-4 flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2 max-sm:mb-2 max-sm:gap-y-1">
           <TabsList class="min-h-11 shrink-0 max-sm:grid max-sm:h-auto max-sm:w-full max-sm:grid-cols-3">
             <TabsTrigger value="overview" class="min-h-11 px-4 max-sm:px-2">运行概览</TabsTrigger>
             <TabsTrigger value="queries" class="min-h-11 px-4 max-sm:px-2">查询记录</TabsTrigger>
             <TabsTrigger value="devices" class="min-h-11 px-4 max-sm:px-2">设备策略</TabsTrigger>
           </TabsList>
-          <OxiDNSStatisticsControls v-if="tab === 'overview' && overview" :statistics="overview.statistics" :resetting="resettingStatistics" @reset="confirmResetStatistics" />
+          <div class="oxidns-panel-actions ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-2 max-sm:w-full sm:min-w-[28rem] sm:justify-end">
+            <OxiDNSStatisticsControls v-if="tab === 'overview' && overview" :statistics="overview.statistics" :resetting="resettingStatistics" @reset="confirmResetStatistics" />
+            <OxiDNSRuleUpdate :agent-id="agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
+            <OxiDNSCacheFlush :agent-id="agentId" :device-name="currentDevice?.name || agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'"
+              @flushed="id => { if (id === agentId) refresh(true) }" />
+          </div>
         </div>
         <template v-if="tab !== 'devices' && !overview">
           <LoadingRows v-if="overviewLoading" :rows="5" />

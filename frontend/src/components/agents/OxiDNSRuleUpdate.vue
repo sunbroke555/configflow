@@ -15,19 +15,23 @@
       </template>
     </AgentStatusRow>
   </template>
-  <!-- Phones keep the actions in the parent row and give progress its own line. -->
-  <div v-else class="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 max-sm:contents">
-    <p v-if="statusText || error" :role="error || task?.status === 'failed' ? 'alert' : 'status'" aria-live="polite"
-      class="m-0 min-w-0 break-words text-xs leading-5 max-sm:order-last max-sm:basis-full"
-      :class="error || task?.status === 'failed' ? needsCheck ? 'text-warning-accent' : 'text-destructive-accent' : task?.status === 'succeeded' ? 'text-success-accent' : 'text-muted-foreground'">
+  <!-- Toolbar: joins the parent action row. Progress lives on the button and
+       success becomes a toast; only results needing attention stay on screen. -->
+  <div v-else class="contents">
+    <Button type="button" variant="outline" class="min-h-11 shrink-0 max-sm:size-11 max-sm:gap-0"
+      :aria-label="toolbarLabel" :title="toolbarLabel" :aria-busy="busy" :disabled="disabled || busy || !agentId" @click="act">
+      <Loader2 v-if="busy" class="size-4 animate-spin" /><RefreshCw v-else class="size-4" />
+      <span class="num max-sm:sr-only">{{ toolbarLabel }}</span>
+    </Button>
+    <Button v-if="needsCheck && !busy" type="button" variant="ghost" class="min-h-11 shrink-0"
+      :disabled="disabled || !agentId" title="先查询当前任务，未运行时才重新提交更新" @click="retry">重新尝试更新</Button>
+    <!-- contain keeps a long reason from widening the action row; phones,
+         where the button is an icon, also show running progress here. -->
+    <p v-if="attention || running" :role="error || task?.status === 'failed' ? 'alert' : 'status'" aria-live="polite"
+      class="order-last m-0 w-full min-w-0 basis-full break-words text-xs leading-5 [contain:inline-size] sm:text-right"
+      :class="attention ? needsCheck ? 'text-warning-accent' : 'text-destructive-accent' : 'text-muted-foreground sm:hidden'">
       <span v-if="statusText" class="num">{{ statusText }}</span><span v-if="error">{{ statusText ? ' · ' : '' }}{{ error }}</span>
     </p>
-    <Button type="button" variant="ghost" size="sm" class="shrink-0 text-primary-accent max-sm:min-h-11" :disabled="disabled || busy || !agentId" @click="act">
-      <Loader2 v-if="busy" class="size-3.5 animate-spin" /><RefreshCw v-else class="size-3.5" />
-      {{ actionLabel }}
-    </Button>
-    <Button v-if="needsCheck && !busy" type="button" variant="ghost" size="sm" class="shrink-0 max-sm:min-h-11"
-      :disabled="disabled || !agentId" title="先查询当前任务，未运行时才重新提交更新" @click="retry">重新尝试更新</Button>
   </div>
 </template>
 
@@ -69,6 +73,17 @@ let watchedTaskId = ''
 let baselineKnown = false
 const count = (value: number) => Number.isFinite(value) && value >= 0 ? value : 0
 const progress = computed(() => task.value ? `下载 ${count(task.value.downloaded)}/${count(task.value.download_total)} · 热重载 ${count(task.value.reloaded)}/${count(task.value.reload_total)}` : '')
+const toolbarLabel = computed(() => {
+  if (running.value && task.value) {
+    const value = task.value
+    return value.phase === 'reloading' ? `更新中 · 热重载 ${count(value.reloaded)}/${count(value.reload_total)}`
+      : `更新中 · 下载 ${count(value.downloaded)}/${count(value.download_total)}`
+  }
+  return actionLabel.value
+})
+const running = computed(() => busy.value && task.value?.status === 'running' && !submitting.value)
+// Successful and idle states need no persistent text in the toolbar.
+const attention = computed(() => Boolean(error.value || task.value?.status === 'failed' || (needsCheck.value && !busy.value)))
 const statusText = computed(() => {
   if (!task.value || task.value.status === 'idle') return ''
   const labels = { running: task.value.phase === 'reloading' ? '正在热重载规则' : '正在下载规则', succeeded: '规则更新完成', failed: task.value.code === 'RULE_UPDATE_UNKNOWN' ? '规则更新结果待确认' : '规则更新失败' }
@@ -144,7 +159,7 @@ function apply(data: OxiDNSRuleUpdateResponse, current: number, initial = false)
     needsCheck.value = false
     if (next.status === 'failed') error.value = message(next, message(data, '部分规则可能已更新，请检查规则下载和热重载任务后重试。'))
     if (watching && !initial) {
-      if (next.status === 'succeeded') { notify.success('OxiDNS 规则更新完成'); emit('updated') }
+      if (next.status === 'succeeded') { notify.success('OxiDNS 规则更新完成', progress.value); emit('updated') }
       if (next.status === 'failed') notify.error('OxiDNS 规则更新失败', error.value)
     }
     watching = false
