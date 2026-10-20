@@ -565,7 +565,9 @@ def register_agent():
             result = agent_manager.register_agent(agent_data, existing_token=existing_token)
 
         response_data = {'success': True, **result}
-        logger.info(f"注册成功: {result.get('id')}")
+        logged = _registration_log_fields(agent_data)
+        logger.info('%s：%s（%s，%s）', '新 Agent 注册成功' if result.get('is_new') else 'Agent 重新注册',
+                    logged.get('name') or result.get('id'), logged.get('service_type', 'mihomo'), logged.get('host', ''))
 
         return jsonify(response_data), 200
 

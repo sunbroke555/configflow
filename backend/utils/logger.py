@@ -31,6 +31,20 @@ def get_logger(name: str = __name__) -> logging.Logger:
     return logger
 
 
+def log_text(value, limit: int = 120) -> str:
+    """User-supplied text on one bounded log line; control characters cannot forge entries."""
+    text = ''.join(char if char.isprintable() else '?' for char in str(value))
+    return text if len(text) <= limit else text[:limit] + '…'
+
+
+def client_ip() -> str:
+    """Request source for operation logs. nginx sets X-Real-IP; direct runs use the socket address."""
+    from flask import has_request_context, request
+    if not has_request_context():
+        return '-'
+    return log_text(request.headers.get('X-Real-IP') or request.remote_addr or '-', 64)
+
+
 # 向后兼容的函数
 def is_debug_enabled() -> bool:
     """检查是否启用了 DEBUG 日志级别"""

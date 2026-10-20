@@ -24,6 +24,7 @@ from backend.version import get_version_info
 # 导入路由注册函数
 from backend.routes import register_blueprints
 from backend.routes.auth import setup_before_request
+from backend.routes.config import register_config_pull_log
 
 # 导入 MCP 服务端
 from backend.mcp_server import mcp_bp
@@ -104,6 +105,8 @@ app.register_blueprint(mcp_bp)
 
 # 设置全局认证中间件
 setup_before_request(app)
+
+register_config_pull_log(app)
 
 @app.before_request
 def start_agent_rule_sync():

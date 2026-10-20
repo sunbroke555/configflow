@@ -196,12 +196,18 @@ def backup_config():
         if error is not None:
             return error
         backup = config_data.setdefault('backup', {})
+        changed = []
         # 部分更新保留未提交字段；掩码表示沿用已保存的密码。
         for key in (*_BACKUP_TEXT_FIELDS, 'auto_backup'):
             if key in data and not (key == 'webdav_password' and data[key] == '******'):
+                if backup.get(key) != data[key]:
+                    changed.append(key)
                 backup[key] = data[key]
 
         save_system_config(config_data)
+        # 只记录字段名和开关状态，不记录地址、账号和密码。
+        current_app.logger.info('WebDAV 备份配置已保存：%s；自动备份%s', '、'.join(changed) or '无变化',
+                                '已开启' if backup.get('auto_backup') else '已关闭')
         return jsonify({'success': True, 'message': '备份配置已保存'})
 
 
@@ -346,6 +352,7 @@ def update_sub_store_dependency():
     """在线更新内置 Sub-Store（后台执行，进度通过依赖列表接口轮询）"""
     from backend.utils.dependencies import start_sub_store_update
     ok, message = start_sub_store_update()
+    (current_app.logger.info if ok else current_app.logger.warning)('Sub-Store 在线更新：%s', message)
     return jsonify({'success': ok, 'message': message}), (202 if ok else 409)
 
 
@@ -358,6 +365,7 @@ def set_sub_store_mode():
         return jsonify({'success': False, 'message': '请选择按需启动或常驻运行'}), 400
     try:
         runtime.set_mode(data['mode'])
+        current_app.logger.info('Sub-Store 运行模式已切换为%s', '常驻运行' if data['mode'] == 'always' else '按需启动')
         return jsonify({'success': True, 'mode': data['mode']})
     except RuntimeUnavailable as exc:
         return jsonify({'success': False, 'message': str(exc)}), 409

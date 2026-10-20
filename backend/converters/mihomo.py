@@ -539,9 +539,9 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     provider_interval = validate_refresh_interval(
         config_data.get('mihomo', {}).get('provider_update_interval', DEFAULT_PROVIDER_INTERVAL),
         'Mihomo 订阅同步间隔')
-    logger.info(f"开始生成订阅 proxy-providers，使用本地接口")
-    logger.info(f"Server domain: {safe_url_for_log(effective_base_url)}")
-    logger.info(f"Config token: {'已配置' if config_token else '未配置'}")
+    logger.debug(f"开始生成订阅 proxy-providers，使用本地接口")
+    logger.debug(f"Server domain: {safe_url_for_log(effective_base_url)}")
+    logger.debug(f"Config token: {'已配置' if config_token else '未配置'}")
 
     for sub in config_data.get('subscriptions', []):
         if sub.get('enabled', True) and sub.get('id') in used_subscription_ids:
@@ -553,7 +553,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
             if config_token:
                 sub_url = append_url_query(sub_url, {'token': config_token})
 
-            logger.info(f"订阅 '{sub['name']}' 使用本地接口: {safe_url_for_log(sub_url)}")
+            logger.debug(f"订阅 '{sub['name']}' 使用本地接口: {safe_url_for_log(sub_url)}")
 
             proxy_providers[sub['name']] = {
                 'type': 'http',

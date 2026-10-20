@@ -5,6 +5,7 @@ import hmac
 import re
 import os
 import fcntl
+import logging
 import threading
 import time
 from copy import deepcopy
@@ -14,6 +15,18 @@ import requests
 from .metrics_history import MetricsHistory
 from .diagnostics import dns_report_fields, failure_text, response_failure
 from .operation_events import append_event, event_time
+
+logger = logging.getLogger(__name__)
+_DEPLOYMENT_RESULTS = {
+    'succeeded': (logging.INFO, '配置发布成功'), 'failed': (logging.WARNING, '配置发布失败'),
+    'rolled_back': (logging.WARNING, '配置发布未生效，已回滚到原配置'),
+    'rollback_failed': (logging.ERROR, '配置发布失败，且回滚失败'),
+}
+
+
+def _agent_label(agent):
+    from backend.utils.logger import log_text
+    return log_text((agent or {}).get('name') or (agent or {}).get('id'))
 
 
 def _constant_time_ascii_equal(provided: Any, expected: Any) -> bool:
@@ -296,9 +309,15 @@ class AgentManager:
                 raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再删除 Agent')
             initial_len = len(agents)
             agents[:] = [agent for agent in agents if agent['id'] != agent_id]
+            if len(agents) < initial_len:
+                deleted.append(agent)
             return len(agents) < initial_len
 
-        return self._update_agents(delete)
+        deleted = []
+        result = self._update_agents(delete)
+        if deleted:
+            logger.info('已删除 Agent %s', _agent_label(deleted[0]))
+        return result
 
     def update_heartbeat(self, agent_id: str, heartbeat_data: Dict[str, Any] = None) -> bool:
         """
@@ -422,10 +441,12 @@ class AgentManager:
             self._preparation_files[(agent_id, deployment_id)] = handle
             deployments[deployment_id] = record
             agent['latest_deployment'] = record.copy()
+            started.append(agent)
             # Bound history, retaining failed records as well as the active task.
             for key in list(deployments)[:-30]:
                 del deployments[key]
             return record.copy()
+        started = []
         with self._deployment_lock:
             try:
                 result = self._update_agents(begin)
@@ -434,6 +455,8 @@ class AgentManager:
                 raise
             if result.get('success') and not result.get('existing'):
                 self._preparing_deployments.add((agent_id, deployment_id))
+                if started:
+                    logger.info('开始向 Agent %s 发布配置（任务 %s）', _agent_label(started[0]), deployment_id[:12])
             return result
 
     def record_deployment(self, agent_id, deployment_id, updates, *, only_unsubmitted=False, upload_receipt=False, activation_receipt=False):
@@ -465,6 +488,7 @@ class AgentManager:
             reported_at = event_time(updates.get('updated_at')) if isinstance(updates.get('updated_at'), str) else None
             if reported_at and state.get('agent_updated_at') and reported_at < state['agent_updated_at']:
                 return state.copy()
+            before = state.get('status')
             if updates.get('status') and updates.get('status') != 'unknown' and not updates.get('http_status'):
                 if state.get('status') == 'unknown':
                     # Transport diagnostics describe an unconfirmed outcome,
@@ -527,8 +551,18 @@ class AgentManager:
                     agent.pop(field, None)
             if is_latest:
                 agent['latest_deployment'] = state.copy()
+            if state.get('status') != before and state.get('status') in _DEPLOYMENT_RESULTS:
+                finished.append((_agent_label(agent), dict(state)))
             return state.copy()
-        return self._update_agents(record)
+        from backend.utils.logger import log_text
+        finished = []
+        result = self._update_agents(record)
+        for label, state in finished[-1:]:
+            level, text = _DEPLOYMENT_RESULTS[state['status']]
+            detail = state.get('error') or state.get('rollback_error') or state.get('message') or ''
+            logger.log(level, 'Agent %s %s（任务 %s）%s', label, text, deployment_id[:12],
+                       '：' + log_text(detail, 300) if detail and state['status'] != 'succeeded' else '')
+        return result
 
     def _deployment_request(self, agent, method, suffix, **kwargs):
         url = f"http://{agent['host']}:{agent['port']}/api/{suffix}"

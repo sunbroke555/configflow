@@ -2,6 +2,7 @@
 from collections import OrderedDict
 from datetime import datetime
 import hashlib
+import logging
 import os
 from pathlib import Path
 from threading import Lock
@@ -13,6 +14,11 @@ import requests
 from .version import get_latest_version
 from .diagnostics import failure_text
 from .operation_events import append_event, clean_events, event_time, merge_events
+
+logger = logging.getLogger(__name__)
+_RESULT_LEVELS = {'succeeded': (logging.INFO, '成功'), 'failed': (logging.WARNING, '失败'),
+                  'rolled_back': (logging.WARNING, '失败，已回滚到原版本'),
+                  'rollback_failed': (logging.ERROR, '失败，且回滚失败')}
 
 TERMINAL = {'succeeded', 'failed', 'rolled_back', 'rollback_failed'}
 ARCHES = ('linux-amd64', 'linux-arm64', 'linux-armv7')
@@ -121,9 +127,12 @@ def _request(agent, method, path, **kwargs):
 
 
 def _save(manager, agent_id, update_id, patch, *, only_queued=False):
+    finished = []
+
     def update(agents):
         agent = next(item for item in agents if item['id'] == agent_id)
         state = agent.get('latest_upgrade') or {}
+        before = state.get('status')
         if state.get('update_id') != update_id:
             raise ValueError('Upgrade ownership changed')
         if state.get('status') in TERMINAL - {'rollback_failed'}:
@@ -149,8 +158,18 @@ def _save(manager, agent_id, update_id, patch, *, only_queued=False):
         state['events'] = events
         state['updated_at'] = time.time()
         agent['latest_upgrade'] = state
+        if state.get('status') != before and state.get('status') in _RESULT_LEVELS:
+            finished.append((agent.get('name') or agent_id, dict(state)))
         return dict(state)
-    return manager._update_agents(update)
+    result = manager._update_agents(update)
+    for name, state in finished[-1:]:
+        from backend.utils.logger import log_text
+        detail = state.get('error') or state.get('message') or ''
+        level, text = _RESULT_LEVELS[state['status']]
+        logger.log(level, 'Agent %s 升级 %s → %s %s%s', log_text(name),
+                   log_text(state.get('previous_version') or '?', 40), log_text(state.get('target_version') or '?', 40),
+                   text, '（' + log_text(detail, 300) + '）' if detail and state['status'] != 'succeeded' else '')
+    return result
 
 
 def start(manager, agent_id):
@@ -195,6 +214,9 @@ def start(manager, agent_id):
             raise ValueError('存在未结束的配置发布，请先完成或恢复')
         current['latest_upgrade'] = dict(state)
     manager._update_agents(reserve)
+    from backend.utils.logger import log_text
+    logger.info('开始升级 Agent %s：%s → %s', log_text(agent.get('name') or agent_id),
+                log_text(state['previous_version'] or '?', 40), log_text(state['target_version'], 40))
     payload = {'version': state['target_version'], 'update_id': state['update_id']}
     if info:
         payload.update(available[arch])

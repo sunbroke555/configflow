@@ -1031,11 +1031,13 @@ def start_auto_loop(lock_dir):
                 try:
                     outcome = auto_round(profile['id'])
                     if any(outcome.values()):
-                        logger.info('Domain discovery auto round for %s: %s', profile['id'], outcome)
+                        logger.info('域名发现自动任务（配置空间 %s）：探测 %s 个，自动加入 %s 个，复检 %s 个',
+                                    profile['id'], outcome.get('probed', 0), outcome.get('applied', 0),
+                                    outcome.get('rechecked', 0))
                 except ProbeBusy:
                     pass
                 except Exception as error:
-                    logger.error('Domain discovery auto round failed for %s: %s',
+                    logger.error('域名发现自动任务失败（配置空间 %s）：%s',
                                  profile['id'], safe_exception_details(error))
                 finally:
                     reset_config_context()
