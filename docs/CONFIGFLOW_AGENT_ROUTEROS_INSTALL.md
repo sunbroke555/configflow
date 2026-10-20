@@ -231,8 +231,22 @@ curl --noproxy '*' --resolve "www.google.com:443:${FAKE_IP}" \
 - **不会拦截 IPv6 或 HTTPS 加密 DNS（DoH，通常为 443 端口）。** 严格指定主机名的 Android「私人 DNS」在拦截 853 后可能直接失败，需要改为自动或关闭，再测试。
 - **“自动暂停”不是备用 DNS。** 它只检查 TCP 端口连通性，不验证 DNS 回答；暂停时仅关闭 53 转发规则，不恢复 DHCP 原值、不更换客户端 DNS，也不解除可选的 853 拦截。仍直接使用故障 OxiDNS 的设备需要另行恢复 DNS。
 - **被转发的查询可能显示为路由器 IP。** 为保证同网段回包经过路由器，会同时设置源地址转换；OxiDNS 按设备分流时需核对实际查询来源。正常直接访问同网段 OxiDNS 的设备不经过这条转发链。
+- **还要核对已有的来源策略路由。** 若手动指定的 DNS 地址也落在已选代理 IP 规则集内，这类查询可能沿策略送往 Mihomo，不能仅凭开启此开关就认定已由 OxiDNS 回答。进阶说明见 [路由设计中的已知限制](ROUTER_INTEGRATION_DESIGN.md#46-强制-dnsrouteros)；RouterOS 的处理顺序见 [官方 Packet Flow](https://help.mikrotik.com/docs/spaces/ROS/pages/328227/Packet+Flow+in+RouterOS)。
 
 关闭功能后，仍需保存、预览并确认发布，才会移除它管理的规则。系统不自动删除已有的手工 DNS 规则；受管规则被外部改动时会阻止覆盖，先按提示核对。
+
+<a id="restore-dns"></a>
+
+#### 停用强制 DNS 并恢复原来的 DNS
+
+只想停止强制转发、继续通过 DHCP 使用 OxiDNS 时，关闭强制 DNS 开关，保持 DHCP DNS 关联，正常预览并确认发布即可。
+
+需要恢复安装前的 DNS，或 OxiDNS 已离线时，按下面顺序操作。**只改 DHCP DNS，仍可能被尚未移除的强制 DNS 规则转回 OxiDNS。**
+
+1. 编辑 RouterOS 接入设置，将 **DHCP DNS 服务器（OxiDNS Agent）** 改为「不关联」，确认 **强制局域网 DNS 走 OxiDNS** 已关闭，保存。取消关联不会自动恢复路由器上的旧 DNS 值。
+2. 打开「策略路由 → 发布预览」，取消勾选全部 OxiDNS 发布目标，再点「保存并预览」。确认提示为「本次只发布 ROS」，且变更中包含撤销强制 DNS，然后点击「确认发布」并等待成功。若已无受管强制 DNS 对象、预览也无变更，则无需重复发布。OxiDNS Agent 离线时，保留 DHCP DNS 关联或仍勾选该发布目标都会阻止发布。
+3. 按 [补充三：手动设置或恢复 DHCP DNS](#手动设置或恢复-dhcp-dns) 将 DNS 改回安装前记录的值；手动指定 DNS 的设备也要单独恢复。
+4. 让客户端重新连接或续租，核对实际 DNS，再测试解析和上网。已有手工 DNS 规则需另行核对。
 
 ## 日常使用
 
@@ -253,7 +267,7 @@ curl --noproxy '*' --resolve "www.google.com:443:${FAKE_IP}" \
 | 开启强制 DNS 后仍有设备绕过 | 检查是否走同一 IPv4 LAN 入口、是否在放行范围，以及是否使用 IPv6 或 DoH；详见上方可选功能 |
 | 开启 853 拦截后设备无法解析 | 检查是否启用了严格的「私人 DNS」，先改为自动或关闭再测试 |
 | 发布失败或结果待确认 | 查看本次发布结果，核实设备状态后再操作；Agent 配置可在发布记录中使用「回滚到发布前」 |
-| 全网启用后无法上网 | 先将 RouterOS 的 DHCP DNS 恢复为安装前记录的值，让客户端重新获取租约 |
+| 全网启用后无法上网 | 开启过强制 DNS 时，先按 [停用与恢复](#restore-dns) 撤销对应规则；再恢复原 DHCP DNS，让客户端重新获取租约 |
 
 需要恢复 DHCP DNS 时，按 [补充三：手动配置](#manual-network) 操作。在 ConfigFlow 中把 DHCP DNS 改为「不关联」只会停止管理，不会恢复原值。
 
