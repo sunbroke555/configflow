@@ -85,6 +85,7 @@
             </EmptyState>
           </SectionCard>
           <OxiDNSQueryTable v-else-if="overview" :agent-id="agentId" :instance-id="overview.core.instance_id" :recorders="overview.recorders" :recorder="recorder" :filters="filters" :data="queries"
+            :collected-at="overview.collected_at" :clock-skew-ms="clockSkewMs"
             :loading="queriesLoading" :error="queriesError" :page="page" :has-next="hasNext"
             @filter="applyFilters" @recorder="selectRecorder" @next="nextPage" @previous="previousPage" @retry="loadQueries(true)" @detail="selectedRecord = $event" />
         </TabsContent>
@@ -161,7 +162,7 @@ async function changeTab(value: string) {
   if (value !== tab.value && await canLeavePolicy()) tab.value = value
 }
 const selectedRecord = ref<OxiDNSQuery | null>(null)
-const { overview, overviewLoading, overviewError, resettingStatistics, resetError, resetStatistics, qps, queries, queriesLoading, queriesError, recorder, filters,
+const { overview, overviewLoading, overviewError, resettingStatistics, resetError, resetStatistics, clockSkewMs, qps, queries, queriesLoading, queriesError, recorder, filters,
   page, hasNext, autoRefresh, refresh, loadQueries, selectRecorder, applyFilters, nextPage, previousPage } = useOxiDNSMonitor(agentId, tab)
 const { devices, loading: devicesLoading, error: devicesError, load: loadDevices } = useOxiDNSDevices()
 const currentDevice = computed(() => devices.value?.find(device => device.id === agentId.value) || overview.value?.agent)

@@ -45,6 +45,7 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
+import { oxiDNSQueryTimeRange, useOxiDNSClock } from '@/composables/useOxiDNSClock'
 import { Check, ChevronsUpDown, Loader2, Search } from '@lucide/vue'
 import { ListboxFilter } from 'reka-ui'
 import { deviceNote } from '@/lib/device-notes'
@@ -54,7 +55,8 @@ import { Button } from '@/components/ui/button'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-const props = withDefaults(defineProps<{ modelValue: string; agentId: string; recorder: string; range: OxiDNSQueryFilters['range']; allowAll?: boolean; placeholder?: string; notes?: Record<string, string> }>(), { allowAll: true, placeholder: '全部客户端' })
+const props = withDefaults(defineProps<{ modelValue: string; agentId: string; recorder: string; range: OxiDNSQueryFilters['range']; collectedAt?: string; allowAll?: boolean; placeholder?: string; notes?: Record<string, string> }>(), { allowAll: true, placeholder: '全部客户端' })
+const clock = useOxiDNSClock(computed(() => props.collectedAt))
 const note = (ip: string) => deviceNote(props.notes || {}, ip)
 const clientLabel = (ip: string) => note(ip) ? `${note(ip)} · ${ip}` : ip
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
@@ -91,15 +93,13 @@ async function load() {
   const current = controller = new AbortController()
   loading.value = true
   error.value = ''
-  const now = Date.now()
   const keyword = search.value.trim()
   // The core searches IPs only; names are matched against the bounded result here.
   const matchesNote = !!keyword && Object.values(props.notes || {}).some(name => name.toLowerCase().includes(keyword.toLowerCase()))
   try {
     const { data } = await oxidnsMonitorApi.clients(props.agentId, {
       recorder: props.recorder, search: matchesNote ? undefined : keyword || undefined,
-      since_ms: props.range === 'all' ? undefined : now - (props.range === '1h' ? 3600000 : 86400000),
-      until_ms: now
+      ...oxiDNSQueryTimeRange(props.range, clock.now())
     }, { signal: current.signal })
     if (disposed || current.signal.aborted || requestEpoch !== epoch) return
     if (!data?.success || !Array.isArray(data.clients)) throw new Error(data?.message || '客户端列表格式异常，请重试。')

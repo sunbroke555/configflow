@@ -186,6 +186,45 @@ describe('OxiDNS monitoring requests', () => {
     expect(model.queries.value).toBeNull()
     expect(oxidnsMonitorApi.queries).toHaveBeenCalledTimes(1)
   })
+  it.each([-8, 8])('finds recent records when the browser clock differs from the Agent by %s hours', async hours => {
+    vi.useFakeTimers()
+    const agentNow = Date.parse('2026-10-20T12:30:00Z')
+    vi.setSystemTime(agentNow + hours * 3600000)
+    vi.mocked(oxidnsMonitorApi.overview).mockResolvedValue(response(snapshot(100, new Date(agentNow).toISOString())))
+    const recentRecord = { ...queryRecord, created_at_ms: agentNow - 5 * 60000 }
+    vi.mocked(oxidnsMonitorApi.queries).mockImplementation(async (_id, params) => response({ ...records(), records:
+      (params.since_ms === undefined || recentRecord.created_at_ms >= Number(params.since_ms)) &&
+      (params.until_ms === undefined || recentRecord.created_at_ms <= Number(params.until_ms)) ? [recentRecord] : [] }))
+    const { model } = harness('queries')
+    await flushPromises()
+    expect(model.queries.value?.records).toEqual([recentRecord])
+    expect(oxidnsMonitorApi.queries).toHaveBeenLastCalledWith('one', expect.objectContaining({ since_ms: agentNow - 3600000, until_ms: agentNow }), expect.anything())
+    model.applyFilters({ ...emptyQueryFilters(), range: '24h' })
+    await flushPromises()
+    expect(oxidnsMonitorApi.queries).toHaveBeenLastCalledWith('one', expect.objectContaining({ since_ms: agentNow - 86400000, until_ms: agentNow }), expect.anything())
+  })
+  it('does not cap all-time records at a browser clock that may be behind the Agent', async () => {
+    const { model } = harness('queries')
+    await flushPromises()
+    model.applyFilters({ ...emptyQueryFilters(), range: 'all' })
+    await flushPromises()
+    expect(oxidnsMonitorApi.queries).toHaveBeenLastCalledWith('one', expect.objectContaining({ since_ms: undefined, until_ms: undefined }), expect.anything())
+  })
+  it('advances the Agent time monotonically while paused, regardless of browser clock corrections', async () => {
+    vi.useFakeTimers()
+    const agentNow = Date.parse('2026-10-20T12:30:00Z')
+    vi.setSystemTime(agentNow)
+    vi.mocked(oxidnsMonitorApi.overview).mockResolvedValue(response(snapshot(100, new Date(agentNow).toISOString())))
+    const { model } = harness('queries')
+    await flushPromises()
+    model.autoRefresh.value = false
+    await flushPromises()
+    vi.setSystemTime(agentNow + 8 * 3600000)
+    await vi.advanceTimersByTimeAsync(60000)
+    model.applyFilters(emptyQueryFilters())
+    await flushPromises()
+    expect(oxidnsMonitorApi.queries).toHaveBeenLastCalledWith('one', expect.objectContaining({ until_ms: agentNow + 60000 }), expect.anything())
+  })
   it('computes QPS only from matching core instances and nondecreasing real counters', async () => {
     const { model } = harness()
     await flushPromises()

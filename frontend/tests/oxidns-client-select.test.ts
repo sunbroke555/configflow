@@ -81,6 +81,19 @@ describe('existing OxiDNS clients', () => {
     await flushPromises()
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['192.0.2.10'])
   })
+  it('scopes clients to the Agent clock even when the browser is eight hours ahead', async () => {
+    vi.useFakeTimers()
+    const agentNow = Date.parse('2026-10-20T12:30:00Z')
+    vi.setSystemTime(agentNow + 8 * 3600000)
+    const wrapper = mountPicker({ collectedAt: new Date(agentNow).toISOString() })
+    await open(wrapper)
+    expect(oxidnsMonitorApi.clients).toHaveBeenLastCalledWith('one', expect.objectContaining({ since_ms: agentNow - 3600000, until_ms: agentNow }), expect.anything())
+  })
+  it('omits both time bounds when selecting historical clients', async () => {
+    const wrapper = mountPicker({ range: 'all' })
+    await open(wrapper)
+    expect(oxidnsMonitorApi.clients).toHaveBeenLastCalledWith('one', expect.objectContaining({ since_ms: undefined, until_ms: undefined }), expect.anything())
+  })
   it('loads a standalone time-scoped list only when opened and selects the full IP', async () => {
     const wrapper = mountPicker()
     expect(oxidnsMonitorApi.clients).not.toHaveBeenCalled()
