@@ -1,6 +1,35 @@
-# OxiDNS Agent 部署
+# OxiDNS Agent 安装、发布与监控
 
 OxiDNS 使用 Go Agent 的 deployment protocol 1，与 MosDNS 保留为两个独立服务类型。旧 Shell Agent 不支持 OxiDNS 事务发布。
+
+## 先选适合的安装方式
+
+| 你的设备情况 | 页面入口 | 接下来做什么 |
+| --- | --- | --- |
+| 已有一个核心 | Agent → 生成安装脚本 → Shell 单服务 | 填实际配置路径，执行命令，绑定配置并发布 |
+| 想同时安装一个核心 | Shell 单服务，勾选同时安装对应核心 | 核心安装成功后继续安装 Agent |
+| 同机管理 Mihomo + OxiDNS | Shell → Mihomo + OxiDNS 同机 | 为两个服务建立独立 Agent；两个端口不要混用 |
+| Linux 承担客户端网关 | 使用模式 → Linux 选择性网关 | 按 [五步向导](LINUX_GATEWAY.md) 操作，最后才应用转发 |
+| Docker 主机 | 页面生成 Docker 命令或 Compose | 保存两个持久化目录，填写主机可达地址 |
+
+先确认目标机能访问 ConfigFlow；安装命令在目标机执行。安装完成后，到 Agent 卡片核对**服务类型、配置空间和在线状态**，再发布配置。保存草稿不会改变设备。
+
+### 功能需要的 Agent 版本
+
+| 功能 | 最低版本 |
+| --- | --- |
+| OxiDNS 基础监控 | `1.7.0-go` |
+| 排行与统计重置 | `1.8.14-go` |
+| 安装环境与发布前 DNS 检查 | `1.8.19-go` |
+| 跟随 Mihomo DNS | `1.8.24-go` |
+| Linux 选择性网关 | `1.8.25-go` |
+| 规则更新与按设备自动同步 | `1.8.30-go` |
+| 本地 DNS 看门狗应答 | `1.8.32-go`，还需完整发布一次 |
+| 全部本机 LAN IPv4 排除保护 | `1.8.34-go` |
+| OxiDNS 自动同步增量下载 | `1.8.35-go` |
+| OxiDNS 清理缓存 | `1.8.36-go` |
+
+最低版本只说明该项能力的起点，建议面板与 Agent 使用包含后续修复的配套版本。更新日志见 [版本定义](../backend/agents/version.py)。
 
 ## 发布与回滚
 
@@ -56,7 +85,7 @@ Agent 页面“发布记录”中的“回滚到发布前”用于恢复最近�
 
 回滚恢复受管理文件及发布前的服务启动状态，并对原本运行的服务重新执行健康检查。备份中的旧服务无法恢复健康时状态为 `rollback_failed`，保留恢复记录并阻止新的发布；Agent 启动时只检查并提示，不会自动停止核心或重试恢复；修复原因后需显式处理恢复记录。成功回滚会清除 ConfigFlow 的“当前方案已同步”标记，因为恢复的文件可能来自接入 ConfigFlow 之前。
 
-完整发布不接受外部 `include` 配置。请把插件写入主配置；`files`、`file`、`persistent.files` 引用的输入文件必须在包中。TLS 证书和 WebUI 静态资源由主机或镜像单独提供。
+面板可展开附加文件中提供的相对 `include`，再生成完整配置；Agent 收到的最终主配置不得残留外部 `include`。仅指向目标机路径、未提供附件的 include 不会自动上传。`files`、`file`、`persistent.files` 引用的输入文件必须在包中。TLS 证书和 WebUI 静态资源由主机或镜像单独提供。
 
 ## 每台 Agent 的规则自动同步
 
@@ -65,7 +94,7 @@ Mihomo 和 OxiDNS 的 Agent 卡片分别提供「规则库自动同步」和「�
 - **规则库自动同步**：处理当前配置中已启用、已引用的共享规则集内容变化，以及新增或移除引用等规则结构变化。仅在共享规则库新增一个未被当前配置引用的条目，不会触发此设备同步。
 - **单条规则自动同步**：处理当前配置选用的内嵌单条规则变化。两个开关独立控制各自范围，未开启的规则范围保留已发布内容。
 
-已有规则集仅内容变化时，通过核心原生规则更新接口下载并热重载。OxiDNS 必须已经配置可识别的 `download` → `reload_provider` 维护链；常用设置可开启「原生规则定时更新」并发布一次来建立它。新增引用、单条规则或其他已开启范围的规则结构变化时，以最近成功发布的基线生成只修改规则范围的候选配置，校验后调用核心原生配置 reload。节点、代理组、DNS 上游和其他尚未发布的非规则草稿不会随之下发。
+已有规则集仅内容变化时，通过核心原生规则更新接口下载并热重载。Agent `1.8.35-go` 起，对能定位到已部署下载清单的变化仅下载相关文件并热重载关联 provider；旧 Agent 或无法定位时退回全量更新。手动「更新规则」和原生定时更新仍为全量。OxiDNS 必须已经配置可识别的 `download` → `reload_provider` 维护链；常用设置可开启「原生规则定时更新」并发布一次来建立它。新增引用、单条规则或其他已开启范围的规则结构变化时，以最近成功发布的基线生成只修改规则范围的候选配置，校验后调用核心原生配置 reload。节点、代理组、DNS 上游和其他尚未发布的非规则草稿不会随之下发。
 
 自动同步要求能够热加载，不能热加载时不会退回重启服务来应用候选配置。OxiDNS 原生自定义分流图无法安全识别或合并时，页面显示等待处理，需要手动检查并发布配置。若候选已切换后检查失败，恢复旧配置的回滚流程可能重启旧服务；这与正常同步时的原生热加载不同。页面会显示等待、进行中、成功、失败或阻塞原因，应以最终状态判断是否生效。
 
@@ -85,7 +114,7 @@ Shell 单服务、同机双 Agent、仅安装核心、核心与 Agent 联合安�
 在下载的脚本或一次性 Agent 命令后添加 `--verbose`，即可展开详细诊断；脚本在阶段边界回显已收集的详情。交互终端使用颜色区分状态，管道输出和设置 `NO_COLOR` 时使用纯文本。
 
 ```sh
-sh install.sh --verbose
+sh configflow-install.sh --verbose
 
 # 独立、只读环境检查
 /opt/configflow-agent/mihomo/configflow-agent \
@@ -182,7 +211,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 - 两套 Agent 使用独立的 `configflow-agent-mihomo` / `configflow-agent-oxidns` 系统服务、`/opt/configflow-agent/mihomo` / `/opt/configflow-agent/oxidns` 目录和二进制，升级及远程卸载互不删除对方的文件。重跑同机脚本会保留对应 Agent 身份。
 - 安装脚本保留现有核心配置。从 `1.8.23-go` 起，Mihomo Agent 发布时保留 DNS 监听地址、端口、整组 `tun.dns-hijack` 及 DNS/TUN 开关，不再强制改为 `1053`，未配置的字段也不会补入。首次安装提供 `1053` 默认值；已有 Agent 需升级后才会采用新的发布规则。
-- Agent `1.8.27-go` 引入普通 Shell 同机发布的本机地址排除；从 `1.8.28-go` 起，仅当 `tun.enable: true` 和 `tun.auto-redirect: true` 同时满足时，才在 `tun.route-exclude-address` 中自动合并 `127.0.0.0/8` 和当前 Agent LAN IPv4 的 `/32` 地址，并保留用户已有排除规则。例如 Agent 地址为 `192.168.0.33` 时，会加入 `192.168.0.33/32`，使发往本机 OxiDNS 的查询避开 Mihomo 自动重定向。任一开关关闭或未配置时，不添加或移除排除项，保留用户原配置。排除按目的地址匹配，不需要添加客户端 IP；Agent 地址变化后，后续发布使用当前地址。此适配继续保留用户配置的 DNS 监听、端口、整组 `dns-hijack`、`auto-route` 与 `auto-detect-interface`，不会自动开启这些设置，不用于 Docker、单服务或 Linux 选择性网关。`auto-redirect` 要求 `auto-route` 开启，由 Mihomo 原生校验检查；`auto-detect-interface` 不影响是否添加排除项。升级 Agent 本身不会重写正在运行的核心配置，需要再发布一次 Mihomo 配置后生效。
+- Agent `1.8.27-go` 引入普通 Shell 同机发布的本机地址排除；从 `1.8.28-go` 起，仅当 `tun.enable: true` 和 `tun.auto-redirect: true` 同时满足时，才在 `tun.route-exclude-address` 中自动合并 `127.0.0.0/8` 和当前全部本机 LAN IPv4 的 `/32` 地址，并保留用户已有排除规则。例如 Agent 地址为 `192.168.0.33` 时，会加入 `192.168.0.33/32`，使发往本机 OxiDNS 的查询避开 Mihomo 自动重定向。任一开关关闭或未配置时，不添加或移除排除项，保留用户原配置。排除按目的地址匹配，不需要添加客户端 IP；Agent `1.8.34-go` 起，发布时读取全部活动 LAN IPv4；显式 `agent_ip` 必须属于本机，不能用它替代其他地址的保护。地址变化后需重新发布，激活前也会再次核对。此适配继续保留用户配置的 DNS 监听、端口、整组 `dns-hijack`、`auto-route` 与 `auto-detect-interface`，不会自动开启这些设置，不用于 Docker、单服务或 Linux 选择性网关。`auto-redirect` 要求 `auto-route` 开启，由 Mihomo 原生校验检查；`auto-detect-interface` 不影响是否添加排除项。升级 Agent 本身不会重写正在运行的核心配置，需要再发布一次 Mihomo 配置后生效。
 - OxiDNS 的监听和上游沿用用户配置。需要 Mihomo 处理远程解析时，将远程上游对应到 Mihomo 实际的 DNS 监听地址和端口（新装默认 `127.0.0.1:1053`）。Mihomo 上游不应再指回 OxiDNS，以免形成循环。发布前检查实际监听冲突和上下游关系；明确冲突会阻止发布，TUN 对目标端口 `53` 的劫持风险只提示，不自动改写。
 - 普通 Shell 同机安装在检查通过、两个 Agent 启动成功后，自动开启当前系统的 `net.ipv4.ip_forward=1`，写入专用 `/etc/sysctl.d/99-configflow-aio-forward.conf`。Mihomo Agent 的 systemd `ExecStartPre` 或 OpenRC `start_pre` 会在开机/服务启动时再次检查；已为 `1` 时不重复切换。此行为不用于单服务、Docker 或选择性网关安装向导，后者仍在最后的网络应用步骤开启转发。
 - 安装前按实际命令检查 `sysctl`、`cmp`、`ln`，已有工具（包括 Alpine 的 BusyBox 命令）直接使用。缺少时只补装对应的软件包：Debian/Alpine 的 `sysctl` 使用 `procps`，Arch 使用 `procps-ng`；`cmp` 使用 `diffutils`，`ln` 使用 `coreutils`。同一软件包不会重复加入安装列表；补装后重新检查命令是否可用，安装失败或仍缺工具时在停止现有 Agent 前退出。取消或卸载不会触发补装。
@@ -235,11 +264,13 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 - Docker 同时启用 Mihomo 与 OxiDNS 时，首次创建 Mihomo 配置使用 DNS `1053`；已有配置和后续发布保留用户设置。MosDNS 与 OxiDNS 默认均使用 53，同一容器安装入口会拒绝同时启用二者；分别用实例与不同端口部署。
 - 核心日志写入 `/var/log/supervisor/oxidns.log` 与 `oxidns.err.log`。原生运行优先读取配置中的日志文件，否则读取 OxiDNS systemd journal。
 
+Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，例如 `http://192.168.1.10:5010`。Agent 对外注册地址也必须可由面板访问，Docker 端口映射须与页面填写一致。
+
 若已有外部规则更新定时任务，选择由外部任务或 OxiDNS 原生定时更新负责规则，避免两个任务同时写同一组文件。
 
 ## 日常 DNS 监控
 
-左侧导航「数据统计」下方的「OxiDNS 监控」进入监控页：单台 OxiDNS Agent 直接打开，多台时先选择要查看的实例。Agent 卡片中的「DNS 监控」也可直达；原有 CPU、内存等主机监控入口保持不变。需要 ConfigFlow 服务端与 Go Agent 均更新到支持此功能的版本，Agent 至少为 `1.7.0-go`。当前适配 OxiDNS `v1.6.1` full 核心的 HTTP API。
+从「总览 → OxiDNS 面板」进入监控页：单台 OxiDNS Agent 直接打开，多台时先选择要查看的实例。Agent 卡片中的「DNS 监控」也可直达；原有 CPU、内存等主机监控入口保持不变。需要 ConfigFlow 服务端与 Go Agent 均更新到支持此功能的版本，Agent 至少为 `1.7.0-go`。当前适配 OxiDNS `v1.6.1` full 核心的 HTTP API。
 
 - **运行概览**：DNS 请求、近期请求速率、平均响应时间、失败请求、处理中请求，以及各缓存和 DNS 监听服务的统计。更新至 `1.8.14-go` 后支持下述排行、上游统计与重置。
 - **缓存命中率**：`(fresh + stale 命中数) / 缓存查找次数`，不是命中数占全部 DNS 请求的比例；可以按缓存实例查看。旧 Agent 的累计指标从核心或插件启动后计数，重启或重载可能清零。新面板按显示的统计起点计算。请求速率由相邻两次采样计算，首次采样或计数重置时显示 `—`。
@@ -248,6 +279,14 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 - **解析来源**：列表显示本地 DNS、远程 DNS、备用 DNS、缓存等来源。更新 ConfigFlow 与 Agent 至 `1.8.10-go` 后，Agent 按需订阅核心现有的查询记录推送，在内存中缓存来源摘要并随列表返回；无需修改或升级 OxiDNS 核心。连接持续接收新记录，不按固定时间断开；仅在连接异常、结束或连续 45 秒没有记录及心跳时重连。每个记录器最多缓存 2000 条摘要，同时最多订阅 4 个记录器，多页面共享订阅；最后一次列表请求后约 60 秒释放订阅及缓存。核心实例或配置变化会清理缓存。2000 条只限制来源缓存，不限制历史列表；被淘汰、断线漏收、推送不可用或旧 Agent 缺少摘要的记录仍通过详情补查，每页最多 4 个并发请求，浏览器缓存最近 200 条结果。
 - **IPv4 优先（抑制 AAAA）**：解析来源分类 `ipv4_preferred` 表示 IPv4 优先策略抑制了最终的 AAAA 应答。仅在记录包含单个 AAAA 查询、响应码为 `NOERROR`、Answer 数量明确为 0，且执行轨迹中对应 quick `prefer_ipv4` 节点具有匹配的相邻 `entered` → `stop` 摘要时识别；普通空应答、NXDOMAIN 或仅出现插件标签不足以判定。此分类不表示探测期间未访问上游 DNS。列表直接返回这一新分类需要更新 ConfigFlow，并将 Agent 升级至 `1.8.12-go` 或更高版本；`1.8.10-go` 提供前述来源缓存能力，但不包含此分类。无需升级或修改 OxiDNS 核心。
 - **刷新**：默认每 10 秒刷新，可暂停。页面隐藏或离开后停止轮询；历史页不会被自动跳回第一页。连接失败时保留上次概览并标明采样时间。
+
+### 清理 DNS 缓存
+
+Agent `1.8.36-go` 起，在 OxiDNS 面板点击「清理缓存」，确认目标设备和实例后执行。页面读取该设备实际部署配置中的全部缓存插件，按类型识别，改名不影响。
+
+清理通过独立管理接口执行，DNS 服务持续运行；不删除查询历史、学习数据或草稿。没有缓存、核心不支持、认证失败或设备忙碌会明确提示。若一部分已清理、另一部分失败，页面列出已完成项，不能把部分完成当作全部成功。
+
+面板接口为 `GET /api/agents/<id>/oxidns/cache` 和 `POST /api/agents/<id>/oxidns/cache/flush`，POST 仅接收 `{"tags":["已发现的缓存tag"]}`；核心地址、凭据及可操作实例均由 Agent 从实际配置读取。发布、重启或待恢复状态会阻止清理。
 
 ### 排行、上游与统计重置
 
@@ -277,6 +316,20 @@ OXIDNS_TEST_BINARY=/path/to/oxidns go test ./routes -run '^TestOxiDNSNativeDashb
 
 监控数据经已登录的 ConfigFlow → 已注册 Agent → 本机核心读取。浏览器不会收到核心认证凭据。Agent 接口仅允许固定的健康、指标和查询记录 / 聚合统计读取路径，不提供配置写入、缓存清空或服务重启能力。ConfigFlow 的重置接口只更新本地面板计数基线。查询历史可能包含内网域名和客户端地址，仅向已认证的 ConfigFlow 管理员提供，响应禁止缓存。
 
-规则更新使用独立的管理操作，不扩展上述只读监控桥：`GET /api/agents/{agent_id}/oxidns/rules/update` 查询任务，`POST` 同路径、请求体 `{}` 发起更新。要求 Agent `1.8.30-go` 或更新版本；Agent 对应固定路径为 `/api/oxidns/rules/update`。目标地址、核心凭据、下载与 provider 标签均从 Agent 的实际配置读取，浏览器不能指定。`202` 只代表任务已受理，需轮询到 `task.status=succeeded` 才确认全部下载和热重载完成。无维护插件时需要先启用原生规则定时更新并发布一次，详见 [手动更新规则内容](OXIDNS.md#手动更新规则内容)。
+规则更新与缓存清理使用独立管理操作，不扩展上述只读监控桥。规则更新入口：`GET /api/agents/{agent_id}/oxidns/rules/update` 查询任务，`POST` 同路径、请求体 `{}` 发起更新。要求 Agent `1.8.30-go` 或更新版本；Agent 对应固定路径为 `/api/oxidns/rules/update`。目标地址、核心凭据、下载与 provider 标签均从 Agent 的实际配置读取，浏览器不能指定。`202` 只代表任务已受理，需轮询到 `task.status=succeeded` 才确认全部下载和热重载完成。无维护插件时需要先启用原生规则定时更新并发布一次，详见 [手动更新规则内容](OXIDNS.md#手动更新规则内容)。
 
 查询记录保存在核心自己的 `state/` 中，保留期限由 OxiDNS 设置决定；记录器异步写入，压力过大时可能丢弃记录，不能当作完整审计日志。解析来源根据 ConfigFlow 标准插件标签和完整执行轨迹归纳，不代表转发组内最终获胜的具体 DNS 服务器；没有轨迹显示「未记录」，无法识别的自定义执行链显示「未识别」。缓存来源只识别标准缓存命中轨迹，不能仅凭缓存插件执行结束就判定命中；NXDOMAIN 也不会被当成广告拦截。
+
+## 操作等待与常见问题
+
+| 现象 | 处理方法 |
+| --- | --- |
+| 显示已受理或等待激活 | 等待最终状态；需要激活时在 Agent 页面确认，不代表已应用 |
+| 提示正在更新规则 | 等待当前规则任务完成，再进行 Agent 更新或其他服务操作 |
+| 发布后同机 DNS 不通 | 核对实际监听、上下游及全部 LAN 地址，查看发布前 DNS 检查结果 |
+| 开启查询记录后仍无历史 | 确认已发布、记录器位于查询链入口、API 可由本机 Agent 访问 |
+| 清理缓存未全部完成 | 查看已完成实例及失败原因，修复后重试；无需重新发布全部配置 |
+
+## 实现参考
+
+[安装与发布入口](../backend/routes/agents.py)、[事务部署](../backend/agents/go-agent/routes/deployment.go)、[DNS 检查](../backend/agents/go-agent/routes/deployment_dns.go)、[自动同步](../backend/agents/rule_sync.py)、[同机 DNS 适配](../backend/agents/go-agent/routes/native_aio_dns.go)、[本地看门狗](../backend/agents/go-agent/routes/dns_watchdog.go)、[缓存清理](../backend/agents/go-agent/routes/oxidns_cache.go)。

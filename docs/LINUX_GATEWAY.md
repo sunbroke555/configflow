@@ -2,11 +2,23 @@
 
 首次安装入口：**Agent → 生成安装脚本 → 使用模式：Linux 选择性网关 → 开始或继续网关安装**。向导把网络信息、规则选择、核心与 Agent 安装、配置发布、转发应用串成五步。
 
-已有网关的后续管理入口仍是 **生成工作台 → Mihomo → Linux 网关**，用于调整接管规则、检查状态和恢复网络。默认使用普通安装模式；只有明确选择网关安装才进入本流程，普通模式沿用原安装器。
+已有网关的后续管理入口仍是 **当前配置 → 配置生成 → Mihomo → Linux 网关**，用于调整接管规则、检查状态和恢复网络。默认使用普通安装模式；只有明确选择网关安装才进入本流程，普通模式沿用原安装器。
 
 本向导适用于同一局域网中的 Linux 单网卡、单出口、IPv4 网络，CPU 为 x86_64 或 arm64。需要运行中的 systemd 或 OpenRC、root 权限、`iproute2`、`nftables` 和可用的 `/dev/net/tun`。不支持通过此向导修改 Docker 宿主机网络。
 
 网关一体安装需要 **Agent `1.8.25-go` 或更新**。新设备会安装固定版本的 Mihomo `v1.19.32`、OxiDNS `v1.6.1`，逐个核验 SHA256；Mihomo 已有核心至少需稳定版 `v1.19.0`。ConfigFlow 服务器也必须提供新版、匹配架构的 Agent 二进制。
+
+## 五步各自会做什么
+
+| 步骤 | 你需要做什么 | 设备何时改变 |
+| --- | --- | --- |
+| 设备与网络 | 在目标机运行只读检测命令，粘贴输出并核对固定地址 | 检测不改 IP 或路由 |
+| 规则与配置 | 选择接管范围，检查两份配置与代理出口 | 继续时保存面板草稿 |
+| 安装 | 在目标 Linux 执行页面生成的完整命令 | 安装缺少的核心和两个 Agent |
+| 发布 | 按顺序发布 Mihomo，再发布 OxiDNS | 应用核心配置，失败停止后续步骤 |
+| 转发与验证 | 先预览，再应用网关转发 | 此时才开启受管主机转发；之后测试一台客户端 |
+
+此向导不是 RouterOS 的安装入口，也不会修改 Docker 宿主机网络。已经是普通同机 Agent 的设备，可核对后接入现有实例；安装方式和恢复归属不应混用。
 
 ## 先理解流量怎么走
 
@@ -103,7 +115,7 @@ Mihomo 缺少 DNS 上游时会补入默认加密上游；已有非循环上游�
 
 开启网关后，生成输出使用 `auto-route`、`auto-redirect` 和 `route-address-set`。旧的 `route-address` / 排除地址从本模式输出中移除，避免与选择范围交叉限制。`routing-mark`、旧的 `tun.include-interface` / `exclude-interface` 或 MAC / UID 等过滤会阻止启用，需先在基础配置中核对并处理。不要手改生成的 `cf_gateway_` provider 或网关标记。
 
-发布到目标 Agent 时，会自动把这台 Linux 的 LAN IPv4 `/32` 和回环网段加入 `route-exclude-address`，让客户端访问网关 53 端口时进入 OxiDNS。Mihomo 的 `auto-redirect` 有独立的 53 端口接管规则，仅修改 `dns-hijack` 端口不足以保护 OxiDNS。Agent 优先使用显式 `agent_ip`；留空时，每次发布都会从本机活动网络接口获取全部符合条件的 IPv4，为每个地址添加精确 `/32` 排除项，避免多网卡或地址别名漏排除。已注册的旧 Agent 无需重新注册。无法获取有效地址或显式地址无效时，仍会阻止发布并提示检查接口或填写 `agent_ip`。
+发布到目标 Agent 时，会自动把这台 Linux 的 LAN IPv4 `/32` 和回环网段加入 `route-exclude-address`，让客户端访问网关 53 端口时进入 OxiDNS。Mihomo 的 `auto-redirect` 有独立的 53 端口接管规则，仅修改 `dns-hijack` 端口不足以保护 OxiDNS。Agent `1.8.34-go` 起，每次发布和激活都会读取本机活动接口的全部 LAN IPv4，为每个地址添加精确 `/32` 排除项。显式 `agent_ip` 必须属于当前本机，不能代替其他地址的保护；留空也会自动检测全部地址。已注册的旧 Agent 无需重新注册，但应更新到包含该修复的版本。无法获取地址或显式地址不属于本机时，在替换配置前阻止发布。
 
 激活已准备的配置之前，会再次检查当前地址是否被候选配置覆盖；如果期间 IP 变化而产生漏排除，会在停止服务或替换文件之前拒绝激活，提示重新发布。普通原生 AIO 开启 TUN 自动重定向时也会补充本机 DNS 排除项，并保留已有排除地址。手动部署生成文件时，也必须补入实际网关 IP 的 `/32` 排除项。
 
@@ -155,7 +167,7 @@ Mihomo 缺少 DNS 上游时会补入默认加密上游；已有非循环上游�
 
 ## 后续管理、停用与常见问题
 
-后续从 **生成工作台 → Mihomo → Linux 网关** 管理接管范围和主机状态。调整 OxiDNS 域名分流或其它参数，使用生成工作台的 OxiDNS 设置。安装向导不会作为常驻服务替代这两个管理入口。
+后续从 **当前配置 → 配置生成 → Mihomo → Linux 网关** 管理接管范围和主机状态。调整 OxiDNS 域名分流或其它参数，使用生成工作台的 OxiDNS 设置。安装向导不会作为常驻服务替代这两个管理入口。
 
 停用顺序：**先恢复客户端网关和 DNS → 在向导恢复所选设备网络 → 关闭网关模式 → 保存并发布 Mihomo**。恢复操作只清理带有匹配归属、且未被外部修改的受管规则；系统参数也只在仍等于受管值时恢复。若提示资源被外部修改，保留现场并先核对变化。
 
@@ -176,3 +188,7 @@ Mihomo 缺少 DNS 上游时会补入默认加密上游；已有非循环上游�
 | 停止 Agent 后重启无法自动恢复 | 状态恢复依赖 Mihomo Agent 的开机启动，检查 Agent 系统服务 |
 
 实现所依据的 Mihomo 能力见 [TUN 配置文档](https://wiki.metacubex.one/config/inbound/tun/)。
+
+## 实现参考
+
+[安装向导](../frontend/src/components/agents/GatewayInstallWizard.vue)、[两份配置的预览与保存](../backend/routes/gateway_onboarding.py)、[安装会话](../backend/agents/gateway_installation.py)、[目标机安装脚本](../backend/agents/scripts/install-gateway.sh)、[全部本机地址核验](../backend/agents/go-agent/routes/agent_ip.go)、[网关网络应用与恢复](../backend/agents/go-agent/routes/linux_gateway.go)。

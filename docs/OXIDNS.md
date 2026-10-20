@@ -4,9 +4,25 @@ ConfigFlow 将 **MosDNS** 和 **OxiDNS** 作为两个独立生成目标。它们
 
 模板按 OxiDNS **v1.6.1 full** 的配置语义验证；精简构建可能缺少查询记录、IP 优选或 RouterOS 等插件。不同版本的额外参数请以 [OxiDNS 官方文档](https://oxidns.org/) 和目标二进制的 `oxidns check` 为准。
 
+## 第一次配置，先做这几步
+
+1. 先选择要使用的配置空间，在规则库准备直连和代理所需规则。
+2. 打开「配置生成 → OxiDNS → 设置」，从「常用设置」填写直连 / 代理 DNS 上游。使用 Mihomo 上游时，填写 OxiDNS 能访问的实际 IP 和 DNS 端口。
+3. 保存草稿，生成预览并检查错误；备用 DNS 留空表示不使用回退，不会自动补成直连 DNS。
+4. 手动部署下载完整 ZIP；远程管理选择同空间的 OxiDNS Agent 发布，等待最终成功。
+5. 想看查询历史时，再开启管理 API 和查询记录，重新发布后进入「总览 → OxiDNS 面板」。
+
+| 操作 | 是否改变运行设备 |
+| --- | --- |
+| 切换常用设置、完整参数或 YAML | 否，三个视图编辑同一份草稿 |
+| 保存草稿 | 否，只保存面板数据 |
+| 生成预览 / 下载 ZIP | 否，手动部署仍需将完整包放到目标机 |
+| 发布并激活 Agent 配置 | 是，校验和健康检查成功后生效 |
+| 更新规则 | 更新已部署规则内容，不下发其他草稿 |
+
 ## 使用流程
 
-1. 在“生成配置”选择 **OxiDNS**，打开参数设置。
+1. 在「当前配置 → 配置生成」选择 **OxiDNS**，打开参数设置。
 2. 在“常用设置”调整核心、分流规则、DNS 上游、缓存、特色功能、WebUI / 日志与高级匹配；“完整参数”按功能分类编辑全部插件，“YAML”编辑同一份文档。三种入口共用一次保存。
 3. 原模板中的选项已合并到常用设置，不再有独立模板工具。“填入已验证性能参数”会直接更新当前草稿，最后统一保存。表单读取当前原生文档的实际值；省略的参数显示未配置，不沿用旧模板值。
 4. 点击“保存草稿”保存当前编辑。参数问题会按字段位置提示，可先保存，修正后才能预览、完整下载或发布。预览显示最终 YAML；下载返回 `oxidns-config.zip`，包括 `config.yaml`、已转换的订阅规则、自定义 hosts 和启用的 AdGuard 文件。
@@ -40,7 +56,7 @@ Hosts 每个条目填写 `域名规则 IP [更多 IP]`，例如 `domain:service.
 oxidns check -c /etc/oxidns/config.yaml -d /etc/oxidns
 ```
 
-`-d` 必须与实际服务的工作目录一致。首版 Agent 要求工作目录等于配置文件所在目录；官方 Debian 布局常为配置放在 `/etc/oxidns`、工作目录为 `/var/lib/oxidns`，此时原生 Agent 安装/发布会明确拒绝，需要先将核心服务的 `-d` 与配置目录对齐。Docker Agent 已使用一致目录。API TLS 证书、RouterOS CA 和 WebUI 静态资源需要在目标机安装；配置包不包含二进制或这些外部资源。Docker Agent 镜像提供的 WebUI 目录为 `/usr/share/oxidns/webui`。
+`-d` 必须与实际服务的工作目录一致。当前原生 Agent 要求工作目录等于配置文件所在目录；官方 Debian 布局常为配置放在 `/etc/oxidns`、工作目录为 `/var/lib/oxidns`，此时原生 Agent 安装/发布会明确拒绝，需要先将核心服务的 `-d` 与配置目录对齐。Docker Agent 已使用一致目录。API TLS 证书、RouterOS CA 和 WebUI 静态资源需要在目标机安装；配置包不包含二进制或这些外部资源。Docker Agent 镜像提供的 WebUI 目录为 `/usr/share/oxidns/webui`。
 
 ## 已验证模板
 
@@ -126,6 +142,18 @@ Agent 读取实际部署的配置，确认核心正在运行该版本后，调�
 
 正常自动同步不会以重启服务作为热加载失败的替代方案；不能安全合并的自定义原生分流图会阻止自动同步，需手动检查并发布。候选已经切换后若健康检查失败，恢复旧配置时可能重启旧服务。此功能只检测 ConfigFlow 内保存的变化，不轮询远端 GitHub 或规则订阅内容；远端 URL 未变而内容更新时，继续使用原生定时更新或「更新规则」。完整流程见 [Agent 自动同步说明](AGENT_OXIDNS.md#每台-agent-的规则自动同步)。
 
+### 自动同步的增量下载
+
+Agent `1.8.35-go` 起，规则自动同步会在能定位已部署下载清单时，只下载有变化的文件，并热重载引用这些文件的 provider。旧 Agent、无法定位的文件或不支持的清单会退回全量规则更新。
+
+手动「更新规则」和原生定时更新仍是全量，不要把增量下载理解为所有更新入口都只请求一个文件。
+
+## 清理运行中的 DNS 缓存
+
+在「总览 → OxiDNS 面板」选择设备，点击「清理缓存」，确认设备名称和将清理的缓存实例。需要 Agent `1.8.36-go` 或更新、已部署的明文 HTTP 管理 API，以及支持 flush 的核心。
+
+此操作按实际部署配置里的 `type: cache` 发现全部缓存，实例改名也能识别。它不发布草稿、不重启核心、不删除查询历史或学习文件；清理后新查询需要重新访问上游。发布、重启或恢复期间会提示忙碌，部分失败会列出已清理的实例，不能据此认为全部完成。
+
 ## API / WebUI 和日志
 
 API 默认关闭。启用后填写监听地址：`127.0.0.1:9199` 只供本机访问，`0.0.0.0:9199` 可供 IPv4 局域网访问。用户名和密码须同时填写；填写后生成 HTTP Basic Auth。WebUI 目录需指向已安装的静态资源，启用 API 本身不会下载 WebUI。
@@ -144,7 +172,7 @@ API TLS 证书与私钥必须成对配置。启用 TLS 时，Agent 自动健康�
 
 ## 校验与发布边界
 
-常用设置、完整参数和 YAML 调用同一个后端校验器。规则目录位于 `backend/schemas/oxidns/`，对照官方 1.6.1 的全部 65 类插件及全局参数；前端不再维护另一套参数语义规则。检查不补写默认值、不清空合法 `{}` / `[]` / `null`，不删除未知字段。未知插件/扩展字段显示警告；核心明确拒绝未知字段的结构会报告错误。
+常用设置、完整参数和 YAML 调用同一个后端校验器。规则目录位于 `backend/schemas/oxidns/`，按仓库收录的 OxiDNS 1.6.1 插件定义和全局参数检查；前端不再维护另一套参数语义规则。检查不补写默认值、不清空合法 `{}` / `[]` / `null`，不删除未知字段。未知插件/扩展字段显示警告；核心明确拒绝未知字段的结构会报告错误。目标核心版本或扩展不同的情况，仍需以实际校验和运行结果为准。
 
 保存草稿不依赖 Agent 在线或参数校验成功。发布时先检查最终配置，再由目标 Agent 在暂存目录执行已安装核心的 `oxidns check`；任一步失败均不替换运行配置。分步暂存后再次激活也会重跑当前核心检查，避免沿用旧环境下的通过结果。服务器同时记录与发布包及规则版本绑定的校验结果；旧版本暂存、缺少结果或规则已更新的候选需重新推送校验。启动后仍执行健康检查，失败自动回滚。
 
@@ -156,6 +184,8 @@ API TLS 证书与私钥必须成对配置。启用 TLS 时，Agent 自动健康�
 
 - `GET /api/oxidns/settings`：返回当前配置空间的完整默认化设置。
 - `POST /api/oxidns/settings`：保存完整草稿，验证 YAML/附件结构；返回 `{success, settings, draft: true}`。
+- `POST /api/oxidns/editor`：准备统一编辑草稿，不保存；返回 `{settings}`。
+- `POST /api/oxidns/render`：渲染传入的未保存 `{settings, base_url?}`，不保存；返回 `{config}`，与生成预览的 `{content}` 不同。
 - `POST /api/oxidns/validate`：接收 `{settings, base_url?}`，不保存；返回 `{valid, issues, schema_version, core_check_required}`，每条问题含字段路径、源文件、级别。
 - `POST /api/oxidns/common-settings`：从当前 `settings.native_config` 读取常用设置及可编辑能力，不保存。
 - `POST /api/oxidns/common-settings/apply`：接收 `settings` 与按字段路径组织的 `changes`，返回更新的草稿及投影，不保存。
@@ -166,6 +196,10 @@ API TLS 证书与私钥必须成对配置。启用 TLS 时，Agent 自动健康�
 - MCP 支持 `get_oxidns_settings`、`update_oxidns_settings` 和现有生成/预览工具中的 `oxidns` 目标。
 
 设置存储在 profile 的 `oxidns` 字段。旧配置导入后自动补齐缺省值；脱敏导出会去除 API/RouterOS 等凭据以及高级 YAML 中可能包含的秘密。
+
+## 实现参考
+
+[统一草稿与接口](../backend/routes/oxidns.py)、[默认值与结构校验](../backend/common/oxidns_settings.py)、[参数校验](../backend/common/oxidns_validation.py)、[include 展开与资源处理](../backend/common/oxidns_native.py)、[生成器](../backend/converters/oxidns.py)、[增量规则同步](../backend/agents/rule_sync.py)、[缓存清理](../backend/agents/go-agent/routes/oxidns_cache.go)。
 
 ## 验证记录
 

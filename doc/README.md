@@ -1,296 +1,84 @@
-# 快速开始
+# ConfigFlow 使用指南
 
-- [ConfigFlow + RouterOS 安装指南](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) - NAS 管理端与 RouterOS 服务安装，按页面下发路由和设备分流；附手动配置
-- [通用安装与入门指南](install_guide.md) - 普通 Docker/NAS 快速开始，不适用于 RouterOS Container
+ConfigFlow 用来集中管理代理订阅、节点和规则，为不同设备或场景生成配置。日常操作在浏览器完成；需要远程发布、监控或网关功能时，再安装 Agent。
 
----
+**第一次使用：**先按 [README 快速开始](../README.md#快速开始) 部署，再按 [第一次使用](../README.md#第一次使用) 完成一份 Mihomo 配置。
 
-# 功能介绍
+## 先找到对应入口
 
-## 项目简介
+| 导航分组 | 页面 | 用途 |
+| --- | --- | --- |
+| 总览 | 数据统计、Mihomo 面板、OxiDNS 面板 | 查看配置健康和已接入设备的运行情况 |
+| 共享资源 | 订阅来源、节点库、订阅聚合、规则库 | 维护所有配置共用的资源；聚合入口需在系统设置开启 |
+| 当前配置 | 策略组、策略规则、域名发现、上游路由、配置生成 | 编辑顶部所选配置空间 |
+| 系统 | 系统设置、配置空间、Agent、日志 | 管理服务、配置方案、设备和备份 |
 
-ConfigFlow 帮助您管理共享订阅、节点、聚合与规则库，为多份独立配置编排策略组和规则，并生成 Mihomo (Clash Meta)、Surge 和 MosDNS 配置文件。
+桌面通过侧栏导航，手机通过底部分组和组内入口切换。页面上的作用域提示可以帮助确认本次修改影响哪里。
 
-**核心价值：**
-- 🎯 **可视化配置管理** - 通过直观的 Web 界面管理所有配置，告别手写 YAML
-- 🚀 **高效批量操作** - 支持批量导入节点、规则，快速构建配置
-- 📦 **集中式规则仓库** - 统一管理所有规则集，轻松复用
-- 🔄 **灵活的策略组** - 支持多种策略类型和节点来源组合
-- 💾 **配置导入导出** - 完整的配置备份和迁移能力
+## 从资源到可用配置
 
-### 工作台界面
+1. **选择配置空间。** 在「系统 → 配置空间」新建，例如标识 `home`、名称「家庭网络」，再从顶部切换过去。
+2. **添加订阅或节点。** 在「共享资源」添加自己的订阅并手动更新一次，或粘贴已有节点。ConfigFlow 不提供代理节点。
+3. **创建策略组。** 在「当前配置 → 策略组」添加「代理选择」，选择订阅或手动节点；首次使用可以保留默认参数。
+4. **安排规则。** 在「策略规则」添加单条规则或引用规则库，指定直连、拒绝或某个策略组。新增规则在列表顶部，通过「更多 → 调整顺序」把兜底 `MATCH` 放在最后并保存。
+5. **生成和使用。** 在「配置生成」选择目标，点击「生成」，检查结果，再下载或复制配置 URL 到客户端。远程设备需要在 Agent 页面绑定配置并发布。
 
-- **作用域**：导航分为总览、共享资源、当前配置和系统。页面顶部保留作用域说明，修改共享资源仍会影响引用它的所有配置。
-- **配置切换**：顶栏选择当前配置空间；手机上配置选择器单独占一行，底栏切换分组，内容顶部切换组内页面。
-- **总览**：统计指标、运行记录、配置健康和快捷操作分区呈现；首次加载显示骨架，部分数据加载失败时显示提示，可通过「立即检测」重新加载。
-- **主题与键盘**：顶栏切换深浅主题并记住选择；支持快速跳转面板、Tab 焦点和「跳转到主要内容」。系统开启减少动效时不播放列表进场动画。
-- **玻璃与辉光**：顶栏和面板采用背景模糊与细亮边，主按钮和导航选中态带柔和辉光；系统减少透明度时回退为实色表面。
-- **表格与表单**：宽表在容器内滚动，长弹窗限制在视口高度内；窄屏保留表单操作和原有卡片视图。
-- **操作说明**：页面说明介绍可执行的操作，表单提示说明填写方法；涉及共享资源、删除或导入覆盖时，会明确影响范围。找不到内容或操作失败时，按提示调整筛选或重试。
-- **删除订阅或聚合**：仍被配置或其他资源使用时无法删除，请先取消相关使用；删除订阅前还需移除从该订阅获取的节点。删除不会自动移除这些使用关系或节点。
+> 订阅、节点、聚合和规则库由所有配置共用；策略组、规则目标和生成参数分别保存。浏览器切换配置空间不会改变 Agent 的绑定。
 
-本轮仅更新界面和交互呈现，保留原有路由、资源模型、配置生成与数据管理行为；未引入新的组件库或字体服务。下方截图为历史版本，布局以当前工作台为准。
+## 支持哪些格式
 
-### 交流频道
-- [ConfigFlow交流群](https://t.me/+fLt02_w38205OTNh)
+| 目标 | 下载内容 | 说明 |
+| --- | --- | --- |
+| Mihomo / Clash Meta | `mihomo.yaml` | 支持配置 URL |
+| Surge | `surge.conf` | 支持配置 URL；不能导出 Mihomo 代理链 |
+| Loon | `.lcf` | 支持配置 URL 和 iOS 一键导入 |
+| MosDNS | `mosdns-config.zip` | 包含主配置、规则和附加文件 |
+| OxiDNS | `oxidns-config.zip` | 独立于 MosDNS 保存设置，支持 Agent 校验与发布 |
 
----
+MosDNS / OxiDNS 的配置 URL 只返回 YAML；首次手动部署需要完整 ZIP。已有 Mihomo、Surge、Loon、Shadowrocket 配置，可在「配置空间 → 导入客户端配置」转换为新空间，导入结果会列出未支持的内容。
 
-<img src="img/img1.png">
-<img src="img/img2.png">
-<img src="img/img3.png">
-<img src="img/img4.png">
-<img src="img/img5.png">
+## 功能文档
 
-## 核心功能
+| 我想做什么 | 查看文档 |
+| --- | --- |
+| 添加、更新订阅 | [订阅来源](module/subscription.md) |
+| 添加、批量导入和测试节点 | [节点库](module/nodes.md) |
+| 设置自动选择、故障转移或代理链 | [策略组](module/proxy-groups.md) |
+| 维护在线或本地规则集 | [规则库](module/rule-library.md) |
+| 安排规则顺序、模拟命中 | [策略规则](module/rules.md) |
+| 下载文件、复制链接、备份配置 | [配置生成与备份](module/generate.md) |
+| 发现域名并补充分流 | [域名发现](module/domain-discovery.md) |
+| 管理多套方案、恢复旧数据 | [多配置与迁移](design/multi-config-management.md) |
+| 用 MCP 客户端调用工具 | [MCP 服务](module/mcp.md) |
 
-### 📝 订阅管理
+## 部署与设备文档
 
-集中管理多个代理订阅源，通过 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 解析订阅和转换节点格式。
+| 场景 | 查看文档 |
+| --- | --- |
+| 普通 Docker / NAS 主机 | [部署指南](module/deployment.md) |
+| Mihomo / OxiDNS 安装及远程管理 | [Agent 安装、发布与回滚](../docs/AGENT_OXIDNS.md) |
+| OxiDNS 参数、插件及配置包 | [OxiDNS 配置](../docs/OXIDNS.md) |
+| Linux 选择性网关 | [Linux 网关安装向导](../docs/LINUX_GATEWAY.md) |
+| RouterOS Container 与设备分流 | [ConfigFlow + RouterOS](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) |
+| 节点库测速 DNS、超时及组件安装 | [节点测速](../docs/NODE_LATENCY.md) |
 
-**主要特性：**
-- 添加和管理多个订阅源
-- 通过 Sub-Store 自动解析订阅、转换节点格式
-- 支持多种订阅格式（base64、YAML、URI）
-- 拖拽排序订阅列表
-- 删除订阅前需取消相关使用，并移除从该订阅获取的节点
+## 备份前先分清范围
 
-[查看详细文档 →](module/subscription.md)
+- 「系统设置 → 导出全部数据」用于完整配置备份，包含所有空间、共享资源、系统设置和 Agent。
+- 「脱敏导出」适合分享排查，不能作为恢复备份。
+- 「配置空间」导出只包含该空间的引用和独立参数，不携带共享资源本体。
+- 更新镜像或迁移主机前，停服备份整个数据目录；只保存根 `config.json` 无法覆盖旧版多配置目录和运行缓存。
 
----
+含访问令牌的配置链接同时具有 MCP 管理权限，请按密码保管。升级和恢复步骤见 [部署指南](module/deployment.md#备份与升级)。
 
-### 🖥️ 节点管理
+## 界面与操作
 
-完整的节点增删改查功能，支持单个添加和批量导入，通过 Sub-Store 进行节点格式转换。
+支持深浅主题、移动端导航、键盘焦点与快速跳转。表单或配置页提示未保存时，先保存或取消再离开。排序模式需要显式保存，取消会恢复旧顺序。
 
-**主要特性：**
-- 支持多种协议：SS、VMess、VLess、Trojan、Hysteria2
-- 三种添加格式：URI、JSON、YAML
-- 通过 Sub-Store 自动转换节点为 Mihomo 格式
-- 批量添加/删除节点
-- 节点启用/禁用
-- 拖拽排序
-- 仍被配置或聚合使用的节点无法删除，需先取消相关使用
+共享资源无法删除时，按提示先解除配置或聚合中的引用；删除订阅还需移除从该订阅获取的节点。
 
-[查看详细文档 →](module/nodes.md)
+[Telegram 交流群](https://t.me/+fLt02_w38205OTNh)
 
----
+## 实现参考
 
-### 🎯 策略管理
-
-配置多种类型的策略组，支持灵活的节点来源组合。
-
-**策略类型：**
-- **Select** - 手动选择节点
-- **URL-Test** - 自动测速选择最快节点
-- **Fallback** - 故障转移
-- **Load-Balance** - 负载均衡
-
-**节点来源：**
-- 订阅来源筛选
-- 正则表达式过滤
-- 手动选择节点
-- 引用其他策略组
-- 跟随模式
-
-[查看详细文档 →](module/proxy-groups.md)
-
----
-
-### 📚 规则仓库
-
-集中管理所有规则集，方便在多个规则配置中复用。
-
-**主要特性：**
-- 支持三种规则类型：domain、ipcidr、classical
-- URL 或本地内容两种来源
-- 批量导入 YAML 格式规则
-- 规则引用跟踪
-- 拖拽排序
-
-[查看详细文档 →](module/rule-library.md)
-
----
-
-### ⚡ 规则配置
-
-创建具体的分流规则，支持14种规则类型。
-
-**主要特性：**
-- 支持 14 种规则类型（DOMAIN、DOMAIN-SUFFIX、IP-CIDR、GEOIP 等）
-- 批量导入域名
-- 从规则仓库选择规则集
-- 规则拖拽排序
-- 规则集自动分组显示
-- 启用/禁用规则
-
-[查看详细文档 →](module/rules.md)
-
----
-
-### 🔭 域名发现
-
-从 Mihomo Agent 收集访问过的域名，找出未被规则覆盖、直连失败的域名，主动探测后一键加入默认的直连 / 代理规则集。
-
-**主要特性：**
-- 按 Agent 单独开启，只记录域名级统计，保留 7 天
-- 标出未覆盖、直连失败、待部署的域名，按主域合并
-- 一键创建默认直连 / 代理规则集，加入后 Agent 自动刷新，无需重新部署
-- 主动探测直连与代理的可达性，给出带置信度的建议，可自动采纳并定期复检
-- 区域检测：经各地区节点检测 ChatGPT、Claude、Netflix、YouTube Premium 的解锁情况和任意域名的地区差异，并可指定走向
-
-[查看详细文档 →](module/domain-discovery.md)
-
----
-
-### 🚀 配置生成
-
-为当前配置一键生成标准文件；全量备份、恢复与服务设置统一在「系统设置」。
-
-**主要特性：**
-- 生成 Mihomo (Clash Meta) 配置
-- 生成 Surge 配置
-- 生成 MosDNS 配置
-- 配置预览（语法高亮）
-- 在「系统设置」全量导出、脱敏导出与导入
-- 在「配置空间」导入/导出单配置引用与独立参数
-- 实时配置统计
-
-[查看详细文档 →](module/generate.md)
-
----
-
-### 🔌 MCP 服务
-
-内置 MCP 服务端，可用 Claude 等 AI 客户端通过自然语言操作平台的全部功能。
-
-**主要特性：**
-- 内置 `/mcp` 端点，与主应用同进程，无需额外部署
-- 工具覆盖共享资源、独立配置、MosDNS、Agent 与全局设置
-- 复用现有配置令牌 / 登录凭证，无需额外密钥
-
-[查看详细文档 →](module/mcp.md)
-
----
-
-## 快速开始
-
-### 1. 部署系统
-
-推荐使用 Docker Compose 部署（镜像已内置 Sub-Store 后端）：
-
-创建 `docker-compose.yml`。镜像默认使用 `latest`，只需将账号、密码和密钥占位符替换为自己的值：
-```yaml
-version: '3.8'
-services:
-  config-flow:
-    image: thsrite/config-flow:latest
-    ports:
-      - "80:80"
-    volumes:
-      - ./data:/data
-    environment:
-      - ADMIN_USERNAME=replace-with-your-admin-user
-      - ADMIN_PASSWORD=replace-with-a-random-password
-      - JWT_SECRET_KEY=replace-with-at-least-32-random-chars
-    restart: unless-stopped
-```
-
-启动：`docker-compose pull && docker-compose up -d`，访问 `http://localhost` 即可使用。
-
-> 认证是可选的：不设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 即无需登录直接使用；设置后才开启登录，此时请把 `ADMIN_PASSWORD` 和 `JWT_SECRET_KEY` 替换为更安全的值。
-> Sub-Store 用于订阅解析和节点格式转换，也可在「系统设置」页面配置已有的 Sub-Store 地址。
-
-[查看完整部署指南 →](module/deployment.md)
-
-### 2. 基本使用流程
-
-**第一步：添加订阅或节点**
-- 进入「订阅管理」添加订阅源
-- 或进入「节点管理」手动添加节点
-
-**第二步：配置规则仓库**
-- 进入「规则仓库」添加常用规则集
-- 推荐使用 Loyalsoldier 等开源规则
-
-**选择当前配置**
-- 在「配置空间」创建配置，从顶部选择器切换
-- 在「策略管理」直接引用共享订阅、节点与聚合，无需独立资源预选
-- 共享源只保存一份；各配置的策略组、代理链、规则目标、排序与生成参数分别保存
-
-**第三步：创建策略组**
-- 进入「策略管理」创建策略组
-- 按地区或用途组织节点
-
-**第四步：配置规则**
-- 进入「规则配置」添加分流规则
-- 从规则仓库引用规则集
-
-**第五步：生成配置**
-- 进入「配置生成」
-- 预览并下载配置文件
-- 导入到代理客户端使用
-
-### 3. 配置示例
-
-**简单配置示例：**
-
-```
-1. 添加订阅：香港机场
-2. 创建策略组：
-   - 🇭🇰 香港节点（url-test，自动选择最快节点）
-   - ✈️ 代理选择（select，手动选择）
-3. 配置规则：
-   - 规则集：proxy → ✈️ 代理选择
-   - 规则集：direct → DIRECT
-   - GEOIP: CN → DIRECT
-   - MATCH → ✈️ 代理选择
-4. 生成并下载 Mihomo 配置
-```
----
-
-## 文档导航
-
-### 功能文档
-- [订阅管理](module/subscription.md) - 管理代理订阅源
-- [节点管理](module/nodes.md) - 添加和管理代理节点
-- [策略管理](module/proxy-groups.md) - 配置策略组
-- [规则仓库](module/rule-library.md) - 集中管理规则集
-- [规则配置](module/rules.md) - 创建分流规则
-- [域名发现](module/domain-discovery.md) - 从 Agent 流量发现未覆盖与直连失败的域名
-- [配置生成](module/generate.md) - 生成和导出配置
-- [MCP 服务](module/mcp.md) - 通过 MCP 用 AI 客户端操作平台
-
-### 部署文档
-- [ConfigFlow + RouterOS 安装指南](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) - NAS 运行 ConfigFlow，RouterOS 运行 Mihomo 和 OxiDNS，通过管理页面下发路由
-- [通用部署指南](module/deployment.md) - 普通 Docker / Docker Compose；不要直接用于 RouterOS Container
----
-
-## 常见问题
-
-**Q: 支持哪些代理协议？**
-
-A: 支持 Shadowsocks、VMess、VLess、Trojan、Hysteria2 等主流协议。
-
-**Q: 如何备份配置？**
-
-A: 在「系统设置」点击「全量导出」，备份共享资源、所有独立配置、系统设置及 Agent。完整备份含凭据，请妥善保管；「脱敏导出」不能替代恢复备份。
-
-**Q: 规则的优先级如何确定？**
-
-A: 规则按照从上到下的顺序匹配，第一个匹配的规则生效。可以通过拖拽调整顺序。
-
-**Q: 可以同时使用多个订阅吗？**
-
-A: 可以，系统支持添加多个订阅源，在策略组中可以选择从特定订阅筛选节点。
-
-**Q: Sub-Store 是什么？**
-
-A: [Sub-Store](https://github.com/sub-store-org/Sub-Store) 是一个开源的订阅管理工具，ConfigFlow 使用它来解析订阅和转换节点格式。推荐通过 Docker Compose 一并部署，也可在「系统设置」配置已有的 Sub-Store 地址。
-
-**Q: 如何更新到最新版本？**
-```bash
-docker-compose pull
-docker-compose up -d
-```
-
+页面与分组名称来自 [导航定义](../frontend/src/navigation.ts)，生成目标来自 [生成工作台](../frontend/src/views/Generate.vue)，数据范围来自 [配置仓库](../backend/common/config_repository.py)。

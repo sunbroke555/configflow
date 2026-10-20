@@ -1,169 +1,103 @@
 # MCP 服务
 
-ConfigFlow 内置 MCP（Model Context Protocol）服务端，把平台的全部业务能力以工具的形式暴露给外部 MCP 客户端（Claude Desktop、Claude Code 等）。接上之后，可以直接用自然语言完成订阅管理、规则调整、策略组编排和配置生成。
+MCP 让支持这种连接方式的客户端调用 ConfigFlow 的管理工具。入口为与面板同地址的 `/mcp`，无需另装服务或开放新端口。
 
-## 端点
+## 接入前准备
 
-| 项目 | 说明 |
-|------|------|
-| 地址 | `http://<你的 ConfigFlow 地址>/mcp` |
-| 传输 | Streamable HTTP（JSON-RPC 2.0 over POST） |
-| 会话 | 无状态，不需要维持 SSE 通道 |
-| 协议版本 | 2025-06-18（同时兼容 2025-03-26、2024-11-05） |
+1. 确认客户端所在设备能打开 ConfigFlow。
+2. 在「系统设置」生成并保存「访问令牌」。
+3. 在 MCP 客户端中选择 **Streamable HTTP / HTTP** 连接，填写完整地址和认证信息。
+4. 先调用 `get_overview` 或 `list_profiles` 确认连通，再进行修改。
 
-MCP 服务与主应用同进程运行，不需要额外部署或额外端口。
+| 项目 | 示例 |
+| --- | --- |
+| 服务地址 | `http://192.168.1.10:5010/mcp` |
+| 请求头 | `Authorization: Bearer 你的访问令牌` |
+| 不支持请求头的客户端 | 将 URL 填为 `http://192.168.1.10:5010/mcp?token=你的访问令牌` |
+| 传输 | JSON-RPC 2.0，通过 HTTP POST 请求 |
+| 支持的协议版本 | `2025-06-18`、`2025-03-26`、`2024-11-05` |
 
-## 认证
+不同客户端的配置界面和文件格式不同，以其 HTTP MCP 接入方式填写以上字段。ConfigFlow 不提供 SSE 通道；GET、DELETE `/mcp` 返回 405。
 
-复用 ConfigFlow 既有的凭证，不需要单独申请密钥。按当前部署的认证配置，行为如下：
+## 认证与权限
 
-| 部署情况 | MCP 需要的凭证 |
-|----------|----------------|
-| 未设置 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，也未设置配置令牌 | 无需凭证 |
-| 设置了配置令牌 | 该配置令牌 |
-| 已启用账号密码登录 | 配置令牌，或登录后获得的 JWT |
+| 服务端配置 | 可使用的凭证 |
+| --- | --- |
+| 未启用账号密码登录，也未设置访问令牌 | 无需凭证 |
+| 未启用登录，但设置了访问令牌 | 正确的访问令牌 |
+| 已启用账号密码登录 | 已设置的访问令牌，或登录取得的 JWT |
 
-令牌支持两种带法，按客户端支持情况任选其一：
+JWT 有效期为 24 小时；访问令牌没有同样的自动到期机制，修改后旧令牌失效。
 
-- 请求头：`Authorization: Bearer <令牌>`
-- 查询参数：`http://<地址>/mcp?token=<令牌>`
+**当前访问令牌同时用于配置链接和 MCP 管理。** 通过它可调用包括配置导出、重置、Agent 卸载等管理工具，不是只读订阅凭证。不要公开分享含令牌的配置链接；当前设置页没有独立的 MCP 专用令牌入口。
 
-推荐用配置令牌接入：它不会过期，适合长期保持的 MCP 连接（JWT 有效期只有 24 小时）。
+## 检查连接的示例
 
-> ⚠️ **请注意配置令牌的权限范围**
->
-> 配置令牌同时也是**订阅链接令牌** —— 「配置生成」页会把它拼进订阅 URL
-> （`.../api/config/<profile_id>/mihomo?token=<配置令牌>`），你复制到 Mihomo / Surge 等客户端的
-> 那串链接里就带着它。
->
-> 而 MCP 工具可以导出整份配置（含各订阅的明文地址）、重置系统、卸载 Agent、清空日志。
-> 因此 **持有订阅链接 = 持有管理员权限**。
->
-> 这意味着：**订阅链接不要分享给他人**。如果确实需要把订阅链接发给别人，
-> 请不要再用同一个令牌接入 MCP。
-
-## 客户端配置
-
-### Claude Code
+在能访问面板的终端中替换 URL 和令牌，执行下面的初始化请求。它只读取协议和服务信息：
 
 ```bash
-claude mcp add --transport http configflow http://<你的地址>/mcp \
-  --header "Authorization: Bearer <配置令牌>"
+CF_MCP_URL='http://192.168.1.10:5010/mcp'
+CF_MCP_TOKEN='replace-with-your-config-token'
+curl --fail-with-body --show-error "$CF_MCP_URL" \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $CF_MCP_TOKEN" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"connection-check","version":"1.0"}}}'
 ```
 
-### Claude Desktop
+成功时返回 `result`，其中包含协议版本、服务信息和工具能力。服务无状态，不需要保存 SSE 会话。
 
-在 `claude_desktop_config.json` 中加入：
+## 工具范围
 
-```json
-{
-  "mcpServers": {
-    "configflow": {
-      "type": "http",
-      "url": "http://<你的地址>/mcp",
-      "headers": {
-        "Authorization": "Bearer <配置令牌>"
-      }
-    }
-  }
-}
-```
+工具实际名称和参数以 `tools/list` 返回为准。常用工具如下：
 
-若客户端不支持自定义请求头，把令牌写进 URL 即可：`http://<你的地址>/mcp?token=<配置令牌>`。
+| 功能 | 工具 |
+| --- | --- |
+| 配置空间 | `list_profiles`、`get_profile`、`manage_profile`、`clone_profile`、`bind_agent_profile` |
+| 导入客户端配置 | `import_client_config`，支持 Mihomo、Surge、Loon、Shadowrocket |
+| 订阅与节点 | `list_subscriptions`、`manage_subscription`、`fetch_subscription`、`get_subscription_nodes`、`list_nodes`、`manage_node` |
+| 订阅聚合 | `list_aggregations`、`manage_aggregation`、`preview_aggregation` |
+| 策略组与代理链 | `list_proxy_groups`、`manage_proxy_group`、`preview_proxy_group_regex` |
+| 规则编排 | `list_rules`、`manage_rule`、`batch_add_rules`、`test_rule_match`、`find_duplicate_rules`、`reorder_items` |
+| 共享规则库 | `list_rule_library`、`manage_rule_library`、`test_rule_library`、`get_rule_library_content`、`cache_rule_library` |
+| 生成和预览 | `preview_config`、`generate_config`、`manage_custom_config` |
+| DNS 设置 | `get_mosdns_settings`、`update_mosdns_settings`、`get_oxidns_settings`、`update_oxidns_settings`、`convert_mosdns_rule` |
+| Agent | `list_agents`、`get_agent`、`manage_agent`、`get_agent_logs`、`get_agent_metrics`、`get_agent_install_info` |
+| 系统、备份与日志 | `get_overview`、`get_settings`、`update_settings`、`manage_config_backup`、`run_backup`、`get_app_logs`、`manage_app_logs` |
 
-## 可用工具
+**MCP 的生成、预览目标当前只有 `mihomo`、`surge`、`mosdns`、`oxidns`。** 页面和 HTTP API 另支持 Loon，不能因此向这些 MCP 工具传 `loon`。页面上其他功能也不一定已有同名 MCP 工具。
 
-工具按功能域组织，读操作以 `list_` / `get_` 开头，写操作以 `manage_` 开头（通过 `action` 参数区分增删改）。
-独立配置工具接受 `profile_id`，省略使用 `default`，不跟随浏览器选择。共享订阅、节点、聚合、规则库、系统设置和全量备份始终是全局操作。策略组直接引用共享资源，不另设资源白名单。
+## 选对配置空间
 
-### 配置空间
+- 独立配置工具可传 `profile_id`，例如 `home`。省略时使用系统当前默认配置空间，默认值不固定为字符串 `default`，也不跟随浏览器顶部选择。
+- 订阅、节点、聚合、规则库、系统设置和全量备份仍是全局操作。
+- Agent 推送使用它自己的绑定，调用前先核对绑定空间。
+- 默认配置可在页面删除时选择接任者；MCP `manage_profile` 的删除操作当前不传接任参数，需要先在页面处理。仍绑定 Agent 的配置不能删除。
 
-| 工具 | 说明 |
-|------|------|
-| `list_profiles` / `get_profile` | 查看配置列表与元数据 |
-| `manage_profile` / `clone_profile` | 创建、改名、删除或克隆；默认配置与绑定 Agent 的配置不能删除 |
-| `bind_agent_profile` | 将 Agent 绑定到指定配置；推送和拉取不受当前浏览器选择影响 |
+## 预览、保存与发布
 
-### 订阅与节点
+| 操作 | 实际行为 |
+| --- | --- |
+| `preview_config` | 返回生成内容，不保存主配置文件；可能读取订阅或规则 |
+| `generate_config`：Mihomo / Surge | 生成并保存文件，只返回结果摘要 |
+| `generate_config`：MosDNS / OxiDNS | 准备完整 ZIP，不保存到服务端磁盘；文件需要在页面下载 |
+| `manage_config_backup`，`scope=system` | 对整个系统导出、导入或重置 |
+| `manage_config_backup`，`scope=profile` | 仅导入或导出单空间引用和独立参数，不支持重置 |
+| Agent 配置推送 | 显式管理操作，最终是否生效需要查询发布结果 |
 
-| 工具 | 说明 |
-|------|------|
-| `list_subscriptions` | 列出所有订阅源 |
-| `manage_subscription` | 增删改订阅 |
-| `fetch_subscription` | 拉取订阅最新内容并刷新节点缓存 |
-| `get_subscription_nodes` | 获取订阅下已解析的节点 |
-| `list_nodes` / `manage_node` | 手动节点的查询与增删改 |
-| `list_aggregations` / `manage_aggregation` | 订阅聚合的查询与增删改 |
-| `preview_aggregation` | 预览聚合产出的节点、数量或 provider YAML（`mode`） |
+MCP 返回会过滤内部凭据，不能把返回文本当作可完整恢复设备身份的备份。恢复用途请在「系统设置」下载「导出全部数据」。
 
-### 规则
+`manage_*` 的更新一般保留未提交字段，但列表和不同设置接口的替换规则应以工具参数为准。调整顺序用 `reorder_items`，其 `ids` 按指定顺序移到顶部或底部，其余保持相对顺序。共享资源被引用时，先解除引用再删除。
 
-| 工具 | 说明 |
-|------|------|
-| `list_rules` / `manage_rule` | 当前配置的规则编排；规则集提交 `library_rule_id` 和本配置目标，不复制共享来源字段 |
-| `batch_add_rules` | 按同一类型和策略批量添加规则 |
-| `test_rule_match` | 测试域名/IP 命中哪条规则、走哪个策略组 |
-| `find_duplicate_rules` | 扫描重复的规则条目 |
-| `list_rule_library` / `manage_rule_library` | 规则仓库条目的查询与增删改 |
-| `test_rule_library` | 测试规则集 URL 的连通性 |
-| `get_rule_library_content` | 读取 `source_type=content` 条目的正文 |
-| `cache_rule_library` | 把指定条目拉取并缓存到本地 |
+## 常见问题
 
-### 策略组与配置
+| 现象 | 处理方法 |
+| --- | --- |
+| 401 | 检查令牌和认证头；JWT 可能已过期 |
+| 405 或客户端等待 SSE | 选择 HTTP POST / Streamable HTTP，不使用 SSE 端点 |
+| 未知工具或不支持的目标 | 重新读取 `tools/list`，核对当前实现的名称和参数 |
+| 工具内容中出现「调用失败」 | 请求已到业务层，按返回原因检查资源、配置或设备 |
+| 改了另一套配置 | 显式传 `profile_id`，检查 Agent 绑定和系统默认空间 |
 
-| 工具 | 说明 |
-|------|------|
-| `list_proxy_groups` / `manage_proxy_group` | 策略组与命名代理链的查询、增删改；直接引用共享资源 ID |
-| `preview_proxy_group_regex` | 预览筛选正则会匹配到哪些节点 |
-| `preview_config` | 生成配置内容并返回，不写盘 |
-| `generate_config` | 生成配置并保存（MosDNS 为打包下载，不落盘） |
-| `manage_custom_config` | 读写自定义配置片段 |
-| `manage_config_backup` | 默认 `scope=system` 导出/导入/重置整个系统；`scope=profile` 仅导入/导出资源引用与独立参数，不支持重置 |
-| `reorder_items` | 调整订阅 / 节点 / 规则 / 规则仓库 / 策略组的顺序 |
+## 实现参考
 
-`manage_proxy_group` 创建代理链示例：`{"action":"create","profile_id":"home","data":{"name":"经 A 的 B","type":"chain","chain":{"entry":{"type":"node","id":"a"},"exit":{"type":"node","id":"b"}}}}`。两端均可用 `{"type":"group","id":"group-id"}` 引用策略组；订阅和聚合通过组使用。前置沿用原组，落地生成独立链组；原节点和原组不变，链仅用于 Mihomo。
-
-### MosDNS、Agent 与系统
-
-| 工具 | 说明 |
-|------|------|
-| `get_mosdns_settings` / `update_mosdns_settings` | MosDNS 各分区配置的读写 |
-| `list_agents` / `get_agent` / `manage_agent` | Agent 的查询、重启、推送配置、升级、卸载 |
-| `get_agent_logs` / `get_agent_metrics` | Agent 日志与监控数据 |
-| `get_agent_install_info` | 安装脚本 / Docker compose / run 命令 / 最新版本号 |
-| `convert_mosdns_rule` | 把远程规则文件转换成 MosDNS 格式预览 |
-| `get_overview` | 系统概览统计 |
-| `get_settings` / `update_settings` | 系统设置的读写 |
-| `run_backup` | 立即备份或测试 WebDAV 连通性 |
-| `get_app_logs` | 读取服务端日志 |
-| `manage_app_logs` | 查看日志文件信息或清空日志 |
-
-## 使用要点
-
-- **生成与订阅**：`preview_config` 用于预览，`generate_config` 用于显式生成；带配置 ID 的订阅接口按该配置生成，不跟随浏览器选择。
-- **更新是增量的**：`manage_*` 的 `update` 只需给出要改的字段，其余字段会自动保留。
-- **先看再改**：`preview_config`、`preview_proxy_group_regex`、`preview_aggregation` 都不会改动数据，适合在落盘前确认效果。
-- **顺序就是优先级**：规则列表顺序即匹配优先级，新建规则默认插在最前面；要调整顺序用 `reorder_items`（`ids` 里的条目按给定顺序整体移到最前或最后，其余保持原相对顺序）。
-- **完整备份**：MCP 返回会移除内部凭据；需恢复 Agent 等完整数据时，在「系统设置」下载全量备份。
-- **共享依赖**：引用中的共享资源不能删除；先调整相关配置或聚合，`409` 返回引用者。规则库更新会动态作用于引用者，但不改变各配置的策略目标和顺序。
-
-## 对话示例
-
-> 帮我看下 ConfigFlow 现在的状态
-
-> 把 github.com 和 githubusercontent.com 加到「国外流量」策略组
-
-> 检查一下规则里有没有重复条目
-
-> 把广告拦截那条规则挪到规则列表最前面
-
-> 预览一下当前的 Mihomo 配置，确认没问题后生成
-
-## 排查
-
-| 现象 | 原因与处理 |
-|------|-----------|
-| 客户端提示 401 | 未带凭证或凭证不对，检查是否与「系统设置」的全局令牌一致 |
-| 接入一段时间后开始 401 | 用的可能是 JWT（24 小时过期），改用配置令牌可长期有效 |
-| 客户端提示不支持的传输 | 本服务只支持 POST，请确认客户端使用的是 Streamable HTTP 而非 SSE |
-| 工具返回「调用失败」 | 属于业务失败（如 Agent 不在线、订阅地址不可达），错误信息中会带上原因 |
+[协议处理](../../backend/mcp_server/server.py)、[工具与参数定义](../../backend/mcp_server/tools.py)、[认证](../../backend/mcp_server/auth.py)、[输出过滤](../../backend/common/config_export.py)。
