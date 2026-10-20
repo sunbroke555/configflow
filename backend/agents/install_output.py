@@ -7,6 +7,20 @@ CLI_OUTPUT_HELPERS = (_SCRIPTS / "cli-output.sh").read_text(encoding="utf-8")
 INSTALL_OUTPUT_HELPERS = (_SCRIPTS / "install-output.sh").read_text(encoding="utf-8")
 
 
+def with_root_privileges(script: str) -> str:
+    """Keep privilege handling in the downloaded file, preserving stdin/args."""
+    lines = script.splitlines(keepends=True)
+    split = 2 if len(lines) > 1 and lines[1].startswith('# ConfigFlow') else 1
+    return ''.join(lines[:split]) + '''if [ "$(id -u)" -ne 0 ]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf '%s\\n' '请使用 root 运行安装脚本，或先安装并配置 sudo。' >&2
+        exit 1
+    fi
+    exec sudo sh "$0" "$@"
+fi
+''' + ''.join(lines[split:])
+
+
 def with_install_output(script: str) -> str:
     # Preserve the public interface marker on line two. The original body keeps
     # its own errexit and traps in an unconditional subshell. Never wrap it in

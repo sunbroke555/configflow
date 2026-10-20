@@ -22,7 +22,7 @@ export interface LinuxGatewayManaged { active: boolean; pending?: boolean; healt
 export interface LinuxGatewayStatus {
   success: boolean; message?: string; enabled_in_config?: boolean; supported?: boolean
   detection_error?: string; config_error?: string; unsupported_reason?: string
-  detection?: { interfaces?: Array<{ name: string; addresses?: string[] }>; default_routes?: unknown[]; suggested?: Partial<LinuxGatewaySpec> }
+  detection?: { interfaces?: Array<{ name: string; addresses?: string[] }>; default_routes?: Array<{ interface: string; gateway: string }>; suggested?: Partial<LinuxGatewaySpec> }
   managed: LinuxGatewayManaged
 }
 export interface LinuxGatewayPreview extends LinuxGatewayStatus {

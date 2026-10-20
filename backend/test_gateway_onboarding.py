@@ -469,3 +469,18 @@ def test_saved_readiness_without_host_address_keeps_previous_behavior():
     document['dns']['nameserver'] = ['192.168.1.2:53']
     config['mihomo']['custom_config'] = yaml.safe_dump(document)
     assert assert_gateway_onboarding_ready(config)['ready']
+
+
+@pytest.mark.parametrize('mode', ['template', 'native'])
+def test_direct_dns_default_and_direct_match_are_preserved_independently(mode):
+    config = snapshot()
+    config['rule_configs'][-1]['policy'] = 'DIRECT'
+    config['oxidns']['default_forward'] = 'forward_local'
+    if mode == 'native':
+        config['oxidns'] = prepare_editor(config['oxidns'], config)
+    candidate, report = prepare_gateway_onboarding(config, form(default_forward='forward_local'))
+    assert report['ready'], report
+    assert candidate['rule_configs'][-1]['policy'] == 'DIRECT'
+    assert gateway_onboarding_state(candidate, 3)['settings']['default_forward'] == 'forward_local'
+    assert assert_gateway_onboarding_ready(candidate)['ready']
+    assert not any('MATCH' in warning for warning in report['warnings'])

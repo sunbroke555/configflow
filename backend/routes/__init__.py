@@ -42,6 +42,7 @@ def register_blueprints(app):
     from backend.routes import mosdns
     from backend.routes import oxidns
     from backend.routes import settings
+    from backend.routes import setup
     from backend.routes.logs import logs_bp  # 日志路由
     from backend.routes.stats import stats_bp  # 统计路由
     from backend.routes import profiles

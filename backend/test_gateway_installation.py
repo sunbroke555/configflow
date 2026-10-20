@@ -5,6 +5,7 @@ import fcntl
 import json
 from pathlib import Path
 import stat
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -51,6 +52,223 @@ def bind(manager, session, pair):
                                       for service in sessions.SERVICES}})
 
 
+def auto_install(setup, ip=''):
+    client, manager, admin, body, _ = setup
+    body = {key: value for key, value in body.items() if key != 'network'}
+    body.update(name='auto-linux', auto_network=True, agent_ip=ip)
+    response = client.post(BASE, headers=admin, json=body)
+    assert response.status_code == 200, response.get_json()
+    saved = sessions._read(manager.repository, response.json['id'])
+    return body, saved
+
+
+def auto_register(setup, saved, service, host=SPEC['address'], **kwargs):
+    client, _, _, _, _ = setup
+    return client.post('/api/agents/register', json={
+        'name': saved['name'] + '-' + service, 'host': host, 'port': saved['ports'][service],
+        'service_type': service, 'deployment_method': 'shell', 'version': '1.8.25-go',
+        'installation_id': saved['id'], 'installation_token': saved['token']}, **kwargs)
+
+
+def network_detection(spec=SPEC):
+    return {'interfaces': [{'name': spec['interface'], 'addresses': [spec['address'] + '/24']}],
+            'default_routes': [{'interface': spec['interface'], 'gateway': spec['upstream_gateway']}], 'suggested': spec}
+
+
+def test_network_confirmation_reuses_live_agent_and_preserves_config_revision(setup, monkeypatch):
+    client, manager, admin, _, _ = setup
+    _, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    calls = []
+    def status(*args):
+        calls.append(args)
+        return {'success': True, 'supported': True, 'managed': {'active': False}, 'detection': network_detection()}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', status)
+    before = manager.repository.export_all()
+    url = BASE + '/' + saved['id'] + '/network'
+    assert client.post(url, json={'auto_network': True}).status_code == 401
+    for body in ({'auto_network': True}, {'network': SPEC}):
+        response = client.post(url, headers=admin, json=body)
+        assert response.status_code == 200, response.json
+        assert response.json['network'] == SPEC
+        assert response.json['phase'] == 'enrolled'
+        assert calls[-1] == (manager, pair['mihomo']['id'], 'status', 'GET', 'home')
+        assert manager.repository.export_all() == before
+    assert sessions._read(manager.repository, saved['id'])['auto_network'] is False
+
+
+@pytest.mark.parametrize('change', [
+    {'interfaces': []}, {'default_routes': []}, {'default_routes': [{'interface': 'other', 'gateway': SPEC['upstream_gateway']}]},
+    {'default_routes': [{}, {}]}, {'interfaces': [{'name': 'eth0', 'addresses': ['malformed']}]},
+])
+def test_network_confirmation_rejects_mismatched_detection_without_writes(setup, monkeypatch, change):
+    client, manager, admin, _, _ = setup
+    _, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    monkeypatch.setattr('backend.agents.linux_gateway.call', lambda *_: {'success': True, 'supported': True, 'managed': {}, 'detection': {**network_detection(), **change}})
+    before = sessions._read(manager.repository, saved['id'])
+    response = client.post(BASE + '/' + saved['id'] + '/network', headers=admin, json={'network': SPEC})
+    assert response.status_code == 409, response.json
+    assert sessions._read(manager.repository, saved['id']) == before
+
+
+@pytest.mark.parametrize('body', [{'auto_network': 1}, {'auto_network': False}, {'network': SPEC, 'auto_network': True}, {'network': {**SPEC, 'address': '192.168.1.99'}}])
+def test_network_confirmation_cannot_switch_hosts_or_skip_registration(setup, body):
+    client, manager, admin, _, saved = setup
+    before = sessions._read(manager.repository, saved['id'])
+    response = client.post(BASE + '/' + saved['id'] + '/network', headers=admin, json=body)
+    assert response.status_code in (400, 409)
+    assert sessions._read(manager.repository, saved['id']) == before
+
+
+def test_network_changes_cannot_redirect_active_forwarding_or_switch_registered_host(setup, monkeypatch):
+    client, manager, admin, _, _ = setup
+    _, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    current = sessions._read(manager.repository, saved['id'])
+    current['network'] = SPEC
+    sessions._write(manager.repository, current)
+    alternate = {**SPEC, 'interface': 'eth1'}
+    status = {'success': True, 'supported': True, 'managed': {'active': True}, 'detection': network_detection(alternate)}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', lambda *_: status)
+    url = BASE + '/' + saved['id'] + '/network'
+    response = client.post(url, headers=admin, json={'network': alternate})
+    assert response.status_code == 409 and '撤销' in response.json['message']
+    status['managed'] = {'active': False}
+    response = client.post(url, headers=admin, json={'network': {**SPEC, 'address': '192.168.1.99'}})
+    assert response.status_code == 409 and '目标主机' in response.json['message']
+    assert sessions._read(manager.repository, saved['id']) == current
+
+
+@pytest.mark.parametrize('ip', ['', SPEC['address']])
+def test_optional_ip_reuses_agent_detection_and_pins_exact_pair(setup, ip):
+    client, manager, admin, _, _ = setup
+    body, saved = auto_install(setup, ip)
+    assert saved['network'] == {**dict.fromkeys(SPEC, ''), 'address': ip}
+    assert f'"agent_ip": "{ip}"' in saved['script']
+    assert 'detect-gateway-network' not in saved['script']
+    first = auto_register(setup, saved, 'mihomo')
+    assert first.status_code == 200, first.json
+    assert sessions._read(manager.repository, saved['id'])['network']['address'] == SPEC['address']
+    assert auto_register(setup, saved, 'oxidns', '192.168.1.99').status_code == 409
+    second = auto_register(setup, saved, 'oxidns')
+    assert second.status_code == 200, second.json
+    pair = {'mihomo': first.json, 'oxidns': second.json}
+    assert bind(manager, saved, pair)['success']
+    public = sessions.get(manager.repository, manager, saved['id'])
+    assert public['phase'] == 'enrolled' and public['auto_network'] is True
+    assert all(agent['host'] == SPEC['address'] for agent in public['agents'].values())
+    assert client.post(BASE, headers=admin, json=body).json['id'] == saved['id']
+
+
+def test_automatic_ip_registration_keeps_empty_host_source_fallback(setup):
+    _, manager, _, _, _ = setup
+    _, saved = auto_install(setup)
+    first = auto_register(setup, saved, 'mihomo', '', environ_overrides={'REMOTE_ADDR': SPEC['address']})
+    assert first.status_code == 200, first.json
+    assert manager.get_agent_by_id(first.json['id'])['host'] == SPEC['address']
+
+
+def test_auto_ip_keeps_owned_host_after_lost_session_receipt(setup):
+    _, manager, _, _, _ = setup
+    _, saved = auto_install(setup)
+    assert auto_register(setup, saved, 'mihomo').status_code == 200
+    sessions._write(manager.repository, saved)  # Simulate crash before receipt commit.
+    assert auto_register(setup, saved, 'oxidns', '192.168.1.99').status_code == 409
+    replay = auto_register(setup, saved, 'mihomo')
+    assert replay.status_code == 200
+    assert sessions._read(manager.repository, saved['id'])['network']['address'] == SPEC['address']
+
+
+@pytest.mark.parametrize('changes', [
+    {'agent_ip': '127.0.0.1'}, {'agent_ip': '0.0.0.0'}, {'agent_ip': 'localhost'},
+    {'agent_ip': '192.168.1.2;reboot'}, {'agent_ip': None}, {'auto_network': 'true'}, {'network': SPEC},
+])
+def test_invalid_auto_network_request_cannot_create_or_change_installation(setup, changes):
+    client, manager, admin, _, _ = setup
+    body, saved = auto_install(setup)
+    before = manager.repository.export_all()
+    assert client.post(BASE, headers=admin, json={**body, **changes}).status_code == 400
+    assert manager.repository.export_all() == before
+    assert sessions._read(manager.repository, saved['id']) == saved
+
+
+@pytest.mark.parametrize('detection', [SPEC, {**SPEC, 'address': '192.168.1.99'}, None])
+def test_auto_network_reads_registered_agent_and_rejects_ambiguous_or_other_host(setup, monkeypatch, detection):
+    _, manager, _, _, _ = setup
+    _, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    saved = sessions._read(manager.repository, saved['id'])
+    before = deepcopy(saved)
+    calls = []
+    def status(*args):
+        calls.append(args)
+        return {'success': True, 'supported': True, 'detection': {'suggested': detection}}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', status)
+    if detection == SPEC:
+        sessions._resolve_auto_network(manager.repository, manager, saved)
+        assert saved['network'] == SPEC
+    else:
+        with pytest.raises(sessions.InstallationError):
+            sessions._resolve_auto_network(manager.repository, manager, saved)
+        assert saved == before
+    assert calls == [(manager, pair['mihomo']['id'], 'status', 'GET', 'home')]
+
+
+def test_auto_network_resolves_before_publication_without_implicitly_applying(setup, monkeypatch):
+    client, manager, admin, _, _ = setup
+    _, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    calls = []
+    def status(*args):
+        calls.append(args[2])
+        return {'success': True, 'supported': True, 'detection': {'suggested': SPEC}}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', status)
+    monkeypatch.setattr(sessions, 'run_publication', lambda *args: None)
+    class Thread:
+        def __init__(self, *, target, **kwargs): self.target = target
+        def start(self): self.target()
+    monkeypatch.setattr(sessions.threading, 'Thread', Thread)
+    response = client.post(BASE + '/' + saved['id'] + '/publish', headers=admin, json={})
+    assert response.status_code == 202, response.json
+    assert response.json['network'] == SPEC
+    assert response.json['phase'] == 'publishing'
+    assert calls == ['status']
+
+
+def test_auto_network_will_not_accept_a_changed_host_during_detection(setup, monkeypatch):
+    _, manager, _, _, _ = setup
+    _, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    saved = sessions._read(manager.repository, saved['id'])
+    before = deepcopy(saved)
+    def status(*args):
+        manager._update_agents(lambda agents: next(a for a in agents if a['id'] == pair['mihomo']['id']).update(host='192.168.1.99'))
+        return {'success': True, 'supported': True, 'detection': {'suggested': SPEC}}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', status)
+    with pytest.raises(sessions.InstallationError):
+        sessions._resolve_auto_network(manager.repository, manager, saved)
+    assert saved == before
+
+
+def test_repreparing_a_changed_auto_installation_does_not_reuse_its_blocked_capability(setup):
+    client, manager, admin, _, _ = setup
+    body, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == pair['mihomo']['id']).update(host='192.168.1.99'))
+    assert sessions.get(manager.repository, manager, saved['id'])['target_changed']
+    response = client.post(BASE, headers=admin, json=body)
+    assert response.status_code == 200, response.json
+    assert response.json['id'] != saved['id'] and not response.json['target_changed']
+
+
 def prepare_run(manager, session):
     pair = register_pair(manager, session)
     bind(manager, session, pair)
@@ -69,6 +287,10 @@ def test_private_session_creation_idempotent_exact_profile_scoped_and_script_sco
     public = client.get(BASE + '/' + saved['id'], headers=admin).get_json()
     assert 'script' not in public and 'token' not in public
     assert saved['token'] in public['command']  # Only administrator receives the capability command.
+    short_path = urlsplit(public['download_url']).path
+    assert short_path == saved['download_path']
+    assert short_path.startswith('/api/agents/i/')
+    assert client.post(BASE, headers=admin, json=body).json['download_url'] == public['download_url']
     assert stat.S_IMODE(sessions._path(manager.repository, saved['id']).stat().st_mode) == 0o600
     assert client.get(BASE, headers=admin, query_string={'profile_id': 'default'}).get_json()['session'] is None
     assert client.get(BASE, headers=admin, query_string={'profile_id': 'home'}).get_json()['session']['id'] == saved['id']
@@ -78,6 +300,9 @@ def test_private_session_creation_idempotent_exact_profile_scoped_and_script_sco
     script = client.get(path, query_string={'token': saved['token']})
     assert script.status_code == 200 and script.data.startswith(b'#!/bin/sh')
     assert script.headers['Cache-Control'] == 'no-store'
+    short = client.get(short_path)
+    assert short.status_code == 200 and short.data == script.data
+    assert b'exec sudo sh "$0" "$@"' in short.data
     assert saved['token'] not in str(before)
 
 

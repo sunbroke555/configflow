@@ -1,0 +1,93 @@
+"""Verify paired publication before routing setup; never write host/router state."""
+from hashlib import sha256
+import json
+
+from backend.common.setup_flow import SetupError
+
+
+def core_fingerprint(config):
+    # Router edits and release receipts advance the profile revision without
+    # changing either core. Keep those outside this content comparison.
+    fields = ('proxy_groups', 'rule_configs', 'mihomo', 'oxidns', 'subscriptions',
+              'nodes', 'subscription_aggregations', 'rule_library', 'system_config')
+    return sha256(json.dumps({key: config.get(key) for key in fields}, sort_keys=True,
+                             ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+
+
+def check_installation(repository, session):
+    from backend.common.agent_manager import get_agent_manager
+    from backend.agents import gateway_installation, linux_gateway
+    from backend.agents.oxidns_monitor import MonitorError
+    manager = get_agent_manager()
+    gateway = gateway_installation.latest(repository, manager, session['profile_id'])['session']
+    config, revision = repository.get_publish_snapshot(session['profile_id'])
+    checked = session.get('installation')
+    if (not gateway or gateway['phase'] != 'published' or gateway['target_changed']
+            or (gateway['config_changed'] and (not checked or checked['id'] != gateway['id']
+                or checked['fingerprint'] != core_fingerprint(config)))):
+        raise SetupError('请先在安装向导完成 Mihomo、OxiDNS 的发布与检查；配置变化后需重新发布', 409)
+    agents = gateway['agents']
+    if not all(agents.get(service, {}).get('id') for service in ('mihomo', 'oxidns')):
+        raise SetupError('两个核心的设备尚未确认，请继续安装向导', 409)
+    try:
+        status = linux_gateway.call(manager, agents['mihomo']['id'], 'status', 'GET', session['profile_id'])
+    except MonitorError as error:
+        raise SetupError(error.message, error.status) from None
+    managed = status.get('managed') or {}
+    if not managed.get('active') or managed.get('pending') or managed.get('healthy') is not True:
+        raise SetupError('Linux 转发尚未启用或健康状态未确认，请继续安装向导', 409)
+    session['installation'] = {'id': gateway['id'], 'fingerprint': core_fingerprint(config),
+        'mihomo': {key: agents['mihomo'].get(key) for key in ('id', 'name', 'host')},
+        'oxidns': {key: agents['oxidns'].get(key) for key in ('id', 'name', 'host')}}
+    from backend.routers.desired import compute_desired
+    selected = config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', [])
+    desired = compute_desired(config, agents['mihomo'].get('host'), selected)
+    for item in desired['proxy_cidrs']:
+        item['requires_source_exclusion'] = item['cidr'] != desired['fake_ip_range']
+    session.update(config_revision=revision, route_instructions={
+        'gateway': agents['mihomo'].get('host'), 'dns': agents['oxidns'].get('host'),
+        'routes': desired['proxy_cidrs'], 'warnings': desired['warnings']})
+    return config
+
+
+def finish(repository, session, body):
+    config = check_installation(repository, session)
+    if session['goal'] == 'router':
+        mode = body.get('router_mode', session.get('router_mode', 'manual'))
+        if mode == 'manual':
+            if body.get('ack_routes') is not True or body.get('ack_dns') is not True:
+                raise SetupError('请先按说明配置主路由的静态路由与 DNS，再确认已完成', 409)
+            session.update(router_mode='manual', router_verification='manual')
+        elif mode == 'managed':
+            from backend.routes.routers import _driver, _inspect
+            from backend.routers.plan import build_plan
+            from backend.routers.base import RouterError
+            router_id = body.get('router_id', session.get('router_id'))
+            router = next((r for r in config.get('routers', {}).get('items', []) if r['id'] == router_id), None)
+            pair = session['installation']
+            if (not router or router.get('proxy_gateway_agent_id') != pair['mihomo']['id']
+                    or router.get('dns_agent_id') != pair['oxidns']['id']):
+                raise SetupError('请关联本次安装的 Mihomo 和 OxiDNS 设备，再预览并发布路由器配置', 409)
+            driver = _driver(router)
+            try:
+                _, desired, state, report = _inspect(config, router, driver)
+                plan = build_plan(router, desired, state, report, report['return_routing'], driver)
+            except RouterError as error:
+                raise SetupError(str(error), 502) from None
+            finally:
+                driver.close()
+            if plan['blockers'] or not plan['empty']:
+                raise SetupError('路由器配置尚未同步，请在差异报告中预览并完成发布', 409)
+            latest = repository.get_profile(session['profile_id']).get('routers', {}).get('items', [])
+            if next((item for item in latest if item['id'] == router_id), None) != router:
+                raise SetupError('路由器设置在检查期间已变化，请重新检查', 409)
+            session.update(router_mode='managed', router_id=router_id, router_verification='verified')
+        else:
+            raise SetupError('请选择路由器配置方式')
+    else:
+        session['router_verification'] = 'client_pending'
+    current, _ = repository.get_publish_snapshot(session['profile_id'])
+    if core_fingerprint(current) != session['installation']['fingerprint']:
+        raise SetupError('核心配置在检查期间已变化，请重新发布后检查', 409)
+    session.update(completed=True, step=5, max_step=5)
+    return session

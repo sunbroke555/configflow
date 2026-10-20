@@ -7,6 +7,7 @@ export interface GatewayOnboardingSettings {
   direct_rule_set_ids: string[]
   proxy_rule_set_ids: string[]
   local_dns: string
+  default_forward?: 'forward_remote' | 'forward_local'
   confirm_template_conversion?: boolean
   expected_config_revision?: number
 }
@@ -36,14 +37,14 @@ export interface GatewayInstallationAgent {
 }
 export interface GatewayInstallation {
   id: string; profile_id: string; name: string; config_revision?: number; network: LinuxGatewaySpec
-  server_url?: string; phase: 'waiting' | 'enrolled' | 'publishing' | 'publish_failed' | 'published'
-  command?: string; expires_at: string; message?: string; error?: string
+  server_url?: string; auto_network?: boolean; phase: 'waiting' | 'enrolled' | 'publishing' | 'publish_failed' | 'published'
+  command?: string; download_url?: string; expires_at: string; message?: string; error?: string
   agents: Partial<Record<'mihomo' | 'oxidns', GatewayInstallationAgent>>
   config_changed?: boolean; target_changed?: boolean; expired?: boolean
   deployments: Partial<Record<'mihomo' | 'oxidns', AgentDeployment>>
 }
 export interface GatewayInstallationInput {
-  profile_id: string; name: string; server_url: string; network: LinuxGatewaySpec
+  profile_id: string; name: string; server_url: string; network?: LinuxGatewaySpec; auto_network?: boolean; agent_ip?: string
   config_revision: number; mihomo_agent_port?: number; oxidns_agent_port?: number
 }
 const scope = (profileId: string) => ({ headers: { 'X-ConfigFlow-Profile': profileId } })
@@ -56,5 +57,6 @@ export const gatewayOnboardingApi = {
   create: (input: GatewayInstallationInput) => api.post<GatewayInstallation>('/agents/gateway-installations', input, scope(input.profile_id)),
   sessions: (profileId: string) => api.get<{ success: boolean; session: GatewayInstallation | null }>('/agents/gateway-installations', { ...scope(profileId), params: { profile_id: profileId } }),
   session: (sessionId: string, profileId: string) => api.get<GatewayInstallation>(sessionPath(sessionId), scope(profileId)),
+  network: (sessionId: string, profileId: string, body: { auto_network: true } | { network: LinuxGatewaySpec }) => api.post<GatewayInstallation>(`${sessionPath(sessionId)}/network`, body, { ...scope(profileId), timeout: 60000 }),
   publish: (sessionId: string, profileId: string, retryFailed = false) => api.post<GatewayInstallation>(`${sessionPath(sessionId)}/publish`, { retry_failed: retryFailed }, { ...scope(profileId), timeout: 120000 }),
 }

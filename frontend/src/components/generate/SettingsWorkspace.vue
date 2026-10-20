@@ -18,6 +18,7 @@ const props = withDefaults(defineProps<{
   saveLabel?: string
   backLabel?: string
   size?: 'wide' | 'form' | 'compact'
+  inline?: boolean
 }>(), {
   description: '',
   dirty: false,
@@ -134,7 +135,8 @@ useEventListener('beforeunload', (event: BeforeUnloadEvent) => {
 </script>
 
 <template>
-  <Dialog :open="open" @update:open="value => !value && requestClose()">
+  <div v-if="inline && open" class="min-w-0"><slot /><div v-if="$slots.footer" class="mt-5 border-t border-border pt-4"><slot name="footer" :disabled="busy || saveDisabled" /></div></div>
+  <Dialog v-else :open="open" @update:open="value => !value && requestClose()">
     <DialogContent
       :show-close-button="false"
       v-bind="description ? {} : { 'aria-describedby': undefined }"

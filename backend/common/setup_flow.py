@@ -1,0 +1,347 @@
+"""Resumable first-use configuration, scoped to a newly created profile."""
+from contextlib import contextmanager
+from copy import deepcopy
+from datetime import datetime, timezone
+import fcntl
+import json
+import os
+import re
+import secrets
+import tempfile
+from urllib.parse import urlsplit
+
+import yaml
+
+from backend.common.config_repository import ProfileExists, ProfileInUse
+from backend.common.gateway_onboarding import DEFAULT_LOCAL_DNS, GatewayOnboardingError, _local_upstreams
+from backend.converters.mihomo import generate_mihomo_config, convert_node_to_mihomo
+from backend.utils.subscription_cache import load_subscription_cache
+from backend.utils.subscription_filter import filter_subscription_items
+
+
+class SetupError(ValueError):
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = status
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _path(repository, session_id):
+    if not isinstance(session_id, str) or not re.fullmatch('[a-f0-9]{32}', session_id):
+        raise SetupError('向导记录不存在', 404)
+    root = repository.data_dir / 'setup-sessions'
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    return root / f'{session_id}.json'
+
+
+@contextmanager
+def locked(repository, session_id):
+    with _path(repository, session_id).with_suffix('.lock').open('a+b') as handle:
+        os.chmod(handle.name, 0o600)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def read(repository, session_id):
+    try:
+        return json.loads(_path(repository, session_id).read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        raise SetupError('向导记录不存在，请重新开始', 404) from None
+
+
+def public(session):
+    result = deepcopy(session)
+    if result.get('router_draft'):
+        from backend.routers.store import public_view
+        result['router_draft'] = public_view(result['router_draft'])
+    return result
+
+
+def write(repository, session):
+    path = _path(repository, session['id'])
+    session['updated_at'] = _now()
+    fd, temporary = tempfile.mkstemp(prefix='.setup-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(session, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def create(repository, body):
+    session_id, goal, name = body.get('id'), body.get('goal'), body.get('name')
+    if goal not in ('router', 'gateway'):
+        raise SetupError('请选择使用方式')
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 64:
+        raise SetupError('配置名称需为 1–64 个字符')
+    with locked(repository, session_id):
+        path = _path(repository, session_id)
+        if path.exists():
+            session = read(repository, session_id)
+            if session['goal'] != goal or session['name'] != name.strip():
+                raise SetupError('该向导已创建，请继续原向导或新建一次配置', 409)
+        else:
+            profile_id = 'setup_' + session_id[:20]
+            if any(p['id'] == profile_id for p in repository.list_profiles()):
+                raise SetupError('配置名称标识冲突，请重新开始', 409)
+            session = {'id': session_id, 'profile_id': profile_id, 'name': name.strip(),
+                       'goal': goal, 'step': 1, 'max_step': 1, 'created_at': _now(),
+                       'subscription_ids': [], 'node_ids': [], 'prepared': False,
+                       'profile_revision': 0, 'completed': False}
+            write(repository, session)
+        try:
+            repository.create_profile({'id': session['profile_id'], 'name': session['name']})
+        except ProfileExists:
+            pass  # A retry after the profile commit uses the same reserved identity.
+        if not repository.get_system().get('system_config', {}).get('config_token'):
+            def ensure_token(system):
+                settings = system.setdefault('system_config', {})
+                if not settings.get('config_token'):
+                    settings['config_token'] = secrets.token_urlsafe(32)
+            repository.update_system_transaction(ensure_token)
+        return session
+
+
+def list_sessions(repository):
+    root = repository.data_dir / 'setup-sessions'
+    records = []
+    for path in root.glob('*.json'):
+        with locked(repository, path.stem):
+            session = read(repository, path.stem)
+        if any(p['id'] == session['profile_id'] for p in repository.list_profiles()):
+            records.append(session)
+    return sorted(records, key=lambda item: item['updated_at'], reverse=True)
+
+
+def source(repository, session, body):
+    if session['prepared']:
+        raise SetupError('方案已生成；修改来源请前往订阅来源或创建新的向导', 409)
+    subscription_ids = body.get('subscription_ids', [])
+    node_ids = body.get('node_ids', [])
+    for values in (subscription_ids, node_ids):
+        if not isinstance(values, list) or len(values) > 100 or any(not isinstance(v, str) for v in values):
+            raise SetupError('请选择有效的订阅或节点')
+    url = body.get('url', '')
+    if not isinstance(url, str) or len(url) > 8192:
+        raise SetupError('订阅链接格式不正确')
+    if url.strip():
+        url = url.strip()
+        try:
+            parsed = urlsplit(url)
+            if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+                raise ValueError()
+            parsed.port
+        except ValueError:
+            raise SetupError('请输入 HTTP(S) 订阅链接') from None
+        subscription_id = 'setup_sub_' + session['id']
+        def update(shared):
+            existing = next((s for s in shared['subscriptions'] if s['id'] == subscription_id), None)
+            if existing:
+                if existing['url'] != url:
+                    existing.update(url=url)
+            else:
+                shared['subscriptions'].append({'id': subscription_id, 'name': session['name'] + '订阅',
+                                                'url': url, 'enabled': True, 'interval': 86400})
+        repository.update_shared_transaction(update)
+        subscription_ids = [subscription_id]
+        node_ids = []
+    shared = repository.get_shared()
+    for values, field in ((subscription_ids, 'subscriptions'), (node_ids, 'nodes')):
+        available = {item['id'] for item in shared[field] if item.get('enabled', True)}
+        if set(values) - available:
+            raise SetupError('所选来源已删除或停用，请刷新后重选', 409)
+    if not subscription_ids and not node_ids:
+        raise SetupError('请添加订阅链接或选择已有节点')
+    session.update(subscription_ids=list(dict.fromkeys(subscription_ids)),
+                   node_ids=list(dict.fromkeys(node_ids)), step=2, max_step=2)
+    return session
+
+
+def _resources(config, session):
+    available = 0
+    for field, selected in (('subscriptions', session['subscription_ids']), ('nodes', session['node_ids'])):
+        items = {item['id']: item for item in config.get(field, []) if item.get('enabled', True)}
+        for resource_id in selected:
+            if resource_id not in items:
+                raise SetupError('所选来源已删除或停用，请返回检查节点来源', 409)
+            if field == 'subscriptions':
+                cache = load_subscription_cache(resource_id) or {}
+                if cache.get('metadata', {}).get('url', items[resource_id]['url']) != items[resource_id]['url']:
+                    raise SetupError('订阅链接已变化，请重新读取订阅')
+                nodes = filter_subscription_items(items[resource_id], cache.get('nodes', []))
+            else:
+                nodes = [items[resource_id]]
+            available += sum(bool(convert_node_to_mihomo(node)) for node in nodes if node.get('enabled', True))
+    if not available:
+        raise SetupError('当前没有可用节点，请先读取订阅或选择支持的节点')
+    return available
+
+
+def prepare(repository, session, body, base_url):
+    if set(body) - {'dns_fallback', 'traffic_fallback', 'local_dns', 'domain_rules', 'template'}:
+        raise SetupError('漏网处理参数无效')
+    if body.get('template', 'basic') != 'basic':
+        raise SetupError('代理优先模式已移除，请刷新向导并分别选择 DNS 与连接的漏网处理')
+    dns_fallback = body.get('dns_fallback', 'mihomo')
+    traffic_fallback = body.get('traffic_fallback', 'proxy')
+    if dns_fallback not in ('mihomo', 'direct') or traffic_fallback not in ('proxy', 'direct'):
+        raise SetupError('请选择有效的 DNS 与连接漏网处理方式')
+    local_dns = body.get('local_dns', session.get('local_dns', DEFAULT_LOCAL_DNS))
+    try:
+        _local_upstreams(local_dns)
+    except GatewayOnboardingError as error:
+        raise SetupError(str(error)) from error
+    local_dns = local_dns.strip()
+    from backend.common.setup_presets import builtin_rule_catalog, canonical_domain_rules, domain_rule_options, recommended_domain_rules, resolve_domain_rules
+    selections = body.get('domain_rules', session.get('domain_rules', recommended_domain_rules(repository)))
+    if not isinstance(selections, dict) or set(selections) != {'direct', 'proxy'}:
+        raise SetupError('请选择有效的直连和代理域名规则集')
+    for values in selections.values():
+        if (not isinstance(values, list) or len(values) > 100
+                or any(not isinstance(value, str) or not value or len(value) > 256 for value in values)):
+            raise SetupError('域名规则集必须是有效的选项列表')
+    selections = canonical_domain_rules(repository, selections)
+    if set(selections['direct']) & set(selections['proxy']):
+        raise SetupError('同一个域名规则集不能同时设为直连和代理')
+    available = {item['id'] for item in domain_rule_options(repository)}
+    if any(set(values) - available for values in selections.values()):
+        raise SetupError('所选域名规则集已删除、停用或不支持，请刷新后重选', 409)
+    config, _ = repository.get_publish_snapshot(session['profile_id'])
+    # A new profile has no references yet, so its hydrated snapshot is empty.
+    # Only the selected resources are referenced by the generated strategy.
+    shared = repository.get_shared()
+    config.update({key: shared[key] for key in repository.SHARED_FIELDS})
+    count = _resources(config, session)
+    groups = [{'id': 'setup_proxy', 'name': '代理选择', 'type': 'select', 'enabled': True,
+               'subscriptions': session['subscription_ids'], 'manual_nodes': session['node_ids']}]
+    rules = [{'id': f'setup_lan_{i}', 'itemType': 'rule', 'rule_type': 'IP-CIDR',
+              'value': value, 'policy': 'DIRECT', 'no_resolve': True, 'enabled': True}
+             for i, value in enumerate(('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))]
+    domain_rules = resolve_domain_rules(repository, selections)
+    selected_rules = [{'id': identity, 'itemType': 'ruleset',
+               'library_rule_id': item['id'], 'enabled': True,
+               'policy': 'DIRECT' if route == 'direct' else '代理选择'}
+              for route, items in domain_rules.items() for identity, item in items]
+    template_order = {'setup_' + identity.replace(':', '_'): index
+                      for index, identity in enumerate(builtin_rule_catalog())}
+    rules += sorted(selected_rules, key=lambda item: template_order.get(item['id'], len(template_order)))
+    rules.append({'id': 'setup_final', 'itemType': 'rule', 'rule_type': 'MATCH',
+                  'policy': '代理选择' if traffic_fallback == 'proxy' else 'DIRECT', 'enabled': True})
+    settings = {'mixed-port': 7890, 'allow-lan': True, 'bind-address': '*',
+                'mode': 'rule', 'log-level': 'info', 'external-controller': '127.0.0.1:9090',
+                'dns': {'enable': True, 'listen': '127.0.0.1:1053', 'enhanced-mode': 'fake-ip',
+                        'nameserver': ['223.5.5.5', '119.29.29.29']}}
+    from backend.common.oxidns_settings import get_default_oxidns_settings
+    dns = get_default_oxidns_settings()
+    dns.update(local_dns=local_dns, remote_dns='127.0.0.1:1053',
+               fallback_dns='127.0.0.1:1053', direct_rulesets=[identity for identity, _ in domain_rules['direct']],
+               proxy_rulesets=[identity for identity, _ in domain_rules['proxy']],
+               default_forward='forward_remote' if dns_fallback == 'mihomo' else 'forward_local')
+    dns['rule_update']['enabled'] = bool(domain_rules['direct'] or domain_rules['proxy'])
+    fields = {'proxy_groups': groups, 'rule_configs': rules, 'oxidns': dns,
+              'mihomo': {**config.get('mihomo', {}), 'custom_config': yaml.safe_dump(settings, sort_keys=False)}}
+    stored = repository.get_profile(session['profile_id'])
+    unchanged = all(stored.get(key) == value for key, value in fields.items())
+    if config['_revision'] != session['profile_revision'] and not unchanged:
+        raise SetupError('该空间已在其他页面修改，向导不会覆盖；请新建向导或前往配置生成继续', 409)
+    candidate = {**deepcopy(config), **deepcopy(fields)}
+    candidate['rule_library'] = repository.get_shared()['rule_library']
+    for items in domain_rules.values():
+        for identity, item in items:
+            rule = next(rule for rule in candidate['rule_configs'] if rule['id'] == identity)
+            rule.update({key: item[key] for key in ('name', 'url', 'source_type', 'behavior', 'format', 'content') if key in item})
+            if item['source_type'] == 'content':
+                rule['url'] = f'/api/profiles/{session["profile_id"]}/rule-library/content/{item["id"]}'
+    from backend.converters.oxidns import generate_oxidns_config
+    from backend.common.oxidns_validation import require_valid_document
+    require_valid_document(yaml.safe_load(generate_oxidns_config(candidate, base_url=base_url)))
+    generated = yaml.safe_load(generate_mihomo_config(candidate, base_url=base_url))
+    if not generated.get('proxy-groups') or not generated.get('rules'):
+        raise SetupError('生成配置未包含有效代理策略，请检查来源')
+    if not unchanged:
+        def update(current):
+            if current['_revision'] != config['_revision']:
+                raise ProfileInUse('配置已更新，请刷新向导后重试')
+            current.update(deepcopy(fields))
+        repository.update_profile_transaction(session['profile_id'], update)
+    saved = repository.get_profile(session['profile_id'])
+    session.pop('template', None)
+    session.update(prepared=True, dns_fallback=dns_fallback, traffic_fallback=traffic_fallback, local_dns=local_dns,
+                   domain_rules=selections,
+                   node_count=count, profile_revision=saved['_revision'],
+                   config_revision=repository.config_revision(session['profile_id']), step=3,
+                   max_step=max(session['max_step'], 3), completed=False)
+    return session
+
+
+def update_progress(repository, session, body):
+    if set(body) - {'step', 'router_id', 'router_mode'}:
+        raise SetupError('向导进度参数无效')
+    if 'step' in body:
+        if type(body['step']) is not int or not 0 <= body['step'] <= session['max_step']:
+            raise SetupError('请先完成前面的步骤')
+        session['step'] = body['step']
+    if 'router_mode' in body:
+        if body['router_mode'] not in ('manual', 'managed') or session['goal'] != 'router':
+            raise SetupError('请选择有效的路由器配置方式')
+        session['router_mode'] = body['router_mode']
+    if 'router_id' in body:
+        routers = repository.get_profile(session['profile_id']).get('routers', {}).get('items', [])
+        if not any(router['id'] == body['router_id'] for router in routers):
+            raise SetupError('请选择当前配置空间中的路由器', 409)
+        session['router_id'] = body['router_id']
+    return session
+
+
+def save_router_draft(session, body):
+    """Keep early connection settings outside the frozen core profile revision."""
+    if session['goal'] != 'router' or not session['prepared'] or session['max_step'] != 3:
+        raise SetupError('请在安装等待期间填写主路由信息；安装完成后使用路由器管理', 409)
+    if set(body) != {'router'}:
+        raise SetupError('主路由连接参数无效')
+    if body['router'] is None:
+        session.pop('router_draft', None)
+        return
+    from backend.routers.store import normalize, RouterValidationError, EDITABLE_FIELDS
+    payload = body['router']
+    if not isinstance(payload, dict) or set(payload) - set((*EDITABLE_FIELDS, 'password')):
+        raise SetupError('主路由连接参数无效')
+    if (payload.get('proxy_gateway_agent_id') or payload.get('dns_agent_id')
+            or payload.get('auto_rule_sync')):
+        raise SetupError('安装完成后自动关联本次设备，暂不启用规则自动同步')
+    try:
+        session['router_draft'] = normalize(payload, session.get('router_draft'))
+    except RouterValidationError as error:
+        raise SetupError(str(error)) from None
+    session['router_mode'] = 'managed'
+
+
+def connect_router_draft(repository, session):
+    """After real installation checks, attach the saved draft to the actual pair."""
+    draft = session.get('router_draft')
+    if not draft:
+        return
+    router = deepcopy(draft)
+    pair = session['installation']
+    router.update(proxy_gateway_agent_id=pair['mihomo']['id'], dns_agent_id=pair['oxidns']['id'])
+
+    def attach(profile):
+        items = profile.setdefault('routers', {}).setdefault('items', [])
+        existing = next((item for item in items if item['id'] == router['id']), None)
+        if existing is None:
+            items.append(router)
+        elif existing != router:
+            raise SetupError('主路由记录已在其他页面修改，请检查路由器设置', 409)
+    repository.update_profile_transaction(session['profile_id'], attach)
+    session.update(router_id=router['id'], router_mode='managed')
+    session.pop('router_draft', None)

@@ -1,0 +1,40 @@
+import api from '@/api'
+
+export type SetupGoal = 'router' | 'gateway'
+export interface SetupDomainSelection { direct: string[]; proxy: string[] }
+export interface SetupDomainRule { id: string; name: string; source: 'builtin' | 'library'; behavior?: 'domain' | 'classical'; aliases?: string[] }
+export interface SetupRouterDraft {
+  id: string; name: string; type: 'ikuai' | 'routeros'; endpoint: string; username: string; verify_tls: boolean
+  proxy_gateway_agent_id: string; dns_agent_id: string; has_password: boolean
+  manage_return_routing?: boolean; ip_rule_sets?: string[]; ros_policy_rule_sets?: string[]
+}
+export interface SetupSession {
+  id: string; profile_id: string; name: string; goal: SetupGoal
+  step: number; max_step: number; prepared: boolean; completed: boolean
+  subscription_ids: string[]; node_ids: string[]; dns_fallback?: 'mihomo' | 'direct'; traffic_fallback?: 'proxy' | 'direct'
+  local_dns?: string
+  domain_rules?: SetupDomainSelection
+  node_count?: number; config_revision?: number; updated_at: string
+  installation?: { id: string; mihomo: { id: string; name: string; host: string }; oxidns: { id: string; name: string; host: string } }
+  router_id?: string; router_mode?: 'manual' | 'managed'; router_verification?: 'manual' | 'verified' | 'client_pending'
+  router_draft?: SetupRouterDraft
+  route_instructions?: { gateway: string; dns: string; routes: { cidr: string; sources: string[]; requires_source_exclusion?: boolean }[]; warnings: string[] }
+}
+export interface SetupIndex {
+  sessions: SetupSession[]; suggested: boolean
+  subscriptions: { id: string; name: string }[]; nodes: { id: string; name: string }[]
+  domain_rules?: SetupDomainRule[]
+  recommended_domain_rules?: SetupDomainSelection
+}
+const path = (id: string) => `/setup/${encodeURIComponent(id)}`
+export const setupApi = {
+  index: () => api.get<SetupIndex>('/setup'),
+  create: (data: { id: string; name: string; goal: SetupGoal }) => api.post<SetupSession>('/setup', data),
+  get: (id: string) => api.get<SetupSession>(path(id)),
+  progress: (id: string, data: { step?: number; router_id?: string; router_mode?: 'manual' | 'managed' }) => api.patch<SetupSession>(path(id), data),
+  source: (id: string, data: { url?: string; subscription_ids?: string[]; node_ids?: string[] }) => api.post<SetupSession>(`${path(id)}/source`, data),
+  prepare: (id: string, settings: { dns_fallback: 'mihomo' | 'direct'; traffic_fallback: 'proxy' | 'direct'; local_dns: string; domain_rules: SetupDomainSelection }) => api.post<SetupSession>(`${path(id)}/prepare`, settings, { timeout: 90000 }),
+  check: (id: string) => api.post<SetupSession>(`${path(id)}/check`, {}, { timeout: 90000 }),
+  saveRouterDraft: (id: string, router: unknown) => api.post<SetupSession>(`${path(id)}/router-draft`, { router }),
+  finish: (id: string, data: { router_mode?: 'manual' | 'managed'; router_id?: string; ack_routes?: boolean; ack_dns?: boolean } = {}) => api.post<SetupSession>(`${path(id)}/finish`, data, { timeout: 90000 })
+}

@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="上游路由" :mobile-help="routerPageHelp">
+    <PageHeader v-if="!embedded" title="上游路由" :mobile-help="routerPageHelp">
       <template #actions>
         <Button @click="openCreate">
           <Plus class="size-4" />
@@ -9,7 +9,8 @@
       </template>
     </PageHeader>
 
-    <p class="mt-0 mb-4 hidden text-[12.5px] leading-relaxed text-muted-foreground md:block">
+    <div v-if="embedded && !(setupDraftSession && routers.length)" class="mb-3 flex items-center justify-end"><Button class="min-h-11" @click="openCreate"><Plus class="size-4" />添加路由器</Button></div>
+    <p v-if="!embedded" class="mt-0 mb-4 hidden text-[12.5px] leading-relaxed text-muted-foreground md:block">
       {{ routerPageHelp }}
     </p>
 
@@ -19,7 +20,7 @@
       <EmptyState
         :icon="RouterIcon"
         title="还没有接入路由器"
-        description="接入 iKuai 4.x 或 RouterOS 7.1+，查看主路由配置与期望状态的差异。"
+        :description="setupDraftSession ? '先填写主路由的管理地址和账号，安装完成后自动关联本次设备。' : '接入 iKuai 4.x 或 RouterOS 7.1+，查看主路由配置与期望状态的差异。'"
       >
         <Button @click="openCreate">
           <Plus class="size-4" />
@@ -50,7 +51,7 @@
               <td role="cell" data-label="状态">
                 <StatusDot
                   :tone="!router.last_probe ? 'muted' : router.last_probe.ok ? 'success' : 'danger'"
-                  :label="!router.last_probe ? '未探测' : router.last_probe.ok ? '可连接' : '连接失败'"
+                  :label="setupDraftSession ? '已保存，待安装' : !router.last_probe ? '未探测' : router.last_probe.ok ? '可连接' : '连接失败'"
                 />
                 <p v-if="router.last_probe && !router.last_probe.ok" class="mt-1 mb-0 max-w-[260px] text-[11.5px] text-destructive-accent">
                   {{ router.last_probe.message }}
@@ -58,10 +59,11 @@
               </td>
               <td role="cell" class="cf-record-wide">
                 <div class="router-record-actions flex items-center justify-end gap-1">
+                  <template v-if="!setupDraftSession">
                   <Button size="sm" variant="outline" :disabled="busyId === router.id" @click="probe(router)">
                     <Loader2 v-if="busyId === router.id && busyAction === 'probe'" class="size-3.5 animate-spin" />
                     <Activity v-else class="size-3.5" />
-                    探测
+                    {{ embedded ? '检查连接' : '探测' }}
                   </Button>
                   <Button size="sm" variant="outline" class="max-md:min-h-11" :disabled="routeBusy || applying || policyLocked" @click="openRouteManager(router)">
                     静态路由
@@ -73,8 +75,9 @@
                   <Button size="sm" :disabled="busyId === router.id || routeBusy || applying || policyLocked" @click="openReport(router)">
                     <Loader2 v-if="busyId === router.id && busyAction === 'report'" class="size-3.5 animate-spin" />
                     <GitCompare v-else class="size-3.5" />
-                    差异报告
+                    {{ embedded ? '查看改动' : '差异报告' }}
                   </Button>
+                  </template>
                   <Button variant="ghost" size="icon-sm" title="编辑" aria-label="编辑" @click="openEdit(router)">
                     <Pencil class="size-4" />
                   </Button>
@@ -485,7 +488,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
       <DialogContent class="max-h-[90dvh] max-w-[480px] overflow-y-auto max-md:[&_[data-slot=button]]:min-h-11 max-md:[&_[role=combobox]]:min-h-11 max-md:[&_[data-slot=dialog-close]]:min-h-11 max-md:[&_[data-slot=dialog-close]]:min-w-11">
         <DialogHeader>
           <DialogTitle>{{ editingId ? '编辑路由器' : '添加路由器' }}</DialogTitle>
-          <DialogDescription>保存仅更新 ConfigFlow 设置，确认发布后才会写入路由器。</DialogDescription>
+          <DialogDescription>{{ embedded ? '选择路由器类型，填写管理地址、用户名和密码。其余选项可保留默认值。' : '保存仅更新 ConfigFlow 设置，确认发布后才会写入路由器。' }}</DialogDescription>
         </DialogHeader>
 
         <form class="flex min-w-0 flex-col gap-4" @submit.prevent="submit">
@@ -494,7 +497,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             <Input id="router-name" v-model="form.name" class="bg-background/50" maxlength="80" placeholder="例如 主路由" />
           </div>
           <div class="flex flex-col gap-1.5">
-            <Label for="router-type">类型</Label>
+            <Label for="router-type">{{ embedded ? '路由器类型（必选）' : '类型' }}</Label>
             <Select v-model="form.type">
               <SelectTrigger id="router-type" class="w-full bg-background/50"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -503,7 +506,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               </SelectContent>
             </Select>
           </div>
-          <FormField label="管理地址" html-for="router-endpoint" :help="form.type === 'routeros' ? routerHelp.endpointROS : routerHelp.endpointIkuai">
+          <FormField :label="embedded ? '管理地址（必填）' : '管理地址'" html-for="router-endpoint" :help="form.type === 'routeros' ? routerHelp.endpointROS : routerHelp.endpointIkuai">
             <Input
               id="router-endpoint"
               v-model="form.endpoint"
@@ -512,12 +515,12 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             />
           </FormField>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-            <FormField label="用户名" html-for="router-username" :help="accountHelp">
+            <FormField :label="embedded ? '用户名（必填）' : '用户名'" html-for="router-username" :help="accountHelp">
               <Input id="router-username" v-model="form.username" class="bg-background/50" autocomplete="off" />
             </FormField>
             <div class="flex flex-col gap-1.5">
               <!-- 与左侧用户名说明按钮的标签行保持同高，包括触屏尺寸。 -->
-              <Label for="router-password" class="min-h-6 max-md:min-h-11 pointer-coarse:min-h-11">密码</Label>
+              <Label for="router-password" class="min-h-6 max-md:min-h-11 pointer-coarse:min-h-11">{{ embedded && !editingHasPassword ? '密码（必填）' : '密码' }}</Label>
               <Input
                 id="router-password"
                 v-model="form.password"
@@ -533,7 +536,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             <Label for="router-verify-tls">校验 HTTPS 证书</Label>
             <FieldHelp label="校验 HTTPS 证书" :text="routerHelp.tls" />
           </div>
-          <FormField label="代理网关（mihomo Agent）" html-for="router-gateway" :help="form.type === 'routeros' ? routerHelp.gatewayROS : routerHelp.gateway">
+          <FormField v-if="!setupDraftSession" label="代理网关（mihomo Agent）" html-for="router-gateway" :help="form.type === 'routeros' ? routerHelp.gatewayROS : routerHelp.gateway">
             <Select v-model="form.proxy_gateway_agent_id">
               <SelectTrigger id="router-gateway" class="w-full bg-background/50"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent>
@@ -544,6 +547,9 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               </SelectContent>
             </Select>
           </FormField>
+          <FormField v-else label="安装设备" help="安装并检查完成后，向导会把代理网关设为本次 Mihomo Agent，把 DHCP DNS 设为本次 OxiDNS Agent，无需预先选择其他设备。"><p class="m-0 text-sm text-muted-foreground">安装后自动关联本次 Mihomo + OxiDNS</p></FormField>
+          <component :is="embedded ? 'details' : 'div'" :class="embedded ? 'space-y-4 border-t border-border pt-3' : 'contents'">
+          <summary v-if="embedded" class="min-h-11 cursor-pointer text-sm font-medium">高级路由选项<span class="ml-2 text-xs font-normal text-muted-foreground">可选，默认无需修改</span></summary>
           <div class="flex flex-col gap-1.5">
             <div class="flex min-h-11 items-center justify-between gap-3">
               <div class="flex min-w-0 items-center gap-1">
@@ -567,7 +573,8 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               <MultiSelect :model-value="form.ros_policy_rule_sets" trigger-id="router-policy-rule-sets" :options="ruleSetOptions" placeholder="不使用策略路由" @update:model-value="selectPolicyRuleSets" />
             </div>
           </FormField>
-          <FormField label="DHCP DNS 服务器（OxiDNS Agent）" html-for="router-dns" :help="routerHelp.dns">
+          </component>
+          <FormField v-if="!setupDraftSession" label="DHCP DNS 服务器（OxiDNS Agent）" html-for="router-dns" :help="routerHelp.dns">
             <Select v-model="form.dns_agent_id">
               <SelectTrigger id="router-dns" class="w-full bg-background/50"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent class="max-w-[calc(100vw-2rem)]">
@@ -584,7 +591,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
           <Button variant="outline" :disabled="saving" @click="dialogVisible = false">取消</Button>
           <Button :disabled="saving" @click="submit">
             <Loader2 v-if="saving" class="size-4 animate-spin" />
-            保存
+            {{ setupDraftSession ? '保存到向导' : '保存' }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -633,10 +640,29 @@ import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import PolicyRoutingPanel from '@/components/routers/PolicyRoutingPanel.vue'
 import RouterRuleSync from '@/components/routers/RouterRuleSync.vue'
 import RouterOperationPreview from '@/components/routers/RouterOperationPreview.vue'
-import { agentApi, routerApi, ruleApi, type StaticRouteChange, type StaticRouteItem, type StaticRoutePlan, type StaticRouteValues } from '@/api'
-import { activeProfileId, getActiveProfileId } from '@/profileContext'
+import { agentApi, routerApi as baseRouterApi, ruleApi, type StaticRouteChange, type StaticRouteItem, type StaticRoutePlan, type StaticRouteValues } from '@/api'
+import { setupApi } from '@/api/setup'
+import { activeProfileId as selectedProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
 import { usePageReloadGuard, withPageReloadBlocked } from '@/lib/pageReloadGuard'
+
+const props = defineProps<{ embedded?: boolean; profileId?: string; setupAgents?: { mihomo: string; oxidns: string }; setupDraftSession?: string }>()
+const emit = defineEmits<{ selected: [id: string]; busy: [value: boolean] }>()
+const activeProfileId = computed(() => props.profileId || selectedProfileId.value)
+const getActiveProfileId = () => activeProfileId.value
+// Embedded setup stays pinned to its new profile, including delayed confirmations.
+// Ordinary router pages retain the original API call signatures.
+const routerApi = {
+  ...baseRouterApi,
+  list: () => props.profileId ? baseRouterApi.list(props.profileId) : baseRouterApi.list(),
+  create: (data: unknown) => props.profileId ? baseRouterApi.create(data, props.profileId) : baseRouterApi.create(data),
+  update: (id: string, data: unknown) => props.profileId ? baseRouterApi.update(id, data, props.profileId) : baseRouterApi.update(id, data),
+  remove: (id: string) => props.profileId ? baseRouterApi.remove(id, props.profileId) : baseRouterApi.remove(id),
+  probe: (id: string) => props.profileId ? baseRouterApi.probe(id, props.profileId) : baseRouterApi.probe(id),
+  report: (id: string) => props.profileId ? baseRouterApi.report(id, props.profileId) : baseRouterApi.report(id),
+  plan: (id: string) => props.profileId ? baseRouterApi.plan(id, props.profileId) : baseRouterApi.plan(id),
+  apply: (id: string, fingerprint: string) => props.profileId ? baseRouterApi.apply(id, fingerprint, props.profileId) : baseRouterApi.apply(id, fingerprint),
+}
 
 const routerPageHelp = '在这里查看和调整主路由的分流设置。「差异报告」只检查，不会修改设备。点「预览发布」查看具体改动，确认后再应用；如果发布失败，会尝试撤销本次改动，并显示结果。'
 
@@ -1028,15 +1054,16 @@ const load = async (isCurrent = () => true) => {
   loading.value = true
   try {
     const [routerResult, agentResult, ruleResult] = await Promise.allSettled([
-      routerApi.list(),
-      agentApi.getAll(),
-      ruleApi.getAll()
+      props.setupDraftSession ? setupApi.get(props.setupDraftSession).then(({ data }) => ({ data: { routers: data.router_draft ? [data.router_draft] : [] } })) : routerApi.list(),
+      props.setupDraftSession ? Promise.resolve({ data: [] }) : agentApi.getAll(),
+      props.profileId ? ruleApi.getAll(props.profileId) : ruleApi.getAll()
     ])
     if (!isCurrent()) return false
     if (routerResult.status === 'rejected') throw routerResult.reason
     routers.value = routerResult.value.data.routers || []
     const agentData = agentResult.status === 'fulfilled' ? agentResult.value.data : []
     agents.value = Array.isArray(agentData) ? agentData : agentData?.data || agentData?.agents || []
+    if (props.profileId) agents.value = agents.value.filter((agent: any) => agent.profile_id === props.profileId)
     const ruleData = ruleResult.status === 'fulfilled' ? ruleResult.value.data : []
     const rules = Array.isArray(ruleData) ? ruleData : ruleData?.data || []
     ruleSets.value = rules
@@ -1059,6 +1086,8 @@ const openCreate = async () => {
   policyRouter.value = null
   syncRouter.value = null
   Object.assign(form, emptyForm())
+  if (props.embedded) form.name = '主路由'
+  if (props.setupAgents && !props.setupDraftSession) Object.assign(form, { proxy_gateway_agent_id: props.setupAgents.mihomo, dns_agent_id: props.setupAgents.oxidns })
   editingId.value = ''
   editingHasPassword.value = false
   dialogVisible.value = true
@@ -1115,9 +1144,11 @@ const submit = async () => {
     dns_agent_id: form.dns_agent_id === NONE ? '' : form.dns_agent_id
   }
   try {
-    if (editingId.value) await routerApi.update(editingId.value, payload)
+    if (props.setupDraftSession) await setupApi.saveRouterDraft(props.setupDraftSession, payload)
+    else if (editingId.value) await routerApi.update(editingId.value, payload)
     else await routerApi.create(payload)
-    notify.success(editingId.value ? '路由器已更新' : '路由器已添加')
+    notify.success(props.setupDraftSession ? '主路由信息已保存，安装后可继续配置' : editingId.value ? '路由器已更新' : '路由器已添加')
+    form.password = ''
     dialogVisible.value = false
     if (editingId.value) {
       clearInspection(editingId.value)
@@ -1135,7 +1166,8 @@ const remove = async (router: RouterItem) => {
   if (!await canLeavePolicy()) return
   if (!(await confirmDanger(`删除路由器「${router.name}」？只删除 ConfigFlow 中的接入记录，不会改动路由器。`))) return
   try {
-    await routerApi.remove(router.id)
+    if (props.setupDraftSession) await setupApi.saveRouterDraft(props.setupDraftSession, null)
+    else await routerApi.remove(router.id)
     clearInspection(router.id)
     if (routeRouter.value?.id === router.id) closeRouteManager()
     if (policyRouter.value?.id === router.id) policyRouter.value = null
@@ -1172,6 +1204,7 @@ const openReport = async (router: RouterItem) => {
   closeRouteManager()
   clearInspection()
   reportRouter.value = router
+  emit('selected', router.id)
   await loadReport(router)
 }
 
@@ -1246,5 +1279,7 @@ const applyPlan = async () => {
   }
 }
 
+watch(() => !!(applying.value || saving.value || routeBusy.value || policyLocked.value || dialogVisible.value || planVisible.value || busyId.value), value => emit('busy', value))
+onBeforeUnmount(() => emit('busy', false))
 onMounted(load)
 </script>

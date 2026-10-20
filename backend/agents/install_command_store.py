@@ -44,12 +44,16 @@ def _database():
         connection.close()
 
 
-def save_install_script(script):
+def save_install_script(script, *, expires_at=None):
     """Persist generated text atomically; only a random capability is public."""
     if not isinstance(script, str) or len(script.encode('utf-8')) > MAX_SCRIPT_BYTES:
         raise ValueError('安装脚本过大，请减少自定义参数后重试。')
     token = secrets.token_urlsafe(16)
-    expires_at = int(time.time()) + TTL_SECONDS
+    now = int(time.time())
+    if expires_at is None:
+        expires_at = now + TTL_SECONDS
+    elif type(expires_at) is not int or not now < expires_at <= now + TTL_SECONDS:
+        raise ValueError('安装链接有效期必须在未来 24 小时内。')
     with _database() as connection:
         if connection.execute('SELECT COUNT(*) FROM snapshots').fetchone()[0] >= MAX_SNAPSHOTS:
             raise InstallCommandStoreFull()
