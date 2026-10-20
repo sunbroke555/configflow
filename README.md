@@ -2,234 +2,433 @@
 
 # ConfigFlow
 
-### 🚀 现代化代理配置管理平台
+**把订阅、节点、规则和设备配置，放到一个面板里管理。**
+
+支持生成 **Mihomo · Surge · Loon · MosDNS · OxiDNS** 配置
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-Available-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/thsrite/config-flow)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![Vue](https://img.shields.io/badge/Vue-3.x-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
+[![Docker](https://img.shields.io/badge/Docker-thsrite%2Fconfig--flow-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/thsrite/config-flow)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](backend/requirements.txt)
+[![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)](frontend/package.json)
 
-**一站式管理订阅、节点、规则，一键生成 Mihomo / Surge / Loon / MosDNS / OxiDNS 配置**
-
-[功能特性](#-功能特性) •
-[快速开始](#-快速开始) •
-[升级与数据安全](#升级与数据安全) •
-[文档](#-文档) •
-[截图预览](#-截图预览)
+[核心功能](#核心功能) · [快速开始](#快速开始) · [第一次使用](#第一次使用) · [备份与升级](#备份与升级) · [常见问题](#常见问题) · [详细文档](#详细文档)
 
 </div>
 
 ---
 
-## ✨ 功能特性
+## 项目简介
 
-<table>
-<tr>
-<td width="50%">
+ConfigFlow 是一个通过浏览器操作的代理与 DNS 配置管理平台。你可以集中维护订阅、节点和规则，为家庭、办公等不同场景分别设置配置，再下载到客户端，或通过 Agent 发布到远程设备。
 
-### 📦 订阅管理
-- 多订阅源支持（Mihomo/Surge/通用格式）
-- 「订阅来源 → 编辑 → 订阅源更新间隔」控制访问机场的频率；0 表示仅手动更新，首次没有缓存时需先手动更新。Mihomo、聚合、预览和发布在间隔内使用持久缓存，不因面板重启或重复同步提前刷新。正数表示允许在间隔到期后的下一次请求刷新，并非独立定时任务。
-- 「配置生成 → Mihomo → 基础配置 → 订阅同步间隔」（Mihomo 面板的基础配置也可设置）独立控制 Mihomo 从面板同步订阅和聚合，默认 3600 秒，0 关闭定时同步；保存并发布后生效。仅需避免自动请求机场时，将订阅源间隔设为 0，保留 Mihomo 同步即可。
-- 内置 [Sub-Store](https://github.com/sub-store-org/Sub-Store) 解析订阅和转换节点格式，支持在线检测与更新
-- 普通 HTTP 订阅复用一次请求的正文与流量头，需转换时把已下载正文交给 Sub-Store；手动更新与聚合拉取在同一服务进程内合并并发请求，自动拉取的成功结果复用 5 分钟，手动更新保留 30 秒防连点窗口，之后可主动拉取并刷新共享缓存。连续失败按 3、6、12 秒递增退避，最多 5 分钟，成功或一小时无失败后重置；直接请求遇到 403 / 429 时不立即回退重试，至少暂缓 60 秒，手动更新也遵守失败冷却。窗口内再次更新不会立即访问上游；带 `#` 自定义参数的链接仍交由 Sub-Store 处理，不额外探测或查询流量，多进程部署各进程独立合并。
-- 支持 Base64、YAML、URI 多种格式
+日常操作可以在页面中完成；需要精细调整时，也能编辑配置原文。
 
-### 🌐 节点管理
-- 可视化节点管理
-- 支持 SS/SSR/VMess/Trojan/Hysteria/Hysteria2
-- 手动添加与编辑
+> 开始使用前，请准备自己的可用订阅或节点，以及对应的代理客户端。需要远程管理时，再为目标设备安装 Agent。
 
-### 📋 规则仓库
-- 集中管理规则集（rule-providers）
-- 批量导入 YAML 格式规则
-- 连通性测试与自动关闭
+## 核心功能
 
-</td>
-<td width="50%">
+| 功能 | 可以做什么 |
+| --- | --- |
+| 🗂️ 多配置空间 | 为不同场景保存各自的策略组、规则和生成参数，共用一份订阅、节点与规则库 |
+| 📦 订阅与节点 | 管理多个订阅，导入 URI、JSON、YAML 节点；内置 Sub-Store 处理订阅解析与格式转换 |
+| 🔗 订阅聚合 | 将多个订阅和节点组合成新的来源，供策略组使用 |
+| 🎯 策略组 | 手动选择、自动测速、故障转移、负载均衡，支持节点筛选、组间引用和跟随；Mihomo 另支持代理链 |
+| 📚 规则管理 | 维护在线或本地规则集，调整匹配顺序，用「命中模拟」检查域名或 IP 会走哪条规则 |
+| ⚡ 配置生成 | 在生成工作台查看结果、下载文件、复制配置链接，Loon 支持一键导入 |
+| 📡 节点测速 | 从 ConfigFlow 所在机器通过节点访问测试地址，支持批量测试和独立测速 DNS 设置 |
+| 🤖 Agent 管理 | 生成安装命令，查看在线状态、主机信息和日志，远程发布配置、重启服务 |
+| 📊 运行面板 | 在 Mihomo 面板查看连接、切换节点和测速；在 OxiDNS 面板查看 DNS 统计与查询记录 |
+| 🔭 域名发现 | 从 Mihomo Agent 收集域名，发现未覆盖或直连失败的请求，探测后补充规则，并支持地区检测 |
+| 🌐 网关与路由 | 提供 Linux 选择性网关安装向导，以及 RouterOS 接入、路由预览和设备分流管理 |
+| 💾 备份与恢复 | 导出全部数据、单配置导入导出、脱敏分享，以及 WebDAV 手动和自动备份 |
+| 🔌 MCP 服务 | 通过内置 `/mcp` 端点，让支持 MCP 的客户端调用资源管理、配置生成和设备管理工具 |
 
-### 🎯 策略组配置
-- 手动选择 / 自动测速 / 故障转移 / 负载均衡
-- 多维度节点筛选；正则预览由后端统一校验，支持 `(?i)` 忽略大小写，非法表达式显示原因并保留上次预览结果
-- 支持引用其他策略组
+### 支持的生成格式
 
-### ⚡ 配置生成
-- 一键生成 Mihomo YAML 配置
-- 一键生成 Surge 配置
-- 一键生成 Loon 配置，iOS 上可通过 `loon://import?sub=` 一键导入
-- 一键生成 MosDNS 配置
-- 一键生成 OxiDNS 完整配置包；独立设置分流、探测缓存、lazy cache、线程与特色插件，支持预览及 Agent 发布回滚（[使用说明](docs/OXIDNS.md)）
-- 实时预览 & 配置导入导出
-- 导入 Mihomo / Surge / Loon / Shadowrocket 配置文件为新的配置空间：节点、订阅、规则集并入共享资源（相同定义自动复用），策略组与规则按本项目结构转换
-- 多配置共享订阅、节点、聚合和规则仓库；资源引用、策略组、规则目标、拨号代理与生成参数分别保存
-- 全局服务、访问令牌、WebDAV 和全量备份统一放在「系统设置」，Agent 按绑定配置下发
-- [多配置、数据迁移与备份说明](doc/design/multi-config-management.md)
+| 目标 | 下载内容 | 使用方式 |
+| --- | --- | --- |
+| **Mihomo / Clash Meta** | `mihomo.yaml` | 下载导入客户端，或使用配置链接 |
+| **Surge** | `surge.conf` | 下载导入客户端，或使用配置链接 |
+| **Loon** | `.lcf` 配置文件 | 下载、使用配置链接，或在 iOS 上一键导入 |
+| **MosDNS** | `mosdns-config.zip` | 下载完整配置包，或通过 Agent 发布 |
+| **OxiDNS** | `oxidns-config.zip` | 下载完整配置包，或通过 Agent 发布 |
 
-### 界面与可访问性
-- 深浅主题均使用玻璃面板与柔和辉光；表单保持清晰底色，浮层保持高不透明度
-- 桌面固定导航，移动端保留分组导航与配置切换；总览指标在窄屏按两列排列
-- 支持键盘跳转到主要内容、可见焦点与系统减少动效偏好；长弹窗在视口内滚动
+已有的 **Mihomo、Surge、Loon、Shadowrocket 配置文件**，还可以通过「配置空间 → 导入客户端配置」转换为新的配置空间。Shadowrocket 当前属于导入来源。
 
-### 🔌 MCP 服务
-- 内置 MCP 服务端（`/mcp` 端点）
-- 工具覆盖共享资源、独立配置、系统设置与 Agent 管理
-- Claude Desktop / Claude Code 等客户端可直接接入
+> **MosDNS / OxiDNS 首次手动部署请下载完整 ZIP。** 配置链接返回的 YAML 不包含首次部署所需的全部规则和附加文件。
 
-### 🤖 Agent 远程管理
-- 一键生成安装脚本
-- Agent 安装入口可选 Linux 选择性网关：填写网络信息、勾选 IP / 域名规则、安装或接入 Mihomo 与 OxiDNS、按顺序发布，再预览和应用转发；fake-IP 自动包含，生成工作台保留后续管理入口（[安装与使用说明](docs/LINUX_GATEWAY.md)）
-- Shell 单服务和同机安装均可勾选同时安装核心，用一条命令先安装或补齐 Mihomo / OxiDNS，再安装对应 Agent；默认不勾选，已有核心保持原样（[单服务安装](docs/AGENT_OXIDNS.md#单服务同时安装核心)、[同机安装](docs/AGENT_OXIDNS.md#shell-同机安装-mihomo--oxidns)）
-- 提供独立的核心安装命令，可选择 Mihomo、OxiDNS 或两者；自动补装缺少的依赖，保留已有核心，只安装所选范围内缺少的核心并创建 systemd / OpenRC 服务。首次安装 Mihomo 时检测 TUN，可用时自动开启，不可用时提示修复方法。核心安装和 Agent 接入分别执行（[核心安装](docs/AGENT_OXIDNS.md#一键安装两个核心)）
-- Shell 支持 Mihomo + OxiDNS 同机接入，独立 Agent 默认端口 8080 / 8082，初始 DNS 端口 1053 / 53；发布时保留用户自定义端口与 DNS 劫持配置，仅在 TUN 和 `auto-redirect` 同时开启时合并本机地址排除规则，让本机 OxiDNS 正常接收查询；普通同机安装自动准备已启用的 TUN 驱动并持久开启 IPv4 转发（[安装说明](docs/AGENT_OXIDNS.md#shell-同机安装-mihomo--oxidns)）
-- Agent 发布前检查 DNS 监听冲突与同机上下游关系，面板保留检测结果和修复建议；当前解析失败与劫持风险只提醒，必要安装环境检测继续保留（[检测范围](docs/AGENT_OXIDNS.md#发布前-dns-检查)）
-- 自动注册与心跳监控
-- 远程推送配置、重启、日志查看
-- Mihomo 面板支持单节点、单组及全部分组测速；全部分组依次测试，可停止后续任务
-- 在 Mihomo 连接菜单编辑来源设备备注，与同一配置空间的 OxiDNS 设备策略共用；按 IP 识别设备，备注不会修改分流策略
-- 连接菜单可将实际记录的域名加入「域名发现」设置的默认直连 / 代理规则集，默认精确匹配，确认后保存；仅有 IP 的连接不转换成域名规则
-- 卡片按注册的服务类型显示 Mihomo、Surge、MosDNS 或 OxiDNS；切换绑定配置不会改变服务类型标签
-- Mihomo、MosDNS、OxiDNS 的「待推送」分别比较当前完整下发文件与上次成功推送的文件指纹，覆盖主配置、订阅节点、规则和自定义文件；修订号仅供诊断
-- OxiDNS 发布前执行原生配置校验，健康检查失败自动恢复旧配置；使用新版 Agent，安装目录要求见 [Agent 说明](docs/AGENT_OXIDNS.md)
+## 界面预览
 
-</td>
-</tr>
-</table>
+以下截图使用演示数据，具体布局以实际版本为准。
 
-Agent 内容核对在后台按实际推送流程准备文件，可能读取远程订阅和规则，但不会推送、重启或替换已校验的节点缓存。订阅读取遵守来源更新间隔，下载响应也会持久复用，避免预览或后台核对反复请求机场；来源间隔为 0 时只使用手动更新得到的节点缓存。页面请求复用核对结果 15 分钟，配置变化后重新核对。远程资源单独变化需等对应刷新间隔和核对缓存到期后的检查才能发现。没有完整历史指纹的旧记录显示「同步状态待确认」，在升级服务端后成功推送一次即可建立记录，无需为此重装 Agent。此状态比较的是下发内容，不是对 Agent 磁盘上所有文件的实时扫描。
+### 数据统计
 
----
+![ConfigFlow 数据统计总览](doc/img/dashboard-demo.png)
 
-## 🚀 快速开始
+### 策略组管理
 
-### Docker Compose 部署（推荐）
+![ConfigFlow 策略组管理](doc/img/policy-groups-demo.png)
+
+## 快速开始
+
+推荐使用 **Docker Compose** 部署。镜像已经包含前端、后端、Sub-Store 和节点测速组件，无需分别安装。
+
+### 1. 准备一个目录
+
+先确认设备已安装 Docker 和 Docker Compose，然后在终端执行：
+
+```bash
+mkdir -p configflow
+cd configflow
+```
+
+这个目录用于保存部署文件和运行数据。
+
+### 2. 创建部署文件
+
+在刚才的目录中新建 `compose.yaml`，复制以下内容。
+
+**启动前，请替换密码和密钥两个占位值。** 密码用于登录面板；密钥用于保护登录凭证，建议使用至少 32 位的随机字符串。
 
 ```yaml
-version: '3.8'
 services:
   config-flow:
     image: thsrite/config-flow:latest
+    container_name: config-flow
     ports:
-      - "80:80"
+      - "5010:80"
     volumes:
       - ./data:/data
     environment:
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=your_password
-      - JWT_SECRET_KEY=your-secret-key
+      DATA_DIR: /data
+      TZ: Asia/Shanghai
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: "replace-with-a-strong-password"
+      JWT_SECRET_KEY: "replace-with-at-least-32-random-characters"
     restart: unless-stopped
 ```
 
-访问 `http://localhost` 即可使用
+| 配置 | 含义 |
+| --- | --- |
+| `5010:80` | 使用设备的 `5010` 端口访问面板；端口被占用时，可改为 `5011:80` 等 |
+| `./data:/data` | 将数据保存在部署文件旁的 `data` 文件夹中，重建容器后仍可保留 |
+| `ADMIN_USERNAME` | 登录用户名，示例为 `admin` |
+| `ADMIN_PASSWORD` | 你设置的登录密码 |
+| `JWT_SECRET_KEY` | 登录凭证的签名密钥，请固定保存，不要每次重启都更换 |
 
-后端默认通过 Waitress 的单进程、8 个固定工作线程处理请求，复用线程及其内存，避免为每次请求创建线程。可通过 `CONFIGFLOW_HTTP_THREADS` 调整为 1–64；同时执行较多耗时任务时可适当增加，超过线程数的请求会排队。`LOG_LEVEL=DEBUG` 保留 Flask 开发服务器及自动重载行为。
+NAS 用户也可以在容器管理工具的项目或 Compose 编辑器中填写同样的内容，并明确选择数据保存目录。
 
-Docker 镜像在 Linux/glibc 生产环境中，仅为后端 Python 进程默认设置 `MALLOC_ARENA_MAX=4` 和 `MALLOC_TRIM_THRESHOLD_=1048576`（1 MiB），减少多个内存池分别保留空闲内存，并让符合条件的释放更早归还堆顶空闲空间；不修改 nginx 或 Sub-Store 的启动环境。已有的同名环境变量或 `GLIBC_TUNABLES` 中对应的 `glibc.malloc.arena_max`、`glibc.malloc.trim_threshold` 分别优先，设置 `CONFIGFLOW_MEMORY_TUNING=0` 可关闭这些默认设置。`LOG_LEVEL=DEBUG` 和非 glibc 环境不应用默认值。固定 trim 阈值也会停止 glibc 自动联动调整 mmap/trim 阈值，可能增加分配和归还内存的开销；不保证所有已释放空间立即归还系统。
+### 3. 启动服务
 
-镜像将 Python 启动器独立安装在源码目录之外，自动更新或回退旧源码不会覆盖它。
-
-> 💡 **提示**：生产环境请务必修改默认密码和 JWT 密钥；镜像已内置 Sub-Store（订阅解析和节点格式转换），无需另外部署，可在「系统设置 → 第三方依赖」检测并在线更新
->
-> 从旧版升级：compose 中的 `sub-store` 服务和 `SUB_STORE_URL` 环境变量已不再使用，可以删除。
-
-## 升级与数据安全
-
-**升级前请确认目标镜像已包含旧版多配置迁移修复，不要仅凭 `latest` 标签判断。** 本节描述当前源码的迁移行为，已发布镜像是否包含修复应以发布记录和镜像摘要为准。
-
-### 升级前检查
-
-1. 记录当前镜像版本或摘要，以及容器 `/data` 对应的宿主机目录。
-2. 停止 ConfigFlow 服务后，备份完整数据目录，包括根 `config.json`、`system.json`、`profiles/`、所有 `.bak` 和缓存文件。**旧版多配置不能只备份根 `config.json`，它可能是更早遗留的数据。**
-3. 使用原 Compose 文件和原数据挂载升级；重要实例建议先复制数据，在隔离副本上验证配置和 Agent 绑定。
+在 `compose.yaml` 所在目录执行：
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-> 仓库内的 Compose 文件位于 `docker/docker-compose.yml`。其中 `./data:/data` 的宿主机路径相对于 Compose 文件所在目录解析；从根目录的旧 Compose 改用此文件时，可能挂载到另一个 `data` 目录。请保留原文件位置，或明确使用原数据目录的绝对路径。
+查看运行状态：
 
-### 迁移行为
-
-| 原数据格式 | 升级处理 |
-|---|---|
-| 原版无版本号的单文件配置 | 资源转为共享资源，策略与生成参数进入默认配置 |
-| schema 2 多配置目录：`system.json`＋`profiles/<id>/config.json` | 优先读取系统索引和各配置文件，忽略残留旧根配置；保留配置 ID、规则顺序、生成参数及 Agent 绑定 |
-| 当前 schema 5 配置 | 直接读取，不因旧目录仍存在而重复迁移 |
-| 不完整数据或不支持的中间格式 | 明确报错，不静默创建默认模板或删除不支持字段 |
-
-同 ID、同定义的资源会合并；同 ID、不同定义的资源会分别保留并重写引用，避免跨配置覆盖。提交前会在 `migrations/<时间戳-标识>/migration/` 保存旧配置主文件和备份文件快照。
-
-### 升级后配置变少怎么办
-
-- **不要重置或清理旧文件。** 先核对 `/data` 的实际挂载、启动日志和升级前备份。
-- 若此前的错误升级已经写入 schema 5，修复版不会自动用旧文件覆盖它，以免丢失升级后新增的数据。
-- 应从升级前的完整快照创建副本，使用含修复的版本迁移；核对全部配置、资源和 Agent 绑定后，再停服切换数据目录。不要只修改 `schema_version`，也不要直接删除生产根配置。
-
-详细支持范围及恢复约束见[多配置、数据迁移与备份说明](doc/design/multi-config-management.md#升级备份与恢复)。
-
----
-
-## 📖 文档
-
-详细使用文档请查看：**[ConfigFlow 使用指南](doc/README.md)**
-
----
-
-## 📸 截图预览
-
-以下截图来自当前版本的本地隔离演示环境，使用虚构配置空间、节点与策略数据；不代表真实线上监控或生产配置。
-
-<div align="center">
-<h3>数据统计总览</h3>
-<img src="doc/img/dashboard-demo.png" alt="ConfigFlow 新版数据统计总览：演示配置空间、引用节点、配置健康与运行状态" title="数据统计总览（演示数据）" width="100%" />
-<br/><br/>
-<h3>当前配置的策略组</h3>
-<img src="doc/img/policy-groups-demo.png" alt="ConfigFlow 新版策略组：日常工作演示配置中的手动选择、自动测速及共享节点引用" title="策略组管理（演示数据）" width="100%" />
-</div>
-
----
-
-## 🏗️ 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| **后端** | Python 3.11 • Flask • PyYAML |
-| **前端** | Vue 3 • TypeScript • Tailwind CSS 4 • Reka UI • Vite |
-| **订阅解析** | [Sub-Store](https://github.com/sub-store-org/Sub-Store) |
-| **部署** | Docker • Nginx • Supervisor |
-
----
-
-## 📁 项目结构
-
+```bash
+docker compose ps
 ```
-config-flow/
-├── backend/                # Python Flask 后端
-│   ├── app.py             # 主应用入口
-│   ├── common/            # 公共模块 (认证、配置)
-│   ├── routes/            # API 路由
-│   ├── mcp_server/        # MCP 服务端 (对外暴露 /mcp)
-│   ├── converters/        # 配置生成器 (Mihomo/Surge/MosDNS)
-│   ├── agents/            # Agent 管理
-│   └── utils/             # 工具函数
-├── frontend/              # Vue 3 前端
+
+遇到启动问题时查看日志：
+
+```bash
+docker compose logs --tail=100 config-flow
+```
+
+### 4. 打开面板
+
+| 部署位置 | 浏览器中输入 |
+| --- | --- |
+| 当前电脑 | `http://localhost:5010` |
+| NAS 或其他服务器 | `http://设备的IP地址:5010` |
+
+例如，NAS 的 IP 是 `192.168.1.10`，就访问：
+
+```text
+http://192.168.1.10:5010
+```
+
+使用刚才设置的用户名和密码登录。
+
+接着打开 **系统 → 系统设置**：
+
+1. 将「服务域名」填为客户端和 Agent 都能访问的完整地址，例如 `http://192.168.1.10:5010`。
+2. 在「访问令牌」中生成并保存令牌，用于保护配置链接。
+
+> 有其他设备需要访问时，服务域名请填写 NAS 或服务器的实际地址。`localhost` 只表示发起访问的设备自己。
+>
+> **访问令牌同时授予 MCP 管理权限。含令牌的配置链接请像密码一样保管，不要公开分享。**
+
+## 第一次使用
+
+下面以生成 **Mihomo 配置**为例。
+
+### 第一步：新建配置空间
+
+打开 **系统 → 配置空间 → 新建配置空间**，填写：
+
+| 项目 | 示例 |
+| --- | --- |
+| 标识 ID | `home` |
+| 名称 | `家庭网络` |
+| 说明 | 可选，可以留空 |
+
+保存后，从配置选择器切换到「家庭网络」。
+
+配置空间可以理解为一套独立方案。以后需要办公、备用等方案时，可以再创建或复制。
+
+### 第二步：添加订阅
+
+打开 **共享资源 → 订阅来源 → 添加订阅**：
+
+1. 起一个方便辨认的名字。
+2. 粘贴自己的订阅链接。
+3. 按提供方说明选择格式；Clash / Mihomo 格式选择 Mihomo。
+4. 第一次使用可保留默认更新间隔，保存后手动更新一次，确认能看到节点。
+
+没有订阅、只有单个节点链接时，可以到 **共享资源 → 节点库** 添加。
+
+### 第三步：创建策略组
+
+策略组就是“一组可供选择的出口”。
+
+打开 **当前配置 → 策略组 → 添加策略组**：
+
+1. 名称填写 `代理选择`。
+2. 类型选择「手动选择」。
+3. 在「订阅筛选」中选择刚才添加的订阅；使用手动节点时，在「手动节点」中选择它们。
+4. 第一次使用时，节点筛选条件可以留空。
+5. 保存。
+
+这样，这个组就能使用所选订阅或手动节点。
+
+### 第四步：添加分流规则
+
+打开 **当前配置 → 策略规则 → 添加规则**，可以先用下面两条熟悉操作：
+
+| 顺序 | 类型 | 值 | 策略 | 效果 |
+| --- | --- | --- | --- | --- |
+| 1 | `DOMAIN-SUFFIX` | `example.com` | `DIRECT` | `example.com` 及其子域名直接连接 |
+| 2 | `MATCH` | 留空 | `代理选择` | 其他请求交给刚才创建的策略组 |
+
+**规则从上往下匹配，先匹配到的生效；`MATCH` 是兜底规则，应放在最后。**
+
+添加完成后，打开「更多 → 调整顺序」，把 `DOMAIN-SUFFIX` 放在前面、`MATCH` 放在最后，再保存顺序。新添加的规则会出现在列表顶部，需要手动确认位置。
+
+这是一份最小操作示例。日常使用时，可以在「规则库」添加所需规则集，再通过「策略规则 → 更多 → 添加规则集」指定它们使用的策略，并放在兜底规则之前。
+
+页面中的「命中模拟」可以帮助检查某个域名或 IP 会匹配到哪里。
+
+### 第五步：生成并导入客户端
+
+打开 **当前配置 → 配置生成**：
+
+1. 选择 **Mihomo**。
+2. 点击「生成」，检查生成结果；出现错误时，按提示修改。
+3. 点击「下载」，将文件导入自己的 Mihomo 客户端。
+4. 也可以复制页面中的配置 URL，在客户端添加远程配置。
+5. 在客户端启用这份配置，并选择可用节点。
+
+使用配置链接，或配置内引用了在线订阅、规则时，客户端需要能持续访问 ConfigFlow。
+
+## 多配置如何共用资源
+
+| 内容 | 保存范围 |
+| --- | --- |
+| 订阅、节点、订阅聚合、规则库 | 所有配置空间共享 |
+| 策略组、代理链、规则目标与顺序、各生成目标的参数 | 每个配置空间独立 |
+| 服务域名、访问令牌、WebDAV、Agent 清单 | 系统全局 |
+| Agent 实际使用的配置 | 由该 Agent 绑定的配置空间决定 |
+
+- 添加共享订阅后，直接在策略组中选择它即可；没有引用的资源不会自动加入生成结果。
+- 修改共享资源，会影响引用它的配置空间。
+- 切换页面顶部的配置空间，只改变当前页面正在编辑的方案。
+- Agent 始终使用自己绑定的配置，浏览器切换配置不会改变它的绑定。
+
+详细说明见 [多配置、迁移与备份](doc/design/multi-config-management.md)。
+
+## 远程设备与网关
+
+需要管理服务器或网关时，打开 **系统 → Agent**，按页面生成安装命令，在目标设备执行，再绑定配置空间并发布。
+
+| 场景 | 使用入口与说明 |
+| --- | --- |
+| 安装 Mihomo / OxiDNS 核心及 Agent | [安装、发布与回滚指南](docs/AGENT_OXIDNS.md) |
+| Linux 设备作为选择性网关 | 「Agent → 生成安装脚本 → Linux 选择性网关」，参阅 [网关指南](docs/LINUX_GATEWAY.md) |
+| 接入 RouterOS 并管理路由 | 「当前配置 → 上游路由」，参阅 [RouterOS 安装指南](docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) |
+| 设置 OxiDNS 分流、缓存和插件 | 「配置生成 → OxiDNS → 设置」，参阅 [OxiDNS 配置指南](docs/OXIDNS.md) |
+| 查看 DNS 统计和查询历史 | 「总览 → OxiDNS 面板」；查询历史需先在配置中开启查询记录 |
+
+Mihomo 和 OxiDNS 支持按设备开启规则自动同步；OxiDNS 还可跟随已成功发布的 Mihomo DNS 监听地址。相关功能需要匹配的 Agent 版本，并先成功手动发布一次配置，具体条件见安装指南。
+
+Linux 网关向导适用于文档列出的 Linux 网络环境，包含网络检查、规则选择、安装、发布和转发应用步骤。建议先验证一台客户端，再扩大使用范围。
+
+## 部署参数
+
+以下环境变量在修改部署文件并重建容器后生效：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `ADMIN_USERNAME` | 空 | 登录用户名，与密码同时设置后开启登录验证 |
+| `ADMIN_PASSWORD` | 空 | 登录密码 |
+| `JWT_SECRET_KEY` | 进程启动时随机生成 | 建议自行固定设置，避免重启后已有登录凭证失效 |
+| `DATA_DIR` | `/data` | 数据保存目录，需要持久挂载 |
+| `TZ` | 镜像中为 `Asia/Shanghai` | 容器时区 |
+| `CONFIGFLOW_HTTP_THREADS` | `8` | 后端同时处理请求的工作线程数，可设为 `1–64` |
+| `LOG_LEVEL` | `INFO` | 日志级别；`DEBUG` 会启用开发调试模式 |
+
+示例已开启登录验证。若用户名或密码未设置完整，则不会开启账号密码登录。
+
+## 备份与升级
+
+### 日常备份
+
+在 **系统设置 → 备份与恢复**中选择：
+
+| 操作 | 适合用途 |
+| --- | --- |
+| 导出全部数据 | 备份共享资源、全部配置空间、系统设置和 Agent |
+| 脱敏导出 | 隐藏敏感信息后分享排查，不能代替恢复备份 |
+| WebDAV 备份 | 将完整配置数据备份到自己的 WebDAV 服务，可开启自动备份 |
+| 配置空间中的导入 / 导出 | 迁移单个空间的引用与独立参数，不能代替全量备份 |
+
+**导入全部数据会覆盖全局数据，不只影响当前配置空间。完整备份包含凭据，请妥善保存。**
+
+### 更新镜像
+
+升级前，记录当前镜像版本和数据目录，并备份完整数据目录。
+
+以下命令适用于上文的 `./data:/data` 示例，请在 `compose.yaml` 所在目录执行：
+
+```bash
+docker compose stop
+
+cp -a ./data "./data-backup-$(date +%Y%m%d-%H%M%S)"
+```
+
+确认备份成功后，再继续更新：
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs --tail=100 config-flow
+```
+
+使用 NAS 管理工具部署时，也可以先停止项目、复制实际数据目录，再更新镜像并启动。
+
+### 从旧版升级
+
+- 当前源码支持原版单文件配置，以及旧版 `system.json` 加 `profiles/<id>/config.json` 的多配置目录迁移。
+- **旧版多配置必须备份整个数据目录，不能只复制根目录的 `config.json`。**
+- 升级前请确认目标镜像已包含所需迁移修复；仅看 `latest` 标签无法判断具体包含哪些修改。
+- 已成功写入当前格式的数据，不会在重启时被旧目录自动覆盖。
+- 迁移后发现配置减少时，先核对数据挂载、日志和备份，保留旧文件；不要通过删除配置或修改版本号尝试恢复。
+
+如果改用仓库中的 `docker/docker-compose.yml`，注意它的 `./data` 相对于 `docker/` 目录解析。迁移部署文件时，请明确填写原数据目录，避免挂载到一个新的空目录。
+
+完整迁移范围与恢复方法见 [升级、备份与恢复说明](doc/design/multi-config-management.md#升级备份与恢复)。
+
+## 常见问题
+
+### 需要另外部署 Sub-Store 吗？
+
+使用当前 Docker 镜像时不需要，镜像已经内置。可以在「系统设置 → 第三方依赖」检查状态并在线更新。
+
+旧部署文件中的独立 `sub-store` 服务和 `SUB_STORE_URL` 环境变量已不再使用。
+
+### 订阅更新间隔和 Mihomo 同步间隔有什么区别？
+
+| 设置位置 | 控制什么 | 设为 `0` 时 |
+| --- | --- | --- |
+| 订阅来源 → 编辑 → 订阅源更新间隔 | ConfigFlow 多久允许重新访问一次订阅提供方 | 只使用手动更新得到的缓存；首次使用前需手动更新 |
+| 配置生成 → Mihomo → 基础配置 → 订阅同步间隔 | Mihomo 多久从 ConfigFlow 同步订阅和聚合，默认 3600 秒 | 关闭这项定时同步 |
+
+订阅源的正数间隔表示：**到期后的下一次请求可以刷新**，并不是面板每天在固定时间主动更新。
+
+Mihomo 同步间隔修改后，需要保存并发布到设备才会生效。连续点击更新时，也可能复用缓存或进入失败后的等待期，请按页面提示处理。
+
+### 添加了订阅，为什么生成的配置里没有节点？
+
+先确认已成功更新订阅，再检查当前配置的策略组是否选择了这个订阅。共享资源需要被当前配置使用，才会加入生成结果。
+
+### 为什么看不到「订阅聚合」？
+
+到「系统设置 → 服务配置」开启「订阅聚合」，资源分组中就会显示入口。
+
+### 节点库测速正常，设备上却不正常？
+
+节点库测速从 **ConfigFlow 所在机器**发起，设备实际使用的是自己的网络，两者的 DNS、出口和连接情况可能不同。
+
+节点服务器域名被解析为 Fake-IP 时，可以在「节点库 → 测速设置 → 测速 DNS」中填写能够返回真实 IP 的 DNS。详见 [节点测速说明](docs/NODE_LATENCY.md)。
+
+### 为什么不能删除订阅、节点或规则资源？
+
+资源可能仍被配置空间或聚合使用。先根据页面提示取消相关引用，再删除。删除订阅前，还需要移除从该订阅获取的节点。
+
+## 项目结构
+
+```text
+configflow/
+├── backend/                   # Python 后端
+│   ├── app.py                 # 应用入口
+│   ├── common/                # 认证、配置与数据管理
+│   ├── routes/                # API 接口
+│   ├── converters/            # 五种目标格式的生成器
+│   ├── agents/                # 设备管理与 Go Agent
+│   ├── node-probe/            # 独立节点测速组件
+│   ├── mcp_server/            # MCP 服务
+│   └── utils/                 # 订阅、规则、备份等工具
+├── frontend/                  # Vue 3 + TypeScript 前端
 │   └── src/
-│       ├── views/         # 页面组件
-│       ├── components/    # 公共组件
-│       └── api/           # API 调用
-├── doc/                   # 项目文档
-└── docker/                # 容器构建与部署配置
-    ├── Dockerfile
-    ├── docker-compose.yml
-    ├── nginx.conf
-    └── supervisord.conf
+│       ├── views/             # 页面
+│       ├── components/        # 组件
+│       └── api/               # 接口调用
+├── docker/                    # 镜像构建与部署文件
+├── doc/                       # 入门和功能使用文档
+├── docs/                      # 专题部署与维护文档
+├── scripts/                   # 检查与测试工具
+└── .github/workflows/         # 自动检查与镜像发布
 ```
 
----
+| 部分 | 主要技术 |
+| --- | --- |
+| 后端 | Python 3.11、Flask、Waitress、PyYAML |
+| 前端 | Vue 3、TypeScript、Vite、Tailwind CSS 4、Reka UI |
+| 订阅处理 | 内置 Sub-Store |
+| 设备与测速 | Go Agent、独立节点测速程序 |
+| 容器部署 | Docker、Nginx、Supervisor |
 
-## 📄 许可证
+## 详细文档
 
-主应用基于 [MIT License](LICENSE) 开源。独立节点测速组件复用 Mihomo 协议实现，按 [GPLv3](backend/node-probe/LICENSE) 分发，部署与配置见[节点库代理延迟](docs/NODE_LATENCY.md)。
+| 我想了解…… | 文档 |
+| --- | --- |
+| 完整功能和使用流程 | [使用指南](doc/README.md) |
+| Docker 部署 | [部署指南](doc/module/deployment.md) |
+| 策略组设置 | [策略组说明](doc/module/proxy-groups.md) |
+| 分流规则设置 | [规则说明](doc/module/rules.md) |
+| 多配置与旧数据迁移 | [多配置管理](doc/design/multi-config-management.md) |
+| OxiDNS 参数和配置包 | [OxiDNS 配置与发布](docs/OXIDNS.md) |
+| Agent 安装、监控与回滚 | [Agent 指南](docs/AGENT_OXIDNS.md) |
+| Linux 网关安装 | [Linux 选择性网关](docs/LINUX_GATEWAY.md) |
+| RouterOS 配合部署 | [ConfigFlow + RouterOS](docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md) |
+| 域名采集和探测 | [域名发现](doc/module/domain-discovery.md) |
+| 节点测速原理与配置 | [节点库代理延迟](docs/NODE_LATENCY.md) |
+| 接入 MCP 客户端 | [MCP 服务](doc/module/mcp.md) |
+| 项目回归检查 | [CI 与测试说明](scripts/ci/README.md) |
+
+## 许可证
+
+主应用使用 [MIT License](LICENSE)。
+
+独立节点测速组件复用 Mihomo 协议实现，按 [GPLv3](backend/node-probe/LICENSE) 分发，相关源码和依赖位于 `backend/node-probe/`。
+
+## 交流
+
+- [Telegram 交流群](https://t.me/+fLt02_w38205OTNh)
 
 ---
 
