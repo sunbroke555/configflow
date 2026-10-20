@@ -344,6 +344,15 @@ def resource_is_read(path, readers):
     return False
 
 
+def replace_download_entries(download, entries):
+    """Detach edited args from other YAML alias consumers, including entries.
+
+    Copying the whole document preserves aliases between its plugins. Rebind
+    only this consumer so custom downloaders keep their original parameters.
+    """
+    download['args'] = deepcopy({**download['args'], 'downloads': entries})
+
+
 def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
     plugins = _plugins(document)
     download = plugins.get('rules_download')
@@ -394,7 +403,7 @@ def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
         elif resource_is_read(location, readers):
             output.append(entry)
     output.extend(desired_entries.values())
-    download['args']['downloads'] = output
+    replace_download_entries(download, output)
 
 
 def apply_routing(document, settings, config, changes, base_url=''):

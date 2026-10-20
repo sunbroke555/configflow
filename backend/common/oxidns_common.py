@@ -1037,7 +1037,7 @@ def _patch_resources(ctx, changes, config, base_url):
         if reload and reload.get('type') == 'reload_provider' and isinstance(reload.get('args'), list):
             reload['args'] = [entry for entry in reload['args'] if entry != '$adguard_rules']
     if any(field in changes for field in ('adguard.urls', 'adguard.content', 'adguard.enabled')) and ctx.plugin('rules_download'):
-        from backend.common.oxidns_common_routing import resource_downloads
+        from backend.common.oxidns_common_routing import resource_downloads, replace_download_entries
         downloader = ctx.plugin('rules_download')
         reload = ctx.plugin('rules_reload')
         if downloader.get('type') != 'download' or not isinstance(downloader.get('args'), dict) or not isinstance(downloader['args'].get('downloads'), list) or (reload and (reload.get('type') != 'reload_provider' or not isinstance(reload.get('args'), list))):
@@ -1054,7 +1054,7 @@ def _patch_resources(ctx, changes, config, base_url):
             elif location in desired:
                 output.append(entry)
                 desired.pop(location)
-        downloader['args']['downloads'] = output + list(desired.values())
+        replace_download_entries(downloader, output + list(desired.values()))
         if reload and ctx.plugin('adguard_rules') and '$adguard_rules' not in reload['args']:
             reload['args'].append('$adguard_rules')
 
