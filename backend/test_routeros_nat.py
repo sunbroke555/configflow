@@ -380,3 +380,30 @@ def test_absent_aggregate_wrong_specific_cannot_use_connected_gateway_as_nat_pro
     assert nat_item(report)['status'] == 'unknown'
     assert next(stage['ops'] for stage in plan['stages'] if stage['key'] == 'routes') == []
     assert session.writes == []
+
+
+def test_release_verifies_not_required_with_the_assessment_the_preview_used():
+    # A LAN-egress hairpin for DNS shares the proxy egress but cannot match
+    # client traffic to the proxy CIDR. The preview proves that with the
+    # ordered-chain simulation; the release readback must not fall back to the
+    # egress-only check and fail an unchanged NAT stage.
+    hairpin = {'.id': '*H', 'chain': 'srcnat', 'action': 'masquerade', 'disabled': 'false',
+               'out-interface': 'lan4', 'src-address': '192.168.0.0/24', 'dst-address': '192.168.0.2',
+               'protocol': 'udp', 'dst-port': '53', 'comment': 'manual dns hairpin'}
+    session = nat_session(nats=[*WAN_RULES, hairpin])
+    driver, state, report, plan = inspect(session)
+    assert assess_nat(CIDR, GATEWAY, state)['status'] == 'missing'
+    assert nat_item(report)['status'] == 'not_required'
+    assert plan['checks']['nat_not_required'] == [{'cidr': CIDR, 'gateway': GATEWAY}]
+    result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+    assert result['ok'], result
+    assert all(method == 'GET' for method, *_ in session.calls if _[0] in (NAT, ROUTES))
+
+
+def test_release_still_rejects_a_new_translating_rule_after_the_preview():
+    session = nat_session()
+    driver, _, _, plan = inspect(session)
+    session.rows[NAT].append({'.id': '*N', 'chain': 'srcnat', 'action': 'masquerade', 'disabled': 'false',
+                              'out-interface': 'lan4'})
+    result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+    assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
