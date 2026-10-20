@@ -21,6 +21,19 @@ class WebDAVConfigurationError(ValueError):
     pass
 
 
+def describe_webdav_error(error):
+    """Keep status codes, including wrapped causes, without remote URLs or bodies."""
+    detail = type(error).__name__
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        status = getattr(error, 'code', None)
+        if isinstance(status, int) and 100 <= status <= 599:
+            return f'{detail} HTTP {status}'
+        error = error.__cause__
+    return detail
+
+
 def upload_backup(snapshot, settings):
     """Upload an export_all snapshot; temporary files are removed on every outcome."""
     from webdav3.client import Client
@@ -45,7 +58,8 @@ def upload_backup(snapshot, settings):
                 try:
                     client.mkdir(current)
                 except Exception as error:
-                    raise WebDAVConfigurationError(f'无法创建目录 {current}：{error}') from error
+                    raise WebDAVConfigurationError(
+                        f'无法创建目录 {current}：{describe_webdav_error(error)}') from error
 
     filename = f'config_backup_{datetime.now().strftime("%Y%m%d_%H%M%S_%f")}.json'
     temporary = None
@@ -115,8 +129,8 @@ class _AutoBackupWorker:
                 if settings.get('auto_backup'):
                     upload_backup(snapshot, settings)
             except Exception as error:
-                # Credentials and remote exception text may contain secrets.
-                logger.warning('WebDAV 自动备份失败（%s）；已保存的配置不受影响', type(error).__name__)
+                logger.warning('WebDAV 自动备份失败（%s）；已保存的配置不受影响',
+                               describe_webdav_error(error))
             # No retry: a later configuration change may schedule another backup.
 
 
