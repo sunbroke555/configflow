@@ -27,6 +27,7 @@ from backend.converters.mihomo import generate_mihomo_config, get_mihomo_provide
 from backend.converters.mosdns import generate_mosdns_config, get_mosdns_ruleset_downloads, get_mosdns_custom_files
 from backend.converters.surge import generate_surge_config
 from backend.routes import agents_bp as bp
+from backend.common.config_export import redact_secrets_in_text
 from backend.common.auth import is_token_within_length, parse_bearer_token, require_auth
 from backend.common.config import get_config, get_default_profile_id, get_repository
 from backend.common.config_repository import ProfileRepositoryError
@@ -869,6 +870,9 @@ def get_agent_logs(agent_id):
         source = request.args.get('source', '')  # Agent 解析出的日志来源
         agent_manager = get_agent_manager()
         result = agent_manager.get_agent_logs(agent_id, lines, log_path=log_path, source=source)
+        for key in ('logs', 'error_logs'):
+            if key in result:
+                result[key] = redact_secrets_in_text(result[key])
         return jsonify(result), 200 if result.get('success') else 500
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
