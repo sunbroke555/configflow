@@ -707,6 +707,7 @@ import MultiSelect from '@/components/common/MultiSelect.vue'
 import { notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { optionHelp } from '@/lib/optionCopy'
+import { isDnsRuleType } from '@/lib/oxidns'
 import { generateApi, customConfigApi, ruleApi, ruleSetApi, proxyGroupApi, serverDomainApi, configTokenApi, type PublishGuard } from '@/api'
 import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'
@@ -1326,12 +1327,15 @@ const rulesetOptionsExcept = (taken: string[], mine: string[]) =>
     .filter(rs => !taken.includes(rs.id) || mine.includes(rs.id))
     .map(rs => ({ value: rs.id, label: rs.name }))
 
+/* 目前只能把域名和 IP-CIDR 类规则转换为 MosDNS 规则；已选中的其他类型保留并标注，便于移除 */
 const ruleOptionsExcept = (taken: string[], mine: string[]) =>
   availableRules.value
-    .filter(rule => !taken.includes(rule.id) || mine.includes(rule.id))
+    .filter(rule => (!taken.includes(rule.id) || mine.includes(rule.id))
+      && (isDnsRuleType(rule.rule_type) || mine.includes(rule.id)))
     .map(rule => ({
       value: rule.id,
       label: `${rule.rule_type}: ${rule.value} → ${rule.policy}`
+        + (isDnsRuleType(rule.rule_type) ? '' : '（暂不能转换为 MosDNS 规则，不会生效）')
     }))
 
 const directRulesetOptions = computed(() =>

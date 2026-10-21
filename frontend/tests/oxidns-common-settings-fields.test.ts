@@ -71,6 +71,19 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('change')).toHaveLength(1)
   })
 
+  it('lists only DNS-convertible single rules and flags selected unsupported ones', async () => {
+    const wrapper = await render({rules: [
+      {id: 'direct', name: 'Direct', rule_type: 'DOMAIN'}, {id: 'geo', name: 'Geo', rule_type: 'GEOIP'},
+      {id: 'port', name: 'Port', rule_type: 'DST-PORT'}, {id: 'cidr', name: 'Cidr', rule_type: 'IP-CIDR6'},
+    ], values: {...values(), direct_rules: ['direct'], proxy_rules: ['geo']}})
+    await click('分流规则')
+    const [, , direct, proxy] = wrapper.findAllComponents(MultiSelect)
+    expect(direct.props('options').map((item: any) => item.value)).toEqual(['direct', 'cidr'])
+    expect(proxy.props('options')).toEqual([
+      {value: 'geo', label: 'Geo（暂不能转换为 OxiDNS 规则，请移除）'}, {value: 'cidr', label: 'Cidr'},
+    ])
+  })
+
   it('sends rule selections and feature toggles as current field changes', async () => {
     const wrapper = await render()
     await click('分流规则')

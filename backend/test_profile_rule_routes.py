@@ -108,6 +108,21 @@ def test_dns_selection_is_cleaned_atomically_when_rule_is_deleted(compositions):
     assert repository.get_profile('default') == before
 
 
+def test_selected_dns_rule_cannot_change_to_an_unconvertible_type(compositions):
+    client, repository, headers = compositions
+    assert client.post('/api/mosdns/rulesets', headers=headers, json={'proxy_rules': ['inline']}).status_code == 200
+    before = repository.get_profile('other')
+    response = client.put('/api/rules/inline', headers=headers, json={'rule_type': 'GEOIP', 'value': 'CN'})
+    assert response.status_code == 400
+    assert 'MosDNS 代理规则' in response.get_json()['message']
+    assert repository.get_profile('other') == before
+    # Convertible types and unrelated edits still save.
+    assert client.put('/api/rules/inline', headers=headers, json={'rule_type': 'IP-CIDR', 'value': '10.0.0.0/8'}).status_code == 200
+    assert client.put('/api/rules/inline', headers=headers, json={'policy': 'Proxy'}).status_code == 200
+    # Unselected rules may use any type.
+    assert client.put('/api/rules/inline', headers={'X-ConfigFlow-Profile': 'default'}, json={'rule_type': 'GEOIP'}).status_code == 200
+
+
 def test_scoped_content_rule_proxy_avoids_network(compositions, monkeypatch):
     client, repository, headers = compositions
     def unexpected_network(*args, **kwargs):

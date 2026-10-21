@@ -88,6 +88,20 @@ def handle_rules():
         return jsonify({'success': True, 'data': rule})
 
 
+def _ensure_dns_rule_type(profile, rule):
+    """A type change must not strand a DNS selection the generator cannot express."""
+    from backend.converters.mosdns import DNS_RULE_TYPES
+    if rule.get('rule_type') in DNS_RULE_TYPES:
+        return
+    for engine, label in (('oxidns', 'OxiDNS'), ('mosdns', 'MosDNS')):
+        settings = profile.get(engine) if isinstance(profile.get(engine), dict) else {}
+        for key, group in (('direct_rules', '直连规则'), ('proxy_rules', '代理规则')):
+            if isinstance(settings.get(key), list) and rule['id'] in settings[key]:
+                raise ProfileValidationError(
+                    f'此规则已用于 {label} {group}，{rule.get("rule_type")} 类型暂不能转换为 {label} 规则。'
+                    f'请先在 {label} 设置中取消选择，或新建一条规则。')
+
+
 def _mutate_rule(rule_id, item_type=None):
     from werkzeug.exceptions import NotFound
     payload = request.get_json() if request.method == 'PUT' else None
@@ -114,6 +128,9 @@ def _mutate_rule(rule_id, item_type=None):
         if item_type:
             updated['itemType'] = item_type
         normalize_rule_config(updated)
+        # Only a type change is checked, so other edits to older selections still save.
+        if updated['itemType'] == 'rule' and updated.get('rule_type') != original.get('rule_type'):
+            _ensure_dns_rule_type(profile, updated)
         items[items.index(original)] = updated
         result.update(updated)
     update_config_transaction(mutate)

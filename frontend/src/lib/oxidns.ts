@@ -166,3 +166,7 @@ export const applyVerifiedOxidnsTemplate = (settings: Record<string, any>) => Ob
   cache_enabled: true, cache_size: 10240, cache_lazy_ttl: 300, cache_dump_enabled: false,
   probe_cache_enabled: true, probe_cache_size: 2048
 })
+
+/** 能转换为 DNS 匹配的单条规则类型，与后端 oxidns._routing_groups / mosdns._single_rule_groups 一致 */
+export const DNS_RULE_TYPES = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'IP-CIDR', 'IP-CIDR6']
+export const isDnsRuleType = (type: unknown) => typeof type === 'string' && DNS_RULE_TYPES.includes(type)

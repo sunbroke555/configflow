@@ -9,7 +9,7 @@ const values = () => ({ worker_threads: 8, listen: '127.0.0.1:5353', local_dns: 
   api: {enabled: true, listen: '127.0.0.1:9199'}, log: {level: 'info'},
   ...Object.fromEntries(featureGroups.map(feature => [feature.key, {enabled: false, args: {}}])) })
 async function render(extra: Record<string, any> = {}) {
-  const wrapper = mount(OxidnsCommonSettings, {attachTo: document.body, props: {values: values(), capabilities: {}, rules: [{id: 'direct', name: 'Direct'}, {id: 'proxy', name: 'Proxy'}], ruleSets: [], ...extra}})
+  const wrapper = mount(OxidnsCommonSettings, {attachTo: document.body, props: {values: values(), capabilities: {}, rules: [{id: 'direct', name: 'Direct', rule_type: 'DOMAIN'}, {id: 'proxy', name: 'Proxy', rule_type: 'IP-CIDR'}], ruleSets: [], ...extra}})
   wrappers.push(wrapper)
   await flushPromises()
   return wrapper

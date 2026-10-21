@@ -15,7 +15,7 @@ from backend.common.oxidns_settings import normalize_oxidns_settings, OxidnsSett
 from backend.common.oxidns_native import (managed_files, native_document,
     relative_resource, resource_references)
 from backend.converters.mosdns import (
-    _build_rule_proxy_url, _parse_custom_matches, _ruleset_parts,
+    DNS_RULE_TYPES, _build_rule_proxy_url, _parse_custom_matches, _ruleset_parts,
     convert_rule_content_for_mosdns, parse_dns_upstreams,
     split_rules_and_rulesets,
 )
@@ -162,8 +162,8 @@ def _routing_groups(config, settings):
         else:
             kind, value = item.get('rule_type', ''), item.get('value', '')
             part = 'ip' if kind in ('IP-CIDR', 'IP-CIDR6') else 'domain'
-            if kind not in ('DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'IP-CIDR', 'IP-CIDR6'):
-                raise OxidnsSettingsError(f'OxiDNS 不支持所选规则类型：{kind}')
+            if kind not in DNS_RULE_TYPES:
+                raise OxidnsSettingsError(f'所选规则类型暂不能转换为 OxiDNS 规则：{kind}')
             converted = convert_rule_content_for_mosdns(f'{kind},{value}', part).strip()
             if not converted or converted.startswith('#'):
                 raise OxidnsSettingsError('所选单条规则无法转换为 DNS 规则')
