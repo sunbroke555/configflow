@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, reactive } from 'vue'
 import { agentApi, customConfigApi, mihomoPanelApi, profileApi } from '@/api'
+import { invalidateAgentSummaries } from '@/lib/agentSummaries'
 import { notify } from '@/lib/feedback'
 import { setActiveProfileId } from '@/profileContext'
 import MihomoPanel from '@/views/MihomoPanel.vue'
@@ -41,6 +42,8 @@ beforeEach(() => {
   routing.route = reactive({ query: { agent: 'gw' } })
   setActiveProfileId('sidebar')
   vi.spyOn(agentApi, 'getAll').mockResolvedValue(response([device]))
+  vi.spyOn(agentApi, 'summaries').mockResolvedValue(response([device]))
+  invalidateAgentSummaries()
   vi.spyOn(profileApi, 'list').mockResolvedValue(response(profiles))
   vi.spyOn(mihomoPanelApi, 'version').mockResolvedValue(response({ data: { version: 'v1.19.0' } }))
   vi.spyOn(mihomoPanelApi, 'configs').mockResolvedValue(response({ data: { mode: 'rule' } }))

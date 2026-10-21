@@ -772,6 +772,10 @@ def handle_agents():
     agent_manager = get_agent_manager()
 
     if request.method == 'GET':
+        if request.args.get('summary') == '1':
+            # Device pickers and live polling need no content comparison, which
+            # loads and hashes each profile's full configuration.
+            return jsonify([_public_agent(agent) for agent in agent_manager.get_all_agents()]), 200
         snapshots = {}
         agents = [_agent_with_content_sync(agent, snapshots) for agent in agent_manager.get_all_agents()]
         from backend.agents.upgrades import artifacts

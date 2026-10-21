@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { delayText, delayTone, latestDelay, orderedGroups, type MihomoProxy } from '@/types/mihomo'
 
 const proxy = (name: string, type: string, extra: Partial<MihomoProxy> = {}): MihomoProxy => ({ name, type, ...extra })
@@ -40,6 +40,7 @@ import MihomoPanel from '@/views/MihomoPanel.vue'
 import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
 import MihomoRules from '@/components/mihomo/MihomoRules.vue'
 import { agentApi, mihomoPanelApi } from '@/api'
+import { invalidateAgentSummaries } from '@/lib/agentSummaries'
 
 const routeState = vi.hoisted(() => ({ route: null as any, replace: vi.fn() }))
 vi.mock('vue-router', () => ({ useRoute: () => routeState.route, useRouter: () => ({ replace: routeState.replace, push: vi.fn() }) }))
@@ -47,7 +48,7 @@ vi.mock('@/api', () => {
   const ok = (data: unknown) => vi.fn().mockResolvedValue({ data: { success: true, data } })
   return {
     clientToolsApi: { notes: vi.fn().mockResolvedValue({ data: { success: true, notes: {} } }) },
-    agentApi: { getAll: vi.fn() },
+    agentApi: { getAll: vi.fn(), summaries: vi.fn() },
     mihomoPanelApi: {
       version: ok({ version: 'v1.19.0' }),
       configs: ok({ mode: 'Rule' }),
@@ -71,9 +72,10 @@ vi.mock('@/api', () => {
 vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 
 describe('mihomo panel view', () => {
+  beforeEach(() => invalidateAgentSummaries())
   it('picks a mihomo agent and renders groups with the current node', async () => {
     routeState.route = reactive({ query: {} })
-    vi.mocked(agentApi.getAll).mockResolvedValue({ data: [
+    vi.mocked(agentApi.summaries).mockResolvedValue({ data: [
       { id: 'dns', name: 'DNS', service_type: 'oxidns', status: 'online' },
       { id: 'gw', name: 'Gateway', service_type: 'mihomo', status: 'online', host: '192.0.2.1' }
     ] } as any)

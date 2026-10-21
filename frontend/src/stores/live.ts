@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import { agentApi } from '@/api'
+import { loadAgentSummaries } from '@/lib/agentSummaries'
 import { useProfileStore } from '@/stores/profile'
 
 /**
@@ -52,7 +52,7 @@ const poll = async () => {
   if (document.hidden || inflight) return
   inflight = true
   try {
-    const { data } = await agentApi.getAll()
+    const data = await loadAgentSummaries()
     agents.value = Array.isArray(data) ? data : []
     loaded.value = true
     const t = throughput.value

@@ -1,5 +1,5 @@
 import { onUnmounted, ref } from 'vue'
-import { agentApi } from '@/api'
+import { loadAgentSummaries } from '@/lib/agentSummaries'
 import type { Agent } from '@/types'
 
 export type OxiDNSDevice = Pick<Agent, 'id' | 'name' | 'host' | 'status'>
@@ -28,7 +28,7 @@ export function useOxiDNSDevices() {
     loading.value = true
     error.value = ''
     try {
-      const { data } = await agentApi.getAll()
+      const data = await loadAgentSummaries()
       if (disposed || requestEpoch !== epoch) return null
       if (!Array.isArray(data)) throw new Error('设备列表格式异常，请稍后重试。')
       devices.value = data.filter((agent: Agent) => agent && agent.service_type === 'oxidns')
