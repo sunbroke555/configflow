@@ -33,9 +33,10 @@ PUBLISH_TIMEOUT = 300
 
 
 class InstallationError(ValueError):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, code=None):
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def _iso(timestamp=None):
@@ -122,12 +123,15 @@ def _saved_snapshot(repository, session):
                                     local_addresses=(address,) if address else ())
     configured_url = config.get('system_config', {}).get('server_domain', '').strip().rstrip('/')
     if configured_url and configured_url != session['server_url']:
-        raise InstallationError('安装地址需与系统设置中的服务地址一致，核心会使用该地址持续下载规则。请先在系统设置确认 Linux 可访问的地址，再重新准备安装。', 409)
+        raise InstallationError(f'系统设置中的服务地址是 {configured_url}，与这里填写的 {session["server_url"]} 不一致。'
+                                '核心会使用系统服务地址持续下载规则，两者需相同。可将本次地址设为系统服务地址后继续，'
+                                '或在系统设置中修改。', 409, code='server_url_mismatch')
     return config
 
 
 def create(repository, manager, body):
-    allowed = {'profile_id', 'name', 'server_url', 'network', 'config_revision', 'mihomo_agent_port', 'oxidns_agent_port', 'auto_network', 'agent_ip'}
+    allowed = {'profile_id', 'name', 'server_url', 'network', 'config_revision', 'mihomo_agent_port', 'oxidns_agent_port', 'auto_network', 'agent_ip',
+               'use_as_server_domain'}
     if not isinstance(body, dict) or set(body) - allowed:
         raise InstallationError('安装参数无效。')
     profile_id = body.get('profile_id')
@@ -166,6 +170,14 @@ def create(repository, manager, body):
                'message': '安装命令已准备，请在目标 Linux 执行后回到这里。'}
     if auto_network:
         session.update(auto_network=True, requested_ip=requested_ip)
+    if type(body.get('use_as_server_domain', False)) is not bool:
+        raise InstallationError('use_as_server_domain 必须为布尔值。')
+    if body.get('use_as_server_domain'):
+        # Explicitly confirmed by the administrator: generated links and rule
+        # downloads of every profile use this address from now on.
+        repository.update_system_transaction(
+            lambda system: system['system_config'].update(server_domain=session['server_url']))
+        logger.info('已将系统服务地址设为 %s（网关安装）', session['server_url'])
     _saved_snapshot(repository, session)
     # Resolve all immutable, checksum-verified downloads before handing a command
     # to the user. Generating this script has no host-side effects.

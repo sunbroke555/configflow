@@ -45,7 +45,7 @@ export interface GatewayInstallation {
 }
 export interface GatewayInstallationInput {
   profile_id: string; name: string; server_url: string; network?: LinuxGatewaySpec; auto_network?: boolean; agent_ip?: string
-  config_revision: number; mihomo_agent_port?: number; oxidns_agent_port?: number
+  config_revision: number; mihomo_agent_port?: number; oxidns_agent_port?: number; use_as_server_domain?: boolean
 }
 const scope = (profileId: string) => ({ headers: { 'X-ConfigFlow-Profile': profileId } })
 const configPath = (profileId: string) => `/profiles/${encodeURIComponent(profileId)}/gateway-onboarding`

@@ -18,7 +18,7 @@
                 id="server-domain"
                 v-model="serverDomain"
                 class="min-w-0 bg-background/50 font-mono"
-                placeholder="http://example.com:5001"
+                placeholder="http://192.168.1.10:5010"
                 @blur="onServerDomainBlur"
               />
               <Button

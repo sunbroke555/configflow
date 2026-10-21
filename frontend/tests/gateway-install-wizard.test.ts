@@ -237,6 +237,17 @@ describe('gateway installation wizard', () => {
     expect(localStorage.getItem('configflow.gateway-installation.office')).toBe('installation-1')
     expect(localStorage.length).toBe(1)
   })
+  it('offers to adopt the install address when it differs from the system server address', async () => {
+    const message = '系统设置中的服务地址是 http://172.17.0.2:5001，与这里填写的 http://192.168.1.3:8000 不一致。'
+    vi.mocked(gatewayOnboardingApi.create).mockRejectedValueOnce({ response: { status: 409, data: { success: false, code: 'server_url_mismatch', message } } })
+    const wrapper = await render(); await prepare(wrapper)
+    expect(wrapper.text()).toContain(message)
+    const adopt = button(wrapper, '将 http://192.168.1.3:8000 设为系统服务地址并继续')
+    expect(adopt.exists()).toBe(true)
+    await adopt.trigger('click'); await flushPromises()
+    expect(gatewayOnboardingApi.create).toHaveBeenLastCalledWith({ profile_id: 'office', name: 'home-gateway', server_url: 'http://192.168.1.3:8000', network: spec, config_revision: 8, use_as_server_domain: true })
+    expect(wrapper.get('#onboarding-command').element).toHaveProperty('value', session().command)
+  })
   it('allows correcting network information immediately after creating a session', async () => {
     const wrapper = await render(); await prepare(wrapper)
     await button(wrapper, '重新准备安装').trigger('click'); await flushPromises()

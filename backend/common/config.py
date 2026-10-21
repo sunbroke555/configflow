@@ -157,7 +157,10 @@ def load_config() -> Dict[str, Any]:
     """Initialize global settings without silently rewriting resource references."""
     reset_config_context()
     repository = get_repository()
-    if not repository.get_system()['system_config'].get('server_domain', '').strip():
+    # Inside a container this guess is the bridge address and the internal
+    # backend port, never reachable from the LAN; requests supply the origin.
+    in_container = os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv')
+    if not in_container and not repository.get_system()['system_config'].get('server_domain', '').strip():
         repository.update_system_transaction(
             lambda system: system['system_config'].update(server_domain=f'http://{get_local_ip()}:5001'))
     from backend.common.agent_manager import init_agent_manager

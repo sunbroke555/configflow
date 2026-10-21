@@ -632,8 +632,23 @@ def test_install_address_must_match_persisted_rule_callback_origin(setup):
     before = manager.repository.export_all()
     response = client.post(BASE, headers=admin, json={**body, 'server_url': 'https://different.example'})
     assert response.status_code == 409
-    assert '系统设置' in response.get_json()['message']
+    result = response.get_json()
+    assert result['code'] == 'server_url_mismatch'
+    assert 'https://config.example' in result['message'] and 'https://different.example' in result['message']
     assert manager.repository.export_all() == before
+    response = client.post(BASE, headers=admin, json={**body, 'server_url': 'https://different.example',
+                                                       'use_as_server_domain': 'yes'})
+    assert response.status_code == 400
+    assert manager.repository.export_all() == before
+
+
+def test_confirmed_install_address_becomes_the_system_server_address(setup):
+    client, manager, admin, body, saved = setup
+    response = client.post(BASE, headers=admin, json={**body, 'server_url': 'https://different.example',
+                                                       'use_as_server_domain': True})
+    assert response.status_code == 200, response.get_json()
+    assert manager.repository.get_system()['system_config']['server_domain'] == 'https://different.example'
+    assert sessions._read(manager.repository, response.get_json()['id'])['server_url'] == 'https://different.example'
 
 
 def test_enrolled_installation_can_resume_with_admin_after_capability_expiry(setup, monkeypatch):
