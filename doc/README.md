@@ -77,6 +77,24 @@ MosDNS / OxiDNS 的配置 URL 只返回 YAML；首次手动部署需要完整 ZI
 
 共享资源无法删除时，按提示先解除配置或聚合中的引用；删除订阅还需移除从该订阅获取的节点。
 
+## 界面预览
+
+截图更新于 **2026-10-21**，均从本地隔离演示环境实际截取。仅使用虚构配置与缓存数据，未连接真实订阅或设备；节点地址使用文档专用 IP，规则使用 `.example` 域名，不含生产凭据。
+
+### 配置生成工作台
+
+选择目标软件后生成预览，再按需下载或发布。图中展示 OxiDNS 演示配置；未绑定设备时不能发布。
+
+![配置生成工作台：软件选择、生成步骤与 OxiDNS YAML 预览（演示数据）](img/generate-demo.jpg)
+
+### 分层选项说明
+
+选项下方先说明效果或适用场景，问号中的详细帮助按「适用条件 / 工作原理」分段，便于快速决策与核对技术细节。
+
+![OxiDNS 设置：优先 IPv4 的简述与分层 Tooltip（演示数据）](img/oxidns-help-demo.jpg)
+
+各功能文档还提供 [订阅来源](module/subscription.md#界面预览)、[节点库](module/nodes.md#界面预览)、[策略组](module/proxy-groups.md#界面预览)、[规则库](module/rule-library.md#界面预览) 和 [策略规则](module/rules.md#界面预览) 的当前界面截图。
+
 [Telegram 交流群](https://t.me/+fLt02_w38205OTNh)
 
 ## 实现参考
