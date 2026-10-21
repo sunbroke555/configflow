@@ -202,6 +202,7 @@ def generate_go_aio_install_script(
     installation_token: str = "",
     manage_ipv4_forwarding: bool = True,
     manage_tun: bool = True,
+    installation_description: str = "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。",
 ) -> str:
     """Manage two isolated native Agents, optionally installing missing cores.
 
@@ -332,7 +333,7 @@ elif command -v systemctl >/dev/null 2>&1; then
 else
     fail "需要 systemd 或 OpenRC 管理已安装的 Mihomo 和 OxiDNS。"
 fi''',
-        "installation_description": 'cf_ui "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。"',
+        "installation_description": "cf_ui " + shlex.quote(installation_description),
         "installation_action": "安装或升级两个独立 Agent",
         "agent_arch_detection": "\n".join("        " + line for line in agent_arch_detection.splitlines()),
         "agent_install_dependencies": AGENT_INSTALL_DEPENDENCIES,
