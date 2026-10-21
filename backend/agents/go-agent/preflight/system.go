@@ -27,21 +27,25 @@ const tunDeviceFix = "普通 Linux/虚拟机先检查内核 TUN 驱动（modprob
 const tunCapabilityFix = "分别核对当前检查进程与 Mihomo 核心进程的 /proc/<PID>/status 中 CapEff、CapBnd 和启动权限；UID 为 root 不能证明具有 CAP_NET_ADMIN。若运行在容器内，还需核对容器保留的能力及 /dev/net/tun 的设备访问策略。按实际服务管理方式做最小调整。"
 const systemdTunCapabilityFix = "检查 Mihomo 服务的 CapabilityBoundingSet 是否包含 CAP_NET_ADMIN；非 root 服务还需核对 AmbientCapabilities 或程序文件能力，并以核心进程的 CapEff 确认实际能力。设备受限制时，核对 DeviceAllow=/dev/net/tun rw。若运行在容器内，还需核对容器保留的能力。保留其他必要权限，按现有服务配置做最小调整。"
 const openRCTunCapabilityFix = "核对 /etc/init.d/ 中对应的 Mihomo 服务脚本与 /etc/conf.d/ 配置，包括 command_user、capabilities 及其启动命令；从该服务实际运行进程的 /proc/<PID>/status 读取 CapEff，确认 CAP_NET_ADMIN，并核对该进程对 /dev/net/tun 的设备访问权限。UID 为 root 不能证明具备该能力；若运行在容器内，还需核对容器保留的能力和设备映射。"
+const gatewayForwardingFix = "在运行网关的 Linux 内检查 /proc/sys 的写权限和 CAP_NET_ADMIN；LXC 需要宿主机管理员允许容器修改网络 sysctl。本安装不会修改 PVE 宿主机。"
 const forwardingFix = "仅当此 Linux/LXC 承担旁路网关或路由转发时，在该系统内执行 sysctl -w net.ipv4.ip_forward=1，并把 net.ipv4.ip_forward=1 写入 /etc/sysctl.d/99-configflow-forward.conf；同时处理报告中的冲突设置及后加载文件，避免被改回 0。重启后用 sysctl net.ipv4.ip_forward 再验证。PVE 仅做二层网桥时不因此需要开启宿主机转发。"
 
 type systemProbe struct {
-	goos     string
-	readFile func(string) ([]byte, error)
-	readDir  func(string) ([]os.DirEntry, error)
-	stat     func(string) (os.FileInfo, error)
-	glob     func(string) ([]string, error)
-	tun      func(string) (uint32, error)
-	showUnit func(string) ([]byte, error)
+	goos      string
+	readFile  func(string) ([]byte, error)
+	readDir   func(string) ([]os.DirEntry, error)
+	stat      func(string) (os.FileInfo, error)
+	glob      func(string) ([]string, error)
+	tun       func(string) (uint32, error)
+	showUnit  func(string) ([]byte, error)
+	getenv    func(string) string
+	writeFile func(string, []byte) error
 }
 
 func defaultSystemProbe() systemProbe {
 	return systemProbe{
 		goos: runtime.GOOS, readFile: os.ReadFile, readDir: os.ReadDir, stat: os.Stat, glob: filepath.Glob, tun: systemTunFeatures,
+		getenv: os.Getenv, writeFile: func(path string, data []byte) error { return os.WriteFile(path, data, 0o644) },
 		showUnit: func(unit string) ([]byte, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
@@ -106,8 +110,37 @@ func systemChecksWithProbe(configs []Config, probe systemProbe) []Check {
 	} else {
 		checks = append(checks, Check{Name: "TUN / CAP_NET_ADMIN", Level: "pass", Message: "本次仅接管 DNS 核心，不需要 TUN 或网络管理能力。"})
 	}
-	checks = append(checks, inspectIPv4Forwarding(probe)...)
+	if probe.getenv != nil && probe.getenv("CONFIGFLOW_FORWARDING_OWNER") == "gateway" {
+		checks = append(checks, inspectGatewayForwarding(probe))
+	} else {
+		checks = append(checks, inspectIPv4Forwarding(probe)...)
+	}
 	return checks
+}
+
+// The selective gateway turns forwarding on when it is applied, restores the
+// value it saved when it is removed, and reapplies its journal at boot. A
+// manual sysctl change would only become the "original" value it restores, so
+// only the permission to change it is checked here.
+func inspectGatewayForwarding(probe systemProbe) Check {
+	const path = "/proc/sys/net/ipv4/ip_forward"
+	check := Check{Name: "IPv4 转发权限", Level: "pass"}
+	data, err := probe.readFile(path)
+	value := strings.TrimSpace(string(data))
+	if err != nil || value != "0" && value != "1" {
+		check.Level = "warn"
+		check.Message = "无法确认 net.ipv4.ip_forward 的当前值；应用网关转发时会再次检查。"
+		return check
+	}
+	// Writing the current value proves the kernel permission without toggling it.
+	if probe.writeFile == nil || probe.writeFile(path, []byte(value+"\n")) != nil {
+		check.Level = "error"
+		check.Message = "无法写入 net.ipv4.ip_forward（当前为 " + value + "），应用网关转发时将无法开启转发。"
+		check.Fix = gatewayForwardingFix
+		return check
+	}
+	check.Message = "当前 net.ipv4.ip_forward=" + value + "；网页「应用网关转发」时开启，撤销时恢复原值，重启后由 Agent 自动恢复，无需手动修改或写入 sysctl.d。"
+	return check
 }
 
 // A configured TUN listener is active independently of the legacy top-level

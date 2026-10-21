@@ -567,3 +567,75 @@ func TestSystemSystemdPermissionFailuresKeepApplicableGuidance(t *testing.T) {
 		})
 	}
 }
+
+func TestGatewayForwardingChecksWritePermissionInsteadOfAskingForManualSysctl(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		value    string
+		writeErr error
+		level    string
+	}{
+		{"off-writable", "0\n", nil, "pass"},
+		{"on-writable", "1\n", nil, "pass"},
+		{"read-only", "0\n", os.ErrPermission, "error"},
+		{"unknown", "2\n", nil, "warn"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := healthySystemFixture()
+			fixture.files["/proc/sys/net/ipv4/ip_forward"] = []byte(tc.value)
+			probe := fixture.probe()
+			var written [][]byte
+			probe.getenv = func(key string) string {
+				if key == "CONFIGFLOW_FORWARDING_OWNER" {
+					return "gateway"
+				}
+				return ""
+			}
+			probe.writeFile = func(path string, data []byte) error {
+				if path != "/proc/sys/net/ipv4/ip_forward" {
+					t.Fatalf("unexpected write to %s", path)
+				}
+				written = append(written, data)
+				return tc.writeErr
+			}
+			checks := systemChecksWithProbe(nil, probe)
+			check := namedSystemCheck(t, checks, "IPv4 转发权限")
+			if check.Level != tc.level || strings.Contains(check.Fix, "sysctl.d") || strings.Contains(check.Message+check.Fix, "sysctl -w") {
+				t.Fatalf("gateway forwarding check: %+v", check)
+			}
+			for _, other := range checks {
+				if other.Name == "IPv4 转发" || other.Name == "IPv4 转发持久化" {
+					t.Fatalf("gateway restores forwarding itself; persistence must not be reported: %+v", other)
+				}
+			}
+			// The probe only writes back the value it read: it never toggles forwarding.
+			for _, data := range written {
+				if string(data) != strings.TrimSpace(tc.value)+"\n" {
+					t.Fatalf("probe changed forwarding: %q", data)
+				}
+			}
+			if tc.level == "pass" && !strings.Contains(check.Message, "应用网关转发") {
+				t.Fatalf("missing who turns forwarding on: %+v", check)
+			}
+			// The compact installer row must not claim forwarding is on when it is off.
+			if tc.level == "pass" {
+				want := map[string]string{"0": "当前未开启", "1": "当前已开启"}[strings.TrimSpace(tc.value)]
+				if summary := compactPass(check); !strings.Contains(summary, want) {
+					t.Fatalf("compact summary %q does not say %q", summary, want)
+				}
+			}
+		})
+	}
+}
+
+func TestOrdinaryInstallKeepsManualForwardingGuidance(t *testing.T) {
+	fixture := healthySystemFixture()
+	fixture.files["/proc/sys/net/ipv4/ip_forward"] = []byte("0\n")
+	probe := fixture.probe()
+	probe.writeFile = func(string, []byte) error { t.Fatal("ordinary checks never write"); return nil }
+	checks := systemChecksWithProbe(nil, probe)
+	if check := namedSystemCheck(t, checks, "IPv4 转发"); check.Level != "warn" || !strings.Contains(check.Fix, "sysctl.d") {
+		t.Fatalf("ordinary install guidance changed: %+v", check)
+	}
+	namedSystemCheck(t, checks, "IPv4 转发持久化")
+}
