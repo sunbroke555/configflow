@@ -455,6 +455,45 @@ def test_structure_release_uses_captured_nonrule_source_and_reload_only(sync_env
     assert 'agents' not in record['source']
 
 
+def test_confirmed_publication_does_not_force_a_republishing_refresh(sync_env, monkeypatch):
+    repository, manager, agent, _, _ = sync_env
+    from backend.converters.mihomo import generate_mihomo_config
+    def inline_only(profile):
+        # Mihomo cannot refresh a non-HTTP provider natively.
+        profile['rule_configs'] = [item for item in profile['rule_configs'] if item['itemType'] == 'rule']
+        profile['oxidns']['direct_rulesets'] = []
+        profile['mihomo']['custom_config'] = ('mode: rule\nrule-providers:\n  lan:\n    type: inline\n'
+                                              '    behavior: domain\n    payload: [nas.lan]\n')
+    repository.update_profile_transaction('default', inline_only)
+    source, _ = repository.get_publish_snapshot('default')
+    content = generate_mihomo_config(source, base_url='https://config.test', sync_lan_hosts=True,
+                                     preflight_providers=False)
+    agent, _ = enroll(manager, agent, source, build_deployment_bundle(
+        agent, source, content, deployment_id='manual', base_url='https://config.test'))
+    rule_sync.configure(manager, agent['id'], {'library': True, 'rules': True})
+    edit_inline(repository)
+    uploads = []
+    def transport(_agent, method, path, **kwargs):
+        if path == 'capabilities':
+            return {'deployment_protocols': [1], 'reload_only_protocols': [1], 'service_type': 'mihomo'}
+        if method == 'post':
+            uploads.append(kwargs['headers'])
+            return {'success': True, 'status': 'activating'}
+        # The Agent confirms activation on a later status poll.
+        deployment = manager.get_agent_by_id(agent['id'])['latest_deployment']
+        return {'success': True, 'status': 'succeeded', 'config_version': deployment['config_version']}
+    monkeypatch.setattr(manager, '_deployment_request', transport)
+    monkeypatch.setattr('backend.agents.mihomo_panel.call',
+                        lambda *_a, **_k: pytest.fail('nothing changed after the publication'))
+    now = [100.0]
+    worker = rule_sync.RuleSyncWorker(manager, clock=lambda: now[0])
+    for _ in range(12):
+        tick(worker, now, agent['id'])
+    assert len(uploads) == 1
+    assert rule_sync.status(manager, agent['id'])['state']['status'] == 'succeeded'
+    assert source_for(manager, agent['id'])['rule_configs'][0]['value'] == 'new-inline.test'
+
+
 def test_unknown_structural_upload_is_reconciled_without_reupload(sync_env, monkeypatch):
     repository, manager, agent, _, old_bundle = sync_env
     rule_sync.configure(manager, agent['id'], {'library': False, 'rules': True})

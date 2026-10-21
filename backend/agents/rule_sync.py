@@ -263,6 +263,10 @@ class RuleSyncWorker:
                 return
             self._state(agent_id, 'succeeded', '规则已通过原生接口热加载')
             agent = self.manager.get_agent_by_id(agent_id)
+            # The publication carried every rule file. Its finished 'running'
+            # state must not force a refresh, which Mihomo serves by another
+            # publication when providers are not all HTTP: an endless cycle.
+            old_state = (agent.get('rule_sync') or {}).get('state') or {}
         baseline = store.load(self.manager.repository, agent, with_bundle=False)
         if baseline is None:
             self._state(agent_id, 'blocked', '先成功发布一次配置，建立自动同步基线')
