@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, ref } from 'vue'
 import { oxidnsMonitorApi } from '@/api'
-import { useOxiDNSMonitor } from '@/composables/useOxiDNSMonitor'
+import { forgetOxiDNSRateSamples, useOxiDNSMonitor } from '@/composables/useOxiDNSMonitor'
 import { emptyQueryFilters, formatDNSCode, querySourceLabel, type OxiDNSOverview } from '@/types/oxidnsMonitor'
 import OxiDNSQueryTable from '@/components/agents/OxiDNSQueryTable.vue'
 import OxiDNSQueryDetail from '@/components/agents/OxiDNSQueryDetail.vue'
@@ -42,6 +42,7 @@ function harness(initialTab = 'overview') {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  forgetOxiDNSRateSamples()
   Object.defineProperty(document, 'hidden', { configurable: true, value: false })
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} })))
@@ -68,17 +69,54 @@ describe('OxiDNS monitoring requests', () => {
     const { model } = harness()
     await flushPromises()
     expect(model.qps.value).toBeNull()
-    await vi.advanceTimersByTimeAsync(999)
+    await vi.advanceTimersByTimeAsync(499)
     expect(oxidnsMonitorApi.overview).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
     expect(model.qps.value).toBe(5)
     expect(oxidnsMonitorApi.overview).toHaveBeenCalledTimes(2)
-    await vi.advanceTimersByTimeAsync(8999)
+    await vi.advanceTimersByTimeAsync(9499)
     expect(oxidnsMonitorApi.overview).toHaveBeenCalledTimes(2)
-    await vi.advanceTimersByTimeAsync(1001)
+    await vi.advanceTimersByTimeAsync(1)
     expect(oxidnsMonitorApi.overview).toHaveBeenCalledTimes(3)
     expect(model.qps.value).toBe(5)
     expect(oxidnsMonitorApi.queries).not.toHaveBeenCalled()
+  })
+  it('reopening a device within the sample gap shows its rate at once', async () => {
+    vi.useFakeTimers()
+    vi.mocked(oxidnsMonitorApi.overview).mockResolvedValueOnce(response(snapshot()))
+    const first = harness()
+    await flushPromises()
+    first.wrapper.unmount()
+    // Reopened 3 s later: the remembered sample gives the rate, no early sample is taken.
+    await vi.advanceTimersByTimeAsync(3000)
+    vi.mocked(oxidnsMonitorApi.overview).mockResolvedValueOnce(response(snapshot(130, '2026-10-17T01:00:03Z')))
+    const { model } = harness()
+    await flushPromises()
+    expect(model.qps.value).toBe(10)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(oxidnsMonitorApi.overview).toHaveBeenCalledTimes(2)
+  })
+  it('samples again when the remembered sample is too old or from another core', async () => {
+    vi.useFakeTimers()
+    vi.mocked(oxidnsMonitorApi.overview).mockResolvedValueOnce(response(snapshot()))
+    const first = harness()
+    await flushPromises()
+    first.wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(31000)
+    vi.mocked(oxidnsMonitorApi.overview)
+      .mockResolvedValueOnce(response(snapshot(400, '2026-10-17T01:00:31Z')))
+      .mockResolvedValueOnce(response(snapshot(410, '2026-10-17T01:00:32Z')))
+    const late = harness()
+    await flushPromises()
+    expect(late.model.qps.value).toBeNull()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(late.model.qps.value).toBe(10)
+    expect(oxidnsMonitorApi.overview).toHaveBeenCalledTimes(3)
+    late.wrapper.unmount()
+    vi.mocked(oxidnsMonitorApi.overview).mockResolvedValueOnce(response(snapshot(5, '2026-10-17T01:00:33Z', 'core-two')))
+    const restarted = harness()
+    await flushPromises()
+    expect(restarted.model.qps.value).toBeNull()
   })
   it('cancels the early sample if a manual refresh already supplies a valid rate', async () => {
     vi.useFakeTimers()
@@ -335,13 +373,13 @@ describe('OxiDNS dashboard resets', () => {
     vi.mocked(oxidnsMonitorApi.resetStatistics).mockResolvedValue(response(periodSnapshot('period-two', 0)))
     const { model } = harness()
     await flushPromises()
-    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(250)
     expect(await model.resetStatistics()).toBe(true)
     vi.mocked(oxidnsMonitorApi.overview).mockResolvedValue(response(periodSnapshot('period-two', 2, '2026-10-17T01:00:01Z')))
-    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(250)
     expect(oxidnsMonitorApi.overview).toHaveBeenCalledTimes(1)
     expect(model.qps.value).toBeNull()
-    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(250)
     expect(model.qps.value).toBe(2)
   })
   it('starts a fresh period without deleting records, filters, or query pagination', async () => {

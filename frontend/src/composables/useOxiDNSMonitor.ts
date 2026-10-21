@@ -8,8 +8,34 @@ const checked = <T>(data: T): T => {
   if ((data as any)?.success === false) throw new Error((data as any).message || '读取失败，请稍后重试。')
   return data
 }
-const FIRST_RATE_SAMPLE_DELAY = 1000
+const FIRST_RATE_SAMPLE_DELAY = 500
 const MAX_RATE_SAMPLE_GAP = 30
+
+// The last overview of each device, kept in memory for this tab only. Reopening
+// a panel within the sample gap computes the rate at once instead of sampling again.
+type RateSample = Pick<OxiDNSOverview, 'collected_at'> & {
+  metrics: Pick<OxiDNSOverview['metrics'], 'requests_total'>
+  core: Pick<OxiDNSOverview['core'], 'instance_id'>
+  statistics?: Pick<NonNullable<OxiDNSOverview['statistics']>, 'generation'>
+}
+const recentSamples = new Map<string, { at: number; sample: RateSample }>()
+function rememberSample(id: string, next: OxiDNSOverview) {
+  recentSamples.set(id, { at: Date.now(), sample: {
+    collected_at: next.collected_at, metrics: { requests_total: next.metrics.requests_total },
+    core: { instance_id: next.core.instance_id },
+    statistics: next.statistics ? { generation: next.statistics.generation } : undefined
+  } })
+}
+/** Drop every remembered sample, e.g. between tests. */
+export function forgetOxiDNSRateSamples() {
+  recentSamples.clear()
+}
+function recentSample(id: string): RateSample | undefined {
+  const entry = recentSamples.get(id)
+  if (entry && Date.now() - entry.at <= MAX_RATE_SAMPLE_GAP * 1000) return entry.sample
+  recentSamples.delete(id)
+  return undefined
+}
 
 export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
   const overview = ref<OxiDNSOverview | null>(null)
@@ -94,7 +120,7 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
     }, FIRST_RATE_SAMPLE_DELAY)
   }
   function applyOverview(next: OxiDNSOverview, clearQps = false) {
-    const prior = overview.value
+    const prior: RateSample | undefined = overview.value ?? recentSample(agentId.value)
     const seconds = prior ? (Date.parse(next.collected_at) - Date.parse(prior.collected_at)) / 1000 : 0
     const currentCount = next.metrics.requests_total
     const priorCount = prior?.metrics.requests_total
@@ -107,6 +133,7 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
       && seconds > 0 && seconds <= MAX_RATE_SAMPLE_GAP
       ? (currentCount - priorCount) / seconds : null
     overview.value = next
+    rememberSample(agentId.value, next)
     if (!next.recorders.includes(recorder.value)) {
       recorder.value = next.recorders[0] || ''
       resetQueries()
