@@ -766,3 +766,72 @@ def test_installation_checks_mihomo_dns_against_entered_linux_lan_address(setup)
     response = client.post(BASE, headers=admin, json={**body, 'config_revision': manager.repository.config_revision('home')})
     assert response.status_code == 400
     assert '循环' in response.get_json()['message']
+
+
+class ImmediateThread:
+    def __init__(self, target, **_):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+def test_repreparing_changed_config_reuses_enrolled_devices_without_reinstall(setup, monkeypatch):
+    client, manager, admin, body, saved = setup
+    saved = prepare_run(manager, saved)
+    saved['phase'] = 'publish_failed'
+    saved['deployments']['mihomo']['status'] = 'succeeded'
+    saved['deployments']['oxidns']['status'] = 'rolled_back'
+    sessions._write(manager.repository, saved)
+    command = client.get(BASE + '/' + saved['id'], headers=admin).json['command']
+    manager.repository.save_profile('home', {'name': 'Changed'})
+    revision = manager.repository.config_revision('home')
+    assert revision != saved['config_revision']
+
+    response = client.post(BASE, headers=admin, json={**body, 'config_revision': revision})
+    assert response.status_code == 200, response.json
+    reused = response.json
+    assert reused['id'] == saved['id'] and reused['command'] == command
+    assert reused['phase'] == 'enrolled' and reused['deployments'] == {} and not reused['config_changed']
+    stored = sessions._read(manager.repository, saved['id'])
+    assert stored['agent_ids'] == saved['agent_ids'] and stored['token'] == saved['token']
+    assert stored['config_revision'] == revision
+
+    # Both cores publish the newly reviewed revision, Mihomo included.
+    published = []
+    def publish(repo, mgr, session, service):
+        published.append((service, session['config_revision']))
+        return {'deployment_id': session['deployments'][service]['deployment_id'], 'status': 'succeeded', 'success': True}
+    monkeypatch.setattr(sessions, '_publish_service', publish)
+    monkeypatch.setattr(sessions.threading, 'Thread', ImmediateThread)
+    assert client.post(BASE + '/' + saved['id'] + '/publish', headers=admin, json={'retry_failed': False}).status_code == 202
+    assert published == [('mihomo', revision), ('oxidns', revision)]
+    assert sessions._read(manager.repository, saved['id'])['phase'] == 'published'
+
+
+def test_repreparing_before_installation_keeps_the_same_command(setup):
+    client, manager, admin, body, saved = setup
+    command = client.get(BASE + '/' + saved['id'], headers=admin).json['command']
+    manager.repository.save_profile('home', {'name': 'Changed'})
+    response = client.post(BASE, headers=admin, json={**body, 'config_revision': manager.repository.config_revision('home')})
+    assert response.status_code == 200, response.json
+    assert response.json['id'] == saved['id'] and response.json['phase'] == 'waiting'
+    assert response.json['command'] == command
+
+
+def test_repreparing_is_refused_while_publishing(setup):
+    client, manager, admin, body, saved = setup
+    saved = prepare_run(manager, saved)
+    manager.repository.save_profile('home', {'name': 'Changed'})
+    response = client.post(BASE, headers=admin, json={**body, 'config_revision': manager.repository.config_revision('home')})
+    assert response.status_code == 409 and '发布进行中' in response.json['message']
+    assert sessions._read(manager.repository, saved['id']) == saved
+
+
+def test_repreparing_a_different_target_still_needs_a_new_installation(setup):
+    client, manager, admin, body, saved = setup
+    manager.repository.save_profile('home', {'name': 'Changed'})
+    response = client.post(BASE, headers=admin, json={**body, 'name': 'other-linux',
+                                                      'config_revision': manager.repository.config_revision('home')})
+    assert response.status_code == 200, response.json
+    assert response.json['id'] != saved['id'] and response.json['phase'] == 'waiting'

@@ -116,7 +116,7 @@ def _server_url(value):
 def _saved_snapshot(repository, session):
     config, revision = repository.get_publish_snapshot(session['profile_id'])
     if revision != session['config_revision']:
-        raise InstallationError('配置已在其他页面修改，请重新预览并保存安装设置后创建新安装会话。', 409)
+        raise InstallationError('配置已在其他页面修改，请重新准备安装并预览保存；已安装的设备会继续沿用。', 409)
     from backend.common.gateway_onboarding import assert_gateway_onboarding_ready
     address = session['network'].get('address')
     assert_gateway_onboarding_ready(config, base_url=session['server_url'],
@@ -196,10 +196,32 @@ def create(repository, manager, body):
                 if _ensure_short_download(previous):
                     _write(repository, previous)
                 return public(repository, manager, previous)
+            if same_target and all(previous.get(key) == session[key] for key in keys if key != 'config_revision'):
+                return _reuse_for_revision(repository, manager, previous['id'], session['config_revision'])
         session['script'] = _script(session)
         _ensure_short_download(session)
         _write(repository, session)
     logger.info('已创建网关安装 %s（目标 %s）', session['name'], session['network']['address'])
+    return public(repository, manager, session)
+
+
+def _reuse_for_revision(repository, manager, session_id, revision):
+    """Bind a newly reviewed configuration to the same installation target.
+
+    The install script and enrollment never depend on the configuration, so
+    the installed devices stay; only publishing starts over with this revision.
+    """
+    with _locked(repository, session_id):
+        session = _read(repository, session_id)
+        if session['phase'] == 'publishing':
+            raise InstallationError('发布进行中，请等待完成后再更新配置。', 409)
+        enrolled = set(session['agent_ids']) == set(SERVICES)
+        session.update(config_revision=revision, deployments={}, phase='enrolled' if enrolled else 'waiting',
+                       message='配置已更新，继续沿用已安装的设备，请重新发布。' if enrolled
+                       else '配置已更新，安装命令不变，请在目标 Linux 执行后回到这里。')
+        _ensure_short_download(session)
+        _write(repository, session)
+    logger.info('网关安装 %s：沿用已安装的设备，配置更新为版本 %s', session['name'], revision)
     return public(repository, manager, session)
 
 
@@ -418,7 +440,7 @@ def latest(repository, manager, profile_id):
 
 def _pair(repository, manager, session):
     if repository.config_revision(session['profile_id']) != session['config_revision']:
-        raise InstallationError('配置已修改，请重新预览并保存安装设置后创建新安装会话。', 409)
+        raise InstallationError('配置已修改：请重新准备安装，预览并保存后会继续沿用已安装的设备，无需重新运行安装命令。', 409)
     if set(session['agent_ids']) != set(SERVICES):
         raise InstallationError('请先完成两个核心和 Agent 的安装登记。', 409)
     agents = {}
