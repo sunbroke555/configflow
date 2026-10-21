@@ -175,6 +175,22 @@ def test_load_config_uses_request_profile_context(tmp_path, monkeypatch):
     assert loaded["mihomo"]["custom_config"] == "port: 22222\n"
 
 
+@pytest.mark.parametrize("marker, expected", [
+    ("/.dockerenv", ""), ("/run/.containerenv", ""), (None, "http://192.0.2.7:5001"),
+])
+def test_first_start_guesses_server_address_only_outside_containers(tmp_path, monkeypatch, marker, expected):
+    # A container's bridge address and internal backend port are never
+    # reachable from the LAN; requests then supply the browser origin.
+    repository = ProfileRepository(tmp_path)
+    make_app(repository, monkeypatch)
+    real_exists = config_module.os.path.exists
+    monkeypatch.setattr(config_module.os.path, "exists",
+                        lambda path: path == marker or (path not in ("/.dockerenv", "/run/.containerenv") and real_exists(path)))
+    monkeypatch.setattr(config_module, "get_local_ip", lambda: "192.0.2.7")
+    config_module.load_config()
+    assert repository.get_system()["system_config"].get("server_domain", "") == expected
+
+
 def test_each_request_reads_latest_shared_config(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.save_shared({"subscriptions": [{"id": "before", "name": "Before", "url": "https://sub.test"}]})

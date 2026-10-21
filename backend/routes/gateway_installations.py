@@ -29,7 +29,7 @@ def _respond(callback, status=200):
         result = callback()
         response = jsonify(result)
     except installations.InstallationError as exc:
-        response, status = jsonify(success=False, message=str(exc)), exc.status
+        response, status = jsonify(success=False, message=str(exc), **({'code': exc.code} if exc.code else {})), exc.status
     except ValueError as exc:
         response, status = jsonify(success=False, message=str(exc)), 400
     response.headers['Cache-Control'] = 'no-store'

@@ -38,6 +38,8 @@ const settings = reactive<GatewayOnboardingSettings>({ rule_set_ids: [], direct_
 const network = reactive(emptyGatewaySpec())
 const name = ref('home-gateway')
 const serverUrl = ref('')
+// Address entered for this installation that differs from the system setting.
+const serverUrlMismatch = ref('')
 const environmentAttempted = ref(false)
 const search = ref('')
 const ruleCategory = ref('rule_set_ids')
@@ -221,10 +223,10 @@ async function previewConfiguration() {
   } catch (failure) { if (current(captured)) error.value = gatewayErrorMessage(failure) }
   finally { if (current(captured)) action.value = '' }
 }
-async function createInstallation() {
+async function createInstallation(useAsServerDomain = false) {
   if (busy.value || locked.value || !configReady.value || environmentErrors.value.length || !config.value) return
   const captured = token()
-  action.value = 'create'; error.value = ''
+  action.value = 'create'; error.value = ''; serverUrlMismatch.value = ''
   try {
     const key = settingsKey.value
     if (savedConfiguration.value?.key !== key) {
@@ -236,12 +238,16 @@ async function createInstallation() {
     }
     if (key !== settingsKey.value) throw new Error('配置已保存，但表单已改变，请重新检查后继续。')
     // Retrying a lost create response must reuse the saved revision and server idempotency.
-    const { data } = await gatewayOnboardingApi.create({ profile_id: captured.profileId, name: name.value.trim(), server_url: serverUrl.value.trim().replace(/\/$/, ''), ...(automaticNetwork.value ? { auto_network: true, agent_ip: network.address.trim() } : { network: cleanGatewaySpec(network) }), config_revision: savedConfiguration.value!.revision })
+    const { data } = await gatewayOnboardingApi.create({ profile_id: captured.profileId, name: name.value.trim(), server_url: serverUrl.value.trim().replace(/\/$/, ''), ...(automaticNetwork.value ? { auto_network: true, agent_ip: network.address.trim() } : { network: cleanGatewaySpec(network) }), config_revision: savedConfiguration.value!.revision, ...(useAsServerDomain ? { use_as_server_domain: true } : {}) })
     if (!current(captured)) return
     acceptInstallation(data)
     baseline.value = allDraftKey.value
     notify.success('配置已保存，请在目标 Linux 执行安装命令。')
-  } catch (failure) { if (current(captured)) error.value = gatewayErrorMessage(failure) }
+  } catch (failure: any) {
+    if (!current(captured)) return
+    error.value = gatewayErrorMessage(failure)
+    if (failure?.response?.data?.code === 'server_url_mismatch') serverUrlMismatch.value = serverUrl.value.trim().replace(/\/$/, '')
+  }
   finally { if (current(captured)) action.value = '' }
 }
 async function refreshInstallation() {
@@ -395,6 +401,10 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
         <p v-if="loading" role="status" class="m-0 flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle class="size-4 animate-spin" />正在读取配置与安装进度…</p>
         <div v-if="error" class="rounded-lg border border-destructive/30 bg-destructive-soft p-3 text-sm text-destructive-accent" role="alert">
           {{ error }}<Button v-if="!config && !installation" variant="ghost" class="min-h-11" :disabled="busy" @click="load">重新读取</Button>
+          <div v-if="serverUrlMismatch && !installation" class="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Button variant="outline" size="sm" class="min-h-11" :disabled="busy || serverUrl.trim().replace(/\/$/, '') !== serverUrlMismatch" @click="createInstallation(true)">将 {{ serverUrlMismatch }} 设为系统服务地址并继续</Button>
+            <span>所有配置生成的规则、订阅和安装链接都会改用此地址。</span>
+          </div>
         </div>
         <p v-if="pollError" class="m-0 break-words text-sm text-warning-accent" role="alert">{{ pollError }}</p>
         <div v-if="embedded && (configurationPreview?.warnings || config?.warnings)?.length" class="space-y-1 text-xs text-warning-accent" role="status"><p v-for="warning in (configurationPreview?.warnings || config?.warnings)" :key="warning" class="m-0">{{ warning }}</p></div>
@@ -617,7 +627,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
         <div class="ml-auto flex min-w-0 flex-wrap justify-end gap-2">
           <Button v-if="step === 1 && !locked" variant="outline" class="min-h-11" :disabled="busy" @click="step = 0">上一步</Button>
           <Button v-if="step === 0" class="min-h-11" :disabled="busy || !config" @click="continueToRules">下一步：选择规则</Button>
-          <Button v-else-if="step === 1" class="min-h-11" :disabled="busy || !configReady || !!environmentErrors.length" @click="createInstallation"><LoaderCircle v-if="action === 'create'" class="size-4 animate-spin" />保存并生成安装命令</Button>
+          <Button v-else-if="step === 1" class="min-h-11" :disabled="busy || !configReady || !!environmentErrors.length" @click="createInstallation()"><LoaderCircle v-if="action === 'create'" class="size-4 animate-spin" />保存并生成安装命令</Button>
           <Button v-else variant="outline" class="min-h-11" :disabled="busy" @click="emit('update:open', false)">{{ activeNetwork || networkRemoved ? '完成，返回 Agent' : '稍后继续' }}</Button>
         </div>
       </div>
