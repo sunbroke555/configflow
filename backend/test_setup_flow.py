@@ -120,6 +120,29 @@ def test_subscription_cache_and_manual_profile_changes_are_checked(setup_api):
     assert client.post(f'/api/setup/{SESSION}/finish', json={}).status_code == 409
 
 
+def test_embedded_installation_and_router_writes_do_not_block_new_choices(setup_api):
+    client, repository = setup_api
+    session = start(client)
+    profile_id = session['profile_id']
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={}).status_code == 200
+    # Step 4 saves the installation settings before generating the command.
+    state = client.get(f'/api/profiles/{profile_id}/gateway-onboarding').json
+    response = client.post(f'/api/profiles/{profile_id}/gateway-onboarding',
+                           json={**state['settings'], 'expected_config_revision': state['config_revision']})
+    assert response.status_code == 200, response.json
+    response = client.post('/api/routers', json=ROUTER_DRAFT, headers={'X-ConfigFlow-Profile': profile_id})
+    assert response.status_code == 200, response.json
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'traffic_fallback': 'direct'})
+    assert response.status_code == 200, response.json
+    assert repository.get_profile(profile_id)['rule_configs'][-1]['policy'] == 'DIRECT'
+    repository.save_profile(profile_id, {'mihomo': {'custom_config': 'mixed-port: 9999'}})
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'traffic_fallback': 'proxy'})
+    assert response.status_code == 409
+    assert '其他页面' in response.json['message']
+
+
 def test_invalid_requests_cannot_skip_steps_or_target_other_profiles(setup_api):
     client, repository = setup_api
     start(client)
@@ -551,3 +574,18 @@ def test_original_first_start_library_is_reused_without_a_second_copy(tmp_path):
     assert len(repository.get_shared()['rule_library']) == 25
     assert repository.export_all() == before
     assert all(item['source'] == 'builtin' for item in domain_rule_options(repository))
+
+
+def test_new_choices_after_installation_check_clear_stale_later_steps(installed):
+    client, repository, profile_id, _, _ = installed
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200, response.json
+    assert response.json['max_step'] == 4 and response.json['route_instructions']
+    retry = client.post(f'/api/setup/{SESSION}/prepare', json={})
+    assert retry.status_code == 200 and retry.json['max_step'] == 4
+    assert 'route_instructions' in retry.json
+    changed = client.post(f'/api/setup/{SESSION}/prepare', json={'traffic_fallback': 'direct'})
+    assert changed.status_code == 200, changed.json
+    assert changed.json['max_step'] == 3 and changed.json['step'] == 3
+    assert not {'installation', 'route_instructions', 'router_verification'} & set(changed.json)
+    assert client.patch(f'/api/setup/{SESSION}', json={'step': 4}).status_code == 400

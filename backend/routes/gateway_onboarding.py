@@ -47,6 +47,7 @@ def gateway_onboarding(profile_id):
             result.update(profile_id=profile_id, config_revision=revision)
             return _response(result)
         prepared = {}
+        before = repository.get_profile(profile_id)
 
         def update(current):
             # Validation and both service edits share the same locked snapshot.
@@ -61,7 +62,12 @@ def gateway_onboarding(profile_id):
             current['oxidns'] = candidate['oxidns']
             prepared.update(result)
 
-        _, revision = repository.update_profile_transaction(profile_id, update, include_config_revision=True)
+        saved, revision = repository.update_profile_transaction(profile_id, update, include_config_revision=True)
+        if saved['_revision'] == before['_revision'] + 1:
+            # The first-use wizard embeds this step; its own save is not an
+            # edit made on another page.
+            from backend.common.setup_flow import adopt_owned_write
+            adopt_owned_write(repository, profile_id, before, saved)
         reset_config_context()
         guards = {kind: {'expected_profile_id': profile_id, 'expected_service_type': kind,
                          'expected_config_revision': revision} for kind in ('mihomo', 'oxidns')}

@@ -504,7 +504,14 @@ def update_network(repository, manager, session_id, body):
             raise InstallationError('参数与主机实际网卡、地址或唯一默认路由不一致；向导不会修改主机 IP 或默认路由。', 409)
         managed = status.get('managed') or {}
         if (managed.get('active') or managed.get('pending')) and network != session['network']:
-            raise InstallationError('请先恢复客户端设置并撤销本次转发，再修改网络参数。', 409)
+            try:
+                live = _spec(managed.get('spec'))
+            except MonitorError:
+                live = None
+            # A new installation on a host that already forwards starts with
+            # an unresolved network; confirming the live parameters is no change.
+            if network != live:
+                raise InstallationError('请先恢复客户端设置并撤销本次转发，再修改网络参数。', 409)
         _pair(repository, manager, session)
         _saved_snapshot(repository, {**session, 'network': network})
         session.update(network=network, auto_network=automatic)

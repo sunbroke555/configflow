@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -110,6 +111,28 @@ def create(repository, body):
                     settings['config_token'] = secrets.token_urlsafe(32)
             repository.update_system_transaction(ensure_token)
         return session
+
+
+# Fields the wizard writes. Router records, probes and release receipts also
+# advance the profile revision and must not count as edits made elsewhere.
+_OWNED_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'oxidns')
+
+
+def owned_digest(profile):
+    owned = {key: profile.get(key) for key in _OWNED_FIELDS}
+    return hashlib.sha256(json.dumps(owned, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def adopt_owned_write(repository, profile_id, before, after):
+    """Record an embedded installation save as the wizard's own edit."""
+    root = repository.data_dir / 'setup-sessions'
+    for path in root.glob('*.json'):
+        with locked(repository, path.stem):
+            session = read(repository, path.stem)
+            if (session['profile_id'] == profile_id and not session.get('completed')
+                    and session.get('owned_digest') == owned_digest(before)):
+                session['owned_digest'] = owned_digest(after)
+                write(repository, session)
 
 
 def list_sessions(repository):
@@ -252,7 +275,9 @@ def prepare(repository, session, body, base_url):
               'mihomo': {**config.get('mihomo', {}), 'custom_config': yaml.safe_dump(settings, sort_keys=False)}}
     stored = repository.get_profile(session['profile_id'])
     unchanged = all(stored.get(key) == value for key, value in fields.items())
-    if config['_revision'] != session['profile_revision'] and not unchanged:
+    edited = (stored['_revision'] != session['profile_revision'] if 'owned_digest' not in session
+              else owned_digest(stored) != session['owned_digest'])
+    if edited and not unchanged:
         raise SetupError('该空间已在其他页面修改，向导不会覆盖；请新建向导或前往配置生成继续', 409)
     candidate = {**deepcopy(config), **deepcopy(fields)}
     candidate['rule_library'] = repository.get_shared()['rule_library']
@@ -270,15 +295,21 @@ def prepare(repository, session, body, base_url):
         raise SetupError('生成配置未包含有效代理策略，请检查来源')
     if not unchanged:
         def update(current):
-            if current['_revision'] != config['_revision']:
+            if current['_revision'] != stored['_revision']:
                 raise ProfileInUse('配置已更新，请刷新向导后重试')
             current.update(deepcopy(fields))
         repository.update_profile_transaction(session['profile_id'], update)
+        if session['max_step'] > 3:
+            # Earlier checks and route instructions described the replaced
+            # configuration; the next check must publish and verify again.
+            for key in ('installation', 'route_instructions', 'router_verification', 'config_revision'):
+                session.pop(key, None)
+            session['max_step'] = 3
     saved = repository.get_profile(session['profile_id'])
     session.pop('template', None)
     session.update(prepared=True, dns_fallback=dns_fallback, traffic_fallback=traffic_fallback, local_dns=local_dns,
                    domain_rules=selections,
-                   node_count=count, profile_revision=saved['_revision'],
+                   node_count=count, profile_revision=saved['_revision'], owned_digest=owned_digest(saved),
                    config_revision=repository.config_revision(session['profile_id']), step=3,
                    max_step=max(session['max_step'], 3), completed=False)
     return session
