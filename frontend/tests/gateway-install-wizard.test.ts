@@ -566,6 +566,21 @@ describe('gateway installation boundaries', () => {
   })
 })
 
+it('tells an embedded user to publish once both Agents have enrolled', async () => {
+  vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('enrolled') }))
+  const wrapper = await render(false, true)
+  expect(wrapper.text()).toContain('按顺序发布并检查两项配置后，再启用转发。')
+  expect(wrapper.text()).not.toContain('请在目标 Linux 执行命令，完成登记后继续发布与检查。')
+})
+
+it('does not offer to continue before a reinstalled host publishes, even if forwarding is still active', async () => {
+  vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('enrolled') }))
+  vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ success: true, enabled_in_config: true, supported: true, managed: { active: true, healthy: true, spec } }))
+  const wrapper = await render(false, true)
+  await button(wrapper, '重新自动检测')?.trigger('click'); await flushPromises()
+  expect(button(wrapper, '继续设置测试客户端')).toBeUndefined()
+})
+
 describe.each([false, true])('shared automatic gateway flow (embedded=%s)', embedded => {
   it('keeps the client step blocked when application succeeds but forwarding is unhealthy', async () => {
     vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('published') }))

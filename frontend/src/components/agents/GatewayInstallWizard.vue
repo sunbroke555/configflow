@@ -609,8 +609,8 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
     <template #footer>
       <div v-if="embedded" class="flex flex-wrap items-center gap-2">
         <Button v-if="!locked" class="min-h-11" :disabled="busy || !config || !!pollError" @click="generatePreparedInstallation"><LoaderCircle v-if="busy" class="size-4 animate-spin" />生成安装命令</Button>
-        <Button v-else-if="activeNetwork" class="min-h-11" :disabled="busy" @click="emit('completed')">{{ goal === 'router' ? '继续接入主路由' : '继续设置测试客户端' }}</Button>
-        <span v-else class="text-xs text-muted-foreground">{{ step === 4 ? (goal === 'router' ? '检查并启用转发后，再接入主路由。' : '检查并启用转发后，才能接入客户端。') : '请在目标 Linux 执行命令，完成登记后继续发布与检查。' }}</span>
+        <Button v-else-if="activeNetwork && installation?.phase === 'published' && !installationBlocked" class="min-h-11" :disabled="busy" @click="emit('completed')">{{ goal === 'router' ? '继续接入主路由' : '继续设置测试客户端' }}</Button>
+        <span v-else class="text-xs text-muted-foreground">{{ step === 4 ? (goal === 'router' ? '检查并启用转发后，再接入主路由。' : '检查并启用转发后，才能接入客户端。') : step === 3 ? '按顺序发布并检查两项配置后，再启用转发。' : '请在目标 Linux 执行命令，完成登记后继续发布与检查。' }}</span>
       </div>
       <div v-else class="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <p class="m-0 shrink-0 text-xs text-muted-foreground"><span class="num">{{ step + 1 }} / 5</span><span class="hidden sm:inline"> · {{ steps[step] }}</span></p>

@@ -143,6 +143,30 @@ def test_network_changes_cannot_redirect_active_forwarding_or_switch_registered_
     assert sessions._read(manager.repository, saved['id']) == current
 
 
+def test_reinstall_on_a_forwarding_host_confirms_its_live_network(setup, monkeypatch):
+    # Preparing the installation again after a configuration change keeps the
+    # host's forwarding; detecting the same network must not demand removing it.
+    client, manager, admin, _, _ = setup
+    _, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    bind(manager, saved, pair)
+    status = {'success': True, 'supported': True, 'managed': {'active': True, 'spec': SPEC},
+              'detection': network_detection()}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', lambda *_: status)
+    url = BASE + '/' + saved['id'] + '/network'
+    response = client.post(url, headers=admin, json={'auto_network': True})
+    assert response.status_code == 200, response.json
+    assert sessions._read(manager.repository, saved['id'])['network'] == SPEC
+    status.update(managed={'active': True, 'spec': {**SPEC, 'interface': 'eth1'}})
+    response = client.post(url, headers=admin, json={'auto_network': True})
+    assert response.status_code == 200
+    current = sessions._read(manager.repository, saved['id'])
+    current['network'] = {**SPEC, 'address': SPEC['address'], 'interface': '', 'lan_cidr': '', 'upstream_gateway': ''}
+    sessions._write(manager.repository, current)
+    response = client.post(url, headers=admin, json={'auto_network': True})
+    assert response.status_code == 409 and '撤销' in response.json['message']
+
+
 @pytest.mark.parametrize('ip', ['', SPEC['address']])
 def test_optional_ip_reuses_agent_detection_and_pins_exact_pair(setup, ip):
     client, manager, admin, _, _ = setup
