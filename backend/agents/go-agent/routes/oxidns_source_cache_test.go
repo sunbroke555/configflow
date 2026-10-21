@@ -14,7 +14,7 @@ import (
 )
 
 func oxSourceTestRecord(id int, tag string) map[string]interface{} {
-	return map[string]interface{}{"id": id, "created_at_ms": 1792100000123, "request_id": id,
+	return map[string]interface{}{"id": id, "created_at_ms": int64(1792100000123), "request_id": id,
 		"client_ip": "192.0.2.1", "questions_json": []interface{}{}, "answers_json": []interface{}{},
 		"elapsed_ms": 1, "has_response": true, "error": nil, "rcode": "No Error",
 		"steps": []oxSourceStep{{Sequence: "main", Kind: "executor", Tag: tag, Outcome: "entered"},
@@ -318,11 +318,11 @@ func TestOxSourceCacheIdentityBoundAndInvalidation(t *testing.T) {
 	if !strings.Contains(string(a.enrich(context.Background(), list())), `"resolution_source":"local"`) {
 		t.Fatal("missing cache hit")
 	}
-	row["created_at_ms"] = 1792100000124
+	row["created_at_ms"] = int64(1792100000124)
 	if strings.Contains(string(a.enrich(context.Background(), list())), "resolution_source") {
 		t.Fatal("reused ID inherited stale source")
 	}
-	row["created_at_ms"] = 1792100000123
+	row["created_at_ms"] = int64(1792100000123)
 	row["client_ip"] = "192.0.2.99"
 	if strings.Contains(string(a.enrich(context.Background(), list())), "resolution_source") {
 		t.Fatal("different query inherited source")
