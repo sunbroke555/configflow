@@ -3,12 +3,13 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import { createMemoryHistory, createRouter, RouterView, useRoute } from 'vue-router'
 import { agentApi, oxidnsMonitorApi, profileApi } from '@/api'
+import { invalidateAgentSummaries } from '@/lib/agentSummaries'
 import OxiDNSMonitor from '@/views/OxiDNSMonitor.vue'
 import { Select } from '@/components/ui/select'
 import { confirm, notify } from '@/lib/feedback'
 import { OXIDNS_DEVICE_STORAGE_KEY } from '@/composables/useOxiDNSDevices'
 
-vi.mock('@/api', () => ({ agentApi: { getAll: vi.fn() }, profileApi: { list: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn(), queries: vi.fn(), query: vi.fn(), resetStatistics: vi.fn() } }))
+vi.mock('@/api', () => ({ agentApi: { getAll: vi.fn(), summaries: vi.fn() }, profileApi: { list: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn(), queries: vi.fn(), query: vi.fn(), resetStatistics: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
 const wrappers: VueWrapper[] = []
 function stubStorage() {
@@ -49,12 +50,14 @@ async function render(path = '/agents/one/oxidns') {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  invalidateAgentSummaries()
   stubStorage()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} })))
   vi.mocked(confirm).mockResolvedValue(true)
   vi.mocked(oxidnsMonitorApi.resetStatistics).mockImplementation(async id => response({ ...snapshot(id), statistics: { generation: 'reset', started_at_ms: 0, reason: 'manual', partial: false } }))
   vi.mocked(agentApi.getAll).mockResolvedValue(response([device('one'), device('two', 'offline'), device('proxy', 'online', 'mihomo')]))
+  vi.mocked(agentApi.summaries).mockResolvedValue(response([device('one'), device('two', 'offline'), device('proxy', 'online', 'mihomo')]))
   vi.mocked(profileApi.list).mockResolvedValue(response([{ id: 'default', name: '默认配置', is_default: true }, { id: 'office', name: '办公室' }]))
   vi.mocked(oxidnsMonitorApi.overview).mockImplementation(async id => response(snapshot(id)))
   vi.mocked(oxidnsMonitorApi.queries).mockImplementation(async id => response({ success: true, recorder: 'queries', records: [{ id: 12, client_ip: 'client-' + id }], next_cursor: null }))
@@ -153,7 +156,7 @@ describe('OxiDNS monitor device selection', () => {
     expect(wrapper.text()).toContain('Device two')
   })
   it('retries a failed device list without replacing a valid overview', async () => {
-    vi.mocked(agentApi.getAll).mockRejectedValueOnce({ response: { data: { message: '设备列表暂不可用' } } })
+    vi.mocked(agentApi.summaries).mockRejectedValueOnce({ response: { data: { message: '设备列表暂不可用' } } })
     const { wrapper } = await render()
     expect(wrapper.text()).toContain('设备列表暂不可用')
     expect(wrapper.find('[data-test="overview"]').exists()).toBe(true)
@@ -163,7 +166,7 @@ describe('OxiDNS monitor device selection', () => {
     expect(wrapper.get('button[role="combobox"]').attributes('disabled')).toBeUndefined()
   })
   it('shows connection guidance when no OxiDNS devices remain', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([device('proxy', 'online', 'mihomo')]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([device('proxy', 'online', 'mihomo')]))
     const { wrapper } = await render()
     expect(wrapper.text()).toContain('暂无 OxiDNS Agent')
     expect(wrapper.find('[data-test="overview"]').exists()).toBe(false)

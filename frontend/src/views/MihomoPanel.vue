@@ -98,6 +98,7 @@ import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
 import MihomoRules from '@/components/mihomo/MihomoRules.vue'
 import MihomoCoreActions from '@/components/mihomo/MihomoCoreActions.vue'
 import { agentApi, mihomoPanelApi, profileApi } from '@/api'
+import { loadAgentSummaries } from '@/lib/agentSummaries'
 import { notify } from '@/lib/feedback'
 import { panelError, type MihomoMode } from '@/types/mihomo'
 import type { Agent } from '@/types'
@@ -174,7 +175,7 @@ async function loadDevices() {
   devicesLoading.value = true
   devicesError.value = ''
   try {
-    const { data } = await agentApi.getAll()
+    const data = await loadAgentSummaries()
     if (!Array.isArray(data)) throw new Error('设备列表格式异常，请稍后重试。')
     devices.value = data.filter((agent: Agent) => agent && (agent.service_type || 'mihomo') === 'mihomo')
     if (!currentDevice.value && devices.value.length) selectDevice(preferred(devices.value).id)

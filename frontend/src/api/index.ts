@@ -396,6 +396,8 @@ export interface AgentLogTarget {
 
 export const agentApi = {
   getAll: () => api.get('/agents'),
+  /** Without content sync status: much cheaper, for pickers and polling. */
+  summaries: () => api.get('/agents', { params: { summary: 1 } }),
   create: (data: any) => api.post('/agents', data),
   update: (id: string, data: any = {}) => api.post(`/agents/${id}/update`, data),
   getUpgrade: (id: string) => api.get(`/agents/${id}/upgrade`),

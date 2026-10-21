@@ -152,3 +152,21 @@ def test_missing_profile_is_unknown_without_breaking_other_agents(api_env, monke
     assert result['mihomo']['content_sync'] == {'status': 'unknown', 'reason': 'profile_unavailable'}
     assert result['mosdns']['content_sync']['status'] == 'never-pushed'
     assert not executor.jobs
+
+
+def test_summary_listing_skips_content_comparison_and_hides_private_baselines(api_env, monkeypatch):
+    client, _manager, _config, ids, executor, _replies, _fetches = api_env
+    for agent_id in ids.values():
+        assert push(client, agent_id).status_code == 200
+
+    def no_comparison(*_args, **_kwargs):
+        pytest.fail('A summary listing must not load profiles or compare contents')
+    monkeypatch.setattr(agents, '_agent_with_content_sync', no_comparison)
+    response = client.get('/api/agents?summary=1')
+    assert response.status_code == 200
+    listed = {agent['service_type']: agent for agent in response.json}
+    assert set(listed) == {'mihomo', 'mosdns'}
+    for agent in listed.values():
+        assert {'id', 'name', 'status', 'service_type'} <= set(agent)
+        assert not {'content_sync', 'has_update', 'token', 'applied_content'} & set(agent)
+    assert executor.jobs == []
