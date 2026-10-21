@@ -45,6 +45,7 @@ def test_opt_in_does_not_change_ordinary_aio_and_sh_syntax(tmp_path):
     assert '"installation_token":' not in ordinary
     assert 'configflow-gateway' not in ordinary
     assert '-prepare-tun' in ordinary
+    assert 'CONFIGFLOW_FORWARDING_OWNER' not in ordinary
     script = generate()
     assert 'read -r choice < /dev/tty' not in script
     assert '"installation_id": "install-session-0123456789"' in script
@@ -54,6 +55,8 @@ def test_opt_in_does_not_change_ordinary_aio_and_sh_syntax(tmp_path):
     result = subprocess.run(['sh', '-n', path], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert 'releases/latest' not in script
+    # Only the gateway's own apply changes forwarding; its environment check says so.
+    assert script.count('CONFIGFLOW_FORWARDING_OWNER=gateway sh "$GATEWAY_STAGE/install-agents.sh"') == 1
     assert 'sysctl -w' not in script
     assert 'enable-ipv4-forwarding.sh' not in script
     assert '99-configflow-aio-forward.conf' not in script

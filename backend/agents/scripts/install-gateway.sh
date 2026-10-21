@@ -336,7 +336,9 @@ cat > "$GATEWAY_STAGE/install-agents.sh" <<'CONFIGFLOW_GATEWAY_AIO_SCRIPT'
 {aio_script}
 CONFIGFLOW_GATEWAY_AIO_SCRIPT
 cf_step "安装两个 Agent"
-sh "$GATEWAY_STAGE/install-agents.sh"
+# Forwarding belongs to the explicit gateway apply, which saves and restores it;
+# the environment check must not tell the user to persist it by hand.
+CONFIGFLOW_FORWARDING_OWNER=gateway sh "$GATEWAY_STAGE/install-agents.sh"
 
 ENROLLMENT_URL={enrollment_url_shell}
 ENROLLMENT_TOKEN={enrollment_token_shell}
