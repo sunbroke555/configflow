@@ -7,7 +7,7 @@ from flask import jsonify, request
 from backend.common.auth import require_auth
 from backend.common.config import get_config, get_repository, reset_config_context, save_config
 from backend.routers import dns_guard
-from backend.routers.base import RouterConflictError, RouterError, as_dict
+from backend.routers.base import RouterConflictError, RouterError, as_dict, retire_policy_routes
 from backend.routers.desired import compute_desired
 from backend.routers.dhcp_dns import dns_agent_settings
 from backend.routers.ikuai import IKuaiDriver
@@ -189,6 +189,9 @@ def _inspect(config, router, driver, content_loader=None):
     if guard:
         driver.dns_guard_manifest = router.get('dns_guard_state')
     state = driver.read_state()
+    if router.get('manage_return_routing') is not True:
+        # Policy rules need managed return routing; without it, route by static routes.
+        retire_policy_routes(state)
     if guard:
         desired['dns_guard'] = {'settings': guard_settings(router), 'previous': router.get('dns_guard_state')}
         state.dns_guard = dns_guard.snapshot(driver)

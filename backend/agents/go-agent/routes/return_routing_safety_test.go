@@ -32,6 +32,8 @@ func safetyReadFake(t *testing.T, override map[string]string, failed string) *[]
 	old := runCommand
 	commands := []string{}
 	outputs := map[string]string{
+		"ip -V":                            "ip utility, iproute2-6.1.0",
+		"nft --version":                    "nftables v1.0.6",
 		"ip -j -N -4 route show table all": `[{"dst":"default","gateway":"192.168.1.1","dev":"eth0","table":"main"}]`,
 		"ip -j -N -4 rule show":            `[{"priority":0,"src":"all","table":"local"},{"priority":32766,"src":"all","table":"main"}]`,
 		"nft -j list ruleset":              `{"nftables":[{"metainfo":{"json_schema_version":1}}]}`,
@@ -62,7 +64,7 @@ func TestSafetyReadResourcesUsesCompleteNumericSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(*commands) != 4 || len(resources.NFT) != 0 || len(resources.Routes) != 1 {
+	if len(*commands) != 6 || len(resources.NFT) != 0 || len(resources.Routes) != 1 {
 		t.Fatalf("resources=%+v commands=%v", resources, *commands)
 	}
 	if err := checkReturnResources(safetySpec(t), nil, resources); err != nil {
@@ -355,5 +357,34 @@ func TestSafetyReadAllLinksRejectsIncompleteIdentity(t *testing.T) {
 				t.Fatal("incomplete links accepted")
 			}
 		})
+	}
+}
+
+func TestReturnRoutingToolsNamesBusyBoxIPAndMissingNft(t *testing.T) {
+	old := runCommand
+	t.Cleanup(func() { runCommand = old })
+	runCommand = func(name string, args ...string) (string, error) {
+		if name == "ip" {
+			return "", errors.New("exit status 1: BusyBox v1.37.0 (2025-11-23) multi-call binary.")
+		}
+		return "", errors.New(`exec: "nft": executable file not found in $PATH`)
+	}
+	_, err := readReturnResources()
+	if err == nil || !strings.Contains(err.Error(), "缺少 iproute2（当前 ip 为 BusyBox 版本）、nftables") ||
+		!strings.Contains(err.Error(), "apk add iproute2 nftables") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestSafetyAnonymousSetMatchesNftMergedIntervals(t *testing.T) {
+	// nftables 1.0.9 reads 91.108.4.0/22, 91.108.8.0/21 and 91.108.16.0/21 back as one range.
+	written := safetyObject(t, `{"rule":{"family":"inet","table":"configflow_return","chain":"owned","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"ip","field":"daddr"}},"right":{"set":[{"prefix":{"addr":"91.108.4.0","len":22}},{"prefix":{"addr":"91.108.8.0","len":21}},{"prefix":{"addr":"91.108.16.0","len":21}},{"prefix":{"addr":"198.18.0.0","len":15}},"1.1.1.1"]}}},{"accept":null}]}}`)
+	readBack := safetyObject(t, `{"rule":{"family":"inet","table":"configflow_return","chain":"owned","handle":7,"expr":[{"match":{"op":"==","left":{"payload":{"protocol":"ip","field":"daddr"}},"right":{"set":["1.1.1.1",{"range":["91.108.4.0","91.108.23.255"]},{"prefix":{"addr":"198.18.0.0","len":15}}]}}},{"accept":null}]}}`)
+	if _, err := confirmResources([]map[string]interface{}{written}, []map[string]interface{}{readBack}); err != nil {
+		t.Fatalf("merged nft intervals must confirm the written CIDRs: %v", err)
+	}
+	narrower := safetyObject(t, `{"rule":{"family":"inet","table":"configflow_return","chain":"owned","expr":[{"match":{"op":"==","left":{"payload":{"protocol":"ip","field":"daddr"}},"right":{"set":["1.1.1.1",{"range":["91.108.4.0","91.108.15.255"]},{"prefix":{"addr":"198.18.0.0","len":15}}]}}},{"accept":null}]}}`)
+	if normalizedResourceEqual(written, narrower) {
+		t.Fatal("a set matching fewer addresses must not be equal")
 	}
 }

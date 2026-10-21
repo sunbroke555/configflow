@@ -154,6 +154,12 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         remaining = {route.id for route in state.routes} & set(checks['removed_routes'])
         if remaining:
             raise ReleaseError('回读校验失败：应删除的路由仍然存在')
+        for check in checks.get('restored_routes') or []:
+            if not any(route.dst == check['cidr'] and route.gateway == check['gateway'] and route.enabled
+                       for route in state.routes):
+                raise ReleaseError(f'回读校验失败：没有找到恢复的静态路由 {check["cidr"]} → {check["gateway"]}')
+        if {rule.id for rule in state.policy_routes or []} & set(checks.get('removed_policy_routes') or []):
+            raise ReleaseError('回读校验失败：应删除的端口分流规则仍然存在')
     elif stage == 'nat_bypass':
         verify_nat(checks, state)
 

@@ -2,6 +2,8 @@ package routes
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os/exec"
@@ -21,6 +23,13 @@ var runCommand = func(name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, name, args...).Output()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		// A bare "exit status 1" hides why the host tool refused, e.g. an ip without JSON support.
+		if detail := strings.TrimSpace(string(exitErr.Stderr)); detail != "" {
+			err = fmt.Errorf("%w: %s", err, detail)
+		}
+	}
 	return string(out), err
 }
 

@@ -431,6 +431,27 @@ describe('routers view', () => {
     expect(routerApi.apply).not.toHaveBeenCalled()
   })
 
+  it('lists iKuai policy rules that go back to static routes without return routing', async () => {
+    vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, generated_at: '2026-10-17T10:00:00', report: {
+      ...REPORT,
+      routes: { ...REPORT.routes, unmanaged_other: [], retired_policy: [
+        { cidr: '198.18.0.0/16', gateway: '192.0.2.4', comment: 'cf-mihomo', restore: false },
+        { cidr: '1.1.1.1/32', gateway: '192.0.2.4', comment: 'cf-mihomo-manual', restore: true }
+      ] },
+      return_routing: { status: 'disabled', message: RETURN_DISABLED_MESSAGE }
+    } } } as any)
+    const wrapper = await mountRouter({ ...ROUTER, manage_return_routing: false })
+    await wrapper.findAll('button').find(button => button.text().includes('差异报告'))!.trigger('click')
+    await flushPromises()
+    const card = wrapper.findAllComponents(SectionCard).find(item => item.props('title') === '其他路由')!
+    expect(card.text()).toContain('端口分流需要回流配合')
+    const rows = card.findAll('tbody tr').map(row => row.text())
+    expect(rows).toEqual([
+      expect.stringContaining('198.18.0.0/16'), expect.stringContaining('1.1.1.1/32')])
+    expect(rows[0]).toContain('端口分流 · 将改回静态路由')
+    expect(rows[1]).toContain('端口分流 · 将恢复为手工静态路由')
+  })
+
   it('discards a stale pending preview after changing the return-routing preference', async () => {
     vi.mocked(routerApi.update).mockResolvedValue({ data: { success: true } } as any)
     vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, report: REPORT, generated_at: '2026-10-17T10:00:00' } } as any)

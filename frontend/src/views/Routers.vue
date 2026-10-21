@@ -405,14 +405,16 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
       </SectionCard>
 
       <SectionCard
-        v-if="report.routes.unmanaged_other.length || report.routes.extra.length"
+        v-if="report.routes.unmanaged_other.length || report.routes.extra.length || report.routes.retired_policy?.length"
         class="mt-4"
         :padded="false"
         title="其他路由"
         persistent-description
         :description="report.routes.mode === 'policy'
           ? '指向代理网关的静态路由会让 mihomo 自身流量回环：手工路由将迁入只增不删的策略路由「cf-mihomo-manual」后删除；多余项为 ConfigFlow 标记但已不再需要的网段。'
-          : '指向代理网关但不由期望状态推导的手工路由不会被修改；多余项为 ConfigFlow 标记但已不再需要的路由。'"
+          : report.routes.retired_policy?.length
+            ? '未开启自动配置回流：ConfigFlow 写入的端口分流将改回静态路由后删除，手工网段恢复为手工静态路由。端口分流需要回流配合，否则连接会被主路由中断。'
+            : '指向代理网关但不由期望状态推导的手工路由不会被修改；多余项为 ConfigFlow 标记但已不再需要的路由。'"
       >
         <template #actions><Button v-if="reportRouter" size="sm" variant="outline" :disabled="applying" @click="openRouteManager(reportRouter)">静态路由</Button></template>
         <div class="cf-table-wrap">
@@ -429,6 +431,12 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
                   <span v-else class="chip chip-acc">手工路由{{ item.enabled ? '' : '（已停用）' }}</span>
                 </td>
                 <td class="text-[12px] text-muted-foreground">{{ item.comment || '—' }}</td>
+              </tr>
+              <tr v-for="item in report.routes.retired_policy || []" :key="'r' + item.comment + item.cidr">
+                <td class="font-mono text-[12px]">{{ item.cidr }}</td>
+                <td class="font-mono text-[12px]">{{ item.gateway }}</td>
+                <td><span class="chip chip-sky">端口分流 · {{ item.restore ? '将恢复为手工静态路由' : '将改回静态路由' }}</span></td>
+                <td class="text-[12px] text-muted-foreground">{{ item.comment }}</td>
               </tr>
               <tr v-for="item in report.routes.extra" :key="'e' + item.cidr">
                 <td class="font-mono text-[12px]">{{ item.cidr }}</td>

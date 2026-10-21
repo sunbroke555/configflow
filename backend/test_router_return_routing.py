@@ -181,7 +181,10 @@ def test_api_setting_persists_and_noop_toggle_rejects_old_preview(authenticated_
                            json={'fingerprint': on['fingerprint']})
     assert rejected.status_code == 409, rejected.get_json()
     off = rejected.get_json()['plan']
-    assert off['empty'] and off['fingerprint'] != on['fingerprint']
+    assert not off['empty'] and off['fingerprint'] != on['fingerprint']
+    # 端口分流 needs return routing: switching it off moves the CIDRs back to static routes.
+    route_ops = next(stage['ops'] for stage in off['stages'] if stage['key'] == 'routes')
+    assert [op['kind'] for op in route_ops].count('policy_route_delete') == 2
     assert session.writes == [] and agent.calls == []
 
     assert client.put(f'/api/routers/{router_id}', headers=admin,

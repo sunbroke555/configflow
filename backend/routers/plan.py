@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from backend.routers.base import (
-    POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT, RouterState, as_dict, is_managed, managed_comment, policy_route,
+    POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT, RESTORED_COMMENT, RouterState, as_dict, is_managed, managed_comment, policy_route,
     policy_route_ok, stale_route_warning, stale_routes, StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
@@ -130,6 +130,47 @@ def _route_ops(report: Dict[str, Any], state: RouterState, gateway: str, warning
     return ops, skipped
 
 
+def _retired_policy_ops(state: RouterState, proxy_cidrs: List[str], skipped: set,
+                        warnings: List[str], blockers: List[str]):
+    """Turn our 端口分流 rules back into static routes, then delete the rules.
+
+    Static routes take precedence, so each CIDR is routed again before its rule
+    goes. Hand-made CIDRs return as plain hand-made routes (no cf marker).
+    """
+    retired = state.retired_policy_routes or []
+    ops, restored = [], []
+    covered = _networks(proxy_cidrs)
+    existing = {route.dst for route in state.routes}
+    kept = []
+    for entry in retired:
+        if entry.comment != POLICY_MANUAL_COMMENT:
+            continue
+        for network in _networks(entry.dst):
+            cidr = str(network)
+            if any(network.subnet_of(outer) for outer in covered):
+                continue
+            if cidr in existing or not entry.gateway:
+                kept.append(cidr)
+                continue
+            existing.add(cidr)
+            ops.append({'kind': 'route_add', 'cidr': cidr, 'gateway': entry.gateway, 'comment': RESTORED_COMMENT,
+                        'summary': f'恢复手工静态路由 {cidr} → {entry.gateway}（备注 {RESTORED_COMMENT}）'})
+            restored.append({'cidr': cidr, 'gateway': entry.gateway})
+    lost = [cidr for cidr in skipped if any(network.overlaps(old) for network in _networks([cidr])
+                                             for entry in retired for old in _networks(entry.dst))]
+    if lost:
+        blockers.append(f'{"、".join(sorted(lost))} 存在路由冲突，改回静态路由前请先处理，'
+                        '否则删除端口分流后这些网段将无法转发')
+    for entry in retired:
+        ops.append({'kind': 'policy_route_delete', 'id': entry.id,
+                    'summary': f'删除端口分流「{entry.comment}」，其网段改由静态路由转发'})
+    if retired:
+        warnings.insert(0, '未开启自动配置回流：将把 iKuai 端口分流「cf-mihomo」「cf-mihomo-manual」改回静态路由，'
+                           '再删除这些规则。端口分流需要回流配合，否则 mihomo 直接回包给设备时 iKuai 会中断连接。'
+                        + (f'已有同网段静态路由、保持不变：{"、".join(kept)}' if kept else ''))
+    return ops, restored
+
+
 def _policy_op(rule, gateway: str, dst: List[str], comment: str):
     scope = f'除 {gateway} 自身外的设备访问 {", ".join(dst)} → {gateway}'
     if rule is None:
@@ -179,11 +220,18 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
         ops.extend([op] if op else [])
         checks.append({'comment': POLICY_MANUAL_COMMENT, 'gateway': gateway, 'dst': dst})
 
-    for route in state.routes:
-        if route.enabled and route.gateway == gateway and (route.dst in migrate or inside(route.dst)):
-            ops.append({'kind': 'route_delete', 'id': route.id, 'cidr': route.dst,
-                        'summary': f'删除静态路由 {route.dst} → {gateway}（{route.comment or "无备注"}），'
-                                   '改由策略路由转发，避免 mihomo 自身流量回环'})
+    migrated = [route for route in state.routes
+                if route.enabled and route.gateway == gateway and (route.dst in migrate or inside(route.dst))]
+    for route in migrated:
+        ops.append({'kind': 'route_delete', 'id': route.id, 'cidr': route.dst,
+                    'summary': f'删除静态路由 {route.dst} → {gateway}（{route.comment or "无备注"}），'
+                               '改由策略路由转发，避免 mihomo 自身流量回环'})
+    if migrated:
+        # Users read an emptied 静态路由 page as data loss; say where the routes went, first.
+        warnings.insert(0, f'将删除 {len(migrated)} 条指向 {gateway} 的静态路由，网段迁移到 iKuai「端口分流」的'
+                           f'「{POLICY_AUTO_COMMENT}」「{POLICY_MANUAL_COMMENT}」规则，转发效果不变，'
+                           f'但 mihomo 自身的流量不再回环：'
+                           + '、'.join(f'{route.dst}（{route.comment or "无备注"}）' for route in migrated))
     deleting = {op['id'] for op in ops if op['kind'] == 'route_delete'}
     for extra in report['routes']['extra']:
         if extra['route_id'].startswith('policy:') or extra['route_id'] in deleting:
@@ -309,6 +357,14 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         route_ops, skipped, policy_checks = _policy_route_ops(report, state, gateway, warnings)
     else:
         route_ops, skipped = _route_ops(report, state, gateway, warnings)
+    restored = []
+    if state.retired_policy_routes is not None:
+        targets = [entry['cidr'] for entry in desired['proxy_cidrs'] if entry['cidr'] not in skipped]
+        retire_ops, restored = _retired_policy_ops(state, targets, skipped, warnings, blockers)
+        route_ops.extend(retire_ops)
+        if any(cidr != desired.get('fake_ip_range') for cidr in targets):
+            warnings.append('静态路由只看目的地址：mihomo 自身直连这些网段时，流量会被送回 mihomo 形成回环。'
+                            '如需避免，请开启「自动配置回流」，改用排除 mihomo 的端口分流。')
     ros_policy = state.ros_policy_plan
     if ros_policy is not None:
         blockers.extend(ros_policy['blockers'])
@@ -436,6 +492,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     }
     if policy:
         checks['policy_routes'] = policy_checks
+    if state.retired_policy_routes:
+        checks['restored_routes'] = restored
+        checks['removed_policy_routes'] = [entry.id for entry in state.retired_policy_routes]
     if ros_policy is not None:
         checks['ros_policy'] = ros_policy['check']
     if manage_return:
