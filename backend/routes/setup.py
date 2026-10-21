@@ -41,8 +41,10 @@ def setup_sessions():
             return flow.public(flow.create(repository, _body()))
         shared = repository.get_shared()
         sessions = flow.list_sessions(repository)
+        # The first-start template already has proxy groups; a device that
+        # ConfigFlow manages is what shows the setup is under way.
         return {'sessions': [flow.public(session) for session in sessions],
-                'suggested': not sessions and not any(p.get('proxy_groups') for p in repository.export_all()['profiles'].values()),
+                'suggested': not sessions and not repository.get_system().get('agents'),
                 'subscriptions': [{'id': s['id'], 'name': s['name']} for s in shared['subscriptions'] if s.get('enabled', True)],
                 'nodes': [{'id': n['id'], 'name': n['name']} for n in shared['nodes'] if n.get('enabled', True)],
                 'domain_rules': domain_rule_options(repository), 'recommended_domain_rules': recommended_domain_rules(repository)}

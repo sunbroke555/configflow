@@ -49,6 +49,25 @@ def test_suggestion_is_read_only_and_creation_resumes_the_same_profile(setup_api
     assert repository.get_profile('default') == before['profiles']['default']
 
 
+def test_first_start_template_still_suggests_setup_until_a_device_exists(tmp_path):
+    from backend.common.config import _get_initial_config, get_default_config
+    repository = ProfileRepository(tmp_path, default_config_factory=get_default_config,
+                                   initial_config_factory=_get_initial_config)
+    assert repository.get_profile('default')['proxy_groups']
+    previous = config_store._repository
+    config_store.set_repository(repository)
+    try:
+        app = Flask(__name__)
+        register_blueprints(app)
+        client = app.test_client()
+        assert client.get('/api/setup').json['suggested']
+        repository.update_system_transaction(lambda system: system.update(agents=[
+            {'id': 'mihomo', 'name': 'mihomo', 'host': '192.0.2.10', 'service_type': 'mihomo', 'profile_id': 'default'}]))
+        assert not client.get('/api/setup').json['suggested']
+    finally:
+        config_store.set_repository(previous)
+
+
 def test_sources_are_idempotent_and_bad_subscription_cannot_complete(setup_api):
     client, repository = setup_api
     start(client)
