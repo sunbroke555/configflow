@@ -9,7 +9,7 @@ from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 import re
 
-from backend.common.oxidns_settings import OxidnsSettingsError
+from backend.common.oxidns_settings import BLOCK_QTYPES_EXECS, OxidnsSettingsError
 from backend.common.dns_watchdog import WATCHDOG_RULE
 from backend.common.oxidns_native import resource_references, relative_resource
 from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag
@@ -68,7 +68,7 @@ def _prefix_end(args):
         elif not item.get('matches') and (action in ('prefer_ipv4', '$query_recorder') or
                                         isinstance(action, str) and action.startswith('metrics_collector ')):
             index += 1
-        elif action == 'reject 0' and isinstance(match, str) and re.fullmatch(r'qtype(?:\s+\d+)+', match):
+        elif action in BLOCK_QTYPES_EXECS and isinstance(match, str) and re.fullmatch(r'qtype(?:\s+\d+)+', match):
             index += 1
         elif action == '$custom_hosts' and not item.get('matches') and index + 1 < len(args) and \
                 args[index + 1].get('exec') == 'accept' and _single_match(args[index + 1]) == 'has_resp':

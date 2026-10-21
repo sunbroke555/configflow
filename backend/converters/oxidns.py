@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 import re
 import yaml
 
-from backend.common.oxidns_settings import normalize_oxidns_settings, OxidnsSettingsError
+from backend.common.oxidns_settings import BLOCK_QTYPES_EXEC, normalize_oxidns_settings, OxidnsSettingsError
 from backend.common.oxidns_native import (managed_files, native_document,
     relative_resource, resource_references)
 from backend.converters.mosdns import (
@@ -341,7 +341,7 @@ def generate_oxidns_config(config_data, base_url=''):
     if s['prefer_ipv4']:
         main.append({'exec': 'prefer_ipv4'})
     if s['block_qtypes']:
-        main.append({'matches': ['qtype ' + ' '.join(str(t) for t in s['block_qtypes'])], 'exec': 'reject 0'})
+        main.append({'matches': ['qtype ' + ' '.join(str(t) for t in s['block_qtypes'])], 'exec': BLOCK_QTYPES_EXEC})
     if s['custom_hosts'].strip():
         main.extend([{'exec': '$custom_hosts'}, {'matches': ['has_resp'], 'exec': 'accept'}])
     if adguard['enabled']:
