@@ -242,7 +242,7 @@ async function createInstallation(useAsServerDomain = false) {
     if (!current(captured)) return
     acceptInstallation(data)
     baseline.value = allDraftKey.value
-    notify.success('配置已保存，请在目标 Linux 执行安装命令。')
+    notify.success(data.phase === 'waiting' ? '配置已保存，请在目标 Linux 执行安装命令。' : '配置已更新，继续沿用已安装的设备，请重新发布。')
   } catch (failure: any) {
     if (!current(captured)) return
     error.value = gatewayErrorMessage(failure)
@@ -410,7 +410,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
         <div v-if="embedded && (configurationPreview?.warnings || config?.warnings)?.length" class="space-y-1 text-xs text-warning-accent" role="status"><p v-for="warning in (configurationPreview?.warnings || config?.warnings)" :key="warning" class="m-0">{{ warning }}</p></div>
         <div v-if="installationBlocked" role="alert" class="space-y-1 border-l-2 border-destructive-accent pl-3 text-xs leading-relaxed">
           <p class="m-0 font-medium text-destructive-accent">安装已暂停</p>
-          <p class="m-0">{{ installation?.target_changed ? '设备绑定或身份已改变。' : installation?.config_changed ? '配置空间在安装后有修改。' : '安装凭据已过期。' }} 已停止发布与转发操作，请重新准备安装。</p>
+          <p class="m-0">{{ installation?.target_changed ? '设备绑定或身份已改变。已停止发布与转发操作，请重新准备安装。' : installation?.config_changed ? '配置空间在安装后有修改。已停止发布与转发操作；请重新准备安装并预览保存，已安装的设备会继续沿用，无需重新运行安装命令。' : '安装凭据已过期。已停止发布与转发操作，请重新准备安装。' }}</p>
         </div>
         <div v-if="installation" class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2">
           <p class="m-0 mr-auto min-w-0 break-words text-xs text-muted-foreground">{{ resumed ? '已恢复' : '安装目标' }} · <strong class="font-medium text-foreground">{{ embedded ? (goal === 'router' ? '主路由分流' : '网关分流') : installation.name }}</strong> <span class="font-mono">{{ network.address }}</span></p>
