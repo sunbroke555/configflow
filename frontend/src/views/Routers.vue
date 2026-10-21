@@ -555,7 +555,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               id="router-endpoint"
               v-model="form.endpoint"
               class="bg-background/50 font-mono"
-              :placeholder="form.type === 'routeros' ? 'https://192.168.88.1' : 'http://192.168.1.1'"
+              :placeholder="form.type === 'routeros' ? 'https://192.168.88.1' : 'https://192.168.9.1'"
             />
           </FormField>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">

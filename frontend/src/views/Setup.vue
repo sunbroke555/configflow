@@ -233,7 +233,7 @@ onUnmounted(() => { disposed = true })
           <div v-if="step === 2 && session" class="space-y-5">
             <section class="space-y-3" aria-labelledby="setup-domain-title">
               <div class="flex flex-wrap items-center gap-1"><h3 id="setup-domain-title" class="m-0 text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" text="直接复用 ConfigFlow 原有初始模板的规则库、顺序及默认去向。支持 URL 和内容型的 Domain / Classical text / YAML 规则；Classical 中的域名与 IP 条件由现有转换流程处理。已有相同来源会直接复用，可取消或替换规则，同一规则集只能选择一种去向。两项核心引用相同规则；按模板顺序匹配，未命中时按下方设置处理。" /><Button variant="ghost" size="sm" class="ml-auto min-h-11" :disabled="working || session?.completed" @click="setDomainRules()">恢复推荐</Button></div>
-              <p class="m-0 text-xs text-muted-foreground">已选 <span class="num">{{ directRules.length }}</span> 组直连、<span class="num">{{ proxyRules.length }}</span> 组代理规则，可直接继续。</p>
+              <p class="text-xs text-muted-foreground">已选 <span class="num">{{ directRules.length }}</span> 组直连、<span class="num">{{ proxyRules.length }}</span> 组代理规则，可直接继续。</p>
               <div class="grid gap-3 sm:grid-cols-2">
                 <FormField label="直连规则" html-for="setup-direct-rules" hint="使用直连 DNS" persistent-hint>
                   <MultiSelect v-model="directRules" trigger-id="setup-direct-rules" :options="directOptions" :disabled="working || session?.completed" :max-visible="2" placeholder="选择直连规则集" search-placeholder="搜索域名规则集…" class="min-h-11" />
@@ -261,7 +261,7 @@ onUnmounted(() => { disposed = true })
                 <Segmented v-model="trafficFallback" :disabled="working || session?.completed" class="shrink-0 self-start sm:self-center" :options="[{value:'proxy',label:'走代理'},{value:'direct',label:'直连'}]" label="Mihomo 未匹配连接的出口" />
               </div>
             </section>
-            <div class="space-y-2 border-t border-border pt-4"><p class="m-0 text-xs text-muted-foreground">{{ session?.subscription_ids.length }} 个订阅 · {{ session?.node_ids.length }} 个已有节点</p><Button :disabled="working || session?.completed || !!localDnsWarning" class="min-h-11" @click="prepare"><LoaderCircle v-if="working" class="size-4 animate-spin" />生成配置并继续<ArrowRight class="size-4" /></Button></div>
+            <div class="space-y-2 border-t border-border pt-4"><p class="text-xs text-muted-foreground">{{ session?.subscription_ids.length }} 个订阅 · {{ session?.node_ids.length }} 个已有节点</p><Button :disabled="working || session?.completed || !!localDnsWarning" class="min-h-11" @click="prepare"><LoaderCircle v-if="working" class="size-4 animate-spin" />生成配置并继续<ArrowRight class="size-4" /></Button></div>
           </div>
           <div v-if="step === 3 && session" class="space-y-4">
             <SetupInstallation :key="session.id" :profile-id="session.profile_id" :goal="session.goal" @busy="childBusy = $event" @completed="checkInstallation" />
