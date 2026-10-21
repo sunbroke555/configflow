@@ -59,15 +59,17 @@ ConfigFlow 是一个通过浏览器操作的代理与 DNS 配置管理平台。�
 
 ## 界面预览
 
-以下截图使用演示数据，具体布局以实际版本为准。
+截图更新于 **2026-10-21**，来自本地隔离演示环境。配置空间、订阅、节点与规则均为虚构数据，未接入真实订阅或设备，不含生产凭据。
 
 ### 数据统计
 
-![ConfigFlow 数据统计总览](doc/img/dashboard-demo.png)
+![ConfigFlow 数据统计总览：演示配置的资源引用与配置流向](doc/img/dashboard-demo.jpg)
 
 ### 策略组管理
 
-![ConfigFlow 策略组管理](doc/img/policy-groups-demo.png)
+![ConfigFlow 策略组管理：订阅来源、节点筛选与命中结果（演示数据）](doc/img/policy-groups-demo.jpg)
+
+更多页面与新版分层选项说明见 [使用指南的界面预览](doc/README.md#界面预览)。
 
 ## 快速开始
 
