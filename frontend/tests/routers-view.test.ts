@@ -358,8 +358,8 @@ describe('routers view', () => {
 
     const toggle = document.querySelector<HTMLButtonElement>('#router-return-routing')!
     expect(toggle.getAttribute('aria-checked')).toBe('false')
-    expect(document.body.textContent).not.toContain('关闭只停止管理，已有回流规则会保留')
-    expect((await toggleHelp('自动配置回流'))?.textContent).toContain('关闭只停止管理，已有回流规则会保留')
+    expect(document.body.textContent).not.toContain('关闭后发布时会移除 Agent 写入的回流规则')
+    expect((await toggleHelp('自动配置回流'))?.textContent).toContain('关闭后发布时会移除 Agent 写入的回流规则')
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     await toggleHelp('自动配置回流')
     expect(document.body.textContent).toContain('DHCP DNS 服务器（OxiDNS Agent）')

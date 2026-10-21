@@ -67,6 +67,9 @@ def _apply(op: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -> D
         if blockers:
             raise RouterError('；'.join(blockers))
         agent.remove(op['restore_legacy'])
+        if op.get('previous'):
+            # A later failure rolls the release back: rules go back with the routes they serve.
+            return {'kind': 'return_routing_apply', 'spec': op['previous'], 'previous': None}
         return {}
     return driver.apply(op)
 
@@ -119,6 +122,11 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         return
     if stage == 'dhcp_dns':
         verify_dns(checks['dhcp_dns'], driver.read_dhcp_dns())
+        return
+    if stage == 'return_cleanup':
+        managed = agent.status().get('managed') or {}
+        if managed.get('active') is True or managed.get('table_present') is True:
+            raise ReleaseError('回读校验失败：Agent 上仍有受管的回流规则')
         return
     if stage == 'return_routing':
         status = agent.status()

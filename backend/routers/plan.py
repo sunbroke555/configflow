@@ -38,6 +38,7 @@ STAGE_TITLES = {
     'nat_bypass': '主路由 NAT 免转换',
     'dhcp_dns': 'DHCP DNS',
     'dns_guard': 'DNS 劫持',
+    'return_cleanup': '移除 mihomo 回流规则',
 }
 
 
@@ -169,6 +170,30 @@ def _retired_policy_ops(state: RouterState, proxy_cidrs: List[str], skipped: set
                            '再删除这些规则。端口分流需要回流配合，否则 mihomo 直接回包给设备时 iKuai 会中断连接。'
                         + (f'已有同网段静态路由、保持不变：{"、".join(kept)}' if kept else ''))
     return ops, restored
+
+
+def _return_cleanup_ops(return_routing: Dict[str, Any], warnings: List[str]):
+    """Remove the Agent's return routing once the switch is off, as the last stage.
+
+    It runs after the routes are back to static routes: removing it earlier would
+    briefly cut 端口分流, which only works with replies routed back.
+    """
+    cleanup = return_routing.get('cleanup')
+    if not cleanup:
+        return []
+    if cleanup['shared_with']:
+        warnings.append(f'mihomo 上的回流规则仍被「{"、".join(cleanup["shared_with"])}」使用，本次保留')
+        return []
+    issues = return_safety_blockers({'safety': cleanup.get('safety')})
+    if not cleanup.get('complete'):
+        issues.insert(0, 'Agent 记录的回流资源不完整，可能有未完成的事务')
+    if issues:
+        warnings.append('无法安全移除 mihomo 上的回流规则，本次保留，请人工核对：' + '；'.join(issues))
+        return []
+    spec = cleanup['spec']
+    return [{'kind': 'return_routing_remove', 'restore_legacy': False, 'previous': spec,
+             'summary': f'移除回流规则（表 inet {MANAGED_RETURN_TABLE}，路由表 {spec.get("table")} → '
+                        f'{spec.get("router_ip")}，标记 {len(spec.get("proxy_dst") or [])} 个网段）'}]
 
 
 def _policy_op(rule, gateway: str, dst: List[str], comment: str):
@@ -460,11 +485,13 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         guard_ops = guard['ops']
         if skipped and guard['spec']:
             blockers.append('存在代理路由冲突，请先处理冲突再启用强制 DNS，避免被劫持的设备拿到 fake-ip 后无法访问')
+    cleanup_ops = [] if manage_return else _return_cleanup_ops(return_routing, warnings)
     manual = driver is not None and not driver.supports_write
     stages = [
         {'key': 'return_routing', 'title': STAGE_TITLES['return_routing'], 'manual': False, 'ops': return_ops,
          'enabled': manage_return,
          'note': ('已启用自动配置回流；自动选择安全可用的编号和标记，不接管已有手工规则。' if manage_return
+                  else '未启用自动配置回流：本次不写入回流规则；已有规则在最后一个阶段移除。' if cleanup_ops
                   else '未启用自动配置回流：本次跳过，已有回流规则保留，不新增、修改或删除。')},
         {'key': 'routes', 'title': STAGE_TITLES['routes'], 'manual': manual, 'ops': route_ops,
          **({'note': '代理网段使用排除 mihomo 自身的端口分流转发：静态路由只看目的地址，'
@@ -481,6 +508,10 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
             'key': 'dns_guard', 'title': STAGE_TITLES['dns_guard'], 'manual': manual, 'ops': guard_ops,
             'note': ('局域网设备发往其他地址的 53 端口查询转给 OxiDNS；先写放行与回包规则，再启用劫持。'
                      if guard['spec'] else '已关闭强制 DNS：只删除本功能已核实归属的对象，手工规则保留。')})
+    if cleanup_ops:
+        stages.append({'key': 'return_cleanup', 'title': STAGE_TITLES['return_cleanup'], 'manual': False,
+                       'ops': cleanup_ops,
+                       'note': '已关闭自动配置回流：路由改好后再移除，只删除 Agent 已核实归属的对象。'})
     checks = {
         'gateway': gateway,
         'routes': [] if policy else [{'cidr': cidr, 'gateway': gateway} for cidr in proxy_cidrs],

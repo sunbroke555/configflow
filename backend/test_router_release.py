@@ -502,3 +502,72 @@ def test_ikuai_error_details_surface_in_message():
     from backend.routers.base import RouterError
     with pytest.raises(RouterError, match='tagname: 名称长度为1-15'):
         driver._write('static_rt', 'add', {'tagname': '', 'dst_addr': '192.0.2.0'})
+
+
+CLEANUP_SPEC = {'safety_version': 1, 'router_ip': '10.0.0.1', 'proxy_dst': ['198.18.0.0/16'], 'mark': '0x400000',
+                'table': 104, 'priority': 104, 'lan_interface': 'eth0', 'tun_device': 'Meta'}
+
+
+def _cleanup(**changes):
+    return {'status': 'disabled', 'message': '未启用自动配置回流',
+            'cleanup': {'spec': CLEANUP_SPEC, 'complete': True, 'shared_with': [],
+                        'safety': copy.deepcopy(SAFE_RETURN_STATUS['safety']), **changes}}
+
+
+def _plan_off(driver, return_routing):
+    state = driver.read_state()
+    retire_policy_routes(state)
+    return build_plan({**ROUTER, 'manage_return_routing': False}, DESIRED, state, build_report(DESIRED, state),
+                      return_routing, driver)
+
+
+def test_switching_return_routing_off_removes_agent_rules_last():
+    plan = _plan_off(_driver(StatefulIKuai([], HOME_NATS, policies=MIGRATED)), _cleanup())
+    assert [stage['key'] for stage in plan['stages']][-1] == 'return_cleanup'
+    [op] = plan['stages'][-1]['ops']
+    assert op['kind'] == 'return_routing_remove' and op['previous'] == CLEANUP_SPEC
+    assert '已有规则在最后一个阶段移除' in plan['stages'][0]['note']
+    # Turned on, the switch keeps managing: nothing is removed.
+    on = _plan(_driver(StatefulIKuai([], HOME_NATS, policies=MIGRATED)))
+    assert 'return_cleanup' not in [stage['key'] for stage in on['stages']]
+
+
+def test_return_cleanup_is_skipped_with_a_reason_when_unsafe_or_shared():
+    cases = {'仍被「旁路由 B」使用': _cleanup(shared_with=['旁路由 B']),
+             '可能有未完成的事务': _cleanup(complete=False),
+             '上次回流事务未完成': _cleanup(safety={**SAFE_RETURN_STATUS['safety'], 'ok': False,
+                                                  'blockers': ['上次回流事务未完成，不能重新分配资源']})}
+    for reason, return_routing in cases.items():
+        plan = _plan_off(_driver(StatefulIKuai([], HOME_NATS, policies=MIGRATED)), return_routing)
+        assert 'return_cleanup' not in [stage['key'] for stage in plan['stages']], reason
+        assert any(reason in warning for warning in plan['warnings']), (reason, plan['warnings'])
+        assert '已有回流规则保留' in plan['stages'][0]['note']
+
+
+def test_return_cleanup_runs_after_static_routes_and_rolls_back_with_them():
+    session = StatefulIKuai([], HOME_NATS, policies=MIGRATED)
+    driver = _driver(session)
+    agent = FakeAgent(SAFE_RETURN_STATUS)
+    agent.apply(CLEANUP_SPEC)
+    agent.calls.clear()
+    plan = _plan_off(driver, _cleanup())
+    result = execute(plan, driver, agent)
+    assert result['ok'], result
+    assert agent.calls == [('remove', False)]
+    assert session.rows['stream_ipport'] == [] and len(session.rows['static_rt']) == 4
+    assert agent.state['managed'] is None
+
+    # The Agent keeps reporting its rules: readback fails and everything goes back.
+    session = StatefulIKuai([], HOME_NATS, policies=MIGRATED)
+    driver = _driver(session)
+    agent = FakeAgent(SAFE_RETURN_STATUS)
+    agent.apply(CLEANUP_SPEC)
+    agent.calls.clear()
+    stuck = agent.state['managed']
+    agent.remove = lambda restore_legacy: agent.calls.append(('remove', restore_legacy)) or {'success': True}
+    agent.state['managed'] = stuck
+    result = execute(_plan_off(driver, _cleanup()), driver, agent)
+    assert not result['ok'] and result['failed_stage'] == 'return_cleanup'
+    assert [call[0] for call in agent.calls] == ['remove', 'apply']
+    assert sorted(row['comment'] for row in _rows(session, 'stream_ipport')) == ['cf-mihomo', 'cf-mihomo-manual']
+    assert session.rows['static_rt'] == []
