@@ -80,7 +80,7 @@ def _native_projection(base, current, projected, settings):
     """Edit only a recognizable native routing graph, preserving its surroundings."""
     from backend.common.oxidns_native import load_native_yaml
     from backend.common.oxidns_common_routing import (
-        _analyze, _references, place_routing_groups, resource_downloads,
+        _analyze, _references, place_routing_groups, reload_references, resource_downloads,
     )
     from backend.converters.oxidns import _routing_groups
 
@@ -173,8 +173,8 @@ def _native_projection(base, current, projected, settings):
                     raise RuleSyncProjectionError('OxiDNS 规则下载地址已手动覆盖，请手动检查并发布。')
                 downloads.append({**item, **replacement} if item.get('url') == old[location].get('url') else item)
         download['args']['downloads'] = downloads + list(new.values())
-        reload['args'] = [f'${group["tag"]}' for entries in groups.values() for group in entries] + [
-            value for value in reload['args'] if not isinstance(value, str) or value.removeprefix('$') not in old_tags]
+        reload['args'] = reload_references(reload['args'], old_tags,
+                                           [group['tag'] for entries in groups.values() for group in entries], plugins)
     projected['oxidns']['native_config'] = yaml.safe_dump(result, allow_unicode=True, sort_keys=False)
 
 
