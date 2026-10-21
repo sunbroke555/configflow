@@ -243,6 +243,43 @@ def test_native_projection_reproduces_routing_edit_saved_in_draft(changes):
     assert yaml.safe_load(projected['oxidns']['native_config']) == draft
 
 
+@pytest.mark.parametrize('changes', [
+    {'proxy_rules': ['single'], 'direct_rules': []},
+    {'direct_rulesets': ['set-a'], 'proxy_rulesets': ['set-b', 'set-c']},
+    {'direct_rulesets': ['set-c']},
+])
+def test_native_projection_keeps_the_drafts_reload_order(changes):
+    # The reload list is an unordered set to OxiDNS, but sync status and DNS
+    # follow compare bytes. A hand-ordered list must not be regrouped.
+    from backend.common.oxidns_common import apply_common_settings
+    template = fixture()
+    template['oxidns']['rule_update'] = {'enabled': True}
+    add_set(template)
+    add_set(template, 'c')
+    template['oxidns'].update(proxy_rulesets=['set-b'], direct_rulesets=['set-a', 'set-c'])
+    base = native(template)
+    document = yaml.safe_load(base['oxidns']['native_config'])
+    reload = next(plugin for plugin in document['plugins'] if plugin['tag'] == 'rules_reload')
+    reload['args'].reverse()
+    base['oxidns']['native_config'] = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
+    current = deepcopy(base)
+    current['oxidns'] = apply_common_settings(base['oxidns'], changes, base)['settings']
+    draft = yaml.safe_load(current['oxidns']['native_config'])
+    projected = project_rule_changes(base, current, {'library': True, 'rules': True})
+    assert yaml.safe_load(projected['oxidns']['native_config']) == draft
+    args = next(plugin for plugin in draft['plugins'] if plugin['tag'] == 'rules_reload')['args']
+    retained = [value for value in reload['args'] if value in args]
+    assert args[:len(retained)] == retained
+
+
+def test_reload_references_edit_in_place():
+    from backend.common.oxidns_common_routing import reload_references
+    existing = ['$rules_ip_1', '$adguard_rules', '$rules_domain_1', '$rules_domain_2']
+    assert reload_references(existing, {'rules_ip_1', 'rules_domain_1', 'rules_domain_2'},
+                             ['rules_domain_1', 'rules_ip_1', 'rules_domain_3'], {'adguard_rules'}) == [
+        '$rules_ip_1', '$adguard_rules', '$rules_domain_1', '$rules_domain_3']
+
+
 def test_mihomo_bundle_cannot_publish_nodes_dns_or_refetched_subscription_bytes():
     previous = {'dns': {'enable': True}, 'proxies': [{'name': 'old', 'server': 'old.test'}],
                 'rules': ['RULE-SET,A,DIRECT'], 'rule-providers': {'A': {'type': 'http', 'path': './rules/a.list'}}}

@@ -320,6 +320,20 @@ def place_routing_groups(plugins, old, expected, external=frozenset()):
     return placed, groups
 
 
+def reload_references(existing, old_tags, new_tags, plugins):
+    """Edit a reload list in place: retained entries keep their order.
+
+    The editor and rule sync both apply this to the same deployed list, so
+    their output stays byte-identical; new providers are appended.
+    """
+    references = []
+    for value in [*existing, *(f'${tag}' for tag in new_tags)]:
+        tag = value.removeprefix('$') if isinstance(value, str) else None
+        if value not in references and (tag is None or tag in new_tags or tag not in old_tags or tag in plugins):
+            references.append(value)
+    return references
+
+
 def resource_downloads(document, settings, config, base_url=''):
     """Download descriptors for actual provider references, without core validation."""
     referenced = {relative_resource(path) for path in resource_references(document)}
@@ -404,12 +418,9 @@ def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
         raise OxidnsSettingsError('规则定时更新包含自定义结构，请先在完整参数中调整下载与重载任务。')
     old_tags = {group['tag'] for entries in old_groups.values() for group in entries}
     new_tags = [group['tag'] for entries in new_groups.values() for group in entries]
-    references = [f'${tag}' for tag in new_tags]
     # Old providers retained for another caller also remain reloadable.
-    references.extend(value for value in (reload['args'] if reload else []) if value not in references and
-                      (not isinstance(value, str) or value.removeprefix('$') not in old_tags or value.removeprefix('$') in plugins))
     if reload is not None:
-        reload['args'] = references
+        reload['args'] = reload_references(reload['args'], old_tags, new_tags, plugins)
     records = _catalog(config)[0]
     known_paths = {_rule_path(record['item'], part).removeprefix('./')
                    for record in records.values() if record['suffix'] == 'rulesets'
