@@ -348,3 +348,47 @@ def test_return_readback_checks_mark_and_mask_semantics(mark, ok):
     assert result['ok'] is ok, result
     if not ok:
         assert result['failed_stage'] == 'return_routing' and session.writes == []
+
+
+def test_api_switching_off_removes_rules_unless_another_router_still_uses_them(authenticated_app, monkeypatch):  # noqa: F811
+    client, _, agents, admin, _ = authenticated_app
+    from backend.routes import routers as routes_module
+    driver, session = router_driver('ikuai')
+    agent = FakeAgent(SAFE_RETURN_STATUS)
+    initial_router = {'type': 'ikuai', 'endpoint': 'http://10.0.0.1', 'manage_return_routing': True}
+    assert execute(plan_for(initial_router, driver, SAFE_RETURN_STATUS), driver, agent)['ok']
+    agent.calls.clear()
+
+    def status(record):
+        body = {**agent.status(), 'status': 'ok'}
+        if body.get('managed'):
+            body['managed'] = {**body['managed'], 'active': True}
+        return body
+    monkeypatch.setitem(routes_module.DRIVERS, 'ikuai', lambda *args, **kwargs: driver)
+    monkeypatch.setattr(routes_module, 'compute_desired', lambda *args, **kwargs: DESIRED)
+    monkeypatch.setattr(routes_module, '_agent', lambda agent_id: {**agents[0], 'status': 'online', 'host': GATEWAY,
+                                                                   'port': 9100})
+    monkeypatch.setattr(routes_module, '_return_routing', status)
+    monkeypatch.setattr(routes_module, 'AgentReturnRouting', lambda *args: agent)
+    common = {'type': 'ikuai', 'endpoint': 'http://10.0.0.1', 'username': 'admin', 'password': 'pw',
+              'proxy_gateway_agent_id': agents[0]['id']}
+    other = client.post('/api/routers', headers=admin, json={**common, 'name': '旁路由 B', 'manage_return_routing': True})
+    router = client.post('/api/routers', headers=admin, json={**common, 'name': '主路由'}).get_json()['router']
+
+    report = client.get(f'/api/routers/{router["id"]}/report', headers=admin).get_json()['report']
+    assert report['return_routing']['cleanup']['shared_with'] == ['旁路由 B']
+    plan = client.post(f'/api/routers/{router["id"]}/plan', headers=admin).get_json()['plan']
+    assert 'return_cleanup' not in [stage['key'] for stage in plan['stages']]
+    assert any('仍被「旁路由 B」使用，本次保留' in warning for warning in plan['warnings'])
+
+    # Nobody else uses it any more: this release removes it, after the routes.
+    assert client.put(f'/api/routers/{other.get_json()["router"]["id"]}', headers=admin,
+                      json={'manage_return_routing': False}).status_code == 200
+    plan = client.post(f'/api/routers/{router["id"]}/plan', headers=admin).get_json()['plan']
+    assert plan['stages'][-1]['key'] == 'return_cleanup'
+    applied = client.post(f'/api/routers/{router["id"]}/apply', headers=admin, json={'fingerprint': plan['fingerprint']})
+    assert applied.status_code == 200 and applied.get_json()['result']['ok'], applied.get_json()
+    assert agent.calls == [('remove', False)] and agent.state['managed'] is None
+    assert session.rows['stream_ipport'] == []
+    plan = client.post(f'/api/routers/{router["id"]}/plan', headers=admin).get_json()['plan']
+    assert plan['empty'] and 'return_cleanup' not in [stage['key'] for stage in plan['stages']]
