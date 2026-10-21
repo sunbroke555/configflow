@@ -44,9 +44,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ==============================================================================
 # Stage 2: 构建前端（产物为静态文件，同样只在构建机原生平台构建一次）
 # ==============================================================================
-# vite-plugin-pwa 依赖的 workbox-build 要求 node >= 20；
-# Node 18 已于 2025-04 结束维护，直接升到 20 LTS。
-FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
+# vite-plugin-pwa 依赖的 workbox-build 要求 node >= 20；Node 20 已结束维护、
+# 不再获得安全修复，与 CI 一致使用 24 LTS。只在构建时使用，不进入运行镜像。
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
@@ -62,7 +62,10 @@ RUN npm run build
 # ==============================================================================
 # Stage 3: 内置 Sub-Store 运行时（Node.js 二进制，Sub-Store 要求 node >= 22.5 的 sqlite 内建模块）
 # ==============================================================================
-FROM node:24-bookworm-slim AS node-runtime
+# 固定到包含安全修复的版本：24.22.1 修复 Brotli 解码越界写入、TLS 证书 IP 校验与
+# dns.resolve 空字节等问题（https://nodejs.org/en/blog/vulnerability/october-2026-security-releases）。
+# Sub-Store 会主动拉取外部订阅，Node 安全更新需要更新这里并重新发布镜像。
+FROM node:24.22.1-bookworm-slim AS node-runtime
 
 # 准备 Node 与 Sub-Store bundle，随后与其他内置程序合并为一个运行组件层。
 FROM --platform=$BUILDPLATFORM python:3.11-slim AS sub-store
