@@ -224,9 +224,41 @@ def _inspect(config, router, driver, content_loader=None):
     else:
         report['return_routing'] = {
             'status': 'disabled',
-            'message': '未启用自动配置回流；本次不读取或修改主机回流配置，已有规则保留。',
+            'message': '未启用自动配置回流；本次不写入回流规则。',
         }
+        cleanup = _return_cleanup(router, gateway_agent)
+        if cleanup:
+            report['return_routing'].update(
+                cleanup=cleanup, message='未启用自动配置回流；mihomo 上仍有 ConfigFlow 写入的回流规则，发布时最后移除。')
     return gateway_agent, desired, state, report
+
+
+def _return_cleanup(router, agent):
+    """Return routing this Agent still manages after the switch was turned off, or None.
+
+    An unreachable or old Agent leaves its rules alone, as before. Another router
+    in any profile that still uses return routing on the same Agent keeps them.
+    """
+    if agent is None or agent.get('status') != 'online' or not agent.get('host') or not agent.get('port'):
+        return None
+    status = _return_routing(agent)
+    managed = status.get('managed') or {}
+    if status.get('status') != 'ok' or not managed.get('spec'):
+        return None
+    safety = status.get('safety') or {}
+    # Removal keeps the state file inactive: only active or unsettled state needs attention.
+    if managed.get('active') is not True and safety.get('ok') is True and not safety.get('blockers'):
+        return None
+    from backend.common.config import get_config, get_repository
+    from backend.common.profile_context import resolve_profile_id
+    current = (resolve_profile_id(), router.get('id'))
+    shared = [item.get('name') or item.get('id')
+              for profile in get_repository().list_profiles()
+              for item in routers_of(get_config(profile['id']))
+              if (profile['id'], item.get('id')) != current and item.get('manage_return_routing') is True
+              and item.get('proxy_gateway_agent_id') == agent.get('id')]
+    return {'spec': managed['spec'], 'complete': managed.get('table_present') is True,
+            'safety': status.get('safety'), 'shared_with': shared}
 
 
 def _now():
@@ -303,7 +335,8 @@ def router_apply(router_id):
                 logger.info('主路由 %s 发布：没有需要写入的变更', _label(router))
                 return jsonify({'success': True, 'result': {'ok': True, 'log': [], 'rollback': []}, 'plan': plan})
             agent_client = None
-            if router.get('manage_return_routing') is True:
+            if router.get('manage_return_routing') is True or any(
+                    op['kind'] == 'return_routing_remove' for stage in plan['stages'] for op in stage['ops']):
                 from backend.common.agent_manager import get_agent_manager
                 agent_client = AgentReturnRouting(get_agent_manager(), gateway_agent)
             published_config = config
