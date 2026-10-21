@@ -148,6 +148,10 @@ func oxQuerySource(record oxSourceRecord) string {
 				source = "ipv4_preferred"
 			} else if step.Tag == "drop_resp" || oxSourceQuick(step.Tag, "drop_resp") {
 				source = "unknown"
+			} else if oxSourceQuick(step.Tag, "black_hole") && step.Outcome == "stop" && i == start+1 {
+				// Blocked query types answer with an inline black_hole; earlier
+				// drafts used the builtin reject 0, labelled the same way.
+				source = "rejected"
 			}
 		}
 	}
