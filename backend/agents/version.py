@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.38-go"
+LATEST_AGENT_VERSION = "1.8.39-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.39-go": {
+        "date": "2026-10-22",
+        "features": [
+            "使用 Go 1.26.10 编译，不再信任 CVE-2026-111943 列出的 8 个中间 CA 密钥，并获得 Go 1.21 停止维护以来的全部安全修复",
+            "HTTPS 默认启用后量子密钥交换 X25519MLKEM768；不再连接只支持 RSA 密钥交换或 3DES 的过时服务器"
+        ]
+    },
     "1.8.38-go": {
         "date": "2026-10-20",
         "features": [
