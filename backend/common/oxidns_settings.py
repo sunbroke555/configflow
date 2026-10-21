@@ -8,6 +8,12 @@ class OxidnsSettingsError(ValueError):
     pass
 
 
+# The SOA lets clients cache the empty answer; ``reject 0`` carries none, so
+# every lookup of a blocked type returned to OxiDNS. Earlier drafts keep it.
+BLOCK_QTYPES_EXEC = 'black_hole nodata short_circuit=true'
+BLOCK_QTYPES_EXECS = (BLOCK_QTYPES_EXEC, 'reject 0')
+
+
 def get_default_oxidns_settings():
     return {
         'config_mode': 'template', 'native_config': '', 'additional_files': [],

@@ -6,7 +6,7 @@ import yaml
 
 from backend.common.oxidns_common import read_common_settings, apply_common_settings
 from backend.common.oxidns_editor import prepare_editor
-from backend.common.oxidns_settings import OxidnsSettingsError
+from backend.common.oxidns_settings import BLOCK_QTYPES_EXEC, OxidnsSettingsError
 from backend.common.oxidns_validation import validate_native_config
 from backend.test_oxidns_integration import oxidns_app
 
@@ -184,12 +184,29 @@ def test_metrics_ipv4_and_qtypes_follow_actual_execution_chain():
     settings = prepared()
     off = apply(settings, {'metrics_enabled': False, 'prefer_ipv4': False, 'block_qtypes': []})
     main = plugin(doc(off['settings']), 'sequence_main')['args']
-    assert not any(item.get('exec') in ('metrics_collector metrics', 'prefer_ipv4', 'reject 0') for item in main)
+    assert not any(item.get('exec') in ('metrics_collector metrics', 'prefer_ipv4', BLOCK_QTYPES_EXEC) for item in main)
     restored = apply(off['settings'], {'metrics_enabled': True, 'prefer_ipv4': True, 'block_qtypes': [28, 65]})
     main = plugin(doc(restored['settings']), 'sequence_main')['args']
-    assert main[:3] == [{'exec': 'metrics_collector metrics'}, {'exec': 'prefer_ipv4'}, {'matches': ['qtype 28 65'], 'exec': 'reject 0'}]
+    assert main[:3] == [{'exec': 'metrics_collector metrics'}, {'exec': 'prefer_ipv4'},
+                        {'matches': ['qtype 28 65'], 'exec': BLOCK_QTYPES_EXEC}]
     custom = edited(restored['settings'], lambda value: plugin(value, 'sequence_main')['args'][1].update(matches=['qname full:example.test']))
     assert not read_common_settings(custom, {})['capabilities']['prefer_ipv4']['editable']
+
+
+def test_blocked_qtypes_written_by_earlier_versions_stay_editable():
+    def legacy(value):
+        rule = next(item for item in plugin(value, 'sequence_main')['args'] if item.get('exec') == BLOCK_QTYPES_EXEC)
+        rule['exec'] = 'reject 0'
+    settings = edited(prepared(), legacy)
+    common = read_common_settings(settings, {})
+    assert common['values']['block_qtypes'] == [65, 255]
+    assert common['capabilities']['block_qtypes']['editable']
+    unrelated = apply(settings, {'metrics_enabled': False})
+    assert {'matches': ['qtype 65 255'], 'exec': 'reject 0'} in plugin(doc(unrelated['settings']), 'sequence_main')['args']
+    saved = apply(settings, {'block_qtypes': [65]})
+    main = plugin(doc(saved['settings']), 'sequence_main')['args']
+    assert {'matches': ['qtype 65'], 'exec': BLOCK_QTYPES_EXEC} in main
+    assert not any(item.get('exec') == 'reject 0' for item in main)
 
 
 def test_dynamic_learning_tracks_route_and_preserves_existing_args():

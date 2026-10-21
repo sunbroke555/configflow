@@ -125,7 +125,7 @@ func oxMonitorRankingConfig(plugins []interface{}) oxRankingConfig {
 				continue
 			}
 		}
-		if len(rule) == 2 && len(matches) == 1 && (matches[0] == "has_resp" && exec == "accept" || strings.HasPrefix(matches[0], "qtype ") && exec == "reject 0") {
+		if len(rule) == 2 && len(matches) == 1 && (matches[0] == "has_resp" && exec == "accept" || strings.HasPrefix(matches[0], "qtype ") && (exec == "reject 0" || exec == "black_hole nodata short_circuit=true")) {
 			continue
 		}
 		// Unknown wrapping executors could replace the block response on the

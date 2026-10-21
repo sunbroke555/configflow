@@ -158,6 +158,14 @@ func TestOxiDNSRankingsDoNotGuessCustomOrNegativeResponseBlocks(t *testing.T) {
 	if result.blocked["records"] != "qs.match.sequence_main.3.0.question" {
 		t.Fatal("generated AdGuard path was not recognized")
 	}
+	// Blocked query types precede AdGuard; current and earlier drafts differ in action.
+	for _, action := range []string{"black_hole nodata short_circuit=true", "reject 0"} {
+		text := strings.Replace(oxRankingTestPlugins, "    - exec: prefer_ipv4\n",
+			"    - exec: prefer_ipv4\n    - matches: [qtype 65 255]\n      exec: "+action+"\n", 1)
+		if result := oxRankingConfigForTest(t, text); result.blocked["records"] != "qs.match.sequence_main.4.0.question" {
+			t.Fatalf("%s blocked qtypes hid the AdGuard path: %#v", action, result.blocked)
+		}
+	}
 }
 
 func TestOxiDNSRankingsUpstreamIdentityAndAddressRedaction(t *testing.T) {

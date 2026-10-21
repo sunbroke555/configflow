@@ -10,7 +10,9 @@ import yaml
 
 from backend.common.oxidns_editor import prepare_editor, _same
 from backend.common.oxidns_native import load_native_yaml, native_document, relative_resource, resource_references
-from backend.common.oxidns_settings import get_default_oxidns_settings, normalize_oxidns_settings, OxidnsSettingsError
+from backend.common.oxidns_settings import (
+    BLOCK_QTYPES_EXEC, BLOCK_QTYPES_EXECS, get_default_oxidns_settings, normalize_oxidns_settings, OxidnsSettingsError,
+)
 from backend.common.oxidns_references import reference_locations, reference_reason
 
 _MISSING = object()
@@ -461,7 +463,7 @@ def _main_control(ctx, field):
         return None, _cap(False, '当前没有可识别的主处理链，请在完整参数中编辑', 'sequence_main'), None
     if field == 'block_qtypes':
         possible = [(index, item) for index, item in enumerate(sequence) if isinstance(item, dict)
-                    and item.get('exec') == 'reject 0' and any(str(match).startswith('qtype ') for match in _matches(item))]
+                    and item.get('exec') in BLOCK_QTYPES_EXECS and any(str(match).startswith('qtype ') for match in _matches(item))]
         if not possible:
             return [], _cap(target='sequence_main'), None
         if len(possible) == 1:
@@ -841,7 +843,7 @@ def _patch_main(ctx, field, value):
     items = ctx.sequence('sequence_main')
     replacement = None
     if value:
-        replacement = {'matches': ['qtype ' + ' '.join(map(str, value))], 'exec': 'reject 0'} if field == 'block_qtypes' else {'exec': 'prefer_ipv4' if field == 'prefer_ipv4' else 'metrics_collector metrics'}
+        replacement = {'matches': ['qtype ' + ' '.join(map(str, value))], 'exec': BLOCK_QTYPES_EXEC} if field == 'block_qtypes' else {'exec': 'prefer_ipv4' if field == 'prefer_ipv4' else 'metrics_collector metrics'}
     if index is not None:
         if replacement:
             items[index] = replacement
