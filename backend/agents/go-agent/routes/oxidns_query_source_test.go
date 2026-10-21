@@ -26,6 +26,10 @@ func TestOxSourceClassification(t *testing.T) {
 		{"unmatched_completion", "unknown", []oxSourceStep{step("forward_remote", "next", "executor")}},
 		{"discard", "unknown", append(run("forward_local"), run("qs.exec.main.2.drop_resp")...)},
 		{"reject", "rejected", append(run("forward_local"), step("reject", "stop", "builtin"))},
+		// Recorded for a blocked HTTPS query: the enclosing prefer_ipv4 stop follows.
+		{"blocked_qtype", "rejected", []oxSourceStep{step("qs.exec.main.4.black_hole", "entered", "executor"),
+			step("qs.exec.main.4.black_hole", "stop", "executor"), step("qs.exec.main.3.prefer_ipv4", "stop", "executor")}},
+		{"black_hole_continues", "remote", append(run("qs.exec.main.4.black_hole"), run("forward_remote")...)},
 		{"hosts", "hosts", append(run("custom_hosts"), step("qs.match.main.1.0.has_resp", "matched", "matcher"))},
 		{"block", "blocked", run("adguard_block")},
 		{"custom", "unknown", run("forward_custom")},

@@ -51,6 +51,10 @@ export function querySourceKind(record: OxiDNSQuery): OxiDNSQuerySource {
       source = 'unknown'
     } else if (step.tag === 'adguard_block') {
       source = 'blocked'
+    } else if (quickPlugin(step.tag, 'black_hole') && step.outcome === 'stop' && index === call.index + 1) {
+      // Blocked query types answer with an inline black_hole; earlier drafts
+      // used the builtin reject 0, labelled the same way.
+      source = 'rejected'
     } else if (step.tag === 'custom_hosts') {
       const check = steps[index + 1]
       if (check?.kind === 'matcher' && quickPlugin(check.tag, 'has_resp') && check.outcome === 'matched') source = 'hosts'

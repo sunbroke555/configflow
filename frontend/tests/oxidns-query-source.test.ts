@@ -59,6 +59,9 @@ describe('query source from the standard ConfigFlow trace', () => {
   it('clears discarded responses and distinguishes local handling from upstream resolution', () => {
     expect(label(...run('forward_local'), ...run('qs.exec.main.1.drop_resp'))).toBe('未识别')
     expect(label(...run('forward_local'), step('reject', 'stop', 'builtin'))).toBe('规则拒绝')
+    // Blocked query types: the enclosing prefer_ipv4 stop follows the black_hole pair.
+    expect(label(...run('qs.exec.main.4.black_hole', 'stop'), step('qs.exec.main.3.prefer_ipv4', 'stop'))).toBe('规则拒绝')
+    expect(label(...run('qs.exec.main.4.black_hole'), ...run('forward_remote'))).toBe('远程 DNS')
     expect(label(...run('custom_hosts'), step('qs.match.main.1.0.has_resp', 'matched', 'matcher'))).toBe('本地 Hosts')
     expect(label(...run('custom_hosts'), step('qs.match.main.1.0.has_resp', 'not_matched', 'matcher'), ...run('forward_remote'))).toBe('远程 DNS')
     expect(querySourceLabel({ ...row, error: 'timeout', steps: run('forward_remote') })).toBe('处理错误')
