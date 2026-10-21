@@ -2,6 +2,8 @@ module configflow/node-probe
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/metacubex/http v0.1.8
 	github.com/metacubex/mihomo v1.19.32
