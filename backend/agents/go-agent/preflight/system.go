@@ -124,7 +124,7 @@ func systemChecksWithProbe(configs []Config, probe systemProbe) []Check {
 // only the permission to change it is checked here.
 func inspectGatewayForwarding(probe systemProbe) Check {
 	const path = "/proc/sys/net/ipv4/ip_forward"
-	check := Check{Name: "IPv4 转发", Level: "pass"}
+	check := Check{Name: "IPv4 转发权限", Level: "pass"}
 	data, err := probe.readFile(path)
 	value := strings.TrimSpace(string(data))
 	if err != nil || value != "0" && value != "1" {

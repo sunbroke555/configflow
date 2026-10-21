@@ -135,6 +135,12 @@ func compactPass(check Check) string {
 		return "IPv4 转发  已开启"
 	case "IPv4 转发持久化":
 		return "IPv4 转发  已找到持久化开启设置"
+	case "IPv4 转发权限":
+		// Passes with forwarding still off: the gateway apply turns it on later.
+		if strings.Contains(check.Message, "ip_forward=1") {
+			return "IPv4 转发  当前已开启，由网关应用与恢复"
+		}
+		return "IPv4 转发  应用网关转发时开启，当前未开启"
 	case "Mihomo 服务权限":
 		if strings.Contains(check.Message, "当前配置未启用 TUN") {
 			return "TUN  当前配置未启用"

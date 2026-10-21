@@ -599,12 +599,12 @@ func TestGatewayForwardingChecksWritePermissionInsteadOfAskingForManualSysctl(t 
 				return tc.writeErr
 			}
 			checks := systemChecksWithProbe(nil, probe)
-			check := namedSystemCheck(t, checks, "IPv4 转发")
+			check := namedSystemCheck(t, checks, "IPv4 转发权限")
 			if check.Level != tc.level || strings.Contains(check.Fix, "sysctl.d") || strings.Contains(check.Message+check.Fix, "sysctl -w") {
 				t.Fatalf("gateway forwarding check: %+v", check)
 			}
 			for _, other := range checks {
-				if other.Name == "IPv4 转发持久化" {
+				if other.Name == "IPv4 转发" || other.Name == "IPv4 转发持久化" {
 					t.Fatalf("gateway restores forwarding itself; persistence must not be reported: %+v", other)
 				}
 			}
@@ -616,6 +616,13 @@ func TestGatewayForwardingChecksWritePermissionInsteadOfAskingForManualSysctl(t 
 			}
 			if tc.level == "pass" && !strings.Contains(check.Message, "应用网关转发") {
 				t.Fatalf("missing who turns forwarding on: %+v", check)
+			}
+			// The compact installer row must not claim forwarding is on when it is off.
+			if tc.level == "pass" {
+				want := map[string]string{"0": "当前未开启", "1": "当前已开启"}[strings.TrimSpace(tc.value)]
+				if summary := compactPass(check); !strings.Contains(summary, want) {
+					t.Fatalf("compact summary %q does not say %q", summary, want)
+				}
 			}
 		})
 	}
