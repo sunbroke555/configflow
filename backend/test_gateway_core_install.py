@@ -179,7 +179,7 @@ if os.environ.get('CORRUPT')==src.name: out.write_bytes(b'bad checksum')
 '''
     mocks={'id':'#!/bin/sh\necho 0\n','uname':f'#!/bin/sh\nif [ "$1" = -s ]; then echo Linux; else echo {architecture}; fi\n',
            'curl':curl,'ip':'#!/bin/sh\nexit 0\n','nft':'#!/bin/sh\n[ "${FAIL_NFT:-}" != yes ]\n',
-           'ss':'#!/bin/sh\nif [ -n "${BUSY_PORT:-}" ]; then echo "udp UNCONN 0 0 0.0.0.0:$BUSY_PORT 0.0.0.0:*"; fi\n',
+           'ss':'#!/bin/sh\nif [ -n "${BUSY_PORT:-}" ]; then echo "udp UNCONN 0 0 0.0.0.0:$BUSY_PORT 0.0.0.0:* ${BUSY_OWNER:-}"; fi\n',
            'sysctl':'#!/bin/sh\nprintf "forbidden-sysctl %s\\n" "$*" >> "$EVENTS"\nexit 98\n',
            'modprobe':'#!/bin/sh\nprintf "forbidden-modprobe %s\\n" "$*" >> "$EVENTS"\nexit 97\n',
            'mknod':'#!/bin/sh\nprintf "forbidden-mknod %s\\n" "$*" >> "$EVENTS"\nexit 97\n',
@@ -231,6 +231,29 @@ def test_preflight_download_and_validation_failures_leave_host_untouched(tmp_pat
     assert not (tmp_path/'etc/oxidns').exists()
     assert not (tmp_path/'opt/configflow-agent').exists()
     assert (tmp_path/'ip_forward').read_text()=='0\n'
+
+
+def test_systemd_resolved_stub_conflict_names_the_fix(tmp_path,monkeypatch):
+    run,events,source=host(tmp_path,monkeypatch)
+    result=run(BUSY_PORT='53',BUSY_OWNER='users:(("systemd-resolve",pid=367,fd=18))')
+    assert result.returncode!=0
+    output=result.stdout+result.stderr
+    assert 'systemd-resolved' in output and 'DNSStubListener=no' in output
+    assert not (tmp_path/'etc/oxidns').exists()
+    other=run(BUSY_PORT='53',BUSY_OWNER='users:(("dnsmasq",pid=9,fd=4))')
+    assert other.returncode!=0 and 'DNSStubListener' not in other.stdout+other.stderr
+
+
+def test_fresh_cores_are_not_reported_as_existing_but_reruns_are(tmp_path,monkeypatch):
+    run,events,source=host(tmp_path,monkeypatch)
+    fresh=run()
+    assert fresh.returncode==0,fresh.stdout+fresh.stderr
+    output=fresh.stdout+fresh.stderr
+    assert '已有核心配置已保留' not in output and '不安装核心' not in output
+    assert '为上一步准备好的 Mihomo 和 OxiDNS 安装 Agent' in output
+    rerun=run(FAIL_GITHUB='yes')
+    assert rerun.returncode==0,rerun.stdout+rerun.stderr
+    assert '已有核心配置已保留' in rerun.stdout+rerun.stderr
 
 
 def test_rerun_preserves_published_configs_and_existing_agent_identity(tmp_path,monkeypatch):

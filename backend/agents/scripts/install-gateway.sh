@@ -67,6 +67,10 @@ check_port_free() {
     # Only called for a new core; existing services have their listeners checked
     # by the Agent's paired environment preflight below.
     if ss -H -lntu | awk -v wanted="$1" '{ n=split($5,a,":"); if (a[n]==wanted) found=1 } END {exit !found}'; then
+        # Debian and Ubuntu enable this local stub by default; name the fix.
+        if [ "$1" = 53 ] && ss -H -lntup 2>/dev/null | awk '{ n=split($5,a,":"); if (a[n]=="53" && /systemd-resolve/) found=1 } END {exit !found}'; then
+            fail "端口 53 被 systemd-resolved 的本机 DNS（127.0.0.53）占用，OxiDNS 需要使用此端口。可关闭其本机监听后重跑安装命令：mkdir -p /etc/systemd/resolved.conf.d && printf '[Resolve]\nDNSStubListener=no\n' > /etc/systemd/resolved.conf.d/configflow.conf && ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf && systemctl restart systemd-resolved"
+        fi
         fail "端口 $1 已被占用。请用 ss -lntup 检查所属服务并先处理冲突；安装器不会停止现有 DNS 服务。"
     fi
 }
@@ -261,6 +265,8 @@ for core in mihomo oxidns; do
         cp "$GATEWAY_STAGE/$core.yaml" "$CORE_CONFIG.new"
         chmod 600 "$CORE_CONFIG.new"
         mv "$CORE_CONFIG.new" "$CORE_CONFIG"
+        # Read by the Agent installer: no existing configuration was kept.
+        cf_fact "core_${core}_new" yes
     fi
     if [ "$core" = mihomo ]; then
         CORE_ARGS="-d $CORE_DIR -f $CORE_CONFIG"

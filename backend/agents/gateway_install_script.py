@@ -114,6 +114,8 @@ def generate_gateway_install_script(
         installation_id=installation_id, installation_token=enrollment_token if installation_id else "",
         manage_ipv4_forwarding=False,
         manage_tun=False,
+        # The gateway script has just prepared the cores in the previous step.
+        installation_description='为上一步准备好的 Mihomo 和 OxiDNS 安装 Agent，不改核心配置、不重启核心。',
     )
     values = {
         'aio_script': aio,
