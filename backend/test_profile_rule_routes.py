@@ -108,6 +108,45 @@ def test_dns_selection_is_cleaned_atomically_when_rule_is_deleted(compositions):
     assert repository.get_profile('default') == before
 
 
+def test_selected_dns_rule_cannot_change_to_an_unconvertible_type(compositions):
+    client, repository, headers = compositions
+    assert client.post('/api/mosdns/rulesets', headers=headers, json={'proxy_rules': ['inline']}).status_code == 200
+    before = repository.get_profile('other')
+    response = client.put('/api/rules/inline', headers=headers, json={'rule_type': 'GEOIP', 'value': 'CN'})
+    assert response.status_code == 400
+    assert 'MosDNS 代理规则' in response.get_json()['message']
+    assert repository.get_profile('other') == before
+    # Convertible types and unrelated edits still save.
+    assert client.put('/api/rules/inline', headers=headers, json={'rule_type': 'IP-CIDR', 'value': '10.0.0.0/8'}).status_code == 200
+    assert client.put('/api/rules/inline', headers=headers, json={'policy': 'Proxy'}).status_code == 200
+    # Unselected rules may use any type.
+    assert client.put('/api/rules/inline', headers={'X-ConfigFlow-Profile': 'default'}, json={'rule_type': 'GEOIP'}).status_code == 200
+
+
+def test_native_oxidns_type_guard_follows_the_routing_document(compositions):
+    """Native drafts keep stale selectors as a catalog; the YAML decides what is selected."""
+    client, repository, headers = compositions
+    def save(settings):
+        assert client.post('/api/oxidns/settings', headers=headers, json=settings).status_code == 200
+    def apply(settings, proxy_rules):
+        response = client.post('/api/oxidns/common-settings/apply', headers=headers,
+                               json={'settings': settings, 'changes': {'proxy_rules': proxy_rules}})
+        assert response.status_code == 200, response.get_json()
+        return response.get_json()['settings']
+    def retype(rule_type, value):
+        return client.put('/api/rules/inline', headers=headers, json={'rule_type': rule_type, 'value': value})
+    settings = client.get('/api/oxidns/settings', headers=headers).get_json()
+    native = client.post('/api/oxidns/editor', headers=headers, json={'settings': settings}).get_json()['settings']
+    save(apply(native, ['inline']))
+    response = retype('GEOIP', 'CN')
+    assert response.status_code == 400 and 'OxiDNS 代理规则' in response.get_json()['message']
+    unselected = apply(client.get('/api/oxidns/settings', headers=headers).get_json(), [])
+    save(unselected)
+    stored = client.get('/api/oxidns/settings', headers=headers).get_json()
+    assert stored['config_mode'] == 'native' and 'inline' in stored['proxy_rules']
+    assert retype('GEOIP', 'CN').status_code == 200
+
+
 def test_scoped_content_rule_proxy_avoids_network(compositions, monkeypatch):
     client, repository, headers = compositions
     def unexpected_network(*args, **kwargs):

@@ -210,6 +210,8 @@ _CLASH_DOMAIN_PREFIXES = {
     'DOMAIN-REGEX': 'regexp',
 }
 _CLASH_IP_TYPES = ('IP-CIDR', 'IP-CIDR6')
+# 单条规则中目前能转换为 DNS 规则的类型；GEOIP/GEOSITE 需要下发 dat 文件，端口、逻辑规则等无对应匹配
+DNS_RULE_TYPES = (*_CLASH_DOMAIN_PREFIXES, *_CLASH_IP_TYPES)
 
 
 def parse_clash_rule_value(line: str):

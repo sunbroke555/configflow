@@ -56,7 +56,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch, computed, onUnmounted } from 'vue'
 import { ChevronDown, ChevronRight } from '@lucide/vue'
-import { apiFields, applyVerifiedOxidnsTemplate, cacheFields, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
+import { apiFields, applyVerifiedOxidnsTemplate, cacheFields, isDnsRuleType, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
 import { optionCopy, optionHelp } from '@/lib/optionCopy'
 import OxidnsFields, { type OxidnsFieldCapability } from './OxidnsFields.vue'
 import OxidnsMatchEditor from './OxidnsMatchEditor.vue'
@@ -88,8 +88,8 @@ const positionFields: OxidnsField[] = [{ path: 'custom_match_position', label: '
 const ruleGroups = [
   { key: 'direct_rulesets', opposite: 'proxy_rulesets', label: '直连规则集', sets: true, ...optionCopy('整组网站或 IP 命中后，使用直连 DNS 查询。', '希望一整组域名或 IP 通过直连 DNS 查询时选择。', '规则按原有顺序参与分流，命中后使用已配置的直连上游。同一规则集不能同时归入代理分组，需要代理的项目应放到另一组。') },
   { key: 'proxy_rulesets', opposite: 'direct_rulesets', label: '代理规则集', sets: true, ...optionCopy('整组网站或 IP 命中后，使用代理 DNS 查询。', '希望一整组域名或 IP 使用代理分流上游时选择。', '命中后使用代理 DNS，只有启用代理 DNS 回退时才使用备用上游。同一规则集不能同时归入直连分组，仍按原有顺序匹配。') },
-  { key: 'direct_rules', opposite: 'proxy_rules', label: '直连规则', sets: false, ...optionCopy('单条网站或 IP 规则命中后，使用直连 DNS。', '只需指定个别域名或 IP 的查询方式，而非选择整组规则。', '命中后使用已配置的直连 DNS，与规则集一起按规则管理中的原有顺序参与分流。同一规则不能同时归入代理分组。') },
-  { key: 'proxy_rules', opposite: 'direct_rules', label: '代理规则', sets: false, ...optionCopy('单条网站或 IP 规则命中后，使用代理 DNS。', '希望为个别域名或 IP 指定代理分流上游时选择。', '与规则集一起按原有顺序匹配，命中后使用代理 DNS。只有启用回退时才使用备用上游，同一规则不能同时归入直连分组。') },
+  { key: 'direct_rules', opposite: 'proxy_rules', label: '直连规则', sets: false, ...optionCopy('单条网站或 IP 规则命中后，使用直连 DNS。', '只需指定个别域名或 IP 的查询方式，而非选择整组规则。', '命中后使用已配置的直连 DNS，与规则集一起按规则管理中的原有顺序参与分流。同一规则不能同时归入代理分组。仅列出域名和 IP-CIDR 类规则。') },
+  { key: 'proxy_rules', opposite: 'direct_rules', label: '代理规则', sets: false, ...optionCopy('单条网站或 IP 规则命中后，使用代理 DNS。', '希望为个别域名或 IP 指定代理分流上游时选择。', '与规则集一起按原有顺序匹配，命中后使用代理 DNS。只有启用回退时才使用备用上游，同一规则不能同时归入直连分组。仅列出域名和 IP-CIDR 类规则。') },
 ]
 const read = (path: string): unknown => path.split('.').reduce<unknown>((value, key) =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, draft)
@@ -115,8 +115,11 @@ const ruleOptions = (group: typeof ruleGroups[number]) => {
   const opposite = selectedRules(group.opposite)
   const selected = selectedRules(group.key)
   return (group.sets ? props.ruleSets : props.rules)
-    .filter(item => !opposite.includes(item.id) || selected.includes(item.id))
-    .map(item => ({ value: item.id, label: item.name || `${item.type || item.rule_type || '规则'} · ${item.value || item.rule_value || item.id}` }))
+    // 已选中的不支持类型仍列出并标注，便于移除；否则会隐藏在草稿里导致生成失败
+    .filter(item => (!opposite.includes(item.id) || selected.includes(item.id))
+      && (group.sets || isDnsRuleType(item.rule_type) || selected.includes(item.id)))
+    .map(item => ({ value: item.id, label: (item.name || `${item.type || item.rule_type || '规则'} · ${item.value || item.rule_value || item.id}`)
+      + (group.sets || isDnsRuleType(item.rule_type) ? '' : '（暂不能转换为 OxiDNS 规则，请移除）') }))
 }
 function write(path: string, value: unknown) {
   const parts = path.split('.'); const key = parts.pop()!

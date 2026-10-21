@@ -88,11 +88,49 @@ def handle_rules():
         return jsonify({'success': True, 'data': rule})
 
 
+def _dns_rule_selections(rule_id):
+    """DNS routing groups that currently use a single rule, as their editors show them.
+
+    A native OxiDNS draft routes by its YAML; the stored selectors are only a
+    retained catalog there, so selections are read back from the document.
+    """
+    from backend.common.oxidns_common_routing import read_routing
+    from backend.common.oxidns_native import load_native_yaml
+    config = get_config()
+    found = []
+    for engine, label in (('oxidns', 'OxiDNS'), ('mosdns', 'MosDNS')):
+        settings = config.get(engine) if isinstance(config.get(engine), dict) else {}
+        if engine == 'oxidns' and settings.get('config_mode') == 'native':
+            try:
+                settings = read_routing(load_native_yaml(settings.get('native_config', '')), settings, config)['values']
+            except ValueError:
+                continue
+        for key, group in (('direct_rules', '直连规则'), ('proxy_rules', '代理规则')):
+            if isinstance(settings.get(key), list) and rule_id in settings[key]:
+                found.append((label, group))
+    return found
+
+
+def _ensure_dns_rule_type(rule, selections):
+    """A type change must not strand a DNS selection the generator cannot express."""
+    from backend.converters.mosdns import DNS_RULE_TYPES
+    if rule.get('rule_type') in DNS_RULE_TYPES or not selections:
+        return
+    label, group = selections[0]
+    raise ProfileValidationError(
+        f'此规则已用于 {label} {group}，{rule.get("rule_type")} 类型暂不能转换为 {label} 规则。'
+        f'请先在 {label} 设置中取消选择，或新建一条规则。')
+
+
 def _mutate_rule(rule_id, item_type=None):
     from werkzeug.exceptions import NotFound
     payload = request.get_json() if request.method == 'PUT' else None
     if request.method == 'PUT' and not isinstance(payload, dict):
         raise ProfileValidationError('规则请求必须是 JSON 对象')
+    from backend.converters.mosdns import DNS_RULE_TYPES
+    # Read outside the transaction; only a request naming an unconvertible type needs it.
+    selections = (_dns_rule_selections(rule_id) if payload and 'rule_type' in payload
+                  and payload['rule_type'] not in DNS_RULE_TYPES else [])
     result = {}
     def mutate(profile):
         items = profile.setdefault('rule_configs', [])
@@ -114,6 +152,9 @@ def _mutate_rule(rule_id, item_type=None):
         if item_type:
             updated['itemType'] = item_type
         normalize_rule_config(updated)
+        # Only a type change is checked, so other edits to older selections still save.
+        if updated['itemType'] == 'rule' and updated.get('rule_type') != original.get('rule_type'):
+            _ensure_dns_rule_type(updated, selections)
         items[items.index(original)] = updated
         result.update(updated)
     update_config_transaction(mutate)
