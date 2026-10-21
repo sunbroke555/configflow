@@ -52,12 +52,11 @@ def _policy_route_items(desired: Dict[str, Any], state: RouterState) -> Dict[str
     items = []
     for entry in desired['proxy_cidrs']:
         target = ipaddress.IPv4Network(entry['cidr'])
-        matches = [route for route in state.routes if route.dst == entry['cidr']]
-        bad = [route for route in matches if not (route.enabled and gateway and route.gateway == gateway)]
+        # A disabled static route forwards nothing, so the policy rule decides: leave it be.
+        matches = [route for route in state.routes if route.dst == entry['cidr'] and route.enabled]
+        bad = [route for route in matches if not (gateway and route.gateway == gateway)]
         if bad:
-            route = bad[0]
-            reason = '已停用' if not route.enabled else f'下一跳为 {route.gateway}'
-            status, detail = 'conflict', f'同网段路由{reason}，期望下一跳 {gateway or "未知"}'
+            status, detail = 'conflict', f'同网段路由下一跳为 {bad[0].gateway}，期望下一跳 {gateway or "未知"}'
         elif matches:
             status, detail = 'adoptable', '静态路由会让 mihomo 自身的流量回环，将迁移为排除 mihomo 的策略路由'
         elif any(target.subnet_of(network) for network in covered):
@@ -163,6 +162,10 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
         # Migration owns exact IDs, including superseded aggregates. All other
         # obsolete managed main routes remain in ordinary static cleanup.
         routes['extra'] = [item for item in routes['extra'] if item['route_id'] not in migrating]
+    # Policy rules being withdrawn because the router routes by static routes again.
+    routes['retired_policy'] = [{'cidr': cidr, 'gateway': entry.gateway, 'comment': entry.comment,
+                                 'restore': entry.comment == POLICY_MANUAL_COMMENT}
+                                for entry in state.retired_policy_routes or [] for cidr in entry.dst]
     nat = _nat_items(desired, state)
     dns = build_dns_report(desired, state.dhcp_dns)
     summary: Dict[str, int] = {}
@@ -175,6 +178,7 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     in_sync = all(item['status'] in {'synced', 'not_required'}
                   for item in routes['items'] + nat['items']) and not routes['extra']
     in_sync = in_sync and not any(item.get('migrate') for item in routes['unmanaged_other'])
+    in_sync = in_sync and not routes['retired_policy']
     in_sync = in_sync and dns['status'] in {'disabled', 'synced'}
     result = {'desired': {key: value for key, value in desired.items() if key != 'ros_policy'},
               'routes': routes, 'nat_bypass': nat, 'dhcp_dns': dns, 'summary': summary, 'in_sync': in_sync}

@@ -236,6 +236,9 @@ class RouterState:
     # None: the vendor routes proxy CIDRs with static routes. A list (possibly
     # empty) means proxy CIDRs are routed by policy rules excluding the gateway.
     policy_routes: Optional[List[PolicyRouteEntry]] = None
+    # A list (possibly empty): the router supports policy rules but routes by
+    # static routes, and these rules of ours are withdrawn (retire_policy_routes).
+    retired_policy_routes: Optional[List[PolicyRouteEntry]] = None
     # Routes the router is actually forwarding with (iKuai 当前路由表). None when
     # the vendor cannot report them; used to find kernel routes without config.
     active_routes: Optional[List[RouteEntry]] = None
@@ -291,6 +294,8 @@ def managed_comment(comment: Optional[str]) -> str:
 # migrated from hand-made static routes are only ever added, never removed.
 POLICY_AUTO_COMMENT = f'{MANAGED_PREFIX}-mihomo'
 POLICY_MANUAL_COMMENT = f'{MANAGED_PREFIX}-mihomo-manual'
+# Hand-made CIDRs restored from POLICY_MANUAL_COMMENT stay hand-made: no cf marker.
+RESTORED_COMMENT = 'mihomo-manual'
 # Highest 端口分流 priority, so no other 分流 rule (multi-WAN, protocol) can send
 # proxy traffic out a WAN line instead of to the gateway.
 POLICY_PRIORITY = 0
@@ -306,6 +311,20 @@ def policy_route_ok(entry: 'PolicyRouteEntry', gateway: str) -> bool:
 def policy_route(state: 'RouterState', comment: str) -> Optional['PolicyRouteEntry']:
     """The first policy route carrying ``comment``; duplicates are left alone."""
     return next((entry for entry in state.policy_routes or [] if entry.comment == comment), None)
+
+
+def retire_policy_routes(state: 'RouterState') -> None:
+    """Route proxy CIDRs by static routes and withdraw our policy rules.
+
+    Policy rules need managed return routing: with NAT bypass, mihomo answers
+    clients directly, and iKuai stops forwarding a 端口分流 connection whose
+    replies it never sees (verified on 4.0.314). Static routes tolerate that.
+    """
+    if state.policy_routes is None:
+        return
+    state.retired_policy_routes = [entry for entry in state.policy_routes
+                                   if entry.comment in (POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT)]
+    state.policy_routes = None
 
 
 def stale_routes(state: 'RouterState', gateway: str) -> List['RouteEntry']:

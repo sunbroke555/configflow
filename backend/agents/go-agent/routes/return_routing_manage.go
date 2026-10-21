@@ -362,16 +362,35 @@ func saveReturnState(cfg *Config, state *returnRoutingState) error {
 	return os.Rename(tmp, path)
 }
 
+// returnRoutingTools names every missing host tool at once, with install commands.
+// BusyBox ip lacks -j/-N, so it fails "ip -V" like a missing ip and is called out.
+func returnRoutingTools() error {
+	missing := []string{}
+	if _, err := runCommand("ip", "-V"); err != nil {
+		if strings.Contains(err.Error(), "BusyBox") {
+			missing = append(missing, "iproute2（当前 ip 为 BusyBox 版本）")
+		} else {
+			missing = append(missing, "iproute2")
+		}
+	}
+	if _, err := runCommand("nft", "--version"); err != nil {
+		missing = append(missing, "nftables")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("mihomo 主机缺少 %s，无法管理回流规则。请安装后重启 Agent："+
+		"Alpine 执行 apk add iproute2 nftables；Debian/Ubuntu 执行 apt install iproute2 nftables；"+
+		"OpenWrt 执行 opkg install ip-full nftables", strings.Join(missing, "、"))
+}
+
 func prepareSpec(cfg *Config, spec ReturnRoutingSpec) (resolvedSpec, error) {
 	resolved, err := validateSpec(spec)
 	if err != nil {
 		return resolved, err
 	}
-	if _, err := runCommand("nft", "--version"); err != nil {
-		return resolved, fmt.Errorf("缺少 nft（nftables），无法管理回流规则")
-	}
-	if _, err := runCommand("ip", "-V"); err != nil {
-		return resolved, fmt.Errorf("缺少 ip（iproute2），无法管理回流规则")
+	if err := returnRoutingTools(); err != nil {
+		return resolved, err
 	}
 	routing, err := readMihomoRoutingStrict(cfg.ConfigPath)
 	if err != nil {

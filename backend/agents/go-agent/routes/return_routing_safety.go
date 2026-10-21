@@ -3,10 +3,12 @@ package routes
 // This file only observes resources and checks ownership. A successful command
 // or a familiar table name is never, by itself, evidence of ownership.
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"reflect"
 	"sort"
 	"strconv"
@@ -104,6 +106,9 @@ func resourceTable(row map[string]interface{}) (uint64, bool) {
 }
 
 func readReturnResources() (*returnResources, error) {
+	if err := returnRoutingTools(); err != nil {
+		return nil, err
+	}
 	result := &returnResources{}
 	reads := []struct {
 		name string
@@ -396,6 +401,9 @@ func normalizeResource(value interface{}, parent string) interface{} {
 		// Anonymous nft sets are unordered. Kernel/compiler output may reorder
 		// CIDRs; rule expressions remain ordered and must never use this path.
 		if parent == "set" {
+			if intervals, ok := ipv4SetIntervals(result); ok {
+				return intervals
+			}
 			sort.SliceStable(result, func(i, j int) bool {
 				left, _ := json.Marshal(result[i])
 				right, _ := json.Marshal(result[j])
@@ -412,6 +420,83 @@ func normalizeResource(value interface{}, parent string) interface{} {
 		}
 	}
 	return value
+}
+
+// ipv4SetIntervals compares an anonymous IPv4 set by the addresses it matches.
+// nft merges adjacent elements of interval sets, so 91.108.4.0/22,
+// 91.108.8.0/21 and 91.108.16.0/21 read back as one 91.108.4.0-91.108.23.255.
+func ipv4SetIntervals(items []interface{}) ([]interface{}, bool) {
+	type interval struct{ start, end uint32 }
+	address := func(value interface{}) (uint32, bool) {
+		text, ok := value.(string)
+		if !ok {
+			return 0, false
+		}
+		ip := net.ParseIP(text).To4()
+		if ip == nil {
+			return 0, false
+		}
+		return binary.BigEndian.Uint32(ip), true
+	}
+	intervals := make([]interval, 0, len(items))
+	for _, item := range items {
+		if start, ok := address(item); ok {
+			intervals = append(intervals, interval{start, start})
+			continue
+		}
+		element, ok := item.(map[string]interface{})
+		if !ok || len(element) != 1 {
+			return nil, false
+		}
+		if prefix, ok := element["prefix"].(map[string]interface{}); ok {
+			start, okAddr := address(prefix["addr"])
+			length, okLen := resourceNumber(prefix["len"])
+			if !okAddr || !okLen || length > 32 {
+				return nil, false
+			}
+			size := uint32(math.MaxUint32)
+			if length > 0 {
+				size = uint32(1)<<(32-length) - 1
+			}
+			if start&size != 0 {
+				return nil, false
+			}
+			intervals = append(intervals, interval{start, start | size})
+			continue
+		}
+		bounds, ok := element["range"].([]interface{})
+		if !ok || len(bounds) != 2 {
+			return nil, false
+		}
+		start, okStart := address(bounds[0])
+		end, okEnd := address(bounds[1])
+		if !okStart || !okEnd || start > end {
+			return nil, false
+		}
+		intervals = append(intervals, interval{start, end})
+	}
+	sort.Slice(intervals, func(i, j int) bool { return intervals[i].start < intervals[j].start })
+	merged := []interval{}
+	for _, next := range intervals {
+		last := len(merged) - 1
+		if last >= 0 && (merged[last].end == math.MaxUint32 || next.start <= merged[last].end+1) {
+			if next.end > merged[last].end {
+				merged[last].end = next.end
+			}
+			continue
+		}
+		merged = append(merged, next)
+	}
+	result := make([]interface{}, len(merged))
+	text := func(value uint32) string {
+		ip := make(net.IP, 4)
+		binary.BigEndian.PutUint32(ip, value)
+		return ip.String()
+	}
+	for i, span := range merged {
+		result[i] = map[string]interface{}{"range": []interface{}{text(span.start), text(span.end)}}
+	}
+	return result, true
 }
 
 func normalizedResourceEqual(a, b map[string]interface{}) bool {

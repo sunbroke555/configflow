@@ -1,6 +1,7 @@
 """Router releases: writable drivers, release plans, staged execution with rollback, API."""
 import copy
 
+from backend.routers.base import retire_policy_routes
 from backend.routers.ikuai import IKuaiDriver, decode_value, encode_value
 from backend.routers.plan import build_plan
 from backend.routers.release import execute
@@ -164,6 +165,9 @@ def test_plan_for_home_setup_adopts_and_fills_gaps():
                       ('route_delete', '198.18.0.0/16', None),
                       ('route_delete', '91.108.4.0/22', None),   # inside 91.108.0.0/16: no rule of its own
                       ('route_delete', '1.1.1.1/32', None)]
+    # An emptied 静态路由 page looks like data loss: lead with where the routes went.
+    assert plan['warnings'][0].startswith(f'将删除 3 条指向 {GATEWAY} 的静态路由，网段迁移到 iKuai「端口分流」')
+    assert plan['warnings'][0].endswith('198.18.0.0/16（fake ip）、91.108.4.0/22（tg）、1.1.1.1/32（dns）')
     assert plan['checks']['routes'] == []
     assert plan['checks']['policy_routes'] == [
         {'comment': 'cf-mihomo', 'gateway': GATEWAY, 'dst': ['91.108.0.0/16', '149.154.160.0/20', '198.18.0.0/16']},
@@ -293,6 +297,72 @@ def test_policy_routes_drop_stale_cidrs_but_keep_manual_ones():
     edit = next(param for func, action, param in session.writes if (func, action) == ('stream_ipport', 'edit'))
     assert edit['tagname'] == 'cf_pr_1' and edit['time']['custom'][0]['weekdays'] == '1234567'  # form kept
     assert [row['id'] for row in session.rows['static_rt']] == [8]
+
+
+def _plan_without_return(driver, desired=DESIRED):
+    state = driver.read_state()
+    retire_policy_routes(state)
+    return build_plan({**ROUTER, 'manage_return_routing': False}, desired, state, build_report(desired, state),
+                      {'status': 'disabled'}, driver)
+
+
+def _rows(session, func):
+    return [decode_value(row) for row in session.rows[func]]
+
+
+def test_without_return_routing_policy_routes_go_back_to_static_and_forth():
+    # With NAT bypass, mihomo answers clients directly. iKuai 4.0.314 then stops
+    # forwarding a 端口分流 connection (only its SYN reaches mihomo); static routes
+    # keep working. So 端口分流 is used only together with managed return routing.
+    session = StatefulIKuai([], HOME_NATS, policies=MIGRATED)
+    driver = _driver(session)
+    plan = _plan_without_return(driver)
+    assert plan['blockers'] == []
+    assert plan['warnings'][0].startswith('未开启自动配置回流：将把 iKuai 端口分流')
+    ops = [(op['kind'], op.get('cidr') or op.get('id')) for op in plan['stages'][1]['ops']]
+    # Static routes first: they take precedence, so nothing is unrouted in between.
+    assert ops == [('route_add', '91.108.0.0/16'), ('route_add', '149.154.160.0/20'),
+                   ('route_add', '198.18.0.0/16'), ('route_add', '1.1.1.1/32'),
+                   ('policy_route_delete', '1'), ('policy_route_delete', '2')]
+    result = execute(plan, driver, None)
+    assert result['ok'], result
+    assert [(row['dst_addr'], row['comment']) for row in _rows(session, 'static_rt')] == [
+        ('91.108.0.0', 'cf-Telegram'), ('149.154.160.0', 'cf-Telegram'), ('198.18.0.0', 'cf-fake-ip'),
+        ('1.1.1.1', 'mihomo-manual')]   # the hand-made CIDR stays hand-made
+    assert session.rows['stream_ipport'] == []
+    report = build_report(DESIRED, driver.read_state())
+    assert report['routes']['retired_policy'] == [] and _plan_without_return(driver)['empty']
+
+    # Return routing switched back on: the same CIDRs move to 端口分流 again.
+    plan = _plan(driver)
+    result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+    assert result['ok'], result
+    assert session.rows['static_rt'] == []
+    assert [(row['comment'], row['dst_addr']['custom']) for row in _rows(session, 'stream_ipport')] == [
+        ('cf-mihomo', ['91.108.0.0/16', '149.154.160.0/20', '198.18.0.0/16']), ('cf-mihomo-manual', ['1.1.1.1/32'])]
+
+
+def test_retiring_policy_routes_keeps_existing_static_routes_and_blocks_on_conflicts():
+    manual = {'id': 9, 'dst_addr': '1.1.1.1', 'netmask': '255.255.255.255', 'gateway': GATEWAY, 'enabled': 'yes',
+              'comment': 'dns', 'tagname': 'RT_9', 'ip_type': '4', 'interface': 'auto', 'prio': 1}
+    plan = _plan_without_return(_driver(StatefulIKuai([manual], HOME_NATS, policies=MIGRATED)))
+    assert ('route_add', '1.1.1.1/32') not in [(op['kind'], op.get('cidr')) for op in plan['stages'][1]['ops']]
+    assert '已有同网段静态路由、保持不变：1.1.1.1/32' in plan['warnings'][0]
+
+    # Deleting cf-mihomo would leave a skipped (conflicting) CIDR unrouted.
+    conflict = {**manual, 'dst_addr': '198.18.0.0', 'netmask': '255.255.0.0', 'gateway': '10.0.0.9'}
+    plan = _plan_without_return(_driver(StatefulIKuai([conflict], HOME_NATS, policies=MIGRATED)))
+    assert any(blocker.startswith('198.18.0.0/16 存在路由冲突，改回静态路由前') for blocker in plan['blockers'])
+
+
+def test_disabled_static_route_does_not_conflict_with_policy_routes():
+    disabled = {'id': 9, 'dst_addr': '198.18.0.0', 'netmask': '255.255.0.0', 'gateway': GATEWAY, 'enabled': 'no',
+                'comment': 'fake ip', 'tagname': 'RT_9', 'ip_type': '4', 'interface': 'auto', 'prio': 1}
+    driver = _driver(StatefulIKuai([disabled], HOME_NATS, policies=MIGRATED))
+    report = build_report(DESIRED, driver.read_state())
+    assert {item['status'] for item in report['routes']['items']} == {'synced'}
+    plan = _plan(driver)
+    assert plan['blockers'] == [] and plan['stages'][1]['ops'] == []   # left alone, not deleted
 
 
 def test_policy_route_that_includes_the_gateway_is_repaired():
