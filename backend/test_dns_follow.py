@@ -374,6 +374,39 @@ def test_baseline_without_file_digests_keeps_the_original_message(follow_env, mo
     assert state['message'].endswith(dns_follow.UNPUBLISHED_CHANGES)
 
 
+@pytest.mark.parametrize('outcome', ['succeeded', 'rolled_back'])
+def test_follow_waits_for_an_in_flight_oxidns_release(follow_env, outcome):
+    # Mihomo and OxiDNS published together: Mihomo finishes first while the
+    # OxiDNS release is still activating on the device.
+    env = follow_env
+    env.bind()
+    env.target_status = 'activating'
+    config, revision = env.repository.get_publish_snapshot('default')
+    prepared = _prepare_transactional_content(env.agent(), config, base_url='https://config.test',
+                                               deployment_id='manual-inflight')
+    env.manager.publish_deployment(env.target_id, prepared['bundle'], config_revision=revision,
+                                   base_url='https://config.test', resource_config=config)
+    assert env.agent()['latest_deployment']['status'] == 'activating'
+    env.target_status = 'succeeded'
+    env.uploads.clear()
+    env.publish_source()
+    env.calls.clear()
+    for _ in range(3):
+        dns_follow.tick(env.manager)
+    state = env.state()
+    assert state['status'] == 'waiting' and state['message'] == dns_follow.WAITING_FOR_TARGET
+    assert not any(path == 'dns/active' for _, _, path, _ in env.calls)
+    assert [event['status'] for event in state['events']].count('waiting') == 1
+    assert env.uploads == []
+    # Either outcome is a confirmed baseline (the new release, or the previous
+    # one left running after rollback); the follow continues without a retry.
+    env.remote[(env.target_id, 'manual-inflight')].update(
+        status=outcome, success=outcome == 'succeeded',
+        **({} if outcome == 'succeeded' else {'message': 'OxiDNS service failed to start'}))
+    env.advance('succeeded')
+    assert len(env.uploads) == 1
+
+
 def test_changed_device_baseline_blocks_automatic_publication(follow_env):
     env = follow_env
     env.bind()

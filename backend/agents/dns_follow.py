@@ -539,6 +539,21 @@ def _run(manager, target, source, binding, source_state):
     _resume(manager, manager.get_agent_by_id(target_id))
 
 
+WAITING_FOR_TARGET = 'Mihomo 已更新，等待 OxiDNS 当前发布完成后再同步'
+
+
+def _target_release_in_flight(manager, target):
+    """A release that is still activating moves the device off the baseline.
+
+    Checking during that window compares the old baseline with the new active
+    release and fails spuriously; once it ends the next round sees the result.
+    """
+    latest = target.get('latest_deployment') or {}
+    if not latest.get('deployment_id') or latest.get('status') in _TERMINAL:
+        return False
+    return manager.get_deployment(target['id'], latest['deployment_id']).get('status') not in _TERMINAL
+
+
 def tick(manager):
     """Run one bounded round. Source polling continues even when the UI closes."""
     from backend.common.config import reset_config_context
@@ -566,6 +581,13 @@ def tick(manager):
                         continue
                     if source_id == state.get('source_deployment_id') and not state.get('retry_requested'):
                         continue
+                    if _target_release_in_flight(manager, target):
+                        # Keep the source unrecorded so the next round still runs.
+                        if (state.get('status'), state.get('message')) != ('waiting', WAITING_FOR_TARGET):
+                            _state(manager, target['id'], 'waiting', WAITING_FOR_TARGET)
+                        continue
+                    # The check may just have recorded the release's outcome.
+                    target = manager.get_agent_by_id(target['id'])
                     _run(manager, target, source, binding, latest)
                 except Exception as error:
                     # Requests errors can contain tokens/config URLs. Do not log
