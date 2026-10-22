@@ -165,6 +165,29 @@ describe('首次使用分流向导', () => {
     expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: dns, traffic_fallback: traffic, local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules })
   })
 
+  it('网关模式默认接管代理规则中的应用连接，可关闭并在恢复时保留', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal: 'gateway', step: 2, max_step: 2, node_ids: ['node'] }) } as never)
+    vi.mocked(setupApi.prepare).mockResolvedValue({ data: record({ goal: 'gateway', step: 3, max_step: 3, prepared: true, ip_takeover: false }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    const toggle = wrapper!.get('#setup-ip-takeover')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper!.text()).toContain('接管应用连接（推荐）')
+    expect(wrapper!.text()).toContain('Telegram 等直接连接 IP 的应用，也按代理规则处理。')
+    await toggle.trigger('click'); await flushPromises()
+    await click('生成配置并继续')
+    expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: 'mihomo', traffic_fallback: 'proxy', local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules, ip_takeover: false })
+    wrapper!.unmount()
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal: 'gateway', step: 2, max_step: 3, prepared: true, ip_takeover: false }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.get('#setup-ip-takeover').attributes('aria-checked')).toBe('false')
+  })
+
+  it('主路由模式不显示应用连接接管', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2, node_ids: ['node'] }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.find('#setup-ip-takeover').exists()).toBe(false)
+  })
+
   it('恢复已保存的漏网设置和直连 DNS 上游', async () => {
     const localDns = 'https://223.6.6.6/dns-query\ntls://223.5.5.5:853'
     vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 3, prepared: true, dns_fallback: 'direct', traffic_fallback: 'proxy', local_dns: localDns, domain_rules: { direct: ['library:work'], proxy: [] } }) } as never)

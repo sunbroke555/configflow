@@ -12,7 +12,7 @@ export interface SetupSession {
   id: string; profile_id: string; name: string; goal: SetupGoal
   step: number; max_step: number; prepared: boolean; completed: boolean
   subscription_ids: string[]; node_ids: string[]; dns_fallback?: 'mihomo' | 'direct'; traffic_fallback?: 'proxy' | 'direct'
-  local_dns?: string
+  local_dns?: string; ip_takeover?: boolean
   domain_rules?: SetupDomainSelection
   node_count?: number; config_revision?: number; updated_at: string
   installation?: { id: string; mihomo: { id: string; name: string; host: string }; oxidns: { id: string; name: string; host: string } }
@@ -33,7 +33,7 @@ export const setupApi = {
   get: (id: string) => api.get<SetupSession>(path(id)),
   progress: (id: string, data: { step?: number; router_id?: string; router_mode?: 'manual' | 'managed' }) => api.patch<SetupSession>(path(id), data),
   source: (id: string, data: { url?: string; subscription_ids?: string[]; node_ids?: string[] }) => api.post<SetupSession>(`${path(id)}/source`, data),
-  prepare: (id: string, settings: { dns_fallback: 'mihomo' | 'direct'; traffic_fallback: 'proxy' | 'direct'; local_dns: string; domain_rules: SetupDomainSelection }) => api.post<SetupSession>(`${path(id)}/prepare`, settings, { timeout: 90000 }),
+  prepare: (id: string, settings: { dns_fallback: 'mihomo' | 'direct'; traffic_fallback: 'proxy' | 'direct'; local_dns: string; domain_rules: SetupDomainSelection; ip_takeover?: boolean }) => api.post<SetupSession>(`${path(id)}/prepare`, settings, { timeout: 90000 }),
   check: (id: string) => api.post<SetupSession>(`${path(id)}/check`, {}, { timeout: 90000 }),
   saveRouterDraft: (id: string, router: unknown) => api.post<SetupSession>(`${path(id)}/router-draft`, { router }),
   finish: (id: string, data: { router_mode?: 'manual' | 'managed'; router_id?: string; ack_routes?: boolean; ack_dns?: boolean } = {}) => api.post<SetupSession>(`${path(id)}/finish`, data, { timeout: 90000 })
