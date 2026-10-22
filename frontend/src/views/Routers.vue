@@ -607,7 +607,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               />
             </div>
           </div>
-          <FormField :label="form.type === 'routeros' ? '使用静态路由的 IP 规则集' : '按 IP 路由给 mihomo 的规则集'" html-for="router-ip-rule-sets" v-bind="routerCopy.staticRules">
+          <FormField :label="form.type === 'routeros' ? '使用静态路由的 IP 规则集' : '按 IP 路由给 Mihomo 的规则集'" html-for="router-ip-rule-sets" v-bind="routerCopy.staticRules">
             <div class="[&_[role=combobox]]:min-h-11">
               <MultiSelect :model-value="form.ip_rule_sets" trigger-id="router-ip-rule-sets" :options="ruleSetOptions" placeholder="仅 fake-ip 网段" @update:model-value="selectStaticRuleSets" />
             </div>
