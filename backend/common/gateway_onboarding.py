@@ -276,7 +276,20 @@ def _proxy_prerequisites(config, document=None):
         warnings.append('当前未配置 Mihomo MATCH 漏网规则，请在规则页确认未匹配连接的处理方式。')
     elif catchall.get('policy') not in reachable and catchall.get('policy') != 'DIRECT':
         warnings.append('Mihomo MATCH 漏网规则未指向可用代理策略或 DIRECT，请确认未匹配连接的处理方式。')
-    warnings.append('策略组可动态选择 DIRECT；此检查仅确认存在代理出口，无法保证每次连接一定走代理。')
+    # Only a group that can resolve to a direct outbound makes the check above
+    # weaker than it reads; groups of proxy nodes alone need no caveat.
+    direct = {'DIRECT'} | {proxy.get('name') for proxy in document.get('proxies', [])
+                           if proxy.get('type') == 'direct' and proxy.get('name')}
+    while True:
+        additions = {group.get('name') for group in groups if group.get('name')
+                     and any(member in direct for member in group.get('proxies', []))}
+        if additions <= direct:
+            break
+        direct.update(additions)
+    selectable = sorted({item.get('policy') for item in active_rules} & reachable & direct)
+    if selectable:
+        warnings.append(f"策略组「{'、'.join(selectable)}」可以选择 DIRECT；此检查只确认存在代理出口，"
+                        '选中 DIRECT 时相关连接不会走代理。')
     return {'ready': ready, 'policies': policies, 'warnings': warnings, 'verified': True}
 
 
