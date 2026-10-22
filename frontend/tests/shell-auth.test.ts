@@ -7,12 +7,14 @@ import Login from '@/views/Login.vue'
 import Profiles from '@/views/Profiles.vue'
 import api, { agentApi, profileApi } from '@/api'
 import { setActiveProfileId } from '@/profileContext'
+import { invalidateAgentSummaries } from '@/lib/agentSummaries'
 
 const authState = vi.hoisted(() => ({ enabled: true }))
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn(async (path: string) => ({ data: path === '/auth/status' ? { authEnabled: authState.enabled } : { enabled: true } })) },
-  agentApi: { getAll: vi.fn(async () => ({ data: [] })) },
+  // The shell's live poll lists Agents through the cheap summary endpoint.
+  agentApi: { getAll: vi.fn(async () => ({ data: [] })), summaries: vi.fn(async () => ({ data: [] })) },
   profileApi: { list: vi.fn(async () => ({ data: [{ id: 'default', name: 'Default' }, { id: 'second', name: 'Second' }] })) },
   systemApi: { getVersion: vi.fn(async () => ({ data: { version: 'test' } })) }
 }))
@@ -35,6 +37,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
   authState.enabled = true
+  invalidateAgentSummaries()
   localStorage.clear()
   sessionStorage.clear()
   setActiveProfileId('default')
@@ -62,16 +65,16 @@ async function renderApp(path = '/login') {
 describe('authenticated shell startup', () => {
   it('does not poll protected agents while an unauthenticated login screen is idle', async () => {
     // Keep motion and flushPromises on real timers; only advance the shared poller.
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
     await renderApp()
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(agentApi.getAll).not.toHaveBeenCalled()
+    expect(agentApi.summaries).not.toHaveBeenCalled()
     expect(profileApi.list).not.toHaveBeenCalled()
     expect(api.get).not.toHaveBeenCalledWith('/settings/subscription-aggregation')
   })
 
   it('starts one poller after login, stops at logout, and restarts after the next login', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
     const interval = vi.spyOn(window, 'setInterval')
     const pollerStarts = () => interval.mock.calls.filter(([, delay]) => delay === 5000).length
     const { router } = await renderApp()
@@ -80,43 +83,43 @@ describe('authenticated shell startup', () => {
     localStorage.setItem('username', 'Synthetic')
     await router.push('/profiles')
     await flushPromises()
-    expect(agentApi.getAll).toHaveBeenCalledTimes(1)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(1)
     expect(pollerStarts()).toBe(1)
     await vi.advanceTimersByTimeAsync(5000)
-    expect(agentApi.getAll).toHaveBeenCalledTimes(2)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
 
     await router.push('/shell-other')
     await flushPromises()
-    expect(agentApi.getAll).toHaveBeenCalledTimes(2)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
     expect(pollerStarts()).toBe(1)
     await vi.advanceTimersByTimeAsync(5000)
-    expect(agentApi.getAll).toHaveBeenCalledTimes(3)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(3)
 
     localStorage.removeItem('token')
     localStorage.removeItem('username')
     await router.push('/login')
     await flushPromises()
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(agentApi.getAll).toHaveBeenCalledTimes(3)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(3)
 
     localStorage.setItem('token', 'new-synthetic-token')
     await router.push('/shell-other')
     await flushPromises()
-    expect(agentApi.getAll).toHaveBeenCalledTimes(4)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(4)
     expect(pollerStarts()).toBe(2)
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(agentApi.getAll).toHaveBeenCalledTimes(6)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(6)
   })
 
   it('keeps polling application pages without a token when authentication is disabled', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
     authState.enabled = false
     await renderApp('/shell-other')
     expect(localStorage.getItem('token')).toBeNull()
     expect(api.get).toHaveBeenCalledWith('/auth/status')
-    expect(agentApi.getAll).toHaveBeenCalledTimes(1)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(agentApi.getAll).toHaveBeenCalledTimes(3)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(3)
   })
 
   it('never loads protected profiles or aggregation settings on the login screen, and loads after login navigation', async () => {

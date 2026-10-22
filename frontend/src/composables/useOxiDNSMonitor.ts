@@ -17,7 +17,8 @@ const MAX_RATE_SAMPLE_GAP = 30
 type RateSample = Pick<OxiDNSOverview, 'collected_at'> & {
   metrics: Pick<OxiDNSOverview['metrics'], 'requests_total'>
   core: Pick<OxiDNSOverview['core'], 'instance_id'>
-  statistics?: Pick<NonNullable<OxiDNSOverview['statistics']>, 'generation'>
+  // The overview reports `statistics: null` before a period starts.
+  statistics?: Pick<NonNullable<OxiDNSOverview['statistics']>, 'generation'> | null
 }
 const recentSamples = new Map<string, { at: number; sample: RateSample }>()
 function rememberSample(id: string, next: OxiDNSOverview) {
