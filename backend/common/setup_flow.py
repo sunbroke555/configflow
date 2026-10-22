@@ -286,10 +286,11 @@ def prepare(repository, session, body, base_url):
                 rule['url'] = f'/api/profiles/{session["profile_id"]}/rule-library/content/{item["id"]}'
     if session['goal'] == 'gateway':
         # Apps that connect to IPs without a DNS lookup never reach the fake-IP
-        # range; the proxy rule sets' IPv4 ranges route them into Mihomo too.
-        # Direct ones are left out: they would only enter Mihomo to leave DIRECT.
+        # range; their proxy rule sets' IPv4 ranges route them into Mihomo too.
         from backend.common.linux_gateway import gateway_editor_state
-        proxy = {identity for identity, _ in domain_rules['proxy']}
+        from backend.common.setup_presets import IP_TAKEOVER_RULES
+        proxy = {rule_id for identity, (rule_id, _) in zip(selections['proxy'], domain_rules['proxy'])
+                 if identity in IP_TAKEOVER_RULES}
         takeover = [item['id'] for item in gateway_editor_state(candidate, include_guidance=False)['candidates']
                     if ip_takeover and item['id'] in proxy and item['available']]
         fields['mihomo']['linux_gateway'] = {**fields['mihomo'].get('linux_gateway', {'enabled': False}),
