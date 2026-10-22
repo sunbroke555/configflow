@@ -235,7 +235,7 @@ onUnmounted(() => { disposed = true })
           <Button v-if="step === 1 && session?.prepared" class="mt-4" @click="move(2)">查看规则与 DNS<ArrowRight class="size-4" /></Button>
           <div v-if="step === 2 && session" class="space-y-5">
             <section class="space-y-3" aria-labelledby="setup-domain-title">
-              <div class="flex flex-wrap items-center gap-1"><h3 id="setup-domain-title" class="m-0 text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" text="直接复用 ConfigFlow 原有初始模板的规则库、顺序及默认去向。支持 URL 和内容型的 Domain / Classical text / YAML 规则；Classical 中的域名与 IP 条件由现有转换流程处理。已有相同来源会直接复用，可取消或替换规则，同一规则集只能选择一种去向。两项核心引用相同规则；按模板顺序匹配，未命中时按下方设置处理。" /><Button variant="ghost" size="sm" class="ml-auto min-h-11" :disabled="working || session?.completed" @click="setDomainRules()">恢复推荐</Button></div>
+              <div class="flex flex-wrap items-center gap-1"><h3 id="setup-domain-title" class="m-0 text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" text="直接复用 ConfigFlow 原有初始模板的规则库、顺序及默认去向。支持 URL 和内容型的 Domain / Classical text / YAML 规则；Classical 中的域名与 IP 条件由现有转换流程处理。已有相同来源会直接复用，可取消或替换规则，同一规则集只能选择一种去向。两项核心引用相同规则；按模板顺序匹配，未命中时按下方设置处理。策略组沿用默认配置：代理规则各自使用对应的服务组（如 📲 Telegram、🤖 人工智能），默认跟随「✈️ 节点选择」，安装后可在 Mihomo 面板逐个切换；订阅中没有节点的地区组不会生成。" /><Button variant="ghost" size="sm" class="ml-auto min-h-11" :disabled="working || session?.completed" @click="setDomainRules()">恢复推荐</Button></div>
               <p class="text-xs text-muted-foreground">已选 <span class="num">{{ directRules.length }}</span> 组直连、<span class="num">{{ proxyRules.length }}</span> 组代理规则，可直接继续。</p>
               <div class="grid gap-3 sm:grid-cols-2">
                 <FormField label="直连规则" html-for="setup-direct-rules" hint="使用直连 DNS" persistent-hint>
@@ -261,7 +261,7 @@ onUnmounted(() => { disposed = true })
                 <Segmented v-model="dnsFallback" :disabled="working || session?.completed" class="shrink-0 self-start sm:self-center" :options="[{value:'mihomo',label:'Mihomo DNS'},{value:'direct',label:'直连 DNS'}]" label="OxiDNS 未匹配域名的 DNS" />
               </div>
               <div class="flex min-h-11 flex-wrap items-center justify-between gap-x-2">
-                <div class="flex items-center gap-1 text-[13px] font-medium max-sm:text-xs"><span>未匹配连接</span><span class="cf-compact-help"><FieldHelp label="未匹配连接" text="进入 Mihomo 的连接未匹配前面的规则时，由最后一条 MATCH 规则决定出口。走代理使用代理选择组中的节点；直连表示 DIRECT。只影响未匹配连接，实际流量是否进入 Mihomo 还取决于路由设置。" /></span></div>
+                <div class="flex items-center gap-1 text-[13px] font-medium max-sm:text-xs"><span>未匹配连接</span><span class="cf-compact-help"><FieldHelp label="未匹配连接" text="进入 Mihomo 的连接未匹配前面的规则时，由最后一条 MATCH 规则决定出口。走代理使用「🐟 漏网之鱼」策略组，默认跟随「✈️ 节点选择」；直连表示 DIRECT。只影响未匹配连接，实际流量是否进入 Mihomo 还取决于路由设置。" /></span></div>
                 <Segmented v-model="trafficFallback" :disabled="working || session?.completed" class="shrink-0 self-start sm:self-center" :options="[{value:'proxy',label:'走代理'},{value:'direct',label:'直连'}]" label="Mihomo 未匹配连接的出口" />
               </div>
             </section>
