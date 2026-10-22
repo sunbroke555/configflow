@@ -88,6 +88,17 @@ def handle_profile(profile_id):
     return '', 204
 
 
+@profiles_bp.route('/<profile_id>/default', methods=['POST'])
+@require_auth
+def set_default_profile(profile_id):
+    repository = get_repository()
+    previous = repository.default_profile_id()
+    if repository.set_default_profile(profile_id):
+        logger.info('默认配置空间已从 %s 改为 %s', log_text(previous, 64),
+                    _profile_label(repository._profile_metadata(profile_id)))
+    return jsonify({'success': True, 'default_profile_id': profile_id})
+
+
 @profiles_bp.route('/<profile_id>/clone', methods=['POST'])
 @require_auth
 def clone_profile(profile_id):

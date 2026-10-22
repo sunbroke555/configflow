@@ -32,6 +32,11 @@ def _respond(action):
     return response, status
 
 
+def _described(repository, session):
+    from backend.common.setup_completion import profile_summary
+    return {**flow.public(session), 'default_profile': profile_summary(repository, session)}
+
+
 @settings_bp.route('/setup', methods=['GET', 'POST'])
 @require_auth
 def setup_sessions():
@@ -62,7 +67,7 @@ def setup_session(session_id):
             if request.method == 'PATCH':
                 flow.update_progress(repository, session, _body())
                 flow.write(repository, session)
-            return flow.public(session)
+            return _described(repository, session)
     return _respond(action)
 
 
@@ -98,5 +103,5 @@ def setup_action(session_id, operation):
             else:
                 raise flow.SetupError('未知向导操作', 404)
             flow.write(repository, session)
-            return flow.public(session)
+            return _described(repository, session)
     return _respond(action)

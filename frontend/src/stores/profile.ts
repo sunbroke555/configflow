@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { profileApi, type ProfileAgentBinding } from '@/api'
-import { activeProfileId, scopedRequests, setActiveProfileId } from '@/profileContext'
+import { activeProfileId, hasChosenProfile, scopedRequests, setActiveProfileId } from '@/profileContext'
 import { confirm, notify } from '@/lib/feedback'
 
 export interface Profile {
@@ -18,6 +18,9 @@ export interface Profile {
 
 const profiles = ref<Profile[]>([])
 const loading = ref(false)
+// Until a tab without its own choice knows the server default, pages must not
+// send profile requests for the 'default' placeholder.
+const profileReady = ref(hasChosenProfile())
 let refreshing: Promise<Profile[]> | undefined
 
 const refreshProfiles = (): Promise<Profile[]> => {
@@ -27,12 +30,15 @@ const refreshProfiles = (): Promise<Profile[]> => {
     try {
       const { data } = await profileApi.list()
       profiles.value = data
-      if (!profiles.value.some(profile => profile.id === activeProfileId.value)) {
-        setActiveProfileId(defaultProfileId.value || profiles.value[0]?.id || 'default')
+      const fallback = defaultProfileId.value || profiles.value[0]?.id || 'default'
+      if (!profiles.value.some(profile => profile.id === activeProfileId.value)
+          || (!hasChosenProfile() && activeProfileId.value !== fallback)) {
+        setActiveProfileId(fallback)
       }
       return profiles.value
     } finally {
       loading.value = false
+      profileReady.value = true
       refreshing = undefined
     }
   })()
@@ -80,6 +86,7 @@ export const useProfileStore = () => ({
   activeProfileId,
   activeProfile,
   defaultProfileId,
+  profileReady,
   refreshProfiles,
   switchProfile,
   profileName,

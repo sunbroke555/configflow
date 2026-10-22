@@ -119,6 +119,9 @@
             <Button variant="ghost" size="icon-sm" title="编辑" aria-label="编辑" @click="openEdit(profile)">
               <Pencil class="size-4" />
             </Button>
+            <Button v-if="!isDefaultProfile(profile)" variant="ghost" size="icon-sm" title="设为默认" aria-label="设为默认" @click="makeDefault(profile)">
+              <Star class="size-4" />
+            </Button>
             <Button variant="ghost" size="icon-sm" title="创建副本" aria-label="创建副本" @click="clone(profile)">
               <Copy class="size-4" />
             </Button>
@@ -392,6 +395,7 @@ import {
   Minimize2,
   Pencil,
   Plus,
+  Star,
   Trash2,
   Upload
 } from '@lucide/vue'
@@ -428,7 +432,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import ProfileAgentBindings from '@/components/ProfileAgentBindings.vue'
 import { profileApi, subscriptionApi } from '@/api'
-import { confirmDanger, notify, prompt } from '@/lib/feedback'
+import { confirm, confirmDanger, notify, prompt } from '@/lib/feedback'
 import { listItem } from '@/lib/motion'
 import { isDefaultProfile, useProfileStore, type Profile } from '@/stores/profile'
 
@@ -481,6 +485,21 @@ const submit = async () => {
   }
 }
 
+
+const makeDefault = async (profile: Profile) => {
+  const approved = await confirm(
+    `未指定配置空间的配置链接、新注册的 Agent 和 MCP 工具会改用「${profile.name}」，新打开的页面也默认进入它。已绑定的设备保持原配置空间，不受影响。`,
+    { title: '设为默认配置空间？', confirmText: '设为默认' }
+  )
+  if (!approved) return
+  try {
+    await profileApi.setDefault(profile.id)
+    await refreshProfiles()
+    notify.success(`默认配置空间已改为「${profile.name}」`)
+  } catch (error: any) {
+    notify.error(error.response?.data?.message || '设为默认失败')
+  }
+}
 
 const clone = async (profile: Profile) => {
   const id = await prompt({

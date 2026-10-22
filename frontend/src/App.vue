@@ -155,7 +155,8 @@
             :active-path="navigationPath(route.path)"
             :subscription-aggregation-enabled="subscriptionAggregationEnabled"
           />
-          <router-view :key="pageKey" />
+          <router-view v-if="profileStore.profileReady.value" :key="pageKey" />
+          <LoadingRows v-else :rows="3" />
         </div>
       </main>
     </div>
@@ -191,6 +192,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Toaster } from '@/components/ui/sonner'
 import BrandMark from '@/components/common/BrandMark.vue'
+import LoadingRows from '@/components/common/LoadingRows.vue'
 import { cn } from '@/lib/utils'
 import { systemApi } from './api'
 import api from './api'

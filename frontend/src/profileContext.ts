@@ -2,9 +2,15 @@ import { ref } from 'vue'
 
 const STORAGE_KEY = 'configflow.activeProfile'
 
+// A tab that never picked a profile follows the server's default profile once
+// the profile list loads; 'default' is only the placeholder until then.
+let chosen = false
+
 const readStoredProfile = (): string => {
   try {
-    return sessionStorage.getItem(STORAGE_KEY) || 'default'
+    const stored = sessionStorage.getItem(STORAGE_KEY)
+    chosen = Boolean(stored)
+    return stored || 'default'
   } catch {
     return 'default'
   }
@@ -20,6 +26,7 @@ export const endScopedRequest = (): void => {
 
 export const setActiveProfileId = (profileId: string): void => {
   if (!profileId) return
+  chosen = true
   activeProfileId.value = profileId
   try {
     sessionStorage.setItem(STORAGE_KEY, profileId)
@@ -29,6 +36,7 @@ export const setActiveProfileId = (profileId: string): void => {
 }
 
 export const clearActiveProfileId = (): void => {
+  chosen = false
   activeProfileId.value = 'default'
   try {
     sessionStorage.removeItem(STORAGE_KEY)
@@ -38,3 +46,5 @@ export const clearActiveProfileId = (): void => {
 }
 
 export const getActiveProfileId = (): string => activeProfileId.value
+
+export const hasChosenProfile = (): boolean => chosen
