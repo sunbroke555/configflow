@@ -19,7 +19,7 @@ export const routerCopy = {
   returnRouting: optionCopy('回复需要经过主路由返回时开启，默认关闭。',
     '网络要求 Mihomo 的回复先经过主路由，再返回设备时开启。',
     '自动维护所需的回流规则。iKuai 开启后改用排除 Mihomo 的端口分流，关闭则改回静态路由。关闭后发布时会移除 Agent 写入的回流规则，其他路由器仍在使用时保留。'),
-  staticRules: optionCopy('所选规则集里的 IPv4 网段由主路由送到 Mihomo；fake-IP 网段自动包含。',
+  staticRules: optionCopy('所选规则集里的 IPv4 网段由主路由送到 Mihomo；fake-ip 网段自动包含。',
     'Telegram 等不查域名、直接连 IP 的应用需要选择。',
     '主路由将目标 IP 的连接送到 Mihomo。fake-ip 网段始终包含；经 OxiDNS 获得 fake-ip 的网站无需重复选择对应 IP 规则集。'),
   policyRules: optionCopy('只让指定设备访问这些 IP 时，交给代理网关。',
