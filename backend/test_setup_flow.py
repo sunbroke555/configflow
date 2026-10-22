@@ -589,3 +589,56 @@ def test_new_choices_after_installation_check_clear_stale_later_steps(installed)
     assert changed.json['max_step'] == 3 and changed.json['step'] == 3
     assert not {'installation', 'route_instructions', 'router_verification'} & set(changed.json)
     assert client.patch(f'/api/setup/{SESSION}', json={'step': 4}).status_code == 400
+
+
+IP_RULE = {'id': 'chat', 'name': '聊天', 'behavior': 'classical', 'format': 'text', 'source_type': 'content',
+           'content': 'DOMAIN-SUFFIX,chat.test\nIP-CIDR,198.51.100.0/24,no-resolve', 'enabled': True}
+DIRECT_IP_RULE = {**IP_RULE, 'id': 'lan-chat', 'name': '内网聊天', 'content': 'IP-CIDR,203.0.113.0/24'}
+
+
+def test_gateway_proxy_rule_ip_ranges_are_taken_over_by_default_and_can_be_declined(setup_api):
+    from backend.common.gateway_onboarding import gateway_onboarding_state, prepare_gateway_onboarding
+    from backend.converters.mihomo import generate_mihomo_config
+    client, repository = setup_api
+    session = start(client, 'gateway')
+    repository.update_shared_transaction(lambda shared: shared.update(
+        nodes=[deepcopy(NODE)], rule_library=[deepcopy(DOMAIN_RULE), deepcopy(IP_RULE), deepcopy(DIRECT_IP_RULE)]))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    selections = {'direct': ['library:lan-chat'], 'proxy': ['library:work', 'library:chat']}
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+    assert response.status_code == 200, response.json
+    assert response.json['ip_takeover'] is True
+    snapshot, revision = repository.get_publish_snapshot(session['profile_id'])
+    names = {item['id']: item['name'] for item in snapshot['rule_configs'] if item['itemType'] == 'ruleset'}
+    # Only the proxy rule set that can carry IP ranges; the domain-only proxy
+    # set and the direct set stay out.
+    selected = snapshot['mihomo']['linux_gateway']['rule_set_ids']
+    assert [names[identity] for identity in selected] == ['聊天']
+    assert snapshot['mihomo']['linux_gateway']['enabled'] is False
+    # The embedded installer carries the selection into the enabled gateway.
+    state = gateway_onboarding_state(snapshot, revision)
+    assert state['settings']['rule_set_ids'] == selected
+    candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
+    assert report['ready'], report
+    mihomo = yaml.safe_load(generate_mihomo_config(candidate, base_url='https://config.test'))
+    assert len(mihomo['tun']['route-address-set']) == 2
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections, 'ip_takeover': False})
+    assert response.status_code == 200, response.json
+    assert repository.get_profile(session['profile_id'])['mihomo']['linux_gateway']['rule_set_ids'] == []
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+    assert response.json['ip_takeover'] is False
+    assert repository.get_profile(session['profile_id'])['mihomo']['linux_gateway']['rule_set_ids'] == []
+
+
+def test_router_setup_leaves_ip_takeover_to_the_router_settings(setup_api):
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(IP_RULE)]))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    selections = {'direct': [], 'proxy': ['library:chat']}
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections, 'ip_takeover': True})
+    assert response.status_code == 400
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+    assert response.status_code == 200, response.json
+    assert 'ip_takeover' not in response.json
+    assert 'linux_gateway' not in repository.get_profile(session['profile_id'])['mihomo']

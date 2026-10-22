@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { ArrowLeft, ArrowRight, Check, CircleCheck, LoaderCircle, Network, Router as RouterIcon } from '@lucide/vue'
 import { setupApi, type SetupGoal, type SetupIndex, type SetupSession } from '@/api/setup'
 import { SETUP_GOALS, SETUP_STEPS, setupError, setupLocalDnsWarning } from '@/lib/setupFlow'
+import { optionHelp } from '@/lib/optionCopy'
 import { confirm } from '@/lib/feedback'
 import { createDeploymentId } from '@/composables/useAgentDeployments'
 import { useProfileStore } from '@/stores/profile'
@@ -20,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
 import Segmented from '@/components/common/Segmented.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 
@@ -32,6 +34,7 @@ const goal = ref<SetupGoal>('router')
 const name = ref('我的分流配置')
 const dnsFallback = ref<'mihomo' | 'direct'>('mihomo')
 const trafficFallback = ref<'proxy' | 'direct'>('proxy')
+const ipTakeover = ref(true)
 const defaultLocalDns = 'https://223.5.5.5/dns-query'
 const localDns = ref(defaultLocalDns)
 const directRules = ref(['builtin:direct'])
@@ -87,6 +90,7 @@ async function accept(value: SetupSession) {
   previewRouting.value = false
   dnsFallback.value = value.dns_fallback || 'mihomo'
   trafficFallback.value = value.traffic_fallback || 'proxy'
+  ipTakeover.value = value.ip_takeover ?? true
   localDns.value = value.local_dns ?? defaultLocalDns
   setDomainRules(value.domain_rules)
   routerMode.value = value.router_mode || 'manual'; routerId.value = value.router_id || ''
@@ -123,7 +127,8 @@ async function prepare() {
   if (!current) return
   await run(async () => {
     const { data } = await setupApi.prepare(current.id, { dns_fallback: dnsFallback.value, traffic_fallback: trafficFallback.value,
-      local_dns: localDns.value, domain_rules: { direct: directRules.value, proxy: proxyRules.value } })
+      local_dns: localDns.value, domain_rules: { direct: directRules.value, proxy: proxyRules.value },
+      ...(goal.value === 'gateway' ? { ip_takeover: ipTakeover.value } : {}) })
     await accept(data); await profileStore.refreshProfiles()
   })
 }
@@ -243,6 +248,13 @@ onUnmounted(() => { disposed = true })
                 </FormField>
               </div>
               <p v-if="!directRules.length && !proxyRules.length" class="m-0 text-xs text-warning-accent" role="status">未选择域名规则，所有域名将使用下方的默认 DNS。</p>
+              <div v-if="goal === 'gateway'" class="flex min-h-11 items-center justify-between gap-4 border-t border-border pt-3">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-1 text-[13px] font-medium max-sm:text-xs"><label for="setup-ip-takeover" class="cursor-pointer">代理规则的 IP 也接管（推荐）</label><span class="cf-compact-help"><FieldHelp label="代理规则的 IP 也接管" :text="optionHelp('Telegram 等不查域名、直接连接 IP 的应用需要开启，否则这些连接不经过 Mihomo。', '代理规则里的 IPv4 网段交给 Mihomo，再按规则决定出口；直连规则不受影响。安装后可在「配置生成 → Linux 网关」的「IP 接管」里逐个调整。')" /></span></div>
+                  <p class="mt-1 mb-0 text-xs text-muted-foreground">Telegram 等直接连接 IP 的应用，也按代理规则处理。</p>
+                </div>
+                <Switch id="setup-ip-takeover" v-model="ipTakeover" :disabled="working || session?.completed" class="shrink-0" />
+              </div>
             </section>
             <section class="space-y-3 border-t border-border pt-4" aria-label="DNS 上游">
               <FormField label="直连 DNS 上游" html-for="setup-local-dns" hint="IP 地址的 DoH / DoT，每行一个。" persistent-hint help="用于查询直连域名的真实 IP。默认地址可直接使用，例如 https://223.5.5.5/dns-query；也支持 tls://223.5.5.5:853，最多 16 个，无需 YAML 前缀。为避免 Linux DNS 接管回环，不支持普通 53 端口、本机地址或代理出口。后续安装自动带入，之后可在 OxiDNS 设置中修改。">

@@ -211,7 +211,7 @@ def _resources(config, session):
 
 
 def prepare(repository, session, body, base_url):
-    if set(body) - {'dns_fallback', 'traffic_fallback', 'local_dns', 'domain_rules', 'template'}:
+    if set(body) - {'dns_fallback', 'traffic_fallback', 'local_dns', 'domain_rules', 'template', 'ip_takeover'}:
         raise SetupError('漏网处理参数无效')
     if body.get('template', 'basic') != 'basic':
         raise SetupError('代理优先模式已移除，请刷新向导并分别选择 DNS 与连接的漏网处理')
@@ -219,6 +219,9 @@ def prepare(repository, session, body, base_url):
     traffic_fallback = body.get('traffic_fallback', 'proxy')
     if dns_fallback not in ('mihomo', 'direct') or traffic_fallback not in ('proxy', 'direct'):
         raise SetupError('请选择有效的 DNS 与连接漏网处理方式')
+    ip_takeover = body.get('ip_takeover', session.get('ip_takeover', True))
+    if type(ip_takeover) is not bool or ('ip_takeover' in body and session['goal'] != 'gateway'):
+        raise SetupError('应用直连 IP 的接管选项无效')
     local_dns = body.get('local_dns', session.get('local_dns', DEFAULT_LOCAL_DNS))
     try:
         _local_upstreams(local_dns)
@@ -273,12 +276,6 @@ def prepare(repository, session, body, base_url):
     dns['rule_update']['enabled'] = bool(domain_rules['direct'] or domain_rules['proxy'])
     fields = {'proxy_groups': groups, 'rule_configs': rules, 'oxidns': dns,
               'mihomo': {**config.get('mihomo', {}), 'custom_config': yaml.safe_dump(settings, sort_keys=False)}}
-    stored = repository.get_profile(session['profile_id'])
-    unchanged = all(stored.get(key) == value for key, value in fields.items())
-    edited = (stored['_revision'] != session['profile_revision'] if 'owned_digest' not in session
-              else owned_digest(stored) != session['owned_digest'])
-    if edited and not unchanged:
-        raise SetupError('该空间已在其他页面修改，向导不会覆盖；请新建向导或前往配置生成继续', 409)
     candidate = {**deepcopy(config), **deepcopy(fields)}
     candidate['rule_library'] = repository.get_shared()['rule_library']
     for items in domain_rules.values():
@@ -287,6 +284,23 @@ def prepare(repository, session, body, base_url):
             rule.update({key: item[key] for key in ('name', 'url', 'source_type', 'behavior', 'format', 'content') if key in item})
             if item['source_type'] == 'content':
                 rule['url'] = f'/api/profiles/{session["profile_id"]}/rule-library/content/{item["id"]}'
+    if session['goal'] == 'gateway':
+        # Apps that connect to IPs without a DNS lookup never reach the fake-IP
+        # range; the proxy rule sets' IPv4 ranges route them into Mihomo too.
+        # Direct ones are left out: they would only enter Mihomo to leave DIRECT.
+        from backend.common.linux_gateway import gateway_editor_state
+        proxy = {identity for identity, _ in domain_rules['proxy']}
+        takeover = [item['id'] for item in gateway_editor_state(candidate, include_guidance=False)['candidates']
+                    if ip_takeover and item['id'] in proxy and item['available']]
+        fields['mihomo']['linux_gateway'] = {**fields['mihomo'].get('linux_gateway', {'enabled': False}),
+                                             'rule_set_ids': takeover}
+        candidate['mihomo'] = deepcopy(fields['mihomo'])
+    stored = repository.get_profile(session['profile_id'])
+    unchanged = all(stored.get(key) == value for key, value in fields.items())
+    edited = (stored['_revision'] != session['profile_revision'] if 'owned_digest' not in session
+              else owned_digest(stored) != session['owned_digest'])
+    if edited and not unchanged:
+        raise SetupError('该空间已在其他页面修改，向导不会覆盖；请新建向导或前往配置生成继续', 409)
     from backend.converters.oxidns import generate_oxidns_config
     from backend.common.oxidns_validation import require_valid_document
     require_valid_document(yaml.safe_load(generate_oxidns_config(candidate, base_url=base_url)))
@@ -308,7 +322,7 @@ def prepare(repository, session, body, base_url):
     saved = repository.get_profile(session['profile_id'])
     session.pop('template', None)
     session.update(prepared=True, dns_fallback=dns_fallback, traffic_fallback=traffic_fallback, local_dns=local_dns,
-                   domain_rules=selections,
+                   domain_rules=selections, **({'ip_takeover': ip_takeover} if session['goal'] == 'gateway' else {}),
                    node_count=count, profile_revision=saved['_revision'], owned_digest=owned_digest(saved),
                    config_revision=repository.config_revision(session['profile_id']), step=3,
                    max_step=max(session['max_step'], 3), completed=False)
