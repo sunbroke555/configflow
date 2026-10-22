@@ -50,7 +50,7 @@
               <FieldHelp label="访问认证" :text="optionHelp('API 监听局域网地址，或需要限制谁能打开 WebUI 时设置。', '用户名和密码需同时填写，两项都留空则不验证身份。DNS 面板和规则更新会自动使用这组凭据，无需另行配置。')" />
               <span class="chip ml-auto shrink-0" :class="apiAuthSet && 'chip-ok'">{{ apiAuthSet ? '已设置' : '未设置' }}</span>
             </div>
-            <p class="m-0 text-xs leading-relaxed" :class="apiAuthWarning ? 'text-warning-accent' : 'text-muted-foreground'" role="status">{{ apiAuthNote }}</p>
+            <p class="mt-0 text-xs leading-relaxed" :class="apiAuthWarning ? 'text-warning-accent' : 'text-muted-foreground'" role="status">{{ apiAuthNote }}</p>
             <OxidnsFields :settings="draft" :fields="apiAuthFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
             <p v-if="errors['api.auth'] && !apiAuthCustom" :role="apiAuthIncomplete ? undefined : 'alert'" class="m-0 text-xs" :class="apiAuthIncomplete ? 'text-muted-foreground' : 'text-destructive-accent'">{{ errors['api.auth'] }}</p>
           </section>
