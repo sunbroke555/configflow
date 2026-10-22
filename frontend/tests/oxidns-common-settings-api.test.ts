@@ -38,7 +38,7 @@ describe('OxiDNS management API access', () => {
     const wrapper = await render({ initialFeature: 'api', values: {...values(), api: {enabled: false, listen: '127.0.0.1:9199', username: 'admin', password: ''}} })
     expect(document.getElementById('oxi-api.listen')).toBeNull()
     expect(document.getElementById('oxi-api.username')).toBeNull()
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
+    expect(wrapper.emitted('error')?.at(-1)?.[0] ?? '').toBe('')
   })
   it('reports saved credentials the Agent cannot forward as soon as the form opens', async () => {
     const wrapper = await render({ initialFeature: 'api', values: {...values(), api: {enabled: true, listen: '127.0.0.1:9199', username: 'admin', password: '${PASS}'}} })
