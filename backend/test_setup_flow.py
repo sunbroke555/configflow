@@ -68,6 +68,31 @@ def test_first_start_template_still_suggests_setup_until_a_device_exists(tmp_pat
         config_store.set_repository(previous)
 
 
+def test_subscriptions_without_a_link_are_not_offered_as_sources(tmp_path):
+    from backend.common.config import _get_initial_config, get_default_config
+    repository = ProfileRepository(tmp_path, default_config_factory=get_default_config,
+                                   initial_config_factory=_get_initial_config)
+    placeholder = repository.get_shared()['subscriptions'][0]['id']
+    repository.update_shared_transaction(lambda shared: shared['subscriptions'].append(
+        {'id': 'multi', 'name': 'Multi', 'url': 'https://a.test/sub\n\nhttps://b.test/sub', 'enabled': True}))
+    repository.update_shared_transaction(lambda shared: shared['subscriptions'].append(
+        {'id': 'noted', 'name': 'Noted', 'url': '订阅链接\nhttps://a.test/sub', 'enabled': True}))
+    previous = config_store._repository
+    config_store.set_repository(repository)
+    try:
+        app = Flask(__name__)
+        register_blueprints(app)
+        client = app.test_client()
+        assert [item['id'] for item in client.get('/api/setup').json['subscriptions']] == ['multi']
+        start(client)
+        response = client.post(f'/api/setup/{SESSION}/source', json={'subscription_ids': [placeholder]})
+        assert response.status_code == 400 and '订阅链接' in response.json['message']
+        response = client.post(f'/api/setup/{SESSION}/source', json={'subscription_ids': ['multi']})
+        assert response.status_code == 200, response.json
+    finally:
+        config_store.set_repository(previous)
+
+
 def test_sources_are_idempotent_and_bad_subscription_cannot_complete(setup_api):
     client, repository = setup_api
     start(client)

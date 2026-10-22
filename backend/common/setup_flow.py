@@ -146,6 +146,24 @@ def list_sessions(repository):
     return sorted(records, key=lambda item: item['updated_at'], reverse=True)
 
 
+def _http_url(url):
+    try:
+        parsed = urlsplit(url)
+        parsed.port
+    except ValueError:
+        return False
+    return parsed.scheme in ('http', 'https') and bool(parsed.hostname)
+
+
+def selectable_subscriptions(shared):
+    """Enabled subscriptions whose every line is a link; Sub-Store fetches each line,
+    and the first-start placeholder has none."""
+    def linked(url):
+        lines = [line.strip() for line in str(url or '').splitlines() if line.strip()]
+        return bool(lines) and all(_http_url(line) for line in lines)
+    return [item for item in shared['subscriptions'] if item.get('enabled', True) and linked(item.get('url'))]
+
+
 def source(repository, session, body):
     if session['prepared']:
         raise SetupError('方案已生成；修改来源请前往订阅来源或创建新的向导', 409)
@@ -159,13 +177,8 @@ def source(repository, session, body):
         raise SetupError('订阅链接格式不正确')
     if url.strip():
         url = url.strip()
-        try:
-            parsed = urlsplit(url)
-            if parsed.scheme not in ('http', 'https') or not parsed.hostname:
-                raise ValueError()
-            parsed.port
-        except ValueError:
-            raise SetupError('请输入 HTTP(S) 订阅链接') from None
+        if not _http_url(url):
+            raise SetupError('请输入 HTTP(S) 订阅链接')
         subscription_id = 'setup_sub_' + session['id']
         def update(shared):
             existing = next((s for s in shared['subscriptions'] if s['id'] == subscription_id), None)
@@ -183,6 +196,8 @@ def source(repository, session, body):
         available = {item['id'] for item in shared[field] if item.get('enabled', True)}
         if set(values) - available:
             raise SetupError('所选来源已删除或停用，请刷新后重选', 409)
+    if set(subscription_ids) - {item['id'] for item in selectable_subscriptions(shared)}:
+        raise SetupError('所选订阅未填写订阅链接，请改用订阅链接添加')
     if not subscription_ids and not node_ids:
         raise SetupError('请添加订阅链接或选择已有节点')
     session.update(subscription_ids=list(dict.fromkeys(subscription_ids)),

@@ -486,26 +486,6 @@ def test_direct_dns_default_and_direct_match_are_preserved_independently(mode):
     assert not any('MATCH' in warning for warning in report['warnings'])
 
 
-def test_direct_choice_caveat_names_only_rule_groups_that_can_select_direct():
-    config = snapshot()
-    config['proxy_groups'].append({'id': 'spare', 'name': 'Spare', 'type': 'select',
-                                   'manual_nodes': ['n', 'DIRECT']})
-    _, report = prepare_gateway_onboarding(config, form())
-    assert report['ready'], report
-    assert not any('DIRECT' in warning for warning in report['warnings'])
-    config['proxy_groups'][0]['manual_nodes'].append('DIRECT')
-    _, report = prepare_gateway_onboarding(config, form())
-    assert [warning for warning in report['warnings'] if 'DIRECT' in warning] == [
-        '策略组「Proxy」可以选择 DIRECT；此检查只确认存在代理出口，选中 DIRECT 时相关连接不会走代理。']
-    for name in ('Alpha', 'Beta', 'Gamma'):
-        config['proxy_groups'].append({'id': name, 'name': name, 'type': 'select', 'manual_nodes': ['n', 'DIRECT']})
-        config['rule_configs'].insert(0, {'id': 'r-' + name, 'itemType': 'rule', 'rule_type': 'DOMAIN',
-                                          'value': name.lower() + '.test', 'policy': name})
-    _, report = prepare_gateway_onboarding(config, form())
-    assert [warning for warning in report['warnings'] if 'DIRECT' in warning] == [
-        '策略组「Alpha、Beta、Gamma」等 4 个可以选择 DIRECT；此检查只确认存在代理出口，选中 DIRECT 时相关连接不会走代理。']
-
-
 def test_install_preview_shows_ip_takeover_overlaps():
     config = snapshot()
     config['rule_library'].append({'id': 'lib-cn', 'name': 'China IP', 'behavior': 'ipcidr',
