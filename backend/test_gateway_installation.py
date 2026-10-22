@@ -835,3 +835,17 @@ def test_repreparing_a_different_target_still_needs_a_new_installation(setup):
                                                       'config_revision': manager.repository.config_revision('home')})
     assert response.status_code == 200, response.json
     assert response.json['id'] != saved['id'] and response.json['phase'] == 'waiting'
+
+
+@pytest.mark.parametrize('ip, reused', [(SPEC['address'], True), ('', True), ('192.168.1.99', False)])
+def test_repreparing_an_auto_installation_with_its_detected_address_keeps_the_devices(setup, ip, reused):
+    client, manager, admin, _, _ = setup
+    body, saved = auto_install(setup)
+    pair = {service: auto_register(setup, saved, service).json for service in sessions.SERVICES}
+    assert bind(manager, saved, pair)['success']
+    manager.repository.save_profile('home', {'name': 'Changed'})
+    revision = manager.repository.config_revision('home')
+    response = client.post(BASE, headers=admin, json={**body, 'agent_ip': ip, 'config_revision': revision})
+    assert response.status_code == 200, response.json
+    assert (response.json['id'] == saved['id']) is reused
+    assert response.json['phase'] == ('enrolled' if reused else 'waiting')

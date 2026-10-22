@@ -190,8 +190,11 @@ def create(repository, manager, body):
         if current and not current['expired'] and not current['target_changed']:
             previous = _read(repository, current['id'])
             keys = ('profile_id', 'config_revision', 'name', 'server_url', 'ports')
+            # After enrollment the wizard shows the detected address in the
+            # optional IP field, so re-preparing then names the same host.
             same_target = (bool(previous.get('auto_network')) == auto_network and
-                (previous.get('requested_ip') == requested_ip if auto_network else previous.get('network') == network))
+                (requested_ip in (previous.get('requested_ip'), previous['network'].get('address'))
+                 if auto_network else previous.get('network') == network))
             if same_target and all(previous.get(key) == session[key] for key in keys):
                 if _ensure_short_download(previous):
                     _write(repository, previous)
