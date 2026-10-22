@@ -250,7 +250,7 @@ onUnmounted(() => { disposed = true })
               <p v-if="!directRules.length && !proxyRules.length" class="m-0 text-xs text-warning-accent" role="status">未选择域名规则，所有域名将使用下方的默认 DNS。</p>
               <div v-if="goal === 'gateway'" class="flex min-h-11 items-center justify-between gap-4 border-t border-border pt-3">
                 <div class="min-w-0">
-                  <div class="flex items-center gap-1 text-[13px] font-medium max-sm:text-xs"><label for="setup-ip-takeover" class="cursor-pointer">接管应用连接（推荐）</label><span class="cf-compact-help"><FieldHelp label="接管应用连接" :text="optionHelp('Telegram 等不查域名、直接连接 IP 的应用需要开启，否则这些连接不经过 Mihomo。', '代理规则里的 IPv4 网段交给 Mihomo，再按规则决定出口；直连规则不受影响。安装后可在「配置生成 → Linux 网关」逐个取消。')" /></span></div>
+                  <div class="flex items-center gap-1 text-[13px] font-medium max-sm:text-xs"><label for="setup-ip-takeover" class="cursor-pointer">代理规则的 IP 也接管（推荐）</label><span class="cf-compact-help"><FieldHelp label="代理规则的 IP 也接管" :text="optionHelp('Telegram 等不查域名、直接连接 IP 的应用需要开启，否则这些连接不经过 Mihomo。', '代理规则里的 IPv4 网段交给 Mihomo，再按规则决定出口；直连规则不受影响。安装后可在「配置生成 → Linux 网关」的「IP 接管」里逐个调整。')" /></span></div>
                   <p class="mt-1 mb-0 text-xs text-muted-foreground">Telegram 等直接连接 IP 的应用，也按代理规则处理。</p>
                 </div>
                 <Switch id="setup-ip-takeover" v-model="ipTakeover" :disabled="working || session?.completed" class="shrink-0" />
