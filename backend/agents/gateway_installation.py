@@ -393,6 +393,7 @@ def enroll(repository, manager, session_id, token, body):
 def public(repository, manager, session):
     result = {key: deepcopy(session[key]) for key in ('id', 'profile_id', 'config_revision', 'name', 'network', 'phase', 'created_at', 'deployments', 'message')}
     result['success'] = True
+    result['remedy'] = deepcopy(session.get('remedy'))
     result['server_url'] = session['server_url']
     result['auto_network'] = session.get('auto_network', False)
     result['expires_at'] = _iso(session['expires'])
@@ -620,7 +621,8 @@ def run_publication(repository, manager, session_id, *, pause=time.sleep):
         with _locked(repository, session_id):
             final = _read(repository, session_id)
             message = str(exc) if isinstance(exc, (InstallationError, ValueError)) else '发布暂未完成，请检查设备状态后继续；已保存任务编号。'
-            final.update(phase='publish_failed', message=message[:1200])
+            # remedy lets the wizard offer the GitHub mirror and download proxy inline.
+            final.update(phase='publish_failed', message=message[:1200], remedy=getattr(exc, 'remedy', None))
             _write(repository, final)
         from backend.utils.logger import log_text
         logger.warning('网关安装 %s 发布未完成：%s', final.get('name', session_id[:8]), log_text(message, 300))
@@ -659,7 +661,7 @@ def publish(repository, manager, session_id, body, app):
                               or session['deployments'][service].get('status') in ('failed', 'rolled_back', 'rollback_failed')
                               else session['deployments'][service])
                     for service in SERVICES}
-            session.update(phase='publishing', message='开始按顺序发布 Mihomo 和 OxiDNS；任一步失败都会停止后续操作。')
+            session.update(phase='publishing', remedy=None, message='开始按顺序发布 Mihomo 和 OxiDNS；任一步失败都会停止后续操作。')
             _write(repository, session)
             logger.info('网关安装 %s：开始按顺序发布 Mihomo 和 OxiDNS', session['name'])
     except Exception:

@@ -386,3 +386,30 @@ def test_oversized_response_still_shares_with_in_flight_consumers(monkeypatch):
     bundle = raw_bundle([SOURCE_URL] * 8)
     assert calls == [SOURCE_URL]
     assert contents(bundle)['rules/7.mrs'] == b'big'
+
+
+@pytest.mark.parametrize('url, error, remedy', [
+    ('https://raw.githubusercontent.com/o/r/main/a.list', requests.exceptions.ConnectionError,
+     {'kind': 'rule_download', 'github': True}),
+    ('https://raw.githubusercontent.com/o/r/main/a.list', requests.exceptions.ConnectTimeout,
+     {'kind': 'rule_download', 'github': True}),
+    (SOURCE_URL, requests.exceptions.ProxyError, {'kind': 'rule_download', 'github': False}),
+    (SOURCE_URL, ValueError, None),
+])
+def test_network_download_failures_offer_mirror_and_proxy_remedy(monkeypatch, url, error, remedy):
+    def fetch(*_args, **_kwargs):
+        raise error('unreachable')
+
+    monkeypatch.setattr(bundles, 'request_rule', fetch)
+    with pytest.raises(bundles.RuleDownloadError) as exc:
+        raw_bundle([url])
+    assert exc.value.remedy == remedy
+
+
+def test_http_status_failures_do_not_offer_network_remedy(monkeypatch):
+    result = response(b'')
+    result.status_code = 404
+    monkeypatch.setattr(bundles, 'request_rule', lambda *_a, **_k: result)
+    with pytest.raises(bundles.RuleDownloadError) as exc:
+        raw_bundle(['https://raw.githubusercontent.com/o/r/main/a.list'])
+    assert exc.value.remedy is None

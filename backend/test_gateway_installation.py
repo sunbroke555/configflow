@@ -849,3 +849,24 @@ def test_repreparing_an_auto_installation_with_its_detected_address_keeps_the_de
     assert response.status_code == 200, response.json
     assert (response.json['id'] == saved['id']) is reused
     assert response.json['phase'] == ('enrolled' if reused else 'waiting')
+
+
+def test_rule_download_failure_keeps_remedy_until_next_publication(setup, monkeypatch):
+    from backend.agents.deployment_bundle import RuleDownloadError
+    client, manager, admin, body, saved = setup
+    saved = prepare_run(manager, saved)
+    remedy = {'kind': 'rule_download', 'github': True}
+    def publish(repo, mgr, session, service):
+        raise RuleDownloadError('无法下载「Telegram」规则集：连接失败', remedy=remedy)
+    monkeypatch.setattr(sessions, '_publish_service', publish)
+    sessions.run_publication(manager.repository, manager, saved['id'], pause=lambda _: None)
+    public = sessions.get(manager.repository, manager, saved['id'])
+    assert public['phase'] == 'publish_failed'
+    assert public['remedy'] == remedy
+    assert '无法下载「Telegram」规则集' in public['message']
+
+    def fail_other(repo, mgr, session, service):
+        raise ValueError('other failure')
+    monkeypatch.setattr(sessions, '_publish_service', fail_other)
+    sessions.run_publication(manager.repository, manager, saved['id'], pause=lambda _: None)
+    assert sessions.get(manager.repository, manager, saved['id'])['remedy'] is None
