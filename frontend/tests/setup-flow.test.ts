@@ -165,27 +165,24 @@ describe('首次使用分流向导', () => {
     expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: dns, traffic_fallback: traffic, local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules })
   })
 
-  it('网关模式默认接管 Telegram 等应用的 IP，可关闭并在恢复时保留', async () => {
-    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal: 'gateway', step: 2, max_step: 2, node_ids: ['node'] }) } as never)
-    vi.mocked(setupApi.prepare).mockResolvedValue({ data: record({ goal: 'gateway', step: 3, max_step: 3, prepared: true, ip_takeover: false }) } as never)
+  it('网关模式说明默认接管 Telegram 等应用的 IP，不选这两个规则集时不显示', async () => {
+    vi.mocked(setupApi.index).mockResolvedValue({ data: { sessions: [], suggested: true, subscriptions: [], nodes: [], domain_rules: [...ruleOptions, { id: 'builtin:telegram', name: 'Telegram', source: 'builtin' }] } } as never)
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal: 'gateway', step: 2, max_step: 2, node_ids: ['node'], domain_rules: { direct: [], proxy: ['builtin:telegram'] } }) } as never)
     await open('/setup?session=' + 'a'.repeat(32))
-    const toggle = wrapper!.get('#setup-ip-takeover')
-    expect(toggle.attributes('aria-checked')).toBe('true')
-    expect(wrapper!.text()).toContain('接管 Telegram 等应用的 IP（推荐）')
-    expect(wrapper!.text()).toContain('Telegram、Google 推送（FCM）直接连 IP，开启后也能走代理。')
-    await toggle.trigger('click'); await flushPromises()
-    await click('生成配置并继续')
-    expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: 'mihomo', traffic_fallback: 'proxy', local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules, ip_takeover: false })
+    const hint = 'Telegram、Google 推送（FCM）会直接连 IP，它们的 IP 网段也会交给 Mihomo。'
+    expect(wrapper!.text()).toContain(hint)
+    expect(wrapper!.find('#setup-ip-takeover').exists()).toBe(false)
     wrapper!.unmount()
-    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal: 'gateway', step: 2, max_step: 3, prepared: true, ip_takeover: false }) } as never)
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal: 'gateway', step: 2, max_step: 2, node_ids: ['node'], domain_rules: defaultRules }) } as never)
     await open('/setup?session=' + 'a'.repeat(32))
-    expect(wrapper!.get('#setup-ip-takeover').attributes('aria-checked')).toBe('false')
+    expect(wrapper!.text()).not.toContain(hint)
   })
 
-  it('主路由模式不显示 IP 接管开关', async () => {
-    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2, node_ids: ['node'] }) } as never)
+  it('主路由模式不显示 IP 接管说明', async () => {
+    vi.mocked(setupApi.index).mockResolvedValue({ data: { sessions: [], suggested: true, subscriptions: [], nodes: [], domain_rules: [...ruleOptions, { id: 'builtin:telegram', name: 'Telegram', source: 'builtin' }] } } as never)
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2, node_ids: ['node'], domain_rules: { direct: [], proxy: ['builtin:telegram'] } }) } as never)
     await open('/setup?session=' + 'a'.repeat(32))
-    expect(wrapper!.find('#setup-ip-takeover').exists()).toBe(false)
+    expect(wrapper!.text()).not.toContain('它们的 IP 网段也会交给 Mihomo')
   })
 
   it('恢复已保存的漏网设置和直连 DNS 上游', async () => {
