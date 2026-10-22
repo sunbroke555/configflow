@@ -22,7 +22,7 @@ onMounted(async () => {
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-1">
         <h2 class="m-0 text-sm font-semibold">{{ session ? `继续配置 · ${session.name}` : '从这里开始配置' }}</h2>
-        <FieldHelp label="首次使用向导" text="配置 Mihomo + OxiDNS 分流，或使用 Linux 网关分流。按步骤读取订阅、准备配置、安装并检查两项核心，再配置主路由或客户端。向导使用独立配置空间，刷新后可继续，也可以从系统设置重新进入。" />
+        <FieldHelp label="首次使用向导" text="配置 Mihomo + OxiDNS 分流，或使用 Linux 网关。按步骤读取订阅、准备配置、安装并检查两项核心，再配置主路由或客户端。向导使用独立配置空间，刷新后可继续，也可以从系统设置重新进入。" />
       </div>
     </div>
     <Button as-child size="sm" class="min-h-11">

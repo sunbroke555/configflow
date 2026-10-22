@@ -275,7 +275,7 @@ describe('gateway installation wizard', () => {
     expect(picker.text()).not.toContain('国外域名')
     const search = 'no-such-gateway-ruleset'
     await wrapper.get('#onboarding-search').setValue(search)
-    for (const category of ['应用连接', '直连域名', '代理域名', '应用连接']) {
+    for (const category of ['IP 接管', '直连域名', '代理域名', 'IP 接管']) {
       await button(wrapper, `${category}，已选 1 个规则集`).trigger('click'); await flushPromises()
       expect(wrapper.get('#onboarding-search').element).toHaveProperty('value', search)
       expect(picker.findAll('p').filter(item => item.text().includes('没有匹配的规则集'))).toHaveLength(1)
@@ -298,7 +298,7 @@ describe('gateway installation wizard', () => {
       settings: { ...settings, rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [] } }))
     const wrapper = await render(); await fillEnvironment(wrapper)
     const picker = wrapper.get('[data-gateway-rule-picker]')
-    for (const category of ['应用连接', '直连域名', '代理域名']) {
+    for (const category of ['IP 接管', '直连域名', '代理域名']) {
       await button(wrapper, `${category}，已选 0 个规则集`).trigger('click'); await flushPromises()
       expect(picker.findAll('p').filter(item => item.text().includes('「规则库」添加'))).toHaveLength(1)
       expect(picker.text()).toContain('「策略规则」引用并启用')
@@ -451,7 +451,7 @@ describe('gateway installation wizard', () => {
       .mockResolvedValueOnce(response({ success: true, managed: { active: true, healthy: true } }))
     const wrapper = await render()
     expect(wrapper.text()).toContain('客户端接入检查')
-    await button(wrapper, '撤销本次网关转发').trigger('click'); await flushPromises()
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('new-mihomo', 'office')
     const showsRestoration = () => /(?:网关转发已撤销|已撤销.*网关转发)/.test(wrapper.text())
     expect.soft(showsRestoration(), 'Restoration must remain visible in the workspace after the toast disappears').toBe(true)
@@ -532,7 +532,7 @@ describe('gateway installation wizard', () => {
     const wrapper = await render()
     expect(linuxGatewayApi.status).toHaveBeenCalledWith('new-mihomo', 'office')
     expect(button(wrapper, '应用网关转发').attributes('disabled')).toBeDefined()
-    await button(wrapper, '撤销本次网关转发').trigger('click'); await flushPromises()
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(linuxGatewayApi.remove).toHaveBeenCalledWith('new-mihomo', 'office')
   })
   it('requires a new preparation when the command expired before enrollment', async () => {
@@ -603,7 +603,7 @@ describe.each([false, true])('shared automatic gateway flow (embedded=%s)', embe
     expect(wrapper.text()).toContain('暂不切换客户端')
     expect(button(wrapper, '继续设置测试客户端')).toBeUndefined()
     expect(wrapper.text()).not.toContain('客户端接入检查')
-    expect(button(wrapper, '撤销本次网关转发')).toBeTruthy()
+    expect(button(wrapper, '撤销网关转发')).toBeTruthy()
     expect(wrapper.emitted('completed')).toBeUndefined()
   })
   it('defaults to automatic detection and reuses prepared rules without a pasted probe', async () => {
@@ -697,7 +697,7 @@ describe.each([false, true])('shared automatic gateway flow (embedded=%s)', embe
     const wrapper = await render(false, embedded)
     expect(wrapper.text().includes('客户端接入检查')).toBe(!embedded)
     if (embedded) expect(button(wrapper, '继续设置测试客户端')).toBeTruthy()
-    await button(wrapper, '撤销本次网关转发').trigger('click'); await flushPromises()
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('new-mihomo', 'office')
     expect(button(wrapper, '继续设置测试客户端')).toBeUndefined()
     expect(wrapper.text()).toContain('网关转发已撤销')

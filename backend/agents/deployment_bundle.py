@@ -448,9 +448,9 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             try:
                 provider = yaml.safe_load(content)
             except (yaml.YAMLError, UnicodeError, RecursionError):
-                raise DeploymentPreparationError('选择性网关无法检查订阅节点，请先修复 Provider YAML') from None
+                raise DeploymentPreparationError('Linux 网关无法检查订阅节点，请先修复 Provider YAML') from None
             if _routing_mark_path(provider):
-                raise DeploymentPreparationError('选择性网关与订阅节点中的 routing-mark 冲突，请移除后重新发布')
+                raise DeploymentPreparationError('Linux 网关与订阅节点中的 routing-mark 冲突，请移除后重新发布')
 
     # Use the final Mihomo configuration rather than reconstructing paths from
     # source suffixes; custom configuration can change provider format/path.

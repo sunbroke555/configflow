@@ -354,7 +354,7 @@
           <FormField label="使用模式" hint="管理已有服务选普通，让局域网分流选网关。" :help="optionHelp('只管理服务选普通模式；需要让局域网设备通过 Linux 分流选网关。', '网关向导安装 Mihomo、OxiDNS 和两个 Agent，检查后再启用转发。仅支持 Linux 的 IPv4 网关，客户端也需按指引接入。')">
             <RadioGroup v-model="installationMode" class="flex flex-wrap gap-2" aria-label="使用模式">
               <label :class="[chipClass(installationMode === 'ordinary'), 'min-h-11']"><RadioGroupItem value="ordinary" />普通模式</label>
-              <label :class="[chipClass(installationMode === 'gateway'), 'min-h-11']"><RadioGroupItem value="gateway" />Linux 选择性网关</label>
+              <label :class="[chipClass(installationMode === 'gateway'), 'min-h-11']"><RadioGroupItem value="gateway" />Linux 网关</label>
             </RadioGroup>
           </FormField>
           <div v-if="installationMode === 'gateway'" class="space-y-4 rounded-lg border border-border bg-muted p-4">
@@ -1749,7 +1749,7 @@ const dockerModeCopy = computed(
       mihomo: optionCopy('需要代理服务时选用，容器已内置 Mihomo。', '只需要代理核心及其管理 Agent，希望通过容器运行。', '同一容器运行 Agent 和 Mihomo，不必另装核心。可接收和更新配置；不会同时部署独立的 OxiDNS 或 MosDNS 服务。'),
       oxidns: optionCopy('需要域名解析服务时选用，容器已内置 OxiDNS。', '希望通过容器运行 OxiDNS，并由 Agent 管理配置。', '同一容器包含 Agent 和 OxiDNS，无需另装核心。它提供 DNS 解析服务；是否需要代理核心，取决于实际分流方案。'),
       mosdns: optionCopy('使用 MosDNS 解析方案时选用，容器内置核心。', '现有配置面向 MosDNS，且希望通过容器部署。', '同一容器运行 Agent 和 MosDNS，可接收配置并管理服务。无需在宿主机另装 MosDNS，不会自动附带 Mihomo 代理核心。'),
-      aio: optionCopy('代理和 DNS 同机运行，一个容器即可部署。', '希望在同一容器内同时运行 Mihomo 与 OxiDNS。', '同一容器运行 Agent + Mihomo + OxiDNS。不会自动完成宿主机网关转发；如需选择性网关，请使用专用安装向导。')
+      aio: optionCopy('代理和 DNS 同机运行，一个容器即可部署。', '希望在同一容器内同时运行 Mihomo 与 OxiDNS。', '同一容器运行 Agent + Mihomo + OxiDNS。不会自动完成宿主机网关转发；如需 Linux 网关，请使用专用安装向导。')
     })[scriptForm.value.dockerMode as 'mihomo' | 'oxidns' | 'mosdns' | 'aio']
 )
 

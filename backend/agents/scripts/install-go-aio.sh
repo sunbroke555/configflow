@@ -153,7 +153,7 @@ case "$choice" in
         for service in mihomo oxidns; do
             select_service "$service"
             if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
-                fail "请先恢复客户端的网关和 DNS，再到 Linux 网关设置中恢复所选设备网络；网关恢复记录未清理，不能卸载 Agent。"
+                fail "请先恢复客户端的网关和 DNS，再到 Linux 网关设置中撤销网关转发；网关恢复记录未清理，不能卸载 Agent。"
             fi
             if [ -f "$CONFIG_FILE" ]; then
                 [ -x "$AGENT_BINARY" ] || fail "缺少检查发布记录的 Agent：$AGENT_BINARY"
@@ -168,7 +168,7 @@ case "$choice" in
         for service in mihomo oxidns; do
             select_service "$service"
             if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
-                fail "请先恢复客户端的网关和 DNS，再到 Linux 网关设置中恢复所选设备网络；网关恢复记录未清理，不能卸载 Agent。"
+                fail "请先恢复客户端的网关和 DNS，再到 Linux 网关设置中撤销网关转发；网关恢复记录未清理，不能卸载 Agent。"
             fi
             if [ -f "$CONFIG_FILE" ]; then
                 "$AGENT_BINARY" -config "$CONFIG_FILE" -require-clean-deployments

@@ -32,7 +32,7 @@ func checkLinuxGatewayCore(cfg *Config, doc map[string]interface{}) error {
 	}
 	output, err := gatewayCoreVersion(binary)
 	if err != nil {
-		return fmt.Errorf("无法检查 Mihomo 核心版本；选择性网关要求 Mihomo 稳定版 v1.19.0 或更新，请先检查核心可执行文件")
+		return fmt.Errorf("无法检查 Mihomo 核心版本；Linux 网关要求 Mihomo 稳定版 v1.19.0 或更新，请先检查核心可执行文件")
 	}
 	version := regexp.MustCompile(`(?i)\bmihomo\s+(?:meta\s+)?v(\d+)\.(\d+)\.(\d+)(?:\s|$)`).FindStringSubmatch(output)
 	if len(version) != 4 {

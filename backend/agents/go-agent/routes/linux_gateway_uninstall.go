@@ -16,7 +16,7 @@ func checkLinuxGatewayUninstall(cfg *Config) error {
 		return fmt.Errorf("无法核对 Linux 网关恢复记录，已停止卸载以保留网络状态：%w", err)
 	}
 	if state != nil {
-		return fmt.Errorf("请先恢复客户端的网关和 DNS，再到 Linux 网关设置中“恢复所选设备网络”，完成后才能卸载 Mihomo Agent")
+		return fmt.Errorf("请先恢复客户端的网关和 DNS，再到 Linux 网关设置中“撤销网关转发”，完成后才能卸载 Mihomo Agent")
 	}
 	return nil
 }

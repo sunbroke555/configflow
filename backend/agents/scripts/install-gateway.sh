@@ -76,7 +76,7 @@ check_port_free() {
 }
 
 [ "$(id -u)" -eq 0 ] || fail '请在目标 Linux 上使用 root 运行命令（或 sudo sh）。'
-[ "$(uname -s)" = Linux ] || fail '选择性网关安装只支持 Linux。'
+[ "$(uname -s)" = Linux ] || fail 'Linux 网关安装只支持 Linux 系统。'
 case "$(uname -m)" in
     x86_64|amd64)
         GATEWAY_ARCH=linux-amd64

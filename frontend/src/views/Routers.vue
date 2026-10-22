@@ -580,7 +580,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             <Label for="router-verify-tls">校验 HTTPS 证书</Label>
             <FieldHelp label="校验 HTTPS 证书" :text="routerCopy.tls.help" />
           </div>
-          <FormField v-if="!setupDraftSession" label="代理网关（mihomo Agent）" html-for="router-gateway" v-bind="form.type === 'routeros' ? routerCopy.gatewayROS : routerCopy.gateway">
+          <FormField v-if="!setupDraftSession" label="代理网关（Mihomo Agent）" html-for="router-gateway" v-bind="form.type === 'routeros' ? routerCopy.gatewayROS : routerCopy.gateway">
             <Select v-model="form.proxy_gateway_agent_id">
               <SelectTrigger id="router-gateway" class="w-full bg-background/50"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent>
@@ -607,7 +607,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               />
             </div>
           </div>
-          <FormField :label="form.type === 'routeros' ? '使用静态路由的 IP 规则集' : '按 IP 路由给 mihomo 的规则集'" html-for="router-ip-rule-sets" v-bind="routerCopy.staticRules">
+          <FormField :label="form.type === 'routeros' ? '使用静态路由的 IP 规则集' : '按 IP 路由给 Mihomo 的规则集'" html-for="router-ip-rule-sets" v-bind="routerCopy.staticRules">
             <div class="[&_[role=combobox]]:min-h-11">
               <MultiSelect :model-value="form.ip_rule_sets" trigger-id="router-ip-rule-sets" :options="ruleSetOptions" placeholder="仅 fake-ip 网段" @update:model-value="selectStaticRuleSets" />
             </div>

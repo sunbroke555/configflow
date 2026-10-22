@@ -138,7 +138,7 @@ func gatewayPreflightResources(cfg *Config, state *gatewayState) ([]map[string]i
 	if prior, err := loadReturnState(cfg); err != nil {
 		return nil, err
 	} else if prior != nil && (prior.Active || (prior.Ownership != nil && prior.Ownership.Pending)) {
-		return nil, fmt.Errorf("自动回流已启用或尚未完成，请先撤销回流再配置选择性网关")
+		return nil, fmt.Errorf("自动回流已启用或尚未完成，请先撤销回流再配置 Linux 网关")
 	}
 	for _, command := range []struct {
 		name string
@@ -186,7 +186,7 @@ func gatewayPreflightResources(cfg *Config, state *gatewayState) ([]map[string]i
 	forward := map[string]bool{}
 	for _, object := range objects {
 		if table, ok := object["table"].(map[string]interface{}); ok && table["name"] == managedReturnTable {
-			return nil, fmt.Errorf("检测到自动回流表，不能混用选择性网关")
+			return nil, fmt.Errorf("检测到自动回流表，不能混用 Linux 网关")
 		}
 		if chain, ok := object["chain"].(map[string]interface{}); ok && chain["hook"] == "forward" && chain["table"] != gatewayTable && (chain["family"] == "ip" || chain["family"] == "inet") {
 			if chain["policy"] != "accept" {

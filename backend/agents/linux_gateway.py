@@ -27,7 +27,7 @@ def supports_gateway(agent):
 
 def require_gateway_agent(agent):
     if not supports_gateway(agent):
-        raise ValueError(f'Linux 选择性网关需要 Mihomo Agent {MIN_AGENT_VERSION} 或更新版本，请先升级 Agent 后再发布。')
+        raise ValueError(f'Linux 网关需要 Mihomo Agent {MIN_AGENT_VERSION} 或更新版本，请先升级 Agent 后再发布。')
 
 
 def require_gateway_bundle_agent(agent, bundle):
@@ -53,7 +53,7 @@ def _spec(body):
     if not isinstance(body, dict) or set(body) != SPEC_FIELDS:
         raise _error('INVALID_REQUEST', 400, '请填写网卡、Linux IPv4、LAN 网段和主路由 IPv4。')
     if any(not isinstance(v, str) or not v or len(v) > 64 for v in body.values()):
-        raise _error('INVALID_REQUEST', 400, '网关网络参数必须是有效的短文本。')
+        raise _error('INVALID_REQUEST', 400, '网关转发的网络参数必须是有效的短文本。')
     interface = body['interface']
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}', interface) or interface == 'lo':
         raise _error('INVALID_REQUEST', 400, '请选择实际的 LAN 网卡，不能使用回环网卡。')
@@ -89,12 +89,12 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
     if operation == 'apply':
         config = get_config(profile_id)
         if (config.get('mihomo', {}).get('linux_gateway') or {}).get('enabled') is not True:
-            raise _error('GATEWAY_DISABLED', 409, '请先启用并保存当前配置空间的 Linux 选择性网关。')
+            raise _error('GATEWAY_DISABLED', 409, '请先启用并保存当前配置空间的 Linux 网关。')
     if operation in ('preview', 'apply'):
         payload = {**_spec(body), 'profile_id': profile_id}
     elif operation == 'remove':
         if body not in (None, {}):
-            raise _error('INVALID_REQUEST', 400, '恢复网络不接受自定义命令或网络参数。')
+            raise _error('INVALID_REQUEST', 400, '撤销网关转发不接受自定义命令或网络参数。')
         payload = {}
     else:
         payload = None

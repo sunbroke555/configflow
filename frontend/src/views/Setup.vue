@@ -82,7 +82,7 @@ const help = [
 
 async function accept(value: SetupSession) {
   if (disposed) return
-  if (!SETUP_GOALS.some(item => item.id === value.goal)) throw new Error('试用方案已调整，请新建一次配置，选择主路由分流或网关分流')
+  if (!SETUP_GOALS.some(item => item.id === value.goal)) throw new Error('试用方案已调整，请新建一次配置，选择主路由分流或 Linux 网关')
   session.value = value; goal.value = value.goal; name.value = value.name
   previewRouting.value = false
   dnsFallback.value = value.dns_fallback || 'mihomo'

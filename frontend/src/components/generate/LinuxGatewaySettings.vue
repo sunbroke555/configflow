@@ -284,12 +284,12 @@ async function applyNetwork() {
     // Only this explicit action can mutate the host; saves and mode switches cannot.
     const { data } = await linuxGatewayApi.apply(token.agentId, token.profileId, cleanGatewaySpec(network))
     if (!current(token, true) || key !== currentPreviewKey.value) return
-    if (!data.success) throw new Error(data.message || '应用网关网络失败')
+    if (!data.success) throw new Error(data.message || '应用网关转发失败')
     status.value = { ...status.value!, ...data }
     networkBaseline.value = gatewaySpecKey(network)
     preview.value = null
-    networkResult.value = data.message || '网关网络已应用。请先测试一台客户端。'
-    notify.success('Linux 网关网络已应用')
+    networkResult.value = data.message || '网关转发已应用。请先测试一台客户端。'
+    notify.success('网关转发已应用')
   } catch (error) {
     if (current(token, true)) {
       const failure = error as any
@@ -303,7 +303,7 @@ async function removeNetwork() {
   if (busy.value || !selectedAgentId.value || !online.value) return
   const token = capture()
   const accepted = await confirm('请先恢复客户端原来的网关和 DNS；原先自动获取的设备恢复自动获取。此操作会移除 ConfigFlow 管理的转发规则，并恢复它接管的系统参数。', {
-    title: `恢复「${selectedAgent.value?.name}」的网关网络？`, confirmText: '恢复网络', cancelText: '取消',
+    title: `撤销「${selectedAgent.value?.name}」的网关转发？`, confirmText: '撤销转发', cancelText: '取消',
   })
   if (!accepted || !current(token, true) || busy.value) return
   networkAction.value = 'remove'
@@ -311,12 +311,12 @@ async function removeNetwork() {
   try {
     const { data } = await linuxGatewayApi.remove(token.agentId, token.profileId)
     if (!current(token, true)) return
-    if (!data.success) throw new Error(data.message || '恢复网关网络失败')
+    if (!data.success) throw new Error(data.message || '撤销网关转发失败')
     status.value = { ...status.value!, ...data }
     preview.value = null
     networkBaseline.value = gatewaySpecKey(network)
-    networkResult.value = data.message || '网关网络已恢复。接下来关闭选择性网关模式，再保存并发布 Mihomo。'
-    notify.success('Linux 网关网络已恢复')
+    networkResult.value = data.message || '网关转发已撤销。接下来关闭 Linux 网关，再保存并发布 Mihomo。'
+    notify.success('网关转发已撤销')
   } catch (error) {
     if (current(token, true)) networkError.value = `${gatewayErrorMessage(error, true)} 请刷新检测确认设备状态。`
   } finally { if (current(token, true)) networkAction.value = '' }
@@ -367,7 +367,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
 
 
 <template>
-  <SettingsWorkspace :open="open" title="Linux 选择性网关" description="试用并预览配置变更，保存后再发布或应用设备网络。" :dirty="configDirty || networkDirty" :busy="busy" :save-disabled="!!loadError || loading || (configDirty && draftReview?.action !== 'save')" size="form" @update:open="emit('update:open', $event)" @save="saveDraft">
+  <SettingsWorkspace :open="open" title="Linux 网关" description="试用并预览配置变更，保存后再发布或应用网关转发。" :dirty="configDirty || networkDirty" :busy="busy" :save-disabled="!!loadError || loading || (configDirty && draftReview?.action !== 'save')" size="form" @update:open="emit('update:open', $event)" @save="saveDraft">
     <div class="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain [overflow-wrap:anywhere]">
       <div class="mx-auto w-full min-w-0 max-w-3xl space-y-4 p-3 sm:p-5">
         <div v-if="loading" role="status" class="flex items-center gap-2 py-4 text-sm text-muted-foreground"><LoaderCircle class="size-4 animate-spin" />正在读取网关配置…</div>
@@ -379,14 +379,14 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
           </div>
 
           <section aria-labelledby="gateway-rules" class="space-y-3">
-            <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 选择性网关" :text="optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用设备网络；IPv6 需另行处理。')" /></div>
+            <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 网关" :text="optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用网关转发；IPv6 需另行处理。')" /></div>
             <label for="linux-gateway-enabled" class="flex min-h-11 cursor-pointer items-center justify-between gap-4 border-b border-border pb-3">
-              <span><span class="block text-sm font-medium">启用 Linux 选择性网关</span><span class="mt-1 block text-xs text-muted-foreground">切换只在本页试用。预览并保存后才更新草稿，设备网络需单独应用。</span></span>
+              <span><span class="block text-sm font-medium">启用 Linux 网关</span><span class="mt-1 block text-xs text-muted-foreground">切换只在本页试用。预览并保存后才更新草稿，网关转发需单独应用。</span></span>
               <Switch id="linux-gateway-enabled" v-model="settings.enabled" :disabled="busy" />
             </label>
-            <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span>先恢复客户端和设备网络，再保存并发布已关闭模式的 Mihomo 配置。</p>
+            <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span>先恢复客户端并撤销网关转发，再保存并发布已关闭模式的 Mihomo 配置。</p>
             <div class="space-y-2">
-              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">应用连接（可选）</h3><span class="cf-compact-help"><FieldHelp label="应用连接" :text="gatewayCopy.applications.help" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
+              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">IP 接管（可选）</h3><span class="cf-compact-help"><FieldHelp label="IP 接管" :text="gatewayCopy.applications.help" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
               <p class="m-0 text-xs leading-relaxed text-muted-foreground">{{ gatewayCopy.applications.hint }}</p>
               <p v-if="fakeIPRange" class="m-0 text-xs text-muted-foreground">自动接管的临时地址范围（fake-IP）：<span class="font-mono">{{ fakeIPRange }}</span></p>
               <Input v-model="search" aria-label="搜索可接管的 IP 规则集" placeholder="搜索规则集名称或策略" class="min-h-11" :disabled="busy" />
@@ -452,8 +452,8 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
               </div>
               <div v-if="status && errors.length" class="text-xs leading-relaxed" role="alert"><p class="m-0 font-medium text-destructive-accent">请修正网络信息</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5"><li v-for="error in errors" :key="error">{{ error }}</li></ul></div>
               <p v-if="!configured" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">先保存并发布。</span>开启模式并保存规则设置，再发布 Mihomo；有未保存修改时不能预览或应用网络。</p>
-              <p v-else-if="status && !status.enabled_in_config" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">设备尚未检测到已部署的选择性网关配置。</span>请先发布并激活 Mihomo，再刷新检测。</p>
-              <div class="flex flex-wrap gap-2"><Button variant="outline" class="min-h-11" :disabled="!canPreview" @click="previewNetwork"><LoaderCircle v-if="networkAction === 'preview'" class="size-4 animate-spin" /><Network v-else class="size-4" />预览并检查</Button><Button class="min-h-11" :disabled="!canApply" @click="applyNetwork"><LoaderCircle v-if="networkAction === 'apply'" class="size-4 animate-spin" />应用网关网络</Button></div>
+              <p v-else-if="status && !status.enabled_in_config" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">设备尚未检测到已部署的 Linux 网关配置。</span>请先发布并激活 Mihomo，再刷新检测。</p>
+              <div class="flex flex-wrap gap-2"><Button variant="outline" class="min-h-11" :disabled="!canPreview" @click="previewNetwork"><LoaderCircle v-if="networkAction === 'preview'" class="size-4 animate-spin" /><Network v-else class="size-4" />预览并检查</Button><Button class="min-h-11" :disabled="!canApply" @click="applyNetwork"><LoaderCircle v-if="networkAction === 'apply'" class="size-4 animate-spin" />应用网关转发</Button></div>
             </template>
             <div v-if="networkError" role="alert" class="text-xs leading-relaxed"><p class="m-0 font-medium text-destructive-accent">需要处理</p><p class="mt-1 mb-0">{{ networkError }}</p></div>
             <p v-if="networkResult" role="status" class="m-0 flex items-start gap-2 text-xs leading-relaxed"><Check class="mt-0.5 size-3.5 shrink-0 text-success-accent" />{{ networkResult }}</p>
@@ -472,7 +472,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             </div>
             <p class="m-0 text-xs leading-relaxed">应用成功后再修改客户端网关和 DNS。先记录原设置，以便恢复。</p>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3">
-              <Button variant="outline" class="min-h-11" :disabled="busy || !online || !shell || !managedNetwork" @click="removeNetwork"><LoaderCircle v-if="networkAction === 'remove'" class="size-4 animate-spin" /><RotateCcw v-else class="size-3.5" />恢复所选设备网络</Button>
+              <Button variant="outline" class="min-h-11" :disabled="busy || !online || !shell || !managedNetwork" @click="removeNetwork"><LoaderCircle v-if="networkAction === 'remove'" class="size-4 animate-spin" /><RotateCcw v-else class="size-3.5" />撤销网关转发</Button>
               <p v-if="managedNetwork" class="m-0 text-xs leading-relaxed text-muted-foreground">恢复前，先恢复客户端原来的网关与 DNS。</p>
             </div>
           </section>
@@ -488,7 +488,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                   <li>规则按 ID 关联，改名保留选择；内容和停用状态约每 {{ Math.ceil(refreshInterval / 60) }} 分钟刷新。新增选择需重新保存并发布。</li>
                   <li>在底部保存并发布到目标 Mihomo；显示「待激活」时还需应用并启动。网关配置会自动生成 TUN 设置，保留现有节点与策略。</li>
                 </ul>
-                <p class="m-0">首次安装可到「Agent → 生成安装脚本」选择「Linux 选择性网关」，完成双核心、Agent 和转发设置；已有标准安装会先校验再接入。普通模式也可接入已有核心，或勾选安装核心。</p>
+                <p class="m-0">首次使用可在「首次使用向导」选择「Linux 网关」，会新建配置空间；要沿用当前配置空间，到「Agent → 生成安装脚本」选择「Linux 网关」。两种方式都会安装双核心和 Agent，并完成转发设置；已有标准安装会先校验再接入。普通模式也可接入已有核心，或勾选安装核心。</p>
                 <p class="m-0">需要 Mihomo 稳定版 v1.19.0+、Agent 1.8.25-go+、root、TUN 和 nftables，不支持通过 Docker 修改宿主机网络。ConfigFlow 服务地址需能被 Linux 访问；启用登录时需订阅令牌，供规则刷新。</p>
               </div>
             </details>
@@ -516,7 +516,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             </details>
             <details>
               <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">停用和恢复步骤</summary>
-              <div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p class="m-0">先恢复客户端原网关和 DNS（原先自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS；再用上方按钮恢复 Linux 网络。</p><p class="m-0">最后关闭选择性网关开关，保存并发布 Mihomo。恢复只处理 ConfigFlow 管理的网络参数，不卸载核心；恢复网络不会单独关闭 Mihomo TUN。</p><p v-if="!managedNetwork" class="m-0">当前设备没有已应用或未完成的 ConfigFlow 网关网络，或尚未完成状态检测。</p></div>
+              <div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p class="m-0">先恢复客户端原网关和 DNS（原先自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS；再用上方按钮撤销网关转发。</p><p class="m-0">最后关闭 Linux 网关开关，保存并发布 Mihomo。撤销只处理 ConfigFlow 管理的网络参数，不卸载核心；撤销转发不会单独关闭 Mihomo TUN。</p><p v-if="!managedNetwork" class="m-0">当前设备没有已应用或未完成的 ConfigFlow 网关转发，或尚未完成状态检测。</p></div>
             </details>
           </div>
         </template>

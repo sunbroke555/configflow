@@ -26,7 +26,7 @@ func adaptGatewayDNS(cfg *Config, content string) (string, error) {
 	tun, tunOK := doc["tun"].(map[string]interface{})
 	dns, dnsOK := doc["dns"].(map[string]interface{})
 	if !tunOK || !dnsOK {
-		return "", fmt.Errorf("选择性网关配置缺少 tun 或 dns 对象")
+		return "", fmt.Errorf("Linux 网关配置缺少 tun 或 dns 对象")
 	}
 	excluded := []string{"127.0.0.0/8"}
 	for _, address := range addresses {

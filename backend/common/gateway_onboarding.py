@@ -25,7 +25,7 @@ DNS_TARGET = '127.0.0.1:1053'
 INPUT_FIELDS = {'rule_set_ids', 'direct_rule_set_ids', 'proxy_rule_set_ids', 'local_dns',
                 'confirm_template_conversion', 'expected_config_revision', 'default_forward'}
 GATEWAY_CHANGES = [
-    '启用当前配置空间的 Linux 选择性网关；fake-IP 网段始终接管，真实 IP 只接管勾选的规则集。',
+    '启用当前配置空间的 Linux 网关；fake-IP 网段始终接管，真实 IP 只接管勾选的规则集。',
     'Mihomo 使用 rule / fake-IP 模式，DNS 监听 127.0.0.1:1053；保留现有规则顺序、策略组和节点。',
     'OxiDNS 在 0.0.0.0:53 同时监听 UDP / TCP，优先 IPv4；直连使用所填 IP 地址 DoH / DoT。',
     'OxiDNS 代理和备用上游均为 127.0.0.1:1053；未匹配域名使用已选择的默认 DNS。',
