@@ -132,7 +132,7 @@ describe('OxiDNS current common settings', () => {
   it.each(['ros_route', 'ros_address_list'])('restores %s TLS fields when rapid off/on returns the unchanged server projection', async feature => {
     const tls = { server_name: 'router.example.test', ca: 'certs/router-ca.pem', insecure: false }
     const original = {...values(), [feature]: {enabled: true, args: {address: '192.0.2.1:8729', tls}}}
-    const wrapper = await render({values: original})
+    const wrapper = await render({values: original, initialFeature: feature})
     const toggle = () => document.getElementById(`oxi-${feature}.args.tls`) as HTMLButtonElement
     toggle().click(); await flushPromises()
     expect(lastChange(wrapper)).toEqual({[`${feature}.args.tls`]: null})
@@ -146,8 +146,25 @@ describe('OxiDNS current common settings', () => {
     expect(original).toMatchObject({[feature]: {args: {tls}}})
   })
 
+  it('builds tabs and feature sections on first visit and keeps their drafts afterwards', async () => {
+    const wrapper = await render({values: {...values(), cache_enabled: true, cache_size: 10240}})
+    expect(document.getElementById('oxi-cache_size')).toBeNull()
+    expect(document.getElementById('oxi-enable-query_recorder')).toBeNull()
+    await click('缓存')
+    await input('oxi-cache_size', '')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
+    await click('核心设置')
+    await click('缓存')
+    expect((document.getElementById('oxi-cache_size') as HTMLInputElement).value).toBe('')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('请填写整数')
+    await click('特色功能')
+    expect(document.getElementById('oxi-enable-query_recorder')).toBeNull()
+    ;(document.querySelector('[aria-label="查询记录设置"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(document.getElementById('oxi-enable-query_recorder')).not.toBeNull()
+  })
   it('sends TLS removal as JSON-safe null and provides full native access', async () => {
-    const wrapper = await render()
+    const wrapper = await render({initialFeature: 'ros_route'})
     const fields = wrapper.findAllComponents(OxidnsFields).find(field => field.props('fields').some((item: any) => item.path === 'ros_route.args.tls'))!
     fields.vm.$emit('change', 'ros_route.args.tls', undefined)
     await flushPromises()

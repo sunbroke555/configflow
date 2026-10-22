@@ -398,7 +398,8 @@ async function save(close = true): Promise<PublishGuard | null> {
   } finally { if (version === loadVersion) saving.value = false }
 }
 watch(validationSource, () => { if (!loading.value && props.open) scheduleValidation() }, { flush: 'sync' })
-watch(() => editorErrors.common, value => { if (!value && pendingCount.value) { applyError.value = ''; void flushChanges() } })
+// Flush early only when an error is actually cleared; the first empty report is not a change.
+watch(() => editorErrors.common, (value, previous) => { if (!value && previous && pendingCount.value) { applyError.value = ''; void flushChanges() } })
 watch(() => [nativeView.value, settings.value?.native_config], () => {
   if (!loading.value && props.open && nativeView.value === 'common' && !applying.value && !pendingCount.value
     && settings.value && settings.value.native_config !== projectionSource) void projectCommon()

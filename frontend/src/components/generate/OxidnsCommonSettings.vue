@@ -5,7 +5,7 @@
         <TabsTrigger v-for="item in tabs" :key="item.value" :value="item.value" class="h-11 min-h-11 flex-none px-3 text-xs md:flex-1" :disabled="disabled">{{ item.label }}</TabsTrigger>
       </TabsList>
       <div class="min-h-0 min-w-0 flex-1 overflow-y-auto p-3 md:p-5">
-        <TabsContent force-mount value="core" class="mt-0 space-y-5 data-[state=inactive]:hidden">
+        <TabsContent v-if="visitedTabs.has('core')" force-mount value="core" class="mt-0 space-y-5 data-[state=inactive]:hidden">
           <div class="flex flex-wrap items-center gap-1">
             <h3 class="mr-auto text-sm font-semibold">核心设置</h3>
             <Button variant="outline" type="button" class="min-h-11 text-xs" :disabled="disabled || !canApplyPerformance || Boolean(activeError())" @click="applyPerformance">填入已验证性能参数</Button>
@@ -13,7 +13,7 @@
           </div>
           <OxidnsFields :settings="draft" :fields="coreFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
-        <TabsContent force-mount value="rules" class="mt-0 space-y-5 data-[state=inactive]:hidden">
+        <TabsContent v-if="visitedTabs.has('rules')" force-mount value="rules" class="mt-0 space-y-5 data-[state=inactive]:hidden">
           <div class="flex items-center gap-1"><h3 class="text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" :text="optionHelp('希望不同网站或 IP 使用不同的 DNS 时设置。', '选中的规则按规则管理中的顺序执行，并同步处理流程和规则资源。已有无法对应的手工流程时，请到完整参数编辑，避免覆盖自定义逻辑。')" /></div>
           <div class="grid min-w-0 gap-4 sm:grid-cols-2">
             <FormField v-for="group in ruleGroups" :key="group.key" :label="group.label" :hint="group.hint" :help="group.help">
@@ -24,24 +24,24 @@
           <p v-if="!rules.length && !ruleSets.length" class="text-sm text-muted-foreground">当前空间尚无规则，可先在「规则管理」中添加。</p>
           <OxidnsFields :settings="draft" :fields="hostFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
-        <TabsContent force-mount value="upstreams" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">DNS 上游</h3><OxidnsFields :settings="draft" :fields="upstreamFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
-        <TabsContent force-mount value="cache" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">缓存</h3><OxidnsFields :settings="draft" :fields="cacheFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
-        <TabsContent force-mount value="features" class="mt-0 space-y-3 data-[state=inactive]:hidden">
-          <Collapsible v-for="feature in featureGroups" :key="feature.key" :default-open="feature.key === initialFeature" class="group rounded-lg border border-border bg-card">
+        <TabsContent v-if="visitedTabs.has('upstreams')" force-mount value="upstreams" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">DNS 上游</h3><OxidnsFields :settings="draft" :fields="upstreamFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
+        <TabsContent v-if="visitedTabs.has('cache')" force-mount value="cache" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">缓存</h3><OxidnsFields :settings="draft" :fields="cacheFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
+        <TabsContent v-if="visitedTabs.has('features')" force-mount value="features" class="mt-0 space-y-3 data-[state=inactive]:hidden">
+          <Collapsible v-for="feature in featureGroups" :key="feature.key" :default-open="feature.key === initialFeature" class="group rounded-lg border border-border bg-card" @update:open="open => { if (open) openedFeatures.add(feature.key) }">
             <div class="relative flex min-h-12 items-center justify-between gap-2 px-3 py-3 text-sm font-medium">
               <CollapsibleTrigger type="button" :aria-label="`${feature.title}设置`" :disabled="disabled" class="absolute inset-0 cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:opacity-50" />
               <span class="pointer-events-none flex min-w-0 flex-1 items-center gap-1"><span class="min-w-0">{{ feature.title }}</span><span class="pointer-events-auto relative z-10"><FieldHelp :label="feature.title" :text="feature.help" /></span></span>
               <span class="chip pointer-events-none shrink-0" :class="!isCustom(`${feature.key}.enabled`) && read(`${feature.key}.enabled`) ? 'chip-ok' : ''">{{ isCustom(`${feature.key}.enabled`) ? '自定义配置' : read(`${feature.key}.enabled`) ? '已启用' : '未启用' }}</span><ChevronDown class="pointer-events-none size-4 shrink-0 text-muted-foreground group-data-[state=open]:rotate-180" />
             </div>
             <p class="m-0 px-3 pb-3 text-xs leading-relaxed text-muted-foreground">{{ feature.hint }}</p>
-            <CollapsibleContent force-mount class="space-y-4 border-t border-border p-3 data-[state=closed]:hidden">
+            <CollapsibleContent v-if="openedFeatures.has(feature.key)" force-mount class="space-y-4 border-t border-border p-3 data-[state=closed]:hidden">
               <div v-if="isCustom(`${feature.key}.enabled`)" class="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"><span>自定义配置</span><FieldHelp :label="`${feature.title}配置状态`" :text="capability(`${feature.key}.enabled`)?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability(`${feature.key}.enabled`)?.target || feature.key)">完整参数<ChevronRight class="size-3.5" /></Button></div>
               <div v-else class="flex min-h-11 items-center gap-3"><Switch :id="`oxi-enable-${feature.key}`" :aria-label="`启用${feature.title}`" :model-value="Boolean(read(`${feature.key}.enabled`))" :disabled="disabled" @update:model-value="change(`${feature.key}.enabled`, $event)" /><Label :for="`oxi-enable-${feature.key}`">启用{{ feature.title }}</Label></div>
               <OxidnsFields v-show="feature.key === 'rule_update' || (read(`${feature.key}.enabled`) && !isCustom(`${feature.key}.enabled`))" :settings="draft" :fields="featureFields(feature)" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
             </CollapsibleContent>
           </Collapsible>
         </TabsContent>
-        <TabsContent force-mount value="access" class="mt-0 space-y-4 data-[state=inactive]:hidden">
+        <TabsContent v-if="visitedTabs.has('access')" force-mount value="access" class="mt-0 space-y-4 data-[state=inactive]:hidden">
           <h3 class="text-sm font-semibold">管理 API / WebUI</h3>
           <OxidnsFields :settings="draft" :fields="apiFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
           <section v-if="read('api.enabled')" ref="apiAuthSection" class="space-y-3 rounded-lg border border-border bg-card p-3" aria-labelledby="oxi-api-auth-title">
@@ -58,7 +58,7 @@
           <h3 class="border-t border-border pt-4 text-sm font-semibold">日志</h3>
           <OxidnsFields :settings="draft" :fields="logFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
-        <TabsContent force-mount value="advanced" class="mt-0 space-y-4 data-[state=inactive]:hidden">
+        <TabsContent v-if="visitedTabs.has('advanced')" force-mount value="advanced" class="mt-0 space-y-4 data-[state=inactive]:hidden">
           <OxidnsFields :settings="draft" :fields="positionFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
           <div v-if="isCustom('custom_matches')" class="flex items-center gap-1 text-xs text-muted-foreground"><span>自定义匹配使用手工结构</span><FieldHelp label="自定义匹配配置状态" :text="capability('custom_matches')?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability('custom_matches')?.target || 'custom_matches')">完整参数<ChevronRight class="size-3.5" /></Button></div>
           <OxidnsMatchEditor v-else :model-value="customMatches" :disabled="disabled" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
@@ -91,6 +91,11 @@ const clone = <T,>(value: T): T => value === undefined ? value : JSON.parse(JSON
 const draft = reactive<Record<string, any>>(clone(props.values))
 const errors = reactive<Record<string, string>>({})
 const tab = ref(props.initialFeature === 'api' ? 'access' : featureGroups.some(feature => feature.key === props.initialFeature) ? 'features' : 'core')
+// Build each tab (and feature section) the first time it is shown, then keep it
+// mounted so drafts and field errors survive switching away.
+const visitedTabs = reactive(new Set([tab.value]))
+watch(tab, value => visitedTabs.add(value))
+const openedFeatures = reactive(new Set(props.initialFeature ? [props.initialFeature] : []))
 const customReason = '当前配置使用自定义结构，请通过完整参数编辑，现有内容会保留。'
 const coreFields = sourceCoreFields
 const upstreamDescriptions: Record<string, ReturnType<typeof optionCopy>> = {
