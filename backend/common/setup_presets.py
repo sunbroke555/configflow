@@ -53,6 +53,82 @@ def builtin_rule_catalog():
             for item in sorted(items, key=lambda item: item['_template_order'])}
 
 
+@lru_cache(maxsize=1)
+def _template():
+    with open(get_backend_resource('config_template.json'), encoding='utf-8') as handle:
+        return json.load(handle)
+
+
+def template_strategy(rules, traffic_fallback, subscription_ids, node_ids, subscription_nodes, manual_nodes):
+    """Adapt the first-start template's proxy groups to a setup profile.
+
+    ``rules`` lists ``(identity, route)`` per selected rule set in rule order.
+    Returns the groups, one policy per rule and the policy for unmatched
+    connections. The wizard's direct/proxy choice stays authoritative: a
+    service group that follows a direct-first strategy in the template follows
+    the proxy-first one when its rules were chosen as proxy, and vice versa.
+    """
+    from backend.utils.group_candidates import filter_candidates
+    template = _template()
+    groups = deepcopy(template['proxy_groups'])
+    by_name = {group['name']: group for group in groups}
+    by_id = {group['id']: group for group in groups}
+    template_subscriptions = {item['id'] for item in template.get('subscriptions', [])}
+    library = {item['id']: item['name'] for item in template.get('rule_library', [])}
+    template_policy = {'builtin:' + re.sub('[^a-z0-9]+', '_', library[rule['library_rule_id']].lower()): rule['policy']
+                       for rule in template['rule_configs']
+                       if rule.get('itemType') == 'ruleset' and rule.get('library_rule_id') in library}
+
+    # Bind template sources to the user's; drop filtered groups that would be
+    # empty, since Mihomo silently turns an empty group into a direct exit.
+    removed = set()
+    for group in groups:
+        if not set(group.get('subscriptions') or []) & template_subscriptions:
+            continue
+        include, exclude = group.get('regex', ''), group.get('exclude_regex', '')
+        matched = filter_candidates(subscription_nodes, include=include, exclude=exclude)
+        manual = [node['id'] for node in filter_candidates(manual_nodes, include=include, exclude=exclude)]
+        if not include and not exclude:
+            manual = list(node_ids)
+        if not matched and not manual:
+            removed.add(group['id'])
+        group.update(subscriptions=list(subscription_ids) if matched else [], manual_nodes=manual, aggregations=[])
+    groups = [group for group in groups if group['id'] not in removed]
+    for group in groups:
+        group['include_groups'] = [item for item in group.get('include_groups') or [] if item not in removed]
+        group['proxies_order'] = [item for item in group.get('proxies_order') or [] if item.get('id') not in removed]
+
+    direct_name = '🎯 全球直连'
+    direct_ids = {by_name[direct_name]['id']}
+    def direct_first(group):
+        followed = by_id.get(group.get('follow_group'), group)
+        return (followed.get('include_groups') or [None])[0] in direct_ids or group['name'] == direct_name
+    follow = {'proxy': by_name['优先代理']['id'], 'direct': by_name['优先直连']['id']}
+
+    policies, proxied = [], set()
+    for identity, route in rules:
+        group = by_name.get(template_policy.get(identity, ''))
+        if route == 'proxy':
+            # Template sets routed direct there (e.g. ChinaMax) have no proxy group.
+            name = group['name'] if group and group.get('follow_group') else '✈️ 节点选择'
+            proxied.add(name)
+        elif template_policy.get(identity) == 'DIRECT':
+            name = 'DIRECT'
+        else:
+            name = group['name'] if group and direct_first(group) else direct_name
+        policies.append(name)
+    # A shared group cannot be both: rules chosen as direct leave it.
+    policies = [direct_name if route == 'direct' and name in proxied else name
+                for (_, route), name in zip(rules, policies)]
+    final = '🐟 漏网之鱼' if traffic_fallback == 'proxy' else 'DIRECT'
+    if traffic_fallback == 'proxy':
+        proxied.add(final)
+    for name in proxied:
+        if by_name[name].get('follow_group') and direct_first(by_name[name]):
+            by_name[name]['follow_group'] = follow['proxy']
+    return groups, policies, final
+
+
 # Template proxy rule sets for apps that connect to IP addresses without a DNS
 # lookup. Their ranges do not overlap the direct ones; broad lists such as
 # Apple, GlobalMedia or Proxy do, and taking them over would proxy direct sites

@@ -95,8 +95,10 @@ def test_prepare_is_resumable_scoped_and_has_a_real_proxy_exit(setup_api, goal):
         assert response.status_code == 200, response.json
     profile = repository.get_profile(session['profile_id'])
     assert profile['_revision'] == 1
-    assert profile['proxy_groups'][0]['manual_nodes'] == ['node']
-    assert profile['rule_configs'][-1]['policy'] == '代理选择'
+    groups = {group['name']: group for group in profile['proxy_groups']}
+    # 'Test node' names no region, so only the all-node group carries it.
+    assert groups['ALL']['manual_nodes'] == ['node'] and '🇭🇰 香港节点' not in groups
+    assert profile['rule_configs'][-1]['policy'] == '🐟 漏网之鱼'
     assert yaml.safe_load(profile['mihomo']['custom_config'])['dns']['listen'] == '127.0.0.1:1053'
     assert repository.get_profile('default') == old
     response = client.post(f'/api/setup/{SESSION}/finish', json={})
@@ -339,7 +341,7 @@ def test_dns_and_connection_fallbacks_are_independent_through_installation(setup
     assert repository.get_profile(session['profile_id'])['_revision'] == 1
     assert len(repository.get_shared()['rule_library']) == len(builtin_rule_catalog())
     expected_forward = 'forward_remote' if dns_fallback == 'mihomo' else 'forward_local'
-    expected_policy = '代理选择' if traffic_fallback == 'proxy' else 'DIRECT'
+    expected_policy = '🐟 漏网之鱼' if traffic_fallback == 'proxy' else 'DIRECT'
     assert config['oxidns']['default_forward'] == expected_forward
     assert config['oxidns']['local_dns'] == local_dns
     assert config['oxidns']['direct_rulesets'] == ['setup_builtin_direct']
@@ -357,7 +359,7 @@ def test_dns_and_connection_fallbacks_are_independent_through_installation(setup
     assert not any('MATCH' in warning for warning in report['warnings'])
     document = yaml.safe_load(generate_mihomo_config(prepared))
     assert document['rules'][-1] == 'MATCH,' + expected_policy
-    assert any(rule.startswith('RULE-SET,') and rule.endswith(',代理选择') for rule in document['rules'])
+    assert 'RULE-SET,Proxy,✈️ 节点选择' in document['rules']
     dns_document = yaml.safe_load(generate_oxidns_config(prepared, 'https://config.test'))
     forward = next(plugin for plugin in dns_document['plugins'] if plugin['tag'] == 'forward_local')
     assert [upstream['addr'] for upstream in forward['args']['upstreams']] == local_dns.splitlines()
@@ -451,7 +453,7 @@ def test_selected_domain_rules_reach_both_core_configs_and_installer(setup_api, 
     for route in ('direct', 'proxy'):
         ids = snapshot['oxidns'][route + '_rulesets']
         assert len(ids) == len(selections[route])
-        assert all(rules[identity]['policy'] == ('DIRECT' if route == 'direct' else '代理选择') for identity in ids)
+        assert all(rules[identity]['policy'] == ('🎯 全球直连' if route == 'direct' else '✈️ 节点选择') for identity in ids)
     state = gateway_onboarding_state(snapshot, revision)
     candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
     assert report['ready'], report
@@ -638,3 +640,61 @@ def test_router_setup_leaves_ip_takeover_to_the_router_settings(setup_api):
     response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
     assert response.status_code == 200, response.json
     assert 'linux_gateway' not in repository.get_profile(session['profile_id'])['mihomo']
+
+
+def test_template_groups_follow_wizard_choices_and_drop_empty_regions():
+    from backend.common.setup_presets import template_strategy
+    rules = [('builtin:apple', 'proxy'), ('builtin:telegram', 'direct'), ('builtin:epic', 'proxy'),
+             ('builtin:steam', 'direct'), ('builtin:bilibili', 'direct'), ('builtin:chinamax', 'proxy'),
+             ('builtin:lan', 'direct'), ('library:work', 'proxy'), ('library:other', 'direct')]
+    nodes = [{'name': '香港 01'}, {'name': '日本 01'}]
+    groups, policies, final = template_strategy(rules, 'proxy', ['sub'], ['manual'], nodes,
+                                                [{'id': 'manual', 'name': '新加坡 01'}])
+    names = {group['name']: group for group in groups}
+    ids = {group['id']: group['name'] for group in groups}
+    assert policies == [
+        '🍎 苹果服务',       # template direct-first; chosen proxy, so it now follows 优先代理
+        '🎯 全球直连',       # template proxy-first; chosen direct
+        '🎮 游戏平台',       # shared with Steam: the proxy rule keeps the group
+        '🎯 全球直连',       # ...and the direct one leaves it
+        '📺 哔哩哔哩',       # template direct-first and chosen direct
+        '✈️ 节点选择',       # template routes ChinaMax direct; chosen proxy
+        'DIRECT',           # template policy is DIRECT itself
+        '✈️ 节点选择', '🎯 全球直连',  # sets without a template group
+    ]
+    assert final == '🐟 漏网之鱼'
+    assert ids[names['🍎 苹果服务']['follow_group']] == '优先代理'
+    assert ids[names['🐟 漏网之鱼']['follow_group']] == '优先代理'
+    assert ids[names['📺 哔哩哔哩']['follow_group']] == '优先直连'
+    assert ids[names['🎮 游戏平台']['follow_group']] == '香港优先策略'
+    # Regions without matching nodes are gone, including from every group list.
+    assert {'🇭🇰 香港节点', '🇯🇵 日本节点', '🇸🇬 新加坡节点'} <= set(names)
+    assert not {'🇹🇼 台湾节点', '🇺🇸 美国节点', '🇰🇷 韩国节点', '🇺🇸 美国负载均衡'} & set(names)
+    assert all(item in ids for group in groups for item in group.get('include_groups') or [])
+    assert names['🇭🇰 香港节点']['subscriptions'] == ['sub'] and names['🇭🇰 香港节点']['manual_nodes'] == []
+    assert names['🇸🇬 新加坡节点']['subscriptions'] == [] and names['🇸🇬 新加坡节点']['manual_nodes'] == ['manual']
+    assert names['ALL']['subscriptions'] == ['sub'] and names['ALL']['manual_nodes'] == ['manual']
+    _, _, final = template_strategy(rules, 'direct', ['sub'], [], nodes, [])
+    assert final == 'DIRECT'
+
+
+def test_setup_profile_uses_template_groups_with_regions_from_the_nodes(setup_api):
+    from backend.converters.mihomo import generate_mihomo_config
+    client, repository = setup_api
+    session = start(client, 'gateway')
+    hong_kong = {**deepcopy(NODE), 'id': 'hk', 'name': '香港 01'}
+    japan = {**deepcopy(NODE), 'id': 'jp', 'name': '日本 01', 'server': '192.0.2.2'}
+    repository.update_shared_transaction(lambda shared: shared['nodes'].extend([hong_kong, japan]))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['hk', 'jp']})
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={})
+    assert response.status_code == 200, response.json
+    snapshot, _ = repository.get_publish_snapshot(session['profile_id'])
+    document = yaml.safe_load(generate_mihomo_config(snapshot, base_url='https://config.test', preflight_providers=False))
+    emitted = {group['name']: group for group in document['proxy-groups']}
+    assert emitted['🇭🇰 香港节点']['proxies'] == ['香港 01']
+    assert emitted['🇯🇵 日本节点']['proxies'] == ['日本 01']
+    assert '🇺🇸 美国节点' not in emitted and '🇺🇸 美国节点' not in emitted['✈️ 节点选择']['proxies']
+    assert emitted['📲 Telegram']['proxies'][0] == '✈️ 节点选择'
+    assert emitted['🍎 苹果服务']['proxies'][0] == '✈️ 节点选择'
+    assert document['rules'][-1] == 'MATCH,🐟 漏网之鱼'
+    assert emitted['🐟 漏网之鱼']['proxies'][0] == '✈️ 节点选择'

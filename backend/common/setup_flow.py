@@ -191,7 +191,8 @@ def source(repository, session, body):
 
 
 def _resources(config, session):
-    available = 0
+    """Return the usable node count and the subscription and manual nodes."""
+    available, sources = 0, {'subscriptions': [], 'nodes': []}
     for field, selected in (('subscriptions', session['subscription_ids']), ('nodes', session['node_ids'])):
         items = {item['id']: item for item in config.get(field, []) if item.get('enabled', True)}
         for resource_id in selected:
@@ -204,10 +205,12 @@ def _resources(config, session):
                 nodes = filter_subscription_items(items[resource_id], cache.get('nodes', []))
             else:
                 nodes = [items[resource_id]]
-            available += sum(bool(convert_node_to_mihomo(node)) for node in nodes if node.get('enabled', True))
+            usable = [node for node in nodes if node.get('enabled', True) and convert_node_to_mihomo(node)]
+            available += len(usable)
+            sources[field] += usable
     if not available:
         raise SetupError('当前没有可用节点，请先读取订阅或选择支持的节点')
-    return available
+    return available, sources['subscriptions'], sources['nodes']
 
 
 def prepare(repository, session, body, base_url):
@@ -225,7 +228,8 @@ def prepare(repository, session, body, base_url):
     except GatewayOnboardingError as error:
         raise SetupError(str(error)) from error
     local_dns = local_dns.strip()
-    from backend.common.setup_presets import builtin_rule_catalog, canonical_domain_rules, domain_rule_options, recommended_domain_rules, resolve_domain_rules
+    from backend.common.setup_presets import (builtin_rule_catalog, canonical_domain_rules, domain_rule_options,
+                                              recommended_domain_rules, resolve_domain_rules, template_strategy)
     selections = body.get('domain_rules', session.get('domain_rules', recommended_domain_rules(repository)))
     if not isinstance(selections, dict) or set(selections) != {'direct', 'proxy'}:
         raise SetupError('请选择有效的直连和代理域名规则集')
@@ -244,22 +248,22 @@ def prepare(repository, session, body, base_url):
     # Only the selected resources are referenced by the generated strategy.
     shared = repository.get_shared()
     config.update({key: shared[key] for key in repository.SHARED_FIELDS})
-    count = _resources(config, session)
-    groups = [{'id': 'setup_proxy', 'name': '代理选择', 'type': 'select', 'enabled': True,
-               'subscriptions': session['subscription_ids'], 'manual_nodes': session['node_ids']}]
+    count, subscription_nodes, manual_nodes = _resources(config, session)
     rules = [{'id': f'setup_lan_{i}', 'itemType': 'rule', 'rule_type': 'IP-CIDR',
               'value': value, 'policy': 'DIRECT', 'no_resolve': True, 'enabled': True}
              for i, value in enumerate(('127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))]
     domain_rules = resolve_domain_rules(repository, selections)
-    selected_rules = [{'id': identity, 'itemType': 'ruleset',
-               'library_rule_id': item['id'], 'enabled': True,
-               'policy': 'DIRECT' if route == 'direct' else '代理选择'}
-              for route, items in domain_rules.items() for identity, item in items]
-    template_order = {'setup_' + identity.replace(':', '_'): index
-                      for index, identity in enumerate(builtin_rule_catalog())}
-    rules += sorted(selected_rules, key=lambda item: template_order.get(item['id'], len(template_order)))
-    rules.append({'id': 'setup_final', 'itemType': 'rule', 'rule_type': 'MATCH',
-                  'policy': '代理选择' if traffic_fallback == 'proxy' else 'DIRECT', 'enabled': True})
+    template_order = {identity: index for index, identity in enumerate(builtin_rule_catalog())}
+    selected_rules = sorted(((identity, route, rule_id, item['id'])
+                             for route in ('direct', 'proxy')
+                             for identity, (rule_id, item) in zip(selections[route], domain_rules[route])),
+                            key=lambda entry: template_order.get(entry[0], len(template_order)))
+    groups, policies, final = template_strategy(
+        [(identity, route) for identity, route, _, _ in selected_rules], traffic_fallback,
+        session['subscription_ids'], session['node_ids'], subscription_nodes, manual_nodes)
+    rules += [{'id': rule_id, 'itemType': 'ruleset', 'library_rule_id': library_id, 'enabled': True, 'policy': policy}
+              for (_, _, rule_id, library_id), policy in zip(selected_rules, policies)]
+    rules.append({'id': 'setup_final', 'itemType': 'rule', 'rule_type': 'MATCH', 'policy': final, 'enabled': True})
     settings = {'mixed-port': 7890, 'allow-lan': True, 'bind-address': '*',
                 'mode': 'rule', 'log-level': 'info', 'external-controller': '127.0.0.1:9090',
                 'dns': {'enable': True, 'listen': '127.0.0.1:1053', 'enhanced-mode': 'fake-ip',
