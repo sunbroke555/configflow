@@ -165,14 +165,14 @@ describe('首次使用分流向导', () => {
     expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: dns, traffic_fallback: traffic, local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules })
   })
 
-  it('网关模式默认接管代理规则中的 IP，可关闭并在恢复时保留', async () => {
+  it('网关模式默认接管 Telegram 等应用的 IP，可关闭并在恢复时保留', async () => {
     vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal: 'gateway', step: 2, max_step: 2, node_ids: ['node'] }) } as never)
     vi.mocked(setupApi.prepare).mockResolvedValue({ data: record({ goal: 'gateway', step: 3, max_step: 3, prepared: true, ip_takeover: false }) } as never)
     await open('/setup?session=' + 'a'.repeat(32))
     const toggle = wrapper!.get('#setup-ip-takeover')
     expect(toggle.attributes('aria-checked')).toBe('true')
-    expect(wrapper!.text()).toContain('代理规则的 IP 也接管（推荐）')
-    expect(wrapper!.text()).toContain('Telegram 等直接连接 IP 的应用，也按代理规则处理。')
+    expect(wrapper!.text()).toContain('接管 Telegram 等应用的 IP（推荐）')
+    expect(wrapper!.text()).toContain('Telegram、Google 推送（FCM）直接连 IP，开启后也能走代理。')
     await toggle.trigger('click'); await flushPromises()
     await click('生成配置并继续')
     expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: 'mihomo', traffic_fallback: 'proxy', local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules, ip_takeover: false })
