@@ -38,7 +38,7 @@ export const linuxGatewayApi = {
   save: (profileId: string, settings: LinuxGatewaySettings, guard?: LinuxGatewayDraftGuard) =>
     api.post<LinuxGatewayConfig>('/custom-config/linux-gateway', guard ? { settings, ...guard } : settings, scope(profileId)),
   previewDraft: (profileId: string, settings: LinuxGatewaySettings, revision: number) =>
-    api.post<LinuxGatewayDraftPreview>('/custom-config/linux-gateway/preview', { settings, expected_config_revision: revision }, scope(profileId)),
+    api.post<LinuxGatewayDraftPreview>('/custom-config/linux-gateway/preview', { settings, expected_config_revision: revision }, { ...scope(profileId), timeout: 120000 }),
   previewRestore: (profileId: string, revision: number) =>
     api.post<LinuxGatewayDraftPreview>('/custom-config/linux-gateway/restore/preview', { expected_config_revision: revision }, scope(profileId)),
   restoreDraft: (profileId: string, guard: LinuxGatewayDraftGuard) =>

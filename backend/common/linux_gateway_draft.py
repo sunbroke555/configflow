@@ -15,7 +15,7 @@ import yaml
 
 from backend.common.config_repository import ProfileInUse
 from backend.common.linux_gateway import (
-    LinuxGatewayError, gateway_settings, validate_gateway_selection,
+    LinuxGatewayError, direct_overlap_warnings, gateway_settings, validate_gateway_selection,
 )
 from backend.converters.mihomo import generate_mihomo_config
 
@@ -140,6 +140,7 @@ def preview_draft(config, candidate, revision, action, base_url=''):
     except (ValueError, yaml.YAMLError, TypeError):
         warnings.append('当前 Mihomo 草稿无法生成；保存目标设置后可修复此问题。')
         changes = [{'path': 'Mihomo', 'before': '当前配置无法生成', 'after': '目标配置生成通过'}]
+    warnings.extend(direct_overlap_warnings(candidate))
     if action == 'restore':
         # Also reveal edits made since the snapshot, including native DNS
         # changes, without rendering/downloading any OxiDNS rule assets.

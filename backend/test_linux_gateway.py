@@ -14,7 +14,7 @@ from backend.agents.deployment_bundle import (
 from backend.common import config as config_store
 from backend.common.config_repository import ProfileRepository
 from backend.common.linux_gateway import (
-    FAKE_PROVIDER, LinuxGatewayError, apply_linux_gateway, extract_gateway_cidrs,
+    FAKE_PROVIDER, LinuxGatewayError, apply_linux_gateway, direct_overlap_warnings, extract_gateway_cidrs,
     gateway_editor_state, gateway_provider_payload, gateway_provider_yaml,
     gateway_source_yaml, normalize_gateway_settings, provider_name, validate_gateway_selection,
 )
@@ -384,3 +384,64 @@ def test_auth_enabled_requires_refresh_token_for_selected_real_ip_sets(monkeypat
         generated(config)
     config['mihomo']['linux_gateway']['rule_set_ids'] = []
     assert generated(config)['tun']['route-address-set'] == [FAKE_PROVIDER]
+
+
+def overlap_snapshot():
+    config = snapshot(selected=['media'])
+
+    def ruleset(rule_id, name, policy, content, behavior='ipcidr', **extra):
+        config['rule_configs'].append({'id': rule_id, 'itemType': 'ruleset', 'name': name, 'library_rule_id': 'lib-' + rule_id,
+                                       'behavior': behavior, 'policy': policy, 'enabled': True})
+        config['rule_library'].append({'id': 'lib-' + rule_id, 'name': name, 'behavior': behavior,
+                                       'source_type': 'content', 'content': content, 'enabled': True, **extra})
+    config['rule_configs'], config['rule_library'] = [], []
+    # A direct set before the taken-over one wins anyway; only later ones lose.
+    ruleset('early', '前置直连', 'DIRECT', '17.1.0.0/16')
+    ruleset('media', 'Apple', 'Proxy', 'DOMAIN-SUFFIX,apple.com\nIP-CIDR,17.0.0.0/8,no-resolve\nIP-CIDR,9.9.9.0/24', 'classical')
+    ruleset('proxy-late', '其他代理', 'Proxy', '17.2.0.0/16')
+    ruleset('china', 'ChinaMax', 'DIRECT', '17.80.0.0/17\n17.81.0.0/16\n114.114.114.0/24', 'classical')
+    # Capture rejects the huge 224.0.0.0/3; comparison must still read the set.
+    ruleset('lan-set', 'Lan', 'DIRECT', 'IP-CIDR,224.0.0.0/3,no-resolve\nIP-CIDR,9.9.9.9/32,no-resolve', 'classical')
+    config['rule_configs'].append({'id': 'lan', 'itemType': 'rule', 'rule_type': 'IP-CIDR', 'value': '9.9.9.128/25',
+                                   'policy': 'DIRECT', 'enabled': True})
+    config['rule_configs'].append({'id': 'match', 'itemType': 'rule', 'rule_type': 'MATCH', 'policy': 'Proxy', 'enabled': True})
+    return config
+
+
+def test_ip_takeover_warns_about_later_direct_ranges_it_would_capture():
+    config = overlap_snapshot()
+    config['rule_library'][3]['content'] = 'IP-CIDR,17.80.0.0/17\nIP-CIDR,17.81.0.0/16\nIP-CIDR,114.114.114.0/24'
+    assert direct_overlap_warnings(config) == [
+        'IP 接管「Apple」与后面的直连规则「ChinaMax、Lan、IP-CIDR,9.9.9.128/25」有 4 段地址重叠（如 9.9.9.0/24 覆盖 9.9.9.9/32）。'
+        '这些地址的连接会先命中「Apple」，部分直连网站可能会走代理。']
+
+
+def test_ip_takeover_overlap_check_is_quiet_without_risk():
+    config = overlap_snapshot()
+    config['rule_library'][3]['content'] = 'IP-CIDR,114.114.114.0/24'
+    config['rule_library'][4]['content'] = 'IP-CIDR,224.0.0.0/3,no-resolve'
+    config['rule_configs'] = [item for item in config['rule_configs'] if item['id'] != 'lan']
+    assert direct_overlap_warnings(config) == []
+    config = overlap_snapshot()
+    config['mihomo']['linux_gateway']['enabled'] = False
+    assert direct_overlap_warnings(config) == []
+    # A remote set that cannot be read is named instead of silently skipped.
+    config = overlap_snapshot()
+    config['rule_library'][4]['content'] = 'IP-CIDR,224.0.0.0/3,no-resolve'
+    config['rule_configs'] = [item for item in config['rule_configs'] if item['id'] != 'lan']
+    china = config['rule_library'][3]
+    china.update(source_type='url', url='https://rules.example/china.list')
+    loads = []
+    assert direct_overlap_warnings(config, content_loader=lambda item, library: loads.append(item['id']) or '') == [
+        '未能读取「ChinaMax」的内容，没有检查 IP 接管与它们的重叠；可在规则库刷新后重新预览。']
+    assert loads == ['china']
+
+
+def test_draft_preview_shows_ip_takeover_overlaps():
+    from backend.common.linux_gateway_draft import preview_draft
+    config = overlap_snapshot()
+    config['proxy_groups'] = [{'id': 'g', 'name': 'Proxy', 'type': 'select', 'enabled': True, 'manual_nodes': ['DIRECT']}]
+    before = deepcopy(config)
+    before['mihomo']['linux_gateway'] = {'enabled': False, 'rule_set_ids': []}
+    result = preview_draft(before, config, 3, 'save')
+    assert any(warning.startswith('IP 接管「Apple」与后面的直连规则') for warning in result['warnings'])

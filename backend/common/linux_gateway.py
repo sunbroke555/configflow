@@ -232,6 +232,115 @@ def gateway_source_yaml(config, rule_id, *, content_loader=None):
     return yaml.safe_dump({'payload': payload}, allow_unicode=True, sort_keys=False)
 
 
+def _rule_networks(config, item, content_loader=None):
+    """IPv4 ranges of a rule set, or None when its content cannot be read.
+
+    Publishing hands rule content straight to the Agent, so large lists such
+    as ChinaMax are often not cached here yet; the first check downloads and
+    caches them, later ones read the cache.
+    """
+    library = _library(config, item)
+    source = library or item
+    if _reason(config, item):
+        return []
+    if source.get('source_type') == 'content':
+        content = source.get('content', '')
+    elif content_loader is not None:
+        content = content_loader(item, library)
+    else:
+        from backend.routes.rules import get_ruleset_content
+        content = get_ruleset_content(item, library, config_data=config)
+    if not content and source.get('source_type') != 'content':
+        return None
+    try:
+        lines = _lines(content or '')
+    except LinuxGatewayError:
+        return None
+    # Unlike capture, comparison takes any prefix and skips malformed lines:
+    # a direct list such as Lan legitimately holds 224.0.0.0/3.
+    behavior = source.get('behavior', item.get('behavior', 'domain'))
+    result = []
+    for line in lines:
+        parts = [part.strip() for part in line.split('#', 1)[0].split(',')]
+        if behavior == 'classical':
+            if len(parts) < 2 or parts[0].upper() != 'IP-CIDR':
+                continue
+            parts = parts[1:]
+        try:
+            network = ipaddress.ip_network(parts[0], strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            result.append(network)
+    return result
+
+
+def _rule_name(config, item):
+    if item.get('itemType') == 'rule':
+        return f"{item.get('rule_type', '')},{str(item.get('value', '')).strip()}"
+    return (_library(config, item) or item).get('name') or item.get('name') or item.get('id', '')
+
+
+def direct_overlap_warnings(config, *, content_loader=None):
+    """Warn when a taken-over set captures addresses a later DIRECT rule routes.
+
+    Taken-over connections reach Mihomo by IP only and the first matching rule
+    wins, so a direct rule placed after the set never gets those addresses.
+    """
+    settings = gateway_settings(config)
+    if not settings['enabled']:
+        return []
+    rules = [item for item in config.get('rule_configs', [])
+             if item.get('enabled', True) and item.get('library_enabled', True)]
+    loaded, unread = {}, []
+
+    def networks(item):
+        if item.get('itemType') == 'rule':
+            if item.get('rule_type') != 'IP-CIDR':
+                return []
+            try:
+                network = ipaddress.ip_network(str(item.get('value', '')).strip(), strict=False)
+            except ValueError:
+                return []
+            return [network] if network.version == 4 else []
+        if item.get('id') not in loaded:
+            loaded[item.get('id')] = _rule_networks(config, item, content_loader)
+            if loaded[item.get('id')] is None:
+                unread.append(item)
+        return loaded[item.get('id')] or []
+
+    warnings = []
+    for index, item in enumerate(rules):
+        if item.get('itemType') != 'ruleset' or item.get('id') not in settings['rule_set_ids']:
+            continue
+        taken = sorted((int(network.network_address), int(network.broadcast_address), network)
+                       for network in ipaddress.collapse_addresses(networks(item)))
+        direct = sorted((int(network.network_address), int(network.broadcast_address), network, order)
+                        for order, later in enumerate(rules[index + 1:], index + 1) if later.get('policy') == 'DIRECT'
+                        for network in networks(later))
+        hits, position = [], 0
+        # Both lists are sorted by start and the taken ranges do not overlap
+        # each other, so one forward sweep finds every overlapping direct range.
+        for start, end, network, rule in direct:
+            while position < len(taken) and taken[position][1] < start:
+                position += 1
+            if position < len(taken) and taken[position][0] <= end:
+                hits.append((taken[position][2], network, rule))
+        if not hits:
+            continue
+        name = _rule_name(config, item)
+        names = '、'.join(_rule_name(config, rules[rule]) for rule in sorted({hit[2] for hit in hits}))
+        outer, inner, _ = hits[0]
+        example = (f'{outer} 两边都有' if outer == inner else f'{outer} 覆盖 {inner}' if outer.supernet_of(inner)
+                   else f'{outer} 与 {inner} 重叠')
+        warnings.append(f'IP 接管「{name}」与后面的直连规则「{names}」有 {len(hits)} 段地址重叠（如 {example}）。'
+                        f'这些地址的连接会先命中「{name}」，部分直连网站可能会走代理。')
+    if unread:
+        warnings.append(f"未能读取「{'、'.join(_rule_name(config, item) for item in unread)}」的内容，"
+                        '没有检查 IP 接管与它们的重叠；可在规则库刷新后重新预览。')
+    return warnings
+
+
 def provider_name(rule_id):
     return PROVIDER_PREFIX + hashlib.sha256(rule_id.encode('utf-8')).hexdigest()[:20]
 
