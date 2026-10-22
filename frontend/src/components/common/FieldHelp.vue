@@ -34,7 +34,8 @@ function closeOnEscape(event: KeyboardEvent) {
           <CircleHelp class="size-3.5" aria-hidden="true" />
         </button>
       </TooltipTrigger>
-      <TooltipPortal>
+      <!-- A closed portal still costs a Teleport per help icon; forms render 100+ of them. -->
+      <TooltipPortal v-if="open">
         <TooltipContent
           side="top"
           align="start"
