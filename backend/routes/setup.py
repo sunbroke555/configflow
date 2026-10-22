@@ -50,7 +50,7 @@ def setup_sessions():
         # ConfigFlow manages is what shows the setup is under way.
         return {'sessions': [flow.public(session) for session in sessions],
                 'suggested': not sessions and not repository.get_system().get('agents'),
-                'subscriptions': [{'id': s['id'], 'name': s['name']} for s in shared['subscriptions'] if s.get('enabled', True)],
+                'subscriptions': [{'id': s['id'], 'name': s['name']} for s in flow.selectable_subscriptions(shared)],
                 'nodes': [{'id': n['id'], 'name': n['name']} for n in shared['nodes'] if n.get('enabled', True)],
                 'domain_rules': domain_rule_options(repository), 'recommended_domain_rules': recommended_domain_rules(repository)}
     return _respond(action)
