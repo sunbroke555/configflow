@@ -578,6 +578,13 @@ export const ruleFetchProxyApi = {
     api.post<{ success: boolean; rule_fetch_proxy: string }>('/settings/rule-fetch-proxy', data)
 }
 
+// GitHub 代理域名：原地址下载失败后改用的镜像前缀
+export const githubProxyDomainApi = {
+  get: () => api.get<{ proxy_domains: string }>('/rule-library/proxy-domains'),
+  update: (proxyDomain: string) =>
+    api.post<{ success: boolean; proxy_domains: string }>('/rule-library/proxy-domains', { proxy_domains: proxyDomain })
+}
+
 // 统计数据
 export const statsApi = {
   getOverview: () => api.get('/stats/overview')

@@ -26,7 +26,9 @@ import yaml
 from backend.agents.diagnostics import failure_text
 from backend.agents.deployment_locations import DeploymentPreparationError, preparation_context, source_error
 from backend.converters.mosdns import RULE_PARTS, empty_rule_part, parse_clash_rule_value
-from backend.utils.rule_fetch import RuleFetchError, is_internal_rule_url, request_rule
+from backend.utils.rule_fetch import (
+    RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
+)
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -36,7 +38,26 @@ MAX_RAW_CACHE_ENTRIES = 128
 
 
 class RuleDownloadError(DeploymentPreparationError):
-    """A rule source could not be fetched before contacting the Agent."""
+    """A rule source could not be fetched before contacting the Agent.
+
+    remedy is set when the panel's GitHub mirror or download proxy may fix it.
+    """
+
+    def __init__(self, message, *, remedy=None):
+        super().__init__(message)
+        self.remedy = remedy
+
+
+def _download_remedy(url, exc, config):
+    # HTTP status errors and internal callbacks are not network reachability
+    # problems; another route would return the same answer.
+    last = exc.last_error if isinstance(exc, RuleFetchError) else exc
+    if not isinstance(last, requests.RequestException) or isinstance(last, requests.exceptions.HTTPError):
+        return None
+    if is_internal_rule_url(url, config):
+        return None
+    source = github_download_candidates(url, config)[0][1]
+    return {'kind': 'rule_download', 'github': is_github_url(source)}
 
 
 def _download_error_message(exc):
@@ -190,7 +211,8 @@ def _fetch_bytes(url, config):
         raise
     except Exception as exc:
         details = failure_text(f'{type(exc).__name__}: {exc}')
-        raise RuleDownloadError(f'{_download_error_message(exc)}\n原始错误：{details}') from None
+        raise RuleDownloadError(f'{_download_error_message(exc)}\n原始错误：{details}',
+                                remedy=_download_remedy(url, exc, config)) from None
     finally:
         if response is not None:
             response.close()
@@ -525,12 +547,12 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         except RuleDownloadError as exc:
             name = item.get('name') or '未命名'
             explanation, _, details = str(exc).partition('\n')
-            raise DeploymentPreparationError(
+            raise RuleDownloadError(
                 f'无法下载「{name}」规则集：{explanation}。本次发布已停止，设备仍使用原配置。'
                 + f'\n文件：{failure_text(str(item.get("local_path", "")))}'
                 + '\n修复：更换该规则的下载地址，或检查「GitHub 代理域名」和「系统设置 → 规则下载代理」。'
                 + '\n也可手动下载后导入规则库的内容型规则，再重新发布。'
-                + (f'\n{details}' if details else '')) from None
+                + (f'\n{details}' if details else ''), remedy=exc.remedy) from None
         except DeploymentPreparationError as exc:
             raise preparation_context(exc, name=item.get('name', ''), path=item.get('local_path', '')) from None
         return item, value

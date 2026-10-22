@@ -200,6 +200,16 @@ class RuleFetchError(requests.RequestException):
             f'{label}：{type(error).__name__}: {error}' for label, error in attempts), secrets))
 
 
+GITHUB_HOSTS = ('github.com', 'raw.githubusercontent.com', 'gist.githubusercontent.com', 'api.github.com')
+
+
+def is_github_url(url):
+    try:
+        return urlsplit(url).hostname in GITHUB_HOSTS
+    except ValueError:
+        return False
+
+
 def github_download_candidates(url, config_data):
     """Keep original paths intact, including GitHub Release assets.
 

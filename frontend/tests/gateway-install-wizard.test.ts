@@ -486,6 +486,20 @@ describe('gateway installation wizard', () => {
     expect(gatewayOnboardingApi.publish).toHaveBeenCalledWith('installation-1', 'office', true)
     expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
   })
+  it('offers the download remedy only for rule download failures', async () => {
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('publish_failed', { message: '无法下载「Telegram」规则集', remedy: { kind: 'rule_download', github: true } }) }))
+    const wrapper = await render()
+    const remedy = wrapper.findComponent({ name: 'RuleDownloadRemedy' })
+    expect(remedy.exists()).toBe(true)
+    expect(remedy.props('github')).toBe(true)
+    remedy.vm.$emit('retry'); await flushPromises()
+    expect(gatewayOnboardingApi.publish).toHaveBeenCalledWith('installation-1', 'office', true)
+  })
+  it('hides the download remedy for other publish failures', async () => {
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('publish_failed', { error: 'Mihomo 健康检查失败' }) }))
+    const wrapper = await render()
+    expect(wrapper.findComponent({ name: 'RuleDownloadRemedy' }).exists()).toBe(false)
+  })
   it('rejects changed target identity before applying', async () => {
     vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('published') }))
     const wrapper = await render()

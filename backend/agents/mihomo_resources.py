@@ -125,13 +125,13 @@ def prepare_mihomo_resources(bundle, capability, config, *, progress=None):
                 raise RuleDownloadError('下载结果为空或是网页，不是 Geo 数据文件')
         except RuleDownloadError as exc:
             reason, _, details = str(exc).partition('\n')
-            raise DeploymentPreparationError(failure_text(
+            raise RuleDownloadError(failure_text(
                 f'{label} 下载失败。本次发布已停止，设备仍使用原配置。\n'
                 f'原因：{reason}\n下载地址：{url}\n目标文件：{target}\n'
                 f'修复：更换 geox-url.{key}，或检查「GitHub 代理域名」和「系统设置 → 规则下载代理」。\n'
                 f'也可手动下载对应数据文件，放到 Agent 机器的 {target}，确保 Mihomo 可读取，再重新发布。'
                 + (f'\n{details}' if details else '')
-            )) from None
+            ), remedy=exc.remedy) from None
         if (len(value) > MAX_FILE_BYTES or len(files) >= MAX_FILES
                 or sum(len(item[0]) for item in files.values()) + len(value) > MAX_TOTAL_BYTES):
             raise DeploymentPreparationError(f'{label} 超出发布文件大小限制')

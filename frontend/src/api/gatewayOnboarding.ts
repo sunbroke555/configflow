@@ -39,6 +39,8 @@ export interface GatewayInstallation {
   id: string; profile_id: string; name: string; config_revision?: number; network: LinuxGatewaySpec
   server_url?: string; auto_network?: boolean; phase: 'waiting' | 'enrolled' | 'publishing' | 'publish_failed' | 'published'
   command?: string; download_url?: string; expires_at: string; message?: string; error?: string
+  /** 规则因网络原因下载失败时，可在面板设置 GitHub 代理域名或规则下载代理后重试 */
+  remedy?: { kind: 'rule_download'; github: boolean } | null
   agents: Partial<Record<'mihomo' | 'oxidns', GatewayInstallationAgent>>
   config_changed?: boolean; target_changed?: boolean; expired?: boolean
   deployments: Partial<Record<'mihomo' | 'oxidns', AgentDeployment>>

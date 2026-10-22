@@ -15,6 +15,7 @@ import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
+import RuleDownloadRemedy from '@/components/agents/RuleDownloadRemedy.vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import GatewayNetworkFields from '@/components/agents/GatewayNetworkFields.vue'
@@ -578,7 +579,8 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
               <AgentDNSChecks :checks="installation?.deployments[service]?.dns_checks" :checked-at="installation?.deployments[service]?.dns_checked_at" compact />
             </div>
           </div>
-          <p v-if="installation?.error || installation?.message" class="m-0 break-words text-xs leading-relaxed" :class="installation?.phase === 'publish_failed' ? 'text-destructive-accent' : 'text-muted-foreground'" :role="installation?.phase === 'publish_failed' ? 'alert' : 'status'">{{ installation.error || installation.message }}</p>
+          <p v-if="installation?.error || installation?.message" class="m-0 break-words whitespace-pre-line text-xs leading-relaxed" :class="installation?.phase === 'publish_failed' ? 'text-destructive-accent' : 'text-muted-foreground'" :role="installation?.phase === 'publish_failed' ? 'alert' : 'status'">{{ installation.error || installation.message }}</p>
+          <RuleDownloadRemedy v-if="installation?.phase === 'publish_failed' && installation.remedy?.kind === 'rule_download'" :github="installation.remedy.github" :busy="busy || installationBlocked" @retry="publish" />
           <div class="flex flex-wrap gap-2"><Button class="min-h-11" :disabled="busy || networkDirty || !!gatewaySpecErrors(network).length || installationBlocked || !installation || !['enrolled', 'publishing', 'publish_failed'].includes(installation.phase)" @click="publish"><LoaderCircle v-if="action === 'publish'" class="size-4 animate-spin" />{{ installation?.phase === 'publish_failed' ? '处理后继续发布' : installation?.phase === 'publishing' ? '继续确认发布' : '按顺序发布两项配置' }}</Button><Button variant="outline" class="min-h-11" :disabled="refreshPending || busy" @click="refreshInstallation"><RefreshCw class="size-4" />刷新进度</Button></div>
           <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">发布说明与排错</summary><p class="mt-1 mb-3 leading-relaxed text-muted-foreground">关闭窗口后发布仍会继续，重新打开可查看进度。失败时在 Agent 查看原因，处理后继续发布，无需重装。</p></details>
         </section>
