@@ -53,6 +53,13 @@ def builtin_rule_catalog():
             for item in sorted(items, key=lambda item: item['_template_order'])}
 
 
+# Template proxy rule sets for apps that connect to IP addresses without a DNS
+# lookup. Their ranges do not overlap the direct ones; broad lists such as
+# Apple, GlobalMedia or Proxy do, and taking them over would proxy direct sites
+# whose real IPs fall inside them, since Mihomo then matches by IP alone.
+IP_TAKEOVER_RULES = ('builtin:telegram', 'builtin:googlefcm')
+
+
 def recommended_domain_rules(repository=None):
     available = None if repository is None else {item['id'] for item in domain_rule_options(repository)}
     return {route: [identity for identity, item in builtin_rule_catalog().items()

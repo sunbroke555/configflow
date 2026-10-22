@@ -596,7 +596,7 @@ IP_RULE = {'id': 'chat', 'name': '聊天', 'behavior': 'classical', 'format': 't
 DIRECT_IP_RULE = {**IP_RULE, 'id': 'lan-chat', 'name': '内网聊天', 'content': 'IP-CIDR,203.0.113.0/24'}
 
 
-def test_gateway_proxy_rule_ip_ranges_are_taken_over_by_default_and_can_be_declined(setup_api):
+def test_gateway_takes_over_only_ip_app_rule_sets(setup_api):
     from backend.common.gateway_onboarding import gateway_onboarding_state, prepare_gateway_onboarding
     from backend.converters.mihomo import generate_mihomo_config
     client, repository = setup_api
@@ -604,16 +604,16 @@ def test_gateway_proxy_rule_ip_ranges_are_taken_over_by_default_and_can_be_decli
     repository.update_shared_transaction(lambda shared: shared.update(
         nodes=[deepcopy(NODE)], rule_library=[deepcopy(DOMAIN_RULE), deepcopy(IP_RULE), deepcopy(DIRECT_IP_RULE)]))
     client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
-    selections = {'direct': ['library:lan-chat'], 'proxy': ['library:work', 'library:chat']}
+    # Broad proxy lists (Apple, a library set with IPs) and direct sets stay
+    # out: their ranges overlap direct sites that would then be proxied.
+    selections = {'direct': ['library:lan-chat', 'builtin:direct'],
+                  'proxy': ['builtin:telegram', 'builtin:apple', 'builtin:googlefcm', 'library:chat', 'library:work']}
     response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
     assert response.status_code == 200, response.json
-    assert response.json['ip_takeover'] is True
     snapshot, revision = repository.get_publish_snapshot(session['profile_id'])
     names = {item['id']: item['name'] for item in snapshot['rule_configs'] if item['itemType'] == 'ruleset'}
-    # Only the proxy rule set that can carry IP ranges; the domain-only proxy
-    # set and the direct set stay out.
     selected = snapshot['mihomo']['linux_gateway']['rule_set_ids']
-    assert [names[identity] for identity in selected] == ['聊天']
+    assert sorted(names[identity] for identity in selected) == ['GoogleFCM', 'Telegram']
     assert snapshot['mihomo']['linux_gateway']['enabled'] is False
     # The embedded installer carries the selection into the enabled gateway.
     state = gateway_onboarding_state(snapshot, revision)
@@ -621,12 +621,11 @@ def test_gateway_proxy_rule_ip_ranges_are_taken_over_by_default_and_can_be_decli
     candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
     assert report['ready'], report
     mihomo = yaml.safe_load(generate_mihomo_config(candidate, base_url='https://config.test'))
-    assert len(mihomo['tun']['route-address-set']) == 2
-    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections, 'ip_takeover': False})
-    assert response.status_code == 200, response.json
-    assert repository.get_profile(session['profile_id'])['mihomo']['linux_gateway']['rule_set_ids'] == []
+    assert len(mihomo['tun']['route-address-set']) == 3
+    # Without either app rule set among the proxy rules nothing is taken over.
+    selections = {'direct': [], 'proxy': ['builtin:apple', 'library:chat']}
     response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
-    assert response.json['ip_takeover'] is False
+    assert response.status_code == 200, response.json
     assert repository.get_profile(session['profile_id'])['mihomo']['linux_gateway']['rule_set_ids'] == []
 
 
@@ -635,10 +634,7 @@ def test_router_setup_leaves_ip_takeover_to_the_router_settings(setup_api):
     session = start(client)
     repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(IP_RULE)]))
     client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
-    selections = {'direct': [], 'proxy': ['library:chat']}
-    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections, 'ip_takeover': True})
-    assert response.status_code == 400
+    selections = {'direct': [], 'proxy': ['builtin:telegram', 'library:chat']}
     response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
     assert response.status_code == 200, response.json
-    assert 'ip_takeover' not in response.json
     assert 'linux_gateway' not in repository.get_profile(session['profile_id'])['mihomo']
