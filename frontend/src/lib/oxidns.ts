@@ -60,14 +60,27 @@ export const cacheFields: OxidnsField[] = [
   number('cache_dump_interval', '持久化间隔（秒）', 1, optionCopy('控制缓存写盘频率，间隔越短写入越频繁。', '主缓存和缓存持久化均已开启时，此设置才生效。', '按此秒数定期将主缓存保存到磁盘。间隔较短可减少意外停止时丢失的缓存，但会增加磁盘写入；不会改变 DNS 响应的有效期。'))
 ]
 
+// Shared by the gateway wizard switch and the settings feature group.
+export const queryRecorderCopy = optionCopy('在面板查看每条查询，会持续写入磁盘。', '默认关闭；需要在 DNS 面板「查询记录」中追查域名结果、处理路径和耗时时开启。', '历史保存到 state/ 下的 SQLite，默认保留 7 天并持续写盘，闪存或 SD 卡设备请谨慎。运行概览不依赖它。')
+
 export const apiFields: OxidnsField[] = [
-  toggle('api.enabled', '启用 API / WebUI', optionCopy('需要查看或管理 OxiDNS 时，开启管理入口。', '使用其他工具或网页查看、管理 OxiDNS 时开启。', '开启 API 后，填写网页文件目录可在同端口访问 WebUI。两者共用下方账号；用户名和密码会包含在生成的运行配置中。')),
-  text('api.listen', 'API 监听地址', optionCopy('选择仅本机访问，或允许局域网访问面板。', '开启管理 API 后，按希望访问面板的设备范围设置。', '127.0.0.1:9199 仅本机可用，0.0.0.0:9199 允许局域网 IPv4 访问。Docker 桥接网络还需映射端口。')),
-  text('api.username', '用户名', optionCopy('与密码一起设置，保护 API 和网页管理入口。', '需要限制 API 和 WebUI 的访问者时，与密码一起填写。', '两个入口共用 HTTP Basic 登录认证；用户名和密码必须同时填写。两项都留空时不验证身份，能访问管理地址的人即可调用接口。')),
-  { path: 'api.password', label: '密码', type: 'password', ...optionCopy('设置管理入口密码，分享配置前移除凭据。', '需要管理入口登录认证时，与用户名一起填写。', 'API 和 WebUI 共用此密码，必须同时填写用户名。密码会写入生成的运行配置，分享或导出配置给他人前应先移除登录凭据。') },
-  { ...text('api.webui_root', 'WebUI 静态文件目录', optionCopy('填写网页文件所在目录，留空只提供 API。', '已在 OxiDNS 运行设备上准备 WebUI 文件时填写。', '目录位于运行设备，相对路径以工作目录为准。Docker 镜像通常用 /usr/share/oxidns/webui；留空只启用 API。')), wide: true },
-  text('api.ssl.cert', 'API TLS 证书路径', optionCopy('使用 HTTPS 管理时，与私钥路径一起填写。', '希望通过 HTTPS 访问 API 或 WebUI 时设置。', '填写运行环境中可读取的证书文件路径，并同时配置匹配的私钥。证书和私钥两项都留空时使用 HTTP，不会自动生成 HTTPS 证书。')),
-  { path: 'api.ssl.key', label: 'API TLS 私钥路径', type: 'password', ...optionCopy('填写证书配套私钥的文件路径，非密钥内容。', '已经配置 API TLS 证书，需要启用 HTTPS 时填写。', '应填与证书匹配的私钥文件路径，而非粘贴密钥内容。文件必须存在于 OxiDNS 运行环境，且服务进程有权限读取。') },
+  toggle('api.enabled', '启用 API / WebUI', optionCopy('DNS 面板和规则更新依赖它，建议保持开启。', '默认开启；ConfigFlow 的 DNS 面板、规则更新和发布热重载都通过它连接核心。', '关闭后面板无法读取数据，发布只能重启核心。填写网页目录后，可在同一端口访问 WebUI。')),
+  { ...text('api.listen', 'API 监听地址', optionCopy('默认仅本机访问，开放局域网时建议设账号。', '需要从其他设备访问 API 或 WebUI 时。', '127.0.0.1:9199 仅本机可用；0.0.0.0:9199 允许局域网 IPv4 访问，建议同时设置账号。Docker 桥接网络还需映射端口。')), when: 'api.enabled' },
+]
+
+// Credentials are optional; both empty means the API answers without authentication.
+export const apiAuthFields: OxidnsField[] = [
+  { ...text('api.username', '用户名', optionCopy('可选，与密码一起设置后访问需要登录。', 'API 开放给局域网，或需限制访问者时填写。', 'API 和 WebUI 共用 HTTP Basic 认证，用户名和密码须同时填写，都留空则不验证身份。用户名不能含英文冒号，DNS 面板会自动使用。')), when: 'api.enabled' },
+  { path: 'api.password', label: '密码', type: 'password', ...optionCopy('与用户名配套使用，分享配置前请移除。', '已填写用户名，需要为管理入口启用登录认证时填写。', 'API 和 WebUI 共用此密码，不能含 ${ 或控制字符。密码会写入生成的运行配置，分享或导出配置给他人前应先移除。'), when: 'api.enabled' },
+]
+
+export const apiExtraFields: OxidnsField[] = [
+  { ...text('api.webui_root', 'WebUI 静态文件目录', optionCopy('填写网页文件所在目录，留空只提供 API。', '已在 OxiDNS 运行设备上准备 WebUI 文件时填写。', '目录位于运行设备，相对路径以工作目录为准。Docker 镜像通常用 /usr/share/oxidns/webui；留空只启用 API。')), wide: true, when: 'api.enabled' },
+  { ...text('api.ssl.cert', 'API TLS 证书路径', optionCopy('使用 HTTPS 管理时，与私钥路径一起填写。', '只通过浏览器或其他工具以 HTTPS 访问 API 时设置。', '填写运行环境中可读取的证书路径，并配置匹配私钥；两项都留空使用 HTTP。DNS 面板暂不支持 HTTPS，启用后面板和规则更新将无法连接。')), when: 'api.enabled' },
+  { path: 'api.ssl.key', label: 'API TLS 私钥路径', type: 'password', ...optionCopy('填写证书配套私钥的文件路径，非密钥内容。', '已经配置 API TLS 证书，需要启用 HTTPS 时填写。', '应填与证书匹配的私钥文件路径，而非粘贴密钥内容。文件必须存在于 OxiDNS 运行环境，且服务进程有权限读取。'), when: 'api.enabled' },
+]
+
+export const logFields: OxidnsField[] = [
   select('log.level', '日志级别', ['off', 'error', 'warn', 'info', 'debug', 'trace'], optionCopy('日常使用 info，排查问题时提高详细程度。', '按日常运行或排查问题的需要，选择记录详细程度。', '从 error 到 trace 记录逐渐增多；off 关闭日志。通常用 info，排障时可临时切换 debug 或 trace，之后调回以减少日志量。')),
   text('log.file', '日志文件', optionCopy('需要单独保存日志文件时填写，留空也可用。', '希望在服务日志之外另存一份日志文件时填写。', '留空仅输出到服务日志；填写后同时写入标准输出和指定文件。路径位于 OxiDNS 运行环境，服务进程须有写入权限。')),
   select('log.rotation', '日志轮转', ['never', 'minutely', 'hourly', 'daily', 'weekly'], optionCopy('按时间分开保存日志，便于查阅和清理。', '已设置日志文件，希望按时间拆分历史记录时使用。', 'never 不拆分；其余选项分别按分钟、小时、天、周生成新文件。此设置只作用于日志文件，不改变服务标准输出中的日志。')),
@@ -91,7 +104,7 @@ const rosFields = (name: string): OxidnsField[] => [
 ]
 
 export const featureGroups: Array<{ key: string; title: string; hint: string; help: string; fields: OxidnsField[] }> = [
-  { key: 'query_recorder', title: '查询记录', ...optionCopy('需要追查域名查询过程时，开启历史记录。', '希望查看每次查询的结果、处理路径和耗时。', '将历史保存到 SQLite，会增加磁盘写入。数据位于 state/，发布配置时保留；只看总请求量和平均耗时可使用轻量指标。'), fields: [
+  { key: 'query_recorder', title: '查询记录', ...queryRecorderCopy, fields: [
     text('query_recorder.args.path', '数据库路径', optionCopy('将查询历史保存在 state 目录下的文件中。', '开启查询记录，需要指定数据库保存位置时填写。', '使用 state/ 下的相对路径保存 SQLite 文件。此目录中的运行数据会在部署时保留，避免更新配置后丢失查询历史。')),
     number('query_recorder.args.retention_days', '保留天数', 1, optionCopy('只保留最近指定天数的查询，定期清理旧记录。', '查询记录已开启，需要控制历史保存范围时设置。', '超过此天数的记录由定时任务清理，可能等到下一轮才删除。删除后数据库文件不一定立即缩小，但释放的空间可以复用。')),
     number('query_recorder.args.queue_size', '写入队列', 1, optionCopy('缓冲等待写入的查询记录，应对请求高峰。', '短时间查询较多，希望缓冲等待写入的记录时调整。', '设置后台数据库写入前最多暂存的记录数量。更大容量能容纳更多待写记录，也可能占用更多内存；它不是历史记录的保留总量。')),

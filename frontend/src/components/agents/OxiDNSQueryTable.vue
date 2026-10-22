@@ -46,7 +46,9 @@
             </div>
             <span v-if="!record.questions_json?.length" class="text-muted-foreground">—</span>
           </TableCell>
-          <TableCell class="font-mono text-xs">{{ record.client_ip || '—' }}</TableCell>
+          <TableCell class="font-mono text-xs">
+            <span class="flex flex-wrap items-center gap-1.5">{{ record.client_ip || '—' }}<span v-if="isAgentProbe(record)" class="chip shrink-0 font-sans" :title="AGENT_PROBE_NOTE">Agent 检查<span class="sr-only">：{{ AGENT_PROBE_NOTE }}</span></span></span>
+          </TableCell>
           <TableCell>
             <span :class="['chip', record.error ? 'chip-bad' : record.has_response ? 'chip-ok' : 'chip-warn']">
               {{ record.error ? '处理错误' : record.has_response ? formatDNSCode(record.rcode) : '无应答' }}
@@ -85,7 +87,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { formatDNSType, formatDNSCode, formatMonitorNumber, formatQueryTime, queryTimeZone, monitorNumber, type OxiDNSQueries, type OxiDNSQuery, type OxiDNSQueryFilters } from '@/types/oxidnsMonitor'
+import { AGENT_PROBE_NOTE, isAgentProbe, formatDNSType, formatDNSCode, formatMonitorNumber, formatQueryTime, queryTimeZone, monitorNumber, type OxiDNSQueries, type OxiDNSQuery, type OxiDNSQueryFilters } from '@/types/oxidnsMonitor'
 const props = defineProps<{
   agentId: string; recorders: string[]; recorder: string; instanceId?: string | null; filters: OxiDNSQueryFilters; data: OxiDNSQueries | null
   loading: boolean; error: string; page: number; hasNext: boolean

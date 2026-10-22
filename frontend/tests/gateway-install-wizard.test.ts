@@ -5,6 +5,8 @@ import GatewayInstallWizard from '@/components/agents/GatewayInstallWizard.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
+import FormField from '@/components/common/FormField.vue'
 import { gatewayOnboardingApi } from '@/api/gatewayOnboarding'
 import { linuxGatewayApi } from '@/api/linuxGateway'
 import { gatewayEnvironmentErrors, installationMatches } from '@/lib/gatewayOnboarding'
@@ -228,8 +230,8 @@ describe('gateway installation wizard', () => {
   })
   it('requires preview, saves both configs and creates installation from the saved revision', async () => {
     const wrapper = await render(); await prepare(wrapper)
-    expect(gatewayOnboardingApi.preview).toHaveBeenCalledWith('office', { ...settings, confirm_template_conversion: false, expected_config_revision: 7 })
-    expect(gatewayOnboardingApi.save).toHaveBeenCalledWith('office', { ...settings, confirm_template_conversion: false, expected_config_revision: 7 })
+    expect(gatewayOnboardingApi.preview).toHaveBeenCalledWith('office', { ...settings, query_recorder: false, confirm_template_conversion: false, expected_config_revision: 7 })
+    expect(gatewayOnboardingApi.save).toHaveBeenCalledWith('office', { ...settings, query_recorder: false, confirm_template_conversion: false, expected_config_revision: 7 })
     expect(gatewayOnboardingApi.create).toHaveBeenCalledWith({ profile_id: 'office', name: 'home-gateway', server_url: 'http://192.168.1.3:8000', network: spec, config_revision: 8 })
     expect(wrapper.get('#onboarding-command').element).toHaveProperty('value', session().command)
     expect(gatewayOnboardingApi.publish).not.toHaveBeenCalled()
@@ -320,9 +322,28 @@ describe('gateway installation wizard', () => {
     expect(wrapper.text()).not.toContain(warning)
     await button(wrapper, '检查配置与代理出口').trigger('click'); await flushPromises()
     expect(gatewayOnboardingApi.preview).toHaveBeenCalledExactlyOnceWith('office', {
-      ...settings, local_dns: newDns, confirm_template_conversion: false, expected_config_revision: 7,
+      ...settings, local_dns: newDns, query_recorder: false, confirm_template_conversion: false, expected_config_revision: 7,
     })
     expect(gatewayOnboardingApi.save).not.toHaveBeenCalled()
+  })
+  it('keeps query recording off by default and sends the explicit choice', async () => {
+    const wrapper = await render(); await fillEnvironment(wrapper)
+    const toggle = wrapper.findComponent(Switch)
+    expect(toggle.props('modelValue')).toBe(false)
+    expect(wrapper.text()).toContain('关闭（默认）')
+    const field = wrapper.findAllComponents(FormField).find(item => item.props('label') === 'OxiDNS 查询记录')!
+    expect(field.props('hint')).toContain('会持续写入磁盘')
+    expect(field.props('help')).toContain('默认关闭')
+    expect(field.props('persistentHint')).toBe(true)
+    toggle.vm.$emit('update:modelValue', true); await flushPromises()
+    expect(wrapper.text()).toContain('开启，记录每条 DNS 查询')
+    await button(wrapper, '检查配置与代理出口').trigger('click'); await flushPromises()
+    expect(gatewayOnboardingApi.preview).toHaveBeenCalledExactlyOnceWith('office', expect.objectContaining({ query_recorder: true }))
+  })
+  it('shows a profile that already records queries as enabled', async () => {
+    vi.mocked(gatewayOnboardingApi.get).mockResolvedValue(response({ ...config(), settings: { ...settings, query_recorder: true } }))
+    const wrapper = await render(); await fillEnvironment(wrapper)
+    expect(wrapper.findComponent(Switch).props('modelValue')).toBe(true)
   })
   it('collapses general gateway notes while keeping current and preview problems directly visible', async () => {
     const currentWarning = '有一个已引用的 IP 规则集暂不可用。'

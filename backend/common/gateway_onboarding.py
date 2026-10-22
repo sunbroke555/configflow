@@ -23,12 +23,13 @@ from backend.converters.mihomo import generate_mihomo_config, _default_mihomo_te
 DEFAULT_LOCAL_DNS = 'https://223.5.5.5/dns-query'
 DNS_TARGET = '127.0.0.1:1053'
 INPUT_FIELDS = {'rule_set_ids', 'direct_rule_set_ids', 'proxy_rule_set_ids', 'local_dns',
-                'confirm_template_conversion', 'expected_config_revision', 'default_forward'}
+                'query_recorder', 'confirm_template_conversion', 'expected_config_revision', 'default_forward'}
 GATEWAY_CHANGES = [
     '启用当前配置空间的 Linux 网关；fake-IP 网段始终接管，真实 IP 只接管勾选的规则集。',
     'Mihomo 使用 rule / fake-IP 模式，DNS 监听 127.0.0.1:1053；保留现有规则顺序、策略组和节点。',
     'OxiDNS 在 0.0.0.0:53 同时监听 UDP / TCP，优先 IPv4；直连使用所填 IP 地址 DoH / DoT。',
     'OxiDNS 代理和备用上游均为 127.0.0.1:1053；未匹配域名使用已选择的默认 DNS。',
+    'OxiDNS 管理 API 未启用时自动开启（仅本机 127.0.0.1:9199，不设账号），供 DNS 面板、规则更新和热重载使用；已启用的监听与认证设置不变。',
     '只保存两份配置草稿；后续分别发布并检查核心，再显式应用主机转发。',
 ]
 
@@ -234,6 +235,9 @@ def _input(value):
         result[key] = list(dict.fromkeys(ids))
     if set(result['direct_rule_set_ids']) & set(result['proxy_rule_set_ids']):
         raise GatewayOnboardingError('同一域名规则集不能同时选择直连和代理')
+    # Optional so older clients keep the profile's current recorder state.
+    if type(result.get('query_recorder', False)) is not bool:
+        raise GatewayOnboardingError('query_recorder 必须为布尔值')
     if type(result.get('confirm_template_conversion', False)) is not bool:
         raise GatewayOnboardingError('confirm_template_conversion 必须为布尔值')
     if 'expected_config_revision' in result and (type(result['expected_config_revision']) is not int or result['expected_config_revision'] < 0):
@@ -294,6 +298,8 @@ def gateway_onboarding_state(config, revision, base_url=''):
     direct = values.get('direct_rulesets') or []
     proxy = values.get('proxy_rulesets') or []
     local = values.get('local_dns') or DEFAULT_LOCAL_DNS
+    recorder = values.get('query_recorder')
+    recorder = isinstance(recorder, dict) and recorder.get('enabled') is True
     warnings = list(state['warnings'])
     field_warnings = {}
     server_url = config.get('system_config', {}).get('server_domain', '') or ''
@@ -327,7 +333,8 @@ def gateway_onboarding_state(config, revision, base_url=''):
     return {'profile_id': config.get('profile_id'), 'config_revision': revision, 'server_url': server_url,
             'settings': {'rule_set_ids': state['settings']['rule_set_ids'],
                          'direct_rule_set_ids': direct, 'proxy_rule_set_ids': proxy, 'local_dns': local,
-                         'default_forward': values.get('default_forward', 'forward_remote')},
+                         'default_forward': values.get('default_forward', 'forward_remote'),
+                         'query_recorder': recorder},
             'gateway_enabled': state['settings']['enabled'], 'ip_candidates': state['candidates'],
             'domain_candidates': _domain_candidates(config, direct + proxy), 'fake_ip_range': state['fake_ip_range'],
             'oxidns_mode': settings.get('config_mode', 'template'), 'warnings': warnings, 'field_warnings': field_warnings,
@@ -377,6 +384,50 @@ def _prepare_mihomo_dns(config, *, local_addresses=()):
     config['mihomo']['custom_config'] = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
 
 
+def _loopback_listen(listen):
+    host = listen.strip()
+    if host.startswith('['):
+        host = host[1:host.find(']')]
+    elif host.count(':') == 1:
+        host = host.split(':')[0]
+    if host.lower() == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _enable_template_api(api, warnings):
+    """Turn on the management API the DNS panel needs, keeping deliberate settings.
+
+    Sub-fields of a disabled API are never validated, so leftovers that would
+    block the wizard or expose an unauthenticated listener are reset here.
+    """
+    api = deepcopy(api)
+    if api.get('enabled'):
+        return api
+    api['enabled'] = True
+    default = '127.0.0.1:9199'
+    username, password = api.get('username') or '', api.get('password') or ''
+    if bool(username) != bool(password):
+        api['username'] = api['password'] = ''
+        username = ''
+        warnings.append('OxiDNS 管理 API 原有账号只填写了一半，已清空；如需认证，请在 OxiDNS 设置「API / 日志」中同时填写用户名和密码。')
+    ssl = api.get('ssl') or {}
+    if ssl and bool(ssl.get('cert')) != bool(ssl.get('key')):
+        api['ssl'] = {}
+        warnings.append('OxiDNS 管理 API 的 TLS 证书和私钥只填写了一项，已清除，API 使用 HTTP。')
+    listen = api.get('listen') if isinstance(api.get('listen'), str) else ''
+    if not listen.strip():
+        api['listen'] = default
+    elif not username and not _loopback_listen(listen):
+        api['listen'] = default
+        warnings.append(f'OxiDNS 管理 API 原监听 {listen} 且未设置账号，已改为仅本机 {default}；'
+                        '如需局域网访问，请先在 OxiDNS 设置「API / 日志」中设置用户名和密码。')
+    return api
+
+
 def prepare_gateway_onboarding(config, value, base_url=''):
     """Return a proposed snapshot and reviewable diagnostics; never persist."""
     value = _input(value)
@@ -419,6 +470,16 @@ def prepare_gateway_onboarding(config, value, base_url=''):
         if settings['config_mode'] == 'native':
             native_changes = {**changes, **{key: yaml.safe_dump(_forward(changes[key], []), allow_unicode=True, sort_keys=False)
                                           for key in ('local_dns', 'remote_dns', 'fallback_dns')}}
+            # The DNS panel, rule updates and hot reloads all reach the core
+            # through its API; keep an existing listener and credentials as-is.
+            if not current['api']['enabled'] and read_common_settings(
+                    settings, config, base_url)['capabilities']['api.enabled']['editable']:
+                native_changes['api.enabled'] = True
+            if 'query_recorder' in value and (current.get('query_recorder') or {}).get('enabled') is not value['query_recorder']:
+                if read_common_settings(settings, config, base_url)['capabilities'].get('query_recorder.enabled', {}).get('editable'):
+                    native_changes['query_recorder.enabled'] = value['query_recorder']
+                else:
+                    report['warnings'].append('OxiDNS 查询记录使用自定义结构，向导未修改；请在 OxiDNS 设置的「特色功能」中调整。')
             try:
                 _check_native_dns_path(settings, allow_disabled_fallback=True)
                 settings = _prepare_native_gateway_fallback(settings)
@@ -436,6 +497,10 @@ def prepare_gateway_onboarding(config, value, base_url=''):
                 report['warnings'].append('已按明确选择转换 OxiDNS 为模板；原生配置和附加文件保存在 gateway_onboarding_native_backup 中，可从配置导出恢复。')
         else:
             settings.update(changes)
+        if settings['config_mode'] == 'template':
+            settings['api'] = _enable_template_api(settings.get('api', {}), report['warnings'])
+            if 'query_recorder' in value:
+                settings['query_recorder'] = {**settings.get('query_recorder', {}), 'enabled': value['query_recorder']}
         candidate['oxidns'] = normalize_oxidns_settings(settings)
         mihomo = yaml.safe_load(generate_mihomo_config(candidate, base_url, preflight_providers=False))
         # Render both services before declaring the draft ready. Target cores

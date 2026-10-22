@@ -4,8 +4,9 @@ import { emptyQueryFilters, monitorNumber, type OxiDNSOverview, type OxiDNSQueri
 import { oxiDNSQueryTimeRange, useOxiDNSClock } from '@/composables/useOxiDNSClock'
 
 const messageOf = (error: any) => error?.response?.data?.message || error?.message || '读取失败，请稍后重试。'
+const codeOf = (error: any): string => error?.response?.data?.code || error?.code || ''
 const checked = <T>(data: T): T => {
-  if ((data as any)?.success === false) throw new Error((data as any).message || '读取失败，请稍后重试。')
+  if ((data as any)?.success === false) throw Object.assign(new Error((data as any).message || '读取失败，请稍后重试。'), { code: (data as any).code })
   return data
 }
 const FIRST_RATE_SAMPLE_DELAY = 500
@@ -42,6 +43,7 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
   const queryClock = useOxiDNSClock(computed(() => overview.value?.collected_at))
   const overviewLoading = ref(false)
   const overviewError = ref('')
+  const overviewErrorCode = ref('')
   const resettingStatistics = ref(false)
   const resetError = ref('')
   const qps = ref<number | null>(null)
@@ -149,12 +151,16 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
     const requestNumber = ++overviewRequest
     overviewLoading.value = true
     overviewError.value = ''
+    overviewErrorCode.value = ''
     try {
       const { data } = await oxidnsMonitorApi.overview(agentId.value, { signal: controller.signal, recorder: recorder.value || undefined })
       if (controller.signal.aborted || requestEpoch !== epoch || requestNumber !== overviewRequest) return
       applyOverview(checked(data) as OxiDNSOverview)
     } catch (error) {
-      if (!controller.signal.aborted && requestEpoch === epoch && requestNumber === overviewRequest) overviewError.value = messageOf(error)
+      if (!controller.signal.aborted && requestEpoch === epoch && requestNumber === overviewRequest) {
+        overviewError.value = messageOf(error)
+        overviewErrorCode.value = codeOf(error)
+      }
     } finally {
       if (requestEpoch === epoch && requestNumber === overviewRequest) overviewLoading.value = false
     }
@@ -175,6 +181,7 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
       if (controller.signal.aborted || requestEpoch !== epoch || requestAgent !== agentId.value) return false
       applyOverview(checked(data) as OxiDNSOverview, true)
       overviewError.value = ''
+      overviewErrorCode.value = ''
       return true
     } catch (error) {
       if (!controller.signal.aborted && requestEpoch === epoch) resetError.value = messageOf(error)
@@ -258,6 +265,7 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
     queriesLoading.value = false
     overview.value = null
     overviewError.value = ''
+    overviewErrorCode.value = ''
     qps.value = null
     recorder.value = ''
     filters.value = emptyQueryFilters()
@@ -279,6 +287,6 @@ export function useOxiDNSMonitor(agentId: Ref<string>, tab: Ref<string>) {
     if (timer) clearInterval(timer)
     document.removeEventListener('visibilitychange', onVisible)
   })
-  return { overview, overviewLoading, overviewError, resettingStatistics, resetError, resetStatistics, clockSkewMs: queryClock.skewMs, qps, queries, queriesLoading, queriesError, recorder,
+  return { overview, overviewLoading, overviewError, overviewErrorCode, resettingStatistics, resetError, resetStatistics, clockSkewMs: queryClock.skewMs, qps, queries, queriesLoading, queriesError, recorder,
     filters, page, hasNext, autoRefresh, refresh, loadQueries, selectRecorder, applyFilters, nextPage, previousPage }
 }

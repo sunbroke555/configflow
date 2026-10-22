@@ -17,6 +17,7 @@
           <p v-for="(question, index) in record.questions_json" :key="index" class="m-0 flex items-start gap-2">
             <span class="min-w-0 break-all font-mono text-sm">{{ question.name }}</span><span class="chip shrink-0 font-mono">{{ formatDNSType(question.qtype) }}</span>
           </p>
+          <p v-if="isAgentProbe(record)" class="m-0 mt-3 text-xs leading-relaxed text-muted-foreground"><span class="chip mr-1.5">Agent 检查</span>{{ AGENT_PROBE_NOTE }}</p>
           <dl class="mb-0 mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
             <div><dt class="text-muted-foreground" :title="'浏览器时区：' + queryTimeZone()">时间</dt><dd class="num m-0 mt-1">{{ formatQueryTime(record.created_at_ms) }}</dd></div>
             <div><dt class="text-muted-foreground">客户端</dt><dd class="m-0 mt-1 break-all font-mono">{{ record.client_ip || '—' }}</dd></div>
@@ -89,7 +90,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import SectionCard from '@/components/common/SectionCard.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
-import { formatDNSCode, formatDNSType, formatMonitorNumber, formatQueryTime, queryTimeZone, monitorNumber, querySourceLabel, type OxiDNSQuery } from '@/types/oxidnsMonitor'
+import { AGENT_PROBE_NOTE, isAgentProbe, formatDNSCode, formatDNSType, formatMonitorNumber, formatQueryTime, queryTimeZone, monitorNumber, querySourceLabel, type OxiDNSQuery } from '@/types/oxidnsMonitor'
 const props = defineProps<{ agentId: string; recordId: string | number; recorder: string }>()
 const emit = defineEmits<{ close: [] }>()
 const record = ref<OxiDNSQuery | null>(null)

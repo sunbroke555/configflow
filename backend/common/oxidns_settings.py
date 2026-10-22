@@ -29,7 +29,7 @@ def get_default_oxidns_settings():
         'cache_lazy_ttl': 300, 'cache_dump_enabled': False,
         'cache_dump_file': './state/cache.dump', 'cache_dump_interval': 300,
         'probe_cache_enabled': True, 'probe_cache_size': 2048,
-        'api': {'enabled': False, 'listen': '127.0.0.1:9199', 'username': '',
+        'api': {'enabled': True, 'listen': '127.0.0.1:9199', 'username': '',
                 'password': '', 'webui_root': '', 'ssl': {}},
         'log': {'level': 'info', 'file': '', 'rotation': 'daily', 'max_files': 7},
         'query_recorder': {'enabled': False, 'args': {

@@ -24,6 +24,9 @@ import GatewayDetectedNetwork from '@/components/agents/GatewayDetectedNetwork.v
 import { gatewayCopy } from '@/lib/gatewayCopy'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { queryRecorderCopy } from '@/lib/oxidns'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -35,7 +38,7 @@ const step = ref(0)
 const contentPane = ref<HTMLElement | null>(null)
 const environmentErrorPanel = ref<HTMLElement | null>(null)
 const config = ref<GatewayOnboardingConfig | null>(null)
-const settings = reactive<GatewayOnboardingSettings>({ rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query', default_forward: 'forward_remote' })
+const settings = reactive<GatewayOnboardingSettings>({ rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query', default_forward: 'forward_remote', query_recorder: false })
 const network = reactive(emptyGatewaySpec())
 const name = ref('home-gateway')
 const serverUrl = ref('')
@@ -377,7 +380,7 @@ watch(() => [props.open, props.profileId] as const, () => {
   loading.value = false; action.value = ''; refreshPending.value = false; baseline.value = ''; step.value = 0
   environmentAttempted.value = false
   Object.assign(network, emptyGatewaySpec()); name.value = 'home-gateway'
-  Object.assign(settings, { rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query', default_forward: 'forward_remote', confirm_template_conversion: false })
+  Object.assign(settings, { rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [], local_dns: 'https://223.5.5.5/dns-query', default_forward: 'forward_remote', query_recorder: false, confirm_template_conversion: false })
   serverUrl.value = window.location.origin
   if (props.open) void load()
 }, { immediate: true, flush: 'sync' })
@@ -503,6 +506,12 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
               <p v-if="localDnsWarning" id="onboarding-dns-warning" class="m-0 text-xs leading-relaxed text-warning-accent" role="status">{{ localDnsWarning }}</p>
             </FormField>
           </div>
+          <FormField label="OxiDNS 查询记录" html-for="onboarding-query-recorder" :hint="queryRecorderCopy.hint" :help="queryRecorderCopy.help" persistent-hint>
+            <div class="flex min-h-11 items-center gap-3">
+              <Switch id="onboarding-query-recorder" v-model="settings.query_recorder" :disabled="busy" />
+              <Label for="onboarding-query-recorder" class="text-sm">{{ settings.query_recorder ? '开启，记录每条 DNS 查询' : '关闭（默认）' }}</Label>
+            </div>
+          </FormField>
           <div v-if="config?.oxidns_mode === 'native'" class="space-y-1">
             <label class="flex min-h-11 cursor-pointer items-center gap-2 text-sm font-medium"><Checkbox v-model="settings.confirm_template_conversion" :disabled="busy" aria-describedby="onboarding-conversion-help" class="shrink-0" /><span>允许转换为 OxiDNS 模板</span></label>
             <p id="onboarding-conversion-help" class="mt-0 mb-0 ml-6 text-xs leading-relaxed text-muted-foreground">仅在原生配置无法保留时替换解析流程，并备份原配置；未勾选则停止。</p>

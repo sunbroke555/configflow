@@ -76,7 +76,10 @@
           <LoadingRows v-if="overviewLoading" :rows="5" />
           <SectionCard v-else>
             <EmptyState :icon="TriangleAlert" title="暂时无法读取 OxiDNS 数据" :description="overviewError || '等待核心返回监控数据。'">
-              <Button variant="outline" class="min-h-11" :disabled="overviewLoading" @click="refresh(true)">重试</Button>
+              <div class="flex flex-wrap justify-center gap-2">
+                <Button v-if="overviewErrorCode === 'API_NOT_CONFIGURED'" class="min-h-11" :disabled="openingSettings" @click="openSettings('api')"><Settings class="size-4" />{{ openingSettings ? '正在打开…' : '前往设置' }}</Button>
+                <Button variant="outline" class="min-h-11" :disabled="overviewLoading" @click="refresh(true)">重试</Button>
+              </div>
             </EmptyState>
           </SectionCard>
         </template>
@@ -167,7 +170,7 @@ async function changeTab(value: string) {
   if (value !== tab.value && await canLeavePolicy()) tab.value = value
 }
 const selectedRecord = ref<OxiDNSQuery | null>(null)
-const { overview, overviewLoading, overviewError, resettingStatistics, resetError, resetStatistics, clockSkewMs, qps, queries, queriesLoading, queriesError, recorder, filters,
+const { overview, overviewLoading, overviewError, overviewErrorCode, resettingStatistics, resetError, resetStatistics, clockSkewMs, qps, queries, queriesLoading, queriesError, recorder, filters,
   page, hasNext, autoRefresh, refresh, loadQueries, selectRecorder, applyFilters, nextPage, previousPage } = useOxiDNSMonitor(agentId, tab)
 const { devices, loading: devicesLoading, error: devicesError, load: loadDevices } = useOxiDNSDevices()
 const currentDevice = computed(() => devices.value?.find(device => device.id === agentId.value) || overview.value?.agent)

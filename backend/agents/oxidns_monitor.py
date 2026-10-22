@@ -49,7 +49,7 @@ RCODE_FILTER_TEXT = {
 
 MESSAGES = {
     'UPGRADE_REQUIRED': '请将此 Agent 升级到 1.7.0-go 或更新版本后使用 DNS 监控。',
-    'API_NOT_CONFIGURED': 'OxiDNS 管理 API 未启用，请在 OxiDNS 配置中启用后推送。',
+    'API_NOT_CONFIGURED': 'OxiDNS 管理 API 未启用。请在 OxiDNS 设置的「API / 日志」中开启，保存后发布到此 Agent。',
     'RECORDER_NOT_CONFIGURED': '查询记录未启用，请在 OxiDNS 设置中开启查询记录并推送配置。',
     'TLS_UNSUPPORTED': '此监控连接暂不支持当前 OxiDNS API 的 TLS 配置。',
     'CORE_UNREACHABLE': '暂时无法连接 OxiDNS 管理 API，请检查核心运行状态。',

@@ -9,7 +9,7 @@ import { values, render, click, input, lastChange } from './helpers/oxidns-commo
 describe('OxiDNS current common settings', () => {
   it('shows all seven former control groups without tool, preview or save actions', async () => {
     await render()
-    for (const label of ['核心设置', '分流规则', 'DNS 上游', '缓存', '特色功能', 'WebUI / 日志', '高级']) {
+    for (const label of ['核心设置', '分流规则', 'DNS 上游', '缓存', '特色功能', 'API / 日志', '高级']) {
       expect(document.querySelector(`[role="tab"][data-state]`) && [...document.querySelectorAll('[role="tab"]')].some(tab => tab.textContent?.trim() === label)).toBe(true)
     }
     expect(document.querySelector('[role="dialog"]')).toBeNull()
