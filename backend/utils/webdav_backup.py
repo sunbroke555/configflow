@@ -2,13 +2,21 @@
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
-from datetime import datetime
+from collections import namedtuple
+from datetime import datetime, timedelta
 
 
 logger = logging.getLogger(__name__)
+# Settings saved before retention existed use these values.
+DEFAULT_KEEP_LATEST = 30
+DEFAULT_KEEP_DAILY = 30
+RETENTION_LIMITS = {'keep_latest': 1000, 'keep_daily': 3650}
+_BACKUP_NAME = re.compile(r'^config_backup_(\d{8})_(\d{6})(?:_(\d{6}))?\.json$')
+BackupResult = namedtuple('BackupResult', 'filename removed')
 _AGENT_RUNTIME_FIELDS = frozenset({
     'last_heartbeat', 'status', 'version', 'service_status', 'config_version',
     'system_metrics', 'cpu', 'memory', 'disk', 'network', 'updated_at',
@@ -70,10 +78,60 @@ def upload_backup(snapshot, settings, trigger='手动'):
         size = os.path.getsize(temporary)
         client.upload_sync(remote_path=directory + filename, local_path=temporary)
         logger.info('WebDAV %s备份完成：%s%s（%.1f KB）', trigger, directory, filename, size / 1024)
-        return filename
     finally:
         if temporary is not None and os.path.exists(temporary):
             os.remove(temporary)
+    return BackupResult(filename, prune_backups(client, directory, settings))
+
+
+def retention_settings(settings):
+    """Saved values; missing or invalid ones (e.g. from an imported file) use the defaults."""
+    values = []
+    for key, default in (('keep_latest', DEFAULT_KEEP_LATEST), ('keep_daily', DEFAULT_KEEP_DAILY)):
+        value = settings.get(key, default)
+        values.append(value if type(value) is int and 0 <= value <= RETENTION_LIMITS[key] else default)
+    return tuple(values)
+
+
+def expired_backups(names, keep_latest, keep_daily, today):
+    """Backups this program named that are neither among the newest keep_latest
+    nor the newest of one of the last keep_daily days; keep_latest 0 keeps all."""
+    if keep_latest <= 0:
+        return []
+    backups = sorted(((m.group(1), m.group(2), m.group(3) or '', name)
+                      for name in names if (m := _BACKUP_NAME.match(name))), reverse=True)
+    keep = {name for *_, name in backups[:keep_latest]}
+    if keep_daily > 0:
+        first_day = (today - timedelta(days=keep_daily - 1)).strftime('%Y%m%d')
+        days = set()
+        for day, _, _, name in backups:
+            if day >= first_day and day not in days:
+                days.add(day)
+                keep.add(name)
+    return [name for *_, name in backups if name not in keep]
+
+
+def prune_backups(client, directory, settings):
+    """Delete expired backups after an upload; failures are only logged."""
+    keep_latest, keep_daily = retention_settings(settings)
+    if keep_latest <= 0:
+        return 0
+    try:
+        names = client.list(directory)
+    except Exception as error:
+        logger.warning('WebDAV 旧备份清理失败：无法列出备份目录（%s）', describe_webdav_error(error))
+        return 0
+    removed = 0
+    for name in expired_backups(names, keep_latest, keep_daily, datetime.now().date()):
+        try:
+            client.clean(directory + name)
+            removed += 1
+        except Exception as error:
+            logger.warning('WebDAV 旧备份 %s 删除失败（%s）', name, describe_webdav_error(error))
+    if removed:
+        logger.info('WebDAV 已清理 %d 个旧备份（保留最近 %d 份及最近 %d 天每天最后一份）',
+                    removed, keep_latest, keep_daily)
+    return removed
 
 
 def _configuration_changed(previous, current):
