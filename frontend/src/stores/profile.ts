@@ -18,6 +18,9 @@ export interface Profile {
 
 const profiles = ref<Profile[]>([])
 const loading = ref(false)
+// Until a tab without its own choice knows the server default, pages must not
+// send profile requests for the 'default' placeholder.
+const profileReady = ref(hasChosenProfile())
 let refreshing: Promise<Profile[]> | undefined
 
 const refreshProfiles = (): Promise<Profile[]> => {
@@ -35,6 +38,7 @@ const refreshProfiles = (): Promise<Profile[]> => {
       return profiles.value
     } finally {
       loading.value = false
+      profileReady.value = true
       refreshing = undefined
     }
   })()
@@ -82,6 +86,7 @@ export const useProfileStore = () => ({
   activeProfileId,
   activeProfile,
   defaultProfileId,
+  profileReady,
   refreshProfiles,
   switchProfile,
   profileName,

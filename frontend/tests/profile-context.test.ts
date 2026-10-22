@@ -185,8 +185,18 @@ describe('default profile for a new tab', () => {
   const list = [{ id: 'default', name: 'Default', is_default: false }, { id: 'setup', name: 'Setup', is_default: true }]
   it('opens the server default when this tab never picked a profile', async () => {
     clearActiveProfileId()
-    api.defaults.adapter = async config => response(config, config.url === '/profiles' ? list : {})
-    await store.refreshProfiles()
+    let release!: () => void
+    const listed = new Promise<void>(resolve => { release = resolve })
+    api.defaults.adapter = async config => {
+      if (config.url === '/profiles') await listed
+      return response(config, config.url === '/profiles' ? list : {})
+    }
+    store.profileReady.value = false
+    const refreshing = store.refreshProfiles()
+    // Pages wait while the placeholder id is still active.
+    expect(store.profileReady.value).toBe(false)
+    release(); await refreshing
+    expect(store.profileReady.value).toBe(true)
     expect(activeProfileId.value).toBe('setup')
   })
 
