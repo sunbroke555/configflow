@@ -12,6 +12,8 @@ from backend.common.gateway_onboarding import (
     gateway_onboarding_state, prepare_gateway_onboarding,
 )
 from backend.common.oxidns_editor import prepare_editor
+from backend.common.oxidns_settings import normalize_oxidns_settings
+from backend.converters.oxidns import generate_oxidns_config
 from backend.routes import register_blueprints
 
 
@@ -520,3 +522,110 @@ def test_install_preview_shows_ip_takeover_overlaps():
         '这些地址的连接会先命中「Proxy IP」，部分直连网站可能会走代理。']
     _, report = prepare_gateway_onboarding(config, form(rule_set_ids=[]))
     assert not any(warning.startswith('IP 接管') for warning in report['warnings'])
+
+
+@pytest.mark.parametrize('stale, expected, warned', [
+    ({'username': 'admin', 'password': ''}, {'username': '', 'password': ''}, '只填写了一半'),
+    ({'listen': ''}, {'listen': '127.0.0.1:9199'}, None),
+    ({'ssl': {'cert': 'a.pem'}}, {'ssl': {}}, 'TLS'),
+    ({'listen': '0.0.0.0:9199'}, {'listen': '127.0.0.1:9199'}, '已改为仅本机'),
+    ({'listen': '[::1]:9300'}, {'listen': '[::1]:9300'}, None),
+])
+def test_template_onboarding_repairs_leftovers_of_a_disabled_api(stale, expected, warned):
+    config = snapshot()
+    config['oxidns']['api'].update(enabled=False, **stale)
+    candidate, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    assert candidate['oxidns']['api']['enabled'] is True
+    assert {key: candidate['oxidns']['api'][key] for key in expected} == expected
+    assert any(warned in item for item in report['warnings']) if warned else not any('管理 API' in item for item in report['warnings'])
+
+
+def test_template_onboarding_keeps_an_enabled_api_untouched():
+    config = snapshot()
+    config['oxidns']['api'].update(enabled=True, listen='0.0.0.0:9300')
+    candidate, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    assert candidate['oxidns']['api'] == normalize_oxidns_settings(config['oxidns'])['api']
+
+
+def test_template_onboarding_enables_management_api_and_keeps_credentials():
+    config = snapshot()
+    config['oxidns']['api'].update(enabled=False, listen='0.0.0.0:9300', username='admin', password='private')
+    candidate, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    assert candidate['oxidns']['api'] == {**config['oxidns']['api'], 'enabled': True}
+    api = yaml.safe_load(generate_oxidns_config(candidate))['api']['http']
+    assert api['listen'] == '0.0.0.0:9300'
+    assert api['auth'] == {'type': 'basic', 'username': 'admin', 'password': 'private'}
+
+
+def test_native_onboarding_adds_default_management_api_when_missing():
+    config = snapshot()
+    settings = prepare_editor(config['oxidns'], config)
+    document = yaml.safe_load(settings['native_config'])
+    document.pop('api', None)
+    settings['native_config'] = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
+    config['oxidns'] = settings
+    candidate, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    assert candidate['oxidns']['config_mode'] == 'native'
+    assert yaml.safe_load(candidate['oxidns']['native_config'])['api'] == {'http': {'listen': '127.0.0.1:9199'}}
+
+
+def test_native_onboarding_keeps_existing_management_api():
+    config = snapshot()
+    settings = prepare_editor(config['oxidns'], config)
+    document = yaml.safe_load(settings['native_config'])
+    document['api'] = {'http': {'listen': '127.0.0.1:9300',
+                                'auth': {'type': 'basic', 'username': 'admin', 'password': 'private'}}}
+    settings['native_config'] = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
+    config['oxidns'] = settings
+    candidate, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    assert yaml.safe_load(candidate['oxidns']['native_config'])['api'] == document['api']
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_template_onboarding_applies_query_recorder_choice(enabled):
+    config = snapshot()
+    config['oxidns']['query_recorder']['enabled'] = not enabled
+    candidate, report = prepare_gateway_onboarding(config, form(query_recorder=enabled))
+    assert report['ready'], report
+    assert candidate['oxidns']['query_recorder']['enabled'] is enabled
+    assert candidate['oxidns']['query_recorder']['args'] == config['oxidns']['query_recorder']['args']
+    plugins = yaml.safe_load(generate_oxidns_config(candidate))['plugins']
+    assert any(item['type'] == 'query_recorder' for item in plugins) is enabled
+
+
+def test_onboarding_keeps_query_recorder_when_client_omits_choice():
+    config = snapshot()
+    config['oxidns']['query_recorder']['enabled'] = True
+    candidate, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    assert candidate['oxidns']['query_recorder']['enabled'] is True
+
+
+def test_onboarding_rejects_non_boolean_query_recorder():
+    with pytest.raises(GatewayOnboardingError, match='query_recorder'):
+        prepare_gateway_onboarding(snapshot(), form(query_recorder='yes'))
+
+
+def test_native_onboarding_toggles_query_recorder():
+    config = snapshot()
+    config['oxidns'] = prepare_editor(config['oxidns'], config)
+    candidate, report = prepare_gateway_onboarding(config, form(query_recorder=True))
+    assert report['ready'], report
+    assert candidate['oxidns']['config_mode'] == 'native'
+    document = yaml.safe_load(candidate['oxidns']['native_config'])
+    assert any(item['type'] == 'query_recorder' for item in document['plugins'])
+    again, report = prepare_gateway_onboarding({**config, 'oxidns': candidate['oxidns']}, form(query_recorder=False))
+    assert report['ready'], report
+    assert not any(item['type'] == 'query_recorder' for item in yaml.safe_load(again['oxidns']['native_config'])['plugins'])
+
+
+def test_onboarding_state_reports_query_recorder():
+    config = snapshot()
+    assert gateway_onboarding_state(config, 1)['settings']['query_recorder'] is False
+    config['oxidns']['query_recorder']['enabled'] = True
+    assert gateway_onboarding_state(config, 1)['settings']['query_recorder'] is True

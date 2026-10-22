@@ -11,7 +11,7 @@
             <Button variant="outline" type="button" class="min-h-11 text-xs" :disabled="disabled || !canApplyPerformance || Boolean(activeError())" @click="applyPerformance">填入已验证性能参数</Button>
             <FieldHelp label="已验证性能参数" :text="canApplyPerformance ? optionHelp('想使用已验证的一组性能参数，且当前结构支持编辑。', '填入 2 线程、300 秒过期缓存保留、2048 条探测缓存及并发和备用参数。保留上游地址、规则及自定义参数，仅改草稿，需统一保存。') : '当前性能设置使用自定义结构，请通过完整参数编辑。'" />
           </div>
-          <OxidnsFields :settings="draft" :fields="coreFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+          <OxidnsFields :settings="draft" :fields="coreFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
         <TabsContent force-mount value="rules" class="mt-0 space-y-5 data-[state=inactive]:hidden">
           <div class="flex items-center gap-1"><h3 class="text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" :text="optionHelp('希望不同网站或 IP 使用不同的 DNS 时设置。', '选中的规则按规则管理中的顺序执行，并同步处理流程和规则资源。已有无法对应的手工流程时，请到完整参数编辑，避免覆盖自定义逻辑。')" /></div>
@@ -22,10 +22,10 @@
             </FormField>
           </div>
           <p v-if="!rules.length && !ruleSets.length" class="text-sm text-muted-foreground">当前空间尚无规则，可先在「规则管理」中添加。</p>
-          <OxidnsFields :settings="draft" :fields="hostFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+          <OxidnsFields :settings="draft" :fields="hostFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
-        <TabsContent force-mount value="upstreams" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">DNS 上游</h3><OxidnsFields :settings="draft" :fields="upstreamFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
-        <TabsContent force-mount value="cache" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">缓存</h3><OxidnsFields :settings="draft" :fields="cacheFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
+        <TabsContent force-mount value="upstreams" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">DNS 上游</h3><OxidnsFields :settings="draft" :fields="upstreamFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
+        <TabsContent force-mount value="cache" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">缓存</h3><OxidnsFields :settings="draft" :fields="cacheFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
         <TabsContent force-mount value="features" class="mt-0 space-y-3 data-[state=inactive]:hidden">
           <Collapsible v-for="feature in featureGroups" :key="feature.key" :default-open="feature.key === initialFeature" class="group rounded-lg border border-border bg-card">
             <div class="relative flex min-h-12 items-center justify-between gap-2 px-3 py-3 text-sm font-medium">
@@ -37,13 +37,29 @@
             <CollapsibleContent force-mount class="space-y-4 border-t border-border p-3 data-[state=closed]:hidden">
               <div v-if="isCustom(`${feature.key}.enabled`)" class="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"><span>自定义配置</span><FieldHelp :label="`${feature.title}配置状态`" :text="capability(`${feature.key}.enabled`)?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability(`${feature.key}.enabled`)?.target || feature.key)">完整参数<ChevronRight class="size-3.5" /></Button></div>
               <div v-else class="flex min-h-11 items-center gap-3"><Switch :id="`oxi-enable-${feature.key}`" :model-value="Boolean(read(`${feature.key}.enabled`))" :disabled="disabled" @update:model-value="change(`${feature.key}.enabled`, $event)" /><Label :for="`oxi-enable-${feature.key}`">启用{{ feature.title }}</Label></div>
-              <OxidnsFields v-show="feature.key === 'rule_update' || (read(`${feature.key}.enabled`) && !isCustom(`${feature.key}.enabled`))" :settings="draft" :fields="featureFields(feature)" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+              <OxidnsFields v-show="feature.key === 'rule_update' || (read(`${feature.key}.enabled`) && !isCustom(`${feature.key}.enabled`))" :settings="draft" :fields="featureFields(feature)" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
             </CollapsibleContent>
           </Collapsible>
         </TabsContent>
-        <TabsContent force-mount value="access" class="mt-0 space-y-4 data-[state=inactive]:hidden"><h3 class="text-sm font-semibold">WebUI / 日志</h3><OxidnsFields :settings="draft" :fields="apiFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" /></TabsContent>
+        <TabsContent force-mount value="access" class="mt-0 space-y-4 data-[state=inactive]:hidden">
+          <h3 class="text-sm font-semibold">管理 API / WebUI</h3>
+          <OxidnsFields :settings="draft" :fields="apiFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+          <section v-if="read('api.enabled')" ref="apiAuthSection" class="space-y-3 rounded-lg border border-border bg-card p-3" aria-labelledby="oxi-api-auth-title">
+            <div class="flex flex-wrap items-center gap-1">
+              <h4 id="oxi-api-auth-title" class="text-sm font-medium">访问认证（可选）</h4>
+              <FieldHelp label="访问认证" :text="optionHelp('API 监听局域网地址，或需要限制谁能打开 WebUI 时设置。', '用户名和密码需同时填写，两项都留空则不验证身份。DNS 面板和规则更新会自动使用这组凭据，无需另行配置。')" />
+              <span class="chip ml-auto shrink-0" :class="apiAuthSet && 'chip-ok'">{{ apiAuthSet ? '已设置' : '未设置' }}</span>
+            </div>
+            <p class="m-0 text-xs leading-relaxed" :class="apiAuthWarning ? 'text-warning-accent' : 'text-muted-foreground'" role="status">{{ apiAuthNote }}</p>
+            <OxidnsFields :settings="draft" :fields="apiAuthFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+            <p v-if="errors['api.auth'] && !apiAuthCustom" :role="apiAuthIncomplete ? undefined : 'alert'" class="m-0 text-xs" :class="apiAuthIncomplete ? 'text-muted-foreground' : 'text-destructive-accent'">{{ errors['api.auth'] }}</p>
+          </section>
+          <OxidnsFields :settings="draft" :fields="apiExtraFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+          <h3 class="border-t border-border pt-4 text-sm font-semibold">日志</h3>
+          <OxidnsFields :settings="draft" :fields="logFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+        </TabsContent>
         <TabsContent force-mount value="advanced" class="mt-0 space-y-4 data-[state=inactive]:hidden">
-          <OxidnsFields :settings="draft" :fields="positionFields" :disabled="disabled" :capabilities="capabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+          <OxidnsFields :settings="draft" :fields="positionFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
           <div v-if="isCustom('custom_matches')" class="flex items-center gap-1 text-xs text-muted-foreground"><span>自定义匹配使用手工结构</span><FieldHelp label="自定义匹配配置状态" :text="capability('custom_matches')?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability('custom_matches')?.target || 'custom_matches')">完整参数<ChevronRight class="size-3.5" /></Button></div>
           <OxidnsMatchEditor v-else :model-value="customMatches" :disabled="disabled" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
           <div class="flex flex-wrap items-center gap-2 border-t border-border pt-3"><span class="text-xs text-muted-foreground">其他插件、网络出站和扩展字段</span><Button type="button" variant="outline" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">完整参数<ChevronRight class="size-3.5" /></Button></div>
@@ -54,9 +70,9 @@
   </section>
 </template>
 <script setup lang="ts">
-import { reactive, ref, watch, computed, onUnmounted } from 'vue'
+import { reactive, ref, watch, computed, nextTick, onUnmounted } from 'vue'
 import { ChevronDown, ChevronRight } from '@lucide/vue'
-import { apiFields, applyVerifiedOxidnsTemplate, cacheFields, isDnsRuleType, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
+import { apiAuthFields, apiExtraFields, apiFields, applyVerifiedOxidnsTemplate, logFields, cacheFields, isDnsRuleType, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
 import { optionCopy, optionHelp } from '@/lib/optionCopy'
 import OxidnsFields, { type OxidnsFieldCapability } from './OxidnsFields.vue'
 import OxidnsMatchEditor from './OxidnsMatchEditor.vue'
@@ -74,7 +90,7 @@ const emit = defineEmits<{ change: [changes: Record<string, unknown>]; error: [m
 const clone = <T,>(value: T): T => value === undefined ? value : JSON.parse(JSON.stringify(value))
 const draft = reactive<Record<string, any>>(clone(props.values))
 const errors = reactive<Record<string, string>>({})
-const tab = ref(featureGroups.some(feature => feature.key === props.initialFeature) ? 'features' : 'core')
+const tab = ref(props.initialFeature === 'api' ? 'access' : featureGroups.some(feature => feature.key === props.initialFeature) ? 'features' : 'core')
 const customReason = '当前配置使用自定义结构，请通过完整参数编辑，现有内容会保留。'
 const coreFields = sourceCoreFields
 const upstreamDescriptions: Record<string, ReturnType<typeof optionCopy>> = {
@@ -82,7 +98,7 @@ const upstreamDescriptions: Record<string, ReturnType<typeof optionCopy>> = {
   remote_dns: optionCopy('设置代理分流的查询上游，临时地址由它提供。', '需要调整代理分流所用上游，Fake-IP 须由外部上游提供。', '逐条填写当前上游。域名地址可用引导 DNS 或指定连接 IP，避免循环解析；标为代理 DNS 不会自动让连接走代理。'),
 }
 const upstreamFields = sourceUpstreamFields.map(field => upstreamDescriptions[field.path] ? { ...field, ...upstreamDescriptions[field.path], emptyHint: '尚未配置上游，点击添加上游填写地址。' } : field)
-const tabs = [{ value: 'core', label: '核心设置' }, { value: 'rules', label: '分流规则' }, { value: 'upstreams', label: 'DNS 上游' }, { value: 'cache', label: '缓存' }, { value: 'features', label: '特色功能' }, { value: 'access', label: 'WebUI / 日志' }, { value: 'advanced', label: '高级' }]
+const tabs = [{ value: 'core', label: '核心设置' }, { value: 'rules', label: '分流规则' }, { value: 'upstreams', label: 'DNS 上游' }, { value: 'cache', label: '缓存' }, { value: 'features', label: '特色功能' }, { value: 'access', label: 'API / 日志' }, { value: 'advanced', label: '高级' }]
 const hostFields: OxidnsField[] = [{ path: 'custom_hosts', label: '自定义 Hosts', type: 'lines', wide: true, placeholder: 'full:example.com 192.0.2.10 2001:db8::10', ...optionCopy('为指定域名固定返回地址，支持双栈查询。', '希望手动指定某个域名的查询结果，而非交给上游解析。', '每条填写域名规则和一个或多个 IP，支持 IPv4、IPv6。可逐条编辑，也可切换 YAML 批量填写，地址应按希望的匹配范围设置。') }]
 const positionFields: OxidnsField[] = [{ path: 'custom_match_position', label: '自定义匹配位置', ...optionCopy('选择自定义规则先执行，还是让自动规则优先。', '已有自定义匹配，需要决定它与自动域名规则的先后。', '放在前面可优先覆盖自动规则；放在后面仅在自动域名规则未结束请求时执行，但仍早于动态域名集和响应 IP 分流。'), options: [{ value: 'head', label: '在自动规则之前' }, { value: 'tail', label: '在自动规则之后' }] }]
 const ruleGroups = [
@@ -102,9 +118,17 @@ const customMatches = computed(() => {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> =>
     item !== null && typeof item === 'object' && !Array.isArray(item)) : []
 })
+// The backend accepts API argument edits in the same batch that enables the API,
+// so don't keep them locked while the projection still reflects the disabled state.
+const fieldCapabilities = computed(() => {
+  const capabilities = props.capabilities
+  if (!read('api.enabled') || capabilities['api.enabled']?.editable === false) return capabilities
+  return Object.fromEntries(Object.entries(capabilities).map(([key, value]) =>
+    [key, key.startsWith('api.') && key !== 'api.enabled' && value.editable === false && value.reason?.startsWith('请先启用 API') ? { ...value, editable: true, reason: undefined } : value]))
+})
 function capability(path: string): OxidnsFieldCapability | undefined {
   const parts = path.split('.')
-  while (parts.length) { const found = props.capabilities[parts.join('.')]; if (found) return found; parts.pop() }
+  while (parts.length) { const found = fieldCapabilities.value[parts.join('.')]; if (found) return found; parts.pop() }
 }
 const isCustom = (path: string) => capability(path)?.editable === false
 const ruleDownloadFields = new Set(['rule_update.args.timeout', 'rule_update.args.outbound', 'rule_update.args.socks5'])
@@ -130,8 +154,34 @@ function write(path: string, value: unknown) {
 function change(path: string, value: unknown) {
   if (props.disabled || isCustom(path)) return
   write(path, value)
+  if (path.startsWith('api.')) checkApiAuth()
   reportErrors()
   emit('change', { [path]: value === undefined ? null : clone(value) })
+  // Turning the API on is when credentials matter; bring the optional block into view.
+  if (path === 'api.enabled' && value === true) nextTick(() => apiAuthSection.value?.scrollIntoView?.({ block: 'nearest' }))
+}
+const apiAuthSection = ref<HTMLElement | null>(null)
+const apiText = (path: string) => { const value = read(path); return typeof value === 'string' ? value : '' }
+const apiAuthSet = computed(() => Boolean(apiText('api.username') && apiText('api.password')))
+// The Agent connects to the API on the core host itself, so only these hosts keep it private.
+function loopbackListen(listen: string) {
+  const host = (listen.startsWith('[') ? listen.slice(1, listen.indexOf(']')) : listen.split(':').length === 2 ? listen.split(':')[0] : listen).toLowerCase()
+  return host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+}
+const apiAuthWarning = computed(() => !apiAuthSet.value && !loopbackListen(apiText('api.listen').trim()))
+const apiAuthNote = computed(() => apiAuthSet.value ? '已设置账号：DNS 面板和规则更新会自动使用这组凭据。'
+  : apiAuthWarning.value ? 'API 监听在本机以外的地址且未设置账号，局域网设备可直接调用接口、查看查询记录，建议设置用户名和密码。'
+    : '当前仅本机可访问 API，可以不设置账号。改为局域网监听或启用 WebUI 时，建议设置用户名和密码。')
+// Mirrors the backend pair rule and the literal-only credentials the Agent can forward.
+const apiAuthCustom = computed(() => isCustom('api.username') || isCustom('api.password'))
+const apiAuthIncomplete = computed(() => Boolean(apiText('api.username')) !== Boolean(apiText('api.password')))
+function checkApiAuth() {
+  const username = apiText('api.username'), password = apiText('api.password')
+  const message = apiAuthIncomplete.value ? (username ? '还需填写密码；不需要认证时请清空用户名' : '还需填写用户名；不需要认证时请清空密码')
+    : username.includes(':') ? '用户名不能包含英文冒号'
+      : [username, password].some(value => value.includes('${')) ? '用户名和密码不能包含 ${，DNS 面板无法读取环境变量引用'
+        : [username, password].some(value => /[\u0000-\u001f\u007f-\u009f]/.test(value)) ? '用户名和密码不能包含控制字符' : ''
+  errors['api.auth'] = message
 }
 const cacheErrorDependencies: Record<string, string[]> = {
   cache_size: ['cache_enabled'],
@@ -143,7 +193,9 @@ const cacheErrorDependencies: Record<string, string[]> = {
 function activeError() {
   return Object.entries(errors).find(([path, message]) => message && !isCustom(path)
     && !(cacheErrorDependencies[path] || []).some(dependency => !read(dependency))
-    && !featureGroups.some(feature => path.startsWith(`${feature.key}.`) && !path.endsWith('.enabled') && !ruleDownloadFields.has(path) && !read(`${feature.key}.enabled`)))?.[1] || ''
+    && !featureGroups.some(feature => path.startsWith(`${feature.key}.`) && !path.endsWith('.enabled') && !ruleDownloadFields.has(path) && !read(`${feature.key}.enabled`))
+    && !(path.startsWith('api.') && path !== 'api.enabled' && !read('api.enabled'))
+    && !(path === 'api.auth' && apiAuthCustom.value))?.[1] || ''
 }
 function reportErrors() { emit('error', activeError()) }
 function setError(path: string, message: string) { errors[path] = message; reportErrors() }
@@ -168,7 +220,10 @@ watch(() => props.values, value => {
     } else if (path) write(path, after)
   }
   sync(draft, value)
+  checkApiAuth()
   reportErrors()
 }, { deep: true })
+checkApiAuth()
+if (activeError()) reportErrors()
 onUnmounted(() => emit('error', ''))
 </script>

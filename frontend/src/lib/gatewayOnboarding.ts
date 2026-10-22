@@ -17,7 +17,8 @@ export const onboardingSettingsKey = (settings: GatewayOnboardingSettings) => JS
   direct_rule_set_ids: [...new Set(settings.direct_rule_set_ids)].sort(),
   proxy_rule_set_ids: [...new Set(settings.proxy_rule_set_ids)].sort(),
   default_forward: settings.default_forward || 'forward_remote',
-  local_dns: settings.local_dns.trim(), confirm_template_conversion: settings.confirm_template_conversion === true,
+  local_dns: settings.local_dns.trim(), query_recorder: settings.query_recorder === true,
+  confirm_template_conversion: settings.confirm_template_conversion === true,
 })
 export function installationHostMatches(session: GatewayInstallation | null, profileId: string): boolean {
   const agent = session?.agents?.mihomo

@@ -3,7 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, ref } from 'vue'
 import { oxidnsMonitorApi } from '@/api'
 import { forgetOxiDNSRateSamples, useOxiDNSMonitor } from '@/composables/useOxiDNSMonitor'
-import { emptyQueryFilters, formatDNSCode, querySourceLabel, type OxiDNSOverview } from '@/types/oxidnsMonitor'
+import { emptyQueryFilters, isAgentProbe, formatDNSCode, querySourceLabel, type OxiDNSOverview } from '@/types/oxidnsMonitor'
 import OxiDNSQueryTable from '@/components/agents/OxiDNSQueryTable.vue'
 import OxiDNSQueryDetail from '@/components/agents/OxiDNSQueryDetail.vue'
 import OxiDNSMetric from '@/components/agents/OxiDNSMetric.vue'
@@ -517,6 +517,36 @@ describe('OxiDNS monitor display', () => {
     expect(wrapper.text()).not.toContain('命中规则')
     expect(wrapper.text()).toContain('本页 1 条')
     expect(oxidnsMonitorApi.query).toHaveBeenCalledTimes(1)
+  })
+  it('labels Agent DNS checks over loopback and leaves device queries unlabelled', async () => {
+    const probe = { ...queryRecord, id: 13, client_ip: '127.0.0.1', questions_json: [{ name: 'example.com.', qtype: 1, qclass: 1 }] }
+    const wrapper = mount(OxiDNSQueryTable, { props: {
+      agentId: 'one', recorders: ['queries'], recorder: 'queries', filters: emptyQueryFilters(),
+      data: { ...records(), records: [probe, queryRecord, { ...queryRecord, id: 14, questions_json: probe.questions_json }] },
+      loading: false, error: '', page: 1, hasNext: false
+    } })
+    wrappers.push(wrapper)
+    await flushPromises()
+    const rows = wrapper.findAll('tbody tr')
+    expect(rows[0].text()).toContain('Agent 检查')
+    expect(rows[1].text()).not.toContain('Agent 检查')
+    expect(rows[2].text()).not.toContain('Agent 检查')
+  })
+  it('recognizes only loopback example.com checks as Agent probes', () => {
+    const probe = (client_ip: string, name: string) => isAgentProbe({ client_ip, questions_json: [{ name, qtype: 1, qclass: 1 }] })
+    expect(probe('127.0.0.1', 'example.com.')).toBe(true)
+    expect(probe('::1', 'EXAMPLE.COM')).toBe(true)
+    expect(probe('::ffff:127.0.0.1', 'example.com')).toBe(true)
+    expect(probe('192.168.3.8', 'example.com.')).toBe(false)
+    expect(probe('127.0.0.1', 'www.example.com.')).toBe(false)
+    expect(isAgentProbe({ client_ip: '127.0.0.1', questions_json: [] })).toBe(false)
+  })
+  it('explains an Agent DNS check in query details', async () => {
+    vi.mocked(oxidnsMonitorApi.query).mockResolvedValue(response({ success: true, recorder: 'queries', record: {
+      ...queryRecord, client_ip: '127.0.0.1', questions_json: [{ name: 'example.com.', qtype: 1, qclass: 1 }], steps: [] } }))
+    wrappers.push(mount(OxiDNSQueryDetail, { attachTo: document.body, props: { agentId: 'one', recorder: 'queries', recordId: 12 } }))
+    await flushPromises()
+    expect(document.body.textContent).toContain('并非局域网设备的查询')
   })
   it('explains an IPv4 preference empty answer without inventing an upstream or cache hit', async () => {
     vi.mocked(oxidnsMonitorApi.query).mockResolvedValue(response({ success: true, recorder: 'queries', record: {

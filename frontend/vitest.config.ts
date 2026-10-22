@@ -5,5 +5,10 @@ import { fileURLToPath, URL } from 'node:url'
 export default defineConfig({
  plugins: [vue()],
  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
- test: { environment: 'jsdom', include: ['tests/*.test.ts'], pool: 'forks', maxWorkers: 2, minWorkers: 1 }
+ test: {
+  environment: 'jsdom', include: ['tests/*.test.ts'], pool: 'forks', maxWorkers: 2, minWorkers: 1,
+  // Node 25+ exposes a built-in localStorage that is undefined without --localstorage-file
+  // and shadows jsdom's Storage; disable it so tests use the browser implementation.
+  poolOptions: { forks: { execArgv: Number(process.versions.node.split('.')[0]) >= 25 ? ['--no-experimental-webstorage'] : [] } }
+ }
 })

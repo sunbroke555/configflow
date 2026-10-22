@@ -97,6 +97,20 @@ describe('OxiDNS monitor device selection', () => {
     await flushPromises()
     expect(wrapper.get('[data-test="recorder-settings"]').text()).toBe('office · query_recorder · 办公室 · Device one')
   })
+  it('opens the API settings when the core API is not configured', async () => {
+    vi.mocked(oxidnsMonitorApi.overview).mockRejectedValue({ response: { data: { success: false, code: 'API_NOT_CONFIGURED', message: 'OxiDNS 管理 API 未启用。' } } })
+    const { wrapper } = await render()
+    expect(wrapper.text()).toContain('OxiDNS 管理 API 未启用。')
+    await wrapper.findAll('button').find(button => button.text() === '前往设置')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="recorder-settings"]').text()).toContain('default · api ·')
+  })
+  it('does not offer API settings for other overview failures', async () => {
+    vi.mocked(oxidnsMonitorApi.overview).mockRejectedValue({ response: { data: { success: false, code: 'CORE_UNREACHABLE', message: '暂时无法连接 OxiDNS 管理 API。' } } })
+    const { wrapper } = await render()
+    expect(wrapper.text()).toContain('暂时无法连接 OxiDNS 管理 API。')
+    expect(wrapper.findAll('button').some(button => button.text() === '前往设置')).toBe(false)
+  })
   it('uses the actual default profile for a legacy Agent with no explicit binding', async () => {
     vi.mocked(oxidnsMonitorApi.overview).mockImplementation(async id => response({ ...snapshot(id), recorders: [] }))
     vi.mocked(profileApi.list).mockResolvedValue(response([{ id: 'default', name: '旧默认', is_default: false }, { id: 'home', name: '家庭', is_default: true }]))

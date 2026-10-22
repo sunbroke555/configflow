@@ -33,7 +33,7 @@ def test_verified_defaults_independent_from_mosdns():
     oxicache = next(p for p in oxi['plugins'] if p['tag'] == 'lazy_cache')['args']
     assert oxicache == {'size': 10240, 'lazy_cache_ttl': 300, 'short_circuit': True}
     assert oxi['runtime'] == {'worker_threads': 2}
-    assert 'api' not in oxi and 'file' not in oxi['log']
+    assert oxi['api'] == {'http': {'listen': '127.0.0.1:9199'}} and 'file' not in oxi['log']
     assert not any('query_summary' in str(p) for p in oxi['plugins'])
     mos = yaml.safe_load(generate_mosdns_config(original))
     assert next(p for p in mos['plugins'] if p['tag'] == 'lazy_cache')['args']['lazy_cache_ttl'] == 21600

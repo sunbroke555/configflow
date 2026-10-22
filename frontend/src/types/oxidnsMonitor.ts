@@ -133,6 +133,14 @@ export const formatDNSCode = (value: string | number | null) => {
   const normalized = original.trim().toLowerCase()
   return dnsCodeLabels.get(normalized) || original
 }
+// ConfigFlow Agents verify DNS after each publish by resolving their default
+// health_dns_name over loopback (preflight UDP/TCP, then consecutive health probes).
+export const AGENT_PROBE_NAME = 'example.com'
+const loopbackClient = (ip: string) => /^(?:::ffff:)?127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/i.test(ip) || ip === '::1'
+export const isAgentProbe = (record: Pick<OxiDNSQuery, 'client_ip' | 'questions_json'>) =>
+  loopbackClient(record.client_ip || '') && Array.isArray(record.questions_json) && record.questions_json.length > 0
+  && record.questions_json.every(question => typeof question?.name === 'string' && question.name.toLowerCase().replace(/\.$/, '') === AGENT_PROBE_NAME)
+export const AGENT_PROBE_NOTE = 'ConfigFlow Agent 在发布配置前后用 example.com 检查本机 DNS 是否可用，并非局域网设备的查询。'
 export const formatQueryTime = (value: number) => Number.isFinite(value) ? new Date(value).toLocaleString() : '—'
 export const queryTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
 export { querySourceLabel } from '@/lib/oxidnsQuerySource'

@@ -18,7 +18,7 @@ describe('OxiDNS current common settings', () => {
     expect((document.getElementById('oxi-worker_threads') as HTMLInputElement).placeholder).toBe('未配置（使用核心默认）')
     await click('DNS 上游')
     expect(document.getElementById('oxi-always_standby')?.parentElement?.textContent).toContain('未配置 · 核心默认')
-    await click('WebUI / 日志')
+    await click('API / 日志')
     expect(document.getElementById('oxi-log.level')?.textContent).toContain('未配置（使用核心默认）')
   })
 

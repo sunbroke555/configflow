@@ -8,6 +8,7 @@ export interface GatewayOnboardingSettings {
   proxy_rule_set_ids: string[]
   local_dns: string
   default_forward?: 'forward_remote' | 'forward_local'
+  query_recorder?: boolean
   confirm_template_conversion?: boolean
   expected_config_revision?: number
 }
