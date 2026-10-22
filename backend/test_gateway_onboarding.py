@@ -497,3 +497,10 @@ def test_direct_choice_caveat_names_only_rule_groups_that_can_select_direct():
     _, report = prepare_gateway_onboarding(config, form())
     assert [warning for warning in report['warnings'] if 'DIRECT' in warning] == [
         '策略组「Proxy」可以选择 DIRECT；此检查只确认存在代理出口，选中 DIRECT 时相关连接不会走代理。']
+    for name in ('Alpha', 'Beta', 'Gamma'):
+        config['proxy_groups'].append({'id': name, 'name': name, 'type': 'select', 'manual_nodes': ['n', 'DIRECT']})
+        config['rule_configs'].insert(0, {'id': 'r-' + name, 'itemType': 'rule', 'rule_type': 'DOMAIN',
+                                          'value': name.lower() + '.test', 'policy': name})
+    _, report = prepare_gateway_onboarding(config, form())
+    assert [warning for warning in report['warnings'] if 'DIRECT' in warning] == [
+        '策略组「Alpha、Beta、Gamma」等 4 个可以选择 DIRECT；此检查只确认存在代理出口，选中 DIRECT 时相关连接不会走代理。']

@@ -288,7 +288,8 @@ def _proxy_prerequisites(config, document=None):
         direct.update(additions)
     selectable = sorted({item.get('policy') for item in active_rules} & reachable & direct)
     if selectable:
-        warnings.append(f"策略组「{'、'.join(selectable)}」可以选择 DIRECT；此检查只确认存在代理出口，"
+        names = '、'.join(selectable[:3]) + (f'」等 {len(selectable)} 个' if len(selectable) > 3 else '」')
+        warnings.append(f'策略组「{names}可以选择 DIRECT；此检查只确认存在代理出口，'
                         '选中 DIRECT 时相关连接不会走代理。')
     return {'ready': ready, 'policies': policies, 'warnings': warnings, 'verified': True}
 
