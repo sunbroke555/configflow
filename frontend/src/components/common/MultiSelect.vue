@@ -29,6 +29,30 @@
     <PopoverContent class="w-(--reka-popper-anchor-width) p-0" align="start">
       <Command :filter-function="filterOptions">
         <CommandInput :placeholder="searchPlaceholder" />
+        <!-- 批量操作：无搜索词时作用于全部选项，有搜索词时只作用于匹配项 -->
+        <CommandSearchState v-if="options.length > 1" v-slot="{ search }">
+          <div class="flex flex-wrap items-center gap-1 border-b px-2 py-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              :disabled="!matchedOptions(search).length"
+              @click="toggleMatched(search)"
+            >
+              {{ bulkLabel(search) }}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              class="ml-auto"
+              :disabled="!modelValue.length"
+              @click="emit('update:modelValue', [])"
+            >
+              清空已选
+            </Button>
+          </div>
+        </CommandSearchState>
         <CommandList>
           <CommandEmpty>没有找到可选项，请调整搜索条件或先添加对应资源。</CommandEmpty>
           <CommandGroup>
@@ -55,7 +79,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Check, ChevronsUpDown } from '@lucide/vue'
+import { useFilter } from 'reka-ui'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import CommandSearchState from '@/components/common/CommandSearchState.vue'
 import {
   Command,
   CommandEmpty,
@@ -104,6 +131,34 @@ const toggle = (value: string): void => {
     ? props.modelValue.filter(item => item !== value)
     : [...props.modelValue, value]
   emit('update:modelValue', next)
+}
+
+/* 与 Command 内部的过滤保持一致：按显示文字包含匹配，忽略大小写和变音符号 */
+const { contains } = useFilter({ sensitivity: 'base' })
+
+const matchedOptions = (search: string): MultiSelectOption[] =>
+  search ? props.options.filter(option => contains(option.label, search)) : props.options
+
+const allMatchedSelected = (search: string): boolean => {
+  const matched = matchedOptions(search)
+  return matched.length > 0 && matched.every(option => props.modelValue.includes(option.value))
+}
+
+const bulkLabel = (search: string): string => {
+  const count = matchedOptions(search).length
+  if (!search) return allMatchedSelected(search) ? '取消全选' : `全选 ${count} 项`
+  return allMatchedSelected(search) ? `取消选中 ${count} 个结果` : `选中 ${count} 个结果`
+}
+
+/* 全部已选时整体取消，否则补选缺少的项；保留不在匹配范围内的已选项及原有顺序 */
+const toggleMatched = (search: string): void => {
+  const matchedValues = matchedOptions(search).map(option => option.value)
+  if (allMatchedSelected(search)) {
+    emit('update:modelValue', props.modelValue.filter(value => !matchedValues.includes(value)))
+    return
+  }
+  const missing = matchedValues.filter(value => !props.modelValue.includes(value))
+  emit('update:modelValue', [...props.modelValue, ...missing])
 }
 
 /* Command 默认按 value 的字符串形式过滤；这里传的是对象，改为按 label 匹配 */
