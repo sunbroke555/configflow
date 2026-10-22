@@ -504,3 +504,19 @@ def test_direct_choice_caveat_names_only_rule_groups_that_can_select_direct():
     _, report = prepare_gateway_onboarding(config, form())
     assert [warning for warning in report['warnings'] if 'DIRECT' in warning] == [
         '策略组「Alpha、Beta、Gamma」等 4 个可以选择 DIRECT；此检查只确认存在代理出口，选中 DIRECT 时相关连接不会走代理。']
+
+
+def test_install_preview_shows_ip_takeover_overlaps():
+    config = snapshot()
+    config['rule_library'].append({'id': 'lib-cn', 'name': 'China IP', 'behavior': 'ipcidr',
+                                   'source_type': 'content', 'content': '1.1.1.0/25'})
+    config['rule_configs'].insert(-1, {'id': 'cn', 'itemType': 'ruleset', 'library_rule_id': 'lib-cn', 'name': 'China IP',
+                                       'behavior': 'ipcidr', 'policy': 'DIRECT', 'source_type': 'content',
+                                       'content': '1.1.1.0/25', 'url': '/api/rules/China%20IP'})
+    _, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    assert [warning for warning in report['warnings'] if warning.startswith('IP 接管')] == [
+        'IP 接管「Proxy IP」与后面的直连规则「China IP」有 1 段地址重叠（如 1.1.1.0/24 覆盖 1.1.1.0/25）。'
+        '这些地址的连接会先命中「Proxy IP」，部分直连网站可能会走代理。']
+    _, report = prepare_gateway_onboarding(config, form(rule_set_ids=[]))
+    assert not any(warning.startswith('IP 接管') for warning in report['warnings'])

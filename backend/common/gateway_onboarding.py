@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from backend.common.linux_gateway import (
-    LinuxGatewayError, gateway_editor_state, validate_gateway_selection,
+    LinuxGatewayError, direct_overlap_warnings, gateway_editor_state, validate_gateway_selection,
 )
 from backend.common.oxidns_common import apply_common_settings, read_common_settings
 from backend.common.oxidns_settings import normalize_oxidns_settings, OxidnsSettingsError
@@ -469,6 +469,7 @@ def prepare_gateway_onboarding(config, value, base_url=''):
         for item in candidate.get('rule_configs', []):
             if item.get('id') in selected and item.get('policy') not in prerequisites['policies']:
                 report['warnings'].append(f"规则集「{item.get('name', item.get('id'))}」当前策略为 {item.get('policy', '未设置')}；DNS 或 IP 接管不会自动把此策略改为代理。")
+        report['warnings'].extend(direct_overlap_warnings(candidate))
         report['ready'] = True
     except (GatewayOnboardingError, LinuxGatewayError, OxidnsSettingsError, ValueError, yaml.YAMLError) as exc:
         report['blockers'].append(str(exc))
