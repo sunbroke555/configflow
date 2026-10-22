@@ -104,6 +104,16 @@ afterEach(() => {
 })
 
 describe('Linux gateway opt-in workflow', () => {
+  it('highlights an unchanged preview instead of listing differences', async () => {
+    vi.mocked(linuxGatewayApi.previewDraft).mockResolvedValueOnce(response({ ...draftPreview(), changes: [] }))
+    const wrapper = await render()
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', true)
+    await flushPromises()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('配置没有变化')
+    expect(wrapper.text()).toContain('无需保存')
+    expect(wrapper.text()).not.toContain('项配置')
+  })
   it('previews local settings offline without saving or changing host networking, then invalidates edited previews', async () => {
     vi.mocked(agentApi.getAll).mockResolvedValue(response([agent('one', { status: 'offline' })]))
     const wrapper = await render()
@@ -114,6 +124,7 @@ describe('Linux gateway opt-in workflow', () => {
     expect(linuxGatewayApi.previewDraft).toHaveBeenCalledWith('office', { enabled: true, rule_set_ids: ['telegram', 'disabled'] }, 9)
     expect(wrapper.text()).toContain('试用预览 · 尚未保存')
     expect(wrapper.text()).toContain('127.0.0.1:1053')
+    expect(wrapper.text()).toContain('保存后会改变 1 项配置')
     expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(false)
     expect(linuxGatewayApi.save).not.toHaveBeenCalled()
     expect(linuxGatewayApi.status).not.toHaveBeenCalled()
