@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { Check, Copy, LoaderCircle, Network, RefreshCw, RotateCcw } from '@lucide/vue'
+import { Check, CircleCheck, Copy, FileDiff, LoaderCircle, Network, RefreshCw, RotateCcw } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { linuxGatewayApi, type LinuxGatewayConfig, type LinuxGatewayDraftPreview, type LinuxGatewayRestorePoint, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewaySettings, type LinuxGatewayStatus } from '@/api/linuxGateway'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySettingsKey, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
@@ -403,17 +403,22 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
           </section>
 
           <section aria-labelledby="gateway-draft" class="space-y-3 border-t border-border pt-4">
-            <div><h2 id="gateway-draft" class="m-0 text-lg font-semibold">配置试用与恢复</h2><p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">先预览，再明确保存。网关设置会参与生成；原有基础 YAML 保留，关闭网关即可按原基础配置生成。</p></div>
+            <div><div class="flex items-center gap-1"><h2 id="gateway-draft" class="m-0 text-lg font-semibold">配置试用与恢复</h2><FieldHelp label="配置试用与恢复" :text="optionHelp('修改了网关开关或接管规则，想先看清会改变什么再保存时使用。', '预览只对比差异，不改动草稿。首次保存时自动备份 Mihomo、OxiDNS 草稿，之后可恢复；基础 YAML 不变，关闭网关即按原配置生成。')" /></div><p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">先预览会改变什么，确认后再保存。</p></div>
             <div class="flex flex-wrap gap-2">
               <Button variant="outline" class="min-h-11" :disabled="busy" @click="previewDraft"><LoaderCircle v-if="draftAction === 'preview'" class="size-4 animate-spin" />预览配置变更</Button>
               <Button v-if="restorePoint" variant="outline" class="min-h-11" :disabled="busy" @click="restoreDraft"><LoaderCircle v-if="draftAction === 'restore'" class="size-4 animate-spin" /><RotateCcw v-else class="size-4" />{{ draftReview?.action === 'restore' ? '恢复这份草稿' : '预览恢复变更' }}</Button>
             </div>
-            <p v-if="restorePoint" class="m-0 text-xs leading-relaxed text-muted-foreground">已保留试用前草稿 · <time :datetime="restorePoint.created_at">{{ new Date(restorePoint.created_at).toLocaleString() }}</time>。恢复会撤销之后对 Mihomo、OxiDNS 草稿的修改，请先核对差异。</p>
-            <p v-else class="m-0 text-xs leading-relaxed text-muted-foreground">首次保存变更时会保留当前 Mihomo、OxiDNS 草稿；后续保存沿用这份快照。</p>
+            <p v-if="restorePoint" class="m-0 text-xs leading-relaxed text-muted-foreground">可恢复到 <time :datetime="restorePoint.created_at">{{ new Date(restorePoint.created_at).toLocaleString() }}</time> 的草稿，之后的修改会被撤销。</p>
+            <p v-else class="m-0 text-xs leading-relaxed text-muted-foreground">第一次保存时会自动备份当前草稿，之后可以恢复。</p>
             <p v-if="draftError" role="alert" class="m-0 text-xs leading-relaxed text-destructive-accent">{{ draftError }}<Button variant="ghost" class="ml-1 min-h-11" :disabled="busy" @click="reloadDraft">重新读取已保存草稿</Button></p>
             <div v-if="draftReview" class="space-y-2" aria-live="polite">
-              <p class="m-0 text-sm font-medium">{{ draftReview.action === 'restore' ? '恢复预览 · 尚未恢复' : '试用预览 · 尚未保存' }} · <span class="num">{{ draftReview.changes.length }}</span> 项变更</p>
-              <p class="m-0 text-xs text-muted-foreground">{{ draftReview.action === 'restore' ? '核对后点击「恢复这份草稿」。只恢复草稿，需要另行发布到设备。' : '核对下方差异后，在底部保存草稿或保存并发布。OxiDNS 草稿不变。' }}</p>
+              <div class="flex items-start gap-2.5 rounded-md border px-3 py-2.5" :class="draftReview.changes.length ? 'border-primary-accent/40 bg-primary-soft' : 'border-success-accent/40 bg-success-soft'">
+                <component :is="draftReview.changes.length ? FileDiff : CircleCheck" class="mt-0.5 size-4 shrink-0" :class="draftReview.changes.length ? 'text-primary-accent' : 'text-success-accent'" aria-hidden="true" />
+                <div class="min-w-0">
+                  <p class="m-0 text-sm font-semibold"><template v-if="draftReview.changes.length">{{ draftReview.action === 'restore' ? '恢复后会改变' : '保存后会改变' }} <span class="num">{{ draftReview.changes.length }}</span> 项配置</template><template v-else>配置没有变化</template><span class="ml-2 text-xs font-normal text-muted-foreground">{{ draftReview.action === 'restore' ? '恢复预览 · 尚未恢复' : '试用预览 · 尚未保存' }}</span></p>
+                  <p class="mt-0.5 mb-0 text-xs leading-relaxed text-muted-foreground">{{ draftReview.changes.length ? (draftReview.action === 'restore' ? '核对下方差异，确认后点「恢复这份草稿」，再重新发布。' : '核对下方差异，确认后点底部「保存草稿」或「保存并发布」。') : (draftReview.action === 'restore' ? '恢复后生成的配置与现在相同。' : '当前设置不会改变生成的配置，无需保存。') }}</p>
+                </div>
+              </div>
               <p v-for="warning in draftReview.warnings" :key="warning" class="m-0 text-xs text-warning-accent">{{ warning }}</p>
               <div v-if="draftReview.changes.length" class="max-h-80 min-w-0 overflow-auto rounded-md border border-border">
                 <dl class="m-0 divide-y divide-border">
@@ -423,9 +428,8 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                   </div>
                 </dl>
               </div>
-              <p v-else class="m-0 text-xs text-muted-foreground">生成配置没有变化。</p>
             </div>
-            <p v-else class="m-0 text-xs text-muted-foreground" role="status">{{ configDirty ? '当前有未保存的试用设置。' : '可以直接试用开关和接管规则。' }}点击「预览配置变更」后可保存；关闭页面可放弃试用。</p>
+            <p v-else class="m-0 text-xs text-muted-foreground" role="status">{{ configDirty ? '有未保存的修改，点「预览配置变更」查看会改变什么。' : '调整上方开关或规则后，点「预览配置变更」查看会改变什么。' }}关闭页面即放弃试用。</p>
           </section>
 
           <section aria-labelledby="gateway-network" class="space-y-3 border-t border-border pt-4">
@@ -440,7 +444,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
               <p v-else-if="!shell" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">Docker 设备不支持。</span>请选择 Linux Shell 安装的设备，才能修改宿主机网络。</p>
               <div class="border-y border-border">
                 <AgentStatusRow label="网络状态" :status="networkState.label" :tone="networkState.tone">
-                  <template #actions><Button variant="ghost" size="sm" class="my-1 min-h-11 text-xs" :disabled="busy || !online || !shell" @click="loadStatus()"><RefreshCw class="size-3.5" />刷新检测</Button></template>
+                  <template #actions><Button variant="ghost" size="sm" class="min-h-11 text-xs" :disabled="busy || !online || !shell" @click="loadStatus()"><RefreshCw class="size-3.5" />刷新检测</Button></template>
                   <template v-if="status?.managed?.pending || (status?.managed?.active && status?.managed?.healthy === false)" #notice><p class="m-0">{{ status?.managed?.pending ? '应用未完成，需要恢复或重新检查。' : '已管理，检测到网络配置需要修复。' }}</p></template>
                 </AgentStatusRow>
               </div>
