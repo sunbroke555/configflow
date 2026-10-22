@@ -1,7 +1,7 @@
 import { optionCopy } from './optionCopy'
 
 export const gatewayCopy = {
-  applications: optionCopy('应用直接连接 IP 时，选择对应规则集。',
+  applications: optionCopy('勾选规则集里的 IPv4 网段也交给 Mihomo。Telegram 等不查域名、直接连 IP 的应用需要勾选。',
     '应用直接连接 IP、不先查询域名时使用，如 Telegram。',
     '所选 IP 的连接交给 Mihomo，仍按其规则决定代理或直连。fake-IP 流量自动接管，无需勾选；留空也不会关闭它。'),
   directDomains: optionCopy('无需代理的网站，可选择对应的域名规则。',

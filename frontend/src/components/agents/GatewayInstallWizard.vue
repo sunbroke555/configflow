@@ -88,7 +88,7 @@ const configReady = computed(() => configurationPreview.value?.ready === true &&
 const localDnsWarning = computed(() => settings.local_dns === config.value?.settings.local_dns
   ? config.value?.field_warnings?.local_dns || '' : '')
 const configLists = computed(() => [
-  { field: 'rule_set_ids' as const, title: '应用连接', ...gatewayCopy.applications, rows: config.value?.ip_candidates || [] },
+  { field: 'rule_set_ids' as const, title: 'IP 接管', ...gatewayCopy.applications, rows: config.value?.ip_candidates || [] },
   { field: 'direct_rule_set_ids' as const, title: '直连域名', ...gatewayCopy.directDomains, rows: config.value?.domain_candidates || [] },
   { field: 'proxy_rule_set_ids' as const, title: '代理域名', ...gatewayCopy.proxyDomains, rows: config.value?.domain_candidates || [] },
 ].map(list => {

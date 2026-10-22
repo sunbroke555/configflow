@@ -386,7 +386,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             </label>
             <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span>先恢复客户端并撤销网关转发，再保存并发布已关闭模式的 Mihomo 配置。</p>
             <div class="space-y-2">
-              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">应用连接（可选）</h3><span class="cf-compact-help"><FieldHelp label="应用连接" :text="gatewayCopy.applications.help" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
+              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">IP 接管（可选）</h3><span class="cf-compact-help"><FieldHelp label="IP 接管" :text="gatewayCopy.applications.help" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
               <p class="m-0 text-xs leading-relaxed text-muted-foreground">{{ gatewayCopy.applications.hint }}</p>
               <p v-if="fakeIPRange" class="m-0 text-xs text-muted-foreground">自动接管的临时地址范围（fake-IP）：<span class="font-mono">{{ fakeIPRange }}</span></p>
               <Input v-model="search" aria-label="搜索可接管的 IP 规则集" placeholder="搜索规则集名称或策略" class="min-h-11" :disabled="busy" />

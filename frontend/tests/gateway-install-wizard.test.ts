@@ -275,7 +275,7 @@ describe('gateway installation wizard', () => {
     expect(picker.text()).not.toContain('国外域名')
     const search = 'no-such-gateway-ruleset'
     await wrapper.get('#onboarding-search').setValue(search)
-    for (const category of ['应用连接', '直连域名', '代理域名', '应用连接']) {
+    for (const category of ['IP 接管', '直连域名', '代理域名', 'IP 接管']) {
       await button(wrapper, `${category}，已选 1 个规则集`).trigger('click'); await flushPromises()
       expect(wrapper.get('#onboarding-search').element).toHaveProperty('value', search)
       expect(picker.findAll('p').filter(item => item.text().includes('没有匹配的规则集'))).toHaveLength(1)
@@ -298,7 +298,7 @@ describe('gateway installation wizard', () => {
       settings: { ...settings, rule_set_ids: [], direct_rule_set_ids: [], proxy_rule_set_ids: [] } }))
     const wrapper = await render(); await fillEnvironment(wrapper)
     const picker = wrapper.get('[data-gateway-rule-picker]')
-    for (const category of ['应用连接', '直连域名', '代理域名']) {
+    for (const category of ['IP 接管', '直连域名', '代理域名']) {
       await button(wrapper, `${category}，已选 0 个规则集`).trigger('click'); await flushPromises()
       expect(picker.findAll('p').filter(item => item.text().includes('「规则库」添加'))).toHaveLength(1)
       expect(picker.text()).toContain('「策略规则」引用并启用')
