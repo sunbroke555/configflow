@@ -272,3 +272,28 @@ def test_default_profile_delete_is_blocked_by_bound_agents(tmp_path, monkeypatch
     assert response.status_code == 409
     assert [u["id"] for u in response.get_json()["usages"]] == ["a1"]
     assert repository.default_profile_id() == "default"
+
+
+def test_default_profile_can_be_changed_without_moving_devices(tmp_path, monkeypatch):
+    repository = ProfileRepository(tmp_path)
+    repository.create_profile({"id": "alpha", "name": "Alpha"})
+    repository.save_profile("default", {"mihomo": {"custom_config": "port: 11111\n"}})
+    repository.save_profile("alpha", {"mihomo": {"custom_config": "port: 22222\n"}})
+    repository.update_system_transaction(lambda system: system["agents"].extend([
+        {"id": "old", "name": "Old", "profile_id": "default"},
+        {"id": "new", "name": "New", "profile_id": "alpha"}]))
+    client = make_app(repository, monkeypatch).test_client()
+
+    assert client.post("/api/profiles/missing/default").status_code == 404
+    response = client.post("/api/profiles/alpha/default")
+    assert response.status_code == 200 and response.get_json()["default_profile_id"] == "alpha"
+    assert [(p["id"], p["is_default"]) for p in client.get("/api/profiles").get_json()] == [
+        ("default", False), ("alpha", True)]
+    # Devices keep their profiles; unscoped links follow the new default.
+    agents = {agent["id"]: agent for agent in repository.get_system()["agents"]}
+    assert agents["old"]["profile_id"] == "default" and agents["new"]["profile_id"] == "alpha"
+    assert yaml.safe_load(client.get("/api/config/mihomo").get_data())["port"] == 22222
+    revision = repository.get_system()["_revision"]
+    assert client.post("/api/profiles/alpha/default").status_code == 200
+    assert repository.get_system()["_revision"] == revision
+    assert ProfileRepository(tmp_path).default_profile_id() == "alpha"

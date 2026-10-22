@@ -189,6 +189,7 @@ export const profileApi = {
   rebindAgents: (id: string, targetProfileId: string, agentIds: string[]) =>
     api.post<ProfileRebindResult>(profilePath(id, '/agents/rebind'), { target_profile_id: targetProfileId, agent_ids: agentIds }),
   clone: (id: string, data: any) => api.post(profilePath(id, '/clone'), data),
+  setDefault: (id: string) => api.post<{ success: boolean; default_profile_id: string }>(profilePath(id, '/default')),
   export: (id: string) => api.get(profilePath(id, '/export'), { responseType: 'blob' }),
   import: (id: string, data: any) => api.post(profilePath(id, '/import'), data),
   importClient: (data: {

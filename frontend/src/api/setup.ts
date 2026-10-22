@@ -8,6 +8,10 @@ export interface SetupRouterDraft {
   proxy_gateway_agent_id: string; dns_agent_id: string; has_password: boolean
   manage_return_routing?: boolean; ip_rule_sets?: string[]; ros_policy_rule_sets?: string[]
 }
+export interface SetupDefaultProfile {
+  is_default: boolean; suggested: boolean; current: { id: string; name: string }
+  leftovers?: { profile: { id: string; name: string } | null; subscriptions: { id: string; name: string }[] }
+}
 export interface SetupSession {
   id: string; profile_id: string; name: string; goal: SetupGoal
   step: number; max_step: number; prepared: boolean; completed: boolean
@@ -18,6 +22,7 @@ export interface SetupSession {
   installation?: { id: string; mihomo: { id: string; name: string; host: string }; oxidns: { id: string; name: string; host: string } }
   router_id?: string; router_mode?: 'manual' | 'managed'; router_verification?: 'manual' | 'verified' | 'client_pending'
   router_draft?: SetupRouterDraft
+  default_profile?: SetupDefaultProfile; previous_default?: string
   route_instructions?: { gateway: string; dns: string; routes: { cidr: string; sources: string[]; requires_source_exclusion?: boolean }[]; warnings: string[] }
 }
 export interface SetupIndex {
@@ -36,5 +41,5 @@ export const setupApi = {
   prepare: (id: string, settings: { dns_fallback: 'mihomo' | 'direct'; traffic_fallback: 'proxy' | 'direct'; local_dns: string; domain_rules: SetupDomainSelection }) => api.post<SetupSession>(`${path(id)}/prepare`, settings, { timeout: 90000 }),
   check: (id: string) => api.post<SetupSession>(`${path(id)}/check`, {}, { timeout: 90000 }),
   saveRouterDraft: (id: string, router: unknown) => api.post<SetupSession>(`${path(id)}/router-draft`, { router }),
-  finish: (id: string, data: { router_mode?: 'manual' | 'managed'; router_id?: string; ack_routes?: boolean; ack_dns?: boolean } = {}) => api.post<SetupSession>(`${path(id)}/finish`, data, { timeout: 90000 })
+  finish: (id: string, data: { router_mode?: 'manual' | 'managed'; router_id?: string; ack_routes?: boolean; ack_dns?: boolean; make_default?: boolean } = {}) => api.post<SetupSession>(`${path(id)}/finish`, data, { timeout: 90000 })
 }

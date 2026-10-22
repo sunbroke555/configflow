@@ -698,3 +698,40 @@ def test_setup_profile_uses_template_groups_with_regions_from_the_nodes(setup_ap
     assert emitted['🍎 苹果服务']['proxies'][0] == '✈️ 节点选择'
     assert document['rules'][-1] == 'MATCH,🐟 漏网之鱼'
     assert emitted['🐟 漏网之鱼']['proxies'][0] == '✈️ 节点选择'
+
+
+def test_finishing_can_make_the_setup_profile_the_default_and_names_leftovers(installed):
+    client, repository, profile_id, _, _ = installed
+    response = client.get(f'/api/setup/{SESSION}')
+    assert response.json['default_profile'] == {'is_default': False, 'suggested': True,
+                                                'current': {'id': 'default', 'name': '默认配置'}}
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 200
+    choices = {'router_mode': 'manual', 'ack_routes': True, 'ack_dns': True}
+    assert client.post(f'/api/setup/{SESSION}/finish', json={**choices, 'make_default': 'yes'}).status_code == 400
+    response = client.post(f'/api/setup/{SESSION}/finish', json={**choices, 'make_default': True})
+    assert response.status_code == 200, response.json
+    assert repository.default_profile_id() == profile_id
+    summary = response.json['default_profile']
+    assert summary['is_default'] and not summary['suggested']
+    assert summary['leftovers'] == {'profile': {'id': 'default', 'name': '默认配置'}, 'subscriptions': []}
+    # The template's sample subscription counts as a leftover only while
+    # nothing but the old default uses it.
+    sample = 'sub_1760688109177'
+    repository.update_shared_transaction(lambda shared: shared['subscriptions'].append(
+        {'id': sample, 'name': 'subscribe', 'url': 'https://example.invalid/sub', 'enabled': True}))
+    repository.save_profile('default', {'proxy_groups': [{'id': 'g', 'name': 'G', 'type': 'select', 'subscriptions': [sample]}]})
+    leftovers = client.get(f'/api/setup/{SESSION}').json['default_profile']['leftovers']
+    assert leftovers['subscriptions'] == [{'id': sample, 'name': 'subscribe'}]
+    repository.update_profile_transaction(profile_id, lambda profile: profile['proxy_groups'].append(
+        {'id': 'uses-sample', 'name': 'Uses sample', 'type': 'select', 'subscriptions': [sample]}))
+    assert client.get(f'/api/setup/{SESSION}').json['default_profile']['leftovers']['subscriptions'] == []
+
+
+def test_default_is_not_suggested_while_devices_use_it(installed):
+    client, repository, _, _, _ = installed
+    repository.update_system_transaction(lambda system: system['agents'].append({'id': 'old', 'name': 'Old', 'profile_id': 'default'}))
+    assert client.get(f'/api/setup/{SESSION}').json['default_profile']['suggested'] is False
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 200
+    response = client.post(f'/api/setup/{SESSION}/finish', json={'router_mode': 'manual', 'ack_routes': True, 'ack_dns': True})
+    assert response.status_code == 200, response.json
+    assert repository.default_profile_id() == 'default' and 'leftovers' not in response.json['default_profile']

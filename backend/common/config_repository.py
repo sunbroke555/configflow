@@ -827,6 +827,21 @@ class ProfileRepository:
             profile['updated_at'] = _now()
         return self._metadata(profile)
 
+    def set_default_profile(self, profile_id):
+        """Make another profile the default; returns whether it changed.
+
+        Stored Agents always name their profile, so no device moves. Only
+        unscoped configuration links, newly registered Agents and MCP tools
+        follow the new default.
+        """
+        with self._document(write=True) as document:
+            self._profile(document, profile_id)
+            if self._default_profile_id(document) == profile_id:
+                return False
+            document['system']['system_config']['default_profile_id'] = profile_id
+            document['system']['_revision'] += 1
+            return True
+
     def delete_profile(self, profile_id, new_default_id=None):
         """删除配置空间；删除默认配置时必须指定接任默认的配置空间（new_default_id）。"""
         with self._lock(self._profile_operation_lock_path(profile_id)), ExitStack() as jobs:

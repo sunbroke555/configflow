@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { profileApi } from '@/api'
 import { useProfileStore } from '@/stores/profile'
-import { confirmDanger, notify } from '@/lib/feedback'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { Select } from '@/components/ui/select'
 import ProfileAgentBindings from '@/components/ProfileAgentBindings.vue'
 import Profiles from '@/views/Profiles.vue'
 
-vi.mock('@/api', () => ({ profileApi: { list: vi.fn(), agentBindings: vi.fn(), rebindAgents: vi.fn(), delete: vi.fn() }, subscriptionApi: {} }))
-vi.mock('@/lib/feedback', () => ({ confirmDanger: vi.fn(), prompt: vi.fn(), notify: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }))
+vi.mock('@/api', () => ({ profileApi: { list: vi.fn(), agentBindings: vi.fn(), rebindAgents: vi.fn(), delete: vi.fn(), setDefault: vi.fn() }, subscriptionApi: {} }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), confirmDanger: vi.fn(), prompt: vi.fn(), notify: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }))
 const response = (data: any) => ({ data } as any)
 const outside = { id: 'outside', name: '外面', is_default: false }
 const home = { id: 'home', name: '家里', is_default: true }
@@ -158,5 +158,21 @@ describe('profile deletion binding checks', () => {
     expect(profileApi.delete).toHaveBeenCalledWith('outside')
     expect(wrapper.getComponent(ProfileAgentBindings).props('profile').id).toBe('outside')
     expect(notify.success).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('default profile', () => {
+  it('lets another profile become the default after confirming what moves', async () => {
+    vi.mocked(confirm).mockResolvedValue(true)
+    vi.mocked(profileApi.setDefault).mockResolvedValue(response({ success: true, default_profile_id: 'outside' }))
+    const wrapper = await renderPage()
+    const actions = wrapper.findAll('[aria-label="设为默认"]')
+    // Only the non-default profile offers it.
+    expect(actions).toHaveLength(1)
+    await actions[0].trigger('click'); await flushPromises()
+    expect(vi.mocked(confirm).mock.calls[0][0]).toContain('已绑定的设备保持原配置空间')
+    expect(profileApi.setDefault).toHaveBeenCalledWith('outside')
+    expect(notify.success).toHaveBeenCalledWith('默认配置空间已改为「外面」')
   })
 })

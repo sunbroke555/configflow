@@ -1,8 +1,47 @@
-"""Verify paired publication before routing setup; never write host/router state."""
+"""Verify paired publication before routing setup; never write host/router state.
+
+Finishing may make the setup profile ConfigFlow's default, only when asked.
+"""
 from hashlib import sha256
 import json
 
 from backend.common.setup_flow import SetupError
+
+
+def _bound_agents(repository, profile_id):
+    return repository.get_profile_agent_bindings(profile_id)['agents']
+
+
+def _template_subscriptions():
+    from backend.common.resource import get_backend_resource
+    with open(get_backend_resource('config_template.json'), encoding='utf-8') as handle:
+        return {item['id'] for item in json.load(handle).get('subscriptions', [])}
+
+
+def profile_summary(repository, session):
+    """Describe the default profile around this setup for the finish screen."""
+    default_id = repository.default_profile_id()
+    current = repository._profile_metadata(default_id)
+    summary = {'is_default': default_id == session['profile_id'],
+               'current': {'id': current['id'], 'name': current['name']},
+               # Suggest it only when nothing depends on the present default.
+               'suggested': default_id != session['profile_id'] and not _bound_agents(repository, default_id)}
+    previous_id = session.get('previous_default')
+    if summary['is_default'] and previous_id:
+        leftovers = {'profile': None, 'subscriptions': []}
+        try:
+            previous = repository._profile_metadata(previous_id)
+        except Exception:
+            previous = None
+        if previous and not _bound_agents(repository, previous_id):
+            leftovers['profile'] = {'id': previous['id'], 'name': previous['name']}
+        subscriptions = {item['id']: item for item in repository.get_shared()['subscriptions']}
+        for subscription_id in sorted(_template_subscriptions() & set(subscriptions)):
+            usages = repository.get_resource_usage('subscriptions', subscription_id)
+            if all(usage['kind'] == 'profile' and usage['id'] == previous_id for usage in usages):
+                leftovers['subscriptions'].append({'id': subscription_id, 'name': subscriptions[subscription_id]['name']})
+        summary['leftovers'] = leftovers
+    return summary
 
 
 def core_fingerprint(config):
@@ -51,6 +90,9 @@ def check_installation(repository, session):
 
 
 def finish(repository, session, body):
+    make_default = body.get('make_default', False)
+    if type(make_default) is not bool:
+        raise SetupError('请选择是否设为默认配置空间')
     config = check_installation(repository, session)
     if session['goal'] == 'router':
         mode = body.get('router_mode', session.get('router_mode', 'manual'))
@@ -90,4 +132,8 @@ def finish(repository, session, body):
     if core_fingerprint(current) != session['installation']['fingerprint']:
         raise SetupError('核心配置在检查期间已变化，请重新发布后检查', 409)
     session.update(completed=True, step=5, max_step=5)
+    previous = repository.default_profile_id()
+    if make_default and previous != session['profile_id']:
+        repository.set_default_profile(session['profile_id'])
+        session['previous_default'] = previous
     return session

@@ -3,7 +3,7 @@ import { flushPromises } from '@vue/test-utils'
 import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import api, { customConfigApi, generateApi, profileApi, proxyGroupApi } from '@/api'
 import { useProfileStore } from '@/stores/profile'
-import { activeProfileId, beginScopedRequest, endScopedRequest, scopedRequests, setActiveProfileId } from '@/profileContext'
+import { activeProfileId, beginScopedRequest, clearActiveProfileId, endScopedRequest, scopedRequests, setActiveProfileId } from '@/profileContext'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
 
 vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
@@ -177,5 +177,23 @@ describe('local profile switching and request ownership', () => {
     finish()
     await first
     expect(store.loading.value).toBe(false)
+  })
+})
+
+
+describe('default profile for a new tab', () => {
+  const list = [{ id: 'default', name: 'Default', is_default: false }, { id: 'setup', name: 'Setup', is_default: true }]
+  it('opens the server default when this tab never picked a profile', async () => {
+    clearActiveProfileId()
+    api.defaults.adapter = async config => response(config, config.url === '/profiles' ? list : {})
+    await store.refreshProfiles()
+    expect(activeProfileId.value).toBe('setup')
+  })
+
+  it('keeps the profile this tab picked even when another one is the default', async () => {
+    setActiveProfileId('default')
+    api.defaults.adapter = async config => response(config, config.url === '/profiles' ? list : {})
+    await store.refreshProfiles()
+    expect(activeProfileId.value).toBe('default')
   })
 })

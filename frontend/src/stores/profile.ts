@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { profileApi, type ProfileAgentBinding } from '@/api'
-import { activeProfileId, scopedRequests, setActiveProfileId } from '@/profileContext'
+import { activeProfileId, hasChosenProfile, scopedRequests, setActiveProfileId } from '@/profileContext'
 import { confirm, notify } from '@/lib/feedback'
 
 export interface Profile {
@@ -27,8 +27,10 @@ const refreshProfiles = (): Promise<Profile[]> => {
     try {
       const { data } = await profileApi.list()
       profiles.value = data
-      if (!profiles.value.some(profile => profile.id === activeProfileId.value)) {
-        setActiveProfileId(defaultProfileId.value || profiles.value[0]?.id || 'default')
+      const fallback = defaultProfileId.value || profiles.value[0]?.id || 'default'
+      if (!profiles.value.some(profile => profile.id === activeProfileId.value)
+          || (!hasChosenProfile() && activeProfileId.value !== fallback)) {
+        setActiveProfileId(fallback)
       }
       return profiles.value
     } finally {

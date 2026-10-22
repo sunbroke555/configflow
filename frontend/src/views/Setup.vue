@@ -55,6 +55,7 @@ const loading = ref(true)
 const ready = ref(false)
 const error = ref('')
 const routerMode = ref<'manual' | 'managed'>('manual')
+const makeDefault = ref(false)
 const routerId = ref('')
 const ackRoutes = ref(false)
 const ackDNS = ref(false)
@@ -86,6 +87,8 @@ const help = [
 async function accept(value: SetupSession) {
   if (disposed) return
   if (!SETUP_GOALS.some(item => item.id === value.goal)) throw new Error('试用方案已调整，请新建一次配置，选择主路由分流或 Linux 网关')
+  // Start from the suggestion once per wizard; later responses keep the choice.
+  if (value.id !== session.value?.id) makeDefault.value = value.default_profile?.suggested ?? false
   session.value = value; goal.value = value.goal; name.value = value.name
   previewRouting.value = false
   dnsFallback.value = value.dns_fallback || 'mihomo'
@@ -152,9 +155,12 @@ async function finish() {
   const current = session.value
   if (!current || previewRouting.value || (current.goal === 'gateway' && !clientReady.value)) return
   await run(async () => {
-    const { data } = await setupApi.finish(current.id, current.goal === 'router'
-      ? { router_mode: routerMode.value, router_id: routerId.value, ack_routes: ackRoutes.value, ack_dns: ackDNS.value } : {})
+    const { data } = await setupApi.finish(current.id, {
+      ...(current.goal === 'router'
+        ? { router_mode: routerMode.value, router_id: routerId.value, ack_routes: ackRoutes.value, ack_dns: ackDNS.value } : {}),
+      ...(current.default_profile && !current.default_profile.is_default ? { make_default: makeDefault.value } : {}) })
     await accept(data)
+    if (data.default_profile?.is_default) await profileStore.refreshProfiles()
   })
 }
 async function checkClientReadiness() {
@@ -175,7 +181,7 @@ watch(() => session.value?.goal === 'gateway' && step.value === 4 ? session.valu
   if (id && freshlyCheckedClient === id) { freshlyCheckedClient = ''; clientReady.value = true }
   else if (id) void checkClientReadiness()
 })
-async function manage(target: '/agents' | '/routers') {
+async function manage(target: '/agents' | '/routers' | '/profiles' | '/subscriptions') {
   if (!session.value) return
   await profileStore.refreshProfiles(); setActiveProfileId(session.value.profile_id); await router.push(target)
 }
@@ -303,6 +309,7 @@ onUnmounted(() => { disposed = true })
               <GatewayClientInstructions v-if="clientReady && routeInstructions" :address="routeInstructions.gateway" />
               <Button variant="outline" :disabled="working" @click="move(3)">管理网络与撤销转发</Button>
             </template>
+            <label v-if="session.default_profile && !session.default_profile.is_default" class="flex items-start gap-2 text-sm"><Checkbox v-model="makeDefault" :disabled="working" class="mt-0.5" /><span><span class="font-medium">设为默认配置空间</span><span class="mt-1 block text-xs leading-relaxed text-muted-foreground">新打开的页面、未指定配置空间的配置链接和新注册的 Agent 都会使用它。现在的默认是「{{ session.default_profile.current.name }}」，已绑定的设备不受影响，之后也可以在配置空间里更改。</span></span></label>
             <Button :disabled="previewRouting || working || (goal === 'gateway' && !clientReady) || (goal === 'router' && (routerMode === 'manual' ? !ackRoutes || !ackDNS : !routerId))" class="min-h-11" @click="finish"><LoaderCircle v-if="working" class="size-4 animate-spin" />{{ previewRouting ? '完成安装后继续' : goal === 'router' && routerMode === 'managed' ? '检查路由器并完成' : '确认设置并继续' }}<ArrowRight class="size-4" /></Button>
           </div>
           <div v-if="step === 5 && session" class="space-y-5">
@@ -310,6 +317,11 @@ onUnmounted(() => { disposed = true })
             <p class="m-0 text-sm">请在实际使用的手机或电脑测试解析、国内网站与代理网站；客户端连通性尚未由本向导确认。</p>
             <p v-if="session.router_verification === 'manual'" class="m-0 text-sm text-warning-accent">主路由为手动配置，尚未自动核验。</p>
             <p v-else-if="session.router_verification === 'verified'" class="m-0 text-sm text-success-accent">主路由的路由与 DHCP DNS 已核对同步。</p>
+            <div v-if="session.default_profile?.is_default && session.previous_default" class="space-y-1 rounded-lg bg-muted px-3 py-2 text-sm">
+              <p class="m-0">已设为默认配置空间，新打开的页面会直接进入它。</p>
+              <p v-if="session.default_profile.leftovers?.profile" class="m-0 text-muted-foreground">原来的「{{ session.default_profile.leftovers.profile.name }}」没有设备在用，不需要的话可以在<button type="button" class="text-primary-accent underline-offset-2 hover:underline" @click="manage('/profiles')">配置空间</button>里删除。</p>
+              <p v-if="session.default_profile.leftovers?.subscriptions.length" class="m-0 text-muted-foreground">示例订阅「{{ session.default_profile.leftovers.subscriptions.map(item => item.name).join('、') }}」只被原来的默认配置使用，不需要的话可以在<button type="button" class="text-primary-accent underline-offset-2 hover:underline" @click="manage('/subscriptions')">订阅来源</button>里删除。</p>
+            </div>
             <div class="flex flex-wrap gap-2"><Button class="min-h-11" :disabled="working" @click="manage('/agents')">进入设备管理<ArrowRight class="size-4" /></Button><Button v-if="goal === 'router'" variant="outline" class="min-h-11" @click="manage('/routers')">进入上游路由</Button></div>
           </div>
           <footer v-if="session && step > 0 && step < 5" class="mt-6 flex items-center gap-2 border-t border-border pt-4"><Button variant="ghost" :disabled="working" @click="move(previewRouting ? session.step : step - 1)"><ArrowLeft class="size-3.5" />{{ previewRouting ? '返回安装与检查' : '上一步' }}</Button><span class="ml-auto text-xs text-muted-foreground">{{ previewRouting ? '安装进度未改变' : '进度已保存' }}</span></footer>
