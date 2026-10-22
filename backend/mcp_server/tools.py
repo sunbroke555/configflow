@@ -1247,7 +1247,8 @@ def _get_settings(args):
     '更新系统设置。server_domain 传 {"server_domain": "..."}；'
     'config_token 传 {"config_token": "..."} 或 {"generate": true} 生成随机令牌；'
     'subscription_aggregation 传 {"enabled": true/false}；'
-    'backup 传 webdav_url / webdav_username / webdav_password / webdav_path / auto_backup；'
+    'backup 传 webdav_url / webdav_username / webdav_password / webdav_path / auto_backup / '
+    'keep_latest（保留最近份数，0 不清理）/ keep_daily（另保留最近几天每天最后一份）；'
     'github_proxy 传 {"proxy_domains": "https://ghproxy.example.com/"}，传空字符串表示关闭。',
     obj(
         {

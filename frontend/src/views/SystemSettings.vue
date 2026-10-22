@@ -341,6 +341,34 @@
             />
           </FormField>
 
+          <div class="grid gap-4 sm:grid-cols-2">
+            <FormField label="保留最近份数" html-for="backup-keep-latest" hint="每次备份后删除更早的备份，0 表示不清理。">
+              <Input
+                id="backup-keep-latest"
+                v-model.number="backupForm.keep_latest"
+                type="number"
+                inputmode="numeric"
+                :min="0"
+                :max="1000"
+                :step="1"
+                class="num bg-background/50"
+              />
+            </FormField>
+            <FormField label="每日保留天数" html-for="backup-keep-daily" hint="另保留最近几天每天最后一份，0 表示不额外保留。">
+              <Input
+                id="backup-keep-daily"
+                v-model.number="backupForm.keep_daily"
+                type="number"
+                inputmode="numeric"
+                :min="0"
+                :max="3650"
+                :step="1"
+                class="num bg-background/50"
+              />
+            </FormField>
+          </div>
+          <p class="-mt-2 text-[12px] text-muted-foreground">只清理备份路径中由 ConfigFlow 生成的 config_backup_*.json 文件。</p>
+
           <FormField hint="保存配置后在后台备份全部数据，短时间内的多次修改会合并备份。">
             <div class="flex items-center gap-2.5">
               <Switch id="auto-backup" v-model="backupForm.auto_backup" />
@@ -402,13 +430,36 @@ import type { DependencyStatus } from '@/api'
 
 // 备份配置
 const backupDialogVisible = ref(false)
-const backupForm = ref({
+const BACKUP_RETENTION_LIMITS = { keep_latest: 1000, keep_daily: 3650 } as const
+const backupForm = ref<{
+  webdav_url: string
+  webdav_username: string
+  webdav_password: string
+  webdav_path: string
+  auto_backup: boolean
+  keep_latest: number | string
+  keep_daily: number | string
+}>({
   webdav_url: '',
   webdav_username: '',
   webdav_password: '',
   webdav_path: '/config-flow-backup/',
-  auto_backup: false
+  auto_backup: false,
+  keep_latest: 30,
+  keep_daily: 30
 })
+
+// 空输入或越界时提示，不把非法值交给后端。
+const backupRetentionValid = () => {
+  for (const [key, limit] of Object.entries(BACKUP_RETENTION_LIMITS) as [keyof typeof BACKUP_RETENTION_LIMITS, number][]) {
+    const value = backupForm.value[key]
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > limit) {
+      notify.warning(key === 'keep_latest' ? '保留最近份数须为 0–1000 的整数' : '每日保留天数须为 0–3650 的整数')
+      return false
+    }
+  }
+  return true
+}
 const testingConnection = ref(false)
 const backingUp = ref(false)
 const savingBackup = ref(false)
@@ -790,7 +841,9 @@ const showBackupDialog = async () => {
         webdav_username: response.data.webdav_username || '',
         webdav_password: response.data.webdav_password || '',
         webdav_path: response.data.webdav_path || '/config-flow-backup/',
-        auto_backup: response.data.auto_backup || false
+        auto_backup: response.data.auto_backup || false,
+        keep_latest: response.data.keep_latest ?? 30,
+        keep_daily: response.data.keep_daily ?? 30
       }
     }
     backupDialogVisible.value = true
@@ -845,16 +898,19 @@ const backupNow = async () => {
     notify.warning('请输入密码')
     return
   }
+  if (!backupRetentionValid()) return
 
   try {
     backingUp.value = true
-    await api.post('/backup/now', {
+    const response = await api.post('/backup/now', {
       webdav_url: backupForm.value.webdav_url,
       webdav_username: backupForm.value.webdav_username,
       webdav_password: backupForm.value.webdav_password,
-      webdav_path: backupForm.value.webdav_path
+      webdav_path: backupForm.value.webdav_path,
+      keep_latest: backupForm.value.keep_latest,
+      keep_daily: backupForm.value.keep_daily
     })
-    notify.success('全部数据已备份到 WebDAV')
+    notify.success(response.data?.message || '全部数据已备份到 WebDAV')
   } catch (error) {
     console.error('备份失败', error)
     const errorMsg = isAxiosError<{ message?: string }>(error) ? error.response?.data?.message : undefined
@@ -865,6 +921,7 @@ const backupNow = async () => {
 }
 
 const saveBackupConfig = async () => {
+  if (!backupRetentionValid()) return
   try {
     savingBackup.value = true
     await api.post('/backup/config', backupForm.value)

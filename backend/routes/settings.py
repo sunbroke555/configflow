@@ -8,7 +8,7 @@ from backend.common.config import get_repository, get_system_config, save_system
 from backend.common.config_export import contains_internal_rule_proxy_token
 from backend.version import get_version_info
 from backend.utils.rule_fetch import normalize_rule_fetch_proxy
-from backend.utils.webdav_backup import describe_webdav_error
+from backend.utils.webdav_backup import RETENTION_LIMITS, describe_webdav_error, retention_settings
 
 
 @settings_bp.route('/settings/rule-fetch-proxy', methods=['GET', 'POST'])
@@ -155,6 +155,7 @@ def get_version():
 
 
 _BACKUP_TEXT_FIELDS = ('webdav_url', 'webdav_username', 'webdav_password', 'webdav_path')
+_BACKUP_FIELDS = (*_BACKUP_TEXT_FIELDS, 'auto_backup', *RETENTION_LIMITS)
 
 
 def _backup_request_data():
@@ -162,12 +163,15 @@ def _backup_request_data():
     message = None
     if not isinstance(data, dict) or not data:
         message = '请求体必须是非空 JSON 对象，请使用 Content-Type: application/json'
-    elif not any(key in data for key in (*_BACKUP_TEXT_FIELDS, 'auto_backup')):
+    elif not any(key in data for key in _BACKUP_FIELDS):
         message = '请提供 WebDAV 备份配置字段'
     elif any(key in data and not isinstance(data[key], str) for key in _BACKUP_TEXT_FIELDS):
         message = 'WebDAV 地址、用户名、密码和路径必须是字符串'
     elif 'auto_backup' in data and not isinstance(data['auto_backup'], bool):
         message = 'auto_backup 必须是布尔值'
+    elif any(key in data and (type(data[key]) is not int or not 0 <= data[key] <= limit)
+             for key, limit in RETENTION_LIMITS.items()):
+        message = '保留份数须为 0–1000 的整数，每日保留天数须为 0–3650 的整数'
     if message:
         return None, (jsonify({'success': False, 'message': message}), 400)
     return data, None
@@ -182,12 +186,15 @@ def backup_config():
     if request.method == 'GET':
         # 返回备份配置（密码脱敏）
         backup_data = config_data.get('backup', {})
+        keep_latest, keep_daily = retention_settings(backup_data)
         return jsonify({
             'webdav_url': backup_data.get('webdav_url', ''),
             'webdav_username': backup_data.get('webdav_username', ''),
             'webdav_password': '******' if backup_data.get('webdav_password') else '',
             'webdav_path': backup_data.get('webdav_path', '/config-flow-backup/'),
-            'auto_backup': backup_data.get('auto_backup', False)
+            'auto_backup': backup_data.get('auto_backup', False),
+            'keep_latest': keep_latest,
+            'keep_daily': keep_daily,
         })
 
     elif request.method == 'POST':
@@ -198,7 +205,7 @@ def backup_config():
         backup = config_data.setdefault('backup', {})
         changed = []
         # 部分更新保留未提交字段；掩码表示沿用已保存的密码。
-        for key in (*_BACKUP_TEXT_FIELDS, 'auto_backup'):
+        for key in _BACKUP_FIELDS:
             if key in data and not (key == 'webdav_password' and data[key] == '******'):
                 if backup.get(key) != data[key]:
                     changed.append(key)
@@ -286,13 +293,17 @@ def backup_now():
     try:
         from backend.utils.webdav_backup import upload_backup, WebDAVConfigurationError
 
+        saved = get_system_config().get('backup', {})
         if data.get('webdav_password') == '******':
-            data['webdav_password'] = get_system_config().get('backup', {}).get('webdav_password', '')
+            data['webdav_password'] = saved.get('webdav_password', '')
+        # 未随请求提交的保留设置沿用已保存的值。
+        data = {**{key: saved[key] for key in RETENTION_LIMITS if key in saved}, **data}
         try:
-            filename = upload_backup(get_repository().export_all(), data)
+            result = upload_backup(get_repository().export_all(), data)
         except WebDAVConfigurationError as error:
             return jsonify({'success': False, 'message': str(error)}), 400
-        return jsonify({'success': True, 'message': f'备份成功：{filename}'})
+        cleaned = f'，已清理 {result.removed} 个旧备份' if result.removed else ''
+        return jsonify({'success': True, 'message': f'备份成功：{result.filename}{cleaned}'})
 
     except Exception as e:
         # 保留异常类型与 HTTP 状态，避免远端异常正文携带凭证。

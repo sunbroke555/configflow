@@ -23,6 +23,7 @@ def wait_idle(worker):
 def dav(tmp_path, monkeypatch):
     uploaded = []
     completed = threading.Event()
+    remote = {}  # directory -> names, as the WebDAV server lists them
 
     class FakeClient:
         def __init__(self, options):
@@ -33,11 +34,21 @@ def dav(tmp_path, monkeypatch):
 
         def upload_sync(self, *, remote_path, local_path):
             uploaded.append((remote_path, json.loads(Path(local_path).read_text()), local_path))
+            directory, name = remote_path.rsplit('/', 1)
+            remote.setdefault(directory + '/', []).append(name)
             completed.set()
+
+        def list(self, path):
+            return list(remote.get(path, []))
+
+        def clean(self, path):
+            directory, name = path.rsplit('/', 1)
+            remote[directory + '/'].remove(name)
 
     package = types.ModuleType('webdav3')
     clients = types.ModuleType('webdav3.client')
     clients.Client = FakeClient
+    clients.remote = remote
     monkeypatch.setitem(sys.modules, 'webdav3', package)
     monkeypatch.setitem(sys.modules, 'webdav3.client', clients)
     worker = webdav_backup._AutoBackupWorker(delay=0.04)
@@ -363,3 +374,149 @@ def test_thread_start_failure_does_not_disable_future_auto_backups(dav, monkeypa
     wait_idle(worker)
     assert len(uploaded) == 1
     assert uploaded[0][1] == repository.export_all()
+
+
+def backup_name(day, time='120000', micro='000000'):
+    return f'config_backup_{day}_{time}_{micro}.json'
+
+
+def test_retention_keeps_latest_plus_newest_of_each_recent_day_and_ignores_foreign_files():
+    from datetime import date
+    names = [backup_name('20261022', f'1{n:05d}') for n in range(5)]          # today, 5 backups
+    names += [backup_name('20261021', '090000'), backup_name('20261021', '230000')]
+    names += [backup_name('20261019', '080000'), backup_name('20260901', '100000')]
+    names += ['config_backup_20261020_120000.json']                           # older name without microseconds
+    foreign = ['notes.txt', 'config_backup_latest.json', 'config_backup_20261022_120000_1.json', 'app']
+    expired = webdav_backup.expired_backups(names + foreign, 3, 3, date(2026, 10, 22))
+    # Newest 3 are today's; 21st and 20th keep their last backup; 19th and September are outside both windows.
+    assert sorted(expired) == sorted([
+        backup_name('20261022', '100000'), backup_name('20261022', '100001'),
+        backup_name('20261021', '090000'),
+        backup_name('20261019', '080000'), backup_name('20260901', '100000'),
+    ])
+    assert not set(expired) & set(foreign)
+
+
+def test_retention_orders_same_second_backups_by_microseconds_and_zero_disables_cleanup():
+    from datetime import date
+    names = [backup_name('20261022', '120000', f'{n:06d}') for n in (9, 10, 500000)]
+    assert webdav_backup.expired_backups(names, 1, 0, date(2026, 10, 22)) == [
+        backup_name('20261022', '120000', '000010'), backup_name('20261022', '120000', '000009')]
+    assert webdav_backup.expired_backups(names, 0, 0, date(2026, 10, 22)) == []
+    assert webdav_backup.expired_backups(names, 0, 30, date(2026, 10, 22)) == []
+
+
+def test_upload_prunes_expired_backups_only_after_a_successful_upload(dav, monkeypatch):
+    repository, settings, uploaded, _, clients, _ = dav
+    old = [backup_name('20200101', f'1{n:05d}') for n in range(4)]
+    clients.remote['/backups/'] = old + ['keep-me.txt']
+    result = webdav_backup.upload_backup(repository.export_all(), {**settings, 'keep_latest': 2, 'keep_daily': 0})
+    assert result.removed == 3
+    assert sorted(clients.remote['/backups/']) == sorted([result.filename, old[-1], 'keep-me.txt'])
+
+    def fail(self, **kwargs):
+        raise OSError('upload failed')
+    monkeypatch.setattr(clients.Client, 'upload_sync', fail)
+    before = list(clients.remote['/backups/'])
+    with pytest.raises(OSError):
+        webdav_backup.upload_backup(repository.export_all(), {**settings, 'keep_latest': 1, 'keep_daily': 0})
+    assert clients.remote['/backups/'] == before
+
+
+def test_settings_without_retention_use_defaults(dav):
+    repository, settings, _, _, clients, _ = dav
+    assert 'keep_latest' not in settings
+    old = [backup_name('20200101', f'{n:06d}') for n in range(webdav_backup.DEFAULT_KEEP_LATEST + 5)]
+    clients.remote['/backups/'] = list(old)
+    result = webdav_backup.upload_backup(repository.export_all(), settings)
+    # The new upload counts towards the newest 30; the old ones are outside the 30-day window.
+    assert result.removed == 6
+    assert len(clients.remote['/backups/']) == webdav_backup.DEFAULT_KEEP_LATEST
+
+
+def test_cleanup_failures_keep_the_backup_and_hide_remote_details(dav, monkeypatch, caplog):
+    repository, settings, _, _, clients, _ = dav
+
+    class RemoteError(Exception):
+        code = 423
+
+    old = [backup_name('20200101', f'1{n:05d}') for n in range(3)]
+    clients.remote['/backups/'] = list(old)
+    original = clients.Client.clean
+    def clean(self, path):
+        if path.endswith(old[0]):
+            raise RemoteError('https://user:private-password@dav.test private-response-body')
+        original(self, path)
+    monkeypatch.setattr(clients.Client, 'clean', clean)
+    result = webdav_backup.upload_backup(repository.export_all(), {**settings, 'keep_latest': 1, 'keep_daily': 0})
+    assert result.removed == 2
+    assert old[0] in clients.remote['/backups/'] and result.filename in clients.remote['/backups/']
+    assert 'HTTP 423' in caplog.text
+
+    def list_fails(self, path):
+        raise RemoteError('private-password private-response-body')
+    monkeypatch.setattr(clients.Client, 'list', list_fails)
+    result = webdav_backup.upload_backup(repository.export_all(), {**settings, 'keep_latest': 1, 'keep_daily': 0})
+    assert result.removed == 0 and result.filename
+    assert '无法列出备份目录' in caplog.text
+    assert 'private-password' not in caplog.text and 'private-response-body' not in caplog.text
+
+
+def test_auto_backup_applies_saved_retention(dav):
+    repository, settings, uploaded, _, clients, worker = dav
+    clients.remote['/backups/'] = [backup_name('20200101', f'1{n:05d}') for n in range(5)]
+    repository.update_system_transaction(
+        lambda system: system.update(backup={**settings, 'keep_latest': 2, 'keep_daily': 0}))
+    wait_idle(worker)
+    assert len(uploaded) == 1
+    assert len(clients.remote['/backups/']) == 2
+    assert uploaded[0][0].endswith(clients.remote['/backups/'][-1])
+
+
+def test_backup_settings_return_retention_defaults_and_save_valid_values(backup_api, dav):
+    repository, _, _, _, _, _ = dav
+    response = backup_api.get('/api/backup/config')
+    assert (response.json['keep_latest'], response.json['keep_daily']) == (30, 30)
+    response = backup_api.post('/api/backup/config', json={'keep_latest': 0, 'keep_daily': 3650})
+    assert response.status_code == 200
+    saved = repository.get_system()['backup']
+    assert (saved['keep_latest'], saved['keep_daily']) == (0, 3650)
+    assert backup_api.get('/api/backup/config').json['keep_latest'] == 0
+
+
+@pytest.mark.parametrize('endpoint', ['config', 'now'])
+@pytest.mark.parametrize('value', [
+    {'keep_latest': -1}, {'keep_latest': 1001}, {'keep_latest': True}, {'keep_latest': '30'},
+    {'keep_latest': 1.5}, {'keep_latest': None}, {'keep_daily': -1}, {'keep_daily': 3651},
+])
+def test_invalid_retention_values_are_rejected_without_changes(backup_api, dav, endpoint, value):
+    repository, settings, uploaded, _, _, _ = dav
+    before = repository.export_all()
+    response = backup_api.post(f'/api/backup/{endpoint}', json={**settings, **value})
+    assert response.status_code == 400
+    assert '保留' in response.json['message']
+    assert repository.export_all() == before
+    assert uploaded == []
+
+
+def test_manual_backup_uses_saved_retention_and_reports_cleanup(backup_api, dav):
+    repository, settings, _, _, clients, _ = dav
+    repository.update_system_transaction(lambda system: system['backup'].update(keep_latest=1, keep_daily=0))
+    clients.remote['/backups/'] = [backup_name('20200101', f'1{n:05d}') for n in range(3)]
+    response = backup_api.post('/api/backup/now', json={**settings, 'webdav_password': '******'})
+    assert response.status_code == 200, response.json
+    assert '已清理 3 个旧备份' in response.json['message']
+    assert len(clients.remote['/backups/']) == 1
+
+
+def test_invalid_saved_retention_falls_back_to_defaults_without_failing_the_upload(backup_api, dav):
+    repository, settings, _, _, clients, _ = dav
+    # Imported or hand-edited settings bypass the API validation.
+    repository.update_system_transaction(
+        lambda system: system['backup'].update(keep_latest='5', keep_daily=-3))
+    assert webdav_backup.retention_settings(repository.get_system()['backup']) == (30, 30)
+    response = backup_api.get('/api/backup/config')
+    assert (response.json['keep_latest'], response.json['keep_daily']) == (30, 30)
+    clients.remote['/backups/'] = [backup_name('20200101', f'{n:06d}') for n in range(31)]
+    result = webdav_backup.upload_backup(repository.export_all(), repository.get_system()['backup'])
+    assert result.filename and result.removed == 2
