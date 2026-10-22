@@ -349,7 +349,7 @@ func TestLinuxGatewayRejectsConflictingFirewallAndReturnRouting(t *testing.T) {
 		if err := applyLinuxGateway(f.cfg, f.spec, "test-profile"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ApplyReturnRouting(f.cfg, ReturnRoutingSpec{}); err == nil || !strings.Contains(err.Error(), "选择性网关") {
+		if _, err := ApplyReturnRouting(f.cfg, ReturnRoutingSpec{}); err == nil || !strings.Contains(err.Error(), "Linux 网关") {
 			t.Fatalf("wrong return routing guard: %v", err)
 		}
 	})

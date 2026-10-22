@@ -161,11 +161,11 @@ def extract_gateway_cidrs(content, behavior):
         if network.version == 6:
             continue
         if network.prefixlen < 8:
-            raise LinuxGatewayError('选择性网关只接受 /8 至 /32 的 IPv4 网段，请拆分或移除 /0、/1 等超大接管范围')
+            raise LinuxGatewayError('Linux 网关只接受 /8 至 /32 的 IPv4 网段，请拆分或移除 /0、/1 等超大接管范围')
         networks.add(network)
     collapsed = list(ipaddress.collapse_addresses(networks))
     if any(network.prefixlen == 0 for network in collapsed):
-        raise LinuxGatewayError('所选 IP 规则覆盖全部 IPv4 地址，无法用于选择性网关')
+        raise LinuxGatewayError('所选 IP 规则覆盖全部 IPv4 地址，无法用于 Linux 网关')
     return [str(network) for network in collapsed]
 
 
@@ -268,14 +268,14 @@ def apply_linux_gateway(mihomo, config, base_url=''):
         return
     conflict = _routing_mark_path(mihomo) or _routing_mark_path(config.get('nodes', []), '节点')
     if conflict:
-        raise LinuxGatewayError(f'选择性网关与 {conflict} 冲突，请先移除 routing-mark')
+        raise LinuxGatewayError(f'Linux 网关与 {conflict} 冲突，请先移除 routing-mark')
     fake_range = fake_ip_network(mihomo)
     tun = deepcopy(mihomo.get('tun') or {})
     if not isinstance(tun, dict):
         raise LinuxGatewayError('Mihomo tun 必须是对象')
     for key in TUN_FILTER_KEYS:
         if tun.get(key):
-            raise LinuxGatewayError(f'选择性网关与现有 tun.{key} 过滤冲突，请先在 Mihomo 基础 YAML 中移除该过滤，避免客户端绕过接管')
+            raise LinuxGatewayError(f'Linux 网关与现有 tun.{key} 过滤冲突，请先在 Mihomo 基础 YAML 中移除该过滤，避免客户端绕过接管')
     # CIDR routing and nftables provider routing intersect. Retaining the old
     # fake-IP-only route-address silently prevents real-IP rules from working.
     for key in ('route-address', 'inet4-route-address', 'inet6-route-address',
@@ -332,7 +332,7 @@ def apply_linux_gateway(mihomo, config, base_url=''):
 def gateway_editor_state(config, *, include_guidance=True):
     settings = gateway_settings(config)
     warnings = [
-        '仅支持 Linux + nftables 的 IPv4 选择性网关；客户端需停用 IPv6 或另行配置 IPv6 路由。',
+        '仅支持 Linux + nftables 的 IPv4 网关；客户端需停用 IPv6 或另行配置 IPv6 路由。',
         'OxiDNS 直连上游请使用带 IP 地址的 DoH / DoT（例如 https://223.5.5.5/dns-query）；普通 UDP/TCP 53 可能被 auto-redirect 接管。',
         '这里只决定哪些 IP 进入 Mihomo；启用后使用 rule 模式，实际出口仍由规则顺序及策略组当前选择决定。',
         'IPv4 接管网段须为 /8 至 /32；/0、/1 等超大范围会被拒绝，避免意外接管全网。',

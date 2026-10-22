@@ -413,7 +413,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           <p class="m-0">{{ installation?.target_changed ? '设备绑定或身份已改变。已停止发布与转发操作，请重新准备安装。' : installation?.config_changed ? '配置空间在安装后有修改。已停止发布与转发操作；请重新准备安装并预览保存，已安装的设备会继续沿用，无需重新运行安装命令。' : '安装凭据已过期。已停止发布与转发操作，请重新准备安装。' }}</p>
         </div>
         <div v-if="installation" class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border pb-2">
-          <p class="m-0 mr-auto min-w-0 break-words text-xs text-muted-foreground">{{ resumed ? '已恢复' : '安装目标' }} · <strong class="font-medium text-foreground">{{ embedded ? (goal === 'router' ? '主路由分流' : '网关分流') : installation.name }}</strong> <span class="font-mono">{{ network.address }}</span></p>
+          <p class="m-0 mr-auto min-w-0 break-words text-xs text-muted-foreground">{{ resumed ? '已恢复' : '安装目标' }} · <strong class="font-medium text-foreground">{{ embedded ? (goal === 'router' ? '主路由分流' : 'Linux 网关') : installation.name }}</strong> <span class="font-mono">{{ network.address }}</span></p>
           <div class="flex shrink-0 items-center">
             <Button variant="ghost" size="sm" class="px-2 text-xs" :disabled="busy" @click="startAnotherInstallation">重新准备安装</Button>
             <FieldHelp label="重新准备安装" text="返回设备与网络重新准备；不会撤销已安装的服务或已提交的发布。" />
@@ -607,7 +607,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           </div>
           <p v-else-if="!activeNetwork" class="m-0 text-xs leading-relaxed">应用成功后再修改客户端。接入前记下原网关、DNS、IPv6 和安全 DNS 设置，以便恢复。</p>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
-            <Button v-if="managedNetwork" variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="removeNetwork">撤销本次网关转发</Button>
+            <Button v-if="managedNetwork" variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="removeNetwork">撤销网关转发</Button>
             <p v-if="managedNetwork" class="m-0">撤销前，先恢复客户端原来的网关与 DNS。</p>
             <Button v-else variant="ghost" class="min-h-11 px-2" :disabled="busy || !canInspectNetwork" @click="inspectNetwork">重新读取网络状态</Button>
           </div>

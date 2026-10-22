@@ -277,7 +277,7 @@ func checkGatewayConfig(cfg *Config, spec LinuxGatewaySpec, profileID string) er
 		return err
 	}
 	if !enabled {
-		return fmt.Errorf("尚未部署启用 Linux 选择性网关的 Mihomo 配置，请先保存并发布配置")
+		return fmt.Errorf("尚未部署启用 Linux 网关的 Mihomo 配置，请先保存并发布配置")
 	}
 	if err := checkLinuxGatewayCore(cfg, doc); err != nil {
 		return err

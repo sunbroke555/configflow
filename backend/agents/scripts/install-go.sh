@@ -206,7 +206,7 @@ case "$choice" in
     2)
         # Preserve the only ownership/recovery record while gateway rules exist.
         if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
-            echo "请先恢复客户端的网关和 DNS，再到 Linux 网关设置中恢复所选设备网络；网关恢复记录未清理，不能卸载 Agent。" >&2
+            echo "请先恢复客户端的网关和 DNS，再到 Linux 网关设置中撤销网关转发；网关恢复记录未清理，不能卸载 Agent。" >&2
             exit 1
         fi
         # Restore before removing the only binary able to recover the journal.
