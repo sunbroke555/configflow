@@ -9,7 +9,7 @@
       <OxidnsEntryEditor v-if="['list', 'numbers', 'upstreams', 'lines'].includes(field.type || '')" :id="`oxi-${field.path}`" :model-value="read(field.path)" :label="field.label" :kind="field.type === 'list' ? 'strings' : field.type as 'numbers' | 'upstreams' | 'lines'" :placeholder="field.placeholder" :empty-hint="field.emptyHint" @update:model-value="write(field.path, $event)" @error="report(field.path, $event ? `${field.label}：${$event}` : '')" />
       <div v-else-if="field.type === 'switch' || field.type === 'tls'" class="flex min-h-11 items-center">
         <span v-if="read(field.path) == null" class="mr-3 text-xs text-muted-foreground">未配置 · 核心默认</span>
-        <Switch :id="`oxi-${field.path}`" :disabled="disabled" :model-value="Boolean(read(field.path))" @update:model-value="write(field.path, field.type === 'tls' ? ($event ? {} : undefined) : $event)" />
+        <Switch :id="`oxi-${field.path}`" :aria-label="field.label" :disabled="disabled" :model-value="Boolean(read(field.path))" @update:model-value="write(field.path, field.type === 'tls' ? ($event ? {} : undefined) : $event)" />
       </div>
       <Select v-else-if="field.options" :disabled="disabled" :model-value="String(read(field.path) ?? '')" @update:model-value="write(field.path, $event)">
         <SelectTrigger :id="`oxi-${field.path}`" class="min-h-11"><SelectValue :placeholder="read(field.path) == null ? '未配置（使用核心默认）' : '请选择'" /></SelectTrigger>

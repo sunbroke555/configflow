@@ -7,6 +7,10 @@ import OxidnsConfigNavigation from '@/components/generate/OxidnsConfigNavigation
 import { agentApi, profileApi, oxidnsApi, ruleApi, ruleSetApi } from '@/api'
 import { notify, settleConfirm } from '@/lib/feedback'
 
+// These suites mount the whole OxiDNS settings form per test; leave headroom for
+// parallel workers on a busy machine without raising the global timeout.
+vi.setConfig({ testTimeout: 15_000 })
+
 const wrappers: ReturnType<typeof mount>[] = []
 const config = 'runtime: {worker_threads: 8, extension: false}\nplugins: [{tag: main, type: sequence, args: [{exec: reject 0}]}]\nunknown: {values: [0, false, null]}'
 const projection = (settings: any) => ({ values: { worker_threads: (loadYaml(settings.native_config) as any)?.runtime?.worker_threads }, capabilities: {} })
