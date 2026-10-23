@@ -57,6 +57,42 @@ def _rule_path(item, part):
     return f'./rules/{_tag("rule", item["id"])}_{part}.txt'
 
 
+_RULE_FILE = re.compile(r'rules/(rule_[0-9a-f]{16})_(domain|ip)\.txt')
+
+
+def unavailable_rulesets(config, paths):
+    """One short "what and where to fix" line per ruleset behind unusable rule files.
+
+    paths that are not generated rule files are ignored.
+    """
+    rulesets = {_tag('rule', item.get('id')): item for item in config.get('rule_configs', [])
+                if item.get('itemType') == 'ruleset'}
+    lines, deleted, seen = [], [], set()
+    for match in map(_RULE_FILE.fullmatch, paths):
+        if not match or match[1] in seen:
+            continue
+        tag, part = match.groups()
+        seen.add(tag)
+        item = rulesets.get(tag)
+        if item is None:
+            deleted.append(tag)
+            continue
+        name = item.get('name') or item.get('id')
+        behavior = item.get('behavior', 'domain')
+        if not item.get('enabled', True):
+            lines.append(f'「{name}」已停用：请在规则管理中重新启用')
+        elif not item.get('library_enabled', True):
+            lines.append(f'「{name}」的规则来源已停用：请在规则库中重新启用')
+        elif part not in _ruleset_parts(behavior):
+            lines.append(f'「{name}」的类型被改成了 {behavior}：请改回原来的类型')
+        else:
+            lines.append(f'「{name}」没有下载地址：请检查规则来源')
+    if deleted:
+        lines.append(f'{len(deleted)} 个已删除的规则集（{"、".join(deleted)}）：'
+                     '请在 OxiDNS 设置的 YAML 中删除含这些名称的行')
+    return lines
+
+
 def get_oxidns_ruleset_downloads(config_data, base_url=''):
     settings = _settings(config_data)
     native_paths = ({relative_resource(path) for path in resource_references(native_document(settings))}
@@ -64,7 +100,11 @@ def get_oxidns_ruleset_downloads(config_data, base_url=''):
     effective = _base(config_data, base_url)
     downloads = []
     selections = {key: value if isinstance(value, list) else [] for key, value in settings.items()}
-    for item, _ in _selected(config_data, selections):
+    # Native YAML is the routing source of truth; its stored selectors are only
+    # a retained catalog, so every referenced active ruleset is downloaded.
+    candidates = (((item, None) for item in _items(config_data)) if native_paths is not None
+                  else _selected(config_data, selections))
+    for item, _ in candidates:
         if item.get('itemType') != 'ruleset':
             continue
         parts = _ruleset_parts(item.get('behavior', 'domain'))
@@ -80,7 +120,7 @@ def get_oxidns_ruleset_downloads(config_data, base_url=''):
         for part in parts:
             downloads.append({'name': item.get('name') or '规则集',
                 'url': _build_rule_proxy_url(config_data, effective, url, part=part),
-                'local_path': _rule_path(item, part)})
+                'local_path': _rule_path(item, part), 'behavior': item.get('behavior', 'domain')})
     adguard = settings['adguard'] if isinstance(settings['adguard'], dict) else {}
     if adguard.get('enabled') and isinstance(adguard.get('urls'), list):
         for url in adguard['urls']:

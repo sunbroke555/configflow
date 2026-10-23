@@ -9,7 +9,7 @@ from backend.common.oxidns_common_routing import (
 )
 from backend.common.oxidns_editor import prepare_editor
 from backend.common.oxidns_settings import OxidnsSettingsError
-from backend.converters.oxidns import _rule_path
+from backend.converters.oxidns import _rule_path, _tag
 
 
 def fixture_config():
@@ -269,3 +269,36 @@ def test_equivalent_absent_controls_are_explicitly_unset_until_meaningful():
     projection = read_routing(updated, sources, config)
     assert projection['values']['aggregate_rules'] is True
     assert projection['capabilities']['aggregate_rules']['editable'] is True
+
+
+@pytest.mark.parametrize('change, reason', [
+    (lambda item, rules: rules.remove(item), f'1 个已删除的规则集（{_tag("rule", "mixed")}）：请在 OxiDNS 设置的 YAML 中删除'),
+    (lambda item, rules: item.update(enabled=False), '「mixed」已停用：请在规则管理中重新启用'),
+    (lambda item, rules: item.update(behavior='ipcidr'), '「mixed」的类型被改成了 ipcidr：请改回原来的类型'),
+])
+def test_locked_routing_says_which_ruleset_to_fix_and_where(change, reason):
+    document, settings, config = prepared(direct_rulesets=['mixed'])
+    item = next(entry for entry in config['rule_configs'] if entry['id'] == 'mixed')
+    change(item, config['rule_configs'])
+    capability = read_routing(document, settings, config)['capabilities']['direct_rulesets']
+    assert capability['editable'] is False
+    assert capability['reason'].startswith('分流里有不可用的规则集，暂时不能在这里编辑。')
+    assert reason in capability['reason']
+
+
+def test_remove_rule_ignores_unused_rules_and_drops_used_ones():
+    from backend.common.oxidns_common_routing import remove_rule
+    document, settings, config = prepared(direct_rulesets=['mixed', 'rs'])
+    assert remove_rule(settings, config, 'rs2') is None
+    updated = remove_rule(settings, config, 'mixed')
+    assert not any(_rule_path({'id': 'mixed'}, part).removeprefix('./') in updated['native_config']
+                   for part in ('domain', 'ip'))
+    assert project(yaml.safe_load(updated['native_config']), updated, config)['direct_rulesets'] == ['rs']
+
+
+def test_native_downloads_follow_yaml_references_not_stored_selectors():
+    from backend.converters.oxidns import get_oxidns_ruleset_downloads
+    document, settings, config = prepared(direct_rulesets=['rs'])
+    stale = {**settings, 'direct_rulesets': [], 'proxy_rulesets': ['rs2']}
+    downloads = get_oxidns_ruleset_downloads({**config, 'oxidns': stale})
+    assert [item['local_path'] for item in downloads] == [_rule_path({'id': 'rs'}, 'domain')]

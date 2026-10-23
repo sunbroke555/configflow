@@ -12,7 +12,7 @@ import re
 from backend.common.oxidns_settings import BLOCK_QTYPES_EXECS, OxidnsSettingsError
 from backend.common.dns_watchdog import WATCHDOG_RULE
 from backend.common.oxidns_native import resource_references, relative_resource
-from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag
+from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag, unavailable_rulesets
 from backend.converters.mosdns import _build_rule_proxy_url
 
 SELECTORS = ('direct_rules', 'proxy_rules', 'direct_rulesets', 'proxy_rulesets')
@@ -205,7 +205,7 @@ def _analyze(document, settings, config):
             '当前没有域名分流规则，前后位置效果相同。' if not domain_indices else '')
     else:
         recognized = False
-    assigned = {}
+    assigned, orphans = {}, []
     for part, entries in groups.items():
         for group in entries:
             args_value = group['args']
@@ -222,6 +222,8 @@ def _analyze(document, settings, config):
                     candidates = atoms.get(_atom(part, key, value), set())
                     if len(candidates) != 1:
                         recognized = False
+                        if not candidates:
+                            orphans.append(_atom(part, key, value)[1:])
                         continue
                     identity = next(iter(candidates))
                     previous = assigned.setdefault(identity, {})
@@ -254,8 +256,14 @@ def _analyze(document, settings, config):
         caps['aggregate_rules'] = _cap(len(matches) == 1,
             '当前没有相邻且同策略的规则，无需合并。' if len(matches) == 2 else '')
     else:
+        reason = '规则资源或顺序无法唯一对应当前规则库，请在完整参数中编辑。'
+        hints = unavailable_rulesets(config, [value for key, value in orphans if key == 'files'])
+        if hints:
+            reason = '分流里有不可用的规则集，暂时不能在这里编辑。' + '；'.join(hints) + '。'
+        elif orphans:
+            reason = f'分流里有规则库中不存在的单条规则（{orphans[0][1]}），请在完整参数中删除后再编辑。'
         for key in (*SELECTORS, 'aggregate_rules'):
-            caps[key] = _cap(False, '规则资源或顺序无法唯一对应当前规则库，请在完整参数中编辑。')
+            caps[key] = _cap(False, reason)
     state.update(plugins=plugins, main=main, groups=groups, prefix=args[:prefix_end],
                  dynamic=[entry for _, entry in dynamic], custom=custom, final=final,
                  records=records)
@@ -265,6 +273,46 @@ def _analyze(document, settings, config):
 def read_routing(document, settings, config):
     state = _analyze(document, settings, config)
     return {'values': deepcopy(state['values']), 'capabilities': deepcopy(state['capabilities'])}
+
+
+def _uses_rule(document, config, identity):
+    """Whether any domain/IP provider still holds a resource generated for identity."""
+    atoms = _catalog(config)[1]
+    for plugin in document.get('plugins') or []:
+        part = {'domain_set': 'domain', 'ip_set': 'ip'}.get(plugin.get('type')) if isinstance(plugin, dict) else None
+        args = plugin.get('args') if part else None
+        for key, values in (args.items() if isinstance(args, dict) else ()):
+            for value in values if isinstance(values, list) else ():
+                atom = _atom(part, key, value)
+                if atom is not None and identity in atoms.get(atom, ()):
+                    return True
+    return False
+
+
+def remove_rule(settings, config, identity, base_url=''):
+    """Native settings without a rule that is about to be deleted, or None if unused.
+
+    Deleting only the stored selector would strand its providers and download
+    entries in the native YAML, which then fails every later publication.
+    """
+    from backend.common.oxidns_common import apply_common_settings
+    from backend.common.oxidns_native import load_native_yaml
+    document = load_native_yaml(settings['native_config'])
+    state = _analyze(document, settings, config)
+    keys = [key for key in SELECTORS if identity in state['values'][key]]
+    result = None
+    if keys and all(state['capabilities'][key]['editable'] for key in keys):
+        changes = {key: [value for value in state['values'][key] if value != identity] for key in keys}
+        # Same path as unchecking it in the editor, which also reconciles rule
+        # updates (an emptied downloader is parked rather than left invalid).
+        result = apply_common_settings(settings, changes, config, base_url)['settings']
+    elif not keys and not _uses_rule(document, config, identity):
+        return None
+    # Hand-written providers outside the recognized routing are never rewritten.
+    if result is None or _uses_rule(load_native_yaml(result['native_config']), config, identity):
+        raise OxidnsSettingsError('OxiDNS 还在用这条规则，而且那部分配置是手动写的，没法自动移除。'
+                                  '请先在 OxiDNS 设置的 YAML 中删掉对它的引用，再删除。')
+    return result
 
 
 def _references(value, tag):

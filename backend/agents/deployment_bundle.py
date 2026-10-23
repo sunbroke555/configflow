@@ -285,8 +285,12 @@ def _empty_rule_text(url):
     return empty_rule_part(part).encode('utf-8') if part in RULE_PARTS else b''
 
 
-def convert_mosdns_rules(content, rule_type='domain_set'):
-    """Convert text for the final MosDNS domain_set or ip_set consumer."""
+def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
+    """Convert text for the final MosDNS domain_set or ip_set consumer.
+
+    mixed marks the IP part of a classical source: its domain entries belong to
+    the domain part and are skipped, as rule-proxy does for device updates.
+    """
     if rule_type not in ('domain_set', 'ip_set'):
         raise DeploymentPreparationError('Unsupported MosDNS rule plugin type')
     try:
@@ -333,6 +337,8 @@ def convert_mosdns_rules(content, rule_type='domain_set'):
             try:
                 ipaddress.ip_network(value, strict=False)
             except ValueError:
+                if mixed and ',' not in line and not line.startswith('ip:'):
+                    continue
                 raise invalid_line('Invalid IP network in MosDNS ip_set rule source', index) from None
             converted.append(value)
             continue
@@ -417,7 +423,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
     files = {}
     file_names = {}
 
-    def add_content(path, value, role, *, native=False, empty=b''):
+    def add_content(path, value, role, *, native=False, mixed=False, empty=b''):
         path = relative_path(path)
         if service == 'oxidns' and (path == 'state' or path.startswith('state/')):
             raise DeploymentPreparationError('OxiDNS runtime state cannot be managed by a deployment')
@@ -428,7 +434,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         # particular, a bare domain is a suffix rule, not MosDNS's full: rule.
         # Only downloaded/shared rule sources go through the rule converter.
         if path in rule_types and not (service == 'oxidns' and native):
-            value = convert_mosdns_rules(value, rule_types[path]) or empty
+            value = convert_mosdns_rules(value, rule_types[path], mixed=mixed) or empty
         if len(value) > MAX_FILE_BYTES:
             raise DeploymentPreparationError('Deployment file exceeds size limit')
         if path in files:
@@ -438,11 +444,11 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         files[path] = (value, role)
         return path
 
-    def add(path, value, role, *, native=False, name='', empty=b''):
+    def add(path, value, role, *, native=False, mixed=False, name='', empty=b''):
         kind = '订阅' if role == 'provider' else '配置' if role == 'config' else '规则集' if role == 'rule' else '附加文件'
         name = name or rule_names.get(str(path).removeprefix('./'), '')
         try:
-            target = add_content(path, value, role, native=native, empty=empty)
+            target = add_content(path, value, role, native=native, mixed=mixed, empty=empty)
         except DeploymentPreparationError as exc:
             raise preparation_context(exc, name=name, path=path, kind=kind) from None
         if name:
@@ -564,7 +570,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             for done, future in enumerate(as_completed(futures), 1):
                 item, value = future.result()
                 add(item['local_path'], value, 'rule', name=item.get('name', ''),
-                    empty=_empty_rule_text(item.get('url', '')))
+                    mixed=item.get('behavior') == 'classical', empty=_empty_rule_text(item.get('url', '')))
                 if detail_progress is not None:
                     detail_progress(done, len(downloads), item.get('name') or '未命名', 'prepared')
                 elif progress is not None:
@@ -587,11 +593,20 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
     elif service == 'oxidns':
         from backend.common.oxidns_native import validate_resource_files
         from backend.common.oxidns_settings import OxidnsSettingsError
+        from backend.converters.oxidns import unavailable_rulesets
         try:
             validate_resource_files(main, files)
         except OxidnsSettingsError as exc:
-            raise DeploymentPreparationError(str(exc).replace(
-                'OxiDNS 配置引用了未打包的资源文件：', 'OxiDNS references an unbundled resource file: ')) from None
+            missing = _unbundled_references(main, files)
+            hints = unavailable_rulesets(config, missing)
+            if hints:
+                raise DeploymentPreparationError('OxiDNS 还在使用不可用的规则集，发布已停止，设备配置没有改动。'
+                                                 + ''.join(f'\n· {hint}' for hint in hints)) from None
+            if missing:
+                raise DeploymentPreparationError(
+                    f'OxiDNS 配置用到了文件 {missing[0]}，但附加文件里没有它，发布已停止，设备配置没有改动。'
+                    '\n请在 OxiDNS 设置的「附加文件」中添加它，或在 YAML 中删除这个引用。') from None
+            raise DeploymentPreparationError(str(exc)) from None
     else:
         for plugin in main.get('plugins', []):
             args = plugin.get('args') or {}
@@ -619,6 +634,15 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
     if phase_progress is not None:
         phase_progress(f'正在打包发布文件（{len(files)} 个文件）')
     return _pack(manifest, files, hashlib.sha256(config_bytes).hexdigest()[:8])
+
+
+def _unbundled_references(main, files):
+    """Relative OxiDNS resource paths the YAML references but the bundle lacks."""
+    from backend.common.oxidns_native import relative_resource, resource_references
+    from backend.common.oxidns_settings import safe_relative_path
+    bundled = {safe_relative_path(path) for path in files}
+    return sorted({path for path in map(relative_resource, resource_references(main))
+                   if path is not None and path not in bundled})
 
 
 def _pack(manifest, files, config_version, *, comparison_config=None):

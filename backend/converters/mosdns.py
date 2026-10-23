@@ -609,7 +609,8 @@ def get_mosdns_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
                 downloads.append({
                     'name': rule_set['name'],
                     'url': ruleset_file['url'],
-                    'local_path': ruleset_file['local_path']
+                    'local_path': ruleset_file['local_path'],
+                    'behavior': rule_set.get('behavior', 'domain'),
                 })
 
     return downloads
@@ -795,7 +796,8 @@ def generate_mosdns_config(config_data: Dict[str, Any], base_url: str = '') -> s
                 ruleset_downloads.append({
                     'name': rule_set['name'],
                     'url': ruleset_file['url'],
-                    'local_path': ruleset_file['local_path']
+                    'local_path': ruleset_file['local_path'],
+                    'behavior': rule_set.get('behavior', 'domain'),
                 })
             is_ip = ruleset_file['part'] == RULE_PART_IP
             plugins.append({
