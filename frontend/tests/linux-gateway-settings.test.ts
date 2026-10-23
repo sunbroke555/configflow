@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
+import { routerKey } from 'vue-router'
 import LinuxGatewaySettings from '@/components/generate/LinuxGatewaySettings.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
@@ -10,7 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Select } from '@/components/ui/select'
 import { agentApi, profileApi } from '@/api'
 import { linuxGatewayApi } from '@/api/linuxGateway'
-import { confirm, notify } from '@/lib/feedback'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { gatewaySpecErrors } from '@/lib/linuxGateway'
 
 vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, profileApi: { list: vi.fn() } }))
@@ -18,7 +19,8 @@ vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: {
   get: vi.fn(), save: vi.fn(), status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn(),
   previewDraft: vi.fn(), previewRestore: vi.fn(), restoreDraft: vi.fn(),
 } }))
-vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), confirmDanger: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
+const routerPush = vi.fn()
 
 const spec = { interface: 'eth0', address: '192.168.1.2', lan_cidr: '192.168.1.0/24', upstream_gateway: '192.168.1.1' }
 const guard = { expected_profile_id: 'office', expected_service_type: 'mihomo', expected_config_revision: 10 }
@@ -65,7 +67,7 @@ async function render(enabled = false, attached = false, extra = {}, realPublish
   const wrapper = shallowMount(LinuxGatewaySettings, {
     attachTo,
     props: { open: true, profileId: 'office' },
-    global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, AgentStatusRow: false, ...(realPublish ? { SettingsPublishBar: false } : {}) } },
+    global: { renderStubDefaultSlot: true, provide: { [routerKey as symbol]: { push: routerPush } }, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, AgentStatusRow: false, ...(realPublish ? { SettingsPublishBar: false } : {}) } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -461,5 +463,115 @@ describe('Gateway LAN input validation', () => {
     expect(gatewaySpecErrors({ ...spec, address: '10.1.1.2' })).toContain('Linux 地址必须在填写的 LAN 网段内。')
     expect(gatewaySpecErrors({ ...spec, lan_cidr: '192.168.1.5/24' })).toContain('LAN 网段请填写网络地址，例如 192.168.1.0/24，而不是设备地址。')
     expect(gatewaySpecErrors({ ...spec, address: 'example.com' }).length).toBeGreaterThan(0)
+  })
+})
+
+describe('router split guards', () => {
+  const split = (mode: 'full_tun' | 'invalid' | 'legacy', changes = {}) => ({ router_split: { mode, source: mode === 'legacy' ? 'setup' : 'marker', issues: [], route_rule_set_ids: mode === 'full_tun' ? ['telegram'] : [], ...changes } })
+  const conflict = (code: string, message = '服务端原文') => Object.assign(new Error('Request failed'), { response: { status: 409, data: { success: false, code, message } } })
+
+  it('makes the selective gateway unavailable for a full-TUN router split', async () => {
+    const wrapper = await render(false, false, split('full_tun'))
+    expect(wrapper.get('[data-router-split="full_tun"]').text()).toContain('主路由分流（完整 TUN）')
+    expect(wrapper.getComponent(Switch).props('disabled')).toBe(true)
+    expect(wrapper.text()).toContain('不适用于主路由分流')
+    expect(wrapper.get('[data-router-routes]').text()).toContain('主路由转发：fake-IP + 1 个规则集')
+    expect(wrapper.get('[data-router-routes]').text()).toContain('Telegram 已改名')
+    expect(wrapper.findAllComponents(Checkbox)).toHaveLength(0)
+    for (const label of ['预览配置变更', '预览并检查', '应用网关转发', '撤销网关转发', '预览恢复变更']) expect(button(wrapper, label)).toBeUndefined()
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+    // The stub keeps saveDisabled as a fallthrough attribute.
+    expect(wrapper.getComponent(SettingsWorkspace).attributes('save-disabled')).toBe('true')
+    await button(wrapper, '到上游路由管理转发网段').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/routers')
+    expect(wrapper.emitted('update:open')).toEqual([[false]])
+  })
+
+  it('cleans a leftover gateway record only after confirming forwarding stays on', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, preserves_forwarding: true, spec } }))
+    const wrapper = await render(false, false, split('full_tun'))
+    expect(wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === '旧网关记录')?.props()).toMatchObject({ status: '仍存在', tone: 'warning' })
+    await button(wrapper, '清理旧网关记录').trigger('click'); await flushPromises()
+    expect(confirm).toHaveBeenCalledWith('将删除旧的 configflow_gateway 规则和网关记录；IPv4 转发已持久化，会保持开启。', expect.objectContaining({ confirmText: '清理旧记录' }))
+    expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('one', 'office')
+    expect(notify.success).toHaveBeenCalledWith('旧网关记录已清理')
+  })
+
+  it('does not offer cleanup when forwarding is not persisted yet', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, preserves_forwarding: false, spec } }))
+    const wrapper = await render(false, false, split('full_tun'))
+    expect(button(wrapper, '清理旧网关记录')).toBeUndefined()
+    expect(wrapper.text()).toContain('清理会关闭转发')
+  })
+
+  it('pauses publishing when the base YAML lost the full TUN, without offering an automatic repair', async () => {
+    const wrapper = await render(false, false, split('full_tun', { issues: ['tun_missing'] }))
+    expect(wrapper.get('[data-tun-missing]').text()).toContain('基础 YAML 缺少完整 TUN，发布已暂停。')
+    expect(wrapper.get('[data-tun-missing]').text()).toContain('请在 Mihomo 基础 YAML 中恢复 tun 后再发布')
+    expect(button(wrapper, '补回完整 TUN')).toBeUndefined()
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+  })
+
+  it('stops every operation for an invalid marker', async () => {
+    const wrapper = await render(false, false, split('invalid'))
+    expect(wrapper.get('[data-router-split="invalid"]').text()).toContain('主路由分流标记 mihomo.router_split 无效')
+    expect(wrapper.find('[data-router-routes]').exists()).toBe(false)
+    expect(wrapper.find('[data-router-split="full_tun"]').exists()).toBe(false)
+    expect(wrapper.getComponent(Switch).props('disabled')).toBe(true)
+    expect(wrapper.findAllComponents(Checkbox)).toHaveLength(0)
+    for (const label of ['预览配置变更', '预览并检查', '应用网关转发', '撤销网关转发', '清理旧网关记录']) expect(button(wrapper, label)).toBeUndefined()
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+  })
+
+  it('keeps a legacy router split on and blocks restore without offering a migration', async () => {
+    const wrapper = await render(true, false, { ...split('legacy'), restore_point: { id: 'snapshot', created_at: '2026-10-20T10:00:00Z' } })
+    expect(wrapper.get('[data-router-split="legacy"]').text()).toContain('旧版主路由分流')
+    expect(wrapper.getComponent(Switch).props('disabled')).toBe(true)
+    expect(wrapper.text()).toContain('新增网段也需加入主路由的静态路由。')
+    expect(wrapper.findAllComponents(Checkbox)[0].props('disabled')).toBe(false)
+    expect(button(wrapper, '预览恢复变更').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-restore-blocked]').text()).toBe('恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。')
+    expect(button(wrapper, '迁移到完整 TUN')).toBeUndefined()
+    expect(wrapper.text()).not.toContain('迁移')
+  })
+
+  it('requires a danger confirmation before tearing down a legacy router split', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, spec } }))
+    const wrapper = await render(true, false, split('legacy'))
+    vi.mocked(confirmDanger).mockResolvedValueOnce(false)
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(confirmDanger).toHaveBeenCalledWith('主路由仍把代理网段转给这台 Linux。撤销后 TUN 接管与 IPv4 转发会还原，这些连接会中断，直到重新应用转发。', { title: '撤销「one」的网关转发？', confirmText: '仍然撤销' })
+    expect(confirm).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
+    vi.mocked(confirmDanger).mockResolvedValueOnce(true)
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('one', 'office', true)
+  })
+
+  it('keeps the selective gateway unchanged without a router split', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, spec } }))
+    const wrapper = await render(true)
+    expect(wrapper.find('[data-router-split]').exists()).toBe(false)
+    expect(wrapper.getComponent(Switch).props('disabled')).toBe(false)
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(confirmDanger).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('one', 'office')
+  })
+
+  it.each(['ROUTER_SPLIT_LEGACY', 'ROUTER_SPLIT_RESTORE_BLOCKED'])('shows the server text for %s where the request failed', async code => {
+    vi.mocked(linuxGatewayApi.previewDraft).mockRejectedValueOnce(conflict(code))
+    const wrapper = await render(true, false, split('legacy'))
+    wrapper.findAllComponents(Checkbox)[0].vm.$emit('update:modelValue', false); await flushPromises()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('服务端原文')
+  })
+
+  it.each(['ROUTER_SPLIT_LEGACY', 'ROUTER_SPLIT_FULL_TUN', 'UPGRADE_REQUIRED'])('falls back to the shared copy for %s without a server text', async code => {
+    vi.mocked(linuxGatewayApi.previewDraft).mockRejectedValueOnce(conflict(code, ''))
+    const wrapper = await render(true, false, split('legacy'))
+    wrapper.findAllComponents(Checkbox)[0].vm.$emit('update:modelValue', false); await flushPromises()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    const { ROUTER_SPLIT_MESSAGES } = await import('@/lib/routerSplit')
+    expect(wrapper.text()).toContain(ROUTER_SPLIT_MESSAGES[code])
   })
 })

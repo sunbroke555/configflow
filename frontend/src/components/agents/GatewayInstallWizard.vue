@@ -9,7 +9,8 @@ import type { SetupGoal } from '@/api/setup'
 import { gatewayEnvironmentErrors, installationHostMatches, installationMatches, onboardingSettingsKey } from '@/lib/gatewayOnboarding'
 import { copyText } from '@/lib/clipboard'
 import { buildInstallCommand } from '@/lib/coreInstallCommand'
-import { notify } from '@/lib/feedback'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { forwardingLabel, forwardingTone, fullTunReady, routerSplitErrorMessage, tunLabel, tunTone, type StatusTone } from '@/lib/routerSplit'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
@@ -33,7 +34,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 const props = defineProps<{ open: boolean; profileId: string; profileName: string; embedded?: boolean; goal?: SetupGoal }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; 'agents-changed': []; completed: []; busy: [value: boolean] }>()
-const steps = ['设备与网络', '分流规则', '安装核心', '发布并检查', '启用与验证']
 const step = ref(0)
 const contentPane = ref<HTMLElement | null>(null)
 const environmentErrorPanel = ref<HTMLElement | null>(null)
@@ -66,6 +66,12 @@ let generation = 0
 let disposed = false
 let poll: ReturnType<typeof setTimeout> | undefined
 const busy = computed(() => loading.value || !!action.value)
+// The server decides the takeover, so an Agent-page wizard follows it too.
+const takeover = computed(() => config.value?.takeover || installation.value?.takeover || 'selective')
+const fullTun = computed(() => takeover.value === 'full_tun')
+const legacy = computed(() => takeover.value === 'legacy')
+const steps = computed(() => ['设备与网络', '分流规则', '安装核心', '发布并检查', fullTun.value ? '转发与 TUN' : '启用与验证'])
+const tunPrepareNote = ref('')
 const installCommand = computed(() => installation.value?.expired ? '' : installation.value?.download_url
   ? buildInstallCommand(installation.value.download_url) : installation.value?.command || '')
 const locked = computed(() => !!installation.value)
@@ -92,7 +98,7 @@ const configReady = computed(() => configurationPreview.value?.ready === true &&
 const localDnsWarning = computed(() => settings.local_dns === config.value?.settings.local_dns
   ? config.value?.field_warnings?.local_dns || '' : '')
 const configLists = computed(() => [
-  { field: 'rule_set_ids' as const, title: 'IP 接管', ...gatewayCopy.applications, rows: config.value?.ip_candidates || [] },
+  { field: 'rule_set_ids' as const, ...(fullTun.value ? { title: '主路由转发', ...gatewayCopy.routerRoutes } : { title: 'IP 接管', ...gatewayCopy.applications }), rows: config.value?.ip_candidates || [] },
   { field: 'direct_rule_set_ids' as const, title: '直连域名', ...gatewayCopy.directDomains, rows: config.value?.domain_candidates || [] },
   { field: 'proxy_rule_set_ids' as const, title: '代理域名', ...gatewayCopy.proxyDomains, rows: config.value?.domain_candidates || [] },
 ].map(list => {
@@ -110,13 +116,31 @@ const canInspectNetwork = computed(() => installationHostMatches(installation.va
 const hostKey = computed(() => JSON.stringify([installation.value?.id, props.profileId, hostAgent.value?.id, gatewaySpecKey(network)]))
 const canApply = computed(() => canNetwork.value && !busy.value && networkPreview.value?.ready === true && networkPreviewKey.value === hostKey.value)
 const managedNetwork = computed(() => !!(networkStatus.value?.managed?.active || networkStatus.value?.managed?.pending))
-const activeNetwork = computed(() => networkStatus.value?.success === true && networkStatus.value.managed?.active === true && networkStatus.value.managed.healthy === true && !networkStatus.value.managed.pending)
+const activeNetwork = computed(() => fullTun.value ? fullTunReady(networkStatus.value)
+  : networkStatus.value?.success === true && networkStatus.value.managed?.active === true && networkStatus.value.managed.healthy === true && !networkStatus.value.managed.pending)
+// Full TUN only checks the host; the selective gateway's apply/revoke stays hidden.
+const fullTunRows = computed(() => {
+  const status = networkStatus.value
+  const checking = action.value === 'inspect'
+  const waiting: { status: string; tone: StatusTone } = { status: checking ? '正在检测' : '等待检测', tone: checking ? 'progress' : 'neutral' }
+  return {
+    forwarding: status ? { status: forwardingLabel(status), tone: forwardingTone(status) } : waiting,
+    forwardingError: status?.ipv4_forwarding?.error || (status?.ipv4_forwarding?.supported === false ? status.ipv4_forwarding.unsupported_reason || '' : ''),
+    tun: status ? { status: tunLabel(status), tone: tunTone(status) } : waiting,
+    tunError: status?.tun?.error || status?.config_error || '',
+  }
+})
+const canPersistForwarding = computed(() => !!networkStatus.value?.ipv4_forwarding && networkStatus.value.ipv4_forwarding.persisted !== true && networkStatus.value.ipv4_forwarding.supported !== false)
 const visibleNetworkWarnings = computed(() => (networkPreview.value?.warnings || []).filter(value => props.goal !== 'router' || !value.includes('切换一台客户端的网关')))
 const token = () => ({ generation, profileId: props.profileId })
 const current = (value: ReturnType<typeof token>) => !disposed && props.open && value.generation === generation && value.profileId === props.profileId
 const storageKey = () => `configflow.gateway-installation.${props.profileId}`
 const settingsBody = (): GatewayOnboardingSettings => ({ ...settings, rule_set_ids: [...settings.rule_set_ids], direct_rule_set_ids: [...settings.direct_rule_set_ids], proxy_rule_set_ids: [...settings.proxy_rule_set_ids], expected_config_revision: config.value?.config_revision })
 
+function hostError(failure: any) {
+  const code = failure?.response?.data?.code
+  return code ? routerSplitErrorMessage(code, failure.response.data.message) : gatewayErrorMessage(failure, true)
+}
 function stopPolling() { if (poll) clearTimeout(poll); poll = undefined }
 function continueToRules() {
   if (busy.value || !config.value || locked.value) return
@@ -323,24 +347,47 @@ async function applyNetwork() {
 async function removeNetwork() {
   if (!canInspectNetwork.value || !hostAgent.value || busy.value || !installation.value) return
   const captured = token(), agentId = hostAgent.value.id, id = installation.value.id
+  // A legacy router split still depends on this takeover; revoking it cuts the router's traffic.
+  const teardown = legacy.value
+  if (teardown && !await confirmDanger('主路由仍把代理网段转给这台 Linux。撤销后 TUN 接管与 IPv4 转发会还原，这些连接会中断，直到重新应用转发。', { title: `撤销「${installation.value.name}」的网关转发？`, confirmText: '仍然撤销' })) return
+  if (!current(captured) || hostAgent.value?.id !== agentId || busy.value) return
   action.value = 'remove'; error.value = ''; networkPreview.value = null
   try {
     const fresh = (await gatewayOnboardingApi.session(id, captured.profileId)).data
     if (!current(captured) || hostAgent.value?.id !== agentId) return
     if (!installationHostMatches(fresh, captured.profileId) || fresh.id !== id || fresh.agents.mihomo?.id !== agentId) throw new Error('原目标设备的身份或绑定已改变，未撤销任何设备的网络设置。')
-    const { data } = await linuxGatewayApi.remove(agentId, captured.profileId)
+    const { data } = teardown ? await linuxGatewayApi.remove(agentId, captured.profileId, true) : await linuxGatewayApi.remove(agentId, captured.profileId)
     if (!current(captured) || hostAgent.value?.id !== agentId) return
     networkStatus.value = data
     if (!data.success) throw new Error(data.message || '恢复未完成，请检查设备状态。')
     if (data.managed?.active || data.managed?.pending) throw new Error(data.managed.error || '撤销结果尚未确认，请重新读取网络状态。')
     networkRemoved.value = true
     notify.success('本向导管理的转发已撤销，请恢复客户端原来的网关与 DNS 设置。')
-  } catch (failure) { if (current(captured)) error.value = gatewayErrorMessage(failure, true) }
+  } catch (failure) { if (current(captured)) error.value = hostError(failure) }
   finally { if (current(captured)) action.value = '' }
+}
+async function persistForwarding() {
+  if (!canInspectNetwork.value || !hostAgent.value || busy.value || !installation.value) return
+  const captured = token(), agentId = hostAgent.value.id
+  const approved = await confirm(`将在「${installation.value.name}」写入 /etc/sysctl.d/99-configflow-aio-forward.conf 和 Agent 开机检查，并立即开启 IPv4 转发。`, { title: '开启 IPv4 转发？', confirmText: '开启并持久化' })
+  if (!approved || !current(captured) || hostAgent.value?.id !== agentId || busy.value) return
+  action.value = 'forwarding'; error.value = ''; tunPrepareNote.value = ''
+  let done = false
+  try {
+    const { data } = await linuxGatewayApi.persistForwarding(agentId, captured.profileId)
+    if (!current(captured) || hostAgent.value?.id !== agentId) return
+    if (!data.success) throw new Error(data.message || 'IPv4 转发未能持久化，请重新检查设备状态。')
+    if (data.tun_prepare && data.tun_prepare.level !== 'pass') tunPrepareNote.value = data.tun_prepare.message
+    notify.success('IPv4 转发已开启并持久化。')
+    done = true
+  } catch (failure) { if (current(captured)) error.value = hostError(failure) }
+  finally { if (current(captured)) action.value = '' }
+  // Show the host's real state instead of assuming the write took effect.
+  if (done && current(captured)) await inspectNetwork()
 }
 async function startAnotherInstallation() {
   if (busy.value) return
-  stopPolling(); installation.value = null; networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false
+  stopPolling(); installation.value = null; networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false; tunPrepareNote.value = ''
   configurationPreview.value = null; savedConfiguration.value = null; resumed.value = false; step.value = 0; error.value = ''; pollError.value = ''
   environmentAttempted.value = false
   Object.assign(network, emptyGatewaySpec(), { address: network.address })
@@ -376,7 +423,7 @@ watch(busy, value => emit('busy', value), { immediate: true })
 watch(() => [props.open, props.profileId] as const, () => {
   autoDetectionAttempt = ''
   generation++; stopPolling(); installation.value = null; config.value = null; configurationPreview.value = null; savedConfiguration.value = null
-  networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false; error.value = ''; pollError.value = ''; resumed.value = false; search.value = ''; ruleCategory.value = 'rule_set_ids'
+  networkStatus.value = null; networkPreview.value = null; networkRemoved.value = false; error.value = ''; pollError.value = ''; resumed.value = false; search.value = ''; ruleCategory.value = 'rule_set_ids'; tunPrepareNote.value = ''
   loading.value = false; action.value = ''; refreshPending.value = false; baseline.value = ''; step.value = 0
   environmentAttempted.value = false
   Object.assign(network, emptyGatewaySpec()); name.value = 'home-gateway'
@@ -388,7 +435,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
 </script>
 
 <template>
-  <SettingsWorkspace :open="open" :inline="embedded" title="安装 Linux 网关" description="安装 Mihomo、OxiDNS 与 Agent，检查后启用转发。" back-label="返回 Agent 列表" :dirty="dirty" :busy="busy" size="form" @update:open="emit('update:open', $event)">
+  <SettingsWorkspace :open="open" :inline="embedded" :title="fullTun ? '安装主路由分流' : '安装 Linux 网关'" :description="fullTun ? '安装 Mihomo、OxiDNS 与 Agent，开启转发并检查 TUN。' : '安装 Mihomo、OxiDNS 与 Agent，检查后启用转发。'" back-label="返回 Agent 列表" :dirty="dirty" :busy="busy" size="form" @update:open="emit('update:open', $event)">
     <div ref="contentPane" class="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain" data-gateway-install-wizard>
       <Tabs :model-value="String(step)" activation-mode="manual" class="mx-auto w-full min-w-0 max-w-3xl gap-5" :class="embedded ? '' : 'p-3 sm:p-5'" @update:model-value="selectStep">
         <div v-if="!embedded" class="min-w-0 space-y-2">
@@ -436,7 +483,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
         <section v-if="step === 0" :key="`${profileId}:${open}`" class="space-y-4" aria-label="设备与网络">
           <div>
             <h2 v-if="!embedded" class="m-0 text-lg font-semibold">设备与网络</h2>
-            <p class="mt-1 mb-0 text-sm text-muted-foreground">{{ embedded ? (goal === 'router' ? '沿用已保存的规则与 DNS。安装登记后自动检测网络，启用成功后再接入主路由。' : '沿用已保存的规则与 DNS。安装登记后自动检测网络，启用成功后再切换客户端。') : '安装登记后自动检测网络。Linux 需使用固定 IP，并与主路由在同一网段。' }}</p>
+            <p class="mt-1 mb-0 text-sm text-muted-foreground">{{ embedded ? (goal === 'router' ? `沿用已保存的规则与 DNS。安装登记后自动检测网络，${fullTun ? '转发与 TUN 检查通过' : '启用成功'}后再接入主路由。` : '沿用已保存的规则与 DNS。安装登记后自动检测网络，启用成功后再切换客户端。') : '安装登记后自动检测网络。Linux 需使用固定 IP，并与主路由在同一网段。' }}</p>
           </div>
           <div class="grid min-w-0 gap-3 sm:grid-cols-2">
             <FormField v-if="!embedded" label="设备名称" html-for="onboarding-name" help="用于命名这台 Linux 上的 Mihomo 和 OxiDNS Agent，不会修改 Linux 的主机名。"><Input id="onboarding-name" v-model="name" class="min-h-11" placeholder="home-gateway" :disabled="busy" /></FormField>
@@ -517,12 +564,18 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
             <p id="onboarding-conversion-help" class="mt-0 mb-0 ml-6 text-xs leading-relaxed text-muted-foreground">仅在原生配置无法保留时替换解析流程，并备份原配置；未勾选则停止。</p>
           </div>
           <details class="border-b border-border text-xs">
-            <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">网关说明</summary>
+            <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">{{ fullTun ? '分流说明' : '网关说明' }}</summary>
             <ul class="mt-1 mb-3 list-disc space-y-2 pl-5 leading-relaxed text-muted-foreground">
-              <li>仅支持 Linux + nftables 的 IPv4 网关；客户端需停用 IPv6，或另行配置 IPv6 路由。</li>
-              <li>接管网段须为 /8 至 /32，拒绝 /0、/1 等过大范围。</li>
-              <li>自动包含 fake-IP 网段 <code class="break-all font-mono">{{ config?.fake_ip_range || '由 Mihomo 配置决定' }}</code>。未选中的 IP 走 Linux 直连转发。</li>
-              <li>Mihomo 使用 rule / fake-IP 模式和选择性 TUN；实际出口由规则顺序及策略组当前选择决定。</li>
+              <template v-if="fullTun">
+                <li>主路由的静态路由自动包含 fake-IP 网段 <code class="break-all font-mono">{{ config?.fake_ip_range || '由 Mihomo 配置决定' }}</code>，另加所选规则集的 IPv4 网段，须为 /8 至 /32。</li>
+                <li>Mihomo 使用 rule / fake-IP 模式和完整 TUN，接管主路由转来的全部连接；实际出口由规则顺序及策略组当前选择决定。</li>
+              </template>
+              <template v-else>
+                <li>仅支持 Linux + nftables 的 IPv4 网关；客户端需停用 IPv6，或另行配置 IPv6 路由。</li>
+                <li>接管网段须为 /8 至 /32，拒绝 /0、/1 等过大范围。</li>
+                <li>自动包含 fake-IP 网段 <code class="break-all font-mono">{{ config?.fake_ip_range || '由 Mihomo 配置决定' }}</code>。未选中的 IP 走 Linux 直连转发。</li>
+                <li>Mihomo 使用 rule / fake-IP 模式和选择性 TUN；实际出口由规则顺序及策略组当前选择决定。</li>
+              </template>
               <li>OxiDNS 在 53 端口服务局域网，代理和后备 DNS 交给 Mihomo；未匹配域名使用已保存的默认 DNS，Mihomo 地址为（<code class="break-all font-mono">127.0.0.1:1053</code>）。</li>
               <li>直连 DNS 使用 IP 地址的 DoH / DoT；普通 53 端口可能被自动接管，形成回环。</li>
             </ul>
@@ -594,7 +647,33 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">发布说明与排错</summary><p class="mt-1 mb-3 leading-relaxed text-muted-foreground">关闭窗口后发布仍会继续，重新打开可查看进度。失败时在 Agent 查看原因，处理后继续发布，无需重装。</p></details>
         </section>
 
-        <section v-else class="space-y-4" aria-label="启用与验证">
+        <section v-else class="space-y-4" :aria-label="steps[4]">
+          <div v-if="legacy && !embedded" class="rounded-lg border border-warning-accent/30 bg-warning-soft px-3 py-2.5 text-xs leading-relaxed" role="status" data-legacy-router-split>
+            <p class="m-0 text-sm font-semibold text-warning-accent">旧版主路由分流</p>
+            <p class="mt-1 mb-0 text-foreground">这台设备使用 Linux 网关的选择性接管，主路由转来的连接依赖它；撤销转发会让这些连接中断。</p>
+          </div>
+          <template v-if="fullTun">
+          <div><h2 class="m-0 text-lg font-semibold">检查转发与 TUN</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">安装时已开启并持久化 IPv4 转发；发布 Mihomo 后由 TUN 接管主路由转来的连接。两项正常后再接入主路由。</p></div>
+          <div class="divide-y divide-border border-y border-border" data-full-tun-checks>
+            <AgentStatusRow label="IPv4 转发" :status="fullTunRows.forwarding.status" :tone="fullTunRows.forwarding.tone">
+              <template v-if="fullTunRows.forwardingError" #notice><p role="alert" class="m-0 text-destructive-accent">{{ fullTunRows.forwardingError }}</p></template>
+            </AgentStatusRow>
+            <AgentStatusRow label="Mihomo TUN" :status="fullTunRows.tun.status" :tone="fullTunRows.tun.tone">
+              <template v-if="fullTunRows.tunError || tunPrepareNote" #notice><p v-if="fullTunRows.tunError" role="alert" class="m-0 text-destructive-accent">{{ fullTunRows.tunError }}</p><p v-if="tunPrepareNote" class="m-0 text-warning-accent">{{ tunPrepareNote }}</p></template>
+            </AgentStatusRow>
+            <AgentStatusRow v-if="managedNetwork" label="旧网关记录" status="仍存在" tone="warning">
+              <template #notice><p class="m-0">请在生成工作台 → Mihomo → Linux 网关中清理。</p><p v-if="networkStatus?.managed?.error" role="alert" class="m-0 text-destructive-accent">{{ networkStatus.managed.error }}</p></template>
+            </AgentStatusRow>
+            <dl class="m-0 grid grid-cols-2 gap-3 py-3 text-xs sm:grid-cols-4"><div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr }}</dd></div></dl>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <Button variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="inspectNetwork"><LoaderCircle v-if="action === 'inspect'" class="size-4 animate-spin" /><RefreshCw v-else class="size-4" />重新检查</Button>
+            <Button v-if="canPersistForwarding" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="persistForwarding"><LoaderCircle v-if="action === 'forwarding'" class="size-4 animate-spin" />开启并持久化 IPv4 转发</Button>
+          </div>
+          <p v-if="activeNetwork" class="m-0 text-xs leading-relaxed">转发与 TUN 正常。接入主路由后，先用一台客户端测试国内网站和代理网站。</p>
+          <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><p class="mt-1 mb-3 leading-relaxed text-muted-foreground">主路由转发的网段在「上游路由」管理；Linux 网关的选择性接管不适用于此方案。</p></details>
+          </template>
+          <template v-else>
           <div><h2 class="m-0 text-lg font-semibold">{{ networkRemoved ? '网关转发已撤销' : activeNetwork ? '验证客户端' : goal === 'router' ? '启用 Linux 转发' : '启用网关转发' }}</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">{{ networkRemoved ? '请恢复客户端接入前的设置。' : activeNetwork ? '先测试一台设备，再接入其他客户端。' : '服务检查已通过。先检查实际网络，再应用转发。' }}</p></div>
           <div class="divide-y divide-border border-y border-border">
             <AgentStatusRow :label="goal === 'router' ? 'Linux 转发' : '网关转发'" :status="networkRemoved ? '已撤销' : activeNetwork ? '已启用' : managedNetwork ? '待确认' : '未启用'" :tone="networkRemoved || activeNetwork ? 'success' : managedNetwork ? 'warning' : 'neutral'">
@@ -623,6 +702,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
             <Button v-else variant="ghost" class="min-h-11 px-2" :disabled="busy || !canInspectNetwork" @click="inspectNetwork">重新读取网络状态</Button>
           </div>
           <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">生成工作台 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
+          </template>
         </section>
         </TabsContent>
       </Tabs>
@@ -631,7 +711,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
       <div v-if="embedded" class="flex flex-wrap items-center gap-2">
         <Button v-if="!locked" class="min-h-11" :disabled="busy || !config || !!pollError" @click="generatePreparedInstallation"><LoaderCircle v-if="busy" class="size-4 animate-spin" />生成安装命令</Button>
         <Button v-else-if="activeNetwork && installation?.phase === 'published' && !installationBlocked" class="min-h-11" :disabled="busy" @click="emit('completed')">{{ goal === 'router' ? '继续接入主路由' : '继续设置测试客户端' }}</Button>
-        <span v-else class="text-xs text-muted-foreground">{{ step === 4 ? (goal === 'router' ? '检查并启用转发后，再接入主路由。' : '检查并启用转发后，才能接入客户端。') : step === 3 ? '按顺序发布并检查两项配置后，再启用转发。' : '请在目标 Linux 执行命令，完成登记后继续发布与检查。' }}</span>
+        <span v-else class="text-xs text-muted-foreground">{{ step === 4 ? (fullTun ? '转发与 TUN 检查通过后，再接入主路由。' : goal === 'router' ? '检查并启用转发后，再接入主路由。' : '检查并启用转发后，才能接入客户端。') : step === 3 ? (fullTun ? '按顺序发布并检查两项配置后，再检查转发与 TUN。' : '按顺序发布并检查两项配置后，再启用转发。') : '请在目标 Linux 执行命令，完成登记后继续发布与检查。' }}</span>
       </div>
       <div v-else class="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <p class="m-0 shrink-0 text-xs text-muted-foreground"><span class="num">{{ step + 1 }} / 5</span><span class="hidden sm:inline"> · {{ steps[step] }}</span></p>

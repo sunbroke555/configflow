@@ -10,10 +10,10 @@ import FormField from '@/components/common/FormField.vue'
 import { gatewayOnboardingApi } from '@/api/gatewayOnboarding'
 import { linuxGatewayApi } from '@/api/linuxGateway'
 import { gatewayEnvironmentErrors, installationMatches } from '@/lib/gatewayOnboarding'
-import { notify } from '@/lib/feedback'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
 vi.mock('@/api/gatewayOnboarding', () => ({ gatewayOnboardingApi: { get: vi.fn(), preview: vi.fn(), save: vi.fn(), create: vi.fn(), sessions: vi.fn(), session: vi.fn(), publish: vi.fn(), network: vi.fn() } }))
-vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: { status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn() } }))
-vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: { status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn(), persistForwarding: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), confirmDanger: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
 const response = (data: unknown) => ({ data }) as any
 const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, 'execCommand')
@@ -46,12 +46,12 @@ const wrappers: ReturnType<typeof shallowMount>[] = []
 const attachedRoots: HTMLElement[] = []
 function button(wrapper: ReturnType<typeof shallowMount>, text: string) { return wrapper.findAll('button').find(item => item.attributes('aria-label') === text || item.text() === text)! }
 function stepButton(wrapper: ReturnType<typeof shallowMount>, index: number) { return wrapper.get('[data-gateway-steps]').findAll('[role="tab"]')[index] }
-async function render(attached = false, embedded = false) {
+async function render(attached = false, embedded = false, goal: 'gateway' | 'router' = 'gateway', extraStubs: Record<string, boolean> = {}) {
   let attachTo: HTMLElement | undefined
   if (attached) {
     attachTo = document.createElement('div'); document.body.appendChild(attachTo); attachedRoots.push(attachTo)
   }
-  const wrapper = shallowMount(GatewayInstallWizard, { attachTo, props: { open: true, profileId: 'office', profileName: '办公室', embedded, goal: 'gateway' }, global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Tabs: tabsStub, TabsTrigger: tabsTriggerStub, Input: false, Textarea: false, GatewayNetworkFields: false, GatewayClientInstructions: false } } })
+  const wrapper = shallowMount(GatewayInstallWizard, { attachTo, props: { open: true, profileId: 'office', profileName: '办公室', embedded, goal }, global: { renderStubDefaultSlot: true, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Tabs: tabsStub, TabsTrigger: tabsTriggerStub, Input: false, Textarea: false, GatewayNetworkFields: false, GatewayClientInstructions: false, ...extraStubs } } })
   wrappers.push(wrapper); await flushPromises(); return wrapper
 }
 async function fillEnvironment(wrapper: ReturnType<typeof shallowMount>) {
@@ -737,5 +737,127 @@ describe.each([false, true])('shared automatic gateway flow (embedded=%s)', embe
     expect(button(wrapper, '继续设置测试客户端')).toBeUndefined()
     expect(wrapper.text()).toContain('网关转发已撤销')
     expect(wrapper.emitted('completed')).toBeUndefined()
+  })
+})
+
+describe('router split with full TUN', () => {
+  const ready = (changes: Record<string, unknown> = {}) => ({ success: true, supported: true, enabled_in_config: false, managed: { active: false, preserves_forwarding: true },
+    ipv4_forwarding: { protocol: 1, current: '1', config: 'managed', hook_script: 'managed', startup_hook: 'registered', persisted: true, supported: true },
+    tun: { configured: true, device: 'Meta', present: true, gateway_marker: false }, ...changes })
+  const row = (wrapper: ReturnType<typeof shallowMount>, label: string) => wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === label)?.props()
+  async function renderPublished(status: unknown, embedded = true, takeover: 'full_tun' | 'legacy' = 'full_tun', extraStubs: Record<string, boolean> = {}) {
+    vi.mocked(gatewayOnboardingApi.get).mockResolvedValue(response({ ...config(), takeover }))
+    const published = session('published', takeover === 'full_tun' ? { takeover: 'full_tun' } : {})
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: published }))
+    vi.mocked(gatewayOnboardingApi.session).mockResolvedValue(response(published))
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response(status))
+    return render(false, embedded, 'router', extraStubs)
+  }
+
+  it.each([false, true])('checks forwarding and TUN instead of offering gateway forwarding (embedded=%s)', async embedded => {
+    const wrapper = await renderPublished(ready(), embedded)
+    expect(wrapper.find('section[aria-label="转发与 TUN"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('检查转发与 TUN')
+    for (const label of ['检查并预览转发', '应用网关转发', '撤销网关转发', '开启并持久化 IPv4 转发']) expect(button(wrapper, label)).toBeUndefined()
+    expect(wrapper.text()).not.toContain('高级选项：手动修改网络')
+    expect(wrapper.findComponent({ name: 'GatewayClientInstructions' }).exists()).toBe(false)
+    expect(row(wrapper, 'IPv4 转发')).toMatchObject({ status: '已开启并持久化', tone: 'success' })
+    expect(row(wrapper, 'Mihomo TUN')).toMatchObject({ status: '运行中 · Meta', tone: 'success' })
+    expect(row(wrapper, '旧网关记录')).toBeUndefined()
+    expect(wrapper.text()).toContain('主路由转发的网段在「上游路由」管理')
+    if (embedded) {
+      await button(wrapper, '继续接入主路由').trigger('click')
+      expect(wrapper.emitted('completed')).toEqual([[]])
+    }
+    expect(linuxGatewayApi.preview).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['current', { current: '0', persisted: false }, '未开启', 'danger'],
+    ['persisted', { current: '1', persisted: false, startup_hook: 'absent' }, '已开启，未持久化', 'warning'],
+  ] as const)('blocks continuing until forwarding is on and persisted (%s)', async (_case, forwarding, label, tone) => {
+    const status = ready({ ipv4_forwarding: { ...ready().ipv4_forwarding, ...forwarding } })
+    const wrapper = await renderPublished(status)
+    expect(row(wrapper, 'IPv4 转发')).toMatchObject({ status: label, tone })
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+    expect(wrapper.text()).toContain('转发与 TUN 检查通过后，再接入主路由。')
+    vi.mocked(confirm).mockResolvedValueOnce(true)
+    vi.mocked(linuxGatewayApi.persistForwarding).mockResolvedValue(response({ success: true, message: 'IPv4 转发已开启并持久化', ipv4_forwarding: ready().ipv4_forwarding, tun_prepare: { level: 'pass', message: '' } }))
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response(ready()))
+    await button(wrapper, '开启并持久化 IPv4 转发').trigger('click'); await flushPromises()
+    expect(vi.mocked(confirm).mock.calls[0][0]).toContain('/etc/sysctl.d/99-configflow-aio-forward.conf')
+    expect(vi.mocked(confirm).mock.calls[0][1]).toMatchObject({ title: '开启 IPv4 转发？', confirmText: '开启并持久化' })
+    expect(linuxGatewayApi.persistForwarding).toHaveBeenCalledExactlyOnceWith('new-mihomo', 'office')
+    expect(notify.success).toHaveBeenCalledWith('IPv4 转发已开启并持久化。')
+    // The real host state is read again instead of assuming success.
+    expect(linuxGatewayApi.status).toHaveBeenCalledTimes(2)
+    expect(button(wrapper, '继续接入主路由')).toBeTruthy()
+  })
+
+  it('does not persist forwarding when the confirmation is cancelled', async () => {
+    const wrapper = await renderPublished(ready({ ipv4_forwarding: { ...ready().ipv4_forwarding, persisted: false } }))
+    vi.mocked(confirm).mockResolvedValueOnce(false)
+    await button(wrapper, '开启并持久化 IPv4 转发').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.persistForwarding).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['TUN not running', { tun: { configured: true, device: 'Meta', present: false, gateway_marker: false } }, 'Mihomo TUN', '未运行'],
+    ['TUN not configured', { tun: { configured: false, device: 'Meta', present: false, gateway_marker: false } }, 'Mihomo TUN', '未启用完整 TUN'],
+    ['gateway config still deployed', { enabled_in_config: true }, 'IPv4 转发', '已开启并持久化'],
+  ])('keeps the router step blocked when %s', async (_case, changes, label, status) => {
+    const wrapper = await renderPublished(ready(changes))
+    expect(row(wrapper, label)?.status).toBe(status)
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+  })
+
+  it('shows a leftover gateway record and keeps the step blocked', async () => {
+    const wrapper = await renderPublished(ready({ managed: { active: true, healthy: true, error: '旧规则仍存在' } }), true, 'full_tun', { AgentStatusRow: false })
+    expect(row(wrapper, '旧网关记录')).toMatchObject({ status: '仍存在', tone: 'warning' })
+    expect(wrapper.text()).toContain('请在生成工作台 → Mihomo → Linux 网关中清理。')
+    expect(wrapper.text()).toContain('旧规则仍存在')
+    expect(button(wrapper, '撤销网关转发')).toBeUndefined()
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+  })
+
+  it('asks for an Agent update when the status has no forwarding or TUN fields', async () => {
+    const wrapper = await renderPublished({ success: true, supported: true, enabled_in_config: false, managed: { active: false } })
+    expect(row(wrapper, 'IPv4 转发')?.status).toBe('需要 Agent 1.8.40-go')
+    expect(row(wrapper, 'Mihomo TUN')?.status).toBe('需要 Agent 1.8.40-go')
+    expect(button(wrapper, '开启并持久化 IPv4 转发')).toBeUndefined()
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+  })
+
+  it('names the IP list for router forwarding and keeps a single IP list', async () => {
+    vi.mocked(gatewayOnboardingApi.get).mockResolvedValue(response({ ...config(), takeover: 'full_tun' }))
+    const wrapper = await render(false, false, 'router')
+    await fillEnvironment(wrapper)
+    const picker = wrapper.get('[data-gateway-rule-picker]')
+    expect(picker.text()).toContain('主路由转发')
+    expect(picker.text()).not.toContain('IP 接管')
+    expect(picker.text()).toContain('勾选的规则集 IPv4 网段会加入主路由静态路由')
+    expect(picker.findAll('[role="tab"]')).toHaveLength(3)
+  })
+
+  it('warns about a legacy router split without offering a migration and confirms a breaking revocation', async () => {
+    const wrapper = await renderPublished({ success: true, supported: true, enabled_in_config: true, managed: { active: true, healthy: true } }, false, 'legacy')
+    expect(wrapper.get('[data-legacy-router-split]').text()).toContain('旧版主路由分流')
+    expect(wrapper.get('[data-legacy-router-split]').text()).not.toContain('迁移')
+    expect(button(wrapper, '前往上游路由迁移')).toBeUndefined()
+    vi.mocked(confirmDanger).mockResolvedValueOnce(false)
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(confirmDanger).toHaveBeenCalledWith(expect.stringContaining('这些连接会中断'), expect.objectContaining({ confirmText: '仍然撤销' }))
+    expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
+    vi.mocked(confirmDanger).mockResolvedValueOnce(true)
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('new-mihomo', 'office', true)
+  })
+
+  it('does not show the legacy banner for a selective gateway', async () => {
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('published') }))
+    const wrapper = await render()
+    expect(wrapper.find('[data-legacy-router-split]').exists()).toBe(false)
+    expect(button(wrapper, '检查并预览转发')).toBeTruthy()
   })
 })
