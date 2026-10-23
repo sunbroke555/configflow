@@ -5,6 +5,7 @@ import (
 	"agent/netfilter"
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,7 +144,7 @@ func mihomoWithTUN(t *testing.T, body string) Config {
 const fullTUN = "tun:\n  enable: true\n  auto-route: true\n  auto-redirect: true\n"
 
 var mayDrop = netfilter.Result{Protocol: 1, State: netfilter.StateMayDrop, Device: "Meta", AutoRedirect: true,
-	Hint:     "这台 Linux 的防火墙会拦截转发到 Mihomo TUN（Meta）的流量：TCP 仍可用，UDP（如 QUIC、语音通话、游戏）和 ping 会失败。ConfigFlow 不会改动防火墙，需要时在这台 Linux 上执行下面的命令放行。",
+	Hint:     "这台 Linux 的防火墙可能拦截经过 Mihomo TUN（Meta）的流量：主路由转来的 UDP（如 QUIC、语音通话、游戏）和 ping 会失败；其他 TCP 连接不受影响。ConfigFlow 不会改动防火墙，需要时在这台 Linux 上执行下面的命令放行。",
 	Remedies: []netfilter.Remedy{{Source: "docker", Label: "Docker", Commands: []string{"iptables -I DOCKER-USER -o Meta -j ACCEPT", "iptables -I DOCKER-USER -i Meta -j ACCEPT"}, PersistNote: "这两条规则重启后会丢失。"}}}
 
 func TestInstallerForwardFilterWarnsWithCommandsAndNeverFails(t *testing.T) {
@@ -154,7 +155,7 @@ func TestInstallerForwardFilterWarnsWithCommandsAndNeverFails(t *testing.T) {
 		auto   bool
 	}{
 		{"tun disabled uses full TUN default", "tun:\n  enable: false\n", "Meta", true},
-		{"configured device", "tun:\n  enable: true\n  auto-route: true\n  device: cf0\n  auto-redirect: false\n", "cf0", false},
+		{"configured device", "tun:\n  enable: true\n  auto-route: true\n  device: cf0\n  auto-redirect: false\n  dns-hijack: []\n", "cf0", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := healthySystemFixture()
@@ -225,6 +226,37 @@ func TestCommandsArePrintedUnwrappedAndInfoIsLogOnly(t *testing.T) {
 	}
 }
 
+func TestInstallerForwardFilterTargetMatchesThePublishedTUN(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		configs func(t *testing.T) []Config
+		want    netfilter.Target
+	}{
+		// Standalone Mihomo: ConfigFlow's full TUN hijacks DNS to this host.
+		{"standalone default", func(t *testing.T) []Config { return []Config{mihomoWithTUN(t, "mode: rule\n")} },
+			netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}},
+		// AIO: OxiDNS on this host answers DNS; the publish excludes the host.
+		{"aio default", func(t *testing.T) []Config {
+			return []Config{mihomoWithTUN(t, "mode: rule\n"), {ServiceType: "oxidns"}}
+		},
+			netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed"}},
+		{"configured tun", func(t *testing.T) []Config {
+			return []Config{mihomoWithTUN(t, fullTUN+"  stack: gvisor\n  dns-hijack: [any:53]\n  route-exclude-address: [10.97.0.20/32]\n")}
+		}, netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "gvisor"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := installerProbe(healthySystemFixture(), "")
+			probe.localAddresses = func() []net.IP { return []net.IP{net.ParseIP("10.97.0.20").To4()} }
+			var target netfilter.Target
+			probe.forwardFilter = func(value netfilter.Target) netfilter.Result { target = value; return mayDrop }
+			systemChecksWithProbe(tc.configs(t), probe)
+			if target != tc.want {
+				t.Fatalf("target %+v, want %+v", target, tc.want)
+			}
+		})
+	}
+}
+
 func TestInstallerForwardFilterFollowsTheFullTUNScope(t *testing.T) {
 	for _, tc := range []struct{ name, config string }{
 		{"selective gateway marker", "tun:\n  enable: true\n  auto-route: true\n  route-address-set: [cf]\nx-configflow-linux-gateway:\n  enabled: true\n"},
@@ -251,23 +283,23 @@ func TestInstallerForwardFilterKeepsEachSourceWithItsNote(t *testing.T) {
 	result := mayDrop
 	result.Remedies = []netfilter.Remedy{
 		{Source: "docker", Label: "Docker", Commands: []string{"iptables -I DOCKER-USER -o Meta -j ACCEPT", "iptables -I DOCKER-USER -i Meta -j ACCEPT"}, PersistNote: "这两条规则重启后会丢失。"},
-		{Source: "firewalld", Label: "firewalld", Commands: []string{"firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload"}, PersistNote: "已用 --permanent 保存，重启后仍有效。"},
+		{Source: "firewalld", Label: "firewalld", Commands: []string{"firewall-cmd --permanent --zone=trusted --change-interface=Meta", "firewall-cmd --reload"}, PersistNote: "已用 --permanent 保存，重启后仍有效。"},
 	}
 	probe.forwardFilter = func(netfilter.Target) netfilter.Result { return result }
 	report := Report(systemChecksWithProbe([]Config{mihomoWithTUN(t, fullTUN)}, probe))
 	check := namedSystemCheck(t, report, "转发过滤")
-	if len(check.Groups) != 2 || check.Groups[1].Label != "firewalld" || len(check.Groups[1].Commands) != 1 || strings.Contains(check.Fix, "重启后") {
+	if len(check.Groups) != 2 || check.Groups[1].Label != "firewalld" || len(check.Groups[1].Commands) != 2 || strings.Contains(check.Fix, "重启后") {
 		t.Fatalf("groups: %+v", check)
 	}
 	var terminal, details bytes.Buffer
 	Report{check}.PrintWithOptions(&terminal, clioutput.Options{Details: &details, Width: 100}, false)
 	want := "    在这台 Linux 上执行（Docker）：\n      iptables -I DOCKER-USER -o Meta -j ACCEPT\n      iptables -I DOCKER-USER -i Meta -j ACCEPT\n      这两条规则重启后会丢失。\n" +
-		"    在这台 Linux 上执行（firewalld）：\n      firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload\n      已用 --permanent 保存，重启后仍有效。\n"
+		"    在这台 Linux 上执行（firewalld）：\n      firewall-cmd --permanent --zone=trusted --change-interface=Meta\n      firewall-cmd --reload\n      已用 --permanent 保存，重启后仍有效。\n"
 	if !strings.Contains(terminal.String(), want) {
 		t.Fatalf("terminal:\n%s", terminal.String())
 	}
 	log := "  在这台 Linux 上执行（Docker）：\n  命令：iptables -I DOCKER-USER -o Meta -j ACCEPT\n  命令：iptables -I DOCKER-USER -i Meta -j ACCEPT\n  说明：这两条规则重启后会丢失。\n" +
-		"  在这台 Linux 上执行（firewalld）：\n  命令：firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload\n  说明：已用 --permanent 保存，重启后仍有效。\n"
+		"  在这台 Linux 上执行（firewalld）：\n  命令：firewall-cmd --permanent --zone=trusted --change-interface=Meta\n  命令：firewall-cmd --reload\n  说明：已用 --permanent 保存，重启后仍有效。\n"
 	if !strings.Contains(details.String(), log) {
 		t.Fatalf("log:\n%s", details.String())
 	}

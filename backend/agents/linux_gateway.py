@@ -425,9 +425,11 @@ _FORWARDING_FIELDS = ('current', 'persisted', 'config', 'hook_script', 'startup_
 # values; an invalid entry is dropped rather than failing the whole status.
 FORWARD_FILTER_STATES = frozenset({'ok', 'may_drop', 'unknown', 'not_applicable'})
 FORWARD_FILTER_SOURCES = frozenset({'docker', 'iptables', 'nftables', 'firewalld', 'ufw'})
+# Blocked paths, in the Agent's display order (netfilter.Flow*).
+FORWARD_FILTER_FLOWS = ('forward', 'dns', 'redirect_tcp', 'tun_tcp')
 FORWARD_FILTER_MAX_SOURCES = 8
 FORWARD_FILTER_MAX_REMEDIES = 6
-FORWARD_FILTER_MAX_COMMANDS = 4
+FORWARD_FILTER_MAX_COMMANDS = 6
 FORWARD_FILTER_MAX_COMMAND = 240
 # Same as the Agent's TUN device pattern (aioDevicePattern, netfilter.DevicePattern).
 _FORWARD_FILTER_DEVICE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}')
@@ -435,6 +437,12 @@ _FORWARD_FILTER_NFT_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}')
 _FORWARD_FILTER_REASON = re.compile(r'[a-z][a-z0-9_]{0,31}')
 # One firewall tool per '&&'-joined step; no shell expansion, pipes or redirects.
 _FORWARD_FILTER_COMMAND = re.compile(r'(?:iptables|iptables-legacy|nft|firewall-cmd|ufw)( [A-Za-z0-9_.:=/,+"\'-]+)+')
+# The only compound line: UFW has no command for conntrack DNAT, so its rule is
+# added once to /etc/ufw/before.rules (netfilter.UFWBeforeRulesCommand). Kept as
+# an exact string instead of allowing grep or sed in general.
+_UFW_DNAT_RULE = '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT'
+FORWARD_FILTER_UFW_BEFORE_RULES = (f"grep -q -- '{_UFW_DNAT_RULE}' /etc/ufw/before.rules || "
+                                   f"sed -i '/^# End required lines/a {_UFW_DNAT_RULE}' /etc/ufw/before.rules")
 
 
 def _forward_filter_text(value, limit):
@@ -451,6 +459,8 @@ def _forward_filter_choice(value, allowed):
 def _forward_filter_command(value):
     if not isinstance(value, str) or not value or len(value) > FORWARD_FILTER_MAX_COMMAND:
         return None
+    if value == FORWARD_FILTER_UFW_BEFORE_RULES:
+        return value
     if not all(_FORWARD_FILTER_COMMAND.fullmatch(step) for step in value.split(' && ')):
         return None
     return value
@@ -464,6 +474,7 @@ def _forward_filter_source(value):
     return {
         'kind': value['kind'],
         'backend': _forward_filter_choice(value.get('backend'), ('nft', 'legacy')),
+        'hook': _forward_filter_choice(value.get('hook'), ('forward', 'input')),
         'family': _forward_filter_choice(value.get('family'), ('ip', 'inet')),
         **names,
         'policy': _forward_filter_choice(value.get('policy'), ('drop', 'accept')),
@@ -496,6 +507,7 @@ def sanitize_forward_filter(value):
     reason = value.get('reason')
     sources = value.get('sources') if isinstance(value.get('sources'), list) else []
     remedies = value.get('remedies') if isinstance(value.get('remedies'), list) else []
+    flows = value.get('flows') if isinstance(value.get('flows'), list) else []
     return {
         'protocol': value.get('protocol') if type(value.get('protocol')) is int else 0,
         'state': value['state'],
@@ -503,9 +515,11 @@ def sanitize_forward_filter(value):
         'device': device if isinstance(device, str) and _FORWARD_FILTER_DEVICE.fullmatch(device) else '',
         'auto_redirect': value.get('auto_redirect') is True,
         'policy': _forward_filter_choice(value.get('policy'), ('drop', 'accept')),
+        'input_policy': _forward_filter_choice(value.get('input_policy'), ('drop', 'accept')),
+        'flows': [flow for flow in FORWARD_FILTER_FLOWS if flow in flows],
         'sources': [source for source in map(_forward_filter_source, sources) if source][:FORWARD_FILTER_MAX_SOURCES],
         'remedies': [remedy for remedy in map(_forward_filter_remedy, remedies) if remedy][:FORWARD_FILTER_MAX_REMEDIES],
-        'hint': _forward_filter_text(value.get('hint'), 300),
+        'hint': _forward_filter_text(value.get('hint'), 400),
         'verify': _forward_filter_text(value.get('verify'), 300),
         'checked_at': _forward_filter_text(value.get('checked_at'), 40),
         'cached': value.get('cached') is True,

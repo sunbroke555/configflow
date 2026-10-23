@@ -473,15 +473,19 @@ def test_selective_gateway_script_is_byte_identical_to_the_previous_release():
 
 
 # The ordinary AIO persists IPv4 forwarding itself. Its environment check is
-# told so, and the summary repeats a forward-filter warning; nothing else moves.
+# told so (no manual-repair warnings remain to point at), and the summary
+# repeats a forward-filter warning; nothing else moves.
 ORDINARY_AIO_FORWARDING_DELTAS = (
     ('cf_step "检查运行环境"\nif cf_environment_check "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json"',
      'cf_step "检查运行环境"\nCONFIGFLOW_INSTALLER_FORWARDING=persist\nexport CONFIGFLOW_INSTALLER_FORWARDING\n'
      'if cf_environment_check "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json"'),
     ('fi\ncf_step_done "运行环境检查通过"\n',
      'fi\nunset CONFIGFLOW_INSTALLER_FORWARDING\ncf_step_done "运行环境检查通过"\n'),
-    ('详细日志。"\n    cf_fact ipv4_forwarding ',
-     '详细日志。"\n'
+    ('    cf_note forwarding "IPv4 转发已设置持久化，尚未实际重启验证；其他配置或服务覆盖风险及原检查结果见详细日志。"\n',
+     '    cf_note forwarding "IPv4 转发已设置持久化，尚未实际重启验证；其他配置或服务仍可能在重启后把它改回 0，'
+     '重启后可执行 sysctl net.ipv4.ip_forward 确认仍为 1。"\n'),
+    ('确认仍为 1。"\n    cf_fact ipv4_forwarding ',
+     '确认仍为 1。"\n'
      '    # The environment check only warns about these; repeat them in the final\n'
      '    # summary because neither stops the install.\n'
      '    if [ -n "${CONFIGFLOW_LOG_FILE:-}" ] && [ -f "$CONFIGFLOW_LOG_FILE" ]; then\n'
@@ -490,8 +494,8 @@ ORDINARY_AIO_FORWARDING_DELTAS = (
      '处理方法见上方「IPv4 转发冲突」或完整日志。"\n'
      '        fi\n'
      "        if grep -q '^\\[提醒\\] 转发过滤：' \"$CONFIGFLOW_LOG_FILE\" 2>/dev/null; then\n"
-     '            cf_note forward_filter "转发过滤：防火墙可能拦截转发到 Mihomo TUN 的 UDP 和 ping，安装不受影响；'
-     '放行命令见上方「转发过滤」或完整日志。"\n'
+     '            cf_note forward_filter "转发过滤：这台 Linux 的防火墙可能拦截经过 Mihomo TUN 的流量，安装不受影响；'
+     '影响范围和放行命令见上方「转发过滤」或完整日志。"\n'
      '        fi\n'
      '    fi\n'
      '    cf_fact ipv4_forwarding '),

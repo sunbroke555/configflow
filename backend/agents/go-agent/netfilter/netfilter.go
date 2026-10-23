@@ -1,5 +1,7 @@
 // Package netfilter inspects, read-only, whether the host firewall may drop
-// traffic forwarded between the LAN and a full-TUN Mihomo device.
+// the traffic a full-TUN Mihomo host handles for the LAN: packets forwarded
+// between the LAN and the TUN device, TCP that auto-redirect hands to a local
+// port, and TCP that the TUN system stack delivers to Mihomo.
 //
 // It never changes firewall state. Every command it runs only lists rules, and
 // it avoids listings with side effects: the legacy iptables filter table is
@@ -28,23 +30,33 @@ const (
 
 // Result is the agent status contract (field forward_filter). Protocol 1.
 type Result struct {
-	Protocol     int      `json:"protocol"`
-	State        string   `json:"state"`
-	Reason       string   `json:"reason"`
-	Device       string   `json:"device"`
-	AutoRedirect bool     `json:"auto_redirect"`
-	Policy       string   `json:"policy"`
-	Sources      []Source `json:"sources"`
-	Remedies     []Remedy `json:"remedies"`
-	Hint         string   `json:"hint"`
-	Verify       string   `json:"verify"`
-	CheckedAt    string   `json:"checked_at"`
-	Cached       bool     `json:"cached"`
+	Protocol     int    `json:"protocol"`
+	State        string `json:"state"`
+	Reason       string `json:"reason"`
+	Device       string `json:"device"`
+	AutoRedirect bool   `json:"auto_redirect"`
+	// Policy and InputPolicy are the real default policies of the inspected
+	// forward and input hooks ("drop" when any of them drops), whatever the
+	// verdict: accept rules can make a DROP policy harmless.
+	Policy      string `json:"policy"`
+	InputPolicy string `json:"input_policy"`
+	// Flows lists the blocked paths: forward (LAN <-> TUN), dns (DNS to this
+	// host that auto-redirect DNATs into the TUN), redirect_tcp (TCP that
+	// auto-redirect hands to a local port) and tun_tcp (TCP the TUN system
+	// stack delivers to Mihomo).
+	Flows     []string `json:"flows"`
+	Sources   []Source `json:"sources"`
+	Remedies  []Remedy `json:"remedies"`
+	Hint      string   `json:"hint"`
+	Verify    string   `json:"verify"`
+	CheckedAt string   `json:"checked_at"`
+	Cached    bool     `json:"cached"`
 }
 
 type Source struct {
 	Kind    string `json:"kind"`    // docker | iptables | nftables | firewalld | ufw
 	Backend string `json:"backend"` // nft | legacy for iptables-based sources
+	Hook    string `json:"hook"`    // forward | input
 	Family  string `json:"family"`
 	Table   string `json:"table"`
 	Chain   string `json:"chain"`
@@ -63,7 +75,23 @@ type Remedy struct {
 type Target struct {
 	Device       string
 	AutoRedirect bool
+	// Stack is tun.stack in lower case; "" is Mihomo's default (gvisor). The
+	// system and mixed stacks hand TCP to a kernel listener of Mihomo.
+	Stack string
+	// DNSHijack: auto-redirect DNATs DNS that LAN devices send to this host
+	// into the TUN (dns-hijack on port 53, host address not excluded).
+	DNSHijack bool
 }
+
+// Flow names reported in Result.Flows, in display order.
+const (
+	FlowForward     = "forward"
+	FlowDNS         = "dns"
+	FlowRedirectTCP = "redirect_tcp"
+	FlowTUNTCP      = "tun_tcp"
+)
+
+var flowOrder = []string{FlowForward, FlowDNS, FlowRedirectTCP, FlowTUNTCP}
 
 // Probe isolates every host access so tests never run real commands.
 type Probe struct {
@@ -84,6 +112,7 @@ var (
 const (
 	maxSources  = 8
 	maxRemedies = 6
+	maxCommands = 6
 	maxDetail   = 160
 )
 
@@ -119,14 +148,51 @@ type inspection struct {
 	lan        []string // default-route interfaces; nil when unknown
 	findings   []finding
 	incomplete string // first reason the view is not complete
-	hooks      int    // inspected forward hooks
+	hooks      int    // inspected forward and input hooks
+	policies   map[string]string
 	ufwActive  bool
-	remedies   []Remedy
+	firewalld  bool // firewalld is running and its state was read
+	remedies   []*remedyPlan
 }
 
 type finding struct {
 	source Source
 	policy bool
+	flow   string
+}
+
+// remedyPlan collects the blocked flows of one place allow rules can go; its
+// commands are generated once every hook has been evaluated.
+type remedyPlan struct {
+	source, binary, family, table, chain string
+	label                                string
+	flows                                map[string]bool
+	policyExists                         bool // firewalld: the configflow-tun policy already exists
+}
+
+// notePolicy keeps the strictest real default policy per hook.
+func (in *inspection) notePolicy(hook, policy string) {
+	if in.policies == nil {
+		in.policies = map[string]string{}
+	}
+	policy = strings.ToLower(policy)
+	if policy != "drop" {
+		policy = "accept"
+	}
+	if in.policies[hook] != "drop" {
+		in.policies[hook] = policy
+	}
+}
+
+func (in *inspection) plan(source, binary, family, table, chain, label string) *remedyPlan {
+	for _, existing := range in.remedies {
+		if existing.source == source && existing.binary == binary && existing.family == family && existing.table == table && existing.chain == chain {
+			return existing
+		}
+	}
+	plan := &remedyPlan{source: source, binary: binary, family: family, table: table, chain: chain, label: label, flows: map[string]bool{}}
+	in.remedies = append(in.remedies, plan)
+	return plan
 }
 
 func (in *inspection) fail(reason string) {
@@ -215,9 +281,9 @@ func Inspect(ctx context.Context, probe Probe, target Target) Result {
 		}
 	}
 
-	firewalldOwned := in.inspectFirewalld()
+	firewalldSkipped := in.inspectFirewalld()
 	if nftDoc != nil {
-		in.evaluateNFT(nftDoc, iptablesNFTRead, firewalldOwned)
+		in.evaluateNFT(nftDoc, iptablesNFTRead, firewalldSkipped)
 	}
 	if !nftKnown && in.hooks == 0 {
 		// Nothing was inspected and nf_tables may still be filtering.
@@ -287,11 +353,9 @@ func exitCode(err error) int {
 	return -1
 }
 
-// firewall-cmd exit statuses (firewalld errors.py). Messages go to stderr.
-const (
-	firewalldNoZone     = 2
-	firewalldNotRunning = 252
-)
+// firewall-cmd exit status when firewalld is not running (firewalld
+// errors.py). Messages go to stderr.
+const firewalldNotRunning = 252
 
 // A legacy filter table appears in ip_tables_names only once loaded. Running
 // iptables-legacy-save before that would load it as a side effect.
@@ -355,9 +419,10 @@ func defaultRouteInterfaces(probe Probe, device string) []string {
 	return result
 }
 
-// inspectFirewalld reports whether nft's firewalld table is accounted for:
-// either judged here through the zone of the TUN device, or left out because
-// firewalld's state could not be read.
+// inspectFirewalld reads whether firewalld runs. Its own nftables table, or
+// its iptables chains, are then evaluated like any other rules but attributed
+// to firewalld. The result reports that firewalld's table must be left out
+// because its state could not be read.
 func (in *inspection) inspectFirewalld() bool {
 	if !in.available("firewall-cmd") {
 		return false
@@ -366,37 +431,14 @@ func (in *inspection) inspectFirewalld() bool {
 	state := strings.TrimSpace(out)
 	switch {
 	case err == nil && state == "running":
+		in.firewalld = true
+		return false
 	case exitCode(err) == firewalldNotRunning || (err == nil && state == "not running"):
 		return false // its leftover table is evaluated like any other
 	default:
 		in.commandFailed(err)
 		return true
 	}
-	in.hooks++
-	device := in.target.Device
-	zone := ""
-	if DevicePattern.MatchString(device) {
-		out, err := in.run("firewall-cmd", "--get-zone-of-interface="+device)
-		value := strings.TrimSpace(out)
-		switch {
-		case err == nil && value == "trusted":
-			return true
-		case err == nil && value != "" && value != "no zone" && !strings.ContainsAny(value, " \t\n"):
-			zone = value
-		case exitCode(err) == firewalldNoZone || (err == nil && value == "no zone"):
-		default:
-			// A timeout or D-Bus error says nothing about the zone.
-			in.commandFailed(err)
-			return true
-		}
-	}
-	current := "未指定"
-	if zone != "" {
-		current = zone
-	}
-	in.findings = append(in.findings, finding{source: Source{Kind: "firewalld", Detail: clip("firewalld 正在运行，" + displayDevice(device) + " 不在 trusted 区域（当前：" + current + "）")}})
-	in.addRemedy(firewalldRemedy(device, zone))
-	return true
 }
 
 func (in *inspection) commandFailed(err error) {
@@ -407,56 +449,57 @@ func (in *inspection) commandFailed(err error) {
 	in.fail("inspect_failed")
 }
 
-func (in *inspection) addRemedy(remedy Remedy) {
-	if len(remedy.Commands) == 0 && remedy.Source == "" {
-		return
-	}
-	for _, existing := range in.remedies {
-		if strings.Join(existing.Commands, "\n") == strings.Join(remedy.Commands, "\n") && existing.Source == remedy.Source {
-			return
-		}
-	}
-	in.remedies = append(in.remedies, remedy)
+func (in *inspection) record(f finding) {
+	in.findings = append(in.findings, f)
 }
 
 func (in *inspection) result(now time.Time) Result {
-	result := Result{Protocol: 1, Device: in.target.Device, AutoRedirect: in.target.AutoRedirect, Sources: []Source{}, Remedies: []Remedy{}, CheckedAt: now.UTC().Format(time.RFC3339)}
+	result := Result{Protocol: 1, Device: in.target.Device, AutoRedirect: in.target.AutoRedirect, Flows: []string{}, Sources: []Source{}, Remedies: []Remedy{}, CheckedAt: now.UTC().Format(time.RFC3339)}
 	if !DevicePattern.MatchString(result.Device) {
 		result.Device = ""
 	}
-	dropPolicy := false
+	blocked := map[string]bool{}
 	seen := map[string]bool{}
 	for _, f := range in.findings {
-		dropPolicy = dropPolicy || f.policy
-		key := f.source.Kind + "|" + f.source.Backend + "|" + f.source.Detail
+		blocked[f.flow] = true
+		key := f.source.Kind + "|" + f.source.Backend + "|" + f.source.Hook + "|" + f.source.Detail
 		if seen[key] || len(result.Sources) >= maxSources {
 			continue
 		}
 		seen[key] = true
 		result.Sources = append(result.Sources, f.source)
 	}
+	for _, name := range flowOrder {
+		if blocked[name] {
+			result.Flows = append(result.Flows, name)
+		}
+	}
 	switch {
 	case len(in.findings) > 0:
 		result.State = StateMayDrop
-		for _, remedy := range in.remedies {
+		for _, plan := range in.remedies {
 			if len(result.Remedies) >= maxRemedies {
 				break
 			}
-			if len(remedy.Commands) > 0 {
+			if remedy := in.remedy(plan); len(remedy.Commands) > 0 {
 				result.Remedies = append(result.Remedies, remedy)
 			}
 		}
-		result.Hint = hint(in.target, len(result.Remedies) > 0)
-		result.Verify = verifyText
+		result.Hint = hint(in.target, blocked, in.incomplete == "", len(result.Remedies) > 0)
+		result.Verify = verify(in.target, blocked)
 	case in.incomplete != "":
 		result.State, result.Reason = StateUnknown, in.incomplete
 	default:
 		result.State = StateOK
 	}
-	if dropPolicy {
-		result.Policy = "drop"
-	} else if in.hooks > 0 || result.State == StateOK {
-		result.Policy = "accept"
+	result.Policy, result.InputPolicy = in.policies["forward"], in.policies["input"]
+	if result.State == StateOK {
+		if result.Policy == "" {
+			result.Policy = "accept"
+		}
+		if result.InputPolicy == "" {
+			result.InputPolicy = "accept"
+		}
 	}
 	return result
 }
@@ -517,17 +560,60 @@ var nonLANPrefixes = []string{"docker", "br-", "veth", "virbr", "lxcbr", "lxdbr"
 type side struct {
 	device string   // set for the TUN side
 	lan    []string // nil = unknown LAN
+	none   bool     // no interface: the output side of an input hook
+}
+
+// ctFacts describe what conntrack reports for a flow's packets. Forward flows
+// only know whether they are replies; input flows are new connections.
+type ctFacts struct {
+	known bool // states below are exact
+	isNew bool
 }
 
 type flow struct {
+	name    string
+	hook    string // forward | input
 	in, out side
 	reply   bool // TUN -> LAN packets answer forwarded connections
+	proto   string
+	dnat    tri // conntrack status DNAT
+	local   tri // destination is an address of this host
+	ct      ctFacts
+	// strict flows report only drops that certainly apply. Input chains are
+	// full of port and address conditions that rarely concern these flows.
+	strict bool
 }
 
-func (in *inspection) flows() []flow {
+// kernelStack reports whether the TUN stack hands TCP to a kernel listener of
+// Mihomo, which the input hook then filters (iifname is the TUN device).
+func kernelStack(stack string) bool {
+	return stack == "system" || stack == "mixed"
+}
+
+func (in *inspection) flows(hook string) []flow {
 	device := side{device: in.target.Device}
 	lan := side{lan: in.lan}
-	return []flow{{in: lan, out: device}, {in: device, out: lan, reply: true}}
+	if hook == "input" {
+		var flows []flow
+		input := ctFacts{known: true, isNew: true}
+		if in.target.AutoRedirect {
+			flows = append(flows, flow{name: FlowRedirectTCP, hook: hook, in: lan, out: side{none: true}, proto: "tcp", dnat: yes, local: yes, ct: input, strict: true})
+		}
+		if kernelStack(in.target.Stack) && (!in.target.AutoRedirect || in.target.DNSHijack) {
+			flows = append(flows, flow{name: FlowTUNTCP, hook: hook, in: device, out: side{none: true}, proto: "tcp", dnat: no, local: yes, ct: input, strict: true})
+		}
+		return flows
+	}
+	flows := []flow{
+		{name: FlowForward, hook: hook, in: lan, out: device, dnat: no, local: no},
+		{name: FlowForward, hook: hook, in: device, out: lan, reply: true, dnat: no, local: no},
+	}
+	if in.target.DNSHijack {
+		flows = append(flows,
+			flow{name: FlowDNS, hook: hook, in: lan, out: device, dnat: yes, local: no},
+			flow{name: FlowDNS, hook: hook, in: device, out: lan, reply: true, dnat: yes, local: no})
+	}
+	return flows
 }
 
 func interfaceMatches(pattern, name string, wildcard byte) bool {
@@ -538,6 +624,9 @@ func interfaceMatches(pattern, name string, wildcard byte) bool {
 }
 
 func matchInterface(pattern string, s side, wildcard byte) tri {
+	if s.none {
+		return no
+	}
 	if s.device != "" {
 		if interfaceMatches(pattern, s.device, wildcard) {
 			return yes

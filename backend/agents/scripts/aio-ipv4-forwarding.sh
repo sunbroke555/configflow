@@ -117,7 +117,7 @@ summarize_ipv4_forwarding() {
             fi
         done
     fi
-    cf_note forwarding "IPv4 转发已设置持久化，尚未实际重启验证；其他配置或服务覆盖风险及原检查结果见详细日志。"
+    cf_note forwarding "IPv4 转发已设置持久化，尚未实际重启验证；其他配置或服务仍可能在重启后把它改回 0，重启后可执行 sysctl net.ipv4.ip_forward 确认仍为 1。"
     # The environment check only warns about these; repeat them in the final
     # summary because neither stops the install.
     if [ -n "${CONFIGFLOW_LOG_FILE:-}" ] && [ -f "$CONFIGFLOW_LOG_FILE" ]; then
@@ -125,7 +125,7 @@ summarize_ipv4_forwarding() {
             cf_note forwarding_conflict "IPv4 转发冲突：其他 sysctl 设置会在重启后把 net.ipv4.ip_forward 改回 0；处理方法见上方「IPv4 转发冲突」或完整日志。"
         fi
         if grep -q '^\[提醒\] 转发过滤：' "$CONFIGFLOW_LOG_FILE" 2>/dev/null; then
-            cf_note forward_filter "转发过滤：防火墙可能拦截转发到 Mihomo TUN 的 UDP 和 ping，安装不受影响；放行命令见上方「转发过滤」或完整日志。"
+            cf_note forward_filter "转发过滤：这台 Linux 的防火墙可能拦截经过 Mihomo TUN 的流量，安装不受影响；影响范围和放行命令见上方「转发过滤」或完整日志。"
         fi
     fi
     cf_fact ipv4_forwarding "IPv4 转发已开启并持久化；Mihomo Agent 开机启动时会再次检查并恢复。"

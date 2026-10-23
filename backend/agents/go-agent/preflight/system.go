@@ -4,6 +4,7 @@ import (
 	"agent/netfilter"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,14 +43,15 @@ type systemProbe struct {
 	getenv    func(string) string
 	writeFile func(string, []byte) error
 	// forwardFilter inspects FORWARD filtering; nil skips the check.
-	forwardFilter func(netfilter.Target) netfilter.Result
+	forwardFilter  func(netfilter.Target) netfilter.Result
+	localAddresses func() []net.IP
 }
 
 func defaultSystemProbe() systemProbe {
 	return systemProbe{
 		goos: runtime.GOOS, readFile: os.ReadFile, readDir: os.ReadDir, stat: os.Stat, glob: filepath.Glob, tun: systemTunFeatures,
 		getenv: os.Getenv, writeFile: func(path string, data []byte) error { return os.WriteFile(path, data, 0o644) },
-		forwardFilter: boundedForwardFilter,
+		forwardFilter: boundedForwardFilter, localAddresses: netfilter.LocalAddresses,
 		showUnit: func(unit string) ([]byte, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()

@@ -175,23 +175,34 @@ Agent 页「单独安装」的 Mihomo（systemd 或 OpenRC）默认也开启并�
 
 ### 完整 TUN 的转发过滤
 
-完整 TUN 主机（主路由分流、普通同机安装或单独安装的 Mihomo，已部署配置启用 `tun.enable` 与 `auto-route`，没有 Linux 网关标记，也没有 `route-address` 限制）上，如果系统防火墙的 FORWARD 默认拒绝（Docker、firewalld、UFW 常见），主路由转来的 TCP 仍可用（auto-redirect 会把它转到本机），但 UDP（QUIC、语音通话、游戏）和 ping 会被丢弃。没有启用 auto-redirect 时，TCP 也会受影响。
+完整 TUN 主机（主路由分流、普通同机安装或单独安装的 Mihomo，已部署配置启用 `tun.enable` 与 `auto-route`，没有 Linux 网关标记，也没有 `route-address` 限制）会经过系统防火墙的两处：
 
-Agent `1.8.42-go` 起会只读检查 iptables（nft / legacy）、nftables 的 forward 链、firewalld 与 UFW，发现可能拦截时只作提醒：「上游路由」的「IPv4 转发」列、首次使用向导第 5 步、配置生成页的 Linux 网关对话框和安装输出都会显示按来源生成的放行命令，并带复制按钮。**ConfigFlow 不会改动防火墙**，安装、发布和向导的完成检查都不受影响；无法检查时不显示任何提醒。选择性 Linux 网关保持原有的应用前检查，不显示这项提醒。
+- **转发（FORWARD）**：主路由转来、进出 TUN 的 UDP（QUIC、语音通话、游戏）和 ping。单独安装的 Mihomo 作为局域网 DNS 时，发到这台 Linux 的 DNS 也会被 auto-redirect 转进 TUN，同样经过这里，UDP 和 TCP 方式的查询都会失败（同机安装由 OxiDNS 应答，不受影响）。没有启用 auto-redirect 时，TCP 也走这里。
+- **本机入站（INPUT）**：auto-redirect 把转来的 TCP 改发到本机的一个随机端口（Mihomo 每次重启都会变），这些连接带有 conntrack 状态 `DNAT`；`mixed` / `system` 栈还会把进入 TUN 的 TCP（如 TCP 方式的 DNS）从 TUN 设备交给本机的 Mihomo。入站默认拒绝时（UFW 的 `deny (incoming)`、`iptables -P INPUT DROP`、nftables input 链 `policy drop`），转来的 TCP 全部失败。
 
-命令中的 TUN 设备名取自已部署配置的 `tun.device`（缺省 `Meta`），以页面显示的为准。下表以 `Meta` 为例，每组同时放行进、出两个方向：
+Agent `1.8.42-go` 起会只读检查 iptables（nft / legacy，含 UFW 的链）、nftables 的 forward 与 input 链、firewalld 自己的规则，按受影响的流量提醒：「上游路由」的「IPv4 转发」列（「可能拦截 UDP」「可能拦截转发」或「可能拦截 DNS」）、首次使用向导第 5 步、配置生成页的 Linux 网关对话框和安装输出都会显示说明和按来源生成的放行命令，并带复制按钮。**ConfigFlow 不会改动防火墙**，安装、发布和向导的完成检查都不受影响；无法检查时不显示任何提醒。选择性 Linux 网关保持原有的应用前检查，不显示这项提醒。
 
-| 来源 | 放行命令 | 重启后 |
-| --- | --- | --- |
-| Docker（存在 `DOCKER-USER` 链） | `iptables -I DOCKER-USER -o Meta -j ACCEPT`<br>`iptables -I DOCKER-USER -i Meta -j ACCEPT` | 会丢失；Debian/Ubuntu 安装 `iptables-persistent` 后执行 `netfilter-persistent save`，Alpine 执行 `rc-service iptables save`。重启 Docker 不会清空 `DOCKER-USER` |
-| iptables（FORWARD 默认 DROP 或有拦截规则；legacy 后端写作 `iptables-legacy`） | `iptables -I FORWARD -o Meta -j ACCEPT`<br>`iptables -I FORWARD -i Meta -j ACCEPT` | 同上 |
-| nftables（forward 链 `policy drop` 或有 drop 规则，表名和链名按实际检测） | `nft 'insert rule inet filter forward oifname "Meta" accept'`<br>`nft 'insert rule inet filter forward iifname "Meta" accept'` | 会丢失；把两条规则写进 `/etc/nftables.conf`（或系统加载的 nftables 配置）对应的链 |
-| firewalld | `firewall-cmd --permanent --zone=trusted --add-interface=Meta && firewall-cmd --reload`（设备已绑定其他区域时为 `--change-interface=Meta`） | `--permanent` 已保存 |
-| UFW | `ufw route allow in on Meta`<br>`ufw route allow out on Meta` | UFW 自动保存 |
+命令只放行上面这些流量：转发只放行进出 TUN 设备的包；本机入站只放行 conntrack 状态为 `DNAT`（本机 NAT 规则重定向过来的连接）和来自 TUN 设备的连接，不开放端口。TUN 设备名取自已部署配置的 `tun.device`（缺省 `Meta`），以页面显示的为准；页面只列出实际被拦截的那几条。下表以 `Meta` 为例：
 
-执行后等几秒再回到页面刷新状态（发现拦截时检查结果只缓存 5 秒，其他结果最多 30 秒），再在客户端 ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。
+| 来源 | 放行转发 | 放行本机入站 | 重启后 |
+| --- | --- | --- | --- |
+| Docker（存在 `DOCKER-USER` 链） | `iptables -I DOCKER-USER -o Meta -j ACCEPT`<br>`iptables -I DOCKER-USER -i Meta -j ACCEPT` | Docker 不改 INPUT；入站被拦时另给一组 iptables 命令 | 会丢失；Debian/Ubuntu 安装 `iptables-persistent` 后执行 `netfilter-persistent save`，Alpine 执行 `rc-service iptables save`。重启 Docker 不会清空 `DOCKER-USER` |
+| iptables（legacy 后端写作 `iptables-legacy`） | `iptables -I FORWARD -o Meta -j ACCEPT`<br>`iptables -I FORWARD -i Meta -j ACCEPT` | `iptables -I INPUT -m conntrack --ctstate DNAT -j ACCEPT`<br>`iptables -I INPUT -i Meta -j ACCEPT` | 同上 |
+| nftables（表名和链名按实际检测） | `nft 'insert rule inet filter forward oifname "Meta" accept'`<br>`nft 'insert rule inet filter forward iifname "Meta" accept'` | `nft 'insert rule inet filter input ct status dnat accept'`<br>`nft 'insert rule inet filter input iifname "Meta" accept'` | 会丢失；把这些规则写进 `/etc/nftables.conf`（或系统加载的 nftables 配置）对应的链 |
+| UFW | `ufw route allow in on Meta`<br>`ufw route allow out on Meta` | `ufw allow in on Meta`<br>下面的 `before.rules` 一行，然后 `ufw reload` | UFW 自动保存；`before.rules` 的改动同样保留 |
+| firewalld（nftables 后端） | `firewall-cmd --permanent --zone=trusted --change-interface=Meta`<br>`firewall-cmd --permanent --new-policy=configflow-tun`<br>`firewall-cmd --permanent --policy=configflow-tun --add-ingress-zone=ANY`<br>`firewall-cmd --permanent --policy=configflow-tun --add-egress-zone=trusted`<br>`firewall-cmd --permanent --policy=configflow-tun --set-target=ACCEPT`<br>`firewall-cmd --reload` | 同左（trusted 区域放行来自 `Meta` 的连接；firewalld 自带 `ct status dnat accept`，重定向的 TCP 不受影响） | `--permanent` 已保存 |
 
-已知限制：只检查 IPv4，只看顶层 `tun`（`listeners` 里的 TUN 不检查）；带源 / 目的地址等其他条件的拦截规则按“可能拦截”保守提醒；使用 iptables 后端的旧版 firewalld（如 CentOS 7）放行后仍可能显示提醒；修改 `tun.device` 后需要按新命令重新放行。
+UFW 没有按 conntrack 状态放行的命令，所以把规则写进 `/etc/ufw/before.rules` 的 `# End required lines` 之后；这一行可重复执行，已存在时不会重复添加：
+
+```sh
+grep -q -- '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules || sed -i '/^# End required lines/a -A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules
+```
+
+firewalld 只把 `Meta` 放进 trusted 区域时，从 `Meta` 进来的流量会放行，但主路由转来、要转发进 `Meta` 的流量仍按局域网网卡所在区域被拒绝，所以还需要 `configflow-tun` 策略（任意区域转发到 trusted 区域时接受）。策略已存在时，页面不再给出 `--new-policy` 一行；重复执行时 firewalld 会提示 `NAME_CONFLICT` 或 `ALREADY_ENABLED`，可以忽略。
+
+以上命令都在实验环境（Debian 13、Mihomo v1.19.32 完整 TUN、`mixed` 栈）逐条验证过：执行后转发的 UDP、ping、TCP 和发到这台 Linux 的 DNS（UDP / TCP）恢复，UFW 与 firewalld 重启后仍有效。执行后等几秒再回到页面刷新状态（发现拦截时检查结果只缓存 5 秒，其他结果最多 30 秒），再按提醒里的验证方法在客户端确认。状态里的 `policy` / `input_policy` 是转发与入站链真实的默认策略，放行规则生效后可能仍是 `drop`，是否拦截以提醒是否消失为准。
+
+已知限制：只检查 IPv4，只看顶层 `tun`（`listeners` 里的 TUN 不检查）；转发方向带源 / 目的地址等其他条件的拦截规则按“可能拦截”保守提醒，本机入站只在规则一定会拦下这些连接时提醒（只针对某些端口或地址的拒绝规则不提醒），但入站默认拒绝时，只放行某个端口范围（如 1024–65535）的规则不算放行，仍会提醒；使用 iptables 后端的旧版 firewalld（如 CentOS 7）没有对应的放行命令，或放行后仍可能显示提醒；修改 `tun.device` 后需要按新命令重新放行。
 
 停用顺序：**先恢复客户端网关和 DNS → 在向导恢复所选设备网络 → 关闭网关模式 → 保存并发布 Mihomo**。恢复操作只清理带有匹配归属、且未被外部修改的受管规则；系统参数也只在仍等于受管值时恢复。若提示资源被外部修改，保留现场并先核对变化。
 
@@ -207,7 +218,7 @@ Agent `1.8.42-go` 起会只读检查 iptables（nft / legacy）、nftables 的 f
 | 提示 Agent 版本旧 | 更新 ConfigFlow 与 Mihomo Agent 至包含本功能的版本（至少 `1.8.25-go`） |
 | 代理域名返回真实 IP | OxiDNS 远程及备用上游、域名规则、Mihomo fake-IP 过滤、客户端安全 DNS |
 | 域名能解析但无法访问 | 系统转发是否已应用，客户端网关是否指向 Linux，代理节点是否可用 |
-| 网页正常，但 UDP、语音或 ping 不通（完整 TUN） | 看「转发过滤」提醒，按页面给出的命令放行进出 TUN 的转发 |
+| 完整 TUN 下 UDP、语音或 ping 不通，或开了 UFW / 入站默认拒绝后网页也打不开 | 看「转发过滤」提醒，按页面给出的命令放行转发和被重定向到本机的连接 |
 | IP 服务进入 Mihomo 但没有代理 | 原有规则顺序和策略组选择；接管并不强制代理出口 |
 | 规则库变更尚未体现 | 先确认规则库已刷新，等待约 5 分钟；新增勾选、策略变更需要重新发布 |
 | 停止 Agent 后重启无法自动恢复 | 状态恢复依赖 Mihomo Agent 的开机启动，检查 Agent 系统服务 |

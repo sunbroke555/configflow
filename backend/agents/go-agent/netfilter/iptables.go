@@ -16,6 +16,10 @@ type iptRule struct {
 	invalidOnly bool
 	states      []string
 	statesNeg   bool
+	proto       string
+	protoNeg    bool
+	dstTypes    []string
+	dstTypesNeg bool
 }
 
 type iptTable struct {
@@ -119,6 +123,15 @@ func parseIptablesRule(line string) (iptRule, bool) {
 		case "!":
 			negated = true
 			continue
+		case "-p", "--protocol":
+			rule.proto, rule.protoNeg = strings.ToLower(next()), negated
+		case "--dst-type":
+			if module == "addrtype" {
+				rule.dstTypes, rule.dstTypesNeg = strings.Split(strings.ToUpper(next()), ","), negated
+			} else {
+				next()
+				rule.conditional = true
+			}
 		case "-i", "--in-interface":
 			rule.in, rule.inNeg = next(), negated
 		case "-o", "--out-interface":
@@ -168,6 +181,12 @@ func (rule iptRule) match(f flow) tri {
 	if rule.out != "" {
 		result = and(result, negate(matchInterface(rule.out, f.out, '+'), rule.outNeg))
 	}
+	if rule.proto != "" {
+		result = and(result, negate(protoMatch([]string{rule.proto}, f), rule.protoNeg))
+	}
+	if len(rule.dstTypes) > 0 {
+		result = and(result, negate(addressTypeMatch(rule.dstTypes, f), rule.dstTypesNeg))
+	}
 	if len(rule.states) > 0 {
 		result = and(result, stateMatch(rule.states, rule.statesNeg, f))
 	}
@@ -177,14 +196,82 @@ func (rule iptRule) match(f flow) tri {
 	return result
 }
 
-// Reply packets of a forwarded connection are ESTABLISHED; new connections
-// from the LAN start as NEW, so state matches stay uncertain for them.
+// protoMatch compares layer 4 protocol names; flows without a known protocol
+// may match anything but "all".
+func protoMatch(protocols []string, f flow) tri {
+	for _, protocol := range protocols {
+		switch protocol = strings.ToLower(protocol); protocol {
+		case "all", "0":
+			return yes
+		case "6":
+			protocol = "tcp"
+		case "17":
+			protocol = "udp"
+		}
+		if f.proto == "" {
+			return maybe
+		}
+		if protocol == f.proto {
+			return yes
+		}
+	}
+	return no
+}
+
+// addressTypeMatch evaluates addrtype --dst-type (and nft fib daddr type):
+// input flows go to a local unicast address, forward flows to a remote one.
+func addressTypeMatch(types []string, f flow) tri {
+	result := no
+	for _, kind := range types {
+		value := maybe
+		switch strings.ToUpper(kind) {
+		case "LOCAL":
+			value = f.local
+		case "UNICAST":
+			value = yes
+		case "BROADCAST", "MULTICAST", "ANYCAST", "BLACKHOLE", "UNREACHABLE", "PROHIBIT", "THROW", "NAT", "XRESOLVE":
+			value = no
+		}
+		if value > result {
+			result = value
+		}
+	}
+	return result
+}
+
+// stateMatch evaluates conntrack states. Input flows are new connections,
+// DNAT-ed or not. For forward flows, replies are ESTABLISHED and new
+// connections from the LAN stay uncertain.
 func stateMatch(states []string, negated bool, f flow) tri {
-	if !f.reply || negated {
+	if f.ct.known {
+		result := no
+		for _, state := range states {
+			switch strings.ToUpper(state) {
+			case "NEW":
+				if f.ct.isNew {
+					result = yes
+				}
+			case "DNAT":
+				if f.dnat > result {
+					result = f.dnat
+				}
+			case "ESTABLISHED", "RELATED", "INVALID", "UNTRACKED", "SNAT":
+			default:
+				if result < maybe {
+					result = maybe
+				}
+			}
+		}
+		return negate(result, negated)
+	}
+	if negated {
 		return maybe
 	}
 	for _, state := range states {
-		if strings.EqualFold(state, "ESTABLISHED") {
+		if strings.EqualFold(state, "ESTABLISHED") && f.reply {
+			return yes
+		}
+		if strings.EqualFold(state, "DNAT") && f.dnat == yes {
 			return yes
 		}
 	}
@@ -212,78 +299,105 @@ type iptEvaluation struct {
 	table   *iptTable
 	binary  string
 	backend string
+	hook    string
 	found   []iptFinding
 }
 
 type iptFinding struct {
 	chains  []string
-	forward int // index of the FORWARD rule this was reached through
+	forward int // index of the builtin chain's rule this was reached through
 	policy  bool
 	rule    string
 	unknown bool
+	flow    string
 }
+
+var iptablesHooks = []struct{ hook, chain string }{{"forward", "FORWARD"}, {"input", "INPUT"}}
 
 func (in *inspection) evaluateIptables(table *iptTable, binary, backend string) {
 	if len(table.policies) == 0 && len(table.rules) == 0 {
 		return
 	}
-	in.hooks++
-	e := &iptEvaluation{in: in, table: table, binary: binary, backend: backend}
-	for _, f := range in.flows() {
-		e.chain("FORWARD", f, 0, []string{"FORWARD"}, -1)
-	}
-	if len(e.found) == 0 {
-		return
-	}
-	kind := e.kind()
 	label := "iptables"
 	if backend == "legacy" && binary == "iptables-legacy" {
 		label = "iptables（legacy）"
 	}
-	seen := map[string]bool{}
-	for _, item := range e.found {
-		detail := ""
-		chain := item.chains[len(item.chains)-1]
-		switch {
-		case item.policy:
-			detail = label + " FORWARD 默认策略为 DROP"
-			if kind == "ufw" {
-				detail = "UFW 已启用，默认拒绝转发（routed）；" + detail
-			}
-		case item.unknown:
-			detail = label + " " + chain + " 链有无法判断的规则：" + item.rule
-		default:
-			detail = label + " " + chain + " 链有可能丢弃转发流量的规则：" + item.rule
-		}
-		if seen[detail] {
+	for _, hook := range iptablesHooks {
+		flows := in.flows(hook.hook)
+		if len(flows) == 0 {
 			continue
 		}
-		seen[detail] = true
-		policy := ""
-		if item.policy {
-			policy = "drop"
+		in.hooks++
+		if policy, ok := table.policies[hook.chain]; ok {
+			in.notePolicy(hook.hook, policy)
 		}
-		in.findings = append(in.findings, finding{source: Source{Kind: kind, Backend: backend, Chain: chain, Policy: policy, Detail: clip(detail)}, policy: item.policy})
+		e := &iptEvaluation{in: in, table: table, binary: binary, backend: backend, hook: hook.hook}
+		for _, f := range flows {
+			e.chain(hook.chain, f, 0, []string{hook.chain}, -1, true)
+		}
+		if len(e.found) == 0 {
+			continue
+		}
+		kind := e.kind()
+		var plan *remedyPlan
+		if kind == "firewalld" {
+			plan = in.plan(kind, "", "", "", "", "firewalld")
+		} else {
+			plan = in.plan(kind, binary, "", "", "", SourceLabel(kind, backend, binary))
+		}
+		for _, item := range e.found {
+			plan.flows[item.flow] = true
+			detail := ""
+			chain := item.chains[len(item.chains)-1]
+			switch {
+			case item.policy:
+				detail = label + " " + hook.chain + " 默认策略为 DROP"
+				switch {
+				case kind == "ufw" && hook.hook == "forward":
+					detail = "UFW 已启用，默认拒绝转发（routed）；" + detail
+				case kind == "ufw":
+					detail = "UFW 已启用，默认拒绝入站（incoming）；" + detail
+				}
+			case item.unknown:
+				detail = label + " " + chain + " 链有无法判断的规则：" + item.rule
+			case hook.hook == "input":
+				detail = label + " " + chain + " 链有会丢弃入站流量的规则：" + item.rule
+			default:
+				detail = label + " " + chain + " 链有可能丢弃转发流量的规则：" + item.rule
+			}
+			policy := ""
+			if item.policy {
+				policy = "drop"
+			}
+			// Repeated details are merged when the result is assembled; each
+			// finding still marks its flow as blocked.
+			in.record(finding{source: Source{Kind: kind, Backend: backend, Hook: hook.hook, Chain: chain, Policy: policy, Detail: clip(detail)}, policy: item.policy, flow: item.flow})
+		}
 	}
-	in.addRemedy(iptablesRemedy(kind, binary, in.target.Device))
 }
 
-// kind attributes the blocking of one backend to the tool the user manages it
-// with, which also decides where the allow rules must go.
+// kind attributes the blocking of one hook of one backend to the tool the
+// user manages it with, which also decides where the allow rules must go.
 func (e *iptEvaluation) kind() string {
-	first := len(e.table.rules["FORWARD"])
-	for _, item := range e.found {
-		if item.forward < first {
-			first = item.forward
-		}
+	if e.in.firewalld && e.isChain(strings.ToUpper(e.hook)+"_direct") {
+		// firewalld's iptables backend owns this table.
+		return "firewalld"
 	}
-	if _, ok := e.table.policies["DOCKER-USER"]; ok {
-		for index, rule := range e.table.rules["FORWARD"] {
-			if index > first {
-				break
+	if e.hook == "forward" {
+		first := len(e.table.rules["FORWARD"])
+		for _, item := range e.found {
+			if item.forward < first {
+				first = item.forward
 			}
-			if rule.target == "DOCKER-USER" && !rule.isGoto && rule.in == "" && rule.out == "" && !rule.conditional && len(rule.states) == 0 {
-				return "docker"
+		}
+		if _, ok := e.table.policies["DOCKER-USER"]; ok {
+			for index, rule := range e.table.rules["FORWARD"] {
+				if index > first {
+					break
+				}
+				if rule.target == "DOCKER-USER" && !rule.isGoto && rule.in == "" && rule.out == "" && !rule.conditional && len(rule.states) == 0 {
+					return "docker"
+				}
 			}
 		}
 	}
@@ -301,7 +415,7 @@ func (e *iptEvaluation) kind() string {
 }
 
 func (e *iptEvaluation) ufwActive() bool {
-	if _, ok := e.table.policies["ufw-user-forward"]; !ok {
+	if _, ok := e.table.policies["ufw-user-"+e.hook]; !ok {
 		return false
 	}
 	return e.in.checkUFW()
@@ -346,11 +460,17 @@ func ufwEnabled(conf string) (bool, bool) {
 	return false, false
 }
 
-func (e *iptEvaluation) record(item iptFinding) {
+// record keeps a possible drop. Strict flows only count drops that certainly
+// apply: certain is false once the path went through a conditional jump.
+func (e *iptEvaluation) record(item iptFinding, f flow, m tri, certain bool) {
+	if f.strict && !(certain && m == yes) {
+		return
+	}
+	item.flow = f.name
 	e.found = append(e.found, item)
 }
 
-func (e *iptEvaluation) chain(name string, f flow, depth int, path []string, forward int) verdict {
+func (e *iptEvaluation) chain(name string, f flow, depth int, path []string, forward int, certain bool) verdict {
 rules:
 	for index, rule := range e.table.rules[name] {
 		at := forward
@@ -370,7 +490,7 @@ rules:
 			if rule.invalidOnly {
 				continue
 			}
-			e.record(iptFinding{chains: path, forward: at, rule: rule.text})
+			e.record(iptFinding{chains: path, forward: at, rule: rule.text}, f, m, certain)
 			if m == yes {
 				return dropped
 			}
@@ -381,10 +501,10 @@ rules:
 		case target == "" || nonTerminatingTargets[target]:
 		case e.isChain(target):
 			if depth >= 16 {
-				e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true})
+				e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true}, f, m, certain)
 				continue
 			}
-			result := e.chain(target, f, depth+1, append(append([]string{}, path...), target), at)
+			result := e.chain(target, f, depth+1, append(append([]string{}, path...), target), at, certain && m == yes)
 			if m != yes {
 				continue
 			}
@@ -397,13 +517,13 @@ rules:
 				}
 			}
 		default:
-			e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true})
+			e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true}, f, m, certain)
 		}
 	}
 	// A builtin chain that returns or falls off its end applies its policy.
 	if depth == 0 {
 		if strings.EqualFold(e.table.policies[name], "DROP") {
-			e.record(iptFinding{chains: path, forward: len(e.table.rules[name]), policy: true})
+			e.record(iptFinding{chains: path, forward: len(e.table.rules[name]), policy: true}, f, yes, true)
 			return dropped
 		}
 		return accepted

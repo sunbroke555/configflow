@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,12 +29,11 @@ type host struct {
 }
 
 var allowedCommands = map[string]bool{
-	"nft -j list ruleset":                   true,
-	"iptables-save -t filter":               true,
-	"iptables-legacy-save -t filter":        true,
-	"firewall-cmd --state":                  true,
-	"firewall-cmd --get-zone-of-interface=": true,
-	"ufw status":                            true,
+	"nft -j list ruleset":            true,
+	"iptables-save -t filter":        true,
+	"iptables-legacy-save -t filter": true,
+	"firewall-cmd --state":           true,
+	"ufw status":                     true,
 }
 
 func newHost(t *testing.T) *host {
@@ -91,11 +91,7 @@ func (h *host) probe() Probe {
 		Run: func(ctx context.Context, name string, args ...string) (string, error) {
 			command := name + " " + strings.Join(args, " ")
 			h.calls = append(h.calls, command)
-			key := command
-			if strings.HasPrefix(command, "firewall-cmd --get-zone-of-interface=") {
-				key = "firewall-cmd --get-zone-of-interface="
-			}
-			if !allowedCommands[key] {
+			if !allowedCommands[command] {
 				h.t.Fatalf("command outside the read-only contract: %s", command)
 			}
 			if h.block {
@@ -132,6 +128,14 @@ func (h *host) probe() Probe {
 
 func (h *host) inspect(device string) Result {
 	return Inspect(context.Background(), h.probe(), Target{Device: device, AutoRedirect: true})
+}
+
+// standalone is ConfigFlow's full TUN on a single-service Mihomo host: mixed
+// stack, auto-redirect and LAN DNS to this host hijacked into the TUN.
+var standalone = Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}
+
+func (h *host) inspectTarget(target Target) Result {
+	return Inspect(context.Background(), h.probe(), target)
 }
 
 // inspectWithoutRedirect leaves nf_tables presence to the kernel facts.
@@ -181,8 +185,11 @@ func TestPlainForwardDropIsReportedOnceWithExactCommands(t *testing.T) {
 	if !reflect.DeepEqual(remedy.Commands, want) || remedy.Source != "iptables" || !strings.Contains(remedy.PersistNote, "netfilter-persistent save") {
 		t.Fatalf("wrong remedy: %+v", remedy)
 	}
-	if !strings.Contains(result.Hint, "TCP 仍可用") || !strings.Contains(result.Hint, "Meta") || !strings.Contains(result.Verify, "ping") || result.CheckedAt != "2026-10-24T08:00:00Z" {
+	if !strings.Contains(result.Hint, "UDP（如 QUIC、语音通话、游戏）和 ping 会失败") || !strings.Contains(result.Hint, "其他 TCP 连接不受影响") || !strings.Contains(result.Hint, "Meta") || !strings.Contains(result.Verify, "ping") || result.CheckedAt != "2026-10-24T08:00:00Z" {
 		t.Fatalf("wrong text: %+v", result)
+	}
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward}) || result.InputPolicy != "accept" || result.Sources[0].Hook != "forward" {
+		t.Fatalf("wrong flows or policies: %+v", result)
 	}
 	if h.called("iptables-legacy-save -t filter") {
 		t.Fatal("legacy table was not loaded; listing it would load it")
@@ -328,20 +335,150 @@ func TestBuiltInNFTablesIsInspected(t *testing.T) {
 }
 
 func TestUFWRoutedDenyAndRouteAllow(t *testing.T) {
+	// UFW denies routed and incoming traffic: forwarded UDP and, through the
+	// INPUT default deny, the TCP auto-redirect hands to a local port.
 	h := nftHost(t, "ip-filter-present.nft.json", "ufw-active.iptables")
 	h.tools["ufw"] = "/usr/sbin/ufw"
 	h.ufwState = "active"
-	remedy := onlyRemedy(t, h.inspect("Meta"))
-	want := []string{"ufw route allow in on Meta", "ufw route allow out on Meta"}
-	if !reflect.DeepEqual(remedy.Commands, want) || remedy.Source != "ufw" || remedy.PersistNote != ufwNote {
+	result := h.inspect("Meta")
+	remedy := onlyRemedy(t, result)
+	want := []string{"ufw route allow in on Meta", "ufw route allow out on Meta", UFWBeforeRulesCommand, "ufw reload"}
+	if !reflect.DeepEqual(remedy.Commands, want) || remedy.Source != "ufw" || remedy.PersistNote != ufwBeforeRulesNote {
 		t.Fatalf("ufw remedy: %+v", remedy)
 	}
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowRedirectTCP}) || strings.Contains(result.Hint, "不受影响") || !strings.Contains(result.Hint, "TCP 连接会失败") {
+		t.Fatalf("ufw flows: %+v", result)
+	}
 
+	// Lab v5-2: `ufw route allow` alone left TCP broken; the warning stays.
 	h = nftHost(t, "ip-filter-present.nft.json", "ufw-route-allowed.iptables")
 	h.tools["ufw"] = "/usr/sbin/ufw"
 	h.ufwState = "active"
-	if result := h.inspect("Meta"); result.State != StateOK {
-		t.Fatalf("route allow should clear the warning: %+v", result)
+	result = h.inspect("Meta")
+	remedy = onlyRemedy(t, result)
+	if !reflect.DeepEqual(remedy.Commands, []string{UFWBeforeRulesCommand, "ufw reload"}) || !reflect.DeepEqual(result.Flows, []string{FlowRedirectTCP}) {
+		t.Fatalf("route allow leaves redirected TCP blocked: %+v", result)
+	}
+	// The real FORWARD policy is still DROP although forwarding is accepted.
+	if result.Policy != "drop" || result.InputPolicy != "drop" || result.Sources[0].Hook != "input" || !strings.Contains(result.Sources[0].Detail, "默认拒绝入站") {
+		t.Fatalf("policies: %+v", result)
+	}
+}
+
+func TestUFWInputAndRemedyFromTheLab(t *testing.T) {
+	// Lab 2026-10-24: ufw 0.36.2 enabled with 22 and 9090 allowed broke
+	// forwarded UDP, DNS to the host (UDP and TCP) and forwarded TCP.
+	h := nftHost(t, "ufw-input.nft.json", "ufw-input.iptables")
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	result := h.inspectTarget(standalone)
+	remedy := onlyRemedy(t, result)
+	want := []string{"ufw route allow in on Meta", "ufw route allow out on Meta", "ufw allow in on Meta", UFWBeforeRulesCommand, "ufw reload"}
+	if !reflect.DeepEqual(remedy.Commands, want) {
+		t.Fatalf("ufw commands: %q", remedy.Commands)
+	}
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowDNS, FlowRedirectTCP, FlowTUNTCP}) || !strings.Contains(result.Hint, "查不到域名") {
+		t.Fatalf("ufw flows: %+v", result)
+	}
+	// After those commands (and a reboot) everything worked: ok, while both
+	// default policies really are still DROP.
+	h = nftHost(t, "ufw-input-fixed.nft.json", "ufw-input-fixed.iptables")
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	result = h.inspectTarget(standalone)
+	if result.State != StateOK || result.Policy != "drop" || result.InputPolicy != "drop" || len(result.Flows) != 0 {
+		t.Fatalf("fixed ufw: %+v", result)
+	}
+}
+
+func TestUFWBeforeRulesCommandIsExact(t *testing.T) {
+	// Verified in the lab: idempotent, the rule lands right after the marker.
+	want := `grep -q -- '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules || sed -i '/^# End required lines/a -A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules`
+	if UFWBeforeRulesCommand != want {
+		t.Fatalf("command changed: %s", UFWBeforeRulesCommand)
+	}
+}
+
+func TestIptablesInputDropBlocksRedirectedAndTUNTCP(t *testing.T) {
+	// Lab: INPUT DROP with ssh allowed. Forwarded TCP (redirected to a local
+	// port) and TCP DNS (system stack, from Meta) failed; UDP and ping worked.
+	h := nftHost(t, "input-drop.nft.json", "input-drop.iptables")
+	result := h.inspectTarget(standalone)
+	remedy := onlyRemedy(t, result)
+	want := []string{"iptables -I INPUT -m conntrack --ctstate DNAT -j ACCEPT", "iptables -I INPUT -i Meta -j ACCEPT"}
+	if !reflect.DeepEqual(remedy.Commands, want) || remedy.Source != "iptables" || !strings.Contains(remedy.PersistNote, "这些规则") {
+		t.Fatalf("input remedy: %+v", remedy)
+	}
+	if !reflect.DeepEqual(result.Flows, []string{FlowRedirectTCP, FlowTUNTCP}) || result.Policy != "accept" || result.InputPolicy != "drop" {
+		t.Fatalf("input flows: %+v", result)
+	}
+	for _, text := range []string{"TCP 连接会失败", "TCP 方式的 DNS 查询会失败"} {
+		if !strings.Contains(result.Hint, text) {
+			t.Fatalf("hint lacks %q: %s", text, result.Hint)
+		}
+	}
+	if strings.Contains(result.Hint, "UDP") || strings.Contains(result.Hint, "不受影响") || !strings.Contains(result.Verify, "网页") || !strings.Contains(result.Verify, "DNS") {
+		t.Fatalf("impact text: %s / %s", result.Hint, result.Verify)
+	}
+	// Both commands applied: ok, and the real INPUT policy is still reported.
+	h = nftHost(t, "input-drop-fixed.nft.json", "input-drop-fixed.iptables")
+	if result := h.inspectTarget(standalone); result.State != StateOK || result.InputPolicy != "drop" {
+		t.Fatalf("fixed input: %+v", result)
+	}
+	// The gvisor stack (Mihomo's default) keeps TCP in user space.
+	h = nftHost(t, "input-drop.nft.json", "input-drop.iptables")
+	target := standalone
+	target.Stack = ""
+	if remedy := onlyRemedy(t, h.inspectTarget(target)); !reflect.DeepEqual(remedy.Commands, want[:1]) {
+		t.Fatalf("gvisor: %q", remedy.Commands)
+	}
+}
+
+func TestInputRulesOnlyCountCertainDrops(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rules string
+		drop  bool
+	}{
+		{"port-specific drop", ":INPUT ACCEPT [0:0]\n-A INPUT -p tcp -m tcp --dport 3306 -j DROP\n", false},
+		{"source ban list", ":INPUT ACCEPT [0:0]\n:f2b - [0:0]\n-A INPUT -p tcp -m multiport --dports 22 -j f2b\n-A f2b -s 192.0.2.1/32 -j REJECT\n-A f2b -j RETURN\n", false},
+		{"udp drop", ":INPUT ACCEPT [0:0]\n-A INPUT -p udp -j DROP\n", false},
+		{"tcp drop", ":INPUT ACCEPT [0:0]\n-A INPUT -p tcp -j DROP\n", true},
+		{"new connections dropped", ":INPUT ACCEPT [0:0]\n-A INPUT -m conntrack --ctstate NEW -j DROP\n", true},
+		{"established only accepted", ":INPUT DROP [0:0]\n-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n", true},
+		{"dnat accepted", ":INPUT DROP [0:0]\n-A INPUT -m conntrack --ctstate DNAT -j ACCEPT\n", false},
+		{"not-local drop skipped for local", ":INPUT DROP [0:0]\n:nl - [0:0]\n-A INPUT -m conntrack --ctstate DNAT -j nl\n-A INPUT -m conntrack --ctstate DNAT -j ACCEPT\n-A nl -m addrtype --dst-type LOCAL -j RETURN\n-A nl -j DROP\n", false},
+		{"open port range is not certain", ":INPUT DROP [0:0]\n-A INPUT -p tcp -m tcp --dport 1024:65535 -j ACCEPT\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table, ok := parseIptablesSave("*filter\n" + tc.rules + "COMMIT\n")
+			if !ok {
+				t.Fatal("parse")
+			}
+			in := &inspection{ctx: context.Background(), target: Target{Device: "Meta", AutoRedirect: true}, lan: []string{"eth0"}}
+			in.evaluateIptables(table, "iptables", "nft")
+			if got := len(in.findings) > 0; got != tc.drop {
+				t.Fatalf("drop=%v, want %v: %+v", got, tc.drop, in.findings)
+			}
+		})
+	}
+}
+
+func TestNFTInputPolicyDrop(t *testing.T) {
+	// Lab: Debian-style inet filter input policy drop (ssh and 9090 open).
+	h := nftHost(t, "nft-input-drop.nft.json", "")
+	result := h.inspectTarget(standalone)
+	remedy := onlyRemedy(t, result)
+	want := []string{`nft 'insert rule inet filter input ct status dnat accept'`, `nft 'insert rule inet filter input iifname "Meta" accept'`}
+	if !reflect.DeepEqual(remedy.Commands, want) || remedy.Label != "nftables inet filter input" || result.InputPolicy != "drop" || result.Policy != "accept" {
+		t.Fatalf("nft input: %+v", result)
+	}
+	if result.Sources[0].Hook != "input" || result.Sources[0].Chain != "input" {
+		t.Fatalf("source: %+v", result.Sources)
+	}
+	h = nftHost(t, "nft-input-fixed.nft.json", "")
+	if result := h.inspectTarget(standalone); result.State != StateOK || result.InputPolicy != "drop" {
+		t.Fatalf("fixed nft input: %+v", result)
 	}
 }
 
@@ -412,52 +549,72 @@ func TestIptablesEvaluationIsConservative(t *testing.T) {
 	}
 }
 
-func TestFirewalldZone(t *testing.T) {
+func firewalldHost(t *testing.T, ruleset string) *host {
+	h := nftHost(t, ruleset, "")
+	h.tools["firewall-cmd"] = "/usr/bin/firewall-cmd"
+	h.outputs["firewall-cmd --state"] = "running\n"
+	return h
+}
+
+var firewalldCommands = []string{
+	"firewall-cmd --permanent --zone=trusted --change-interface=Meta",
+	"firewall-cmd --permanent --new-policy=configflow-tun",
+	"firewall-cmd --permanent --policy=configflow-tun --add-ingress-zone=ANY",
+	"firewall-cmd --permanent --policy=configflow-tun --add-egress-zone=trusted",
+	"firewall-cmd --permanent --policy=configflow-tun --set-target=ACCEPT",
+	"firewall-cmd --reload",
+}
+
+func TestFirewalldRulesetFromTheLab(t *testing.T) {
+	// firewalld 2.3.1 (nftables backend), lab 2026-10-24. Its own chains are
+	// evaluated: ct status dnat accept lets redirected TCP and hijacked DNS in.
 	for _, tc := range []struct {
-		zone, out string
-		err       error
-		commands  []string
-		state     string
+		ruleset string
+		flows   []string
 	}{
-		{"public", "public\n", nil, []string{"firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload"}, StateMayDrop},
-		{"none", "", exitStatus(2), []string{"firewall-cmd --permanent --zone=trusted --add-interface=Meta && firewall-cmd --reload"}, StateMayDrop},
-		{"trusted", "trusted\n", nil, nil, StateOK},
+		// Meta in no zone: forwarded UDP/ping and TCP DNS (from Meta) failed.
+		{"firewalld-public.nft.json", []string{FlowForward, FlowTUNTCP}},
+		// Meta in trusted only: what enters from Meta works, forwarding into it does not.
+		{"firewalld-trusted-only.nft.json", []string{FlowForward}},
+		// Meta in public: intra-zone forwarding works, TCP DNS from Meta fails;
+		// moving Meta to trusted alone would break forwarding, so the policy is included.
+		{"firewalld-meta-public.nft.json", []string{FlowTUNTCP}},
 	} {
-		h := nftHost(t, "firewalld.nft.json", "")
-		h.tools["firewall-cmd"] = "/usr/bin/firewall-cmd"
-		h.outputs["firewall-cmd --state"] = "running\n"
-		h.outputs["firewall-cmd --get-zone-of-interface=Meta"] = tc.out
-		if tc.err != nil {
-			h.errs["firewall-cmd --get-zone-of-interface=Meta"] = tc.err
+		result := firewalldHost(t, tc.ruleset).inspectTarget(standalone)
+		remedy := onlyRemedy(t, result)
+		if !reflect.DeepEqual(result.Flows, tc.flows) || !reflect.DeepEqual(remedy.Commands, firewalldCommands) || remedy.Source != "firewalld" || remedy.PersistNote != firewalldNote {
+			t.Fatalf("%s: %+v", tc.ruleset, result)
 		}
-		result := h.inspect("Meta")
-		if result.State != tc.state {
-			t.Fatalf("%s: %+v", tc.zone, result)
-		}
-		if tc.commands != nil {
-			remedy := onlyRemedy(t, result)
-			if !reflect.DeepEqual(remedy.Commands, tc.commands) || remedy.PersistNote != firewalldNote || result.Sources[0].Kind != "firewalld" {
-				t.Fatalf("%s: %+v", tc.zone, result)
-			}
+		if result.Sources[0].Kind != "firewalld" || !strings.HasPrefix(result.Sources[0].Detail, "firewalld 正在运行") {
+			t.Fatalf("%s sources: %+v", tc.ruleset, result.Sources)
 		}
 	}
-	// The zone query itself failed (killed by its budget, D-Bus error): the
-	// zone is unknown, not "none", and no command is suggested.
-	for _, err := range []error{errors.New("signal: killed"), exitStatus(1), context.DeadlineExceeded} {
-		h := nftHost(t, "firewalld.nft.json", "")
-		h.tools["firewall-cmd"] = "/usr/bin/firewall-cmd"
-		h.outputs["firewall-cmd --state"] = "running\n"
-		h.errs["firewall-cmd --get-zone-of-interface=Meta"] = err
-		if result := h.inspect("Meta"); result.State != StateUnknown || len(result.Remedies) != 0 || len(result.Sources) != 0 {
-			t.Fatalf("%v: %+v", err, result)
-		}
+	// After the commands: trusted zone plus the configflow-tun policy.
+	if result := firewalldHost(t, "firewalld-fixed.nft.json").inspectTarget(standalone); result.State != StateOK || result.Policy != "accept" {
+		t.Fatalf("fixed firewalld: %+v", result)
 	}
+}
+
+func TestFirewalldExistingPolicyIsNotCreatedAgain(t *testing.T) {
+	in := &inspection{target: Target{Device: "Meta"}}
+	plan := &remedyPlan{source: "firewalld", flows: map[string]bool{FlowForward: true}, policyExists: true}
+	if commands := in.remedy(plan).Commands; len(commands) != 5 || strings.Contains(strings.Join(commands, "\n"), "--new-policy") {
+		t.Fatalf("existing policy: %q", commands)
+	}
+	// Redirected TCP only (an old release without ct status dnat accept): no command.
+	plan = &remedyPlan{source: "firewalld", flows: map[string]bool{FlowRedirectTCP: true}}
+	if remedy := in.remedy(plan); len(remedy.Commands) != 0 {
+		t.Fatalf("redirect only: %+v", remedy)
+	}
+}
+
+func TestFirewalldStateDecidesHowItsTableIsJudged(t *testing.T) {
 	// firewalld stopped (exit 252, nothing on stdout): its leftover table is
 	// evaluated like any other, and a clean host stays ok.
-	h := nftHost(t, "firewalld.nft.json", "")
+	h := nftHost(t, "firewalld-public.nft.json", "")
 	h.tools["firewall-cmd"] = "/usr/bin/firewall-cmd"
 	h.errs["firewall-cmd --state"] = exitStatus(252)
-	if result := h.inspect("Meta"); result.State != StateMayDrop || result.Sources[0].Kind != "nftables" {
+	if result := h.inspectTarget(standalone); result.State != StateMayDrop || result.Sources[0].Kind != "nftables" {
 		t.Fatalf("stopped firewalld: %+v", result)
 	}
 	h = nftHost(t, "mihomo-only.nft.json", "")
@@ -467,11 +624,13 @@ func TestFirewalldZone(t *testing.T) {
 		t.Fatalf("disabled firewalld must not make the host unknown: %+v", result)
 	}
 	// Its state cannot be read: its table is not judged as a plain nft chain.
-	h = nftHost(t, "firewalld.nft.json", "")
-	h.tools["firewall-cmd"] = "/usr/bin/firewall-cmd"
-	h.errs["firewall-cmd --state"] = errors.New("signal: killed")
-	if result := h.inspect("Meta"); result.State != StateUnknown || len(result.Remedies) != 0 {
-		t.Fatalf("unreadable firewalld state: %+v", result)
+	for _, err := range []error{errors.New("signal: killed"), exitStatus(1), context.DeadlineExceeded} {
+		h = nftHost(t, "firewalld-public.nft.json", "")
+		h.tools["firewall-cmd"] = "/usr/bin/firewall-cmd"
+		h.errs["firewall-cmd --state"] = err
+		if result := h.inspectTarget(standalone); result.State != StateUnknown || len(result.Remedies) != 0 {
+			t.Fatalf("unreadable firewalld state %v: %+v", err, result)
+		}
 	}
 }
 
@@ -515,7 +674,8 @@ func TestInvalidDeviceOrNamesGiveNoCommands(t *testing.T) {
 	if result.State != StateMayDrop || len(result.Remedies) != 0 || result.Device != "" || !strings.Contains(result.Hint, "手动放行") {
 		t.Fatalf("invalid device: %+v", result)
 	}
-	if remedy := nftRemedy("inet", "bad'table", "forward", "Meta"); len(remedy.Commands) != 0 {
+	in := &inspection{target: Target{Device: "Meta"}}
+	if remedy := in.remedy(&remedyPlan{source: "nftables", family: "inet", table: "bad'table", chain: "forward", flows: map[string]bool{FlowForward: true}}); len(remedy.Commands) != 0 {
 		t.Fatalf("unsafe table name produced commands: %+v", remedy)
 	}
 }
@@ -624,5 +784,100 @@ func TestDefaultProbeIsUntranslatedAndBounded(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("waited %s for an orphaned child", elapsed)
+	}
+}
+
+func TestTUNTargetReadsTheDeployedTUN(t *testing.T) {
+	local := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.97.0.20").To4()}
+	list := func(values ...string) []interface{} {
+		result := []interface{}{}
+		for _, value := range values {
+			result = append(result, value)
+		}
+		return result
+	}
+	for _, tc := range []struct {
+		name string
+		tun  map[string]interface{}
+		want Target
+	}{
+		{"ConfigFlow standalone full TUN", map[string]interface{}{"enable": true, "stack": "Mixed", "auto-redirect": true, "dns-hijack": list("any:53", "tcp://any:53")},
+			Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}},
+		{"AIO excludes this host", map[string]interface{}{"device": "cf0", "stack": "mixed", "auto-redirect": true, "dns-hijack": list("any:53"), "route-exclude-address": list("127.0.0.0/8", "10.97.0.20/32")},
+			Target{Device: "cf0", AutoRedirect: true, Stack: "mixed"}},
+		{"Mihomo's default hijack", map[string]interface{}{"auto-redirect": true}, Target{Device: "Meta", AutoRedirect: true, DNSHijack: true}},
+		{"no port 53", map[string]interface{}{"auto-redirect": true, "dns-hijack": list("any:1053")}, Target{Device: "Meta", AutoRedirect: true}},
+		{"empty hijack", map[string]interface{}{"auto-redirect": true, "dns-hijack": list()}, Target{Device: "Meta", AutoRedirect: true}},
+		{"bare excluded address", map[string]interface{}{"auto-redirect": true, "route-exclude-address": list("10.97.0.20")}, Target{Device: "Meta", AutoRedirect: true}},
+		{"other excluded network", map[string]interface{}{"auto-redirect": true, "route-exclude-address": list("192.168.0.0/16")}, Target{Device: "Meta", AutoRedirect: true, DNSHijack: true}},
+		{"without auto-redirect", map[string]interface{}{"stack": "system", "dns-hijack": list("0.0.0.0:53")}, Target{Device: "Meta", Stack: "system"}},
+	} {
+		if got := TUNTarget(tc.tun, local); got != tc.want {
+			t.Fatalf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestImpactTextFollowsTheBlockedFlows(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		target   Target
+		blocked  []string
+		contains []string
+		absent   []string
+	}{
+		{"forward with auto-redirect", Target{Device: "Meta", AutoRedirect: true}, []string{FlowForward},
+			[]string{"UDP（如 QUIC、语音通话、游戏）和 ping 会失败", "其他 TCP 连接不受影响"}, []string{"DNS"}},
+		{"forward with hijacked DNS", standalone, []string{FlowForward, FlowDNS},
+			[]string{"UDP（如 QUIC", "查不到域名（UDP 和 TCP 方式都会失败）", "其他 TCP 连接不受影响"}, nil},
+		{"redirected TCP", standalone, []string{FlowRedirectTCP},
+			[]string{"TCP 连接会失败（auto-redirect"}, []string{"不受影响", "UDP"}},
+		{"forward without auto-redirect", Target{Device: "Meta", Stack: "mixed"}, []string{FlowForward, FlowTUNTCP},
+			[]string{"包括 TCP、UDP 和 ping"}, []string{"不受影响", "TUN 把它们交给"}},
+		{"tun input without auto-redirect", Target{Device: "Meta", Stack: "mixed"}, []string{FlowTUNTCP},
+			[]string{"TCP 连接会失败（TUN 把它们交给本机的 Mihomo"}, []string{"UDP"}},
+	} {
+		blocked := map[string]bool{}
+		for _, name := range tc.blocked {
+			blocked[name] = true
+		}
+		text := hint(tc.target, blocked, true, true)
+		for _, want := range tc.contains {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s: %q lacks %q", tc.name, text, want)
+			}
+		}
+		for _, unwanted := range tc.absent {
+			if strings.Contains(text, unwanted) {
+				t.Fatalf("%s: %q contains %q", tc.name, text, unwanted)
+			}
+		}
+		if !strings.HasSuffix(text, "ConfigFlow 不会改动防火墙，需要时在这台 Linux 上执行下面的命令放行。") {
+			t.Fatalf("%s: tail %q", tc.name, text)
+		}
+	}
+	// An incomplete view never claims TCP is unaffected.
+	if text := hint(Target{Device: "Meta", AutoRedirect: true}, map[string]bool{FlowForward: true}, false, true); strings.Contains(text, "不受影响") {
+		t.Fatalf("incomplete: %s", text)
+	}
+	if text := verify(Target{AutoRedirect: true}, map[string]bool{FlowForward: true}); text != verifyPrefix+" ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。" {
+		t.Fatalf("forward verify: %s", text)
+	}
+	if text := verify(standalone, map[string]bool{FlowRedirectTCP: true, FlowTUNTCP: true}); text != verifyPrefix+"打开一个走代理的网页；再用这台 Linux 作 DNS 解析一个域名，确认都可用。" {
+		t.Fatalf("input verify: %s", text)
+	}
+}
+
+func TestDockerHostWithInputDropGetsTwoGroups(t *testing.T) {
+	h := nftHost(t, "ip-filter-present.nft.json", "")
+	docker := strings.Replace(fixture(t, "docker-drop.iptables"), ":INPUT ACCEPT [0:0]", ":INPUT DROP [0:0]", 1)
+	h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+	h.outputs["iptables-save -t filter"] = docker
+	result := h.inspectTarget(standalone)
+	if len(result.Remedies) != 2 || result.Remedies[0].Source != "docker" || result.Remedies[1].Source != "iptables" {
+		t.Fatalf("groups: %+v", result.Remedies)
+	}
+	if want := []string{"iptables -I INPUT -m conntrack --ctstate DNAT -j ACCEPT", "iptables -I INPUT -i Meta -j ACCEPT"}; !reflect.DeepEqual(result.Remedies[1].Commands, want) {
+		t.Fatalf("input group: %q", result.Remedies[1].Commands)
 	}
 }

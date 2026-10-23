@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"agent/netfilter"
+	"net"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -92,13 +93,21 @@ func inspectInstallerForwardingConflict(probe systemProbe) (Check, bool) {
 
 const forwardFilterFix = "需要放行时在这台 Linux 上执行下面的命令；发布 Mihomo 配置后以 ConfigFlow 页面显示的命令为准（TUN 设备名可能不同）。"
 
-// installerForwardTarget uses the install configuration's TUN device when it
-// enables TUN, otherwise ConfigFlow's full-TUN default. It follows the scope of
-// the Agent status (routes/forward_filter.go): a selective Linux gateway
-// configuration (marker present, enabled or not), a route-restricted TUN and
-// an enabled TUN without auto-route are not full TUN and are not inspected.
-func installerForwardTarget(configs []Config) (netfilter.Target, bool) {
-	target := netfilter.Target{Device: "Meta", AutoRedirect: true}
+// installerForwardTarget uses the install configuration's TUN settings when it
+// enables TUN, otherwise ConfigFlow's full-TUN default (Meta, mixed stack,
+// auto-redirect, dns-hijack any:53). It follows the scope of the Agent status
+// (routes/forward_filter.go): a selective Linux gateway configuration (marker
+// present, enabled or not), a route-restricted TUN and an enabled TUN without
+// auto-route are not full TUN and are not inspected. With a DNS service on the
+// same host (AIO), DNS to this host is served by it, not hijacked into the TUN.
+func installerForwardTarget(configs []Config, local []net.IP) (netfilter.Target, bool) {
+	target := netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}
+	dnsService := false
+	for _, cfg := range configs {
+		if cfg.ServiceType == "oxidns" || cfg.ServiceType == "mosdns" {
+			dnsService = true
+		}
+	}
 	for _, cfg := range configs {
 		if cfg.ServiceType != "mihomo" {
 			continue
@@ -120,12 +129,12 @@ func installerForwardTarget(configs []Config) (netfilter.Target, bool) {
 			if tun["auto-route"] != true {
 				return netfilter.Target{}, false
 			}
-			if device, ok := tun["device"].(string); ok && device != "" {
-				target.Device = device
-			}
-			target.AutoRedirect = tun["auto-redirect"] == true
+			target = netfilter.TUNTarget(tun, local)
 		}
 		break
+	}
+	if dnsService {
+		target.DNSHijack = false
 	}
 	return target, true
 }
@@ -136,7 +145,11 @@ func inspectForwardFilter(probe systemProbe, configs []Config) (Check, bool) {
 	if probe.forwardFilter == nil {
 		return Check{}, false
 	}
-	target, applicable := installerForwardTarget(configs)
+	var local []net.IP
+	if probe.localAddresses != nil {
+		local = probe.localAddresses()
+	}
+	target, applicable := installerForwardTarget(configs, local)
 	if !applicable {
 		return Check{}, false
 	}
@@ -146,16 +159,17 @@ func inspectForwardFilter(probe systemProbe, configs []Config) (Check, bool) {
 	case netfilter.StateMayDrop:
 		check.Level, check.Fix = "warn", forwardFilterFix
 		check.Message = strings.Replace(result.Hint, "，需要时在这台 Linux 上执行下面的命令放行。", "。", 1)
+		check.Message = strings.Replace(check.Message, "，请在这台 Linux 上手动放行这些流量。", "。", 1)
 		for _, remedy := range result.Remedies {
 			if len(remedy.Commands) > 0 {
 				check.Groups = append(check.Groups, CommandGroup{Label: remedy.Label, Commands: remedy.Commands, Note: remedy.PersistNote})
 			}
 		}
 		if len(check.Groups) == 0 {
-			check.Fix = "请在这台 Linux 上手动放行进出 TUN 设备的转发流量；发布 Mihomo 配置后可在 ConfigFlow 页面查看检查结果。"
+			check.Fix = "请在这台 Linux 上手动放行上述流量；发布 Mihomo 配置后可在 ConfigFlow 页面查看检查结果。"
 		}
 	case netfilter.StateOK:
-		check.Level, check.Message = "pass", "未发现会拦截 TUN 转发的防火墙规则。"
+		check.Level, check.Message = "pass", "未发现会拦截 TUN 转发或本机入站的防火墙规则。"
 	default:
 		reason := result.Reason
 		if reason == "" {

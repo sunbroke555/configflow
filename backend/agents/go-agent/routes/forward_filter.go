@@ -44,7 +44,7 @@ var forwardFilterCache struct {
 }
 
 func forwardFilterNotApplicable(reason string) netfilter.Result {
-	return netfilter.Result{Protocol: 1, State: netfilter.StateNotApplicable, Reason: reason, Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
+	return netfilter.Result{Protocol: 1, State: netfilter.StateNotApplicable, Reason: reason, Flows: []string{}, Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
 }
 
 // forwardFilterTarget decides applicability from the deployed configuration
@@ -61,7 +61,7 @@ func forwardFilterTarget(cfg *Config) (netfilter.Target, *netfilter.Result) {
 		err = yaml.Unmarshal(data, &doc)
 	}
 	if err != nil || doc == nil {
-		result := netfilter.Result{Protocol: 1, State: netfilter.StateUnknown, Reason: "config_error", Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
+		result := netfilter.Result{Protocol: 1, State: netfilter.StateUnknown, Reason: "config_error", Flows: []string{}, Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
 		return netfilter.Target{}, &result
 	}
 	if _, marker := doc["x-configflow-linux-gateway"]; marker {
@@ -83,24 +83,20 @@ func forwardFilterTarget(cfg *Config) (netfilter.Target, *netfilter.Result) {
 		result := forwardFilterNotApplicable("not_linux")
 		return netfilter.Target{}, &result
 	}
-	device := "Meta"
-	if value, ok := tun["device"].(string); ok && value != "" {
-		device = value
-	}
-	redirect, _ := tun["auto-redirect"].(bool)
-	return netfilter.Target{Device: device, AutoRedirect: redirect}, nil
+	return netfilter.TUNTarget(tun, forwardFilterLocalAddresses()), nil
 }
+
+// forwardFilterLocalAddresses decides whether DNS to this host stays out of
+// the TUN (route-exclude-address); a variable so tests do not depend on the host.
+var forwardFilterLocalAddresses = netfilter.LocalAddresses
 
 func forwardFilterKey(cfg *Config, target netfilter.Target) string {
 	info, err := os.Stat(cfg.ConfigPath)
 	if err != nil {
 		return ""
 	}
-	redirect := "0"
-	if target.AutoRedirect {
-		redirect = "1"
-	}
-	return cfg.ConfigPath + "|" + info.ModTime().UTC().Format(time.RFC3339Nano) + "|" + strconv.FormatInt(info.Size(), 10) + "|" + target.Device + "|" + redirect
+	return cfg.ConfigPath + "|" + info.ModTime().UTC().Format(time.RFC3339Nano) + "|" + strconv.FormatInt(info.Size(), 10) + "|" +
+		target.Device + "|" + strconv.FormatBool(target.AutoRedirect) + "|" + target.Stack + "|" + strconv.FormatBool(target.DNSHijack)
 }
 
 // forwardFilterStatus is bounded by netfilter.TotalBudget plus a short grace,
@@ -129,6 +125,9 @@ func forwardFilterStatus(cfg *Config) netfilter.Result {
 	case result = <-done:
 	case <-time.After(budget + 250*time.Millisecond):
 		result = netfilter.Result{Protocol: 1, State: netfilter.StateUnknown, Reason: "timeout", Device: target.Device, AutoRedirect: target.AutoRedirect, CheckedAt: now.UTC().Format(time.RFC3339)}
+	}
+	if result.Flows == nil {
+		result.Flows = []string{}
 	}
 	if result.Sources == nil {
 		result.Sources = []netfilter.Source{}

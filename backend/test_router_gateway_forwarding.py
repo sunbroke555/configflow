@@ -257,12 +257,13 @@ def docker_filter(**fields):
     """A may_drop report as Agent 1.8.42-go sends it for Docker's FORWARD policy."""
     return {
         'protocol': 1, 'state': 'may_drop', 'reason': '', 'device': 'Meta', 'auto_redirect': True, 'policy': 'drop',
-        'sources': [{'kind': 'docker', 'backend': 'nft', 'family': '', 'table': '', 'chain': '', 'policy': 'drop',
-                     'detail': 'FORWARD 默认策略为 DROP（Docker）'}],
+        'input_policy': 'accept', 'flows': ['forward'],
+        'sources': [{'kind': 'docker', 'backend': 'nft', 'hook': 'forward', 'family': '', 'table': '', 'chain': '',
+                     'policy': 'drop', 'detail': 'FORWARD 默认策略为 DROP（Docker）'}],
         'remedies': [{'source': 'docker', 'label': 'Docker', 'device': 'Meta',
                       'commands': ['iptables -I DOCKER-USER -o Meta -j ACCEPT', 'iptables -I DOCKER-USER -i Meta -j ACCEPT'],
                       'persist_note': '这两条规则重启后会丢失（重启 Docker 不会清空 DOCKER-USER）。'}],
-        'hint': '这台 Linux 的防火墙会拦截转发到 Mihomo TUN（Meta）的流量：TCP 仍可用，UDP（如 QUIC、语音通话、游戏）和 ping 会失败。',
+        'hint': '这台 Linux 的防火墙可能拦截经过 Mihomo TUN（Meta）的流量：主路由转来的 UDP（如 QUIC、语音通话、游戏）和 ping 会失败；其他 TCP 连接不受影响。',
         'verify': '执行后回到这里刷新状态。', 'checked_at': '2026-10-24T03:00:00Z', 'cached': False, **fields}
 
 
@@ -305,6 +306,10 @@ def test_persist_response_has_no_forward_filter(home):
 
 
 @pytest.mark.parametrize('command', [
+    'grep -q -- x /etc/ufw/before.rules || sed -i "1d" /etc/passwd',
+    bridge.FORWARD_FILTER_UFW_BEFORE_RULES + '; reboot',
+    bridge.FORWARD_FILTER_UFW_BEFORE_RULES.replace('/etc/ufw/before.rules', '/etc/passwd'),
+    'sed -i 1d /etc/ufw/before.rules',
     'iptables -I FORWARD -o Meta -j ACCEPT; reboot',
     'iptables -I FORWARD -o Meta -j ACCEPT | sh',
     'iptables -I FORWARD -o $(id) -j ACCEPT',
@@ -327,14 +332,29 @@ def test_sanitize_drops_commands_that_are_not_plain_firewall_commands(command):
 
 
 def test_sanitize_keeps_every_command_form_the_agent_generates():
+    # Exactly what Agent 1.8.42-go generates (netfilter/remedy.go), lab-verified.
+    ufw_before_rules = ("grep -q -- '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules || "
+                        "sed -i '/^# End required lines/a -A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' "
+                        "/etc/ufw/before.rules")
     commands = {
         'docker': ['iptables -I DOCKER-USER -o Meta -j ACCEPT', 'iptables -I DOCKER-USER -i Meta -j ACCEPT'],
-        'iptables': ['iptables-legacy -I FORWARD -o utun.0 -j ACCEPT', 'iptables-legacy -I FORWARD -i utun.0 -j ACCEPT'],
+        'iptables': ['iptables-legacy -I FORWARD -o utun.0 -j ACCEPT', 'iptables-legacy -I FORWARD -i utun.0 -j ACCEPT',
+                     'iptables-legacy -I INPUT -m conntrack --ctstate DNAT -j ACCEPT',
+                     'iptables-legacy -I INPUT -i utun.0 -j ACCEPT'],
         'nftables': ['nft \'insert rule inet filter forward oifname "Meta" accept\'',
-                     'nft \'insert rule inet filter forward iifname "Meta" accept\''],
-        'firewalld': ['firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload'],
-        'ufw': ['ufw route allow in on Meta', 'ufw route allow out on Meta'],
+                     'nft \'insert rule inet filter forward iifname "Meta" accept\'',
+                     "nft 'insert rule inet filter input ct status dnat accept'",
+                     'nft \'insert rule inet filter input iifname "Meta" accept\''],
+        'firewalld': ['firewall-cmd --permanent --zone=trusted --change-interface=Meta',
+                      'firewall-cmd --permanent --new-policy=configflow-tun',
+                      'firewall-cmd --permanent --policy=configflow-tun --add-ingress-zone=ANY',
+                      'firewall-cmd --permanent --policy=configflow-tun --add-egress-zone=trusted',
+                      'firewall-cmd --permanent --policy=configflow-tun --set-target=ACCEPT',
+                      'firewall-cmd --reload'],
+        'ufw': ['ufw route allow in on Meta', 'ufw route allow out on Meta', 'ufw allow in on Meta', ufw_before_rules,
+                'ufw reload'],
     }
+    assert ufw_before_rules == bridge.FORWARD_FILTER_UFW_BEFORE_RULES
     remedies = [{'source': source, 'label': source, 'device': 'Meta', 'commands': lines, 'persist_note': 'n'}
                 for source, lines in commands.items()]
     result = bridge.sanitize_forward_filter(docker_filter(remedies=remedies))
@@ -344,20 +364,21 @@ def test_sanitize_keeps_every_command_form_the_agent_generates():
 def test_sanitize_reduces_fields_to_known_values():
     result = bridge.sanitize_forward_filter(docker_filter(
         protocol='1', reason='Timeout!', device='bad device', auto_redirect='yes', policy='reject',
-        hint='第一行\n‮第二行' + '长' * 400, verify=5, checked_at='2026-10-24T03:00:00Z' + 'z' * 60, cached=1,
+        hint='第一行\n‮第二行' + '长' * 500, verify=5, input_policy='reject', flows=['tun_tcp', 'forward', 'bogus', {}, 'forward'], checked_at='2026-10-24T03:00:00Z' + 'z' * 60, cached=1,
         extra='ignored',
         sources=[{'kind': 'nftables', 'backend': 'other', 'family': 'inet', 'table': 'filter', 'chain': 'for ward',
                   'policy': 'drop', 'detail': '\x1b[31mred'}, {'kind': 'shell'}, 'x'] * 4,
-        remedies=[{'source': 'docker', 'label': 'L' * 100, 'device': 'Meta', 'commands': ['ufw route allow in on Meta'] * 6,
+        remedies=[{'source': 'docker', 'label': 'L' * 100, 'device': 'Meta', 'commands': ['ufw route allow in on Meta'] * 8,
                    'persist_note': None}, {'source': 'cron', 'commands': ['ufw status']}, None] * 4))
-    assert set(result) == {'protocol', 'state', 'reason', 'device', 'auto_redirect', 'policy', 'sources', 'remedies',
-                           'hint', 'verify', 'checked_at', 'cached'}
+    assert set(result) == {'protocol', 'state', 'reason', 'device', 'auto_redirect', 'policy', 'input_policy', 'flows',
+                           'sources', 'remedies', 'hint', 'verify', 'checked_at', 'cached'}
+    assert (result['input_policy'], result['flows']) == ('', ['forward', 'tun_tcp'])
     assert (result['protocol'], result['reason'], result['device'], result['auto_redirect'], result['policy'],
             result['cached']) == (0, '', '', False, '', False)
-    assert result['hint'].startswith('第一行第二行') and len(result['hint']) == 300
+    assert result['hint'].startswith('第一行第二行') and len(result['hint']) == 400
     assert result['verify'] == '' and len(result['checked_at']) == 40
     assert len(result['sources']) == 4
-    assert result['sources'][0] == {'kind': 'nftables', 'backend': '', 'family': 'inet', 'table': 'filter',
+    assert result['sources'][0] == {'kind': 'nftables', 'backend': '', 'hook': '', 'family': 'inet', 'table': 'filter',
                                     'chain': '', 'policy': 'drop', 'detail': '[31mred'}
     assert len(result['remedies']) == 4
     assert result['remedies'][0]['label'] == 'L' * 80

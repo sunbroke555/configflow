@@ -253,6 +253,9 @@ func Printable(value string) string {
 
 // Wrap uses display cells rather than byte length, so Chinese and ASCII reports
 // fit the same terminal. Continuation lines retain the original indentation.
+// Lines break between Chinese characters or at spaces, never inside an ASCII
+// word or path, and never put closing punctuation at the start of a line; a
+// word wider than the whole line is still split.
 func Wrap(out io.Writer, prefix, text string, width int) {
 	if width < 20 {
 		width = 78
@@ -260,16 +263,99 @@ func Wrap(out io.Writer, prefix, text string, width int) {
 	prefixWidth := cells(prefix)
 	continuation := strings.Repeat(" ", prefixWidth)
 	line, used := prefix, prefixWidth
-	for _, r := range Printable(text) {
-		n := runeCells(r)
-		if used+n > width && used > prefixWidth {
-			fmt.Fprintln(out, strings.TrimRight(line, " "))
-			line, used = continuation, prefixWidth
+	flush := func() {
+		fmt.Fprintln(out, strings.TrimRight(line, " "))
+		line, used = continuation, prefixWidth
+	}
+	for _, unit := range wrapUnits(Printable(text)) {
+		n := cells(unit)
+		if unit == " " {
+			if used+n > width {
+				flush()
+			} else if used > prefixWidth {
+				line += unit
+				used += n
+			}
+			continue
 		}
-		line += string(r)
-		used += n
+		if n <= width-prefixWidth {
+			if used+n > width && used > prefixWidth {
+				flush()
+			}
+			line += unit
+			used += n
+			continue
+		}
+		// Wider than any line: split it, starting on the current line.
+		for _, r := range unit {
+			rn := runeCells(r)
+			if used+rn > width && used > prefixWidth {
+				flush()
+			}
+			line += string(r)
+			used += rn
+		}
 	}
 	fmt.Fprintln(out, line)
+}
+
+const (
+	closingPunctuation = "，。、；：！？）」』】》〉”’…,.;:!?)]}%"
+	openingPunctuation = "（「『【《〈“‘([{"
+)
+
+// wrapUnits splits text into the pieces a line may not break inside: runs of
+// ASCII non-space characters, single wide characters and single spaces, with
+// closing punctuation kept on the piece before it and opening punctuation on
+// the piece after it.
+func wrapUnits(text string) []string {
+	var units []string
+	var word strings.Builder
+	opening := ""
+	push := func(unit string) {
+		units = append(units, opening+unit)
+		opening = ""
+	}
+	endWord := func() {
+		if word.Len() > 0 {
+			push(word.String())
+			word.Reset()
+		}
+	}
+	for _, r := range text {
+		switch {
+		case r == ' ':
+			endWord()
+			if opening != "" {
+				push("")
+			}
+			units = append(units, " ")
+		case strings.ContainsRune(closingPunctuation, r) && (word.Len() > 0 || len(units) > 0):
+			if word.Len() > 0 && r < 0x80 {
+				word.WriteRune(r)
+				continue
+			}
+			endWord()
+			if last := len(units) - 1; last >= 0 && units[last] != " " {
+				units[last] += string(r)
+			} else {
+				push(string(r))
+			}
+		case strings.ContainsRune(openingPunctuation, r) && r >= 0x80:
+			endWord()
+			opening += string(r)
+		case r < 0x80:
+			word.WriteRune(r)
+		default:
+			endWord()
+			push(string(r))
+		}
+	}
+	endWord()
+	if opening != "" {
+		push("")
+	}
+	return units
 }
 
 func cells(value string) int {

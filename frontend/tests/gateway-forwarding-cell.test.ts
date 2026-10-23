@@ -6,7 +6,7 @@ import { routerApi, agentApi, ruleApi } from '@/api'
 import { activeProfileId } from '@/profileContext'
 import { confirm, notify } from '@/lib/feedback'
 import type { GatewayForwardingEntry } from '@/lib/gatewayForwarding'
-import { DOCKER_COMMANDS, DOCKER_HINT, mayDrop, quiet } from './fixtures/forward-filter'
+import { DOCKER_COMMANDS, DOCKER_HINT, UFW_COMMANDS, mayDrop, quiet, ufwDrop } from './fixtures/forward-filter'
 
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn() },
@@ -265,8 +265,9 @@ describe('routers page forward-filter warning', () => {
     expect(cell(wrapper).text()).toContain('未开启')
     expect(persistButton(wrapper)).toBeDefined()
     const short = cell(wrapper).get('[data-forward-filter-short]')
-    expect(short.text()).toBe('防火墙可能拦截 UDP')
-    expect(short.classes()).toEqual(expect.arrayContaining(['text-[11.5px]', 'text-warning-accent', 'sm:max-w-[102px]']))
+    expect(short.text()).toBe('可能拦截 UDP')
+    // One line within the 102px column (lab v5-2: the longer phrase wrapped at 1400px).
+    expect(short.classes()).toEqual(expect.arrayContaining(['text-[11.5px]', 'text-warning-accent', 'sm:max-w-[102px]', 'whitespace-nowrap']))
     const button = filterButton(wrapper)
     expect(button.text()).toBe('放行命令')
     expect(button.attributes('title')).toBe('查看放行 TUN 转发的命令')
@@ -279,6 +280,15 @@ describe('routers page forward-filter warning', () => {
     expect(dialog.textContent).toContain(DOCKER_HINT)
     expect(dialog.querySelector('pre')!.textContent).toBe(DOCKER_COMMANDS.join('\n'))
     expect(dialog.className).toContain('sm:max-w-[560px]')
+  })
+
+  it('says forwarding may be blocked when redirected TCP is, and shows the UFW commands verbatim', async () => {
+    const wrapper = await mountRouters([entry({ forward_filter: ufwDrop() })])
+    expect(cell(wrapper).get('[data-forward-filter-short]').text()).toBe('可能拦截转发')
+    await filterButton(wrapper).trigger('click'); await flushPromises()
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(dialog.querySelector('pre')!.textContent).toBe(UFW_COMMANDS.join('\n'))
+    expect(dialog.textContent).toContain('主路由转来的 TCP 连接会失败')
   })
 
   it.each([
@@ -300,6 +310,6 @@ describe('routers page forward-filter warning', () => {
     const wrapper = await mountRouters([entry({ forward_filter: mayDrop() })])
     await persistButton(wrapper)!.trigger('click'); await flushPromises()
     expect(cell(wrapper).text()).toContain('已开启并持久化')
-    expect(cell(wrapper).get('[data-forward-filter-short]').text()).toBe('防火墙可能拦截 UDP')
+    expect(cell(wrapper).get('[data-forward-filter-short]').text()).toBe('可能拦截 UDP')
   })
 })

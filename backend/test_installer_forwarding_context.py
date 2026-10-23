@@ -24,7 +24,7 @@ from backend import test_standalone_forwarding_install as standalone
 SCRIPTS = Path(__file__).resolve().parent / "agents" / "scripts"
 VARIABLE = "CONFIGFLOW_INSTALLER_FORWARDING"
 EXPORT = INSTALLER_FORWARDING_ENVIRONMENT + "if cf_environment_check "
-FILTER_NOTE = "转发过滤：防火墙可能拦截转发到 Mihomo TUN 的 UDP 和 ping，安装不受影响；放行命令见上方「转发过滤」或完整日志。"
+FILTER_NOTE = "转发过滤：这台 Linux 的防火墙可能拦截经过 Mihomo TUN 的流量，安装不受影响；影响范围和放行命令见上方「转发过滤」或完整日志。"
 
 
 def single(service="mihomo", **options):

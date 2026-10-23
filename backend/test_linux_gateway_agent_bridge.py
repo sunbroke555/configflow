@@ -490,8 +490,9 @@ def test_not_kept_copy_points_to_the_routers_page(constant):
 
 FORWARD_FILTER = {
     'protocol': 1, 'state': 'may_drop', 'reason': '', 'device': 'Meta', 'auto_redirect': True, 'policy': 'drop',
-    'sources': [{'kind': 'iptables', 'backend': 'nft', 'family': '', 'table': '', 'chain': '', 'policy': 'drop',
-                 'detail': 'FORWARD 默认策略为 DROP'}],
+    'input_policy': 'accept', 'flows': ['forward'],
+    'sources': [{'kind': 'iptables', 'backend': 'nft', 'hook': 'forward', 'family': '', 'table': '', 'chain': '',
+                 'policy': 'drop', 'detail': 'FORWARD 默认策略为 DROP'}],
     'remedies': [{'source': 'iptables', 'label': 'iptables', 'device': 'Meta',
                   'commands': ['iptables -I FORWARD -o Meta -j ACCEPT', 'iptables -I FORWARD -i Meta -j ACCEPT'],
                   'persist_note': '这两条规则重启后会丢失。'}],

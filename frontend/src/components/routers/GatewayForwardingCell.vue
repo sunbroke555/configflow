@@ -38,7 +38,8 @@ const agentName = computed(() => props.entry?.agent_name || props.entry?.agent_i
       前往 Agent 页更新
     </RouterLink>
     <template v-if="filterWarning">
-      <p class="m-0 max-w-[260px] break-words text-[11.5px] leading-relaxed text-warning-accent sm:max-w-[102px]" data-forward-filter-short>{{ filterWarning.short }}</p>
+      <!-- 短句最长 6 个字宽，在 102px 列内一行放下。 -->
+      <p class="m-0 max-w-[260px] whitespace-nowrap text-[11.5px] leading-relaxed text-warning-accent sm:max-w-[102px]" data-forward-filter-short>{{ filterWarning.short }}</p>
       <Button size="sm" variant="ghost" class="px-2 text-xs max-md:min-h-11" aria-label="查看放行 TUN 转发的命令" title="查看放行 TUN 转发的命令" @click="filterOpen = true">放行命令</Button>
       <Dialog v-model:open="filterOpen">
         <DialogContent class="sm:max-w-[560px]">

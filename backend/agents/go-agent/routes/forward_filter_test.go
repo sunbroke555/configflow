@@ -4,6 +4,7 @@ import (
 	"agent/netfilter"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -100,6 +101,25 @@ func TestForwardFilterApplicability(t *testing.T) {
 				t.Fatalf("target: %+v", f.target)
 			}
 		})
+	}
+}
+
+func TestForwardFilterTargetCarriesStackAndDNSHijack(t *testing.T) {
+	// ConfigFlow's standalone full TUN; the AIO publish excludes this host.
+	standalone := fullTUNConfig + "  stack: mixed\n  dns-hijack: [any:53, tcp://any:53]\n"
+	f := newForwardFilterFixture(t, standalone)
+	forwardFilterLocalAddresses = func() []net.IP { return []net.IP{net.ParseIP("10.97.0.20").To4()} }
+	t.Cleanup(func() { forwardFilterLocalAddresses = netfilter.LocalAddresses })
+	forwardFilterStatus(f.cfg)
+	if want := (netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}); f.target != want {
+		t.Fatalf("standalone target: %+v", f.target)
+	}
+	f.write(t, standalone+"  route-exclude-address: [127.0.0.0/8, 10.97.0.20/32]\n")
+	if result := forwardFilterStatus(f.cfg); result.Cached || f.target.DNSHijack || f.target.Stack != "mixed" {
+		t.Fatalf("aio target: %+v %+v", f.target, result)
+	}
+	if result := forwardFilterStatus(f.cfg); result.Flows == nil {
+		t.Fatalf("flows must be a list: %+v", result)
 	}
 }
 
