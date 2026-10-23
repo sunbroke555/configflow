@@ -8,6 +8,7 @@ import { FORWARDING_AGENT_VERSION, ROUTER_SPLIT_MESSAGES, gatewayLeftover, route
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySettingsKey, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
+import { forwardFilterWarning } from '@/lib/forwardFilter'
 import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
 import FormField from '@/components/common/FormField.vue'
@@ -15,6 +16,7 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import { gatewayCopy } from '@/lib/gatewayCopy'
 import { optionHelp } from '@/lib/optionCopy'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import ForwardFilterNotice from '@/components/agents/ForwardFilterNotice.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -86,6 +88,8 @@ const legacyMode = computed(() => splitMode.value === 'legacy')
 const tunMissing = computed(() => splitMode.value === 'full_tun' && !!routerSplit.value?.issues?.includes('tun_missing'))
 const tunFiltered = computed(() => splitMode.value === 'full_tun' && !!routerSplit.value?.issues?.includes('tun_filtered'))
 const forwardedRuleNames = computed(() => (routerSplit.value?.route_rule_set_ids || []).map(id => candidates.value.find(item => item.id === id)?.name || id))
+// Full TUN only, and a warning only: it never changes the publish bar or any action here.
+const filterWarning = computed(() => fullTunMode.value && !invalidMode.value && selectedAgentId.value ? forwardFilterWarning(status.value?.forward_filter) : null)
 const leftoverGateway = computed(() => fullTunMode.value && !invalidMode.value ? gatewayLeftover(status.value) : null)
 const configured = computed(() => savedSettings.value.enabled && settings.enabled && !configDirty.value)
 const errors = computed(() => gatewaySpecErrors(network))
@@ -513,6 +517,15 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             </div>
             <div v-if="networkError" role="alert" class="text-xs leading-relaxed"><p class="m-0 font-medium text-destructive-accent">需要处理</p><p class="mt-1 mb-0">{{ networkError }}</p></div>
             <p v-if="networkResult" role="status" class="m-0 flex items-start gap-2 text-xs leading-relaxed"><Check class="mt-0.5 size-3.5 shrink-0 text-success-accent" />{{ networkResult }}</p>
+          </section>
+
+          <section v-if="fullTunMode && !invalidMode && filterWarning" aria-labelledby="gateway-forward-filter" class="space-y-3 border-t border-border pt-4" data-forward-filter-section>
+            <div><h2 id="gateway-forward-filter" class="m-0 text-lg font-semibold">转发过滤</h2><p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">{{ selectedAgent ? `「${selectedAgent.name}」` : '这台设备' }}的防火墙检查结果，只作提醒，不影响发布。</p></div>
+            <div class="border-y border-border">
+              <AgentStatusRow label="转发过滤" :status="filterWarning.status" tone="warning">
+                <template #notice><ForwardFilterNotice :filter="status?.forward_filter" /></template>
+              </AgentStatusRow>
+            </div>
           </section>
 
           <section v-if="!fullTunMode" aria-labelledby="gateway-network" class="space-y-3 border-t border-border pt-4">

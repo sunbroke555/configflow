@@ -1,4 +1,5 @@
 /** 上游路由页「IPv4 转发」列：代理网关 Agent 的转发状态与一键开启（数据来自 /api/routers/gateway-forwarding）。 */
+import type { ForwardFilter } from '@/lib/forwardFilter'
 
 /** 单独安装的 Mihomo Agent 从此版本起支持在面板开启并持久化 IPv4 转发（同机安装为 1.8.40-go）。 */
 export const STANDALONE_FORWARDING_AGENT_VERSION = '1.8.41-go'
@@ -26,6 +27,8 @@ export interface GatewayForwardingEntry {
   layout: string | null
   gateway_record: boolean
   preserves_forwarding: boolean
+  /** Agent 1.8.42-go 起提供；只作提醒，不影响 state、label 与 action */
+  forward_filter?: ForwardFilter | null
 }
 
 export interface GatewayForwardingView {

@@ -1,4 +1,5 @@
 import api, { type PublishGuard } from '@/api'
+import type { ForwardFilter } from '@/lib/forwardFilter'
 
 export interface LinuxGatewaySettings { enabled: boolean; rule_set_ids: string[] }
 export interface LinuxGatewayCandidate {
@@ -49,6 +50,8 @@ export interface LinuxGatewayStatus {
   /** Agent 1.8.40-go 起提供；缺少时表示 Agent 需要更新 */
   ipv4_forwarding?: LinuxGatewayForwarding
   tun?: LinuxGatewayTun
+  /** Agent 1.8.42-go 起提供：完整 TUN 主机的转发过滤检查，只作提醒 */
+  forward_filter?: ForwardFilter
 }
 export interface LinuxGatewayForwardingResult {
   success: boolean; message?: string; ipv4_forwarding?: LinuxGatewayForwarding

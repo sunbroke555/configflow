@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Loader2 } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import StatusDot from '@/components/common/StatusDot.vue'
+import ForwardFilterNotice from '@/components/agents/ForwardFilterNotice.vue'
 import { gatewayForwardingView, type GatewayForwardingEntry } from '@/lib/gatewayForwarding'
+import { forwardFilterWarning } from '@/lib/forwardFilter'
 
 const props = defineProps<{ entry?: GatewayForwardingEntry; loading: boolean; busy: boolean; failed?: boolean; disabled?: boolean }>()
 const emit = defineEmits<{ persist: [] }>()
 const view = computed(() => gatewayForwardingView(props.entry, props.loading, props.failed))
+// 转发过滤只作提醒：不改变上面的状态、说明与操作。
+const filterWarning = computed(() => forwardFilterWarning(props.entry?.forward_filter))
+const filterOpen = ref(false)
+const agentName = computed(() => props.entry?.agent_name || props.entry?.agent_id || '')
 </script>
 
 <template>
@@ -30,5 +37,18 @@ const view = computed(() => gatewayForwardingView(props.entry, props.loading, pr
       class="inline-flex items-center text-[12px] text-primary-accent underline underline-offset-4 max-md:min-h-11">
       前往 Agent 页更新
     </RouterLink>
+    <template v-if="filterWarning">
+      <p class="m-0 max-w-[260px] break-words text-[11.5px] leading-relaxed text-warning-accent sm:max-w-[102px]" data-forward-filter-short>{{ filterWarning.short }}</p>
+      <Button size="sm" variant="ghost" class="px-2 text-xs max-md:min-h-11" aria-label="查看放行 TUN 转发的命令" title="查看放行 TUN 转发的命令" @click="filterOpen = true">放行命令</Button>
+      <Dialog v-model:open="filterOpen">
+        <DialogContent class="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle class="pr-8 [overflow-wrap:anywhere]">放行「{{ agentName }}」的 TUN 转发</DialogTitle>
+            <DialogDescription>这台设备的防火墙检查结果，只作提醒，不影响发布和 IPv4 转发。</DialogDescription>
+          </DialogHeader>
+          <ForwardFilterNotice :filter="entry?.forward_filter" />
+        </DialogContent>
+      </Dialog>
+    </template>
   </div>
 </template>

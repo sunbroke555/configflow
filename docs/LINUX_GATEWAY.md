@@ -173,6 +173,26 @@ Mihomo 缺少 DNS 上游时会补入默认加密上游；已有非循环上游�
 
 Agent 页「单独安装」的 Mihomo（systemd 或 OpenRC）默认也开启并持久化 IPv4 转发，做法与同机安装相同：写入 `/etc/sysctl.d/99-configflow-aio-forward.conf`，并在 Agent 启动前检查转发（`/opt/configflow-agent/enable-ipv4-forwarding.sh`）。不需要时在安装对话框勾选「不开启 IPv4 转发」，生成的命令与此前版本相同；自定义启停命令、OxiDNS、MosDNS 和 Docker 安装不涉及转发。设备上已有 Linux 网关记录时，默认命令会在停止旧 Agent 之前拒绝安装，避免替网关接管转发；请勾选「不开启 IPv4 转发」重新生成命令，或在「上游路由」页确认后开启。已经安装的主机，可在「上游路由」页对作为代理网关的 Mihomo Agent 一键「开启并持久化 IPv4 转发」（同机安装需 `1.8.40-go`，单独安装需 `1.8.41-go`）；该操作只把转发从关闭改为开启，不修改核心配置，也不重启 Mihomo 或 Agent。持久化之后，撤销 Linux 网关记录时 IPv4 转发保持开启；卸载 Agent 时这份持久化设置会保留。
 
+### 完整 TUN 的转发过滤
+
+完整 TUN 主机（主路由分流、普通同机安装或单独安装的 Mihomo，已部署配置启用 `tun.enable` 与 `auto-route`，没有 Linux 网关标记，也没有 `route-address` 限制）上，如果系统防火墙的 FORWARD 默认拒绝（Docker、firewalld、UFW 常见），主路由转来的 TCP 仍可用（auto-redirect 会把它转到本机），但 UDP（QUIC、语音通话、游戏）和 ping 会被丢弃。没有启用 auto-redirect 时，TCP 也会受影响。
+
+Agent `1.8.42-go` 起会只读检查 iptables（nft / legacy）、nftables 的 forward 链、firewalld 与 UFW，发现可能拦截时只作提醒：「上游路由」的「IPv4 转发」列、首次使用向导第 5 步、配置生成页的 Linux 网关对话框和安装输出都会显示按来源生成的放行命令，并带复制按钮。**ConfigFlow 不会改动防火墙**，安装、发布和向导的完成检查都不受影响；无法检查时不显示任何提醒。选择性 Linux 网关保持原有的应用前检查，不显示这项提醒。
+
+命令中的 TUN 设备名取自已部署配置的 `tun.device`（缺省 `Meta`），以页面显示的为准。下表以 `Meta` 为例，每组同时放行进、出两个方向：
+
+| 来源 | 放行命令 | 重启后 |
+| --- | --- | --- |
+| Docker（存在 `DOCKER-USER` 链） | `iptables -I DOCKER-USER -o Meta -j ACCEPT`<br>`iptables -I DOCKER-USER -i Meta -j ACCEPT` | 会丢失；Debian/Ubuntu 安装 `iptables-persistent` 后执行 `netfilter-persistent save`，Alpine 执行 `rc-service iptables save`。重启 Docker 不会清空 `DOCKER-USER` |
+| iptables（FORWARD 默认 DROP 或有拦截规则；legacy 后端写作 `iptables-legacy`） | `iptables -I FORWARD -o Meta -j ACCEPT`<br>`iptables -I FORWARD -i Meta -j ACCEPT` | 同上 |
+| nftables（forward 链 `policy drop` 或有 drop 规则，表名和链名按实际检测） | `nft 'insert rule inet filter forward oifname "Meta" accept'`<br>`nft 'insert rule inet filter forward iifname "Meta" accept'` | 会丢失；把两条规则写进 `/etc/nftables.conf`（或系统加载的 nftables 配置）对应的链 |
+| firewalld | `firewall-cmd --permanent --zone=trusted --add-interface=Meta && firewall-cmd --reload`（设备已绑定其他区域时为 `--change-interface=Meta`） | `--permanent` 已保存 |
+| UFW | `ufw route allow in on Meta`<br>`ufw route allow out on Meta` | UFW 自动保存 |
+
+执行后回到页面刷新状态（检查结果最多缓存 30 秒），再在客户端 ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。
+
+已知限制：只检查 IPv4，只看顶层 `tun`（`listeners` 里的 TUN 不检查）；带源 / 目的地址等其他条件的拦截规则按“可能拦截”保守提醒；使用 iptables 后端的旧版 firewalld（如 CentOS 7）放行后仍可能显示提醒；修改 `tun.device` 后需要按新命令重新放行。
+
 停用顺序：**先恢复客户端网关和 DNS → 在向导恢复所选设备网络 → 关闭网关模式 → 保存并发布 Mihomo**。恢复操作只清理带有匹配归属、且未被外部修改的受管规则；系统参数也只在仍等于受管值时恢复。若提示资源被外部修改，保留现场并先核对变化。
 
 存在网关恢复记录时，Mihomo Agent 的远程卸载和 Shell 安装菜单中的卸载都会被阻止，必须先按上述步骤恢复设备网络，避免删除恢复记录却留下系统转发规则。
@@ -187,6 +207,7 @@ Agent 页「单独安装」的 Mihomo（systemd 或 OpenRC）默认也开启并�
 | 提示 Agent 版本旧 | 更新 ConfigFlow 与 Mihomo Agent 至包含本功能的版本（至少 `1.8.25-go`） |
 | 代理域名返回真实 IP | OxiDNS 远程及备用上游、域名规则、Mihomo fake-IP 过滤、客户端安全 DNS |
 | 域名能解析但无法访问 | 系统转发是否已应用，客户端网关是否指向 Linux，代理节点是否可用 |
+| 网页正常，但 UDP、语音或 ping 不通（完整 TUN） | 看「转发过滤」提醒，按页面给出的命令放行进出 TUN 的转发 |
 | IP 服务进入 Mihomo 但没有代理 | 原有规则顺序和策略组选择；接管并不强制代理出口 |
 | 规则库变更尚未体现 | 先确认规则库已刷新，等待约 5 分钟；新增勾选、策略变更需要重新发布 |
 | 停止 Agent 后重启无法自动恢复 | 状态恢复依赖 Mihomo Agent 的开机启动，检查 Agent 系统服务 |

@@ -6,6 +6,7 @@ import { routerApi, agentApi, ruleApi } from '@/api'
 import { activeProfileId } from '@/profileContext'
 import { confirm, notify } from '@/lib/feedback'
 import type { GatewayForwardingEntry } from '@/lib/gatewayForwarding'
+import { DOCKER_COMMANDS, DOCKER_HINT, mayDrop, quiet } from './fixtures/forward-filter'
 
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn() },
@@ -253,5 +254,52 @@ describe('routers page IPv4 forwarding column', () => {
     first.resolve({ data: { success: true, gateways: [entry(PERSISTED)] } })
     await flushPromises()
     expect(cell(wrapper).text()).toContain('已开启，未持久化')
+  })
+})
+
+describe('routers page forward-filter warning', () => {
+  const filterButton = (wrapper: VueWrapper, index = 0) => cell(wrapper, index).find('button[aria-label="查看放行 TUN 转发的命令"]')
+
+  it('adds a short warning and a commands dialog without changing the forwarding status or action', async () => {
+    const wrapper = await mountRouters([entry({ forward_filter: mayDrop() })])
+    expect(cell(wrapper).text()).toContain('未开启')
+    expect(persistButton(wrapper)).toBeDefined()
+    const short = cell(wrapper).get('[data-forward-filter-short]')
+    expect(short.text()).toBe('防火墙可能拦截 UDP')
+    expect(short.classes()).toEqual(expect.arrayContaining(['text-[11.5px]', 'text-warning-accent', 'sm:max-w-[102px]']))
+    const button = filterButton(wrapper)
+    expect(button.text()).toBe('放行命令')
+    expect(button.attributes('title')).toBe('查看放行 TUN 转发的命令')
+    expect(button.attributes('data-variant')).toBe('ghost')
+    expect(button.classes()).toContain('max-md:min-h-11')
+
+    await button.trigger('click'); await flushPromises()
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(dialog.textContent).toContain('放行「pve-mihomo」的 TUN 转发')
+    expect(dialog.textContent).toContain(DOCKER_HINT)
+    expect(dialog.querySelector('pre')!.textContent).toBe(DOCKER_COMMANDS.join('\n'))
+    expect(dialog.className).toContain('sm:max-w-[560px]')
+  })
+
+  it.each([
+    ['an older Agent', undefined],
+    ['no report', null],
+    ['ok', quiet('ok')],
+    ['unknown', quiet('unknown', 'timeout')],
+    ['a selective gateway', quiet('not_applicable', 'linux_gateway')],
+  ])('adds nothing for %s', async (_case, forward_filter) => {
+    const wrapper = await mountRouters([entry({ ...PERSISTED, forward_filter })])
+    expect(cell(wrapper).find('[data-forward-filter-short]').exists()).toBe(false)
+    expect(filterButton(wrapper).exists()).toBe(false)
+    expect(cell(wrapper).text()).toBe('已开启并持久化')
+  })
+
+  it('keeps the last warning when the persist response carries none', async () => {
+    vi.mocked(confirm).mockResolvedValue(true)
+    vi.mocked(routerApi.persistGatewayForwarding).mockResolvedValue({ data: { success: true, gateway: entry({ ...PERSISTED, forward_filter: null }) } } as any)
+    const wrapper = await mountRouters([entry({ forward_filter: mayDrop() })])
+    await persistButton(wrapper)!.trigger('click'); await flushPromises()
+    expect(cell(wrapper).text()).toContain('已开启并持久化')
+    expect(cell(wrapper).get('[data-forward-filter-short]').text()).toBe('防火墙可能拦截 UDP')
   })
 })
