@@ -1,5 +1,6 @@
 """No host networking is touched: test the opt-in, bound-agent HTTP boundary."""
 import copy
+from copy import deepcopy
 import json
 
 import pytest
@@ -48,6 +49,9 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(requests.Session, 'request', request)
     monkeypatch.setattr(bridge, 'get_config', lambda profile: {'mihomo': {'linux_gateway': {'enabled': True}}})
+    # These profiles are no router split; their setup sessions and topology are not stored here.
+    monkeypatch.setattr('backend.common.router_split.router_split_state',
+                        lambda repository, profile, config: {'mode': None})
     return seen, replies
 
 
@@ -132,3 +136,129 @@ def test_http_requires_login_and_explicit_current_binding(authenticated_app, cal
     assert result.status_code == 200
     assert result.headers['Cache-Control'] == 'no-store'
     assert 'private-agent-token' not in result.get_data(as_text=True)
+
+
+MARKER = {'version': 1, 'takeover': 'full_tun', 'route_rule_set_ids': [], 'origin': 'setup'}
+CURRENT = bridge.FORWARDING_MIN_AGENT_VERSION
+
+
+@pytest.fixture
+def split(calls, monkeypatch):
+    """Choose the profile's takeover; legacy is resolved through router_split_state."""
+    modes = {'value': None}
+    def config(profile):
+        if modes['value'] == 'full_tun':
+            return {'mihomo': {'linux_gateway': {'enabled': False}, 'router_split': deepcopy(MARKER)}}
+        if modes['value'] == 'invalid':
+            return {'mihomo': {'linux_gateway': {'enabled': True}, 'router_split': {'version': 2}}}
+        return {'mihomo': {'linux_gateway': {'enabled': True}}}
+    monkeypatch.setattr(bridge, 'get_config', config)
+    monkeypatch.setattr('backend.common.router_split.router_split_state',
+                        lambda repository, profile, config: {'mode': modes['value']})
+    return modes
+
+
+def test_forwarding_posts_to_its_own_path_for_a_full_tun_profile(split, calls):
+    seen, replies = calls
+    split['value'] = 'full_tun'
+    replies.append(Response({'success': True, 'ipv4_forwarding': {'persisted': True}}))
+    result = bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {'prepare_tun': True})
+    assert result['ipv4_forwarding']['persisted'] is True
+    assert seen[0]['method'] == 'POST'
+    assert seen[0]['url'] == 'http://127.0.0.1:8080/api/linux-gateway/forwarding'
+    assert seen[0]['json'] == {'prepare_tun': True}
+    for body in (None, {}):
+        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', body)
+        assert seen[-1]['json'] == {}
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'GET', 'home')
+    assert error.value.code == 'NOT_ALLOWED'
+
+
+@pytest.mark.parametrize('body', [{'prepare_tun': 1}, {'prepare_tun': 'yes'}, {'prepare_tun': True, 'x': 1},
+                                  {'command': 'sysctl'}, [], 'x'])
+def test_forwarding_accepts_only_prepare_tun(split, calls, body):
+    split['value'] = 'full_tun'
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', body)
+    assert error.value.code == 'INVALID_REQUEST' and error.value.status == 400
+    assert calls[0] == []
+
+
+@pytest.mark.parametrize('version', [bridge.MIN_AGENT_VERSION, '1.8.39-go'])
+def test_forwarding_needs_the_forwarding_agent(split, calls, version):
+    split['value'] = 'full_tun'
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=version), 'gateway', 'forwarding', 'POST', 'home', {})
+    assert error.value.code == 'UPGRADE_REQUIRED' and CURRENT in error.value.message
+    assert calls[0] == []
+
+
+def test_forwarding_on_an_old_agent_route_maps_to_upgrade(split, calls):
+    split['value'] = 'full_tun'
+    calls[1].append(Response(raw=b'not found', status=404))
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {})
+    assert error.value.code == 'UPGRADE_REQUIRED' and CURRENT in error.value.message
+
+
+def test_forwarding_uncertain_result_is_not_repeated(split, calls, monkeypatch):
+    split['value'] = 'full_tun'
+    def lost(*args, **kwargs):
+        raise requests.ConnectionError('reset')
+    monkeypatch.setattr(requests.Session, 'request', lost)
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {})
+    assert error.value.message == '未能确认转发持久化结果，请先刷新设备状态，勿重复操作。'
+
+
+@pytest.mark.parametrize('mode', [None, 'legacy', 'invalid'])
+def test_forwarding_is_only_for_a_full_tun_profile(split, calls, mode):
+    split['value'] = mode
+    for body in ({}, {'prepare_tun': True}):
+        with pytest.raises(MonitorError) as error:
+            bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', body)
+        assert error.value.code == 'ROUTER_SPLIT_REQUIRED' and error.value.status == 409
+        assert error.value.message == '仅主路由分流（完整 TUN）的配置空间可在此开启转发持久化。'
+    assert calls[0] == []
+
+
+@pytest.mark.parametrize('mode,code', [('full_tun', 'ROUTER_SPLIT_FULL_TUN'), ('invalid', 'ROUTER_SPLIT_INVALID')])
+def test_apply_is_refused_for_a_router_split(split, calls, mode, code):
+    split['value'] = mode
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'apply', 'POST', 'home', SPEC)
+    assert error.value.code == code and error.value.status == 409
+    assert calls[0] == []
+
+
+def test_legacy_teardown_needs_confirmation_and_never_forwards_it(split, calls):
+    split['value'] = 'legacy'
+    for body in (None, {}, {'confirm_router_split_teardown': False}):
+        with pytest.raises(MonitorError) as error:
+            bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', body)
+        assert error.value.code == ('ROUTER_SPLIT_LEGACY_TEARDOWN' if body != {'confirm_router_split_teardown': False}
+                                    else 'INVALID_REQUEST')
+    for body in ({'confirm_router_split_teardown': 1}, {'confirm_router_split_teardown': True, 'x': 1}):
+        with pytest.raises(MonitorError) as error:
+            bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', body)
+        assert error.value.code == 'INVALID_REQUEST'
+    assert calls[0] == []
+    bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', {'confirm_router_split_teardown': True})
+    assert calls[0][0]['json'] == {}
+    assert len(calls[0]) == 1
+
+
+def test_full_tun_remove_needs_an_agent_that_keeps_forwarding(split, calls):
+    split['value'] = 'full_tun'
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version='1.8.39-go'), 'gateway', 'remove', 'POST', 'home', {})
+    assert error.value.code == 'UPGRADE_REQUIRED' and CURRENT in error.value.message
+    bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', {})
+    assert calls[0][0]['json'] == {}
+
+
+def test_ordinary_gateway_remove_is_unchanged(split, calls):
+    bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', {})
+    bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', {'confirm_router_split_teardown': True})
+    assert [item['json'] for item in calls[0]] == [{}, {}]

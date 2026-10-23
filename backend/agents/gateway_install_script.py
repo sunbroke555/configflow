@@ -53,11 +53,11 @@ FULL_TUN_TEXT = {
     'header_note': 'Full-TUN router split: forwarding is persisted and TUN prepared by the AIO step.',
     'agent_min_patch': '40',
     'agent_min_version': '1.8.40-go',
-    # A host still on the old gateway takeover is migrated in place instead.
+    # A host still on the old gateway takeover is not reinstalled over it.
     'journal_precheck': ('\nif [ -e /opt/configflow-agent/mihomo/linux-gateway.json ] || '
                          '[ -L /opt/configflow-agent/mihomo/linux-gateway.json ]; then '
-                         "fail '这台 Linux 仍在使用旧版主路由分流（Linux 网关接管）。"
-                         "请在 ConfigFlow「上游路由」迁移到完整 TUN，无需重新安装。'; fi"),
+                         "fail '这台 Linux 仍在使用旧版主路由分流（Linux 网关接管），已停止安装。"
+                         "如需改用完整 TUN，请先在 ConfigFlow 配置生成页的 Linux 网关中撤销接管。'; fi"),
     'failure_note': '完成网页检查前不要修改主路由。',
     'forwarding_comment': '# The AIO step persists IPv4 forwarding and prepares TUN for the full-TUN router split.',
     'forwarding_owner_env': '',

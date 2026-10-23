@@ -445,3 +445,28 @@ def test_draft_preview_shows_ip_takeover_overlaps():
     before['mihomo']['linux_gateway'] = {'enabled': False, 'rule_set_ids': []}
     result = preview_draft(before, config, 3, 'save')
     assert any(warning.startswith('IP 接管「Apple」与后面的直连规则') for warning in result['warnings'])
+
+
+ROUTER_SPLIT = {'version': 1, 'takeover': 'full_tun', 'route_rule_set_ids': [], 'origin': 'setup'}
+
+
+@pytest.mark.parametrize('marker,code', [(ROUTER_SPLIT, 'ROUTER_SPLIT_FULL_TUN'), ({'version': 2}, 'ROUTER_SPLIT_INVALID')])
+def test_generation_refuses_the_gateway_for_a_router_split(marker, code):
+    from backend.common.router_split import RouterSplitError
+    config = snapshot()
+    config['mihomo']['router_split'] = deepcopy(marker)
+    with pytest.raises(RouterSplitError) as error:
+        generated(config)
+    assert error.value.code == code
+    if code == 'ROUTER_SPLIT_INVALID':
+        config['mihomo']['linux_gateway']['enabled'] = False
+        with pytest.raises(RouterSplitError):
+            generated(config)
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_generation_without_marker_is_unchanged_by_the_router_split_check(monkeypatch, enabled):
+    config = snapshot(enabled=enabled)
+    output = generate_mihomo_config(deepcopy(config), preflight_providers=False)
+    monkeypatch.setattr('backend.common.router_split.check_generation', lambda config: None)
+    assert generate_mihomo_config(deepcopy(config), preflight_providers=False) == output

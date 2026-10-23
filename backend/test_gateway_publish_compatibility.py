@@ -72,3 +72,58 @@ def test_normal_publish_route_enforces_gateway_support(authenticated_app, monkey
     else:
         assert response.status_code < 300 and result['status'] == 'ready'
         assert calls == ['capabilities', 'deployments']
+
+
+def full_tun(custom_config=None, gateway=False):
+    from backend.common.router_split import full_tun_base_yaml
+    value = config(gateway)
+    value['mihomo']['custom_config'] = (full_tun_base_yaml(value['mihomo']['custom_config'])
+                                        if custom_config is None else custom_config)
+    value['mihomo']['router_split'] = {'version': 1, 'takeover': 'full_tun', 'route_rule_set_ids': [], 'origin': 'setup'}
+    return value
+
+
+@pytest.mark.parametrize('version', ['1.8.25-go', '1.8.39-go', ''])
+def test_full_tun_profile_needs_a_forwarding_agent_on_shell(version):
+    from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION
+    agent = {'id': 'old', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': version}
+    with pytest.raises(ValueError, match=FORWARDING_MIN_AGENT_VERSION):
+        _prepare_transactional_content(agent, full_tun())
+    # Docker never runs the host gateway, so an older image keeps publishing.
+    docker = {**agent, 'deployment_method': 'docker'}
+    prepared = _prepare_transactional_content(docker, full_tun())
+    assert 'auto-redirect: true' in prepared['config_content']
+    current = {**agent, 'version': FORWARDING_MIN_AGENT_VERSION}
+    assert 'x-configflow-linux-gateway' not in _prepare_transactional_content(current, full_tun())['config_content']
+
+
+def test_full_tun_profile_without_tun_is_never_published():
+    from backend.common.router_split import GENERATED_TUN_MISSING
+    agent = {'id': 'new', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': '1.8.40-go'}
+    with pytest.raises(ValueError) as error:
+        _prepare_transactional_content(agent, full_tun('mode: rule\ndns: {enable: false}\n'))
+    assert str(error.value) == GENERATED_TUN_MISSING
+
+
+def test_full_tun_profile_with_the_gateway_enabled_cannot_generate():
+    from backend.common.router_split import RouterSplitError
+    agent = {'id': 'new', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': '1.8.40-go'}
+    with pytest.raises(RouterSplitError) as error:
+        _prepare_transactional_content(agent, full_tun(gateway=True))
+    assert error.value.code == 'ROUTER_SPLIT_FULL_TUN'
+    invalid = full_tun()
+    invalid['mihomo']['router_split']['version'] = 2
+    with pytest.raises(RouterSplitError) as error:
+        _prepare_transactional_content(agent, invalid)
+    assert error.value.code == 'ROUTER_SPLIT_INVALID'
+
+
+@pytest.mark.parametrize('method', ['shell', 'docker'])
+def test_gateway_and_ordinary_profiles_keep_their_agent_requirements(method):
+    agent = {'id': 'old', 'service_type': 'mihomo', 'deployment_method': method, 'version': MIN_AGENT_VERSION}
+    # goal=gateway: the selective gateway still needs only the gateway version.
+    assert 'x-configflow-linux-gateway:' in _prepare_transactional_content(agent, config(True))['config_content']
+    ordinary = {**agent, 'version': '1.8.0-go'}
+    assert _prepare_transactional_content(ordinary, config(False))['bundle'].manifest['service_type'] == 'mihomo'
+    oxidns = {'id': 'dns', 'service_type': 'oxidns', 'deployment_method': method, 'version': '1.8.0-go'}
+    assert _prepare_transactional_content(oxidns, full_tun())['bundle'].manifest['service_type'] == 'oxidns'

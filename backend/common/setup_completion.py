@@ -64,7 +64,7 @@ def _check_full_tun(status):
         raise SetupError('IPv4 转发尚未持久化，重启后可能失效；请在安装与检查中点击「开启并持久化 IPv4 转发」', 409)
     managed = status.get('managed') or {}
     if managed.get('active') or managed.get('pending') or managed.get('error'):
-        raise SetupError('设备上仍有 Linux 网关的转发记录，请先在「上游路由」完成迁移或清理', 409)
+        raise SetupError('设备上仍有 Linux 网关的转发记录，请先在配置生成页的 Linux 网关中撤销后再检查', 409)
     if status.get('enabled_in_config') or tun.get('gateway_marker'):
         raise SetupError('已发布的 Mihomo 仍是 Linux 网关配置，请重新发布', 409)
     if tun.get('configured') is not True:

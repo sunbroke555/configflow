@@ -545,7 +545,7 @@ def test_full_tun_install_refuses_a_host_still_on_the_gateway_takeover(tmp_path,
     record.write_text('{}')
     result = run()
     assert result.returncode != 0
-    assert '迁移到完整 TUN' in result.stdout + result.stderr
+    assert '中撤销接管' in result.stdout + result.stderr
     assert (tmp_path / 'ip_forward').read_text() == '0\n'
     assert not (tmp_path / 'etc/mihomo').exists()
     assert not events.exists() or 'sysctl' not in events.read_text()

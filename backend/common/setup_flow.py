@@ -296,7 +296,7 @@ def prepare(repository, session, body, base_url):
     from backend.common.router_split import FULL_TUN, MARKER_KEY, read_marker
     stored = repository.get_profile(session['profile_id'])
     # A profile prepared before the full TUN takeover uses the Linux gateway,
-    # and its host still forwards through it. Keep that until it is migrated.
+    # and its host still forwards through it. Keep that takeover unchanged.
     legacy = (session['goal'] == 'router' and read_marker(stored)[0] == 'absent'
               and gateway_settings(stored)['enabled'])
     full_tun = session['goal'] == 'router' and not legacy

@@ -372,6 +372,10 @@ def _routing_mark_path(value, path='Mihomo', seen=None):
 
 def apply_linux_gateway(mihomo, config, base_url=''):
     """Patch only generated output. Disabled mode is an exact no-op."""
+    # A router split profile never gets the selective takeover; without its
+    # marker this check does nothing.
+    from backend.common.router_split import check_generation
+    check_generation(config)
     settings = gateway_settings(config)
     if not settings['enabled']:
         return

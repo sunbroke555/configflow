@@ -13,7 +13,9 @@ MIN_AGENT_VERSION = '1.8.25-go'
 # Persists AIO forwarding and keeps it when a gateway record is removed.
 FORWARDING_MIN_AGENT_VERSION = '1.8.40-go'
 MAX_RESPONSE_BYTES = 512 * 1024
-OPERATIONS = {'status': 'GET', 'preview': 'POST', 'apply': 'POST', 'remove': 'POST'}
+OPERATIONS = {'status': 'GET', 'preview': 'POST', 'apply': 'POST', 'remove': 'POST', 'forwarding': 'POST'}
+# Operations that change host networking; the router split guards each one.
+HOST_OPERATIONS = ('apply', 'remove', 'forwarding')
 SPEC_FIELDS = {'interface', 'address', 'lan_cidr', 'upstream_gateway'}
 
 
@@ -82,6 +84,54 @@ def _spec(body):
     return {**body, 'address': str(address), 'upstream_gateway': str(upstream), 'lan_cidr': str(network)}
 
 
+def _router_split_mode(profile_id, config):
+    """The profile's takeover; the setup and topology lookups run only if needed."""
+    from backend.common.linux_gateway import LinuxGatewayError, gateway_settings
+    from backend.common.router_split import read_marker, router_split_state
+    state = read_marker(config)[0]
+    if state != 'absent':
+        return 'full_tun' if state == 'valid' else 'invalid'
+    try:
+        if not gateway_settings(config)['enabled']:
+            return None
+    except LinuxGatewayError:
+        return None
+    from backend.common.config import get_repository
+    return router_split_state(get_repository(), profile_id, config)['mode']
+
+
+def _router_split_guard(agent, operation, profile_id, body):
+    """Keep the main router's forwarded connections; returns the Agent payload."""
+    from backend.common.router_split import MESSAGES
+    confirmed = isinstance(body, dict) and set(body) == {'confirm_router_split_teardown'} \
+        and body['confirm_router_split_teardown'] is True
+    if operation == 'remove' and body not in (None, {}) and not confirmed:
+        raise _error('INVALID_REQUEST', 400, '撤销网关转发不接受自定义命令或网络参数。')
+    mode = _router_split_mode(profile_id, get_config(profile_id))
+    if operation == 'apply':
+        if mode == 'full_tun':
+            raise _error('ROUTER_SPLIT_FULL_TUN', 409, MESSAGES['ROUTER_SPLIT_FULL_TUN'])
+        if mode == 'invalid':
+            raise _error('ROUTER_SPLIT_INVALID', 409, MESSAGES['ROUTER_SPLIT_INVALID'])
+        return None
+    if operation == 'remove':
+        if mode == 'legacy' and not confirmed:
+            raise _error('ROUTER_SPLIT_LEGACY_TEARDOWN', 409, MESSAGES['ROUTER_SPLIT_LEGACY_TEARDOWN'])
+        if mode == 'full_tun' and not supports_forwarding(agent):
+            # An older Agent writes the original forwarding values back.
+            raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
+        return {}
+    if not supports_forwarding(agent):
+        raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
+    if mode != 'full_tun':
+        raise _error('ROUTER_SPLIT_REQUIRED', 409, '仅主路由分流（完整 TUN）的配置空间可在此开启转发持久化。')
+    if body in (None, {}):
+        return {}
+    if not isinstance(body, dict) or set(body) != {'prepare_tun'} or type(body['prepare_tun']) is not bool:
+        raise _error('INVALID_REQUEST', 400, '开启转发持久化只接受 prepare_tun 参数。')
+    return {'prepare_tun': body['prepare_tun']}
+
+
 def call(manager, agent_id, operation, method, profile_id, body=None):
     if OPERATIONS.get(operation) != method:
         raise _error('NOT_ALLOWED', 404, '不支持这个网关操作。')
@@ -96,17 +146,15 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
         raise _error('UNSUPPORTED_ENVIRONMENT', 409, '自动网络配置适用于 Linux Shell 安装，请选择原生安装的 Mihomo Agent。')
     if not supports_gateway(agent):
         raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {MIN_AGENT_VERSION} 或更新版本。')
+    if operation in HOST_OPERATIONS:
+        payload = _router_split_guard(agent, operation, profile_id, body)
     if operation == 'apply':
         config = get_config(profile_id)
         if (config.get('mihomo', {}).get('linux_gateway') or {}).get('enabled') is not True:
             raise _error('GATEWAY_DISABLED', 409, '请先启用并保存当前配置空间的 Linux 网关。')
     if operation in ('preview', 'apply'):
         payload = {**_spec(body), 'profile_id': profile_id}
-    elif operation == 'remove':
-        if body not in (None, {}):
-            raise _error('INVALID_REQUEST', 400, '撤销网关转发不接受自定义命令或网络参数。')
-        payload = {}
-    else:
+    elif operation not in HOST_OPERATIONS:
         payload = None
     try:
         with requests.Session() as session:
@@ -126,11 +174,16 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
     except MonitorError:
         raise
     except (requests.RequestException, KeyError, TypeError, ValueError):
-        message = ('未能确认网关操作结果，请先刷新设备网络状态，勿重复应用。'
-                   if operation in ('apply', 'remove') else '暂时无法连接 Agent，请检查设备连接。')
+        if operation in ('apply', 'remove'):
+            message = '未能确认网关操作结果，请先刷新设备网络状态，勿重复应用。'
+        elif operation == 'forwarding':
+            message = '未能确认转发持久化结果，请先刷新设备状态，勿重复操作。'
+        else:
+            message = '暂时无法连接 Agent，请检查设备连接。'
         raise _error('AGENT_UNREACHABLE', 502, message) from None
     if status == 404:
-        raise _error('UPGRADE_REQUIRED', 409, f'设备尚未提供网关接口，请更新到包含本功能的 {MIN_AGENT_VERSION} 或更新版本。')
+        minimum = FORWARDING_MIN_AGENT_VERSION if operation == 'forwarding' else MIN_AGENT_VERSION
+        raise _error('UPGRADE_REQUIRED', 409, f'设备尚未提供网关接口，请更新到包含本功能的 {minimum} 或更新版本。')
     if status in (401, 403):
         raise _error('AGENT_AUTH_FAILED', 502, 'Agent 认证失败，请检查设备注册状态。')
     try:

@@ -485,8 +485,10 @@ def test_selected_domain_rules_reach_both_core_configs_and_installer(setup_api, 
         ids = snapshot['oxidns'][route + '_rulesets']
         assert len(ids) == len(selections[route])
         assert all(rules[identity]['policy'] == ('🎯 全球直连' if route == 'direct' else '✈️ 节点选择') for identity in ids)
-    state = gateway_onboarding_state(snapshot, revision)
-    candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
+    # A router setup is a full TUN; generation refuses the selective gateway there.
+    state = gateway_onboarding_state(snapshot, revision, takeover='full_tun')
+    candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test',
+                                                   takeover='full_tun')
     assert report['ready'], report
     assert candidate['oxidns']['direct_rulesets'] == snapshot['oxidns']['direct_rulesets']
     assert candidate['oxidns']['proxy_rulesets'] == snapshot['oxidns']['proxy_rulesets']

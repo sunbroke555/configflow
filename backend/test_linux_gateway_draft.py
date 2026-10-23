@@ -232,3 +232,127 @@ def test_new_draft_endpoints_require_panel_auth_not_agent_or_subscription_tokens
         'settings': SETTINGS, 'expected_config_revision': response.json['config_revision'],
     })
     assert review.status_code == 200, review.json
+
+
+# ---- router split guards
+
+MARKER = {'version': 1, 'takeover': 'full_tun', 'route_rule_set_ids': ['r'], 'origin': 'setup'}
+ROUTER = {'id': 'r1', 'name': 'Main', 'type': 'ikuai', 'endpoint': 'http://192.0.2.1', 'username': 'admin',
+          'password': 'p', 'proxy_gateway_agent_id': 'mihomo-home'}
+
+
+def make_mode(repository, mode):
+    """Turn the gateway-enabled 'home' profile into one router split takeover."""
+    from backend.common import setup_flow
+    from backend.common.router_split import full_tun_base_yaml
+    if mode == 'full_tun':
+        repository.update_profile_transaction('home', lambda c: c['mihomo'].update(
+            custom_config=full_tun_base_yaml(c['mihomo']['custom_config']), router_split=deepcopy(MARKER),
+            linux_gateway={'enabled': False, 'rule_set_ids': []}))
+    elif mode == 'invalid':
+        repository.update_profile_transaction('home', lambda c: c['mihomo'].update(router_split={'version': 2}))
+    elif mode == 'legacy_setup':
+        setup_flow.write(repository, {'id': 'a' * 32, 'profile_id': 'home', 'name': 'Home', 'goal': 'router',
+                                      'step': 5, 'max_step': 5, 'prepared': True, 'completed': True})
+    elif mode == 'legacy_topology':
+        repository.update_system_transaction(lambda system: system.update(agents=[
+            {'id': 'mihomo-home', 'name': 'm', 'profile_id': 'home', 'service_type': 'mihomo'}]))
+        repository.save_profile('home', {'routers': {'items': [deepcopy(ROUTER)]}})
+
+
+def guarded(client, path, body):
+    response = client.post(PATH + path, json=body)
+    return response.status_code, (response.json or {}).get('code')
+
+
+@pytest.mark.parametrize('mode', ['legacy_setup', 'legacy_topology'])
+def test_legacy_router_split_keeps_the_gateway_on(gateway_app, mode):
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, mode)
+    state = client.get(PATH).json
+    assert state['router_split']['mode'] == 'legacy'
+    assert state['router_split']['source'] == mode.split('_')[1]
+    assert set(state['router_split']) == {'mode', 'source', 'issues', 'route_rule_set_ids'}
+    revision = repository.config_revision('home')
+    before = repository.export_all()
+    off = {'settings': SETTINGS, 'expected_config_revision': revision}
+    assert guarded(client, '/preview', off) == (409, 'ROUTER_SPLIT_LEGACY')
+    assert guarded(client, '', {**off, 'preview_token': '0' * 64}) == (409, 'ROUTER_SPLIT_LEGACY')
+    # The unguarded request shape of old integrations is checked as well.
+    assert guarded(client, '', SETTINGS) == (409, 'ROUTER_SPLIT_LEGACY')
+    assert repository.export_all() == before
+    # Changing what the gateway takes over is still allowed.
+    changed = {'enabled': True, 'rule_set_ids': []}
+    assert save(client, preview(client, repository, changed), changed).status_code == 200
+    assert RESTORE_KEY in repository.get_profile('home')['mihomo']
+    # That snapshot still forwards, so it can be restored.
+    preview(client, repository, restore=True)
+    # A snapshot from before the trial turns the gateway off.
+    repository.update_profile_transaction('home', lambda c: c['mihomo'][RESTORE_KEY]['mihomo'].update(
+        linux_gateway={'enabled': False, 'rule_set_ids': []}))
+    restore = {'expected_config_revision': repository.config_revision('home')}
+    assert guarded(client, '/restore/preview', restore) == (409, 'ROUTER_SPLIT_RESTORE_BLOCKED')
+    response = client.post(PATH + '/restore', json={**restore, 'preview_token': '0' * 64})
+    assert response.status_code == 409 and response.json == {
+        'success': False, 'code': 'ROUTER_SPLIT_RESTORE_BLOCKED',
+        'message': '恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。'}
+    assert RESTORE_KEY in repository.get_profile('home')['mihomo']
+
+
+def test_full_tun_router_split_never_enables_the_gateway(gateway_app):
+    app, repository = gateway_app
+    client = app.test_client()
+    # A restore point taken earlier would bring back a profile without TUN.
+    assert client.post(PATH, json={'enabled': True, 'rule_set_ids': []}).status_code == 200
+    make_mode(repository, 'full_tun')
+    state = client.get(PATH).json
+    assert state['router_split'] == {'mode': 'full_tun', 'source': 'marker', 'issues': [],
+                                     'route_rule_set_ids': ['r']}
+    before = repository.export_all()
+    revision = repository.config_revision('home')
+    on = {'enabled': True, 'rule_set_ids': ['r']}
+    assert guarded(client, '/preview', {'settings': on, 'expected_config_revision': revision}) == (409, 'ROUTER_SPLIT_FULL_TUN')
+    assert guarded(client, '', on) == (409, 'ROUTER_SPLIT_FULL_TUN')
+    restore = {'expected_config_revision': revision}
+    assert guarded(client, '/restore/preview', restore) == (409, 'ROUTER_SPLIT_RESTORE_BLOCKED')
+    response = client.post(PATH + '/restore', json={**restore, 'preview_token': '0' * 64})
+    assert response.json['message'] == '主路由分流的配置空间不能恢复试用前快照：快照中没有完整 TUN，恢复会让分流中断。'
+    assert repository.export_all() == before
+    # Keeping the gateway off is an ordinary save.
+    assert save(client, preview(client, repository)).status_code == 200
+
+
+def test_invalid_marker_stops_every_gateway_change(gateway_app):
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'invalid')
+    assert client.get(PATH).json['router_split']['mode'] == 'invalid'
+    revision = repository.config_revision('home')
+    for settings in (SETTINGS, {'enabled': True, 'rule_set_ids': ['r']}):
+        assert guarded(client, '/preview', {'settings': settings, 'expected_config_revision': revision}) == (
+            409, 'ROUTER_SPLIT_INVALID')
+    assert guarded(client, '/restore/preview', {'expected_config_revision': revision}) == (409, 'ROUTER_SPLIT_INVALID')
+
+
+def test_router_split_guard_is_rechecked_inside_the_transaction(gateway_app, monkeypatch):
+    app, repository = gateway_app
+    client = app.test_client()
+    on = {'enabled': True, 'rule_set_ids': ['r']}
+    original_update = repository.update_profile_transaction
+    def racing(profile_id, updater, **kwargs):
+        # Another request turns the profile into a full TUN router split meanwhile.
+        monkeypatch.setattr(repository, 'update_profile_transaction', original_update)
+        make_mode(repository, 'full_tun')
+        return original_update(profile_id, updater, **kwargs)
+    monkeypatch.setattr(repository, 'update_profile_transaction', racing)
+    # The unguarded request shape skips the revision check; the guard still runs on the locked profile.
+    response = client.post(PATH, json=on)
+    assert response.status_code == 409 and response.json['code'] == 'ROUTER_SPLIT_FULL_TUN'
+    assert repository.get_profile('home')['mihomo']['linux_gateway']['enabled'] is False
+
+
+def test_ordinary_gateway_reports_no_router_split(gateway_app):
+    app, repository = gateway_app
+    state = app.test_client().get(PATH).json
+    assert state['router_split'] == {'mode': None, 'source': None, 'issues': [], 'route_rule_set_ids': []}

@@ -46,7 +46,7 @@ ROUTER_SPLIT_CHANGES = [
     'OxiDNS 管理 API 未启用时自动开启（仅本机 127.0.0.1:9199，不设账号），供 DNS 面板、规则更新和热重载使用；已启用的监听与认证设置不变。',
     '主路由只需转发 fake-IP 网段和所选「主路由转发」规则集；只保存两份配置草稿，之后依次发布并检查转发与 TUN。',
 ]
-LEGACY_TAKEOVER_WARNING = '此配置空间使用旧版 Linux 网关接管；完成后可在「上游路由」迁移到完整 TUN。'
+LEGACY_TAKEOVER_WARNING = '此配置空间使用旧版 Linux 网关接管，保持不变。'
 
 
 class GatewayOnboardingError(ValueError):

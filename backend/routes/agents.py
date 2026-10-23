@@ -1199,6 +1199,12 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
     if service_type == 'mihomo' and (config_data.get('mihomo', {}).get('linux_gateway') or {}).get('enabled'):
         from backend.agents.linux_gateway import require_gateway_agent
         require_gateway_agent(agent)
+    from backend.common.router_split import is_full_tun, read_marker, require_full_tun_generated
+    if service_type == 'mihomo' and read_marker(config_data)[0] != 'absent':
+        from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION, supports_forwarding
+        if agent.get('deployment_method') != 'docker' and not supports_forwarding(agent):
+            raise ValueError(f'主路由分流（完整 TUN）需要 Mihomo Agent {FORWARDING_MIN_AGENT_VERSION} 或更新版本；'
+                             '旧版本在移除旧网关记录时可能关闭 IPv4 转发。请先在 Agent 页更新。')
     if phase_progress is not None:
         service_name = {'mihomo': 'Mihomo', 'mosdns': 'MosDNS', 'oxidns': 'OxiDNS'}.get(service_type, service_type)
         phase_progress(f'正在生成 {service_name} config.yaml 并检查基础配置', force=True)
@@ -1211,6 +1217,9 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
             main = yaml.safe_load(config_content)
         except yaml.YAMLError as exc:
             raise _generated_config_failure(exc, config_content, 'Mihomo') from exc
+        if is_full_tun(config_data):
+            # Without TUN the main router's forwarded connections would loop.
+            require_full_tun_generated(main)
         provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url, main_config=main)
         ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
         if provider_downloads:

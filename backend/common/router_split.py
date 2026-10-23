@@ -7,8 +7,6 @@ used the gateway; they are recognized here as ``legacy`` so that callers do not
 remove a takeover the main router still forwards connections to.
 """
 from copy import deepcopy
-from datetime import datetime
-import re
 
 import yaml
 
@@ -23,17 +21,17 @@ GATEWAY_MARKER = 'x-configflow-linux-gateway'
 MESSAGES = {
     'ROUTER_SPLIT_FULL_TUN': '此配置空间使用 Mihomo + OxiDNS 分流（完整 TUN），主路由转来的连接已全部交给 Mihomo，'
                              '不能再开启 Linux 网关的选择性接管。',
-    'ROUTER_SPLIT_LEGACY': '这是旧版主路由分流：关闭 Linux 网关会同时去掉 TUN 并还原转发，主路由转来的连接会中断。'
-                           '请先在「上游路由」迁移到完整 TUN。',
+    'ROUTER_SPLIT_LEGACY': '这是旧版主路由分流：Mihomo 靠 Linux 网关接管主路由转来的连接。'
+                           '关闭 Linux 网关会同时去掉 TUN 并还原转发，主路由转来的连接会中断。',
     'ROUTER_SPLIT_RESTORE_BLOCKED': '主路由分流的配置空间不能恢复试用前快照：快照中没有完整 TUN，恢复会让分流中断。',
-    'ROUTER_SPLIT_LEGACY_TEARDOWN': '撤销会还原 TUN 接管与 IPv4 转发，主路由转来的连接将中断。请确认后重试，或先迁移到完整 TUN。',
+    'ROUTER_SPLIT_LEGACY_TEARDOWN': '撤销会还原 TUN 接管与 IPv4 转发，主路由转来的连接将中断。确认后重试。',
     'ROUTER_SPLIT_INVALID': '主路由分流标记 mihomo.router_split 无效，已停止生成和网关操作。请从备份恢复，或重新运行首次使用向导。',
-    'ROUTER_SPLIT_MIGRATION_RUNNING': '主路由分流迁移进行中，请等待完成后再操作。',
 }
+# ROUTER_SPLIT_RESTORE_BLOCKED for a legacy profile whose snapshot has the gateway off.
+LEGACY_RESTORE_BLOCKED = '恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。'
 GENERATED_TUN_MISSING = ('主路由分流需要完整 TUN，但生成的 Mihomo 配置未启用（基础 YAML 缺少 tun 或被修改）。'
-                         '请在「上游路由」点「补回完整 TUN」或修正基础 YAML 后再发布，否则主路由转来的连接会回环。')
-_REQUIRED = {'version', 'takeover', 'route_rule_set_ids', 'origin'}
-_MIGRATION_FIELDS = {'migration_id', 'migrated_at'}
+                         '请在基础 YAML 中恢复 tun 后再发布，否则主路由转来的连接会回环。')
+_KEYS = {'version', 'takeover', 'route_rule_set_ids', 'origin'}
 
 
 class RouterSplitError(LinuxGatewayError):
@@ -52,34 +50,16 @@ def _valid_ids(ids):
                     and not any(ord(c) < 32 or ord(c) == 127 for c in item) for item in ids))
 
 
-def _valid_time(value):
-    try:
-        datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
 def read_marker(config):
     """Return ('absent' | 'valid' | 'invalid', normalized marker or None)."""
     mihomo = config.get('mihomo') if isinstance(config, dict) else None
     if not isinstance(mihomo, dict) or MARKER_KEY not in mihomo:
         return 'absent', None
     marker = mihomo[MARKER_KEY]
-    if (not isinstance(marker, dict) or not _REQUIRED <= set(marker)
-            or set(marker) - _REQUIRED - _MIGRATION_FIELDS
+    if (not isinstance(marker, dict) or set(marker) != _KEYS
             or type(marker['version']) is not int or marker['version'] != 1
-            or marker['takeover'] != 'full_tun' or marker['origin'] not in ('setup', 'migration')
+            or marker['takeover'] != 'full_tun' or marker['origin'] != 'setup'
             or not _valid_ids(marker['route_rule_set_ids'])):
-        return 'invalid', None
-    # The migration's identity is written once it commits; its preview draft
-    # carries the origin alone. A setup marker never names a migration.
-    if marker['origin'] == 'setup' and set(marker) & _MIGRATION_FIELDS:
-        return 'invalid', None
-    if 'migration_id' in marker and (not isinstance(marker['migration_id'], str)
-                                     or not re.fullmatch('[a-f0-9]{32}', marker['migration_id'])):
-        return 'invalid', None
-    if 'migrated_at' in marker and not _valid_time(marker['migrated_at']):
         return 'invalid', None
     result = deepcopy(marker)
     result['route_rule_set_ids'] = list(dict.fromkeys(marker['route_rule_set_ids']))
@@ -145,23 +125,6 @@ def _dump(document):
 
 def full_tun_base_yaml(text):
     return _dump(full_tun_document(_load_base(text)))
-
-
-def migration_base_yaml(text):
-    """Full TUN plus the values the old gateway generator forced on output.
-
-    Keeping them in the base YAML makes migration change only the takeover.
-    """
-    document = full_tun_document(_load_base(text))
-    dns = deepcopy(document.get('dns') or {})
-    if not isinstance(dns, dict):
-        raise LinuxGatewayError('Mihomo dns 必须是对象')
-    document['mode'] = 'rule'
-    document['ipv6'] = False
-    dns.update({'enable': True, 'listen': '127.0.0.1:1053', 'enhanced-mode': 'fake-ip', 'ipv6': False})
-    dns.setdefault('fake-ip-range', '198.18.0.1/16')
-    document['dns'] = dns
-    return _dump(document)
 
 
 def is_full_tun_document(doc):

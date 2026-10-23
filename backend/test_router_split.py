@@ -9,7 +9,7 @@ from backend.common.config_repository import ProfileRepository
 from backend.common.linux_gateway import LinuxGatewayError, validate_gateway_selection
 from backend.common.router_split import (
     FULL_TUN, RouterSplitError, check_generation, full_tun_base_yaml, full_tun_document, is_full_tun,
-    is_full_tun_document, legacy_context, migration_base_yaml, mode_from_context, read_marker,
+    is_full_tun_document, legacy_context, mode_from_context, read_marker,
     require_full_tun_generated, route_rule_set_ids, router_split_state,
 )
 
@@ -30,10 +30,6 @@ def test_valid_marker_is_normalized_and_full_tun():
     assert state == 'valid'
     assert marker['route_rule_set_ids'] == ['a', 'b']
     assert is_full_tun(config()) and route_rule_set_ids(config()) == ['a', 'b']
-    migrated = {**MARKER, 'origin': 'migration', 'migration_id': 'f' * 32, 'migrated_at': '2026-10-23T08:00:00+00:00'}
-    assert read_marker(config(migrated))[0] == 'valid'
-    # A migration preview carries the origin before its identity is committed.
-    assert read_marker(config({**MARKER, 'origin': 'migration'}))[0] == 'valid'
 
 
 def test_absent_marker():
@@ -44,7 +40,7 @@ def test_absent_marker():
 
 @pytest.mark.parametrize('change', [
     {'version': True}, {'version': 2}, {'version': '1'}, {'extra': 1}, {'takeover': 'selective'},
-    {'origin': 'manual'}, {'route_rule_set_ids': 'a'}, {'route_rule_set_ids': ['']},
+    {'origin': 'manual'}, {'origin': 'migration'}, {'route_rule_set_ids': 'a'}, {'route_rule_set_ids': ['']},
     {'route_rule_set_ids': ['x\n']}, {'route_rule_set_ids': ['x' * 257]}, {'route_rule_set_ids': [1]},
     {'route_rule_set_ids': ['r'] * 1025}, {'migration_id': 'f' * 32},
 ])
@@ -60,8 +56,7 @@ def test_invalid_marker_fails_closed(change):
 
 @pytest.mark.parametrize('marker', [
     {key: value for key, value in MARKER.items() if key != 'origin'}, None, [],
-    {**MARKER, 'origin': 'migration', 'migration_id': 'XYZ'},
-    {**MARKER, 'origin': 'migration', 'migrated_at': 'yesterday'},
+    {**MARKER, 'migrated_at': '2026-10-23T08:00:00+00:00'},
 ])
 def test_incomplete_or_malformed_marker_is_invalid(marker):
     assert read_marker({'mihomo': {'router_split': marker}})[0] == 'invalid'
@@ -106,17 +101,6 @@ def test_full_tun_base_yaml_is_idempotent_and_uses_default_template():
     for broken in ('[1, 2]', 'a: [', 1):
         with pytest.raises(LinuxGatewayError):
             full_tun_base_yaml(broken)
-
-
-def test_migration_base_yaml_keeps_the_old_generator_values():
-    document = yaml.safe_load(migration_base_yaml('mode: global\nipv6: true\ndns:\n  enable: false\n  listen: 0.0.0.0:53\n  ipv6: true\n'))
-    assert document['mode'] == 'rule' and document['ipv6'] is False and document['tun'] == FULL_TUN
-    assert document['dns'] == {'enable': True, 'listen': '127.0.0.1:1053', 'ipv6': False,
-                               'enhanced-mode': 'fake-ip', 'fake-ip-range': '198.18.0.1/16'}
-    kept = yaml.safe_load(migration_base_yaml('dns:\n  fake-ip-range: 28.0.0.1/8\n'))
-    assert kept['dns']['fake-ip-range'] == '28.0.0.1/8'
-    with pytest.raises(LinuxGatewayError, match='dns 必须是对象'):
-        migration_base_yaml('dns: [1]\n')
 
 
 @pytest.mark.parametrize('change, expected', [
