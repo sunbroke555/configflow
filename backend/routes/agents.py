@@ -249,7 +249,9 @@ _INSTALL_COMMAND_FIELDS = frozenset({
     'health_dns_address', 'health_dns_name', 'deployment_health_timeout',
     'mihomo_agent_port', 'oxidns_agent_port', 'mihomo_config_path', 'oxidns_config_path',
     'mihomo_service_unit', 'oxidns_service_unit', 'mihomo_service_binary', 'oxidns_service_binary',
+    'ipv4_forwarding',
 })
+_INSTALL_COMMAND_BOOLEANS = frozenset({'install_core', 'ipv4_forwarding'})
 _INSTALL_COMMAND_NUMBERS = frozenset({
     'port', 'mihomo_agent_port', 'oxidns_agent_port', 'deployment_health_timeout',
 })
@@ -260,9 +262,9 @@ def _install_command_params(payload):
         raise ValueError('安装参数无效，请重新生成命令。')
     params = MultiDict()
     for key, value in payload.items():
-        if key == 'install_core':
+        if key in _INSTALL_COMMAND_BOOLEANS:
             if not isinstance(value, bool):
-                raise ValueError('install_core 必须为 true 或 false')
+                raise ValueError(f'{key} 必须为 true 或 false')
             value = 'true' if value else 'false'
         elif key in _INSTALL_COMMAND_NUMBERS:
             if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
@@ -379,6 +381,14 @@ def _install_script_response(params):
             # Preserve strict validation instead of Flask's integer converter
             # silently replacing an invalid explicit value with the default.
             agent_port = params.get('port', '8080')
+        # Omitted: Mihomo single-service installs under systemd/OpenRC enable
+        # and persist IPv4 forwarding; false opts out. Other installs never take it.
+        forwarding_value = params.get('ipv4_forwarding')
+        if forwarding_value not in (None, 'true', 'false'):
+            raise ValueError('ipv4_forwarding 必须为 true 或 false')
+        if forwarding_value is not None and (service_type != 'mihomo' or agent_type != 'go'):
+            raise ValueError('仅 Mihomo 单独安装（Go Agent）可设置 IPv4 转发')
+        manage_forwarding = None if forwarding_value is None else forwarding_value == 'true'
 
         logger.info(f"生成安装脚本请求 - 名称: {agent_name}, 类型: {service_type}, 端口: {agent_port}, Agent类型: {agent_type}")
 
@@ -457,6 +467,7 @@ def _install_script_response(params):
                     'start_command', 'status_command', 'health_url', 'health_dns_address', 'health_dns_name')},
                 deployment_health_timeout=params.get('deployment_health_timeout', 30, type=int),
                 install_core=install_core,
+                manage_ipv4_forwarding=manage_forwarding if service_type == 'mihomo' else False,
             )
 
         logger.info(f"安装脚本生成成功，长度: {len(script)} 字符")
