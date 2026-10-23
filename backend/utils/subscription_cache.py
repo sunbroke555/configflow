@@ -19,11 +19,58 @@ def _ensure_cache_dir() -> str:
     return str(get_repository().shared_cache_dir())
 
 
+def _cache_name(sub_id: str) -> str:
+    safe_id = sub_id.replace('/', '_').replace('\\', '_')
+    return f'{safe_id}.json'
+
+
 def _get_cache_path(sub_id: str) -> str:
     """获取缓存文件路径"""
-    cache_dir = _ensure_cache_dir()
-    safe_id = sub_id.replace('/', '_').replace('\\', '_')
-    return os.path.join(cache_dir, f'{safe_id}.json')
+    return os.path.join(_ensure_cache_dir(), _cache_name(sub_id))
+
+
+def _remove_cache_file(path: str) -> bool:
+    removed = False
+    for target in (path, path + '.lock'):
+        try:
+            os.remove(target)
+            removed = removed or target == path
+        except FileNotFoundError:
+            pass
+    return removed
+
+
+def delete_subscription_cache(sub_id: str) -> bool:
+    """删除已移除订阅的节点缓存（含节点地址与凭据），返回是否删除了文件。"""
+    try:
+        return _remove_cache_file(_get_cache_path(sub_id))
+    except OSError as exc:
+        logger.warning("删除订阅缓存失败 (%s): %s", sub_id, exc)
+        return False
+
+
+def prune_orphan_caches() -> list:
+    """删除不属于任何现存订阅的节点缓存，返回被删除的文件名。
+
+    只有成功读到订阅列表时才清理，读取失败不删除任何文件。
+    """
+    try:
+        keep = {_cache_name(item['id']) for item in get_repository().get_shared()['subscriptions']}
+        cache_dir = _ensure_cache_dir()
+        names = [name for name in os.listdir(cache_dir) if name.endswith('.json') and name not in keep]
+    except (OSError, ProfileRepositoryError, KeyError, TypeError) as exc:
+        logger.warning("检查订阅缓存失败，跳过清理: %s", exc)
+        return []
+    removed = []
+    for name in names:
+        try:
+            if _remove_cache_file(os.path.join(cache_dir, name)):
+                removed.append(name)
+        except OSError as exc:
+            logger.warning("删除孤立订阅缓存失败 (%s): %s", name, exc)
+    if removed:
+        logger.info("已清理 %d 个已删除订阅的节点缓存", len(removed))
+    return removed
 
 
 def save_subscription_nodes(

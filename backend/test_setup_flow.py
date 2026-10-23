@@ -770,6 +770,7 @@ def test_abandon_deletes_an_unused_setup_profile_and_its_subscription(setup_api)
     client, repository = setup_api
     profile_id = start(client)['profile_id']
     client.post(f'/api/setup/{SESSION}/source', json={'url': 'https://subscription.test/list'})
+    save_subscription_nodes('setup_sub_' + SESSION, [NODE])
     before = {p['id'] for p in repository.list_profiles()}
     plan = _abandon(client, dry_run=True).json
     assert plan['delete_profile'] and plan['kept_reason'] is None
@@ -780,6 +781,8 @@ def test_abandon_deletes_an_unused_setup_profile_and_its_subscription(setup_api)
     assert profile_id not in {p['id'] for p in repository.list_profiles()}
     assert 'default' in {p['id'] for p in repository.list_profiles()}
     assert not any(s['id'] == 'setup_sub_' + SESSION for s in repository.get_shared()['subscriptions'])
+    from backend.utils.subscription_cache import load_subscription_cache
+    assert load_subscription_cache('setup_sub_' + SESSION) is None
     index = client.get('/api/setup').json
     assert index['sessions'] == [] and index['suggested'] is False
     assert client.get(f'/api/setup/{SESSION}').status_code == 404

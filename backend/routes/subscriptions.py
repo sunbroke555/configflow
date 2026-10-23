@@ -11,6 +11,7 @@ from backend.common.config import get_default_profile_id, get_resource_config, g
 from backend.common.config_repository import ProfileRepositoryError
 from backend.utils.reorder import resolve_new_order
 from backend.utils.subscription_cache import (
+    delete_subscription_cache,
     load_subscription_cache,
     save_subscription_nodes,
 )
@@ -120,6 +121,7 @@ def handle_subscription(sub_id):
         config_data['subscriptions'] = [s for s in subs if s['id'] != sub_id]
         save_shared_config(config_data)
         subscription_health.forget(sub_id)
+        delete_subscription_cache(sub_id)
         return jsonify({'success': True})
 
     elif request.method == 'PUT':

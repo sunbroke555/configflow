@@ -133,6 +133,13 @@ def initialize_app():
     runtime.start_monitor()
 
     try:
+        # 已删除订阅留下的节点缓存含节点凭据，启动时清理一次
+        from backend.utils.subscription_cache import prune_orphan_caches
+        prune_orphan_caches()
+    except Exception as e:
+        app.logger.warning(f"清理订阅缓存失败: {str(e)}")
+
+    try:
         # 初始化 Agent 管理器
         init_agent_manager()
         app.logger.info("✅ 应用初始化完成")
