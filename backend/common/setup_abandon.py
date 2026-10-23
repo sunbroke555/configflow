@@ -77,7 +77,9 @@ def abandon(repository, session):
                 repository.update_shared_transaction(lambda shared: {
                     **shared, 'subscriptions': [item for item in shared['subscriptions'] if item['id'] != subscription_id]})
                 from backend.utils import subscription_health
+                from backend.utils.subscription_cache import delete_subscription_cache
                 subscription_health.forget(subscription_id)
+                delete_subscription_cache(subscription_id)
             except (ProfileInUse, ProfileValidationError):
                 result['subscription_kept'] = True  # Another profile now uses it.
         flow.remove(repository, session['id'])
