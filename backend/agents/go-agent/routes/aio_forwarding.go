@@ -76,6 +76,15 @@ if [ "$(cat /proc/sys/net/ipv4/ip_forward)" != 1 ]; then
 fi
 `
 
+// The single-service installer writes the same hook; only this comment names
+// its one Agent (go_install_script.STANDALONE_FORWARDING_HOOK_COMMENT).
+const (
+	aioHookComment           = "# The installer commits this file only after both Agents start successfully.\n"
+	aioStandaloneHookComment = "# The installer commits this file only after the Agent starts successfully.\n"
+)
+
+var aioStandaloneForwardingHook = strings.Replace(aioForwardingHook, aioHookComment, aioStandaloneHookComment, 1)
+
 func aioForwardingConfigPath() string {
 	return filepath.Join(aioSysctlDir, "99-configflow-aio-forward.conf")
 }
@@ -96,7 +105,16 @@ const aioStandaloneUnit = "configflow-agent"
 
 var aioStandaloneBinary = "/usr/local/bin/configflow-agent"
 
-func (t aioForwardingTarget) Hook() string            { return filepath.Join(t.Directory, aioForwardingHookName) }
+func (t aioForwardingTarget) Hook() string { return filepath.Join(t.Directory, aioForwardingHookName) }
+
+// HookContent is the exact start hook the installer of this layout writes.
+func (t aioForwardingTarget) HookContent() string {
+	if t.Layout == "standalone" {
+		return aioStandaloneForwardingHook
+	}
+	return aioForwardingHook
+}
+
 func (t aioForwardingTarget) SystemdHookLine() string { return "ExecStartPre=/bin/sh " + t.Hook() }
 func (t aioForwardingTarget) OpenRCHookLine() string {
 	return "    /bin/sh " + t.Hook() + " || return 1"
@@ -212,7 +230,7 @@ func aioHookScriptState(t aioForwardingTarget) (string, error) {
 	if err != nil {
 		return "modified", err
 	}
-	if string(data) == aioForwardingHook {
+	if string(data) == t.HookContent() {
 		return "managed", nil
 	}
 	return "modified", nil
@@ -595,7 +613,7 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 		}
 	}()
 	if hookState == "absent" {
-		if err := durableWrite(hook, []byte(aioForwardingHook), 0755); err != nil {
+		if err := durableWrite(hook, []byte(instance.HookContent()), 0755); err != nil {
 			return nil, fmt.Errorf("无法写入 IPv4 转发启动脚本：%w", err)
 		}
 		hookCreated = true

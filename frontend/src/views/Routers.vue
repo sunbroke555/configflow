@@ -51,6 +51,7 @@
               <td role="cell" class="font-mono text-[12px]" data-label="版本">{{ router.last_probe?.ok ? router.last_probe.version : '—' }}</td>
               <td role="cell" data-label="状态">
                 <StatusDot
+                  class="whitespace-nowrap"
                   :tone="!router.last_probe ? 'muted' : router.last_probe.ok ? 'success' : 'danger'"
                   :label="setupDraftSession ? '已保存，待安装' : !router.last_probe ? '未探测' : router.last_probe.ok ? '可连接' : '连接失败'"
                 />

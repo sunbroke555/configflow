@@ -149,6 +149,14 @@ func (f *aioFixture) unitName() string {
 
 func (f *aioFixture) hookPath() string { return filepath.Join(f.agentDir(), aioForwardingHookName) }
 
+// hookContent is the hook this layout's installer writes.
+func (f *aioFixture) hookContent() string {
+	if f.layout == "standalone" {
+		return aioStandaloneForwardingHook
+	}
+	return aioForwardingHook
+}
+
 func (f *aioFixture) unitPath() string {
 	if f.manager == "systemd" {
 		return filepath.Join(aioSystemdUnitDir, f.unitName()+".service")
@@ -230,7 +238,7 @@ func (f *aioFixture) snapshot(t *testing.T) map[string]string {
 func (f *aioFixture) assertPersisted(t *testing.T) {
 	t.Helper()
 	data, err := os.ReadFile(f.hookPath())
-	if err != nil || string(data) != aioForwardingHook {
+	if err != nil || string(data) != f.hookContent() {
 		t.Fatalf("hook not installed: %v", err)
 	}
 	if info, _ := os.Stat(f.hookPath()); info.Mode().Perm() != 0755 {
@@ -379,11 +387,11 @@ func TestAIOForwardingRefusesForeignStateWithoutChanges(t *testing.T) {
 			os.Symlink(target, aioForwardingConfigPath())
 		}},
 		{"modified hook", "openrc", "已被修改", func(t *testing.T, f *aioFixture) {
-			os.WriteFile(f.hookPath(), []byte(aioForwardingHook+"echo extra\n"), 0755)
+			os.WriteFile(f.hookPath(), []byte(f.hookContent()+"echo extra\n"), 0755)
 		}},
 		{"hook symlink", "systemd", "已被修改", func(t *testing.T, f *aioFixture) {
 			target := filepath.Join(f.root, "hook.sh")
-			os.WriteFile(target, []byte(aioForwardingHook), 0755)
+			os.WriteFile(target, []byte(f.hookContent()), 0755)
 			os.Symlink(target, f.hookPath())
 		}},
 		{"unit symlink", "systemd", "不是普通文件", func(t *testing.T, f *aioFixture) {
@@ -531,14 +539,14 @@ func TestAIOForwardingConvergesAfterInterruptedSteps(t *testing.T) {
 			setup func(*testing.T, *aioFixture)
 		}{
 			{"after hook", func(t *testing.T, f *aioFixture) {
-				os.WriteFile(f.hookPath(), []byte(aioForwardingHook), 0755)
+				os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 			}},
 			{"after unit before reload", func(t *testing.T, f *aioFixture) {
-				os.WriteFile(f.hookPath(), []byte(aioForwardingHook), 0755)
+				os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 				f.writeUnit(t, f.fixtureUnit(t, "hook"))
 			}},
 			{"after commit", func(t *testing.T, f *aioFixture) {
-				os.WriteFile(f.hookPath(), []byte(aioForwardingHook), 0755)
+				os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 				f.writeUnit(t, f.fixtureUnit(t, "hook"))
 				f.loaded = f.fixtureUnit(t, "hook")
 				os.WriteFile(aioForwardingConfigPath(), []byte(aioForwardingContent), 0644)
@@ -581,7 +589,7 @@ func TestAIOForwardingStatusMatrix(t *testing.T) {
 			os.WriteFile(f.hookPath(), []byte("#!/bin/sh\n"), 0755)
 		}, map[string]interface{}{"hook_script": "modified"}},
 		{"managed hook", "openrc", func(t *testing.T, f *aioFixture) {
-			os.WriteFile(f.hookPath(), []byte(aioForwardingHook), 0755)
+			os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 		}, map[string]interface{}{"hook_script": "managed", "startup_hook": "absent"}},
 		{"foreign ExecStartPre", "systemd", func(t *testing.T, f *aioFixture) {
 			f.loaded += "\nExecStartPre=/bin/true\n"

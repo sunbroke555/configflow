@@ -148,6 +148,32 @@ func TestAIOForwardingStandaloneHookLines(t *testing.T) {
 	}
 }
 
+// The single-service hook differs from the AIO hook only in the comment naming
+// its one Agent, and each layout recognises only its own installer's hook.
+func TestAIOForwardingStandaloneHookNamesOneAgent(t *testing.T) {
+	if strings.Count(aioForwardingHook, aioHookComment) != 1 {
+		t.Fatal("AIO hook comment not found")
+	}
+	if aioStandaloneForwardingHook == aioForwardingHook || strings.Contains(aioStandaloneForwardingHook, "both Agents") ||
+		strings.Replace(aioStandaloneForwardingHook, aioStandaloneHookComment, aioHookComment, 1) != aioForwardingHook {
+		t.Fatalf("standalone hook is not the AIO hook with its own comment:\n%s", aioStandaloneForwardingHook)
+	}
+	for _, layout := range aioLayouts {
+		f := newAIOLayoutFixture(t, "systemd", layout)
+		target, err := aioForwardingTargetFor(f.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := map[string]string{"aio": aioStandaloneForwardingHook, "standalone": aioForwardingHook}[layout]
+		for content, want := range map[string]string{f.hookContent(): "managed", other: "modified"} {
+			os.WriteFile(f.hookPath(), []byte(content), 0755)
+			if state, err := aioHookScriptState(target); err != nil || state != want {
+				t.Fatalf("%s: hook state %q %v, want %q", layout, state, err, want)
+			}
+		}
+	}
+}
+
 // A single-service host that tried the Linux gateway (ip_forward originally 0)
 // and then persisted forwarding keeps forwarding on when the gateway is removed.
 func TestAIOForwardingStandalonePersistKeepsForwardingOnGatewayRemoval(t *testing.T) {

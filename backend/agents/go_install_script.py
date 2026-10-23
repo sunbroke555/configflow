@@ -30,20 +30,26 @@ else
     exit 1
 fi'''
 # The single-service Mihomo installer reuses the AIO forwarding helpers, rooted
-# at its own Agent directory; the hook, config file and marker stay identical,
-# so the Agent recognises (and the gateway removal preserves) either layout.
+# at its own Agent directory; the config file and marker stay identical, so the
+# Agent recognises (and the gateway removal preserves) either layout. Only the
+# hook's comment names the one Agent it waits for; the Go Agent writes and
+# recognises the same per-layout text (aioStandaloneHookComment).
 _AIO_FORWARDING_HEAD = "# Included only in the ordinary Shell cohost installer, never the gateway wizard.\n"
 _AIO_FORWARDING_ROOT = "$AGENT_ROOT/mihomo/"
+AIO_FORWARDING_HOOK_COMMENT = "# The installer commits this file only after both Agents start successfully.\n"
+STANDALONE_FORWARDING_HOOK_COMMENT = "# The installer commits this file only after the Agent starts successfully.\n"
 STANDALONE_FORWARDING_HOOK = "/opt/configflow-agent/enable-ipv4-forwarding.sh"
 STANDALONE_FORWARDING_UNSUPPORTED = "仅使用 systemd 或 OpenRC 的 Mihomo 单独安装可开启并持久化 IPv4 转发"
 
 
 def _standalone_forwarding_functions() -> str:
     if (not INSTALL_GO_AIO_FORWARDING.startswith(_AIO_FORWARDING_HEAD)
-            or INSTALL_GO_AIO_FORWARDING.count(_AIO_FORWARDING_ROOT) != 6):
+            or INSTALL_GO_AIO_FORWARDING.count(_AIO_FORWARDING_ROOT) != 6
+            or INSTALL_GO_AIO_FORWARDING.count(AIO_FORWARDING_HOOK_COMMENT) != 1):
         raise RuntimeError("aio-ipv4-forwarding.sh changed; review the single-service forwarding helpers")
     text = ("# Single-service Mihomo installer: the AIO forwarding helpers, rooted at $AGENT_DIR.\n"
-            + INSTALL_GO_AIO_FORWARDING[len(_AIO_FORWARDING_HEAD):].replace(_AIO_FORWARDING_ROOT, "$AGENT_DIR/"))
+            + INSTALL_GO_AIO_FORWARDING[len(_AIO_FORWARDING_HEAD):].replace(_AIO_FORWARDING_ROOT, "$AGENT_DIR/")
+            .replace(AIO_FORWARDING_HOOK_COMMENT, STANDALONE_FORWARDING_HOOK_COMMENT))
     if "$AGENT_ROOT" in text:
         raise RuntimeError("single-service forwarding helpers still reference the AIO root")
     return text

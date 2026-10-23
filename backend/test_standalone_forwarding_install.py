@@ -5,6 +5,7 @@ The script runs against isolated files with mocked services, sysctl and ip_forwa
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -12,7 +13,8 @@ import sys
 import pytest
 
 from backend.agents.go_install_script import (
-    INSTALL_GO_AIO_FORWARDING, STANDALONE_FORWARDING_HOOK, generate_go_agent_install_script,
+    AIO_FORWARDING_HOOK_COMMENT, INSTALL_GO_AIO_FORWARDING, STANDALONE_FORWARDING_HOOK,
+    STANDALONE_FORWARDING_HOOK_COMMENT, generate_go_agent_install_script,
 )
 from backend.test_agent_install_commands import admin, client, make  # noqa: F401
 from backend.test_router_split_regression import baseline, single_service_script_digests
@@ -20,8 +22,11 @@ from backend.test_single_agent_core_install import FAKE_CORE
 
 GO_UNIT_TESTDATA = Path(__file__).resolve().parent / "agents/go-agent/routes/testdata"
 FORWARD_CONTENT = "# Managed by ConfigFlow Shell AIO IPv4 forwarding v1\nnet.ipv4.ip_forward=1\n"
-HOOK_SCRIPT = INSTALL_GO_AIO_FORWARDING.split("<<'CONFIGFLOW_AIO_FORWARDING_EOF'\n", 1)[1].split(
+AIO_HOOK_SCRIPT = INSTALL_GO_AIO_FORWARDING.split("<<'CONFIGFLOW_AIO_FORWARDING_EOF'\n", 1)[1].split(
     "\nCONFIGFLOW_AIO_FORWARDING_EOF\n", 1)[0] + "\n"
+# The single-service hook is the AIO hook whose comment names its one Agent.
+HOOK_SCRIPT = AIO_HOOK_SCRIPT.replace(AIO_FORWARDING_HOOK_COMMENT, STANDALONE_FORWARDING_HOOK_COMMENT)
+GO_FORWARDING = Path(__file__).resolve().parent / "agents/go-agent/routes/aio_forwarding.go"
 
 
 def generated(service="mihomo", **options):
@@ -133,11 +138,22 @@ def test_go_agent_unit_fixtures_match_the_single_service_installer(manager, suff
     assert fixture.read_text() == service_heredoc(script, manager)
 
 
-def test_uses_the_aio_hook_verbatim():
+def test_uses_the_aio_hook_with_a_single_agent_comment():
     script = generated(manage_ipv4_forwarding=None)
+    assert HOOK_SCRIPT != AIO_HOOK_SCRIPT and AIO_HOOK_SCRIPT.count(AIO_FORWARDING_HOOK_COMMENT) == 1
     assert script.count(HOOK_SCRIPT) == 1
+    assert "both Agents" not in script and AIO_FORWARDING_HOOK_COMMENT not in script
     assert 'cp "$STAGE_DIR/enable-ipv4-forwarding.sh" "$AGENT_DIR/enable-ipv4-forwarding.sh"' in script
     assert '/bin/sh "$AGENT_DIR/enable-ipv4-forwarding.sh" || ipv4_failure' in script
+
+
+def test_go_agent_writes_and_recognises_the_same_hook_comments():
+    # The Agent rewrites the hook when forwarding is persisted from the panel and
+    # reports any other text as modified, so both comments must match exactly.
+    go = GO_FORWARDING.read_text(encoding="utf-8")
+    for name, comment in (("aioHookComment", AIO_FORWARDING_HOOK_COMMENT),
+                          ("aioStandaloneHookComment", STANDALONE_FORWARDING_HOOK_COMMENT)):
+        assert re.search(rf'^\s*{name}\s*= {re.escape(json.dumps(comment, ensure_ascii=False))}$', go, re.M), name
 
 
 # -- Running the installer --------------------------------------------------

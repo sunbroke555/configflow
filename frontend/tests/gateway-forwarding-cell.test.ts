@@ -62,7 +62,12 @@ const mountRouters = async (gateways: GatewayForwardingEntry[] | null = [entry()
   return wrapper
 }
 const cell = (wrapper: VueWrapper, index = 0) => wrapper.findAll('td[data-label="IPv4 转发"]')[index]!
-const persistButton = (wrapper: VueWrapper) => cell(wrapper).findAll('button').find(button => button.text().includes('开启并持久化 IPv4 转发'))
+// The column header already says IPv4 转发: the button shows the action, and its full name is the accessible name.
+const persistButtonIn = (wrapper: VueWrapper, index = 0) => cell(wrapper, index).find('button[aria-label="开启并持久化 IPv4 转发"]')
+const persistButton = (wrapper: VueWrapper) => {
+  const button = persistButtonIn(wrapper)
+  return button.exists() ? button : undefined
+}
 
 describe('routers page IPv4 forwarding column', () => {
   it('appears only on the standalone page and reads the active profile', async () => {
@@ -76,6 +81,25 @@ describe('routers page IPv4 forwarding column', () => {
     expect(page.findAll('th').map(th => th.text())).toContain('IPv4 转发')
     expect(routerApi.gatewayForwarding).toHaveBeenCalledExactlyOnceWith('profile-b')
     expect(cell(page).text()).toContain('未开启')
+  })
+
+  it('labels the persist button with the short action and keeps the full name for assistive tech', async () => {
+    const wrapper = await mountRouters()
+    const button = persistButton(wrapper)!
+    expect(button.text()).toBe('开启并持久化')
+    expect(button.attributes('title')).toBe('开启并持久化 IPv4 转发')
+    expect(button.attributes('aria-busy')).toBeUndefined()
+    // Touch targets stay 44px in the stacked phone layout.
+    expect(button.classes()).toContain('max-md:min-h-11')
+  })
+
+  it('keeps the forwarding column narrow: the table opts into the compact columns and router status stays on one line', async () => {
+    const wrapper = await mountRouters([entry({ state: 'blocked', can_persist: false, current: '1', message: 'IPv4 转发持久化文件已被修改，请先在设备上核对。' })])
+    expect(wrapper.get('table').classes()).toEqual(expect.arrayContaining(['cf-mobile-records', 'router-records', 'router-records-forwarding']))
+    expect(wrapper.get('td[data-label="状态"] > span').classes()).toContain('whitespace-nowrap')
+    // Labels and notes in the column are no wider than the button on desktop and wrap instead of widening it.
+    expect(cell(wrapper).get('[data-gateway-forwarding] > span').classes()).toContain('sm:max-w-[102px]')
+    expect(cell(wrapper).get('[role="alert"]').classes()).toEqual(expect.arrayContaining(['max-w-[260px]', 'sm:max-w-[102px]']))
   })
 
   it('shows no action once forwarding is persisted, and a dash for routers without a proxy gateway', async () => {
@@ -108,6 +132,9 @@ describe('routers page IPv4 forwarding column', () => {
       { title: '开启「pve-mihomo」的 IPv4 转发？', confirmText: '开启并持久化' })
     expect(routerApi.persistGatewayForwarding).toHaveBeenCalledExactlyOnceWith('a1', 'default')
     expect(persistButton(wrapper)!.attributes('disabled')).toBeDefined()
+    // While the request runs the shorter text keeps the button from widening the column.
+    expect(persistButton(wrapper)!.text()).toBe('开启中…')
+    expect(persistButton(wrapper)!.attributes('aria-busy')).toBe('true')
     done.resolve({ data: { success: true, gateway: entry({ ...PERSISTED, gateway_record: true, preserves_forwarding: true }) } })
     await flushPromises()
     expect(notify.success).toHaveBeenCalledWith('IPv4 转发已开启并持久化。')
@@ -167,7 +194,7 @@ describe('routers page IPv4 forwarding column', () => {
     const posted = deferred<any>()
     vi.mocked(routerApi.persistGatewayForwarding).mockReturnValue(posted.promise)
     const wrapper = await mountRouters([entry(), entry({ agent_id: 'a2', agent_name: 'lxc-mihomo', routers: [{ id: 'r2', name: '旁路由' }] })])
-    const buttonOf = (index: number) => cell(wrapper, index).findAll('button').find(button => button.text().includes('开启并持久化 IPv4 转发'))!
+    const buttonOf = (index: number) => persistButtonIn(wrapper, index)
     expect(buttonOf(1).attributes('disabled')).toBeUndefined()
     await buttonOf(0).trigger('click')
     await flushPromises()

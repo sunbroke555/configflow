@@ -236,6 +236,21 @@ body {
   opacity: 0.6;
 }
 
+/*
+ * 上游路由表多出「IPv4 转发」列时收紧列间距，1400px 宽且侧栏展开时整表仍放得下，不出现表内滚动。
+ * 操作列右对齐，左侧只需与上一列隔开。手机记录布局（< 640px）不受影响。
+ */
+@media (width >= 640px) {
+  .router-records-forwarding th,
+  .router-records-forwarding td {
+    padding-inline: var(--cf-sp-3);
+  }
+
+  .router-records-forwarding td:last-child {
+    padding-left: var(--cf-sp-1);
+  }
+}
+
 .cf-table__num {
   width: 44px;
   color: var(--cf-fg-3);
