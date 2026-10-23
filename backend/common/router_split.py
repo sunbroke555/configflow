@@ -34,7 +34,7 @@ FULL_TUN_NO_RESTORE_POINT = '没有可恢复的试用前快照；主路由分流
 FULL_TUN_RESTORE_OVERWRITES = '主路由分流的配置空间不能恢复试用前快照：恢复会用快照覆盖当前的 Mihomo 与 OxiDNS 设置，可能让分流中断。'
 GENERATED_TUN_MISSING = ('主路由分流需要完整 TUN，但生成的 Mihomo 配置未启用（基础 YAML 缺少 tun 或被修改）。'
                          '请在基础 YAML 中恢复 tun 后再发布，否则主路由转来的连接会回环。')
-GENERATED_TUN_FILTERED = ('主路由分流的完整 TUN 不能带 tun.{keys} 过滤：被排除的连接会在主路由与 Linux 之间回环。'
+GENERATED_TUN_FILTERED = ('主路由分流的完整 TUN 不能带 tun.{keys} 过滤：未进入 TUN 的连接会在主路由与 Linux 之间回环。'
                           '请在 Mihomo 基础 YAML 中移除后再发布。')
 _KEYS = {'version', 'takeover', 'route_rule_set_ids', 'origin'}
 
@@ -101,7 +101,7 @@ def full_tun_document(document):
     if not isinstance(tun, dict):
         raise LinuxGatewayError('Mihomo tun 必须是对象')
     for key in tun_filters(tun):
-        raise LinuxGatewayError(f'主路由分流的完整 TUN 与现有 tun.{key} 过滤冲突：被排除的连接会在主路由与 Linux 之间回环。'
+        raise LinuxGatewayError(f'主路由分流的完整 TUN 与现有 tun.{key} 过滤冲突：未进入 TUN 的连接会在主路由与 Linux 之间回环。'
                                 '请先在 Mihomo 基础 YAML 中移除该过滤')
     for key in ROUTE_KEYS_REMOVED:
         tun.pop(key, None)
