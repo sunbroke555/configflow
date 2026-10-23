@@ -131,7 +131,8 @@ const fullTunRows = computed(() => {
   }
 })
 const canPersistForwarding = computed(() => !!networkStatus.value?.ipv4_forwarding && networkStatus.value.ipv4_forwarding.persisted !== true && networkStatus.value.ipv4_forwarding.supported !== false)
-const visibleNetworkWarnings = computed(() => (networkPreview.value?.warnings || []).filter(value => props.goal !== 'router' || !value.includes('切换一台客户端的网关')))
+const visibleNetworkWarnings = computed(() => (networkPreview.value?.warnings || []).filter(value => (props.goal !== 'router' && !legacy.value) || !value.includes('切换一台客户端的网关')))
+const LEGACY_REMOVED = '网关转发已撤销，主路由转来的连接已中断。请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发。'
 const token = () => ({ generation, profileId: props.profileId })
 const current = (value: ReturnType<typeof token>) => !disposed && props.open && value.generation === generation && value.profileId === props.profileId
 const storageKey = () => `configflow.gateway-installation.${props.profileId}`
@@ -362,7 +363,8 @@ async function removeNetwork() {
     if (!data.success) throw new Error(data.message || '恢复未完成，请检查设备状态。')
     if (data.managed?.active || data.managed?.pending) throw new Error(data.managed.error || '撤销结果尚未确认，请重新读取网络状态。')
     networkRemoved.value = true
-    notify.success('本向导管理的转发已撤销，请恢复客户端原来的网关与 DNS 设置。')
+    // A legacy router split's clients never changed their gateway; the server says what to do instead.
+    notify.success(teardown ? data.message || LEGACY_REMOVED : '本向导管理的转发已撤销，请恢复客户端原来的网关与 DNS 设置。')
   } catch (failure) { if (current(captured)) error.value = hostError(failure) }
   finally { if (current(captured)) action.value = '' }
 }
@@ -674,7 +676,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><p class="mt-1 mb-3 leading-relaxed text-muted-foreground">主路由转发的网段在「上游路由」管理；Linux 网关的选择性接管不适用于此方案。</p></details>
           </template>
           <template v-else>
-          <div><h2 class="m-0 text-lg font-semibold">{{ networkRemoved ? '网关转发已撤销' : activeNetwork ? '验证客户端' : goal === 'router' ? '启用 Linux 转发' : '启用网关转发' }}</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">{{ networkRemoved ? '请恢复客户端接入前的设置。' : activeNetwork ? '先测试一台设备，再接入其他客户端。' : '服务检查已通过。先检查实际网络，再应用转发。' }}</p></div>
+          <div><h2 class="m-0 text-lg font-semibold">{{ networkRemoved ? '网关转发已撤销' : activeNetwork ? '验证客户端' : goal === 'router' ? '启用 Linux 转发' : '启用网关转发' }}</h2><p class="mt-1 mb-0 text-sm text-muted-foreground">{{ networkRemoved ? (legacy ? '主路由转来的连接已中断。' : '请恢复客户端接入前的设置。') : activeNetwork ? '先测试一台设备，再接入其他客户端。' : '服务检查已通过。先检查实际网络，再应用转发。' }}</p></div>
           <div class="divide-y divide-border border-y border-border">
             <AgentStatusRow :label="goal === 'router' ? 'Linux 转发' : '网关转发'" :status="networkRemoved ? '已撤销' : activeNetwork ? '已启用' : managedNetwork ? '待确认' : '未启用'" :tone="networkRemoved || activeNetwork ? 'success' : managedNetwork ? 'warning' : 'neutral'">
               <template v-if="networkStatus?.unsupported_reason || networkStatus?.config_error || networkStatus?.detection_error || networkStatus?.managed?.error" #notice><p role="alert" class="m-0 text-destructive-accent">{{ networkStatus.unsupported_reason || networkStatus.config_error || networkStatus.detection_error || networkStatus.managed?.error }}</p></template>
@@ -690,7 +692,10 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
             <div v-if="visibleNetworkWarnings.length" class="text-xs leading-relaxed"><p class="m-0 font-medium text-warning-accent">检查提醒</p><ul class="mt-1 mb-0 list-disc space-y-1 pl-5 text-foreground"><li v-for="item in visibleNetworkWarnings" :key="item" class="break-words">{{ item }}</li></ul></div>
             <details v-if="networkPreview.commands?.length" class="text-xs text-muted-foreground"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">查看网络操作</summary><ul class="mt-0 mb-2 list-disc space-y-1 pl-5"><li v-for="item in networkPreview.commands" :key="item" class="break-words">{{ item }}</li></ul></details>
           </div>
-          <GatewayClientInstructions v-if="activeNetwork && !embedded" :address="network.address" />
+          <p v-if="legacy && activeNetwork" class="m-0 text-xs leading-relaxed" data-legacy-clients>主路由转来的连接由这台 Linux 接管。客户端网关保持主路由，DNS 保持接入主路由时的设置，无需修改。</p>
+          <p v-else-if="legacy && networkRemoved" class="m-0 text-xs leading-relaxed" role="status" data-legacy-clients>请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发恢复分流。客户端设置无需修改。</p>
+          <p v-else-if="legacy" class="m-0 text-xs leading-relaxed" data-legacy-clients>应用成功后，主路由转来的连接重新由 Mihomo 接管；客户端设置无需修改。</p>
+          <GatewayClientInstructions v-else-if="activeNetwork && !embedded" :address="network.address" />
           <div v-else-if="networkRemoved" class="space-y-2 text-xs" role="status">
             <p class="m-0 leading-relaxed">恢复原网关和 DNS（原来自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS。修改过主路由 DHCP 时，也恢复原值。</p>
             <p class="m-0 leading-relaxed text-muted-foreground">核心和已发布配置仍保留。撤销转发不会关闭 Mihomo TUN；要停用，请到「生成工作台 → Mihomo → Linux 网关」关闭模式，再保存并发布。</p>
@@ -698,10 +703,10 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           <p v-else-if="!activeNetwork" class="m-0 text-xs leading-relaxed">应用成功后再修改客户端。接入前记下原网关、DNS、IPv6 和安全 DNS 设置，以便恢复。</p>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
             <Button v-if="managedNetwork" variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="removeNetwork">撤销网关转发</Button>
-            <p v-if="managedNetwork" class="m-0">撤销前，先恢复客户端原来的网关与 DNS。</p>
+            <p v-if="managedNetwork" class="m-0">{{ legacy ? '撤销前，先删除主路由上指向这台 Linux 的静态路由。' : '撤销前，先恢复客户端原来的网关与 DNS。' }}</p>
             <Button v-else variant="ghost" class="min-h-11 px-2" :disabled="busy || !canInspectNetwork" @click="inspectNetwork">重新读取网络状态</Button>
           </div>
-          <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">生成工作台 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
+          <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="legacy" class="m-0">主路由转发的网段在「上游路由」管理。</p><p v-else-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">生成工作台 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
           </template>
         </section>
         </TabsContent>

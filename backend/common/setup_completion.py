@@ -155,6 +155,8 @@ def finish(repository, session, body):
     make_default = body.get('make_default', False)
     if type(make_default) is not bool:
         raise SetupError('请选择是否设为默认配置空间')
+    # The table the user confirmed against, before this finish re-checks.
+    shown_missing = (session.get('route_instructions') or {}).get('missing_rule_sets') or []
     config = check_installation(repository, session)
     if session['goal'] == 'router':
         mode = body.get('router_mode', session.get('router_mode', 'manual'))
@@ -164,6 +166,11 @@ def finish(repository, session, body):
                 names = '」「'.join(missing)
                 raise SetupError(f'主路由转发规则集「{names}」的 IP 段仍未下载，静态路由说明不完整。'
                                  '请检查 ConfigFlow 服务器能否访问规则地址后重新检查。', 409)
+            if shown_missing:
+                # The download succeeded only now: the confirmed table lacked these ranges.
+                names = '」「'.join(shown_missing)
+                raise SetupError(f'主路由转发规则集「{names}」的 IP 段已下载，静态路由表有新增网段。'
+                                 '请重新检查，按更新后的列表配置主路由后再确认。', 409)
             if body.get('ack_routes') is not True or body.get('ack_dns') is not True:
                 raise SetupError('请先按说明配置主路由的静态路由与 DNS，再确认已完成', 409)
             session.update(router_mode='manual', router_verification='manual')

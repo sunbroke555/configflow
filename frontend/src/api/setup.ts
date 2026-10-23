@@ -25,7 +25,7 @@ export interface SetupSession {
   router_id?: string; router_mode?: 'manual' | 'managed'; router_verification?: 'manual' | 'verified' | 'client_pending'
   router_draft?: SetupRouterDraft
   default_profile?: SetupDefaultProfile; previous_default?: string
-  route_instructions?: { gateway: string; dns: string; routes: { cidr: string; sources: string[]; requires_source_exclusion?: boolean }[]; warnings: string[] }
+  route_instructions?: { gateway: string; dns: string; routes: { cidr: string; sources: string[]; requires_source_exclusion?: boolean }[]; warnings: string[]; incomplete?: boolean; missing_rule_sets?: string[] }
 }
 export interface SetupAbandonPlan {
   session_id: string; name: string; profile: { id: string; name: string }

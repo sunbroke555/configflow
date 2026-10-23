@@ -71,6 +71,9 @@ const icons = { router: RouterIcon, gateway: Network }
 const step = computed(() => previewRouting.value ? 4 : session.value?.step ?? 0)
 const canPreviewRouting = computed(() => session.value?.goal === 'router' && session.value.prepared && session.value.max_step === 3)
 const routeInstructions = computed(() => previewRouting.value ? undefined : session.value?.route_instructions)
+// A forwarded rule set the server could not download leaves its ranges out of the table.
+const missingRuleSets = computed(() => routeInstructions.value?.incomplete ? routeInstructions.value.missing_rule_sets || [] : [])
+const routesIncomplete = computed(() => !!routeInstructions.value?.incomplete)
 const working = computed(() => busy.value || childBusy.value || clientChecking.value)
 const pair = computed(() => session.value?.installation)
 const routerAgents = computed(() => pair.value ? { mihomo: pair.value.mihomo.id, oxidns: pair.value.oxidns.id } : undefined)
@@ -176,6 +179,10 @@ async function checkClientReadiness() {
     if (!disposed && epoch === clientCheckEpoch) clientError.value = setupError(failure)
   } finally { if (!disposed && epoch === clientCheckEpoch) clientChecking.value = false }
 }
+// A re-check can add ranges; the confirmation was for the earlier table.
+watch(() => routeInstructions.value?.routes.map(item => item.cidr).join(' '), (now, before) => {
+  if (before !== undefined && now !== before) ackRoutes.value = false
+})
 watch(() => session.value?.goal === 'gateway' && step.value === 4 ? session.value.id : '', id => {
   clientCheckEpoch++; clientReady.value = false; clientChecking.value = false; clientError.value = ''
   if (id && freshlyCheckedClient === id) { freshlyCheckedClient = ''; clientReady.value = true }
@@ -310,6 +317,7 @@ onUnmounted(() => { disposed = true })
                 </FormField>
                 <p v-if="routeInstructions?.routes.some(item => item.requires_source_exclusion)" class="m-0 text-sm text-warning-accent">真实 IP 网段需在主路由按来源排除 Linux 本机（策略路由），否则 Linux 直连这些地址时会被转回自己；只能按目的地址配置时，只添加 fake-IP 网段。</p>
                 <p v-for="warning in routeInstructions?.warnings" :key="warning" class="m-0 text-sm text-warning-accent">{{ warning }}</p>
+                <div v-if="routesIncomplete" role="status" class="flex flex-col items-start gap-2 rounded-lg border border-warning-accent/30 bg-warning-soft px-3 py-2.5 text-sm leading-relaxed" data-routes-incomplete><p class="m-0">规则集「{{ missingRuleSets.join('」「') || '主路由转发' }}」的 IP 段尚未下载，上表缺少这些网段，暂不能确认完成。请确认 ConfigFlow 服务器能访问规则地址后重新检查。</p><Button variant="outline" class="min-h-11" :disabled="working" @click="checkInstallation"><LoaderCircle v-if="working" class="size-4 animate-spin" />重新检查</Button></div>
                 <label class="flex min-h-11 items-center gap-2 text-sm"><Checkbox v-model="ackRoutes" :disabled="previewRouting" />已配置主路由静态路由</label><label class="flex min-h-11 items-center gap-2 text-sm"><Checkbox v-model="ackDNS" :disabled="previewRouting" />已将测试客户端 DNS 指向 OxiDNS</label>
                 <p class="m-0 text-xs text-muted-foreground">手动设置由你确认，向导无法自动核验这台主路由。</p>
               </template>
@@ -326,7 +334,7 @@ onUnmounted(() => { disposed = true })
               <Button variant="outline" :disabled="working" @click="move(3)">管理网络与撤销转发</Button>
             </template>
             <label v-if="session.default_profile && !session.default_profile.is_default" class="flex items-start gap-2 text-sm"><Checkbox v-model="makeDefault" :disabled="working" class="mt-0.5" /><span><span class="font-medium">设为默认配置空间</span><span class="mt-1 block text-xs leading-relaxed text-muted-foreground">新打开的页面、未指定配置空间的配置链接和新注册的 Agent 都会使用它。现在的默认是「{{ session.default_profile.current.name }}」，已绑定的设备不受影响，之后也可以在配置空间里更改。</span></span></label>
-            <Button :disabled="previewRouting || working || (goal === 'gateway' && !clientReady) || (goal === 'router' && (routerMode === 'manual' ? !ackRoutes || !ackDNS : !routerId))" class="min-h-11" @click="finish"><LoaderCircle v-if="working" class="size-4 animate-spin" />{{ previewRouting ? '完成安装后继续' : goal === 'router' && routerMode === 'managed' ? '检查路由器并完成' : '确认设置并继续' }}<ArrowRight class="size-4" /></Button>
+            <Button :disabled="previewRouting || working || (goal === 'gateway' && !clientReady) || (goal === 'router' && (routerMode === 'manual' ? !ackRoutes || !ackDNS || routesIncomplete : !routerId))" class="min-h-11" @click="finish"><LoaderCircle v-if="working" class="size-4 animate-spin" />{{ previewRouting ? '完成安装后继续' : goal === 'router' && routerMode === 'managed' ? '检查路由器并完成' : '确认设置并继续' }}<ArrowRight class="size-4" /></Button>
           </div>
           <div v-if="step === 5 && session" class="space-y-5">
             <div class="flex items-center gap-2"><CircleCheck class="size-5 text-success-accent" /><h3 class="m-0 text-base font-semibold">Mihomo + OxiDNS 已准备好</h3></div>

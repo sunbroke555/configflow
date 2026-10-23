@@ -493,8 +493,8 @@ describe('router split guards', () => {
 
   it('cleans a leftover gateway record only after confirming forwarding stays on', async () => {
     vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, preserves_forwarding: true, spec } }))
-    // The Agent's generic text is about restoring client gateways, which a router split never changed.
-    vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, message: '受管网关配置已撤销；请恢复客户端原来的网关和 DNS 设置', managed: { active: false } }))
+    // The server replaces the Agent's text about client gateways, which a router split never changed.
+    vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, message: '旧网关记录已清理，IPv4 转发保持开启。', managed: { active: false } }))
     const wrapper = await render(false, false, split('full_tun'))
     expect(wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === '旧网关记录')?.props()).toMatchObject({ status: '仍存在', tone: 'warning' })
     await button(wrapper, '清理旧网关记录').trigger('click'); await flushPromises()
@@ -571,7 +571,8 @@ describe('router split guards', () => {
     expect(confirm).not.toHaveBeenCalled()
     expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
     vi.mocked(confirmDanger).mockResolvedValueOnce(true)
-    vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, message: '受管网关配置已撤销；请恢复客户端原来的网关和 DNS 设置', managed: { active: false } }))
+    // The server replaces the Agent's text for a confirmed teardown; without one the local copy says the same.
+    vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, message: '', managed: { active: false } }))
     await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('one', 'office', true)
     // What needs handling is the main router's static routes, not the clients.
@@ -658,7 +659,30 @@ describe('router split guards', () => {
     expect(plain.find('[data-tun-filtered]').exists()).toBe(false)
   })
 
-  it.each(['FORWARDING_NOT_PERSISTED', 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED'])('explains a refused cleanup (%s) while forwarding is not persisted', async code => {
+  it.each([
+    ['设备上没有旧网关记录，无需清理；IPv4 转发保持不变。', '设备上没有旧网关记录，无需清理；IPv4 转发保持不变。'],
+    ['', '旧网关记录已清理，IPv4 转发保持开启。'],
+  ])('shows the server outcome of a cleanup (%s)', async (message, shown) => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, preserves_forwarding: true, spec } }))
+    vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, message, managed: { active: false } }))
+    const wrapper = await render(false, false, split('full_tun'))
+    await button(wrapper, '清理旧网关记录').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain(shown)
+  })
+
+  it('explains a refused gateway-off edit of an old router split that cannot keep forwarding', async () => {
+    vi.mocked(linuxGatewayApi.previewDraft).mockRejectedValueOnce(conflict('ROUTER_SPLIT_FORWARDING_NOT_PERSISTED', '')).mockRejectedValueOnce(conflict('ROUTER_SPLIT_FORWARDING_NOT_PERSISTED'))
+    // An old router split whose base YAML gained a full TUN reports no mode.
+    const wrapper = await render(true, false)
+    wrapper.findAllComponents(Checkbox)[0].vm.$emit('update:modelValue', false); await flushPromises()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('这台设备尚未持久化 IPv4 转发，已阻止；请保持 Linux 网关开启。')
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('服务端原文')
+  })
+
+  it('explains a refused cleanup while forwarding is not persisted', async () => {
+    const code = 'FORWARDING_NOT_PERSISTED'
     managedHost()
     vi.mocked(linuxGatewayApi.remove).mockRejectedValueOnce(conflict(code)).mockRejectedValueOnce(conflict(code, ''))
     const wrapper = await render(false, false, split('full_tun'))

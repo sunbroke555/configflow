@@ -319,10 +319,12 @@ def test_frontend_keeps_the_same_router_split_copy():
     """The editor falls back to its own copy only when a response has no message."""
     import re
     from pathlib import Path
-    from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION
+    from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION, FORWARDING_NOT_KEPT, GATEWAY_OFF_NOT_KEPT
     from backend.common.router_split import LEGACY_RESTORE_BLOCKED, MESSAGES
     source = (Path(__file__).resolve().parent.parent / 'frontend/src/lib/routerSplit.ts').read_text(encoding='utf-8')
     frontend = dict(re.findall(r"^\s+(ROUTER_SPLIT_[A-Z_]+): '([^']*)',$", source, re.MULTILINE))
     assert frontend == MESSAGES
     assert f"LEGACY_RESTORE_BLOCKED = '{LEGACY_RESTORE_BLOCKED}'" in source
     assert f"FORWARDING_AGENT_VERSION = '{FORWARDING_MIN_AGENT_VERSION}'" in source
+    assert f"FORWARDING_NOT_PERSISTED = '{FORWARDING_NOT_KEPT.format(action='')}'" in source
+    assert f"GATEWAY_OFF_NOT_PERSISTED = '{GATEWAY_OFF_NOT_KEPT.replace('「{name}」上', '设备上')}'" in source

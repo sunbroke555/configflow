@@ -396,6 +396,28 @@ describe('主路由分流改为完整 TUN', () => {
     if (step === 4) expect(wrapper!.text()).toContain('Mihomo、OxiDNS 已发布，Linux 转发已检查')
   })
 
+  it('转发规则集未下载时提示重新检查，确认前不能完成，网段变化后需重新勾选', async () => {
+    const missing = installed({ route_instructions: { gateway: '192.0.2.10', dns: '192.0.2.10', routes: [{ cidr: '198.18.0.0/16', sources: ['fake-ip'] }],
+      warnings: ['规则集「Telegram」没有本地缓存，未计入其中的 IP 段'], incomplete: true, missing_rule_sets: ['Telegram'] } })
+    vi.mocked(setupApi.get).mockResolvedValue({ data: missing } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    const finish = () => wrapper!.findAll('button').find(item => item.text() === '确认设置并继续')!
+    for (const box of wrapper!.findAll('button[role="checkbox"]')) await box.trigger('click')
+    await flushPromises()
+    expect(wrapper!.get('[data-routes-incomplete]').text()).toContain('规则集「Telegram」的 IP 段尚未下载，上表缺少这些网段，暂不能确认完成。')
+    expect(finish().attributes('disabled')).toBeDefined()
+    vi.mocked(setupApi.check).mockResolvedValue({ data: installed({ route_instructions: { gateway: '192.0.2.10', dns: '192.0.2.10', warnings: [], incomplete: false,
+      routes: [{ cidr: '91.108.4.0/22', sources: ['Telegram'], requires_source_exclusion: true }, { cidr: '198.18.0.0/16', sources: ['fake-ip'] }] } }) } as never)
+    await click('重新检查')
+    expect(setupApi.check).toHaveBeenCalledWith('a'.repeat(32))
+    expect(wrapper!.find('[data-routes-incomplete]').exists()).toBe(false)
+    expect(wrapper!.text()).toContain('91.108.4.0/22')
+    // The static routes were confirmed against the shorter table.
+    expect(finish().attributes('disabled')).toBeDefined()
+    await wrapper!.findAll('button[role="checkbox"]')[0]!.trigger('click'); await flushPromises()
+    expect(finish().attributes('disabled')).toBeUndefined()
+  })
+
   it('旧版提示不出现在其他步骤', async () => {
     vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 3, prepared: true, legacy_takeover: true }) } as never)
     await open('/setup?session=' + 'a'.repeat(32))

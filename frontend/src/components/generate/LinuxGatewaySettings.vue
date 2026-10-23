@@ -345,10 +345,11 @@ async function removeNetwork() {
     status.value = { ...status.value!, ...data }
     preview.value = null
     networkBaseline.value = gatewaySpecKey(network)
-    // The Agent's own text asks to restore client gateways, which a router split never changed.
-    networkResult.value = leftover ? '旧网关记录已清理，IPv4 转发保持开启。'
+    // For a router split the server replaces the Agent's text (restore client
+    // gateways), which its clients never changed; it also says whether a record existed.
+    networkResult.value = data.message || (leftover ? '旧网关记录已清理，IPv4 转发保持开启。'
       : teardown ? '网关转发已撤销，主路由转来的连接已中断。请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发。'
-        : data.message || '网关转发已撤销。接下来关闭 Linux 网关，再保存并发布 Mihomo。'
+        : '网关转发已撤销。接下来关闭 Linux 网关，再保存并发布 Mihomo。')
     notify.success(leftover ? '旧网关记录已清理' : '网关转发已撤销')
   } catch (error) {
     if (current(token, true)) networkError.value = `${failureMessage(error, true)} 请刷新检测确认设备状态。`

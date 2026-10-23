@@ -859,8 +859,25 @@ describe('router split with full TUN', () => {
     expect(confirmDanger).toHaveBeenCalledWith(expect.stringContaining('这些连接会中断'), expect.objectContaining({ confirmText: '仍然撤销' }))
     expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
     vi.mocked(confirmDanger).mockResolvedValueOnce(true)
+    expect(wrapper.text()).toContain('撤销前，先删除主路由上指向这台 Linux 的静态路由。')
     await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('new-mihomo', 'office', true)
+    // The router split's clients never changed their gateway; the static routes need handling instead.
+    expect(notify.success).toHaveBeenCalledWith('网关转发已撤销，主路由转来的连接已中断。请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发。')
+    expect(wrapper.get('[data-legacy-clients]').text()).toContain('请删除主路由上指向这台 Linux 的静态路由')
+    expect(wrapper.text()).not.toContain('恢复客户端')
+    expect(wrapper.text()).not.toContain('恢复原网关')
+  })
+
+  it('uses the server text after revoking a legacy router split and keeps clients on the main router', async () => {
+    const wrapper = await renderPublished({ success: true, supported: true, enabled_in_config: true, managed: { active: true, healthy: true } }, false, 'legacy')
+    expect(wrapper.findComponent({ name: 'GatewayClientInstructions' }).exists()).toBe(false)
+    expect(wrapper.get('[data-legacy-clients]').text()).toBe('主路由转来的连接由这台 Linux 接管。客户端网关保持主路由，DNS 保持接入主路由时的设置，无需修改。')
+    expect(wrapper.text()).not.toContain('可将两项都设为')
+    vi.mocked(confirmDanger).mockResolvedValueOnce(true)
+    vi.mocked(linuxGatewayApi.remove).mockResolvedValueOnce(response({ success: true, message: '服务端原文', managed: { active: false } }))
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(notify.success).toHaveBeenCalledWith('服务端原文')
   })
 
   it('does not show the legacy banner for a selective gateway', async () => {

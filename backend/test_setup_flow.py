@@ -1087,6 +1087,10 @@ def test_full_tun_route_instructions_download_the_forwarded_rule_sets(installed,
     assert response.status_code == 409 and '「TG Lab」的 IP 段仍未下载' in response.json['message']
     assert not client.get(f'/api/setup/{SESSION}').json['completed']
     reply['value'] = '91.108.4.0/22\n149.154.160.0/20\n'
+    # The download works now, but the table the user confirmed lacked these ranges.
+    response = client.post(f'/api/setup/{SESSION}/finish', json=manual)
+    assert response.status_code == 409 and '「TG Lab」的 IP 段已下载' in response.json['message']
+    assert not client.get(f'/api/setup/{SESSION}').json['completed']
     response = client.post(f'/api/setup/{SESSION}/check', json={})
     instructions = response.json['route_instructions']
     assert instructions['incomplete'] is False and 'missing_rule_sets' not in instructions
