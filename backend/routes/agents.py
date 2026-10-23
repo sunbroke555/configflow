@@ -1200,7 +1200,7 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
         from backend.agents.linux_gateway import require_gateway_agent
         require_gateway_agent(agent)
     from backend.common.router_split import (
-        GATEWAY_MARKER, is_full_tun, publish_legacy_source, read_marker, require_full_tun_generated,
+        GATEWAY_MARKER, gateway_was_used, is_full_tun, publish_legacy_source, read_marker, require_full_tun_generated,
     )
     if service_type == 'mihomo' and read_marker(config_data)[0] != 'absent':
         from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION, supports_forwarding
@@ -1229,12 +1229,15 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
                 linux_gateway.require_forwarding_kept(get_agent_manager(), agent)
         elif (agent.get('deployment_method') != 'docker'
               and not (isinstance(main, dict) and isinstance(main.get(GATEWAY_MARKER), dict)
-                       and main[GATEWAY_MARKER].get('enabled') is True)
-              and publish_legacy_source(get_repository(), agent.get('profile_id'), config_data, agent.get('id'))):
+                       and main[GATEWAY_MARKER].get('enabled') is True)):
             # An old router split with the gateway off: the Agent removes the
             # host's gateway record, and with it the IPv4 forwarding unless persisted.
+            # Only a host that can hold one, for a profile that used the gateway.
             from backend.agents import linux_gateway
-            linux_gateway.require_gateway_off_kept(get_agent_manager(), agent)
+            source = (linux_gateway.supports_gateway(agent)
+                      and publish_legacy_source(get_repository(), agent.get('profile_id'), config_data, agent.get('id')))
+            if source and gateway_was_used(config_data, agent, source):
+                linux_gateway.require_gateway_off_kept(get_agent_manager(), agent)
         provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url, main_config=main)
         ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
         if provider_downloads:

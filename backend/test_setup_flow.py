@@ -1079,8 +1079,8 @@ def test_full_tun_route_instructions_download_the_forwarded_rule_sets(installed,
     instructions = response.json['route_instructions']
     assert instructions['incomplete'] is True and instructions['missing_rule_sets'] == ['TG Lab']
     assert '规则集「TG Lab」没有本地缓存，未计入其中的 IP 段' in instructions['warnings']
-    # The library URL, then the rule's own (here the same), each with the check's timeout.
-    assert set(downloads) == {('https://rules.test/telegram.list', (5, 20))}
+    # The library URL with the check's timeout; the rule's own is the same, so it is not asked again.
+    assert downloads == [('https://rules.test/telegram.list', (5, 20))]
     # The manual confirmation re-checks, so a download that still fails blocks it.
     manual = {'router_mode': 'manual', 'ack_routes': True, 'ack_dns': True}
     response = client.post(f'/api/setup/{SESSION}/finish', json=manual)
@@ -1111,6 +1111,49 @@ def test_route_rule_downloads_stop_starting_after_the_check_budget(installed, mo
     monkeypatch.setattr('backend.routes.rules.request_rule', lambda *_a, **_k: pytest.fail('downloaded'))
     response = client.post(f'/api/setup/{SESSION}/check', json={})
     assert response.status_code == 200 and response.json['route_instructions']['incomplete'] is True
+
+
+def test_route_rule_budget_bounds_a_stalled_download(installed, monkeypatch):
+    """Review: a download started near the budget's end ran on past the wizard's 90 s timeout."""
+    import threading
+    import time as clock
+    client, repository, profile_id, gateway, _ = installed
+    forward_telegram(repository, profile_id, monkeypatch, gateway)
+    monkeypatch.setattr('backend.common.setup_completion.ROUTE_RULE_BUDGET', 0.5)
+    release, timeouts = threading.Event(), []
+    def stalled(url, **kwargs):
+        timeouts.append(kwargs.get('timeout'))
+        release.wait(10)
+        return SimpleNamespace(status_code=200, text='91.108.4.0/22\n')
+    monkeypatch.setattr('backend.routes.rules.request_rule', stalled)
+    started = clock.monotonic()
+    try:
+        response = client.post(f'/api/setup/{SESSION}/check', json={})
+        elapsed = clock.monotonic() - started
+    finally:
+        release.set()
+    assert response.status_code == 200, response.json
+    assert response.json['route_instructions']['incomplete'] is True and elapsed < 3
+    # Each request's timeouts shrink to what is left of the budget.
+    assert len(timeouts) == 1 and all(0 < value <= 0.5 for value in timeouts[0])
+
+
+def test_rule_item_url_is_asked_only_when_it_differs_from_the_library_url(monkeypatch):
+    import requests
+    from backend.routes.rules import get_ruleset_content
+    asked = []
+    def offline(url, **kwargs):
+        asked.append(url)
+        raise requests.ConnectionError('offline')
+    monkeypatch.setattr('backend.routes.rules.request_rule', offline)
+    import uuid
+    library = {**TELEGRAM_LIBRARY, 'id': 'lib-' + uuid.uuid4().hex, 'name': 'Uncached Lab'}
+    config = {'rule_library': [], 'system_config': {}}
+    assert get_ruleset_content({'name': 'x', 'url': library['url']}, library, config_data=config) == ''
+    assert asked == [library['url']]
+    asked.clear()
+    get_ruleset_content({'name': 'x', 'url': 'https://mirror.test/telegram.list'}, library, config_data=config)
+    assert asked == [library['url'], 'https://mirror.test/telegram.list']
 
 
 def test_selective_route_instructions_still_read_only_the_local_cache(installed, monkeypatch):

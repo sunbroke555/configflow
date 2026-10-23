@@ -11,8 +11,8 @@ from backend.common.linux_gateway import (
 )
 from backend.common.router_split import (
     FULL_TUN_NO_RESTORE_POINT, FULL_TUN_RESTORE_OVERWRITES, LEGACY_RESTORE_BLOCKED, MESSAGES, RouterSplitError,
-    base_is_full_tun, legacy_context, legacy_source, mode_from_context, needs_context, route_rule_set_ids,
-    router_split_state,
+    base_is_full_tun, legacy_context, legacy_gateway_agent_ids, legacy_source, mode_from_context, needs_context,
+    route_rule_set_ids, router_split_state,
 )
 from backend.routes import custom_config_bp, profiles_bp
 from backend.common.linux_gateway_draft import (
@@ -103,7 +103,9 @@ def linux_gateway_settings(profile_id=None):
                     raise LinuxGatewayError('Linux 网关设置已在其他位置修改，请刷新后重试')
                 from backend.agents.linux_gateway import gateway_off_refusal
                 from backend.common.agent_manager import get_agent_manager
-                checked['refusal'] = gateway_off_refusal(get_agent_manager(), profile_id, context['mihomo_agent_ids'])
+                # Only the hosts the old split's gateway may be on, as a publish checks.
+                checked['refusal'] = gateway_off_refusal(get_agent_manager(), profile_id,
+                                                         legacy_gateway_agent_ids(config, context))
             return checked['refusal']
         if request.method == 'POST':
             value = request.get_json(silent=True)

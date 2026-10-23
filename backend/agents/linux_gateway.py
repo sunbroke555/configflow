@@ -29,6 +29,11 @@ GATEWAY_OFF_UNKNOWN = '无法读取「{name}」的 IPv4 转发状态，已阻止
 PUBLISH_GATEWAY_OFF_NOT_KEPT = ('待发布的 Mihomo 配置关闭了 Linux 网关：发布后 Agent 会撤销设备上的旧版网关记录，'
                                 '并把 IPv4 转发还原为关闭，主路由分流转来的连接会中断。这台设备尚未持久化 IPv4 转发，已停止发布。'
                                 '请在 Linux 网关中重新开启并保存后再发布。')
+# Removing the record of an old router split whose base YAML gained a full TUN.
+LEGACY_REMOVE_NOT_KEPT = ('撤销会删除旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，主路由分流转来的连接会中断。'
+                          '这台设备尚未持久化 IPv4 转发，已阻止；请保持网关转发。普通 All-in-One 安装会持久化转发，不受影响。')
+LEGACY_REMOVE_UPGRADE = ('撤销前需要确认这台 Linux 已持久化 IPv4 转发，'
+                         f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
 # The Agent's own remove text tells clients to restore their gateway; a router
 # split's clients never changed it.
 REMOVED_MESSAGES = {
@@ -56,14 +61,44 @@ def supports_forwarding(agent):
     return _at_least(agent, FORWARDING_MIN_AGENT_VERSION)
 
 
+def _managed(status):
+    managed = status.get('managed') if isinstance(status, dict) else None
+    return managed if isinstance(managed, dict) else {}
+
+
+def has_record(status):
+    """Whether the host still has a gateway record (an unreadable one counts)."""
+    managed = _managed(status)
+    return bool(managed.get('active') or managed.get('pending') or managed.get('error'))
+
+
 def keeps_forwarding(status):
     """Whether removing the host's gateway record, if any, leaves forwarding on."""
-    managed = status.get('managed') if isinstance(status, dict) else None
-    managed = managed if isinstance(managed, dict) else {}
-    if not (managed.get('active') or managed.get('pending') or managed.get('error')):
+    if not has_record(status):
         return True
     # Only the persisted AIO forwarding stops the Agent writing the original values back.
-    return managed.get('preserves_forwarding') is True
+    return _managed(status).get('preserves_forwarding') is True
+
+
+def _record_kept(agent, status):
+    # Only an Agent from FORWARDING_MIN_AGENT_VERSION on persists forwarding.
+    return not has_record(status) or (supports_forwarding(agent) and keeps_forwarding(status))
+
+
+def record_status(manager, agent, profile_id):
+    """The host's gateway status, or None when the Agent cannot hold a gateway record.
+
+    An Agent below MIN_AGENT_VERSION, or one without the gateway endpoint
+    (404), never applied a gateway, so it has nothing to remove.
+    """
+    if not supports_gateway(agent):
+        return None
+    try:
+        return call(manager, agent.get('id'), 'status', 'GET', profile_id)
+    except MonitorError as error:
+        if error.code == 'UPGRADE_REQUIRED':
+            return None
+        raise
 
 
 def require_forwarding_kept(manager, agent):
@@ -79,10 +114,10 @@ def require_forwarding_kept(manager, agent):
 def require_gateway_off_kept(manager, agent):
     """An old router split's gateway-off publish makes the Agent remove its record; refuse if that turns forwarding off."""
     try:
-        status = call(manager, agent.get('id'), 'status', 'GET', agent.get('profile_id'))
+        status = record_status(manager, agent, agent.get('profile_id'))
     except MonitorError as error:
         raise ValueError(f'无法确认设备上是否仍有旧版 Linux 网关记录，已停止发布：{error.message}') from None
-    if not keeps_forwarding(status):
+    if not _record_kept(agent, status):
         raise ValueError(PUBLISH_GATEWAY_OFF_NOT_KEPT)
 
 
@@ -90,21 +125,23 @@ def gateway_off_refusal(manager, profile_id, agent_ids):
     """Why turning the gateway off would turn IPv4 forwarding off on a bound host, or None.
 
     Only the persisted AIO forwarding (1.8.40-go) keeps it when the Agent
-    removes its gateway record; a host without a record keeps what it has.
+    removes its gateway record; a host without a record keeps what it has,
+    whatever its version. ``agent_ids`` are the hosts the old split's
+    gateway may be on (``router_split.legacy_gateway_agent_ids``).
     """
     for agent_id in agent_ids:
         agent = manager.get_agent_by_id(agent_id)
         if not agent or agent.get('service_type') != 'mihomo' or agent.get('deployment_method') == 'docker':
             continue  # Docker never applies the gateway on the host.
         name = agent.get('name') or agent_id
-        if not supports_forwarding(agent):
-            return GATEWAY_OFF_UPGRADE.format(name=name)
         try:
-            status = call(manager, agent_id, 'status', 'GET', profile_id)
+            status = record_status(manager, agent, profile_id)
         except MonitorError as error:
             return GATEWAY_OFF_UNKNOWN.format(name=name, reason=error.message.rstrip('。'))
-        if not keeps_forwarding(status):
-            return GATEWAY_OFF_NOT_KEPT.format(name=name)
+        if _record_kept(agent, status):
+            continue
+        # A record without persisted forwarding: only 1.8.40-go can persist it.
+        return GATEWAY_OFF_NOT_KEPT.format(name=name) if supports_forwarding(agent) else GATEWAY_OFF_UPGRADE.format(name=name)
     return None
 
 
@@ -159,16 +196,23 @@ def _router_split_mode(profile_id, config):
     """The profile's takeover; the setup and topology lookups run only if needed."""
     from backend.common.linux_gateway import LinuxGatewayError, gateway_settings
     from backend.common.router_split import read_marker, router_split_state
-    state = read_marker(config)[0]
-    if state != 'absent':
-        return 'full_tun' if state == 'valid' else 'invalid'
+    marker = read_marker(config)[0]
+    if marker != 'absent':
+        return 'full_tun' if marker == 'valid' else 'invalid'
     try:
         if not gateway_settings(config)['enabled']:
             return None
     except LinuxGatewayError:
         return None
     from backend.common.config import get_repository
-    return router_split_state(get_repository(), profile_id, config)['mode']
+    from backend.common.router_split import base_is_full_tun, legacy_context, legacy_source
+    repository = get_repository()
+    mode = router_split_state(repository, profile_id, config)['mode']
+    if mode is None and base_is_full_tun(config) and legacy_source(config, legacy_context(repository, profile_id)):
+        # An old router split whose base YAML gained a full TUN: removing the
+        # record keeps the TUN, but turns forwarding off unless it is persisted.
+        return 'legacy_full_tun'
+    return mode
 
 
 def _router_split_guard(manager, agent, operation, profile_id, body):
@@ -200,9 +244,22 @@ def _router_split_guard(manager, agent, operation, profile_id, body):
             status = call(manager, agent['id'], 'status', 'GET', profile_id)
             if not keeps_forwarding(status):
                 raise _error('FORWARDING_NOT_PERSISTED', 409, FORWARDING_NOT_KEPT.format(action=''))
-            managed = status.get('managed') if isinstance(status.get('managed'), dict) else {}
-            if not (managed.get('active') or managed.get('pending') or managed.get('error')):
+            if not has_record(status):
                 mode = 'full_tun_none'
+        elif mode == 'legacy_full_tun':
+            # The same rule as turning the gateway off in the editor; a
+            # confirmed teardown accepts the interruption, as for a legacy split.
+            status = call(manager, agent['id'], 'status', 'GET', profile_id)
+            if not has_record(status):
+                mode = 'full_tun_none'
+            elif _record_kept(agent, status):
+                mode = 'full_tun'
+            elif confirmed:
+                mode = 'legacy'
+            elif not supports_forwarding(agent):
+                raise _error('UPGRADE_REQUIRED', 409, LEGACY_REMOVE_UPGRADE)
+            else:
+                raise _error('FORWARDING_NOT_PERSISTED', 409, LEGACY_REMOVE_NOT_KEPT)
         return {}, mode
     if not supports_forwarding(agent):
         raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')

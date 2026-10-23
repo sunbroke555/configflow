@@ -4,6 +4,7 @@ Finishing may make the setup profile ConfigFlow's default, only when asked.
 """
 from hashlib import sha256
 import json
+import threading
 import time
 
 from backend.common.setup_flow import SetupError
@@ -74,9 +75,22 @@ def _check_full_tun(status):
         raise SetupError(f"Mihomo TUN（{tun.get('device') or 'Meta'}）未运行，请检查 Mihomo 日志", 409)
 
 
-# Downloads of the router split's forwarded rule sets during one check.
+# Downloads of the router split's forwarded rule sets during one check. The
+# budget bounds the whole warm-up, so that with the Agent status read before
+# it (at most 48 s) the request stays under the wizard's 90 s timeout.
 ROUTE_RULE_TIMEOUT = (5, 20)
-ROUTE_RULE_BUDGET = 45
+ROUTE_RULE_BUDGET = 30
+
+
+def _within(deadline, load):
+    """Run ``load()`` until ``deadline``; a download still running then is left
+    to finish in the background, where it can still fill the rule cache."""
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(value=load()), daemon=True,
+                              name='setup-route-rule')
+    worker.start()
+    worker.join(max(deadline - time.monotonic(), 0))
+    return result.get('value', '')
 
 
 def _route_rule_loader(config, missing):
@@ -84,7 +98,8 @@ def _route_rule_loader(config, missing):
 
     The full TUN generates no gateway providers, so nothing else downloads these
     rule sets before the check. Names whose content stays unavailable go into
-    ``missing``; downloads stop starting once the check's budget is spent.
+    ``missing``. Each request's timeouts shrink to the time left in the
+    budget; once it is spent only the cache is read.
     """
     from backend.routes.rules import get_ruleset_content
     deadline = time.monotonic() + ROUTE_RULE_BUDGET
@@ -92,8 +107,13 @@ def _route_rule_loader(config, missing):
     def load(item, library_rule):
         content = ''
         try:
-            content = get_ruleset_content(item, library_rule, allow_network=time.monotonic() < deadline,
-                                          config_data=config, timeout=ROUTE_RULE_TIMEOUT)
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                timeout = tuple(max(min(limit, remaining), 0.1) for limit in ROUTE_RULE_TIMEOUT)
+                content = _within(deadline, lambda: get_ruleset_content(
+                    item, library_rule, allow_network=True, config_data=config, timeout=timeout))
+            else:
+                content = get_ruleset_content(item, library_rule, allow_network=False, config_data=config)
         finally:
             if not content:
                 missing.append(str(item.get('name') or item.get('id') or '规则集'))

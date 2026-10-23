@@ -195,13 +195,20 @@ def test_full_tun_publish_refuses_a_filtered_tun():
     assert 'auto-redirect: true' in _prepare_transactional_content(agent, full_tun(pyyaml.safe_dump(base)))['config_content']
 
 
-def old_split(*, gateway=False, routed=True):
-    """An unmarked profile from the old router split wizard, its base YAML now a full TUN."""
+def old_split(*, gateway=False, routed=True, used=True):
+    """An unmarked profile from the old router split wizard, its base YAML now a full TUN.
+
+    ``used``: the editor changed the gateway once, which keeps a restore point.
+    """
+    from backend.common.linux_gateway_draft import RESTORE_KEY
     from backend.common.router_split import full_tun_base_yaml
     value = config(gateway)
     value['mihomo']['custom_config'] = full_tun_base_yaml(value['mihomo']['custom_config'])
     if routed:
         value['routers'] = {'items': [{'id': 'r1', 'proxy_gateway_agent_id': 'split'}]}
+    if used:
+        value['mihomo'][RESTORE_KEY] = {'version': 1, 'id': 'p', 'created_at': '2026-10-01T00:00:00+00:00',
+                                        'mihomo': {}, 'oxidns': {}}
     return value
 
 
@@ -216,22 +223,31 @@ def sessions(monkeypatch):
     return value
 
 
-@pytest.mark.parametrize('match', ['topology', 'setup'])
+@pytest.mark.parametrize('match', ['topology', 'installed', 'setup'])
 def test_old_router_split_gateway_off_publish_keeps_forwarding(host, sessions, match):
     """Lab v2-H: publishing the gateway off made the Agent remove its record and set ip_forward back to 0."""
     from backend.agents.linux_gateway import PUBLISH_GATEWAY_OFF_NOT_KEPT
+    agent, profile = SPLIT_AGENT, old_split(routed=match != 'setup', used=match == 'topology')
     if match == 'setup':
+        # The old wizard always turned the gateway on.
         sessions.append({'id': 's', 'goal': 'router', 'completed': True})
+    if match == 'installed':
+        # The gateway installation wizard registered this Agent.
+        agent = {**SPLIT_AGENT, 'gateway_installation_id': 'install-1'}
     host['status'] = {'success': True, 'managed': {'active': True, 'healthy': True, 'preserves_forwarding': False}}
     with pytest.raises(ValueError) as error:
-        _prepare_transactional_content(SPLIT_AGENT, old_split(routed=match == 'topology'))
+        _prepare_transactional_content(agent, profile)
     assert str(error.value) == PUBLISH_GATEWAY_OFF_NOT_KEPT
     assert host['calls'] == [('split', 'status', 'GET', 'home')]
     # Persisted forwarding (ordinary All-in-One), or no record at all, keeps it on.
     host['status']['managed']['preserves_forwarding'] = True
-    _prepare_transactional_content(SPLIT_AGENT, old_split(routed=match == 'topology'))
+    _prepare_transactional_content(agent, profile)
+    # An Agent before 1.8.40-go cannot persist it, whatever it reports.
+    with pytest.raises(ValueError, match='已停止发布'):
+        _prepare_transactional_content({**agent, 'version': '1.8.39-go'}, profile)
     host['status']['managed'] = {'active': False, 'preserves_forwarding': False}
-    _prepare_transactional_content(SPLIT_AGENT, old_split(routed=match == 'topology'))
+    _prepare_transactional_content(agent, profile)
+    _prepare_transactional_content({**agent, 'version': '1.8.39-go'}, profile)
 
 
 def test_old_router_split_gateway_off_publish_refuses_an_unknown_record(host, sessions):
@@ -251,4 +267,44 @@ def test_gateway_off_publish_reads_the_status_only_for_an_old_router_split(host,
     _prepare_transactional_content(SPLIT_AGENT, old_split())
     sessions[:] = [{'id': 's', 'goal': 'router', 'abandoned': True}]
     _prepare_transactional_content(SPLIT_AGENT, old_split(routed=False))
+    # A topology match whose gateway was never changed in the editor or installed.
+    sessions.clear()
+    _prepare_transactional_content(SPLIT_AGENT, old_split(used=False))
     assert host['calls'] == []
+
+
+@pytest.mark.parametrize('version', ['1.8.20-go', '1.8.24-go', ''])
+def test_gateway_off_publish_skips_agents_that_never_had_the_gateway(host, sessions, version):
+    """Review: an ordinary routed profile on an Agent before 1.8.25-go could not publish at all."""
+    from backend.agents.oxidns_monitor import MonitorError
+    host['status'] = MonitorError('UPGRADE_REQUIRED', 409, 'no gateway API')
+    old = {**SPLIT_AGENT, 'version': version}
+    # Without a gateway API the host has no gateway record to remove.
+    for profile in (old_split(), old_split(used=False)):
+        _prepare_transactional_content(old, profile)
+    ordinary = config(False)
+    ordinary['routers'] = {'items': [{'id': 'r1', 'proxy_gateway_agent_id': 'split'}]}
+    _prepare_transactional_content(old, ordinary)
+    sessions.append({'id': 's', 'goal': 'router', 'completed': True})
+    _prepare_transactional_content(old, old_split(routed=False, used=False))
+    assert host['calls'] == []
+
+
+def test_gateway_off_publish_never_reads_the_status_for_a_profile_that_never_used_the_gateway(host, sessions):
+    """Review: an ordinary AIO profile with ConfigFlow-managed routes now waited on (or failed with) a status call."""
+    from backend.agents.oxidns_monitor import MonitorError
+    host['status'] = MonitorError('AGENT_UNREACHABLE', 502, '暂时无法连接 Agent，请检查设备连接。')
+    ordinary = config(False)
+    ordinary['routers'] = {'items': [{'id': 'r1', 'proxy_gateway_agent_id': 'split'}]}
+    for version in ('1.8.30-go', '1.8.40-go'):
+        _prepare_transactional_content({**SPLIT_AGENT, 'version': version}, ordinary)
+        _prepare_transactional_content({**SPLIT_AGENT, 'version': version}, old_split(used=False))
+    assert host['calls'] == []
+
+
+def test_gateway_off_publish_treats_a_missing_gateway_endpoint_as_no_record(host, sessions):
+    from backend.agents.oxidns_monitor import MonitorError
+    # call() maps the Agent's 404 to UPGRADE_REQUIRED: it never had a gateway endpoint.
+    host['status'] = MonitorError('UPGRADE_REQUIRED', 409, '设备尚未提供网关接口')
+    _prepare_transactional_content(SPLIT_AGENT, old_split())
+    assert host['calls'] == [('split', 'status', 'GET', 'home')]

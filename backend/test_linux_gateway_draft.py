@@ -445,8 +445,9 @@ def test_legacy_split_whose_base_gained_a_full_tun_keeps_forwarding_when_turned_
 
 
 @pytest.mark.parametrize('change,message', [
+    # A gateway record without persisted forwarding, on an Agent that cannot persist it.
     ({'version': '1.8.39-go'}, '请先将 Mihomo Agent 更新到 1.8.40-go 或更新版本'),
-    ({'version': ''}, '请先将 Mihomo Agent 更新到 1.8.40-go 或更新版本'),
+    ({'version': '1.8.25-go'}, '请先将 Mihomo Agent 更新到 1.8.40-go 或更新版本'),
     (None, '无法读取「m」的 IPv4 转发状态，已阻止关闭 Linux 网关：暂时无法连接 Agent，请检查设备连接。请确认设备在线后重试。'),
 ])
 def test_legacy_full_tun_gateway_off_needs_a_current_reachable_agent(gateway_app, hosts, change, message):
@@ -466,6 +467,41 @@ def test_legacy_full_tun_gateway_off_needs_a_current_reachable_agent(gateway_app
     # A Docker Mihomo never applies the gateway on its host.
     hosts['agents']['mihomo-home'].update(deployment_method='docker')
     assert save(client, preview(client, repository)).status_code == 200
+
+
+@pytest.mark.parametrize('version,reads', [('1.8.25-go', True), ('1.8.39-go', True), ('1.8.20-go', False), ('', False)])
+def test_legacy_full_tun_gateway_off_is_allowed_without_a_gateway_record(gateway_app, hosts, version, reads):
+    """Review: a host that never applied the gateway keeps its forwarding, whatever its version."""
+    from backend.agents.oxidns_monitor import MonitorError
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'legacy_topology')
+    give_base_full_tun(repository)
+    hosts['agents']['mihomo-home']['version'] = version
+    hosts['status'] = {'success': True, 'managed': {'active': False, 'healthy': False}}
+    assert save(client, preview(client, repository)).status_code == 200
+    assert bool(hosts['calls']) is reads
+    # An Agent without the gateway endpoint (404) has no record either.
+    hosts['calls'].clear()
+    hosts['status'] = MonitorError('UPGRADE_REQUIRED', 409, '设备尚未提供网关接口')
+    hosts['agents']['mihomo-home']['version'] = '1.8.30-go'
+    repository.update_profile_transaction('home', lambda c: c['mihomo']['linux_gateway'].update(enabled=True))
+    assert save(client, preview(client, repository)).status_code == 200
+
+
+def test_legacy_topology_gateway_off_checks_only_the_routers_proxy_gateway(gateway_app, hosts):
+    """Review: an offline or old secondary Mihomo that no router forwards to blocked the switch-off."""
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'legacy_topology')
+    second = {'id': 'mihomo-two', 'name': 'two', 'profile_id': 'home', 'service_type': 'mihomo',
+              'deployment_method': 'shell', 'version': '1.8.20-go'}
+    hosts['agents']['mihomo-two'] = second
+    repository.update_system_transaction(lambda system: system['agents'].append(deepcopy(second)))
+    give_base_full_tun(repository)
+    hosts['status'] = {'success': True, 'managed': {'active': False, 'healthy': False}}
+    assert save(client, preview(client, repository)).status_code == 200
+    assert {call[0] for call in hosts['calls']} == {'mihomo-home'}
 
 
 def test_legacy_split_with_a_full_tun_base_cannot_go_back_to_no_tun(gateway_app, hosts):

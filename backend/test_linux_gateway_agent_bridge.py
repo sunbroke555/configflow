@@ -309,6 +309,59 @@ def test_selective_gateway_remove_keeps_the_agent_text(split, calls):
     assert bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', {}) == AGENT_REMOVED
 
 
+@pytest.fixture
+def legacy_full_tun(calls, monkeypatch):
+    """An old router split (topology match) whose base YAML gained a full TUN: its mode is None."""
+    from backend.common.router_split import full_tun_base_yaml
+    context = {'session_goal': None, 'has_gateway_session': False, 'mihomo_agent_ids': ['gateway']}
+    monkeypatch.setattr(bridge, 'get_config', lambda profile: {
+        'mihomo': {'linux_gateway': {'enabled': True}, 'custom_config': full_tun_base_yaml('')},
+        'routers': {'items': [{'id': 'r1', 'proxy_gateway_agent_id': 'gateway'}]}})
+    monkeypatch.setattr('backend.common.router_split.legacy_context', lambda repository, profile: deepcopy(context))
+    return context
+
+
+def test_old_split_with_a_full_tun_base_cannot_remove_a_record_that_turns_forwarding_off(legacy_full_tun, calls):
+    """Review: 「撤销网关转发」 in mode null sent a plain remove, and the Agent set ip_forward back to 0."""
+    seen, replies = calls
+    record = {'success': True, 'managed': {'active': True, 'healthy': True, 'preserves_forwarding': False}}
+    replies.append(Response(record))
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', {})
+    assert error.value.code == 'FORWARDING_NOT_PERSISTED' and error.value.status == 409
+    assert error.value.message == bridge.LEGACY_REMOVE_NOT_KEPT
+    replies.append(Response(record))
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version='1.8.39-go'), 'gateway', 'remove', 'POST', 'home', {})
+    assert error.value.code == 'UPGRADE_REQUIRED' and error.value.message == bridge.LEGACY_REMOVE_UPGRADE
+    assert [item['url'].rsplit('/', 1)[1] for item in seen] == ['status', 'status']
+    # A confirmed teardown accepts the interruption, as for a legacy split.
+    replies.extend([Response(record), Response(AGENT_REMOVED)])
+    result = bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home',
+                         {'confirm_router_split_teardown': True})
+    assert result['message'] == bridge.REMOVED_MESSAGES['legacy']
+    assert seen[-1]['json'] == {} and [item['url'].rsplit('/', 1)[1] for item in seen][-2:] == ['status', 'remove']
+
+
+@pytest.mark.parametrize('managed,message', [
+    ({'active': True, 'healthy': True, 'preserves_forwarding': True}, '旧网关记录已清理，IPv4 转发保持开启。'),
+    ({'active': False, 'preserves_forwarding': False}, '设备上没有旧网关记录，无需清理；IPv4 转发保持不变。'),
+])
+def test_old_split_with_a_full_tun_base_removes_a_record_that_keeps_forwarding(legacy_full_tun, calls, managed, message):
+    seen, replies = calls
+    replies.extend([Response({'success': True, 'managed': managed}), Response(AGENT_REMOVED)])
+    result = bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', {})
+    assert result == {**AGENT_REMOVED, 'message': message}
+    assert [(item['url'].rsplit('/', 1)[1], item['json']) for item in seen] == [('status', None), ('remove', {})]
+
+
+def test_full_tun_base_without_the_old_split_keeps_the_selective_remove(legacy_full_tun, calls):
+    legacy_full_tun.update(mihomo_agent_ids=['other'])
+    calls[1].append(Response(AGENT_REMOVED))
+    assert bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', {}) == AGENT_REMOVED
+    assert [item['url'].rsplit('/', 1)[1] for item in calls[0]] == ['remove']
+
+
 def test_http_router_split_codes_reach_the_editor(authenticated_app, monkeypatch):
     """The stored setup session and marker decide, and the editor gets the code and text."""
     from backend.common import setup_flow

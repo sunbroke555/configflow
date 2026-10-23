@@ -461,6 +461,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
         except Exception as e:
             logger.warning("Failed to read cached rule file %s: %s", filepath, safe_exception_details(e))
 
+    library_url = ''
     # 2. 如果缓存不存在或读取失败，从规则仓库获取内容
     if library_rule and not rule_content:
         source_type = library_rule.get('source_type', 'url')
@@ -475,6 +476,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
             if url:
                 if config_data is None:
                     config_data = get_config()
+                library_url = url
                 try:
                     response = request_rule(url, timeout=timeout, config_data=config_data)
                     if response.status_code == 200:
@@ -505,6 +507,9 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
                 if server_domain:
                     url = f"{server_domain}{url}"
 
+            if url == library_url:
+                # The library URL just failed; the same request would only wait again.
+                return rule_content
             try:
                 response = request_rule(url, timeout=timeout, config_data=config_data)
                 if response.status_code == 200:

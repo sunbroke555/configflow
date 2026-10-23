@@ -236,6 +236,30 @@ def publish_legacy_source(repository, profile_id, config, agent_id):
     return legacy_source(config, {**_session_context(repository, profile_id), 'mihomo_agent_ids': [agent_id]})
 
 
+def legacy_gateway_agent_ids(config, context):
+    """The bound Mihomo Agents an old router split's gateway record may be on:
+    the routers' proxy gateways for a topology match, every one for 'setup'."""
+    agent_ids = list(context.get('mihomo_agent_ids') or [])
+    source = legacy_source(config, context)
+    if source == 'topology':
+        routers = (config.get('routers') or {}).get('items') or []
+        proxies = {router.get('proxy_gateway_agent_id') for router in routers if isinstance(router, dict)}
+        return [agent_id for agent_id in agent_ids if agent_id in proxies]
+    return agent_ids if source else []
+
+
+def gateway_was_used(config, agent, source):
+    """Whether a publish may meet a gateway record left by this profile's old router split.
+
+    The old wizard ('setup') always turned the gateway on. Otherwise the
+    editor keeps a restore point once it changes the gateway, and the
+    installation wizard marks each Agent it installed.
+    """
+    from backend.common.linux_gateway_draft import RESTORE_KEY
+    return (source == 'setup' or RESTORE_KEY in (config.get('mihomo') or {})
+            or bool(agent.get('gateway_installation_id')))
+
+
 def _state(config, context):
     agent_ids = list(context.get('mihomo_agent_ids') or [])
     result = {'mode': None, 'source': None, 'mihomo_agent_ids': agent_ids,
