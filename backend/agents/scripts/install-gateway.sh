@@ -1,5 +1,5 @@
 #!/bin/sh
-# ConfigFlow Linux gateway installation. No forwarding or TUN interception here.
+# ConfigFlow Linux gateway installation. {header_note}
 set -eu
 for cf_argument do
     case "$cf_argument" in --verbose|-v) ;; *) cf_error "未知参数：$cf_argument"; exit 2 ;; esac
@@ -12,7 +12,7 @@ fail() { printf '%s\n' "$*" >&2; exit 1; }
 cleanup_gateway() {
     gateway_exit=$?
     if [ "$gateway_exit" -ne 0 ] && [ "$GATEWAY_CHANGED" -eq 1 ]; then
-        echo '安装未完成。已安装的核心和原有配置均保留；修复上方错误后重新运行同一命令可继续。尚未应用网关转发，请不要修改客户端网关。' >&2
+        echo '安装未完成。已安装的核心和原有配置均保留；修复上方错误后重新运行同一命令可继续。{failure_note}' >&2
     fi
     [ -z "$GATEWAY_STAGE" ] || rm -rf "$GATEWAY_STAGE"
     [ -z "$GATEWAY_LOCK" ] || rmdir "$GATEWAY_LOCK"
@@ -126,7 +126,7 @@ for directory in /etc /usr/local /usr/local/bin /opt /opt/configflow-agent /run;
 done
 for legacy in /opt/configflow-agent/config*.json /etc/systemd/system/configflow-agent.service /etc/init.d/configflow-agent /usr/local/bin/configflow-agent; do
     [ ! -e "$legacy" ] && [ ! -L "$legacy" ] || fail '检测到旧版共享 Agent，请先通过原卸载流程移除 Agent 并保留核心配置。'
-done
+done{journal_precheck}
 MIHOMO_DOWNLOAD=0
 OXIDNS_DOWNLOAD=0
 for core in mihomo oxidns; do
@@ -183,7 +183,7 @@ fi
 chmod 755 "$GATEWAY_STAGE/configflow-agent"
 "$GATEWAY_STAGE/configflow-agent" -version >/dev/null || fail 'Agent 无法在当前系统运行；请重新构建匹配版本。'
 agent_version=$("$GATEWAY_STAGE/configflow-agent" -version)
-printf '%s\n' "$agent_version" | awk -F '[-.]' '/^[0-9]+\.[0-9]+\.[0-9]+(-go)?$/ && ($1>1 || ($1==1 && ($2>8 || ($2==8 && $3>=25)))) {ok=1} END {exit !ok}' || fail '网关向导需要 Agent 1.8.25-go 或更新，请更新服务器的 Agent 构建并重新生成命令。'
+printf '%s\n' "$agent_version" | awk -F '[-.]' '/^[0-9]+\.[0-9]+\.[0-9]+(-go)?$/ && ($1>1 || ($1==1 && ($2>8 || ($2==8 && $3>={agent_min_patch})))) {ok=1} END {exit !ok}' || fail '网关向导需要 Agent {agent_min_version} 或更新，请更新服务器的 Agent 构建并重新生成命令。'
 cat > "$GATEWAY_STAGE/mihomo.yaml" <<'CONFIGFLOW_GATEWAY_MIHOMO_BOOTSTRAP'
 # ConfigFlow bootstrap only: final gateway configuration is published in the UI.
 mode: rule
@@ -347,9 +347,8 @@ cat > "$GATEWAY_STAGE/install-agents.sh" <<'CONFIGFLOW_GATEWAY_AIO_SCRIPT'
 {aio_script}
 CONFIGFLOW_GATEWAY_AIO_SCRIPT
 cf_step "安装两个 Agent"
-# Forwarding belongs to the explicit gateway apply, which saves and restores it;
-# the environment check must not tell the user to persist it by hand.
-CONFIGFLOW_FORWARDING_OWNER=gateway sh "$GATEWAY_STAGE/install-agents.sh"
+{forwarding_comment}
+{forwarding_owner_env}sh "$GATEWAY_STAGE/install-agents.sh"
 
 ENROLLMENT_URL={enrollment_url_shell}
 ENROLLMENT_TOKEN={enrollment_token_shell}
@@ -386,6 +385,6 @@ if [ -n "$ENROLLMENT_URL" ]; then
     fi
     grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$GATEWAY_STAGE/enrollment-result.json" || fail '服务器未确认安装绑定，请回到网页刷新安装状态。'
 fi
-cf_fact next_steps '请回到 ConfigFlow 安装向导，继续发布 Mihomo、发布 OxiDNS，再检查并应用网关转发。'
-cf_note gateway '安装脚本未写入 TUN/转发配置，原有配置已保留；完成网页验证前不要修改客户端网关/DNS。'
+cf_fact next_steps '{next_steps}'
+cf_note gateway '{gateway_note}'
 cf_complete '核心及两个 Agent 已就绪'

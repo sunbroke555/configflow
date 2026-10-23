@@ -10,19 +10,29 @@ from .oxidns_monitor import MonitorError, _agent_origin
 from .version import compare_versions
 
 MIN_AGENT_VERSION = '1.8.25-go'
+# Persists AIO forwarding and keeps it when a gateway record is removed.
+FORWARDING_MIN_AGENT_VERSION = '1.8.40-go'
 MAX_RESPONSE_BYTES = 512 * 1024
 OPERATIONS = {'status': 'GET', 'preview': 'POST', 'apply': 'POST', 'remove': 'POST'}
 SPEC_FIELDS = {'interface', 'address', 'lan_cidr', 'upstream_gateway'}
 
 
-def supports_gateway(agent):
+def _at_least(agent, minimum):
     version = agent.get('version', '')
     if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-go)?', version):
         return False
     try:
-        return compare_versions(version, MIN_AGENT_VERSION) >= 0
+        return compare_versions(version, minimum) >= 0
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+def supports_gateway(agent):
+    return _at_least(agent, MIN_AGENT_VERSION)
+
+
+def supports_forwarding(agent):
+    return _at_least(agent, FORWARDING_MIN_AGENT_VERSION)
 
 
 def require_gateway_agent(agent):

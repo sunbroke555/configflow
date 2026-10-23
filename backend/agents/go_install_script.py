@@ -205,6 +205,7 @@ def generate_go_aio_install_script(
     manage_ipv4_forwarding: bool = True,
     manage_tun: bool = True,
     installation_description: str = "此安装器只接管已安装的 Mihomo 和 OxiDNS，不安装核心、不改核心配置、不重启核心。",
+    tun_prepare_assume_enabled: bool = False,
 ) -> str:
     """Manage two isolated native Agents, optionally installing missing cores.
 
@@ -212,6 +213,8 @@ def generate_go_aio_install_script(
     phase. Agent failures retain completed cores and restart previous Agents.
     Ordinary AIO prepares enabled TUN and persists IPv4 forwarding; the selective
     gateway installer opts out because it manages its own network lifecycle.
+    The router split's gateway installer prepares TUN although its bootstrap
+    config keeps TUN off (``tun_prepare_assume_enabled``).
     """
     if not isinstance(install_core, bool):
         raise ValueError("install_core 必须为 true 或 false")
@@ -221,6 +224,10 @@ def generate_go_aio_install_script(
         raise ValueError("manage_tun must be a boolean")
     if not isinstance(non_interactive, bool):
         raise ValueError("non_interactive must be a boolean")
+    if not isinstance(tun_prepare_assume_enabled, bool):
+        raise ValueError("tun_prepare_assume_enabled must be a boolean")
+    if tun_prepare_assume_enabled and not (manage_tun and verified_agent_path):
+        raise ValueError("assume-tun-enabled is only supported inside the gateway installer")
     if verified_agent_path and verified_agent_path != "$GATEWAY_STAGE/configflow-agent":
         raise ValueError("Preverified Agent binary is only supported inside the gateway installer")
     if verified_agent_path and not non_interactive:
@@ -263,10 +270,11 @@ def generate_go_aio_install_script(
         raise ValueError("Core configurations require separate directories for deployment journals")
     replacements = {"binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
                     "mihomo_agent_port": str(ports[0]), "oxidns_agent_port": str(ports[1])}
+    tun_flags = "-prepare-tun -assume-tun-enabled" if tun_prepare_assume_enabled else "-prepare-tun"
     replacements.update({
         "tun_prepare_notice": 'cf_ui "Mihomo 已启用 TUN 时，自动检查运行环境；本机加载 TUN 驱动并设置开机加载，容器缺少设备时给出宿主机处理提示。"' if manage_tun else "",
         "tun_prepare": '''cf_step "准备 TUN 驱动与开机加载"
-if "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json" -prepare-tun; then
+if "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json" ''' + tun_flags + '''; then
     :
 else
     tun_status=$?

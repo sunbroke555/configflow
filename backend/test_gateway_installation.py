@@ -870,3 +870,84 @@ def test_rule_download_failure_keeps_remedy_until_next_publication(setup, monkey
     monkeypatch.setattr(sessions, '_publish_service', fail_other)
     sessions.run_publication(manager.repository, manager, saved['id'], pause=lambda _: None)
     assert sessions.get(manager.repository, manager, saved['id'])['remedy'] is None
+
+
+def make_full_tun(repo):
+    config, _ = repo.get_publish_snapshot('home')
+    candidate, report = prepare_gateway_onboarding(config, form(), takeover='full_tun')
+    assert report['ready'], report
+    repo.save_profile('home', {'mihomo': candidate['mihomo'], 'oxidns': candidate['oxidns']})
+    return repo.config_revision('home')
+
+
+def test_session_records_selective_takeover_and_its_script(setup):
+    client, manager, admin, body, saved = setup
+    assert saved['takeover'] == 'selective'
+    assert client.get(BASE + '/' + saved['id'], headers=admin).json['takeover'] == 'selective'
+    assert 'CONFIGFLOW_FORWARDING_OWNER=gateway sh' in saved['script']
+    assert '-assume-tun-enabled' not in saved['script']
+
+
+def test_full_tun_profile_gets_a_new_session_with_the_full_tun_installer(setup):
+    client, manager, admin, body, saved = setup
+    revision = make_full_tun(manager.repository)
+    response = client.post(BASE, headers=admin, json={**body, 'config_revision': revision})
+    assert response.status_code == 200, response.json
+    assert response.json['id'] != saved['id'] and response.json['takeover'] == 'full_tun'
+    stored = sessions._read(manager.repository, response.json['id'])
+    assert stored['takeover'] == 'full_tun'
+    assert '-prepare-tun -assume-tun-enabled' in stored['script']
+    assert 'persist_ipv4_forwarding' in stored['script']
+    assert 'CONFIGFLOW_FORWARDING_OWNER' not in stored['script']
+    # The same request again reuses the full TUN session.
+    again = client.post(BASE, headers=admin, json={**body, 'config_revision': revision})
+    assert again.json['id'] == response.json['id']
+
+
+def test_enrolled_selective_session_is_not_reused_after_takeover_changes(setup):
+    client, manager, admin, body, saved = setup
+    saved = prepare_run(manager, saved)
+    saved.update(phase='published')
+    sessions._write(manager.repository, saved)
+    revision = make_full_tun(manager.repository)
+    response = client.post(BASE, headers=admin, json={**body, 'config_revision': revision})
+    assert response.status_code == 200, response.json
+    assert response.json['id'] != saved['id'] and response.json['phase'] == 'waiting'
+    assert sessions._read(manager.repository, saved['id'])['config_revision'] == saved['config_revision']
+
+
+def test_snapshot_rejects_a_session_whose_takeover_changed(setup):
+    _, manager, _, _, saved = setup
+    saved['config_revision'] = make_full_tun(manager.repository)
+    with pytest.raises(sessions.InstallationError) as error:
+        sessions._saved_snapshot(manager.repository, saved)
+    assert error.value.status == 409 and '接管方式已变化' in str(error.value)
+    # A session recorded before the takeover existed is checked as before.
+    saved.pop('takeover')
+    assert sessions._saved_snapshot(manager.repository, saved)['mihomo']['router_split']
+
+
+def test_session_from_before_the_takeover_field_is_reused_as_selective(setup):
+    client, manager, admin, body, saved = setup
+    del saved['takeover']
+    sessions._write(manager.repository, saved)
+    response = client.post(BASE, headers=admin, json=body)
+    assert response.status_code == 200, response.json
+    assert response.json['id'] == saved['id'] and response.json['takeover'] == 'selective'
+
+
+@pytest.mark.parametrize('full_tun, message', [
+    (True, 'Mihomo 和 OxiDNS 均已发布并通过健康检查，现在检查 IPv4 转发与 TUN。'),
+    (False, 'Mihomo 和 OxiDNS 均已发布并通过健康检查，现在可以预览网关转发。'),
+])
+def test_publication_completion_names_the_next_check(setup, monkeypatch, full_tun, message):
+    client, manager, admin, body, saved = setup
+    if full_tun:
+        revision = make_full_tun(manager.repository)
+        saved = sessions._read(manager.repository, client.post(BASE, headers=admin, json={**body, 'config_revision': revision}).json['id'])
+    session = prepare_run(manager, saved)
+    monkeypatch.setattr(sessions, '_publish_service', lambda repo, mgr, current, service: {
+        'deployment_id': current['deployments'][service]['deployment_id'], 'status': 'succeeded', 'success': True})
+    sessions.run_publication(manager.repository, manager, session['id'], pause=lambda _: None)
+    result = sessions._read(manager.repository, session['id'])
+    assert result['phase'] == 'published' and result['message'] == message

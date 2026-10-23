@@ -113,10 +113,17 @@ def _server_url(value):
     return value.rstrip('/')
 
 
+def _takeover(config):
+    from backend.common.router_split import is_full_tun
+    return 'full_tun' if is_full_tun(config) else 'selective'
+
+
 def _saved_snapshot(repository, session):
     config, revision = repository.get_publish_snapshot(session['profile_id'])
     if revision != session['config_revision']:
         raise InstallationError('配置已在其他页面修改，请重新准备安装并预览保存；已安装的设备会继续沿用。', 409)
+    if session.get('takeover') and session['takeover'] != _takeover(config):
+        raise InstallationError('接管方式已变化，请重新准备安装；已安装的设备会继续沿用。', 409)
     from backend.common.gateway_onboarding import assert_gateway_onboarding_ready
     address = session['network'].get('address')
     assert_gateway_onboarding_ready(config, base_url=session['server_url'],
@@ -178,7 +185,8 @@ def create(repository, manager, body):
         repository.update_system_transaction(
             lambda system: system['system_config'].update(server_domain=session['server_url']))
         logger.info('已将系统服务地址设为 %s（网关安装）', session['server_url'])
-    _saved_snapshot(repository, session)
+    # The installer itself differs by takeover: full TUN persists forwarding.
+    session['takeover'] = _takeover(_saved_snapshot(repository, session))
     # Resolve all immutable, checksum-verified downloads before handing a command
     # to the user. Generating this script has no host-side effects.
     # A lost HTTP response must not create a second capability for the same
@@ -189,7 +197,9 @@ def create(repository, manager, body):
         current = latest(repository, manager, profile_id)['session']
         if current and not current['expired'] and not current['target_changed']:
             previous = _read(repository, current['id'])
-            keys = ('profile_id', 'config_revision', 'name', 'server_url', 'ports')
+            keys = ('profile_id', 'config_revision', 'name', 'server_url', 'ports', 'takeover')
+            # Sessions from before the takeover field always used the gateway.
+            previous.setdefault('takeover', 'selective')
             # After enrollment the wizard shows the detected address in the
             # optional IP field, so re-preparing then names the same host.
             same_target = (bool(previous.get('auto_network')) == auto_network and
@@ -236,6 +246,7 @@ def _script(session):
         mihomo_agent_port=session['ports']['mihomo'], oxidns_agent_port=session['ports']['oxidns'],
         enrollment_url=session['server_url'] + '/api/agents/gateway-installations/' + session['id'] + '/enroll',
         enrollment_token=session['token'], installation_id=session['id'],
+        full_tun=session.get('takeover') == 'full_tun',
     )
 
 
@@ -396,6 +407,7 @@ def public(repository, manager, session):
     result['remedy'] = deepcopy(session.get('remedy'))
     result['server_url'] = session['server_url']
     result['auto_network'] = session.get('auto_network', False)
+    result['takeover'] = session.get('takeover', 'selective')
     result['expires_at'] = _iso(session['expires'])
     result['expired'] = time.time() >= session['expires']
     result['agents'] = {}
@@ -625,7 +637,9 @@ def run_publication(repository, manager, session_id, *, pause=time.sleep):
         _pair(repository, manager, session)
         with _locked(repository, session_id):
             final = _read(repository, session_id)
-            final.update(phase='published', message='Mihomo 和 OxiDNS 均已发布并通过健康检查，现在可以预览网关转发。')
+            final.update(phase='published', message='Mihomo 和 OxiDNS 均已发布并通过健康检查，现在检查 IPv4 转发与 TUN。'
+                         if final.get('takeover') == 'full_tun' else
+                         'Mihomo 和 OxiDNS 均已发布并通过健康检查，现在可以预览网关转发。')
             _write(repository, final)
         logger.info('网关安装 %s：Mihomo 和 OxiDNS 均已发布并通过健康检查', session['name'])
     except Exception as exc:

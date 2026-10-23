@@ -53,10 +53,31 @@ def core_fingerprint(config):
                              ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
+def _check_full_tun(status):
+    """The router split forwards into the full TUN; no gateway record may remain."""
+    forwarding, tun = status.get('ipv4_forwarding'), status.get('tun')
+    if not isinstance(forwarding, dict) or not isinstance(tun, dict):
+        raise SetupError('请将 Mihomo Agent 更新到 1.8.40-go 或更新版本后再检查', 409)
+    if forwarding.get('current') != '1':
+        raise SetupError('Linux IPv4 转发未开启，请在安装与检查中点击「开启并持久化 IPv4 转发」', 409)
+    if forwarding.get('persisted') is not True:
+        raise SetupError('IPv4 转发尚未持久化，重启后可能失效；请在安装与检查中点击「开启并持久化 IPv4 转发」', 409)
+    managed = status.get('managed') or {}
+    if managed.get('active') or managed.get('pending') or managed.get('error'):
+        raise SetupError('设备上仍有 Linux 网关的转发记录，请先在「上游路由」完成迁移或清理', 409)
+    if status.get('enabled_in_config') or tun.get('gateway_marker'):
+        raise SetupError('已发布的 Mihomo 仍是 Linux 网关配置，请重新发布', 409)
+    if tun.get('configured') is not True:
+        raise SetupError('已发布的 Mihomo 未启用完整 TUN，请检查基础 YAML 后重新发布', 409)
+    if tun.get('present') is not True:
+        raise SetupError(f"Mihomo TUN（{tun.get('device') or 'Meta'}）未运行，请检查 Mihomo 日志", 409)
+
+
 def check_installation(repository, session):
     from backend.common.agent_manager import get_agent_manager
     from backend.agents import gateway_installation, linux_gateway
     from backend.agents.oxidns_monitor import MonitorError
+    from backend.common.router_split import is_full_tun, route_rule_set_ids
     manager = get_agent_manager()
     gateway = gateway_installation.latest(repository, manager, session['profile_id'])['session']
     config, revision = repository.get_publish_snapshot(session['profile_id'])
@@ -68,18 +89,25 @@ def check_installation(repository, session):
     agents = gateway['agents']
     if not all(agents.get(service, {}).get('id') for service in ('mihomo', 'oxidns')):
         raise SetupError('两个核心的设备尚未确认，请继续安装向导', 409)
+    if any(agents[service].get('status') != 'online' for service in ('mihomo', 'oxidns')):
+        raise SetupError('安装设备离线，请检查连接后再检查', 409)
+    full_tun = session['goal'] == 'router' and is_full_tun(config) and not session.get('legacy_takeover')
     try:
         status = linux_gateway.call(manager, agents['mihomo']['id'], 'status', 'GET', session['profile_id'])
     except MonitorError as error:
         raise SetupError(error.message, error.status) from None
-    managed = status.get('managed') or {}
-    if not managed.get('active') or managed.get('pending') or managed.get('healthy') is not True:
-        raise SetupError('Linux 转发尚未启用或健康状态未确认，请继续安装向导', 409)
+    if full_tun:
+        _check_full_tun(status)
+    else:
+        managed = status.get('managed') or {}
+        if not managed.get('active') or managed.get('pending') or managed.get('healthy') is not True:
+            raise SetupError('Linux 转发尚未启用或健康状态未确认，请继续安装向导', 409)
     session['installation'] = {'id': gateway['id'], 'fingerprint': core_fingerprint(config),
         'mihomo': {key: agents['mihomo'].get(key) for key in ('id', 'name', 'host')},
         'oxidns': {key: agents['oxidns'].get(key) for key in ('id', 'name', 'host')}}
     from backend.routers.desired import compute_desired
-    selected = config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', [])
+    selected = (route_rule_set_ids(config) if full_tun
+                else config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', []))
     desired = compute_desired(config, agents['mihomo'].get('host'), selected)
     for item in desired['proxy_cidrs']:
         item['requires_source_exclusion'] = item['cidr'] != desired['fake_ip_range']

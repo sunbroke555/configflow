@@ -189,6 +189,12 @@ def test_setup_apis_require_administrator_authentication(setup_api, monkeypatch)
     assert client.post('/api/setup', json={'id': SESSION, 'name': 'test', 'goal': 'router'}).status_code == 401
 
 
+# A router split Agent reporting persisted forwarding and a running full TUN.
+FULL_TUN_STATUS = {'success': True, 'enabled_in_config': False, 'managed': {},
+                   'ipv4_forwarding': {'protocol': 1, 'current': '1', 'persisted': True},
+                   'tun': {'configured': True, 'device': 'Meta', 'present': True, 'gateway_marker': False}}
+
+
 @pytest.fixture
 def installed(setup_api, monkeypatch):
     client, repository = setup_api
@@ -198,7 +204,7 @@ def installed(setup_api, monkeypatch):
     client.post(f'/api/setup/{SESSION}/prepare', json={})
     profile_id = session['profile_id']
     revision = repository.config_revision(profile_id)
-    agents = {service: {'id': service, 'name': service, 'host': '192.0.2.10',
+    agents = {service: {'id': service, 'name': service, 'host': '192.0.2.10', 'status': 'online',
                        'profile_id': profile_id, 'service_type': service} for service in ('mihomo', 'oxidns')}
     repository.update_system_transaction(lambda system: system.update(agents=list(agents.values())))
     gateway = {'id': 'installation', 'phase': 'published', 'target_changed': False, 'agents': agents}
@@ -206,9 +212,9 @@ def installed(setup_api, monkeypatch):
         return {'session': {**gateway, 'config_changed': repository.config_revision(profile_id) != revision}}
     monkeypatch.setattr('backend.common.agent_manager.get_agent_manager', lambda: object())
     monkeypatch.setattr('backend.agents.gateway_installation.latest', latest)
-    managed = {'active': True, 'healthy': True}
-    monkeypatch.setattr('backend.agents.linux_gateway.call', lambda *_: {'managed': managed})
-    return client, repository, profile_id, gateway, managed
+    status = deepcopy(FULL_TUN_STATUS)
+    monkeypatch.setattr('backend.agents.linux_gateway.call', lambda *_: status)
+    return client, repository, profile_id, gateway, status
 
 
 ROUTER_DRAFT = {'name': 'Main', 'type': 'ikuai', 'endpoint': 'http://192.0.2.1',
@@ -242,14 +248,14 @@ def test_early_router_settings_are_private_and_do_not_invalidate_installation(in
 
 
 def test_router_draft_attaches_only_after_healthy_installation_and_is_idempotent(installed):
-    client, repository, profile_id, _, managed = installed
+    client, repository, profile_id, _, status = installed
     response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT})
     router_id = response.json['router_draft']['id']
-    managed['healthy'] = False
+    status['tun']['present'] = False
     assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409
     assert repository.get_profile(profile_id)['routers']['items'] == []
     assert 'router_draft' in client.get(f'/api/setup/{SESSION}').json
-    managed['healthy'] = True
+    status['tun']['present'] = True
     for _ in range(2):
         response = client.post(f'/api/setup/{SESSION}/check', json={})
         assert response.status_code == 200, response.json
@@ -294,10 +300,10 @@ def test_router_draft_rejects_invalid_or_premature_links(installed, change):
 
 
 def test_installation_check_requires_both_services_and_healthy_forwarding(installed):
-    client, _, _, gateway, managed = installed
-    managed['healthy'] = False
+    client, _, _, gateway, status = installed
+    status['ipv4_forwarding']['current'] = '0'
     assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409
-    managed['healthy'] = True
+    status['ipv4_forwarding']['current'] = '1'
     gateway['target_changed'] = True
     assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409
     gateway['target_changed'] = False
@@ -372,10 +378,10 @@ def test_dns_and_connection_fallbacks_are_independent_through_installation(setup
     assert config['oxidns']['direct_rulesets'] == ['setup_builtin_direct']
     assert config['oxidns']['proxy_rulesets'] == ['setup_builtin_proxy']
     assert config['rule_configs'][-1]['policy'] == expected_policy
-    state = gateway_onboarding_state(config, revision)
+    state = gateway_onboarding_state(config, revision, takeover='full_tun')
     assert state['settings']['default_forward'] == expected_forward
     assert state['settings']['local_dns'] == local_dns
-    prepared, report = prepare_gateway_onboarding(config, state['settings'], base_url='https://config.test')
+    prepared, report = prepare_gateway_onboarding(config, state['settings'], base_url='https://config.test', takeover='full_tun')
     assert report['ready'], report
     assert assert_gateway_onboarding_ready(prepared, base_url='https://config.test')['ready']
     assert prepared['oxidns']['default_forward'] == expected_forward
@@ -555,8 +561,8 @@ def test_recommended_classical_library_is_ready_and_existing_sources_are_not_dup
     assert not any(rule.get('library_rule_id') == custom['id'] for rule in profile['rule_configs'])
     snapshot, revision = repository.get_publish_snapshot(session['profile_id'])
     assert [rule['name'] for rule in snapshot['rule_configs'] if rule['itemType'] == 'ruleset'] == [item['name'] for item in builtin_rule_catalog().values()]
-    state = gateway_onboarding_state(snapshot, revision)
-    candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
+    state = gateway_onboarding_state(snapshot, revision, takeover='full_tun')
+    candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test', takeover='full_tun')
     assert report['ready'], report
     assert assert_gateway_onboarding_ready(candidate, base_url='https://config.test')['ready']
     downloads = get_oxidns_ruleset_downloads(candidate, 'https://config.test')
@@ -664,7 +670,9 @@ def test_router_setup_leaves_ip_takeover_to_the_router_settings(setup_api):
     selections = {'direct': [], 'proxy': ['builtin:telegram', 'library:chat']}
     response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
     assert response.status_code == 200, response.json
-    assert 'linux_gateway' not in repository.get_profile(session['profile_id'])['mihomo']
+    mihomo = repository.get_profile(session['profile_id'])['mihomo']
+    assert mihomo['linux_gateway'] == {'enabled': False, 'rule_set_ids': []}
+    assert mihomo['router_split']['route_rule_set_ids'] == []
 
 
 def test_template_groups_follow_wizard_choices_and_drop_empty_regions():
@@ -864,3 +872,171 @@ def test_an_automatic_check_does_not_reopen_an_abandoned_setup(setup_api, monkey
     assert not _abandon(client).json['delete_profile']
     client.post(f'/api/setup/{SESSION}/check', json={})
     assert client.get(f'/api/setup/{SESSION}').json['abandoned']
+
+
+def test_router_setup_writes_full_tun_and_marker_instead_of_the_gateway(setup_api):
+    from backend.common.router_split import FULL_TUN
+    from backend.converters.mihomo import generate_mihomo_config
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    for _ in range(2):
+        response = client.post(f'/api/setup/{SESSION}/prepare', json={})
+        assert response.status_code == 200, response.json
+        assert response.json['legacy_takeover'] is False
+    profile = repository.get_profile(session['profile_id'])
+    assert profile['_revision'] == 1
+    base = yaml.safe_load(profile['mihomo']['custom_config'])
+    assert base['tun'] == FULL_TUN
+    assert list(base) == ['mixed-port', 'allow-lan', 'bind-address', 'mode', 'log-level', 'external-controller', 'tun', 'dns']
+    assert profile['mihomo']['router_split'] == {'version': 1, 'takeover': 'full_tun', 'origin': 'setup',
+                                                 'route_rule_set_ids': []}
+    assert profile['mihomo']['linux_gateway'] == {'enabled': False, 'rule_set_ids': []}
+    snapshot, _ = repository.get_publish_snapshot(session['profile_id'])
+    generated = yaml.safe_load(generate_mihomo_config(snapshot, preflight_providers=False))
+    assert 'x-configflow-linux-gateway' not in generated
+    assert generated['tun']['auto-redirect'] is True and 'route-address-set' not in generated['tun']
+
+
+def test_router_reprepare_keeps_forwarded_rule_sets_that_still_exist(setup_api):
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(IP_RULE)]))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    selections = {'direct': [], 'proxy': ['library:chat']}
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections}).status_code == 200
+    profile_id = session['profile_id']
+    before = repository.get_profile(profile_id)
+    chat = next(rule['id'] for rule in before['rule_configs'] if rule.get('library_rule_id') == 'chat')
+    mihomo = deepcopy(before['mihomo'])
+    mihomo['router_split']['route_rule_set_ids'] = [chat, 'deleted']
+    repository.save_profile(profile_id, {'mihomo': mihomo})
+    from backend.common.setup_flow import adopt_owned_write
+    adopt_owned_write(repository, profile_id, before, repository.get_profile(profile_id))
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections}).status_code == 200
+    assert repository.get_profile(profile_id)['mihomo']['router_split']['route_rule_set_ids'] == [chat]
+
+
+def test_gateway_setup_fields_match_the_previous_release(setup_api):
+    import json
+    from pathlib import Path
+    client, repository = setup_api
+    session = start(client, 'gateway')
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(IP_RULE)]))
+    assert client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']}).status_code == 200
+    selections = {'direct': ['builtin:direct'], 'proxy': ['builtin:telegram', 'library:chat', 'builtin:proxy']}
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+    assert response.status_code == 200, response.json
+    assert 'legacy_takeover' not in response.json
+    profile = repository.get_profile(session['profile_id'])
+    # Captured from 0ef9e89 with the same inputs.
+    expected = json.loads((Path(__file__).parent / 'testdata' / 'setup_gateway_fields_0ef9e89.json').read_text(encoding='utf-8'))
+    for key, value in expected.items():
+        assert profile[key] == value, key
+
+
+def _make_legacy(repository, profile_id):
+    """Turn a prepared router setup into one saved by the earlier gateway installer."""
+    from backend.common.setup_flow import adopt_owned_write
+    before = repository.get_profile(profile_id)
+    mihomo = {key: value for key, value in before['mihomo'].items() if key != 'router_split'}
+    mihomo.update(custom_config='mixed-port: 7890\ndns:\n  enable: true\n  listen: 127.0.0.1:1053\n',
+                  linux_gateway={'enabled': True, 'rule_set_ids': []})
+    repository.save_profile(profile_id, {'mihomo': mihomo})
+    adopt_owned_write(repository, profile_id, before, repository.get_profile(profile_id))
+
+
+def test_legacy_router_setup_keeps_the_gateway_when_prepared_again(setup_api):
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    client.post(f'/api/setup/{SESSION}/prepare', json={})
+    _make_legacy(repository, session['profile_id'])
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'traffic_fallback': 'direct'})
+    assert response.status_code == 200, response.json
+    assert response.json['legacy_takeover'] is True
+    mihomo = repository.get_profile(session['profile_id'])['mihomo']
+    assert 'router_split' not in mihomo
+    assert 'tun' not in yaml.safe_load(mihomo['custom_config'])
+    assert mihomo['linux_gateway'] == {'enabled': True, 'rule_set_ids': []}
+
+
+def test_router_draft_attaches_with_the_forwarded_rule_sets(installed, monkeypatch):
+    client, repository, profile_id, gateway, _ = installed
+    mihomo = repository.get_profile(profile_id)['mihomo']
+    mihomo['router_split']['route_rule_set_ids'] = ['setup_builtin_telegram']
+    repository.save_profile(profile_id, {'mihomo': mihomo})
+    revision = repository.config_revision(profile_id)
+    monkeypatch.setattr('backend.agents.gateway_installation.latest', lambda *_: {'session': {
+        **gateway, 'config_changed': repository.config_revision(profile_id) != revision}})
+    client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT})
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200, response.json
+    router = repository.get_profile(profile_id)['routers']['items'][0]
+    assert router['ip_rule_sets'] == ['setup_builtin_telegram']
+
+
+@pytest.mark.parametrize('change, message', [
+    (lambda status, agents: status.pop('ipv4_forwarding'), '1.8.40-go'),
+    (lambda status, agents: status.pop('tun'), '1.8.40-go'),
+    (lambda status, agents: status['ipv4_forwarding'].update(current='0'), 'IPv4 转发未开启'),
+    (lambda status, agents: status['ipv4_forwarding'].update(current='', error='读取失败'), 'IPv4 转发未开启'),
+    (lambda status, agents: status['ipv4_forwarding'].update(persisted=False), '尚未持久化'),
+    (lambda status, agents: status['managed'].update(active=True), '仍有 Linux 网关的转发记录'),
+    (lambda status, agents: status['managed'].update(pending=True), '仍有 Linux 网关的转发记录'),
+    (lambda status, agents: status['managed'].update(error='nft 表残留'), '仍有 Linux 网关的转发记录'),
+    (lambda status, agents: status.update(enabled_in_config=True), '仍是 Linux 网关配置'),
+    (lambda status, agents: status['tun'].update(gateway_marker=True), '仍是 Linux 网关配置'),
+    (lambda status, agents: status['tun'].update(configured=False), '未启用完整 TUN'),
+    (lambda status, agents: status['tun'].update(present=False), 'Mihomo TUN（Meta）未运行'),
+    (lambda status, agents: status['tun'].update(present=False, device='utun'), 'Mihomo TUN（utun）未运行'),
+    (lambda status, agents: agents['oxidns'].update(status='offline'), '安装设备离线'),
+])
+def test_full_tun_installation_check_covers_forwarding_and_tun(installed, change, message):
+    client, _, _, gateway, status = installed
+    change(status, gateway['agents'])
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 409
+    assert message in response.json['message']
+
+
+def test_full_tun_route_instructions_only_use_the_marker_list(installed, monkeypatch):
+    client, repository, profile_id, gateway, _ = installed
+    mihomo = repository.get_profile(profile_id)['mihomo']
+    mihomo['router_split']['route_rule_set_ids'] = ['forwarded']
+    mihomo['linux_gateway']['rule_set_ids'] = ['gateway-only']
+    repository.save_profile(profile_id, {'mihomo': mihomo})
+    revision = repository.config_revision(profile_id)
+    monkeypatch.setattr('backend.agents.gateway_installation.latest', lambda *_: {'session': {
+        **gateway, 'config_changed': repository.config_revision(profile_id) != revision}})
+    calls = []
+    def desired(config, host, selected):
+        calls.append(selected)
+        return {'proxy_cidrs': [{'cidr': '198.18.0.0/16', 'sources': ['fake-ip']}], 'fake_ip_range': '198.18.0.0/16', 'warnings': []}
+    monkeypatch.setattr('backend.routers.desired.compute_desired', desired)
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200, response.json
+    assert calls == [['forwarded']]
+    assert response.json['route_instructions']['routes'] == [
+        {'cidr': '198.18.0.0/16', 'sources': ['fake-ip'], 'requires_source_exclusion': False}]
+
+
+def test_legacy_and_gateway_installation_checks_still_use_gateway_forwarding(installed):
+    client, repository, profile_id, gateway, status = installed
+    from backend.common import setup_flow
+    session = setup_flow.read(repository, SESSION)
+    session['legacy_takeover'] = True
+    setup_flow.write(repository, session)
+    status.clear()
+    status['managed'] = {'active': True, 'healthy': False}
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409
+    status['managed']['healthy'] = True
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 200
+    session = setup_flow.read(repository, SESSION)
+    session.update(goal='gateway', legacy_takeover=False)
+    setup_flow.write(repository, session)
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 200
+    status['managed']['active'] = False
+    assert client.post(f'/api/setup/{SESSION}/check', json={}).status_code == 409

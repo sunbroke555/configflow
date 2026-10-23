@@ -11,7 +11,12 @@ from urllib.parse import urlsplit
 import yaml
 
 from backend.common.linux_gateway import (
-    LinuxGatewayError, direct_overlap_warnings, gateway_editor_state, validate_gateway_selection,
+    LinuxGatewayError, direct_overlap_warnings, gateway_editor_state, gateway_settings,
+    validate_gateway_selection, validate_rule_set_ids,
+)
+from backend.common.router_split import (
+    MARKER_KEY, MESSAGES, full_tun_base_yaml, is_full_tun, is_full_tun_document, read_marker,
+    route_rule_set_ids,
 )
 from backend.common.oxidns_common import apply_common_settings, read_common_settings
 from backend.common.oxidns_settings import normalize_oxidns_settings, OxidnsSettingsError
@@ -32,6 +37,16 @@ GATEWAY_CHANGES = [
     'OxiDNS 管理 API 未启用时自动开启（仅本机 127.0.0.1:9199，不设账号），供 DNS 面板、规则更新和热重载使用；已启用的监听与认证设置不变。',
     '只保存两份配置草稿；后续分别发布并检查核心，再显式应用主机转发。',
 ]
+ROUTER_SPLIT_CHANGES = [
+    'Mihomo 使用完整 TUN 接管主路由转来的连接，不启用 Linux 网关的选择性接管。',
+    '安装时开启并持久化 IPv4 转发、准备 TUN，与普通同机安装一致。',
+    'Mihomo 使用 rule / fake-IP 模式，DNS 监听 127.0.0.1:1053；保留现有规则顺序、策略组和节点。',
+    'OxiDNS 在 0.0.0.0:53 同时监听 UDP / TCP，优先 IPv4；直连使用所填 IP 地址 DoH / DoT。',
+    'OxiDNS 代理和备用上游均为 127.0.0.1:1053；未匹配域名使用已选择的默认 DNS。',
+    'OxiDNS 管理 API 未启用时自动开启（仅本机 127.0.0.1:9199，不设账号），供 DNS 面板、规则更新和热重载使用；已启用的监听与认证设置不变。',
+    '主路由只需转发 fake-IP 网段和所选「主路由转发」规则集；只保存两份配置草稿，之后依次发布并检查转发与 TUN。',
+]
+LEGACY_TAKEOVER_WARNING = '此配置空间使用旧版 Linux 网关接管；完成后可在「上游路由」迁移到完整 TUN。'
 
 
 class GatewayOnboardingError(ValueError):
@@ -283,9 +298,40 @@ def _proxy_prerequisites(config, document=None):
     return {'ready': ready, 'policies': policies, 'warnings': warnings, 'verified': True}
 
 
-def gateway_onboarding_state(config, revision, base_url=''):
+def onboarding_takeover(repository, profile_id, config):
+    """How the installer takes over connections: 'full_tun', 'legacy' or 'selective'."""
+    from backend.common.router_split import legacy_context, router_split_state
+    state, _ = read_marker(config)
+    if state == 'valid':
+        return 'full_tun'
+    if state == 'invalid':
+        raise GatewayOnboardingError(MESSAGES['ROUTER_SPLIT_INVALID'])
+    try:
+        enabled = gateway_settings(config)['enabled']
+    except LinuxGatewayError as exc:
+        raise GatewayOnboardingError(str(exc)) from exc
+    if enabled:
+        return 'legacy' if router_split_state(repository, profile_id, config)['mode'] == 'legacy' else 'selective'
+    context = legacy_context(repository, profile_id)
+    # Prepared before this server knew the marker but not yet saved here: the
+    # host has no gateway state, so the router split starts with the full TUN.
+    if context['session_goal'] == 'router' and not context['session_completed']:
+        return 'full_tun'
+    return 'selective'
+
+
+def _full_tun_view(config):
+    # The editor marks forwarded rule sets by the gateway selection; show the
+    # router split's own list instead, including entries deleted since.
+    view = deepcopy(config)
+    view.setdefault('mihomo', {})['linux_gateway'] = {'enabled': False, 'rule_set_ids': route_rule_set_ids(config)}
+    return view
+
+
+def gateway_onboarding_state(config, revision, base_url='', *, takeover='selective'):
     # The wizard presents usage guidance next to its fields and in its help panel.
-    state = gateway_editor_state(config, include_guidance=False)
+    state = gateway_editor_state(_full_tun_view(config) if takeover == 'full_tun' else config,
+                                 include_guidance=False)
     blockers = []
     conversion = False
     try:
@@ -335,7 +381,8 @@ def gateway_onboarding_state(config, revision, base_url=''):
                          'direct_rule_set_ids': direct, 'proxy_rule_set_ids': proxy, 'local_dns': local,
                          'default_forward': values.get('default_forward', 'forward_remote'),
                          'query_recorder': recorder},
-            'gateway_enabled': state['settings']['enabled'], 'ip_candidates': state['candidates'],
+            'gateway_enabled': state['settings']['enabled'] and takeover != 'full_tun',
+            'ip_candidates': state['candidates'], 'takeover': takeover,
             'domain_candidates': _domain_candidates(config, direct + proxy), 'fake_ip_range': state['fake_ip_range'],
             'oxidns_mode': settings.get('config_mode', 'template'), 'warnings': warnings, 'field_warnings': field_warnings,
             'blockers': blockers, 'can_prepare': not blockers, 'template_conversion_available': conversion,
@@ -428,12 +475,15 @@ def _enable_template_api(api, warnings):
     return api
 
 
-def prepare_gateway_onboarding(config, value, base_url=''):
+def prepare_gateway_onboarding(config, value, base_url='', *, takeover='selective'):
     """Return a proposed snapshot and reviewable diagnostics; never persist."""
     value = _input(value)
     candidate = deepcopy(config)
-    report = {'success': True, 'ready': False, 'blockers': [], 'warnings': [],
-              'changes': list(GATEWAY_CHANGES), 'validation': {}, 'template_conversion_available': False}
+    full_tun = takeover == 'full_tun'
+    report = {'success': True, 'ready': False, 'blockers': [],
+              'warnings': [LEGACY_TAKEOVER_WARNING] if takeover == 'legacy' else [],
+              'changes': list(ROUTER_SPLIT_CHANGES if full_tun else GATEWAY_CHANGES), 'validation': {},
+              'template_conversion_available': False}
     try:
         try:
             settings, current = _oxidns_values(config, base_url)
@@ -459,8 +509,16 @@ def prepare_gateway_onboarding(config, value, base_url=''):
                 raise GatewayOnboardingError('所选域名规则集不可用：' + (item['reason'] if item else '不存在或不属于当前配置空间'))
             if not item['available']:
                 report['warnings'].append(item['name'] + '：' + item['reason'])
-        candidate.setdefault('mihomo', {})['linux_gateway'] = validate_gateway_selection(candidate, {
-            'enabled': True, 'rule_set_ids': value['rule_set_ids']})
+        if full_tun:
+            ids = validate_rule_set_ids(candidate, value['rule_set_ids'], set(route_rule_set_ids(config)))
+            draft = candidate.setdefault('mihomo', {})
+            marker = read_marker(config)[1] or {'version': 1, 'takeover': 'full_tun', 'origin': 'setup'}
+            draft['linux_gateway'] = {'enabled': False, 'rule_set_ids': []}
+            draft[MARKER_KEY] = {**marker, 'route_rule_set_ids': ids}
+            draft['custom_config'] = full_tun_base_yaml(draft.get('custom_config', ''))
+        else:
+            candidate.setdefault('mihomo', {})['linux_gateway'] = validate_gateway_selection(candidate, {
+                'enabled': True, 'rule_set_ids': value['rule_set_ids']})
         _prepare_mihomo_dns(candidate)
         changes = {'listen': '0.0.0.0:53', 'tcp_enabled': True, 'prefer_ipv4': True,
                    'local_dns': value['local_dns'], 'remote_dns': DNS_TARGET, 'fallback_dns': DNS_TARGET,
@@ -518,7 +576,8 @@ def prepare_gateway_onboarding(config, value, base_url=''):
         selected = set(value['rule_set_ids']) | set(value['proxy_rule_set_ids'])
         for item in candidate.get('rule_configs', []):
             if item.get('id') in selected and item.get('policy') not in prerequisites['policies']:
-                report['warnings'].append(f"规则集「{item.get('name', item.get('id'))}」当前策略为 {item.get('policy', '未设置')}；DNS 或 IP 接管不会自动把此策略改为代理。")
+                report['warnings'].append(f"规则集「{item.get('name', item.get('id'))}」当前策略为 {item.get('policy', '未设置')}；"
+                                          f"DNS 或{'主路由转发' if full_tun else ' IP 接管'}不会自动把此策略改为代理。")
         report['warnings'].extend(direct_overlap_warnings(candidate))
         report['ready'] = True
     except (GatewayOnboardingError, LinuxGatewayError, OxidnsSettingsError, ValueError, yaml.YAMLError) as exc:
@@ -529,7 +588,16 @@ def prepare_gateway_onboarding(config, value, base_url=''):
 def assert_gateway_onboarding_ready(config, base_url='', *, local_addresses=()):
     """Reject unprepared saved drafts before an installation session is frozen."""
     state = gateway_editor_state(config)
-    if not state['settings']['enabled']:
+    if is_full_tun(config):
+        if gateway_settings(config)['enabled']:
+            raise GatewayOnboardingError('主路由分流不能同时启用 Linux 网关，请重新预览并保存')
+        try:
+            document = yaml.safe_load(config.get('mihomo', {}).get('custom_config') or '')
+        except (yaml.YAMLError, RecursionError):
+            document = None
+        if not is_full_tun_document(document):
+            raise GatewayOnboardingError('Mihomo 基础 YAML 缺少完整 TUN，请重新预览并保存')
+    elif not state['settings']['enabled']:
         raise GatewayOnboardingError('请先在安装向导预览并保存网关配置')
     try:
         settings, values = _oxidns_values(config, base_url)

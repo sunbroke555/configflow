@@ -609,3 +609,193 @@ def test_onboarding_state_reports_query_recorder():
     assert gateway_onboarding_state(config, 1)['settings']['query_recorder'] is False
     config['oxidns']['query_recorder']['enabled'] = True
     assert gateway_onboarding_state(config, 1)['settings']['query_recorder'] is True
+
+
+MARKER = {'version': 1, 'takeover': 'full_tun', 'origin': 'setup', 'route_rule_set_ids': ['ip']}
+
+
+def full_tun_snapshot():
+    config = snapshot()
+    config['mihomo'].update(router_split=deepcopy(MARKER), linux_gateway={'enabled': False, 'rule_set_ids': []})
+    return config
+
+
+def test_full_tun_state_shows_forwarded_rule_sets_without_the_gateway():
+    from backend.common.linux_gateway import gateway_editor_state
+    config = full_tun_snapshot()
+    config['mihomo']['router_split']['route_rule_set_ids'] = ['ip', 'deleted']
+    state = gateway_onboarding_state(config, 3, takeover='full_tun')
+    assert state['takeover'] == 'full_tun' and state['gateway_enabled'] is False
+    assert state['settings']['rule_set_ids'] == ['ip', 'deleted']
+    assert {item['id']: item['selected'] for item in state['ip_candidates']} == {'ip': True, 'deleted': True}
+    selective = gateway_onboarding_state(snapshot(), 3)
+    assert selective['takeover'] == 'selective'
+    assert selective['ip_candidates'] == gateway_editor_state(snapshot(), include_guidance=False)['candidates']
+
+
+def test_full_tun_preview_keeps_gateway_disabled_and_adds_the_tun():
+    from backend.common.gateway_onboarding import ROUTER_SPLIT_CHANGES
+    from backend.common.router_split import FULL_TUN
+    from backend.converters.mihomo import generate_mihomo_config
+    config = full_tun_snapshot()
+    config['mihomo']['router_split']['route_rule_set_ids'] = []
+    before = deepcopy(config)
+    candidate, report = prepare_gateway_onboarding(config, form(), takeover='full_tun')
+    assert config == before
+    assert report['ready'], report
+    assert report['changes'] == ROUTER_SPLIT_CHANGES
+    assert candidate['mihomo']['linux_gateway'] == {'enabled': False, 'rule_set_ids': []}
+    assert candidate['mihomo']['router_split'] == {**MARKER, 'route_rule_set_ids': ['ip']}
+    base = yaml.safe_load(candidate['mihomo']['custom_config'])
+    assert base['tun'] == FULL_TUN and base['log-level'] == 'warning'
+    assert base['dns']['nameserver']
+    generated = yaml.safe_load(generate_mihomo_config(candidate, preflight_providers=False))
+    assert 'x-configflow-linux-gateway' not in generated and generated['tun']['enable'] is True
+    assert candidate['oxidns']['listen'] == '0.0.0.0:53'
+    assert assert_gateway_onboarding_ready(candidate)['ready']
+    # Previewing the same choices again leaves the base YAML as it is.
+    again, _ = prepare_gateway_onboarding(candidate, form(), takeover='full_tun')
+    assert again['mihomo'] == candidate['mihomo']
+
+
+def test_full_tun_preview_starts_a_marker_and_only_accepts_ip_rule_sets():
+    config = snapshot()
+    candidate, report = prepare_gateway_onboarding(config, form(rule_set_ids=[]), takeover='full_tun')
+    assert report['ready'], report
+    assert candidate['mihomo']['router_split'] == {**MARKER, 'route_rule_set_ids': []}
+    _, report = prepare_gateway_onboarding(config, form(rule_set_ids=['direct']), takeover='full_tun')
+    assert not report['ready'] and 'IP-CIDR / Classical' in report['blockers'][0]
+    _, report = prepare_gateway_onboarding(config, form(rule_set_ids=['foreign']), takeover='full_tun')
+    assert not report['ready'] and '不存在' in report['blockers'][0]
+    # A rule set already forwarded stays even after it stopped being an IP set.
+    kept = full_tun_snapshot()
+    kept['mihomo']['router_split']['route_rule_set_ids'] = ['direct']
+    candidate, report = prepare_gateway_onboarding(kept, form(rule_set_ids=['direct']), takeover='full_tun')
+    assert report['ready'], report
+    assert candidate['mihomo']['router_split']['route_rule_set_ids'] == ['direct']
+
+
+def test_full_tun_policy_warning_names_router_forwarding():
+    config = full_tun_snapshot()
+    config['rule_configs'][0]['policy'] = 'DIRECT'
+    _, report = prepare_gateway_onboarding(config, form(), takeover='full_tun')
+    assert any('DNS 或主路由转发不会' in warning for warning in report['warnings']), report
+    _, report = prepare_gateway_onboarding({**snapshot(), 'rule_configs': config['rule_configs']}, form())
+    assert any('DNS 或 IP 接管不会' in warning for warning in report['warnings']), report
+
+
+def test_full_tun_readiness_requires_the_tun_and_no_gateway():
+    candidate, report = prepare_gateway_onboarding(full_tun_snapshot(), form(), takeover='full_tun')
+    assert report['ready'], report
+    assert assert_gateway_onboarding_ready(candidate)['ready']
+    missing = deepcopy(candidate)
+    missing['mihomo']['custom_config'] = 'mixed-port: 7890\ndns:\n  nameserver: [https://223.5.5.5/dns-query]\n'
+    with pytest.raises(GatewayOnboardingError, match='缺少完整 TUN'):
+        assert_gateway_onboarding_ready(missing)
+    enabled = deepcopy(candidate)
+    enabled['mihomo']['linux_gateway'] = {'enabled': True, 'rule_set_ids': []}
+    with pytest.raises(GatewayOnboardingError, match='不能同时启用 Linux 网关'):
+        assert_gateway_onboarding_ready(enabled)
+    # A selective profile still needs its enabled gateway.
+    with pytest.raises(GatewayOnboardingError, match='预览并保存网关配置'):
+        assert_gateway_onboarding_ready(snapshot())
+
+
+def test_selective_and_legacy_previews_are_unchanged():
+    from backend.common.gateway_onboarding import GATEWAY_CHANGES, LEGACY_TAKEOVER_WARNING
+    default = prepare_gateway_onboarding(snapshot(), form())
+    assert prepare_gateway_onboarding(snapshot(), form(), takeover='selective') == default
+    assert default[1]['changes'] == GATEWAY_CHANGES
+    candidate, report = prepare_gateway_onboarding(snapshot(), form(), takeover='legacy')
+    assert candidate == default[0]
+    assert report == {**default[1], 'warnings': [LEGACY_TAKEOVER_WARNING, *default[1]['warnings']]}
+
+
+def _session(repository, goal, completed=False):
+    from backend.common import setup_flow
+    setup_flow.write(repository, {'id': 'b' * 32, 'profile_id': 'home', 'name': 'Home', 'goal': goal,
+                                  'step': 3, 'max_step': 3, 'prepared': True, 'completed': completed})
+
+
+def _set_mihomo(repository, **fields):
+    mihomo = repository.get_profile('home')['mihomo']
+    mihomo.update(fields)
+    repository.save_profile('home', {'mihomo': mihomo})
+    return repository.get_profile('home')
+
+
+def test_onboarding_takeover_branches(onboarding_app):
+    from backend.common.gateway_onboarding import onboarding_takeover
+    _, repository = onboarding_app
+    assert onboarding_takeover(repository, 'home', repository.get_profile('home')) == 'selective'
+    _session(repository, 'router')
+    # Prepared by an earlier server and not saved here yet: nothing forwards on the host.
+    assert onboarding_takeover(repository, 'home', repository.get_profile('home')) == 'full_tun'
+    _session(repository, 'router', completed=True)
+    assert onboarding_takeover(repository, 'home', repository.get_profile('home')) == 'selective'
+    enabled = _set_mihomo(repository, linux_gateway={'enabled': True, 'rule_set_ids': []})
+    assert onboarding_takeover(repository, 'home', enabled) == 'legacy'
+    _session(repository, 'gateway')
+    assert onboarding_takeover(repository, 'home', enabled) == 'selective'
+    marked = _set_mihomo(repository, router_split=deepcopy(MARKER), linux_gateway={'enabled': False, 'rule_set_ids': []})
+    assert onboarding_takeover(repository, 'home', marked) == 'full_tun'
+    invalid = _set_mihomo(repository, router_split={**MARKER, 'version': True})
+    with pytest.raises(GatewayOnboardingError, match='router_split 无效'):
+        onboarding_takeover(repository, 'home', invalid)
+
+
+def test_full_tun_save_writes_marker_and_tun(onboarding_app):
+    from backend.common.router_split import is_full_tun_document
+    client, repository = onboarding_app
+    _session(repository, 'router')
+    state = client.get('/api/profiles/home/gateway-onboarding').get_json()
+    assert state['takeover'] == 'full_tun' and state['settings']['rule_set_ids'] == []
+    body = form(expected_config_revision=state['config_revision'])
+    preview = client.post('/api/profiles/home/gateway-onboarding/preview', json=body)
+    assert preview.status_code == 200 and preview.get_json()['ready'], preview.get_json()
+    assert preview.get_json()['changes'][0].startswith('Mihomo 使用完整 TUN')
+    saved = client.post('/api/profiles/home/gateway-onboarding', json=body)
+    assert saved.status_code == 200, saved.get_json()
+    mihomo = repository.get_profile('home')['mihomo']
+    assert mihomo['linux_gateway'] == {'enabled': False, 'rule_set_ids': []}
+    assert mihomo['router_split'] == MARKER
+    assert is_full_tun_document(yaml.safe_load(mihomo['custom_config']))
+    assert assert_gateway_onboarding_ready(repository.get_compat_config('home'))['ready']
+    assert client.get('/api/profiles/home/gateway-onboarding').get_json()['takeover'] == 'full_tun'
+    invalid = client.post('/api/profiles/home/gateway-onboarding', json=form(rule_set_ids=['direct']))
+    assert invalid.status_code == 400 and 'IP-CIDR' in invalid.get_json()['message']
+
+
+def test_full_tun_save_rejects_a_gateway_enabled_meanwhile(onboarding_app, monkeypatch):
+    client, repository = onboarding_app
+    _set_mihomo(repository, linux_gateway={'enabled': True, 'rule_set_ids': ['ip']})
+    monkeypatch.setattr('backend.routes.gateway_onboarding.onboarding_takeover', lambda *_: 'full_tun')
+    before = repository.export_all()
+    response = client.post('/api/profiles/home/gateway-onboarding', json=form())
+    assert response.status_code == 409, response.get_json()
+    assert repository.export_all() == before
+
+
+def test_save_rejects_a_marker_written_meanwhile(onboarding_app, monkeypatch):
+    client, repository = onboarding_app
+    from backend.routes import gateway_onboarding as route
+    takeover = route.onboarding_takeover
+
+    def decided_then_marked(*args):
+        result = takeover(*args)
+        _set_mihomo(repository, router_split=deepcopy(MARKER))
+        return result
+    monkeypatch.setattr(route, 'onboarding_takeover', decided_then_marked)
+    response = client.post('/api/profiles/home/gateway-onboarding', json=form())
+    assert response.status_code == 409, response.get_json()
+    assert repository.get_profile('home')['mihomo'].get('linux_gateway', {}).get('enabled') is not True
+
+
+def test_invalid_marker_blocks_the_installer(onboarding_app):
+    client, repository = onboarding_app
+    _set_mihomo(repository, router_split={'version': 1})
+    for response in (client.get('/api/profiles/home/gateway-onboarding'),
+                     client.post('/api/profiles/home/gateway-onboarding/preview', json=form()),
+                     client.post('/api/profiles/home/gateway-onboarding', json=form())):
+        assert response.status_code == 400
+        assert 'router_split 无效' in response.get_json()['message']
