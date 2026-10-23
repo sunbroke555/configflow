@@ -55,6 +55,15 @@ def test_single_service_mihomo_that_persists_forwarding_tells_the_environment_ch
     check_sh(tmp_path, script)
 
 
+def test_single_service_gateway_record_is_refused_before_the_environment_check():
+    # Otherwise the check would first say the installer persists forwarding.
+    for options in ({"manage_ipv4_forwarding": None}, {"manage_ipv4_forwarding": None, "install_core": True}):
+        script = single(**options)
+        refusal = script.index('if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then\n    fail "检测到 Linux 网关记录')
+        assert refusal < script.index(EXPORT) < script.index('cf_step "检查 IPv4 转发持久化"')
+        assert script.count("检测到 Linux 网关记录") == 1
+
+
 @pytest.mark.parametrize("service,options", [
     ("mihomo", {"manage_ipv4_forwarding": False}),
     ("mihomo", {"manage_ipv4_forwarding": False, "install_core": True}),

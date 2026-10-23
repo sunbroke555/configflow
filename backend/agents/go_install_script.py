@@ -62,11 +62,14 @@ def _standalone_forwarding_functions() -> str:
     return text
 
 
-# Runs before the previous Agent is stopped: a failure leaves the host unchanged.
-_STANDALONE_FORWARDING_PREPARE = '''cf_step "检查 IPv4 转发持久化"
-if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
+# Refused before the environment check, which would otherwise first describe
+# the forwarding this installer is about to decline to manage.
+_STANDALONE_GATEWAY_RECORD_REFUSAL = '''if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
     fail "检测到 Linux 网关记录，单独安装不会接管网关管理的 IPv4 转发；本次未改动 Agent。请在面板勾选「不开启 IPv4 转发」后重新生成安装命令；如这台设备是主路由的代理网关，可在「上游路由」页开启并持久化 IPv4 转发。"
 fi
+'''
+# Runs before the previous Agent is stopped: a failure leaves the host unchanged.
+_STANDALONE_FORWARDING_PREPARE = '''cf_step "检查 IPv4 转发持久化"
 STAGE_DIR=$(mktemp -d "$AGENT_DIR/.ipv4-forward.XXXXXX")
 prepare_ipv4_forwarding
 cf_step_done "IPv4 转发持久化检查通过"
@@ -207,7 +210,7 @@ def generate_go_agent_install_script(
         "ipv4_forwarding_notice": 'cf_ui "Mihomo 单独安装将开启并持久化本机 IPv4 转发（作为主路由的代理网关时需要）；'
                                   '不需要时请在面板勾选「不开启 IPv4 转发」后重新生成命令。"\n',
         "ipv4_forwarding_dependencies": " sysctl cmp ln",
-        "ipv4_forwarding_environment": INSTALLER_FORWARDING_ENVIRONMENT,
+        "ipv4_forwarding_environment": _STANDALONE_GATEWAY_RECORD_REFUSAL + INSTALLER_FORWARDING_ENVIRONMENT,
         "ipv4_forwarding_environment_end": INSTALLER_FORWARDING_ENVIRONMENT_END,
         "ipv4_forwarding_functions": ('fail() { echo "$*" >&2; exit 1; }\nSERVICE=mihomo\nSTAGE_DIR=""\n'
                                       + _standalone_forwarding_functions()),
