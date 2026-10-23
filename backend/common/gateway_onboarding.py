@@ -11,7 +11,8 @@ from urllib.parse import urlsplit
 import yaml
 
 from backend.common.linux_gateway import (
-    LinuxGatewayError, direct_overlap_warnings, gateway_editor_state, validate_gateway_selection,
+    LinuxGatewayError, direct_overlap_warnings, gateway_editor_state, gateway_settings,
+    validate_gateway_selection,
 )
 from backend.common.oxidns_common import apply_common_settings, read_common_settings
 from backend.common.oxidns_settings import normalize_oxidns_settings, OxidnsSettingsError
@@ -335,7 +336,8 @@ def gateway_onboarding_state(config, revision, base_url=''):
                          'direct_rule_set_ids': direct, 'proxy_rule_set_ids': proxy, 'local_dns': local,
                          'default_forward': values.get('default_forward', 'forward_remote'),
                          'query_recorder': recorder},
-            'gateway_enabled': state['settings']['enabled'], 'ip_candidates': state['candidates'],
+            'gateway_enabled': state['settings']['enabled'], 'scheme': state['settings'].get('scheme'),
+            'ip_candidates': state['candidates'],
             'domain_candidates': _domain_candidates(config, direct + proxy), 'fake_ip_range': state['fake_ip_range'],
             'oxidns_mode': settings.get('config_mode', 'template'), 'warnings': warnings, 'field_warnings': field_warnings,
             'blockers': blockers, 'can_prepare': not blockers, 'template_conversion_available': conversion,
@@ -459,8 +461,11 @@ def prepare_gateway_onboarding(config, value, base_url=''):
                 raise GatewayOnboardingError('所选域名规则集不可用：' + (item['reason'] if item else '不存在或不属于当前配置空间'))
             if not item['available']:
                 report['warnings'].append(item['name'] + '：' + item['reason'])
+        # The wizard's own selection is used as before; only keep the stored scheme.
+        scheme = gateway_settings(candidate).get('scheme')
+        rule_set_ids = value['rule_set_ids']
         candidate.setdefault('mihomo', {})['linux_gateway'] = validate_gateway_selection(candidate, {
-            'enabled': True, 'rule_set_ids': value['rule_set_ids']})
+            'enabled': True, 'rule_set_ids': rule_set_ids, **({'scheme': scheme} if scheme else {})})
         _prepare_mihomo_dns(candidate)
         changes = {'listen': '0.0.0.0:53', 'tcp_enabled': True, 'prefer_ipv4': True,
                    'local_dns': value['local_dns'], 'remote_dns': DNS_TARGET, 'fallback_dns': DNS_TARGET,
@@ -515,7 +520,7 @@ def prepare_gateway_onboarding(config, value, base_url=''):
         report['warnings'].extend(prerequisites['warnings'])
         if not prerequisites['ready']:
             raise GatewayOnboardingError('当前配置没有被启用规则引用的可用代理出口；请先添加节点或订阅、配置策略组，并为需要代理的规则选择该策略')
-        selected = set(value['rule_set_ids']) | set(value['proxy_rule_set_ids'])
+        selected = set(rule_set_ids) | set(value['proxy_rule_set_ids'])
         for item in candidate.get('rule_configs', []):
             if item.get('id') in selected and item.get('policy') not in prerequisites['policies']:
                 report['warnings'].append(f"规则集「{item.get('name', item.get('id'))}」当前策略为 {item.get('policy', '未设置')}；DNS 或 IP 接管不会自动把此策略改为代理。")

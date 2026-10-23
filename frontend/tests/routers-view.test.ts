@@ -9,7 +9,7 @@ import { routerApi, agentApi, ruleApi } from '@/api'
 import { setupApi } from '@/api/setup'
 import { NAV_GROUPS, scopeOfPath } from '@/navigation'
 import { activeProfileId } from '@/profileContext'
-import { notify } from '@/lib/feedback'
+import { confirmDanger, notify } from '@/lib/feedback'
 import { canReloadPage } from '@/lib/pageReloadGuard'
 
 vi.mock('@/api', () => ({
@@ -19,7 +19,7 @@ vi.mock('@/api', () => ({
   },
   ruleApi: { getAll: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn() }
 }))
-vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn() }, confirmDanger: vi.fn(), confirm: vi.fn(), confirmState: { resolve: null }, settleConfirm: vi.fn() }))
+vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }, confirmDanger: vi.fn(), confirm: vi.fn(), confirmState: { resolve: null }, settleConfirm: vi.fn() }))
 vi.mock('@/api/setup', () => ({ setupApi: { get: vi.fn(), saveRouterDraft: vi.fn() } }))
 
 const wrappers: VueWrapper[] = []
@@ -161,6 +161,54 @@ describe('routers view', () => {
     buttonInDocument('策略路由').click()
     await flushPromises()
     expect(ros.text()).not.toContain('静态路由 · 主路由')
+  })
+
+  it('reports Linux takeover sync after saving a router and stays quiet when nothing synced', async () => {
+    vi.mocked(routerApi.update).mockResolvedValueOnce({ data: { success: true, linux_gateway_sync: {
+      synced: true, changed: true, skipped: [{ id: 'cn', name: '国内域名', reason: '域名规则集不能用于 IP 接管' }]
+    } } } as any)
+    const wrapper = await mountRouter({ ...ROUTER, ip_rule_sets: [] })
+    await wrapper.find('button[aria-label="编辑"]').trigger('click'); await flushPromises()
+    buttonInDocument('保存').click(); await flushPromises()
+    expect(notify.success).toHaveBeenCalledWith('路由器已更新，已同步到 Linux 接管，发布 Mihomo 后生效')
+    expect(notify.warning).toHaveBeenCalledWith(expect.stringContaining('国内域名'))
+    expect(notify.warning).toHaveBeenCalledWith(expect.stringContaining('域名规则集不能用于 IP 接管'))
+
+    vi.mocked(notify.success).mockClear(); vi.mocked(notify.warning).mockClear()
+    vi.mocked(routerApi.update).mockResolvedValueOnce({ data: { success: true, linux_gateway_sync: { synced: false, changed: false, skipped: [] } } } as any)
+    await wrapper.find('button[aria-label="编辑"]').trigger('click'); await flushPromises()
+    buttonInDocument('保存').click(); await flushPromises()
+    expect(notify.success).toHaveBeenCalledWith('路由器已更新')
+    expect(notify.warning).not.toHaveBeenCalled()
+  })
+
+  it('warns when the Linux takeover sync failed, ahead of skipped rule sets', async () => {
+    vi.mocked(routerApi.update).mockResolvedValueOnce({ data: { success: true, linux_gateway_sync: {
+      synced: false, changed: false, skipped: [], error: 'Mihomo 基础 YAML 无法解析'
+    } } } as any)
+    const wrapper = await mountRouter({ ...ROUTER, ip_rule_sets: [] })
+    await wrapper.find('button[aria-label="编辑"]').trigger('click'); await flushPromises()
+    buttonInDocument('保存').click(); await flushPromises()
+    expect(notify.success).toHaveBeenCalledWith('路由器已更新')
+    expect(notify.warning).toHaveBeenCalledWith('Linux 接管未同步：Mihomo 基础 YAML 无法解析')
+
+    vi.mocked(notify.warning).mockClear()
+    vi.mocked(routerApi.update).mockResolvedValueOnce({ data: { success: true, linux_gateway_sync: {
+      synced: false, changed: false, error: 'x', skipped: [{ id: 'cn', name: '国内域名', reason: '域名规则集不能用于 IP 接管' }]
+    } } } as any)
+    await wrapper.find('button[aria-label="编辑"]').trigger('click'); await flushPromises()
+    buttonInDocument('保存').click(); await flushPromises()
+    expect(notify.warning).toHaveBeenCalledWith(expect.stringMatching(/^Linux 接管未同步：x；国内域名/))
+  })
+
+  it('reports Linux takeover sync after deleting a router', async () => {
+    vi.mocked(confirmDanger).mockResolvedValueOnce(true)
+    vi.mocked(routerApi.remove).mockResolvedValueOnce({ data: { success: true, linux_gateway_sync: { synced: true, changed: true, skipped: [] } } } as any)
+    const wrapper = await mountRouter()
+    await wrapper.find('button[aria-label="删除"]').trigger('click'); await flushPromises()
+    expect(routerApi.remove).toHaveBeenCalledWith('router_1')
+    expect(notify.success).toHaveBeenCalledWith('已删除，已同步到 Linux 接管，发布 Mihomo 后生效')
+    expect(notify.warning).not.toHaveBeenCalled()
   })
 
   it('selects policy rule sets directly without selecting any static rule sets', async () => {

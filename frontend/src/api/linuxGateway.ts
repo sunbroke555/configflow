@@ -1,6 +1,11 @@
 import api, { type PublishGuard } from '@/api'
 
-export interface LinuxGatewaySettings { enabled: boolean; rule_set_ids: string[] }
+export type LinuxGatewayScheme = 'router' | 'gateway'
+export interface LinuxGatewaySettings { enabled: boolean; rule_set_ids: string[]; scheme?: LinuxGatewayScheme | null }
+export interface LinuxGatewaySkippedRuleSet { id: string; name: string; reason: string }
+export interface LinuxGatewayRouterTakeover { rule_set_ids: string[]; skipped: LinuxGatewaySkippedRuleSet[] }
+/** 路由器保存后同步 IP 接管的结果；只有显式选择「主路由分流」的空间才会 synced。 */
+export interface LinuxGatewaySyncResult { synced: boolean; changed: boolean; skipped: LinuxGatewaySkippedRuleSet[]; error?: string }
 export interface LinuxGatewayCandidate {
   id: string; name: string; behavior: string; policy?: string; enabled: boolean
   library_enabled?: boolean; available: boolean; selected?: boolean; description?: string; reason?: string
@@ -9,6 +14,8 @@ export interface LinuxGatewayConfig {
   success?: boolean; settings: LinuxGatewaySettings; candidates: LinuxGatewayCandidate[]
   fake_ip_range: string; warnings: string[]; refresh_interval?: number; publish_guard?: PublishGuard
   config_revision: number; restore_point: LinuxGatewayRestorePoint | null
+  scheme?: LinuxGatewayScheme | null; effective_scheme?: LinuxGatewayScheme; scheme_inferred?: boolean
+  router_takeover?: LinuxGatewayRouterTakeover
 }
 export interface LinuxGatewayRestorePoint { id: string; created_at: string }
 export interface LinuxGatewayDraftGuard { expected_config_revision: number; preview_token: string }

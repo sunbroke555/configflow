@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import { Check, CircleCheck, Copy, FileDiff, LoaderCircle, Network, RefreshCw, RotateCcw } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
-import { linuxGatewayApi, type LinuxGatewayConfig, type LinuxGatewayDraftPreview, type LinuxGatewayRestorePoint, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewaySettings, type LinuxGatewayStatus } from '@/api/linuxGateway'
+import { linuxGatewayApi, type LinuxGatewayConfig, type LinuxGatewayDraftPreview, type LinuxGatewayRestorePoint, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewayRouterTakeover, type LinuxGatewayScheme, type LinuxGatewaySettings, type LinuxGatewayStatus } from '@/api/linuxGateway'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySettingsKey, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
-import { confirm, notify } from '@/lib/feedback'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import Segmented from '@/components/common/Segmented.vue'
 import { gatewayCopy } from '@/lib/gatewayCopy'
 import { optionHelp } from '@/lib/optionCopy'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
@@ -23,8 +25,12 @@ type Agent = { id: string; name: string; profile_id?: string; service_type: stri
 type Profile = { id: string; name: string; is_default?: boolean }
 const props = defineProps<{ open: boolean; profileId: string }>()
 const emit = defineEmits<{ 'update:open': [value: boolean] }>()
-const settings = reactive<LinuxGatewaySettings>({ enabled: false, rule_set_ids: [] })
-const savedSettings = ref<LinuxGatewaySettings>({ enabled: false, rule_set_ids: [] })
+const settings = reactive<LinuxGatewaySettings>({ enabled: false, rule_set_ids: [], scheme: null })
+const savedSettings = ref<LinuxGatewaySettings>({ enabled: false, rule_set_ids: [], scheme: null })
+// Saved scheme as the server sees it; when nothing is stored it is only inferred for display.
+const savedScheme = ref<LinuxGatewayScheme>('gateway')
+const schemeInferred = ref(false)
+const routerTakeover = ref<LinuxGatewayRouterTakeover>({ rule_set_ids: [], skipped: [] })
 const candidates = ref<LinuxGatewayCandidate[]>([])
 const fakeIPRange = ref('')
 const warnings = ref<string[]>([])
@@ -85,13 +91,41 @@ const rows = computed(() => {
   return all.filter(item => `${item.name} ${item.policy || ''}`.toLowerCase().includes(search.value.trim().toLowerCase()))
 })
 const selectedAvailable = computed(() => candidates.value.filter(item => item.available && settings.rule_set_ids.includes(item.id)).length)
+const scheme = computed<LinuxGatewayScheme>(() => settings.scheme || savedScheme.value)
+const routerScheme = computed(() => scheme.value === 'router')
+const schemeOptions: Array<{ value: LinuxGatewayScheme; label: string }> = [{ value: 'router', label: '主路由分流' }, { value: 'gateway', label: 'Linux 网关' }]
+// Only an explicitly chosen router scheme follows 上游路由; an inferred one still shows what is applied.
+const explicitRouter = computed(() => settings.scheme === 'router')
+// The applied network was set up under the saved scheme, whatever the draft Segmented shows.
+const liveRouterScheme = computed(() => savedScheme.value === 'router')
+const idsKey = (ids: string[]) => JSON.stringify([...new Set(ids)].sort())
+const ruleRows = (ids: string[]) => ids.map(id => {
+  const item = candidates.value.find(candidate => candidate.id === id)
+  return { id, name: item?.name || id, policy: item?.policy || '' }
+})
+const takeoverRows = computed(() => ruleRows(explicitRouter.value ? routerTakeover.value.rule_set_ids : settings.rule_set_ids))
+const takeoverNames = computed(() => ruleRows(routerTakeover.value.rule_set_ids).map(item => item.name).join('、'))
+const takeoverPending = computed(() => savedSettings.value.scheme === 'router'
+  && idsKey(savedSettings.value.rule_set_ids) !== idsKey(routerTakeover.value.rule_set_ids))
+const takeoverDrafted = computed(() => idsKey(settings.rule_set_ids) === idsKey(routerTakeover.value.rule_set_ids))
+// Pull the current 上游路由 sets into the draft; the usual preview and save follow.
+function syncTakeover() { settings.rule_set_ids = [...routerTakeover.value.rule_set_ids] }
+const draftSettings = (): LinuxGatewaySettings => ({
+  enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids], ...(settings.scheme ? { scheme: settings.scheme } : {}),
+})
 const capture = () => ({ session, hostSession, profileId: props.profileId, agentId: selectedAgentId.value })
 const current = (token: ReturnType<typeof capture>, host = false) => !disposed && props.open && token.session === session
   && token.profileId === props.profileId && (!host || (token.hostSession === hostSession && token.agentId === selectedAgentId.value))
 
 function acceptConfig(data: LinuxGatewayConfig) {
-  Object.assign(settings, { enabled: data.settings.enabled, rule_set_ids: [...data.settings.rule_set_ids] })
-  savedSettings.value = { enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids] }
+  const stored = data.settings.scheme || data.scheme || null
+  const takeover = data.router_takeover || { rule_set_ids: [], skipped: [] }
+  // Open with what is saved; a router scheme that lags 上游路由 shows 待同步 instead of starting dirty.
+  Object.assign(settings, { enabled: data.settings.enabled, rule_set_ids: [...data.settings.rule_set_ids], scheme: stored })
+  savedSettings.value = { enabled: data.settings.enabled, rule_set_ids: [...data.settings.rule_set_ids], scheme: stored }
+  savedScheme.value = stored || data.effective_scheme || 'gateway'
+  schemeInferred.value = !stored && !!data.scheme_inferred
+  routerTakeover.value = takeover
   configRevision.value = data.config_revision
   restorePoint.value = data.restore_point || null
   if (data.candidates) candidates.value = data.candidates
@@ -107,7 +141,7 @@ async function reviewDraft(action: 'save' | 'restore', token: ReturnType<typeof 
   const key = gatewaySettingsKey(settings)
   const { data } = action === 'restore'
     ? await linuxGatewayApi.previewRestore(token.profileId, configRevision.value)
-    : await linuxGatewayApi.previewDraft(token.profileId, { enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids] }, configRevision.value)
+    : await linuxGatewayApi.previewDraft(token.profileId, draftSettings(), configRevision.value)
   if (!current(token) || key !== gatewaySettingsKey(settings)) throw new Error('设置页面或试用内容已改变，请重新预览。')
   if (data.success === false) throw new Error((data as any).message || '配置预览失败')
   draftReview.value = data
@@ -156,15 +190,21 @@ async function load() {
 async function save(): Promise<PublishGuard | null> {
   if (busy.value || loadError.value) throw new Error('配置尚未就绪，请重试读取后再保存。')
   const token = capture()
-  const draft = { enabled: settings.enabled, rule_set_ids: [...settings.rule_set_ids] }
+  const draft = draftSettings()
   saving.value = true
   draftError.value = ''
   try {
     const review = draftReview.value?.action === 'save' && reviewKey.value === gatewaySettingsKey(draft)
       ? draftReview.value : await reviewDraft('save', token)
-    const approved = await confirm(`将保存当前网关设置，生成配置有 ${review.changes.length} 项变更。基础 YAML 保持原样；首次更改会保留试用前的 Mihomo、OxiDNS 草稿供恢复。`, {
-      title: '保存网关草稿？', confirmText: '确认保存',
-    })
+    // The warning describes the network that is live now, not the unsaved Segmented choice.
+    const disablingRouter = savedSettings.value.enabled && !draft.enabled && liveRouterScheme.value
+    const approved = disablingRouter
+      ? await confirmDanger(`停用后会中断主路由分流：主路由转来的流量将无法交给 Mihomo。生成配置有 ${review.changes.length} 项变更，保存后仍需发布 Mihomo。`, {
+        title: '停用 Linux 网关？', confirmText: '停用',
+      })
+      : await confirm(`将保存当前网关设置，生成配置有 ${review.changes.length} 项变更。基础 YAML 保持原样；首次更改会保留试用前的 Mihomo、OxiDNS 草稿供恢复。`, {
+        title: '保存网关草稿？', confirmText: '确认保存',
+      })
     if (!approved || !current(token) || gatewaySettingsKey(draft) !== gatewaySettingsKey(settings)) return null
     const { data } = await linuxGatewayApi.save(token.profileId, draft, {
       expected_config_revision: review.config_revision, preview_token: review.preview_token,
@@ -288,7 +328,7 @@ async function applyNetwork() {
     status.value = { ...status.value!, ...data }
     networkBaseline.value = gatewaySpecKey(network)
     preview.value = null
-    networkResult.value = data.message || '网关转发已应用。请先测试一台客户端。'
+    networkResult.value = data.message || (liveRouterScheme.value ? '网关转发已应用。' : '网关转发已应用。请先测试一台客户端。')
     notify.success('网关转发已应用')
   } catch (error) {
     if (current(token, true)) {
@@ -302,9 +342,14 @@ async function applyNetwork() {
 async function removeNetwork() {
   if (busy.value || !selectedAgentId.value || !online.value) return
   const token = capture()
-  const accepted = await confirm('请先恢复客户端原来的网关和 DNS；原先自动获取的设备恢复自动获取。此操作会移除 ConfigFlow 管理的转发规则，并恢复它接管的系统参数。', {
-    title: `撤销「${selectedAgent.value?.name}」的网关转发？`, confirmText: '撤销转发', cancelText: '取消',
-  })
+  const title = `撤销「${selectedAgent.value?.name}」的网关转发？`
+  const accepted = liveRouterScheme.value
+    ? await confirmDanger('撤销后会中断主路由分流，主路由转来的流量将无法经过 Linux。请先把主路由的静态路由和 DNS 改回原设置。此操作会移除 ConfigFlow 管理的转发规则，并恢复它接管的系统参数。', {
+      title, confirmText: '撤销转发', cancelText: '取消',
+    })
+    : await confirm('请先恢复客户端原来的网关和 DNS；原先自动获取的设备恢复自动获取。此操作会移除 ConfigFlow 管理的转发规则，并恢复它接管的系统参数。', {
+      title, confirmText: '撤销转发', cancelText: '取消',
+    })
   if (!accepted || !current(token, true) || busy.value) return
   networkAction.value = 'remove'
   networkError.value = ''
@@ -379,13 +424,31 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
           </div>
 
           <section aria-labelledby="gateway-rules" class="space-y-3">
-            <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 网关" :text="optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用网关转发；IPv6 需另行处理。')" /></div>
+            <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 网关" :text="optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', routerScheme ? '主路由把分流流量转给 Linux，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用网关转发；IPv6 需另行处理。' : '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用网关转发；IPv6 需另行处理。')" /></div>
+            <div class="flex min-h-11 flex-wrap items-center justify-between gap-x-2 border-b border-border pb-3">
+              <div class="flex items-center gap-1 text-sm font-medium"><span>使用方式</span><span class="cf-compact-help"><FieldHelp label="使用方式" :text="optionHelp('主路由把流量转给 Linux 时选主路由分流；客户端以 Linux 为网关时选 Linux 网关。', '主路由分流的 IP 接管跟随「上游路由」；Linux 网关在本页勾选，客户端网关和 DNS 改为 Linux。')" /></span><template v-if="!settings.scheme && schemeInferred"><span class="ml-1 text-xs font-normal text-muted-foreground">已自动判断</span><span class="cf-compact-help"><FieldHelp label="已自动判断" :text="optionHelp('尚未保存使用方式时自动判断。', '有路由器以本空间 Mihomo 为代理网关时判为主路由分流，否则为 Linux 网关；点选并保存后固定。')" /></span></template></div>
+              <Segmented :model-value="scheme" :options="schemeOptions" label="Linux 网关使用方式" :disabled="busy" class="shrink-0 self-start sm:self-center" @update:model-value="settings.scheme = $event" />
+            </div>
             <label for="linux-gateway-enabled" class="flex min-h-11 cursor-pointer items-center justify-between gap-4 border-b border-border pb-3">
               <span><span class="block text-sm font-medium">启用 Linux 网关</span><span class="mt-1 block text-xs text-muted-foreground">切换只在本页试用。预览并保存后才更新草稿，网关转发需单独应用。</span></span>
               <Switch id="linux-gateway-enabled" v-model="settings.enabled" :disabled="busy" />
             </label>
-            <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span>先恢复客户端并撤销网关转发，再保存并发布已关闭模式的 Mihomo 配置。</p>
-            <div class="space-y-2">
+            <p v-if="routerScheme" class="m-0 text-xs leading-relaxed text-muted-foreground">此空间使用主路由分流，Linux 转发是它的一部分，平时无需在这里修改。</p>
+            <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span><template v-if="liveRouterScheme">会中断主路由分流。先把主路由的静态路由和 DNS 改回原设置并撤销网关转发，再保存并发布 Mihomo。</template><template v-else>先恢复客户端并撤销网关转发，再保存并发布已关闭模式的 Mihomo 配置。</template></p>
+            <div v-if="routerScheme" class="space-y-2">
+              <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">IP 接管</h3></div><span class="text-xs text-muted-foreground">{{ explicitRouter ? '跟随' : '当前接管' }} <span class="num">{{ takeoverRows.length }}</span> 个规则集</span></div>
+              <p v-if="!explicitRouter" class="m-0 text-xs leading-relaxed text-muted-foreground">当前接管来自本页已保存的规则集；选择「主路由分流」并保存后改为跟随上游路由。<RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/routers">查看上游路由</RouterLink></p>
+              <p v-if="explicitRouter" class="m-0 text-xs leading-relaxed text-muted-foreground">由「上游路由」的 IP 规则集决定。<RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/routers">到上游路由修改</RouterLink></p>
+              <p v-if="fakeIPRange" class="m-0 text-xs text-muted-foreground">自动接管的临时地址范围（fake-IP）：<span class="font-mono">{{ fakeIPRange }}</span></p>
+              <p v-if="explicitRouter && takeoverPending" class="m-0 flex flex-wrap items-center gap-x-2 text-xs leading-relaxed" role="status"><span><span class="font-medium text-warning-accent">待同步：</span>上游路由的 IP 规则集已变化，同步后预览并保存即可生效。</span><Button v-if="!takeoverDrafted" variant="ghost" size="sm" class="min-h-11 text-xs" :disabled="busy" @click="syncTakeover">同步到接管</Button></p>
+              <ul class="m-0 max-h-64 list-none overflow-y-auto rounded-md border border-border p-0" :aria-label="explicitRouter ? '跟随上游路由的 IP 规则集' : '当前接管的 IP 规则集'">
+                <li v-for="item in takeoverRows" :key="item.id" class="flex min-h-11 flex-col justify-center border-b border-border px-3 py-2.5 text-xs leading-relaxed last:border-b-0"><span class="block text-sm font-medium">{{ item.name }}</span><span v-if="item.policy" class="block text-muted-foreground">出口策略：{{ item.policy }}</span><span v-if="item.policy.toUpperCase() === 'DIRECT'" class="block text-warning-accent">当前策略为 DIRECT，接管后仍由 Mihomo 直连。</span></li>
+                <li v-for="item in explicitRouter ? routerTakeover.skipped : []" :key="`skipped-${item.id}`" class="flex min-h-11 flex-col justify-center border-b border-border px-3 py-2.5 text-xs leading-relaxed last:border-b-0"><span class="block text-sm font-medium text-muted-foreground">{{ item.name || item.id }}</span><span class="block text-warning-accent">未接管：{{ item.reason }}</span></li>
+                <li v-if="!takeoverRows.length && (!explicitRouter || !routerTakeover.skipped.length)" class="px-3 py-4 text-xs leading-relaxed text-muted-foreground">{{ explicitRouter ? '上游路由还没有 IP 规则集，只接管 fake-IP。' : '当前未选 IP 规则集，只接管 fake-IP。' }}</li>
+              </ul>
+              <p v-if="!explicitRouter" class="m-0 text-xs leading-relaxed text-muted-foreground">点选上方「主路由分流」并保存后改为：{{ takeoverNames || '只接管 fake-IP' }}</p>
+            </div>
+            <div v-else class="space-y-2">
               <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">IP 接管（可选）</h3><span class="cf-compact-help"><FieldHelp label="IP 接管" :text="gatewayCopy.applications.help" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
               <p class="m-0 text-xs leading-relaxed text-muted-foreground">{{ gatewayCopy.applications.hint }}</p>
               <p v-if="fakeIPRange" class="m-0 text-xs text-muted-foreground">自动接管的临时地址范围（fake-IP）：<span class="font-mono">{{ fakeIPRange }}</span></p>
@@ -474,10 +537,10 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                 </div>
               </details>
             </div>
-            <p class="m-0 text-xs leading-relaxed">应用成功后再修改客户端网关和 DNS。先记录原设置，以便恢复。</p>
+            <p v-if="!liveRouterScheme" class="m-0 text-xs leading-relaxed">应用成功后再修改客户端网关和 DNS。先记录原设置，以便恢复。</p>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3">
               <Button variant="outline" class="min-h-11" :disabled="busy || !online || !shell || !managedNetwork" @click="removeNetwork"><LoaderCircle v-if="networkAction === 'remove'" class="size-4 animate-spin" /><RotateCcw v-else class="size-3.5" />撤销网关转发</Button>
-              <p v-if="managedNetwork" class="m-0 text-xs leading-relaxed text-muted-foreground">恢复前，先恢复客户端原来的网关与 DNS。</p>
+              <p v-if="managedNetwork" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ liveRouterScheme ? '撤销前，先把主路由的静态路由和 DNS 改回原设置。' : '恢复前，先恢复客户端原来的网关与 DNS。' }}</p>
             </div>
           </section>
 
@@ -486,13 +549,14 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
               <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">网关说明与安装要求</summary>
               <div class="space-y-3 pt-1 pb-3 leading-relaxed text-muted-foreground">
                 <ul class="m-0 list-disc space-y-2 pl-5">
-                  <li>仅支持 Linux + nftables 的 IPv4 网关。客户端需停用 IPv6，或另行配置 IPv6 路由；所有流量仍经过 Linux。</li>
+                  <li v-if="routerScheme">仅支持 Linux + nftables 的 IPv4 网关。主路由转来的流量经过 Linux；IPv6 需另行配置路由。</li>
+                  <li v-else>仅支持 Linux + nftables 的 IPv4 网关。客户端需停用 IPv6，或另行配置 IPv6 路由；所有流量仍经过 Linux。</li>
                   <li>fake-IP 和所选真实 IP 进入 Mihomo；其余流量由 Linux 直连转发。Mihomo 使用 rule 模式，实际出口仍由规则顺序与策略组当前选择决定。</li>
                   <li>接管网段须为 /8 至 /32，拒绝 /0、/1 等过大范围。不要把全网或普通直连规则一并选入。</li>
                   <li>规则按 ID 关联，改名保留选择；内容和停用状态约每 {{ Math.ceil(refreshInterval / 60) }} 分钟刷新。新增选择需重新保存并发布。</li>
                   <li>在底部保存并发布到目标 Mihomo；显示「待激活」时还需应用并启动。网关配置会自动生成 TUN 设置，保留现有节点与策略。</li>
                 </ul>
-                <p class="m-0">首次使用可在「首次使用向导」选择「Linux 网关」，会新建配置空间；要沿用当前配置空间，到「Agent → 生成安装脚本」选择「Linux 网关」。两种方式都会安装双核心和 Agent，并完成转发设置；已有标准安装会先校验再接入。普通模式也可接入已有核心，或勾选安装核心。</p>
+                <p v-if="!routerScheme" class="m-0">首次使用可在「首次使用向导」选择「Linux 网关」，会新建配置空间；要沿用当前配置空间，到「Agent → 生成安装脚本」选择「Linux 网关」。两种方式都会安装双核心和 Agent，并完成转发设置；已有标准安装会先校验再接入。普通模式也可接入已有核心，或勾选安装核心。</p>
                 <p class="m-0">需要 Mihomo 稳定版 v1.19.0+、Agent 1.8.25-go+、root、TUN 和 nftables，不支持通过 Docker 修改宿主机网络。ConfigFlow 服务地址需能被 Linux 访问；启用登录时需订阅令牌，供规则刷新。</p>
               </div>
             </details>
@@ -509,7 +573,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                 <p class="m-0">Mihomo 的 DNS 上游不能再指回 OxiDNS；代理域名也不能被 fake-IP 过滤规则改为真实 IP。请确认对应策略组已选择可用代理节点。</p>
               </div>
             </details>
-            <details>
+            <details v-if="!liveRouterScheme">
               <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">客户端接入与验证</summary>
               <ol class="mt-1 mb-3 list-decimal space-y-2 pl-5 leading-relaxed text-muted-foreground">
                 <li>先记录一台测试设备原来的网关、DNS、IPv6 和安全 DNS 设置。将网关和 DNS 都设为 <code class="text-foreground">{{ network.address || 'Linux 的局域网 IP' }}</code>；Linux 自身仍以主路由 <code>{{ network.upstream_gateway || '的 IP' }}</code> 为默认网关。</li>
@@ -520,7 +584,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             </details>
             <details>
               <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">停用和恢复步骤</summary>
-              <div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p class="m-0">先恢复客户端原网关和 DNS（原先自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS；再用上方按钮撤销网关转发。</p><p class="m-0">最后关闭 Linux 网关开关，保存并发布 Mihomo。撤销只处理 ConfigFlow 管理的网络参数，不卸载核心；撤销转发不会单独关闭 Mihomo TUN。</p><p v-if="!managedNetwork" class="m-0">当前设备没有已应用或未完成的 ConfigFlow 网关转发，或尚未完成状态检测。</p></div>
+              <div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="liveRouterScheme" class="m-0">先把主路由的静态路由和 DNS 改回原设置，再用上方按钮撤销网关转发。</p><p v-else class="m-0">先恢复客户端原网关和 DNS（原先自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS；再用上方按钮撤销网关转发。</p><p class="m-0">最后关闭 Linux 网关开关，保存并发布 Mihomo。撤销只处理 ConfigFlow 管理的网络参数，不卸载核心；撤销转发不会单独关闭 Mihomo TUN。</p><p v-if="!managedNetwork" class="m-0">当前设备没有已应用或未完成的 ConfigFlow 网关转发，或尚未完成状态检测。</p></div>
             </details>
           </div>
         </template>

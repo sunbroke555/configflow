@@ -1,4 +1,4 @@
-import type { LinuxGatewaySettings, LinuxGatewaySpec } from '@/api/linuxGateway'
+import type { LinuxGatewaySettings, LinuxGatewaySpec, LinuxGatewaySyncResult } from '@/api/linuxGateway'
 
 export const emptyGatewaySpec = (): LinuxGatewaySpec => ({ interface: '', address: '', lan_cidr: '', upstream_gateway: '' })
 export const cleanGatewaySpec = (spec: LinuxGatewaySpec): LinuxGatewaySpec => ({
@@ -6,7 +6,7 @@ export const cleanGatewaySpec = (spec: LinuxGatewaySpec): LinuxGatewaySpec => ({
   lan_cidr: spec.lan_cidr.trim(), upstream_gateway: spec.upstream_gateway.trim(),
 })
 export const gatewaySettingsKey = (settings: LinuxGatewaySettings) => JSON.stringify({
-  enabled: settings.enabled, rule_set_ids: [...new Set(settings.rule_set_ids)].sort(),
+  enabled: settings.enabled, rule_set_ids: [...new Set(settings.rule_set_ids)].sort(), scheme: settings.scheme || null,
 })
 export const gatewaySpecKey = (spec: LinuxGatewaySpec) => JSON.stringify(cleanGatewaySpec(spec))
 
@@ -50,4 +50,17 @@ export function gatewaySpecErrors(draft: LinuxGatewaySpec): string[] {
 export function gatewayErrorMessage(error: any, hostOperation = false): string {
   if (hostOperation && error?.response?.status === 404) return '此 Agent 尚不支持 Linux 网关管理，请在 Agent 页面升级后重试。'
   return error?.response?.data?.message || error?.message || '请求未完成，请稍后重试。'
+}
+
+/** 路由器保存后的 Linux 接管同步反馈：成功提示的补充文字，以及被跳过规则集的简短警告。 */
+export function gatewaySyncFeedback(sync?: LinuxGatewaySyncResult | null) {
+  const suffix = sync?.changed ? '，已同步到 Linux 接管，发布 Mihomo 后生效' : ''
+  const skipped = sync?.skipped || []
+  const names = skipped.slice(0, 3).map(item => item.name || item.id).join('、')
+  // 同步失败放在前面，避免被跳过列表挡住。
+  const warning = [
+    sync?.error ? `Linux 接管未同步：${sync.error}` : '',
+    skipped.length ? `${names}${skipped.length > 3 ? ` 等 ${skipped.length} 个规则集` : ''}未同步到 Linux 接管：${skipped[0].reason || '不可用于 IP 接管'}${skipped.length > 1 ? '等' : ''}` : '',
+  ].filter(Boolean).join('；')
+  return { suffix, warning }
 }

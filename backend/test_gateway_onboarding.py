@@ -89,6 +89,18 @@ def test_preview_generates_both_configs_preserves_sources_and_unrelated_settings
     assert assert_gateway_onboarding_ready(candidate)['ready']
 
 
+@pytest.mark.parametrize('scheme', ['router', 'gateway'])
+def test_onboarding_keeps_the_stored_scheme_and_its_own_selection(scheme):
+    config = snapshot()
+    config['mihomo']['linux_gateway'] = {'enabled': False, 'rule_set_ids': [], 'scheme': scheme}
+    assert gateway_onboarding_state(config, 1)['scheme'] == scheme
+    candidate, report = prepare_gateway_onboarding(config, form())
+    assert report['ready'], report
+    # The install wizard behaves as before for both schemes; the scheme survives.
+    assert candidate['mihomo']['linux_gateway'] == {'enabled': True, 'rule_set_ids': ['ip'], 'scheme': scheme}
+    assert gateway_onboarding_state(snapshot(), 1)['scheme'] is None
+
+
 @pytest.mark.parametrize('existing_fallback', ['', 'https://1.1.1.1/dns-query'])
 def test_existing_native_configuration_updates_safely_without_template_replacement(existing_fallback):
     config = snapshot()

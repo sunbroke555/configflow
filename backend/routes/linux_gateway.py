@@ -12,6 +12,7 @@ from backend.common.linux_gateway_draft import (
     check_preview, check_revision, prepare_restore, prepare_settings,
     preview_draft, remember_original, restore_summary,
 )
+from backend.common.linux_gateway_scheme import router_takeover, scheme_state
 
 
 def _response(value):
@@ -30,8 +31,11 @@ def _response(value):
 @custom_config_bp.route('/linux-gateway/restore', methods=['POST'])
 @require_auth
 def linux_gateway_settings(profile_id=None):
+    from backend.common.agent_manager import get_agent_manager
     repository = get_repository()
     profile_id = resolve_profile_id(profile_id)
+    agents = get_agent_manager().get_all_agents()
+    default_profile = repository.default_profile_id()
     try:
         guard = None
         config, revision = repository.get_publish_snapshot(profile_id)
@@ -41,8 +45,13 @@ def linux_gateway_settings(profile_id=None):
                 raise LinuxGatewayError('Linux 网关设置必须是 JSON 对象')
             restore = '/linux-gateway/restore' in request.path
             action = 'restore' if restore else 'save'
+            def takeover(config):
+                return router_takeover(config, agents, profile_id, default_profile)
+
             def prepare(current):
-                return prepare_restore(current) if restore else prepare_settings(current, value.get('settings', value))
+                if restore:
+                    return prepare_restore(current, takeover)
+                return prepare_settings(current, value.get('settings', value), takeover)
 
             if request.path.endswith('/preview'):
                 check_revision(value.get('expected_config_revision'), revision)
@@ -73,6 +82,7 @@ def linux_gateway_settings(profile_id=None):
                      'expected_config_revision': revision}
         # Static usage guidance is presented in the editor's expandable help.
         result = gateway_editor_state(config, include_guidance=False)
+        result.update(scheme_state(config, agents, profile_id, default_profile))
         result.update(config_revision=revision, restore_point=restore_summary(config))
         if guard is not None:
             result.update(success=True, publish_guard=guard)

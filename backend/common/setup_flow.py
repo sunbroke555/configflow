@@ -324,7 +324,10 @@ def prepare(repository, session, body, base_url):
                     if item['id'] in proxy and item['available']]
         fields['mihomo']['linux_gateway'] = {**fields['mihomo'].get('linux_gateway', {'enabled': False}),
                                              'rule_set_ids': takeover}
-        candidate['mihomo'] = deepcopy(fields['mihomo'])
+    # The chosen goal is how this space uses its gateway; router saves only
+    # mirror their IP rule sets into it once this is explicitly 'router'.
+    fields['mihomo']['linux_gateway'] = {**(fields['mihomo'].get('linux_gateway') or {}), 'scheme': session['goal']}
+    candidate['mihomo'] = deepcopy(fields['mihomo'])
     stored = repository.get_profile(session['profile_id'])
     unchanged = all(stored.get(key) == value for key, value in fields.items())
     edited = (stored['_revision'] != session['profile_revision'] if 'owned_digest' not in session

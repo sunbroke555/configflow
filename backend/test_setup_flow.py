@@ -241,8 +241,10 @@ def test_early_router_settings_are_private_and_do_not_invalidate_installation(in
     assert 'draft-secret' not in path.read_text()
 
 
-def test_router_draft_attaches_only_after_healthy_installation_and_is_idempotent(installed):
+def test_router_draft_attaches_only_after_healthy_installation_and_is_idempotent(installed, monkeypatch):
     client, repository, profile_id, _, managed = installed
+    monkeypatch.setattr('backend.common.linux_gateway_scheme.sync_router_takeover',
+                        lambda *_: pytest.fail('wizard router links must not sync gateway takeover'))
     response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT})
     router_id = response.json['router_draft']['id']
     managed['healthy'] = False
@@ -250,6 +252,8 @@ def test_router_draft_attaches_only_after_healthy_installation_and_is_idempotent
     assert repository.get_profile(profile_id)['routers']['items'] == []
     assert 'router_draft' in client.get(f'/api/setup/{SESSION}').json
     managed['healthy'] = True
+    mihomo = repository.get_profile(profile_id)['mihomo']
+    assert mihomo['linux_gateway'] == {'scheme': 'router'}
     for _ in range(2):
         response = client.post(f'/api/setup/{SESSION}/check', json={})
         assert response.status_code == 200, response.json
@@ -261,6 +265,8 @@ def test_router_draft_attaches_only_after_healthy_installation_and_is_idempotent
     assert routers[0]['proxy_gateway_agent_id'] == 'mihomo'
     assert routers[0]['dns_agent_id'] == 'oxidns'
     assert routers[0]['password'] == 'draft-secret'
+    # Linking the router keeps the published core intact: no takeover sync.
+    assert repository.get_profile(profile_id)['mihomo'] == mihomo
     assert client.post(f'/api/setup/{SESSION}/router-draft', json={'router': ROUTER_DRAFT}).status_code == 409
 
 
@@ -642,11 +648,13 @@ def test_gateway_takes_over_only_ip_app_rule_sets(setup_api):
     selected = snapshot['mihomo']['linux_gateway']['rule_set_ids']
     assert sorted(names[identity] for identity in selected) == ['GoogleFCM', 'Telegram']
     assert snapshot['mihomo']['linux_gateway']['enabled'] is False
+    assert snapshot['mihomo']['linux_gateway']['scheme'] == 'gateway'
     # The embedded installer carries the selection into the enabled gateway.
     state = gateway_onboarding_state(snapshot, revision)
     assert state['settings']['rule_set_ids'] == selected
     candidate, report = prepare_gateway_onboarding(snapshot, state['settings'], base_url='https://config.test')
     assert report['ready'], report
+    assert candidate['mihomo']['linux_gateway'] == {'enabled': True, 'rule_set_ids': selected, 'scheme': 'gateway'}
     mihomo = yaml.safe_load(generate_mihomo_config(candidate, base_url='https://config.test'))
     assert len(mihomo['tun']['route-address-set']) == 3
     # Without either app rule set among the proxy rules nothing is taken over.
@@ -664,7 +672,36 @@ def test_router_setup_leaves_ip_takeover_to_the_router_settings(setup_api):
     selections = {'direct': [], 'proxy': ['builtin:telegram', 'library:chat']}
     response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
     assert response.status_code == 200, response.json
-    assert 'linux_gateway' not in repository.get_profile(session['profile_id'])['mihomo']
+    # Only the scheme is recorded; IP takeover stays with the router settings.
+    assert repository.get_profile(session['profile_id'])['mihomo']['linux_gateway'] == {'scheme': 'router'}
+
+
+def test_router_takeover_sync_does_not_block_an_open_router_wizard(setup_api):
+    client, repository = setup_api
+    session = start(client)
+    profile_id = session['profile_id']
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(IP_RULE)]))
+    repository.update_system_transaction(lambda system: system.update(agents=[
+        {'id': 'mihomo', 'name': 'mihomo', 'host': '192.0.2.10', 'service_type': 'mihomo', 'profile_id': profile_id}]))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    selections = {'direct': [], 'proxy': ['library:chat']}
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections}).status_code == 200
+    rule_id = next(rule['id'] for rule in repository.get_profile(profile_id)['rule_configs']
+                   if rule.get('library_rule_id') == 'chat')
+    headers = {'X-ConfigFlow-Profile': profile_id}
+    created = client.post('/api/routers', headers=headers, json={**ROUTER_DRAFT, 'proxy_gateway_agent_id': 'mihomo'})
+    assert created.status_code == 200, created.json
+    # Editing the router on 上游路由 mirrors its IP sets into the takeover.
+    path = '/api/routers/' + created.json['router']['id']
+    updated = client.put(path, headers=headers, json={**ROUTER_DRAFT, 'proxy_gateway_agent_id': 'mihomo',
+                                                      'ip_rule_sets': [rule_id]})
+    assert updated.status_code == 200, updated.json
+    assert updated.json['linux_gateway_sync']['changed'] is True
+    assert repository.get_profile(profile_id)['mihomo']['linux_gateway']['rule_set_ids'] == [rule_id]
+    # That automatic mirror is not an edit made on another page.
+    selections = {'direct': ['library:chat'], 'proxy': []}
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+    assert response.status_code == 200, response.json
 
 
 def test_template_groups_follow_wizard_choices_and_drop_empty_regions():

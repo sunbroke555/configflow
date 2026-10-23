@@ -17,6 +17,7 @@ from backend.common.config_repository import ProfileInUse
 from backend.common.linux_gateway import (
     LinuxGatewayError, direct_overlap_warnings, gateway_settings, validate_gateway_selection,
 )
+from backend.common.linux_gateway_scheme import SCHEME_LABELS
 from backend.converters.mihomo import generate_mihomo_config
 
 RESTORE_KEY = 'linux_gateway_restore_point'
@@ -50,24 +51,48 @@ def restore_summary(config):
     return {'id': point['id'], 'created_at': point['created_at']} if point else None
 
 
-def prepare_settings(config, value):
+def prepare_settings(config, value, takeover=None):
+    """Validate dialog settings; ``takeover(config)`` gives router-scheme IDs."""
+    if isinstance(value, dict):
+        value = dict(value)
+        if value.get('scheme') is None:
+            # Older clients omit the scheme; never let a save clear it.
+            value.pop('scheme', None)
+            stored = gateway_settings(config).get('scheme')
+            if stored:
+                value['scheme'] = stored
+        if value.get('scheme') == 'router' and takeover is not None:
+            # Router scheme mirrors 上游路由; a client list cannot diverge.
+            value['rule_set_ids'] = takeover(config)['rule_set_ids']
     candidate = deepcopy(config)
     candidate.setdefault('mihomo', {})['linux_gateway'] = validate_gateway_selection(config, value)
     return candidate
 
 
-def prepare_restore(config):
+def _without_scheme(config):
+    return {key: value for key, value in gateway_settings(config).items() if key != 'scheme'}
+
+
+def prepare_restore(config, takeover=None):
+    """Bring back the trial snapshot; ``takeover(config)`` gives router-scheme IDs."""
     point = restore_point(config)
     if not point:
         raise LinuxGatewayError('没有可用的试用前草稿快照')
     candidate = deepcopy(config)
     for key in ('mihomo', 'oxidns'):
         candidate[key] = deepcopy(point[key])
+    # Restore the snapshot as a whole, scheme included: switching the scheme is
+    # itself a trial that a restore must be able to undo. A restored router
+    # scheme follows the current 上游路由 IP rule sets.
+    restored = gateway_settings(candidate)
+    if restored.get('scheme') == 'router' and takeover is not None:
+        candidate['mihomo']['linux_gateway'] = {**restored, 'rule_set_ids': takeover(config)['rule_set_ids']}
     return candidate
 
 
 def remember_original(config, candidate):
-    if gateway_settings(config) == gateway_settings(candidate):
+    # Choosing a scheme alone changes no takeover, so it is not a gateway trial.
+    if _without_scheme(config) == _without_scheme(candidate):
         return
     if RESTORE_KEY in config.get('mihomo', {}):
         if not restore_point(config):
@@ -141,6 +166,11 @@ def preview_draft(config, candidate, revision, action, base_url=''):
         warnings.append('当前 Mihomo 草稿无法生成；保存目标设置后可修复此问题。')
         changes = [{'path': 'Mihomo', 'before': '当前配置无法生成', 'after': '目标配置生成通过'}]
     warnings.extend(direct_overlap_warnings(candidate))
+    # The scheme never reaches Mihomo; show it so the diff is not empty.
+    left, right = (gateway_settings(item).get('scheme') for item in (config, candidate))
+    if left != right:
+        changes.append({'path': 'Linux 网关.使用方式', 'before': SCHEME_LABELS.get(left, '未设置'),
+                        'after': SCHEME_LABELS.get(right, '未设置')})
     if action == 'restore':
         # Also reveal edits made since the snapshot, including native DNS
         # changes, without rendering/downloading any OxiDNS rule assets.

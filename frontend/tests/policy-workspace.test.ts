@@ -136,6 +136,40 @@ describe('one-place DNS and ROS workflow', () => {
     expect(routerApi.apply.mock.invocationCallOrder[0]).toBeGreaterThan(agentApi.pushConfig.mock.invocationCallOrder[1]!)
     expect(scopedRequests.value).toBe(0)
   })
+  it('reports Linux takeover sync after saving routing settings', async () => {
+    vi.mocked(routerApi.savePolicySettings).mockImplementationOnce(async (_id, body) => {
+      state = { ...state, revision: 'rev-2', router: { ...state.router, ...body.router } }
+      return { data: { success: true, workspace: clone(state), linux_gateway_sync: {
+        synced: true, changed: true, skipped: [{ id: 'mrs', name: 'MRS 集合', reason: 'MRS 格式不支持' }]
+      } } } as any
+    })
+    const w = await setup()
+    await w.get('[aria-label="192.0.2.105 备注"]').setValue('changed')
+    await click(w, '保存并预览')
+    expect(notify.success).toHaveBeenCalledWith('策略路由设置已保存，已同步到 Linux 接管，发布 Mihomo 后生效')
+    expect(notify.warning).toHaveBeenCalledWith(expect.stringContaining('MRS 集合'))
+  })
+  it('warns when the Linux takeover sync failed after saving routing settings', async () => {
+    vi.mocked(routerApi.savePolicySettings).mockImplementationOnce(async (_id, body) => {
+      state = { ...state, revision: 'rev-2', router: { ...state.router, ...body.router } }
+      return { data: { success: true, workspace: clone(state), linux_gateway_sync: {
+        synced: false, changed: false, skipped: [], error: '使用方式无效'
+      } } } as any
+    })
+    const w = await setup()
+    await w.get('[aria-label="192.0.2.105 备注"]').setValue('changed')
+    await click(w, '保存并预览')
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(notify.warning).toHaveBeenCalledWith('Linux 接管未同步：使用方式无效')
+  })
+  it('does not mention Linux takeover when the save did not sync', async () => {
+    const w = await setup()
+    await w.get('[aria-label="192.0.2.105 备注"]').setValue('changed')
+    await click(w, '保存并预览')
+    expect(routerApi.savePolicySettings).toHaveBeenCalled()
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(notify.warning).not.toHaveBeenCalled()
+  })
   it('prepares the visible client picker without eagerly scanning query records', async () => {
     const w = await setup()
     expect(oxidnsMonitorApi.overview).toHaveBeenCalledWith('dns1')

@@ -85,6 +85,34 @@ def _save_items(config, items):
     save_config(config)
 
 
+def _gateway_sync(profile_id):
+    """Mirror router IP rule sets into a router-scheme Linux gateway.
+
+    The router change is already committed; a sync problem is reported in the
+    response and never turns that save into a failure.
+    """
+    from backend.common.linux_gateway_scheme import sync_router_takeover
+    repository = get_repository()
+    try:
+        before = repository.get_profile(profile_id)
+        result = sync_router_takeover(repository, profile_id)
+    except Exception as error:
+        logger.exception('Could not sync router IP rule sets into Linux gateway takeover')
+        result = {'synced': False, 'changed': False, 'skipped': [], 'error': str(error)}
+    if result['changed']:
+        try:
+            after = repository.get_profile(profile_id)
+            if after['_revision'] == before['_revision'] + 1:
+                # The mirror is automatic; an open first-use wizard must not read
+                # it as an edit made on another page.
+                from backend.common.setup_flow import adopt_owned_write
+                adopt_owned_write(repository, profile_id, before, after)
+        except Exception:
+            logger.exception('Could not record the Linux gateway sync for an open setup wizard')
+    reset_config_context()
+    return result
+
+
 def _agent(agent_id):
     if not agent_id:
         return None
@@ -102,9 +130,11 @@ def list_or_create_routers():
         router = normalize(request.get_json(silent=True))
     except RouterValidationError as error:
         return jsonify({'success': False, 'message': str(error)}), 400
+    from backend.common.profile_context import resolve_profile_id
     _save_items(config, routers_of(config) + [router])
     logger.info('已添加主路由 %s（%s）', _label(router), router['type'])
-    return jsonify({'success': True, 'router': public_view(router)})
+    return jsonify({'success': True, 'router': public_view(router),
+                    'linux_gateway_sync': _gateway_sync(resolve_profile_id())})
 
 
 @routers_bp.route('/<router_id>', methods=['PUT', 'DELETE'])
@@ -132,7 +162,7 @@ def update_or_delete_router(router_id):
             get_repository().save_router_settings(profile_id, existing, None)
             reset_config_context()
             logger.info('已删除主路由记录 %s', _label(existing))
-            return jsonify({'success': True})
+            return jsonify({'success': True, 'linux_gateway_sync': _gateway_sync(profile_id)})
         try:
             router = normalize(request.get_json(silent=True), existing)
         except RouterValidationError as error:
@@ -146,7 +176,8 @@ def update_or_delete_router(router_id):
         if router.get('password') != existing.get('password'):
             changed.append('password')
         logger.info('已修改主路由 %s 的设置：%s', _label(router), '、'.join(changed) or '无变化')
-        return jsonify({'success': True, 'router': public_view(router)})
+        return jsonify({'success': True, 'router': public_view(router),
+                        'linux_gateway_sync': _gateway_sync(profile_id)})
 
 
 @routers_bp.route('/<router_id>/probe', methods=['POST'])
@@ -475,6 +506,7 @@ def policy_settings(router_id):
                     raise RouterConflictError('路由器设置已变化，请刷新后重试')
                 update_config_transaction(lambda config: save_workspace(
                     config, router_id, body, body['base_url']), profile_id)
+            sync = _gateway_sync(profile_id)
         config = get_config(profile_id)
         router = find_router(config, router_id)
         if router is None:
@@ -482,7 +514,8 @@ def policy_settings(router_id):
         workspace = read_workspace(config, router, profile_id,
                                    get_repository().get_profile(profile_id)['name'],
                                    get_agent_manager().get_all_agents(), get_default_profile_id())
-        response = jsonify(success=True, workspace=workspace)
+        extra = {'linux_gateway_sync': sync} if request.method == 'PUT' else {}
+        response = jsonify(success=True, workspace=workspace, **extra)
         response.headers['Cache-Control'] = 'no-store'
         return response
     except RouterConflictError as error:

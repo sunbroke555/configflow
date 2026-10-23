@@ -10,7 +10,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Select } from '@/components/ui/select'
 import { agentApi, profileApi } from '@/api'
 import { linuxGatewayApi } from '@/api/linuxGateway'
-import { confirm, notify } from '@/lib/feedback'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import Segmented from '@/components/common/Segmented.vue'
 import { gatewaySpecErrors } from '@/lib/linuxGateway'
 
 vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, profileApi: { list: vi.fn() } }))
@@ -18,7 +19,7 @@ vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: {
   get: vi.fn(), save: vi.fn(), status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn(),
   previewDraft: vi.fn(), previewRestore: vi.fn(), restoreDraft: vi.fn(),
 } }))
-vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), confirmDanger: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
 
 const spec = { interface: 'eth0', address: '192.168.1.2', lan_cidr: '192.168.1.0/24', upstream_gateway: '192.168.1.1' }
 const guard = { expected_profile_id: 'office', expected_service_type: 'mihomo', expected_config_revision: 10 }
@@ -93,6 +94,7 @@ beforeEach(() => {
   vi.mocked(linuxGatewayApi.apply).mockResolvedValue(response({ success: true, managed: { active: true, healthy: true, spec } }))
   vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, managed: { active: false } }))
   vi.mocked(confirm).mockResolvedValue(true)
+  vi.mocked(confirmDanger).mockResolvedValue(true)
 })
 afterEach(() => {
   wrappers.splice(0).forEach(item => item.unmount())
@@ -461,5 +463,165 @@ describe('Gateway LAN input validation', () => {
     expect(gatewaySpecErrors({ ...spec, address: '10.1.1.2' })).toContain('Linux 地址必须在填写的 LAN 网段内。')
     expect(gatewaySpecErrors({ ...spec, lan_cidr: '192.168.1.5/24' })).toContain('LAN 网段请填写网络地址，例如 192.168.1.0/24，而不是设备地址。')
     expect(gatewaySpecErrors({ ...spec, address: 'example.com' }).length).toBeGreaterThan(0)
+  })
+})
+
+const takeover = { rule_set_ids: ['telegram'], skipped: [{ id: 'cn', name: '国内域名', reason: '域名规则集不能用于 IP 接管' }] }
+const routerScheme = (stored: 'router' | null = 'router') => ({
+  scheme: stored, effective_scheme: 'router', scheme_inferred: !stored, router_takeover: takeover,
+})
+async function renderScheme(enabled: boolean, extra: Record<string, unknown>) {
+  const base = config(enabled)
+  const scheme = (extra as any).scheme
+  return render(enabled, false, { ...extra, settings: { ...base.settings, ...(scheme ? { scheme } : {}) } })
+}
+
+describe('Linux gateway usage scheme', () => {
+  it('keeps the legacy gateway workflow unchanged and never sends a scheme until one is picked', async () => {
+    const wrapper = await render()
+    expect(wrapper.getComponent(Segmented).props('modelValue')).toBe('gateway')
+    expect(wrapper.text()).not.toContain('已自动判断')
+    expect(wrapper.findAllComponents(Checkbox)).toHaveLength(2)
+    expect(wrapper.text()).toContain('应用成功后再修改客户端网关和 DNS')
+    expect(wrapper.text()).toContain('客户端接入与验证')
+    expect(wrapper.text()).not.toContain('此空间使用主路由分流')
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', true); await flushPromises()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(Object.keys(vi.mocked(linuxGatewayApi.previewDraft).mock.calls[0][1])).toEqual(['enabled', 'rule_set_ids'])
+  })
+
+  it('shows an inferred router scheme read-only and makes it explicit only when picked', async () => {
+    const wrapper = await renderScheme(true, routerScheme(null))
+    expect(wrapper.getComponent(Segmented).props('modelValue')).toBe('router')
+    expect(wrapper.text()).toContain('已自动判断')
+    expect(wrapper.findAllComponents(Checkbox)).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('由「上游路由」的 IP 规则集决定')
+    expect(wrapper.text()).toContain('当前接管来自本页已保存的规则集')
+    // Inference never syncs: the list shows what Mihomo applies now, router sets only as a preview.
+    expect(wrapper.text()).toContain('当前接管 2 个规则集')
+    expect(wrapper.text()).toContain('已停用 IP 集合')
+    expect(wrapper.text()).toContain('点选上方「主路由分流」并保存后改为：Telegram 已改名')
+    expect(wrapper.text()).not.toContain('未接管：域名规则集不能用于 IP 接管')
+    expect(wrapper.findComponent({ name: 'RouterLink' }).props('to')).toBe('/routers')
+    expect(wrapper.text()).toContain('此空间使用主路由分流，Linux 转发是它的一部分，平时无需在这里修改。')
+    expect(wrapper.text()).not.toContain('应用成功后再修改客户端网关和 DNS')
+    expect(wrapper.text()).not.toContain('客户端接入与验证')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+    wrapper.getComponent(Segmented).vm.$emit('update:modelValue', 'router'); await flushPromises()
+    expect(wrapper.text()).not.toContain('已自动判断')
+    expect(wrapper.text()).toContain('跟随 1 个规则集')
+    expect(wrapper.text()).not.toContain('已停用 IP 集合')
+    expect(wrapper.text()).toContain('未接管：域名规则集不能用于 IP 接管')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.previewDraft).toHaveBeenCalledWith('office', { enabled: true, rule_set_ids: ['telegram', 'disabled'], scheme: 'router' }, 9)
+  })
+
+  it('switches between schemes without losing the gateway selection', async () => {
+    const wrapper = await render(true, false, { scheme: 'gateway', effective_scheme: 'gateway', router_takeover: takeover })
+    expect(wrapper.findAllComponents(Checkbox)).toHaveLength(2)
+    wrapper.getComponent(Segmented).vm.$emit('update:modelValue', 'router'); await flushPromises()
+    expect(wrapper.findAllComponents(Checkbox)).toHaveLength(0)
+    expect(wrapper.text()).toContain('由「上游路由」的 IP 规则集决定')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    wrapper.getComponent(Segmented).vm.$emit('update:modelValue', 'gateway'); await flushPromises()
+    expect(wrapper.findAllComponents(Checkbox)).toHaveLength(2)
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+  })
+
+  it('asks for a danger confirmation before saving a disabled router scheme', async () => {
+    const wrapper = await renderScheme(true, routerScheme())
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', false); await flushPromises()
+    expect(wrapper.text()).toContain('会中断主路由分流')
+    expect(wrapper.text()).not.toContain('先恢复客户端')
+    await wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft'); await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(confirmDanger).toHaveBeenCalledWith(expect.stringContaining('中断主路由分流'), expect.objectContaining({ title: '停用 Linux 网关？', confirmText: '停用' }))
+    // The saved list is sent; for a router scheme the server mirrors 上游路由 anyway.
+    expect(linuxGatewayApi.save).toHaveBeenCalledWith('office', { enabled: false, rule_set_ids: ['telegram', 'disabled'], scheme: 'router' }, draftGuard)
+  })
+
+  it('offers to save a router takeover that no longer matches 上游路由', async () => {
+    // Stored ['telegram', 'disabled'] predates the router change to ['telegram'].
+    const wrapper = await renderScheme(true, routerScheme())
+    expect(wrapper.text()).toContain('待同步：')
+    expect(wrapper.text()).toContain('跟随 1 个规则集')
+    // Opening never starts dirty, so network checks stay available.
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+    await button(wrapper, '同步到接管').trigger('click'); await flushPromises()
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    expect(button(wrapper, '同步到接管')).toBeUndefined()
+    await button(wrapper, '预览配置变更').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.previewDraft).toHaveBeenCalledWith('office', { enabled: true, rule_set_ids: ['telegram'], scheme: 'router' }, 9)
+  })
+
+  it('treats a router takeover that matches 上游路由 as saved', async () => {
+    const wrapper = await renderScheme(true, { ...routerScheme(), router_takeover: { rule_set_ids: ['disabled', 'telegram'], skipped: [] } })
+    expect(wrapper.text()).not.toContain('待同步')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+  })
+
+  it('keeps the router warning for withdrawing forwarding while only the draft shows Linux 网关', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValueOnce(response({ ...hostStatus(), managed: { active: true, spec } }))
+    vi.mocked(confirmDanger).mockResolvedValueOnce(false)
+    const wrapper = await renderScheme(true, routerScheme())
+    wrapper.getComponent(Segmented).vm.$emit('update:modelValue', 'gateway'); await flushPromises()
+    expect(wrapper.text()).toContain('撤销前，先把主路由的静态路由和 DNS 改回原设置。')
+    expect(wrapper.text()).toContain('先把主路由的静态路由和 DNS 改回原设置，再用上方按钮撤销网关转发。')
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(confirmDanger).toHaveBeenCalledWith(expect.stringContaining('中断主路由分流'), expect.any(Object))
+  })
+
+  it('keeps the gateway warnings for a live gateway network while only the draft shows 主路由分流', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValueOnce(response({ ...hostStatus(), managed: { active: true, spec } }))
+    vi.mocked(confirm).mockResolvedValueOnce(false)
+    const wrapper = await render(true, false, { scheme: 'gateway', effective_scheme: 'gateway', router_takeover: takeover })
+    wrapper.getComponent(Segmented).vm.$emit('update:modelValue', 'router'); await flushPromises()
+    expect(wrapper.text()).toContain('恢复前，先恢复客户端原来的网关与 DNS。')
+    expect(wrapper.text()).toContain('应用成功后再修改客户端网关和 DNS')
+    expect(wrapper.text()).toContain('客户端接入与验证')
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(confirmDanger).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('请先恢复客户端原来的网关和 DNS'), expect.objectContaining({ confirmText: '撤销转发' }))
+    expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
+    // Disabling still describes the gateway network that is live now.
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', false); await flushPromises()
+    expect(wrapper.text()).toContain('先恢复客户端并撤销网关转发')
+    expect(wrapper.text()).not.toContain('会中断主路由分流')
+    await wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft'); await flushPromises()
+    expect(confirmDanger).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ title: '保存网关草稿？' }))
+  })
+
+  it('keeps the router warnings for disabling a live router network while only the draft shows Linux 网关', async () => {
+    const wrapper = await renderScheme(true, routerScheme())
+    wrapper.getComponent(Segmented).vm.$emit('update:modelValue', 'gateway'); await flushPromises()
+    expect(wrapper.text()).not.toContain('应用成功后再修改客户端网关和 DNS')
+    expect(wrapper.text()).not.toContain('客户端接入与验证')
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', false); await flushPromises()
+    expect(wrapper.text()).toContain('会中断主路由分流')
+    await wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft'); await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(confirmDanger).toHaveBeenCalledWith(expect.stringContaining('中断主路由分流'), expect.objectContaining({ title: '停用 Linux 网关？' }))
+  })
+
+  it('keeps the plain confirmation when disabling the gateway scheme', async () => {
+    const wrapper = await render(true, false, { scheme: 'gateway', effective_scheme: 'gateway' })
+    wrapper.getComponent(Switch).vm.$emit('update:modelValue', false); await flushPromises()
+    await wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft'); await flushPromises()
+    expect(confirmDanger).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ title: '保存网关草稿？' }))
+  })
+
+  it('warns that withdrawing forwarding interrupts the router scheme', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValueOnce(response({ ...hostStatus(), managed: { active: true, spec } }))
+    vi.mocked(confirmDanger).mockResolvedValueOnce(false)
+    const wrapper = await renderScheme(true, routerScheme())
+    expect(wrapper.text()).toContain('撤销前，先把主路由的静态路由和 DNS 改回原设置。')
+    await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(confirmDanger).toHaveBeenCalledWith(expect.stringContaining('中断主路由分流'), expect.objectContaining({ confirmText: '撤销转发' }))
+    expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
   })
 })

@@ -722,6 +722,8 @@ import RouterRuleSync from '@/components/routers/RouterRuleSync.vue'
 import RouterOperationPreview from '@/components/routers/RouterOperationPreview.vue'
 import { agentApi, routerApi as baseRouterApi, ruleApi, type StaticRouteChange, type StaticRouteItem, type StaticRoutePlan, type StaticRouteValues } from '@/api'
 import { setupApi } from '@/api/setup'
+import type { LinuxGatewaySyncResult } from '@/api/linuxGateway'
+import { gatewaySyncFeedback } from '@/lib/linuxGateway'
 import { activeProfileId as selectedProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
 import { routerCopy } from '@/lib/routerCopy'
@@ -1257,10 +1259,12 @@ const submit = async () => {
     dns_agent_id: form.dns_agent_id === NONE ? '' : form.dns_agent_id
   }
   try {
+    let sync: LinuxGatewaySyncResult | undefined
     if (props.setupDraftSession) await setupApi.saveRouterDraft(props.setupDraftSession, payload)
-    else if (editingId.value) await routerApi.update(editingId.value, payload)
-    else await routerApi.create(payload)
-    notify.success(props.setupDraftSession ? '主路由信息已保存，安装后可继续配置' : editingId.value ? '路由器已更新' : '路由器已添加')
+    else sync = (editingId.value ? await routerApi.update(editingId.value, payload) : await routerApi.create(payload))?.data?.linux_gateway_sync
+    const feedback = gatewaySyncFeedback(sync)
+    notify.success(`${props.setupDraftSession ? '主路由信息已保存，安装后可继续配置' : editingId.value ? '路由器已更新' : '路由器已添加'}${feedback.suffix}`)
+    if (feedback.warning) notify.warning(feedback.warning)
     form.password = ''
     dialogVisible.value = false
     if (editingId.value) {
@@ -1279,13 +1283,16 @@ const remove = async (router: RouterItem) => {
   if (!await canLeavePolicy()) return
   if (!(await confirmDanger(`删除路由器「${router.name}」？只删除 ConfigFlow 中的接入记录，不会改动路由器。`))) return
   try {
+    let sync: LinuxGatewaySyncResult | undefined
     if (props.setupDraftSession) await setupApi.saveRouterDraft(props.setupDraftSession, null)
-    else await routerApi.remove(router.id)
+    else sync = (await routerApi.remove(router.id))?.data?.linux_gateway_sync
     clearInspection(router.id)
     if (routeRouter.value?.id === router.id) closeRouteManager()
     if (policyRouter.value?.id === router.id) policyRouter.value = null
     if (syncRouter.value?.id === router.id) syncRouter.value = null
-    notify.success('已删除')
+    const feedback = gatewaySyncFeedback(sync)
+    notify.success(`已删除${feedback.suffix}`)
+    if (feedback.warning) notify.warning(feedback.warning)
     await load()
   } catch (error) {
     notify.error(errorMessage(error, '删除失败'))

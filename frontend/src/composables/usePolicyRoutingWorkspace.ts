@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { agentApi, routerApi, type PolicyWorkspace, type PolicyWorkspacePreview } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
+import { gatewaySyncFeedback } from '@/lib/linuxGateway'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 import { createDeploymentId, deploymentStatusLabel, type AgentDeployment } from './useAgentDeployments'
 import type { OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
@@ -88,6 +89,9 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
         state.value = data.workspace; policies.value = clone(data.workspace.sources.policies); settings.value = routerDraft(data.workspace)
         changes.value = [...changes.value, ...diff]
         saved()
+        const feedback = gatewaySyncFeedback(data.linux_gateway_sync)
+        if (feedback.suffix) notify.success(`策略路由设置已保存${feedback.suffix}`)
+        if (feedback.warning) notify.warning(feedback.warning)
       }
       const { data } = await routerApi.previewPolicySettings(c.id, state.value!.revision, [...targets.value], c.profile)
       if (!current(c)) return

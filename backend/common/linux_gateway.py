@@ -15,6 +15,7 @@ import yaml
 from backend.common.profile_context import append_url_query, profile_api_path
 
 PROVIDER_PREFIX = 'cf_gateway_'
+SCHEMES = ('router', 'gateway')
 FAKE_PROVIDER = PROVIDER_PREFIX + 'fake_ip'
 REFRESH_INTERVAL = 300
 DEFAULT_FAKE_RANGE = '198.18.0.1/16'
@@ -44,7 +45,15 @@ def normalize_gateway_settings(value):
             or any(not isinstance(item, str) or not item or len(item) > 256
                    or any(ord(c) < 32 or ord(c) == 127 for c in item) for item in ids)):
         raise LinuxGatewayError('请选择有效的 IP 规则集，最多 1024 个')
-    return {'enabled': enabled, 'rule_set_ids': list(dict.fromkeys(ids))}
+    result = {'enabled': enabled, 'rule_set_ids': list(dict.fromkeys(ids))}
+    # The usage scheme is optional profile metadata: absent means not chosen
+    # yet, so old settings keep comparing equal. It never reaches Mihomo.
+    scheme = value.get('scheme')
+    if scheme is not None:
+        if scheme not in SCHEMES:
+            raise LinuxGatewayError('使用方式无效')
+        result['scheme'] = scheme
+    return result
 
 
 def gateway_settings(config):
@@ -91,24 +100,38 @@ def _library(config, item):
                  if entry.get('id') == library_id), None) if library_id else None
 
 
-def _reason(config, item):
+REASON_MESSAGES = {
+    'missing': '规则集已删除或不属于当前配置空间',
+    'library_missing': '共享规则库条目已删除',
+    'behavior': '仅支持 IP-CIDR 或 Classical 规则集',
+    'mrs': '网关提取暂不支持 MRS，请使用 text / YAML 格式的 IP 规则集',
+    'disabled': '当前配置空间已停用此规则集，接管范围将清空',
+    'library_disabled': '共享规则库已停用此规则集，接管范围将清空',
+}
+
+
+def reason_code(config, item):
     if item is None:
-        return '规则集已删除或不属于当前配置空间'
+        return 'missing'
     library = _library(config, item)
     if item.get('library_rule_id') and library is None:
-        return '共享规则库条目已删除'
+        return 'library_missing'
     source = library or item
     behavior = source.get('behavior', item.get('behavior', 'domain'))
     if behavior not in ('ipcidr', 'classical'):
-        return '仅支持 IP-CIDR 或 Classical 规则集'
+        return 'behavior'
     if (source.get('format') == 'mrs'
             or urlsplit(source.get('url', '')).path.lower().endswith('.mrs')):
-        return '网关提取暂不支持 MRS，请使用 text / YAML 格式的 IP 规则集'
+        return 'mrs'
     if not item.get('enabled', True):
-        return '当前配置空间已停用此规则集，接管范围将清空'
+        return 'disabled'
     if not item.get('library_enabled', True) or not source.get('enabled', True):
-        return '共享规则库已停用此规则集，接管范围将清空'
+        return 'library_disabled'
     return ''
+
+
+def _reason(config, item):
+    return REASON_MESSAGES.get(reason_code(config, item), '')
 
 
 def _lines(content):
