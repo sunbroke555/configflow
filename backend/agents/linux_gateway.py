@@ -19,6 +19,23 @@ HOST_OPERATIONS = ('apply', 'remove', 'forwarding')
 SPEC_FIELDS = {'interface', 'address', 'lan_cidr', 'upstream_gateway'}
 FORWARDING_NOT_KEPT = ('设备上仍有旧版 Linux 网关记录，且 IPv4 转发尚未持久化：{action}Agent 撤销该记录时会把 IPv4 转发还原为关闭，'
                        '主路由转来的连接会中断。请先在 Linux 网关安装向导的「检查转发与 TUN」中开启并持久化 IPv4 转发。')
+# Turning the gateway off on an old router split host whose base YAML gained a full TUN.
+GATEWAY_OFF_NOT_KEPT = ('关闭 Linux 网关会让 Agent 撤销「{name}」上的旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，'
+                        '主路由分流转来的连接会中断。这台设备尚未持久化 IPv4 转发，已阻止；请保持 Linux 网关开启。'
+                        '普通 All-in-One 安装会持久化转发，不受影响。')
+GATEWAY_OFF_UPGRADE = ('关闭 Linux 网关前需要确认「{name}」已持久化 IPv4 转发，'
+                       f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
+GATEWAY_OFF_UNKNOWN = '无法读取「{name}」的 IPv4 转发状态，已阻止关闭 Linux 网关：{reason}。请确认设备在线后重试。'
+PUBLISH_GATEWAY_OFF_NOT_KEPT = ('待发布的 Mihomo 配置关闭了 Linux 网关：发布后 Agent 会撤销设备上的旧版网关记录，'
+                                '并把 IPv4 转发还原为关闭，主路由分流转来的连接会中断。这台设备尚未持久化 IPv4 转发，已停止发布。'
+                                '请在 Linux 网关中重新开启并保存后再发布。')
+# The Agent's own remove text tells clients to restore their gateway; a router
+# split's clients never changed it.
+REMOVED_MESSAGES = {
+    'full_tun': '旧网关记录已清理，IPv4 转发保持开启。',
+    'full_tun_none': '设备上没有旧网关记录，无需清理；IPv4 转发保持不变。',
+    'legacy': '网关转发已撤销，主路由转来的连接已中断。请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发。',
+}
 
 
 def _at_least(agent, minimum):
@@ -57,6 +74,38 @@ def require_forwarding_kept(manager, agent):
         raise ValueError(f'无法确认设备上是否仍有旧版 Linux 网关记录，已停止发布：{error.message}') from None
     if not keeps_forwarding(status):
         raise ValueError(FORWARDING_NOT_KEPT.format(action='发布完整 TUN 后，'))
+
+
+def require_gateway_off_kept(manager, agent):
+    """An old router split's gateway-off publish makes the Agent remove its record; refuse if that turns forwarding off."""
+    try:
+        status = call(manager, agent.get('id'), 'status', 'GET', agent.get('profile_id'))
+    except MonitorError as error:
+        raise ValueError(f'无法确认设备上是否仍有旧版 Linux 网关记录，已停止发布：{error.message}') from None
+    if not keeps_forwarding(status):
+        raise ValueError(PUBLISH_GATEWAY_OFF_NOT_KEPT)
+
+
+def gateway_off_refusal(manager, profile_id, agent_ids):
+    """Why turning the gateway off would turn IPv4 forwarding off on a bound host, or None.
+
+    Only the persisted AIO forwarding (1.8.40-go) keeps it when the Agent
+    removes its gateway record; a host without a record keeps what it has.
+    """
+    for agent_id in agent_ids:
+        agent = manager.get_agent_by_id(agent_id)
+        if not agent or agent.get('service_type') != 'mihomo' or agent.get('deployment_method') == 'docker':
+            continue  # Docker never applies the gateway on the host.
+        name = agent.get('name') or agent_id
+        if not supports_forwarding(agent):
+            return GATEWAY_OFF_UPGRADE.format(name=name)
+        try:
+            status = call(manager, agent_id, 'status', 'GET', profile_id)
+        except MonitorError as error:
+            return GATEWAY_OFF_UNKNOWN.format(name=name, reason=error.message.rstrip('。'))
+        if not keeps_forwarding(status):
+            return GATEWAY_OFF_NOT_KEPT.format(name=name)
+    return None
 
 
 def require_gateway_agent(agent):
@@ -123,7 +172,11 @@ def _router_split_mode(profile_id, config):
 
 
 def _router_split_guard(manager, agent, operation, profile_id, body):
-    """Keep the main router's forwarded connections; returns the Agent payload."""
+    """Keep the main router's forwarded connections.
+
+    Returns the Agent payload and the takeover, which a successful remove
+    reports with ``REMOVED_MESSAGES`` (``full_tun_none``: no record was there).
+    """
     from backend.common.router_split import MESSAGES
     confirmed = isinstance(body, dict) and set(body) == {'confirm_router_split_teardown'} \
         and body['confirm_router_split_teardown'] is True
@@ -135,7 +188,7 @@ def _router_split_guard(manager, agent, operation, profile_id, body):
             raise _error('ROUTER_SPLIT_FULL_TUN', 409, MESSAGES['ROUTER_SPLIT_FULL_TUN'])
         if mode == 'invalid':
             raise _error('ROUTER_SPLIT_INVALID', 409, MESSAGES['ROUTER_SPLIT_INVALID'])
-        return None
+        return None, mode
     if operation == 'remove':
         if mode == 'legacy' and not confirmed:
             raise _error('ROUTER_SPLIT_LEGACY_TEARDOWN', 409, MESSAGES['ROUTER_SPLIT_LEGACY_TEARDOWN'])
@@ -144,18 +197,22 @@ def _router_split_guard(manager, agent, operation, profile_id, body):
                 # An older Agent writes the original forwarding values back.
                 raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
             # So does a current one unless the AIO forwarding is persisted.
-            if not keeps_forwarding(call(manager, agent['id'], 'status', 'GET', profile_id)):
+            status = call(manager, agent['id'], 'status', 'GET', profile_id)
+            if not keeps_forwarding(status):
                 raise _error('FORWARDING_NOT_PERSISTED', 409, FORWARDING_NOT_KEPT.format(action=''))
-        return {}
+            managed = status.get('managed') if isinstance(status.get('managed'), dict) else {}
+            if not (managed.get('active') or managed.get('pending') or managed.get('error')):
+                mode = 'full_tun_none'
+        return {}, mode
     if not supports_forwarding(agent):
         raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
     if mode != 'full_tun':
         raise _error('ROUTER_SPLIT_REQUIRED', 409, '仅主路由分流（完整 TUN）的配置空间可在此开启转发持久化。')
     if body in (None, {}):
-        return {}
+        return {}, mode
     if not isinstance(body, dict) or set(body) != {'prepare_tun'} or type(body['prepare_tun']) is not bool:
         raise _error('INVALID_REQUEST', 400, '开启转发持久化只接受 prepare_tun 参数。')
-    return {'prepare_tun': body['prepare_tun']}
+    return {'prepare_tun': body['prepare_tun']}, mode
 
 
 def call(manager, agent_id, operation, method, profile_id, body=None):
@@ -172,8 +229,9 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
         raise _error('UNSUPPORTED_ENVIRONMENT', 409, '自动网络配置适用于 Linux Shell 安装，请选择原生安装的 Mihomo Agent。')
     if not supports_gateway(agent):
         raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {MIN_AGENT_VERSION} 或更新版本。')
+    split = None
     if operation in HOST_OPERATIONS:
-        payload = _router_split_guard(manager, agent, operation, profile_id, body)
+        payload, split = _router_split_guard(manager, agent, operation, profile_id, body)
     if operation == 'apply':
         config = get_config(profile_id)
         if (config.get('mihomo', {}).get('linux_gateway') or {}).get('enabled') is not True:
@@ -223,4 +281,6 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
         if not isinstance(message, str) or not message:
             message = '网关操作未完成，请刷新状态后查看检查结果。'
         raise _error('GATEWAY_ERROR', status if status in (400, 409, 422) else 502, message[:1000])
+    if operation == 'remove' and split in REMOVED_MESSAGES and data.get('success') is True:
+        data['message'] = REMOVED_MESSAGES[split]
     return data

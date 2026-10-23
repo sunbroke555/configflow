@@ -358,8 +358,37 @@ def test_ordinary_gateway_reports_no_router_split(gateway_app):
     assert state['router_split'] == {'mode': None, 'source': None, 'issues': [], 'route_rule_set_ids': []}
 
 
-def test_legacy_restore_to_a_base_yaml_with_its_own_full_tun_is_allowed(gateway_app):
-    """Ordinary AIO with a full TUN base YAML trying the gateway: going back keeps the TUN."""
+@pytest.fixture
+def hosts(monkeypatch):
+    """The bound Mihomo Agents and the gateway status each one reports."""
+    state = {'agents': {'mihomo-home': {'id': 'mihomo-home', 'name': 'm', 'profile_id': 'home', 'service_type': 'mihomo',
+                                        'deployment_method': 'shell', 'version': '1.8.40-go'}},
+             'status': {'success': True, 'managed': {'active': True, 'healthy': True, 'preserves_forwarding': True}},
+             'calls': []}
+
+    class Manager:
+        def get_agent_by_id(self, agent_id):
+            return deepcopy(state['agents'].get(agent_id))
+
+    def call(manager, agent_id, operation, method, profile_id, body=None):
+        state['calls'].append((agent_id, operation, profile_id))
+        if isinstance(state['status'], Exception):
+            raise state['status']
+        return deepcopy(state['status'])
+    monkeypatch.setattr('backend.common.agent_manager.get_agent_manager', lambda: Manager())
+    monkeypatch.setattr('backend.agents.linux_gateway.call', call)
+    return state
+
+
+def give_base_full_tun(repository):
+    from backend.common.router_split import full_tun_base_yaml
+    repository.update_profile_transaction('home', lambda c: c['mihomo'].update(
+        custom_config=full_tun_base_yaml(c['mihomo'].get('custom_config') or '')))
+
+
+def test_legacy_restore_to_a_base_yaml_with_its_own_full_tun_is_allowed(gateway_app, hosts):
+    """Ordinary AIO with a full TUN base YAML trying the gateway: going back keeps
+    the TUN, and its persisted forwarding stays when the Agent removes the record."""
     from backend.common.router_split import full_tun_base_yaml
     app, repository = gateway_app
     client = app.test_client()
@@ -371,9 +400,121 @@ def test_legacy_restore_to_a_base_yaml_with_its_own_full_tun_is_allowed(gateway_
         snapshot.update(custom_config=full_tun_base_yaml(snapshot.get('custom_config') or ''),
                         linux_gateway={'enabled': False, 'rule_set_ids': []})
     repository.update_profile_transaction('home', snapshot_full_tun)
+    # Not persisted (an old router split host): the record's removal turns forwarding off.
+    hosts['status']['managed']['preserves_forwarding'] = False
+    restore = {'expected_config_revision': repository.config_revision('home')}
+    assert guarded(client, '/restore/preview', restore) == (409, 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED')
+    hosts['status']['managed']['preserves_forwarding'] = True
     review = preview(client, repository, restore=True)
     assert save(client, review, restore=True).status_code == 200
     assert repository.get_profile('home')['mihomo']['linux_gateway']['enabled'] is False
+
+
+@pytest.mark.parametrize('mode', ['legacy_setup', 'legacy_topology'])
+def test_legacy_split_whose_base_gained_a_full_tun_keeps_forwarding_when_turned_off(gateway_app, hosts, mode):
+    """Lab v2-H: an old wizard host has no AIO forwarding persistence, so turning
+    the gateway off and publishing set ip_forward back to 0 and broke UDP/ICMP."""
+    from backend.agents.linux_gateway import GATEWAY_OFF_NOT_KEPT
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, mode)
+    repository.update_system_transaction(lambda system: system.update(agents=[deepcopy(hosts['agents']['mihomo-home'])]))
+    give_base_full_tun(repository)
+    assert client.get(PATH).json['router_split']['mode'] is None
+    hosts['status']['managed']['preserves_forwarding'] = False
+    before = repository.export_all()
+    revision = repository.config_revision('home')
+    off = {'settings': SETTINGS, 'expected_config_revision': revision}
+    response = client.post(PATH + '/preview', json=off)
+    assert response.status_code == 409 and response.json == {
+        'success': False, 'code': 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED', 'message': GATEWAY_OFF_NOT_KEPT.format(name='m')}
+    assert guarded(client, '', {**off, 'preview_token': '0' * 64}) == (409, 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED')
+    assert guarded(client, '', SETTINGS) == (409, 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED')
+    assert repository.export_all() == before
+    assert {call[1:] for call in hosts['calls']} == {('status', 'home')}
+    # Without a gateway record on the host nothing restores forwarding.
+    hosts['status']['managed'] = {'active': False, 'healthy': False, 'preserves_forwarding': False}
+    assert client.post(PATH + '/preview', json=off).status_code == 200
+    # Persisted (as an ordinary All-in-One install has it): allowed.
+    hosts['status']['managed'] = {'active': True, 'healthy': True, 'preserves_forwarding': True}
+    hosts['calls'].clear()
+    assert save(client, preview(client, repository)).status_code == 200
+    assert repository.get_profile('home')['mihomo']['linux_gateway']['enabled'] is False
+    # The status is read before the transaction, once per request.
+    assert len(hosts['calls']) == 2
+
+
+@pytest.mark.parametrize('change,message', [
+    ({'version': '1.8.39-go'}, '请先将 Mihomo Agent 更新到 1.8.40-go 或更新版本'),
+    ({'version': ''}, '请先将 Mihomo Agent 更新到 1.8.40-go 或更新版本'),
+    (None, '无法读取「m」的 IPv4 转发状态，已阻止关闭 Linux 网关：暂时无法连接 Agent，请检查设备连接。请确认设备在线后重试。'),
+])
+def test_legacy_full_tun_gateway_off_needs_a_current_reachable_agent(gateway_app, hosts, change, message):
+    from backend.agents.oxidns_monitor import MonitorError
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'legacy_topology')
+    give_base_full_tun(repository)
+    if change is None:
+        hosts['status'] = MonitorError('AGENT_UNREACHABLE', 502, '暂时无法连接 Agent，请检查设备连接。')
+    else:
+        hosts['agents']['mihomo-home'].update(change)
+    response = client.post(PATH + '/preview', json={'settings': SETTINGS,
+                                                    'expected_config_revision': repository.config_revision('home')})
+    assert response.status_code == 409 and response.json['code'] == 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED'
+    assert message in response.json['message']
+    # A Docker Mihomo never applies the gateway on its host.
+    hosts['agents']['mihomo-home'].update(deployment_method='docker')
+    assert save(client, preview(client, repository)).status_code == 200
+
+
+def test_legacy_split_with_a_full_tun_base_cannot_go_back_to_no_tun(gateway_app, hosts):
+    """Restoring a snapshot without TUN while the current base has one is the old teardown."""
+    from backend.common.router_split import LEGACY_RESTORE_BLOCKED
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'legacy_topology')
+    changed = {'enabled': True, 'rule_set_ids': []}
+    assert save(client, preview(client, repository, changed), changed).status_code == 200
+    give_base_full_tun(repository)
+    repository.update_profile_transaction('home', lambda c: c['mihomo'][RESTORE_KEY]['mihomo'].update(
+        linux_gateway={'enabled': False, 'rule_set_ids': []}))
+    response = client.post(PATH + '/restore/preview', json={'expected_config_revision': repository.config_revision('home')})
+    assert response.status_code == 409 and response.json['message'] == LEGACY_RESTORE_BLOCKED
+    assert hosts['calls'] == []
+
+
+def test_ordinary_profile_with_a_full_tun_base_turns_the_gateway_off_without_agent_calls(gateway_app, hosts):
+    from backend.common import setup_flow
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'legacy_topology')
+    # A gateway-goal profile using an upstream router is no router split.
+    setup_flow.write(repository, {'id': 'b' * 32, 'profile_id': 'home', 'name': 'Home', 'goal': 'gateway',
+                                  'step': 5, 'max_step': 5, 'prepared': True, 'completed': True})
+    give_base_full_tun(repository)
+    hosts['status']['managed']['preserves_forwarding'] = False
+    assert save(client, preview(client, repository)).status_code == 200
+    assert hosts['calls'] == []
+
+
+def test_full_tun_restore_message_matches_the_restore_point(gateway_app):
+    from backend.common.router_split import FULL_TUN_NO_RESTORE_POINT, FULL_TUN_RESTORE_OVERWRITES, full_tun_base_yaml
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'full_tun')
+    restore = {'expected_config_revision': repository.config_revision('home')}
+    response = client.post(PATH + '/restore/preview', json=restore)
+    assert response.status_code == 409 and response.json == {
+        'success': False, 'code': 'ROUTER_SPLIT_RESTORE_BLOCKED', 'message': FULL_TUN_NO_RESTORE_POINT}
+    def full_tun_snapshot(config):
+        config['mihomo'][RESTORE_KEY] = {'version': 1, 'id': 'p', 'created_at': '2026-10-23T00:00:00+00:00',
+                                         'mihomo': {**deepcopy(config['mihomo']),
+                                                    'custom_config': full_tun_base_yaml('')},
+                                         'oxidns': {}}
+    repository.update_profile_transaction('home', full_tun_snapshot)
+    response = client.post(PATH + '/restore/preview', json={'expected_config_revision': repository.config_revision('home')})
+    assert response.json['message'] == FULL_TUN_RESTORE_OVERWRITES
 
 
 def test_editor_reads_setup_sessions_only_for_a_possible_legacy_split(gateway_app, monkeypatch):

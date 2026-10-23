@@ -1,4 +1,6 @@
 """Editor and stable, authenticated runtime providers for selective gateways."""
+from functools import partial
+
 from flask import jsonify, make_response, request
 
 from backend.common.auth import require_auth, validate_token_or_jwt
@@ -8,13 +10,14 @@ from backend.common.linux_gateway import (
     LinuxGatewayError, gateway_editor_state, gateway_provider_yaml, gateway_source_yaml, gateway_settings,
 )
 from backend.common.router_split import (
-    LEGACY_RESTORE_BLOCKED, MESSAGES, RouterSplitError, base_is_full_tun, legacy_context, mode_from_context,
-    needs_context, route_rule_set_ids, router_split_state,
+    FULL_TUN_NO_RESTORE_POINT, FULL_TUN_RESTORE_OVERWRITES, LEGACY_RESTORE_BLOCKED, MESSAGES, RouterSplitError,
+    base_is_full_tun, legacy_context, legacy_source, mode_from_context, needs_context, route_rule_set_ids,
+    router_split_state,
 )
 from backend.routes import custom_config_bp, profiles_bp
 from backend.common.linux_gateway_draft import (
     check_preview, check_revision, prepare_restore, prepare_settings,
-    preview_draft, remember_original, restore_summary,
+    preview_draft, remember_original, restore_point, restore_summary,
 )
 
 
@@ -24,8 +27,19 @@ def _response(value):
     return response
 
 
-def _guard(context, current, candidate, restore):
-    """Refuse a change that would end the router split's takeover."""
+def _restore_blocked(current):
+    point = restore_point(current)
+    if point is None:
+        return FULL_TUN_NO_RESTORE_POINT
+    return FULL_TUN_RESTORE_OVERWRITES if base_is_full_tun(point) else MESSAGES['ROUTER_SPLIT_RESTORE_BLOCKED']
+
+
+def _guard(context, current, candidate, restore, forwarding):
+    """Refuse a change that would end the router split's takeover.
+
+    ``forwarding()`` returns why the bound hosts would lose IPv4 forwarding
+    when the gateway goes off, or None; it is read before the transaction.
+    """
     if context is None and needs_context(current):
         # The gateway was turned on after the setup sessions were (not) read.
         raise LinuxGatewayError('Linux 网关设置已在其他位置修改，请刷新后重试')
@@ -35,15 +49,23 @@ def _guard(context, current, candidate, restore):
         raise RouterSplitError(MESSAGES['ROUTER_SPLIT_INVALID'], 'ROUTER_SPLIT_INVALID')
     if mode == 'full_tun':
         if restore:
-            raise RouterSplitError(MESSAGES['ROUTER_SPLIT_RESTORE_BLOCKED'], 'ROUTER_SPLIT_RESTORE_BLOCKED')
+            raise RouterSplitError(_restore_blocked(current), 'ROUTER_SPLIT_RESTORE_BLOCKED')
         if after['enabled']:
             raise RouterSplitError(MESSAGES['ROUTER_SPLIT_FULL_TUN'], 'ROUTER_SPLIT_FULL_TUN')
-    if mode == 'legacy' and not after['enabled'] and not base_is_full_tun(candidate):
-        # Turning the gateway off here removes TUN and restores forwarding; a
-        # snapshot whose base YAML has its own full TUN keeps the takeover.
+    if (context is None or after['enabled'] or not gateway_settings(current)['enabled']
+            or not legacy_source(current, context)):
+        return
+    # An old router split turns the gateway off, also when the current base
+    # YAML already has a full TUN: without one afterwards the TUN and the
+    # forwarding go, and with one the Agent still restores forwarding unless
+    # the host persisted it (an ordinary All-in-One install does).
+    if not base_is_full_tun(candidate):
         if restore:
             raise RouterSplitError(LEGACY_RESTORE_BLOCKED, 'ROUTER_SPLIT_RESTORE_BLOCKED')
         raise RouterSplitError(MESSAGES['ROUTER_SPLIT_LEGACY'], 'ROUTER_SPLIT_LEGACY')
+    refusal = forwarding()
+    if refusal:
+        raise RouterSplitError(refusal, 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED')
 
 
 def _router_split(repository, profile_id, config, context):
@@ -72,25 +94,44 @@ def linux_gateway_settings(profile_id=None):
         # Setup sessions and Agent bindings are read outside the profile lock,
         # and only when the profile could be a legacy router split.
         context = legacy_context(repository, profile_id) if needs_context(config) else None
+        checked = {}
+
+        def forwarding(io):
+            # Agents are only called outside the profile transaction.
+            if 'refusal' not in checked:
+                if not io:
+                    raise LinuxGatewayError('Linux 网关设置已在其他位置修改，请刷新后重试')
+                from backend.agents.linux_gateway import gateway_off_refusal
+                from backend.common.agent_manager import get_agent_manager
+                checked['refusal'] = gateway_off_refusal(get_agent_manager(), profile_id, context['mihomo_agent_ids'])
+            return checked['refusal']
         if request.method == 'POST':
             value = request.get_json(silent=True)
             if not isinstance(value, dict):
                 raise LinuxGatewayError('Linux 网关设置必须是 JSON 对象')
             restore = '/linux-gateway/restore' in request.path
             action = 'restore' if restore else 'save'
-            def prepare(current):
+            def prepare(current, io=False):
+                check = partial(forwarding, io)
                 if restore:
                     # The snapshot itself is only read after the guard allows it.
-                    _guard(context, current, current, True)
+                    _guard(context, current, current, True, check)
                     candidate = prepare_restore(current)
                 else:
                     candidate = prepare_settings(current, value.get('settings', value))
-                _guard(context, current, candidate, restore)
+                _guard(context, current, candidate, restore, check)
                 return candidate
 
             if request.path.endswith('/preview'):
                 check_revision(value.get('expected_config_revision'), revision)
-                return _response(preview_draft(config, prepare(config), revision, action, request.url_root.rstrip('/')))
+                return _response(preview_draft(config, prepare(config, True), revision, action,
+                                               request.url_root.rstrip('/')))
+            try:
+                # Reads the hosts' forwarding, if turning the gateway off needs
+                # it, before the lock; the transaction decides again below.
+                prepare(config, True)
+            except (LinuxGatewayError, ValueError):
+                pass
 
             committed = {}
             def update(current):

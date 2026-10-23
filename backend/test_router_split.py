@@ -9,9 +9,10 @@ from backend.common.config_repository import ProfileRepository
 from backend.common.linux_gateway import LinuxGatewayError, validate_gateway_selection
 from backend.common.router_split import (
     FULL_TUN, RouterSplitError, check_generation, full_tun_base_yaml, full_tun_document, is_full_tun,
-    is_full_tun_document, legacy_context, mode_from_context, read_marker,
+    GENERATED_TUN_FILTERED, is_full_tun_document, legacy_context, mode_from_context, read_marker,
     require_full_tun_generated, route_rule_set_ids, router_split_state,
 )
+from backend.common.linux_gateway import TUN_FILTER_KEYS
 
 MARKER = {'version': 1, 'takeover': 'full_tun', 'route_rule_set_ids': ['a', 'b', 'a'], 'origin': 'setup'}
 
@@ -116,6 +117,10 @@ def test_full_tun_base_yaml_is_idempotent_and_uses_default_template():
     ({'tun': {**FULL_TUN, 'route-address': []}}, False),
     ({'tun': {**FULL_TUN, 'route-exclude-address': ['192.168.1.2/32'], 'device': 'Meta'}}, True),
     ({'x-configflow-linux-gateway': {'enabled': False}}, False),
+    ({'tun': {**FULL_TUN, 'exclude-interface': ['eth0']}}, False),
+    ({'tun': {**FULL_TUN, 'include-mac-address': ['00:11:22:33:44:55']}}, False),
+    ({'tun': {**FULL_TUN, 'exclude-uid': [1000], 'include-interface': []}}, False),
+    ({'tun': {**FULL_TUN, 'exclude-interface': [], 'include-uid': None}}, True),
 ])
 def test_full_tun_document_truth_table(change, expected):
     document = {'tun': deepcopy(FULL_TUN), **change}
@@ -126,6 +131,20 @@ def test_full_tun_document_truth_table(change, expected):
         with pytest.raises(ValueError, match='完整 TUN'):
             require_full_tun_generated(document)
     assert is_full_tun_document(None) is False
+
+
+@pytest.mark.parametrize('key', TUN_FILTER_KEYS)
+def test_every_tun_filter_stops_the_full_tun(key):
+    """A filtered connection is routed back to the main router, which forwards it here again."""
+    document = {'tun': {**FULL_TUN, key: ['x']}}
+    assert is_full_tun_document(document) is False
+    with pytest.raises(ValueError) as error:
+        require_full_tun_generated(document)
+    assert str(error.value) == GENERATED_TUN_FILTERED.format(keys=key)
+    with pytest.raises(LinuxGatewayError, match=f'tun.{key} 过滤冲突'):
+        full_tun_document(document)
+    assert router_split_state(None, 'home', config(custom_config=yaml.safe_dump(document)), context={})['issues'] == [
+        'tun_filtered']
 
 
 def test_rule_set_id_validation_is_shared_with_gateway_selection():
@@ -174,6 +193,8 @@ def test_marker_wins_and_reports_issues(repository):
     broken = config(gateway={'enabled': True, 'rule_set_ids': []}, custom_config='mixed-port: 7890\n')
     assert router_split_state(repository, 'home', broken)['issues'] == ['tun_missing', 'gateway_enabled']
     assert router_split_state(repository, 'home', config(custom_config='a: ['))['issues'] == ['tun_missing']
+    filtered = 'tun: {enable: true, auto-route: false, exclude-interface: [eth0]}\n'
+    assert router_split_state(repository, 'home', config(custom_config=filtered))['issues'] == ['tun_filtered', 'tun_missing']
     assert router_split_state(repository, 'home', config({**MARKER, 'version': 0}))['mode'] == 'invalid'
 
 

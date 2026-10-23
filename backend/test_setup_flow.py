@@ -1031,7 +1031,7 @@ def test_full_tun_route_instructions_only_use_the_marker_list(installed, monkeyp
     monkeypatch.setattr('backend.agents.gateway_installation.latest', lambda *_: {'session': {
         **gateway, 'config_changed': repository.config_revision(profile_id) != revision}})
     calls = []
-    def desired(config, host, selected):
+    def desired(config, host, selected, content_loader=None):
         calls.append(selected)
         return {'proxy_cidrs': [{'cidr': '198.18.0.0/16', 'sources': ['fake-ip']}], 'fake_ip_range': '198.18.0.0/16', 'warnings': []}
     monkeypatch.setattr('backend.routers.desired.compute_desired', desired)
@@ -1040,6 +1040,89 @@ def test_full_tun_route_instructions_only_use_the_marker_list(installed, monkeyp
     assert calls == [['forwarded']]
     assert response.json['route_instructions']['routes'] == [
         {'cidr': '198.18.0.0/16', 'sources': ['fake-ip'], 'requires_source_exclusion': False}]
+
+
+TELEGRAM_LIBRARY = {'id': 'lib-tg', 'name': 'TG Lab', 'url': 'https://rules.test/telegram.list', 'source_type': 'url',
+                    'behavior': 'ipcidr', 'format': 'text', 'enabled': True}
+TELEGRAM = {'id': 'tg', 'itemType': 'ruleset', 'library_rule_id': 'lib-tg', 'policy': 'Proxy', 'enabled': True}
+
+
+def forward_telegram(repository, profile_id, monkeypatch, gateway, *, marker=True):
+    repository.update_shared_transaction(lambda shared: shared['rule_library'].append(deepcopy(TELEGRAM_LIBRARY)))
+    profile = repository.get_profile(profile_id)
+    mihomo = profile['mihomo']
+    if marker:
+        mihomo['router_split']['route_rule_set_ids'] = ['tg']
+    else:
+        mihomo['linux_gateway']['rule_set_ids'] = ['tg']
+    repository.save_profile(profile_id, {'mihomo': mihomo, 'rule_configs': profile['rule_configs'] + [deepcopy(TELEGRAM)]})
+    revision = repository.config_revision(profile_id)
+    monkeypatch.setattr('backend.agents.gateway_installation.latest', lambda *_: {'session': {
+        **gateway, 'config_changed': repository.config_revision(profile_id) != revision}})
+
+
+def test_full_tun_route_instructions_download_the_forwarded_rule_sets(installed, monkeypatch):
+    """Lab v2-E: on a fresh server nothing had cached Telegram, so its IP ranges were missing."""
+    import requests
+    client, repository, profile_id, gateway, _ = installed
+    forward_telegram(repository, profile_id, monkeypatch, gateway)
+    downloads = []
+    reply = {'value': requests.ConnectionError('offline')}
+    def request_rule(url, **kwargs):
+        downloads.append((url, kwargs.get('timeout')))
+        if isinstance(reply['value'], Exception):
+            raise reply['value']
+        return SimpleNamespace(status_code=200, text=reply['value'])
+    monkeypatch.setattr('backend.routes.rules.request_rule', request_rule)
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200, response.json
+    instructions = response.json['route_instructions']
+    assert instructions['incomplete'] is True and instructions['missing_rule_sets'] == ['TG Lab']
+    assert '规则集「TG Lab」没有本地缓存，未计入其中的 IP 段' in instructions['warnings']
+    # The library URL, then the rule's own (here the same), each with the check's timeout.
+    assert set(downloads) == {('https://rules.test/telegram.list', (5, 20))}
+    # The manual confirmation re-checks, so a download that still fails blocks it.
+    manual = {'router_mode': 'manual', 'ack_routes': True, 'ack_dns': True}
+    response = client.post(f'/api/setup/{SESSION}/finish', json=manual)
+    assert response.status_code == 409 and '「TG Lab」的 IP 段仍未下载' in response.json['message']
+    assert not client.get(f'/api/setup/{SESSION}').json['completed']
+    reply['value'] = '91.108.4.0/22\n149.154.160.0/20\n'
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    instructions = response.json['route_instructions']
+    assert instructions['incomplete'] is False and 'missing_rule_sets' not in instructions
+    assert [route['cidr'] for route in instructions['routes']] == ['91.108.4.0/22', '149.154.160.0/20', '198.18.0.0/16']
+    assert instructions['warnings'] == []
+    # Cached now: a later check needs no network.
+    reply['value'] = requests.ConnectionError('offline')
+    downloads.clear()
+    response = client.post(f'/api/setup/{SESSION}/finish', json=manual)
+    assert response.status_code == 200, response.json
+    assert response.json['completed'] and downloads == []
+
+
+def test_route_rule_downloads_stop_starting_after_the_check_budget(installed, monkeypatch):
+    client, repository, profile_id, gateway, _ = installed
+    forward_telegram(repository, profile_id, monkeypatch, gateway)
+    monkeypatch.setattr('backend.common.setup_completion.ROUTE_RULE_BUDGET', -1)
+    monkeypatch.setattr('backend.routes.rules.request_rule', lambda *_a, **_k: pytest.fail('downloaded'))
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200 and response.json['route_instructions']['incomplete'] is True
+
+
+def test_selective_route_instructions_still_read_only_the_local_cache(installed, monkeypatch):
+    client, repository, profile_id, gateway, status = installed
+    from backend.common import setup_flow
+    session = setup_flow.read(repository, SESSION)
+    session['legacy_takeover'] = True
+    setup_flow.write(repository, session)
+    status.clear()
+    status['managed'] = {'active': True, 'healthy': True}
+    forward_telegram(repository, profile_id, monkeypatch, gateway, marker=False)
+    monkeypatch.setattr('backend.routes.rules.request_rule', lambda *_a, **_k: pytest.fail('downloaded'))
+    response = client.post(f'/api/setup/{SESSION}/check', json={})
+    assert response.status_code == 200, response.json
+    instructions = response.json['route_instructions']
+    assert instructions['incomplete'] is False and '规则集「TG Lab」没有本地缓存，未计入其中的 IP 段' in instructions['warnings']
 
 
 def test_legacy_and_gateway_installation_checks_still_use_gateway_forwarding(installed):

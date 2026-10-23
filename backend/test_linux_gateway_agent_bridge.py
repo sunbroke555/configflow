@@ -284,6 +284,31 @@ def test_ordinary_gateway_remove_is_unchanged(split, calls):
     assert [item['json'] for item in calls[0]] == [{}, {}]
 
 
+AGENT_REMOVED = {'success': True, 'message': '受管网关配置已撤销；请恢复客户端原来的网关和 DNS 设置', 'managed': {'active': False}}
+
+
+@pytest.mark.parametrize('mode,managed,message', [
+    ('full_tun', {'active': False, 'preserves_forwarding': True}, '设备上没有旧网关记录，无需清理；IPv4 转发保持不变。'),
+    ('full_tun', {'active': True, 'healthy': True, 'preserves_forwarding': True}, '旧网关记录已清理，IPv4 转发保持开启。'),
+    ('legacy', None, '网关转发已撤销，主路由转来的连接已中断。请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发。'),
+])
+def test_router_split_remove_never_tells_clients_to_restore_their_gateway(split, calls, mode, managed, message):
+    """The main router forwards to Linux; its clients never changed their gateway."""
+    _, replies = calls
+    split['value'] = mode
+    if managed is not None:
+        replies.append(Response({'success': True, 'managed': managed}))
+    replies.append(Response(AGENT_REMOVED))
+    body = {'confirm_router_split_teardown': True} if mode == 'legacy' else {}
+    result = bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', body)
+    assert result == {**AGENT_REMOVED, 'message': message}
+
+
+def test_selective_gateway_remove_keeps_the_agent_text(split, calls):
+    calls[1].append(Response(AGENT_REMOVED))
+    assert bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', {}) == AGENT_REMOVED
+
+
 def test_http_router_split_codes_reach_the_editor(authenticated_app, monkeypatch):
     """The stored setup session and marker decide, and the editor gets the code and text."""
     from backend.common import setup_flow

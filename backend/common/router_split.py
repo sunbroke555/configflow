@@ -29,8 +29,13 @@ MESSAGES = {
 }
 # ROUTER_SPLIT_RESTORE_BLOCKED for a legacy profile whose snapshot has the gateway off.
 LEGACY_RESTORE_BLOCKED = '恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。'
+# ROUTER_SPLIT_RESTORE_BLOCKED for a full TUN profile, by what the restore point holds.
+FULL_TUN_NO_RESTORE_POINT = '没有可恢复的试用前快照；主路由分流（完整 TUN）不使用 Linux 网关试用，无需恢复。'
+FULL_TUN_RESTORE_OVERWRITES = '主路由分流的配置空间不能恢复试用前快照：恢复会用快照覆盖当前的 Mihomo 与 OxiDNS 设置，可能让分流中断。'
 GENERATED_TUN_MISSING = ('主路由分流需要完整 TUN，但生成的 Mihomo 配置未启用（基础 YAML 缺少 tun 或被修改）。'
                          '请在基础 YAML 中恢复 tun 后再发布，否则主路由转来的连接会回环。')
+GENERATED_TUN_FILTERED = ('主路由分流的完整 TUN 不能带 tun.{keys} 过滤：被排除的连接会在主路由与 Linux 之间回环。'
+                          '请在 Mihomo 基础 YAML 中移除后再发布。')
 _KEYS = {'version', 'takeover', 'route_rule_set_ids', 'origin'}
 
 
@@ -82,6 +87,11 @@ def _gateway_enabled(config):
     return isinstance(value, dict) and value.get('enabled') is True
 
 
+def tun_filters(tun):
+    """The TUN filter keys in use; each lets some forwarded connections bypass the TUN."""
+    return [key for key in TUN_FILTER_KEYS if tun.get(key)] if isinstance(tun, dict) else []
+
+
 def full_tun_document(document):
     """Return the base document with the full TUN; user TUN keys are kept."""
     document = deepcopy(document)
@@ -90,9 +100,9 @@ def full_tun_document(document):
         tun = {}
     if not isinstance(tun, dict):
         raise LinuxGatewayError('Mihomo tun 必须是对象')
-    for key in TUN_FILTER_KEYS:
-        if tun.get(key):
-            raise LinuxGatewayError(f'Linux 网关与现有 tun.{key} 过滤冲突，请先在 Mihomo 基础 YAML 中移除该过滤，避免客户端绕过接管')
+    for key in tun_filters(tun):
+        raise LinuxGatewayError(f'主路由分流的完整 TUN 与现有 tun.{key} 过滤冲突：被排除的连接会在主路由与 Linux 之间回环。'
+                                '请先在 Mihomo 基础 YAML 中移除该过滤')
     for key in ROUTE_KEYS_REMOVED:
         tun.pop(key, None)
     for key, value in FULL_TUN.items():
@@ -127,7 +137,8 @@ def full_tun_base_yaml(text):
     return _dump(full_tun_document(_load_base(text)))
 
 
-def is_full_tun_document(doc):
+def _full_tun_shape(doc):
+    # Captures every connection, apart from what a TUN filter excludes.
     if not isinstance(doc, dict) or GATEWAY_MARKER in doc:
         return False
     tun = doc.get('tun')
@@ -137,6 +148,15 @@ def is_full_tun_document(doc):
     return (all(tun.get(key) is True for key in ('enable', 'auto-route', 'auto-redirect'))
             and isinstance(hijack, list) and 'any:53' in hijack
             and not any(key in tun for key in ROUTE_KEYS_REMOVED))
+
+
+def _document_filters(doc):
+    return tun_filters(doc.get('tun')) if isinstance(doc, dict) else []
+
+
+def is_full_tun_document(doc):
+    """A TUN the main router can forward to: a filtered connection would loop back."""
+    return _full_tun_shape(doc) and not _document_filters(doc)
 
 
 def check_generation(config):
@@ -149,23 +169,28 @@ def check_generation(config):
 
 
 def require_full_tun_generated(main):
-    if not is_full_tun_document(main):
+    if not _full_tun_shape(main):
         raise ValueError(GENERATED_TUN_MISSING)
+    filters = _document_filters(main)
+    if filters:
+        raise ValueError(GENERATED_TUN_FILTERED.format(keys='、tun.'.join(filters)))
 
 
-def legacy_context(repository, profile_id):
-    """Read the setup sessions and bound Agents; call outside profile transactions.
-
-    An abandoned session is no longer the profile's purpose, as on the Setup page.
-    """
+def _session_context(repository, profile_id):
+    # An abandoned session is no longer the profile's purpose, as on the Setup page.
     from backend.common.setup_flow import profile_sessions
     sessions = [item for item in profile_sessions(repository, profile_id) if not item.get('abandoned')]
     latest = sessions[0] if sessions else None  # Sorted newest first.
-    agents = repository.get_profile_agent_bindings(profile_id)['agents']
     return {'session_goal': latest.get('goal') if latest else None,
             'session_id': latest.get('id') if latest else None,
             'session_completed': bool(latest.get('completed')) if latest else False,
-            'has_gateway_session': any(item.get('goal') == 'gateway' for item in sessions),
+            'has_gateway_session': any(item.get('goal') == 'gateway' for item in sessions)}
+
+
+def legacy_context(repository, profile_id):
+    """Read the setup sessions and bound Agents; call outside profile transactions."""
+    agents = repository.get_profile_agent_bindings(profile_id)['agents']
+    return {**_session_context(repository, profile_id),
             'mihomo_agent_ids': [agent['id'] for agent in agents if agent.get('service_type') == 'mihomo']}
 
 
@@ -176,24 +201,53 @@ def needs_context(config):
 
 def base_is_full_tun(config):
     """Whether the Mihomo base YAML itself carries the full TUN, without the gateway."""
+    return is_full_tun_document(_base_document(config))
+
+
+def _base_document(config):
     try:
-        document = yaml.safe_load((config.get('mihomo') or {}).get('custom_config') or '')
+        return yaml.safe_load((config.get('mihomo') or {}).get('custom_config') or '')
     except (yaml.YAMLError, RecursionError):
-        return False
-    return is_full_tun_document(document)
+        return None
+
+
+def _router_ids(config, agent_ids):
+    routers = (config.get('routers') or {}).get('items') or []
+    return [router.get('id') for router in routers if isinstance(router, dict)
+            and router.get('proxy_gateway_agent_id') in agent_ids]
+
+
+def legacy_source(config, context):
+    """How an unmarked profile matches the router split set up with the gateway:
+    'setup', 'topology' or None, whatever its gateway switch and base TUN."""
+    if read_marker(config)[0] != 'absent':
+        return None
+    if context.get('session_goal') == 'router':
+        return 'setup'
+    if context.get('has_gateway_session'):
+        return None  # A gateway-goal profile may use upstream routers without the split.
+    return 'topology' if _router_ids(config, list(context.get('mihomo_agent_ids') or [])) else None
+
+
+def publish_legacy_source(repository, profile_id, config, agent_id):
+    """legacy_source for a publish to one Agent; reads the setup sessions only if needed."""
+    if read_marker(config)[0] != 'absent' or not profile_id:
+        return None
+    return legacy_source(config, {**_session_context(repository, profile_id), 'mihomo_agent_ids': [agent_id]})
 
 
 def _state(config, context):
     agent_ids = list(context.get('mihomo_agent_ids') or [])
-    routers = (config.get('routers') or {}).get('items') or []
     result = {'mode': None, 'source': None, 'mihomo_agent_ids': agent_ids,
-              'router_ids': [router.get('id') for router in routers if isinstance(router, dict)
-                             and router.get('proxy_gateway_agent_id') in agent_ids],
+              'router_ids': _router_ids(config, agent_ids),
               'setup_session_id': context.get('session_id'), 'issues': []}
     state, _ = read_marker(config)
     if state == 'valid':
         result.update(mode='full_tun', source='marker')
-        if not base_is_full_tun(config):
+        base = _base_document(config)
+        if _document_filters(base):
+            result['issues'].append('tun_filtered')
+        if not _full_tun_shape(base):
             result['issues'].append('tun_missing')
         if _gateway_enabled(config):
             result['issues'].append('gateway_enabled')
@@ -202,14 +256,12 @@ def _state(config, context):
         result.update(mode='invalid', source='marker')
         return result
     if not _gateway_enabled(config) or base_is_full_tun(config):
-        # With its own full TUN, turning the gateway off keeps the takeover.
+        # With its own full TUN, turning the gateway off keeps the takeover;
+        # the editor still checks that the host keeps IPv4 forwarding then.
         return result
-    if context.get('session_goal') == 'router':
-        result.update(mode='legacy', source='setup')
-    elif context.get('has_gateway_session'):
-        pass  # A gateway-goal profile may use upstream routers without the split.
-    elif result['router_ids']:
-        result.update(mode='legacy', source='topology')
+    source = legacy_source(config, context)
+    if source:
+        result.update(mode='legacy', source=source)
     return result
 
 

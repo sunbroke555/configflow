@@ -178,3 +178,77 @@ def test_status_is_only_read_for_a_full_tun_shell_mihomo(host):
     _prepare_transactional_content({**shell, 'version': MIN_AGENT_VERSION}, config(True))
     _prepare_transactional_content({**shell, 'service_type': 'oxidns'}, full_tun())
     assert host['calls'] == []
+
+
+def test_full_tun_publish_refuses_a_filtered_tun():
+    """Lab v2-E2: tun.exclude-interface [eth0] let forwarded SYNs loop between router and Linux."""
+    import yaml as pyyaml
+    from backend.common.router_split import GENERATED_TUN_FILTERED, full_tun_base_yaml
+    agent = {'id': 'new', 'service_type': 'mihomo', 'deployment_method': 'docker', 'version': '1.8.40-go'}
+    base = pyyaml.safe_load(full_tun_base_yaml('mode: rule\ndns: {enable: false}\n'))
+    base['tun'].update({'exclude-interface': ['eth0'], 'include-uid': [0]})
+    with pytest.raises(ValueError) as error:
+        _prepare_transactional_content(agent, full_tun(pyyaml.safe_dump(base)))
+    assert str(error.value) == GENERATED_TUN_FILTERED.format(keys='exclude-interface、tun.include-uid')
+    # An empty filter list filters nothing.
+    base['tun'].update({'exclude-interface': [], 'include-uid': None})
+    assert 'auto-redirect: true' in _prepare_transactional_content(agent, full_tun(pyyaml.safe_dump(base)))['config_content']
+
+
+def old_split(*, gateway=False, routed=True):
+    """An unmarked profile from the old router split wizard, its base YAML now a full TUN."""
+    from backend.common.router_split import full_tun_base_yaml
+    value = config(gateway)
+    value['mihomo']['custom_config'] = full_tun_base_yaml(value['mihomo']['custom_config'])
+    if routed:
+        value['routers'] = {'items': [{'id': 'r1', 'proxy_gateway_agent_id': 'split'}]}
+    return value
+
+
+SPLIT_AGENT = {'id': 'split', 'profile_id': 'home', 'service_type': 'mihomo', 'deployment_method': 'shell',
+               'version': '1.8.40-go'}
+
+
+@pytest.fixture
+def sessions(monkeypatch):
+    value = []
+    monkeypatch.setattr('backend.common.setup_flow.profile_sessions', lambda repository, profile_id: deepcopy(value))
+    return value
+
+
+@pytest.mark.parametrize('match', ['topology', 'setup'])
+def test_old_router_split_gateway_off_publish_keeps_forwarding(host, sessions, match):
+    """Lab v2-H: publishing the gateway off made the Agent remove its record and set ip_forward back to 0."""
+    from backend.agents.linux_gateway import PUBLISH_GATEWAY_OFF_NOT_KEPT
+    if match == 'setup':
+        sessions.append({'id': 's', 'goal': 'router', 'completed': True})
+    host['status'] = {'success': True, 'managed': {'active': True, 'healthy': True, 'preserves_forwarding': False}}
+    with pytest.raises(ValueError) as error:
+        _prepare_transactional_content(SPLIT_AGENT, old_split(routed=match == 'topology'))
+    assert str(error.value) == PUBLISH_GATEWAY_OFF_NOT_KEPT
+    assert host['calls'] == [('split', 'status', 'GET', 'home')]
+    # Persisted forwarding (ordinary All-in-One), or no record at all, keeps it on.
+    host['status']['managed']['preserves_forwarding'] = True
+    _prepare_transactional_content(SPLIT_AGENT, old_split(routed=match == 'topology'))
+    host['status']['managed'] = {'active': False, 'preserves_forwarding': False}
+    _prepare_transactional_content(SPLIT_AGENT, old_split(routed=match == 'topology'))
+
+
+def test_old_router_split_gateway_off_publish_refuses_an_unknown_record(host, sessions):
+    from backend.agents.oxidns_monitor import MonitorError
+    host['status'] = MonitorError('AGENT_UNREACHABLE', 502, '暂时无法连接 Agent，请检查设备连接。')
+    with pytest.raises(ValueError, match='无法确认设备上是否仍有旧版 Linux 网关记录.*暂时无法连接 Agent'):
+        _prepare_transactional_content(SPLIT_AGENT, old_split())
+
+
+def test_gateway_off_publish_reads_the_status_only_for_an_old_router_split(host, sessions):
+    _prepare_transactional_content({**SPLIT_AGENT, 'deployment_method': 'docker'}, old_split())
+    _prepare_transactional_content(SPLIT_AGENT, old_split(gateway=True))
+    _prepare_transactional_content({**SPLIT_AGENT, 'profile_id': None}, old_split())
+    _prepare_transactional_content({**SPLIT_AGENT, 'id': 'other'}, old_split())
+    _prepare_transactional_content(SPLIT_AGENT, old_split(routed=False))
+    sessions.append({'id': 's', 'goal': 'gateway'})
+    _prepare_transactional_content(SPLIT_AGENT, old_split())
+    sessions[:] = [{'id': 's', 'goal': 'router', 'abandoned': True}]
+    _prepare_transactional_content(SPLIT_AGENT, old_split(routed=False))
+    assert host['calls'] == []

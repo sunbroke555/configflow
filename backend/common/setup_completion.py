@@ -4,6 +4,7 @@ Finishing may make the setup profile ConfigFlow's default, only when asked.
 """
 from hashlib import sha256
 import json
+import time
 
 from backend.common.setup_flow import SetupError
 
@@ -73,6 +74,33 @@ def _check_full_tun(status):
         raise SetupError(f"Mihomo TUN（{tun.get('device') or 'Meta'}）未运行，请检查 Mihomo 日志", 409)
 
 
+# Downloads of the router split's forwarded rule sets during one check.
+ROUTE_RULE_TIMEOUT = (5, 20)
+ROUTE_RULE_BUDGET = 45
+
+
+def _route_rule_loader(config, missing):
+    """Load each forwarded rule set like generation does, filling the rule cache.
+
+    The full TUN generates no gateway providers, so nothing else downloads these
+    rule sets before the check. Names whose content stays unavailable go into
+    ``missing``; downloads stop starting once the check's budget is spent.
+    """
+    from backend.routes.rules import get_ruleset_content
+    deadline = time.monotonic() + ROUTE_RULE_BUDGET
+
+    def load(item, library_rule):
+        content = ''
+        try:
+            content = get_ruleset_content(item, library_rule, allow_network=time.monotonic() < deadline,
+                                          config_data=config, timeout=ROUTE_RULE_TIMEOUT)
+        finally:
+            if not content:
+                missing.append(str(item.get('name') or item.get('id') or '规则集'))
+        return content
+    return load
+
+
 def check_installation(repository, session):
     from backend.common.agent_manager import get_agent_manager
     from backend.agents import gateway_installation, linux_gateway
@@ -106,14 +134,20 @@ def check_installation(repository, session):
         'mihomo': {key: agents['mihomo'].get(key) for key in ('id', 'name', 'host')},
         'oxidns': {key: agents['oxidns'].get(key) for key in ('id', 'name', 'host')}}
     from backend.routers.desired import compute_desired
-    selected = (route_rule_set_ids(config) if full_tun
-                else config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', []))
-    desired = compute_desired(config, agents['mihomo'].get('host'), selected)
+    missing = []
+    if full_tun:
+        desired = compute_desired(config, agents['mihomo'].get('host'), route_rule_set_ids(config),
+                                  content_loader=_route_rule_loader(config, missing))
+    else:
+        # The selective gateway's generation already downloaded its rule sets.
+        desired = compute_desired(config, agents['mihomo'].get('host'),
+                                  config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', []))
     for item in desired['proxy_cidrs']:
         item['requires_source_exclusion'] = item['cidr'] != desired['fake_ip_range']
     session.update(config_revision=revision, route_instructions={
         'gateway': agents['mihomo'].get('host'), 'dns': agents['oxidns'].get('host'),
-        'routes': desired['proxy_cidrs'], 'warnings': desired['warnings']})
+        'routes': desired['proxy_cidrs'], 'warnings': desired['warnings'], 'incomplete': bool(missing),
+        **({'missing_rule_sets': missing} if missing else {})})
     return config
 
 
@@ -125,6 +159,11 @@ def finish(repository, session, body):
     if session['goal'] == 'router':
         mode = body.get('router_mode', session.get('router_mode', 'manual'))
         if mode == 'manual':
+            missing = session['route_instructions'].get('missing_rule_sets') or []
+            if missing:
+                names = '」「'.join(missing)
+                raise SetupError(f'主路由转发规则集「{names}」的 IP 段仍未下载，静态路由说明不完整。'
+                                 '请检查 ConfigFlow 服务器能否访问规则地址后重新检查。', 409)
             if body.get('ack_routes') is not True or body.get('ack_dns') is not True:
                 raise SetupError('请先按说明配置主路由的静态路由与 DNS，再确认已完成', 409)
             session.update(router_mode='manual', router_verification='manual')
