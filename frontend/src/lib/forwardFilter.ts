@@ -7,10 +7,11 @@ export type ForwardFilterState = 'ok' | 'may_drop' | 'unknown' | 'not_applicable
 export type ForwardFilterSourceKind = 'docker' | 'iptables' | 'nftables' | 'firewalld' | 'ufw'
 /**
  * 被拦截的流量：forward＝主路由转来、进出 TUN 的转发（UDP、ping；没有 auto-redirect 时也包括 TCP），
- * dns＝把这台 Linux 当 DNS 的查询（auto-redirect 劫持进 TUN），redirect_tcp＝auto-redirect 转给本机端口的 TCP，
- * tun_tcp＝TUN 交给本机 Mihomo 的 TCP（system / mixed 栈）。
+ * dns＝把这台 Linux 当 DNS 的查询（auto-redirect 劫持进 TUN），local_dns＝发到这台 Linux 53 端口、
+ * 由本机 DNS 服务（如同机安装的 OxiDNS）应答的查询（不经过 TUN，被本机入站规则拦下），
+ * redirect_tcp＝auto-redirect 转给本机端口的 TCP，tun_tcp＝TUN 交给本机 Mihomo 的 TCP（system / mixed 栈）。
  */
-export type ForwardFilterFlow = 'forward' | 'dns' | 'redirect_tcp' | 'tun_tcp'
+export type ForwardFilterFlow = 'forward' | 'dns' | 'local_dns' | 'redirect_tcp' | 'tun_tcp'
 
 export interface ForwardFilterSource {
   kind: ForwardFilterSourceKind
@@ -80,21 +81,22 @@ const SOURCE_LABELS: Record<ForwardFilterSourceKind, string> = {
 }
 
 const isText = (value: unknown): value is string => typeof value === 'string'
-const FLOWS: readonly ForwardFilterFlow[] = ['forward', 'dns', 'redirect_tcp', 'tun_tcp']
+const FLOWS: readonly ForwardFilterFlow[] = ['forward', 'dns', 'local_dns', 'redirect_tcp', 'tun_tcp']
 
 /**
- * 状态短句按被拦截的流量：只有转发的 UDP / ping 时为「可能拦截 UDP」；TCP 也受影响，
- * 或转发的 UDP 与发到这台 Linux 的 DNS（UDP、TCP 都失败）一起受影响时为「可能拦截转发」；
- * 只影响把这台 Linux 当 DNS 的查询时为「可能拦截 DNS」。
+ * 状态短句（最多 6 个字宽，一行放下）按被拦截的流量：发到这台 Linux 的 DNS（dns、local_dns）受影响时
+ * 优先为「可能拦截 DNS」（查不到域名时其他连接也无从谈起）；只有转发时为「可能拦截 UDP」
+ * （没有 auto-redirect 时转发也包括 TCP，为「可能拦截转发」）；只有进本机的 TCP（redirect_tcp、tun_tcp）
+ * 时为「可能拦截 TCP」；转发与 TCP 同时受影响时为「可能拦截转发」。
  */
 function impactLabel(filter: ForwardFilter): string {
   const redirect = filter.auto_redirect === true
   const flows = Array.isArray(filter.flows) ? filter.flows.filter(flow => FLOWS.includes(flow)) : []
   if (!flows.length) return redirect ? '可能拦截 UDP' : '可能拦截转发'
-  const tcp = flows.includes('redirect_tcp') || (!redirect && (flows.includes('forward') || flows.includes('tun_tcp')))
-  const forward = flows.includes('forward')
-  if (tcp || (forward && flows.includes('dns'))) return '可能拦截转发'
-  return forward ? '可能拦截 UDP' : '可能拦截 DNS'
+  if (flows.includes('dns') || flows.includes('local_dns')) return '可能拦截 DNS'
+  const tcp = flows.includes('redirect_tcp') || flows.includes('tun_tcp')
+  if (flows.includes('forward')) return tcp || !redirect ? '可能拦截转发' : '可能拦截 UDP'
+  return '可能拦截 TCP'
 }
 
 export function forwardFilterSourceLabel(kind: ForwardFilterSourceKind, label?: string): string {

@@ -125,6 +125,7 @@ type nftFinding struct {
 	policy  bool
 	unknown bool
 	flow    string
+	proto   string
 }
 
 // record keeps a possible drop; strict flows only count certain ones (see
@@ -136,7 +137,7 @@ func (e *nftEvaluation) record(item nftFinding, f flow, m tri, certain bool) {
 		}
 		return
 	}
-	item.flow = f.name
+	item.flow, item.proto = f.name, f.proto
 	e.found = append(e.found, item)
 }
 
@@ -175,11 +176,8 @@ func (in *inspection) evaluateNFT(ruleset *nftRuleset, iptablesNFTRead, firewall
 		if firewalld {
 			kind = "firewalld"
 			plan = in.plan("firewalld", "", "", "", "", "firewalld")
-			if _, ok := ruleset.chains[nftKey("inet", "firewalld", "filter_FWD_policy_"+FirewalldPolicy)]; ok {
-				plan.policyExists = true
-			}
-			if _, ok := ruleset.chains[nftKey("inet", "firewalld", "filter_IN_"+FirewalldZone)]; ok {
-				plan.zoneExists = true
+			if plan.lanZones == nil {
+				plan.lanZones = firewalldZones(ruleset, in.lan)
 			}
 		} else {
 			plan = in.plan("nftables", "", chain.family, chain.table, chain.name, name)
@@ -201,15 +199,18 @@ func (in *inspection) evaluateNFT(ruleset *nftRuleset, iptablesNFTRead, firewall
 				} else {
 					detail = "firewalld 正在运行，会拒绝转发到 " + displayDevice(in.target.Device) + " 的流量（" + chain.name + "）"
 				}
-				if item.flow == FlowRedirectTCP {
+				switch item.flow {
+				case FlowRedirectTCP:
 					detail = "firewalld 正在运行，会拒绝被重定向到本机端口的 TCP（" + chain.name + "）"
+				case FlowLocalDNS:
+					detail = "firewalld 正在运行，会拒绝局域网发到本机 53 端口的 DNS 查询（" + chain.name + "）"
 				}
 			}
 			policy := ""
 			if item.policy {
 				policy = "drop"
 			}
-			in.record(finding{source: Source{Kind: kind, Hook: chain.hook, Family: chain.family, Table: chain.table, Chain: chain.name, Policy: policy, Detail: clip(detail)}, policy: item.policy, flow: item.flow})
+			in.record(finding{source: Source{Kind: kind, Hook: chain.hook, Family: chain.family, Table: chain.table, Chain: chain.name, Policy: policy, Detail: clip(detail)}, policy: item.policy, flow: item.flow, proto: item.proto})
 		}
 	}
 }
@@ -557,6 +558,12 @@ func nftMatch(body interface{}, f flow, lookup func(string) ([]interface{}, bool
 			}
 		}
 		switch protocol {
+		case "icmp":
+			if field == "type" && (op == "==" || op == "!=" || op == "in") {
+				if values, ok := nftResolve(spec["right"], lookup); ok {
+					return negate(icmpTypeMatch(values, f), negated), false
+				}
+			}
 		case "ip":
 			if field == "saddr" && (op == "==" || op == "!=" || op == "in") {
 				if prefixes, ok := nftPrefixes(spec["right"], lookup); ok {
@@ -786,4 +793,64 @@ func lastAddr(prefix netip.Prefix) netip.Addr {
 	value := uint32(bytes[0])<<24 | uint32(bytes[1])<<16 | uint32(bytes[2])<<8 | uint32(bytes[3])
 	value |= ^uint32(0) >> uint(prefix.Bits()) // shifting by 32 gives 0
 	return netip.AddrFrom4([4]byte{byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)})
+}
+
+// firewalldZones finds the zones of the LAN interfaces in firewalld's input
+// dispatch (filter_INPUT_POLICIES since 1.0, filter_INPUT_ZONES before): the
+// first jump or goto to a zone chain that applies to the interface by name
+// or unconditionally (the default zone). Rules with any other match (source
+// zones) are skipped. Unknown LAN interfaces give none.
+func firewalldZones(ruleset *nftRuleset, lan []string) []string {
+	var zones []string
+	seen := map[string]bool{}
+	for _, iface := range lan {
+		zone := ""
+		for _, name := range []string{"filter_INPUT_POLICIES", "filter_INPUT_ZONES"} {
+			chain := ruleset.chains[nftKey("inet", "firewalld", name)]
+			if chain == nil {
+				continue
+			}
+			for _, expressions := range chain.rules {
+				if zone = firewalldZoneRule(expressions, iface); zone != "" {
+					break
+				}
+			}
+			if zone != "" {
+				break
+			}
+		}
+		if zone != "" && !seen[zone] {
+			seen[zone] = true
+			zones = append(zones, zone)
+		}
+	}
+	return zones
+}
+
+func firewalldZoneRule(expressions []interface{}, iface string) string {
+	for _, raw := range expressions {
+		expression, _ := raw.(map[string]interface{})
+		if body, ok := expression["match"].(map[string]interface{}); ok {
+			left, _ := body["left"].(map[string]interface{})
+			value, _ := body["right"].(string)
+			if body["op"] != "==" || nftMetaKey(left) != "iifname" || value != iface {
+				return ""
+			}
+			continue
+		}
+		for _, verdict := range []string{"jump", "goto"} {
+			spec, ok := expression[verdict].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			target, _ := spec["target"].(string)
+			zone := strings.TrimPrefix(target, "filter_IN_")
+			if zone == target || strings.HasPrefix(zone, "policy_") || !nftNamePattern.MatchString(zone) {
+				return ""
+			}
+			return zone
+		}
+		return ""
+	}
+	return ""
 }

@@ -19,14 +19,20 @@ describe('forward filter warning', () => {
 
   it.each([
     ['forwarded UDP only', ['forward'], true, '可能拦截 UDP'],
-    // Lab: FORWARD DROP on a standalone Mihomo serving LAN DNS; every lookup fails, not just UDP.
-    ['forwarded UDP and DNS to this host', ['forward', 'dns'], true, '可能拦截转发'],
+    ['forwarding without auto-redirect (TCP too)', ['forward'], false, '可能拦截转发'],
+    // DNS failure breaks everything else, so it wins over every other flow.
+    ['forwarded UDP and DNS to this host', ['forward', 'dns'], true, '可能拦截 DNS'],
     ['DNS to this host only', ['dns'], true, '可能拦截 DNS'],
     ['TCP DNS from the TUN and DNS to this host', ['dns', 'tun_tcp'], true, '可能拦截 DNS'],
-    ['redirected TCP (UFW, INPUT drop)', ['forward', 'dns', 'redirect_tcp', 'tun_tcp'], true, '可能拦截转发'],
-    ['redirected TCP only', ['redirect_tcp'], true, '可能拦截转发'],
-    ['TCP DNS from the TUN only (firewalld)', ['tun_tcp'], true, '可能拦截 DNS'],
-    ['TUN TCP without auto-redirect', ['tun_tcp'], false, '可能拦截转发'],
+    ['UFW on a standalone host', ['forward', 'dns', 'redirect_tcp', 'tun_tcp'], true, '可能拦截 DNS'],
+    // Lab v6-d-aio: UFW on an all-in-one host; OxiDNS on this host is dropped on INPUT.
+    ['UFW on an all-in-one host', ['forward', 'local_dns', 'redirect_tcp'], true, '可能拦截 DNS'],
+    ['local DNS only', ['local_dns'], true, '可能拦截 DNS'],
+    ['redirected TCP only (INPUT drop)', ['redirect_tcp'], true, '可能拦截 TCP'],
+    ['redirected and TUN TCP', ['redirect_tcp', 'tun_tcp'], true, '可能拦截 TCP'],
+    ['TCP from the TUN only (firewalld)', ['tun_tcp'], true, '可能拦截 TCP'],
+    ['TUN TCP without auto-redirect', ['tun_tcp'], false, '可能拦截 TCP'],
+    ['forwarded UDP and redirected TCP', ['forward', 'redirect_tcp'], true, '可能拦截转发'],
     ['an older Agent without flows', undefined, true, '可能拦截 UDP'],
     ['unknown flow names', ['bogus'], false, '可能拦截转发'],
   ])('labels %s', (_case, flows, auto_redirect, label) => {
@@ -35,9 +41,18 @@ describe('forward filter warning', () => {
 
   it('keeps every UFW command, including the before.rules line, verbatim', () => {
     const warning = forwardFilterWarning(ufwDrop())!
-    expect(warning.status).toBe('可能拦截转发')
+    expect(warning.status).toBe('可能拦截 DNS')
     expect(warning.groups).toHaveLength(1)
     expect(warning.groups[0]).toMatchObject({ label: '在这台 Linux 上执行（UFW）', commands: UFW_COMMANDS, text: UFW_COMMANDS.join('\n') })
+  })
+
+  it('uses only the short labels that fit the routers column', () => {
+    const labels = new Set<string>()
+    for (const flows of [[], ['forward'], ['dns'], ['local_dns'], ['redirect_tcp'], ['tun_tcp'], ['forward', 'tun_tcp']]) {
+      for (const auto_redirect of [true, false]) labels.add(forwardFilterWarning(mayDrop({ flows: flows as any, auto_redirect }))!.short)
+    }
+    // Four characters plus a three-letter word or two more characters: one line in the 102px column.
+    expect([...labels].sort()).toEqual(['可能拦截 DNS', '可能拦截 TCP', '可能拦截 UDP', '可能拦截转发'])
   })
 
   it.each([

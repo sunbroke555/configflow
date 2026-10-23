@@ -310,6 +310,11 @@ def test_persist_response_has_no_forward_filter(home):
     bridge.FORWARD_FILTER_UFW_BEFORE_RULES + '; reboot',
     bridge.FORWARD_FILTER_UFW_BEFORE_RULES.replace('/etc/ufw/before.rules', '/etc/passwd'),
     'sed -i 1d /etc/ufw/before.rules',
+    # Only the two exact firewalld existence checks may use '||' or a redirect.
+    'firewall-cmd --permanent --info-zone=public >/dev/null 2>&1 || firewall-cmd --permanent --new-zone=public',
+    'firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 || rm -rf /',
+    'firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 || firewall-cmd --permanent --new-zone=configflow-tun; reboot',
+    'firewall-cmd --permanent --info-policy=configflow-fwd > /etc/passwd',
     'iptables -I FORWARD -o Meta -j ACCEPT; reboot',
     'iptables -I FORWARD -o Meta -j ACCEPT | sh',
     'iptables -I FORWARD -o $(id) -j ACCEPT',
@@ -340,21 +345,28 @@ def test_sanitize_keeps_every_command_form_the_agent_generates():
         'docker': ['iptables -I DOCKER-USER -o Meta -j ACCEPT', 'iptables -I DOCKER-USER -i Meta -j ACCEPT'],
         'iptables': ['iptables-legacy -I FORWARD -o utun.0 -j ACCEPT', 'iptables-legacy -I FORWARD -i utun.0 -j ACCEPT',
                      'iptables-legacy -I INPUT -m conntrack --ctstate DNAT -j ACCEPT',
-                     'iptables-legacy -I INPUT -i utun.0 -j ACCEPT'],
+                     'iptables-legacy -I INPUT -i utun.0 -j ACCEPT',
+                     'iptables-legacy -I INPUT -i eth0 -p udp --dport 53 -j ACCEPT',
+                     'iptables-legacy -I INPUT -i eth0 -p tcp --dport 53 -j ACCEPT'],
         'nftables': ['nft \'insert rule inet filter forward oifname "Meta" accept\'',
                      'nft \'insert rule inet filter forward iifname "Meta" accept\'',
                      "nft 'insert rule inet filter input ct status dnat accept'",
-                     'nft \'insert rule inet filter input iifname "Meta" accept\''],
-        'firewalld': ['firewall-cmd --permanent --new-zone=configflow-tun',
+                     'nft \'insert rule inet filter input iifname "Meta" accept\'',
+                     'nft \'insert rule inet filter input iifname "eth0" udp dport 53 accept\'',
+                     'nft \'insert rule inet filter input iifname "eth0" tcp dport 53 accept\''],
+        'firewalld': ['firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 || '
+                      'firewall-cmd --permanent --new-zone=configflow-tun',
                       'firewall-cmd --permanent --zone=configflow-tun --set-target=ACCEPT',
                       'firewall-cmd --permanent --zone=configflow-tun --change-interface=Meta',
+                      'firewall-cmd --permanent --info-policy=configflow-fwd >/dev/null 2>&1 || '
                       'firewall-cmd --permanent --new-policy=configflow-fwd',
                       'firewall-cmd --permanent --policy=configflow-fwd --add-ingress-zone=ANY',
                       'firewall-cmd --permanent --policy=configflow-fwd --add-egress-zone=configflow-tun',
                       'firewall-cmd --permanent --policy=configflow-fwd --set-target=ACCEPT',
+                      'firewall-cmd --permanent --zone=public --add-service=dns',
                       'firewall-cmd --reload'],
-        'ufw': ['ufw route allow in on Meta', 'ufw route allow out on Meta', 'ufw allow in on Meta', ufw_before_rules,
-                'ufw reload'],
+        'ufw': ['ufw route allow in on Meta', 'ufw route allow out on Meta', 'ufw allow in on Meta',
+                'ufw allow in on eth0 to any port 53', ufw_before_rules, 'ufw reload'],
     }
     assert ufw_before_rules == bridge.FORWARD_FILTER_UFW_BEFORE_RULES
     remedies = [{'source': source, 'label': source, 'device': 'Meta', 'commands': lines, 'persist_note': 'n'}
@@ -366,15 +378,15 @@ def test_sanitize_keeps_every_command_form_the_agent_generates():
 def test_sanitize_reduces_fields_to_known_values():
     result = bridge.sanitize_forward_filter(docker_filter(
         protocol='1', reason='Timeout!', device='bad device', auto_redirect='yes', policy='reject',
-        hint='第一行\n‮第二行' + '长' * 500, verify=5, input_policy='reject', flows=['tun_tcp', 'forward', 'bogus', {}, 'forward'], checked_at='2026-10-24T03:00:00Z' + 'z' * 60, cached=1,
+        hint='第一行\n‮第二行' + '长' * 500, verify=5, input_policy='reject', flows=['tun_tcp', 'local_dns', 'forward', 'bogus', {}, 'forward'], checked_at='2026-10-24T03:00:00Z' + 'z' * 60, cached=1,
         extra='ignored',
         sources=[{'kind': 'nftables', 'backend': 'other', 'family': 'inet', 'table': 'filter', 'chain': 'for ward',
                   'policy': 'drop', 'detail': '\x1b[31mred'}, {'kind': 'shell'}, 'x'] * 4,
-        remedies=[{'source': 'docker', 'label': 'L' * 100, 'device': 'Meta', 'commands': ['ufw route allow in on Meta'] * 10,
+        remedies=[{'source': 'docker', 'label': 'L' * 100, 'device': 'Meta', 'commands': ['ufw route allow in on Meta'] * 14,
                    'persist_note': None}, {'source': 'cron', 'commands': ['ufw status']}, None] * 4))
     assert set(result) == {'protocol', 'state', 'reason', 'device', 'auto_redirect', 'policy', 'input_policy', 'flows',
                            'sources', 'remedies', 'hint', 'verify', 'checked_at', 'cached'}
-    assert (result['input_policy'], result['flows']) == ('', ['forward', 'tun_tcp'])
+    assert (result['input_policy'], result['flows']) == ('', ['forward', 'local_dns', 'tun_tcp'])
     assert (result['protocol'], result['reason'], result['device'], result['auto_redirect'], result['policy'],
             result['cached']) == (0, '', '', False, '', False)
     assert result['hint'].startswith('第一行第二行') and len(result['hint']) == 400

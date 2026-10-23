@@ -6,7 +6,7 @@ import { routerApi, agentApi, ruleApi } from '@/api'
 import { activeProfileId } from '@/profileContext'
 import { confirm, notify } from '@/lib/feedback'
 import type { GatewayForwardingEntry } from '@/lib/gatewayForwarding'
-import { DOCKER_COMMANDS, DOCKER_HINT, UFW_COMMANDS, mayDrop, quiet, ufwDrop } from './fixtures/forward-filter'
+import { AIO_UFW_COMMANDS, DOCKER_COMMANDS, DOCKER_HINT, UFW_COMMANDS, aioUfwDrop, mayDrop, quiet, ufwDrop } from './fixtures/forward-filter'
 
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn() },
@@ -282,13 +282,22 @@ describe('routers page forward-filter warning', () => {
     expect(dialog.className).toContain('sm:max-w-[560px]')
   })
 
-  it('says forwarding may be blocked when redirected TCP is, and shows the UFW commands verbatim', async () => {
+  it('says DNS may be blocked when DNS to this host is, and shows the UFW commands verbatim', async () => {
     const wrapper = await mountRouters([entry({ forward_filter: ufwDrop() })])
-    expect(cell(wrapper).get('[data-forward-filter-short]').text()).toBe('可能拦截转发')
+    expect(cell(wrapper).get('[data-forward-filter-short]').text()).toBe('可能拦截 DNS')
     await filterButton(wrapper).trigger('click'); await flushPromises()
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
     expect(dialog.querySelector('pre')!.textContent).toBe(UFW_COMMANDS.join('\n'))
     expect(dialog.textContent).toContain('主路由转来的 TCP 连接会失败')
+  })
+
+  it('labels an all-in-one host whose local DNS is dropped, with the port 53 command', async () => {
+    const wrapper = await mountRouters([entry({ forward_filter: aioUfwDrop() })])
+    expect(cell(wrapper).get('[data-forward-filter-short]').text()).toBe('可能拦截 DNS')
+    await filterButton(wrapper).trigger('click'); await flushPromises()
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(dialog.querySelector('pre')!.textContent).toBe(AIO_UFW_COMMANDS.join('\n'))
+    expect(dialog.textContent).toContain('客户端查不到域名（UDP 和 TCP 方式都失败）')
   })
 
   it.each([

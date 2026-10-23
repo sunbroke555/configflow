@@ -99,7 +99,8 @@ const forwardFilterFix = "需要放行时在这台 Linux 上执行下面的命�
 // (routes/forward_filter.go): a selective Linux gateway configuration (marker
 // present, enabled or not), a route-restricted TUN and an enabled TUN without
 // auto-route are not full TUN and are not inspected. With a DNS service on the
-// same host (AIO), DNS to this host is served by it, not hijacked into the TUN.
+// same host (AIO), DNS to this host is served by it through the input hook,
+// not hijacked into the TUN.
 func installerForwardTarget(configs []Config, local []net.IP) (netfilter.Target, bool) {
 	target := netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}
 	dnsService := false
@@ -133,8 +134,11 @@ func installerForwardTarget(configs []Config, local []net.IP) (netfilter.Target,
 		}
 		break
 	}
+	target.LAN = local
 	if dnsService {
-		target.DNSHijack = false
+		// The DNS service of an all-in-one install answers port 53 on this
+		// host itself, through the input hook; it may not listen yet.
+		target.DNSHijack, target.ServesDNS = false, true
 	}
 	return target, true
 }

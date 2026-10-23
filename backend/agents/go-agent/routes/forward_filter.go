@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +22,8 @@ var forwardFilterInspect = func(ctx context.Context, target netfilter.Target) ne
 var forwardFilterNow = time.Now
 
 // A warning is cached only briefly: after running the suggested commands the
-// operator refreshes right away and must see the new result.
+// operator refreshes right away and must see the new result. Other results
+// last 30 seconds; the verify text (netfilter.verifyPrefix) says both.
 const (
 	forwardFilterTTL        = 30 * time.Second
 	forwardFilterWarningTTL = 5 * time.Second
@@ -95,8 +97,13 @@ func forwardFilterKey(cfg *Config, target netfilter.Target) string {
 	if err != nil {
 		return ""
 	}
+	lan := make([]string, 0, len(target.LAN))
+	for _, ip := range target.LAN {
+		lan = append(lan, ip.String())
+	}
 	return cfg.ConfigPath + "|" + info.ModTime().UTC().Format(time.RFC3339Nano) + "|" + strconv.FormatInt(info.Size(), 10) + "|" +
-		target.Device + "|" + strconv.FormatBool(target.AutoRedirect) + "|" + target.Stack + "|" + strconv.FormatBool(target.DNSHijack) + "|" + target.TUNPeer.String()
+		target.Device + "|" + strconv.FormatBool(target.AutoRedirect) + "|" + target.Stack + "|" + strconv.FormatBool(target.DNSHijack) + "|" + target.TUNPeer.String() + "|" +
+		strings.Join(lan, ",") + "|" + strconv.FormatBool(target.ServesDNS)
 }
 
 // forwardFilterStatus is bounded by netfilter.TotalBudget plus a short grace,

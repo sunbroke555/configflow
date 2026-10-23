@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -239,7 +240,7 @@ func TestInstallerForwardFilterTargetMatchesThePublishedTUN(t *testing.T) {
 		{"aio default", func(t *testing.T) []Config {
 			return []Config{mihomoWithTUN(t, "mode: rule\n"), {ServiceType: "oxidns"}}
 		},
-			netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed"}},
+			netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", ServesDNS: true}},
 		{"configured tun", func(t *testing.T) []Config {
 			return []Config{mihomoWithTUN(t, fullTUN+"  stack: gvisor\n  dns-hijack: [any:53]\n  route-exclude-address: [10.97.0.20/32]\n")}
 		}, netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "gvisor"}},
@@ -250,8 +251,10 @@ func TestInstallerForwardFilterTargetMatchesThePublishedTUN(t *testing.T) {
 			var target netfilter.Target
 			probe.forwardFilter = func(value netfilter.Target) netfilter.Result { target = value; return mayDrop }
 			systemChecksWithProbe(tc.configs(t), probe)
-			if target != tc.want {
-				t.Fatalf("target %+v, want %+v", target, tc.want)
+			want := tc.want
+			want.LAN = []net.IP{net.ParseIP("10.97.0.20").To4()}
+			if !reflect.DeepEqual(target, want) {
+				t.Fatalf("target %+v, want %+v", target, want)
 			}
 		})
 	}

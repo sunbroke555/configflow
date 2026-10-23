@@ -426,10 +426,10 @@ _FORWARDING_FIELDS = ('current', 'persisted', 'config', 'hook_script', 'startup_
 FORWARD_FILTER_STATES = frozenset({'ok', 'may_drop', 'unknown', 'not_applicable'})
 FORWARD_FILTER_SOURCES = frozenset({'docker', 'iptables', 'nftables', 'firewalld', 'ufw'})
 # Blocked paths, in the Agent's display order (netfilter.Flow*).
-FORWARD_FILTER_FLOWS = ('forward', 'dns', 'redirect_tcp', 'tun_tcp')
+FORWARD_FILTER_FLOWS = ('forward', 'dns', 'local_dns', 'redirect_tcp', 'tun_tcp')
 FORWARD_FILTER_MAX_SOURCES = 8
 FORWARD_FILTER_MAX_REMEDIES = 6
-FORWARD_FILTER_MAX_COMMANDS = 8
+FORWARD_FILTER_MAX_COMMANDS = 12
 FORWARD_FILTER_MAX_COMMAND = 240
 # Same as the Agent's TUN device pattern (aioDevicePattern, netfilter.DevicePattern).
 _FORWARD_FILTER_DEVICE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}')
@@ -443,6 +443,12 @@ _FORWARD_FILTER_COMMAND = re.compile(r'(?:iptables|iptables-legacy|nft|firewall-
 _UFW_DNAT_RULE = '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT'
 FORWARD_FILTER_UFW_BEFORE_RULES = (f"grep -q -- '{_UFW_DNAT_RULE}' /etc/ufw/before.rules || "
                                    f"sed -i '/^# End required lines/a {_UFW_DNAT_RULE}' /etc/ufw/before.rules")
+# firewalld's --new-zone / --new-policy fail with NAME_CONFLICT when re-run, so
+# they are guarded by an existence check (netfilter.FirewalldNew*Command); only
+# these exact lines may redirect output or use '||'.
+FORWARD_FILTER_FIREWALLD_TEMPLATES = frozenset(
+    f'firewall-cmd --permanent --info-{kind}={name} >/dev/null 2>&1 || firewall-cmd --permanent --new-{kind}={name}'
+    for kind, name in (('zone', 'configflow-tun'), ('policy', 'configflow-fwd')))
 
 
 def _forward_filter_text(value, limit):
@@ -459,7 +465,7 @@ def _forward_filter_choice(value, allowed):
 def _forward_filter_command(value):
     if not isinstance(value, str) or not value or len(value) > FORWARD_FILTER_MAX_COMMAND:
         return None
-    if value == FORWARD_FILTER_UFW_BEFORE_RULES:
+    if value == FORWARD_FILTER_UFW_BEFORE_RULES or value in FORWARD_FILTER_FIREWALLD_TEMPLATES:
         return value
     if not all(_FORWARD_FILTER_COMMAND.fullmatch(step) for step in value.split(' && ')):
         return None

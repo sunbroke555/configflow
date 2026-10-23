@@ -10,20 +10,32 @@ const (
 	iptablesPersistNote = "这些规则重启后会丢失。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。"
 	dockerPersistNote   = "这两条规则重启后会丢失（重启 Docker 不会清空 DOCKER-USER）。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。"
 	nftPersistNote      = "nft 命令只改当前规则，重启后会丢失；请把这些规则写进 /etc/nftables.conf（或系统加载的 nftables 配置）里对应的链。"
-	firewalldNote       = "把 TUN 设备放进只含它的 configflow-tun 区域（接受从它进来的流量），再用 configflow-fwd 策略放行转发进这个区域的流量；其他区域和网卡不受影响。已用 --permanent 保存，重启后仍有效；重复执行时提示 NAME_CONFLICT 或 ALREADY_ENABLED 可以忽略。"
+	firewalldNote       = "把 TUN 设备放进只含它的 configflow-tun 区域（接受从它进来的流量），再用 configflow-fwd 策略只放行转发进这个区域（即进入 TUN 设备）的流量；其他区域和网卡不受影响。已用 --permanent 保存，重启后仍有效；可以重复执行，提示 ALREADY_ENABLED 可以忽略。"
+	firewalldDNSNote    = "在局域网网卡所在的区域开放 DNS 服务（53/udp 和 53/tcp），只影响这个区域的网卡。已用 --permanent 保存，重启后仍有效；可以重复执行，提示 ALREADY_ENABLED 可以忽略。"
 	ufwNote             = "UFW 会自动保存，重启后仍有效。"
 	ufwBeforeRulesNote  = "UFW 规则会自动保存；/etc/ufw/before.rules 的改动在 ufw reload 后生效，重启后仍有效。"
 
-	verifyPrefix = "执行后等几秒再回到这里刷新状态（发现拦截时结果只缓存 5 秒）；再在客户端"
+	verifyPrefix = "执行后等几秒再回到这里刷新状态（检查结果会缓存：发现拦截时 5 秒，未发现时 30 秒，所以 30 秒内刷新可能仍显示旧结果）；再在客户端"
 )
 
 // FirewalldZone holds only the TUN device; its ACCEPT target takes what
 // enters from the device. FirewalldPolicy accepts forwarding from any zone into
-// that zone, so no other zone or interface is opened (reusing trusted would
-// also open forwarding to whatever else the operator put there).
+// that zone: a policy matches by egress zone, so it only accepts packets whose
+// output interface is the TUN device, and no other zone or interface is opened
+// (reusing trusted would also open forwarding to whatever else the operator
+// put there, such as a LAN network as a trusted source).
 const (
 	FirewalldZone   = "configflow-tun"
 	FirewalldPolicy = "configflow-fwd"
+)
+
+// The zone and the policy are only created when missing: --new-zone and
+// --new-policy fail with NAME_CONFLICT when re-run, while every other command
+// only warns (ALREADY_ENABLED). Exact strings, the backend allows no other
+// compound line.
+const (
+	FirewalldNewZoneCommand   = "firewall-cmd --permanent --info-zone=" + FirewalldZone + " >/dev/null 2>&1 || firewall-cmd --permanent --new-zone=" + FirewalldZone
+	FirewalldNewPolicyCommand = "firewall-cmd --permanent --info-policy=" + FirewalldPolicy + " >/dev/null 2>&1 || firewall-cmd --permanent --new-policy=" + FirewalldPolicy
 )
 
 // UFWDNATRule accepts only traffic the host's own NAT rules redirected to it
@@ -54,7 +66,8 @@ func SourceLabel(kind, backend, binary string) string {
 
 // remedy turns a plan's blocked flows into allow rules for exactly those
 // flows: forwarding into and out of the TUN device, redirected TCP (conntrack
-// status DNAT) and TCP from the TUN device to the host.
+// status DNAT), TCP from the TUN device to the host, and DNS (53/udp and
+// 53/tcp) from the LAN interfaces to the host.
 func (in *inspection) remedy(plan *remedyPlan) Remedy {
 	device := in.target.Device
 	remedy := Remedy{Source: plan.source, Label: plan.label, Device: device}
@@ -63,6 +76,15 @@ func (in *inspection) remedy(plan *remedyPlan) Remedy {
 	}
 	forward := plan.flows[FlowForward] || plan.flows[FlowDNS]
 	redirect, tun := plan.flows[FlowRedirectTCP], plan.flows[FlowTUNTCP]
+	// DNS is only opened on named LAN interfaces, never on every interface.
+	var lan []string
+	if plan.flows[FlowLocalDNS] {
+		for _, name := range in.lan {
+			if DevicePattern.MatchString(name) {
+				lan = append(lan, name)
+			}
+		}
+	}
 	var commands []string
 	switch plan.source {
 	case "docker":
@@ -77,6 +99,9 @@ func (in *inspection) remedy(plan *remedyPlan) Remedy {
 		if tun {
 			commands = append(commands, "ufw allow in on "+device)
 		}
+		for _, name := range lan {
+			commands = append(commands, "ufw allow in on "+name+" to any port 53")
+		}
 		remedy.PersistNote = ufwNote
 		if redirect {
 			commands = append(commands, UFWBeforeRulesCommand, "ufw reload")
@@ -88,25 +113,35 @@ func (in *inspection) remedy(plan *remedyPlan) Remedy {
 		// The zone accepts what enters from the TUN device; forwarding into it
 		// needs the policy as well, also when only the input hook blocked
 		// (the device's previous zone may have allowed that forwarding).
+		notes := []string{}
 		if forward || tun {
-			if !plan.zoneExists {
-				commands = append(commands, "firewall-cmd --permanent --new-zone="+FirewalldZone)
-			}
 			commands = append(commands,
+				FirewalldNewZoneCommand,
 				"firewall-cmd --permanent --zone="+FirewalldZone+" --set-target=ACCEPT",
-				"firewall-cmd --permanent --zone="+FirewalldZone+" --change-interface="+device)
-			if !plan.policyExists {
-				commands = append(commands, "firewall-cmd --permanent --new-policy="+FirewalldPolicy)
-			}
-			commands = append(commands,
+				"firewall-cmd --permanent --zone="+FirewalldZone+" --change-interface="+device,
+				FirewalldNewPolicyCommand,
 				"firewall-cmd --permanent --policy="+FirewalldPolicy+" --add-ingress-zone=ANY",
 				"firewall-cmd --permanent --policy="+FirewalldPolicy+" --add-egress-zone="+FirewalldZone,
 				"firewall-cmd --permanent --policy="+FirewalldPolicy+" --set-target=ACCEPT")
+			notes = append(notes, firewalldNote)
+		}
+		if len(lan) > 0 {
+			// The LAN interface's own zone; a TUN zone never serves the LAN.
+			added := false
+			for _, zone := range plan.lanZones {
+				if zone != FirewalldZone {
+					commands = append(commands, "firewall-cmd --permanent --zone="+zone+" --add-service=dns")
+					added = true
+				}
+			}
+			if added {
+				notes = append(notes, firewalldDNSNote)
+			}
 		}
 		if len(commands) > 0 {
 			commands = append(commands, "firewall-cmd --reload")
 		}
-		remedy.PersistNote = firewalldNote
+		remedy.PersistNote = strings.Join(notes, "")
 	case "nftables":
 		if !nftNamePattern.MatchString(plan.table) || !nftNamePattern.MatchString(plan.chain) || (plan.family != "ip" && plan.family != "inet") {
 			return remedy
@@ -122,6 +157,9 @@ func (in *inspection) remedy(plan *remedyPlan) Remedy {
 		if tun {
 			commands = append(commands, prefix+`iifname "`+device+`" accept'`)
 		}
+		for _, name := range lan {
+			commands = append(commands, prefix+`iifname "`+name+`" udp dport 53 accept'`, prefix+`iifname "`+name+`" tcp dport 53 accept'`)
+		}
 		remedy.PersistNote = nftPersistNote
 	default:
 		if forward {
@@ -132,6 +170,9 @@ func (in *inspection) remedy(plan *remedyPlan) Remedy {
 		}
 		if tun {
 			commands = append(commands, plan.binary+" -I INPUT -i "+device+" -j ACCEPT")
+		}
+		for _, name := range lan {
+			commands = append(commands, plan.binary+" -I INPUT -i "+name+" -p udp --dport 53 -j ACCEPT", plan.binary+" -I INPUT -i "+name+" -p tcp --dport 53 -j ACCEPT")
 		}
 		remedy.PersistNote = iptablesPersistNote
 	}
@@ -145,24 +186,84 @@ func (in *inspection) remedy(plan *remedyPlan) Remedy {
 	return remedy
 }
 
+// protocols names the protocols a flow was blocked for (finding keys
+// "flow/proto"); a flow blocked without protocol detail counts for all.
+func protocols(blocked map[string]bool, flow string, all ...string) map[string]bool {
+	result := map[string]bool{}
+	for _, proto := range all {
+		if blocked[flow+"/"+proto] {
+			result[proto] = true
+		}
+	}
+	if len(result) == 0 && blocked[flow] {
+		for _, proto := range all {
+			result[proto] = true
+		}
+	}
+	return result
+}
+
+// forwardImpact describes forwarded traffic by blocked protocol: TCP only
+// passes the forward hook without auto-redirect, and UFW, for one, accepts
+// forwarded ping while it drops forwarded UDP.
+func forwardImpact(target Target, blocked map[string]bool) (string, bool) {
+	all := []string{"udp", "icmp"}
+	if !target.AutoRedirect {
+		all = []string{"tcp", "udp", "icmp"}
+	}
+	protos := protocols(blocked, FlowForward, all...)
+	switch {
+	case len(protos) == 0:
+		return "", false
+	case protos["tcp"] && protos["udp"] && protos["icmp"]:
+		return "主路由转来的连接（包括 TCP、UDP 和 ping）都会失败", true
+	}
+	var names []string
+	if protos["tcp"] {
+		names = append(names, "TCP")
+	}
+	if protos["udp"] {
+		names = append(names, "UDP（如 QUIC、语音通话、游戏）")
+	}
+	if protos["icmp"] {
+		names = append(names, "ping")
+	}
+	return "主路由转来的 " + joinMixed(names, "和") + spaced("会失败", names[len(names)-1]), protos["tcp"]
+}
+
+// joinMixed joins words with a CJK conjunction, spacing it from Latin words
+// only (no space next to a full-width parenthesis).
+func joinMixed(words []string, conjunction string) string {
+	text := ""
+	for index, word := range words {
+		if index > 0 {
+			text += spaced(conjunction, words[index-1]) + " "
+		}
+		text += word
+	}
+	return text
+}
+
+func spaced(text, previous string) string {
+	if strings.HasSuffix(previous, "）") {
+		return text
+	}
+	return " " + text
+}
+
 // hint is the explanation shown with a may_drop result: what fails, per
 // blocked flow, for this host's TUN settings.
 func hint(target Target, blocked map[string]bool, complete, commands bool) string {
 	device := displayDevice(target.Device)
 	var impacts []string
-	allForwarded := false
-	if blocked[FlowForward] {
-		if target.AutoRedirect {
-			impacts = append(impacts, "主路由转来的 UDP（如 QUIC、语音通话、游戏）和 ping 会失败")
-		} else {
-			impacts = append(impacts, "主路由转来的连接（包括 TCP、UDP 和 ping）都会失败")
-			allForwarded = true
-		}
+	forward, forwardTCP := forwardImpact(target, blocked)
+	if forward != "" {
+		impacts = append(impacts, forward)
 	}
 	switch {
 	case blocked[FlowRedirectTCP]:
 		impacts = append(impacts, "主路由转来的 TCP 连接会失败（auto-redirect 把它们转给本机端口，被本机入站规则拦下）")
-	case blocked[FlowTUNTCP] && !target.AutoRedirect && !allForwarded:
+	case blocked[FlowTUNTCP] && !target.AutoRedirect && !forwardTCP:
 		impacts = append(impacts, "主路由转来的 TCP 连接会失败（TUN 把它们交给本机的 Mihomo，被本机入站规则拦下）")
 	}
 	switch {
@@ -171,12 +272,30 @@ func hint(target Target, blocked map[string]bool, complete, commands bool) strin
 	case blocked[FlowTUNTCP] && target.DNSHijack:
 		impacts = append(impacts, "把这台 Linux 当作 DNS 服务器的设备，TCP 方式的 DNS 查询会失败")
 	}
+	if blocked[FlowLocalDNS] {
+		switch dns := protocols(blocked, FlowLocalDNS, "udp", "tcp"); {
+		case dns["udp"] && dns["tcp"]:
+			impacts = append(impacts, "客户端查不到域名（UDP 和 TCP 方式都失败）")
+		case dns["udp"]:
+			impacts = append(impacts, "客户端查不到域名（UDP 方式的 DNS 查询失败）")
+		default:
+			impacts = append(impacts, "客户端 TCP 方式的 DNS 查询会失败")
+		}
+	}
 	// Only a complete view may say so: an input rule that might apply (a
 	// conditional drop, or a drop after a conditional accept) is not reported.
-	if target.AutoRedirect && complete && !blocked[FlowRedirectTCP] {
+	if target.AutoRedirect && complete && !blocked[FlowRedirectTCP] && (forward != "" || blocked[FlowDNS] || blocked[FlowTUNTCP]) {
 		impacts = append(impacts, "其他 TCP 连接不受影响")
 	}
-	text := "这台 Linux 的防火墙可能拦截经过 Mihomo TUN（" + device + "）的流量：" + strings.Join(impacts, "；") + "。"
+	subject := "经过 Mihomo TUN（" + device + "）的流量"
+	if blocked[FlowLocalDNS] {
+		if len(impacts) == 1 {
+			subject = "发到本机 53 端口的 DNS 查询（由本机的 DNS 服务应答，不经过 TUN）"
+		} else {
+			subject = "经过 Mihomo TUN（" + device + "）的流量和发到本机 53 端口的 DNS 查询"
+		}
+	}
+	text := "这台 Linux 的防火墙可能拦截" + subject + "：" + strings.Join(impacts, "；") + "。"
 	if commands {
 		return text + "ConfigFlow 不会改动防火墙，需要时在这台 Linux 上执行下面的命令放行。"
 	}
@@ -186,13 +305,23 @@ func hint(target Target, blocked map[string]bool, complete, commands bool) strin
 // verify says how to confirm the commands worked, for the flows they fix.
 func verify(target Target, blocked map[string]bool) string {
 	var checks []string
-	if blocked[FlowForward] {
-		checks = append(checks, "ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）")
+	all := []string{"udp", "icmp"}
+	if !target.AutoRedirect {
+		all = []string{"tcp", "udp", "icmp"}
 	}
-	if blocked[FlowRedirectTCP] || (!target.AutoRedirect && (blocked[FlowForward] || blocked[FlowTUNTCP])) {
+	forward := protocols(blocked, FlowForward, all...)
+	switch {
+	case forward["icmp"] && forward["udp"]:
+		checks = append(checks, "ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）")
+	case forward["udp"]:
+		checks = append(checks, "打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）")
+	case forward["icmp"]:
+		checks = append(checks, "ping 一个走代理的地址")
+	}
+	if blocked[FlowRedirectTCP] || forward["tcp"] || (!target.AutoRedirect && blocked[FlowTUNTCP]) {
 		checks = append(checks, "打开一个走代理的网页")
 	}
-	if blocked[FlowDNS] || (blocked[FlowTUNTCP] && target.DNSHijack) {
+	if blocked[FlowDNS] || blocked[FlowLocalDNS] || (blocked[FlowTUNTCP] && target.DNSHijack) {
 		checks = append(checks, "用这台 Linux 作 DNS 解析一个域名")
 	}
 	if len(checks) == 0 {
@@ -222,6 +351,7 @@ func TUNTarget(tun map[string]interface{}, lan []net.IP) Target {
 	}
 	target.DNSHijack = target.AutoRedirect && hijacksPort53(tun) && !excludesLAN(tun["route-exclude-address"], lan)
 	target.TUNPeer = tunPeer(tun)
+	target.LAN = lan
 	return target
 }
 

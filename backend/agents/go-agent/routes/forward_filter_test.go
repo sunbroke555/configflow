@@ -111,7 +111,7 @@ func TestForwardFilterTargetCarriesStackAndDNSHijack(t *testing.T) {
 	forwardFilterLANAddresses = func() []net.IP { return []net.IP{net.ParseIP("10.97.0.20").To4()} }
 	t.Cleanup(func() { forwardFilterLANAddresses = netfilter.LANAddresses })
 	forwardFilterStatus(f.cfg)
-	if want := (netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}); f.target != want {
+	if want := (netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true, LAN: []net.IP{net.ParseIP("10.97.0.20").To4()}}); !reflect.DeepEqual(f.target, want) {
 		t.Fatalf("standalone target: %+v", f.target)
 	}
 	f.write(t, standalone+"  route-exclude-address: [127.0.0.0/8, 10.97.0.20/32]\n")

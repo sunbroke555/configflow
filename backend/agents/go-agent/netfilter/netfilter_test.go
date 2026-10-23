@@ -2,6 +2,7 @@ package netfilter
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -574,10 +575,10 @@ func firewalldHost(t *testing.T, ruleset string) *host {
 }
 
 var firewalldCommands = []string{
-	"firewall-cmd --permanent --new-zone=configflow-tun",
+	"firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 || firewall-cmd --permanent --new-zone=configflow-tun",
 	"firewall-cmd --permanent --zone=configflow-tun --set-target=ACCEPT",
 	"firewall-cmd --permanent --zone=configflow-tun --change-interface=Meta",
-	"firewall-cmd --permanent --new-policy=configflow-fwd",
+	"firewall-cmd --permanent --info-policy=configflow-fwd >/dev/null 2>&1 || firewall-cmd --permanent --new-policy=configflow-fwd",
 	"firewall-cmd --permanent --policy=configflow-fwd --add-ingress-zone=ANY",
 	"firewall-cmd --permanent --policy=configflow-fwd --add-egress-zone=configflow-tun",
 	"firewall-cmd --permanent --policy=configflow-fwd --set-target=ACCEPT",
@@ -619,19 +620,31 @@ func TestFirewalldRulesetFromTheLab(t *testing.T) {
 	}
 }
 
-func TestFirewalldExistingPolicyIsNotCreatedAgain(t *testing.T) {
+func TestFirewalldCommandsCanBeRerun(t *testing.T) {
+	// Lab v7 A-6: re-running the commands failed only on --new-zone and
+	// --new-policy (NAME_CONFLICT); the others only warn. Both are guarded by
+	// an existence check, with or without the zone and policy in use.
 	in := &inspection{target: Target{Device: "Meta"}}
-	plan := &remedyPlan{source: "firewalld", flows: map[string]bool{FlowForward: true}, policyExists: true}
-	if commands := in.remedy(plan).Commands; len(commands) != 7 || strings.Contains(strings.Join(commands, "\n"), "--new-policy") {
-		t.Fatalf("existing policy: %q", commands)
+	for _, flows := range []map[string]bool{{FlowForward: true}, {FlowTUNTCP: true}, {FlowForward: true, FlowTUNTCP: true}} {
+		commands := in.remedy(&remedyPlan{source: "firewalld", flows: flows}).Commands
+		if !reflect.DeepEqual(commands, firewalldCommands) {
+			t.Fatalf("%v: %q", flows, commands)
+		}
 	}
-	plan = &remedyPlan{source: "firewalld", flows: map[string]bool{FlowTUNTCP: true}, zoneExists: true, policyExists: true}
-	if commands := in.remedy(plan).Commands; !reflect.DeepEqual(commands, []string{firewalldCommands[1], firewalldCommands[2], firewalldCommands[4], firewalldCommands[5], firewalldCommands[6], firewalldCommands[7]}) {
-		t.Fatalf("existing zone and policy: %q", commands)
+	for _, command := range firewalldCommands {
+		if strings.Contains(command, "--new-") && !strings.Contains(command, " >/dev/null 2>&1 || ") {
+			t.Fatalf("unguarded: %s", command)
+		}
+		// The policy only ever accepts forwarding into the TUN-only zone.
+		if strings.Contains(command, "trusted") || (strings.Contains(command, "--add-egress-zone=") && !strings.HasSuffix(command, "--add-egress-zone="+FirewalldZone)) {
+			t.Fatalf("policy wider than the TUN zone: %s", command)
+		}
+	}
+	if FirewalldNewZoneCommand != firewalldCommands[0] || FirewalldNewPolicyCommand != firewalldCommands[3] {
+		t.Fatal("exact templates changed")
 	}
 	// Redirected TCP only (an old release without ct status dnat accept): no command.
-	plan = &remedyPlan{source: "firewalld", flows: map[string]bool{FlowRedirectTCP: true}}
-	if remedy := in.remedy(plan); len(remedy.Commands) != 0 {
+	if remedy := in.remedy(&remedyPlan{source: "firewalld", flows: map[string]bool{FlowRedirectTCP: true}}); len(remedy.Commands) != 0 {
 		t.Fatalf("redirect only: %+v", remedy)
 	}
 }
@@ -843,7 +856,12 @@ func TestTUNTargetReadsTheDeployedTUN(t *testing.T) {
 		// DNS to the LAN address out of the TUN.
 		{"Docker network excluded", map[string]interface{}{"auto-redirect": true, "route-exclude-address": list("172.16.0.0/12")}, Target{Device: "Meta", AutoRedirect: true, DNSHijack: true}},
 	} {
-		if got := TUNTarget(tc.tun, local); got != tc.want {
+		got := TUNTarget(tc.tun, local)
+		if !reflect.DeepEqual(got.LAN, local) {
+			t.Fatalf("%s: LAN addresses %v", tc.name, got.LAN)
+		}
+		got.LAN = nil
+		if !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%s: %+v, want %+v", tc.name, got, tc.want)
 		}
 	}
@@ -1162,5 +1180,283 @@ func TestTUNTCPSourceIsTheTUNPeer(t *testing.T) {
 	prefixes, ok := nftPrefixes(map[string]interface{}{"range": []interface{}{"10.0.0.1", "10.0.0.6"}}, nil)
 	if !ok || fmt.Sprint(prefixes) != "[10.0.0.1/32 10.0.0.2/31 10.0.0.4/31 10.0.0.6/32]" {
 		t.Fatalf("range: %v %v", prefixes, ok)
+	}
+}
+
+// aio is ConfigFlow's all-in-one host (lab v6-d-aio): full TUN with
+// auto-redirect and the mixed stack, the host's own address excluded from the
+// TUN, and OxiDNS answering 0.0.0.0:53 itself.
+var aio = Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", LAN: []net.IP{net.ParseIP("10.97.0.20").To4()}}
+
+// procHex writes an address the way /proc/net does: 32-bit words in hex,
+// each in the host's byte order.
+func procHex(ip net.IP) string {
+	raw := ip.To4()
+	if raw == nil {
+		raw = ip.To16()
+	}
+	var text strings.Builder
+	for i := 0; i < len(raw); i += 4 {
+		fmt.Fprintf(&text, "%08X", binary.NativeEndian.Uint32(raw[i:i+4]))
+	}
+	return text.String()
+}
+
+// procSocket is one /proc/net/{tcp,udp}[6] line.
+func procSocket(local string, port int, remote string, state string) string {
+	return fmt.Sprintf("   0: %s:%04X %s:0000 %s 00000000:00000000 00:00000000 00000000   997        0 21571 2 0000000000000000 0\n", procHex(net.ParseIP(local)), port, procHex(net.ParseIP(remote)), state)
+}
+
+const procHeader = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n"
+
+// oxidnsListening adds what `ss -lntup` showed on the AIO host (12-host-dns):
+// OxiDNS on 0.0.0.0:53 (UDP and TCP), Mihomo's DNS on *:1053, and the
+// Agent's API.
+func (h *host) oxidnsListening() *host {
+	h.files["/proc/net/udp"] = procHeader + procSocket("0.0.0.0", 53, "0.0.0.0", "07")
+	h.files["/proc/net/tcp"] = procHeader + procSocket("0.0.0.0", 53, "0.0.0.0", "0A") + procSocket("0.0.0.0", 8080, "0.0.0.0", "0A") +
+		procSocket("10.97.0.20", 53, "10.97.0.200", "01")
+	h.files["/proc/net/udp6"] = procHeader + procSocket("::", 1053, "::", "07")
+	return h
+}
+
+func TestAIOWithUFWReportsLocalDNSFromTheLab(t *testing.T) {
+	// Lab v6-d-aio 41-46: UFW deny (incoming) and deny (routed). After the
+	// commands of the previous release, TCP and forwarded UDP worked while DNS
+	// to 10.97.0.20:53 (OxiDNS, outside the TUN) was still dropped on INPUT
+	// ([UFW BLOCK] IN=eth0 DPT=53), UDP and TCP alike. Forwarded ping worked
+	// throughout: UFW accepts forwarded echo requests.
+	h := nftHost(t, "ufw-input.nft.json", "ufw-input.iptables").oxidnsListening()
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	result := h.inspectTarget(aio)
+	remedy := onlyRemedy(t, result)
+	want := []string{"ufw route allow in on Meta", "ufw route allow out on Meta", "ufw allow in on eth0 to any port 53", UFWBeforeRulesCommand, "ufw reload"}
+	if !reflect.DeepEqual(remedy.Commands, want) {
+		t.Fatalf("ufw commands: %q", remedy.Commands)
+	}
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowLocalDNS, FlowRedirectTCP}) {
+		t.Fatalf("flows: %+v", result.Flows)
+	}
+	for _, text := range []string{"客户端查不到域名（UDP 和 TCP 方式都失败）", "发到本机 53 端口的 DNS 查询", "主路由转来的 UDP（如 QUIC、语音通话、游戏）会失败"} {
+		if !strings.Contains(result.Hint, text) {
+			t.Fatalf("hint lacks %q: %s", text, result.Hint)
+		}
+	}
+	if strings.Contains(result.Hint, "ping") || strings.Contains(result.Verify, "ping") || !strings.Contains(result.Verify, "DNS") {
+		t.Fatalf("UFW accepts forwarded ping: %s / %s", result.Hint, result.Verify)
+	}
+	// After `ufw allow in on eth0 to any port 53` as well: ok.
+	h = nftHost(t, "ufw-input-fixed.nft.json", "ufw-dns-fixed.iptables").oxidnsListening()
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	if result := h.inspectTarget(aio); result.State != StateOK {
+		t.Fatalf("dns allowed: %+v", result)
+	}
+	// Without the DNS rule the previous fix leaves exactly the DNS warning.
+	h = nftHost(t, "ufw-input-fixed.nft.json", "ufw-input-fixed.iptables").oxidnsListening()
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	result = h.inspectTarget(aio)
+	if remedy := onlyRemedy(t, result); !reflect.DeepEqual(remedy.Commands, []string{"ufw allow in on eth0 to any port 53"}) || !reflect.DeepEqual(result.Flows, []string{FlowLocalDNS}) {
+		t.Fatalf("dns only: %+v", result)
+	}
+	if !strings.HasPrefix(result.Hint, "这台 Linux 的防火墙可能拦截发到本机 53 端口的 DNS 查询（由本机的 DNS 服务应答，不经过 TUN）：客户端查不到域名（UDP 和 TCP 方式都失败）。") || strings.Contains(result.Hint, "不受影响") {
+		t.Fatalf("dns only hint: %s", result.Hint)
+	}
+}
+
+func TestAIOWithIptablesInputDropReportsLocalDNS(t *testing.T) {
+	h := nftHost(t, "input-drop.nft.json", "input-drop.iptables").oxidnsListening()
+	result := h.inspectTarget(aio)
+	remedy := onlyRemedy(t, result)
+	want := []string{
+		"iptables -I INPUT -m conntrack --ctstate DNAT -j ACCEPT",
+		"iptables -I INPUT -i eth0 -p udp --dport 53 -j ACCEPT",
+		"iptables -I INPUT -i eth0 -p tcp --dport 53 -j ACCEPT",
+	}
+	if !reflect.DeepEqual(remedy.Commands, want) || !reflect.DeepEqual(result.Flows, []string{FlowLocalDNS, FlowRedirectTCP}) {
+		t.Fatalf("iptables: %+v", result)
+	}
+	h = nftHost(t, "input-drop-fixed.nft.json", "input-dns-fixed.iptables").oxidnsListening()
+	if result := h.inspectTarget(aio); result.State != StateOK {
+		t.Fatalf("fixed: %+v", result)
+	}
+	// The legacy backend names its own binary.
+	in := &inspection{target: aio, lan: []string{"eth0"}}
+	if commands := in.remedy(&remedyPlan{source: "iptables", binary: "iptables-legacy", flows: map[string]bool{FlowLocalDNS: true}}).Commands; commands[0] != "iptables-legacy -I INPUT -i eth0 -p udp --dport 53 -j ACCEPT" {
+		t.Fatalf("legacy: %q", commands)
+	}
+}
+
+func TestAIOWithNFTInputDropReportsLocalDNS(t *testing.T) {
+	h := nftHost(t, "nft-input-drop.nft.json", "").oxidnsListening()
+	result := h.inspectTarget(aio)
+	remedy := onlyRemedy(t, result)
+	want := []string{
+		`nft 'insert rule inet filter input ct status dnat accept'`,
+		`nft 'insert rule inet filter input iifname "eth0" udp dport 53 accept'`,
+		`nft 'insert rule inet filter input iifname "eth0" tcp dport 53 accept'`,
+	}
+	if !reflect.DeepEqual(remedy.Commands, want) {
+		t.Fatalf("nft: %q", remedy.Commands)
+	}
+	if result := nftHost(t, "nft-input-dns-fixed.nft.json", "").oxidnsListening().inspectTarget(aio); result.State != StateOK {
+		t.Fatalf("fixed: %+v", result)
+	}
+}
+
+func TestAIOWithFirewalldReportsLocalDNS(t *testing.T) {
+	// firewalld public zone (lab 2026-10-24) offers ssh and dhcpv6-client
+	// only; DNS to the host needs the dns service in eth0's zone.
+	result := firewalldHost(t, "firewalld-public.nft.json").oxidnsListening().inspectTarget(aio)
+	remedy := onlyRemedy(t, result)
+	want := append(append([]string{}, firewalldCommands[:7]...), "firewall-cmd --permanent --zone=public --add-service=dns", "firewall-cmd --reload")
+	if !reflect.DeepEqual(remedy.Commands, want) || !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowLocalDNS}) {
+		t.Fatalf("firewalld: %+v", result)
+	}
+	if !strings.Contains(remedy.PersistNote, "开放 DNS 服务") || !strings.Contains(remedy.PersistNote, "configflow-tun") {
+		t.Fatalf("note: %s", remedy.PersistNote)
+	}
+	found := false
+	for _, source := range result.Sources {
+		found = found || strings.Contains(source.Detail, "53 端口的 DNS 查询")
+	}
+	if !found {
+		t.Fatalf("sources: %+v", result.Sources)
+	}
+	// After the forwarding commands only DNS is left; after both, ok.
+	result = firewalldHost(t, "firewalld-zone-fixed.nft.json").oxidnsListening().inspectTarget(aio)
+	if remedy := onlyRemedy(t, result); !reflect.DeepEqual(remedy.Commands, []string{"firewall-cmd --permanent --zone=public --add-service=dns", "firewall-cmd --reload"}) || remedy.PersistNote != firewalldDNSNote {
+		t.Fatalf("dns only: %+v", result)
+	}
+	if result := firewalldHost(t, "firewalld-dns-fixed.nft.json").oxidnsListening().inspectTarget(aio); result.State != StateOK {
+		t.Fatalf("fixed: %+v", result)
+	}
+	// The zone is read from firewalld's dispatch: eth0 by name before the default zone.
+	ruleset, err := parseNFT(fixture(t, "firewalld-zone-fixed.nft.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zones := firewalldZones(ruleset, []string{"eth0"}); !reflect.DeepEqual(zones, []string{"public"}) {
+		t.Fatalf("zones: %v", zones)
+	}
+	if zones := firewalldZones(ruleset, []string{"Meta"}); !reflect.DeepEqual(zones, []string{"configflow-tun"}) {
+		t.Fatalf("tun zone: %v", zones)
+	}
+	if zones := firewalldZones(ruleset, nil); len(zones) != 0 {
+		t.Fatalf("unknown LAN: %v", zones)
+	}
+}
+
+func TestLocalDNSNeedsAReachableListener(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"nothing on 53", map[string]string{}, nil},
+		{"systemd-resolved stub", map[string]string{"/proc/net/udp": procHeader + procSocket("127.0.0.53", 53, "0.0.0.0", "07"), "/proc/net/tcp": procHeader + procSocket("127.0.0.53", 53, "0.0.0.0", "0A")}, nil},
+		{"TUN address only", map[string]string{"/proc/net/udp": procHeader + procSocket("198.18.0.1", 53, "0.0.0.0", "07")}, nil},
+		{"LAN address", map[string]string{"/proc/net/udp": procHeader + procSocket("10.97.0.20", 53, "0.0.0.0", "07")}, []string{"udp"}},
+		{"connected UDP and a TCP client", map[string]string{"/proc/net/udp": procHeader + procSocket("0.0.0.0", 53, "10.97.0.200", "01"), "/proc/net/tcp": procHeader + procSocket("0.0.0.0", 53, "0.0.0.0", "06")}, nil},
+		{"IPv6 wildcard", map[string]string{"/proc/net/tcp6": procHeader + procSocket("::", 53, "::", "0A"), "/proc/net/udp6": procHeader + procSocket("::", 53, "::", "07")}, []string{"udp", "tcp"}},
+		{"IPv4-mapped LAN address", map[string]string{"/proc/net/udp6": procHeader + procSocket("::ffff:10.97.0.20", 53, "::", "07")}, []string{"udp"}},
+	} {
+		probe := Probe{ReadFile: func(path string) ([]byte, error) {
+			if data, ok := tc.files[path]; ok {
+				return []byte(data), nil
+			}
+			return nil, os.ErrNotExist
+		}}
+		if got := localDNSProtocols(probe, aio); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: %v", tc.name, got)
+		}
+	}
+	// An installed DNS service counts before it listens.
+	target := aio
+	target.ServesDNS = true
+	if got := localDNSProtocols(Probe{}, target); !reflect.DeepEqual(got, []string{"udp", "tcp"}) {
+		t.Fatalf("installed service: %v", got)
+	}
+	// Hijacked DNS goes through the TUN instead (flow dns), never local_dns.
+	h := nftHost(t, "input-drop.nft.json", "input-drop.iptables").oxidnsListening()
+	if result := h.inspectTarget(standalone); slicesContain(result.Flows, FlowLocalDNS) {
+		t.Fatalf("hijacked: %+v", result.Flows)
+	}
+	// A DNS drop that may not apply (accept from the LAN network first) is not reported.
+	h = nftHost(t, "ip-filter-present.nft.json", "").oxidnsListening()
+	h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+	h.outputs["iptables-save -t filter"] = "*filter\n:INPUT DROP [0:0]\n:FORWARD ACCEPT [0:0]\n-A INPUT -s 10.97.0.0/24 -j ACCEPT\n-A INPUT -m conntrack --ctstate DNAT -j ACCEPT\nCOMMIT\n"
+	if result := h.inspectTarget(aio); slicesContain(result.Flows, FlowLocalDNS) {
+		t.Fatalf("uncertain: %+v", result)
+	}
+	// Only the blocked protocol is described; UDP allowed, TCP dropped.
+	h = nftHost(t, "ip-filter-present.nft.json", "").oxidnsListening()
+	h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+	h.outputs["iptables-save -t filter"] = "*filter\n:INPUT DROP [0:0]\n:FORWARD ACCEPT [0:0]\n-A INPUT -m conntrack --ctstate DNAT -j ACCEPT\n-A INPUT -p udp -m udp --dport 53 -j ACCEPT\nCOMMIT\n"
+	result := h.inspectTarget(aio)
+	if !reflect.DeepEqual(result.Flows, []string{FlowLocalDNS}) || !strings.Contains(result.Hint, "客户端 TCP 方式的 DNS 查询会失败") {
+		t.Fatalf("tcp only: %+v", result)
+	}
+	// Unknown LAN interfaces: no command opens port 53 on every interface.
+	h = nftHost(t, "input-drop.nft.json", "input-drop.iptables").oxidnsListening()
+	delete(h.files, "/proc/net/route")
+	result = h.inspectTarget(aio)
+	for _, remedy := range result.Remedies {
+		for _, command := range remedy.Commands {
+			if strings.Contains(command, "53") {
+				t.Fatalf("unscoped DNS command: %s", command)
+			}
+		}
+	}
+	if !slicesContain(result.Flows, FlowLocalDNS) {
+		t.Fatalf("unknown LAN still warns: %+v", result)
+	}
+}
+
+func slicesContain(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestForwardedPingIsJudgedSeparately(t *testing.T) {
+	// Plain FORWARD DROP (lab 72): UDP and ping failed.
+	result := nftHost(t, "plain-drop.nft.json", "plain-drop.iptables").inspect("Meta")
+	if !strings.Contains(result.Hint, "UDP（如 QUIC、语音通话、游戏）和 ping 会失败") || !strings.Contains(result.Verify, "ping") {
+		t.Fatalf("plain drop: %s / %s", result.Hint, result.Verify)
+	}
+	// UFW accepts forwarded echo requests; ping stays out of the text.
+	h := nftHost(t, "ip-filter-present.nft.json", "ufw-active.iptables")
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	result = h.inspect("Meta")
+	if !strings.Contains(result.Hint, "主路由转来的 UDP（如 QUIC、语音通话、游戏）会失败") || strings.Contains(result.Hint, "ping") || strings.Contains(result.Verify, "ping") {
+		t.Fatalf("ufw: %s / %s", result.Hint, result.Verify)
+	}
+	// Without auto-redirect TCP is forwarded too.
+	h = nftHost(t, "ip-filter-present.nft.json", "ufw-active.iptables")
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	result = h.inspectWithoutRedirect("Meta")
+	if !strings.Contains(result.Hint, "主路由转来的 TCP 和 UDP（如 QUIC、语音通话、游戏）会失败") {
+		t.Fatalf("ufw without auto-redirect: %s", result.Hint)
+	}
+	echo := flow{proto: "icmp"}
+	for _, tc := range []struct {
+		value string
+		want  tri
+	}{{"8", yes}, {"echo-request", yes}, {"8/0", yes}, {"any", yes}, {"3", no}, {"0", no}} {
+		name, _ := icmpTypeName(tc.value)
+		if got := icmpTypeMatch([]string{name}, echo); got != tc.want {
+			t.Fatalf("%s: %v", tc.value, got)
+		}
+	}
+	if icmpTypeMatch([]string{"echo-request"}, flow{proto: "udp"}) != no || icmpTypeMatch([]string{"echo-request"}, flow{}) != maybe {
+		t.Fatal("icmp type on other flows")
 	}
 }

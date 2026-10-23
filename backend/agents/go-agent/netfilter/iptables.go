@@ -27,6 +27,8 @@ type iptRule struct {
 	tcpFlagsNeg bool
 	source      *netip.Prefix // -s; nil when the rule has none
 	sourceNeg   bool
+	icmpType    string // --icmp-type normalized by icmpTypeName; "" when none
+	icmpTypeNeg bool
 }
 
 type iptTable struct {
@@ -183,6 +185,12 @@ func parseIptablesRule(line string) (iptRule, bool) {
 			} else {
 				rule.conditional = true
 			}
+		case "--icmp-type":
+			if name, ok := icmpTypeName(next()); ok && module == "icmp" {
+				rule.icmpType, rule.icmpTypeNeg = name, negated
+			} else {
+				rule.conditional = true
+			}
 		case "-c", "--set-counters":
 			next()
 			next()
@@ -231,6 +239,9 @@ func (rule iptRule) match(f flow) tri {
 	if rule.tcpFlags != nil {
 		result = and(result, negate(rule.tcpFlags.match(f), rule.tcpFlagsNeg))
 	}
+	if rule.icmpType != "" {
+		result = and(result, negate(icmpTypeMatch([]string{rule.icmpType}, f), rule.icmpTypeNeg))
+	}
 	if rule.conditional {
 		result = and(result, maybe)
 	}
@@ -254,6 +265,52 @@ func protoMatch(protocols []string, f flow) tri {
 		}
 		if protocol == f.proto {
 			return yes
+		}
+	}
+	return no
+}
+
+// icmpTypeName reads an ICMP type as iptables-save prints it ("8", "8/0") or
+// by name; only echo-request (ping, the ICMP the flows carry) and any matter.
+func icmpTypeName(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if index := strings.Index(value, "/"); index >= 0 {
+		value = value[:index]
+	}
+	switch value {
+	case "":
+		return "", false
+	case "8", "echo-request", "ping":
+		return "echo-request", true
+	case "0", "echo-reply", "pong":
+		return "echo-reply", true
+	case "any", "255":
+		return "any", true
+	}
+	return "other", true
+}
+
+// icmpTypeMatch compares ICMP types with the flow: forwarded ICMP is ping,
+// echo requests from the LAN and echo replies back.
+func icmpTypeMatch(types []string, f flow) tri {
+	if f.proto == "" {
+		return maybe
+	}
+	if f.proto != "icmp" {
+		return no
+	}
+	for _, kind := range types {
+		switch kind {
+		case "any":
+			return yes
+		case "echo-request":
+			if !f.reply {
+				return yes
+			}
+		case "echo-reply":
+			if f.reply {
+				return yes
+			}
 		}
 	}
 	return no
@@ -351,6 +408,7 @@ type iptFinding struct {
 	rule    string
 	unknown bool
 	flow    string
+	proto   string
 }
 
 var iptablesHooks = []struct{ hook, chain string }{{"forward", "FORWARD"}, {"input", "INPUT"}}
@@ -401,6 +459,8 @@ func (in *inspection) evaluateIptables(table *iptTable, binary, backend string) 
 				}
 			case item.unknown:
 				detail = label + " " + chain + " 链有无法判断的规则：" + item.rule
+			case item.flow == FlowLocalDNS:
+				detail = label + " " + chain + " 链有会丢弃发到本机 53 端口的 DNS 查询的规则：" + item.rule
 			case hook.hook == "input":
 				detail = label + " " + chain + " 链有会丢弃入站流量的规则：" + item.rule
 			default:
@@ -412,7 +472,7 @@ func (in *inspection) evaluateIptables(table *iptTable, binary, backend string) 
 			}
 			// Repeated details are merged when the result is assembled; each
 			// finding still marks its flow as blocked.
-			in.record(finding{source: Source{Kind: kind, Backend: backend, Hook: hook.hook, Chain: chain, Policy: policy, Detail: clip(detail)}, policy: item.policy, flow: item.flow})
+			in.record(finding{source: Source{Kind: kind, Backend: backend, Hook: hook.hook, Chain: chain, Policy: policy, Detail: clip(detail)}, policy: item.policy, flow: item.flow, proto: item.proto})
 		}
 	}
 }
@@ -510,7 +570,7 @@ func (e *iptEvaluation) record(item iptFinding, f flow, m tri, certain bool) {
 		e.in.skipped = true
 		return
 	}
-	item.flow = f.name
+	item.flow, item.proto = f.name, f.proto
 	e.found = append(e.found, item)
 }
 

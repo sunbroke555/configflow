@@ -1,7 +1,8 @@
 // Package netfilter inspects, read-only, whether the host firewall may drop
 // the traffic a full-TUN Mihomo host handles for the LAN: packets forwarded
 // between the LAN and the TUN device, TCP that auto-redirect hands to a local
-// port, and TCP that the TUN system stack delivers to Mihomo.
+// port, TCP that the TUN system stack delivers to Mihomo, and DNS that a
+// local server on this host (OxiDNS on an all-in-one host) answers.
 //
 // It never changes firewall state. Every command it runs only lists rules, and
 // it avoids listings with side effects: the legacy iptables filter table is
@@ -12,7 +13,10 @@ package netfilter
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -42,9 +46,10 @@ type Result struct {
 	Policy      string `json:"policy"`
 	InputPolicy string `json:"input_policy"`
 	// Flows lists the blocked paths: forward (LAN <-> TUN), dns (DNS to this
-	// host that auto-redirect DNATs into the TUN), redirect_tcp (TCP that
-	// auto-redirect hands to a local port) and tun_tcp (TCP the TUN system
-	// stack delivers to Mihomo).
+	// host that auto-redirect DNATs into the TUN), local_dns (DNS to this
+	// host's LAN address that a local server answers, outside the TUN),
+	// redirect_tcp (TCP that auto-redirect hands to a local port) and tun_tcp
+	// (TCP the TUN system stack delivers to Mihomo).
 	Flows     []string `json:"flows"`
 	Sources   []Source `json:"sources"`
 	Remedies  []Remedy `json:"remedies"`
@@ -86,6 +91,14 @@ type Target struct {
 	// to Mihomo: the address after tun.inet4-address. Zero means Mihomo's
 	// default, 198.18.0.2 (inet4-address 198.18.0.1/30).
 	TUNPeer netip.Addr
+	// LAN lists this host's LAN-side IPv4 addresses (LANAddresses). A DNS
+	// listener bound to one of them, or to the wildcard address, is reachable
+	// from LAN devices.
+	LAN []net.IP
+	// ServesDNS: a DNS service installed on this host (OxiDNS or MosDNS of an
+	// all-in-one install) answers port 53, even before it listens. Otherwise
+	// a listener on port 53 is looked for in /proc/net.
+	ServesDNS bool
 }
 
 var defaultTUNPeer = netip.MustParseAddr("198.18.0.2")
@@ -94,11 +107,15 @@ var defaultTUNPeer = netip.MustParseAddr("198.18.0.2")
 const (
 	FlowForward     = "forward"
 	FlowDNS         = "dns"
+	FlowLocalDNS    = "local_dns"
 	FlowRedirectTCP = "redirect_tcp"
 	FlowTUNTCP      = "tun_tcp"
 )
 
-var flowOrder = []string{FlowForward, FlowDNS, FlowRedirectTCP, FlowTUNTCP}
+var flowOrder = []string{FlowForward, FlowDNS, FlowLocalDNS, FlowRedirectTCP, FlowTUNTCP}
+
+// dnsPort is where LAN devices send DNS to this host.
+const dnsPort = 53
 
 // Probe isolates every host access so tests never run real commands.
 type Probe struct {
@@ -119,7 +136,7 @@ var (
 const (
 	maxSources  = 8
 	maxRemedies = 6
-	maxCommands = 8
+	maxCommands = 12
 	maxDetail   = 160
 )
 
@@ -164,12 +181,16 @@ type inspection struct {
 	ufwActive bool
 	firewalld bool // firewalld is running and its state was read
 	remedies  []*remedyPlan
+	// localDNS lists the protocols (udp, tcp) of a DNS server on this host
+	// that LAN devices reach outside the TUN; empty when there is none.
+	localDNS []string
 }
 
 type finding struct {
 	source Source
 	policy bool
 	flow   string
+	proto  string // layer 4 protocol of the flow, "" when not split by protocol
 }
 
 // remedyPlan collects the blocked flows of one place allow rules can go; its
@@ -178,9 +199,8 @@ type remedyPlan struct {
 	source, binary, family, table, chain string
 	label                                string
 	flows                                map[string]bool
-	// firewalld: the configflow-tun zone and configflow-fwd policy already
-	// exist (their chains appear once they are in use).
-	zoneExists, policyExists bool
+	// firewalld: the zones of the LAN interfaces, where DNS is allowed.
+	lanZones []string
 }
 
 // notePolicy keeps the strictest real default policy per hook.
@@ -254,6 +274,11 @@ func Inspect(ctx context.Context, probe Probe, target Target) Result {
 	defer cancel()
 	in := &inspection{ctx: ctx, probe: probe, target: target, ports: localPortRange(probe)}
 	in.lan = defaultRouteInterfaces(probe, target.Device)
+	if !target.DNSHijack {
+		// Hijacked DNS is DNAT-ed into the TUN (flow dns); otherwise DNS to
+		// this host's LAN address reaches a local server through the input hook.
+		in.localDNS = localDNSProtocols(probe, target)
+	}
 
 	nftLoaded, nftKnown := nfTablesPresent(in)
 	legacyLoaded := legacyFilterLoaded(in)
@@ -475,6 +500,9 @@ func (in *inspection) result(now time.Time) Result {
 	seen := map[string]bool{}
 	for _, f := range in.findings {
 		blocked[f.flow] = true
+		if f.proto != "" {
+			blocked[f.flow+"/"+f.proto] = true
+		}
 		key := f.source.Kind + "|" + f.source.Backend + "|" + f.source.Hook + "|" + f.source.Detail
 		if seen[key] || len(result.Sources) >= maxSources {
 			continue
@@ -626,11 +654,23 @@ func (in *inspection) flows(hook string) []flow {
 			}
 			flows = append(flows, flow{name: FlowTUNTCP, hook: hook, in: device, out: side{none: true}, proto: "tcp", dnat: no, local: yes, ct: input, dport: ports, saddr: peer, strict: true})
 		}
+		// New DNS queries from the LAN to this host's own address, port 53.
+		for _, proto := range in.localDNS {
+			flows = append(flows, flow{name: FlowLocalDNS, hook: hook, in: lan, out: side{none: true}, proto: proto, dnat: no, local: yes, ct: input, dport: portSpan{dnsPort, dnsPort}, strict: true})
+		}
 		return flows
 	}
-	flows := []flow{
-		{name: FlowForward, hook: hook, in: lan, out: device, dnat: no, local: no},
-		{name: FlowForward, hook: hook, in: device, out: lan, reply: true, dnat: no, local: no},
+	// Forwarded traffic per protocol: auto-redirect takes TCP out of the
+	// forward hook, and some firewalls (UFW) accept forwarded ping only.
+	protocols := []string{"udp", "icmp"}
+	if !in.target.AutoRedirect {
+		protocols = []string{"tcp", "udp", "icmp"}
+	}
+	var flows []flow
+	for _, proto := range protocols {
+		flows = append(flows,
+			flow{name: FlowForward, hook: hook, in: lan, out: device, proto: proto, dnat: no, local: no},
+			flow{name: FlowForward, hook: hook, in: device, out: lan, reply: true, proto: proto, dnat: no, local: no})
 	}
 	if in.target.DNSHijack {
 		flows = append(flows,
@@ -686,4 +726,94 @@ func matchAnyInterface(patterns []string, s side, wildcard byte) tri {
 		}
 	}
 	return result
+}
+
+// localDNSProtocols lists the protocols of a DNS server on this host that LAN
+// devices reach: a socket on port 53 bound to the wildcard address or a LAN
+// address (a loopback-only stub such as systemd-resolved does not count).
+// An installed DNS service counts for both before it listens.
+func localDNSProtocols(probe Probe, target Target) []string {
+	if target.ServesDNS {
+		return []string{"udp", "tcp"}
+	}
+	if probe.ReadFile == nil {
+		return nil
+	}
+	var udp, tcp bool
+	for _, table := range []struct {
+		path string
+		tcp  bool
+	}{{"/proc/net/udp", false}, {"/proc/net/tcp", true}, {"/proc/net/udp6", false}, {"/proc/net/tcp6", true}} {
+		data, err := probe.ReadFile(table.path)
+		if err != nil {
+			continue
+		}
+		if dnsSocket(string(data), table.tcp, target.LAN) {
+			if table.tcp {
+				tcp = true
+			} else {
+				udp = true
+			}
+		}
+	}
+	var result []string
+	if udp {
+		result = append(result, "udp")
+	}
+	if tcp {
+		result = append(result, "tcp")
+	}
+	return result
+}
+
+// dnsSocket reads one /proc/net/{tcp,udp}[6] table for a listening TCP socket
+// (state 0A) or an unconnected UDP socket on port 53 that LAN devices reach.
+func dnsSocket(table string, tcp bool, lan []net.IP) bool {
+	lines := strings.Split(table, "\n")
+	for _, line := range lines[1:] {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		local, remote, state := fields[1], fields[2], fields[3]
+		if tcp && state != "0A" {
+			continue
+		}
+		if !tcp && strings.Trim(strings.ReplaceAll(remote, ":", ""), "0") != "" {
+			continue // a connected UDP socket
+		}
+		index := strings.LastIndex(local, ":")
+		if index < 0 || local[index+1:] != "0035" {
+			continue
+		}
+		addr, ok := procAddress(local[:index])
+		if !ok {
+			continue
+		}
+		if addr.IsUnspecified() {
+			return true
+		}
+		addr = addr.Unmap()
+		for _, ip := range lan {
+			if candidate, ok := netip.AddrFromSlice(ip.To4()); ok && candidate == addr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// procAddress decodes a /proc/net address: 32-bit words in hex, each printed
+// in the host's byte order.
+func procAddress(value string) (netip.Addr, bool) {
+	raw, err := hex.DecodeString(value)
+	if err != nil || (len(raw) != 4 && len(raw) != 16) {
+		return netip.Addr{}, false
+	}
+	bytes := make([]byte, len(raw))
+	for i := 0; i < len(raw); i += 4 {
+		binary.NativeEndian.PutUint32(bytes[i:], binary.BigEndian.Uint32(raw[i:]))
+	}
+	addr, ok := netip.AddrFromSlice(bytes)
+	return addr, ok
 }

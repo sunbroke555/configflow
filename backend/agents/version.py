@@ -8,7 +8,7 @@ VERSION_CHANGELOG = {
     "1.8.42-go": {
         "date": "2026-10-24",
         "features": [
-            "完整 TUN 主机检查转发和本机入站过滤（iptables、nftables、Docker、firewalld、UFW）：可能拦截转发的 UDP、ping、发到本机的 DNS，或 auto-redirect 转给本机的 TCP 时只提醒，按受影响的流量说明并给出只放行这些流量的命令，不修改防火墙",
+            "完整 TUN 主机检查转发和本机入站过滤（iptables、nftables、Docker、firewalld、UFW）：可能拦截转发的 UDP、ping、发到本机的 DNS（包括同机安装时由 OxiDNS 应答的 53 端口），或 auto-redirect 转给本机的 TCP 时只提醒，按受影响的流量说明并给出只放行这些流量的命令，不修改防火墙",
             "安装器自己开启 IPv4 转发时，环境检查改为说明“安装器将开启并持久化”，不再提示手动修复；只在其他 sysctl 设置会改回 0 时提醒"
         ]
     },
