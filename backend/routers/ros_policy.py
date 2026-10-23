@@ -9,6 +9,7 @@ from bisect import bisect_right
 import hashlib
 import ipaddress
 import json
+import re
 
 from backend.routers.base import RouterError, is_managed
 
@@ -52,11 +53,30 @@ def snapshot(driver):
     # A stable synthetic ID lets this singleton participate in the same preview
     # fingerprint as collections. It is never an editable policy resource.
     result[SETTINGS] = [{**settings, '.id': 'routing-settings'}]
+    if 'policy-rules' not in settings:
+        # policy-rules exists only since RouterOS 7.22; the version lets the
+        # blocker say so instead of reporting an unknown priority.
+        try:
+            resource = driver._get('/system/resource')
+        except RouterError:
+            resource = None
+        if isinstance(resource, dict) and resource.get('version'):
+            # Drop the release channel: "7.21.2 (stable)" -> "7.21.2".
+            result[SETTINGS][0]['routeros-version'] = str(resource['version']).split()[0]
     return result
+
+
+def policy_rules_missing_message(version):
+    match = re.match(r'(\d+)\.(\d+)', version or '')
+    if match and (int(match.group(1)), int(match.group(2))) >= (7, 22):
+        return f'RouterOS {version} 未返回路由查找顺序（/routing/settings policy-rules），无法确认 Mangle 优先级'
+    return f'策略路由需要 RouterOS 7.22 或更高版本（当前 {version or "版本未知"}），请升级 RouterOS 后再发布'
 
 
 def check_policy_order(live):
     settings = live.get(SETTINGS) or []
+    if len(settings) == 1 and 'policy-rules' not in settings[0]:
+        raise RouterError(policy_rules_missing_message(settings[0].get('routeros-version')))
     order = settings[0].get('policy-rules') if len(settings) == 1 else None
     if isinstance(order, str):
         order = [item.strip() for item in order.split(',')]
