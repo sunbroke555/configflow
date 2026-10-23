@@ -250,3 +250,16 @@ def test_forwarding_agent_version_gate(version, gateway, forwarding):
     assert FORWARDING_MIN_AGENT_VERSION == '1.8.40-go'
     assert supports_gateway({'version': version}) is gateway
     assert supports_forwarding({'version': version}) is forwarding
+
+
+def test_frontend_keeps_the_same_router_split_copy():
+    """The editor falls back to its own copy only when a response has no message."""
+    import re
+    from pathlib import Path
+    from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION
+    from backend.common.router_split import LEGACY_RESTORE_BLOCKED, MESSAGES
+    source = (Path(__file__).resolve().parent.parent / 'frontend/src/lib/routerSplit.ts').read_text(encoding='utf-8')
+    frontend = dict(re.findall(r"^\s+(ROUTER_SPLIT_[A-Z_]+): '([^']*)',$", source, re.MULTILINE))
+    assert frontend == MESSAGES
+    assert f"LEGACY_RESTORE_BLOCKED = '{LEGACY_RESTORE_BLOCKED}'" in source
+    assert f"FORWARDING_AGENT_VERSION = '{FORWARDING_MIN_AGENT_VERSION}'" in source

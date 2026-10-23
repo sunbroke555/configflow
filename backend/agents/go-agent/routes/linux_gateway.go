@@ -523,8 +523,8 @@ func LinuxGatewayHandler(cfg *Config, action string) http.HandlerFunc {
 	}
 }
 
-// linuxGatewayForwarding persists native AIO IPv4 forwarding, the first step
-// of moving a router-split host from selective takeover to a full TUN.
+// linuxGatewayForwarding persists native AIO IPv4 forwarding, so the installation
+// wizard can repair a full-TUN router split whose forwarding is not persisted.
 func linuxGatewayForwarding(cfg *Config, w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		PrepareTUN bool `json:"prepare_tun"`

@@ -262,3 +262,47 @@ def test_ordinary_gateway_remove_is_unchanged(split, calls):
     bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', {})
     bridge.call(Manager(), 'gateway', 'remove', 'POST', 'home', {'confirm_router_split_teardown': True})
     assert [item['json'] for item in calls[0]] == [{}, {}]
+
+
+def test_http_router_split_codes_reach_the_editor(authenticated_app, monkeypatch):
+    """The stored setup session and marker decide, and the editor gets the code and text."""
+    from backend.common import setup_flow
+    from backend.common.router_split import MESSAGES
+    client, manager, _, admin, _ = authenticated_app
+    repository = manager.repository
+    repository.create_profile({'id': 'home', 'name': 'Home'})
+    seen = []
+
+    def request(session, method, url, **kwargs):
+        seen.append((url.rsplit('/', 1)[-1], kwargs['json']))
+        return Response({'success': True, 'managed': {'active': False}})
+    monkeypatch.setattr(requests.Session, 'request', request)
+    agent = manager.register_agent({'name': 'split', 'host': '127.0.0.1', 'port': 8080, 'service_type': 'mihomo',
+                                    'deployment_method': 'shell', 'version': CURRENT, 'profile_id': 'home'})
+    headers = {**admin, 'X-ConfigFlow-Profile': 'home'}
+    path = f"/api/agents/{agent['id']}/linux-gateway/"
+
+    def mihomo(**fields):
+        value = repository.get_profile('home').get('mihomo') or {}
+        repository.save_profile('home', {'mihomo': {**value, **fields}})
+    # Legacy: a router setup session from before the marker, with the gateway on.
+    mihomo(linux_gateway={'enabled': True, 'rule_set_ids': []})
+    setup_flow.write(repository, {'id': 'd' * 32, 'profile_id': 'home', 'name': 'Home', 'goal': 'router',
+                                  'step': 4, 'max_step': 4, 'prepared': True, 'completed': True})
+    response = client.post(path + 'remove', headers=headers, json={})
+    assert response.status_code == 409
+    assert response.get_json() == {'success': False, 'code': 'ROUTER_SPLIT_LEGACY_TEARDOWN',
+                                   'message': MESSAGES['ROUTER_SPLIT_LEGACY_TEARDOWN']}
+    assert client.post(path + 'forwarding', headers=headers, json={}).get_json()['code'] == 'ROUTER_SPLIT_REQUIRED'
+    assert seen == []
+    response = client.post(path + 'remove', headers=headers, json={'confirm_router_split_teardown': True})
+    assert response.status_code == 200, response.get_json()
+    assert seen == [('remove', {})]
+    # Full TUN: forwarding goes through, the selective gateway never does.
+    mihomo(linux_gateway={'enabled': False, 'rule_set_ids': []}, router_split=deepcopy(MARKER))
+    response = client.post(path + 'forwarding', headers=headers, json={})
+    assert response.status_code == 200, response.get_json()
+    assert seen[-1] == ('forwarding', {})
+    response = client.post(path + 'apply', headers=headers, json=SPEC)
+    assert response.status_code == 409 and response.get_json()['code'] == 'ROUTER_SPLIT_FULL_TUN'
+    assert len(seen) == 2
