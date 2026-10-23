@@ -15,7 +15,8 @@ import { canReloadPage } from '@/lib/pageReloadGuard'
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn() },
   routerApi: {
-    list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), probe: vi.fn(), report: vi.fn(), plan: vi.fn(), apply: vi.fn(), routes: vi.fn(), routePlan: vi.fn(), routeApply: vi.fn(), policy: vi.fn(), policySettings: vi.fn(), savePolicySettings: vi.fn(), previewPolicySettings: vi.fn()
+    list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), probe: vi.fn(), report: vi.fn(), plan: vi.fn(), apply: vi.fn(), routes: vi.fn(), routePlan: vi.fn(), routeApply: vi.fn(), policy: vi.fn(), policySettings: vi.fn(), savePolicySettings: vi.fn(), previewPolicySettings: vi.fn(),
+    gatewayForwarding: vi.fn(), persistGatewayForwarding: vi.fn()
   },
   ruleApi: { getAll: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn() }
 }))
@@ -78,6 +79,7 @@ const mountRouter = async (router: Record<string, unknown> | null = ROUTER, agen
   vi.mocked(routerApi.list).mockResolvedValue({ data: { success: true, routers: router ? [router] : [] } } as any)
   vi.mocked(agentApi.getAll).mockResolvedValue({ data: agents } as any)
   vi.mocked(ruleApi.getAll).mockResolvedValue({ data: [] } as any)
+  vi.mocked(routerApi.gatewayForwarding).mockResolvedValue({ data: { success: true, gateways: [] } } as any)
   vi.mocked(routerApi.policySettings).mockResolvedValue({ data: { success: true, workspace: { profile_id: 'default', profile_name: '默认配置', revision: 'one', oxidns_revision: 'dns-one', router: { id: 'router_1', name: '主路由', ip_rule_sets: [], ros_policy_rule_sets: ['telegram'], proxy_gateway_agent_id: 'a1' }, sources: { policies: [], editable: true, reason: '' }, source_agents: [], gateways: [], rule_sets: [] } } } as any)
   const wrapper = mount(Routers, { attachTo: document.body, props })
   wrappers.push(wrapper)

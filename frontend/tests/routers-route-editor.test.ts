@@ -11,7 +11,8 @@ import { activeProfileId } from '@/profileContext'
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn() }, ruleApi: { getAll: vi.fn() },
   routerApi: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn(), probe: vi.fn(), report: vi.fn(),
-    plan: vi.fn(), apply: vi.fn(), routes: vi.fn(), routePlan: vi.fn(), routeApply: vi.fn() }
+    plan: vi.fn(), apply: vi.fn(), routes: vi.fn(), routePlan: vi.fn(), routeApply: vi.fn(),
+    gatewayForwarding: vi.fn(), persistGatewayForwarding: vi.fn() }
 }))
 vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() },
   confirm: vi.fn(), confirmDanger: vi.fn(), confirmState: { resolve: null }, settleConfirm: vi.fn() }))
@@ -56,6 +57,7 @@ beforeEach(() => {
   vi.mocked(agentApi.getAll).mockResolvedValue({ data: [] } as any)
   vi.mocked(ruleApi.getAll).mockResolvedValue({ data: [] } as any)
   vi.mocked(routerApi.routes).mockResolvedValue({ data: { success: true, routes: [ROUTE] } } as any)
+  vi.mocked(routerApi.gatewayForwarding).mockResolvedValue({ data: { success: true, gateways: [] } } as any)
   vi.mocked(routerApi.routePlan).mockResolvedValue(preview() as any)
   vi.mocked(routerApi.routeApply).mockResolvedValue({ data: { success: true, result: { changed: true } } } as any)
   vi.mocked(confirm).mockResolvedValue(true)

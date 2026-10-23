@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.40-go"
+LATEST_AGENT_VERSION = "1.8.41-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.41-go": {
+        "date": "2026-10-23",
+        "features": [
+            "Mihomo 单独安装的 Agent 也可开启并持久化 IPv4 转发并注册开机检查（与同机安装共用持久化文件）",
+            "单独安装主机持久化转发后，撤销旧 Linux 网关记录时同样保留 IPv4 转发"
+        ]
+    },
     "1.8.40-go": {
         "date": "2026-10-23",
         "features": [

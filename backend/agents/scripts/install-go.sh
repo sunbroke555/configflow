@@ -18,7 +18,7 @@ fi
 {init_detection}
 
 {agent_install_dependencies}
-cf_ui "1) {installation_action}"
+{ipv4_forwarding_notice}cf_ui "1) {installation_action}"
 cf_ui "2) 卸载 Agent"
 cf_ui "3) 取消"
 cf_prompt '请输入选项 [1-3]: '
@@ -32,7 +32,7 @@ case "$choice" in
             armv7l|armhf) AGENT_ARCH="linux-armv7" ;;
             *) echo "不支持的 CPU 架构"; exit 1 ;;
         esac
-        agent_ensure_dependencies{core_dependencies}
+        agent_ensure_dependencies{core_dependencies}{ipv4_forwarding_dependencies}
         cf_step_done "安装环境与依赖已就绪"
         ;;
     2) cf_step "卸载 Agent" ;;
@@ -184,7 +184,7 @@ remove_recovery_gate() {
     fi
 }
 
-# One native installer owns the legacy configflow-agent unit and shared binary.
+{ipv4_forwarding_functions}# One native installer owns the legacy configflow-agent unit and shared binary.
 # Refuse a cross-core overwrite; Docker supports separate core/Agent instances.
 for isolated_dir in "$AGENT_DIR/mihomo" "$AGENT_DIR/oxidns"; do
     if [ -e "$isolated_dir" ] || [ -L "$isolated_dir" ]; then
@@ -238,7 +238,7 @@ case "$choice" in
         rm -f /usr/local/bin/configflow-agent
         rm -rf "$AGENT_DIR"
         rm -f /var/log/configflow-agent.log /var/log/configflow-agent.log.* /etc/logrotate.d/configflow-agent
-        cf_complete "Agent 已卸载，服务配置与发布备份已保留。"
+{ipv4_forwarding_uninstall}        cf_complete "Agent 已卸载，服务配置与发布备份已保留。"
         exit 0
         ;;
     *) cf_complete "已取消"; exit 0 ;;
@@ -307,7 +307,7 @@ else
     exit "$environment_status"
 fi
 cf_step_done "核心接管与运行环境检查通过"
-cf_step "安装并启动 Agent 服务"
+{ipv4_forwarding_prepare}cf_step "安装并启动 Agent 服务"
 # Stop the previous Go or legacy Shell Agent before replacing its binary/config.
 if [ "$INIT_SYSTEM" = "systemd" ]; then
     systemctl stop configflow-agent 2>/dev/null || true
@@ -326,7 +326,7 @@ mv "$BINARY_TMP" /usr/local/bin/configflow-agent
 mv "$CONFIG_FILE.new" "$CONFIG_FILE"
 chmod 600 "$CONFIG_FILE"
 
-# Reuse an existing logrotate installation; publishing requires no new package.
+{ipv4_forwarding_hook}# Reuse an existing logrotate installation; publishing requires no new package.
 if command -v logrotate >/dev/null 2>&1; then
     mkdir -p /etc/logrotate.d
     cat > /etc/logrotate.d/configflow-agent <<'LOGEOF'
@@ -352,7 +352,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/configflow-agent
-ExecStart=/usr/local/bin/configflow-agent -config /opt/configflow-agent/config-{service_type}.json
+{ipv4_systemd_pre}ExecStart=/usr/local/bin/configflow-agent -config /opt/configflow-agent/config-{service_type}.json
 Restart=always
 RestartSec=10
 
@@ -379,7 +379,7 @@ depend() {
     after firewall
 }
 start_pre() {
-    checkpath --directory --mode 0755 /var/log
+{ipv4_openrc_pre}    checkpath --directory --mode 0755 /var/log
     checkpath --file --mode 0644 --owner root:root /var/log/configflow-agent.log
     if [ -f /var/log/configflow-agent.log ]; then
         log_size=$(wc -c < /var/log/configflow-agent.log 2>/dev/null || echo 0)
@@ -397,6 +397,6 @@ SERVICEEOF
     rc-service configflow-agent start
     rc-service configflow-agent status
 fi
-cf_step_done "Agent 服务已启动"
-cf_fact agent_{service_type} "{service_label} Agent：端口 {agent_port}，服务已启动"
+{ipv4_forwarding_apply}cf_step_done "Agent 服务已启动"
+{ipv4_forwarding_summary}cf_fact agent_{service_type} "{service_label} Agent：端口 {agent_port}，服务已启动"
 cf_complete "安装完成"

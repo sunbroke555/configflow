@@ -1,9 +1,10 @@
 package routes
 
-// Native AIO IPv4 forwarding persistence, matching aio-ipv4-forwarding.sh so a
-// host installed through the gateway wizard can be moved to a full TUN without
-// reinstalling. The installer and this file must produce identical artifacts:
-// the sysctl.d file, the boot hook and the in-place patched Agent service.
+// Shell Mihomo Agent IPv4 forwarding persistence, matching aio-ipv4-forwarding.sh
+// (native AIO) and the single-service installer install-go.sh, so a host can be
+// moved to a full TUN or serve as an upstream router's proxy gateway without
+// reinstalling. The installers and this file must produce identical artifacts:
+// the shared sysctl.d file, the boot hook and the in-place patched Agent service.
 import (
 	"agent/preflight"
 	"agent/upgrade"
@@ -75,16 +76,107 @@ if [ "$(cat /proc/sys/net/ipv4/ip_forward)" != 1 ]; then
 fi
 `
 
+// The single-service installer writes the same hook; only this comment names
+// its one Agent (go_install_script.STANDALONE_FORWARDING_HOOK_COMMENT).
+const (
+	aioHookComment           = "# The installer commits this file only after both Agents start successfully.\n"
+	aioStandaloneHookComment = "# The installer commits this file only after the Agent starts successfully.\n"
+)
+
+var aioStandaloneForwardingHook = strings.Replace(aioForwardingHook, aioHookComment, aioStandaloneHookComment, 1)
+
 func aioForwardingConfigPath() string {
 	return filepath.Join(aioSysctlDir, "99-configflow-aio-forward.conf")
 }
 
-func aioForwardingHookPath() string {
-	return filepath.Join(aioAgentRoot, "mihomo", aioForwardingHookName)
+// aioForwardingTarget is the Mihomo Agent service whose start hook keeps IPv4
+// forwarding on: the native AIO layout or the single-service Shell layout.
+type aioForwardingTarget struct {
+	Layout          string   // "native_aio" | "standalone"
+	Directory       string   // the hook lives here; WorkingDirectory= in the unit
+	Unit            string   // without .service
+	Manager         string   // systemd | openrc
+	ExecStart       string   // the complete expected ExecStart= line
+	OpenRCOwnership []string // standalone only: exact lines the init script must contain
 }
 
-func aioSystemdHookLine() string { return "ExecStartPre=/bin/sh " + aioForwardingHookPath() }
-func aioOpenRCHookLine() string  { return "    /bin/sh " + aioForwardingHookPath() + " || return 1" }
+// The single-service installer always writes this unit and program path.
+const aioStandaloneUnit = "configflow-agent"
+
+var aioStandaloneBinary = "/usr/local/bin/configflow-agent"
+
+func (t aioForwardingTarget) Hook() string { return filepath.Join(t.Directory, aioForwardingHookName) }
+
+// HookContent is the exact start hook the installer of this layout writes.
+func (t aioForwardingTarget) HookContent() string {
+	if t.Layout == "standalone" {
+		return aioStandaloneForwardingHook
+	}
+	return aioForwardingHook
+}
+
+func (t aioForwardingTarget) SystemdHookLine() string { return "ExecStartPre=/bin/sh " + t.Hook() }
+func (t aioForwardingTarget) OpenRCHookLine() string {
+	return "    /bin/sh " + t.Hook() + " || return 1"
+}
+
+func (t aioForwardingTarget) UnitPath() string {
+	if t.Manager == "systemd" {
+		return filepath.Join(aioSystemdUnitDir, t.Unit+".service")
+	}
+	return filepath.Join(aioOpenRCDir, t.Unit)
+}
+
+func aioNativeTarget(instance nativeAIOInstallation) aioForwardingTarget {
+	return aioForwardingTarget{
+		Layout: "native_aio", Directory: instance.Directory, Unit: instance.Unit, Manager: instance.Manager,
+		ExecStart: "ExecStart=" + instance.Directory + "/configflow-agent -config " + instance.Directory + "/config.json",
+	}
+}
+
+// aioDefaultTarget is the native AIO Mihomo Agent, used where no installation
+// is recognised so status keeps describing the AIO hook path.
+func aioDefaultTarget() aioForwardingTarget {
+	return aioNativeTarget(nativeAIOInstallation{Directory: filepath.Join(aioAgentRoot, "mihomo"), Unit: "configflow-agent-mihomo", Manager: "systemd"})
+}
+
+// aioForwardingTargetFor accepts only the fixed layouts the installers write:
+// native AIO, or the single-service Mihomo install in its own directory (never
+// a mixed layout where an AIO Mihomo directory also exists).
+func aioForwardingTargetFor(cfg *Config) (aioForwardingTarget, error) {
+	if instance, err := nativeAIOInstallationFor(cfg); err == nil {
+		return aioNativeTarget(instance), nil
+	}
+	if cfg == nil || cfg.NativeAIO || cfg.ServiceType != "mihomo" {
+		return aioForwardingTarget{}, fmt.Errorf("not a supported Mihomo Agent installation")
+	}
+	config := filepath.Join(aioAgentRoot, "config-mihomo.json")
+	if cfg.AgentConfigFile != config {
+		return aioForwardingTarget{}, fmt.Errorf("single-service Agent config path does not match the installer")
+	}
+	if unit := strings.TrimSuffix(cfg.AgentServiceUnit, ".service"); unit != "" && unit != aioStandaloneUnit {
+		return aioForwardingTarget{}, fmt.Errorf("single-service Agent unit does not match the installer")
+	}
+	if cfg.ServiceManager != "systemd" && cfg.ServiceManager != "openrc" {
+		return aioForwardingTarget{}, fmt.Errorf("single-service forwarding requires systemd or OpenRC")
+	}
+	if _, err := os.Lstat(filepath.Join(aioAgentRoot, "mihomo")); !os.IsNotExist(err) {
+		return aioForwardingTarget{}, fmt.Errorf("mixed single-service and native AIO layout")
+	}
+	return aioForwardingTarget{
+		Layout: "standalone", Directory: aioAgentRoot, Unit: aioStandaloneUnit, Manager: cfg.ServiceManager,
+		ExecStart: "ExecStart=" + aioStandaloneBinary + " -config " + config,
+		OpenRCOwnership: []string{
+			"command=\"" + aioStandaloneBinary + "\"",
+			"command_args=\"-config " + config + "\"",
+		},
+	}, nil
+}
+
+// The zero-argument forms describe the native AIO Mihomo Agent.
+func aioForwardingHookPath() string { return aioDefaultTarget().Hook() }
+func aioSystemdHookLine() string    { return aioDefaultTarget().SystemdHookLine() }
+func aioOpenRCHookLine() string     { return aioDefaultTarget().OpenRCHookLine() }
 
 // The first line of start_pre() in OpenRC scripts written before the installer
 // reserved a hook line; the hook is inserted above it, as the installer does now.
@@ -122,8 +214,8 @@ func aioForwardingConfigState() (string, error) {
 	return "foreign", nil
 }
 
-func aioHookScriptState() (string, error) {
-	path := aioForwardingHookPath()
+func aioHookScriptState(t aioForwardingTarget) (string, error) {
+	path := t.Hook()
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return "absent", nil
@@ -138,29 +230,29 @@ func aioHookScriptState() (string, error) {
 	if err != nil {
 		return "modified", err
 	}
-	if string(data) == aioForwardingHook {
+	if string(data) == t.HookContent() {
 		return "managed", nil
 	}
 	return "modified", nil
 }
 
-// aioInstallation accepts only the fixed native AIO layout that the installer
-// writes; any other installation keeps its own forwarding management.
-func aioInstallation(cfg *Config) (nativeAIOInstallation, error) {
+// aioInstallation accepts only the fixed layouts that the installers write;
+// any other installation keeps its own forwarding management.
+func aioInstallation(cfg *Config) (aioForwardingTarget, error) {
 	if err := gatewayPlatform(cfg); err != nil {
-		return nativeAIOInstallation{}, err
+		return aioForwardingTarget{}, err
 	}
-	instance, err := nativeAIOInstallationFor(cfg)
+	target, err := aioForwardingTargetFor(cfg)
 	if err != nil {
-		return instance, fmt.Errorf("仅支持普通 Shell 同机安装（systemd 或 OpenRC）的 Mihomo Agent 自动持久化 IPv4 转发；其他安装方式请手动配置")
+		return target, fmt.Errorf("仅支持 Shell 安装（同机安装或 Mihomo 单独安装，systemd 或 OpenRC）的 Mihomo Agent 自动持久化 IPv4 转发；其他安装方式请手动配置")
 	}
-	return instance, nil
+	return target, nil
 }
 
 // The merged unit view also covers drop-ins outside /etc. update-agent.sh
 // accepts exactly one ExecStartPre, and only this hook.
-func aioSystemdStartupHook(unit string) (string, error) {
-	out, err := aioRun("systemctl", "show", "-p", "ExecStartPre", "--value", unit+".service")
+func aioSystemdStartupHook(t aioForwardingTarget) (string, error) {
+	out, err := aioRun("systemctl", "show", "-p", "ExecStartPre", "--value", t.Unit+".service")
 	if err != nil {
 		return "unknown", fmt.Errorf("无法读取 Agent 服务的 ExecStartPre：%w", err)
 	}
@@ -168,24 +260,44 @@ func aioSystemdStartupHook(unit string) (string, error) {
 	if value == "" {
 		return "absent", nil
 	}
-	if strings.Count(value, "{ path=") == 1 && strings.Contains(value, "{ path=/bin/sh ; argv[]=/bin/sh "+aioForwardingHookPath()+" ;") {
+	if strings.Count(value, "{ path=") == 1 && strings.Contains(value, "{ path=/bin/sh ; argv[]=/bin/sh "+t.Hook()+" ;") {
 		return "registered", nil
 	}
 	return "foreign", nil
 }
 
-func aioOpenRCStartupHook(unit string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(aioOpenRCDir, unit))
+// aioOpenRCOwned reports whether every ownership line occurs as a whole line.
+func aioOpenRCOwned(lines []string, t aioForwardingTarget) bool {
+	for _, want := range t.OpenRCOwnership {
+		found := false
+		for _, line := range lines {
+			if line == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func aioOpenRCStartupHook(t aioForwardingTarget) (string, error) {
+	data, err := os.ReadFile(filepath.Join(aioOpenRCDir, t.Unit))
 	if err != nil {
 		return "unknown", fmt.Errorf("无法读取 Agent 服务脚本：%w", err)
 	}
 	lines := strings.Split(string(data), "\n")
+	if !aioOpenRCOwned(lines, t) {
+		return "unknown", nil
+	}
 	for index, line := range lines {
 		if line != "start_pre() {" || index+1 >= len(lines) {
 			continue
 		}
 		switch lines[index+1] {
-		case aioOpenRCHookLine():
+		case t.OpenRCHookLine():
 			return "registered", nil
 		case "    ", aioOpenRCLegacyFirstLine:
 			return "absent", nil
@@ -195,12 +307,12 @@ func aioOpenRCStartupHook(unit string) (string, error) {
 	return "unknown", nil
 }
 
-func aioStartupHookState(instance nativeAIOInstallation) (string, error) {
-	switch instance.Manager {
+func aioStartupHookState(t aioForwardingTarget) (string, error) {
+	switch t.Manager {
 	case "systemd":
-		return aioSystemdStartupHook(instance.Unit)
+		return aioSystemdStartupHook(t)
 	case "openrc":
-		return aioOpenRCStartupHook(instance.Unit)
+		return aioOpenRCStartupHook(t)
 	}
 	return "unknown", nil
 }
@@ -208,9 +320,12 @@ func aioStartupHookState(instance nativeAIOInstallation) (string, error) {
 func aioForwardingStatus(cfg *Config) map[string]interface{} {
 	result := map[string]interface{}{"protocol": 1, "current": "", "supported": true}
 	errs := []string{}
-	instance, supportErr := aioInstallation(cfg)
+	target, supportErr := aioInstallation(cfg)
 	if supportErr != nil {
 		result["supported"], result["unsupported_reason"] = false, supportErr.Error()
+		target = aioDefaultTarget()
+	} else {
+		result["layout"] = target.Layout
 	}
 	if value, err := gatewayReadSysctl("net/ipv4/ip_forward"); err != nil {
 		errs = append(errs, "无法读取 IPv4 转发状态："+err.Error())
@@ -221,13 +336,13 @@ func aioForwardingStatus(cfg *Config) map[string]interface{} {
 	if err != nil {
 		errs = append(errs, "无法检查 IPv4 转发持久化配置："+err.Error())
 	}
-	hook, err := aioHookScriptState()
+	hook, err := aioHookScriptState(target)
 	if err != nil {
 		errs = append(errs, "无法检查 IPv4 转发启动脚本："+err.Error())
 	}
 	startup := "unknown"
 	if supportErr == nil {
-		startup, err = aioStartupHookState(instance)
+		startup, err = aioStartupHookState(target)
 		if err != nil {
 			errs = append(errs, err.Error())
 		}
@@ -271,10 +386,10 @@ func aioTUNStatus(cfg *Config) map[string]interface{} {
 }
 
 // aioPatchSystemd returns the patched unit, or nil when already registered.
-func aioPatchSystemd(data []byte, directory string) ([]byte, error) {
+func aioPatchSystemd(data []byte, t aioForwardingTarget) ([]byte, error) {
 	lines := strings.Split(string(data), "\n")
-	execStart := "ExecStart=" + directory + "/configflow-agent -config " + directory + "/config.json"
-	hook, starts, at := aioSystemdHookLine(), 0, -1
+	execStart := t.ExecStart
+	hook, starts, at := t.SystemdHookLine(), 0, -1
 	for index, line := range lines {
 		if strings.HasPrefix(line, "ExecStartPre=") && line != hook {
 			return nil, fmt.Errorf("Agent 服务存在未知 ExecStartPre，无法自动注册 IPv4 转发检查")
@@ -285,7 +400,7 @@ func aioPatchSystemd(data []byte, directory string) ([]byte, error) {
 		}
 	}
 	if starts != 1 || lines[at] != execStart || strings.Count(string(data), hook+"\n") > 1 {
-		return nil, fmt.Errorf("Agent 服务的 ExecStart 不是同机安装写入的格式，无法自动注册 IPv4 转发检查")
+		return nil, fmt.Errorf("Agent 服务的 ExecStart 不是安装器写入的格式，无法自动注册 IPv4 转发检查")
 	}
 	previous := ""
 	if at > 0 {
@@ -295,20 +410,23 @@ func aioPatchSystemd(data []byte, directory string) ([]byte, error) {
 	case previous == hook:
 		return nil, nil
 	case strings.Contains(string(data), hook+"\n"):
-		return nil, fmt.Errorf("Agent 服务的 IPv4 转发检查位置异常，请用普通同机安装重新安装 Agent")
+		return nil, fmt.Errorf("Agent 服务的 IPv4 转发检查位置异常，请重新运行原安装命令")
 	case at > 0 && previous == "":
 		lines[at-1] = hook
-	case at > 0 && previous == "WorkingDirectory="+directory:
+	case at > 0 && previous == "WorkingDirectory="+t.Directory:
 		lines = append(lines[:at], append([]string{hook}, lines[at:]...)...)
 	default:
-		return nil, fmt.Errorf("Agent 服务文件结构无法识别，无法自动注册 IPv4 转发检查；请用普通同机安装重新安装 Agent")
+		return nil, fmt.Errorf("Agent 服务文件结构无法识别，无法自动注册 IPv4 转发检查；请重新运行原安装命令")
 	}
 	return []byte(strings.Join(lines, "\n")), nil
 }
 
-func aioPatchOpenRC(data []byte) ([]byte, error) {
+func aioPatchOpenRC(data []byte, t aioForwardingTarget) ([]byte, error) {
 	lines := strings.Split(string(data), "\n")
-	found := -1
+	if !aioOpenRCOwned(lines, t) {
+		return nil, fmt.Errorf("Agent 服务脚本不是 ConfigFlow 单独安装写入的格式，无法自动注册 IPv4 转发检查")
+	}
+	hook, found := t.OpenRCHookLine(), -1
 	for index, line := range lines {
 		if line == "start_pre() {" {
 			if found >= 0 {
@@ -320,17 +438,17 @@ func aioPatchOpenRC(data []byte) ([]byte, error) {
 	}
 	if found >= 0 && found+1 < len(lines) {
 		switch lines[found+1] {
-		case aioOpenRCHookLine():
+		case hook:
 			return nil, nil
 		case "    ":
-			lines[found+1] = aioOpenRCHookLine()
+			lines[found+1] = hook
 			return []byte(strings.Join(lines, "\n")), nil
 		case aioOpenRCLegacyFirstLine:
-			lines = append(lines[:found+1], append([]string{aioOpenRCHookLine()}, lines[found+1:]...)...)
+			lines = append(lines[:found+1], append([]string{hook}, lines[found+1:]...)...)
 			return []byte(strings.Join(lines, "\n")), nil
 		}
 	}
-	return nil, fmt.Errorf("Agent 服务脚本已被修改，无法自动注册 IPv4 转发检查；请用普通同机安装重新安装 Agent")
+	return nil, fmt.Errorf("Agent 服务脚本已被修改，无法自动注册 IPv4 转发检查；请重新运行原安装命令")
 }
 
 func aioRegularFile(path, label string) error {
@@ -387,7 +505,7 @@ func summarizeTUNPrepare(report preflight.Report) map[string]interface{} {
 }
 
 // persistAIOForwarding enables and persists IPv4 forwarding the way the
-// ordinary AIO installer does. The caller holds gatewayMu, returnRoutingMu and
+// ordinary AIO and single-service Mihomo installers do. The caller holds gatewayMu, returnRoutingMu and
 // the service operation lock. Every step is checked first, so a retry after
 // any interruption converges. Forwarding is never written to 0.
 func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]interface{}, resultErr error) {
@@ -395,7 +513,7 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 	if err != nil {
 		return nil, err
 	}
-	if err := instance.validateDirectory(); err != nil {
+	if err := (nativeAIOInstallation{Directory: instance.Directory}).validateDirectory(); err != nil {
 		return nil, fmt.Errorf("Agent 安装目录无效：%w", err)
 	}
 	// The boot hook runs these; without them a later Agent restart would fail
@@ -430,8 +548,8 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 	if value, err := gatewayReadSysctl(key); err != nil || value != current {
 		return nil, aioForwardingFailure("IPv4 转发权限检查后读回值不一致", fmt.Errorf("读回 %q：%v", value, err))
 	}
-	hook := aioForwardingHookPath()
-	hookState, err := aioHookScriptState()
+	hook := instance.Hook()
+	hookState, err := aioHookScriptState(instance)
 	if err != nil {
 		return nil, fmt.Errorf("无法检查 IPv4 转发启动脚本：%w", err)
 	}
@@ -441,10 +559,7 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 
 	// Inspect the service before changing anything; patched is nil when the
 	// file already carries the hook in the installer's position.
-	unitPath := filepath.Join(aioOpenRCDir, instance.Unit)
-	if instance.Manager == "systemd" {
-		unitPath = filepath.Join(aioSystemdUnitDir, instance.Unit+".service")
-	}
+	unitPath := instance.UnitPath()
 	if err := aioRegularFile(unitPath, "Agent 服务文件"); err != nil {
 		return nil, err
 	}
@@ -458,16 +573,16 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 		if err := aioSystemdDropInsWithPre(instance.Unit); err != nil {
 			return nil, err
 		}
-		if patched, err = aioPatchSystemd(snapshot.Data, instance.Directory); err != nil {
+		if patched, err = aioPatchSystemd(snapshot.Data, instance); err != nil {
 			return nil, err
 		}
-		if loaded, err = aioSystemdStartupHook(instance.Unit); err != nil {
+		if loaded, err = aioSystemdStartupHook(instance); err != nil {
 			return nil, err
 		}
 		if loaded == "foreign" || (patched != nil && loaded != "absent") {
 			return nil, fmt.Errorf("Agent 服务已从其他位置加载 ExecStartPre，无法自动注册 IPv4 转发检查")
 		}
-	} else if patched, err = aioPatchOpenRC(snapshot.Data); err != nil {
+	} else if patched, err = aioPatchOpenRC(snapshot.Data, instance); err != nil {
 		return nil, err
 	}
 
@@ -498,7 +613,7 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 		}
 	}()
 	if hookState == "absent" {
-		if err := durableWrite(hook, []byte(aioForwardingHook), 0755); err != nil {
+		if err := durableWrite(hook, []byte(instance.HookContent()), 0755); err != nil {
 			return nil, fmt.Errorf("无法写入 IPv4 转发启动脚本：%w", err)
 		}
 		hookCreated = true
@@ -515,7 +630,7 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 		if _, err := aioRun("systemctl", "daemon-reload"); err != nil {
 			return nil, fmt.Errorf("systemctl daemon-reload 失败：%w", err)
 		}
-		if state, err := aioSystemdStartupHook(instance.Unit); err != nil || state != "registered" {
+		if state, err := aioSystemdStartupHook(instance); err != nil || state != "registered" {
 			return nil, fmt.Errorf("重新加载后 Agent 服务未注册 IPv4 转发检查（%s）：%v", state, err)
 		}
 	}

@@ -4,6 +4,7 @@ import { explainRequestError } from '@/lib/requestError'
 import router from '@/router'
 import { getAuthSessionGeneration, getAuthToken, invalidateAuthSession } from '@/authSession'
 import { beginScopedRequest, clearActiveProfileId, endScopedRequest, getActiveProfileId } from '@/profileContext'
+import type { GatewayForwardingEntry } from '@/lib/gatewayForwarding'
 
 const api = axios.create({
   baseURL: '/api',
@@ -321,7 +322,11 @@ export const routerApi = {
   routePlan: (id: string, change: StaticRouteChange, profileId = getActiveProfileId()) =>
     api.post(`/routers/${id}/routes/plan`, change, { ...profileOptions(profileId), timeout: 60000 }),
   routeApply: (id: string, change: StaticRouteChange & { fingerprint: string }, profileId = getActiveProfileId()) =>
-    api.post(`/routers/${id}/routes/apply`, change, { ...profileOptions(profileId), timeout: 90000 })
+    api.post(`/routers/${id}/routes/apply`, change, { ...profileOptions(profileId), timeout: 90000 }),
+  gatewayForwarding: (profileId = getActiveProfileId()) =>
+    api.get<{ success: boolean; gateways: GatewayForwardingEntry[] }>('/routers/gateway-forwarding', { ...profileOptions(profileId), timeout: 60000 }),
+  persistGatewayForwarding: (agentId: string, profileId = getActiveProfileId()) =>
+    api.post<{ success: boolean; message?: string; gateway: GatewayForwardingEntry }>('/routers/gateway-forwarding', { agent_id: agentId }, { ...profileOptions(profileId), timeout: 90000 })
 }
 
 // OxiDNS 统一配置
@@ -371,6 +376,8 @@ export interface AgentInstallScriptParams {
   mihomo_config_path?: string; oxidns_config_path?: string;
   mihomo_service_unit?: string; oxidns_service_unit?: string;
   mihomo_service_binary?: string; oxidns_service_binary?: string;
+  /** 仅 Mihomo 单独安装：省略时默认开启并持久化 IPv4 转发，false 不开启。 */
+  ipv4_forwarding?: boolean;
 }
 
 export interface InstallCommandResult {

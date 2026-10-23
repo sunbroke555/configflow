@@ -19,6 +19,7 @@ type aioFixture struct {
 	*gatewayFixture
 	root        string
 	manager     string
+	layout      string // "aio" | "standalone"
 	loaded      string // the systemd unit view as of the last daemon-reload
 	reloads     int
 	failReloads int
@@ -30,7 +31,15 @@ type aioFixture struct {
 	writes      []string
 }
 
+// Both Shell layouts whose Mihomo Agent can persist IPv4 forwarding.
+var aioLayouts = []string{"aio", "standalone"}
+
 func newAIOFixture(t *testing.T, manager string) *aioFixture {
+	t.Helper()
+	return newAIOLayoutFixture(t, manager, "aio")
+}
+
+func newAIOLayoutFixture(t *testing.T, manager, layout string) *aioFixture {
 	t.Helper()
 	g := newGatewayFixture(t)
 	oldUnit, oldOpenRC, oldAgent, oldSysfs := aioSystemdUnitDir, aioOpenRCDir, aioAgentRoot, aioSysfsNetRoot
@@ -41,20 +50,26 @@ func newAIOFixture(t *testing.T, manager string) *aioFixture {
 	})
 	aioLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 	root := t.TempDir()
-	f := &aioFixture{gatewayFixture: g, root: root, manager: manager}
+	f := &aioFixture{gatewayFixture: g, root: root, manager: manager, layout: layout}
 	aioAgentRoot = filepath.Join(root, "opt/configflow-agent")
 	aioSystemdUnitDir = filepath.Join(root, "etc/systemd/system")
 	aioOpenRCDir = filepath.Join(root, "etc/init.d")
 	aioSysctlDir = filepath.Join(root, "etc/sysctl.d")
 	aioSysfsNetRoot = filepath.Join(root, "sys/class/net")
-	for _, dir := range []string{filepath.Join(aioAgentRoot, "mihomo"), aioSystemdUnitDir, aioOpenRCDir, aioSysctlDir, aioSysfsNetRoot} {
+	for _, dir := range []string{f.agentDir(), aioSystemdUnitDir, aioOpenRCDir, aioSysctlDir, aioSysfsNetRoot} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	g.cfg.NativeAIO, g.cfg.ServiceManager = true, manager
-	g.cfg.AgentConfigFile = filepath.Join(aioAgentRoot, "mihomo/config.json")
-	g.cfg.AgentServiceUnit = "configflow-agent-mihomo"
+	g.cfg.ServiceManager = manager
+	if layout == "standalone" {
+		// install-go.sh writes neither native_aio nor agent_service_unit.
+		g.cfg.NativeAIO, g.cfg.AgentServiceUnit = false, ""
+		g.cfg.AgentConfigFile = filepath.Join(aioAgentRoot, "config-mihomo.json")
+	} else {
+		g.cfg.NativeAIO, g.cfg.AgentServiceUnit = true, "configflow-agent-mihomo"
+		g.cfg.AgentConfigFile = filepath.Join(aioAgentRoot, "mihomo/config.json")
+	}
 	f.writeUnit(t, f.fixtureUnit(t, "plain"))
 	f.loaded = f.fixtureUnit(t, "plain")
 	write := gatewayWriteSysctl
@@ -65,7 +80,7 @@ func newAIOFixture(t *testing.T, manager string) *aioFixture {
 	aioRun = func(name string, args ...string) (string, error) {
 		command := name + " " + strings.Join(args, " ")
 		switch command {
-		case "systemctl show -p ExecStartPre --value configflow-agent-mihomo.service":
+		case "systemctl show -p ExecStartPre --value " + f.unitName() + ".service":
 			if f.showErr != nil {
 				return "", f.showErr
 			}
@@ -94,7 +109,7 @@ func newAIOFixture(t *testing.T, manager string) *aioFixture {
 				f.loaded += "\n" + string(extra)
 			}
 			return "", nil
-		case "/bin/sh " + aioForwardingHookPath():
+		case "/bin/sh " + f.hookPath():
 			// Emulates the hook: a missing config is a no-op, a managed one enables.
 			f.hookRuns++
 			if f.hookErr != nil {
@@ -110,7 +125,7 @@ func newAIOFixture(t *testing.T, manager string) *aioFixture {
 	}
 	aioPrepareTUN = func(cfg preflight.Config) preflight.Report {
 		f.tunCalls++
-		if !cfg.NativeAIO || cfg.ServiceType != "mihomo" {
+		if cfg.NativeAIO != (layout == "aio") || cfg.ServiceType != "mihomo" {
 			t.Fatalf("TUN preparation received wrong config: %+v", cfg)
 		}
 		return preflight.Report{{Name: "TUN 自动准备", Level: "error", Message: "modprobe tun 失败", Fix: "检查内核模块。"}}
@@ -118,19 +133,44 @@ func newAIOFixture(t *testing.T, manager string) *aioFixture {
 	return f
 }
 
+func (f *aioFixture) agentDir() string {
+	if f.layout == "standalone" {
+		return aioAgentRoot
+	}
+	return filepath.Join(aioAgentRoot, "mihomo")
+}
+
+func (f *aioFixture) unitName() string {
+	if f.layout == "standalone" {
+		return "configflow-agent"
+	}
+	return "configflow-agent-mihomo"
+}
+
+func (f *aioFixture) hookPath() string { return filepath.Join(f.agentDir(), aioForwardingHookName) }
+
+// hookContent is the hook this layout's installer writes.
+func (f *aioFixture) hookContent() string {
+	if f.layout == "standalone" {
+		return aioStandaloneForwardingHook
+	}
+	return aioForwardingHook
+}
+
 func (f *aioFixture) unitPath() string {
 	if f.manager == "systemd" {
-		return filepath.Join(aioSystemdUnitDir, "configflow-agent-mihomo.service")
+		return filepath.Join(aioSystemdUnitDir, f.unitName()+".service")
 	}
-	return filepath.Join(aioOpenRCDir, "configflow-agent-mihomo")
+	return filepath.Join(aioOpenRCDir, f.unitName())
 }
 
 // Fixtures are the installer-rendered units (a Python test keeps them in sync).
 func (f *aioFixture) fixtureUnit(t *testing.T, variant string) string {
 	t.Helper()
-	name := "testdata/aio-unit-systemd-" + variant + ".service"
+	prefix := map[string]string{"aio": "aio-unit", "standalone": "standalone-unit"}[f.layout]
+	name := "testdata/" + prefix + "-systemd-" + variant + ".service"
 	if f.manager == "openrc" {
-		name = "testdata/aio-unit-openrc-" + variant + ".initd"
+		name = "testdata/" + prefix + "-openrc-" + variant + ".initd"
 	}
 	data, err := os.ReadFile(name)
 	if err != nil {
@@ -197,11 +237,11 @@ func (f *aioFixture) snapshot(t *testing.T) map[string]string {
 
 func (f *aioFixture) assertPersisted(t *testing.T) {
 	t.Helper()
-	data, err := os.ReadFile(aioForwardingHookPath())
-	if err != nil || string(data) != aioForwardingHook {
+	data, err := os.ReadFile(f.hookPath())
+	if err != nil || string(data) != f.hookContent() {
 		t.Fatalf("hook not installed: %v", err)
 	}
-	if info, _ := os.Stat(aioForwardingHookPath()); info.Mode().Perm() != 0755 {
+	if info, _ := os.Stat(f.hookPath()); info.Mode().Perm() != 0755 {
 		t.Fatalf("hook mode %v", info.Mode())
 	}
 	unit, err := os.ReadFile(f.unitPath())
@@ -221,7 +261,8 @@ func (f *aioFixture) assertPersisted(t *testing.T) {
 	if f.forwarding(t) != "1" {
 		t.Fatal("forwarding not enabled")
 	}
-	if status := aioForwardingStatus(f.cfg); status["persisted"] != true || status["current"] != "1" {
+	wantLayout := map[string]string{"aio": "native_aio", "standalone": "standalone"}[f.layout]
+	if status := aioForwardingStatus(f.cfg); status["persisted"] != true || status["current"] != "1" || status["layout"] != wantLayout {
 		t.Fatalf("status not persisted: %+v", status)
 	}
 }
@@ -264,37 +305,43 @@ func TestAIOForwardingHookMatchesInstallerScript(t *testing.T) {
 }
 
 func TestAIOForwardingFirstPersistMatchesInstallerAndIsIdempotent(t *testing.T) {
-	for _, manager := range []string{"systemd", "openrc"} {
-		t.Run(manager, func(t *testing.T) {
-			f := newAIOFixture(t, manager)
-			if status := aioForwardingStatus(f.cfg); status["config"] != "absent" || status["hook_script"] != "absent" || status["startup_hook"] != "absent" || status["persisted"] != false || status["current"] != "0" || status["supported"] != true {
-				t.Fatalf("wrong initial status: %+v", status)
-			}
-			result, err := persistAIOForwarding(f.cfg, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result["tun_prepare"] != nil || f.tunCalls != 0 {
-				t.Fatalf("TUN prepared without request: %+v", result)
-			}
-			f.assertPersisted(t)
-			wantReloads := map[string]int{"systemd": 1, "openrc": 0}[manager]
-			if f.reloads != wantReloads || f.hookRuns != 1 {
-				t.Fatalf("reloads=%d hook runs=%d", f.reloads, f.hookRuns)
-			}
-			before := f.snapshot(t)
-			if _, err := persistAIOForwarding(f.cfg, false); err != nil {
-				t.Fatal(err)
-			}
-			if after := f.snapshot(t); fmt.Sprint(after) != fmt.Sprint(before) {
-				t.Fatal("repeated persist changed files")
-			}
-			if f.reloads != wantReloads {
-				t.Fatal("repeated persist reloaded systemd")
-			}
-			f.assertPersisted(t)
-		})
+	for _, layout := range aioLayouts {
+		for _, manager := range []string{"systemd", "openrc"} {
+			t.Run(layout+"/"+manager, func(t *testing.T) {
+				testAIOForwardingFirstPersist(t, layout, manager)
+			})
+		}
 	}
+}
+
+func testAIOForwardingFirstPersist(t *testing.T, layout, manager string) {
+	f := newAIOLayoutFixture(t, manager, layout)
+	if status := aioForwardingStatus(f.cfg); status["config"] != "absent" || status["hook_script"] != "absent" || status["startup_hook"] != "absent" || status["persisted"] != false || status["current"] != "0" || status["supported"] != true {
+		t.Fatalf("wrong initial status: %+v", status)
+	}
+	result, err := persistAIOForwarding(f.cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["tun_prepare"] != nil || f.tunCalls != 0 {
+		t.Fatalf("TUN prepared without request: %+v", result)
+	}
+	f.assertPersisted(t)
+	wantReloads := map[string]int{"systemd": 1, "openrc": 0}[manager]
+	if f.reloads != wantReloads || f.hookRuns != 1 {
+		t.Fatalf("reloads=%d hook runs=%d", f.reloads, f.hookRuns)
+	}
+	before := f.snapshot(t)
+	if _, err := persistAIOForwarding(f.cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if after := f.snapshot(t); fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatal("repeated persist changed files")
+	}
+	if f.reloads != wantReloads {
+		t.Fatal("repeated persist reloaded systemd")
+	}
+	f.assertPersisted(t)
 }
 
 func TestAIOForwardingInsertsHookAfterWorkingDirectory(t *testing.T) {
@@ -340,12 +387,12 @@ func TestAIOForwardingRefusesForeignStateWithoutChanges(t *testing.T) {
 			os.Symlink(target, aioForwardingConfigPath())
 		}},
 		{"modified hook", "openrc", "已被修改", func(t *testing.T, f *aioFixture) {
-			os.WriteFile(aioForwardingHookPath(), []byte(aioForwardingHook+"echo extra\n"), 0755)
+			os.WriteFile(f.hookPath(), []byte(f.hookContent()+"echo extra\n"), 0755)
 		}},
 		{"hook symlink", "systemd", "已被修改", func(t *testing.T, f *aioFixture) {
 			target := filepath.Join(f.root, "hook.sh")
-			os.WriteFile(target, []byte(aioForwardingHook), 0755)
-			os.Symlink(target, aioForwardingHookPath())
+			os.WriteFile(target, []byte(f.hookContent()), 0755)
+			os.Symlink(target, f.hookPath())
 		}},
 		{"unit symlink", "systemd", "不是普通文件", func(t *testing.T, f *aioFixture) {
 			target := filepath.Join(f.root, "unit.service")
@@ -353,7 +400,7 @@ func TestAIOForwardingRefusesForeignStateWithoutChanges(t *testing.T) {
 			os.Symlink(target, f.unitPath())
 		}},
 		{"unknown ExecStartPre", "systemd", "未知 ExecStartPre", func(t *testing.T, f *aioFixture) {
-			unit := strings.Replace(f.fixtureUnit(t, "plain"), "/mihomo\n\nExecStart=", "/mihomo\nExecStartPre=/bin/true\nExecStart=", 1)
+			unit := strings.Replace(f.fixtureUnit(t, "plain"), "\nExecStart=", "\nExecStartPre=/bin/true\nExecStart=", 1)
 			f.writeUnit(t, unit)
 			f.loaded = unit
 		}},
@@ -371,16 +418,16 @@ func TestAIOForwardingRefusesForeignStateWithoutChanges(t *testing.T) {
 			f.showErr = fmt.Errorf("bus unavailable")
 		}},
 		{"OpenRC changed", "openrc", "服务脚本已被修改", func(t *testing.T, f *aioFixture) {
-			f.writeUnit(t, strings.Replace(f.fixtureUnit(t, "plain"), "start_pre() {\n    \n", "start_pre() {\n    echo custom\n", 1))
+			f.writeUnit(t, strings.Replace(f.fixtureUnit(t, "plain"), "start_pre() {\n", "start_pre() {\n    echo custom\n", 1))
 		}},
 		{"sysctl.d symlink", "openrc", "sysctl.d", func(t *testing.T, f *aioFixture) {
 			os.Remove(aioSysctlDir)
 			os.Symlink(f.root, aioSysctlDir)
 		}},
 		{"agent directory symlink", "systemd", "安装目录", func(t *testing.T, f *aioFixture) {
-			real := filepath.Join(f.root, "real-mihomo")
-			os.Rename(filepath.Join(aioAgentRoot, "mihomo"), real)
-			os.Symlink(real, filepath.Join(aioAgentRoot, "mihomo"))
+			real := filepath.Join(f.root, "real-agent")
+			os.Rename(f.agentDir(), real)
+			os.Symlink(real, f.agentDir())
 		}},
 		{"sysctl missing", "systemd", "缺少 sysctl 命令", func(t *testing.T, f *aioFixture) {
 			// The hook would fail at every Agent restart while ip_forward is 0.
@@ -395,26 +442,34 @@ func TestAIOForwardingRefusesForeignStateWithoutChanges(t *testing.T) {
 			gatewayWriteSysctl = func(string, string) error { return fmt.Errorf("read-only file system") }
 		}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			f := newAIOFixture(t, test.manager)
-			test.change(t, f)
-			before := f.snapshot(t)
-			_, err := persistAIOForwarding(f.cfg, true)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("wrong refusal: %v", err)
-			}
-			if after := f.snapshot(t); fmt.Sprint(after) != fmt.Sprint(before) {
-				t.Fatalf("refusal changed files:\nbefore %v\nafter  %v", before, after)
-			}
-			if f.reloads != 0 || f.hookRuns != 0 || f.tunCalls != 0 || f.forwarding(t) != "0" {
-				t.Fatalf("refusal had effects: reloads=%d hooks=%d tun=%d", f.reloads, f.hookRuns, f.tunCalls)
-			}
-		})
+		for _, layout := range aioLayouts {
+			t.Run(layout+"/"+test.name, func(t *testing.T) {
+				f := newAIOLayoutFixture(t, test.manager, layout)
+				test.change(t, f)
+				before := f.snapshot(t)
+				_, err := persistAIOForwarding(f.cfg, true)
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("wrong refusal: %v", err)
+				}
+				if after := f.snapshot(t); fmt.Sprint(after) != fmt.Sprint(before) {
+					t.Fatalf("refusal changed files:\nbefore %v\nafter  %v", before, after)
+				}
+				if f.reloads != 0 || f.hookRuns != 0 || f.tunCalls != 0 || f.forwarding(t) != "0" {
+					t.Fatalf("refusal had effects: reloads=%d hooks=%d tun=%d", f.reloads, f.hookRuns, f.tunCalls)
+				}
+			})
+		}
 	}
 }
 
 func TestAIOForwardingDaemonReloadFailureRollsBackUnit(t *testing.T) {
-	f := newAIOFixture(t, "systemd")
+	for _, layout := range aioLayouts {
+		t.Run(layout, func(t *testing.T) { testAIOForwardingDaemonReloadRollback(t, layout) })
+	}
+}
+
+func testAIOForwardingDaemonReloadRollback(t *testing.T, layout string) {
+	f := newAIOLayoutFixture(t, "systemd", layout)
 	before := f.snapshot(t)
 	f.failReloads = 1
 	_, err := persistAIOForwarding(f.cfg, false)
@@ -443,59 +498,62 @@ func TestAIOForwardingHookFailureKeepsCommittedConfigAndNeverDisables(t *testing
 		{"hook error", "1", func(f *aioFixture) { f.hookErr = fmt.Errorf("sysctl denied") }, "未能成功开启"},
 		{"hook no-op readback", "0", func(f *aioFixture) { f.hookNoop = true }, "不是 1"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			f := newAIOFixture(t, "systemd")
-			f.setForwarding(t, test.initial)
-			test.change(f)
-			_, err := persistAIOForwarding(f.cfg, true)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("hook failure accepted: %v", err)
-			}
-			if !aioForwardingConfigManaged() {
-				t.Fatal("committed config removed after hook failure")
-			}
-			if unit, _ := os.ReadFile(f.unitPath()); string(unit) != f.fixtureUnit(t, "hook") {
-				t.Fatal("committed unit rolled back after hook failure")
-			}
-			for _, write := range f.writes {
-				if write != "net/ipv4/ip_forward="+test.initial && write != "net/ipv4/ip_forward=1" {
-					t.Fatalf("unexpected sysctl write: %v", f.writes)
+		for _, layout := range aioLayouts {
+			t.Run(layout+"/"+test.name, func(t *testing.T) {
+				f := newAIOLayoutFixture(t, "systemd", layout)
+				f.setForwarding(t, test.initial)
+				test.change(f)
+				_, err := persistAIOForwarding(f.cfg, true)
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("hook failure accepted: %v", err)
 				}
-			}
-			if f.forwarding(t) != test.initial || f.tunCalls != 0 {
-				t.Fatal("forwarding changed by failed hook or TUN prepared")
-			}
-			f.hookErr, f.hookNoop = nil, false
-			if _, err := persistAIOForwarding(f.cfg, false); err != nil {
-				t.Fatal(err)
-			}
-			f.assertPersisted(t)
-		})
+				if !aioForwardingConfigManaged() {
+					t.Fatal("committed config removed after hook failure")
+				}
+				if unit, _ := os.ReadFile(f.unitPath()); string(unit) != f.fixtureUnit(t, "hook") {
+					t.Fatal("committed unit rolled back after hook failure")
+				}
+				for _, write := range f.writes {
+					if write != "net/ipv4/ip_forward="+test.initial && write != "net/ipv4/ip_forward=1" {
+						t.Fatalf("unexpected sysctl write: %v", f.writes)
+					}
+				}
+				if f.forwarding(t) != test.initial || f.tunCalls != 0 {
+					t.Fatal("forwarding changed by failed hook or TUN prepared")
+				}
+				f.hookErr, f.hookNoop = nil, false
+				if _, err := persistAIOForwarding(f.cfg, false); err != nil {
+					t.Fatal(err)
+				}
+				f.assertPersisted(t)
+			})
+		}
 	}
 }
 
 func TestAIOForwardingConvergesAfterInterruptedSteps(t *testing.T) {
-	for _, manager := range []string{"systemd", "openrc"} {
+	for _, cell := range [][2]string{{"aio", "systemd"}, {"aio", "openrc"}, {"standalone", "systemd"}, {"standalone", "openrc"}} {
+		layout, manager := cell[0], cell[1]
 		for _, test := range []struct {
 			name  string
 			setup func(*testing.T, *aioFixture)
 		}{
 			{"after hook", func(t *testing.T, f *aioFixture) {
-				os.WriteFile(aioForwardingHookPath(), []byte(aioForwardingHook), 0755)
+				os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 			}},
 			{"after unit before reload", func(t *testing.T, f *aioFixture) {
-				os.WriteFile(aioForwardingHookPath(), []byte(aioForwardingHook), 0755)
+				os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 				f.writeUnit(t, f.fixtureUnit(t, "hook"))
 			}},
 			{"after commit", func(t *testing.T, f *aioFixture) {
-				os.WriteFile(aioForwardingHookPath(), []byte(aioForwardingHook), 0755)
+				os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 				f.writeUnit(t, f.fixtureUnit(t, "hook"))
 				f.loaded = f.fixtureUnit(t, "hook")
 				os.WriteFile(aioForwardingConfigPath(), []byte(aioForwardingContent), 0644)
 			}},
 		} {
-			t.Run(manager+"/"+test.name, func(t *testing.T) {
-				f := newAIOFixture(t, manager)
+			t.Run(layout+"/"+manager+"/"+test.name, func(t *testing.T) {
+				f := newAIOLayoutFixture(t, manager, layout)
 				test.setup(t, f)
 				if _, err := persistAIOForwarding(f.cfg, false); err != nil {
 					t.Fatal(err)
@@ -528,16 +586,16 @@ func TestAIOForwardingStatusMatrix(t *testing.T) {
 			os.WriteFile(aioForwardingConfigPath(), []byte(aioForwardingContent), 0644)
 		}, map[string]interface{}{"config": "managed", "hook_script": "absent", "persisted": false}},
 		{"modified hook", "systemd", func(t *testing.T, f *aioFixture) {
-			os.WriteFile(aioForwardingHookPath(), []byte("#!/bin/sh\n"), 0755)
+			os.WriteFile(f.hookPath(), []byte("#!/bin/sh\n"), 0755)
 		}, map[string]interface{}{"hook_script": "modified"}},
 		{"managed hook", "openrc", func(t *testing.T, f *aioFixture) {
-			os.WriteFile(aioForwardingHookPath(), []byte(aioForwardingHook), 0755)
+			os.WriteFile(f.hookPath(), []byte(f.hookContent()), 0755)
 		}, map[string]interface{}{"hook_script": "managed", "startup_hook": "absent"}},
 		{"foreign ExecStartPre", "systemd", func(t *testing.T, f *aioFixture) {
 			f.loaded += "\nExecStartPre=/bin/true\n"
 		}, map[string]interface{}{"startup_hook": "foreign"}},
 		{"duplicate hook", "systemd", func(t *testing.T, f *aioFixture) {
-			f.loaded = f.fixtureUnit(t, "hook") + "\n" + aioSystemdHookLine() + "\n"
+			f.loaded = f.fixtureUnit(t, "hook") + "\n" + "ExecStartPre=/bin/sh " + f.hookPath() + "\n"
 		}, map[string]interface{}{"startup_hook": "foreign"}},
 		{"registered systemd", "systemd", func(t *testing.T, f *aioFixture) {
 			f.loaded = f.fixtureUnit(t, "hook")
@@ -549,13 +607,13 @@ func TestAIOForwardingStatusMatrix(t *testing.T) {
 			f.writeUnit(t, f.fixtureUnit(t, "hook"))
 		}, map[string]interface{}{"startup_hook": "registered"}},
 		{"changed OpenRC", "openrc", func(t *testing.T, f *aioFixture) {
-			f.writeUnit(t, strings.Replace(f.fixtureUnit(t, "plain"), "start_pre() {\n    \n", "start_pre() {\n    echo custom\n", 1))
+			f.writeUnit(t, strings.Replace(f.fixtureUnit(t, "plain"), "start_pre() {\n", "start_pre() {\n    echo custom\n", 1))
 		}, map[string]interface{}{"startup_hook": "unknown"}},
 		{"unreadable forwarding", "systemd", func(t *testing.T, f *aioFixture) {
 			f.setForwarding(t, "2")
 		}, map[string]interface{}{"current": ""}},
-		{"not native AIO", "systemd", func(t *testing.T, f *aioFixture) {
-			f.cfg.NativeAIO = false
+		{"layout reversed", "systemd", func(t *testing.T, f *aioFixture) {
+			f.cfg.NativeAIO = !f.cfg.NativeAIO
 		}, map[string]interface{}{"supported": false, "startup_hook": "unknown"}},
 		{"OxiDNS", "systemd", func(t *testing.T, f *aioFixture) {
 			f.cfg.ServiceType = "oxidns"
@@ -567,25 +625,34 @@ func TestAIOForwardingStatusMatrix(t *testing.T) {
 			f.cfg.ServiceManager = "supervisor"
 		}, map[string]interface{}{"supported": false}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			f := newAIOFixture(t, test.manager)
-			test.change(t, f)
-			status := aioForwardingStatus(f.cfg)
-			for key, want := range test.want {
-				if status[key] != want {
-					t.Fatalf("%s=%v want %v: %+v", key, status[key], want, status)
+		for _, layout := range aioLayouts {
+			t.Run(layout+"/"+test.name, func(t *testing.T) {
+				f := newAIOLayoutFixture(t, test.manager, layout)
+				test.change(t, f)
+				status := aioForwardingStatus(f.cfg)
+				for key, want := range test.want {
+					if status[key] != want {
+						t.Fatalf("%s=%v want %v: %+v", key, status[key], want, status)
+					}
 				}
-			}
-			if status["protocol"] != 1 {
-				t.Fatalf("missing protocol: %+v", status)
-			}
-			if status["supported"] == false && status["unsupported_reason"] == "" {
-				t.Fatalf("unsupported without reason: %+v", status)
-			}
-			if status["startup_hook"] == "unknown" && test.name == "systemctl failure" && status["error"] == nil {
-				t.Fatalf("systemctl failure not reported: %+v", status)
-			}
-		})
+				wantLayout := map[string]interface{}{"aio": "native_aio", "standalone": "standalone"}[layout]
+				if status["supported"] == false {
+					wantLayout = nil
+				}
+				if status["layout"] != wantLayout {
+					t.Fatalf("layout=%v want %v: %+v", status["layout"], wantLayout, status)
+				}
+				if status["protocol"] != 1 {
+					t.Fatalf("missing protocol: %+v", status)
+				}
+				if status["supported"] == false && status["unsupported_reason"] == "" {
+					t.Fatalf("unsupported without reason: %+v", status)
+				}
+				if status["startup_hook"] == "unknown" && test.name == "systemctl failure" && status["error"] == nil {
+					t.Fatalf("systemctl failure not reported: %+v", status)
+				}
+			})
+		}
 	}
 }
 
@@ -627,7 +694,13 @@ func TestAIOTUNStatusReadsDeployedConfiguration(t *testing.T) {
 }
 
 func TestLinuxGatewayForwardingHTTP(t *testing.T) {
-	f := newAIOFixture(t, "openrc")
+	for _, layout := range aioLayouts {
+		t.Run(layout, func(t *testing.T) { testLinuxGatewayForwardingHTTP(t, layout) })
+	}
+}
+
+func testLinuxGatewayForwardingHTTP(t *testing.T, layout string) {
+	f := newAIOLayoutFixture(t, "openrc", layout)
 	call := func(method, body string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
 		LinuxGatewayHandler(f.cfg, "forwarding")(recorder, httptest.NewRequest(method, "/api/linux-gateway/forwarding", strings.NewReader(body)))
@@ -676,7 +749,13 @@ func TestLinuxGatewayForwardingHTTP(t *testing.T) {
 }
 
 func TestLinuxGatewayStatusReportsForwardingAndTUN(t *testing.T) {
-	f := newAIOFixture(t, "systemd")
+	for _, layout := range aioLayouts {
+		t.Run(layout, func(t *testing.T) { testLinuxGatewayStatusReportsForwardingAndTUN(t, layout) })
+	}
+}
+
+func testLinuxGatewayStatusReportsForwardingAndTUN(t *testing.T, layout string) {
+	f := newAIOLayoutFixture(t, "systemd", layout)
 	recorder := httptest.NewRecorder()
 	LinuxGatewayHandler(f.cfg, "status")(recorder, httptest.NewRequest(http.MethodGet, "/api/linux-gateway/status", nil))
 	var response struct {

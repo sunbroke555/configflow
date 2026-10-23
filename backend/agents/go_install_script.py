@@ -4,6 +4,7 @@ import posixpath
 import re
 import shlex
 from pathlib import Path, PurePosixPath
+from typing import Optional
 from backend.agents.install_output import with_install_output
 
 
@@ -28,6 +29,54 @@ else
     echo "需要正在使用的 systemd 或 OpenRC；容器请先配置 init 服务管理器。" >&2
     exit 1
 fi'''
+# The single-service Mihomo installer reuses the AIO forwarding helpers, rooted
+# at its own Agent directory; the config file and marker stay identical, so the
+# Agent recognises (and the gateway removal preserves) either layout. Only the
+# hook's comment names the one Agent it waits for; the Go Agent writes and
+# recognises the same per-layout text (aioStandaloneHookComment).
+_AIO_FORWARDING_HEAD = "# Included only in the ordinary Shell cohost installer, never the gateway wizard.\n"
+_AIO_FORWARDING_ROOT = "$AGENT_ROOT/mihomo/"
+AIO_FORWARDING_HOOK_COMMENT = "# The installer commits this file only after both Agents start successfully.\n"
+STANDALONE_FORWARDING_HOOK_COMMENT = "# The installer commits this file only after the Agent starts successfully.\n"
+STANDALONE_FORWARDING_HOOK = "/opt/configflow-agent/enable-ipv4-forwarding.sh"
+STANDALONE_FORWARDING_UNSUPPORTED = "仅使用 systemd 或 OpenRC 的 Mihomo 单独安装可开启并持久化 IPv4 转发"
+
+
+def _standalone_forwarding_functions() -> str:
+    if (not INSTALL_GO_AIO_FORWARDING.startswith(_AIO_FORWARDING_HEAD)
+            or INSTALL_GO_AIO_FORWARDING.count(_AIO_FORWARDING_ROOT) != 6
+            or INSTALL_GO_AIO_FORWARDING.count(AIO_FORWARDING_HOOK_COMMENT) != 1):
+        raise RuntimeError("aio-ipv4-forwarding.sh changed; review the single-service forwarding helpers")
+    text = ("# Single-service Mihomo installer: the AIO forwarding helpers, rooted at $AGENT_DIR.\n"
+            + INSTALL_GO_AIO_FORWARDING[len(_AIO_FORWARDING_HEAD):].replace(_AIO_FORWARDING_ROOT, "$AGENT_DIR/")
+            .replace(AIO_FORWARDING_HOOK_COMMENT, STANDALONE_FORWARDING_HOOK_COMMENT))
+    if "$AGENT_ROOT" in text:
+        raise RuntimeError("single-service forwarding helpers still reference the AIO root")
+    return text
+
+
+# Runs before the previous Agent is stopped: a failure leaves the host unchanged.
+_STANDALONE_FORWARDING_PREPARE = '''cf_step "检查 IPv4 转发持久化"
+if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
+    fail "检测到 Linux 网关记录，单独安装不会接管网关管理的 IPv4 转发；本次未改动 Agent。请在面板勾选「不开启 IPv4 转发」后重新生成安装命令；如这台设备是主路由的代理网关，可在「上游路由」页开启并持久化 IPv4 转发。"
+fi
+STAGE_DIR=$(mktemp -d "$AGENT_DIR/.ipv4-forward.XXXXXX")
+prepare_ipv4_forwarding
+cf_step_done "IPv4 转发持久化检查通过"
+'''
+_STANDALONE_FORWARDING_CLEANUP = '''    cleanup_ipv4_forwarding "$agent_status"
+    if [ -n "$STAGE_DIR" ]; then rm -rf "$STAGE_DIR" || true; fi
+'''
+_STANDALONE_FORWARDING_TRAP = '''configflow_agent_cleanup() {
+    agent_status=$?
+    trap - 0 HUP INT TERM
+    rm -f "$BINARY_TMP" || true
+''' + _STANDALONE_FORWARDING_CLEANUP + '''    exit "$agent_status"
+}
+trap configflow_agent_cleanup 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM'''
 
 
 def generate_go_agent_install_script(
@@ -50,11 +99,17 @@ def generate_go_agent_install_script(
     health_dns_name: str = "",
     deployment_health_timeout: int = 30,
     install_core: bool = False,
+    manage_ipv4_forwarding: Optional[bool] = False,
 ) -> str:
     """Generate an installer with explicit service lifecycle and deployment checks.
 
     Standard native installs detect systemd/OpenRC on the target. A custom
     restart command is not parsed to invent stop/start/status operations.
+
+    ``manage_ipv4_forwarding`` enables and persists IPv4 forwarding like the
+    Shell All-in-One installer: ``False`` keeps the script byte-identical to
+    earlier releases, ``None`` enables it for Mihomo under systemd/OpenRC, and
+    ``True`` requires that.
     """
     if service_type not in ("mihomo", "mosdns", "oxidns"):
         raise ValueError("Go Agent transactional deployment supports mihomo, mosdns and oxidns")
@@ -90,6 +145,14 @@ def generate_go_agent_install_script(
         service_manager = "__CONFIGFLOW_INIT__" if standard_restart else "command"
     if service_manager == "command" and not all((stop_command, start_command, status_command)):
         raise ValueError("Custom lifecycle requires stop_command, start_command and status_command; a restart command alone cannot support rollback")
+    if manage_ipv4_forwarding is not None and not isinstance(manage_ipv4_forwarding, bool):
+        raise ValueError("manage_ipv4_forwarding 必须为 true 或 false")
+    # The Agent recognises the persisted forwarding only under systemd/OpenRC.
+    forwarding_supported = service_type == "mihomo" and service_manager != "command"
+    if manage_ipv4_forwarding is None:
+        manage_ipv4_forwarding = forwarding_supported
+    elif manage_ipv4_forwarding and not forwarding_supported:
+        raise ValueError(STANDALONE_FORWARDING_UNSUPPORTED)
     cfg = {
         "server_url": server_url,
         "agent_name": agent_name,
@@ -131,6 +194,26 @@ def generate_go_agent_install_script(
         "core_install_phase": "",
         "agent_cleanup_trap": 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM',
     }
+    # Every placeholder starts a line and carries its own newline, so the
+    # opt-out output is byte-identical to the installer before this option.
+    forwarding = {
+        "ipv4_forwarding_notice": 'cf_ui "Mihomo 单独安装将开启并持久化本机 IPv4 转发（作为主路由的代理网关时需要）；'
+                                  '不需要时请在面板勾选「不开启 IPv4 转发」后重新生成命令。"\n',
+        "ipv4_forwarding_dependencies": " sysctl cmp ln",
+        "ipv4_forwarding_functions": ('fail() { echo "$*" >&2; exit 1; }\nSERVICE=mihomo\nSTAGE_DIR=""\n'
+                                      + _standalone_forwarding_functions()),
+        "ipv4_forwarding_prepare": _STANDALONE_FORWARDING_PREPARE,
+        "ipv4_forwarding_hook": "install_ipv4_forwarding_hook\n",
+        "ipv4_systemd_pre": f"ExecStartPre=/bin/sh {STANDALONE_FORWARDING_HOOK}\n",
+        "ipv4_openrc_pre": f"    /bin/sh {STANDALONE_FORWARDING_HOOK} || return 1\n",
+        "ipv4_forwarding_apply": "persist_ipv4_forwarding\n",
+        "ipv4_forwarding_summary": "summarize_ipv4_forwarding\n",
+        "ipv4_forwarding_uninstall": '        [ ! -f /etc/sysctl.d/99-configflow-aio-forward.conf ] || '
+                                     'cf_ui "IPv4 转发及其 sysctl.d 持久化设置保留，避免影响仍在运行的 Mihomo。"\n',
+    }
+    replacements.update({key: value if manage_ipv4_forwarding else "" for key, value in forwarding.items()})
+    if manage_ipv4_forwarding:
+        replacements["agent_cleanup_trap"] = _STANDALONE_FORWARDING_TRAP
     if install_core:
         from backend.agents.core_install_script import generate_core_install_script
 
@@ -149,6 +232,7 @@ def generate_go_agent_install_script(
             '    agent_status=$?\n'
             '    trap - 0 HUP INT TERM\n'
             '    if [ -n "${BINARY_TMP:-}" ]; then rm -f "$BINARY_TMP" || true; fi\n'
+            + (_STANDALONE_FORWARDING_CLEANUP if manage_ipv4_forwarding else '') +
             '    if [ "$agent_status" -ne 0 ]; then\n'
             f'        echo "Agent 安装未完成；{service_type} 核心安装阶段已结束，已安装或原有的核心予以保留。修复上方 Agent 错误后可重新运行。" >&2\n'
             '    fi\n'

@@ -444,6 +444,20 @@
             </p>
           </div>
 
+          <div v-if="singleMihomoForwarding" class="min-w-0">
+            <label for="agent-skip-forwarding" :class="['flex min-h-11 items-center gap-2 text-[13px] font-medium', forwardingCustomLifecycle ? 'cursor-not-allowed text-muted-foreground' : 'cursor-pointer']">
+              <Checkbox id="agent-skip-forwarding" v-model="scriptForm.skipIpv4Forwarding" :disabled="forwardingCustomLifecycle" aria-describedby="agent-skip-forwarding-note" />
+              不开启 IPv4 转发
+            </label>
+            <p id="agent-skip-forwarding-note" class="m-0 pl-6 text-[12px] leading-relaxed text-muted-foreground">
+              {{ forwardingCustomLifecycle
+                ? '自定义启停命令的安装不自动开启 IPv4 转发。'
+                : scriptForm.skipIpv4Forwarding
+                  ? '不修改本机 IPv4 转发；已有的持久化设置会保留。作为主路由的代理网关前，可在「上游路由」页开启并持久化。'
+                  : '默认开启并持久化本机 IPv4 转发（写入 /etc/sysctl.d/99-configflow-aio-forward.conf，Agent 启动前检查），作为主路由的代理网关时需要。' }}
+            </p>
+          </div>
+
           <div class="divide-y divide-border/60 border-y border-border/60">
             <Collapsible v-if="shellAio" v-model:open="lifecyclePanelOpen">
               <CollapsibleTrigger aria-label="核心服务高级配置" class="flex min-h-11 w-full items-center gap-2 py-3 text-left text-[13px] font-medium">
@@ -1066,6 +1080,7 @@ const createScriptForm = () => ({
   installType: 'shell',
   shellMode: 'single',
   installCore: false,
+  skipIpv4Forwarding: false,
   dockerMode: 'mihomo', // mihomo, mosdns, oxidns, aio
   name: '',
   type: 'mihomo',
@@ -1115,8 +1130,22 @@ const aioServiceSettings = computed(() => aioCoreInstall.value ? {
   mihomoServiceBinary: '/usr/local/bin/mihomo', oxidnsServiceBinary: '/usr/local/bin/oxidns'
 } : scriptForm.value)
 const shellServiceSettings = computed(() => shellAio.value ? aioServiceSettings.value : singleServiceSettings.value)
+// Same rule as the server: a custom lifecycle (explicit commands, or a non-standard restart under auto-detection).
+const usesCustomLifecycle = (form: { service_unit: string; type: string; restart_command: string; service_manager: string }) => {
+  const unit = (form.service_unit.trim() || form.type).replace(/\.service$/, '')
+  const restart = form.restart_command.trim()
+  const standardRestart = !restart || [
+    `systemctl restart ${unit}`, `systemctl restart ${unit}.service`, `rc-service ${unit} restart`
+  ].includes(restart)
+  return form.service_manager === 'command' || (form.service_manager === 'auto' && !standardRestart)
+}
+// Standalone Mihomo installs enable and persist IPv4 forwarding by default; AIO, Docker, OxiDNS and MosDNS never send it.
+const singleMihomoForwarding = computed(() => scriptForm.value.installType === 'shell'
+  && scriptForm.value.shellMode === 'single' && scriptForm.value.type === 'mihomo')
+const forwardingCustomLifecycle = computed(() => singleMihomoForwarding.value && usesCustomLifecycle(singleServiceSettings.value))
 watch(() => [scriptForm.value.type, scriptForm.value.installType, scriptForm.value.shellMode], () => {
   scriptForm.value.installCore = false
+  scriptForm.value.skipIpv4Forwarding = false
 }, { flush: 'sync' })
 
 const resetCoreInstallCommand = () => {
@@ -2085,13 +2114,7 @@ const generateScript = async () => {
         notify.warning('Mihomo DNS 使用 1053，请为 Agent 选择其他端口')
         return
       }
-      const unit = (form.service_unit.trim() || form.type).replace(/\.service$/, '')
-      const restart = form.restart_command.trim()
-      const standardRestart = !restart || [
-        `systemctl restart ${unit}`, `systemctl restart ${unit}.service`, `rc-service ${unit} restart`
-      ].includes(restart)
-      const customLifecycle = form.service_manager === 'command' || (form.service_manager === 'auto' && !standardRestart)
-      if (customLifecycle && ![form.stop_command, form.start_command, form.status_command].every(value => value.trim())) {
+      if (usesCustomLifecycle(form) && ![form.stop_command, form.start_command, form.status_command].every(value => value.trim())) {
         lifecyclePanelOpen.value = true
         notify.warning('自定义服务需要填写停止、启动和状态检查命令，才能在发布失败时回滚')
         return
@@ -2173,7 +2196,8 @@ const generateScript = async () => {
         restart_command: form.restart_command.trim(),
         server_url: serverUrl,
         ...lifecycleParams,
-        ...(includeCore ? { install_core: true } : {})
+        ...(includeCore ? { install_core: true } : {}),
+        ...(singleMihomoForwarding.value && scriptForm.value.skipIpv4Forwarding && !forwardingCustomLifecycle.value ? { ipv4_forwarding: false } : {})
       }
       const response = await agentApi.generateInstallCommand(shellParams)
       if (request !== scriptRequest || !scriptDialogVisible.value) return

@@ -31,7 +31,7 @@
 
     <SectionCard v-else :padded="false" title="路由器">
       <div class="cf-table-wrap">
-        <table class="cf-table cf-mobile-records router-records min-w-[880px]" role="table">
+        <table :class="['cf-table cf-mobile-records router-records', showForwarding ? 'router-records-forwarding min-w-[1040px]' : 'min-w-[880px]']" role="table">
           <thead role="rowgroup">
             <tr role="row">
               <th role="columnheader">名称</th>
@@ -39,6 +39,7 @@
               <th role="columnheader">管理地址</th>
               <th role="columnheader">版本</th>
               <th role="columnheader">状态</th>
+              <th v-if="showForwarding" role="columnheader">IPv4 转发</th>
               <th role="columnheader" class="text-right">操作</th>
             </tr>
           </thead>
@@ -50,12 +51,23 @@
               <td role="cell" class="font-mono text-[12px]" data-label="版本">{{ router.last_probe?.ok ? router.last_probe.version : '—' }}</td>
               <td role="cell" data-label="状态">
                 <StatusDot
+                  class="whitespace-nowrap"
                   :tone="!router.last_probe ? 'muted' : router.last_probe.ok ? 'success' : 'danger'"
                   :label="setupDraftSession ? '已保存，待安装' : !router.last_probe ? '未探测' : router.last_probe.ok ? '可连接' : '连接失败'"
                 />
                 <p v-if="router.last_probe && !router.last_probe.ok" class="mt-1 mb-0 max-w-[260px] text-[11.5px] text-destructive-accent">
                   {{ router.last_probe.message }}
                 </p>
+              </td>
+              <td v-if="showForwarding" role="cell" class="router-record-forwarding" data-label="IPv4 转发">
+                <GatewayForwardingCell
+                  :entry="forwardingEntryFor(router)"
+                  :loading="forwardingLoading && Boolean(router.proxy_gateway_agent_id)"
+                  :failed="forwardingFailed && Boolean(router.proxy_gateway_agent_id)"
+                  :busy="Boolean(router.proxy_gateway_agent_id) && forwardingBusy === router.proxy_gateway_agent_id"
+                  :disabled="Boolean(forwardingBusy) && forwardingBusy !== router.proxy_gateway_agent_id"
+                  @persist="persistForwarding(router.proxy_gateway_agent_id)"
+                />
               </td>
               <td role="cell" class="cf-record-wide">
                 <div class="router-record-actions flex items-center justify-end gap-1">
@@ -720,11 +732,14 @@ import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import PolicyRoutingPanel from '@/components/routers/PolicyRoutingPanel.vue'
 import RouterRuleSync from '@/components/routers/RouterRuleSync.vue'
 import RouterOperationPreview from '@/components/routers/RouterOperationPreview.vue'
+import GatewayForwardingCell from '@/components/routers/GatewayForwardingCell.vue'
 import { agentApi, routerApi as baseRouterApi, ruleApi, type StaticRouteChange, type StaticRouteItem, type StaticRoutePlan, type StaticRouteValues } from '@/api'
 import { setupApi } from '@/api/setup'
 import { activeProfileId as selectedProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
 import { routerCopy } from '@/lib/routerCopy'
+import { persistConfirmText, type GatewayForwardingEntry } from '@/lib/gatewayForwarding'
+import { routerSplitErrorMessage } from '@/lib/routerSplit'
 import { usePageReloadGuard, withPageReloadBlocked } from '@/lib/pageReloadGuard'
 
 const props = defineProps<{ embedded?: boolean; profileId?: string; setupAgents?: { mihomo: string; oxidns: string }; setupDraftSession?: string }>()
@@ -1176,12 +1191,88 @@ const load = async (isCurrent = () => true) => {
     if (agentResult.status === 'rejected' || ruleResult.status === 'rejected') {
       notify.error('关联 Agent 或规则集暂时无法读取，仍可管理设备上的静态路由')
     }
+    void loadForwarding()
     return true
   } catch (error) {
     if (isCurrent()) notify.error(errorMessage(error, '加载路由器失败'))
     return false
   } finally {
     if (isCurrent()) loading.value = false
+  }
+}
+
+// 「IPv4 转发」列：代理网关的转发状态独立读取，不阻塞路由器列表；过期响应按请求令牌丢弃。
+const showForwarding = computed(() => !props.embedded && !props.setupDraftSession)
+const forwardingEntries = ref<Record<string, GatewayForwardingEntry>>({})
+const forwardingLoading = ref(false)
+const forwardingFailed = ref(false)
+const forwardingBusy = ref('')
+let forwardingRequest = 0
+const forwardingEntryFor = (router: RouterItem) =>
+  router.proxy_gateway_agent_id ? forwardingEntries.value[router.proxy_gateway_agent_id] : undefined
+const loadForwarding = async () => {
+  if (!showForwarding.value) return
+  const request = ++forwardingRequest
+  const profileId = activeProfileId.value
+  forwardingLoading.value = true
+  try {
+    const { data } = await routerApi.gatewayForwarding(profileId)
+    if (request !== forwardingRequest) return
+    const entries: Record<string, GatewayForwardingEntry> = {}
+    for (const entry of Array.isArray(data?.gateways) ? data.gateways : []) {
+      if (entry && typeof entry.agent_id === 'string') entries[entry.agent_id] = entry
+    }
+    forwardingEntries.value = entries
+    forwardingFailed.value = false
+  } catch {
+    if (request !== forwardingRequest) return
+    forwardingEntries.value = {}
+    forwardingFailed.value = true
+  } finally {
+    if (request === forwardingRequest) forwardingLoading.value = false
+  }
+}
+watch(activeProfileId, () => {
+  forwardingRequest += 1
+  forwardingEntries.value = {}
+  forwardingFailed.value = false
+  forwardingLoading.value = false
+  forwardingBusy.value = ''
+  void loadForwarding()
+})
+const persistForwarding = async (agentId: string) => {
+  const entry = forwardingEntries.value[agentId]
+  if (!entry) return
+  if (forwardingBusy.value) {
+    if (forwardingBusy.value !== agentId) notify.info('另一台网关正在开启 IPv4 转发，请稍候。')
+    return
+  }
+  const { title, description } = persistConfirmText(entry)
+  if (!await confirm(description, { title, confirmText: '开启并持久化' })) return
+  const profileId = activeProfileId.value
+  forwardingBusy.value = agentId
+  try {
+    const { data } = await routerApi.persistGatewayForwarding(agentId, profileId)
+    if (profileId !== activeProfileId.value) return
+    notify.success('IPv4 转发已开启并持久化。')
+    // A read still in flight may predate the POST and must not replace the fresh entry; it may also
+    // be the only read covering a newly linked gateway, so drop it and issue a fresh one afterwards.
+    const readInFlight = forwardingLoading.value
+    forwardingRequest += 1
+    forwardingLoading.value = false
+    if (data?.gateway && data.gateway.agent_id === agentId) {
+      forwardingEntries.value = { ...forwardingEntries.value, [agentId]: data.gateway }
+      if (readInFlight) void loadForwarding()
+    } else {
+      void loadForwarding()
+    }
+  } catch (error: any) {
+    if (profileId !== activeProfileId.value) return
+    const body = error?.response?.data
+    notify.error(routerSplitErrorMessage(body?.code, typeof body?.message === 'string' ? body.message : ''))
+    void loadForwarding()
+  } finally {
+    if (forwardingBusy.value === agentId) forwardingBusy.value = ''
   }
 }
 

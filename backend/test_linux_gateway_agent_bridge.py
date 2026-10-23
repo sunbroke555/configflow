@@ -140,6 +140,8 @@ def test_http_requires_login_and_explicit_current_binding(authenticated_app, cal
 
 MARKER = {'version': 1, 'takeover': 'full_tun', 'route_rule_set_ids': [], 'origin': 'setup'}
 CURRENT = bridge.FORWARDING_MIN_AGENT_VERSION
+# Persists forwarding on either Shell layout, so no layout check precedes the request.
+STANDALONE = bridge.STANDALONE_FORWARDING_MIN_AGENT_VERSION
 
 
 @pytest.fixture
@@ -162,16 +164,16 @@ def test_forwarding_posts_to_its_own_path_for_a_full_tun_profile(split, calls):
     seen, replies = calls
     split['value'] = 'full_tun'
     replies.append(Response({'success': True, 'ipv4_forwarding': {'persisted': True}}))
-    result = bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {'prepare_tun': True})
+    result = bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', {'prepare_tun': True})
     assert result['ipv4_forwarding']['persisted'] is True
     assert seen[0]['method'] == 'POST'
     assert seen[0]['url'] == 'http://127.0.0.1:8080/api/linux-gateway/forwarding'
     assert seen[0]['json'] == {'prepare_tun': True}
     for body in (None, {}):
-        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', body)
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', body)
         assert seen[-1]['json'] == {}
     with pytest.raises(MonitorError) as error:
-        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'GET', 'home')
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'GET', 'home')
     assert error.value.code == 'NOT_ALLOWED'
 
 
@@ -180,7 +182,7 @@ def test_forwarding_posts_to_its_own_path_for_a_full_tun_profile(split, calls):
 def test_forwarding_accepts_only_prepare_tun(split, calls, body):
     split['value'] = 'full_tun'
     with pytest.raises(MonitorError) as error:
-        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', body)
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', body)
     assert error.value.code == 'INVALID_REQUEST' and error.value.status == 400
     assert calls[0] == []
 
@@ -198,7 +200,7 @@ def test_forwarding_on_an_old_agent_route_maps_to_upgrade(split, calls):
     split['value'] = 'full_tun'
     calls[1].append(Response(raw=b'not found', status=404))
     with pytest.raises(MonitorError) as error:
-        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {})
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', {})
     assert error.value.code == 'UPGRADE_REQUIRED' and CURRENT in error.value.message
 
 
@@ -208,7 +210,7 @@ def test_forwarding_uncertain_result_is_not_repeated(split, calls, monkeypatch):
         raise requests.ConnectionError('reset')
     monkeypatch.setattr(requests.Session, 'request', lost)
     with pytest.raises(MonitorError) as error:
-        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {})
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', {})
     assert error.value.message == '未能确认转发持久化结果，请先刷新设备状态，勿重复操作。'
 
 
@@ -219,7 +221,8 @@ def test_forwarding_is_only_for_a_full_tun_profile(split, calls, mode):
         with pytest.raises(MonitorError) as error:
             bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', body)
         assert error.value.code == 'ROUTER_SPLIT_REQUIRED' and error.value.status == 409
-        assert error.value.message == '仅主路由分流（完整 TUN）的配置空间可在此开启转发持久化。'
+        assert error.value.message == ('仅主路由分流（完整 TUN）的配置空间，或「上游路由」中作为代理网关的 '
+                                       'Mihomo Agent 可开启转发持久化。')
     assert calls[0] == []
 
 
@@ -376,7 +379,7 @@ def test_http_router_split_codes_reach_the_editor(authenticated_app, monkeypatch
         return Response({'success': True, 'managed': {'active': False}})
     monkeypatch.setattr(requests.Session, 'request', request)
     agent = manager.register_agent({'name': 'split', 'host': '127.0.0.1', 'port': 8080, 'service_type': 'mihomo',
-                                    'deployment_method': 'shell', 'version': CURRENT, 'profile_id': 'home'})
+                                    'deployment_method': 'shell', 'version': STANDALONE, 'profile_id': 'home'})
     headers = {**admin, 'X-ConfigFlow-Profile': 'home'}
     path = f"/api/agents/{agent['id']}/linux-gateway/"
 
@@ -404,3 +407,82 @@ def test_http_router_split_codes_reach_the_editor(authenticated_app, monkeypatch
     response = client.post(path + 'apply', headers=headers, json=SPEC)
     assert response.status_code == 409 and response.get_json()['code'] == 'ROUTER_SPLIT_FULL_TUN'
     assert len(seen) == 2
+
+
+STANDALONE_STATUS = {'success': True, 'supported': True, 'managed': {'active': False},
+                     'ipv4_forwarding': {'protocol': 1, 'supported': False, 'current': '0',
+                                         'unsupported_reason': '仅支持普通 Shell 同机安装'}}
+AIO_STATUS = {'success': True, 'supported': True, 'managed': {'active': False},
+              'ipv4_forwarding': {'protocol': 1, 'supported': True, 'current': '0', 'layout': 'native_aio'}}
+
+
+@pytest.fixture
+def proxy_gateway(split, monkeypatch):
+    """The profile's upstream router sends proxied traffic to this Agent."""
+    routers = {'items': [{'id': 'r1', 'name': '主路由', 'proxy_gateway_agent_id': 'gateway'}]}
+    previous = bridge.get_config
+    monkeypatch.setattr(bridge, 'get_config', lambda profile: {**previous(profile), 'routers': routers})
+    return routers
+
+
+@pytest.mark.parametrize('mode', [None, 'legacy', 'invalid'])
+def test_forwarding_is_allowed_for_a_proxy_gateway(proxy_gateway, split, calls, mode):
+    """Persisting only turns forwarding on; a selective gateway's record then keeps it on removal."""
+    seen, replies = calls
+    split['value'] = mode
+    replies.append(Response({'success': True, 'ipv4_forwarding': {'persisted': True}}))
+    for body in (None, {}):
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', body)
+    assert [(item['method'], item['url'].rsplit('/', 1)[1], item['json']) for item in seen] == [
+        ('POST', 'forwarding', {}), ('POST', 'forwarding', {})]
+
+
+@pytest.mark.parametrize('body', [{'prepare_tun': True}, {'prepare_tun': False}, {'x': 1}, [], 'x'])
+def test_proxy_gateway_forwarding_takes_no_parameters(proxy_gateway, split, calls, body):
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', body)
+    assert error.value.code == 'INVALID_REQUEST' and error.value.status == 400
+    assert calls[0] == []
+
+
+def test_a_router_of_another_agent_does_not_allow_forwarding(proxy_gateway, split, calls):
+    proxy_gateway['items'][0]['proxy_gateway_agent_id'] = 'other'
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', {})
+    assert error.value.code == 'ROUTER_SPLIT_REQUIRED'
+    assert calls[0] == []
+
+
+@pytest.mark.parametrize('mode', [None, 'full_tun'])
+def test_forwarding_below_1_8_41_needs_an_update_only_for_a_single_service_install(proxy_gateway, split, calls, mode):
+    seen, replies = calls
+    split['value'] = mode
+    replies.append(Response(STANDALONE_STATUS))
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {})
+    assert error.value.code == 'UPGRADE_REQUIRED' and STANDALONE in error.value.message
+    assert [(item['method'], item['url'].rsplit('/', 1)[1]) for item in seen] == [('GET', 'status')]
+    # The same Agent version on the AIO layout persists as before.
+    seen.clear()
+    replies.extend([Response(AIO_STATUS), Response({'success': True})])
+    bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {})
+    assert [(item['method'], item['url'].rsplit('/', 1)[1], item['json']) for item in seen] == [
+        ('GET', 'status', None), ('POST', 'forwarding', {})]
+
+
+def test_an_unsupported_platform_below_1_8_41_is_left_to_the_agent(proxy_gateway, split, calls):
+    """A command-managed or non-root host: an update would not help, the Agent says why."""
+    seen, replies = calls
+    replies.extend([Response({**STANDALONE_STATUS, 'supported': False}),
+                    Response({'success': False, 'message': '仅支持 Shell 原生安装'}, 409)])
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'forwarding', 'POST', 'home', {})
+    assert error.value.code == 'GATEWAY_ERROR' and error.value.message == '仅支持 Shell 原生安装'
+    assert len(seen) == 2
+
+
+@pytest.mark.parametrize('constant', ['GATEWAY_OFF_NOT_KEPT', 'LEGACY_REMOVE_NOT_KEPT'])
+def test_not_kept_copy_points_to_the_routers_page(constant):
+    text = getattr(bridge, constant)
+    assert text.endswith('如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。')
+    assert '普通 All-in-One' not in text
