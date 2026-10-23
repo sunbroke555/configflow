@@ -160,7 +160,7 @@ def test_go_agent_writes_and_recognises_the_same_hook_comments():
 
 def harness(tmp_path, monkeypatch, manager="systemd", install_core=False, **options):
     if install_core:
-        monkeypatch.setattr("backend.agents.core_install_script.generate_core_install_script", lambda: FAKE_CORE)
+        monkeypatch.setattr("backend.agents.core_install_script.generate_core_install_script", lambda **_: FAKE_CORE)
     options.setdefault("manage_ipv4_forwarding", None)
     source = generated(install_core=install_core, **options)
     root = tmp_path / "root"

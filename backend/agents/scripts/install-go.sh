@@ -299,14 +299,14 @@ cf_step "检查核心接管与运行环境"
 "$BINARY_TMP" -config "$CONFIG_FILE.new" -validate-service
 # Report TUN, permissions, forwarding and listener conflicts with repair steps.
 # This check is read-only; an error leaves the previous Agent running.
-if cf_environment_check "$BINARY_TMP" -config "$CONFIG_FILE.new" -check-environment; then
+{ipv4_forwarding_environment}if cf_environment_check "$BINARY_TMP" -config "$CONFIG_FILE.new" -check-environment; then
     :
 else
     environment_status=$?
     echo "若提示未知 -check-environment 参数，请更新 ConfigFlow 并重新构建/提供 1.8.19-go 或更高的 Agent 下载文件；否则按上方环境问题修复后重跑。" >&2
     exit "$environment_status"
 fi
-cf_step_done "核心接管与运行环境检查通过"
+{ipv4_forwarding_environment_end}cf_step_done "核心接管与运行环境检查通过"
 {ipv4_forwarding_prepare}cf_step "安装并启动 Agent 服务"
 # Stop the previous Go or legacy Shell Agent before replacing its binary/config.
 if [ "$INIT_SYSTEM" = "systemd" ]; then

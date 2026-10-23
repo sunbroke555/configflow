@@ -33,7 +33,9 @@ def test_combined_api_reuses_selected_canonical_installer_and_has_valid_shell(cl
     assert response.status_code == 200
     source = response.get_data(as_text=True)
     assert source.splitlines()[1] == AGENT_CORE_INSTALL_INTERFACE
-    assert generate_core_install_script().rstrip() in source
+    # Mihomo persists IPv4 forwarding by default, so its core phase says so.
+    assert generate_core_install_script(installer_forwarding=service == "mihomo").rstrip() in source
+    assert ("旁路网关修复：" in source) is (service == "oxidns")
     assert f"(\nset -- --core {service}\n" in source
     assert source.index('case "$choice"') < source.index('case "$(uname -m)"') < source.index(f"set -- --core {service}")
     assert source.index(f"set -- --core {service}") < source.index('cf_step "下载并校验 Agent"')
@@ -65,7 +67,7 @@ def test_omitted_and_false_preserve_agent_only_api(client, service):
     {"port": "8080.1"}, {"port": "0"}, {"port": "65536"},
 ])
 def test_api_rejects_unsupported_combined_settings_before_loading_core(client, monkeypatch, options):
-    def unexpected():
+    def unexpected(**_):
         pytest.fail("Invalid settings must be rejected before loading the core installer")
     monkeypatch.setattr("backend.agents.core_install_script.generate_core_install_script", unexpected)
     response = client.get("/api/agents/install-script", query_string={
@@ -101,7 +103,7 @@ exit 0
 
 def harness(tmp_path, monkeypatch, service="mihomo", manager="systemd", real_core=False, install_core=True, **settings):
     if not real_core:
-        monkeypatch.setattr("backend.agents.core_install_script.generate_core_install_script", lambda: FAKE_CORE)
+        monkeypatch.setattr("backend.agents.core_install_script.generate_core_install_script", lambda **_: FAKE_CORE)
     source = generated(service, install_core=install_core)
     root = tmp_path / "root"
     for relative in ("etc/systemd/system", "etc/init.d", "usr/local/bin", "sbin", "run", "opt", "var/log"):

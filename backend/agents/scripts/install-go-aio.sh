@@ -270,7 +270,7 @@ cf_step_done "核心接管检查与 Agent 下载校验通过"
 # listeners from unrelated port owners. Diagnostics include repair guidance;
 # the check never changes capabilities, forwarding or either core config.
 cf_step "检查运行环境"
-if cf_environment_check "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json" \
+{ipv4_forwarding_environment}if cf_environment_check "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json" \
     -environment-peer-config "$STAGE_DIR/oxidns-config.json" -check-environment; then
     :
 else
@@ -278,7 +278,7 @@ else
     echo "若提示未知 -check-environment 参数，请更新 ConfigFlow 并重新构建/提供 1.8.19-go 或更高的 Agent 下载文件；否则按上方环境问题修复后重跑。" >&2
     exit "$environment_status"
 fi
-cf_step_done "运行环境检查通过"
+{ipv4_forwarding_environment_end}cf_step_done "运行环境检查通过"
 
 {ipv4_forwarding_prepare}
 

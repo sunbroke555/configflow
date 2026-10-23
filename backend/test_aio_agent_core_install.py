@@ -28,7 +28,9 @@ def test_combined_aio_api_embeds_canonical_core_phase_after_choice_and_architect
     assert response.status_code == 200
     source = response.get_data(as_text=True)
     assert source.splitlines()[1] == AGENT_CORE_INSTALL_INTERFACE
-    assert generate_core_install_script().rstrip() in source
+    # The installer persists forwarding itself, so its core phase says so.
+    assert generate_core_install_script(installer_forwarding=True).rstrip() in source
+    assert '旁路网关修复：' not in source
     assert '(\nset -- --core both\n' in source
     assert source.index('case "$choice"') < source.index('case "$(uname -m)"') < source.index('set -- --core both')
     assert source.index('CORE_PHASE_COMPLETED=true') < source.index('PHYSICAL_AGENT_ROOT=')
@@ -59,7 +61,7 @@ def test_combined_aio_api_embeds_canonical_core_phase_after_choice_and_architect
     {'mihomo_agent_port': '8082'}, {'oxidns_agent_port': 'invalid'},
 ])
 def test_invalid_combined_settings_rejected_before_loading_core(client, monkeypatch, options):
-    def unexpected():
+    def unexpected(**_):
         pytest.fail('Invalid settings must be rejected before loading the core installer')
     monkeypatch.setattr('backend.agents.core_install_script.generate_core_install_script', unexpected)
     response = client.get('/api/agents/install-script', query_string={
@@ -96,7 +98,7 @@ exit 0
 
 def harness(tmp_path, monkeypatch, manager='systemd', existing=True, real_core=False):
     if not real_core:
-        monkeypatch.setattr('backend.agents.core_install_script.generate_core_install_script', lambda: FAKE_CORE)
+        monkeypatch.setattr('backend.agents.core_install_script.generate_core_install_script', lambda **_: FAKE_CORE)
     monkeypatch.setattr(aio, 'generated', lambda: generate_go_aio_install_script(
         'https://config.test', 'cohost', binary_download_url='https://config.test/download', install_core=True))
     installer, env, units = aio.harness(tmp_path, manager, existing)
