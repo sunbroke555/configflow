@@ -10,7 +10,7 @@ import { gatewayEnvironmentErrors, installationHostMatches, installationMatches,
 import { copyText } from '@/lib/clipboard'
 import { buildInstallCommand } from '@/lib/coreInstallCommand'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
-import { forwardingLabel, forwardingTone, fullTunReady, routerSplitErrorMessage, tunLabel, tunTone, type StatusTone } from '@/lib/routerSplit'
+import { forwardingLabel, forwardingTone, fullTunReady, gatewayLeftover, routerSplitErrorMessage, tunLabel, tunTone, type StatusTone } from '@/lib/routerSplit'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
@@ -661,7 +661,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
             <AgentStatusRow label="Mihomo TUN" :status="fullTunRows.tun.status" :tone="fullTunRows.tun.tone">
               <template v-if="fullTunRows.tunError || tunPrepareNote" #notice><p v-if="fullTunRows.tunError" role="alert" class="m-0 text-destructive-accent">{{ fullTunRows.tunError }}</p><p v-if="tunPrepareNote" class="m-0 text-warning-accent">{{ tunPrepareNote }}</p></template>
             </AgentStatusRow>
-            <AgentStatusRow v-if="managedNetwork" label="旧网关记录" status="仍存在" tone="warning">
+            <AgentStatusRow v-if="gatewayLeftover(networkStatus)" label="旧网关记录" :status="gatewayLeftover(networkStatus) === 'present' ? '仍存在' : '无法确认'" tone="warning">
               <template #notice><p class="m-0">请在生成工作台 → Mihomo → Linux 网关中清理。</p><p v-if="networkStatus?.managed?.error" role="alert" class="m-0 text-destructive-accent">{{ networkStatus.managed.error }}</p></template>
             </AgentStatusRow>
             <dl class="m-0 grid grid-cols-2 gap-3 py-3 text-xs sm:grid-cols-4"><div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr }}</dd></div></dl>

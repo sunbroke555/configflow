@@ -475,7 +475,9 @@ describe('router split guards', () => {
     expect(wrapper.get('[data-router-split="full_tun"]').text()).toContain('主路由分流（完整 TUN）')
     expect(wrapper.getComponent(Switch).props('disabled')).toBe(true)
     expect(wrapper.text()).toContain('不适用于主路由分流')
-    expect(wrapper.get('[data-router-routes]').text()).toContain('主路由转发：fake-IP + 1 个规则集')
+    expect(wrapper.get('[data-router-routes]').text()).toContain('安装时选择的转发网段：fake-IP + 1 个规则集')
+    // The marker keeps the install-time list; the upstream router records may differ since.
+    expect(wrapper.get('[data-router-routes]').text()).toContain('以「上游路由」中的设置为准')
     expect(wrapper.get('[data-router-routes]').text()).toContain('Telegram 已改名')
     expect(wrapper.findAllComponents(Checkbox)).toHaveLength(0)
     for (const label of ['预览配置变更', '预览并检查', '应用网关转发', '撤销网关转发', '预览恢复变更']) expect(button(wrapper, label)).toBeUndefined()
@@ -489,12 +491,27 @@ describe('router split guards', () => {
 
   it('cleans a leftover gateway record only after confirming forwarding stays on', async () => {
     vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, preserves_forwarding: true, spec } }))
+    // The Agent's generic text is about restoring client gateways, which a router split never changed.
+    vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, message: '受管网关配置已撤销；请恢复客户端原来的网关和 DNS 设置', managed: { active: false } }))
     const wrapper = await render(false, false, split('full_tun'))
     expect(wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === '旧网关记录')?.props()).toMatchObject({ status: '仍存在', tone: 'warning' })
     await button(wrapper, '清理旧网关记录').trigger('click'); await flushPromises()
     expect(confirm).toHaveBeenCalledWith('将删除旧的 configflow_gateway 规则和网关记录；IPv4 转发已持久化，会保持开启。', expect.objectContaining({ confirmText: '清理旧记录' }))
     expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('one', 'office')
     expect(notify.success).toHaveBeenCalledWith('旧网关记录已清理')
+    expect(wrapper.text()).toContain('旧网关记录已清理，IPv4 转发保持开启。')
+    expect(wrapper.text()).not.toContain('请恢复客户端原来的网关')
+  })
+
+  it.each([
+    [{ active: false, pending: true, preserves_forwarding: true }, '仍存在'],
+    [{ active: false, error: '网关状态文件无法读取', preserves_forwarding: true }, '无法确认'],
+  ])('offers cleanup for a pending or unreadable gateway record too %#', async (managed, label) => {
+    // The setup check refuses these as well, so the page must not call them 「无」.
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed }))
+    const wrapper = await render(false, false, split('full_tun'))
+    expect(wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === '旧网关记录')?.props()).toMatchObject({ status: label, tone: 'warning' })
+    expect(button(wrapper, '清理旧网关记录')).toBeDefined()
   })
 
   it('does not offer cleanup when forwarding is not persisted yet', async () => {
@@ -523,16 +540,24 @@ describe('router split guards', () => {
     expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
   })
 
-  it('keeps a legacy router split on and blocks restore without offering a migration', async () => {
+  it('keeps a legacy router split on and lets the server decide a restore, without offering a migration', async () => {
     const wrapper = await render(true, false, { ...split('legacy'), restore_point: { id: 'snapshot', created_at: '2026-10-20T10:00:00Z' } })
     expect(wrapper.get('[data-router-split="legacy"]').text()).toContain('旧版主路由分流')
     expect(wrapper.getComponent(Switch).props('disabled')).toBe(true)
     expect(wrapper.text()).toContain('新增网段也需加入主路由的静态路由。')
     expect(wrapper.findAllComponents(Checkbox)[0].props('disabled')).toBe(false)
-    expect(button(wrapper, '预览恢复变更').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-restore-blocked]').text()).toBe('恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。')
     expect(button(wrapper, '迁移到完整 TUN')).toBeUndefined()
     expect(wrapper.text()).not.toContain('迁移')
+    // A snapshot that keeps the gateway on (only the rule sets changed) can be restored.
+    expect(button(wrapper, '预览恢复变更').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).not.toContain('恢复后 Linux 网关为关闭状态')
+    await button(wrapper, '预览恢复变更').trigger('click'); await flushPromises()
+    expect(linuxGatewayApi.previewRestore).toHaveBeenCalledOnce()
+    // One that turns it off is refused by the server, whose text is shown in place.
+    vi.mocked(linuxGatewayApi.previewRestore).mockRejectedValueOnce(conflict('ROUTER_SPLIT_RESTORE_BLOCKED', '恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。'))
+    const blocked = await render(true, false, { ...split('legacy'), restore_point: { id: 'snapshot', created_at: '2026-10-20T10:00:00Z' } })
+    await button(blocked, '预览恢复变更').trigger('click'); await flushPromises()
+    expect(blocked.get('[role="alert"]').text()).toContain('恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。')
   })
 
   it('requires a danger confirmation before tearing down a legacy router split', async () => {
@@ -544,8 +569,12 @@ describe('router split guards', () => {
     expect(confirm).not.toHaveBeenCalled()
     expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
     vi.mocked(confirmDanger).mockResolvedValueOnce(true)
+    vi.mocked(linuxGatewayApi.remove).mockResolvedValue(response({ success: true, message: '受管网关配置已撤销；请恢复客户端原来的网关和 DNS 设置', managed: { active: false } }))
     await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('one', 'office', true)
+    // What needs handling is the main router's static routes, not the clients.
+    expect(wrapper.text()).toContain('请删除主路由上指向这台 Linux 的静态路由')
+    expect(wrapper.text()).not.toContain('请恢复客户端原来的网关')
   })
 
   it('keeps the selective gateway unchanged without a router split', async () => {

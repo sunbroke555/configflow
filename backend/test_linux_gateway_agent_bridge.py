@@ -255,7 +255,27 @@ def test_full_tun_remove_needs_an_agent_that_keeps_forwarding(split, calls):
         bridge.call(Manager(version='1.8.39-go'), 'gateway', 'remove', 'POST', 'home', {})
     assert error.value.code == 'UPGRADE_REQUIRED' and CURRENT in error.value.message
     bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', {})
-    assert calls[0][0]['json'] == {}
+    # The host's status is read first: no gateway record here, so removal is sent.
+    assert [(item['method'], item['url'].rsplit('/', 1)[1], item['json']) for item in calls[0]] == [
+        ('GET', 'status', None), ('POST', 'remove', {})]
+
+
+@pytest.mark.parametrize('managed', [
+    {'active': True, 'healthy': True}, {'active': False, 'pending': True}, {'active': False, 'error': 'journal unreadable'},
+])
+def test_full_tun_remove_keeps_forwarding_that_is_not_persisted(split, calls, managed):
+    """Without the AIO forwarding file the Agent writes the journal's original 0 back."""
+    seen, replies = calls
+    split['value'] = 'full_tun'
+    replies.append(Response({'success': True, 'managed': {**managed, 'preserves_forwarding': False}}))
+    with pytest.raises(MonitorError) as error:
+        bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', {})
+    assert error.value.code == 'FORWARDING_NOT_PERSISTED' and error.value.status == 409
+    assert error.value.message == bridge.FORWARDING_NOT_KEPT.format(action='')
+    assert [item['url'].rsplit('/', 1)[1] for item in seen] == ['status']
+    replies.append(Response({'success': True, 'managed': {**managed, 'preserves_forwarding': True}}))
+    bridge.call(Manager(version=CURRENT), 'gateway', 'remove', 'POST', 'home', {})
+    assert [item['url'].rsplit('/', 1)[1] for item in seen] == ['status', 'status', 'remove']
 
 
 def test_ordinary_gateway_remove_is_unchanged(split, calls):

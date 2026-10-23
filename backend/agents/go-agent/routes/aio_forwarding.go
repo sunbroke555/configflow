@@ -25,6 +25,7 @@ var aioOpenRCDir = "/etc/init.d"
 var aioAgentRoot = "/opt/configflow-agent"
 var aioSysfsNetRoot = "/sys/class/net"
 var aioPrepareTUN = preflight.PrepareTUNAssumeEnabled
+var aioLookPath = exec.LookPath
 
 // daemon-reload and the hook may exceed the 3s diagnostic command timeout.
 var aioRun = func(name string, args ...string) (string, error) {
@@ -84,6 +85,10 @@ func aioForwardingHookPath() string {
 
 func aioSystemdHookLine() string { return "ExecStartPre=/bin/sh " + aioForwardingHookPath() }
 func aioOpenRCHookLine() string  { return "    /bin/sh " + aioForwardingHookPath() + " || return 1" }
+
+// The first line of start_pre() in OpenRC scripts written before the installer
+// reserved a hook line; the hook is inserted above it, as the installer does now.
+const aioOpenRCLegacyFirstLine = "    checkpath --directory --mode 0755 /var/log"
 
 // aioForwardingConfigManaged reports whether IPv4 forwarding is owned by the
 // persisted AIO configuration. Gateway removal then leaves forwarding alone.
@@ -182,7 +187,7 @@ func aioOpenRCStartupHook(unit string) (string, error) {
 		switch lines[index+1] {
 		case aioOpenRCHookLine():
 			return "registered", nil
-		case "    ":
+		case "    ", aioOpenRCLegacyFirstLine:
 			return "absent", nil
 		}
 		return "unknown", nil
@@ -320,6 +325,9 @@ func aioPatchOpenRC(data []byte) ([]byte, error) {
 		case "    ":
 			lines[found+1] = aioOpenRCHookLine()
 			return []byte(strings.Join(lines, "\n")), nil
+		case aioOpenRCLegacyFirstLine:
+			lines = append(lines[:found+1], append([]string{aioOpenRCHookLine()}, lines[found+1:]...)...)
+			return []byte(strings.Join(lines, "\n")), nil
 		}
 	}
 	return nil, fmt.Errorf("Agent 服务脚本已被修改，无法自动注册 IPv4 转发检查；请用普通同机安装重新安装 Agent")
@@ -389,6 +397,13 @@ func persistAIOForwarding(cfg *Config, prepareTUN bool) (result map[string]inter
 	}
 	if err := instance.validateDirectory(); err != nil {
 		return nil, fmt.Errorf("Agent 安装目录无效：%w", err)
+	}
+	// The boot hook runs these; without them a later Agent restart would fail
+	// its start check while ip_forward is still 0 (the installer checks too).
+	for _, command := range []string{"sysctl", "cat"} {
+		if _, err := aioLookPath(command); err != nil {
+			return nil, fmt.Errorf("缺少 %s 命令，无法注册 IPv4 转发开机检查；请先安装该命令（Debian/Ubuntu 的 sysctl 由 procps 提供）后重试", command)
+		}
 	}
 	if info, err := os.Lstat(aioSysctlDir); os.IsNotExist(err) {
 		if err := os.Mkdir(aioSysctlDir, 0755); err != nil {

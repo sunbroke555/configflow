@@ -31,13 +31,20 @@ export function tunTone(status?: LinuxGatewayStatus | null): StatusTone {
   return tun.present === true ? 'success' : 'danger'
 }
 
+/** 设备上的旧网关记录：已生效或未完成为 present，记录无法读取为 unknown（与服务端检查一致，都需清理）。 */
+export function gatewayLeftover(status?: LinuxGatewayStatus | null): 'present' | 'unknown' | null {
+  const managed = status?.managed
+  if (managed?.active || managed?.pending) return 'present'
+  return managed?.error ? 'unknown' : null
+}
+
 /** 完整 TUN 可以接入主路由：转发已开启并持久化、TUN 运行中，且没有旧网关记录。 */
 export function fullTunReady(status?: LinuxGatewayStatus | null): boolean {
   if (!status || status.success === false) return false
-  const { ipv4_forwarding: forwarding, tun, managed } = status
+  const { ipv4_forwarding: forwarding, tun } = status
   return forwarding?.current === '1' && forwarding.persisted === true
     && tun?.configured === true && tun.present === true && tun.gateway_marker !== true
-    && !managed?.active && !managed?.pending && !status.enabled_in_config
+    && !gatewayLeftover(status) && !status.enabled_in_config
 }
 
 export const ROUTER_SPLIT_MESSAGES: Record<string, string> = {
@@ -48,7 +55,7 @@ export const ROUTER_SPLIT_MESSAGES: Record<string, string> = {
   ROUTER_SPLIT_INVALID: '主路由分流标记 mihomo.router_split 无效，已停止生成和网关操作。请从备份恢复，或重新运行首次使用向导。',
   UPGRADE_REQUIRED: `请先将 Mihomo Agent 更新到 ${FORWARDING_AGENT_VERSION} 或更新版本。`,
 }
-/** 旧版主路由分流下恢复快照会关闭 Linux 网关，因此不提供恢复。 */
+/** 旧版主路由分流下，快照会关闭 Linux 网关时服务端拒绝恢复的说明。 */
 export const LEGACY_RESTORE_BLOCKED = '恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。'
 /** 主路由分流错误码的文案：服务端原文优先（同一错误码按接管方式可能有不同说明），缺失时用本地文案。 */
 export function routerSplitErrorMessage(code: string | undefined | null, fallback = ''): string {

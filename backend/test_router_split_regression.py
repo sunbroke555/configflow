@@ -152,6 +152,8 @@ def test_router_setup_runs_end_to_end_on_a_full_tun(authenticated_app, monkeypat
 
     # Publishing generates the full TUN and refuses a shell Agent that would drop forwarding.
     agent = {'id': 'm', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': '1.8.40-go'}
+    monkeypatch.setattr('backend.agents.linux_gateway.call', lambda *args: {
+        'success': True, 'managed': {'active': False, 'healthy': False, 'preserves_forwarding': True}})
     main = yaml.safe_load(_prepare_transactional_content(agent, config)['config_content'])
     assert main['tun']['enable'] is True and main['tun']['auto-redirect'] is True
     assert 'x-configflow-linux-gateway' not in main

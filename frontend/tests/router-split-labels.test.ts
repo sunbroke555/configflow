@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LinuxGatewayStatus } from '@/api/linuxGateway'
-import { ROUTER_SPLIT_MESSAGES, forwardingLabel, forwardingTone, fullTunReady, routerSplitErrorMessage, tunLabel, tunTone } from '@/lib/routerSplit'
+import { ROUTER_SPLIT_MESSAGES, forwardingLabel, forwardingTone, fullTunReady, gatewayLeftover, routerSplitErrorMessage, tunLabel, tunTone } from '@/lib/routerSplit'
 
 const ready = (changes: Partial<LinuxGatewayStatus> = {}): LinuxGatewayStatus => ({
   success: true, supported: true, enabled_in_config: false, managed: { active: false, preserves_forwarding: true },
@@ -40,8 +40,18 @@ describe('router split status labels', () => {
       null, ready({ success: false }), forwarding({ persisted: false }), forwarding({ current: '0' }),
       tun({ present: false }), tun({ configured: false }), tun({ gateway_marker: true }),
       ready({ managed: { active: true } }), ready({ managed: { active: false, pending: true } }), ready({ enabled_in_config: true }),
+      // The setup check refuses an unreadable gateway record as well.
+      ready({ managed: { active: false, error: '网关状态文件无法读取' } }),
       ready({ ipv4_forwarding: undefined, tun: undefined }),
     ]) expect(fullTunReady(status)).toBe(false)
+  })
+
+  it('reports a gateway record that is active, pending or unreadable', () => {
+    expect(gatewayLeftover(ready())).toBeNull()
+    expect(gatewayLeftover(null)).toBeNull()
+    expect(gatewayLeftover(ready({ managed: { active: true } }))).toBe('present')
+    expect(gatewayLeftover(ready({ managed: { active: false, pending: true } }))).toBe('present')
+    expect(gatewayLeftover(ready({ managed: { active: false, error: 'bad journal' } }))).toBe('unknown')
   })
 
   it('prefers the server text and falls back to the shared copy', () => {

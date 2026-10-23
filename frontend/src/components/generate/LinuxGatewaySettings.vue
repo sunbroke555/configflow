@@ -4,7 +4,7 @@ import { routerKey } from 'vue-router'
 import { Check, CircleCheck, Copy, FileDiff, LoaderCircle, Network, RefreshCw, RotateCcw } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { linuxGatewayApi, type LinuxGatewayConfig, type LinuxGatewayDraftPreview, type LinuxGatewayRestorePoint, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewayRouterSplit, type LinuxGatewaySettings, type LinuxGatewayStatus } from '@/api/linuxGateway'
-import { LEGACY_RESTORE_BLOCKED, ROUTER_SPLIT_MESSAGES, routerSplitErrorMessage } from '@/lib/routerSplit'
+import { ROUTER_SPLIT_MESSAGES, gatewayLeftover, routerSplitErrorMessage } from '@/lib/routerSplit'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySettingsKey, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
@@ -85,7 +85,7 @@ const fullTunMode = computed(() => splitMode.value === 'full_tun' || invalidMode
 const legacyMode = computed(() => splitMode.value === 'legacy')
 const tunMissing = computed(() => splitMode.value === 'full_tun' && !!routerSplit.value?.issues?.includes('tun_missing'))
 const forwardedRuleNames = computed(() => (routerSplit.value?.route_rule_set_ids || []).map(id => candidates.value.find(item => item.id === id)?.name || id))
-const leftoverGateway = computed(() => fullTunMode.value && !invalidMode.value && !!status.value?.managed?.active)
+const leftoverGateway = computed(() => fullTunMode.value && !invalidMode.value ? gatewayLeftover(status.value) : null)
 const configured = computed(() => savedSettings.value.enabled && settings.enabled && !configDirty.value)
 const errors = computed(() => gatewaySpecErrors(network))
 const currentPreviewKey = computed(() => JSON.stringify([props.profileId, selectedAgentId.value, gatewaySpecKey(network), gatewaySettingsKey(settings)]))
@@ -201,7 +201,8 @@ async function save(): Promise<PublishGuard | null> {
 }
 
 async function restoreDraft() {
-  if (busy.value || !restorePoint.value || fullTunMode.value || legacyMode.value) return
+  // Legacy: the server refuses only a snapshot that turns the gateway off.
+  if (busy.value || !restorePoint.value || fullTunMode.value) return
   const token = capture()
   const key = gatewaySettingsKey(settings)
   draftAction.value = 'restore'
@@ -325,7 +326,8 @@ async function removeNetwork() {
   const token = capture()
   // Legacy split: the router still forwards here, so revoking interrupts it.
   const teardown = legacyMode.value
-  const accepted = fullTunMode.value
+  const leftover = fullTunMode.value
+  const accepted = leftover
     ? await confirm('将删除旧的 configflow_gateway 规则和网关记录；IPv4 转发已持久化，会保持开启。', { title: `清理「${selectedAgent.value?.name}」的旧网关记录？`, confirmText: '清理旧记录' })
     : teardown
       ? await confirmDanger('主路由仍把代理网段转给这台 Linux。撤销后 TUN 接管与 IPv4 转发会还原，这些连接会中断，直到重新应用转发。', { title: `撤销「${selectedAgent.value?.name}」的网关转发？`, confirmText: '仍然撤销' })
@@ -342,8 +344,11 @@ async function removeNetwork() {
     status.value = { ...status.value!, ...data }
     preview.value = null
     networkBaseline.value = gatewaySpecKey(network)
-    networkResult.value = data.message || (fullTunMode.value ? '旧网关记录已清理，IPv4 转发保持开启。' : '网关转发已撤销。接下来关闭 Linux 网关，再保存并发布 Mihomo。')
-    notify.success(fullTunMode.value ? '旧网关记录已清理' : '网关转发已撤销')
+    // The Agent's own text asks to restore client gateways, which a router split never changed.
+    networkResult.value = leftover ? '旧网关记录已清理，IPv4 转发保持开启。'
+      : teardown ? '网关转发已撤销，主路由转来的连接已中断。请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发。'
+        : data.message || '网关转发已撤销。接下来关闭 Linux 网关，再保存并发布 Mihomo。'
+    notify.success(leftover ? '旧网关记录已清理' : '网关转发已撤销')
   } catch (error) {
     if (current(token, true)) networkError.value = `${failureMessage(error, true)} 请刷新检测确认设备状态。`
   } finally { if (current(token, true)) networkAction.value = '' }
@@ -422,7 +427,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
           </div>
           <div v-else-if="legacyMode" role="status" class="space-y-2 rounded-lg border border-warning-accent/30 bg-warning-soft px-3 py-2.5 text-xs leading-relaxed" data-router-split="legacy">
             <p class="m-0 text-sm font-semibold text-warning-accent">旧版主路由分流</p>
-            <p class="m-0 text-foreground">关闭开关、恢复快照或撤销转发会同时去掉 TUN 并还原 IPv4 转发，主路由转来的连接会中断。</p>
+            <p class="m-0 text-foreground">关闭开关、恢复到网关关闭的快照或撤销转发，会同时去掉 TUN 并还原 IPv4 转发，主路由转来的连接会中断。</p>
           </div>
           <p v-if="tunMissing" role="alert" class="m-0 text-xs leading-relaxed" data-tun-missing><span class="font-medium text-warning-accent">基础 YAML 缺少完整 TUN，发布已暂停。</span>请在 Mihomo 基础 YAML 中恢复 tun 后再发布，否则主路由转来的连接会回环。</p>
 
@@ -438,8 +443,9 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             </label>
             <p v-if="!settings.enabled && savedSettings.enabled" class="m-0 text-xs leading-relaxed" role="status"><span class="font-medium text-warning-accent">准备停用：</span>先恢复客户端并撤销网关转发，再保存并发布已关闭模式的 Mihomo 配置。</p>
             <div v-if="fullTunMode && !invalidMode" class="space-y-1 text-xs leading-relaxed" data-router-routes>
-              <p class="m-0 text-sm font-medium">主路由转发：fake-IP + <span class="num">{{ forwardedRuleNames.length }}</span> 个规则集</p>
+              <p class="m-0 text-sm font-medium">安装时选择的转发网段：fake-IP + <span class="num">{{ forwardedRuleNames.length }}</span> 个规则集</p>
               <p v-if="forwardedRuleNames.length" class="m-0 text-muted-foreground [overflow-wrap:anywhere]">{{ forwardedRuleNames.join('、') }}</p>
+              <p class="m-0 text-muted-foreground">主路由实际转发哪些网段，以「上游路由」中的设置为准。</p>
             </div>
             <div v-else-if="!fullTunMode" class="space-y-2">
               <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><div class="flex min-h-8 items-center gap-1"><h3 class="m-0 text-sm font-semibold">IP 接管（可选）</h3><span class="cf-compact-help"><FieldHelp label="IP 接管" :text="gatewayCopy.applications.help" /></span></div><span class="text-xs text-muted-foreground">已选 <span class="num">{{ selectedAvailable }}</span> 个可用规则集</span></div>
@@ -462,10 +468,9 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             <div><div class="flex items-center gap-1"><h2 id="gateway-draft" class="m-0 text-lg font-semibold">配置试用与恢复</h2><FieldHelp label="配置试用与恢复" :text="optionHelp('修改了网关开关或接管规则，想先看清会改变什么再保存时使用。', '预览只对比差异，不改动草稿。首次保存时自动备份 Mihomo、OxiDNS 草稿，之后可恢复；基础 YAML 不变，关闭网关即按原配置生成。')" /></div><p class="mt-1 mb-0 text-xs leading-relaxed text-muted-foreground">先预览会改变什么，确认后再保存。</p></div>
             <div class="flex flex-wrap gap-2">
               <Button variant="outline" class="min-h-11" :disabled="busy" @click="previewDraft"><LoaderCircle v-if="draftAction === 'preview'" class="size-4 animate-spin" />预览配置变更</Button>
-              <Button v-if="restorePoint" variant="outline" class="min-h-11" :disabled="busy || legacyMode" @click="restoreDraft"><LoaderCircle v-if="draftAction === 'restore'" class="size-4 animate-spin" /><RotateCcw v-else class="size-4" />{{ draftReview?.action === 'restore' ? '恢复这份草稿' : '预览恢复变更' }}</Button>
+              <Button v-if="restorePoint" variant="outline" class="min-h-11" :disabled="busy" @click="restoreDraft"><LoaderCircle v-if="draftAction === 'restore'" class="size-4 animate-spin" /><RotateCcw v-else class="size-4" />{{ draftReview?.action === 'restore' ? '恢复这份草稿' : '预览恢复变更' }}</Button>
             </div>
-            <p v-if="restorePoint && legacyMode" class="m-0 text-xs leading-relaxed text-muted-foreground" data-restore-blocked>{{ LEGACY_RESTORE_BLOCKED }}</p>
-            <p v-else-if="restorePoint" class="m-0 text-xs leading-relaxed text-muted-foreground">可恢复到 <time :datetime="restorePoint.created_at">{{ new Date(restorePoint.created_at).toLocaleString() }}</time> 的草稿，之后的修改会被撤销。</p>
+            <p v-if="restorePoint" class="m-0 text-xs leading-relaxed text-muted-foreground">可恢复到 <time :datetime="restorePoint.created_at">{{ new Date(restorePoint.created_at).toLocaleString() }}</time> 的草稿，之后的修改会被撤销。</p>
             <p v-else class="m-0 text-xs leading-relaxed text-muted-foreground">第一次保存时会自动备份当前草稿，之后可以恢复。</p>
             <p v-if="draftError" role="alert" class="m-0 text-xs leading-relaxed text-destructive-accent">{{ draftError }}<Button variant="ghost" class="ml-1 min-h-11" :disabled="busy" @click="reloadDraft">重新读取已保存草稿</Button></p>
             <div v-if="draftReview" class="space-y-2" aria-live="polite">
@@ -495,7 +500,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
               <Select v-model="selectedAgentId" :disabled="busy"><SelectTrigger id="gateway-agent" class="min-h-11 w-full"><SelectValue placeholder="选择当前空间的 Mihomo 设备" /></SelectTrigger><SelectContent><SelectItem v-for="agent in targets" :key="agent.id" :value="agent.id">{{ agent.name }}{{ agent.enabled === false ? '（已禁用）' : agent.status !== 'online' ? '（离线）' : '' }}</SelectItem></SelectContent></Select>
             </FormField>
             <div v-if="selectedAgentId" class="border-y border-border">
-              <AgentStatusRow label="旧网关记录" :status="networkAction === 'status' ? '正在检测' : !status ? '等待检测' : leftoverGateway ? '仍存在' : '无'" :tone="networkAction === 'status' ? 'progress' : leftoverGateway ? 'warning' : status ? 'success' : 'neutral'">
+              <AgentStatusRow label="旧网关记录" :status="networkAction === 'status' ? '正在检测' : !status ? '等待检测' : leftoverGateway === 'present' ? '仍存在' : leftoverGateway ? '无法确认' : '无'" :tone="networkAction === 'status' ? 'progress' : leftoverGateway ? 'warning' : status ? 'success' : 'neutral'">
                 <template #actions><Button variant="ghost" size="sm" class="min-h-11 text-xs" :disabled="busy || !online || !shell" @click="loadStatus()"><RefreshCw class="size-3.5" />刷新检测</Button></template>
                 <template v-if="leftoverGateway" #notice>
                   <p v-if="status?.managed?.preserves_forwarding !== true" class="m-0 text-warning-accent">这台设备尚未持久化 IPv4 转发，清理会关闭转发；请先在安装向导中开启并持久化 IPv4 转发。</p>

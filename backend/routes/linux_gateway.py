@@ -8,7 +8,8 @@ from backend.common.linux_gateway import (
     LinuxGatewayError, gateway_editor_state, gateway_provider_yaml, gateway_source_yaml, gateway_settings,
 )
 from backend.common.router_split import (
-    LEGACY_RESTORE_BLOCKED, MESSAGES, RouterSplitError, legacy_context, mode_from_context, route_rule_set_ids, router_split_state,
+    LEGACY_RESTORE_BLOCKED, MESSAGES, RouterSplitError, base_is_full_tun, legacy_context, mode_from_context,
+    needs_context, route_rule_set_ids, router_split_state,
 )
 from backend.routes import custom_config_bp, profiles_bp
 from backend.common.linux_gateway_draft import (
@@ -25,7 +26,10 @@ def _response(value):
 
 def _guard(context, current, candidate, restore):
     """Refuse a change that would end the router split's takeover."""
-    mode = mode_from_context(current, context)
+    if context is None and needs_context(current):
+        # The gateway was turned on after the setup sessions were (not) read.
+        raise LinuxGatewayError('Linux 网关设置已在其他位置修改，请刷新后重试')
+    mode = mode_from_context(current, context or {})
     after = gateway_settings(candidate)
     if mode == 'invalid':
         raise RouterSplitError(MESSAGES['ROUTER_SPLIT_INVALID'], 'ROUTER_SPLIT_INVALID')
@@ -34,15 +38,18 @@ def _guard(context, current, candidate, restore):
             raise RouterSplitError(MESSAGES['ROUTER_SPLIT_RESTORE_BLOCKED'], 'ROUTER_SPLIT_RESTORE_BLOCKED')
         if after['enabled']:
             raise RouterSplitError(MESSAGES['ROUTER_SPLIT_FULL_TUN'], 'ROUTER_SPLIT_FULL_TUN')
-    if mode == 'legacy' and not after['enabled']:
-        # Turning the gateway off here removes TUN and restores forwarding.
+    if mode == 'legacy' and not after['enabled'] and not base_is_full_tun(candidate):
+        # Turning the gateway off here removes TUN and restores forwarding; a
+        # snapshot whose base YAML has its own full TUN keeps the takeover.
         if restore:
             raise RouterSplitError(LEGACY_RESTORE_BLOCKED, 'ROUTER_SPLIT_RESTORE_BLOCKED')
         raise RouterSplitError(MESSAGES['ROUTER_SPLIT_LEGACY'], 'ROUTER_SPLIT_LEGACY')
 
 
-def _router_split(repository, profile_id, config):
-    state = router_split_state(repository, profile_id, config)
+def _router_split(repository, profile_id, config, context):
+    if context is None and needs_context(config):
+        context = legacy_context(repository, profile_id)
+    state = router_split_state(repository, profile_id, config, context=context or {})
     return {'mode': state['mode'], 'source': state['source'], 'issues': state['issues'],
             'route_rule_set_ids': route_rule_set_ids(config)}
 
@@ -61,9 +68,10 @@ def linux_gateway_settings(profile_id=None):
     profile_id = resolve_profile_id(profile_id)
     try:
         guard = None
-        # Setup sessions and Agent bindings are read outside the profile lock.
-        context = legacy_context(repository, profile_id)
         config, revision = repository.get_publish_snapshot(profile_id)
+        # Setup sessions and Agent bindings are read outside the profile lock,
+        # and only when the profile could be a legacy router split.
+        context = legacy_context(repository, profile_id) if needs_context(config) else None
         if request.method == 'POST':
             value = request.get_json(silent=True)
             if not isinstance(value, dict):
@@ -110,7 +118,7 @@ def linux_gateway_settings(profile_id=None):
         # Static usage guidance is presented in the editor's expandable help.
         result = gateway_editor_state(config, include_guidance=False)
         result.update(config_revision=revision, restore_point=restore_summary(config),
-                      router_split=_router_split(repository, profile_id, config))
+                      router_split=_router_split(repository, profile_id, config, context))
         if guard is not None:
             result.update(success=True, publish_guard=guard)
         return _response(result)

@@ -1220,6 +1220,11 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
         if is_full_tun(config_data):
             # Without TUN the main router's forwarded connections would loop.
             require_full_tun_generated(main)
+            if agent.get('deployment_method') != 'docker':
+                # The deployed full TUN makes the Agent remove an old gateway
+                # record, which must not turn forwarding off with it.
+                from backend.agents import linux_gateway
+                linux_gateway.require_forwarding_kept(get_agent_manager(), agent)
         provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url, main_config=main)
         ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
         if provider_downloads:

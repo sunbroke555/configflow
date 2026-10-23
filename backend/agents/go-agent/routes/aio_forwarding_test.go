@@ -34,11 +34,12 @@ func newAIOFixture(t *testing.T, manager string) *aioFixture {
 	t.Helper()
 	g := newGatewayFixture(t)
 	oldUnit, oldOpenRC, oldAgent, oldSysfs := aioSystemdUnitDir, aioOpenRCDir, aioAgentRoot, aioSysfsNetRoot
-	oldRun, oldPrepare := aioRun, aioPrepareTUN
+	oldRun, oldPrepare, oldLookPath := aioRun, aioPrepareTUN, aioLookPath
 	t.Cleanup(func() {
 		aioSystemdUnitDir, aioOpenRCDir, aioAgentRoot, aioSysfsNetRoot = oldUnit, oldOpenRC, oldAgent, oldSysfs
-		aioRun, aioPrepareTUN = oldRun, oldPrepare
+		aioRun, aioPrepareTUN, aioLookPath = oldRun, oldPrepare, oldLookPath
 	})
+	aioLookPath = func(name string) (string, error) { return "/usr/bin/" + name, nil }
 	root := t.TempDir()
 	f := &aioFixture{gatewayFixture: g, root: root, manager: manager}
 	aioAgentRoot = filepath.Join(root, "opt/configflow-agent")
@@ -308,6 +309,23 @@ func TestAIOForwardingInsertsHookAfterWorkingDirectory(t *testing.T) {
 	f.assertPersisted(t)
 }
 
+func TestAIOForwardingInsertsHookIntoPreHookOpenRCScript(t *testing.T) {
+	f := newAIOFixture(t, "openrc")
+	// Native AIO scripts written before the installer reserved the hook line.
+	plain := strings.Replace(f.fixtureUnit(t, "plain"), "start_pre() {\n    \n", "start_pre() {\n", 1)
+	if plain == f.fixtureUnit(t, "plain") {
+		t.Fatal("fixture has no reserved hook line")
+	}
+	f.writeUnit(t, plain)
+	if status := aioForwardingStatus(f.cfg); status["startup_hook"] != "absent" {
+		t.Fatalf("old script status: %+v", status)
+	}
+	if _, err := persistAIOForwarding(f.cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	f.assertPersisted(t)
+}
+
 func TestAIOForwardingRefusesForeignStateWithoutChanges(t *testing.T) {
 	for _, test := range []struct {
 		name, manager, want string
@@ -363,6 +381,15 @@ func TestAIOForwardingRefusesForeignStateWithoutChanges(t *testing.T) {
 			real := filepath.Join(f.root, "real-mihomo")
 			os.Rename(filepath.Join(aioAgentRoot, "mihomo"), real)
 			os.Symlink(real, filepath.Join(aioAgentRoot, "mihomo"))
+		}},
+		{"sysctl missing", "systemd", "缺少 sysctl 命令", func(t *testing.T, f *aioFixture) {
+			// The hook would fail at every Agent restart while ip_forward is 0.
+			aioLookPath = func(name string) (string, error) {
+				if name == "sysctl" {
+					return "", fmt.Errorf("executable file not found in $PATH")
+				}
+				return "/bin/" + name, nil
+			}
 		}},
 		{"permission probe", "systemd", "无法写入 IPv4 转发参数", func(t *testing.T, f *aioFixture) {
 			gatewayWriteSysctl = func(string, string) error { return fmt.Errorf("read-only file system") }

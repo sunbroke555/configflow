@@ -83,8 +83,22 @@ def full_tun(custom_config=None, gateway=False):
     return value
 
 
+@pytest.fixture
+def host(monkeypatch):
+    """The Agent status a full TUN publish reads; no gateway record by default."""
+    state = {'status': {'success': True, 'managed': {'active': False, 'healthy': False, 'preserves_forwarding': False}},
+             'calls': []}
+    def call(manager, agent_id, operation, method, profile_id, body=None):
+        state['calls'].append((agent_id, operation, method, profile_id))
+        if isinstance(state['status'], Exception):
+            raise state['status']
+        return deepcopy(state['status'])
+    monkeypatch.setattr('backend.agents.linux_gateway.call', call)
+    return state
+
+
 @pytest.mark.parametrize('version', ['1.8.25-go', '1.8.39-go', ''])
-def test_full_tun_profile_needs_a_forwarding_agent_on_shell(version):
+def test_full_tun_profile_needs_a_forwarding_agent_on_shell(host, version):
     from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION
     agent = {'id': 'old', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': version}
     with pytest.raises(ValueError, match=FORWARDING_MIN_AGENT_VERSION):
@@ -97,7 +111,7 @@ def test_full_tun_profile_needs_a_forwarding_agent_on_shell(version):
     assert 'x-configflow-linux-gateway' not in _prepare_transactional_content(current, full_tun())['config_content']
 
 
-def test_full_tun_profile_without_tun_is_never_published():
+def test_full_tun_profile_without_tun_is_never_published(host):
     from backend.common.router_split import GENERATED_TUN_MISSING
     agent = {'id': 'new', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': '1.8.40-go'}
     with pytest.raises(ValueError) as error:
@@ -105,7 +119,7 @@ def test_full_tun_profile_without_tun_is_never_published():
     assert str(error.value) == GENERATED_TUN_MISSING
 
 
-def test_full_tun_profile_with_the_gateway_enabled_cannot_generate():
+def test_full_tun_profile_with_the_gateway_enabled_cannot_generate(host):
     from backend.common.router_split import RouterSplitError
     agent = {'id': 'new', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': '1.8.40-go'}
     with pytest.raises(RouterSplitError) as error:
@@ -119,7 +133,7 @@ def test_full_tun_profile_with_the_gateway_enabled_cannot_generate():
 
 
 @pytest.mark.parametrize('method', ['shell', 'docker'])
-def test_gateway_and_ordinary_profiles_keep_their_agent_requirements(method):
+def test_gateway_and_ordinary_profiles_keep_their_agent_requirements(host, method):
     agent = {'id': 'old', 'service_type': 'mihomo', 'deployment_method': method, 'version': MIN_AGENT_VERSION}
     # goal=gateway: the selective gateway still needs only the gateway version.
     assert 'x-configflow-linux-gateway:' in _prepare_transactional_content(agent, config(True))['config_content']
@@ -127,3 +141,40 @@ def test_gateway_and_ordinary_profiles_keep_their_agent_requirements(method):
     assert _prepare_transactional_content(ordinary, config(False))['bundle'].manifest['service_type'] == 'mihomo'
     oxidns = {'id': 'dns', 'service_type': 'oxidns', 'deployment_method': method, 'version': '1.8.0-go'}
     assert _prepare_transactional_content(oxidns, full_tun())['bundle'].manifest['service_type'] == 'oxidns'
+
+
+@pytest.mark.parametrize('managed', [
+    {'active': True, 'healthy': True}, {'active': False, 'pending': True}, {'active': False, 'error': 'journal unreadable'},
+])
+def test_full_tun_publish_never_lets_an_old_gateway_record_turn_forwarding_off(host, managed):
+    """A legacy host rebound to a full TUN profile: the deployed config has no
+    gateway marker, so the Agent removes its record and, without the persisted
+    AIO forwarding, writes ip_forward back to the journal's original 0."""
+    from backend.agents.linux_gateway import FORWARDING_NOT_KEPT
+    agent = {'id': 'rebound', 'profile_id': 'home', 'service_type': 'mihomo', 'deployment_method': 'shell',
+             'version': '1.8.40-go'}
+    host['status'] = {'success': True, 'managed': {**managed, 'preserves_forwarding': False}}
+    with pytest.raises(ValueError) as error:
+        _prepare_transactional_content(agent, full_tun())
+    assert str(error.value) == FORWARDING_NOT_KEPT.format(action='发布完整 TUN 后，')
+    assert host['calls'] == [('rebound', 'status', 'GET', 'home')]
+    # Once the forwarding is persisted, removing the record keeps it on.
+    host['status']['managed']['preserves_forwarding'] = True
+    assert 'auto-redirect: true' in _prepare_transactional_content(agent, full_tun())['config_content']
+
+
+def test_full_tun_publish_refuses_when_the_gateway_record_cannot_be_checked(host):
+    from backend.agents.oxidns_monitor import MonitorError
+    agent = {'id': 'm', 'profile_id': 'home', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': '1.8.40-go'}
+    host['status'] = MonitorError('AGENT_UNREACHABLE', 502, '暂时无法连接 Agent，请检查设备连接。')
+    with pytest.raises(ValueError, match='无法确认设备上是否仍有旧版 Linux 网关记录.*暂时无法连接 Agent'):
+        _prepare_transactional_content(agent, full_tun())
+
+
+def test_status_is_only_read_for_a_full_tun_shell_mihomo(host):
+    shell = {'id': 'm', 'profile_id': 'home', 'service_type': 'mihomo', 'deployment_method': 'shell', 'version': '1.8.40-go'}
+    _prepare_transactional_content({**shell, 'deployment_method': 'docker'}, full_tun())
+    _prepare_transactional_content(shell, config(False))
+    _prepare_transactional_content({**shell, 'version': MIN_AGENT_VERSION}, config(True))
+    _prepare_transactional_content({**shell, 'service_type': 'oxidns'}, full_tun())
+    assert host['calls'] == []

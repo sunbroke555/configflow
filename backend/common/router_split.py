@@ -154,16 +154,33 @@ def require_full_tun_generated(main):
 
 
 def legacy_context(repository, profile_id):
-    """Read the setup sessions and bound Agents; call outside profile transactions."""
-    from backend.common.setup_flow import list_sessions
-    sessions = [item for item in list_sessions(repository) if item.get('profile_id') == profile_id]
-    latest = sessions[0] if sessions else None  # list_sessions sorts newest first.
+    """Read the setup sessions and bound Agents; call outside profile transactions.
+
+    An abandoned session is no longer the profile's purpose, as on the Setup page.
+    """
+    from backend.common.setup_flow import profile_sessions
+    sessions = [item for item in profile_sessions(repository, profile_id) if not item.get('abandoned')]
+    latest = sessions[0] if sessions else None  # Sorted newest first.
     agents = repository.get_profile_agent_bindings(profile_id)['agents']
     return {'session_goal': latest.get('goal') if latest else None,
             'session_id': latest.get('id') if latest else None,
             'session_completed': bool(latest.get('completed')) if latest else False,
             'has_gateway_session': any(item.get('goal') == 'gateway' for item in sessions),
             'mihomo_agent_ids': [agent['id'] for agent in agents if agent.get('service_type') == 'mihomo']}
+
+
+def needs_context(config):
+    """Only an unmarked profile with the gateway on can be a legacy router split."""
+    return read_marker(config)[0] == 'absent' and _gateway_enabled(config)
+
+
+def base_is_full_tun(config):
+    """Whether the Mihomo base YAML itself carries the full TUN, without the gateway."""
+    try:
+        document = yaml.safe_load((config.get('mihomo') or {}).get('custom_config') or '')
+    except (yaml.YAMLError, RecursionError):
+        return False
+    return is_full_tun_document(document)
 
 
 def _state(config, context):
@@ -176,11 +193,7 @@ def _state(config, context):
     state, _ = read_marker(config)
     if state == 'valid':
         result.update(mode='full_tun', source='marker')
-        try:
-            document = yaml.safe_load((config.get('mihomo') or {}).get('custom_config') or '')
-        except (yaml.YAMLError, RecursionError):
-            document = None
-        if not is_full_tun_document(document):
+        if not base_is_full_tun(config):
             result['issues'].append('tun_missing')
         if _gateway_enabled(config):
             result['issues'].append('gateway_enabled')
@@ -188,7 +201,8 @@ def _state(config, context):
     if state == 'invalid':
         result.update(mode='invalid', source='marker')
         return result
-    if not _gateway_enabled(config):
+    if not _gateway_enabled(config) or base_is_full_tun(config):
+        # With its own full TUN, turning the gateway off keeps the takeover.
         return result
     if context.get('session_goal') == 'router':
         result.update(mode='legacy', source='setup')
@@ -204,8 +218,9 @@ def mode_from_context(config, context):
     return _state(config, context)['mode']
 
 
-def router_split_state(repository, profile_id, config=None):
-    context = legacy_context(repository, profile_id)
+def router_split_state(repository, profile_id, config=None, context=None):
     if config is None:
         config = repository.get_profile(profile_id)
+    if context is None:
+        context = legacy_context(repository, profile_id)
     return _state(config, context)

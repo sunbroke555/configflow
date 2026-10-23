@@ -213,6 +213,48 @@ def test_latest_session_of_the_profile_decides(repository):
     assert mode_from_context(config(), context) == 'full_tun'
 
 
+def test_abandoned_sessions_no_longer_decide(repository):
+    """An abandoned wizard is not the profile's purpose, as on the Setup page."""
+    record = session(repository, 'router', index=3)
+    setup_flow.write(repository, {**record, 'abandoned': True})
+    context = legacy_context(repository, 'home')
+    assert context['session_goal'] is None and context['session_id'] is None
+    assert router_split_state(repository, 'home', gateway_profile())['mode'] is None
+    # An abandoned gateway session no longer hides the topology either.
+    gateway = session(repository, 'gateway', index=4)
+    setup_flow.write(repository, {**gateway, 'abandoned': True})
+    assert router_split_state(repository, 'home', gateway_profile(['mihomo-home']))['mode'] == 'legacy'
+
+
+def test_base_yaml_with_its_own_full_tun_is_not_a_legacy_takeover(repository):
+    """Turning the gateway off keeps the base YAML's full TUN, so nothing ends."""
+    profile = gateway_profile(['mihomo-home'])
+    profile['mihomo']['custom_config'] = full_tun_base_yaml('mixed-port: 7890\n')
+    assert router_split_state(repository, 'home', profile)['mode'] is None
+    session(repository, 'router', index=5)
+    assert router_split_state(repository, 'home', profile)['mode'] is None
+    # A TUN restricted to route addresses is not the full TUN.
+    profile['mihomo']['custom_config'] = 'tun: {enable: true, auto-route: true, auto-redirect: true, dns-hijack: [any:53], route-address: [198.18.0.0/16]}\n'
+    assert router_split_state(repository, 'home', profile)['mode'] == 'legacy'
+
+
+def test_session_reads_never_wait_for_a_wizard_step(repository):
+    """A step holding its session lock (a slow Agent check) must not block the editors."""
+    import threading
+    record = session(repository, 'router', index=6)
+    # Not session records: skipped instead of failing every profile's editor.
+    root = repository.data_dir / 'setup-sessions'
+    (root / 'notes.json').write_text('{}', encoding='utf-8')
+    (root / ('f' * 32 + '.json')).write_text('[]', encoding='utf-8')
+    done = threading.Event()
+    with setup_flow.locked(repository, record['id']):
+        worker = threading.Thread(target=lambda: (legacy_context(repository, 'home'), done.set()))
+        worker.start()
+        assert done.wait(5), 'legacy_context waited for the session lock'
+        worker.join()
+    assert legacy_context(repository, 'home')['session_id'] == record['id']
+
+
 def test_stored_profile_is_read_when_no_config_is_given(repository):
     repository.save_profile('home', {'mihomo': config()['mihomo']})
     assert router_split_state(repository, 'home')['mode'] == 'full_tun'

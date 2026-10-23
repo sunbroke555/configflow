@@ -34,7 +34,15 @@ def _respond(action):
 
 def _described(repository, session):
     from backend.common.setup_completion import profile_summary
-    return {**flow.public(session), 'default_profile': profile_summary(repository, session)}
+    result = {**flow.public(session), 'default_profile': profile_summary(repository, session)}
+    if session.get('goal') == 'router' and session.get('prepared') and 'legacy_takeover' not in session:
+        # Prepared before this server recorded the takeover; decide as prepare does.
+        from backend.common.linux_gateway import LinuxGatewayError
+        try:
+            result['legacy_takeover'] = flow.legacy_takeover(repository.get_profile(session['profile_id']))
+        except LinuxGatewayError:
+            pass  # A malformed gateway setting is reported where it is edited.
+    return result
 
 
 @settings_bp.route('/setup', methods=['GET', 'POST'])

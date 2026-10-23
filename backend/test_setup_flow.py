@@ -949,6 +949,23 @@ def _make_legacy(repository, profile_id):
     adopt_owned_write(repository, profile_id, before, repository.get_profile(profile_id))
 
 
+def test_router_session_prepared_before_the_takeover_field_reports_legacy(setup_api):
+    """Sessions prepared by an earlier server have no legacy_takeover; derive it like prepare."""
+    from backend.common import setup_flow
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    client.post(f'/api/setup/{SESSION}/prepare', json={})
+    stored = setup_flow.read(repository, SESSION)
+    stored.pop('legacy_takeover')
+    setup_flow.write(repository, stored)
+    assert client.get(f'/api/setup/{SESSION}').json['legacy_takeover'] is False
+    _make_legacy(repository, session['profile_id'])
+    assert client.get(f'/api/setup/{SESSION}').json['legacy_takeover'] is True
+    assert 'legacy_takeover' not in setup_flow.read(repository, SESSION)
+
+
 def test_legacy_router_setup_keeps_the_gateway_when_prepared_again(setup_api):
     client, repository = setup_api
     session = start(client)

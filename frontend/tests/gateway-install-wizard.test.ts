@@ -821,6 +821,15 @@ describe('router split with full TUN', () => {
     expect(button(wrapper, '继续接入主路由')).toBeUndefined()
   })
 
+  it('shows an unreadable gateway record instead of reporting the router step ready', async () => {
+    // The setup check refuses managed.error too; the step must not offer to continue.
+    const wrapper = await renderPublished(ready({ managed: { active: false, error: '网关状态文件无法读取' } }), true, 'full_tun', { AgentStatusRow: false })
+    expect(row(wrapper, '旧网关记录')).toMatchObject({ status: '无法确认', tone: 'warning' })
+    expect(wrapper.text()).toContain('网关状态文件无法读取')
+    expect(wrapper.text()).not.toContain('转发与 TUN 正常')
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+  })
+
   it('asks for an Agent update when the status has no forwarding or TUN fields', async () => {
     const wrapper = await renderPublished({ success: true, supported: true, enabled_in_config: false, managed: { active: false } })
     expect(row(wrapper, 'IPv4 转发')?.status).toBe('需要 Agent 1.8.40-go')

@@ -356,3 +356,53 @@ def test_ordinary_gateway_reports_no_router_split(gateway_app):
     app, repository = gateway_app
     state = app.test_client().get(PATH).json
     assert state['router_split'] == {'mode': None, 'source': None, 'issues': [], 'route_rule_set_ids': []}
+
+
+def test_legacy_restore_to_a_base_yaml_with_its_own_full_tun_is_allowed(gateway_app):
+    """Ordinary AIO with a full TUN base YAML trying the gateway: going back keeps the TUN."""
+    from backend.common.router_split import full_tun_base_yaml
+    app, repository = gateway_app
+    client = app.test_client()
+    make_mode(repository, 'legacy_topology')
+    changed = {'enabled': True, 'rule_set_ids': []}
+    assert save(client, preview(client, repository, changed), changed).status_code == 200
+    def snapshot_full_tun(config):
+        snapshot = config['mihomo'][RESTORE_KEY]['mihomo']
+        snapshot.update(custom_config=full_tun_base_yaml(snapshot.get('custom_config') or ''),
+                        linux_gateway={'enabled': False, 'rule_set_ids': []})
+    repository.update_profile_transaction('home', snapshot_full_tun)
+    review = preview(client, repository, restore=True)
+    assert save(client, review, restore=True).status_code == 200
+    assert repository.get_profile('home')['mihomo']['linux_gateway']['enabled'] is False
+
+
+def test_editor_reads_setup_sessions_only_for_a_possible_legacy_split(gateway_app, monkeypatch):
+    """Unrelated profiles must not wait for (or fail on) the setup session store."""
+    app, repository = gateway_app
+    client = app.test_client()
+    def forbidden(*_args):
+        raise AssertionError('setup sessions read')
+    repository.update_profile_transaction('home', lambda c: c['mihomo'].update(linux_gateway={'enabled': False, 'rule_set_ids': []}))
+    monkeypatch.setattr('backend.routes.linux_gateway.legacy_context', forbidden)
+    monkeypatch.setattr('backend.common.router_split.legacy_context', forbidden)
+    assert client.get(PATH).json['router_split']['mode'] is None
+    assert save(client, preview(client, repository)).status_code == 200
+    make_mode(repository, 'full_tun')
+    assert client.get(PATH).json['router_split']['mode'] == 'full_tun'
+    assert save(client, preview(client, repository)).status_code == 200
+
+
+def test_gateway_enabled_meanwhile_without_a_context_asks_for_a_refresh(gateway_app, monkeypatch):
+    app, repository = gateway_app
+    client = app.test_client()
+    repository.update_profile_transaction('home', lambda c: c['mihomo'].update(linux_gateway={'enabled': False, 'rule_set_ids': []}))
+    original_update = repository.update_profile_transaction
+    def racing(profile_id, updater, **kwargs):
+        monkeypatch.setattr(repository, 'update_profile_transaction', original_update)
+        original_update('home', lambda c: c['mihomo'].update(linux_gateway={'enabled': True, 'rule_set_ids': []}))
+        return original_update(profile_id, updater, **kwargs)
+    monkeypatch.setattr(repository, 'update_profile_transaction', racing)
+    # The unguarded request shape skips the revision check that would catch this first.
+    response = client.post(PATH, json=SETTINGS)
+    assert response.status_code == 400 and '请刷新后重试' in response.json['message']
+    assert repository.get_profile('home')['mihomo']['linux_gateway']['enabled'] is True

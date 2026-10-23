@@ -744,6 +744,17 @@ def test_onboarding_takeover_branches(onboarding_app):
         onboarding_takeover(repository, 'home', invalid)
 
 
+def test_abandoned_router_session_does_not_force_a_full_tun(onboarding_app):
+    """Kept only because Agents or routers were added; the user may use a selective gateway now."""
+    from backend.common import setup_flow
+    from backend.common.gateway_onboarding import onboarding_takeover
+    client, repository = onboarding_app
+    _session(repository, 'router')
+    setup_flow.write(repository, {**setup_flow.read(repository, 'b' * 32), 'abandoned': True})
+    assert onboarding_takeover(repository, 'home', repository.get_profile('home')) == 'selective'
+    assert client.get('/api/profiles/home/gateway-onboarding').get_json()['takeover'] == 'selective'
+
+
 def test_full_tun_save_writes_marker_and_tun(onboarding_app):
     from backend.common.router_split import is_full_tun_document
     client, repository = onboarding_app
