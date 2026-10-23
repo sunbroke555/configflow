@@ -4,10 +4,12 @@ import (
 	"agent/clioutput"
 	"agent/netfilter"
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func installerProbe(fixture *systemFixture, owner string) systemProbe {
@@ -138,9 +140,11 @@ func mihomoWithTUN(t *testing.T, body string) Config {
 	return Config{ServiceType: "mihomo", ConfigPath: path, ServiceManager: "systemd", ServiceUnit: "mihomo"}
 }
 
+const fullTUN = "tun:\n  enable: true\n  auto-route: true\n  auto-redirect: true\n"
+
 var mayDrop = netfilter.Result{Protocol: 1, State: netfilter.StateMayDrop, Device: "Meta", AutoRedirect: true,
 	Hint:     "这台 Linux 的防火墙会拦截转发到 Mihomo TUN（Meta）的流量：TCP 仍可用，UDP（如 QUIC、语音通话、游戏）和 ping 会失败。ConfigFlow 不会改动防火墙，需要时在这台 Linux 上执行下面的命令放行。",
-	Remedies: []netfilter.Remedy{{Source: "docker", Commands: []string{"iptables -I DOCKER-USER -o Meta -j ACCEPT", "iptables -I DOCKER-USER -i Meta -j ACCEPT"}, PersistNote: "这两条规则重启后会丢失。"}}}
+	Remedies: []netfilter.Remedy{{Source: "docker", Label: "Docker", Commands: []string{"iptables -I DOCKER-USER -o Meta -j ACCEPT", "iptables -I DOCKER-USER -i Meta -j ACCEPT"}, PersistNote: "这两条规则重启后会丢失。"}}}
 
 func TestInstallerForwardFilterWarnsWithCommandsAndNeverFails(t *testing.T) {
 	for _, tc := range []struct {
@@ -150,7 +154,7 @@ func TestInstallerForwardFilterWarnsWithCommandsAndNeverFails(t *testing.T) {
 		auto   bool
 	}{
 		{"tun disabled uses full TUN default", "tun:\n  enable: false\n", "Meta", true},
-		{"configured device", "tun:\n  enable: true\n  device: cf0\n  auto-redirect: false\n", "cf0", false},
+		{"configured device", "tun:\n  enable: true\n  auto-route: true\n  device: cf0\n  auto-redirect: false\n", "cf0", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := healthySystemFixture()
@@ -162,7 +166,8 @@ func TestInstallerForwardFilterWarnsWithCommandsAndNeverFails(t *testing.T) {
 			if target.Device != tc.device || target.AutoRedirect != tc.auto {
 				t.Fatalf("target: %+v", target)
 			}
-			if check.Level != "warn" || len(check.Commands) != 2 || !strings.Contains(check.Fix, "以 ConfigFlow 页面显示的命令为准") || !strings.HasSuffix(check.Fix, "这两条规则重启后会丢失。") || strings.Contains(check.Message, "下面的命令放行") {
+			if check.Level != "warn" || len(check.Groups) != 1 || len(check.Groups[0].Commands) != 2 || check.Groups[0].Label != "Docker" || check.Groups[0].Note != "这两条规则重启后会丢失。" ||
+				!strings.Contains(check.Fix, "以 ConfigFlow 页面显示的命令为准") || strings.Contains(check.Fix, "重启后会丢失") || strings.Contains(check.Message, "下面的命令放行") {
 				t.Fatalf("check: %+v", check)
 			}
 			if report.HasErrors() {
@@ -176,7 +181,7 @@ func TestInstallerForwardFilterWarnsWithCommandsAndNeverFails(t *testing.T) {
 		probe.forwardFilter = func(netfilter.Target) netfilter.Result {
 			return netfilter.Result{State: state, Reason: "timeout"}
 		}
-		report := Report(systemChecksWithProbe([]Config{fixtureMihomo(t, true)}, probe))
+		report := Report(systemChecksWithProbe([]Config{mihomoWithTUN(t, fullTUN)}, probe))
 		check := namedSystemCheck(t, report, "转发过滤")
 		want := map[string]string{netfilter.StateUnknown: "info", netfilter.StateOK: "pass"}[state]
 		if check.Level != want || report.HasErrors() || compactPass(check) != "" {
@@ -197,13 +202,13 @@ func TestCommandsArePrintedUnwrappedAndInfoIsLogOnly(t *testing.T) {
 	long := "nft 'insert rule inet filter forward oifname \"Meta\" accept'"
 	report := Report{
 		{Name: installerForwardingName, Level: "pass", Message: "当前 net.ipv4.ip_forward=0，安装器将开启并持久化（/etc/sysctl.d/99-configflow-aio-forward.conf）；Mihomo Agent 每次启动前会再次检查。"},
-		{Name: "转发过滤", Level: "warn", Message: "防火墙会拦截。", Fix: "执行下面的命令。", Commands: []string{long, "nft\x1b[2J x"}},
+		{Name: "转发过滤", Level: "warn", Message: "防火墙会拦截。", Fix: "执行下面的命令。", Groups: []CommandGroup{{Label: "nftables inet filter forward", Commands: []string{long, "nft\x1b[2J x"}, Note: "重启后会丢失。"}}},
 		{Name: "转发过滤检查", Level: "info", Message: "未能确认转发过滤（timeout），不影响安装。"},
 	}
 	var terminal, details bytes.Buffer
 	report.PrintWithOptions(&terminal, clioutput.Options{Details: &details, Width: 40}, false)
 	text := terminal.String()
-	if !strings.Contains(text, "    命令：\n      "+long+"\n") || strings.Contains(text, "\x1b") {
+	if !strings.Contains(text, "    在这台 Linux 上执行（nftables inet filter forward）：\n      "+long+"\n") || !strings.Contains(text, "      重启后会丢失。\n") || strings.Contains(text, "\x1b") {
 		t.Fatalf("commands wrapped or unescaped: %q", text)
 	}
 	if !strings.Contains(text, "1 项通过，1 项提醒") || strings.Contains(text, "未能确认") {
@@ -213,9 +218,73 @@ func TestCommandsArePrintedUnwrappedAndInfoIsLogOnly(t *testing.T) {
 		t.Fatalf("missing compact forwarding row: %s", text)
 	}
 	log := details.String()
-	for _, want := range []string{"[通过] IPv4 转发（安装器管理）：当前 net.ipv4.ip_forward=0，安装器将开启并持久化", "[提醒] 转发过滤：防火墙会拦截。\n  处理方法：执行下面的命令。\n  命令：" + long + "\n", "[信息] 转发过滤检查：未能确认转发过滤（timeout），不影响安装。", "环境检查完成（1 项提醒）"} {
+	for _, want := range []string{"[通过] IPv4 转发（安装器管理）：当前 net.ipv4.ip_forward=0，安装器将开启并持久化", "[提醒] 转发过滤：防火墙会拦截。\n  处理方法：执行下面的命令。\n  在这台 Linux 上执行（nftables inet filter forward）：\n  命令：" + long + "\n", "[信息] 转发过滤检查：未能确认转发过滤（timeout），不影响安装。", "环境检查完成（1 项提醒）"} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("log missing %q:\n%s", want, log)
 		}
+	}
+}
+
+func TestInstallerForwardFilterFollowsTheFullTUNScope(t *testing.T) {
+	for _, tc := range []struct{ name, config string }{
+		{"selective gateway marker", "tun:\n  enable: true\n  auto-route: true\n  route-address-set: [cf]\nx-configflow-linux-gateway:\n  enabled: true\n"},
+		{"disabled gateway marker", "tun:\n  enable: false\nx-configflow-linux-gateway:\n  enabled: false\n"},
+		{"route-address-set", "tun:\n  enable: true\n  auto-route: true\n  route-address-set: [cf]\n"},
+		{"route-address", "tun:\n  enable: true\n  auto-route: true\n  route-address: [198.18.0.0/15]\n"},
+		{"auto-route off", "tun:\n  enable: true\n  auto-route: false\n"},
+		{"auto-route unset", "tun:\n  enable: true\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := installerProbe(healthySystemFixture(), "")
+			probe.forwardFilter = func(netfilter.Target) netfilter.Result { t.Fatal("inspected"); return mayDrop }
+			for _, check := range systemChecksWithProbe([]Config{mihomoWithTUN(t, tc.config)}, probe) {
+				if check.Name == "转发过滤" {
+					t.Fatalf("not full TUN: %+v", check)
+				}
+			}
+		})
+	}
+}
+
+func TestInstallerForwardFilterKeepsEachSourceWithItsNote(t *testing.T) {
+	probe := installerProbe(healthySystemFixture(), "")
+	result := mayDrop
+	result.Remedies = []netfilter.Remedy{
+		{Source: "docker", Label: "Docker", Commands: []string{"iptables -I DOCKER-USER -o Meta -j ACCEPT", "iptables -I DOCKER-USER -i Meta -j ACCEPT"}, PersistNote: "这两条规则重启后会丢失。"},
+		{Source: "firewalld", Label: "firewalld", Commands: []string{"firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload"}, PersistNote: "已用 --permanent 保存，重启后仍有效。"},
+	}
+	probe.forwardFilter = func(netfilter.Target) netfilter.Result { return result }
+	report := Report(systemChecksWithProbe([]Config{mihomoWithTUN(t, fullTUN)}, probe))
+	check := namedSystemCheck(t, report, "转发过滤")
+	if len(check.Groups) != 2 || check.Groups[1].Label != "firewalld" || len(check.Groups[1].Commands) != 1 || strings.Contains(check.Fix, "重启后") {
+		t.Fatalf("groups: %+v", check)
+	}
+	var terminal, details bytes.Buffer
+	Report{check}.PrintWithOptions(&terminal, clioutput.Options{Details: &details, Width: 100}, false)
+	want := "    在这台 Linux 上执行（Docker）：\n      iptables -I DOCKER-USER -o Meta -j ACCEPT\n      iptables -I DOCKER-USER -i Meta -j ACCEPT\n      这两条规则重启后会丢失。\n" +
+		"    在这台 Linux 上执行（firewalld）：\n      firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload\n      已用 --permanent 保存，重启后仍有效。\n"
+	if !strings.Contains(terminal.String(), want) {
+		t.Fatalf("terminal:\n%s", terminal.String())
+	}
+	log := "  在这台 Linux 上执行（Docker）：\n  命令：iptables -I DOCKER-USER -o Meta -j ACCEPT\n  命令：iptables -I DOCKER-USER -i Meta -j ACCEPT\n  说明：这两条规则重启后会丢失。\n" +
+		"  在这台 Linux 上执行（firewalld）：\n  命令：firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload\n  说明：已用 --permanent 保存，重启后仍有效。\n"
+	if !strings.Contains(details.String(), log) {
+		t.Fatalf("log:\n%s", details.String())
+	}
+}
+
+func TestInstallerForwardFilterIsBoundedEvenIfInspectionHangs(t *testing.T) {
+	old := netfilter.TotalBudget
+	netfilter.TotalBudget = 100 * time.Millisecond
+	t.Cleanup(func() { netfilter.TotalBudget = old })
+	release := make(chan struct{})
+	defer close(release)
+	start := time.Now()
+	result := boundedForwardFilterWith(netfilter.Target{Device: "Meta", AutoRedirect: true}, func(context.Context) netfilter.Result {
+		<-release // ignores its context, like a command whose child keeps the pipe
+		return mayDrop
+	})
+	if result.State != netfilter.StateUnknown || result.Reason != "timeout" || time.Since(start) > 2*time.Second {
+		t.Fatalf("%+v after %s", result, time.Since(start))
 	}
 }

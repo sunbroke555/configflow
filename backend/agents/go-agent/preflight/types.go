@@ -38,8 +38,22 @@ type Check struct {
 	Level   string // pass, warn, error, or info (logged only, never counted)
 	Message string
 	Fix     string
-	// Commands are exact, copy-pasteable lines; they are printed unwrapped.
-	Commands []string `json:",omitempty"`
+	// Groups hold exact, copy-pasteable commands per source; they are printed
+	// unwrapped, each with its own label and note.
+	Groups []CommandGroup `json:",omitempty"`
+}
+
+type CommandGroup struct {
+	Label    string
+	Commands []string
+	Note     string `json:",omitempty"`
+}
+
+func (group CommandGroup) heading() string {
+	if group.Label == "" {
+		return "在这台 Linux 上执行："
+	}
+	return "在这台 Linux 上执行（" + group.Label + "）："
 }
 
 type Report []Check
@@ -104,11 +118,14 @@ func (r Report) PrintWithOptions(out io.Writer, options clioutput.Options, prepa
 		if check.Fix != "" {
 			clioutput.Wrap(out, "    处理方法：", check.Fix, options.Width)
 		}
-		if len(check.Commands) > 0 {
+		for _, group := range check.Groups {
 			// Wrapping would break a command that is meant to be pasted.
-			fmt.Fprintln(out, "    命令：")
-			for _, command := range check.Commands {
+			fmt.Fprintln(out, "    "+clioutput.Printable(group.heading()))
+			for _, command := range group.Commands {
 				fmt.Fprintln(out, "      "+clioutput.Printable(command))
+			}
+			if group.Note != "" {
+				clioutput.Wrap(out, "      ", group.Note, options.Width)
 			}
 		}
 	}
@@ -203,8 +220,14 @@ func (r Report) printDetailed(out io.Writer, preparation, heading bool) {
 		if check.Fix != "" {
 			fmt.Fprintf(out, "  处理方法：%s\n", printable(check.Fix))
 		}
-		for _, command := range check.Commands {
-			fmt.Fprintf(out, "  命令：%s\n", printable(command))
+		for _, group := range check.Groups {
+			fmt.Fprintf(out, "  %s\n", printable(group.heading()))
+			for _, command := range group.Commands {
+				fmt.Fprintf(out, "  命令：%s\n", printable(command))
+			}
+			if group.Note != "" {
+				fmt.Fprintf(out, "  说明：%s\n", printable(group.Note))
+			}
 		}
 	}
 	if preparation && failures > 0 {

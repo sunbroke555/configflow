@@ -17,11 +17,18 @@ type nftRuleset struct {
 	tables map[string]bool
 	chains map[string]*nftChain
 	order  []*nftChain
+	sets   map[string][]interface{} // named sets and maps -> elements
 }
 
 func nftKey(parts ...string) string { return strings.Join(parts, "|") }
 
 func (r *nftRuleset) hasTable(family, name string) bool { return r.tables[nftKey(family, name)] }
+
+// set returns the elements of a named set or map of the chain's table.
+func (r *nftRuleset) set(chain *nftChain, name string) ([]interface{}, bool) {
+	elements, ok := r.sets[nftKey(chain.family, chain.table, name)]
+	return elements, ok
+}
 
 func parseNFT(output string) (*nftRuleset, error) {
 	var doc struct {
@@ -33,7 +40,7 @@ func parseNFT(output string) (*nftRuleset, error) {
 	if doc.Nftables == nil {
 		return nil, fmt.Errorf("nft ruleset 返回格式无效")
 	}
-	ruleset := &nftRuleset{tables: map[string]bool{}, chains: map[string]*nftChain{}}
+	ruleset := &nftRuleset{tables: map[string]bool{}, chains: map[string]*nftChain{}, sets: map[string][]interface{}{}}
 	type ruleObject struct {
 		Family string        `json:"family"`
 		Table  string        `json:"table"`
@@ -68,6 +75,25 @@ func parseNFT(output string) (*nftRuleset, error) {
 			ruleset.chains[nftKey(chain.Family, chain.Table, chain.Name)] = value
 			ruleset.order = append(ruleset.order, value)
 		}
+		for _, kind := range []string{"set", "map"} {
+			raw, ok := object[kind]
+			if !ok {
+				continue
+			}
+			var set struct {
+				Family string        `json:"family"`
+				Table  string        `json:"table"`
+				Name   string        `json:"name"`
+				Elem   []interface{} `json:"elem"`
+			}
+			if err := json.Unmarshal(raw, &set); err != nil {
+				return nil, err
+			}
+			if set.Elem == nil {
+				set.Elem = []interface{}{}
+			}
+			ruleset.sets[nftKey(set.Family, set.Table, set.Name)] = set.Elem
+		}
 		if raw, ok := object["rule"]; ok {
 			var rule ruleObject
 			if err := json.Unmarshal(raw, &rule); err != nil {
@@ -100,7 +126,7 @@ type nftFinding struct {
 
 // evaluateNFT evaluates every IPv4 forward base chain independently: accept
 // only ends its own chain, while a drop in any of them drops the packet.
-func (in *inspection) evaluateNFT(ruleset *nftRuleset, iptablesNFTRead, firewalldRunning bool) {
+func (in *inspection) evaluateNFT(ruleset *nftRuleset, iptablesNFTRead, firewalldOwned bool) {
 	for _, chain := range ruleset.order {
 		if !chain.base || chain.hook != "forward" || (chain.family != "ip" && chain.family != "inet") {
 			continue
@@ -108,8 +134,8 @@ func (in *inspection) evaluateNFT(ruleset *nftRuleset, iptablesNFTRead, firewall
 		switch {
 		case iptablesNFTRead && chain.family == "ip" && chain.table == "filter":
 			continue // already evaluated through iptables-save
-		case firewalldRunning && chain.table == "firewalld":
-			continue // represented by the firewalld zone check
+		case firewalldOwned && chain.table == "firewalld":
+			continue // represented by the firewalld zone check, or unknown
 		case chain.family == "ip" && chain.table == "configflow_gateway":
 			continue // selective gateway resources are judged by the gateway itself
 		}
@@ -180,7 +206,7 @@ func (e *nftEvaluation) rule(chain *nftChain, expressions []interface{}, f flow,
 		for name, body := range expression {
 			switch name {
 			case "match":
-				value, invalid := nftMatch(body, f)
+				value, invalid := nftMatch(body, f, func(name string) ([]interface{}, bool) { return e.ruleset.set(chain, name) })
 				m = and(m, value)
 				invalidOnly = invalidOnly || invalid
 			case "counter", "log", "mangle", "notrack", "comment":
@@ -261,48 +287,74 @@ func (e *nftEvaluation) verdict(chain *nftChain, kind, target string, m tri, inv
 	return fallThrough
 }
 
-// vmap keyed by an interface name is resolved per flow; any other verdict map
-// is only a problem when it can drop.
+// vmap resolves elements keyed by an interface name or a conntrack state per
+// flow; any other key may match each element. Jump and goto targets are
+// followed like those of an ordinary rule.
 func (e *nftEvaluation) vmap(chain *nftChain, body interface{}, m tri, invalidOnly bool, f flow, depth int) verdict {
 	spec, _ := body.(map[string]interface{})
-	key := nftMetaKey(spec["key"])
-	data, _ := spec["data"].(map[string]interface{})
-	elements, _ := data["set"].([]interface{})
-	var s side
-	wildcard := byte('*')
-	switch key {
-	case "iifname", "iif":
-		s = f.in
-	case "oifname", "oif":
-		s = f.out
-	default:
-		for _, raw := range elements {
-			pair, _ := raw.([]interface{})
-			if len(pair) == 2 {
-				if kind, _ := nftVerdictOf(pair[1]); kind == "drop" {
-					e.found = append(e.found, nftFinding{chain: chain.name})
-				}
-			}
-		}
+	elements, ok := e.elements(chain, spec["data"])
+	if !ok {
+		e.found = append(e.found, nftFinding{chain: chain.name, unknown: true})
 		return fallThrough
 	}
+	key := nftMetaKey(spec["key"])
+	ctState := nftCTKey(spec["key"]) == "state"
 	for _, raw := range elements {
 		pair, _ := raw.([]interface{})
 		if len(pair) != 2 {
 			e.found = append(e.found, nftFinding{chain: chain.name, unknown: true})
 			continue
 		}
-		name, ok := pair[0].(string)
-		element := maybe
-		if ok {
-			element = matchInterface(name, s, wildcard)
+		element, elementInvalid := maybe, false
+		value := nftElementValue(pair[0])
+		switch {
+		case key == "iifname" || key == "iif" || key == "oifname" || key == "oif":
+			s := f.out
+			if key == "iifname" || key == "iif" {
+				s = f.in
+			}
+			if name, ok := value.(string); ok && !strings.HasPrefix(name, "@") {
+				element = matchInterface(name, s, '*')
+			}
+		case ctState:
+			if values, ok := nftStrings(value); ok {
+				if len(values) == 1 && values[0] == "invalid" {
+					elementInvalid = true
+				} else {
+					element = stateMatch(values, false, f)
+				}
+			}
 		}
 		kind, target := nftVerdictOf(pair[1])
-		if result := e.verdict(chain, kind, target, and(m, element), invalidOnly, f, depth); result != fallThrough {
+		if result := e.verdict(chain, kind, target, and(m, element), invalidOnly || elementInvalid, f, depth); result != fallThrough {
 			return result
 		}
 	}
 	return fallThrough
+}
+
+// elements reads an anonymous verdict map or a named map reference (@name).
+func (e *nftEvaluation) elements(chain *nftChain, value interface{}) ([]interface{}, bool) {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		elements, ok := v["set"].([]interface{})
+		return elements, ok
+	case string:
+		if strings.HasPrefix(v, "@") {
+			return e.ruleset.set(chain, v[1:])
+		}
+	}
+	return nil, false
+}
+
+// nftElementValue unwraps an element carrying options ({"elem": {"val": ...}}).
+func nftElementValue(value interface{}) interface{} {
+	if wrapped, ok := value.(map[string]interface{}); ok {
+		if elem, ok := wrapped["elem"].(map[string]interface{}); ok {
+			return elem["val"]
+		}
+	}
+	return value
 }
 
 func nftVerdictOf(value interface{}) (string, string) {
@@ -329,6 +381,13 @@ func nftMetaKey(value interface{}) string {
 	return key
 }
 
+func nftCTKey(value interface{}) string {
+	expression, _ := value.(map[string]interface{})
+	ct, _ := expression["ct"].(map[string]interface{})
+	key, _ := ct["key"].(string)
+	return key
+}
+
 func nftStrings(value interface{}) ([]string, bool) {
 	switch v := value.(type) {
 	case string:
@@ -336,7 +395,7 @@ func nftStrings(value interface{}) ([]string, bool) {
 	case []interface{}:
 		result := []string{}
 		for _, item := range v {
-			text, ok := item.(string)
+			text, ok := nftElementValue(item).(string)
 			if !ok {
 				return nil, false
 			}
@@ -351,9 +410,31 @@ func nftStrings(value interface{}) ([]string, bool) {
 	return nil, false
 }
 
+// nftResolve reads the right-hand values of a match. A named set (@name) is
+// read from the ruleset; one that cannot be resolved to names is not usable.
+func nftResolve(value interface{}, lookup func(string) ([]interface{}, bool)) ([]string, bool) {
+	if name, ok := value.(string); ok && strings.HasPrefix(name, "@") {
+		elements, found := lookup(name[1:])
+		if !found {
+			return nil, false
+		}
+		return nftStrings(elements)
+	}
+	values, ok := nftStrings(value)
+	if !ok {
+		return nil, false
+	}
+	for _, item := range values {
+		if strings.HasPrefix(item, "@") {
+			return nil, false
+		}
+	}
+	return values, true
+}
+
 // nftMatch evaluates interface and conntrack-state matches; any other match
 // is conditional. The second result marks a match on ct state invalid only.
-func nftMatch(body interface{}, f flow) (tri, bool) {
+func nftMatch(body interface{}, f flow, lookup func(string) ([]interface{}, bool)) (tri, bool) {
 	spec, _ := body.(map[string]interface{})
 	op, _ := spec["op"].(string)
 	negated := op == "!="
@@ -362,7 +443,7 @@ func nftMatch(body interface{}, f flow) (tri, bool) {
 	}
 	left, _ := spec["left"].(map[string]interface{})
 	if key := nftMetaKey(left); key != "" {
-		values, ok := nftStrings(spec["right"])
+		values, ok := nftResolve(spec["right"], lookup)
 		if !ok {
 			return maybe, false
 		}
@@ -375,7 +456,7 @@ func nftMatch(body interface{}, f flow) (tri, bool) {
 		return maybe, false
 	}
 	if ct, ok := left["ct"].(map[string]interface{}); ok && ct["key"] == "state" {
-		values, ok := nftStrings(spec["right"])
+		values, ok := nftResolve(spec["right"], lookup)
 		if !ok {
 			return maybe, false
 		}

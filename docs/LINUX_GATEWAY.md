@@ -189,7 +189,7 @@ Agent `1.8.42-go` 起会只读检查 iptables（nft / legacy）、nftables 的 f
 | firewalld | `firewall-cmd --permanent --zone=trusted --add-interface=Meta && firewall-cmd --reload`（设备已绑定其他区域时为 `--change-interface=Meta`） | `--permanent` 已保存 |
 | UFW | `ufw route allow in on Meta`<br>`ufw route allow out on Meta` | UFW 自动保存 |
 
-执行后回到页面刷新状态（检查结果最多缓存 30 秒），再在客户端 ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。
+执行后等几秒再回到页面刷新状态（发现拦截时检查结果只缓存 5 秒，其他结果最多 30 秒），再在客户端 ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。
 
 已知限制：只检查 IPv4，只看顶层 `tun`（`listeners` 里的 TUN 不检查）；带源 / 目的地址等其他条件的拦截规则按“可能拦截”保守提醒；使用 iptables 后端的旧版 firewalld（如 CentOS 7）放行后仍可能显示提醒；修改 `tun.device` 后需要按新命令重新放行。
 

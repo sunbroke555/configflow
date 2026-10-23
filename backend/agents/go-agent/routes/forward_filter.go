@@ -20,7 +20,19 @@ var forwardFilterInspect = func(ctx context.Context, target netfilter.Target) ne
 
 var forwardFilterNow = time.Now
 
-const forwardFilterTTL = 30 * time.Second
+// A warning is cached only briefly: after running the suggested commands the
+// operator refreshes right away and must see the new result.
+const (
+	forwardFilterTTL        = 30 * time.Second
+	forwardFilterWarningTTL = 5 * time.Second
+)
+
+func forwardFilterCacheTTL(result netfilter.Result) time.Duration {
+	if result.State == netfilter.StateMayDrop {
+		return forwardFilterWarningTTL
+	}
+	return forwardFilterTTL
+}
 
 var forwardFilterMu sync.Mutex
 
@@ -102,7 +114,7 @@ func forwardFilterStatus(cfg *Config) netfilter.Result {
 	defer forwardFilterMu.Unlock()
 	key := forwardFilterKey(cfg, target)
 	now := forwardFilterNow()
-	if forwardFilterCache.present && key != "" && forwardFilterCache.key == key && now.Sub(forwardFilterCache.at) < forwardFilterTTL && now.Sub(forwardFilterCache.at) >= 0 {
+	if forwardFilterCache.present && key != "" && forwardFilterCache.key == key && now.Sub(forwardFilterCache.at) < forwardFilterCacheTTL(forwardFilterCache.result) && now.Sub(forwardFilterCache.at) >= 0 {
 		result := forwardFilterCache.result
 		result.Cached = true
 		return result

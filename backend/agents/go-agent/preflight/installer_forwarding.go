@@ -93,8 +93,11 @@ func inspectInstallerForwardingConflict(probe systemProbe) (Check, bool) {
 const forwardFilterFix = "需要放行时在这台 Linux 上执行下面的命令；发布 Mihomo 配置后以 ConfigFlow 页面显示的命令为准（TUN 设备名可能不同）。"
 
 // installerForwardTarget uses the install configuration's TUN device when it
-// enables TUN, otherwise ConfigFlow's full-TUN default.
-func installerForwardTarget(configs []Config) netfilter.Target {
+// enables TUN, otherwise ConfigFlow's full-TUN default. It follows the scope of
+// the Agent status (routes/forward_filter.go): a selective Linux gateway
+// configuration (marker present, enabled or not), a route-restricted TUN and
+// an enabled TUN without auto-route are not full TUN and are not inspected.
+func installerForwardTarget(configs []Config) (netfilter.Target, bool) {
 	target := netfilter.Target{Device: "Meta", AutoRedirect: true}
 	for _, cfg := range configs {
 		if cfg.ServiceType != "mihomo" {
@@ -104,8 +107,19 @@ func installerForwardTarget(configs []Config) netfilter.Target {
 		if err != nil {
 			break
 		}
+		if _, marker := doc["x-configflow-linux-gateway"]; marker {
+			return netfilter.Target{}, false
+		}
 		tun, _ := doc["tun"].(map[string]interface{})
+		for _, key := range []string{"route-address", "route-address-set", "inet4-route-address"} {
+			if entries, ok := tun[key].([]interface{}); ok && len(entries) > 0 {
+				return netfilter.Target{}, false
+			}
+		}
 		if tun["enable"] == true {
+			if tun["auto-route"] != true {
+				return netfilter.Target{}, false
+			}
 			if device, ok := tun["device"].(string); ok && device != "" {
 				target.Device = device
 			}
@@ -113,29 +127,31 @@ func installerForwardTarget(configs []Config) netfilter.Target {
 		}
 		break
 	}
-	return target
+	return target, true
 }
 
 // inspectForwardFilter only ever warns; an unknown result is informational.
+// Each source keeps its own commands and persistence note.
 func inspectForwardFilter(probe systemProbe, configs []Config) (Check, bool) {
 	if probe.forwardFilter == nil {
 		return Check{}, false
 	}
-	result := probe.forwardFilter(installerForwardTarget(configs))
+	target, applicable := installerForwardTarget(configs)
+	if !applicable {
+		return Check{}, false
+	}
+	result := probe.forwardFilter(target)
 	check := Check{Name: "转发过滤"}
 	switch result.State {
 	case netfilter.StateMayDrop:
 		check.Level, check.Fix = "warn", forwardFilterFix
 		check.Message = strings.Replace(result.Hint, "，需要时在这台 Linux 上执行下面的命令放行。", "。", 1)
-		notes := map[string]bool{}
 		for _, remedy := range result.Remedies {
-			check.Commands = append(check.Commands, remedy.Commands...)
-			if remedy.PersistNote != "" && !notes[remedy.PersistNote] {
-				notes[remedy.PersistNote] = true
-				check.Fix += remedy.PersistNote
+			if len(remedy.Commands) > 0 {
+				check.Groups = append(check.Groups, CommandGroup{Label: remedy.Label, Commands: remedy.Commands, Note: remedy.PersistNote})
 			}
 		}
-		if len(check.Commands) == 0 {
+		if len(check.Groups) == 0 {
 			check.Fix = "请在这台 Linux 上手动放行进出 TUN 设备的转发流量；发布 Mihomo 配置后可在 ConfigFlow 页面查看检查结果。"
 		}
 	case netfilter.StateOK:

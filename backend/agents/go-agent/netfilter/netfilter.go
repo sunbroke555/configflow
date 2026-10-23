@@ -4,7 +4,8 @@
 // It never changes firewall state. Every command it runs only lists rules, and
 // it avoids listings with side effects: the legacy iptables filter table is
 // only read when the kernel already has it loaded, and nftables views are only
-// read when the nf_tables module is present. Any failure degrades to "unknown".
+// read when nf_tables is present (loaded module, built into the kernel, or in
+// use by Mihomo's auto-redirect). Any failure degrades to "unknown".
 package netfilter
 
 import (
@@ -95,7 +96,13 @@ func DefaultProbe() Probe {
 	return Probe{
 		LookPath: exec.LookPath,
 		Run: func(ctx context.Context, name string, args ...string) (string, error) {
-			out, err := exec.CommandContext(ctx, name, args...).Output()
+			cmd := exec.CommandContext(ctx, name, args...)
+			// ufw and firewall-cmd translate their output through LANG/LANGUAGE.
+			cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C", "LANGUAGE=C")
+			// A wrapper's child may keep the pipe open after the wrapper is
+			// killed; do not wait for it beyond the command budget.
+			cmd.WaitDelay = 250 * time.Millisecond
+			out, err := cmd.Output()
 			return string(out), err
 		},
 		ReadFile:     os.ReadFile,
@@ -169,7 +176,7 @@ func Inspect(ctx context.Context, probe Probe, target Target) Result {
 	in := &inspection{ctx: ctx, probe: probe, target: target}
 	in.lan = defaultRouteInterfaces(probe, target.Device)
 
-	nftLoaded := probe.Stat != nil && statOK(probe, "/sys/module/nf_tables")
+	nftLoaded, nftKnown := nfTablesPresent(in)
 	legacyLoaded := legacyFilterLoaded(in)
 
 	var nftDoc *nftRuleset
@@ -208,9 +215,13 @@ func Inspect(ctx context.Context, probe Probe, target Target) Result {
 		}
 	}
 
-	firewalldRunning := in.inspectFirewalld()
+	firewalldOwned := in.inspectFirewalld()
 	if nftDoc != nil {
-		in.evaluateNFT(nftDoc, iptablesNFTRead, firewalldRunning)
+		in.evaluateNFT(nftDoc, iptablesNFTRead, firewalldOwned)
+	}
+	if !nftKnown && in.hooks == 0 {
+		// Nothing was inspected and nf_tables may still be filtering.
+		in.fail("nft_state_unknown")
 	}
 	return in.result(now())
 }
@@ -236,6 +247,51 @@ func statOK(probe Probe, path string) bool {
 	_, err := probe.Stat(path)
 	return err == nil
 }
+
+// nfTablesPresent reports whether nf_tables is in the kernel, and whether that
+// answer is known. A built-in nf_tables has no /sys/module entry, so the
+// kernel's modules.builtin list is read too; auto-redirect itself uses it.
+func nfTablesPresent(in *inspection) (present, known bool) {
+	if in.probe.Stat != nil && statOK(in.probe, "/sys/module/nf_tables") {
+		return true, true
+	}
+	if in.target.AutoRedirect {
+		return true, true
+	}
+	if in.probe.ReadFile == nil {
+		return false, false
+	}
+	release, err := in.probe.ReadFile("/proc/sys/kernel/osrelease")
+	name := strings.TrimSpace(string(release))
+	if err != nil || name == "" || strings.ContainsAny(name, "/ \t\n") {
+		return false, false
+	}
+	data, err := in.probe.ReadFile("/lib/modules/" + name + "/modules.builtin")
+	if err != nil {
+		return false, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line == "nf_tables.ko" || strings.HasSuffix(line, "/nf_tables.ko") {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// exitCode is the command's exit status, or -1 when it did not exit normally.
+func exitCode(err error) int {
+	var coded interface{ ExitCode() int }
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
+	}
+	return -1
+}
+
+// firewall-cmd exit statuses (firewalld errors.py). Messages go to stderr.
+const (
+	firewalldNoZone     = 2
+	firewalldNotRunning = 252
+)
 
 // A legacy filter table appears in ip_tables_names only once loaded. Running
 // iptables-legacy-save before that would load it as a side effect.
@@ -299,32 +355,38 @@ func defaultRouteInterfaces(probe Probe, device string) []string {
 	return result
 }
 
+// inspectFirewalld reports whether nft's firewalld table is accounted for:
+// either judged here through the zone of the TUN device, or left out because
+// firewalld's state could not be read.
 func (in *inspection) inspectFirewalld() bool {
 	if !in.available("firewall-cmd") {
 		return false
 	}
 	out, err := in.run("firewall-cmd", "--state")
 	state := strings.TrimSpace(out)
-	if state != "running" {
-		if err != nil && state != "not running" {
-			in.failed(err)
-		}
-		return false
+	switch {
+	case err == nil && state == "running":
+	case exitCode(err) == firewalldNotRunning || (err == nil && state == "not running"):
+		return false // its leftover table is evaluated like any other
+	default:
+		in.commandFailed(err)
+		return true
 	}
 	in.hooks++
 	device := in.target.Device
 	zone := ""
 	if DevicePattern.MatchString(device) {
 		out, err := in.run("firewall-cmd", "--get-zone-of-interface="+device)
-		zone = strings.TrimSpace(out)
-		if zone == "no zone" || strings.ContainsAny(zone, " \t\n") {
-			zone = ""
-		}
-		if err == nil && zone == "trusted" {
+		value := strings.TrimSpace(out)
+		switch {
+		case err == nil && value == "trusted":
 			return true
-		}
-		if err != nil && zone == "" && in.ctx.Err() != nil {
-			in.failed(err)
+		case err == nil && value != "" && value != "no zone" && !strings.ContainsAny(value, " \t\n"):
+			zone = value
+		case exitCode(err) == firewalldNoZone || (err == nil && value == "no zone"):
+		default:
+			// A timeout or D-Bus error says nothing about the zone.
+			in.commandFailed(err)
 			return true
 		}
 	}
@@ -335,6 +397,14 @@ func (in *inspection) inspectFirewalld() bool {
 	in.findings = append(in.findings, finding{source: Source{Kind: "firewalld", Detail: clip("firewalld 正在运行，" + displayDevice(device) + " 不在 trusted 区域（当前：" + current + "）")}})
 	in.addRemedy(firewalldRemedy(device, zone))
 	return true
+}
+
+func (in *inspection) commandFailed(err error) {
+	if err != nil {
+		in.failed(err)
+		return
+	}
+	in.fail("inspect_failed")
 }
 
 func (in *inspection) addRemedy(remedy Remedy) {

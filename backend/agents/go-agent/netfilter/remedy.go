@@ -7,7 +7,7 @@ const (
 	firewalldNote       = "已用 --permanent 保存，重启后仍有效。"
 	ufwNote             = "UFW 会自动保存，重启后仍有效。"
 
-	verifyText = "执行后回到这里刷新状态；再在客户端 ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。"
+	verifyText = "执行后等几秒再回到这里刷新状态（发现拦截时结果只缓存 5 秒）；再在客户端 ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。"
 )
 
 // SourceLabel names a source in operator-facing text.

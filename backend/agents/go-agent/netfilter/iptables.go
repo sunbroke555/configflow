@@ -307,9 +307,19 @@ func (e *iptEvaluation) ufwActive() bool {
 	return e.in.checkUFW()
 }
 
+// checkUFW prefers ufw's own setting over `ufw status`, whose output is
+// translated (zh_CN: "状态： 激活"); the command runs with LC_ALL=C otherwise.
 func (in *inspection) checkUFW() bool {
 	if in.ufwActive {
 		return true
+	}
+	if in.probe.ReadFile != nil {
+		if data, err := in.probe.ReadFile("/etc/ufw/ufw.conf"); err == nil {
+			if enabled, ok := ufwEnabled(string(data)); ok {
+				in.ufwActive = enabled
+				return enabled
+			}
+		}
 	}
 	if !in.available("ufw") {
 		return false
@@ -317,6 +327,23 @@ func (in *inspection) checkUFW() bool {
 	out, err := in.run("ufw", "status")
 	in.ufwActive = err == nil && strings.Contains(out, "Status: active")
 	return in.ufwActive
+}
+
+// ufwEnabled reads ENABLED=yes|no from /etc/ufw/ufw.conf.
+func ufwEnabled(conf string) (bool, bool) {
+	for _, line := range strings.Split(conf, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ENABLED=") {
+			continue
+		}
+		switch strings.ToLower(strings.Trim(strings.TrimPrefix(line, "ENABLED="), `"' `)) {
+		case "yes":
+			return true, true
+		case "no":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 func (e *iptEvaluation) record(item iptFinding) {

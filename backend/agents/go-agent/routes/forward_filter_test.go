@@ -126,6 +126,29 @@ func TestForwardFilterCacheExpiresAndFollowsConfigChanges(t *testing.T) {
 	}
 }
 
+func TestForwardFilterWarningIsCachedOnlyBriefly(t *testing.T) {
+	// The operator runs the suggested commands and refreshes right away.
+	f := newForwardFilterFixture(t, fullTUNConfig)
+	forwardFilterStatus(f.cfg)
+	f.advance(4 * time.Second)
+	if result := forwardFilterStatus(f.cfg); !result.Cached || f.calls.Load() != 1 {
+		t.Fatalf("within 5s: %+v", result)
+	}
+	f.advance(2 * time.Second)
+	forwardFilterInspect = func(_ context.Context, target netfilter.Target) netfilter.Result {
+		f.calls.Add(1)
+		return netfilter.Result{Protocol: 1, State: netfilter.StateOK, Device: target.Device, Policy: "accept"}
+	}
+	if result := forwardFilterStatus(f.cfg); result.Cached || result.State != netfilter.StateOK || f.calls.Load() != 2 {
+		t.Fatalf("after the fix: %+v", result)
+	}
+	// A clean result keeps the longer cache.
+	f.advance(20 * time.Second)
+	if result := forwardFilterStatus(f.cfg); !result.Cached || f.calls.Load() != 2 {
+		t.Fatalf("ok cached: %+v", result)
+	}
+}
+
 func TestForwardFilterConcurrentCallsShareOneInspection(t *testing.T) {
 	f := newForwardFilterFixture(t, fullTUNConfig)
 	var wg sync.WaitGroup
