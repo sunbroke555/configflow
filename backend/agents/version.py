@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.41-go"
+LATEST_AGENT_VERSION = "1.8.42-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.42-go": {
+        "date": "2026-10-24",
+        "features": [
+            "完整 TUN 主机检查 FORWARD 过滤（iptables、nftables、Docker、firewalld、UFW）：可能拦截转发到 TUN 的 UDP 和 ping 时只提醒，并给出按实际 TUN 设备名生成的放行命令，不修改防火墙",
+            "安装器自己开启 IPv4 转发时，环境检查改为说明“安装器将开启并持久化”，不再提示手动修复；只在其他 sysctl 设置会改回 0 时提醒"
+        ]
+    },
     "1.8.41-go": {
         "date": "2026-10-23",
         "features": [
