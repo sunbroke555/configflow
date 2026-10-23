@@ -431,7 +431,7 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             <p class="m-0 text-foreground">关闭开关、恢复到网关关闭的快照或撤销转发，会同时去掉 TUN 并还原 IPv4 转发，主路由转来的连接会中断。</p>
           </div>
           <p v-if="tunMissing" role="alert" class="m-0 text-xs leading-relaxed" data-tun-missing><span class="font-medium text-warning-accent">基础 YAML 缺少完整 TUN，发布已暂停。</span>请在 Mihomo 基础 YAML 中恢复 tun 后再发布，否则主路由转来的连接会回环。</p>
-          <p v-if="tunFiltered" role="alert" class="m-0 text-xs leading-relaxed" data-tun-filtered><span class="font-medium text-warning-accent">基础 YAML 的 tun 过滤了主路由转来的连接。</span>tun 中的网卡或地址过滤（如 exclude-interface）会让这些连接不经过 Mihomo。请在 Mihomo 基础 YAML 中去掉这些过滤后再发布。</p>
+          <p v-if="tunFiltered" role="alert" class="m-0 text-xs leading-relaxed" data-tun-filtered><span class="font-medium text-warning-accent">基础 YAML 的 tun 带有过滤，发布已暂停。</span>exclude-interface 等过滤会让被排除的连接在主路由与 Linux 之间回环，请在 Mihomo 基础 YAML 中移除后再发布。</p>
 
           <section aria-labelledby="gateway-rules" class="space-y-3">
             <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 网关" :text="splitMode ? optionHelp('主路由分流：主路由把 fake-IP 和所选规则集的网段转给这台 Linux。', '客户端网关保持主路由，只有转来的连接交给 Mihomo，其余由主路由直接转发。转发网段在「上游路由」管理。') : optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用网关转发；IPv6 需另行处理。')" /></div>

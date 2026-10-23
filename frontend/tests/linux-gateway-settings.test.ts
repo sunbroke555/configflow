@@ -648,9 +648,11 @@ describe('router split guards', () => {
     expect(wrapper.get('[data-router-split-stop]').text()).toContain('请先按上方提示恢复标记')
   })
 
-  it('warns when the base YAML tun filters the forwarded connections', async () => {
+  it('pauses publishing when the base YAML tun filters the forwarded connections', async () => {
     const wrapper = await render(false, false, split('full_tun', { issues: ['tun_filtered'] }))
     expect(wrapper.get('[data-tun-filtered]').text()).toContain('exclude-interface')
+    expect(wrapper.get('[data-tun-filtered]').text()).toContain('基础 YAML 的 tun 带有过滤，发布已暂停。')
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
     expect(wrapper.find('[data-tun-missing]').exists()).toBe(false)
     const plain = await render(false, false, split('full_tun'))
     expect(plain.find('[data-tun-filtered]').exists()).toBe(false)
