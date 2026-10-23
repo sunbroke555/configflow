@@ -107,6 +107,17 @@ else
 fi
 for dependency in ip nft ss tar gzip sha256sum awk sed grep mktemp readlink head cmp; do need "$dependency"; done
 command -v curl >/dev/null 2>&1 || need wget
+# OxiDNS cron plugins resolve IANA timezones from the system database; minimal
+# Alpine images ship without it. The package stays installed like other deps.
+if [ ! -f "${TZDIR:-/usr/share/zoneinfo}/Asia/Shanghai" ]; then
+    printf '%s\n' '缺少时区数据，正在安装 tzdata；系统依赖会保留。'
+    if command -v apk >/dev/null 2>&1; then
+        apk add --no-cache tzdata || fail '安装 tzdata 失败；请检查网络和软件源后运行 apk add tzdata，再重跑。'
+    elif command -v apt-get >/dev/null 2>&1; then
+        { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata; } || fail '安装 tzdata 失败；请检查网络和软件源后运行 apt-get install -y tzdata，再重跑。'
+    fi
+    [ -f "${TZDIR:-/usr/share/zoneinfo}/Asia/Shanghai" ] || fail '缺少时区数据，OxiDNS 的定时任务无法使用时区。请手动安装 tzdata 后重跑。'
+fi
 [ -c /dev/net/tun ] || fail '缺少 /dev/net/tun。请先在宿主机/LXC 配置中开放 TUN，再重跑；安装器不会修改宿主机权限。'
 nft -j list ruleset >/dev/null || fail '无法读取 nftables，缺少 CAP_NET_ADMIN 或内核 nftables 支持；请检查宿主机/LXC 权限。'
 [ -r /proc/sys/net/ipv4/ip_forward ] || fail '无法读取 IPv4 转发设置，请检查内核网络命名空间。'
@@ -170,7 +181,7 @@ if [ "$OXIDNS_DOWNLOAD" -eq 1 ]; then
     "$GATEWAY_STAGE/oxidns" --version | grep -F "${OXIDNS_VERSION#v}" >/dev/null || fail 'OxiDNS 下载版本与固定版本不一致。'
 fi
 chmod 755 "$GATEWAY_STAGE/configflow-agent"
-"$GATEWAY_STAGE/configflow-agent" -h >/dev/null || fail 'Agent 无法在当前系统运行；请重新构建匹配版本。'
+"$GATEWAY_STAGE/configflow-agent" -version >/dev/null || fail 'Agent 无法在当前系统运行；请重新构建匹配版本。'
 agent_version=$("$GATEWAY_STAGE/configflow-agent" -version)
 printf '%s\n' "$agent_version" | awk -F '[-.]' '/^[0-9]+\.[0-9]+\.[0-9]+(-go)?$/ && ($1>1 || ($1==1 && ($2>8 || ($2==8 && $3>=25)))) {ok=1} END {exit !ok}' || fail '网关向导需要 Agent 1.8.25-go 或更新，请更新服务器的 Agent 构建并重新生成命令。'
 cat > "$GATEWAY_STAGE/mihomo.yaml" <<'CONFIGFLOW_GATEWAY_MIHOMO_BOOTSTRAP'

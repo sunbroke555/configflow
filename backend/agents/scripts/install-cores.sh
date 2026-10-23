@@ -150,6 +150,23 @@ fi
 add_package() {
     case " ${PACKAGES} " in *" $1 "*) ;; *) PACKAGES="${PACKAGES:+${PACKAGES} }$1" ;; esac
 }
+detect_package_manager() {
+    if command -v apk >/dev/null 2>&1; then
+        package_manager=apk
+    elif command -v apt-get >/dev/null 2>&1; then
+        package_manager=apt-get
+    elif command -v dnf >/dev/null 2>&1; then
+        package_manager=dnf
+    elif command -v yum >/dev/null 2>&1; then
+        package_manager=yum
+    elif command -v pacman >/dev/null 2>&1; then
+        package_manager=pacman
+    elif command -v zypper >/dev/null 2>&1; then
+        package_manager=zypper
+    else
+        package_manager=""
+    fi
+}
 collect_missing_dependencies() {
     MISSING_DEPENDENCIES=""
     PACKAGES=""
@@ -168,21 +185,15 @@ collect_missing_dependencies() {
         add_package curl
         add_package ca-certificates
     fi
+    # OxiDNS cron plugins resolve IANA timezones from the system database;
+    # minimal Alpine images ship without it.
+    if [ "$NEW_OXIDNS" = true ] && [ ! -f "${TZDIR:-/usr/share/zoneinfo}/Asia/Shanghai" ]; then
+        MISSING_DEPENDENCIES="${MISSING_DEPENDENCIES:+${MISSING_DEPENDENCIES} }时区数据"
+        if [ "$package_manager" = zypper ]; then add_package timezone; else add_package tzdata; fi
+    fi
 }
 install_dependencies() {
-    if command -v apk >/dev/null 2>&1; then
-        package_manager=apk
-    elif command -v apt-get >/dev/null 2>&1; then
-        package_manager=apt-get
-    elif command -v dnf >/dev/null 2>&1; then
-        package_manager=dnf
-    elif command -v yum >/dev/null 2>&1; then
-        package_manager=yum
-    elif command -v pacman >/dev/null 2>&1; then
-        package_manager=pacman
-    elif command -v zypper >/dev/null 2>&1; then
-        package_manager=zypper
-    else
+    if [ -z "$package_manager" ]; then
         fail "缺少依赖：${MISSING_DEPENDENCIES}。未找到支持的包管理器（apk、apt-get、dnf、yum、pacman、zypper）；请手动安装 ${PACKAGES} 后重新运行。"
     fi
     printf '%s\n' "缺少依赖：${MISSING_DEPENDENCIES}；使用 ${package_manager} 安装 ${PACKAGES}。"
@@ -197,6 +208,7 @@ install_dependencies() {
         zypper) zypper --non-interactive install --no-recommends "$@" ;;
     esac
 }
+detect_package_manager
 collect_missing_dependencies
 if [ -n "${MISSING_DEPENDENCIES}" ]; then
     # PACKAGES contains only the fixed package names listed above.

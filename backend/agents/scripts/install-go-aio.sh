@@ -115,7 +115,7 @@ case "$choice" in
     1)
         cf_step "检查安装环境与依赖"
 {agent_arch_detection}
-        agent_ensure_dependencies{ipv4_forwarding_dependencies}
+        agent_ensure_dependencies zoneinfo{ipv4_forwarding_dependencies}
         cf_step_done "安装环境与依赖已就绪"
         ;;
     2) cf_step "卸载 Agent" ;;
@@ -235,7 +235,7 @@ else
     fail "安装阶段需要 wget 或 curl 下载二进制"
 fi
 chmod 755 "$BINARY_TMP"
-"$BINARY_TMP" -h >/dev/null
+"$BINARY_TMP" -version >/dev/null
 cat > "$STAGE_DIR/mihomo-config.json" <<'CONFIGFLOW_MIHOMO_JSON_EOF'
 {mihomo_config_json}
 CONFIGFLOW_MIHOMO_JSON_EOF

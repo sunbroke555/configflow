@@ -42,6 +42,9 @@ def harness(tmp_path, manager="systemd", **options):
         (root / "proc/sys/net/ipv4/ip_forward").write_text(forwarding + "\n")
     if options.pop("EXISTING_TUN_INTERFACE", False):
         (root / "sys/class/net/configflow-tun").mkdir()
+    if options.pop("TZDATA", True):
+        (root / "usr/share/zoneinfo/Asia").mkdir(parents=True)
+        (root / "usr/share/zoneinfo/Asia/Shanghai").write_text("TZif")
     events = tmp_path / "events"
     events.touch()
     fake_core = f'''#!{sys.executable} -S
@@ -184,6 +187,10 @@ updating = sys.argv[1:] == ['update']
 if os.environ.get('FAIL_PACKAGE') == ('update' if updating else 'install'): raise SystemExit(41)
 if updating or os.environ.get('PACKAGE_NO_COMMANDS'): raise SystemExit(0)
 commands = Path(os.environ['PATH'])
+if 'tzdata' in sys.argv or 'timezone' in sys.argv:
+    zone = Path(os.environ['ROOT']) / 'usr/share/zoneinfo/Asia/Shanghai'
+    zone.parent.mkdir(parents=True, exist_ok=True)
+    zone.write_text('TZif')
 for executable in (Path(os.environ['FIXTURE']) / 'unavailable-commands').iterdir():
     # Restore the real fixture command only after a successful fake transaction.
     shutil.move(str(executable), commands / executable.name)
@@ -207,6 +214,7 @@ for executable in (Path(os.environ['FIXTURE']) / 'unavailable-commands').iterdir
     env = dict(os.environ)
     # CI may export this globally; tests must observe what the installer sets.
     env.pop("DEBIAN_FRONTEND", None)
+    env.pop("TZDIR", None)
     env.update(PATH=str(commands), EVENTS=str(events), FIXTURE=str(tmp_path), ROOT=str(root), CONFIGFLOW_INSTALL_LOG_DIR=str(tmp_path), **options)
     return installer, env, root, events
 
@@ -314,6 +322,26 @@ def test_missing_dependencies_installed_before_core_download(tmp_path, package_m
     # A second invocation must not rerun the package manager or restart cores.
     assert run(installer, env).returncode == 0
     assert events.read_text() == log
+
+
+@pytest.mark.parametrize("package_manager,package", [("apk", "tzdata"), ("apt-get", "tzdata"), ("zypper", "timezone")])
+def test_missing_timezone_data_installed_for_new_oxidns(tmp_path, package_manager, package):
+    installer, env, root, events = harness(
+        tmp_path, "openrc" if package_manager == "apk" else "systemd",
+        PACKAGE_MANAGER=package_manager, TZDATA=False)
+    result = run(installer, env, "--core", "oxidns")
+    assert result.returncode == 0, result.stdout + result.stderr
+    installs = [line for line in events.read_text().splitlines()
+                if line.startswith("package ") and " update " not in line]
+    assert len(installs) == 1 and installs[0].split(" DEBIAN_FRONTEND=", 1)[0].endswith(" " + package)
+    assert (root / "usr/share/zoneinfo/Asia/Shanghai").is_file()
+
+
+def test_mihomo_only_install_does_not_require_timezone_data(tmp_path):
+    installer, env, root, events = harness(tmp_path, PACKAGE_MANAGER="apk", TZDATA=False)
+    result = run(installer, env, "--core", "mihomo")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "package " not in events.read_text()
 
 
 @pytest.mark.parametrize("missing", [(), ("tar",)])

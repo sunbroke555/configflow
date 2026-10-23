@@ -95,7 +95,7 @@ def harness(tmp_path, manager="systemd", existing=True, **options):
     agent.write_text(f'''#!{sys.executable} -S
 import json, os, sys
 args = sys.argv[1:]
-if args == ['-h']:
+if args in (['-h'], ['-version']):
     raise SystemExit(0)
 cfg = json.load(open(args[args.index('-config') + 1]))
 with open(os.environ['EVENTS'], 'a') as log:

@@ -125,6 +125,8 @@ def generate_go_agent_install_script(
         "binary_download_url_shell": shlex.quote(binary_download_url.rstrip("/")),
         "init_detection": _AGENT_INIT_DETECTION,
         "agent_install_dependencies": AGENT_INSTALL_DEPENDENCIES,
+        # OxiDNS resolves cron timezones from the system tzdata.
+        "core_dependencies": " zoneinfo" if service_type == "oxidns" else "",
         "installation_action": "安装或升级 Go Agent（包含事务发布与失败回滚）",
         "core_install_phase": "",
         "agent_cleanup_trap": 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM',
