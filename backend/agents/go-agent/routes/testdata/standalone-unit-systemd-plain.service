@@ -1,0 +1,14 @@
+[Unit]
+Description=ConfigFlow Agent (Go)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/configflow-agent
+ExecStart=/usr/local/bin/configflow-agent -config /opt/configflow-agent/config-mihomo.json
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

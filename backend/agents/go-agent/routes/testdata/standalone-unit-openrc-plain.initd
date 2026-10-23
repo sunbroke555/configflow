@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+name="ConfigFlow Agent (Go)"
+command="/usr/local/bin/configflow-agent"
+command_args="-config /opt/configflow-agent/config-mihomo.json"
+pidfile="/run/configflow-agent.pid"
+output_log="/var/log/configflow-agent.log"
+error_log="/var/log/configflow-agent.log"
+directory="/opt/configflow-agent"
+command_background="yes"
+depend() {
+    need net
+    after firewall
+}
+start_pre() {
+    checkpath --directory --mode 0755 /var/log
+    checkpath --file --mode 0644 --owner root:root /var/log/configflow-agent.log
+    if [ -f /var/log/configflow-agent.log ]; then
+        log_size=$(wc -c < /var/log/configflow-agent.log 2>/dev/null || echo 0)
+        if [ "$log_size" -gt 10485760 ]; then
+            mv -f /var/log/configflow-agent.log /var/log/configflow-agent.log.1
+            : > /var/log/configflow-agent.log
+            chmod 0644 /var/log/configflow-agent.log
+        fi
+    fi
+}
