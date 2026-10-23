@@ -116,6 +116,69 @@ describe('routers page IPv4 forwarding column', () => {
     expect(routerApi.gatewayForwarding).toHaveBeenCalledTimes(1)
   })
 
+  it('re-reads the column after a persist that overtook a read, so a newly linked gateway is not left blank', async () => {
+    vi.mocked(confirm).mockResolvedValue(true)
+    vi.mocked(routerApi.probe).mockResolvedValue({ data: { success: true, probe: { version: '4.0' } } } as any)
+    const posted = deferred<any>()
+    vi.mocked(routerApi.persistGatewayForwarding).mockReturnValue(posted.promise)
+    const wrapper = await mountRouters()
+    await persistButton(wrapper)!.trigger('click')
+    await flushPromises()
+
+    // While the POST waits, the router list now links a second gateway and a read starts for it.
+    const B = entry({ agent_id: 'a2', agent_name: 'lxc-mihomo', routers: [{ id: 'r2', name: '旁路由' }], current: '1' })
+    vi.mocked(routerApi.list).mockResolvedValue({ data: { success: true, routers: [ROUTER, { ...ROUTER, id: 'r2', name: '旁路由', proxy_gateway_agent_id: 'a2' }] } } as any)
+    const staleRead = deferred<any>()
+    vi.mocked(routerApi.gatewayForwarding).mockReturnValueOnce(staleRead.promise)
+    await wrapper.findAll('button').find(button => button.text().includes('探测'))!.trigger('click')
+    await flushPromises()
+    expect(routerApi.gatewayForwarding).toHaveBeenCalledTimes(2)
+    expect(cell(wrapper, 1).text()).toContain('读取中…')
+
+    const freshRead = deferred<any>()
+    vi.mocked(routerApi.gatewayForwarding).mockReturnValueOnce(freshRead.promise)
+    posted.resolve({ data: { success: true, gateway: entry(PERSISTED) } })
+    await flushPromises()
+    expect(routerApi.gatewayForwarding).toHaveBeenCalledTimes(3)
+    expect(cell(wrapper, 0).text()).toContain('已开启并持久化')
+
+    // The read issued before the POST finished is discarded even if it lands last.
+    freshRead.resolve({ data: { success: true, gateways: [entry(PERSISTED), B] } })
+    await flushPromises()
+    staleRead.resolve({ data: { success: true, gateways: [entry(), B] } })
+    await flushPromises()
+    expect(cell(wrapper, 0).text()).toContain('已开启并持久化')
+    expect(cell(wrapper, 1).text()).toContain('已开启，未持久化')
+  })
+
+  it('does not issue an extra read after a persist when no read was in flight', async () => {
+    vi.mocked(confirm).mockResolvedValue(true)
+    vi.mocked(routerApi.persistGatewayForwarding).mockResolvedValue({ data: { success: true, gateway: entry(PERSISTED) } } as any)
+    const wrapper = await mountRouters()
+    await persistButton(wrapper)!.trigger('click')
+    await flushPromises()
+    expect(routerApi.gatewayForwarding).toHaveBeenCalledTimes(1)
+    expect(cell(wrapper).text()).toContain('已开启并持久化')
+  })
+
+  it('disables the other gateways\' persist buttons while one gateway is being persisted', async () => {
+    vi.mocked(routerApi.list).mockResolvedValue({ data: { success: true, routers: [ROUTER, { ...ROUTER, id: 'r2', name: '旁路由', proxy_gateway_agent_id: 'a2' }] } } as any)
+    vi.mocked(confirm).mockResolvedValue(true)
+    const posted = deferred<any>()
+    vi.mocked(routerApi.persistGatewayForwarding).mockReturnValue(posted.promise)
+    const wrapper = await mountRouters([entry(), entry({ agent_id: 'a2', agent_name: 'lxc-mihomo', routers: [{ id: 'r2', name: '旁路由' }] })])
+    const buttonOf = (index: number) => cell(wrapper, index).findAll('button').find(button => button.text().includes('开启并持久化 IPv4 转发'))!
+    expect(buttonOf(1).attributes('disabled')).toBeUndefined()
+    await buttonOf(0).trigger('click')
+    await flushPromises()
+    expect(buttonOf(0).attributes('disabled')).toBeDefined()
+    expect(buttonOf(1).attributes('disabled')).toBeDefined()
+    posted.resolve({ data: { success: true, gateway: entry(PERSISTED) } })
+    await flushPromises()
+    expect(buttonOf(1).attributes('disabled')).toBeUndefined()
+    expect(routerApi.persistGatewayForwarding).toHaveBeenCalledExactlyOnceWith('a1', 'default')
+  })
+
   it('does not post when the confirmation is cancelled', async () => {
     vi.mocked(confirm).mockResolvedValue(false)
     const wrapper = await mountRouters([entry({ current: '1' })])

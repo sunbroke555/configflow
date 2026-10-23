@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import StatusDot from '@/components/common/StatusDot.vue'
 import { gatewayForwardingView, type GatewayForwardingEntry } from '@/lib/gatewayForwarding'
 
-const props = defineProps<{ entry?: GatewayForwardingEntry; loading: boolean; busy: boolean; failed?: boolean }>()
+const props = defineProps<{ entry?: GatewayForwardingEntry; loading: boolean; busy: boolean; failed?: boolean; disabled?: boolean }>()
 const emit = defineEmits<{ persist: [] }>()
 const view = computed(() => gatewayForwardingView(props.entry, props.loading, props.failed))
 </script>
@@ -18,7 +18,7 @@ const view = computed(() => gatewayForwardingView(props.entry, props.loading, pr
       :class="['m-0 max-w-[260px] break-words text-[11.5px] leading-relaxed', view.tone === 'danger' ? 'text-destructive-accent' : 'text-muted-foreground']">
       {{ view.note }}
     </p>
-    <Button v-if="view.action === 'persist'" size="sm" variant="outline" class="max-md:min-h-11" :disabled="busy" @click="emit('persist')">
+    <Button v-if="view.action === 'persist'" size="sm" variant="outline" class="max-md:min-h-11" :disabled="busy || disabled" @click="emit('persist')">
       <Loader2 v-if="busy" class="size-3.5 animate-spin" />
       开启并持久化 IPv4 转发
     </Button>

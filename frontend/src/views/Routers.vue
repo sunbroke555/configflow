@@ -64,6 +64,7 @@
                   :loading="forwardingLoading && Boolean(router.proxy_gateway_agent_id)"
                   :failed="forwardingFailed && Boolean(router.proxy_gateway_agent_id)"
                   :busy="Boolean(router.proxy_gateway_agent_id) && forwardingBusy === router.proxy_gateway_agent_id"
+                  :disabled="Boolean(forwardingBusy) && forwardingBusy !== router.proxy_gateway_agent_id"
                   @persist="persistForwarding(router.proxy_gateway_agent_id)"
                 />
               </td>
@@ -1240,7 +1241,11 @@ watch(activeProfileId, () => {
 })
 const persistForwarding = async (agentId: string) => {
   const entry = forwardingEntries.value[agentId]
-  if (!entry || forwardingBusy.value) return
+  if (!entry) return
+  if (forwardingBusy.value) {
+    if (forwardingBusy.value !== agentId) notify.info('另一台网关正在开启 IPv4 转发，请稍候。')
+    return
+  }
   const { title, description } = persistConfirmText(entry)
   if (!await confirm(description, { title, confirmText: '开启并持久化' })) return
   const profileId = activeProfileId.value
@@ -1249,10 +1254,14 @@ const persistForwarding = async (agentId: string) => {
     const { data } = await routerApi.persistGatewayForwarding(agentId, profileId)
     if (profileId !== activeProfileId.value) return
     notify.success('IPv4 转发已开启并持久化。')
-    forwardingRequest += 1   // an earlier read must not replace the fresh entry
+    // A read still in flight may predate the POST and must not replace the fresh entry; it may also
+    // be the only read covering a newly linked gateway, so drop it and issue a fresh one afterwards.
+    const readInFlight = forwardingLoading.value
+    forwardingRequest += 1
     forwardingLoading.value = false
     if (data?.gateway && data.gateway.agent_id === agentId) {
       forwardingEntries.value = { ...forwardingEntries.value, [agentId]: data.gateway }
+      if (readInFlight) void loadForwarding()
     } else {
       void loadForwarding()
     }
