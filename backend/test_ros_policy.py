@@ -43,6 +43,7 @@ class MemoryROS(RouterOSDriver):
         self.fail = self.lost = None
         self.inactive = False
         self.settings = {'policy-rules': 'mangle,vrf-lookup,vrf-unreach,local,user,main'}
+        self.resource = {'version': '7.24.5 (stable)'}
 
     def close(self):
         pass
@@ -52,6 +53,11 @@ class MemoryROS(RouterOSDriver):
         if path == SETTINGS:
             assert method == 'GET'
             return copy.deepcopy(self.settings)
+        if path == '/system/resource':
+            assert method == 'GET'
+            if self.resource is None:
+                raise RouterError('resource unavailable')
+            return copy.deepcopy(self.resource)
         collection = next(key for key in sorted(self.rows, key=len, reverse=True)
                           if path == key or path.startswith(key + '/'))
         row_id = path[len(collection) + 1:]
@@ -701,6 +707,20 @@ def test_unknown_or_lower_mangle_priority_blocks_without_writes(order):
     driver.settings['policy-rules'] = order
     _, plan = inspect(driver)
     assert any('优先级' in b for b in plan['blockers'])
+    assert not execute(plan, driver, None)['ok'] and not driver.writes
+
+
+@pytest.mark.parametrize('resource,message', [
+    ({'version': '7.21.2 (stable)'}, '策略路由需要 RouterOS 7.22 或更高版本（当前 7.21.2），请升级 RouterOS 后再发布'),
+    (None, '策略路由需要 RouterOS 7.22 或更高版本（当前 版本未知），请升级 RouterOS 后再发布'),
+    ({'version': '7.24.5 (stable)'}, 'RouterOS 7.24.5 未返回路由查找顺序（/routing/settings policy-rules），无法确认 Mangle 优先级'),
+])
+def test_missing_policy_rules_names_required_version_without_writes(resource, message):
+    driver = MemoryROS()
+    del driver.settings['policy-rules']
+    driver.resource = resource
+    _, plan = inspect(driver)
+    assert message in plan['blockers']
     assert not execute(plan, driver, None)['ok'] and not driver.writes
 
 
