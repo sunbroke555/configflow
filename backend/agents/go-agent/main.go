@@ -30,11 +30,16 @@ func runAgent() int {
 	validateService := flag.Bool("validate-service", false, "Validate OxiDNS service working directory without registration or mutation")
 	checkEnvironment := flag.Bool("check-environment", false, "Inspect native installation TUN, permissions, IPv4 forwarding and port occupancy without changing the system")
 	prepareTUN := flag.Bool("prepare-tun", false, "Prepare enabled TUN for native AIO: load the local driver and persist it, or explain required container host changes")
+	assumeTUN := flag.Bool("assume-tun-enabled", false, "With -prepare-tun: prepare TUN even when the bootstrap config has TUN disabled (gateway installer)")
 	environmentPeerConfig := flag.String("environment-peer-config", "", "Peer Agent candidate configuration for a joint native AIO environment check")
 	verbose := flag.Bool("verbose", false, "Expand one-shot command diagnostics; full details are always saved to a private log")
 
 	// 解析命令行参数
 	flag.Parse()
+	if *assumeTUN && !*prepareTUN {
+		fmt.Fprintln(os.Stderr, "-assume-tun-enabled 只能与 -prepare-tun 一起使用。")
+		return 2
+	}
 	if *prepareTUN && (*configPath == "" || *printVersion || *upgradeWorker != "" || *cleanupOnly ||
 		*checkDeployments || *requireCleanDeployments || *recoverOnly || *recoverAndExit ||
 		*validateService || *checkEnvironment || *environmentPeerConfig != "") {
@@ -110,6 +115,8 @@ func runAgent() int {
 		var report preflight.Report
 		if err != nil {
 			report = preflight.Report{{Name: "安装配置", Level: "error", Message: err.Error(), Fix: "核对 Mihomo 安装参数并重新生成脚本。"}}
+		} else if *assumeTUN {
+			report = preflight.PrepareTUNAssumeEnabled(candidate)
 		} else {
 			report = preflight.PrepareTUN(candidate)
 		}

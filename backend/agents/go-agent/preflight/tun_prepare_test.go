@@ -593,3 +593,41 @@ func TestPersistTUNFileUsesOnlyIsolatedPathsAndPreservesLegacyContent(t *testing
 		t.Fatal("followed directory symlink")
 	}
 }
+
+func TestPrepareTUNAssumeEnabledPreparesBootstrapWithTUNDisabled(t *testing.T) {
+	for _, manager := range []string{"systemd", "openrc"} {
+		for _, yaml := range []string{"mode: rule\n", "tun: {enable: false}\n", "listeners: [{type: tun, disabled: true}]\n"} {
+			t.Run(manager+"/"+yaml, func(t *testing.T) {
+				f := newTUNPrepareFixture()
+				delete(f.modes, "/dev/net/tun")
+				f.files["/proc/modules"] = nil
+				cfg := tunPrepareConfig(t, yaml, manager)
+				assertTUNReport(t, prepareTUNWithMode(cfg, f.probe(), true), false, "开机加载配置")
+				if strings.Count(strings.Join(f.calls, "\n"), "modprobe tun") != 1 || string(f.files[tunModulesFile]) != tunModulesContent {
+					t.Fatalf("assumed TUN not prepared: commands=%v writes=%v", f.calls, f.writes)
+				}
+				// The ordinary installer entry still skips the same configuration.
+				skipped := newTUNPrepareFixture()
+				assertTUNReport(t, prepareTUNWithProbe(cfg, skipped.probe()), false, "跳过")
+				if len(skipped.calls) != 0 || len(skipped.writes) != 0 {
+					t.Fatalf("ordinary preparation touched host: %v %v", skipped.calls, skipped.writes)
+				}
+			})
+		}
+	}
+}
+
+func TestPrepareTUNAssumeEnabledStillRejectsInvalidConfiguration(t *testing.T) {
+	for _, yaml := range []string{"", "tun: null\n", "tun: {enable: 'true'}\n", "listeners: {}\n", "tun: ["} {
+		t.Run(yaml, func(t *testing.T) {
+			cfg := tunPrepareConfig(t, yaml, "systemd")
+			// Nil callbacks prove that rejection happens before host inspection.
+			if report := prepareTUNWithMode(cfg, tunPrepareProbe{}, true); !report.HasErrors() {
+				t.Fatalf("invalid config accepted: %+v", report)
+			}
+		})
+	}
+	cfg := tunPrepareConfig(t, "tun: {enable: false}\n", "systemd")
+	cfg.NativeAIO = false
+	assertTUNReport(t, prepareTUNWithMode(cfg, tunPrepareProbe{}, true), true, "普通 Shell 同机安装")
+}

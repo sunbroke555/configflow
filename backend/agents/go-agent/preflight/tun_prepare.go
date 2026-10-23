@@ -54,11 +54,23 @@ func PrepareTUN(cfg Config) Report {
 	return prepareTUNWithProbe(cfg, defaultTUNPrepareProbe())
 }
 
+// PrepareTUNAssumeEnabled prepares TUN for a configuration that will enable it
+// later. The gateway installer bootstraps with TUN disabled so installation
+// cannot take over traffic before rules are published. Invalid or ambiguous
+// TUN entries are still rejected before any host change.
+func PrepareTUNAssumeEnabled(cfg Config) Report {
+	return prepareTUNWithMode(cfg, defaultTUNPrepareProbe(), true)
+}
+
 func tunPreparationError(message, fix string) Report {
 	return Report{{Name: "TUN 自动准备", Level: "error", Message: message, Fix: fix}}
 }
 
 func prepareTUNWithProbe(cfg Config, probe tunPrepareProbe) Report {
+	return prepareTUNWithMode(cfg, probe, false)
+}
+
+func prepareTUNWithMode(cfg Config, probe tunPrepareProbe, assume bool) Report {
 	if cfg.ServiceType != "mihomo" {
 		return Report{{Name: "TUN 自动准备", Level: "pass", Message: "此核心无需准备 Mihomo TUN，未修改系统。"}}
 	}
@@ -80,6 +92,9 @@ func prepareTUNWithProbe(cfg Config, probe tunPrepareProbe) Report {
 	}
 	if state == tunUnknown {
 		return tunPreparationError("无法确定当前配置的 TUN 状态，未修改系统。", "修复 tun 和 listeners 配置后重新运行安装脚本。")
+	}
+	if assume && state == tunDisabled {
+		state = tunEnabled
 	}
 	if state != tunEnabled {
 		return Report{{Name: "TUN 自动准备", Level: "pass", Message: "当前配置未启用 TUN，跳过模块加载与开机配置。"}}

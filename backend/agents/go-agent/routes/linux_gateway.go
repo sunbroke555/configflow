@@ -361,7 +361,7 @@ func gatewayCommands(spec LinuxGatewaySpec) []string {
 }
 
 func gatewayManaged(cfg *Config) map[string]interface{} {
-	result := map[string]interface{}{"active": false, "healthy": false}
+	result := map[string]interface{}{"active": false, "healthy": false, "preserves_forwarding": aioForwardingConfigManaged()}
 	state, err := loadGatewayState(cfg)
 	if err != nil {
 		result["error"] = err.Error()
@@ -476,14 +476,19 @@ func LinuxGatewayHandler(cfg *Config, action string) http.HandlerFunc {
 			if err := gatewayPlatform(cfg); err != nil {
 				result["unsupported_reason"] = err.Error()
 			}
+			result["ipv4_forwarding"], result["tun"] = aioForwardingStatus(cfg), aioTUNStatus(cfg)
 			JsonResponse(w, 200, result)
+			return
+		}
+		if action == "forwarding" {
+			linuxGatewayForwarding(cfg, w, r)
 			return
 		}
 		var request struct {
 			LinuxGatewaySpec
 			ProfileID string `json:"profile_id"`
 		}
-		if action != "remove" {
+		if action != "remove" && action != "forwarding" {
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 			decoder.DisallowUnknownFields()
 			if err := decoder.Decode(&request); err != nil {
@@ -516,6 +521,38 @@ func LinuxGatewayHandler(cfg *Config, action string) http.HandlerFunc {
 		}
 		JsonResponse(w, 200, map[string]interface{}{"success": true, "message": map[string]string{"apply": "网关转发已配置；请按引导验证一台客户端", "remove": "受管网关配置已撤销；请恢复客户端原来的网关和 DNS 设置"}[action], "managed": gatewayManaged(cfg)})
 	}
+}
+
+// linuxGatewayForwarding persists native AIO IPv4 forwarding, the first step
+// of moving a router-split host from selective takeover to a full TUN.
+func linuxGatewayForwarding(cfg *Config, w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		PrepareTUN bool `json:"prepare_tun"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(&request)
+	if err == nil {
+		if err := decoder.Decode(new(interface{})); err != io.EOF {
+			JsonResponse(w, 400, map[string]interface{}{"success": false, "message": "请求只能包含一个 JSON 对象"})
+			return
+		}
+	} else if err != io.EOF {
+		JsonResponse(w, 400, map[string]interface{}{"success": false, "message": "转发参数无效：" + err.Error()})
+		return
+	}
+	release, err := AcquireServiceOperation(cfg)
+	if err != nil {
+		JsonResponse(w, 409, map[string]interface{}{"success": false, "message": err.Error(), "ipv4_forwarding": aioForwardingStatus(cfg)})
+		return
+	}
+	defer release()
+	result, err := persistAIOForwarding(cfg, request.PrepareTUN)
+	if err != nil {
+		JsonResponse(w, 409, map[string]interface{}{"success": false, "message": err.Error(), "ipv4_forwarding": aioForwardingStatus(cfg)})
+		return
+	}
+	JsonResponse(w, 200, map[string]interface{}{"success": true, "message": "IPv4 转发已开启并持久化", "ipv4_forwarding": aioForwardingStatus(cfg), "tun_prepare": result["tun_prepare"], "managed": gatewayManaged(cfg)})
 }
 
 // gatewayNotReady marks only transient host readiness failures. Ownership,

@@ -24,7 +24,7 @@ func nativeAIOInstallationFor(cfg *Config) (nativeAIOInstallation, error) {
 		return instance, fmt.Errorf("unsupported native AIO service")
 	}
 	instance = nativeAIOInstallation{
-		Directory: "/opt/configflow-agent/" + cfg.ServiceType,
+		Directory: filepath.Join(aioAgentRoot, cfg.ServiceType),
 		Unit:      "configflow-agent-" + cfg.ServiceType,
 		Log:       "/var/log/configflow-agent-" + cfg.ServiceType + ".log",
 		Manager:   cfg.ServiceManager,

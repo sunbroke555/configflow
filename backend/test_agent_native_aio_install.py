@@ -775,3 +775,38 @@ def test_single_installer_refuses_aio_install_and_uninstall(tmp_path, choice):
     assert "同机" in result.stderr
     assert (tmp_path / "agent/oxidns/config.json").read_bytes() == original
     assert not (tmp_path / "events").exists()
+
+
+GO_UNIT_TESTDATA = Path(__file__).resolve().parent / "agents/go-agent/routes/testdata"
+
+
+def rendered_agent_unit(manager, hook):
+    """Expand the installer's Agent service heredoc exactly as the shell does."""
+    script = generated()
+    start = {"systemd": 'cat > "/etc/systemd/system/$AGENT_UNIT.service" <<SERVICEEOF\n',
+             "openrc": 'cat > "/etc/init.d/$AGENT_UNIT" <<SERVICEEOF\n'}[manager]
+    assert script.count(start) == 1
+    body = script.split(start, 1)[1].split("\nSERVICEEOF\n", 1)[0]
+    # Take the hook values from install_ipv4_forwarding_hook itself.
+    assignments = [line.strip() for line in script.splitlines()
+                   if line.strip().startswith(('IPV4_SYSTEMD_PRE="ExecStartPre', 'IPV4_OPENRC_PRE="/bin/sh'))]
+    assert len(assignments) == 2
+    shell = "\n".join([
+        'SERVICE=mihomo', 'AGENT_UNIT=configflow-agent-mihomo', 'AGENT_DIR=/opt/configflow-agent/mihomo',
+        'CONFIG_FILE="$AGENT_DIR/config.json"', 'AGENT_BINARY="$AGENT_DIR/configflow-agent"',
+        'AGENT_LOG=/var/log/configflow-agent-mihomo.log', 'IPV4_SYSTEMD_PRE=""', 'IPV4_OPENRC_PRE=""',
+        *(assignments if hook else []),
+        "cat <<SERVICEEOF", body, "SERVICEEOF", "",
+    ])
+    result = subprocess.run(["sh", "-c", shell], text=True, capture_output=True, check=True)
+    return result.stdout
+
+
+@pytest.mark.parametrize("manager,suffix", [("systemd", "service"), ("openrc", "initd")])
+@pytest.mark.parametrize("variant", ["plain", "hook"])
+def test_go_agent_unit_patch_fixtures_match_installer_templates(manager, suffix, variant):
+    # The Go Agent patches an installed unit in place to register the forwarding
+    # hook; its fixtures must stay identical to what this installer writes.
+    expected = rendered_agent_unit(manager, variant == "hook")
+    fixture = GO_UNIT_TESTDATA / f"aio-unit-{manager}-{variant}.{suffix}"
+    assert fixture.read_text() == expected

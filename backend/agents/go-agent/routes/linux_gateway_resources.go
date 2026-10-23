@@ -381,7 +381,14 @@ func writeGatewaySysctls(state *gatewayState) error {
 
 func restoreGatewaySysctls(state *gatewayState) error {
 	values := map[string]string{}
+	// Persisted AIO forwarding now owns IPv4 forwarding: a router-split host
+	// still routes through the full TUN after the gateway record is gone. IPv4
+	// checks forwarding per ingress interface, so keep every forwarding switch.
+	preserve := aioForwardingConfigManaged()
 	for key, expected := range gatewayStateSysctls(state) {
+		if preserve && (key == "net/ipv4/ip_forward" || strings.HasSuffix(key, "/forwarding")) {
+			continue
+		}
 		current, err := gatewayReadSysctl(key)
 		// The TUN interface may disappear when a disabled configuration is deployed.
 		if os.IsNotExist(err) && strings.HasPrefix(key, "net/ipv4/conf/") {

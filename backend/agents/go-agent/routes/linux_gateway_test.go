@@ -29,13 +29,17 @@ func newGatewayFixture(t *testing.T) *gatewayFixture {
 	oldRun, oldInput, oldLook := gatewayRun, gatewayRunInput, gatewayLookPath
 	oldWrite := gatewayWriteSysctl
 	oldCoreVersion := gatewayCoreVersion
+	oldAIOSysctl := aioSysctlDir
 	t.Cleanup(func() {
 		gatewayOS, gatewayGeteuid, gatewaySysctlRoot = oldOS, oldUID, oldRoot
 		gatewayRun, gatewayRunInput, gatewayLookPath = oldRun, oldInput, oldLook
 		gatewayWriteSysctl = oldWrite
 		gatewayCoreVersion = oldCoreVersion
+		aioSysctlDir = oldAIOSysctl
 	})
 	root := t.TempDir()
+	// Never let a persisted AIO forwarding file on the test host change removal.
+	aioSysctlDir = filepath.Join(root, "sysctl.d")
 	gatewayOS, gatewayGeteuid, gatewaySysctlRoot = "linux", func() int { return 0 }, filepath.Join(root, "proc")
 	gatewayCoreVersion = func(string) (string, error) { return "Mihomo Meta v1.19.0", nil }
 	fixture := &gatewayFixture{cfg: &Config{AgentConfigFile: filepath.Join(root, "agent.json"), ConfigPath: filepath.Join(root, "mihomo.yaml"), ServiceType: "mihomo", ServiceManager: "systemd"}, spec: LinuxGatewaySpec{Interface: "eth0", Address: "192.168.1.2", LANCIDR: "192.168.1.0/24", UpstreamGateway: "192.168.1.1"}, nft: []map[string]interface{}{}, addresses: `[{"ifname":"eth0","addr_info":[{"local":"192.168.1.2","prefixlen":24}]}]`, routes: `[{"dev":"eth0","gateway":"192.168.1.1"}]`}
@@ -602,5 +606,62 @@ func TestLinuxGatewayBootDoesNotRetryOwnershipConflict(t *testing.T) {
 	err := reapplyLinuxGateway(f.cfg, 3, func() { waits++ })
 	if err == nil || waits != 0 || f.mutations != 1 {
 		t.Fatalf("retried or changed conflicting owner: %v waits=%d mutations=%d", err, waits, f.mutations)
+	}
+}
+
+func TestLinuxGatewayRemovalPreservesPersistedAIOForwarding(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+		remove  func(*Config) error
+		keep    bool
+	}{
+		{"remove", aioForwardingContent, removeLinuxGateway, true},
+		{"reconcile", aioForwardingContent, reconcileLinuxGateway, true},
+		// A modified persistence file does not prove ownership: restore as before.
+		{"tampered", aioForwardingContent + "net.ipv4.conf.all.forwarding=1\n", removeLinuxGateway, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newGatewayFixture(t)
+			if err := applyLinuxGateway(f.cfg, f.spec, "test-profile"); err != nil {
+				t.Fatal(err)
+			}
+			state, err := loadGatewayState(f.cfg)
+			if err != nil || state == nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(aioSysctlDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(aioForwardingConfigPath(), []byte(test.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if gatewayManaged(f.cfg)["preserves_forwarding"] != test.keep {
+				t.Fatal("managed status does not report forwarding preservation")
+			}
+			// Deploying a full TUN configuration drops the gateway marker.
+			f.writeConfig(t, false)
+			if err := test.remove(f.cfg); err != nil {
+				t.Fatal(err)
+			}
+			for key, original := range state.Original {
+				want := original
+				if test.keep && (key == "net/ipv4/ip_forward" || strings.HasSuffix(key, "/forwarding")) {
+					want = "1"
+				}
+				if value, err := gatewayReadSysctl(key); err != nil || value != want {
+					t.Errorf("%s=%q want %q (%v)", key, value, want, err)
+				}
+			}
+			if state.Original["net/ipv4/conf/all/send_redirects"] != "1" {
+				t.Fatal("fixture must prove send_redirects is restored, not merely kept")
+			}
+			if len(f.nft) != 0 {
+				t.Fatal("owned firewall retained")
+			}
+			if state, err := loadGatewayState(f.cfg); err != nil || state != nil {
+				t.Fatalf("journal retained: %+v %v", state, err)
+			}
+		})
 	}
 }
