@@ -4,7 +4,7 @@ from flask import jsonify, request
 from backend.common.auth import require_auth
 from backend.common.config import get_repository
 from backend.common.config_repository import ProfileNotFound, ProfileInUse, ProfileValidationError
-from backend.common import setup_flow as flow
+from backend.common import setup_abandon, setup_flow as flow
 from backend.common.setup_presets import domain_rule_options, recommended_domain_rules
 from backend.routes import settings_bp
 
@@ -48,8 +48,11 @@ def setup_sessions():
         sessions = flow.list_sessions(repository)
         # The first-start template already has proxy groups; a device that
         # ConfigFlow manages is what shows the setup is under way.
+        system = repository.get_system()
         return {'sessions': [flow.public(session) for session in sessions],
-                'suggested': not sessions and not repository.get_system().get('agents'),
+                # An explicitly abandoned setup must not turn into a new prompt.
+                'suggested': not sessions and not system.get('agents')
+                and not system.get('system_config', {}).get(setup_abandon.DISMISSED_KEY),
                 'subscriptions': [{'id': s['id'], 'name': s['name']} for s in flow.selectable_subscriptions(shared)],
                 'nodes': [{'id': n['id'], 'name': n['name']} for n in shared['nodes'] if n.get('enabled', True)],
                 'domain_rules': domain_rule_options(repository), 'recommended_domain_rules': recommended_domain_rules(repository)}
@@ -66,6 +69,7 @@ def setup_session(session_id):
             repository.get_profile(session['profile_id'])
             if request.method == 'PATCH':
                 flow.update_progress(repository, session, _body())
+                session.pop('abandoned', None)  # Continuing reopens an abandoned setup.
                 flow.write(repository, session)
             return _described(repository, session)
     return _respond(action)
@@ -80,6 +84,14 @@ def setup_action(session_id, operation):
             session = flow.read(repository, session_id)
             repository.get_profile(session['profile_id'])
             body = _body()
+            if operation == 'abandon':
+                if set(body) - {'dry_run'} or type(body.get('dry_run', False)) is not bool:
+                    raise flow.SetupError('请提交有效的放弃请求')
+                return setup_abandon.plan(repository, session) if body.get('dry_run') else setup_abandon.abandon(repository, session)
+            if operation != 'check':
+                # The page re-checks a gateway client on its own; only the
+                # user's own edits reopen an abandoned setup.
+                session.pop('abandoned', None)
             if operation == 'source':
                 flow.source(repository, session, body)
             elif operation == 'prepare':

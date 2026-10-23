@@ -428,6 +428,17 @@ def get(repository, manager, session_id):
     return public(repository, manager, _read(repository, session_id))
 
 
+def has_installation(repository, profile_id):
+    """Whether any installation was created for this profile."""
+    for path in _root(repository).glob('*.json'):
+        try:
+            if json.loads(path.read_text()).get('profile_id') == profile_id:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def latest(repository, manager, profile_id):
     repository.validate_profile_id(profile_id)
     sessions = []

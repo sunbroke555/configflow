@@ -118,6 +118,11 @@ def create(repository, body):
 _OWNED_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'oxidns')
 
 
+def remove(repository, session_id):
+    """Delete an abandoned session record; the caller holds its lock."""
+    _path(repository, session_id).unlink(missing_ok=True)
+
+
 def owned_digest(profile):
     owned = {key: profile.get(key) for key in _OWNED_FIELDS}
     return hashlib.sha256(json.dumps(owned, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -128,11 +133,19 @@ def adopt_owned_write(repository, profile_id, before, after):
     root = repository.data_dir / 'setup-sessions'
     for path in root.glob('*.json'):
         with locked(repository, path.stem):
-            session = read(repository, path.stem)
-            if (session['profile_id'] == profile_id and not session.get('completed')
+            session = _read_existing(repository, path.stem)
+            if session and (session['profile_id'] == profile_id and not session.get('completed')
                     and session.get('owned_digest') == owned_digest(before)):
                 session['owned_digest'] = owned_digest(after)
                 write(repository, session)
+
+
+def _read_existing(repository, session_id):
+    """Read a listed session, or None if it was abandoned after the listing."""
+    try:
+        return read(repository, session_id)
+    except SetupError:
+        return None
 
 
 def list_sessions(repository):
@@ -140,8 +153,8 @@ def list_sessions(repository):
     records = []
     for path in root.glob('*.json'):
         with locked(repository, path.stem):
-            session = read(repository, path.stem)
-        if any(p['id'] == session['profile_id'] for p in repository.list_profiles()):
+            session = _read_existing(repository, path.stem)
+        if session and any(p['id'] == session['profile_id'] for p in repository.list_profiles()):
             records.append(session)
     return sorted(records, key=lambda item: item['updated_at'], reverse=True)
 
