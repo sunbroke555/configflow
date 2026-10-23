@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LinuxGatewayStatus } from '@/api/linuxGateway'
-import { ROUTER_SPLIT_MESSAGES, forwardingLabel, forwardingTone, fullTunReady, gatewayLeftover, routerSplitErrorMessage, tunLabel, tunTone } from '@/lib/routerSplit'
+import { FORWARDING_NOT_PERSISTED, ROUTER_SPLIT_MESSAGES, forwardingLabel, forwardingTone, fullTunReady, gatewayLeftover, routerSplitErrorMessage, tunLabel, tunTone } from '@/lib/routerSplit'
 
 const ready = (changes: Partial<LinuxGatewayStatus> = {}): LinuxGatewayStatus => ({
   success: true, supported: true, enabled_in_config: false, managed: { active: false, preserves_forwarding: true },
@@ -58,6 +58,11 @@ describe('router split status labels', () => {
     expect(routerSplitErrorMessage('ROUTER_SPLIT_RESTORE_BLOCKED', '恢复后 Linux 网关为关闭状态')).toBe('恢复后 Linux 网关为关闭状态')
     expect(routerSplitErrorMessage('ROUTER_SPLIT_LEGACY')).toBe(ROUTER_SPLIT_MESSAGES.ROUTER_SPLIT_LEGACY)
     expect(routerSplitErrorMessage('UPGRADE_REQUIRED', '')).toBe('请先将 Mihomo Agent 更新到 1.8.40-go 或更新版本。')
+    // Refused gateway-record teardown while forwarding is not persisted, from the bridge or the publish guard.
+    for (const code of ['FORWARDING_NOT_PERSISTED', 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED']) {
+      expect(routerSplitErrorMessage(code)).toBe(FORWARDING_NOT_PERSISTED)
+      expect(routerSplitErrorMessage(code, '服务端原文')).toBe('服务端原文')
+    }
     expect(routerSplitErrorMessage('SOMETHING_ELSE')).toBe('请求未完成，请稍后重试。')
     // Nothing in the shared copy points to a migration that no longer exists.
     for (const message of Object.values(ROUTER_SPLIT_MESSAGES)) expect(message).not.toContain('迁移')

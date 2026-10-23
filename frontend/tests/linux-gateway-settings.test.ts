@@ -13,6 +13,8 @@ import { agentApi, profileApi } from '@/api'
 import { linuxGatewayApi } from '@/api/linuxGateway'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { gatewaySpecErrors } from '@/lib/linuxGateway'
+import FieldHelp from '@/components/common/FieldHelp.vue'
+import selectiveBaseline from './fixtures/linux-gateway-selective-0ef9e89.json'
 
 vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, profileApi: { list: vi.fn() } }))
 vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: {
@@ -585,6 +587,84 @@ describe('router split guards', () => {
     await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(confirmDanger).not.toHaveBeenCalled()
     expect(linuxGatewayApi.remove).toHaveBeenCalledExactlyOnceWith('one', 'office')
+  })
+
+  // Selective-gateway client steps that a router split never follows (lab copy scan).
+  const selectiveCopy = ['网关和 DNS 都设为', '主路由无需静态路由', '客户端原网关', '客户端原来的网关', '修改客户端网关', '切换客户端', '网关说明与安装要求', '1.8.25-go', '其余流量由 Linux 直连转发', '迁移']
+  const managedHost = () => vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, preserves_forwarding: true, spec } }))
+  const helpTexts = (wrapper: ReturnType<typeof shallowMount>) => wrapper.findAllComponents(FieldHelp).map(item => item.props('text') as string)
+
+  const selectiveScenarios: Record<string, (extra: object) => Promise<ReturnType<typeof shallowMount>>> = {
+    off: extra => render(false, false, extra),
+    managed: extra => { vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, spec } })); return render(true, false, extra) },
+    'no-agent': extra => { vi.mocked(agentApi.getAll).mockResolvedValue(response([])); return render(false, false, extra) },
+  }
+  it.each(Object.keys(selectiveScenarios).flatMap(name => [
+    [name, 'absent', {}], [name, 'null', { router_split: null }], [name, 'mode null', { router_split: { mode: null, source: null, issues: [], route_rule_set_ids: [] } }],
+  ] as const))('renders a gateway-scheme profile exactly as 0ef9e89 did (%s, router_split %s)', async (name, _label, extra) => {
+    const wrapper = await selectiveScenarios[name](extra)
+    const expected = (selectiveBaseline.scenarios as Record<string, { text: string; help: string[] }>)[name]
+    expect(wrapper.text()).toBe(expected.text)
+    expect(helpTexts(wrapper)).toEqual(expected.help)
+    expect(wrapper.find('[data-router-split-guide]').exists()).toBe(false)
+  })
+
+  it('explains the full TUN split instead of the selective client steps', async () => {
+    managedHost()
+    const wrapper = await render(false, false, split('full_tun'))
+    for (const text of selectiveCopy) expect(wrapper.text()).not.toContain(text)
+    expect(wrapper.text()).not.toContain('192.168.1.2')
+    expect(helpTexts(wrapper).join('\n')).not.toContain('设备以 Linux 为网关和 DNS')
+    const guide = wrapper.get('[data-router-split-guide]').text()
+    expect(guide).toContain('分流说明')
+    expect(guide).toContain('fake-IP 网段 198.18.0.1/16 和所选规则集的 IPv4 网段转给这台 Linux')
+    expect(guide).toContain('完整 TUN，接管主路由转来的全部连接')
+    expect(guide).toContain('需要 Mihomo Agent 1.8.40-go 或更新版本')
+    expect(wrapper.get('[data-router-split-clients]').text()).toContain('客户端网关保持主路由，无需改为 Linux；DNS 保持接入主路由时的设置')
+    const stop = wrapper.get('[data-router-split-stop]').text()
+    expect(stop).toContain('先删除主路由上指向这台 Linux 的静态路由，再把主路由 DHCP 的 DNS 改回原值')
+    expect(stop).toContain('完整 TUN 不使用本页的开关与网关转发')
+    // The OxiDNS settings guide applies to both schemes and stays.
+    expect(wrapper.text()).toContain('DNS 配置说明')
+  })
+
+  it('tells a legacy split to keep its takeover and drops the client gateway steps', async () => {
+    managedHost()
+    const wrapper = await render(true, false, split('legacy'))
+    for (const text of selectiveCopy) expect(wrapper.text()).not.toContain(text)
+    expect(wrapper.text()).toContain('客户端网关保持主路由，DNS 保持接入主路由时的设置，无需修改。')
+    expect(wrapper.text()).toContain('撤销前，先删除主路由上指向这台 Linux 的静态路由。')
+    const guide = wrapper.get('[data-router-split-guide]').text()
+    expect(guide).toContain('不要关闭 Linux 网关或撤销网关转发')
+    expect(guide).not.toContain('1.8.40-go')
+    expect(wrapper.get('[data-router-split-stop]').text()).toContain('静态路由删除前，不要撤销网关转发')
+    expect(button(wrapper, '撤销网关转发')).toBeDefined()
+  })
+
+  it('keeps the selective client steps out of an invalid marker too', async () => {
+    const wrapper = await render(false, false, split('invalid'))
+    for (const text of selectiveCopy) expect(wrapper.text()).not.toContain(text)
+    expect(wrapper.get('[data-router-split-guide]').text()).not.toContain('完整 TUN')
+    expect(wrapper.get('[data-router-split-stop]').text()).toContain('请先按上方提示恢复标记')
+  })
+
+  it('warns when the base YAML tun filters the forwarded connections', async () => {
+    const wrapper = await render(false, false, split('full_tun', { issues: ['tun_filtered'] }))
+    expect(wrapper.get('[data-tun-filtered]').text()).toContain('exclude-interface')
+    expect(wrapper.find('[data-tun-missing]').exists()).toBe(false)
+    const plain = await render(false, false, split('full_tun'))
+    expect(plain.find('[data-tun-filtered]').exists()).toBe(false)
+  })
+
+  it.each(['FORWARDING_NOT_PERSISTED', 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED'])('explains a refused cleanup (%s) while forwarding is not persisted', async code => {
+    managedHost()
+    vi.mocked(linuxGatewayApi.remove).mockRejectedValueOnce(conflict(code)).mockRejectedValueOnce(conflict(code, ''))
+    const wrapper = await render(false, false, split('full_tun'))
+    await button(wrapper, '清理旧网关记录').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('服务端原文')
+    await button(wrapper, '清理旧网关记录').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('IPv4 转发尚未持久化')
+    expect(notify.success).not.toHaveBeenCalled()
   })
 
   it.each(['ROUTER_SPLIT_LEGACY', 'ROUTER_SPLIT_RESTORE_BLOCKED'])('shows the server text for %s where the request failed', async code => {

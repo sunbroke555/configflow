@@ -4,7 +4,7 @@ import { routerKey } from 'vue-router'
 import { Check, CircleCheck, Copy, FileDiff, LoaderCircle, Network, RefreshCw, RotateCcw } from '@lucide/vue'
 import { agentApi, profileApi, type PublishGuard } from '@/api'
 import { linuxGatewayApi, type LinuxGatewayConfig, type LinuxGatewayDraftPreview, type LinuxGatewayRestorePoint, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewayRouterSplit, type LinuxGatewaySettings, type LinuxGatewayStatus } from '@/api/linuxGateway'
-import { ROUTER_SPLIT_MESSAGES, gatewayLeftover, routerSplitErrorMessage } from '@/lib/routerSplit'
+import { FORWARDING_AGENT_VERSION, ROUTER_SPLIT_MESSAGES, gatewayLeftover, routerSplitErrorMessage } from '@/lib/routerSplit'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySettingsKey, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
@@ -84,6 +84,7 @@ const invalidMode = computed(() => splitMode.value === 'invalid')
 const fullTunMode = computed(() => splitMode.value === 'full_tun' || invalidMode.value)
 const legacyMode = computed(() => splitMode.value === 'legacy')
 const tunMissing = computed(() => splitMode.value === 'full_tun' && !!routerSplit.value?.issues?.includes('tun_missing'))
+const tunFiltered = computed(() => splitMode.value === 'full_tun' && !!routerSplit.value?.issues?.includes('tun_filtered'))
 const forwardedRuleNames = computed(() => (routerSplit.value?.route_rule_set_ids || []).map(id => candidates.value.find(item => item.id === id)?.name || id))
 const leftoverGateway = computed(() => fullTunMode.value && !invalidMode.value ? gatewayLeftover(status.value) : null)
 const configured = computed(() => savedSettings.value.enabled && settings.enabled && !configDirty.value)
@@ -430,9 +431,10 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
             <p class="m-0 text-foreground">关闭开关、恢复到网关关闭的快照或撤销转发，会同时去掉 TUN 并还原 IPv4 转发，主路由转来的连接会中断。</p>
           </div>
           <p v-if="tunMissing" role="alert" class="m-0 text-xs leading-relaxed" data-tun-missing><span class="font-medium text-warning-accent">基础 YAML 缺少完整 TUN，发布已暂停。</span>请在 Mihomo 基础 YAML 中恢复 tun 后再发布，否则主路由转来的连接会回环。</p>
+          <p v-if="tunFiltered" role="alert" class="m-0 text-xs leading-relaxed" data-tun-filtered><span class="font-medium text-warning-accent">基础 YAML 的 tun 过滤了主路由转来的连接。</span>tun 中的网卡或地址过滤（如 exclude-interface）会让这些连接不经过 Mihomo。请在 Mihomo 基础 YAML 中去掉这些过滤后再发布。</p>
 
           <section aria-labelledby="gateway-rules" class="space-y-3">
-            <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 网关" :text="optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用网关转发；IPv6 需另行处理。')" /></div>
+            <div class="flex items-center gap-1"><h2 id="gateway-rules" class="m-0 text-lg font-semibold">接管规则</h2><FieldHelp label="Linux 网关" :text="splitMode ? optionHelp('主路由分流：主路由把 fake-IP 和所选规则集的网段转给这台 Linux。', '客户端网关保持主路由，只有转来的连接交给 Mihomo，其余由主路由直接转发。转发网段在「上游路由」管理。') : optionHelp('Linux + nftables 的 IPv4 网络，用 Shell Agent。', '设备以 Linux 为网关和 DNS，选中连接交给 Mihomo，其余直接转发。保存并发布配置后，还需单独应用网关转发；IPv6 需另行处理。')" /></div>
             <label for="linux-gateway-enabled" class="flex min-h-11 cursor-pointer items-center justify-between gap-4 border-b border-border pb-3">
               <span><span class="block text-sm font-medium">启用 Linux 网关</span><span class="mt-1 block text-xs text-muted-foreground">切换只在本页试用。预览并保存后才更新草稿，网关转发需单独应用。</span></span>
               <span class="flex shrink-0 items-center gap-1">
@@ -554,15 +556,30 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                 </div>
               </details>
             </div>
-            <p class="m-0 text-xs leading-relaxed">应用成功后再修改客户端网关和 DNS。先记录原设置，以便恢复。</p>
+            <p v-if="!legacyMode" class="m-0 text-xs leading-relaxed">应用成功后再修改客户端网关和 DNS。先记录原设置，以便恢复。</p>
+            <p v-else class="m-0 text-xs leading-relaxed">客户端网关保持主路由，DNS 保持接入主路由时的设置，无需修改。</p>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3">
               <Button variant="outline" class="min-h-11" :disabled="busy || !online || !shell || !managedNetwork" @click="removeNetwork"><LoaderCircle v-if="networkAction === 'remove'" class="size-4 animate-spin" /><RotateCcw v-else class="size-3.5" />撤销网关转发</Button>
-              <p v-if="managedNetwork" class="m-0 text-xs leading-relaxed text-muted-foreground">恢复前，先恢复客户端原来的网关与 DNS。</p>
+              <p v-if="managedNetwork" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ legacyMode ? '撤销前，先删除主路由上指向这台 Linux 的静态路由。' : '恢复前，先恢复客户端原来的网关与 DNS。' }}</p>
             </div>
           </section>
 
           <div class="divide-y divide-border border-y border-border text-xs">
-            <details>
+            <details v-if="splitMode" data-router-split-guide>
+              <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">分流说明</summary>
+              <ul class="mt-1 mb-3 list-disc space-y-2 pl-5 leading-relaxed text-muted-foreground">
+                <li>主路由按静态路由把 fake-IP 网段 <code class="break-all font-mono">{{ fakeIPRange || '由 Mihomo 配置决定' }}</code> 和所选规则集的 IPv4 网段转给这台 Linux，其余流量由主路由直接转发。转发网段在「上游路由」管理。</li>
+                <template v-if="legacyMode">
+                  <li>旧版方案：Mihomo 靠这台 Linux 的网关转发与选择性 TUN 接管转来的连接，实际出口由规则顺序及策略组当前选择决定。</li>
+                  <li>不要关闭 Linux 网关或撤销网关转发，否则会同时去掉 TUN 并还原 IPv4 转发，主路由转来的连接会中断。</li>
+                </template>
+                <template v-else-if="!invalidMode">
+                  <li>Mihomo 使用 rule / fake-IP 模式和完整 TUN，接管主路由转来的全部连接；实际出口由规则顺序及策略组当前选择决定。</li>
+                  <li>需要 Mihomo Agent {{ FORWARDING_AGENT_VERSION }} 或更新版本、root 和 TUN。IPv4 转发由 Agent 开启并持久化，不使用本页的 Linux 网关开关与网关转发。</li>
+                </template>
+              </ul>
+            </details>
+            <details v-else>
               <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">网关说明与安装要求</summary>
               <div class="space-y-3 pt-1 pb-3 leading-relaxed text-muted-foreground">
                 <ul class="m-0 list-disc space-y-2 pl-5">
@@ -589,7 +606,16 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                 <p class="m-0">Mihomo 的 DNS 上游不能再指回 OxiDNS；代理域名也不能被 fake-IP 过滤规则改为真实 IP。请确认对应策略组已选择可用代理节点。</p>
               </div>
             </details>
-            <details>
+            <details v-if="splitMode" data-router-split-clients>
+              <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">客户端接入与验证</summary>
+              <ol class="mt-1 mb-3 list-decimal space-y-2 pl-5 leading-relaxed text-muted-foreground">
+                <li>客户端网关保持主路由，无需改为 Linux；DNS 保持接入主路由时的设置，由主路由 DHCP 下发这台 Linux 上的 OxiDNS 地址。</li>
+                <li>关闭客户端代理、浏览器安全 DNS 和系统私有 DNS，刷新 DNS 缓存或重新连接网络。应用自带 DoH / DoT，或主路由未转发的真实 IP，不会经过 Mihomo。</li>
+                <li>分别测试直连和代理域名：直连返回真实 IP；代理返回 fake-IP，并在 Mihomo 连接列表确认出口。再测试所选规则集的真实 IP 服务是否命中预期策略。</li>
+                <li>单设备通过后再接入其他设备。新增转发网段时，主路由的静态路由也需同步添加。</li>
+              </ol>
+            </details>
+            <details v-else>
               <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">客户端接入与验证</summary>
               <ol class="mt-1 mb-3 list-decimal space-y-2 pl-5 leading-relaxed text-muted-foreground">
                 <li>先记录一台测试设备原来的网关、DNS、IPv6 和安全 DNS 设置。将网关和 DNS 都设为 <code class="text-foreground">{{ network.address || 'Linux 的局域网 IP' }}</code>；Linux 自身仍以主路由 <code>{{ network.upstream_gateway || '的 IP' }}</code> 为默认网关。</li>
@@ -598,7 +624,16 @@ onBeforeUnmount(() => { disposed = true; session++; hostSession++ })
                 <li>单设备通过后再接入其他设备。主路由无需静态路由；支持 DHCP 分发网关和 DNS 时，可统一下发 Linux 地址，否则逐台设置。</li>
               </ol>
             </details>
-            <details>
+            <details v-if="splitMode" data-router-split-stop>
+              <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">停用和恢复步骤</summary>
+              <div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground">
+                <p class="m-0">停用分流时，先删除主路由上指向这台 Linux 的静态路由，再把主路由 DHCP 的 DNS 改回原值；客户端重新连接网络后不再经过 Mihomo。</p>
+                <p v-if="legacyMode" class="m-0">静态路由删除前，不要撤销网关转发，否则主路由转来的连接会中断。删除后再用上方按钮撤销网关转发；Linux 网关开关保持开启。</p>
+                <p v-else-if="invalidMode" class="m-0">标记无效时已停止生成和网关操作，请先按上方提示恢复标记。</p>
+                <p v-else class="m-0">完整 TUN 不使用本页的开关与网关转发，无需在这里撤销。Agent 持久化的 IPv4 转发与 Mihomo TUN 保持不变，核心也不会卸载。</p>
+              </div>
+            </details>
+            <details v-else>
               <summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">停用和恢复步骤</summary>
               <div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p class="m-0">先恢复客户端原网关和 DNS（原先自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS；再用上方按钮撤销网关转发。</p><p class="m-0">最后关闭 Linux 网关开关，保存并发布 Mihomo。撤销只处理 ConfigFlow 管理的网络参数，不卸载核心；撤销转发不会单独关闭 Mihomo TUN。</p><p v-if="!managedNetwork" class="m-0">当前设备没有已应用或未完成的 ConfigFlow 网关转发，或尚未完成状态检测。</p></div>
             </details>

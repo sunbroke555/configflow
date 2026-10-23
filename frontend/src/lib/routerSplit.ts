@@ -57,7 +57,12 @@ export const ROUTER_SPLIT_MESSAGES: Record<string, string> = {
 }
 /** 旧版主路由分流下，快照会关闭 Linux 网关时服务端拒绝恢复的说明。 */
 export const LEGACY_RESTORE_BLOCKED = '恢复后 Linux 网关为关闭状态，主路由转来的连接会中断，已阻止。'
+/** 旧网关记录仍在且 IPv4 转发未持久化时，撤销记录或发布完整 TUN 会让转发被还原为关闭，服务端拒绝时的说明。 */
+export const FORWARDING_NOT_PERSISTED = '设备上仍有旧版 Linux 网关记录，且 IPv4 转发尚未持久化：Agent 撤销该记录时会把 IPv4 转发还原为关闭，主路由转来的连接会中断。请先在 Linux 网关安装向导的「检查转发与 TUN」中开启并持久化 IPv4 转发。'
+const FORWARDING_NOT_PERSISTED_CODES = new Set(['FORWARDING_NOT_PERSISTED', 'ROUTER_SPLIT_FORWARDING_NOT_PERSISTED'])
 /** 主路由分流错误码的文案：服务端原文优先（同一错误码按接管方式可能有不同说明），缺失时用本地文案。 */
 export function routerSplitErrorMessage(code: string | undefined | null, fallback = ''): string {
-  return fallback || (code && ROUTER_SPLIT_MESSAGES[code]) || '请求未完成，请稍后重试。'
+  if (fallback) return fallback
+  if (code && FORWARDING_NOT_PERSISTED_CODES.has(code)) return FORWARDING_NOT_PERSISTED
+  return (code && ROUTER_SPLIT_MESSAGES[code]) || '请求未完成，请稍后重试。'
 }
