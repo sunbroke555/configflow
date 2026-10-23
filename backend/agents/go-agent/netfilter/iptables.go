@@ -1,6 +1,7 @@
 package netfilter
 
 import (
+	"net/netip"
 	"strings"
 )
 
@@ -20,6 +21,12 @@ type iptRule struct {
 	protoNeg    bool
 	dstTypes    []string
 	dstTypesNeg bool
+	dports      []portSpan // destination ports; nil when the rule has none
+	dportsNeg   bool
+	tcpFlags    *tcpFlags
+	tcpFlagsNeg bool
+	source      *netip.Prefix // -s; nil when the rule has none
+	sourceNeg   bool
 }
 
 type iptTable struct {
@@ -132,6 +139,12 @@ func parseIptablesRule(line string) (iptRule, bool) {
 				next()
 				rule.conditional = true
 			}
+		case "-s", "--source":
+			if prefix, ok := parsePrefix(next()); ok {
+				rule.source, rule.sourceNeg = &prefix, negated
+			} else {
+				rule.conditional = true
+			}
 		case "-i", "--in-interface":
 			rule.in, rule.inNeg = next(), negated
 		case "-o", "--out-interface":
@@ -149,6 +162,25 @@ func parseIptablesRule(line string) (iptRule, bool) {
 				rule.states, rule.statesNeg = strings.Split(strings.ToUpper(next()), ","), negated
 			} else {
 				next()
+				rule.conditional = true
+			}
+		case "--dport", "--destination-port", "--dports", "--destination-ports":
+			multi := arg == "--dports" || arg == "--destination-ports"
+			value := next()
+			if spans, ok := parsePortList(value, multi); ok && (multi == (module == "multiport")) {
+				rule.dports, rule.dportsNeg = spans, negated
+			} else {
+				rule.conditional = true
+			}
+		case "--syn":
+			// Saved as --tcp-flags FIN,SYN,RST,ACK SYN by current releases.
+			rule.tcpFlags, rule.tcpFlagsNeg = &tcpFlags{mask: synMask, comp: tcpFlagSYN}, negated
+		case "--tcp-flags":
+			mask, maskOK := parseTCPFlags(next())
+			comp, compOK := parseTCPFlags(next())
+			if maskOK && compOK {
+				rule.tcpFlags, rule.tcpFlagsNeg = &tcpFlags{mask: mask, comp: comp}, negated
+			} else {
 				rule.conditional = true
 			}
 		case "-c", "--set-counters":
@@ -189,6 +221,15 @@ func (rule iptRule) match(f flow) tri {
 	}
 	if len(rule.states) > 0 {
 		result = and(result, stateMatch(rule.states, rule.statesNeg, f))
+	}
+	if rule.dports != nil {
+		result = and(result, negate(portMatch(rule.dports, f), rule.dportsNeg))
+	}
+	if rule.source != nil {
+		result = and(result, negate(sourceMatch([]netip.Prefix{*rule.source}, f), rule.sourceNeg))
+	}
+	if rule.tcpFlags != nil {
+		result = and(result, negate(rule.tcpFlags.match(f), rule.tcpFlagsNeg))
 	}
 	if rule.conditional {
 		result = and(result, maybe)
@@ -461,16 +502,25 @@ func ufwEnabled(conf string) (bool, bool) {
 }
 
 // record keeps a possible drop. Strict flows only count drops that certainly
-// apply: certain is false once the path went through a conditional jump.
+// apply: certain is false once the path went through a conditional jump, or
+// past a rule that may have accepted the packet. A drop left out that way
+// still means the view of the flow is not complete.
 func (e *iptEvaluation) record(item iptFinding, f flow, m tri, certain bool) {
 	if f.strict && !(certain && m == yes) {
+		e.in.skipped = true
 		return
 	}
 	item.flow = f.name
 	e.found = append(e.found, item)
 }
 
-func (e *iptEvaluation) chain(name string, f flow, depth int, path []string, forward int, certain bool) verdict {
+// chain evaluates one chain for a flow. The second result reports that a rule
+// on the way may have accepted the packet (a conditional ACCEPT, or a jump
+// whose chain may accept): no later drop, policy included, is then certain.
+// Port conditions are resolved against the flow's ports first, so a service
+// port allowed by the user does not count as a possible accept.
+func (e *iptEvaluation) chain(name string, f flow, depth int, path []string, forward int, certain bool) (verdict, bool) {
+	mayAccept, mayReturn := false, false
 rules:
 	for index, rule := range e.table.rules[name] {
 		at := forward
@@ -481,54 +531,63 @@ rules:
 		if m == no {
 			continue
 		}
+		sure := certain && !mayAccept && !mayReturn
 		switch target := rule.target; {
 		case target == "ACCEPT":
 			if m == yes {
-				return accepted
+				return accepted, mayAccept
 			}
+			mayAccept = true
 		case target == "DROP" || target == "REJECT":
 			if rule.invalidOnly {
 				continue
 			}
-			e.record(iptFinding{chains: path, forward: at, rule: rule.text}, f, m, certain)
+			e.record(iptFinding{chains: path, forward: at, rule: rule.text}, f, m, sure)
 			if m == yes {
-				return dropped
+				return dropped, mayAccept
 			}
 		case target == "RETURN":
 			if m == yes {
 				break rules
 			}
+			mayReturn = true
 		case target == "" || nonTerminatingTargets[target]:
 		case e.isChain(target):
 			if depth >= 16 {
-				e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true}, f, m, certain)
+				e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true}, f, m, sure)
+				mayAccept = true
 				continue
 			}
-			result := e.chain(target, f, depth+1, append(append([]string{}, path...), target), at, certain && m == yes)
+			result, inner := e.chain(target, f, depth+1, append(append([]string{}, path...), target), at, sure && m == yes)
+			if inner || (m != yes && result == accepted) {
+				mayAccept = true
+			}
 			if m != yes {
 				continue
 			}
 			switch result {
 			case accepted, dropped:
-				return result
+				return result, mayAccept
 			default:
 				if rule.isGoto {
 					break rules
 				}
 			}
 		default:
-			e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true}, f, m, certain)
+			// An unknown target may drop or accept.
+			e.record(iptFinding{chains: path, forward: at, rule: rule.text, unknown: true}, f, m, sure)
+			mayAccept = true
 		}
 	}
 	// A builtin chain that returns or falls off its end applies its policy.
 	if depth == 0 {
 		if strings.EqualFold(e.table.policies[name], "DROP") {
-			e.record(iptFinding{chains: path, forward: len(e.table.rules[name]), policy: true}, f, yes, true)
-			return dropped
+			e.record(iptFinding{chains: path, forward: len(e.table.rules[name]), policy: true}, f, yes, certain && !mayAccept)
+			return dropped, mayAccept
 		}
-		return accepted
+		return accepted, mayAccept
 	}
-	return fallThrough
+	return fallThrough, mayAccept
 }
 
 func (e *iptEvaluation) isChain(name string) bool {

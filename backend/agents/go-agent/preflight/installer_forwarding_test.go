@@ -246,7 +246,7 @@ func TestInstallerForwardFilterTargetMatchesThePublishedTUN(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			probe := installerProbe(healthySystemFixture(), "")
-			probe.localAddresses = func() []net.IP { return []net.IP{net.ParseIP("10.97.0.20").To4()} }
+			probe.lanAddresses = func() []net.IP { return []net.IP{net.ParseIP("10.97.0.20").To4()} }
 			var target netfilter.Target
 			probe.forwardFilter = func(value netfilter.Target) netfilter.Result { target = value; return mayDrop }
 			systemChecksWithProbe(tc.configs(t), probe)

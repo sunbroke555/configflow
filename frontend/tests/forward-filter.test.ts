@@ -19,7 +19,10 @@ describe('forward filter warning', () => {
 
   it.each([
     ['forwarded UDP only', ['forward'], true, '可能拦截 UDP'],
-    ['forwarded UDP and DNS to this host', ['forward', 'dns'], true, '可能拦截 UDP'],
+    // Lab: FORWARD DROP on a standalone Mihomo serving LAN DNS; every lookup fails, not just UDP.
+    ['forwarded UDP and DNS to this host', ['forward', 'dns'], true, '可能拦截转发'],
+    ['DNS to this host only', ['dns'], true, '可能拦截 DNS'],
+    ['TCP DNS from the TUN and DNS to this host', ['dns', 'tun_tcp'], true, '可能拦截 DNS'],
     ['redirected TCP (UFW, INPUT drop)', ['forward', 'dns', 'redirect_tcp', 'tun_tcp'], true, '可能拦截转发'],
     ['redirected TCP only', ['redirect_tcp'], true, '可能拦截转发'],
     ['TCP DNS from the TUN only (firewalld)', ['tun_tcp'], true, '可能拦截 DNS'],

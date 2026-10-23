@@ -13,6 +13,7 @@ package netfilter
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,7 +82,13 @@ type Target struct {
 	// DNSHijack: auto-redirect DNATs DNS that LAN devices send to this host
 	// into the TUN (dns-hijack on port 53, host address not excluded).
 	DNSHijack bool
+	// TUNPeer is the source address the TUN system stack gives TCP it hands
+	// to Mihomo: the address after tun.inet4-address. Zero means Mihomo's
+	// default, 198.18.0.2 (inet4-address 198.18.0.1/30).
+	TUNPeer netip.Addr
 }
+
+var defaultTUNPeer = netip.MustParseAddr("198.18.0.2")
 
 // Flow names reported in Result.Flows, in display order.
 const (
@@ -112,7 +119,7 @@ var (
 const (
 	maxSources  = 8
 	maxRemedies = 6
-	maxCommands = 6
+	maxCommands = 8
 	maxDetail   = 160
 )
 
@@ -148,11 +155,15 @@ type inspection struct {
 	lan        []string // default-route interfaces; nil when unknown
 	findings   []finding
 	incomplete string // first reason the view is not complete
-	hooks      int    // inspected forward and input hooks
-	policies   map[string]string
-	ufwActive  bool
-	firewalld  bool // firewalld is running and its state was read
-	remedies   []*remedyPlan
+	// skipped: a strict flow passed a drop that may apply, or a drop after a
+	// rule that may already have accepted it; the view of it is not complete.
+	skipped   bool
+	ports     portSpan // ephemeral ports auto-redirect and the TUN stack listen on
+	hooks     int      // inspected forward and input hooks
+	policies  map[string]string
+	ufwActive bool
+	firewalld bool // firewalld is running and its state was read
+	remedies  []*remedyPlan
 }
 
 type finding struct {
@@ -167,7 +178,9 @@ type remedyPlan struct {
 	source, binary, family, table, chain string
 	label                                string
 	flows                                map[string]bool
-	policyExists                         bool // firewalld: the configflow-tun policy already exists
+	// firewalld: the configflow-tun zone and configflow-fwd policy already
+	// exist (their chains appear once they are in use).
+	zoneExists, policyExists bool
 }
 
 // notePolicy keeps the strictest real default policy per hook.
@@ -239,7 +252,7 @@ func Inspect(ctx context.Context, probe Probe, target Target) Result {
 	}
 	ctx, cancel := context.WithTimeout(ctx, TotalBudget)
 	defer cancel()
-	in := &inspection{ctx: ctx, probe: probe, target: target}
+	in := &inspection{ctx: ctx, probe: probe, target: target, ports: localPortRange(probe)}
 	in.lan = defaultRouteInterfaces(probe, target.Device)
 
 	nftLoaded, nftKnown := nfTablesPresent(in)
@@ -485,7 +498,7 @@ func (in *inspection) result(now time.Time) Result {
 				result.Remedies = append(result.Remedies, remedy)
 			}
 		}
-		result.Hint = hint(in.target, blocked, in.incomplete == "", len(result.Remedies) > 0)
+		result.Hint = hint(in.target, blocked, in.incomplete == "" && !in.skipped, len(result.Remedies) > 0)
 		result.Verify = verify(in.target, blocked)
 	case in.incomplete != "":
 		result.State, result.Reason = StateUnknown, in.incomplete
@@ -579,6 +592,8 @@ type flow struct {
 	dnat    tri // conntrack status DNAT
 	local   tri // destination is an address of this host
 	ct      ctFacts
+	dport   portSpan   // destination ports the flow may use; zero when any
+	saddr   netip.Addr // source address when known
 	// strict flows report only drops that certainly apply. Input chains are
 	// full of port and address conditions that rarely concern these flows.
 	strict bool
@@ -596,11 +611,20 @@ func (in *inspection) flows(hook string) []flow {
 	if hook == "input" {
 		var flows []flow
 		input := ctFacts{known: true, isNew: true}
+		// Both listen on a port the kernel picks from its ephemeral range.
+		ports := in.ports
+		if ports.hi == 0 {
+			ports = defaultLocalPorts
+		}
 		if in.target.AutoRedirect {
-			flows = append(flows, flow{name: FlowRedirectTCP, hook: hook, in: lan, out: side{none: true}, proto: "tcp", dnat: yes, local: yes, ct: input, strict: true})
+			flows = append(flows, flow{name: FlowRedirectTCP, hook: hook, in: lan, out: side{none: true}, proto: "tcp", dnat: yes, local: yes, ct: input, dport: ports, strict: true})
 		}
 		if kernelStack(in.target.Stack) && (!in.target.AutoRedirect || in.target.DNSHijack) {
-			flows = append(flows, flow{name: FlowTUNTCP, hook: hook, in: device, out: side{none: true}, proto: "tcp", dnat: no, local: yes, ct: input, strict: true})
+			peer := in.target.TUNPeer
+			if !peer.IsValid() {
+				peer = defaultTUNPeer
+			}
+			flows = append(flows, flow{name: FlowTUNTCP, hook: hook, in: device, out: side{none: true}, proto: "tcp", dnat: no, local: yes, ct: input, dport: ports, saddr: peer, strict: true})
 		}
 		return flows
 	}
@@ -634,13 +658,8 @@ func matchInterface(pattern string, s side, wildcard byte) tri {
 		return no
 	}
 	if s.lan == nil {
-		if pattern == "lo" {
+		if pattern == "lo" || nonLANInterface(pattern) {
 			return no
-		}
-		for _, prefix := range nonLANPrefixes {
-			if strings.HasPrefix(pattern, prefix) {
-				return no
-			}
 		}
 		return maybe
 	}

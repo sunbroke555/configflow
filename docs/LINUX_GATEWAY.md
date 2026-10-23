@@ -190,7 +190,7 @@ Agent `1.8.42-go` 起会只读检查 iptables（nft / legacy，含 UFW 的链）
 | iptables（legacy 后端写作 `iptables-legacy`） | `iptables -I FORWARD -o Meta -j ACCEPT`<br>`iptables -I FORWARD -i Meta -j ACCEPT` | `iptables -I INPUT -m conntrack --ctstate DNAT -j ACCEPT`<br>`iptables -I INPUT -i Meta -j ACCEPT` | 同上 |
 | nftables（表名和链名按实际检测） | `nft 'insert rule inet filter forward oifname "Meta" accept'`<br>`nft 'insert rule inet filter forward iifname "Meta" accept'` | `nft 'insert rule inet filter input ct status dnat accept'`<br>`nft 'insert rule inet filter input iifname "Meta" accept'` | 会丢失；把这些规则写进 `/etc/nftables.conf`（或系统加载的 nftables 配置）对应的链 |
 | UFW | `ufw route allow in on Meta`<br>`ufw route allow out on Meta` | `ufw allow in on Meta`<br>下面的 `before.rules` 一行，然后 `ufw reload` | UFW 自动保存；`before.rules` 的改动同样保留 |
-| firewalld（nftables 后端） | `firewall-cmd --permanent --zone=trusted --change-interface=Meta`<br>`firewall-cmd --permanent --new-policy=configflow-tun`<br>`firewall-cmd --permanent --policy=configflow-tun --add-ingress-zone=ANY`<br>`firewall-cmd --permanent --policy=configflow-tun --add-egress-zone=trusted`<br>`firewall-cmd --permanent --policy=configflow-tun --set-target=ACCEPT`<br>`firewall-cmd --reload` | 同左（trusted 区域放行来自 `Meta` 的连接；firewalld 自带 `ct status dnat accept`，重定向的 TCP 不受影响） | `--permanent` 已保存 |
+| firewalld（nftables 后端） | `firewall-cmd --permanent --new-zone=configflow-tun`<br>`firewall-cmd --permanent --zone=configflow-tun --set-target=ACCEPT`<br>`firewall-cmd --permanent --zone=configflow-tun --change-interface=Meta`<br>`firewall-cmd --permanent --new-policy=configflow-fwd`<br>`firewall-cmd --permanent --policy=configflow-fwd --add-ingress-zone=ANY`<br>`firewall-cmd --permanent --policy=configflow-fwd --add-egress-zone=configflow-tun`<br>`firewall-cmd --permanent --policy=configflow-fwd --set-target=ACCEPT`<br>`firewall-cmd --reload` | 同左（`configflow-tun` 区域只含 `Meta`，接受从它进来的连接；firewalld 自带 `ct status dnat accept`，重定向的 TCP 不受影响） | `--permanent` 已保存 |
 
 UFW 没有按 conntrack 状态放行的命令，所以把规则写进 `/etc/ufw/before.rules` 的 `# End required lines` 之后；这一行可重复执行，已存在时不会重复添加：
 
@@ -198,11 +198,11 @@ UFW 没有按 conntrack 状态放行的命令，所以把规则写进 `/etc/ufw/
 grep -q -- '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules || sed -i '/^# End required lines/a -A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules
 ```
 
-firewalld 只把 `Meta` 放进 trusted 区域时，从 `Meta` 进来的流量会放行，但主路由转来、要转发进 `Meta` 的流量仍按局域网网卡所在区域被拒绝，所以还需要 `configflow-tun` 策略（任意区域转发到 trusted 区域时接受）。策略已存在时，页面不再给出 `--new-policy` 一行；重复执行时 firewalld 会提示 `NAME_CONFLICT` 或 `ALREADY_ENABLED`，可以忽略。
+firewalld 把 `Meta` 放进接受入站的区域后，从 `Meta` 进来的流量会放行，但主路由转来、要转发进 `Meta` 的流量仍按局域网网卡所在区域被拒绝，所以还需要 `configflow-fwd` 策略（任意区域转发到 `configflow-tun` 区域时接受）。这里用只含 TUN 设备的专用区域，不复用 trusted：策略对出口区域的全部成员生效，trusted 里若已有其他网卡或来源网段，复用它会连带放开从任意区域（包括 WAN 口）转发到这些网卡或网段的新连接。区域或策略已在使用时，页面不再给出对应的 `--new-zone` / `--new-policy` 一行；重复执行时 firewalld 会提示 `NAME_CONFLICT` 或 `ALREADY_ENABLED`，可以忽略。
 
-以上命令都在实验环境（Debian 13、Mihomo v1.19.32 完整 TUN、`mixed` 栈）逐条验证过：执行后转发的 UDP、ping、TCP 和发到这台 Linux 的 DNS（UDP / TCP）恢复，UFW 与 firewalld 重启后仍有效。执行后等几秒再回到页面刷新状态（发现拦截时检查结果只缓存 5 秒，其他结果最多 30 秒），再按提醒里的验证方法在客户端确认。状态里的 `policy` / `input_policy` 是转发与入站链真实的默认策略，放行规则生效后可能仍是 `drop`，是否拦截以提醒是否消失为准。
+以上命令都在实验环境（Debian 13、Mihomo v1.19.32 完整 TUN、`mixed` 栈）逐条验证过：执行后转发的 UDP、ping、TCP 和发到这台 Linux 的 DNS（UDP / TCP）恢复，UFW 与 firewalld 重启后仍有效；firewalld 的命令在 `Meta` 原本不属于任何区域和属于 public 两种情况下都验证过，trusted 区域里已有的来源网段不会被放开。执行后等几秒再回到页面刷新状态（发现拦截时检查结果只缓存 5 秒，其他结果最多 30 秒），再按提醒里的验证方法在客户端确认。状态里的 `policy` / `input_policy` 是转发与入站链真实的默认策略，放行规则生效后可能仍是 `drop`，是否拦截以提醒是否消失为准。
 
-已知限制：只检查 IPv4，只看顶层 `tun`（`listeners` 里的 TUN 不检查）；转发方向带源 / 目的地址等其他条件的拦截规则按“可能拦截”保守提醒，本机入站只在规则一定会拦下这些连接时提醒（只针对某些端口或地址的拒绝规则不提醒），但入站默认拒绝时，只放行某个端口范围（如 1024–65535）的规则不算放行，仍会提醒；使用 iptables 后端的旧版 firewalld（如 CentOS 7）没有对应的放行命令，或放行后仍可能显示提醒；修改 `tun.device` 后需要按新命令重新放行。
+已知限制：只检查 IPv4，只看顶层 `tun`（`listeners` 里的 TUN 不检查）；转发方向带源 / 目的地址等其他条件的拦截规则按“可能拦截”保守提醒，UFW 默认放行转发的 ping，提醒里的「ping 会失败」在 UFW 上可能不准确。本机入站只在规则一定会拦下这些连接时提醒：端口条件按本机临时端口范围（`net.ipv4.ip_local_port_range`，重定向和 TUN 交给 Mihomo 的端口都从这里随机选取）判断，所以只放行 22、9090 等服务端口不算放行，`! --dport 22` 的拒绝或只拦 SYN（`--syn`）的规则算作拦截；只针对某些地址的拒绝规则不提醒；入站默认拒绝之前若有可能放行这些连接的规则（如 `ufw allow from <局域网>`、`-s <网段> -j ACCEPT`，被重定向的 TCP 仍保留客户端地址），不再断言转发的 TCP 会失败。有这类拿不准的规则时，提醒不会写“其他 TCP 连接不受影响”。只有 `route-exclude-address` 覆盖了默认路由网卡上的全部 IPv4 地址，才认为发到这台 Linux 的 DNS 不进 TUN（排除 Docker 等网段不算）；使用 iptables 后端的旧版 firewalld（如 CentOS 7）没有对应的放行命令，或放行后仍可能显示提醒；修改 `tun.device` 后需要按新命令重新放行。
 
 停用顺序：**先恢复客户端网关和 DNS → 在向导恢复所选设备网络 → 关闭网关模式 → 保存并发布 Mihomo**。恢复操作只清理带有匹配归属、且未被外部修改的受管规则；系统参数也只在仍等于受管值时恢复。若提示资源被外部修改，保留现场并先核对变化。
 

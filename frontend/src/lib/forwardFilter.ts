@@ -83,7 +83,8 @@ const isText = (value: unknown): value is string => typeof value === 'string'
 const FLOWS: readonly ForwardFilterFlow[] = ['forward', 'dns', 'redirect_tcp', 'tun_tcp']
 
 /**
- * 状态短句按被拦截的流量：TCP 也受影响时为「可能拦截转发」，只有 UDP / ping 时为「可能拦截 UDP」，
+ * 状态短句按被拦截的流量：只有转发的 UDP / ping 时为「可能拦截 UDP」；TCP 也受影响，
+ * 或转发的 UDP 与发到这台 Linux 的 DNS（UDP、TCP 都失败）一起受影响时为「可能拦截转发」；
  * 只影响把这台 Linux 当 DNS 的查询时为「可能拦截 DNS」。
  */
 function impactLabel(filter: ForwardFilter): string {
@@ -91,8 +92,9 @@ function impactLabel(filter: ForwardFilter): string {
   const flows = Array.isArray(filter.flows) ? filter.flows.filter(flow => FLOWS.includes(flow)) : []
   if (!flows.length) return redirect ? '可能拦截 UDP' : '可能拦截转发'
   const tcp = flows.includes('redirect_tcp') || (!redirect && (flows.includes('forward') || flows.includes('tun_tcp')))
-  if (tcp) return '可能拦截转发'
-  return flows.includes('forward') ? '可能拦截 UDP' : '可能拦截 DNS'
+  const forward = flows.includes('forward')
+  if (tcp || (forward && flows.includes('dns'))) return '可能拦截转发'
+  return forward ? '可能拦截 UDP' : '可能拦截 DNS'
 }
 
 export function forwardFilterSourceLabel(kind: ForwardFilterSourceKind, label?: string): string {

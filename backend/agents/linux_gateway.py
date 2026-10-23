@@ -429,7 +429,7 @@ FORWARD_FILTER_SOURCES = frozenset({'docker', 'iptables', 'nftables', 'firewalld
 FORWARD_FILTER_FLOWS = ('forward', 'dns', 'redirect_tcp', 'tun_tcp')
 FORWARD_FILTER_MAX_SOURCES = 8
 FORWARD_FILTER_MAX_REMEDIES = 6
-FORWARD_FILTER_MAX_COMMANDS = 6
+FORWARD_FILTER_MAX_COMMANDS = 8
 FORWARD_FILTER_MAX_COMMAND = 240
 # Same as the Agent's TUN device pattern (aioDevicePattern, netfilter.DevicePattern).
 _FORWARD_FILTER_DEVICE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}')

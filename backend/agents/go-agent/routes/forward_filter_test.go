@@ -108,8 +108,8 @@ func TestForwardFilterTargetCarriesStackAndDNSHijack(t *testing.T) {
 	// ConfigFlow's standalone full TUN; the AIO publish excludes this host.
 	standalone := fullTUNConfig + "  stack: mixed\n  dns-hijack: [any:53, tcp://any:53]\n"
 	f := newForwardFilterFixture(t, standalone)
-	forwardFilterLocalAddresses = func() []net.IP { return []net.IP{net.ParseIP("10.97.0.20").To4()} }
-	t.Cleanup(func() { forwardFilterLocalAddresses = netfilter.LocalAddresses })
+	forwardFilterLANAddresses = func() []net.IP { return []net.IP{net.ParseIP("10.97.0.20").To4()} }
+	t.Cleanup(func() { forwardFilterLANAddresses = netfilter.LANAddresses })
 	forwardFilterStatus(f.cfg)
 	if want := (netfilter.Target{Device: "Meta", AutoRedirect: true, Stack: "mixed", DNSHijack: true}); f.target != want {
 		t.Fatalf("standalone target: %+v", f.target)

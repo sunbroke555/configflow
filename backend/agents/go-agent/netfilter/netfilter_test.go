@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -448,7 +449,23 @@ func TestInputRulesOnlyCountCertainDrops(t *testing.T) {
 		{"established only accepted", ":INPUT DROP [0:0]\n-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n", true},
 		{"dnat accepted", ":INPUT DROP [0:0]\n-A INPUT -m conntrack --ctstate DNAT -j ACCEPT\n", false},
 		{"not-local drop skipped for local", ":INPUT DROP [0:0]\n:nl - [0:0]\n-A INPUT -m conntrack --ctstate DNAT -j nl\n-A INPUT -m conntrack --ctstate DNAT -j ACCEPT\n-A nl -m addrtype --dst-type LOCAL -j RETURN\n-A nl -j DROP\n", false},
-		{"open port range is not certain", ":INPUT DROP [0:0]\n-A INPUT -p tcp -m tcp --dport 1024:65535 -j ACCEPT\n", true},
+		// Redirected TCP goes to a port from the ephemeral range (32768-60999).
+		{"ephemeral ports accepted", ":INPUT DROP [0:0]\n-A INPUT -p tcp -m tcp --dport 1024:65535 -j ACCEPT\n", false},
+		{"service ports accepted", ":INPUT DROP [0:0]\n-A INPUT -p tcp -m multiport --dports 22,80,443,8000:9000 -j ACCEPT\n", true},
+		{"part of the ephemeral ports accepted", ":INPUT DROP [0:0]\n-A INPUT -p tcp -m tcp --dport 40000:41000 -j ACCEPT\n", false},
+		// A source or interface condition may hold for LAN clients (ufw allow from <LAN>).
+		{"LAN source accepted", ":INPUT DROP [0:0]\n-A INPUT -i lo -j ACCEPT\n-A INPUT -s 192.168.1.0/24 -j ACCEPT\n", false},
+		{"source accepted in a user chain", ":INPUT DROP [0:0]\n:allow - [0:0]\n-A INPUT -j allow\n-A allow -s 192.168.1.0/24 -j ACCEPT\n", false},
+		{"source accepted after a jump", ":INPUT DROP [0:0]\n:allow - [0:0]\n-A INPUT -s 192.168.1.0/24 -j allow\n-A allow -j ACCEPT\n", false},
+		{"accept for another interface", ":INPUT DROP [0:0]\n-A INPUT -i wg0 -j ACCEPT\n", true},
+		// New TCP connections start with SYN; other ports than ssh include the redirect port.
+		{"syn dropped", ":INPUT ACCEPT [0:0]\n-A INPUT -i eth0 -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -j DROP\n", true},
+		{"syn dropped (old syntax)", ":INPUT ACCEPT [0:0]\n-A INPUT -p tcp --syn -j DROP\n", true},
+		{"non-syn dropped", ":INPUT ACCEPT [0:0]\n-A INPUT -p tcp -m tcp ! --tcp-flags FIN,SYN,RST,ACK SYN -m conntrack --ctstate NEW -j DROP\n", false},
+		{"all but ssh rejected", ":INPUT ACCEPT [0:0]\n-A INPUT -p tcp -m tcp ! --dport 22 -j REJECT --reject-with icmp-port-unreachable\n", true},
+		{"high ports dropped", ":INPUT ACCEPT [0:0]\n-A INPUT -p tcp -m tcp --dport 1024:65535 -j DROP\n", true},
+		{"hardened input", ":INPUT ACCEPT [0:0]\n-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT\n-A INPUT -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -j DROP\n", true},
+		{"syn dropped after a LAN accept", ":INPUT ACCEPT [0:0]\n-A INPUT -s 192.168.1.0/24 -j ACCEPT\n-A INPUT -p tcp --syn -j DROP\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			table, ok := parseIptablesSave("*filter\n" + tc.rules + "COMMIT\n")
@@ -557,11 +574,13 @@ func firewalldHost(t *testing.T, ruleset string) *host {
 }
 
 var firewalldCommands = []string{
-	"firewall-cmd --permanent --zone=trusted --change-interface=Meta",
-	"firewall-cmd --permanent --new-policy=configflow-tun",
-	"firewall-cmd --permanent --policy=configflow-tun --add-ingress-zone=ANY",
-	"firewall-cmd --permanent --policy=configflow-tun --add-egress-zone=trusted",
-	"firewall-cmd --permanent --policy=configflow-tun --set-target=ACCEPT",
+	"firewall-cmd --permanent --new-zone=configflow-tun",
+	"firewall-cmd --permanent --zone=configflow-tun --set-target=ACCEPT",
+	"firewall-cmd --permanent --zone=configflow-tun --change-interface=Meta",
+	"firewall-cmd --permanent --new-policy=configflow-fwd",
+	"firewall-cmd --permanent --policy=configflow-fwd --add-ingress-zone=ANY",
+	"firewall-cmd --permanent --policy=configflow-fwd --add-egress-zone=configflow-tun",
+	"firewall-cmd --permanent --policy=configflow-fwd --set-target=ACCEPT",
 	"firewall-cmd --reload",
 }
 
@@ -589,17 +608,26 @@ func TestFirewalldRulesetFromTheLab(t *testing.T) {
 			t.Fatalf("%s sources: %+v", tc.ruleset, result.Sources)
 		}
 	}
-	// After the commands: trusted zone plus the configflow-tun policy.
-	if result := firewalldHost(t, "firewalld-fixed.nft.json").inspectTarget(standalone); result.State != StateOK || result.Policy != "accept" {
+	// Lab v7: after the commands (configflow-tun zone with only Meta, and the
+	// configflow-fwd policy) everything worked, also after a reboot.
+	if result := firewalldHost(t, "firewalld-zone-fixed.nft.json").inspectTarget(standalone); result.State != StateOK || result.Policy != "accept" {
 		t.Fatalf("fixed firewalld: %+v", result)
+	}
+	// Meta in trusted plus an ANY -> trusted policy (lab v6) is also clean.
+	if result := firewalldHost(t, "firewalld-fixed.nft.json").inspectTarget(standalone); result.State != StateOK {
+		t.Fatalf("trusted firewalld: %+v", result)
 	}
 }
 
 func TestFirewalldExistingPolicyIsNotCreatedAgain(t *testing.T) {
 	in := &inspection{target: Target{Device: "Meta"}}
 	plan := &remedyPlan{source: "firewalld", flows: map[string]bool{FlowForward: true}, policyExists: true}
-	if commands := in.remedy(plan).Commands; len(commands) != 5 || strings.Contains(strings.Join(commands, "\n"), "--new-policy") {
+	if commands := in.remedy(plan).Commands; len(commands) != 7 || strings.Contains(strings.Join(commands, "\n"), "--new-policy") {
 		t.Fatalf("existing policy: %q", commands)
+	}
+	plan = &remedyPlan{source: "firewalld", flows: map[string]bool{FlowTUNTCP: true}, zoneExists: true, policyExists: true}
+	if commands := in.remedy(plan).Commands; !reflect.DeepEqual(commands, []string{firewalldCommands[1], firewalldCommands[2], firewalldCommands[4], firewalldCommands[5], firewalldCommands[6], firewalldCommands[7]}) {
+		t.Fatalf("existing zone and policy: %q", commands)
 	}
 	// Redirected TCP only (an old release without ct status dnat accept): no command.
 	plan = &remedyPlan{source: "firewalld", flows: map[string]bool{FlowRedirectTCP: true}}
@@ -811,10 +839,21 @@ func TestTUNTargetReadsTheDeployedTUN(t *testing.T) {
 		{"bare excluded address", map[string]interface{}{"auto-redirect": true, "route-exclude-address": list("10.97.0.20")}, Target{Device: "Meta", AutoRedirect: true}},
 		{"other excluded network", map[string]interface{}{"auto-redirect": true, "route-exclude-address": list("192.168.0.0/16")}, Target{Device: "Meta", AutoRedirect: true, DNSHijack: true}},
 		{"without auto-redirect", map[string]interface{}{"stack": "system", "dns-hijack": list("0.0.0.0:53")}, Target{Device: "Meta", Stack: "system"}},
+		// Review: excluding the private ranges a Docker bridge uses does not keep
+		// DNS to the LAN address out of the TUN.
+		{"Docker network excluded", map[string]interface{}{"auto-redirect": true, "route-exclude-address": list("172.16.0.0/12")}, Target{Device: "Meta", AutoRedirect: true, DNSHijack: true}},
 	} {
 		if got := TUNTarget(tc.tun, local); got != tc.want {
 			t.Fatalf("%s: %+v, want %+v", tc.name, got, tc.want)
 		}
+	}
+	// Every LAN address must be excluded; none known means hijacked.
+	tun := map[string]interface{}{"auto-redirect": true, "route-exclude-address": list("10.97.0.20/32")}
+	if got := TUNTarget(tun, []net.IP{net.ParseIP("10.97.0.20"), net.ParseIP("192.168.50.2")}); !got.DNSHijack {
+		t.Fatalf("second LAN address: %+v", got)
+	}
+	if got := TUNTarget(tun, nil); !got.DNSHijack {
+		t.Fatalf("no LAN address: %+v", got)
 	}
 }
 
@@ -879,5 +918,249 @@ func TestDockerHostWithInputDropGetsTwoGroups(t *testing.T) {
 	}
 	if want := []string{"iptables -I INPUT -m conntrack --ctstate DNAT -j ACCEPT", "iptables -I INPUT -i Meta -j ACCEPT"}; !reflect.DeepEqual(result.Remedies[1].Commands, want) {
 		t.Fatalf("input group: %q", result.Remedies[1].Commands)
+	}
+}
+
+// nftInputRules is a minimal ruleset: inet filter with an input and a forward base
+// chain and the given input rules (nft -j rule expressions).
+func nftInputRules(inputPolicy, forwardPolicy string, input ...string) string {
+	objects := []string{
+		`{"table": {"family": "inet", "name": "filter", "handle": 1}}`,
+		`{"chain": {"family": "inet", "table": "filter", "name": "input", "handle": 1, "type": "filter", "hook": "input", "prio": 0, "policy": "` + inputPolicy + `"}}`,
+		`{"chain": {"family": "inet", "table": "filter", "name": "forward", "handle": 2, "type": "filter", "hook": "forward", "prio": 0, "policy": "` + forwardPolicy + `"}}`,
+	}
+	for _, expr := range input {
+		objects = append(objects, `{"rule": {"family": "inet", "table": "filter", "chain": "input", "expr": `+expr+`}}`)
+	}
+	return `{"nftables": [` + strings.Join(objects, ", ") + `]}`
+}
+
+const (
+	nftLoopbackAccept  = `[{"match": {"op": "==", "left": {"meta": {"key": "iif"}}, "right": "lo"}}, {"accept": null}]`
+	nftEstablished     = `[{"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}}, {"accept": null}]`
+	nftServicePorts    = `[{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": {"set": [22, 9090, {"range": [8000, 9000]}]}}}, {"accept": null}]`
+	nftLANSourceAccept = `[{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": {"prefix": {"addr": "10.97.0.0", "len": 24}}}}, {"accept": null}]`
+	nftAllButSSHDrop   = `[{"match": {"op": "!=", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 22}}, {"drop": null}]`
+	nftSYNDrop         = `[{"match": {"op": "==", "left": {"&": [{"payload": {"protocol": "tcp", "field": "flags"}}, {"|": ["fin", "syn", "rst", "ack"]}]}, "right": "syn"}}, {"drop": null}]`
+	nftSYNBitDrop      = `[{"match": {"op": "in", "left": {"payload": {"protocol": "tcp", "field": "flags"}}, "right": "syn"}}, {"drop": null}]`
+	nftSourceBan       = `[{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": "192.0.2.1"}}, {"drop": null}]`
+	nftTUNSourceAccept = `[{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": {"set": [{"range": ["198.18.0.0", "198.18.0.3"]}, "10.0.0.1"]}}}, {"accept": null}]`
+	nftEphemeralAccept = `[{"match": {"op": "==", "left": {"payload": {"protocol": "th", "field": "dport"}}, "right": {"range": [1024, 65535]}}}, {"accept": null}]`
+)
+
+func TestConditionalAcceptsKeepInputDropsUncertain(t *testing.T) {
+	// Review: `ufw allow from <LAN>` (or -s LAN -j ACCEPT) lets redirected TCP
+	// in, since auto-redirect keeps the client's source address. A DROP
+	// policy after such a rule is no longer reported as certain. Lab v7 C:
+	// forwarded TCP worked; TCP DNS, which the TUN stack sends from
+	// 198.18.0.2, was still blocked.
+	h := nftHost(t, "ufw-input.nft.json", "ufw-allow-from-lan.iptables")
+	h.tools["ufw"] = "/usr/sbin/ufw"
+	h.ufwState = "active"
+	result := h.inspectTarget(standalone)
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowDNS, FlowTUNTCP}) || strings.Contains(result.Hint, "TCP 连接会失败") || strings.Contains(result.Hint, "不受影响") {
+		t.Fatalf("ufw allow from LAN: %+v", result)
+	}
+	if remedy := onlyRemedy(t, result); !reflect.DeepEqual(remedy.Commands, []string{"ufw route allow in on Meta", "ufw route allow out on Meta", "ufw allow in on Meta"}) {
+		t.Fatalf("ufw allow from LAN commands: %q", remedy.Commands)
+	}
+
+	// Plain iptables: INPUT DROP with the LAN accepted.
+	h = nftHost(t, "input-drop.nft.json", "")
+	h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+	h.outputs["iptables-save -t filter"] = strings.Replace(fixture(t, "input-drop.iptables"),
+		"-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT\n", "-A INPUT -s 10.97.0.0/24 -j ACCEPT\n-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT\n", 1)
+	if result := h.inspectTarget(standalone); !reflect.DeepEqual(result.Flows, []string{FlowTUNTCP}) || result.InputPolicy != "drop" {
+		t.Fatalf("iptables -s LAN -j ACCEPT: %+v", result)
+	}
+
+	// nftables: ip saddr <LAN> accept before policy drop.
+	for _, tc := range []struct {
+		name  string
+		rules []string
+		flows []string
+	}{
+		{"LAN source accepted", []string{nftLoopbackAccept, nftEstablished, nftServicePorts, nftLANSourceAccept}, []string{FlowTUNTCP}},
+		{"LAN and TUN sources accepted", []string{nftEstablished, nftLANSourceAccept, nftTUNSourceAccept}, []string{}},
+		{"ephemeral ports accepted", []string{nftEstablished, nftEphemeralAccept}, []string{}},
+		{"service ports only", []string{nftLoopbackAccept, nftEstablished, nftServicePorts}, []string{FlowRedirectTCP, FlowTUNTCP}},
+	} {
+		h = nftHost(t, "mihomo-only.nft.json", "")
+		h.outputs["nft -j list ruleset"] = nftInputRules("drop", "accept", tc.rules...)
+		if result := h.inspectTarget(standalone); !reflect.DeepEqual(result.Flows, tc.flows) {
+			t.Fatalf("nft %s: %+v", tc.name, result)
+		}
+	}
+}
+
+func TestInputDropsOfNewTCPAreCertain(t *testing.T) {
+	// Review: these rules drop every new TCP connection to the redirect port,
+	// so forwarded TCP fails although INPUT accepts by default.
+	for _, tc := range []struct {
+		name  string
+		rules []string
+	}{
+		{"all but ssh dropped", []string{nftEstablished, nftAllButSSHDrop}},
+		{"syn dropped", []string{nftEstablished, nftServicePorts, nftSYNDrop}},
+		{"syn bit dropped", []string{nftEstablished, nftSYNBitDrop}},
+	} {
+		h := nftHost(t, "mihomo-only.nft.json", "")
+		h.outputs["nft -j list ruleset"] = nftInputRules("accept", "drop", tc.rules...)
+		result := h.inspectTarget(standalone)
+		if !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowDNS, FlowRedirectTCP, FlowTUNTCP}) || strings.Contains(result.Hint, "不受影响") || !strings.Contains(result.Hint, "TCP 连接会失败") {
+			t.Fatalf("nft %s: %+v", tc.name, result)
+		}
+	}
+	h := nftHost(t, "plain-drop.nft.json", "")
+	h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+	h.outputs["iptables-save -t filter"] = strings.Replace(fixture(t, "plain-drop.iptables"), "COMMIT", "-A INPUT -p tcp -m tcp ! --dport 22 -j DROP\nCOMMIT", 1)
+	result := h.inspectTarget(standalone)
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowDNS, FlowRedirectTCP, FlowTUNTCP}) || strings.Contains(result.Hint, "不受影响") {
+		t.Fatalf("iptables ! --dport 22: %+v", result)
+	}
+}
+
+func TestUncertainInputDropsDoNotClaimTCPIsUnaffected(t *testing.T) {
+	// A drop that may concern redirected TCP is not reported, but the hint no
+	// longer says other TCP connections are unaffected.
+	h := nftHost(t, "plain-drop.nft.json", "")
+	h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+	h.outputs["iptables-save -t filter"] = strings.Replace(fixture(t, "plain-drop.iptables"), "COMMIT", "-A INPUT -s 192.0.2.0/24 -j DROP\nCOMMIT", 1)
+	result := h.inspectTarget(Target{Device: "Meta", AutoRedirect: true})
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward}) || strings.Contains(result.Hint, "不受影响") || !strings.Contains(result.Hint, "UDP") {
+		t.Fatalf("uncertain input drop: %+v", result)
+	}
+	h = nftHost(t, "mihomo-only.nft.json", "")
+	h.outputs["nft -j list ruleset"] = nftInputRules("accept", "drop", nftSourceBan)
+	if result := h.inspectTarget(standalone); strings.Contains(result.Hint, "不受影响") || !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowDNS}) {
+		t.Fatalf("nft uncertain input drop: %+v", result)
+	}
+	// Port rules that cannot concern the redirect port leave the claim intact.
+	h = nftHost(t, "plain-drop.nft.json", "")
+	h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+	h.outputs["iptables-save -t filter"] = strings.Replace(fixture(t, "plain-drop.iptables"), "COMMIT", "-A INPUT -p tcp -m tcp --dport 3306 -j DROP\nCOMMIT", 1)
+	if result := h.inspectTarget(Target{Device: "Meta", AutoRedirect: true}); !strings.Contains(result.Hint, "其他 TCP 连接不受影响") {
+		t.Fatalf("port drop: %+v", result)
+	}
+}
+
+func TestEphemeralPortRangeIsRead(t *testing.T) {
+	h := nftHost(t, "mihomo-only.nft.json", "")
+	h.files["/proc/sys/net/ipv4/ip_local_port_range"] = "10000\t20000\n"
+	accept := `[{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": {"range": [10000, 20000]}}}, {"accept": null}]`
+	h.outputs["nft -j list ruleset"] = nftInputRules("drop", "accept", accept)
+	if result := h.inspect("Meta"); result.State != StateOK {
+		t.Fatalf("custom range accepted: %+v", result)
+	}
+	for _, tc := range []struct {
+		value string
+		want  portSpan
+	}{
+		{"10000\t20000\n", portSpan{10000, 20000}},
+		{"garbage", defaultLocalPorts},
+		{"20000 10000", defaultLocalPorts},
+	} {
+		probe := Probe{ReadFile: func(string) ([]byte, error) { return []byte(tc.value), nil }}
+		if got := localPortRange(probe); got != tc.want {
+			t.Fatalf("%q: %+v", tc.value, got)
+		}
+	}
+}
+
+func TestPortAndFlagMatching(t *testing.T) {
+	f := flow{proto: "tcp", ct: ctFacts{known: true, isNew: true}, dport: portSpan{32768, 60999}}
+	for _, tc := range []struct {
+		spans string
+		want  tri
+	}{
+		{"22", no}, {"1024:65535", yes}, {"1024:", yes}, {"40000", maybe}, {"30000:40000", maybe}, {"61000:65535", no},
+		{"1000:32767,32768:50000,50001:61000", yes}, {"32768:40000,40002:60999", maybe},
+	} {
+		spans, ok := parsePortList(tc.spans, true)
+		if !ok || portMatch(spans, f) != tc.want {
+			t.Fatalf("%s: %v %v, want %v", tc.spans, ok, portMatch(spans, f), tc.want)
+		}
+	}
+	if portMatch([]portSpan{{22, 22}}, flow{}) != maybe {
+		t.Fatal("unknown ports")
+	}
+	for _, tc := range []struct {
+		mask, comp string
+		want       tri
+	}{
+		{"FIN,SYN,RST,ACK", "SYN", yes}, {"SYN,ACK", "SYN", yes}, {"SYN,ACK", "ACK", no}, {"ALL", "NONE", no}, {"ALL", "SYN", yes}, {"SYN,ECE", "SYN", maybe},
+	} {
+		mask, _ := parseTCPFlags(tc.mask)
+		comp, _ := parseTCPFlags(tc.comp)
+		if got := (tcpFlags{mask: mask, comp: comp}).match(f); got != tc.want {
+			t.Fatalf("%s %s: %v, want %v", tc.mask, tc.comp, got, tc.want)
+		}
+	}
+	if (tcpFlags{mask: synMask, comp: tcpFlagSYN}).match(flow{proto: "tcp"}) != maybe {
+		t.Fatal("forward flows are not only SYN packets")
+	}
+}
+
+func TestLANAddressesComeFromTheDefaultRoute(t *testing.T) {
+	ip := func(values ...string) []net.IP {
+		var result []net.IP
+		for _, value := range values {
+			result = append(result, net.ParseIP(value))
+		}
+		return result
+	}
+	up := net.FlagUp | net.FlagBroadcast
+	interfaces := []interfaceAddresses{
+		{name: "lo", flags: net.FlagUp | net.FlagLoopback, ips: ip("127.0.0.1")},
+		{name: "eth0", flags: up, ips: ip("10.97.0.20", "fe80::1")},
+		{name: "docker0", flags: up, ips: ip("172.17.0.1")},
+		{name: "Meta", flags: net.FlagUp | net.FlagPointToPoint, ips: ip("198.18.0.1")},
+		{name: "eth1", flags: up, ips: ip("192.168.50.2")},
+	}
+	if got := lanAddresses([]string{"eth0"}, interfaces); len(got) != 1 || !got[0].Equal(net.ParseIP("10.97.0.20")) {
+		t.Fatalf("default route: %v", got)
+	}
+	// Without a default route: no loopback, TUN or container bridge.
+	if got := lanAddresses(nil, interfaces); len(got) != 2 || !got[0].Equal(net.ParseIP("10.97.0.20")) || !got[1].Equal(net.ParseIP("192.168.50.2")) {
+		t.Fatalf("fallback: %v", got)
+	}
+}
+
+func TestTUNTCPSourceIsTheTUNPeer(t *testing.T) {
+	// Lab v7: TCP the mixed stack hands to Mihomo enters as 198.18.0.2 -> 198.18.0.1.
+	for _, tc := range []struct {
+		name   string
+		rules  string
+		target Target
+		flows  []string
+	}{
+		{"TUN source rejected", "-A INPUT -s 198.18.0.0/30 -p tcp -j REJECT\n", standalone, []string{FlowTUNTCP}},
+		{"other sources rejected", "-A INPUT ! -s 198.18.0.0/16 -p tcp -j REJECT\n", standalone, []string{}},
+		{"configured inet4-address", "-A INPUT -s 172.19.0.2/32 -p tcp -j REJECT\n", func() Target {
+			target := standalone
+			target.TUNPeer = netip.MustParseAddr("172.19.0.2")
+			return target
+		}(), []string{FlowTUNTCP}},
+	} {
+		h := nftHost(t, "ip-filter-present.nft.json", "")
+		h.tools["iptables-save"] = "/usr/sbin/xtables-nft-multi"
+		h.outputs["iptables-save -t filter"] = "*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n" + tc.rules + "COMMIT\n"
+		if result := h.inspectTarget(tc.target); !reflect.DeepEqual(result.Flows, tc.flows) {
+			t.Fatalf("%s: %+v", tc.name, result)
+		}
+	}
+	for _, tc := range []struct {
+		value interface{}
+		want  string
+	}{
+		{[]interface{}{"172.19.0.1/30"}, "172.19.0.2"}, {"10.0.0.1/24", "10.0.0.2"}, {nil, "invalid IP"}, {[]interface{}{"fdfe::1/126"}, "invalid IP"}, {"bad", "invalid IP"},
+	} {
+		if got := tunPeer(map[string]interface{}{"inet4-address": tc.value}).String(); got != tc.want {
+			t.Fatalf("%v: %s", tc.value, got)
+		}
+	}
+	prefixes, ok := nftPrefixes(map[string]interface{}{"range": []interface{}{"10.0.0.1", "10.0.0.6"}}, nil)
+	if !ok || fmt.Sprint(prefixes) != "[10.0.0.1/32 10.0.0.2/31 10.0.0.4/31 10.0.0.6/32]" {
+		t.Fatalf("range: %v %v", prefixes, ok)
 	}
 }

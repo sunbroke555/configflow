@@ -83,12 +83,12 @@ func forwardFilterTarget(cfg *Config) (netfilter.Target, *netfilter.Result) {
 		result := forwardFilterNotApplicable("not_linux")
 		return netfilter.Target{}, &result
 	}
-	return netfilter.TUNTarget(tun, forwardFilterLocalAddresses()), nil
+	return netfilter.TUNTarget(tun, forwardFilterLANAddresses()), nil
 }
 
-// forwardFilterLocalAddresses decides whether DNS to this host stays out of
+// forwardFilterLANAddresses decides whether DNS to this host stays out of
 // the TUN (route-exclude-address); a variable so tests do not depend on the host.
-var forwardFilterLocalAddresses = netfilter.LocalAddresses
+var forwardFilterLANAddresses = netfilter.LANAddresses
 
 func forwardFilterKey(cfg *Config, target netfilter.Target) string {
 	info, err := os.Stat(cfg.ConfigPath)
@@ -96,7 +96,7 @@ func forwardFilterKey(cfg *Config, target netfilter.Target) string {
 		return ""
 	}
 	return cfg.ConfigPath + "|" + info.ModTime().UTC().Format(time.RFC3339Nano) + "|" + strconv.FormatInt(info.Size(), 10) + "|" +
-		target.Device + "|" + strconv.FormatBool(target.AutoRedirect) + "|" + target.Stack + "|" + strconv.FormatBool(target.DNSHijack)
+		target.Device + "|" + strconv.FormatBool(target.AutoRedirect) + "|" + target.Stack + "|" + strconv.FormatBool(target.DNSHijack) + "|" + target.TUNPeer.String()
 }
 
 // forwardFilterStatus is bounded by netfilter.TotalBudget plus a short grace,

@@ -2,6 +2,7 @@ package netfilter
 
 import (
 	"net"
+	"net/netip"
 	"strings"
 )
 
@@ -9,16 +10,21 @@ const (
 	iptablesPersistNote = "这些规则重启后会丢失。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。"
 	dockerPersistNote   = "这两条规则重启后会丢失（重启 Docker 不会清空 DOCKER-USER）。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。"
 	nftPersistNote      = "nft 命令只改当前规则，重启后会丢失；请把这些规则写进 /etc/nftables.conf（或系统加载的 nftables 配置）里对应的链。"
-	firewalldNote       = "把 TUN 设备放进 trusted 区域，并用 configflow-tun 策略放行转发到 trusted 区域的流量；已用 --permanent 保存，重启后仍有效。"
+	firewalldNote       = "把 TUN 设备放进只含它的 configflow-tun 区域（接受从它进来的流量），再用 configflow-fwd 策略放行转发进这个区域的流量；其他区域和网卡不受影响。已用 --permanent 保存，重启后仍有效；重复执行时提示 NAME_CONFLICT 或 ALREADY_ENABLED 可以忽略。"
 	ufwNote             = "UFW 会自动保存，重启后仍有效。"
 	ufwBeforeRulesNote  = "UFW 规则会自动保存；/etc/ufw/before.rules 的改动在 ufw reload 后生效，重启后仍有效。"
 
 	verifyPrefix = "执行后等几秒再回到这里刷新状态（发现拦截时结果只缓存 5 秒）；再在客户端"
 )
 
-// FirewalldPolicy is the firewalld policy the remedy creates for forwarding
-// into the trusted zone.
-const FirewalldPolicy = "configflow-tun"
+// FirewalldZone holds only the TUN device; its ACCEPT target takes what
+// enters from the device. FirewalldPolicy accepts forwarding from any zone into
+// that zone, so no other zone or interface is opened (reusing trusted would
+// also open forwarding to whatever else the operator put there).
+const (
+	FirewalldZone   = "configflow-tun"
+	FirewalldPolicy = "configflow-fwd"
+)
 
 // UFWDNATRule accepts only traffic the host's own NAT rules redirected to it
 // (auto-redirect's local port); no port is opened.
@@ -79,17 +85,22 @@ func (in *inspection) remedy(plan *remedyPlan) Remedy {
 	case "firewalld":
 		// firewalld accepts redirected traffic (ct status dnat) itself; a
 		// release that does not has no rule for it and is left to the operator.
-		// trusted accepts what enters from the TUN device; forwarding into it
+		// The zone accepts what enters from the TUN device; forwarding into it
 		// needs the policy as well, also when only the input hook blocked
 		// (the device's previous zone may have allowed that forwarding).
 		if forward || tun {
-			commands = append(commands, "firewall-cmd --permanent --zone=trusted --change-interface="+device)
+			if !plan.zoneExists {
+				commands = append(commands, "firewall-cmd --permanent --new-zone="+FirewalldZone)
+			}
+			commands = append(commands,
+				"firewall-cmd --permanent --zone="+FirewalldZone+" --set-target=ACCEPT",
+				"firewall-cmd --permanent --zone="+FirewalldZone+" --change-interface="+device)
 			if !plan.policyExists {
 				commands = append(commands, "firewall-cmd --permanent --new-policy="+FirewalldPolicy)
 			}
 			commands = append(commands,
 				"firewall-cmd --permanent --policy="+FirewalldPolicy+" --add-ingress-zone=ANY",
-				"firewall-cmd --permanent --policy="+FirewalldPolicy+" --add-egress-zone=trusted",
+				"firewall-cmd --permanent --policy="+FirewalldPolicy+" --add-egress-zone="+FirewalldZone,
 				"firewall-cmd --permanent --policy="+FirewalldPolicy+" --set-target=ACCEPT")
 		}
 		if len(commands) > 0 {
@@ -160,6 +171,8 @@ func hint(target Target, blocked map[string]bool, complete, commands bool) strin
 	case blocked[FlowTUNTCP] && target.DNSHijack:
 		impacts = append(impacts, "把这台 Linux 当作 DNS 服务器的设备，TCP 方式的 DNS 查询会失败")
 	}
+	// Only a complete view may say so: an input rule that might apply (a
+	// conditional drop, or a drop after a conditional accept) is not reported.
 	if target.AutoRedirect && complete && !blocked[FlowRedirectTCP] {
 		impacts = append(impacts, "其他 TCP 连接不受影响")
 	}
@@ -196,9 +209,9 @@ func verify(target Target, blocked map[string]bool) string {
 }
 
 // TUNTarget reads the TUN settings that decide which paths are inspected.
-// local lists this host's addresses: a route-exclude-address covering one of
-// them keeps DNS to this host out of the TUN.
-func TUNTarget(tun map[string]interface{}, local []net.IP) Target {
+// lan lists this host's LAN-side IPv4 addresses (LANAddresses): DNS to this
+// host stays out of the TUN only when route-exclude-address covers all of them.
+func TUNTarget(tun map[string]interface{}, lan []net.IP) Target {
 	target := Target{Device: "Meta"}
 	if value, ok := tun["device"].(string); ok && value != "" {
 		target.Device = value
@@ -207,8 +220,28 @@ func TUNTarget(tun map[string]interface{}, local []net.IP) Target {
 	if stack, ok := tun["stack"].(string); ok {
 		target.Stack = strings.ToLower(strings.TrimSpace(stack))
 	}
-	target.DNSHijack = target.AutoRedirect && hijacksPort53(tun) && !excludesLocal(tun["route-exclude-address"], local)
+	target.DNSHijack = target.AutoRedirect && hijacksPort53(tun) && !excludesLAN(tun["route-exclude-address"], lan)
+	target.TUNPeer = tunPeer(tun)
 	return target
+}
+
+// tunPeer is the address after the first tun.inet4-address (a list, or a
+// string in older configs); zero for Mihomo's default or an unusable value.
+func tunPeer(tun map[string]interface{}) netip.Addr {
+	var value string
+	switch raw := tun["inet4-address"].(type) {
+	case string:
+		value = raw
+	case []interface{}:
+		if len(raw) > 0 {
+			value, _ = raw[0].(string)
+		}
+	}
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+	if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 30 {
+		return netip.Addr{}
+	}
+	return prefix.Addr().Next()
 }
 
 // hijacksPort53 follows Mihomo: without the key, dns-hijack is 0.0.0.0:53.
@@ -236,41 +269,109 @@ func hijacksPort53(tun map[string]interface{}) bool {
 	return false
 }
 
-func excludesLocal(raw interface{}, local []net.IP) bool {
+// excludesLAN reports whether route-exclude-address covers every LAN IPv4
+// address; an address it does not cover still has its DNS hijacked. A Docker
+// or libvirt network in the list (172.16.0.0/12) does not count for the LAN.
+func excludesLAN(raw interface{}, lan []net.IP) bool {
 	entries, _ := raw.([]interface{})
+	var networks []*net.IPNet
 	for _, item := range entries {
 		value, _ := item.(string)
 		_, network, err := net.ParseCIDR(strings.TrimSpace(value))
 		if err != nil {
-			if ip := net.ParseIP(strings.TrimSpace(value)); ip != nil {
-				if v4 := ip.To4(); v4 != nil {
-					ip = v4
-				}
-				network = &net.IPNet{IP: ip, Mask: net.CIDRMask(len(ip)*8, len(ip)*8)}
-			} else {
+			ip := net.ParseIP(strings.TrimSpace(value))
+			if ip == nil {
 				continue
 			}
+			if v4 := ip.To4(); v4 != nil {
+				ip = v4
+			}
+			network = &net.IPNet{IP: ip, Mask: net.CIDRMask(len(ip)*8, len(ip)*8)}
 		}
-		for _, ip := range local {
-			if !ip.IsLoopback() && network.Contains(ip) {
-				return true
+		networks = append(networks, network)
+	}
+	covered := 0
+	for _, ip := range lan {
+		v4 := ip.To4()
+		if v4 == nil || v4.IsLoopback() {
+			continue
+		}
+		excluded := false
+		for _, network := range networks {
+			if network.Contains(v4) {
+				excluded = true
+				break
 			}
 		}
+		if !excluded {
+			return false
+		}
+		covered++
 	}
-	return false
+	return covered > 0
 }
 
-// LocalAddresses lists this host's interface addresses; errors give none.
-func LocalAddresses() []net.IP {
-	addresses, err := net.InterfaceAddrs()
+// interfaceAddresses is one interface's name, flags and addresses.
+type interfaceAddresses struct {
+	name  string
+	flags net.Flags
+	ips   []net.IP
+}
+
+// LANAddresses lists the IPv4 addresses of the default-route interfaces, where
+// LAN devices reach this host. Without a readable default route it falls back
+// to every interface that is up and is not loopback, point-to-point (TUN) or a
+// container or VM bridge. Errors give none.
+func LANAddresses() []net.IP {
+	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
+	var list []interfaceAddresses
+	for _, iface := range interfaces {
+		addresses, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		item := interfaceAddresses{name: iface.Name, flags: iface.Flags}
+		for _, address := range addresses {
+			if network, ok := address.(*net.IPNet); ok {
+				item.ips = append(item.ips, network.IP)
+			}
+		}
+		list = append(list, item)
+	}
+	return lanAddresses(defaultRouteInterfaces(DefaultProbe(), ""), list)
+}
+
+func lanAddresses(defaults []string, interfaces []interfaceAddresses) []net.IP {
+	wanted := map[string]bool{}
+	for _, name := range defaults {
+		wanted[name] = true
+	}
 	var result []net.IP
-	for _, address := range addresses {
-		if network, ok := address.(*net.IPNet); ok {
-			result = append(result, network.IP)
+	for _, iface := range interfaces {
+		if len(wanted) > 0 {
+			if !wanted[iface.name] {
+				continue
+			}
+		} else if iface.flags&net.FlagUp == 0 || iface.flags&(net.FlagLoopback|net.FlagPointToPoint) != 0 || nonLANInterface(iface.name) {
+			continue
+		}
+		for _, ip := range iface.ips {
+			if v4 := ip.To4(); v4 != nil && !v4.IsLoopback() {
+				result = append(result, v4)
+			}
 		}
 	}
 	return result
+}
+
+func nonLANInterface(name string) bool {
+	for _, prefix := range nonLANPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }

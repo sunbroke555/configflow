@@ -146,8 +146,8 @@ func inspectForwardFilter(probe systemProbe, configs []Config) (Check, bool) {
 		return Check{}, false
 	}
 	var local []net.IP
-	if probe.localAddresses != nil {
-		local = probe.localAddresses()
+	if probe.lanAddresses != nil {
+		local = probe.lanAddresses()
 	}
 	target, applicable := installerForwardTarget(configs, local)
 	if !applicable {
