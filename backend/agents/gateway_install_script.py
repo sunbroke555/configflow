@@ -36,6 +36,36 @@ CORE_RELEASES = {
 }
 
 
+# The selective values reproduce the gateway installer exactly as before.
+SELECTIVE_TEXT = {
+    'header_note': 'No forwarding or TUN interception here.',
+    'agent_min_patch': '25',
+    'agent_min_version': '1.8.25-go',
+    'journal_precheck': '',
+    'failure_note': '尚未应用网关转发，请不要修改客户端网关。',
+    'forwarding_comment': ('# Forwarding belongs to the explicit gateway apply, which saves and restores it;\n'
+                           '# the environment check must not tell the user to persist it by hand.'),
+    'forwarding_owner_env': 'CONFIGFLOW_FORWARDING_OWNER=gateway ',
+    'next_steps': '请回到 ConfigFlow 安装向导，继续发布 Mihomo、发布 OxiDNS，再检查并应用网关转发。',
+    'gateway_note': '安装脚本未写入 TUN/转发配置，原有配置已保留；完成网页验证前不要修改客户端网关/DNS。',
+}
+FULL_TUN_TEXT = {
+    'header_note': 'Full-TUN router split: forwarding is persisted and TUN prepared by the AIO step.',
+    'agent_min_patch': '40',
+    'agent_min_version': '1.8.40-go',
+    # A host still on the old gateway takeover is not reinstalled over it.
+    'journal_precheck': ('\nif [ -e /opt/configflow-agent/mihomo/linux-gateway.json ] || '
+                         '[ -L /opt/configflow-agent/mihomo/linux-gateway.json ]; then '
+                         "fail '这台 Linux 仍在使用旧版主路由分流（Linux 网关接管），已停止安装。"
+                         "如需改用完整 TUN，请先在 ConfigFlow 配置生成页的 Linux 网关中撤销接管。'; fi"),
+    'failure_note': '完成网页检查前不要修改主路由。',
+    'forwarding_comment': '# The AIO step persists IPv4 forwarding and prepares TUN for the full-TUN router split.',
+    'forwarding_owner_env': '',
+    'next_steps': '请回到 ConfigFlow 安装向导，继续发布 Mihomo、发布 OxiDNS，再检查转发与 TUN。',
+    'gateway_note': 'IPv4 转发已开启并持久化，TUN 已准备；发布 Mihomo 配置后才开始接管。完成网页检查前不要修改主路由。',
+}
+
+
 def local_agent_checksums() -> dict[str, str]:
     """Hash precisely the binaries served by agents.download_agent_binary."""
     directory = Path(os.getenv('AGENTS_STATIC_DIR', '/opt/configflow/static/agents'))
@@ -73,8 +103,13 @@ def generate_gateway_install_script(
     enrollment_token: str = '',
     agent_checksums: dict[str, str] | None = None,
     installation_id: str = '',
+    full_tun: bool = False,
 ) -> str:
-    """Generate one install command's script; never enable TUN or forwarding.
+    """Generate one install command's script.
+
+    The selective gateway never enables TUN or forwarding here; its explicit
+    apply does. ``full_tun`` (the router split) persists IPv4 forwarding and
+    prepares TUN in the Agent step, as an ordinary All-in-One install does.
 
     ``enrollment_token`` is a short-lived installation-session credential, not
     an administrator or global registration secret. Successful enrollment is
@@ -100,6 +135,8 @@ def generate_gateway_install_script(
     for token in (enrollment_token,):
         if token and (not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{16,512}', token)):
             raise ValueError('Invalid installation-session token')
+    if not isinstance(full_tun, bool):
+        raise ValueError('full_tun must be a boolean')
     checksums = local_agent_checksums() if agent_checksums is None else dict(agent_checksums)
     if not checksums:
         raise ValueError('ConfigFlow 尚未提供 Linux Agent 二进制，请先构建/部署最新版 Agent 后重试。')
@@ -112,13 +149,17 @@ def generate_gateway_install_script(
         mihomo_service_binary='/usr/local/bin/mihomo', oxidns_service_binary='/usr/local/bin/oxidns',
         non_interactive=True, verified_agent_path='$GATEWAY_STAGE/configflow-agent',
         installation_id=installation_id, installation_token=enrollment_token if installation_id else "",
-        manage_ipv4_forwarding=False,
-        manage_tun=False,
+        manage_ipv4_forwarding=full_tun,
+        manage_tun=full_tun,
+        # The bootstrap config keeps TUN off until the published one takes over.
+        tun_prepare_assume_enabled=full_tun,
         # The gateway script has just prepared the cores in the previous step.
-        installation_description='为上一步准备好的 Mihomo 和 OxiDNS 安装 Agent，不改核心配置、不重启核心。',
+        installation_description=('为上一步准备好的 Mihomo 和 OxiDNS 安装 Agent，开启并持久化 IPv4 转发、准备 TUN；不改核心配置、不重启核心。'
+                                  if full_tun else '为上一步准备好的 Mihomo 和 OxiDNS 安装 Agent，不改核心配置、不重启核心。'),
     )
     values = {
         'aio_script': aio,
+        **(FULL_TUN_TEXT if full_tun else SELECTIVE_TEXT),
         'binary_download_url_shell': shlex.quote(binary_download_url),
         'enrollment_url_shell': shlex.quote(enrollment_url),
         'enrollment_token_shell': shlex.quote(enrollment_token),

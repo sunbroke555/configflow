@@ -6,6 +6,7 @@ import MultiSelect from '@/components/common/MultiSelect.vue'
 import SetupInstallation from '@/components/setup/SetupInstallation.vue'
 import { subscriptionApi } from '@/api'
 import { setupApi, type SetupSession } from '@/api/setup'
+import { SETUP_GOALS } from '@/lib/setupFlow'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn() }, agentApi: {}, routerApi: {}, ruleApi: {},
@@ -367,4 +368,59 @@ it('abandons the open setup from the page header and lists it as abandoned', asy
   expect(setupApi.abandon).toHaveBeenNthCalledWith(2, 'a'.repeat(32))
   expect(wrapper!.text()).toContain('已放弃')
   expect(wrapper!.findAll('button').some(item => item.text() === '放弃此向导')).toBe(false)
+})
+
+describe('主路由分流改为完整 TUN', () => {
+  it('说明安装时开启并持久化 IPv4 转发、准备 TUN，网关方案文案不变', () => {
+    const [routerGoal, gatewayGoal] = SETUP_GOALS
+    expect(routerGoal.help).toContain('安装时开启并持久化 IPv4 转发、准备 TUN')
+    expect(routerGoal.help).toContain('Mihomo 以完整 TUN 接管主路由转来的连接')
+    expect(routerGoal.help).toContain('客户端默认网关仍指向主路由')
+    expect(gatewayGoal.help).toContain('显式启用 Linux 转发')
+  })
+
+  it('完成安装后显示转发与 TUN 已检查，真实 IP 网段提示按来源排除 Linux', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ route_instructions: { gateway: '192.0.2.10', dns: '192.0.2.10', warnings: [],
+      routes: [{ cidr: '198.18.0.0/16', sources: ['fake-ip'] }, { cidr: '91.108.4.0/22', sources: ['Telegram'], requires_source_exclusion: true }] } }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.text()).toContain('Mihomo、OxiDNS 已发布，IPv4 转发与 TUN 已检查')
+    expect(wrapper!.text()).toContain('真实 IP 网段需在主路由按来源排除 Linux 本机（策略路由），否则 Linux 直连这些地址时会被转回自己；只能按目的地址配置时，只添加 fake-IP 网段。')
+    expect(wrapper!.find('[data-legacy-takeover]').exists()).toBe(false)
+  })
+
+  it.each([3, 4])('旧版向导准备的方案在第 %s 步提示保持旧版接管', async step => {
+    const session = step === 3 ? record({ step: 3, max_step: 3, prepared: true, legacy_takeover: true }) : installed({ legacy_takeover: true })
+    vi.mocked(setupApi.get).mockResolvedValue({ data: session } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.get('[data-legacy-takeover]').text()).toBe('此配置空间使用旧版 Linux 网关接管，保持不变。')
+    if (step === 4) expect(wrapper!.text()).toContain('Mihomo、OxiDNS 已发布，Linux 转发已检查')
+  })
+
+  it('转发规则集未下载时提示重新检查，确认前不能完成，网段变化后需重新勾选', async () => {
+    const missing = installed({ route_instructions: { gateway: '192.0.2.10', dns: '192.0.2.10', routes: [{ cidr: '198.18.0.0/16', sources: ['fake-ip'] }],
+      warnings: ['规则集「Telegram」没有本地缓存，未计入其中的 IP 段'], incomplete: true, missing_rule_sets: ['Telegram'] } })
+    vi.mocked(setupApi.get).mockResolvedValue({ data: missing } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    const finish = () => wrapper!.findAll('button').find(item => item.text() === '确认设置并继续')!
+    for (const box of wrapper!.findAll('button[role="checkbox"]')) await box.trigger('click')
+    await flushPromises()
+    expect(wrapper!.get('[data-routes-incomplete]').text()).toContain('规则集「Telegram」的 IP 段尚未下载，上表缺少这些网段，暂不能确认完成。')
+    expect(finish().attributes('disabled')).toBeDefined()
+    vi.mocked(setupApi.check).mockResolvedValue({ data: installed({ route_instructions: { gateway: '192.0.2.10', dns: '192.0.2.10', warnings: [], incomplete: false,
+      routes: [{ cidr: '91.108.4.0/22', sources: ['Telegram'], requires_source_exclusion: true }, { cidr: '198.18.0.0/16', sources: ['fake-ip'] }] } }) } as never)
+    await click('重新检查')
+    expect(setupApi.check).toHaveBeenCalledWith('a'.repeat(32))
+    expect(wrapper!.find('[data-routes-incomplete]').exists()).toBe(false)
+    expect(wrapper!.text()).toContain('91.108.4.0/22')
+    // The static routes were confirmed against the shorter table.
+    expect(finish().attributes('disabled')).toBeDefined()
+    await wrapper!.findAll('button[role="checkbox"]')[0]!.trigger('click'); await flushPromises()
+    expect(finish().attributes('disabled')).toBeUndefined()
+  })
+
+  it('旧版提示不出现在其他步骤', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 3, prepared: true, legacy_takeover: true }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.find('[data-legacy-takeover]').exists()).toBe(false)
+  })
 })

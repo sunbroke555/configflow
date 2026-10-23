@@ -51,4 +51,20 @@ describe('Linux gateway HTTP boundary', () => {
     expect(requests[4].data).toEqual(spec)
     expect(requests[5].data).toEqual({})
   })
+  it('persists forwarding and confirms a legacy teardown only through explicit bodies', async () => {
+    const requests: any[] = []
+    api.defaults.adapter = async request => {
+      requests.push({ ...request, data: typeof request.data === 'string' ? JSON.parse(request.data) : request.data })
+      return { data: { success: true }, status: 200, statusText: 'OK', headers: {}, config: request }
+    }
+    await linuxGatewayApi.persistForwarding('host/name', 'space')
+    await linuxGatewayApi.remove('host/name', 'space', true)
+    await linuxGatewayApi.remove('host/name', 'space')
+    expect(requests.map(item => [item.method, item.url])).toEqual([
+      ['post', '/agents/host%2Fname/linux-gateway/forwarding'], ['post', '/agents/host%2Fname/linux-gateway/remove'], ['post', '/agents/host%2Fname/linux-gateway/remove'],
+    ])
+    expect(requests.map(item => item.data)).toEqual([{}, { confirm_router_split_teardown: true }, {}])
+    expect(requests.map(item => item.headers['X-ConfigFlow-Profile'])).toEqual(Array(3).fill('space'))
+    expect(requests.map(item => item.params)).toEqual(Array(3).fill({ profile_id: 'space' }))
+  })
 })

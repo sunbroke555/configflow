@@ -1199,6 +1199,14 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
     if service_type == 'mihomo' and (config_data.get('mihomo', {}).get('linux_gateway') or {}).get('enabled'):
         from backend.agents.linux_gateway import require_gateway_agent
         require_gateway_agent(agent)
+    from backend.common.router_split import (
+        GATEWAY_MARKER, gateway_was_used, is_full_tun, publish_legacy_source, read_marker, require_full_tun_generated,
+    )
+    if service_type == 'mihomo' and read_marker(config_data)[0] != 'absent':
+        from backend.agents.linux_gateway import FORWARDING_MIN_AGENT_VERSION, supports_forwarding
+        if agent.get('deployment_method') != 'docker' and not supports_forwarding(agent):
+            raise ValueError(f'主路由分流（完整 TUN）需要 Mihomo Agent {FORWARDING_MIN_AGENT_VERSION} 或更新版本；'
+                             '旧版本在移除旧网关记录时可能关闭 IPv4 转发。请先在 Agent 页更新。')
     if phase_progress is not None:
         service_name = {'mihomo': 'Mihomo', 'mosdns': 'MosDNS', 'oxidns': 'OxiDNS'}.get(service_type, service_type)
         phase_progress(f'正在生成 {service_name} config.yaml 并检查基础配置', force=True)
@@ -1211,6 +1219,25 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
             main = yaml.safe_load(config_content)
         except yaml.YAMLError as exc:
             raise _generated_config_failure(exc, config_content, 'Mihomo') from exc
+        if is_full_tun(config_data):
+            # Without TUN the main router's forwarded connections would loop.
+            require_full_tun_generated(main)
+            if agent.get('deployment_method') != 'docker':
+                # The deployed full TUN makes the Agent remove an old gateway
+                # record, which must not turn forwarding off with it.
+                from backend.agents import linux_gateway
+                linux_gateway.require_forwarding_kept(get_agent_manager(), agent)
+        elif (agent.get('deployment_method') != 'docker'
+              and not (isinstance(main, dict) and isinstance(main.get(GATEWAY_MARKER), dict)
+                       and main[GATEWAY_MARKER].get('enabled') is True)):
+            # An old router split with the gateway off: the Agent removes the
+            # host's gateway record, and with it the IPv4 forwarding unless persisted.
+            # Only a host that can hold one, for a profile that used the gateway.
+            from backend.agents import linux_gateway
+            source = (linux_gateway.supports_gateway(agent)
+                      and publish_legacy_source(get_repository(), agent.get('profile_id'), config_data, agent.get('id')))
+            if source and gateway_was_used(config_data, agent, source):
+                linux_gateway.require_gateway_off_kept(get_agent_manager(), agent)
         provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url, main_config=main)
         ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
         if provider_downloads:

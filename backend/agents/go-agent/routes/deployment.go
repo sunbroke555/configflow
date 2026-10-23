@@ -275,6 +275,7 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 		if cfg.ServiceType == "mihomo" {
 			result["mihomo_resources"] = mihomoGeoAssetNames(filepath.Dir(cfg.ConfigPath))
 			result["config_directory"] = filepath.Dir(cfg.ConfigPath)
+			result["aio_forwarding_protocols"] = []int{1}
 		}
 		JsonResponse(w, 200, result)
 	}

@@ -159,6 +159,34 @@ def list_sessions(repository):
     return sorted(records, key=lambda item: item['updated_at'], reverse=True)
 
 
+def legacy_takeover(profile):
+    """A router profile prepared before the full TUN takeover uses the Linux
+    gateway, and its host still forwards through it; that takeover stays."""
+    from backend.common.linux_gateway import gateway_settings
+    from backend.common.router_split import read_marker
+    return read_marker(profile)[0] == 'absent' and gateway_settings(profile)['enabled']
+
+
+def profile_sessions(repository, profile_id):
+    """The sessions of one profile, newest first, read without the session locks.
+
+    ``write`` replaces files atomically, so an unlocked read is whole and never
+    waits for a wizard step that holds a lock while it calls an Agent. Files
+    that are not session records are skipped instead of failing the caller.
+    """
+    records = []
+    for path in (repository.data_dir / 'setup-sessions').glob('*.json'):
+        if not re.fullmatch('[a-f0-9]{32}', path.stem):
+            continue
+        try:
+            session = json.loads(path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            continue
+        if isinstance(session, dict) and session.get('profile_id') == profile_id:
+            records.append(session)
+    return sorted(records, key=lambda item: item.get('updated_at') or '', reverse=True)
+
+
 def _http_url(url):
     try:
         parsed = urlsplit(url)
@@ -292,8 +320,13 @@ def prepare(repository, session, body, base_url):
     rules += [{'id': rule_id, 'itemType': 'ruleset', 'library_rule_id': library_id, 'enabled': True, 'policy': policy}
               for (_, _, rule_id, library_id), policy in zip(selected_rules, policies)]
     rules.append({'id': 'setup_final', 'itemType': 'rule', 'rule_type': 'MATCH', 'policy': final, 'enabled': True})
+    from backend.common.router_split import FULL_TUN, MARKER_KEY, read_marker
+    stored = repository.get_profile(session['profile_id'])
+    legacy = session['goal'] == 'router' and legacy_takeover(stored)
+    full_tun = session['goal'] == 'router' and not legacy
     settings = {'mixed-port': 7890, 'allow-lan': True, 'bind-address': '*',
                 'mode': 'rule', 'log-level': 'info', 'external-controller': '127.0.0.1:9090',
+                **({'tun': deepcopy(FULL_TUN)} if full_tun else {}),
                 'dns': {'enable': True, 'listen': '127.0.0.1:1053', 'enhanced-mode': 'fake-ip',
                         'nameserver': ['223.5.5.5', '119.29.29.29']}}
     from backend.common.oxidns_settings import get_default_oxidns_settings
@@ -305,6 +338,16 @@ def prepare(repository, session, body, base_url):
     dns['rule_update']['enabled'] = bool(domain_rules['direct'] or domain_rules['proxy'])
     fields = {'proxy_groups': groups, 'rule_configs': rules, 'oxidns': dns,
               'mihomo': {**config.get('mihomo', {}), 'custom_config': yaml.safe_dump(settings, sort_keys=False)}}
+    if full_tun:
+        # The router forwards fake-IP, plus rule sets chosen later, to the full
+        # TUN; the gateway's selective takeover never applies here.
+        rule_ids = {rule['id'] for rule in rules}
+        state, marker = read_marker(stored)
+        keep = [rule_id for rule_id in (marker['route_rule_set_ids'] if state == 'valid' else [])
+                if rule_id in rule_ids]
+        identity = marker if state == 'valid' else {'version': 1, 'takeover': 'full_tun', 'origin': 'setup'}
+        fields['mihomo'].update(linux_gateway={'enabled': False, 'rule_set_ids': []},
+                                **{MARKER_KEY: {**identity, 'route_rule_set_ids': keep}})
     candidate = {**deepcopy(config), **deepcopy(fields)}
     candidate['rule_library'] = repository.get_shared()['rule_library']
     for items in domain_rules.values():
@@ -325,7 +368,6 @@ def prepare(repository, session, body, base_url):
         fields['mihomo']['linux_gateway'] = {**fields['mihomo'].get('linux_gateway', {'enabled': False}),
                                              'rule_set_ids': takeover}
         candidate['mihomo'] = deepcopy(fields['mihomo'])
-    stored = repository.get_profile(session['profile_id'])
     unchanged = all(stored.get(key) == value for key, value in fields.items())
     edited = (stored['_revision'] != session['profile_revision'] if 'owned_digest' not in session
               else owned_digest(stored) != session['owned_digest'])
@@ -351,6 +393,8 @@ def prepare(repository, session, body, base_url):
             session['max_step'] = 3
     saved = repository.get_profile(session['profile_id'])
     session.pop('template', None)
+    if session['goal'] == 'router':
+        session['legacy_takeover'] = legacy
     session.update(prepared=True, dns_fallback=dns_fallback, traffic_fallback=traffic_fallback, local_dns=local_dns,
                    domain_rules=selections,
                    node_count=count, profile_revision=saved['_revision'], owned_digest=owned_digest(saved),
@@ -411,6 +455,10 @@ def connect_router_draft(repository, session):
     router.update(proxy_gateway_agent_id=pair['mihomo']['id'], dns_agent_id=pair['oxidns']['id'])
 
     def attach(profile):
+        from backend.common.router_split import is_full_tun, route_rule_set_ids
+        if is_full_tun(profile) and not router.get('ip_rule_sets'):
+            # Start from the rule sets the full TUN setup forwards from the router.
+            router['ip_rule_sets'] = route_rule_set_ids(profile)
         items = profile.setdefault('routers', {}).setdefault('items', [])
         existing = next((item for item in items if item['id'] == router['id']), None)
         if existing is None:

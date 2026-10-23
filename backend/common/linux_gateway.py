@@ -372,6 +372,10 @@ def _routing_mark_path(value, path='Mihomo', seen=None):
 
 def apply_linux_gateway(mihomo, config, base_url=''):
     """Patch only generated output. Disabled mode is an exact no-op."""
+    # A router split profile never gets the selective takeover; without its
+    # marker this check does nothing.
+    from backend.common.router_split import check_generation
+    check_generation(config)
     settings = gateway_settings(config)
     if not settings['enabled']:
         return
@@ -481,12 +485,9 @@ def gateway_editor_state(config, *, include_guidance=True):
             'warnings': warnings, 'refresh_interval': REFRESH_INTERVAL}
 
 
-def validate_gateway_selection(config, value):
-    settings = normalize_gateway_settings(value)
-    if not settings['enabled']:
-        return settings
-    previous = set(gateway_settings(config)['rule_set_ids'])
-    for rule_id in settings['rule_set_ids']:
+def validate_rule_set_ids(config, ids, previous):
+    """Check IP rule set choices by ID; IDs in ``previous`` may stay as they are."""
+    for rule_id in ids:
         item = _rule(config, rule_id)
         if item is None:
             if rule_id not in previous:
@@ -502,6 +503,14 @@ def validate_gateway_selection(config, value):
             extract_gateway_cidrs(source.get('content', ''), behavior)
         if 'MRS' in _reason(config, item) and rule_id not in previous:
             raise LinuxGatewayError(_reason(config, item))
+    return list(ids)
+
+
+def validate_gateway_selection(config, value):
+    settings = normalize_gateway_settings(value)
+    if not settings['enabled']:
+        return settings
+    validate_rule_set_ids(config, settings['rule_set_ids'], set(gateway_settings(config)['rule_set_ids']))
     if settings['enabled']:
         preview = deepcopy(config)
         preview.setdefault('mihomo', {})['linux_gateway'] = settings

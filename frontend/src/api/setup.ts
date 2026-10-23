@@ -15,6 +15,8 @@ export interface SetupDefaultProfile {
 export interface SetupSession {
   id: string; profile_id: string; name: string; goal: SetupGoal
   step: number; max_step: number; prepared: boolean; completed: boolean; abandoned?: boolean
+  /** 主路由分流仍使用旧版 Linux 网关接管（升级前准备的方案） */
+  legacy_takeover?: boolean
   subscription_ids: string[]; node_ids: string[]; dns_fallback?: 'mihomo' | 'direct'; traffic_fallback?: 'proxy' | 'direct'
   local_dns?: string
   domain_rules?: SetupDomainSelection
@@ -23,7 +25,7 @@ export interface SetupSession {
   router_id?: string; router_mode?: 'manual' | 'managed'; router_verification?: 'manual' | 'verified' | 'client_pending'
   router_draft?: SetupRouterDraft
   default_profile?: SetupDefaultProfile; previous_default?: string
-  route_instructions?: { gateway: string; dns: string; routes: { cidr: string; sources: string[]; requires_source_exclusion?: boolean }[]; warnings: string[] }
+  route_instructions?: { gateway: string; dns: string; routes: { cidr: string; sources: string[]; requires_source_exclusion?: boolean }[]; warnings: string[]; incomplete?: boolean; missing_rule_sets?: string[] }
 }
 export interface SetupAbandonPlan {
   session_id: string; name: string; profile: { id: string; name: string }

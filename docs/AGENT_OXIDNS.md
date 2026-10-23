@@ -29,6 +29,7 @@ OxiDNS 使用 Go Agent 的 deployment protocol 1，与 MosDNS 保留为两个独
 | OxiDNS 自动同步增量下载 | `1.8.35-go` |
 | OxiDNS 清理缓存 | `1.8.36-go` |
 | 核心刷新规则后继续 DNS 联动和手动回滚 | `1.8.38-go` |
+| 首次使用向导「Mihomo + OxiDNS 分流」（完整 TUN、转发持久化检查） | `1.8.40-go` |
 
 最低版本只说明该项能力的起点，建议面板与 Agent 使用包含后续修复的配套版本。更新日志见 [版本定义](../backend/agents/version.py)。
 
@@ -220,7 +221,7 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 - 安装脚本保留现有核心配置。从 `1.8.23-go` 起，Mihomo Agent 发布时保留 DNS 监听地址、端口、整组 `tun.dns-hijack` 及 DNS/TUN 开关，不再强制改为 `1053`，未配置的字段也不会补入。首次安装提供 `1053` 默认值；已有 Agent 需升级后才会采用新的发布规则。
 - Agent `1.8.27-go` 引入普通 Shell 同机发布的本机地址排除；从 `1.8.28-go` 起，仅当 `tun.enable: true` 和 `tun.auto-redirect: true` 同时满足时，才在 `tun.route-exclude-address` 中自动合并 `127.0.0.0/8` 和当前全部本机 LAN IPv4 的 `/32` 地址，并保留用户已有排除规则。例如 Agent 地址为 `192.168.0.33` 时，会加入 `192.168.0.33/32`，使发往本机 OxiDNS 的查询避开 Mihomo 自动重定向。任一开关关闭或未配置时，不添加或移除排除项，保留用户原配置。排除按目的地址匹配，不需要添加客户端 IP；Agent `1.8.34-go` 起，发布时读取全部活动 LAN IPv4；显式 `agent_ip` 必须属于本机，不能用它替代其他地址的保护。地址变化后需重新发布，激活前也会再次核对。此适配继续保留用户配置的 DNS 监听、端口、整组 `dns-hijack`、`auto-route` 与 `auto-detect-interface`，不会自动开启这些设置，不用于 Docker、单服务或 Linux 选择性网关。`auto-redirect` 要求 `auto-route` 开启，由 Mihomo 原生校验检查；`auto-detect-interface` 不影响是否添加排除项。升级 Agent 本身不会重写正在运行的核心配置，需要再发布一次 Mihomo 配置后生效。
 - OxiDNS 的监听和上游沿用用户配置。需要 Mihomo 处理远程解析时，将远程上游对应到 Mihomo 实际的 DNS 监听地址和端口（新装默认 `127.0.0.1:1053`）。Mihomo 上游不应再指回 OxiDNS，以免形成循环。发布前检查实际监听冲突和上下游关系；明确冲突会阻止发布，TUN 对目标端口 `53` 的劫持风险只提示，不自动改写。
-- 普通 Shell 同机安装在检查通过、两个 Agent 启动成功后，自动开启当前系统的 `net.ipv4.ip_forward=1`，写入专用 `/etc/sysctl.d/99-configflow-aio-forward.conf`。Mihomo Agent 的 systemd `ExecStartPre` 或 OpenRC `start_pre` 会在开机/服务启动时再次检查；已为 `1` 时不重复切换。此行为不用于单服务、Docker 或选择性网关安装向导，后者仍在最后的网络应用步骤开启转发。
+- 普通 Shell 同机安装在检查通过、两个 Agent 启动成功后，自动开启当前系统的 `net.ipv4.ip_forward=1`，写入专用 `/etc/sysctl.d/99-configflow-aio-forward.conf`。Mihomo Agent 的 systemd `ExecStartPre` 或 OpenRC `start_pre` 会在开机/服务启动时再次检查；已为 `1` 时不重复切换。此行为不用于单服务、Docker 或选择性网关安装向导，后者仍在最后的网络应用步骤开启转发。首次使用向导的「Mihomo + OxiDNS 分流」虽然走网关安装命令，但按普通同机方式开启并持久化转发，并用 `-prepare-tun -assume-tun-enabled` 准备 TUN（此时 bootstrap 配置的 `tun.enable` 仍为 `false`，发布 Mihomo 后才接管）；`-assume-tun-enabled` 只能与 `-prepare-tun` 同用。
 - 安装前按实际命令检查 `sysctl`、`cmp`、`ln`，已有工具（包括 Alpine 的 BusyBox 命令）直接使用。缺少时只补装对应的软件包：Debian/Alpine 的 `sysctl` 使用 `procps`，Arch 使用 `procps-ng`；`cmp` 使用 `diffutils`，`ln` 使用 `coreutils`。同一软件包不会重复加入安装列表；补装后重新检查命令是否可用，安装失败或仍缺工具时在停止现有 Agent 前退出。取消或卸载不会触发补装。
 - 无需按虚拟机品牌分支：物理机、VM、LXC 都检查实际运行核心的 Linux、systemd/OpenRC、sysctl 和当前网络命名空间的写权限。权限不足、`/proc/sys` 只读或持久化失败时，安装会失败并说明原因，不报告已完成；不会自动修改 PVE 宿主机或提升容器权限。已有选择性网关网络记录的设备应继续使用原网关入口，避免两套恢复机制争用。
 - 同名持久化文件若不属于安装器会拒绝覆盖；已有其他 sysctl 配置不重写，也不执行 `sysctl --system`。首次从 `0` 变为 `1` 会产生 Linux 正常的主机/路由模式切换副作用；开启全局转发不等于验证了接口、防火墙或完整转发链路。卸载 Agent 时保留转发持久化文件，因为两个核心继续运行。若其他服务之后覆盖此参数，应排查对应服务。

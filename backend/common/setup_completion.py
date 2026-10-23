@@ -4,6 +4,8 @@ Finishing may make the setup profile ConfigFlow's default, only when asked.
 """
 from hashlib import sha256
 import json
+import threading
+import time
 
 from backend.common.setup_flow import SetupError
 
@@ -53,10 +55,77 @@ def core_fingerprint(config):
                              ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
+def _check_full_tun(status):
+    """The router split forwards into the full TUN; no gateway record may remain."""
+    forwarding, tun = status.get('ipv4_forwarding'), status.get('tun')
+    if not isinstance(forwarding, dict) or not isinstance(tun, dict):
+        raise SetupError('请将 Mihomo Agent 更新到 1.8.40-go 或更新版本后再检查', 409)
+    if forwarding.get('current') != '1':
+        raise SetupError('Linux IPv4 转发未开启，请在安装与检查中点击「开启并持久化 IPv4 转发」', 409)
+    if forwarding.get('persisted') is not True:
+        raise SetupError('IPv4 转发尚未持久化，重启后可能失效；请在安装与检查中点击「开启并持久化 IPv4 转发」', 409)
+    managed = status.get('managed') or {}
+    if managed.get('active') or managed.get('pending') or managed.get('error'):
+        raise SetupError('设备上仍有 Linux 网关的转发记录，请先在配置生成页的 Linux 网关中撤销后再检查', 409)
+    if status.get('enabled_in_config') or tun.get('gateway_marker'):
+        raise SetupError('已发布的 Mihomo 仍是 Linux 网关配置，请重新发布', 409)
+    if tun.get('configured') is not True:
+        raise SetupError('已发布的 Mihomo 未启用完整 TUN，请检查基础 YAML 后重新发布', 409)
+    if tun.get('present') is not True:
+        raise SetupError(f"Mihomo TUN（{tun.get('device') or 'Meta'}）未运行，请检查 Mihomo 日志", 409)
+
+
+# Downloads of the router split's forwarded rule sets during one check. The
+# budget bounds the whole warm-up, so that with the Agent status read before
+# it (at most 48 s) the request stays under the wizard's 90 s timeout.
+ROUTE_RULE_TIMEOUT = (5, 20)
+ROUTE_RULE_BUDGET = 30
+
+
+def _within(deadline, load):
+    """Run ``load()`` until ``deadline``; a download still running then is left
+    to finish in the background, where it can still fill the rule cache."""
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(value=load()), daemon=True,
+                              name='setup-route-rule')
+    worker.start()
+    worker.join(max(deadline - time.monotonic(), 0))
+    return result.get('value', '')
+
+
+def _route_rule_loader(config, missing):
+    """Load each forwarded rule set like generation does, filling the rule cache.
+
+    The full TUN generates no gateway providers, so nothing else downloads these
+    rule sets before the check. Names whose content stays unavailable go into
+    ``missing``. Each request's timeouts shrink to the time left in the
+    budget; once it is spent only the cache is read.
+    """
+    from backend.routes.rules import get_ruleset_content
+    deadline = time.monotonic() + ROUTE_RULE_BUDGET
+
+    def load(item, library_rule):
+        content = ''
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                timeout = tuple(max(min(limit, remaining), 0.1) for limit in ROUTE_RULE_TIMEOUT)
+                content = _within(deadline, lambda: get_ruleset_content(
+                    item, library_rule, allow_network=True, config_data=config, timeout=timeout))
+            else:
+                content = get_ruleset_content(item, library_rule, allow_network=False, config_data=config)
+        finally:
+            if not content:
+                missing.append(str(item.get('name') or item.get('id') or '规则集'))
+        return content
+    return load
+
+
 def check_installation(repository, session):
     from backend.common.agent_manager import get_agent_manager
     from backend.agents import gateway_installation, linux_gateway
     from backend.agents.oxidns_monitor import MonitorError
+    from backend.common.router_split import is_full_tun, route_rule_set_ids
     manager = get_agent_manager()
     gateway = gateway_installation.latest(repository, manager, session['profile_id'])['session']
     config, revision = repository.get_publish_snapshot(session['profile_id'])
@@ -68,24 +137,37 @@ def check_installation(repository, session):
     agents = gateway['agents']
     if not all(agents.get(service, {}).get('id') for service in ('mihomo', 'oxidns')):
         raise SetupError('两个核心的设备尚未确认，请继续安装向导', 409)
+    if any(agents[service].get('status') != 'online' for service in ('mihomo', 'oxidns')):
+        raise SetupError('安装设备离线，请检查连接后再检查', 409)
+    full_tun = session['goal'] == 'router' and is_full_tun(config) and not session.get('legacy_takeover')
     try:
         status = linux_gateway.call(manager, agents['mihomo']['id'], 'status', 'GET', session['profile_id'])
     except MonitorError as error:
         raise SetupError(error.message, error.status) from None
-    managed = status.get('managed') or {}
-    if not managed.get('active') or managed.get('pending') or managed.get('healthy') is not True:
-        raise SetupError('Linux 转发尚未启用或健康状态未确认，请继续安装向导', 409)
+    if full_tun:
+        _check_full_tun(status)
+    else:
+        managed = status.get('managed') or {}
+        if not managed.get('active') or managed.get('pending') or managed.get('healthy') is not True:
+            raise SetupError('Linux 转发尚未启用或健康状态未确认，请继续安装向导', 409)
     session['installation'] = {'id': gateway['id'], 'fingerprint': core_fingerprint(config),
         'mihomo': {key: agents['mihomo'].get(key) for key in ('id', 'name', 'host')},
         'oxidns': {key: agents['oxidns'].get(key) for key in ('id', 'name', 'host')}}
     from backend.routers.desired import compute_desired
-    selected = config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', [])
-    desired = compute_desired(config, agents['mihomo'].get('host'), selected)
+    missing = []
+    if full_tun:
+        desired = compute_desired(config, agents['mihomo'].get('host'), route_rule_set_ids(config),
+                                  content_loader=_route_rule_loader(config, missing))
+    else:
+        # The selective gateway's generation already downloaded its rule sets.
+        desired = compute_desired(config, agents['mihomo'].get('host'),
+                                  config.get('mihomo', {}).get('linux_gateway', {}).get('rule_set_ids', []))
     for item in desired['proxy_cidrs']:
         item['requires_source_exclusion'] = item['cidr'] != desired['fake_ip_range']
     session.update(config_revision=revision, route_instructions={
         'gateway': agents['mihomo'].get('host'), 'dns': agents['oxidns'].get('host'),
-        'routes': desired['proxy_cidrs'], 'warnings': desired['warnings']})
+        'routes': desired['proxy_cidrs'], 'warnings': desired['warnings'], 'incomplete': bool(missing),
+        **({'missing_rule_sets': missing} if missing else {})})
     return config
 
 
@@ -93,10 +175,22 @@ def finish(repository, session, body):
     make_default = body.get('make_default', False)
     if type(make_default) is not bool:
         raise SetupError('请选择是否设为默认配置空间')
+    # The table the user confirmed against, before this finish re-checks.
+    shown_missing = (session.get('route_instructions') or {}).get('missing_rule_sets') or []
     config = check_installation(repository, session)
     if session['goal'] == 'router':
         mode = body.get('router_mode', session.get('router_mode', 'manual'))
         if mode == 'manual':
+            missing = session['route_instructions'].get('missing_rule_sets') or []
+            if missing:
+                names = '」「'.join(missing)
+                raise SetupError(f'主路由转发规则集「{names}」的 IP 段仍未下载，静态路由说明不完整。'
+                                 '请检查 ConfigFlow 服务器能否访问规则地址后重新检查。', 409)
+            if shown_missing:
+                # The download succeeded only now: the confirmed table lacked these ranges.
+                names = '」「'.join(shown_missing)
+                raise SetupError(f'主路由转发规则集「{names}」的 IP 段已下载，静态路由表有新增网段。'
+                                 '请重新检查，按更新后的列表配置主路由后再确认。', 409)
             if body.get('ack_routes') is not True or body.get('ack_dns') is not True:
                 raise SetupError('请先按说明配置主路由的静态路由与 DNS，再确认已完成', 409)
             session.update(router_mode='manual', router_verification='manual')

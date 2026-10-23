@@ -451,7 +451,7 @@ def handle_rule_set(rule_set_id):
 
 
 def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_network: bool = True, *,
-                        config_data: dict = None) -> str:
+                        config_data: dict = None, timeout=30) -> str:
     """获取规则集内容（优先使用本地缓存，从URL获取后会自动缓存）
 
     Args:
@@ -459,6 +459,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
         library_rule: 规则仓库中的规则（可选）
         allow_network: 为 False 时只读本地缓存和内容型规则，不发起网络请求
         config_data: 本次请求的配置快照，下载远程内容时使用（可选）
+        timeout: 每次下载请求的超时（秒，或 requests 的 (连接, 读取) 元组）
 
     Returns:
         规则集内容字符串，获取失败返回空字符串
@@ -493,6 +494,7 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
         except Exception as e:
             logger.warning("Failed to read cached rule file %s: %s", filepath, safe_exception_details(e))
 
+    library_url = ''
     # 2. 如果缓存不存在或读取失败，从规则仓库获取内容
     if library_rule and not rule_content:
         source_type = library_rule.get('source_type', 'url')
@@ -507,8 +509,9 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
             if url:
                 if config_data is None:
                     config_data = get_config()
+                library_url = url
                 try:
-                    response = request_rule(url, timeout=30, config_data=config_data)
+                    response = request_rule(url, timeout=timeout, config_data=config_data)
                     if response.status_code == 200:
                         rule_content = response.text
                         logger.info(f"Fetched rule content from library URL: {safe_url_for_log(url)}")
@@ -537,8 +540,11 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
                 if server_domain:
                     url = f"{server_domain}{url}"
 
+            if url == library_url:
+                # The library URL just failed; the same request would only wait again.
+                return rule_content
             try:
-                response = request_rule(url, timeout=30, config_data=config_data)
+                response = request_rule(url, timeout=timeout, config_data=config_data)
                 if response.status_code == 200:
                     rule_content = response.text
                     logger.info(f"Fetched rule content from item URL: {safe_url_for_log(url)}")

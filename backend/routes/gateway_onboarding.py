@@ -6,8 +6,10 @@ from backend.common.config import get_repository, reset_config_context
 from backend.common.config_repository import ProfileInUse
 from backend.common.gateway_onboarding import (
     GatewayOnboardingError, GatewayOnboardingBlocked,
-    gateway_onboarding_state, prepare_gateway_onboarding,
+    gateway_onboarding_state, onboarding_takeover, prepare_gateway_onboarding,
 )
+from backend.common.linux_gateway import gateway_settings
+from backend.common.router_split import read_marker
 from backend.routes import profiles_bp
 
 
@@ -39,15 +41,19 @@ def gateway_onboarding(profile_id):
     try:
         if request.method == 'GET':
             config, revision = repository.get_publish_snapshot(profile_id)
-            return _response(gateway_onboarding_state(config, revision, base_url))
+            takeover = onboarding_takeover(repository, profile_id, config)
+            return _response(gateway_onboarding_state(config, revision, base_url, takeover=takeover))
         body = _body()
         if request.path.endswith('/preview'):
             config, revision = repository.get_publish_snapshot(profile_id)
-            _, result = prepare_gateway_onboarding(config, body, base_url)
+            takeover = onboarding_takeover(repository, profile_id, config)
+            _, result = prepare_gateway_onboarding(config, body, base_url, takeover=takeover)
             result.update(profile_id=profile_id, config_revision=revision)
             return _response(result)
         prepared = {}
         before = repository.get_profile(profile_id)
+        # Setup sessions and Agent bindings are read outside the profile lock.
+        takeover = onboarding_takeover(repository, profile_id, before)
 
         def update(current):
             # Validation and both service edits share the same locked snapshot.
@@ -55,7 +61,13 @@ def gateway_onboarding(profile_id):
             expected = body.get('expected_config_revision') if isinstance(body, dict) else None
             if expected is not None and expected != repository.config_revision(profile_id):
                 raise ProfileInUse('配置或共享资源已更新，请刷新安装向导并重新预览后保存')
-            candidate, result = prepare_gateway_onboarding(current, body, base_url)
+            marker = read_marker(current)[0]
+            # The takeover was decided outside the lock. A gateway enabled since
+            # may already forward on the host; a marker change is another plan.
+            if (marker != read_marker(before)[0]
+                    or takeover == 'full_tun' and marker == 'absent' and gateway_settings(current)['enabled']):
+                raise ProfileInUse('配置已更新，请刷新安装向导并重新预览后保存')
+            candidate, result = prepare_gateway_onboarding(current, body, base_url, takeover=takeover)
             if not result['ready']:
                 raise GatewayOnboardingBlocked(result)
             current['mihomo'] = candidate['mihomo']

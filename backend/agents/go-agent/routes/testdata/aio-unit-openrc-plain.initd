@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+name="ConfigFlow Agent (mihomo)"
+command="/opt/configflow-agent/mihomo/configflow-agent"
+command_args="-config /opt/configflow-agent/mihomo/config.json"
+pidfile="/run/configflow-agent-mihomo.pid"
+output_log="/var/log/configflow-agent-mihomo.log"
+error_log="/var/log/configflow-agent-mihomo.log"
+directory="/opt/configflow-agent/mihomo"
+command_background="yes"
+depend() {
+    need net
+    after firewall
+}
+start_pre() {
+    
+    checkpath --directory --mode 0755 /var/log
+    checkpath --file --mode 0644 --owner root:root "/var/log/configflow-agent-mihomo.log"
+}

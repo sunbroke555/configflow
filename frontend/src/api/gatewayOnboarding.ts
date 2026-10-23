@@ -12,6 +12,7 @@ export interface GatewayOnboardingSettings {
   confirm_template_conversion?: boolean
   expected_config_revision?: number
 }
+export type GatewayTakeover = 'full_tun' | 'legacy' | 'selective'
 export interface GatewayOnboardingConfig {
   profile_id: string
   config_revision: number
@@ -26,6 +27,8 @@ export interface GatewayOnboardingConfig {
   blockers: string[]
   can_prepare: boolean
   proxy_prerequisites?: { ready: boolean; policies: string[]; warnings: string[] }
+  /** full_tun：主路由分流的完整 TUN；legacy：旧版网关接管；selective：Linux 网关 */
+  takeover?: GatewayTakeover
 }
 export interface GatewayConfigurationPreview {
   success: boolean; ready: boolean; blockers: string[]; warnings: string[]
@@ -44,6 +47,7 @@ export interface GatewayInstallation {
   remedy?: { kind: 'rule_download'; github: boolean } | null
   agents: Partial<Record<'mihomo' | 'oxidns', GatewayInstallationAgent>>
   config_changed?: boolean; target_changed?: boolean; expired?: boolean
+  takeover?: Exclude<GatewayTakeover, 'legacy'>
   deployments: Partial<Record<'mihomo' | 'oxidns', AgentDeployment>>
 }
 export interface GatewayInstallationInput {

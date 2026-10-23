@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -71,7 +72,7 @@ def test_hashes_exact_served_agent_files(tmp_path, monkeypatch):
     assert installer.local_agent_checksums() == {'linux-amd64': hashlib.sha256(b'new binary').hexdigest()}
 
 
-def host(tmp_path, monkeypatch, manager='systemd', architecture='x86_64'):
+def host(tmp_path, monkeypatch, manager='systemd', architecture='x86_64', full_tun=False):
     events = tmp_path / 'events'
     assets = tmp_path / 'assets'
     commands = tmp_path / 'commands'
@@ -100,8 +101,9 @@ if args == ['-version']: print(os.environ.get('AGENT_VERSION','1.8.25-go')); rai
 cfg=json.load(open(args[args.index('-config')+1]))
 with open(os.environ['EVENTS'],'a') as f: f.write('agent-check '+cfg['service_type']+' '+args[-1]+'\\n')
 if '-prepare-tun' in args:
- with open(os.environ['EVENTS'],'a') as f: f.write('prepare-tun:'+cfg['service_type']+'\\n')
- raise SystemExit('Gateway installation must not prepare TUN')
+ with open(os.environ['EVENTS'],'a') as f: f.write('prepare-tun:'+cfg['service_type']+' '+' '.join(args[2:])+'\\n')
+ if os.environ.get('FULL_TUN') != 'yes': raise SystemExit('Gateway installation must not prepare TUN')
+ raise SystemExit()
 if cfg['service_type'] == os.environ.get('FAIL_AGENT_CHECK'): raise SystemExit(42)
 '''
     raw_agent = agent.encode()
@@ -118,7 +120,7 @@ if cfg['service_type'] == os.environ.get('FAIL_AGENT_CHECK'): raise SystemExit(4
             releases[service][arch]['sha256'] = hashlib.sha256((assets / file).read_bytes()).hexdigest()
     monkeypatch.setattr(installer, 'CORE_RELEASES', releases)
     hashes = {arch: hashlib.sha256(raw_agent).hexdigest() for arch in ('linux-amd64','linux-arm64')}
-    source = generate(agent_checksums=hashes)
+    source = generate(agent_checksums=hashes, full_tun=full_tun)
     # No command sees a real host path: all writable paths, logs, proc reads,
     # service definitions and Agent/core roots are confined to this temp root.
     replacements = [('/etc/', str(tmp_path / 'etc') + '/'), ('/etc ', str(tmp_path / 'etc') + ' '),
@@ -186,7 +188,12 @@ if os.environ.get('CORRUPT')==src.name: out.write_bytes(b'bad checksum')
     mocks={'id':'#!/bin/sh\necho 0\n','uname':f'#!/bin/sh\nif [ "$1" = -s ]; then echo Linux; else echo {architecture}; fi\n',
            'curl':curl,'ip':'#!/bin/sh\nexit 0\n','nft':'#!/bin/sh\n[ "${FAIL_NFT:-}" != yes ]\n',
            'ss':'#!/bin/sh\nif [ -n "${BUSY_PORT:-}" ]; then echo "udp UNCONN 0 0 0.0.0.0:$BUSY_PORT 0.0.0.0:* ${BUSY_OWNER:-}"; fi\n',
-           'sysctl':'#!/bin/sh\nprintf "forbidden-sysctl %s\\n" "$*" >> "$EVENTS"\nexit 98\n',
+           'sysctl':(shebang + '''import os,sys
+args=sys.argv[1:]
+with open(os.environ['EVENTS'],'a') as f: f.write('sysctl '+' '.join(args)+'\\n')
+assert args[:2]==['-q','-w'] and args[2] in ('net.ipv4.ip_forward=0','net.ipv4.ip_forward=1'), args
+open(os.environ['FAKE_ROOT']+'/ip_forward','w').write(args[2][-1]+'\\n')
+''' if full_tun else '#!/bin/sh\nprintf "forbidden-sysctl %s\\n" "$*" >> "$EVENTS"\nexit 98\n'),
            'modprobe':'#!/bin/sh\nprintf "forbidden-modprobe %s\\n" "$*" >> "$EVENTS"\nexit 97\n',
            'mknod':'#!/bin/sh\nprintf "forbidden-mknod %s\\n" "$*" >> "$EVENTS"\nexit 97\n',
            'sleep':'#!/bin/sh\nexit 0\n'}
@@ -196,6 +203,8 @@ if os.environ.get('CORRUPT')==src.name: out.write_bytes(b'bad checksum')
     script=tmp_path/'install.sh';script.write_text(source)
     environment=dict(os.environ,PATH=str(commands)+os.pathsep+os.environ['PATH'],FAKE_ROOT=str(tmp_path),EVENTS=str(events),ASSETS=str(assets),
                      TZDIR=str(tmp_path/'zoneinfo'))
+    if full_tun:
+        environment.update(FULL_TUN='yes', AGENT_VERSION='1.8.40-go')
     def run(**overrides):
         return subprocess.run(['sh',str(script)],env=dict(environment,**overrides),capture_output=True,text=True,timeout=30)
     return run,events,source
@@ -450,3 +459,93 @@ def test_existing_mihomo_must_be_supported_stable_release_before_any_install_cha
     assert '稳定版' in result.stderr
     assert 'systemctl enable' not in events.read_text()
     for kind,content in before.items(): assert (tmp_path/f'etc/{kind}/config.yaml').read_bytes()==content
+
+
+BASELINES = Path(__file__).parent / 'testdata'
+
+
+def test_selective_gateway_script_is_byte_identical_to_the_previous_release():
+    # Captured from 0ef9e89 with exactly these inputs.
+    expected = (BASELINES / 'gateway_install_selective_0ef9e89.sh').read_text(encoding='utf-8')
+    assert generate() == expected
+    assert generate(full_tun=False) == expected
+
+
+def test_ordinary_aio_script_is_byte_identical_to_the_previous_release():
+    expected = (BASELINES / 'go_aio_install_0ef9e89.sh').read_text(encoding='utf-8')
+    assert generate_go_aio_install_script('https://cf.test', 'ordinary', agent_ip='192.168.8.3',
+                                          binary_download_url='https://cf.test/api/agents/download') == expected
+
+
+@pytest.mark.parametrize('kwargs', [
+    {'tun_prepare_assume_enabled': True},
+    {'tun_prepare_assume_enabled': True, 'manage_tun': False, 'non_interactive': True,
+     'verified_agent_path': '$GATEWAY_STAGE/configflow-agent'},
+    {'tun_prepare_assume_enabled': 1},
+])
+def test_assumed_tun_preparation_is_only_for_the_gateway_installer(kwargs):
+    with pytest.raises(ValueError):
+        generate_go_aio_install_script('https://cf.test', 'ordinary', **kwargs)
+
+
+def test_full_tun_script_persists_forwarding_and_prepares_tun(tmp_path):
+    script = generate(full_tun=True)
+    for expected in ('prepare_ipv4_forwarding', 'install_ipv4_forwarding_hook', 'persist_ipv4_forwarding',
+                     '-prepare-tun -assume-tun-enabled;', '$3>=40', 'Agent 1.8.40-go 或更新',
+                     'if [ -e /opt/configflow-agent/mihomo/linux-gateway.json ] || [ -L /opt/configflow-agent/mihomo/linux-gateway.json ]',
+                     '# ConfigFlow Linux gateway installation. Full-TUN router split',
+                     '请回到 ConfigFlow 安装向导，继续发布 Mihomo、发布 OxiDNS，再检查转发与 TUN。',
+                     # Shared with the selective installer: timezone data and the Agent's -version check.
+                     'apk add --no-cache tzdata', '"$GATEWAY_STAGE/configflow-agent" -version >/dev/null',
+                     'agent_ensure_dependencies zoneinfo sysctl cmp ln'):
+        assert expected in script, expected
+    assert 'CONFIGFLOW_FORWARDING_OWNER' not in script
+    assert '$3>=25' not in script
+    path = tmp_path / 'script.sh'
+    path.write_text(script)
+    result = subprocess.run(['sh', '-n', path], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    with pytest.raises(ValueError):
+        generate(full_tun='yes')
+
+
+@pytest.mark.parametrize('manager', ['systemd', 'openrc'])
+def test_full_tun_install_persists_forwarding_and_prepares_assumed_tun(tmp_path, monkeypatch, manager):
+    run, events, _ = host(tmp_path, monkeypatch, manager, full_tun=True)
+    result = run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = events.read_text()
+    assert (tmp_path / 'ip_forward').read_text() == '1\n'
+    assert (tmp_path / 'etc/sysctl.d/99-configflow-aio-forward.conf').read_text() == \
+        '# Managed by ConfigFlow Shell AIO IPv4 forwarding v1\nnet.ipv4.ip_forward=1\n'
+    hook = tmp_path / 'opt/configflow-agent/mihomo/enable-ipv4-forwarding.sh'
+    assert stat.S_IMODE(hook.stat().st_mode) == 0o755
+    unit = (tmp_path / ('etc/systemd/system/configflow-agent-mihomo.service' if manager == 'systemd'
+                        else 'etc/init.d/configflow-agent-mihomo')).read_text()
+    assert f'/bin/sh {hook}' in unit
+    assert 'prepare-tun:mihomo -prepare-tun -assume-tun-enabled' in log
+    # The bootstrap keeps TUN off until the published configuration takes over.
+    assert 'enable: false' in (tmp_path / 'etc/mihomo/config.yaml').read_text()
+    assert not (tmp_path / 'opt/configflow-agent/mihomo/linux-gateway.json').exists()
+
+
+def test_full_tun_install_requires_the_forwarding_agent(tmp_path, monkeypatch):
+    run, _, _ = host(tmp_path, monkeypatch, full_tun=True)
+    result = run(AGENT_VERSION='1.8.39-go')
+    assert result.returncode != 0
+    assert '1.8.40-go' in result.stdout + result.stderr
+    assert not (tmp_path / 'etc/mihomo').exists()
+    assert (tmp_path / 'ip_forward').read_text() == '0\n'
+
+
+def test_full_tun_install_refuses_a_host_still_on_the_gateway_takeover(tmp_path, monkeypatch):
+    run, events, _ = host(tmp_path, monkeypatch, full_tun=True)
+    record = tmp_path / 'opt/configflow-agent/mihomo/linux-gateway.json'
+    record.parent.mkdir(parents=True)
+    record.write_text('{}')
+    result = run()
+    assert result.returncode != 0
+    assert '中撤销接管' in result.stdout + result.stderr
+    assert (tmp_path / 'ip_forward').read_text() == '0\n'
+    assert not (tmp_path / 'etc/mihomo').exists()
+    assert not events.exists() or 'sysctl' not in events.read_text()

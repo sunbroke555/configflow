@@ -1,0 +1,17 @@
+[Unit]
+Description=ConfigFlow Agent (mihomo)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/configflow-agent/mihomo
+ExecStartPre=/bin/sh /opt/configflow-agent/mihomo/enable-ipv4-forwarding.sh
+ExecStart=/opt/configflow-agent/mihomo/configflow-agent -config /opt/configflow-agent/mihomo/config.json
+StandardOutput=append:/var/log/configflow-agent-mihomo.log
+StandardError=append:/var/log/configflow-agent-mihomo.log
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
