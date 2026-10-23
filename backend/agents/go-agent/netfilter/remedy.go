@@ -15,7 +15,9 @@ const (
 	ufwNote             = "UFW 会自动保存，重启后仍有效。"
 	ufwBeforeRulesNote  = "UFW 规则会自动保存；/etc/ufw/before.rules 的改动在 ufw reload 后生效，重启后仍有效。"
 
-	verifyPrefix = "执行后等几秒再回到这里刷新状态（检查结果会缓存：发现拦截时 5 秒，未发现时 30 秒，所以 30 秒内刷新可能仍显示旧结果）；再在客户端"
+	// Only a may_drop result carries this text, and it is cached for 5 seconds
+	// (routes.forwardFilterWarningTTL); the next refresh after that rechecks.
+	verifyPrefix = "执行后等 5 秒以上再回到这里刷新状态（发现拦截时检查结果缓存 5 秒）；再在客户端"
 )
 
 // FirewalldZone holds only the TUN device; its ACCEPT target takes what
@@ -203,15 +205,20 @@ func protocols(blocked map[string]bool, flow string, all ...string) map[string]b
 	return result
 }
 
+// forwardedProtocols are the protocols that pass the forward hook: TCP only
+// without auto-redirect (auto-redirect hands it to a local port).
+func forwardedProtocols(target Target) []string {
+	if target.AutoRedirect {
+		return []string{"udp", "icmp"}
+	}
+	return []string{"tcp", "udp", "icmp"}
+}
+
 // forwardImpact describes forwarded traffic by blocked protocol: TCP only
 // passes the forward hook without auto-redirect, and UFW, for one, accepts
 // forwarded ping while it drops forwarded UDP.
 func forwardImpact(target Target, blocked map[string]bool) (string, bool) {
-	all := []string{"udp", "icmp"}
-	if !target.AutoRedirect {
-		all = []string{"tcp", "udp", "icmp"}
-	}
-	protos := protocols(blocked, FlowForward, all...)
+	protos := protocols(blocked, FlowForward, forwardedProtocols(target)...)
 	switch {
 	case len(protos) == 0:
 		return "", false
@@ -272,8 +279,9 @@ func hint(target Target, blocked map[string]bool, complete, commands bool) strin
 	case blocked[FlowTUNTCP] && target.DNSHijack:
 		impacts = append(impacts, "把这台 Linux 当作 DNS 服务器的设备，TCP 方式的 DNS 查询会失败")
 	}
+	localDNS := protocols(blocked, FlowLocalDNS, "udp", "tcp")
 	if blocked[FlowLocalDNS] {
-		switch dns := protocols(blocked, FlowLocalDNS, "udp", "tcp"); {
+		switch dns := localDNS; {
 		case dns["udp"] && dns["tcp"]:
 			impacts = append(impacts, "客户端查不到域名（UDP 和 TCP 方式都失败）")
 		case dns["udp"]:
@@ -284,7 +292,10 @@ func hint(target Target, blocked map[string]bool, complete, commands bool) strin
 	}
 	// Only a complete view may say so: an input rule that might apply (a
 	// conditional drop, or a drop after a conditional accept) is not reported.
-	if target.AutoRedirect && complete && !blocked[FlowRedirectTCP] && (forward != "" || blocked[FlowDNS] || blocked[FlowTUNTCP]) {
+	// Nor when clients cannot resolve names at all (UDP DNS to this host
+	// fails): their TCP connections by name fail with it.
+	resolves := !blocked[FlowDNS] && !localDNS["udp"]
+	if target.AutoRedirect && complete && resolves && !blocked[FlowRedirectTCP] && (forward != "" || blocked[FlowTUNTCP]) {
 		impacts = append(impacts, "其他 TCP 连接不受影响")
 	}
 	subject := "经过 Mihomo TUN（" + device + "）的流量"
@@ -305,11 +316,7 @@ func hint(target Target, blocked map[string]bool, complete, commands bool) strin
 // verify says how to confirm the commands worked, for the flows they fix.
 func verify(target Target, blocked map[string]bool) string {
 	var checks []string
-	all := []string{"udp", "icmp"}
-	if !target.AutoRedirect {
-		all = []string{"tcp", "udp", "icmp"}
-	}
-	forward := protocols(blocked, FlowForward, all...)
+	forward := protocols(blocked, FlowForward, forwardedProtocols(target)...)
 	switch {
 	case forward["icmp"] && forward["udp"]:
 		checks = append(checks, "ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）")

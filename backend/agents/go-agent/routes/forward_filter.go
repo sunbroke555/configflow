@@ -23,7 +23,8 @@ var forwardFilterNow = time.Now
 
 // A warning is cached only briefly: after running the suggested commands the
 // operator refreshes right away and must see the new result. Other results
-// last 30 seconds; the verify text (netfilter.verifyPrefix) says both.
+// last 30 seconds. Only a warning carries the verify text
+// (netfilter.verifyPrefix), which states the 5 seconds.
 const (
 	forwardFilterTTL        = 30 * time.Second
 	forwardFilterWarningTTL = 5 * time.Second
@@ -46,7 +47,7 @@ var forwardFilterCache struct {
 }
 
 func forwardFilterNotApplicable(reason string) netfilter.Result {
-	return netfilter.Result{Protocol: 1, State: netfilter.StateNotApplicable, Reason: reason, Flows: []string{}, Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
+	return netfilter.Result{Protocol: 1, State: netfilter.StateNotApplicable, Reason: reason, Flows: []string{}, ForwardProtocols: []string{}, Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
 }
 
 // forwardFilterTarget decides applicability from the deployed configuration
@@ -63,7 +64,7 @@ func forwardFilterTarget(cfg *Config) (netfilter.Target, *netfilter.Result) {
 		err = yaml.Unmarshal(data, &doc)
 	}
 	if err != nil || doc == nil {
-		result := netfilter.Result{Protocol: 1, State: netfilter.StateUnknown, Reason: "config_error", Flows: []string{}, Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
+		result := netfilter.Result{Protocol: 1, State: netfilter.StateUnknown, Reason: "config_error", Flows: []string{}, ForwardProtocols: []string{}, Sources: []netfilter.Source{}, Remedies: []netfilter.Remedy{}}
 		return netfilter.Target{}, &result
 	}
 	if _, marker := doc["x-configflow-linux-gateway"]; marker {
@@ -135,6 +136,9 @@ func forwardFilterStatus(cfg *Config) netfilter.Result {
 	}
 	if result.Flows == nil {
 		result.Flows = []string{}
+	}
+	if result.ForwardProtocols == nil {
+		result.ForwardProtocols = []string{}
 	}
 	if result.Sources == nil {
 		result.Sources = []netfilter.Source{}

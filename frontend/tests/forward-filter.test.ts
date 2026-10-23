@@ -14,7 +14,7 @@ describe('forward filter warning', () => {
   })
 
   it('says every forwarded connection may fail without auto-redirect', () => {
-    expect(forwardFilterWarning(mayDrop({ auto_redirect: false }))).toMatchObject({ status: '可能拦截转发', short: '可能拦截转发' })
+    expect(forwardFilterWarning(mayDrop({ auto_redirect: false, forward_protocols: ['tcp', 'udp', 'icmp'] }))).toMatchObject({ status: '可能拦截转发', short: '可能拦截转发' })
   })
 
   it.each([
@@ -30,13 +30,32 @@ describe('forward filter warning', () => {
     ['local DNS only', ['local_dns'], true, '可能拦截 DNS'],
     ['redirected TCP only (INPUT drop)', ['redirect_tcp'], true, '可能拦截 TCP'],
     ['redirected and TUN TCP', ['redirect_tcp', 'tun_tcp'], true, '可能拦截 TCP'],
-    ['TCP from the TUN only (firewalld)', ['tun_tcp'], true, '可能拦截 TCP'],
+    // With auto-redirect the Agent checks tun_tcp only for hijacked DNS: it is TCP DNS, other TCP is unaffected.
+    ['TCP DNS from the TUN only (auto-redirect)', ['tun_tcp'], true, '可能拦截 DNS'],
     ['TUN TCP without auto-redirect', ['tun_tcp'], false, '可能拦截 TCP'],
     ['forwarded UDP and redirected TCP', ['forward', 'redirect_tcp'], true, '可能拦截转发'],
     ['an older Agent without flows', undefined, true, '可能拦截 UDP'],
     ['unknown flow names', ['bogus'], false, '可能拦截转发'],
   ])('labels %s', (_case, flows, auto_redirect, label) => {
-    expect(forwardFilterWarning(mayDrop({ flows: flows as any, auto_redirect }))).toMatchObject({ status: label, short: label })
+    expect(forwardFilterWarning(mayDrop({ flows: flows as any, auto_redirect, forward_protocols: undefined }))).toMatchObject({ status: label, short: label })
+  })
+
+  it.each([
+    ['UDP and ping (FORWARD DROP)', ['forward'], ['udp', 'icmp'], true, '可能拦截 UDP'],
+    ['UDP only (UFW accepts forwarded ping)', ['forward'], ['udp'], true, '可能拦截 UDP'],
+    // `-A FORWARD -p icmp -j DROP`: the Agent says only ping fails, so UDP is not claimed.
+    ['ping only', ['forward'], ['icmp'], true, '可能拦截转发'],
+    ['ping only without auto-redirect', ['forward'], ['icmp'], false, '可能拦截转发'],
+    ['TCP only without auto-redirect', ['forward'], ['tcp'], false, '可能拦截 TCP'],
+    ['TCP and UDP without auto-redirect', ['forward'], ['tcp', 'udp'], false, '可能拦截转发'],
+    ['TCP and ping without auto-redirect', ['forward'], ['tcp', 'icmp'], false, '可能拦截转发'],
+    ['ping and redirected TCP', ['forward', 'redirect_tcp'], ['icmp'], true, '可能拦截转发'],
+    ['UDP and redirected TCP', ['forward', 'redirect_tcp'], ['udp'], true, '可能拦截转发'],
+    ['unknown protocol names fall back to auto-redirect', ['forward'], ['sctp'], true, '可能拦截 UDP'],
+    ['an empty list falls back too', ['forward'], [], false, '可能拦截转发'],
+    ['DNS still wins', ['forward', 'local_dns'], ['icmp'], true, '可能拦截 DNS'],
+  ])('labels forwarding by blocked protocol: %s', (_case, flows, forward_protocols, auto_redirect, label) => {
+    expect(forwardFilterWarning(mayDrop({ flows: flows as any, forward_protocols: forward_protocols as any, auto_redirect }))!.short).toBe(label)
   })
 
   it('keeps every UFW command, including the before.rules line, verbatim', () => {
@@ -49,7 +68,9 @@ describe('forward filter warning', () => {
   it('uses only the short labels that fit the routers column', () => {
     const labels = new Set<string>()
     for (const flows of [[], ['forward'], ['dns'], ['local_dns'], ['redirect_tcp'], ['tun_tcp'], ['forward', 'tun_tcp']]) {
-      for (const auto_redirect of [true, false]) labels.add(forwardFilterWarning(mayDrop({ flows: flows as any, auto_redirect }))!.short)
+      for (const forward_protocols of [undefined, ['tcp'], ['udp'], ['icmp'], ['tcp', 'udp', 'icmp']]) {
+        for (const auto_redirect of [true, false]) labels.add(forwardFilterWarning(mayDrop({ flows: flows as any, forward_protocols: forward_protocols as any, auto_redirect }))!.short)
+      }
     }
     // Four characters plus a three-letter word or two more characters: one line in the 102px column.
     expect([...labels].sort()).toEqual(['可能拦截 DNS', '可能拦截 TCP', '可能拦截 UDP', '可能拦截转发'])

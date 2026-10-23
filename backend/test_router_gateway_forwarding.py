@@ -257,7 +257,7 @@ def docker_filter(**fields):
     """A may_drop report as Agent 1.8.42-go sends it for Docker's FORWARD policy."""
     return {
         'protocol': 1, 'state': 'may_drop', 'reason': '', 'device': 'Meta', 'auto_redirect': True, 'policy': 'drop',
-        'input_policy': 'accept', 'flows': ['forward'],
+        'input_policy': 'accept', 'flows': ['forward'], 'forward_protocols': ['udp', 'icmp'],
         'sources': [{'kind': 'docker', 'backend': 'nft', 'hook': 'forward', 'family': '', 'table': '', 'chain': '',
                      'policy': 'drop', 'detail': 'FORWARD 默认策略为 DROP（Docker）'}],
         'remedies': [{'source': 'docker', 'label': 'Docker', 'device': 'Meta',
@@ -375,6 +375,19 @@ def test_sanitize_keeps_every_command_form_the_agent_generates():
     assert {remedy['source']: remedy['commands'] for remedy in result['remedies']} == commands
 
 
+def test_sanitize_keeps_only_known_forward_protocols():
+    # Only ping is dropped: the panel must not claim UDP is blocked.
+    assert bridge.sanitize_forward_filter(docker_filter(forward_protocols=['icmp']))['forward_protocols'] == ['icmp']
+    assert bridge.sanitize_forward_filter(docker_filter(
+        forward_protocols=['icmp', 'sctp', 'tcp', {}, 'udp; reboot', 'tcp']))['forward_protocols'] == ['tcp', 'icmp']
+    # An Agent that does not report them, or a report without a forward flow.
+    assert bridge.sanitize_forward_filter(docker_filter(forward_protocols=None))['forward_protocols'] == []
+    without = docker_filter()
+    del without['forward_protocols']
+    assert bridge.sanitize_forward_filter(without)['forward_protocols'] == []
+    assert bridge.sanitize_forward_filter(docker_filter(flows=['local_dns']))['forward_protocols'] == []
+
+
 def test_sanitize_reduces_fields_to_known_values():
     result = bridge.sanitize_forward_filter(docker_filter(
         protocol='1', reason='Timeout!', device='bad device', auto_redirect='yes', policy='reject',
@@ -385,8 +398,9 @@ def test_sanitize_reduces_fields_to_known_values():
         remedies=[{'source': 'docker', 'label': 'L' * 100, 'device': 'Meta', 'commands': ['ufw route allow in on Meta'] * 14,
                    'persist_note': None}, {'source': 'cron', 'commands': ['ufw status']}, None] * 4))
     assert set(result) == {'protocol', 'state', 'reason', 'device', 'auto_redirect', 'policy', 'input_policy', 'flows',
-                           'sources', 'remedies', 'hint', 'verify', 'checked_at', 'cached'}
+                           'forward_protocols', 'sources', 'remedies', 'hint', 'verify', 'checked_at', 'cached'}
     assert (result['input_policy'], result['flows']) == ('', ['forward', 'local_dns', 'tun_tcp'])
+    assert result['forward_protocols'] == ['udp', 'icmp']
     assert (result['protocol'], result['reason'], result['device'], result['auto_redirect'], result['policy'],
             result['cached']) == (0, '', '', False, '', False)
     assert result['hint'].startswith('第一行第二行') and len(result['hint']) == 400

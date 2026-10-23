@@ -427,6 +427,9 @@ FORWARD_FILTER_STATES = frozenset({'ok', 'may_drop', 'unknown', 'not_applicable'
 FORWARD_FILTER_SOURCES = frozenset({'docker', 'iptables', 'nftables', 'firewalld', 'ufw'})
 # Blocked paths, in the Agent's display order (netfilter.Flow*).
 FORWARD_FILTER_FLOWS = ('forward', 'dns', 'local_dns', 'redirect_tcp', 'tun_tcp')
+# Protocols the forward flow is blocked for (Result.ForwardProtocols), in order;
+# empty for an Agent that does not report them.
+FORWARD_FILTER_PROTOCOLS = ('tcp', 'udp', 'icmp')
 FORWARD_FILTER_MAX_SOURCES = 8
 FORWARD_FILTER_MAX_REMEDIES = 6
 FORWARD_FILTER_MAX_COMMANDS = 12
@@ -514,6 +517,7 @@ def sanitize_forward_filter(value):
     sources = value.get('sources') if isinstance(value.get('sources'), list) else []
     remedies = value.get('remedies') if isinstance(value.get('remedies'), list) else []
     flows = value.get('flows') if isinstance(value.get('flows'), list) else []
+    protocols = value.get('forward_protocols') if isinstance(value.get('forward_protocols'), list) else []
     return {
         'protocol': value.get('protocol') if type(value.get('protocol')) is int else 0,
         'state': value['state'],
@@ -523,6 +527,7 @@ def sanitize_forward_filter(value):
         'policy': _forward_filter_choice(value.get('policy'), ('drop', 'accept')),
         'input_policy': _forward_filter_choice(value.get('input_policy'), ('drop', 'accept')),
         'flows': [flow for flow in FORWARD_FILTER_FLOWS if flow in flows],
+        'forward_protocols': [proto for proto in FORWARD_FILTER_PROTOCOLS if proto in protocols] if 'forward' in flows else [],
         'sources': [source for source in map(_forward_filter_source, sources) if source][:FORWARD_FILTER_MAX_SOURCES],
         'remedies': [remedy for remedy in map(_forward_filter_remedy, remedies) if remedy][:FORWARD_FILTER_MAX_REMEDIES],
         'hint': _forward_filter_text(value.get('hint'), 400),

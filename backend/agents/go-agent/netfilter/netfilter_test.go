@@ -411,7 +411,7 @@ func TestIptablesInputDropBlocksRedirectedAndTUNTCP(t *testing.T) {
 	if !reflect.DeepEqual(remedy.Commands, want) || remedy.Source != "iptables" || !strings.Contains(remedy.PersistNote, "这些规则") {
 		t.Fatalf("input remedy: %+v", remedy)
 	}
-	if !reflect.DeepEqual(result.Flows, []string{FlowRedirectTCP, FlowTUNTCP}) || result.Policy != "accept" || result.InputPolicy != "drop" {
+	if !reflect.DeepEqual(result.Flows, []string{FlowRedirectTCP, FlowTUNTCP}) || result.ForwardProtocols == nil || len(result.ForwardProtocols) != 0 || result.Policy != "accept" || result.InputPolicy != "drop" {
 		t.Fatalf("input flows: %+v", result)
 	}
 	for _, text := range []string{"TCP 连接会失败", "TCP 方式的 DNS 查询会失败"} {
@@ -885,8 +885,16 @@ func TestImpactTextFollowsTheBlockedFlows(t *testing.T) {
 	}{
 		{"forward with auto-redirect", Target{Device: "Meta", AutoRedirect: true}, []string{FlowForward},
 			[]string{"UDP（如 QUIC、语音通话、游戏）和 ping 会失败", "其他 TCP 连接不受影响"}, []string{"DNS"}},
+		// Names do not resolve, so TCP by name fails as well.
 		{"forward with hijacked DNS", standalone, []string{FlowForward, FlowDNS},
-			[]string{"UDP（如 QUIC", "查不到域名（UDP 和 TCP 方式都会失败）", "其他 TCP 连接不受影响"}, nil},
+			[]string{"UDP（如 QUIC", "查不到域名（UDP 和 TCP 方式都会失败）"}, []string{"不受影响"}},
+		{"forward with local DNS", aio, []string{FlowForward, FlowLocalDNS},
+			[]string{"UDP（如 QUIC", "客户端查不到域名（UDP 和 TCP 方式都失败）"}, []string{"不受影响"}},
+		// Only TCP DNS fails: names still resolve over UDP.
+		{"forward with TCP-only local DNS", aio, []string{FlowForward, FlowLocalDNS, FlowLocalDNS + "/tcp"},
+			[]string{"客户端 TCP 方式的 DNS 查询会失败", "其他 TCP 连接不受影响"}, nil},
+		{"TCP DNS from the TUN", standalone, []string{FlowTUNTCP},
+			[]string{"TCP 方式的 DNS 查询会失败", "其他 TCP 连接不受影响"}, []string{"UDP（"}},
 		{"redirected TCP", standalone, []string{FlowRedirectTCP},
 			[]string{"TCP 连接会失败（auto-redirect"}, []string{"不受影响", "UDP"}},
 		{"forward without auto-redirect", Target{Device: "Meta", Stack: "mixed"}, []string{FlowForward, FlowTUNTCP},
@@ -916,6 +924,11 @@ func TestImpactTextFollowsTheBlockedFlows(t *testing.T) {
 	// An incomplete view never claims TCP is unaffected.
 	if text := hint(Target{Device: "Meta", AutoRedirect: true}, map[string]bool{FlowForward: true}, false, true); strings.Contains(text, "不受影响") {
 		t.Fatalf("incomplete: %s", text)
+	}
+	// A warning is cached for 5 seconds (routes.forwardFilterWarningTTL); the
+	// text says so and does not claim a longer delay.
+	if !strings.Contains(verifyPrefix, "缓存 5 秒") || strings.Contains(verifyPrefix, "30 秒") {
+		t.Fatalf("verify prefix: %s", verifyPrefix)
 	}
 	if text := verify(Target{AutoRedirect: true}, map[string]bool{FlowForward: true}); text != verifyPrefix+" ping 一个走代理的地址，或打开一个使用 UDP 的应用（如 QUIC 网页、语音通话）确认可用。" {
 		t.Fatalf("forward verify: %s", text)
@@ -1315,6 +1328,11 @@ func TestAIOWithFirewalldReportsLocalDNS(t *testing.T) {
 	if !reflect.DeepEqual(remedy.Commands, want) || !reflect.DeepEqual(result.Flows, []string{FlowForward, FlowLocalDNS}) {
 		t.Fatalf("firewalld: %+v", result)
 	}
+	// firewalld accepts redirected TCP itself, but clients that cannot resolve
+	// names cannot open TCP connections by name either.
+	if !strings.Contains(result.Hint, "客户端查不到域名（UDP 和 TCP 方式都失败）") || strings.Contains(result.Hint, "不受影响") {
+		t.Fatalf("firewalld hint: %s", result.Hint)
+	}
 	if !strings.Contains(remedy.PersistNote, "开放 DNS 服务") || !strings.Contains(remedy.PersistNote, "configflow-tun") {
 		t.Fatalf("note: %s", remedy.PersistNote)
 	}
@@ -1430,6 +1448,9 @@ func TestForwardedPingIsJudgedSeparately(t *testing.T) {
 	if !strings.Contains(result.Hint, "UDP（如 QUIC、语音通话、游戏）和 ping 会失败") || !strings.Contains(result.Verify, "ping") {
 		t.Fatalf("plain drop: %s / %s", result.Hint, result.Verify)
 	}
+	if !reflect.DeepEqual(result.ForwardProtocols, []string{"udp", "icmp"}) {
+		t.Fatalf("plain drop protocols: %v", result.ForwardProtocols)
+	}
 	// UFW accepts forwarded echo requests; ping stays out of the text.
 	h := nftHost(t, "ip-filter-present.nft.json", "ufw-active.iptables")
 	h.tools["ufw"] = "/usr/sbin/ufw"
@@ -1438,6 +1459,9 @@ func TestForwardedPingIsJudgedSeparately(t *testing.T) {
 	if !strings.Contains(result.Hint, "主路由转来的 UDP（如 QUIC、语音通话、游戏）会失败") || strings.Contains(result.Hint, "ping") || strings.Contains(result.Verify, "ping") {
 		t.Fatalf("ufw: %s / %s", result.Hint, result.Verify)
 	}
+	if !reflect.DeepEqual(result.ForwardProtocols, []string{"udp"}) {
+		t.Fatalf("ufw protocols: %v", result.ForwardProtocols)
+	}
 	// Without auto-redirect TCP is forwarded too.
 	h = nftHost(t, "ip-filter-present.nft.json", "ufw-active.iptables")
 	h.tools["ufw"] = "/usr/sbin/ufw"
@@ -1445,6 +1469,18 @@ func TestForwardedPingIsJudgedSeparately(t *testing.T) {
 	result = h.inspectWithoutRedirect("Meta")
 	if !strings.Contains(result.Hint, "主路由转来的 TCP 和 UDP（如 QUIC、语音通话、游戏）会失败") {
 		t.Fatalf("ufw without auto-redirect: %s", result.Hint)
+	}
+	if !reflect.DeepEqual(result.ForwardProtocols, []string{"tcp", "udp"}) {
+		t.Fatalf("ufw without auto-redirect protocols: %v", result.ForwardProtocols)
+	}
+	// Only ping dropped: the report names icmp alone, so the panel does not
+	// claim UDP is blocked.
+	pingOnly := strings.Replace(fixture(t, "plain-drop.iptables"), ":FORWARD DROP [17:874]\n", ":FORWARD ACCEPT [0:0]\n-A FORWARD -p icmp -j DROP\n", 1)
+	h = nftHost(t, "ip-filter-present.nft.json", "plain-drop.iptables")
+	h.outputs["iptables-save -t filter"] = pingOnly
+	result = h.inspect("Meta")
+	if !reflect.DeepEqual(result.Flows, []string{FlowForward}) || !reflect.DeepEqual(result.ForwardProtocols, []string{"icmp"}) || !strings.Contains(result.Hint, "主路由转来的 ping 会失败") || strings.Contains(result.Hint, "UDP") || !strings.Contains(result.Verify, "ping") {
+		t.Fatalf("ping only: %+v", result)
 	}
 	echo := flow{proto: "icmp"}
 	for _, tc := range []struct {

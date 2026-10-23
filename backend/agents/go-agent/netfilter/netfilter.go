@@ -50,13 +50,17 @@ type Result struct {
 	// host's LAN address that a local server answers, outside the TUN),
 	// redirect_tcp (TCP that auto-redirect hands to a local port) and tun_tcp
 	// (TCP the TUN system stack delivers to Mihomo).
-	Flows     []string `json:"flows"`
-	Sources   []Source `json:"sources"`
-	Remedies  []Remedy `json:"remedies"`
-	Hint      string   `json:"hint"`
-	Verify    string   `json:"verify"`
-	CheckedAt string   `json:"checked_at"`
-	Cached    bool     `json:"cached"`
+	Flows []string `json:"flows"`
+	// ForwardProtocols lists the protocols (tcp, udp, icmp) the forward flow
+	// is blocked for, in that order; empty without a forward finding. TCP is
+	// only forwarded without auto-redirect.
+	ForwardProtocols []string `json:"forward_protocols"`
+	Sources          []Source `json:"sources"`
+	Remedies         []Remedy `json:"remedies"`
+	Hint             string   `json:"hint"`
+	Verify           string   `json:"verify"`
+	CheckedAt        string   `json:"checked_at"`
+	Cached           bool     `json:"cached"`
 }
 
 type Source struct {
@@ -492,7 +496,7 @@ func (in *inspection) record(f finding) {
 }
 
 func (in *inspection) result(now time.Time) Result {
-	result := Result{Protocol: 1, Device: in.target.Device, AutoRedirect: in.target.AutoRedirect, Flows: []string{}, Sources: []Source{}, Remedies: []Remedy{}, CheckedAt: now.UTC().Format(time.RFC3339)}
+	result := Result{Protocol: 1, Device: in.target.Device, AutoRedirect: in.target.AutoRedirect, Flows: []string{}, ForwardProtocols: []string{}, Sources: []Source{}, Remedies: []Remedy{}, CheckedAt: now.UTC().Format(time.RFC3339)}
 	if !DevicePattern.MatchString(result.Device) {
 		result.Device = ""
 	}
@@ -513,6 +517,12 @@ func (in *inspection) result(now time.Time) Result {
 	for _, name := range flowOrder {
 		if blocked[name] {
 			result.Flows = append(result.Flows, name)
+		}
+	}
+	forward := protocols(blocked, FlowForward, forwardedProtocols(in.target)...)
+	for _, proto := range []string{"tcp", "udp", "icmp"} {
+		if forward[proto] {
+			result.ForwardProtocols = append(result.ForwardProtocols, proto)
 		}
 	}
 	switch {
