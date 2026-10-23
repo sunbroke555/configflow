@@ -204,6 +204,9 @@ func validateOxiDNS(cfg *Config, doc map[string]interface{}, stage, config strin
 			return pluginLocation(fmt.Errorf("OxiDNS plugin type/tag missing or duplicated"), stage, manifest, index, field)
 		}
 		tags[tag] = true
+		if err := validateOxiDNSTimezone(kind, args); err != nil {
+			return pluginLocation(err, stage, manifest, index, "args", "timezone")
+		}
 		type resourceReference struct {
 			value interface{}
 			path  []interface{}

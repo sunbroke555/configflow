@@ -147,7 +147,7 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ['EVENTS'], 'a') as log:
     log.write('agent ' + ' '.join(args) + '\\n')
-if args == ['-h']:
+if args in (['-h'], ['-version']):
     raise SystemExit(0)
 cfg = json.load(open(args[args.index('-config') + 1]))
 assert cfg['service_manager'] == os.environ['TEST_MANAGER']

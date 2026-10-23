@@ -100,14 +100,34 @@ func serviceRunning(cfg *Config) (bool, error) {
 	if e == nil {
 		return true, nil
 	}
-	var exit *exec.ExitError
-	if errors.As(e, &exit) {
-		code := exit.ExitCode()
-		if (cfg.ServiceManager == "systemd" && code == 3) || (cfg.ServiceManager == "openrc" && code == 3) || (cfg.ServiceManager == "command" && (code == 1 || code == 3)) {
-			return false, nil
+	code := commandExitCode(e)
+	if cfg.ServiceManager == "openrc" {
+		v := string(out)
+		if (code == openrcStatusStopping && strings.Contains(v, "status: stopping")) || (code == openrcStatusStarting && strings.Contains(v, "status: starting")) {
+			return false, errServiceTransition
 		}
 	}
+	if (cfg.ServiceManager == "systemd" && code == 3) || (cfg.ServiceManager == "openrc" && (code == openrcStatusStopped || code == openrcStatusCrashed)) || (cfg.ServiceManager == "command" && (code == 1 || code == 3)) {
+		return false, nil
+	}
 	return false, diagnosticFailure("cannot determine service status", e, out, cfg.Token)
+}
+
+// OpenRC status exit codes (openrc-run.sh _status). Crashed means OpenRC still
+// records the service as started although its daemon has exited.
+const (
+	openrcStatusStopped  = 3
+	openrcStatusStopping = 4
+	openrcStatusStarting = 8
+	openrcStatusCrashed  = 32
+)
+
+func commandExitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	return -1
 }
 func stopService(cfg *Config) error {
 	// Stop the manager even for EXITED/BACKOFF/activating: those states may have
@@ -137,10 +157,69 @@ func startService(cfg *Config) error {
 			return err
 		}
 	}
+	// OpenRC treats start of a crashed service as already started and does
+	// nothing; zap clears that record so start launches the daemon again.
+	if cfg.ServiceManager == "openrc" {
+		if _, e := serviceCommand(cfg, "status"); commandExitCode(e) == openrcStatusCrashed {
+			if _, e = serviceCommand(cfg, "zap"); e != nil {
+				return e
+			}
+		}
+	}
 	if _, e := serviceCommand(cfg, "start"); e != nil {
-		return e
+		return withServiceLog(cfg, e)
 	}
 	return nil
+}
+
+const serviceFailureLogLines = 30
+
+// recentServiceLog returns the tail of the core's own error output so a core
+// that exits during startup explains itself in the deployment failure.
+func recentServiceLog(cfg *Config) (LogSource, string) {
+	sources := coreLogSources(cfg)
+	for _, id := range []string{"core-err", "core", "core-file"} {
+		for _, source := range sources {
+			if source.ID != id || source.Kind == "unavailable" {
+				continue
+			}
+			logs, e := ReadLogSource(source, serviceFailureLogLines)
+			if e == nil && strings.TrimSpace(logs) != "" {
+				return source, strings.TrimSpace(logs)
+			}
+		}
+	}
+	return LogSource{}, ""
+}
+
+func withServiceLog(cfg *Config, err error) error {
+	if err == nil {
+		return nil
+	}
+	source, logs := recentServiceLog(cfg)
+	if logs == "" {
+		return err
+	}
+	summary, details := deploymentErrorFields(err)
+	reason := ""
+	for _, line := range strings.Split(logs, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") || strings.Contains(lower, "failed") {
+			reason = strings.TrimSpace(line)
+		}
+	}
+	if reason != "" && !strings.Contains(summary, reason) {
+		summary += ": " + reason
+	}
+	where := source.Path
+	if where == "" {
+		where = source.Unit
+	}
+	if details != "" {
+		details += "\n\n"
+	}
+	details += fmt.Sprintf("%s 最近 %d 行（%s）：\n%s", source.Label, serviceFailureLogLines, where, logs)
+	return diagnosticWithSecrets(&deploymentDiagnosticError{summary: summary, details: details, cause: err}, cfg.Token)
 }
 
 func validateStagedDeployment(cfg *Config, s *DeploymentState) (result error) {
@@ -591,7 +670,7 @@ func checkDeploymentHealth(cfg *Config) error {
 			if last == nil {
 				last = fmt.Errorf("service did not remain healthy long enough")
 			}
-			return last
+			return withServiceLog(cfg, last)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

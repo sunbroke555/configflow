@@ -20,6 +20,15 @@ agent_collect_dependencies() {
     # Extra commands are supplied only by installers that actually need them.
     # Existing BusyBox applets count as available; do not replace working tools.
     for agent_tool in awk basename cat chmod cp dirname grep head mkdir mktemp mv readlink rm sed wc "$@"; do
+        if [ "$agent_tool" = zoneinfo ]; then
+            # OxiDNS cron plugins resolve IANA timezones from the system
+            # database; minimal Alpine images ship without it.
+            if [ ! -f "${TZDIR:-/usr/share/zoneinfo}/Asia/Shanghai" ]; then
+                AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }时区数据"
+                if [ "$AGENT_PACKAGE_MANAGER" = zypper ]; then agent_add_package timezone; else agent_add_package tzdata; fi
+            fi
+            continue
+        fi
         if ! command -v "$agent_tool" >/dev/null 2>&1; then
             AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }$agent_tool"
             case "$agent_tool" in

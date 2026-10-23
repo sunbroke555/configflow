@@ -26,7 +26,7 @@ FORWARDING_MANAGERS = [
 ]
 
 
-def isolate_dependencies(tmp_path, env, missing=(), package_manager="apk"):
+def isolate_dependencies(tmp_path, env, missing=(), package_manager="apk", tzdata=True):
     """No host package manager can be reached, including after a mock failure."""
     commands = tmp_path / "commands"
     commands.mkdir(exist_ok=True)
@@ -58,6 +58,10 @@ if os.environ.get('EVENTS'):
         log.write(('package-update' if updating else 'package-install') + '\\n')
 if os.environ.get('FAIL_PACKAGE') == ('update' if updating else 'install'): raise SystemExit(41)
 if updating or os.environ.get('PACKAGE_NO_COMMANDS'): raise SystemExit(0)
+if 'tzdata' in sys.argv or 'timezone' in sys.argv:
+    zone = Path(os.environ['TZDIR']) / 'Asia/Shanghai'
+    zone.parent.mkdir(parents=True, exist_ok=True)
+    zone.write_text('TZif')
 for executable in Path(os.environ['TEST_UNAVAILABLE']).iterdir():
     packages = {{'awk': ['gawk'], 'grep': ['grep'], 'sed': ['sed'], 'wget': ['curl'],
                 'sysctl': ['procps-ng' if Path(sys.argv[0]).name in ('pacman', 'dnf', 'yum') else 'procps'],
@@ -69,19 +73,24 @@ for executable in Path(os.environ['TEST_UNAVAILABLE']).iterdir():
     env.pop("DEBIAN_FRONTEND", None)
     events = tmp_path / "packages"
     events.touch()
+    # Timezone data is looked up through TZDIR, never the host's zoneinfo.
+    zoneinfo = tmp_path / "zoneinfo"
+    if tzdata:
+        (zoneinfo / "Asia").mkdir(parents=True, exist_ok=True)
+        (zoneinfo / "Asia/Shanghai").write_text("TZif")
     # Existing mock core binaries are in the second PATH entry, never host bins.
     core_bins = tmp_path / "root/usr/local/bin"
     env.update(PATH=f"{commands}:{core_bins}", TEST_COMMANDS=str(commands),
-               TEST_UNAVAILABLE=str(unavailable), PACKAGE_EVENTS=str(events))
+               TEST_UNAVAILABLE=str(unavailable), PACKAGE_EVENTS=str(events), TZDIR=str(zoneinfo))
     return events
 
 
-def dependency_harness(tmp_path, missing=(), manager="apk", required=(), **options):
+def dependency_harness(tmp_path, missing=(), manager="apk", required=(), tzdata=True, **options):
     script = tmp_path / "dependencies.sh"
     script.write_text("set -eu\n" + AGENT_INSTALL_DEPENDENCIES +
                       "\nagent_ensure_dependencies " + shlex.join(required) + "\nprintf 'ready\\n'\n")
     env = dict(os.environ, **options)
-    events = isolate_dependencies(tmp_path, env, missing, manager)
+    events = isolate_dependencies(tmp_path, env, missing, manager, tzdata)
     return script, env, events
 
 
@@ -190,6 +199,27 @@ def test_shared_coreutils_is_installed_once_for_runtime_and_forwarding_tools(
     assert transactions[-1][1] == prefix + ["coreutils"]
 
 
+@pytest.mark.parametrize("manager,package", [("apk", "tzdata"), ("apt-get", "tzdata"), ("zypper", "timezone")])
+def test_missing_timezone_data_installed_for_oxidns(tmp_path, manager, package):
+    script, env, events = dependency_harness(tmp_path, manager=manager, required=("zoneinfo",), tzdata=False)
+    result = run(script, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "时区数据" in result.stdout
+    installs = [json.loads(line) for line in events.read_text().splitlines() if json.loads(line)[1] != ["update"]]
+    assert len(installs) == 1 and installs[0][1][-1] == package
+    assert (tmp_path / "zoneinfo/Asia/Shanghai").is_file()
+    # The second run finds the data and makes no package transaction.
+    count = len(events.read_text().splitlines())
+    assert run(script, env).returncode == 0
+    assert len(events.read_text().splitlines()) == count
+
+
+def test_timezone_data_not_required_without_oxidns(tmp_path):
+    script, env, events = dependency_harness(tmp_path, tzdata=False)
+    assert run(script, env).returncode == 0
+    assert events.read_text() == ""
+
+
 def test_unrequested_forwarding_commands_are_not_installed(tmp_path):
     script, env, events = dependency_harness(tmp_path, FORWARDING_TOOLS)
     assert run(script, env).returncode == 0
@@ -200,10 +230,11 @@ def test_unrequested_forwarding_commands_are_not_installed(tmp_path):
 def test_install_entrypoints_request_forwarding_tools_only_when_enabled():
     ordinary = aio.generated()
     optout = aio.generated(manage_ipv4_forwarding=False, manage_tun=False)
-    for source, expected in ((ordinary, "agent_ensure_dependencies sysctl cmp ln"),
-                             (optout, "agent_ensure_dependencies"),
+    for source, expected in ((ordinary, "agent_ensure_dependencies zoneinfo sysctl cmp ln"),
+                             (optout, "agent_ensure_dependencies zoneinfo"),
                              (single.generated(), "agent_ensure_dependencies"),
-                             (gateway.generate(), "agent_ensure_dependencies")):
+                             (single.generated("oxidns"), "agent_ensure_dependencies zoneinfo"),
+                             (gateway.generate(), "agent_ensure_dependencies zoneinfo")):
         calls = [line.strip() for line in source.splitlines()
                  if line.strip().startswith("agent_ensure_dependencies") and not line.endswith("{")]
         assert calls == [expected]

@@ -135,6 +135,9 @@ if cfg['service_type'] == os.environ.get('FAIL_AGENT_CHECK'): raise SystemExit(4
         (tmp_path / directory).mkdir(parents=True,exist_ok=True)
     (tmp_path / 'ip_forward').write_text('0\n')
     (tmp_path / 'active').write_text('')
+    # Timezone data is looked up through TZDIR, never the host's zoneinfo.
+    (tmp_path / 'zoneinfo/Asia').mkdir(parents=True)
+    (tmp_path / 'zoneinfo/Asia/Shanghai').write_text('TZif')
     manager_code = shebang + '''import json,os,sys
 from pathlib import Path
 root=Path(os.environ['FAKE_ROOT']); name=Path(sys.argv[0]).name; args=sys.argv[1:]
@@ -191,7 +194,8 @@ if os.environ.get('CORRUPT')==src.name: out.write_bytes(b'bad checksum')
     for name,body in mocks.items():
         p=commands/name;p.write_text(body);p.chmod(0o755)
     script=tmp_path/'install.sh';script.write_text(source)
-    environment=dict(os.environ,PATH=str(commands)+os.pathsep+os.environ['PATH'],FAKE_ROOT=str(tmp_path),EVENTS=str(events),ASSETS=str(assets))
+    environment=dict(os.environ,PATH=str(commands)+os.pathsep+os.environ['PATH'],FAKE_ROOT=str(tmp_path),EVENTS=str(events),ASSETS=str(assets),
+                     TZDIR=str(tmp_path/'zoneinfo'))
     def run(**overrides):
         return subprocess.run(['sh',str(script)],env=dict(environment,**overrides),capture_output=True,text=True,timeout=30)
     return run,events,source
@@ -221,6 +225,32 @@ def test_new_install_validates_before_mutation_registers_and_never_applies_forwa
         assert cfg['installation_id']=='install-session-0123456789'
         assert cfg['service_binary']==str(tmp_path/f'usr/local/bin/{kind}')
     assert not (tmp_path/'run/configflow-gateway-install.lock').exists()
+
+
+def test_missing_timezone_data_installed_before_cores(tmp_path,monkeypatch):
+    run,events,source=host(tmp_path,monkeypatch,'openrc')
+    apk=tmp_path/'commands/apk'
+    apk.write_text('#!/bin/sh\nprintf "apk %s\\n" "$*" >> "$EVENTS"\n'
+                   'mkdir -p "$TZDIR/Asia" && printf TZif > "$TZDIR/Asia/Shanghai"\n')
+    apk.chmod(0o755)
+    empty=tmp_path/'empty-zoneinfo'
+    result=run(TZDIR=str(empty))
+    assert result.returncode==0,result.stdout+result.stderr
+    log=events.read_text()
+    assert log.count('apk add --no-cache tzdata')==1
+    assert log.index('apk add --no-cache tzdata')<log.index('rc-update -u')
+    assert (empty/'Asia/Shanghai').is_file()
+
+
+def test_timezone_data_install_failure_stops_before_mutation(tmp_path,monkeypatch):
+    run,events,source=host(tmp_path,monkeypatch,'openrc')
+    apk=tmp_path/'commands/apk'
+    apk.write_text('#!/bin/sh\nexit 1\n')
+    apk.chmod(0o755)
+    result=run(TZDIR=str(tmp_path/'empty-zoneinfo'))
+    assert result.returncode!=0
+    assert 'tzdata' in result.stdout+result.stderr
+    assert not (tmp_path/'etc/oxidns').exists()
 
 
 @pytest.mark.parametrize('failure',[{'CORRUPT':'oxidns.tar.gz'},{'FAIL_DOWNLOAD':'agent'}, {'FAIL_CHECK':'oxidns'},

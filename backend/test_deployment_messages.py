@@ -14,6 +14,8 @@ from backend.test_agent_upgrade_auth import authenticated_app  # noqa: F401
     ('Rollback outcome unknown; awaiting Agent status', '暂时无法确认回滚结果'),
     ('Only a successful deployment can be rolled back', '发布成功'),
     ('service start failed', '服务启动失败'),
+    ('service is not running: ERROR listen udp 0.0.0.0:53: bind: address already in use', '核心服务启动后退出'),
+    ('timezone data for Asia/Shanghai is missing on this device; install tzdata (Alpine: apk add tzdata) and publish again', 'apk add tzdata'),
     ('backup checksum mismatch: rules/Claude.mrs', '旧配置备份校验失败'),
     ('rollback cannot stop service: rc-service exited with code 1', '回滚时无法停止当前服务'),
     ('Agent returned HTTP 503', 'HTTP 状态码'),

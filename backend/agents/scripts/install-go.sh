@@ -32,7 +32,7 @@ case "$choice" in
             armv7l|armhf) AGENT_ARCH="linux-armv7" ;;
             *) echo "不支持的 CPU 架构"; exit 1 ;;
         esac
-        agent_ensure_dependencies
+        agent_ensure_dependencies{core_dependencies}
         cf_step_done "安装环境与依赖已就绪"
         ;;
     2) cf_step "卸载 Agent" ;;
@@ -265,7 +265,7 @@ else
     echo "安装阶段需要 wget 或 curl 下载二进制"; exit 1
 fi
 chmod 755 "$BINARY_TMP"
-"$BINARY_TMP" -h >/dev/null
+"$BINARY_TMP" -version >/dev/null
 cf_step_done "Agent 下载与校验通过"
 
 

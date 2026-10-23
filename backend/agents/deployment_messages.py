@@ -66,6 +66,8 @@ _PREFIXES = {
     'rollback cannot stop service: ': '回滚时无法停止当前服务，请检查服务状态。',
     'old service failed to start: ': '恢复旧配置后服务未能启动，请查看核心日志。',
     'old service health failed: ': '恢复旧配置后服务检查未通过，请查看核心日志。',
+    'service is not running: ': '核心服务启动后退出，原始错误末尾是核心日志中的报错。',
+    'timezone data for ': '设备缺少时区数据，OxiDNS 的定时任务无法启动；请在设备上安装 tzdata（Alpine：apk add tzdata）后重新发布。当前运行配置未修改。',
 }
 
 
