@@ -60,7 +60,7 @@ export const LEGACY_RESTORE_BLOCKED = '恢复后 Linux 网关为关闭状态，�
 /** 旧网关记录仍在且 IPv4 转发未持久化时，撤销记录或发布完整 TUN 会让转发被还原为关闭，服务端拒绝时的说明。 */
 export const FORWARDING_NOT_PERSISTED = '设备上仍有旧版 Linux 网关记录，且 IPv4 转发尚未持久化：Agent 撤销该记录时会把 IPv4 转发还原为关闭，主路由转来的连接会中断。请先在 Linux 网关安装向导的「检查转发与 TUN」中开启并持久化 IPv4 转发。'
 /** 旧版主路由分流的基础 YAML 已有完整 TUN，但设备未持久化 IPv4 转发时，服务端拒绝关闭 Linux 网关的说明。 */
-export const GATEWAY_OFF_NOT_PERSISTED = '关闭 Linux 网关会让 Agent 撤销设备上的旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，主路由分流转来的连接会中断。这台设备尚未持久化 IPv4 转发，已阻止；请保持 Linux 网关开启。普通 All-in-One 安装会持久化转发，不受影响。'
+export const GATEWAY_OFF_NOT_PERSISTED = '关闭 Linux 网关会让 Agent 撤销设备上的旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，主路由分流转来的连接会中断。这台设备尚未持久化 IPv4 转发，已阻止；请保持 Linux 网关开启。如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。'
 /** 不在 ROUTER_SPLIT_MESSAGES 中的错误码（该表与服务端 MESSAGES 逐条同步）。 */
 const EXTRA_MESSAGES: Record<string, string> = {
   FORWARDING_NOT_PERSISTED,

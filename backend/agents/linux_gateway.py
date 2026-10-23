@@ -12,6 +12,12 @@ from .version import compare_versions
 MIN_AGENT_VERSION = '1.8.25-go'
 # Persists AIO forwarding and keeps it when a gateway record is removed.
 FORWARDING_MIN_AGENT_VERSION = '1.8.40-go'
+# Single-service Shell Mihomo Agents persist forwarding from this version on.
+STANDALONE_FORWARDING_MIN_AGENT_VERSION = '1.8.41-go'
+FORWARDING_CONFIG_PATH = '/etc/sysctl.d/99-configflow-aio-forward.conf'
+STANDALONE_UPGRADE = (f'单独安装的 Mihomo Agent 需更新到 {STANDALONE_FORWARDING_MIN_AGENT_VERSION} '
+                      '或更新版本才能开启并持久化 IPv4 转发。')
+ROUTER_SPLIT_REQUIRED = '仅主路由分流（完整 TUN）的配置空间，或「上游路由」中作为代理网关的 Mihomo Agent 可开启转发持久化。'
 MAX_RESPONSE_BYTES = 512 * 1024
 OPERATIONS = {'status': 'GET', 'preview': 'POST', 'apply': 'POST', 'remove': 'POST', 'forwarding': 'POST'}
 # Operations that change host networking; the router split guards each one.
@@ -22,7 +28,7 @@ FORWARDING_NOT_KEPT = ('设备上仍有旧版 Linux 网关记录，且 IPv4 转�
 # Turning the gateway off on an old router split host whose base YAML gained a full TUN.
 GATEWAY_OFF_NOT_KEPT = ('关闭 Linux 网关会让 Agent 撤销「{name}」上的旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，'
                         '主路由分流转来的连接会中断。这台设备尚未持久化 IPv4 转发，已阻止；请保持 Linux 网关开启。'
-                        '普通 All-in-One 安装会持久化转发，不受影响。')
+                        '如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。')
 GATEWAY_OFF_UPGRADE = ('关闭 Linux 网关前需要确认「{name}」已持久化 IPv4 转发，'
                        f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
 GATEWAY_OFF_UNKNOWN = '无法读取「{name}」的 IPv4 转发状态，已阻止关闭 Linux 网关：{reason}。请确认设备在线后重试。'
@@ -31,7 +37,7 @@ PUBLISH_GATEWAY_OFF_NOT_KEPT = ('待发布的 Mihomo 配置关闭了 Linux 网�
                                 '请在 Linux 网关中重新开启并保存后再发布。')
 # Removing the record of an old router split whose base YAML gained a full TUN.
 LEGACY_REMOVE_NOT_KEPT = ('撤销会删除旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，主路由分流转来的连接会中断。'
-                          '这台设备尚未持久化 IPv4 转发，已阻止；请保持网关转发。普通 All-in-One 安装会持久化转发，不受影响。')
+                          '这台设备尚未持久化 IPv4 转发，已阻止；请保持网关转发。如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。')
 LEGACY_REMOVE_UPGRADE = ('撤销前需要确认这台 Linux 已持久化 IPv4 转发，'
                          f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
 # The Agent's own remove text tells clients to restore their gateway; a router
@@ -61,6 +67,30 @@ def supports_forwarding(agent):
     return _at_least(agent, FORWARDING_MIN_AGENT_VERSION)
 
 
+def supports_standalone_forwarding(agent):
+    return _at_least(agent, STANDALONE_FORWARDING_MIN_AGENT_VERSION)
+
+
+def proxy_gateway_routers(config, agent_id):
+    """Upstream routers in this profile whose proxied traffic goes to ``agent_id``."""
+    from backend.routers.store import routers_of
+    return [item for item in routers_of(config) if agent_id and item.get('proxy_gateway_agent_id') == agent_id]
+
+
+def _forwarding_upgrade_needed(status, agent):
+    """Whether only a newer Agent could persist forwarding here.
+
+    The host's platform is supported, but this Agent does not recognise its
+    installation: a single-service install below 1.8.41-go, or any Agent
+    without the forwarding status (below 1.8.40-go).
+    """
+    forwarding = status.get('ipv4_forwarding') if isinstance(status, dict) else None
+    if not isinstance(forwarding, dict):
+        return True
+    return (forwarding.get('supported') is False and status.get('supported') is True
+            and not supports_standalone_forwarding(agent))
+
+
 def _managed(status):
     managed = status.get('managed') if isinstance(status, dict) else None
     return managed if isinstance(managed, dict) else {}
@@ -76,7 +106,8 @@ def keeps_forwarding(status):
     """Whether removing the host's gateway record, if any, leaves forwarding on."""
     if not has_record(status):
         return True
-    # Only the persisted AIO forwarding stops the Agent writing the original values back.
+    # Only the persisted forwarding (AIO 1.8.40-go, single-service 1.8.41-go)
+    # stops the Agent writing the original values back.
     return _managed(status).get('preserves_forwarding') is True
 
 
@@ -124,7 +155,7 @@ def require_gateway_off_kept(manager, agent):
 def gateway_off_refusal(manager, profile_id, agent_ids):
     """Why turning the gateway off would turn IPv4 forwarding off on a bound host, or None.
 
-    Only the persisted AIO forwarding (1.8.40-go) keeps it when the Agent
+    Only the persisted forwarding (1.8.40-go AIO, 1.8.41-go single-service) keeps it when the Agent
     removes its gateway record; a host without a record keeps what it has,
     whatever its version. ``agent_ids`` are the hosts the old split's
     gateway may be on (``router_split.legacy_gateway_agent_ids``).
@@ -263,13 +294,36 @@ def _router_split_guard(manager, agent, operation, profile_id, body):
         return {}, mode
     if not supports_forwarding(agent):
         raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
-    if mode != 'full_tun':
-        raise _error('ROUTER_SPLIT_REQUIRED', 409, '仅主路由分流（完整 TUN）的配置空间可在此开启转发持久化。')
-    if body in (None, {}):
-        return {}, mode
-    if not isinstance(body, dict) or set(body) != {'prepare_tun'} or type(body['prepare_tun']) is not bool:
-        raise _error('INVALID_REQUEST', 400, '开启转发持久化只接受 prepare_tun 参数。')
-    return {'prepare_tun': body['prepare_tun']}, mode
+    if mode == 'full_tun':
+        if body not in (None, {}) and (not isinstance(body, dict) or set(body) != {'prepare_tun'}
+                                       or type(body['prepare_tun']) is not bool):
+            raise _error('INVALID_REQUEST', 400, '开启转发持久化只接受 prepare_tun 参数。')
+        payload = {} if body in (None, {}) else {'prepare_tun': body['prepare_tun']}
+    elif proxy_gateway_routers(get_config(profile_id), agent['id']):
+        # Persisting only turns 0 into 1 and never touches a gateway journal; with
+        # it, removing that gateway later keeps forwarding instead of restoring 0.
+        if body not in (None, {}):
+            raise _error('INVALID_REQUEST', 400, '为代理网关开启转发持久化不接受额外参数。')
+        payload = {}
+    else:
+        raise _error('ROUTER_SPLIT_REQUIRED', 409, ROUTER_SPLIT_REQUIRED)
+    _require_forwarding_layout(agent, lambda: _request(agent, 'status', 'GET'))
+    return payload, mode
+
+
+def _require_forwarding_layout(agent, read_status):
+    """Below 1.8.41-go only the AIO layout persists; say so instead of the Agent's refusal."""
+    if not supports_standalone_forwarding(agent) and _forwarding_upgrade_needed(read_status(), agent):
+        raise _error('UPGRADE_REQUIRED', 409, STANDALONE_UPGRADE)
+
+
+def _check_agent(agent):
+    if agent.get('service_type') != 'mihomo':
+        raise _error('WRONG_SERVICE', 400, 'Linux 网关只能应用到 Mihomo Agent。')
+    if agent.get('deployment_method') == 'docker':
+        raise _error('UNSUPPORTED_ENVIRONMENT', 409, '自动网络配置适用于 Linux Shell 安装，请选择原生安装的 Mihomo Agent。')
+    if not supports_gateway(agent):
+        raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {MIN_AGENT_VERSION} 或更新版本。')
 
 
 def call(manager, agent_id, operation, method, profile_id, body=None):
@@ -280,12 +334,7 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
         raise _error('AGENT_NOT_FOUND', 404, '未找到这台 Agent。')
     if not profile_id or agent.get('profile_id') != profile_id:
         raise _error('PROFILE_CHANGED', 409, '设备绑定的配置空间已变化，请重新打开网关设置。')
-    if agent.get('service_type') != 'mihomo':
-        raise _error('WRONG_SERVICE', 400, 'Linux 网关只能应用到 Mihomo Agent。')
-    if agent.get('deployment_method') == 'docker':
-        raise _error('UNSUPPORTED_ENVIRONMENT', 409, '自动网络配置适用于 Linux Shell 安装，请选择原生安装的 Mihomo Agent。')
-    if not supports_gateway(agent):
-        raise _error('UPGRADE_REQUIRED', 409, f'请先将 Mihomo Agent 更新到 {MIN_AGENT_VERSION} 或更新版本。')
+    _check_agent(agent)
     split = None
     if operation in HOST_OPERATIONS:
         payload, split = _router_split_guard(manager, agent, operation, profile_id, body)
@@ -297,6 +346,14 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
         payload = {**_spec(body), 'profile_id': profile_id}
     elif operation not in HOST_OPERATIONS:
         payload = None
+    data = _request(agent, operation, method, payload)
+    if operation == 'remove' and split in REMOVED_MESSAGES and data.get('success') is True:
+        data['message'] = REMOVED_MESSAGES[split]
+    return data
+
+
+def _request(agent, operation, method, payload=None):
+    """One bounded request to the Agent's gateway API, with its errors mapped."""
     try:
         with requests.Session() as session:
             session.trust_env = False
@@ -338,6 +395,122 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
         if not isinstance(message, str) or not message:
             message = '网关操作未完成，请刷新状态后查看检查结果。'
         raise _error('GATEWAY_ERROR', status if status in (400, 409, 422) else 502, message[:1000])
-    if operation == 'remove' and split in REMOVED_MESSAGES and data.get('success') is True:
-        data['message'] = REMOVED_MESSAGES[split]
+    return data
+
+
+# The 上游路由 page: IPv4 forwarding on each router's proxy gateway. Its routes
+# authorise by the router link in their own profile, not the Agent's binding.
+GATEWAY_FORWARDING_MESSAGES = {
+    'missing': '关联的 Agent 已删除，请在路由器设置中重新选择代理网关。',
+    'not_mihomo': '代理网关不是 Mihomo Agent。',
+    'docker': 'Docker 部署的 Agent 不管理宿主机网络，请在宿主机上开启并持久化 IPv4 转发。',
+    'offline': 'Agent 离线。',
+    'upgrade_required': (f'请先将 Mihomo Agent 更新到 {STANDALONE_FORWARDING_MIN_AGENT_VERSION} '
+                         '或更新版本，才能在此开启并持久化 IPv4 转发。'),
+    'config_blocked': (f'IPv4 转发持久化文件 {FORWARDING_CONFIG_PATH} 已被修改或不是 ConfigFlow 写入的内容，'
+                       '请先在设备上核对。'),
+    'hook_blocked': 'IPv4 转发启动脚本已被修改，请先在设备上核对。',
+}
+_FORWARDING_FIELDS = ('current', 'persisted', 'config', 'hook_script', 'startup_hook', 'layout')
+
+
+def _online(agent):
+    """Heartbeat within two minutes, as the Agent list shows it; a stale one is never asked."""
+    from datetime import datetime
+    if agent.get('status') != 'online':
+        return False
+    try:
+        heartbeat = datetime.fromisoformat(agent.get('last_heartbeat', ''))
+        return (datetime.now(heartbeat.tzinfo) - heartbeat).total_seconds() <= 120
+    except (ValueError, TypeError):
+        return False
+
+
+def _gateway_entry(agent_id, agent, routers, state, message='', status=None, can_persist=False):
+    forwarding = status.get('ipv4_forwarding') if isinstance(status, dict) else None
+    forwarding = forwarding if isinstance(forwarding, dict) else {}
+    agent = agent or {}
+    return {
+        'agent_id': agent_id,
+        'agent_name': agent.get('name') or agent_id,
+        'agent_version': agent.get('version') if isinstance(agent.get('version'), str) else '',
+        'routers': list(routers),
+        'state': state,
+        'can_persist': can_persist,
+        'message': message,
+        'minimum_version': STANDALONE_FORWARDING_MIN_AGENT_VERSION if state == 'upgrade_required' else None,
+        **{field: forwarding.get(field) for field in _FORWARDING_FIELDS},
+        'gateway_record': has_record(status) if isinstance(status, dict) else False,
+        'preserves_forwarding': _managed(status).get('preserves_forwarding') is True,
+    }
+
+
+def _entry_from_status(agent_id, agent, routers, status):
+    forwarding = status.get('ipv4_forwarding') if isinstance(status, dict) else None
+    if _forwarding_upgrade_needed(status, agent):
+        message = STANDALONE_UPGRADE if isinstance(forwarding, dict) else GATEWAY_FORWARDING_MESSAGES['upgrade_required']
+        return _gateway_entry(agent_id, agent, routers, 'upgrade_required', message, status)
+    if forwarding.get('supported') is False:
+        reason = forwarding.get('unsupported_reason')
+        return _gateway_entry(agent_id, agent, routers, 'unsupported', reason if isinstance(reason, str) else '', status)
+    if forwarding.get('config') in ('foreign', 'symlink'):
+        return _gateway_entry(agent_id, agent, routers, 'blocked', GATEWAY_FORWARDING_MESSAGES['config_blocked'], status)
+    if forwarding.get('hook_script') == 'modified':
+        return _gateway_entry(agent_id, agent, routers, 'blocked', GATEWAY_FORWARDING_MESSAGES['hook_blocked'], status)
+    if forwarding.get('current') == '1' and forwarding.get('persisted') is True:
+        return _gateway_entry(agent_id, agent, routers, 'persisted', '', status)
+    error = forwarding.get('error')
+    return _gateway_entry(agent_id, agent, routers, 'needs_persist', error if isinstance(error, str) else '',
+                          status, can_persist=True)
+
+
+def _gateway_precheck(agent_id, agent, routers):
+    """The entry for an Agent that cannot be asked, or None when its status should be read."""
+    if not agent:
+        return _gateway_entry(agent_id, None, routers, 'missing', GATEWAY_FORWARDING_MESSAGES['missing'])
+    if agent.get('service_type') != 'mihomo':
+        return _gateway_entry(agent_id, agent, routers, 'not_mihomo', GATEWAY_FORWARDING_MESSAGES['not_mihomo'])
+    if agent.get('deployment_method') == 'docker':
+        return _gateway_entry(agent_id, agent, routers, 'docker', GATEWAY_FORWARDING_MESSAGES['docker'])
+    if not _online(agent):
+        return _gateway_entry(agent_id, agent, routers, 'offline', GATEWAY_FORWARDING_MESSAGES['offline'])
+    if not supports_forwarding(agent):
+        # Below 1.8.40-go no Agent persists forwarding; offer the update directly.
+        return _gateway_entry(agent_id, agent, routers, 'upgrade_required', GATEWAY_FORWARDING_MESSAGES['upgrade_required'])
+    return None
+
+
+def gateway_forwarding_entry(manager, agent_id, routers):
+    """Per-Agent IPv4 forwarding view for the 上游路由 page; never raises for one Agent."""
+    agent = manager.get_agent_by_id(agent_id)
+    entry = _gateway_precheck(agent_id, agent, routers)
+    if entry is not None:
+        return entry
+    try:
+        status = _request(agent, 'status', 'GET')
+    except MonitorError as error:
+        if error.code == 'UPGRADE_REQUIRED':
+            return _gateway_entry(agent_id, agent, routers, 'upgrade_required',
+                                  GATEWAY_FORWARDING_MESSAGES['upgrade_required'])
+        return _gateway_entry(agent_id, agent, routers, 'error', error.message)
+    return _entry_from_status(agent_id, agent, routers, status)
+
+
+def persist_gateway_forwarding(manager, agent_id, routers):
+    """Persist forwarding on a router's proxy gateway; the caller has checked the router link."""
+    agent = manager.get_agent_by_id(agent_id)
+    if not agent:
+        raise _error('AGENT_NOT_FOUND', 404, GATEWAY_FORWARDING_MESSAGES['missing'])
+    if agent.get('service_type') != 'mihomo':
+        raise _error('WRONG_SERVICE', 400, GATEWAY_FORWARDING_MESSAGES['not_mihomo'])
+    if agent.get('deployment_method') == 'docker':
+        raise _error('UNSUPPORTED_ENVIRONMENT', 409, GATEWAY_FORWARDING_MESSAGES['docker'])
+    if not _online(agent):
+        raise _error('AGENT_OFFLINE', 409, 'Agent 离线，无法开启转发。')
+    if not supports_forwarding(agent):
+        raise _error('UPGRADE_REQUIRED', 409, GATEWAY_FORWARDING_MESSAGES['upgrade_required'])
+    _require_forwarding_layout(agent, lambda: _request(agent, 'status', 'GET'))
+    data = _request(agent, 'forwarding', 'POST', {})
+    data['gateway'] = _entry_from_status(agent_id, agent, routers, {
+        'supported': True, 'ipv4_forwarding': data.get('ipv4_forwarding'), 'managed': data.get('managed')})
     return data
