@@ -301,11 +301,12 @@ RouterOS 驱动还逐项回读实际写入字段，并检查新 NAT 规则相对
 - 每台路由器可选“自动配置回流”，默认关闭；关闭保留已有规则。保存修改后清除该路由器的旧报告和发布预览，重新读取后再发布。
 - 选择 OxiDNS Agent 下发 DHCP DNS，默认不关联；报告显示未关联、已同步、待更新或待确认，预览包含目标网段与完整 DNS 列表变更，并提示终端续租后生效。
 - 连接探测、版本和连接状态展示。
+- “IPv4 转发”列：显示每台路由器代理网关（Mihomo Agent）的转发状态（已开启并持久化、已开启未持久化、未开启、需更新 Agent、离线、Docker 部署等）；未持久化时可确认后一键开启并持久化，写入 `/etc/sysctl.d/99-configflow-aio-forward.conf` 并注册 Agent 启动前检查，不修改核心配置、不重启服务。同机安装需 Agent `1.8.40-go`，单独安装需 `1.8.41-go`。该列独立读取，不阻塞路由器列表。
 - 独立“管理路由”入口：读取设备实际路由，添加、编辑、启停或删除单条普通静态路由，预览确认后写入。
 - 代理路由、NAT 免转换、mihomo 回流状态的差异报告；显示已同步、可接管、冲突、缺失、多余、无需免转换和待确认项。NAT 的说明栏展示出口与源 NAT 判定依据；无需免转换不计为缺失，证据不足时显示待确认。
 - 发布预览、阻塞与警告提示、确认发布、逐阶段执行与回滚结果。
 
-后端提供 `/api/routers` 的列表和新增，`/api/routers/<id>` 的编辑和删除，以及对应的 `/probe`、`/report`、`/plan`、`/apply`。独立路由管理使用 `/routes`、`/routes/plan`、`/routes/apply`。
+后端提供 `/api/routers` 的列表和新增，`/api/routers/<id>` 的编辑和删除，以及对应的 `/probe`、`/report`、`/plan`、`/apply`。独立路由管理使用 `/routes`、`/routes/plan`、`/routes/apply`。代理网关的 IPv4 转发使用 `GET/POST /api/routers/gateway-forwarding`（POST 只接受 `{agent_id}`，且该 Agent 须是当前配置空间某台路由器的代理网关）。
 
 ### 7.1 ROS 远程规则自动同步
 

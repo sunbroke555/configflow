@@ -797,3 +797,73 @@ describe('Shell AIO with both cores', () => {
     expect(document.getElementById('aio-install-cores')?.getAttribute('aria-checked')).toBe('false')
   })
 })
+
+describe('standalone Mihomo IPv4 forwarding opt-out', () => {
+  const skip = () => document.getElementById('agent-skip-forwarding') as HTMLButtonElement | null
+  const note = () => document.getElementById('agent-skip-forwarding-note')?.textContent?.trim()
+  async function toggleSkip() {
+    skip()!.click()
+    await flushPromises()
+  }
+  const lastParams = () => vi.mocked(agentApi.generateInstallCommand).mock.calls.at(-1)![0]
+
+  it('defaults to enabling forwarding and leaves the field out of the request', async () => {
+    expect(skip()?.getAttribute('aria-checked')).toBe('false')
+    expect(skip()?.getAttribute('aria-describedby')).toBe('agent-skip-forwarding-note')
+    expect(document.querySelector('label[for="agent-skip-forwarding"]')?.textContent?.trim()).toBe('不开启 IPv4 转发')
+    expect(note()).toBe('默认开启并持久化本机 IPv4 转发（写入 /etc/sysctl.d/99-configflow-aio-forward.conf，Agent 启动前检查），作为主路由的代理网关时需要。')
+    await click('生成安装命令')
+    expect(lastParams()).not.toHaveProperty('ipv4_forwarding')
+  })
+
+  it('sends ipv4_forwarding false once opted out, also with the core', async () => {
+    await toggleSkip()
+    expect(note()).toBe('不修改本机 IPv4 转发；已有的持久化设置会保留。作为主路由的代理网关前，可在「上游路由」页开启并持久化。')
+    await click('生成安装命令')
+    expect(lastParams()).toMatchObject({ type: 'mihomo', ipv4_forwarding: false })
+    document.getElementById('agent-install-core')!.click()
+    await flushPromises()
+    vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse(`#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho installed`) as any)
+    await click('生成安装命令')
+    expect(lastParams()).toMatchObject({ install_core: true, ipv4_forwarding: false })
+  })
+
+  it('resets after switching the service or mode and is hidden outside standalone Mihomo', async () => {
+    await toggleSkip()
+    await radio('oxidns')
+    expect(skip()).toBeNull()
+    await click('生成安装命令')
+    expect(lastParams()).not.toHaveProperty('ipv4_forwarding')
+    await radio('mosdns')
+    expect(skip()).toBeNull()
+    await radio('mihomo')
+    expect(skip()?.getAttribute('aria-checked')).toBe('false')
+    await toggleSkip()
+    await radio('aio')
+    expect(skip()).toBeNull()
+    await click('生成安装命令')
+    expect(lastParams()).toMatchObject({ type: 'aio' })
+    expect(lastParams()).not.toHaveProperty('ipv4_forwarding')
+    await radio('single')
+    expect(skip()?.getAttribute('aria-checked')).toBe('false')
+    await radio('docker')
+    expect(skip()).toBeNull()
+  })
+
+  it('is disabled and never sent for a custom lifecycle', async () => {
+    await toggleSkip()
+    await expand('服务管理高级配置（可选）')
+    await input('agent-restart', '/opt/custom/control restart')
+    expect(skip()!.disabled).toBe(true)
+    expect(note()).toBe('自定义启停命令的安装不自动开启 IPv4 转发。')
+    await input('agent-service-stop', '/opt/custom/control stop')
+    await input('agent-service-start', '/opt/custom/control start')
+    await input('agent-service-status', '/opt/custom/control status')
+    await click('生成安装命令')
+    expect(lastParams()).toMatchObject({ restart_command: '/opt/custom/control restart', stop_command: '/opt/custom/control stop' })
+    expect(lastParams()).not.toHaveProperty('ipv4_forwarding')
+    // A standard restart command keeps the option available.
+    await input('agent-restart', 'systemctl restart mihomo')
+    expect(skip()!.disabled).toBe(false)
+  })
+})
