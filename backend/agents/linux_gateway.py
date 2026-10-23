@@ -2,6 +2,7 @@
 import ipaddress
 import json
 import re
+import unicodedata
 
 import requests
 
@@ -347,6 +348,12 @@ def call(manager, agent_id, operation, method, profile_id, body=None):
     elif operation not in HOST_OPERATIONS:
         payload = None
     data = _request(agent, operation, method, payload)
+    if operation == 'status' and 'forward_filter' in data:
+        forward_filter = sanitize_forward_filter(data['forward_filter'])
+        if forward_filter is None:
+            del data['forward_filter']
+        else:
+            data['forward_filter'] = forward_filter
     if operation == 'remove' and split in REMOVED_MESSAGES and data.get('success') is True:
         data['message'] = REMOVED_MESSAGES[split]
     return data
@@ -413,6 +420,97 @@ GATEWAY_FORWARDING_MESSAGES = {
 }
 _FORWARDING_FIELDS = ('current', 'persisted', 'config', 'hook_script', 'startup_hook', 'layout')
 
+# Full-TUN FORWARD filtering, a warning only (Agent 1.8.42-go and later). The
+# Agent's report is rendered as copy-paste commands, so it is reduced to known
+# values; an invalid entry is dropped rather than failing the whole status.
+FORWARD_FILTER_STATES = frozenset({'ok', 'may_drop', 'unknown', 'not_applicable'})
+FORWARD_FILTER_SOURCES = frozenset({'docker', 'iptables', 'nftables', 'firewalld', 'ufw'})
+FORWARD_FILTER_MAX_SOURCES = 8
+FORWARD_FILTER_MAX_REMEDIES = 6
+FORWARD_FILTER_MAX_COMMANDS = 4
+FORWARD_FILTER_MAX_COMMAND = 240
+# Same as the Agent's TUN device pattern (aioDevicePattern, netfilter.DevicePattern).
+_FORWARD_FILTER_DEVICE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,14}')
+_FORWARD_FILTER_NFT_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}')
+_FORWARD_FILTER_REASON = re.compile(r'[a-z][a-z0-9_]{0,31}')
+# One firewall tool per '&&'-joined step; no shell expansion, pipes or redirects.
+_FORWARD_FILTER_COMMAND = re.compile(r'(?:iptables|iptables-legacy|nft|firewall-cmd|ufw)( [A-Za-z0-9_.:=/,+"\'-]+)+')
+
+
+def _forward_filter_text(value, limit):
+    if not isinstance(value, str):
+        return ''
+    text = ''.join(c for c in value if unicodedata.category(c) not in ('Cc', 'Cf', 'Zl', 'Zp'))
+    return text.strip()[:limit]
+
+
+def _forward_filter_choice(value, allowed):
+    return value if isinstance(value, str) and value in allowed else ''
+
+
+def _forward_filter_command(value):
+    if not isinstance(value, str) or not value or len(value) > FORWARD_FILTER_MAX_COMMAND:
+        return None
+    if not all(_FORWARD_FILTER_COMMAND.fullmatch(step) for step in value.split(' && ')):
+        return None
+    return value
+
+
+def _forward_filter_source(value):
+    if not isinstance(value, dict) or value.get('kind') not in FORWARD_FILTER_SOURCES:
+        return None
+    names = {key: value.get(key) if isinstance(value.get(key), str) and _FORWARD_FILTER_NFT_NAME.fullmatch(value.get(key))
+             else '' for key in ('table', 'chain')}
+    return {
+        'kind': value['kind'],
+        'backend': _forward_filter_choice(value.get('backend'), ('nft', 'legacy')),
+        'family': _forward_filter_choice(value.get('family'), ('ip', 'inet')),
+        **names,
+        'policy': _forward_filter_choice(value.get('policy'), ('drop', 'accept')),
+        'detail': _forward_filter_text(value.get('detail'), 200),
+    }
+
+
+def _forward_filter_remedy(value):
+    if not isinstance(value, dict) or value.get('source') not in FORWARD_FILTER_SOURCES:
+        return None
+    device = value.get('device')
+    device = device if isinstance(device, str) and _FORWARD_FILTER_DEVICE.fullmatch(device) else ''
+    commands = value.get('commands') if isinstance(value.get('commands'), list) else []
+    # Commands name the TUN device; without a valid one none can be trusted.
+    commands = [command for command in map(_forward_filter_command, commands) if command] if device else []
+    return {
+        'source': value['source'],
+        'label': _forward_filter_text(value.get('label'), 80),
+        'device': device,
+        'commands': commands[:FORWARD_FILTER_MAX_COMMANDS],
+        'persist_note': _forward_filter_text(value.get('persist_note'), 300),
+    }
+
+
+def sanitize_forward_filter(value):
+    """The Agent's forward_filter report reduced to known values, or None when it is unusable."""
+    if not isinstance(value, dict) or value.get('state') not in FORWARD_FILTER_STATES:
+        return None
+    device = value.get('device')
+    reason = value.get('reason')
+    sources = value.get('sources') if isinstance(value.get('sources'), list) else []
+    remedies = value.get('remedies') if isinstance(value.get('remedies'), list) else []
+    return {
+        'protocol': value.get('protocol') if type(value.get('protocol')) is int else 0,
+        'state': value['state'],
+        'reason': reason if isinstance(reason, str) and _FORWARD_FILTER_REASON.fullmatch(reason) else '',
+        'device': device if isinstance(device, str) and _FORWARD_FILTER_DEVICE.fullmatch(device) else '',
+        'auto_redirect': value.get('auto_redirect') is True,
+        'policy': _forward_filter_choice(value.get('policy'), ('drop', 'accept')),
+        'sources': [source for source in map(_forward_filter_source, sources) if source][:FORWARD_FILTER_MAX_SOURCES],
+        'remedies': [remedy for remedy in map(_forward_filter_remedy, remedies) if remedy][:FORWARD_FILTER_MAX_REMEDIES],
+        'hint': _forward_filter_text(value.get('hint'), 300),
+        'verify': _forward_filter_text(value.get('verify'), 300),
+        'checked_at': _forward_filter_text(value.get('checked_at'), 40),
+        'cached': value.get('cached') is True,
+    }
+
 
 def _online(agent):
     """Heartbeat within two minutes, as the Agent list shows it; a stale one is never asked."""
@@ -442,6 +540,7 @@ def _gateway_entry(agent_id, agent, routers, state, message='', status=None, can
         **{field: forwarding.get(field) for field in _FORWARDING_FIELDS},
         'gateway_record': has_record(status) if isinstance(status, dict) else False,
         'preserves_forwarding': _managed(status).get('preserves_forwarding') is True,
+        'forward_filter': sanitize_forward_filter(status.get('forward_filter')) if isinstance(status, dict) else None,
     }
 
 

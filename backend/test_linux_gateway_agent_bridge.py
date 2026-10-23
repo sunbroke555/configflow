@@ -486,3 +486,56 @@ def test_not_kept_copy_points_to_the_routers_page(constant):
     text = getattr(bridge, constant)
     assert text.endswith('如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。')
     assert '普通 All-in-One' not in text
+
+
+FORWARD_FILTER = {
+    'protocol': 1, 'state': 'may_drop', 'reason': '', 'device': 'Meta', 'auto_redirect': True, 'policy': 'drop',
+    'sources': [{'kind': 'iptables', 'backend': 'nft', 'family': '', 'table': '', 'chain': '', 'policy': 'drop',
+                 'detail': 'FORWARD 默认策略为 DROP'}],
+    'remedies': [{'source': 'iptables', 'label': 'iptables', 'device': 'Meta',
+                  'commands': ['iptables -I FORWARD -o Meta -j ACCEPT', 'iptables -I FORWARD -i Meta -j ACCEPT'],
+                  'persist_note': '这两条规则重启后会丢失。'}],
+    'hint': '提醒', 'verify': '验证', 'checked_at': '2026-10-24T03:00:00Z', 'cached': True,
+}
+
+
+def test_status_passes_the_forward_filter_through_sanitized(calls):
+    seen, replies = calls
+    replies.append(Response({'success': True, 'supported': True, 'forward_filter': {
+        **FORWARD_FILTER, 'extra': 'x', 'remedies': FORWARD_FILTER['remedies'] + [
+            {'source': 'iptables', 'device': 'Meta', 'commands': ['iptables -F; reboot']}]}}))
+    result = bridge.call(Manager(), 'gateway', 'status', 'GET', 'home')
+    assert result['supported'] is True
+    assert result['forward_filter'] == {**FORWARD_FILTER, 'remedies': FORWARD_FILTER['remedies'] + [
+        {'source': 'iptables', 'label': '', 'device': 'Meta', 'commands': [], 'persist_note': ''}]}
+
+
+@pytest.mark.parametrize('value', ['ok', None, {'state': 'unexpected'}])
+def test_status_drops_an_unusable_forward_filter(calls, value):
+    seen, replies = calls
+    replies.append(Response({'success': True, 'forward_filter': value}))
+    result = bridge.call(Manager(), 'gateway', 'status', 'GET', 'home')
+    assert result == {'success': True}
+
+
+def test_status_of_an_older_agent_is_unchanged(calls):
+    seen, replies = calls
+    payload = {'success': True, 'supported': True, 'ipv4_forwarding': {'current': '1'}, 'tun': {'enabled': True}}
+    replies.append(Response(deepcopy(payload)))
+    assert bridge.call(Manager(), 'gateway', 'status', 'GET', 'home') == payload
+
+
+@pytest.mark.parametrize('operation,body', [('preview', SPEC), ('apply', SPEC), ('remove', {})])
+def test_other_operations_are_not_rewritten(calls, operation, body):
+    seen, replies = calls
+    payload = {'success': True, 'forward_filter': {'state': 'odd', 'commands': 'rm -rf /'}}
+    replies.append(Response(deepcopy(payload)))
+    assert bridge.call(Manager(), 'gateway', operation, 'POST', 'home', body) == payload
+
+
+def test_forwarding_response_is_not_rewritten(split, calls):
+    seen, replies = calls
+    split['value'] = 'full_tun'
+    payload = {'success': True, 'ipv4_forwarding': {'persisted': True}, 'forward_filter': {'state': 'odd'}}
+    replies.append(Response(deepcopy(payload)))
+    assert bridge.call(Manager(version=STANDALONE), 'gateway', 'forwarding', 'POST', 'home', {}) == payload

