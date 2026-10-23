@@ -11,9 +11,9 @@ vi.mock('@/api', () => ({
   default: { get: vi.fn() }, agentApi: {}, routerApi: {}, ruleApi: {},
   subscriptionApi: { fetch: vi.fn() }
 }))
-vi.mock('@/api/setup', () => ({ setupApi: { index: vi.fn(), create: vi.fn(), get: vi.fn(), source: vi.fn(), progress: vi.fn(), prepare: vi.fn(), check: vi.fn(), saveRouterDraft: vi.fn(), finish: vi.fn() } }))
+vi.mock('@/api/setup', () => ({ setupApi: { index: vi.fn(), create: vi.fn(), get: vi.fn(), source: vi.fn(), progress: vi.fn(), prepare: vi.fn(), check: vi.fn(), saveRouterDraft: vi.fn(), finish: vi.fn(), abandon: vi.fn() } }))
 vi.mock('@/stores/profile', () => ({ useProfileStore: () => ({ refreshProfiles: vi.fn().mockResolvedValue([]) }) }))
-vi.mock('@/lib/feedback', () => ({ confirm: vi.fn().mockResolvedValue(false), notify: { error: vi.fn(), success: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn().mockResolvedValue(false), confirmDanger: vi.fn().mockResolvedValue(true), notify: { error: vi.fn(), success: vi.fn() } }))
 
 const record = (changes: Partial<SetupSession> = {}): SetupSession => ({
   id: 'a'.repeat(32), profile_id: 'setup_test', name: '我的分流配置', goal: 'router', step: 1,
@@ -352,4 +352,19 @@ describe('首次使用分流向导', () => {
     expect(wrapper!.text()).not.toContain('自动配置主路由')
     expect(setupApi.create).not.toHaveBeenCalled()
   })
+})
+
+it('abandons the open setup from the page header and lists it as abandoned', async () => {
+  vi.mocked(setupApi.index).mockResolvedValue({ data: { sessions: [record({ step: 2, max_step: 2 })], suggested: false, subscriptions: [], nodes: [], domain_rules: ruleOptions } } as never)
+  vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2 }) } as never)
+  vi.mocked(setupApi.abandon).mockResolvedValue({ data: { session_id: 'a'.repeat(32), name: '我的分流配置', profile: { id: 'setup_test', name: '我的分流配置' },
+    delete_profile: false, kept_reason: '已有设备在使用它（Mihomo）', guidance: '', subscription: null } } as never)
+  const { confirm } = await import('@/lib/feedback')
+  vi.mocked(confirm).mockResolvedValueOnce(true)
+  await open('/setup?session=' + 'a'.repeat(32))
+  await click('放弃此向导')
+  expect(setupApi.abandon).toHaveBeenNthCalledWith(1, 'a'.repeat(32), true)
+  expect(setupApi.abandon).toHaveBeenNthCalledWith(2, 'a'.repeat(32))
+  expect(wrapper!.text()).toContain('已放弃')
+  expect(wrapper!.findAll('button').some(item => item.text() === '放弃此向导')).toBe(false)
 })

@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ArrowRight, Check, CircleCheck, LoaderCircle, Network, Router as RouterIcon } from '@lucide/vue'
 import { setupApi, type SetupGoal, type SetupIndex, type SetupSession } from '@/api/setup'
-import { SETUP_GOALS, SETUP_STEPS, setupError, setupLocalDnsWarning } from '@/lib/setupFlow'
+import { SETUP_GOALS, SETUP_STEPS, abandonSetup, setupError, setupLocalDnsWarning } from '@/lib/setupFlow'
 import { confirm } from '@/lib/feedback'
 import { createDeploymentId } from '@/composables/useAgentDeployments'
 import { useProfileStore } from '@/stores/profile'
@@ -185,6 +185,21 @@ async function manage(target: '/agents' | '/routers' | '/profiles' | '/subscript
   if (!session.value) return
   await profileStore.refreshProfiles(); setActiveProfileId(session.value.profile_id); await router.push(target)
 }
+async function abandonCurrent() {
+  if (!session.value || working.value) return
+  busy.value = true; error.value = ''
+  try {
+    const id = session.value.id
+    const result = await abandonSetup(id)
+    if (!result || disposed) return
+    options.value.sessions = result.delete_profile
+      ? options.value.sessions.filter(item => item.id !== id)
+      : options.value.sessions.map(item => item.id === id ? { ...item, abandoned: true } : item)
+    if (result.delete_profile) await profileStore.refreshProfiles()
+    newSetup()
+  } catch (failure) { if (!disposed) error.value = setupError(failure) }
+  finally { busy.value = false }
+}
 function newSetup() {
   session.value = undefined; error.value = ''; childBusy.value = false; ackRoutes.value = false; ackDNS.value = false
   previewRouting.value = false
@@ -214,7 +229,7 @@ onUnmounted(() => { disposed = true })
 
 <template>
   <div class="mx-auto max-w-5xl">
-    <PageHeader title="开始使用"><template #actions><Button variant="outline" class="min-h-11" :disabled="working" @click="session ? newSetup() : router.push('/dashboard')">{{ session ? '新建一次配置' : '返回总览' }}</Button></template></PageHeader>
+    <PageHeader title="开始使用"><template #actions><Button v-if="session && !session.completed" variant="ghost" class="min-h-11" :disabled="working" @click="abandonCurrent">放弃此向导</Button><Button variant="outline" class="min-h-11" :disabled="working" @click="session ? newSetup() : router.push('/dashboard')">{{ session ? '新建一次配置' : '返回总览' }}</Button></template></PageHeader>
     <p v-if="loading" role="status" class="py-12 text-center text-sm text-muted-foreground">正在读取向导进度…</p>
     <template v-else>
       <div v-if="error" role="alert" class="mb-4 rounded-lg border border-destructive-accent/30 bg-destructive-soft px-4 py-3 text-sm text-destructive-accent">{{ error }}<Button v-if="!ready" variant="ghost" class="ml-2" @click="load">重新加载</Button></div>
@@ -234,7 +249,7 @@ onUnmounted(() => { disposed = true })
             <FormField label="配置名称" html-for="setup-name" help="向导创建独立配置空间，订阅与节点保留在共享资源中。"><Input id="setup-name" v-model="name" :maxlength="64" :disabled="working || !!session" @keydown.enter="!session && start()" /></FormField>
             <Button v-if="!session" :disabled="working || !ready || !name.trim()" class="min-h-11" @click="start"><LoaderCircle v-if="working" class="size-4 animate-spin" />创建配置并继续<ArrowRight class="size-4" /></Button>
             <Button v-else class="min-h-11" @click="move(1)">继续当前配置<ArrowRight class="size-4" /></Button>
-            <div v-if="!session && options.sessions.length" class="border-t border-border pt-4"><div class="mb-2 flex items-center gap-1"><h3 class="m-0 text-sm font-medium">最近的向导</h3><FieldHelp label="最近的向导" text="进度保存在服务端，刷新或更换浏览器后仍可继续。" /></div><button v-for="item in options.sessions.slice(0, 5)" :key="item.id" class="flex min-h-11 w-full items-center gap-2 border-b border-border/50 py-2 text-left text-sm" :disabled="working" @click="resume(item.id)"><span class="min-w-0 flex-1 truncate">{{ item.name }}</span><span class="text-xs text-muted-foreground">{{ item.completed ? '已完成' : SETUP_STEPS[item.step] }}</span><ArrowRight class="size-3.5" /></button></div>
+            <div v-if="!session && options.sessions.length" class="border-t border-border pt-4"><div class="mb-2 flex items-center gap-1"><h3 class="m-0 text-sm font-medium">最近的向导</h3><FieldHelp label="最近的向导" text="进度保存在服务端，刷新或更换浏览器后仍可继续。" /></div><button v-for="item in options.sessions.slice(0, 5)" :key="item.id" class="flex min-h-11 w-full items-center gap-2 border-b border-border/50 py-2 text-left text-sm" :disabled="working" @click="resume(item.id)"><span class="min-w-0 flex-1 truncate">{{ item.name }}</span><span class="text-xs text-muted-foreground">{{ item.completed ? '已完成' : item.abandoned ? '已放弃' : SETUP_STEPS[item.step] }}</span><ArrowRight class="size-3.5" /></button></div>
           </div>
 
           <SetupSources v-if="step === 1 && session" :key="session.id" :session="session" :options="options" @saved="accept" @busy="childBusy = $event" />

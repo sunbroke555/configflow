@@ -760,3 +760,104 @@ def test_default_is_not_suggested_while_devices_use_it(installed):
     response = client.post(f'/api/setup/{SESSION}/finish', json={'router_mode': 'manual', 'ack_routes': True, 'ack_dns': True})
     assert response.status_code == 200, response.json
     assert repository.default_profile_id() == 'default' and 'leftovers' not in response.json['default_profile']
+
+
+def _abandon(client, dry_run=False):
+    return client.post(f'/api/setup/{SESSION}/abandon', json={'dry_run': dry_run} if dry_run else {})
+
+
+def test_abandon_deletes_an_unused_setup_profile_and_its_subscription(setup_api):
+    client, repository = setup_api
+    profile_id = start(client)['profile_id']
+    client.post(f'/api/setup/{SESSION}/source', json={'url': 'https://subscription.test/list'})
+    before = {p['id'] for p in repository.list_profiles()}
+    plan = _abandon(client, dry_run=True).json
+    assert plan['delete_profile'] and plan['kept_reason'] is None
+    assert plan['subscription']['id'] == 'setup_sub_' + SESSION
+    assert {p['id'] for p in repository.list_profiles()} == before  # A dry run changes nothing.
+    result = _abandon(client).json
+    assert result['delete_profile']
+    assert profile_id not in {p['id'] for p in repository.list_profiles()}
+    assert 'default' in {p['id'] for p in repository.list_profiles()}
+    assert not any(s['id'] == 'setup_sub_' + SESSION for s in repository.get_shared()['subscriptions'])
+    index = client.get('/api/setup').json
+    assert index['sessions'] == [] and index['suggested'] is False
+    assert client.get(f'/api/setup/{SESSION}').status_code == 404
+
+
+def test_abandon_keeps_a_subscription_another_profile_uses(setup_api):
+    client, repository = setup_api
+    start(client)
+    client.post(f'/api/setup/{SESSION}/source', json={'url': 'https://subscription.test/list'})
+    subscription_id = 'setup_sub_' + SESSION
+    repository.update_profile_transaction('default', lambda profile: {**profile, 'proxy_groups': [
+        {'id': 'g', 'name': 'G', 'type': 'select', 'subscriptions': [subscription_id]}]})
+    result = _abandon(client).json
+    assert result['delete_profile'] and result.get('subscription_kept')
+    assert any(s['id'] == subscription_id for s in repository.get_shared()['subscriptions'])
+
+
+def test_abandon_keeps_a_profile_with_bound_devices_and_hides_the_banner(setup_api):
+    client, repository = setup_api
+    profile_id = start(client)['profile_id']
+    repository.update_system_transaction(lambda system: system.update(agents=[
+        {'id': 'mihomo', 'name': '网关 Mihomo', 'host': '192.0.2.10', 'service_type': 'mihomo', 'profile_id': profile_id}]))
+    plan = _abandon(client, dry_run=True).json
+    assert not plan['delete_profile'] and '网关 Mihomo' in plan['kept_reason'] and plan['guidance']
+    result = _abandon(client).json
+    assert not result['delete_profile']
+    assert profile_id in {p['id'] for p in repository.list_profiles()}
+    session = client.get('/api/setup').json['sessions'][0]
+    assert session['abandoned'] and not session['completed']
+    # Continuing the wizard reopens it.
+    assert client.patch(f'/api/setup/{SESSION}', json={'step': 1}).status_code == 200
+    assert not client.get(f'/api/setup/{SESSION}').json.get('abandoned')
+
+
+def test_abandon_keeps_profiles_with_routers_installations_or_default_role(setup_api, monkeypatch):
+    client, repository = setup_api
+    profile_id = start(client)['profile_id']
+    repository.update_profile_transaction(profile_id, lambda profile: {**profile, 'routers': {'items': [
+        {**ROUTER_DRAFT, 'id': 'r1'}]}})
+    assert '主路由' in _abandon(client, dry_run=True).json['kept_reason']
+    repository.update_profile_transaction(profile_id, lambda profile: {**profile, 'routers': {'items': []}})
+    from backend.agents import gateway_installation
+    monkeypatch.setattr(gateway_installation, 'has_installation', lambda repo, pid: pid == profile_id)
+    assert '安装' in _abandon(client, dry_run=True).json['kept_reason']
+    monkeypatch.setattr(gateway_installation, 'has_installation', lambda repo, pid: False)
+    repository.set_default_profile(profile_id)
+    assert '默认' in _abandon(client, dry_run=True).json['kept_reason']
+
+
+def test_abandon_rejects_completed_setups_and_bad_bodies(setup_api):
+    client, repository = setup_api
+    start(client)
+    assert client.post(f'/api/setup/{SESSION}/abandon', json={'dry_run': 'yes'}).status_code == 400
+    assert client.post(f'/api/setup/{SESSION}/abandon', json={'delete': True}).status_code == 400
+    path = repository.data_dir / 'setup-sessions' / f'{SESSION}.json'
+    import json
+    path.write_text(json.dumps({**json.loads(path.read_text()), 'completed': True}))
+    assert _abandon(client).status_code == 409
+
+
+def test_listing_skips_a_session_abandoned_during_the_listing(setup_api, monkeypatch):
+    client, repository = setup_api
+    start(client)
+    from backend.common import setup_flow
+    original = setup_flow.read
+    def vanish(repo, session_id):
+        (repo.data_dir / 'setup-sessions' / f'{session_id}.json').unlink(missing_ok=True)
+        return original(repo, session_id)
+    monkeypatch.setattr(setup_flow, 'read', vanish)
+    response = client.get('/api/setup')
+    assert response.status_code == 200 and response.json['sessions'] == []
+
+
+def test_an_automatic_check_does_not_reopen_an_abandoned_setup(setup_api, monkeypatch):
+    client, repository = setup_api
+    profile_id = start(client)['profile_id']
+    repository.update_system_transaction(lambda system: system.update(agents=[
+        {'id': 'mihomo', 'name': 'Mihomo', 'host': '192.0.2.10', 'service_type': 'mihomo', 'profile_id': profile_id}]))
+    assert not _abandon(client).json['delete_profile']
+    client.post(f'/api/setup/{SESSION}/check', json={})
+    assert client.get(f'/api/setup/{SESSION}').json['abandoned']

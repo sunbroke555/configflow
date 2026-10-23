@@ -30,7 +30,7 @@
       </Button>
     </header>
 
-    <SetupEntry />
+    <SetupEntry @abandoned="loadAllData" />
 
     <p
       v-if="loadFailed"

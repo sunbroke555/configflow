@@ -14,7 +14,7 @@ export interface SetupDefaultProfile {
 }
 export interface SetupSession {
   id: string; profile_id: string; name: string; goal: SetupGoal
-  step: number; max_step: number; prepared: boolean; completed: boolean
+  step: number; max_step: number; prepared: boolean; completed: boolean; abandoned?: boolean
   subscription_ids: string[]; node_ids: string[]; dns_fallback?: 'mihomo' | 'direct'; traffic_fallback?: 'proxy' | 'direct'
   local_dns?: string
   domain_rules?: SetupDomainSelection
@@ -24,6 +24,11 @@ export interface SetupSession {
   router_draft?: SetupRouterDraft
   default_profile?: SetupDefaultProfile; previous_default?: string
   route_instructions?: { gateway: string; dns: string; routes: { cidr: string; sources: string[]; requires_source_exclusion?: boolean }[]; warnings: string[] }
+}
+export interface SetupAbandonPlan {
+  session_id: string; name: string; profile: { id: string; name: string }
+  delete_profile: boolean; kept_reason: string | null; guidance: string
+  subscription: { id: string; name: string } | null; subscription_kept?: boolean
 }
 export interface SetupIndex {
   sessions: SetupSession[]; suggested: boolean
@@ -41,5 +46,6 @@ export const setupApi = {
   prepare: (id: string, settings: { dns_fallback: 'mihomo' | 'direct'; traffic_fallback: 'proxy' | 'direct'; local_dns: string; domain_rules: SetupDomainSelection }) => api.post<SetupSession>(`${path(id)}/prepare`, settings, { timeout: 90000 }),
   check: (id: string) => api.post<SetupSession>(`${path(id)}/check`, {}, { timeout: 90000 }),
   saveRouterDraft: (id: string, router: unknown) => api.post<SetupSession>(`${path(id)}/router-draft`, { router }),
+  abandon: (id: string, dryRun = false) => api.post<SetupAbandonPlan>(`${path(id)}/abandon`, dryRun ? { dry_run: true } : {}),
   finish: (id: string, data: { router_mode?: 'manual' | 'managed'; router_id?: string; ack_routes?: boolean; ack_dns?: boolean; make_default?: boolean } = {}) => api.post<SetupSession>(`${path(id)}/finish`, data, { timeout: 90000 })
 }
