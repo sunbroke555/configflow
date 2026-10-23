@@ -267,7 +267,7 @@ def test_zip_and_agent_both_refuse_missing_relative_native_resources(document):
     generated = generate_oxidns_config(value)
     with pytest.raises(OxidnsArchiveError, match='未打包'):
         build_oxidns_zip(value, generated, [], [])
-    with pytest.raises(DeploymentPreparationError, match='unbundled'):
+    with pytest.raises(DeploymentPreparationError, match='附加文件里没有它'):
         build_deployment_bundle(AGENT, value, generated)
 
 

@@ -54,7 +54,7 @@ def test_complete_oxidns_bundle_converts_rules_and_preserves_filter_bytes():
 def test_oxidns_bundle_refuses_mutable_state_payload_and_missing_file():
     with pytest.raises(DeploymentPreparationError, match='runtime state'):
         build_deployment_bundle(AGENT, {}, 'plugins: []', custom_files=[{'path': 'state/learned.txt', 'content': 'bad'}])
-    with pytest.raises(DeploymentPreparationError, match='unbundled'):
+    with pytest.raises(DeploymentPreparationError, match='附加文件里没有它'):
         build_deployment_bundle(AGENT, {}, 'plugins: [{tag: filters, type: adguard_rule, args: {files: [rules/missing.txt]}}]')
 
 
@@ -110,7 +110,7 @@ def test_docker_oxidns_boot_starts_without_recovery_gate(tmp_path):
 @pytest.mark.parametrize('args', [{'file': 'geoip.dat'}, {'persistent': {'files': ['rules/permanent.txt']}}])
 def test_oxidns_bundle_requires_nested_and_singular_files(args):
     config = yaml.safe_dump({'plugins': [{'tag': 'custom', 'type': 'geoip', 'args': args}]})
-    with pytest.raises(DeploymentPreparationError, match='unbundled'):
+    with pytest.raises(DeploymentPreparationError, match='附加文件里没有它'):
         build_deployment_bundle(AGENT, {}, config)
 
 

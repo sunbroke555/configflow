@@ -278,6 +278,45 @@ def test_mosdns_ip_set_rejects_invalid_network_instead_of_empty_file(env, networ
         build_deployment_bundle(agent, config, 'plugins: [{type: ip_set, args: {files: [./rules/ip.txt]}}]',
             custom_files=[{'path': 'rules/ip.txt', 'content': 'IP-CIDR,' + network + ',no-resolve'}])
 
+def test_classical_ip_part_skips_domains_but_ip_sources_stay_strict(env, monkeypatch):
+    """A mixed source's bare domains belong to its domain part, as rule-proxy treats them."""
+    _, _, agent, config = env
+    agent['service_type'] = 'mosdns'
+    def fetch(url, **kwargs):
+        result = response(None)
+        result._content = b'tmdb-image-prod.b-cdn.net\nDOMAIN-SUFFIX,themoviedb.org\nIP-CIDR,192.0.2.0/24\n'
+        return result
+    monkeypatch.setattr('backend.agents.deployment_bundle.request_rule', fetch)
+    def build(behavior):
+        return build_deployment_bundle(agent, config, 'plugins: [{type: ip_set, args: {files: [./rules/tmdb_ip.txt]}}]',
+            ruleset_downloads=[{'name': 'TMDB', 'url': 'https://rules.test/tmdb.list',
+                                'local_path': './rules/tmdb_ip.txt', 'behavior': behavior}])
+    assert contents(build('classical'))['files/rules/tmdb_ip.txt'] == b'192.0.2.0/24'
+    with pytest.raises(DeploymentPreparationError, match='Invalid IP network'):
+        build('ipcidr')
+    with pytest.raises(DeploymentPreparationError, match='Invalid IP network'):
+        convert_mosdns_rules(b'IP-CIDR,not-an-address', 'ip_set', mixed=True)
+
+
+def test_oxidns_names_each_unavailable_ruleset_and_where_to_fix_it(env):
+    from backend.converters.oxidns import _rule_path, _tag
+    _, _, agent, config = env
+    agent['service_type'] = 'oxidns'
+    disabled = {'id': 'paused', 'itemType': 'ruleset', 'name': 'Paused', 'behavior': 'domain',
+                'enabled': False, 'url': 'https://rules.test/paused'}
+    gone_domain, gone_ip, paused = (_rule_path({'id': 'gone'}, 'domain'), _rule_path({'id': 'gone'}, 'ip'),
+                                    _rule_path(disabled, 'domain'))
+    main = yaml.safe_dump({'plugins': [
+        {'tag': 'rules_domain_1', 'type': 'domain_set', 'args': {'files': [gone_domain, paused]}},
+        {'tag': 'rules_ip_1', 'type': 'ip_set', 'args': {'files': [gone_ip]}}]})
+    with pytest.raises(DeploymentPreparationError) as error:
+        build_deployment_bundle(agent, {**config, 'rule_configs': [disabled]}, main)
+    assert str(error.value) == (
+        'OxiDNS 还在使用不可用的规则集，发布已停止，设备配置没有改动。'
+        '\n· 「Paused」已停用：请在规则管理中重新启用'
+        f'\n· 1 个已删除的规则集（{_tag("rule", "gone")}）：请在 OxiDNS 设置的 YAML 中删除含这些名称的行')
+
+
 def test_upload_ready_does_not_mark_version_and_status_survives_restart(env, monkeypatch):
     repository, manager, agent, config = env
     bundle = minimal_bundle(agent, config)

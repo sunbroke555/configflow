@@ -147,6 +147,54 @@ def test_native_oxidns_type_guard_follows_the_routing_document(compositions):
     assert retype('GEOIP', 'CN').status_code == 200
 
 
+def test_deleting_a_rule_removes_it_from_native_oxidns_routing(compositions):
+    """A deleted ruleset must not leave providers or downloads no publication can fill."""
+    import yaml
+    from backend.common.oxidns_common_routing import read_routing
+    from backend.converters.oxidns import _rule_path, _tag, get_oxidns_ruleset_downloads
+    from backend.common.oxidns_native import relative_resource, resource_references
+    client, repository, headers = compositions
+    settings = client.get('/api/oxidns/settings', headers=headers).get_json()
+    native = client.post('/api/oxidns/editor', headers=headers, json={'settings': settings}).get_json()['settings']
+    response = client.post('/api/oxidns/common-settings/apply', headers=headers, json={
+        'settings': native, 'changes': {'direct_rulesets': ['set'], 'proxy_rules': ['inline']}})
+    assert response.status_code == 200, response.get_json()
+    assert client.post('/api/oxidns/settings', headers=headers, json=response.get_json()['settings']).status_code == 200
+    assert _rule_path({'id': 'set'}, 'ip').removeprefix('./') in client.get('/api/oxidns/settings', headers=headers).get_json()['native_config']
+
+    assert client.delete('/api/rules/set', headers=headers).status_code == 200
+    config = repository.get_compat_config('other')
+    document = yaml.safe_load(config['oxidns']['native_config'])
+    # Providers, sequence matches and rules_download entries all name the generated file.
+    assert _tag('rule', 'set') not in config['oxidns']['native_config']
+    referenced = {relative_resource(path) for path in resource_references(document)} - {None}
+    downloads = {item['local_path'].removeprefix('./') for item in get_oxidns_ruleset_downloads(config)}
+    assert not {path for path in referenced if path.startswith('rules/rule_')} - downloads
+    routing = read_routing(document, config['oxidns'], config)
+    assert routing['values']['proxy_rules'] == ['inline']
+    assert all(routing['capabilities'][key]['editable']
+               for key in ('direct_rulesets', 'proxy_rulesets', 'direct_rules', 'proxy_rules'))
+    # The other profile's composition is untouched.
+    assert any(item['id'] == 'set' for item in repository.get_profile('default')['rule_configs'])
+
+
+def test_rule_delete_is_refused_while_unrecognized_native_routing_uses_it(compositions):
+    client, repository, headers = compositions
+    settings = client.get('/api/oxidns/settings', headers=headers).get_json()
+    native = client.post('/api/oxidns/editor', headers=headers, json={'settings': settings}).get_json()['settings']
+    applied = client.post('/api/oxidns/common-settings/apply', headers=headers, json={
+        'settings': native, 'changes': {'direct_rulesets': ['set']}}).get_json()['settings']
+    # A hand-written provider reusing the generated file makes routing unrecognizable.
+    from backend.converters.oxidns import _rule_path
+    applied['native_config'] = applied['native_config'].replace(
+        'plugins:\n', 'plugins:\n- tag: manual_set\n  type: domain_set\n  args:\n    files:\n'
+        f'    - {_rule_path({"id": "set"}, "domain")}\n', 1)
+    assert client.post('/api/oxidns/settings', headers=headers, json=applied).status_code == 200
+    response = client.delete('/api/rules/set', headers=headers)
+    assert response.status_code == 400 and 'YAML 中删掉' in response.get_json()['message']
+    assert any(item['id'] == 'set' for item in repository.get_profile('other')['rule_configs'])
+
+
 def test_scoped_content_rule_proxy_avoids_network(compositions, monkeypatch):
     client, repository, headers = compositions
     def unexpected_network(*args, **kwargs):

@@ -111,6 +111,33 @@ def _dns_rule_selections(rule_id):
     return found
 
 
+def _native_oxidns_without(rule_id):
+    """(current, updated) native OxiDNS settings without a rule about to be deleted.
+
+    Native YAML routes OxiDNS, so removing the stored selector alone would leave
+    providers and downloads that reference files no publication can produce.
+    """
+    from backend.common.oxidns_common_routing import remove_rule
+    from backend.common.oxidns_native import load_native_yaml
+    from backend.common.oxidns_settings import OxidnsSettingsError, normalize_oxidns_settings
+    config = get_config()
+    settings = config.get('oxidns') if isinstance(config.get('oxidns'), dict) else {}
+    if settings.get('config_mode') != 'native' or not settings.get('native_config'):
+        return None
+    try:
+        load_native_yaml(settings['native_config'])
+    except ValueError:
+        return None  # An unreadable draft cannot be published; it is fixed in the editor.
+    try:
+        result = remove_rule(settings, config, rule_id, request.url_root.rstrip('/'))
+        if result is None:
+            return None
+        # Stored exactly as the editor saves it.
+        return settings, normalize_oxidns_settings(result, validate_native_arguments=False)
+    except OxidnsSettingsError as exc:
+        raise ProfileValidationError(str(exc)) from None
+
+
 def _ensure_dns_rule_type(rule, selections):
     """A type change must not strand a DNS selection the generator cannot express."""
     from backend.converters.mosdns import DNS_RULE_TYPES
@@ -131,6 +158,7 @@ def _mutate_rule(rule_id, item_type=None):
     # Read outside the transaction; only a request naming an unconvertible type needs it.
     selections = (_dns_rule_selections(rule_id) if payload and 'rule_type' in payload
                   and payload['rule_type'] not in DNS_RULE_TYPES else [])
+    native = _native_oxidns_without(rule_id) if request.method == 'DELETE' else None
     result = {}
     def mutate(profile):
         items = profile.setdefault('rule_configs', [])
@@ -139,6 +167,11 @@ def _mutate_rule(rule_id, item_type=None):
         if original is None:
             raise NotFound('Rule not found')
         if request.method == 'DELETE':
+            if native is not None:
+                # The edit was computed from a read outside this transaction.
+                if profile.get('oxidns') != native[0]:
+                    raise ProfileValidationError('OxiDNS 配置刚被修改，请刷新后重新删除。')
+                profile['oxidns'] = native[1]
             items.remove(original)
             # Remove target selections in the same transaction as the rule.
             # A later browser read/modify/write can fail or overwrite new edits.
