@@ -11,6 +11,8 @@ from urllib.request import urlopen
 import pytest
 import yaml
 
+from backend.native_test_helpers import wait_for_mihomo_routing
+
 from backend.test_domain_wildcard_delivery import CASES, source_for
 from backend.test_domain_wildcard_oxidns_edges import EDGE_CASES
 from backend.utils.rule_matcher import RuleConfigMatcher
@@ -98,7 +100,7 @@ def test_native_mihomo_domain_wildcards_agree_with_page_matcher(tmp_path, layout
             for _ in range(100):
                 try:
                     with urlopen(f'http://127.0.0.1:{controller_port}/providers/rules', timeout=.2) as response:
-                        actual = json.load(response)['providers']
+                        actual = json.load(response).get('providers') or {}
                     if all(actual.get(tag, {}).get('ruleCount', 0) >= 1 for tag in providers):
                         break
                 except OSError:
@@ -108,21 +110,7 @@ def test_native_mihomo_domain_wildcards_agree_with_page_matcher(tmp_path, layout
             else:
                 pytest.fail('Domain providers did not initialize: ' + log_path.read_text())
             assert all(actual[tag]['ruleCount'] == 1 for tag in providers), actual
-            # Provider counts become visible before executor finishes its GC
-            # and switches the tunnel from Inner to Running. During that gap
-            # external HTTP connections close without a route/log. Probe the
-            # data path separately; never retry or skip an actual matrix query.
-            for _ in range(100):
-                try:
-                    _http_request(proxy_port, '127.0.0.1', 30999, timeout=.2)
-                except OSError:
-                    pass
-                if ' --> 127.0.0.1:30999 match Match using FALLBACK' in log_path.read_text():
-                    break
-                assert process.poll() is None, log_path.read_text()
-                time.sleep(.05)
-            else:
-                pytest.fail('Mihomo routing did not become ready: ' + log_path.read_text())
+            wait_for_mihomo_routing(process, proxy_port, log_path)
             for host, port, _, _, _, _ in requests:
                 _http_request(proxy_port, host, port)
 
