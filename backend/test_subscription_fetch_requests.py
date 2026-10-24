@@ -279,8 +279,9 @@ def test_manual_route_reuses_traffic_without_userinfo_get(monkeypatch):
     def fetch(*args, **kwargs):
         assert kwargs == {'refresh': True}
         return result
-    monkeypatch.setattr(subscriptions, 'get_subscription_proxies_yaml', fetch)
-    monkeypatch.setattr(subscriptions, 'save_subscription_nodes', lambda *a: {'count': 1})
+    # The manual route shares the scheduled task's download (系统设置 → 定时任务).
+    monkeypatch.setattr(client, 'get_subscription_proxies_yaml', fetch)
+    monkeypatch.setattr('backend.utils.subscription_cache.save_subscription_nodes', lambda *a: {'count': 1})
     monkeypatch.setattr(subscriptions.subscription_health, 'record_fetch', lambda *a, **k: recorded.append(k))
     monkeypatch.setattr(subscriptions.subscription_health, 'fetch_userinfo', lambda *a: pytest.fail('extra airport GET'))
     app = Flask(__name__)

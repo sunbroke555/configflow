@@ -95,10 +95,17 @@ def test_local_refresh_fetches_legacy_entry_without_source_type(rule_app):
     cache = repository.shared_rules_dir() / rule_cache_filename(repository.get_shared()['rule_library'][0])
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text('DOMAIN,stale.test')
+    # Devices read the cache; the scheduled task refreshes it through the proxy.
     response = app.test_client().get('/api/profiles/alpha/rules/local/Legacy')
-    assert response.get_data(as_text=True) == BODY
+    assert response.get_data(as_text=True) == 'DOMAIN,stale.test'
+    assert calls == []
+    from backend.utils.scheduled_refresh import refresh_rule_source
+    refresh_rule_source(repository.get_shared()['rule_library'][0])
     assert cache.read_text() == BODY
     assert [url for _, url, _ in calls] == [SOURCE]
+    assert calls[0][2]['proxies'] == {'http': PROXY, 'https': PROXY}
+    response = app.test_client().get('/api/profiles/alpha/rules/local/Legacy')
+    assert response.get_data(as_text=True) == BODY
 
 
 def test_mosdns_conversion_uses_proxy_and_original_hostname(rule_app):

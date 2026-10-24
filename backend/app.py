@@ -172,6 +172,9 @@ if __name__ == '__main__':
         start_auto_loop(os.path.join(str(DATA_DIR), 'probes'))
         from backend.routers.rule_sync import start_loop as start_rule_sync_loop
         start_rule_sync_loop()
+        # 订阅与规则集按各自间隔在服务端更新（系统设置 → 定时任务）
+        from backend.utils.scheduled_refresh import start_loop as start_scheduled_refresh
+        start_scheduled_refresh()
 
     from backend.http_server import run_http_server
     run_http_server(app, debug=(LOG_LEVEL == 'DEBUG'))

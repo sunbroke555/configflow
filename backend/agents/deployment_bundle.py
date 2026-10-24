@@ -290,10 +290,9 @@ def materialize_rule(url, config, base_url, *, depth=0, raw_mosdns=False, fetch_
         if declared is None and declared_rule is not None:
             declared = {**declared_rule, 'source_type': 'url', 'url': url}
         if declared is not None and declared.get('source_type', 'url') == 'url':
-            from backend.utils.rule_utils import refresh_remote_rule
-            value, error = refresh_remote_rule(
-                declared, config_data=config, allow_stale=True,
-                fetch=fetch_raw or (lambda source_url: _fetch_bytes(source_url, config)))
+            from backend.utils.scheduled_refresh import read_rule_source
+            value, error = read_rule_source(
+                declared, config, fetch=fetch_raw or (lambda source_url: _fetch_bytes(source_url, config)))
             if error is not None:
                 logger.warning('规则集「%s」更新失败，使用上一次有效缓存：%s',
                                declared.get('name', ''), failure_text(str(error)))

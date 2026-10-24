@@ -405,8 +405,8 @@ def test_rule_cache_workers_use_shared_rule_sources(tmp_path, monkeypatch):
     register_blueprints(app)
     seen_rules = []
     monkeypatch.setattr(
-        "backend.utils.rule_utils.save_rule_to_local",
-        lambda rule: seen_rules.append(rule["id"]) or "cached.list",
+        "backend.utils.scheduled_refresh.refresh_rule_source",
+        lambda rule, trigger: seen_rules.append(rule["id"]) or (b"", None),
     )
 
     response = app.test_client().post(

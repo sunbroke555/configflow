@@ -13,6 +13,7 @@ from backend.common.config_repository import ProfileRepository
 from backend.routes import register_blueprints
 from backend.utils.mosdns_archive import build_mosdns_zip
 from backend.utils.rule_utils import rule_cache_filename, write_validated_rule_cache
+from backend.utils.scheduled_refresh import refresh_rule_source
 
 
 OLD = 'DOMAIN,old.test\nIP-CIDR,192.0.2.0/24'
@@ -88,6 +89,9 @@ def test_real_origin_b_then_failure_retains_last_valid_b(app_repo, origin, endpo
     query = {'url': url, 'part': part, 'token': token}
     client = app.test_client()
     server.body = NEW
+    # Devices read the cache; the scheduled task is what brings in B.
+    assert client.get(endpoint, query_string=query).get_data(as_text=True) != expected
+    refresh_rule_source(repository.get_shared()['rule_library'][0])
     fresh = client.get(endpoint, query_string=query)
     assert fresh.status_code == 200
     assert fresh.get_data(as_text=True) == expected
@@ -99,6 +103,8 @@ def test_real_origin_b_then_failure_retains_last_valid_b(app_repo, origin, endpo
         server.status = 503
     else:
         server.body = 'BOGUS,broken.test'
+    with pytest.raises(Exception):
+        refresh_rule_source(repository.get_shared()['rule_library'][0])
     unavailable = client.get(endpoint, query_string=query)
     assert unavailable.status_code == 200
     assert unavailable.get_data(as_text=True) == expected
@@ -110,6 +116,7 @@ def test_real_origin_b_then_failure_retains_last_valid_b(app_repo, origin, endpo
     assert cache.read_text() == NEW
 
     server.status, server.body = 200, NEW
+    refresh_rule_source(repository.get_shared()['rule_library'][0])
     recovered = client.get(endpoint, query_string=query)
     assert recovered.status_code == 200
     assert recovered.get_data(as_text=True) == expected

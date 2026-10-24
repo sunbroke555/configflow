@@ -200,8 +200,9 @@ def test_dns_follow_after_alias_withdrawal_preserves_custom_downloads_and_skips_
     assert plugin(actual, 'forward_remote')['args']['upstreams'][0]['addr'] == 'udp://127.0.0.1:2053'
     assert_custom_preserved(actual, expected)
     assert len(plugin(actual, 'rules_download')['args']['downloads']) == 1
-    # Address changes may prepare resources; withdrawn sources must stay out.
-    assert fetched and set(fetched) == {'https://example.test/keep.txt'}
+    # Address changes may prepare resources (library sources come from the
+    # scheduled cache); withdrawn sources must stay out.
+    assert set(fetched) <= {'https://example.test/keep.txt'}
     env.uploads.clear()
     def unavailable(*args, **kwargs):
         pytest.fail('an unchanged upstream must not prepare or download another bundle')

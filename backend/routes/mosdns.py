@@ -550,15 +550,15 @@ def mosdns_rule_proxy():
             stale_error = None
             try:
                 if declared is not None and declared.get('source_type', 'url') == 'url':
-                    from backend.utils.rule_utils import refresh_remote_rule
-                    value, stale_error = refresh_remote_rule(
-                        declared, config_data=config_data, allow_stale=True,
+                    from backend.utils.scheduled_refresh import read_rule_source
+                    value, stale_error = read_rule_source(
+                        declared, config_data,
                         fetch=lambda _url: _fetch_remote_content(fetch_url, config_data=config_data, raw=True))
                     original_content = value.decode('utf-8-sig')
                     if stale_error is not None:
+                        from backend.utils.scheduled_refresh import describe_failure
                         logger.warning('规则集「%s」更新失败，使用上一次有效缓存：%s',
-                                       declared.get('name', ''), str(stale_error) if isinstance(stale_error, RemoteRuleValidationError)
-                                       else safe_exception_details(stale_error))
+                                       declared.get('name', ''), describe_failure(stale_error))
                 else:
                     original_content = _fetch_remote_content(fetch_url)
             except requests.exceptions.RequestException as e:

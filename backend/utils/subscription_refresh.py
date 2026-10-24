@@ -53,8 +53,29 @@ def remember_source_download(sub, result):
     return result
 
 
+def download_subscription_nodes(sub):
+    """Download, parse and store a subscription: (nodes, result, cache).
+
+    A failure raises before anything is stored, so the previous nodes stay.
+    """
+    import uuid
+    from backend.utils.sub_store_client import get_subscription_proxies_yaml, parse_proxies_from_yaml, proxies_to_nodes
+    from backend.utils.subscription_cache import save_subscription_nodes
+    result = remember_source_download(sub, get_subscription_proxies_yaml(sub['id'], sub['url'], refresh=True))
+    proxies = parse_proxies_from_yaml(result[0])
+    if not proxies:
+        raise ValueError('订阅没有返回任何节点，已保留原有缓存')
+    nodes = proxies_to_nodes(proxies)
+    for node in nodes:
+        node['subscription_id'] = sub['id']
+        node['subscription_name'] = sub['name']
+        node.setdefault('id', f"node_{uuid.uuid4().hex[:8]}")
+    cache = save_subscription_nodes(sub['id'], nodes, source_cache_metadata(sub, result))
+    return nodes, result, cache
+
+
 def fetch_subscription_source(sub, *, fetch):
-    """Automatic delivery uses the durable cache until its source interval expires.
+    """Automatic delivery uses the stored nodes; see the scheduled task.
 
     Manual refresh deliberately calls the transport directly. Returned cached
     content still goes through each consumer's normal filtering and validation.
@@ -75,12 +96,13 @@ def fetch_subscription_source(sub, *, fetch):
         cache = None
     cached_nodes = cache.get('nodes') if cache else None
     usable = isinstance(cached_nodes, list) and bool(cached_nodes)
-    fresh = False
-    # Legacy node-only caches remain usable in manual mode, but cannot prove
-    # when the current URL was fetched and must not defer a scheduled refresh.
-    if usable and interval and cache.get('metadata', {}).get('url') == sub.get('url'):
-        fresh = _is_fresh(cache.get('updated_at'), interval)
-    if interval == 0 or fresh:
+    # The scheduled task (系统设置 → 定时任务) refreshes stored nodes when the
+    # interval is due and keeps them when a refresh fails, so deliveries use
+    # nodes stored for this URL as they are. Legacy node-only caches remain
+    # usable in manual mode, but cannot prove which URL they came from; they
+    # are downloaded once more and then carry the URL.
+    current = usable and cache.get('metadata', {}).get('url') == sub.get('url')
+    if interval == 0 or current:
         if not usable:
             raise StrategyReferenceError(
                 f'订阅「{sub.get("name", sub["id"])}」已关闭自动更新，且没有当前订阅地址的可用缓存。'
