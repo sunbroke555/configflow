@@ -54,13 +54,13 @@ def test_dns_save_reuses_names_and_keeps_notes_after_policy_removal(oxidns_app):
     assert not repo.get_profile('office')['oxidns'].get('device_policies')
     policy_url = f'/api/agents/{dns}/oxidns/device-policies'
     state = client.get(policy_url).get_json()
-    saved = client.put(policy_url, json={'profile_id': 'office', 'revision': state['revision'],
+    saved = client.put(policy_url, json={'profile_id': 'office', 'revision': state['revision'], 'notes_revision': state['notes_revision'],
         'policies': [{'ip': '192.0.2.6', 'mode': 'smart', 'name': ''}]}).get_json()
     assert saved['policies'][0]['name'] == 'NAS'
     saved['policies'][0]['name'] = '群晖'
-    renamed = client.put(policy_url, json={key: saved[key] for key in ('profile_id', 'revision', 'policies')}).get_json()
+    renamed = client.put(policy_url, json={key: saved[key] for key in ('profile_id', 'revision', 'notes_revision', 'policies')}).get_json()
     assert client.get(url).get_json()['notes']['192.0.2.6'] == '群晖'
-    assert client.put(policy_url, json={'profile_id': 'office', 'revision': renamed['revision'], 'policies': []}).status_code == 200
+    assert client.put(policy_url, json={'profile_id': 'office', 'revision': renamed['revision'], 'notes_revision': renamed['notes_revision'], 'policies': []}).status_code == 200
     assert client.get(url).get_json()['notes']['192.0.2.6'] == '群晖'
 
 
@@ -126,6 +126,54 @@ def test_policy_editor_rejects_names_renamed_elsewhere(oxidns_app):
     body['policies'][0]['mode'] = 'smart'
     assert client.put(url, json=body).status_code == 409
     assert client.get(notes).get_json()['notes']['192.0.2.8'] == '群晖'
+
+
+def test_removing_a_legacy_named_policy_keeps_its_name(oxidns_app):
+    app, repo = oxidns_app
+    dns = agent('oxidns')
+    def setup(config):
+        config['oxidns'] = apply_policies(config['oxidns'], config, [
+            {'ip': '192.0.2.1', 'name': '旧电视', 'mode': 'direct'},
+            {'ip': '192.0.2.2', 'name': '旧音箱', 'mode': 'direct'},
+            {'ip': '192.0.2.3', 'name': '', 'mode': 'smart'}])
+        config['device_notes'] = {'192.0.2.2': ''}
+    repo.update_profile_transaction('office', setup)
+    client = app.test_client()
+    url = f'/api/agents/{dns}/oxidns/device-policies'
+    state = client.get(url).get_json()
+    body = {key: state[key] for key in ('profile_id', 'revision', 'notes_revision')}
+    saved = client.put(url, json={**body, 'policies': [state['policies'][2]]})
+    assert saved.status_code == 200, saved.get_json()
+    # The removed row's legacy name survives; a name hidden before stays hidden.
+    assert saved.get_json()['device_notes'] == {'192.0.2.1': '旧电视'}
+
+
+def test_policy_editor_requires_the_names_revision(oxidns_app):
+    app, repo = oxidns_app
+    dns = agent('oxidns')
+    client = app.test_client()
+    url = f'/api/agents/{dns}/oxidns/device-policies'
+    state = client.get(url).get_json()
+    before = deepcopy(repo.get_profile('office'))
+    body = {'profile_id': 'office', 'revision': state['revision'], 'policies': [{'ip': '192.0.2.4', 'name': 'NAS', 'mode': 'smart'}]}
+    assert client.put(url, json=body).status_code == 409
+    assert repo.get_profile('office') == before
+
+
+def test_new_policy_row_without_a_name_keeps_a_rename_made_elsewhere(oxidns_app):
+    app, _ = oxidns_app
+    mihomo, dns = agent(), agent('oxidns')
+    client = app.test_client()
+    notes = f'/api/agents/{mihomo}/client-notes'
+    url = f'/api/agents/{dns}/oxidns/device-policies'
+    assert client.put(notes, json={'profile_id': 'office', 'ip': '192.0.2.9', 'name': '手机', 'previous_name': ''}).status_code == 200
+    state = client.get(url).get_json()
+    assert client.put(notes, json={'profile_id': 'office', 'ip': '192.0.2.9', 'name': '小米手机', 'previous_name': '手机'}).status_code == 200
+    saved = client.put(url, json={**{key: state[key] for key in ('profile_id', 'revision', 'notes_revision')},
+                                  'policies': [{'ip': '192.0.2.9', 'name': '', 'mode': 'smart'}]})
+    assert saved.status_code == 200, saved.get_json()
+    assert saved.get_json()['policies'][0]['name'] == '小米手机'
+    assert client.get(notes).get_json()['notes'] == {'192.0.2.9': '小米手机'}
 
 
 def test_notes_bound_profile_validation_and_conflict(oxidns_app):

@@ -81,7 +81,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
       if (dirty.value) {
         const diff = sourceChanges()
         const { data } = await routerApi.savePolicySettings(c.id, {
-          revision: state.value.revision, policies: clone(policies.value), router: clone(settings.value)
+          revision: state.value.revision, names_revision: state.value.names_revision, policies: clone(policies.value), router: clone(settings.value)
         }, c.profile)
         if (!current(c)) return
         if (!data.success) throw new Error(data.message)

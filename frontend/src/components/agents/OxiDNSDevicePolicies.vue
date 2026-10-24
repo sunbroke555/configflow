@@ -242,7 +242,13 @@ async function save(): Promise<boolean> {
     error.value = ''
     submissionFailure.value = null
     try {
-      const { data } = await oxidnsDevicePolicyApi.save(id, { profile_id: state.value.profile_id, revision: state.value.revision, notes_revision: state.value.notes_revision, policies: JSON.parse(sent) })
+      const stored = new Set(state.value.policies.map(row => row.ip))
+      const notes = state.value.device_notes || {}
+      // A new row still showing the loaded shared name is sent unnamed, so the
+      // server keeps a rename made elsewhere since then.
+      const policies = (JSON.parse(sent) as OxiDNSDevicePolicy[]).map(row =>
+        !stored.has(row.ip) && row.name.trim() === (notes[row.ip] || '') ? { ...row, name: '' } : row)
+      const { data } = await oxidnsDevicePolicyApi.save(id, { profile_id: state.value.profile_id, revision: state.value.revision, notes_revision: state.value.notes_revision, policies })
       if (disposed || id !== props.agentId || generation !== epoch) return false
       state.value = data
       // Adopt the server's normalized rows only if nothing changed while saving,

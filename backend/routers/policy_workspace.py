@@ -10,9 +10,9 @@ FIELDS = ('ip_rule_sets', 'ros_policy_rule_sets', 'proxy_gateway_agent_id')
 
 def draft_revision(config, router):
     # Do not invalidate a draft on a probe/heartbeat, but detect edits from the
-    # ordinary router form, another device editor, a renamed source or another publication.
+    # ordinary router form, another device editor or another publication.
     return digest({'router': {k: v for k, v in router.items() if k != 'last_probe'},
-                   'oxidns': revision(config.get('oxidns') or {}), 'names': policy_names_revision(config)})
+                   'oxidns': revision(config.get('oxidns') or {})})
 
 
 def read_workspace(config, router, profile_id, profile_name, agents, default_profile):
@@ -27,14 +27,17 @@ def read_workspace(config, router, profile_id, profile_name, agents, default_pro
               'library_rule_id': r.get('library_rule_id') or ''}
              for r in config.get('rule_configs', []) if r.get('itemType') == 'ruleset']
     return {'profile_id': profile_id, 'profile_name': profile_name,
-            'revision': draft_revision(config, router), 'router': public_view(router),
+            'revision': draft_revision(config, router), 'names_revision': policy_names_revision(config),
+            'router': public_view(router),
             'sources': policies, 'source_agents': sources, 'gateways': gateways, 'rule_sets': rules,
             'oxidns_revision': revision(config.get('oxidns') or {})}
 
 
 def save_workspace(config, router_id, body, base_url):
     router = find_router(config, router_id)
-    if not router or router.get('type') != 'routeros' or body.get('revision') != draft_revision(config, router):
+    # Source names are guarded only here: renaming changes neither DNS nor router output.
+    if not router or router.get('type') != 'routeros' or body.get('revision') != draft_revision(config, router) or \
+            body.get('names_revision') != policy_names_revision(config):
         raise RouterConflictError('配置已在其他页面更新，请重新载入后再保存。')
     updated = normalize(body['router'], router)
     existing = read_policies(config.get('oxidns') or {}, config)

@@ -80,6 +80,11 @@ def prepare_policy_notes(config, rows):
         if row['ip'] not in previous and not row['name']:
             row['name'] = names.get(row['ip'], '')
         _assign(config, notes, row['ip'], row['name'])
+    kept = {row['ip'] for row in rows}
+    for ip, name in _legacy_names(config).items():
+        # A removed row takes its legacy name with it; keep the name for Mihomo and DNS logs.
+        if ip not in kept:
+            notes.setdefault(ip, name)
     return rows, normalize_notes(notes)
 
 

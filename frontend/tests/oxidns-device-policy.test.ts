@@ -267,12 +267,16 @@ describe('OxiDNS device policy editing', () => {
 
 it('reuses a shared device note when adding a DNS policy', async () => {
   vi.mocked(oxidnsDevicePolicyApi.get).mockResolvedValue(response({ ...state(), device_notes: { '192.168.50.51': '工作电脑' } }))
+  // Like the server, unnamed new rows take the current shared name (renamed elsewhere here).
+  vi.mocked(oxidnsDevicePolicyApi.save).mockImplementation(async (_id, data) => response({ ...state(
+    data.policies.map(row => ({ ...row, name: row.name || '客厅电脑' }))), revision: 'v2' }))
   const wrapper = await render({ recorder: 'query_recorder' })
   expect(wrapper.findComponent(OxiDNSClientSelect).props('notes')).toEqual({ '192.168.50.51': '工作电脑' })
   await add(wrapper)
-  expect(wrapper.get('input[aria-label="192.168.50.51 备注"]').element.value).toBe('工作电脑')
+  expect(vi.mocked(oxidnsDevicePolicyApi.save).mock.lastCall?.[1].policies).toEqual([{ ip: '192.168.50.51', name: '', mode: 'smart' }])
   await flushPromises()
-  expect(vi.mocked(oxidnsDevicePolicyApi.save).mock.lastCall?.[1].policies).toEqual([{ ip: '192.168.50.51', name: '工作电脑', mode: 'smart' }])
+  // The loaded name is not sent back, so a rename made elsewhere is kept and shown.
+  expect(wrapper.get('input[aria-label="192.168.50.51 备注"]').element.value).toBe('客厅电脑')
   expect(agentApi.pushConfig).not.toHaveBeenCalled()
 })
 

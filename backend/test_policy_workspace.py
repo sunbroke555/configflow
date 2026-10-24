@@ -29,7 +29,7 @@ def read(workspace):
 
 
 def body_for(state):
-    return {'revision': state['revision'], 'base_url': '',
+    return {'revision': state['revision'], 'names_revision': state['names_revision'], 'base_url': '',
         'router': {key: state['router'].get(key) for key in ('ip_rule_sets', 'ros_policy_rule_sets', 'proxy_gateway_agent_id')},
         'policies': state['sources']['policies']}
 
@@ -83,6 +83,8 @@ def test_renaming_sources_keeps_oxidns_and_rejects_stale_workspace(workspace):
     stale = body_for(renamed.get_json()['workspace'])
     notes = {'profile_id': 'default', 'ip': '192.0.2.105', 'name': '存储', 'previous_name': '群晖'}
     assert client.put(f'/api/agents/{dns["id"]}/client-notes', headers=admin, json=notes).status_code == 200
+    # A rename elsewhere does not invalidate previews or publishing, only saving stale names.
+    assert read(workspace)['revision'] == stale['revision']
     assert client.put(path + '/policy-settings', headers=admin, json=stale).status_code == 409
     assert read(workspace)['sources']['policies'][0]['name'] == '存储'
 

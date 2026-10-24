@@ -1892,7 +1892,7 @@ def oxidns_device_policies(agent_id):
                 if not latest or latest.get('service_type') != 'oxidns' or \
                         (latest.get('profile_id') or get_default_profile_id()) != profile_id or \
                         body.get('revision') != revision(config.get('oxidns', {})) or \
-                        body.get('notes_revision', policy_names_revision(config)) != policy_names_revision(config):
+                        body.get('notes_revision') != policy_names_revision(config):
                     raise PolicyConflict('配置或设备绑定已更新，请重新载入后再保存。')
                 config['oxidns'] = save_policy_rows(config, config.get('oxidns', {}), body.get('policies'),
                                                     body.get('base_url', ''))
