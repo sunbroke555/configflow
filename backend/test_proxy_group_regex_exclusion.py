@@ -140,7 +140,7 @@ def test_provider_refresh_filters_response_without_removing_source_cache(regex_e
     import yaml
     from backend.routes import subscriptions, aggregations
     from backend.utils.subscription_cache import load_subscription_cache
-    from backend.utils.subscription_refresh import _download_cache_path
+    from backend.utils import scheduled_refresh, sub_store_client
 
     client, repository = regex_env
     names = ['HK 01', 'HK 02', 'JP 01', '广告']
@@ -172,14 +172,13 @@ def test_provider_refresh_filters_response_without_removing_source_cache(regex_e
     assert cached_response.status_code == 200
     assert 'HK 03' not in cached_response.get_data(as_text=True)
     assert len(fetch_calls) == 1
-    # Expire both persisted caches without bypassing the source refresh policy.
+    # Once the interval has passed, the scheduled task refreshes the source;
+    # provider pulls keep reading the stored nodes.
     cached_nodes = repository.read_shared_json('subscribes/feed.json')
     cached_nodes['updated_at'] = '2000-01-01T00:00:00+00:00'
     repository.write_shared_json('subscribes/feed.json', cached_nodes)
-    download_path = _download_cache_path('https://example.test/sub')
-    downloaded = repository.read_shared_json(download_path)
-    downloaded['fetched_at'] = '2000-01-01T00:00:00+00:00'
-    repository.write_shared_json(download_path, downloaded)
+    monkeypatch.setattr(sub_store_client, 'get_subscription_proxies_yaml', fetch)
+    assert scheduled_refresh.run_round() == 1
     response = client.get(endpoint, query_string=query)
     assert response.status_code == 200, response.get_data(as_text=True)
     assert 'HK 03' in response.get_data(as_text=True)

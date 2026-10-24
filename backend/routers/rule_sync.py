@@ -272,6 +272,11 @@ def sync(profile_id, router_id, download=None):
             if driver is not None:
                 driver.close()
         _log_outcome(router, receipt)
+        from backend.utils import task_status
+        started = task_status.parse_time(timestamp)
+        task_status.record(f'router_rule_sync:{profile_id}:{router_id}', ok=receipt.get('status') == 'synced',
+                           started_at=timestamp, error=receipt.get('message', ''),
+                           duration_ms=(datetime.now(timezone.utc) - started).total_seconds() * 1000 if started else 0)
         return store.public(receipt, True)
 
 

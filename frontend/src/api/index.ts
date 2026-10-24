@@ -612,6 +612,14 @@ export const githubProxyDomainApi = {
     api.post<{ success: boolean; proxy_domains: string }>('/rule-library/proxy-domains', { proxy_domains: proxyDomain })
 }
 
+// 系统设置「定时任务」：订阅、规则集与各后台任务的最近结果
+export const tasksApi = {
+  list: () => api.get<{ success: boolean; tasks: import('@/lib/scheduledTasks').ScheduledTask[] }>('/tasks'),
+  run: (key: string) => api.post<{ success: boolean; message: string }>('/tasks/run', { key }),
+  setInterval: (key: string, intervalSeconds: number) =>
+    api.put<{ success: boolean; task: import('@/lib/scheduledTasks').ScheduledTask | null }>('/tasks/interval', { key, interval_seconds: intervalSeconds })
+}
+
 // 统计数据
 export const statsApi = {
   getOverview: () => api.get('/stats/overview')

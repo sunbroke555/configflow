@@ -42,7 +42,7 @@ def _is_global_request() -> bool:
     return (
         request.blueprint in {
             "auth", "settings", "mcp", "agents", "logs", "nodes",
-            "subscriptions", "subscription_aggregations", "rule_library", "profiles",
+            "subscriptions", "subscription_aggregations", "rule_library", "profiles", "tasks",
         }
         or endpoint in {"config.export_config", "config.import_config", "config.reset_config"}
         or not request.path.startswith("/api/")

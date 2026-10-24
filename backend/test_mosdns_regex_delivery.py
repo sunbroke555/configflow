@@ -161,12 +161,13 @@ def test_generated_zip_and_web_download_keep_regex_and_split_ip(delivery):
         downloaded = archive_files(io.BytesIO(response.data))
         assert_archive(downloaded, delivery['mixed'])
         assert downloaded == files
-        assert delivery['calls'] == ([SOURCE_URL] if delivery['remote'] else [])
+        assert delivery['calls'] == []  # the first build stored the validated source
 
 
 def test_rule_proxy_keeps_regex_and_matches_generated_file_parts(delivery):
     downloads = get_mosdns_ruleset_downloads(delivery['config'], base_url=BASE_URL)
     assert len(downloads) == (2 if delivery['mixed'] else 1)
+    fetched = []
     for download in downloads:
         callback = urlsplit(download['url'])
         assert callback.path == '/api/profiles/office/mosdns/rule-proxy'
@@ -188,4 +189,7 @@ def test_rule_proxy_keeps_regex_and_matches_generated_file_parts(delivery):
                 assert response.get_data(as_text=True).splitlines() == IP_LINES
             else:
                 assert_domain_rules(response.get_data(as_text=True))
-            assert delivery['calls'] == ([SOURCE_URL] if delivery['remote'] else [])
+            fetched += delivery['calls']
+    if not delivery['invalid_remote']:
+        # Only the first read downloads; later reads use the validated cache.
+        assert fetched == ([SOURCE_URL] if delivery['remote'] else [])

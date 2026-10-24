@@ -15,7 +15,7 @@ from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rul
 from backend.utils.logger import get_logger
 from backend.utils.rule_fetch import request_rule
 from backend.utils.url_utils import safe_exception_details
-from backend.utils.ruleset_content import inspect_domain_content, validate_domain_content, read_rule_payload, append_rule_lines, RemoteRuleValidationError
+from backend.utils.ruleset_content import inspect_domain_content, validate_domain_content, read_rule_payload, append_rule_lines
 
 logger = get_logger(__name__)
 
@@ -203,6 +203,9 @@ def handle_rule_library_item(rule_id):
         new_rule.pop('has_ip_part', None)
         new_rule.pop('url' if new_rule.get('source_type') == 'content' else 'content', None)
         validate_domain_content(new_rule, old)
+        if 'update_interval' not in new_rule and 'update_interval' in old:
+            # The interval is edited in 系统设置 → 定时任务; source edits keep it.
+            new_rule['update_interval'] = old['update_interval']
         library[library.index(old)] = new_rule
 
     def native_profiles(shared, profiles):
@@ -232,6 +235,11 @@ def handle_rule_library_item(rule_id):
             if source_changed or not os.path.exists(target):
                 write_validated_rule_cache(new_rule, prepared)
         update_shared_and_config_transaction(mutate, rebuild, native_profiles)
+    if new_rule is None or source_changed:
+        # The task history belongs to the previous declaration.
+        from backend.utils import task_status
+        from backend.utils.scheduled_refresh import rule_source_key
+        task_status.forget(rule_source_key(rule_id))
     if new_rule is None:
         try:
             os.remove(os.path.join(get_rules_dir(), rule_cache_filename(previous)))
@@ -446,7 +454,7 @@ def test_rules():
 def cache_rules():
     """批量缓存选中的规则到本地"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from backend.utils.rule_utils import save_rule_to_local
+    from backend.utils.scheduled_refresh import describe_failure, refresh_rule_source
 
     config_data = get_shared_config()
     try:
@@ -470,7 +478,12 @@ def cache_rules():
         def cache_single_rule(rule):
             """缓存单个规则"""
             try:
-                local_path = save_rule_to_local(rule)
+                if rule.get('source_type', 'url') == 'url':
+                    # Recorded with the scheduled runs (系统设置 → 定时任务).
+                    refresh_rule_source(rule, 'manual')
+                    local_path = rule_cache_filename(rule)
+                else:
+                    local_path = save_rule_to_local(rule)
                 return {
                     'id': rule.get('id', ''),
                     'name': rule.get('name', ''),
@@ -482,7 +495,7 @@ def cache_rules():
                     'id': rule.get('id', ''),
                     'name': rule.get('name', ''),
                     'success': False,
-                    'error': str(e) if isinstance(e, RemoteRuleValidationError) else safe_exception_details(e),
+                    'error': describe_failure(e),
                     'cache_retained': read_validated_rule_cache(rule, config_data) is not None
                 }
 

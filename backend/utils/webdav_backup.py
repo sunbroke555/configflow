@@ -42,7 +42,28 @@ def describe_webdav_error(error):
     return detail
 
 
+BACKUP_TASK_KEY = 'webdav_backup'
+
+
 def upload_backup(snapshot, settings, trigger='手动'):
+    """Upload an export_all snapshot and record the run for 系统设置 → 定时任务."""
+    import time
+    from backend.utils import task_status
+    started, clock = task_status.now_iso(), time.monotonic()
+    kind = 'event' if trigger == '自动' else 'manual'
+    try:
+        result = _upload_backup(snapshot, settings, trigger)
+    except Exception as error:
+        task_status.record(BACKUP_TASK_KEY, ok=False, started_at=started, trigger=kind,
+                           duration_ms=(time.monotonic() - clock) * 1000,
+                           error=str(error) if isinstance(error, WebDAVConfigurationError) else describe_webdav_error(error))
+        raise
+    task_status.record(BACKUP_TASK_KEY, ok=True, started_at=started, trigger=kind,
+                       duration_ms=(time.monotonic() - clock) * 1000)
+    return result
+
+
+def _upload_backup(snapshot, settings, trigger):
     """Upload an export_all snapshot; temporary files are removed on every outcome."""
     from webdav3.client import Client
 

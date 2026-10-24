@@ -10,7 +10,7 @@ from backend.common import config as config_module
 from backend.common.config_repository import ProfileRepository
 from backend.routes import aggregations, subscriptions
 from backend.test_qa_integrity import make_app
-from backend.utils import sub_store_client
+from backend.utils import scheduled_refresh, sub_store_client, task_status
 from backend.utils.provider_delivery import prepare_subscription_provider
 from backend.utils.subscription_cache import load_subscription_cache, save_subscription_nodes
 from backend.utils.subscription_refresh import fetch_subscription_source
@@ -84,17 +84,42 @@ def test_manual_refresh_is_allowed_and_next_poll_uses_new_cache(setup, monkeypat
     assert calls == [URL]
 
 
-def test_interval_expires_and_success_refreshes_shared_cache(setup, monkeypatch):
+def test_expired_cache_is_served_and_the_scheduled_task_refreshes_it(setup, monkeypatch):
     app, repo, _ = setup
     repo.update_shared_transaction(lambda shared: shared['subscriptions'][0].update(interval=259200))
-    cache_source(repo, age=259201)
-    fetch = Mock(return_value=(CONTENT, 'direct_yaml'))
+    before = cache_source(repo, age=259201)
+    fetch = Mock(side_effect=AssertionError('devices read the stored nodes'))
     monkeypatch.setattr(subscriptions, 'get_subscription_proxies_yaml', fetch)
     monkeypatch.setattr(aggregations, 'get_subscription_proxies_yaml', fetch)
     for path in ['/api/subscriptions/proxies', '/api/subscriptions/s/proxies', '/api/aggregations/a/provider']:
         response = app.test_client().get(path)
         assert response.status_code == 200, response.text
-    fetch.assert_called_once_with('s', URL)
+    fetch.assert_not_called()
+    assert load_subscription_cache('s') == before
+
+    download = Mock(return_value=(CONTENT, 'direct_yaml'))
+    monkeypatch.setattr(sub_store_client, 'get_subscription_proxies_yaml', download)
+    assert scheduled_refresh.run_round() == 1
+    download.assert_called_once_with('s', URL, refresh=True)
+    assert scheduled_refresh.run_round() == 0  # due again only after the interval
+    entry = task_status.get('subscription:s')
+    assert (entry['last_status'], entry['run_count'], entry['last_trigger']) == ('success', 1, 'schedule')
+    assert load_subscription_cache('s')['updated_at'] > before['updated_at']
+
+
+def test_failed_scheduled_refresh_keeps_nodes_and_retries_sooner(setup, monkeypatch):
+    _, repo, _ = setup
+    repo.update_shared_transaction(lambda shared: shared['subscriptions'][0].update(interval=86400))
+    before = cache_source(repo, age=86401)
+    monkeypatch.setattr(sub_store_client, 'get_subscription_proxies_yaml',
+                        Mock(return_value=('proxies: []', 'direct_yaml')))
+    assert scheduled_refresh.run_round() == 1
+    assert load_subscription_cache('s') == before
+    entry = task_status.get('subscription:s')
+    assert entry['last_status'] == 'failed' and entry['cache_retained'] is True
+    assert entry['last_error'] == '订阅没有返回任何节点，已保留原有缓存'
+    due = scheduled_refresh.next_run_at(entry, 86400)
+    assert due - task_status.parse_time(entry['last_run_at']) == timedelta(seconds=scheduled_refresh.RETRY_SECONDS)
 
 
 def test_publish_preparation_uses_cache_and_stages_no_fake_refresh(setup):
@@ -112,7 +137,7 @@ def test_publish_preparation_uses_cache_and_stages_no_fake_refresh(setup):
 def test_dry_previews_share_download_across_restart_without_changing_validated_nodes(setup):
     _, repo, sub = setup
     sub['interval'] = 259200
-    before = cache_source(repo, age=259201)
+    before = None  # stored nodes would be served as they are
     fetch = Mock(return_value=(CONTENT, 'direct_yaml'))
     snapshot = SimpleNamespace(validate=lambda proxies, provider_name=None: None, has_chains=False)
     first = prepare_subscription_provider(sub, {}, snapshot, fetch=fetch)

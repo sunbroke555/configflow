@@ -17,14 +17,14 @@ from backend.utils.subscription_cache import (
 )
 from backend.utils.sub_store_client import (
     get_subscription_proxies_yaml,
-    parse_proxies_from_yaml,
     proxies_to_nodes,
 )
 from backend.utils.url_utils import safe_exception_details
-from backend.utils import subscription_health
+from backend.utils import subscription_health, task_status
+from backend.utils.scheduled_refresh import refresh_subscription, subscription_key
 from backend.utils.subscription_filter import filter_subscription_items, validate_regex_filter
 from backend.utils.subscription_refresh import (
-    fetch_subscription_source, validate_refresh_interval, source_cache_metadata, remember_source_download,
+    fetch_subscription_source, validate_refresh_interval, source_cache_metadata,
 )
 
 # 由服务端计算、不属于订阅配置本身的字段；前端整对象回写时要剥掉，避免落进配置文件
@@ -121,6 +121,7 @@ def handle_subscription(sub_id):
         config_data['subscriptions'] = [s for s in subs if s['id'] != sub_id]
         save_shared_config(config_data)
         subscription_health.forget(sub_id)
+        task_status.forget(subscription_key(sub_id))
         delete_subscription_cache(sub_id)
         return jsonify({'success': True})
 
@@ -136,6 +137,9 @@ def handle_subscription(sub_id):
                 config_data['subscriptions'][i] = new_data
 
                 save_shared_config(config_data)
+                if new_data.get('url') != s.get('url'):
+                    # The task history belongs to the previous address.
+                    task_status.forget(subscription_key(sub_id))
                 return jsonify({'success': True, 'data': new_data})
         return jsonify({'success': False, 'message': 'Subscription not found'}), 404
 
@@ -217,36 +221,12 @@ def fetch_subscription(sub_id):
     fetch_error = None
     from_cache = False
 
-    # 优先尝试从 Sub-Store 获取
+    # 优先尝试从 Sub-Store 获取；结果与定时任务记在同一处（系统设置 → 定时任务）
     try:
         current_app.logger.info(f"尝试通过 Sub-Store 获取订阅: {sub['name']} (id: {sub_id})")
-        fetch_result = get_subscription_proxies_yaml(sub_id, sub['url'], refresh=True)
-        fetch_result = remember_source_download(sub, fetch_result)
-        yaml_text, source = fetch_result
-        proxies = parse_proxies_from_yaml(yaml_text)
-        nodes = proxies_to_nodes(proxies)
-
-        # 为节点添加订阅来源信息和ID
-        for node in nodes:
-            node['subscription_id'] = sub_id
-            node['subscription_name'] = sub['name']
-            if 'id' not in node:
-                node['id'] = f"node_{uuid.uuid4().hex[:8]}"
-
-        # 写入缓存（缓存保留原始节点，筛选只作用于输出）
-        cache_payload = save_subscription_nodes(
-            sub_id,
-            nodes,
-            source_cache_metadata(sub, fetch_result)
-        )
+        nodes, fetch_result, cache_payload = refresh_subscription(sub, 'manual')
         nodes = filter_subscription_items(sub, nodes)
-        # 复用订阅正文请求的流量头，不为流量信息额外访问机场。
-        subscription_health.record_fetch(
-            sub_id,
-            ok=True,
-            count=len(nodes),
-            traffic=getattr(fetch_result, 'traffic', None),
-        )
+        source = fetch_result[1]
         if source == 'rendered_yaml':
             current_app.logger.info(f"成功直接复用订阅 URL 返回的 Sub-Store YAML 并写入缓存: {sub['name']}, 节点数: {len(nodes)}")
         elif source == 'sub_store':
@@ -260,17 +240,15 @@ def fetch_subscription(sub_id):
         fetch_error = f"request_failed ({safe_exception_details(e)})"
         current_app.logger.warning("从URL获取订阅失败: %s, 尝试读取本地缓存: %s", sub['name'], safe_exception_details(e))
 
-        # 从URL获取失败，尝试读取本地缓存
+        # 从URL获取失败，尝试读取本地缓存（健康记录已由 refresh_subscription 写入）
         cache = load_subscription_cache(sub_id)
         if cache:
             nodes = filter_subscription_items(sub, cache.get('nodes', []))
             cache_payload = cache
             from_cache = True
-            subscription_health.record_fetch(sub_id, ok=False, from_cache=True, count=len(nodes))
             current_app.logger.info(f"使用本地缓存数据: {sub['name']}, 节点数: {len(nodes)}")
         else:
             # 既没有从URL获取成功，也没有本地缓存
-            subscription_health.record_fetch(sub_id, ok=False)
             return jsonify({
                 'success': False,
                 'message': f'从订阅URL获取失败: {fetch_error}，且本地无缓存数据'

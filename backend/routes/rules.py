@@ -689,7 +689,7 @@ def get_local_rule(name):
                     'message': f'Rule not found in rule library: {name}. Please add it to the rule library first.'
                 }), 404
 
-        from backend.utils.rule_utils import refresh_remote_rule
+        from backend.utils.scheduled_refresh import read_rule_source
         from backend.utils.ruleset_content import RemoteRuleValidationError
         if rule.get('source_type', 'url') == 'url':
             try:
@@ -697,7 +697,8 @@ def get_local_rule(name):
                     response = request_rule(url, timeout=2, config_data=config_data)
                     response.raise_for_status()
                     return response.content
-                content, error = refresh_remote_rule(rule, config_data, fetch=fetch, allow_stale=True)
+                # Library sources are served from the cache the scheduled task keeps fresh.
+                content, error = read_rule_source(rule, config_data, fetch=fetch)
             except RemoteRuleValidationError as error:
                 return jsonify({'success': False, 'message': str(error), 'errors': error.errors,
                                 'cache_retained': False}), 422

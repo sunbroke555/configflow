@@ -147,7 +147,7 @@ def test_auto_loop_clears_context_after_every_profile_before_sleep(tmp_path, mon
     monkeypatch.setattr(service, '_AUTO_STARTED', False)
     monkeypatch.setattr(service.threading, 'Thread', CapturedThread)
     monkeypatch.setattr(config_module, 'get_repository', lambda: Repository())
-    monkeypatch.setattr(service, 'auto_round', run)
+    monkeypatch.setattr(service, 'run_auto_task', run)
     monkeypatch.setattr(time, 'sleep', sleep)
     service.start_auto_loop(tmp_path)
     with pytest.raises(StopLoop):

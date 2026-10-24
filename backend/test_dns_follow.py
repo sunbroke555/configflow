@@ -746,7 +746,8 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
         assert env.uploads == []
         assert env.state()['status'] == 'succeeded', env.state()
         assert env.state()['target_deployment_id'] is None
-        assert downloads == ([] if baseline_digest == 'full' else [url])
+        # Library rule sets come from the scheduled cache, not a new download.
+        assert downloads == []
         return
 
     if outage and not retain_cache:
@@ -764,7 +765,7 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
     expected['plugins'][0]['args']['upstreams'][1]['addr'] = 'udp://127.0.0.1:2053'
     assert env.uploaded_document() == expected
     assert len(env.uploads) == 1
-    assert downloads == [url] * (3 if outage and not retain_cache else 2)
+    assert downloads == [url] * (2 if outage and not retain_cache else 0)
 
 
 def test_unpublished_bound_address_cannot_be_mistaken_for_live_noop(follow_env, monkeypatch):

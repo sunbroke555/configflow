@@ -159,7 +159,7 @@ def build_mosdns_zip(config, yaml_content, downloads, custom_files, *, base_url=
         # Reuse rule-proxy's bounded transport and cache fallback. The explicit
         # snapshot keeps workers independent of Flask's request context.
         from backend.routes.mosdns import _fetch_remote_content
-        from backend.utils.rule_utils import refresh_remote_rule
+        from backend.utils.scheduled_refresh import read_rule_source
         kind, value, *identity = source
         if kind == 'inline':
             return value
@@ -170,11 +170,11 @@ def build_mosdns_zip(config, yaml_content, downloads, custom_files, *, base_url=
             from backend.converters.common import ruleset_format
             if ruleset_format(declared, config) == 'mrs':
                 raise RemoteRuleValidationError('OxiDNS/MosDNS 不支持 MRS 二进制规则，请使用该订阅的 Text 或 YAML 版本。')
-            content, error = refresh_remote_rule(
-                declared, config_data=config, allow_stale=True,
-                fetch=lambda url: _fetch_remote_content(url, config_data=config, raw=True))
+            content, error = read_rule_source(
+                declared, config, fetch=lambda url: _fetch_remote_content(url, config_data=config, raw=True))
             if error is not None:
-                detail = str(error) if isinstance(error, RemoteRuleValidationError) else safe_exception_details(error)
+                from backend.utils.scheduled_refresh import describe_failure
+                detail = describe_failure(error)
                 logger.warning('MosDNS ZIP 规则“%s”更新失败，使用上一次有效缓存：%s',
                                _label(sources[source][0][0]), detail)
             return content.decode('utf-8-sig')

@@ -17,6 +17,8 @@ from backend.utils.mosdns_archive import build_mosdns_zip, MosdnsArchiveError
 from backend.utils.remote_rule_sources import resolve_remote_rule_source
 from backend.utils.ruleset_content import RemoteRuleValidationError
 from backend.utils.rule_utils import read_validated_rule_cache, write_validated_rule_cache
+from backend.utils import task_status
+from backend.utils.scheduled_refresh import refresh_rule_source
 
 
 @pytest.fixture
@@ -82,12 +84,22 @@ def test_rule_proxy_uses_valid_cache_after_invalid_refresh(source_env, monkeypat
     write_validated_rule_cache(source, b'+.valid.example\n', config)
     monkeypatch.setattr(mosdns, 'get_config', lambda: config)
     monkeypatch.setattr(mosdns, '_require_rule_proxy_auth', lambda: True)
-    monkeypatch.setattr(mosdns, '_fetch_remote_content', lambda *a, **kw: 'DOMAIN,bad.example')
+    monkeypatch.setattr(mosdns, '_fetch_remote_content', lambda *a, **kw: pytest.fail('devices read the cache'))
+    with Flask(__name__).test_request_context(proxy_url(source)):
+        content, status, headers = mosdns.mosdns_rule_proxy()
+    assert (content, status) == ('domain:valid.example', 200)
+    assert 'X-ConfigFlow-Rule-Cache' not in headers
+    # The scheduled refresh rejects the invalid response and keeps the cache.
+    with pytest.raises(RemoteRuleValidationError):
+        refresh_rule_source(source, fetch=lambda _url: b'DOMAIN,bad.example')
     with Flask(__name__).test_request_context(proxy_url(source)):
         content, status, headers = mosdns.mosdns_rule_proxy()
     assert (content, status) == ('domain:valid.example', 200)
     assert headers['X-ConfigFlow-Rule-Cache'] == 'stale'
     assert read_validated_rule_cache(source, config) == b'+.valid.example\n'
+    entry = task_status.get('rule_source:source')
+    assert entry['last_status'] == 'failed' and entry['cache_retained'] is True
+    assert 'DOMAIN,bad.example' in entry['last_error']
 
 
 @pytest.mark.parametrize('cached', [False, True])

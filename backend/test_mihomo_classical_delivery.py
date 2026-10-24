@@ -10,6 +10,7 @@ from flask import Flask
 from backend.common import config as config_store
 from backend.common.config_repository import ProfileRepository
 from backend.converters.mihomo import generate_mihomo_config, get_mihomo_ruleset_downloads
+from backend.utils.scheduled_refresh import refresh_rule_source
 from backend.routes import register_blueprints
 from backend.utils.rule_utils import rule_cache_filename, save_rule_to_local
 
@@ -83,6 +84,16 @@ def test_url_source_and_fallback_keep_raw_cache(delivery, monkeypatch, remote_st
 
     monkeypatch.setattr('backend.routes.rules.request_rule', fetch)
     before = deepcopy(repository.export_all())
+
+    def scheduled(url):
+        response = fetch(url)
+        response.raise_for_status()
+        return response.content
+    # The scheduled task refreshes the cache; device pulls only read it.
+    try:
+        refresh_rule_source(rule, fetch=scheduled)
+    except requests.RequestException:
+        assert remote_state != 'fresh'
     response = client.get('/api/rules/local/Mixed?target=mihomo')
     assert response.status_code == 200
     assert response.get_data(as_text=True) == EXPECTED

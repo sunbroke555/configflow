@@ -244,6 +244,11 @@ class RuleSyncWorker:
             _update(self.manager, agent_id, state=state)
             if (previous.get('status'), previous.get('message')) != (status, message):
                 _log_state(agent, agent_id, status, message)
+            if status in ('succeeded', 'failed') and previous.get('status') != status:
+                # One finished run for 系统设置 → 定时任务, not one per poll.
+                from backend.utils import task_status
+                task_status.record(f'agent_rule_sync:{agent_id}', ok=status == 'succeeded', trigger='event',
+                                   error=state['message'])
 
     def run(self, agent_id):
         # Multiple web workers can start the loop; one device operation at a

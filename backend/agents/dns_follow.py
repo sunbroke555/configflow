@@ -277,6 +277,11 @@ def _state(manager, target_id, status, message, *, before_save=None, **fields):
         state['events'] = append_event(state.get('events'), status, message_safe, secrets=secrets)
         return deepcopy(state)
     result = manager._update_agents(save)
+    if names and status in ('succeeded', 'failed') and names[-1][1][0] != status:
+        # One finished run for 系统设置 → 定时任务, not one per reconcile round.
+        from backend.utils import task_status
+        task_status.record(f'dns_follow:{target_id}', ok=status == 'succeeded', trigger='event',
+                           error=result.get('message', ''))
     if names and names[-1][1] != (result.get('status'), result.get('message')):
         # A persistent error repeats every round; record only its first occurrence.
         from backend.utils.logger import log_text

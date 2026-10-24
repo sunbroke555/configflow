@@ -1000,6 +1000,46 @@ AUTO_FIRST_DELAY_SECONDS = 120
 _AUTO_STARTED = False
 
 
+def auto_task_key(profile_id):
+    return f'domain_discovery:{profile_id}'
+
+
+def run_auto_task(profile_id, trigger='schedule'):
+    """One automatic round, recorded for 系统设置 → 定时任务.
+
+    Profiles with automatic probing off are not recorded; a missing
+    prerequisite or a busy manual probe is a skipped run with its reason.
+    """
+    import time
+    from backend.utils import task_status
+    config = get_config(profile_id)
+    settings = read_settings(config)
+    if not settings['auto_probe']:
+        return None
+    key, started, clock = auto_task_key(profile_id), task_status.now_iso(), time.monotonic()
+
+    def finish(**fields):
+        task_status.record(key, started_at=started, trigger=trigger,
+                           duration_ms=(time.monotonic() - clock) * 1000, **fields)
+
+    if not proxy_probe_path(config, settings):
+        finish(ok=False, skipped=True, error='默认代理规则集没有指向代理策略组，无法探测代理路径')
+        return None
+    if not _probe_agents(profile_id):
+        finish(ok=False, skipped=True, error='没有开启域名发现的在线 Agent（需要 ' + MIN_PROBE_AGENT_VERSION + ' 或更新版本）')
+        return None
+    try:
+        outcome = auto_round(profile_id)
+    except ProbeBusy:
+        finish(ok=False, skipped=True, error='已有探测任务在运行，本轮跳过')
+        return None
+    except Exception as error:
+        finish(ok=False, error=safe_exception_details(error) if not isinstance(error, ProbeError) else str(error))
+        raise
+    finish(ok=True)
+    return outcome
+
+
 def start_auto_loop(lock_dir):
     """启动后台自动探测线程；用文件锁保证多进程部署时只有一个进程在跑。"""
     global _AUTO_STARTED
@@ -1025,8 +1065,8 @@ def start_auto_loop(lock_dir):
             for profile in get_repository().list_profiles():
                 reset_config_context()
                 try:
-                    outcome = auto_round(profile['id'])
-                    if any(outcome.values()):
+                    outcome = run_auto_task(profile['id'])
+                    if outcome and any(outcome.values()):
                         logger.info('域名发现自动任务（配置空间 %s）：探测 %s 个，自动加入 %s 个，复检 %s 个',
                                     profile['id'], outcome.get('probed', 0), outcome.get('applied', 0),
                                     outcome.get('rechecked', 0))
