@@ -228,3 +228,15 @@ def test_legacy_rule_sets_declaration_is_resolved_and_validated(source_env, with
     with pytest.raises(DeploymentPreparationError, match='Domain 不接受 Classical'):
         materialize_rule(source['url'], config, '', source_id=marker,
                          fetch_raw=lambda _url: b'DOMAIN,bad.example')
+
+
+def test_remote_library_yaml_cannot_be_delivered_as_text_provider(source_env, monkeypatch):
+    from backend.agents import deployment_bundle as bundles
+    _repo, source, config = source_env
+    config['rule_library'][0]['format'] = 'yaml'
+    main = {'rule-providers': {'custom': {'type': 'http',
+        'url': 'https://config.example/api/profiles/default/rules/local/域名订阅?target=mihomo',
+        'path': 'rules/custom.list', 'behavior': 'domain', 'format': 'text'}}}
+    monkeypatch.setattr(bundles, '_fetch_bytes', lambda *_args: b'payload:\n  - valid.example\n')
+    with pytest.raises(DeploymentPreparationError, match='声明为 text.*YAML payload'):
+        bundles.build_deployment_bundle({'id': 'agent', 'service_type': 'mihomo'}, config, yaml.safe_dump(main))

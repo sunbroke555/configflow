@@ -185,11 +185,6 @@ def test_bundle_layout_uses_library_format_like_rules_local_http(library_format,
     config = snapshot(source)
     config['rule_library'][0].update(behavior='domain', format=library_format)
     before = deepcopy(config)
-    if provider_format == 'text':
-        with pytest.raises(bundles.DeploymentPreparationError, match='声明为 text.*YAML payload'):
-            build(config, {'shared': provider('domain', provider_format)})
-        assert config == before
-        return
     files = contents(build(config, {'shared': provider('domain', provider_format)}))
     delivered = files['rules/shared.list'].decode()
     assert yaml.safe_load(delivered) == yaml.safe_load(source)
@@ -197,4 +192,17 @@ def test_bundle_layout_uses_library_format_like_rules_local_http(library_format,
         assert not yaml.compose(delivered).value[0][1].flow_style
     else:
         assert delivered == source
+    assert config == before
+
+
+def test_handwritten_ambiguous_classical_lines_keep_delivery_warnings(monkeypatch, caplog):
+    source = '.ambiguous.test\n*.ambiguous.test\nfull:ambiguous.test\n'
+    config = snapshot(source, 'content')
+    config['rule_library'][0]['format'] = 'text'
+    before = deepcopy(config)
+    monkeypatch.setattr('backend.utils.ruleset_content.validate_remote_rule_content',
+                        lambda *_args, **_kwargs: pytest.fail('Handwritten sources are not remote subscriptions'))
+    delivered = contents(build(config, {'shared': provider()}))
+    assert delivered['rules/shared.list'] == source.encode()
+    assert '3 unconverted lines' in caplog.text
     assert config == before
