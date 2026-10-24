@@ -73,6 +73,7 @@ Sub-Store 默认按需启动，空闲约 5 分钟后停止；第一次转换需�
 data/
 ├── config.json          # 系统、共享资源和全部配置空间
 ├── config.json.bak      # 配置备份文件
+├── runtime.sqlite3      # Agent 心跳状态（版本、服务状态、监控指标），可丢弃，下次心跳重建
 ├── shared/              # 共享订阅和规则缓存
 ├── profiles/<id>/       # 每个配置的生成文件、Provider 和转换规则
 ├── sub-store/           # 内置 Sub-Store 数据及在线更新组件
@@ -120,6 +121,8 @@ docker compose logs --tail=100 config-flow
 ```
 
 `latest` 是可变化的标签，不代表已核实包含某个修复。重要实例应记录可回退的版本或摘要，并先用数据副本验证。
+
+`runtime.sqlite3` 只保存 Agent 心跳状态，不在 JSON 导出和 WebDAV 备份里。原机恢复时它仍保留，各 Agent 显示恢复前最后一次心跳的状态；在没有它的新机器上恢复时，各 Agent 在下一次心跳前显示为注册时的状态。
 
 旧版多配置必须完整备份 `system.json`、`profiles/`、`.bak` 和缓存，不能只备份根 `config.json`。完整 JSON 导出也不包含主机上所有运行文件。迁移边界和恢复方法见 [升级、备份与恢复](../design/multi-config-management.md#升级备份与恢复)。
 

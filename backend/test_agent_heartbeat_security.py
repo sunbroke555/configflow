@@ -7,7 +7,7 @@ from flask import Flask, Request
 
 from backend.common import auth as auth_module
 from backend.common import config as config_module
-from backend.common.agent_manager import init_agent_manager
+from backend.common.agent_manager import get_agent_manager, init_agent_manager
 from backend.common.auth import MAX_AUTH_TOKEN_LENGTH
 from backend.common.config_repository import ProfileRepository
 from backend.routes import register_blueprints
@@ -81,7 +81,8 @@ def test_heartbeat_accepts_matching_bearer_token(tmp_path):
     )
 
     assert response.status_code == 200
-    agent = next(item for item in repository.get_system()["agents"] if item["id"] == registered["id"])
+    # Heartbeat state is read through the manager; it no longer lands in config.json.
+    agent = get_agent_manager().get_agent_by_id(registered["id"])
     assert agent["version"] == "2.0.0"
     assert agent["config_version"] == "cfg-2"
     assert agent["service_status"] == "running"
@@ -205,7 +206,7 @@ def test_authenticated_global_backup_preserves_secrets_for_recovery(tmp_path, mo
         json={"version": "restored"},
     )
     assert heartbeat.status_code == 200
-    assert restored.get_system()["agents"][0]["version"] == "restored"
+    assert get_agent_manager().get_agent_by_id(registered["id"])["version"] == "restored"
     assert registered["token"] not in heartbeat.get_data(as_text=True)
 
 
@@ -348,7 +349,8 @@ def test_heartbeat_accepts_chunked_json_without_content_length(tmp_path):
 
     assert response.status_code == 200
     assert stream.bytes_returned == len(b'{"version":"chunked"}')
-    agent = next(item for item in repository.get_system()["agents"] if item["id"] == registered["id"])
+    # Heartbeat state is read through the manager; it no longer lands in config.json.
+    agent = get_agent_manager().get_agent_by_id(registered["id"])
     assert agent["version"] == "chunked"
 
 
@@ -380,5 +382,6 @@ def test_heartbeat_accepts_whitelisted_system_metrics(tmp_path):
     )
 
     assert response.status_code == 200
-    agent = next(item for item in repository.get_system()["agents"] if item["id"] == registered["id"])
+    # Heartbeat state is read through the manager; it no longer lands in config.json.
+    agent = get_agent_manager().get_agent_by_id(registered["id"])
     assert agent["system_metrics"] == metrics
