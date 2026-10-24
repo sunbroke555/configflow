@@ -681,7 +681,7 @@ def test_existing_custom_reject_on_rule_file_stays_editable():
               'url': '/x/ads', 'behavior': 'domain', 'name': 'ads'},
              {'id': 'ruleset_cn', 'itemType': 'ruleset', 'library_rule_id': 'l2', 'policy': 'DIRECT', 'enabled': True,
               'url': '/x/cn', 'behavior': 'domain', 'name': 'cn'}]
-    config = {'rule_configs': items, 'system_config': {'server_domain': 'http://cf'}}
+    config = {'rule_configs': items, 'system_config': {'server_domain': 'http://cf', 'rule_proxy_token': 'test-only'}}
     for name in ('my_ads', 'rules_domain_9'):
         document, settings = native(config, direct_rulesets=['ruleset_cn'])
         document['plugins'].insert(0, {'tag': name, 'type': 'domain_set',

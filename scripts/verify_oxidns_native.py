@@ -393,7 +393,9 @@ def prepare_rule_dns(root, scenario):
     from backend.converters.mosdns import _ruleset_parts, convert_rule_content_for_mosdns
     from backend.converters.oxidns import _rule_path, generate_oxidns_config
     settings, rules, actions = rule_dns_inputs(scenario)
-    config = {'rule_configs': rules}
+    # Rule sets are always downloadable through the rule proxy, which needs a token.
+    config = {'rule_configs': rules,
+              'system_config': {'server_domain': 'http://config.invalid', 'rule_proxy_token': 'test-only'}}
     if RULE_DNS_SCENARIOS[scenario][0] == 'template':
         config['oxidns'] = {**settings, 'rule_actions': actions}
     else:
