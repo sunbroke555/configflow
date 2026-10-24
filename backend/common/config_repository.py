@@ -70,6 +70,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# Every version fills these in at startup: they never show an edit.
+_STARTUP_SETTINGS = ('rule_proxy_token', 'retired_rule_proxy_tokens')
+
+
+def _content_digest(value: Dict[str, Any]) -> str:
+    """Digest of a parsed config.json, independent of layout and key order."""
+    value = copy.deepcopy(value)
+    system = value.get('system')
+    for settings in (value.get('system_config'), system.get('system_config') if isinstance(system, dict) else None):
+        if isinstance(settings, dict):
+            for key in _STARTUP_SETTINGS:
+                settings.pop(key, None)
+    text = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     result: Dict[str, Any] = copy.deepcopy(base)
     for key, value in override.items():
@@ -488,9 +504,26 @@ class ProfileRepository:
                 'shared': document['shared'].get('_revision', 0),
                 'profiles': {key: profile.get('_revision', 0) for key, profile in document['profiles'].items()}}
 
+    def _legacy_content(self):
+        """_content_digest of config.json, or None when it cannot be read."""
+        try:
+            return _content_digest(self._read_json(self.legacy_path))
+        except ProfileRepositoryError:
+            return None
+
+    def _legacy_is_current(self):
+        """Whether config.json is a current-schema document (not a pre-schema root)."""
+        try:
+            return self._read_json(self.legacy_path).get('schema_version') == self.SCHEMA_VERSION
+        except ProfileRepositoryError:
+            return False
+
     def _legacy_record(self, document, status, at, *, data_source):
         sha256, size = self._legacy_fingerprint()
+        # revisions: baseline of current-schema files; content: of the older
+        # formats, which carry no revision counters.
         return {'sha256': sha256, 'size': size, 'revisions': self._revisions_of(document),
+                'content': self._legacy_content() if sha256 is not None else None,
                 'status': status, 'at': at, 'data_source': data_source and sha256 is not None}
 
     def _open_locked(self):
@@ -503,6 +536,11 @@ class ProfileRepository:
             if journal.exists():
                 # Never apply a journal left by another file to a new database.
                 os.replace(journal, journal.with_name(f'{journal.name}.orphan-{time.time_ns()}'))
+            earlier = self._earlier_databases()
+            if earlier:
+                logger.error('%s 不存在，但数据目录里有它以前的副本（%s）；将从旧配置文件重新迁移，'
+                             '之后的修改不在迁移结果中，请核对并按需从这些副本恢复',
+                             self.DATABASE_FILENAME, '、'.join(earlier))
             self._migrate_to_store_locked()
         else:
             try:
@@ -528,6 +566,14 @@ class ProfileRepository:
             with self._write_locked():
                 pass
 
+    def _earlier_databases(self):
+        """Damaged copies and snapshots that show a database existed here before."""
+        paths = sorted(self.data_dir.glob(f'{self.DATABASE_FILENAME}.corrupt-*'))
+        if self.migrations_dir.is_dir():
+            paths += sorted(self.migrations_dir.glob(f'*/*/{self.DATABASE_FILENAME}'))[-3:]
+        return [str(path.relative_to(self.data_dir)) for path in paths
+                if not path.name.endswith('-journal')]
+
     def _rebuild_corrupt_locked(self, error):
         """Replace a physically damaged database from a config.json known to match it."""
         record = self._store.salvage_meta()
@@ -535,15 +581,18 @@ class ProfileRepository:
         sha256, size = self._legacy_fingerprint()
         if record is None:
             # Nothing tells which file the data came from: config.json is a
-            # source unless it is the stale root of a split installation.
-            usable = sha256 is not None and not (self.data_dir / 'system.json').exists()
+            # source unless it is the stale (pre-schema) root of a split
+            # installation. Older versions keep system.json after migrating a
+            # split layout to a schema-5 config.json, which is then authoritative.
+            usable = sha256 is not None and (
+                not (self.data_dir / 'system.json').exists() or self._legacy_is_current())
         else:
             usable = (sha256 is not None and isinstance(legacy, dict) and legacy.get('data_source') is True and
                       legacy.get('sha256') == sha256 and legacy.get('size') == size)
         if not usable:
             raise ProfileRepositoryError(
                 f'配置数据库 {self.DATABASE_FILENAME} 已损坏（{error}），且没有可安全使用的恢复来源；'
-                '请停止服务，用“导出全部数据”的备份或 migrations/ 下的快照恢复。损坏文件未改动。') from error
+                f'请停止服务后恢复：{self._RESTORE_HINT}损坏文件未改动。') from error
         try:
             document = self._read_with_backup(
                 self.legacy_path, lambda value: self._validate_document(self._convert_import(value)))
@@ -553,7 +602,7 @@ class ProfileRepository:
         except ProfileRepositoryError as failure:
             raise ProfileRepositoryError(
                 f'配置数据库 {self.DATABASE_FILENAME} 已损坏（{error}），config.json 也无法使用（{failure}）；'
-                '请停止服务，用“导出全部数据”的备份或 migrations/ 下的快照恢复。损坏文件未改动。') from failure
+                f'请停止服务后恢复：{self._RESTORE_HINT}损坏文件未改动。') from failure
         now = _now()
         corrupt = self._store.corrupt_target()
         corrupt_name = corrupt.name
@@ -576,6 +625,9 @@ class ProfileRepository:
                      '可用的数据库快照：%s', error, corrupt.name,
                      '、'.join(str(path.relative_to(self.data_dir)) for path in snapshots) or '无')
 
+    _RESTORE_HINT = ('用“导出全部数据”的备份导入；或把 migrations/ 下 import/、legacy-config/ 快照里的 '
+                     'configflow.sqlite3 复制回数据目录；migration/ 快照只有迁移前的旧配置文件，需放回后重新迁移或导入。')
+
     def _import_changed_legacy_locked(self):
         """Import config.json once if an older version edited it during a rollback."""
         if self.legacy_path.is_symlink() or not self.legacy_path.is_file():
@@ -588,7 +640,8 @@ class ProfileRepository:
         now = _now()
         rejected = {**record, 'sha256': sha256, 'size': size, 'status': 'rejected', 'at': now, 'data_source': False}
         try:
-            converted = self._convert_import(self._read_json(self.legacy_path))
+            raw = self._read_json(self.legacy_path)
+            converted = self._convert_import(raw)
             self._ensure_rule_proxy_token(converted['system'])
             self._validate_document(converted)
         except Exception as error:  # any unusable content: keep the database as it is
@@ -605,18 +658,29 @@ class ProfileRepository:
         # Older versions rewrite config.json at startup without edits (token,
         # re-migration, defaults). Only a revision bump or a changed profile set
         # shows an edit; anything else would replace newer data with stale data.
-        edited = (above(revisions['system'], baseline.get('system')) or
-                  above(revisions['shared'], baseline.get('shared')) or
-                  set(revisions['profiles']) != set(old_profiles) or
-                  any(above(value, old_profiles.get(key)) for key, value in revisions['profiles'].items()))
+        current_schema = raw.get('schema_version') == self.SCHEMA_VERSION
+        content = _content_digest(raw)
+        same_content = content == record.get('content')
+        if not current_schema and record.get('content') is not None:
+            # The original single-file format (and schema 2) has no revision
+            # counters: any change of its content is an edit.
+            edited = not same_content
+        else:
+            # No content baseline (config.json was missing or unreadable at
+            # migration): as for current-schema files, only revisions count.
+            edited = (above(revisions['system'], baseline.get('system')) or
+                      above(revisions['shared'], baseline.get('shared')) or
+                      set(revisions['profiles']) != set(old_profiles) or
+                      any(above(value, old_profiles.get(key)) for key, value in revisions['profiles'].items()))
         if not edited:
             logger.info('config.json 在迁移后被改写，但没有新的修改；已记录，不导入')
-            # Same revisions as the recorded data: it stays a source exactly
-            # when the previous file was one (e.g. only a token was added).
-            self._commit_meta_locked({'legacy_config': {**record, 'sha256': sha256, 'size': size,
-                                                        'status': 'ignored', 'at': now}})
+            # Same data as recorded: it stays a source exactly when the
+            # previous file was one (e.g. only a token was added).
+            self._commit_meta_locked({'legacy_config': {
+                **record, 'sha256': sha256, 'size': size, 'status': 'ignored', 'at': now,
+                'data_source': record.get('data_source') is True and (current_schema or same_content)}})
             return
-        meta = {'legacy_config': {'sha256': sha256, 'size': size, 'revisions': revisions,
+        meta = {'legacy_config': {'sha256': sha256, 'size': size, 'revisions': revisions, 'content': content,
                                   'status': 'imported', 'at': now, 'data_source': True},
                 'last_legacy_import': {'at': now, 'sha256': sha256, 'snapshot': None}}
         try:
@@ -805,12 +869,12 @@ class ProfileRepository:
     def _set_cache(self, entry):
         if entry.size > self.DOCUMENT_CACHE_MAX_BYTES:
             return
+        # Always the latest loaded or committed entry: every read compares its
+        # head with the database, so an older one only costs a reload, while a
+        # guard on the generation number would keep a stale entry after a
+        # restored (older) database reaches the same generation again.
         with self._cache_lock:
-            current = self._document_cache
-            # Monotonic per database: a slow reader never replaces a newer entry.
-            if (current is None or current.head.store_id != entry.head.store_id or
-                    current.head.generation < entry.head.generation):
-                self._document_cache = entry
+            self._document_cache = entry
 
     def _drop_cache(self):
         with self._cache_lock:

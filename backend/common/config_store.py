@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import time
@@ -76,7 +77,9 @@ class ConfigStorageError(OSError):
     """A runtime SQLite failure; keeps the 500 semantics of disk errors."""
 
 
-Head = namedtuple('Head', 'store_id generation')
+# commit_id is random per committed generation: a restored older database
+# that reaches the same generation number again never matches a cached head.
+Head = namedtuple('Head', 'store_id generation commit_id')
 Entry = namedtuple('Entry', 'head document size')
 Changes = namedtuple('Changes', 'delete_sections upsert_sections delete_fields upsert_fields root_order')
 
@@ -199,7 +202,9 @@ class ConfigStore:
         connection = sqlite3.connect(uri, uri=True, timeout=self._timeout(), isolation_level=None)
         try:
             connection.execute('PRAGMA foreign_keys=ON')
-            connection.execute('PRAGMA synchronous=FULL')
+            # EXTRA = FULL plus a directory fsync after the DELETE-mode journal
+            # is unlinked, which is the commit point.
+            connection.execute('PRAGMA synchronous=EXTRA')
         except BaseException:
             connection.close()
             raise
@@ -251,11 +256,13 @@ class ConfigStore:
             raise StoreCorrupt(f'数据库元信息无法解析：{error}') from error
 
     def head(self, connection) -> Head:
-        meta = self._meta_rows(connection, ('store_id', 'generation'))
-        store_id, generation = meta.get('store_id'), meta.get('generation')
+        meta = self._meta_rows(connection, ('store_id', 'generation', 'commit_id'))
+        store_id, generation, commit_id = meta.get('store_id'), meta.get('generation'), meta.get('commit_id')
         if not isinstance(store_id, str) or not isinstance(generation, int) or isinstance(generation, bool):
             raise StoreCorrupt('数据库元信息缺少 store_id/generation')
-        return Head(store_id, generation)
+        if commit_id is not None and not isinstance(commit_id, str):
+            raise StoreCorrupt('数据库元信息 commit_id 无效')
+        return Head(store_id, generation, commit_id)
 
     def meta(self, key: str, connection=None):
         if connection is None:
@@ -342,6 +349,9 @@ class ConfigStore:
                     connection.execute('ROLLBACK')
                     return None
                 generation = head.generation + (1 if changed else 0)
+                commit_id = uuid.uuid4().hex if changed else head.commit_id
+                if changed:
+                    meta['commit_id'] = commit_id
                 self._apply(connection, changes, generation, meta)
                 self._commit(connection)
             except BaseException:
@@ -359,7 +369,7 @@ class ConfigStore:
             if stored_fields.get(key, (None, None))[1] == text:
                 value = _lookup(base.document, *key)
             parsed[key] = (position, json.loads(text) if value is _ABSENT else value)
-        return Entry(Head(head.store_id, generation), build_document(root_order, sections, parsed), size)
+        return Entry(Head(head.store_id, generation, commit_id), build_document(root_order, sections, parsed), size)
 
     def _apply(self, connection, changes: Changes, generation: int, meta: Dict[str, Any]) -> None:
         """Every statement of one commit (seam for failure injection before COMMIT)."""
@@ -419,7 +429,7 @@ class ConfigStore:
                 for statement in SCHEMA:
                     connection.execute(statement)
                 values = {'storage_version': STORAGE_VERSION, 'store_id': uuid.uuid4().hex, 'generation': 1,
-                          'root_order': root_order, 'created_at': _now(), **meta}
+                          'commit_id': uuid.uuid4().hex, 'root_order': root_order, 'created_at': _now(), **meta}
                 connection.executemany('INSERT INTO meta (key, value) VALUES (?, ?)',
                                        [(key, dumps(value)) for key, value in values.items()])
                 connection.executemany('INSERT INTO sections (scope, owner, position) VALUES (?, ?, ?)',
@@ -511,11 +521,20 @@ class ConfigStore:
         return self.path.with_name(f'{self.path.name}.corrupt-{time.time_ns()}')
 
     def preserve_corrupt(self, target: Optional[Path] = None) -> Path:
-        """Move the damaged file (and its hot journal) aside, never delete it."""
+        """Keep the damaged file (and its hot journal) under another name.
+
+        The file itself stays in place until install() atomically replaces it:
+        a crash in between leaves the damaged database, never a missing one.
+        """
         target = target or self.corrupt_target()
-        os.replace(self.path, target)
+        try:
+            os.link(self.path, target)
+        except OSError:  # filesystems without hard links (some NAS)
+            shutil.copy2(self.path, target)
+            self._fsync_file(target)
         journal = Path(str(self.path) + '-journal')
         if journal.exists():
+            # Must go before install(): it would be applied to the new file.
             os.replace(journal, Path(str(target) + '-journal'))
         self._fsync_dir()
         return target

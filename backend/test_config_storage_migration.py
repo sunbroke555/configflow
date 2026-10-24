@@ -241,11 +241,46 @@ def test_config_json_edited_by_older_version_is_imported_once(tmp_path, caplog):
     assert not caplog.records
 
 
-@pytest.mark.parametrize('rewrite', ['reformatted', 'token-added', 'remigrated'])
+def test_legacy_single_file_edited_by_pre_profile_version_is_imported_once(tmp_path, caplog):
+    # The original single-file format has no _revision: only its content
+    # tells whether the rolled-back version changed anything.
+    write_json(tmp_path / 'config.json', legacy_single())
+    repository = ProfileRepository(tmp_path)
+    repository.update_profile('default', {'name': 'Newer data'})
+
+    def edit(document):
+        document['subscriptions'][0]['url'] = 'https://edited.example/sub'
+        document['subscriptions'].append({'id': 'sub-2', 'name': 'Added', 'url': 'https://added.example/sub'})
+    bump(tmp_path / 'config.json', edit)
+
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        reopened = ProfileRepository(tmp_path)
+    assert [item['url'] for item in reopened.get_shared()['subscriptions']] == [
+        'https://edited.example/sub', 'https://added.example/sub']
+    assert any('config.json' in record.getMessage() and record.levelno == logging.WARNING
+               for record in caplog.records)
+    record = reopened._store.meta('legacy_config')
+    assert record['status'] == 'imported' and record['data_source'] is True
+    assert record['sha256'] == sha(tmp_path / 'config.json')
+    [snapshot] = snapshots(tmp_path, 'legacy-config')
+    saved = ConfigStore(snapshot / DB, lambda: 1.0).load().document
+    assert saved['profiles']['default']['name'] == 'Newer data'
+
+    fingerprint = reopened._store.fingerprint()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        again = ProfileRepository(tmp_path)
+    assert again._store.fingerprint() == fingerprint
+    assert len(snapshots(tmp_path, 'legacy-config')) == 1
+    assert not caplog.records
+
+
+@pytest.mark.parametrize('rewrite', ['reformatted', 'token-added', 'remigrated',
+                                     'legacy-reformatted', 'legacy-token-added'])
 def test_config_json_rewritten_without_edits_is_not_imported(tmp_path, rewrite):
     root = tmp_path / 'data'
     root.mkdir()
-    if rewrite == 'remigrated':
+    if rewrite in ('remigrated', 'legacy-reformatted', 'legacy-token-added'):
         write_json(root / 'config.json', legacy_single())
     else:
         write_json(root / 'config.json', schema5(tmp_path, token=rewrite != 'token-added'))
@@ -253,10 +288,13 @@ def test_config_json_rewritten_without_edits_is_not_imported(tmp_path, rewrite):
     repository.update_profile('default', {'name': 'Newer data'})
     current = repository.export_all()
     generation = repository._store.fingerprint()[1]
-    if rewrite == 'reformatted':
+    if rewrite in ('reformatted', 'legacy-reformatted'):
         (root / 'config.json').write_text(json.dumps(json.loads((root / 'config.json').read_text())))
     elif rewrite == 'token-added':
         bump(root / 'config.json', lambda document: document['system']['system_config'].update(
+            rule_proxy_token='older-version-token'))
+    elif rewrite == 'legacy-token-added':
+        bump(root / 'config.json', lambda document: document['system_config'].update(
             rule_proxy_token='older-version-token'))
     else:
         # An older version re-migrates the untouched legacy file at its startup.
@@ -416,6 +454,23 @@ def test_stale_root_of_a_split_layout_is_never_a_rebuild_source(tmp_path):
     assert not list(tmp_path.glob(f'{DB}.corrupt-*'))
 
 
+def test_schema5_config_json_next_to_a_split_layout_is_a_rebuild_source(tmp_path):
+    # Older versions keep system.json after migrating a split layout to a
+    # schema-5 config.json, which is then the authoritative file.
+    root = tmp_path / 'data'
+    _install_split(root, _bundle(), legacy='missing')
+    write_json(root / 'config.json', schema5(tmp_path))
+    repository = ProfileRepository(root)
+    assert repository._store.meta('migration')['source'] == 'config-v5'
+    repository.create_profile({'id': 'b', 'name': 'B'})
+    (root / DB).write_bytes(b'garbage' * 100)
+    rebuilt = ProfileRepository(root)
+    [corrupt] = root.glob(f'{DB}.corrupt-*')
+    assert corrupt.read_bytes() == b'garbage' * 100
+    assert rebuilt.get_profile('default')['description'] == 'from config.json'
+    assert rebuilt._store.meta('migration')['source'] == 'corrupt-rebuild'
+
+
 def test_rebuild_source_follows_imports_and_rejections(tmp_path):
     root = tmp_path / 'data'
     root.mkdir()
@@ -445,6 +500,47 @@ def test_empty_database_file_counts_as_corrupt(tmp_path):
     assert repository.get_shared()['subscriptions'][0]['id'] == 'sub-1'
 
 
+class _Crash(BaseException):
+    """A process killed in the middle of a step."""
+
+
+def test_crash_before_installing_the_rebuild_keeps_the_damaged_file_in_place(tmp_path, monkeypatch, caplog):
+    _migrated_with_legacy(tmp_path)
+    garbage = b'garbage' * 100
+    (tmp_path / DB).write_bytes(garbage)
+
+    def crash(self, temporary):
+        raise _Crash()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ConfigStore, 'install', crash)
+        with pytest.raises(_Crash):
+            ProfileRepository(tmp_path)
+    # Never a moment without the database: the next start rebuilds again.
+    assert (tmp_path / DB).read_bytes() == garbage
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger=LOGGER):
+        repository = ProfileRepository(tmp_path)
+    assert repository._store.meta('migration')['source'] == 'corrupt-rebuild'
+    assert repository._store.meta('recovered_from')['source'] == 'config.json'
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+    corrupt = list(tmp_path.glob(f'{DB}.corrupt-*'))
+    assert corrupt and all(path.read_bytes() == garbage for path in corrupt)
+
+
+def test_missing_database_after_an_earlier_one_is_reported(tmp_path, caplog):
+    _migrated_with_legacy(tmp_path)
+    (tmp_path / DB).write_bytes(b'garbage' * 100)
+    ProfileRepository(tmp_path)
+    (tmp_path / DB).unlink()
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger=LOGGER):
+        repository = ProfileRepository(tmp_path)
+    assert repository.get_shared()['subscriptions'][0]['id'] == 'sub-1'
+    assert any(record.levelno == logging.ERROR and '.corrupt-' in record.getMessage()
+               for record in caplog.records)
+
+
 def test_hot_journal_moves_with_the_corrupt_database(tmp_path):
     # SQLite itself rolls back or discards a journal it can read when the
     # file is opened; one that is still there belongs to the damaged file.
@@ -455,7 +551,10 @@ def test_hot_journal_moves_with_the_corrupt_database(tmp_path):
     corrupt = store.preserve_corrupt()
     assert corrupt.read_bytes() == database
     assert Path(str(corrupt) + '-journal').read_bytes() == b'journal bytes'
-    assert not (tmp_path / DB).exists() and not (tmp_path / f'{DB}-journal').exists()
+    # The damaged file stays in place until install() replaces it atomically;
+    # its journal must already be gone so it never applies to the new file.
+    assert (tmp_path / DB).read_bytes() == database
+    assert not (tmp_path / f'{DB}-journal').exists()
 
 
 def test_orphan_journal_without_database_is_set_aside(tmp_path):
@@ -622,6 +721,34 @@ def test_cache_follows_the_generation(tmp_path, monkeypatch):
     for _ in range(3):
         assert repository.get_profile('default')['name'] == 'Elsewhere'
     assert counts == {'load': 1, 'validate': 1}
+
+
+def test_restored_older_database_is_never_served_from_cache(tmp_path):
+    repository = ProfileRepository(tmp_path)
+    other = ProfileRepository(tmp_path)
+
+    def mark(value):
+        repository.update_system_transaction(lambda system: system['system_config'].update(marker=value))
+
+    mark('snapshot')
+    backup = tmp_path / 'backup.sqlite3'
+    repository._store.backup_to(backup)
+    for index in range(3):
+        mark(f'live{index}')
+    assert other.get_system()['system_config']['marker'] == 'live2'
+    # An operator restores the snapshot while the service runs; later
+    # writes bring the generation back to the number cached before.
+    source, target = sqlite3.connect(backup), sqlite3.connect(tmp_path / DB)
+    source.backup(target)
+    source.close()
+    target.close()
+    for index in range(3):
+        mark(f'post{index}')
+    assert repository.get_system()['system_config']['marker'] == 'post2'
+    assert other.get_system()['system_config']['marker'] == 'post2'
+    repository.update_system_transaction(lambda system: system['system_config'].update(other=1))
+    settings = ProfileRepository(tmp_path).get_system()['system_config']
+    assert (settings['marker'], settings['other']) == ('post2', 1)
 
 
 # -- delete tombstones --------------------------------------------------------------

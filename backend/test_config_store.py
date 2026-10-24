@@ -77,7 +77,8 @@ def test_pragmas_and_file_mode(tmp_path, monkeypatch):
     connection = repository._store.connect()
     try:
         assert connection.execute('PRAGMA foreign_keys').fetchone()[0] == 1
-        assert connection.execute('PRAGMA synchronous').fetchone()[0] == 2
+        # EXTRA (3): the directory is synced after the journal is unlinked.
+        assert connection.execute('PRAGMA synchronous').fetchone()[0] == 3
         assert connection.execute('PRAGMA journal_mode').fetchone()[0] == 'delete'
         assert connection.execute('PRAGMA busy_timeout').fetchone()[0] == 7000
         assert connection.execute('PRAGMA application_id').fetchone()[0] == 0x43464C57
@@ -106,7 +107,8 @@ def test_commit_writes_only_changed_rows(tmp_path):
     document = sample_document()
     document['profiles']['zeta']['name'] = 'Renamed'
     entry = target.commit(base, document)
-    assert entry.head == (base.head.store_id, 2)
+    assert entry.head[:2] == (base.head.store_id, 2)
+    assert entry.head.commit_id not in (None, base.head.commit_id)
     stored = rows(target.path)
     assert stored[('profile', 'zeta', 'name')] == (dumps('Renamed'), 2)
     assert {key for key, (_, revision) in stored.items() if revision == 2} == {('profile', 'zeta', 'name')}
