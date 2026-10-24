@@ -482,6 +482,16 @@ body {
   .router-records td:nth-child(5) { grid-area: status; }
   .router-records td:last-child { grid-area: actions; }
 
+  /* 客户端设备：地址与移除同排，名称与 DNS 策略同排。 */
+  .client-device-records tbody tr {
+    grid-template-areas: 'ip actions' 'name mode';
+  }
+
+  .client-device-records td:nth-child(1) { grid-area: ip; }
+  .client-device-records td:nth-child(2) { grid-area: name; }
+  .client-device-records td:nth-child(3) { grid-area: mode; }
+  .client-device-records td:last-child { grid-area: actions; align-self: start; }
+
   .router-record-actions {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -51,7 +51,7 @@
           <Input v-model="search" class="min-h-11 pl-9" aria-label="搜索设备" placeholder="搜索名称或 IP…" />
         </div>
         <div v-if="visibleRows.length" class="cf-table-wrap">
-          <table class="cf-table cf-mobile-records w-full min-w-[620px]" role="table">
+          <table class="cf-table cf-mobile-records client-device-records w-full min-w-[620px]" role="table">
             <thead role="rowgroup">
               <tr role="row">
                 <th role="columnheader" scope="col">IP / 网段</th>
@@ -62,7 +62,7 @@
             </thead>
             <tbody role="rowgroup">
               <tr v-for="row in visibleRows" :key="row.ip" role="row" :data-client-ip="row.ip">
-                <td role="cell" class="cf-record-wide font-mono text-xs" data-label="IP / 网段">
+                <td role="cell" class="font-mono text-xs" data-label="IP / 网段">
                   {{ row.ip }}
                   <span v-if="!saved(row.ip)" class="chip ml-2 font-sans">未保存</span>
                 </td>
@@ -72,7 +72,7 @@
                 </td>
                 <td role="cell" data-label="DNS 策略">
                   <Select :model-value="row.mode || 'default'" :disabled="publishing || !state.editable" @update:model-value="value => setMode(row, String(value))">
-                    <SelectTrigger :aria-label="row.ip + ' DNS 策略'" class="min-h-11 w-36"><SelectValue /></SelectTrigger>
+                    <SelectTrigger :aria-label="row.ip + ' DNS 策略'" class="min-h-11 w-36 max-sm:w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="default">默认</SelectItem>
                       <SelectItem value="smart">智能分流</SelectItem>
@@ -80,7 +80,7 @@
                     </SelectContent>
                   </Select>
                 </td>
-                <td role="cell" class="cf-record-wide text-right">
+                <td role="cell" class="text-right">
                   <div class="flex items-center justify-end gap-2">
                     <Loader2 v-if="savingIp === row.ip" class="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" aria-label="正在保存" />
                     <span v-else-if="failures[row.ip]" class="flex items-center gap-1 text-xs text-destructive-accent" role="alert">
@@ -124,7 +124,7 @@
         <div v-if="state.agents.length" class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
           <p class="m-0 min-w-0 flex-1 text-xs text-muted-foreground">发布的是「{{ state.profile_name }}」的完整已保存配置，包含其他草稿修改。</p>
           <Button class="min-h-11" :disabled="!selected.length || publishing || !!savingIp || selected.some(busy)" @click="publish">
-            <Loader2 v-if="publishing" class="size-4 animate-spin" /><Upload v-else class="size-4" />{{ publishing ? '发布中…' : `发布到 ${selected.length} 台 OxiDNS` }}
+            <Loader2 v-if="publishing" class="size-4 animate-spin" /><Upload v-else class="size-4" />{{ publishing ? '发布中…' : selected.length ? `发布到 ${selected.length} 台 OxiDNS` : '选择要发布的 OxiDNS' }}
           </Button>
         </div>
       </SectionCard>
@@ -245,7 +245,9 @@ async function load() {
 }
 
 async function loadRecorder(data: ClientDevicesState) {
-  const agent = data.agents.find(item => item.id === fromAgent) || data.agents.find(item => item.status === 'online')
+  // Query records come from an online OxiDNS, preferably the one this page was opened from.
+  const online = data.agents.filter(item => item.status === 'online')
+  const agent = online.find(item => item.id === fromAgent) || online[0]
   queryAgent.value = agent?.id || ''
   recorder.value = ''
   queryHint.value = agent ? '' : '没有在线的 OxiDNS，可手动添加 IP 或网段。'

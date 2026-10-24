@@ -152,6 +152,15 @@ describe('client devices page', () => {
     expect(stored[0].name).toBe('新名')
   })
 
+  it('reads query records from an online OxiDNS and asks for a target when none is selected', async () => {
+    vi.mocked(clientDeviceApi.get).mockResolvedValue(response(state(undefined, { agents: agents.map(agent => ({ ...agent, status: agent.id === 'two' ? 'online' : 'offline' })) })))
+    const { wrapper } = await render('/client-devices?agent=one')
+    expect(oxidnsMonitorApi.overview).toHaveBeenCalledWith('two')
+    await wrapper.get('[aria-label="发布到 DNS 1"]').trigger('click')
+    await flushPromises()
+    expect(button(wrapper, '选择要发布的 OxiDNS').attributes('disabled')).toBeDefined()
+  })
+
   it('opens the bound profile from an OxiDNS Agent and targets only that device', async () => {
     const { wrapper, router } = await render('/client-devices?agent=two')
     expect(clientDeviceApi.get).toHaveBeenCalledWith({ agentId: 'two' })
