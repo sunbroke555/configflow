@@ -316,7 +316,7 @@ def handle_custom_mihomo_config():
                 except ValueError as exc:
                     return jsonify({'success': False, 'message': str(exc)}), 400
                 config_data['mihomo']['provider_update_interval'] = interval
-            # 预先做 YAML 校验：避免把坏的 custom_config 写进 config.json，
+            # 预先做 YAML 校验：避免把坏的 custom_config 写进配置数据库，
             # 下次生成时反而更难定位问题（生成路径也会 fail-closed）。
             if custom_config and custom_config.strip():
                 try:

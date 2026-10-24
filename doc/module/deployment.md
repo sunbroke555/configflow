@@ -71,12 +71,13 @@ Sub-Store 默认按需启动，空闲约 5 分钟后停止；第一次转换需�
 
 ```text
 data/
-├── config.json          # 系统、共享资源和全部配置空间
-├── config.json.bak      # 配置备份文件
+├── configflow.sqlite3   # 系统、共享资源和全部配置空间
+├── config.json          # 仅升级前的旧格式副本（若存在），新版本不再写入
+├── configflow.sqlite3.corrupt-*  # 数据库损坏时保留的原文件（仅在出现损坏时）
 ├── shared/              # 共享订阅和规则缓存
 ├── profiles/<id>/       # 每个配置的生成文件、Provider 和转换规则
 ├── sub-store/           # 内置 Sub-Store 数据及在线更新组件
-├── migrations/          # 迁移快照与删除配置时的保留数据
+├── migrations/          # 迁移/导入快照（含数据库备份）与删除配置的保留数据（含 deleted-profile.json）
 └── app.log              # 服务日志，路径可由 LOG_FILE 调整
 ```
 
@@ -101,7 +102,7 @@ data/
 ## 备份与升级
 
 1. 在「系统设置」导出全部数据，并记录当前镜像版本或摘要。
-2. 停服后复制整个实际挂载的数据目录。
+2. 停服后复制整个实际挂载的数据目录。服务运行时不要只复制 `configflow.sqlite3`，可能复制到写到一半的状态；运行中请使用导出或 WebDAV 备份。
 3. 确认备份成功，再更新镜像。
 
 本例使用相对路径 `./data`：
