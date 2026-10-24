@@ -6,6 +6,7 @@
       </template>
       <template #actions>
         <Button v-if="fromAgent" variant="outline" class="min-h-11" @click="router.push(oxidnsMonitorPath(fromAgent))"><ArrowLeft class="size-4" />返回 OxiDNS 面板</Button>
+        <Button v-else-if="backTo" variant="outline" class="min-h-11" @click="router.push(backTo)"><ArrowLeft class="size-4" />{{ backTo.startsWith('/setup') ? '返回配置向导' : '返回上游路由' }}</Button>
         <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" aria-label="重新载入" title="重新载入" :disabled="loading || publishing" @click="reload">
           <RefreshCw class="size-4" :class="{ 'animate-spin motion-reduce:animate-none': loading }" /><span class="max-sm:sr-only">重新载入</span>
         </Button>
@@ -183,6 +184,8 @@ const router = useRouter()
 const agentOf = (value: unknown) => typeof value === 'string' ? value : ''
 /** 从 OxiDNS 面板进入时固定使用该设备绑定的配置空间，不切换全局空间 */
 const fromAgent = ref(agentOf(route.query.agent))
+/** 从上游路由或配置向导进入时的返回地址，只接受站内路径 */
+const backTo = computed(() => { const value = route.query.from; return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '' })
 /** 从上游路由等页面进入其他配置空间时同样不切换全局空间 */
 const fromProfile = ref(agentOf(route.query.profile))
 // Matches the breakpoint where .cf-mobile-records hides the table header and its help.

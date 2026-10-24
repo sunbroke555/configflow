@@ -96,7 +96,8 @@ describe('one-place DNS and ROS workflow', () => {
     expect(routerApi.apply).not.toHaveBeenCalled()
   })
   it('shows sources read-only and sends their management to the client devices page', async () => {
-    state.sources.policies = [...state.sources.policies, { ip: '192.0.2.0/24', name: '', mode: 'direct' }, { ip: '2001:db8::5', name: 'IPv6', mode: 'smart' }]
+    state.sources.policies = [...state.sources.policies, { ip: '192.0.2.0/24', name: '', mode: 'direct' }, { ip: '2001:db8::5', name: 'IPv6', mode: 'smart' },
+      { ip: '192.0.2.4', name: '网关', mode: 'smart' }]
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }, { path: '/client-devices', component: { template: '<div />' } }] })
     await router.push('/')
     const w = mount(PolicyRoutingPanel, { attachTo: document.body, props: { id: 'ros', name: 'ROS', profile: 'office' }, global: { plugins: [router] } })
@@ -107,8 +108,16 @@ describe('one-place DNS and ROS workflow', () => {
     expect(rows[0]).toContain('NAS'); expect(rows[0]).toContain('智能分流'); expect(rows[0]).toContain('参与')
     expect(rows[1]).toContain('直连'); expect(rows[1]).toContain('不参与')
     expect(rows[2]).toContain('不参与')
+    // The proxy gateway itself never becomes a policy routing source.
+    expect(rows[3]).toContain('不参与')
     await click(w, '在客户端设备中管理')
-    expect(router.currentRoute.value.fullPath).toBe('/client-devices?profile=office')
+    expect(router.currentRoute.value.path).toBe('/client-devices')
+    expect(router.currentRoute.value.query).toEqual({ from: '/', profile: 'office' })
+  })
+  it('marks no source as routed while no policy rule set is selected', async () => {
+    state.router.ros_policy_rule_sets = []
+    const w = await setup()
+    expect(w.findAll('tbody tr').map(row => row.text().includes('不参与'))).toEqual([true])
   })
   it('saves routing settings without sources, previews, and only publishes after explicit confirmation', async () => {
     const w = await setup()

@@ -20,7 +20,7 @@
         <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
             <span class="min-w-0 break-words">{{ state.profile_name }} · 共用来源设备</span>
-            <FieldHelp label="来源设备" :text="optionHelp('在「客户端设备」中设为智能分流的 IPv4 设备或网段参与 ROS 策略路由。', '更具体的直连例外及 Mihomo 自身会被排除。直连设备仍遵循主表静态路由；IPv6 策略仅作用于 OxiDNS，不会建立 ROS IPv6 策略。修改来源后，需在这里重新保存并预览发布。')" />
+            <FieldHelp label="来源设备" :text="optionHelp('已选择「使用策略路由的 IP 规则集」时，在「客户端设备」中设为智能分流的 IPv4 设备或网段参与 ROS 策略路由。', '更具体的直连例外及 Mihomo 自身会被排除。直连设备仍遵循主表静态路由；IPv6 策略仅作用于 OxiDNS，不会建立 ROS IPv6 策略。修改来源后，需在这里重新保存并预览发布。')" />
           </div>
           <Button variant="outline" class="min-h-11" :disabled="locked || editing" @click="openClientDevices"><MonitorSmartphone class="size-4" />在客户端设备中管理</Button>
         </div>
@@ -140,14 +140,14 @@
           </section>
         </div>
       </TabsContent>
-      <TabsContent value="objects" class="m-0"><PolicyRoutingObjects :id="id" :profile="profile" :disabled="locked || editing" :sources-editable="state.sources.editable" @add-source="openClientDevices" @edit-destinations="editDestinations()" @edit="editObject" /></TabsContent>
+      <TabsContent value="objects" class="m-0"><PolicyRoutingObjects :id="id" :profile="profile" :disabled="locked || editing" @add-source="openClientDevices" @edit-destinations="editDestinations()" @edit="editObject" /></TabsContent>
     </Tabs>
     <PolicyDestinationEditor v-if="destinationEditorOpen && state" ref="destinationEditor" :rules="state.rule_sets" :selected-ids="settings.ros_policy_rule_sets" :address="destinationAddress" @close="destinationEditorOpen = false" @saved="contentSaved" />
   </SectionCard>
 </template>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ChevronUp, Info, Loader2, MonitorSmartphone, Network, Pencil } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -179,6 +179,7 @@ const emit = defineEmits<{ close: []; saved: []; busy: [value: boolean] }>()
 const { state, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview,
   results, rosResult, unresolved, blockers, canPublish, reload, canLeave: canLeaveWorkspace, selectRules, saveAndPreview, publish, refreshResults } = usePolicyRoutingWorkspace(props, () => emit('saved'))
 const router = useRouter()
+const route = useRoute()
 const destinationEditorOpen = ref(false), destinationAddress = ref('')
 const destinationEditor = ref<InstanceType<typeof PolicyDestinationEditor>>()
 const editing = computed(() => destinationEditorOpen.value)
@@ -187,11 +188,16 @@ const ruleOptions = computed(() => state.value?.rule_sets.map(rule => ({ value: 
 const routeChangeCount = computed(() => preview.value?.router_plan.stages.reduce((count, stage) => count + (stage.enabled === false ? 0 : stage.ops.length), 0) || 0)
 watch([locked, editing], ([busy, editing]) => emit('busy', busy || editing), { immediate: true })
 watch(() => [props.id, props.profile], () => { destinationEditorOpen.value = false })
-// Only smart IPv4 rows feed ROS; the server still subtracts direct exceptions and the gateway.
-const routesSource = (row: OxiDNSDevicePolicy) => row.mode === 'smart' && !row.ip.includes(':')
+const gatewayHost = computed(() => state.value?.gateways.find(agent => agent.id === settings.value.proxy_gateway_agent_id)?.host || '')
+// Smart IPv4 rows feed ROS only with policy rule sets selected, never the gateway
+// itself; the server also subtracts more specific direct exceptions (see help).
+const routesSource = (row: OxiDNSDevicePolicy) => settings.value.ros_policy_rule_sets.length > 0 && row.mode === 'smart'
+  && !row.ip.includes(':') && ![gatewayHost.value, `${gatewayHost.value}/32`].includes(row.ip)
 /** 来源在「客户端设备」编辑；空间不是当前全局空间时带上它，不切换全局空间 */
 function openClientDevices() {
-  void router.push({ path: '/client-devices', query: props.profile === getActiveProfileId() ? {} : { profile: props.profile } })
+  const query: Record<string, string> = { from: route.fullPath }
+  if (props.profile !== getActiveProfileId()) query.profile = props.profile
+  void router.push({ path: '/client-devices', query })
 }
 function editDestinations(address = '') {
   if (locked.value) return

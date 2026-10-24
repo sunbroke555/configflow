@@ -159,7 +159,7 @@ def inspect_desired(config, router, desired, content_loader=None):
             raise RouterError(policies['reason'])
         result['sources'] = smart_sources(policies['policies'], desired.get('proxy_gateway') or '')
         if not result['sources']:
-            raise RouterError('请先在「来源设备」或「当前配置 → 客户端设备」中把至少一个 IPv4 地址或网段设为智能分流')
+            raise RouterError('请先在「当前配置 → 客户端设备」中把至少一个 IPv4 地址或网段设为智能分流')
     except (RouterError, OxidnsSettingsError, ValueError) as error:
         result['error'] = str(error)
     return result

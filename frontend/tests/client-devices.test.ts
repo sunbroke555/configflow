@@ -241,6 +241,15 @@ describe('client devices page', () => {
     expect(wrapper.text()).not.toContain('返回 OxiDNS 面板')
   })
 
+  it('returns to the setup wizard or router page it was opened from', async () => {
+    const { wrapper, router } = await render('/client-devices?profile=home&from=%2Fother%3Fsession%3Ds1')
+    await button(wrapper, '返回上游路由').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/other?session=s1')
+    const external = await render('/client-devices?from=%2F%2Fevil.example')
+    expect(external.wrapper.text()).not.toContain('返回上游路由')
+  })
+
   it('switches to the active profile when the navigation drops the Agent', async () => {
     const { wrapper, router } = await render('/client-devices?agent=two')
     await router.push('/client-devices')
