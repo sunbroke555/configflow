@@ -3,6 +3,18 @@
     <PageHeader title="系统设置">
       <template #actions><Button as-child variant="outline" class="min-h-11"><RouterLink to="/setup">首次使用向导</RouterLink></Button></template>
     </PageHeader>
+    <Tabs :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
+      <TabsList class="mb-4 min-h-11 max-sm:mb-2 max-sm:grid max-sm:h-auto max-sm:w-full max-sm:grid-cols-2">
+        <TabsTrigger value="general" class="min-h-11 px-4 max-sm:px-2">常规</TabsTrigger>
+        <TabsTrigger value="tasks" class="min-h-11 px-4 max-sm:px-2">
+          定时任务
+          <span v-if="failedTasks" class="chip chip-bad num ml-1.5 px-1.5" :aria-label="`${failedTasks} 个任务失败`">{{ failedTasks }}</span>
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent value="tasks" class="mt-0 min-w-0">
+        <ScheduledTasks />
+      </TabsContent>
+      <TabsContent value="general" class="mt-0 min-w-0">
     <!-- ===== 服务配置 / 配置管理 ===== -->
     <div class="grid grid-cols-2 gap-3 max-[1100px]:grid-cols-1">
       <SectionCard title="服务配置" :icon="Settings" class="min-w-0">
@@ -286,6 +298,8 @@
         </div>
       </div>
     </SectionCard>
+      </TabsContent>
+    </Tabs>
 
     <!-- ===== 配置备份 ===== -->
     <Dialog v-model:open="backupDialogVisible">
@@ -407,7 +421,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { isAxiosError } from 'axios'
 import { Archive, CircleArrowUp, CloudUpload, Copy, Download, Eye, EyeOff, Loader2, Package, RefreshCw, RotateCcw, Settings, ShieldCheck, Trash2, Upload } from '@lucide/vue'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -415,6 +430,8 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import FormField from '@/components/common/FormField.vue'
 import StatusDot from '@/components/common/StatusDot.vue'
 import SubStoreRuntime from '@/components/settings/SubStoreRuntime.vue'
+import ScheduledTasks from '@/components/settings/ScheduledTasks.vue'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -425,8 +442,22 @@ import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { optionHelp } from '@/lib/optionCopy'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
-import api, { configApi, serverDomainApi, configTokenApi, ruleFetchProxyApi, dependenciesApi } from '@/api'
+import api, { configApi, serverDomainApi, configTokenApi, ruleFetchProxyApi, dependenciesApi, tasksApi } from '@/api'
+import { taskSummary } from '@/lib/scheduledTasks'
 import type { DependencyStatus } from '@/api'
+
+// 「常规 / 定时任务」标签与地址栏 ?tab= 同步，可直接分享或从其他页面跳转。
+const route = useRoute()
+const router = useRouter()
+const tab = ref(route.query.tab === 'tasks' ? 'tasks' : 'general')
+watch(() => route.query.tab, value => { tab.value = value === 'tasks' ? 'tasks' : 'general' })
+const changeTab = (value: string) => {
+  tab.value = value === 'tasks' ? 'tasks' : 'general'
+  router.replace({ query: { ...route.query, tab: tab.value === 'tasks' ? 'tasks' : undefined } })
+}
+// 常规页也提示失败的任务数，读取失败时不打扰。
+const failedTasks = ref(0)
+tasksApi.list().then(({ data }) => { failedTasks.value = taskSummary(data.tasks || []).failed }).catch(() => {})
 
 // 备份配置
 const backupDialogVisible = ref(false)

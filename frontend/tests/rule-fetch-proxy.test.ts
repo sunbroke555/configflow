@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import SystemSettings from '@/views/SystemSettings.vue'
-import { ruleFetchProxyApi, serverDomainApi, configTokenApi } from '@/api'
+import { ruleFetchProxyApi, serverDomainApi, configTokenApi, tasksApi } from '@/api'
 import { canReloadPage } from '@/lib/pageReloadGuard'
 import { notify } from '@/lib/feedback'
 
@@ -11,7 +12,9 @@ vi.mock('@/api', () => ({
   configTokenApi: { get: vi.fn(async () => ({ data: { config_token: '' } })), update: vi.fn(), delete: vi.fn() },
   serverDomainApi: { get: vi.fn(async () => ({ data: { server_domain: 'http://configflow.test' } })), update: vi.fn() },
   ruleFetchProxyApi: { get: vi.fn(), update: vi.fn() },
-  dependenciesApi: { list: vi.fn(async () => ({ data: { dependencies: [] } })), update: vi.fn() }
+  dependenciesApi: { list: vi.fn(async () => ({ data: { dependencies: [] } })), update: vi.fn() },
+  tasksApi: { list: vi.fn(async () => ({ data: { success: true, tasks: [] } })), run: vi.fn(), setInterval: vi.fn() },
+  routerApi: {}
 }))
 
 const proxy = 'http://proxy-user:proxy-secret@192.168.0.3:7890'
@@ -29,12 +32,33 @@ afterEach(() => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount())
   vi.restoreAllMocks()
 })
-async function render() {
-  const wrapper = mount(SystemSettings)
+async function render(path = '/system-settings') {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/system-settings', component: SystemSettings }, { path: '/setup', component: { render: () => null } }] })
+  await router.push(path)
+  const wrapper = mount(SystemSettings, { attachTo: document.body, global: { plugins: [router] } })
   wrappers.push(wrapper)
   await flushPromises()
-  return wrapper
+  return Object.assign(wrapper, { router })
 }
+
+describe('system settings tabs', () => {
+  it('opens scheduled tasks from ?tab=tasks, counts failures on the tab and returns to general settings', async () => {
+    vi.mocked(tasksApi.list).mockResolvedValue({ data: { success: true, tasks: [
+      { key: 'subscription:s', category: 'subscription', name: 'Feed', enabled: true, running: false, last_status: 'failed',
+        last_error: '上游返回 HTTP 503', cache_retained: true, interval_seconds: 86400, run_count: 1, failure_count: 1 },
+    ] } } as any)
+    const wrapper = await render('/system-settings?tab=tasks')
+    expect(wrapper.find('[data-scheduled-tasks]').exists()).toBe(true)
+    expect(wrapper.find('#rule-fetch-proxy').exists()).toBe(false)
+    expect(wrapper.get('[aria-label="1 个任务失败"]').text()).toBe('1')
+    const general = wrapper.findAll('[role="tab"]').find(tab => tab.text() === '常规')!
+    await general.trigger('mousedown', { button: 0 })
+    await flushPromises()
+    expect(wrapper.router.currentRoute.value.query.tab).toBeUndefined()
+    expect(wrapper.find('[data-scheduled-tasks]').exists()).toBe(false)
+    expect(wrapper.find('#rule-fetch-proxy').exists()).toBe(true)
+  })
+})
 
 describe('rule download proxy setting', () => {
   it('loads the saved proxy masked and saves changed values on blur without displaying credentials', async () => {

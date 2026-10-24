@@ -412,7 +412,7 @@
               />
               <span class="text-xs text-muted-foreground">秒，0 为仅手动更新</span>
             </div>
-            <p class="m-0 text-xs text-muted-foreground">自动请求在间隔内使用缓存；设为 0 后不自动访问订阅源，Mihomo 仍可同步面板缓存。</p>
+            <p class="m-0 text-xs text-muted-foreground">服务端按此间隔定时更新订阅（系统设置 → 定时任务），设备拉取时使用已更新的缓存，更新失败保留原有节点；设为 0 后不自动访问订阅源，Mihomo 仍可同步面板缓存。</p>
           </div>
 
           <HealthCheckFields v-model="providerHealth" provider />

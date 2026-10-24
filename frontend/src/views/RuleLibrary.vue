@@ -110,13 +110,16 @@
 
       <Alert v-if="cacheRequestError || Object.keys(cacheFailures).length" class="mb-4" data-cache-errors>
         <AlertDescription>
-          <p class="m-0 text-[13px] font-semibold text-foreground">规则集内容更新失败</p>
+          <p class="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] font-semibold text-foreground">
+            规则集内容更新失败
+            <RouterLink to="/system-settings?tab=tasks" class="inline-flex items-center text-[12px] font-normal text-primary-accent underline underline-offset-4 max-md:min-h-11">在定时任务中查看</RouterLink>
+          </p>
           <p v-if="cacheRequestError" class="mt-2 whitespace-pre-wrap break-all text-destructive-accent">{{ cacheRequestError }}</p>
           <ul v-if="Object.keys(cacheFailures).length" class="m-0 mt-2 list-none divide-y divide-border p-0">
             <li v-for="failure in cacheFailures" :key="failure.id" :data-cache-failure="failure.id" class="min-w-0 py-2 first:pt-0 last:pb-0">
               <p class="m-0 break-all text-[13px] font-medium text-foreground">{{ failure.name }}</p>
               <p class="m-0 mt-1 text-xs" :class="failure.cache_retained ? 'text-warning-accent' : 'text-destructive-accent'">
-                {{ failure.cache_retained ? '已保留上一次有效缓存，继续使用原有内容。' : '没有可用的有效缓存，请修正规则来源或类型后重试。' }}
+                {{ failure.cache_retained ? (failure.cache_updated_at ? `已保留 ${absoluteTime(failure.cache_updated_at)} 的有效缓存，继续使用原有内容。` : '已保留上一次有效缓存，继续使用原有内容。') : '没有可用的有效缓存，请修正规则来源或类型后重试。' }}
               </p>
               <p class="m-0 mt-1 whitespace-pre-wrap break-all text-xs text-foreground">{{ failure.error }}</p>
             </li>
@@ -734,7 +737,8 @@ import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
 import { useProfileStore } from '@/stores/profile'
-import api, { ruleApi } from '@/api'
+import api, { ruleApi, tasksApi } from '@/api'
+import { absoluteTime } from '@/lib/scheduledTasks'
 import { activeProfileId, getActiveProfileId } from '@/profileContext'
 import { isAxiosError } from 'axios'
 import { detectRuleContentFormat, domainRuleLine } from '@/lib/ruleset-format'
@@ -932,6 +936,7 @@ interface RuleCacheResult {
   success: boolean
   error?: string
   cache_retained?: boolean
+  cache_updated_at?: string | null
 }
 const caching = ref(false) // 批量缓存加载状态
 const cacheFailures = ref<Record<string, RuleCacheResult>>({})
@@ -1060,6 +1065,27 @@ const loadRuleLibrary = async () => {
     }
   } catch (error) {
     notify.error('加载规则库失败')
+  }
+  await loadRefreshFailures()
+}
+
+// 定时更新与批量下载的结果保存在服务端，刷新页面后仍显示失败原因与是否在用旧缓存。
+const loadRefreshFailures = async () => {
+  try {
+    const { data } = await tasksApi.list()
+    for (const task of data.tasks || []) {
+      if (task.category !== 'rule_source') continue
+      if (task.last_status === 'failed' && !task.running) {
+        cacheFailures.value[task.resource_id] = {
+          id: task.resource_id, name: task.name, success: false, error: task.last_error || '更新失败，请重试。',
+          cache_retained: Boolean(task.cache_retained), cache_updated_at: task.cache_updated_at
+        }
+      } else {
+        delete cacheFailures.value[task.resource_id]
+      }
+    }
+  } catch {
+    // 读取失败时保留本页已有的结果，不额外提示。
   }
 }
 

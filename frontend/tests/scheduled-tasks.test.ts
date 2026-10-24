@@ -1,0 +1,191 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import ScheduledTasks from '@/components/settings/ScheduledTasks.vue'
+import { Select } from '@/components/ui/select'
+import { routerApi, tasksApi } from '@/api'
+import { notify } from '@/lib/feedback'
+import {
+  cacheNote, intervalText, isOverdue, relativeTo, sourceIntervalOptions, taskStatusView, taskSummary,
+  type ScheduledTask
+} from '@/lib/scheduledTasks'
+
+vi.mock('@/api', () => ({
+  tasksApi: { list: vi.fn(), run: vi.fn(), setInterval: vi.fn() },
+  routerApi: { saveRuleSync: vi.fn() },
+}))
+vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn() } }))
+
+const NOW = Date.parse('2026-10-24T08:00:00Z')
+const task = (changes: Partial<ScheduledTask> = {}): ScheduledTask => ({
+  key: 'rule_source:r1', category: 'rule_source', name: 'Streaming', detail: 'rules.test', resource_id: 'r1',
+  profile_id: null, profile_name: null, enabled: true, interval_seconds: 86400, schedule_text: '',
+  editable: true, can_run: true, run_hint: '', running: false, next_run_at: '2026-10-24T11:00:00Z',
+  state_message: '', link: '/rule-library', last_run_at: '2026-10-23T11:00:00Z', last_status: 'success',
+  last_error: '', last_duration_ms: 1200, last_trigger: 'schedule', last_success_at: '2026-10-23T11:00:00Z',
+  run_count: 42, failure_count: 3, cache_retained: null, cache_updated_at: '2026-10-23T11:00:00Z', ...changes
+})
+const failed = task({
+  last_status: 'failed', last_error: '连接上游超时', cache_retained: true,
+  cache_updated_at: '2026-10-22T11:00:00Z', next_run_at: '2026-10-24T08:05:00Z',
+})
+
+describe('scheduled task helpers', () => {
+  it('formats intervals, relative times and summaries', () => {
+    expect(intervalText(86400)).toBe('每 1 天')
+    expect(intervalText(6 * 3600)).toBe('每 6 小时')
+    expect(intervalText(1800)).toBe('每 30 分钟')
+    expect(intervalText(0)).toBe('仅手动')
+    expect(relativeTo('2026-10-24T11:00:00Z', NOW)).toBe('3 小时后')
+    expect(relativeTo('2026-10-23T08:00:00Z', NOW)).toBe('1 天前')
+    expect(relativeTo('2026-10-24T08:00:20Z', NOW)).toBe('即将运行')
+    expect(relativeTo(null, NOW)).toBe('—')
+    expect(sourceIntervalOptions(7200)).toContain(7200)
+    expect(taskSummary([task(), failed, task({ enabled: false, last_status: 'failed' }), task({ running: true })]))
+      .toEqual({ total: 4, enabled: 3, failed: 1, running: 1 })
+  })
+
+  it('colours a failure by whether the previous cache is still in use', () => {
+    expect(taskStatusView(task())).toEqual({ label: '成功', chip: 'chip-ok' })
+    expect(taskStatusView(failed)).toEqual({ label: '失败 · 使用旧缓存', chip: 'chip-warn' })
+    expect(taskStatusView(task({ last_status: 'failed', cache_retained: false }))).toEqual({ label: '失败', chip: 'chip-bad' })
+    expect(taskStatusView(task({ last_status: 'skipped' }))).toEqual({ label: '已跳过', chip: 'chip-warn' })
+    expect(taskStatusView(task({ running: true }))).toEqual({ label: '运行中', chip: 'chip-acc' })
+    expect(taskStatusView(task({ last_status: null }))).toBeNull()
+    expect(cacheNote(failed)).toMatch(/^继续使用 .+（.+）更新的缓存。$/)
+    expect(cacheNote(task({ last_status: 'failed', cache_retained: false }))).toBe('没有可用的有效缓存，请修正来源后重新运行。')
+    expect(cacheNote(task())).toBe('')
+    expect(isOverdue(task({ next_run_at: '2026-10-24T07:00:00Z' }), NOW)).toBe(true)
+    expect(isOverdue(task({ next_run_at: '2026-10-24T07:58:00Z' }), NOW)).toBe(false)
+    expect(isOverdue(task({ next_run_at: '2026-10-24T07:00:00Z', enabled: false }), NOW)).toBe(false)
+  })
+})
+
+const wrappers: ReturnType<typeof mount>[] = []
+async function render(tasks: ScheduledTask[]) {
+  vi.mocked(tasksApi.list).mockResolvedValue({ data: { success: true, tasks } } as any)
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:path(.*)*', component: { render: () => null } }] })
+  const wrapper = mount(ScheduledTasks, { attachTo: document.body, global: { plugins: [router] } })
+  wrappers.push(wrapper)
+  await flushPromises()
+  return wrapper
+}
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
+  vi.setSystemTime(NOW)
+})
+afterEach(() => {
+  wrappers.splice(0).forEach(wrapper => wrapper.unmount())
+  document.body.innerHTML = ''
+  vi.useRealTimers()
+})
+
+describe('ScheduledTasks', () => {
+  it('shows each task with its schedule, results and always-visible failure reason', async () => {
+    const wrapper = await render([task(), failed, task({
+      key: 'router_rule_sync:p:ros', category: 'router_rule_sync', name: 'ROS', profile_id: 'p', profile_name: 'Home',
+      detail: '', interval_seconds: 1800, last_status: 'failed', last_error: '请先手动预览发布', cache_retained: null,
+      state_message: '已暂停，需要在上游路由手动预览发布', can_run: false, run_hint: '同步尚未完成或需要人工确认',
+    }), task({ key: 'webdav_backup', category: 'webdav_backup', name: 'WebDAV 自动备份', interval_seconds: null,
+      schedule_text: '配置变更后自动备份', next_run_at: null, editable: false, link: '/system-settings', last_status: null, last_run_at: null, run_count: 0 })])
+    expect(wrapper.get('[data-task-summary]').text()).toBe('已启用 4 / 4')
+    expect(wrapper.get('[data-task-failed]').text()).toBe('2 个失败')
+    const row = wrapper.get('[data-task="rule_source:r1"]')
+    expect(row.text()).toContain('Streaming')
+    expect(row.text()).toContain('rules.test')
+    expect(row.text()).toContain('每 1 天')
+    expect(row.text()).toContain('3 小时后')
+    expect(row.text()).toContain('运行 42 次 · 失败 3 次')
+    expect(row.get('[data-task-status]').classes()).toContain('chip-ok')
+    const failure = wrapper.findAll('[data-task="rule_source:r1"]')[1]!
+    expect(failure.get('[data-task-status]').text()).toBe('失败 · 使用旧缓存')
+    expect(failure.get('[data-task-error]').text()).toBe('连接上游超时')
+    expect(failure.get('[data-task-error]').classes()).toContain('text-warning-accent')
+    expect(failure.get('[data-task-cache]').text()).toContain('更新的缓存')
+    const ros = wrapper.get('[data-task="router_rule_sync:p:ros"]')
+    expect(ros.text()).toContain('Home')
+    expect(ros.get('[data-task-error]').classes()).toContain('text-destructive-accent')
+    expect(ros.text()).toContain('已暂停，需要在上游路由手动预览发布')
+    expect(ros.get('button[aria-label="立即运行「ROS」"]').attributes('disabled')).toBeDefined()
+    expect(ros.get('button[aria-label="立即运行「ROS」"]').attributes('title')).toBe('同步尚未完成或需要人工确认')
+    const backup = wrapper.get('[data-task="webdav_backup"]')
+    expect(backup.text()).toContain('配置变更后自动备份')
+    expect(backup.text()).toContain('按需')
+    expect(backup.text()).toContain('尚未运行')
+    expect(backup.find('button[aria-label^="编辑"]').exists()).toBe(false)
+    expect(backup.get('a').attributes('href')).toBe('/system-settings')
+  })
+
+  it('filters by failure and category', async () => {
+    const wrapper = await render([task({ key: 'subscription:s', category: 'subscription', name: 'Feed' }), failed])
+    const chip = (text: string) => wrapper.findAll('button.chip').find(item => item.text().startsWith(text))!
+    await chip('失败').trigger('click')
+    expect(wrapper.findAll('tbody tr').map(row => row.attributes('data-task'))).toEqual(['rule_source:r1'])
+    await chip('订阅更新').trigger('click')
+    expect(wrapper.findAll('tbody tr').map(row => row.attributes('data-task'))).toEqual(['subscription:s'])
+    expect(chip('订阅更新').attributes('aria-pressed')).toBe('true')
+  })
+
+  it('runs a task, then polls quickly until it finishes', async () => {
+    const wrapper = await render([task()])
+    vi.mocked(tasksApi.run).mockResolvedValue({ data: { success: true, message: '已开始运行，结果会显示在列表中' } } as any)
+    vi.mocked(tasksApi.list).mockResolvedValueOnce({ data: { success: true, tasks: [task({ running: true })] } } as any)
+    await wrapper.get('button[aria-label="立即运行「Streaming」"]').trigger('click')
+    await flushPromises()
+    expect(tasksApi.run).toHaveBeenCalledWith('rule_source:r1')
+    expect(notify.success).toHaveBeenCalledWith('「Streaming」：已开始运行，结果会显示在列表中')
+    expect(wrapper.get('[data-task-status]').text()).toBe('运行中')
+    expect(wrapper.text()).toContain('运行中…')
+    vi.mocked(tasksApi.list).mockResolvedValue({ data: { success: true, tasks: [task({ run_count: 43 })] } } as any)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(wrapper.text()).toContain('运行 43 次')
+    expect(wrapper.text()).not.toContain('运行中…')
+  })
+
+  it('reports a run that cannot start', async () => {
+    const wrapper = await render([task()])
+    vi.mocked(tasksApi.run).mockRejectedValue({ isAxiosError: true, response: { data: { message: '这个任务正在运行，请稍后查看结果' } } })
+    await wrapper.get('button[aria-label="立即运行「Streaming」"]').trigger('click')
+    await flushPromises()
+    expect(notify.error).toHaveBeenCalledWith('这个任务正在运行，请稍后查看结果')
+  })
+
+  it('keeps the last list and says so when a later read fails', async () => {
+    const wrapper = await render([failed])
+    vi.mocked(tasksApi.list).mockRejectedValue(new Error('网络错误'))
+    await wrapper.get('button[aria-label="刷新任务列表"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toBe('网络错误，保留上次读取的结果。')
+    expect(wrapper.find('[data-task="rule_source:r1"]').exists()).toBe(true)
+  })
+
+  it('edits a source interval, including turning automatic updates off', async () => {
+    const wrapper = await render([task()])
+    vi.mocked(tasksApi.setInterval).mockResolvedValue({ data: { success: true, task: null } } as any)
+    await wrapper.get('button[aria-label="编辑「Streaming」的间隔"]').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('服务端按此间隔下载并校验规则集')
+    wrapper.findAllComponents(Select)[0]!.vm.$emit('update:modelValue', '0')
+    await flushPromises()
+    document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(tasksApi.setInterval).toHaveBeenCalledWith('rule_source:r1', 0)
+    expect(notify.success).toHaveBeenCalledWith('已更新「Streaming」')
+  })
+
+  it('edits a router through its own rule sync settings and keeps errors in the dialog', async () => {
+    const ros = task({ key: 'router_rule_sync:p:ros', category: 'router_rule_sync', name: 'ROS', resource_id: 'ros',
+      profile_id: 'p', interval_seconds: 1800 })
+    const wrapper = await render([ros])
+    vi.mocked(routerApi.saveRuleSync).mockRejectedValueOnce({ isAxiosError: true, response: { data: { message: '路由器设置已变化，请刷新后重试' } } })
+    await wrapper.get('button[aria-label="编辑「ROS」的间隔"]').trigger('click')
+    await flushPromises()
+    wrapper.findAllComponents(Select)[0]!.vm.$emit('update:modelValue', '3600')
+    await flushPromises()
+    document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(routerApi.saveRuleSync).toHaveBeenCalledWith('ros', { auto_rule_sync: true, rule_sync_interval: 60 }, 'p')
+    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe('路由器设置已变化，请刷新后重试')
+  })
+})

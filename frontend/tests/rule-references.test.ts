@@ -60,7 +60,8 @@ vi.mock('@/api', () => ({
   ruleApi: network.rules,
   ruleSetApi: network.sets,
   proxyGroupApi: { getAll: vi.fn(async () => ({ data: [{ id: 'group-one', name: 'Target policy' }] })) },
-  profileApi: { list: vi.fn(async () => ({ data: [{ id: 'default', name: 'Default' }, { id: 'target', name: 'Target' }] })) }
+  profileApi: { list: vi.fn(async () => ({ data: [{ id: 'default', name: 'Default' }, { id: 'target', name: 'Target' }] })) },
+  tasksApi: { list: vi.fn(async () => ({ data: { success: true, tasks: [] } })) }
 }))
 
 const wrappers: VueWrapper[] = []
@@ -227,6 +228,23 @@ describe('profile rule references', () => {
 })
 
 describe('shared rule library', () => {
+  it('shows scheduled refresh failures saved on the server after a reload', async () => {
+    const { tasksApi } = await import('@/api')
+    network.state.library.push({ id: 'library-ip', name: 'Remote networks', source_type: 'url', url: 'https://rules.test/ip.txt', behavior: 'ipcidr', enabled: true })
+    const row = { category: 'rule_source', running: false, enabled: true }
+    vi.mocked(tasksApi.list).mockResolvedValueOnce({ data: { success: true, tasks: [
+      { ...row, resource_id: 'library-one', name: 'Shared domains', last_status: 'failed', last_error: '连接上游超时',
+        cache_retained: true, cache_updated_at: '2026-10-22T03:00:00Z' },
+      { ...row, resource_id: 'library-ip', name: 'Remote networks', last_status: 'success', last_error: '' },
+    ] } } as any)
+    const wrapper = await render(RuleLibrary)
+    const failure = wrapper.get('[data-cache-failure="library-one"]').text()
+    expect(failure).toContain('连接上游超时')
+    expect(failure).toMatch(/已保留 .*2026.* 的有效缓存/)
+    expect(wrapper.find('[data-cache-failure="library-ip"]').exists()).toBe(false)
+    expect(wrapper.get('[data-cache-errors]').text()).toContain('在定时任务中查看')
+  })
+
   it('keeps remote validation failures visible with cache states and clears only recovered sources', async () => {
     Object.assign(network.state.library[0]!, { source_type: 'url', url: 'https://rules.test/domain.txt', content: '' })
     network.state.library.push({ id: 'library-ip', name: 'Remote networks', source_type: 'url', url: 'https://rules.test/ip.txt', behavior: 'ipcidr', enabled: true })
