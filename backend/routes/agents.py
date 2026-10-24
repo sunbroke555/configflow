@@ -30,7 +30,7 @@ from backend.routes import agents_bp as bp
 from backend.common.config_export import redact_secrets_in_text
 from backend.common.auth import is_token_within_length, parse_bearer_token, require_auth
 from backend.common.config import get_config, get_default_profile_id, get_repository
-from backend.common.config_repository import ProfileRepositoryError
+from backend.common.config_repository import ProfileRepositoryError, ProfileInUse
 from backend.common.agent_manager import get_agent_manager
 from backend.common.utils import str_to_bool
 from backend.utils.logger import get_logger
@@ -1368,6 +1368,11 @@ def push_config_to_agent(agent_id):
         if legacy_revision_guard and data['expected_config_revision'] != config_revision:
             return jsonify(success=False, message='配置已改变，请重新预览后发布。'), 409
         service_type = agent.get('service_type', 'mihomo')
+        from backend.agents.device_group_publish import require_coordinated_publish
+        try:
+            require_coordinated_publish(config_data, service_type)
+        except ProfileInUse as exc:
+            return jsonify(success=False, message=str(exc)), 409
         if guarded and (data['expected_profile_id'] != profile_id
                         or data['expected_service_type'] != service_type
                         or data['expected_config_revision'] != config_revision):
@@ -1888,6 +1893,8 @@ def oxidns_device_policies(agent_id):
 
             def update(config):
                 # Recheck binding under the repository transaction lock.
+                if config.get('device_groups') is not None:
+                    raise PolicyConflict('这个配置空间已升级为设备组，请到设备组页修改')
                 latest = manager.get_agent_by_id(agent_id)
                 if not latest or latest.get('service_type') != 'oxidns' or \
                         (latest.get('profile_id') or get_default_profile_id()) != profile_id or \
@@ -1905,11 +1912,22 @@ def oxidns_device_policies(agent_id):
                  for item in manager.get_all_agents()
                  if item.get('service_type') == 'oxidns' and
                  (item.get('profile_id') or get_default_profile_id()) == profile_id]
+        if config.get('device_groups') is not None:
+            notes = read_notes(config)
+            groups = config['device_groups']['groups']
+            policy_view = {'migrated': True, 'editable': False,
+                           'reason': '已升级为设备组，请到设备组页修改。全部代理模式无法用旧设备策略完整表达。',
+                           'projection_partial': any(group.get('mode') == 'proxy' for group in groups),
+                           'policies': [{'ip': member, 'name': notes.get(member, ''),
+                                         'mode': 'direct' if group.get('mode') == 'direct' else 'smart'}
+                                        for group in groups for member in group['members']]}
+        else:
+            policy_view = read_policies(settings, config)
         return response({'success': True, 'draft': True, 'profile_id': profile_id,
                          'profile_name': profile.get('name') or profile_id,
                          'revision': revision(settings), 'agents': peers, 'device_notes': read_notes(config),
                          'deployment': _public_deployment(agent['latest_deployment']) if agent.get('latest_deployment') else None,
-                         **read_policies(settings, config)})
+                         **policy_view})
     except PolicyConflict as exc:
         return response({'message': str(exc)}, 409)
     except (OxidnsSettingsError, ProfileRepositoryError) as exc:

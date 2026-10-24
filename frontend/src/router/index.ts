@@ -71,6 +71,11 @@ const routes = [
     component: () => import('@/views/Rules.vue')
   },
   {
+    path: '/device-groups',
+    name: 'DeviceGroups',
+    component: () => import('@/views/DeviceGroups.vue')
+  },
+  {
     path: '/domain-discovery',
     name: 'DomainDiscovery',
     component: () => import('@/views/DomainDiscovery.vue')

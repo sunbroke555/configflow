@@ -1,0 +1,30 @@
+mixed-port: 27890
+allow-lan: true
+bind-address: '*'
+mode: rule
+log-level: info
+ipv6: true
+external-controller: 127.0.0.1:29090
+dns:
+  enable: false
+sub-rules:
+  lan-rules:
+    - MATCH,DIRECT
+rule-providers:
+  ads:
+    type: inline
+    behavior: domain
+    payload:
+      - +.ads.example
+proxies: []
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - DOMAIN-SUFFIX,example,节点选择
+  - RULE-SET,ads,REJECT
+  - IP-CIDR,192.0.2.0/24,REJECT-DROP,no-resolve
+  - MATCH,REJECT
+  - DOMAIN,after.example,REJECT

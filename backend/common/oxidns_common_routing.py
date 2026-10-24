@@ -88,7 +88,7 @@ def _prefix_end(args):
             index += 2
         elif action == 'goto adguard_reject' and match == 'question $adguard_rules':
             index += 1
-        elif item == {'exec': 'jump cf_device_policy'}:
+        elif item in ({'exec': 'jump cf_device_policy'}, {'exec': 'jump cf_dg_dispatch'}):
             # Device policy owns this hook; routing edits must keep it ahead of
             # domain rules and must not expose it as a user custom match.
             index += 1

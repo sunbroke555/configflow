@@ -5,6 +5,7 @@ from flask import request, jsonify, send_file
 from backend.routes import generate_bp
 from backend.common.auth import require_auth
 from backend.common.config import get_config, get_repository
+from backend.common.device_group_warnings import generation_warnings, generation_warning_headers
 from backend.utils.strategy_references import StrategyReferenceError
 from backend.utils.mosdns_archive import MosdnsArchiveError, build_mosdns_zip
 from backend.utils.url_utils import safe_exception_details
@@ -19,6 +20,16 @@ from backend.converters.mosdns import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _preview_response(content, config, service):
+    warnings = generation_warnings(config, service)
+    return jsonify({'content': content, **({'warnings': warnings} if warnings else {})})
+
+
+def _download_response(response, config, service):
+    response.headers.update(generation_warning_headers(config, service))
+    return response
 
 
 @generate_bp.route('/mihomo', methods=['POST'])
@@ -39,7 +50,7 @@ def generate_mihomo():
             config_data['profile_id'], 'config.yaml', yaml_content
         )
 
-        return send_file(output_file, as_attachment=True, download_name='mihomo.yaml')
+        return _download_response(send_file(output_file, as_attachment=True, download_name='mihomo.yaml'), config_data, 'mihomo')
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -64,7 +75,7 @@ def generate_surge():
             config_data['profile_id'], 'config.conf', config_content
         )
 
-        return send_file(output_file, as_attachment=True, download_name='surge.conf')
+        return _download_response(send_file(output_file, as_attachment=True, download_name='surge.conf'), config_data, 'surge')
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -86,7 +97,7 @@ def generate_loon():
             config_data['profile_id'], 'loon.lcf', config_content
         )
 
-        return send_file(output_file, as_attachment=True, download_name='loon.lcf')
+        return _download_response(send_file(output_file, as_attachment=True, download_name='loon.lcf'), config_data, 'loon')
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -117,8 +128,8 @@ def generate_mosdns():
         zip_buffer = build_mosdns_zip(
             config_data, yaml_content, ruleset_downloads, custom_files, base_url=base_url,
         )
-        return send_file(zip_buffer, as_attachment=True, download_name='mosdns-config.zip',
-                         mimetype='application/zip')
+        return _download_response(send_file(zip_buffer, as_attachment=True, download_name='mosdns-config.zip',
+                         mimetype='application/zip'), config_data, 'mosdns')
     except MosdnsArchiveError as e:
         logger.warning('MosDNS ZIP 生成失败：%s', e)
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -140,7 +151,7 @@ def preview_mihomo():
 
         # 传递 base_url 给生成器
         yaml_content = generate_mihomo_config(config_data, base_url=base_url)
-        return jsonify({'content': yaml_content})
+        return _preview_response(yaml_content, config_data, 'mihomo')
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -159,7 +170,7 @@ def preview_surge():
 
         # 传递 base_url 给生成器
         config_content = generate_surge_config(config_data, base_url=base_url)
-        return jsonify({'content': config_content})
+        return _preview_response(config_content, config_data, 'surge')
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -176,7 +187,7 @@ def preview_loon():
         base_url = data.get('base_url', '')
 
         config_content = generate_loon_config(config_data, base_url=base_url)
-        return jsonify({'content': config_content})
+        return _preview_response(config_content, config_data, 'loon')
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
@@ -195,7 +206,7 @@ def preview_mosdns():
 
         # 传递 base_url 给生成器
         yaml_content = generate_mosdns_config(config_data, base_url=base_url)
-        return jsonify({'content': yaml_content})
+        return _preview_response(yaml_content, config_data, 'mosdns')
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

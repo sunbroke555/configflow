@@ -2,12 +2,15 @@
 
 from datetime import datetime, timedelta
 from functools import lru_cache
+import re
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from backend.agents.traffic_store import split_route_key
 
 # mihomo 兜底规则在连接与日志里的名字
 MATCH_RULE = 'Match'
+# Mihomo reports the outer source condition, not the sub-rule segment name.
+_DEVICE_GROUP_SOURCE = re.compile(r'\(RULE-SET,cf_dg_set_[0-9a-f]+,src\)')
 # 直连失败判定：失败占比与最少失败次数
 FAILING_RATIO = 0.5
 FAILING_MIN_FAILS = 3
@@ -51,6 +54,11 @@ def is_ignored(domain: str, host: str, ignored: Iterable[str]) -> bool:
         if host == value or host.endswith('.' + value) or domain == value:
             return True
     return False
+
+
+def is_device_group_route(route):
+    return route.get('rule') == 'SubRules' and bool(
+        _DEVICE_GROUP_SOURCE.fullmatch(route.get('rule_payload') or ''))
 
 
 def summarize(agent_reports: List[Tuple[Dict[str, Any], Dict[str, Any]]], *, days: int,
@@ -102,7 +110,10 @@ def summarize(agent_reports: List[Tuple[Dict[str, Any], Dict[str, Any]]], *, day
                     host_conns += stats.get('conns', 0)
                     if route['rule'] == MATCH_RULE:
                         host_item['uncovered'] = True
-                    if route['outlet'] == 'direct':
+                    # Group modes deliberately bypass global routing. Keep
+                    # their traffic visible, but do not turn group failures
+                    # into global-rule suggestions or dilute other failures.
+                    if route['outlet'] == 'direct' and not is_device_group_route(route):
                         host_item['direct_conns'] += stats.get('conns', 0)
                         host_item['direct_fails'] += stats.get('fails', 0)
 

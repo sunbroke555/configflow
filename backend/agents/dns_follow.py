@@ -587,6 +587,12 @@ def tick(manager):
                         continue
                     _agent(manager, target['id'], 'oxidns')
                     source = _agent(manager, binding['source_agent_id'], 'mihomo')
+                    from backend.agents.device_group_publish import blocks_follow
+                    if blocks_follow(manager, target, source):
+                        message = '设备组正在协调发布，等待全部 Mihomo 与 OxiDNS 发布完成后再同步'
+                        if (state.get('status'), state.get('message')) != ('waiting', message):
+                            _state(manager, target['id'], 'waiting', message)
+                        continue
                     if (_profile(manager, target) != binding['target_profile_id']
                             or _profile(manager, source) != binding['source_profile_id']):
                         raise FollowError('Agent 的配置绑定已改变，请重新设置 DNS 联动')

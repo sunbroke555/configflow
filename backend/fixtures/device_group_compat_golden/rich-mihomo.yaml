@@ -1,0 +1,52 @@
+mixed-port: 7890
+allow-lan: true
+mode: rule
+dns:
+  enable: false
+custom-extension:
+  keep: true
+sub-rules:
+  lan-rules:
+    - MATCH,DIRECT
+proxies: []
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies:
+      - DIRECT
+rule-providers:
+  广告规则:
+    type: http
+    behavior: domain
+    url: https://rules.test/ads.yaml
+    path: ./ruleset/广告规则.yaml
+    interval: 86400
+    format: yaml
+  mixed:
+    type: http
+    behavior: classical
+    url: https://rules.test/mixed.yaml
+    path: ./ruleset/mixed.yaml
+    interval: 86400
+    format: yaml
+  networks:
+    type: http
+    behavior: ipcidr
+    url: https://rules.test/networks.txt
+    path: ./ruleset/networks.list
+    interval: 86400
+    format: text
+rules:
+  - DOMAIN-SUFFIX,example.test,节点选择
+  - DOMAIN,refused.example.test,REJECT
+  - DOMAIN,missing.example.test,REJECT
+  - DOMAIN,empty.example.test,REJECT-DROP
+  - DOMAIN-KEYWORD,ads,REJECT
+  - DOMAIN,pinned.example.test,DIRECT
+  - IP-CIDR,192.0.2.0/24,DIRECT,no-resolve
+  - IP-CIDR6,2001:db8::/32,节点选择,no-resolve
+  - RULE-SET,广告规则,REJECT
+  - RULE-SET,mixed,节点选择,no-resolve
+  - RULE-SET,networks,DIRECT,no-resolve
+  - MATCH,节点选择
+  - DOMAIN,after.example.test,REJECT

@@ -4,6 +4,7 @@
 
     <!-- ===== 生成工作台：目标切换 + 编译步骤 + 代码面板 ===== -->
     <GenerateStudio v-if="!agentSettings" :targets="studioTargets" @copy="copyUrl" />
+    <ul v-if="downloadWarnings.length" class="mb-4 mt-0 list-none space-y-1 rounded-lg bg-warning-soft p-3 text-xs" role="status" aria-label="下载配置提醒"><li v-for="warning in downloadWarnings" :key="warning" class="break-words">{{ warning }}</li></ul>
 
     <LinuxGatewaySettings v-model:open="linuxGatewayDialogVisible" :profile-id="profileId" />
 
@@ -49,6 +50,7 @@
         <DialogHeader>
           <DialogTitle>{{ getPreviewDialogTitle() }}</DialogTitle>
           <DialogDescription>查看生成结果，确认后可复制完整内容。此处不能直接修改。</DialogDescription>
+          <ul v-if="previewWarnings.length" class="m-0 max-h-32 list-none space-y-1 overflow-y-auto rounded-lg bg-warning-soft p-3 text-left text-xs" aria-label="预览配置提醒" role="status"><li v-for="warning in previewWarnings" :key="warning">{{ warning }}</li></ul>
         </DialogHeader>
 
         <YamlEditor v-model="previewContent" class="h-full min-h-0" :read-only="true" />
@@ -715,6 +717,7 @@ import { isDnsRuleType } from '@/lib/oxidns'
 import { isBlockRoute, isUpstreamValue } from '@/lib/ruleDns'
 import router from '@/router'
 import { generateApi, customConfigApi, ruleApi, ruleSetApi, proxyGroupApi, serverDomainApi, configTokenApi, type PublishGuard } from '@/api'
+import { generationWarnings } from '@/lib/generationWarnings'
 import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'
 import type { RuleDnsSnapshot, RuleSet } from '@/types'
@@ -1042,6 +1045,12 @@ const customConfigSession = trackEditorSession(customConfigDialogVisible, saving
 
 const previewDialogVisible = ref(false)
 const previewContent = ref('')
+const previewWarnings = ref<string[]>([])
+const downloadWarnings = ref<string[]>([])
+function showDownloadWarnings(response: Parameters<typeof generationWarnings>[0]) {
+  downloadWarnings.value = generationWarnings(response)
+  if (downloadWarnings.value.length) notify.warning('配置已生成，请留意兼容性提醒', downloadWarnings.value.join('；'))
+}
 const currentPreviewType = ref<ConfigType>('mihomo')
 
 const mosdnsSettingsDialogVisible = ref(false)
@@ -1420,6 +1429,7 @@ const generateMihomo = async () => {
   try {
     mihomoLoading.value = true
     const response = await generateApi.mihomo(profileId)
+    showDownloadWarnings(response)
 
     // 创建下载链接
     const blob = new Blob([response.data], { type: 'application/x-yaml' })
@@ -1442,6 +1452,7 @@ const generateSurge = async () => {
   try {
     surgeLoading.value = true
     const response = await generateApi.surge(profileId)
+    showDownloadWarnings(response)
 
     // 创建下载链接
     const blob = new Blob([response.data], { type: 'text/plain' })
@@ -1464,6 +1475,7 @@ const generateLoon = async () => {
   try {
     loonLoading.value = true
     const response = await generateApi.loon(profileId)
+    showDownloadWarnings(response)
 
     // 创建下载链接
     const blob = new Blob([response.data], { type: 'text/plain' })
@@ -1492,6 +1504,7 @@ const generateMosdns = async () => {
   try {
     mosdnsLoading.value = true
     const response = await generateApi.mosdns(profileId)
+    showDownloadWarnings(response)
 
     // 创建下载链接
     const blob = new Blob([response.data], { type: 'application/zip' })
@@ -1529,6 +1542,7 @@ const generateOxidns = async () => {
   try {
     oxidnsLoading.value = true
     const response = await generateApi.oxidns(profileId)
+    showDownloadWarnings(response)
 
     // 创建下载链接
     const blob = new Blob([response.data], { type: 'application/zip' })
@@ -1679,7 +1693,8 @@ const previewConfig = async (type: ConfigType) => {
       mosdns: generateApi.previewMosdns
     }
     const response = await apiMap[type](profileId)
-    previewContent.value = response.data.content || response.data
+    previewContent.value = String(response.data?.content ?? response.data ?? '')
+    previewWarnings.value = generationWarnings(response)
     previewDialogVisible.value = true
   } catch (error) {
     notify.error('生成预览失败')

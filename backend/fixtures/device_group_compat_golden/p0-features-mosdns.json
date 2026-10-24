@@ -1,0 +1,179 @@
+{
+  "system_config": {
+    "rule_proxy_token": "fixture-token",
+    "server_domain": "https://config.test"
+  },
+  "oxidns": {
+    "direct_rules": [
+      "d1",
+      "d3",
+      "i1",
+      "off"
+    ],
+    "proxy_rules": [
+      "d2",
+      "i2"
+    ],
+    "direct_rulesets": [
+      "s1"
+    ],
+    "proxy_rulesets": [
+      "s2",
+      "s3"
+    ],
+    "custom_matches": [
+      {
+        "matches": "qname domain:corp.test",
+        "exec": "goto china_dns"
+      }
+    ],
+    "custom_match_position": "tail",
+    "custom_hosts": "full:nas.test 192.168.1.2",
+    "block_qtypes": [
+      65
+    ],
+    "aggregate_rules": false,
+    "default_forward": "forward_local",
+    "cache_lazy_ttl": 0,
+    "fallback_dns": "udp://9.9.9.9",
+    "remote_ttl": 60,
+    "local_dns": "udp://10.0.0.1\nudp://10.0.0.2",
+    "remote_dns": "- addr: https://1.1.1.1/dns-query\n  bootstrap: 223.5.5.5\n",
+    "ip_selector": {
+      "enabled": true
+    },
+    "ros_address_list": {
+      "enabled": true,
+      "args": {
+        "address": "192.168.88.1",
+        "username": "u",
+        "password": "p"
+      }
+    },
+    "dynamic_domain_set": {
+      "enabled": true,
+      "learn": true,
+      "route": "proxy"
+    },
+    "query_recorder": {
+      "enabled": true
+    },
+    "adguard": {
+      "enabled": true,
+      "urls": [
+        "https://rules.test/adguard.txt"
+      ]
+    },
+    "api": {
+      "enabled": true
+    },
+    "log": {
+      "file": "./oxidns.log"
+    },
+    "rule_update": {
+      "enabled": true
+    },
+    "device_policies": [
+      {
+        "ip": "192.168.1.10",
+        "name": "pc",
+        "mode": "direct"
+      }
+    ]
+  },
+  "rule_configs": [
+    {
+      "id": "d1",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-SUFFIX",
+      "value": "example.test",
+      "enabled": true
+    },
+    {
+      "id": "d2",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "x.example.test",
+      "enabled": true
+    },
+    {
+      "id": "d3",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-KEYWORD",
+      "value": "ads",
+      "enabled": true
+    },
+    {
+      "id": "i1",
+      "itemType": "rule",
+      "rule_type": "IP-CIDR",
+      "value": "203.0.113.0/24",
+      "enabled": true
+    },
+    {
+      "id": "i2",
+      "itemType": "rule",
+      "rule_type": "IP-CIDR6",
+      "value": "2001:db8::/32",
+      "enabled": true
+    },
+    {
+      "id": "g1",
+      "itemType": "rule",
+      "rule_type": "GEOIP",
+      "value": "CN",
+      "enabled": true
+    },
+    {
+      "id": "off",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-SUFFIX",
+      "value": "off.test",
+      "enabled": false
+    },
+    {
+      "id": "s1",
+      "name": "cn",
+      "itemType": "ruleset",
+      "behavior": "domain",
+      "url": "https://rules.test/cn"
+    },
+    {
+      "id": "s2",
+      "name": "mixed",
+      "itemType": "ruleset",
+      "behavior": "classical",
+      "url": "/api/rule-library/content/s2"
+    },
+    {
+      "id": "s3",
+      "name": "ips",
+      "itemType": "ruleset",
+      "behavior": "ipcidr",
+      "url": "https://rules.test/ip"
+    }
+  ],
+  "mosdns": {
+    "direct_rules": [
+      "d1",
+      "d3",
+      "i1",
+      "off"
+    ],
+    "proxy_rules": [
+      "d2",
+      "i2"
+    ],
+    "direct_rulesets": [
+      "s1"
+    ],
+    "proxy_rulesets": [
+      "s2",
+      "s3"
+    ],
+    "block_qtypes": [
+      65
+    ],
+    "cache_lazy_ttl": 0
+  }
+}

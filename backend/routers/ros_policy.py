@@ -135,8 +135,9 @@ def smart_sources(rows, gateway):
 
 def inspect_desired(config, router, desired, content_loader=None):
     """Called only for selected policy rule sets or a previously deployed bundle."""
-    from backend.common.oxidns_device_policy import read_policies, revision
+    from backend.common.oxidns_device_policy import read_policies
     from backend.common.oxidns_settings import OxidnsSettingsError
+    from backend.common.device_groups import DeviceGroupsError, source_networks, source_revision
     from backend.routers.desired import compute_desired
     selected = router.get('ros_policy_rule_sets') or []
     result = {'selected': selected, 'sources': [], 'cidrs': [], 'error': '',
@@ -152,15 +153,22 @@ def inspect_desired(config, router, desired, content_loader=None):
     if blocking_warnings:
         result['error'] = '策略路由暂不能发布：' + '；'.join(blocking_warnings)
     settings = config.get('oxidns') or {}
-    result['source_revision'] = revision(settings)
+    result['source_revision'] = source_revision(config)
     try:
-        policies = read_policies(settings, config)
-        if not policies['editable']:
-            raise RouterError(policies['reason'])
-        result['sources'] = smart_sources(policies['policies'], desired.get('proxy_gateway') or '')
+        if config.get('policy_routing_sources') is None:
+            policies = read_policies(settings, config)
+            if not policies['editable']:
+                raise RouterError(policies['reason'])
+            result['sources'] = smart_sources(policies['policies'], desired.get('proxy_gateway') or '')
+        else:
+            result['source_kind'] = 'device_groups'
+            result['sources'] = source_networks(config, desired.get('proxy_gateway') or '')
         if not result['sources']:
-            raise RouterError('请先在当前配置空间的 OxiDNS 设备策略中保存至少一个智能分流 IPv4 地址或网段')
-    except (RouterError, OxidnsSettingsError, ValueError) as error:
+            message = ('请先在当前配置空间的 OxiDNS 设备策略中保存至少一个智能分流 IPv4 地址或网段'
+                       if config.get('policy_routing_sources') is None else
+                       '请先在路由器策略的来源编辑器中保存至少一个有效 IPv4 地址或网段')
+            raise RouterError(message)
+    except (RouterError, OxidnsSettingsError, DeviceGroupsError, ValueError) as error:
         result['error'] = str(error)
     return result
 
@@ -372,6 +380,14 @@ def build(desired, state):
     gateway = desired.get('proxy_gateway') or ''
     spec = {'sources': request['sources'], 'destinations': [item['cidr'] for item in request['cidrs']],
             'gateway': gateway, 'naming_version': NAMING_VERSION, 'policy_version': POLICY_VERSION}
+    if request.get('source_kind') == 'device_groups' and previous:
+        old_sources = [ipaddress.ip_network(value) for value in (previous.get('spec') or {}).get('sources', [])]
+        new_sources = [ipaddress.ip_network(value) for value in spec['sources']]
+        withdrawn = [str(network) for network in subtract(old_sources, new_sources)]
+        if withdrawn:
+            result['warnings'].append('以下来源将离开策略路由：' + '、'.join(withdrawn) + '；发布后这些设备访问所选网段将按普通路由处理')
+        result['source_changes'] = {'removed': withdrawn,
+                                    'added': [str(network) for network in subtract(new_sources, old_sources)]}
     if request['selected'] and not spec['destinations']:
         result['blockers'].append('选中的策略路由规则集没有可用的真实 IPv4 网段')
     # NAT assessment ignores only manifest-verified Mangle objects. Other

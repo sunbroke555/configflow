@@ -162,12 +162,14 @@ def _default_profile_config() -> Dict[str, Any]:
         "surge": {"custom_config": "", "smart_groups": []},
         "loon": {"custom_config": ""},
         "routers": {"items": []},
+        "device_groups": None,
+        "policy_routing_sources": None,
     }
 
 
 SHARED_FIELDS = ('subscriptions', 'nodes', 'subscription_aggregations', 'rule_library')
 RESOURCE_FIELDS = SHARED_FIELDS[:3]
-PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes')
+PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes', 'device_groups', 'policy_routing_sources')
 BUILTIN_POLICIES = {'DIRECT', 'REJECT'}
 RULE_SOURCE_FIELDS = ('name', 'url', 'behavior', 'content', 'source_type', 'format')
 # Per-rule OxiDNS DNS fields keyed by (or listing) rule_configs ids.
@@ -677,8 +679,120 @@ class ProfileRepository:
                 connections.add(connection)
             yield
 
+    @staticmethod
+    def _device_group_context(document, profile_id):
+        """The same immutable topology inputs used by resolved generator inputs."""
+        return {**copy.deepcopy(document['profiles'][profile_id]), 'profile_id': profile_id,
+                'agents': copy.deepcopy(document['system']['agents']),
+                'system_config': copy.deepcopy(document['system']['system_config'])}
+
+    @staticmethod
+    def _validate_device_group_sources(context, compiled):
+        """Bound both the generic source set and each configured gateway split."""
+        import ipaddress
+        from backend.common.device_groups import source_networks
+
+        source_networks(context, None, compiled=compiled)
+        agents = {agent.get('id'): agent for agent in context.get('agents') or []
+                  if isinstance(agent, dict)}
+        gateways = set()
+        for router in (context.get('routers') or {}).get('items') or []:
+            if not isinstance(router, dict) or router.get('type') != 'routeros':
+                continue
+            agent = agents.get(router.get('proxy_gateway_agent_id')) or {}
+            try:
+                gateways.add(str(ipaddress.IPv4Address(agent.get('host'))))
+            except (ValueError, TypeError):
+                # An unresolved address is a publication blocker, not a reason
+                # to invent a gateway or resolve a name during a write.
+                continue
+        for gateway in sorted(gateways):
+            source_networks(context, gateway, compiled=compiled)
+
+    def _normalize_device_group_write(self, previous, proposed, *, clone_sources=None,
+                                      allow_migration=False, untrusted_profiles=()):
+        """All writers share normalization, dependency cleanup and native patching."""
+        from backend.common.device_groups import (
+            DeviceGroupsError, compile_groups, infrastructure_snapshot, normalize_sources,
+        )
+        from backend.common.oxidns_device_groups import normalize_transition
+
+        for profile_id, profile in proposed['profiles'].items():
+            source_id = (clone_sources or {}).get(profile_id, profile_id)
+            before = (self._device_group_context(previous, source_id)
+                      if source_id in previous['profiles'] else {})
+            # Legacy-only writes retain their exact previous path and bytes.
+            if all(config.get(field) is None for config in (before, profile)
+                   for field in ('device_groups', 'policy_routing_sources')):
+                continue
+            old_model, new_model = before.get('device_groups'), profile.get('device_groups')
+            old_rows = old_model.get('groups', []) if isinstance(old_model, dict) else []
+            new_rows = new_model.get('groups', []) if isinstance(new_model, dict) else []
+            if not isinstance(new_rows, list):
+                new_rows = []  # The pure validator reports the invalid shape below.
+            old_devices = {row.get('id'): row for row in old_rows if isinstance(row, dict)}
+            new_devices = {row.get('id'): row for row in new_rows if isinstance(row, dict)}
+            old_policies = {group.get('id'): group for group in before.get('proxy_groups', [])}
+            new_policies = {group.get('id'): group for group in profile.get('proxy_groups', [])}
+            renamed = {old.get('name'): new_policies[identity].get('name') for identity, old in old_policies.items()
+                       if identity in new_policies and old.get('name') != new_policies[identity].get('name')}
+            available = {group.get('name') for group in new_policies.values() if group.get('enabled', True)}
+            for identity, row in new_devices.items():
+                old = old_devices.get(identity, {})
+                if row.get('mode') != 'proxy':
+                    continue
+                if row.get('policy') == old.get('policy') and row.get('policy') in renamed:
+                    row['policy'] = renamed[row['policy']]
+                if old.get('mode') == 'proxy' and row.get('policy') not in available:
+                    raise ProfileInUse(f'设备组「{row.get("name") or identity}」仍引用被删除或停用的策略组，请先修改设备组',
+                                       [{'kind': 'device_group', 'id': identity, 'name': row.get('name') or identity,
+                                         'profile_id': profile_id, 'profile_name': profile['name']}])
+            removed = set(old_devices) - set(new_devices)
+            sources = profile.get('policy_routing_sources')
+            if isinstance(sources, dict) and isinstance(sources.get('exclude_groups'), list):
+                sources['exclude_groups'] = [identity for identity in sources['exclude_groups'] if identity not in removed]
+            old_settings = before.get('oxidns') or {}
+            old_template = old_settings.get('template_settings') or {}
+            has_legacy = bool(old_settings.get('device_policies') or
+                              (old_template.get('device_policies') if isinstance(old_template, dict) else False))
+            if old_model is None and new_model is not None and has_legacy and not allow_migration:
+                raise ProfileInUse('请先通过「升级为设备组」预览并迁移现有设备策略')
+            context = self._device_group_context(proposed, profile_id)
+            try:
+                compiled = compile_groups(context)
+                if 'device_groups' in profile:
+                    profile['device_groups'] = {'version': 1, 'groups': compiled['groups']} if compiled['enabled'] else None
+                if 'policy_routing_sources' in profile:
+                    profile['policy_routing_sources'] = normalize_sources(sources, group_ids=compiled['by_id'])
+                if profile.get('policy_routing_sources') is not None:
+                    context['policy_routing_sources'] = profile['policy_routing_sources']
+                    self._validate_device_group_sources(context, compiled)
+            except DeviceGroupsError as error:
+                raise ProfileValidationError(str(error)) from error
+            settings = profile.get('oxidns') or {}
+            template = settings.get('template_settings') or {}
+            if compiled['enabled'] and (settings.get('device_policies') or
+                    (template.get('device_policies') if isinstance(template, dict) else False)):
+                raise ProfileValidationError('设备组与旧设备策略不能同时保存，请通过「升级为设备组」完成迁移')
+            context = self._device_group_context(proposed, profile_id)
+            trusted = {} if untrusted_profiles is True or profile_id in untrusted_profiles else before
+            normalize_transition(trusted, context)
+            if 'oxidns' in context:
+                profile['oxidns'] = context['oxidns']
+            # System-only changes to registered addresses/bindings can change
+            # generated group sets. Advance only feature-using profiles so the
+            # existing integer publish guard also protects these inputs.
+            topology_changed = (before and infrastructure_snapshot(before)['fingerprint'] !=
+                                compiled['infrastructure']['fingerprint'])
+            own_profile_before = previous['profiles'].get(profile_id)
+            if own_profile_before is not None and (topology_changed or profile != own_profile_before):
+                if profile.get('_revision', 0) <= own_profile_before.get('_revision', 0):
+                    profile['_revision'] = own_profile_before.get('_revision', 0) + 1
+                    profile['updated_at'] = _now()
+
     @contextmanager
-    def _document(self, write=False, *, locked_routers=(), policy_router=None):
+    def _document(self, write=False, *, locked_routers=(), policy_router=None,
+                  clone_sources=None, allow_device_group_migration=False, untrusted_profiles=()):
         nested = getattr(self._local, 'document', None)
         if nested is not None:
             if write:
@@ -698,6 +812,9 @@ class ProfileRepository:
                 yield document
                 if write:
                     self._ensure_rule_proxy_token(document['system'])
+                    self._normalize_device_group_write(previous, document, clone_sources=clone_sources,
+                                                       allow_migration=allow_device_group_migration,
+                                                       untrusted_profiles=untrusted_profiles)
                     self._validate_document(document)
                     with self._router_commit_guard(previous, document, locked_routers, policy_router):
                         with self._commit_guard():
@@ -784,11 +901,13 @@ class ProfileRepository:
         name = metadata.get('name') or profile_id
         if not isinstance(name, str) or not name.strip():
             raise ProfileValidationError('配置名称不能为空')
-        with self._document(write=True) as document:
+        clone_sources = {}
+        with self._document(write=True, clone_sources=clone_sources) as document:
             if profile_id in document['profiles']:
                 raise ProfileExists(profile_id)
             profile = copy.deepcopy(self._profile(document, clone_from)) if clone_from else self._empty_profile(profile_id, name)
             if clone_from:
+                clone_sources[profile_id] = clone_from
                 # Router credentials, sync settings and ownership belong to the source devices.
                 profile['routers'] = {'items': []}
             profile.update(id=profile_id, name=name.strip(), description=str(metadata.get('description') or ''),
@@ -934,8 +1053,10 @@ class ProfileRepository:
         current['updated_at'] = _now()
         return current
 
-    def update_profile_transaction(self, profile_id, updater, *, include_config_revision=False):
-        with self._document(write=True) as document:
+    def update_profile_transaction(self, profile_id, updater, *, include_config_revision=False,
+                                   allow_device_group_migration=False, _untrusted_import=False):
+        with self._document(write=True, allow_device_group_migration=allow_device_group_migration,
+                            untrusted_profiles={profile_id} if _untrusted_import else ()) as document:
             current = self._update_profile_locked(document, profile_id, updater)
             revision = int(current['_revision']) + int(document['shared'].get('_revision', 0))
         saved = copy.deepcopy(current)
@@ -1199,7 +1320,8 @@ class ProfileRepository:
             # Imported rules replace the composition; per-rule DNS of rules it
             # no longer has would otherwise refuse the whole import.
             _prune_rule_dns(current)
-        return self.update_profile_transaction(profile_id, update)
+        return self.update_profile_transaction(profile_id, update, allow_device_group_migration=True,
+                                               _untrusted_import=True)
 
     def export_all(self, desensitize=False):
         with self._document() as document:
@@ -1239,7 +1361,7 @@ class ProfileRepository:
         document = self._convert_import(data)
         self._ensure_rule_proxy_token(document['system'])
         self._validate_document(document)
-        with self._document(write=True) as previous:
+        with self._document(write=True, allow_device_group_migration=True, untrusted_profiles=True) as previous:
             self._snapshot('import')
             settings = document['system']['system_config']
             old_settings = previous['system']['system_config']
@@ -1959,7 +2081,7 @@ class ProfileRepository:
             if not isinstance(profile, dict) or profile.get('id') != profile_id:
                 raise ProfileValidationError('配置内容与 ID 不一致')
             try:
-                self._validate_profile(profile, catalogs)
+                self._validate_profile(profile, catalogs, context=self._device_group_context(document, profile_id))
                 resolved = self._resolve_profile(document, profile_id)
                 from backend.utils.dialer_references import validate_dialers, DialerReferenceError
                 try:
@@ -1978,7 +2100,7 @@ class ProfileRepository:
                 raise ProfileValidationError('配置修订号无效')
 
     @staticmethod
-    def _validate_profile(profile, catalogs):
+    def _validate_profile(profile, catalogs, *, context=None):
         if any(key in profile for key in SHARED_FIELDS):
             raise ProfileValidationError('独立配置不能保存共享资源副本')
         if not isinstance(profile.get('name'), str) or not profile['name'].strip():
@@ -2051,6 +2173,20 @@ class ProfileRepository:
             normalize_notes(profile.get('device_notes', {}))
         except OxidnsSettingsError as exc:
             raise ProfileValidationError(str(exc)) from exc
+        if profile.get('device_groups') is not None or profile.get('policy_routing_sources') is not None:
+            from backend.common.device_groups import DeviceGroupsError, compile_groups, normalize_sources
+            try:
+                compiled = compile_groups(context or profile)
+                normalize_sources(profile.get('policy_routing_sources'), group_ids=compiled['by_id'])
+                if profile.get('policy_routing_sources') is not None:
+                    ProfileRepository._validate_device_group_sources(context or profile, compiled)
+            except DeviceGroupsError as exc:
+                raise ProfileValidationError(str(exc)) from exc
+            settings = profile.get('oxidns') or {}
+            template = settings.get('template_settings') or {}
+            if compiled['enabled'] and (settings.get('device_policies') or
+                    (template.get('device_policies') if isinstance(template, dict) else False)):
+                raise ProfileValidationError('设备组与旧设备策略不能同时保存，请通过「升级为设备组」完成迁移')
         # 上游路由器同样是后加字段，缺省为空对象
         routers = profile.get('routers', {})
         if not isinstance(routers, dict) or not isinstance(routers.get('items', []), list):

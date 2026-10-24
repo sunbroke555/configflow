@@ -1,0 +1,80 @@
+{
+  "system_config": {
+    "rule_proxy_token": "fixture-token",
+    "server_domain": "https://config.test"
+  },
+  "oxidns": {},
+  "rule_configs": [
+    {
+      "id": "d1",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-SUFFIX",
+      "value": "example.test",
+      "enabled": true
+    },
+    {
+      "id": "d2",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "x.example.test",
+      "enabled": true
+    },
+    {
+      "id": "d3",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-KEYWORD",
+      "value": "ads",
+      "enabled": true
+    },
+    {
+      "id": "i1",
+      "itemType": "rule",
+      "rule_type": "IP-CIDR",
+      "value": "203.0.113.0/24",
+      "enabled": true
+    },
+    {
+      "id": "i2",
+      "itemType": "rule",
+      "rule_type": "IP-CIDR6",
+      "value": "2001:db8::/32",
+      "enabled": true
+    },
+    {
+      "id": "g1",
+      "itemType": "rule",
+      "rule_type": "GEOIP",
+      "value": "CN",
+      "enabled": true
+    },
+    {
+      "id": "off",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-SUFFIX",
+      "value": "off.test",
+      "enabled": false
+    },
+    {
+      "id": "s1",
+      "name": "cn",
+      "itemType": "ruleset",
+      "behavior": "domain",
+      "url": "https://rules.test/cn"
+    },
+    {
+      "id": "s2",
+      "name": "mixed",
+      "itemType": "ruleset",
+      "behavior": "classical",
+      "url": "/api/rule-library/content/s2"
+    },
+    {
+      "id": "s3",
+      "name": "ips",
+      "itemType": "ruleset",
+      "behavior": "ipcidr",
+      "url": "https://rules.test/ip"
+    }
+  ],
+  "mosdns": {}
+}
