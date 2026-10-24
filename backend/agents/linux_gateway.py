@@ -587,7 +587,16 @@ def _gateway_entry(agent_id, agent, routers, state, message='', status=None, can
         'gateway_record': has_record(status) if isinstance(status, dict) else False,
         'preserves_forwarding': _managed(status).get('preserves_forwarding') is True,
         'forward_filter': sanitize_forward_filter(status.get('forward_filter')) if isinstance(status, dict) else None,
+        'system_source': _system_source(forwarding) if state == 'system_persisted' else None,
     }
+
+
+def _system_source(forwarding):
+    """The sysctl file:line that persists forwarding on the host (Agent 1.8.43-go and later)."""
+    source = forwarding.get('system_source')
+    if isinstance(source, str) and 0 < len(source) <= 300 and source.isprintable():
+        return source
+    return None
 
 
 def _entry_from_status(agent_id, agent, routers, status):
@@ -604,6 +613,11 @@ def _entry_from_status(agent_id, agent, routers, status):
         return _gateway_entry(agent_id, agent, routers, 'blocked', GATEWAY_FORWARDING_MESSAGES['hook_blocked'], status)
     if forwarding.get('current') == '1' and forwarding.get('persisted') is True:
         return _gateway_entry(agent_id, agent, routers, 'persisted', '', status)
+    if forwarding.get('current') == '1' and forwarding.get('system_persisted') is True:
+        # The host's own sysctl configuration keeps forwarding on across reboots.
+        # ConfigFlow's persistence is still offered: only it keeps forwarding
+        # when a Linux gateway record is removed.
+        return _gateway_entry(agent_id, agent, routers, 'system_persisted', '', status, can_persist=True)
     error = forwarding.get('error')
     return _gateway_entry(agent_id, agent, routers, 'needs_persist', error if isinstance(error, str) else '',
                           status, can_persist=True)

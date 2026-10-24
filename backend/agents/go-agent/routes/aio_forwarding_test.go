@@ -675,6 +675,23 @@ func TestAIOForwardingUnsupportedInstallationsAreRefused(t *testing.T) {
 	}
 }
 
+func TestAIOForwardingStatusReportsSystemPersistenceSeparately(t *testing.T) {
+	f := newAIOFixture(t, "systemd")
+	if status := aioForwardingStatus(f.cfg); status["system_persisted"] != false || status["system_source"] != nil {
+		t.Fatalf("system persistence claimed without configuration: %+v", status)
+	}
+	// The host persisted forwarding itself; ConfigFlow's own persistence is absent.
+	aioSystemForwarding = func() (string, bool) { return "/etc/sysctl.d/99-ip-forward.conf:1", true }
+	status := aioForwardingStatus(f.cfg)
+	if status["system_persisted"] != true || status["system_source"] != "/etc/sysctl.d/99-ip-forward.conf:1" {
+		t.Fatalf("system persistence not reported: %+v", status)
+	}
+	// Only ConfigFlow's own persistence keeps forwarding when a gateway record is removed.
+	if status["persisted"] != false || status["config"] != "absent" {
+		t.Fatalf("system persistence counted as ConfigFlow's: %+v", status)
+	}
+}
+
 func TestAIOTUNStatusReadsDeployedConfiguration(t *testing.T) {
 	f := newAIOFixture(t, "systemd")
 	status := aioTUNStatus(f.cfg)

@@ -351,7 +351,26 @@ func TestSystemForwardingPersistenceHonorsPrecedenceAndUncertainty(t *testing.T)
 			if check.Level != tc.level || !strings.Contains(check.Message, tc.message) {
 				t.Fatalf("persistence overclaimed or ignored precedence: %+v", check)
 			}
+			// The Agent status reports system persistence exactly when this check passes.
+			if source, ok := systemForwardingPersistence(fixture.probe()); ok != (tc.level == "pass") || ok != (source != "") {
+				t.Fatalf("status persistence disagrees with the check: %q %v %+v", source, ok, check)
+			}
 		})
+	}
+}
+
+func TestSystemForwardingPersistenceNamesTheSettingLine(t *testing.T) {
+	fixture := healthySystemFixture()
+	// A host that persisted forwarding itself before ConfigFlow managed it.
+	fixture.files = map[string][]byte{"/etc/sysctl.d/99-ip-forward.conf": []byte("# routing\nnet.ipv4.ip_forward = 1\n")}
+	if source, ok := systemForwardingPersistence(fixture.probe()); !ok || source != "/etc/sysctl.d/99-ip-forward.conf:2" {
+		t.Fatalf("own sysctl file not recognised: %q %v", source, ok)
+	}
+	// An unreadable file may hold a later '=0': not certain, not persisted.
+	fixture.files["/usr/lib/sysctl.d/99-z.conf"] = nil
+	fixture.fileErr = map[string]error{"/usr/lib/sysctl.d/99-z.conf": os.ErrPermission}
+	if source, ok := systemForwardingPersistence(fixture.probe()); ok {
+		t.Fatalf("unreadable configuration claimed persisted: %q", source)
 	}
 }
 

@@ -37,6 +37,9 @@ export interface LinuxGatewayForwarding {
   hook_script: string
   startup_hook: string
   persisted: boolean
+  /** 主机自己的 sysctl 配置已持久化转发（Agent 1.8.43-go 起）；不等于 ConfigFlow 的持久化 */
+  system_persisted?: boolean
+  system_source?: string
   supported?: boolean
   unsupported_reason?: string
   error?: string

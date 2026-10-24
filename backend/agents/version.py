@@ -1,10 +1,16 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.42-go"
+LATEST_AGENT_VERSION = "1.8.43-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.43-go": {
+        "date": "2026-10-24",
+        "features": [
+            "IPv4 转发状态同时报告主机自己的 sysctl 配置是否已持久化转发（按 systemd-sysctl 的加载顺序判断，后加载的设置、/run 下的临时设置或无法读取的文件都不算），面板不再把这类主机显示为“未持久化”"
+        ]
+    },
     "1.8.42-go": {
         "date": "2026-10-24",
         "features": [
