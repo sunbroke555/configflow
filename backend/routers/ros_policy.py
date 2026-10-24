@@ -102,15 +102,29 @@ def stable(snapshot):
 
 
 def subtract(networks, exclusions):
-    for excluded in exclusions:
-        remaining = []
-        for network in networks:
-            if not network.overlaps(excluded):
-                remaining.append(network)
-            elif not network.subnet_of(excluded):
-                remaining.extend(network.address_exclude(excluded))
-        networks = remaining
-    return list(ipaddress.collapse_addresses(networks))
+    """Remove exclusions from networks with a sorted sweep, not every pair.
+
+    Rule sets hold thousands of prefixes; comparing each pair made previews
+    with ~3000 destinations take tens of seconds.
+    """
+    networks = list(ipaddress.collapse_addresses(networks))
+    exclusions = list(ipaddress.collapse_addresses(exclusions))
+    remaining, first = [], 0
+    for network in networks:
+        start, end = int(network.network_address), int(network.broadcast_address)
+        while first < len(exclusions) and int(exclusions[first].broadcast_address) < start:
+            first += 1
+        pieces, index = [network], first
+        while index < len(exclusions) and int(exclusions[index].network_address) <= end:
+            excluded, parts = exclusions[index], []
+            for piece in pieces:
+                if not piece.overlaps(excluded):
+                    parts.append(piece)
+                elif not piece.subnet_of(excluded):
+                    parts.extend(piece.address_exclude(excluded))
+            pieces, index = parts, index + 1
+        remaining.extend(pieces)
+    return list(ipaddress.collapse_addresses(remaining))
 
 
 def smart_sources(rows, gateway):

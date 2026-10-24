@@ -1,20 +1,23 @@
 """Guarded REST transactions for source-policy bundles.
 
-Readback uses individual resource URLs, so loading thousands of address-list
-entries does not repeatedly download the entire list. Compensation checks the
-exact last-written configuration before touching a resource.
+Address-list members are written by /execute console batches and checked with
+one filtered read per list, so thousands of members cost a few dozen requests
+instead of one write and one read each. Other objects use individual resource
+URLs. Compensation checks the exact last-written configuration before touching
+a resource.
 """
 import copy
 import ipaddress
+from itertools import groupby
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from backend.routers.base import RouterError, RouterRollbackError
 from backend.routers.ros_policy import (
-    FILTER, MANGLE, NAT, ROUTES, RULES, TABLES, VRFS, bundle_health,
+    ADDRESSES, FILTER, MANGLE, NAT, ROUTES, RULES, TABLES, VRFS, bundle_health,
     check_policy_order, check_references, check_route_egress, config_row, enabled, owned_rows, snapshot, stable,
 )
-from backend.routers.routeros import ROUTE_FIELDS, MissingResource, UncertainWrite, _matches
+from backend.routers.routeros import ROUTE_FIELDS, MissingResource, UncertainWrite, _comparable, _matches
 from backend.routers.ros_values import comparable_values
 
 
@@ -92,6 +95,154 @@ def _create(driver, path, values, journal, ids, *, restoring=False):
     return _resource(path, actual)
 
 
+# Measured on RouterOS 7.24: a 16 kB batch adds ~800 members in well under a
+# second on x86; slower boards keep it inside the 10 s request timeout. The
+# console caps one executed script at 64 kB.
+ADDRESS_SCRIPT_BYTES = 16 * 1024
+ADDRESS_REMOVE_BATCH = 500
+
+
+def _script_string(value):
+    text = str(value)
+    for raw, escaped in (('\\', '\\\\'), ('"', '\\"'), ('$', '\\$'), ('\n', '\\n'), ('\r', '\\r'), ('\t', '\\t')):
+        text = text.replace(raw, escaped)
+    return '"' + text + '"'
+
+
+def _script_value(key, value):
+    # REST accepts true/false, but console commands reject them for yes/no flags.
+    if key == 'disabled' and _comparable(key, value) in ('true', 'false'):
+        return 'yes' if _comparable(key, value) == 'true' else 'no'
+    return _script_string(value)
+
+
+def _address_rows(driver, name):
+    rows = driver._list(ADDRESSES + '?' + urlencode({'list': name}))
+    return [row for row in rows if row.get('list') == name]
+
+
+def _run_address_batches(driver, shared, addresses):
+    """Add members in console batches; return the failure count and first reason."""
+    params = ' '.join(f'{key}={_script_value(key, value)}' for key, value in shared.items())
+    head = ':local n 0\n:local m ""\n:foreach a in={'
+    tail = ('} do={:onerror e in={/ip/firewall/address-list/add ' + params + ' address=$a}'
+            ' do={:set n ($n+1); :if ($n=1) do={:set m ($a . " " . $e)}}}\n:put ("cf-done:" . $n . ":" . $m)')
+    budget = ADDRESS_SCRIPT_BYTES - len(head.encode()) - len(tail.encode())
+    batches, current, size = [], [], 0
+    for address in addresses:
+        item = _script_string(address)
+        if current and size + len(item) + 1 > budget:
+            batches.append(current)
+            current, size = [], 0
+        current.append(item)
+        size += len(item) + 1
+    if current:
+        batches.append(current)
+    failed, first = 0, ''
+    for batch in batches:
+        result = driver._request('POST', '/execute', {'script': head + ';'.join(batch) + tail, 'as-string': ''})
+        output = str(result.get('ret', '')) if isinstance(result, dict) else ''
+        marker = output.rfind('cf-done:')
+        count, _, message = output[marker + len('cf-done:'):].partition(':') if marker >= 0 else ('', '', '')
+        if not count.strip().isdigit():
+            # A syntax error or an interrupted script prints no completion marker.
+            raise RouterError('批量写入地址列表未执行完成：' + (output.strip()[:200] or 'RouterOS 无输出'))
+        failed += int(count)
+        first = first or message.strip()
+    return failed, first
+
+
+def _settled_address_rows(driver, name):
+    """After a lost reply the batch may still run; wait until the list stops growing."""
+    rows = _address_rows(driver, name)
+    for _ in range(10):
+        time.sleep(1)
+        latest = _address_rows(driver, name)
+        if len(latest) == len(rows):
+            return latest
+        rows = latest
+    raise RouterRollbackError('地址列表批量写入结果不明确，未删除任何不明归属的对象，请检查路由器：' + name)
+
+
+def _create_addresses(driver, entries, journal, ids):
+    """Create address-list members in batches and journal every row they produced.
+
+    One filtered read per list proves that each requested member exists exactly
+    once with the submitted values. Rows nobody requested are never journaled.
+    """
+    groups = {}
+    for index, values in enumerate(entries):
+        shared = tuple((key, value) for key, value in values.items() if key != 'address')
+        groups.setdefault(shared, []).append((index, values))
+    resources = [None] * len(entries)
+    for shared, members in groups.items():
+        shared = dict(shared)
+        name = shared.get('list')
+        if not name:
+            raise RouterError('地址列表条目缺少列表名')
+        before = {row['.id'] for row in _address_rows(driver, name)}
+        failure = None
+        try:
+            failed, reason = _run_address_batches(driver, shared, [values['address'] for _, values in members])
+        except UncertainWrite as error:
+            failure, rows = error, _settled_address_rows(driver, name)
+        except RouterError as error:
+            failure, rows = error, _address_rows(driver, name)
+        else:
+            rows = _address_rows(driver, name)
+        wanted = {}
+        for index, values in members:
+            wanted.setdefault(_comparable('address', values['address']), []).append((index, values))
+        unknown = []
+        for row in rows:
+            if row['.id'] in before or row['.id'] in ids[ADDRESSES]:
+                continue
+            matches = wanted.get(_comparable('address', row.get('address', '')))
+            if not matches or not _matches_values(ADDRESSES, row, matches[0][1]):
+                unknown.append(row)
+                continue
+            index, _ = matches.pop(0)
+            ids[ADDRESSES].add(row['.id'])
+            resources[index] = _resource(ADDRESSES, row)
+            journal.append({'action': 'delete', **resources[index]})
+        if failure is not None:
+            raise failure
+        if unknown:
+            raise RouterError(f'批量写入期间地址列表 {name} 出现未提交的条目，保留这些对象，请检查路由器')
+        missing = [values['address'] for items in wanted.values() for _, values in items]
+        if failed or missing:
+            detail = f'；首个错误：{reason}' if reason else ''
+            raise RouterError(f'地址列表 {name} 有 {max(failed, len(missing))} 条写入失败'
+                              f'（{"、".join(missing[:5])}）{detail}')
+    return resources
+
+
+def _remove_addresses(driver, ids):
+    for start in range(0, len(ids), ADDRESS_REMOVE_BATCH):
+        driver._request('POST', ADDRESSES + '/remove', {'.id': ','.join(ids[start:start + ADDRESS_REMOVE_BATCH])})
+
+
+def _live_addresses(driver, items):
+    live = {}
+    for name in dict.fromkeys(item['config'].get('list') for item in items):
+        live.update((row['.id'], row) for row in _address_rows(driver, name))
+    return live
+
+
+def _delete_addresses(driver, items, journal):
+    """Guard owned members with one read per list, journal them, then remove in batches."""
+    live = _live_addresses(driver, items)
+    for item in items:
+        row = live.get(item['id'])
+        if row is None or config_row(row) != config_row(item['config']):
+            raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + item['path'] + '/' + item['id'])
+    for item in items:
+        journal.append({'action': 'restore', **item, 'values': _writable(ADDRESSES, live[item['id']])})
+    _remove_addresses(driver, [item['id'] for item in items])
+    if set(_live_addresses(driver, items)) & {item['id'] for item in items}:
+        raise RouterError('策略路由回读校验失败：对象仍然存在')
+
+
 def _delete(driver, item, journal):
     original = _guard(driver, item)
     values = _writable(item['path'], original)
@@ -105,6 +256,34 @@ def _delete(driver, item, journal):
     driver._request('DELETE', item['path'] + '/' + quote(item['id'], safe='*'))
     if _read(driver, item['path'], item['id']) is not None:
         raise RouterError('策略路由回读校验失败：对象仍然存在')
+
+
+def _restore_delete_addresses(driver, steps):
+    """Remove still-present members of a failed release; keep externally changed ones."""
+    live = _live_addresses(driver, steps)
+    present = [step for step in steps if step['id'] in live]
+    changed = [step for step in present if config_row(live[step['id']]) != config_row(step['config'])]
+    removing = [step['id'] for step in present if step not in changed]
+    _remove_addresses(driver, removing)
+    if set(_live_addresses(driver, steps)) & set(removing):
+        raise RouterError('回滚删除后对象仍存在')
+    if changed:
+        raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + ADDRESSES + '/' + changed[0]['id'])
+
+
+def _restore_addresses(driver, steps, ids, remapped, configs):
+    """Recreate deleted members in batches; members still present must be unchanged."""
+    live = _live_addresses(driver, steps)
+    changed = [step for step in steps
+               if step['id'] in live and config_row(live[step['id']]) != config_row(step['config'])]
+    absent = [step for step in steps if step['id'] not in live]
+    if absent:
+        created = _create_addresses(driver, [step['values'] for step in absent], [], ids)
+        for step, resource in zip(absent, created):
+            remapped[(ADDRESSES, step['id'])] = resource['id']
+            configs[(ADDRESSES, resource['id'])] = resource['config']
+    if changed:
+        raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + ADDRESSES + '/' + changed[0]['id'])
 
 
 def restore(driver, op):
@@ -130,52 +309,65 @@ def restore(driver, op):
     except RouterError as error:
         failures.append(str(error))
         delete_safe = False
-    for step in op['steps']:
-        try:
-            if step['action'] == 'operation':
-                # Keep the replacement protection if the old path could not
-                # be restored; report the incomplete rollback for inspection.
-                if failures:
+    configs = {}
+    for (action, is_address), run in groupby(op['steps'], key=lambda step: (step['action'], step.get('path') == ADDRESSES)):
+        if is_address and action in ('delete', 'restore'):
+            # Members are batched: one read per list instead of one per member.
+            try:
+                if action == 'restore':
+                    _restore_addresses(driver, list(run), ids, remapped, configs)
+                elif delete_safe:
+                    _restore_delete_addresses(driver, list(run))
+            except RouterError as error:
+                failures.append(str(error))
+            continue
+        for step in run:
+            try:
+                if step['action'] == 'operation':
+                    # Keep the replacement protection if the old path could not
+                    # be restored; report the incomplete rollback for inspection.
+                    if failures:
+                        continue
+                    driver.apply(step['undo'])
                     continue
-                driver.apply(step['undo'])
-                continue
-            current = _read(driver, step['path'], step['id'])
-            if step['action'] == 'delete':
-                if not delete_safe:
-                    continue
-                if current is None:
-                    continue
-                _guard(driver, step)
-                # Do not drop an entire table if another writer has started
-                # referencing it since the release. Leave it for inspection.
-                if step['path'] == TABLES:
-                    check_references([step], snapshot(driver))
-                driver._request('DELETE', step['path'] + '/' + quote(step['id'], safe='*'))
-                if _read(driver, step['path'], step['id']) is not None:
-                    raise RouterError('回滚删除后对象仍存在')
-            else:
-                if current is not None:
+                current = _read(driver, step['path'], step['id'])
+                if step['action'] == 'delete':
+                    if not delete_safe:
+                        continue
+                    if current is None:
+                        continue
                     _guard(driver, step)
-                    continue
-                values = copy.deepcopy(step['values'])
-                before = values.get('place-before')
-                if before:
-                    values['place-before'] = remapped.get((step['path'], before), before)
-                    if _read(driver, step['path'], values['place-before']) is None:
-                        raise RouterError('原规则位置已改变，不能安全恢复顺序')
-                restored = _create(driver, step['path'], values, [], ids, restoring=True)
-                remapped[(step['path'], step['id'])] = restored['id']
-        except RouterError as error:
-            failures.append(str(error))
+                    # Do not drop an entire table if another writer has started
+                    # referencing it since the release. Leave it for inspection.
+                    if step['path'] == TABLES:
+                        check_references([step], snapshot(driver))
+                    driver._request('DELETE', step['path'] + '/' + quote(step['id'], safe='*'))
+                    if _read(driver, step['path'], step['id']) is not None:
+                        raise RouterError('回滚删除后对象仍存在')
+                else:
+                    if current is not None:
+                        _guard(driver, step)
+                        continue
+                    values = copy.deepcopy(step['values'])
+                    before = values.get('place-before')
+                    if before:
+                        values['place-before'] = remapped.get((step['path'], before), before)
+                        if _read(driver, step['path'], values['place-before']) is None:
+                            raise RouterError('原规则位置已改变，不能安全恢复顺序')
+                    restored = _create(driver, step['path'], values, [], ids, restoring=True)
+                    remapped[(step['path'], step['id'])] = restored['id']
+            except RouterError as error:
+                failures.append(str(error))
     previous = copy.deepcopy(op.get('previous'))
     if previous:
         for item in previous['resources']:
             new_id = remapped.get((item['path'], item['id']))
             if new_id:
                 item['id'] = new_id
-                row = _read(driver, item['path'], new_id)
-                if row:
-                    item['config'] = config_row(row)
+                config = configs.get((item['path'], new_id))
+                row = None if config else _read(driver, item['path'], new_id)
+                if config or row:
+                    item['config'] = config or config_row(row)
     driver.ros_policy_manifest = previous
     if failures:
         raise RouterRollbackError('策略路由回滚未完成：' + '；'.join(failures))
@@ -242,11 +434,16 @@ def apply(driver, op):
             verify_nat(op['static_nat_checks'], driver.read_state())
             for path in (NAT, ROUTES):
                 ids[path].update(row['.id'] for row in driver._list(path))
-        for entry in op['bundle']:
-            resource = _create(driver, entry['path'], entry['values'], journal, ids)
-            resources.append(resource)
-            if entry['path'] == ROUTES:
-                check_route_egress(_read(driver, ROUTES, resource['id']), op['spec']['gateway'], op['spec']['egress_interface'])
+        for is_address, run in groupby(op['bundle'], key=lambda entry: entry['path'] == ADDRESSES):
+            run = list(run)
+            if is_address:
+                resources.extend(_create_addresses(driver, [entry['values'] for entry in run], journal, ids))
+                continue
+            for entry in run:
+                resource = _create(driver, entry['path'], entry['values'], journal, ids)
+                resources.append(resource)
+                if entry['path'] == ROUTES:
+                    check_route_egress(_read(driver, ROUTES, resource['id']), op['spec']['gateway'], op['spec']['egress_interface'])
         for replacement in op.get('replacements', []):
             _create(driver, replacement['path'], replacement['values'], journal, ids)
         _verify_replacement_nat(driver, op, resources)
@@ -255,8 +452,12 @@ def apply(driver, op):
         # Reverse creation order: withdraw the old entry rule first, then its
         # private chain/NAT/route/table and finally its list members.
         check_references(owned, snapshot(driver))
-        for entry in reversed(owned):
-            _delete(driver, entry, journal)
+        for is_address, run in groupby(reversed(owned), key=lambda entry: entry['path'] == ADDRESSES):
+            if is_address:
+                _delete_addresses(driver, list(run), journal)
+                continue
+            for entry in run:
+                _delete(driver, entry, journal)
     except RouterError as error:
         undo = {'steps': list(reversed(journal)), 'previous': op.get('previous')}
         try:

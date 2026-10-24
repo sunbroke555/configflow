@@ -4,7 +4,9 @@ import ipaddress
 
 from backend.routers.base import RouterError, RouterRollbackError
 from backend.routers.ros_policy import ADDRESSES, MANGLE, ROUTES, config_row, owned_rows, snapshot, check_references
-from backend.routers.ros_policy_write import _create, _delete, _guard, _resource, restore, verify
+from backend.routers.ros_policy_write import (
+    _create, _create_addresses, _delete, _delete_addresses, _guard, _resource, restore, verify,
+)
 
 
 def static_resources(driver, desired):
@@ -118,22 +120,36 @@ def apply_delta(driver, desired, plan, baseline, ensure_current=lambda **_: None
     try:
         ensure_current(force=True)
         for path, values in additions:
+            if path == ADDRESSES:
+                continue
             ensure_current()
-            if path == ROUTES and any(row.get('routing-table', 'main') == 'main'
-                    and row.get('dst-address') == values['dst-address'] for row in driver._list(ROUTES)):
+            if any(row.get('routing-table', 'main') == 'main'
+                   and row.get('dst-address') == values['dst-address'] for row in driver._list(ROUTES)):
                 raise RouterError('写入前发现同网段路由，保留手工对象，请重新预览')
-            resource = _create(driver, path, values, journal, ids)
-            if path == ADDRESSES and next_manifest:
-                # Preserve dependency order: withdrawal reverses this sequence
-                # and must deactivate Mangle before deleting list members.
-                position = next((i for i, item in enumerate(next_manifest['resources'])
-                                 if item['path'] != ADDRESSES), len(next_manifest['resources']))
-                next_manifest['resources'].insert(position, resource)
-            log.append({'status': 'ok', 'summary': f'新增 {values.get("address") or values.get("dst-address")}'})
+            _create(driver, path, values, journal, ids)
+            log.append({'status': 'ok', 'summary': f'新增 {values["dst-address"]}'})
+        members = [values for path, values in additions if path == ADDRESSES]
+        if members:
+            ensure_current()
+            for values, resource in zip(members, _create_addresses(driver, members, journal, ids)):
+                if next_manifest:
+                    # Preserve dependency order: withdrawal reverses this sequence
+                    # and must deactivate Mangle before deleting list members.
+                    position = next((i for i, item in enumerate(next_manifest['resources'])
+                                     if item['path'] != ADDRESSES), len(next_manifest['resources']))
+                    next_manifest['resources'].insert(position, resource)
+                log.append({'status': 'ok', 'summary': f'新增 {values["address"]}'})
         for item in removals:
+            if item['path'] == ADDRESSES:
+                continue
             ensure_current()
             _delete(driver, item, journal)
-            log.append({'status': 'ok', 'summary': f'删除 {item["config"].get("address") or item["config"].get("dst-address")}'})
+            log.append({'status': 'ok', 'summary': f'删除 {item["config"]["dst-address"]}'})
+        members = [item for item in removals if item['path'] == ADDRESSES]
+        if members:
+            ensure_current()
+            _delete_addresses(driver, members, journal)
+            log.extend({'status': 'ok', 'summary': f'删除 {item["config"].get("address")}'} for item in members)
         driver.ros_policy_manifest = next_manifest
         # Exclude unrelated cf-prefixed static routes deliberately preserved above.
         checks = {**plan['checks'], 'removed_routes': [item['id'] for item in removals if item['path'] == ROUTES]}
