@@ -1861,8 +1861,8 @@ def get_oxidns_query(agent_id, record_id):
 def oxidns_device_policies(agent_id):
     """Edit only the bound profile, independently of the global UI selection."""
     from backend.common.config import update_config_transaction
-    from backend.common.oxidns_device_policy import apply_policies, read_policies, revision
-    from backend.common.device_notes import prepare_policy_notes, read_notes
+    from backend.common.oxidns_device_policy import read_policies, revision
+    from backend.common.device_notes import policy_names_revision, read_notes, save_policy_rows
     from backend.common.oxidns_settings import OxidnsSettingsError
 
     def response(data, status=200):
@@ -1880,7 +1880,7 @@ def oxidns_device_policies(agent_id):
     try:
         if request.method == 'PUT':
             body = request.get_json(silent=True)
-            if not isinstance(body, dict) or set(body) - {'profile_id', 'revision', 'policies', 'base_url'} or \
+            if not isinstance(body, dict) or set(body) - {'profile_id', 'revision', 'notes_revision', 'policies', 'base_url'} or \
                     not isinstance(body.get('base_url', ''), str):
                 return response({'message': '设备策略请求格式无效。'}, 400)
             if body.get('profile_id') != profile_id:
@@ -1891,11 +1891,11 @@ def oxidns_device_policies(agent_id):
                 latest = manager.get_agent_by_id(agent_id)
                 if not latest or latest.get('service_type') != 'oxidns' or \
                         (latest.get('profile_id') or get_default_profile_id()) != profile_id or \
-                        body.get('revision') != revision(config.get('oxidns', {})):
+                        body.get('revision') != revision(config.get('oxidns', {})) or \
+                        body.get('notes_revision', policy_names_revision(config)) != policy_names_revision(config):
                     raise PolicyConflict('配置或设备绑定已更新，请重新载入后再保存。')
-                rows, notes = prepare_policy_notes(config, body.get('policies'))
-                config['oxidns'] = apply_policies(config.get('oxidns', {}), config, rows, body.get('base_url', ''))
-                config['device_notes'] = notes
+                config['oxidns'] = save_policy_rows(config, config.get('oxidns', {}), body.get('policies'),
+                                                    body.get('base_url', ''))
 
             update_config_transaction(update, profile_id)
         config = get_config(profile_id)
@@ -1907,7 +1907,8 @@ def oxidns_device_policies(agent_id):
                  (item.get('profile_id') or get_default_profile_id()) == profile_id]
         return response({'success': True, 'draft': True, 'profile_id': profile_id,
                          'profile_name': profile.get('name') or profile_id,
-                         'revision': revision(settings), 'agents': peers, 'device_notes': read_notes(config),
+                         'revision': revision(settings), 'notes_revision': policy_names_revision(config),
+                         'agents': peers, 'device_notes': read_notes(config),
                          'deployment': _public_deployment(agent['latest_deployment']) if agent.get('latest_deployment') else None,
                          **read_policies(settings, config)})
     except PolicyConflict as exc:

@@ -480,7 +480,7 @@ export const clientToolsApi = {
 export const oxidnsDevicePolicyApi = {
   get: (id: string, options: { signal?: AbortSignal } = {}) =>
     api.get(`/agents/${encodeURIComponent(id)}/oxidns/device-policies`, options),
-  save: (id: string, data: { profile_id: string; revision: string; policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[] }) =>
+  save: (id: string, data: { profile_id: string; revision: string; notes_revision: string; policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[] }) =>
     api.put(`/agents/${encodeURIComponent(id)}/oxidns/device-policies`, { ...data, base_url: getBaseUrl() })
 }
 

@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from backend.common.agent_manager import get_agent_manager
-from backend.common.device_notes import read_notes
+from backend.common.device_notes import read_notes, set_note
 from backend.common.oxidns_device_policy import apply_policies
 from backend.test_oxidns_integration import oxidns_app
 from backend.utils import domain_discovery_service as service
@@ -34,14 +34,15 @@ def test_notes_shared_with_dns_without_changing_native_rules(oxidns_app):
     assert client.get(f'/api/agents/{dns}/client-notes').get_json()['notes'] == saved.get_json()['notes']
     state = client.get(f'/api/agents/{dns}/oxidns/device-policies').get_json()
     assert state['policies'][0]['name'] == '工作电脑'
-    after = repo.get_profile('office')['oxidns']
-    assert after['native_config'] == original['native_config']
-    assert after['device_policies'][0]['mode'] == 'direct'
-    assert after['template_settings']['device_policies'][0]['name'] == '工作电脑'
+    # A rename is display-only: the OxiDNS settings and their revisions stay unchanged.
+    assert repo.get_profile('office')['oxidns'] == original
     assert repo.get_profile('default') == default
     assert client.put(url, json=body).status_code == 409
     body.update(name='', previous_name='工作电脑')
+    # Clearing hides the name the policy row saved before names moved to device_notes.
     assert client.put(url, json=body).get_json()['notes'].get('192.0.2.5', '') == ''
+    assert client.get(f'/api/agents/{dns}/oxidns/device-policies').get_json()['policies'][0]['name'] == ''
+    assert repo.get_profile('office')['oxidns'] == original
 
 
 def test_dns_save_reuses_names_and_keeps_notes_after_policy_removal(oxidns_app):
@@ -61,6 +62,70 @@ def test_dns_save_reuses_names_and_keeps_notes_after_policy_removal(oxidns_app):
     assert client.get(url).get_json()['notes']['192.0.2.6'] == '群晖'
     assert client.put(policy_url, json={'profile_id': 'office', 'revision': renamed['revision'], 'policies': []}).status_code == 200
     assert client.get(url).get_json()['notes']['192.0.2.6'] == '群晖'
+
+
+def test_legacy_policy_names_are_a_fallback_and_can_be_hidden():
+    config = {'oxidns': {'device_policies': [
+        {'ip': '192.0.2.1', 'name': '旧名', 'mode': 'smart'},
+        {'ip': '192.0.2.2', 'name': '保留', 'mode': 'direct'},
+        {'ip': '192.0.2.3', 'name': '', 'mode': 'smart'}]},
+        'device_notes': {'192.0.2.1': '新名', '192.0.2.3': 'NAS'}}
+    assert read_notes(config) == {'192.0.2.1': '新名', '192.0.2.2': '保留', '192.0.2.3': 'NAS'}
+    set_note(config, '192.0.2.2', '')
+    set_note(config, '192.0.2.3', '')
+    assert config['device_notes'] == {'192.0.2.1': '新名', '192.0.2.2': ''}
+    assert read_notes(config) == {'192.0.2.1': '新名'}
+    assert config['oxidns']['device_policies'][1]['name'] == '保留'
+
+
+def test_policy_name_edits_keep_template_settings_and_revisions(oxidns_app):
+    app, repo = oxidns_app
+    dns = agent('oxidns')
+    repo.update_profile_transaction('office', lambda config: config['oxidns'].update(
+        device_policies=[{'ip': '192.0.2.7', 'name': '旧名', 'mode': 'direct'}]))
+    original = deepcopy(repo.get_profile('office')['oxidns'])
+    assert original.get('config_mode', 'template') == 'template' and not original.get('native_config')
+    client = app.test_client()
+    url = f'/api/agents/{dns}/oxidns/device-policies'
+    state = client.get(url).get_json()
+    body = {key: state[key] for key in ('profile_id', 'revision', 'notes_revision', 'policies')}
+    body['policies'][0]['name'] = '客厅电视'
+    saved = client.put(url, json=body)
+    assert saved.status_code == 200, saved.get_json()
+    # Only device_notes changed: no native conversion and no new OxiDNS revision to publish.
+    assert repo.get_profile('office')['oxidns'] == original
+    assert saved.get_json()['revision'] == state['revision']
+    assert saved.get_json()['policies'][0]['name'] == '客厅电视'
+    assert repo.get_profile('office')['device_notes'] == {'192.0.2.7': '客厅电视'}
+    body['policies'][0]['mode'] = 'smart'
+    body['notes_revision'] = saved.get_json()['notes_revision']
+    changed = client.put(url, json=body)
+    assert changed.status_code == 200, changed.get_json()
+    assert changed.get_json()['revision'] != state['revision']
+    assert repo.get_profile('office')['oxidns']['device_policies'] == [{'ip': '192.0.2.7', 'name': '客厅电视', 'mode': 'smart'}]
+
+
+def test_policy_editor_rejects_names_renamed_elsewhere(oxidns_app):
+    app, _ = oxidns_app
+    mihomo, dns = agent(), agent('oxidns')
+    client = app.test_client()
+    url = f'/api/agents/{dns}/oxidns/device-policies'
+    notes = f'/api/agents/{mihomo}/client-notes'
+    state = client.get(url).get_json()
+    created = client.put(url, json={'profile_id': 'office', 'revision': state['revision'], 'notes_revision': state['notes_revision'],
+                                    'policies': [{'ip': '192.0.2.8', 'name': 'NAS', 'mode': 'smart'}]}).get_json()
+    body = {key: created[key] for key in ('profile_id', 'revision', 'notes_revision', 'policies')}
+    # Naming a device without a policy does not disturb the open editor.
+    assert client.put(notes, json={'profile_id': 'office', 'ip': '192.0.2.9', 'name': '手机', 'previous_name': ''}).status_code == 200
+    body['policies'][0]['mode'] = 'direct'
+    assert client.put(url, json=body).status_code == 200
+    latest = client.get(url).get_json()
+    body = {key: latest[key] for key in ('profile_id', 'revision', 'notes_revision', 'policies')}
+    assert client.put(notes, json={'profile_id': 'office', 'ip': '192.0.2.8', 'name': '群晖', 'previous_name': 'NAS'}).status_code == 200
+    assert client.get(url).get_json()['revision'] == latest['revision']
+    body['policies'][0]['mode'] = 'smart'
+    assert client.put(url, json=body).status_code == 409
+    assert client.get(notes).get_json()['notes']['192.0.2.8'] == '群晖'
 
 
 def test_notes_bound_profile_validation_and_conflict(oxidns_app):

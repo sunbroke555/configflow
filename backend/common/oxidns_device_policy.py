@@ -145,7 +145,11 @@ def read_policies(settings, config):
     from backend.common.oxidns_editor import prepare_editor
     from backend.common.oxidns_native import load_native_yaml
 
-    rows = normalize_policies(settings.get('device_policies', []))
+    from backend.common.device_notes import stored_names
+
+    names = stored_names(config)
+    rows = [{**row, 'name': names.get(row['ip'], row['name'])}
+            for row in normalize_policies(settings.get('device_policies', []))]
     try:
         current = prepare_editor(settings, config)
         patch_document(load_native_yaml(current['native_config']), rows, rows)

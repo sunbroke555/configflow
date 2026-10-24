@@ -1,6 +1,6 @@
 """One profile draft for OxiDNS source devices and a RouterOS policy bundle."""
-from backend.common.oxidns_device_policy import apply_policies, read_policies, revision
-from backend.common.device_notes import prepare_policy_notes
+from backend.common.oxidns_device_policy import read_policies, revision
+from backend.common.device_notes import policy_names_revision, save_policy_rows
 from backend.routers.ros_policy import digest
 from backend.routers.store import find_router, normalize, public_view, routers_of
 from backend.routers.base import RouterConflictError
@@ -10,9 +10,9 @@ FIELDS = ('ip_rule_sets', 'ros_policy_rule_sets', 'proxy_gateway_agent_id')
 
 def draft_revision(config, router):
     # Do not invalidate a draft on a probe/heartbeat, but detect edits from the
-    # ordinary router form, another device editor or another publication.
+    # ordinary router form, another device editor, a renamed source or another publication.
     return digest({'router': {k: v for k, v in router.items() if k != 'last_probe'},
-                   'oxidns': revision(config.get('oxidns') or {})})
+                   'oxidns': revision(config.get('oxidns') or {}), 'names': policy_names_revision(config)})
 
 
 def read_workspace(config, router, profile_id, profile_name, agents, default_profile):
@@ -41,10 +41,8 @@ def save_workspace(config, router_id, body, base_url):
     settings = config.get('oxidns') or {}
     if body['policies'] != existing['policies']:
         # Validation happens before either section is changed. The repository
-        # commits the two sections together, never a half-saved workflow.
-        rows, notes = prepare_policy_notes(config, body['policies'])
-        settings = apply_policies(settings, config, rows, base_url)
-        config['device_notes'] = notes
+        # commits the sections together, never a half-saved workflow.
+        settings = save_policy_rows(config, settings, body['policies'], base_url)
     items = routers_of(config)
     items[next(i for i, row in enumerate(items) if row['id'] == router_id)] = updated
     config['routers'] = {**config.get('routers', {}), 'items': items}

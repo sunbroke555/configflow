@@ -242,7 +242,7 @@ async function save(): Promise<boolean> {
     error.value = ''
     submissionFailure.value = null
     try {
-      const { data } = await oxidnsDevicePolicyApi.save(id, { profile_id: state.value.profile_id, revision: state.value.revision, policies: JSON.parse(sent) })
+      const { data } = await oxidnsDevicePolicyApi.save(id, { profile_id: state.value.profile_id, revision: state.value.revision, notes_revision: state.value.notes_revision, policies: JSON.parse(sent) })
       if (disposed || id !== props.agentId || generation !== epoch) return false
       state.value = data
       // Adopt the server's normalized rows only if nothing changed while saving,
