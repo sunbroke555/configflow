@@ -2,7 +2,7 @@
   <div class="min-w-0">
     <PageHeader title="客户端设备" :mobile-help="pageHelp">
       <template #title-extra>
-        <span v-if="state && fromAgent" class="min-w-0 max-w-48 truncate rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground" :title="`配置空间：${state.profile_name}`">配置：{{ state.profile_name }}</span>
+        <span v-if="state && (fromAgent || fromProfile)" class="min-w-0 max-w-48 truncate rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground" :title="`配置空间：${state.profile_name}`">配置：{{ state.profile_name }}</span>
       </template>
       <template #actions>
         <Button v-if="fromAgent" variant="outline" class="min-h-11" @click="router.push(oxidnsMonitorPath(fromAgent))"><ArrowLeft class="size-4" />返回 OxiDNS 面板</Button>
@@ -183,6 +183,8 @@ const router = useRouter()
 const agentOf = (value: unknown) => typeof value === 'string' ? value : ''
 /** 从 OxiDNS 面板进入时固定使用该设备绑定的配置空间，不切换全局空间 */
 const fromAgent = ref(agentOf(route.query.agent))
+/** 从上游路由等页面进入其他配置空间时同样不切换全局空间 */
+const fromProfile = ref(agentOf(route.query.profile))
 // Matches the breakpoint where .cf-mobile-records hides the table header and its help.
 const phone = useMediaQuery('(width < 640px)')
 const state = ref<ClientDevicesState | null>(null)
@@ -240,7 +242,7 @@ async function load(keep = false) {
   loading.value = true
   error.value = ''
   try {
-    const { data } = await clientDeviceApi.get({ agentId: fromAgent.value || undefined })
+    const { data } = await clientDeviceApi.get({ agentId: fromAgent.value || undefined, profileId: fromProfile.value || undefined })
     if (disposed) return
     const merge = keep && data.profile_id === state.value?.profile_id
     if (merge) {
@@ -405,11 +407,12 @@ onBeforeRouteLeave(async () => {
   return !unsaved().length || await confirm('有设备尚未保存，离开会丢失这些修改。', { title: '离开客户端设备', confirmText: '放弃修改' })
 })
 onBeforeRouteUpdate(async to => {
-  const next = agentOf(to.query.agent)
-  if (next === fromAgent.value) return
+  const next = agentOf(to.query.agent), profile = agentOf(to.query.profile)
+  if (next === fromAgent.value && profile === fromProfile.value) return
   await queue
   if (unsaved().length && !await confirm('有设备尚未保存，切换后会丢失这些修改。', { title: '离开客户端设备', confirmText: '放弃修改' })) return false
   fromAgent.value = next
+  fromProfile.value = profile
   void load()
 })
 onMounted(() => load())

@@ -234,6 +234,13 @@ describe('client devices page', () => {
     expect(router.currentRoute.value.path).toBe('/agents/two/oxidns')
   })
 
+  it('opens another profile from the router panel without switching the global profile', async () => {
+    const { wrapper } = await render('/client-devices?profile=home')
+    expect(clientDeviceApi.get).toHaveBeenCalledWith({ agentId: undefined, profileId: 'home' })
+    expect(wrapper.text()).toContain('配置：办公室')
+    expect(wrapper.text()).not.toContain('返回 OxiDNS 面板')
+  })
+
   it('switches to the active profile when the navigation drops the Agent', async () => {
     const { wrapper, router } = await render('/client-devices?agent=two')
     await router.push('/client-devices')

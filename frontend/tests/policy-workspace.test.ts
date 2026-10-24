@@ -1,7 +1,8 @@
-import { canReloadPage } from '@/lib/pageReloadGuard'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import PolicyRoutingPanel from '@/components/routers/PolicyRoutingPanel.vue'
+import { Select } from '@/components/ui/select'
 import { agentApi, routerApi, oxidnsMonitorApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
 import { scopedRequests } from '@/profileContext'
@@ -24,7 +25,7 @@ beforeEach(() => {
   vi.mocked(confirm).mockResolvedValue(false)
   vi.mocked(routerApi.policySettings).mockImplementation(async () => ({ data: { success: true, workspace: clone(state) } }) as any)
   vi.mocked(routerApi.savePolicySettings).mockImplementation(async (_id, body) => {
-    state = { ...state, revision: 'rev-2', oxidns_revision: 'dns-2', sources: { ...state.sources, policies: clone(body.policies) as any }, router: { ...state.router, ...body.router } }
+    state = { ...state, revision: 'rev-2', oxidns_revision: 'dns-2', router: { ...state.router, ...body.router } }
     return { data: { success: true, workspace: clone(state) } } as any
   })
   vi.mocked(routerApi.previewPolicySettings).mockImplementation(async (_id, revision, targets) => ({ data: { success: true, preview: {
@@ -39,6 +40,11 @@ afterEach(async () => { wrappers.splice(0).forEach(w => w.unmount()); await flus
 async function setup() {
   const wrapper = mount(PolicyRoutingPanel, { attachTo: document.body, props: { id: 'ros', name: 'ROS', profile: 'office' } })
   wrappers.push(wrapper); await flushPromises(); return wrapper
+}
+/** Router settings are the only draft left here; changing the gateway makes it unsaved. */
+async function editGateway(w: VueWrapper, value = '__none__') {
+  await click(w, '规则集与网关')
+  w.findAllComponents(Select)[0]!.vm.$emit('update:modelValue', value); await flushPromises()
 }
 async function click(w: VueWrapper, text: string) {
   const button = w.findAll('button').find(b => b.text() === text)!
@@ -75,35 +81,6 @@ describe('one-place DNS and ROS workflow', () => {
     expect(wrapper.get('[aria-label="发布结果"]').text()).toContain(events[0].message)
   })
 
-  it('preserves a source address still being entered before it reaches the saved draft', async () => {
-    const w = await setup()
-    expect(canReloadPage()).toBe(true)
-    const input = w.get<HTMLInputElement>('#policy-source-ip')
-    await input.setValue('192.0.2.')
-    expect(canReloadPage()).toBe(false)
-    expect(routerApi.savePolicySettings).not.toHaveBeenCalled()
-    expect(input.element.value).toBe('192.0.2.')
-    await input.setValue('')
-    expect(canReloadPage()).toBe(true)
-  })
-
-
-  it('edits an existing source through the dialog and retains routing choices until explicit publish', async () => {
-    const w = await setup()
-    await w.get('[aria-label="编辑 192.0.2.105"]').trigger('click'); await flushPromises()
-    const editor = w.findComponent({ name: 'PolicySourceEditor' })
-    expect(editor.props('policy')).toEqual(initial().sources.policies[0])
-    expect(w.findAll('button').find(b => b.text() === '保存并预览')?.attributes('disabled')).toBeDefined()
-    editor.vm.$emit('apply', { ip: '192.0.2.101', name: '本机', mode: 'smart' }); await flushPromises()
-    expect(routerApi.savePolicySettings).not.toHaveBeenCalled()
-    await click(w, '保存并预览')
-    expect(routerApi.savePolicySettings).toHaveBeenCalledWith('ros', expect.objectContaining({
-      policies: [{ ip: '192.0.2.101', name: '本机', mode: 'smart' }], router: {
-        ip_rule_sets: ['static'], ros_policy_rule_sets: ['proxy'], proxy_gateway_agent_id: 'mihomo'
-      }
-    }), 'office')
-    expect(routerApi.apply).not.toHaveBeenCalled()
-  })
   it('clears an old preview after rule content changes without auto-selecting a cancelled policy', async () => {
     state.router.ros_policy_rule_sets = []
     const w = await setup()
@@ -118,16 +95,28 @@ describe('one-place DNS and ROS workflow', () => {
     expect(state.router.ros_policy_rule_sets).toEqual([])
     expect(routerApi.apply).not.toHaveBeenCalled()
   })
-  it('saves sources and routing together, previews, and only publishes after explicit confirmation', async () => {
+  it('shows sources read-only and sends their management to the client devices page', async () => {
+    state.sources.policies = [...state.sources.policies, { ip: '192.0.2.0/24', name: '', mode: 'direct' }, { ip: '2001:db8::5', name: 'IPv6', mode: 'smart' }]
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }, { path: '/client-devices', component: { template: '<div />' } }] })
+    await router.push('/')
+    const w = mount(PolicyRoutingPanel, { attachTo: document.body, props: { id: 'ros', name: 'ROS', profile: 'office' }, global: { plugins: [router] } })
+    wrappers.push(w); await flushPromises()
+    expect(w.find('#policy-source-ip').exists()).toBe(false)
+    expect(w.find('input').exists()).toBe(false)
+    const rows = w.findAll('tbody tr').map(row => row.text())
+    expect(rows[0]).toContain('NAS'); expect(rows[0]).toContain('智能分流'); expect(rows[0]).toContain('参与')
+    expect(rows[1]).toContain('直连'); expect(rows[1]).toContain('不参与')
+    expect(rows[2]).toContain('不参与')
+    await click(w, '在客户端设备中管理')
+    expect(router.currentRoute.value.fullPath).toBe('/client-devices?profile=office')
+  })
+  it('saves routing settings without sources, previews, and only publishes after explicit confirmation', async () => {
     const w = await setup()
-    await w.get('#policy-source-ip').setValue('192.0.2.101')
-    await click(w, '添加')
+    await editGateway(w)
     await click(w, '保存并预览')
-    expect(routerApi.savePolicySettings).toHaveBeenCalledWith('ros', expect.objectContaining({
-      revision: 'rev-1', names_revision: 'names-1', policies: [initial().sources.policies[0], { ip: '192.0.2.101', name: '', mode: 'smart' }],
-      router: { ip_rule_sets: ['static'], ros_policy_rule_sets: ['proxy'], proxy_gateway_agent_id: 'mihomo' }
-    }), 'office')
-    expect(w.text()).toContain('新增来源 192.0.2.101')
+    expect(routerApi.savePolicySettings).toHaveBeenCalledWith('ros', {
+      revision: 'rev-1', router: { ip_rule_sets: ['static'], ros_policy_rule_sets: ['proxy'], proxy_gateway_agent_id: '' }
+    }, 'office')
     expect(agentApi.pushConfig).not.toHaveBeenCalled(); expect(routerApi.apply).not.toHaveBeenCalled()
     await click(w, '确认发布')
     expect(agentApi.pushConfig).toHaveBeenCalledTimes(2)
@@ -136,26 +125,13 @@ describe('one-place DNS and ROS workflow', () => {
     expect(routerApi.apply.mock.invocationCallOrder[0]).toBeGreaterThan(agentApi.pushConfig.mock.invocationCallOrder[1]!)
     expect(scopedRequests.value).toBe(0)
   })
-  it('prepares the visible client picker without eagerly scanning query records', async () => {
-    const w = await setup()
-    expect(oxidnsMonitorApi.overview).toHaveBeenCalledWith('dns1')
-    expect(oxidnsMonitorApi.clients).not.toHaveBeenCalled()
-    const picker = w.findComponent({ name: 'OxiDNSClientSelect' })
-    expect(picker.props('recorder')).toBe('query_recorder')
-    expect(picker.element.closest('details')).toBeNull()
-    picker.vm.$emit('update:modelValue', '192.0.2.106'); await flushPromises()
-    await click(w, '保存并预览')
-    expect(routerApi.savePolicySettings).toHaveBeenCalledWith('ros', expect.objectContaining({
-      policies: expect.arrayContaining([{ ip: '192.0.2.106', name: '', mode: 'smart' }])
-    }), 'office')
-  })
   it('does not prepare a preview after a rejected atomic save and retains edited input', async () => {
     const w = await setup()
-    await w.get('[aria-label="192.0.2.105 备注"]').setValue('changed')
+    await editGateway(w)
     vi.mocked(routerApi.savePolicySettings).mockRejectedValueOnce(new Error('配置已更新'))
     await click(w, '保存并预览')
     expect(w.text()).toContain('配置已更新')
-    expect(w.get('[aria-label="192.0.2.105 备注"]').element.value).toBe('changed')
+    expect(w.text()).toContain('未保存')
     expect(routerApi.previewPolicySettings).not.toHaveBeenCalled()
   })
   it('invalidates the preview when targets or settings change', async () => {
@@ -217,7 +193,7 @@ describe('one-place DNS and ROS workflow', () => {
     })
     await click(w, '确认发布')
     expect(w.text()).toContain('发布结果')
-    await click(w, '来源设备'); await w.get('[aria-label="192.0.2.105 备注"]').setValue('new name')
+    await editGateway(w)
     await click(w, '保存并预览')
     expect(routerApi.savePolicySettings).toHaveBeenCalledWith('ros', expect.objectContaining({ revision: 'published-revision' }), 'office')
   })
@@ -307,14 +283,14 @@ describe('one-place DNS and ROS workflow', () => {
     expect(rows[2]!.text()).toContain('失败')
   })
   it('keeps unsaved work when panel collapse is cancelled', async () => {
-    const w = await setup(); await w.get('[aria-label="192.0.2.105 备注"]').setValue('changed')
+    const w = await setup(); await editGateway(w)
     await click(w, '收起面板')
     expect(confirm).toHaveBeenCalled(); expect(w.emitted('close')).toBeUndefined()
   })
   it.each(['unmount', 'profile round trip'])('does not preview after a pending save and %s', async change => {
     let finish!: (value: any) => void
     const w = await setup()
-    await w.get('[aria-label="192.0.2.105 备注"]').setValue('changed')
+    await editGateway(w)
     vi.mocked(routerApi.savePolicySettings).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }) as any)
     await click(w, '保存并预览')
     if (change === 'unmount') w.unmount()

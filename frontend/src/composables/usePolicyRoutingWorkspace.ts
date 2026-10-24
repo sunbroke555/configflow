@@ -3,7 +3,6 @@ import { agentApi, routerApi, type PolicyWorkspace, type PolicyWorkspacePreview 
 import { confirm, notify } from '@/lib/feedback'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 import { createDeploymentId, deploymentStatusLabel, type AgentDeployment } from './useAgentDeployments'
-import type { OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
 
 export interface PolicyReleaseRow { id: string; name: string; status: string; message?: string; deployment_id?: string; task?: Partial<AgentDeployment> }
 const terminal = new Set(['succeeded', 'failed', 'rolled_back', 'rollback_failed'])
@@ -16,18 +15,17 @@ const routerDraft = (state: PolicyWorkspace) => ({
 
 export function usePolicyRoutingWorkspace(props: { id: string; profile: string }, saved: () => void) {
   const state = ref<PolicyWorkspace | null>(null)
-  const policies = ref<OxiDNSDevicePolicy[]>([])
   const settings = ref({ ip_rule_sets: [] as string[], ros_policy_rule_sets: [] as string[], proxy_gateway_agent_id: '' })
   const targets = ref<string[]>([])
   const tab = ref('sources')
   const loading = ref(false), saving = ref(false), publishing = ref(false)
   const error = ref(''), preview = ref<PolicyWorkspacePreview | null>(null)
-  const changes = ref<string[]>([]), results = ref<PolicyReleaseRow[]>([]), rosResult = ref<any>(null)
+  const results = ref<PolicyReleaseRow[]>([]), rosResult = ref<any>(null)
   const unresolved = computed(() => results.value.some(row => row.deployment_id && !terminal.has(row.status)))
   const busy = computed(() => loading.value || saving.value || publishing.value)
   const locked = computed(() => busy.value || unresolved.value)
-  const dirty = computed(() => !!state.value && (JSON.stringify(policies.value) !== JSON.stringify(state.value.sources.policies)
-    || JSON.stringify(settings.value) !== JSON.stringify(routerDraft(state.value))))
+  // Sources are edited on the client devices page; only router settings are drafted here.
+  const dirty = computed(() => !!state.value && JSON.stringify(settings.value) !== JSON.stringify(routerDraft(state.value)))
   let epoch = 0, disposed = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let wake: (() => void) | undefined
@@ -36,7 +34,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
   const current = (c: ReturnType<typeof context>) => !disposed && c.id === props.id && c.profile === props.profile && c.epoch === epoch
   const pause = () => new Promise<void>(resolve => { wake = resolve; timer = setTimeout(() => { timer = undefined; wake = undefined; resolve() }, 2000) })
   const invalidate = () => { preview.value = null }
-  watch([policies, settings, targets], invalidate, { deep: true })
+  watch([settings, targets], invalidate, { deep: true })
 
   async function canLeave() {
     if (busy.value) { notify.info('正在保存或发布，请稍候。'); return false }
@@ -51,10 +49,9 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
       if (!current(c)) return
       if (!data.success) throw new Error(data.message)
       state.value = data.workspace
-      policies.value = clone(data.workspace.sources.policies)
       settings.value = routerDraft(data.workspace)
       targets.value = data.workspace.source_agents.map(agent => agent.id)
-      changes.value = []; results.value = []; rosResult.value = null
+      results.value = []; rosResult.value = null
     } catch (failure) { if (current(c)) error.value = message(failure) }
     finally { if (current(c)) loading.value = false }
   }
@@ -65,28 +62,15 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
     const other = kind === 'ip_rule_sets' ? 'ros_policy_rule_sets' : 'ip_rule_sets'
     settings.value[other] = settings.value[other].filter(id => !values.includes(id))
   }
-  function sourceChanges() {
-    if (!state.value) return []
-    const before = new Map(state.value.sources.policies.map(row => [row.ip, row]))
-    const after = new Map(policies.value.map(row => [row.ip, row]))
-    const label = (row: OxiDNSDevicePolicy) => `${row.ip}：${row.mode === 'smart' ? '智能分流' : '直连'}${row.name ? `（${row.name}）` : ''}`
-    return [...policies.value.filter(row => JSON.stringify(before.get(row.ip)) !== JSON.stringify(row)).map(row =>
-      before.has(row.ip) ? `修改来源 ${label(before.get(row.ip)!)} → ${label(row)}` : `新增来源 ${label(row)}`),
-    ...state.value.sources.policies.filter(row => !after.has(row.ip)).map(row => `移除来源 ${label(row)}`)]
-  }
   async function saveAndPreview() {
     if (!state.value || locked.value) return
     const c = context(); saving.value = true; error.value = ''; preview.value = null; results.value = []; rosResult.value = null
     try {
       if (dirty.value) {
-        const diff = sourceChanges()
-        const { data } = await routerApi.savePolicySettings(c.id, {
-          revision: state.value.revision, names_revision: state.value.names_revision, policies: clone(policies.value), router: clone(settings.value)
-        }, c.profile)
+        const { data } = await routerApi.savePolicySettings(c.id, { revision: state.value.revision, router: clone(settings.value) }, c.profile)
         if (!current(c)) return
         if (!data.success) throw new Error(data.message)
-        state.value = data.workspace; policies.value = clone(data.workspace.sources.policies); settings.value = routerDraft(data.workspace)
-        changes.value = [...changes.value, ...diff]
+        state.value = data.workspace; settings.value = routerDraft(data.workspace)
         saved()
       }
       const { data } = await routerApi.previewPolicySettings(c.id, state.value!.revision, [...targets.value], c.profile)
@@ -213,13 +197,12 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
         if (results.value.some(row => row.task?.dns_checks?.some(check => check.level === 'warn'))) {
           notify.warning('所选目标发布完成，DNS 检查有提醒', '请查看下方设备的 DNS 检查结果和修复建议。')
         } else notify.success('所选目标发布完成')
-        changes.value = []; saved()
+        saved()
         // ROS stores ownership after publishing. Refresh that revision without
         // discarding the visible release results or any concurrent editor change.
         try {
           const { data } = await routerApi.policySettings(c.id, c.profile)
-          if (current(c) && data.success && JSON.stringify(data.workspace.sources.policies) === JSON.stringify(policies.value)
-            && JSON.stringify(routerDraft(data.workspace)) === JSON.stringify(settings.value)) state.value = data.workspace
+          if (current(c) && data.success && JSON.stringify(routerDraft(data.workspace)) === JSON.stringify(settings.value)) state.value = data.workspace
         } catch { /* A later save still rejects a stale revision safely. */ }
       }
       else throw new Error('ROS 发布未完成，已完成的 OxiDNS 发布结果保留。请核对发布与回滚记录。')
@@ -252,6 +235,6 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
     void load()
   }, { immediate: true })
   onBeforeUnmount(() => { disposed = true; epoch++; submissionObservers.forEach(stop => stop()); if (timer) clearTimeout(timer); wake?.(); window.removeEventListener('beforeunload', beforeUnload) })
-  return { state, policies, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview, changes,
+  return { state, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview,
     results, rosResult, unresolved, blockers, canPublish, load, reload, canLeave, selectRules, saveAndPreview, publish, refreshResults }
 }

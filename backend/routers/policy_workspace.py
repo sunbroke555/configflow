@@ -35,14 +35,14 @@ def read_workspace(config, router, profile_id, profile_name, agents, default_pro
 
 def save_workspace(config, router_id, body, base_url):
     router = find_router(config, router_id)
-    # Source names are guarded only here: renaming changes neither DNS nor router output.
+    # Source names are guarded only when sources are sent: renaming changes neither DNS nor router output.
     if not router or router.get('type') != 'routeros' or body.get('revision') != draft_revision(config, router) or \
-            body.get('names_revision') != policy_names_revision(config):
+            ('policies' in body and body.get('names_revision') != policy_names_revision(config)):
         raise RouterConflictError('配置已在其他页面更新，请重新载入后再保存。')
     updated = normalize(body['router'], router)
     existing = read_policies(config.get('oxidns') or {}, config)
     settings = config.get('oxidns') or {}
-    if body['policies'] != existing['policies']:
+    if 'policies' in body and body['policies'] != existing['policies']:
         # Validation happens before either section is changed. The repository
         # commits the sections together, never a half-saved workflow.
         settings = save_policy_rows(config, settings, body['policies'], base_url)
