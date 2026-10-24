@@ -162,7 +162,7 @@ func TestOxiDNSRankingsDoNotGuessCustomOrNegativeResponseBlocks(t *testing.T) {
 	for _, action := range []string{"black_hole nodata short_circuit=true", "reject 0"} {
 		text := strings.Replace(oxRankingTestPlugins, "    - exec: prefer_ipv4\n",
 			"    - exec: prefer_ipv4\n    - matches: [qtype 65 255]\n      exec: "+action+"\n", 1)
-		if result := oxRankingConfigForTest(t, text); result.blocked["records"] != "qs.match.sequence_main.4.0.question" {
+		if result := oxRankingConfigForTest(t, text); !reflect.DeepEqual(result.blocked["records"], []string{"qs.match.sequence_main.4.0.question"}) {
 			t.Fatalf("%s blocked qtypes hid the AdGuard path: %#v", action, result.blocked)
 		}
 	}
