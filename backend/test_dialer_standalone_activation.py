@@ -59,7 +59,7 @@ def test_uri_main_chain_rejects_plain_provider_before_any_publication(tmp_path, 
                'reserved': [plain('DIRECT')], 'malformed': [{'name': None}]}[case]
     fetch = install_fetch(monkeypatch, proxies)
     before = load_subscription_cache('s')
-    document_before = repo.path.read_bytes()
+    document_before = repo._store.fingerprint()
     artifacts = [repo.write_profile_text(p, 'providers/agg.yaml', 'last-good') for p in {'default', profile}]
     writes = Mock(side_effect=AssertionError('Must validate before cache/artifact publication'))
     monkeypatch.setattr(repo, 'write_profile_text', writes)
@@ -74,7 +74,7 @@ def test_uri_main_chain_rejects_plain_provider_before_any_publication(tmp_path, 
     writes.assert_not_called()
     network.assert_not_called()
     assert load_subscription_cache('s') == before
-    assert repo.path.read_bytes() == document_before
+    assert repo._store.fingerprint() == document_before
     assert all(p.read_text() == 'last-good' for p in artifacts)
 
 

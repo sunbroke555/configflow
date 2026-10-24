@@ -64,12 +64,12 @@ def test_referenced_shared_node_delete_never_cleans_profile_or_aggregation(tmp_p
     app, repo = make_app(tmp_path)
     seed_nodes(repo, [node('used')], aggregations=[{'id': 'agg', 'name': 'Agg', 'nodes': ['used'], 'subscriptions': []}],
                groups=[{'id': 'g', 'name': 'Group', 'type': 'select', 'manual_nodes': ['used', 'DIRECT'], 'aggregations': ['agg'], 'proxies_order': [{'type': 'node', 'id': 'used'}, {'type': 'node', 'id': 'DIRECT'}]}])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     write = Mock(side_effect=AssertionError('Referenced deletion must not write'))
-    monkeypatch.setattr(repo, '_write_json', write)
+    monkeypatch.setattr(repo._store, 'commit', write)
     response = app.test_client().delete('/api/nodes/used')
     assert response.status_code == 409
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
     write.assert_not_called()
     assert repo.get_shared()['subscription_aggregations'][0]['nodes'] == ['used']
     assert repo.get_profile('default')['proxy_groups'][0]['manual_nodes'] == ['used', 'DIRECT']
@@ -82,7 +82,7 @@ def test_api_rejects_ambiguous_dialer_identity_without_write(tmp_path, resource,
     client = app.test_client()
     seed_nodes(repo, [node('relay'), node('exit')], chains=[chain_group('exit', {'type': 'node', 'id': 'relay'})],
                groups=[{'id': 'g', 'name': 'Group', 'type': 'select', 'manual_nodes': ['DIRECT']}])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     data = node('exit') if resource == 'nodes' else {'id': 'g', 'name': 'Group', 'type': 'select', 'manual_nodes': ['DIRECT']}
     if conflict == 'name':
         data['name'] = 'relay'
@@ -93,7 +93,7 @@ def test_api_rejects_ambiguous_dialer_identity_without_write(tmp_path, resource,
     response = (client.post('/api/' + resource, json=data) if conflict == 'id' else
                 client.put('/api/' + resource + ('/exit' if resource == 'nodes' else '/g'), json=data))
     assert response.status_code == (409 if conflict == 'name' or (resource == 'nodes' and conflict == 'builtin') else 400)
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('resource,key', [('nodes', 'nodes'), ('proxy-groups', 'groups')])
@@ -133,11 +133,11 @@ def test_subscription_surge_consumer_reports_unsupported_dialer_as_400(tmp_path)
 def test_shared_node_api_rejects_profile_binding_without_mutation(tmp_path, method):
     app, repo = make_app(tmp_path)
     seed_nodes(repo, [node('relay'), node('exit')])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = getattr(app.test_client(), method)('/api/nodes' + ('/exit' if method == 'put' else ''),
         json=node('exit', dialer_ref={'type': 'node', 'id': 'relay'}))
     assert response.status_code == 400
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 def test_builtin_looking_resource_id_does_not_bypass_cycle_validation(tmp_path):
@@ -145,10 +145,10 @@ def test_builtin_looking_resource_id_does_not_bypass_cycle_validation(tmp_path):
     client = app.test_client()
     seed_nodes(repo, [node('DIRECT', 'Relay'), node('exit')])
     create_chain(client, 'exit', {'type': 'node', 'id': 'DIRECT'})
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = client.post('/api/proxy-groups', json=chain_group('DIRECT', {'type': 'node', 'id': 'DIRECT'}))
     assert response.status_code == 409
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('storage', ['structured', 'uri'])
@@ -225,16 +225,13 @@ def test_editing_and_deleting_chain_keeps_direct_exit_and_other_profile(tmp_path
 def test_chain_write_failure_rolls_back_atomic_document(tmp_path, monkeypatch):
     app, repo = make_app(tmp_path)
     seed_nodes(repo, [node('relay'), node('exit')])
-    before = repo.path.read_bytes()
-    original = repo._write_json
-    def injected(path, data):
-        if path == repo.path:
-            raise OSError('injected write failure')
-        original(path, data)
-    monkeypatch.setattr(repo, '_write_json', injected)
+    before = repo._store.fingerprint()
+    def injected(*args):
+        raise OSError('injected write failure')
+    monkeypatch.setattr(repo._store, '_apply', injected)
     response = app.test_client().post('/api/proxy-groups', json=chain_group('exit', {'type': 'node', 'id': 'relay'}))
     assert response.status_code == 500
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 def test_concurrent_chain_creation_preserves_independent_routes(tmp_path):
@@ -262,20 +259,20 @@ def test_concurrent_chain_creation_preserves_independent_routes(tmp_path):
 def test_disabled_chain_still_protects_its_stable_reference(tmp_path, operation):
     app, repo = make_app(tmp_path)
     seed_nodes(repo, [node('relay'), node('exit')], chains=[{**chain_group('exit', {'type': 'node', 'id': 'relay'}), 'enabled': False}])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     client = app.test_client()
     response = client.delete('/api/nodes/relay') if operation == 'delete' else client.put('/api/nodes/relay', json={**node('relay'), 'enabled': False})
     assert response.status_code == 409
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 def test_disabling_selected_shared_source_preserves_binding_and_metadata(tmp_path):
     app, repo = make_app(tmp_path)
     seed_nodes(repo, [node('relay'), node('exit')], chains=[chain_group('exit', {'type': 'node', 'id': 'relay'})])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = app.test_client().put('/api/nodes/exit', json={**node('exit'), 'enabled': False})
     assert response.status_code == 409
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
     assert repo.get_profile('default')['proxy_groups'][0]['chain'] == {'entry': {'type': 'node', 'id': 'relay'}, 'exit': {'type': 'node', 'id': 'exit'}}
 
 
@@ -337,7 +334,7 @@ def test_invalid_topology_rejected_without_artifact_write(tmp_path, monkeypatch,
     if failure != 'uri':
         create_chain(client, 'exit', {'type': 'node', 'id': 'relay'})
     output = repo.write_generated('default', 'config.yaml' if format == 'mihomo' else 'config.conf', 'known good')
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     if failure in ('missing', 'cycle'):
         entry = {'type': 'node', 'id': 'gone' if failure == 'missing' else 'exit'}
         response = client.put('/api/proxy-groups/chain-exit', json=chain_group('exit', entry))
@@ -350,7 +347,7 @@ def test_invalid_topology_rejected_without_artifact_write(tmp_path, monkeypatch,
             pytest.skip('Valid stable topology is supported by Mihomo')
         response = client.post('/api/generate/' + format, json={})
     assert response.status_code == (409 if failure in ('missing', 'cycle', 'reserved', 'duplicate') else 400), response.get_data(as_text=True)
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
     assert output.read_text() == 'known good'
 
 
@@ -370,15 +367,15 @@ def test_raw_dialer_validation_and_precedence(tmp_path, storage, operation):
         payload['proxy_string'] = json.dumps(raw) if storage == 'json' else yaml.safe_dump(raw)
     if operation == 'override':
         create_chain(client, 'exit', {'type': 'node', 'id': 'other'})
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = client.put('/api/nodes/exit', json=payload)
     if operation == 'missing':
         assert response.status_code == 409
-        assert repo.path.read_bytes() == before
+        assert repo._store.fingerprint() == before
         return
     assert response.status_code == 200
     if operation in ('cycle', 'rename', 'delete', 'disable'):
-        before = repo.path.read_bytes()
+        before = repo._store.fingerprint()
         if operation == 'cycle':
             response = client.put('/api/nodes/relay', json=node('relay', params={'dialer-proxy': 'exit'}))
         elif operation == 'delete':
@@ -387,7 +384,7 @@ def test_raw_dialer_validation_and_precedence(tmp_path, storage, operation):
             data = node('relay', 'Renamed') if operation == 'rename' else {**node('relay'), 'enabled': False}
             response = client.put('/api/nodes/relay', json=data)
         assert response.status_code == 409
-        assert repo.path.read_bytes() == before
+        assert repo._store.fingerprint() == before
     else:
         response = client.post('/api/generate/mihomo/preview', json={})
         assert response.status_code == 200
@@ -408,17 +405,17 @@ def test_raw_dialer_validation_and_precedence(tmp_path, storage, operation):
 def test_invalid_stable_reference_rejected_without_write(tmp_path, ref, status):
     app, repo = make_app(tmp_path)
     seed_nodes(repo, [node('relay'), node('exit')])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = app.test_client().post('/api/proxy-groups', json=chain_group('exit', ref))
     assert response.status_code == status, response.get_data(as_text=True)
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('operation', ['delete', 'disable', 'cycle', 'id'])
 def test_node_mutations_protect_references_atomically(tmp_path, operation):
     app, repo = make_app(tmp_path)
     seed_nodes(repo, [node('relay'), node('exit')], chains=[chain_group('exit', {'type': 'node', 'id': 'relay'})])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     client = app.test_client()
     if operation == 'delete':
         response = client.delete('/api/nodes/relay')
@@ -428,7 +425,7 @@ def test_node_mutations_protect_references_atomically(tmp_path, operation):
         data = {**node('relay'), 'enabled': False} if operation == 'disable' else node('spoof')
         response = client.put('/api/nodes/relay', json=data)
     assert response.status_code == (400 if operation == 'id' else 409)
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('operation', ['direct_exit_member', 'membership_cycle', 'delete', 'disable', 'dynamic_nested'])
@@ -448,7 +445,7 @@ def test_group_dialer_validates_all_paths(tmp_path, operation):
         assert proxies['Via exit']['dialer-proxy'] == 'RelayPool'
         assert 'dialer-proxy' not in proxies['exit']
         return
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     if operation == 'delete':
         response = client.delete('/api/proxy-groups/g')
     elif operation == 'disable':
@@ -474,4 +471,4 @@ def test_group_dialer_validates_all_paths(tmp_path, operation):
         assert repo.get_shared() == shared_before
         return
     assert response.status_code == 409
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before

@@ -83,19 +83,16 @@ def test_mosdns_invalid_rule_selection_cannot_save_other_sections(editors):
 def test_editor_disk_failure_rolls_back_every_field(editors, monkeypatch, kind):
     client, repository = editors
     before = repository.get_profile('office')
-    document = repository.path.read_bytes()
-    original_write = repository._write_json
-    def fail(path, value):
-        if path == repository.path:
-            raise OSError('injected write failure')
-        return original_write(path, value)
-    monkeypatch.setattr(repository, '_write_json', fail)
+    document = repository._store.fingerprint()
+    def fail(*args):
+        raise OSError('injected write failure')
+    monkeypatch.setattr(repository._store, '_apply', fail)
     endpoint, body = ('/mosdns/settings', mosdns_draft()) if kind == 'mosdns' else (
         '/rules/group-name', {'ids': ['r1', 'rs1'], 'group_name': 'New'})
     response = client.post('/api' + endpoint + '?profile=office', json=body)
     assert response.status_code == 500
     assert repository.get_profile('office') == before
-    assert repository.path.read_bytes() == document
+    assert repository._store.fingerprint() == document
 
 
 def test_mosdns_save_preserves_concurrent_unrelated_fields_and_returns_its_own_revision(editors, monkeypatch):

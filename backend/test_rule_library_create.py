@@ -85,9 +85,9 @@ def test_failed_commit_rolls_back_new_source_and_cache(library, monkeypatch, fai
     app, repository = library
     rule = source('new', source_type='content', content='new.test')
     path = cache_path(repository, rule)
-    before = repository.path.read_bytes()
+    before = repository._store.fingerprint()
     original_atomic = repository._write_atomic
-    original_json = repository._write_json
+    original_apply = repository._store._apply
 
     def atomic(target, content):
         if target == path and failure == 'cache-before-write':
@@ -96,15 +96,15 @@ def test_failed_commit_rolls_back_new_source_and_cache(library, monkeypatch, fai
         if target == path and failure == 'cache-after-write':
             raise OSError('controlled post-replace cache failure')
 
-    def write_json(target, content):
-        if target == repository.path and failure == 'document-before-write':
+    def apply(*args):
+        if failure == 'document-before-write':
             raise OSError('controlled document failure')
-        original_json(target, content)
-        if target == repository.path and failure == 'document-after-write':
-            raise OSError('controlled post-replace document failure')
+        original_apply(*args)
+        if failure == 'document-after-write':
+            raise OSError('controlled post-write document failure')
 
     monkeypatch.setattr(repository, '_write_atomic', atomic)
-    monkeypatch.setattr(repository, '_write_json', write_json)
+    monkeypatch.setattr(repository._store, '_apply', apply)
     if failure == 'validation':
         original_validate = repository._validate_document
 
@@ -118,7 +118,7 @@ def test_failed_commit_rolls_back_new_source_and_cache(library, monkeypatch, fai
 
     assert response.status_code == (400 if failure == 'validation' else 500)
     assert response.json['success'] is False
-    assert repository.path.read_bytes() == before
+    assert repository._store.fingerprint() == before
     assert repository.get_shared()['rule_library'] == []
     assert not path.exists()
     assert not path.with_name(path.name + '.bak').exists()
@@ -146,37 +146,29 @@ def test_duplicate_id_preserves_existing_custom_and_legacy_cache(library, monkey
     assert (repository.shared_rules_dir() / 'Custom.list').read_text() == 'legacy-custom.test'
 
 
-@pytest.mark.parametrize('rollback_fails', [False, True])
-def test_document_fsync_failure_after_replace_has_truthful_creation_result(library, monkeypatch, rollback_fails):
+@pytest.mark.parametrize('committed', [False, True])
+def test_commit_failure_has_truthful_creation_result(library, monkeypatch, committed):
     app, repository = library
     rule = source('new', source_type='content', content='new.test')
     path = cache_path(repository, rule)
-    before = repository.path.read_bytes()
-    original_fsync = repository._fsync_dir
-    original_temp = repository._write_temp
-    replaced = False
+    before = repository._store.fingerprint()
+    original_commit = repository._store._commit
+    reported = False
 
-    def fsync(directory):
-        nonlocal replaced
-        if directory == repository.path.parent and not replaced:
-            stored = json.loads(repository.path.read_text())['shared']['rule_library']
-            assert stored and stored[0]['id'] == 'new'
-            replaced = True
-            raise OSError('controlled config directory fsync failure after replace')
-        original_fsync(directory)
+    def commit(connection):
+        nonlocal reported
+        reported = True
+        if committed:
+            # The outcome is unknown to the caller: COMMIT happened, yet failed.
+            original_commit(connection)
+        raise OSError('controlled COMMIT failure')
 
-    def write_temp(target, content):
-        if rollback_fails and replaced and target == repository.path:
-            raise OSError('controlled rollback disk failure')
-        return original_temp(target, content)
-
-    monkeypatch.setattr(repository, '_fsync_dir', fsync)
-    monkeypatch.setattr(repository, '_write_temp', write_temp)
+    monkeypatch.setattr(repository._store, '_commit', commit)
 
     response = app.test_client().post('/api/rule-library', json=rule)
 
-    assert replaced
-    if rollback_fails:
+    assert reported
+    if committed:
         assert response.status_code == 503
         assert response.json['confirmation_required'] is True
         assert '待确认' in response.json['message']
@@ -186,7 +178,7 @@ def test_document_fsync_failure_after_replace_has_truthful_creation_result(libra
     else:
         assert response.status_code == 500
         assert '未添加' in response.json['message']
-        assert repository.path.read_bytes() == before
+        assert repository._store.fingerprint() == before
         assert repository.get_shared()['rule_library'] == []
         assert not path.exists()
 
@@ -241,20 +233,16 @@ def test_failed_commit_cannot_remove_a_waiting_cache_writers_new_data(library, m
     app, repository = library
     rule = source('new', source_type='content', content='uncommitted.test')
     commit, fail, writer_started = Event(), Event(), Event()
-    original_json = repository._write_json
-
-    def write_json(target, content):
-        if target == repository.path:
-            commit.set()
-            assert fail.wait(5)
-            raise OSError('controlled commit failure')
-        original_json(target, content)
+    def apply(*args):
+        commit.set()
+        assert fail.wait(5)
+        raise OSError('controlled commit failure')
 
     def write_new_cache():
         writer_started.set()
         repository.write_shared_text('rules/' + rule_cache_filename(rule), 'concurrent-cache.test')
 
-    monkeypatch.setattr(repository, '_write_json', write_json)
+    monkeypatch.setattr(repository._store, '_apply', apply)
     with ThreadPoolExecutor(max_workers=2) as pool:
         pending = pool.submit(lambda: app.test_client().post('/api/rule-library', json=rule))
         try:

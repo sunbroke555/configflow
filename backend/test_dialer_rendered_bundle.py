@@ -55,7 +55,7 @@ def setup_bundle(tmp_path, monkeypatch, source, reverse, *, chain=True, text=DUP
     manager = agent_manager(monkeypatch)
     output = repo.write_generated('default', 'config.yaml', 'last-good-main')
     provider = repo.write_profile_text('default', 'providers/other.yaml', 'last-good-provider')
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     return app, repo, fetch, writes, manager, output, provider, before, conversions
 
 
@@ -74,7 +74,7 @@ def test_provider_only_chain_globally_rejects_plain_duplicates_before_publicatio
     manager.push_config_to_agent.assert_not_called()
     assert output.read_text() == 'last-good-main'
     assert provider.read_text() == 'last-good-provider'
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('path', PATHS)
@@ -134,4 +134,4 @@ def test_bundle_validation_does_not_weaken_reserved_names_or_content_errors(
     manager.push_config_to_agent.assert_not_called()
     assert output.read_text() == 'last-good-main'
     assert provider.read_text() == 'last-good-provider'
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before

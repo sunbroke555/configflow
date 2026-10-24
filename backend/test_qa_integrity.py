@@ -100,18 +100,16 @@ def test_rename_write_failure_rolls_back_all_resources(tmp_path, monkeypatch):
     client = app.test_client()
     group = seed_strategy(client)
     before = repo.get_profile('default')
-    document = tmp_path / 'config.json'
-    system_before = document.read_bytes()
-    original_write = repo._write_json
-    def fail(path, data):
-        if path == document:
-            raise OSError('injected write failure')
-        return original_write(path, data)
-    monkeypatch.setattr(repo, '_write_json', fail)
+    system_before = repo._store.fingerprint()
+    original_apply = repo._store._apply
+    def fail(*args):
+        original_apply(*args)
+        raise OSError('injected write failure')
+    monkeypatch.setattr(repo._store, '_apply', fail)
     response = client.put('/api/proxy-groups/g1', json={**group, 'name': 'New'})
     assert response.status_code == 500
     assert repo.get_profile('default') == before
-    assert document.read_bytes() == system_before
+    assert repo._store.fingerprint() == system_before
 
 
 @pytest.mark.parametrize('format', ['mihomo', 'surge'])
@@ -129,13 +127,13 @@ def test_generation_rejects_dangling_policy_without_writing(tmp_path, format, pr
     assert client.post('/api/proxy-groups', json={'id': 'disabled', 'name': 'Disabled', 'enabled': False, 'type': 'select', 'manual_nodes': ['DIRECT']}).status_code == 200
     assert client.post('/api/rules', json={'id': 'r1', 'itemType': 'rule', 'rule_type': 'MATCH', 'policy': invalid_policy, 'enabled': True}).status_code == 200
     before = repo.get_profile('default')
-    document_before = (tmp_path / 'config.json').read_bytes()
+    document_before = repo._store.fingerprint()
     response = client.post('/api/generate/' + format + preview, json={})
     assert response.status_code == 400
     assert invalid_policy in response.get_json()['message']
     assert repo.get_profile('default') == before
     assert output.read_bytes() == last_known_good
-    assert (tmp_path / 'config.json').read_bytes() == document_before
+    assert repo._store.fingerprint() == document_before
 
 
 @pytest.mark.parametrize('format,policy', [

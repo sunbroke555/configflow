@@ -63,9 +63,9 @@ def test_other_references_still_block_deletion_without_changing_listener(environ
     repo, client = environment
     repo.update_profile_transaction('default', lambda profile: profile['rule_configs'].append(
         {'id': 'rule', 'itemType': 'rule', 'rule_type': 'MATCH', 'policy': 'Pinned'}))
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     assert client.delete('/api/proxy-groups/g').status_code == 409
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('source', [
@@ -75,10 +75,10 @@ def test_other_references_still_block_deletion_without_changing_listener(environ
 def test_uncertain_native_config_never_partially_deletes_group(environment, source):
     repo, client = environment
     repo.update_profile_transaction('default', lambda profile: profile['mihomo'].update(custom_config=source))
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = client.delete('/api/proxy-groups/g')
     assert response.status_code == 400
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('target', ['Missing', '${FIXED_POLICY}', ' Pinned '])
