@@ -20,89 +20,35 @@ function respond(data: RuleContentCheck) {
   network.post.mockResolvedValueOnce({ data })
 }
 
-const conversion = {
-  content: 'DOMAIN-SUFFIX,tmdb.org\nDOMAIN,api.example.org\nIP-CIDR,192.0.2.1/32,no-resolve\nIP-CIDR6,2001:db8::1/128,no-resolve',
-  changes: [
-    { line: 1, before: '+.tmdb.org', after: 'DOMAIN-SUFFIX,tmdb.org' },
-    { line: 2, before: 'api.example.org', after: 'DOMAIN,api.example.org' },
-    { line: 3, before: '192.0.2.1', after: 'IP-CIDR,192.0.2.1/32,no-resolve' },
-    { line: 4, before: '2001:db8::1', after: 'IP-CIDR6,2001:db8::1/128,no-resolve' }
-  ],
-  errors: []
-}
-
-describe('handwritten ruleset content confirmation', () => {
-  it('shows the classical conversion preview and waits for explicit confirmation without mutating the draft', async () => {
-    const rule = { behavior: 'classical', content: '+.tmdb.org\napi.example.org\n192.0.2.1\n2001:db8::1', format: 'text' }
+describe('handwritten ruleset content checks', () => {
+  it('saves classical bare domains and IPs unchanged without a conversion confirmation', async () => {
+    const rule = { behavior: 'classical', content: '# keep\r\n  +.tmdb.org \r\n\r\napi.example.org\r\n192.0.2.1\r\n2001:db8::1\r\n', format: 'text' }
     const original = { ...rule }
-    respond(conversion)
-    const complete = vi.fn()
-    const result = prepareRuleContent(rule).then(value => { complete(value); return value })
-    await flushPromises()
+    respond({ content: rule.content, changes: [], errors: [] })
+    expect(await prepareRuleContent(rule)).toBe(rule.content)
     expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', { ...rule, append_lines: [] })
-    expect(complete).not.toHaveBeenCalled()
     expect(rule).toEqual(original)
-    expect(confirmState.title).toBe('转换为 Classical 格式')
-    expect(confirmState.confirmText).toBe('转换并保存')
-    expect(confirmState.cancelText).toBe('返回编辑')
-    expect(confirmState.description).toContain('裸域名精确匹配')
-    for (const change of conversion.changes) expect(confirmState.description).toContain(`${change.before} → ${change.after}`)
-    settleConfirm('confirm')
-    expect(await result).toBe(conversion.content)
-    expect(rule).toEqual(original)
+    expect(confirmState.open).toBe(false)
+    expect(notify.warning).not.toHaveBeenCalled()
   })
 
-  it('returns to editing without adopting conversions on cancel', async () => {
-    const rule = { behavior: 'classical', content: '+.tmdb.org' }
-    respond(conversion)
-    const result = prepareRuleContent(rule)
-    await flushPromises()
-    settleConfirm('cancel')
-    expect(await result).toBeNull()
-    expect(rule.content).toBe('+.tmdb.org')
+  it.each(['+.tmdb.org\n*.example.org', '.example.org\nfull:example.net'])('keeps ambiguous classical lines without an extra save confirmation: %s', async content => {
+    respond({ content, changes: [], errors: [], warnings: [{ line: 2, before: '*.example.org', message: '请手动调整' }] })
+    expect(await prepareRuleContent({ behavior: 'classical', content })).toBe(content)
+    expect(confirmState.open).toBe(false)
+    expect(notify.warning).not.toHaveBeenCalled()
   })
 
-  it('preserves unsupported lines and shows their warning beside convertible lines', async () => {
-    const warning = { line: 5, before: '*.example.org', message: '无法确定 Classical 语义，请手动调整。' }
-    respond({ ...conversion, content: `${conversion.content}\n*.example.org`, warnings: [warning] })
-    const result = prepareRuleContent({ behavior: 'classical', content: '+.tmdb.org\n*.example.org' })
-    await flushPromises()
-    expect(confirmState.description).toContain('内容将保留原样')
-    expect(confirmState.description).toContain('第 5 行：*.example.org')
-    expect(confirmState.description).toContain(warning.message)
-    expect(confirmState.confirmText).toBe('转换并保存')
-    settleConfirm('confirm')
-    expect(await result).toBe(`${conversion.content}\n*.example.org`)
-  })
-
-  it.each(['confirm', 'cancel'] as const)('requires an explicit choice when only ambiguous lines remain: %s', async choice => {
-    const content = '.example.org\nfull:example.net'
-    respond({ content, changes: [], errors: [], warnings: [{ line: 1, before: '.example.org', message: '请手动调整' }] })
-    const result = prepareRuleContent({ behavior: 'classical', content })
-    await flushPromises()
-    expect(confirmState.title).toBe('检查 Classical 写法')
-    expect(confirmState.confirmText).toBe('按原样保存')
-    expect(confirmState.description).toContain('Mihomo 可能跳过这些规则')
-    expect(confirmState.description).not.toContain('发现 0 条')
-    settleConfirm(choice)
-    expect(await result).toBe(choice === 'confirm' ? content : null)
-  })
-
-  it('keeps the existing domain conversion confirmation', async () => {
+  it.each(['confirm', 'cancel'] as const)('keeps the existing domain conversion confirmation: %s', async choice => {
+    const rule = { behavior: 'domain', content: 'DOMAIN-SUFFIX,example.org' }
     respond({ content: '+.example.org', changes: [{ line: 1, before: 'DOMAIN-SUFFIX,example.org', after: '+.example.org' }], errors: [] })
-    const result = prepareRuleContent({ behavior: 'domain', content: 'DOMAIN-SUFFIX,example.org' })
+    const result = prepareRuleContent(rule)
     await flushPromises()
     expect(confirmState.title).toBe('转换为 Domain 格式')
     expect(confirmState.description).toContain('转换后匹配范围不变')
-    settleConfirm('confirm')
-    expect(await result).toBe('+.example.org')
-  })
-
-  it('returns unchanged valid classical content without a confirmation', async () => {
-    const content = '# comment\nDOMAIN,example.org\n'
-    respond({ content, changes: [], errors: [] })
-    expect(await prepareRuleContent({ behavior: 'classical', content })).toBe(content)
-    expect(confirmState.open).toBe(false)
+    settleConfirm(choice)
+    expect(await result).toBe(choice === 'confirm' ? '+.example.org' : null)
+    expect(rule.content).toBe('DOMAIN-SUFFIX,example.org')
   })
 
   it('blocks malformed content while preserving the draft', async () => {
@@ -114,15 +60,16 @@ describe('handwritten ruleset content confirmation', () => {
     expect(confirmState.open).toBe(false)
   })
 
-  it('passes yaml and appended rules to the server without rewriting them locally', async () => {
-    const content = 'payload:\n  - DOMAIN,example.org\n'
+  it('retains original bare yaml entries when adding rules, without a confirmation', async () => {
+    const content = '# keep\npayload:\n  - +.tmdb.org\n  - 192.0.2.1\n'
     const appended = ['IP-CIDR6,2001:db8::/32,no-resolve']
-    const checked = 'payload:\n  - DOMAIN,example.org\n  - IP-CIDR6,2001:db8::/32,no-resolve\n'
+    const checked = content + '  - "IP-CIDR6,2001:db8::/32,no-resolve"\n'
     respond({ content: checked, changes: [], errors: [] })
     expect(await prepareRuleContent({ behavior: 'classical', format: 'yaml', content }, appended)).toBe(checked)
     expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', {
       behavior: 'classical', format: 'yaml', content, append_lines: appended
     })
+    expect(confirmState.open).toBe(false)
   })
 
   it('leaves ipcidr drafts on their existing path', async () => {

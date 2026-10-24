@@ -141,14 +141,11 @@ def test_inspection_proposes_explicit_changes_and_keeps_warnings_separate():
     assert result['content'] == 'DOMAIN-SUFFIX,tmdb.org\nIP-CIDR,192.0.2.1/32,no-resolve\n*.example.com'
 
 
-def test_save_requires_explicit_classical_conversion_without_mutation():
+def test_save_accepts_bare_classical_entries_without_mutation():
     rule = {'source_type': 'content', 'behavior': 'classical', 'content': '+.tmdb.org'}
     before = deepcopy(rule)
-    with pytest.raises(ProfileValidationError, match='确认转换'):
-        validate_domain_content(rule)
-    assert rule == before
-    rule['content'] = inspect_domain_content(rule['content'], 'classical')['content']
     validate_domain_content(rule)
+    assert rule == before
 
 
 def test_classical_validation_only_checks_edited_handwritten_content():
@@ -160,8 +157,7 @@ def test_classical_validation_only_checks_edited_handwritten_content():
     validate_domain_content({**existing, 'content': '*.example.com\nfull:example.com'})
     with pytest.raises(ProfileValidationError):
         validate_domain_content({**existing, 'content': 'payload: [true]'})
-    with pytest.raises(ProfileValidationError, match='确认转换'):
-        validate_domain_content({**existing, 'content': '+.changed.test'}, previous=existing)
+    validate_domain_content({**existing, 'content': '+.changed.test'}, previous=existing)
 
 
 def _classical_matches(query, line):

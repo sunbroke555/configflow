@@ -17,7 +17,7 @@ import RuleDnsField from '@/components/rules/RuleDnsField.vue'
 import api, { ruleApi, ruleSetApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
 import { isDnsRuleType } from '@/lib/oxidns'
-import { prepareRuleContent } from '@/lib/ruleset-content'
+import { CLASSICAL_CONTENT_HINT, prepareRuleContent } from '@/lib/ruleset-content'
 import { domainRuleLine } from '@/lib/ruleset-format'
 import {
   DNS_COPY, DNS_FIELD_HELP, IP_DNS_RULE_TYPES, NO_RESOLVE_RULE_TYPES, PASTE_LIMIT, PASTE_SUGGEST_RULESET, PINNED_HINT,
@@ -367,9 +367,10 @@ async function libraryPayload(): Promise<Extract<ComposePayload['source'], { kin
     return { ...library, url }
   }
   const lines = value.content.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-  const content = value.behavior === 'domain' && value.scope !== 'PATTERN'
-    ? lines.map(line => (line.startsWith('#') ? line : domainRuleLine('domain', value.scope, line))).join('\n')
-    : lines.join('\n')
+  const content = value.behavior === 'classical' ? value.content
+    : value.behavior === 'domain' && value.scope !== 'PATTERN'
+      ? lines.map(line => (line.startsWith('#') ? line : domainRuleLine('domain', value.scope, line))).join('\n')
+      : lines.join('\n')
   const checked = await prepareRuleContent({ behavior: value.behavior, content, format: 'text' })
   return checked === null ? null : { ...library, content: checked }
 }
@@ -635,6 +636,7 @@ async function save() {
                 </Select>
               </FormField>
             </div>
+            <p v-if="form.library.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
           </template>
 
           <div v-if="showNoResolve" class="flex flex-wrap items-center gap-x-2.5 gap-y-1">

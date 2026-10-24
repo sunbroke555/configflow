@@ -5,6 +5,7 @@ import PolicyDestinationEditor from '@/components/routers/PolicyDestinationEdito
 import { sourcePolicyIndex } from '@/lib/policySourceEditor'
 import api, { ruleContentApi } from '@/api'
 import { confirm } from '@/lib/feedback'
+import { CLASSICAL_CONTENT_HINT } from '@/lib/ruleset-content'
 import { scopedRequests } from '@/profileContext'
 vi.mock('@/api', () => ({ default: { post: vi.fn() }, ruleContentApi: { read: vi.fn(), save: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), warning: vi.fn() } }))
@@ -66,55 +67,40 @@ describe('policy authoring editors', () => {
     expect(w.emitted('saved')).toHaveLength(1)
     expect(scopedRequests.value).toBe(0)
   })
-  it.each([true, false])('previews a classical conversion before saving a destination ruleset: accepted=%s', async accepted => {
+  it('explains classical delivery and saves the original destination content without confirmation', async () => {
     const data = response()
     data.data.rule.behavior = 'classical'
     data.data.rule.content = 'DOMAIN-SUFFIX,tmdb.org'
     Object.assign(data.data.rule, { format: 'yaml' })
     vi.mocked(ruleContentApi.read).mockResolvedValueOnce(data as any)
-    const original = 'payload: ["+.tmdb.org", "192.0.2.1"]'
-    const converted = 'payload: ["DOMAIN-SUFFIX,tmdb.org", "IP-CIDR,192.0.2.1/32,no-resolve"]'
-    vi.mocked(api.post).mockResolvedValueOnce({ data: { content: converted, errors: [], changes: [
-      { line: 1, before: '+.tmdb.org', after: 'DOMAIN-SUFFIX,tmdb.org' },
-      { line: 1, before: '192.0.2.1', after: 'IP-CIDR,192.0.2.1/32,no-resolve' }
-    ] } })
-    let resolve!: (value: boolean) => void
-    vi.mocked(confirm).mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    const original = '# keep\npayload: ["+.tmdb.org", "192.0.2.1", "*.test"]\n'
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { content: original, errors: [], changes: [],
+      warnings: [{ line: 2, before: '*.test', message: '请手动调整' }] } })
     const w = await destination()
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
     await field('destination-edit-content').setValue(original)
     await click('保存规则内容')
     expect(api.post).toHaveBeenCalledWith('/rule-library/check-content', {
       behavior: 'classical', format: 'yaml', content: original, append_lines: []
     })
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('+.tmdb.org → DOMAIN-SUFFIX,tmdb.org'), expect.objectContaining({ confirmText: '转换并保存' }))
-    expect(ruleContentApi.save).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(ruleContentApi.save).toHaveBeenCalledWith('library', 'read-revision', original)
+    expect(w.emitted('saved')).toHaveLength(1)
     expect((field('destination-edit-content').element as HTMLTextAreaElement).value).toBe(original)
-    resolve(accepted); await flushPromises()
-    if (accepted) {
-      expect(ruleContentApi.save).toHaveBeenCalledWith('library', 'read-revision', converted)
-      expect(w.emitted('saved')).toHaveLength(1)
-      expect((field('destination-edit-content').element as HTMLTextAreaElement).value).toBe(converted)
-    } else {
-      expect(ruleContentApi.save).not.toHaveBeenCalled()
-      expect(w.emitted('saved')).toBeUndefined()
-      expect((field('destination-edit-content').element as HTMLTextAreaElement).value).toBe(original)
-    }
     expect(scopedRequests.value).toBe(0)
   })
-  it('does not save a conversion accepted after the destination editor unmounts', async () => {
+  it('does not save if classical content checking finishes after the destination editor unmounts', async () => {
     const data = response(); data.data.rule.behavior = 'classical'
     vi.mocked(ruleContentApi.read).mockResolvedValueOnce(data as any)
-    vi.mocked(api.post).mockResolvedValueOnce({ data: { content: 'IP-CIDR,192.0.2.1/32,no-resolve', errors: [], changes: [
-      { line: 1, before: '192.0.2.1', after: 'IP-CIDR,192.0.2.1/32,no-resolve' }
-    ] } })
-    let resolve!: (value: boolean) => void
-    vi.mocked(confirm).mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    let resolve!: (value: any) => void
+    vi.mocked(api.post).mockImplementationOnce(() => new Promise(done => { resolve = done }))
     const w = await destination()
     await field('destination-edit-content').setValue('192.0.2.1')
     await click('保存规则内容')
     w.unmount(); wrappers.splice(wrappers.indexOf(w), 1)
-    resolve(true); await flushPromises()
+    resolve({ data: { content: '192.0.2.1', errors: [], changes: [] } }); await flushPromises()
     expect(ruleContentApi.save).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled()
     expect(scopedRequests.value).toBe(0)
   })
   it('retains input on a version conflict and requires confirmation before reloading', async () => {
@@ -130,11 +116,12 @@ describe('policy authoring editors', () => {
     await click('重新读取'); expect(ruleContentApi.read).toHaveBeenCalledTimes(2)
   })
   it('does not convert a URL subscription into manual content', async () => {
-    const data = response(); data.data.rule.source_type = 'url'; data.data.rule.url = 'https://example.test/ips.txt'
+    const data = response(); data.data.rule.source_type = 'url'; data.data.rule.url = 'https://example.test/ips.txt'; data.data.rule.behavior = 'classical'
     vi.mocked(ruleContentApi.read).mockResolvedValueOnce(data as any)
     await destination()
     expect(document.getElementById('destination-edit-content')).toBeNull()
     expect(document.body.textContent).toContain('不能在这里修改下载内容')
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
     expect(ruleContentApi.save).not.toHaveBeenCalled()
   })
   it('ignores a response after its profile editor was unmounted', async () => {

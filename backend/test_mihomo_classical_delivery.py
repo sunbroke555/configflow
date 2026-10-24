@@ -140,27 +140,101 @@ def test_dns_converters_keep_original_matching_semantics_after_mihomo_download(d
     assert convert_mosdns_rules(original.encode()).decode() == expected
 
 
-def test_classical_edit_preview_requires_explicit_conversion_before_save(delivery):
-    client, repository, rule = delivery
+@pytest.mark.parametrize('source', [SOURCE + '*.manual.test\n', 'payload: ["+.tmdb.org", "192.0.2.8", "*.manual.test"]\n'])
+def test_classical_edit_check_keeps_original_content_without_conversion_proposal(delivery, source):
+    client, repository, _ = delivery
     original = deepcopy(repository.export_all())
     preview = client.post('/api/rule-library/check-content', json={
-        'behavior': 'classical', 'content': SOURCE + '*.manual.test\n'})
+        'behavior': 'classical', 'content': source})
     assert preview.status_code == 200
-    assert preview.json['content'] == EXPECTED + '*.manual.test\n'
-    assert len(preview.json['changes']) == 4
+    assert preview.json['content'] == source
+    assert preview.json['changes'] == []
+    assert not preview.json['errors']
     assert preview.json['warnings'][0]['before'] == '*.manual.test'
     assert repository.export_all() == original
-    new_rule = {**rule, 'id': 'new', 'name': 'New'}
-    assert client.post('/api/rule-library', json=new_rule).status_code == 400
-    assert client.put('/api/rule-library/mixed', json={**rule, 'content': SOURCE + 'new.test'}).status_code == 400
-    draft = client.get('/api/rule-library/mixed/draft-content').json
-    assert draft['rule']['format'] == 'text'
-    assert client.put('/api/rule-library/mixed/draft-content', json={
-        'revision': draft['revision'], 'content': SOURCE + 'new.test'}).status_code == 400
+
+
+@pytest.mark.parametrize(('source', 'expected'), [
+    (SOURCE, SOURCE + '+.added.test\n192.0.2.9\n'),
+    ('payload: ["+.tmdb.org"]\n', 'payload: ["+.tmdb.org", "+.added.test", "192.0.2.9"]\n'),
+])
+def test_classical_append_preview_keeps_bare_original_and_appended_lines(delivery, source, expected):
+    client, repository, _ = delivery
+    original = deepcopy(repository.export_all())
+    preview = client.post('/api/rule-library/check-content', json={
+        'behavior': 'classical', 'content': source, 'append_lines': ['+.added.test', '192.0.2.9']})
+    assert preview.status_code == 200
+    assert preview.json['content'] == expected
+    assert preview.json['changes'] == []
+    assert not preview.json['errors']
     assert repository.export_all() == original
-    new_rule['content'] = preview.json['content']
+
+
+def _assert_raw_storage_and_mihomo_delivery(client, repository, rule, source, normalized):
+    saved = next(item for item in repository.get_shared()['rule_library'] if item['id'] == rule['id'])
+    assert saved['content'] == source
+    cache = repository.shared_rules_dir() / rule_cache_filename(saved)
+    assert cache.read_text() == source
+    path = '/api/rules/local/' + rule['name']
+    assert client.get(path).get_data(as_text=True) == source
+    delivered = client.get(path, query_string={'target': 'mihomo'})
+    assert delivered.status_code == 200
+    assert delivered.get_data(as_text=True) == normalized
+    assert cache.read_text() == source
+    assert next(item for item in repository.get_shared()['rule_library'] if item['id'] == rule['id'])['content'] == source
+
+
+@pytest.mark.parametrize(('source', 'normalized', 'rule_format'), [
+    (SOURCE, EXPECTED, 'text'),
+    ('payload: ["+.tmdb.org", "192.0.2.8"]\n',
+     'payload: ["DOMAIN-SUFFIX,tmdb.org", "IP-CIDR,192.0.2.8/32,no-resolve"]\n', 'yaml'),
+])
+def test_classical_create_update_and_draft_save_keep_raw_content(delivery, source, normalized, rule_format):
+    client, repository, rule = delivery
+    new_rule = {**rule, 'id': 'new', 'name': 'New', 'content': source, 'format': rule_format}
     assert client.post('/api/rule-library', json=new_rule).status_code == 200
-    assert next(item for item in repository.get_shared()['rule_library'] if item['id'] == 'new')['content'] == new_rule['content']
-    # Existing malformed sources can still be renamed/disabled without repair.
-    assert client.put('/api/rule-library/mixed', json={**rule, 'enabled': False}).status_code == 200
-    assert next(item for item in repository.get_shared()['rule_library'] if item['id'] == 'mixed')['content'] == SOURCE
+    _assert_raw_storage_and_mihomo_delivery(client, repository, new_rule, source, normalized)
+
+    updated = {**rule, 'content': source + '# put\n', 'format': rule_format}
+    assert client.put('/api/rule-library/mixed', json=updated).status_code == 200
+    _assert_raw_storage_and_mihomo_delivery(client, repository, updated, updated['content'], normalized + '# put\n')
+
+    draft = client.get('/api/rule-library/mixed/draft-content').json
+    assert draft['rule']['format'] == rule_format
+    source += '# draft\n'
+    assert client.put('/api/rule-library/mixed/draft-content', json={
+        'revision': draft['revision'], 'content': source}).status_code == 200
+    _assert_raw_storage_and_mihomo_delivery(client, repository, updated, source, normalized + '# draft\n')
+
+
+def test_classical_compose_preserves_original_source_and_cache(delivery):
+    client, repository, rule = delivery
+    response = client.post('/api/rules/compose', json={
+        'source': {'kind': 'new_library', 'library': {**rule, 'name': 'Composed'}},
+        'rule': {'policy': 'DIRECT'}, 'dns': 'default',
+    })
+    assert response.status_code == 200, response.json
+    created = response.json['data']['library']
+    assert created['content'] == SOURCE
+    _assert_raw_storage_and_mihomo_delivery(client, repository, created, SOURCE, EXPECTED)
+
+
+def test_classical_malformed_payload_is_still_rejected_before_any_save(delivery):
+    client, repository, rule = delivery
+    original = deepcopy(repository.export_all())
+    content = 'payload: [true]'
+    preview = client.post('/api/rule-library/check-content', json={
+        'behavior': 'classical', 'content': content})
+    assert preview.status_code == 200
+    assert preview.json['content'] == content and preview.json['errors']
+    invalid = {**rule, 'content': content}
+    assert client.post('/api/rule-library', json={**invalid, 'id': 'new', 'name': 'New'}).status_code == 400
+    assert client.put('/api/rule-library/mixed', json=invalid).status_code == 400
+    draft = client.get('/api/rule-library/mixed/draft-content').json
+    assert client.put('/api/rule-library/mixed/draft-content', json={
+        'revision': draft['revision'], 'content': content}).status_code == 400
+    assert client.post('/api/rules/compose', json={
+        'source': {'kind': 'new_library', 'library': {**invalid, 'name': 'Invalid'}},
+        'rule': {'policy': 'DIRECT'}, 'dns': 'default',
+    }).status_code == 400
+    assert repository.export_all() == original

@@ -165,9 +165,9 @@ def validate_domain_content(rule, previous=None):
     if checked['errors']:
         error = checked['errors'][0]
         raise ProfileValidationError(f"规则内容第 {error['line']} 行：{error['message']}" if error['line'] else error['message'])
-    if checked['changes']:
-        if rule['behavior'] == 'classical':
-            raise ProfileValidationError('Classical 内容包含未标注规则类型的域名或 IP，请在规则库编辑并确认转换格式后保存。')
+    # Classical compatibility is applied only when delivering to Mihomo.
+    # Saving a draft preserves the source text, including safe bare entries.
+    if rule['behavior'] == 'domain' and checked['changes']:
         raise ProfileValidationError('Domain 内容包含 Classical 前缀，请在规则库编辑并确认转换格式后保存。')
 
 

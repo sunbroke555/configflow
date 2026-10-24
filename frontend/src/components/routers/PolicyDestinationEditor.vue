@@ -20,6 +20,7 @@
               <p class="m-0">保存会影响所有引用它的配置空间。保存后仍需预览发布，才会下发到设备。</p>
             </div>
           </div>
+          <p v-if="data.rule.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
           <template v-if="data.rule.source_type === 'content'">
             <div class="space-y-2"><Label for="destination-edit-content">规则内容 · {{ data.rule.behavior || '原格式' }}</Label><Textarea id="destination-edit-content" v-model="content" :disabled="saving" class="min-h-64 w-full font-mono text-xs" spellcheck="false" /></div>
             <p class="m-0 text-xs text-muted-foreground">保留原格式；删除原行即移除该条目。若其他规则集也包含同一 IP，发布后仍可能保留。</p>
@@ -47,7 +48,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import { ruleContentApi, type PolicyWorkspace, type RuleContentDraft } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
-import { prepareRuleContent } from '@/lib/ruleset-content'
+import { CLASSICAL_CONTENT_HINT, prepareRuleContent } from '@/lib/ruleset-content'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 const props = defineProps<{ rules: PolicyWorkspace['rule_sets']; selectedIds: string[]; address?: string }>()
 const emit = defineEmits<{ close: []; saved: [] }>()

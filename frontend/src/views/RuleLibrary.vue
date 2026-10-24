@@ -481,6 +481,8 @@
             </Select>
           </div>
 
+          <p v-if="form.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
+
           <div class="flex items-center gap-2.5">
             <Switch
               id="lib-enabled"
@@ -544,6 +546,7 @@
               :placeholder="currentRuleSet?.behavior === 'ipcidr' ? '192.0.2.0/24\n2001:db8::/64' : 'example.com\napi.example.org'"
             />
           </div>
+          <p v-if="currentRuleSet?.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
           <div v-if="addRulePreview" class="flex min-w-0 flex-col gap-1.5">
             <Label>将写入的内容</Label>
             <pre class="m-0 max-h-36 overflow-auto rounded-lg bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap break-all">{{ addRulePreview }}</pre>
@@ -695,7 +698,7 @@ import api, { ruleApi } from '@/api'
 import { activeProfileId, getActiveProfileId } from '@/profileContext'
 import { isAxiosError } from 'axios'
 import { domainRuleLine } from '@/lib/ruleset-format'
-import { prepareRuleContent } from '@/lib/ruleset-content'
+import { CLASSICAL_CONTENT_HINT, prepareRuleContent } from '@/lib/ruleset-content'
 import RuleDnsField from '@/components/rules/RuleDnsField.vue'
 import {
   DNS_COPY, DNS_FIELD_HELP, PINNED_HINT, confirmSaveWithoutDns, copyKey, defaultDnsChoice, dnsErrorReason, dnsWarnings,
@@ -962,7 +965,7 @@ const ruleContentHelperText = computed(() => {
     case 'ipcidr':
       return '支持 IPv4/IPv6 CIDR 写法，例如 192.168.0.0/16 或 2001:db8::/32。'
     default:
-      return '每行带规则类型，例如 DOMAIN,example.com、DOMAIN-SUFFIX,example.com 或 IP-CIDR,192.0.2.0/24；不支持嵌套 RULE-SET。'
+      return '每行一条，支持完整规则，例如 DOMAIN,example.com、DOMAIN-SUFFIX,example.com 或 IP-CIDR,192.0.2.0/24；不支持嵌套 RULE-SET。'
   }
 })
 

@@ -30,7 +30,7 @@ def _content_revision(rule):
 @rule_library_bp.route('/check-content', methods=['POST'])
 @require_auth
 def check_rule_content():
-    """Preview format repairs without changing shared sources or caches."""
+    """Check editable content without changing shared sources or caches."""
     from backend.common.config_repository import ProfileValidationError
     body = request.get_json()
     if not isinstance(body, dict) or not isinstance(body.get('content'), str):
@@ -42,7 +42,11 @@ def check_rule_content():
     if lines:
         _, payload = read_rule_payload(content)
         content = append_rule_lines(content, lines, payload)
-    return jsonify(inspect_domain_content(content, body.get('behavior'), body.get('format')))
+    checked = inspect_domain_content(content, body.get('behavior'), body.get('format'))
+    if body.get('behavior') == 'classical':
+        # Automatic compatibility belongs to Mihomo delivery, not draft edits.
+        checked.update(content=content, changes=[])
+    return jsonify(checked)
 
 
 @rule_library_bp.route('/<rule_id>/draft-content', methods=['GET', 'PUT'])

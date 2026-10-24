@@ -3,6 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import RuleEditorDialog from '@/components/rules/RuleEditorDialog.vue'
 import { Select } from '@/components/ui/select'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
+import { CLASSICAL_CONTENT_HINT } from '@/lib/ruleset-content'
 import type { RuleDnsSnapshot } from '@/types'
 
 const network = vi.hoisted(() => ({
@@ -280,6 +281,29 @@ describe('rule editor dialog', () => {
     expect(network.copy).toHaveBeenCalledWith('手写条目')
     expect(network.compose).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('update:open')).toBeUndefined()
+  })
+
+  it('explains classical delivery and creates a ruleset from the unchanged draft without confirmation', async () => {
+    const wrapper = await render({ initialSource: 'new_library' })
+    await type('#rule-library-name', 'Mixed rules')
+    await choose(wrapper, '内容类型', 'classical')
+    // The explanation remains visible for a URL source as well as pasted content.
+    expect(text()).toContain(CLASSICAL_CONTENT_HINT)
+    await source('粘贴内容')
+    expect(text()).toContain(CLASSICAL_CONTENT_HINT)
+    const content = '# keep\n  +.tmdb.org \n\n192.0.2.1\n*.manual.test\n'
+    await type('#rule-library-content', content)
+    network.post.mockResolvedValueOnce({ data: { content, changes: [], errors: [], warnings: [
+      { line: 5, before: '*.manual.test', message: '请手动调整' }
+    ] } })
+    await click(save())
+    expect(confirmState.open).toBe(false)
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', {
+      behavior: 'classical', content, format: 'text', append_lines: []
+    })
+    expect(network.compose).toHaveBeenCalledWith(expect.objectContaining({
+      source: { kind: 'new_library', library: { name: 'Mixed rules', source_type: 'content', content, behavior: 'classical', format: 'text', enabled: true } }
+    }), 'p1')
   })
 
   it('asks before saving an unreachable URL as a disabled ruleset and keeps its DNS for later', async () => {

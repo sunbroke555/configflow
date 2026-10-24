@@ -10,6 +10,7 @@ import ConfirmHost from '@/components/feedback/ConfirmHost.vue'
 import { Select } from '@/components/ui/select'
 import { setActiveProfileId } from '@/profileContext'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
+import { CLASSICAL_CONTENT_HINT } from '@/lib/ruleset-content'
 
 // Replace only HTTP boundaries; dialogs, selectors, sorting and stores stay real.
 const network = vi.hoisted(() => {
@@ -226,6 +227,39 @@ describe('profile rule references', () => {
 })
 
 describe('shared rule library', () => {
+  it('explains classical delivery for content and URL sources and saves the original draft without confirmation', async () => {
+    const content = '# keep\n  +.tmdb.org \n\n192.0.2.1\n*.manual.test\n'
+    Object.assign(network.state.library[0]!, { behavior: 'classical', content })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
+    const state = (wrapper.vm as any).$.setupState
+    state.form.source_type = 'url'; await flushPromises()
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
+    state.form.source_type = 'content'; await flushPromises()
+    network.post.mockResolvedValueOnce({ data: { content, changes: [], errors: [], warnings: [
+      { line: 5, before: '*.manual.test', message: '请手动调整' }
+    ] } })
+    await clickText('保存')
+    expect(confirmState.open).toBe(false)
+    expect(network.put).toHaveBeenCalledExactlyOnceWith('/rule-library/library-one', expect.objectContaining({ content, behavior: 'classical' }))
+  })
+
+  it('keeps existing bare classical entries when appending a typed rule', async () => {
+    const content = '# keep\n  +.tmdb.org \n\n192.0.2.1'
+    Object.assign(network.state.library[0]!, { behavior: 'classical', content })
+    const wrapper = await render(RuleLibrary)
+    const state = (wrapper.vm as any).$.setupState
+    state.showAddRuleToSetDialog(network.state.library[0]); await flushPromises()
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
+    state.addRuleToSetForm.value = 'api.example.com'; await flushPromises()
+    await clickText('添加')
+    expect(confirmState.open).toBe(false)
+    expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({
+      content: content + '\nDOMAIN-SUFFIX,api.example.com\n', behavior: 'classical'
+    }))
+  })
+
   it('offers exact, suffix and explicit wildcard input with the stored format preview', async () => {
     const wrapper = await render(RuleLibrary)
     const state = (wrapper.vm as any).$.setupState
