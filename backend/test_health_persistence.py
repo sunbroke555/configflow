@@ -42,11 +42,11 @@ def test_reopen_clone_export_import_and_shared_impact(tmp_path):
     target = ProfileRepository(tmp_path / 'target')
     target.import_all(exported)
     assert target.get_compat_config('second')['subscriptions'] == reopened.get_compat_config('second')['subscriptions']
-    before = target.path.read_bytes()
+    before = target._store.fingerprint()
     invalid = deepcopy(exported)
     invalid['shared']['subscriptions'][0]['health_check']['lazy'] = 'false'
     with pytest.raises(ProfileValidationError): target.import_all(invalid)
-    assert target.path.read_bytes() == before
+    assert target._store.fingerprint() == before
 
 
 def test_actual_generation_uses_subscription_and_aggregation_source_truth(tmp_path):

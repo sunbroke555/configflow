@@ -89,12 +89,9 @@ def test_disabled_reads_and_failed_commits_do_not_schedule_backups(dav, monkeypa
             {'id': 'duplicate', 'name': 'One', 'type': 'select'},
             {'id': 'duplicate', 'name': 'Two', 'type': 'select'},
         ]})
-    original = repository._write_json
-    def fail(path, value):
-        if path == repository.path:
-            raise OSError('disk failure')
-        return original(path, value)
-    monkeypatch.setattr(repository, '_write_json', fail)
+    def fail(*args):
+        raise OSError('disk failure')
+    monkeypatch.setattr(repository._store, '_apply', fail)
     with pytest.raises(OSError):
         repository.save_profile('default', {'mihomo': {'custom_config': 'not committed'}})
     assert worker._thread is None

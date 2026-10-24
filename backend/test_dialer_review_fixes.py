@@ -25,13 +25,13 @@ def test_invalid_final_provider_rejects_all_consumers(tmp_path, monkeypatch, pat
     monkeypatch.setattr('backend.routes.agents.get_agent_manager', lambda: manager)
     output = repo.write_generated('default', 'config.yaml', 'known good')
     provider = repo.write_profile_text('default', 'providers/agg.yaml', 'known good provider')
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     client = app.test_client()
     response = client.get(path) if path.startswith('/api/config') else client.post(path, json={'restart': False})
     assert response.status_code == 400, response.get_data(as_text=True)
     assert output.read_text() == 'known good'
     assert provider.read_text() == 'known good provider'
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
     manager.push_config_to_agent.assert_not_called()
 
 
@@ -61,10 +61,10 @@ def test_bad_node_put_never_means_delete(tmp_path, payload):
     app, repo = make_app(tmp_path)
     client = app.test_client()
     assert client.post('/api/nodes', json=node('victim')).status_code == 200
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = client.put('/api/nodes/victim', data=payload, content_type='application/json')
     assert response.status_code == 400
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 def test_no_dialer_legacy_duplicate_names_still_generate(tmp_path):
@@ -94,13 +94,13 @@ def test_invalid_chain_rejected_before_network_cache_or_provider_write(tmp_path,
     cache_write = Mock()
     monkeypatch.setattr('backend.routes.aggregations.get_subscription_proxies_yaml', fetch)
     monkeypatch.setattr('backend.utils.subscription_cache.save_subscription_nodes', cache_write)
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     provider = repo.write_profile_text('default', 'providers/agg.yaml', 'known good')
     response = app.test_client().post('/api/proxy-groups', json=chain_group('exit', {'type': 'node', 'id': 'gone'}))
     assert response.status_code == 409
     fetch.assert_not_called()
     cache_write.assert_not_called()
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
     assert provider.read_text() == 'known good'
     assert load_subscription_cache('s') == cache_before
 
@@ -167,11 +167,11 @@ def test_late_provider_validation_400_blocks_agent_push(tmp_path, monkeypatch):
     def reject(*args, **kwargs):
         raise StrategyReferenceError('Provider validation failed')
     monkeypatch.setattr('backend.routes.aggregations.generate_aggregation_provider', reject)
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     result = app.test_client().post('/api/agents/a/push-config', json={'restart': False})
     assert result.status_code == 400
     manager.push_config_to_agent.assert_not_called()
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('failure', ['timeout', 'http500'])
@@ -217,10 +217,10 @@ def test_subscription_cached_metadata_validation_is_not_swallowed(tmp_path, form
     app, repo = make_app(tmp_path)
     add_subscription(repo, {'id': 's', 'name': 'Cached', 'enabled': True, 'url': ''})
     save_subscription_nodes('s', [{**node('cached'), **bad}])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = app.test_client().get('/api/subscriptions/s/proxies?format=' + format)
     assert response.status_code == 400
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('bad', [{'params': None}, {'proxy_string': 123}, {'id': ['cached']}, {'name': ['Cached']}])
@@ -273,10 +273,10 @@ def test_named_chains_require_manual_nodes_throughout(tmp_path, mode):
         {'id': 'nested', 'name': 'Nested', 'type': 'select', 'include_groups': ['g']},
     ])
     ref = {'type': 'group', 'id': 'nested' if mode == 'nested_group' else 'g'} if 'group' in mode else {'type': 'node', 'id': 'relay'}
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = client.post('/api/proxy-groups', json=chain_group('exit', ref))
     assert response.status_code == 409
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 
@@ -285,13 +285,13 @@ def test_malformed_dialer_metadata_write_is_controlled(tmp_path, bad):
     app, repo = make_app(tmp_path)
     client = app.test_client()
     client.post('/api/nodes', json=node('relay'))
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     if 'group_order' in bad:
         response = client.post('/api/proxy-groups', json={'id': 'g', 'name': 'G', 'type': 'select', 'manual_nodes': ['relay'], 'proxies_order': bad['group_order']})
     else:
         response = client.post('/api/nodes', json={**node('bad'), **bad})
     assert response.status_code == 400
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('bad', BAD_SHAPES)
@@ -312,7 +312,7 @@ def test_malformed_metadata_mutations_preserve_storage_cache_and_artifacts(tmp_p
     monkeypatch.setattr('requests.sessions.Session.request', network)
     paths = [repo.write_profile_text('default', name, 'known good')
              for name in ('generated/config.yaml', 'generated/config.conf', 'providers/agg.yaml')]
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     client = app.test_client()
     if 'group_order' in bad:
         response = client.put('/api/proxy-groups/g', json={**group, 'proxies_order': bad['group_order']})
@@ -320,7 +320,7 @@ def test_malformed_metadata_mutations_preserve_storage_cache_and_artifacts(tmp_p
         response = client.put('/api/nodes/relay', json={**node('relay'), **bad})
     assert response.status_code == 400, response.get_data(as_text=True)
     assert all(output.read_text() == 'known good' for output in paths)
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
     assert load_subscription_cache('s') == cache_before
     manager.push_config_to_agent.assert_not_called()
     network.assert_not_called()

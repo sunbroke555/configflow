@@ -148,13 +148,10 @@ def _source_bytes(root):
 
 
 def _assert_preserved(root, before, *, migrated=False):
-    after = _source_bytes(root)
-    if migrated:
-        before = {key: value for key, value in before.items()
-                  if key not in {"config.json", "config.json.bak"}}
-        after = {key: value for key, value in after.items()
-                 if key not in {"config.json", "config.json.bak"}}
-    assert after == before
+    # Every legacy source, including a stale config.json, stays byte for byte:
+    # the database is written next to them and they are never repaired.
+    assert _source_bytes(root) == before
+    assert not list(root.glob("config.json.corrupt-*"))
 
 
 def _no_template():
@@ -269,13 +266,13 @@ def test_restart_keeps_current_schema5_and_never_reimports_old_split(tmp_path):
     repository.update_profile_fields("office", {"mihomo": {"custom_config": "mixed-port: 9999"}})
     repository.update_system_transaction(lambda system: system["agents"][1].update(profile_id="default"))
     before = repository.export_all()
-    root_bytes = repository.path.read_bytes()
+    root_bytes = repository._store.fingerprint()
     snapshots = sorted(str(path) for path in (tmp_path / "migrations").rglob("system.json"))
     (tmp_path / "system.json").write_bytes(b"invalid obsolete index")
     (tmp_path / "profiles" / "office" / "config.json").unlink()
     reopened = ProfileRepository(tmp_path, initial_config_factory=_no_template)
     assert reopened.export_all() == before
-    assert reopened.path.read_bytes() == root_bytes
+    assert reopened._store.fingerprint() == root_bytes
     assert sorted(str(path) for path in (tmp_path / "migrations").rglob("system.json")) == snapshots
 
 
@@ -367,7 +364,7 @@ def test_failed_commit_leaves_originals_retryable(tmp_path, monkeypatch, legacy,
 
     def fail_root_commit(source, destination):
         nonlocal failed
-        if Path(destination) == tmp_path / "config.json" and not failed:
+        if Path(destination) == tmp_path / "configflow.sqlite3" and not failed:
             failed = True
             if after_replace:
                 replace(source, destination)
@@ -414,11 +411,11 @@ def test_incomplete_schema2_import_preserves_current_repository(tmp_path, damage
     elif damage == "unknown-version":
         bundle["schema_version"] = 999
     before = repository.export_all()
-    root_bytes = repository.path.read_bytes()
+    root_bytes = repository._store.fingerprint()
     with pytest.raises(ProfileRepositoryError):
         repository.import_all(bundle)
     assert repository.export_all() == before
-    assert repository.path.read_bytes() == root_bytes
+    assert repository._store.fingerprint() == root_bytes
 
 
 @pytest.mark.parametrize("damage", ["node-dialer", "resource-refs", "node-overrides", "missing-subscription", "invalid-settings"])
@@ -443,10 +440,10 @@ def test_schema2_migration_does_not_strip_invalid_or_unsupported_fields(tmp_path
         _assert_preserved(tmp_path, before)
     else:
         repository = ProfileRepository(tmp_path)
-        before = repository.path.read_bytes()
+        before = repository._store.fingerprint()
         with pytest.raises(ProfileRepositoryError):
             repository.import_all(bundle)
-        assert repository.path.read_bytes() == before
+        assert repository._store.fingerprint() == before
 
 
 @pytest.mark.parametrize("relative", ["system.json", "profiles/office/config.json"])
@@ -630,7 +627,7 @@ def test_binary_stale_root_is_restored_if_commit_fails_after_replace(tmp_path, m
     def fail_once(source, destination):
         nonlocal failed
         real_replace(source, destination)
-        if Path(destination) == tmp_path / 'config.json' and not failed:
+        if Path(destination) == tmp_path / 'configflow.sqlite3' and not failed:
             failed = True
             raise OSError(errno.ENOSPC, 'Injected full disk after replace')
     with monkeypatch.context() as patch:

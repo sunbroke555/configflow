@@ -47,7 +47,7 @@ def test_exact_delivered_graph_is_validated_before_cache_and_agent_push(monkeypa
         monkeypatch.setattr('backend.utils.sub_store_client.convert_proxy_string',
             lambda _s: {'name': 'exit', 'type': 'http', 'server': 'example.test', 'port': 80, 'dialer-proxy': 'relay'})
     before = load_subscription_cache('s')
-    profile_before = repo.path.read_bytes()
+    profile_before = repo._store.fingerprint()
     artifact = repo.write_generated('default', 'config.yaml', 'last-good-main')
     provider = repo.write_profile_text('default', 'providers/agg.yaml', 'last-good-provider')
     manager = agent_manager(monkeypatch)
@@ -58,7 +58,7 @@ def test_exact_delivered_graph_is_validated_before_cache_and_agent_push(monkeypa
     network = Mock(side_effect=AssertionError('No self-HTTP or Agent network before validation'))
     monkeypatch.setattr('requests.get', network)
     response = app.test_client().post('/api/agents/a/push-config', json={'restart': False})
-    assert repo.path.read_bytes() == profile_before
+    assert repo._store.fingerprint() == profile_before
     assert artifact.read_text() == 'last-good-main'
     network.assert_not_called()
     assert fetch.call_count == len(responses)

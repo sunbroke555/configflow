@@ -18,7 +18,7 @@ def test_provider_membership_cycle_rejected_before_side_effects(tmp_path, monkey
     network = Mock(side_effect=AssertionError('No network'))
     monkeypatch.setattr('requests.get', network)
     before = load_subscription_cache('s')
-    profile = repo.path.read_bytes()
+    profile = repo._store.fingerprint()
     artifacts = [repo.write_profile_text('default', name, 'last-good') for name in ('generated/config.yaml', 'providers/agg.yaml')]
     path = {'preview': '/api/generate/mihomo/preview', 'generate': '/api/generate/mihomo', 'download': '/api/config/mihomo', 'provider': '/api/subscriptions/s/proxies' if direct else '/api/aggregations/agg/provider', 'push': '/api/agents/a/push-config'}[consumer]
     client = app.test_client()
@@ -27,7 +27,7 @@ def test_provider_membership_cycle_rejected_before_side_effects(tmp_path, monkey
     manager.push_config_to_agent.assert_not_called()
     network.assert_not_called()
     assert load_subscription_cache('s') == before
-    assert repo.path.read_bytes() == profile
+    assert repo._store.fingerprint() == profile
     assert all(p.read_text() == 'last-good' for p in artifacts)
 
 

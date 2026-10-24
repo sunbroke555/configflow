@@ -1,4 +1,6 @@
+import hashlib
 import json
+import stat
 import multiprocessing
 import os
 import shutil
@@ -25,10 +27,8 @@ def _initialize_repository_rounds_worker(data_dirs, barrier, results):
                 {
                     "round": round_index,
                     "ok": True,
-                    "profile": repository.path.read_text(
-                        encoding="utf-8"
-                    ),
-                    "system": repository.path.read_text(encoding="utf-8"),
+                    "profile": json.dumps(repository.export_all()),
+                    "system": json.dumps(repository.get_system()),
                     "derived": (
                         repository.shared_rules_dir() / "legacy.list"
                     ).read_text(encoding="utf-8"),
@@ -338,7 +338,8 @@ def test_repository_creates_isolated_default_profile(tmp_path):
     repository = ProfileRepository(tmp_path)
     assert repository.list_profiles()[0]['id'] == 'default'
     assert repository.profile_dir('default') == tmp_path / 'profiles' / 'default'
-    assert repository.path == tmp_path / 'config.json'
+    assert repository.db_path == tmp_path / 'configflow.sqlite3'
+    assert not (tmp_path / 'config.json').exists()
     assert repository.export_all()['schema_version'] == 5
     assert not (tmp_path / 'system.json').exists()
     assert not (repository.profile_dir('default') / 'config.json').exists()
@@ -356,9 +357,10 @@ def test_empty_data_directory_generates_and_atomically_persists_rule_proxy_token
 
     assert repository.get_system()["system_config"]["rule_proxy_token"] == "generated-default-token"
     assert repository.get_system()["system_config"].get("config_token", "") == ""
-    persisted = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    persisted = repository._store.load().document
     assert persisted["system"]["system_config"]["rule_proxy_token"] == "generated-default-token"
-    assert not list(tmp_path.glob(".config.json.*.tmp"))
+    assert not list(tmp_path.glob(".configflow.sqlite3.*.tmp"))
+    assert not (tmp_path / "config.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -379,14 +381,17 @@ def test_legacy_missing_or_empty_rule_proxy_token_is_generated_and_persisted(
         "rule_configs": [],
     }
     (tmp_path / "config.json").write_text(json.dumps(legacy), encoding="utf-8")
+    legacy_bytes = (tmp_path / "config.json").read_bytes()
 
     repository = ProfileRepository(tmp_path)
 
     assert repository.get_system()["system_config"]["rule_proxy_token"] == "generated-legacy-token"
     if legacy_system_config.get("config_token"):
         assert repository.get_system()["system_config"]["config_token"] == legacy_system_config["config_token"]
-    persisted = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    persisted = repository._store.load().document
     assert persisted["system"]["system_config"]["rule_proxy_token"] == "generated-legacy-token"
+    # The legacy file is kept as the pre-migration copy, never rewritten.
+    assert (tmp_path / "config.json").read_bytes() == legacy_bytes
 
 
 def test_new_repository_rotates_equal_factory_tokens(tmp_path, monkeypatch):
@@ -437,7 +442,8 @@ def test_restart_atomically_rotates_rule_proxy_token_equal_to_config_token(tmp_p
     })
     document = repository.export_all()
     document["system"] = system
-    repository._write_json(repository.path, document)
+    # Persist a raw document that skips the repository's token rule.
+    repository._store.commit(repository._store.load(), document)
     monkeypatch.setattr(
         "backend.common.config_repository.secrets.token_urlsafe",
         lambda size: "rotated-internal-token",
@@ -448,7 +454,7 @@ def test_restart_atomically_rotates_rule_proxy_token_equal_to_config_token(tmp_p
     system_config = restarted.get_system()["system_config"]
     assert system_config["config_token"] == "shared-token"
     assert system_config["rule_proxy_token"] == "rotated-internal-token"
-    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["system"]["system_config"] == system_config
+    assert restarted._store.load().document["system"]["system_config"] == system_config
     assert restarted.rule_proxy_tokens_for_sanitization() == {
         "shared-token",
         "rotated-internal-token",
@@ -463,7 +469,7 @@ def test_restart_atomically_rotates_rule_proxy_token_equal_to_config_token(tmp_p
         assert restarted.get_system()["system_config"]["retired_rule_proxy_tokens"] == [
             "shared-token"
         ]
-    assert not list(tmp_path.glob(".config.json.*.tmp"))
+    assert not list(tmp_path.glob(".configflow.sqlite3.*.tmp"))
 
 
 def test_legacy_retired_rule_proxy_tokens_are_normalized_and_preserved(tmp_path):
@@ -509,9 +515,7 @@ def test_system_transaction_never_persists_equal_config_and_rule_proxy_tokens(tm
         lambda system: system["system_config"].update({"config_token": internal_token})
     )
 
-    persisted_system_config = json.loads(
-        (tmp_path / "config.json").read_text(encoding="utf-8")
-    )["system"]["system_config"]
+    persisted_system_config = repository._store.load().document["system"]["system_config"]
     assert persisted_system_config["config_token"] == internal_token
     assert persisted_system_config["rule_proxy_token"] == "transaction-rotated-token"
     assert repository.get_system()["system_config"] == persisted_system_config
@@ -538,9 +542,9 @@ def test_existing_nonempty_rule_proxy_token_is_preserved_across_restarts(
         assert restarted.get_system()["system_config"]["rule_proxy_token"] == old_token
         assert restarted.rule_proxy_tokens_for_sanitization() == {old_token}
 
-    persisted = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    persisted = original._store.load().document
     assert persisted["system"]["system_config"]["rule_proxy_token"] == old_token
-    assert not list(tmp_path.glob(".config.json.*.tmp"))
+    assert not list(tmp_path.glob(".configflow.sqlite3.*.tmp"))
 
 
 def test_profile_id_cannot_escape_profiles_directory(tmp_path):
@@ -569,6 +573,7 @@ def test_legacy_config_migrates_without_data_loss_and_is_idempotent(tmp_path):
         "backup": {"webdav_url": "https://backup.example"},
     }
     (tmp_path / "config.json").write_text(json.dumps(legacy), encoding="utf-8")
+    legacy_bytes = (tmp_path / "config.json").read_bytes()
     (tmp_path / "subscribes").mkdir()
     (tmp_path / "subscribes" / "sub-1.json").write_text("{\"nodes\": []}", encoding="utf-8")
     (tmp_path / "providers").mkdir()
@@ -595,6 +600,11 @@ def test_legacy_config_migrates_without_data_loss_and_is_idempotent(tmp_path):
     assert second.get_profile("default") == first_profile
     assert second.get_system() == first_system
     assert len(list((tmp_path / "migrations").glob("*/migration/config.json"))) == 1
+    assert (tmp_path / "config.json").read_bytes() == legacy_bytes
+    record = second._store.meta("legacy_config")
+    assert record["sha256"] == hashlib.sha256(legacy_bytes).hexdigest()
+    assert record["size"] == len(legacy_bytes)
+    assert second._store.meta("migration")["source"] == "legacy-single"
 
 
 def test_legacy_initialization_is_serialized_across_processes_over_multiple_rounds(
@@ -673,19 +683,21 @@ def test_legacy_migration_cleans_partial_derived_copy_and_retry_succeeds(tmp_pat
 
 
 
-def test_atomic_profile_save_keeps_previous_file_when_replace_fails(tmp_path, monkeypatch):
+def test_failed_database_commit_keeps_previous_data(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.save_profile("default", {"proxy_groups": [{"id": "old", "name": "old"}]})
-    config_path = repository.path
+    before = repository._store.fingerprint()
 
-    def fail_replace(source, target):
-        raise OSError("replace failed")
+    def fail_commit(connection):
+        raise OSError("commit failed")
 
-    monkeypatch.setattr("backend.common.config_repository.os.replace", fail_replace)
+    monkeypatch.setattr(repository._store, "_commit", fail_commit)
     with pytest.raises(OSError):
         repository.save_profile("default", {"proxy_groups": [{"id": "new", "name": "new"}]})
 
-    assert json.loads(config_path.read_text(encoding="utf-8"))["profiles"]["default"]["proxy_groups"] == [{"id": "old", "name": "old"}]
+    assert repository._store.fingerprint() == before
+    assert repository.get_profile("default")["proxy_groups"] == [{"id": "old", "name": "old"}]
+    assert ProfileRepository(tmp_path).get_profile("default")["proxy_groups"] == [{"id": "old", "name": "old"}]
 
 
 def test_partial_system_metadata_save_keeps_other_fields(tmp_path):
@@ -781,15 +793,10 @@ def test_profile_transaction_preserves_concurrent_list_updates(tmp_path):
 def test_save_profile_rolls_back_profile_when_system_commit_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.save_profile("default", {"proxy_groups": [{"id": "old", "name": "old"}]})
-    system_path = repository.path
-    original_write_json = repository._write_json
+    def fail_system_commit(*args):
+        raise OSError("injected system commit failure")
 
-    def fail_system_commit(path, data):
-        if path == system_path:
-            raise OSError("injected system commit failure")
-        return original_write_json(path, data)
-
-    monkeypatch.setattr(repository, "_write_json", fail_system_commit)
+    monkeypatch.setattr(repository._store, "_apply", fail_system_commit)
     with pytest.raises(OSError, match="injected system commit failure"):
         repository.save_profile("default", {"proxy_groups": [{"id": "new", "name": "new"}]})
 
@@ -799,16 +806,14 @@ def test_save_profile_rolls_back_profile_when_system_commit_fails(tmp_path, monk
 def test_save_profile_rolls_back_system_when_commit_fails_after_replace(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     before = repository.get_system()
-    system_path = repository.path
-    original_write_json = repository._write_json
+    original_apply = repository._store._apply
 
-    def write_then_fail(path, data):
-        if path == system_path:
-            original_write_json(path, data)
-            raise OSError("injected post-replace failure")
-        return original_write_json(path, data)
+    def write_then_fail(*args):
+        # Every row is written; the transaction must still roll back.
+        original_apply(*args)
+        raise OSError("injected post-replace failure")
 
-    monkeypatch.setattr(repository, "_write_json", write_then_fail)
+    monkeypatch.setattr(repository._store, "_apply", write_then_fail)
     with pytest.raises(OSError, match="injected post-replace failure"):
         repository.save_profile("default", {"proxy_groups": [{"id": "new", "name": "new"}]})
 
@@ -817,15 +822,10 @@ def test_save_profile_rolls_back_system_when_commit_fails_after_replace(tmp_path
 
 def test_create_profile_cleans_directory_when_system_commit_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
-    system_path = repository.path
-    original_write_json = repository._write_json
+    def fail_system_commit(*args):
+        raise OSError("injected system commit failure")
 
-    def fail_system_commit(path, data):
-        if path == system_path:
-            raise OSError("injected system commit failure")
-        return original_write_json(path, data)
-
-    monkeypatch.setattr(repository, "_write_json", fail_system_commit)
+    monkeypatch.setattr(repository._store, "_apply", fail_system_commit)
     with pytest.raises(OSError, match="injected system commit failure"):
         repository.create_profile({"id": "orphan"})
 
@@ -840,14 +840,10 @@ def test_create_profile_restores_preexisting_orphan_directory_on_commit_failure(
     original_config = b'{"unregistered": "original"}\n'
     (orphan_dir / "config.json").write_bytes(original_config)
     (orphan_dir / "important.txt").write_text("keep me", encoding="utf-8")
-    original_write_json = repository._write_json
+    def fail_system_commit(*args):
+        raise OSError("system commit failed")
 
-    def fail_system_commit(path, data):
-        if path == repository.path:
-            raise OSError("system commit failed")
-        return original_write_json(path, data)
-
-    monkeypatch.setattr(repository, "_write_json", fail_system_commit)
+    monkeypatch.setattr(repository._store, "_apply", fail_system_commit)
     with pytest.raises(OSError, match="system commit failed"):
         repository.create_profile({"id": "orphan"})
 
@@ -862,15 +858,14 @@ def test_delete_profile_serializes_with_in_flight_profile_write(tmp_path, monkey
     repository.create_profile({"id": "deletable"})
     write_started = threading.Event()
     allow_write = threading.Event()
-    original_write_json = repository._write_json
+    original_apply = repository._store._apply
 
-    def blocked_profile_write(path, data):
-        if path == repository.path:
-            write_started.set()
-            assert allow_write.wait(timeout=5)
-        return original_write_json(path, data)
+    def blocked_profile_write(*args):
+        write_started.set()
+        assert allow_write.wait(timeout=5)
+        return original_apply(*args)
 
-    monkeypatch.setattr(repository, "_write_json", blocked_profile_write)
+    monkeypatch.setattr(repository._store, "_apply", blocked_profile_write)
     write_error = []
 
     def write_profile():
@@ -899,15 +894,10 @@ def test_delete_profile_serializes_with_in_flight_profile_write(tmp_path, monkey
 def test_update_profile_transaction_rolls_back_profile_when_system_commit_fails(tmp_path, monkeypatch):
     repository = ProfileRepository(tmp_path)
     repository.save_profile("default", {"proxy_groups": [{"id": "old", "name": "old"}]})
-    system_path = repository.path
-    original_write_json = repository._write_json
+    def fail_system_commit(*args):
+        raise OSError("system commit failed")
 
-    def fail_system_commit(path, data):
-        if path == system_path:
-            raise OSError("system commit failed")
-        return original_write_json(path, data)
-
-    monkeypatch.setattr(repository, "_write_json", fail_system_commit)
+    monkeypatch.setattr(repository._store, "_apply", fail_system_commit)
     with pytest.raises(OSError, match="system commit failed"):
         repository.update_profile_transaction(
             "default", lambda profile: profile.update({"proxy_groups": [{"id": "new", "name": "new"}]}),
@@ -921,6 +911,7 @@ def test_delete_profile_archives_derived_files_without_destroying_recovery_data(
     repository.create_profile({"id": "keep", "name": "Keep"})
     repository.profile_dir("keep").mkdir()
     (repository.profile_dir("keep") / "important.txt").write_text("keep me", encoding="utf-8")
+    profile = repository.export_profile("keep")
 
     repository.delete_profile("keep")
 
@@ -929,6 +920,9 @@ def test_delete_profile_archives_derived_files_without_destroying_recovery_data(
     tombstones = list(repository.migrations_dir.glob("deleted-keep-*"))
     assert len(tombstones) == 1
     assert (tombstones[0] / "important.txt").read_text(encoding="utf-8") == "keep me"
+    exported = tombstones[0] / "deleted-profile.json"
+    assert json.loads(exported.read_text(encoding="utf-8")) == profile
+    assert stat.S_IMODE(exported.stat().st_mode) == 0o600
 
 
 def test_delete_profile_restores_directory_when_system_commit_fails(tmp_path, monkeypatch):
@@ -938,14 +932,10 @@ def test_delete_profile_restores_directory_when_system_commit_fails(tmp_path, mo
     marker = repository.profile_dir("keep") / "important.txt"
     marker.write_text("original", encoding="utf-8")
     before = repository.get_system()
-    original_write_json = repository._write_json
+    def fail_system_commit(*args):
+        raise OSError("system commit failed")
 
-    def fail_system_commit(path, data):
-        if path == repository.path:
-            raise OSError("system commit failed")
-        return original_write_json(path, data)
-
-    monkeypatch.setattr(repository, "_write_json", fail_system_commit)
+    monkeypatch.setattr(repository._store, "_apply", fail_system_commit)
     with pytest.raises(OSError, match="system commit failed"):
         repository.delete_profile("keep")
 
