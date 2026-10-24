@@ -86,6 +86,21 @@ def test_local_refresh_and_ruleset_fallback_use_proxy(rule_app):
     assert all(options['proxies'] == {'http': PROXY, 'https': PROXY} for _, _, options in calls)
 
 
+def test_local_refresh_fetches_legacy_entry_without_source_type(rule_app):
+    app, repository, calls = rule_app
+    repository.save_shared({'rule_library': [{
+        'id': 'legacy', 'name': 'Legacy', 'url': SOURCE, 'behavior': 'classical', 'enabled': True,
+    }]})
+    from backend.utils.rule_utils import rule_cache_filename
+    cache = repository.shared_rules_dir() / rule_cache_filename(repository.get_shared()['rule_library'][0])
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text('DOMAIN,stale.test')
+    response = app.test_client().get('/api/profiles/alpha/rules/local/Legacy')
+    assert response.get_data(as_text=True) == BODY
+    assert cache.read_text() == BODY
+    assert [url for _, url, _ in calls] == [SOURCE]
+
+
 def test_mosdns_conversion_uses_proxy_and_original_hostname(rule_app):
     app, repository, calls = rule_app
     token = repository.get_system()['system_config']['rule_proxy_token']
