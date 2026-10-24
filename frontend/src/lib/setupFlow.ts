@@ -31,11 +31,12 @@ export async function abandonSetup(id: string): Promise<SetupAbandonPlan | null>
     : data.subscription_kept ? '已放弃向导并删除配置空间；订阅仍被其他配置使用，已保留。' : '已放弃向导，并删除了它创建的配置。')
   return data
 }
-/** 规则集多选项；内置规则与规则库同名但内容不同时，两项分别注明来源 */
+/** 规则集多选项；内置规则与规则库的规则集同名时，两边分别注明来源 */
 export function setupRuleOptions(rules: SetupDomainRule[]): { value: string; label: string }[] {
-  const namesakes = new Set(rules.flatMap(item => item.conflict ? [item.conflict.id] : []))
+  const names = (source: SetupDomainRule['source']) => new Set(rules.filter(item => item.source === source).map(item => item.name))
+  const builtin = names('builtin'), library = names('library')
   return rules.map(item => ({ value: item.id,
-    label: item.conflict ? `${item.name}（内置）` : namesakes.has(item.id) ? `${item.name}（规则库）` : item.name }))
+    label: !builtin.has(item.name) || !library.has(item.name) ? item.name : `${item.name}（${item.source === 'builtin' ? '内置' : '规则库'}）` }))
 }
 /** 已选、且会在规则库另建一份的内置规则 */
 export function setupRuleConflicts(rules: SetupDomainRule[], selection: SetupDomainSelection): SetupDomainRule[] {
@@ -44,7 +45,7 @@ export function setupRuleConflicts(rules: SetupDomainRule[], selection: SetupDom
 }
 /** 改用规则库的同名规则集：在原去向就地替换；它已在另一去向时只取消内置项 */
 export function useLibraryNamesake(selection: SetupDomainSelection, rule: SetupDomainRule): SetupDomainSelection {
-  const target = rule.conflict!.id
+  const target = rule.conflict!.id!
   const swap = (values: string[], other: string[]) => [...new Set(values.flatMap(id =>
     id !== rule.id ? [id] : other.includes(target) ? [] : [target]))]
   return { direct: swap(selection.direct, selection.proxy), proxy: swap(selection.proxy, selection.direct) }

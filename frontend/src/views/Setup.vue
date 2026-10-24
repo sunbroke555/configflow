@@ -280,7 +280,7 @@ onUnmounted(() => { disposed = true })
               </div>
               <div v-for="rule in ruleConflicts" :key="rule.id" role="status" class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-warning-accent/30 bg-warning-soft px-3 py-2.5 text-xs leading-relaxed" data-rule-conflict>
                 <p class="m-0 min-w-0 flex-1 basis-60">规则库已有同名的「{{ rule.conflict!.name }}」，但内容和内置版本不同。继续会在规则库另建一份内置版本。</p>
-                <Button variant="outline" size="sm" class="min-h-11" :disabled="working || session?.completed" @click="useNamesake(rule)">改用规则库的「{{ rule.conflict!.name }}」</Button>
+                <Button v-if="rule.conflict!.id" variant="outline" size="sm" class="min-h-11" :disabled="working || session?.completed" @click="useNamesake(rule)">改用规则库的「{{ rule.conflict!.name }}」</Button>
               </div>
               <p v-if="!directRules.length && !proxyRules.length" class="m-0 text-xs text-warning-accent" role="status">未选择域名规则，所有域名将使用下方的默认 DNS。</p>
               <p v-if="goal === 'gateway' && ipTakeover" class="m-0 text-xs leading-relaxed text-muted-foreground">Telegram、Google 推送（FCM）会直接连 IP，它们的 IP 网段也会交给 Mihomo。安装后可在「配置生成 → Linux 网关」的「IP 接管」里调整。</p>

@@ -292,6 +292,24 @@ describe('首次使用分流向导', () => {
       domain_rules: { direct: ['builtin:direct'], proxy: ['builtin:proxy', 'library:my_grok'] } }))
   })
 
+  it('副本已建或同名规则集不能选用时，仍注明来源且只提示不提供改用', async () => {
+    vi.mocked(setupApi.index).mockResolvedValue({ data: { sessions: [], suggested: true, subscriptions: [], nodes: [], domain_rules: [
+      ...ruleOptions,
+      { id: 'builtin:grok', name: 'Grok', source: 'builtin', aliases: ['library:builtin_grok'] },
+      { id: 'library:my_grok', name: 'Grok', source: 'library' },
+      { id: 'builtin:openai', name: 'OpenAI', source: 'builtin', conflict: { name: 'OpenAI' } },
+    ] } } as never)
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2,
+      domain_rules: { direct: [], proxy: ['builtin:grok', 'builtin:openai'] } }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    const labels = wrapper!.findAllComponents(MultiSelect)[1]!.props('options').map((item: { label: string }) => item.label)
+    expect(labels).toEqual(expect.arrayContaining(['Grok（内置）', 'Grok（规则库）', 'OpenAI']))
+    const notices = wrapper!.findAll('[data-rule-conflict]')
+    expect(notices).toHaveLength(1)
+    expect(notices[0]!.text()).toContain('规则库已有同名的「OpenAI」')
+    expect(notices[0]!.find('button').exists()).toBe(false)
+  })
+
   it('订阅链接明文显示，读取失败保持来源步骤并使用同一会话重试', async () => {
     vi.mocked(setupApi.source).mockResolvedValue({ data: record({ step: 2, max_step: 2, subscription_ids: ['sub'] }) } as never)
     vi.mocked(subscriptionApi.fetch).mockRejectedValueOnce(new Error('订阅读取失败')).mockResolvedValueOnce({ data: { success: true, count: 3 } } as never)

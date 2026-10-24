@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from backend.common.config_repository import ProfileValidationError
 from backend.common.resource import get_backend_resource
 
 _LEGACY_ALIASES = {
@@ -35,20 +36,30 @@ _DOMAIN_KINDS = ('DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD')
 def _parsed_rules(content, behavior, rule_format):
     """What a hand-written rule set matches, ignoring order, case and spelling.
 
-    Bare Classical lines take the delivery normalization; a Domain "+.x" is a
-    Classical DOMAIN-SUFFIX and a plain name a DOMAIN. Anything ambiguous makes
-    the whole set incomparable (None) rather than equal by accident.
+    Only content Mihomo reads the way it is written takes part: anything the
+    editor flags, or YAML that delivery keeps raw (multi-line entries,
+    anchors) and Mihomo reads line by line differently, is incomparable
+    (None) rather than equal by accident. Bare Classical lines take the
+    delivery normalization; a Domain "+.x" is a Classical DOMAIN-SUFFIX and a
+    plain name a DOMAIN. Parameters keep their case, as Mihomo matches
+    "no-resolve" and "src" exactly.
     """
-    from backend.utils.ruleset_content import _classical_line
+    from backend.utils.ruleset_content import inspect_domain_content, normalize_mihomo_ruleset
     from backend.utils.rule_syntax import split_rule_payload
     try:
+        if inspect_domain_content(content, behavior, rule_format)['errors']:
+            return None
+        content, warnings = normalize_mihomo_ruleset(content, behavior, rule_format)
+        if warnings:
+            return None
         if rule_format == 'yaml':
-            lines = yaml.safe_load(content.removeprefix('\ufeff'))['payload']
+            lines = yaml.safe_load(content)['payload']
+            if any(line != line.strip() for line in lines):
+                return None
         else:
-            lines = content.removeprefix('\ufeff').splitlines()
+            lines = [line.strip() for line in content.removeprefix('\ufeff').splitlines()]
         rules = set()
         for line in lines:
-            line = line.strip()
             if not line or line.startswith(('#', '//')):
                 continue
             if behavior == 'domain':
@@ -60,13 +71,13 @@ def _parsed_rules(content, behavior, rule_format):
                 else:
                     rules.add(('DOMAIN', value))
                 continue
-            kind, payload, params = split_rule_payload(_classical_line(line))
+            kind, payload, params = split_rule_payload(line)
             if kind in _DOMAIN_KINDS:
                 payload = payload.lower()
             elif kind in ('IP-CIDR', 'IP-CIDR6'):
                 payload = str(ipaddress.ip_network(payload, strict=False))
-            rules.add((kind, payload, *sorted(param.lower() for param in params)))
-    except (AttributeError, KeyError, TypeError, ValueError, yaml.YAMLError):
+            rules.add((kind, payload, *sorted(params)))
+    except (AttributeError, KeyError, TypeError, ValueError, yaml.YAMLError, ProfileValidationError):
         return None
     return frozenset(rules) or None
 
@@ -265,8 +276,8 @@ def domain_rule_options(repository):
     """Wizard choices: template rule sets first, then the user's other sets.
 
     A template set the library lacks but whose name a different library set
-    already uses carries ``conflict``, so the wizard can offer that set instead
-    of adding a "（内置）" copy.
+    already uses carries ``conflict``: choosing it adds a "（内置）" copy, and
+    ``conflict.id`` names the set the wizard can offer instead, if any.
     """
     shared = repository.get_shared()['rule_library']
     identities = {item['id']: _builtin_identity(item) for item in shared}
@@ -280,9 +291,12 @@ def domain_rule_options(repository):
         option = {'id': identity, 'name': item['name'], 'source': 'builtin', 'behavior': item['behavior'],
                   'aliases': [alias for alias, target in _LEGACY_ALIASES.items() if target == identity]
                              + ['library:' + entry['id'] for entry in matches]}
-        namesake = None if matches else next((entry for entry in own if entry['name'] == item['name']), None)
+        # Any set holding the name blocks the template set (see ensure_builtin_library);
+        # only one the wizard can offer is a swap target.
+        namesake = None if matches else next((entry for entry in sorted(shared, key=lambda entry: entry not in own)
+                                              if entry['name'] == item['name']), None)
         if namesake:
-            option['conflict'] = {'id': 'library:' + namesake['id'], 'name': namesake['name']}
+            option['conflict'] = {'name': namesake['name'], **({'id': 'library:' + namesake['id']} if namesake in own else {})}
         options.append(option)
     options += [{'id': 'library:' + item['id'], 'name': item['name'], 'source': 'library'} for item in own]
     return options
