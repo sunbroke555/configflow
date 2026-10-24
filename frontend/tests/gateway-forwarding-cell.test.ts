@@ -258,7 +258,7 @@ describe('routers page IPv4 forwarding column', () => {
 })
 
 describe('routers page forward-filter warning', () => {
-  const filterButton = (wrapper: VueWrapper, index = 0) => cell(wrapper, index).find('button[aria-label="查看放行 TUN 转发的命令"]')
+  const filterButton = (wrapper: VueWrapper, index = 0) => cell(wrapper, index).find('button[aria-label="查看防火墙放行命令"]')
 
   it('adds a short warning and a commands dialog without changing the forwarding status or action', async () => {
     const wrapper = await mountRouters([entry({ forward_filter: mayDrop() })])
@@ -270,13 +270,13 @@ describe('routers page forward-filter warning', () => {
     expect(short.classes()).toEqual(expect.arrayContaining(['text-[11.5px]', 'text-warning-accent', 'sm:max-w-[102px]', 'whitespace-nowrap']))
     const button = filterButton(wrapper)
     expect(button.text()).toBe('放行命令')
-    expect(button.attributes('title')).toBe('查看放行 TUN 转发的命令')
+    expect(button.attributes('title')).toBe('查看防火墙放行命令')
     expect(button.attributes('data-variant')).toBe('ghost')
     expect(button.classes()).toContain('max-md:min-h-11')
 
     await button.trigger('click'); await flushPromises()
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!
-    expect(dialog.textContent).toContain('放行「pve-mihomo」的 TUN 转发')
+    expect(dialog.textContent).toContain('「pve-mihomo」的防火墙放行命令')
     expect(dialog.textContent).toContain(DOCKER_HINT)
     expect(dialog.querySelector('pre')!.textContent).toBe(DOCKER_COMMANDS.join('\n'))
     expect(dialog.className).toContain('sm:max-w-[560px]')

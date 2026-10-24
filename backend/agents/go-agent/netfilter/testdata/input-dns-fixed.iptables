@@ -5,7 +5,6 @@
 :OUTPUT ACCEPT [0:0]
 -A INPUT -i eth0 -p tcp -m tcp --dport 53 -j ACCEPT
 -A INPUT -i eth0 -p udp -m udp --dport 53 -j ACCEPT
--A INPUT -i Meta -j ACCEPT
 -A INPUT -m conntrack --ctstate DNAT -j ACCEPT
 -A INPUT -i lo -j ACCEPT
 -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT

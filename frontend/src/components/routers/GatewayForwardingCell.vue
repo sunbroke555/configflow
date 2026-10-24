@@ -40,11 +40,11 @@ const agentName = computed(() => props.entry?.agent_name || props.entry?.agent_i
     <template v-if="filterWarning">
       <!-- 短句最长 6 个字宽，在 102px 列内一行放下。 -->
       <p class="m-0 max-w-[260px] whitespace-nowrap text-[11.5px] leading-relaxed text-warning-accent sm:max-w-[102px]" data-forward-filter-short>{{ filterWarning.short }}</p>
-      <Button size="sm" variant="ghost" class="px-2 text-xs max-md:min-h-11" aria-label="查看放行 TUN 转发的命令" title="查看放行 TUN 转发的命令" @click="filterOpen = true">放行命令</Button>
+      <Button size="sm" variant="ghost" class="px-2 text-xs max-md:min-h-11" aria-label="查看防火墙放行命令" title="查看防火墙放行命令" @click="filterOpen = true">放行命令</Button>
       <Dialog v-model:open="filterOpen">
         <DialogContent class="sm:max-w-[560px]">
           <DialogHeader>
-            <DialogTitle class="pr-8 [overflow-wrap:anywhere]">放行「{{ agentName }}」的 TUN 转发</DialogTitle>
+            <DialogTitle class="pr-8 [overflow-wrap:anywhere]">「{{ agentName }}」的防火墙放行命令</DialogTitle>
             <DialogDescription>这台设备的防火墙检查结果，只作提醒，不影响发布和 IPv4 转发。</DialogDescription>
           </DialogHeader>
           <ForwardFilterNotice :filter="entry?.forward_filter" />

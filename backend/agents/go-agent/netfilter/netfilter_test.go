@@ -602,7 +602,7 @@ func TestFirewalldRulesetFromTheLab(t *testing.T) {
 	} {
 		result := firewalldHost(t, tc.ruleset).inspectTarget(standalone)
 		remedy := onlyRemedy(t, result)
-		if !reflect.DeepEqual(result.Flows, tc.flows) || !reflect.DeepEqual(remedy.Commands, firewalldCommands) || remedy.Source != "firewalld" || remedy.PersistNote != firewalldNote {
+		if !reflect.DeepEqual(result.Flows, tc.flows) || !reflect.DeepEqual(remedy.Commands, firewalldCommands) || remedy.Source != "firewalld" || remedy.PersistNote != firewalldNote+firewalldSavedNote {
 			t.Fatalf("%s: %+v", tc.ruleset, result)
 		}
 		if result.Sources[0].Kind != "firewalld" || !strings.HasPrefix(result.Sources[0].Detail, "firewalld 正在运行") {
@@ -1345,7 +1345,7 @@ func TestAIOWithFirewalldReportsLocalDNS(t *testing.T) {
 	}
 	// After the forwarding commands only DNS is left; after both, ok.
 	result = firewalldHost(t, "firewalld-zone-fixed.nft.json").oxidnsListening().inspectTarget(aio)
-	if remedy := onlyRemedy(t, result); !reflect.DeepEqual(remedy.Commands, []string{"firewall-cmd --permanent --zone=public --add-service=dns", "firewall-cmd --reload"}) || remedy.PersistNote != firewalldDNSNote {
+	if remedy := onlyRemedy(t, result); !reflect.DeepEqual(remedy.Commands, []string{"firewall-cmd --permanent --zone=public --add-service=dns", "firewall-cmd --reload"}) || remedy.PersistNote != firewalldDNSNote+firewalldSavedNote {
 		t.Fatalf("dns only: %+v", result)
 	}
 	if result := firewalldHost(t, "firewalld-dns-fixed.nft.json").oxidnsListening().inspectTarget(aio); result.State != StateOK {
@@ -1494,5 +1494,13 @@ func TestForwardedPingIsJudgedSeparately(t *testing.T) {
 	}
 	if icmpTypeMatch([]string{"echo-request"}, flow{proto: "udp"}) != no || icmpTypeMatch([]string{"echo-request"}, flow{}) != maybe {
 		t.Fatal("icmp type on other flows")
+	}
+}
+
+func TestFirewalldPersistNoteSaysSavedOnce(t *testing.T) {
+	result := firewalldHost(t, "firewalld-public.nft.json").oxidnsListening().inspectTarget(aio)
+	remedy := onlyRemedy(t, result)
+	if strings.Count(remedy.PersistNote, firewalldSavedNote) != 1 || !strings.Contains(remedy.PersistNote, firewalldNote) || !strings.Contains(remedy.PersistNote, firewalldDNSNote) {
+		t.Fatalf("persist note: %q", remedy.PersistNote)
 	}
 }

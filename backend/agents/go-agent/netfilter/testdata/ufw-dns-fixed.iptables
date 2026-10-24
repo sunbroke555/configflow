@@ -104,7 +104,6 @@
 -A ufw-user-input -i eth0 -p tcp -m tcp --dport 53 -j ACCEPT
 -A ufw-user-input -i eth0 -p udp -m udp --dport 53 -j ACCEPT
 -A ufw-user-input -p tcp -m tcp --dport 9090 -j ACCEPT
--A ufw-user-input -i Meta -j ACCEPT
 -A ufw-user-limit -m limit --limit 3/min -j LOG --log-prefix "[UFW LIMIT BLOCK] "
 -A ufw-user-limit -j REJECT --reject-with icmp-port-unreachable
 -A ufw-user-limit-accept -j ACCEPT
