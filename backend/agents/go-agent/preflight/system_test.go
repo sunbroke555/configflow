@@ -104,6 +104,20 @@ func (f *systemFixture) probe() systemProbe {
 	}
 }
 
+// useLoader makes the fixture boot with systemd ("systemd"), Alpine's OpenRC
+// sysctl service ("alpine") or procps sysctl --system (anything else).
+func (f *systemFixture) useLoader(loader string) {
+	switch loader {
+	case "systemd":
+		if f.devices == nil {
+			f.devices = map[string]os.FileMode{}
+		}
+		f.devices["/run/systemd/system"] = os.ModeDir
+	case "alpine":
+		f.files["/etc/alpine-release"] = []byte("3.20.3\n")
+	}
+}
+
 func fixtureMihomo(t *testing.T, enable bool) Config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -330,23 +344,37 @@ func TestSystemForwardingZeroWarnsWithoutAssumingGatewayRole(t *testing.T) {
 func TestSystemForwardingPersistenceHonorsPrecedenceAndUncertainty(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
+		loader  string
 		files   map[string][]byte
 		level   string
 		message string
 	}{
-		{"later-disables", map[string][]byte{"/etc/sysctl.d/10-enable.conf": []byte("net.ipv4.ip_forward=1"), "/usr/lib/sysctl.d/99-disable.conf": []byte("net.ipv4.ip_forward=0")}, "warn", "ip_forward=0"},
-		{"same-name-etc-wins", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1"), "/usr/lib/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=0")}, "pass", "重启后仍需验证"},
-		{"last-line-wins", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1\nnet/ipv4/ip_forward=0\n")}, "warn", "ip_forward=0"},
-		{"legacy-only", map[string][]byte{"/etc/sysctl.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "取决于发行版"},
-		{"legacy-conflict", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1"), "/etc/sysctl.conf": []byte("net.ipv4.ip_forward=0")}, "warn", "设置不一致"},
-		{"runtime-only", map[string][]byte{"/run/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "临时目录 /run"},
-		{"comment-only", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("# net.ipv4.ip_forward=1")}, "warn", "未在常见"},
-		{"masked-vendor", map[string][]byte{"/etc/sysctl.d/99-forward.conf": nil, "/usr/lib/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "未在常见"},
-		{"legacy-lib-directory", map[string][]byte{"/lib/sysctl.d/99-forward.conf": []byte("/net/ipv4/ip_forward=1")}, "pass", "重启后仍需验证"},
+		{"later-disables", "", map[string][]byte{"/etc/sysctl.d/10-enable.conf": []byte("net.ipv4.ip_forward=1"), "/usr/lib/sysctl.d/99-disable.conf": []byte("net.ipv4.ip_forward=0")}, "warn", "ip_forward=0"},
+		{"same-name-etc-wins", "", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1"), "/usr/lib/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=0")}, "pass", "重启后仍需验证"},
+		{"last-line-wins", "", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1\nnet/ipv4/ip_forward=0\n")}, "warn", "ip_forward=0"},
+		// procps applies /etc/sysctl.conf last; systemd-sysctl never reads it.
+		{"sysctl.conf-procps", "", map[string][]byte{"/etc/sysctl.conf": []byte("net.ipv4.ip_forward=1")}, "pass", "sysctl --system"},
+		{"sysctl.conf-systemd", "systemd", map[string][]byte{"/etc/sysctl.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "未在常见"},
+		{"sysctl.conf-overrides-procps", "", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1"), "/etc/sysctl.conf": []byte("net.ipv4.ip_forward=0")}, "warn", "ip_forward=0（/etc/sysctl.conf:1）"},
+		{"sysctl.conf-ignored-systemd", "systemd", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1"), "/etc/sysctl.conf": []byte("net.ipv4.ip_forward=0")}, "pass", "systemd-sysctl"},
+		{"debian-link-systemd", "systemd", map[string][]byte{"/etc/sysctl.d/50-forward.conf": []byte("net.ipv4.ip_forward=1"), "/etc/sysctl.d/99-sysctl.conf": []byte("net.ipv4.ip_forward=0")}, "warn", "99-sysctl.conf"},
+		{"runtime-only", "", map[string][]byte{"/run/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "临时目录 /run"},
+		{"comment-only", "", map[string][]byte{"/etc/sysctl.d/99-forward.conf": []byte("# net.ipv4.ip_forward=1")}, "warn", "未在常见"},
+		{"masked-vendor", "", map[string][]byte{"/etc/sysctl.d/99-forward.conf": nil, "/usr/lib/sysctl.d/99-forward.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "未在常见"},
+		{"legacy-lib-directory", "", map[string][]byte{"/lib/sysctl.d/99-forward.conf": []byte("/net/ipv4/ip_forward=1")}, "pass", "重启后仍需验证"},
+		// Alpine applies whole directories in turn instead of sorting across them.
+		{"alpine-etc-after-vendor", "alpine", map[string][]byte{"/etc/sysctl.d/10-off.conf": []byte("net.ipv4.ip_forward=0"), "/usr/lib/sysctl.d/99-on.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "ip_forward=0（/etc/sysctl.d/10-off.conf:1）"},
+		{"systemd-sorts-across-directories", "systemd", map[string][]byte{"/etc/sysctl.d/10-off.conf": []byte("net.ipv4.ip_forward=0"), "/usr/lib/sysctl.d/99-on.conf": []byte("net.ipv4.ip_forward=1")}, "pass", "/usr/lib/sysctl.d/99-on.conf:1"},
+		{"alpine-vendor-before-etc", "alpine", map[string][]byte{"/etc/sysctl.d/10-on.conf": []byte("net.ipv4.ip_forward=1"), "/usr/lib/sysctl.d/99-off.conf": []byte("net.ipv4.ip_forward=0")}, "pass", "Alpine sysctl 服务"},
+		{"alpine-sysctl.conf-after-sysctl.d", "alpine", map[string][]byte{"/etc/sysctl.d/99-on.conf": []byte("net.ipv4.ip_forward=1"), "/etc/sysctl.conf": []byte("net.ipv4.ip_forward=0")}, "warn", "/etc/sysctl.conf:1"},
+		{"alpine-ignores-usr-local", "alpine", map[string][]byte{"/usr/local/lib/sysctl.d/99-on.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "未在常见"},
+		{"alpine-etc-shadows-vendor", "alpine", map[string][]byte{"/etc/sysctl.d/50-x.conf": []byte("# nothing"), "/lib/sysctl.d/50-x.conf": []byte("net.ipv4.ip_forward=1")}, "warn", "未在常见"},
+		{"alpine-applies-lib-and-usr-lib", "alpine", map[string][]byte{"/lib/sysctl.d/50-x.conf": []byte("net.ipv4.ip_forward=1"), "/usr/lib/sysctl.d/50-x.conf": []byte("net.ipv4.ip_forward=0")}, "warn", "/usr/lib/sysctl.d/50-x.conf:1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := healthySystemFixture()
 			fixture.files = tc.files
+			fixture.useLoader(tc.loader)
 			check := inspectForwardingPersistence(fixture.probe())
 			if check.Level != tc.level || !strings.Contains(check.Message, tc.message) {
 				t.Fatalf("persistence overclaimed or ignored precedence: %+v", check)

@@ -3,8 +3,6 @@ package preflight
 import (
 	"agent/netfilter"
 	"net"
-	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -42,51 +40,14 @@ func inspectInstallerForwarding(probe systemProbe) []Check {
 // inspectInstallerForwardingConflict recomputes the boot-time value as if the
 // installer's file already existed, and reports only a later '=0'.
 func inspectInstallerForwardingConflict(probe systemProbe) (Check, bool) {
-	selected := map[string]string{filepath.Base(installerForwardingConfig): installerForwardingConfig}
-	for _, dir := range []string{"/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d", "/lib/sysctl.d"} {
-		paths, _ := probe.glob(dir + "/*.conf")
-		for _, path := range paths {
-			base := filepath.Base(path)
-			if _, found := selected[base]; !found {
-				selected[base] = path
-			}
-		}
-	}
-	names := make([]string, 0, len(selected))
-	for name := range selected {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var effective forwardingSetting
-	for _, name := range names {
-		path := selected[name]
-		if path == installerForwardingConfig {
-			effective = forwardingSetting{value: "1", where: path}
-			continue
-		}
-		data, err := probe.readFile(path)
-		if err != nil {
-			continue
-		}
-		if setting := parseForwardingSetting(data, path); setting.where != "" {
-			effective = setting
-		}
-	}
-	conflict := ""
-	if effective.value == "0" {
-		conflict = effective.where
-	} else if data, err := probe.readFile("/etc/sysctl.conf"); err == nil {
-		if legacy := parseForwardingSetting(data, "/etc/sysctl.conf"); legacy.value == "0" {
-			conflict = legacy.where
-		}
-	}
-	if conflict == "" {
+	system := readSystemForwardingWith(probe, map[string][]byte{installerForwardingConfig: []byte("net.ipv4.ip_forward=1\n")})
+	if system.effective.value != "0" {
 		return Check{}, false
 	}
 	return Check{
 		Name:    "IPv4 转发冲突",
 		Level:   "warn",
-		Message: conflict + " 在 ConfigFlow 的持久化文件之后加载，并设置 net.ipv4.ip_forward=0，重启后转发可能被关闭。",
+		Message: system.effective.where + " 在 ConfigFlow 的持久化文件之后加载，并设置 net.ipv4.ip_forward=0，重启后转发可能被关闭。",
 		Fix:     "把该行改为 1 或删除，重启后用 sysctl net.ipv4.ip_forward 确认为 1。",
 	}, true
 }

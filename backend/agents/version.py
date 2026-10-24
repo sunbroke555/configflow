@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.43-go"
+LATEST_AGENT_VERSION = "1.8.44-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.44-go": {
+        "date": "2026-10-24",
+        "features": [
+            "判断主机自己的 sysctl 配置是否已持久化 IPv4 转发时，按开机时实际的加载方式（systemd 的 systemd-sysctl、其他 OpenRC 系统的 sysctl --system、Alpine 的 sysctl 服务）依次加载各文件算出最终值：systemd 主机不再把 /etc/sysctl.conf 当作会加载，其他 OpenRC 系统最后加载它，Alpine 按目录依次加载",
+            "环境检查的 IPv4 转发持久化与安装器的“后加载设置会改回 0”提醒使用同一套加载顺序"
+        ]
+    },
     "1.8.43-go": {
         "date": "2026-10-24",
         "features": [

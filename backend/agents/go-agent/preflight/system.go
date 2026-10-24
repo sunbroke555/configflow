@@ -438,58 +438,144 @@ func parseForwardingSetting(data []byte, path string) forwardingSetting {
 	return result
 }
 
-// systemForwarding is the boot-time IPv4 forwarding the sysctl configuration
-// gives: the last setting in sysctl.d order and the one in /etc/sysctl.conf.
-type systemForwarding struct {
-	effective  forwardingSetting
-	legacy     forwardingSetting
-	unreadable bool
+// sysctlLoader is what applies the sysctl configuration at boot; each reads
+// different files in a different order.
+type sysctlLoader string
+
+const (
+	// systemd-sysctl: one file per basename (/etc, /run, /usr/local/lib,
+	// /usr/lib, /lib), applied in filename order. It never reads
+	// /etc/sysctl.conf itself; Debian and Fedora link it in as 99-sysctl.conf.
+	loaderSystemd sysctlLoader = "systemd-sysctl"
+	// procps "sysctl --system" (OpenRC outside Alpine): the same selection and
+	// order, then /etc/sysctl.conf last.
+	loaderProcps sysctlLoader = "sysctl --system"
+	// Alpine's OpenRC sysctl service (BusyBox sysctl has no --system): /lib
+	// and /usr/lib unless shadowed in /etc or /run, then /etc/sysctl.d unless
+	// shadowed in /run, then /etc/sysctl.conf, then /run/sysctl.d. It does not
+	// read /usr/local/lib/sysctl.d.
+	loaderAlpine sysctlLoader = "Alpine sysctl 服务"
+)
+
+func detectSysctlLoader(probe systemProbe) sysctlLoader {
+	// sd_booted(): systemd is the running init.
+	if info, err := probe.stat("/run/systemd/system"); err == nil && info.IsDir() {
+		return loaderSystemd
+	}
+	if _, err := probe.readFile("/etc/alpine-release"); err == nil {
+		return loaderAlpine
+	}
+	return loaderProcps
 }
 
-// persisted reports whether the configuration certainly turns forwarding on
-// at boot: sysctl.d ends with '=1' outside /run, everything was readable and
-// /etc/sysctl.conf does not contradict it.
-func (s systemForwarding) persisted() bool {
-	return s.effective.value == "1" && !strings.HasPrefix(s.effective.where, "/run/") && !s.unreadable &&
-		(s.legacy.where == "" || s.legacy.value == "1")
-}
-
-func readSystemForwarding(probe systemProbe) systemForwarding {
-	// systemd-sysctl picks the highest-priority directory for each basename,
-	// then processes selected files in lexical filename order. Merely finding
-	// an earlier '=1' is not evidence that a later '=0' will not replace it.
-	selected := make(map[string]string)
-	var result systemForwarding
-	for _, dir := range []string{"/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d", "/lib/sysctl.d"} {
+// sysctlBootFiles lists, in application order, the files the loader applies
+// at boot. extra adds files that do not exist yet (the installer's own).
+func sysctlBootFiles(probe systemProbe, loader sysctlLoader, extra []string) ([]string, bool) {
+	unreadable := false
+	list := func(dir string) []string {
 		paths, err := probe.glob(dir + "/*.conf")
-		result.unreadable = result.unreadable || err != nil
+		unreadable = unreadable || err != nil
+		for _, path := range extra {
+			if filepath.Dir(path) == dir {
+				paths = append(paths, path)
+			}
+		}
+		sort.Strings(paths)
+		return paths
+	}
+	names := func(paths []string) map[string]bool {
+		set := make(map[string]bool, len(paths))
 		for _, path := range paths {
-			base := filepath.Base(path)
-			if _, found := selected[base]; !found {
+			set[filepath.Base(path)] = true
+		}
+		return set
+	}
+	if loader == loaderAlpine {
+		etc, run := list("/etc/sysctl.d"), list("/run/sysctl.d")
+		etcNames, runNames := names(etc), names(run)
+		var files []string
+		for _, path := range append(list("/lib/sysctl.d"), list("/usr/lib/sysctl.d")...) {
+			if base := filepath.Base(path); !etcNames[base] && !runNames[base] {
+				files = append(files, path)
+			}
+		}
+		for _, path := range etc {
+			if !runNames[filepath.Base(path)] {
+				files = append(files, path)
+			}
+		}
+		files = append(files, "/etc/sysctl.conf")
+		return append(files, run...), unreadable
+	}
+	selected := make(map[string]string)
+	for _, dir := range []string{"/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d", "/lib/sysctl.d"} {
+		for _, path := range list(dir) {
+			if base := filepath.Base(path); selected[base] == "" {
 				selected[base] = path
 			}
 		}
 	}
-	names := make([]string, 0, len(selected))
-	for name := range selected {
-		names = append(names, name)
+	bases := make([]string, 0, len(selected))
+	for base := range selected {
+		bases = append(bases, base)
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		path := selected[name]
-		data, err := probe.readFile(path)
-		if err != nil {
-			result.unreadable = true
+	sort.Strings(bases)
+	files := make([]string, 0, len(bases)+1)
+	for _, base := range bases {
+		files = append(files, selected[base])
+	}
+	if loader == loaderProcps {
+		files = append(files, "/etc/sysctl.conf")
+	}
+	return files, unreadable
+}
+
+// systemForwarding is the IPv4 forwarding the boot-time loader leaves: the
+// last setting in the files it applies, in its order.
+type systemForwarding struct {
+	loader     sysctlLoader
+	effective  forwardingSetting
+	unreadable bool
+}
+
+// persisted reports whether the configuration certainly turns forwarding on
+// at boot: the last applied setting is '=1', it is not in /run (emptied at
+// boot) and every file was readable.
+func (s systemForwarding) persisted() bool {
+	return s.effective.value == "1" && !strings.HasPrefix(s.effective.where, "/run/") && !s.unreadable
+}
+
+func readSystemForwarding(probe systemProbe) systemForwarding {
+	return readSystemForwardingWith(probe, nil)
+}
+
+// readSystemForwardingWith treats each path in pending as if it held the given
+// content, whether or not it exists yet.
+func readSystemForwardingWith(probe systemProbe, pending map[string][]byte) systemForwarding {
+	loader := detectSysctlLoader(probe)
+	extra := make([]string, 0, len(pending))
+	for path := range pending {
+		extra = append(extra, path)
+	}
+	files, unreadable := sysctlBootFiles(probe, loader, extra)
+	result := systemForwarding{loader: loader, unreadable: unreadable}
+	seen := make(map[string]bool, len(files))
+	for _, path := range files {
+		if seen[path] {
 			continue
+		}
+		seen[path] = true
+		data, ok := pending[path]
+		if !ok {
+			var err error
+			if data, err = probe.readFile(path); err != nil {
+				result.unreadable = result.unreadable || !os.IsNotExist(err)
+				continue
+			}
 		}
 		if setting := parseForwardingSetting(data, path); setting.where != "" {
 			result.effective = setting
 		}
-	}
-	legacyData, legacyErr := probe.readFile("/etc/sysctl.conf")
-	result.legacy = parseForwardingSetting(legacyData, "/etc/sysctl.conf")
-	if legacyErr != nil && !os.IsNotExist(legacyErr) {
-		result.unreadable = true
 	}
 	return result
 }
@@ -512,27 +598,22 @@ func systemForwardingPersistence(probe systemProbe) (string, bool) {
 
 func inspectForwardingPersistence(probe systemProbe) Check {
 	system := readSystemForwarding(probe)
-	effective, legacy, unreadable := system.effective, system.legacy, system.unreadable
+	effective := system.effective
 	check := Check{Name: "IPv4 转发持久化", Level: "warn", Fix: forwardingFix}
 	if system.persisted() {
 		check.Level = "pass"
-		check.Message = "在 sysctl.d 中发现最后可读设置为 net.ipv4.ip_forward=1（" + effective.where + "）；仅确认文件设置，启动服务仍可能覆盖，重启后仍需验证。"
+		check.Message = "按开机时的加载方式（" + string(system.loader) + "）计算，最后生效的设置为 net.ipv4.ip_forward=1（" + effective.where + "）；仅确认文件设置，启动服务仍可能覆盖，重启后仍需验证。"
 		check.Fix = ""
 	} else if effective.where != "" {
-		check.Message = "sysctl.d 中最后可读设置为 net.ipv4.ip_forward=" + effective.value + "（" + effective.where + "）；不能确认重启后的转发状态。"
-	} else if legacy.where != "" {
-		check.Message = "仅在 /etc/sysctl.conf 发现 net.ipv4.ip_forward=" + legacy.value + "；该文件是否加载及其顺序取决于发行版和服务，不能确认重启后生效。"
+		check.Message = "按开机时的加载方式（" + string(system.loader) + "）计算，最后生效的设置为 net.ipv4.ip_forward=" + effective.value + "（" + effective.where + "）；不能确认重启后的转发状态。"
 	} else {
-		check.Message = "未在常见 sysctl 配置中找到明确的 IPv4 转发设置；可能由其他服务管理，无法确认重启后的状态。"
+		check.Message = "未在常见 sysctl 配置中找到开机时会加载的 IPv4 转发设置（" + string(system.loader) + "）；可能由其他服务管理，无法确认重启后的状态。"
 	}
-	if unreadable {
+	if system.unreadable {
 		check.Message += " 部分配置无法读取。"
 	}
 	if strings.HasPrefix(effective.where, "/run/") {
 		check.Message += " 该设置位于临时目录 /run，重启后不保证保留。"
-	}
-	if legacy.where != "" && effective.where != "" && legacy.value != effective.value {
-		check.Message += " /etc/sysctl.conf 与 sysctl.d 的设置不一致，需核对启动加载顺序。"
 	}
 	return check
 }
