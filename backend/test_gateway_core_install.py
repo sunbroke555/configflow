@@ -469,12 +469,49 @@ def test_selective_gateway_script_is_byte_identical_to_the_previous_release():
     expected = (BASELINES / 'gateway_install_selective_0ef9e89.sh').read_text(encoding='utf-8')
     assert generate() == expected
     assert generate(full_tun=False) == expected
+    assert 'CONFIGFLOW_INSTALLER_FORWARDING' not in expected
 
 
-def test_ordinary_aio_script_is_byte_identical_to_the_previous_release():
+# The ordinary AIO persists IPv4 forwarding itself. Its environment check is
+# told so (no manual-repair warnings remain to point at), and the summary
+# repeats a forward-filter warning; nothing else moves.
+ORDINARY_AIO_FORWARDING_DELTAS = (
+    ('cf_step "检查运行环境"\nif cf_environment_check "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json"',
+     'cf_step "检查运行环境"\nCONFIGFLOW_INSTALLER_FORWARDING=persist\nexport CONFIGFLOW_INSTALLER_FORWARDING\n'
+     'if cf_environment_check "$BINARY_TMP" -config "$STAGE_DIR/mihomo-config.json"'),
+    ('fi\ncf_step_done "运行环境检查通过"\n',
+     'fi\nunset CONFIGFLOW_INSTALLER_FORWARDING\ncf_step_done "运行环境检查通过"\n'),
+    ('    cf_note forwarding "IPv4 转发已设置持久化，尚未实际重启验证；其他配置或服务覆盖风险及原检查结果见详细日志。"\n',
+     '    cf_note forwarding "IPv4 转发已设置持久化，尚未实际重启验证；其他配置或服务仍可能在重启后把它改回 0，'
+     '重启后可执行 sysctl net.ipv4.ip_forward 确认仍为 1。"\n'),
+    ('确认仍为 1。"\n    cf_fact ipv4_forwarding ',
+     '确认仍为 1。"\n'
+     '    # The environment check only warns about these; repeat them in the final\n'
+     '    # summary because neither stops the install.\n'
+     '    if [ -n "${CONFIGFLOW_LOG_FILE:-}" ] && [ -f "$CONFIGFLOW_LOG_FILE" ]; then\n'
+     "        if grep -q '^\\[提醒\\] IPv4 转发冲突：' \"$CONFIGFLOW_LOG_FILE\" 2>/dev/null; then\n"
+     '            cf_note forwarding_conflict "IPv4 转发冲突：其他 sysctl 设置会在重启后把 net.ipv4.ip_forward 改回 0；'
+     '处理方法见上方「IPv4 转发冲突」或完整日志。"\n'
+     '        fi\n'
+     "        if grep -q '^\\[提醒\\] 转发过滤：' \"$CONFIGFLOW_LOG_FILE\" 2>/dev/null; then\n"
+     '            cf_note forward_filter "转发过滤：这台 Linux 的防火墙可能拦截经过 Mihomo TUN 的流量，安装不受影响；'
+     '影响范围和放行命令见上方「转发过滤」或完整日志。"\n'
+     '        fi\n'
+     '    fi\n'
+     '    cf_fact ipv4_forwarding '),
+)
+
+
+def test_ordinary_aio_script_is_the_previous_release_plus_intentional_forwarding_context_delta():
     expected = (BASELINES / 'go_aio_install_0ef9e89.sh').read_text(encoding='utf-8')
-    assert generate_go_aio_install_script('https://cf.test', 'ordinary', agent_ip='192.168.8.3',
-                                          binary_download_url='https://cf.test/api/agents/download') == expected
+    for old, new in ORDINARY_AIO_FORWARDING_DELTAS:
+        assert expected.count(old) == 1, old
+        expected = expected.replace(old, new, 1)
+    script = generate_go_aio_install_script('https://cf.test', 'ordinary', agent_ip='192.168.8.3',
+                                            binary_download_url='https://cf.test/api/agents/download')
+    assert script == expected
+    assert script.count('export CONFIGFLOW_INSTALLER_FORWARDING\n') == 1
+    assert script.count('unset CONFIGFLOW_INSTALLER_FORWARDING\n') == 1
 
 
 @pytest.mark.parametrize('kwargs', [
@@ -501,6 +538,9 @@ def test_full_tun_script_persists_forwarding_and_prepares_tun(tmp_path):
         assert expected in script, expected
     assert 'CONFIGFLOW_FORWARDING_OWNER' not in script
     assert '$3>=25' not in script
+    # The inner AIO persists forwarding, so its environment check is told so.
+    assert script.count('CONFIGFLOW_INSTALLER_FORWARDING=persist\nexport CONFIGFLOW_INSTALLER_FORWARDING\nif cf_environment_check "$BINARY_TMP"') == 1
+    assert script.count('unset CONFIGFLOW_INSTALLER_FORWARDING\n') == 1
     path = tmp_path / 'script.sh'
     path.write_text(script)
     result = subprocess.run(['sh', '-n', path], capture_output=True, text=True)

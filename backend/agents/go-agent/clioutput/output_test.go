@@ -181,3 +181,34 @@ func TestResultLogUsesSharedWarningAndFailureLabels(t *testing.T) {
 		t.Fatalf("parent script cannot reliably count command diagnostics: %s", details)
 	}
 }
+
+func TestWrapKeepsWordsAndPunctuationTogether(t *testing.T) {
+	var out bytes.Buffer
+	// Lab v5-3: the installer split "ConfigFlow" and began a line with "，UDP".
+	Wrap(&out, "    原因：", "这台 Linux 的防火墙会拦截转发到 Mihomo TUN（Meta）的流量：TCP 仍可用，UDP（如 QUIC、语音通话、游戏）和 ping 会失败。ConfigFlow 不会改动防火墙。", 78)
+	Wrap(&out, "    处理方法：", "需要放行时在这台 Linux 上执行下面的命令；发布 Mihomo 配置后以 ConfigFlow 页面显示的命令为准（TUN 设备名可能不同）。", 78)
+	Wrap(&out, "  ✓ ", "IPv4 转发  当前为 0，安装器将开启并持久化（/etc/sysctl.d/99-configflow-aio-forward.conf）", 78)
+	text := out.String()
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if cells(line) > 78 || strings.HasPrefix(trimmed, "，") || strings.HasPrefix(trimmed, "。") || strings.HasPrefix(trimmed, "）") {
+			t.Fatalf("bad line %q in\n%s", line, text)
+		}
+	}
+	for _, word := range []string{"ConfigFlow", "/etc/sysctl.d/99-configflow-aio-forward.conf"} {
+		if !strings.Contains(text, word) {
+			t.Fatalf("%s was split:\n%s", word, text)
+		}
+	}
+	// A word wider than the line is still split rather than overflowing.
+	out.Reset()
+	Wrap(&out, "  ", strings.Repeat("x", 50), 30)
+	for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
+		if cells(line) > 30 {
+			t.Fatalf("overwide: %q", line)
+		}
+	}
+	if got := strings.ReplaceAll(strings.ReplaceAll(out.String(), "\n", ""), " ", ""); got != strings.Repeat("x", 50) {
+		t.Fatalf("lost text: %q", out.String())
+	}
+}

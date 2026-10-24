@@ -1261,7 +1261,9 @@ const persistForwarding = async (agentId: string) => {
     forwardingRequest += 1
     forwardingLoading.value = false
     if (data?.gateway && data.gateway.agent_id === agentId) {
-      forwardingEntries.value = { ...forwardingEntries.value, [agentId]: data.gateway }
+      // The persist response carries no firewall check; keep the last one until the next read.
+      const forward_filter = data.gateway.forward_filter ?? entry.forward_filter ?? null
+      forwardingEntries.value = { ...forwardingEntries.value, [agentId]: { ...data.gateway, forward_filter } }
       if (readInFlight) void loadForwarding()
     } else {
       void loadForwarding()

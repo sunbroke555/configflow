@@ -1,8 +1,10 @@
 package preflight
 
 import (
+	"agent/netfilter"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,12 +42,16 @@ type systemProbe struct {
 	showUnit  func(string) ([]byte, error)
 	getenv    func(string) string
 	writeFile func(string, []byte) error
+	// forwardFilter inspects FORWARD filtering; nil skips the check.
+	forwardFilter func(netfilter.Target) netfilter.Result
+	lanAddresses  func() []net.IP
 }
 
 func defaultSystemProbe() systemProbe {
 	return systemProbe{
 		goos: runtime.GOOS, readFile: os.ReadFile, readDir: os.ReadDir, stat: os.Stat, glob: filepath.Glob, tun: systemTunFeatures,
 		getenv: os.Getenv, writeFile: func(path string, data []byte) error { return os.WriteFile(path, data, 0o644) },
+		forwardFilter: boundedForwardFilter, lanAddresses: netfilter.LANAddresses,
 		showUnit: func(unit string) ([]byte, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
@@ -53,6 +59,30 @@ func defaultSystemProbe() systemProbe {
 				"--property=LoadState,MainPID,CapabilityBoundingSet,AmbientCapabilities,PrivateDevices,DevicePolicy,DeviceAllow,PrivateNetwork,NetworkNamespacePath,User,NoNewPrivileges,RootDirectory,RootImage",
 				"--", unit).Output()
 		},
+	}
+}
+
+// boundedForwardFilter never holds the environment check past the inspection
+// budget, even if a command outlives its context; it then reports unknown.
+func boundedForwardFilter(target netfilter.Target) netfilter.Result {
+	return boundedForwardFilterWith(target, func(ctx context.Context) netfilter.Result {
+		return netfilter.Inspect(ctx, netfilter.DefaultProbe(), target)
+	})
+}
+
+func boundedForwardFilterWith(target netfilter.Target, inspect func(context.Context) netfilter.Result) netfilter.Result {
+	budget := netfilter.TotalBudget
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	done := make(chan netfilter.Result, 1)
+	go func() { done <- inspect(ctx) }()
+	timer := time.NewTimer(budget + 250*time.Millisecond)
+	defer timer.Stop()
+	select {
+	case result := <-done:
+		return result
+	case <-timer.C:
+		return netfilter.Result{Protocol: 1, State: netfilter.StateUnknown, Reason: "timeout", Device: target.Device, AutoRedirect: target.AutoRedirect}
 	}
 }
 
@@ -110,9 +140,17 @@ func systemChecksWithProbe(configs []Config, probe systemProbe) []Check {
 	} else {
 		checks = append(checks, Check{Name: "TUN / CAP_NET_ADMIN", Level: "pass", Message: "本次仅接管 DNS 核心，不需要 TUN 或网络管理能力。"})
 	}
-	if probe.getenv != nil && probe.getenv("CONFIGFLOW_FORWARDING_OWNER") == "gateway" {
+	switch {
+	case probe.getenv != nil && probe.getenv("CONFIGFLOW_FORWARDING_OWNER") == "gateway":
 		checks = append(checks, inspectGatewayForwarding(probe))
-	} else {
+	case probe.getenv != nil && probe.getenv(installerForwardingEnv) == "persist":
+		checks = append(checks, inspectInstallerForwarding(probe)...)
+		if hasMihomo {
+			if check, ok := inspectForwardFilter(probe, configs); ok {
+				checks = append(checks, check)
+			}
+		}
+	default:
 		checks = append(checks, inspectIPv4Forwarding(probe)...)
 	}
 	return checks

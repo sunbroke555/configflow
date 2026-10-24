@@ -11,6 +11,7 @@ import { gatewayOnboardingApi } from '@/api/gatewayOnboarding'
 import { linuxGatewayApi } from '@/api/linuxGateway'
 import { gatewayEnvironmentErrors, installationMatches } from '@/lib/gatewayOnboarding'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { DOCKER_COMMANDS, DOCKER_HINT, mayDrop, quiet } from './fixtures/forward-filter'
 vi.mock('@/api/gatewayOnboarding', () => ({ gatewayOnboardingApi: { get: vi.fn(), preview: vi.fn(), save: vi.fn(), create: vi.fn(), sessions: vi.fn(), session: vi.fn(), publish: vi.fn(), network: vi.fn() } }))
 vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: { status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn(), persistForwarding: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), confirmDanger: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
@@ -878,6 +879,43 @@ describe('router split with full TUN', () => {
     vi.mocked(linuxGatewayApi.remove).mockResolvedValueOnce(response({ success: true, message: '服务端原文', managed: { active: false } }))
     await button(wrapper, '撤销网关转发').trigger('click'); await flushPromises()
     expect(notify.success).toHaveBeenCalledWith('服务端原文')
+  })
+
+  it('warns about forward filtering on a full-TUN host without changing the completion check', async () => {
+    const wrapper = await renderPublished(ready({ forward_filter: mayDrop() }), true, 'full_tun', { AgentStatusRow: false, ForwardFilterNotice: false })
+    expect(row(wrapper, '转发过滤')).toMatchObject({ status: '可能拦截 UDP', tone: 'warning' })
+    expect(row(wrapper, 'IPv4 转发')).toMatchObject({ status: '已开启并持久化', tone: 'success' })
+    expect(row(wrapper, 'Mihomo TUN')).toMatchObject({ status: '运行中 · Meta', tone: 'success' })
+    const labels = wrapper.findAllComponents(AgentStatusRow).map(item => item.props('label'))
+    expect(labels.indexOf('转发过滤')).toBe(labels.indexOf('Mihomo TUN') + 1)
+    expect(wrapper.text()).toContain(DOCKER_HINT)
+    expect(wrapper.get('[data-full-tun-checks] pre').text()).toBe(DOCKER_COMMANDS.join('\n'))
+    // Still complete: the warning never blocks the router step.
+    expect(wrapper.text()).toContain('转发与 TUN 正常')
+    await button(wrapper, '继续接入主路由').trigger('click')
+    expect(wrapper.emitted('completed')).toEqual([[]])
+    expect(button(wrapper, '开启并持久化 IPv4 转发')).toBeUndefined()
+  })
+
+  it.each([
+    ['an older Agent', undefined],
+    ['ok', quiet('ok')],
+    ['unknown', quiet('unknown', 'timeout')],
+  ])('adds no forward-filter row for %s', async (_case, forward_filter) => {
+    const wrapper = await renderPublished(ready(forward_filter ? { forward_filter } : {}), true, 'full_tun', { AgentStatusRow: false })
+    expect(row(wrapper, '转发过滤')).toBeUndefined()
+    expect(wrapper.text()).toContain('转发与 TUN 正常')
+  })
+
+  it('never shows the forward-filter row on a selective gateway', async () => {
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('published') }))
+    vi.mocked(gatewayOnboardingApi.session).mockResolvedValue(response(session('published')))
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ success: true, enabled_in_config: true, supported: true, managed: { active: true, healthy: true }, forward_filter: mayDrop() }))
+    const wrapper = await render(false, false, 'gateway', { AgentStatusRow: false, ForwardFilterNotice: false })
+    expect(linuxGatewayApi.status).toHaveBeenCalled()
+    expect(row(wrapper, '网关转发')).toBeDefined()
+    expect(row(wrapper, '转发过滤')).toBeUndefined()
+    expect(wrapper.text()).not.toContain(DOCKER_HINT)
   })
 
   it('does not show the legacy banner for a selective gateway', async () => {

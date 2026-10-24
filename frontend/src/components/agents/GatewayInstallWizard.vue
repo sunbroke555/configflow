@@ -8,6 +8,7 @@ import { setupServerError } from '@/lib/setupFlow'
 import type { SetupGoal } from '@/api/setup'
 import { gatewayEnvironmentErrors, installationHostMatches, installationMatches, onboardingSettingsKey } from '@/lib/gatewayOnboarding'
 import { copyText } from '@/lib/clipboard'
+import { forwardFilterWarning } from '@/lib/forwardFilter'
 import { buildInstallCommand } from '@/lib/coreInstallCommand'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { forwardingLabel, forwardingTone, fullTunReady, gatewayLeftover, routerSplitErrorMessage, tunLabel, tunTone, type StatusTone } from '@/lib/routerSplit'
@@ -17,6 +18,7 @@ import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import RuleDownloadRemedy from '@/components/agents/RuleDownloadRemedy.vue'
+import ForwardFilterNotice from '@/components/agents/ForwardFilterNotice.vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import GatewayNetworkFields from '@/components/agents/GatewayNetworkFields.vue'
@@ -130,6 +132,8 @@ const fullTunRows = computed(() => {
     tunError: status?.tun?.error || status?.config_error || '',
   }
 })
+// A warning only: never part of activeNetwork, fullTunReady or the forwarding action.
+const forwardFilter = computed(() => fullTun.value ? forwardFilterWarning(networkStatus.value?.forward_filter) : null)
 const canPersistForwarding = computed(() => !!networkStatus.value?.ipv4_forwarding && networkStatus.value.ipv4_forwarding.persisted !== true && networkStatus.value.ipv4_forwarding.supported !== false)
 const visibleNetworkWarnings = computed(() => (networkPreview.value?.warnings || []).filter(value => (props.goal !== 'router' && !legacy.value) || !value.includes('切换一台客户端的网关')))
 const LEGACY_REMOVED = '网关转发已撤销，主路由转来的连接已中断。请删除主路由上指向这台 Linux 的静态路由，或重新应用网关转发。'
@@ -662,6 +666,9 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
             </AgentStatusRow>
             <AgentStatusRow label="Mihomo TUN" :status="fullTunRows.tun.status" :tone="fullTunRows.tun.tone">
               <template v-if="fullTunRows.tunError || tunPrepareNote" #notice><p v-if="fullTunRows.tunError" role="alert" class="m-0 text-destructive-accent">{{ fullTunRows.tunError }}</p><p v-if="tunPrepareNote" class="m-0 text-warning-accent">{{ tunPrepareNote }}</p></template>
+            </AgentStatusRow>
+            <AgentStatusRow v-if="forwardFilter" label="转发过滤" :status="forwardFilter.status" tone="warning">
+              <template #notice><ForwardFilterNotice :filter="networkStatus?.forward_filter" /></template>
             </AgentStatusRow>
             <AgentStatusRow v-if="gatewayLeftover(networkStatus)" label="旧网关记录" :status="gatewayLeftover(networkStatus) === 'present' ? '仍存在' : '无法确认'" tone="warning">
               <template #notice><p class="m-0">请在生成工作台 → Mihomo → Linux 网关中清理。</p><p v-if="networkStatus?.managed?.error" role="alert" class="m-0 text-destructive-accent">{{ networkStatus.managed.error }}</p></template>

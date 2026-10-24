@@ -117,8 +117,10 @@ def test_forwarding_summary_only_replaces_resolved_warning_and_preserves_log(tmp
     summary = (report_dir / "note.forwarding").read_text()
     assert "已设置持久化" in summary
     assert "尚未实际重启验证" in summary
-    assert "其他配置或服务覆盖风险" in summary
-    assert "原检查结果见详细日志" in summary
+    assert "其他配置或服务仍可能在重启后把它改回 0" in summary
+    assert "sysctl net.ipv4.ip_forward 确认仍为 1" in summary
+    # The environment check no longer asks for a manual repair to look up.
+    assert "原检查结果" not in summary
     assert "当前为 0" not in summary
     assert "已开启并持久化" in (report_dir / "fact.ipv4_forwarding").read_text()
     assert (tmp_path / "log-before-summary").read_bytes() == (tmp_path / "log-after-summary").read_bytes()
@@ -144,7 +146,7 @@ def test_successful_aio_install_does_not_repeat_resolved_forwarding_warning(tmp_
     assert (tmp_path / "ip_forward").read_text() == "1\n"
     assert "IPv4 转发已开启并持久化" in output
     assert "尚未实际重启验证" in output
-    assert "其他配置或服务覆盖风险" in output
+    assert "其他配置或服务仍可能在重启后把它改回 0" in output
     assert "当前 net.ipv4.ip_forward=0" not in output
     assert "DNS 检查：仍需核对客户端入口。" in output
     log = detail_output(result)

@@ -173,6 +173,37 @@ Mihomo 缺少 DNS 上游时会补入默认加密上游；已有非循环上游�
 
 Agent 页「单独安装」的 Mihomo（systemd 或 OpenRC）默认也开启并持久化 IPv4 转发，做法与同机安装相同：写入 `/etc/sysctl.d/99-configflow-aio-forward.conf`，并在 Agent 启动前检查转发（`/opt/configflow-agent/enable-ipv4-forwarding.sh`）。不需要时在安装对话框勾选「不开启 IPv4 转发」，生成的命令与此前版本相同；自定义启停命令、OxiDNS、MosDNS 和 Docker 安装不涉及转发。设备上已有 Linux 网关记录时，默认命令会在停止旧 Agent 之前拒绝安装，避免替网关接管转发；请勾选「不开启 IPv4 转发」重新生成命令，或在「上游路由」页确认后开启。已经安装的主机，可在「上游路由」页对作为代理网关的 Mihomo Agent 一键「开启并持久化 IPv4 转发」（同机安装需 `1.8.40-go`，单独安装需 `1.8.41-go`）；该操作只把转发从关闭改为开启，不修改核心配置，也不重启 Mihomo 或 Agent。持久化之后，撤销 Linux 网关记录时 IPv4 转发保持开启；卸载 Agent 时这份持久化设置会保留。
 
+### 完整 TUN 的转发过滤
+
+完整 TUN 主机（主路由分流、普通同机安装或单独安装的 Mihomo，已部署配置启用 `tun.enable` 与 `auto-route`，没有 Linux 网关标记，也没有 `route-address` 限制）会经过系统防火墙的两处：
+
+- **转发（FORWARD）**：主路由转来、进出 TUN 的 UDP（QUIC、语音通话、游戏）和 ping。单独安装的 Mihomo 作为局域网 DNS 时，发到这台 Linux 的 DNS 也会被 auto-redirect 转进 TUN，同样经过这里，UDP 和 TCP 方式的查询都会失败。没有启用 auto-redirect 时，TCP 也走这里。UFW 默认放行转发的 ping（`ufw-before-forward` 的 echo-request），这时提醒只说 UDP。
+- **本机入站（INPUT）**：auto-redirect 把转来的 TCP 改发到本机的一个随机端口（Mihomo 每次重启都会变），这些连接带有 conntrack 状态 `DNAT`；`mixed` / `system` 栈还会把进入 TUN 的 TCP（如 TCP 方式的 DNS）从 TUN 设备交给本机的 Mihomo。同机安装时本机地址被 `route-exclude-address` 排除在 TUN 之外，客户端发到这台 Linux 53 端口的 DNS 由 OxiDNS（监听 `0.0.0.0:53`）直接应答，也经过这里。入站默认拒绝时（UFW 的 `deny (incoming)`、`iptables -P INPUT DROP`、nftables input 链 `policy drop`、firewalld 的 public 等区域），转来的 TCP 全部失败，同机安装的客户端还会查不到域名（UDP 和 TCP 方式都失败）。
+
+Agent `1.8.42-go` 起会只读检查 iptables（nft / legacy，含 UFW 的链）、nftables 的 forward 与 input 链、firewalld 自己的规则，按受影响的流量提醒：「上游路由」的「IPv4 转发」列（发到本机的 DNS 受影响时为「可能拦截 DNS」，包括启用 auto-redirect 时只有 TCP 方式的 DNS 受影响；否则只有转发时按被拦协议显示：拦 UDP 为「可能拦截 UDP」，只拦 TCP 为「可能拦截 TCP」，只拦 ping 等其他组合为「可能拦截转发」；只有进本机的 TCP 时为「可能拦截 TCP」，转发与 TCP 都有时为「可能拦截转发」）、首次使用向导第 5 步、配置生成页的 Linux 网关对话框和安装输出都会显示说明和按来源生成的放行命令，并带复制按钮。**ConfigFlow 不会改动防火墙**，安装、发布和向导的完成检查都不受影响；无法检查时不显示任何提醒。选择性 Linux 网关保持原有的应用前检查，不显示这项提醒。
+
+命令只放行上面这些流量：转发只放行进出 TUN 设备的包；本机入站只放行 conntrack 状态为 `DNAT`（本机 NAT 规则重定向过来的连接）和来自 TUN 设备的连接；本机的 DNS 只在局域网网卡（默认路由所在网卡）上开放 53/udp 和 53/tcp，不开放其他端口，读不到局域网网卡时不给这两条命令。只有本机确实有可从局域网访问的 53 端口监听（绑定 `0.0.0.0`、`::` 或局域网地址；`127.0.0.53` 这类只在本机的不算），或同机安装了 OxiDNS / MosDNS 时才检查这一项。TUN 设备名取自已部署配置的 `tun.device`（缺省 `Meta`），以页面显示的为准；页面只列出实际被拦截的那几条。下表以 `Meta`、局域网网卡 `eth0` 为例：
+
+| 来源 | 放行转发 | 放行本机入站 | 放行发到本机的 DNS | 重启后 |
+| --- | --- | --- | --- | --- |
+| Docker（存在 `DOCKER-USER` 链） | `iptables -I DOCKER-USER -o Meta -j ACCEPT`<br>`iptables -I DOCKER-USER -i Meta -j ACCEPT` | Docker 不改 INPUT；入站被拦时另给一组 iptables 命令 | 同左 | 会丢失；Debian/Ubuntu 安装 `iptables-persistent` 后执行 `netfilter-persistent save`，Alpine 执行 `rc-service iptables save`。重启 Docker 不会清空 `DOCKER-USER` |
+| iptables（legacy 后端写作 `iptables-legacy`） | `iptables -I FORWARD -o Meta -j ACCEPT`<br>`iptables -I FORWARD -i Meta -j ACCEPT` | `iptables -I INPUT -m conntrack --ctstate DNAT -j ACCEPT`<br>`iptables -I INPUT -i Meta -j ACCEPT` | `iptables -I INPUT -i eth0 -p udp --dport 53 -j ACCEPT`<br>`iptables -I INPUT -i eth0 -p tcp --dport 53 -j ACCEPT` | 同上 |
+| nftables（表名和链名按实际检测） | `nft 'insert rule inet filter forward oifname "Meta" accept'`<br>`nft 'insert rule inet filter forward iifname "Meta" accept'` | `nft 'insert rule inet filter input ct status dnat accept'`<br>`nft 'insert rule inet filter input iifname "Meta" accept'` | `nft 'insert rule inet filter input iifname "eth0" udp dport 53 accept'`<br>`nft 'insert rule inet filter input iifname "eth0" tcp dport 53 accept'` | 会丢失；把这些规则写进 `/etc/nftables.conf`（或系统加载的 nftables 配置）对应的链 |
+| UFW | `ufw route allow in on Meta`<br>`ufw route allow out on Meta` | `ufw allow in on Meta`<br>下面的 `before.rules` 一行，然后 `ufw reload` | `ufw allow in on eth0 to any port 53`（UFW 为 UDP 和 TCP 各写一条） | UFW 自动保存；`before.rules` 的改动同样保留 |
+| firewalld（nftables 后端） | `firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 \|\| firewall-cmd --permanent --new-zone=configflow-tun`<br>`firewall-cmd --permanent --zone=configflow-tun --set-target=ACCEPT`<br>`firewall-cmd --permanent --zone=configflow-tun --change-interface=Meta`<br>`firewall-cmd --permanent --info-policy=configflow-fwd >/dev/null 2>&1 \|\| firewall-cmd --permanent --new-policy=configflow-fwd`<br>`firewall-cmd --permanent --policy=configflow-fwd --add-ingress-zone=ANY`<br>`firewall-cmd --permanent --policy=configflow-fwd --add-egress-zone=configflow-tun`<br>`firewall-cmd --permanent --policy=configflow-fwd --set-target=ACCEPT`<br>`firewall-cmd --reload` | 同左（`configflow-tun` 区域只含 `Meta`，接受从它进来的连接；firewalld 自带 `ct status dnat accept`，重定向的 TCP 不受影响） | `firewall-cmd --permanent --zone=public --add-service=dns`（`eth0` 实际所在的区域，从 firewalld 的规则读取），然后 `firewall-cmd --reload` | `--permanent` 已保存 |
+
+UFW 没有按 conntrack 状态放行的命令，所以把规则写进 `/etc/ufw/before.rules` 的 `# End required lines` 之后；这一行可重复执行，已存在时不会重复添加：
+
+```sh
+grep -q -- '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules || sed -i '/^# End required lines/a -A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules
+```
+
+firewalld 把 `Meta` 放进接受入站的区域后，从 `Meta` 进来的流量会放行，但主路由转来、要转发进 `Meta` 的流量仍按局域网网卡所在区域被拒绝，所以还需要 `configflow-fwd` 策略（任意区域转发到 `configflow-tun` 区域时接受）。这个策略只按出口区域匹配：`configflow-tun` 区域由这组命令新建、只含 TUN 设备，所以它只放行出口是 `Meta` 的转发，也就是进入 Mihomo 的流量；转发到其他网卡、网段的流量仍按它们自己的区域处理。这里不复用 trusted：策略对出口区域的全部成员生效，trusted 里若已有其他网卡或来源网段，复用它（ANY → trusted）会连带放开从任意区域（包括 WAN 口）转发到这些网卡或网段的新连接。整组命令可以重复执行：`--new-zone` / `--new-policy` 重复执行会报 `NAME_CONFLICT`，所以先用 `--info-zone` / `--info-policy` 检查，已存在时跳过；其他命令重复执行只会提示 `ALREADY_ENABLED`，可以忽略。`--add-service=dns` 只开放 DNS 服务（53/udp、53/tcp），作用于局域网网卡所在区域的全部网卡。
+
+转发与本机入站的命令都在实验环境（Debian 13、Mihomo v1.19.32 完整 TUN、`mixed` 栈）逐条验证过：执行后转发的 UDP、ping、TCP 和发到这台 Linux 的 DNS（UDP / TCP）恢复，UFW 与 firewalld 重启后仍有效；firewalld 的命令在 `Meta` 原本不属于任何区域和属于 public 两种情况下都验证过，trusted 区域里已有的来源网段不会被放开。同机安装开启 UFW 后，只执行转发与入站的命令时 TCP 和转发的 UDP 恢复、DNS 仍失败（`[UFW BLOCK] IN=eth0 … DPT=53`），所以单独给出放行 53 端口的命令。发现拦截时检查结果缓存 5 秒（未发现拦截时缓存 30 秒，这时不显示提醒），所以执行命令后等 5 秒以上再回到页面刷新状态，再按提醒里的验证方法在客户端确认。状态里的 `policy` / `input_policy` 是转发与入站链真实的默认策略，放行规则生效后可能仍是 `drop`，是否拦截以提醒是否消失为准。
+
+已知限制：只检查 IPv4，只看顶层 `tun`（`listeners` 里的 TUN 不检查）；转发方向带源 / 目的地址等其他条件的拦截规则按“可能拦截”保守提醒；ping 只按 ICMP 类型（`--icmp-type` / `icmp type`）判断是否被单独放行。本机入站只在规则一定会拦下这些连接时提醒：端口条件按本机临时端口范围（`net.ipv4.ip_local_port_range`，重定向和 TUN 交给 Mihomo 的端口都从这里随机选取）判断，所以只放行 22、9090 等服务端口不算放行，`! --dport 22` 的拒绝或只拦 SYN（`--syn`）的规则算作拦截；只针对某些地址的拒绝规则不提醒；入站默认拒绝之前若有可能放行这些连接的规则（如 `ufw allow from <局域网>`、`-s <网段> -j ACCEPT`，被重定向的 TCP 仍保留客户端地址），不再断言转发的 TCP 会失败。有这类拿不准的规则时，提醒不会写“其他 TCP 连接不受影响”。只有 `route-exclude-address` 覆盖了默认路由网卡上的全部 IPv4 地址，才认为发到这台 Linux 的 DNS 不进 TUN（排除 Docker 等网段不算）；使用 iptables 后端的旧版 firewalld（如 CentOS 7）没有对应的放行命令，或放行后仍可能显示提醒；修改 `tun.device` 后需要按新命令重新放行。
+
 停用顺序：**先恢复客户端网关和 DNS → 在向导恢复所选设备网络 → 关闭网关模式 → 保存并发布 Mihomo**。恢复操作只清理带有匹配归属、且未被外部修改的受管规则；系统参数也只在仍等于受管值时恢复。若提示资源被外部修改，保留现场并先核对变化。
 
 存在网关恢复记录时，Mihomo Agent 的远程卸载和 Shell 安装菜单中的卸载都会被阻止，必须先按上述步骤恢复设备网络，避免删除恢复记录却留下系统转发规则。
@@ -187,6 +218,7 @@ Agent 页「单独安装」的 Mihomo（systemd 或 OpenRC）默认也开启并�
 | 提示 Agent 版本旧 | 更新 ConfigFlow 与 Mihomo Agent 至包含本功能的版本（至少 `1.8.25-go`） |
 | 代理域名返回真实 IP | OxiDNS 远程及备用上游、域名规则、Mihomo fake-IP 过滤、客户端安全 DNS |
 | 域名能解析但无法访问 | 系统转发是否已应用，客户端网关是否指向 Linux，代理节点是否可用 |
+| 完整 TUN 下 UDP、语音或 ping 不通，或开了 UFW / 入站默认拒绝后网页也打不开、查不到域名 | 看「转发过滤」提醒，按页面给出的命令放行转发、被重定向到本机的连接和发到本机 53 端口的 DNS |
 | IP 服务进入 Mihomo 但没有代理 | 原有规则顺序和策略组选择；接管并不强制代理出口 |
 | 规则库变更尚未体现 | 先确认规则库已刷新，等待约 5 分钟；新增勾选、策略变更需要重新发布 |
 | 停止 Agent 后重启无法自动恢复 | 状态恢复依赖 Mihomo Agent 的开机启动，检查 Agent 系统服务 |

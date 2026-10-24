@@ -35,9 +35,25 @@ type Config struct {
 
 type Check struct {
 	Name    string
-	Level   string // pass, warn or error
+	Level   string // pass, warn, error, or info (logged only, never counted)
 	Message string
 	Fix     string
+	// Groups hold exact, copy-pasteable commands per source; they are printed
+	// unwrapped, each with its own label and note.
+	Groups []CommandGroup `json:",omitempty"`
+}
+
+type CommandGroup struct {
+	Label    string
+	Commands []string
+	Note     string `json:",omitempty"`
+}
+
+func (group CommandGroup) heading() string {
+	if group.Label == "" {
+		return "在这台 Linux 上执行："
+	}
+	return "在这台 Linux 上执行（" + group.Label + "）："
 }
 
 type Report []Check
@@ -83,6 +99,8 @@ func (r Report) PrintWithOptions(out io.Writer, options clioutput.Options, prepa
 	passed, warnings, failures := 0, 0, 0
 	for _, check := range r {
 		switch check.Level {
+		case "info":
+			continue
 		case "warn":
 			warnings++
 		case "error":
@@ -99,6 +117,16 @@ func (r Report) PrintWithOptions(out io.Writer, options clioutput.Options, prepa
 		clioutput.Wrap(out, "    原因：", check.Message, options.Width)
 		if check.Fix != "" {
 			clioutput.Wrap(out, "    处理方法：", check.Fix, options.Width)
+		}
+		for _, group := range check.Groups {
+			// Wrapping would break a command that is meant to be pasted.
+			fmt.Fprintln(out, "    "+clioutput.Printable(group.heading()))
+			for _, command := range group.Commands {
+				fmt.Fprintln(out, "      "+clioutput.Printable(command))
+			}
+			if group.Note != "" {
+				clioutput.Wrap(out, "      ", group.Note, options.Width)
+			}
 		}
 	}
 	fmt.Fprintln(out)
@@ -135,6 +163,11 @@ func compactPass(check Check) string {
 		return "IPv4 转发  已开启"
 	case "IPv4 转发持久化":
 		return "IPv4 转发  已找到持久化开启设置"
+	case installerForwardingName:
+		if strings.Contains(check.Message, "ip_forward=0") {
+			return "IPv4 转发  当前为 0，安装器将开启并持久化（" + installerForwardingConfig + "）"
+		}
+		return "IPv4 转发  当前为 1，安装器将持久化（" + installerForwardingConfig + "）"
 	case "IPv4 转发权限":
 		// Passes with forwarding still off: the gateway apply turns it on later.
 		if strings.Contains(check.Message, "ip_forward=1") {
@@ -174,6 +207,8 @@ func (r Report) printDetailed(out io.Writer, preparation, heading bool) {
 	for _, check := range r {
 		label := "通过"
 		switch check.Level {
+		case "info":
+			label = "信息"
 		case "warn":
 			label = "提醒"
 			warnings++
@@ -184,6 +219,15 @@ func (r Report) printDetailed(out io.Writer, preparation, heading bool) {
 		fmt.Fprintf(out, "[%s] %s：%s\n", label, printable(check.Name), printable(check.Message))
 		if check.Fix != "" {
 			fmt.Fprintf(out, "  处理方法：%s\n", printable(check.Fix))
+		}
+		for _, group := range check.Groups {
+			fmt.Fprintf(out, "  %s\n", printable(group.heading()))
+			for _, command := range group.Commands {
+				fmt.Fprintf(out, "  命令：%s\n", printable(command))
+			}
+			if group.Note != "" {
+				fmt.Fprintf(out, "  说明：%s\n", printable(group.Note))
+			}
 		}
 	}
 	if preparation && failures > 0 {

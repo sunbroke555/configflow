@@ -40,6 +40,13 @@ AIO_FORWARDING_HOOK_COMMENT = "# The installer commits this file only after both
 STANDALONE_FORWARDING_HOOK_COMMENT = "# The installer commits this file only after the Agent starts successfully.\n"
 STANDALONE_FORWARDING_HOOK = "/opt/configflow-agent/enable-ipv4-forwarding.sh"
 STANDALONE_FORWARDING_UNSUPPORTED = "仅使用 systemd 或 OpenRC 的 Mihomo 单独安装可开启并持久化 IPv4 转发"
+# Exported for the environment check only and unset right after it, so no
+# service inherits it: the installer enables and persists forwarding itself, so
+# the check reports that instead of asking for a manual sysctl repair. Older
+# Agents ignore it. Plain shell keeps it free of an extra tool such as env.
+INSTALLER_FORWARDING_ENVIRONMENT = ("CONFIGFLOW_INSTALLER_FORWARDING=persist\n"
+                                    "export CONFIGFLOW_INSTALLER_FORWARDING\n")
+INSTALLER_FORWARDING_ENVIRONMENT_END = "unset CONFIGFLOW_INSTALLER_FORWARDING\n"
 
 
 def _standalone_forwarding_functions() -> str:
@@ -55,11 +62,14 @@ def _standalone_forwarding_functions() -> str:
     return text
 
 
-# Runs before the previous Agent is stopped: a failure leaves the host unchanged.
-_STANDALONE_FORWARDING_PREPARE = '''cf_step "检查 IPv4 转发持久化"
-if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
+# Refused before the environment check, which would otherwise first describe
+# the forwarding this installer is about to decline to manage.
+_STANDALONE_GATEWAY_RECORD_REFUSAL = '''if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
     fail "检测到 Linux 网关记录，单独安装不会接管网关管理的 IPv4 转发；本次未改动 Agent。请在面板勾选「不开启 IPv4 转发」后重新生成安装命令；如这台设备是主路由的代理网关，可在「上游路由」页开启并持久化 IPv4 转发。"
 fi
+'''
+# Runs before the previous Agent is stopped: a failure leaves the host unchanged.
+_STANDALONE_FORWARDING_PREPARE = '''cf_step "检查 IPv4 转发持久化"
 STAGE_DIR=$(mktemp -d "$AGENT_DIR/.ipv4-forward.XXXXXX")
 prepare_ipv4_forwarding
 cf_step_done "IPv4 转发持久化检查通过"
@@ -200,6 +210,8 @@ def generate_go_agent_install_script(
         "ipv4_forwarding_notice": 'cf_ui "Mihomo 单独安装将开启并持久化本机 IPv4 转发（作为主路由的代理网关时需要）；'
                                   '不需要时请在面板勾选「不开启 IPv4 转发」后重新生成命令。"\n',
         "ipv4_forwarding_dependencies": " sysctl cmp ln",
+        "ipv4_forwarding_environment": _STANDALONE_GATEWAY_RECORD_REFUSAL + INSTALLER_FORWARDING_ENVIRONMENT,
+        "ipv4_forwarding_environment_end": INSTALLER_FORWARDING_ENVIRONMENT_END,
         "ipv4_forwarding_functions": ('fail() { echo "$*" >&2; exit 1; }\nSERVICE=mihomo\nSTAGE_DIR=""\n'
                                       + _standalone_forwarding_functions()),
         "ipv4_forwarding_prepare": _STANDALONE_FORWARDING_PREPARE,
@@ -226,7 +238,7 @@ def generate_go_agent_install_script(
             f'echo "先安装或保留 {service_type} 核心，成功后继续安装 Agent。"\n'
             '(\n'
             f'set -- --core {service_type}\n'
-            + generate_core_install_script().rstrip() + '\n)\n'
+            + generate_core_install_script(installer_forwarding=manage_ipv4_forwarding).rstrip() + '\n)\n'
             'BINARY_TMP=""\n'
             'configflow_agent_cleanup() {\n'
             '    agent_status=$?\n'
@@ -368,6 +380,8 @@ fi
 cf_step_done "TUN 准备完成（具体处理结果见日志）"''' if manage_tun else "",
         "ipv4_forwarding_functions": INSTALL_GO_AIO_FORWARDING if manage_ipv4_forwarding else "",
         "ipv4_forwarding_dependencies": " sysctl cmp ln" if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_environment": INSTALLER_FORWARDING_ENVIRONMENT if manage_ipv4_forwarding else "",
+        "ipv4_forwarding_environment_end": INSTALLER_FORWARDING_ENVIRONMENT_END if manage_ipv4_forwarding else "",
         "ipv4_forwarding_notice": 'cf_ui "普通 Shell 同机安装将自动开启并持久化当前 Linux 的 IPv4 转发。"' if manage_ipv4_forwarding else "",
         "ipv4_forwarding_prepare": "prepare_ipv4_forwarding" if manage_ipv4_forwarding else "",
         "ipv4_forwarding_ownership": "check_ipv4_forwarding_ownership" if manage_ipv4_forwarding else "",
@@ -450,7 +464,8 @@ fi''',
             # An unconditional subshell preserves set -e, unlike an if/&&/||
             # context, and isolates core variables, exit statements and traps.
             "core_install_phase": 'echo "先安装或保留两个核心，成功后继续安装两个 Agent。"\n'
-                + '(\nset -- --core both\n' + generate_core_install_script().rstrip() + '\n)\n'
+                + '(\nset -- --core both\n'
+                + generate_core_install_script(installer_forwarding=manage_ipv4_forwarding).rstrip() + '\n)\n'
                 + 'CORE_PHASE_COMPLETED=true\n'
                 + '''# Minimal systems may not yet have /opt, needed for physical path checks.
 mkdir -p "$(dirname "$AGENT_ROOT")"

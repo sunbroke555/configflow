@@ -3,6 +3,7 @@ package routes
 // Linux gateway is an opt-in host operation, independent of configuration
 // publishing. Its journal is the only authority for changing host resources.
 import (
+	"agent/netfilter"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -458,6 +459,12 @@ func LinuxGatewayHandler(cfg *Config, action string) http.HandlerFunc {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		// Read-only and bounded; inspected outside the gateway locks so it never
+		// delays apply, remove or forwarding requests.
+		var forwardFilter netfilter.Result
+		if action == "status" {
+			forwardFilter = forwardFilterStatus(cfg)
+		}
 		gatewayMu.Lock()
 		defer gatewayMu.Unlock()
 		// Shares the same order as boot replay; return-routing never takes gatewayMu.
@@ -477,6 +484,7 @@ func LinuxGatewayHandler(cfg *Config, action string) http.HandlerFunc {
 				result["unsupported_reason"] = err.Error()
 			}
 			result["ipv4_forwarding"], result["tun"] = aioForwardingStatus(cfg), aioTUNStatus(cfg)
+			result["forward_filter"] = forwardFilter
 			JsonResponse(w, 200, result)
 			return
 		}

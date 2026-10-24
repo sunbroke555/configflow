@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LinuxGatewayStatus } from '@/api/linuxGateway'
+import { mayDrop, quiet } from './fixtures/forward-filter'
 import { FORWARDING_NOT_PERSISTED, GATEWAY_OFF_NOT_PERSISTED, ROUTER_SPLIT_MESSAGES, forwardingLabel, forwardingTone, fullTunReady, gatewayLeftover, routerSplitErrorMessage, tunLabel, tunTone } from '@/lib/routerSplit'
 
 const ready = (changes: Partial<LinuxGatewayStatus> = {}): LinuxGatewayStatus => ({
@@ -44,6 +45,17 @@ describe('router split status labels', () => {
       ready({ managed: { active: false, error: '网关状态文件无法读取' } }),
       ready({ ipv4_forwarding: undefined, tun: undefined }),
     ]) expect(fullTunReady(status)).toBe(false)
+  })
+
+  it('ignores the forward-filter warning: it never changes readiness or the row labels', () => {
+    for (const forward_filter of [mayDrop(), mayDrop({ auto_redirect: false }), quiet('unknown', 'timeout'), quiet('ok')]) {
+      const status = ready({ forward_filter })
+      expect(fullTunReady(status)).toBe(true)
+      expect([forwardingLabel(status), forwardingTone(status), tunLabel(status), tunTone(status)]).toEqual([forwardingLabel(ready()), forwardingTone(ready()), tunLabel(ready()), tunTone(ready())])
+      expect(gatewayLeftover(status)).toBeNull()
+    }
+    expect(fullTunReady(forwarding({ persisted: false }))).toBe(false)
+    expect(fullTunReady({ ...forwarding({ persisted: false }), forward_filter: quiet('ok') })).toBe(false)
   })
 
   it('reports a gateway record that is active, pending or unreadable', () => {
