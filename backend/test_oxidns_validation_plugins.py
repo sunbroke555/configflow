@@ -243,3 +243,14 @@ def test_schema_audit_follows_nested_union_fields_and_ignores_runtime_only_rust_
     assert not schema_at(schema, 'items[].new_parameter')
     source = 'struct Config {\n #[serde(rename = "async")]\n async_mode: bool,\n #[serde(default, skip)]\n runtime_only: bool,\n new_parameter: String,\n}'
     assert native_fields(source, 'Config') == {'async', 'new_parameter'}
+
+
+def test_black_hole_bare_null_mode_is_warning():
+    def issues(args):
+        plugin = {'tag': 'bh', 'type': 'black_hole', 'args': args}
+        return collect_plugin_issues(plugin, 0, {'plugins': [plugin]})
+    assert issues({'mode': None, 'short_circuit': True}) == [{
+        'path': ['plugins', 0, 'args', 'mode'], 'message': 'mode 为空时 OxiDNS 会按 nxdomain 处理；黑洞请写 "null"（带引号）',
+        'code': 'null-mode', 'severity': 'warning'}]
+    assert issues({'mode': 'null', 'short_circuit': True}) == []
+    assert issues({'short_circuit': True}) == []

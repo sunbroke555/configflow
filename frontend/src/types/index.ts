@@ -130,3 +130,81 @@ export interface Agent {
   cpu?: number
   memory?: number
 }
+
+/** 策略规则的 OxiDNS DNS 处理：`GET/PUT /api/rules/dns` 与 `POST /api/rules/compose` 的词汇表 */
+export type RuleDnsBlock = 'refused' | 'nxdomain' | 'nodata' | 'blackhole'
+export type RuleDnsRoute = 'direct' | 'proxy' | RuleDnsBlock | `upstream:${string}`
+export type RuleDnsValue = 'follow' | 'default' | RuleDnsRoute
+export type RuleDnsStateKind = 'follow' | 'follow_drift' | 'default' | 'explicit' | 'disabled' | 'unsupported'
+
+/** 单条规则的显示状态；省略的规则即默认上游 */
+export interface RuleDnsState {
+  state: RuleDnsStateKind
+  route?: RuleDnsRoute | null
+  follow_route?: 'direct' | 'proxy' | null
+  /** 已停用但启用后跟随策略 */
+  follow?: boolean
+  upstream_label?: string
+  in_lists?: boolean
+  reason?: string
+}
+
+export interface RuleDnsUpstream {
+  key: string
+  source: 'local' | 'remote' | 'fallback'
+  addr: string
+  label: string
+  /** 被 DNS 联动绑定的上游不能固定 */
+  linked: boolean
+}
+
+export interface RuleDnsAgent {
+  id: string
+  name: string
+  service_type: string
+  auto_sync: { library: boolean; rules: boolean }
+}
+
+export interface RuleDnsEngine {
+  mode: 'template' | 'native'
+  editable: boolean
+  reason: string
+  default_forward: string
+  prefer_ipv4: boolean
+  local_probe_active: boolean
+  oxidns_in_use: boolean
+  warnings: string[]
+  agents: RuleDnsAgent[]
+}
+
+export interface RuleDnsSnapshot {
+  engine: RuleDnsEngine
+  upstreams: RuleDnsUpstream[]
+  rules: Record<string, RuleDnsState>
+  mosdns: Record<string, 'direct' | 'proxy'>
+}
+
+export type ComposeSource =
+  | { kind: 'values'; rule_type: string; text: string }
+  | { kind: 'library'; library_rule_ids: string[] }
+  | { kind: 'new_library'; library: { name: string; source_type: 'url' | 'content'; url?: string; content?: string; behavior: string; format: string; enabled: boolean } }
+
+export interface ComposePayload {
+  source: ComposeSource
+  rule: { policy: string; remark: string; group_name: string; no_resolve: boolean; enabled: boolean; position: 'top' | 'bottom' }
+  dns?: RuleDnsValue
+  /** 只作用于 IP 行；缺省时等于 dns */
+  dns_ip?: RuleDnsValue
+  base_url?: string
+}
+
+export interface ComposeResult {
+  success: true
+  data: { rules: Array<Record<string, any>>; library: Record<string, any> | null }
+  dns: Record<string, RuleDnsState>
+  skipped: Array<{ line: number; value: string; existing_id: string; index: number; enabled: boolean }>
+  warnings: string[]
+  draft: boolean
+  /** 有指定上游被 OxiDNS 规则自动同步暂扣，需手动发布 */
+  pinned_withheld?: boolean
+}

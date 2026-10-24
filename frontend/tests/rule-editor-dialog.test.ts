@@ -1,0 +1,511 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import RuleEditorDialog from '@/components/rules/RuleEditorDialog.vue'
+import { Select } from '@/components/ui/select'
+import { confirmState, notify, settleConfirm } from '@/lib/feedback'
+import type { RuleDnsSnapshot } from '@/types'
+
+const network = vi.hoisted(() => ({
+  compose: vi.fn(),
+  update: vi.fn(async (_id: string, _body: Record<string, any>, _profile?: string) => ({ data: { success: true } })),
+  create: vi.fn(async (_body: Record<string, any>, _profile?: string) => ({ data: { success: true } })),
+  setUpdate: vi.fn(async (_id: string, _body: Record<string, any>, _profile?: string) => ({ data: { success: true } })),
+  post: vi.fn(async (path: string, body?: any): Promise<{ data: any }> => (path === '/rule-library/check-content'
+    ? { data: { content: body.content, changes: [], errors: [] } }
+    : { data: { success: true, available: true } })),
+  copy: vi.fn(async (_text: string) => undefined)
+}))
+vi.mock('@/api', () => ({
+  default: { post: network.post },
+  ruleApi: { compose: network.compose, update: network.update, create: network.create },
+  ruleSetApi: { update: network.setUpdate }
+}))
+vi.mock('@/lib/clipboard', () => ({ copyText: network.copy }))
+
+const snapshot = (patch: Partial<RuleDnsSnapshot['engine']> = {}, rest: Partial<RuleDnsSnapshot> = {}): RuleDnsSnapshot => ({
+  engine: { mode: 'template', editable: true, reason: '', default_forward: 'forward_remote', prefer_ipv4: true,
+    local_probe_active: false, oxidns_in_use: true, warnings: [], agents: [], ...patch },
+  upstreams: [{ key: 'b2e55ef47454', source: 'local', addr: 'udp://223.5.5.5', label: '直连 · 223.5.5.5', linked: false }],
+  rules: {}, mosdns: {}, ...rest
+})
+const existing = [
+  { id: 'rule-a', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'kept.test', policy: 'DIRECT', enabled: true },
+  { id: 'rule-b', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'old.test', policy: 'DIRECT', enabled: false },
+  { id: 'set-a', itemType: 'ruleset', library_rule_id: 'lib-a', name: 'Ads', behavior: 'domain', policy: 'REJECT', enabled: true }
+]
+const library = [
+  { id: 'lib-a', name: 'Ads', behavior: 'domain', source_type: 'url', url: 'https://rules.test/ads.list', enabled: true },
+  { id: 'lib-b', name: 'Corp', behavior: 'classical', source_type: 'content', content: 'DOMAIN,corp.lan', enabled: true, has_ip_part: true }
+]
+const composeResult = (patch: Record<string, unknown> = {}) => ({ data: {
+  success: true, data: { rules: [{ id: 'rule-new' }], library: null }, dns: {}, skipped: [], warnings: [], draft: true, ...patch
+} })
+
+const wrappers: VueWrapper[] = []
+const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  network.compose.mockImplementation(async () => composeResult())
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+    matches: false, media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(),
+    addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn()
+  })))
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+  for (const kind of ['success', 'warning', 'error'] as const) vi.spyOn(notify, kind).mockImplementation(() => 0)
+})
+afterEach(() => {
+  wrappers.splice(0).forEach(wrapper => wrapper.unmount())
+  settleConfirm('cancel')
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  if (scrollDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', scrollDescriptor)
+  else delete (HTMLElement.prototype as any).scrollIntoView
+  document.body.innerHTML = ''
+})
+
+async function render(props: Record<string, unknown> = {}) {
+  const wrapper = mount(RuleEditorDialog, {
+    props: { open: true, mode: 'create', rules: existing, library, policies: ['DIRECT', 'REJECT', 'Proxy'], dns: snapshot(), profileId: 'p1', ...props },
+    attachTo: document.body
+  })
+  wrappers.push(wrapper)
+  await flushPromises()
+  return wrapper
+}
+const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')!
+const text = () => dialog().textContent || ''
+const button = (label: string) => Array.from(dialog().querySelectorAll('button')).find(item => item.textContent?.trim() === label)
+async function click(element: Element | undefined | null) {
+  expect(element).toBeTruthy()
+  ;(element as HTMLElement).click()
+  await flushPromises()
+}
+async function type(selector: string, value: string) {
+  const field = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!
+  field.value = value
+  field.dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+}
+async function choose(wrapper: VueWrapper, label: string, value: string) {
+  const select = wrapper.findAllComponents(Select).find(item => item.find(`[aria-label="${label}"]`).exists())
+  expect(select, label).toBeTruthy()
+  select!.vm.$emit('update:modelValue', value)
+  await flushPromises()
+}
+const dnsTrigger = () => document.querySelector<HTMLButtonElement>('#rule-dns')!
+async function pickDns(label: string) {
+  await click(dnsTrigger())
+  await click(Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(item => item.querySelector('.block')?.textContent?.trim() === label))
+}
+async function source(label: string) {
+  await click(Array.from(dialog().querySelectorAll('[role="radio"]')).find(item => item.textContent?.trim() === label))
+}
+const save = () => Array.from(dialog().querySelectorAll<HTMLButtonElement>('footer button')).at(-1)!
+
+describe('rule editor dialog', () => {
+  it('keeps the policy and DNS when switching between sources', async () => {
+    const wrapper = await render()
+    await choose(wrapper, '策略', 'Proxy')
+    await pickDns('不存在')
+    await source('规则库')
+    expect(dnsTrigger().textContent).toContain('不存在')
+    await source('新建规则集')
+    await source('输入规则')
+    expect(dnsTrigger().textContent).toContain('不存在')
+    expect(wrapper.findAllComponents(Select).find(item => item.find('[aria-label="策略"]').exists())!.props('modelValue')).toBe('Proxy')
+  })
+
+  it('previews each line with its type, invalid lines and duplicates including disabled ones', async () => {
+    await render()
+    await type('#rule-values', 'openai.com\nDOMAIN,api.example.org\nIP-CIDR,1.2.3.0/24\nexa mple.net\nkept.test\nold.test')
+    const preview = dialog().querySelector('[data-paste-preview]')!.textContent!
+    expect(preview).toContain('DOMAIN-SUFFIXopenai.com')
+    expect(preview).toContain('DOMAINapi.example.org')
+    expect(preview).toContain('IP-CIDR1.2.3.0/24')
+    expect(preview).toContain('第 4 行：不是有效域名')
+    expect(preview).toContain('第 5 行 kept.test 已在 #1')
+    expect(preview).toContain('第 6 行 old.test 已在 #2（已停用）')
+    // compose rejects the whole batch when any line is invalid, so saving waits for the fix.
+    expect(text()).toContain('有效 3 条，1 行无效需修正或删除 · 第 4 行不是有效域名 · 跳过 2 条重复')
+    expect(text()).not.toContain('将添加')
+    expect(save().disabled).toBe(true)
+    expect(dialog().querySelector('footer')!.textContent).toContain('请先修正或删除 1 行无效内容')
+    await type('#rule-values', 'openai.com\nDOMAIN,api.example.org\nIP-CIDR,1.2.3.0/24\nkept.test\nold.test')
+    expect(text()).toContain('将添加 3 条 · 跳过 2 条重复')
+    expect(save().textContent?.trim()).toBe('保存 3 条规则')
+    expect(save().disabled).toBe(false)
+  })
+
+  it('updates the follow label with the policy but never changes an explicit choice', async () => {
+    const wrapper = await render()
+    await type('#rule-values', 'openai.com')
+    expect(dnsTrigger().textContent).toContain('跟随策略 · 直连 DNS')
+    await choose(wrapper, '策略', 'Proxy')
+    expect(dnsTrigger().textContent).toContain('跟随策略 · 代理 DNS')
+    await choose(wrapper, '策略', 'REJECT')
+    expect(dnsTrigger().textContent).toContain('跟随策略 · 默认上游')
+    expect(text()).toContain('需要同时拦截解析请选「拒绝」或「黑洞」')
+    await choose(wrapper, '策略', 'DIRECT')
+    await pickDns('代理 DNS')
+    await choose(wrapper, '策略', 'Proxy')
+    await choose(wrapper, '策略', 'DIRECT')
+    expect(dnsTrigger().textContent).toContain('代理 DNS')
+    expect(text()).toContain('DNS 为单独设置的代理 DNS，不随策略变化')
+    await click(button('改为跟随策略'))
+    expect(dnsTrigger().textContent).toContain('跟随策略 · 直连 DNS')
+  })
+
+  it('disables DNS for types that cannot be routed, sends default and restores the choice afterwards', async () => {
+    const item = { id: 'rule-x', itemType: 'rule', rule_type: 'DOMAIN', value: 'x.test', policy: 'DIRECT', enabled: true, remark: '' }
+    const wrapper = await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'rule-x': { state: 'explicit', route: 'blackhole' } } }) })
+    expect(dnsTrigger().textContent).toContain('黑洞')
+    await choose(wrapper, '规则类型', 'GEOIP')
+    expect(dnsTrigger().disabled).toBe(true)
+    expect(dnsTrigger().textContent).toContain('默认上游')
+    expect(text()).toContain('GEOIP 不参与 DNS 分流')
+    await choose(wrapper, '规则类型', 'DOMAIN')
+    expect(dnsTrigger().textContent).toContain('黑洞')
+    await choose(wrapper, '规则类型', 'GEOIP')
+    await click(save())
+    expect(network.update).toHaveBeenCalledWith('rule-x', expect.objectContaining({ rule_type: 'GEOIP', dns: 'default' }), 'p1')
+  })
+
+  it('warns about IP parts and the first IP rule, including classical rulesets', async () => {
+    await render()
+    await type('#rule-values', 'IP-CIDR,1.2.3.0/24')
+    expect(dnsTrigger().textContent).toContain('默认上游')
+    expect(text()).not.toContain('第一条参与 DNS 的 IP 规则')
+    await pickDns('直连 DNS')
+    expect(text()).toContain('这是第一条参与 DNS 的 IP 规则')
+    await click(button('另有 1 条提示'))
+    expect(text()).toContain('IPv4 网段不影响 IPv6 查询')
+    expect(dialog().querySelector('#rule-noresolve')).not.toBeNull()
+
+    wrappers.splice(0).forEach(wrapper => wrapper.unmount())
+    document.body.innerHTML = ''
+    await render({ initialSource: 'library' })
+    ;(wrappers[0]!.vm as any).$.setupState.form.libraryIds = ['lib-b']
+    await flushPromises()
+    // A classical ruleset may create an IP group: default upstream until chosen, then the first-IP warning.
+    expect(dnsTrigger().textContent).toContain('默认上游')
+    await pickDns('跟随策略')
+    expect(text()).toContain('这是第一条参与 DNS 的 IP 规则')
+  })
+
+  it('keeps pasted IP lines on the default upstream and sends dns_ip until DNS is chosen', async () => {
+    await render()
+    await type('#rule-values', 'openai.com\nIP-CIDR,1.2.3.0/24')
+    expect(text()).toContain('域名 1 条：跟随策略 · 直连 DNS ／ IP 1 条：默认上游')
+    expect(text()).toContain('IP 规则保持默认上游，避免为所有查询开启本地探测。')
+    await click(save())
+    expect(network.compose).toHaveBeenCalledWith({
+      source: { kind: 'values', rule_type: 'DOMAIN-SUFFIX', text: 'openai.com\nIP-CIDR,1.2.3.0/24' },
+      rule: { policy: 'DIRECT', remark: '', group_name: '', no_resolve: true, enabled: true, position: 'top' },
+      dns: 'follow', dns_ip: 'default'
+    }, 'p1')
+  })
+
+  it('applies a chosen DNS to every pasted line', async () => {
+    await render()
+    await type('#rule-values', 'openai.com\nIP-CIDR,1.2.3.0/24')
+    await pickDns('黑洞')
+    expect(text()).toContain('这是第一条参与 DNS 的 IP 规则')
+    await click(save())
+    const [payload] = network.compose.mock.calls[0]!
+    expect(payload).toMatchObject({ dns: 'blackhole' })
+    expect(payload).not.toHaveProperty('dns_ip')
+  })
+
+  it('points out when MosDNS handles the rule differently', async () => {
+    const item = { id: 'rule-m', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'm.test', policy: 'DIRECT', enabled: true }
+    await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'rule-m': { state: 'explicit', route: 'blackhole' } }, mosdns: { 'rule-m': 'direct' } }) })
+    expect(text()).toContain('MosDNS 仍按直连 DNS处理此规则，与这里的「黑洞」不同；本字段只对 OxiDNS 生效。')
+  })
+
+  it('disables DNS up front when native routing is locked and links to the full parameters', async () => {
+    await render({ dns: snapshot({ mode: 'native', editable: false, reason: '自定义匹配引用了 rules_domain_3' }) })
+    await type('#rule-values', 'openai.com')
+    expect(dnsTrigger().disabled).toBe(true)
+    expect(dnsTrigger().textContent).toContain('默认上游')
+    expect(text()).toContain('DNS 处理需在完整参数修改：自定义匹配引用了 rules_domain_3')
+    const link = Array.from(dialog().querySelectorAll('a')).find(item => item.textContent?.includes('打开完整参数'))!
+    expect(link.getAttribute('href')).toBe('/generate?oxidns=config')
+    expect(link.getAttribute('target')).toBe('_blank')
+    await click(save())
+    expect(network.compose.mock.calls[0]![0]).not.toHaveProperty('dns')
+  })
+
+  it('never sends dns while the DNS state is not loaded', async () => {
+    const item = { id: 'rule-u', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'u.test', policy: 'DIRECT', enabled: true }
+    await render({ mode: 'edit', item, dns: null })
+    expect(dnsTrigger().disabled).toBe(true)
+    expect(text()).toContain('DNS 状态未加载，本次不修改 DNS')
+    await type('#rule-value', 'changed.test')
+    await click(save())
+    const [, payload] = network.update.mock.calls[0]!
+    expect(payload).toMatchObject({ value: 'changed.test' })
+    expect(payload).not.toHaveProperty('dns')
+  })
+
+  it('offers to save with the default upstream after a 409 routing lock, without leaving the page', async () => {
+    const locked = { isAxiosError: true, response: { status: 409, data: { message: '规则仍在使用',
+      usages: [{ kind: 'oxidns', code: 'oxidns_routing_custom', target: 'sequence_main', reason: 'sequence_main 第 4 条为手写条目' }] } } }
+    network.compose.mockRejectedValueOnce(locked)
+    const wrapper = await render()
+    await type('#rule-values', 'openai.com')
+    await pickDns('黑洞')
+    await click(save())
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.description).toBe('sequence_main 第 4 条为手写条目')
+    expect(confirmState.confirmText).toBe('仍保存（DNS 默认上游）')
+    expect(confirmState.altText).toBe('复制原因')
+    settleConfirm('confirm')
+    await flushPromises()
+    expect(network.compose).toHaveBeenCalledTimes(2)
+    expect(network.compose.mock.calls[0]![0]).toMatchObject({ dns: 'blackhole' })
+    expect(network.compose.mock.calls[1]![0]).not.toHaveProperty('dns')
+    expect(wrapper.emitted('saved')).toEqual([[{ ids: ['rule-new'], dns: {} }]])
+    expect(wrapper.emitted('update:open')).toEqual([[false]])
+  })
+
+  it('copies the lock reason and keeps the form open', async () => {
+    network.compose.mockRejectedValueOnce({ isAxiosError: true, response: { status: 409, data: { usages: [{ code: 'oxidns_routing_custom', reason: '手写条目' }] } } })
+    const wrapper = await render()
+    await type('#rule-values', 'openai.com')
+    await click(save())
+    settleConfirm('alt')
+    await flushPromises()
+    expect(network.copy).toHaveBeenCalledWith('手写条目')
+    expect(network.compose).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+  })
+
+  it('asks before saving an unreachable URL as a disabled ruleset and keeps its DNS for later', async () => {
+    network.post.mockImplementation(async () => ({ data: { success: true, available: false } }))
+    await render({ initialSource: 'new_library' })
+    await type('#rule-library-name', '广告拦截')
+    await type('#rule-library-url', 'https://rules.test/ads.list')
+    await pickDns('黑洞')
+    await click(save())
+    expect(network.post).toHaveBeenCalledWith('/rule-library/test-single', { url: 'https://rules.test/ads.list' })
+    expect(confirmState.description).toBe('地址暂时无法访问，仍保存为停用的规则集？DNS「黑洞」会在启用后生效')
+    settleConfirm('confirm')
+    await flushPromises()
+    expect(network.compose).toHaveBeenCalledWith(expect.objectContaining({
+      source: { kind: 'new_library', library: { name: '广告拦截', source_type: 'url', url: 'https://rules.test/ads.list', behavior: 'domain', format: 'text', enabled: false } },
+      dns: 'blackhole'
+    }), 'p1')
+  })
+
+  it('disables saving when nothing can be added', async () => {
+    await render()
+    expect(save().disabled).toBe(true)
+    expect(text()).toContain('没有可添加的规则')
+    await type('#rule-values', 'kept.test')
+    expect(save().disabled).toBe(true)
+    await type('#rule-values', 'kept.test\nnew.test')
+    expect(save().disabled).toBe(false)
+  })
+
+  it('asks before discarding changes when closing', async () => {
+    const wrapper = await render()
+    await click(button('取消'))
+    expect(wrapper.emitted('update:open')).toEqual([[false]])
+    await type('#rule-values', 'draft.test')
+    await click(button('取消'))
+    expect(confirmState.description).toBe('放弃未保存的规则？')
+    settleConfirm('cancel')
+    await flushPromises()
+    expect(wrapper.emitted('update:open')).toHaveLength(1)
+    await click(button('取消'))
+    settleConfirm('confirm')
+    await flushPromises()
+    expect(wrapper.emitted('update:open')).toEqual([[false], [false]])
+  })
+
+  it('merges compose warnings into one notification with an enable action for a disabled duplicate', async () => {
+    network.compose.mockResolvedValueOnce(composeResult({
+      skipped: [{ line: 2, value: 'old.test', existing_id: 'rule-b', index: 2, enabled: false }],
+      warnings: ['忽略第 3 行行尾策略 Proxy']
+    }))
+    const wrapper = await render()
+    await type('#rule-values', 'openai.com\nold.test\nDOMAIN,x.test,Proxy')
+    await click(save())
+    expect(notify.warning).toHaveBeenCalledTimes(1)
+    const [message, , action] = vi.mocked(notify.warning).mock.calls[0]!
+    expect(message).toBe('已添加 1 条；跳过 1 条重复（#2）；忽略 1 处行尾策略')
+    expect(action?.label).toBe('启用 #2')
+    action!.onClick()
+    expect(wrapper.emitted('enable')).toEqual([['rule-b']])
+  })
+
+  it('reports where the change applies after saving', async () => {
+    await render({ dns: snapshot({ agents: [
+      { id: 'a1', name: 'Main', service_type: 'oxidns', auto_sync: { rules: true, library: false } },
+      { id: 'a2', name: 'Edge', service_type: 'mihomo', auto_sync: { rules: false, library: false } }
+    ] }) })
+    await type('#rule-values', 'openai.com')
+    await click(save())
+    const [message, description, action] = vi.mocked(notify.success).mock.calls[0]!
+    expect(message).toBe('已添加 1 条')
+    expect(description).toBe('1 台已开启规则自动同步，将自动更新；1 台需发布后生效')
+    expect(action?.label).toBe('去发布')
+  })
+
+  it('sends a compose request for library sources with the chosen DNS', async () => {
+    await render({ initialSource: 'library' })
+    ;(wrappers[0]!.vm as any).$.setupState.form.libraryIds = ['lib-b']
+    await flushPromises()
+    await pickDns('不存在')
+    await click(save())
+    expect(network.compose).toHaveBeenCalledWith({
+      source: { kind: 'library', library_rule_ids: ['lib-b'] },
+      rule: { policy: 'DIRECT', remark: '', group_name: '', no_resolve: false, enabled: true, position: 'top' },
+      dns: 'nxdomain'
+    }, 'p1')
+  })
+
+  it('edits rulesets through the reference update with dns only when it changed', async () => {
+    const item = existing[2]!
+    const wrapper = await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'set-a': { state: 'explicit', route: 'nxdomain' } } }) })
+    expect(dialog().querySelector('[role="radiogroup"][aria-label="匹配来源"]')).toBeNull()
+    expect(text()).toContain('在规则库中编辑来源')
+    await choose(wrapper, '策略', 'Proxy')
+    await click(save())
+    const [id, payload] = network.setUpdate.mock.calls[0]!
+    expect(id).toBe('set-a')
+    expect(payload).toMatchObject({ itemType: 'ruleset', library_rule_id: 'lib-a', policy: 'Proxy', group_name: '' })
+    expect(payload).not.toHaveProperty('dns')
+    expect(payload).not.toHaveProperty('name')
+  })
+
+  it('offers to update a drifted follow rule to its policy', async () => {
+    const item = { id: 'rule-d', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'd.test', policy: 'DIRECT', enabled: true }
+    await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'rule-d': { state: 'follow_drift', route: 'proxy', follow_route: 'direct' } } }) })
+    expect(text()).toContain('策略已是 DIRECT，DNS 仍为代理 DNS（与策略不一致）')
+    await click(button('按策略更新 DNS'))
+    await click(save())
+    expect(network.update.mock.calls[0]![1]).toMatchObject({ dns: 'follow' })
+  })
+
+  it('uses a full-screen layout on phones with the footer outside the scrolling body', async () => {
+    await render()
+    expect(dialog().classList.contains('rule-editor-dialog')).toBe(true)
+    // The scroll container is a div: Chromium does not clip a flex-sized fieldset, so it never scrolled.
+    expect(dialog().querySelector(':scope > div.rule-editor-body > fieldset.rule-editor-fields')).not.toBeNull()
+    expect(dialog().querySelector('fieldset.rule-editor-body')).toBeNull()
+    expect(dialog().querySelector(':scope > footer.rule-editor-footer')).not.toBeNull()
+  })
+
+  it('passes the DNS of new rules returned by compose to the page', async () => {
+    network.compose.mockResolvedValueOnce(composeResult({ dns: { 'rule-new': { state: 'explicit', route: 'blackhole' } } }))
+    const wrapper = await render()
+    await type('#rule-values', 'openai.com')
+    await pickDns('黑洞')
+    await click(save())
+    expect(wrapper.emitted('saved')).toEqual([[{ ids: ['rule-new'], dns: { 'rule-new': { state: 'explicit', route: 'blackhole' } } }]])
+  })
+
+  it('keeps a group name typed together with a policy change, and clears the old one otherwise', async () => {
+    const item = { id: 'rule-g', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'g.test', policy: 'DIRECT', enabled: true, group_name: '国内' }
+    let wrapper = await render({ mode: 'edit', item })
+    await choose(wrapper, '策略', 'Proxy')
+    await type('#rule-group', '国外')
+    await click(save())
+    expect(network.update.mock.calls[0]![1]).toMatchObject({ policy: 'Proxy', group_name: '国外' })
+
+    wrappers.splice(0).forEach(entry => entry.unmount())
+    document.body.innerHTML = ''
+    wrapper = await render({ mode: 'edit', item })
+    await choose(wrapper, '策略', 'Proxy')
+    await click(save())
+    expect(network.update.mock.calls[1]![1]).toMatchObject({ policy: 'Proxy', group_name: '' })
+  })
+
+  it('does not call a never-configured default upstream a separate choice, but does for a saved one', async () => {
+    const item = { id: 'rule-l', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'baidu.com', policy: 'DIRECT', enabled: true }
+    await render({ mode: 'edit', item })
+    expect(dnsTrigger().textContent).toContain('默认上游')
+    expect(text()).not.toContain('单独设置')
+
+    wrappers.splice(0).forEach(entry => entry.unmount())
+    document.body.innerHTML = ''
+    await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'rule-l': { state: 'explicit', route: 'proxy' } } }) })
+    expect(text()).toContain('DNS 为单独设置的代理 DNS，不随策略变化')
+  })
+
+  it('swaps the library ruleset of a reference in place, keeping current and used entries apart', async () => {
+    const library2 = [...library, { id: 'lib-c', name: 'Nets', behavior: 'ipcidr', source_type: 'url', url: 'https://rules.test/nets.list', enabled: true },
+      { id: 'lib-d', name: 'Old', behavior: 'domain', source_type: 'url', url: 'https://rules.test/old.list', enabled: false }]
+    const rules = [...existing, { id: 'set-b', itemType: 'ruleset', library_rule_id: 'lib-b', name: 'Corp', behavior: 'classical', policy: 'DIRECT', enabled: true }]
+    await render({ mode: 'edit', item: existing[2], rules, library: library2, dns: snapshot({}, { rules: { 'set-a': { state: 'explicit', route: 'nxdomain' } } }) })
+    await click(dialog().querySelector('button[aria-label="选择规则集"]'))
+    const option = (name: string) => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(item => item.textContent?.includes(name))!
+    expect(option('Ads').hasAttribute('data-disabled')).toBe(false)
+    expect(option('Corp').hasAttribute('data-disabled')).toBe(true) // already referenced as #4
+    expect(option('Old').hasAttribute('data-disabled')).toBe(true)
+    await click(option('Nets'))
+    expect(dialog().querySelector('button[aria-label="选择规则集"]')!.textContent).toContain('Nets')
+    expect(dialog().querySelector<HTMLButtonElement>('#rule-noresolve')!.getAttribute('aria-checked')).toBe('true')
+    await click(save())
+    const [id, payload] = network.setUpdate.mock.calls[0]!
+    expect(id).toBe('set-a')
+    expect(payload).toMatchObject({ library_rule_id: 'lib-c', no_resolve: true, policy: 'REJECT' })
+    expect(payload).not.toHaveProperty('dns')
+  })
+
+  it('compares with MosDNS only when a MosDNS device is bound or the rule is in a MosDNS list', async () => {
+    // Other rules sit in MosDNS lists, but this new rule is in none and no MosDNS device is bound.
+    await render({ dns: snapshot({}, { mosdns: { 'rule-a': 'direct' } }) })
+    await type('#rule-values', 'openai.com')
+    await pickDns('代理 DNS')
+    expect(text()).not.toContain('MosDNS')
+
+    wrappers.splice(0).forEach(entry => entry.unmount())
+    document.body.innerHTML = ''
+    const item = { id: 'rule-n', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'n.test', policy: 'DIRECT', enabled: true }
+    await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'rule-n': { state: 'explicit', route: 'proxy' } }, mosdns: { 'rule-a': 'direct' } }) })
+    expect(text()).not.toContain('MosDNS')
+
+    wrappers.splice(0).forEach(entry => entry.unmount())
+    document.body.innerHTML = ''
+    await render({ dns: snapshot({ agents: [{ id: 'm', name: 'M', service_type: 'mosdns', auto_sync: { rules: false, library: false } }] }) })
+    await type('#rule-values', 'openai.com')
+    await pickDns('代理 DNS')
+    expect(text()).toContain('MosDNS 仍按默认上游处理此规则，与这里的「代理 DNS」不同')
+  })
+
+  it('asks to publish a pinned upstream only when the server says auto-sync withheld it', async () => {
+    const agents = [{ id: 'a1', name: 'Main', service_type: 'oxidns', auto_sync: { rules: true, library: false } }]
+    network.compose.mockResolvedValueOnce(composeResult({ pinned_withheld: false }))
+    await render({ dns: snapshot({ agents }) })
+    await type('#rule-values', 'openai.com')
+    await pickDns('直连 · 223.5.5.5')
+    await click(save())
+    expect(vi.mocked(notify.success).mock.calls[0]).toEqual(['已添加 1 条', '1 台已开启规则自动同步，将自动更新', undefined])
+
+    wrappers.splice(0).forEach(entry => entry.unmount())
+    document.body.innerHTML = ''
+    network.compose.mockResolvedValueOnce(composeResult({ pinned_withheld: true }))
+    await render({ dns: snapshot({ agents }) })
+    await type('#rule-values', 'openai.com')
+    await pickDns('直连 · 223.5.5.5')
+    await click(save())
+    const [, description, action] = vi.mocked(notify.success).mock.calls[1]!
+    expect(description).toBe('1 台已开启规则自动同步，将自动更新；指定上游需手动发布')
+    expect(action?.label).toBe('去发布')
+  })
+
+  it('moves the DNS field into more options when the profile does not use OxiDNS', async () => {
+    await render({ dns: snapshot({ oxidns_in_use: false }) })
+    await type('#rule-values', 'openai.com')
+    const more = dialog().querySelector('details[data-rule-more]')!
+    expect(more.querySelector('#rule-dns')).not.toBeNull()
+    expect(more.textContent).toContain('当前配置空间未使用 OxiDNS')
+    expect(dnsTrigger().textContent).toContain('默认上游')
+    await click(save())
+    expect(network.compose.mock.calls[0]![0]).not.toHaveProperty('dns')
+  })
+})

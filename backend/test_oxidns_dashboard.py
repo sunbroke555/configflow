@@ -480,3 +480,44 @@ def test_missing_retention_metadata_is_unknown(tmp_path, monkeypatch):
     result = monitor.overview(Manager(tmp_path), 'one')
     assert result['rankings']['success'] is True
     assert result['rankings']['retention_days'] is None
+
+
+@pytest.mark.parametrize('blocked, expected', [
+    ({}, ('standard_adguard', '标准 AdGuard 拦截路径')),
+    ({'reason': 'standard_adguard'}, ('standard_adguard', '标准 AdGuard 拦截路径')),
+    ({'reason': 'rule_dns', 'matcher_tags': ['qs.match.sequence_main.3.0.qname', 'qs.match.sequence_main.4.0.qname']},
+     ('rule_dns', '规则拦截（拒绝/黑洞）')),
+    ({'reason': 'standard_adguard_rule_dns', 'matcher_tags': ['qs.match.sequence_main.2.0.question']},
+     ('standard_adguard_rule_dns', '标准 AdGuard 与规则拦截')),
+])
+def test_blocked_ranking_reason_follows_agent(tmp_path, monkeypatch, blocked, expected):
+    manager = Manager(tmp_path)
+    current, ranks, _ = transport(monkeypatch)
+    ranks['blocked'].update(blocked)
+    result = monitor.overview(manager, 'one')['rankings']['blocked']
+    assert result['available'] is True and (result['code'], result['reason']) == expected
+    assert result.get('matcher_tags') == blocked.get('matcher_tags')
+
+
+@pytest.mark.parametrize('blocked', [{'reason': 'Rule DNS'}, {'reason': 'rule_dns', 'matcher_tags': ['../x']},
+                                     {'reason': 'rule_dns', 'matcher_tags': []},
+                                     {'reason': 'rule_dns', 'matcher_tags': [f'm{i}' for i in range(33)]}])
+def test_blocked_ranking_rejects_malformed_reason_or_matchers(tmp_path, monkeypatch, blocked):
+    manager = Manager(tmp_path)
+    current, ranks, _ = transport(monkeypatch)
+    ranks['blocked'].update(blocked)
+    assert monitor.overview(manager, 'one')['rankings']['available'] is False
+
+
+def test_too_many_block_rules_reason_is_actionable(tmp_path, monkeypatch):
+    manager = Manager(tmp_path)
+    current, ranks, _ = transport(monkeypatch)
+    ranks['blocked'] = {'available': False, 'reason': 'too_many_block_rules', 'sample_size': 0, 'rows': [],
+                        'at_limit': False}
+    result = monitor.overview(manager, 'one')['rankings']['blocked']
+    assert result['available'] is False and result['code'] == 'too_many_block_rules'
+    assert result['reason'].startswith('拦截规则分组超过 32 个') and '刷新' not in result['reason']
+    # The agent's sentence fallback is not a code; the generic text covers rule blocks too.
+    ranks['blocked'] = {'available': False, 'reason': '当前配置未包含可确认的标准 AdGuard 拦截路径'}
+    result = monitor.overview(manager, 'one')['rankings']['blocked']
+    assert result['code'] == 'unsupported_configuration' and '拒绝/黑洞' in result['reason']

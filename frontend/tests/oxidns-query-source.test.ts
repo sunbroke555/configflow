@@ -68,6 +68,48 @@ describe('query source from the standard ConfigFlow trace', () => {
   })
 })
 
+// Steps written as "sequence node kind tag outcome", as OxiDNS 1.6.1 records them.
+const trace = (...lines: string[]): Step[] => lines.map((line, event_index) => {
+  const [sequence_tag, node, kind, tag, outcome] = line.split(' ')
+  return { event_index, sequence_tag, node_index: Number(node), kind, tag, outcome }
+})
+const chain = 'cf_dns_up_8c1812f0bae3'
+const pinnedHead = [`sequence_main 11 matcher qs.match.sequence_main.11.0.qname matched`,
+  `${chain} 0 executor qs.exec.${chain}.0.drop_resp entered`, `${chain} 0 executor qs.exec.${chain}.0.drop_resp next`,
+  `${chain} 1 executor cf_dns_cache_8c1812f0bae3 entered`]
+const pinnedForward = [`${chain} 2 executor cf_dns_fwd_8c1812f0bae3 entered`, `${chain} 2 executor cf_dns_fwd_8c1812f0bae3 next`]
+const pinnedTail = [`${chain} 1 executor cf_dns_cache_8c1812f0bae3 stop`, 'sequence_main 11 builtin goto stop']
+const probe = ['local_probe 0 executor local_probe_cache entered', 'local_probe 1 matcher qs.match.local_probe.1.0.has_resp matched',
+  'local_probe 1 executor forward_local entered', 'local_probe 1 executor forward_local next',
+  'local_probe 2 builtin return return', 'local_probe 0 executor local_probe_cache return']
+
+describe('rule DNS actions in the query source', () => {
+  it('labels the rule blackhole as a rule block for domain and IP rules', () => {
+    expect(label(...trace('sequence_main 10 executor cf_dns_blackhole entered', 'sequence_main 10 executor cf_dns_blackhole stop'))).toBe('规则拦截')
+    expect(label(...trace(...probe, 'sequence_main 18 executor cf_dns_blackhole entered', 'sequence_main 18 executor cf_dns_blackhole stop'))).toBe('规则拦截')
+    expect(label(...trace('sequence_main 10 executor cf_dns_blackhole entered', 'sequence_main 10 executor cf_dns_blackhole error'))).toBe('未识别')
+  })
+  it.each([
+    ['a cache miss', [...pinnedHead, ...pinnedForward, `${chain} 3 matcher qs.match.${chain}.3.0.has_resp not_matched`, `${chain} 4 builtin accept stop`, ...pinnedTail], '指定上游'],
+    ['its own cache hit', [...pinnedHead, ...pinnedTail], '指定上游'],
+    ['a chain without cache', [...pinnedHead.slice(0, 3), ...pinnedForward, 'sequence_main 11 builtin goto stop'], '指定上游'],
+    ['the chain run as an executor', ['sequence_main 11 executor cf_dns_up_8c1812f0bae3 entered', 'sequence_main 11 executor cf_dns_up_8c1812f0bae3 stop'], '指定上游'],
+    ['a reject on no answer', [...pinnedHead, ...pinnedForward, `${chain} 3 matcher qs.match.${chain}.3.0.has_resp matched`, `${chain} 3 builtin reject stop`, ...pinnedTail], '规则拒绝'],
+    ['a failed forward', [...pinnedHead, `${chain} 2 executor cf_dns_fwd_8c1812f0bae3 entered`, `${chain} 2 executor cf_dns_fwd_8c1812f0bae3 error`, `${chain} 1 executor cf_dns_cache_8c1812f0bae3 error`], '未识别'],
+    ['a similar tag', ['sequence_main 11 executor cf_dns_upstream entered', 'sequence_main 11 executor cf_dns_upstream next'], '未识别']
+  ])('summarizes a pinned upstream with %s', (_name, lines, expected) => {
+    expect(label(...trace(...lines))).toBe(expected)
+  })
+  it('lets an IP rule after the local probe show the pinned upstream, not the local DNS', () => {
+    const ip = [...probe, 'sequence_main 19 matcher qs.match.sequence_main.19.0.resp_ip matched', ...pinnedHead.slice(1)]
+    expect(label(...trace(...ip, ...pinnedForward, `${chain} 4 builtin accept stop`, ...pinnedTail))).toBe('指定上游')
+    expect(label(...trace(...ip, ...pinnedTail))).toBe('指定上游')
+  })
+  it('uses an Agent pinned summary as is', () => {
+    expect(querySourceLabel({ ...row, steps: [], resolution_source: 'pinned' })).toBe('指定上游')
+  })
+})
+
 describe('IPv4 preference source', () => {
   it.each(['NOERROR', 'No Error', 'noerror', '0', 0])('recognizes the reported suppressed AAAA with rcode %s', rcode => {
     expect(querySourceLabel({ ...suppressedAAAA, rcode })).toBe(preferredLabel)

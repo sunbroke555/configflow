@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { flushPromises } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { load as loadYaml } from 'js-yaml'
 import { agentApi, profileApi, oxidnsApi, ruleApi, ruleSetApi } from '@/api'
-import { confirmState, settleConfirm } from '@/lib/feedback'
+import { confirmState, notify, settleConfirm } from '@/lib/feedback'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
+import OxidnsSettings from '@/components/generate/OxidnsSettings.vue'
 
-import { config, settings, publishGuard, render, button, click, input, savedPayload, views, worker, yamlInput } from './helpers/oxidns-settings'
+import { config, settings, publishGuard, etags, render, button, click, input, savedPayload, views, worker, yamlInput } from './helpers/oxidns-settings'
 
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
@@ -26,6 +27,73 @@ describe('unified OxiDNS profile settings', () => {
     expect(wrapper.findComponent(SettingsWorkspace).props('busy')).toBe(false)
     expect(document.body.textContent).toContain('草稿已保存')
     expect(document.body.textContent).not.toContain('发布成功')
+  })
+
+  it('guards each save with the stored version and continues from the version it wrote', async () => {
+    await render()
+    expect(document.querySelector('[data-rule-dns-note]')?.textContent).toContain('策略规则页的 DNS 修改会直接写入此草稿')
+    await input(worker, '5')
+    await click('保存并发布')
+    expect(vi.mocked(oxidnsApi.saveSettings).mock.calls[0]![2]).toBe(etags.loaded)
+    await input(worker, '6')
+    await click('保存草稿')
+    expect(vi.mocked(oxidnsApi.saveSettings).mock.calls[1]![2]).toBe(etags.saved)
+  })
+
+  it('reloads and replays common-settings edits when the rules page changed the stored settings', async () => {
+    const wrapper = await render()
+    await input(worker, '5')
+    const changed = { response: { status: 409, data: { success: false, code: 'oxidns_changed_elsewhere', message: 'OxiDNS 设置已在其他页面修改（例如策略规则的 DNS），请重新加载后再保存' } } }
+    vi.mocked(oxidnsApi.saveSettings).mockRejectedValueOnce(changed)
+    const newer = { ...settings(), native_config: config.replace('extension: false', 'extension: true'), rule_actions: { rule_x: { action: 'blackhole' } } }
+    vi.mocked(oxidnsApi.getSettings).mockResolvedValueOnce({ data: newer, headers: { etag: '"oxidns-v3"' } } as any)
+    await click('保存草稿')
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+    expect(notify.error).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('OxiDNS 设置已在其他页面修改')
+    expect(confirmState).toMatchObject({ open: true, title: 'OxiDNS 设置已在其他页面修改', confirmText: '重新加载并保留我的修改', altText: '重新加载（放弃本页未保存修改）' })
+    vi.mocked(oxidnsApi.applyCommonSettings).mockClear()
+    settleConfirm('confirm')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(180); await flushPromises()
+    expect(oxidnsApi.getSettings).toHaveBeenCalledTimes(2)
+    expect(oxidnsApi.applyCommonSettings).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ rule_actions: newer.rule_actions }), { worker_threads: 5 }, 'oxi-profile')
+    expect((document.querySelector(worker) as HTMLInputElement).value).toBe('5')
+    await click('保存草稿')
+    expect(vi.mocked(oxidnsApi.saveSettings).mock.calls.at(-1)![2]).toBe('"oxidns-v3"')
+    expect(savedPayload().rule_actions).toEqual(newer.rule_actions)
+    expect(loadYaml(savedPayload().native_config)).toMatchObject({ runtime: { worker_threads: 5, extension: true } })
+  })
+
+  it('offers only a discarding reload when YAML was edited before the stored settings changed', async () => {
+    await render()
+    await click('完整参数', views())
+    await click('YAML', views())
+    await input(yamlInput, config.replace('worker_threads: 8', 'worker_threads: 7'))
+    vi.mocked(oxidnsApi.saveSettings).mockRejectedValueOnce({ response: { status: 409, data: { success: false, code: 'oxidns_changed_elsewhere', message: 'OxiDNS 设置已在其他页面修改' } } })
+    await click('保存草稿')
+    expect(confirmState).toMatchObject({ open: true, confirmText: '重新加载（放弃本页未保存修改）', altText: '' })
+    expect(confirmState.description).toContain('无法在最新配置上自动重做')
+    settleConfirm('cancel')
+    await flushPromises()
+    expect(oxidnsApi.getSettings).toHaveBeenCalledTimes(1)
+    expect((document.querySelector(yamlInput) as HTMLTextAreaElement).value).toContain('worker_threads: 7')
+    vi.mocked(oxidnsApi.saveSettings).mockRejectedValueOnce({ response: { status: 409, data: { success: false, code: 'oxidns_changed_elsewhere', message: 'OxiDNS 设置已在其他页面修改' } } })
+    await click('保存草稿')
+    vi.mocked(oxidnsApi.applyCommonSettings).mockClear()
+    settleConfirm('confirm')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(180); await flushPromises()
+    expect(oxidnsApi.getSettings).toHaveBeenCalledTimes(2)
+    expect(oxidnsApi.applyCommonSettings).not.toHaveBeenCalled()
+    expect((document.querySelector(worker) as HTMLInputElement).value).toBe('8')
+  })
+
+  it('opens directly on the full parameters when linked from a locked rule DNS field', async () => {
+    const wrapper = mount(OxidnsSettings, { attachTo: document.body, props: { open: true, profileId: 'oxi-profile', initialTab: 'config' } })
+    await flushPromises()
+    expect(button('完整参数', views()).getAttribute('aria-pressed')).toBe('true')
+    wrapper.unmount()
   })
 
   it('retains the saved draft when publication validation rejects it', async () => {
@@ -95,7 +163,7 @@ describe('unified OxiDNS profile settings', () => {
     await click('保存草稿')
     expect(agentApi.pushConfig).not.toHaveBeenCalled()
     expect(oxidnsApi.saveSettings).toHaveBeenCalledTimes(1)
-    expect(oxidnsApi.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ config_mode: 'native' }), 'oxi-profile')
+    expect(oxidnsApi.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ config_mode: 'native' }), 'oxi-profile', etags.loaded)
     expect(loadYaml(savedPayload().native_config)).toEqual({ ...(loadYaml(config) as any), runtime: { worker_threads: 6, extension: false } })
     expect(savedPayload().template_settings).toEqual({ worker_threads: 2 })
     expect(wrapper.emitted('saved')).toHaveLength(1)

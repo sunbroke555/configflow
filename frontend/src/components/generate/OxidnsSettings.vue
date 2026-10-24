@@ -17,6 +17,7 @@
     </template>
     <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 md:p-5" @input.capture="markEdited">
       <p v-if="contextLabel" class="m-0 break-words text-xs text-muted-foreground">{{ contextLabel }}</p>
+      <InfoNote v-if="settings && !loading" class="shrink-0" data-rule-dns-note><p>策略规则页的 DNS 修改会直接写入此草稿。</p></InfoNote>
       <LoadingRows v-if="loading" :rows="5" />
       <div v-else-if="loadError" role="alert" class="space-y-3 py-4">
         <p class="text-destructive-accent">{{ loadError }}</p><Button variant="outline" @click="load">重新加载</Button>
@@ -47,7 +48,7 @@
           </template>
         </OxidnsNativeEditor>
         <div ref="filesPanel" v-show="tab === 'files'" class="min-h-0 flex-1 overflow-y-auto">
-          <OxidnsFilesEditor v-model="settings.additional_files" :disabled="editorLocked || nativePending" @error="editorErrors.additional_files = $event" />
+          <OxidnsFilesEditor :model-value="settings.additional_files" :disabled="editorLocked || nativePending" @update:model-value="acceptFiles" @error="editorErrors.additional_files = $event" />
         </div>
         <div v-if="applyError" class="flex shrink-0 flex-wrap items-center gap-2">
           <p role="alert" class="min-w-0 flex-1 break-words text-sm text-destructive-accent">{{ applyError }}</p>
@@ -90,19 +91,24 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Check, Download, Loader2 } from '@lucide/vue'
 import { oxidnsApi, ruleApi, ruleSetApi, type PublishGuard } from '@/api'
-import { notify } from '@/lib/feedback'
+import { choose, confirm, notify } from '@/lib/feedback'
 import { formatOxidnsIssuePath, readOxidnsValidationResult, type OxidnsValidationIssue } from '@/lib/oxidnsNativeValidation'
 import OxidnsNativeEditor from './OxidnsNativeEditor.vue'
 import OxidnsCommonSettings from './OxidnsCommonSettings.vue'
 import OxidnsFilesEditor from './OxidnsFilesEditor.vue'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import InfoNote from '@/components/common/InfoNote.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import { Button } from '@/components/ui/button'
 import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
 
-const props = defineProps<{ open: boolean; profileId: string; preferredAgentId?: string; initialFeature?: string; contextLabel?: string; backLabel?: string }>()
+const props = defineProps<{
+  open: boolean; profileId: string; preferredAgentId?: string; initialFeature?: string; contextLabel?: string; backLabel?: string
+  /** 打开后直接进入的内容：config 为完整参数（定位到主执行链），files 为附加文件 */
+  initialTab?: 'config' | 'files'
+}>()
 const emit = defineEmits<{ (event: 'update:open', value: boolean): void; (event: 'saved'): void }>()
 const settings = ref<Record<string, any> | null>(null)
 const rules = ref<any[]>([])
@@ -132,6 +138,15 @@ const pending = ref<Record<string, unknown>>({})
 const pendingCount = computed(() => Object.keys(pending.value).length)
 const editorLocked = computed(() => saving.value || applying.value || Boolean(pendingCount.value || editorErrors.common || applyError.value))
 let loadVersion = 0
+// The stored object's ETag at load (or after the last save). The rules page
+// writes per-rule DNS straight into the stored settings, so a whole-object
+// save must not overwrite it unseen.
+let settingsEtag = ''
+// Common-settings changes applied since the last load or save. If nothing
+// else was edited here, they can be replayed onto a newer stored version.
+let commonChanges: Record<string, unknown> = {}
+let otherEdits = false
+let pendingInitialTab: typeof props.initialTab
 let projectionVersion = 0
 let projectionSource: string | undefined
 let changeTimer: ReturnType<typeof setTimeout> | undefined
@@ -160,6 +175,7 @@ async function reconcileNative(before: string, candidate: string, renames?: Reco
 }
 function acceptNativeConfig(text: string) {
   if (!settings.value) return
+  otherEdits = true
   if (reconciledNative?.settings.native_config === text) {
     ++projectionVersion
     projectionSource = text
@@ -290,6 +306,9 @@ async function load() {
       oxidnsApi.getSettings(props.profileId), ruleApi.getAll(props.profileId), ruleSetApi.getAll(props.profileId)
     ])
     if (version !== loadVersion) return
+    settingsEtag = typeof config.headers?.etag === 'string' ? config.headers.etag : ''
+    commonChanges = {}
+    otherEdits = false
     const prepared = await oxidnsApi.prepareEditor(config.data, props.profileId)
     if (version !== loadVersion) return
     settings.value = prepared.data.settings
@@ -304,7 +323,10 @@ async function load() {
   } finally {
     if (version === loadVersion) {
       loading.value = false
-      if (settings.value && !loadError.value) await validateDraft()
+      if (settings.value && !loadError.value) {
+        await showInitialTab()
+        await validateDraft()
+      }
     }
   }
 }
@@ -330,6 +352,7 @@ async function flushChanges() {
     if (settings.value?.native_config !== source) throw new Error('配置已变化，请撤销未同步修改后重新编辑。')
     projectionSource = response.data.settings.native_config
     settings.value = response.data.settings
+    commonChanges = { ...commonChanges, ...changes }
     if (!pendingCount.value) {
       commonValues.value = response.data.values
       commonCapabilities.value = response.data.capabilities
@@ -356,6 +379,11 @@ async function discardPending() {
   ++commonKey.value
   await projectCommon()
 }
+function acceptFiles(files: unknown[]) {
+  if (!settings.value) return
+  otherEdits = true
+  settings.value.additional_files = files
+}
 function downloadLegacy() {
   if (typeof settings.value?.legacy_native_config !== 'string') return
   const url = URL.createObjectURL(new Blob([settings.value.legacy_native_config], { type: 'text/yaml;charset=utf-8' }))
@@ -375,8 +403,12 @@ async function save(close = true): Promise<PublishGuard | null> {
     // Draft storage does not require an online validator or a publishable
     // configuration. Publication performs rule and target-core checks again.
     const source = validationSource.value
-    const response = await oxidnsApi.saveSettings({ ...settings.value, config_mode: 'native' }, profileId)
+    const response = await oxidnsApi.saveSettings({ ...settings.value, config_mode: 'native' }, profileId, settingsEtag || undefined)
     if (version !== loadVersion) return null
+    // A later save (for example the publish after this draft) must match the new version.
+    settingsEtag = typeof response.headers?.etag === 'string' ? response.headers.etag : ''
+    commonChanges = {}
+    otherEdits = false
     savedSource.value = source
     if (close) notify.success('OxiDNS 草稿已保存，尚未发布')
     emit('saved')
@@ -384,6 +416,11 @@ async function save(close = true): Promise<PublishGuard | null> {
     return response.data.publish_guard || null
   } catch (error: any) {
     if (version !== loadVersion) return null
+    if (error.response?.data?.code === 'oxidns_changed_elsewhere') {
+      saveError.value = error.response.data.message || '保存失败：OxiDNS 设置已在其他页面修改。'
+      void resolveChangedElsewhere()
+      return null
+    }
     if (Array.isArray(error.response?.data?.issues)) {
       try {
         const result = readOxidnsValidationResult({ valid: false, issues: error.response.data.issues })
@@ -397,6 +434,40 @@ async function save(close = true): Promise<PublishGuard | null> {
     return null
   } finally { if (version === loadVersion) saving.value = false }
 }
+/**
+ * The stored settings changed elsewhere (409 oxidns_changed_elsewhere). Common-settings
+ * changes are replayed onto the reloaded version; YAML, full-parameter or file edits
+ * cannot be merged, so those only offer a reload that discards them.
+ */
+async function resolveChangedElsewhere() {
+  const version = loadVersion
+  const changes = { ...commonChanges }
+  const title = 'OxiDNS 设置已在其他页面修改'
+  if (!otherEdits) {
+    const choice = await choose('其他页面（例如策略规则的 DNS）已修改此草稿。本页只改过常用设置，可以重新加载最新配置并重新应用这些修改，检查后再保存。', {
+      title, confirmText: '重新加载并保留我的修改', altText: '重新加载（放弃本页未保存修改）'
+    })
+    if (choice === 'cancel' || version !== loadVersion || !props.open) return
+    await load()
+    if (choice !== 'confirm' || !Object.keys(changes).length || version + 1 !== loadVersion || !settings.value || loadError.value) return
+    queueChanges(changes)
+    notify.info('已载入最新配置并重新应用本页的常用设置修改，检查后再保存')
+    return
+  }
+  const accepted = await confirm('其他页面（例如策略规则的 DNS）已修改此草稿。本页改过 YAML、完整参数或附加文件，无法在最新配置上自动重做；重新加载会放弃本页未保存的修改。', {
+    title, confirmText: '重新加载（放弃本页未保存修改）'
+  })
+  if (accepted && version === loadVersion && props.open) await load()
+}
+async function showInitialTab() {
+  const initial = pendingInitialTab
+  pendingInitialTab = undefined
+  if (initial === 'files') tab.value = 'files'
+  else if (initial === 'config') {
+    await nextTick()
+    nativeEditor.value?.showFull('sequence_main')
+  }
+}
 watch(validationSource, () => { if (!loading.value && props.open) scheduleValidation() }, { flush: 'sync' })
 // Flush early only when an error is actually cleared; the first empty report is not a change.
 watch(() => editorErrors.common, (value, previous) => { if (!value && previous && pendingCount.value) { applyError.value = ''; void flushChanges() } })
@@ -405,6 +476,7 @@ watch(() => [nativeView.value, settings.value?.native_config], () => {
     && settings.value && settings.value.native_config !== projectionSource) void projectCommon()
 }, { flush: 'post' })
 watch(() => [props.open, props.profileId], () => {
+  pendingInitialTab = props.open ? props.initialTab : undefined
   if (props.open) void load()
   else { ++loadVersion; resetCommon(); invalidateValidation() }
 }, { immediate: true })

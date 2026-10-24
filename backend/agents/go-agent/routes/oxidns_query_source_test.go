@@ -2,6 +2,7 @@ package routes
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -221,5 +222,159 @@ func TestOxSourceIPv4PolicySurvivesWrappingCacheButNotLaterReplacement(t *testin
 	record.Steps = append(record.Steps, oxSourceStep{Sequence: "sequence_main", Kind: "executor", Tag: "forward_remote", Outcome: "entered"}, oxSourceStep{Sequence: "sequence_main", Kind: "executor", Tag: "forward_remote", Outcome: "next"})
 	if got := oxQuerySource(record); got != "remote" {
 		t.Fatalf("replacement response retained source %s", got)
+	}
+}
+
+// oxSourceTrace builds steps from "sequence node kind tag outcome" lines as
+// printed from OxiDNS 1.6.1 query_recorder records.
+func oxSourceTrace(t *testing.T, lines ...string) oxSourceRecord {
+	t.Helper()
+	record := oxSourceRecord{HasResponse: true}
+	for _, line := range lines {
+		var step oxSourceStep
+		var node int
+		if _, err := fmt.Sscan(line, &step.Sequence, &node, &step.Kind, &step.Tag, &step.Outcome); err != nil {
+			t.Fatalf("bad trace line %q: %v", line, err)
+		}
+		step.Node = &node
+		record.Steps = append(record.Steps, step)
+	}
+	return record
+}
+
+const (
+	oxTraceSelectorIn  = "sequence_main 2 executor qs.exec.sequence_main.2.prefer_ipv4 entered"
+	oxTraceSelectorOut = "sequence_main 2 executor qs.exec.sequence_main.2.prefer_ipv4 stop"
+)
+
+var oxTraceProbe = []string{
+	"sequence_main 13 matcher qs.match.sequence_main.13.0.qname not_matched",
+	"local_probe 0 executor local_probe_cache entered",
+	"local_probe 1 matcher qs.match.local_probe.1.0.has_resp matched",
+	"local_probe 1 executor forward_local entered",
+	"local_probe 1 executor forward_local next",
+	"local_probe 2 builtin return return",
+	"local_probe 0 executor local_probe_cache return",
+	"sequence_main 14 builtin jump return",
+	"sequence_main 15 matcher qs.match.sequence_main.15.0.resp_ip not_matched",
+}
+
+func oxTraceLines(parts ...[]string) []string {
+	result := []string{}
+	for _, part := range parts {
+		result = append(result, part...)
+	}
+	return result
+}
+
+func TestQuerySourceRuleBlackhole(t *testing.T) {
+	domain := oxSourceTrace(t,
+		oxTraceSelectorIn,
+		"sequence_main 10 matcher qs.match.sequence_main.10.0.qname matched",
+		"sequence_main 10 executor cf_dns_blackhole entered",
+		"sequence_main 10 executor cf_dns_blackhole stop",
+		oxTraceSelectorOut,
+	)
+	if got := oxQuerySource(domain); got != "blocked" {
+		t.Fatalf("domain rule blackhole got %s", got)
+	}
+	ip := oxSourceTrace(t, oxTraceLines([]string{oxTraceSelectorIn}, oxTraceProbe, []string{
+		"sequence_main 18 matcher qs.match.sequence_main.18.0.resp_ip matched",
+		"sequence_main 18 executor cf_dns_blackhole entered",
+		"sequence_main 18 executor cf_dns_blackhole stop",
+		oxTraceSelectorOut,
+	})...)
+	if got := oxQuerySource(ip); got != "blocked" {
+		t.Fatalf("IP rule blackhole after the local probe got %s", got)
+	}
+	failed := oxSourceTrace(t,
+		"sequence_main 10 executor cf_dns_blackhole entered",
+		"sequence_main 10 executor cf_dns_blackhole error",
+	)
+	if got := oxQuerySource(failed); got != "unknown" {
+		t.Fatalf("failed blackhole got %s", got)
+	}
+}
+
+func TestQuerySourcePinnedUpstream(t *testing.T) {
+	head := []string{oxTraceSelectorIn, "sequence_main 11 matcher qs.match.sequence_main.11.0.qname matched",
+		"cf_dns_up_8c1812f0bae3 0 executor qs.exec.cf_dns_up_8c1812f0bae3.0.drop_resp entered",
+		"cf_dns_up_8c1812f0bae3 0 executor qs.exec.cf_dns_up_8c1812f0bae3.0.drop_resp next",
+		"cf_dns_up_8c1812f0bae3 1 executor cf_dns_cache_8c1812f0bae3 entered"}
+	forward := []string{"cf_dns_up_8c1812f0bae3 2 executor cf_dns_fwd_8c1812f0bae3 entered",
+		"cf_dns_up_8c1812f0bae3 2 executor cf_dns_fwd_8c1812f0bae3 next"}
+	tail := []string{"cf_dns_up_8c1812f0bae3 1 executor cf_dns_cache_8c1812f0bae3 stop",
+		"sequence_main 11 builtin goto stop", oxTraceSelectorOut}
+	cases := []struct {
+		name, want string
+		lines      []string
+	}{
+		{"cache_miss", "pinned", oxTraceLines(head, forward, []string{
+			"cf_dns_up_8c1812f0bae3 3 matcher qs.match.cf_dns_up_8c1812f0bae3.3.0.has_resp not_matched",
+			"cf_dns_up_8c1812f0bae3 4 builtin accept stop"}, tail)},
+		{"own_cache_hit", "pinned", oxTraceLines(head, tail)},
+		{"remote_ttl", "pinned", oxTraceLines(head, forward, []string{
+			"cf_dns_up_8c1812f0bae3 3 matcher qs.match.cf_dns_up_8c1812f0bae3.3.0.has_resp not_matched",
+			"cf_dns_up_8c1812f0bae3 4 executor qs.exec.cf_dns_up_8c1812f0bae3.4.ttl entered",
+			"cf_dns_up_8c1812f0bae3 4 executor qs.exec.cf_dns_up_8c1812f0bae3.4.ttl next",
+			"cf_dns_up_8c1812f0bae3 5 builtin accept stop"}, tail)},
+		{"without_cache", "pinned", oxTraceLines(head[:4], forward, []string{"sequence_main 11 builtin goto stop", oxTraceSelectorOut})},
+		// The miss's completion wraps the no-answer reject; it must not hide it.
+		{"no_answer_rejected", "rejected", oxTraceLines(head, forward, []string{
+			"cf_dns_up_8c1812f0bae3 3 matcher qs.match.cf_dns_up_8c1812f0bae3.3.0.has_resp matched",
+			"cf_dns_up_8c1812f0bae3 3 builtin reject stop"}, tail)},
+		{"forward_failed", "unknown", oxTraceLines(head, []string{
+			"cf_dns_up_8c1812f0bae3 2 executor cf_dns_fwd_8c1812f0bae3 entered",
+			"cf_dns_up_8c1812f0bae3 2 executor cf_dns_fwd_8c1812f0bae3 error",
+			"cf_dns_up_8c1812f0bae3 1 executor cf_dns_cache_8c1812f0bae3 error"})},
+		{"chain_as_executor", "pinned", []string{
+			"sequence_main 11 executor cf_dns_up_8c1812f0bae3 entered",
+			"sequence_main 11 executor cf_dns_up_8c1812f0bae3 stop"}},
+		{"similar_tag", "unknown", []string{
+			"sequence_main 11 executor cf_dns_upstream entered",
+			"sequence_main 11 executor cf_dns_upstream next"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := oxQuerySource(oxSourceTrace(t, tc.lines...)); got != tc.want {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// IP rules run after the local probe already answered; the last completed
+// step owns the answer, so neither probe nor pinned cache wrapper decides.
+func TestQuerySourceIPRuleAfterProbeUsesLastStep(t *testing.T) {
+	probe := oxTraceLines([]string{oxTraceSelectorIn}, oxTraceProbe)
+	if got := oxQuerySource(oxSourceTrace(t, oxTraceLines(probe, []string{
+		"sequence_main 16 matcher qs.match.sequence_main.16.0.resp_ip not_matched",
+		"sequence_main 17 matcher qs.match.sequence_main.17.0.resp_ip matched",
+		"sequence_main 17 builtin reject stop", oxTraceSelectorOut})...)); got != "rejected" {
+		t.Fatalf("IP rule reject got %s", got)
+	}
+	pinned := oxTraceLines(probe, []string{
+		"sequence_main 19 matcher qs.match.sequence_main.19.0.resp_ip matched",
+		"cf_dns_up_8c1812f0bae3 0 executor qs.exec.cf_dns_up_8c1812f0bae3.0.drop_resp entered",
+		"cf_dns_up_8c1812f0bae3 0 executor qs.exec.cf_dns_up_8c1812f0bae3.0.drop_resp next",
+		"cf_dns_up_8c1812f0bae3 1 executor cf_dns_cache_8c1812f0bae3 entered",
+	})
+	miss := oxTraceLines(pinned, []string{
+		"cf_dns_up_8c1812f0bae3 2 executor cf_dns_fwd_8c1812f0bae3 entered",
+		"cf_dns_up_8c1812f0bae3 2 executor cf_dns_fwd_8c1812f0bae3 next",
+		"cf_dns_up_8c1812f0bae3 3 matcher qs.match.cf_dns_up_8c1812f0bae3.3.0.has_resp not_matched",
+		"cf_dns_up_8c1812f0bae3 4 builtin accept stop",
+		"cf_dns_up_8c1812f0bae3 1 executor cf_dns_cache_8c1812f0bae3 stop",
+		"sequence_main 19 builtin goto stop", oxTraceSelectorOut,
+	})
+	if got := oxQuerySource(oxSourceTrace(t, miss...)); got != "pinned" {
+		t.Fatalf("IP rule pinned upstream got %s", got)
+	}
+	hit := oxTraceLines(pinned, []string{
+		"cf_dns_up_8c1812f0bae3 1 executor cf_dns_cache_8c1812f0bae3 stop",
+		"sequence_main 19 builtin goto stop", oxTraceSelectorOut,
+	})
+	if got := oxQuerySource(oxSourceTrace(t, hit...)); got != "pinned" {
+		t.Fatalf("IP rule pinned cache hit got %s", got)
 	}
 }

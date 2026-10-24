@@ -3,6 +3,11 @@
 The native providers and sequence are the source of truth. Historical template
 inputs are only retained as resource sources; they never supply displayed values.
 Unrecognized routing is left for the complete editor instead of being regenerated.
+
+Per-rule DNS actions (rejections, blackhole, pinned upstreams) are rule groups
+too, but only on generated providers that nothing else uses; their owned helper
+plugins are created and removed with the groups and never overwritten when edited
+by hand.
 """
 from copy import deepcopy
 from fnmatch import fnmatchcase
@@ -12,15 +17,23 @@ import re
 from backend.common.oxidns_settings import BLOCK_QTYPES_EXECS, OxidnsSettingsError
 from backend.common.dns_watchdog import WATCHDOG_RULE
 from backend.common.oxidns_native import resource_references, relative_resource
+from backend.common.rule_dns import (
+    BLACKHOLE_TAG, GROUP_TAG_RE, LIST_ROUTES, REAL_WRAPPERS, ROUTE_LABELS, UPSTREAM_PREFIX, Invalid,
+    chain_features, follow_route, helper_plugins, normalize_action, parse_exec, pinned_action, route_exec, route_key,
+)
 from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag, unavailable_rulesets
 from backend.converters.mosdns import _build_rule_proxy_url
 
 SELECTORS = ('direct_rules', 'proxy_rules', 'direct_rulesets', 'proxy_rulesets')
-ROUTING_FIELDS = frozenset((*SELECTORS, 'aggregate_rules', 'default_forward',
+RULE_DNS_FIELDS = ('rule_actions', 'rule_dns_follow')
+ROUTING_FIELDS = frozenset((*SELECTORS, *RULE_DNS_FIELDS, 'aggregate_rules', 'default_forward',
                            'custom_matches', 'custom_match_position'))
 _TARGETS = {'domain': {'goto china_dns': 'direct', 'goto proxy_dns_seq': 'proxy'},
             'ip': {'goto direct_ip': 'direct', 'goto ip_requery_proxy': 'proxy'}}
 _REASON = '当前分流执行链包含自定义结构，请在完整参数中编辑。'
+_MISSING_RULE = '所选规则不在当前空间的可用规则库中，请刷新后重试。'
+_HELPER_TAG = re.compile(rf'{BLACKHOLE_TAG}|cf_dns_(?:up|fwd|cache)_([0-9a-f]{{12}})')
+_HELPER_EXEC = re.compile(r'(?:\$|goto |jump )cf_dns_')
 
 
 def _cap(editable=True, reason='', target='sequence_main'):
@@ -122,9 +135,78 @@ def _describe(group):
     return {'route': group['route'], 'args': group['args']}
 
 
+def _suffix(item):
+    return 'rulesets' if item.get('itemType') == 'ruleset' else 'rules'
+
+
+def _known(config):
+    """Every rule of the space by id, disabled ones included, so their DNS
+    choices are parked instead of lost."""
+    result = {}
+    for item in config.get('rule_configs') or _items(config):
+        if isinstance(item, dict) and isinstance(item.get('id'), str):
+            result.setdefault(item['id'], item)
+    return result
+
+
+def _stored_follow(settings, config):
+    follow = settings.get('rule_dns_follow')
+    known = _known(config)
+    return [identity for identity in dict.fromkeys(follow) if isinstance(identity, str) and identity in known] \
+        if isinstance(follow, list) else []
+
+
+def _route_of(values, identity):
+    action = values['rule_actions'].get(identity)
+    if action is not None:
+        return route_key(action)
+    return next((route for route in LIST_ROUTES
+                 if identity in values[f'{route}_rules'] or identity in values[f'{route}_rulesets']), None)
+
+
+def _owned_group(document, plugins, args, entry, tag):
+    """A generated provider that only this one sequence_main entry uses."""
+    if not GROUP_TAG_RE.fullmatch(tag) or set(entry) != {'matches', 'exec'}:
+        return False
+    if sum(1 for item in args if _references(item, tag)) != 1 or \
+            _references({key: value for key, value in document.items() if key != 'plugins'}, tag):
+        return False
+    return not any(_references(plugin, tag) for name, plugin in plugins.items()
+                   if name not in ('sequence_main', 'rules_reload', tag))
+
+
+def _unique_atoms(part, provider, atoms):
+    """Every provider value belongs to exactly one catalog rule."""
+    args = provider.get('args')
+    if not isinstance(args, dict) or not args or set(args) - {'files', 'exps' if part == 'domain' else 'ips'}:
+        return False
+    return all(isinstance(values, list) and values and
+               all(len(atoms.get(_atom(part, key, value), ())) == 1 for value in values)
+               for key, values in args.items())
+
+
 def _analyze(document, settings, config):
+    """Recognized routing state.
+
+    Upgrading never locks a document that was editable before rule DNS actions
+    existed: when claiming action entries breaks recognition and no helper is in
+    use, those entries are read as custom matches, exactly as before.
+    """
+    state = _recognize(document, settings, config, claim=True)
+    args = state.get('main', {}).get('args', [])
+    if state.get('claimed') and not any(_HELPER_EXEC.match(entry['exec']) for entry in args):
+        legacy = _recognize(document, settings, config, claim=False)
+        caps = state['capabilities']
+        if not caps['direct_rules']['editable'] or (
+                not caps['custom_matches']['editable'] and legacy['capabilities']['custom_matches']['editable']):
+            return legacy
+    return state
+
+
+def _recognize(document, settings, config, claim):
     values = {key: [] for key in SELECTORS}
-    values.update(aggregate_rules=None, default_forward=None, custom_matches=[], custom_match_position=None)
+    values.update(aggregate_rules=None, default_forward=None, custom_matches=[], custom_match_position=None,
+                  rule_actions={}, rule_dns_follow=_stored_follow(settings, config))
     caps = {key: _cap(False, _REASON) for key in ROUTING_FIELDS}
     state = {'values': values, 'capabilities': caps}
     plugins = _plugins(document)
@@ -144,6 +226,7 @@ def _analyze(document, settings, config):
     dynamic = []
     middle_end = len(args) - 1
     recognized = True
+    invalid, claimed = None, False
     for index, entry in enumerate(args[:-1]):
         match = _single_match(entry)
         if match == 'qname $dynamic_domains' and entry['exec'] in _TARGETS['domain']:
@@ -154,10 +237,23 @@ def _analyze(document, settings, config):
         if parsed:
             part = 'domain' if parsed[1] == 'qname' else 'ip'
             provider = plugins.get(parsed[2], {})
-            route = _TARGETS[part].get(entry['exec'])
-            if route and provider.get('type') == ('domain_set' if part == 'domain' else 'ip_set'):
+            route = None
+            if provider.get('type') == ('domain_set' if part == 'domain' else 'ip_set'):
+                route = parse_exec(entry['exec'], part, plugins)
+            if route is not None and route not in LIST_ROUTES:
+                # A user's own match (or one reusing a generated provider) stays a custom match.
+                if claim and _owned_group(document, plugins, args, entry, parsed[2]) and \
+                        (isinstance(route, Invalid) or _unique_atoms(part, provider, atoms)):
+                    claimed = True
+                else:
+                    route = None
+            if route is not None:
                 group = {'index': index, 'tag': parsed[2], 'route': route,
                          'args': provider.get('args'), 'entry': entry, 'provider': provider}
+                if isinstance(route, Invalid):
+                    invalid = invalid or route.reason
+                elif route.startswith('upstream:'):
+                    group['action'] = pinned_action(entry['exec'][len('goto ' + UPSTREAM_PREFIX):], plugins)
                 groups[part].append(group)
                 if part == 'ip':
                     middle_end = min(middle_end, index)
@@ -205,9 +301,18 @@ def _analyze(document, settings, config):
             '当前没有域名分流规则，前后位置效果相同。' if not domain_indices else '')
     else:
         recognized = False
-    assigned, orphans = {}, []
+    if invalid:
+        # Rebuilding the chain for a custom match edit would silently drop the
+        # entry whose helper was edited by hand, so custom matches lock too.
+        recognized = False
+        caps['custom_matches'] = caps['custom_match_position'] = _cap(False, invalid)
+    assigned, orphans, actions = {}, [], {}
     for part, entries in groups.items():
         for group in entries:
+            if isinstance(group['route'], Invalid):
+                continue
+            if group['route'] not in LIST_ROUTES:
+                actions[group['route']] = group.get('action') or {'action': group['route']}
             args_value = group['args']
             allowed = {'files', 'exps' if part == 'domain' else 'ips'}
             if not isinstance(args_value, dict) or not args_value or set(args_value) - allowed or \
@@ -236,11 +341,17 @@ def _analyze(document, settings, config):
         if set(parts) != record['parts'] or len(routes) != 1:
             recognized = False
             continue
-        values[next(iter(routes)) + '_' + record['suffix']].append(identity)
+        route = next(iter(routes))
+        if route in LIST_ROUTES:
+            values[route + '_' + record['suffix']].append(identity)
+        else:
+            values['rule_actions'][identity] = deepcopy(actions[route])
     # Reconstruct profile order instead of deriving it from stale selection metadata.
     for key in SELECTORS:
         selected = set(values[key])
         values[key] = [identity for identity in records if identity in selected]
+    values['rule_actions'] = {identity: values['rule_actions'][identity]
+                              for identity in records if identity in values['rule_actions']}
     matches = []
     if recognized:
         for aggregate in (True, False):
@@ -251,22 +362,22 @@ def _analyze(document, settings, config):
         recognized = bool(matches)
     if recognized:
         values['aggregate_rules'] = matches[0] if len(matches) == 1 else None
-        for key in SELECTORS:
+        for key in (*SELECTORS, *RULE_DNS_FIELDS):
             caps[key] = _cap()
         caps['aggregate_rules'] = _cap(len(matches) == 1,
             '当前没有相邻且同策略的规则，无需合并。' if len(matches) == 2 else '')
     else:
-        reason = '规则资源或顺序无法唯一对应当前规则库，请在完整参数中编辑。'
-        hints = unavailable_rulesets(config, [value for key, value in orphans if key == 'files'])
+        reason = invalid or '规则资源或顺序无法唯一对应当前规则库，请在完整参数中编辑。'
+        hints = [] if invalid else unavailable_rulesets(config, [value for key, value in orphans if key == 'files'])
         if hints:
             reason = '分流里有不可用的规则集，暂时不能在这里编辑。' + '；'.join(hints) + '。'
-        elif orphans:
+        elif orphans and not invalid:
             reason = f'分流里有规则库中不存在的单条规则（{orphans[0][1]}），请在完整参数中删除后再编辑。'
-        for key in (*SELECTORS, 'aggregate_rules'):
+        for key in (*SELECTORS, *RULE_DNS_FIELDS, 'aggregate_rules'):
             caps[key] = _cap(False, reason)
     state.update(plugins=plugins, main=main, groups=groups, prefix=args[:prefix_end],
                  dynamic=[entry for _, entry in dynamic], custom=custom, final=final,
-                 records=records)
+                 records=records, claimed=claimed)
     return state
 
 
@@ -299,14 +410,19 @@ def remove_rule(settings, config, identity, base_url=''):
     from backend.common.oxidns_native import load_native_yaml
     document = load_native_yaml(settings['native_config'])
     state = _analyze(document, settings, config)
-    keys = [key for key in SELECTORS if identity in state['values'][key]]
+    values = state['values']
+    # A rule is routed by a selector list or by its own DNS action.
+    changes = {key: [value for value in values[key] if value != identity]
+               for key in SELECTORS if identity in values[key]}
+    if identity in values['rule_actions']:
+        changes['rule_actions'] = {key: value for key, value in values['rule_actions'].items() if key != identity}
     result = None
-    if keys and all(state['capabilities'][key]['editable'] for key in keys):
-        changes = {key: [value for value in state['values'][key] if value != identity] for key in keys}
+    if changes and all(state['capabilities'][key]['editable'] for key in changes):
         # Same path as unchecking it in the editor, which also reconciles rule
-        # updates (an emptied downloader is parked rather than left invalid).
+        # updates (an emptied downloader is parked rather than left invalid)
+        # and drops helpers no other rule uses.
         result = apply_common_settings(settings, changes, config, base_url)['settings']
-    elif not keys and not _uses_rule(document, config, identity):
+    elif not changes and not _uses_rule(document, config, identity):
         return None
     # Hand-written providers outside the recognized routing are never rewritten.
     if result is None or _uses_rule(load_native_yaml(result['native_config']), config, identity):
@@ -449,7 +565,91 @@ def replace_download_entries(download, entries):
     download['args'] = deepcopy({**download['args'], 'downloads': entries})
 
 
-def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
+def _own_helpers(document, routes, actions, entries=()):
+    """Create, keep, refresh or remove the owned helper plugins in place.
+
+    Helpers needed by routes are created before sequence_main, or replaced when
+    an owned pinned chain only differs by features. A same-named plugin that is
+    not a recognized helper is never overwritten. A helper nothing else uses any
+    more is removed; one a custom match or another plugin still uses is kept.
+    entries are the rule group entries just written, which are not "elsewhere".
+    """
+    plugins = document['plugins']
+    by_tag = _plugins(document)
+    desired = helper_plugins(routes, actions, chain_features(by_tag))
+    wanted = {plugin['tag']: plugin for plugin in desired}
+    owned = {id(entry) for entry in entries}
+    outside = [{**plugin, 'args': [item for item in plugin['args'] if id(item) not in owned]}
+               if plugin.get('tag') == 'sequence_main' and isinstance(plugin.get('args'), list) else plugin
+               for plugin in plugins if not _HELPER_TAG.fullmatch(str(plugin.get('tag')))]
+    top = {key: value for key, value in document.items() if key != 'plugins'}
+
+    def external(tag):
+        return _references(top, tag) or any(_references(plugin, tag) for plugin in outside)
+
+    def replaceable(tag):
+        key = _HELPER_TAG.fullmatch(tag)[1]
+        action = pinned_action(key, by_tag) if key else None
+        if action is None:
+            return False
+        trio = [prefix + key for prefix in ('cf_dns_up_', 'cf_dns_fwd_', 'cf_dns_cache_')]
+        # Another address under this tag (edited by hand) is replaced only if unused elsewhere.
+        return route_key(action) == 'upstream:' + key or not any(external(item) for item in trio)
+
+    for tag, plugin in wanted.items():
+        existing = by_tag.get(tag)
+        if existing is not None and not _same(existing, plugin) and not replaceable(tag):
+            raise OxidnsSettingsError(f'已有同名插件 {tag}，无法创建 DNS 处理所需插件，请先在完整参数中改名')
+    kept = set(wanted) | {tag for tag in by_tag if _HELPER_TAG.fullmatch(tag) and external(tag)}
+    # A kept chain keeps the forward and cache it calls.
+    pending = list(kept)
+    while pending:
+        tag = pending.pop()
+        source = wanted.get(tag, by_tag.get(tag))
+        for other in by_tag:
+            if other not in kept and _HELPER_TAG.fullmatch(other) and _references(source, other):
+                kept.add(other)
+                pending.append(other)
+    result = []
+    for plugin in plugins:
+        tag = plugin.get('tag')
+        if tag in wanted:
+            result.append(deepcopy(wanted[tag]))
+        elif not _HELPER_TAG.fullmatch(str(tag)) or tag in kept:
+            result.append(plugin)
+    for plugin in desired:
+        if plugin['tag'] in by_tag:
+            continue
+        # Before the first helper that uses it, else before the main sequence.
+        index = next((i for i, item in enumerate(result) if item.get('tag') in wanted and
+                      item.get('tag') != plugin['tag'] and _references(wanted[item['tag']], plugin['tag'])),
+                     next((i for i, item in enumerate(result) if item.get('tag') == 'sequence_main'), len(result)))
+        result.insert(index, deepcopy(plugin))
+    plugins[:] = result
+
+
+def owned_chains(document):
+    """{chain tag: action} of the pinned upstream chains whose tag still names
+    their content; refresh_rule_helpers keeps exactly these in sync."""
+    plugins = _plugins(document)
+    result = {}
+    for tag in plugins:
+        key = tag[len(UPSTREAM_PREFIX):] if tag.startswith(UPSTREAM_PREFIX) else None
+        action = pinned_action(key, plugins) if key else None
+        if action is not None and route_key(action) == 'upstream:' + key:
+            result[tag] = action
+    return result
+
+
+def refresh_rule_helpers(document):
+    """Rebuild owned pinned upstream chains for the YAML's current IP selection,
+    RouterOS, cache and TTL features. Chains edited by hand are left alone."""
+    actions = owned_chains(document)
+    if actions:
+        _own_helpers(document, [route_key(action) for action in actions.values()], actions)
+
+
+def _sync_updates(document, settings, config, old_groups, new_groups, base_url, before_config=None):
     plugins = _plugins(document)
     download = plugins.get('rules_download')
     reload = plugins.get('rules_reload')
@@ -469,9 +669,12 @@ def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
     # Old providers retained for another caller also remain reloadable.
     if reload is not None:
         reload['args'] = reload_references(reload['args'], old_tags, new_tags, plugins)
-    records = _catalog(config)[0]
+    # Downloads of rulesets that left the catalog (deleted or disabled) are owned too.
+    records = list(_catalog(config)[0].values())
+    if before_config is not None:
+        records.extend(_catalog(before_config)[0].values())
     known_paths = {_rule_path(record['item'], part).removeprefix('./')
-                   for record in records.values() if record['suffix'] == 'rulesets'
+                   for record in records if record['suffix'] == 'rulesets'
                    for part in record['parts']}
     desired = resource_downloads(document, settings, config, base_url)
     def path(entry):
@@ -499,20 +702,156 @@ def _sync_updates(document, settings, config, old_groups, new_groups, base_url):
     replace_download_entries(download, output)
 
 
-def apply_routing(document, settings, config, changes, base_url=''):
-    """Apply one atomic routing edit to copies; never persist or regenerate all YAML."""
+def _name(item):
+    return item.get('name') or item.get('value') or item.get('id')
+
+
+def _route_label(route):
+    return ROUTE_LABELS[route.split(':', 1)[0]]
+
+
+def _assign(values, item, action):
+    """Route one active rule by a stored choice; direct/proxy live in the lists."""
+    action = normalize_action(action, parked=True)
+    if action['action'] in LIST_ROUTES:
+        values[f'{action["action"]}_{_suffix(item)}'].append(item['id'])
+    else:
+        values['rule_actions'][item['id']] = action
+
+
+def _validate_selections(values, changes, known):
+    """Shape and existence of changed selections. Ids still in the space but not
+    active are accepted (and parked); ids that no longer exist are refused."""
+    for key in SELECTORS:
+        if not isinstance(values[key], list) or any(not isinstance(value, str) for value in values[key]):
+            raise OxidnsSettingsError(f'{key} 必须为规则 ID 列表')
+        values[key] = list(dict.fromkeys(values[key]))
+        suffix = 'rulesets' if key.endswith('rulesets') else 'rules'
+        if key in changes and any(identity not in known or _suffix(known[identity]) != suffix
+                                  for identity in values[key]):
+            raise OxidnsSettingsError(_MISSING_RULE)
+    if 'rule_actions' in changes:
+        actions = values['rule_actions']
+        if not isinstance(actions, dict) or any(not isinstance(identity, str) for identity in actions):
+            raise OxidnsSettingsError('rule_actions 必须为以规则 ID 为键的对象')
+        if any(identity not in known for identity in actions):
+            raise OxidnsSettingsError(_MISSING_RULE)
+        values['rule_actions'] = {identity: normalize_action(action)
+                                  for identity, action in actions.items() if action is not None}
+    if 'rule_dns_follow' in changes:
+        follow = values['rule_dns_follow']
+        if not isinstance(follow, list) or any(not isinstance(identity, str) for identity in follow):
+            raise OxidnsSettingsError('rule_dns_follow 必须为规则 ID 数组')
+        if any(identity not in known for identity in follow):
+            raise OxidnsSettingsError(_MISSING_RULE)
+        values['rule_dns_follow'] = list(dict.fromkeys(follow))
+    for suffix in ('rules', 'rulesets'):
+        if set(values['direct_' + suffix]) & set(values['proxy_' + suffix]):
+            raise OxidnsSettingsError('同一规则不能同时选择直连和代理。')
+
+
+def _take_over(values, current, changes, known, notices):
+    """A changed key wins over the other kind of choice it newly takes a rule
+    from: a selector list over rule_actions, and rule_actions over a list."""
+    old, taken = current['values'], []
+    if 'rule_actions' in changes:
+        for identity, action in values['rule_actions'].items():
+            if identity in old['rule_actions']:
+                continue
+            for key in SELECTORS:
+                if identity in values[key]:
+                    if key in changes:
+                        raise OxidnsSettingsError('同一规则不能同时选择多种 DNS 处理。')
+                    values[key].remove(identity)
+                    taken.append((identity, key.split('_')[0], route_key(action)))
+    for key in SELECTORS:
+        for identity in values[key] if key in changes else ():
+            if identity in old[key] or identity not in values['rule_actions']:
+                continue
+            if 'rule_actions' in changes:
+                raise OxidnsSettingsError('同一规则不能同时选择多种 DNS 处理。')
+            taken.append((identity, route_key(values['rule_actions'].pop(identity)), key.split('_')[0]))
+    if notices is not None:
+        notices.extend(f'规则「{_name(known[identity])}」的 DNS 处理已从「{_route_label(before)}」改为「{_route_label(after)}」'
+                       for identity, before, after in taken)
+
+
+def _settle(values, settings, changes, current, known, active):
+    """Keep only active rules in the selections; return (parked, follow).
+
+    Choices of rules that left the active catalog are parked, parked choices of
+    rules that rejoined are restored, and follow rules that rejoined get their
+    policy's route. Follow rules are never parked: the policy decides again.
+    """
+    follow_given = 'rule_dns_follow' in changes
+    follow = [identity for identity in values['rule_dns_follow'] if identity in known]
+    stored = settings.get('rule_dns_parked')
+    parked = {identity: deepcopy(action) for identity, action in stored.items() if identity in known} \
+        if isinstance(stored, dict) else {}
+    assigned = {identity for key in SELECTORS if key in changes for identity in values[key]}
+    if 'rule_actions' in changes:
+        assigned.update(values['rule_actions'])
+    leaving = {}
+    for key in SELECTORS:
+        leaving.update((identity, {'action': key.split('_')[0]}) for identity in values[key] if identity not in active)
+        values[key] = [identity for identity in values[key] if identity in active]
+    leaving.update((identity, action) for identity, action in values['rule_actions'].items() if identity not in active)
+    values['rule_actions'] = {identity: action for identity, action in values['rule_actions'].items() if identity in active}
+    for identity, action in leaving.items():
+        if identity in known and (identity not in follow or identity in assigned):
+            parked[identity] = action
+            if identity in follow and not follow_given:
+                follow.remove(identity)
+    before = current['records']
+    for identity, record in active.items():
+        if _route_of(values, identity) is not None:
+            parked.pop(identity, None)
+        elif identity in parked:
+            _assign(values, record['item'], parked.pop(identity))
+        elif identity in follow and identity not in before:
+            route = follow_route(record['item'])
+            if route is not None:
+                _assign(values, record['item'], {'action': route})
+    if not follow_given:
+        # Follow intent ends for a rule active before and after whose actual
+        # route this write changed, and for a rule with an explicit action.
+        follow = [identity for identity in follow if identity not in values['rule_actions'] and not (
+            identity in before and identity in active and
+            _route_of(current['values'], identity) != _route_of(values, identity))]
+    for identity in follow:
+        if identity in values['rule_actions']:
+            label = ROUTE_LABELS[values['rule_actions'][identity]['action']]
+            raise OxidnsSettingsError(f'规则 {identity} 已设置 DNS 处理「{label}」，不能同时跟随策略')
+        if identity in parked:
+            raise OxidnsSettingsError(f'规则 {identity} 已暂存停用前的 DNS 处理，不能同时跟随策略')
+    return parked, follow
+
+
+def apply_routing(document, settings, config, changes, base_url='', *, before_config=None, notices=None):
+    """Apply one atomic routing edit to copies; never persist or regenerate all YAML.
+
+    before_config is the rule space the document was written for. Passing it
+    rebuilds the owned routing for config even without changes, so reordering,
+    disabling, enabling or editing rules never strands the routing; a document
+    that cannot be rebuilt raises its lock reason and callers decide whether
+    that is fatal. notices, when a list, receives a line for each rule a changed
+    key took from another kind of DNS choice.
+    """
     changes = {key: value for key, value in changes.items() if key in ROUTING_FIELDS}
-    if not changes:
+    rebuild = before_config is not None
+    if not changes and not rebuild:
         return deepcopy(document), deepcopy(settings)
-    current = _analyze(document, settings, config)
+    current = _analyze(document, settings, before_config if rebuild else config)
     for key in changes:
         cap = current['capabilities'][key]
         if not cap['editable']:
             raise OxidnsSettingsError(cap['reason'])
+    if rebuild and not current['capabilities']['direct_rules']['editable']:
+        raise OxidnsSettingsError(current['capabilities']['direct_rules']['reason'])
     values = {**deepcopy(current['values']), **deepcopy(changes)}
     if values['default_forward'] not in ('forward_local', 'forward_remote'):
         raise OxidnsSettingsError('默认转发目标无效。')
-    if changes.keys() <= {'default_forward'}:
+    if not rebuild and changes.keys() <= {'default_forward'}:
         result = deepcopy(document)
         args = _plugins(result)['sequence_main']['args']
         direct = values['default_forward'] == 'forward_local'
@@ -523,16 +862,11 @@ def apply_routing(document, settings, config, changes, base_url=''):
         if current['groups']['ip']:
             args[-2] = {'matches': ['has_resp'], 'exec': 'goto default_direct_ip'} if direct else {'exec': 'drop_resp'}
         return result, deepcopy(settings)
-    for key in SELECTORS:
-        if not isinstance(values[key], list) or any(not isinstance(value, str) for value in values[key]):
-            raise OxidnsSettingsError(f'{key} 必须为规则 ID 列表')
-        values[key] = list(dict.fromkeys(values[key]))
-        suffix = 'rulesets' if key.endswith('rulesets') else 'rules'
-        if any(identity not in current['records'] or current['records'][identity]['suffix'] != suffix for identity in values[key]):
-            raise OxidnsSettingsError('所选规则不在当前空间的可用规则库中，请刷新后重试。')
-    for suffix in ('rules', 'rulesets'):
-        if set(values['direct_' + suffix]) & set(values['proxy_' + suffix]):
-            raise OxidnsSettingsError('同一规则不能同时选择直连和代理。')
+    known = _known(config)
+    active = _catalog(config)[0] if rebuild else current['records']
+    _validate_selections(values, changes, known)
+    _take_over(values, current, changes, known, notices)
+    parked, follow = _settle(values, settings, changes, current, known, active)
     if 'aggregate_rules' in changes and type(values['aggregate_rules']) is not bool:
         raise OxidnsSettingsError('合并相邻规则必须为布尔值。')
     if 'custom_match_position' in changes and values['custom_match_position'] not in ('head', 'tail'):
@@ -554,7 +888,7 @@ def apply_routing(document, settings, config, changes, base_url=''):
         values['custom_matches'] = normalized
     result, result_settings = deepcopy(document), deepcopy(settings)
     main = _plugins(result)['sequence_main']
-    routing_changed = any(key in changes for key in (*SELECTORS, 'aggregate_rules'))
+    routing_changed = rebuild or any(key in changes for key in (*SELECTORS, 'aggregate_rules', 'rule_actions'))
     if routing_changed:
         # There is no actual aggregate setting until adjacent same-route rules
         # exist. New rule selections use the existing grouped representation, or
@@ -577,17 +911,22 @@ def apply_routing(document, settings, config, changes, base_url=''):
             for identity in values[key]:
                 if identity not in result_settings[key]:
                     result_settings[key].append(identity)
+        # Unlike the retained list catalog, actions map exactly the active rules.
+        result_settings['rule_actions'] = deepcopy(values['rule_actions'])
+        result_settings['rule_dns_parked'] = parked
     else:
         groups = current['groups']
+    if routing_changed or 'rule_dns_follow' in changes:
+        result_settings['rule_dns_follow'] = follow
     # Build only the identified sequence regions, retaining all surrounding nodes.
     prefix = deepcopy(current['prefix'])
     custom = deepcopy(values['custom_matches'])
     position = values['custom_match_position'] or 'tail'
     domain = [deepcopy(group['entry']) if not routing_changed else
-              {'matches': [f'qname ${group["tag"]}'], 'exec': 'goto china_dns' if group['route'] == 'direct' else 'goto proxy_dns_seq'}
+              {'matches': [f'qname ${group["tag"]}'], 'exec': route_exec(group['route'], 'domain')}
               for group in groups['domain']]
     ip = [deepcopy(group['entry']) if not routing_changed else
-          {'matches': [f'resp_ip ${group["tag"]}'], 'exec': 'goto direct_ip' if group['route'] == 'direct' else 'goto ip_requery_proxy'}
+          {'matches': [f'resp_ip ${group["tag"]}'], 'exec': route_exec(group['route'], 'ip')}
           for group in groups['ip']]
     final = deepcopy(current['final'])
     final['exec'] = 'goto china_dns' if values['default_forward'] == 'forward_local' else 'goto proxy_dns_seq'
@@ -607,12 +946,16 @@ def apply_routing(document, settings, config, changes, base_url=''):
                 affected.append({'exec': 'goto default_direct_ip'})
     available = _plugins(result)
     for entry in affected:
-        action = entry['exec']
-        target = action.split(' ', 1)[1]
+        verb, _, target = entry['exec'].partition(' ')
+        # Rejections need no target; owned helpers are created below.
+        if verb not in ('goto', 'jump') or target.startswith(UPSTREAM_PREFIX):
+            continue
         if available.get(target, {}).get('type') != 'sequence':
             raise OxidnsSettingsError(f'分流执行链 {target} 未配置，请在完整参数中添加后再调整。')
     main['args'] = [*prefix, *(custom if position == 'head' else []), *domain,
                     *(custom if position == 'tail' else []), *suffix, final]
     if routing_changed:
-        _sync_updates(result, result_settings, config, current['groups'], groups, base_url)
+        _own_helpers(result, [group['route'] for part in ('domain', 'ip') for group in groups[part]],
+                     values['rule_actions'], domain + ip)
+        _sync_updates(result, result_settings, config, current['groups'], groups, base_url, before_config)
     return result, result_settings

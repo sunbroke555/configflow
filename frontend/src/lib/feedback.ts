@@ -9,11 +9,17 @@
 import { reactive } from 'vue'
 import { toast } from 'vue-sonner'
 
+/** 轻提示上的单个操作按钮，例如「去发布」 */
+export interface NotifyAction {
+  label: string
+  onClick: () => void
+}
+
 export const notify = {
-  success: (message: string, description?: string) => toast.success(message, { description }),
-  error: (message: string, description?: string) => toast.error(message, { description }),
-  warning: (message: string, description?: string) => toast.warning(message, { description }),
-  info: (message: string, description?: string) => toast.info(message, { description }),
+  success: (message: string, description?: string, action?: NotifyAction) => toast.success(message, { description, action }),
+  error: (message: string, description?: string, action?: NotifyAction) => toast.error(message, { description, action }),
+  warning: (message: string, description?: string, action?: NotifyAction) => toast.warning(message, { description, action }),
+  info: (message: string, description?: string, action?: NotifyAction) => toast.info(message, { description, action }),
   loading: (message: string) => toast.loading(message),
   dismiss: (id?: string | number) => toast.dismiss(id)
 }

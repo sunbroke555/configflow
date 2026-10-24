@@ -1,5 +1,6 @@
 """Independent OxiDNS strategy and compatibility regression tests."""
 from copy import deepcopy
+from hashlib import sha256
 import re
 import pytest
 import yaml
@@ -11,6 +12,8 @@ from backend.converters.oxidns import (
     generate_oxidns_config, get_oxidns_custom_files, get_oxidns_ruleset_downloads,
 )
 from backend.converters.mosdns import generate_mosdns_config
+from backend.common.oxidns_validation import validate_native_config
+from backend.common.rule_dns import route_key
 
 
 def document(settings=None, rules=None):
@@ -451,3 +454,201 @@ def test_invalid_or_ambiguous_hosts_fail_in_preview_and_download_instead_of_drop
     for render in (generate_oxidns_config, get_oxidns_custom_files):
         with pytest.raises(OxidnsSettingsError, match='Hosts 第 2 行'):
             render(config)
+
+
+# Rule DNS actions must not change any existing output. The digests below are the
+# generator output at e4b926f for these settings (computed with that revision).
+def golden_rules():
+    return [
+        rule('d1', 'example.test'), rule('d2', 'x.example.test', 'DOMAIN'), rule('d3', 'ads', 'DOMAIN-KEYWORD'),
+        rule('i1', '203.0.113.0/24', 'IP-CIDR'), rule('i2', '2001:db8::/32', 'IP-CIDR6'),
+        rule('g1', 'CN', 'GEOIP'), dict(rule('off', 'off.test'), enabled=False),
+        {'id': 's1', 'name': 'cn', 'itemType': 'ruleset', 'behavior': 'domain', 'url': 'https://rules.test/cn'},
+        {'id': 's2', 'name': 'mixed', 'itemType': 'ruleset', 'behavior': 'classical', 'url': '/api/rule-library/content/s2'},
+        {'id': 's3', 'name': 'ips', 'itemType': 'ruleset', 'behavior': 'ipcidr', 'url': 'https://rules.test/ip'},
+    ]
+
+
+GOLDEN_ROUTING = {'direct_rules': ['d1', 'd3', 'i1', 'off'], 'proxy_rules': ['d2', 'i2'],
+                  'direct_rulesets': ['s1'], 'proxy_rulesets': ['s2', 's3'],
+                  'custom_matches': [{'matches': 'qname domain:corp.test', 'exec': 'goto china_dns'}],
+                  'custom_match_position': 'head', 'custom_hosts': 'full:nas.test 192.168.1.2', 'block_qtypes': [65]}
+GOLDEN_CASES = {
+    'defaults': ({}, '008e259709b5b359e1bfe14748d3077fe161c9555c81fe55315b8156b3ec6fa5'),
+    'routing': (GOLDEN_ROUTING, '238d0bac816e02427cf24de486fbf9a5ef447e843a12aac5336656b22a1dfe83'),
+    'features': ({**GOLDEN_ROUTING, 'aggregate_rules': False, 'default_forward': 'forward_local', 'cache_lazy_ttl': 0,
+                  'custom_match_position': 'tail', 'fallback_dns': 'udp://9.9.9.9', 'remote_ttl': 60,
+                  'local_dns': 'udp://10.0.0.1\nudp://10.0.0.2',
+                  'remote_dns': '- addr: https://1.1.1.1/dns-query\n  bootstrap: 223.5.5.5\n',
+                  'ip_selector': {'enabled': True},
+                  'ros_address_list': {'enabled': True, 'args': {'address': '192.168.88.1', 'username': 'u', 'password': 'p'}},
+                  'dynamic_domain_set': {'enabled': True, 'learn': True, 'route': 'proxy'},
+                  'query_recorder': {'enabled': True}, 'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']},
+                  'api': {'enabled': True}, 'log': {'file': './oxidns.log'}, 'rule_update': {'enabled': True},
+                  'device_policies': [{'ip': '192.168.1.10', 'name': 'pc', 'mode': 'direct'}]},
+                 'fbe37670191252cd1bcbf9dfa1084d027b9cc2cc0fb2e2c3127939e901f9984d'),
+    'minimal': ({**GOLDEN_ROUTING, 'cache_enabled': False, 'probe_cache_enabled': False, 'prefer_ipv4': False,
+                 'metrics_enabled': False, 'tcp_enabled': False, 'remote_ttl': 0, 'block_qtypes': [],
+                 'ros_route': {'enabled': True, 'args': {'address': '192.168.88.1', 'username': 'u', 'password': 'p',
+                                                         'routing_table': 'proxy', 'gateway4': '10.0.0.1'}}},
+                'b0878fe1159a53109af012bc32f80917ae4d816be666e677275b52bafd31cdf5'),
+}
+
+
+def golden_config(settings):
+    return {'system_config': {'rule_proxy_token': 'fixture-token', 'server_domain': 'https://config.test'},
+            'oxidns': deepcopy(settings), 'rule_configs': golden_rules()}
+
+
+@pytest.mark.parametrize('name', GOLDEN_CASES)
+@pytest.mark.parametrize('extra', [{}, {'rule_actions': {}, 'rule_dns_follow': [], 'rule_dns_parked': {}},
+                                   {'rule_actions': {'gone': None}, 'rule_dns_follow': ['d1', 's2']}])
+def test_output_byte_identical_without_rule_dns_fields(name, extra):
+    settings, digest = GOLDEN_CASES[name]
+    output = generate_oxidns_config(golden_config({**settings, **extra}), 'https://fallback.test')
+    assert sha256(output.encode()).hexdigest() == digest
+
+
+PINNED = {'action': 'upstream', 'source': 'local', 'upstream': {'addr': 'udp://10.0.0.53:53'}}
+PINNED_KEY = route_key(PINNED)[9:]
+ACTION_EXEC = {'refused': 'reject', 'nxdomain': 'reject 3', 'nodata': 'reject 0', 'blackhole': '$cf_dns_blackhole'}
+
+
+def main_execs(p, kind):
+    return [(entry['matches'][0].split('$')[1], entry['exec']) for entry in p['sequence_main']['args']
+            if str((entry.get('matches') or [''])[0]).startswith(kind + ' $rules_')]
+
+
+@pytest.mark.parametrize(('action', 'expected'), [*ACTION_EXEC.items(), ('upstream', f'goto cf_dns_up_{PINNED_KEY}')])
+@pytest.mark.parametrize(('kind', 'value', 'match'), [('DOMAIN-SUFFIX', 'a.test', 'qname'),
+                                                      ('IP-CIDR', '203.0.113.0/24', 'resp_ip'),
+                                                      ('IP-CIDR6', '2001:db8::/32', 'resp_ip')])
+def test_template_emits_exec_for_each_action_domain_and_ip(action, expected, kind, value, match):
+    stored = PINNED if action == 'upstream' else {'action': action}
+    p = plugins({'rule_actions': {'a': stored}}, [rule('a', value, kind)])
+    part = 'domain' if match == 'qname' else 'ip'
+    assert main_execs(p, match) == [(f'rules_{part}_1', expected)]
+    if part == 'ip':
+        main = p['sequence_main']['args']
+        assert main.index({'exec': 'jump local_probe'}) < main.index({'matches': ['resp_ip $rules_ip_1'], 'exec': expected})
+
+
+def test_rule_actions_take_precedence_over_lists():
+    rules = [rule('a', 'a.test'), rule('b', 'b.test'), rule('c', '203.0.113.0/24', 'IP-CIDR')]
+    p = plugins({'direct_rules': ['a', 'c'], 'proxy_rules': ['b'],
+                 'rule_actions': {'a': {'action': 'nxdomain'}, 'c': {'action': 'refused'}}}, rules)
+    assert main_execs(p, 'qname') == [('rules_domain_1', 'reject 3'), ('rules_domain_2', 'goto proxy_dns_seq')]
+    assert main_execs(p, 'resp_ip') == [('rules_ip_1', 'reject')]
+    assert p['rules_domain_1']['args'] == {'exps': ['domain:a.test']}
+
+
+def test_union_catalog_lists_with_actions_render_in_template():
+    # Native writes keep a union catalog in the lists; it flows into templates.
+    rules = [rule('a', 'a.test'), rule('b', 'b.test'), rule('c', 'c.test')]
+    settings = {'direct_rules': ['a', 'b', 'c'], 'proxy_rules': [],
+                'rule_actions': {'b': {'action': 'blackhole'}}, 'rule_dns_follow': ['a']}
+    p = plugins(settings, rules)
+    assert main_execs(p, 'qname') == [('rules_domain_1', 'goto china_dns'), ('rules_domain_2', '$cf_dns_blackhole'),
+                                      ('rules_domain_3', 'goto china_dns')]
+
+
+def test_blackhole_helper_mode_is_quoted_null_string():
+    text = generate_oxidns_config({'oxidns': {'rule_actions': {'a': {'action': 'blackhole'}}}, 'rule_configs': [rule('a', 'a.test')]})
+    assert "- tag: cf_dns_blackhole\n  type: black_hole\n  args:\n    mode: 'null'\n    short_circuit: true\n" in text
+    helper = next(item for item in yaml.safe_load(text)['plugins'] if item['tag'] == 'cf_dns_blackhole')
+    assert helper['args'] == {'mode': 'null', 'short_circuit': True}
+
+
+def test_upstream_helper_chain_copies_entry_and_follows_features():
+    remote = {'action': 'upstream', 'source': 'remote', 'upstream': {'addr': 'tls://dns.test', 'socks5': '127.0.0.1:1080'}}
+    rules = [rule('a', 'a.test'), rule('b', 'b.test')]
+    settings = {'rule_actions': {'a': PINNED, 'b': remote}, 'remote_ttl': 30, 'cache_lazy_ttl': 0,
+                'ros_address_list': {'enabled': True, 'args': {'address': '192.0.2.1', 'username': 'u', 'password': 'p'}}}
+    p = plugins(settings, rules)
+    local_key, remote_key = PINNED_KEY, route_key(remote)[9:]
+    assert p[f'cf_dns_fwd_{remote_key}']['args'] == {'upstreams': [remote['upstream']]}
+    assert p[f'cf_dns_cache_{local_key}']['args'] == {'size': 1024, 'short_circuit': True}
+    assert p[f'cf_dns_up_{local_key}']['args'][:3] == [
+        {'exec': 'drop_resp'}, {'exec': '$ros_address_list'}, {'exec': f'$cf_dns_cache_{local_key}'}]
+    assert p['china_dns']['args'][0] == {'exec': '$ros_address_list'}
+    assert p[f'cf_dns_up_{remote_key}']['args'][-2:] == [{'exec': 'ttl 30'}, {'exec': 'accept'}]
+    assert '$ros_address_list' not in str(p[f'cf_dns_up_{remote_key}'])
+    no_cache = plugins({**settings, 'cache_enabled': False}, rules)
+    assert f'cf_dns_cache_{local_key}' not in no_cache and f'$cf_dns_cache_{local_key}' not in str(no_cache)
+
+
+def test_helpers_emitted_only_when_used_before_sequence_main():
+    rules = [rule('a', 'a.test'), rule('b', 'b.test'), dict(rule('c', 'c.test'), enabled=False)]
+    unused = plugins({'rule_actions': {'a': {'action': 'nodata'}, 'c': {'action': 'blackhole'}}}, rules)
+    assert not any(tag.startswith('cf_dns_') for tag in unused)
+    order = list(plugins({'rule_actions': {'a': PINNED, 'b': {'action': 'blackhole'}}}, rules))
+    helpers = [tag for tag in order if tag.startswith('cf_dns_')]
+    assert helpers == [f'cf_dns_fwd_{PINNED_KEY}', f'cf_dns_cache_{PINNED_KEY}', f'cf_dns_up_{PINNED_KEY}', 'cf_dns_blackhole']
+    assert order.index('ip_requery_proxy') < order.index(helpers[0])
+    assert order.index(helpers[-1]) + 1 == order.index('sequence_main')
+
+
+def test_user_plugin_named_like_a_helper_is_a_duplicate_tag():
+    custom = 'plugins:\n- tag: cf_dns_blackhole\n  type: black_hole\n  args: {mode: nxdomain}\n'
+    with pytest.raises(OxidnsSettingsError, match='tag 重复：cf_dns_blackhole'):
+        document({'custom_config': custom, 'rule_actions': {'a': {'action': 'blackhole'}}}, [rule('a', 'a.test')])
+
+
+def test_adjacent_same_action_merges_only_with_aggregate_rules():
+    other = {**PINNED, 'upstream': {'addr': 'udp://10.0.0.54'}}
+    rules = [rule(name, f'{name}.test') for name in 'abcdef']
+    actions = {'a': {'action': 'refused'}, 'b': {'action': 'refused'}, 'c': PINNED, 'd': PINNED, 'e': other,
+               'f': {'action': 'nxdomain'}}
+    p = plugins({'rule_actions': actions}, rules)
+    assert main_execs(p, 'qname') == [('rules_domain_1', 'reject'), ('rules_domain_2', f'goto cf_dns_up_{PINNED_KEY}'),
+                                      ('rules_domain_3', f'goto cf_dns_up_{route_key(other)[9:]}'),
+                                      ('rules_domain_4', 'reject 3')]
+    assert p['rules_domain_2']['args'] == {'exps': ['domain:c.test', 'domain:d.test']}
+    separate = plugins({'rule_actions': actions, 'aggregate_rules': False}, rules)
+    assert len(main_execs(separate, 'qname')) == 6
+
+
+def test_actions_keep_rule_order_and_section_positions():
+    rules = [rule('a', 'a.test'), rule('b', '203.0.113.0/24', 'IP-CIDR'), rule('c', 'c.test'), rule('d', 'd.test'),
+             rule('e', '198.51.100.0/24', 'IP-CIDR')]
+    settings = {'direct_rules': ['c'], 'proxy_rules': ['e'], 'custom_match_position': 'tail',
+                'custom_matches': [{'matches': 'qname domain:corp.test', 'exec': 'reject 3'}],
+                'dynamic_domain_set': {'enabled': True},
+                'rule_actions': {'a': {'action': 'blackhole'}, 'b': {'action': 'nxdomain'}, 'd': {'action': 'refused'}}}
+    main = plugins(settings, rules)['sequence_main']['args']
+    execs = [entry['exec'] for entry in main[main.index({'exec': 'prefer_ipv4'}) + 2:]]
+    assert execs == ['$cf_dns_blackhole', 'goto china_dns', 'reject', 'reject 3', 'goto china_dns',
+                     'jump local_probe', 'reject 3', 'goto ip_requery_proxy', 'drop_resp', 'goto proxy_dns_seq']
+    assert main[-6]['matches'] == ['qname $dynamic_domains']
+
+
+def test_action_on_unconvertible_rule_is_rejected():
+    with pytest.raises(OxidnsSettingsError, match='GEOIP'):
+        document({'rule_actions': {'g': {'action': 'refused'}}}, [rule('g', 'CN', 'GEOIP')])
+
+
+def test_action_only_ruleset_is_downloaded_and_reloaded():
+    config = {'system_config': {'rule_proxy_token': 'fixture-token'},
+              'oxidns': {'rule_actions': {'rs1': {'action': 'blackhole'}}, 'rule_update': {'enabled': True}},
+              'rule_configs': [{'id': 'rs1', 'name': 'ads', 'itemType': 'ruleset', 'behavior': 'domain',
+                                'url': 'https://rules.test/ads.txt'}]}
+    downloads = get_oxidns_ruleset_downloads(config, 'https://config.test')
+    assert [item['local_path'] for item in downloads] == ['./rules/rule_8c4bba9e7c828a1b_domain.txt']
+    p = {item['tag']: item for item in yaml.safe_load(generate_oxidns_config(config, 'https://config.test'))['plugins']}
+    assert p['rules_reload']['args'] == ['$rules_domain_1']
+    assert p['rules_domain_1']['args'] == {'files': ['./rules/rule_8c4bba9e7c828a1b_domain.txt']}
+    assert len(p['rules_download']['args']['downloads']) == 1
+
+
+def test_generated_actions_pass_configflow_validator():
+    remote = {'action': 'upstream', 'source': 'remote', 'upstream': {'addr': 'udp://127.0.0.1:15403'}}
+    rules = [rule('a', 'a.test'), rule('b', 'b.test'), rule('c', 'c.test'), rule('d', 'd.test'), rule('e', 'e.test'),
+             rule('f', 'f.test'), rule('g', '203.0.113.0/24', 'IP-CIDR'), rule('h', '198.51.100.0/24', 'IP-CIDR'),
+             {'id': 'mixed', 'name': 'mixed', 'itemType': 'ruleset', 'behavior': 'classical', 'url': 'https://rules.test/m'}]
+    settings = {'direct_rules': ['a'], 'ip_selector': {'enabled': True}, 'rule_update': {'enabled': True},
+                'rule_actions': {'b': {'action': 'refused'}, 'c': {'action': 'nxdomain'}, 'd': {'action': 'nodata'},
+                                 'e': {'action': 'blackhole'}, 'f': PINNED, 'g': PINNED, 'h': remote,
+                                 'mixed': {'action': 'blackhole'}}}
+    result = generate_oxidns_config({'system_config': {'rule_proxy_token': 'fixture-token'},
+                                     'oxidns': settings, 'rule_configs': rules}, 'https://config.test')
+    assert validate_native_config(yaml.safe_load(result)) == []

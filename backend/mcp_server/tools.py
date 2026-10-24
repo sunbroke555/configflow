@@ -560,6 +560,13 @@ def _manage_node(args):
 
 # ================================================================ 规则
 
+RULE_DNS = string(
+    'OxiDNS DNS 处理（只对 OxiDNS 生效）：follow（跟随策略）、default（默认上游）、direct（直连 DNS）、'
+    'proxy（代理 DNS）、upstream:<key>（指定上游，key 取自 get_rule_dns 的 upstreams）、'
+    'refused（拒绝）、nxdomain（不存在）、nodata（空应答）、blackhole（黑洞）'
+)
+
+
 @tool(
     'list_rules',
     '列出规则配置列表（含直接规则与规则集，通过 itemType 区分：rule / ruleset），'
@@ -575,7 +582,9 @@ def _list_rules(args):
     '创建、更新或删除一条规则或规则集。'
     'itemType=rule 时 data 需含 rule_type（如 DOMAIN-SUFFIX / IP-CIDR）、value、policy；'
     'itemType=ruleset 时 data 需含 name、policy，以及 url 或 library_rule_id。'
-    '新建的规则默认插在列表最前（优先级最高），要放到最后传 position=bottom。',
+    '新建的规则默认插在列表最前（优先级最高），要放到最后传 position=bottom。'
+    'update 时可在 data.dns 中同时修改这条规则的 OxiDNS DNS 处理；'
+    '新建并设置 DNS 请用 compose_rule，它在一次写入中完成。',
     obj(
         {
             'action': ACTION,
@@ -583,7 +592,9 @@ def _list_rules(args):
             'data': free_object(
                 '规则字段：itemType（rule / ruleset）、rule_type、value、'
                 'policy（目标策略组名）、enabled、no_resolve、remark、group_name；'
-                'ruleset 另有 name、url、behavior、library_rule_id'
+                'ruleset 另有 name、url、behavior、library_rule_id。'
+                'dns（仅 update）：OxiDNS DNS 处理，取值同 set_rule_dns；省略则不变，'
+                '跟随策略的规则会随 policy 自动调整'
             ),
             'position': string(
                 'create 时新规则放在列表哪一端，默认 top（优先级最高）',
@@ -595,6 +606,11 @@ def _list_rules(args):
 )
 def _manage_rule(args):
     data = args.get('data') or {}
+    if args.get('action') == 'create' and 'dns' in data:
+        # POST stores the object as given; DNS is profile state, not a rule field.
+        if data['dns'] != 'default':
+            raise ApiError(400, '新建规则并设置 DNS 请使用 compose_rule')
+        args = {**args, 'data': {key: value for key, value in data.items() if key != 'dns'}}
     prefix = 'ruleset' if data.get('itemType') == 'ruleset' else 'rule'
     result = _crud(args, '/api/rules', prefix, '规则')
     # 后端 POST /api/rules 固定插到队首，要放队尾就创建后再移一次
@@ -605,6 +621,62 @@ def _manage_rule(args):
             _reorder('rules', [new_id], 'bottom')
             result['position'] = 'bottom'
     return result
+
+
+@tool(
+    'compose_rule',
+    '一次写入新建规则或规则集引用，并设置它们的 OxiDNS DNS 处理；任何一步失败都不保存。'
+    'source.kind=values：text 每行一条（可写 TYPE,value；+.x / *.x 为 DOMAIN-SUFFIX，full:x 为 DOMAIN），'
+    '无前缀的行按 source.rule_type，最多 200 行，已存在的行会跳过；'
+    'source.kind=library：library_rule_ids 引用规则仓库条目；'
+    'source.kind=new_library：library 为新规则仓库条目（name，source_type=url 给 url，content 给 content；enabled 缺省为 true）。'
+    'id 由服务端生成。',
+    obj(
+        {
+            'source': free_object('规则来源：{kind: values | library | new_library, ...}'),
+            'rule': free_object(
+                '规则字段：policy（必填，策略组名或 DIRECT / REJECT 等）、position（top / bottom，默认 top）、'
+                'enabled、no_resolve、remark、group_name'
+            ),
+            'dns': RULE_DNS,
+            'dns_ip': string('粘贴内容里 IP-CIDR / IP-CIDR6 行的 DNS 处理；省略时与 dns 相同。取值同 dns'),
+        },
+        ['source', 'rule'],
+    ),
+)
+def _compose_rule(args):
+    body = {key: args[key] for key in ('source', 'rule', 'dns', 'dns_ip') if args.get(key) is not None}
+    return call_api('POST', '/api/rules/compose', body=body)
+
+
+@tool(
+    'get_rule_dns',
+    '读取每条规则的 OxiDNS DNS 处理：engine（模式、是否可编辑及原因、开启规则自动同步的设备）、'
+    'upstreams（可固定的上游及其 key）和 rules（未列出的规则为默认上游）。',
+    NO_ARGS,
+)
+def _get_rule_dns(args):
+    return call_api('GET', '/api/rules/dns')
+
+
+@tool(
+    'set_rule_dns',
+    '批量修改规则的 OxiDNS DNS 处理，一次最多 200 条，在一次写入中完成。'
+    '修改规则 DNS 请优先使用本工具，而不是 update_oxidns_settings。',
+    obj(
+        {
+            'routes': {'type': 'object', 'description': '规则 id → DNS 处理。' + RULE_DNS['description'],
+                       'additionalProperties': {'type': 'string'}},
+            'skip_unsupported': boolean('为 true 时跳过不参与 DNS 分流的规则（如 GEOIP），否则报错'),
+        },
+        ['routes'],
+    ),
+)
+def _set_rule_dns(args):
+    body = {'routes': _require(args, 'routes')}
+    if args.get('skip_unsupported') is not None:
+        body['skip_unsupported'] = args['skip_unsupported']
+    return call_api('PUT', '/api/rules/dns', body=body)
 
 
 @tool(
@@ -1178,7 +1250,8 @@ def _get_oxidns_settings(args):
 @tool(
     'update_oxidns_settings',
     '更新独立的 OxiDNS 参数。仅需提交修改字段，嵌套对象会合并，列表整体替换；不影响 MosDNS。'
-    '高级插件以 enabled 开关和 args 原生参数配置，生成后可通过 preview_config 检查。',
+    '高级插件以 enabled 开关和 args 原生参数配置，生成后可通过 preview_config 检查。'
+    '规则的 DNS 处理请用 set_rule_dns；在这里只能用 rule_actions.<规则 id>: null 删除一条。',
     obj({'data': free_object('OxiDNS 参数，例如 worker_threads、cache_lazy_ttl、probe_cache_size、api 或 query_recorder')}, ['data']),
 )
 def _update_oxidns_settings(args):

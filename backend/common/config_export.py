@@ -19,11 +19,14 @@ def redact_oxidns_settings(settings: Any) -> Any:
 
     Full administrator backups remain restorable. Upstream/native YAML strings
     can contain embedded credentials, so omit those opaque fields completely.
+    Rules pinned to an upstream keep their shape; only the copied upstream's
+    address and credentials are redacted.
     """
     opaque_fields = {'custom_config', 'native_config', 'template_base_config', 'legacy_native_config', 'local_dns', 'remote_dns', 'fallback_dns'}
     credential_fields = {'password', 'username', 'token', 'secret', 'authorization',
                          'private_key', 'private-key', 'key', 'socks5', 'proxy',
                          'url', 'urls', 'headers', 'bootstrap_rules'}
+    pinned_fields = {'rule_actions', 'rule_dns_parked'}
 
     def redact(value, depth=0):
         if depth >= 64:
@@ -31,10 +34,22 @@ def redact_oxidns_settings(settings: Any) -> Any:
         if isinstance(value, dict):
             return {key: ([] if key == 'additional_files' else '' if key in opaque_fields else
                           _REDACTED if str(key).lower() in credential_fields and item else
+                          redact_pinned(item, depth + 1) if key in pinned_fields else
                           redact(item, depth + 1)) for key, item in value.items()}
         if isinstance(value, list):
             return [redact(item, depth + 1) for item in value]
         return value
+
+    def redact_pinned(actions, depth):
+        if not isinstance(actions, dict) or depth >= 62:
+            return redact(actions, depth)
+        result = {}
+        for identity, action in actions.items():
+            result[identity] = redact(action, depth + 1)
+            upstream = result[identity].get('upstream') if isinstance(result[identity], dict) else None
+            if isinstance(upstream, dict) and upstream.get('addr'):
+                upstream['addr'] = _REDACTED
+        return result
 
     return redact(settings)
 

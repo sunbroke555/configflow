@@ -7,7 +7,7 @@ const sameCall = (a: Step, b: Step) => a.tag === b.tag && a.sequence_tag === b.s
 const quickPlugin = (tag: string | null, type: string) => tag?.startsWith('qs.') && tag.endsWith('.' + type)
 const dnsToken = (value: unknown) => typeof value === 'string' || typeof value === 'number' ? String(value).trim().toLowerCase() : ''
 const summaryLabels = new Map<OxiDNSQuerySource, string>([
-  ['local', '本地 DNS'], ['remote', '远程 DNS'], ['fallback', '备用 DNS'], ['cache', '缓存'],
+  ['local', '本地 DNS'], ['remote', '远程 DNS'], ['fallback', '备用 DNS'], ['pinned', '指定上游'], ['cache', '缓存'],
   ['hosts', '本地 Hosts'], ['blocked', '规则拦截'], ['rejected', '规则拒绝'], ['unknown', '未识别'],
   ['unrecorded', '未记录'], ['error', '处理错误'], ['no_response', '无应答'],
   ['ipv4_preferred', 'IPv4 优先（抑制 AAAA）']
@@ -49,12 +49,18 @@ export function querySourceKind(record: OxiDNSQuery): OxiDNSQuerySource {
       source = forward
     } else if (quickPlugin(step.tag, 'drop_resp') || step.tag === 'drop_resp') {
       source = 'unknown'
-    } else if (step.tag === 'adguard_block') {
+    } else if (step.tag === 'adguard_block' || step.tag === 'cf_dns_blackhole') {
       source = 'blocked'
     } else if (quickPlugin(step.tag, 'black_hole') && step.outcome === 'stop' && index === call.index + 1) {
       // Blocked query types answer with an inline black_hole; earlier drafts
       // used the builtin reject 0, labelled the same way.
       source = 'rejected'
+    } else if (step.tag?.startsWith('cf_dns_fwd_')) {
+      source = 'pinned'
+    } else if (step.tag?.startsWith('cf_dns_up_') || step.tag?.startsWith('cf_dns_cache_')) {
+      // A rule's pinned upstream chain and its own cache. Like lazy_cache, a
+      // wrapping completion is not evidence: the inner forward or reject decides.
+      if (index === call.index + 1) source = 'pinned'
     } else if (step.tag === 'custom_hosts') {
       const check = steps[index + 1]
       if (check?.kind === 'matcher' && quickPlugin(check.tag, 'has_resp') && check.outcome === 'matched') source = 'hosts'

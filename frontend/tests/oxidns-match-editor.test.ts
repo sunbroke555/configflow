@@ -139,6 +139,20 @@ describe('OxiDNS custom match editor', () => {
     expect(latest(wrapper)![0].exec).toBe('goto my_sequence')
   })
 
+  it('names the three reject responses after the DNS handling labels used by policy rules', async () => {
+    const wrapper = mount(OxidnsMatchEditor, { props: { modelValue: ['reject', 'reject 3', 'reject 0'].map(exec => ({ ...direct(), exec })) }, attachTo: document.body })
+    wrappers.push(wrapper)
+    expect(wrapper.find('[aria-label$="自定义动作"]').exists()).toBe(false)
+    const trigger = wrapper.get('[aria-label="匹配项 1 执行动作"]')
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    await flushPromises()
+    const labels = Array.from(document.querySelectorAll('[role="option"]')).map(option => option.textContent?.trim())
+    expect(labels).toEqual(expect.arrayContaining(['拒绝（REFUSED）', '不存在（NXDOMAIN）', '空应答（NOERROR）']))
+    expect(labels.indexOf('拒绝（REFUSED）')).toBeLessThan(labels.indexOf('不存在（NXDOMAIN）'))
+    // Recognised presets, not custom actions: each trigger shows its preset label.
+    expect(['1', '2', '3'].map(index => wrapper.get(`[aria-label="匹配项 ${index} 执行动作"]`).text())).toEqual(['拒绝（REFUSED）', '不存在（NXDOMAIN）', '空应答（NOERROR）'])
+  })
+
   it('allows a paused incomplete entry and validates it when enabled', async () => {
     const wrapper = render([{ enabled: false, extension: 'retained' }])
     expect(valid(wrapper)).toBe(true)

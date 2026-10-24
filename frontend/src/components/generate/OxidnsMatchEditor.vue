@@ -41,7 +41,7 @@
             <Button type="button" variant="ghost" size="icon" class="size-11 shrink-0 text-muted-foreground" :aria-label="`删除匹配项 ${index + 1} 条件 ${conditionIndex + 1}`" :disabled="disabled" @click="removeCondition(item, conditionIndex)"><Trash2 class="size-4" /></Button>
           </div>
         </div>
-        <FormField label="执行动作" :html-for="`${item.key}-action`" hint="条件全部满足时，使用所选 DNS 或返回指定应答。" :help="optionHelp('同一匹配项的条件全部满足后，执行所选动作。', '直连、代理、备用进入对应 DNS 流程；拒绝返回 NXDOMAIN，空响应返回无答案的 NOERROR。自定义可用 $插件名 或 goto 序列名。')">
+        <FormField label="执行动作" :html-for="`${item.key}-action`" hint="条件全部满足时，使用所选 DNS 或返回指定应答。" :help="optionHelp('同一匹配项的条件全部满足后，执行所选动作。', '直连、代理、备用进入对应 DNS 流程；拒绝返回 REFUSED，不存在返回 NXDOMAIN，空应答返回无答案的 NOERROR。自定义可用 $插件名 或 goto 序列名。')">
           <Select :model-value="item.customAction ? 'custom' : String(item.data.exec)" :disabled="disabled" @update:model-value="setAction(item, String($event))">
             <SelectTrigger :id="`${item.key}-action`" class="min-h-11 w-full" :aria-label="`匹配项 ${index + 1} 执行动作`"><SelectValue placeholder="选择执行动作" /></SelectTrigger>
             <SelectContent>
@@ -94,8 +94,9 @@ const actions = [
   { value: 'goto china_dns', label: '直连 DNS' },
   { value: 'goto proxy_dns_seq', label: '代理 DNS' },
   { value: 'goto fallback_dns', label: '备用 DNS' },
-  { value: 'reject 3', label: '拒绝（NXDOMAIN）' },
-  { value: 'reject 0', label: '返回空响应（NOERROR）' },
+  { value: 'reject', label: '拒绝（REFUSED）' },
+  { value: 'reject 3', label: '不存在（NXDOMAIN）' },
+  { value: 'reject 0', label: '空应答（NOERROR）' },
   { value: 'accept', label: '接受响应并结束' },
   { value: 'return', label: '返回上级序列' },
 ]

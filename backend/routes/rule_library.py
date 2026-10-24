@@ -98,7 +98,10 @@ def handle_rule_library():
     """规则仓库管理"""
     config_data = get_shared_config()
     if request.method == 'GET':
-        return jsonify(config_data.get('rule_library', []))
+        from backend.common.rule_dns import has_ip_part
+        # has_ip_part: routing this source in OxiDNS DNS creates an IP group.
+        return jsonify([{**rule, 'has_ip_part': has_ip_part({**rule, 'itemType': 'ruleset'})}
+                        for rule in config_data.get('rule_library', [])])
 
     elif request.method == 'POST':
         rule = request.json
@@ -109,6 +112,7 @@ def handle_rule_library():
             raise ProfileValidationError('规则库条目必须有 ID')
         if any(item['id'] == rule['id'] for item in config_data.get('rule_library', [])):
             raise ProfileExists('规则库 ID 已存在，请刷新后重试')
+        rule.pop('has_ip_part', None)
         validate_domain_content(rule)
 
         # 根据 source_type 清理字段
@@ -146,8 +150,11 @@ def handle_rule_library_item(rule_id):
     """Update shared sources without overwriting independent compositions."""
     from werkzeug.exceptions import NotFound
     from backend.common.config_repository import ProfileValidationError
+    from backend.common.config import update_shared_and_config_transaction
+    from backend.common.rule_dns import apply_rule_dns
     new_rule = request.get_json() if request.method == 'PUT' else None
-    previous = {}
+    base_url = request.url_root.rstrip('/')
+    previous, warnings = {}, []
     def mutate(shared):
         library = shared.setdefault('rule_library', [])
         old = next((item for item in library if item.get('id') == rule_id), None)
@@ -161,10 +168,31 @@ def handle_rule_library_item(rule_id):
             raise ProfileValidationError('规则库请求必须是 JSON 对象')
         new_rule['id'] = rule_id
         new_rule.pop('base_url', None)
+        new_rule.pop('has_ip_part', None)
         new_rule.pop('url' if new_rule.get('source_type') == 'content' else 'content', None)
         validate_domain_content(new_rule, old)
         library[library.index(old)] = new_rule
-    update_shared_config_transaction(mutate)
+
+    def native_profiles(shared, profiles):
+        """Native OxiDNS profiles whose routing this edit changes."""
+        old = next((item for item in shared.get('rule_library', []) if item.get('id') == rule_id), None)
+        if old is None or not isinstance(new_rule, dict) or all(
+                new_rule.get(key, default) == old.get(key, default) for key, default in (('enabled', True), ('behavior', 'domain'))):
+            return []
+        return [profile_id for profile_id, profile in profiles.items()
+                if (profile.get('oxidns') or {}).get('config_mode') == 'native' and
+                any(item.get('library_rule_id') == rule_id for item in profile.get('rule_configs', []))]
+
+    def rebuild(profile_id, before, after):
+        # Enabling, disabling or retyping a source rebuilds native routing in the
+        # same commit, parking and restoring the DNS choices of its references.
+        warnings.extend({'profile': profile_id, 'message': message}
+                        for message in apply_rule_dns(before, after, {}, base_url=base_url, strict=False))
+
+    if new_rule is None:
+        update_shared_config_transaction(mutate)
+    else:
+        update_shared_and_config_transaction(mutate, rebuild, native_profiles)
     if new_rule is None:
         try:
             os.remove(os.path.join(get_rules_dir(), rule_cache_filename(previous)))
@@ -180,7 +208,7 @@ def handle_rule_library_item(rule_id):
     if new_rule is not None:
         save_rule_to_local(new_rule)
         usages = get_repository().get_resource_usage('rule_library', rule_id)
-        return jsonify({'success': True, 'data': new_rule, 'synced_count': len(usages)})
+        return jsonify({'success': True, 'data': new_rule, 'synced_count': len(usages), 'warnings': warnings})
     return jsonify({'success': True})
 
 

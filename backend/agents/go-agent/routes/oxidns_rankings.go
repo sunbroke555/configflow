@@ -12,12 +12,21 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const oxRankingLimit = 10
+const (
+	oxRankingLimit = 10
+	// Each confirmed block branch costs one top_qnames request per snapshot.
+	oxRankingBlockLimit = 32
+)
+
+// Generated rule-group providers; renamed duplicates gain further _N suffixes.
+var oxRankingRuleGroup = regexp.MustCompile(`^rules_(domain|ip)_[0-9]+(_[0-9]+)*$`)
 
 type oxUpstreamLabel struct {
 	PluginTag string `json:"plugin_tag"`
@@ -28,13 +37,14 @@ type oxUpstreamLabel struct {
 type oxRankingConfig struct {
 	upstreams []oxUpstreamLabel
 	retention map[string]*uint64
-	blocked   map[string]string
+	// Per recorder, the quick matcher tags whose match proves a block answer.
+	blocked map[string][]string
 }
 
 // These labels describe configured upstreams, never the winner inferred from a
 // query trace. Match OxiDNS 1.6.1 forward::upstream_metric_names exactly.
 func oxMonitorRankingConfig(plugins []interface{}) oxRankingConfig {
-	result := oxRankingConfig{upstreams: []oxUpstreamLabel{}, retention: map[string]*uint64{}, blocked: map[string]string{}}
+	result := oxRankingConfig{upstreams: []oxUpstreamLabel{}, retention: map[string]*uint64{}, blocked: map[string][]string{}}
 	byTag := map[string]map[string]interface{}{}
 	duplicate := map[string]bool{}
 	for _, item := range plugins {
@@ -88,19 +98,10 @@ func oxMonitorRankingConfig(plugins []interface{}) oxRankingConfig {
 	}
 	main := byTag["sequence_main"]
 	rules, _ := main["args"].([]interface{})
-	block := byTag["adguard_block"]
-	reject := byTag["adguard_reject"]
-	provider := byTag["adguard_rules"]
-	wantReject := []interface{}{map[string]interface{}{"exec": "$adguard_block"}, map[string]interface{}{"exec": "accept"}}
-	if main["type"] != "sequence" || block["type"] != "black_hole" || provider["type"] != "adguard_rule" || reject["type"] != "sequence" || !reflect.DeepEqual(reject["args"], wantReject) {
+	if main["type"] != "sequence" || !oxRankingDirectEntry(plugins) {
 		return result
 	}
-	blockArgs, ok := block["args"].(map[string]interface{})
-	mode, _ := blockArgs["mode"].(string)
-	if !ok || len(blockArgs) != 1 || mode != "nxdomain" && mode != "nodata" && mode != "null" && mode != "refused" || !oxRankingDirectEntry(plugins) {
-		return result
-	}
-	// A quick matcher match proves a block only for the generated terminal
+	// A quick matcher match proves a block only for a generated terminal
 	// branch. Arbitrary matcher matches, NXDOMAIN and IPv4 suppression do not.
 	recorders := []string{}
 	for index, raw := range rules {
@@ -110,22 +111,37 @@ func oxMonitorRankingConfig(plugins []interface{}) oxRankingConfig {
 		}
 		exec, _ := rule["exec"].(string)
 		matches := oxRankingMatches(rule["matches"])
-		if len(rule) == 2 && reflect.DeepEqual(matches, []string{"question $adguard_rules"}) && exec == "goto adguard_reject" {
+		matcher := ""
+		if len(rule) == 2 && reflect.DeepEqual(matches, []string{"question $adguard_rules"}) && exec == "goto adguard_reject" && oxRankingAdguard(byTag) {
+			matcher = "question"
+		} else if len(rule) == 2 && len(matches) == 1 && oxRankingRuleBlock(byTag, matches[0], exec) {
+			// Rule DNS actions: reject (refused/nxdomain/nodata) or blackhole.
+			matcher = strings.Fields(matches[0])[0]
+		}
+		if matcher != "" {
 			for _, recorder := range recorders {
-				result.blocked[recorder] = fmt.Sprintf("qs.match.sequence_main.%d.0.question", index)
+				result.blocked[recorder] = append(result.blocked[recorder], fmt.Sprintf("qs.match.sequence_main.%d.0.%s", index, matcher))
 			}
-			break
+			continue
 		}
 		if len(rule) == 1 && matches == nil {
 			if strings.HasPrefix(exec, "$") && byTag[strings.TrimPrefix(exec, "$")]["type"] == "query_recorder" {
 				recorders = append(recorders, strings.TrimPrefix(exec, "$"))
 				continue
 			}
-			if exec == "metrics_collector metrics" || exec == "prefer_ipv4" || exec == "$custom_hosts" && byTag["custom_hosts"]["type"] == "hosts" {
+			if exec == "metrics_collector metrics" || exec == "prefer_ipv4" || exec == "$custom_hosts" && byTag["custom_hosts"]["type"] == "hosts" || exec == "drop_resp" {
+				continue
+			}
+			// A jumped sequence's own wrappers complete before it returns
+			// (OxiDNS 1.6.1 traces), so it cannot rewrite a later block answer.
+			if target := strings.TrimPrefix(exec, "jump "); target != exec && target != "sequence_main" && byTag[target]["type"] == "sequence" {
 				continue
 			}
 		}
-		if len(rule) == 2 && len(matches) == 1 && (matches[0] == "has_resp" && exec == "accept" || strings.HasPrefix(matches[0], "qtype ") && (exec == "reject 0" || exec == "black_hole nodata short_circuit=true")) {
+		// Other conditional terminal branches only end the queries they take,
+		// including the NODATA answer for blocked query types.
+		if len(rule) == 2 && len(matches) > 0 && (oxRankingTerminal(byTag, exec) ||
+			len(matches) == 1 && strings.HasPrefix(matches[0], "qtype ") && exec == "black_hole nodata short_circuit=true") {
 			continue
 		}
 		// Unknown wrapping executors could replace the block response on the
@@ -133,6 +149,48 @@ func oxMonitorRankingConfig(plugins []interface{}) oxRankingConfig {
 		break
 	}
 	return result
+}
+
+func oxRankingAdguard(byTag map[string]map[string]interface{}) bool {
+	reject := byTag["adguard_reject"]
+	wantReject := []interface{}{map[string]interface{}{"exec": "$adguard_block"}, map[string]interface{}{"exec": "accept"}}
+	return byTag["adguard_rules"]["type"] == "adguard_rule" && reject["type"] == "sequence" && reflect.DeepEqual(reject["args"], wantReject) && oxRankingBlackHole(byTag["adguard_block"], false)
+}
+
+// A main-chain black hole must short-circuit, or later entries would replace
+// its answer. Mode null is the quoted string: a bare YAML null means nxdomain.
+func oxRankingBlackHole(plugin map[string]interface{}, shortCircuit bool) bool {
+	args, ok := plugin["args"].(map[string]interface{})
+	mode, _ := args["mode"].(string)
+	want := 1
+	if shortCircuit {
+		want = 2
+		if args["short_circuit"] != true {
+			return false
+		}
+	}
+	return plugin["type"] == "black_hole" && ok && len(args) == want && (mode == "nxdomain" || mode == "nodata" || mode == "null" || mode == "refused")
+}
+
+// reject, reject 3 and reject 0 all answer and stop as the builtin "reject".
+func oxRankingBlock(byTag map[string]map[string]interface{}, exec string) bool {
+	return exec == "reject" || strings.HasPrefix(exec, "reject ") && len(strings.Fields(exec)) == 2 ||
+		exec == "$cf_dns_blackhole" && oxRankingBlackHole(byTag["cf_dns_blackhole"], true)
+}
+
+func oxRankingTerminal(byTag map[string]map[string]interface{}, exec string) bool {
+	return strings.HasPrefix(exec, "goto ") || exec == "accept" || oxRankingBlock(byTag, exec)
+}
+
+// Only generated rule groups count: qname for domain groups, resp_ip for IP
+// groups after the local probe. Pinned upstreams and lists are not blocks.
+func oxRankingRuleBlock(byTag map[string]map[string]interface{}, match, exec string) bool {
+	fields := strings.Fields(match)
+	if len(fields) != 2 || !strings.HasPrefix(fields[1], "$") || !oxRankingBlock(byTag, exec) {
+		return false
+	}
+	group := oxRankingRuleGroup.FindStringSubmatch(strings.TrimPrefix(fields[1], "$"))
+	return group != nil && byTag[group[0]] != nil && (group[1] == "domain" && fields[0] == "qname" || group[1] == "ip" && fields[0] == "resp_ip")
 }
 
 // An outer sequence/executor can replace the response after the main chain
@@ -305,6 +363,38 @@ func oxDecodeRanking(data []byte, clients bool) (oxRankingGroup, *oxMonitorError
 	return result, nil
 }
 
+// Block branches are terminal, so each query is counted under one matcher and
+// samples add up. A total beyond one request's sample cap is reported at the
+// cap; per-domain counts then cover more than the reported sample.
+func oxMergeRankings(groups []oxRankingGroup) oxRankingGroup {
+	if len(groups) == 1 {
+		return groups[0]
+	}
+	result := oxRankingGroup{Rows: []oxRankingRow{}}
+	counts := map[string]uint64{}
+	for _, group := range groups {
+		result.SampleSize += group.SampleSize
+		for _, row := range group.Rows {
+			counts[row.Key] += row.Count
+		}
+	}
+	if result.SampleSize > oxMonitorClientSampleLimit {
+		result.SampleSize = oxMonitorClientSampleLimit
+	}
+	result.AtLimit = result.SampleSize == oxMonitorClientSampleLimit
+	for key, count := range counts {
+		result.Rows = append(result.Rows, oxRankingRow{key, count, float64(count) / float64(result.SampleSize)})
+	}
+	sort.Slice(result.Rows, func(i, j int) bool {
+		a, b := result.Rows[i], result.Rows[j]
+		return a.Count > b.Count || a.Count == b.Count && a.Key < b.Key
+	})
+	if len(result.Rows) > oxRankingLimit {
+		result.Rows = result.Rows[:oxRankingLimit]
+	}
+	return result
+}
+
 func (config *oxMonitorConfig) verifySnapshot(ctx context.Context, client *http.Client, cfg *Config, before []byte, running *oxMonitorRuntime) *oxMonitorError {
 	afterRuntime, err := config.runtimeSnapshot(ctx, client)
 	if err != nil {
@@ -380,19 +470,40 @@ func (config *oxMonitorConfig) writeRankings(w http.ResponseWriter, ctx context.
 		return
 	}
 	blocked := map[string]interface{}{"available": false, "reason": "当前配置未包含可确认的标准 AdGuard 拦截路径", "sample_size": 0, "rows": []oxRankingRow{}, "at_limit": false}
-	if matcher := config.rankings.blocked[tag]; matcher != "" {
-		filtered := url.Values{}
-		for key, items := range query {
-			filtered[key] = append([]string{}, items...)
+	matchers := config.rankings.blocked[tag]
+	if len(matchers) > oxRankingBlockLimit {
+		blocked["reason"] = "too_many_block_rules"
+	} else if len(matchers) > 0 {
+		groups := []oxRankingGroup{}
+		adguard, rules := false, false
+		for _, matcher := range matchers {
+			// The core filters by one matcher tag per request.
+			filtered := url.Values{}
+			for key, items := range query {
+				filtered[key] = append([]string{}, items...)
+			}
+			filtered.Set("matcher_tag", matcher)
+			filtered.Set("status", "has_response")
+			group, fetchErr := fetch("top_qnames", filtered)
+			if fetchErr != nil {
+				oxMonitorWriteError(w, fetchErr)
+				return
+			}
+			groups = append(groups, group)
+			adguard = adguard || strings.HasSuffix(matcher, ".question")
+			rules = rules || !strings.HasSuffix(matcher, ".question")
 		}
-		filtered.Set("matcher_tag", matcher)
-		filtered.Set("status", "has_response")
-		group, fetchErr := fetch("top_qnames", filtered)
-		if fetchErr != nil {
-			oxMonitorWriteError(w, fetchErr)
-			return
+		reason := "rule_dns"
+		if adguard && rules {
+			reason = "standard_adguard_rule_dns"
+		} else if adguard {
+			reason = "standard_adguard"
 		}
-		blocked = map[string]interface{}{"available": true, "reason": "standard_adguard", "matcher_tag": matcher, "sample_size": group.SampleSize, "rows": group.Rows, "at_limit": group.AtLimit}
+		group := oxMergeRankings(groups)
+		blocked = map[string]interface{}{"available": true, "reason": reason, "matcher_tags": matchers, "sample_size": group.SampleSize, "rows": group.Rows, "at_limit": group.AtLimit}
+		if len(matchers) == 1 {
+			blocked["matcher_tag"] = matchers[0]
+		}
 	}
 	if err := config.verifySnapshot(ctx, client, cfg, health, running); err != nil {
 		oxMonitorWriteError(w, err)

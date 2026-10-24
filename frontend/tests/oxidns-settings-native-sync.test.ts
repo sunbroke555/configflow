@@ -211,7 +211,7 @@ describe('unified OxiDNS profile settings', () => {
     expect(document.body.textContent).not.toContain('过期联动提示')
     expect(document.body.textContent).not.toContain('当前配置已切换')
     await click('保存草稿')
-    expect(oxidnsApi.saveSettings).toHaveBeenCalledExactlyOnceWith(next, 'next-profile')
+    expect(oxidnsApi.saveSettings).toHaveBeenCalledExactlyOnceWith(next, 'next-profile', undefined)
   })
 
 

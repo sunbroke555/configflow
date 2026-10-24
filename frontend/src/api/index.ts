@@ -5,6 +5,7 @@ import router from '@/router'
 import { getAuthSessionGeneration, getAuthToken, invalidateAuthSession } from '@/authSession'
 import { beginScopedRequest, clearActiveProfileId, endScopedRequest, getActiveProfileId } from '@/profileContext'
 import type { GatewayForwardingEntry } from '@/lib/gatewayForwarding'
+import type { ComposePayload, ComposeResult, RuleDnsSnapshot, RuleDnsState, RuleDnsValue } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
@@ -136,7 +137,17 @@ export const ruleApi = {
   batchCreate: (data: unknown, profileId?: string) => api.post('/rules/batch', data, profileOptions(profileId)),
   renameGroup: (ids: string[], groupName: string, profileId?: string) =>
     api.post('/rules/group-name', { ids, group_name: groupName }, profileOptions(profileId)),
-  findDuplicates: (profileId?: string, signal?: AbortSignal) => api.post('/rules/find-duplicates', {}, { ...profileOptions(profileId), timeout: 120000, signal })
+  findDuplicates: (profileId?: string, signal?: AbortSignal) => api.post('/rules/find-duplicates', {}, { ...profileOptions(profileId), timeout: 120000, signal }),
+  /** 一次写入规则、共享规则库条目与 OxiDNS DNS 处理；id 由服务端生成 */
+  compose: (data: ComposePayload, profileId?: string) =>
+    api.post<ComposeResult>('/rules/compose', { ...data, base_url: data.base_url ?? getBaseUrl() }, profileOptions(profileId)),
+  /** 当前配置空间每条规则的 DNS 处理与可固定的上游 */
+  getDns: (profileId?: string) =>
+    api.get<RuleDnsSnapshot & { success: true }>('/rules/dns', { ...profileOptions(profileId), params: { base_url: getBaseUrl() } }),
+  /** 列表快速切换与分组批量设置；一次最多 200 条 */
+  setDns: (routes: Record<string, RuleDnsValue>, options: { skipUnsupported?: boolean } = {}, profileId?: string) =>
+    api.put<{ success: true; rules: Record<string, RuleDnsState>; skipped: string[]; warnings: string[]; pinned_withheld?: boolean }>(
+      '/rules/dns', { routes, skip_unsupported: options.skipUnsupported === true, base_url: getBaseUrl() }, profileOptions(profileId))
 }
 
 // 规则集相关
@@ -332,7 +343,9 @@ export const routerApi = {
 // OxiDNS 统一配置
 export const oxidnsApi = {
   getSettings: (profileId?: string) => api.get('/oxidns/settings', profileOptions(profileId)),
-  saveSettings: (settings: unknown, profileId?: string) => api.post('/oxidns/settings', settings, profileOptions(profileId)),
+  /** ifMatch 为读取时的 ETag；设置已在其他页面修改时返回 409 oxidns_changed_elsewhere */
+  saveSettings: (settings: unknown, profileId?: string, ifMatch?: string) => api.post('/oxidns/settings', settings,
+    ifMatch ? { headers: { ...profileOptions(profileId).headers, 'If-Match': ifMatch } } : profileOptions(profileId)),
   validateSettings: (settings: unknown, profileId?: string) => api.post('/oxidns/validate', { settings, base_url: getBaseUrl() }, profileOptions(profileId)),
   render: (settings: unknown, profileId?: string) => api.post('/oxidns/render', { settings, base_url: getBaseUrl() }, profileOptions(profileId)),
   prepareEditor: (settings: unknown, profileId?: string) => api.post('/oxidns/editor', { settings, base_url: getBaseUrl() }, profileOptions(profileId)),

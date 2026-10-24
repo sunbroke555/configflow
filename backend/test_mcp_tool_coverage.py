@@ -293,3 +293,52 @@ def test_named_chain_roundtrip_uses_proxy_group_tools_and_stays_profile_local(ap
     assert [group["id"] for group in repository.get_profile("alpha")["proxy_groups"]] == [entry["id"]]
     assert repository.get_profile("default") == default
     assert repository.get_shared() == shared
+
+
+def test_compose_rule_tool(app_with_config):
+    app, repository = app_with_config
+    with app.app_context():
+        result = tools.call_tool("compose_rule", {
+            "source": {"kind": "values", "text": "b.com\n+.c.com\na.com", "rule_type": "DOMAIN"},
+            "rule": {"policy": "DIRECT"}, "dns": "nxdomain"})
+    created = [item["id"] for item in result["data"]["rules"]]
+    assert len(created) == 2 and all(item_id.startswith("rule_") for item_id in created)
+    assert result["skipped"][0]["existing_id"] == "rule-1"
+    profile = repository.get_profile("default")
+    assert _ids(repository, "rule_configs")[:2] == created
+    assert profile["oxidns"]["rule_actions"] == {item_id: {"action": "nxdomain"} for item_id in created}
+    with app.app_context():
+        with pytest.raises(Exception, match="compose_rule"):
+            tools.call_tool("manage_rule", {"action": "create", "data": {
+                "itemType": "rule", "rule_type": "DOMAIN", "value": "z.com", "policy": "DIRECT", "dns": "blackhole"}})
+        created = tools.call_tool("manage_rule", {"action": "create", "data": {
+            "itemType": "rule", "rule_type": "DOMAIN", "value": "z.com", "policy": "DIRECT", "dns": "default"}})
+    assert "dns" not in created["item"]
+    assert all("dns" not in item for item in repository.get_profile("default")["rule_configs"])
+
+
+def test_set_rule_dns_tool(app_with_config):
+    app, repository = app_with_config
+    with app.app_context():
+        result = tools.call_tool("set_rule_dns", {"routes": {"rule-1": "blackhole", "ruleset-1": "follow"}})
+        assert result["rules"]["rule-1"]["route"] == "blackhole"
+        state = tools.call_tool("get_rule_dns", {})
+        assert state["rules"]["rule-1"] == {"state": "explicit", "route": "blackhole"}
+        assert state["rules"]["ruleset-1"]["state"] == "follow"
+        assert {item["source"] for item in state["upstreams"]} >= {"local", "remote"}
+        upstream = state["upstreams"][0]
+        tools.call_tool("set_rule_dns", {"routes": {"rule-1": "upstream:" + upstream["key"]}})
+        # Rule edits carry dns through the same transaction and never store it on the rule.
+        tools.call_tool("manage_rule", {"action": "update", "id": "rule-1", "data": {"dns": "refused"}})
+    oxidns = repository.get_profile("default")["oxidns"]
+    assert oxidns["rule_actions"] == {"rule-1": {"action": "refused"}}
+    assert oxidns["rule_dns_follow"] == ["ruleset-1"] and oxidns["direct_rulesets"] == ["ruleset-1"]
+    assert all("dns" not in item for item in repository.get_profile("default")["rule_configs"])
+
+
+def test_update_oxidns_settings_null_deletes_action(app_with_config):
+    app, repository = app_with_config
+    with app.app_context():
+        tools.call_tool("set_rule_dns", {"routes": {"rule-1": "nodata", "ruleset-1": "blackhole"}})
+        tools.call_tool("update_oxidns_settings", {"data": {"rule_actions": {"rule-1": None}}})
+    assert repository.get_profile("default")["oxidns"]["rule_actions"] == {"ruleset-1": {"action": "blackhole"}}

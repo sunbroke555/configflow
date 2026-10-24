@@ -942,3 +942,37 @@ def test_native_content_refresh_falls_back_to_full_update(sync_env, monkeypatch,
     assert calls[-1] == ('POST', None)
     assert len([entry for entry in calls if entry[0] == 'POST']) == (2 if version == '1.8.35-go' else 1)
     assert rule_sync.status(manager, agent['id'])['state']['status'] == 'running'
+
+
+def test_unpublished_pinned_upstream_is_withheld_and_reported(sync_env, monkeypatch):
+    repository, manager, agent, _, _ = as_oxidns(sync_env)
+    rule_sync.configure(manager, agent['id'], {'library': False, 'rules': True})
+    draft = {'action': 'upstream', 'source': 'local', 'upstream': {'addr': 'udp://192.0.2.77'}}
+    repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update(
+        local_dns='udp://192.0.2.77', direct_rules=[], rule_actions={'single': draft}))
+    monkeypatch.setattr(manager, 'publish_deployment', lambda *_a, **_k: pytest.fail('DNS draft was published'))
+    worker, now = worker_for(manager)
+    worker.run(agent['id'])
+    tick(worker, now, agent['id'], 10)
+    state = rule_sync.status(manager, agent['id'])['state']
+    assert state['status'] == 'idle' and state['message'].endswith('指定上游需手动发布')
+    assert 'single' not in (source_for(manager, agent['id'])['oxidns'].get('rule_actions') or {})
+
+
+def test_pinned_withheld_reports_only_auto_synced_unpublished_pins(sync_env):
+    repository, manager, agent, _, _ = as_oxidns(sync_env)
+    draft = {'action': 'upstream', 'source': 'local', 'upstream': {'addr': 'udp://192.0.2.77'}}
+    repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update(
+        local_dns='udp://192.0.2.77', direct_rules=[], rule_actions={'single': draft}))
+    # Only the library scope syncs automatically, so the inline rule waits for a manual publish anyway.
+    assert rule_sync.pinned_withheld(repository, 'default', ['single']) is False
+    rule_sync.configure(manager, agent['id'], {'library': False, 'rules': True})
+    assert rule_sync.pinned_withheld(repository, 'default', ['single']) is True
+    assert rule_sync.pinned_withheld(repository, 'default', ['set-a']) is False
+    assert rule_sync.pinned_withheld(repository, 'default', []) is False
+    # Another profile's devices and disabled or MosDNS-type devices never withhold.
+    assert rule_sync.pinned_withheld(repository, 'missing-profile-devices', ['single']) is False
+    update_agent(manager, agent['id'], enabled=False)
+    assert rule_sync.pinned_withheld(repository, 'default', ['single']) is False
+    update_agent(manager, agent['id'], enabled=True, service_type='mihomo')
+    assert rule_sync.pinned_withheld(repository, 'default', ['single']) is False

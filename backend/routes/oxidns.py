@@ -1,31 +1,78 @@
 """Profile-scoped OxiDNS template settings."""
 from copy import deepcopy
+from hashlib import sha256
+import json
 from flask import jsonify, request
 from backend.routes import oxidns_bp
 from backend.common.auth import require_auth
-from backend.common.config import get_config, save_config_with_publish_guard
+from backend.common.config import get_config
 from backend.common.oxidns_settings import normalize_oxidns_settings, OxidnsSettingsError
+
+
+_CHANGED_ELSEWHERE = 'OxiDNS 设置已在其他页面修改（例如策略规则的 DNS），请重新加载后再保存'
+
+
+def _etag(settings):
+    """Strong validator of the stored OxiDNS object.
+
+    The rules page writes per-rule DNS into this object directly (and, in
+    template mode, never touches native_config), so the editor guards its
+    whole-object save with it.
+    """
+    text = json.dumps(settings if isinstance(settings, dict) else {}, sort_keys=True,
+                      ensure_ascii=False, separators=(',', ':'))
+    return '"' + sha256(text.encode()).hexdigest() + '"'
+
+
+class _ChangedElsewhere(Exception):
+    """If-Match no longer names the stored settings; nothing is saved."""
 
 
 @oxidns_bp.route('/settings', methods=['GET', 'POST'])
 @require_auth
 def oxidns_settings():
-    config = get_config()
+    from backend.common.config import get_repository, reset_config_context
+    from backend.common.profile_context import resolve_profile_id
+    from backend.common.rule_dns import invalidate_follow
     try:
         if request.method == 'GET':
+            config = get_config()
             # Older versions allowed incomplete plugin instances to be saved.
             # Keep them editable; new writes and every render still validate.
-            return jsonify(normalize_oxidns_settings(
+            response = jsonify(normalize_oxidns_settings(
                 config.get('oxidns', {}), validate_native_arguments=False))
+            response.headers['ETag'] = _etag(config.get('oxidns', {}))
+            return response
         value = request.get_json(silent=True)
         if not isinstance(value, dict):
             raise OxidnsSettingsError('OxiDNS 设置必须是对象')
+        expected = (request.headers.get('If-Match') or '').strip()
         # Whole-object updates are deliberate: the editor always loads defaults,
         # and callers can reset a feature without stale fields surviving.
         settings = normalize_oxidns_settings(value, validate_native_arguments=False)
-        config['oxidns'] = settings
-        guard = save_config_with_publish_guard(config, 'oxidns')
-        return jsonify({'success': True, 'settings': settings, 'draft': True, 'publish_guard': guard})
+
+        def update(current):
+            # Checked under the write lock, so a rules-page DNS write can never
+            # land between the check and the save. Requests without If-Match
+            # (older clients, MCP) keep saving as before.
+            if expected and expected != '*' and expected != _etag(current.get('oxidns', {})):
+                raise _ChangedElsewhere()
+            # A route changed here by hand is an explicit choice from now on.
+            current['oxidns'] = invalidate_follow(current, settings)
+
+        profile_id = resolve_profile_id()
+        try:
+            saved, revision = get_repository().update_profile_transaction(
+                profile_id, update, include_config_revision=True)
+        except _ChangedElsewhere:
+            return jsonify({'success': False, 'code': 'oxidns_changed_elsewhere', 'message': _CHANGED_ELSEWHERE}), 409
+        finally:
+            reset_config_context()
+        guard = {'expected_profile_id': profile_id, 'expected_service_type': 'oxidns',
+                 'expected_config_revision': revision}
+        response = jsonify({'success': True, 'settings': saved['oxidns'], 'draft': True, 'publish_guard': guard})
+        response.headers['ETag'] = _etag(saved['oxidns'])
+        return response
     except OxidnsSettingsError as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
 

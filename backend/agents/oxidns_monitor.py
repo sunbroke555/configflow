@@ -264,11 +264,20 @@ def _overview_snapshot(agent, dashboard):
     return data, core, recorders, observations, labels
 
 
+# Labels of the agent's blocked-ranking reason; older agents send none.
+BLOCKED_REASONS = {'standard_adguard': '标准 AdGuard 拦截路径', 'rule_dns': '规则拦截（拒绝/黑洞）',
+                   'standard_adguard_rule_dns': '标准 AdGuard 与规则拦截'}
+# The agent ranks at most this many block matchers (oxRankingBlockLimit).
+BLOCK_RANKING_MATCHER_LIMIT = 32
+
+
 def _rankings_unavailable(code, **fields):
     reasons = {
         'upgrade_required': f'请将 Agent 升级到 {MIN_DASHBOARD_AGENT_VERSION} 或更新版本以查看排行并重置统计。',
         'recorder_not_configured': '未启用查询记录，无法计算域名和客户端排行。',
-        'unsupported_configuration': '当前配置未包含可确认的标准 AdGuard 拦截路径。',
+        'unsupported_configuration': '当前配置未包含可确认的拦截路径（标准 AdGuard 或规则「拒绝/黑洞」）。',
+        'too_many_block_rules': (f'拦截规则分组超过 {BLOCK_RANKING_MATCHER_LIMIT} 个，暂不统计被拦截域名排行；'
+                                 '请合并拒绝/黑洞规则后再查看。'),
         'snapshot_changed': '采集期间核心或配置发生变化，请稍后刷新。',
     }
     reason = reasons.get(code, MESSAGES.get(code.upper(), '暂时无法获取排行，请稍后刷新。'))
@@ -335,12 +344,21 @@ def _dashboard_rankings(agent, params, snapshot, state, recorders):
     if not isinstance(blocked, dict) or type(blocked.get('available')) is not bool:
         raise MonitorError('INVALID_RESPONSE')
     if blocked['available']:
-        blocked_result = {'available': True, 'reason': '标准 AdGuard 拦截路径',
+        code = blocked.get('reason', 'standard_adguard')
+        if not isinstance(code, str) or not re.fullmatch(r'[a-z_]{1,64}', code):
+            raise MonitorError('INVALID_RESPONSE')
+        blocked_result = {'available': True, 'code': code, 'reason': BLOCKED_REASONS.get(code, '拦截路径'),
                           **_ranking_section(blocked, 'domains')}
         if 'matcher_tag' in blocked:
             if not _valid_recorder_tag(blocked['matcher_tag']):
                 raise MonitorError('INVALID_RESPONSE')
             blocked_result['matcher_tag'] = blocked['matcher_tag']
+        if 'matcher_tags' in blocked:
+            tags = blocked['matcher_tags']
+            if (not isinstance(tags, list) or not 0 < len(tags) <= BLOCK_RANKING_MATCHER_LIMIT
+                    or not all(_valid_recorder_tag(tag) for tag in tags)):
+                raise MonitorError('INVALID_RESPONSE')
+            blocked_result['matcher_tags'] = list(tags)
     else:
         reason = blocked.get('reason')
         if not isinstance(reason, str) or not re.fullmatch(r'[a-z_]{1,64}', reason):
@@ -502,7 +520,7 @@ def _record(value, detail=False):
         record['steps'] = value['steps']
     source = value.get('resolution_source')
     if isinstance(source, str) and source in {
-            'local', 'remote', 'fallback', 'cache', 'hosts', 'blocked', 'rejected',
+            'local', 'remote', 'fallback', 'pinned', 'cache', 'hosts', 'blocked', 'rejected',
             'unknown', 'unrecorded', 'error', 'no_response', 'ipv4_preferred'}:
         record['resolution_source'] = source
     return record

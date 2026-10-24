@@ -19,17 +19,85 @@ _RESOURCE_LISTS = ('direct_rules', 'proxy_rules', 'direct_rulesets', 'proxy_rule
 _MISSING = object()
 
 
-def template_inputs(settings):
-    """Copy template controls without recursively embedding previous editor data."""
-    return {key: deepcopy(value) for key, value in settings.items()
-            if key not in _EDITOR_FIELDS and not key.startswith('_editor_')}
+def _rule_ids(config):
+    """(every rule id -> item, ids of active rules) of a space."""
+    from backend.converters.oxidns import _items
+    items = config.get('rule_configs') or _items(config)
+    known = {}
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get('id'), str):
+            known.setdefault(item['id'], item)
+    return known, {item.get('id') for item in _items(config)}
+
+
+def _restore_parked(inputs, config):
+    """Template inputs route disabled rules again: the generator skips them itself.
+
+    Parked choices return to the lists or rule_actions, and rule_actions ids
+    leave the selector lists, whose native union catalog may still hold them.
+    """
+    parked, actions = inputs.get('rule_dns_parked'), inputs.get('rule_actions')
+    if not isinstance(parked, dict) or not isinstance(actions, dict) or \
+            any(not isinstance(inputs.get(key, []), list) for key in _RESOURCE_LISTS):
+        return inputs  # Normalization reports the malformed value.
+    known = _rule_ids(config)[0] if config is not None else {}
+    for identity, action in parked.items():
+        route = action.get('action') if isinstance(action, dict) else None
+        if route in ('direct', 'proxy'):
+            item = known.get(identity)
+            if item is not None:
+                suffix = 'rulesets' if item.get('itemType') == 'ruleset' else 'rules'
+            else:
+                suffix = 'rulesets' if identity in inputs.get(f'{route}_rulesets', []) else 'rules'
+            other = f'{"proxy" if route == "direct" else "direct"}_{suffix}'
+            inputs[other] = [value for value in inputs.get(other, []) if value != identity]
+            if identity not in inputs.setdefault(f'{route}_{suffix}', []):
+                inputs[f'{route}_{suffix}'].append(identity)
+        elif route is not None:
+            actions.setdefault(identity, action)
+    inputs['rule_dns_parked'] = {}
+    for key in _RESOURCE_LISTS:
+        if key in inputs:
+            inputs[key] = [value for value in inputs[key] if value not in actions]
+    return inputs
+
+
+def template_inputs(settings, config=None):
+    """Copy template controls without recursively embedding previous editor data.
+
+    Choices parked by native routing are restored; config, when given, says
+    whether a parked direct/proxy id is a rule or a ruleset.
+    """
+    return _restore_parked({key: deepcopy(value) for key, value in settings.items()
+                            if key not in _EDITOR_FIELDS and not key.startswith('_editor_')}, config)
+
+
+def _park_inactive(settings, config):
+    """Native routing keeps only active rules; park the choices of the others.
+
+    rule_actions keeps active ids only. The selector lists stay a retained
+    catalog. Follow rules need no parking: their policy decides on enabling.
+    """
+    known, active = _rule_ids(config)
+    follow = set(settings['rule_dns_follow'])
+    parked = settings['rule_dns_parked']
+    for identity, action in list(settings['rule_actions'].items()):
+        if identity in active:
+            continue
+        del settings['rule_actions'][identity]
+        if identity in known and identity not in follow:
+            parked.setdefault(identity, action)
+    for key in _RESOURCE_LISTS:
+        for identity in settings[key]:
+            if identity in known and identity not in active and identity not in follow:
+                parked.setdefault(identity, {'action': key.split('_')[0]})
 
 
 def _template(settings, config, base_url):
     from backend.converters.oxidns import generate_oxidns_config
     source = deepcopy(config)
     source['oxidns'] = normalize_oxidns_settings({
-        **template_inputs(settings), 'config_mode': 'template', 'native_config': '',
+        **template_inputs(settings, config), 'config_mode': 'template', 'native_config': '',
         'additional_files': deepcopy(settings.get('additional_files', [])),
     })
     text = generate_oxidns_config(source, base_url)
@@ -43,7 +111,7 @@ def prepare_editor(settings, config, base_url=''):
         # A former native user may have an invalid, inactive template. Opening
         # the editor must not attempt to regenerate it or replace their YAML.
         if not isinstance(current.get('template_settings'), dict):
-            current['template_settings'] = template_inputs(current)
+            current['template_settings'] = template_inputs(current, config)
         return current
     template, text, document = _template(current, config, base_url)
     old_native = current['native_config']
@@ -55,7 +123,8 @@ def prepare_editor(settings, config, base_url=''):
         if not same:
             current['legacy_native_config'] = old_native
     current.update(config_mode='native', native_config=text,
-                   template_settings=template_inputs(template), template_base_config=text)
+                   template_settings=template_inputs(template, config), template_base_config=text)
+    _park_inactive(current, config)
     return current
 
 
@@ -209,10 +278,10 @@ def preview_template(settings, proposed_inputs, config, base_url='', resolutions
     ):
         raise OxidnsSettingsError('resolutions 必须按参数路径选择 current 或 template')
     current = prepare_editor(settings, config, base_url)
-    previous_inputs = current.get('template_settings', template_inputs(current))
+    previous_inputs = current.get('template_settings', template_inputs(current, config))
     # Validate only on invoking this tool. Merely opening a native draft never
     # depends on whether its retained template controls are still renderable.
-    old_template = {**template_inputs(previous_inputs), 'additional_files': current['additional_files']}
+    old_template = {**template_inputs(previous_inputs, config), 'additional_files': current['additional_files']}
     base_text = current.get('template_base_config')
     if isinstance(base_text, str) and base_text.strip():
         base = load_native_yaml(base_text, '模板基线')
@@ -222,14 +291,14 @@ def preview_template(settings, proposed_inputs, config, base_url='', resolutions
     else:
         _, _, base = _template(old_template, config, base_url)
     next_template, next_text, proposed = _template({
-        **template_inputs(proposed_inputs), 'additional_files': current['additional_files'],
+        **template_inputs(proposed_inputs, config), 'additional_files': current['additional_files'],
     }, config, base_url)
     document = load_native_yaml(current['native_config'])
     conflicts = []
     merged = _merge(base, document, proposed, (), resolutions, conflicts)
     changes = _changes(document, merged)
     result = deepcopy(current)
-    result.update(config_mode='native', template_settings=template_inputs(next_template),
+    result.update(config_mode='native', template_settings=template_inputs(next_template, config),
                   template_base_config=next_text)
     # Keep comments and original formatting when the actual document is equal.
     if not _same(document, merged):
@@ -239,6 +308,11 @@ def preview_template(settings, proposed_inputs, config, base_url='', resolutions
     for key in _RESOURCE_LISTS:
         result[key] = _union(current.get(key), next_template.get(key))
         changes.extend(_changes(current.get(key, _MISSING), result[key], ('resources', key)))
+    # The draft's own rule DNS choices win; follow ends where the template set an action.
+    result['rule_actions'] = {**next_template['rule_actions'], **current['rule_actions']}
+    result['rule_dns_follow'] = [identity for identity in current['rule_dns_follow']
+                                 if identity not in result['rule_actions']]
+    _park_inactive(result, config)
     result['custom_hosts'] = _merge(previous_inputs.get('custom_hosts', ''), current.get('custom_hosts', ''),
                                     next_template['custom_hosts'], ('resources', 'custom_hosts'), resolutions, conflicts)
     result['custom_hosts'] = _keep_referenced_content(

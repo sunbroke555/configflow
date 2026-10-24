@@ -170,6 +170,8 @@ RESOURCE_FIELDS = SHARED_FIELDS[:3]
 PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes')
 BUILTIN_POLICIES = {'DIRECT', 'REJECT'}
 RULE_SOURCE_FIELDS = ('name', 'url', 'behavior', 'content', 'source_type', 'format')
+# Per-rule OxiDNS DNS fields keyed by (or listing) rule_configs ids.
+RULE_DNS_FIELDS = ('rule_actions', 'rule_dns_follow', 'rule_dns_parked')
 ROUTER_IDENTITY_FIELDS = ('type', 'endpoint')
 ROUTER_CONNECTION_FIELDS = (*ROUTER_IDENTITY_FIELDS, 'username', 'password', 'verify_tls')
 # Device ownership receipts; only a publication under the router's lock may change them.
@@ -193,6 +195,20 @@ def _id_list(values, label):
     if len(set(values)) != len(values):
         raise ProfileValidationError(f'{label} 含有重复引用')
     return values
+
+
+def _prune_rule_dns(profile):
+    """Drop per-rule OxiDNS DNS entries of rules the profile no longer has."""
+    oxidns = profile.get('oxidns')
+    if not isinstance(oxidns, dict) or not isinstance(profile.get('rule_configs'), list):
+        return
+    ids = {rule.get('id') for rule in profile['rule_configs'] if isinstance(rule, dict)}
+    for key in RULE_DNS_FIELDS:
+        value = oxidns.get(key)
+        if isinstance(value, dict):
+            oxidns[key] = {identity: item for identity, item in value.items() if identity in ids}
+        elif isinstance(value, list):
+            oxidns[key] = [identity for identity in value if identity in ids]
 
 
 def _collect_resource_refs(profile, catalogs, resource_roots=None):
@@ -895,27 +911,32 @@ class ProfileRepository:
             return copy.deepcopy(replacement)
         return current
 
+    def _update_profile_locked(self, document, profile_id, updater):
+        """Apply one profile updater inside an open write transaction."""
+        current = self._profile(document, profile_id)
+        previous_group_names = {group.get('name') for group in current['proxy_groups']}
+        # Updaters may inspect hydrated resources but cannot persist copies.
+        snapshot = self._resolve_profile(document, profile_id)
+        updated = self._apply_updater(snapshot, updater)
+        for key in PROFILE_FIELDS:
+            if key in updated:
+                current[key] = copy.deepcopy(updated[key])
+        removed_names = previous_group_names - {group.get('name') for group in current['proxy_groups']}
+        for rule in current['rule_configs']:
+            if rule.get('policy') in removed_names:
+                raise ProfileInUse(f'配置 {current["name"]} 的规则仍引用被删除策略组：{rule["policy"]}',
+                                   [{'kind': 'profile', 'id': profile_id, 'name': current['name']}])
+        for rule in current['rule_configs']:
+            if rule.get('itemType') == 'ruleset':
+                for key in (*RULE_SOURCE_FIELDS, 'library_enabled'):
+                    rule.pop(key, None)
+        current['_revision'] += 1
+        current['updated_at'] = _now()
+        return current
+
     def update_profile_transaction(self, profile_id, updater, *, include_config_revision=False):
         with self._document(write=True) as document:
-            current = self._profile(document, profile_id)
-            previous_group_names = {group.get('name') for group in current['proxy_groups']}
-            # Updaters may inspect hydrated resources but cannot persist copies.
-            snapshot = self._resolve_profile(document, profile_id)
-            updated = self._apply_updater(snapshot, updater)
-            for key in PROFILE_FIELDS:
-                if key in updated:
-                    current[key] = copy.deepcopy(updated[key])
-            removed_names = previous_group_names - {group.get('name') for group in current['proxy_groups']}
-            for rule in current['rule_configs']:
-                if rule.get('policy') in removed_names:
-                    raise ProfileInUse(f'配置 {current["name"]} 的规则仍引用被删除策略组：{rule["policy"]}',
-                                       [{'kind': 'profile', 'id': profile_id, 'name': current['name']}])
-            for rule in current['rule_configs']:
-                if rule.get('itemType') == 'ruleset':
-                    for key in (*RULE_SOURCE_FIELDS, 'library_enabled'):
-                        rule.pop(key, None)
-            current['_revision'] += 1
-            current['updated_at'] = _now()
+            current = self._update_profile_locked(document, profile_id, updater)
             revision = int(current['_revision']) + int(document['shared'].get('_revision', 0))
         saved = copy.deepcopy(current)
         return (saved, revision) if include_config_revision else saved
@@ -1044,22 +1065,49 @@ class ProfileRepository:
             preserve_cache = True
         return copy.deepcopy(rule)
 
+    def _apply_shared_locked(self, document, updater):
+        """Apply one shared updater inside an open write transaction."""
+        current = document['shared']
+        updated = self._apply_updater(copy.deepcopy(current), updater)
+        proposed = {key: copy.deepcopy(updated.get(key, current[key])) for key in SHARED_FIELDS}
+        for kind in SHARED_FIELDS:
+            remaining = _items_by_id(proposed[kind], kind)
+            for resource in current[kind]:
+                disabled = kind != 'rule_library' and resource.get('enabled', True) and not remaining.get(resource['id'], {}).get('enabled', True)
+                if resource['id'] not in remaining or disabled:
+                    usages = self._resource_usage(document, kind, resource['id'])
+                    if usages:
+                        raise ProfileInUse(f'资源 {resource.get("name", resource["id"])} 仍被引用：' + '、'.join(u['name'] for u in usages), usages)
+        proposed['_revision'] = current['_revision'] + 1
+        document['shared'] = proposed
+        return proposed
+
     def update_shared_transaction(self, updater):
         with self._document(write=True) as document:
-            current = document['shared']
-            updated = self._apply_updater(copy.deepcopy(current), updater)
-            proposed = {key: copy.deepcopy(updated.get(key, current[key])) for key in SHARED_FIELDS}
-            for kind in SHARED_FIELDS:
-                remaining = _items_by_id(proposed[kind], kind)
-                for resource in current[kind]:
-                    disabled = kind != 'rule_library' and resource.get('enabled', True) and not remaining.get(resource['id'], {}).get('enabled', True)
-                    if resource['id'] not in remaining or disabled:
-                        usages = self._resource_usage(document, kind, resource['id'])
-                        if usages:
-                            raise ProfileInUse(f'资源 {resource.get("name", resource["id"])} 仍被引用：' + '、'.join(u['name'] for u in usages), usages)
-            proposed['_revision'] = current['_revision'] + 1
-            document['shared'] = proposed
+            proposed = self._apply_shared_locked(document, updater)
         return copy.deepcopy(proposed)
+
+    def update_shared_and_profiles_transaction(self, shared_updater, profile_updater, profile_ids):
+        """Update shared resources and profiles in one commit; any failure writes nothing.
+
+        profile_ids is a list, or a callable receiving the current (shared,
+        profiles) sections read-only and returning one. profile_updater(profile_id,
+        before, after) sees the profile resolved against the shared data before
+        and after shared_updater, and edits after like any profile updater.
+        Each section's revision advances once.
+        """
+        with self._document(write=True) as document:
+            selected = profile_ids(document['shared'], document['profiles']) if callable(profile_ids) else profile_ids
+            selected = list(dict.fromkeys(selected))
+            before = {profile_id: self._resolve_profile(document, profile_id) for profile_id in selected}
+            shared = self._apply_shared_locked(document, shared_updater)
+            profiles = {}
+            for profile_id in selected:
+                def update(snapshot, profile_id=profile_id):
+                    return profile_updater(profile_id, before[profile_id], snapshot)
+                profiles[profile_id] = self._update_profile_locked(document, profile_id, update)
+            result = copy.deepcopy(shared), copy.deepcopy(profiles)
+        return result
 
     def save_shared(self, snapshot, baseline=None):
         if not isinstance(snapshot, dict):
@@ -1121,16 +1169,10 @@ class ProfileRepository:
             result[field] = [copy.deepcopy(item) for item in shared[field] if item['id'] in selected[field]]
         result['rule_library'] = copy.deepcopy(shared['rule_library'])
         library = {item['id']: item for item in shared['rule_library']}
+        from backend.common.rule_dns import hydrate_ruleset
         for rule in result['rule_configs']:
             if rule.get('itemType') == 'ruleset':
-                resource = library[rule['library_rule_id']]
-                for key in RULE_SOURCE_FIELDS:
-                    if key in resource:
-                        rule[key] = copy.deepcopy(resource[key])
-                rule.setdefault('behavior', 'domain')
-                if resource.get('source_type') == 'content':
-                    rule['url'] = f'/api/profiles/{profile_id}/rule-library/content/{resource["id"]}'
-                rule['library_enabled'] = copy.deepcopy(resource.get('enabled', True))
+                hydrate_ruleset(rule, library[rule['library_rule_id']], profile_id)
         return result
 
     def get_compat_config(self, profile_id, *, resource_roots=None):
@@ -1148,7 +1190,16 @@ class ProfileRepository:
             raise ProfileValidationError('独立配置导入只接受引用，不接受共享资源副本')
         if set(data) & {'resource_refs', 'node_dialers'}:
             raise ProfileValidationError('独立配置导入仅支持当前格式')
-        return self.save_profile(profile_id, data)
+        def update(current):
+            if '_revision' in data and data['_revision'] != current['_revision']:
+                raise ProfileInUse('配置已更新，请刷新后重试')
+            for key, value in data.items():
+                if key in PROFILE_FIELDS:
+                    current[key] = copy.deepcopy(value)
+            # Imported rules replace the composition; per-rule DNS of rules it
+            # no longer has would otherwise refuse the whole import.
+            _prune_rule_dns(current)
+        return self.update_profile_transaction(profile_id, update)
 
     def export_all(self, desensitize=False):
         with self._document() as document:
@@ -2014,6 +2065,25 @@ class ProfileRepository:
                 for value in _id_list(dns_settings.get(key, []), key):
                     if value not in rules or rules[value]['itemType'] != expected:
                         raise ProfileInUse(f'{label} {key} 仍引用不存在的规则 {value}，请先取消选择')
+        oxidns = profile.get('oxidns', {})
+        from backend.common.rule_dns import normalize_action
+        for key in RULE_DNS_FIELDS:
+            value = oxidns.get(key, [])
+            if not isinstance(value, (dict, list)) or any(not isinstance(identity, str) for identity in value):
+                raise ProfileValidationError(f'OxiDNS {key} 必须以规则 ID 为键')
+            for identity in value:
+                if identity not in rules:
+                    raise ProfileInUse(f'OxiDNS DNS 处理仍引用不存在的规则 {identity}，请先取消')
+            if key == 'rule_dns_follow' or not isinstance(value, dict):
+                continue
+            # Imports skip the OxiDNS settings normalizer, but the rules page and
+            # generation read these actions directly.
+            for identity, action in value.items():
+                try:
+                    if action is not None:
+                        normalize_action(action, parked=key == 'rule_dns_parked')
+                except OxidnsSettingsError as exc:
+                    raise ProfileValidationError(f'OxiDNS {key} 中规则 {identity} 的 DNS 处理无效：{exc}') from exc
         for setting in profile['surge'].get('smart_groups', []):
             if setting.get('group_id') not in groups:
                 raise ProfileInUse('Surge Smart 设置引用的策略组不存在')

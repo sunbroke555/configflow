@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -71,6 +72,9 @@ plugins:
   - {tag: adguard_block, type: black_hole, args: {mode: nxdomain}}
   - {tag: adguard_reject, type: sequence, args: [{exec: '$adguard_block'}, {exec: accept}]}
   - {tag: forward_local, type: forward, args: {upstreams: [{tag: test_upstream, addr: %q}]}}
+  - {tag: rules_domain_1, type: domain_set, args: {exps: [domain:refused.example]}}
+  - {tag: rules_domain_2, type: domain_set, args: {exps: [domain:hole.example]}}
+  - {tag: cf_dns_blackhole, type: black_hole, args: {mode: 'null', short_circuit: true}}
   - tag: sequence_main
     type: sequence
     args:
@@ -78,6 +82,8 @@ plugins:
       - exec: $records
       - matches: [question $adguard_rules]
         exec: goto adguard_reject
+      - {matches: [qname $rules_domain_1], exec: reject}
+      - {matches: [qname $rules_domain_2], exec: $cf_dns_blackhole}
       - exec: $forward_local
       - exec: accept
   - {tag: server, type: udp_server, args: {listen: %q, entry: sequence_main}}
@@ -150,6 +156,12 @@ plugins:
 	for i := 0; i < 7; i++ {
 		query("allowed.example", 0)
 	}
+	for i := 0; i < 5; i++ {
+		query("refused.example", 5)
+	}
+	for i := 0; i < 3; i++ {
+		query("hole.example", 0)
+	}
 	deadline = time.Now().Add(8 * time.Second)
 	for {
 		response := oxMonitorTestRequest(cfg, "GET", fmt.Sprintf("/api/oxidns/rankings?since_ms=%d", start))
@@ -165,8 +177,9 @@ plugins:
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != 200 {
 			t.Fatalf("real ranking API: %d %s (%v)", response.Code, response.Body.String(), err)
 		}
-		if body.Clients.SampleSize == 67 {
-			if body.Retention != nil || len(body.Clients.Rows) != 1 || body.Clients.Rows[0].Count != 67 || len(body.Domains.Rows) != 2 || body.Domains.Rows[0].Key != "ads.example." || body.Domains.Rows[0].Count != 60 || !body.Blocked.Available || body.Blocked.SampleSize != 60 || len(body.Blocked.Rows) != 1 || body.Blocked.Rows[0].Count != 60 {
+		if body.Clients.SampleSize == 75 {
+			blocked := []oxRankingRow{{"ads.example.", 60, 60.0 / 68}, {"refused.example.", 5, 5.0 / 68}, {"hole.example.", 3, 3.0 / 68}}
+			if body.Retention != nil || len(body.Clients.Rows) != 1 || body.Clients.Rows[0].Count != 75 || len(body.Domains.Rows) != 4 || body.Domains.Rows[0].Key != "ads.example." || body.Domains.Rows[0].Count != 60 || !body.Blocked.Available || body.Blocked.SampleSize != 68 || !reflect.DeepEqual(body.Blocked.Rows, blocked) {
 				t.Fatalf("real aggregate semantics: %s", response.Body.String())
 			}
 			break
@@ -190,5 +203,5 @@ plugins:
 			t.Fatalf("missing actual metric %s: %s", metric, summary.Metrics)
 		}
 	}
-	t.Log("real OxiDNS: 67 recorded requests, 60 confirmed AdGuard blocks, 7 isolated upstream attempts; nullable retention, aggregate APIs and runtime revisions verified")
+	t.Log("real OxiDNS: 75 recorded requests, 60 confirmed AdGuard blocks plus 8 rule reject/blackhole blocks, 7 isolated upstream attempts; nullable retention, aggregate APIs and runtime revisions verified")
 }

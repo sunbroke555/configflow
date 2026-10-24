@@ -934,6 +934,10 @@ def test_gateway_setup_fields_match_the_previous_release(setup_api):
     profile = repository.get_profile(session['profile_id'])
     # Captured from 0ef9e89 with the same inputs.
     expected = json.loads((Path(__file__).parent / 'testdata' / 'setup_gateway_fields_0ef9e89.json').read_text(encoding='utf-8'))
+    # Per-rule OxiDNS DNS settings postdate 0ef9e89; they must be stored empty.
+    rule_dns = {'rule_actions': {}, 'rule_dns_follow': [], 'rule_dns_parked': {}}
+    assert {key: profile['oxidns'].get(key) for key in rule_dns} == rule_dns
+    profile['oxidns'] = {key: value for key, value in profile['oxidns'].items() if key not in rule_dns}
     for key, value in expected.items():
         assert profile[key] == value, key
 

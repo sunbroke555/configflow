@@ -96,8 +96,17 @@ def baseline():
     return json.loads(BASELINE.read_text(encoding='utf-8'))
 
 
+# Per-rule OxiDNS DNS settings postdate 0ef9e89. Stored empty, they leave every
+# generated output unchanged, so they must be empty and are otherwise ignored.
+RULE_DNS_DEFAULTS = {'rule_actions': {}, 'rule_dns_follow': [], 'rule_dns_parked': {}}
+
+
 def test_gateway_goal_drafts_match_the_previous_release(tmp_path):
-    assert gateway_goal_fields(tmp_path) == baseline()['gateway_goal_fields']
+    fields = gateway_goal_fields(tmp_path)
+    oxidns = fields['oxidns']
+    assert {key: oxidns.get(key) for key in RULE_DNS_DEFAULTS} == RULE_DNS_DEFAULTS
+    fields['oxidns'] = {key: value for key, value in oxidns.items() if key not in RULE_DNS_DEFAULTS}
+    assert fields == baseline()['gateway_goal_fields']
 
 
 def test_single_service_scripts_match_the_previous_release():

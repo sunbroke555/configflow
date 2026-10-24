@@ -3,6 +3,10 @@
 The source snapshot and archive must come from the same successful deployment.
 Neither function mutates its inputs. No network requests or repository writes are
 made here. Settings are ``{'library': bool, 'rules': bool}``; omitted scopes are off.
+
+Per-rule OxiDNS DNS choices follow their rule's scope, except that a rule newly
+pinned to an upstream the published configuration does not have keeps its
+published choice: DNS drafts are never published automatically.
 """
 from copy import deepcopy
 import hashlib
@@ -14,6 +18,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import yaml
 
+from backend.common.oxidns_settings import OxidnsSettingsError
+from backend.common.rule_dns import (
+    BLACKHOLE_PLUGIN, BLACKHOLE_TAG, UPSTREAM_PREFIX, entry_key, hydrate_ruleset, normalize_action,
+    parse_exec, pinned_action, upstream_catalog,
+)
 from .deployment_bundle import (
     DeploymentPreparationError, _local_rule, _pack, deployment_content_fingerprint, relative_path,
 )
@@ -23,13 +32,95 @@ class RuleSyncProjectionError(ValueError):
     pass
 
 
-_SOURCE_FIELDS = ('name', 'url', 'behavior', 'content', 'source_type', 'format')
 _SELECTORS = ('direct_rulesets', 'proxy_rulesets', 'direct_rules', 'proxy_rules')
+_RULE_DNS = ('rule_actions', 'rule_dns_follow', 'rule_dns_parked')
 _GROUP_TAG = re.compile(r'rules_(?:domain|ip)_\d+(?:_\d+)*\Z')
+# Owned rule DNS helpers: rebuilt with the rule groups, never hand-written plugins.
+_HELPER_TAG = re.compile(rf'{BLACKHOLE_TAG}|cf_dns_(?:up|fwd|cache)_([0-9a-f]{{12}})')
+PINNED_WITHHELD = '指定上游需手动发布'
 
 
 def _scope(item):
     return 'library' if item.get('itemType') == 'ruleset' else 'rules' if item.get('itemType') == 'rule' else None
+
+
+def _key_scope(key):
+    return 'library' if key.endswith('rulesets') else 'rules'
+
+
+def _scopes(*configs):
+    """Scope of every rule id the configs know, so removed rules also follow their scope."""
+    result = {}
+    for config in configs:
+        for item in config.get('rule_configs', []):
+            if isinstance(item, dict) and isinstance(item.get('id'), str):
+                result.setdefault(item['id'], _scope(item))
+    return result
+
+
+def _pinned_key(action):
+    try:
+        action = normalize_action(action, parked=True)
+    except OxidnsSettingsError:
+        return None
+    return entry_key(action['upstream'], action['source']) if action['action'] == 'upstream' else None
+
+
+def published_upstreams(source):
+    """Pinned upstream keys a published source can already resolve: its upstream
+    lists and the upstreams its rules are already pinned to."""
+    settings = source.get('oxidns') or {}
+    try:
+        keys = {entry['key'] for entry in upstream_catalog(settings)}
+    except OxidnsSettingsError:
+        keys = set()
+    actions = settings.get('rule_actions')
+    keys.update(key for key in map(_pinned_key, actions.values() if isinstance(actions, dict) else ()) if key)
+    return keys
+
+
+def _rule_dns(previous, desired, scoped, published, withheld):
+    """Selections with opted-in rules taken from desired.
+
+    Both map the selector lists and rule DNS fields they hold. A rule newly
+    pinned to an upstream outside published keeps all its previous choices and
+    is added to withheld.
+    """
+    def field(source, key, kind):
+        value = source.get(key)
+        return value if isinstance(value, kind) else kind()
+    held = set()
+    for key in ('rule_actions', 'rule_dns_parked'):
+        old = field(previous, key, dict)
+        for identity, action in field(desired, key, dict).items():
+            pinned = _pinned_key(action) if scoped(identity) and action != old.get(identity) else None
+            if pinned is not None and pinned not in published:
+                held.add(identity)
+    withheld.update(held)
+    take = lambda identity: scoped(identity) and identity not in held
+    result = {}
+    for key in _SELECTORS:
+        if key in previous or key in desired:
+            chosen = [identity for identity in field(desired, key, list) if identity not in held]
+            result[key] = chosen + [identity for identity in field(previous, key, list)
+                                    if identity in held and identity not in chosen]
+    for key in ('rule_actions', 'rule_dns_parked'):
+        if key in previous or key in desired:
+            result[key] = {identity: deepcopy(action) for identity, action in field(previous, key, dict).items()
+                           if not take(identity)}
+            result[key].update((identity, deepcopy(action)) for identity, action in field(desired, key, dict).items()
+                               if take(identity))
+    if 'rule_dns_follow' in previous or 'rule_dns_follow' in desired:
+        follow = [identity for identity in field(previous, 'rule_dns_follow', list) if not take(identity)]
+        follow.extend(identity for identity in field(desired, 'rule_dns_follow', list)
+                      if take(identity) and identity not in follow)
+        result['rule_dns_follow'] = follow
+    return result
+
+
+def _disjoint_follow(follow, actions, parked):
+    # Follow only records intent; a rule with an explicit or parked choice does not follow.
+    return [identity for identity in follow if identity not in actions and identity not in parked]
 
 
 def _merge_items(previous, desired, settings):
@@ -66,28 +157,19 @@ def _hydrate(config):
         source = library.get(item['library_rule_id'])
         if source is None:
             raise RuleSyncProjectionError('规则集引用的共享来源不存在，请先修复规则引用。')
-        for key in (*_SOURCE_FIELDS, 'library_enabled'):
-            item.pop(key, None)
-        item.update({key: deepcopy(source[key]) for key in _SOURCE_FIELDS if key in source})
-        item.setdefault('behavior', 'domain')
-        item['library_enabled'] = source.get('enabled', True)
-        if source.get('source_type') == 'content':
-            item['url'] = f'/api/profiles/{config.get("profile_id") or "default"}/rule-library/content/{source["id"]}'
+        hydrate_ruleset(item, source, config.get('profile_id'))
     return config
 
 
-def _native_projection(base, current, projected, settings):
+def _native_projection(base, current, projected, settings, published, withheld):
     """Edit only a recognizable native routing graph, preserving its surroundings."""
     from backend.common.oxidns_native import load_native_yaml
-    from backend.common.oxidns_common_routing import (
-        _analyze, _references, place_routing_groups, reload_references, resource_downloads,
-    )
-    from backend.converters.oxidns import _routing_groups
+    from backend.common.oxidns_common_routing import _analyze, _references, apply_routing
 
     original = base.get('oxidns') or {}
     document = load_native_yaml(original.get('native_config', ''))
     before = _analyze(document, original, base)
-    keys = [key for key in _SELECTORS if settings.get('library' if key.endswith('rulesets') else 'rules')]
+    keys = [key for key in _SELECTORS if settings.get(_key_scope(key))]
     if not keys:
         return
     # Content-only updates can use existing file references even when a custom
@@ -100,98 +182,88 @@ def _native_projection(base, current, projected, settings):
         return
     if any(not before['capabilities'][key]['editable'] for key in keys):
         raise RuleSyncProjectionError('OxiDNS 原生分流包含无法识别的自定义结构，无法自动应用规则结构；请手动检查并发布。')
-    values = deepcopy(before['values'])
-    if current_oxi.get('config_mode') == 'native' and not same_document:
-        desired_document = load_native_yaml(current_oxi.get('native_config', ''))
-        desired = _analyze(desired_document, current_oxi, current)
-        if any(not desired['capabilities'][key]['editable'] for key in keys):
-            raise RuleSyncProjectionError('OxiDNS 草稿分流无法唯一对应当前规则，请手动检查并发布。')
-        for key in keys:
-            values[key] = deepcopy(desired['values'][key])
-    elif current_oxi.get('config_mode') != 'native':
-        for key in keys:
-            values[key] = deepcopy(current_oxi.get(key, []))
     # Native source selectors are a retained resource catalog, not routing truth.
     # If YAML did not change, retain the deployed graph's selections.
-    available = {item['id'] for item in projected.get('rule_configs', [])
-                 if item.get('enabled', True) and item.get('library_enabled', True)}
+    desired = before['values']
+    if current_oxi.get('config_mode') == 'native' and not same_document:
+        desired_document = load_native_yaml(current_oxi.get('native_config', ''))
+        state = _analyze(desired_document, current_oxi, current)
+        if any(not state['capabilities'][key]['editable'] for key in keys):
+            raise RuleSyncProjectionError('OxiDNS 草稿分流无法唯一对应当前规则，请手动检查并发布。')
+        desired = state['values']
+    elif current_oxi.get('config_mode') != 'native':
+        actions = current_oxi.get('rule_actions') if isinstance(current_oxi.get('rule_actions'), dict) else {}
+        # A template's actions win over its union lists.
+        desired = {**{key: [identity for identity in current_oxi.get(key, []) if identity not in actions]
+                      for key in _SELECTORS}, 'rule_actions': actions}
+    desired = {**desired, 'rule_dns_follow': current_oxi.get('rule_dns_follow') or []}
+    scopes = _scopes(projected, current, base)
+    values = _rule_dns(before['values'], desired, lambda identity: settings.get(scopes.get(identity), False),
+                       published, withheld)
+    known = _scopes(projected)
     for key in _SELECTORS:
-        values[key] = [identity for identity in values[key] if identity in available]
-        projected.setdefault('oxidns', {})[key] = deepcopy(values[key])
-    values['aggregate_rules'] = True if values.get('aggregate_rules') is None else values['aggregate_rules']
-    groups = _routing_groups(projected, values)
+        values[key] = [identity for identity in values[key] if known.get(identity) == _key_scope(key)]
+    values['rule_actions'] = {identity: action for identity, action in values['rule_actions'].items()
+                              if identity in known}
+    values['rule_dns_follow'] = [identity for identity in _disjoint_follow(
+        values['rule_dns_follow'], values['rule_actions'], projected['oxidns'].get('rule_dns_parked') or {})
+        if identity in known]
     old_groups = [group for entries in before['groups'].values() for group in entries]
     old_tags = {group['tag'] for group in old_groups}
     if any(set(group['provider']) - {'tag', 'type', 'args'} for group in old_groups):
         raise RuleSyncProjectionError('OxiDNS 规则 Provider 包含额外原生参数，请手动检查并发布。')
     for tag in old_tags:
         if (_references({key: value for key, value in document.items() if key != 'plugins'}, tag)
-                or _references(values.get('custom_matches', []), tag)
+                or _references(before['values'].get('custom_matches', []), tag)
                 or any(_references(plugin, tag) for plugin in document['plugins']
                        if plugin.get('tag') not in old_tags | {'sequence_main', 'rules_reload'})):
             raise RuleSyncProjectionError('OxiDNS 规则 Provider 被自定义插件共用，无法安全自动替换；请手动发布。')
-    result = deepcopy(document)
-    # Same naming and placement as the editor: DNS follow compares the draft
-    # it edited with the bytes rule sync deployed.
-    result['plugins'], groups = place_routing_groups(result['plugins'], old_groups, groups)
-    plugins = {plugin['tag']: plugin for plugin in result['plugins']}
-    domain = [{'matches': [f'qname ${group["tag"]}'],
-               'exec': 'goto china_dns' if group['route'] == 'direct' else 'goto proxy_dns_seq'} for group in groups['domain']]
-    ip = [{'matches': [f'resp_ip ${group["tag"]}'],
-           'exec': 'goto direct_ip' if group['route'] == 'direct' else 'goto ip_requery_proxy'} for group in groups['ip']]
-    custom = deepcopy(before['custom'])
-    suffix = deepcopy(before['dynamic'])
-    if ip:
-        suffix.extend([{'exec': 'jump local_probe'}, *ip,
-                       {'matches': ['has_resp'], 'exec': 'goto default_direct_ip'}
-                       if values['default_forward'] == 'forward_local' else {'exec': 'drop_resp'}])
-    head = values.get('custom_match_position') == 'head'
-    plugins['sequence_main']['args'] = [*deepcopy(before['prefix']), *(custom if head else []),
-                                       *domain, *(custom if not head else []), *suffix, deepcopy(before['final'])]
-    for entry in domain + ip + ([{'exec': 'jump local_probe'}] if ip else []):
-        target = entry['exec'].split(' ', 1)[1]
-        if plugins.get(target, {}).get('type') != 'sequence':
-            raise RuleSyncProjectionError(f'OxiDNS 缺少分流执行链 {target}，请手动检查并发布。')
-    download, reload = plugins.get('rules_download'), plugins.get('rules_reload')
-    if download is not None or reload is not None:
-        if (not download or download.get('type') != 'download' or not isinstance(download.get('args'), dict)
-                or not isinstance(download['args'].get('downloads'), list)
-                or not reload or reload.get('type') != 'reload_provider' or not isinstance(reload.get('args'), list)):
-            raise RuleSyncProjectionError('OxiDNS 下载和重载任务包含自定义结构，请手动检查并发布。')
-        def path(entry):
-            return str(entry.get('dir', '')).rstrip('/') + '/' + str(entry.get('filename', ''))
-        old = {path(item): item for item in resource_downloads(document, original, base)}
-        new = {path(item): item for item in resource_downloads(result, projected['oxidns'], projected)}
-        downloads = []
-        for item in download['args']['downloads']:
-            location = path(item)
-            if location not in old:
-                downloads.append(item)
-            elif location in new:
-                replacement = new.pop(location)
-                if item.get('url') != old[location].get('url') and replacement.get('url') != old[location].get('url'):
-                    raise RuleSyncProjectionError('OxiDNS 规则下载地址已手动覆盖，请手动检查并发布。')
-                downloads.append({**item, **replacement} if item.get('url') == old[location].get('url') else item)
-        download['args']['downloads'] = downloads + list(new.values())
-        reload['args'] = reload_references(reload['args'], old_tags,
-                                           [group['tag'] for entries in groups.values() for group in entries], plugins)
-    projected['oxidns']['native_config'] = yaml.safe_dump(result, allow_unicode=True, sort_keys=False)
+    # Only opted-in keys change; values such as an unset aggregate are not editable.
+    changes = {**{key: values[key] for key in keys},
+               'rule_actions': values['rule_actions'], 'rule_dns_follow': values['rule_dns_follow']}
+    try:
+        result, result_settings = apply_routing(document, projected['oxidns'], projected, changes, before_config=base)
+    except OxidnsSettingsError as error:
+        raise RuleSyncProjectionError(f'OxiDNS 规则分流无法自动更新：{str(error).rstrip("。")}；请手动检查并发布。') from None
+    result_settings['native_config'] = yaml.safe_dump(result, allow_unicode=True, sort_keys=False)
+    projected['oxidns'] = result_settings
 
 
-def project_rule_changes(base, current, settings, *, service_type=None):
-    """Return the deployed source with only opted-in rule scopes advanced."""
+def project_rule_changes(base, current, settings, *, service_type=None, withheld=None):
+    """Return the deployed source with only opted-in rule scopes advanced.
+
+    withheld, when a set, receives the ids of rules whose newly pinned upstream
+    must be published manually.
+    """
     result = deepcopy(base)
+    withheld = set() if withheld is None else withheld
     if not settings.get('library') and not settings.get('rules'):
         return result
     if settings.get('library'):
         result['rule_library'] = deepcopy(current.get('rule_library', []))
     result['rule_configs'] = _merge_items(base.get('rule_configs', []), current.get('rule_configs', []), settings)
     _hydrate(result)
+    previous, desired = base.get('oxidns') or {}, current.get('oxidns') or {}
+    published = published_upstreams(base)
+    scopes = _scopes(result, current, base)
+    values = _rule_dns({key: previous[key] for key in (*_SELECTORS, *_RULE_DNS) if key in previous},
+                       {key: desired[key] for key in (*_SELECTORS, *_RULE_DNS) if key in desired},
+                       lambda identity: settings.get(scopes.get(identity), False), published, withheld)
+    oxidns = result.setdefault('oxidns', {})
     for key in _SELECTORS:
-        if settings.get('library' if key.endswith('rulesets') else 'rules'):
-            result.setdefault('oxidns', {})[key] = deepcopy((current.get('oxidns') or {}).get(key, []))
-    if service_type != 'mihomo' and (base.get('oxidns') or {}).get('config_mode') == 'native':
-        _native_projection(base, current, result, settings)
+        if settings.get(_key_scope(key)):
+            oxidns[key] = values.get(key, [])
+    known = _scopes(result)
+    for key in _RULE_DNS:
+        if key in values:
+            value = values[key]
+            oxidns[key] = ({identity: action for identity, action in value.items() if identity in known}
+                           if isinstance(value, dict) else [identity for identity in value if identity in known])
+    if 'rule_dns_follow' in oxidns:
+        oxidns['rule_dns_follow'] = _disjoint_follow(oxidns['rule_dns_follow'], oxidns.get('rule_actions') or {},
+                                                     oxidns.get('rule_dns_parked') or {})
+    if service_type != 'mihomo' and previous.get('config_mode') == 'native':
+        _native_projection(base, current, result, settings, published, withheld)
     return result
 
 
@@ -345,8 +417,9 @@ def _sequence_skeleton(plugin):
         if isinstance(matches, list) and len(matches) == 1 and isinstance(matches[0], str):
             match = re.fullmatch(r'(qname|resp_ip) \$(rules_(?:domain|ip)_\d+(?:_\d+)*)', matches[0])
             if match and set(entry) == {'matches', 'exec'}:
-                targets = ('goto china_dns', 'goto proxy_dns_seq') if match[1] == 'qname' else ('goto direct_ip', 'goto ip_requery_proxy')
-                if entry['exec'] in targets:
+                # Any rule DNS route: list gotos, rejections and owned helpers.
+                # Helper contents are checked separately, so no plugins are needed here.
+                if parse_exec(entry['exec'], 'domain' if match[1] == 'qname' else 'ip', {}) is not None:
                     removable.add(index)
                     if match[1] == 'resp_ip':
                         ip_indices.append(index)
@@ -360,12 +433,40 @@ def _sequence_skeleton(plugin):
     return {**deepcopy(plugin), 'args': [deepcopy(entry) for index, entry in enumerate(args) if index not in removable]}
 
 
+def _check_helpers(previous, left, right):
+    """Changed rule DNS helpers must be canonical and pin only upstreams the
+    deployed configuration already has, whatever the candidate's source said."""
+    try:
+        published = {entry['key'] for entry in upstream_catalog({'config_mode': 'native'}, previous)}
+    except OxidnsSettingsError:
+        published = set()
+    published.update(match[1] for match in map(_HELPER_TAG.fullmatch, left)
+                     if match and match[0].startswith(UPSTREAM_PREFIX) and _canonical_chain(match[1], left))
+    for tag, plugin in right.items():
+        match = _HELPER_TAG.fullmatch(tag)
+        if not match or left.get(tag) == plugin:
+            continue
+        if tag == BLACKHOLE_TAG:
+            if plugin != BLACKHOLE_PLUGIN or type(plugin['args']['short_circuit']) is not bool:
+                raise RuleSyncProjectionError('OxiDNS 候选配置的黑洞插件不是规则生成的格式。')
+        elif not (_canonical_chain(match[1], right) and match[1] in published and (
+                tag.startswith(UPSTREAM_PREFIX) or {'exec': f'${tag}'} in right[UPSTREAM_PREFIX + match[1]]['args'])):
+            raise RuleSyncProjectionError('OxiDNS 候选配置包含未发布的指定上游，请手动发布。')
+
+
+def _canonical_chain(key, plugins):
+    action = pinned_action(key, plugins)
+    return action is not None and entry_key(action['upstream'], action['source']) == key
+
+
 def _isolate_oxidns_document(previous, candidate):
     left = {plugin['tag']: plugin for plugin in previous.get('plugins', [])}
     right = {plugin['tag']: plugin for plugin in candidate.get('plugins', [])}
     if len(left) != len(previous.get('plugins', [])) or len(right) != len(candidate.get('plugins', [])):
         raise RuleSyncProjectionError('OxiDNS 插件标签重复，无法隔离规则更新。')
-    allowed = lambda tag: bool(_GROUP_TAG.fullmatch(tag)) or tag in ('sequence_main', 'rules_download', 'rules_reload')
+    allowed = lambda tag: bool(_GROUP_TAG.fullmatch(tag) or _HELPER_TAG.fullmatch(tag)) or \
+        tag in ('sequence_main', 'rules_download', 'rules_reload')
+    _check_helpers(previous, left, right)
     if _sequence_skeleton(left.get('sequence_main')) != _sequence_skeleton(right.get('sequence_main')):
         raise RuleSyncProjectionError('OxiDNS 候选配置包含规则范围之外的执行链变化。')
     for tag in set(left) | set(right):

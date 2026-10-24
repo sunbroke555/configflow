@@ -155,14 +155,14 @@ func TestOxiDNSRankingsDoNotGuessCustomOrNegativeResponseBlocks(t *testing.T) {
 		})
 	}
 	result := oxRankingConfigForTest(t, oxRankingTestPlugins)
-	if result.blocked["records"] != "qs.match.sequence_main.3.0.question" {
+	if !reflect.DeepEqual(result.blocked["records"], []string{"qs.match.sequence_main.3.0.question"}) {
 		t.Fatal("generated AdGuard path was not recognized")
 	}
 	// Blocked query types precede AdGuard; current and earlier drafts differ in action.
 	for _, action := range []string{"black_hole nodata short_circuit=true", "reject 0"} {
 		text := strings.Replace(oxRankingTestPlugins, "    - exec: prefer_ipv4\n",
 			"    - exec: prefer_ipv4\n    - matches: [qtype 65 255]\n      exec: "+action+"\n", 1)
-		if result := oxRankingConfigForTest(t, text); result.blocked["records"] != "qs.match.sequence_main.4.0.question" {
+		if result := oxRankingConfigForTest(t, text); !reflect.DeepEqual(result.blocked["records"], []string{"qs.match.sequence_main.4.0.question"}) {
 			t.Fatalf("%s blocked qtypes hid the AdGuard path: %#v", action, result.blocked)
 		}
 	}
@@ -393,5 +393,237 @@ func TestOxiDNSMonitorRuntimeRevisionChangesAfterSameFileReload(t *testing.T) {
 	after := read()
 	if before["source_revision"] != after["source_revision"] || before["runtime_revision"] == after["runtime_revision"] {
 		t.Fatal("same-file core reload did not change runtime identity")
+	}
+}
+
+// Shaped like ConfigFlow's rule DNS actions output (OxiDNS 1.6.1 checked).
+const oxRankingRulePlugins = `- {tag: records, type: query_recorder}
+- {tag: adguard_rules, type: adguard_rule, args: {files: [ads.txt]}}
+- {tag: adguard_block, type: black_hole, args: {mode: nxdomain}}
+- tag: adguard_reject
+  type: sequence
+  args:
+    - exec: $adguard_block
+    - exec: accept
+- {tag: rules_domain_1, type: domain_set, args: {exps: [domain:direct.test]}}
+- {tag: rules_domain_2, type: domain_set, args: {exps: [domain:refused.test]}}
+- {tag: rules_domain_3, type: domain_set, args: {exps: [domain:nx.test]}}
+- {tag: rules_domain_4_2, type: domain_set, args: {exps: [domain:nodata.test]}}
+- {tag: rules_domain_5, type: domain_set, args: {exps: [domain:bh.test]}}
+- {tag: rules_domain_6, type: domain_set, args: {exps: [domain:up.test]}}
+- {tag: rules_ip_1, type: ip_set, args: {ips: [203.0.113.0/28]}}
+- {tag: rules_ip_2, type: ip_set, args: {ips: [203.0.113.64/26]}}
+- {tag: rules_ip_3, type: ip_set, args: {ips: [203.0.113.128/26]}}
+- {tag: custom_set, type: domain_set, args: {exps: [domain:custom.test]}}
+- {tag: cf_dns_blackhole, type: black_hole, args: {mode: 'null', short_circuit: true}}
+- tag: local_probe
+  type: sequence
+  args:
+    - exec: $local_probe_cache
+    - {matches: ['!has_resp'], exec: $forward_local}
+    - exec: return
+- tag: sequence_main
+  type: sequence
+  args:
+    - exec: metrics_collector metrics
+    - exec: $records
+    - exec: prefer_ipv4
+    - {matches: [qtype 65 255], exec: reject 0}
+    - {matches: [question $adguard_rules], exec: goto adguard_reject}
+    - {matches: [qname $rules_domain_1], exec: goto china_dns}
+    - {matches: [qname $rules_domain_2], exec: reject}
+    - {matches: [qname $rules_domain_3], exec: reject 3}
+    - {matches: [qname $rules_domain_4_2], exec: reject 0}
+    - {matches: [qname $rules_domain_5], exec: $cf_dns_blackhole}
+    - {matches: [qname $rules_domain_6], exec: goto cf_dns_up_8c1812f0bae3}
+    - exec: jump local_probe
+    - {matches: [resp_ip $rules_ip_1], exec: goto direct_ip}
+    - {matches: [resp_ip $rules_ip_2], exec: reject 3}
+    - {matches: [resp_ip $rules_ip_3], exec: $cf_dns_blackhole}
+    - exec: drop_resp
+    - exec: goto proxy_dns_seq
+- {tag: server, type: udp_server, args: {entry: sequence_main, listen: ':53'}}
+`
+
+func oxRankingRuleMatchers(indexes ...int) []string {
+	result := []string{}
+	for _, index := range indexes {
+		kind := "qname"
+		if index == 4 {
+			kind = "question"
+		} else if index > 11 {
+			kind = "resp_ip"
+		}
+		result = append(result, fmt.Sprintf("qs.match.sequence_main.%d.0.%s", index, kind))
+	}
+	return result
+}
+
+func TestRankingsCountRuleBlocks(t *testing.T) {
+	all := oxRankingRuleMatchers(4, 6, 7, 8, 9, 13, 14)
+	if got := oxRankingConfigForTest(t, oxRankingRulePlugins).blocked["records"]; !reflect.DeepEqual(got, all) {
+		t.Fatalf("rule blocks: %#v", got)
+	}
+	for _, test := range []struct {
+		name, old, new string
+		want           []string
+	}{
+		// Without short_circuit later entries replace the answer; nothing after counts.
+		{"blackhole continues", "mode: 'null', short_circuit: true", "mode: 'null'", oxRankingRuleMatchers(4, 6, 7, 8)},
+		{"blackhole bare null", "mode: 'null', short_circuit: true", "mode: null, short_circuit: true", oxRankingRuleMatchers(4, 6, 7, 8)},
+		{"blackhole other type", "tag: cf_dns_blackhole, type: black_hole", "tag: cf_dns_blackhole, type: forward", oxRankingRuleMatchers(4, 6, 7, 8)},
+		{"custom provider", "qname $rules_domain_3]", "qname $custom_set]", oxRankingRuleMatchers(4, 6, 8, 9, 13, 14)},
+		{"missing provider", "qname $rules_domain_3]", "qname $rules_domain_9]", oxRankingRuleMatchers(4, 6, 8, 9, 13, 14)},
+		{"wrong matcher kind", "qname $rules_domain_3]", "resp_ip $rules_domain_3]", oxRankingRuleMatchers(4, 6, 8, 9, 13, 14)},
+		{"additional condition", "[qname $rules_domain_3]", "[qname $rules_domain_3, qtype 1]", oxRankingRuleMatchers(4, 6, 8, 9, 13, 14)},
+		{"adguard not standard", "type: adguard_rule", "type: domain_set", oxRankingRuleMatchers(6, 7, 8, 9, 13, 14)},
+		{"unknown wrapper", "exec: jump local_probe", "exec: $custom_wrapper", oxRankingRuleMatchers(4, 6, 7, 8, 9)},
+		{"jump to unknown plugin", "exec: jump local_probe", "exec: jump forward_local", oxRankingRuleMatchers(4, 6, 7, 8, 9)},
+		{"unconditional goto", "    - exec: jump local_probe\n", "    - exec: goto china_dns\n", oxRankingRuleMatchers(4, 6, 7, 8, 9)},
+		{"no recorder", "    - exec: $records\n", "", nil},
+		{"outer wrapper", "entry: sequence_main", "entry: other", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := strings.Replace(oxRankingRulePlugins, test.old, test.new, 1)
+			if text == oxRankingRulePlugins {
+				t.Fatal("fixture replacement did not apply")
+			}
+			if got := oxRankingConfigForTest(t, text).blocked["records"]; !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("got %#v want %#v", got, test.want)
+			}
+		})
+	}
+	// A device-policy style jump before the AdGuard entry does not hide it.
+	policy := strings.Replace(oxRankingRulePlugins, "    - exec: prefer_ipv4\n", "    - exec: prefer_ipv4\n    - exec: jump cf_device_policy\n", 1) +
+		"- {tag: cf_device_policy, type: sequence, args: [{matches: [client_ip 192.0.2.9], exec: goto china_dns}]}\n"
+	shifted := []string{}
+	for _, matcher := range oxRankingRuleMatchers(5, 7, 8, 9, 10, 14, 15) {
+		shifted = append(shifted, strings.Replace(strings.Replace(matcher, ".5.0.qname", ".5.0.question", 1), ".14.0.qname", ".14.0.resp_ip", 1))
+	}
+	if got := oxRankingConfigForTest(t, policy).blocked["records"]; !reflect.DeepEqual(got, shifted) {
+		t.Fatalf("policy jump: %#v want %#v", got, shifted)
+	}
+}
+
+func TestRankingsMergeRuleBlockSamples(t *testing.T) {
+	rows := func(pairs ...interface{}) []oxRankingRow {
+		result := []oxRankingRow{}
+		for i := 0; i < len(pairs); i += 2 {
+			result = append(result, oxRankingRow{Key: pairs[i].(string), Count: uint64(pairs[i+1].(int))})
+		}
+		return result
+	}
+	single := oxRankingGroup{SampleSize: 3, Rows: rows("a.", 3), AtLimit: false}
+	if got := oxMergeRankings([]oxRankingGroup{single}); !reflect.DeepEqual(got, single) {
+		t.Fatalf("single group changed: %#v", got)
+	}
+	merged := oxMergeRankings([]oxRankingGroup{
+		{SampleSize: 4, Rows: rows("a.", 2, "b.", 2)},
+		{SampleSize: 0, Rows: rows()},
+		{SampleSize: 3, Rows: rows("c.", 2, "a.", 1)},
+	})
+	want := []oxRankingRow{{"a.", 3, 3.0 / 7}, {"b.", 2, 2.0 / 7}, {"c.", 2, 2.0 / 7}}
+	if merged.SampleSize != 7 || merged.AtLimit || !reflect.DeepEqual(merged.Rows, want) {
+		t.Fatalf("merged: %#v", merged)
+	}
+	many := []oxRankingGroup{{SampleSize: oxMonitorClientSampleLimit, AtLimit: true}, {SampleSize: 1, Rows: rows("z.", 1)}}
+	for i := 0; i < 12; i++ {
+		many[0].Rows = append(many[0].Rows, oxRankingRow{Key: fmt.Sprintf("d%02d.", i), Count: uint64(100 - i)})
+	}
+	capped := oxMergeRankings(many)
+	if capped.SampleSize != oxMonitorClientSampleLimit || !capped.AtLimit || len(capped.Rows) != oxRankingLimit || capped.Rows[0].Key != "d00." || capped.Rows[9].Key != "d09." {
+		t.Fatalf("capped: %#v", capped)
+	}
+}
+
+func TestRankingsFetchEveryRuleBlockMatcher(t *testing.T) {
+	var cfg *Config
+	var mu sync.Mutex
+	var matchers []string
+	samples := map[string]string{
+		"qs.match.sequence_main.4.0.question": `{"ok":true,"sample_size":3,"rows":[{"key":"ads.example.","count":3}]}`,
+		"qs.match.sequence_main.6.0.qname":    `{"ok":true,"sample_size":2,"rows":[{"key":"refused.test.","count":1},{"key":"ads.example.","count":1}]}`,
+		"qs.match.sequence_main.14.0.resp_ip": `{"ok":true,"sample_size":1,"rows":[{"key":"ipbh.test.","count":1}]}`,
+	}
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			fmt.Fprint(w, oxMonitorTestHealth)
+			return
+		case "/api/reload/status":
+			oxRankingTestRuntime(t, w, cfg)
+			return
+		}
+		if matcher := r.URL.Query().Get("matcher_tag"); matcher != "" {
+			if len(r.URL.Query()["matcher_tag"]) != 1 || r.URL.Query().Get("status") != "has_response" || r.URL.Path != "/api/plugins/records/stats/top_qnames" {
+				t.Errorf("unsafe block request: %s", r.URL)
+			}
+			mu.Lock()
+			matchers = append(matchers, matcher)
+			mu.Unlock()
+			if body, ok := samples[matcher]; ok {
+				fmt.Fprint(w, body)
+				return
+			}
+		}
+		fmt.Fprint(w, `{"ok":true,"sample_size":0,"rows":[]}`)
+	}))
+	defer core.Close()
+	cfg = oxMonitorTestConfig(t, core.URL, oxRankingRulePlugins)
+	response := oxMonitorTestRequest(cfg, "GET", "/api/oxidns/rankings?since_ms=1")
+	var result struct {
+		Blocked struct {
+			Available bool     `json:"available"`
+			Reason    string   `json:"reason"`
+			Matcher   *string  `json:"matcher_tag"`
+			Matchers  []string `json:"matcher_tags"`
+			oxRankingGroup
+		} `json:"blocked"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != 200 {
+		t.Fatalf("rankings: %d %s", response.Code, response.Body.String())
+	}
+	all := oxRankingRuleMatchers(4, 6, 7, 8, 9, 13, 14)
+	if !reflect.DeepEqual(matchers, all) {
+		t.Fatalf("fetched matchers %v", matchers)
+	}
+	blocked := result.Blocked
+	// ads.example. is counted under both the AdGuard and a rule matcher.
+	want := []oxRankingRow{{"ads.example.", 4, 4.0 / 6}, {"ipbh.test.", 1, 1.0 / 6}, {"refused.test.", 1, 1.0 / 6}}
+	if !blocked.Available || blocked.Reason != "standard_adguard_rule_dns" || blocked.Matcher != nil || !reflect.DeepEqual(blocked.Matchers, all) ||
+		blocked.SampleSize != 6 || blocked.AtLimit || !reflect.DeepEqual(blocked.Rows, want) {
+		t.Fatalf("merged block ranking: %s", response.Body.String())
+	}
+}
+
+func TestRankingsTooManyRuleBlocksUnavailable(t *testing.T) {
+	var cfg *Config
+	var blockCalls atomic.Int32
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/health":
+			fmt.Fprint(w, oxMonitorTestHealth)
+			return
+		case "/api/reload/status":
+			oxRankingTestRuntime(t, w, cfg)
+			return
+		}
+		if r.URL.Query().Has("matcher_tag") {
+			blockCalls.Add(1)
+		}
+		fmt.Fprint(w, `{"ok":true,"sample_size":0,"rows":[]}`)
+	}))
+	defer core.Close()
+	var text strings.Builder
+	text.WriteString("- {tag: records, type: query_recorder}\n- {tag: server, type: udp_server, args: {entry: sequence_main}}\n")
+	main := "- tag: sequence_main\n  type: sequence\n  args:\n    - exec: $records\n"
+	for i := 1; i <= oxRankingBlockLimit+1; i++ {
+		fmt.Fprintf(&text, "- {tag: rules_domain_%d, type: domain_set, args: {exps: [domain:r%d.test]}}\n", i, i)
+		main += fmt.Sprintf("    - {matches: [qname $rules_domain_%d], exec: reject}\n", i)
+	}
+	cfg = oxMonitorTestConfig(t, core.URL, text.String()+main)
+	response := oxMonitorTestRequest(cfg, "GET", "/api/oxidns/rankings?since_ms=1")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"blocked":{"at_limit":false,"available":false,"reason":"too_many_block_rules"`) || blockCalls.Load() != 0 {
+		t.Fatalf("too many block rules: %d %s (%d block calls)", response.Code, response.Body.String(), blockCalls.Load())
 	}
 }
