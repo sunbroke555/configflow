@@ -80,12 +80,16 @@ def test_native_classical_bare_lines_parse_and_match(tmp_path, rule_format):
                 try:
                     with urlopen(f'http://127.0.0.1:{controller_port}/providers/rules', timeout=.2) as response:
                         providers = json.load(response)
-                    break
+                    # The controller can respond before asynchronous providers
+                    # finish loading, especially in parallel backend runs.
+                    if providers['providers']['bare']['ruleCount'] == len(lines):
+                        break
                 except OSError:
-                    assert process.poll() is None, log_path.read_text()
-                    time.sleep(.05)
+                    pass
+                assert process.poll() is None, log_path.read_text()
+                time.sleep(.05)
             else:
-                pytest.fail('Mihomo controller did not start: ' + log_path.read_text())
+                pytest.fail('Mihomo classical provider did not load: ' + log_path.read_text())
             assert providers['providers']['bare']['ruleCount'] == len(lines)
             for host, matched in [('tmdb.org', True), ('api.tmdb.org', True),
                                   ('exact.test', True), ('child.exact.test', False)]:
