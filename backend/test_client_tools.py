@@ -148,6 +148,17 @@ def test_removing_a_legacy_named_policy_keeps_its_name(oxidns_app):
     assert saved.get_json()['device_notes'] == {'192.0.2.1': '旧电视'}
 
 
+def test_removing_legacy_rows_drops_hidden_names_and_respects_the_note_limit():
+    from backend.common.device_notes import MAX_NOTES, prepare_policy_notes
+    rows = [{'ip': '10.0.0.1', 'name': '旧名', 'mode': 'direct'}, {'ip': '10.0.0.2', 'name': '已隐藏', 'mode': 'direct'}]
+    config = {'oxidns': {'device_policies': rows}, 'device_notes': {'10.0.0.2': ''}}
+    assert prepare_policy_notes(config, [])[1] == {'10.0.0.1': '旧名'}
+    full = {f'10.1.{i // 256}.{i % 256}': f'设备{i}' for i in range(MAX_NOTES)}
+    config['device_notes'] = full
+    # A full list never blocks removing a row; the legacy name is not kept then.
+    assert prepare_policy_notes(config, [])[1] == full
+
+
 def test_policy_editor_requires_the_names_revision(oxidns_app):
     app, repo = oxidns_app
     dns = agent('oxidns')

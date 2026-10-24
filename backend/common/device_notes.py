@@ -82,9 +82,14 @@ def prepare_policy_notes(config, rows):
         _assign(config, notes, row['ip'], row['name'])
     kept = {row['ip'] for row in rows}
     for ip, name in _legacy_names(config).items():
-        # A removed row takes its legacy name with it; keep the name for Mihomo and DNS logs.
-        if ip not in kept:
-            notes.setdefault(ip, name)
+        if ip in kept:
+            continue
+        if notes.get(ip) == '':
+            # The legacy name leaves with its row, so nothing is left to hide.
+            notes.pop(ip)
+        elif ip not in notes and len(notes) < MAX_NOTES:
+            # Keep a removed row's legacy name for Mihomo and DNS logs while there is room.
+            notes[ip] = name
     return rows, normalize_notes(notes)
 
 

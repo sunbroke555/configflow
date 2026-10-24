@@ -524,6 +524,8 @@ def policy_settings(router_id):
         workspace = read_workspace(config, router, profile_id,
                                    get_repository().get_profile(profile_id)['name'],
                                    get_agent_manager().get_all_agents(), get_default_profile_id())
+        # Read after the draft, so a newer write only makes the publish recheck stricter.
+        workspace['config_revision'] = get_repository().config_revision(profile_id)
         response = jsonify(success=True, workspace=workspace)
         response.headers['Cache-Control'] = 'no-store'
         return response

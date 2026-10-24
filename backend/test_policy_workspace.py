@@ -83,8 +83,10 @@ def test_renaming_sources_keeps_oxidns_and_rejects_stale_workspace(workspace):
     stale = body_for(renamed.get_json()['workspace'])
     notes = {'profile_id': 'default', 'ip': '192.0.2.105', 'name': '存储', 'previous_name': '群晖'}
     assert client.put(f'/api/agents/{dns["id"]}/client-notes', headers=admin, json=notes).status_code == 200
-    # A rename elsewhere does not invalidate previews or publishing, only saving stale names.
+    # A rename elsewhere does not invalidate previews, only saving stale names. It still advances
+    # the profile revision every DNS push checks, which the panel rechecks before publishing.
     assert read(workspace)['revision'] == stale['revision']
+    assert read(workspace)['config_revision'] == renamed.get_json()['workspace']['config_revision'] + 1
     assert client.put(path + '/policy-settings', headers=admin, json=stale).status_code == 409
     assert read(workspace)['sources']['policies'][0]['name'] == '存储'
 

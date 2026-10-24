@@ -278,7 +278,7 @@ export interface PolicyRoutingView {
   source_agents: { id: string; name: string }[]
 }
 export interface PolicyWorkspace {
-  profile_id: string; profile_name: string; revision: string; names_revision: string; oxidns_revision: string
+  profile_id: string; profile_name: string; revision: string; names_revision: string; oxidns_revision: string; config_revision: number
   router: { id: string; name: string; ip_rule_sets: string[]; ros_policy_rule_sets: string[]; proxy_gateway_agent_id: string }
   sources: { policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[]; editable: boolean; reason: string }
   source_agents: { id: string; name: string; host: string; status: string }[]

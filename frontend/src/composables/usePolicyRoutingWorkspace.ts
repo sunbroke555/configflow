@@ -160,8 +160,10 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
       // Recheck both drafts and bindings before the first external write.
       const fresh = await routerApi.policySettings(c.id, c.profile)
       if (!current(c)) return
-      if (fresh.data.workspace.revision !== snapshot.revision || snapshot.targets.some(target =>
-        !fresh.data.workspace.source_agents.some(agent => agent.id === target.id && agent.host === target.host))) {
+      // A rename changes only config_revision, which every DNS push is checked against.
+      const workspace = fresh.data.workspace
+      if (workspace.revision !== snapshot.revision || workspace.config_revision !== snapshot.config_revision ||
+        snapshot.targets.some(target => !workspace.source_agents.some(agent => agent.id === target.id && agent.host === target.host))) {
         throw new Error('配置或发布目标已变化，请重新载入并预览。')
       }
       for (const target of snapshot.targets) {

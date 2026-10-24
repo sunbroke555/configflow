@@ -11,7 +11,7 @@ vi.mock('@/api', () => ({
 }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
-const initial = () => ({ profile_id: 'office', profile_name: '家庭', revision: 'rev-1', oxidns_revision: 'dns-1',
+const initial = () => ({ profile_id: 'office', profile_name: '家庭', revision: 'rev-1', names_revision: 'names-1', oxidns_revision: 'dns-1', config_revision: 42,
   router: { id: 'ros', name: 'ROS', ip_rule_sets: ['static'], ros_policy_rule_sets: ['proxy'], proxy_gateway_agent_id: 'mihomo' },
   sources: { editable: true, reason: '', policies: [{ ip: '192.0.2.105', name: 'NAS', mode: 'smart' as const }] },
   source_agents: [{ id: 'dns1', name: 'DNS one', host: '192.0.2.2', status: 'online' }, { id: 'dns2', name: 'DNS two', host: '192.0.2.3', status: 'online' }],
@@ -124,7 +124,7 @@ describe('one-place DNS and ROS workflow', () => {
     await click(w, '添加')
     await click(w, '保存并预览')
     expect(routerApi.savePolicySettings).toHaveBeenCalledWith('ros', expect.objectContaining({
-      revision: 'rev-1', policies: [initial().sources.policies[0], { ip: '192.0.2.101', name: '', mode: 'smart' }],
+      revision: 'rev-1', names_revision: 'names-1', policies: [initial().sources.policies[0], { ip: '192.0.2.101', name: '', mode: 'smart' }],
       router: { ip_rule_sets: ['static'], ros_policy_rule_sets: ['proxy'], proxy_gateway_agent_id: 'mihomo' }
     }), 'office')
     expect(w.text()).toContain('新增来源 192.0.2.101')
@@ -178,6 +178,14 @@ describe('one-place DNS and ROS workflow', () => {
     await click(w, '确认发布')
     expect(agentApi.pushConfig).not.toHaveBeenCalled(); expect(routerApi.apply).not.toHaveBeenCalled()
     expect(w.text()).toContain('发布目标已变化')
+  })
+  it('rejects a source renamed elsewhere after the preview before making any external writes', async () => {
+    const w = await setup(); await click(w, '保存并预览')
+    // A rename leaves the draft revision alone but advances the profile revision every push checks.
+    state.config_revision = 43
+    await click(w, '确认发布')
+    expect(agentApi.pushConfig).not.toHaveBeenCalled(); expect(routerApi.apply).not.toHaveBeenCalled()
+    expect(w.text()).toContain('请重新载入并预览')
   })
   it('polls a lost DNS response by the same deployment id without resubmitting', async () => {
     const w = await setup(); await click(w, '保存并预览'); vi.useFakeTimers()
