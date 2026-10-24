@@ -20,7 +20,7 @@ declare module 'axios' {
   }
 }
 
-const scopedPath = /^\/(?:profiles\/[^/]+\/(?:generate|device-groups)(?:\/|$)|proxy-groups(?:\/|$)|rules(?:\/|$)|rule-sets(?:\/|$)|rule-configs(?:\/|$)|custom-config(?:\/|$)|(?:mosdns|oxidns)(?:\/|$)|stats(?:\/|$)|domain-discovery(?:\/|$)|routers(?:\/|$))/
+const scopedPath = /^\/(?:profiles\/[^/]+\/generate|proxy-groups(?:\/|$)|rules(?:\/|$)|rule-sets(?:\/|$)|rule-configs(?:\/|$)|custom-config(?:\/|$)|(?:mosdns|oxidns)(?:\/|$)|stats(?:\/|$)|domain-discovery(?:\/|$)|routers(?:\/|$))/
 const profileOptions = (profileId = getActiveProfileId()) => ({
   headers: { 'X-ConfigFlow-Profile': profileId }
 })
@@ -275,9 +275,7 @@ export interface PolicyRoutingView {
 export interface PolicyWorkspace {
   profile_id: string; profile_name: string; revision: string; oxidns_revision: string
   router: { id: string; name: string; ip_rule_sets: string[]; ros_policy_rule_sets: string[]; proxy_gateway_agent_id: string }
-  sources: { policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[]; editable: boolean; reason: string;
-    kind?: 'legacy' | 'device_groups'; policy_routing_sources?: import('@/types/deviceGroups').PolicyRoutingSources;
-    groups?: { id: string; name: string }[] }
+  sources: { policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[]; editable: boolean; reason: string }
   source_agents: { id: string; name: string; host: string; status: string }[]
   gateways: { id: string; name: string; host: string }[]
   rule_sets: { id: string; name: string; policy: string; library_rule_id?: string }[]
@@ -328,7 +326,7 @@ export const routerApi = {
     api.post<RouterRuleSyncResponse>(`/routers/${id}/rule-sync`, null, profileOptions(profileId)),
   policySettings: (id: string, profileId: string) =>
     api.get<{ success: boolean; message?: string; workspace: PolicyWorkspace }>(`/routers/${id}/policy-settings`, profileOptions(profileId)),
-  savePolicySettings: (id: string, draft: { revision: string; router: Pick<PolicyWorkspace['router'], 'ip_rule_sets' | 'ros_policy_rule_sets' | 'proxy_gateway_agent_id'>; policies?: PolicyWorkspace['sources']['policies']; policy_routing_sources?: import('@/types/deviceGroups').PolicyRoutingSources }, profileId: string) =>
+  savePolicySettings: (id: string, draft: { revision: string; router: Pick<PolicyWorkspace['router'], 'ip_rule_sets' | 'ros_policy_rule_sets' | 'proxy_gateway_agent_id'>; policies: PolicyWorkspace['sources']['policies'] }, profileId: string) =>
     api.put<{ success: boolean; message?: string; workspace: PolicyWorkspace }>(`/routers/${id}/policy-settings`, { ...draft, base_url: getBaseUrl() }, profileOptions(profileId)),
   previewPolicySettings: (id: string, revision: string, targets: string[], profileId: string) =>
     api.post<{ success: boolean; message?: string; preview: PolicyWorkspacePreview }>(`/routers/${id}/policy-settings/preview`, { revision, targets, base_url: getBaseUrl() }, { ...profileOptions(profileId), timeout: 90000 }),

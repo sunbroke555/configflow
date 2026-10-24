@@ -35,9 +35,6 @@ class RuleSyncProjectionError(ValueError):
 _SELECTORS = ('direct_rulesets', 'proxy_rulesets', 'direct_rules', 'proxy_rules')
 _RULE_DNS = ('rule_actions', 'rule_dns_follow', 'rule_dns_parked')
 _GROUP_TAG = re.compile(r'rules_(?:domain|ip)_\d+(?:_\d+)*\Z')
-_DEVICE_BLOCK = re.compile(r'cf_dg_block_[0-9a-f]{16}\Z')
-_DEVICE_SEGMENT = re.compile(r'cf_dg_seg_[0-9a-f]+\Z')
-_DEVICE_SOURCE = re.compile(r'cf_dg_set_[0-9a-f]+\Z')
 # Owned rule DNS helpers: rebuilt with the rule groups, never hand-written plugins.
 _HELPER_TAG = re.compile(rf'{BLACKHOLE_TAG}|cf_dns_(?:up|fwd|cache)_([0-9a-f]{{12}})')
 PINNED_WITHHELD = '指定上游需手动发布'
@@ -462,79 +459,14 @@ def _canonical_chain(key, plugins):
     return action is not None and entry_key(action['upstream'], action['source']) == key
 
 
-def _managed_provider(tag, device_groups_enabled=False):
-    return bool(_GROUP_TAG.fullmatch(tag) or device_groups_enabled and _DEVICE_BLOCK.fullmatch(tag))
-
-
-def _device_segment_skeleton(plugin, plugins):
-    if not isinstance(plugin, dict) or plugin.get('type') != 'sequence' or not isinstance(plugin.get('args'), list):
-        raise RuleSyncProjectionError('设备组执行链无法安全隔离规则更新。')
-    remaining = []
-    for entry in plugin['args']:
-        matches = entry.get('matches') if isinstance(entry, dict) else None
-        if isinstance(entry, dict) and set(entry) == {'matches', 'exec'} and isinstance(matches, list) and len(matches) == 1 and \
-                isinstance(matches[0], str) and re.fullmatch(
-                    r'qname \$(?:rules_domain_\d+(?:_\d+)*|cf_dg_block_[0-9a-f]{16})', matches[0]) and \
-                parse_exec(entry['exec'], 'domain', plugins) in ('refused', 'nxdomain', 'nodata', 'blackhole'):
-            if remaining:
-                raise RuleSyncProjectionError('设备组拦截规则必须位于默认 DNS 路径之前。')
-            continue
-        remaining.append(deepcopy(entry))
-    if remaining not in ([{'exec': 'goto cf_dg_local'}],
-                          [{'exec': 'jump china_dns'}, {'exec': 'accept'}],
-                          [{'exec': 'jump proxy_dns_seq'}, {'exec': 'accept'}]):
-        raise RuleSyncProjectionError('设备组执行链包含规则范围之外的变化，请手动发布。')
-    return {**deepcopy(plugin), 'args': remaining}
-
-
-def _isolate_mihomo_segments(previous, proposed, result):
-    """Advance copied blockers while keeping source membership and group mode."""
-    left, right = previous.get('sub-rules') or {}, proposed.get('sub-rules') or {}
-    names = {name for name in left if _DEVICE_SEGMENT.fullmatch(name)}
-    if names != {name for name in right if _DEVICE_SEGMENT.fullmatch(name)}:
-        raise RuleSyncProjectionError('规则同步不能增删设备组，请手动发布。')
-    for name in names:
-        old, new = left[name], right[name]
-        if not isinstance(old, list) or not isinstance(new, list) or not old or not new or old[-1] != new[-1] or \
-                not re.fullmatch(r'MATCH,(?!REJECT(?:-DROP)?$).+', str(old[-1])) or \
-                any(not isinstance(row, str) or row.startswith('MATCH,') or not re.search(
-                    r',(?:REJECT|REJECT-DROP)(?:,no-resolve)?$', row) for row in old[:-1] + new[:-1]):
-            raise RuleSyncProjectionError('规则同步不能改变设备组默认策略或复制非拦截规则。')
-    sources = lambda doc: {name: provider for name, provider in (doc.get('rule-providers') or {}).items()
-                           if _DEVICE_SOURCE.fullmatch(name)}
-    dispatch = lambda doc: [row for row in doc.get('rules', []) if isinstance(row, str) and
-                           re.fullmatch(r'SUB-RULE,\(RULE-SET,cf_dg_set_[0-9a-f]+,src\),cf_dg_seg_[0-9a-f]+', row)]
-    if sources(previous) != sources(proposed) or dispatch(previous) != dispatch(proposed):
-        raise RuleSyncProjectionError('规则同步不能改变设备组成员或分发，请手动发布。')
-    for document in (previous, proposed):
-        prefix = dispatch(document)
-        if document.get('rules', [])[:len(prefix)] != prefix:
-            raise RuleSyncProjectionError('设备组分发必须位于主规则表开头。')
-    if names:
-        result['sub-rules'] = {**deepcopy(left), **{name: deepcopy(right[name]) for name in names}}
-
-
-def _isolate_oxidns_document(previous, candidate, *, device_groups_enabled=False):
+def _isolate_oxidns_document(previous, candidate):
     left = {plugin['tag']: plugin for plugin in previous.get('plugins', [])}
     right = {plugin['tag']: plugin for plugin in candidate.get('plugins', [])}
     if len(left) != len(previous.get('plugins', [])) or len(right) != len(candidate.get('plugins', [])):
         raise RuleSyncProjectionError('OxiDNS 插件标签重复，无法隔离规则更新。')
-    allowed = lambda tag: bool(_managed_provider(tag, device_groups_enabled) or _HELPER_TAG.fullmatch(tag) or
-                              device_groups_enabled and _DEVICE_SEGMENT.fullmatch(tag)) or \
+    allowed = lambda tag: bool(_GROUP_TAG.fullmatch(tag) or _HELPER_TAG.fullmatch(tag)) or \
         tag in ('sequence_main', 'rules_download', 'rules_reload')
     _check_helpers(previous, left, right)
-    segments = {tag for tag in left if device_groups_enabled and _DEVICE_SEGMENT.fullmatch(tag)}
-    if device_groups_enabled and segments != {tag for tag in right if _DEVICE_SEGMENT.fullmatch(tag)}:
-        raise RuleSyncProjectionError('规则同步不能增删设备组，请手动发布。')
-    for tag in segments:
-        if _device_segment_skeleton(left[tag], left) != _device_segment_skeleton(right[tag], right):
-            raise RuleSyncProjectionError('规则同步不能改变设备组默认 DNS 路径，请手动发布。')
-    for plugins in (left, right):
-        for tag, plugin in plugins.items():
-            if device_groups_enabled and _DEVICE_BLOCK.fullmatch(tag) and (set(plugin) != {'tag', 'type', 'args'} or
-                    plugin['type'] != 'domain_set' or not isinstance(plugin['args'], dict) or
-                    set(plugin['args']) - {'files', 'exps'}):
-                raise RuleSyncProjectionError('设备组拦截规则 Provider 不是受管格式。')
     if _sequence_skeleton(left.get('sequence_main')) != _sequence_skeleton(right.get('sequence_main')):
         raise RuleSyncProjectionError('OxiDNS 候选配置包含规则范围之外的执行链变化。')
     for tag in set(left) | set(right):
@@ -566,12 +498,12 @@ def _isolate_oxidns_document(previous, candidate, *, device_groups_enabled=False
                          for plugin in candidate.get('plugins', [])]
     result_plugins = {plugin['tag']: plugin for plugin in result['plugins']}
     def managed_paths(plugins):
-        return {relative_path(path) for tag, plugin in plugins.items() if _managed_provider(tag, device_groups_enabled)
+        return {relative_path(path) for tag, plugin in plugins.items() if _GROUP_TAG.fullmatch(tag)
                 for path in (plugin.get('args') or {}).get('files', [])}
     old_paths, new_paths = managed_paths(left), managed_paths(right)
     from backend.common.oxidns_native import resource_references, relative_resource
     other_paths = {relative_resource(path) for path in resource_references({'plugins': [
-        plugin for tag, plugin in left.items() if not _managed_provider(tag, device_groups_enabled)]})}
+        plugin for tag, plugin in left.items() if not _GROUP_TAG.fullmatch(tag)]})}
     if (old_paths | new_paths) & other_paths:
         raise RuleSyncProjectionError('OxiDNS 规则文件被其他插件共用，无法单独自动更新。')
     if 'rules_download' in result_plugins:
@@ -584,14 +516,14 @@ def _isolate_oxidns_document(previous, candidate, *, device_groups_enabled=False
         unrelated = [deepcopy(entry) for entry in left['rules_download']['args']['downloads'] if location(entry) not in old_paths]
         result_plugins['rules_download']['args']['downloads'] = managed + unrelated
         managed_refs = [value for value in right['rules_reload']['args']
-                        if isinstance(value, str) and _managed_provider(value.removeprefix('$'), device_groups_enabled)]
+                        if isinstance(value, str) and _GROUP_TAG.fullmatch(value.removeprefix('$'))]
         other_refs = [value for value in left['rules_reload']['args']
-                      if not isinstance(value, str) or not _managed_provider(value.removeprefix('$'), device_groups_enabled)]
+                      if not isinstance(value, str) or not _GROUP_TAG.fullmatch(value.removeprefix('$'))]
         result_plugins['rules_reload']['args'] = deepcopy(managed_refs + other_refs)
     return result
 
 
-def isolate_rule_bundle(baseline_bundle, candidate_bundle, service_type, *, device_groups_enabled=False):
+def isolate_rule_bundle(baseline_bundle, candidate_bundle, service_type):
     """Keep deployed non-rule configuration/files byte-for-byte in a candidate.
 
     Candidate sources must already be projected with ``project_rule_changes``.
@@ -608,8 +540,6 @@ def isolate_rule_bundle(baseline_bundle, candidate_bundle, service_type, *, devi
     proposed = yaml.safe_load(candidate[new_path][0])
     if service_type == 'mihomo':
         document = deepcopy(previous)
-        if device_groups_enabled:
-            _isolate_mihomo_segments(previous, proposed, document)
         for key in ('rules', 'rule-providers'):
             if key in proposed:
                 document[key] = deepcopy(proposed[key])
@@ -620,10 +550,9 @@ def isolate_rule_bundle(baseline_bundle, candidate_bundle, service_type, *, devi
         old_paths = {relative_path(provider['path']) for provider in previous.get('rule-providers', {}).values()
                      if isinstance(provider, dict) and provider.get('path')}
     elif service_type == 'oxidns':
-        document = _isolate_oxidns_document(previous, proposed, device_groups_enabled=device_groups_enabled)
+        document = _isolate_oxidns_document(previous, proposed)
         def paths_for(value):
-            return {relative_path(path) for plugin in value.get('plugins', [])
-                    if _managed_provider(plugin['tag'], device_groups_enabled)
+            return {relative_path(path) for plugin in value.get('plugins', []) if _GROUP_TAG.fullmatch(plugin['tag'])
                     for path in (plugin.get('args') or {}).get('files', [])}
         paths, old_paths = paths_for(document), paths_for(previous)
     else:

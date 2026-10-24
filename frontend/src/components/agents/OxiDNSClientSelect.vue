@@ -3,7 +3,7 @@
   <Popover v-model:open="open">
     <PopoverTrigger as-child>
       <Button type="button" variant="outline" role="combobox" aria-label="客户端 IP" :aria-expanded="open"
-        class="min-h-11 w-full min-w-0 justify-between gap-2 bg-card font-normal" :disabled="externalMode ? !externalAvailable : !agentId || !recorder">
+        class="min-h-11 w-full min-w-0 justify-between gap-2 bg-card font-normal" :disabled="!agentId || !recorder">
         <span :class="['min-w-0 truncate', modelValue ? 'font-mono' : 'text-muted-foreground']" :title="modelValue || placeholder">{{ modelValue ? clientLabel(modelValue) : placeholder }}</span>
         <ChevronsUpDown class="size-4 shrink-0 text-muted-foreground" />
       </Button>
@@ -32,7 +32,6 @@
             <Check :class="['size-4 shrink-0', modelValue === client.ip ? 'text-primary-accent' : 'opacity-0']" />
             <span class="min-w-0 break-all text-xs"><span v-if="note(client.ip)" class="mb-0.5 block">{{ note(client.ip) }}</span><span class="font-mono text-muted-foreground">{{ client.ip }}</span></span>
             <span v-if="client.ip === modelValue" class="ml-auto shrink-0 text-xs text-muted-foreground">已选</span>
-            <span v-else-if="externalMode" class="ml-auto shrink-0 text-xs text-muted-foreground">样本内 {{ client.count }} 次</span>
           </CommandItem>
           </CommandGroup>
         </CommandList>
@@ -56,8 +55,7 @@ import { Button } from '@/components/ui/button'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-const props = withDefaults(defineProps<{ modelValue: string; agentId: string; recorder: string; range: OxiDNSQueryFilters['range']; collectedAt?: string; allowAll?: boolean; placeholder?: string; notes?: Record<string, string>; externalClients?: OxiDNSClients['clients']; externalAvailable?: boolean }>(), { allowAll: true, placeholder: '全部客户端', externalAvailable: false })
-const externalMode = computed(() => props.externalClients !== undefined)
+const props = withDefaults(defineProps<{ modelValue: string; agentId: string; recorder: string; range: OxiDNSQueryFilters['range']; collectedAt?: string; allowAll?: boolean; placeholder?: string; notes?: Record<string, string> }>(), { allowAll: true, placeholder: '全部客户端' })
 const clock = useOxiDNSClock(computed(() => props.collectedAt))
 const note = (ip: string) => deviceNote(props.notes || {}, ip)
 const clientLabel = (ip: string) => note(ip) ? `${note(ip)} · ${ip}` : ip
@@ -75,7 +73,7 @@ let epoch = 0
 let disposed = false
 
 const options = computed(() => {
-  const values = new Map((externalMode.value ? props.externalClients || [] : clients.value).map(client => [client.ip, client]))
+  const values = new Map(clients.value.map(client => [client.ip, client]))
   if (props.modelValue && !values.has(props.modelValue)) values.set(props.modelValue, { ip: props.modelValue, count: 0 })
   return [...values.values()].filter(client => clientLabel(client.ip).toLowerCase().includes(search.value.toLowerCase().trim()))
 })
@@ -90,7 +88,6 @@ function cancel() {
 }
 async function load() {
   cancel()
-  if (externalMode.value) return
   if (disposed || !open.value || !props.agentId || !props.recorder) return
   const requestEpoch = epoch
   const current = controller = new AbortController()
@@ -120,7 +117,6 @@ function changeSearch(value: string) {
   error.value = ''
   limited.value = false
   searchPending.value = true
-  if (externalMode.value) { searchPending.value = false; return }
   debounce = setTimeout(() => { void load() }, 300)
 }
 function select(value: string) {

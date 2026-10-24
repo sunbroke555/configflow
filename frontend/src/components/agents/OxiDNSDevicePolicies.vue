@@ -5,11 +5,6 @@
       <Button variant="outline" class="min-h-11" :disabled="loading" @click="load">重试</Button>
     </EmptyState>
   </SectionCard>
-  <SectionCard v-else-if="state.migrated" title="设备策略已升级为设备组">
-    <p class="m-0 break-words text-sm">配置：{{ state.profile_name }}。此入口只读，设备组会同时影响 OxiDNS 和 Mihomo。</p>
-    <p v-if="state.reason" class="mb-0 mt-2 break-words text-xs text-muted-foreground">{{ state.reason }}</p>
-    <RouterLink to="/device-groups" class="mt-3 inline-flex min-h-11 items-center text-sm text-primary-accent underline underline-offset-4" @click="setActiveProfileId(state.profile_id)">前往设备组</RouterLink>
-  </SectionCard>
   <SectionCard
     v-else
     class="[&>header]:items-start [&>header_h2]:whitespace-nowrap max-sm:[&>header>div:first-child]:basis-full"
@@ -94,9 +89,7 @@
 
 <script setup lang="ts">
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
-import { setActiveProfileId } from '@/profileContext'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
 import { Check, Loader2, Monitor, Plus, Trash2, Upload } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

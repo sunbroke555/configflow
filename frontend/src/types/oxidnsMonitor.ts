@@ -151,7 +151,6 @@ export interface OxiDNSDevicePolicy {
 }
 
 export interface OxiDNSDevicePolicies {
-  migrated?: boolean
   device_notes?: Record<string, string>
   success: true
   draft: true

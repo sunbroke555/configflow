@@ -264,9 +264,6 @@ def generate_oxidns_config(config_data, base_url=''):
         from backend.common.oxidns_common_updates import prepare_native_rule_updates
         from backend.common.oxidns_validation import require_valid_document
         document = prepare_native_rule_updates(native_document(s), s, config_data, base_url)
-        if config_data.get('device_groups') is not None:
-            from backend.common.oxidns_device_groups import render_document
-            document = render_document(document, config_data)
         require_valid_document(document)
         return yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
     try:
@@ -473,7 +470,4 @@ def generate_oxidns_config(config_data, base_url=''):
     if s.get('device_policies'):
         from backend.common.oxidns_device_policy import patch_document
         result = patch_document(result, [], s['device_policies'])
-    if config_data.get('device_groups') is not None:
-        from backend.common.oxidns_device_groups import render_document
-        result = render_document(result, config_data)
     return yaml.safe_dump(result, allow_unicode=True, sort_keys=False)

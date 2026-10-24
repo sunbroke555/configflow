@@ -10,7 +10,6 @@ from backend.routes import config_bp
 from backend.common.auth import require_auth, validate_token_or_jwt
 from backend.common.config import get_config, save_config, get_repository, reset_config_context, save_config_with_publish_guard
 from backend.common.config_repository import ProfileInUse, ProfileValidationError
-from backend.common.device_group_warnings import generation_warning_headers
 from backend.common.profile_context import resolve_profile_id
 from backend.utils.logger import client_ip, get_logger
 from backend.utils.strategy_references import StrategyReferenceError
@@ -60,7 +59,6 @@ def get_mihomo_config():
 
         # 直接返回内容，不下载
         return yaml_content, 200, {
-            **generation_warning_headers(config_data, 'mihomo'),
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': 'inline'
         }
@@ -95,7 +93,6 @@ def get_surge_config():
 
         # 直接返回内容，不下载
         return config_content, 200, {
-            **generation_warning_headers(config_data, 'surge'),
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': 'inline'
         }
@@ -135,7 +132,6 @@ def get_loon_config():
         # Loon 以文件名作为导入后的配置名称，使用配置空间名称
         filename = quote(f"{loon_config_name(config_data.get('name'), config_data.get('profile_id'))}.lcf")
         return config_content, 200, {
-            **generation_warning_headers(config_data, 'loon'),
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': f"inline; filename*=UTF-8''{filename}"
         }
@@ -169,7 +165,6 @@ def get_mosdns_config():
 
         # 直接返回内容，不下载
         return yaml_content, 200, {
-            **generation_warning_headers(config_data, 'mosdns'),
             'Content-Type': 'text/plain; charset=utf-8',
             'Content-Disposition': 'inline'
         }

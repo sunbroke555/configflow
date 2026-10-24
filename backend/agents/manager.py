@@ -601,18 +601,10 @@ class AgentManager:
                 return result
             time.sleep(min(.1, remaining))
 
-    def _device_group_target_matches(self, agent, expected):
-        if expected is None:
-            return True
-        from backend.common.device_group_workspace import target_fingerprint
-        return bool(agent) and target_fingerprint(agent, self.repository.default_profile_id()) == expected
-
-    def get_deployment(self, agent_id, deployment_id, *, expected_target_fingerprint=None):
+    def get_deployment(self, agent_id, deployment_id):
         agent = self.get_agent_by_id(agent_id)
         if not agent:
             return {'success': False, 'message': 'Agent not found', 'http_status': 404}
-        if not self._device_group_target_matches(agent, expected_target_fingerprint):
-            return {'success': False, 'message': 'Agent 连接或绑定已改变，请重新预览', 'http_status': 409}
         state = agent.get('deployments', {}).get(deployment_id)
         if not state:
             return {'success': False, 'message': 'Deployment not found', 'http_status': 404}
@@ -629,8 +621,6 @@ class AgentManager:
             # The POST may finish preparation between our first read and the
             # lock check. Re-read before classifying an interrupted task.
             agent = self.get_agent_by_id(agent_id)
-            if not self._device_group_target_matches(agent, expected_target_fingerprint):
-                return {'success': False, 'message': 'Agent 连接或绑定已改变，请重新预览', 'http_status': 409}
             state = agent.get('deployments', {}).get(deployment_id, state)
             if state.get('status') in ('succeeded', 'failed', 'rolled_back'):
                 return state
@@ -661,11 +651,6 @@ class AgentManager:
                     # creation. Even if the upload completed while GET was in
                     # flight, that earlier 404 cannot prove publication failed.
                     return {**state, 'message': '设备正在接收发布，等待确认', 'pending': True}
-                if expected_target_fingerprint is not None:
-                    # A coordinated batch must not treat a lost remote journal
-                    # as proof that this upload never took effect.
-                    return {**state, 'status': 'unknown', 'pending': True,
-                            'message': 'Agent 未返回原发布记录，无法确认结果；后续设备已暂停'}
                 return self.record_deployment(agent_id, deployment_id, {
                     'success': False, 'status': 'failed', 'message': 'Agent has no record of the uploaded deployment'})
             if result.get('http_status') or not isinstance(result.get('status'), str):
@@ -674,16 +659,13 @@ class AgentManager:
         except requests.RequestException:
             return {**state, 'message': 'Deployment status temporarily unavailable', 'pending': True}
 
-    def activate_deployment(self, agent_id, deployment_id, *, expected_target_fingerprint=None):
-        guard = {'expected_target_fingerprint': expected_target_fingerprint} if expected_target_fingerprint is not None else {}
-        state = self.get_deployment(agent_id, deployment_id, **guard)
+    def activate_deployment(self, agent_id, deployment_id):
+        state = self.get_deployment(agent_id, deployment_id)
         agent = self.get_agent_by_id(agent_id)
         if state.get('http_status'):
             return state
         if not agent:
             return {'success': False, 'message': 'Agent not found', 'http_status': 404}
-        if not self._device_group_target_matches(agent, expected_target_fingerprint):
-            return {'success': False, 'message': 'Agent 连接或绑定已改变，请重新预览', 'http_status': 409}
         if (state.get('profile_id') != (agent.get('profile_id') or self.repository.default_profile_id())
                 or state.get('service_type') != agent.get('service_type', 'mihomo')):
             return {**state, 'success': False, 'http_status': 409,
@@ -829,7 +811,7 @@ class AgentManager:
         self._update_agents(remember)
 
     def publish_deployment(self, agent_id, bundle, *, activate=True, config_revision=None, base_url='',
-                           resource_config=None, source_snapshot=None, expected_target_fingerprint=None):
+                           resource_config=None, source_snapshot=None):
         agent = self.get_agent_by_id(agent_id)
         if not agent:
             return {'success': False, 'message': 'Agent not found', 'http_status': 404}
@@ -839,10 +821,6 @@ class AgentManager:
             if not result.get('success'):
                 return result
         try:
-            if expected_target_fingerprint is not None:
-                from backend.common.device_group_workspace import target_fingerprint
-                if target_fingerprint(agent, self.repository.default_profile_id()) != expected_target_fingerprint:
-                    raise ValueError('设备组发布目标已改变，请重新预览后发布')
             if (agent.get('profile_id') or self.repository.default_profile_id()) != bundle.manifest['profile_id']:
                 raise ValueError('Agent profile changed during preparation')
             if agent.get('service_type', 'mihomo') != bundle.manifest['service_type']:
@@ -867,8 +845,7 @@ class AgentManager:
                 if previous.get('source_sha256', previous.get('sha256')) != bundle.sha256:
                     return {'success': False, 'deployment_id': deployment_id, 'http_status': 409,
                             'message': 'Deployment ID already belongs to different content'}
-                guard = {'expected_target_fingerprint': expected_target_fingerprint} if expected_target_fingerprint is not None else {}
-                return self.get_deployment(agent_id, deployment_id, **guard)
+                return self.get_deployment(agent_id, deployment_id)
             content_bundle = bundle
             if agent.get('service_type') == 'mihomo':
                 from .mihomo_resources import prepare_mihomo_resources
@@ -891,12 +868,6 @@ class AgentManager:
                 capture(self.repository, agent_id, content_bundle, source_snapshot, base_url,
                         comparison_config=content_bundle.comparison_config)
             # Persist before the request: a lost response can still be reconciled.
-            if expected_target_fingerprint is not None:
-                current_target = self.get_agent_by_id(agent_id)
-                if not current_target or target_fingerprint(current_target, self.repository.default_profile_id()) != expected_target_fingerprint:
-                    raise ValueError('文件准备期间 Agent 连接或绑定已改变，已停止下发，请重新预览')
-                if config_revision is not None and self.repository.config_revision(bundle.manifest['profile_id']) != config_revision:
-                    raise ValueError('文件准备期间配置已改变，已停止下发，请重新预览')
             self.record_deployment(agent_id, deployment_id, {
                 'success': True, 'status': 'uploading', 'submitted': True,
                 'message': f'正在上传发布包（{len(bundle.manifest["files"])} 个文件，{len(bundle.archive):,} 字节）',

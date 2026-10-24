@@ -18,11 +18,9 @@
       </div>
       <TabsContent value="sources" class="m-0 px-5 pb-4 max-md:px-4 max-sm:px-3">
         <div class="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{{ state.profile_name }} · {{ newSources ? '独立策略路由来源' : '共用来源设备' }}</span>
-          <FieldHelp label="来源设备" :text="newSources ? deviceGroupCopy.sources.help : optionHelp('仅智能分流的 IPv4 设备或网段参与 ROS 策略路由。', '更具体的直连例外及 Mihomo 自身会被排除。直连设备仍遵循主表静态路由；IPv6 策略仅作用于 OxiDNS，不会建立 ROS IPv6 策略。')" />
+          <span>{{ state.profile_name }} · 共用来源设备</span>
+          <FieldHelp label="来源设备" :text="optionHelp('仅智能分流的 IPv4 设备或网段参与 ROS 策略路由。', '更具体的直连例外及 Mihomo 自身会被排除。直连设备仍遵循主表静态路由；IPv6 策略仅作用于 OxiDNS，不会建立 ROS IPv6 策略。')" />
         </div>
-        <p v-if="newSources" class="mb-3 mt-0 text-xs text-muted-foreground">本页编辑哪些来源进入 RouterOS 策略路由。设备组的成员与模式在<RouterLink to="/device-groups" class="inline-flex min-h-11 items-center px-1 text-primary-accent underline underline-offset-4">设备组</RouterLink>管理。</p>
-        <p v-if="sourceExitWarning" role="alert" class="mb-3 rounded-lg bg-warning-soft p-3 text-sm">来源范围已缩小或新增排除设备组，部分设备可能将不再经过 RouterOS 策略路由。保存后请核对发布预览中的实际来源。</p>
         <p v-if="!state.sources.editable" role="alert" class="rounded-md bg-warning-soft p-3 text-sm text-warning-accent">{{ state.sources.reason }}</p>
         <fieldset class="m-0 min-w-0 space-y-4 border-0 p-0" :disabled="locked || !state.sources.editable">
           <div class="grid min-w-0 items-start gap-4 lg:grid-cols-2">
@@ -46,16 +44,11 @@
               <Label for="policy-source-ip" class="flex min-h-5 items-center">手动添加 IP / 网段</Label>
               <div class="flex min-w-0 items-center gap-2">
                 <Input id="policy-source-ip" v-model="newIP" class="min-h-11 min-w-0 flex-1 font-mono" placeholder="192.168.0.105 或 192.168.0.0/24" @keydown.enter.prevent="addSource(newIP)" />
-                <Button variant="outline" class="min-h-11 shrink-0" :disabled="!newIP.trim() || (newSources ? routingSources.include.length >= 1024 : policies.length >= 512)" @click="addSource(newIP)"><Plus class="size-4" />添加</Button>
+                <Button variant="outline" class="min-h-11 shrink-0" :disabled="!newIP.trim() || policies.length >= 512" @click="addSource(newIP)"><Plus class="size-4" />添加</Button>
               </div>
             </div>
           </div>
-          <template v-if="newSources">
-            <div v-if="routingSources.include.length" class="cf-table-wrap"><table class="cf-table cf-mobile-records policy-source-records w-full" role="table"><thead><tr><th>包含来源 IP / 网段</th><th class="text-right">操作</th></tr></thead><tbody><tr v-for="(ip, index) in routingSources.include" :key="ip"><td class="cf-record-wide break-all font-mono text-xs" data-label="包含来源 IP / 网段">{{ ip }}<span v-if="ip.includes(':')" class="mt-1 block font-sans text-warning-accent">RouterOS 不生成 IPv6 策略来源</span></td><td class="text-right"><div class="flex justify-end gap-2"><Button variant="ghost" size="icon" class="size-11" :aria-label="`编辑 ${ip}`" @click="editSource(index)"><Pencil class="size-4" /></Button><Button variant="ghost" size="icon" class="size-11" :aria-label="`移除 ${ip}`" @click="routingSources.include.splice(index, 1)"><Trash2 class="size-4" /></Button></div></td></tr></tbody></table></div>
-            <EmptyState v-else :icon="Network" title="尚未包含任何来源" description="添加需要进入策略路由的 IP 或网段；空列表表示不生成来源。" />
-            <FormField label="排除这些设备组" v-bind="deviceGroupCopy.sources"><MultiSelect v-model="routingSources.exclude_groups" :options="(state.sources.groups || []).map(group => ({ value: group.id, label: group.name }))" placeholder="不排除设备组" /></FormField>
-          </template>
-          <div v-else-if="policies.length" class="cf-table-wrap">
+          <div v-if="policies.length" class="cf-table-wrap">
             <table class="cf-table cf-mobile-records policy-source-records min-w-[540px] w-full" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader">客户端 IP / 网段</th><th role="columnheader">备注</th><th role="columnheader">策略</th><th role="columnheader" class="text-right">操作</th></tr></thead>
               <tbody role="rowgroup"><tr role="row" v-for="(row, index) in policies" :key="row.ip">
                 <td role="cell" class="cf-record-wide font-mono text-xs" data-label="客户端 IP / 网段">{{ row.ip }}</td>
@@ -85,7 +78,7 @@
       </TabsContent>
       <TabsContent value="preview" class="m-0 px-5 pb-5 max-md:px-4 max-sm:px-3">
         <div class="space-y-5">
-          <fieldset v-if="!newSources" class="m-0 min-w-0 border-0 p-0" :disabled="locked">
+          <fieldset class="m-0 min-w-0 border-0 p-0" :disabled="locked">
             <legend class="mb-3 flex items-center gap-2 text-sm font-semibold">
               OxiDNS 发布目标
               <FieldHelp label="OxiDNS 发布目标" :text="optionHelp('希望把当前空间的设备策略同步到指定 OxiDNS 时选择。', '选中的设备接收完整已保存配置，包含其他草稿改动，并非只更新设备策略。未选设备保持现状；全部取消时只发布 ROS。')" />
@@ -99,7 +92,6 @@
             </div>
             <p class="mb-0 mt-2 text-xs text-muted-foreground">{{ targets.length ? '发布完整已保存配置，包含其他草稿改动。' : '本次只发布 ROS，OxiDNS 保持现状。' }}</p>
           </fieldset>
-          <p v-else class="m-0 text-xs text-muted-foreground">本页只发布 RouterOS。双核心草稿需到设备组页按 Mihomo、OxiDNS 的顺序发布。</p>
           <p v-if="!preview" class="m-0 border-t border-border pt-4 text-sm text-muted-foreground">点击上方“保存并预览”，核对本次变更后确认发布。</p>
           <template v-else>
             <ul v-if="blockers.length" class="m-0 list-none space-y-2 rounded-lg bg-destructive-soft p-3 text-sm text-destructive-accent" role="alert"><li v-for="item in blockers" :key="item">{{ item }}</li></ul>
@@ -175,7 +167,7 @@
       </TabsContent>
       <TabsContent value="objects" class="m-0"><PolicyRoutingObjects :id="id" :profile="profile" :disabled="locked || editing" :sources-editable="state.sources.editable" @add-source="editSource(-1)" @edit-destinations="editDestinations()" @edit="editObject" /></TabsContent>
     </Tabs>
-    <PolicySourceEditor v-if="sourceEditorOpen" ref="sourceEditor" :policy="!newSources && sourceIndex >= 0 ? policies[sourceIndex] : undefined" :policies="policies" :source-mode="newSources" :source="newSources && sourceIndex >= 0 ? routingSources.include[sourceIndex] : undefined" :include="routingSources.include" @close="sourceEditorOpen = false" @apply="applySource" @apply-source="applyInclude" />
+    <PolicySourceEditor v-if="sourceEditorOpen" ref="sourceEditor" :policy="sourceIndex >= 0 ? policies[sourceIndex] : undefined" :policies="policies" @close="sourceEditorOpen = false" @apply="applySource" />
     <PolicyDestinationEditor v-if="destinationEditorOpen && state" ref="destinationEditor" :rules="state.rule_sets" :selected-ids="settings.ros_policy_rule_sets" :address="destinationAddress" @close="destinationEditorOpen = false" @saved="contentSaved" />
   </SectionCard>
 </template>
@@ -213,11 +205,9 @@ import { sourcePolicyIndex } from '@/lib/policySourceEditor'
 import { notify } from '@/lib/feedback'
 import { oxidnsMonitorApi, type PolicyRoutingObject } from '@/api'
 import type { OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
-import { deviceGroupCopy } from '@/lib/deviceGroupCopy'
-import { RouterLink } from 'vue-router'
 const props = defineProps<{ id: string; name: string; profile: string }>()
 const emit = defineEmits<{ close: []; saved: []; busy: [value: boolean] }>()
-const { state, policies, routingSources, newSources, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview, changes,
+const { state, policies, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview, changes,
   results, rosResult, unresolved, blockers, canPublish, reload, canLeave: canLeaveWorkspace, selectRules, saveAndPreview, publish, refreshResults } = usePolicyRoutingWorkspace(props, () => emit('saved'))
 const sourceEditorOpen = ref(false), destinationEditorOpen = ref(false), sourceIndex = ref(-1), destinationAddress = ref('')
 const sourceEditor = ref<InstanceType<typeof PolicySourceEditor>>(), destinationEditor = ref<InstanceType<typeof PolicyDestinationEditor>>()
@@ -227,10 +217,6 @@ const ruleOptions = computed(() => state.value?.rule_sets.map(rule => ({ value: 
 const newIP = ref(''), queryAgent = ref(''), recorder = ref(''), queryError = ref('')
 usePageReloadGuard(() => !!newIP.value.trim())
 const queryLoading = ref(false)
-const sourceExitWarning = computed(() => newSources.value && !!state.value?.sources.policy_routing_sources && (
-  state.value.sources.policy_routing_sources.include.some(ip => !routingSources.value.include.includes(ip)) ||
-  routingSources.value.exclude_groups.some(id => !state.value!.sources.policy_routing_sources!.exclude_groups.includes(id))
-))
 const routeChangeCount = computed(() => preview.value?.router_plan.stages.reduce((count, stage) => count + (stage.enabled === false ? 0 : stage.ops.length), 0) || 0)
 let queryEpoch = 0
 watch([locked, editing], ([busy, editing]) => emit('busy', busy || editing), { immediate: true })
@@ -251,13 +237,9 @@ async function loadQueryRecorder() {
   finally { if (current === queryEpoch) queryLoading.value = false }
 }
 function addSource(value: string) {
-  if (locked.value || !state.value?.sources.editable || (newSources.value ? routingSources.value.include.length >= 1024 : policies.value.length >= 512)) return
+  if (locked.value || !state.value?.sources.editable || policies.value.length >= 512) return
   try {
     const ip = normalizeClientRange(value.trim())
-    if (newSources.value) {
-      if (routingSources.value.include.includes(ip)) { notify.info('此 IP 或网段已在列表中'); return }
-      routingSources.value.include.push(ip); newIP.value = ''; return
-    }
     if (policies.value.some(row => row.ip === ip)) { notify.info('此 IP 或网段已在列表中'); return }
     policies.value.push({ ip, name: '', mode: 'smart' }); newIP.value = ''
   } catch { notify.error('请输入有效的 IP 或 CIDR 网段') }
@@ -272,12 +254,6 @@ function applySource(row: OxiDNSDevicePolicy) {
   else policies.value.push(row)
   sourceEditorOpen.value = false; tab.value = 'sources'
 }
-function applyInclude(ip: string) {
-  if (locked.value || !state.value?.sources.editable) return
-  if (sourceIndex.value >= 0) routingSources.value.include.splice(sourceIndex.value, 1, ip)
-  else routingSources.value.include.push(ip)
-  sourceEditorOpen.value = false; tab.value = 'sources'
-}
 function editDestinations(address = '') {
   if (locked.value) return
   destinationAddress.value = address; destinationEditorOpen.value = true
@@ -289,7 +265,7 @@ async function editObject(item: PolicyRoutingObject) {
   if (locked.value) return
   if (item.editor === 'destination') { editDestinations(item.configured_address); return }
   if (item.editor === 'source') {
-    const index = sourcePolicyIndex(item.configured_address || '', newSources.value ? routingSources.value.include.map(ip => ({ ip, name: '', mode: 'smart' as const })) : policies.value)
+    const index = sourcePolicyIndex(item.configured_address || '', policies.value)
     if (index >= 0) { editSource(index); return }
     tab.value = 'sources'
     notify.info('该网段可能由多个来源合并，或草稿已变更，请在来源列表中选择要编辑的设备。')

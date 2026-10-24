@@ -4,7 +4,6 @@ import { confirm, notify } from '@/lib/feedback'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 import { createDeploymentId, deploymentStatusLabel, type AgentDeployment } from './useAgentDeployments'
 import type { OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
-import type { PolicyRoutingSources } from '@/types/deviceGroups'
 
 export interface PolicyReleaseRow { id: string; name: string; status: string; message?: string; deployment_id?: string; task?: Partial<AgentDeployment> }
 const terminal = new Set(['succeeded', 'failed', 'rolled_back', 'rollback_failed'])
@@ -18,8 +17,6 @@ const routerDraft = (state: PolicyWorkspace) => ({
 export function usePolicyRoutingWorkspace(props: { id: string; profile: string }, saved: () => void) {
   const state = ref<PolicyWorkspace | null>(null)
   const policies = ref<OxiDNSDevicePolicy[]>([])
-  const routingSources = ref<PolicyRoutingSources>({ include: [], exclude_groups: [] })
-  const newSources = computed(() => state.value?.sources.kind === 'device_groups')
   const settings = ref({ ip_rule_sets: [] as string[], ros_policy_rule_sets: [] as string[], proxy_gateway_agent_id: '' })
   const targets = ref<string[]>([])
   const tab = ref('sources')
@@ -29,9 +26,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
   const unresolved = computed(() => results.value.some(row => row.deployment_id && !terminal.has(row.status)))
   const busy = computed(() => loading.value || saving.value || publishing.value)
   const locked = computed(() => busy.value || unresolved.value)
-  const dirty = computed(() => !!state.value && ((newSources.value
-    ? JSON.stringify(routingSources.value) !== JSON.stringify(state.value.sources.policy_routing_sources)
-    : JSON.stringify(policies.value) !== JSON.stringify(state.value.sources.policies))
+  const dirty = computed(() => !!state.value && (JSON.stringify(policies.value) !== JSON.stringify(state.value.sources.policies)
     || JSON.stringify(settings.value) !== JSON.stringify(routerDraft(state.value))))
   let epoch = 0, disposed = false
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -41,7 +36,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
   const current = (c: ReturnType<typeof context>) => !disposed && c.id === props.id && c.profile === props.profile && c.epoch === epoch
   const pause = () => new Promise<void>(resolve => { wake = resolve; timer = setTimeout(() => { timer = undefined; wake = undefined; resolve() }, 2000) })
   const invalidate = () => { preview.value = null }
-  watch([policies, routingSources, settings, targets], invalidate, { deep: true })
+  watch([policies, settings, targets], invalidate, { deep: true })
 
   async function canLeave() {
     if (busy.value) { notify.info('正在保存或发布，请稍候。'); return false }
@@ -57,9 +52,8 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
       if (!data.success) throw new Error(data.message)
       state.value = data.workspace
       policies.value = clone(data.workspace.sources.policies)
-      routingSources.value = clone(data.workspace.sources.policy_routing_sources || { include: [], exclude_groups: [] })
       settings.value = routerDraft(data.workspace)
-      targets.value = data.workspace.sources.kind === 'device_groups' ? [] : data.workspace.source_agents.map(agent => agent.id)
+      targets.value = data.workspace.source_agents.map(agent => agent.id)
       changes.value = []; results.value = []; rosResult.value = null
     } catch (failure) { if (current(c)) error.value = message(failure) }
     finally { if (current(c)) loading.value = false }
@@ -73,16 +67,6 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
   }
   function sourceChanges() {
     if (!state.value) return []
-    if (newSources.value) {
-      const before = state.value.sources.policy_routing_sources || { include: [], exclude_groups: [] }
-      const groupName = (id: string) => state.value?.sources.groups?.find(group => group.id === id)?.name || id
-      return [
-        ...routingSources.value.include.filter(ip => !before.include.includes(ip)).map(ip => `新增包含来源 ${ip}`),
-        ...before.include.filter(ip => !routingSources.value.include.includes(ip)).map(ip => `移除包含来源 ${ip}`),
-        ...routingSources.value.exclude_groups.filter(id => !before.exclude_groups.includes(id)).map(id => `排除设备组 ${groupName(id)}`),
-        ...before.exclude_groups.filter(id => !routingSources.value.exclude_groups.includes(id)).map(id => `不再排除设备组 ${groupName(id)}`),
-      ]
-    }
     const before = new Map(state.value.sources.policies.map(row => [row.ip, row]))
     const after = new Map(policies.value.map(row => [row.ip, row]))
     const label = (row: OxiDNSDevicePolicy) => `${row.ip}：${row.mode === 'smart' ? '智能分流' : '直连'}${row.name ? `（${row.name}）` : ''}`
@@ -97,13 +81,11 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
       if (dirty.value) {
         const diff = sourceChanges()
         const { data } = await routerApi.savePolicySettings(c.id, {
-          revision: state.value.revision, router: clone(settings.value),
-          ...(newSources.value ? { policy_routing_sources: clone(routingSources.value) } : { policies: clone(policies.value) })
+          revision: state.value.revision, policies: clone(policies.value), router: clone(settings.value)
         }, c.profile)
         if (!current(c)) return
         if (!data.success) throw new Error(data.message)
         state.value = data.workspace; policies.value = clone(data.workspace.sources.policies); settings.value = routerDraft(data.workspace)
-        routingSources.value = clone(data.workspace.sources.policy_routing_sources || { include: [], exclude_groups: [] })
         changes.value = [...changes.value, ...diff]
         saved()
       }
@@ -234,9 +216,7 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
         // discarding the visible release results or any concurrent editor change.
         try {
           const { data } = await routerApi.policySettings(c.id, c.profile)
-          if (current(c) && data.success && (newSources.value
-            ? JSON.stringify(data.workspace.sources.policy_routing_sources) === JSON.stringify(routingSources.value)
-            : JSON.stringify(data.workspace.sources.policies) === JSON.stringify(policies.value))
+          if (current(c) && data.success && JSON.stringify(data.workspace.sources.policies) === JSON.stringify(policies.value)
             && JSON.stringify(routerDraft(data.workspace)) === JSON.stringify(settings.value)) state.value = data.workspace
         } catch { /* A later save still rejects a stale revision safely. */ }
       }
@@ -270,6 +250,6 @@ export function usePolicyRoutingWorkspace(props: { id: string; profile: string }
     void load()
   }, { immediate: true })
   onBeforeUnmount(() => { disposed = true; epoch++; submissionObservers.forEach(stop => stop()); if (timer) clearTimeout(timer); wake?.(); window.removeEventListener('beforeunload', beforeUnload) })
-  return { state, policies, routingSources, newSources, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview, changes,
+  return { state, policies, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview, changes,
     results, rosResult, unresolved, blockers, canPublish, load, reload, canLeave, selectRules, saveAndPreview, publish, refreshResults }
 }

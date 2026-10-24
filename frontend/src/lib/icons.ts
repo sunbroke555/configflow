@@ -33,7 +33,6 @@ import {
   Share2,
   Sun,
   User,
-  Users,
   type LucideIcon
 } from '@lucide/vue'
 
@@ -63,7 +62,6 @@ const MAP: Record<string, LucideIcon> = {
   Sunny: Sun,
   Moon,
   User,
-  Users,
   SwitchButton: LogOut,
   Gauge,
   Router

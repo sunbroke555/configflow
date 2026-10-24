@@ -24,92 +24,6 @@ class CustomConfigYAMLError(Exception):
     """
 
 
-class DeviceGroupGenerationError(ValueError):
-    """Device-group output cannot safely coexist with the user's base YAML."""
-
-
-def _render_rule(item):
-    """One rendering path for both global rules and copied blocking rules."""
-    if item.get('itemType') == 'ruleset':
-        line = f"RULE-SET,{item['name']},{item.get('policy', 'PROXY')}"
-        return line + ',no-resolve' if item.get('no_resolve', False) else line
-    if item.get('itemType') != 'rule':
-        return None
-    kind, value, policy = item['rule_type'], item.get('value', ''), item['policy']
-    if kind == 'MATCH':
-        return f'MATCH,{policy}'
-    if kind == 'RULE-SET':
-        return f'RULE-SET,{value},{policy}'
-    if kind in LOGIC_RULE_TYPES:
-        if item.get('no_resolve', False):
-            value = apply_no_resolve_to_logic_rule(value)
-        return f'{kind},{value},{policy}'
-    line = f'{kind},{value},{policy}'
-    return line + ',no-resolve' if item.get('no_resolve', False) else line
-
-
-def _device_group_segments(compiled):
-    if not compiled or not compiled.get('enabled'):
-        return []
-    return [group for group in compiled['groups']
-            if group['id'] != 'default' and group.get('mode', 'follow') != 'follow'
-            and compiled['effective'].get(group['id'])]
-
-
-def _check_device_group_names(document, config, groups):
-    if not groups:
-        return
-    for field in ('rule-providers', 'sub-rules'):
-        values = document.get(field)
-        if values is None:
-            values = {}
-        if not isinstance(values, dict):
-            raise DeviceGroupGenerationError(f'Mihomo {field} 必须是对象，才能加入设备组分段。')
-        if any(isinstance(name, str) and name.startswith(('cf_dg_', 'cf_scope_')) for name in values):
-            raise DeviceGroupGenerationError(
-                f'cf_dg_ 和 cf_scope_ 是设备组保留前缀，请修改基础 YAML 中同名前缀的 {field}。')
-    for item in config.get('rule_configs') or []:
-        if (item.get('itemType') == 'ruleset' and item.get('enabled', True)
-                and item.get('library_enabled', True)
-                and str(item.get('name', '')).startswith(('cf_dg_', 'cf_scope_'))):
-            raise DeviceGroupGenerationError('cf_dg_ 和 cf_scope_ 是设备组保留前缀，请修改同名前缀的规则集。')
-
-
-def _apply_device_groups(document, config, compiled, *, logical_config=None):
-    groups = _device_group_segments(compiled)
-    if not groups:
-        return
-    from backend.common.device_group_blocking import compile_blocking_rules
-
-    blocking = compile_blocking_rules(config)['mihomo'] if any(g.get('keep_blocking') for g in groups) else []
-    # Named chains belong to the logical policy catalog even when lowering
-    # emits their exit as a proxy node. Individual nodes stay ineligible.
-    policy_config = logical_config if logical_config is not None else config
-    policies = {g.get('name') for g in policy_config.get('proxy_groups', []) if g.get('enabled', True)}
-    if document.get('rule-providers') is None:
-        document['rule-providers'] = {}
-    if document.get('sub-rules') is None:
-        document['sub-rules'] = {}
-    providers = document['rule-providers']
-    segments = document['sub-rules']
-    dispatch = []
-    for group in groups:
-        suffix = group['id'].removeprefix('dg_')
-        provider, segment = f'cf_dg_set_{suffix}', f'cf_dg_seg_{suffix}'
-        if group['mode'] == 'proxy':
-            policy = group.get('policy')
-            if policy not in policies or policy in {'DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'PASS-RULE', 'GLOBAL', 'COMPATIBLE'}:
-                raise DeviceGroupGenerationError('全部代理只能选择已启用的策略组，请检查设备组的策略引用。')
-        else:
-            policy = 'DIRECT'
-        providers[provider] = {'type': 'inline', 'behavior': 'ipcidr',
-                               'payload': [str(network) for network in compiled['effective'][group['id']]]}
-        rows = [_render_rule(item) for item in blocking] if group.get('keep_blocking') else []
-        segments[segment] = [row for row in rows if row is not None] + [f'MATCH,{policy}']
-        dispatch.append(f'SUB-RULE,(RULE-SET,{provider},src),{segment}')
-    document['rules'] = dispatch + document['rules']
-
-
 def _default_mihomo_template() -> dict:
     """首次初始化时的内嵌默认模板。
 
@@ -384,7 +298,7 @@ def inject_region_probe(mihomo_config: Dict[str, Any], port: int) -> bool:
 
 def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                            sync_lan_hosts: bool = False, *, preflight_providers: bool = True,
-                           region_probe: bool = False, target_core_version: Optional[str] = None) -> str:
+                           region_probe: bool = False) -> str:
     """生成 Mihomo YAML 配置
 
     Args:
@@ -446,17 +360,6 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
             )
 
     normalize_find_process_mode(mihomo_config)
-
-    compiled_groups = None
-    if logical_config.get('device_groups') is not None:
-        from backend.common.device_groups import compile_groups
-        compiled_groups = compile_groups(logical_config)
-    device_groups = _device_group_segments(compiled_groups)
-    # Check the original base before managed providers replace its mapping.
-    _check_device_group_names(mihomo_config, config_data, device_groups)
-    if device_groups:
-        from backend.common.device_group_capabilities import require_mihomo_group_version
-        require_mihomo_group_version(target_core_version, allow_unknown=True)
 
     # 仅 Agent 推送场景同步 MosDNS 自定义 Hosts（内网域名映射）
     if sync_lan_hosts:
@@ -857,12 +760,46 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
         if not item.get('enabled', True) or not item.get('library_enabled', True):
             continue
 
-        line = _render_rule(item)
-        if line is not None:
-            rules.append(line)
+        item_type = item.get('itemType', '')
+
+        if item_type == 'rule':
+            # 单条规则
+            rule_type = item['rule_type']
+            value = item.get('value', '')
+            policy = item['policy']
+
+            # MATCH 规则只有两个字段：MATCH,POLICY
+            if rule_type == 'MATCH':
+                rules.append(f"MATCH,{policy}")
+            elif rule_type == 'RULE-SET':
+                rules.append(f"RULE-SET,{value},{policy}")
+            elif rule_type in LOGIC_RULE_TYPES:
+                # 逻辑规则的 no-resolve 必须写在子条件内部，追加为第四个字段
+                # 会被 Mihomo 当作策略名，导致配置加载失败
+                if item.get('no_resolve', False):
+                    value = apply_no_resolve_to_logic_rule(value)
+                rules.append(f"{rule_type},{value},{policy}")
+            else:
+                # 其他规则有三个字段：RULE_TYPE,VALUE,POLICY
+                # 根据配置决定是否添加 no-resolve 参数
+                no_resolve = item.get('no_resolve', False)
+                if no_resolve:
+                    rules.append(f"{rule_type},{value},{policy},no-resolve")
+                else:
+                    rules.append(f"{rule_type},{value},{policy}")
+
+        elif item_type == 'ruleset':
+            # 规则集引用
+            policy = item.get('policy', 'PROXY')
+            ruleset_name = item['name']
+            # 根据配置决定是否添加 no-resolve 参数
+            no_resolve = item.get('no_resolve', False)
+            if no_resolve:
+                rules.append(f"RULE-SET,{ruleset_name},{policy},no-resolve")
+            else:
+                rules.append(f"RULE-SET,{ruleset_name},{policy}")
 
     mihomo_config['rules'] = rules
-    _apply_device_groups(mihomo_config, config_data, compiled_groups, logical_config=logical_config)
     from backend.utils.group_candidates import lower_group_provider_filters
     lower_group_provider_filters(config_data, mihomo_config)
     from backend.utils.proxy_chains import lower_chain_providers
