@@ -336,10 +336,9 @@ export const routerApi = {
     api.post(`/routers/${id}/routes/plan`, change, { ...profileOptions(profileId), timeout: 60000 }),
   routeApply: (id: string, change: StaticRouteChange & { fingerprint: string }, profileId = getActiveProfileId()) =>
     api.post(`/routers/${id}/routes/apply`, change, { ...profileOptions(profileId), timeout: 90000 }),
+  /** 本配置空间各路由器的代理网关转发状态；上游路由页只用它提示异常，开启入口在 Agent 页。 */
   gatewayForwarding: (profileId = getActiveProfileId()) =>
-    api.get<{ success: boolean; gateways: GatewayForwardingEntry[] }>('/routers/gateway-forwarding', { ...profileOptions(profileId), timeout: 60000 }),
-  persistGatewayForwarding: (agentId: string, profileId = getActiveProfileId()) =>
-    api.post<{ success: boolean; message?: string; gateway: GatewayForwardingEntry }>('/routers/gateway-forwarding', { agent_id: agentId }, { ...profileOptions(profileId), timeout: 90000 })
+    api.get<{ success: boolean; gateways: GatewayForwardingEntry[] }>('/routers/gateway-forwarding', { ...profileOptions(profileId), timeout: 60000 })
 }
 
 // OxiDNS 统一配置
@@ -429,6 +428,11 @@ export const agentApi = {
   removeDNSFollow: (id: string) => api.delete(`/agents/${encodeURIComponent(id)}/dns-follow`),
   retryDNSFollow: (id: string) => api.post(`/agents/${encodeURIComponent(id)}/dns-follow/retry`, {}),
   bindProfile: (id: string, profileId: string) => api.put(`/agents/${id}`, { profile_id: profileId }),
+  /** 所有配置空间中被路由器用作代理网关的 Agent 的 IPv4 转发状态 */
+  gatewayForwarding: () =>
+    api.get<{ success: boolean; gateways: GatewayForwardingEntry[] }>('/agents/gateway-forwarding', { timeout: 60000 }),
+  persistGatewayForwarding: (agentId: string) =>
+    api.post<{ success: boolean; message?: string; gateway: GatewayForwardingEntry }>('/agents/gateway-forwarding', { agent_id: agentId }, { timeout: 90000 }),
   delete: (id: string) => api.delete(`/agents/${id}`),
   restart: (id: string) => api.post(`/agents/${id}/restart`),
   getStatus: (id: string) => api.get(`/agents/${id}/status`),

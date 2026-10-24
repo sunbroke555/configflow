@@ -29,7 +29,7 @@ FORWARDING_NOT_KEPT = ('设备上仍有旧版 Linux 网关记录，且 IPv4 转�
 # Turning the gateway off on an old router split host whose base YAML gained a full TUN.
 GATEWAY_OFF_NOT_KEPT = ('关闭 Linux 网关会让 Agent 撤销「{name}」上的旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，'
                         '主路由分流转来的连接会中断。这台设备尚未持久化 IPv4 转发，已阻止；请保持 Linux 网关开启。'
-                        '如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。')
+                        '如这台设备是路由器的代理网关，可在 Agent 页这台设备的卡片上开启并持久化 IPv4 转发后再操作。')
 GATEWAY_OFF_UPGRADE = ('关闭 Linux 网关前需要确认「{name}」已持久化 IPv4 转发，'
                        f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
 GATEWAY_OFF_UNKNOWN = '无法读取「{name}」的 IPv4 转发状态，已阻止关闭 Linux 网关：{reason}。请确认设备在线后重试。'
@@ -38,7 +38,7 @@ PUBLISH_GATEWAY_OFF_NOT_KEPT = ('待发布的 Mihomo 配置关闭了 Linux 网�
                                 '请在 Linux 网关中重新开启并保存后再发布。')
 # Removing the record of an old router split whose base YAML gained a full TUN.
 LEGACY_REMOVE_NOT_KEPT = ('撤销会删除旧版网关记录，并把这台 Linux 的 IPv4 转发还原为关闭，主路由分流转来的连接会中断。'
-                          '这台设备尚未持久化 IPv4 转发，已阻止；请保持网关转发。如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。')
+                          '这台设备尚未持久化 IPv4 转发，已阻止；请保持网关转发。如这台设备是路由器的代理网关，可在 Agent 页这台设备的卡片上开启并持久化 IPv4 转发后再操作。')
 LEGACY_REMOVE_UPGRADE = ('撤销前需要确认这台 Linux 已持久化 IPv4 转发，'
                          f'请先将 Mihomo Agent 更新到 {FORWARDING_MIN_AGENT_VERSION} 或更新版本。')
 # The Agent's own remove text tells clients to restore their gateway; a router
@@ -76,6 +76,25 @@ def proxy_gateway_routers(config, agent_id):
     """Upstream routers in this profile whose proxied traffic goes to ``agent_id``."""
     from backend.routers.store import routers_of
     return [item for item in routers_of(config) if agent_id and item.get('proxy_gateway_agent_id') == agent_id]
+
+
+def proxy_gateways_all_profiles():
+    """agent_id -> every upstream router, in any profile, sending proxied traffic to it.
+
+    The Agents page lists devices from all profiles, so its forwarding view
+    follows router links wherever they are; each reference names its profile.
+    """
+    from backend.common.config import get_repository
+    from backend.routers.store import routers_of
+    linked = {}
+    for profile in get_repository().list_profiles():
+        for item in routers_of(get_config(profile['id'])):
+            agent_id = item.get('proxy_gateway_agent_id')
+            if agent_id and isinstance(agent_id, str):
+                linked.setdefault(agent_id, []).append({
+                    'id': item.get('id'), 'name': item.get('name') or item.get('id'),
+                    'profile_id': profile['id'], 'profile_name': profile.get('name') or profile['id']})
+    return linked
 
 
 def _forwarding_upgrade_needed(status, agent):
@@ -405,8 +424,10 @@ def _request(agent, operation, method, payload=None):
     return data
 
 
-# The 上游路由 page: IPv4 forwarding on each router's proxy gateway. Its routes
-# authorise by the router link in their own profile, not the Agent's binding.
+# IPv4 forwarding on each router's proxy gateway: shown and persisted on the
+# Agents page (router links in any profile), and read by the 上游路由 page to
+# warn about its own routers. Both authorise by the router link, not the
+# Agent's profile binding.
 GATEWAY_FORWARDING_MESSAGES = {
     'missing': '关联的 Agent 已删除，请在路由器设置中重新选择代理网关。',
     'not_mihomo': '代理网关不是 Mihomo Agent。',
@@ -605,7 +626,7 @@ def _gateway_precheck(agent_id, agent, routers):
 
 
 def gateway_forwarding_entry(manager, agent_id, routers):
-    """Per-Agent IPv4 forwarding view for the 上游路由 page; never raises for one Agent."""
+    """Per-Agent IPv4 forwarding view for a router's proxy gateway; never raises for one Agent."""
     agent = manager.get_agent_by_id(agent_id)
     entry = _gateway_precheck(agent_id, agent, routers)
     if entry is not None:

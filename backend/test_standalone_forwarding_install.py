@@ -345,7 +345,7 @@ def test_gateway_record_refuses_before_the_agent_is_stopped(tmp_path, monkeypatc
     before = snapshot(paths)
     result = run(script, env)
     assert result.returncode != 0
-    assert "不开启 IPv4 转发" in result.stderr and "上游路由" in result.stderr
+    assert "不开启 IPv4 转发" in result.stderr and "Agent 页这台设备的卡片上" in result.stderr
     assert not stopped(paths)
     assert snapshot(paths) == before
     assert not paths["conf"].exists() and paths["proc"].read_text() == "0\n"
