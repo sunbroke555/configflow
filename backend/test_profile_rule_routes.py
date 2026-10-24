@@ -390,3 +390,83 @@ def test_library_toggle_resyncs_native_profiles_in_one_transaction(space):
     assert response.status_code == 200
     assert oxidns(repository)['rule_dns_parked'] == {}
     assert native_values(repository)['values']['rule_actions'] == {'set': {'action': 'blackhole'}}
+
+
+# ---- Inline policy changes (PUT /rules/policy) ------------------------------
+
+def put_policy(client, **body):
+    return client.put('/api/rules/policy', headers=HEADERS, json=body)
+
+
+def test_group_policy_change_is_one_write_moving_follow_and_keeping_explicit_and_labels(space):
+    client, repository = space
+    assert client.post('/api/rules/group-name', headers=HEADERS, json={'ids': ['set', 'inline'], 'group_name': 'Home'}).status_code == 200
+    assert set_dns(client, {'set': 'follow', 'inline': 'direct'}).status_code == 200
+    default = repository.get_profile('default')
+    revision = repository.config_revision('other')
+    response = put_policy(client, ids=['set', 'inline'], policy='Proxy')
+    assert response.status_code == 200, response.get_json()
+    assert repository.config_revision('other') == revision + 1
+    rules = {item['id']: item for item in repository.get_profile('other')['rule_configs']}
+    assert [rules[key]['policy'] for key in ('set', 'inline')] == ['Proxy', 'Proxy']
+    assert [rules[key]['group_name'] for key in ('set', 'inline')] == ['Home', 'Home']
+    state = client.get('/api/rules/dns', headers=HEADERS).get_json()['rules']
+    assert state['set'] == {'state': 'follow', 'route': 'proxy', 'follow_route': 'proxy'}
+    assert state['inline']['state'] == 'explicit' and state['inline']['route'] == 'direct'
+    assert repository.get_profile('default') == default
+
+
+def test_row_policy_change_clears_its_group_label(space):
+    client, repository = space
+    assert client.post('/api/rules/group-name', headers=HEADERS, json={'ids': ['set', 'inline'], 'group_name': 'Home'}).status_code == 200
+    assert put_policy(client, ids=['inline'], policy='REJECT', group_name='').status_code == 200
+    rules = {item['id']: item for item in repository.get_profile('other')['rule_configs']}
+    assert (rules['inline']['policy'], rules['inline']['group_name']) == ('REJECT', '')
+    assert (rules['set']['policy'], rules['set']['group_name']) == ('DIRECT', 'Home')
+
+
+def test_policy_change_rebuilds_native_routing(space):
+    client, repository = space
+    make_native(client)
+    assert set_dns(client, {'inline': 'follow'}).status_code == 200
+    assert put_policy(client, ids=['inline'], policy='Proxy').status_code == 200
+    values = native_values(repository)['values']
+    assert 'inline' in values['proxy_rules'] and 'inline' not in values['direct_rules']
+
+
+def test_policy_change_on_custom_native_saves_rules_with_warning(space):
+    client, repository = space
+    lock_native(client, repository)
+    native = oxidns(repository)['native_config']
+    response = put_policy(client, ids=['inline', 'off'], policy='Proxy')
+    assert response.status_code == 200
+    assert response.get_json()['warnings'][0].startswith('OxiDNS 分流含自定义结构，DNS 未修改')
+    assert oxidns(repository)['native_config'] == native
+    assert [item['policy'] for item in repository.get_profile('other')['rule_configs'] if item['id'] in ('inline', 'off')] == ['Proxy', 'Proxy']
+
+
+def test_policy_change_has_no_batch_cap_for_large_groups(space):
+    client, repository = space
+    response = client.post('/api/rules/batch', headers=HEADERS, json={
+        'rule_type': 'DOMAIN-SUFFIX', 'domains': [f'd{index}.test' for index in range(250)], 'policy': 'DIRECT'})
+    assert response.status_code == 200
+    ids = [item['id'] for item in response.get_json()['rules']]
+    assert put_policy(client, ids=ids, policy='Proxy').status_code == 200
+    rules = {item['id']: item for item in repository.get_profile('other')['rule_configs']}
+    assert {rules[key]['policy'] for key in ids} == {'Proxy'}
+
+
+@pytest.mark.parametrize('body, status', [
+    ({'ids': ['inline'], 'policy': 'Missing'}, 400),
+    ({'ids': ['inline', 'deleted'], 'policy': 'Proxy'}, 404),
+    ({'ids': [], 'policy': 'Proxy'}, 400),
+    ({'ids': ['inline', 'inline'], 'policy': 'Proxy'}, 400),
+    ({'ids': 'inline', 'policy': 'Proxy'}, 400),
+    ({'ids': ['inline'], 'policy': ''}, 400),
+    ({'ids': ['inline'], 'policy': 'Proxy', 'group_name': 1}, 400),
+])
+def test_policy_change_rejects_bad_requests_without_changes(space, body, status):
+    client, repository = space
+    before = repository.get_profile('other')
+    assert put_policy(client, **body).status_code == status
+    assert repository.get_profile('other') == before

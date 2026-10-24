@@ -140,7 +140,7 @@ describe('rule group sections', () => {
     await flushPromises()
     const units = (wrapper.vm as any).$.setupState.reorderDisplayItems
     // Headers of expanded groups are not sortable; collapsed groups move whole.
-    expect(units.map((item: any) => item.uniqueId)).toEqual(['rule-r-lan', 'rule-r-a', 'rule-r-b', 'rule-r-c', 'rule-r-home', 'group_rule-r-x_DIRECT'])
+    expect(units.map((item: any) => item.uniqueId)).toEqual(['rule-r-lan', 'rule-r-a', 'rule-r-b', 'rule-r-c', 'rule-r-home', 'group_rule-r-x'])
 
     await wrapper.get('button[aria-label="2 条规则 上移"]').trigger('click')
     await clickText('保存顺序')
@@ -167,7 +167,7 @@ describe('rule group sections', () => {
       await flushPromises()
       expect(rowValues(wrapper)).toContain('b.test')
       expect(wrapper.find('.rule-row.is-match').text()).toContain('b.test')
-      expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-a_Proxy'])
+      expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-a'])
     } finally {
       vi.useRealTimers()
     }
@@ -180,7 +180,7 @@ describe('rule group sections', () => {
     await (wrapper.vm as any).$.setupState.loadAllRules()
     await flushPromises()
     expect(toggle(wrapper, 'DNS地址').attributes('aria-expanded')).toBe('false')
-    expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-new_Proxy'])
+    expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-new'])
   })
 
   it('drops group styling from members while reordering', async () => {
@@ -201,5 +201,12 @@ describe('rule group sections', () => {
     await flushPromises()
     // Every child stays a single draggable card for Sortable.
     expect(children().every(el => el.hasAttribute('data-reorder-item') && el.getAttribute('aria-hidden') !== 'true')).toBe(true)
+  })
+
+  it('keeps groups collapsed under the earlier key format and migrates it', async () => {
+    localStorage.setItem('cf-rules-collapsed:default', JSON.stringify(['group_rule-r-a_Proxy']))
+    const wrapper = await render()
+    expect(toggle(wrapper, 'DNS地址').attributes('aria-expanded')).toBe('false')
+    expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-a'])
   })
 })
