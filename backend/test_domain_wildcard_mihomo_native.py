@@ -31,13 +31,25 @@ def _free_port():
         return reserve.getsockname()[1]
 
 
+def _http_request(proxy_port, host, port, timeout=2):
+    with socket.create_connection(('127.0.0.1', proxy_port), timeout=timeout) as connection:
+        connection.settimeout(timeout)
+        target = f'{host}:{port}'
+        connection.sendall(f'GET http://{target}/ HTTP/1.1\r\nHost: {target}\r\n'
+                           'Connection: close\r\n\r\n'.encode())
+        try:
+            connection.recv(1024)
+        except (ConnectionResetError, socket.timeout):
+            pass
+
+
 def _domain_matcher(source, rule_format):
     return RuleConfigMatcher([{'id': 'domain', 'itemType': 'ruleset', 'behavior': 'domain',
                               'format': rule_format}], [], lambda *_: source)
 
 
 @pytest.mark.parametrize('layout', ['text', 'text-bom', 'text-bom-comment', 'text-cr',
-                                    'block', 'block-cr', 'flow', 'json'])
+                                    'text-unicode', 'block', 'block-cr', 'flow', 'json'])
 def test_native_mihomo_domain_wildcards_agree_with_page_matcher(tmp_path, layout):
     binary = os.environ.get('MIHOMO_BINARY') or shutil.which('mihomo')
     if not binary:
@@ -49,9 +61,11 @@ def test_native_mihomo_domain_wildcards_agree_with_page_matcher(tmp_path, layout
         rule_format = 'text' if layout.startswith('text') else 'yaml'
         source = ('\ufeff' + pattern + '\n' if layout == 'text-bom'
                   else '\ufeff# Domain patterns\n' + pattern + '\n' if layout == 'text-bom-comment'
-                  else source_for(pattern, layout.removesuffix('-cr')))
+                  else source_for(pattern, layout.removesuffix('-cr').removesuffix('-unicode')))
         if layout.endswith('-cr'):
             source = source.replace('\n', '\r')
+        elif layout == 'text-unicode':
+            source = source.replace('\n', '\u2028')
         content, warnings = normalize_mihomo_ruleset(source, 'domain', rule_format)
         assert warnings == []
         path = tmp_path / f'{tag}.{rule_format}'
@@ -94,16 +108,24 @@ def test_native_mihomo_domain_wildcards_agree_with_page_matcher(tmp_path, layout
             else:
                 pytest.fail('Domain providers did not initialize: ' + log_path.read_text())
             assert all(actual[tag]['ruleCount'] == 1 for tag in providers), actual
+            # Provider counts become visible before executor finishes its GC
+            # and switches the tunnel from Inner to Running. During that gap
+            # external HTTP connections close without a route/log. Probe the
+            # data path separately; never retry or skip an actual matrix query.
+            for _ in range(100):
+                try:
+                    _http_request(proxy_port, '127.0.0.1', 30999, timeout=.2)
+                except OSError:
+                    pass
+                if ' --> 127.0.0.1:30999 match Match using FALLBACK' in log_path.read_text():
+                    break
+                assert process.poll() is None, log_path.read_text()
+                time.sleep(.05)
+            else:
+                pytest.fail('Mihomo routing did not become ready: ' + log_path.read_text())
             for host, port, _, _, _, _ in requests:
-                with socket.create_connection(('127.0.0.1', proxy_port), timeout=2) as connection:
-                    connection.settimeout(2)
-                    target = f'{host}:{port}'
-                    connection.sendall(f'GET http://{target}/ HTTP/1.1\r\nHost: {target}\r\n'
-                                       'Connection: close\r\n\r\n'.encode())
-                    try:
-                        connection.recv(1024)
-                    except (ConnectionResetError, socket.timeout):
-                        pass
+                _http_request(proxy_port, host, port)
+
         finally:
             process.terminate()
             try:

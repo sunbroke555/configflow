@@ -193,7 +193,9 @@ def normalize_mihomo_ruleset(content, behavior, rule_format):
         return content, []
     # Mihomo splits on LF and treats a text BOM as part of the first domain.
     # Normalize transport framing only; the stored source remains untouched.
-    content = re.sub(r'\r(?!\n)', '\n', content.removeprefix('\ufeff'))
+    line_break = (r'\r(?!\n)|[\v\f\x1c-\x1e\x85\u2028\u2029]'
+                  if rule_format == 'text' else r'\r(?!\n)')
+    content = re.sub(line_break, '\n', content.removeprefix('\ufeff'))
     warnings = []
     if behavior == 'classical':
         content, warnings = normalize_classical_lines(content)

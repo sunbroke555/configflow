@@ -102,3 +102,23 @@ def test_generated_http_and_agent_delivery_normalize_framing_only(
     assert convert_rule_content_for_mosdns(source, 'domain') == dns
     assert convert_mosdns_rules(source.encode()).decode() == dns
     assert repository.export_all() == before
+
+
+@pytest.mark.parametrize('separator', ['\n', '\r\n', '\r', '\v', '\f', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'])
+def test_all_accepted_text_line_boundaries_deliver_as_separate_rules(separator):
+    source = separator.join(['*.example.com', '+.other.com', ''])
+    assert not inspect_domain_content(source, 'domain', 'text')['errors']
+    converted, warnings = normalize_mihomo_ruleset(source, 'domain', 'text')
+    assert not warnings
+    assert converted == ('\r\n' if separator == '\r\n' else '\n').join(
+        ['*.example.com', '+.other.com', ''])
+    assert normalize_mihomo_ruleset(converted, 'domain', 'text') == (converted, [])
+    expected = 'regexp:^[^.]+\\.example\\.com$\ndomain:other.com'
+    assert convert_rule_content_for_mosdns(source, 'domain') == expected
+    assert convert_mosdns_rules(source.encode()).decode() == expected
+    for value in (source, converted):
+        matcher = RuleConfigMatcher([{'id': 'set', 'itemType': 'ruleset', 'behavior': 'domain',
+                                      'format': 'text'}], [], lambda *_: value)
+        assert matcher.match('a.example.com')
+        assert matcher.match('other.com')
+        assert matcher.match('a.b.example.com') is None
