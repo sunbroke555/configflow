@@ -35,9 +35,15 @@ class CountingROS(MemoryROS):
         if endpoint == '/execute':
             script = values['script']
             endpoint = ('/execute:digest' if 'cf-digest:' in script else
-                        '/execute:names' if 'cf-names:' in script else '/execute')
+                        '/execute:names' if 'cf-names:' in script else
+                        '/execute:fetch' if 'cf-rows:' in script else '/execute')
         self.requests[method, endpoint] += 1
         return super()._request(method, path, values)
+
+
+def is_read(path, values):
+    """A list read after a batch: a filtered GET or a console row fetch."""
+    return '?' in path or (path == '/execute' and 'cf-rows:' in values['script'])
 
 
 def members(driver, name=LIST):
@@ -72,7 +78,7 @@ def test_batches_stay_under_the_script_limit_and_escape_values(monkeypatch):
     sent = []
     original = driver._request
     def capture(method, path, values=None):
-        if path == '/execute':
+        if path == '/execute' and 'address-list/add' in values['script']:
             sent.append(values['script'])
         return original(method, path, values)
     monkeypatch.setattr(driver, '_request', capture)
@@ -145,7 +151,7 @@ def test_list_that_keeps_growing_after_a_lost_reply_is_left_for_inspection(monke
     reads = []
     original = driver._request
     def growing(method, path, values=None):
-        if method == 'GET' and '?' in path:
+        if is_read(path, values):
             reads.append(path)
             driver.rows[ADDRESSES].append({'.id': f'*G{len(reads)}', 'list': LIST,
                                            'address': f'203.0.113.{len(reads)}', 'comment': 'c', 'disabled': 'false'})
@@ -276,9 +282,9 @@ def test_failed_readback_after_a_batch_still_rolls_back_every_written_member(mon
     original = driver._request
     state = {'executed': False, 'failures': 0}
     def flaky(method, path, values=None):
-        if path == '/execute':
+        if path == '/execute' and 'address-list/add' in values['script']:
             state['executed'] = True
-        elif method == 'GET' and '?' in path and state['executed'] and state['failures'] < 3:
+        elif is_read(path, values) and state['executed'] and state['failures'] < 3:
             state['failures'] += 1
             raise RouterError('无法连接 RouterOS：ReadTimeout')
         return original(method, path, values)
@@ -299,9 +305,9 @@ def test_one_transient_read_failure_is_retried(monkeypatch):
     original = driver._request
     state = {'executed': False, 'failed': False}
     def flaky(method, path, values=None):
-        if path == '/execute':
+        if path == '/execute' and 'address-list/add' in values['script']:
             state['executed'] = True
-        elif method == 'GET' and '?' in path and state['executed'] and not state['failed']:
+        elif is_read(path, values) and state['executed'] and not state['failed']:
             state['failed'] = True
             raise RouterError('无法连接 RouterOS：ReadTimeout')
         return original(method, path, values)

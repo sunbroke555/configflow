@@ -119,6 +119,13 @@ class MemoryROS(RouterOSDriver):
                 count, value = address_lists.digest([row for row in self.rows[ADDRESSES] if row.get('list') == name])
                 lines.append(f'cf-digest:{index}:{count}:{value}')
             return {'ret': '\r\n'.join(lines)}
+        if 'cf-rows:' in values['script']:
+            self.counts['FETCH', ADDRESSES] += 1
+            name = _unescape(FETCH_LIST.search(values['script'])[1])
+            start, end = map(int, FETCH_RANGE.search(values['script']).groups())
+            members = [row for row in self.rows[ADDRESSES] if row.get('list') == name]
+            lines = [f'cf-row:{address_lists._encode(row).decode().rstrip(chr(10))}' for row in members[start:end]]
+            return {'ret': '\r\n'.join(lines + [f'cf-rows:{len(members)}'])}
         if 'cf-names:' in values['script']:
             pattern = re.compile(_unescape(NAMES_PATTERN.search(values['script'])[1]))
             excluded = {_unescape(name) for name in NAMES_EXCLUDED.findall(values['script'])}
@@ -169,6 +176,8 @@ BATCH = re.compile(r':local n 0\n:local m ""\n:foreach a in=\{(?P<items>.*)\} do
                    r':if \(\$n=1\) do=\{:set m \(\$a \. " " \. \$e\)\}\}\}\n:put \("cf-done:" \. \$n \. ":" \. \$m\)',
                    re.DOTALL)
 DIGEST_LIST = re.compile(r'\(\$groups->"((?:[^"\\]|\\.)*)"\)')
+FETCH_LIST = re.compile(r'print as-value where list="((?:[^"\\]|\\.)*)"')
+FETCH_RANGE = re.compile(r'\$i >= (\d+) && \$i < (\d+)')
 NAMES_PATTERN = re.compile(r'find where list~"((?:[^"\\]|\\.)*)"')
 NAMES_EXCLUDED = re.compile(r'list!="((?:[^"\\]|\\.)*)"')
 FIELD = re.compile(r'([\w-]+)=(?:"((?:[^"\\]|\\.)*)"|(yes|no))')

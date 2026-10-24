@@ -121,8 +121,7 @@ def _script_value(key, value):
 def _address_rows(driver, name, attempts=1):
     for attempt in range(attempts):
         try:
-            rows = driver._list(ADDRESSES + '?' + urlencode({'list': name}))
-            return [row for row in rows if row.get('list') == name]
+            return ros_address_lists.fetch(driver, name)
         except RouterError:
             if attempt + 1 == attempts:
                 raise
@@ -344,7 +343,7 @@ def _restore_addresses(driver, steps, ids, remapped, configs):
 def restore(driver, op):
     failures = []
     remapped = {}
-    live = snapshot(driver)
+    live = snapshot(driver, reserve=False)
     ids = {path: {row['.id'] for row in rows} for path, rows in live.items()}
     deleting = [step for step in op['steps'] if step['action'] == 'delete']
     # Preserve the whole new bundle if another writer started using its lists
@@ -398,7 +397,7 @@ def restore(driver, op):
                     # Do not drop an entire table if another writer has started
                     # referencing it since the release. Leave it for inspection.
                     if step['path'] == TABLES:
-                        check_references([step], snapshot(driver))
+                        check_references([step], snapshot(driver, reserve=False))
                     driver._request('DELETE', step['path'] + '/' + quote(step['id'], safe='*'))
                     if _read(driver, step['path'], step['id']) is not None:
                         raise RouterError('回滚删除后对象仍存在')
@@ -438,7 +437,7 @@ def _verify_replacement_nat(driver, op, resources):
         return
     from backend.routers.routeros_nat import _egress, preserves_sources, RouteEgressIndex
     state = driver.read_state()
-    live = snapshot(driver)
+    live = snapshot(driver, reserve=False)
     removing = {(item['path'], item['id']) for item in op['owned'] + op['migrations']}
     policy = removing | {(item['path'], item['id']) for item in resources}
     context = state.nat_context or {}
@@ -509,7 +508,7 @@ def apply(driver, op):
             _delete(driver, migration, journal)
         # Reverse creation order: withdraw the old entry rule first, then its
         # private chain/NAT/route/table and finally its list members.
-        check_references(owned, snapshot(driver))
+        check_references(owned, snapshot(driver, reserve=False))
         for is_address, run in groupby(reversed(owned), key=lambda entry: entry['path'] == ADDRESSES):
             if is_address:
                 _delete_addresses(driver, list(run), journal)
@@ -529,7 +528,7 @@ def apply(driver, op):
 
 def verify(driver, check):
     manifest = getattr(driver, 'ros_policy_manifest', check.get('previous'))
-    live = snapshot(driver)
+    live = snapshot(driver, reserve=False)
     owned = owned_rows(manifest, live)
     if check['spec'] is None:
         if owned or owned_rows(check.get('previous'), live):
@@ -544,7 +543,7 @@ def verify(driver, check):
                    for path, rows in live.items() for row in rows):
             break
         time.sleep(0.25)
-        live = snapshot(driver)
+        live = snapshot(driver, reserve=False)
         owned = owned_rows(manifest, live)
     if not manifest or manifest.get('spec') != check['spec'] or len(owned) != len(manifest['resources']):
         raise RouterError('策略路由回读校验失败：来源、目的或转发资源不完整')

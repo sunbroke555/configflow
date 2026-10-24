@@ -143,3 +143,20 @@ def test_proofs_are_reused_only_inside_a_scope_and_until_a_write():
     address_lists.read(driver, names)
     address_lists.read(driver, names)
     assert digests() == outside + 2  # no reuse outside a scope
+
+
+def test_console_fetch_matches_rest_rows_and_pages_large_lists():
+    driver = ReadLog()
+    driver.rows[ADDRESSES] = [row(index, list=DESTINATIONS, comment='cf-ros-policy-test',
+                                  **{'creation-time': '2026-10-25 00:00:00'}) for index in range(4500)]
+    rows = address_lists.fetch(driver, DESTINATIONS)
+    expected = [{key: value for key, value in item.items() if key != 'creation-time'} for item in driver.rows[ADDRESSES]]
+    assert rows == expected
+    assert driver.counts['FETCH', ADDRESSES] == 3 and not driver.address_reads
+
+
+def test_console_fetch_falls_back_to_rest_when_values_contain_separators():
+    driver = ReadLog()
+    driver.rows[ADDRESSES] = [row(1, list=DESTINATIONS, comment='a;b'), row(2, list=DESTINATIONS)]
+    assert address_lists.fetch(driver, DESTINATIONS) == driver.rows[ADDRESSES]
+    assert driver.address_reads == [ADDRESSES + '?list=' + DESTINATIONS]

@@ -37,6 +37,45 @@ def filtered(driver, name):
     return [row for row in rows if row.get('list') == name]
 
 
+FETCH_ROWS = 2000
+
+
+def fetch(driver, name):
+    """All members of one list via console output, ~2.5x cheaper than REST JSON.
+
+    Each member prints as ``[:len $r] . ":" . [:tostr $r]``. A member whose
+    values contain separators cannot be split back reliably; then the whole
+    list is read through REST instead.
+    """
+    rows, start = [], 0
+    drop = ' '.join(f':set ($r->{_script_string(key)});' for key in sorted(RUNTIME))
+    while True:
+        script = (':local i 0\n'
+                  f':foreach r in=[/ip/firewall/address-list/print as-value where list={_script_string(name)}] do={{'
+                  f':if ($i >= {start} && $i < {start + FETCH_ROWS}) do={{{drop} '
+                  ':put ("cf-row:" . [:len $r] . ":" . [:tostr $r])}; :set i ($i+1)}\n'
+                  ':put ("cf-rows:" . $i)')
+        result = driver._request('POST', '/execute', {'script': script, 'as-string': ''})
+        output = str(result.get('ret', '')) if isinstance(result, dict) else ''
+        lines = output.replace('\r', '').split('\n')
+        total = next((line[len('cf-rows:'):] for line in lines if line.startswith('cf-rows:')), '')
+        parsed = [_decode(line[len('cf-row:'):]) for line in lines if line.startswith('cf-row:')]
+        if not total.isdigit() or any(row is None or row.get('list') != name for row in parsed):
+            return filtered(driver, name)
+        rows.extend(parsed)
+        start += FETCH_ROWS
+        if start >= int(total):
+            return rows if len(rows) == int(total) else filtered(driver, name)
+
+
+def _decode(text):
+    count, _, body = text.partition(':')
+    pairs = [part.partition('=') for part in body.split(';')] if body else []
+    if not count.isdigit() or len(pairs) != int(count) or any(not sep for _, sep, _ in pairs):
+        return None
+    return {key: value for key, _, value in pairs}
+
+
 def _encode(row):
     """``[:len $r] . ":" . [:tostr $r]`` of a member without runtime keys.
 

@@ -49,7 +49,12 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def snapshot(driver):
+def snapshot(driver, reserve=True):
+    """Live policy-relevant configuration.
+
+    ``reserve`` also lists occupied fresh-name candidates; only previews and
+    the evidence check before writing need them.
+    """
     from backend.routers import ros_address_lists
     result = {path: driver._list(path) for path in PATHS if path != ADDRESSES}
     # Members are needed only for lists NAT selects on (migrations) and for
@@ -57,8 +62,9 @@ def snapshot(driver):
     names = ros_address_lists.referenced(result[NAT]) | set(ros_address_lists.known_lists(driver))
     lists = ros_address_lists.read(driver, names)
     result[ADDRESSES] = [row for name in sorted(lists) for row in lists[name]]
-    occupied = ros_address_lists.occupied_names(driver, NAME_PATTERNS, names)
-    result[LIST_NAMES] = [{'.id': 'name:' + name, 'occupied-list': name} for name in sorted(occupied)]
+    if reserve:
+        occupied = ros_address_lists.occupied_names(driver, NAME_PATTERNS, names)
+        result[LIST_NAMES] = [{'.id': 'name:' + name, 'occupied-list': name} for name in sorted(occupied)]
     settings = driver._get(SETTINGS)
     if not isinstance(settings, dict):
         raise RouterError('无法读取 ROS 路由查找顺序')
