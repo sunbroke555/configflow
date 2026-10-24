@@ -57,13 +57,13 @@ def restart(repository):
 
 def test_heartbeat_with_known_version_writes_nothing_and_is_visible_through_the_manager(tmp_path):
     repository, manager, agent = setup(tmp_path)
-    before, current_revision = (tmp_path / "config.json").read_bytes(), revision(repository)
+    before, current_revision = repository._store.fingerprint(), revision(repository)
 
     for _ in range(3):
         assert manager.update_heartbeat(agent["id"], {"version": "1.0.0", "service_status": "running",
                                                       "config_version": "0", "system_metrics": METRICS})
 
-    assert (tmp_path / "config.json").read_bytes() == before
+    assert repository._store.fingerprint() == before
     assert revision(repository) == current_revision
     assert not (tmp_path / "runtime.sqlite3").exists()
     for current in (manager.get_agent_by_id(agent["id"]), manager.get_all_agents()[0]):
@@ -132,9 +132,9 @@ def test_re_registration_wins_until_the_next_heartbeat(tmp_path):
 
 def test_unknown_agent_writes_and_remembers_nothing(tmp_path):
     repository, manager, _ = setup(tmp_path)
-    before = (tmp_path / "config.json").read_bytes()
+    before = repository._store.fingerprint()
     assert not manager.update_heartbeat("missing", {"version": "2.0.0"})
-    assert (tmp_path / "config.json").read_bytes() == before
+    assert repository._store.fingerprint() == before
     assert manager.runtime._entries == {}
 
 
