@@ -271,6 +271,7 @@ def _forget(driver, items, removed):
 
 def _delete_addresses(driver, items, journal):
     """Guard owned members with one read per list, journal them, then remove in batches."""
+    ros_address_lists.invalidate(driver)  # destructive: never trust an earlier proof
     live = _live_addresses(driver, items)
     for item in items:
         row = live.get(item['id'])
@@ -301,6 +302,7 @@ def _delete(driver, item, journal):
 
 def _restore_delete_addresses(driver, steps):
     """Remove still-present members of a failed release; keep externally changed ones."""
+    ros_address_lists.invalidate(driver)
     live = _live_addresses(driver, steps)
     present = [step for step in steps if step['id'] in live]
     changed = [step for step in present if config_row(live[step['id']]) != config_row(step['config'])]
@@ -323,6 +325,7 @@ def _restore_sweep(driver, step):
 
 def _restore_addresses(driver, steps, ids, remapped, configs):
     """Recreate deleted members in batches; members still present must be unchanged."""
+    ros_address_lists.invalidate(driver)
     live = _live_addresses(driver, steps)
     changed = [step for step in steps
                if step['id'] in live and config_row(live[step['id']]) != config_row(step['config'])]

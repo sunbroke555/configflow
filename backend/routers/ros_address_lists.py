@@ -47,7 +47,7 @@ def fetch(driver, name):
     values contain separators cannot be split back reliably; then the whole
     list is read through REST instead.
     """
-    rows, start = [], 0
+    rows, start, totals = [], 0, set()
     drop = ' '.join(f':set ($r->{_script_string(key)});' for key in sorted(RUNTIME))
     while True:
         script = (':local i 0\n'
@@ -63,9 +63,13 @@ def fetch(driver, name):
         if not total.isdigit() or any(row is None or row.get('list') != name for row in parsed):
             return filtered(driver, name)
         rows.extend(parsed)
+        totals.add(int(total))
         start += FETCH_ROWS
         if start >= int(total):
-            return rows if len(rows) == int(total) else filtered(driver, name)
+            # Pages are positional: a list that changed between pages would
+            # shift members across the boundary, so every page must agree.
+            consistent = len(totals) == 1 and len(rows) == int(total) and len({row.get('.id') for row in rows}) == len(rows)
+            return rows if consistent else filtered(driver, name)
 
 
 def _decode(text):
@@ -219,6 +223,32 @@ def read(driver, names):
     for value in rows.values():
         value.sort(key=lambda row: str(row.get('.id')))
     return rows
+
+
+LOCATE_LIMIT = 20
+
+
+def locate(driver, ids):
+    """Members with these IDs in any list; absent IDs are omitted.
+
+    Scoped reads cannot see a managed member that was moved into an unread
+    list. A few IDs are looked up one by one; many fall back to the table.
+    """
+    from backend.routers.routeros import MissingResource
+    from urllib.parse import quote
+    ids = list(dict.fromkeys(ids))
+    if len(ids) > LOCATE_LIMIT:
+        wanted = set(ids)
+        return [row for row in driver._list(ADDRESSES) if row.get('.id') in wanted]
+    found = []
+    for row_id in ids:
+        try:
+            row = driver._get(ADDRESSES + '/' + quote(row_id, safe='*'))
+        except MissingResource:
+            continue
+        if isinstance(row, dict) and row.get('.id') == row_id:
+            found.append(row)
+    return found
 
 
 def occupied_names(driver, patterns, exclude):

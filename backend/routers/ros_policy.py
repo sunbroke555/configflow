@@ -62,6 +62,12 @@ def snapshot(driver, reserve=True):
     names = ros_address_lists.referenced(result[NAT]) | set(ros_address_lists.known_lists(driver))
     lists = ros_address_lists.read(driver, names)
     result[ADDRESSES] = [row for name in sorted(lists) for row in lists[name]]
+    # A managed member moved into an unread list must still look edited, not deleted.
+    present = {row.get('.id') for row in result[ADDRESSES]}
+    manifest = getattr(driver, 'ros_policy_manifest', None) or {}
+    result[ADDRESSES] += ros_address_lists.locate(driver, [
+        item['id'] for item in manifest.get('resources', [])
+        if item.get('path') == ADDRESSES and item['id'] not in present])
     if reserve:
         occupied = ros_address_lists.occupied_names(driver, NAME_PATTERNS, names)
         result[LIST_NAMES] = [{'.id': 'name:' + name, 'occupied-list': name} for name in sorted(occupied)]

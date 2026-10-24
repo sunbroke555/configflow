@@ -160,3 +160,43 @@ def test_console_fetch_falls_back_to_rest_when_values_contain_separators():
     driver.rows[ADDRESSES] = [row(1, list=DESTINATIONS, comment='a;b'), row(2, list=DESTINATIONS)]
     assert address_lists.fetch(driver, DESTINATIONS) == driver.rows[ADDRESSES]
     assert driver.address_reads == [ADDRESSES + '?list=' + DESTINATIONS]
+
+
+def test_console_fetch_rejects_pages_taken_while_the_list_changed():
+    driver = ReadLog()
+    driver.rows[ADDRESSES] = [row(index, list=DESTINATIONS) for index in range(2500)]
+    original = driver._execute
+    def shrinking(values):
+        result = original(values)
+        if 'cf-rows:' in values['script'] and driver.counts['FETCH', ADDRESSES] == 1:
+            del driver.rows[ADDRESSES][:100]  # someone removes early members between pages
+        return result
+    driver._execute = shrinking
+    rows = address_lists.fetch(driver, DESTINATIONS)
+    assert rows == driver.rows[ADDRESSES] and driver.address_reads == [ADDRESSES + '?list=' + DESTINATIONS]
+
+
+def test_member_moved_to_an_unread_list_is_reported_as_edited_not_deleted():
+    driver = ReadLog()
+    release(driver)
+    member = next(item for item in driver.rows[ADDRESSES] if item['list'] == 'CF_Source_Proxy_IP_01')
+    member['list'] = 'my-list'
+    driver.address_list_cache = None
+    _, plan = inspect(driver)
+    assert any('外部修改' in message for message in plan['blockers'])
+
+
+def test_withdrawal_rechecks_members_instead_of_trusting_the_proof_from_its_start():
+    driver = ReadLog()
+    release(driver)
+    _, withdrawal = inspect(driver, desired_for(driver, selected=False))
+    original = driver._request
+    def edit_after_entry_rule(method, path, values=None):
+        result = original(method, path, values)
+        if method == 'DELETE' and path.startswith('/ip/firewall/mangle'):
+            next(item for item in driver.rows[ADDRESSES] if item['list'] == DESTINATIONS)['comment'] = 'WinBox'
+        return result
+    driver._request = edit_after_entry_rule
+    result = execute(withdrawal, driver, None)
+    assert not result['ok']
+    assert any(item['comment'] == 'WinBox' for item in driver.rows[ADDRESSES])
