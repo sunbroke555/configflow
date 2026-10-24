@@ -82,10 +82,12 @@ def relevant(router: Dict[str, Any]) -> bool:
 
 
 def snapshot(driver) -> Dict[str, Optional[List[Dict[str, Any]]]]:
+    from backend.routers.ros_address_lists import filtered
     live = {}
     for path in PATHS:
         try:
-            live[path] = driver._list(path)
+            # Only the bypass list is ever owned or checked for name collisions.
+            live[path] = filtered(driver, BYPASS_LIST) if path == ADDRESSES else driver._list(path)
         except RouterError:
             if path != NETWATCH:
                 raise

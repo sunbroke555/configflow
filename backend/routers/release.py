@@ -47,6 +47,9 @@ def _check_return_allocation(status: Dict[str, Any], spec: Dict[str, Any]) -> No
 
 
 def _apply(op: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -> Dict[str, Any]:
+    from backend.routers import ros_address_lists
+    # Any operation may change what earlier reads proved.
+    ros_address_lists.invalidate(driver)
     kind = op['kind']
     if kind in {'return_routing_apply', 'return_routing_remove'} and agent is None:
         raise RouterError('未启用 Agent 回流配置，无法执行回流操作')
@@ -186,6 +189,13 @@ def _rollback(done: List[Tuple[str, Dict[str, Any], Dict[str, Any]]], driver, ag
 
 
 def execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -> Dict[str, Any]:
+    from backend.routers import ros_address_lists
+    # Consecutive readbacks between operations share one proof of each list.
+    with ros_address_lists.reuse(driver):
+        return _execute(plan, driver, agent)
+
+
+def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -> Dict[str, Any]:
     log: List[Dict[str, Any]] = []
     done: List[Tuple[str, Dict[str, Any], Dict[str, Any]]] = []
     record = log.append

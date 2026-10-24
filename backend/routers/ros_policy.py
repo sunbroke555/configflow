@@ -24,12 +24,16 @@ RAW = '/ip/firewall/raw'
 VRFS = '/ip/vrf'
 SETTINGS = '/routing/settings'
 PATHS = (ADDRESSES, TABLES, MANGLE, ROUTES, NAT, RULES, FILTER, RAW, VRFS)
+# Names of address lists this feature may reserve; occupied ones are read as
+# names only, without their members.
+LIST_NAMES = '/ip/firewall/address-list#names'
+NAME_PATTERNS = ('CF_Source_Proxy_IP_[0-9]+', 'CF_Destination_Proxy_IP_[0-9]+', 'CF_Bypass_IP_[0-9]+')
 PREFIX = 'cf-ros-policy-'
 NAMING_VERSION = 1
 POLICY_VERSION = 2
 RUNTIME = {'.id', 'bytes', 'packets', 'active', 'inactive', 'immediate-gw', 'used',
            'creation-time', 'belongs-to', 'hw-offloaded', 'debug.fwp-ptr', 'actual-interface',
-           'uptime', 'last-updated', 'invalid'}
+           'uptime', 'last-updated', 'invalid', 'timeout'}
 
 
 def enabled(row):
@@ -46,7 +50,15 @@ def digest(value):
 
 
 def snapshot(driver):
-    result = {path: driver._list(path) for path in PATHS}
+    from backend.routers import ros_address_lists
+    result = {path: driver._list(path) for path in PATHS if path != ADDRESSES}
+    # Members are needed only for lists NAT selects on (migrations) and for
+    # this feature's own lists (ownership); known lists are proven by digest.
+    names = ros_address_lists.referenced(result[NAT]) | set(ros_address_lists.known_lists(driver))
+    lists = ros_address_lists.read(driver, names)
+    result[ADDRESSES] = [row for name in sorted(lists) for row in lists[name]]
+    occupied = ros_address_lists.occupied_names(driver, NAME_PATTERNS, names)
+    result[LIST_NAMES] = [{'.id': 'name:' + name, 'occupied-list': name} for name in sorted(occupied)]
     settings = driver._get(SETTINGS)
     if not isinstance(settings, dict):
         raise RouterError('无法读取 ROS 路由查找顺序')
@@ -97,7 +109,10 @@ def check_route_egress(row, gateway, interface):
 
 
 def stable(snapshot):
-    return {path: [{'.id': row.get('.id'), **config_row(row)} for row in rows]
+    # Dynamic list members come and go with their timeouts; they are runtime
+    # state, so they must not make a preview stale.
+    return {path: [{'.id': row.get('.id'), **config_row(row)} for row in rows
+                   if not (path == ADDRESSES and str(row.get('dynamic', '')).lower() in ('true', 'yes'))]
             for path, rows in snapshot.items()}
 
 

@@ -9,7 +9,7 @@ from backend.routers.release import execute
 from backend.routers.report import build_report
 from backend.test_ros_policy import (
     GATEWAY, MANGLE, NAT, ROUTER, ROUTES, TARGET, MemoryROS,
-    configurations, desired_for, inspect, release,
+    configurations, desired_for, inspect, is_write, release,
 )
 
 
@@ -317,7 +317,7 @@ def test_withdrawal_requires_full_old_source_destination_nat_proof(condition):
 
     def request(method, path, values=None):
         result = original_request(method, path, values)
-        if method != 'GET':
+        if is_write(method, path, values):
             action = nat_action(driver, '192.168.0.101', '91.108.4.1', 'bridge')
             observations.append(action)
             assert action == 'accept', (method, path, action)

@@ -32,6 +32,10 @@ class CountingROS(MemoryROS):
         endpoint = path.partition('?')[0]
         if endpoint.startswith(ADDRESSES + '/') and endpoint != ADDRESSES + '/remove':
             endpoint = ADDRESSES + '/<id>'
+        if endpoint == '/execute':
+            script = values['script']
+            endpoint = ('/execute:digest' if 'cf-digest:' in script else
+                        '/execute:names' if 'cf-names:' in script else '/execute')
         self.requests[method, endpoint] += 1
         return super()._request(method, path, values)
 

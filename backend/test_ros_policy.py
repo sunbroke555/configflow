@@ -7,6 +7,7 @@ from urllib.parse import unquote
 
 import pytest
 
+from backend.routers import ros_address_lists as address_lists
 from backend.routers.base import RouterError
 from backend.routers.plan import build_plan
 from backend.routers.release import execute
@@ -110,6 +111,20 @@ class MemoryROS(RouterOSDriver):
 
     def _execute(self, values):
         """Run the address-list batch script; each member counts as one PUT."""
+        if 'cf-digest:' in values['script']:
+            self.counts['DIGEST', ADDRESSES] += 1
+            names = [_unescape(name) for name in DIGEST_LIST.findall(values['script'])]
+            lines = []
+            for index, name in enumerate(names):
+                count, value = address_lists.digest([row for row in self.rows[ADDRESSES] if row.get('list') == name])
+                lines.append(f'cf-digest:{index}:{count}:{value}')
+            return {'ret': '\r\n'.join(lines)}
+        if 'cf-names:' in values['script']:
+            pattern = re.compile(_unescape(NAMES_PATTERN.search(values['script'])[1]))
+            excluded = {_unescape(name) for name in NAMES_EXCLUDED.findall(values['script'])}
+            names = sorted({row['list'] for row in self.rows[ADDRESSES]
+                            if pattern.search(row.get('list', '')) and row['list'] not in excluded})
+            return {'ret': 'cf-names:\r\n' + '\r\n'.join(names)}
         match = BATCH.fullmatch(values['script'])
         assert match and values.get('as-string') == '', values['script']
         fields = {key: {'yes': 'true', 'no': 'false'}[bare] if bare else _unescape(quoted)
@@ -153,12 +168,21 @@ BATCH = re.compile(r':local n 0\n:local m ""\n:foreach a in=\{(?P<items>.*)\} do
                    r'/ip/firewall/address-list/add (?P<params>.*) address=\$a\} do=\{:set n \(\$n\+1\); '
                    r':if \(\$n=1\) do=\{:set m \(\$a \. " " \. \$e\)\}\}\}\n:put \("cf-done:" \. \$n \. ":" \. \$m\)',
                    re.DOTALL)
+DIGEST_LIST = re.compile(r'\(\$groups->"((?:[^"\\]|\\.)*)"\)')
+NAMES_PATTERN = re.compile(r'find where list~"((?:[^"\\]|\\.)*)"')
+NAMES_EXCLUDED = re.compile(r'list!="((?:[^"\\]|\\.)*)"')
 FIELD = re.compile(r'([\w-]+)=(?:"((?:[^"\\]|\\.)*)"|(yes|no))')
 ITEM = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
 def _unescape(text):
     return re.sub(r'\\(.)', lambda match: {'n': '\n', 'r': '\r', 't': '\t'}.get(match[1], match[1]), text)
+
+
+def is_write(method, path, values=None):
+    """Digest and name scripts run through POST /execute but only read."""
+    script = (values or {}).get('script', '') if path == '/execute' else ''
+    return method != 'GET' and 'cf-digest:' not in script and 'cf-names:' not in script
 
 
 def desired_for(driver, selected=True, cidrs=None):
@@ -516,7 +540,7 @@ def test_external_edit_reference_and_name_collision_are_preserved(reference_path
 def test_changed_preview_and_inactive_next_hop_never_activate():
     driver = MemoryROS()
     _, plan = inspect(driver)
-    driver.rows[ADDRESSES].append({'.id': '*F', 'list': 'foreign', 'address': '10.1.1.1'})
+    driver.rows[FILTER].append({'.id': '*F', 'chain': 'forward', 'action': 'drop', 'src-address-list': 'foreign'})
     result = execute(plan, driver, None)
     assert not result['ok'] and not driver.writes
     driver = MemoryROS()
@@ -807,3 +831,28 @@ def test_actual_policy_egress_is_checked_before_mangle_activation(monkeypatch):
     assert not result['ok']
     assert not any(path == MANGLE for _, path, _ in driver.writes)
     assert configurations(driver) == before
+
+
+def test_unrelated_and_dynamic_list_members_neither_load_nor_stale_the_preview():
+    driver = MemoryROS()
+    driver.rows[ADDRESSES] += [{'.id': f'*B{i}', 'list': 'blocklist', 'address': f'203.0.113.{i}', 'disabled': 'false'}
+                               for i in range(50)]
+    driver.rows[ADDRESSES].append({'.id': '*D1', 'list': 'port-scanners', 'address': '198.51.100.7',
+                                   'dynamic': 'true', 'timeout': '59m59s', 'disabled': 'false'})
+    driver.rows[FILTER].append({'.id': '*F', 'chain': 'input', 'action': 'drop', 'src-address-list': 'port-scanners'})
+    reads = []
+    original = driver._request
+    def request(method, path, values=None):
+        if method == 'GET' and path.startswith(ADDRESSES):
+            reads.append(path)
+        return original(method, path, values)
+    driver._request = request
+    _, plan = inspect(driver)
+    driver.rows[ADDRESSES][-1]['timeout'] = '59m41s'
+    driver.rows[ADDRESSES].append({'.id': '*B99', 'list': 'blocklist', 'address': '203.0.113.99', 'disabled': 'false'})
+    result = execute(plan, driver, None)
+    assert result['ok'], result
+    assert all('?' in path for path in reads)
+    assert not any('blocklist' in path or 'port-scanners' in path for path in reads)
+    _, again = inspect(driver)
+    assert again['empty'] and not again['blockers']

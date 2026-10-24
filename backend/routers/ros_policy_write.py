@@ -12,6 +12,7 @@ from itertools import groupby
 import time
 from urllib.parse import quote, urlencode
 
+from backend.routers import ros_address_lists
 from backend.routers.base import RouterError, RouterRollbackError
 from backend.routers.ros_policy import (
     ADDRESSES, FILTER, MANGLE, NAT, ROUTES, RULES, TABLES, VRFS, bundle_health,
@@ -146,6 +147,7 @@ def _run_address_batches(driver, shared, addresses):
     if current:
         batches.append(current)
     failed, first = 0, ''
+    ros_address_lists.invalidate(driver)
     for batch in batches:
         result = driver._request('POST', '/execute', {'script': head + ';'.join(batch) + tail, 'as-string': ''})
         output = str(result.get('ret', '')) if isinstance(result, dict) else ''
@@ -204,7 +206,7 @@ def _create_addresses(driver, entries, journal, ids, created=None):
         name = shared.get('list')
         if not name:
             raise RouterError('地址列表条目缺少列表名')
-        before = {row['.id'] for row in _address_rows(driver, name)}
+        before = {row['.id'] for row in ros_address_lists.read(driver, [name])[name]}
         sweep = {'action': 'sweep', 'path': ADDRESSES, 'list': name, 'shared': shared,
                  'addresses': [values['address'] for _, values in members], 'before': sorted(before)}
         journal.append(sweep)
@@ -240,6 +242,8 @@ def _create_addresses(driver, entries, journal, ids, created=None):
         if unknown:
             raise RouterError(f'批量写入期间地址列表 {name} 出现未提交的条目，保留这些对象，请检查路由器')
         missing = [values['address'] for items in wanted.values() for _, values in items]
+        if not unknown and not missing and not failed:
+            ros_address_lists.remember(driver, name, rows)
         if failed or missing:
             detail = f'；首个错误：{reason}' if reason else ''
             raise RouterError(f'地址列表 {name} 有 {max(failed, len(missing))} 条写入失败'
@@ -248,15 +252,22 @@ def _create_addresses(driver, entries, journal, ids, created=None):
 
 
 def _remove_addresses(driver, ids):
+    ros_address_lists.invalidate(driver)
     for start in range(0, len(ids), ADDRESS_REMOVE_BATCH):
         driver._request('POST', ADDRESSES + '/remove', {'.id': ','.join(ids[start:start + ADDRESS_REMOVE_BATCH])})
 
 
 def _live_addresses(driver, items):
-    live = {}
-    for name in dict.fromkeys(item['config'].get('list') for item in items):
-        live.update((row['.id'], row) for row in _address_rows(driver, name))
-    return live
+    lists = ros_address_lists.read(driver, {item['config'].get('list') for item in items})
+    return {row['.id']: row for rows in lists.values() for row in rows}
+
+
+def _forget(driver, items, removed):
+    """After removing members, expect the remaining ones so the next read is a digest."""
+    names = {item['config'].get('list') for item in items}
+    known = ros_address_lists.known_lists(driver)
+    for name in names & set(known):
+        ros_address_lists.remember(driver, name, [row for row in known[name] if row['.id'] not in removed])
 
 
 def _delete_addresses(driver, items, journal):
@@ -269,6 +280,7 @@ def _delete_addresses(driver, items, journal):
     for item in items:
         journal.append({'action': 'restore', **item, 'values': _writable(ADDRESSES, live[item['id']])})
     _remove_addresses(driver, [item['id'] for item in items])
+    _forget(driver, items, {item['id'] for item in items})
     if set(_live_addresses(driver, items)) & {item['id'] for item in items}:
         raise RouterError('策略路由回读校验失败：对象仍然存在')
 
