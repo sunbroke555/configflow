@@ -3,7 +3,7 @@
     <DialogContent class="max-w-md" @escape-key-down="event => { if (saving) event.preventDefault() }" @interact-outside="event => { if (saving) event.preventDefault() }">
       <DialogHeader>
         <DialogTitle>设备备注</DialogTitle>
-        <DialogDescription>同一配置空间的 Mihomo 来源和 DNS 设备策略共用此备注。</DialogDescription>
+        <DialogDescription>名称在同一配置空间共用，也可在「客户端设备」页统一管理。</DialogDescription>
       </DialogHeader>
       <p class="m-0 break-all font-mono text-sm">{{ ip }}</p>
       <p v-if="catalog" class="m-0 text-xs text-muted-foreground">配置空间：{{ catalog.profile_name }}</p>

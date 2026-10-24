@@ -14,8 +14,10 @@ def _state(profile_id):
     from backend.common.config import get_config, get_default_profile_id, get_repository
     config = get_config(profile_id)
     default = get_default_profile_id()
+    from backend.routes.agents import _public_deployment
     agents = [{'id': agent['id'], 'name': agent.get('name') or agent['id'], 'host': agent.get('host') or '',
-               'status': agent.get('status') or 'offline'}
+               'status': agent.get('status') or 'offline',
+               'deployment': _public_deployment(agent['latest_deployment']) if agent.get('latest_deployment') else None}
               for agent in get_agent_manager().get_all_agents()
               if agent.get('service_type') == 'oxidns' and (agent.get('profile_id') or default) == profile_id]
     return {'success': True, 'profile_id': profile_id, 'profile_name': get_repository().get_profile(profile_id).get('name') or profile_id,
@@ -31,10 +33,21 @@ def _response(payload, status=200):
 @client_devices_bp.route('', methods=['GET', 'PUT'])
 @require_auth
 def client_devices():
-    """PUT {profile_id, ip, name, mode, previous_name, previous_mode, base_url}；mode 为空表示不设 DNS 策略。"""
-    from backend.common.config import update_config_transaction
+    """GET ?agent=<OxiDNS Agent> 读取该设备绑定的配置空间，不随全局切换。
+
+    PUT {profile_id, ip, name, mode, previous_name, previous_mode, base_url}；mode 为空表示不设 DNS 策略。
+    """
+    from backend.common.agent_manager import get_agent_manager
+    from backend.common.config import get_default_profile_id, update_config_transaction
     from backend.common.profile_context import resolve_profile_id
-    profile_id = resolve_profile_id()
+    agent_id = request.args.get('agent')
+    if agent_id is not None and request.method == 'GET':
+        agent = get_agent_manager().get_agent_by_id(agent_id)
+        if not agent or agent.get('service_type') != 'oxidns':
+            return _response({'success': False, 'message': '这台 OxiDNS Agent 已不存在，请返回 Agent 页刷新。'}, 404)
+        profile_id = agent.get('profile_id') or get_default_profile_id()
+    else:
+        profile_id = resolve_profile_id()
     try:
         if request.method == 'PUT':
             body = request.get_json(silent=True)

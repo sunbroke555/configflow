@@ -150,17 +150,3 @@ export interface OxiDNSDevicePolicy {
   mode: 'smart' | 'direct'
 }
 
-export interface OxiDNSDevicePolicies {
-  device_notes?: Record<string, string>
-  success: true
-  draft: true
-  profile_id: string
-  profile_name: string
-  revision: string
-  notes_revision: string
-  policies: OxiDNSDevicePolicy[]
-  editable: boolean
-  reason: string
-  agents: Array<{ id: string; name: string }>
-  deployment?: import('@/composables/useAgentDeployments').AgentDeployment | null
-}

@@ -22,6 +22,7 @@ import {
   LayoutGrid,
   Link2,
   LogOut,
+  MonitorSmartphone,
   Moon,
   Network,
   Radar,
@@ -64,7 +65,8 @@ const MAP: Record<string, LucideIcon> = {
   User,
   SwitchButton: LogOut,
   Gauge,
-  Router
+  Router,
+  Devices: MonitorSmartphone
 }
 
 /** 取不到时回落到通用图标，避免导航项因图标缺失而不渲染 */

@@ -126,3 +126,14 @@ def test_client_devices_require_admin(oxidns_app, monkeypatch):
     client = app.test_client()
     assert client.get(URL).status_code == 401
     assert client.put(URL, json=change('192.0.2.1', 'x', '')).status_code == 401
+
+
+def test_an_oxidns_agent_opens_its_bound_profile(oxidns_app):
+    app, repo = oxidns_app
+    seed(repo)
+    dns = agent()
+    client = app.test_client()
+    state = client.get(f'/api/client-devices?agent={dns}', headers={'X-ConfigFlow-Profile': 'default'}).get_json()
+    assert state['profile_id'] == 'office' and state['agents'][0]['id'] == dns and state['agents'][0]['deployment'] is None
+    assert client.get(f'/api/client-devices?agent={agent("mihomo")}').status_code == 404
+    assert client.get('/api/client-devices?agent=missing').status_code == 404

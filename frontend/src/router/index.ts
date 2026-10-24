@@ -71,6 +71,11 @@ const routes = [
     component: () => import('@/views/Rules.vue')
   },
   {
+    path: '/client-devices',
+    name: 'ClientDevices',
+    component: () => import('@/views/ClientDevices.vue')
+  },
+  {
     path: '/domain-discovery',
     name: 'DomainDiscovery',
     component: () => import('@/views/DomainDiscovery.vue')
