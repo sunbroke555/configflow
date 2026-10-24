@@ -12,6 +12,8 @@ from urllib.request import urlopen
 import pytest
 import yaml
 
+from backend.native_test_helpers import wait_for_mihomo_routing
+
 from backend.utils.ruleset_content import normalize_classical_lines
 
 
@@ -79,10 +81,10 @@ def test_native_classical_bare_lines_parse_and_match(tmp_path, rule_format):
             for _ in range(100):
                 try:
                     with urlopen(f'http://127.0.0.1:{controller_port}/providers/rules', timeout=.2) as response:
-                        providers = json.load(response)
+                        providers = json.load(response).get('providers') or {}
                     # The controller can respond before asynchronous providers
                     # finish loading, especially in parallel backend runs.
-                    if providers['providers']['bare']['ruleCount'] == len(lines):
+                    if providers.get('bare', {}).get('ruleCount') == len(lines):
                         break
                 except OSError:
                     pass
@@ -90,7 +92,9 @@ def test_native_classical_bare_lines_parse_and_match(tmp_path, rule_format):
                 time.sleep(.05)
             else:
                 pytest.fail('Mihomo classical provider did not load: ' + log_path.read_text())
-            assert providers['providers']['bare']['ruleCount'] == len(lines)
+            assert providers['bare']['ruleCount'] == len(lines)
+            wait_for_mihomo_routing(process, proxy_port, log_path,
+                                    expected_log='match Match using REJECT')
             for host, matched in [('tmdb.org', True), ('api.tmdb.org', True),
                                   ('exact.test', True), ('child.exact.test', False)]:
                 with socket.create_connection(('127.0.0.1', proxy_port), timeout=3) as connection:
