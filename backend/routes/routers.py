@@ -218,6 +218,13 @@ def probe_router(router_id):
 
 def _inspect(config, router, driver, content_loader=None):
     """Desired state, router state, drift report and Agent return-routing state."""
+    from backend.routers import ros_address_lists
+    # One preview proves each address list once, however many readers need it.
+    with ros_address_lists.reuse(driver):
+        return _inspect_state(config, router, driver, content_loader)
+
+
+def _inspect_state(config, router, driver, content_loader=None):
     gateway_agent = _agent(router.get('proxy_gateway_agent_id'))
     policy_sets = set(router.get('ros_policy_rule_sets') or []) if router['type'] == 'routeros' else set()
     static_sets = static_rule_sets(router)

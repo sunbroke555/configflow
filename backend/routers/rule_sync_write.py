@@ -71,7 +71,7 @@ def apply_delta(driver, desired, plan, baseline, ensure_current=lambda **_: None
     previous = copy.deepcopy(getattr(driver, 'ros_policy_manifest', None))
     for item in baseline['static_resources']:
         _guard(driver, item)
-    live = snapshot(driver)
+    live = snapshot(driver, reserve=False)
     wanted = {item['cidr'] for item in desired['proxy_cidrs']}
     known_static = {item['id'] for item in baseline['static_resources']}
     if any(row.get('routing-table', 'main') == 'main' and row.get('dst-address') in wanted

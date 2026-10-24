@@ -195,7 +195,7 @@ class FakeROSSession:
         pass
 
     def get(self, url, **_):
-        path = url.split('/rest', 1)[1]
+        path, _, query = url.split('/rest', 1)[1].partition('?')
         data = {
             '/system/resource': {'version': self.version, 'board-name': 'CHR'},
             '/ip/route': [{'.id': '*1', 'dst-address': '198.18.0.0/16', 'gateway': '192.168.1.4',
@@ -208,6 +208,9 @@ class FakeROSSession:
             '/routing/rule': [], '/ip/firewall/mangle': [], '/ip/vrf': [],
             '/interface/list': [], '/interface/list/member': [],
         }[path]
+        if query:
+            key, _, value = query.partition('=')
+            data = [row for row in data if row.get(key) == value]
         return FakeResponse(data)
 
 

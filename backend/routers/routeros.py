@@ -25,6 +25,7 @@ PERMISSION_HELP = (
 )
 ROUTES = '/ip/route'
 NAT = '/ip/firewall/nat'
+MANGLE = '/ip/firewall/mangle'
 FILTER = '/ip/firewall/filter'
 NETWATCH = '/tool/netwatch'
 DHCP_NETWORKS = '/ip/dhcp-server/network'
@@ -121,8 +122,9 @@ class RouterOSDriver(RouterDriver):
         if not match or (int(match.group(1)), int(match.group(2))) < (7, 1):
             raise RouterError(f'需要 RouterOS 7.1+，当前版本 {version or "未知"}')
         capabilities = []
+        # An absent list name proves read access without serializing members.
         for path, capability in (('/ip/route', 'routes'), ('/ip/firewall/nat', 'nat_bypass'),
-                                 ('/ip/firewall/address-list', 'address_sets')):
+                                 ('/ip/firewall/address-list?list=cf-probe', 'address_sets')):
             try:
                 self._list(path)
                 capabilities.append(capability)
@@ -132,13 +134,20 @@ class RouterOSDriver(RouterDriver):
                           model=str(resource.get('board-name') or ''), capabilities=capabilities)
 
     def read_state(self) -> RouterState:
+        from backend.routers import ros_address_lists
         state = RouterState()
-        for row in self._list('/ip/firewall/address-list'):
-            if _truthy(row.get('disabled')):
-                continue
-            state.address_sets.setdefault(str(row.get('list') or ''), []).append(str(row.get('address') or ''))
         routes = self._list(ROUTES)
         nats = self._list(NAT)
+        try:
+            mangle = self._list(MANGLE)
+        except RouterError:
+            mangle = None
+        # Only lists NAT and Mangle selectors use are resolved; other lists
+        # (blocklists, dynamic detection lists) are never downloaded.
+        for name, rows in ros_address_lists.read(self, ros_address_lists.referenced(nats + (mangle or []))).items():
+            for row in rows:
+                if not _truthy(row.get('disabled')):
+                    state.address_sets.setdefault(name, []).append(str(row.get('address') or ''))
         assessed = nats
         if getattr(self, 'dns_guard_manifest', None):
             # Proven DNS guard hairpins only translate queries to OxiDNS:53, never
@@ -159,8 +168,11 @@ class RouterOSDriver(RouterDriver):
         if scoped:
             # Main-table routes alone cannot prove an egress when policy routing
             # or VRFs can select another path. Unavailable evidence stays unknown.
-            for key, path in (('routing_rules', '/routing/rule'), ('mangle', '/ip/firewall/mangle'),
-                              ('vrfs', '/ip/vrf')):
+            for key, path in (('routing_rules', '/routing/rule'), ('mangle', MANGLE), ('vrfs', '/ip/vrf')):
+                if key == 'mangle' and mangle is not None:
+                    context[key] = [{name: value for name, value in row.items()
+                                     if name not in {'bytes', 'packets'}} for row in mangle]
+                    continue
                 try:
                     context[key] = [{name: value for name, value in row.items()
                                      if name not in {'bytes', 'packets'}} for row in self._list(path)]
@@ -211,7 +223,7 @@ class RouterOSDriver(RouterDriver):
                             if key not in NAT_READ_ONLY and not key.startswith('.')}))
         manifest = getattr(self, 'ros_policy_manifest', None)
         if manifest and isinstance(context.get('mangle'), list):
-            from backend.routers.ros_policy import config_row, MANGLE
+            from backend.routers.ros_policy import config_row
             proven = {entry['id'] for entry in manifest.get('resources', []) if entry['path'] == MANGLE
                       and any(row.get('.id') == entry['id'] and config_row(row) == config_row(entry['config'])
                               for row in context['mangle'])}

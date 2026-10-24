@@ -82,10 +82,18 @@ def relevant(router: Dict[str, Any]) -> bool:
 
 
 def snapshot(driver) -> Dict[str, Optional[List[Dict[str, Any]]]]:
+    from backend.routers.ros_address_lists import filtered, locate
     live = {}
     for path in PATHS:
         try:
-            live[path] = driver._list(path)
+            # Only the bypass list is ever owned or checked for name collisions.
+            live[path] = filtered(driver, BYPASS_LIST) if path == ADDRESSES else driver._list(path)
+            if path == ADDRESSES:
+                # A managed member moved out of the bypass list must still look edited.
+                present = {row.get('.id') for row in live[path]}
+                manifest = getattr(driver, 'dns_guard_manifest', None) or {}
+                live[path] += locate(driver, [item['id'] for item in manifest.get('resources', [])
+                                             if item.get('path') == ADDRESSES and item['id'] not in present])
         except RouterError:
             if path != NETWATCH:
                 raise
