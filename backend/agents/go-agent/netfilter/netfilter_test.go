@@ -1504,3 +1504,16 @@ func TestFirewalldPersistNoteSaysSavedOnce(t *testing.T) {
 		t.Fatalf("persist note: %q", remedy.PersistNote)
 	}
 }
+
+func TestRunOnceNoteOnlyForNonIdempotentCommands(t *testing.T) {
+	for _, note := range []string{iptablesPersistNote, dockerPersistNote, nftPersistNote} {
+		if !strings.HasSuffix(note, runOnceNote) {
+			t.Fatalf("missing run-once note: %q", note)
+		}
+	}
+	for _, note := range []string{ufwNote, firewalldNote, firewalldDNSNote, firewalldSavedNote} {
+		if strings.Contains(note, runOnceNote) {
+			t.Fatalf("idempotent tool must not carry the run-once note: %q", note)
+		}
+	}
+}
