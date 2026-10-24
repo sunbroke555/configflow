@@ -34,6 +34,8 @@ def get_default_config() -> Dict[str, Any]:
         'rule_configs': [],  # 规则配置：统一存储规则和规则集，通过 itemType 字段区分
         'proxy_groups': [],
         'rule_library': [],  # 规则仓库
+        'device_groups': None,
+        'policy_routing_sources': None,
         'system_config': {  # 系统配置
             'server_domain': '',
             'github_proxy_domain': '',
@@ -197,12 +199,14 @@ def save_config_with_publish_guard(config: Dict[str, Any], service_type: str,
 def update_config_transaction(
     updater: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
     profile_id: Optional[str] = None,
+    *, allow_device_group_migration: bool = False,
 ) -> Dict[str, Any]:
     """Apply an incremental resource update to freshly locked profile data."""
     from backend.common.profile_context import resolve_profile_id
 
     resolved_id = resolve_profile_id(profile_id)
-    result = get_repository().update_profile_transaction(resolved_id, updater)
+    kwargs = {'allow_device_group_migration': True} if allow_device_group_migration else {}
+    result = get_repository().update_profile_transaction(resolved_id, updater, **kwargs)
     _cache().pop(resolved_id, None)
     baselines = _CONFIG_BASELINES.get()
     if baselines is not None:

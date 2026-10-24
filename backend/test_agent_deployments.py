@@ -46,6 +46,45 @@ def minimal_bundle(agent, config, deployment_id='test-release'):
     return build_deployment_bundle(agent, config, 'mode: rule\nrules: [MATCH,DIRECT]', deployment_id=deployment_id)
 
 
+def test_device_group_status_and_activation_never_follow_changed_endpoint(env, monkeypatch):
+    from backend.common.device_group_workspace import target_fingerprint
+    _, manager, agent, _ = env
+    fingerprint = target_fingerprint(agent)
+    changed = {**agent, 'host': 'other.test'}
+    monkeypatch.setattr(manager, 'get_agent_by_id', lambda _: changed)
+    monkeypatch.setattr(manager, '_deployment_request', lambda *_a, **_k: pytest.fail('changed endpoint must not receive requests'))
+    for method in (manager.get_deployment, manager.activate_deployment):
+        assert method(agent['id'], 'original', expected_target_fingerprint=fingerprint)['http_status'] == 409
+
+
+def test_device_group_missing_remote_journal_remains_unknown(env, monkeypatch):
+    from backend.common.device_group_workspace import target_fingerprint
+    _, manager, agent, _ = env
+    manager.begin_deployment(agent['id'], 'original')
+    manager.record_deployment(agent['id'], 'original', {'status': 'unknown', 'submitted': True})
+    manager.finish_deployment_preparation(agent['id'], 'original')
+    monkeypatch.setattr(manager, '_deployment_request', lambda *_a, **_k: {'http_status': 404, 'success': False})
+    result = manager.get_deployment(agent['id'], 'original', expected_target_fingerprint=target_fingerprint(agent))
+    assert result['status'] == 'unknown' and result['pending']
+    assert manager.get_agent_by_id(agent['id'])['deployments']['original']['status'] == 'unknown'
+
+
+def test_device_group_draft_change_during_resource_preparation_stops_upload(env, monkeypatch):
+    from backend.common.device_group_workspace import target_fingerprint
+    repository, manager, agent, config = env
+    revision = repository.config_revision('default')
+    monkeypatch.setattr(manager, '_deployment_request', lambda _a, method, *_args, **_kwargs:
+        {'deployment_protocols': [1], 'service_type': 'mihomo'} if method == 'get' else pytest.fail('stale draft uploaded'))
+    def prepare(bundle, *_args, **_kwargs):
+        repository.save_profile('default', {'mihomo': {'custom_config': 'mode: rule\n'}})
+        return bundle
+    monkeypatch.setattr('backend.agents.mihomo_resources.prepare_mihomo_resources', prepare)
+    result = manager.publish_deployment(agent['id'], minimal_bundle(agent, config),
+        config_revision=revision, expected_target_fingerprint=target_fingerprint(agent), resource_config=config)
+    assert result['status'] == 'failed' and '配置已改变' in result['message']
+    assert not result.get('submitted')
+
+
 def test_panel_geo_download_failure_is_reported_before_upload(env, monkeypatch):
     _, manager, agent, config = env
     candidate = build_deployment_bundle(agent, config, 'rules: ["GEOSITE,cn,DIRECT"]')

@@ -1,0 +1,244 @@
+custom_extension:
+  保留: true
+runtime:
+  worker_threads: 2
+api:
+  http:
+    listen: 127.0.0.1:9199
+log:
+  level: info
+plugins:
+- tag: rules_domain_1
+  type: domain_set
+  args:
+    exps:
+    - full:refused.example.test
+- tag: rules_domain_2
+  type: domain_set
+  args:
+    exps:
+    - full:missing.example.test
+- tag: rules_domain_3
+  type: domain_set
+  args:
+    exps:
+    - full:empty.example.test
+- tag: rules_domain_4
+  type: domain_set
+  args:
+    exps:
+    - keyword:ads
+- tag: rules_domain_5
+  type: domain_set
+  args:
+    exps:
+    - full:pinned.example.test
+- tag: rules_domain_6
+  type: domain_set
+  args:
+    files:
+    - ./rules/rule_3c7c4bd3265bc0f8_domain.txt
+- tag: custom_hosts
+  type: hosts
+  args:
+    files:
+    - ./rules/custom_hosts.txt
+- tag: lazy_cache
+  type: cache
+  args:
+    size: 10240
+    lazy_cache_ttl: 60
+    short_circuit: true
+- tag: local_probe_cache
+  type: cache
+  args:
+    size: 2048
+    short_circuit: false
+- tag: forward_local
+  type: forward
+  args:
+    concurrent: 2
+    upstreams:
+    - addr: udp://192.168.50.53
+- tag: forward_remote
+  type: forward
+  args:
+    concurrent: 1
+    upstreams:
+    - addr: udp://203.0.113.53
+- tag: forward_fallback
+  type: forward
+  args:
+    concurrent: 2
+    upstreams:
+    - addr: udp://1.1.1.1
+- tag: query_recorder
+  type: query_recorder
+  args:
+    path: ./state/queries.db
+    queue_size: 8192
+    batch_size: 256
+    flush_interval_ms: 200
+    memory_tail: 1024
+    retention_days: 7
+    cleanup_interval_hours: 1
+    reader_concurrency: 2
+- tag: china_dns
+  type: sequence
+  args:
+  - exec: $lazy_cache
+  - exec: $forward_local
+  - matches:
+    - '!has_resp'
+    exec: reject 3
+- tag: local_probe
+  type: sequence
+  args:
+  - exec: $local_probe_cache
+  - matches:
+    - '!has_resp'
+    exec: $forward_local
+  - exec: return
+- tag: remote_dns
+  type: sequence
+  args:
+  - exec: $forward_remote
+  - matches:
+    - '!has_resp'
+    exec: reject 3
+  - exec: ttl 120
+- tag: fallback_dns
+  type: sequence
+  args:
+  - exec: $forward_fallback
+  - matches:
+    - '!has_resp'
+    exec: reject 3
+- tag: fallback
+  type: fallback
+  args:
+    primary: remote_dns
+    secondary: fallback_dns
+    threshold: 500
+    always_standby: false
+- tag: proxy_dns_seq
+  type: sequence
+  args:
+  - exec: $fallback
+  - exec: accept
+- tag: default_direct_ip
+  type: sequence
+  args:
+  - exec: accept
+- tag: direct_ip
+  type: sequence
+  args:
+  - exec: accept
+- tag: ip_requery_proxy
+  type: sequence
+  args:
+  - exec: drop_resp
+  - exec: goto proxy_dns_seq
+- tag: cf_dns_blackhole
+  type: black_hole
+  args:
+    mode: 'null'
+    short_circuit: true
+- tag: cf_dns_fwd_0c8dac524a31
+  type: forward
+  args:
+    upstreams:
+    - addr: udp://9.9.9.9
+- tag: cf_dns_cache_0c8dac524a31
+  type: cache
+  args:
+    size: 1024
+    lazy_cache_ttl: 60
+    short_circuit: true
+- tag: cf_dns_up_0c8dac524a31
+  type: sequence
+  args:
+  - exec: drop_resp
+  - exec: $cf_dns_cache_0c8dac524a31
+  - exec: $cf_dns_fwd_0c8dac524a31
+  - matches:
+    - '!has_resp'
+    exec: reject 3
+  - exec: ttl 120
+  - exec: accept
+- tag: sequence_main
+  type: sequence
+  args:
+  - exec: metrics_collector metrics
+  - exec: $query_recorder
+  - exec: prefer_ipv4
+  - matches:
+    - qtype 65 255
+    exec: black_hole nodata short_circuit=true
+  - exec: $custom_hosts
+  - matches:
+    - has_resp
+    exec: accept
+  - matches:
+    - qname domain:custom.test
+    exec: goto china_dns
+  - matches:
+    - qname $rules_domain_1
+    exec: reject
+  - matches:
+    - qname $rules_domain_2
+    exec: reject 3
+  - matches:
+    - qname $rules_domain_3
+    exec: reject 0
+  - matches:
+    - qname $rules_domain_4
+    exec: $cf_dns_blackhole
+  - matches:
+    - qname $rules_domain_5
+    exec: goto cf_dns_up_0c8dac524a31
+  - matches:
+    - qname $rules_domain_6
+    exec: $cf_dns_blackhole
+  - exec: goto proxy_dns_seq
+- tag: server_udp
+  type: udp_server
+  args:
+    listen: 0.0.0.0:53
+    entry: sequence_main
+- tag: server_tcp
+  type: tcp_server
+  args:
+    listen: 0.0.0.0:53
+    entry: sequence_main
+- tag: rules_download
+  type: download
+  args:
+    timeout: 60s
+    downloads:
+    - url: https://config.test/api/profiles/golden-space/mosdns/rule-proxy?url=https%3A%2F%2Frules.test%2Fads.yaml&part=domain&token=fixture-token
+      dir: rules
+      filename: rule_3c7c4bd3265bc0f8_domain.txt
+- tag: rules_reload
+  type: reload_provider
+  args:
+  - $rules_domain_1
+  - $rules_domain_2
+  - $rules_domain_3
+  - $rules_domain_4
+  - $rules_domain_5
+  - $rules_domain_6
+- tag: rules_refresh
+  type: sequence
+  args:
+  - exec: $rules_download
+  - exec: $rules_reload
+- tag: custom_passthrough
+  type: sequence
+  args:
+  - exec: return
+native_extension:
+  keep:
+  - 真实底稿
+  - false
+  - 0

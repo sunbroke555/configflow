@@ -1074,6 +1074,9 @@ def _patch_resources(ctx, changes, config, base_url):
 
 
 def apply_common_settings(settings, changes, config, base_url=''):
+    if config.get('device_groups') is not None:
+        from backend.common.oxidns_device_groups import require_native_blocking_supported
+        require_native_blocking_supported(config)
     if not isinstance(changes, dict) or not changes:
         raise OxidnsSettingsError('changes 必须为非空参数对象')
     from backend.common.oxidns_common_routing import ROUTING_FIELDS, apply_routing

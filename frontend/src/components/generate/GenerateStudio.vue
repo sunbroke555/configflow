@@ -138,6 +138,7 @@
             </div>
           </div>
 
+          <ul v-if="warnings.length" class="m-0 list-none space-y-1 border-b border-border bg-warning-soft px-5 py-3 text-xs max-sm:px-3" aria-label="配置生成提醒" role="status"><li v-for="warning in warnings" :key="warning" class="break-words">{{ warning }}</li></ul>
           <div v-if="pushResults.length" class="min-w-0 border-b border-border px-5 py-2 max-sm:px-3" aria-label="配置发布结果">
             <div class="min-w-0 divide-y divide-border/70">
               <div v-for="result in pushResults" :key="result.id" class="min-w-0" :data-publish-agent="result.id">
@@ -233,6 +234,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import SectionCard from '@/components/common/SectionCard.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import { agentApi, generateApi, ruleSetApi, statsApi } from '@/api'
+import { generationWarnings } from '@/lib/generationWarnings'
 import { createDeploymentId, deploymentNeedsNotice, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
@@ -316,6 +318,7 @@ const output = ref('')
 const lines = ref<string[]>([])
 const freshFrom = ref(0)
 const error = ref('')
+const warnings = ref<string[]>([])
 const codeEl = ref<HTMLElement | null>(null)
 
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
@@ -356,6 +359,7 @@ const generate = async () => {
   running.value = true
   phase.value = 'steps'
   error.value = ''
+  warnings.value = []
   failedAt.value = -1
   lines.value = []
   output.value = ''
@@ -370,7 +374,7 @@ const generate = async () => {
   }[target]
 
   const request = api()
-    .then(res => ({ ok: true as const, content: String(res.data?.content ?? res.data ?? '') }))
+    .then(res => ({ ok: true as const, content: String(res.data?.content ?? res.data ?? ''), warnings: generationWarnings(res) }))
     .catch((err: any) => ({ ok: false as const, message: err.response?.data?.message || '生成失败' }))
   loadCounts()
 
@@ -389,6 +393,7 @@ const generate = async () => {
 
     stepIndex.value = 4
     phase.value = 'write'
+    warnings.value = result.warnings
     output.value = result.content
     const all = result.content.replace(/\n$/, '').split('\n')
     // 约 150 帧写完：短配置逐行出现，长配置按块追加，避免卡顿
@@ -535,6 +540,7 @@ watch(active, () => {
   stepIndex.value = -1
   failedAt.value = -1
   error.value = ''
+  warnings.value = []
 })
 
 watch(() => router?.currentRoute.value.query.run, run => run === 'generate-mihomo' && runPending())

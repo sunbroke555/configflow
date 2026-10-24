@@ -1,0 +1,645 @@
+{
+  "profile_id": "golden-space",
+  "profile_name": "兼容基线",
+  "nodes": [],
+  "subscriptions": [],
+  "subscription_aggregations": [],
+  "rule_library": [],
+  "system_config": {
+    "server_domain": "https://config.test",
+    "rule_proxy_token": "fixture-token"
+  },
+  "proxy_groups": [
+    {
+      "id": "pg_main",
+      "name": "节点选择",
+      "type": "select",
+      "manual_nodes": [
+        "DIRECT"
+      ]
+    }
+  ],
+  "rule_configs": [
+    {
+      "id": "r_allow",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-SUFFIX",
+      "value": "example.test",
+      "policy": "节点选择"
+    },
+    {
+      "id": "r_refused",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "refused.example.test",
+      "policy": "REJECT"
+    },
+    {
+      "id": "r_nxdomain",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "missing.example.test",
+      "policy": "REJECT"
+    },
+    {
+      "id": "r_nodata",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "empty.example.test",
+      "policy": "REJECT-DROP"
+    },
+    {
+      "id": "r_blackhole",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-KEYWORD",
+      "value": "ads",
+      "policy": "REJECT"
+    },
+    {
+      "id": "r_pinned",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "pinned.example.test",
+      "policy": "DIRECT"
+    },
+    {
+      "id": "r_ip",
+      "itemType": "rule",
+      "rule_type": "IP-CIDR",
+      "value": "192.0.2.0/24",
+      "policy": "DIRECT",
+      "no_resolve": true
+    },
+    {
+      "id": "r_ip6",
+      "itemType": "rule",
+      "rule_type": "IP-CIDR6",
+      "value": "2001:db8::/32",
+      "policy": "节点选择",
+      "no_resolve": true
+    },
+    {
+      "id": "r_off",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "disabled.example.test",
+      "policy": "REJECT",
+      "enabled": false
+    },
+    {
+      "id": "r_lib_off",
+      "itemType": "ruleset",
+      "name": "disabled-library",
+      "behavior": "domain",
+      "url": "https://rules.test/disabled.yaml",
+      "policy": "REJECT",
+      "library_enabled": false
+    },
+    {
+      "id": "rs_ads",
+      "itemType": "ruleset",
+      "name": "广告规则",
+      "behavior": "domain",
+      "url": "https://rules.test/ads.yaml",
+      "policy": "REJECT"
+    },
+    {
+      "id": "rs_mixed",
+      "itemType": "ruleset",
+      "name": "mixed",
+      "behavior": "classical",
+      "url": "https://rules.test/mixed.yaml",
+      "policy": "节点选择",
+      "no_resolve": true
+    },
+    {
+      "id": "rs_ip",
+      "itemType": "ruleset",
+      "name": "networks",
+      "behavior": "ipcidr",
+      "url": "https://rules.test/networks.txt",
+      "policy": "DIRECT",
+      "no_resolve": true
+    },
+    {
+      "id": "r_match_off",
+      "itemType": "rule",
+      "rule_type": "MATCH",
+      "policy": "REJECT",
+      "enabled": false
+    },
+    {
+      "id": "r_match",
+      "itemType": "rule",
+      "rule_type": "MATCH",
+      "policy": "节点选择"
+    },
+    {
+      "id": "r_after",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "after.example.test",
+      "policy": "REJECT"
+    }
+  ],
+  "oxidns": {
+    "config_mode": "native",
+    "native_config": "custom_extension:\n  保留: true\nruntime:\n  worker_threads: 2\napi:\n  http:\n    listen: 127.0.0.1:9199\nlog:\n  level: info\nplugins:\n- tag: rules_domain_1\n  type: domain_set\n  args:\n    exps:\n    - full:refused.example.test\n- tag: rules_domain_2\n  type: domain_set\n  args:\n    exps:\n    - full:missing.example.test\n- tag: rules_domain_3\n  type: domain_set\n  args:\n    exps:\n    - full:empty.example.test\n- tag: rules_domain_4\n  type: domain_set\n  args:\n    exps:\n    - keyword:ads\n- tag: rules_domain_5\n  type: domain_set\n  args:\n    exps:\n    - full:pinned.example.test\n- tag: rules_domain_6\n  type: domain_set\n  args:\n    files:\n    - ./rules/rule_3c7c4bd3265bc0f8_domain.txt\n- tag: custom_hosts\n  type: hosts\n  args:\n    files:\n    - ./rules/custom_hosts.txt\n- tag: lazy_cache\n  type: cache\n  args:\n    size: 10240\n    lazy_cache_ttl: 60\n    short_circuit: true\n- tag: local_probe_cache\n  type: cache\n  args:\n    size: 2048\n    short_circuit: false\n- tag: forward_local\n  type: forward\n  args:\n    concurrent: 2\n    upstreams:\n    - addr: udp://192.168.50.53\n- tag: forward_remote\n  type: forward\n  args:\n    concurrent: 1\n    upstreams:\n    - addr: udp://9.9.9.9\n- tag: forward_fallback\n  type: forward\n  args:\n    concurrent: 2\n    upstreams:\n    - addr: udp://1.1.1.1\n- tag: query_recorder\n  type: query_recorder\n  args:\n    path: ./state/queries.db\n    queue_size: 8192\n    batch_size: 256\n    flush_interval_ms: 200\n    memory_tail: 1024\n    retention_days: 7\n    cleanup_interval_hours: 1\n    reader_concurrency: 2\n- tag: china_dns\n  type: sequence\n  args:\n  - exec: $lazy_cache\n  - exec: $forward_local\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n- tag: local_probe\n  type: sequence\n  args:\n  - exec: $local_probe_cache\n  - matches:\n    - '!has_resp'\n    exec: $forward_local\n  - exec: return\n- tag: remote_dns\n  type: sequence\n  args:\n  - exec: $forward_remote\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n  - exec: ttl 120\n- tag: fallback_dns\n  type: sequence\n  args:\n  - exec: $forward_fallback\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n- tag: fallback\n  type: fallback\n  args:\n    primary: remote_dns\n    secondary: fallback_dns\n    threshold: 500\n    always_standby: false\n- tag: proxy_dns_seq\n  type: sequence\n  args:\n  - exec: $fallback\n  - exec: accept\n- tag: default_direct_ip\n  type: sequence\n  args:\n  - exec: accept\n- tag: direct_ip\n  type: sequence\n  args:\n  - exec: accept\n- tag: ip_requery_proxy\n  type: sequence\n  args:\n  - exec: drop_resp\n  - exec: goto proxy_dns_seq\n- tag: cf_dns_blackhole\n  type: black_hole\n  args:\n    mode: 'null'\n    short_circuit: true\n- tag: cf_dns_fwd_0c8dac524a31\n  type: forward\n  args:\n    upstreams:\n    - addr: udp://9.9.9.9\n- tag: cf_dns_cache_0c8dac524a31\n  type: cache\n  args:\n    size: 1024\n    lazy_cache_ttl: 60\n    short_circuit: true\n- tag: cf_dns_up_0c8dac524a31\n  type: sequence\n  args:\n  - exec: drop_resp\n  - exec: $cf_dns_cache_0c8dac524a31\n  - exec: $cf_dns_fwd_0c8dac524a31\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n  - exec: ttl 120\n  - exec: accept\n- tag: sequence_main\n  type: sequence\n  args:\n  - exec: metrics_collector metrics\n  - exec: $query_recorder\n  - exec: prefer_ipv4\n  - matches:\n    - qtype 65 255\n    exec: black_hole nodata short_circuit=true\n  - exec: $custom_hosts\n  - matches:\n    - has_resp\n    exec: accept\n  - exec: jump cf_device_policy\n  - matches:\n    - qname domain:custom.test\n    exec: goto china_dns\n  - matches:\n    - qname $rules_domain_1\n    exec: reject\n  - matches:\n    - qname $rules_domain_2\n    exec: reject 3\n  - matches:\n    - qname $rules_domain_3\n    exec: reject 0\n  - matches:\n    - qname $rules_domain_4\n    exec: $cf_dns_blackhole\n  - matches:\n    - qname $rules_domain_5\n    exec: goto cf_dns_up_0c8dac524a31\n  - matches:\n    - qname $rules_domain_6\n    exec: $cf_dns_blackhole\n  - exec: goto proxy_dns_seq\n- tag: server_udp\n  type: udp_server\n  args:\n    listen: 0.0.0.0:53\n    entry: sequence_main\n- tag: server_tcp\n  type: tcp_server\n  args:\n    listen: 0.0.0.0:53\n    entry: sequence_main\n- tag: rules_download\n  type: download\n  args:\n    timeout: 60s\n    downloads:\n    - url: https://config.test/api/profiles/golden-space/mosdns/rule-proxy?url=https%3A%2F%2Frules.test%2Fads.yaml&part=domain&token=fixture-token\n      dir: rules\n      filename: rule_3c7c4bd3265bc0f8_domain.txt\n- tag: rules_reload\n  type: reload_provider\n  args:\n  - $rules_domain_1\n  - $rules_domain_2\n  - $rules_domain_3\n  - $rules_domain_4\n  - $rules_domain_5\n  - $rules_domain_6\n- tag: rules_refresh\n  type: sequence\n  args:\n  - exec: $rules_download\n  - exec: $rules_reload\n- tag: custom_passthrough\n  type: sequence\n  args:\n  - exec: return\n- tag: cf_device_policy\n  type: sequence\n  args:\n  - matches:\n    - client_ip fd00:1234::10\n    exec: return\n  - matches:\n    - client_ip fd00:1234::/64\n    exec: goto cf_device_direct\n  - matches:\n    - client_ip 192.168.0.80/28\n    exec: goto cf_device_direct\n  - matches:\n    - client_ip 192.168.0.64/26\n    exec: return\n  - matches:\n    - client_ip 192.168.0.0/25\n    exec: goto cf_device_direct\n  - matches:\n    - client_ip 192.168.0.0/24\n    exec: return\n  - exec: return\n- tag: cf_device_direct\n  type: sequence\n  args:\n  - exec: $forward_local\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n  - exec: accept\n",
+    "additional_files": [],
+    "direct_rulesets": [],
+    "proxy_rulesets": [],
+    "direct_rules": [],
+    "proxy_rules": [],
+    "local_dns": "udp://192.168.50.53",
+    "remote_dns": "udp://9.9.9.9",
+    "fallback_dns": "udp://1.1.1.1",
+    "default_forward": "forward_remote",
+    "custom_hosts": "full:nas.test 192.168.50.2",
+    "custom_config": "custom_extension:\n  保留: true\nplugins:\n  - tag: custom_passthrough\n    type: sequence\n    args:\n      - exec: return\n",
+    "custom_matches": [
+      {
+        "matches": "qname domain:custom.test",
+        "exec": "goto china_dns"
+      }
+    ],
+    "custom_match_position": "head",
+    "device_policies": [
+      {
+        "ip": "192.168.0.0/24",
+        "name": "局域网",
+        "mode": "smart"
+      },
+      {
+        "ip": "192.168.0.0/25",
+        "name": "直连网段",
+        "mode": "direct"
+      },
+      {
+        "ip": "192.168.0.64/26",
+        "name": "默认例外",
+        "mode": "smart"
+      },
+      {
+        "ip": "192.168.0.80/28",
+        "name": "再次直连",
+        "mode": "direct"
+      },
+      {
+        "ip": "fd00:1234::/64",
+        "name": "IPv6直连",
+        "mode": "direct"
+      },
+      {
+        "ip": "fd00:1234::10",
+        "name": "IPv6例外",
+        "mode": "smart"
+      }
+    ],
+    "worker_threads": 2,
+    "listen": "0.0.0.0:53",
+    "tcp_enabled": true,
+    "prefer_ipv4": true,
+    "block_qtypes": [
+      65,
+      255
+    ],
+    "metrics_enabled": true,
+    "aggregate_rules": true,
+    "local_concurrent": 2,
+    "remote_concurrent": 1,
+    "fallback_concurrent": 2,
+    "fallback_threshold": 500,
+    "always_standby": false,
+    "remote_ttl": 120,
+    "cache_enabled": true,
+    "cache_size": 10240,
+    "cache_lazy_ttl": 60,
+    "cache_dump_enabled": false,
+    "cache_dump_file": "./state/cache.dump",
+    "cache_dump_interval": 300,
+    "probe_cache_enabled": true,
+    "probe_cache_size": 2048,
+    "api": {
+      "enabled": true,
+      "listen": "127.0.0.1:9199",
+      "username": "",
+      "password": "",
+      "webui_root": "",
+      "ssl": {}
+    },
+    "log": {
+      "level": "info",
+      "file": "",
+      "rotation": "daily",
+      "max_files": 7
+    },
+    "query_recorder": {
+      "enabled": true,
+      "args": {
+        "path": "./state/queries.db",
+        "queue_size": 8192,
+        "batch_size": 256,
+        "flush_interval_ms": 200,
+        "memory_tail": 1024,
+        "retention_days": 7,
+        "cleanup_interval_hours": 1,
+        "reader_concurrency": 2
+      }
+    },
+    "ip_selector": {
+      "enabled": false,
+      "args": {
+        "selection_mode": "background",
+        "probe_methods": [
+          "tcp:443",
+          "tcp:80"
+        ],
+        "probe_stagger": 200,
+        "probe_timeout": 600,
+        "max_wait": 1000,
+        "top_n": 0,
+        "dnssec_policy": "reorder_only",
+        "max_parallel_probes": 64,
+        "cache": {
+          "enabled": true,
+          "size": 4096,
+          "ttl": 3600,
+          "failure_ttl": 60
+        }
+      }
+    },
+    "dynamic_domain_set": {
+      "enabled": false,
+      "route": "direct",
+      "learn": false,
+      "args": {
+        "path": "./state/learned-domains.txt",
+        "bootstrap_rules": [],
+        "queue_size": 1024,
+        "batch_size": 256,
+        "flush_interval_ms": 200
+      },
+      "learn_args": {
+        "phase": "after",
+        "questions": "first",
+        "qtypes": [
+          "A",
+          "AAAA"
+        ],
+        "success_only": true,
+        "answer_required": true,
+        "rule_kind": "full",
+        "async": true,
+        "error_mode": "continue",
+        "timeout": "1s"
+      }
+    },
+    "adguard": {
+      "enabled": false,
+      "content": "",
+      "urls": [],
+      "mode": "nxdomain"
+    },
+    "ros_address_list": {
+      "enabled": false,
+      "args": {
+        "address": "",
+        "username": "",
+        "password": "",
+        "async": true,
+        "address_list4": "oxidns",
+        "address_list6": "oxidns",
+        "min_ttl": 60,
+        "max_ttl": 3600,
+        "queue_capacity": 16384,
+        "comment_prefix": "configflow",
+        "cleanup_on_shutdown": true
+      }
+    },
+    "ros_route": {
+      "enabled": false,
+      "args": {
+        "address": "",
+        "username": "",
+        "password": "",
+        "async": true,
+        "routing_table": "",
+        "gateway4": "",
+        "gateway6": "",
+        "distance": 100,
+        "min_ttl": 60,
+        "max_ttl": 3600,
+        "queue_capacity": 16384,
+        "comment_prefix": "configflow",
+        "cleanup_on_shutdown": true
+      }
+    },
+    "rule_update": {
+      "enabled": false,
+      "args": {
+        "schedule": "30 3 * * *",
+        "timezone": "Asia/Shanghai",
+        "timeout": "60s",
+        "outbound": "",
+        "socks5": ""
+      }
+    },
+    "rule_actions": {
+      "r_refused": {
+        "action": "refused"
+      },
+      "r_nxdomain": {
+        "action": "nxdomain"
+      },
+      "r_nodata": {
+        "action": "nodata"
+      },
+      "r_blackhole": {
+        "action": "blackhole"
+      },
+      "rs_ads": {
+        "action": "blackhole"
+      },
+      "r_pinned": {
+        "action": "upstream",
+        "source": "remote",
+        "upstream": {
+          "addr": "udp://9.9.9.9"
+        }
+      }
+    },
+    "rule_dns_follow": [
+      "r_allow",
+      "r_ip",
+      "r_ip6",
+      "rs_mixed",
+      "rs_ip",
+      "r_after"
+    ],
+    "rule_dns_parked": {},
+    "template_settings": {
+      "direct_rulesets": [],
+      "proxy_rulesets": [],
+      "direct_rules": [],
+      "proxy_rules": [],
+      "local_dns": "udp://192.168.50.53",
+      "remote_dns": "udp://9.9.9.9",
+      "fallback_dns": "udp://1.1.1.1",
+      "default_forward": "forward_remote",
+      "custom_hosts": "full:nas.test 192.168.50.2",
+      "custom_config": "custom_extension:\n  保留: true\nplugins:\n  - tag: custom_passthrough\n    type: sequence\n    args:\n      - exec: return\n",
+      "custom_matches": [
+        {
+          "matches": "qname domain:custom.test",
+          "exec": "goto china_dns"
+        }
+      ],
+      "custom_match_position": "head",
+      "device_policies": [
+        {
+          "ip": "192.168.0.0/24",
+          "name": "局域网",
+          "mode": "smart"
+        },
+        {
+          "ip": "192.168.0.0/25",
+          "name": "直连网段",
+          "mode": "direct"
+        },
+        {
+          "ip": "192.168.0.64/26",
+          "name": "默认例外",
+          "mode": "smart"
+        },
+        {
+          "ip": "192.168.0.80/28",
+          "name": "再次直连",
+          "mode": "direct"
+        },
+        {
+          "ip": "fd00:1234::/64",
+          "name": "IPv6直连",
+          "mode": "direct"
+        },
+        {
+          "ip": "fd00:1234::10",
+          "name": "IPv6例外",
+          "mode": "smart"
+        }
+      ],
+      "worker_threads": 2,
+      "listen": "0.0.0.0:53",
+      "tcp_enabled": true,
+      "prefer_ipv4": true,
+      "block_qtypes": [
+        65,
+        255
+      ],
+      "metrics_enabled": true,
+      "aggregate_rules": true,
+      "local_concurrent": 2,
+      "remote_concurrent": 1,
+      "fallback_concurrent": 2,
+      "fallback_threshold": 500,
+      "always_standby": false,
+      "remote_ttl": 120,
+      "cache_enabled": true,
+      "cache_size": 10240,
+      "cache_lazy_ttl": 60,
+      "cache_dump_enabled": false,
+      "cache_dump_file": "./state/cache.dump",
+      "cache_dump_interval": 300,
+      "probe_cache_enabled": true,
+      "probe_cache_size": 2048,
+      "api": {
+        "enabled": true,
+        "listen": "127.0.0.1:9199",
+        "username": "",
+        "password": "",
+        "webui_root": "",
+        "ssl": {}
+      },
+      "log": {
+        "level": "info",
+        "file": "",
+        "rotation": "daily",
+        "max_files": 7
+      },
+      "query_recorder": {
+        "enabled": true,
+        "args": {
+          "path": "./state/queries.db",
+          "queue_size": 8192,
+          "batch_size": 256,
+          "flush_interval_ms": 200,
+          "memory_tail": 1024,
+          "retention_days": 7,
+          "cleanup_interval_hours": 1,
+          "reader_concurrency": 2
+        }
+      },
+      "ip_selector": {
+        "enabled": false,
+        "args": {
+          "selection_mode": "background",
+          "probe_methods": [
+            "tcp:443",
+            "tcp:80"
+          ],
+          "probe_stagger": 200,
+          "probe_timeout": 600,
+          "max_wait": 1000,
+          "top_n": 0,
+          "dnssec_policy": "reorder_only",
+          "max_parallel_probes": 64,
+          "cache": {
+            "enabled": true,
+            "size": 4096,
+            "ttl": 3600,
+            "failure_ttl": 60
+          }
+        }
+      },
+      "dynamic_domain_set": {
+        "enabled": false,
+        "route": "direct",
+        "learn": false,
+        "args": {
+          "path": "./state/learned-domains.txt",
+          "bootstrap_rules": [],
+          "queue_size": 1024,
+          "batch_size": 256,
+          "flush_interval_ms": 200
+        },
+        "learn_args": {
+          "phase": "after",
+          "questions": "first",
+          "qtypes": [
+            "A",
+            "AAAA"
+          ],
+          "success_only": true,
+          "answer_required": true,
+          "rule_kind": "full",
+          "async": true,
+          "error_mode": "continue",
+          "timeout": "1s"
+        }
+      },
+      "adguard": {
+        "enabled": false,
+        "content": "",
+        "urls": [],
+        "mode": "nxdomain"
+      },
+      "ros_address_list": {
+        "enabled": false,
+        "args": {
+          "address": "",
+          "username": "",
+          "password": "",
+          "async": true,
+          "address_list4": "oxidns",
+          "address_list6": "oxidns",
+          "min_ttl": 60,
+          "max_ttl": 3600,
+          "queue_capacity": 16384,
+          "comment_prefix": "configflow",
+          "cleanup_on_shutdown": true
+        }
+      },
+      "ros_route": {
+        "enabled": false,
+        "args": {
+          "address": "",
+          "username": "",
+          "password": "",
+          "async": true,
+          "routing_table": "",
+          "gateway4": "",
+          "gateway6": "",
+          "distance": 100,
+          "min_ttl": 60,
+          "max_ttl": 3600,
+          "queue_capacity": 16384,
+          "comment_prefix": "configflow",
+          "cleanup_on_shutdown": true
+        }
+      },
+      "rule_update": {
+        "enabled": false,
+        "args": {
+          "schedule": "30 3 * * *",
+          "timezone": "Asia/Shanghai",
+          "timeout": "60s",
+          "outbound": "",
+          "socks5": ""
+        }
+      },
+      "rule_actions": {
+        "r_refused": {
+          "action": "refused"
+        },
+        "r_nxdomain": {
+          "action": "nxdomain"
+        },
+        "r_nodata": {
+          "action": "nodata"
+        },
+        "r_blackhole": {
+          "action": "blackhole"
+        },
+        "rs_ads": {
+          "action": "blackhole"
+        },
+        "r_pinned": {
+          "action": "upstream",
+          "source": "remote",
+          "upstream": {
+            "addr": "udp://9.9.9.9"
+          }
+        }
+      },
+      "rule_dns_follow": [
+        "r_allow",
+        "r_ip",
+        "r_ip6",
+        "rs_mixed",
+        "rs_ip",
+        "r_after"
+      ],
+      "rule_dns_parked": {}
+    },
+    "template_base_config": "custom_extension:\n  保留: true\nruntime:\n  worker_threads: 2\napi:\n  http:\n    listen: 127.0.0.1:9199\nlog:\n  level: info\nplugins:\n- tag: rules_domain_1\n  type: domain_set\n  args:\n    exps:\n    - full:refused.example.test\n- tag: rules_domain_2\n  type: domain_set\n  args:\n    exps:\n    - full:missing.example.test\n- tag: rules_domain_3\n  type: domain_set\n  args:\n    exps:\n    - full:empty.example.test\n- tag: rules_domain_4\n  type: domain_set\n  args:\n    exps:\n    - keyword:ads\n- tag: rules_domain_5\n  type: domain_set\n  args:\n    exps:\n    - full:pinned.example.test\n- tag: rules_domain_6\n  type: domain_set\n  args:\n    files:\n    - ./rules/rule_3c7c4bd3265bc0f8_domain.txt\n- tag: custom_hosts\n  type: hosts\n  args:\n    files:\n    - ./rules/custom_hosts.txt\n- tag: lazy_cache\n  type: cache\n  args:\n    size: 10240\n    lazy_cache_ttl: 60\n    short_circuit: true\n- tag: local_probe_cache\n  type: cache\n  args:\n    size: 2048\n    short_circuit: false\n- tag: forward_local\n  type: forward\n  args:\n    concurrent: 2\n    upstreams:\n    - addr: udp://192.168.50.53\n- tag: forward_remote\n  type: forward\n  args:\n    concurrent: 1\n    upstreams:\n    - addr: udp://9.9.9.9\n- tag: forward_fallback\n  type: forward\n  args:\n    concurrent: 2\n    upstreams:\n    - addr: udp://1.1.1.1\n- tag: query_recorder\n  type: query_recorder\n  args:\n    path: ./state/queries.db\n    queue_size: 8192\n    batch_size: 256\n    flush_interval_ms: 200\n    memory_tail: 1024\n    retention_days: 7\n    cleanup_interval_hours: 1\n    reader_concurrency: 2\n- tag: china_dns\n  type: sequence\n  args:\n  - exec: $lazy_cache\n  - exec: $forward_local\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n- tag: local_probe\n  type: sequence\n  args:\n  - exec: $local_probe_cache\n  - matches:\n    - '!has_resp'\n    exec: $forward_local\n  - exec: return\n- tag: remote_dns\n  type: sequence\n  args:\n  - exec: $forward_remote\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n  - exec: ttl 120\n- tag: fallback_dns\n  type: sequence\n  args:\n  - exec: $forward_fallback\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n- tag: fallback\n  type: fallback\n  args:\n    primary: remote_dns\n    secondary: fallback_dns\n    threshold: 500\n    always_standby: false\n- tag: proxy_dns_seq\n  type: sequence\n  args:\n  - exec: $fallback\n  - exec: accept\n- tag: default_direct_ip\n  type: sequence\n  args:\n  - exec: accept\n- tag: direct_ip\n  type: sequence\n  args:\n  - exec: accept\n- tag: ip_requery_proxy\n  type: sequence\n  args:\n  - exec: drop_resp\n  - exec: goto proxy_dns_seq\n- tag: cf_dns_blackhole\n  type: black_hole\n  args:\n    mode: 'null'\n    short_circuit: true\n- tag: cf_dns_fwd_0c8dac524a31\n  type: forward\n  args:\n    upstreams:\n    - addr: udp://9.9.9.9\n- tag: cf_dns_cache_0c8dac524a31\n  type: cache\n  args:\n    size: 1024\n    lazy_cache_ttl: 60\n    short_circuit: true\n- tag: cf_dns_up_0c8dac524a31\n  type: sequence\n  args:\n  - exec: drop_resp\n  - exec: $cf_dns_cache_0c8dac524a31\n  - exec: $cf_dns_fwd_0c8dac524a31\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n  - exec: ttl 120\n  - exec: accept\n- tag: sequence_main\n  type: sequence\n  args:\n  - exec: metrics_collector metrics\n  - exec: $query_recorder\n  - exec: prefer_ipv4\n  - matches:\n    - qtype 65 255\n    exec: black_hole nodata short_circuit=true\n  - exec: $custom_hosts\n  - matches:\n    - has_resp\n    exec: accept\n  - exec: jump cf_device_policy\n  - matches:\n    - qname domain:custom.test\n    exec: goto china_dns\n  - matches:\n    - qname $rules_domain_1\n    exec: reject\n  - matches:\n    - qname $rules_domain_2\n    exec: reject 3\n  - matches:\n    - qname $rules_domain_3\n    exec: reject 0\n  - matches:\n    - qname $rules_domain_4\n    exec: $cf_dns_blackhole\n  - matches:\n    - qname $rules_domain_5\n    exec: goto cf_dns_up_0c8dac524a31\n  - matches:\n    - qname $rules_domain_6\n    exec: $cf_dns_blackhole\n  - exec: goto proxy_dns_seq\n- tag: server_udp\n  type: udp_server\n  args:\n    listen: 0.0.0.0:53\n    entry: sequence_main\n- tag: server_tcp\n  type: tcp_server\n  args:\n    listen: 0.0.0.0:53\n    entry: sequence_main\n- tag: rules_download\n  type: download\n  args:\n    timeout: 60s\n    downloads:\n    - url: https://config.test/api/profiles/golden-space/mosdns/rule-proxy?url=https%3A%2F%2Frules.test%2Fads.yaml&part=domain&token=fixture-token\n      dir: rules\n      filename: rule_3c7c4bd3265bc0f8_domain.txt\n- tag: rules_reload\n  type: reload_provider\n  args:\n  - $rules_domain_1\n  - $rules_domain_2\n  - $rules_domain_3\n  - $rules_domain_4\n  - $rules_domain_5\n  - $rules_domain_6\n- tag: rules_refresh\n  type: sequence\n  args:\n  - exec: $rules_download\n  - exec: $rules_reload\n- tag: custom_passthrough\n  type: sequence\n  args:\n  - exec: return\n- tag: cf_device_policy\n  type: sequence\n  args:\n  - matches:\n    - client_ip fd00:1234::10\n    exec: return\n  - matches:\n    - client_ip fd00:1234::/64\n    exec: goto cf_device_direct\n  - matches:\n    - client_ip 192.168.0.80/28\n    exec: goto cf_device_direct\n  - matches:\n    - client_ip 192.168.0.64/26\n    exec: return\n  - matches:\n    - client_ip 192.168.0.0/25\n    exec: goto cf_device_direct\n  - matches:\n    - client_ip 192.168.0.0/24\n    exec: return\n  - exec: return\n- tag: cf_device_direct\n  type: sequence\n  args:\n  - exec: $forward_local\n  - matches:\n    - '!has_resp'\n    exec: reject 3\n  - exec: accept\n"
+  },
+  "mosdns": {
+    "direct_rules": [
+      "r_pinned",
+      "r_ip"
+    ],
+    "proxy_rules": [
+      "r_allow",
+      "r_ip6"
+    ],
+    "direct_rulesets": [
+      "rs_ip"
+    ],
+    "proxy_rulesets": [
+      "rs_mixed"
+    ],
+    "custom_hosts": "nas.test 192.168.50.2",
+    "local_dns": "udp://192.168.50.53",
+    "remote_dns": "udp://9.9.9.9",
+    "cache_enabled": true,
+    "custom_config": "log: {level: warn}\ncustom_extension: {keep: true}\n"
+  },
+  "mihomo": {
+    "custom_config": "mixed-port: 7890\nallow-lan: true\nmode: rule\ndns: {enable: false}\ncustom-extension: {keep: true}\nsub-rules:\n  lan-rules: [\"MATCH,DIRECT\"]\n"
+  },
+  "surge": {
+    "custom_config": "[General]\nloglevel = notify\n[Host]\nnas.test = 192.168.50.2\n"
+  },
+  "loon": {
+    "custom_config": "[General]\nloglevel = notify\n[Host]\nnas.test = 192.168.50.2\n"
+  }
+}

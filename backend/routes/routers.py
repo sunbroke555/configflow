@@ -496,6 +496,7 @@ def policy_settings(router_id):
     from backend.common.profile_context import resolve_profile_id
     from backend.common.oxidns_settings import OxidnsSettingsError
     from backend.common.config_repository import ProfileRepositoryError
+    from backend.common.device_groups import DeviceGroupsError
     from backend.routers.policy_workspace import FIELDS, read_workspace, save_workspace
 
     profile_id = resolve_profile_id()
@@ -507,7 +508,9 @@ def policy_settings(router_id):
     try:
         if request.method == 'PUT':
             body = request.get_json(silent=True)
-            if not isinstance(body, dict) or set(body) != {'revision', 'router', 'policies', 'base_url'} or \
+            if not isinstance(body, dict) or set(body) not in (
+                    {'revision', 'router', 'policies', 'base_url'},
+                    {'revision', 'router', 'policy_routing_sources', 'base_url'}) or \
                     not isinstance(body['router'], dict) or set(body['router']) != set(FIELDS) or \
                     not isinstance(body['base_url'], str):
                 return jsonify(success=False, message='策略路由设置格式无效'), 400
@@ -529,7 +532,7 @@ def policy_settings(router_id):
         return response
     except RouterConflictError as error:
         return jsonify(success=False, message=str(error)), 409
-    except (RouterValidationError, OxidnsSettingsError, ProfileRepositoryError) as error:
+    except (RouterValidationError, OxidnsSettingsError, ProfileRepositoryError, DeviceGroupsError) as error:
         return jsonify(success=False, message=str(error)), 400
 
 
@@ -562,16 +565,18 @@ def preview_policy_settings(router_id):
     if body.get('revision') != draft_revision(config, router):
         return jsonify(success=False, message='配置已更新，请重新载入后预览。'), 409
     manager = get_agent_manager()
+    modern_sources = config.get('device_groups') is not None or config.get('policy_routing_sources') is not None
+    targets = [] if modern_sources else body['targets']
     peers = {a['id']: a for a in manager.get_all_agents() if a.get('service_type') == 'oxidns'
              and (a.get('profile_id') or get_default_profile_id()) == profile_id}
-    if any(target not in peers for target in body['targets']):
+    if any(target not in peers for target in targets):
         return jsonify(success=False, message='OxiDNS 发布目标或绑定已变化，请重新载入。'), 409
     driver = _driver(router)
     try:
         _, desired, state, report = _inspect(config, router, driver)
         plan = build_plan(router, desired, state, report, report['return_routing'], driver)
         content = ''
-        if body['targets']:
+        if targets:
             document = yaml.safe_load(generate_oxidns_config(config, base_url=body.get('base_url', '')))
             require_valid_document(document)
             content = yaml.safe_dump(sanitize_external_payload(document, config.get('system_config')), allow_unicode=True, sort_keys=False)
@@ -582,7 +587,8 @@ def preview_policy_settings(router_id):
             'oxidns_revision': revision(config.get('oxidns') or {}), 'router_plan': plan,
             'dns_content': content, 'targets': [{'id': target, 'name': peers[target].get('name') or target,
                 'host': peers[target].get('host') or '', 'status': peers[target].get('status') or 'offline'}
-                for target in body['targets']]})
+                for target in targets],
+            **({'warnings': ['独立策略路由来源只需预览并发布到路由器，无需发布 OxiDNS']} if modern_sources else {})})
         response.headers['Cache-Control'] = 'no-store'
         return response
     except (RouterError, ValueError) as error:

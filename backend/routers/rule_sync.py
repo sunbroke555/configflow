@@ -42,7 +42,7 @@ def controls(config, router):
         # Added only while enabled, so existing baselines keep their digest. The
         # guard's manifest changes only through a manual release, not settings.
         fields.append('dns_guard')
-    return digest({
+    result = {
         'router': {key: router.get(key) for key in fields},
         'agents': [{key: (agent or {}).get(key) for key in ('id', 'host', 'service_type', 'profile_id')}
                    for agent in (_agent(router.get('proxy_gateway_agent_id')), _agent(router.get('dns_agent_id')))],
@@ -53,7 +53,12 @@ def controls(config, router):
                     for rule_id, (item, source) in sources.items()},
         'fake_ip': str(fake_ip_network(config)), 'oxidns': config.get('oxidns'),
         'proxy_groups': config.get('proxy_groups'),
-    })
+    }
+    if config.get('policy_routing_sources') is not None:
+        from backend.common.device_groups import source_revision
+        result.pop('oxidns')
+        result['policy_routing_sources'] = source_revision(config)
+    return digest(result)
 
 
 def _targets(config, router, records, gateway):

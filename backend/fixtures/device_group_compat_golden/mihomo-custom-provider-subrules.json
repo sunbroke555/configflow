@@ -1,0 +1,65 @@
+{
+  "profile_id": "p0-device-groups",
+  "nodes": [],
+  "subscriptions": [],
+  "aggregations": [],
+  "rule_library": [],
+  "proxy_groups": [
+    {
+      "id": "g_proxy",
+      "name": "节点选择",
+      "type": "select",
+      "manual_nodes": [
+        "DIRECT"
+      ]
+    }
+  ],
+  "mihomo": {
+    "custom_config": "mixed-port: 27890\nallow-lan: true\nbind-address: '*'\nmode: rule\nlog-level: info\nipv6: true\nexternal-controller: 127.0.0.1:29090\ndns:\n  enable: false\nsub-rules:\n  lan-rules:\n  - MATCH,DIRECT\nrule-providers:\n  ads:\n    type: inline\n    behavior: domain\n    payload:\n    - +.ads.example\n"
+  },
+  "rule_configs": [
+    {
+      "id": "r_precedence",
+      "itemType": "rule",
+      "rule_type": "DOMAIN-SUFFIX",
+      "value": "example",
+      "policy": "节点选择"
+    },
+    {
+      "id": "r_ads",
+      "itemType": "rule",
+      "rule_type": "RULE-SET",
+      "value": "ads",
+      "policy": "REJECT"
+    },
+    {
+      "id": "r_drop",
+      "itemType": "rule",
+      "rule_type": "IP-CIDR",
+      "value": "192.0.2.0/24",
+      "policy": "REJECT-DROP",
+      "no_resolve": true
+    },
+    {
+      "id": "r_disabled",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "disabled.example",
+      "policy": "REJECT",
+      "enabled": false
+    },
+    {
+      "id": "r_match",
+      "itemType": "rule",
+      "rule_type": "MATCH",
+      "policy": "REJECT"
+    },
+    {
+      "id": "r_after",
+      "itemType": "rule",
+      "rule_type": "DOMAIN",
+      "value": "after.example",
+      "policy": "REJECT"
+    }
+  ]
+}

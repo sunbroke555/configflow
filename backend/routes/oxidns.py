@@ -132,6 +132,9 @@ def prepare_oxidns_editor():
     from backend.common.oxidns_editor import prepare_editor
     try:
         value, base_url = _editor_request()
+        if get_config().get('device_groups') is not None:
+            from backend.common.oxidns_device_groups import require_native_blocking_supported
+            require_native_blocking_supported(get_config())
         return _editor_response({'settings': prepare_editor(value['settings'], get_config(), base_url)})
     except OxidnsSettingsError as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
