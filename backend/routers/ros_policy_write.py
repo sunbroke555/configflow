@@ -95,10 +95,11 @@ def _create(driver, path, values, journal, ids, *, restoring=False):
     return _resource(path, actual)
 
 
-# Measured on RouterOS 7.24: a 16 kB batch adds ~800 members in well under a
-# second on x86; slower boards keep it inside the 10 s request timeout. The
-# console caps one executed script at 64 kB.
+# Measured on RouterOS 7.24 (x86 CHR): 200 members take ~0.1 s, leaving a wide
+# margin under the 10 s request timeout on slower boards. The console caps one
+# executed script at 64 kB.
 ADDRESS_SCRIPT_BYTES = 16 * 1024
+ADDRESS_BATCH_MEMBERS = 200
 ADDRESS_REMOVE_BATCH = 500
 
 
@@ -116,9 +117,15 @@ def _script_value(key, value):
     return _script_string(value)
 
 
-def _address_rows(driver, name):
-    rows = driver._list(ADDRESSES + '?' + urlencode({'list': name}))
-    return [row for row in rows if row.get('list') == name]
+def _address_rows(driver, name, attempts=1):
+    for attempt in range(attempts):
+        try:
+            rows = driver._list(ADDRESSES + '?' + urlencode({'list': name}))
+            return [row for row in rows if row.get('list') == name]
+        except RouterError:
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(1)
 
 
 def _run_address_batches(driver, shared, addresses):
@@ -131,7 +138,7 @@ def _run_address_batches(driver, shared, addresses):
     batches, current, size = [], [], 0
     for address in addresses:
         item = _script_string(address)
-        if current and size + len(item) + 1 > budget:
+        if current and (size + len(item) + 1 > budget or len(current) == ADDRESS_BATCH_MEMBERS):
             batches.append(current)
             current, size = [], 0
         current.append(item)
@@ -154,21 +161,38 @@ def _run_address_batches(driver, shared, addresses):
 
 def _settled_address_rows(driver, name):
     """After a lost reply the batch may still run; wait until the list stops growing."""
-    rows = _address_rows(driver, name)
+    rows = _address_rows(driver, name, attempts=3)
     for _ in range(10):
         time.sleep(1)
-        latest = _address_rows(driver, name)
+        latest = _address_rows(driver, name, attempts=3)
         if len(latest) == len(rows):
             return latest
         rows = latest
     raise RouterRollbackError('地址列表批量写入结果不明确，未删除任何不明归属的对象，请检查路由器：' + name)
 
 
-def _create_addresses(driver, entries, journal, ids):
+def _requested(rows, shared, addresses, before):
+    """Rows absent before a batch write that match one requested member."""
+    wanted = {}
+    for address in addresses:
+        wanted.setdefault(_comparable('address', address), []).append({**shared, 'address': address})
+    matched = []
+    for row in rows:
+        candidates = wanted.get(_comparable('address', row.get('address', '')))
+        if row['.id'] not in before and candidates and _matches_values(ADDRESSES, row, candidates[0]):
+            candidates.pop(0)
+            matched.append(row)
+    return matched
+
+
+def _create_addresses(driver, entries, journal, ids, created=None):
     """Create address-list members in batches and journal every row they produced.
 
     One filtered read per list proves that each requested member exists exactly
     once with the submitted values. Rows nobody requested are never journaled.
+    Until that read succeeds, a list-scoped sweep step stands in for the rows,
+    so a failed read cannot leave a whole batch outside the rollback. Matched
+    rows are also recorded in ``created`` (index -> resource) as they are found.
     """
     groups = {}
     for index, values in enumerate(entries):
@@ -181,15 +205,19 @@ def _create_addresses(driver, entries, journal, ids):
         if not name:
             raise RouterError('地址列表条目缺少列表名')
         before = {row['.id'] for row in _address_rows(driver, name)}
+        sweep = {'action': 'sweep', 'path': ADDRESSES, 'list': name, 'shared': shared,
+                 'addresses': [values['address'] for _, values in members], 'before': sorted(before)}
+        journal.append(sweep)
         failure = None
         try:
-            failed, reason = _run_address_batches(driver, shared, [values['address'] for _, values in members])
+            failed, reason = _run_address_batches(driver, shared, sweep['addresses'])
         except UncertainWrite as error:
             failure, rows = error, _settled_address_rows(driver, name)
         except RouterError as error:
-            failure, rows = error, _address_rows(driver, name)
+            failure, rows = error, _address_rows(driver, name, attempts=3)
         else:
-            rows = _address_rows(driver, name)
+            rows = _address_rows(driver, name, attempts=3)
+        journal.remove(sweep)
         wanted = {}
         for index, values in members:
             wanted.setdefault(_comparable('address', values['address']), []).append((index, values))
@@ -205,6 +233,8 @@ def _create_addresses(driver, entries, journal, ids):
             ids[ADDRESSES].add(row['.id'])
             resources[index] = _resource(ADDRESSES, row)
             journal.append({'action': 'delete', **resources[index]})
+            if created is not None:
+                created[index] = resources[index]
         if failure is not None:
             raise failure
         if unknown:
@@ -271,16 +301,29 @@ def _restore_delete_addresses(driver, steps):
         raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + ADDRESSES + '/' + changed[0]['id'])
 
 
+def _restore_sweep(driver, step):
+    """Remove members a batch wrote before its rows could be read and journaled."""
+    rows = _address_rows(driver, step['list'], attempts=3)
+    removing = [row['.id'] for row in _requested(rows, step['shared'], step['addresses'], set(step['before']))]
+    _remove_addresses(driver, removing)
+    if {row['.id'] for row in _address_rows(driver, step['list'], attempts=3)} & set(removing):
+        raise RouterError('回滚删除后对象仍存在')
+
+
 def _restore_addresses(driver, steps, ids, remapped, configs):
     """Recreate deleted members in batches; members still present must be unchanged."""
     live = _live_addresses(driver, steps)
     changed = [step for step in steps
                if step['id'] in live and config_row(live[step['id']]) != config_row(step['config'])]
     absent = [step for step in steps if step['id'] not in live]
-    if absent:
-        created = _create_addresses(driver, [step['values'] for step in absent], [], ids)
-        for step, resource in zip(absent, created):
-            remapped[(ADDRESSES, step['id'])] = resource['id']
+    created = {}
+    try:
+        if absent:
+            _create_addresses(driver, [step['values'] for step in absent], [], ids, created)
+    finally:
+        # Members recreated before a failure are still ours; keep their new IDs.
+        for index, resource in created.items():
+            remapped[(ADDRESSES, absent[index]['id'])] = resource['id']
             configs[(ADDRESSES, resource['id'])] = resource['config']
     if changed:
         raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + ADDRESSES + '/' + changed[0]['id'])
@@ -311,11 +354,14 @@ def restore(driver, op):
         delete_safe = False
     configs = {}
     for (action, is_address), run in groupby(op['steps'], key=lambda step: (step['action'], step.get('path') == ADDRESSES)):
-        if is_address and action in ('delete', 'restore'):
+        if is_address and action in ('delete', 'restore', 'sweep'):
             # Members are batched: one read per list instead of one per member.
             try:
                 if action == 'restore':
                     _restore_addresses(driver, list(run), ids, remapped, configs)
+                elif action == 'sweep' and delete_safe:
+                    for step in run:
+                        _restore_sweep(driver, step)
                 elif delete_safe:
                     _restore_delete_addresses(driver, list(run))
             except RouterError as error:

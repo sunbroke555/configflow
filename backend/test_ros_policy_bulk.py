@@ -10,7 +10,7 @@ from backend.routers.release import execute
 from backend.routers.ros_policy import ADDRESSES, MANGLE
 from backend.routers import ros_policy_write
 from backend.routers.ros_policy_write import (
-    ADDRESS_SCRIPT_BYTES, _create_addresses, _delete_addresses, restore,
+    ADDRESS_BATCH_MEMBERS, ADDRESS_SCRIPT_BYTES, _create_addresses, _delete_addresses, restore,
 )
 from backend.routers.routeros import UncertainWrite
 from backend.test_ros_policy import MemoryROS, configurations, desired_for, inspect
@@ -50,7 +50,7 @@ def test_thousands_of_destinations_cost_batches_not_one_request_per_member():
     assert {row['address'] for row in members(driver)} == set(destinations)
     assert driver.requests['PUT', ADDRESSES] == 0
     assert driver.requests['GET', ADDRESSES + '/<id>'] == 0
-    assert 2 <= driver.requests['POST', '/execute'] <= 6
+    assert driver.requests['POST', '/execute'] == 3000 // ADDRESS_BATCH_MEMBERS + 2  # + source and bypass
 
     # Replacing the group removes the old list with a handful of id batches.
     driver.requests.clear()
@@ -76,7 +76,8 @@ def test_batches_stay_under_the_script_limit_and_escape_values(monkeypatch):
     entries = [{'list': LIST, 'address': cidr, 'comment': comment, 'disabled': 'false'} for cidr in cidrs(2500)]
     journal, ids = [], {ADDRESSES: set()}
     resources = _create_addresses(driver, entries, journal, ids)
-    assert len(sent) > 1 and all(len(script.encode()) <= ADDRESS_SCRIPT_BYTES for script in sent)
+    assert len(sent) == 13 and all(len(script.encode()) <= ADDRESS_SCRIPT_BYTES for script in sent)
+    assert max(script.count('";"') + 1 for script in sent) == ADDRESS_BATCH_MEMBERS
     assert all('disabled=no' in script and '\\$var' in script and '\\"quoted\\"' in script for script in sent)
     assert {row['comment'] for row in members(driver)} == {comment}
     assert [item['config']['address'] for item in resources] == [entry['address'] for entry in entries]
@@ -150,7 +151,10 @@ def test_list_that_keeps_growing_after_a_lost_reply_is_left_for_inspection(monke
     with pytest.raises(RouterRollbackError, match='结果不明确'):
         _create_addresses(driver, [{'list': LIST, 'address': '100.64.0.0/24', 'comment': 'c', 'disabled': 'false'}],
                           journal, {ADDRESSES: set()})
-    assert journal == []
+    assert [step['action'] for step in journal] == ['sweep']
+    monkeypatch.setattr(driver, '_request', original)
+    restore(driver, {'steps': journal, 'previous': None})
+    assert members(driver) and all(row['.id'].startswith('*G') for row in members(driver))
 
 
 def test_rows_nobody_requested_are_never_journaled(monkeypatch):
@@ -255,3 +259,69 @@ def test_preview_with_thousands_of_previous_and_current_destinations_is_fast():
 
 def _networks_of(values):
     return [ipaddress.IPv4Network(value) for value in values]
+
+
+@pytest.mark.parametrize('stage', ['publish', 'rule_sync_shape'])
+def test_failed_readback_after_a_batch_still_rolls_back_every_written_member(monkeypatch, stage):
+    """A transient read failure after /execute must not orphan the batch."""
+    driver = MemoryROS()
+    monkeypatch.setattr(ros_policy_write.time, 'sleep', lambda _: None)
+    if stage == 'rule_sync_shape':
+        driver.rows[ADDRESSES].append({'.id': '*OLD', 'list': LIST, 'address': '198.51.100.0/24',
+                                       'comment': 'c', 'disabled': 'false'})
+    original = driver._request
+    state = {'executed': False, 'failures': 0}
+    def flaky(method, path, values=None):
+        if path == '/execute':
+            state['executed'] = True
+        elif method == 'GET' and '?' in path and state['executed'] and state['failures'] < 3:
+            state['failures'] += 1
+            raise RouterError('无法连接 RouterOS：ReadTimeout')
+        return original(method, path, values)
+    monkeypatch.setattr(driver, '_request', flaky)
+    journal = []
+    with pytest.raises(RouterError, match='ReadTimeout'):
+        _create_addresses(driver, [{'list': LIST, 'address': cidr, 'comment': 'c', 'disabled': 'false'}
+                                   for cidr in cidrs(450)], journal, {ADDRESSES: {'*OLD'}})
+    assert [step['action'] for step in journal] == ['sweep']
+    assert len(members(driver)) == 450 + (stage == 'rule_sync_shape')
+    restore(driver, {'steps': list(reversed(journal)), 'previous': None})
+    assert [row['.id'] for row in members(driver)] == (['*OLD'] if stage == 'rule_sync_shape' else [])
+
+
+def test_one_transient_read_failure_is_retried(monkeypatch):
+    driver = MemoryROS()
+    monkeypatch.setattr(ros_policy_write.time, 'sleep', lambda _: None)
+    original = driver._request
+    state = {'executed': False, 'failed': False}
+    def flaky(method, path, values=None):
+        if path == '/execute':
+            state['executed'] = True
+        elif method == 'GET' and '?' in path and state['executed'] and not state['failed']:
+            state['failed'] = True
+            raise RouterError('无法连接 RouterOS：ReadTimeout')
+        return original(method, path, values)
+    monkeypatch.setattr(driver, '_request', flaky)
+    journal = []
+    resources = _create_addresses(driver, [{'list': LIST, 'address': cidr, 'comment': 'c', 'disabled': 'false'}
+                                           for cidr in cidrs(3)], journal, {ADDRESSES: set()})
+    assert state['failed'] and len(resources) == 3
+    assert [step['action'] for step in journal] == ['delete'] * 3
+
+
+def test_rollback_keeps_new_ids_of_members_recreated_before_a_failure():
+    driver = MemoryROS()
+    journal, ids = [], {ADDRESSES: set()}
+    created = _create_addresses(driver, [{'list': LIST, 'address': cidr, 'comment': 'c', 'disabled': 'false'}
+                                         for cidr in cidrs(4)], [], ids)
+    _delete_addresses(driver, created, journal)
+    # Someone re-adds one member by hand, so recreating it is refused.
+    driver.rows[ADDRESSES].append({'.id': '*HAND', 'list': LIST, 'address': created[3]['config']['address'],
+                                   'comment': 'c', 'disabled': 'false'})
+    previous = {'spec': {}, 'resources': copy.deepcopy(created)}
+    with pytest.raises(RouterRollbackError, match='1 条写入失败'):
+        restore(driver, {'steps': list(reversed(journal)), 'previous': previous})
+    manifest = driver.ros_policy_manifest
+    live = {row['.id'] for row in members(driver)}
+    remapped = [item['id'] for item in manifest['resources'][:3]]
+    assert all(item_id in live and item_id not in {item['id'] for item in created} for item_id in remapped)
