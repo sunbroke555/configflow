@@ -650,25 +650,26 @@ def test_unchanged_address_does_not_prepare_or_download_rules(follow_env, monkey
     assert any(call[2] == 'dns/active' for call in env.calls)
 
 
-@pytest.mark.parametrize(('with_dns_server', 'address_changed', 'legacy_baseline', 'baseline_digest', 'outage'), [
-    pytest.param(False, False, False, 'full', True, id='unchanged'),
-    pytest.param(True, False, False, 'full', True, id='unchanged-with-watchdog'),
-    pytest.param(False, True, False, 'full', True, id='changed'),
-    pytest.param(True, True, False, 'full', True, id='changed-with-watchdog'),
-    pytest.param(True, False, True, 'full', True, id='unchanged-legacy-without-watchdog'),
-    pytest.param(True, True, True, 'full', True, id='changed-legacy-retries-after-tls-outage'),
-    pytest.param(True, False, True, 'short', False, id='unchanged-legacy-short-digest'),
-    pytest.param(True, False, True, 'missing', False, id='unchanged-legacy-missing-digest'),
-    pytest.param(True, True, True, 'short', False, id='changed-legacy-short-digest'),
-    pytest.param(True, True, True, 'missing', False, id='changed-legacy-missing-digest'),
+@pytest.mark.parametrize(('with_dns_server', 'address_changed', 'legacy_baseline', 'baseline_digest', 'outage', 'retain_cache'), [
+    pytest.param(False, False, False, 'full', True, False, id='unchanged'),
+    pytest.param(True, False, False, 'full', True, False, id='unchanged-with-watchdog'),
+    pytest.param(False, True, False, 'full', True, False, id='changed'),
+    pytest.param(True, True, False, 'full', True, False, id='changed-with-watchdog'),
+    pytest.param(True, False, True, 'full', True, False, id='unchanged-legacy-without-watchdog'),
+    pytest.param(True, True, True, 'full', True, False, id='changed-legacy-retries-after-tls-outage'),
+    pytest.param(True, False, True, 'short', False, False, id='unchanged-legacy-short-digest'),
+    pytest.param(True, False, True, 'missing', False, False, id='unchanged-legacy-missing-digest'),
+    pytest.param(True, True, True, 'short', False, False, id='changed-legacy-short-digest'),
+    pytest.param(True, True, True, 'missing', False, False, id='changed-legacy-missing-digest'),
+    pytest.param(True, True, False, 'full', True, True, id='changed-tls-outage-with-valid-cache'),
 ])
 def test_apple_tls_outage_skipped_only_for_unchanged_address(
-        follow_env, monkeypatch, with_dns_server, address_changed, legacy_baseline, baseline_digest, outage):
+        follow_env, monkeypatch, with_dns_server, address_changed, legacy_baseline, baseline_digest, outage, retain_cache):
     from backend.agents import deployment_bundle
     from backend.common.dns_watchdog import ensure_local_dns_watchdog
 
     env = follow_env
-    url = 'https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Apple/Apple.list'
+    url = 'https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Apple/Apple_Domain.yaml'
     rule_id = 'apple'
     path = './rules/rule_' + hashlib.sha256(rule_id.encode()).hexdigest()[:16] + '_domain.txt'
     settings = deepcopy(env.repository.get_profile('default')['oxidns'])
@@ -695,7 +696,7 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
             raise requests.exceptions.SSLError('UNEXPECTED_EOF_WHILE_READING')
         response = requests.Response()
         response.status_code = 200
-        response._content = b'DOMAIN-SUFFIX,apple.com\n'
+        response._content = b'payload:\n  - "+.apple.com"\n'
         response._content_consumed = True
         return response
 
@@ -729,6 +730,12 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
     env.uploads.clear()
     downloads.clear()
     offline = outage
+    if outage and not retain_cache:
+        # The no-cache branch still exercises a real preparation failure. A
+        # validated prior response now legitimately allows an offline update.
+        from backend.utils.rule_utils import rule_cache_filename
+        source = config['rule_library'][0]
+        (env.repository.shared_rules_dir() / rule_cache_filename(source)).unlink()
     env.bind()
     if not address_changed:
         env.listener.update(port=1053, listen='0.0.0.0:1053')
@@ -742,7 +749,7 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
         assert downloads == ([] if baseline_digest == 'full' else [url])
         return
 
-    if outage:
+    if outage and not retain_cache:
         assert env.uploads == []
         assert env.state()['status'] == 'failed', env.state()
         assert '无法下载「Apple」规则集' in env.state()['message']
@@ -757,7 +764,7 @@ def test_apple_tls_outage_skipped_only_for_unchanged_address(
     expected['plugins'][0]['args']['upstreams'][1]['addr'] = 'udp://127.0.0.1:2053'
     assert env.uploaded_document() == expected
     assert len(env.uploads) == 1
-    assert downloads == [url] * (3 if outage else 2)
+    assert downloads == [url] * (3 if outage and not retain_cache else 2)
 
 
 def test_unpublished_bound_address_cannot_be_mistaken_for_live_noop(follow_env, monkeypatch):

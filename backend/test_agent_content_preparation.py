@@ -43,10 +43,10 @@ def content_env(tmp_path, monkeypatch):
     config['mosdns'].update(local_dns='udp://192.0.2.1:53', remote_dns='udp://192.0.2.2:53',
                             fallback_dns='udp://192.0.2.3:53')
     config['rule_library'] = [
-        {'id': 'selected-rule', 'name': 'Selected', 'source_type': 'content',
-         'content': 'DOMAIN-SUFFIX,first.test', 'enabled': True},
-        {'id': 'unused-rule', 'name': 'Unused', 'source_type': 'content',
-         'content': 'DOMAIN-SUFFIX,unused.test', 'enabled': True},
+        {'id': 'selected-rule', 'name': 'Selected', 'source_type': 'content', 'behavior': 'domain', 'format': 'text',
+         'content': '+.first.test', 'enabled': True},
+        {'id': 'unused-rule', 'name': 'Unused', 'source_type': 'content', 'behavior': 'domain', 'format': 'text',
+         'content': '+.unused.test', 'enabled': True},
     ]
     config['rule_configs'] = [{
         'id': 'selected-rule-ref', 'itemType': 'ruleset', 'name': 'Selected',
@@ -112,7 +112,7 @@ def test_selected_rule_bytes_change_fingerprint_without_changing_main_yaml(conte
     config, _remote, _fetches, _repository = content_env
     original = prepare(config, service)
     changed = deepcopy(config)
-    changed['rule_library'][0]['content'] = 'DOMAIN-SUFFIX,second.test'
+    changed['rule_library'][0]['content'] = '+.second.test'
     current = prepare(changed, service)
     original_files, current_files = files(original), files(current)
     assert original_files['config.yaml'] == current_files['config.yaml']
@@ -155,7 +155,7 @@ def test_unused_resource_edits_do_not_change_or_fetch_delivered_content(content_
     config, _remote, fetches, _repository = content_env
     original = prepare(config, service)
     changed = deepcopy(config)
-    changed['rule_library'][1]['content'] = 'DOMAIN-SUFFIX,changed-unused.test'
+    changed['rule_library'][1]['content'] = '+.changed-unused.test'
     changed['subscriptions'][1].update(name='Renamed unused feed', url='https://subscription.test/changed-unused')
     changed['nodes'].append({'id': 'unused-node', 'name': 'Unused node', 'type': 'http',
                              'server': 'unused.test', 'port': 8080, 'enabled': True})

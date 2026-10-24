@@ -15,6 +15,8 @@ from backend.common.config import (
 from backend.common.config_repository import ProfileValidationError
 from backend.common.profile_context import resolve_profile_id
 from backend.utils.rule_utils import rule_cache_read_path
+from backend.utils.remote_rule_sources import resolve_remote_rule_source
+from backend.utils.ruleset_content import RemoteRuleValidationError
 from backend.utils.rule_fetch import request_rule, validate_rule_url
 from backend.utils.url_utils import safe_exception_details, safe_url_for_log
 
@@ -50,8 +52,10 @@ def _load_cached_rule_content_for_url(original_url: str, config_data=None) -> st
             continue
         seen.add(filepath)
         try:
-            with open(filepath, 'r', encoding='utf-8') as handle:
-                return handle.read()
+            from backend.utils.rule_utils import read_validated_rule_cache
+            content = read_validated_rule_cache(source, config_data=config_data)
+            if content is not None:
+                return content.decode('utf-8-sig')
         except FileNotFoundError:
             continue
         except (OSError, UnicodeError) as error:
@@ -402,7 +406,7 @@ def _validate_remote_url(url: str) -> str:
     return url
 
 
-def _fetch_remote_content(url: str, config_data=None) -> str:
+def _fetch_remote_content(url: str, config_data=None, *, raw=False) -> str | bytes:
     import requests
 
     response = request_rule(
@@ -424,7 +428,8 @@ def _fetch_remote_content(url: str, config_data=None) -> str:
             if total > _MAX_RULE_PROXY_BYTES:
                 raise ValueError('Remote response exceeds size limit')
             chunks.append(chunk)
-        return b''.join(chunks).decode('utf-8', errors='replace')
+        content = b''.join(chunks)
+        return content if raw else content.decode('utf-8', errors='replace')
     finally:
         response.close()
 
@@ -531,13 +536,31 @@ def mosdns_rule_proxy():
         if part is not None and part not in RULE_PARTS:
             return jsonify({'success': False, 'message': 'Invalid part parameter'}), 400
 
+        stale_error = None
         original_content = _local_content_rule(original_url, config_data)
         if original_content is None:
             # Use normal hostname routing, including Fake-IP networks and the download proxy.
             fetch_url = apply_github_proxy_domain(original_url, config_data)
             _validate_remote_url(fetch_url)
+            declared = resolve_remote_rule_source(original_url, config_data, request.args.get('source_id'))
+            if declared is not None:
+                from backend.converters.common import ruleset_format
+                if ruleset_format(declared, config_data) == 'mrs':
+                    raise RemoteRuleValidationError('OxiDNS/MosDNS 不支持 MRS 二进制规则，请使用该订阅的 Text 或 YAML 版本。')
+            stale_error = None
             try:
-                original_content = _fetch_remote_content(fetch_url)
+                if declared is not None and declared.get('source_type', 'url') == 'url':
+                    from backend.utils.rule_utils import refresh_remote_rule
+                    value, stale_error = refresh_remote_rule(
+                        declared, config_data=config_data, allow_stale=True,
+                        fetch=lambda _url: _fetch_remote_content(fetch_url, config_data=config_data, raw=True))
+                    original_content = value.decode('utf-8-sig')
+                    if stale_error is not None:
+                        logger.warning('规则集「%s」更新失败，使用上一次有效缓存：%s',
+                                       declared.get('name', ''), str(stale_error) if isinstance(stale_error, RemoteRuleValidationError)
+                                       else safe_exception_details(stale_error))
+                else:
+                    original_content = _fetch_remote_content(fetch_url)
             except requests.exceptions.RequestException as e:
                 logger.warning(
                     "在线规则更新失败，保留设备现有规则: %s %s",
@@ -555,9 +578,14 @@ def mosdns_rule_proxy():
 
         # 格式转换（Clash/List/YAML -> mosdns），按 part 拆分域名 / IP
         converted_content = convert_rule_content_for_mosdns(original_content, part)
-        return converted_content, 200, {'Content-Type': 'text/plain; charset=utf-8',
-                                       'Cache-Control': 'no-store'}
+        headers = {'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store'}
+        if stale_error is not None:
+            headers['X-ConfigFlow-Rule-Cache'] = 'stale'
+        return converted_content, 200, headers
 
+    except RemoteRuleValidationError as e:
+        logger.warning('规则源类型校验失败：%s', str(e))
+        return jsonify(success=False, code='RULE_CONTENT_INVALID', message=str(e)), 422
     except ValueError as e:
         logger.warning("MosDNS rule-proxy rejected request: %s", safe_exception_details(e))
         return jsonify({'success': False, 'message': 'Invalid remote URL'}), 400

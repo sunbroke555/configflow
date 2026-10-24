@@ -1,4 +1,5 @@
 """Transactional deployment preparation, persistent ownership and result handling."""
+import base64
 import hashlib
 import io
 import json
@@ -136,7 +137,8 @@ def test_panel_geo_bundle_replay_keeps_profile_baseline_and_does_not_redownload(
 
 def test_bundle_preserves_binary_mrs_and_all_hashes(env, monkeypatch):
     _, _, agent, config = env
-    original = b'\x00MRS\xff\xfe\x80\r\n'
+    # Real Mihomo v1.19.32 domain MRS, preserving its compressed bytes.
+    original = base64.b64decode('KLUv/QQATQEAlAFNUlMBACgGqqqqAA1tb2MuZWxwbWF4ZS4rBQBgoJ3naGbBMgGu0wItMyBa')
     seen = []
     def fetch(url, **kwargs):
         seen.append((url, kwargs))
@@ -331,7 +333,7 @@ def test_classical_ip_part_skips_domains_but_ip_sources_stay_strict(env, monkeyp
             ruleset_downloads=[{'name': 'TMDB', 'url': 'https://rules.test/tmdb.list',
                                 'local_path': './rules/tmdb_ip.txt', 'behavior': behavior}])
     assert contents(build('classical'))['files/rules/tmdb_ip.txt'] == b'192.0.2.0/24'
-    with pytest.raises(DeploymentPreparationError, match='Invalid IP network'):
+    with pytest.raises(DeploymentPreparationError, match='ipcidr/text.*第 1 行'):
         build('ipcidr')
     with pytest.raises(DeploymentPreparationError, match='Invalid IP network'):
         convert_mosdns_rules(b'IP-CIDR,not-an-address', 'ip_set', mixed=True)

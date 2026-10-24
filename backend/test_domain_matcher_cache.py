@@ -312,7 +312,10 @@ def test_missing_url_source_stays_local_and_recovers_when_file_appears(rules, mo
     old = cache.local_matcher(config, 'default')
     assert old.match('matched.example') is None
     assert old._source.retry_at is not None
-    (root / 'domains.list').write_text('DOMAIN,matched.example')
+    from backend.utils.rule_utils import rule_cache_filename
+    path = root / rule_cache_filename(config['rule_library'][0])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('DOMAIN,matched.example')
     current = cache.local_matcher(config, 'default')
     assert current is not old
     assert current.match('matched.example')

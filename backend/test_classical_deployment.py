@@ -10,6 +10,18 @@ import yaml
 from backend.agents import deployment_bundle as bundles
 
 
+
+
+@pytest.fixture(autouse=True)
+def isolated_rule_cache(tmp_path, monkeypatch):
+    from backend.common import config as config_module
+    from backend.common.config_repository import ProfileRepository
+    monkeypatch.setattr(config_module, '_repository', ProfileRepository(tmp_path))
+    config_module.reset_config_context()
+    yield
+    config_module.reset_config_context()
+
+
 SOURCE = '+.tmdb.org\nexact.test\n192.0.2.1\n2001:db8::1\n'
 EXPECTED = ('DOMAIN-SUFFIX,tmdb.org\nDOMAIN,exact.test\n'
             'IP-CIDR,192.0.2.1/32,no-resolve\nIP-CIDR6,2001:db8::1/128,no-resolve\n')
@@ -46,6 +58,7 @@ def build(config, providers, service='mihomo', **kwargs):
 def test_snapshot_classical_providers_normalize_without_mutating_source(monkeypatch, source_type, rule_format):
     source = SOURCE if rule_format == 'text' else yaml.safe_dump({'payload': SOURCE.splitlines()})
     config = snapshot(source, source_type)
+    config['rule_library'][0]['format'] = rule_format
     original = deepcopy(config)
     calls = []
 
@@ -68,19 +81,31 @@ def test_snapshot_classical_providers_normalize_without_mutating_source(monkeypa
     assert config == original
 
 
-@pytest.mark.parametrize('behavior,rule_format,source', [
-    ('domain', 'text', SOURCE.encode()),
-    ('ipcidr', 'text', b'192.0.2.1/32\n'),
-    ('classical', 'mrs', b'\x00MRS\xff\xfe\x80'),
-    ('classical', 'text', b'\xff\xfe+\x00.\x00'),
+@pytest.mark.parametrize('behavior,source', [
+    ('domain', b'+.tmdb.org\nexact.test\n'),
+    ('ipcidr', b'192.0.2.1/32\n'),
 ])
-def test_non_classical_or_non_text_payload_is_byte_preserved(monkeypatch, behavior, rule_format, source):
+def test_valid_non_classical_remote_payload_is_byte_preserved(monkeypatch, behavior, source):
     monkeypatch.setattr(bundles, '_fetch_bytes', lambda *_args: source)
-    files = contents(build(snapshot(source_type='url'), {'shared': provider(behavior, rule_format)}))
+    config = snapshot(source_type='url')
+    config['rule_library'][0].update(behavior=behavior, format='text')
+    files = contents(build(config, {'shared': provider(behavior, 'text')}))
     assert files['rules/shared.list'] == source
 
 
-def test_shared_raw_download_does_not_rewrite_domain_consumer(monkeypatch):
+@pytest.mark.parametrize('rule_format,source', [
+    ('mrs', b'\x00MRS\xff\xfe\x80'),
+    ('text', b'\xff\xfe+\x00.\x00'),
+])
+def test_invalid_remote_binary_or_encoding_is_rejected(monkeypatch, rule_format, source):
+    monkeypatch.setattr(bundles, '_fetch_bytes', lambda *_args: source)
+    config = snapshot(source_type='url')
+    config['rule_library'][0]['format'] = rule_format
+    with pytest.raises(bundles.DeploymentPreparationError, match='MRS|UTF-8'):
+        build(config, {'shared': provider('classical', rule_format)})
+
+
+def test_shared_raw_download_rejects_incompatible_domain_consumer(monkeypatch):
     calls = []
 
     def fetch(url, *_args):
@@ -89,9 +114,8 @@ def test_shared_raw_download_does_not_rewrite_domain_consumer(monkeypatch):
 
     monkeypatch.setattr(bundles, '_fetch_bytes', fetch)
     domain = {**provider('domain'), 'path': './rules/domain.list'}
-    files = contents(build(snapshot(source_type='url'), {'classical': provider(), 'domain': domain}))
-    assert files['rules/shared.list'] == EXPECTED.encode()
-    assert files['rules/domain.list'] == SOURCE.encode()
+    with pytest.raises(bundles.DeploymentPreparationError, match='domain/text'):
+        build(snapshot(source_type='url'), {'classical': provider(), 'domain': domain})
     assert calls == ['https://rules.test/shared']
 
 
@@ -168,4 +192,17 @@ def test_bundle_layout_uses_library_format_like_rules_local_http(library_format,
         assert not yaml.compose(delivered).value[0][1].flow_style
     else:
         assert delivered == source
+    assert config == before
+
+
+def test_handwritten_ambiguous_classical_lines_keep_delivery_warnings(monkeypatch, caplog):
+    source = '.ambiguous.test\n*.ambiguous.test\nfull:ambiguous.test\n'
+    config = snapshot(source, 'content')
+    config['rule_library'][0]['format'] = 'text'
+    before = deepcopy(config)
+    monkeypatch.setattr('backend.utils.ruleset_content.validate_remote_rule_content',
+                        lambda *_args, **_kwargs: pytest.fail('Handwritten sources are not remote subscriptions'))
+    delivered = contents(build(config, {'shared': provider()}))
+    assert delivered['rules/shared.list'] == source.encode()
+    assert '3 unconverted lines' in caplog.text
     assert config == before

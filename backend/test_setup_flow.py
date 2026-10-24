@@ -1076,7 +1076,7 @@ def test_full_tun_route_instructions_download_the_forwarded_rule_sets(installed,
         downloads.append((url, kwargs.get('timeout')))
         if isinstance(reply['value'], Exception):
             raise reply['value']
-        return SimpleNamespace(status_code=200, text=reply['value'])
+        return SimpleNamespace(status_code=200, content=reply['value'].encode(), raise_for_status=lambda: None)
     monkeypatch.setattr('backend.routes.rules.request_rule', request_rule)
     response = client.post(f'/api/setup/{SESSION}/check', json={})
     assert response.status_code == 200, response.json
@@ -1128,7 +1128,7 @@ def test_route_rule_budget_bounds_a_stalled_download(installed, monkeypatch):
     def stalled(url, **kwargs):
         timeouts.append(kwargs.get('timeout'))
         release.wait(10)
-        return SimpleNamespace(status_code=200, text='91.108.4.0/22\n')
+        return SimpleNamespace(status_code=200, content=b'91.108.4.0/22\n', raise_for_status=lambda: None)
     monkeypatch.setattr('backend.routes.rules.request_rule', stalled)
     started = clock.monotonic()
     try:

@@ -3,6 +3,7 @@ from bisect import bisect_left
 import ipaddress
 import json
 import re
+import struct
 
 import yaml
 
@@ -320,6 +321,195 @@ def validate_domain_content(rule, previous=None):
     if checked['errors']:
         error = checked['errors'][0]
         raise ProfileValidationError(f"规则内容第 {error['line']} 行：{error['message']}" if error['line'] else error['message'])
+
+
+
+class RemoteRuleValidationError(ProfileValidationError):
+    """Downloaded rules did not match their declared type or representation."""
+
+    def __init__(self, rule, rule_format=None, errors=None):
+        if isinstance(rule, str):
+            self.errors = errors or [{'line': 0, 'before': '', 'message': rule}]
+            self.behavior = None
+            self.rule_format = rule_format
+            super().__init__(rule)
+            return
+        self.errors = errors
+        self.behavior = rule.get('behavior', 'domain')
+        self.rule_format = rule_format
+        name = rule.get('name') or rule.get('id') or '未命名规则集'
+        error = errors[0]
+        location = f"第 {error['line']} 行" if error.get('line') else '文件'
+        original = str(error.get('before', ''))
+        # A remote HTML response or oversized line should not overwhelm the UI.
+        preview = original if len(original) <= 200 else original[:200] + '…'
+        detail = f'，原文 {preview!r}' if original else ''
+        remainder = f'（共 {len(errors)} 处错误）' if len(errors) > 1 else ''
+        super().__init__(f'远端规则集「{name}」声明为 {self.behavior}/{rule_format}，'
+                         f'{location}{detail}：{error["message"]}{remainder}')
+
+
+def _remote_text_entries(content, rule_format):
+    """Return physical source locations without rendering or modifying the source."""
+    source_lines = content.splitlines()
+    errors = []
+
+    def problem(line, message, before=None):
+        if before is None:
+            before = source_lines[line - 1] if 0 < line <= len(source_lines) else ''
+        errors.append({'line': line, 'before': before, 'message': message})
+
+    if rule_format != 'yaml':
+        if _has_yaml_payload(content):
+            first = next((i for i, value in enumerate(source_lines, 1)
+                          if value.lstrip('\ufeff \t') and not value.lstrip().startswith(('#', '//'))), 1)
+            problem(first, '声明为 text，但内容是 YAML payload；请检查订阅链接或选择 YAML 格式。')
+            return [], errors
+        return [(number, value.removeprefix('\ufeff') if number == 1 else value)
+                for number, value in enumerate(source_lines, 1)], errors
+    try:
+        root = yaml.compose(content)
+        if not isinstance(root, yaml.MappingNode):
+            problem(1, '声明为 YAML，但文件需要包含 payload 列表；请检查订阅链接或文件格式。')
+            return [], errors
+        pairs = [(key, value) for key, value in root.value
+                 if isinstance(key, yaml.ScalarNode) and key.value == 'payload']
+        if len(pairs) != 1:
+            problem(pairs[1][0].start_mark.line + 1 if len(pairs) > 1 else 1,
+                    'YAML 规则需要唯一的 payload 列表。')
+            return [], errors
+        _, payload = pairs[0]
+        if not isinstance(payload, yaml.SequenceNode):
+            problem(payload.start_mark.line + 1, 'YAML payload 必须是列表。')
+            return [], errors
+        for token in yaml.scan(content):
+            if isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken)):
+                problem(token.start_mark.line + 1, '远端 YAML 规则不支持锚点或别名；请使用展开后的 payload 列表。')
+        entries = []
+        for node in payload.value:
+            number = node.start_mark.line + 1
+            if (not isinstance(node, yaml.ScalarNode) or node.tag != 'tag:yaml.org,2002:str'
+                    or node.style in ('|', '>') or node.start_mark.line != node.end_mark.line
+                    or '\n' in node.value or '\r' in node.value):
+                problem(number, 'payload 每项必须是单行文本；不接受数字、布尔值、嵌套结构或多行内容。')
+                continue
+            entries.append((number, node.value))
+        return entries, errors
+    except (yaml.YAMLError, ValueError, RecursionError) as error:
+        mark = getattr(error, 'problem_mark', None)
+        message = getattr(error, 'problem', None) or str(error)
+        problem(mark.line + 1 if mark else 0, 'YAML 格式无效：' + message)
+        return [], errors
+
+
+
+def _validate_remote_mrs(content, rule):
+    """Check the MRS envelope and declared behavior without decoding its rule tree.
+
+    MRS v1 stores magic, behavior, signed count and reserved-extra length inside
+    a zstd stream. The compressed stream must be complete, including its checksum.
+    Trie/IP-set internals remain the destination core's responsibility.
+    """
+    import zstandard
+
+    def fail(message):
+        raise RemoteRuleValidationError(rule, 'mrs', [{'line': 0, 'before': '', 'message': message}])
+
+    if not isinstance(content, bytes):
+        fail('MRS 必须按原始二进制读取，不能作为文本校验。')
+    header = bytearray()
+    total = 0
+    decoder = zstandard.ZstdDecompressor(max_window_size=128 * 1024).decompressobj()
+    try:
+        # Small input chunks bound each temporary decoded allocation; only the
+        # fixed header is retained. Large legitimate providers can stream through.
+        for offset in range(0, len(content), 1024):
+            pending = content[offset:offset + 1024]
+            while pending:
+                if decoder.eof:
+                    decoder = zstandard.ZstdDecompressor(max_window_size=128 * 1024).decompressobj()
+                decoded = decoder.decompress(pending)
+                total += len(decoded)
+                if total > 256 * 1024 * 1024:
+                    fail('MRS 解压后超过 256 MiB 校验上限。')
+                header.extend(decoded[:max(0, 21 - len(header))])
+                pending = decoder.unused_data
+        if not decoder.eof:
+            fail('MRS 的 Zstandard 压缩流不完整或已截断。')
+    except zstandard.ZstdError:
+        fail('MRS 的 Zstandard 压缩流无效或校验失败；请检查订阅链接和文件格式。')
+    if len(header) != 21 or header[:4] != b'MRS\x01':
+        fail('不是有效 MRS v1 文件：文件头缺失或版本不受支持。')
+    actual = {0: 'domain', 1: 'ipcidr'}.get(header[4])
+    if actual is None:
+        fail(f'MRS 文件包含未知规则类型标记 {header[4]}。')
+    if actual != rule.get('behavior', 'domain'):
+        fail(f'MRS 文件实际类型为 {actual}，与声明的 {rule.get("behavior", "domain")} 不匹配。')
+    count, extra_length = struct.unpack('>qq', header[5:21])
+    if count < 0:
+        fail('MRS 规则数量不能为负数。')
+    if extra_length < 0 or extra_length > total - 21:
+        fail('MRS 扩展字段长度无效或内容已截断。')
+    if total - 21 - extra_length == 0:
+        fail('MRS 规则正文缺失。')
+
+
+def validate_remote_rule_content(content, rule, config_data=None, *, rule_format=None):
+    """Validate a remote response without conversion; raise with source diagnostics.
+
+    Classical bare domains/IPs remain valid under the existing delivery contract.
+    This function never returns a normalized replacement for the original bytes.
+    """
+    from backend.converters.common import ruleset_format
+
+    behavior = rule.get('behavior', 'domain')
+    declared = rule.get('format')
+    selected_format = rule_format or ruleset_format(rule, config_data or {})
+    metadata_error = _metadata_error(behavior, declared, 'url')
+    if not metadata_error:
+        metadata_error = _metadata_error(behavior, selected_format, 'url')
+    if metadata_error:
+        raise RemoteRuleValidationError(rule, selected_format,
+                                        [{'line': 0, 'before': '', 'message': metadata_error}])
+    if selected_format == 'mrs':
+        _validate_remote_mrs(content, rule)
+        return
+    if isinstance(content, bytes):
+        try:
+            content = content.decode('utf-8')
+        except UnicodeDecodeError as error:
+            prefix = content[:error.start].decode('utf-8', errors='ignore')
+            line_breaks = '\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029'
+            line = len(prefix.splitlines()) + (0 if prefix and prefix[-1] not in line_breaks else 1)
+            raise RemoteRuleValidationError(rule, selected_format, [{
+                'line': max(1, line), 'before': repr(content[error.start:error.end]),
+                'message': '内容不是有效 UTF-8 文本；请检查订阅链接、编码或是否误选了 MRS 格式。',
+            }]) from None
+    if not isinstance(content, str):
+        raise RemoteRuleValidationError(rule, selected_format,
+                                        [{'line': 0, 'before': '', 'message': '规则内容必须是文本或字节。'}])
+    entries, errors = _remote_text_entries(content, selected_format)
+    for number, original in entries:
+        value = original.strip()
+        if not value or value.startswith(('#', '//')):
+            continue
+        error = None
+        if behavior == 'ipcidr':
+            error = cidr_error(value)
+        elif behavior == 'classical' and (',' in value or value.upper() in RULE_TYPES):
+            error = classical_line_error(value)
+        else:
+            try:
+                # Inspect the existing accepted range but discard any proposal.
+                # No source/cache data is modified by this validation.
+                (_classical_line if behavior == 'classical' else _domain_line)(value)
+            except ValueError as failure:
+                error = str(failure).replace('，已保留原文', '')
+        if error:
+            errors.append({'line': number, 'before': original, 'message': error})
+    if errors:
+        errors.sort(key=lambda item: item['line'])
+        raise RemoteRuleValidationError(rule, selected_format, errors)
 
 
 def read_rule_payload(content):

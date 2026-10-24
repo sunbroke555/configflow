@@ -108,6 +108,22 @@
         </template>
       </Toolbar>
 
+      <Alert v-if="cacheRequestError || Object.keys(cacheFailures).length" class="mb-4" data-cache-errors>
+        <AlertDescription>
+          <p class="m-0 text-[13px] font-semibold text-foreground">规则集内容更新失败</p>
+          <p v-if="cacheRequestError" class="mt-2 whitespace-pre-wrap break-all text-destructive-accent">{{ cacheRequestError }}</p>
+          <ul v-if="Object.keys(cacheFailures).length" class="m-0 mt-2 list-none divide-y divide-border p-0">
+            <li v-for="failure in cacheFailures" :key="failure.id" :data-cache-failure="failure.id" class="min-w-0 py-2 first:pt-0 last:pb-0">
+              <p class="m-0 break-all text-[13px] font-medium text-foreground">{{ failure.name }}</p>
+              <p class="m-0 mt-1 text-xs" :class="failure.cache_retained ? 'text-warning-accent' : 'text-destructive-accent'">
+                {{ failure.cache_retained ? '已保留上一次有效缓存，继续使用原有内容。' : '没有可用的有效缓存，请修正规则来源或类型后重试。' }}
+              </p>
+              <p class="m-0 mt-1 whitespace-pre-wrap break-all text-xs text-foreground">{{ failure.error }}</p>
+            </li>
+          </ul>
+        </AlertDescription>
+      </Alert>
+
       <ReorderBar
         :active="reorder.active.value"
         :saving="reorder.saving.value"
@@ -498,11 +514,14 @@
 
           <p v-if="form.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
 
+          <Alert v-if="saveError" class="border-destructive-accent/30" data-rule-save-error>
+            <AlertDescription class="whitespace-pre-wrap break-all text-destructive-accent">{{ saveError }}</AlertDescription>
+          </Alert>
+
           <div class="flex items-center gap-2.5">
             <Switch
               id="lib-enabled"
               v-model="form.enabled"
-              @update:model-value="value => handleFormStatusChange(Boolean(value))"
             />
             <Label for="lib-enabled" class="text-[13px] text-muted-foreground">
               {{ form.enabled ? '规则启用中' : '规则已停用' }}
@@ -907,8 +926,18 @@ const batchImportFailures = ref<string[]>([])
 const batchImportResults = new Map<string, 'saved' | 'pending'>()
 const isEdit = ref(false)
 const testing = ref(false)
+interface RuleCacheResult {
+  id: string
+  name: string
+  success: boolean
+  error?: string
+  cache_retained?: boolean
+}
 const caching = ref(false) // 批量缓存加载状态
+const cacheFailures = ref<Record<string, RuleCacheResult>>({})
+const cacheRequestError = ref('')
 const savingRule = ref(false)
+const saveError = ref('')
 const testResults = ref<Record<string, boolean>>({})
 const currentRuleSet = ref<RuleLibraryItem | null>(null)
 const rulesContainer = ref<HTMLElement | null>(null)
@@ -1025,12 +1054,17 @@ const loadRuleLibrary = async () => {
   try {
     const { data } = await api.get('/rule-library')
     ruleLibrary.value = data
+    const existingIds = new Set(ruleLibrary.value.map(rule => rule.id))
+    for (const id of Object.keys(cacheFailures.value)) {
+      if (!existingIds.has(id)) delete cacheFailures.value[id]
+    }
   } catch (error) {
     notify.error('加载规则库失败')
   }
 }
 
 const showAddDialog = () => {
+  saveError.value = ''
   isEdit.value = false
   form.value = {
     id: `lib_${Date.now()}`,
@@ -1045,6 +1079,7 @@ const showAddDialog = () => {
 }
 
 const editRule = (row: RuleLibraryItem) => {
+  saveError.value = ''
   isEdit.value = true
   form.value = libraryPayload(row)
   dialogVisible.value = true
@@ -1053,40 +1088,6 @@ const editRule = (row: RuleLibraryItem) => {
 const isFullUrl = (url: string): boolean => {
   if (!url) return false
   return url.startsWith('http://') || url.startsWith('https://')
-}
-
-const testSingleRule = async (url: string): Promise<boolean> => {
-  try {
-    if (!isFullUrl(url)) {
-      return true
-    }
-
-    const { data } = await api.post('/rule-library/test-single', { url })
-    if (data.success) {
-      return data.available
-    }
-    return false
-  } catch (error) {
-    return false
-  }
-}
-
-const handleFormStatusChange = async (enabled: boolean) => {
-  if (!enabled) {
-    return
-  }
-
-  if (form.value.source_type === 'url' && form.value.url && isFullUrl(form.value.url)) {
-    const loadingToast = notify.loading('正在测试规则连通性…')
-    const isAvailable = await testSingleRule(form.value.url)
-    notify.dismiss(loadingToast)
-
-    if (!isAvailable) {
-      notify.error('规则地址无法访问，无法开启')
-      form.value.enabled = false
-      return
-    }
-  }
 }
 
 const performSaveRule = async () => {
@@ -1110,23 +1111,6 @@ const performSaveRule = async () => {
     form.value.content = checked
   }
 
-  let isAvailable = true
-
-  if (form.value.source_type === 'url' && form.value.url) {
-    const loadingToast = notify.loading('正在测试规则连通性…')
-    isAvailable = await testSingleRule(form.value.url)
-    notify.dismiss(loadingToast)
-
-    if (!isAvailable) {
-      const ok = await confirm('该规则地址无法访问，规则将被添加但状态为关闭。是否继续？', {
-        title: '连通性测试失败',
-        confirmText: '继续添加'
-      })
-      if (!ok) return
-      form.value.enabled = false
-    }
-  }
-
   const payload = { ...libraryPayload(form.value), ...(form.value.source_type === 'content' ? { format: form.value.format || detectRuleContentFormat(form.value.content || '') } : {}) }
   try {
     if (isEdit.value) {
@@ -1134,20 +1118,26 @@ const performSaveRule = async () => {
       notify.success('共享来源已更新，各配置的策略、顺序和启用状态保持不变')
     } else {
       await api.post('/rule-library', payload)
-      notify.success(isAvailable ? '添加成功' : '添加成功（规则已关闭）')
+      notify.success('添加成功')
     }
+    if (form.value.id) delete cacheFailures.value[form.value.id]
     dialogVisible.value = false
     loadRuleLibrary()
   } catch (error) {
-    notify.error(errorMessage(error, '保存失败'))
+    saveError.value = errorMessage(error, '保存失败')
+    notify.error(saveError.value)
   }
 }
 
 const saveRule = async () => {
   if (savingRule.value) return
   savingRule.value = true
+  saveError.value = ''
   try { await performSaveRule() }
-  catch (error) { notify.error(errorMessage(error, '检查规则内容失败')) }
+  catch (error) {
+    saveError.value = errorMessage(error, '检查规则内容失败')
+    notify.error(saveError.value)
+  }
   finally { savingRule.value = false }
 }
 
@@ -1170,18 +1160,6 @@ const handleToggle = async (rule: RuleLibraryItem) => {
 }
 
 const toggleEnabled = async (row: RuleLibraryItem) => {
-  if (row.enabled && row.source_type === 'url' && isFullUrl(row.url)) {
-    const loadingToast = notify.loading('正在测试规则连通性…')
-    const isAvailable = await testSingleRule(row.url)
-    notify.dismiss(loadingToast)
-
-    if (!isAvailable) {
-      notify.error('规则地址无法访问，无法开启')
-      row.enabled = false
-      return
-    }
-  }
-
   try {
     await api.put(`/rule-library/${row.id}`, libraryPayload(row))
     notify.success(row.enabled ? '共享来源已开启，各配置启用状态保持不变' : '共享来源已关闭，各配置启用状态保持不变')
@@ -1399,13 +1377,14 @@ const batchTestConnectivity = async () => {
 
 const batchCacheRules = async () => {
   const ok = await confirm(
-    `将下载选中的 ${selectedRules.value.length} 个规则集内容并保存在服务器上。下载失败的来源会被停用，各配置的启用状态不变。是否继续？`,
+    `将下载选中的 ${selectedRules.value.length} 个规则集，并按所选类型校验。内容不匹配时不转换；更新失败会保留上一次有效缓存，启用状态不变。是否继续？`,
     { title: '批量下载规则集内容' }
   )
   if (!ok) return
 
   try {
     caching.value = true
+    cacheRequestError.value = ''
 
     const { data } = await api.post('/rule-library/cache', {
       rule_ids: selectedRules.value
@@ -1416,24 +1395,28 @@ const batchCacheRules = async () => {
       const failedCount = data.failed_count
       const totalCount = data.total_count
 
-      // 清空选择
-      selectedRules.value = []
+      const results: RuleCacheResult[] = data.results || []
+      for (const result of results) {
+        if (result.success) delete cacheFailures.value[result.id]
+        else cacheFailures.value[result.id] = { ...result, error: result.error || '更新失败，请重试。' }
+      }
+      // 保留失败项的选择，便于修正后重试；其他来源的失败详情继续可见。
+      selectedRules.value = results.filter(result => !result.success).map(result => result.id)
 
       if (failedCount > 0) {
-        notify.warning(`下载完成：成功 ${successCount} 个，失败 ${failedCount} 个。下载失败的来源已停用，各配置的启用状态不变。`)
+        notify.warning(`下载完成：成功 ${successCount} 个，失败 ${failedCount} 个。失败详情与缓存状态见下方，启用状态不变。`)
       } else {
         notify.success(`已下载 ${totalCount} 个规则集的内容。`)
       }
 
       await loadRuleLibrary()
     } else {
-      notify.error('下载规则集内容失败：' + data.message)
+      cacheRequestError.value = data.message || '下载规则集内容失败'
+      notify.error(cacheRequestError.value)
     }
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      notify.error('下载规则集内容失败')
-      console.error('批量缓存失败:', error)
-    }
+  } catch (error) {
+    cacheRequestError.value = errorMessage(error, '下载规则集内容失败')
+    notify.error(cacheRequestError.value)
   } finally {
     caching.value = false
   }

@@ -189,6 +189,8 @@ def test_compose_new_library_url_and_content_one_commit(space, monkeypatch):
     client, repository = space
     cached = []
     monkeypatch.setattr('backend.utils.rule_utils.save_rule_to_local', cached.append)
+    monkeypatch.setattr('backend.utils.rule_utils.read_rule_source_content', lambda _: 'example.test')
+    monkeypatch.setattr('backend.utils.rule_utils.write_validated_rule_cache', lambda rule, content: cached.append(rule))
     shared, profile = repository.get_shared()['_revision'], repository.get_profile('other')['_revision']
     response = compose(client, {'kind': 'new_library', 'library': {
         'id': 'chosen', 'name': '广告', 'source_type': 'url', 'url': 'https://example.test/ads.list',

@@ -197,4 +197,4 @@ def test_mosdns_rule_proxy_url_round_trips_remote_url_and_special_token(profile_
 
     generated_url = get_mosdns_ruleset_downloads(config)[0]["url"]
 
-    _assert_query(generated_url, url=remote_url, token="internal /&?")
+    _assert_query(generated_url, url=remote_url, source_id="rules-1", token="internal /&?")

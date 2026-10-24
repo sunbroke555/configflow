@@ -356,21 +356,52 @@ describe('rule editor dialog', () => {
     }), 'p1')
   })
 
-  it('asks before saving an unreachable URL as a disabled ruleset and keeps its DNS for later', async () => {
-    network.post.mockImplementation(async () => ({ data: { success: true, available: false } }))
-    await render({ initialSource: 'new_library' })
+  it('preserves the remote source draft, enabled state and DNS when server type validation fails', async () => {
+    const message = '规则集广告拦截（domain）第 4 行：DOMAIN-SUFFIX,example.com\nDomain 不接受 Classical 行。'
+    network.compose.mockRejectedValueOnce({ isAxiosError: true, response: { data: { message } } })
+    const wrapper = await render({ initialSource: 'new_library' })
     await type('#rule-library-name', '广告拦截')
     await type('#rule-library-url', 'https://rules.test/ads.list')
     await pickDns('黑洞')
     await click(save())
-    expect(network.post).toHaveBeenCalledWith('/rule-library/test-single', { url: 'https://rules.test/ads.list' })
-    expect(confirmState.description).toBe('地址暂时无法访问，仍保存为停用的规则集？DNS「黑洞」会在启用后生效')
-    settleConfirm('confirm')
-    await flushPromises()
+    expect(network.post).not.toHaveBeenCalled()
+    expect(confirmState.open).toBe(false)
     expect(network.compose).toHaveBeenCalledWith(expect.objectContaining({
-      source: { kind: 'new_library', library: { name: '广告拦截', source_type: 'url', url: 'https://rules.test/ads.list', behavior: 'domain', format: 'text', enabled: false } },
+      source: { kind: 'new_library', library: { name: '广告拦截', source_type: 'url', url: 'https://rules.test/ads.list', behavior: 'domain', enabled: true } },
       dns: 'blackhole'
     }), 'p1')
+    expect(document.querySelector('[data-rule-save-error]')?.textContent).toBe(message)
+    expect(document.querySelector<HTMLInputElement>('#rule-library-url')?.value).toBe('https://rules.test/ads.list')
+    expect(notify.error).toHaveBeenCalledWith(message)
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+    await click(save())
+    expect(document.querySelector('[data-rule-save-error]')).toBeNull()
+    expect(wrapper.emitted('update:open')).toEqual([[false]])
+  })
+
+  it('leaves automatic URL format detection to the server instead of forcing Text', async () => {
+    await render({ initialSource: 'new_library' })
+    await type('#rule-library-name', 'YAML domains')
+    await type('#rule-library-url', 'https://rules.test/domains.yaml')
+    await click(save())
+    expect(network.compose.mock.calls[0]![0].source.library).toEqual({
+      name: 'YAML domains', source_type: 'url', url: 'https://rules.test/domains.yaml', behavior: 'domain', enabled: true
+    })
+  })
+
+  it('lets users declare YAML for a txt URL after a format error without losing the source', async () => {
+    network.compose.mockRejectedValueOnce({ isAxiosError: true, response: { data: { message: '内容是 YAML payload，请选择 YAML 格式。' } } })
+    const wrapper = await render({ initialSource: 'new_library' })
+    await type('#rule-library-name', 'YAML in txt')
+    await type('#rule-library-url', 'https://rules.test/direct.txt')
+    await click(save())
+    expect(text()).toContain('内容是 YAML payload，请选择 YAML 格式。')
+    await choose(wrapper, '内容格式', 'yaml')
+    await click(save())
+    expect(network.compose.mock.calls.at(-1)![0].source.library).toEqual({
+      name: 'YAML in txt', source_type: 'url', url: 'https://rules.test/direct.txt', behavior: 'domain', format: 'yaml', enabled: true
+    })
+    expect(document.querySelector('[data-rule-save-error]')).toBeNull()
   })
 
   it('disables saving when nothing can be added', async () => {

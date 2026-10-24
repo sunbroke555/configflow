@@ -163,6 +163,12 @@ def load_sources(config, router, download=None):
                 raise RouterError('所选规则内容总量超过 16 MiB，停止自动同步')
         content = fetched[key]
         try:
+            if source.get('source_type', 'url') == 'url':
+                from backend.utils.ruleset_content import validate_remote_rule_content, RemoteRuleValidationError
+                try:
+                    validate_remote_rule_content(content, source, config_data=config)
+                except RemoteRuleValidationError as error:
+                    raise RouterError(str(error)) from None
             record = classify(content, source.get('behavior') or item.get('behavior') or 'domain')
         except RouterError as error:
             raise RouterError(f'规则集「{name}」：{error}') from None

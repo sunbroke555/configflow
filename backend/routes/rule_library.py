@@ -11,11 +11,11 @@ from backend.common.auth import require_auth
 from backend.common.config import get_shared_config, save_shared_config, update_shared_config_transaction, get_config, get_repository, get_system_config, save_system_config
 from backend.common.config_repository import ProfileRepositoryError, RuleLibraryCreationUncertain
 from backend.utils.reorder import resolve_new_order
-from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local, rule_cache_filename, read_rule_source_content
+from backend.utils.rule_utils import sanitize_rule_name, get_rules_dir, save_rule_to_local, rule_cache_filename, read_rule_source_content, read_validated_rule_cache, write_validated_rule_cache
 from backend.utils.logger import get_logger
 from backend.utils.rule_fetch import request_rule
 from backend.utils.url_utils import safe_exception_details
-from backend.utils.ruleset_content import inspect_domain_content, validate_domain_content, read_rule_payload, append_rule_lines
+from backend.utils.ruleset_content import inspect_domain_content, validate_domain_content, read_rule_payload, append_rule_lines, RemoteRuleValidationError
 
 logger = get_logger(__name__)
 
@@ -159,11 +159,39 @@ def handle_rule_library_item(rule_id):
     new_rule = request.get_json() if request.method == 'PUT' else None
     base_url = request.url_root.rstrip('/')
     previous, warnings = {}, []
+    prepared = None
+    source_changed = False
+    if request.method == 'PUT':
+        if not isinstance(new_rule, dict):
+            raise ProfileValidationError('规则库请求必须是 JSON 对象')
+        baseline = next((item for item in get_shared_config().get('rule_library', [])
+                         if item.get('id') == rule_id), None)
+        if baseline is None:
+            raise NotFound('Rule not found')
+        new_rule['id'] = rule_id
+        validate_domain_content(new_rule, baseline)
+        source_fields = ('url', 'source_type', 'behavior', 'format', 'content')
+        source_changed = any(new_rule.get(key) != baseline.get(key) for key in source_fields)
+        if source_changed:
+            import requests
+            try:
+                prepared = read_rule_source_content(new_rule)
+            except requests.RequestException:
+                return jsonify({'success': False, 'message': '规则源下载失败，未修改规则，原配置与有效缓存已保留'}), 502
+            if prepared is None:
+                raise ProfileValidationError('请提供有效的规则来源和订阅地址')
+        else:
+            # A rename must migrate a valid legacy name cache before removing it.
+            # Metadata edits stay possible even when the remote source is down.
+            prepared = read_validated_rule_cache(baseline)
     def mutate(shared):
         library = shared.setdefault('rule_library', [])
         old = next((item for item in library if item.get('id') == rule_id), None)
         if old is None:
             raise NotFound('Rule not found')
+        if request.method == 'PUT' and old != baseline:
+            from werkzeug.exceptions import Conflict
+            raise Conflict('规则集已在其他页面更新，请重新读取后再编辑。')
         previous.update(old)
         if request.method == 'DELETE':
             library.remove(old)
@@ -196,12 +224,23 @@ def handle_rule_library_item(rule_id):
     if new_rule is None:
         update_shared_config_transaction(mutate)
     else:
+        # Remote cache paths include the proposed declaration. Persist valid
+        # bytes before committing it, so a failed disk write cannot publish a
+        # new URL/type without its cache. Other declarations keep their bytes.
+        if prepared is not None and new_rule.get('source_type', 'url') == 'url':
+            target = os.path.join(get_rules_dir(), rule_cache_filename(new_rule))
+            if source_changed or not os.path.exists(target):
+                write_validated_rule_cache(new_rule, prepared)
         update_shared_and_config_transaction(mutate, rebuild, native_profiles)
     if new_rule is None:
         try:
             os.remove(os.path.join(get_rules_dir(), rule_cache_filename(previous)))
         except FileNotFoundError:
             pass
+    if new_rule is not None and new_rule.get('source_type') == 'content' and prepared is not None:
+        # Handwritten sources share one stable path; do not overwrite it before
+        # a possibly rejected metadata/profile transaction has committed.
+        write_validated_rule_cache(new_rule, prepared)
     old_name = previous.get('name')
     if old_name and (new_rule is None or new_rule.get('name') != old_name):
         old_path = os.path.join(get_rules_dir(), f'{sanitize_rule_name(old_name)}.list')
@@ -210,7 +249,6 @@ def handle_rule_library_item(rule_id):
         except FileNotFoundError:
             pass
     if new_rule is not None:
-        save_rule_to_local(new_rule)
         usages = get_repository().get_resource_usage('rule_library', rule_id)
         return jsonify({'success': True, 'data': new_rule, 'synced_count': len(usages), 'warnings': warnings})
     return jsonify({'success': True})
@@ -444,7 +482,8 @@ def cache_rules():
                     'id': rule.get('id', ''),
                     'name': rule.get('name', ''),
                     'success': False,
-                    'error': safe_exception_details(e)
+                    'error': str(e) if isinstance(e, RemoteRuleValidationError) else safe_exception_details(e),
+                    'cache_retained': read_validated_rule_cache(rule, config_data) is not None
                 }
 
         # 使用线程池并发缓存
@@ -454,17 +493,9 @@ def cache_rules():
                 result = future.result()
                 results.append(result)
 
-                # 如果缓存失败，记录ID并自动关闭
                 if not result['success']:
                     failed_rule_ids.append(result['id'])
-                    # 在规则仓库中关闭该规则
-                    for rule in config_data['rule_library']:
-                        if rule['id'] == result['id']:
-                            rule['enabled'] = False
-                            break
-
-        # Preserve each profile's independent enabled preference.
-        save_shared_config(config_data)
+        # A failed refresh keeps source preferences and the valid cache intact.
 
         success_count = len([r for r in results if r['success']])
 

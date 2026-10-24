@@ -313,13 +313,9 @@ def _served_rule_content(library_item) -> bytes:
     摘要必须按缓存文件算：配置先提交、缓存文件后写入，按配置算会让 Agent 在文件更新前就刷新，
     Mihomo 拉到旧内容后 Agent 又以为已经刷新过，新规则要等 rule-provider 的 interval 才生效。
     """
-    from backend.utils.rule_utils import rule_cache_read_path
-    path = rule_cache_read_path(library_item)
-    try:
-        with open(path, 'rb') as handle:
-            return handle.read()
-    except OSError:
-        return (library_item.get('content') or '').encode('utf-8')
+    from backend.utils.rule_utils import read_validated_rule_cache
+    cached = read_validated_rule_cache(library_item)
+    return cached if cached is not None else (library_item.get('content') or '').encode('utf-8')
 
 
 def proxy_probe_path(config, settings=None) -> Optional[str]:

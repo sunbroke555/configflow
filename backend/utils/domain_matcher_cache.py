@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import os
+from backend.common.config_repository import ProfileValidationError
 import threading
 import time
 from collections import OrderedDict
@@ -80,11 +81,14 @@ class _LocalSource:
                     # Keep an old handle's retry bounded after a stable read.
                     # The registry signature still detects edits on acquisition.
                     self.stamps[path] = after
+                if (library_rule or item).get('source_type', 'url') == 'url':
+                    from backend.utils.ruleset_content import validate_remote_rule_content
+                    validate_remote_rule_content(content, library_rule or item)
                 return content
             except FileNotFoundError:
                 if self.stamps.get(path) is not None:
                     self._retry(item, library_rule)
-            except (OSError, UnicodeError):
+            except (OSError, UnicodeError, ProfileValidationError):
                 self._retry(item, library_rule)
         if library_rule and library_rule.get('source_type', 'url') == 'content':
             return library_rule.get('content', '')

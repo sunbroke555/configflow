@@ -20,7 +20,7 @@ def test_complete_mixed_archive_deduplicates_fetch_and_excludes_runtime_state(mo
                                                   'behavior': 'classical', 'url': 'https://rules.test/mixed'}]}
     original = deepcopy(config)
     calls = []
-    def fetch(url, config_data):
+    def fetch(url, config_data, **_kwargs):
         assert config_data['profile_id'] == 'office'
         calls.append(url)
         if url.endswith('mixed'):
