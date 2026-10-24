@@ -28,16 +28,16 @@ describe('RouterOS policy objects', () => {
   it('offers add actions even without published objects and emits edits with saved roles', async () => {
     vi.mocked(routerApi.policy).mockResolvedValue(response() as any)
     const wrapper = await setup()
-    await click(wrapper, '新增来源'); expect(wrapper.emitted('add-source')).toHaveLength(1)
+    await click(wrapper, '管理来源设备'); expect(wrapper.emitted('add-source')).toHaveLength(1)
     await click(wrapper, '编辑目的规则集'); expect(wrapper.emitted('edit-destinations')).toHaveLength(1)
     const object = { id: '*1', kind: 'addresses', status: 'changed', editor: 'source', configured_address: '192.0.2.105/32', fields: { list: 'renamed', address: '192.0.2.99' } }
     vi.mocked(routerApi.policy).mockResolvedValue(response([object]) as any)
-    await click(wrapper, '刷新对象'); await click(wrapper, '编辑来源')
+    await click(wrapper, '刷新对象'); await click(wrapper, '在客户端设备中管理')
     expect(wrapper.emitted('edit')?.[0]).toEqual([object])
     expect(wrapper.findAll('thead th').at(-1)?.text()).toBe('操作')
-    expect(wrapper.findAll('tbody td').at(-1)?.text()).toBe('编辑来源')
+    expect(wrapper.findAll('tbody td').at(-1)?.text()).toBe('在客户端设备中管理')
     await wrapper.setProps({ disabled: true })
-    await click(wrapper, '编辑来源'); expect(wrapper.emitted('edit')).toHaveLength(1)
+    await click(wrapper, '在客户端设备中管理'); expect(wrapper.emitted('edit')).toHaveLength(1)
   })
   it('pages large address lists, searches fields without loading source editors', async () => {
     vi.mocked(routerApi.policy).mockResolvedValue(response(Array.from({ length: 123 }, (_, i) => ({

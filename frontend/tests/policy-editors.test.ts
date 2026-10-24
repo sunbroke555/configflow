@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import PolicySourceEditor from '@/components/routers/PolicySourceEditor.vue'
 import PolicyDestinationEditor from '@/components/routers/PolicyDestinationEditor.vue'
-import { sourcePolicyIndex } from '@/lib/policySourceEditor'
 import api, { ruleContentApi } from '@/api'
 import { confirm } from '@/lib/feedback'
 import { CLASSICAL_CONTENT_HINT } from '@/lib/ruleset-content'
@@ -10,7 +8,6 @@ import { scopedRequests } from '@/profileContext'
 vi.mock('@/api', () => ({ default: { post: vi.fn() }, ruleContentApi: { read: vi.fn(), save: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), warning: vi.fn() } }))
 const wrappers: VueWrapper[] = []
-const source = { ip: '192.0.2.105', name: 'NAS', mode: 'smart' as const }
 const field = (id: string) => new DOMWrapper(document.getElementById(id) as HTMLInputElement)
 const button = (text: string) => Array.from(document.querySelectorAll('button')).find(row => row.textContent?.trim() === text)!
 const click = async (text: string) => { button(text).click(); await flushPromises() }
@@ -31,33 +28,6 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()) })
 
 describe('policy authoring editors', () => {
-  it('edits the original source address, normalizes it and rejects duplicates without touching drafts', async () => {
-    const policies = [source, { ...source, ip: '192.0.2.106' }]
-    const w = mount(PolicySourceEditor, { attachTo: document.body, props: { policy: source, policies } }); wrappers.push(w)
-    await flushPromises()
-    await field('source-edit-ip').setValue('192.0.2.106/32')
-    await field('policy-source-form').trigger('submit')
-    expect(w.emitted('apply')).toBeUndefined()
-    expect(document.body.textContent).toContain('此 IP 或网段已存在')
-    expect(policies[0].ip).toBe('192.0.2.105')
-    await field('source-edit-ip').setValue('192.0.2.119/28')
-    await field('policy-source-form').trigger('submit')
-    expect(w.emitted('apply')?.[0]).toEqual([{ ...source, ip: '192.0.2.112/28' }])
-  })
-  it('maps split ranges back to the most specific original source but not merged unrelated sources', () => {
-    const rows = [{ ...source, ip: '192.0.2.0/24' }, { ...source, ip: '192.0.2.64/26' }]
-    expect(sourcePolicyIndex('192.0.2.80/28', rows)).toBe(1)
-    expect(sourcePolicyIndex('192.0.2.105/32', [source])).toBe(0)
-    expect(sourcePolicyIndex('192.0.2.0/24', [{ ...source, ip: '192.0.2.0/25' }, { ...source, ip: '192.0.2.128/25' }])).toBe(-1)
-    expect(sourcePolicyIndex('invalid', rows)).toBe(-1)
-  })
-  it('protects unsaved source changes on cancel', async () => {
-    const w = mount(PolicySourceEditor, { attachTo: document.body, props: { policies: [] } }); wrappers.push(w)
-    await flushPromises(); await field('source-edit-ip').setValue('192.0.2.101')
-    await click('取消'); expect(w.emitted('close')).toBeUndefined()
-    vi.mocked(confirm).mockResolvedValueOnce(true)
-    await click('取消'); expect(w.emitted('close')).toHaveLength(1)
-  })
   it('loads only the exact shared source and submits content with a pinned revision', async () => {
     const w = await destination()
     expect(ruleContentApi.read).toHaveBeenCalledWith('library')

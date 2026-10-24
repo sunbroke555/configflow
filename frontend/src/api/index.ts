@@ -331,7 +331,7 @@ export const routerApi = {
     api.post<RouterRuleSyncResponse>(`/routers/${id}/rule-sync`, null, profileOptions(profileId)),
   policySettings: (id: string, profileId: string) =>
     api.get<{ success: boolean; message?: string; workspace: PolicyWorkspace }>(`/routers/${id}/policy-settings`, profileOptions(profileId)),
-  savePolicySettings: (id: string, draft: { revision: string; names_revision: string; router: Pick<PolicyWorkspace['router'], 'ip_rule_sets' | 'ros_policy_rule_sets' | 'proxy_gateway_agent_id'>; policies: PolicyWorkspace['sources']['policies'] }, profileId: string) =>
+  savePolicySettings: (id: string, draft: { revision: string; router: Pick<PolicyWorkspace['router'], 'ip_rule_sets' | 'ros_policy_rule_sets' | 'proxy_gateway_agent_id'> }, profileId: string) =>
     api.put<{ success: boolean; message?: string; workspace: PolicyWorkspace }>(`/routers/${id}/policy-settings`, { ...draft, base_url: getBaseUrl() }, profileOptions(profileId)),
   previewPolicySettings: (id: string, revision: string, targets: string[], profileId: string) =>
     api.post<{ success: boolean; message?: string; preview: PolicyWorkspacePreview }>(`/routers/${id}/policy-settings/preview`, { revision, targets, base_url: getBaseUrl() }, { ...profileOptions(profileId), timeout: 90000 }),

@@ -3,7 +3,7 @@
     <div class="flex flex-wrap items-center justify-between gap-2 px-5 pb-3 max-md:px-4 max-sm:px-3">
       <span class="text-xs text-muted-foreground">{{ collectedAt ? `读取于 ${collectedAt}` : '' }}</span>
       <div class="cf-section-actions flex flex-wrap gap-2">
-        <Button variant="outline" class="min-h-11" :disabled="disabled || !sourcesEditable" @click="emit('add-source')"><Plus class="size-4" />新增来源</Button>
+        <Button variant="outline" class="min-h-11" :disabled="disabled" @click="emit('add-source')"><MonitorSmartphone class="size-4" />管理来源设备</Button>
         <Button variant="outline" class="min-h-11" :disabled="disabled" @click="emit('edit-destinations')">编辑目的规则集</Button>
         <Button variant="outline" class="min-h-11" :disabled="loading || disabled" @click="load"><RefreshCw class="size-4" />刷新对象</Button>
       </div>
@@ -11,7 +11,7 @@
     <p v-if="error" role="alert" class="px-5 text-sm text-destructive-accent">{{ error }}</p>
     <LoadingRows v-if="loading" :rows="4" />
     <template v-else-if="data">
-        <p class="m-0 px-5 pb-3 text-xs text-muted-foreground max-md:px-4 max-sm:px-3">编辑会打开对应来源或规则集，修改后需保存并预览发布。下表仍显示设备上的已下发对象；不会直接修改 ROS 字段。</p>
+        <p class="m-0 px-5 pb-3 text-xs text-muted-foreground max-md:px-4 max-sm:px-3">来源设备在「客户端设备」中管理，规则集与设置在本面板编辑，修改后都需在这里保存并预览发布。下表仍显示设备上的已下发对象；不会直接修改 ROS 字段。</p>
         <template v-if="data.objects.length">
           <div class="flex flex-wrap gap-2 border-t border-border px-5 py-3 max-md:px-4 max-sm:px-3" role="group" aria-label="策略对象类型">
             <Button v-for="group in groups" :key="group.key" size="sm" class="min-h-11" :variant="kind === group.key ? 'secondary' : 'ghost'" :aria-pressed="kind === group.key" @click="kind = group.key">
@@ -39,7 +39,7 @@
                       <dl class="m-0 space-y-1 pb-2 font-mono text-xs"><div v-for="(value, field) in item.fields" :key="field"><dt class="inline text-muted-foreground">{{ field }}: </dt><dd class="m-0 inline">{{ value }}</dd></div></dl>
                     </details>
                   </td>
-                  <td class="text-right"><Button variant="ghost" class="min-h-11" :disabled="disabled || (item.editor === 'source' && !sourcesEditable)" @click="emit('edit', item)"><Pencil class="size-4" />{{ item.editor === 'source' ? '编辑来源' : item.editor === 'destination' ? '编辑规则集' : '编辑设置' }}</Button></td>
+                  <td class="text-right"><Button variant="ghost" class="min-h-11" :disabled="disabled" @click="emit('edit', item)"><component :is="item.editor === 'source' ? MonitorSmartphone : Pencil" class="size-4" />{{ item.editor === 'source' ? '在客户端设备中管理' : item.editor === 'destination' ? '编辑规则集' : '编辑设置' }}</Button></td>
                 </tr>
               </tbody>
             </table>
@@ -58,14 +58,14 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ListFilter, Network, Pencil, Plus, RefreshCw } from '@lucide/vue'
+import { ListFilter, MonitorSmartphone, Network, Pencil, RefreshCw } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import { routerApi, type PolicyRoutingObject, type PolicyRoutingView } from '@/api'
 
-const props = withDefaults(defineProps<{ id: string; profile: string; disabled?: boolean; sourcesEditable?: boolean }>(), { sourcesEditable: true })
+const props = defineProps<{ id: string; profile: string; disabled?: boolean }>()
 const emit = defineEmits<{ 'add-source': []; 'edit-destinations': []; edit: [item: PolicyRoutingObject] }>()
 const data = ref<PolicyRoutingView | null>(null)
 const loading = ref(false)

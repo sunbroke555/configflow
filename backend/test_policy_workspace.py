@@ -91,6 +91,24 @@ def test_renaming_sources_keeps_oxidns_and_rejects_stale_workspace(workspace):
     assert read(workspace)['sources']['policies'][0]['name'] == '存储'
 
 
+def test_router_only_saves_leave_sources_alone_and_ignore_renames(workspace):
+    client, _, dns, admin, path = workspace
+    body = body_for(read(workspace))
+    body['policies'] = [{'ip': '192.0.2.105', 'mode': 'smart', 'name': 'NAS'}]
+    assert client.put(path + '/policy-settings', headers=admin, json=body).status_code == 200
+    state = read(workspace)
+    notes = {'profile_id': 'default', 'ip': '192.0.2.105', 'name': '群晖', 'previous_name': 'NAS'}
+    assert client.put(f'/api/agents/{dns["id"]}/client-notes', headers=admin, json=notes).status_code == 200
+    before = copy.deepcopy(get_repository().get_profile('default'))
+    router_only = {'revision': state['revision'], 'base_url': '',
+                   'router': {**body_for(state)['router'], 'proxy_gateway_agent_id': ''}}
+    saved = client.put(path + '/policy-settings', headers=admin, json=router_only)
+    assert saved.status_code == 200, saved.get_json()
+    after = get_repository().get_profile('default')
+    assert after['oxidns'] == before['oxidns'] and after['device_notes'] == before['device_notes']
+    assert after['routers']['items'][0]['proxy_gateway_agent_id'] == ''
+
+
 @pytest.mark.parametrize('failure', ['bad_ip', 'duplicate', 'bad_router', 'extra_field'])
 def test_bad_source_or_router_change_does_not_partially_save(workspace, failure):
     client, _, _, admin, path = workspace

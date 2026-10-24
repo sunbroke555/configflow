@@ -17,49 +17,28 @@
         </TabsList>
       </div>
       <TabsContent value="sources" class="m-0 px-5 pb-4 max-md:px-4 max-sm:px-3">
-        <div class="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{{ state.profile_name }} · 共用来源设备</span>
-          <FieldHelp label="来源设备" :text="optionHelp('仅智能分流的 IPv4 设备或网段参与 ROS 策略路由。', '更具体的直连例外及 Mihomo 自身会被排除。直连设备仍遵循主表静态路由；IPv6 策略仅作用于 OxiDNS，不会建立 ROS IPv6 策略。')" />
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+            <span class="min-w-0 break-words">{{ state.profile_name }} · 共用来源设备</span>
+            <FieldHelp label="来源设备" :text="optionHelp('已选择「使用策略路由的 IP 规则集」时，在「客户端设备」中设为智能分流的 IPv4 设备或网段参与 ROS 策略路由。', '更具体的直连例外及 Mihomo 自身会被排除。直连设备仍遵循主表静态路由；IPv6 策略仅作用于 OxiDNS，不会建立 ROS IPv6 策略。修改来源后，需在这里重新保存并预览发布。')" />
+          </div>
+          <Button variant="outline" class="min-h-11" :disabled="locked || editing" @click="openClientDevices"><MonitorSmartphone class="size-4" />在客户端设备中管理</Button>
         </div>
         <p v-if="!state.sources.editable" role="alert" class="rounded-md bg-warning-soft p-3 text-sm text-warning-accent">{{ state.sources.reason }}</p>
-        <fieldset class="m-0 min-w-0 space-y-4 border-0 p-0" :disabled="locked || !state.sources.editable">
-          <div class="grid min-w-0 items-start gap-4 lg:grid-cols-2">
-            <div v-if="state.source_agents.length" class="min-w-0 space-y-2">
-              <div class="flex min-h-5 items-center gap-2">
-                <span class="text-sm font-medium">从查询记录选择客户端</span>
-                <FieldHelp label="已有客户端" :text="optionHelp('设备已经通过所选 OxiDNS 查询过域名，且有查询记录。', '从历史记录选择 IP，加入下方来源列表，再为它指定策略。没有查询记录的设备也可手动填写 IP 或网段，不必等它出现在列表里。')" />
-              </div>
-              <div class="grid min-w-0 gap-2" :class="state.source_agents.length > 1 ? 'sm:grid-cols-2' : ''">
-                <Select v-if="state.source_agents.length > 1" v-model="queryAgent" :disabled="locked || !state.sources.editable">
-                  <SelectTrigger class="min-h-11 w-full" aria-label="查询记录来源"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem v-for="agent in state.source_agents" :key="agent.id" :value="agent.id">{{ agent.name }}</SelectItem></SelectContent>
-                </Select>
-                <OxiDNSClientSelect :agent-id="queryAgent" :recorder="recorder" model-value="" range="all" :allow-all="false" :placeholder="queryLoading ? '正在读取查询记录…' : '选择已有客户端…'" @update:model-value="addSource" />
-              </div>
-              <div v-if="queryError" class="flex items-center gap-2 text-xs text-muted-foreground" role="status">
-                <span class="min-w-0">{{ queryError }}</span><Button variant="ghost" class="min-h-11 shrink-0 px-2" :disabled="locked || queryLoading" @click="loadQueryRecorder">重试</Button>
-              </div>
-            </div>
-            <div class="min-w-0 space-y-2">
-              <Label for="policy-source-ip" class="flex min-h-5 items-center">手动添加 IP / 网段</Label>
-              <div class="flex min-w-0 items-center gap-2">
-                <Input id="policy-source-ip" v-model="newIP" class="min-h-11 min-w-0 flex-1 font-mono" placeholder="192.168.0.105 或 192.168.0.0/24" @keydown.enter.prevent="addSource(newIP)" />
-                <Button variant="outline" class="min-h-11 shrink-0" :disabled="!newIP.trim() || policies.length >= 512" @click="addSource(newIP)"><Plus class="size-4" />添加</Button>
-              </div>
-            </div>
-          </div>
-          <div v-if="policies.length" class="cf-table-wrap">
-            <table class="cf-table cf-mobile-records policy-source-records min-w-[540px] w-full" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader">客户端 IP / 网段</th><th role="columnheader">备注</th><th role="columnheader">策略</th><th role="columnheader" class="text-right">操作</th></tr></thead>
-              <tbody role="rowgroup"><tr role="row" v-for="(row, index) in policies" :key="row.ip">
-                <td role="cell" class="cf-record-wide font-mono text-xs" data-label="客户端 IP / 网段">{{ row.ip }}</td>
-                <td role="cell" data-label="备注"><Input v-model="row.name" :aria-label="`${row.ip} 备注`" maxlength="80" class="min-h-11 min-w-28" /></td>
-                <td role="cell" data-label="策略"><Select v-model="row.mode" :disabled="locked || !state.sources.editable"><SelectTrigger class="min-h-11 w-32" :aria-label="`${row.ip} 策略`"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="smart">智能分流</SelectItem><SelectItem value="direct">直连</SelectItem></SelectContent></Select></td>
-                <td role="cell" class="cf-record-wide text-right"><div class="flex justify-end gap-2"><Button variant="ghost" size="icon" class="size-11" :aria-label="`编辑 ${row.ip}`" @click="editSource(index)"><Pencil class="size-4" /></Button><Button variant="ghost" size="icon" class="size-11" :aria-label="`移除 ${row.ip}`" @click="policies.splice(index, 1)"><Trash2 class="size-4" /></Button></div></td>
-              </tr></tbody>
-            </table>
-          </div>
-          <EmptyState v-else :icon="Network" title="尚未添加来源设备" description="添加需要智能分流的客户端 IP 或网段，也可为更具体的地址设置直连例外。" />
-        </fieldset>
+        <div v-if="state.sources.policies.length" class="cf-table-wrap">
+          <table class="cf-table cf-mobile-records policy-source-records min-w-[480px] w-full" role="table">
+            <thead role="rowgroup"><tr role="row"><th role="columnheader">客户端 IP / 网段</th><th role="columnheader">名称</th><th role="columnheader">DNS 策略</th><th role="columnheader">策略路由</th></tr></thead>
+            <tbody role="rowgroup"><tr v-for="row in state.sources.policies" :key="row.ip" role="row">
+              <td role="cell" class="font-mono text-xs" data-label="客户端 IP / 网段">{{ row.ip }}</td>
+              <td role="cell" class="break-words" data-label="名称">{{ row.name || '—' }}</td>
+              <td role="cell" data-label="DNS 策略">{{ row.mode === 'smart' ? '智能分流' : '直连' }}</td>
+              <td role="cell" data-label="策略路由"><span :class="['chip', routesSource(row) && 'chip-acc']">{{ routesSource(row) ? '参与' : '不参与' }}</span></td>
+            </tr></tbody>
+          </table>
+        </div>
+        <EmptyState v-else :icon="Network" title="尚未设置来源设备" description="在「客户端设备」中把设备的 DNS 策略设为智能分流，它的 IPv4 地址就会作为策略路由的来源。">
+          <Button variant="outline" class="min-h-11" :disabled="locked || editing" @click="openClientDevices">前往客户端设备</Button>
+        </EmptyState>
       </TabsContent>
       <TabsContent value="settings" class="m-0 px-5 pb-5 max-md:px-4 max-sm:px-3">
         <fieldset class="m-0 grid min-w-0 gap-5 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="locked">
@@ -95,10 +74,6 @@
           <p v-if="!preview" class="m-0 border-t border-border pt-4 text-sm text-muted-foreground">点击上方“保存并预览”，核对本次变更后确认发布。</p>
           <template v-else>
             <ul v-if="blockers.length" class="m-0 list-none space-y-2 rounded-lg bg-destructive-soft p-3 text-sm text-destructive-accent" role="alert"><li v-for="item in blockers" :key="item">{{ item }}</li></ul>
-            <section v-if="changes.length" class="grid gap-2 border-t border-border pt-4 sm:grid-cols-[11rem_minmax(0,1fr)]" aria-label="本次保存的来源变更">
-              <h3 class="m-0 text-sm font-semibold">来源变更 <span class="ml-1 text-xs font-normal text-muted-foreground">{{ changes.length }} 项</span></h3>
-              <ul class="m-0 max-h-60 list-none space-y-1 overflow-auto p-0 text-sm"><li v-for="(item, index) in changes" :key="index" class="break-words">{{ item }}</li></ul>
-            </section>
             <section class="min-w-0 space-y-3" aria-label="路由变更">
               <div class="flex items-center justify-between gap-3">
                 <h3 class="m-0 text-sm font-semibold">路由变更 <span class="ml-2 font-normal text-muted-foreground">{{ name }}</span></h3>
@@ -165,18 +140,16 @@
           </section>
         </div>
       </TabsContent>
-      <TabsContent value="objects" class="m-0"><PolicyRoutingObjects :id="id" :profile="profile" :disabled="locked || editing" :sources-editable="state.sources.editable" @add-source="editSource(-1)" @edit-destinations="editDestinations()" @edit="editObject" /></TabsContent>
+      <TabsContent value="objects" class="m-0"><PolicyRoutingObjects :id="id" :profile="profile" :disabled="locked || editing" @add-source="openClientDevices" @edit-destinations="editDestinations()" @edit="editObject" /></TabsContent>
     </Tabs>
-    <PolicySourceEditor v-if="sourceEditorOpen" ref="sourceEditor" :policy="sourceIndex >= 0 ? policies[sourceIndex] : undefined" :policies="policies" @close="sourceEditorOpen = false" @apply="applySource" />
     <PolicyDestinationEditor v-if="destinationEditorOpen && state" ref="destinationEditor" :rules="state.rule_sets" :selected-ids="settings.ros_policy_rule_sets" :address="destinationAddress" @close="destinationEditorOpen = false" @saved="contentSaved" />
   </SectionCard>
 </template>
 <script setup lang="ts">
-import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ChevronUp, Info, Loader2, Network, Pencil, Plus, Trash2 } from '@lucide/vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ChevronUp, Info, Loader2, MonitorSmartphone, Network, Pencil } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -188,71 +161,43 @@ import { optionHelp } from '@/lib/optionCopy'
 import { routerCopy } from '@/lib/routerCopy'
 import FormField from '@/components/common/FormField.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
-import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import PolicyRoutingObjects from './PolicyRoutingObjects.vue'
-import PolicySourceEditor from './PolicySourceEditor.vue'
 import PolicyDestinationEditor from './PolicyDestinationEditor.vue'
 import RouterOperationPreview from './RouterOperationPreview.vue'
 import { usePolicyRoutingWorkspace, type PolicyReleaseRow } from '@/composables/usePolicyRoutingWorkspace'
 import { deploymentLabels, deploymentNeedsNotice } from '@/composables/useAgentDeployments'
-import { normalizeClientRange } from '@/lib/oxidnsClientRange'
-import { sourcePolicyIndex } from '@/lib/policySourceEditor'
-import { notify } from '@/lib/feedback'
-import { oxidnsMonitorApi, type PolicyRoutingObject } from '@/api'
+import { getActiveProfileId } from '@/profileContext'
+import type { PolicyRoutingObject } from '@/api'
 import type { OxiDNSDevicePolicy } from '@/types/oxidnsMonitor'
 const props = defineProps<{ id: string; name: string; profile: string }>()
 const emit = defineEmits<{ close: []; saved: []; busy: [value: boolean] }>()
-const { state, policies, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview, changes,
+const { state, settings, targets, tab, loading, saving, publishing, locked, dirty, error, preview,
   results, rosResult, unresolved, blockers, canPublish, reload, canLeave: canLeaveWorkspace, selectRules, saveAndPreview, publish, refreshResults } = usePolicyRoutingWorkspace(props, () => emit('saved'))
-const sourceEditorOpen = ref(false), destinationEditorOpen = ref(false), sourceIndex = ref(-1), destinationAddress = ref('')
-const sourceEditor = ref<InstanceType<typeof PolicySourceEditor>>(), destinationEditor = ref<InstanceType<typeof PolicyDestinationEditor>>()
-const editing = computed(() => sourceEditorOpen.value || destinationEditorOpen.value)
+const router = useRouter()
+const route = useRoute()
+const destinationEditorOpen = ref(false), destinationAddress = ref('')
+const destinationEditor = ref<InstanceType<typeof PolicyDestinationEditor>>()
+const editing = computed(() => destinationEditorOpen.value)
 const tabs = [{ value: 'sources', label: '来源设备' }, { value: 'settings', label: '规则集与网关' }, { value: 'preview', label: '发布预览' }, { value: 'objects', label: '已下发对象' }]
 const ruleOptions = computed(() => state.value?.rule_sets.map(rule => ({ value: rule.id, label: `${rule.name}（${rule.policy}）` })) || [])
-const newIP = ref(''), queryAgent = ref(''), recorder = ref(''), queryError = ref('')
-usePageReloadGuard(() => !!newIP.value.trim())
-const queryLoading = ref(false)
 const routeChangeCount = computed(() => preview.value?.router_plan.stages.reduce((count, stage) => count + (stage.enabled === false ? 0 : stage.ops.length), 0) || 0)
-let queryEpoch = 0
 watch([locked, editing], ([busy, editing]) => emit('busy', busy || editing), { immediate: true })
-watch(() => [props.id, props.profile], () => { sourceEditorOpen.value = false; destinationEditorOpen.value = false })
-watch(() => state.value?.profile_id, () => { queryAgent.value = state.value?.source_agents[0]?.id || ''; newIP.value = '' })
-watch(queryAgent, () => { void loadQueryRecorder() })
-async function loadQueryRecorder() {
-  const current = ++queryEpoch; recorder.value = ''; queryError.value = ''
-  queryLoading.value = false
-  if (!queryAgent.value) return
-  queryLoading.value = true
-  try {
-    const { data } = await oxidnsMonitorApi.overview(queryAgent.value)
-    if (current !== queryEpoch) return
-    recorder.value = data.recorders?.[0] || ''
-    if (!recorder.value) queryError.value = '此设备尚无可读取的查询记录，可手动添加 IP 或网段。'
-  } catch { if (current === queryEpoch) queryError.value = '暂时无法读取查询记录，可手动添加 IP 或网段。' }
-  finally { if (current === queryEpoch) queryLoading.value = false }
-}
-function addSource(value: string) {
-  if (locked.value || !state.value?.sources.editable || policies.value.length >= 512) return
-  try {
-    const ip = normalizeClientRange(value.trim())
-    if (policies.value.some(row => row.ip === ip)) { notify.info('此 IP 或网段已在列表中'); return }
-    policies.value.push({ ip, name: '', mode: 'smart' }); newIP.value = ''
-  } catch { notify.error('请输入有效的 IP 或 CIDR 网段') }
-}
-function editSource(index: number) {
-  if (locked.value || !state.value?.sources.editable) return
-  sourceIndex.value = index; sourceEditorOpen.value = true
-}
-function applySource(row: OxiDNSDevicePolicy) {
-  if (locked.value || !state.value?.sources.editable) return
-  if (sourceIndex.value >= 0) policies.value.splice(sourceIndex.value, 1, row)
-  else policies.value.push(row)
-  sourceEditorOpen.value = false; tab.value = 'sources'
+watch(() => [props.id, props.profile], () => { destinationEditorOpen.value = false })
+const gatewayHost = computed(() => state.value?.gateways.find(agent => agent.id === settings.value.proxy_gateway_agent_id)?.host || '')
+// Smart IPv4 rows feed ROS only with policy rule sets selected, never the gateway
+// itself; the server also subtracts more specific direct exceptions (see help).
+const routesSource = (row: OxiDNSDevicePolicy) => settings.value.ros_policy_rule_sets.length > 0 && row.mode === 'smart'
+  && !row.ip.includes(':') && ![gatewayHost.value, `${gatewayHost.value}/32`].includes(row.ip)
+/** 来源在「客户端设备」编辑；空间不是当前全局空间时带上它，不切换全局空间 */
+function openClientDevices() {
+  const query: Record<string, string> = { from: route.fullPath }
+  if (props.profile !== getActiveProfileId()) query.profile = props.profile
+  void router.push({ path: '/client-devices', query })
 }
 function editDestinations(address = '') {
   if (locked.value) return
@@ -264,17 +209,10 @@ function contentSaved() {
 async function editObject(item: PolicyRoutingObject) {
   if (locked.value) return
   if (item.editor === 'destination') { editDestinations(item.configured_address); return }
-  if (item.editor === 'source') {
-    const index = sourcePolicyIndex(item.configured_address || '', policies.value)
-    if (index >= 0) { editSource(index); return }
-    tab.value = 'sources'
-    notify.info('该网段可能由多个来源合并，或草稿已变更，请在来源列表中选择要编辑的设备。')
-    return
-  }
+  if (item.editor === 'source') { openClientDevices(); return }
   tab.value = 'settings'; await nextTick(); document.getElementById('policy-gateway')?.focus()
 }
 async function canLeave() {
-  if (sourceEditor.value && !await sourceEditor.value.canLeave()) return false
   if (destinationEditor.value && !await destinationEditor.value.canLeave()) return false
   return canLeaveWorkspace()
 }
@@ -302,6 +240,6 @@ const resultTone = (status: string) => status === 'succeeded' ? 'success'
   : ['failed', 'rolled_back', 'rollback_failed'].includes(status) ? 'danger'
   : ['unknown', 'ready', 'recovery_pending', 'rolling_back'].includes(status) ? 'warning'
   : ['waiting', 'skipped'].includes(status) ? 'neutral' : 'progress'
-onBeforeUnmount(() => { queryEpoch++; emit('busy', false) })
+onBeforeUnmount(() => { emit('busy', false) })
 defineExpose({ canLeave })
 </script>
