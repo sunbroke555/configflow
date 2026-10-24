@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from backend.common.config_store import (
-    ConfigStorageError, ConfigStore, Entry, StoreConflict, StoreCorrupt, StoreError, StoreUnsupported,
+    ConfigStorageError, ConfigStore, StoreConflict, StoreCorrupt, StoreError, StoreUnsupported,
 )
 from backend.common.oxidns_settings import get_default_oxidns_settings
 
@@ -464,8 +464,11 @@ class ProfileRepository:
         now = _now()
         migration = {'source': source, 'at': now,
                      'snapshot': str(snapshot.relative_to(self.data_dir)) if snapshot else None}
-        entry = self._store.create(document, meta={
-            'migration': migration, 'legacy_config': self._legacy_record(document, 'migrated', now)})
+        # data_source: whether config.json holds this data (it is a stale,
+        # non-authoritative file next to a split layout or missing otherwise).
+        record = self._legacy_record(document, 'migrated', now,
+                                     data_source=source in ('legacy-single', 'config-v5'))
+        entry = self._store.create(document, meta={'migration': migration, 'legacy_config': record})
         self._set_cache(entry)
         if has_legacy:
             logger.info('已把旧配置（%s）迁移到 %s；config.json 保留为迁移前副本，不再写入',
@@ -485,10 +488,10 @@ class ProfileRepository:
                 'shared': document['shared'].get('_revision', 0),
                 'profiles': {key: profile.get('_revision', 0) for key, profile in document['profiles'].items()}}
 
-    def _legacy_record(self, document, status, at):
+    def _legacy_record(self, document, status, at, *, data_source):
         sha256, size = self._legacy_fingerprint()
         return {'sha256': sha256, 'size': size, 'revisions': self._revisions_of(document),
-                'status': status, 'at': at}
+                'status': status, 'at': at, 'data_source': data_source and sha256 is not None}
 
     def _open_locked(self):
         """Startup under .config.lock: migrate, check, recover and load the database."""
@@ -514,7 +517,7 @@ class ProfileRepository:
                 raise ConfigStorageError(
                     f'无法打开配置数据库 {self.DATABASE_FILENAME}：{error}；数据库未改动') from error
         try:
-            entry = self._read_entry(locked=True)
+            self._read_entry(locked=True)
         except ConfigStorageError:
             raise
         except (ProfileRepositoryError, ValueError, TypeError) as error:
@@ -530,8 +533,13 @@ class ProfileRepository:
         record = self._store.salvage_meta()
         legacy = (record or {}).get('legacy_config') if isinstance(record, dict) else None
         sha256, size = self._legacy_fingerprint()
-        usable = sha256 is not None and (
-            record is None or (isinstance(legacy, dict) and legacy.get('sha256') == sha256 and legacy.get('size') == size))
+        if record is None:
+            # Nothing tells which file the data came from: config.json is a
+            # source unless it is the stale root of a split installation.
+            usable = sha256 is not None and not (self.data_dir / 'system.json').exists()
+        else:
+            usable = (sha256 is not None and isinstance(legacy, dict) and legacy.get('data_source') is True and
+                      legacy.get('sha256') == sha256 and legacy.get('size') == size)
         if not usable:
             raise ProfileRepositoryError(
                 f'配置数据库 {self.DATABASE_FILENAME} 已损坏（{error}），且没有可安全使用的恢复来源；'
@@ -551,7 +559,8 @@ class ProfileRepository:
         corrupt_name = corrupt.name
         meta = {'migration': {'source': 'corrupt-rebuild', 'at': now, 'snapshot': None,
                               'corrupt_file': corrupt_name, 'error': str(error)},
-                'legacy_config': legacy if isinstance(legacy, dict) else self._legacy_record(document, 'migrated', now),
+                'legacy_config': legacy if isinstance(legacy, dict) else
+                self._legacy_record(document, 'migrated', now, data_source=True),
                 'recovered_from': {'source': 'config.json', 'at': now, 'corrupt_file': corrupt_name}}
         temporary, entry = self._store.build_temporary(document, meta)
         try:
@@ -577,14 +586,14 @@ class ProfileRepository:
         if sha256 == record.get('sha256') and size == record.get('size'):
             return
         now = _now()
+        rejected = {**record, 'sha256': sha256, 'size': size, 'status': 'rejected', 'at': now, 'data_source': False}
         try:
             converted = self._convert_import(self._read_json(self.legacy_path))
             self._ensure_rule_proxy_token(converted['system'])
             self._validate_document(converted)
-        except ProfileRepositoryError as error:
+        except Exception as error:  # any unusable content: keep the database as it is
             logger.warning('config.json 在迁移后被修改，但内容无法导入（%s）；已忽略，数据库未改动', error)
-            self._commit_meta_locked({'legacy_config': {**record, 'sha256': sha256, 'size': size,
-                                                        'status': 'rejected', 'at': now, 'error': str(error)}})
+            self._commit_meta_locked({'legacy_config': {**rejected, 'error': str(error)}})
             return
         baseline = record.get('revisions') if isinstance(record.get('revisions'), dict) else {}
         revisions = self._revisions_of(converted)
@@ -602,15 +611,24 @@ class ProfileRepository:
                   any(above(value, old_profiles.get(key)) for key, value in revisions['profiles'].items()))
         if not edited:
             logger.info('config.json 在迁移后被改写，但没有新的修改；已记录，不导入')
+            # Same revisions as the recorded data: it stays a source exactly
+            # when the previous file was one (e.g. only a token was added).
             self._commit_meta_locked({'legacy_config': {**record, 'sha256': sha256, 'size': size,
                                                         'status': 'ignored', 'at': now}})
             return
         meta = {'legacy_config': {'sha256': sha256, 'size': size, 'revisions': revisions,
-                                  'status': 'imported', 'at': now},
+                                  'status': 'imported', 'at': now, 'data_source': True},
                 'last_legacy_import': {'at': now, 'sha256': sha256, 'snapshot': None}}
-        with self._write_locked(meta=meta) as (previous, document):
-            snapshot = self._apply_import(document, converted, 'legacy-config')
-            meta['last_legacy_import']['snapshot'] = str(snapshot.relative_to(self.data_dir))
+        try:
+            with self._write_locked(meta=meta) as (previous, document):
+                snapshot = self._apply_import(document, converted, 'legacy-config')
+                meta['last_legacy_import']['snapshot'] = str(snapshot.relative_to(self.data_dir))
+        except ProfileRepositoryError as error:
+            # E.g. it would drop a router's published ownership record. Never
+            # leave the service unable to start over a rollback leftover.
+            logger.warning('config.json 在迁移后被修改，但导入被拒绝（%s）；已忽略，数据库未改动', error)
+            self._commit_meta_locked({'legacy_config': {**rejected, 'error': str(error)}})
+            return
         logger.warning('检测到旧版本在回退期间修改了 config.json，已导入为当前配置；'
                        '导入前的数据库已备份到 %s', meta['last_legacy_import']['snapshot'])
 

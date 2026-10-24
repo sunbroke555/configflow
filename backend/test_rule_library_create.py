@@ -1,5 +1,4 @@
 """A failed import must not publish a source or overwrite another cache."""
-import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
