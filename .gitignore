@@ -26,6 +26,8 @@ dist/
 # Runtime configuration and generated data only
 /config.json
 /backend/config.json
+/configflow.sqlite3*
+/backend/configflow.sqlite3*
 /system.json
 /system.json.lock
 /system.json.bak
