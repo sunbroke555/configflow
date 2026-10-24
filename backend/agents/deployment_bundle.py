@@ -29,6 +29,10 @@ from backend.converters.mosdns import RULE_PARTS, empty_rule_part, parse_clash_r
 from backend.utils.rule_fetch import (
     RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
 )
+from backend.utils.logger import get_logger
+from backend.utils.ruleset_content import normalize_classical_lines
+
+logger = get_logger(__name__)
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -496,7 +500,9 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                 continue
             if not definition.get('url'):
                 raise DeploymentPreparationError(f'Rule provider {name} references an unbundled local file; use a managed rule source')
-            downloads.append({'name': name, 'url': definition['url'], 'local_path': path})
+            downloads.append({'name': name, 'url': definition['url'], 'local_path': path,
+                              'behavior': definition.get('behavior'),
+                              'format': definition.get('format', 'yaml')})
     downloads = [item for item in downloads if relative_path(item['local_path']) not in pinned_paths]
     # Share only original response bytes within this captured deployment. A
     # classical source may feed both domain and IP files through different
@@ -550,6 +556,24 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             value = materialize_rule(item.get('url', ''), config, base_url,
                                      raw_mosdns=relative_path(item['local_path']) in rule_types,
                                      fetch_raw=fetch_raw)
+            # Snapshot callbacks bypass /rules/local, so apply the same repair
+            # for the final Mihomo consumer without changing shared raw bytes.
+            if (service == 'mihomo' and item.get('behavior') == 'classical'
+                    and item.get('format', 'yaml') in ('text', 'yaml')
+                    and parse_qs(urlsplit(item.get('url', '')).query).get('target', [''])[0] == 'mihomo'
+                    and (local_rule := _local_rule(item['url'], config, base_url)) is not None
+                    and local_rule.get('behavior') == 'classical'):
+                try:
+                    text = value.decode('utf-8')
+                except UnicodeDecodeError:
+                    pass
+                else:
+                    normalized, warnings = normalize_classical_lines(text)
+                    value = normalized.encode('utf-8')
+                    if warnings:
+                        logger.warning('Mihomo classical provider %s: %s unconverted lines (first 10: %s)',
+                                       item.get('name', ''), len(warnings),
+                                       ', '.join(str(warning.get('line')) for warning in warnings[:10]))
         except RuleDownloadError as exc:
             name = item.get('name') or '未命名'
             explanation, _, details = str(exc).partition('\n')

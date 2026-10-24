@@ -609,8 +609,8 @@ def batch_add_rules():
 def get_local_rule(name):
     """获取本地缓存的规则文件（通过规则名称）
 
-    这个端点用于 Mihomo 配置中的 rule-providers，
-    提供本地缓存的规则文件，避免外部网络请求。
+    Mihomo 的 classical provider 通过 target=mihomo 请求兼容内容；
+    无标记请求继续返回原文，供其他客户端及规则转换器使用。
 
     注意：此接口不需要权限校验，因为会被 Mihomo 等客户端直接访问。
 
@@ -638,6 +638,25 @@ def get_local_rule(name):
         filename = rule_cache_filename(rule or {'name': name})
         filepath = rule_cache_read_path(rule or {'name': name}, rule_library)
 
+        def content_response(content):
+            # Transform only the delivered bytes, never the shared source/cache.
+            if (rule and rule.get('behavior') == 'classical'
+                    and rule.get('format') != 'mrs' and request.args.get('target') == 'mihomo'):
+                from backend.utils.ruleset_content import normalize_classical_lines
+                try:
+                    normalized, warnings = normalize_classical_lines(content.decode('utf-8'))
+                except UnicodeDecodeError:
+                    logger.warning("Rule '%s' is not UTF-8; leaving classical content unchanged", name)
+                else:
+                    content = normalized.encode('utf-8')
+                    if warnings:
+                        logger.warning("Rule '%s': %s classical entries need manual review (lines %s)",
+                                       name, len(warnings), [item['line'] for item in warnings[:10]])
+            resp = make_response(content, 200)
+            resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
+            resp.headers['Content-Length'] = str(len(content))
+            return resp
+
         logger.info(f"Requesting local rule: {name}, filepath: {filepath}")
 
         # 如果规则仓库中没有找到该规则
@@ -647,10 +666,7 @@ def get_local_rule(name):
                 logger.warning(f"Rule '{name}' not found in library, but cache exists, returning cache")
                 with open(filepath, 'rb') as f:
                     content = f.read()
-                resp = make_response(content, 200)
-                resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-                resp.headers['Content-Length'] = str(len(content))
-                return resp
+                return content_response(content)
             else:
                 logger.error(f"Rule '{name}' not found in rule library and no cache exists")
                 return jsonify({
@@ -673,10 +689,7 @@ def get_local_rule(name):
                     repository.write_shared_text(os.path.join('rules', filename), response.text)
                     # 返回响应并添加 Content-Length 头
                     content = response.text.encode('utf-8')
-                    resp = make_response(content, 200)
-                    resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-                    resp.headers['Content-Length'] = str(len(content))
-                    return resp
+                    return content_response(content)
                 else:
                     logger.warning(f"Failed to fetch rule '{name}', status code: {response.status_code}")
             except requests.Timeout:
@@ -689,10 +702,7 @@ def get_local_rule(name):
             logger.info(f"Returning cached rule file: {filepath}")
             with open(filepath, 'rb') as f:
                 content = f.read()
-            resp = make_response(content, 200)
-            resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-            resp.headers['Content-Length'] = str(len(content))
-            return resp
+            return content_response(content)
         else:
             # 缓存文件不存在，尝试重新生成
             logger.warning(f"Cache file not found for rule '{name}', regenerating...")
@@ -702,10 +712,7 @@ def get_local_rule(name):
                     logger.info(f"Successfully regenerated cache for rule '{name}'")
                     with open(filepath, 'rb') as f:
                         content = f.read()
-                    resp = make_response(content, 200)
-                    resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-                    resp.headers['Content-Length'] = str(len(content))
-                    return resp
+                    return content_response(content)
                 else:
                     logger.error(f"Failed to regenerate cache for rule '{name}'")
                     return jsonify({

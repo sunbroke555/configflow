@@ -3,11 +3,11 @@ import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-uti
 import PolicySourceEditor from '@/components/routers/PolicySourceEditor.vue'
 import PolicyDestinationEditor from '@/components/routers/PolicyDestinationEditor.vue'
 import { sourcePolicyIndex } from '@/lib/policySourceEditor'
-import { ruleContentApi } from '@/api'
+import api, { ruleContentApi } from '@/api'
 import { confirm } from '@/lib/feedback'
 import { scopedRequests } from '@/profileContext'
-vi.mock('@/api', () => ({ ruleContentApi: { read: vi.fn(), save: vi.fn() } }))
-vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn() } }))
+vi.mock('@/api', () => ({ default: { post: vi.fn() }, ruleContentApi: { read: vi.fn(), save: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), warning: vi.fn() } }))
 const wrappers: VueWrapper[] = []
 const source = { ip: '192.0.2.105', name: 'NAS', mode: 'smart' as const }
 const field = (id: string) => new DOMWrapper(document.getElementById(id) as HTMLInputElement)
@@ -64,6 +64,57 @@ describe('policy authoring editors', () => {
     await click('保存规则内容')
     expect(ruleContentApi.save).toHaveBeenCalledWith('library', 'read-revision', '9.9.9.9/32')
     expect(w.emitted('saved')).toHaveLength(1)
+    expect(scopedRequests.value).toBe(0)
+  })
+  it.each([true, false])('previews a classical conversion before saving a destination ruleset: accepted=%s', async accepted => {
+    const data = response()
+    data.data.rule.behavior = 'classical'
+    data.data.rule.content = 'DOMAIN-SUFFIX,tmdb.org'
+    Object.assign(data.data.rule, { format: 'yaml' })
+    vi.mocked(ruleContentApi.read).mockResolvedValueOnce(data as any)
+    const original = 'payload: ["+.tmdb.org", "192.0.2.1"]'
+    const converted = 'payload: ["DOMAIN-SUFFIX,tmdb.org", "IP-CIDR,192.0.2.1/32,no-resolve"]'
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { content: converted, errors: [], changes: [
+      { line: 1, before: '+.tmdb.org', after: 'DOMAIN-SUFFIX,tmdb.org' },
+      { line: 1, before: '192.0.2.1', after: 'IP-CIDR,192.0.2.1/32,no-resolve' }
+    ] } })
+    let resolve!: (value: boolean) => void
+    vi.mocked(confirm).mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    const w = await destination()
+    await field('destination-edit-content').setValue(original)
+    await click('保存规则内容')
+    expect(api.post).toHaveBeenCalledWith('/rule-library/check-content', {
+      behavior: 'classical', format: 'yaml', content: original, append_lines: []
+    })
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('+.tmdb.org → DOMAIN-SUFFIX,tmdb.org'), expect.objectContaining({ confirmText: '转换并保存' }))
+    expect(ruleContentApi.save).not.toHaveBeenCalled()
+    expect((field('destination-edit-content').element as HTMLTextAreaElement).value).toBe(original)
+    resolve(accepted); await flushPromises()
+    if (accepted) {
+      expect(ruleContentApi.save).toHaveBeenCalledWith('library', 'read-revision', converted)
+      expect(w.emitted('saved')).toHaveLength(1)
+      expect((field('destination-edit-content').element as HTMLTextAreaElement).value).toBe(converted)
+    } else {
+      expect(ruleContentApi.save).not.toHaveBeenCalled()
+      expect(w.emitted('saved')).toBeUndefined()
+      expect((field('destination-edit-content').element as HTMLTextAreaElement).value).toBe(original)
+    }
+    expect(scopedRequests.value).toBe(0)
+  })
+  it('does not save a conversion accepted after the destination editor unmounts', async () => {
+    const data = response(); data.data.rule.behavior = 'classical'
+    vi.mocked(ruleContentApi.read).mockResolvedValueOnce(data as any)
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { content: 'IP-CIDR,192.0.2.1/32,no-resolve', errors: [], changes: [
+      { line: 1, before: '192.0.2.1', after: 'IP-CIDR,192.0.2.1/32,no-resolve' }
+    ] } })
+    let resolve!: (value: boolean) => void
+    vi.mocked(confirm).mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    const w = await destination()
+    await field('destination-edit-content').setValue('192.0.2.1')
+    await click('保存规则内容')
+    w.unmount(); wrappers.splice(wrappers.indexOf(w), 1)
+    resolve(true); await flushPromises()
+    expect(ruleContentApi.save).not.toHaveBeenCalled()
     expect(scopedRequests.value).toBe(0)
   })
   it('retains input on a version conflict and requires confirmation before reloading', async () => {

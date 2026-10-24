@@ -8,4 +8,5 @@ export interface RuleContentCheck {
   content: string
   changes: { line: number; before: string; after: string }[]
   errors: { line: number; message: string }[]
+  warnings?: { line: number; message: string; before?: string }[]
 }

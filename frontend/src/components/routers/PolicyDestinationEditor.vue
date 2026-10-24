@@ -47,6 +47,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import { ruleContentApi, type PolicyWorkspace, type RuleContentDraft } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
+import { prepareRuleContent } from '@/lib/ruleset-content'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 const props = defineProps<{ rules: PolicyWorkspace['rule_sets']; selectedIds: string[]; address?: string }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
@@ -81,7 +82,10 @@ async function save() {
   const current = epoch, id = data.value.rule.id
   saving.value = true; error.value = ''; beginScopedRequest()
   try {
-    const response = await ruleContentApi.save(id, data.value.revision, content.value)
+    const checked = await prepareRuleContent({ ...data.value.rule, content: content.value })
+    if (current !== epoch || checked === null) return
+    content.value = checked
+    const response = await ruleContentApi.save(id, data.value.revision, checked)
     if (current !== epoch) return
     if (!response.data.success) throw new Error('保存失败，请重新读取核对。')
     data.value = { ...data.value!, revision: response.data.revision, rule: { ...data.value!.rule, content: content.value } }

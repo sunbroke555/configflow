@@ -65,7 +65,7 @@ def edit_rule_library_content(rule_id):
             return jsonify({'success': False, 'message': error.description}), 404
         return jsonify({'success': True, 'revision': _content_revision(rule),
                         'rule': {key: rule.get(key, '') for key in
-                                 ('id', 'name', 'source_type', 'behavior', 'content', 'url')},
+                                 ('id', 'name', 'source_type', 'behavior', 'format', 'content', 'url')},
                         'usage_count': len(get_repository().get_resource_usage('rule_library', rule_id))}), 200, {'Cache-Control': 'no-store'}
 
     body = request.get_json()
