@@ -60,6 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/proxy-groups', label: '策略组', icon: 'Grid' },
       { path: '/rules', label: '策略规则', icon: 'Document' },
+      { path: '/client-devices', label: '客户端设备', icon: 'Devices' },
       { path: '/domain-discovery', label: '域名发现', icon: 'Radar' },
       { path: '/routers', label: '上游路由', icon: 'Router' },
       { path: '/generate', label: '配置生成', icon: 'Download' }

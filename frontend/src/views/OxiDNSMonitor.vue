@@ -60,11 +60,15 @@
       </p>
       <Tabs :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
         <div class="mb-4 flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2 max-sm:mb-2 max-sm:gap-y-1">
-          <TabsList class="min-h-11 shrink-0 max-sm:grid max-sm:h-auto max-sm:w-full max-sm:grid-cols-3">
-            <TabsTrigger value="overview" class="min-h-11 px-4 max-sm:px-2">运行概览</TabsTrigger>
-            <TabsTrigger value="queries" class="min-h-11 px-4 max-sm:px-2">查询记录</TabsTrigger>
-            <TabsTrigger value="devices" class="min-h-11 px-4 max-sm:px-2">设备策略</TabsTrigger>
-          </TabsList>
+          <div class="flex min-w-0 shrink-0 items-center gap-2 max-sm:w-full">
+            <TabsList class="min-h-11 shrink-0 max-sm:grid max-sm:h-auto max-sm:flex-1 max-sm:grid-cols-2">
+              <TabsTrigger value="overview" class="min-h-11 px-4 max-sm:px-2">运行概览</TabsTrigger>
+              <TabsTrigger value="queries" class="min-h-11 px-4 max-sm:px-2">查询记录</TabsTrigger>
+            </TabsList>
+            <Button variant="ghost" class="min-h-11 shrink-0 px-3 text-primary-accent" :disabled="!agentId" @click="openClientDevices">
+              <MonitorSmartphone class="size-4" />客户端设备
+            </Button>
+          </div>
           <div class="oxidns-panel-actions ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-2 max-sm:w-full sm:min-w-[28rem] sm:justify-end">
             <OxiDNSStatisticsControls v-if="tab === 'overview' && overview" :statistics="overview.statistics" :resetting="resettingStatistics" @reset="confirmResetStatistics" />
             <OxiDNSRuleUpdate :agent-id="agentId" :disabled="switchingDevice || currentDevice?.status !== 'online'" @updated="refreshAll" />
@@ -72,7 +76,7 @@
               @flushed="id => { if (id === agentId) refresh(true) }" />
           </div>
         </div>
-        <template v-if="tab !== 'devices' && !overview">
+        <template v-if="!overview">
           <LoadingRows v-if="overviewLoading" :rows="5" />
           <SectionCard v-else>
             <EmptyState :icon="TriangleAlert" title="暂时无法读取 OxiDNS 数据" :description="overviewError || '等待核心返回监控数据。'">
@@ -96,7 +100,6 @@
             :loading="queriesLoading" :error="queriesError" :page="page" :has-next="hasNext"
             @filter="applyFilters" @recorder="selectRecorder" @next="nextPage" @previous="previousPage" @retry="loadQueries(true)" @detail="selectedRecord = $event" />
         </TabsContent>
-        <TabsContent value="devices"><OxiDNSDevicePolicies ref="policyPanel" :agent-id="agentId" :recorder="recorder" @published="refresh(true)" /></TabsContent>
       </Tabs>
     </template>
     <OxiDNSQueryDetail v-if="selectedRecord" :agent-id="agentId" :record-id="selectedRecord.id" :recorder="recorder" @close="selectedRecord = null" />
@@ -106,8 +109,8 @@
 </template>
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { Loader2, RefreshCw, Search, Server, Settings, TriangleAlert } from '@lucide/vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Loader2, MonitorSmartphone, RefreshCw, Search, Server, Settings, TriangleAlert } from '@lucide/vue'
 import { agentApi, profileApi } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -122,7 +125,6 @@ import OxiDNSOverviewPanel from '@/components/agents/OxiDNSOverview.vue'
 import OxiDNSStatisticsControls from '@/components/agents/OxiDNSStatisticsControls.vue'
 import OxiDNSQueryTable from '@/components/agents/OxiDNSQueryTable.vue'
 import OxiDNSQueryDetail from '@/components/agents/OxiDNSQueryDetail.vue'
-import OxiDNSDevicePolicies from '@/components/agents/OxiDNSDevicePolicies.vue'
 import OxiDNSRuleUpdate from '@/components/agents/OxiDNSRuleUpdate.vue'
 import OxiDNSCacheFlush from '@/components/agents/OxiDNSCacheFlush.vue'
 import { useOxiDNSMonitor } from '@/composables/useOxiDNSMonitor'
@@ -161,14 +163,13 @@ async function openSettings(initialFeature?: string) {
     if (current === settingsRequest) openingSettings.value = false
   }
 }
-const tab = ref(['queries', 'devices'].includes(String(route.query.tab)) ? String(route.query.tab) : 'overview')
-const policyPanel = ref<InstanceType<typeof OxiDNSDevicePolicies> | null>(null)
-const canLeavePolicy = async () => await policyPanel.value?.canLeave() ?? true
-onBeforeRouteLeave(canLeavePolicy)
-onBeforeRouteUpdate(async (to, from) => to.params.agentId === from.params.agentId || await canLeavePolicy())
-async function changeTab(value: string) {
-  if (value !== tab.value && await canLeavePolicy()) tab.value = value
+const tab = ref(route.query.tab === 'queries' ? 'queries' : 'overview')
+function changeTab(value: string) {
+  tab.value = value
 }
+// Device policies moved to the profile's client devices page; old links land there.
+const openClientDevices = () => router.push({ path: '/client-devices', query: { agent: agentId.value } })
+if (route.query.tab === 'devices') void router.replace({ path: '/client-devices', query: { agent: agentId.value } })
 const selectedRecord = ref<OxiDNSQuery | null>(null)
 const { overview, overviewLoading, overviewError, overviewErrorCode, resettingStatistics, resetError, resetStatistics, clockSkewMs, qps, queries, queriesLoading, queriesError, recorder, filters,
   page, hasNext, autoRefresh, refresh, loadQueries, selectRecorder, applyFilters, nextPage, previousPage } = useOxiDNSMonitor(agentId, tab)

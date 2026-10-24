@@ -20,7 +20,7 @@ declare module 'axios' {
   }
 }
 
-const scopedPath = /^\/(?:profiles\/[^/]+\/generate|proxy-groups(?:\/|$)|rules(?:\/|$)|rule-sets(?:\/|$)|rule-configs(?:\/|$)|custom-config(?:\/|$)|(?:mosdns|oxidns)(?:\/|$)|stats(?:\/|$)|domain-discovery(?:\/|$)|routers(?:\/|$))/
+const scopedPath = /^\/(?:profiles\/[^/]+\/generate|proxy-groups(?:\/|$)|rules(?:\/|$)|rule-sets(?:\/|$)|rule-configs(?:\/|$)|custom-config(?:\/|$)|(?:mosdns|oxidns)(?:\/|$)|stats(?:\/|$)|domain-discovery(?:\/|$)|routers(?:\/|$)|client-devices(?:\/|$|\?))/
 const profileOptions = (profileId = getActiveProfileId()) => ({
   headers: { 'X-ConfigFlow-Profile': profileId }
 })
@@ -476,14 +476,32 @@ export const clientToolsApi = {
     api.post(`/agents/${encodeURIComponent(id)}/mihomo/rule-targets/apply`, data)
 }
 
-// OxiDNS monitoring never sends core credentials or addresses from the browser.
-export const oxidnsDevicePolicyApi = {
-  get: (id: string, options: { signal?: AbortSignal } = {}) =>
-    api.get(`/agents/${encodeURIComponent(id)}/oxidns/device-policies`, options),
-  save: (id: string, data: { profile_id: string; revision: string; notes_revision: string; policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[] }) =>
-    api.put(`/agents/${encodeURIComponent(id)}/oxidns/device-policies`, { ...data, base_url: getBaseUrl() })
+export type ClientDeviceMode = '' | 'smart' | 'direct'
+export interface ClientDevice { ip: string; name: string; mode: ClientDeviceMode }
+export interface ClientDeviceAgent {
+  id: string; name: string; host: string; status: string
+  deployment: import('@/composables/useAgentDeployments').AgentDeployment | null
+}
+export interface ClientDevicesState {
+  success: true; profile_id: string; profile_name: string; oxidns_revision: string
+  devices: ClientDevice[]; editable: boolean; reason: string; agents: ClientDeviceAgent[]
+}
+/** 当前配置空间的设备名称与 OxiDNS DNS 策略；从 Agent 进入时按设备绑定的空间读取 */
+export const clientDeviceApi = {
+  get: (options: { agentId?: string; profileId?: string; signal?: AbortSignal } = {}) =>
+    api.get<ClientDevicesState>('/client-devices', {
+      ...(options.profileId ? profileOptions(options.profileId) : {}),
+      params: options.agentId ? { agent: options.agentId } : undefined, signal: options.signal
+    }),
+  /** 只保存一行；previous 是编辑前看到的值，已被其他页面修改时返回 409 */
+  save: (profileId: string, device: ClientDevice, previous: Omit<ClientDevice, 'ip'>) =>
+    api.put<ClientDevicesState>('/client-devices', {
+      profile_id: profileId, ip: device.ip, name: device.name, mode: device.mode,
+      previous_name: previous.name, previous_mode: previous.mode, base_url: getBaseUrl()
+    }, profileOptions(profileId))
 }
 
+// OxiDNS monitoring never sends core credentials or addresses from the browser.
 export const oxidnsMonitorApi = {
   clients: (id: string, params: Record<string, string | number | undefined>, options: { signal?: AbortSignal } = {}) =>
     api.get(`/agents/${encodeURIComponent(id)}/oxidns/clients`, { params, ...options }),
