@@ -27,7 +27,7 @@ def test_converted_main_chain_preflights_subscription_only_provider(tmp_path, mo
     outbound = Mock(side_effect=AssertionError('invalid graph must precede outbound agent requests'))
     monkeypatch.setattr('requests.get', outbound)
     output = repo.write_generated('default', 'config.yaml', 'known good')
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     client = app.test_client()
     response = client.get(path) if path.startswith('/api/config') else client.post(path, json={'restart': False})
     assert response.status_code == 400, response.get_data(as_text=True)
@@ -36,7 +36,7 @@ def test_converted_main_chain_preflights_subscription_only_provider(tmp_path, mo
     outbound.assert_not_called()
     manager.push_config_to_agent.assert_not_called()
     assert output.read_text() == 'known good'
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('provider_chain', [True, False])
@@ -198,7 +198,7 @@ def test_deep_group_chain_api_never_returns_500(tmp_path, monkeypatch, cycle, pa
                'include_groups': [f'g{i + 1}'] if i < 1099 else []} for i in range(1100)]
     seed_nodes(repo, [node(str(i)) for i in range(1100)], groups=groups,
                chains=[chain_group('1099', {'type': 'group', 'id': 'g0'})])
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     convert = Mock(wraps=mihomo.convert_node_to_mihomo)
     monkeypatch.setattr(mihomo, 'convert_node_to_mihomo', convert)
     if cycle:
@@ -208,7 +208,7 @@ def test_deep_group_chain_api_never_returns_500(tmp_path, monkeypatch, cycle, pa
         response = app.test_client().post(path, json={} if 'preview' in path else node('new'))
     assert response.status_code == (409 if cycle else 200), response.get_data(as_text=True)
     if cycle or 'preview' in path:
-        assert repo.path.read_bytes() == before
+        assert repo._store.fingerprint() == before
     if not cycle and 'preview' in path:
         proxies = yaml.safe_load(response.get_json()['content'])['proxies']
         assert len(proxies) == 1101

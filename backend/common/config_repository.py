@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import copy
 import errno
+import hashlib
 import json
+import logging
 import math
 import os
 import re
 import secrets
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
@@ -19,7 +22,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
+from backend.common.config_store import (
+    ConfigStorageError, ConfigStore, StoreConflict, StoreCorrupt, StoreError, StoreUnsupported,
+)
 from backend.common.oxidns_settings import get_default_oxidns_settings
+
+logger = logging.getLogger(__name__)
 
 
 class ProfileRepositoryError(Exception):
@@ -53,10 +61,29 @@ class ProfileInUse(ProfileRepositoryError, ValueError):
 _PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _THREAD_LOCKS: Dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
+# File locks held by the current thread: flock on a second descriptor of the
+# same file would wait for this thread itself.
+_HELD_LOCKS = threading.local()
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# Every version fills these in at startup: they never show an edit.
+_STARTUP_SETTINGS = ('rule_proxy_token', 'retired_rule_proxy_tokens')
+
+
+def _content_digest(value: Dict[str, Any]) -> str:
+    """Digest of a parsed config.json, independent of layout and key order."""
+    value = copy.deepcopy(value)
+    system = value.get('system')
+    for settings in (value.get('system_config'), system.get('system_config') if isinstance(system, dict) else None):
+        if isinstance(settings, dict):
+            for key in _STARTUP_SETTINGS:
+                settings.pop(key, None)
+    text = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -322,22 +349,29 @@ class ProfileRepository:
     MAX_LOCK_TIMEOUT_SECONDS = 3600.0
     LOCK_POLL_INTERVAL_SECONDS = 0.05
     DOCUMENT_CACHE_MAX_BYTES = 8 * 1024 * 1024
+    DATABASE_FILENAME = 'configflow.sqlite3'
+    LEGACY_FILENAME = 'config.json'
 
     def __init__(self, data_dir, default_config_factory=None, initial_config_factory=None):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.profiles_dir = self.data_dir / 'profiles'
-        self.path = self.data_dir / 'config.json'
+        self.db_path = self.data_dir / self.DATABASE_FILENAME
+        # Pre-migration copy; read only to detect edits made by older versions.
+        self.legacy_path = self.data_dir / self.LEGACY_FILENAME
         self.migrations_dir = self.data_dir / 'migrations'
         self.initialization_lock_file = self.data_dir / '.config.lock'
         self._default_config_factory = default_config_factory
         self._initial_config_factory = initial_config_factory
         self._local = threading.local()
-        # One validated generation only; public readers return independent values.
+        self._store = ConfigStore(self.db_path, self._lock_timeout_seconds)
+        # One validated generation only, keyed by the database head; public
+        # readers return independent values.
         self._document_cache = None
+        self._cache_lock = threading.Lock()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         with self._lock(self.initialization_lock_file):
-            self._initialize_locked()
+            self._open_locked()
 
     def _legacy_defaults(self):
         return _deep_merge(_default_profile_config(), self._default_config_factory() if self._default_config_factory else {})
@@ -360,7 +394,8 @@ class ProfileRepository:
             raise ProfileValidationError(f'JSON object expected in {path.name}')
         return value
 
-    def _read_recoverable(self, path, validator):
+    def _read_with_backup(self, path, validator):
+        """Read a legacy file, falling back to its .bak; never repairs either."""
         try:
             current = self._read_json(path)
             validator(current)
@@ -374,75 +409,296 @@ class ProfileRepository:
                 validator(recovered)
             except ProfileRepositoryError:
                 raise error
-            corrupt = path.with_name(path.name + '.corrupt-' + uuid.uuid4().hex)
-            if path.exists():
-                shutil.copy2(path, corrupt)
-            # Do not refresh the valid backup with the corrupt primary.
-            content = json.dumps(recovered, ensure_ascii=False, indent=2) + '\n'
-            temporary = self._write_temp(path, content)
-            try:
-                os.replace(temporary, path)
-                self._fsync_dir(path.parent)
-            finally:
-                if temporary.exists():
-                    temporary.unlink()
             return recovered
 
+    def _initial_document_locked(self):
+        """The validated document of the pre-database layout (or the defaults).
 
-    def _initialize_locked(self):
-        if self.path.exists() and not self.path.is_file():
+        Returns (document, source, split_source, remaps, has_legacy). Nothing on
+        disk is written: every legacy file stays as it is.
+        """
+        path = self.legacy_path
+        if path.exists() and not path.is_file():
             raise ProfileValidationError('config.json must be a regular file')
         system_file = self.data_dir / 'system.json'
         has_layout = system_file.exists() or system_file.with_suffix('.json.bak').exists()
         if has_layout:
-            for path in (self.path, self.path.with_name('config.json.bak'), self.profiles_dir):
-                self._check_migration_path(path)
+            for candidate in (path, path.with_name('config.json.bak'), self.profiles_dir):
+                self._check_migration_path(candidate)
         current = None
-        if self.path.exists() or self.path.with_name('config.json.bak').exists():
+        if path.exists() or path.with_name('config.json.bak').exists():
             try:
-                current = self._read_json(self.path)
+                current = self._read_json(path)
             except ProfileRepositoryError:
                 # A stale single-file config is not authoritative in a split
                 # installation. Prefer a committed current-format backup, if any.
                 if has_layout:
-                    backup = self.path.with_name('config.json.bak')
+                    backup = path.with_name('config.json.bak')
                     if backup.is_file():
                         try:
                             candidate = self._read_json(backup)
                         except ProfileRepositoryError:
                             candidate = {}
                         if candidate.get('schema_version') is not None:
-                            current = self._read_recoverable(
-                                self.path, lambda value: self._validate_document(self._convert_import(value)))
+                            current = self._read_with_backup(
+                                path, lambda value: self._validate_document(self._convert_import(value)))
                 else:
-                    current = self._read_recoverable(
-                        self.path, lambda value: self._validate_document(self._convert_import(value)))
+                    current = self._read_with_backup(
+                        path, lambda value: self._validate_document(self._convert_import(value)))
             if current is not None and current.get('schema_version') == self.SCHEMA_VERSION:
-                current = self._read_recoverable(self.path, self._validate_document)
-                if self._ensure_rule_proxy_token(current['system']):
-                    self._write_json(self.path, current)
-                return
+                document = self._read_with_backup(path, self._validate_document)
+                self._ensure_rule_proxy_token(document['system'])
+                self._validate_document(document)
+                return document, 'config-v5', None, {}, True
         split_source = None
         if has_layout and (current is None or current.get('schema_version') is None):
             split_source = self._read_profile_layout()
             source = split_source
+            label = 'split-v2'
         else:
             if current is None or current.get('schema_version') is None:
                 if any(self.profiles_dir.glob('*/config.json')) or any(self.profiles_dir.glob('*/config.json.bak')):
                     raise ProfileValidationError('发现旧配置文件但缺少 system.json 索引；请恢复完整数据目录，不能初始化空配置')
             source = current if current is not None else (self._initial_config_factory or self._legacy_defaults)()
+            label = 'legacy-single' if current is not None else 'defaults'
         remaps = {}
         document = self._convert_import(source, resource_remaps=remaps)
         self._ensure_rule_proxy_token(document['system'])
         self._validate_document(document)
-        if current is not None or split_source is not None:
-            self._snapshot('migration', split_source['profiles'] if split_source else ())
+        return document, label, split_source, remaps, current is not None or split_source is not None
+
+    def _migrate_to_store_locked(self):
+        """Build the database from the legacy layout; legacy files stay untouched."""
+        document, source, split_source, remaps, has_legacy = self._initial_document_locked()
+        snapshot = None
+        if has_legacy:
+            snapshot = self._snapshot('migration', split_source['profiles'] if split_source else ())
         if split_source is not None:
             self._migrate_profile_cache(split_source, document, remaps)
-        else:
+        elif source != 'config-v5':
             self._migrate_raw_cache()
-        with self._commit_guard():
-            self._write_json(self.path, document)
+        now = _now()
+        migration = {'source': source, 'at': now,
+                     'snapshot': str(snapshot.relative_to(self.data_dir)) if snapshot else None}
+        # data_source: whether config.json holds this data (it is a stale,
+        # non-authoritative file next to a split layout or missing otherwise).
+        record = self._legacy_record(document, 'migrated', now,
+                                     data_source=source in ('legacy-single', 'config-v5'))
+        entry = self._store.create(document, meta={'migration': migration, 'legacy_config': record})
+        self._set_cache(entry)
+        if has_legacy:
+            logger.info('已把旧配置（%s）迁移到 %s；config.json 保留为迁移前副本，不再写入',
+                        source, self.DATABASE_FILENAME)
+
+    def _legacy_fingerprint(self):
+        """(sha256, size) of config.json as it is now, or (None, None)."""
+        path = self.legacy_path
+        if path.is_symlink() or not path.is_file():
+            return None, None
+        content = path.read_bytes()
+        return hashlib.sha256(content).hexdigest(), len(content)
+
+    @staticmethod
+    def _revisions_of(document):
+        return {'system': document['system'].get('_revision', 0),
+                'shared': document['shared'].get('_revision', 0),
+                'profiles': {key: profile.get('_revision', 0) for key, profile in document['profiles'].items()}}
+
+    def _legacy_content(self):
+        """_content_digest of config.json, or None when it cannot be read."""
+        try:
+            return _content_digest(self._read_json(self.legacy_path))
+        except ProfileRepositoryError:
+            return None
+
+    def _legacy_is_current(self):
+        """Whether config.json is a current-schema document (not a pre-schema root)."""
+        try:
+            return self._read_json(self.legacy_path).get('schema_version') == self.SCHEMA_VERSION
+        except ProfileRepositoryError:
+            return False
+
+    def _legacy_record(self, document, status, at, *, data_source):
+        sha256, size = self._legacy_fingerprint()
+        # revisions: baseline of current-schema files; content: of the older
+        # formats, which carry no revision counters.
+        return {'sha256': sha256, 'size': size, 'revisions': self._revisions_of(document),
+                'content': self._legacy_content() if sha256 is not None else None,
+                'status': status, 'at': at, 'data_source': data_source and sha256 is not None}
+
+    def _open_locked(self):
+        """Startup under .config.lock: migrate, check, recover and load the database."""
+        self._store.discard_stale_temporaries()
+        if self.db_path.is_symlink() or (self.db_path.exists() and not self.db_path.is_file()):
+            raise ProfileValidationError(f'{self.DATABASE_FILENAME} 必须是普通文件')
+        if not self.db_path.exists():
+            journal = self.db_path.with_name(self.db_path.name + '-journal')
+            if journal.exists():
+                # Never apply a journal left by another file to a new database.
+                os.replace(journal, journal.with_name(f'{journal.name}.orphan-{time.time_ns()}'))
+            earlier = self._earlier_databases()
+            if earlier:
+                logger.error('%s 不存在，但数据目录里有它以前的副本（%s）；将从旧配置文件重新迁移，'
+                             '之后的修改不在迁移结果中，请核对并按需从这些副本恢复',
+                             self.DATABASE_FILENAME, '、'.join(earlier))
+            self._migrate_to_store_locked()
+        else:
+            try:
+                self._store.check()
+            except StoreUnsupported as error:
+                raise ProfileRepositoryError(
+                    f'配置数据库由更新版本的 ConfigFlow 创建（{error}），当前版本无法读取；'
+                    '请升级到对应版本，或用“导出全部数据”的备份恢复。数据库未改动。') from error
+            except StoreCorrupt as error:
+                self._rebuild_corrupt_locked(error)
+            except (sqlite3.Error, StoreError) as error:
+                raise ConfigStorageError(
+                    f'无法打开配置数据库 {self.DATABASE_FILENAME}：{error}；数据库未改动') from error
+        try:
+            self._read_entry(locked=True)
+        except ConfigStorageError:
+            raise
+        except (ProfileRepositoryError, ValueError, TypeError) as error:
+            raise ProfileRepositoryError(f'配置数据库内容未通过校验：{error}') from error
+        self._import_changed_legacy_locked()
+        entry = self._read_entry(locked=True)
+        if self._ensure_rule_proxy_token(copy.deepcopy(entry.document['system'])):
+            with self._write_locked():
+                pass
+
+    def _earlier_databases(self):
+        """Damaged copies and snapshots that show a database existed here before."""
+        paths = sorted(self.data_dir.glob(f'{self.DATABASE_FILENAME}.corrupt-*'))
+        if self.migrations_dir.is_dir():
+            paths += sorted(self.migrations_dir.glob(f'*/*/{self.DATABASE_FILENAME}'))[-3:]
+        return [str(path.relative_to(self.data_dir)) for path in paths
+                if not path.name.endswith('-journal')]
+
+    def _rebuild_corrupt_locked(self, error):
+        """Replace a physically damaged database from a config.json known to match it."""
+        record = self._store.salvage_meta()
+        legacy = (record or {}).get('legacy_config') if isinstance(record, dict) else None
+        sha256, size = self._legacy_fingerprint()
+        if record is None:
+            # Nothing tells which file the data came from: config.json is a
+            # source unless it is the stale (pre-schema) root of a split
+            # installation. Older versions keep system.json after migrating a
+            # split layout to a schema-5 config.json, which is then authoritative.
+            usable = sha256 is not None and (
+                not (self.data_dir / 'system.json').exists() or self._legacy_is_current())
+        else:
+            usable = (sha256 is not None and isinstance(legacy, dict) and legacy.get('data_source') is True and
+                      legacy.get('sha256') == sha256 and legacy.get('size') == size)
+        if not usable:
+            raise ProfileRepositoryError(
+                f'配置数据库 {self.DATABASE_FILENAME} 已损坏（{error}），且没有可安全使用的恢复来源；'
+                f'请停止服务后恢复：{self._RESTORE_HINT}损坏文件未改动。') from error
+        try:
+            document = self._read_with_backup(
+                self.legacy_path, lambda value: self._validate_document(self._convert_import(value)))
+            document = self._convert_import(document)
+            self._ensure_rule_proxy_token(document['system'])
+            self._validate_document(document)
+        except ProfileRepositoryError as failure:
+            raise ProfileRepositoryError(
+                f'配置数据库 {self.DATABASE_FILENAME} 已损坏（{error}），config.json 也无法使用（{failure}）；'
+                f'请停止服务后恢复：{self._RESTORE_HINT}损坏文件未改动。') from failure
+        now = _now()
+        corrupt = self._store.corrupt_target()
+        corrupt_name = corrupt.name
+        meta = {'migration': {'source': 'corrupt-rebuild', 'at': now, 'snapshot': None,
+                              'corrupt_file': corrupt_name, 'error': str(error)},
+                'legacy_config': legacy if isinstance(legacy, dict) else
+                self._legacy_record(document, 'migrated', now, data_source=True),
+                'recovered_from': {'source': 'config.json', 'at': now, 'corrupt_file': corrupt_name}}
+        temporary, entry = self._store.build_temporary(document, meta)
+        try:
+            self._store.preserve_corrupt(corrupt)
+            self._store.install(temporary)
+        finally:
+            if temporary.exists():
+                self._store.discard_temporary(temporary)
+        self._set_cache(entry)
+        snapshots = sorted(self.migrations_dir.glob(f'*/*/{self.DATABASE_FILENAME}'))[-3:]
+        logger.error('配置数据库已损坏（%s），原文件已保留为 %s，并已从 config.json 重建。'
+                     '迁移（或上次导入旧配置）之后的全部修改都不在重建结果中；'
+                     '可用的数据库快照：%s', error, corrupt.name,
+                     '、'.join(str(path.relative_to(self.data_dir)) for path in snapshots) or '无')
+
+    _RESTORE_HINT = ('用“导出全部数据”的备份导入；或把 migrations/ 下 import/、legacy-config/ 快照里的 '
+                     'configflow.sqlite3 复制回数据目录；migration/ 快照只有迁移前的旧配置文件，需放回后重新迁移或导入。')
+
+    def _import_changed_legacy_locked(self):
+        """Import config.json once if an older version edited it during a rollback."""
+        if self.legacy_path.is_symlink() or not self.legacy_path.is_file():
+            return
+        record = self._store.meta('legacy_config')
+        record = record if isinstance(record, dict) else {}
+        sha256, size = self._legacy_fingerprint()
+        if sha256 == record.get('sha256') and size == record.get('size'):
+            return
+        now = _now()
+        rejected = {**record, 'sha256': sha256, 'size': size, 'status': 'rejected', 'at': now, 'data_source': False}
+        try:
+            raw = self._read_json(self.legacy_path)
+            converted = self._convert_import(raw)
+            self._ensure_rule_proxy_token(converted['system'])
+            self._validate_document(converted)
+        except Exception as error:  # any unusable content: keep the database as it is
+            logger.warning('config.json 在迁移后被修改，但内容无法导入（%s）；已忽略，数据库未改动', error)
+            self._commit_meta_locked({'legacy_config': {**rejected, 'error': str(error)}})
+            return
+        baseline = record.get('revisions') if isinstance(record.get('revisions'), dict) else {}
+        revisions = self._revisions_of(converted)
+        old_profiles = baseline.get('profiles') if isinstance(baseline.get('profiles'), dict) else {}
+
+        def above(value, old):
+            return isinstance(value, int) and (not isinstance(old, int) or value > old)
+
+        # Older versions rewrite config.json at startup without edits (token,
+        # re-migration, defaults). Only a revision bump or a changed profile set
+        # shows an edit; anything else would replace newer data with stale data.
+        current_schema = raw.get('schema_version') == self.SCHEMA_VERSION
+        content = _content_digest(raw)
+        same_content = content == record.get('content')
+        if not current_schema and record.get('content') is not None:
+            # The original single-file format (and schema 2) has no revision
+            # counters: any change of its content is an edit.
+            edited = not same_content
+        else:
+            # No content baseline (config.json was missing or unreadable at
+            # migration): as for current-schema files, only revisions count.
+            edited = (above(revisions['system'], baseline.get('system')) or
+                      above(revisions['shared'], baseline.get('shared')) or
+                      set(revisions['profiles']) != set(old_profiles) or
+                      any(above(value, old_profiles.get(key)) for key, value in revisions['profiles'].items()))
+        if not edited:
+            logger.info('config.json 在迁移后被改写，但没有新的修改；已记录，不导入')
+            # Same data as recorded: it stays a source exactly when the
+            # previous file was one (e.g. only a token was added).
+            self._commit_meta_locked({'legacy_config': {
+                **record, 'sha256': sha256, 'size': size, 'status': 'ignored', 'at': now,
+                'data_source': record.get('data_source') is True and (current_schema or same_content)}})
+            return
+        meta = {'legacy_config': {'sha256': sha256, 'size': size, 'revisions': revisions, 'content': content,
+                                  'status': 'imported', 'at': now, 'data_source': True},
+                'last_legacy_import': {'at': now, 'sha256': sha256, 'snapshot': None}}
+        try:
+            with self._write_locked(meta=meta) as (previous, document):
+                snapshot = self._apply_import(document, converted, 'legacy-config')
+                meta['last_legacy_import']['snapshot'] = str(snapshot.relative_to(self.data_dir))
+        except ProfileRepositoryError as error:
+            # E.g. it would drop a router's published ownership record. Never
+            # leave the service unable to start over a rollback leftover.
+            logger.warning('config.json 在迁移后被修改，但导入被拒绝（%s）；已忽略，数据库未改动', error)
+            self._commit_meta_locked({'legacy_config': {**rejected, 'error': str(error)}})
+            return
+        logger.warning('检测到旧版本在回退期间修改了 config.json，已导入为当前配置；'
+                       '导入前的数据库已备份到 %s', meta['last_legacy_import']['snapshot'])
+
+    def _commit_meta_locked(self, meta):
+        with self._write_locked(meta=meta):
+            pass
 
     def _check_migration_path(self, path):
         for part in (path, *path.parents):
@@ -538,10 +794,17 @@ class ProfileRepository:
 
 
     def _snapshot(self, reason, legacy_profiles=()):
+        """Copy the database (and, for migrations, the legacy files) aside.
+
+        Callers hold .config.lock and no SQLite transaction.
+        """
         self._check_migration_path(self.migrations_dir)
         destination = self._create_migration_snapshot_dir() / reason
         destination.mkdir()
-        for name in ('config.json', 'config.json.bak', 'system.json', 'system.json.bak'):
+        if self.db_path.is_file():
+            self._store.backup_to(destination / self.DATABASE_FILENAME)
+        legacy_names = ('config.json', 'config.json.bak', 'system.json', 'system.json.bak')
+        for name in legacy_names if reason in ('migration', 'legacy-config') else ():
             source = self.data_dir / name
             self._check_migration_path(source)
             if source.is_file():
@@ -575,51 +838,47 @@ class ProfileRepository:
                     if item.is_file() and not (target / item.name).exists():
                         shutil.copy2(item, target / item.name)
 
-    @contextmanager
-    def _commit_guard(self):
-        previous = self.path.read_bytes() if self.path.exists() else None
-        try:
-            yield
-        except Exception:
-            if previous is None:
-                if self.path.exists():
-                    self.path.unlink()
-            elif not self.path.exists() or self.path.read_bytes() != previous:
-                temporary = self._write_temp(self.path, previous)
-                try:
-                    os.replace(temporary, self.path)
-                    self._fsync_dir(self.path.parent)
-                finally:
-                    if temporary.exists():
-                        temporary.unlink()
-            raise
+    def _load_entry(self):
+        with self._store.reading() as connection:  # head and rows from one snapshot
+            head = self._store.head(connection)
+            cached = self._document_cache
+            if cached is not None and cached.head == head:
+                return cached
+            entry = self._store.load(connection)
+        self._validate_document(entry.document)
+        self._set_cache(entry)
+        return entry
 
-    def _document_signature(self):
-        # POSIX ctime changes even when an editor restores the old mtime and
-        # length. Windows ctime is creation time, so do not cache there.
-        if os.name == 'nt':
-            return None
+    def _read_entry(self, *, locked=False):
+        """The current validated document; reads never need .config.lock."""
         try:
-            stat = self.path.stat()
-        except OSError:
-            return None
-        if stat.st_size > self.DOCUMENT_CACHE_MAX_BYTES:
-            return None
-        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            try:
+                return self._load_entry()
+            except (ConfigStorageError, ProfileRepositoryError, StoreError, ValueError, TypeError):
+                # Network filesystems may not honour SQLite's own locks: retry
+                # once serialized with writers before reporting the failure.
+                if locked or self._holds_lock(self.initialization_lock_file):
+                    raise
+            with self._lock(self.initialization_lock_file):
+                return self._load_entry()
+        except StoreConflict as error:
+            raise ProfileRepositoryError('配置数据库在事务外被修改，已放弃本次写入，请重试') from error
+        except StoreError as error:
+            raise ProfileRepositoryError(f'配置数据库内容无效：{error}') from error
 
-    def _read_document_locked(self):
-        signature = self._document_signature()
-        if signature is not None and self._document_cache is not None:
-            cached_signature, document = self._document_cache
-            if signature == cached_signature:
-                return document
-        self._document_cache = None
-        document = self._read_recoverable(self.path, self._validate_document)
-        # Recovery, replacement or an uncoordinated edit during the read must
-        # never label an older document with the newer file's signature.
-        if signature is not None and signature == self._document_signature():
-            self._document_cache = (signature, document)
-        return document
+    def _set_cache(self, entry):
+        if entry.size > self.DOCUMENT_CACHE_MAX_BYTES:
+            return
+        # Always the latest loaded or committed entry: every read compares its
+        # head with the database, so an older one only costs a reload, while a
+        # guard on the generation number would keep a stale entry after a
+        # restored (older) database reaches the same generation again.
+        with self._cache_lock:
+            self._document_cache = entry
+
+    def _drop_cache(self):
+        with self._cache_lock:
+            self._document_cache = None
 
     @staticmethod
     def _router_records(document):
@@ -634,7 +893,7 @@ class ProfileRepository:
 
     @contextmanager
     def _router_commit_guard(self, previous, proposed, locked_routers=(), policy_router=None):
-        """Protect device ownership under the document lock, through the disk write."""
+        """Protect device ownership under the document lock, through COMMIT."""
         from backend.routers.rule_sync_store import job_lock
 
         old_routers = self._router_records(previous)
@@ -685,30 +944,51 @@ class ProfileRepository:
                 raise ProfileInUse('不能在配置事务中再次开启写事务')
             yield nested
             return
-        with self._lock(self.initialization_lock_file):
-            document = self._read_document_locked()
-            previous = document
-            if write:
-                # Never expose the cached generation to a mutating transaction,
-                # including callbacks which fail before validation or commit.
-                self._document_cache = None
-                document = copy.deepcopy(document)
+        if not write:
+            document = self._read_entry().document
             self._local.document = document
             try:
                 yield document
-                if write:
-                    self._ensure_rule_proxy_token(document['system'])
-                    self._validate_document(document)
-                    with self._router_commit_guard(previous, document, locked_routers, policy_router):
-                        with self._commit_guard():
-                            self._write_json(self.path, document)
             finally:
                 self._local.document = None
-                if write:
-                    self._document_cache = None
-        if write and document['system'].get('backup', {}).get('auto_backup'):
+            return
+        with self._lock(self.initialization_lock_file):
+            with self._write_locked(locked_routers=locked_routers, policy_router=policy_router) as (previous, document):
+                yield document
+        if document['system'].get('backup', {}).get('auto_backup'):
             from backend.utils.webdav_backup import configuration_committed
             configuration_committed(self, previous, document)
+
+    @contextmanager
+    def _write_locked(self, *, locked_routers=(), policy_router=None, meta=None):
+        """One write transaction; the caller holds .config.lock.
+
+        Yields (previous, document): the committed generation and the copy to
+        mutate. Only rows that changed are written, in one SQLite transaction.
+        """
+        if getattr(self._local, 'document', None) is not None:
+            raise ProfileInUse('不能在配置事务中再次开启写事务')
+        base = self._read_entry(locked=True)
+        previous = base.document
+        document = copy.deepcopy(previous)
+        self._local.document = document
+        try:
+            yield previous, document
+            self._ensure_rule_proxy_token(document['system'])
+            self._validate_document(document)
+            with self._router_commit_guard(previous, document, locked_routers, policy_router):
+                try:
+                    committed = self._store.commit(base, document, meta=meta)
+                except StoreConflict as error:
+                    self._drop_cache()
+                    raise ProfileRepositoryError('配置数据库在事务外被修改，已放弃本次写入，请重试') from error
+                except BaseException:
+                    self._drop_cache()
+                    raise
+            if committed is not None:
+                self._set_cache(committed)
+        finally:
+            self._local.document = None
 
     @staticmethod
     def _profile(document, profile_id):
@@ -771,7 +1051,7 @@ class ProfileRepository:
             return int(profile.get('_revision', 0)) + int(document['shared'].get('_revision', 0))
 
     def get_publish_snapshot(self, profile_id):
-        """Capture generated inputs and their revision under the same read lock."""
+        """Capture generated inputs and their revision from the same read snapshot."""
         with self._document() as document:
             profile = self._profile(document, profile_id)
             revision = int(profile.get('_revision', 0)) + int(document['shared'].get('_revision', 0))
@@ -862,6 +1142,8 @@ class ProfileRepository:
         """删除配置空间；删除默认配置时必须指定接任默认的配置空间（new_default_id）。"""
         with self._lock(self._profile_operation_lock_path(profile_id)), ExitStack() as jobs:
             tombstone = None
+            moved = False
+            exported = None
             directory = self.profile_dir(profile_id)
             locked_routers = set()
             try:
@@ -887,17 +1169,36 @@ class ProfileRepository:
                                                     if key != profile_id}}
                     jobs.enter_context(self._router_commit_guard(document, without_profile))
                     locked_routers.update(key for key in self._router_records(document) if key[0] == profile_id)
+                    self.migrations_dir.mkdir(exist_ok=True)
+                    tombstone = self.migrations_dir / f'deleted-{profile_id}-{uuid.uuid4().hex}'
                     if directory.exists():
-                        self.migrations_dir.mkdir(exist_ok=True)
-                        tombstone = self.migrations_dir / f'deleted-{profile_id}-{uuid.uuid4().hex}'
                         os.replace(directory, tombstone)
+                        moved = True
+                    else:
+                        tombstone.mkdir(parents=True)
+                    # The database keeps no old generations: retain the deleted
+                    # profile itself (export_profile shape, 0600: it holds credentials).
+                    exported = tombstone / 'deleted-profile.json'
+                    if exported.exists():
+                        exported = tombstone / f'deleted-profile-{uuid.uuid4().hex}.json'
+                    temporary = self._write_temp(exported, json.dumps(profile, ensure_ascii=False, indent=2) + '\n')
+                    try:
+                        os.replace(temporary, exported)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                    self._fsync_dir(tombstone)
                     del document['profiles'][profile_id]
                     if is_default:
                         document['system']['system_config']['default_profile_id'] = new_default_id
                         document['system']['_revision'] += 1
             except Exception:
+                if exported is not None:
+                    exported.unlink(missing_ok=True)
                 if tombstone is not None and tombstone.exists():
-                    os.replace(tombstone, directory)
+                    if moved:
+                        os.replace(tombstone, directory)
+                    else:
+                        shutil.rmtree(tombstone, ignore_errors=True)
                 raise
 
     @staticmethod
@@ -1048,13 +1349,12 @@ class ProfileRepository:
                     self._write_atomic(path, content)
             except Exception as error:
                 if owns_cache:
-                    # The document guard normally restores the old generation.
-                    # If that restoration also failed after replace(), retain the
-                    # cache for any possibly committed source. Read the atomic
-                    # file directly: taking the document lock while holding the
-                    # cache lock would invert the order used above.
+                    # A failed commit normally rolls back. If the outcome is
+                    # unknown (COMMIT reported an error), retain the cache for
+                    # any possibly committed source. Reads need no document
+                    # lock, so the cache lock order is unaffected.
                     try:
-                        current = self._read_json(self.path)
+                        current = self._store.load().document
                         preserve_cache = any(item.get('id') == rule['id']
                                              for item in current['shared']['rule_library'])
                     except Exception:
@@ -1235,24 +1535,33 @@ class ProfileRepository:
             result = sanitize_external_payload(result, system_config)
         return result
 
-    def import_all(self, data):
+    def _prepare_import(self, data):
         document = self._convert_import(data)
         self._ensure_rule_proxy_token(document['system'])
         self._validate_document(document)
+        return document
+
+    def _apply_import(self, previous, document, reason):
+        """Replace the open transaction's document; returns the snapshot taken first."""
+        snapshot = self._snapshot(reason)
+        settings = document['system']['system_config']
+        old_settings = previous['system']['system_config']
+        retired = settings.setdefault('retired_rule_proxy_tokens', [])
+        for token in [old_settings.get('rule_proxy_token'), *old_settings.get('retired_rule_proxy_tokens', [])]:
+            if isinstance(token, str) and token and token != settings.get('rule_proxy_token') and token not in retired:
+                retired.append(token)
+        document['system']['_revision'] = previous['system']['_revision'] + 1
+        document['shared']['_revision'] = previous['shared']['_revision'] + 1
+        for key, profile in document['profiles'].items():
+            profile['_revision'] = previous['profiles'].get(key, {}).get('_revision', 0) + 1
+        previous.clear()
+        previous.update(document)
+        return snapshot
+
+    def import_all(self, data):
+        document = self._prepare_import(data)
         with self._document(write=True) as previous:
-            self._snapshot('import')
-            settings = document['system']['system_config']
-            old_settings = previous['system']['system_config']
-            retired = settings.setdefault('retired_rule_proxy_tokens', [])
-            for token in [old_settings.get('rule_proxy_token'), *old_settings.get('retired_rule_proxy_tokens', [])]:
-                if isinstance(token, str) and token and token != settings.get('rule_proxy_token') and token not in retired:
-                    retired.append(token)
-            document['system']['_revision'] = previous['system']['_revision'] + 1
-            document['shared']['_revision'] = previous['shared']['_revision'] + 1
-            for key, profile in document['profiles'].items():
-                profile['_revision'] = previous['profiles'].get(key, {}).get('_revision', 0) + 1
-            previous.clear()
-            previous.update(document)
+            self._apply_import(previous, document, 'import')
         return self.export_all()
 
     def reset_all(self):
@@ -1438,19 +1747,31 @@ class ProfileRepository:
                     ) from None
                 time.sleep(min(self.LOCK_POLL_INTERVAL_SECONDS, remaining))
 
+    @staticmethod
+    def _holds_lock(path: Path) -> bool:
+        return str(path.resolve()) in getattr(_HELD_LOCKS, "paths", ())
+
     @contextmanager
     def _lock(self, path: Path) -> Iterator[None]:
         path.parent.mkdir(parents=True, exist_ok=True)
         thread_lock = self._thread_lock(path)
+        key = str(path.resolve())
         with thread_lock:
             with path.open("a+b") as handle:
                 if handle.seek(0, os.SEEK_END) == 0:
                     handle.write(b"0")
                     handle.flush()
                 self._acquire_file_lock(handle)
+                held = getattr(_HELD_LOCKS, "paths", None)
+                if held is None:
+                    held = _HELD_LOCKS.paths = {}
+                held[key] = held.get(key, 0) + 1
                 try:
                     yield
                 finally:
+                    held[key] -= 1
+                    if not held[key]:
+                        del held[key]
                     if os.name == "nt":
                         import msvcrt
 

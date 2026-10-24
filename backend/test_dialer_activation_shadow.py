@@ -62,7 +62,7 @@ def test_shadowed_main_chain_rejects_before_any_delivery_mutation(tmp_path, monk
     network = Mock(side_effect=AssertionError('Rejected graph must not reach network'))
     monkeypatch.setattr('requests.get', network)
     cache_before = load_subscription_cache('s')
-    profile_before = repo.path.read_bytes()
+    profile_before = repo._store.fingerprint()
     artifacts = [repo.write_profile_text('default', name, 'last-good')
                  for name in ('generated/config.yaml', 'providers/agg.yaml')]
     # Read-back equality alone can miss a write followed by rollback.
@@ -92,7 +92,7 @@ def test_shadowed_main_chain_rejects_before_any_delivery_mutation(tmp_path, monk
     network.assert_not_called()
     manager.push_config_to_agent.assert_not_called()
     assert load_subscription_cache('s') == cache_before
-    assert repo.path.read_bytes() == profile_before
+    assert repo._store.fingerprint() == profile_before
     assert all(path.read_text() == 'last-good' for path in artifacts)
 
 

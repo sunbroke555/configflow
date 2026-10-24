@@ -110,15 +110,15 @@ def test_mcp_advertises_typed_health_fields():
 @pytest.mark.parametrize('field,value', [('enable', 'false'), ('lazy', 0), ('timeout', None), ('expected-status', '299-200'), ('unknown', 1)])
 def test_shared_health_validation_is_atomic(tmp_path, field, value):
     repo = ProfileRepository(tmp_path)
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     with pytest.raises(ProfileValidationError):
         repo.update_shared_transaction(lambda p: p['subscriptions'].append({'id':'s','name':'S','url':'https://example.test', 'health_check': {field:value}}))
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 @pytest.mark.parametrize('field,value', [('interval', True), ('interval', 0), ('timeout', '5000'), ('timeout', -1), ('lazy', 'false'), ('url', 'ftp://probe.test'), ('url', 'http://@example.test'), ('url', 'http://example.test:0'), ('expected-status', '204,abc'), ('tolerance', -1)])
 def test_repository_rejects_invalid_group_health_atomically(tmp_path, field, value):
     repo = ProfileRepository(tmp_path)
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     with pytest.raises(ProfileValidationError):
         repo.update_profile_transaction('default', lambda p: p['proxy_groups'].append({'id':'g','name':'G','type':'url-test','manual_nodes':['DIRECT'],field:value}))
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before

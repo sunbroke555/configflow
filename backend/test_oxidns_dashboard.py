@@ -315,12 +315,12 @@ def test_reset_route_auth_method_no_store_and_unchanged_config(authenticated_app
     assert client.post(url, json={}, headers={'Authorization': 'Bearer ' + registered['token']}).status_code == 401
     assert client.get(url, headers=admin).status_code == 405
     assert calls == []
-    config_before = manager.repository.path.read_bytes()
+    config_before = manager.repository._store.fingerprint()
     response = client.post(url, json={}, headers=admin)
     assert response.status_code == 200
     assert response.headers['Cache-Control'] == 'no-store'
     assert response.get_json()['statistics']['reason'] == 'manual'
-    assert manager.repository.path.read_bytes() == config_before
+    assert manager.repository._store.fingerprint() == config_before
     assert registered['token'] not in response.get_data(as_text=True)
     assert client.post(url + '?agent_id=elsewhere', json={}, headers=admin).status_code == 400
     assert client.post(url, json={'recorder': 'x' * 3000}, headers=admin).status_code == 400

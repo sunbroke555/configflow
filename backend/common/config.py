@@ -19,7 +19,9 @@ logger = get_logger(__name__)
 DATA_DIR = os.environ.get('DATA_DIR', '/data')
 if not os.path.exists(DATA_DIR) and 'DATA_DIR' not in os.environ:
     DATA_DIR = '.'  # 开发模式，使用当前目录
-CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
+CONFIG_DATABASE_FILE = os.path.join(DATA_DIR, 'configflow.sqlite3')
+# pre-migration copy, read only for rollback detection
+LEGACY_CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 AGGREGATION_PROVIDERS_DIR = os.path.join(DATA_DIR, 'providers')
 
 

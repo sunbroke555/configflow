@@ -1,4 +1,4 @@
-"""Heartbeats are recorded beside config.json and laid over the registered Agent."""
+"""Heartbeats are recorded beside the configuration and laid over the registered Agent."""
 from datetime import datetime, timedelta
 import os
 import sqlite3
@@ -32,13 +32,13 @@ def stored(repository, agent_id):
     return next(item for item in repository.get_system()["agents"] if item["id"] == agent_id)
 
 
-def test_heartbeat_leaves_config_json_alone_and_is_visible_through_the_manager(tmp_path):
+def test_heartbeat_leaves_the_configuration_alone_and_is_visible_through_the_manager(tmp_path):
     repository, manager, agent = setup(tmp_path)
-    before, revision = (tmp_path / "config.json").read_bytes(), repository.get_system()["_revision"]
+    before, revision = repository._store.fingerprint(), repository.get_system()["_revision"]
 
     assert manager.update_heartbeat(agent["id"], {"version": "2.0.0", "service_status": "running", "system_metrics": METRICS})
 
-    assert (tmp_path / "config.json").read_bytes() == before
+    assert repository._store.fingerprint() == before
     assert repository.get_system()["_revision"] == revision
     for current in (manager.get_agent_by_id(agent["id"]), manager.get_all_agents()[0]):
         assert current["status"] == "online"
@@ -55,7 +55,7 @@ def test_partial_heartbeats_keep_earlier_values_and_inherit_registered_state(tmp
 
     assert manager.update_heartbeat(agent["id"], {})
     first = manager.get_agent_by_id(agent["id"])
-    # The first heartbeat starts from what config.json already held.
+    # The first heartbeat starts from what the configuration already held.
     assert first["version"] == "1.0.0" and first["service_status"] == "running"
     assert datetime.fromisoformat(first["last_heartbeat"]) >= stamp
 
@@ -79,7 +79,7 @@ def test_re_registration_wins_until_the_next_heartbeat(tmp_path):
     assert current["version"] == "3.0.0" and "system_metrics" not in current
 
 
-def test_config_version_stays_in_config_json_and_is_written_only_when_changed(tmp_path):
+def test_config_version_stays_in_the_configuration_and_is_written_only_when_changed(tmp_path):
     repository, manager, agent = setup(tmp_path)
     revision = repository.get_system()["_revision"]
     assert manager.update_heartbeat(agent["id"], {"config_version": stored(repository, agent["id"])["config_version"]})
@@ -90,9 +90,9 @@ def test_config_version_stays_in_config_json_and_is_written_only_when_changed(tm
 
 def test_unknown_agent_writes_nothing(tmp_path):
     repository, manager, _ = setup(tmp_path)
-    before = (tmp_path / "config.json").read_bytes()
+    before = repository._store.fingerprint()
     assert not manager.update_heartbeat("missing", {"version": "2.0.0"})
-    assert (tmp_path / "config.json").read_bytes() == before
+    assert repository._store.fingerprint() == before
     assert manager.runtime._rows() == {}
 
 

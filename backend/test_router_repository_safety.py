@@ -63,7 +63,7 @@ def replace_routers(repository, writer, routers):
 def test_every_writer_rejects_live_ownership_loss(repository, writer, change):
     persist(repository)
     before = repository.export_all()
-    raw = repository.path.read_bytes()
+    raw = repository._store.fingerprint()
     routers = copy.deepcopy(before['profiles']['live']['routers'])
     router = routers['items'][0]
     if change == 'remove-router':
@@ -76,7 +76,7 @@ def test_every_writer_rejects_live_ownership_loss(repository, writer, change):
         router[change] = False if change == 'verify_tls' else 'changed'
     with pytest.raises(ProfileInUse):
         replace_routers(repository, writer, routers)
-    assert repository.path.read_bytes() == raw
+    assert repository._store.fingerprint() == raw
     assert repository.export_all() == before
 
 
@@ -250,17 +250,16 @@ def test_first_publication_blocks_batch_replacement_across_processes(repository,
     assert persist(repository)['ros_policy_state'] == MANIFEST
 
 
-def test_replacement_holds_publication_lock_through_atomic_disk_write(repository, monkeypatch):
-    original = repository._write_json
+def test_replacement_holds_publication_lock_through_database_commit(repository, monkeypatch):
+    original = repository._store._commit
     observations = []
 
-    def write(path, document):
-        if path == repository.path:
-            with job_lock('other', 'other-router', CONNECTION) as acquired:
-                observations.append(acquired)
-        return original(path, document)
+    def commit(connection):
+        with job_lock('other', 'other-router', CONNECTION) as acquired:
+            observations.append(acquired)
+        return original(connection)
 
-    monkeypatch.setattr(repository, '_write_json', write)
+    monkeypatch.setattr(repository._store, '_commit', commit)
     repository.import_profile('live', {'routers': {'items': []}})
     assert observations == [False]
     with job_lock('other', 'other-router', CONNECTION) as acquired:

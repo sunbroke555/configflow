@@ -24,7 +24,7 @@ def test_combined_invalid_fetched_graph_rejected_without_side_effects(tmp_path, 
     app, repo = make_app(tmp_path)
     seed_profile(repo)
     cache_before = load_subscription_cache('s')
-    profile_before = repo.path.read_bytes()
+    profile_before = repo._store.fingerprint()
     artifact = repo.write_generated('default', 'config.yaml', 'last-good')
     cache_read = Mock(wraps=load_subscription_cache)
     monkeypatch.setattr('backend.routes.subscriptions.load_subscription_cache', cache_read)
@@ -40,7 +40,7 @@ def test_combined_invalid_fetched_graph_rejected_without_side_effects(tmp_path, 
     cache_write.assert_not_called()
     network.assert_not_called()
     assert load_subscription_cache('s') == cache_before
-    assert repo.path.read_bytes() == profile_before
+    assert repo._store.fingerprint() == profile_before
     assert artifact.read_text() == 'last-good'
 
 
@@ -56,13 +56,13 @@ def test_combined_invalid_cache_rejected_on_transport_failure(tmp_path, monkeypa
     seed_profile(repo)
     save_subscription_nodes('s', [cached])
     before = load_subscription_cache('s')
-    profile_before = repo.path.read_bytes()
+    profile_before = repo._store.fingerprint()
     monkeypatch.setattr('backend.routes.subscriptions.get_subscription_proxies_yaml',
                         Mock(side_effect=ConnectionError('transport failure')))
     response = app.test_client().get('/api/subscriptions/proxies')
     assert response.status_code == 400, response.data
     assert load_subscription_cache('s') == before
-    assert repo.path.read_bytes() == profile_before
+    assert repo._store.fingerprint() == profile_before
 
 
 def add_second_feed(repo):
@@ -84,11 +84,11 @@ def test_combined_final_graph_rejects_cross_source_topology(tmp_path, monkeypatc
         contents = [provider('A', **{'dialer-proxy': 'B'}), provider('B', **{'dialer-proxy': 'A'})]
     fetch = Mock(side_effect=[(text, 'rendered_yaml') for text in contents])
     monkeypatch.setattr('backend.routes.subscriptions.get_subscription_proxies_yaml', fetch)
-    before = repo.path.read_bytes()
+    before = repo._store.fingerprint()
     response = app.test_client().get('/api/subscriptions/proxies')
     assert response.status_code == 400, response.data
     assert fetch.call_count == 2
-    assert repo.path.read_bytes() == before
+    assert repo._store.fingerprint() == before
 
 
 @pytest.mark.parametrize('content', ['proxies: [null]', 'proxies: not-an-array',

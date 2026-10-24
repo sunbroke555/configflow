@@ -2,8 +2,8 @@
 
 import copy
 import json
-import os
-import time
+import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -16,9 +16,6 @@ from backend.common.config_repository import (
 )
 
 
-pytestmark = pytest.mark.skipif(os.name == 'nt', reason='document reuse requires POSIX change time')
-
-
 @pytest.fixture
 def repository(tmp_path):
     return ProfileRepository(tmp_path)
@@ -26,38 +23,32 @@ def repository(tmp_path):
 
 def observe_reads(repository, monkeypatch):
     counts = {'read': 0, 'validate': 0}
-    read, validate = repository._read_json, repository._validate_document
+    load, validate = repository._store.load, repository._validate_document
 
-    def tracked_read(path):
-        if path == repository.path:
-            counts['read'] += 1
-        return read(path)
+    def tracked_load(*args, **kwargs):
+        counts['read'] += 1
+        return load(*args, **kwargs)
 
     def tracked_validate(document):
         counts['validate'] += 1
         return validate(document)
 
-    monkeypatch.setattr(repository, '_read_json', tracked_read)
+    monkeypatch.setattr(repository._store, 'load', tracked_load)
     monkeypatch.setattr(repository, '_validate_document', tracked_validate)
     return counts
 
 
-def external_document(repository, name):
-    document = json.loads(repository.path.read_text())
-    document['profiles']['default']['name'] = name
-    return document
-
-
-def replace_document(repository, document, *, preserve_mtime=False):
-    previous = repository.path.stat()
-    temporary = repository.path.with_name('external.json')
-    temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2) + '\n')
-    if preserve_mtime:
-        os.utime(temporary, ns=(previous.st_atime_ns, previous.st_mtime_ns))
-    os.replace(temporary, repository.path)
+def raw_rename(repository, name):
+    """Change the default profile's name behind the repository's back."""
+    with sqlite3.connect(repository.db_path) as connection:
+        connection.execute("UPDATE fields SET value = ? WHERE scope = 'profile' AND owner = 'default' AND field = 'name'",
+                           (json.dumps(name),))
+        connection.execute("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'generation'")
+    connection.close()
 
 
 def test_unchanged_getters_read_and_validate_once(repository, monkeypatch):
+    repository._drop_cache()
     counts = observe_reads(repository, monkeypatch)
     for _ in range(3):
         repository.get_system()
@@ -96,76 +87,65 @@ def test_public_results_cannot_mutate_cached_document(repository):
     assert repository.export_all() == before
 
 
-@pytest.mark.parametrize('atomic', [False, True])
-def test_external_same_size_same_mtime_edit_invalidates(repository, atomic):
+def test_external_commit_invalidates_by_generation(repository, monkeypatch):
     repository.update_profile('default', {'name': 'Alpha'})
     assert repository.get_profile('default')['name'] == 'Alpha'
-    previous = repository.path.stat()
-    changed = external_document(repository, 'Bravo')
-    if atomic:
-        replace_document(repository, changed, preserve_mtime=True)
-    else:
-        repository.path.write_text(json.dumps(changed, ensure_ascii=False, indent=2) + '\n')
-        os.utime(repository.path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
-        # This branch relies on ctime, which may not advance within one Linux
-        # clock tick. Establish that premise without changing size or mtime.
-        deadline = time.monotonic() + 2
-        while repository.path.stat().st_ctime_ns == previous.st_ctime_ns and time.monotonic() < deadline:
-            time.sleep(0.01)
-            os.utime(repository.path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
-        assert repository.path.stat().st_ctime_ns != previous.st_ctime_ns
-    current = repository.path.stat()
-    assert (current.st_size, current.st_mtime_ns) == (previous.st_size, previous.st_mtime_ns)
+    counts = observe_reads(repository, monkeypatch)
+    other = ProfileRepository(repository.data_dir)
+    other.update_profile('default', {'name': 'Bravo'})
     assert repository.get_profile('default')['name'] == 'Bravo'
+    assert repository.get_profile('default')['name'] == 'Bravo'
+    assert counts['read'] == 1
+    raw_rename(repository, 'Charlie')
+    assert repository.get_profile('default')['name'] == 'Charlie'
 
 
-def test_replacement_during_read_never_labels_old_document_as_new(repository, monkeypatch):
-    old_read = repository._read_recoverable
-    changed = external_document(repository, 'External')
-    replaced = False
+def test_rebuilt_database_with_same_generation_invalidates(repository):
+    repository.update_profile('default', {'name': 'Alpha'})
+    head = repository._document_cache.head
+    document = repository._store.load().document
+    document['profiles']['default']['name'] = 'Rebuilt'
+    # Same generation number, different database: store_id must differ.
+    repository._store.create(document, meta={})
+    with sqlite3.connect(repository.db_path) as connection:
+        connection.execute("UPDATE meta SET value = ? WHERE key = 'generation'", (json.dumps(head.generation),))
+    connection.close()
+    assert repository._store.load().head.generation == head.generation
+    assert repository.get_profile('default')['name'] == 'Rebuilt'
 
-    def replace_after_read(path, validator):
-        nonlocal replaced
-        document = old_read(path, validator)
-        if not replaced:
-            replaced = True
-            replace_document(repository, changed)
-        return document
 
-    monkeypatch.setattr(repository, '_read_recoverable', replace_after_read)
+def test_commit_during_read_never_labels_old_document_as_new(repository, monkeypatch):
+    other = ProfileRepository(repository.data_dir)
+    original_load = repository._store.load
+    committed = []
+
+    def load_then_commit(*args, **kwargs):
+        entry = original_load(*args, **kwargs)
+        if not committed:
+            # A writer in another thread cannot commit while this read
+            # transaction is open; it commits right after it ends.
+            thread = threading.Thread(target=lambda: committed.append(
+                other.update_profile('default', {'name': 'External'})))
+            thread.start()
+            committed.append(thread)
+        return entry
+
+    repository._drop_cache()
+    monkeypatch.setattr(repository._store, 'load', load_then_commit)
     assert repository.get_profile('default')['name'] != 'External'
+    committed[0].join(10)
     assert repository.get_profile('default')['name'] == 'External'
 
 
-@pytest.mark.parametrize('damage', ['invalid_json', 'invalid_schema', 'missing'])
-def test_warm_cache_does_not_bypass_backup_recovery(repository, damage):
-    repository.update_profile('default', {'name': 'Backup'})
-    repository.update_profile('default', {'name': 'Current'})
-    backup_path = repository.path.with_name('config.json.bak')
-    backup = backup_path.read_bytes()
-    assert repository.get_profile('default')['name'] == 'Current'
-    if damage == 'missing':
-        repository.path.unlink()
-    elif damage == 'invalid_schema':
-        changed = external_document(repository, 'Invalid')
-        changed['system']['agents'] = [{'id': 'bad', 'profile_id': 'missing'}]
-        replace_document(repository, changed)
-    else:
-        repository.path.write_text('{')
-    assert repository.get_profile('default')['name'] == 'Backup'
-    assert repository.export_all() == json.loads(backup)
-    assert backup_path.read_bytes() == backup
-    if damage != 'missing':
-        assert list(repository.data_dir.glob('config.json.corrupt-*'))
-
-
-def test_unrecoverable_damage_raises_instead_of_using_cached_copy(repository):
+def test_damaged_database_raises_instead_of_using_cached_copy(repository):
     original = repository.export_all()
-    repository.path.write_text('{')
-    repository.path.with_name('config.json.bak').write_text('{')
-    with pytest.raises(ProfileRepositoryError):
+    with sqlite3.connect(repository.db_path) as connection:
+        connection.execute("UPDATE fields SET value = '{' WHERE scope = 'system' AND field = 'agents'")
+        connection.execute("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'generation'")
+    connection.close()
+    with pytest.raises(ProfileRepositoryError, match='配置数据库内容无效'):
         repository.get_system()
-    replace_document(repository, original)
+    repository._store.create(original, meta={})
     assert repository.export_all() == original
 
 
@@ -185,23 +165,21 @@ def test_invalid_write_and_callback_failure_do_not_poison_cache(repository):
     assert repository.export_all() == before
 
 
-def test_failed_commit_restores_file_and_invalidates_cache(repository, monkeypatch):
+def test_failed_commit_keeps_data_and_drops_cache(repository, monkeypatch):
     before = repository.export_all()
-    original_fsync = repository._fsync_dir
-    failed = False
+    fingerprint = repository._store.fingerprint()
 
-    def fail_first_fsync(directory):
-        nonlocal failed
-        if not failed:
-            failed = True
-            raise OSError('injected failure after replacement')
-        return original_fsync(directory)
+    def fail(connection):
+        raise OSError('injected failure at COMMIT')
 
-    monkeypatch.setattr(repository, '_fsync_dir', fail_first_fsync)
+    monkeypatch.setattr(repository._store, '_commit', fail)
     with pytest.raises(OSError, match='injected failure'):
         repository.update_profile('default', {'name': 'Uncommitted'})
-    assert json.loads(repository.path.read_text()) == before
+    assert repository._document_cache is None
+    assert repository._store.fingerprint() == fingerprint
+    counts = observe_reads(repository, monkeypatch)
     assert repository.export_all() == before
+    assert counts['read'] == 1
 
 
 def test_nested_reads_use_transaction_and_failed_transaction_is_not_cached(repository):
@@ -239,7 +217,8 @@ def test_separate_repository_caches_observe_concurrent_commits(repository):
 
 def test_large_document_is_not_retained_in_cache(repository, monkeypatch):
     repository.get_system()
-    monkeypatch.setattr(repository, 'DOCUMENT_CACHE_MAX_BYTES', repository.path.stat().st_size - 1)
+    monkeypatch.setattr(repository, 'DOCUMENT_CACHE_MAX_BYTES', repository._store.load().size - 1)
+    repository._drop_cache()
     counts = observe_reads(repository, monkeypatch)
     repository.get_system()
     repository.get_system()

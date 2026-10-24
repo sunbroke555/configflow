@@ -71,12 +71,12 @@ class ProfileRepositoryTest(unittest.TestCase):
     def test_unsupported_import_preserves_existing_data_and_original_file(self):
         repository = ProfileRepository(self.root, get_default_config)
         repository.import_all(self.legacy())
-        before = repository.path.read_bytes()
+        before = repository._store.fingerprint()
         invalid = repository.export_all()
         invalid['schema_version'] = 2
         with self.assertRaises(ProfileValidationError):
             repository.import_all(invalid)
-        self.assertEqual(repository.path.read_bytes(), before)
+        self.assertEqual(repository._store.fingerprint(), before)
 
     def test_independent_concurrent_profile_writes_and_shared_updates_survive(self):
         repository = ProfileRepository(self.root, get_default_config)
