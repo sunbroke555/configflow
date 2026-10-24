@@ -12,6 +12,8 @@ import yaml
 
 from backend.converters.mosdns import RULE_PARTS, convert_rule_content_for_mosdns
 from backend.utils.url_utils import safe_exception_details
+from backend.utils.remote_rule_sources import resolve_remote_rule_source
+from backend.utils.ruleset_content import RemoteRuleValidationError
 
 logger = logging.getLogger(__name__)
 MAX_WORKERS = 8
@@ -76,7 +78,7 @@ def _local_path(url, config, base_url):
     return None
 
 
-def _source(url, config, base_url, depth=0):
+def _source(url, config, base_url, depth=0, source_id=None):
     """Resolve callbacks to inline text or a remote source plus conversions."""
     if depth > 3:
         raise MosdnsArchiveError('规则回调存在循环引用')
@@ -84,14 +86,17 @@ def _source(url, config, base_url, depth=0):
         raise MosdnsArchiveError('规则缺少下载地址')
     local = _local_path(url, config, base_url)
     if local is None:
-        return ('remote', url), ()
+        source = resolve_remote_rule_source(url, config, source_id)
+        identity = (source or {}).get('id') or source_id
+        return ('remote', url, identity), ()
     if local == '/mosdns/rule-proxy':
         query = parse_qs(urlsplit(url).query)
         original = query.get('url', [''])[0]
         part = query.get('part', [None])[0] or None
         if part is not None and part not in RULE_PARTS:
             raise MosdnsArchiveError('规则转换类型无效')
-        key, conversions = _source(original, config, base_url, depth + 1)
+        key, conversions = _source(original, config, base_url, depth + 1,
+                                   source_id=query.get('source_id', [None])[0])
         return key, conversions + (part,)
     library_id = local.removeprefix('/rule-library/content/') if local.startswith('/rule-library/content/') else None
     name = local.removeprefix('/rules/local/') if local.startswith('/rules/local/') else None
@@ -105,7 +110,7 @@ def _source(url, config, base_url, depth=0):
         if (library_id is not None and rule.get('id') == library_id) or (name is not None and rule.get('name') == name):
             if rule.get('source_type') == 'content':
                 return ('inline', rule.get('content', '')), ()
-            return _source(rule.get('url', ''), config, base_url, depth + 1)
+            return _source(rule.get('url', ''), config, base_url, depth + 1, source_id=rule.get('id'))
     raise MosdnsArchiveError('规则不在当前配置快照中')
 
 
@@ -143,7 +148,7 @@ def build_mosdns_zip(config, yaml_content, downloads, custom_files, *, base_url=
             path = _path(item.get('local_path'))
             key, conversions = _source(item.get('url'), config, base_url)
         except Exception as exc:
-            detail = str(exc) if isinstance(exc, MosdnsArchiveError) else safe_exception_details(exc)
+            detail = str(exc) if isinstance(exc, (MosdnsArchiveError, RemoteRuleValidationError)) else safe_exception_details(exc)
             raise MosdnsArchiveError(f'规则“{_label(item)}”准备失败：{detail}') from None
         file_order.setdefault(path, None)
         if len(file_order) > MAX_FILES:
@@ -153,23 +158,30 @@ def build_mosdns_zip(config, yaml_content, downloads, custom_files, *, base_url=
     def fetch(source):
         # Reuse rule-proxy's bounded transport and cache fallback. The explicit
         # snapshot keeps workers independent of Flask's request context.
-        from backend.routes.mosdns import _fetch_remote_content, _load_cached_rule_content_for_url
-        kind, value = source
+        from backend.routes.mosdns import _fetch_remote_content
+        from backend.utils.rule_utils import refresh_remote_rule
+        kind, value, *identity = source
         if kind == 'inline':
             return value
         try:
-            try:
+            declared = resolve_remote_rule_source(value, config, identity[0] if identity else None)
+            if declared is None:
                 return _fetch_remote_content(value, config_data=config)
-            except requests.RequestException as exc:
-                cached = _load_cached_rule_content_for_url(value, config_data=config)
-                if not cached:
-                    raise
-                logger.warning('MosDNS ZIP 规则“%s”使用本地缓存：%s',
-                               _label(sources[source][0][0]), safe_exception_details(exc))
-                return cached
+            from backend.converters.common import ruleset_format
+            if ruleset_format(declared, config) == 'mrs':
+                raise RemoteRuleValidationError('OxiDNS/MosDNS 不支持 MRS 二进制规则，请使用该订阅的 Text 或 YAML 版本。')
+            content, error = refresh_remote_rule(
+                declared, config_data=config, allow_stale=True,
+                fetch=lambda url: _fetch_remote_content(url, config_data=config, raw=True))
+            if error is not None:
+                detail = str(error) if isinstance(error, RemoteRuleValidationError) else safe_exception_details(error)
+                logger.warning('MosDNS ZIP 规则“%s”更新失败，使用上一次有效缓存：%s',
+                               _label(sources[source][0][0]), detail)
+            return content.decode('utf-8-sig')
         except Exception as exc:
+            detail = str(exc) if isinstance(exc, RemoteRuleValidationError) else safe_exception_details(exc)
             raise MosdnsArchiveError(
-                f'规则“{_label(sources[source][0][0])}”下载失败：{safe_exception_details(exc)}'
+                f'规则“{_label(sources[source][0][0])}”下载失败：{detail}'
             ) from None
 
     pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
@@ -197,7 +209,7 @@ def build_mosdns_zip(config, yaml_content, downloads, custom_files, *, base_url=
                             content = convert_rule_content_for_mosdns(content, part)
                         add(path, content)
                     except Exception as exc:
-                        detail = str(exc) if isinstance(exc, MosdnsArchiveError) else safe_exception_details(exc)
+                        detail = str(exc) if isinstance(exc, (MosdnsArchiveError, RemoteRuleValidationError)) else safe_exception_details(exc)
                         raise MosdnsArchiveError(f'规则“{_label(item)}”转换失败：{detail}') from None
             # Bound retained response bodies as well as concurrent sockets.
             # Converted files are checked against the budget before more work.

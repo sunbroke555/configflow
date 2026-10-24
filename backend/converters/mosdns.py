@@ -184,11 +184,13 @@ def split_rules_and_rulesets(config_data: Dict[str, Any]) -> tuple:
 
 
 def _build_rule_proxy_url(config_data: Dict[str, Any], effective_base_url: str, url: str,
-                          part: str = None) -> str:
+                          part: str = None, source_id: str = None) -> str:
     endpoint = profile_api_path(config_data, '/mosdns/rule-proxy')
     if endpoint == '/mosdns/rule-proxy':
         endpoint = f'/api{endpoint}'
     query = {'url': url}
+    if source_id:
+        query['source_id'] = source_id
     if part:
         query['part'] = part
     rule_proxy_token = config_data.get('system_config', {}).get('rule_proxy_token', '')
@@ -320,6 +322,7 @@ def _ruleset_files(config_data: Dict[str, Any], effective_base_url: str,
                 config_data, effective_base_url, url,
                 # 纯域名规则集保持旧 URL，不带 part 参数
                 part=None if behavior not in ('ipcidr', 'classical') else part,
+                source_id=rule_set.get('library_rule_id') or rule_set.get('id'),
             )
         files.append({
             'part': part,

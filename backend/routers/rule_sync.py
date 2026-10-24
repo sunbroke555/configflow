@@ -117,6 +117,11 @@ class Downloads:
         from backend.utils.url_utils import safe_exception_details
         key = digest([source.get('url'), config.get('system_config')])
         if key in self.items:
+            from backend.utils.ruleset_content import validate_remote_rule_content, RemoteRuleValidationError
+            try:
+                validate_remote_rule_content(self.items[key], source, config_data=config)
+            except RemoteRuleValidationError as error:
+                raise DownloadError(str(error)) from None
             return self.items[key]
         try:
             with request_rule(source.get('url') or '', config_data=config, stream=True,
@@ -134,6 +139,11 @@ class Downloads:
         except Exception as error:
             # Third-party responses and URL credentials are never shown in errors.
             raise DownloadError('远程规则下载失败：' + safe_exception_details(error)) from None
+        from backend.utils.ruleset_content import validate_remote_rule_content, RemoteRuleValidationError
+        try:
+            validate_remote_rule_content(content, source, config_data=config)
+        except RemoteRuleValidationError as error:
+            raise DownloadError(str(error)) from None
         while self.items and self.size + size > 16 * 1024 * 1024:
             _, old = self.items.popitem(last=False)
             self.size -= len(old.encode())
@@ -153,15 +163,13 @@ def _save_manifest(profile_id, router, driver):
 
 
 def _cache_sources(config, router, contents):
-    from backend.common.config import get_repository
-    from backend.utils.rule_utils import rule_cache_filename
+    from backend.utils.rule_utils import write_validated_rule_cache
     seen = set()
     for rule_id, (_, source) in selected_sources(config, router).items():
         if source['id'] in seen or source.get('source_type', 'url') != 'url':
             continue
         seen.add(source['id'])
-        filename = rule_cache_filename(source)
-        get_repository().write_shared_text('rules/' + filename, contents[rule_id])
+        write_validated_rule_cache(source, contents[rule_id], config_data=config)
 
 
 def sync(profile_id, router_id, download=None):

@@ -31,7 +31,8 @@ from backend.utils.rule_fetch import (
     RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
 )
 from backend.utils.logger import get_logger
-from backend.utils.ruleset_content import normalize_mihomo_ruleset
+from backend.utils.ruleset_content import normalize_mihomo_ruleset, RemoteRuleValidationError
+from backend.utils.remote_rule_sources import resolve_remote_rule_source
 
 logger = get_logger(__name__)
 
@@ -225,7 +226,7 @@ def _fetch_bytes(url, config):
             response.close()
 
 
-def materialize_rule(url, config, base_url, *, depth=0, raw_mosdns=False, fetch_raw=None):
+def materialize_rule(url, config, base_url, *, depth=0, raw_mosdns=False, fetch_raw=None, source_id=None, declared_rule=None):
     if depth > 3:
         raise DeploymentPreparationError('Recursive rule callback')
     parsed = urlsplit(url)
@@ -233,11 +234,13 @@ def materialize_rule(url, config, base_url, *, depth=0, raw_mosdns=False, fetch_
                 'server_domain': config.get('system_config', {}).get('server_domain') or base_url}
     internal = not (parsed.scheme or parsed.netloc) or is_internal_rule_url(url, {'system_config': settings})
     if internal and parsed.path.endswith(('/mosdns/rule-proxy', '/oxidns/rule-proxy')):
-        original = parse_qs(parsed.query).get('url', [''])[0]
+        query = parse_qs(parsed.query)
+        original = query.get('url', [''])[0]
         if not original:
             raise DeploymentPreparationError('Rule conversion callback has no source')
         value = materialize_rule(original, config, base_url, depth=depth + 1,
-                                 raw_mosdns=raw_mosdns, fetch_raw=fetch_raw)
+                                 raw_mosdns=raw_mosdns, fetch_raw=fetch_raw,
+                                 source_id=query.get('source_id', [None])[0], declared_rule=declared_rule)
         # The final consuming plugin chooses domain/IP conversion for bundles.
         return value if raw_mosdns else convert_mosdns_rules(value)
     # Gateway callbacks must use this publication's immutable snapshot, never a
@@ -274,8 +277,25 @@ def materialize_rule(url, config, base_url, *, depth=0, raw_mosdns=False, fetch_
         source = rule.get('url', '')
         if source == url:
             raise DeploymentPreparationError('Rule callback refers to itself')
+        source_id = rule.get('id')
         return materialize_rule(source, config, base_url, depth=depth + 1,
-                                raw_mosdns=raw_mosdns, fetch_raw=fetch_raw)
+                                raw_mosdns=raw_mosdns, fetch_raw=fetch_raw, source_id=source_id,
+                                declared_rule=declared_rule)
+    try:
+        declared = resolve_remote_rule_source(url, config, source_id)
+        if declared is None and declared_rule is not None:
+            declared = {**declared_rule, 'source_type': 'url', 'url': url}
+        if declared is not None and declared.get('source_type', 'url') == 'url':
+            from backend.utils.rule_utils import refresh_remote_rule
+            value, error = refresh_remote_rule(
+                declared, config_data=config, allow_stale=True,
+                fetch=fetch_raw or (lambda source_url: _fetch_bytes(source_url, config)))
+            if error is not None:
+                logger.warning('规则集「%s」更新失败，使用上一次有效缓存：%s',
+                               declared.get('name', ''), failure_text(str(error)))
+            return value
+    except RemoteRuleValidationError as exc:
+        raise DeploymentPreparationError(str(exc)) from None
     return fetch_raw(url) if fetch_raw is not None else _fetch_bytes(url, config)
 
 
@@ -554,7 +574,8 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
         try:
             value = materialize_rule(item.get('url', ''), config, base_url,
                                      raw_mosdns=relative_path(item['local_path']) in rule_types,
-                                     fetch_raw=fetch_raw)
+                                     fetch_raw=fetch_raw,
+                                     declared_rule=item if item.get('behavior') is not None else None)
             # Snapshot callbacks bypass /rules/local, so apply the same repair
             # for the final Mihomo consumer without changing shared raw bytes.
             if (service == 'mihomo'
@@ -573,6 +594,14 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                         logger.warning('Mihomo provider %s: %s unconverted lines (first 10: %s)',
                                        item.get('name', ''), len(warnings),
                                        ', '.join(str(warning.get('line')) for warning in warnings[:10]))
+            if service == 'mihomo' and item.get('behavior') is not None:
+                # Custom provider declarations can differ from the library.
+                # Check the exact bytes consumed by this final provider too.
+                from backend.utils.ruleset_content import validate_remote_rule_content
+                validate_remote_rule_content(value, item, config_data={}, rule_format=item.get('format'))
+        except RemoteRuleValidationError as exc:
+            raise preparation_context(DeploymentPreparationError(str(exc)),
+                                      name=item.get('name', ''), path=item.get('local_path', '')) from None
         except RuleDownloadError as exc:
             name = item.get('name') or '未命名'
             explanation, _, details = str(exc).partition('\n')

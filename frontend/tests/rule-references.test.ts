@@ -227,6 +227,95 @@ describe('profile rule references', () => {
 })
 
 describe('shared rule library', () => {
+  it('keeps remote validation failures visible with cache states and clears only recovered sources', async () => {
+    Object.assign(network.state.library[0]!, { source_type: 'url', url: 'https://rules.test/domain.txt', content: '' })
+    network.state.library.push({ id: 'library-ip', name: 'Remote networks', source_type: 'url', url: 'https://rules.test/ip.txt', behavior: 'ipcidr', enabled: true })
+    const warning = vi.spyOn(notify, 'warning').mockImplementation(() => 0)
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('[aria-label="选择 Shared domains"]').trigger('click')
+    await wrapper.get('[aria-label="选择 Remote networks"]').trigger('click')
+    const domainError = '规则集 Shared domains（domain）第 3 行：DOMAIN-SUFFIX,example.com\nDomain 不接受 Classical 类型前缀。'
+    const ipError = '规则集 Remote networks（ipcidr）第 2 行：+.example.com\n不是有效 IP 网段。'
+    network.post.mockResolvedValueOnce({ data: { success: true, success_count: 0, failed_count: 2, total_count: 2, results: [
+      { id: 'library-one', name: 'Shared domains', success: false, error: domainError, cache_retained: true },
+      { id: 'library-ip', name: 'Remote networks', success: false, error: ipError, cache_retained: false }
+    ] } })
+    await clickText('批量下载内容')
+    expect(confirmState.description).toContain('内容不匹配时不转换')
+    expect(confirmState.description).toContain('保留上一次有效缓存')
+    settleConfirm('confirm'); await flushPromises()
+    expect(network.post).toHaveBeenCalledWith('/rule-library/cache', { rule_ids: ['library-one', 'library-ip'] })
+    expect(wrapper.get('[data-cache-failure="library-one"]').text()).toContain(domainError)
+    expect(wrapper.get('[data-cache-failure="library-one"]').text()).toContain('已保留上一次有效缓存')
+    expect(wrapper.get('[data-cache-failure="library-ip"]').text()).toContain(ipError)
+    expect(wrapper.get('[data-cache-failure="library-ip"]').text()).toContain('没有可用的有效缓存')
+    expect(wrapper.find('[aria-label="停用 Shared domains"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="停用 Remote networks"]').exists()).toBe(true)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('启用状态不变'))
+    expect((wrapper.vm as any).$.setupState.selectedRules).toEqual(['library-one', 'library-ip'])
+
+    // Repairing one source must not hide the other source's failure.
+    await wrapper.get('[aria-label="选择 Remote networks"]').trigger('click')
+    network.post.mockResolvedValueOnce({ data: { success: true, success_count: 1, failed_count: 0, total_count: 1, results: [
+      { id: 'library-one', name: 'Shared domains', success: true }
+    ] } })
+    await clickText('批量下载内容'); settleConfirm('confirm'); await flushPromises()
+    expect(wrapper.find('[data-cache-failure="library-one"]').exists()).toBe(false)
+    expect(wrapper.get('[data-cache-failure="library-ip"]').text()).toContain(ipError)
+    expect((wrapper.vm as any).$.setupState.selectedRules).toEqual([])
+  })
+
+  it('shows the server reason for a failed refresh request and retains selection for retry', async () => {
+    const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('[aria-label="选择 Shared domains"]').trigger('click')
+    const message = '规则集 Shared domains 校验失败：第 4 行 DOMAIN,example.com 不属于 domain。'
+    network.post.mockRejectedValueOnce({ isAxiosError: true, response: { data: { message } } })
+    await clickText('批量下载内容'); settleConfirm('confirm'); await flushPromises()
+    expect(wrapper.get('[data-cache-errors]').text()).toContain(message)
+    expect(error).toHaveBeenCalledWith(message)
+    expect((wrapper.vm as any).$.setupState.selectedRules).toEqual(['library-one'])
+  })
+
+  it.each(['create', 'edit'] as const)('preserves the %s remote draft and shows the complete validation error inline', async mode => {
+    const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+    Object.assign(network.state.library[0]!, { source_type: 'url', url: 'https://rules.test/domain.txt', content: '' })
+    const wrapper = await render(RuleLibrary)
+    if (mode === 'edit') {
+      await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    } else {
+      await clickText('添加规则集')
+      const input = document.querySelector<HTMLInputElement>('#lib-name')!
+      input.value = 'New remote'; input.dispatchEvent(new Event('input', { bubbles: true }))
+      const url = document.querySelector<HTMLInputElement>('#lib-url')!
+      url.value = 'https://rules.test/domain.txt'; url.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+    }
+    const message = '规则集远端内容与 domain 不匹配。\n第 7 行：DOMAIN-SUFFIX,example.com\n请使用合法 Domain 写法或选择 Classical。'
+    const rejection = { isAxiosError: true, response: { data: { message } } }
+    if (mode === 'edit') network.put.mockRejectedValueOnce(rejection)
+    else network.post.mockRejectedValueOnce(rejection)
+    await clickText('保存')
+    expect(document.querySelector('[data-rule-save-error]')?.textContent).toBe(message)
+    expect(document.querySelector<HTMLInputElement>('#lib-url')?.value).toBe('https://rules.test/domain.txt')
+    expect(document.querySelector<HTMLInputElement>('#lib-name')?.value).toBe(mode === 'edit' ? 'Shared domains' : 'New remote')
+    expect(error).toHaveBeenCalledWith(message)
+    expect(network.post.mock.calls.some(([path]) => path === '/rule-library/test-single')).toBe(false)
+    expect(confirmState.open).toBe(false)
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
+  it('lets the server validate re-enabling a remote source and restores its state on failure', async () => {
+    Object.assign(network.state.library[0]!, { source_type: 'url', url: 'https://rules.test/domain.txt', content: '', enabled: false })
+    const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+    network.put.mockRejectedValueOnce({ isAxiosError: true, response: { data: { message: '第 2 行 DOMAIN,example.com 与 domain 不匹配' } } })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('[aria-label="启用 Shared domains"]').trigger('click'); await flushPromises()
+    expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({ enabled: true }))
+    expect(network.post).not.toHaveBeenCalled()
+    expect(wrapper.find('[aria-label="启用 Shared domains"]').exists()).toBe(true)
+    expect(error).toHaveBeenCalledWith('第 2 行 DOMAIN,example.com 与 domain 不匹配')
+  })
+
   it('explains classical delivery for content and URL sources and saves the original draft without confirmation', async () => {
     const content = '# keep\n  +.tmdb.org \n\n192.0.2.1\n*.manual.test\n'
     Object.assign(network.state.library[0]!, { behavior: 'classical', content })

@@ -187,7 +187,7 @@ export interface RuleDnsSnapshot {
 export type ComposeSource =
   | { kind: 'values'; rule_type: string; text: string }
   | { kind: 'library'; library_rule_ids: string[] }
-  | { kind: 'new_library'; library: { name: string; source_type: 'url' | 'content'; url?: string; content?: string; behavior: string; format: string; enabled: boolean } }
+  | { kind: 'new_library'; library: { name: string; source_type: 'url' | 'content'; url?: string; content?: string; behavior: string; format?: string; enabled: boolean } }
 
 export interface ComposePayload {
   source: ComposeSource

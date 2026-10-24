@@ -149,11 +149,12 @@ def test_underlying_transport_tries_original_then_mirror_with_same_proxy(reposit
 def test_local_cache_callback_resolves_original_url_without_self_http(repository, monkeypatch):
     config = repository.get_compat_config('office')
     source = 'https://rules.test/remote'
-    config['rule_library'].append({'id': 'remote', 'name': '远程规则', 'source_type': 'url', 'url': source})
+    config['rule_library'].append({'id': 'remote', 'name': '远程规则', 'source_type': 'url', 'url': source, 'behavior': 'classical', 'format': 'text'})
     config['rule_configs'].append({'itemType': 'ruleset', 'library_rule_id': 'remote'})
-    repository.write_shared_text('rules/远程规则.list', 'DOMAIN,cached.test')
+    from backend.utils.rule_utils import write_validated_rule_cache
+    write_validated_rule_cache(config['rule_library'][-1], 'DOMAIN,cached.test', config)
     seen = []
-    def fetch(url, config_data=None):
+    def fetch(url, config_data=None, **_kwargs):
         seen.append(url)
         raise requests.Timeout('private-password')
     monkeypatch.setattr(mosdns, '_fetch_remote_content', fetch)
@@ -167,9 +168,10 @@ def test_local_cache_callback_resolves_original_url_without_self_http(repository
 def test_remote_timeout_falls_back_only_to_matching_cached_source(repository, monkeypatch, cached, caplog):
     config = repository.get_compat_config('office')
     source = 'https://rules.test/list?token=source-secret'
-    config['rule_configs'].append({'itemType': 'ruleset', 'name': '远程规则', 'url': source})
+    config['rule_configs'].append({'itemType': 'ruleset', 'name': '远程规则', 'url': source, 'behavior': 'classical', 'format': 'text'})
     if cached:
-        repository.write_shared_text('rules/' + sanitize_rule_name('远程规则') + '.list', 'DOMAIN,cached.test')
+        from backend.utils.rule_utils import write_validated_rule_cache
+        write_validated_rule_cache(config['rule_configs'][-1], 'DOMAIN,cached.test', config)
     def fetch(*args, **kwargs):
         raise requests.Timeout('Timeout https://rules.test/?token=source-secret via private-password')
     monkeypatch.setattr(mosdns, '_fetch_remote_content', fetch)

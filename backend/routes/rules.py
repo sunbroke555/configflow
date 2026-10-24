@@ -420,6 +420,16 @@ def compose_rules():
         library = _new_library(source.get('library'))
     else:
         raise ProfileValidationError('请选择规则来源：values、library 或 new_library')
+    prepared_remote = None
+    if library is not None and library.get('source_type', 'url') == 'url':
+        from backend.utils.rule_utils import read_rule_source_content
+        import requests
+        try:
+            prepared_remote = read_rule_source_content(library)
+        except requests.RequestException:
+            return jsonify({'success': False, 'message': '规则源下载失败，未添加规则，请检查来源后重试'}), 502
+        if prepared_remote is None:
+            raise ProfileValidationError('请提供有效的规则来源和订阅地址')
     created, skipped = [], []
 
     def add_library(shared):
@@ -487,7 +497,11 @@ def compose_rules():
     if library is not None:
         from backend.utils.rule_utils import save_rule_to_local
         try:
-            save_rule_to_local(library)
+            if prepared_remote is not None:
+                from backend.utils.rule_utils import write_validated_rule_cache
+                write_validated_rule_cache(library, prepared_remote)
+            else:
+                save_rule_to_local(library)
         except Exception as error:  # The cache is refilled on demand; the commit stands.
             logger.warning('Caching composed rule library failed: %s', safe_exception_details(error))
             warnings.append('规则集已保存，但本地缓存失败，发布时会重新获取')
@@ -675,57 +689,33 @@ def get_local_rule(name):
                     'message': f'Rule not found in rule library: {name}. Please add it to the rule library first.'
                 }), 404
 
-        # 如果找到规则且是 URL 类型，尝试实时拉取最新数据
-        if rule.get('source_type') == 'url':
-            import requests
-            url = rule.get('url', '')
-            logger.info(f"Rule '{name}' is URL type, attempting to fetch from: {safe_url_for_log(url)}")
-
+        from backend.utils.rule_utils import refresh_remote_rule
+        from backend.utils.ruleset_content import RemoteRuleValidationError
+        if rule.get('source_type', 'url') == 'url':
             try:
-                # 尝试在 2 秒内拉取最新数据
-                response = request_rule(url, timeout=2, config_data=config_data)
-                if response.status_code == 200:
-                    logger.info(f"Successfully fetched latest data for rule '{name}'")
-                    # 更新本地缓存
-                    repository.write_shared_text(os.path.join('rules', filename), response.text)
-                    # 返回响应并添加 Content-Length 头
-                    content = response.text.encode('utf-8')
-                    return content_response(content)
-                else:
-                    logger.warning(f"Failed to fetch rule '{name}', status code: {response.status_code}")
-            except requests.Timeout:
-                logger.warning(f"Timeout fetching rule '{name}', falling back to cache")
-            except Exception as e:
-                logger.error("Error fetching rule '%s', falling back to cache: %s", name, safe_exception_details(e))
+                def fetch(url):
+                    response = request_rule(url, timeout=2, config_data=config_data)
+                    response.raise_for_status()
+                    return response.content
+                content, error = refresh_remote_rule(rule, config_data, fetch=fetch, allow_stale=True)
+            except RemoteRuleValidationError as error:
+                return jsonify({'success': False, 'message': str(error), 'errors': error.errors,
+                                'cache_retained': False}), 422
+            except Exception as error:
+                return jsonify({'success': False, 'message': safe_exception_details(error),
+                                'cache_retained': False}), 502
+            response = content_response(content)
+            if error is not None:
+                response.headers['X-ConfigFlow-Cache'] = 'stale'
+                response.headers['Warning'] = '110 ConfigFlow "Rule refresh failed; using validated cache"'
+            return response
 
-        # 如果是 content 类型或拉取失败，使用本地缓存
         if os.path.exists(filepath):
-            logger.info(f"Returning cached rule file: {filepath}")
-            with open(filepath, 'rb') as f:
-                content = f.read()
-            return content_response(content)
-        else:
-            # 缓存文件不存在，尝试重新生成
-            logger.warning(f"Cache file not found for rule '{name}', regenerating...")
-            try:
-                save_rule_to_local(rule)
-                if os.path.exists(filepath):
-                    logger.info(f"Successfully regenerated cache for rule '{name}'")
-                    with open(filepath, 'rb') as f:
-                        content = f.read()
-                    return content_response(content)
-                else:
-                    logger.error(f"Failed to regenerate cache for rule '{name}'")
-                    return jsonify({
-                        'success': False,
-                        'message': f'Failed to generate cache for rule: {name}'
-                    }), 500
-            except Exception as cache_error:
-                logger.error("Error regenerating cache for rule '%s': %s", name, safe_exception_details(cache_error))
-                return jsonify({
-                    'success': False,
-                    'message': 'Error generating rule cache'
-                }), 500
+            with open(filepath, 'rb') as handle:
+                return content_response(handle.read())
+        save_rule_to_local(rule)
+        with open(rule_cache_read_path(rule, rule_library), 'rb') as handle:
+            return content_response(handle.read())
 
     except Exception as e:
         logger.error("Error getting local rule '%s': %s", name, safe_exception_details(e))
@@ -782,104 +772,38 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
     Returns:
         规则集内容字符串，获取失败返回空字符串
     """
-    import os
-    from backend.utils.rule_utils import rule_cache_filename, rule_cache_read_path
-
-    rule_content = ''
-    rule_name = ''
-    filepath = ''
-    repository = get_repository()
-
-    # 获取规则名称和缓存路径
-    if library_rule:
-        rule_name = library_rule.get('name', '')
-    if not rule_name:
-        rule_name = rule_item.get('name', '')
-
-    if rule_name:
-        source = library_rule or rule_item
-        filename = rule_cache_filename(source)
-        library = config_data.get('rule_library', []) if config_data is not None else None
-        filepath = rule_cache_read_path(source, library)
-
-    # 1. 优先尝试从本地缓存读取
-    if filepath and os.path.exists(filepath):
+    from backend.utils.rule_utils import read_validated_rule_cache, refresh_remote_rule
+    from backend.utils.ruleset_content import RemoteRuleValidationError
+    source = library_rule or rule_item
+    if source.get('source_type') == 'content':
+        return source.get('content', '')
+    cached = read_validated_rule_cache(source, config_data)
+    if cached is not None:
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                rule_content = f.read()
-            logger.info(f"Loaded rule content from cache: {filepath}")
-            return rule_content
-        except Exception as e:
-            logger.warning("Failed to read cached rule file %s: %s", filepath, safe_exception_details(e))
-
-    library_url = ''
-    # 2. 如果缓存不存在或读取失败，从规则仓库获取内容
-    if library_rule and not rule_content:
-        source_type = library_rule.get('source_type', 'url')
-        if source_type == 'content':
-            # 直接使用内容（content类型在规则仓库保存时已经缓存）
-            rule_content = library_rule.get('content', '')
-            logger.info(f"Using rule content from library config")
-            return rule_content
-        elif allow_network:
-            # 从 URL 获取
-            url = library_rule.get('url', '')
-            if url:
-                if config_data is None:
-                    config_data = get_config()
-                library_url = url
-                try:
-                    response = request_rule(url, timeout=timeout, config_data=config_data)
-                    if response.status_code == 200:
-                        rule_content = response.text
-                        logger.info(f"Fetched rule content from library URL: {safe_url_for_log(url)}")
-
-                        # 保存到本地缓存
-                        if filepath:
-                            try:
-                                repository.write_shared_text(os.path.join('rules', filename), rule_content)
-                                logger.info(f"Cached rule content to: {filepath}")
-                            except Exception as cache_error:
-                                logger.warning(f"Failed to cache rule content to {filepath}: {cache_error}")
-
-                        return rule_content
-                except Exception as e:
-                    logger.warning("Failed to fetch rule from library URL %s: %s", safe_url_for_log(url), safe_exception_details(e))
-
-    # 3. 如果规则仓库没有，尝试从规则集的 url 字段获取
-    if not rule_content and allow_network:
-        url = rule_item.get('url', '')
-        if url:
-            if config_data is None:
-                config_data = get_config()
-            # 如果是相对路径，拼接 server_domain
-            if url.startswith('/'):
-                server_domain = config_data.get('system_config', {}).get('server_domain', '')
-                if server_domain:
-                    url = f"{server_domain}{url}"
-
-            if url == library_url:
-                # The library URL just failed; the same request would only wait again.
-                return rule_content
-            try:
-                response = request_rule(url, timeout=timeout, config_data=config_data)
-                if response.status_code == 200:
-                    rule_content = response.text
-                    logger.info(f"Fetched rule content from item URL: {safe_url_for_log(url)}")
-
-                    # 保存到本地缓存
-                    if filepath:
-                        try:
-                            repository.write_shared_text(os.path.join('rules', filename), rule_content)
-                            logger.info(f"Cached rule content to: {filepath}")
-                        except Exception as cache_error:
-                            logger.warning(f"Failed to cache rule content to {filepath}: {cache_error}")
-
-                    return rule_content
-            except Exception as e:
-                logger.warning("Failed to fetch rule from item URL %s: %s", safe_url_for_log(url), safe_exception_details(e))
-
-    return rule_content
+            return cached.decode('utf-8-sig')
+        except UnicodeError:
+            return ''  # The page matcher cannot interpret MRS binaries.
+    if not allow_network:
+        return ''
+    url = source.get('url', '')
+    if not url:
+        return ''
+    if config_data is None:
+        config_data = get_config()
+    if url.startswith('/'):
+        url = config_data.get('system_config', {}).get('server_domain', '').rstrip('/') + url
+    def fetch(_):
+        response = request_rule(url, timeout=timeout, config_data=config_data)
+        response.raise_for_status()
+        return response.content
+    try:
+        content, _ = refresh_remote_rule(source, config_data, fetch=fetch)
+        return content.decode('utf-8-sig')
+    except RemoteRuleValidationError:
+        raise
+    except Exception as error:
+        logger.warning('Failed to fetch ruleset %s: %s', source.get('name', ''), safe_exception_details(error))
+        return ''
 
 
 @bp.route('/match-test', methods=['POST'])
@@ -904,10 +828,20 @@ def match_test_rule():
         if not is_valid_domain(query, allow_dns_labels=True) and not is_valid_ip(query):
             return jsonify({'success': False, 'message': '请输入有效的域名或IP地址'}), 400
 
+        from backend.utils.ruleset_content import RemoteRuleValidationError
+        invalid_sources = []
+        def load_source(item, library_rule):
+            try:
+                return get_ruleset_content(item, library_rule, config_data=config_data)
+            except RemoteRuleValidationError as error:
+                invalid_sources.append(error)
+                return ''
         matcher = RuleConfigMatcher(
-            config_data.get('rule_configs', []), config_data.get('rule_library', []),
-            lambda item, library_rule: get_ruleset_content(item, library_rule, config_data=config_data))
+            config_data.get('rule_configs', []), config_data.get('rule_library', []), load_source)
         matched = matcher.match(query)
+        if invalid_sources:
+            error = invalid_sources[0]
+            return jsonify({'success': False, 'message': str(error), 'errors': error.errors}), 422
         if matched:
             elapsed_time = time.time() - start_time
             return jsonify({

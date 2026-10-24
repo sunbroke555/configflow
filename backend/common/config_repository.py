@@ -1141,8 +1141,8 @@ class ProfileRepository:
         from backend.utils.rule_utils import rule_cache_filename
 
         _items_by_id([rule], 'rule_library')
-        if not isinstance(content, str):
-            raise ProfileValidationError('规则内容必须是文本')
+        if not isinstance(content, (str, bytes)):
+            raise ProfileValidationError('规则内容必须是文本或二进制规则数据')
         path = self.shared_path(os.path.join('rules', rule_cache_filename(rule)))
         preserve_cache = False
         owns_cache = False

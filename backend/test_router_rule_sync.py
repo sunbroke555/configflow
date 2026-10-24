@@ -104,7 +104,7 @@ def test_policy_remote_change_updates_only_destinations_and_remains_withdrawable
     assert all(driver.rows[path] == rows for path, rows in kept.items())
     assert result['rules'][0]['version'] == result['rules'][0]['synced_version']
     from backend.utils.rule_utils import rule_cache_filename
-    assert (repo.shared_rules_dir() / rule_cache_filename({'id': 'lib'})).read_text() == NEW
+    assert (repo.shared_rules_dir() / rule_cache_filename(next(rule for rule in repo.get_shared()['rule_library'] if rule['id'] == 'lib'))).read_text() == NEW
     repo.update_profile_transaction('default', lambda doc: doc['routers']['items'][0].update(ros_policy_rule_sets=[]))
     from backend.routes.routers import _inspect
     config = rule_sync.config_for('default'); router = config['routers']['items'][0]
@@ -274,7 +274,7 @@ def test_shared_remote_download_is_reused_without_persistent_memory_cache(monkey
         def iter_content(self, size): yield NEW.encode()
     monkeypatch.setattr(rule_fetch, 'request_rule', lambda *a, **k: calls.append(k) or Response())
     downloads = rule_sync.Downloads()
-    source = {'url': 'https://example.test/rules'}
+    source = {'url': 'https://example.test/rules', 'behavior': 'classical', 'format': 'text'}
     assert downloads(source, {}) == downloads(source, {}) == NEW
     assert len(calls) == 1 and calls[0]['stream'] is True
     assert downloads(source, {'system_config': {'rule_fetch_proxy': 'different'}}) == NEW

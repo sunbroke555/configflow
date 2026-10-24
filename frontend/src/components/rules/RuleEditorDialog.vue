@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { Check, ChevronRight, ChevronsUpDown, ExternalLink, Loader2, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -75,7 +76,7 @@ const form = reactive({
   text: '',
   value: '',
   libraryIds: [] as string[],
-  library: { name: '', source_type: 'url' as 'url' | 'content', url: '', content: '', behavior: 'domain', scope: '' },
+  library: { name: '', source_type: 'url' as 'url' | 'content', url: '', content: '', behavior: 'domain', format: 'auto', scope: '' },
   policy: 'DIRECT',
   remark: '',
   group_name: '',
@@ -88,6 +89,7 @@ const dnsTouched = ref(false)
 /** 编辑偏离的跟随规则时，选择「按策略更新 DNS」 */
 const resync = ref(false)
 const saving = ref(false)
+const saveError = ref('')
 const libraryOpen = ref(false)
 const urlCheck = ref<'idle' | 'checking' | 'ok' | 'failed'>('idle')
 let initial = ''
@@ -268,6 +270,7 @@ const snapshot = () => JSON.stringify({ source: source.value, form, dns: dnsChoi
 const dirty = () => props.open && snapshot() !== initial
 
 function reset() {
+  saveError.value = ''
   session += 1
   const item = editItem.value
   source.value = editing.value ? (item?.itemType === 'ruleset' ? 'library' : 'values') : props.initialSource || 'values'
@@ -276,7 +279,7 @@ function reset() {
     text: '',
     value: item?.value || '',
     libraryIds: item?.itemType === 'ruleset' ? [item.library_rule_id] : [],
-    library: { name: '', source_type: 'url', url: '', content: '', behavior: 'domain', scope: '' },
+    library: { name: '', source_type: 'url', url: '', content: '', behavior: 'domain', format: 'auto', scope: '' },
     policy: item?.policy || 'DIRECT',
     remark: item?.remark || '',
     group_name: item?.group_name || '',
@@ -360,16 +363,10 @@ watch(() => form.library.url, () => { urlCheck.value = 'idle' })
 /** 新建规则集的来源；内容规则集按所选匹配范围写入并复用格式检查 */
 async function libraryPayload(): Promise<Extract<ComposePayload['source'], { kind: 'new_library' }>['library'] | null> {
   const value = form.library
-  const library = { name: value.name.trim(), source_type: value.source_type, behavior: value.behavior, format: 'text', enabled: form.enabled }
+  const library: Extract<ComposePayload['source'], { kind: 'new_library' }>['library'] = { name: value.name.trim(), source_type: value.source_type, behavior: value.behavior, enabled: form.enabled }
   if (value.source_type === 'url') {
     const url = value.url.trim()
-    if (urlCheck.value !== 'ok' && !(await testUrl())) {
-      const label = effectiveDns.value === 'default' ? '' : `DNS「${choiceLabel(effectiveDns.value, { policyRoute: policyRoute.value, upstreamLabel: upstreamLabel.value })}」会在启用后生效`
-      const accepted = await confirm(`地址暂时无法访问，仍保存为停用的规则集？${label}`, { title: '连通性测试失败', confirmText: '保存为停用' })
-      if (!accepted) return null
-      library.enabled = false
-    }
-    return { ...library, url }
+    return { ...library, url, ...(value.format !== 'auto' ? { format: value.format } : {}) }
   }
   library.format = libraryFormat.value
   const lines = value.content.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
@@ -460,6 +457,7 @@ async function save() {
   if (saving.value || !addCount.value || blocked.value) return
   const current = session
   saving.value = true
+  saveError.value = ''
   try {
     let done = false
     try {
@@ -471,7 +469,10 @@ async function save() {
     }
     if (done && current === session) emit('update:open', false)
   } catch (error) {
-    if (current === session) notify.error(errorReason(error) || '保存失败')
+    if (current === session) {
+      saveError.value = errorReason(error) || '保存失败'
+      notify.error(saveError.value)
+    }
   } finally {
     if (current === session) saving.value = false
   }
@@ -500,6 +501,9 @@ async function save() {
       <!-- 滚动容器不能是 fieldset：Chromium 中 fieldset 不按 flex 高度裁剪，内容会画到底栏下方 -->
       <div class="rule-editor-body cf-focus-gutter">
         <fieldset :disabled="saving" class="rule-editor-fields">
+          <Alert v-if="saveError" class="border-destructive-accent/30" data-rule-save-error>
+            <AlertDescription class="whitespace-pre-wrap break-all text-destructive-accent">{{ saveError }}</AlertDescription>
+          </Alert>
           <FormField v-if="!editing" label="匹配来源">
             <Segmented v-model="source" :options="SOURCE_OPTIONS" label="匹配来源" block />
           </FormField>
@@ -632,6 +636,17 @@ async function save() {
                   <SelectTrigger class="w-full bg-background/50" aria-label="内容类型"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem v-for="option in BEHAVIORS" :key="option.value" :value="option.value">{{ option.label }}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormField>
+              <FormField v-if="form.library.source_type === 'url'" label="内容格式" help="自动按地址后缀识别格式。若地址以 .txt 结尾但内容是 payload 列表，请选择 YAML。">
+                <Select v-model="form.library.format">
+                  <SelectTrigger class="w-full bg-background/50" aria-label="内容格式"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">自动识别</SelectItem>
+                    <SelectItem value="text">Text · 每行一条</SelectItem>
+                    <SelectItem value="yaml">YAML · payload 列表</SelectItem>
+                    <SelectItem value="mrs">MRS · 二进制规则</SelectItem>
                   </SelectContent>
                 </Select>
               </FormField>

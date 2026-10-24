@@ -7,12 +7,25 @@ import tarfile
 from threading import Barrier, Event, Lock, get_ident
 import time
 from urllib.parse import urlencode
+from unittest.mock import patch
 
 import pytest
 import requests
 import yaml
 
 from backend.agents import deployment_bundle as bundles
+
+
+
+
+@pytest.fixture(autouse=True)
+def isolated_rule_cache(tmp_path, monkeypatch):
+    from backend.common import config as config_module
+    from backend.common.config_repository import ProfileRepository
+    monkeypatch.setattr(config_module, '_repository', ProfileRepository(tmp_path))
+    config_module.reset_config_context()
+    yield
+    config_module.reset_config_context()
 
 
 BASE_URL = 'https://config.test'
@@ -43,9 +56,15 @@ def raw_bundle(urls, *, progress=None):
         str(index): {'type': 'http', 'format': 'mrs', 'behavior': 'domain',
                      'url': url, 'path': f'./rules/{index}.mrs'}
         for index, url in enumerate(urls)}}
-    return bundles.build_deployment_bundle(
-        {'id': 'fixture', 'service_type': 'mihomo', 'profile_id': 'default'},
-        config(), yaml.safe_dump(main), base_url=BASE_URL, progress=progress)
+    # These tests exercise bounded transport with arbitrary binary bodies.
+    # Content validation/cache acceptance has separate integration coverage.
+    def transport_only(rule, config_data=None, *, fetch, **_kwargs):
+        return fetch(rule['url']), None
+    with patch('backend.utils.rule_utils.refresh_remote_rule', transport_only), \
+            patch('backend.utils.ruleset_content.validate_remote_rule_content', return_value=None):
+        return bundles.build_deployment_bundle(
+            {'id': 'fixture', 'service_type': 'mihomo', 'profile_id': 'default'},
+            config(), yaml.safe_dump(main), base_url=BASE_URL, progress=progress)
 
 
 def synchronize_consumers(monkeypatch, count=8):
@@ -67,7 +86,8 @@ def test_callback_aliases_download_one_source_for_each_domain_and_ip_consumer(
         monkeypatch, service, yaml_payload):
     snapshot = config()
     snapshot['rule_library'] = [{'id': 'shared', 'name': 'Shared',
-                                'source_type': 'url', 'url': SOURCE_URL}]
+                                'source_type': 'url', 'url': SOURCE_URL, 'behavior': 'classical',
+                                'format': 'yaml' if yaml_payload else 'text'}]
     lines = ['DOMAIN-SUFFIX,example.test', 'DOMAIN,exact.test',
              'IP-CIDR,192.0.2.0/24', 'IP-CIDR6,2001:db8::/32']
     original = (yaml.safe_dump({'payload': lines}) if yaml_payload else '\n'.join(lines)).encode()
@@ -109,7 +129,8 @@ def test_empty_rule_proxy_part_matches_bytes_devices_refresh(monkeypatch, servic
     # Bundled bytes must be identical, or DNS follow sees an unpublished change.
     from backend.converters.mosdns import convert_rule_content_for_mosdns
     snapshot = config()
-    snapshot['rule_library'] = [{'id': 'shared', 'name': 'Shared', 'source_type': 'url', 'url': SOURCE_URL}]
+    snapshot['rule_library'] = [{'id': 'shared', 'name': 'Shared', 'source_type': 'url', 'url': SOURCE_URL,
+                                'behavior': 'classical', 'format': 'text'}]
     original = 'DOMAIN-SUFFIX,example.test\nDOMAIN,exact.test'
     monkeypatch.setattr(bundles, 'request_rule', lambda *_a, **_k: response(original.encode()))
     main = {'plugins': [
