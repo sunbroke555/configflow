@@ -10,6 +10,8 @@ from urllib.request import urlopen
 import pytest
 import yaml
 
+from backend.native_test_helpers import wait_for_mihomo_routing
+
 from backend.utils.ruleset_content import normalize_mihomo_ruleset
 
 
@@ -59,8 +61,8 @@ def test_native_flow_and_json_payloads_load_after_delivery_conversion(tmp_path, 
             for _ in range(100):
                 try:
                     with urlopen(f'http://127.0.0.1:{controller_port}/providers/rules', timeout=.2) as response:
-                        providers = json.load(response)['providers']
-                    if providers['converted']['ruleCount'] == 1:
+                        providers = json.load(response).get('providers') or {}
+                    if providers.get('converted', {}).get('ruleCount') == 1:
                         break
                 except OSError:
                     pass
@@ -69,6 +71,7 @@ def test_native_flow_and_json_payloads_load_after_delivery_conversion(tmp_path, 
             else:
                 pytest.fail('Converted YAML provider did not load: ' + log_path.read_text())
             assert providers['original']['ruleCount'] == 0
+            wait_for_mihomo_routing(process, proxy_port, log_path)
             for port in (31000, 31001):
                 with socket.create_connection(('127.0.0.1', proxy_port), timeout=2) as connection:
                     connection.settimeout(2)
