@@ -65,7 +65,7 @@ def _standalone_forwarding_functions() -> str:
 # Refused before the environment check, which would otherwise first describe
 # the forwarding this installer is about to decline to manage.
 _STANDALONE_GATEWAY_RECORD_REFUSAL = '''if [ -e "$AGENT_DIR/linux-gateway.json" ] || [ -L "$AGENT_DIR/linux-gateway.json" ]; then
-    fail "检测到 Linux 网关记录，单独安装不会接管网关管理的 IPv4 转发；本次未改动 Agent。请在面板勾选「不开启 IPv4 转发」后重新生成安装命令；如这台设备是主路由的代理网关，可在「上游路由」页开启并持久化 IPv4 转发。"
+    fail "检测到 Linux 网关记录，单独安装不会接管网关管理的 IPv4 转发；本次未改动 Agent。请在面板勾选「不开启 IPv4 转发」后重新生成安装命令；如这台设备是路由器的代理网关，可在面板 Agent 页这台设备的卡片上开启并持久化 IPv4 转发。"
 fi
 '''
 # Runs before the previous Agent is stopped: a failure leaves the host unchanged.

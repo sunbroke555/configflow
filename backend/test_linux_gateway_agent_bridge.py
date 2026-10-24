@@ -484,7 +484,7 @@ def test_an_unsupported_platform_below_1_8_41_is_left_to_the_agent(proxy_gateway
 @pytest.mark.parametrize('constant', ['GATEWAY_OFF_NOT_KEPT', 'LEGACY_REMOVE_NOT_KEPT'])
 def test_not_kept_copy_points_to_the_routers_page(constant):
     text = getattr(bridge, constant)
-    assert text.endswith('如这台设备是「上游路由」中的代理网关，可在该页开启并持久化 IPv4 转发后再操作。')
+    assert text.endswith('如这台设备是路由器的代理网关，可在 Agent 页这台设备的卡片上开启并持久化 IPv4 转发后再操作。')
     assert '普通 All-in-One' not in text
 
 

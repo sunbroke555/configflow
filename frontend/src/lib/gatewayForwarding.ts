@@ -1,5 +1,10 @@
-/** 上游路由页「IPv4 转发」列：代理网关 Agent 的转发状态与一键开启（数据来自 /api/routers/gateway-forwarding）。 */
+/**
+ * 代理网关的 IPv4 转发：路由器把要分流的流量转给这台 Mihomo 主机，它需要开启 IPv4 转发。
+ * 状态与「开启并持久化」在 Agent 页的设备卡片上（/api/agents/gateway-forwarding）；
+ * 上游路由页只在转发不可用时提示（/api/routers/gateway-forwarding）。
+ */
 import type { ForwardFilter } from '@/lib/forwardFilter'
+import { forwardFilterWarning } from '@/lib/forwardFilter'
 
 /** 单独安装的 Mihomo Agent 从此版本起支持在面板开启并持久化 IPv4 转发（同机安装为 1.8.40-go）。 */
 export const STANDALONE_FORWARDING_AGENT_VERSION = '1.8.41-go'
@@ -9,12 +14,20 @@ export type GatewayForwardingState =
   | 'persisted' | 'needs_persist' | 'blocked' | 'unsupported' | 'upgrade_required'
   | 'offline' | 'docker' | 'not_mihomo' | 'missing' | 'error'
 
+/** 把流量转给这台 Agent 的路由器；Agent 页的读取跨配置空间，会带上空间信息。 */
+export interface GatewayForwardingRouter {
+  id: string
+  name: string
+  profile_id?: string
+  profile_name?: string
+}
+
 /** 与后端 linux_gateway.gateway_forwarding_entry 的返回结构一一对应。 */
 export interface GatewayForwardingEntry {
   agent_id: string
   agent_name: string
   agent_version: string
-  routers: { id: string; name: string }[]
+  routers: GatewayForwardingRouter[]
   state: GatewayForwardingState
   can_persist: boolean
   message: string
@@ -33,24 +46,16 @@ export interface GatewayForwardingEntry {
 
 export interface GatewayForwardingView {
   label: string
-  tone: 'success' | 'warning' | 'danger' | 'info' | 'muted'
+  tone: 'success' | 'warning' | 'danger' | 'neutral'
   note?: string
-  action: 'persist' | 'upgrade' | null
+  action: 'persist' | null
 }
 
 const withNote = (view: Omit<GatewayForwardingView, 'note'>, note?: string | null): GatewayForwardingView =>
   note ? { ...view, note } : view
 
-/**
- * 一行路由器的转发状态。`failed` 表示整个列表读取失败：每个关联行显示「无法读取」。
- * 未关联代理网关的路由器没有条目，显示「—」。
- */
-export function gatewayForwardingView(entry: GatewayForwardingEntry | undefined, loading: boolean, failed = false): GatewayForwardingView {
-  if (!entry) {
-    if (loading) return { label: '读取中…', tone: 'muted', action: null }
-    if (failed) return { label: '无法读取', tone: 'warning', note: '读取 IPv4 转发状态失败，请稍后刷新页面。', action: null }
-    return { label: '—', tone: 'muted', action: null }
-  }
+/** Agent 卡片「IPv4 转发」一行的状态；tone 与 AgentStatusRow 一致。 */
+export function gatewayForwardingView(entry: GatewayForwardingEntry): GatewayForwardingView {
   const message = entry.message || ''
   switch (entry.state) {
     case 'persisted':
@@ -62,16 +67,16 @@ export function gatewayForwardingView(entry: GatewayForwardingEntry | undefined,
       return withNote({ label: '状态未知', tone: 'warning', action }, message)
     }
     case 'upgrade_required':
-      return { label: '请先更新 Agent', tone: 'warning', action: 'upgrade',
-        note: `需要 ${entry.minimum_version || STANDALONE_FORWARDING_AGENT_VERSION} 或更新版本` }
+      return { label: '请先更新 Agent', tone: 'warning', action: null,
+        note: `需要 ${entry.minimum_version || STANDALONE_FORWARDING_AGENT_VERSION} 或更新版本才能在面板开启并持久化。` }
     case 'unsupported':
-      return withNote({ label: '不支持自动持久化', tone: 'muted', action: null }, message)
+      return withNote({ label: '不支持自动持久化', tone: 'neutral', action: null }, message)
     case 'blocked':
       return withNote({ label: '持久化文件已被修改', tone: 'danger', action: null }, message)
     case 'offline':
-      return { label: 'Agent 离线', tone: 'muted', action: null }
+      return { label: 'Agent 离线', tone: 'neutral', action: null }
     case 'docker':
-      return withNote({ label: 'Docker 部署', tone: 'muted', action: null }, message)
+      return withNote({ label: 'Docker 部署', tone: 'neutral', action: null }, message)
     case 'missing':
       return withNote({ label: 'Agent 已删除', tone: 'danger', action: null }, message)
     case 'not_mihomo':
@@ -79,6 +84,42 @@ export function gatewayForwardingView(entry: GatewayForwardingEntry | undefined,
     default:
       return withNote({ label: '无法读取', tone: 'warning', action: null }, message)
   }
+}
+
+/** 「路由器「ROS」」；涉及多个配置空间时在名称后注明空间。 */
+export function gatewayRoutersText(entry: GatewayForwardingEntry): string {
+  const routers = Array.isArray(entry.routers) ? entry.routers : []
+  const profiles = new Set(routers.map(router => router.profile_id).filter(Boolean))
+  const names = routers.map(router => {
+    const name = `「${router.name || router.id}」`
+    return profiles.size > 1 && router.profile_name ? `${name}（${router.profile_name}）` : name
+  })
+  return names.length ? `路由器${names.join('、')}` : '路由器'
+}
+
+/** 展开说明：为什么这台设备需要 IPv4 转发。 */
+export function gatewayForwardingReason(entry: GatewayForwardingEntry): string {
+  return `${gatewayRoutersText(entry)}把要分流的流量转给这台设备，需要开启 IPv4 转发；未开启时转来的 UDP（如 QUIC、游戏、语音）和 ping 会被丢弃。持久化后重启设备也保持开启。`
+}
+
+/** 路由器状态下方的提示：「代理网关「agent」problem」；Agent 已删除时没有名称。 */
+export interface RouterForwardingWarning {
+  agent: string | null
+  problem: string
+}
+
+/**
+ * 上游路由页在路由器状态下方的提示：只在代理网关的转发确定不可用、或防火墙可能拦截时出现，
+ * 其他状态（含未持久化、离线、需要更新、读取失败）不提示，处理入口在 Agent 页。
+ */
+export function routerForwardingWarning(entry: GatewayForwardingEntry | undefined): RouterForwardingWarning | null {
+  if (!entry) return null
+  const agent = entry.agent_name || entry.agent_id
+  if (entry.state === 'missing') return { agent: null, problem: '代理网关 Agent 已删除' }
+  if (entry.state === 'not_mihomo') return { agent, problem: '不是 Mihomo' }
+  if (entry.state === 'needs_persist' && entry.current === '0') return { agent, problem: '未开启 IPv4 转发' }
+  const filter = forwardFilterWarning(entry.forward_filter)
+  return filter ? { agent, problem: filter.short } : null
 }
 
 /** 一键开启前的确认文案；设备有 Linux 网关记录时说明撤销网关后转发保持开启。 */

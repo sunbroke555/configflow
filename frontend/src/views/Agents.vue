@@ -201,6 +201,15 @@
             <OxiDNSRuleUpdate v-if="agent.service_type === 'oxidns'" :ref="instance => setRuleUpdateRef(agent.id, instance)"
               :agent-id="agent.id" presentation="card" :disabled="ruleUpdateBlocked(agent)" @updated="loadAgents" />
 
+            <!-- 被路由器用作代理网关的设备：IPv4 转发状态与一键开启。 -->
+            <AgentGatewayForwarding
+              v-if="forwardingEntries[agent.id]"
+              :entry="forwardingEntries[agent.id]"
+              :busy="forwardingBusy === agent.id"
+              :disabled="Boolean(forwardingBusy) && forwardingBusy !== agent.id"
+              @persist="persistForwarding(agent.id)"
+            />
+
             <AgentUpgradeStatus v-if="upgrades[agent.id]" :task="upgrades[agent.id]" :busy="upgradeBusy(agent.id)">
               <template #actions>
                 <Button v-if="!upgrades[agent.id].update_id && upgrades[agent.id].status === 'unknown'" variant="outline" size="sm" class="min-h-11" :disabled="upgradeQuerying.has(agent.id)" @click="retryUnconfirmedUpgrade(agent.id)">重新确认并提交更新</Button>
@@ -453,7 +462,7 @@
               {{ forwardingCustomLifecycle
                 ? '自定义启停命令的安装不自动开启 IPv4 转发。'
                 : scriptForm.skipIpv4Forwarding
-                  ? '不修改本机 IPv4 转发；已有的持久化设置会保留。作为主路由的代理网关前，可在「上游路由」页开启并持久化。'
+                  ? '不修改本机 IPv4 转发；已有的持久化设置会保留。被路由器用作代理网关后，可在这台设备的卡片上开启并持久化。'
                   : '默认开启并持久化本机 IPv4 转发（写入 /etc/sysctl.d/99-configflow-aio-forward.conf，Agent 启动前检查），作为主路由的代理网关时需要。' }}
             </p>
           </div>
@@ -908,11 +917,13 @@ import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentUpgradeStatus from '@/components/agents/AgentUpgradeStatus.vue'
+import AgentGatewayForwarding from '@/components/agents/AgentGatewayForwarding.vue'
 import OxiDNSRuleUpdate from '@/components/agents/OxiDNSRuleUpdate.vue'
 import AgentRuleSync from '@/components/agents/AgentRuleSync.vue'
 import { submitAgentRequests } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { upgradeLabels, useAgentUpgrades } from '@/composables/useAgentUpgrades'
+import { useAgentGatewayForwarding } from '@/composables/useAgentGatewayForwarding'
 import { use } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent, TitleComponent } from 'echarts/components'
@@ -954,6 +965,7 @@ const requestRollback = async (agent: Agent, record: AgentDeployment) => {
 const {
   upgrades, busy: upgradeBusy, querying: upgradeQuerying, track: trackUpgrade, query: queryAgentUpgrade, start: startUpgrade, retryUnknown: retryUnknownUpgrade
 } = useAgentUpgrades(() => { void loadAgents() })
+const { entries: forwardingEntries, busy: forwardingBusy, persist: persistForwarding } = useAgentGatewayForwarding(agents)
 
 const retryUnconfirmedUpgrade = async (agentId: string) => {
   try {

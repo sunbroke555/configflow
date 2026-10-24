@@ -818,7 +818,7 @@ describe('standalone Mihomo IPv4 forwarding opt-out', () => {
 
   it('sends ipv4_forwarding false once opted out, also with the core', async () => {
     await toggleSkip()
-    expect(note()).toBe('不修改本机 IPv4 转发；已有的持久化设置会保留。作为主路由的代理网关前，可在「上游路由」页开启并持久化。')
+    expect(note()).toBe('不修改本机 IPv4 转发；已有的持久化设置会保留。被路由器用作代理网关后，可在这台设备的卡片上开启并持久化。')
     await click('生成安装命令')
     expect(lastParams()).toMatchObject({ type: 'mihomo', ipv4_forwarding: false })
     document.getElementById('agent-install-core')!.click()
