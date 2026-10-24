@@ -11,8 +11,10 @@ import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
+import sqlite3
 import requests
 from .metrics_history import MetricsHistory
+from .runtime_store import AgentRuntimeStore
 from .diagnostics import dns_report_fields, failure_text, response_failure
 from .operation_events import append_event, event_time
 
@@ -71,9 +73,11 @@ class AgentManager:
 
         # 初始化监控历史管理器
         self.metrics_history = MetricsHistory()
+        # 心跳状态单独存放，不再每次心跳重写整份配置
+        self.runtime = AgentRuntimeStore(repository.data_dir)
 
     def _agents(self) -> List[Dict[str, Any]]:
-        return self.repository.get_system().get('agents', [])
+        return self.runtime.overlay(self.repository.get_system().get('agents', []))
 
     def _update_agents(self, updater, profile_id=None):
         result = {}
@@ -317,11 +321,18 @@ class AgentManager:
         result = self._update_agents(delete)
         if deleted:
             logger.info('已删除 Agent %s', _agent_label(deleted[0]))
+            try:
+                self.runtime.delete(agent_id)
+            except (OSError, sqlite3.Error) as error:
+                # A leftover row is never shown: only registered Agents are overlaid.
+                logger.warning('Agent %s 的心跳状态清理失败：%s', _agent_label(deleted[0]), error)
         return result
 
     def update_heartbeat(self, agent_id: str, heartbeat_data: Dict[str, Any] = None) -> bool:
         """
         更新 Agent 心跳
+
+        心跳状态写入运行状态库，不改动配置文件；只有 config_version 变化时才写配置。
 
         Args:
             agent_id: Agent ID
@@ -330,53 +341,29 @@ class AgentManager:
         Returns:
             bool: 是否更新成功
         """
-        def update(agents):
-            for agent in agents:
-                if agent['id'] != agent_id:
-                    continue
-                agent['last_heartbeat'] = datetime.now().isoformat()
-                agent['status'] = 'online'  # Agent 在线状态
-
-                # 更新其他信息
-                if heartbeat_data:
-                    if 'version' in heartbeat_data:
-                        agent['version'] = heartbeat_data['version']
-                    if 'service_status' in heartbeat_data:
-                        agent['service_status'] = heartbeat_data['service_status']  # 服务运行状态
-                    if 'config_version' in heartbeat_data:
-                        agent['config_version'] = heartbeat_data['config_version']
-
-                    # 处理系统监控数据
-                    if 'system_metrics' in heartbeat_data:
-                        system_metrics = heartbeat_data['system_metrics']
-                        agent['system_metrics'] = system_metrics
-
-                        # 同时保存到顶层字段以保持向后兼容
-                        if 'cpu' in system_metrics:
-                            agent['cpu'] = system_metrics['cpu']
-                        if 'memory' in system_metrics:
-                            agent['memory'] = system_metrics['memory']
-                        if 'disk' in system_metrics:
-                            agent['disk'] = system_metrics['disk']
-                        if 'network' in system_metrics:
-                            agent['network'] = system_metrics['network']
-
-                        # 保存监控数据到历史记录
-                        try:
-                            self.metrics_history.add_metrics(agent_id, system_metrics)
-                        except Exception as e:
-                            print(f"Warning: Failed to save metrics history: {e}")
-
-                    # 兼容旧版本的直接字段
-                    elif 'cpu' in heartbeat_data:
-                        agent['cpu'] = heartbeat_data['cpu']
-                    elif 'memory' in heartbeat_data:
-                        agent['memory'] = heartbeat_data['memory']
-
-                return True
+        heartbeat_data = heartbeat_data or {}
+        agent = next((item for item in self.repository.get_system().get('agents', []) if item['id'] == agent_id), None)
+        if agent is None:
             return False
+        self.runtime.record_heartbeat(agent, heartbeat_data)
 
-        return self._update_agents(update)
+        # config_version 是发布基线，仍随配置保存
+        if 'config_version' in heartbeat_data and heartbeat_data['config_version'] != agent.get('config_version'):
+            def update(agents):
+                for item in agents:
+                    if item['id'] == agent_id:
+                        item['config_version'] = heartbeat_data['config_version']
+                        return True
+                return False
+            self._update_agents(update)
+
+        if 'system_metrics' in heartbeat_data:
+            # 保存监控数据到历史记录
+            try:
+                self.metrics_history.add_metrics(agent_id, heartbeat_data['system_metrics'])
+            except Exception as e:
+                logger.warning('Agent %s 的监控历史保存失败：%s', _agent_label(agent), e)
+        return True
 
     def _preparation_file(self, agent_id, deployment_id):
         root = self.repository.data_dir / '.agent-deployment-locks'
@@ -1401,7 +1388,8 @@ class AgentManager:
                 return dict(agent)
             return None
 
-        return self._update_agents(update)
+        result = self._update_agents(update)
+        return self.runtime.overlay([result])[0] if result else None
 
     def probe_domains(self, agent: Dict[str, Any], payload: Dict[str, Any], timeout: int = 200) -> Dict[str, Any]:
         """让 Agent 经本机 Mihomo 探测一批域名；失败时抛出异常，消息可展示给用户。"""

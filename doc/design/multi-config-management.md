@@ -13,6 +13,8 @@
 | 作用域 | 持久内容 | 页面与影响范围 |
 |--------|----------|----------------|
 | `system` | 服务地址、全局访问令牌、WebDAV、Agent 清单 | 「系统设置」与「Agent」，影响全部配置 |
+
+Agent 心跳上报的版本、服务状态和监控指标另存于 `DATA_DIR/runtime.sqlite3`，读取 Agent 时叠加在注册信息上，以心跳时间较新的一方为准；心跳不再改写 `config.json`。发布基线 `config_version` 仍随 Agent 保存在 `config.json`。
 | `shared` | 订阅、节点、订阅聚合、规则仓库的资源定义 | 共享资源页面；修改会影响所有引用它的配置 |
 | `profiles.<id>` | 策略组与命名代理链、规则排序与目标、Mihomo / Surge / Loon / MosDNS / OxiDNS 参数、域名发现、路由器与设备备注 | 当前配置独立保存，通过稳定 ID 引用共享资源，不复制资源本体 |
 
@@ -199,7 +201,7 @@ MCP 工具通过 `backend/mcp_server/invoker.py` 进程内调用现有 REST API�
 建议全局保存：
 
 - Profile 索引；
-- Agent 注册、心跳和监控元数据；
+- Agent 注册信息（心跳和监控元数据另存于 `runtime.sqlite3`）；
 - 登录/认证相关系统设置；
 - ConfigFlow 服务地址；
 - 全局备份配置。
