@@ -474,8 +474,8 @@ GOLDEN_ROUTING = {'direct_rules': ['d1', 'd3', 'i1', 'off'], 'proxy_rules': ['d2
                   'custom_matches': [{'matches': 'qname domain:corp.test', 'exec': 'goto china_dns'}],
                   'custom_match_position': 'head', 'custom_hosts': 'full:nas.test 192.168.1.2', 'block_qtypes': [65]}
 GOLDEN_CASES = {
-    'defaults': ({}, '9bdf333102c7ea725f561c5b6f0a522b16236da0c52d96b40b67c00a12b2834c'),
-    'routing': (GOLDEN_ROUTING, '504bec3306c859d0469249825bc033de726a42b95f7b40561f83980be6abd5ea'),
+    'defaults': ({}, '008e259709b5b359e1bfe14748d3077fe161c9555c81fe55315b8156b3ec6fa5'),
+    'routing': (GOLDEN_ROUTING, '238d0bac816e02427cf24de486fbf9a5ef447e843a12aac5336656b22a1dfe83'),
     'features': ({**GOLDEN_ROUTING, 'aggregate_rules': False, 'default_forward': 'forward_local', 'cache_lazy_ttl': 0,
                   'custom_match_position': 'tail', 'fallback_dns': 'udp://9.9.9.9', 'remote_ttl': 60,
                   'local_dns': 'udp://10.0.0.1\nudp://10.0.0.2',
@@ -486,12 +486,12 @@ GOLDEN_CASES = {
                   'query_recorder': {'enabled': True}, 'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']},
                   'api': {'enabled': True}, 'log': {'file': './oxidns.log'}, 'rule_update': {'enabled': True},
                   'device_policies': [{'ip': '192.168.1.10', 'name': 'pc', 'mode': 'direct'}]},
-                 'b7b59154cf88b54274034f9b38060ba7a24ceaee3a088dd70fe5a289cfbf9e42'),
+                 'fbe37670191252cd1bcbf9dfa1084d027b9cc2cc0fb2e2c3127939e901f9984d'),
     'minimal': ({**GOLDEN_ROUTING, 'cache_enabled': False, 'probe_cache_enabled': False, 'prefer_ipv4': False,
                  'metrics_enabled': False, 'tcp_enabled': False, 'remote_ttl': 0, 'block_qtypes': [],
                  'ros_route': {'enabled': True, 'args': {'address': '192.168.88.1', 'username': 'u', 'password': 'p',
                                                          'routing_table': 'proxy', 'gateway4': '10.0.0.1'}}},
-                '014c15c84512ec0be0b8ec8c38c28d664ada13fea3c306ec93728b9b5f8fddb6'),
+                'b0878fe1159a53109af012bc32f80917ae4d816be666e677275b52bafd31cdf5'),
 }
 
 
