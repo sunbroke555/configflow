@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.common.config_repository import ProfileRepository, ProfileRepositoryError
+from backend.common.config_repository import ProfileInUse, ProfileRepository, ProfileRepositoryError
 from backend.common.config_store import ConfigStore, ConfigStorageError
 from backend.test_split_layout_migration import _bundle, _install_split, _source_bytes
 
@@ -291,6 +291,33 @@ def test_invalid_config_json_rewrite_is_rejected_once(tmp_path, caplog):
     assert not caplog.records
 
 
+def test_rejected_import_keeps_the_service_starting(tmp_path, monkeypatch, caplog):
+    root = tmp_path / 'data'
+    root.mkdir()
+    write_json(root / 'config.json', schema5(tmp_path))
+    repository = ProfileRepository(root)
+    current = repository.export_all()
+    bump(root / 'config.json', lambda document: document['profiles']['default'].update(
+        name='Edited', _revision=document['profiles']['default']['_revision'] + 1))
+
+    guard = ProfileRepository._router_commit_guard
+
+    def refuse(self, previous, proposed, *args, **kwargs):
+        # As if the import dropped a router's published ownership record.
+        if previous != proposed:
+            raise ProfileInUse('路由器仍有已发布的策略路由')
+        return guard(self, previous, proposed, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ProfileRepository, '_router_commit_guard', refuse)
+        with caplog.at_level(logging.WARNING, logger=LOGGER):
+            ProfileRepository(root)
+    assert any('导入被拒绝' in record.getMessage() for record in caplog.records)
+    reopened = ProfileRepository(root)
+    assert reopened.export_all() == current
+    assert reopened._store.meta('legacy_config')['status'] == 'rejected'
+
+
 def test_config_json_written_after_fresh_install_is_imported_when_edited(tmp_path):
     repository = ProfileRepository(tmp_path)
     document = repository.export_all()
@@ -374,6 +401,31 @@ def test_corrupt_database_with_changed_config_json_fails_loudly(tmp_path):
         ProfileRepository(tmp_path)
     assert (tmp_path / DB).read_bytes() == damaged
     assert not list(tmp_path.glob(f'{DB}.corrupt-*'))
+
+
+def test_stale_root_of_a_split_layout_is_never_a_rebuild_source(tmp_path):
+    _install_split(tmp_path, _bundle(), legacy='stale')
+    ProfileRepository(tmp_path)
+    assert ProfileRepository(tmp_path)._store.meta('legacy_config')['data_source'] is False
+    _damage_fields_table(tmp_path / DB)
+    with pytest.raises(ProfileRepositoryError, match='没有可安全使用的恢复来源'):
+        ProfileRepository(tmp_path)
+    (tmp_path / DB).write_bytes(b'garbage' * 100)
+    with pytest.raises(ProfileRepositoryError, match='没有可安全使用的恢复来源'):
+        ProfileRepository(tmp_path)
+    assert not list(tmp_path.glob(f'{DB}.corrupt-*'))
+
+
+def test_rebuild_source_follows_imports_and_rejections(tmp_path):
+    root = tmp_path / 'data'
+    root.mkdir()
+    write_json(root / 'config.json', schema5(tmp_path, token=False))
+    ProfileRepository(root)
+    # Token added by an older version: same data, still a source.
+    bump(root / 'config.json', lambda document: document['system']['system_config'].update(rule_proxy_token='t'))
+    assert ProfileRepository(root)._store.meta('legacy_config')['data_source'] is True
+    (root / 'config.json').write_text('{"schema_version": 5}')
+    assert ProfileRepository(root)._store.meta('legacy_config')['data_source'] is False
 
 
 def test_corrupt_database_without_any_source_fails_loudly(tmp_path):
