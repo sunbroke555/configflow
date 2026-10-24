@@ -34,7 +34,7 @@
               <component :is="allGroupsCollapsed ? ChevronsUpDown : ChevronsDownUp" class="size-4" />
               {{ allGroupsCollapsed ? '全部展开分组' : '全部收起分组' }}
             </DropdownMenuItem>
-            <DropdownMenuItem :disabled="allRules.length < 2" @select="enterReorder">
+            <DropdownMenuItem :disabled="reorderUnits.length < 2" @select="enterReorder">
               <ArrowUpDown class="size-4" />
               调整顺序
             </DropdownMenuItem>
@@ -196,8 +196,8 @@
                 <ChevronRight :class="cn('size-4 transition-transform', !item.collapsed && 'rotate-90')" />
               </Button>
             </span>
-            <span class="flex min-w-0 flex-1 items-baseline gap-2">
-              <span :class="cn('min-w-0 max-w-[60%] shrink-0 truncate text-[13px]', item.groupName ? 'font-medium text-foreground' : 'text-muted-foreground')">
+            <span class="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+              <span :class="cn('min-w-0 max-w-[60%] truncate text-[13px]', item.groupName ? 'font-medium text-foreground' : 'text-muted-foreground')">
                 {{ groupTitle(item) }}
               </span>
               <span class="num shrink-0 font-mono text-[11px] text-muted-foreground">
@@ -360,20 +360,25 @@
       ref="rulesContainer"
       class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3 max-md:grid-cols-1"
     >
-      <template v-for="(item, cfIndex) in displayList" :key="item.uniqueId">
       <Motion
+        v-for="(item, cfIndex) in cardList"
+        :key="item.uniqueId"
         v-bind="listItem(cfIndex)"
         data-reorder-item
         :data-id="item.uniqueId"
+        :aria-hidden="item.isGroupEnd || undefined"
         :class="[
-          item.isGroup && !reorder.active.value
+          item.isGroupEnd
+            ? 'col-span-full h-0 border-0 border-b border-border'
+            : item.isGroup && !reorder.active.value
             ? 'col-span-full flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-0 border-b border-border px-1 pt-3 pb-2'
             : 'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border border-border/35 bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
           !item.isGroup && !item.enabled && 'dark:opacity-60'
         ]"
       >
         <!-- 分段标题：成员卡片紧随其后；排序时收起的分组作为一张卡片整组移动 -->
-        <template v-if="item.isGroup && !reorder.active.value">
+        <template v-if="item.isGroupEnd"></template>
+        <template v-else-if="item.isGroup && !reorder.active.value">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -521,9 +526,6 @@
           </footer>
         </template>
       </Motion>
-      <!-- 分组到此结束：后面的卡片另起一行，不和成员混在同一段里 -->
-      <div v-if="item.isLastInGroup && !reorder.active.value" class="col-span-full h-0 border-0 border-b border-border" aria-hidden="true" />
-      </template>
     </div>
 
     <!-- ===== 添加 / 编辑规则（一页表单） ===== -->
@@ -993,12 +995,15 @@ const readCollapsed = () => {
 }
 const collapsedGroups = ref<Set<string>>(readCollapsed())
 const revealedGroups = ref<Set<string>>(new Set())
+const rulesLoaded = ref(false)
 const isCollapsed = (groupId: string) => collapsedGroups.value.has(groupId) && !revealedGroups.value.has(groupId)
 
 const saveCollapsed = (ids: Iterable<string>) => {
   // 只记录现有分组，规则调整后失效的记录随之清理
   const current = new Set(ruleGroups.value.map(group => group.groupId))
-  collapsedGroups.value = new Set([...ids].filter(id => current.has(id)))
+  const next = new Set([...ids].filter(id => current.has(id)))
+  if (next.size === collapsedGroups.value.size && [...next].every(id => collapsedGroups.value.has(id))) return
+  collapsedGroups.value = next
   try {
     localStorage.setItem(collapsedStorageKey, JSON.stringify([...collapsedGroups.value]))
   } catch {
@@ -1122,10 +1127,20 @@ const allRulesAndSets = computed(() => ruleGroups.value.flatMap((group) => {
   }))]
 }))
 
+// 组 id 取自组首：新增、删除或移动组首后按成员把收起状态迁到当前的组 id，
+// 避免用户的设置丢失，也避免过期记录日后让分组自己收起。
+watch(() => ruleGroups.value, (groups) => {
+  if (!rulesLoaded.value) return
+  saveCollapsed(groups
+    .filter(group => group.count > 1 && group.items.some((item: any) => collapsedGroups.value.has(`group_${item.uniqueId}_${group.policy}`)))
+    .map(group => group.groupId))
+})
+
 const loadAllRules = async () => {
   try {
     const { data } = await ruleApi.getAll(profileId)
     allRules.value = data
+    rulesLoaded.value = true
   } catch (error) {
     notify.error('加载规则列表失败')
   }
@@ -1569,9 +1584,21 @@ const reorder = useReorder<any>({
   }
 })
 
+/**
+ * 排序单元：收起的分组整组移动，展开的分组逐条移动。展开时的组头不参与排序，
+ * 成员去掉组内样式，移出原组后不会被误读为其他组的成员。
+ */
+const reorderUnits = computed(() => allRulesAndSets.value
+  .filter(item => !(item.isGroup && !item.collapsed))
+  .map(item => (item.isGroupMember ? { ...item, isGroupMember: false, isLastInGroup: false } : item)))
+
+/** 卡片视图：分组成员后插入通栏分隔，后面的卡片另起一行；排序时不插入，保证每个子元素都可拖动 */
+const cardList = computed(() => (reorder.active.value
+  ? displayList.value
+  : displayList.value.flatMap(item => (item.isLastInGroup ? [item, { isGroupEnd: true, uniqueId: `${item.groupId}-end` }] : [item]))))
+
 const enterReorder = () => {
-  // 收起的分组整组移动，展开的分组逐条移动；展开时的组头不参与排序
-  reorderDisplayItems.value = allRulesAndSets.value.filter(item => !(item.isGroup && !item.collapsed))
+  reorderDisplayItems.value = [...reorderUnits.value]
   reorder.enter()
 }
 

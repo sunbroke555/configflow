@@ -172,4 +172,34 @@ describe('rule group sections', () => {
       vi.useRealTimers()
     }
   })
+
+  it('keeps a collapsed group collapsed when a new rule becomes its first member', async () => {
+    const wrapper = await render()
+    await toggle(wrapper, 'DNS地址').trigger('click')
+    network.state.rules.splice(1, 0, rule('r-new', 'new.test', 'Proxy'))
+    await (wrapper.vm as any).$.setupState.loadAllRules()
+    await flushPromises()
+    expect(toggle(wrapper, 'DNS地址').attributes('aria-expanded')).toBe('false')
+    expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-new_Proxy'])
+  })
+
+  it('drops group styling from members while reordering', async () => {
+    const wrapper = await render()
+    ;(wrapper.vm as any).$.setupState.enterReorder()
+    await flushPromises()
+    expect(wrapper.findAll('.rule-row.in-group')).toHaveLength(0)
+    expect(wrapper.findAll('.rule-row')[1]!.find('.chip').text()).toBe('Proxy')
+  })
+
+  it('ends each card section with a full-width divider outside reorder mode only', async () => {
+    const wrapper = await render()
+    ;(wrapper.vm as any).$.setupState.viewMode = 'card'
+    await flushPromises()
+    const children = () => Array.from(document.querySelector('#sortable-rules')!.children)
+    expect(children().filter(el => el.getAttribute('aria-hidden') === 'true' && el.classList.contains('col-span-full'))).toHaveLength(2)
+    ;(wrapper.vm as any).$.setupState.enterReorder()
+    await flushPromises()
+    // Every child stays a single draggable card for Sortable.
+    expect(children().every(el => el.hasAttribute('data-reorder-item') && el.getAttribute('aria-hidden') !== 'true')).toBe(true)
+  })
 })
