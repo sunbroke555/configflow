@@ -21,11 +21,12 @@ from backend.utils.url_utils import safe_exception_details
 logger = get_logger(__name__)
 
 
-def is_valid_domain(query: str) -> bool:
+def is_valid_domain(query: str, *, allow_dns_labels: bool = False) -> bool:
     """验证输入是否为有效域名
 
     Args:
         query: 待验证的字符串
+        allow_dns_labels: 规则测试允许 DNS 标签中的下划线和首尾连字符；域名发现仍使用严格主机名。
 
     Returns:
         是否为有效域名
@@ -39,7 +40,9 @@ def is_valid_domain(query: str) -> bool:
 
     # 域名正则表达式
     domain_pattern = r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$'
-    return bool(re.match(domain_pattern, query))
+    if allow_dns_labels:
+        domain_pattern = r'^[a-zA-Z0-9_\-]{1,63}(?:\.[a-zA-Z0-9_\-]{1,63})*$'
+    return bool(re.fullmatch(domain_pattern, query))
 
 
 def is_valid_ip(query: str) -> bool:
@@ -56,6 +59,13 @@ def is_valid_ip(query: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def normalize_match_query(query: str) -> str:
+    """Ignore one DNS root dot without turning a dotted IP input into an address."""
+    if query.endswith('.') and not is_valid_ip(query[:-1]):
+        return query[:-1]
+    return query
 
 
 def parse_rule_line(line: str) -> Optional[Tuple[str, str]]:
@@ -231,11 +241,12 @@ def match_query(query: str, rule_type: str, rule_value: str) -> bool:
     Returns:
         是否匹配
     """
+    query = normalize_match_query(query)
     # 判断查询类型
     if is_valid_ip(query):
         # IP匹配
         return match_ip(query, rule_type, rule_value)
-    elif is_valid_domain(query):
+    elif is_valid_domain(query, allow_dns_labels=True):
         # 域名匹配
         return match_domain(query, rule_type, rule_value)
 
@@ -621,11 +632,12 @@ class RuleConfigMatcher:
             return self._indexes[key]
 
     def match(self, query: str) -> Optional[Dict[str, Any]]:
+        query = normalize_match_query(query)
         try:
             ip = ipaddress.ip_address(query)
         except ValueError:
             ip = None
-            if not is_valid_domain(query):
+            if not is_valid_domain(query, allow_dns_labels=True):
                 return None
         domain = query.lower() if ip is None else None
         for index, rule_item in self._items:

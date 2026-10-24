@@ -191,6 +191,9 @@ def normalize_mihomo_ruleset(content, behavior, rule_format):
     """Compose delivery-only syntax and YAML-layout compatibility."""
     if rule_format == 'mrs':
         return content, []
+    # Mihomo splits on LF and treats a text BOM as part of the first domain.
+    # Normalize transport framing only; the stored source remains untouched.
+    content = re.sub(r'\r(?!\n)', '\n', content.removeprefix('\ufeff'))
     warnings = []
     if behavior == 'classical':
         content, warnings = normalize_classical_lines(content)

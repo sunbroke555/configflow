@@ -394,7 +394,7 @@ def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
     is_yaml_format = bool(_has_yaml_payload(content))
     if not is_yaml_format:
         sample_count = 0
-        for line in content.split('\n'):
+        for line in content.splitlines():
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
@@ -422,7 +422,7 @@ def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
             # YAML 解析失败，按文本方式处理
             is_yaml_format = False
     if not is_yaml_format:
-        rule_lines = content.split('\n')
+        rule_lines = content.splitlines()
 
     converted = []
     for line in rule_lines:
