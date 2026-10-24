@@ -143,7 +143,7 @@ def test_damaged_database_raises_instead_of_using_cached_copy(repository):
         connection.execute("UPDATE fields SET value = '{' WHERE scope = 'system' AND field = 'agents'")
         connection.execute("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'generation'")
     connection.close()
-    with pytest.raises((ProfileRepositoryError, OSError)):
+    with pytest.raises(ProfileRepositoryError, match='配置数据库内容无效'):
         repository.get_system()
     repository._store.create(original, meta={})
     assert repository.export_all() == original
