@@ -137,6 +137,11 @@ export const ruleApi = {
   batchCreate: (data: unknown, profileId?: string) => api.post('/rules/batch', data, profileOptions(profileId)),
   renameGroup: (ids: string[], groupName: string, profileId?: string) =>
     api.post('/rules/group-name', { ids, group_name: groupName }, profileOptions(profileId)),
+  /** 一次改多条规则的策略；跟随策略的 DNS 随之变化，单独设置的 DNS 不变。传 groupName 时同时改组名 */
+  setPolicy: (ids: string[], policy: string, options: { groupName?: string } = {}, profileId?: string) =>
+    api.put<{ success: true; warnings?: string[]; pinned_withheld?: boolean }>('/rules/policy', {
+      ids, policy, ...(options.groupName === undefined ? {} : { group_name: options.groupName }), base_url: getBaseUrl()
+    }, profileOptions(profileId)),
   findDuplicates: (profileId?: string, signal?: AbortSignal) => api.post('/rules/find-duplicates', {}, { ...profileOptions(profileId), timeout: 120000, signal }),
   /** 一次写入规则、共享规则库条目与 OxiDNS DNS 处理；id 由服务端生成 */
   compose: (data: ComposePayload, profileId?: string) =>

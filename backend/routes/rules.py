@@ -540,6 +540,59 @@ def rename_rule_group():
     return jsonify({'success': True})
 
 
+@bp.route('/policy', methods=['PUT'])
+@require_auth
+def set_rule_policy():
+    """Move rules to one policy in a single write; follow DNS moves with it.
+
+    PUT {ids, policy, group_name?, base_url}. A group header changes every
+    member and keeps its label; a row leaving its group sends group_name: ''
+    as the editor does. Explicit DNS choices never change with the policy.
+    """
+    from werkzeug.exceptions import NotFound
+    from backend.common.rule_dns import apply_rule_dns
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        raise ProfileValidationError('请提供规则 ID 列表和策略')
+    ids = body.get('ids')
+    if (not isinstance(ids, list) or not ids
+            or any(not isinstance(value, str) or not value for value in ids)
+            or len(set(ids)) != len(ids)):
+        raise ProfileValidationError('规则 ID 列表不能为空或包含重复项')
+    if len(ids) > _DNS_BATCH_LIMIT:
+        raise ProfileValidationError(f'一次最多修改 {_DNS_BATCH_LIMIT} 条规则的策略')
+    policy = body.get('policy')
+    if not isinstance(policy, str) or not policy:
+        raise ProfileValidationError('请选择策略')
+    group_name = body.get('group_name', _MISSING)
+    if group_name is not _MISSING and not isinstance(group_name, str):
+        raise ProfileValidationError('组名称必须是文本')
+    base_url = _base_url(body)
+    warnings = []
+
+    def mutate(profile):
+        groups = {group.get('name') for group in profile.get('proxy_groups', [])}
+        if policy not in _BUILTIN_POLICIES and policy not in groups:
+            raise ProfileValidationError(f'策略不存在：{policy}')
+        before = copy.deepcopy(profile)
+        items = {item.get('id'): item for item in profile.get('rule_configs', []) if isinstance(item, dict)}
+        if any(value not in items for value in ids):
+            raise NotFound('部分规则已被删除，请刷新列表后再修改')
+        for value in ids:
+            items[value]['policy'] = policy
+            if group_name is not _MISSING:
+                items[value]['group_name'] = group_name.strip()
+        # Follow rules move with the policy and native routing is rebuilt; a
+        # custom native draft keeps its YAML and the save returns a warning.
+        warnings.extend(apply_rule_dns(before, profile, {}, base_url=base_url, strict=False))
+
+    try:
+        update_config_transaction(mutate)
+    except NotFound as error:
+        return jsonify({'success': False, 'message': error.description}), 404
+    return jsonify({'success': True, **({'warnings': warnings} if warnings else {}), **_pinned_withheld(ids)})
+
+
 @bp.route('/reorder', methods=['POST'])
 @require_auth
 def reorder_rules():

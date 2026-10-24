@@ -209,7 +209,15 @@
             </span>
             <span class="w-[160px] shrink-0 max-lg:hidden" aria-hidden="true" />
             <span class="flex w-[120px] shrink-0 justify-end">
-              <span :class="cn('chip max-w-full truncate', policyChip(item.policy))">{{ item.policy }}</span>
+              <RulePolicySelect
+                :model-value="item.policy"
+                :policies="availablePolicies"
+                :label="`${groupTitle(item)} 的策略：${item.policy}，点击修改整组`"
+                :disabled="reorder.active.value"
+                :loading="!!policyPending[item.groupId]"
+                :trigger-class="cn('chip', policyChip(item.policy))"
+                @update:model-value="value => setGroupPolicy(item, value)"
+              />
             </span>
             <span v-if="dnsColumn" class="flex w-[148px] shrink-0 items-center gap-1 pl-2 xl:w-[188px]">
               <span class="flex min-w-0 flex-1 items-center" data-group-dns>
@@ -302,9 +310,16 @@
             </span>
 
             <span class="flex w-[120px] shrink-0 justify-end">
-              <!-- 组内策略已在组头显示，成员行降为文字 -->
-              <span v-if="item.isGroupMember" class="max-w-full truncate text-[12px] text-muted-foreground">{{ item.policy }}</span>
-              <span v-else :class="cn('chip max-w-full truncate', policyChip(item.policy))">{{ item.policy }}</span>
+              <!-- 组内策略已在组头显示，成员行降为文字；改单条会离开原分组 -->
+              <RulePolicySelect
+                :model-value="item.policy"
+                :policies="availablePolicies"
+                :label="`${ruleName(item)} 的策略：${item.policy}，点击修改`"
+                :disabled="reorder.active.value"
+                :loading="!!policyPending[item.uniqueId]"
+                :trigger-class="item.isGroupMember ? 'h-[30px] text-[12px] text-muted-foreground hover:text-foreground' : cn('chip', policyChip(item.policy))"
+                @update:model-value="value => setRulePolicy(item, value)"
+              />
             </span>
             <span v-if="dnsColumn" class="cf-reorder-mute flex w-[148px] shrink-0 items-center pl-2 xl:w-[188px]">
               <RuleDnsCell
@@ -395,7 +410,14 @@
           <span class="num shrink-0 font-mono text-[11px] text-muted-foreground">
             {{ groupRange(item) }}<template v-if="item.groupName"> · {{ item.count }} 项</template>
           </span>
-          <span :class="cn('chip max-w-[150px] truncate', policyChip(item.policy))">{{ item.policy }}</span>
+          <RulePolicySelect
+            :model-value="item.policy"
+            :policies="availablePolicies"
+            :label="`${groupTitle(item)} 的策略：${item.policy}，点击修改整组`"
+            :loading="!!policyPending[item.groupId]"
+            :trigger-class="cn('chip max-w-[150px]', policyChip(item.policy))"
+            @update:model-value="value => setGroupPolicy(item, value)"
+          />
           <span class="ml-auto flex min-w-0 items-center gap-1">
             <span v-if="dnsColumn" class="flex min-w-0 items-center gap-1.5 text-[12px]" data-group-dns>
               <span class="shrink-0 text-muted-foreground">DNS</span>
@@ -509,7 +531,15 @@
             />
           </div>
           <footer :class="cn('cf-reorder-mute flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2', !dnsColumn && 'mt-auto')">
-            <Badge variant="secondary" class="min-w-0 max-w-[150px] text-[10.5px]" :title="item.policy"><span class="truncate">{{ item.policy }}</span></Badge>
+            <RulePolicySelect
+              :model-value="item.policy"
+              :policies="availablePolicies"
+              :label="`${ruleName(item)} 的策略：${item.policy}，点击修改`"
+              :disabled="reorder.active.value"
+              :loading="!!policyPending[item.uniqueId]"
+              :trigger-class="cn('chip max-w-[150px]', policyChip(item.policy))"
+              @update:model-value="value => setRulePolicy(item, value)"
+            />
             <Button variant="ghost" size="icon-sm" class="ml-auto" title="编辑" aria-label="编辑" @click="editItem(item)">
               <Pencil class="size-4" />
             </Button>
@@ -753,6 +783,7 @@ import ViewToggle from '@/components/common/ViewToggle.vue'
 import RuleEditorDialog from '@/components/rules/RuleEditorDialog.vue'
 import RuleDnsBatchDialog from '@/components/rules/RuleDnsBatchDialog.vue'
 import RuleDnsCell from '@/components/rules/RuleDnsCell.vue'
+import RulePolicySelect from '@/components/rules/RulePolicySelect.vue'
 import { confirm, notify } from '@/lib/feedback'
 import { listItem } from '@/lib/motion'
 import { ruleApi, ruleSetApi, proxyGroupApi } from '@/api'
@@ -1103,8 +1134,8 @@ const ruleGroups = computed(() => {
       if (!current.groupName && item.group_name) current.groupName = item.group_name
       return
     }
-    // 用首项的复合键：规则与规则集的 id 可能重复
-    const groupId = `group_${itemWithId.uniqueId}_${item.policy}`
+    // 用首项的复合键：规则与规则集的 id 可能重复；不含策略，整组改策略后收起状态不变
+    const groupId = `group_${itemWithId.uniqueId}`
     current = { isGroup: true, groupId, uniqueId: groupId, policy: item.policy, groupName: item.group_name || '', count: 1, items: [itemWithId] }
     groups.push(current)
   })
@@ -1132,7 +1163,7 @@ const allRulesAndSets = computed(() => ruleGroups.value.flatMap((group) => {
 watch(() => ruleGroups.value, (groups) => {
   if (!rulesLoaded.value) return
   saveCollapsed(groups
-    .filter(group => group.count > 1 && group.items.some((item: any) => collapsedGroups.value.has(`group_${item.uniqueId}_${group.policy}`)))
+    .filter(group => group.count > 1 && group.items.some((item: any) => collapsedGroups.value.has(`group_${item.uniqueId}`)))
     .map(group => group.groupId))
 })
 
@@ -1375,6 +1406,55 @@ const openBatch = (group: any) => {
   batchItems.value = group.items.map((item: any) => allRules.value.find(r => r.id === item.id && r.itemType === item.itemType) || item)
   batchName.value = group.groupName || group.groupDefaultName
   batchOpen.value = true
+}
+
+/* ================================================================
+ * 策略快速切换：单条改动离开原分组（清空组名），组头改整组并保留组名。
+ * 跟随策略的 DNS 由服务端随之调整，单独设置的 DNS 不变。
+ * ================================================================ */
+const policyPending = ref<Record<string, string>>({})
+const ruleName = (item: any) => (item.itemType === 'ruleset' ? item.name || item.id : item.value || item.rule_type || item.id)
+
+/** 改策略后 DNS 仍是单独设置、与新策略不同的项 */
+const explicitDnsCount = (items: any[], policy: string) => (dnsColumn.value ? items.filter((item) => {
+  const entry = dnsSnapshot.value?.rules[item.id]
+  return entry?.state === 'explicit' && (entry.route ?? null) !== followRoute({ ...item, policy })
+}).length : 0)
+
+const applyPolicy = async (key: string, items: any[], policy: string, options: { groupName?: string } = {}) => {
+  if (policyPending.value[key]) return
+  policyPending.value = { ...policyPending.value, [key]: policy }
+  try {
+    const explicit = explicitDnsCount(items, policy)
+    const { data } = await ruleApi.setPolicy(items.map(item => item.id), policy, options, profileId)
+    await loadAllRules()
+    void loadDns()
+    notifyRuleSaved(items.length > 1 ? `已将 ${items.length} 项的策略改为「${policy}」` : `策略已改为「${policy}」`, {
+      agents: dnsSnapshot.value?.engine.agents,
+      scopes: [...new Set(items.map(item => (item.itemType === 'ruleset' ? 'library' as const : 'rules' as const)))],
+      pinned: data.pinned_withheld === true,
+      extra: [...(explicit ? [`${explicit} 项 DNS 为单独设置，不随策略变化`] : []), ...(data.warnings || [])]
+    })
+  } catch (error) {
+    notify.error(errorMessage(error, '修改策略失败'))
+  } finally {
+    const next = { ...policyPending.value }
+    delete next[key]
+    policyPending.value = next
+  }
+}
+
+const setRulePolicy = (item: any, policy: string) => applyPolicy(item.uniqueId, [item], policy, { groupName: '' })
+
+const setGroupPolicy = async (group: any, policy: string) => {
+  const explicit = explicitDnsCount(group.items, policy)
+  const dns = dnsColumn.value
+    ? `跟随策略的 DNS 会一起变化${explicit ? `；${explicit} 项 DNS 为单独设置，不随策略变化` : ''}。`
+    : ''
+  const accepted = await confirm(`将把「${groupTitle(group)}」的 ${group.count} 项策略从「${group.policy}」改为「${policy}」，组名保留。${dns}`, {
+    title: '修改整组策略', confirmText: '修改'
+  })
+  if (accepted) await applyPolicy(group.groupId, group.items, policy)
 }
 
 /** 「统一为跟随策略」：只标记当前 DNS 已与策略一致的规则，生成结果不变 */
