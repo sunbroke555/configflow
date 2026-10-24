@@ -338,36 +338,43 @@ describe('shared rule library', () => {
     }))
   })
 
-  it('shows correct examples and leaves mixed drafts untouched when conversion is cancelled', async () => {
-    network.state.library[0]!.content = 'DOMAIN-SUFFIX,x.ai\napi.telegram.org'
+  it.each(['DOMAIN', 'DOMAIN-SUFFIX'])('rejects a %s prefix in Domain content without offering conversion', async kind => {
+    const content = `${kind},x.ai\napi.telegram.org`
+    network.state.library[0]!.content = content
     const wrapper = await render(RuleLibrary)
     await render(ConfirmHost)
     await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
     expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.placeholder).toContain('+.example.com')
-    expect(document.body.textContent).toContain('两种写法可混用')
-    network.post.mockResolvedValueOnce({ data: { content: '+.x.ai\napi.telegram.org', errors: [], changes: [{ line: 1, before: 'DOMAIN-SUFFIX,x.ai', after: '+.x.ai' }] } })
+    expect(document.body.textContent).toContain('不加 DOMAIN 等前缀')
+    network.post.mockResolvedValueOnce({ data: { content, changes: [], errors: [{ line: 1, message: `Domain 不接受 ${kind} 前缀，请使用域名写法。` }] } })
     await clickText('保存')
     expect(network.put).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('DOMAIN-SUFFIX,x.ai → +.x.ai')
-    await clickText('返回编辑')
-    expect(network.put).not.toHaveBeenCalled()
-    expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.value).toBe('DOMAIN-SUFFIX,x.ai\napi.telegram.org')
+    expect(confirmState.open).toBe(false)
+    expect(document.body.textContent).not.toContain('转换并保存')
+    expect(document.querySelector('[data-rule-content-issues]')?.textContent).toContain(`第 1 行：Domain 不接受 ${kind} 前缀`)
+    expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.value).toBe(content)
   })
 
-  it('saves only after approving conversion and blocks unsafe formats', async () => {
+  it('saves after manually fixing Domain content and preserves all supported wildcard forms', async () => {
+    const content = 'DOMAIN-SUFFIX,x.ai\nDOMAIN,api.telegram.org'
+    network.state.library[0]!.content = content
     const wrapper = await render(RuleLibrary)
     await render(ConfirmHost)
     await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
-    const warning = vi.spyOn(notify, 'warning').mockImplementation(() => 0)
-    network.post.mockResolvedValueOnce({ data: { content: 'bad', changes: [], errors: [{ line: 2, message: 'Domain 无法表达 DOMAIN-KEYWORD；请使用 Classical。' }] } })
-    await clickText('保存')
-    expect(warning).toHaveBeenCalledWith(expect.stringContaining('第 2 行'))
-    expect(network.put).not.toHaveBeenCalled()
-    network.post.mockResolvedValueOnce({ data: { content: '+.x.ai\napi.telegram.org', errors: [], changes: [{ line: 1, before: 'DOMAIN-SUFFIX,x.ai', after: '+.x.ai' }] } })
+    network.post.mockResolvedValueOnce({ data: { content, changes: [], errors: [
+      { line: 1, message: 'Domain 不接受 DOMAIN-SUFFIX 前缀' }, { line: 2, message: 'Domain 不接受 DOMAIN 前缀' }
+    ] } })
     await clickText('保存')
     expect(network.put).not.toHaveBeenCalled()
-    await clickText('转换并保存')
-    expect(network.put).toHaveBeenCalledExactlyOnceWith('/rule-library/library-one', expect.objectContaining({ content: '+.x.ai\napi.telegram.org' }))
+    expect(confirmState.open).toBe(false)
+    const corrected = '+.x.ai\napi.telegram.org\n.example.org\n*.example.org\n*.*.example.org\n*'
+    const input = document.querySelector<HTMLTextAreaElement>('#lib-content')!
+    input.value = corrected; input.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+    expect(document.querySelector('[data-rule-content-issues]')).toBeNull()
+    network.post.mockResolvedValueOnce({ data: { content: corrected, errors: [], changes: [] } })
+    await clickText('保存')
+    expect(confirmState.open).toBe(false)
+    expect(network.put).toHaveBeenCalledExactlyOnceWith('/rule-library/library-one', expect.objectContaining({ content: corrected, behavior: 'domain' }))
   })
 
   it('keeps a draft and releases the save lock when format checking fails', async () => {

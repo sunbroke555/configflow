@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises } from '@vue/test-utils'
 import { prepareRuleContent } from '@/lib/ruleset-content'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
 import { detectRuleContentFormat, type RuleContentCheck } from '@/lib/ruleset-format'
@@ -48,16 +47,21 @@ describe('handwritten ruleset content checks', () => {
     expect(notify.warning).toHaveBeenCalledWith('规则内容有 1 条提醒', '第 2 行：请手动调整')
   })
 
-  it.each(['confirm', 'cancel'] as const)('keeps the existing domain conversion confirmation: %s', async choice => {
-    const rule = { behavior: 'domain', content: 'DOMAIN-SUFFIX,example.org' }
-    respond({ content: '+.example.org', changes: [{ line: 1, before: 'DOMAIN-SUFFIX,example.org', after: '+.example.org' }], errors: [] })
-    const result = prepareRuleContent(rule)
-    await flushPromises()
-    expect(confirmState.title).toBe('转换为 Domain 格式')
-    expect(confirmState.description).toContain('转换后匹配范围不变')
-    settleConfirm(choice)
-    expect(await result).toBe(choice === 'confirm' ? '+.example.org' : null)
-    expect(rule.content).toBe('DOMAIN-SUFFIX,example.org')
+  it.each(['DOMAIN', 'DOMAIN-SUFFIX'])('rejects %s-prefixed Domain content and retains the draft without conversion', async kind => {
+    const rule = { behavior: 'domain', content: `${kind},example.org` }
+    const error = { line: 1, message: `Domain 不接受 ${kind} 前缀，请使用域名写法。` }
+    respond({ content: rule.content, changes: [], errors: [error] })
+    expect(await prepareRuleContent(rule)).toBeNull()
+    expect(notify.warning).toHaveBeenCalledWith(`第 1 行：${error.message}`)
+    expect(rule.content).toBe(`${kind},example.org`)
+    expect(confirmState.open).toBe(false)
+  })
+
+  it.each(['example.org', '.example.org', '*.example.org', '*.*.example.org', '+.example.org', '*'])('saves valid Domain pattern %s unchanged without confirmation', async content => {
+    respond({ content, changes: [], errors: [] })
+    expect(await prepareRuleContent({ behavior: 'domain', content })).toBe(content)
+    expect(notify.warning).not.toHaveBeenCalled()
+    expect(confirmState.open).toBe(false)
   })
 
   it('blocks malformed content while preserving the draft', async () => {

@@ -124,7 +124,7 @@ def test_generated_provider_and_download_share_explicit_mihomo_target(delivery, 
     assert provider['url'] == download['url']
     parsed = urlsplit(provider['url'])
     assert parsed.path == '/prefix/api/profiles/default/rules/local/Mixed'
-    assert parse_qs(parsed.query) == ({'target': ['mihomo']} if behavior == 'classical' else {})
+    assert parse_qs(parsed.query) == {'target': ['mihomo']}
     assert provider['behavior'] == behavior
 
 

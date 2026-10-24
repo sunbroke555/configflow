@@ -115,7 +115,15 @@ def test_single_service_scripts_match_the_previous_release():
 
 @pytest.mark.parametrize('name', ['ordinary', 'gateway', 'own_tun'])
 def test_mihomo_without_marker_matches_the_previous_release(name):
-    assert unmarked_mihomo_outputs()[name] == baseline()['unmarked_mihomo'][name]
+    expected = baseline()['unmarked_mihomo'][name]
+    # Text delivery compatibility postdates this baseline; only its explicit
+    # local-provider marker may differ. All routing/TUN bytes stay identical.
+    for provider in yaml.safe_load(expected).get('rule-providers', {}).values():
+        url = provider.get('url', '')
+        if '/rules/local/' in url and provider.get('format') != 'mrs':
+            expected = expected.replace('url: ' + url + '\n',
+                                        'url: ' + url + '?target=mihomo\n')
+    assert unmarked_mihomo_outputs()[name] == expected
 
 
 def test_router_setup_runs_end_to_end_on_a_full_tun(authenticated_app, monkeypatch):

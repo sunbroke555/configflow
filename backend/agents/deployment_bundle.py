@@ -26,7 +26,7 @@ import yaml
 from backend.agents.diagnostics import failure_text
 from backend.agents.deployment_locations import DeploymentPreparationError, preparation_context, source_error
 from backend.converters.common import ruleset_format
-from backend.converters.mosdns import RULE_PARTS, empty_rule_part, parse_clash_rule_value
+from backend.converters.mosdns import RULE_PARTS, domain_pattern_for_mosdns, empty_rule_part, parse_clash_rule_value
 from backend.utils.rule_fetch import (
     RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
 )
@@ -332,7 +332,7 @@ def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
 
     for index, line in enumerate(lines):
         line = line.strip()
-        if not line or line.startswith('#'):
+        if not line or line.startswith(('#', '//')):
             continue
         if rule_type == 'ip_set':
             if re.match(r'^(domain|full|keyword|regexp):', line):
@@ -362,20 +362,15 @@ def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
                 converted.append(f'{mapping[kind]}:{value}')
             # Domain consumers omit IP/process rules, as rule-proxy did for
             # Clash input. In particular, a bare IPv6 CIDR cannot load in domain_set.
-        elif line.startswith('+.'):
-            converted.append('domain:' + line[2:])
-        elif line.startswith('*.'):
-            converted.append(r'regexp:^[^.]+\.' + re.escape(line[2:]) + '$')
-        elif line.startswith('.'):
-            converted.append(r'regexp:.+\.' + re.escape(line[1:]) + '$')
         else:
             try:
                 ipaddress.ip_network(line, strict=False)
                 # Raw address/CIDR lists must not reach a domain_set either.
             except ValueError:
-                if '.' not in line or any(c.isspace() for c in line) or '<' in line or '>' in line:
+                expression = domain_pattern_for_mosdns(line)
+                if not expression:
                     raise invalid_line('Unrecognized MosDNS rule source content', index) from None
-                converted.append('full:' + line)
+                converted.append(expression)
     return '\n'.join(converted).encode('utf-8')
 
 

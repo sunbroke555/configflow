@@ -1,4 +1,4 @@
-"""Domain format repairs preserve matching scope and every unaffected byte."""
+"""Domain validation rejects Classical syntax and preserves editable source text."""
 from copy import deepcopy
 
 import pytest
@@ -18,15 +18,16 @@ from backend.utils.rule_matcher import parse_rule_line, match_domain
     "# domains\npayload:\n  - 'DOMAIN-SUFFIX,x.ai' # suffix\n  - DOMAIN,api.telegram.org\n  - '+.grok.com'\n  - exact.test\n",
     'payload: ["DOMAIN-SUFFIX,x.ai", "DOMAIN,api.telegram.org", "+.grok.com", "exact.test",]\n',
 ])
-def test_repairs_preserve_text_and_matching_scope_across_delivery(source):
+def test_domain_prefix_errors_preserve_text_and_valid_patterns_keep_scope(source):
     checked = inspect_domain_content(source, 'domain')
-    assert not checked['errors']
-    assert [change['after'] for change in checked['changes']] == ['+.x.ai', 'api.telegram.org']
+    assert len(checked['errors']) == 2
+    assert checked['content'] == source and checked['changes'] == []
+    assert [item['line'] for item in checked['errors']] == ([1, 1] if source.startswith('payload: [') else [3, 4] if 'payload:' in source else [2, 3])
+    assert all('example.com' in item['message'] and '+.example.com' in item['message'] for item in checked['errors'])
     expected = source.replace("'DOMAIN-SUFFIX,x.ai'", '"+.x.ai"').replace('"DOMAIN-SUFFIX,x.ai"', '"+.x.ai"')
     expected = expected.replace('DOMAIN-SUFFIX,x.ai', '+.x.ai')
     expected = expected.replace('"DOMAIN,api.telegram.org"', '"api.telegram.org"')
     expected = expected.replace('DOMAIN,api.telegram.org', '"api.telegram.org"' if 'payload:' in source else 'api.telegram.org')
-    assert checked['content'] == expected
     assert inspect_domain_content(expected, 'domain') == {'content': expected, 'changes': [], 'errors': []}
     converted = 'domain:x.ai\nfull:api.telegram.org\ndomain:grok.com\nfull:exact.test'
     assert convert_rule_content_for_mosdns(expected, 'domain') == converted
@@ -49,6 +50,31 @@ def test_plain_and_wildcard_mixture_needs_no_repair():
     source = '# unchanged\n+.x.ai\napi.telegram.org\n*.example.test\n.example.org\n\n'
     assert inspect_domain_content(source, 'domain') == {'content': source, 'changes': [], 'errors': []}
     assert not inspect_domain_content('DOMAIN-KEYWORD,google', 'classical')['errors']
+
+
+@pytest.mark.parametrize(('source', 'rule_format'), [
+    ('# all supported Domain patterns\n.example.com\n*.example.com\n*.*.example.com\n+.example.com\n*\n', 'text'),
+    ("payload:\n  - '.example.com'\n  - '*.example.com'\n  - '*.*.example.com'\n  - '+.example.com'\n  - '*'\n", 'yaml'),
+    ('payload: [".example.com", "*.example.com", "*.*.example.com", "+.example.com", "*"]\n', 'yaml'),
+])
+def test_all_supported_domain_patterns_remain_valid_and_save_unchanged(oxidns_app, source, rule_format):
+    app, repo = oxidns_app
+    client = app.test_client()
+    expected = {'content': source, 'changes': [], 'errors': []}
+    assert inspect_domain_content(source, 'domain', rule_format) == expected
+    before = deepcopy(repo.export_all())
+    preview = client.post('/api/rule-library/check-content', json={
+        'behavior': 'domain', 'format': rule_format, 'content': source})
+    assert preview.status_code == 200
+    assert preview.json == expected
+    assert repo.export_all() == before
+    saved = client.post('/api/rule-library', json={
+        'id': 'patterns', 'name': 'Patterns', 'source_type': 'content',
+        'behavior': 'domain', 'format': rule_format, 'content': source})
+    assert saved.status_code == 200, saved.json
+    actual = next(rule for rule in repo.get_shared()['rule_library'] if rule['id'] == 'patterns')
+    assert actual['content'] == source
+    assert client.get('/api/rules/local/Patterns').data.decode() == source
 
 
 @pytest.mark.parametrize('content', [
@@ -76,19 +102,25 @@ def test_check_content_requires_auth_when_authentication_is_enabled(oxidns_app, 
     assert repo.export_all() == before
 
 
-def test_preview_does_not_write_and_save_requires_explicit_repaired_content(oxidns_app):
+def test_preview_reports_errors_without_repair_and_valid_user_content_saves(oxidns_app):
     app, repo = oxidns_app
     client = app.test_client()
     before = deepcopy(repo.export_all())
     body = {'behavior': 'domain', 'content': 'DOMAIN-SUFFIX,x.ai\napi.telegram.org', 'append_lines': ['+.grok.com']}
     preview = client.post('/api/rule-library/check-content', json=body)
     assert preview.status_code == 200
+    assert preview.json['content'] == body['content'] + '\n+.grok.com\n'
+    assert preview.json['changes'] == []
+    assert [error['line'] for error in preview.json['errors']] == [1]
     assert repo.export_all() == before
     rule = {'id': 'new', 'name': 'New', 'source_type': 'content', 'behavior': 'domain', 'content': body['content']}
     rejected = client.post('/api/rule-library', json=rule)
     assert rejected.status_code == 400
     assert repo.export_all() == before
     rule['content'] = preview.json['content']
+    assert client.post('/api/rule-library', json=rule).status_code == 400
+    assert repo.export_all() == before
+    rule['content'] = '+.x.ai\napi.telegram.org\n+.grok.com\n'
     assert client.post('/api/rule-library', json=rule).status_code == 200
     assert client.get('/api/rules/local/New').data.decode() == '+.x.ai\napi.telegram.org\n+.grok.com\n'
     shared = deepcopy(repo.get_shared())
@@ -153,4 +185,43 @@ def test_connection_add_rejects_old_invalid_prefix_instead_of_reporting_false_co
     response = app.test_client().post(f'/api/agents/{aid}/mihomo/rule-targets/apply', json={
         'profile_id': 'office', 'ruleset_id': ruleset_id, 'target': 'proxy', 'value': 'example.test', 'rule_type': 'DOMAIN'})
     assert response.status_code == 400
+    assert repo.export_all() == before
+
+
+@pytest.mark.parametrize('content', [
+    '# keep\nDOMAIN,x.ai\nDOMAIN-SUFFIX,api.test\n',
+    'payload: ["DOMAIN,x.ai", "DOMAIN-SUFFIX,api.test"]\n',
+])
+@pytest.mark.parametrize('entry', ['create', 'edit', 'draft', 'compose'])
+def test_domain_classical_prefixes_are_rejected_atomically_at_each_save(oxidns_app, content, entry):
+    app, repo = oxidns_app
+    client = app.test_client()
+    rule = {'id': 'new', 'name': 'New', 'source_type': 'content', 'behavior': 'domain', 'content': content}
+    before = deepcopy(repo.export_all())
+    if entry == 'create':
+        response = client.post('/api/rule-library', json=rule)
+    elif entry == 'edit':
+        response = client.put('/api/rule-library/lib', json=rule)
+    elif entry == 'draft':
+        state = client.get('/api/rule-library/lib/draft-content').json
+        response = client.put('/api/rule-library/lib/draft-content', json={
+            'revision': state['revision'], 'content': content})
+    else:
+        response = client.post('/api/rules/compose', json={
+            'source': {'kind': 'new_library', 'library': rule},
+            'rule': {'policy': 'DIRECT'}, 'dns': 'default',
+        })
+    assert response.status_code == 400, response.json
+    assert 'example.com' in response.json['message'] and '+.example.com' in response.json['message']
+    assert repo.export_all() == before
+
+
+def test_domain_check_returns_every_error_and_never_proposes_a_conversion(oxidns_app):
+    app, repo = oxidns_app
+    before = deepcopy(repo.export_all())
+    source = '# keep\nDOMAIN,one.test\n+.valid.test\nDOMAIN-SUFFIX,two.test\nIP-CIDR,192.0.2.0/24\n'
+    response = app.test_client().post('/api/rule-library/check-content', json={'behavior': 'domain', 'content': source})
+    assert response.status_code == 200
+    assert response.json['content'] == source and response.json['changes'] == []
+    assert [error['line'] for error in response.json['errors']] == [2, 4, 5]
     assert repo.export_all() == before

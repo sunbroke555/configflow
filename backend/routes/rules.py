@@ -14,7 +14,7 @@ from backend.common.config import (
 )
 from backend.common.profile_context import resolve_profile_id
 from backend.common.config_repository import ProfileRepositoryError, ProfileValidationError
-from backend.utils.rule_matcher import RuleConfigMatcher, parse_rule_line, is_valid_domain, is_valid_ip
+from backend.utils.rule_matcher import RuleConfigMatcher, parse_rule_line, is_valid_domain, is_valid_ip, normalize_match_query
 from backend.utils.reorder import reorder_by_ids
 from backend.utils.logger import get_logger
 from backend.utils.url_utils import safe_exception_details, safe_url_for_log
@@ -609,7 +609,7 @@ def batch_add_rules():
 def get_local_rule(name):
     """获取本地缓存的规则文件（通过规则名称）
 
-    Mihomo 的 Classical 或 YAML provider 通过 target=mihomo 请求兼容内容；
+    Mihomo 的文本 provider 通过 target=mihomo 请求编码和格式兼容内容；
     无标记请求继续返回原文，供其他客户端及规则转换器使用。
 
     注意：此接口不需要权限校验，因为会被 Mihomo 等客户端直接访问。
@@ -899,8 +899,9 @@ def match_test_rule():
         if not query:
             return jsonify({'success': False, 'message': '请输入域名或IP地址'}), 400
 
-        # 验证输入格式
-        if not is_valid_domain(query) and not is_valid_ip(query):
+        # DNS 根点与内核规范化一致；只放宽规则测试，不影响域名发现校验。
+        query = normalize_match_query(query)
+        if not is_valid_domain(query, allow_dns_labels=True) and not is_valid_ip(query):
             return jsonify({'success': False, 'message': '请输入有效的域名或IP地址'}), 400
 
         matcher = RuleConfigMatcher(

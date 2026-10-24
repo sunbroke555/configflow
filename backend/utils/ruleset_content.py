@@ -31,17 +31,11 @@ def _valid_pattern(value):
 
 
 def _domain_line(value):
-    if ',' not in value:
-        if not _valid_pattern(value):
-            raise ValueError('请填写域名或通配符，例如 example.com、+.example.com。')
-        return value
-    fields = [part.strip() for part in value.split(',')]
-    kind = fields[0].upper()
-    if kind not in ('DOMAIN', 'DOMAIN-SUFFIX'):
-        raise ValueError(f'Domain 无法表达 {fields[0]}；需要这类规则时请使用 Classical。')
-    if len(fields) != 2 or not _valid_pattern(fields[1]) or any(char in fields[1] for char in '*+') or fields[1].startswith('.'):
-        raise ValueError('请只填写规则类型和完整域名，例如 DOMAIN-SUFFIX,example.com。')
-    return ('+.' if kind == 'DOMAIN-SUFFIX' else '') + fields[1]
+    if ',' in value:
+        raise ValueError('Domain 不接受 Classical 规则行；精确域名请填写 example.com，域名及其子域名请填写 +.example.com。')
+    if not _valid_pattern(value):
+        raise ValueError('请填写域名或通配符，例如 example.com、+.example.com。')
+    return value
 
 
 def _valid_classical_domain(value):
@@ -197,6 +191,11 @@ def normalize_mihomo_ruleset(content, behavior, rule_format):
     """Compose delivery-only syntax and YAML-layout compatibility."""
     if rule_format == 'mrs':
         return content, []
+    # Mihomo splits on LF and treats a text BOM as part of the first domain.
+    # Normalize transport framing only; the stored source remains untouched.
+    line_break = (r'\r(?!\n)|[\v\f\x1c-\x1e\x85\u2028\u2029]'
+                  if rule_format == 'text' else r'\r(?!\n)')
+    content = re.sub(line_break, '\n', content.removeprefix('\ufeff'))
     warnings = []
     if behavior == 'classical':
         content, warnings = normalize_classical_lines(content)
@@ -321,10 +320,6 @@ def validate_domain_content(rule, previous=None):
     if checked['errors']:
         error = checked['errors'][0]
         raise ProfileValidationError(f"规则内容第 {error['line']} 行：{error['message']}" if error['line'] else error['message'])
-    # Classical compatibility is applied only when delivering to Mihomo.
-    # Saving a draft preserves the source text, including safe bare entries.
-    if behavior == 'domain' and checked['changes']:
-        raise ProfileValidationError('Domain 内容包含 Classical 前缀，请在规则库编辑并确认转换格式后保存。')
 
 
 def read_rule_payload(content):
