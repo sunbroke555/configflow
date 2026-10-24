@@ -12,6 +12,7 @@ import re
 import yaml
 
 from backend.common.oxidns_settings import BLOCK_QTYPES_EXEC, normalize_oxidns_settings, OxidnsSettingsError
+from backend.common.rule_dns import helper_plugins, route_exec, route_key
 from backend.common.oxidns_native import (managed_files, native_document,
     relative_resource, resource_references)
 from backend.converters.mosdns import (
@@ -20,6 +21,8 @@ from backend.converters.mosdns import (
     split_rules_and_rulesets,
 )
 
+LOCAL_DNS_DEFAULTS = ('udp://223.5.5.5', 'udp://119.29.29.29')
+REMOTE_DNS_DEFAULTS = ('https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query')
 _TAG = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)*$')
 
 
@@ -44,10 +47,15 @@ def _items(config):
 
 
 def _selected(config, settings):
+    # A rule DNS action always wins over the selector lists, which in native
+    # mode keep a union catalog of every rule ever routed.
+    actions = settings.get('rule_actions') or {}
     for item in _items(config):
         suffix = 'rulesets' if item.get('itemType') == 'ruleset' else 'rules'
         identity = item.get('id')
-        if identity in settings[f'direct_{suffix}']:
+        if isinstance(identity, str) and identity in actions:
+            yield item, route_key(actions[identity])
+        elif identity in settings[f'direct_{suffix}']:
             yield item, 'direct'
         elif identity in settings[f'proxy_{suffix}']:
             yield item, 'proxy'
@@ -99,7 +107,7 @@ def get_oxidns_ruleset_downloads(config_data, base_url=''):
                     if settings['config_mode'] == 'native' else None)
     effective = _base(config_data, base_url)
     downloads = []
-    selections = {key: value if isinstance(value, list) else [] for key, value in settings.items()}
+    selections = {key: value if isinstance(value, (list, dict)) else [] for key, value in settings.items()}
     # Native YAML is the routing source of truth; its stored selectors are only
     # a retained catalog, so every referenced active ruleset is downloaded.
     candidates = (((item, None) for item in _items(config_data)) if native_paths is not None
@@ -314,8 +322,7 @@ def generate_oxidns_config(config_data, base_url=''):
         # probe, never the final proxy/Fake-IP answer from its parent sequence.
         add('local_probe_cache', 'cache', {'size': s['probe_cache_size'], 'short_circuit': False})
     fallback_upstreams = _fallback_upstreams(s['fallback_dns'])
-    for name, defaults in (('local', ['udp://223.5.5.5', 'udp://119.29.29.29']),
-                           ('remote', ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'])):
+    for name, defaults in (('local', LOCAL_DNS_DEFAULTS), ('remote', REMOTE_DNS_DEFAULTS)):
         add(f'forward_{name}', 'forward', {'concurrent': s[f'{name}_concurrent'],
             'upstreams': _forward(s[f'{name}_dns'], defaults)})
     if fallback_upstreams:
@@ -372,6 +379,9 @@ def generate_oxidns_config(config_data, base_url=''):
     requery.append({'exec': 'goto proxy_dns_seq'})
     add('direct_ip', 'sequence', direct_ip)
     add('ip_requery_proxy', 'sequence', requery)
+    # Blackhole and pinned upstream helpers exist only while a rule uses them.
+    plugins.extend(helper_plugins([group['route'] for entries in groups.values() for group in entries],
+                                  s['rule_actions'], s))
 
     main = []
     if s['metrics_enabled']:
@@ -390,7 +400,7 @@ def generate_oxidns_config(config_data, base_url=''):
     if s['custom_match_position'] == 'head':
         main.extend(matches)
     for group in groups['domain']:
-        main.append({'matches': [f'qname ${group["tag"]}'], 'exec': 'goto ' + ('china_dns' if group['route'] == 'direct' else 'proxy_dns_seq')})
+        main.append({'matches': [f'qname ${group["tag"]}'], 'exec': route_exec(group['route'], 'domain')})
     if s['custom_match_position'] == 'tail':
         main.extend(matches)
     # Explicit rules override previously learned classifications.
@@ -399,7 +409,7 @@ def generate_oxidns_config(config_data, base_url=''):
     if groups['ip']:
         main.append({'exec': 'jump local_probe'})
         for group in groups['ip']:
-            main.append({'matches': [f'resp_ip ${group["tag"]}'], 'exec': 'goto ' + ('direct_ip' if group['route'] == 'direct' else 'ip_requery_proxy')})
+            main.append({'matches': [f'resp_ip ${group["tag"]}'], 'exec': route_exec(group['route'], 'ip')})
         if s['default_forward'] == 'forward_local':
             main.append({'matches': ['has_resp'], 'exec': 'goto default_direct_ip'})
         else:

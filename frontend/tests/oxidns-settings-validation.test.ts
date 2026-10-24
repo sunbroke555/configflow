@@ -56,7 +56,7 @@ describe('unified OxiDNS profile settings', () => {
     await flushPromises()
     expect(button('保存草稿').disabled).toBe(false)
     await click('保存草稿')
-    expect(oxidnsApi.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ native_config: expect.stringContaining('worker_threads: 4') }), 'other-profile')
+    expect(oxidnsApi.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ native_config: expect.stringContaining('worker_threads: 4') }), 'other-profile', undefined)
   })
 
 

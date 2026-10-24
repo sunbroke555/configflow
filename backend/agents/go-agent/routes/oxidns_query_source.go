@@ -119,7 +119,7 @@ func oxQuerySource(record oxSourceRecord) string {
 			source = "remote"
 		case "forward_fallback":
 			source = "fallback"
-		case "adguard_block":
+		case "adguard_block", "cf_dns_blackhole":
 			source = "blocked"
 		case "custom_hosts":
 			if i+1 < len(record.Steps) {
@@ -141,7 +141,16 @@ func oxQuerySource(record oxSourceRecord) string {
 				}
 			}
 		default:
-			if oxSourceIPv4Selector(step) && step.Outcome == "stop" &&
+			if strings.HasPrefix(step.Tag, "cf_dns_fwd_") {
+				source = "pinned"
+			} else if strings.HasPrefix(step.Tag, "cf_dns_up_") || strings.HasPrefix(step.Tag, "cf_dns_cache_") {
+				// A rule's pinned upstream chain and its private cache. As with
+				// lazy_cache, a wrapping completion is not evidence by itself: the
+				// inner forward, or the reject on no answer, decides instead.
+				if i == start+1 {
+					source = "pinned"
+				}
+			} else if oxSourceIPv4Selector(step) && step.Outcome == "stop" &&
 				i == start+1 && oxSourceIPv4SuppressedResponse(record) {
 				// Suppression retains only the selector's entered/stop pair. Its
 				// isolated probe may still have contacted upstream DNS servers.

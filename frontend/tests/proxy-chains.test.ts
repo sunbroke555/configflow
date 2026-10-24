@@ -17,7 +17,7 @@ vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
   nodeApi: { getAll: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
   proxyGroupApi: { getAll: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
-  ruleApi: { getAll: vi.fn(), create: vi.fn(), update: vi.fn() },
+  ruleApi: { getAll: vi.fn(), create: vi.fn(), update: vi.fn(), compose: vi.fn(), getDns: vi.fn() },
   ruleSetApi: { getAll: vi.fn() },
   profileApi: { list: vi.fn() }
 }))
@@ -33,6 +33,7 @@ const chain = (entry: NonNullable<ProxyGroup['chain']>['entry'] = { type: 'node'
 beforeAll(() => {
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })) })
+  Object.defineProperty(window, 'ResizeObserver', { configurable: true, value: class { observe() {} unobserve() {} disconnect() {} } })
 })
 beforeEach(() => {
   vi.resetAllMocks()
@@ -56,6 +57,8 @@ beforeEach(() => {
   vi.mocked(proxyGroupApi.delete).mockImplementation(async id => { groups = groups.filter(group => group.id !== id); return response({}) })
   vi.mocked(ruleApi.getAll).mockResolvedValue(response([]))
   vi.mocked(ruleApi.create).mockResolvedValue(response({}))
+  vi.mocked(ruleApi.compose).mockResolvedValue(response({ success: true, data: { rules: [{ id: 'rule-new' }], library: null }, dns: {}, skipped: [], warnings: [], draft: true }) as any)
+  vi.mocked(ruleApi.getDns).mockRejectedValue(new Error('not used here'))
   vi.mocked(nodeApi.update).mockResolvedValue(response({}))
   vi.spyOn(notify, 'error').mockImplementation(() => 0)
   vi.spyOn(notify, 'warning').mockImplementation(() => 0)
@@ -478,12 +481,13 @@ it('offers a named chain as a rule policy and persists its name', async () => {
   groups.push(chain())
   await render(Rules)
   await button('添加规则')
-  await fill('#rule-value', 'example.test')
-  const triggers = document.querySelectorAll('[role="dialog"] [role="combobox"]')
-  triggers[1].setAttribute('data-testid', 'rule-policy')
+  await fill('#rule-values', 'example.test')
+  document.querySelector('[role="dialog"] [aria-label="策略"]')!.setAttribute('data-testid', 'rule-policy')
   await select('[data-testid="rule-policy"]', 'Via relay')
-  await button('保存')
-  expect(ruleApi.create).toHaveBeenCalledWith(expect.objectContaining({ policy: 'Via relay', value: 'example.test' }), 'default')
+  await button('保存 1 条规则')
+  expect(ruleApi.compose).toHaveBeenCalledWith(expect.objectContaining({
+    source: { kind: 'values', rule_type: 'DOMAIN-SUFFIX', text: 'example.test' }, rule: expect.objectContaining({ policy: 'Via relay' })
+  }), 'default')
 })
 
 it('keeps rejected drafts open with inline backend guidance and no shared writes', async () => {

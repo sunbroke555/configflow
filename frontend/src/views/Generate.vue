@@ -66,6 +66,7 @@
     <OxidnsSettings
       v-model:open="oxidnsSettingsDialogVisible"
       :profile-id="profileId"
+      :initial-tab="oxidnsInitialTab"
       :preferred-agent-id="agentSettings?.agentId"
       :context-label="settingsContextLabel"
       :back-label="settingsBackLabel"
@@ -100,6 +101,9 @@
               <InfoNote>
                 <p>选择哪些规则和规则集使用国内 DNS，哪些使用国外 DNS。</p>
                 <p>只有选中的规则和规则集才会用于生成 MosDNS 配置。</p>
+              </InfoNote>
+              <InfoNote v-if="oxidnsDnsDifference" data-oxidns-dns-difference>
+                <p>{{ oxidnsDnsDifference }}</p>
               </InfoNote>
 
               <LabeledDivider label="直连规则配置" />
@@ -708,10 +712,12 @@ import { notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { optionHelp } from '@/lib/optionCopy'
 import { isDnsRuleType } from '@/lib/oxidns'
+import { isBlockRoute, isUpstreamValue } from '@/lib/ruleDns'
+import router from '@/router'
 import { generateApi, customConfigApi, ruleApi, ruleSetApi, proxyGroupApi, serverDomainApi, configTokenApi, type PublishGuard } from '@/api'
 import YamlEditor from '@/components/YamlEditor.vue'
 import api from '@/api'
-import type { RuleSet } from '@/types'
+import type { RuleDnsSnapshot, RuleSet } from '@/types'
 import { activeProfileId } from '@/profileContext'
 import type { AgentSettingsContext } from '@/lib/agentSettings'
 import * as yaml from 'js-yaml'
@@ -1012,6 +1018,9 @@ const loonLoading = ref(false)
 const mosdnsLoading = ref(false)
 const oxidnsLoading = ref(false)
 const oxidnsSettingsDialogVisible = ref(false)
+// 「打开完整参数」深链（/generate?oxidns=config）只作用于这一次打开。
+const oxidnsInitialTab = ref<'config'>()
+watch(oxidnsSettingsDialogVisible, open => { if (!open) oxidnsInitialTab.value = undefined })
 
 const mihomoPreviewLoading = ref(false)
 const surgePreviewLoading = ref(false)
@@ -1855,7 +1864,45 @@ const getMosdnsCustomConfigPlaceholder = () => {
   return '输入自定义 YAML 配置，例如：\nlog:\n  level: info\n  file: ./mosdns.log\n\nservers:\n  - addr: 127.0.0.1:5335\n    protocol: udp\n\n# data_providers 和 plugins 将自动生成'
 }
 
+// 规则在 OxiDNS 中的 DNS 处理（GET /rules/dns），用于提示与 MosDNS 自身分流不同的规则；
+// 只用于提示，读取失败不影响 MosDNS 设置。
+const mosdnsOxidnsDns = ref<RuleDnsSnapshot | null>(null)
+const loadMosdnsOxidnsDns = async () => {
+  try {
+    const { data } = await ruleApi.getDns(profileId)
+    if (pageActive) mosdnsOxidnsDns.value = data?.engine && data.rules ? data : null
+  } catch (error) {
+    console.error('加载规则 DNS 处理失败', error)
+  }
+}
+/** MosDNS 只有直连 / 代理两种分流：OxiDNS 的拦截、指定上游及不同的分流按 MosDNS 草稿汇总 */
+const oxidnsDnsDifference = computed(() => {
+  const snapshot = mosdnsOxidnsDns.value
+  if (!snapshot?.engine.oxidns_in_use) return ''
+  const mosdns = new Map<string, 'direct' | 'proxy'>()
+  for (const id of [...mosdnsDirectRules.value, ...mosdnsDirectRulesets.value]) mosdns.set(id, 'direct')
+  for (const id of [...mosdnsProxyRules.value, ...mosdnsProxyRulesets.value]) mosdns.set(id, 'proxy')
+  const known = new Set([...availableRules.value, ...availableRuleSets.value].map(item => item.id))
+  const counts = { block: 0, upstream: 0, route: 0 }
+  for (const id of new Set([...Object.keys(snapshot.rules), ...mosdns.keys()])) {
+    // 省略的规则即 OxiDNS 默认上游；停用与不参与 DNS 的规则两边都不生成。
+    const entry = snapshot.rules[id]
+    if ((!entry && !known.has(id)) || entry?.state === 'unsupported' || entry?.state === 'disabled') continue
+    const route = entry?.route || null
+    if (isBlockRoute(route)) counts.block++
+    else if (isUpstreamValue(route)) counts.upstream++
+    else if (route !== (mosdns.get(id) ?? null)) counts.route++
+  }
+  const parts = ([['拦截', counts.block], ['指定上游', counts.upstream], ['直连/代理', counts.route]] as const).filter(([, count]) => count)
+  const total = counts.block + counts.upstream + counts.route
+  return total
+    ? `${total} 条规则在 OxiDNS 中的 DNS 处理与 MosDNS 不同（${parts.map(([label, count]) => `${label} ${count}`).join(' · ')}），MosDNS 按自身设置解析`
+    : ''
+})
+
 const showMosdnsSettingsDialog = async () => {
+  mosdnsOxidnsDns.value = null
+  void loadMosdnsOxidnsDns()
   try {
     // 加载规则集列表和规则列表
     await Promise.all([loadRuleSets(), loadRules()])
@@ -2002,6 +2049,16 @@ watch(agentEditorOpen, (open, wasOpen) => {
   if (props.agentSettings && wasOpen && !open) emit('close')
 })
 
+/** 规则页「打开完整参数」的深链：/generate?oxidns=config 直接打开 OxiDNS 设置的完整参数 */
+function openLinkedOxidnsSettings() {
+  const query = router.currentRoute?.value?.query
+  if (query?.oxidns !== 'config') return
+  oxidnsInitialTab.value = 'config'
+  oxidnsSettingsDialogVisible.value = true
+  const { oxidns: _linked, ...rest } = query
+  void router.replace({ query: rest })
+}
+
 onMounted(async () => {
   if (props.agentSettings) {
     const service = props.agentSettings.serviceType
@@ -2014,6 +2071,7 @@ onMounted(async () => {
     }
     return
   }
+  openLinkedOxidnsSettings()
   // 从后端加载服务域名配置
   try {
     const response = await serverDomainApi.get()

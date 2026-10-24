@@ -5,7 +5,7 @@
       title="策略规则"
     >
       <template #actions>
-        <Button @click="showAddRuleDialog">
+        <Button @click="openEditor('values')">
           <Plus class="size-4" />
           添加规则
         </Button>
@@ -17,9 +17,13 @@
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem @select="showAddRuleSetDialog">
+            <DropdownMenuItem @select="openEditor('library')">
               <FolderOpen class="size-4" />
               添加规则集
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="dnsColumn" :disabled="!followCandidates.length" @select="unifyFollow">
+              <Workflow class="size-4" />
+              统一为跟随策略
             </DropdownMenuItem>
             <DropdownMenuItem @select="showDuplicateDialog">
               <Copy class="size-4" />
@@ -80,6 +84,10 @@
               <span aria-hidden="true">→</span>
               <span class="chip font-mono" :title="simVia.hint">{{ simVia.label }}</span>
             </template>
+            <template v-if="simDns">
+              <span aria-hidden="true">·</span>
+              <span :class="cn('chip', chipClass(simDns.tone))" :title="simDns.title" data-sim-dns>DNS：{{ simDns.text }}</span>
+            </template>
             <span class="ml-auto font-mono text-[11.5px]">{{ simResult.elapsed_time }} ms</span>
           </template>
           <template v-else-if="simResult">
@@ -96,13 +104,29 @@
       </form>
     </SectionCard>
 
+    <!-- DNS 状态读取失败时保留 DNS 列，并在列表上方提供重试 -->
+    <InfoNote v-if="displayList.length && dnsColumn && dnsError" class="mb-3.5" data-dns-error>
+      <p class="flex flex-wrap items-center gap-2">
+        DNS 状态读取失败，DNS 列暂不可修改
+        <Button type="button" variant="ghost" size="xs" class="text-primary-accent max-sm:h-11" :disabled="dnsLoading" @click="loadDns">
+          <Loader2 v-if="dnsLoading" class="size-3 animate-spin" />重试
+        </Button>
+      </p>
+    </InfoNote>
+    <InfoNote v-else-if="displayList.length && dnsColumn && dnsSnapshot && !dnsSnapshot.engine.editable" class="mb-3.5" data-dns-locked>
+      <p class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span class="min-w-0 break-words">DNS 处理需在完整参数修改：{{ dnsSnapshot.engine.reason || 'OxiDNS 分流含自定义结构' }}</span>
+        <a href="/generate?oxidns=config" target="_blank" rel="noopener" class="inline-flex min-h-6 items-center gap-1 text-primary-accent underline-offset-4 hover:underline max-sm:min-h-11">打开完整参数<ExternalLink class="size-3" aria-hidden="true" /></a>
+      </p>
+    </InfoNote>
+
     <SectionCard v-if="displayList.length === 0" :padded="false">
       <EmptyState
         :icon="FileText"
         title="暂无规则"
         description="添加单条规则或从规则库选择规则集，再指定处理流量的策略。规则从上到下匹配。"
       >
-        <Button @click="showAddRuleDialog">
+        <Button @click="openEditor('values')">
           <Plus class="size-4" />
           添加规则
         </Button>
@@ -112,7 +136,7 @@
     <!-- ===== 列表视图 ===== -->
     <SectionCard v-else-if="viewMode === 'list'" :padded="false">
       <div class="max-w-full overflow-x-auto" role="region" aria-label="策略规则列表" tabindex="0">
-      <div class="min-w-[680px]">
+      <div :class="dnsColumn ? 'min-w-[828px] max-lg:min-w-[668px] xl:min-w-[868px]' : 'min-w-[680px]'">
       <div
         class="flex items-center gap-2.5 border-b border-border px-4 py-3 font-mono text-[10.5px] tracking-[0.12em] text-muted-foreground uppercase"
         aria-hidden="true"
@@ -123,6 +147,7 @@
         <span class="min-w-0 flex-1">匹配值</span>
         <span class="w-[160px] max-lg:hidden">备注</span>
         <span class="w-[120px] text-right">策略</span>
+        <span v-if="dnsColumn" class="w-[148px] pl-2 xl:w-[188px]">DNS</span>
         <span class="w-[136px]" />
       </div>
       <div id="sortable-rules" ref="rulesContainer" class="flex flex-col">
@@ -162,7 +187,22 @@
             <span class="ml-auto flex w-[120px] shrink-0 justify-end">
               <span :class="cn('chip max-w-full truncate', policyChip(item.policy))">{{ item.policy }}</span>
             </span>
+            <span v-if="dnsColumn" class="flex w-[148px] shrink-0 items-center pl-2 xl:w-[188px]" data-group-dns>
+              <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-6 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
+              <span v-else :class="cn('min-w-0 truncate text-[12px]', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
+            </span>
             <span class="flex w-[136px] shrink-0 items-center justify-end gap-0.5">
+              <Button
+                v-if="dnsColumn && dnsEditable"
+                variant="ghost"
+                size="icon-sm"
+                class="cf-reorder-mute shrink-0"
+                title="批量设置 DNS"
+                :aria-label="`批量设置 ${item.groupName || item.groupDefaultName} 的 DNS`"
+                @click.stop="openBatch(item)"
+              >
+                <Server class="size-4" />
+              </Button>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -188,7 +228,7 @@
               item.isExpandedGroupItem && 'bg-background/40',
               !item.enabled && 'opacity-55',
               simScanKey === item.uniqueId && 'is-scan',
-              simMatchKey === item.uniqueId && 'is-match'
+              (simMatchKey === item.uniqueId || recentKeys.has(item.uniqueId)) && 'is-match'
             ]"
           >
             <DragHandle
@@ -236,6 +276,17 @@
 
             <span class="flex w-[120px] shrink-0 justify-end">
               <span :class="cn('chip max-w-full truncate', policyChip(item.policy))">{{ item.policy }}</span>
+            </span>
+            <span v-if="dnsColumn" class="cf-reorder-mute flex w-[148px] shrink-0 items-center pl-2 xl:w-[188px]">
+              <RuleDnsCell
+                :item="item"
+                :snapshot="dnsSnapshot"
+                :loading="dnsLoading"
+                :stale="dnsStale.has(item.id)"
+                :pending="dnsPending[item.id]"
+                :disabled="reorder.active.value || dnsError"
+                @change="value => setRuleDns(item, value)"
+              />
             </span>
 
             <div class="cf-reorder-mute flex w-[136px] shrink-0 items-center justify-end gap-0.5">
@@ -329,6 +380,15 @@
             <Badge variant="secondary" class="min-w-0 max-w-full text-[10.5px]" :title="item.policy"><span class="truncate">{{ item.policy }}</span></Badge>
           </div>
 
+          <div v-if="dnsColumn" class="cf-reorder-mute flex w-full min-w-0 items-center gap-2 text-[12px]" data-group-dns>
+            <span class="shrink-0 text-muted-foreground">DNS</span>
+            <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-5 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
+            <span v-else :class="cn('min-w-0 flex-1 truncate', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
+            <Button v-if="dnsEditable" variant="ghost" size="icon-sm" class="shrink-0" title="批量设置 DNS" :aria-label="`批量设置 ${item.groupName || item.groupDefaultName} 的 DNS`" @click.stop="openBatch(item)">
+              <Server class="size-4" />
+            </Button>
+          </div>
+
           <footer class="mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2">
             <Button variant="ghost" size="sm" @click.stop="showGroupRenameDialog(item)">
               <Pencil class="size-3.5" />
@@ -408,7 +468,20 @@
             </p>
           </div>
 
-          <footer class="cf-reorder-mute mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2">
+          <div v-if="dnsColumn" class="cf-reorder-mute mt-auto flex w-full min-w-0 items-center gap-2 text-[12px]" data-card-dns>
+            <span class="shrink-0 text-muted-foreground">DNS</span>
+            <RuleDnsCell
+              class="min-w-0 flex-1"
+              :item="item"
+              :snapshot="dnsSnapshot"
+              :loading="dnsLoading"
+              :stale="dnsStale.has(item.id)"
+              :pending="dnsPending[item.id]"
+              :disabled="reorder.active.value || dnsError"
+              @change="value => setRuleDns(item, value)"
+            />
+          </div>
+          <footer :class="cn('cf-reorder-mute flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2', !dnsColumn && 'mt-auto')">
             <Badge variant="secondary" class="min-w-0 max-w-[150px] text-[10.5px]" :title="item.policy"><span class="truncate">{{ item.policy }}</span></Badge>
             <Button variant="ghost" size="icon-sm" class="ml-auto" title="编辑" aria-label="编辑" @click="editItem(item)">
               <Pencil class="size-4" />
@@ -428,180 +501,30 @@
       </Motion>
     </div>
 
-    <!-- ===== 添加 / 编辑规则 ===== -->
-    <Dialog v-model:open="ruleDialogVisible">
-      <DialogContent class="max-w-[520px]">
-        <DialogHeader>
-          <DialogTitle>{{ isEditRule ? '编辑规则' : '添加规则' }}</DialogTitle>
-          <DialogDescription>规则按列表顺序自上而下匹配，命中即停止。</DialogDescription>
-        </DialogHeader>
+    <!-- ===== 添加 / 编辑规则（一页表单） ===== -->
+    <RuleEditorDialog
+      v-model:open="editorOpen"
+      :mode="editorItem ? 'edit' : 'create'"
+      :item="editorItem"
+      :initial-source="editorSource"
+      :rules="allRules"
+      :library="ruleLibrary"
+      :policies="availablePolicies"
+      :dns="editorDns"
+      :dns-loading="dnsLoading"
+      :profile-id="profileId"
+      @saved="onEditorSaved"
+      @enable="enableRule"
+    />
 
-        <div class="cf-focus-gutter flex max-h-[60dvh] flex-col gap-4 overflow-y-auto">
-          <div class="flex flex-col gap-1.5">
-            <Label>规则类型</Label>
-            <Select v-model="ruleForm.rule_type">
-              <SelectTrigger class="w-full bg-background/50 font-mono">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="type in RULE_TYPES" :key="type" :value="type" class="font-mono">
-                  {{ type }}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <Label for="rule-value">值</Label>
-            <Input
-              id="rule-value"
-              v-model="ruleForm.value"
-              class="bg-background/50 font-mono"
-              placeholder="域名、IP 或规则集名称"
-            />
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <Label>策略</Label>
-            <Select v-model="ruleForm.policy">
-              <SelectTrigger class="w-full min-w-0 bg-background/50 [&>span]:truncate">
-                <SelectValue placeholder="选择策略" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="policy in availablePolicies" :key="policy" :value="policy" :title="policy">
-                  <span class="break-all">{{ policy }}</span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <Label for="rule-remark">备注</Label>
-            <Input
-              id="rule-remark"
-              v-model="ruleForm.remark"
-              class="bg-background/50"
-              placeholder="可选，添加备注说明"
-            />
-          </div>
-
-          <div v-if="isIpRuleType" class="flex flex-col gap-1.5">
-            <div class="flex items-center gap-2.5">
-              <Switch id="rule-noresolve" v-model="ruleForm.no_resolve" />
-              <Label for="rule-noresolve" class="text-[13px] text-muted-foreground">no-resolve</Label>
-            </div>
-            <p class="m-0 text-[12px] text-muted-foreground">
-              开启后，匹配 IP 条件时不为此解析域名。IP 类规则建议开启；逻辑规则中仅对 IP 子条件生效。
-            </p>
-          </div>
-
-          <div class="flex items-center gap-2.5">
-            <Switch id="rule-enabled" v-model="ruleForm.enabled" />
-            <Label for="rule-enabled" class="text-[13px] text-muted-foreground">
-              {{ ruleForm.enabled ? '规则启用中' : '规则已停用' }}
-            </Label>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" @click="ruleDialogVisible = false">取消</Button>
-          <Button @click="saveRule">保存</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <!-- ===== 添加 / 编辑规则集 ===== -->
-    <Dialog v-model:open="ruleSetDialogVisible">
-      <DialogContent class="max-w-[520px]">
-        <DialogHeader>
-          <DialogTitle>{{ isEditRuleSet ? '编辑规则集' : '添加规则集' }}</DialogTitle>
-          <DialogDescription>从规则库选择规则集，并设置当前配置使用的策略和启用状态。不会修改规则集内容或其他配置。</DialogDescription>
-        </DialogHeader>
-
-        <div class="cf-focus-gutter flex max-h-[60dvh] flex-col gap-4 overflow-y-auto">
-          <div class="flex flex-col gap-1.5">
-            <Label>选择规则</Label>
-            <Select v-model="selectedLibraryRule" @update:model-value="value => onLibraryRuleSelect(String(value))">
-              <SelectTrigger class="w-full min-w-0 bg-background/50 [&>span]:truncate">
-                <SelectValue placeholder="选择共享规则集（必选）">
-                  {{ selectedLibraryRuleLabel || '选择共享规则集（必选）' }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="rule in enabledLibraryRules" :key="rule.id" :value="rule.id">
-                  <span class="flex w-full items-center gap-2">
-                    <span class="min-w-0 truncate">{{ rule.name }}</span>
-                    <span class="ml-auto font-mono text-[10.5px] text-muted-foreground">
-                      {{ rule.behavior }}
-                    </span>
-                  </span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <div class="flex items-center gap-2">
-              <p class="m-0 flex-1 text-[12px] text-muted-foreground">当前配置已添加的规则集不会重复显示。</p>
-              <Button v-if="selectedLibraryRule" variant="ghost" size="sm" @click="onLibraryRuleClear">
-                清除选择
-              </Button>
-            </div>
-          </div>
-
-          <div v-if="selectedLibrarySource" class="min-w-0 rounded-lg border border-border/50 bg-background/50 p-3 text-xs text-muted-foreground">
-            <p class="m-0 break-all font-medium text-foreground">{{ selectedLibrarySource.name }}</p>
-            <p class="mt-1 mb-0">{{ selectedLibrarySource.behavior }} · {{ selectedLibrarySource.source_type === 'content' ? '共享规则内容' : '远程 URL' }}</p>
-            <p class="mt-1 mb-0 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono">{{ selectedLibrarySource.source_type === 'content' ? selectedLibrarySource.content : selectedLibrarySource.url }}</p>
-            <p v-if="selectedLibrarySource.enabled === false" class="mt-2 mb-0 text-warning-accent">共享来源已停用；当前配置的启用状态会保留，来源重新启用后生效。</p>
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <Label>策略</Label>
-            <Select v-model="ruleSetForm.policy">
-              <SelectTrigger class="w-full min-w-0 bg-background/50 [&>span]:truncate">
-                <SelectValue placeholder="选择策略" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="policy in availablePolicies" :key="policy" :value="policy" :title="policy">
-                  <span class="break-all">{{ policy }}</span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <Label for="ruleset-remark">备注</Label>
-            <Input
-              id="ruleset-remark"
-              v-model="ruleSetForm.remark"
-              class="bg-background/50"
-              placeholder="可选，添加备注说明"
-            />
-          </div>
-
-          <div v-if="selectedLibrarySource?.behavior === 'ipcidr'" class="flex flex-col gap-1.5">
-            <div class="flex items-center gap-2.5">
-              <Switch id="ruleset-noresolve" v-model="ruleSetForm.no_resolve" />
-              <Label for="ruleset-noresolve" class="text-[13px] text-muted-foreground">no-resolve</Label>
-            </div>
-            <p class="m-0 text-[12px] text-muted-foreground">开启后，匹配 IP 条件时不为此解析域名。IP CIDR 类规则集建议开启。</p>
-          </div>
-
-          <div class="flex items-center gap-2.5">
-            <Switch
-              id="ruleset-enabled"
-              v-model="ruleSetForm.enabled"
-            />
-            <Label for="ruleset-enabled" class="text-[13px] text-muted-foreground">
-              {{ ruleSetForm.enabled ? '规则集启用中' : '规则集已停用' }}
-            </Label>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" @click="ruleSetDialogVisible = false">取消</Button>
-          <Button :disabled="!selectedLibraryRule" @click="saveRuleSet">保存</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <RuleDnsBatchDialog
+      v-model:open="batchOpen"
+      :items="batchItems"
+      :group-name="batchName"
+      :snapshot="dnsSnapshot"
+      :profile-id="profileId"
+      @applied="mergeDns"
+    />
 
     <!-- ===== 规则组重命名 ===== -->
     <Dialog v-model:open="groupRenameDialogVisible">
@@ -759,6 +682,7 @@ import {
   ChevronUp,
   CircleCheck,
   Copy,
+  ExternalLink,
   Eye,
   EyeOff,
   FileText,
@@ -768,8 +692,9 @@ import {
   Pencil,
   Play,
   Plus,
+  Server,
   Trash2,
-  TriangleAlert
+  Workflow
 } from '@lucide/vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -791,52 +716,35 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { Switch } from '@/components/ui/switch'
 import EmptyState from '@/components/common/EmptyState.vue'
+import InfoNote from '@/components/common/InfoNote.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import ViewToggle from '@/components/common/ViewToggle.vue'
-import { notify } from '@/lib/feedback'
+import RuleEditorDialog from '@/components/rules/RuleEditorDialog.vue'
+import RuleDnsBatchDialog from '@/components/rules/RuleDnsBatchDialog.vue'
+import RuleDnsCell from '@/components/rules/RuleDnsCell.vue'
+import { confirm, notify } from '@/lib/feedback'
 import { listItem } from '@/lib/motion'
 import { ruleApi, ruleSetApi, proxyGroupApi } from '@/api'
 import { cn } from '@/lib/utils'
-import type { Rule, RuleSet, ProxyGroup } from '@/types'
+import { chipClass, dnsChip, dnsLabel, followRoute, isUpstreamValue, notifyRuleSaved, pinnedWithheld, ruleSetPayload } from '@/lib/ruleDns'
+import { isDnsRuleType } from '@/lib/oxidns'
+import type { ProxyGroup, RuleDnsSnapshot, RuleDnsState, RuleDnsValue } from '@/types'
 import api from '@/api'
 import { getActiveProfileId } from '@/profileContext'
 import { isAxiosError } from 'axios'
 
 const errorMessage = (error: unknown, fallback: string) =>
   isAxiosError<{ message?: string }>(error) ? error.response?.data?.message || fallback : fallback
+/** DNS 写入失败：native 分流被手动修改时，服务端在 usages[0].reason 给出具体原因 */
+const dnsFailure = (error: unknown, fallback: string) =>
+  (isAxiosError<{ usages?: Array<{ reason?: string }> }>(error) && error.response?.data?.usages?.[0]?.reason) || errorMessage(error, fallback)
 
 const profileId = getActiveProfileId()
 const profileRequestConfig = { headers: { 'X-ConfigFlow-Profile': profileId } }
 
-
-const RULE_TYPES = [
-  'DOMAIN',
-  'DOMAIN-SUFFIX',
-  'DOMAIN-KEYWORD',
-  'IP-CIDR',
-  'IP-CIDR6',
-  'IP-SUFFIX',
-  'DST-PORT',
-  'SRC-PORT',
-  'GEOIP',
-  'GEOSITE',
-  'RULE-SET',
-  'AND',
-  'OR',
-  'NOT',
-  'MATCH'
-]
 
 /* DIRECT 绿、REJECT 红，其余走强调色，与生成的配置语义一致 */
 const policyTone = (policy: string) =>
@@ -845,15 +753,6 @@ const policyTone = (policy: string) =>
 const allRules = ref<any[]>([])  // 包含规则和规则集的合并数组
 const proxyGroups = ref<ProxyGroup[]>([])
 const ruleLibrary = ref<any[]>([])  // 规则仓库
-const selectedLibraryRule = ref('')  // 选中的规则仓库项ID
-const selectedLibrarySource = computed(() =>
-  ruleLibrary.value.find(rule => rule.id === selectedLibraryRule.value)
-)
-const selectedLibraryRuleLabel = computed(() => selectedLibrarySource.value?.name || '')
-const ruleDialogVisible = ref(false)
-const ruleSetDialogVisible = ref(false)
-const isEditRule = ref(false)
-const isEditRuleSet = ref(false)
 const viewMode = ref<'list' | 'card'>('list') // 默认表格视图，与匹配顺序一致
 const rulesContainer = ref<HTMLElement | null>(null)
 
@@ -866,6 +765,15 @@ const simResult = ref<any>(null)
 const simScanKey = ref('')
 const simMatchKey = ref('')
 const simVia = ref<{ label: string; hint: string } | null>(null)
+/** 命中项的 DNS 处理，与列表 chip 同源 */
+const simDns = computed(() => {
+  const result = simResult.value
+  const snapshot = dnsSnapshot.value
+  if (!result?.matched || !result.rule_id || !snapshot?.engine.oxidns_in_use) return null
+  const entry = snapshot.rules[result.rule_id]
+  const chip = dnsChip(entry, { ...snapshot.engine, editable: true })
+  return { text: dnsLabel(entry, snapshot.engine), tone: chip.tone, title: chip.title }
+})
 
 const policyChip = (policy: string) =>
   policy === 'DIRECT' ? 'chip-ok font-mono' : policy === 'REJECT' ? 'chip-bad font-mono' : 'chip-acc'
@@ -1032,54 +940,11 @@ let duplicateController: AbortController | undefined
 let duplicateScanSequence = 0
 let duplicateViewActive = true
 
-const ruleForm = ref<Partial<Rule> & { itemType?: string }>({
-  rule_type: 'DOMAIN-SUFFIX',
-  value: '',
-  policy: 'DIRECT',
-  enabled: true,
-  remark: '',
-  no_resolve: false
-})
-
-type RuleSetReference = Partial<Pick<RuleSet, 'id' | 'library_rule_id' | 'policy' | 'enabled' | 'order' | 'remark' | 'no_resolve' | 'group_name'>> & { itemType?: string; formats?: string[]; mosdns?: unknown }
-
-const ruleSetPayload = (item: RuleSetReference) => ({
-  id: item.id,
-  itemType: 'ruleset',
-  library_rule_id: item.library_rule_id,
-  policy: item.policy,
-  enabled: item.enabled,
-  order: item.order,
-  remark: item.remark,
-  no_resolve: item.no_resolve,
-  group_name: item.group_name,
-  formats: item.formats,
-  mosdns: item.mosdns
-})
-
-const ruleSetForm = ref<RuleSetReference>({
-  policy: 'DIRECT',
-  enabled: true,
-  library_rule_id: '',  // 关联的规则仓库ID
-  remark: '',
-  no_resolve: false
-})
-
 // 可用的策略选项：DIRECT、REJECT和所有策略组
 const availablePolicies = computed(() => {
   const policies = ['DIRECT', 'REJECT']
   const groupNames = proxyGroups.value.map(g => g.name)
   return [...policies, ...groupNames]
-})
-
-// 判断当前规则类型是否为 IP 类型（需要 no-resolve）
-// 逻辑规则内部可包含 IP 类条件，同样需要 no-resolve（生成时会写入子条件内）
-const LOGIC_RULE_TYPES = ['AND', 'OR', 'NOT']
-const IP_RULE_TYPES = ['IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'GEOIP']
-
-const isIpRuleType = computed(() => {
-  const type = ruleForm.value.rule_type || ''
-  return IP_RULE_TYPES.includes(type) || LOGIC_RULE_TYPES.includes(type)
 })
 
 // 展开的组ID集合
@@ -1234,26 +1099,6 @@ const allRulesAndSets = computed(() => {
   return finalResult
 })
 
-// 过滤出已启用的规则仓库项，并排除已被使用的
-const enabledLibraryRules = computed(() => {
-  // 获取所有已使用的规则仓库ID（规则集中关联的）
-  const usedLibraryIds = new Set(
-    allRules.value
-      .filter(item => item.itemType === 'ruleset' && item.library_rule_id)
-      .map(item => item.library_rule_id)
-  )
-
-  // 编辑模式下，当前规则关联的ID应该保留（允许保持当前选择）
-  if (isEditRuleSet.value && ruleSetForm.value.library_rule_id) {
-    usedLibraryIds.delete(ruleSetForm.value.library_rule_id)
-  }
-
-  // 保留正在编辑的引用，即使共享来源已停用。
-  return ruleLibrary.value.filter(rule =>
-    (rule.enabled !== false || rule.id === selectedLibraryRule.value) && !usedLibraryIds.has(rule.id)
-  )
-})
-
 const loadAllRules = async () => {
   try {
     const { data } = await ruleApi.getAll(profileId)
@@ -1281,135 +1126,15 @@ const loadRuleLibrary = async () => {
   }
 }
 
-const showAddRuleDialog = () => {
-  isEditRule.value = false
-  ruleForm.value = {
-    id: `rule_${Date.now()}`,
-    rule_type: 'DOMAIN-SUFFIX',
-    value: '',
-    policy: 'DIRECT',
-    enabled: true,
-    remark: '',
-    no_resolve: false,  // DOMAIN-SUFFIX 不需要 no-resolve
-    itemType: 'rule'
-  }
-  ruleDialogVisible.value = true
-}
-
-const editRule = (row: Rule) => {
-  isEditRule.value = true
-  ruleForm.value = { ...row }
-  // 如果没有 no_resolve 字段，根据规则类型设置默认值
-  if (ruleForm.value.no_resolve === undefined || ruleForm.value.no_resolve === null) {
-    ruleForm.value.no_resolve = IP_RULE_TYPES.includes(ruleForm.value.rule_type || '')
-  }
-  ruleDialogVisible.value = true
-}
-
-const saveRule = async () => {
-  try {
-    const ruleData = { ...ruleForm.value, itemType: 'rule' }
-    if (isEditRule.value) {
-      const originalItem = allRules.value.find(r => r.id === ruleData.id && r.itemType === 'rule')
-      if (originalItem && originalItem.policy !== ruleData.policy) {
-        ruleData.group_name = ''
-      }
-      await ruleApi.update(ruleData.id!, ruleData, profileId)
-      notify.success('更新成功')
-    } else {
-      await ruleApi.create(ruleData, profileId)
-      notify.success('添加成功')
-    }
-    ruleDialogVisible.value = false
-    loadAllRules()
-  } catch (error) {
-    notify.error(errorMessage(error, '保存失败'))
-  }
-}
-
 const deleteRule = async (row: any) => {
   try {
     await ruleApi.delete(row.id, profileId)
 
     notify.success('删除成功')
     loadAllRules()
+    void loadDns()
   } catch (error) {
     notify.error(errorMessage(error, '删除失败'))
-  }
-}
-
-const showAddRuleSetDialog = () => {
-  isEditRuleSet.value = false
-  selectedLibraryRule.value = ''  // 清空选中的规则
-  ruleSetForm.value = {
-    id: `ruleset_${Date.now()}`,
-    policy: 'DIRECT',
-    enabled: true,
-    library_rule_id: '',
-    remark: '',
-    no_resolve: false,  // classical 不需要 no-resolve
-    itemType: 'ruleset'
-  }
-  ruleSetDialogVisible.value = true
-}
-
-// 来源只从共享目录读取，不复制到当前配置。
-const onLibraryRuleSelect = (libraryRuleId: string) => {
-  selectedLibraryRule.value = libraryRuleId
-  ruleSetForm.value.library_rule_id = libraryRuleId
-  ruleSetForm.value.no_resolve = selectedLibrarySource.value?.behavior === 'ipcidr'
-}
-
-const onLibraryRuleClear = () => {
-  selectedLibraryRule.value = ''
-  ruleSetForm.value.library_rule_id = ''
-  ruleSetForm.value.no_resolve = false
-}
-
-const editRuleSet = (row: RuleSet) => {
-  isEditRuleSet.value = true
-  ruleSetForm.value = ruleSetPayload(row)
-  // 如果没有 no_resolve 字段，根据 behavior 设置默认值
-  if (ruleSetForm.value.no_resolve === undefined || ruleSetForm.value.no_resolve === null) {
-    ruleSetForm.value.no_resolve = row.behavior === 'ipcidr'
-  }
-
-  // 如果有关联的规则仓库ID，则反显
-  if (row.library_rule_id) {
-    selectedLibraryRule.value = row.library_rule_id
-  } else {
-    selectedLibraryRule.value = ''
-  }
-
-  ruleSetDialogVisible.value = true
-}
-
-const saveRuleSet = async () => {
-  if (!selectedLibraryRule.value) {
-    notify.warning('请先选择共享规则库中的规则集')
-    return
-  }
-  try {
-    const ruleSetData = ruleSetPayload(ruleSetForm.value)
-    if (isEditRuleSet.value) {
-      // 检查策略是否发生变化
-      const originalItem = allRules.value.find(r => r.id === ruleSetData.id && r.itemType === 'ruleset')
-      if (originalItem && originalItem.policy !== ruleSetData.policy) {
-        // 策略变化，清除组名称
-        ruleSetData.group_name = ''
-      }
-      await ruleSetApi.update(ruleSetData.id!, ruleSetData, profileId)
-      notify.success('更新成功')
-    } else {
-      await ruleSetApi.create(ruleSetData, profileId)
-      notify.success('添加成功')
-    }
-    ruleSetDialogVisible.value = false
-    // 保存后重置所有展开状态，确保分组状态正确
-    expandedGroups.value = new Set()
-    loadAllRules()
-  } catch (error) {
-    notify.error(errorMessage(error, '保存失败'))
   }
 }
 
@@ -1419,18 +1144,59 @@ const deleteRuleSet = async (row: any) => {
 
     notify.success('删除成功')
     loadAllRules()
+    void loadDns()
   } catch (error) {
     notify.error(errorMessage(error, '删除失败'))
   }
 }
 
-// 统一的编辑方法
+/* ================================================================
+ * 一页表单：新建走 compose，编辑沿用规则 / 规则集的 PUT
+ * ================================================================ */
+const editorOpen = ref(false)
+const editorItem = ref<Record<string, any> | null>(null)
+const editorSource = ref<'values' | 'library' | 'new_library'>('values')
+const recentKeys = ref<Set<string>>(new Set())
+let recentTimer: number | undefined
+
+const openEditor = (source: 'values' | 'library' | 'new_library') => {
+  editorItem.value = null
+  editorSource.value = source
+  editorOpen.value = true
+}
+
+// 统一的编辑方法：传原始对象，表单不会带上展示用的分组字段
 const editItem = (row: any) => {
-  if (row.itemType === 'rule') {
-    editRule(row)
-  } else {
-    editRuleSet(row)
-  }
+  editorItem.value = allRules.value.find(r => r.id === row.id && r.itemType === row.itemType) || row
+  editorOpen.value = true
+}
+
+/**
+ * 保存后刷新列表与 DNS，滚动到新增或修改的行并高亮。
+ * compose 已返回新规则的 DNS 时直接并入快照；其余保存过的行在 DNS 重新读取完成前显示骨架。
+ */
+const onEditorSaved = async ({ ids, dns }: { ids: string[]; dns?: Record<string, RuleDnsState> }) => {
+  if (dns && dnsSnapshot.value) dnsSnapshot.value = { ...dnsSnapshot.value, rules: { ...dnsSnapshot.value.rules, ...dns } }
+  const unknown = ids.filter(id => !dns?.[id])
+  if (unknown.length) dnsStale.value = new Set([...dnsStale.value, ...unknown])
+  void loadDns()
+  await loadAllRules()
+  const keys = allRules.value.filter(item => ids.includes(item.id)).map(getItemKey)
+  if (!keys.length) return
+  const groups = allRulesAndSets.value.filter((item: any) => item.isGroup && item.items.some((sub: any) => keys.includes(sub.uniqueId)))
+  if (groups.length) expandedGroups.value = new Set([...expandedGroups.value, ...groups.map((group: any) => group.groupId)])
+  recentKeys.value = new Set(keys)
+  window.clearTimeout(recentTimer)
+  recentTimer = window.setTimeout(() => { recentKeys.value = new Set() }, 4000)
+  await nextTick()
+  rulesContainer.value?.querySelector<HTMLElement>(`[data-rule-key="${keys[0]}"]`)?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+}
+
+/** 粘贴时跳过的重复项已停用：「启用 #12」 */
+const enableRule = (id: string) => {
+  const item = allRules.value.find(r => r.id === id)
+  // 传展示用副本，与列表行一致；原始对象由 toggleItemStatus 自己查找并更新
+  if (item && !item.enabled) void toggleItemStatus({ ...item })
 }
 
 // 统一的删除方法
@@ -1455,23 +1221,158 @@ const toggleItemStatus = async (item: any) => {
   // 保存旧状态用于回滚
   const oldEnabled = originalItem.enabled
 
-  // 切换状态
-  item.enabled = !item.enabled
-  originalItem.enabled = !originalItem.enabled
+  // 切换状态：只取反一次，item 与 originalItem 可能是同一个对象
+  const nextEnabled = !oldEnabled
+  item.enabled = nextEnabled
+  originalItem.enabled = nextEnabled
 
 
   try {
-    if (item.itemType === 'rule') {
-      await ruleApi.update(item.id, originalItem, profileId)
-    } else {
-      await ruleSetApi.update(item.id, ruleSetPayload(originalItem), profileId)
-    }
-    notify.success('状态已更新')
+    // DNS 状态单独存放，原始对象里没有 dns，启停永远不是严格的 DNS 修改。
+    const { data } = item.itemType === 'rule'
+      ? await ruleApi.update(item.id, originalItem, profileId)
+      : await ruleSetApi.update(item.id, ruleSetPayload(originalItem), profileId)
+    const warnings: string[] = Array.isArray(data?.warnings) ? data.warnings : []
+    if (warnings.length) notify.warning('状态已更新', warnings.join('\n'))
+    else notify.success('状态已更新')
+    void loadDns()
   } catch (error) {
     notify.error(errorMessage(error, '更新状态失败'))
     // 失败后恢复状态
     item.enabled = oldEnabled
     originalItem.enabled = oldEnabled
+  }
+}
+
+/* ================================================================
+ * DNS 处理：独立于规则对象的状态表（GET /rules/dns）
+ * ================================================================ */
+const dnsSnapshot = ref<RuleDnsSnapshot | null>(null)
+const dnsLoading = ref(false)
+const dnsError = ref(false)
+const dnsPending = ref<Record<string, RuleDnsValue>>({})
+/** 快照读取之后保存过、或列表刷新时新出现的规则：快照中的值（或缺省的默认上游）可能已过时 */
+const dnsStale = ref<Set<string>>(new Set())
+let dnsSequence = 0
+
+/** 使用 OxiDNS 时显示 DNS 列；加载中或读取失败时保留，避免误显示为默认上游 */
+const dnsColumn = computed(() => (dnsSnapshot.value ? dnsSnapshot.value.engine.oxidns_in_use : dnsLoading.value || dnsError.value))
+const dnsEditable = computed(() => !!dnsSnapshot.value?.engine.editable && !dnsError.value)
+/** 读取失败或该规则的 DNS 未知时，表单按未加载处理：字段禁用且不发送 dns */
+const editorDns = computed(() => (dnsError.value || (editorItem.value && dnsStale.value.has(editorItem.value.id)) ? null : dnsSnapshot.value))
+const groupStale = (group: any) => group.items.some((item: any) => dnsStale.value.has(item.id))
+
+// 列表刷新带来的新行（例如在规则库页添加的引用）在 DNS 重新读取完成前同样视为未知。
+watch(() => allRules.value.map(item => item.id), (ids, previous) => {
+  if (!dnsLoading.value || !previous) return
+  const known = new Set(previous)
+  const fresh = ids.filter(id => !known.has(id) && !dnsSnapshot.value?.rules[id])
+  if (fresh.length) dnsStale.value = new Set([...dnsStale.value, ...fresh])
+})
+
+const loadDns = async () => {
+  const sequence = ++dnsSequence
+  dnsLoading.value = true
+  try {
+    const { data } = await ruleApi.getDns(profileId)
+    if (sequence !== dnsSequence) return
+    if (!data?.engine || !data.rules) throw new Error('invalid DNS state')
+    dnsSnapshot.value = { engine: data.engine, upstreams: data.upstreams || [], rules: data.rules, mosdns: data.mosdns || {} }
+    dnsStale.value = new Set()
+    dnsError.value = false
+  } catch {
+    if (sequence === dnsSequence) dnsError.value = true
+  } finally {
+    if (sequence === dnsSequence) dnsLoading.value = false
+  }
+}
+
+const mergeDns = (rules: Record<string, RuleDnsState>) => {
+  if (dnsSnapshot.value) dnsSnapshot.value = { ...dnsSnapshot.value, rules: { ...dnsSnapshot.value.rules, ...rules } }
+  // 引擎状态（首条 IP、本地探测）可能随之变化，后台刷新一次。
+  void loadDns()
+}
+
+/** 列表中的快速切换：chip 内显示进度，失败时保持原值 */
+const setRuleDns = async (item: any, value: RuleDnsValue) => {
+  if (dnsPending.value[item.id]) return
+  dnsPending.value = { ...dnsPending.value, [item.id]: value }
+  try {
+    const { data } = await ruleApi.setDns({ [item.id]: value }, {}, profileId)
+    mergeDns(data.rules || {})
+    notifyRuleSaved('DNS 已更新', {
+      agents: dnsSnapshot.value?.engine.agents,
+      scopes: [item.itemType === 'ruleset' ? 'library' : 'rules'],
+      pinned: pinnedWithheld(data, isUpstreamValue(value)),
+      extra: data.warnings
+    })
+  } catch (error) {
+    notify.error(dnsFailure(error, 'DNS 处理修改失败'))
+  } finally {
+    const next = { ...dnsPending.value }
+    delete next[item.id]
+    dnsPending.value = next
+  }
+}
+
+/** 分组行的只读汇总：设置一致时显示共同值，否则「DNS 混合 3/5」 */
+const groupDns = (group: any) => {
+  const engine = dnsSnapshot.value?.engine
+  if (!engine || groupStale(group)) return { text: '—', title: 'DNS 状态读取失败', tone: 'muted' }
+  const counts = new Map<string, number>()
+  let drift = false
+  for (const item of group.items) {
+    const chip = dnsChip(dnsSnapshot.value!.rules[item.id], { ...engine, editable: true })
+    drift ||= chip.tone === 'warn'
+    counts.set(chip.text, (counts.get(chip.text) || 0) + 1)
+  }
+  const [top, count] = [...counts].sort((a, b) => b[1] - a[1])[0] || ['—', 0]
+  if (counts.size === 1) return { text: top, title: `${group.items.length} 项均为「${top}」`, tone: drift ? 'warn' : 'muted' }
+  return { text: `DNS 混合 ${count}/${group.items.length}`, title: `${group.items.length} 项中 ${count} 项为「${top}」`, tone: drift ? 'warn' : 'muted' }
+}
+
+const batchOpen = ref(false)
+const batchItems = ref<any[]>([])
+const batchName = ref('')
+const openBatch = (group: any) => {
+  batchItems.value = group.items.map((item: any) => allRules.value.find(r => r.id === item.id && r.itemType === item.itemType) || item)
+  batchName.value = group.groupName || group.groupDefaultName
+  batchOpen.value = true
+}
+
+/** 「统一为跟随策略」：只标记当前 DNS 已与策略一致的规则，生成结果不变 */
+const followCandidates = computed(() => {
+  const snapshot = dnsSnapshot.value
+  if (!snapshot?.engine.editable) return []
+  return allRules.value.filter(item => {
+    const entry = snapshot.rules[item.id]
+    const state = entry?.state || 'default'
+    const route = followRoute(item)
+    if (state === 'explicit') return entry!.route === route
+    // 默认上游且策略不单独处理（例如 REJECT）：标记后同样不改变生成结果。
+    return state === 'default' && route === null && (item.itemType === 'ruleset' || isDnsRuleType(item.rule_type))
+  })
+})
+
+const unifyFollow = async () => {
+  const items = followCandidates.value
+  if (!items.length) return
+  const accepted = await confirm(`将 ${items.length} 条规则标记为跟随策略。它们当前的 DNS 已与策略一致，生成结果不变；之后修改策略时 DNS 会一起变化。`, {
+    title: '统一为跟随策略', confirmText: '统一'
+  })
+  if (!accepted) return
+  const merged: Record<string, RuleDnsState> = {}
+  try {
+    for (let index = 0; index < items.length; index += 200) {
+      const routes = Object.fromEntries(items.slice(index, index + 200).map(item => [item.id, 'follow' as const]))
+      const { data } = await ruleApi.setDns(routes, {}, profileId)
+      Object.assign(merged, data.rules || {})
+    }
+    notify.success(`已将 ${items.length} 条规则设为跟随策略`)
+  } catch (error) {
+    notify.error(dnsFailure(error, '统一为跟随策略失败'))
+  } finally {
+    mergeDns(merged)
   }
 }
 
@@ -1592,6 +1493,7 @@ const performDuplicateScan = async () => {
 }
 
 onUnmounted(() => {
+  window.clearTimeout(recentTimer)
   duplicateViewActive = false
   ++duplicateScanSequence
   duplicateController?.abort()
@@ -1611,20 +1513,13 @@ const deleteDuplicateRule = async (occ: any) => {
 }
 
 
-// 监听规则类型变化，自动设置 no_resolve 默认值
-watch(() => ruleForm.value.rule_type, (newType) => {
-  // 切换规则类型时，自动设置 no_resolve（IP 类型默认开启）
-  const isIpType = ['IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'GEOIP'].includes(newType || '')
-  ruleForm.value.no_resolve = isIpType
-})
-
-
 /* ---------- 统一拖动排序 ----------
  * 可见列表是展示项（分组会折叠多条原始规则），排序结果必须展开回
  * 原始 rule_configs。展示项的键是 itemType-id 复合键，说明原始 id 可能
  * 跨类型重复，因此这里沿用后端仍兼容的完整数组格式而不是 ids 契约。
  */
 const reorderDisplayItems = ref<any[]>([])
+const reorderWarnings: string[] = []
 
 const displayList = computed(() =>
   reorder.active.value ? reorderDisplayItems.value : allRulesAndSets.value
@@ -1643,9 +1538,11 @@ const reorder = useReorder<any>({
         `排序重建失败：期望 ${allRules.value.length} 条，实际 ${rebuilt.length} 条`
       )
     }
-    await api.post('/rules/reorder', {
+    const { data } = await api.post('/rules/reorder', {
       rule_configs: rebuilt.map(item => item.itemType === 'ruleset' ? ruleSetPayload(item) : item)
     }, profileRequestConfig)
+    // native OxiDNS 按新顺序重建分流；自定义结构时 DNS 保持不变并返回说明。
+    reorderWarnings.splice(0, reorderWarnings.length, ...(Array.isArray(data?.warnings) ? data.warnings : []))
     allRules.value = rebuilt
   }
 })
@@ -1661,20 +1558,22 @@ const handleSaveOrder = async () => {
     // 折叠分组，让合并后的分组卡片立即反映最新顺序
     expandedGroups.value = new Set()
     await loadAllRules()
-    notify.success('顺序已保存')
+    void loadDns()
+    if (reorderWarnings.length) notify.warning('顺序已保存', reorderWarnings.splice(0).join('\n'))
+    else notify.success('顺序已保存')
   } catch (error) {
     notify.error(errorMessage(error, '保存顺序失败，顺序已还原'))
   }
 }
 
 onMounted(() => {
-  Promise.all([loadAllRules(), loadProxyGroups(), loadRuleLibrary()])
+  Promise.all([loadAllRules(), loadProxyGroups(), loadRuleLibrary(), loadDns()])
 })
 
 
 // 页面激活时重新加载数据（从其他页面返回时）
 onActivated(() => {
-  Promise.all([loadAllRules(), loadProxyGroups(), loadRuleLibrary()])
+  Promise.all([loadAllRules(), loadProxyGroups(), loadRuleLibrary(), loadDns()])
 })
 </script>
 

@@ -61,6 +61,9 @@ def get_default_oxidns_settings():
         'rule_update': {'enabled': False, 'args': {
             'schedule': '30 3 * * *', 'timezone': 'Asia/Shanghai', 'timeout': '60s',
             'outbound': '', 'socks5': ''}},
+        # Per-rule DNS handling: explicit actions (generation reads these),
+        # follow-the-policy intent, and native-mode choices of disabled rules.
+        'rule_actions': {}, 'rule_dns_follow': [], 'rule_dns_parked': {},
     }
 
 
@@ -84,6 +87,32 @@ def safe_relative_path(value, label='文件路径'):
     return path.as_posix()
 
 
+def _normalize_rule_dns(settings):
+    """Shape and disjointness of the per-rule DNS fields, in both modes.
+
+    A null value deletes its key; that is the only way a recursive merge (MCP)
+    can remove one. rule_actions wins over the selector lists by definition, so
+    overlap with them is allowed.
+    """
+    from backend.common.rule_dns import ROUTE_LABELS, normalize_action
+    for key, parked in (('rule_actions', False), ('rule_dns_parked', True)):
+        value = settings[key]
+        if not isinstance(value, dict) or any(not isinstance(identity, str) for identity in value):
+            raise OxidnsSettingsError(f'{key} 必须为以规则 ID 为键的对象')
+        settings[key] = {identity: normalize_action(action, parked=parked)
+                         for identity, action in value.items() if action is not None}
+    follow = settings['rule_dns_follow']
+    if not isinstance(follow, list) or any(not isinstance(identity, str) for identity in follow):
+        raise OxidnsSettingsError('rule_dns_follow 必须为规则 ID 数组')
+    settings['rule_dns_follow'] = list(dict.fromkeys(follow))
+    for identity in settings['rule_dns_follow']:
+        if identity in settings['rule_actions']:
+            label = ROUTE_LABELS[settings['rule_actions'][identity]['action']]
+            raise OxidnsSettingsError(f'规则 {identity} 已设置 DNS 处理「{label}」，不能同时跟随策略')
+        if identity in settings['rule_dns_parked']:
+            raise OxidnsSettingsError(f'规则 {identity} 已暂存停用前的 DNS 处理，不能同时跟随策略')
+
+
 def normalize_oxidns_settings(value=None, *, validate_native_arguments=True):
     if value is None:
         value = {}
@@ -98,6 +127,7 @@ def normalize_oxidns_settings(value=None, *, validate_native_arguments=True):
         raise OxidnsSettingsError('OxiDNS 完整配置必须为 YAML 文本')
     from backend.common.oxidns_native import managed_files, native_document
     managed_files(settings['additional_files'])
+    _normalize_rule_dns(settings)
     if settings['config_mode'] == 'native':
         if validate_native_arguments:
             native_document(settings)

@@ -14,13 +14,19 @@
           <OxidnsFields :settings="draft" :fields="coreFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
         <TabsContent v-if="visitedTabs.has('rules')" force-mount value="rules" class="mt-0 space-y-5 data-[state=inactive]:hidden">
-          <div class="flex items-center gap-1"><h3 class="text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" :text="optionHelp('希望不同网站或 IP 使用不同的 DNS 时设置。', '选中的规则按规则管理中的顺序执行，并同步处理流程和规则资源。已有无法对应的手工流程时，请到完整参数编辑，避免覆盖自定义逻辑。')" /></div>
+          <div class="flex items-center gap-1"><h3 class="text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" :text="optionHelp('希望不同网站或 IP 使用不同的 DNS 时设置。', '选中的规则按规则管理中的顺序执行，并同步处理流程和规则资源。标注「跟随策略」的规则在这里移动后改为单独设置，不再随策略变化。已有无法对应的手工流程时，请到完整参数编辑，避免覆盖自定义逻辑。')" /></div>
           <div class="grid min-w-0 gap-4 sm:grid-cols-2">
             <FormField v-for="group in ruleGroups" :key="group.key" :label="group.label" :hint="group.hint" :help="group.help">
               <div v-if="isCustom(group.key)" class="flex min-h-11 items-center gap-1 text-xs text-muted-foreground"><span>暂不可编辑</span><FieldHelp :label="`${group.label}配置状态`" :text="capability(group.key)?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability(group.key)?.target || group.key)">完整参数<ChevronRight class="size-3.5" /></Button></div>
-              <fieldset v-else class="min-w-0 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="disabled"><MultiSelect :model-value="selectedRules(group.key)" :options="ruleOptions(group)" :placeholder="`选择${group.label}`" @update:model-value="change(group.key, $event)" /></fieldset>
+              <fieldset v-else class="min-w-0 border-0 p-0 [&_[role=combobox]]:min-h-11" :disabled="disabled"><MultiSelect :model-value="pickerRules(group.key)" :options="ruleOptions(group)" :placeholder="`选择${group.label}`" @update:model-value="change(group.key, $event)" /></fieldset>
             </FormField>
           </div>
+          <InfoNote v-if="otherActions.count" data-rule-actions-summary>
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span class="min-w-0 break-words">另有 {{ otherActions.count }} 条规则使用其他 DNS 处理（{{ otherActions.parts }}），请在策略规则页修改</span>
+              <RouterLink to="/rules" class="inline-flex min-h-6 items-center gap-0.5 rounded-sm text-primary-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent max-sm:min-h-11">打开策略规则<ChevronRight class="size-3.5" aria-hidden="true" /></RouterLink>
+            </div>
+          </InfoNote>
           <p v-if="!rules.length && !ruleSets.length" class="text-sm text-muted-foreground">当前空间尚无规则，可先在「规则管理」中添加。</p>
           <OxidnsFields :settings="draft" :fields="hostFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
@@ -72,18 +78,21 @@
 <script setup lang="ts">
 import { reactive, ref, watch, computed, nextTick, onUnmounted } from 'vue'
 import { ChevronDown, ChevronRight } from '@lucide/vue'
+import { RouterLink } from 'vue-router'
 import { apiAuthFields, apiExtraFields, apiFields, applyVerifiedOxidnsTemplate, logFields, cacheFields, isDnsRuleType, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
 import { optionCopy, optionHelp } from '@/lib/optionCopy'
 import OxidnsFields, { type OxidnsFieldCapability } from './OxidnsFields.vue'
 import OxidnsMatchEditor from './OxidnsMatchEditor.vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import InfoNote from '@/components/common/InfoNote.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { BLOCK_ROUTES, CHOICE_LABELS } from '@/lib/ruleDns'
 
 const props = withDefaults(defineProps<{ values: Record<string, any>; capabilities: Record<string, OxidnsFieldCapability>; rules: any[]; ruleSets: any[]; disabled?: boolean; navigationDisabled?: boolean; initialFeature?: string }>(), { disabled: false, navigationDisabled: false })
 const emit = defineEmits<{ change: [changes: Record<string, unknown>]; error: [message: string]; navigate: [target: string]; full: [] }>()
@@ -140,14 +149,35 @@ const ruleDownloadFields = new Set(['rule_update.args.timeout', 'rule_update.arg
 const featureFields = (feature: typeof featureGroups[number]) => feature.key === 'rule_update'
   ? feature.fields.filter(field => ruleDownloadFields.has(field.path) || (read('rule_update.enabled') && !isCustom('rule_update.enabled')))
   : feature.fields
+// 策略规则页设置的拒绝、黑洞、指定上游等处理优先于这 4 个列表；不在这里列出，
+// 否则选中会把规则从原处理中移走。
+const ruleActions = computed<Record<string, { action?: string }>>(() => {
+  const value = read('rule_actions')
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, { action?: string }> : {}
+})
+const followIds = computed(() => new Set(selectedRules('rule_dns_follow')))
+const pickerRules = (path: string) => selectedRules(path).filter(id => !(id in ruleActions.value))
+const otherActions = computed(() => {
+  const counts = new Map<string, number>()
+  for (const entry of Object.values(ruleActions.value)) {
+    const action = typeof entry?.action === 'string' ? entry.action : ''
+    if (action) counts.set(action, (counts.get(action) || 0) + 1)
+  }
+  const actions = [...BLOCK_ROUTES, 'upstream'].filter(action => counts.has(action))
+  return {
+    count: actions.reduce((total, action) => total + counts.get(action)!, 0),
+    parts: actions.map(action => `${CHOICE_LABELS[action]} ${counts.get(action)}`).join(' · ')
+  }
+})
 const ruleOptions = (group: typeof ruleGroups[number]) => {
   const opposite = selectedRules(group.opposite)
   const selected = selectedRules(group.key)
   return (group.sets ? props.ruleSets : props.rules)
     // 已选中的不支持类型仍列出并标注，便于移除；否则会隐藏在草稿里导致生成失败
-    .filter(item => (!opposite.includes(item.id) || selected.includes(item.id))
+    .filter(item => (!opposite.includes(item.id) || selected.includes(item.id)) && !(item.id in ruleActions.value)
       && (group.sets || isDnsRuleType(item.rule_type) || selected.includes(item.id)))
     .map(item => ({ value: item.id, label: (item.name || `${item.type || item.rule_type || '规则'} · ${item.value || item.rule_value || item.id}`)
+      + (followIds.value.has(item.id) ? ' · 跟随策略' : '')
       + (group.sets || isDnsRuleType(item.rule_type) ? '' : '（暂不能转换为 OxiDNS 规则，请移除）') }))
 }
 function write(path: string, value: unknown) {

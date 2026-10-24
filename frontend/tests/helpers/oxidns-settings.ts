@@ -16,6 +16,8 @@ const config = 'runtime: {worker_threads: 8, extension: false}\nplugins: [{tag: 
 const projection = (settings: any) => ({ values: { worker_threads: (loadYaml(settings.native_config) as any)?.runtime?.worker_threads }, capabilities: {} })
 const settings = () => ({ config_mode: 'native', native_config: config, additional_files: [], template_settings: { worker_threads: 2 } })
 const publishGuard = { expected_profile_id: 'oxi-profile', expected_service_type: 'oxidns', expected_config_revision: 7 }
+// Stored-settings versions: as loaded, and after a successful save.
+const etags = { loaded: '"oxidns-v1"', saved: '"oxidns-v2"' }
 beforeEach(() => {
   const realSetTimeout = globalThis.setTimeout
   const realClearTimeout = globalThis.clearTimeout
@@ -37,7 +39,7 @@ beforeEach(() => {
   })
   settleConfirm('cancel')
   vi.clearAllMocks()
-  vi.mocked(oxidnsApi.getSettings).mockImplementation(async () => ({ data: settings() }) as any)
+  vi.mocked(oxidnsApi.getSettings).mockImplementation(async () => ({ data: settings(), headers: { etag: etags.loaded } }) as any)
   vi.mocked(oxidnsApi.validateSettings).mockImplementation(async (value: any) => {
     const doc = loadYaml(value.native_config) as any
     const issues: any[] = []
@@ -47,7 +49,7 @@ beforeEach(() => {
     })
     return {data: {valid: !issues.length, issues}} as any
   })
-  vi.mocked(oxidnsApi.saveSettings).mockResolvedValue({ data: { success: true, publish_guard: publishGuard } } as any)
+  vi.mocked(oxidnsApi.saveSettings).mockResolvedValue({ data: { success: true, publish_guard: publishGuard }, headers: { etag: etags.saved } } as any)
   vi.mocked(profileApi.list).mockResolvedValue({ data: [{ id: 'oxi-profile', name: 'DNS配置', is_default: true }] } as any)
   vi.mocked(agentApi.getAll).mockResolvedValue({ data: [{ id: 'dns', name: 'OxiDNS', profile_id: 'oxi-profile', service_type: 'oxidns', status: 'online' }] } as any)
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => ({ data: { success: true, deployment_id: deploymentId, status: 'verifying' } }) as any)
@@ -131,4 +133,4 @@ async function removeNativePlugin(wrapper: ReturnType<typeof mount>, tag: string
 }
 
 
-export { config, projection, settings, publishGuard, render, button, click, settleValidation, input, savedPayload, views, worker, yamlInput, removeNativePlugin }
+export { config, projection, settings, publishGuard, etags, render, button, click, settleValidation, input, savedPayload, views, worker, yamlInput, removeNativePlugin }

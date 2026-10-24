@@ -88,7 +88,8 @@ def _entries(document):
         if not isinstance(plugin, dict) or plugin.get('type') != 'forward':
             continue
         tag = plugin.get('tag')
-        if not isinstance(tag, str) or not tag or tags.count(tag) != 1:
+        # Rule DNS helpers hold a copy pinned by a rule; following would rewrite it.
+        if not isinstance(tag, str) or not tag or tags.count(tag) != 1 or tag.startswith('cf_dns_'):
             continue
         args = plugin.get('args') or {}
         if not isinstance(args, dict):
@@ -115,6 +116,19 @@ def _entry(document, binding):
         if tag == binding['upstream_tag'] and index == binding['upstream_index']:
             return entry
     raise FollowError('绑定的 OxiDNS 上游已移除，请重新选择绑定')
+
+
+def _pinned_by_rule(config, settings, address):
+    """1-based position of a rule pinned to address, active or parked, else None."""
+    pinned = set()
+    for key in ('rule_actions', 'rule_dns_parked'):
+        values = settings.get(key)
+        for identity, action in values.items() if isinstance(values, dict) else ():
+            upstream = action.get('upstream') if isinstance(action, dict) and action.get('action') == 'upstream' else None
+            if isinstance(upstream, dict) and upstream.get('addr') == address:
+                pinned.add(identity)
+    return next((index for index, item in enumerate(config.get('rule_configs') or [], 1)
+                 if isinstance(item, dict) and item.get('id') in pinned), None)
 
 
 def _network_host(value):
@@ -205,9 +219,13 @@ def configure(manager, target_id, payload):
             _same_namespace(manager, target, source)
         profile_id = _profile(manager, target)
         config = manager.repository.get_compat_config(profile_id)
-        _, document = _document(config, (target.get('applied_content') or {}).get('base_url', ''))
+        settings, document = _document(config, (target.get('applied_content') or {}).get('base_url', ''))
         entry = _entry(document, binding)
         _scheme(entry['addr'])
+        # Following would leave the rule's pinned copy behind on the old address.
+        index = _pinned_by_rule(config, settings, entry['addr'])
+        if index is not None:
+            raise FollowError(f'该上游已被策略规则 #{index} 固定为指定上游，请先改选后再绑定')
         binding.update(id=uuid.uuid4().hex, source_profile_id=_profile(manager, source), target_profile_id=profile_id,
                        upstream_signature=_digest(entry), after_deployment_id=(source.get('latest_deployment') or {}).get('deployment_id'))
         def save(agents):

@@ -1,6 +1,7 @@
 """规则路由模块"""
 import copy
 import os
+import re
 import requests
 from flask import g, request, jsonify, make_response
 from backend.common.json_response import jsonify_external
@@ -88,31 +89,17 @@ def handle_rules():
         return jsonify({'success': True, 'data': rule})
 
 
-def _dns_rule_selections(rule_id):
-    """DNS routing groups that currently use a single rule, as their editors show them.
-
-    A native OxiDNS draft routes by its YAML; the stored selectors are only a
-    retained catalog there, so selections are read back from the document.
-    """
-    from backend.common.oxidns_common_routing import read_routing
-    from backend.common.oxidns_native import load_native_yaml
-    config = get_config()
-    found = []
-    for engine, label in (('oxidns', 'OxiDNS'), ('mosdns', 'MosDNS')):
-        settings = config.get(engine) if isinstance(config.get(engine), dict) else {}
-        if engine == 'oxidns' and settings.get('config_mode') == 'native':
-            try:
-                settings = read_routing(load_native_yaml(settings.get('native_config', '')), settings, config)['values']
-            except ValueError:
-                continue
-        for key, group in (('direct_rules', '直连规则'), ('proxy_rules', '代理规则')):
-            if isinstance(settings.get(key), list) and rule_id in settings[key]:
-                found.append((label, group))
-    return found
+_MISSING = object()
 
 
-def _native_oxidns_without(rule_id):
-    """(current, updated) native OxiDNS settings without a rule about to be deleted.
+def _base_url(body=None):
+    """Download base for native OxiDNS writes; the request root when not given."""
+    value = body.get('base_url') if isinstance(body, dict) else None
+    return value.rstrip('/') if isinstance(value, str) and value.strip() else request.url_root.rstrip('/')
+
+
+def _native_oxidns_without(config, rule_id, base_url):
+    """Native OxiDNS settings without a rule about to be deleted, or None if unchanged.
 
     Native YAML routes OxiDNS, so removing the stored selector alone would leave
     providers and downloads that reference files no publication can produce.
@@ -120,7 +107,6 @@ def _native_oxidns_without(rule_id):
     from backend.common.oxidns_common_routing import remove_rule
     from backend.common.oxidns_native import load_native_yaml
     from backend.common.oxidns_settings import OxidnsSettingsError, normalize_oxidns_settings
-    config = get_config()
     settings = config.get('oxidns') if isinstance(config.get('oxidns'), dict) else {}
     if settings.get('config_mode') != 'native' or not settings.get('native_config'):
         return None
@@ -129,49 +115,81 @@ def _native_oxidns_without(rule_id):
     except ValueError:
         return None  # An unreadable draft cannot be published; it is fixed in the editor.
     try:
-        result = remove_rule(settings, config, rule_id, request.url_root.rstrip('/'))
-        if result is None:
-            return None
-        # Stored exactly as the editor saves it.
-        return settings, normalize_oxidns_settings(result, validate_native_arguments=False)
+        result = remove_rule(settings, config, rule_id, base_url)
     except OxidnsSettingsError as exc:
         raise ProfileValidationError(str(exc)) from None
+    if result is None:
+        return None
+    # Stored exactly as the editor saves it.
+    return normalize_oxidns_settings(result, validate_native_arguments=False)
 
 
-def _ensure_dns_rule_type(rule, selections):
-    """A type change must not strand a DNS selection the generator cannot express."""
-    from backend.converters.mosdns import DNS_RULE_TYPES
-    if rule.get('rule_type') in DNS_RULE_TYPES or not selections:
+def _ensure_dns_rule_type(config, rule, dns):
+    """A type change must not strand a DNS route the generator cannot express.
+
+    Read from the transaction snapshot; a native OxiDNS draft routes by its
+    YAML. Follow rules simply lose their route, and sending dns: default with
+    the change clears an explicit OxiDNS one.
+    """
+    from backend.common.rule_dns import ROUTE_LABELS, convertible, explicit_route
+    if convertible(rule):
         return
-    label, group = selections[0]
-    raise ProfileValidationError(
-        f'此规则已用于 {label} {group}，{rule.get("rule_type")} 类型暂不能转换为 {label} 规则。'
-        f'请先在 {label} 设置中取消选择，或新建一条规则。')
+    kind = rule.get('rule_type')
+    mosdns = config.get('mosdns') if isinstance(config.get('mosdns'), dict) else {}
+    for key, group in (('direct_rules', '直连规则'), ('proxy_rules', '代理规则')):
+        if isinstance(mosdns.get(key), list) and rule['id'] in mosdns[key]:
+            raise ProfileValidationError(
+                f'此规则已用于 MosDNS {group}，{kind} 类型暂不能转换为 MosDNS 规则。'
+                '请先在 MosDNS 设置中取消选择，或新建一条规则。')
+    route = explicit_route(config, rule['id'])
+    if route is not None and dns != 'default':
+        raise ProfileValidationError(
+            f'此规则已用于 OxiDNS DNS 处理「{ROUTE_LABELS[route.split(":", 1)[0]]}」，{kind} 类型不参与 DNS 分流。'
+            '请同时把 DNS 设为默认上游，或新建一条规则')
+
+
+def _pinned_withheld(rule_ids):
+    """Response field: an auto-syncing OxiDNS device withholds a newly pinned upstream
+    of these rules, so it must be published manually. Omitted when it cannot be
+    computed; the save has already been committed."""
+    from backend.agents.rule_sync import pinned_withheld
+    try:
+        return {'pinned_withheld': pinned_withheld(get_repository(), resolve_profile_id(), rule_ids)}
+    except Exception as error:
+        logger.warning('Checking withheld pinned upstreams failed: %s', safe_exception_details(error))
+        return {}
+
+
+def _hydrated(config, item):
+    """item with its shared source, as the transaction snapshot holds rulesets."""
+    from backend.common.rule_dns import hydrate_ruleset
+    if item.get('itemType') != 'ruleset':
+        return item
+    library = next(entry for entry in config.get('rule_library', []) if entry.get('id') == item['library_rule_id'])
+    return hydrate_ruleset(copy.deepcopy(item), library, config.get('profile_id'))
 
 
 def _mutate_rule(rule_id, item_type=None):
     from werkzeug.exceptions import NotFound
+    from backend.common.rule_dns import RULE_DNS_FIELDS, apply_rule_dns
     payload = request.get_json() if request.method == 'PUT' else None
     if request.method == 'PUT' and not isinstance(payload, dict):
         raise ProfileValidationError('规则请求必须是 JSON 对象')
-    from backend.converters.mosdns import DNS_RULE_TYPES
-    # Read outside the transaction; only a request naming an unconvertible type needs it.
-    selections = (_dns_rule_selections(rule_id) if payload and 'rule_type' in payload
-                  and payload['rule_type'] not in DNS_RULE_TYPES else [])
-    native = _native_oxidns_without(rule_id) if request.method == 'DELETE' else None
-    result = {}
+    # DNS is per-profile OxiDNS state, never a field of the rule itself.
+    dns = payload.pop('dns', _MISSING) if payload is not None else _MISSING
+    base_url = _base_url()
+    result, warnings = {}, []
     def mutate(profile):
+        before = copy.deepcopy(profile)
         items = profile.setdefault('rule_configs', [])
         original = next((item for item in items if item.get('id') == rule_id
                          and (item_type is None or item.get('itemType') == item_type)), None)
         if original is None:
             raise NotFound('Rule not found')
         if request.method == 'DELETE':
+            native = _native_oxidns_without(before, rule_id, base_url)
             if native is not None:
-                # The edit was computed from a read outside this transaction.
-                if profile.get('oxidns') != native[0]:
-                    raise ProfileValidationError('OxiDNS 配置刚被修改，请刷新后重新删除。')
-                profile['oxidns'] = native[1]
+                profile['oxidns'] = native
             items.remove(original)
             # Remove target selections in the same transaction as the rule.
             # A later browser read/modify/write can fail or overwrite new edits.
@@ -180,24 +198,311 @@ def _mutate_rule(rule_id, item_type=None):
                 for key in ('direct_rulesets', 'proxy_rulesets', 'direct_rules', 'proxy_rules'):
                     if isinstance(settings.get(key), list):
                         settings[key] = [value for value in settings[key] if value != rule_id]
+            oxidns = profile.get('oxidns')
+            if isinstance(oxidns, dict):
+                for key in RULE_DNS_FIELDS:
+                    value = oxidns.get(key)
+                    if isinstance(value, dict):
+                        value.pop(rule_id, None)
+                    elif isinstance(value, list):
+                        oxidns[key] = [identity for identity in value if identity != rule_id]
             return
         updated = {**original, **payload, 'id': rule_id}
         if item_type:
             updated['itemType'] = item_type
         normalize_rule_config(updated)
+        result.update(updated)
+        updated = _hydrated(profile, updated)
         # Only a type change is checked, so other edits to older selections still save.
         if updated['itemType'] == 'rule' and updated.get('rule_type') != original.get('rule_type'):
-            _ensure_dns_rule_type(updated, selections)
+            _ensure_dns_rule_type(before, updated, dns)
         items[items.index(original)] = updated
-        result.update(updated)
+        # Policy, enablement and value edits move follow rules and rebuild native
+        # routing; only a request naming dns fails on a custom native draft.
+        warnings.extend(apply_rule_dns(before, profile, {} if dns is _MISSING else {rule_id: dns},
+                                       base_url=base_url, strict=dns is not _MISSING))
     update_config_transaction(mutate)
-    return jsonify({'success': True, **({'data': result} if result else {})})
+    return jsonify({'success': True, **({'data': result} if result else {}),
+                    **({'warnings': warnings} if warnings else {}),
+                    **(_pinned_withheld([rule_id]) if request.method == 'PUT' else {})})
 
 
 @bp.route('/<rule_id>', methods=['DELETE', 'PUT'])
 @require_auth
 def handle_rule(rule_id):
     return _mutate_rule(rule_id)
+
+
+_DNS_BATCH_LIMIT = 200
+_PASTE_LIMIT = 200
+_LIBRARY_LIMIT = 50
+_DOMAIN_TYPES = ('DOMAIN', 'DOMAIN-SUFFIX')
+_BUILTIN_POLICIES = ('DIRECT', 'REJECT', 'REJECT-DROP', 'PASS')
+_RULE_TYPE = re.compile(r'[A-Z][A-Z0-9-]*')
+
+
+@bp.route('/dns', methods=['GET', 'PUT'])
+@require_auth
+def handle_rule_dns():
+    """Per-rule OxiDNS DNS handling of the current profile.
+
+    PUT {routes: {id: dns}, skip_unsupported, base_url} switches up to 200 rules
+    in one transaction; rules whose type cannot be routed are skipped instead
+    of refused when skip_unsupported is true.
+    """
+    from backend.common.rule_dns import apply_rule_dns, check_choice, convertible, rule_dns_entries, rule_dns_state
+    if request.method == 'GET':
+        return jsonify({'success': True, **rule_dns_state(get_config(), _base_url(request.args))})
+    body = request.get_json(silent=True)
+    routes = body.get('routes') if isinstance(body, dict) else None
+    if not isinstance(routes, dict) or not routes:
+        raise ProfileValidationError('请提供要修改 DNS 处理的规则')
+    if len(routes) > _DNS_BATCH_LIMIT:
+        raise ProfileValidationError(f'一次最多修改 {_DNS_BATCH_LIMIT} 条规则的 DNS 处理')
+    for value in routes.values():
+        check_choice(value)
+    skip = body.get('skip_unsupported') is True
+    base_url = _base_url(body)
+    skipped, warnings = [], []
+
+    def mutate(profile):
+        before = copy.deepcopy(profile)
+        items = {item.get('id'): item for item in profile.get('rule_configs', [])}
+        assignments = {}
+        for identity, choice in routes.items():
+            item = items.get(identity)
+            if skip and item is not None and choice != 'default' and not convertible(item):
+                skipped.append(identity)
+                continue
+            assignments[identity] = choice
+        warnings.extend(apply_rule_dns(before, profile, assignments, base_url=base_url, strict=True))
+
+    update_config_transaction(mutate)
+    changed = [identity for identity in routes if identity not in skipped]
+    return jsonify({'success': True, 'rules': rule_dns_entries(get_config(), changed, base_url),
+                    'skipped': skipped, 'warnings': warnings, **_pinned_withheld(changed)})
+
+
+def _rule_value_error(kind, value):
+    if not kind:
+        return '无前缀的行需要选择规则类型'
+    if not _RULE_TYPE.fullmatch(kind):
+        return f'不支持的规则类型 {kind}'
+    if not value:
+        return '规则值为空'
+    if kind in _DOMAIN_TYPES and (is_valid_ip(value) or not is_valid_domain(value)):
+        return '不是有效域名'
+    if kind in ('IP-CIDR', 'IP-CIDR6'):
+        import ipaddress
+        try:
+            ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return '不是有效 IP 网段'
+    return None
+
+
+def _paste_rows(text, rule_type):
+    """Rows of a pasted rule list: (rows, warnings, field errors).
+
+    One rule per line; blank lines and # comments are ignored. ``TYPE,value``
+    lines keep a trailing no-resolve and ignore other trailing fields such as a
+    policy; ``+.x`` and ``*.x`` are DOMAIN-SUFFIX, ``full:x`` is DOMAIN, and
+    other lines use rule_type. Repeated lines are added once.
+    """
+    lines = [(number, raw.strip()) for number, raw in enumerate(text.splitlines(), 1)]
+    lines = [(number, line) for number, line in lines if line and not line.startswith('#')]
+    if len(lines) > _PASTE_LIMIT:
+        raise ProfileValidationError(f'一次最多添加 {_PASTE_LIMIT} 条，较多条目请改为新建规则集')
+    rows, warnings, errors, seen = [], [], [], set()
+    for number, line in lines:
+        no_resolve = False
+        if ',' in line:
+            fields = [field.strip() for field in line.split(',')]
+            kind, value = fields[0].upper(), fields[1]
+            for extra in fields[2:]:
+                if extra.lower() == 'no-resolve':
+                    no_resolve = True
+                elif extra:
+                    warnings.append(f'忽略第 {number} 行行尾策略 {extra}')
+        elif line.startswith('+.'):
+            kind, value = 'DOMAIN-SUFFIX', line[2:].strip()
+        elif line.startswith('*.'):
+            kind, value = 'DOMAIN-SUFFIX', line[2:].strip()
+            warnings.append(f'{line} 将按 DOMAIN-SUFFIX 添加，也包含 {value} 本身')
+        elif line.lower().startswith('full:'):
+            kind, value = 'DOMAIN', line[5:].strip()
+        else:
+            kind, value = rule_type, line
+        error = _rule_value_error(kind, value)
+        if error:
+            errors.append({'line': number, 'message': error})
+            continue
+        if (kind, value) in seen:
+            continue
+        seen.add((kind, value))
+        rows.append({'line': number, 'rule_type': kind, 'value': value, 'no_resolve': no_resolve})
+    return rows, warnings, errors
+
+
+def _new_library(value):
+    from backend.utils.ruleset_content import validate_domain_content
+    if not isinstance(value, dict):
+        raise ProfileValidationError('请提供新规则集的来源')
+    library = {key: copy.deepcopy(item) for key, item in value.items() if key not in ('id', 'base_url', 'has_ip_part')}
+    if not isinstance(library.get('name'), str) or not library['name'].strip():
+        raise ProfileValidationError('请填写规则集名称')
+    library['name'] = library['name'].strip()
+    # Stored entries carry an explicit flag; the rule library page reads a
+    # missing one as disabled while generation treats it as enabled.
+    library['enabled'] = library.get('enabled', True) is not False
+    validate_domain_content(library)
+    library.pop('content' if library.get('source_type', 'url') == 'url' else 'url', None)
+    return library
+
+
+def _new_id(prefix, used):
+    import uuid
+    while True:
+        value = f'{prefix}_{uuid.uuid4().hex[:12]}'
+        if value not in used:
+            used.add(value)
+            return value
+
+
+@bp.route('/compose', methods=['POST'])
+@require_auth
+def compose_rules():
+    """Create rules or ruleset references with their OxiDNS DNS atomically.
+
+    Shared rule-library additions, the profile's rules, its OxiDNS choices
+    and (native drafts) the YAML are written in one repository commit; any
+    failure writes nothing. Ids are generated here.
+    """
+    from werkzeug.exceptions import NotFound
+    from backend.common.config import update_shared_and_config_transaction
+    from backend.common.config_repository import ProfileInUse
+    from backend.common.rule_dns import IP_RULE_TYPES, apply_rule_dns, check_choice, convertible, rule_dns_entries
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        raise ProfileValidationError('请求必须是 JSON 对象')
+    source = body.get('source') if isinstance(body.get('source'), dict) else {}
+    rule = body.get('rule') if isinstance(body.get('rule'), dict) else {}
+    kind = source.get('kind')
+    dns = check_choice(body.get('dns', 'default'))
+    dns_ip = check_choice(body['dns_ip']) if body.get('dns_ip') is not None else dns
+    base_url = _base_url(body)
+    policy = rule.get('policy')
+    if not isinstance(policy, str) or not policy.strip():
+        raise ProfileValidationError('请选择策略')
+    position = rule.get('position', 'top')
+    if position not in ('top', 'bottom'):
+        raise ProfileValidationError('位置只能是 top 或 bottom')
+    common = {'policy': policy, 'enabled': rule.get('enabled', True) is not False,
+              'remark': rule.get('remark') if isinstance(rule.get('remark'), str) else '',
+              'group_name': rule.get('group_name') if isinstance(rule.get('group_name'), str) else ''}
+    warnings, rows, library, library_ids = [], [], None, []
+    if kind == 'values':
+        text = source.get('text')
+        if not isinstance(text, str):
+            raise ProfileValidationError('请输入规则')
+        rule_type = source.get('rule_type') if isinstance(source.get('rule_type'), str) else ''
+        rows, warnings, errors = _paste_rows(text, rule_type.strip().upper())
+        if errors:
+            first = errors[0]
+            return jsonify({'success': False, 'message': f'第 {first["line"]} 行：{first["message"]}',
+                            'field_errors': errors}), 400
+        if not rows:
+            raise ProfileValidationError('没有可添加的规则')
+        for row in rows:
+            choice = dns_ip if row['rule_type'] in IP_RULE_TYPES else dns
+            if choice != 'default' and not convertible({'itemType': 'rule', 'rule_type': row['rule_type']}):
+                raise ProfileValidationError(
+                    f'第 {row["line"]} 行 {row["rule_type"]} 规则不参与 DNS 分流，请把 DNS 设为默认上游')
+    elif kind == 'library':
+        library_ids = source.get('library_rule_ids')
+        if (not isinstance(library_ids, list) or not 1 <= len(library_ids) <= _LIBRARY_LIMIT or
+                any(not isinstance(value, str) or not value for value in library_ids) or
+                len(set(library_ids)) != len(library_ids)):
+            raise ProfileValidationError(f'请选择 1 到 {_LIBRARY_LIMIT} 个规则集')
+    elif kind == 'new_library':
+        library = _new_library(source.get('library'))
+    else:
+        raise ProfileValidationError('请选择规则来源：values、library 或 new_library')
+    created, skipped = [], []
+
+    def add_library(shared):
+        entries = shared.setdefault('rule_library', [])
+        if any(entry.get('name') == library['name'] for entry in entries):
+            raise ProfileValidationError(f'规则库已有同名规则集「{library["name"]}」')
+        library['id'] = _new_id('lib', {entry.get('id') for entry in entries})
+        entries.append(copy.deepcopy(library))
+
+    def compose(before, profile):
+        groups = {group.get('name') for group in profile.get('proxy_groups', [])}
+        if policy not in _BUILTIN_POLICIES and policy not in groups:
+            raise ProfileValidationError(f'策略不存在：{policy}')
+        items = profile.setdefault('rule_configs', [])
+        used = {item.get('id') for item in items}
+        additions, assignments = [], {}
+        if kind == 'values':
+            existing = {(item.get('rule_type'), item.get('value')): (index, item)
+                        for index, item in reversed(list(enumerate(items, 1))) if item.get('itemType') != 'ruleset'}
+            for row in rows:
+                found = existing.get((row['rule_type'], row['value']))
+                if found:
+                    index, item = found
+                    skipped.append({'line': row['line'], 'value': row['value'], 'existing_id': item['id'],
+                                    'index': index, 'enabled': item.get('enabled', True) is not False})
+                    continue
+                ip = row['rule_type'] in IP_RULE_TYPES
+                item = {'id': _new_id('rule', used), 'itemType': 'rule', 'rule_type': row['rule_type'],
+                        'value': row['value'], **common,
+                        'no_resolve': row['no_resolve'] or (ip and rule.get('no_resolve') is True)}
+                additions.append(item)
+                assignments[item['id']] = dns_ip if ip else dns
+        else:
+            library_by_id = {entry.get('id'): entry for entry in profile.get('rule_library', [])}
+            for library_id in library_ids if kind == 'library' else [library['id']]:
+                if library_id not in library_by_id:
+                    raise NotFound('规则集必须引用存在的共享规则库条目')
+                index = next((index for index, item in enumerate(items, 1)
+                              if item.get('itemType') == 'ruleset' and item.get('library_rule_id') == library_id), None)
+                if index is not None:
+                    # Two references to one ruleset make native OxiDNS routing ambiguous.
+                    raise ProfileInUse(f'该规则集已在策略规则 #{index}', [{
+                        'kind': 'rule', 'code': 'ruleset_already_used', 'id': items[index - 1]['id'], 'index': index}])
+                item = {'id': _new_id('ruleset', used), 'itemType': 'ruleset', 'library_rule_id': library_id,
+                        **common, 'no_resolve': rule.get('no_resolve') is True}
+                additions.append(item)
+                assignments[item['id']] = dns
+        created.extend(copy.deepcopy(additions))
+        hydrated = [_hydrated(profile, item) for item in additions]
+        if position == 'top':
+            items[0:0] = hydrated
+        else:
+            items.extend(hydrated)
+        assignments = {identity: choice for identity, choice in assignments.items() if choice != 'default'}
+        if assignments:
+            warnings.extend(apply_rule_dns(before, profile, assignments, base_url=base_url, strict=True))
+
+    try:
+        if library is not None:
+            update_shared_and_config_transaction(add_library, lambda _, before, after: compose(before, after))
+        else:
+            update_config_transaction(lambda profile: compose(copy.deepcopy(profile), profile))
+    except NotFound as error:
+        return jsonify({'success': False, 'message': error.description}), 404
+    if library is not None:
+        from backend.utils.rule_utils import save_rule_to_local
+        try:
+            save_rule_to_local(library)
+        except Exception as error:  # The cache is refilled on demand; the commit stands.
+            logger.warning('Caching composed rule library failed: %s', safe_exception_details(error))
+            warnings.append('规则集已保存，但本地缓存失败，发布时会重新获取')
+    return jsonify({'success': True, 'data': {'rules': created, 'library': library},
+                    'dns': rule_dns_entries(get_config(), [item['id'] for item in created], base_url),
+                    'skipped': skipped, 'warnings': warnings, 'draft': True,
+                    **_pinned_withheld([item['id'] for item in created])})
 
 
 @bp.route('/group-name', methods=['POST'])
@@ -249,15 +554,20 @@ def reorder_rules():
         ids = [item.get('id') for item in items]
     if not isinstance(ids, list):
         raise ProfileValidationError('ids must be a list')
-    order = []
+    from backend.common.rule_dns import apply_rule_dns
+    order, warnings = [], []
+    base_url = _base_url(body)
     def mutate(profile):
+        before = copy.deepcopy(profile)
         items, missing = reorder_by_ids(profile.get('rule_configs', []), ids, body.get('position', 'top'))
         if missing:
             raise NotFound(f'以下规则 id 不存在: {missing}')
         profile['rule_configs'] = items
         order.extend(item['id'] for item in items)
+        # Native OxiDNS routes in rule order; rebuild it with the new order.
+        warnings.extend(apply_rule_dns(before, profile, {}, base_url=base_url, strict=False))
     update_config_transaction(mutate)
-    return jsonify({'success': True, 'order': order})
+    return jsonify({'success': True, 'order': order, **({'warnings': warnings} if warnings else {})})
 
 
 @bp.route('/batch', methods=['POST'])

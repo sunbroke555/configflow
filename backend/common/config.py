@@ -260,6 +260,23 @@ def update_shared_config_transaction(updater) -> Dict[str, Any]:
     return result
 
 
+def update_shared_and_config_transaction(shared_updater, updater, profile_ids=None):
+    """Update shared resources and one or more profiles in a single commit.
+
+    updater(profile_id, before, after) runs for each profile; before is resolved
+    against the shared data as it was, after against shared_updater's result.
+    profile_ids defaults to the request profile and may be a callable, see
+    ProfileRepository.update_shared_and_profiles_transaction.
+    """
+    from backend.common.profile_context import resolve_profile_id
+
+    if profile_ids is None:
+        profile_ids = [resolve_profile_id()]
+    result = get_repository().update_shared_and_profiles_transaction(shared_updater, updater, profile_ids)
+    reset_config_context()
+    return result
+
+
 def get_system_config() -> Dict[str, Any]:
     """Return the global system section, including settings, backup and agents."""
     result = get_repository().get_system()

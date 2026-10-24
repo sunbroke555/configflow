@@ -374,19 +374,36 @@
     </template>
 
     <Dialog v-model:open="referenceDialogVisible">
-      <DialogContent class="max-w-[520px]">
+      <DialogContent class="max-h-[calc(100dvh-2rem)] max-w-[520px] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>加入配置</DialogTitle>
           <DialogDescription class="break-all">将 {{ referenceRuleIds.length }} 个规则集加入「{{ referenceProfileName }}」，已添加的会跳过。内容仍与规则库共用，后续修改会影响使用它的所有配置。</DialogDescription>
         </DialogHeader>
-        <div class="flex flex-col gap-2">
-          <Label>目标策略</Label>
-          <Select v-model="referencePolicy">
-            <SelectTrigger class="w-full min-w-0 bg-background/50 [&>span]:truncate"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="policy in referencePolicies" :key="policy" :value="policy" :title="policy"><span class="break-all">{{ policy }}</span></SelectItem>
-            </SelectContent>
-          </Select>
+        <div class="flex min-w-0 flex-col gap-4">
+          <div class="flex flex-col gap-2">
+            <Label for="reference-policy">目标策略</Label>
+            <Select v-model="referencePolicy">
+              <SelectTrigger id="reference-policy" class="w-full min-w-0 bg-background/50 [&>span]:truncate"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="policy in referencePolicies" :key="policy" :value="policy" :title="policy"><span class="break-all">{{ policy }}</span></SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <RuleDnsField
+            v-if="referenceDnsShown"
+            :model-value="referenceDnsValue"
+            :hint="referenceDnsHint"
+            :help="referenceDnsHelp"
+            :persistent-hint="referenceDnsDisabled"
+            :warnings="referenceDnsWarnings"
+            :upstreams="referenceDns?.upstreams"
+            :upstream-label="referenceUpstreamLabel"
+            :policy-route="referencePolicyRoute"
+            :default-forward="referenceDns?.engine.default_forward"
+            :disabled="referenceDnsDisabled || addingReferences"
+            @update:model-value="chooseReferenceDns"
+            @action="kind => { if (kind === 'follow') chooseReferenceDns('follow') }"
+          />
         </div>
         <DialogFooter>
           <Button variant="outline" :disabled="addingReferences" @click="referenceDialogVisible = false">取消</Button>
@@ -674,11 +691,17 @@ import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { listItem } from '@/lib/motion'
 import { useProfileStore } from '@/stores/profile'
-import api from '@/api'
+import api, { ruleApi } from '@/api'
 import { activeProfileId, getActiveProfileId } from '@/profileContext'
 import { isAxiosError } from 'axios'
 import { domainRuleLine } from '@/lib/ruleset-format'
 import { prepareRuleContent } from '@/lib/ruleset-content'
+import RuleDnsField from '@/components/rules/RuleDnsField.vue'
+import {
+  DNS_COPY, DNS_FIELD_HELP, PINNED_HINT, confirmSaveWithoutDns, copyKey, defaultDnsChoice, dnsErrorReason, dnsWarnings,
+  followRoute, isRoutingLocked, isUpstreamValue, notifyRuleSaved, pinnedWithheld
+} from '@/lib/ruleDns'
+import type { ComposePayload, RuleDnsSnapshot, RuleDnsValue } from '@/types'
 
 const errorMessage = (error: unknown, fallback: string) =>
   isAxiosError<{ message?: string }>(error) ? error.response?.data?.message || fallback : fallback
@@ -697,6 +720,8 @@ interface RuleLibraryItem {
   source_type?: 'url' | 'content'
   content?: string
   format?: string
+  /** 规则库列表接口补充：在 OxiDNS 中参与 DNS 时会产生 IP 部分 */
+  has_ip_part?: boolean
 }
 
 const libraryPayload = (item: Partial<RuleLibraryItem>): Partial<RuleLibraryItem> => ({
@@ -718,49 +743,132 @@ const referencePolicy = ref('DIRECT')
 const referencePolicies = ref<string[]>([])
 const addingReferences = ref(false)
 
+// 目标配置空间的规则 DNS 状态（GET /rules/dns）；读取失败时不修改 DNS（默认上游）。
+const referenceDns = ref<RuleDnsSnapshot | null>(null)
+const referenceDnsChoice = ref<RuleDnsValue>('default')
+const referenceDnsTouched = ref(false)
+
 const showReferenceDialog = async (ids: string[]) => {
   const profileId = getActiveProfileId()
   const profileName = cfProfileName.value
   try {
-    const { data } = await api.get<{ name: string }[]>('/proxy-groups', { headers: { 'X-ConfigFlow-Profile': profileId } })
+    const [{ data }, dns] = await Promise.all([
+      api.get<{ name: string }[]>('/proxy-groups', { headers: { 'X-ConfigFlow-Profile': profileId } }),
+      ruleApi.getDns(profileId).then(response => response.data, () => null)
+    ])
     referenceProfileId.value = profileId
     referenceProfileName.value = profileName
     referenceRuleIds.value = [...ids]
     referencePolicy.value = 'DIRECT'
     referencePolicies.value = ['DIRECT', 'REJECT', ...data.map(group => group.name)]
+    referenceDns.value = dns?.engine ? dns : null
+    referenceDnsTouched.value = false
+    referenceDnsChoice.value = referenceDefaultDns.value
     referenceDialogVisible.value = true
   } catch (error) {
     notify.error(errorMessage(error, '加载配置策略失败'))
   }
 }
 
+const referenceItems = computed(() => referenceRuleIds.value.flatMap(id => ruleLibrary.value.filter(item => item.id === id)))
+const referenceHasIp = computed(() => referenceItems.value.some(item => item.has_ip_part ?? ['ipcidr', 'classical'].includes(item.behavior)))
+const referenceEngine = computed(() => referenceDns.value?.engine ?? null)
+/** 不使用 OxiDNS 的配置空间不显示 DNS；读取失败时仍显示，说明本次不修改 DNS */
+const referenceDnsShown = computed(() => !referenceEngine.value || referenceEngine.value.oxidns_in_use)
+const referenceDnsDisabled = computed(() => !referenceEngine.value || !referenceEngine.value.editable)
+const referenceDnsValue = computed<RuleDnsValue>(() => (referenceDnsDisabled.value ? 'default' : referenceDnsChoice.value))
+const referencePolicyRoute = computed(() => followRoute({ itemType: 'ruleset', policy: referencePolicy.value }))
+const referenceDefaultDns = computed(() => defaultDnsChoice({
+  domain: referenceItems.value.some(item => item.behavior !== 'ipcidr'), ip: referenceHasIp.value
+}, referenceEngine.value))
+const referenceUpstreamLabel = computed(() => {
+  const value = referenceDnsValue.value
+  return isUpstreamValue(value) ? referenceDns.value?.upstreams.find(item => item.key === value.slice(9))?.label : undefined
+})
+const referenceDnsWarnings = computed(() => dnsWarnings({
+  engine: referenceEngine.value,
+  unloaded: !referenceEngine.value,
+  value: referenceDnsValue.value,
+  policy: referencePolicy.value,
+  policyRoute: referencePolicyRoute.value,
+  ipRouted: referenceHasIp.value,
+  // 新加入的规则集不在 MosDNS 列表中，MosDNS 按默认上游处理。
+  mosdns: referenceEngine.value?.agents.some(agent => agent.service_type === 'mosdns') ? { route: null } : null,
+  explainExplicit: referenceDnsTouched.value,
+  upstreamLabel: referenceUpstreamLabel.value
+}).filter(warning => warning.action !== 'resync'))
+const referenceDnsHint = computed(() => (isUpstreamValue(referenceDnsValue.value)
+  ? PINNED_HINT : DNS_COPY[copyKey(referenceDnsValue.value)].hint))
+const referenceDnsHelp = computed(() => `${DNS_FIELD_HELP}\n\n${DNS_COPY[copyKey(referenceDnsValue.value)].help}`)
+function chooseReferenceDns(value: RuleDnsValue) {
+  referenceDnsTouched.value = true
+  referenceDnsChoice.value = value
+}
+
 const addReferences = async () => {
   addingReferences.value = true
-  const requestConfig = { headers: { 'X-ConfigFlow-Profile': referenceProfileId.value } }
+  const profileId = referenceProfileId.value
+  const requestConfig = { headers: { 'X-ConfigFlow-Profile': profileId } }
   let added = 0
   try {
     const { data } = await api.get<{ itemType?: string; library_rule_id?: string }[]>('/rules', requestConfig)
     const usedIds = new Set(data.filter(item => item.itemType === 'ruleset').map(item => item.library_rule_id))
-    for (const libraryRuleId of referenceRuleIds.value) {
-      if (usedIds.has(libraryRuleId)) continue
-      const source = ruleLibrary.value.find(item => item.id === libraryRuleId)
-      await api.post('/rule-sets', {
-        id: `ruleset_${crypto.randomUUID()}`,
-        itemType: 'ruleset',
-        library_rule_id: libraryRuleId,
-        policy: referencePolicy.value,
-        enabled: true,
-        no_resolve: source?.behavior === 'ipcidr'
-      }, requestConfig)
-      added++
+    const pending = referenceRuleIds.value.filter(id => !usedIds.has(id))
+    const skipped = referenceRuleIds.value.length - pending.length
+    const ipcidr = (id: string) => ruleLibrary.value.find(item => item.id === id)?.behavior === 'ipcidr'
+    // 共享来源、规则引用与 DNS 由 compose 一次写入；IP 网段规则集默认 no-resolve，与其他类型各提交一次。
+    const batches = [true, false].map(noResolve => ({ noResolve, ids: pending.filter(id => ipcidr(id) === noResolve) }))
+      .filter(batch => batch.ids.length)
+    let dns: RuleDnsValue | undefined = referenceDnsShown.value && referenceValueSendable() ? referenceDnsValue.value : undefined
+    let pinned = false
+    const warnings: string[] = []
+    for (const [index, batch] of batches.entries()) {
+      const payload = (choice?: RuleDnsValue): ComposePayload => ({
+        source: { kind: 'library', library_rule_ids: batch.ids },
+        rule: { policy: referencePolicy.value, remark: '', group_name: '', no_resolve: batch.noResolve, enabled: true, position: 'top' },
+        ...(choice ? { dns: choice } : {})
+      })
+      let response
+      try {
+        response = await ruleApi.compose(payload(dns), profileId)
+      } catch (error) {
+        if (!dns || !isRoutingLocked(error)) throw error
+        if (!(await confirmSaveWithoutDns(error))) {
+          // 已取消的批次没有加入：如实说明，并只保留它们的选择以便重试
+          const cancelled = batches.slice(index).flatMap(item => item.ids)
+          if (added) {
+            notifyAdded(added, skipped, warnings, pinned, cancelled.length)
+            referenceRuleIds.value = cancelled
+          }
+          return
+        }
+        dns = undefined
+        response = await ruleApi.compose(payload(), profileId)
+      }
+      added += response.data.data.rules.length
+      warnings.push(...(response.data.warnings || []))
+      pinned ||= pinnedWithheld(response.data, dns !== undefined && isUpstreamValue(dns))
     }
-    notify.success(`已向「${referenceProfileName.value}」添加 ${added} 个规则集，跳过 ${referenceRuleIds.value.length - added} 个已添加的规则集`)
+    notifyAdded(added, skipped, warnings, pinned)
     referenceDialogVisible.value = false
   } catch (error) {
-    notify.error(`已添加 ${added} 个规则集；${errorMessage(error, '添加失败')}`)
+    const reason = dnsErrorReason(error) || errorMessage(error, '添加失败')
+    notify.error(added ? `已添加 ${added} 个规则集；${reason}` : reason)
   } finally {
     addingReferences.value = false
   }
+}
+/** 字段可用且值不是默认上游时才发送 dns；默认上游不写 OxiDNS */
+const referenceValueSendable = () => !referenceDnsDisabled.value && referenceDnsValue.value !== 'default'
+function notifyAdded(added: number, skipped: number, warnings: string[], pinned: boolean, cancelled = 0) {
+  const title = cancelled
+    ? `已向「${referenceProfileName.value}」添加 ${added} 个规则集，未添加 ${cancelled} 个（已取消）${skipped ? `，跳过 ${skipped} 个已添加的规则集` : ''}`
+    : `已向「${referenceProfileName.value}」添加 ${added} 个规则集，跳过 ${skipped} 个已添加的规则集`
+  if (!added) {
+    notify.success(title)
+    return
+  }
+  notifyRuleSaved(title, { agents: referenceEngine.value?.agents, scopes: ['library'], pinned, extra: warnings, warn: cancelled > 0 })
 }
 
 const ruleLibrary = ref<RuleLibraryItem[]>([])

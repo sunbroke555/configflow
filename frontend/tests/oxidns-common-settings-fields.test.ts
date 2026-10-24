@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { flushPromises } from '@vue/test-utils'
+import { flushPromises, RouterLinkStub } from '@vue/test-utils'
 import OxidnsMatchEditor from '@/components/generate/OxidnsMatchEditor.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import { featureGroups } from '@/lib/oxidns'
@@ -82,6 +82,40 @@ describe('OxiDNS current common settings', () => {
     expect(proxy.props('options')).toEqual([
       {value: 'geo', label: 'Geo（暂不能转换为 OxiDNS 规则，请移除）'}, {value: 'cidr', label: 'Cidr'},
     ])
+  })
+
+  it('leaves rules with other DNS handling to the rules page and marks policy-following rules', async () => {
+    const wrapper = await render({
+      rules: [
+        {id: 'direct', name: 'Direct', rule_type: 'DOMAIN'}, {id: 'blocked', name: 'Blocked', rule_type: 'DOMAIN-SUFFIX'},
+        {id: 'pinned', name: 'Pinned', rule_type: 'DOMAIN'}, {id: 'cidr', name: 'Cidr', rule_type: 'IP-CIDR'},
+      ],
+      ruleSets: [{id: 'ads', name: 'Ads'}, {id: 'cn', name: 'CN'}],
+      values: {...values(), direct_rules: ['direct', 'blocked'], direct_rulesets: ['cn'], rule_dns_follow: ['direct', 'cn'],
+        rule_actions: {blocked: {action: 'refused'}, ads: {action: 'blackhole'}, pinned: {action: 'upstream', upstream: {addr: 'udp://10.0.0.53'}}}},
+    }, {stubs: {RouterLink: RouterLinkStub}})
+    await click('分流规则')
+    const [directSets, proxySets, direct, proxy] = wrapper.findAllComponents(MultiSelect)
+    expect(directSets.props('options')).toEqual([{value: 'cn', label: 'CN · 跟随策略'}])
+    expect(proxySets.props('options')).toEqual([])
+    expect(direct.props('options')).toEqual([{value: 'direct', label: 'Direct · 跟随策略'}, {value: 'cidr', label: 'Cidr'}])
+    expect(proxy.props('options').map((item: any) => item.value)).toEqual(['cidr'])
+    // A stale list entry for a rule with its own action is neither shown nor sent back.
+    expect(direct.props('modelValue')).toEqual(['direct'])
+    direct.vm.$emit('update:modelValue', ['direct', 'cidr'])
+    await flushPromises()
+    expect(lastChange(wrapper)).toEqual({direct_rules: ['direct', 'cidr']})
+    const note = wrapper.get('[data-rule-actions-summary]')
+    expect(note.text()).toContain('另有 3 条规则使用其他 DNS 处理（拒绝 1 · 黑洞 1 · 指定上游 1），请在策略规则页修改')
+    const link = note.getComponent(RouterLinkStub)
+    expect(link.props('to')).toBe('/rules')
+    expect(link.text()).toBe('打开策略规则')
+  })
+
+  it('shows no DNS handling summary when no rule uses other handling', async () => {
+    const wrapper = await render({values: {...values(), rule_actions: {}, rule_dns_follow: []}})
+    await click('分流规则')
+    expect(wrapper.find('[data-rule-actions-summary]').exists()).toBe(false)
   })
 
   it('sends rule selections and feature toggles as current field changes', async () => {

@@ -250,6 +250,9 @@ def collect_plugin_issues(plugin, index, document):
             raw_mode=args.get('mode')
             mode=raw_mode.strip().lower() if isinstance(raw_mode,str) else raw_mode
             ips=args.get('ips')
+            if 'mode' in args and raw_mode is None:
+                # A YAML null is not the "null" mode: the core silently answers nxdomain.
+                issue(['mode'],'mode 为空时 OxiDNS 会按 nxdomain 处理；黑洞请写 "null"（带引号）','null-mode','warning')
             if isinstance(mode,str) and mode not in ('nxdomain','nodata','null','custom','refused') and not _deferred(mode):
                 issue(['mode'],'拦截模式无效','enum')
             if isinstance(ips,list):

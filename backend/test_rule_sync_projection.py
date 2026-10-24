@@ -433,7 +433,7 @@ def test_prepare_candidate_library_off_never_refetches_remote_rule(service, monk
     assert 'new-inline.test' in str(unpack_document(candidate))
 
 
-@pytest.mark.parametrize('change', ['inline', 'new-set'])
+@pytest.mark.parametrize('change', ['inline', 'new-set', 'dns'])
 def test_prepare_candidate_real_oxidns_native_graph_with_offline_adguard(change, monkeypatch):
     from backend.agents.rule_sync import prepare_candidate
     from backend.converters.oxidns import _tag
@@ -452,6 +452,10 @@ def test_prepare_candidate_real_oxidns_native_graph_with_offline_adguard(change,
         current_template['oxidns']['proxy_rulesets'] = ['set-b']
         current = native(current_template)
         settings = {'library': True, 'rules': False}
+    elif change == 'dns':
+        from backend.common.rule_dns import entry_key
+        current = with_dns(base, {'set-a': 'blackhole', 'single': 'upstream:' + entry_key(LOCAL['upstream'], 'local')})
+        settings = {'library': True, 'rules': True}
     else:
         current = deepcopy(base)
         current['rule_configs'][1]['value'] = 'new-inline.test'
@@ -466,6 +470,9 @@ def test_prepare_candidate_real_oxidns_native_graph_with_offline_adguard(change,
     actual = unpack_document(candidate)
     if change == 'inline':
         assert 'full:new-inline.test' in str(actual)
+    elif change == 'dns':
+        tags = {plugin['tag'] for plugin in actual['plugins']}
+        assert 'cf_dns_blackhole' in tags and any(tag.startswith('cf_dns_up_') for tag in tags)
     else:
         assert _rule_path(current['rule_configs'][0], 'domain') in str(actual)
     assert candidate.manifest['config_path'] == 'installed.yml'
@@ -631,3 +638,156 @@ def test_rule_source_fingerprint_follows_local_callbacks_without_fetching():
     assert unchanged_rule_paths(entries, entries, base, current, 'https://config.test') == {'ruleset/B.list'}
     moved = [{**entries[1], 'url': 'https://rules.test/moved.list'}]
     assert unchanged_rule_paths(entries, moved, base, base, 'https://config.test') == set()
+
+
+# ---- Per-rule OxiDNS DNS handling ---------------------------------------------
+
+LOCAL = {'action': 'upstream', 'source': 'local', 'upstream': {'addr': 'udp://192.0.2.1'}}
+DRAFT = {'action': 'upstream', 'source': 'local', 'upstream': {'addr': 'udp://192.0.2.7'}}
+
+
+def with_dns(config, assignments):
+    from backend.common.rule_dns import apply_rule_dns
+    result = deepcopy(config)
+    apply_rule_dns(deepcopy(result), result, assignments)
+    return result
+
+
+def plugins_of(config):
+    return {plugin['tag']: plugin for plugin in yaml.safe_load(config['oxidns']['native_config'])['plugins']}
+
+
+def main_execs(config):
+    return {entry['matches'][0]: entry['exec'] for entry in plugins_of(config)['sequence_main']['args']
+            if entry.get('matches') and entry['matches'][0].startswith(('qname $rules_', 'resp_ip $rules_'))}
+
+
+def test_projection_copies_rule_actions_and_follow_by_scope():
+    base = fixture()
+    base['oxidns'].update(rule_actions={'set-a': {'action': 'refused'}}, direct_rulesets=[])
+    current = deepcopy(base)
+    current['oxidns'].update(rule_actions={'set-a': {'action': 'blackhole'}, 'single': {'action': 'nxdomain'}},
+                             direct_rules=[], rule_dns_follow=[], rule_dns_parked={})
+    rules = project_rule_changes(base, current, {'rules': True})['oxidns']
+    assert rules['rule_actions'] == {'set-a': {'action': 'refused'}, 'single': {'action': 'nxdomain'}}
+    assert rules['direct_rules'] == []
+    library = project_rule_changes(base, current, {'library': True})['oxidns']
+    assert library['rule_actions'] == {'set-a': {'action': 'blackhole'}}
+    assert library['direct_rules'] == ['single']
+    # Follow intent and a removed rule's choices travel with their scope too.
+    current['oxidns'].update(rule_actions={'set-a': {'action': 'blackhole'}}, direct_rules=['single'],
+                             rule_dns_follow=['single'])
+    assert project_rule_changes(base, current, {'library': True})['oxidns']['rule_dns_follow'] == []
+    assert project_rule_changes(base, current, {'rules': True})['oxidns']['rule_dns_follow'] == ['single']
+    current['rule_configs'].pop(0)
+    assert project_rule_changes(base, current, {'library': True})['oxidns']['rule_actions'] == {}
+    for scope in ('library', 'rules'):
+        kind = rule_change_kind(base, with_dns(base, {'set-a' if scope == 'library' else 'single': 'blackhole'}),
+                                'oxidns', {scope: True})
+        assert kind == 'structure'
+
+
+@pytest.mark.parametrize('mode', ['template', 'native'])
+def test_projection_withholds_unpublished_pinned_upstream(mode):
+    base = fixture() if mode == 'template' else native(fixture())
+    draft = deepcopy(base)
+    if mode == 'template':
+        draft['oxidns']['local_dns'] = 'udp://192.0.2.1\nudp://192.0.2.7'
+    else:
+        document = yaml.safe_load(draft['oxidns']['native_config'])
+        next(plugin for plugin in document['plugins'] if plugin['tag'] == 'forward_local')['args']['upstreams'].append(
+            {'addr': 'udp://192.0.2.7'})
+        draft['oxidns']['native_config'] = yaml.safe_dump(document, sort_keys=False)
+    from backend.common.rule_dns import entry_key
+    current = with_dns(draft, {'single': 'upstream:' + entry_key(DRAFT['upstream'], 'local'),
+                               'set-a': 'upstream:' + entry_key(LOCAL['upstream'], 'local')})
+    assert current['oxidns']['rule_actions'] == {'set-a': LOCAL, 'single': DRAFT}
+    withheld = set()
+    projected = project_rule_changes(base, current, {'library': True, 'rules': True}, service_type='oxidns',
+                                     withheld=withheld)
+    assert withheld == {'single'}
+    # The published upstream is pinned; the draft one keeps the published route.
+    assert projected['oxidns']['rule_actions'] == {'set-a': LOCAL}
+    assert 'single' in projected['oxidns']['direct_rules']
+    rendered = generate_oxidns_config(projected)
+    assert '192.0.2.7' not in rendered and 'cf_dns_up_' + entry_key(LOCAL['upstream'], 'local') in rendered
+    # Pins already published are not reported again.
+    withheld.clear()
+    projected = project_rule_changes(projected, with_dns(current, {'single': 'direct'}),
+                                     {'library': True, 'rules': True}, withheld=withheld)
+    assert withheld == set() and projected['oxidns']['rule_actions'] == {'set-a': LOCAL}
+
+
+def test_native_projection_emits_actions_via_apply_routing():
+    from backend.common.oxidns_common_routing import read_routing
+    from backend.common.rule_dns import entry_key
+    base = native(fixture())
+    current = with_dns(base, {'set-a': 'blackhole', 'single': 'upstream:' + entry_key(LOCAL['upstream'], 'local')})
+    current_doc = yaml.safe_load(current['oxidns']['native_config'])
+    next(plugin for plugin in current_doc['plugins'] if plugin['tag'] == 'forward_remote')['args']['upstreams'] = [
+        {'addr': 'udp://192.0.2.9'}]
+    current['oxidns']['native_config'] = yaml.safe_dump(current_doc, sort_keys=False)
+    projected = project_rule_changes(base, current, {'library': True, 'rules': True}, service_type='oxidns')
+    plugins = plugins_of(projected)
+    # Only rule routing and its owned helpers move; the draft's upstream edit stays out.
+    assert plugins['forward_remote'] == plugins_of(base)['forward_remote']
+    assert plugins['cf_dns_blackhole']['args'] == {'mode': 'null', 'short_circuit': True}
+    key = entry_key(LOCAL['upstream'], 'local')
+    assert sorted(main_execs(projected).values()) == ['$cf_dns_blackhole', 'goto cf_dns_up_' + key]
+    values = read_routing(yaml.safe_load(projected['oxidns']['native_config']), projected['oxidns'], projected)['values']
+    assert values['rule_actions'] == {'set-a': {'action': 'blackhole'}, 'single': LOCAL}
+    assert projected['oxidns']['rule_actions'] == values['rule_actions']
+    assert rule_change_kind(base, current, 'oxidns', {'library': True, 'rules': True}) == 'structure'
+    path = _rule_path(base['rule_configs'][0], 'domain').removeprefix('./')
+    files = {path: (b'old.test', 'rule')}
+    isolate_rule_bundle(bundle(yaml.safe_load(base['oxidns']['native_config']), 'oxidns', files),
+                        bundle(yaml.safe_load(projected['oxidns']['native_config']), 'oxidns', files), 'oxidns')
+    # Only the library scope: the inline rule keeps its published direct route.
+    library = project_rule_changes(base, current, {'library': True}, service_type='oxidns')
+    assert sorted(main_execs(library).values()) == ['$cf_dns_blackhole', 'goto china_dns']
+    assert 'cf_dns_up_' + key not in plugins_of(library)
+    # Reverting the draft removes the helpers again.
+    reverted = project_rule_changes(projected, base, {'library': True, 'rules': True}, service_type='oxidns')
+    assert not [tag for tag in plugins_of(reverted) if tag.startswith('cf_dns_')]
+
+
+def test_native_projection_without_custom_matches():
+    original = fixture()
+    original['oxidns']['direct_rules'] = []
+    base = native(original)
+    from backend.common.oxidns_common_routing import read_routing
+    before = read_routing(yaml.safe_load(base['oxidns']['native_config']), base['oxidns'], base)['values']
+    assert before['custom_matches'] == [] and before['custom_match_position'] is None
+    current = with_dns(base, {'single': 'refused'})
+    projected = project_rule_changes(base, current, {'rules': True}, service_type='oxidns')
+    assert sorted(main_execs(projected).values()) == ['goto china_dns', 'reject']
+    assert projected['oxidns']['rule_actions'] == {'single': {'action': 'refused'}}
+
+
+def test_isolation_allows_owned_dns_helpers():
+    from backend.common.rule_dns import entry_key
+    base = fixture()
+    previous = yaml.safe_load(generate_oxidns_config(base))
+    key = entry_key(LOCAL['upstream'], 'local')
+    candidate = yaml.safe_load(generate_oxidns_config(
+        with_dns(base, {'set-a': 'blackhole', 'single': 'upstream:' + key})))
+    path = _rule_path(base['rule_configs'][0], 'domain').removeprefix('./')
+    files = {path: (b'old.test', 'rule')}
+    isolated = unpack_document(isolate_rule_bundle(bundle(previous, 'oxidns', files),
+                                                   bundle(candidate, 'oxidns', files), 'oxidns'))
+    tags = [plugin['tag'] for plugin in isolated['plugins']]
+    assert {'cf_dns_blackhole', 'cf_dns_up_' + key, 'cf_dns_fwd_' + key, 'cf_dns_cache_' + key} <= set(tags)
+    assert tags.index('cf_dns_up_' + key) < tags.index('sequence_main')
+    # Reverting to the published routing drops them from the next candidate.
+    isolate_rule_bundle(bundle(isolated, 'oxidns', files), bundle(previous, 'oxidns', files), 'oxidns')
+    # A candidate pinning an upstream the device does not have, or carrying a
+    # hand-shaped helper, is refused at this second boundary.
+    unpublished = deepcopy(candidate)
+    for plugin in unpublished['plugins']:
+        if plugin['tag'] == 'cf_dns_fwd_' + key:
+            plugin['args']['upstreams'] = [{'addr': 'udp://192.0.2.7'}]
+    edited = deepcopy(candidate)
+    next(plugin for plugin in edited['plugins'] if plugin['tag'] == 'cf_dns_blackhole')['args']['mode'] = None
+    for value in (unpublished, edited):
+        with pytest.raises(RuleSyncProjectionError):
+            isolate_rule_bundle(bundle(previous, 'oxidns', files), bundle(value, 'oxidns', files), 'oxidns')

@@ -369,6 +369,28 @@ def test_desensitized_backup_removes_credentials_without_changing_live_state(tmp
     assert repository.get_system()["system_config"]["rule_proxy_token"] == RULE_PROXY_SECRET
 
 
+
+def test_redacts_pinned_upstream_addr_keeps_shape():
+    pinned = {"action": "upstream", "source": "remote",
+              "upstream": {"addr": "https://user:pass@doh.test/dns-query", "socks5": "u:p@127.0.0.1:1080",
+                           "bootstrap": "223.5.5.5", "timeout": "3s"}}
+    redacted_upstream = {"addr": REDACTED, "socks5": REDACTED, "bootstrap": "223.5.5.5", "timeout": "3s"}
+    actions = {"rule-a": pinned, "rule-b": {"action": "blackhole"}, "rule-c": None}
+    settings = {"rule_actions": actions, "rule_dns_parked": {"rule-d": pinned, "rule-e": {"action": "direct"}},
+                "rule_dns_follow": ["rule-f"],
+                "template_settings": {"rule_actions": actions},
+                "gateway_onboarding_native_backup": {"settings": {"rule_dns_parked": {"rule-d": pinned}}}}
+    original = copy.deepcopy(settings)
+    result = config_export.redact_oxidns_settings(settings)
+    expected = {**pinned, "upstream": redacted_upstream}
+    assert result["rule_actions"] == {"rule-a": expected, "rule-b": {"action": "blackhole"}, "rule-c": None}
+    assert result["rule_dns_parked"] == {"rule-d": expected, "rule-e": {"action": "direct"}}
+    assert result["rule_dns_follow"] == ["rule-f"]
+    assert result["template_settings"]["rule_actions"]["rule-a"] == expected
+    assert result["gateway_onboarding_native_backup"]["settings"]["rule_dns_parked"]["rule-d"] == expected
+    assert "user:pass" not in json.dumps(result, ensure_ascii=False)
+    assert settings == original
+
 def test_profile_export_and_explicit_settings_responses_do_not_leak_rule_proxy_token(tmp_path):
     app, _ = _app_with_secrets(tmp_path)
     client = app.test_client()

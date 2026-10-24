@@ -12,8 +12,8 @@ const values = () => ({ worker_threads: 8, listen: '127.0.0.1:5353', local_dns: 
   direct_rules: ['direct'], proxy_rules: [], direct_rulesets: [], proxy_rulesets: [], custom_matches: [], custom_hosts: '', custom_match_position: 'head',
   api: {enabled: true, listen: '127.0.0.1:9199'}, log: {level: 'info'},
   ...Object.fromEntries(featureGroups.map(feature => [feature.key, {enabled: false, args: {}}])) })
-async function render(extra: Record<string, any> = {}) {
-  const wrapper = mount(OxidnsCommonSettings, {attachTo: document.body, props: {values: values(), capabilities: {}, rules: [{id: 'direct', name: 'Direct', rule_type: 'DOMAIN'}, {id: 'proxy', name: 'Proxy', rule_type: 'IP-CIDR'}], ruleSets: [], ...extra}})
+async function render(extra: Record<string, any> = {}, global: Parameters<typeof mount>[1]['global'] = {}) {
+  const wrapper = mount(OxidnsCommonSettings, {attachTo: document.body, global, props: {values: values(), capabilities: {}, rules: [{id: 'direct', name: 'Direct', rule_type: 'DOMAIN'}, {id: 'proxy', name: 'Proxy', rule_type: 'IP-CIDR'}], ruleSets: [], ...extra}})
   wrappers.push(wrapper)
   await flushPromises()
   return wrapper

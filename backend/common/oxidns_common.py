@@ -19,6 +19,9 @@ _MISSING = object()
 _DEFAULTS = get_default_oxidns_settings()
 _FEATURES = ('query_recorder', 'ip_selector', 'ros_address_list', 'ros_route')
 _WRAPPERS = ('china_dns', 'direct_ip', 'default_direct_ip')
+# Features that pinned upstream chains of rule DNS copy from china_dns / remote_dns.
+_CHAIN_WRAPPERS = ('ip_selector', 'ros_address_list', 'ros_route')
+_CHAIN_FIELDS = {'cache_enabled', 'cache_lazy_ttl', 'remote_ttl', *(f'{name}.enabled' for name in _CHAIN_WRAPPERS)}
 _TAG_TYPES = {'lazy_cache': 'cache', 'local_probe_cache': 'cache',
               'forward_local': 'forward', 'forward_remote': 'forward', 'forward_fallback': 'forward',
               'fallback': 'fallback', 'dynamic_domains': 'dynamic_domain_set',
@@ -152,6 +155,11 @@ def _neutral(value):
     return False if isinstance(value, bool) else '' if isinstance(value, str) else None
 
 
+def _owned_chains(document):
+    from backend.common.oxidns_common_routing import owned_chains
+    return set(owned_chains(document))
+
+
 class _Context:
     def __init__(self, document, settings):
         self.doc, self.settings = document, settings
@@ -254,8 +262,11 @@ class _Context:
         counts = {chain: 0 for chain in chains}
         custom = False
         any_call = False
+        # Pinned upstream chains of rule DNS copy china_dns's wrappers and are
+        # rebuilt with it, so their calls are neither custom nor a feature switch.
+        owned = _owned_chains(self.doc) if tag in _CHAIN_WRAPPERS else set()
         for plugin in self.plugins:
-            if not isinstance(plugin.get('args'), list):
+            if not isinstance(plugin.get('args'), list) or plugin.get('tag') in owned:
                 continue
             for item in plugin['args']:
                 action = item.get('exec') if isinstance(item, dict) else None
@@ -267,7 +278,7 @@ class _Context:
                         custom = True
         remaining = deepcopy(self.doc)
         for plugin in remaining.get('plugins', []):
-            if plugin.get('tag') in counts and isinstance(plugin.get('args'), list):
+            if (plugin.get('tag') in counts or plugin.get('tag') in owned) and isinstance(plugin.get('args'), list):
                 plugin['args'] = [item for item in plugin['args'] if item != expected]
         references = reference_locations(remaining, [tag])
         if references:
@@ -584,7 +595,8 @@ def _adguard_state(ctx):
 def _read(document, settings, config):
     ctx = _Context(document, settings)
     values = _neutral(_DEFAULTS)
-    for field in ('config_mode', 'native_config', 'additional_files', 'custom_config'):
+    # Parked rule DNS choices are routing bookkeeping, not a common control.
+    for field in ('config_mode', 'native_config', 'additional_files', 'custom_config', 'rule_dns_parked'):
         values.pop(field, None)
     capabilities = {}
     _direct_read(ctx, values, capabilities)
@@ -1148,6 +1160,10 @@ def apply_common_settings(settings, changes, config, base_url=''):
                     items.pop(index)
             elif value:
                 items.append({'exec': f'ttl {value}'})
+    if _CHAIN_FIELDS & set(changes):
+        from backend.common.oxidns_common_routing import refresh_rule_helpers
+        refresh_rule_helpers(ctx.doc)
+        ctx.by_tag = {item.get('tag'): item for item in ctx.doc['plugins'] if isinstance(item, dict)}
     _finish_fallback(ctx, fallback_enabled)
     _park_disabled_features(ctx, changes)
     from backend.common.oxidns_common_updates import finish_rule_updates

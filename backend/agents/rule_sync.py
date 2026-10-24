@@ -54,6 +54,39 @@ def _update(manager, agent_id, *, state=None, settings=None):
     return manager._update_agents(update)
 
 
+def pinned_withheld(repository, profile_id, rule_ids):
+    """Whether an auto-syncing OxiDNS device of the profile withholds a newly
+    pinned upstream of one of rule_ids, so the choice must be published manually.
+
+    Uses the same projection as the worker, against each device's baseline.
+    """
+    from backend.common.rule_dns import profile_agents
+    from .rule_sync_projection import project_rule_changes
+    identities = set(rule_ids)
+    if not identities:
+        return False
+    agents = profile_agents({'agents': repository.get_system().get('agents', []), 'profile_id': profile_id,
+                             'system_config': {'default_profile_id': repository.default_profile_id()}})
+    current = None
+    for agent in agents:
+        settings = settings_for(agent)
+        if agent.get('service_type') != 'oxidns' or not any(settings.values()):
+            continue
+        baseline = store.load(repository, agent, with_bundle=False)
+        if baseline is None:
+            continue  # No baseline: the device needs a manual publish anyway.
+        if current is None:
+            current, _ = repository.get_publish_snapshot(profile_id)
+        withheld = set()
+        try:
+            project_rule_changes(baseline['source'], current, settings, service_type='oxidns', withheld=withheld)
+        except ValueError:
+            continue  # The worker blocks on it and asks for a manual publish.
+        if withheld & identities:
+            return True
+    return False
+
+
 def status(manager, agent_id):
     agent = manager.get_agent_by_id(agent_id)
     if agent is None:
@@ -189,9 +222,12 @@ class RuleSyncWorker:
         self.manager = manager
         self.clock = clock
         self.prepare = prepare
+        self.notice = ''
 
     def _state(self, agent_id, status, message, **fields):
-        state = {'status': status, 'message': message, **fields}
+        # A rule pinned to an unpublished upstream stays out of every automatic
+        # publication; say so with whatever the device is doing.
+        state = {'status': status, 'message': f'{message}；{self.notice}' if self.notice else message, **fields}
         agent = self.manager.get_agent_by_id(agent_id) or {}
         previous = {key: value for key, value in ((agent.get('rule_sync') or {}).get('state') or {}).items()
                     if key != 'updated_at'}
@@ -228,7 +264,8 @@ class RuleSyncWorker:
                             **{key: state[key] for key in ('native_task', 'key') if key in state})
 
     def _run(self, agent_id):
-        from .rule_sync_projection import project_rule_changes, rule_change_kind
+        from .rule_sync_projection import PINNED_WITHHELD, project_rule_changes, rule_change_kind
+        self.notice = ''
         agent = next((item for item in self.manager.get_all_agents() if item['id'] == agent_id), None)
         if agent is None or agent.get('service_type') not in ('mihomo', 'oxidns'):
             return
@@ -272,15 +309,18 @@ class RuleSyncWorker:
             self._state(agent_id, 'blocked', '先成功发布一次配置，建立自动同步基线')
             return
         current, _ = self.manager.repository.get_publish_snapshot(agent['profile_id'])
+        withheld = set()
         try:
             kind = rule_change_kind(baseline['source'], current, agent['service_type'], settings)
-            source = project_rule_changes(baseline['source'], current, settings, service_type=agent['service_type'])
+            source = project_rule_changes(baseline['source'], current, settings, service_type=agent['service_type'],
+                                          withheld=withheld)
         except ValueError:
             self._state(agent_id, 'blocked', '当前原生规则结构无法安全自动合并，请手动检查并发布配置')
             return
+        self.notice = PINNED_WITHHELD if withheld and agent['service_type'] == 'oxidns' else ''
         if kind == 'none' and not (old_state.get('native_task') or settings['library'] and
                                   (old_state.get('force_refresh') or old_state.get('status') == 'running')):
-            if old_state.get('status') != 'succeeded':
+            if old_state.get('status') != 'succeeded' or self.notice not in old_state.get('message', ''):
                 self._state(agent_id, 'idle', '已引用的规则没有待同步变化')
             return
         if kind == 'none':

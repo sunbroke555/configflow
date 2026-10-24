@@ -4,10 +4,12 @@ import type { VueWrapper } from '@vue/test-utils'
 import type { Component } from 'vue'
 import Rules from '@/views/Rules.vue'
 import RuleLibrary from '@/views/RuleLibrary.vue'
+import RuleDnsField from '@/components/rules/RuleDnsField.vue'
+import RuleDnsSelect from '@/components/rules/RuleDnsSelect.vue'
 import ConfirmHost from '@/components/feedback/ConfirmHost.vue'
 import { Select } from '@/components/ui/select'
 import { setActiveProfileId } from '@/profileContext'
-import { notify, settleConfirm } from '@/lib/feedback'
+import { confirmState, notify, settleConfirm } from '@/lib/feedback'
 
 // Replace only HTTP boundaries; dialogs, selectors, sorting and stores stay real.
 const network = vi.hoisted(() => {
@@ -33,7 +35,16 @@ const network = vi.hoisted(() => {
     update: vi.fn(async (_id: string, _body: Record<string, unknown>, _profileId?: string) => ({ data: {} })),
     delete: vi.fn(async (_id: string, _profileId?: string) => ({ data: {} })),
     renameGroup: vi.fn(async (_ids: string[], _name: string, _profileId?: string) => ({ data: { success: true } })),
-    findDuplicates: vi.fn(async (_profileId?: string) => ({ data: {} }))
+    findDuplicates: vi.fn(async (_profileId?: string) => ({ data: {} })),
+    getDns: vi.fn(async (_profileId?: string) => ({ data: {
+      success: true, upstreams: [], rules: {}, mosdns: {},
+      engine: { mode: 'template', editable: true, reason: '', default_forward: 'forward_remote', prefer_ipv4: true,
+        local_probe_active: false, oxidns_in_use: true, warnings: [], agents: [] }
+    } })),
+    setDns: vi.fn(async (_routes: Record<string, string>, _options?: unknown, _profileId?: string) => ({ data: { success: true, rules: {}, skipped: [], warnings: [] } })),
+    compose: vi.fn(async (_body: Record<string, any>, _profileId?: string) => ({ data: {
+      success: true, data: { rules: [{ id: 'ruleset-new' }], library: null }, dns: {}, skipped: [], warnings: [], draft: true
+    } }))
   }
   const sets = {
     create: vi.fn(async (_body: Record<string, unknown>, _profileId?: string) => ({ data: {} })),
@@ -75,6 +86,7 @@ beforeEach(() => {
     addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn()
   })))
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 })
 
 afterEach(() => {
@@ -166,21 +178,35 @@ describe('profile rule references', () => {
     expect(network.post).not.toHaveBeenCalled()
   })
 
-  it('requires selecting a shared source for new rulesets', async () => {
-    network.state.rules = []
-    const wrapper = await render(Rules)
+  it('adds rulesets from the library tab through compose and greys out references already in use', async () => {
+    network.state.library.push({ id: 'library-two', name: 'Second domains', source_type: 'url', url: 'https://rules.test/two.list', behavior: 'domain', format: 'text', enabled: true })
+    await render(Rules)
     await menuAction('添加规则集')
-    const saveButton = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.trim() === '保存')
-    expect(saveButton?.disabled).toBe(true)
-    const sourceSelect = wrapper.findAllComponents(Select).find(select => select.props('modelValue') === '')
-    expect(sourceSelect).toBeTruthy()
-    sourceSelect!.vm.$emit('update:modelValue', 'library-one')
+    // The menu restores focus to its trigger on a timer; a popover opened before that closes again.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(document.querySelector('[role="radio"][aria-checked="true"]')?.textContent?.trim()).toBe('规则库')
+    const save = () => Array.from(document.querySelectorAll('button')).find(button => button.textContent?.trim().startsWith('添加') && button.textContent.includes('规则集'))
+    expect(save()?.disabled).toBe(true)
+    document.querySelector<HTMLButtonElement>('button[aria-label="选择规则集"]')!.click()
     await flushPromises()
-    await clickText('保存')
-    const [payload, profileId] = network.sets.create.mock.calls[0]!
-    expectReferenceOnly(payload)
+    const options = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+    const used = options.find(option => option.textContent?.includes('Shared domains'))!
+    expect(used.textContent).toContain('已添加 · #1')
+    expect(used.hasAttribute('data-disabled')).toBe(true)
+    options.find(option => option.textContent?.includes('Second domains'))!.click()
+    await flushPromises()
+    setActiveProfileId('target')
+    expect(save()?.textContent?.trim()).toBe('添加 1 个规则集')
+    save()!.click()
+    await flushPromises()
+    expect(network.rules.compose).toHaveBeenCalledTimes(1)
+    const [payload, profileId] = network.rules.compose.mock.calls[0]!
     expect(profileId).toBe('default')
-    expect(payload.policy).toBe('DIRECT')
+    expect(payload.source).toEqual({ kind: 'library', library_rule_ids: ['library-two'] })
+    expect(payload.rule).toMatchObject({ policy: 'DIRECT', enabled: true, position: 'top' })
+    // A domain ruleset follows its policy by default when OxiDNS is in use.
+    expect(payload.dns).toBe('follow')
+    expect(network.sets.create).not.toHaveBeenCalled()
   })
 
   it('reorders hydrated rulesets using only independent reference fields', async () => {
@@ -353,18 +379,22 @@ describe('shared rule library', () => {
     expect(network.sets.update).not.toHaveBeenCalled()
   })
 
-  it('captures the destination profile when opening the reference dialog', async () => {
+  it('captures the destination profile and adds through compose with the DNS choice', async () => {
     network.state.rules = []
     const wrapper = await render(RuleLibrary)
     await wrapper.get('button[aria-label="将 Shared domains 加入当前配置"]').trigger('click')
     await flushPromises()
+    expect(network.rules.getDns).toHaveBeenCalledWith('default')
+    // A domain ruleset follows its policy by default when OxiDNS is in use.
+    expect(wrapper.getComponent(RuleDnsSelect).props('modelValue')).toBe('follow')
     setActiveProfileId('target')
     await clickText('加入配置')
-    const call = network.post.mock.calls.find(([path]) => path === '/rule-sets')
-    expect(call).toBeTruthy()
-    expectReferenceOnly(call![1])
-    expect(call![1]).toMatchObject({ policy: 'DIRECT', enabled: true })
-    expect(call![2]).toEqual({ headers: { 'X-ConfigFlow-Profile': 'default' } })
+    expect(network.rules.compose).toHaveBeenCalledExactlyOnceWith({
+      source: { kind: 'library', library_rule_ids: ['library-one'] },
+      rule: { policy: 'DIRECT', remark: '', group_name: '', no_resolve: false, enabled: true, position: 'top' },
+      dns: 'follow'
+    }, 'default')
+    expect(network.post.mock.calls.some(([path]) => path === '/rule-sets')).toBe(false)
     expect(network.get).toHaveBeenCalledWith('/rules', { headers: { 'X-ConfigFlow-Profile': 'default' } })
   })
 
@@ -374,6 +404,118 @@ describe('shared rule library', () => {
     await flushPromises()
     await clickText('加入配置')
     expect(network.post).not.toHaveBeenCalled()
+    expect(network.rules.compose).not.toHaveBeenCalled()
+  })
+
+  it('keeps IP rulesets on the default upstream until chosen and sends no-resolve per batch', async () => {
+    network.state.rules = []
+    network.state.library.push({ id: 'library-ip', name: 'Shared networks', source_type: 'content', content: '10.0.0.0/8', url: '', behavior: 'ipcidr', format: 'text', enabled: true, has_ip_part: true })
+    const wrapper = await render(RuleLibrary)
+    ;(wrapper.vm as any).$.setupState.showReferenceDialog(['library-ip'])
+    await flushPromises()
+    const field = wrapper.getComponent(RuleDnsField)
+    expect(field.props('modelValue')).toBe('default')
+    field.vm.$emit('update:modelValue', 'blackhole')
+    await flushPromises()
+    // Routing an IP ruleset in DNS turns on local probing for every query.
+    expect(field.props('warnings').map((item: any) => item.text).join('\n')).toContain('这是第一条参与 DNS 的 IP 规则')
+    await clickText('加入配置')
+    expect(network.rules.compose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      source: { kind: 'library', library_rule_ids: ['library-ip'] }, dns: 'blackhole',
+      rule: expect.objectContaining({ no_resolve: true })
+    }), 'default')
+
+    network.rules.compose.mockClear()
+    ;(wrapper.vm as any).$.setupState.showReferenceDialog(['library-one', 'library-ip'])
+    await flushPromises()
+    expect(wrapper.getComponent(RuleDnsField).props('modelValue')).toBe('default')
+    await clickText('加入配置')
+    expect(network.rules.compose.mock.calls.map(([payload]) => [payload.source.library_rule_ids, payload.rule.no_resolve, payload.dns]))
+      .toEqual([[['library-ip'], true, undefined], [['library-one'], false, undefined]])
+  })
+
+  it.each([
+    ['locked native routing', { editable: false, reason: '主执行链含手写条目' }, 'DNS 处理需在完整参数修改：主执行链含手写条目'],
+    ['unreadable DNS state', null, 'DNS 状态未加载，本次不修改 DNS']
+  ])('disables the DNS choice and sends none for %s', async (_, engine, warning) => {
+    network.state.rules = []
+    if (engine) {
+      network.rules.getDns.mockResolvedValueOnce({ data: { success: true, upstreams: [], rules: {}, mosdns: {}, engine: {
+        mode: 'native', default_forward: 'forward_remote', prefer_ipv4: true, local_probe_active: false, oxidns_in_use: true,
+        warnings: [], agents: [], ...engine } } })
+    } else network.rules.getDns.mockRejectedValueOnce(new Error('offline'))
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="将 Shared domains 加入当前配置"]').trigger('click')
+    await flushPromises()
+    const field = wrapper.getComponent(RuleDnsField)
+    expect(field.props()).toMatchObject({ modelValue: 'default', disabled: true })
+    expect(field.props('warnings')[0].text).toBe(warning)
+    await clickText('加入配置')
+    expect(network.rules.compose.mock.calls[0]![0]).not.toHaveProperty('dns')
+  })
+
+  it('hides the DNS choice for a profile that does not use OxiDNS', async () => {
+    network.state.rules = []
+    network.rules.getDns.mockResolvedValueOnce({ data: { success: true, upstreams: [], rules: {}, mosdns: {}, engine: {
+      mode: 'template', editable: true, reason: '', default_forward: 'forward_remote', prefer_ipv4: true, local_probe_active: false,
+      oxidns_in_use: false, warnings: [], agents: [] } } })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="将 Shared domains 加入当前配置"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(RuleDnsField).exists()).toBe(false)
+    await clickText('加入配置')
+    expect(network.rules.compose.mock.calls[0]![0]).not.toHaveProperty('dns')
+  })
+
+  it('offers to add without DNS when native routing became custom while saving', async () => {
+    network.state.rules = []
+    network.rules.compose.mockRejectedValueOnce({ isAxiosError: true, response: { status: 409, data: {
+      success: false, message: '配置仍在使用', usages: [{ kind: 'oxidns', code: 'oxidns_routing_custom', reason: '主执行链含手写条目' }] } } })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="将 Shared domains 加入当前配置"]').trigger('click')
+    await flushPromises()
+    await clickText('加入配置')
+    expect(confirmState).toMatchObject({ open: true, description: '主执行链含手写条目', confirmText: '仍保存（DNS 默认上游）', altText: '复制原因' })
+    settleConfirm('confirm')
+    await flushPromises()
+    expect(network.rules.compose.mock.calls.map(([payload]) => payload.dns)).toEqual(['follow', undefined])
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('reports a cancelled second batch as not added and keeps only it selected', async () => {
+    network.state.rules = []
+    network.state.library.push({ id: 'library-ip', name: 'Shared networks', source_type: 'content', content: '10.0.0.0/8', url: '', behavior: 'ipcidr', format: 'text', enabled: true, has_ip_part: true })
+    const success = vi.spyOn(notify, 'success').mockImplementation(() => 0)
+    const warning = vi.spyOn(notify, 'warning').mockImplementation(() => 0)
+    network.rules.compose
+      .mockResolvedValueOnce({ data: { success: true, data: { rules: [{ id: 'ruleset-ip' }], library: null }, dns: {}, skipped: [], warnings: [], draft: true } })
+      .mockRejectedValueOnce({ isAxiosError: true, response: { status: 409, data: { usages: [{ code: 'oxidns_routing_custom', reason: '主执行链含手写条目' }] } } })
+    const wrapper = await render(RuleLibrary)
+    const setup = (wrapper.vm as any).$.setupState
+    setup.showReferenceDialog(['library-one', 'library-ip'])
+    await flushPromises()
+    wrapper.getComponent(RuleDnsField).vm.$emit('update:modelValue', 'blackhole')
+    await flushPromises()
+    await clickText('加入配置')
+    expect(confirmState.open).toBe(true)
+    settleConfirm('cancel')
+    await flushPromises()
+    expect(success).not.toHaveBeenCalled()
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning.mock.calls[0]![0]).toMatch(/添加 1 个规则集，未添加 1 个（已取消）$/)
+    expect(setup.referenceRuleIds).toEqual(['library-one'])
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
+  it('does not claim zero added rulesets when the first request fails', async () => {
+    network.state.rules = []
+    const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+    network.rules.compose.mockRejectedValueOnce({ isAxiosError: true, response: { status: 400, data: { message: '规则集不存在' } } })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="将 Shared domains 加入当前配置"]').trigger('click')
+    await flushPromises()
+    await clickText('加入配置')
+    expect(error).toHaveBeenCalledWith('规则集不存在')
   })
 
   it('surfaces all-profile deletion conflicts without deleting configuration references', async () => {

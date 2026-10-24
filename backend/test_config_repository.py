@@ -208,5 +208,129 @@ def test_global_settings_three_way_merge_preserves_concurrent_agent_updates(tmp_
         config.reset_config_context()
 
 
+
+def _rule_dns_repository(tmp_path):
+    repository = ProfileRepository(tmp_path)
+    repository.save_shared({'rule_library': [
+        {'id': 'lib', 'name': 'Ads', 'source_type': 'content', 'content': 'ads.test', 'behavior': 'domain'}]})
+    repository.save_profile('default', {'rule_configs': [
+        {'id': 'rule', 'itemType': 'rule', 'rule_type': 'DOMAIN', 'value': 'a.test', 'policy': 'DIRECT'},
+        {'id': 'set', 'itemType': 'ruleset', 'library_rule_id': 'lib', 'policy': 'REJECT'}]})
+    repository.clone_profile('default', {'id': 'other', 'name': 'Other'})
+    return repository
+
+
+def test_shared_and_profiles_transaction_commits_once(tmp_path):
+    repository = _rule_dns_repository(tmp_path)
+    shared_revision = repository.get_shared()['_revision']
+    revisions = {pid: repository.get_profile(pid)['_revision'] for pid in ('default', 'other')}
+    seen = {}
+
+    def add(shared):
+        shared['rule_library'].append({'id': 'new', 'name': 'New', 'source_type': 'content',
+                                       'content': 'new.test', 'behavior': 'classical'})
+
+    def compose(profile_id, before, after):
+        # before is resolved against the shared data as it was, after against the new one.
+        seen[profile_id] = ([item['id'] for item in before['rule_library']], [item['id'] for item in after['rule_library']])
+        after['rule_configs'].insert(0, {'id': 'ref', 'itemType': 'ruleset', 'library_rule_id': 'new', 'policy': 'DIRECT'})
+        after['rule_configs'][0]['behavior'] = 'classical'  # Hydrated fields never persist.
+
+    shared, profiles = repository.update_shared_and_profiles_transaction(
+        add, compose, lambda shared, profiles: [pid for pid in profiles if pid == 'other'])
+    assert seen == {'other': (['lib'], ['lib', 'new'])}
+    assert set(profiles) == {'other'} and shared['_revision'] == shared_revision + 1
+    assert repository.get_profile('other')['_revision'] == revisions['other'] + 1
+    assert repository.get_profile('default')['_revision'] == revisions['default']
+    stored = repository.get_profile('other')['rule_configs'][0]
+    assert stored == {'id': 'ref', 'itemType': 'ruleset', 'library_rule_id': 'new', 'policy': 'DIRECT'}
+    resolved = repository.get_compat_config('other')['rule_configs'][0]
+    assert resolved['behavior'] == 'classical' and resolved['url'].endswith('/rule-library/content/new')
+
+
+def test_shared_and_profiles_transaction_rolls_back_all(tmp_path):
+    import pytest
+    repository = _rule_dns_repository(tmp_path)
+    before = repository.export_all()
+
+    def fail(profile_id, _, after):
+        after['rule_configs'].clear()
+        if profile_id == 'other':
+            raise ProfileValidationError('boom')
+
+    with pytest.raises(ProfileValidationError):
+        repository.update_shared_and_profiles_transaction(
+            lambda shared: shared['rule_library'][0].update(name='Renamed'), fail, ['default', 'other'])
+    assert repository.export_all() == before
+    # Whole-document validation also rejects everything at once.
+    with pytest.raises(ProfileInUse):
+        repository.update_shared_and_profiles_transaction(
+            lambda shared: shared['rule_library'][0].update(name='Renamed'),
+            lambda pid, _, after: after['oxidns'].update(rule_dns_follow=['missing']), ['default'])
+    assert repository.export_all() == before
+
+
+def test_rule_dns_ids_must_exist(tmp_path):
+    import pytest
+    repository = _rule_dns_repository(tmp_path)
+    repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update(
+        rule_actions={'set': {'action': 'blackhole'}}, rule_dns_follow=['rule'],
+        rule_dns_parked={'rule': {'action': 'direct'}}))
+    for field, value in (('rule_actions', {'gone': {'action': 'refused'}}), ('rule_dns_follow', ['gone']),
+                         ('rule_dns_parked', {'gone': {'action': 'proxy'}})):
+        with pytest.raises(ProfileInUse, match='OxiDNS DNS 处理仍引用不存在的规则 gone'):
+            repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update({field: value}))
+    with pytest.raises(ProfileValidationError):
+        repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update(rule_actions='x'))
+
+
+def test_rule_dns_action_shapes_are_validated(tmp_path):
+    import pytest
+    repository = _rule_dns_repository(tmp_path)
+    for field, value in (('rule_actions', {'set': {'kind': 'blackhole'}}), ('rule_actions', {'set': 'reject'}),
+                         ('rule_actions', {'set': {'action': 'direct'}}),
+                         ('rule_actions', {'set': {'action': 'upstream', 'upstream': {'addr': '1.1.1.1'}}}),
+                         ('rule_dns_parked', {'rule': {'action': 'drop'}})):
+        with pytest.raises(ProfileValidationError, match=f'OxiDNS {field} 中规则'):
+            repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update({field: value}))
+    # Imports skip the settings normalizer and must be refused the same way.
+    exported = repository.export_profile('default')
+    exported['oxidns']['rule_actions'] = {'set': {'kind': 'blackhole'}}
+    with pytest.raises(ProfileValidationError):
+        repository.import_profile('default', exported)
+    assert repository.get_profile('default')['oxidns'].get('rule_actions', {}) == {}
+
+
+def test_every_delete_path_cleans_rule_dns_fields(tmp_path):
+    from flask import Flask
+    from backend.common import config as config_module
+    from backend.routes import register_blueprints
+    repository = _rule_dns_repository(tmp_path)
+    fields = {'rule_actions': {'set': {'action': 'blackhole'}}, 'rule_dns_follow': ['rule'], 'rule_dns_parked': {}}
+    for profile_id in ('default', 'other'):
+        repository.update_profile_transaction(profile_id, lambda profile: profile['oxidns'].update(copy.deepcopy(fields)))
+    previous = config_module._repository
+    config_module.set_repository(repository)
+    try:
+        app = Flask(__name__)
+        register_blueprints(app)
+        client = app.test_client()
+        headers = {'X-ConfigFlow-Profile': 'other'}
+        assert client.delete('/api/rules/set', headers=headers).status_code == 200
+        assert client.delete('/api/rules/rule', headers=headers).status_code == 200
+        oxidns = repository.get_profile('other')['oxidns']
+        assert (oxidns['rule_actions'], oxidns['rule_dns_follow'], oxidns['rule_dns_parked']) == ({}, [], {})
+    finally:
+        config_module.set_repository(previous)
+        config_module.reset_config_context()
+    # An import replacing the composition drops the DNS entries of rules it lacks.
+    exported = repository.export_profile('default')
+    exported['rule_configs'] = [item for item in exported['rule_configs'] if item['id'] != 'set']
+    del exported['oxidns']
+    repository.import_profile('default', exported)
+    oxidns = repository.get_profile('default')['oxidns']
+    assert oxidns['rule_actions'] == {} and oxidns['rule_dns_follow'] == ['rule']
+
+
 if __name__ == '__main__':
     unittest.main()

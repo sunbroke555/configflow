@@ -62,7 +62,7 @@ export interface OxiDNSOverview {
 
 export interface OxiDNSQuestion { name: string; qtype: string | number; qclass: string | number }
 export interface OxiDNSAnswer { name: string; rr_type: string | number; ttl: number; payload_text: string }
-export type OxiDNSQuerySource = 'local' | 'remote' | 'fallback' | 'cache' | 'hosts' | 'blocked' | 'rejected' | 'unknown' | 'unrecorded' | 'error' | 'no_response' | 'ipv4_preferred'
+export type OxiDNSQuerySource = 'local' | 'remote' | 'fallback' | 'pinned' | 'cache' | 'hosts' | 'blocked' | 'rejected' | 'unknown' | 'unrecorded' | 'error' | 'no_response' | 'ipv4_preferred'
 export interface OxiDNSQuery {
   id: number | string
   created_at_ms: number

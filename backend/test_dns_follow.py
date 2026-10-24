@@ -478,6 +478,42 @@ def test_network_binding_rejects_loopback_listener(follow_env):
     assert env.uploads == []
 
 
+
+def pin_rule(env, address, *, parked=False):
+    action = {'action': 'upstream', 'source': 'remote', 'upstream': {'addr': address, 'timeout': '5s'}}
+    def update(profile):
+        profile['rule_configs'] = [
+            {'id': 'rule-a', 'itemType': 'rule', 'rule_type': 'DOMAIN', 'value': 'a.test', 'policy': 'DIRECT'},
+            {'id': 'rule-b', 'itemType': 'rule', 'rule_type': 'DOMAIN', 'value': 'b.test', 'policy': 'Proxy',
+             'enabled': not parked}]
+        profile['oxidns']['rule_dns_parked' if parked else 'rule_actions'] = {'rule-b': action}
+    env.repository.update_profile_transaction('default', update)
+
+
+def test_candidates_exclude_pinned_rule_upstreams(follow_env):
+    env = follow_env
+    settings = env.repository.get_profile('default')['oxidns']
+    document = yaml.safe_load(settings['native_config'])
+    document['plugins'].append({'tag': 'cf_dns_fwd_0123456789ab', 'type': 'forward',
+                                'args': {'upstreams': [{'addr': 'udp://192.0.2.50:53'}]}})
+    env.repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update(
+        native_config=yaml.safe_dump(document, sort_keys=False)))
+    upstreams = dns_follow.options(env.manager, env.target_id)['upstreams']
+    assert [item['tag'] for item in upstreams] == ['forward_remote', 'forward_remote', 'forward_local']
+    with pytest.raises(dns_follow.FollowError, match='已移除'):
+        env.bind(upstream_tag='cf_dns_fwd_0123456789ab', upstream_index=0)
+
+
+@pytest.mark.parametrize('parked', [False, True])
+def test_configure_refuses_upstream_pinned_by_rule(follow_env, parked):
+    env = follow_env
+    pin_rule(env, 'udp://127.0.0.1:1053', parked=parked)
+    with pytest.raises(dns_follow.FollowError, match='策略规则 #2 固定为指定上游'):
+        env.bind()
+    assert env.agent().get('dns_follow') is None
+    env.bind(upstream_index=0)
+    assert env.agent()['dns_follow']['upstream_index'] == 0
+
 def test_disabled_binding_does_not_follow_next_source_publication(follow_env):
     env = follow_env
     env.bind()

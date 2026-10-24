@@ -6,7 +6,7 @@ import yaml
 
 from backend.common.oxidns_editor import prepare_editor, preview_template, _merge
 from backend.common.oxidns_native import load_native_yaml
-from backend.common.oxidns_settings import OxidnsSettingsError
+from backend.common.oxidns_settings import OxidnsSettingsError, normalize_oxidns_settings
 from backend.converters.oxidns import generate_oxidns_config, get_oxidns_custom_files, get_oxidns_ruleset_downloads
 from backend.test_oxidns_integration import oxidns_app
 
@@ -421,3 +421,103 @@ def test_template_migration_keeps_complete_zip_and_agent_bundle_resources_byte_e
         assert after['rules/adguard-custom.txt'] == b'||ad.test^\n'
         assert any(b'example.test' in data for path, data in after.items() if path.startswith('rules/rule_'))
     assert config == original
+
+
+# Per-rule DNS choices across template <-> native conversion.
+
+BLACKHOLE = {'action': 'blackhole'}
+NXDOMAIN = {'action': 'nxdomain'}
+
+
+def rule_space():
+    rule = lambda identity, **extra: {'id': identity, 'itemType': 'rule', 'rule_type': 'DOMAIN',
+                                      'value': f'{identity}.test', 'policy': 'Proxy', **extra}
+    ruleset = lambda identity, **extra: {'id': identity, 'itemType': 'ruleset', 'behavior': 'domain',
+                                         'url': f'https://example.test/{identity}.txt', 'policy': 'Proxy', **extra}
+    return {'system_config': {'server_domain': 'http://config.test', 'rule_proxy_token': 'test-only'},
+            'rule_configs': [rule('a', policy='DIRECT'), rule('b'), rule('off', enabled=False),
+                             rule('follow_off', enabled=False), ruleset('rs'),
+                             ruleset('rs_off', library_enabled=False), ruleset('rs_off2', enabled=False)]}
+
+
+def routing(settings, config):
+    from backend.common.oxidns_common_routing import read_routing
+    return read_routing(document(settings), settings, config)['values']
+
+
+def test_prepare_editor_parks_inactive_actions():
+    config = rule_space()
+    template = {'direct_rules': ['a'], 'proxy_rules': ['follow_off'], 'proxy_rulesets': ['rs_off'],
+                'rule_actions': {'b': BLACKHOLE, 'off': NXDOMAIN, 'deleted': NXDOMAIN},
+                'rule_dns_follow': ['follow_off']}
+    result = prepare_editor(template, config)
+    assert result['rule_actions'] == {'b': BLACKHOLE}
+    assert result['rule_dns_parked'] == {'off': NXDOMAIN, 'rs_off': {'action': 'proxy'}}
+    assert result['rule_dns_follow'] == ['follow_off']
+    # Lists stay a retained catalog; the YAML is exactly the template's.
+    assert result['proxy_rulesets'] == ['rs_off'] and result['proxy_rules'] == ['follow_off']
+    assert document(result) == yaml.safe_load(generate_oxidns_config({**config, 'oxidns': template}))
+    assert routing(result, config)['rule_actions'] == {'b': BLACKHOLE}
+    assert normalize_oxidns_settings(result, validate_native_arguments=False)['rule_dns_parked'] == result['rule_dns_parked']
+
+
+def test_template_inputs_restores_parked():
+    from backend.common.oxidns_editor import template_inputs
+    config = rule_space()
+    native = {'config_mode': 'native', 'native_config': 'plugins: []', 'direct_rules': ['a', 'b'], 'proxy_rules': ['b'],
+              'direct_rulesets': ['rs_off'], 'rule_actions': {'b': {'action': 'refused'}},
+              'rule_dns_parked': {'off': NXDOMAIN, 'rs_off': {'action': 'proxy'}, 'rs_off2': {'action': 'direct'}},
+              'rule_dns_follow': ['follow_off']}
+    inputs = template_inputs(native, config)
+    assert inputs['rule_actions'] == {'b': {'action': 'refused'}, 'off': NXDOMAIN}
+    assert inputs['rule_dns_parked'] == {}
+    assert inputs['direct_rules'] == ['a'] and inputs['proxy_rules'] == []
+    assert inputs['direct_rulesets'] == ['rs_off2'] and inputs['proxy_rulesets'] == ['rs_off']
+    assert inputs['rule_dns_follow'] == ['follow_off']
+    assert 'native_config' not in inputs and native['rule_dns_parked']['off'] == NXDOMAIN
+    # Re-enabled in the template, every parked choice routes again.
+    enabled = {**config, 'rule_configs': [{key: value for key, value in item.items()
+                                           if key not in ('enabled', 'library_enabled')} for item in config['rule_configs']]}
+    main = plugin(yaml.safe_load(generate_oxidns_config({**enabled, 'oxidns': {**inputs, 'config_mode': 'template'}})),
+                  'sequence_main')['args']
+    assert [entry['exec'] for entry in main if entry.get('matches', [''])[0].startswith('qname $rules_')] == [
+        'goto china_dns', 'reject', 'reject 3', 'goto proxy_dns_seq', 'goto china_dns']
+    # Without the space, an unlisted parked direct id is taken for a single rule.
+    assert template_inputs({'rule_actions': {}, 'rule_dns_parked': {'x': {'action': 'direct'}}})['direct_rules'] == ['x']
+
+
+def test_native_template_round_trip_keeps_disabled_choices():
+    from backend.common.oxidns_editor import template_inputs
+    config = rule_space()
+    template = {'direct_rules': ['a'], 'rule_actions': {'b': BLACKHOLE, 'off': NXDOMAIN}, 'proxy_rulesets': ['rs_off']}
+    inputs = template_inputs(prepare_editor(template, config), config)
+    assert inputs['rule_actions'] == template['rule_actions']
+    assert inputs['proxy_rulesets'] == ['rs_off'] and inputs['rule_dns_parked'] == {}
+
+
+def test_preview_template_keeps_current_rule_actions():
+    from backend.common.oxidns_common_routing import apply_routing
+    config = rule_space()
+    start = prepare_editor({'direct_rules': ['a'], 'rule_actions': {'b': BLACKHOLE}}, config)
+    updated, current = apply_routing(document(start), start, config, {'rule_actions': {'b': NXDOMAIN}})
+    current['native_config'] = yaml.safe_dump(updated, allow_unicode=True, sort_keys=False)
+    result = preview_template(current, {**start['template_settings'], 'worker_threads': 3}, config)['settings']
+    assert result['rule_actions'] == {'b': NXDOMAIN}
+    assert routing(result, config)['rule_actions'] == {'b': NXDOMAIN}
+    assert document(result)['runtime']['worker_threads'] == 3
+    assert not any(item['tag'] == 'cf_dns_blackhole' for item in document(result)['plugins'])
+
+
+def test_preview_template_with_union_lists_and_actions():
+    config = rule_space()
+    start = prepare_editor({'direct_rules': ['a'], 'proxy_rules': ['b'], 'rule_dns_follow': ['a', 'b']}, config)
+    # The template now blocks b and a disabled rule; the union catalog still lists b as proxy.
+    inputs = {**start['template_settings'], 'rule_actions': {'b': BLACKHOLE, 'off': NXDOMAIN},
+              'rule_dns_follow': ['a']}
+    result = preview_template(start, inputs, config)['settings']
+    assert result['proxy_rules'] == ['b']
+    assert result['rule_actions'] == {'b': BLACKHOLE}
+    assert result['rule_dns_parked'] == {'off': NXDOMAIN}
+    assert result['rule_dns_follow'] == ['a']
+    assert routing(result, config)['rule_actions'] == {'b': BLACKHOLE}
+    assert 'b' not in result['template_settings']['proxy_rules']

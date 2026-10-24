@@ -13,6 +13,7 @@ vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
 let wrapper: VueWrapper | undefined
 let group: ProxyGroup
 let rules: Array<Record<string, any>>
+let dnsState: Record<string, any>
 const requests: InternalAxiosRequestConfig[] = []
 const originalAdapter = api.defaults.adapter
 const scrollDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
@@ -28,6 +29,11 @@ beforeEach(() => {
   requests.length = 0
   group = { id: 'group-one', name: 'Primary policy', type: 'select', enabled: true, subscriptions: ['sub-one'], regex: 'HK' }
   rules = [{ id: 'rule-one', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'example.test', policy: group.name, enabled: true }]
+  dnsState = {
+    success: true, upstreams: [], mosdns: {}, rules: { 'rule-one': { state: 'follow', route: 'proxy', follow_route: 'proxy' } },
+    engine: { mode: 'template', editable: true, reason: '', default_forward: 'forward_remote', prefer_ipv4: true,
+      local_probe_active: false, oxidns_in_use: true, warnings: [], agents: [] }
+  }
   vi.spyOn(nodeApi, 'latency')
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
   api.defaults.adapter = async config => {
@@ -44,6 +50,13 @@ beforeEach(() => {
     } })
     if (config.url === '/proxy-groups') return response(config, [structuredClone(group)])
     const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data
+    if (config.url === '/rules/dns') return response(config, structuredClone(dnsState))
+    if (config.url === '/rules/compose') {
+      const created = { id: `rule-${rules.length + 1}`, itemType: 'rule', rule_type: body.source.rule_type, value: body.source.text.trim(),
+        policy: body.rule.policy, enabled: body.rule.enabled }
+      rules.unshift(created)
+      return response(config, { success: true, data: { rules: [created], library: null }, dns: {}, skipped: [], warnings: [], draft: true })
+    }
     if (config.url === '/rules') {
       if (config.method === 'post') rules.push(body)
       return response(config, config.method === 'get' ? structuredClone(rules) : { success: true })
@@ -62,6 +75,7 @@ beforeEach(() => {
     addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn()
   })))
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 })
 
 afterEach(async () => {
@@ -131,8 +145,8 @@ describe('rule match simulation', () => {
   it('preserves rule create, edit and delete after a simulation', async () => {
     const page = await renderAndSimulate()
     await clickText('添加规则')
-    await new DOMWrapper(document.querySelector<HTMLInputElement>('#rule-value')!).setValue('created.test')
-    await clickText('保存', document.querySelector('[role="dialog"]')!)
+    await new DOMWrapper(document.querySelector<HTMLTextAreaElement>('#rule-values')!).setValue('created.test')
+    await clickText('保存 1 条规则', document.querySelector('[role="dialog"]')!)
     const created = rules.find(rule => rule.value === 'created.test')!
     expect(created).toBeTruthy()
     expect(page.text()).toContain('created.test')
@@ -148,8 +162,23 @@ describe('rule match simulation', () => {
     expect(rules.some(rule => rule.id === created.id)).toBe(false)
     expect(page.text()).not.toContain('edited.test')
     const mutations = requests.filter(request => ['post', 'put', 'delete'].includes(request.method || '') && request.url !== '/rules/match-test' && request.url !== '/proxy-groups/preview-regex')
-    expect(mutations.map(request => request.method)).toEqual(['post', 'put', 'delete'])
+    expect(mutations.map(request => `${request.method} ${request.url}`)).toEqual(['post /rules/compose', `put /rules/${created.id}`, `delete /rules/${created.id}`])
+    expect(JSON.parse(mutations[0]!.data)).toMatchObject({ source: { kind: 'values', rule_type: 'DOMAIN-SUFFIX', text: 'created.test' }, rule: { policy: 'DIRECT' }, dns: 'follow' })
+    expect(JSON.parse(mutations[1]!.data)).not.toHaveProperty('dns')
     mutations.forEach(request => expect(request.headers.get('X-ConfigFlow-Profile')).toBe('simulation-profile'))
     expect(nodeApi.latency).not.toHaveBeenCalled()
+  })
+
+  it('shows the DNS handling of the matched rule next to its policy', async () => {
+    const page = await renderAndSimulate()
+    await vi.waitFor(() => expect(page.get('[data-sim-dns]').text()).toBe('DNS：跟随 · 代理 DNS'))
+    expect(requests.find(request => request.url === '/rules/dns')!.headers.get('X-ConfigFlow-Profile')).toBe('simulation-profile')
+  })
+
+  it('leaves the DNS chip out when the profile does not use OxiDNS', async () => {
+    dnsState.engine.oxidns_in_use = false
+    const page = await renderAndSimulate()
+    expect(page.find('[data-sim-dns]').exists()).toBe(false)
+    expect(page.text()).not.toContain('DNS：')
   })
 })

@@ -206,7 +206,7 @@ describe('unified OxiDNS profile settings', () => {
     resolveFirst({ data: { settings: first, ...projection(first) } }); await flushPromises(); await settleValidation()
     expect((document.querySelector(worker) as HTMLInputElement).value).toBe('6')
     await click('保存草稿')
-    expect(oxidnsApi.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ native_config: expect.stringContaining('worker_threads: 6') }), 'next-profile')
+    expect(oxidnsApi.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ native_config: expect.stringContaining('worker_threads: 6') }), 'next-profile', undefined)
   })
 
   it('allows complete editing when projection fails and retries common settings', async () => {

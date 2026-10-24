@@ -142,7 +142,7 @@ def test_query_detail_is_flat_and_read_only(monkeypatch):
     assert calls[0][0].endswith('/queries/42')
 
 
-@pytest.mark.parametrize('source', ['local', 'remote', 'fallback', 'cache', 'hosts', 'blocked',
+@pytest.mark.parametrize('source', ['local', 'remote', 'fallback', 'pinned', 'cache', 'hosts', 'blocked',
                                     'rejected', 'unknown', 'unrecorded', 'error', 'no_response', 'ipv4_preferred'])
 def test_list_preserves_agent_source_summary_without_trace_requests(monkeypatch, source):
     calls = install_transport(monkeypatch, Response({'ok': True, 'records': [
@@ -153,6 +153,11 @@ def test_list_preserves_agent_source_summary_without_trace_requests(monkeypatch,
     assert len(calls) == 1 and calls[0][0].endswith('/queries')
     assert calls[0][1]['headers']['X-ConfigFlow-Query-Sources'] == '1'
 
+
+
+def test_pinned_resolution_source_accepted():
+    # Agents name a rule's pinned upstream (cf_dns_up_*) as its own source.
+    assert monitor._record({**ROW, 'resolution_source': 'pinned'})['resolution_source'] == 'pinned'
 
 @pytest.mark.parametrize('source', ['private://credentials', 'constructor', {}, [], None])
 def test_invalid_source_summary_is_ignored_for_legacy_detail_fallback(source):
