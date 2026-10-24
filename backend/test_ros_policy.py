@@ -1,6 +1,7 @@
 """Per-rule-set RouterOS policy routing: selection, migration and compensation."""
 import copy
 import ipaddress
+import re
 from collections import Counter
 from urllib.parse import unquote
 
@@ -49,7 +50,15 @@ class MemoryROS(RouterOSDriver):
         pass
 
     def _request(self, method, path, values=None):
-        path = unquote(path)
+        path, _, query = unquote(path).partition('?')
+        if path == '/execute':
+            return self._execute(values)
+        if path == ADDRESSES + '/remove':
+            return self._remove(values)
+        if query:
+            assert method == 'GET' and path == ADDRESSES
+            key, _, value = query.partition('=')
+            return [copy.deepcopy(row) for row in self.rows[ADDRESSES] if row.get(key) == value]
         if path == SETTINGS:
             assert method == 'GET'
             return copy.deepcopy(self.settings)
@@ -98,6 +107,58 @@ class MemoryROS(RouterOSDriver):
         if point == self.lost:
             raise UncertainWrite('response lost after commit')
         return copy.deepcopy(current or {})
+
+    def _execute(self, values):
+        """Run the address-list batch script; each member counts as one PUT."""
+        match = BATCH.fullmatch(values['script'])
+        assert match and values.get('as-string') == '', values['script']
+        fields = {key: {'yes': 'true', 'no': 'false'}[bare] if bare else _unescape(quoted)
+                  for key, quoted, bare in FIELD.findall(match['params'])}
+        failed, first = 0, ''
+        existing = {(row.get('list'), row.get('address')) for row in self.rows[ADDRESSES]}
+        for address in (_unescape(item) for item in ITEM.findall(match['items'])):
+            self.writes.append(('PUT', ADDRESSES, {**fields, 'address': address}))
+            self.counts['PUT', ADDRESSES] += 1
+            point = ('PUT', ADDRESSES, self.counts['PUT', ADDRESSES])
+            if point == self.fail:
+                raise RouterError('injected failure')
+            network = ipaddress.ip_network(address, strict=False)
+            stored = str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
+            if (fields['list'], stored) in existing:
+                failed += 1
+                first = first or f'{address} failure: already have such entry'
+                continue
+            existing.add((fields['list'], stored))
+            self.next_id += 1
+            self.rows[ADDRESSES].append({'.id': f'*{self.next_id:X}', **fields, 'address': stored})
+            if point == self.lost:
+                raise UncertainWrite('response lost after commit')
+        return {'ret': f'cf-done:{failed}:{first}'}
+
+    def _remove(self, values):
+        """Comma-separated ids stop at the first missing one, like RouterOS."""
+        for row_id in values['.id'].split(','):
+            self.writes.append(('DELETE', ADDRESSES + '/' + row_id, None))
+            self.counts['DELETE', ADDRESSES] += 1
+            if ('DELETE', ADDRESSES, self.counts['DELETE', ADDRESSES]) == self.fail:
+                raise RouterError('injected failure')
+            current = next((row for row in self.rows[ADDRESSES] if row['.id'] == row_id), None)
+            if current is None:
+                raise RouterError('RouterOS POST /ip/firewall/address-list/remove 返回 HTTP 404')
+            self.rows[ADDRESSES].remove(current)
+        return []
+
+
+BATCH = re.compile(r':local n 0\n:local m ""\n:foreach a in=\{(?P<items>.*)\} do=\{:onerror e in=\{'
+                   r'/ip/firewall/address-list/add (?P<params>.*) address=\$a\} do=\{:set n \(\$n\+1\); '
+                   r':if \(\$n=1\) do=\{:set m \(\$a \. " " \. \$e\)\}\}\}\n:put \("cf-done:" \. \$n \. ":" \. \$m\)',
+                   re.DOTALL)
+FIELD = re.compile(r'([\w-]+)=(?:"((?:[^"\\]|\\.)*)"|(yes|no))')
+ITEM = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def _unescape(text):
+    return re.sub(r'\\(.)', lambda match: {'n': '\n', 'r': '\r', 't': '\t'}.get(match[1], match[1]), text)
 
 
 def desired_for(driver, selected=True, cidrs=None):
