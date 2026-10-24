@@ -20,7 +20,7 @@
       </EmptyState>
     </SectionCard>
     <template v-else>
-      <SectionCard title="设备列表" :help="listHelp" class="mb-5">
+      <SectionCard title="设备列表" :help="phone ? `${listHelp}\n\n${modeHelp}` : listHelp" class="mb-5">
         <template #actions>
           <span class="flex min-h-11 items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
             <template v-if="savingIp"><Loader2 class="size-3.5 animate-spin motion-reduce:animate-none" />正在保存…</template>
@@ -67,7 +67,7 @@
                   <span v-if="!saved(row.ip)" class="chip ml-2 font-sans">未保存</span>
                 </td>
                 <td role="cell" data-label="名称">
-                  <Input v-model="row.name" :aria-label="row.ip + ' 名称'" maxlength="80" placeholder="设备或网段名称" class="min-h-11 min-w-36"
+                  <Input v-model="row.name" :aria-label="row.ip + ' 名称'" maxlength="80" placeholder="设备或网段名称" class="min-h-11 min-w-36 max-sm:min-w-0"
                     :disabled="publishing" @blur="save(row.ip)" @keydown.enter.prevent="save(row.ip)" />
                 </td>
                 <td role="cell" data-label="DNS 策略">
@@ -102,9 +102,11 @@
         <ul v-else class="m-0 list-none divide-y divide-border/70 p-0" aria-label="OxiDNS 发布目标">
           <li v-for="agent in state.agents" :key="agent.id" class="py-2">
             <div class="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1">
-              <Checkbox :model-value="selected.includes(agent.id)" :disabled="publishing" :aria-label="`发布到 ${agent.name}`"
-                @update:model-value="value => toggle(agent.id, value === true)" />
-              <span class="min-w-0 break-all font-medium">{{ agent.name }}</span>
+              <label class="flex min-h-11 min-w-0 cursor-pointer items-center gap-3">
+                <Checkbox :model-value="selected.includes(agent.id)" :disabled="publishing" :aria-label="`发布到 ${agent.name}`"
+                  @update:model-value="value => toggle(agent.id, value === true)" />
+                <span class="min-w-0 break-all font-medium">{{ agent.name }}</span>
+              </label>
               <span class="min-w-0 break-all font-mono text-xs text-muted-foreground">{{ agent.host || '—' }}</span>
               <StatusDot :tone="agent.status === 'online' ? 'success' : 'muted'" :label="agent.status === 'online' ? '在线' : '离线'" />
               <Button v-if="deployments[agent.id]?.status === 'ready'" class="ml-auto min-h-11" :disabled="publishing" @click="activate(agent.id)">应用并启动</Button>
@@ -119,6 +121,8 @@
             <AgentStatusRow v-else-if="rejected[agent.id]" label="配置推送" status="失败" tone="danger">
               <template #notice><AgentFailureDetails :show-progress-message="false" :showDNSChecks="false" :task="rejected[agent.id]" /></template>
             </AgentStatusRow>
+            <AgentDNSChecks :checks="(deployments[agent.id] || rejected[agent.id])?.dns_checks" :checked-at="(deployments[agent.id] || rejected[agent.id])?.dns_checked_at" compact />
+            <p v-if="deployments[agent.id]?.status === 'ready'" class="mb-0 mt-1 text-xs text-muted-foreground">待激活的是已上传的配置快照，不包含之后保存的草稿修改。</p>
           </li>
         </ul>
         <div v-if="state.agents.length" class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
@@ -134,7 +138,8 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { useMediaQuery } from '@vueuse/core'
 import { ArrowLeft, Check, Loader2, MonitorSmartphone, Plus, RefreshCw, Search, Trash2, Upload } from '@lucide/vue'
 import { agentApi, clientDeviceApi, oxidnsMonitorApi, type ClientDevice, type ClientDeviceMode, type ClientDevicesState } from '@/api'
 import { Button } from '@/components/ui/button'
@@ -152,6 +157,7 @@ import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import { createDeploymentId, deploymentNeedsNotice, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import { oxidnsMonitorPath } from '@/composables/useOxiDNSDevices'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
@@ -159,12 +165,12 @@ import { normalizeClientRange } from '@/lib/oxidnsClientRange'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 
 const pageHelp = '为局域网设备命名，并按需设置 OxiDNS 的 DNS 策略。名称在本配置空间共用，Mihomo 连接、数据统计和 OxiDNS 查询记录都按它显示。'
-const listHelp = '修改名称立即生效，不需要发布。DNS 策略保存为草稿，发布到 OxiDNS 后生效。名称和 DNS 策略都清空后，设备从列表移除。'
+const listHelp = '修改名称立即生效，不需要发布。DNS 策略保存为草稿，发布到 OxiDNS 后生效；已启用策略路由时，智能分流 IPv4 的变化还需在上游路由页重新发布。名称和 DNS 策略都清空后，设备从列表移除。'
 const modeHelp = [
-  '默认：按 DNS 规则处理。',
-  '智能分流：同样按 DNS 规则处理，可让「直连」网段中的单个设备例外；IPv4 地址还会作为上游路由「策略路由」的来源。',
+  '默认：没有单独策略。地址落在已设策略的网段内时沿用该网段，否则按 DNS 规则处理。',
+  '智能分流：按 DNS 规则处理，可让「直连」网段中的单个设备例外；IPv4 地址还是上游路由「策略路由」的来源，改动后需在上游路由页重新发布。',
   '直连：用本地 DNS 上游解析全部域名；是否走代理仍取决于路由器分流。',
-  '范围重叠时，单个 IP 优先，其次是更小的网段，与添加顺序无关。',
+  '设了策略的范围重叠时，单个 IP 优先，其次是更小的网段，与添加顺序无关。',
 ].join('\n\n')
 const rangeHelp = [
   '支持单个 IPv4 / IPv6 和 CIDR 网段，例如 192.168.50.50、192.168.50.0/24，网段会整理为标准写法。',
@@ -174,8 +180,11 @@ const publishHelp = '只发布到勾选的 OxiDNS。未勾选的设备保持现�
 
 const route = useRoute()
 const router = useRouter()
+const agentOf = (value: unknown) => typeof value === 'string' ? value : ''
 /** 从 OxiDNS 面板进入时固定使用该设备绑定的配置空间，不切换全局空间 */
-const fromAgent = typeof route.query.agent === 'string' ? route.query.agent : ''
+const fromAgent = ref(agentOf(route.query.agent))
+// Matches the breakpoint where .cf-mobile-records hides the table header and its help.
+const phone = useMediaQuery('(width < 640px)')
 const state = ref<ClientDevicesState | null>(null)
 const rows = ref<ClientDevice[]>([])
 const loading = ref(false)
@@ -216,25 +225,34 @@ function adopt(data: ClientDevicesState) {
   // here stay until they get a name or a policy; rows removed elsewhere leave.
   const local = rows.value.flatMap(row => {
     const next = latest.get(row.ip), previous = before.get(row.ip)
-    const edited = !previous || row.name.trim() !== previous.name || row.mode !== previous.mode
     if (!next) return previous ? [] : [row]
-    return [edited && previous ? row : { ...next }]
+    if (!previous) return [{ ...next }]
+    // Only the fields edited here stay local; the rest follows the server, so a
+    // later save never sends back a value changed elsewhere meanwhile.
+    return [{ ...next, name: row.name.trim() !== previous.name ? row.name : next.name, mode: row.mode !== previous.mode ? row.mode : next.mode }]
   })
   const listed = new Set(local.map(row => row.ip))
   rows.value = [...local, ...data.devices.filter(row => !listed.has(row.ip)).map(row => ({ ...row }))]
 }
 
-async function load() {
+/** keep：保留本页未保存的修改，只合并最新数据（单行冲突后使用） */
+async function load(keep = false) {
   loading.value = true
   error.value = ''
   try {
-    const { data } = await clientDeviceApi.get({ agentId: fromAgent || undefined })
+    const { data } = await clientDeviceApi.get({ agentId: fromAgent.value || undefined })
     if (disposed) return
+    const merge = keep && data.profile_id === state.value?.profile_id
+    if (merge) {
+      adopt(data)
+      return
+    }
+    for (const ip of Object.keys(failures)) delete failures[ip]
     rows.value = []
     state.value = null
     adopt(data)
     const online = data.agents.filter(agent => agent.status === 'online').map(agent => agent.id)
-    selected.value = fromAgent ? data.agents.filter(agent => agent.id === fromAgent).map(agent => agent.id) : online
+    selected.value = fromAgent.value ? data.agents.filter(agent => agent.id === fromAgent.value).map(agent => agent.id) : online
     for (const agent of data.agents) if (agent.deployment) track(agent.id, agent.deployment, false)
     void loadRecorder(data)
   } catch (failure) {
@@ -247,7 +265,7 @@ async function load() {
 async function loadRecorder(data: ClientDevicesState) {
   // Query records come from an online OxiDNS, preferably the one this page was opened from.
   const online = data.agents.filter(item => item.status === 'online')
-  const agent = online.find(item => item.id === fromAgent) || online[0]
+  const agent = online.find(item => item.id === fromAgent.value) || online[0]
   queryAgent.value = agent?.id || ''
   recorder.value = ''
   queryHint.value = agent ? '' : '没有在线的 OxiDNS，可手动添加 IP 或网段。'
@@ -297,6 +315,7 @@ async function remove(row: ClientDevice) {
   if (previous && !await confirmDanger(`将清除「${previous.name || row.ip}」的名称${previous.mode ? '和 DNS 策略' : ''}。${previous.mode ? 'DNS 策略的修改需要发布后生效。' : ''}`,
     { title: '移除客户端设备', confirmText: '移除' })) return
   if (!previous) {
+    delete failures[row.ip]
     rows.value = rows.value.filter(item => item.ip !== row.ip)
     return
   }
@@ -316,9 +335,9 @@ async function saveNow(ip: string) {
   if (!row || !state.value || disposed) return
   const previous = saved(ip) || { name: '', mode: '' as ClientDeviceMode }
   const device = { ip, name: row.name.trim(), mode: row.mode }
+  delete failures[ip]
   if (device.name === previous.name && device.mode === previous.mode) return
   savingIp.value = ip
-  delete failures[ip]
   try {
     const { data } = await clientDeviceApi.save(state.value.profile_id, device, { name: previous.name, mode: previous.mode })
     if (disposed) return
@@ -328,7 +347,10 @@ async function saveNow(ip: string) {
     if (disposed) return
     if (failure?.response?.status === 409) {
       notify.error('设备已在其他页面修改', messageOf(failure))
-      await load()
+      // Drop only this row's edit; other rows keep what is still being typed.
+      Object.assign(row, saved(ip) || { name: '', mode: '' })
+      if (!saved(ip)) rows.value = rows.value.filter(item => item.ip !== ip)
+      await load(true)
     } else {
       failures[ip] = messageOf(failure)
     }
@@ -343,8 +365,9 @@ function toggle(id: string, value: boolean) {
 
 async function publish() {
   await queue
-  if (!state.value || publishing.value || Object.keys(failures).length) {
-    if (Object.keys(failures).length) notify.error('有设备未保存', '先处理保存失败的设备，再发布。')
+  const failing = rows.value.some(row => failures[row.ip])
+  if (!state.value || publishing.value || failing) {
+    if (failing) notify.error('有设备未保存', '先处理保存失败的设备，再发布。')
     return
   }
   const targets = state.value.agents.filter(agent => selected.value.includes(agent.id))
@@ -365,8 +388,8 @@ async function publish() {
         if (failure.response?.data?.deployment_id) endSubmission(agent.id, deploymentId, failure.response.data)
         else if (!failure.response || failure.response.status >= 500) endSubmission(agent.id, deploymentId, 'unknown')
         else if (!endSubmission(agent.id, deploymentId, 'rejected')) rejected[agent.id] = { ...failure.response.data, error: messageOf(failure) }
-        // A rejected guard means the draft changed; later devices would be rejected too.
-        if (failure.response?.status === 409) {
+        // A changed draft rejects every device; a busy or rolled-back device fails alone.
+        if (failure.response?.data?.code === 'draft_changed') {
           notify.error('发布已停止', messageOf(failure))
           return
         }
@@ -381,6 +404,14 @@ onBeforeRouteLeave(async () => {
   await queue
   return !unsaved().length || await confirm('有设备尚未保存，离开会丢失这些修改。', { title: '离开客户端设备', confirmText: '放弃修改' })
 })
-onMounted(load)
+onBeforeRouteUpdate(async to => {
+  const next = agentOf(to.query.agent)
+  if (next === fromAgent.value) return
+  await queue
+  if (unsaved().length && !await confirm('有设备尚未保存，切换后会丢失这些修改。', { title: '离开客户端设备', confirmText: '放弃修改' })) return false
+  fromAgent.value = next
+  void load()
+})
+onMounted(() => load())
 onUnmounted(() => { disposed = true })
 </script>

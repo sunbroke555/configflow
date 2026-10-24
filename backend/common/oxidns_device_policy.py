@@ -67,7 +67,8 @@ def normalize_policies(value):
             raise OxidnsSettingsError('设备备注最多 80 个字符，不能包含换行或控制字符。')
         if mode not in ('smart', 'direct'):
             raise OxidnsSettingsError('设备策略必须为智能分流或直连。')
-        result.append({'ip': ip, 'name': name.strip(), 'mode': mode})
+        # Older versions accepted DEL in names; drop it so the row stays editable.
+        result.append({'ip': ip, 'name': name.replace('\x7f', '').strip(), 'mode': mode})
     return result
 
 

@@ -137,3 +137,25 @@ def test_an_oxidns_agent_opens_its_bound_profile(oxidns_app):
     assert state['profile_id'] == 'office' and state['agents'][0]['id'] == dns and state['agents'][0]['deployment'] is None
     assert client.get(f'/api/client-devices?agent={agent("mihomo")}').status_code == 404
     assert client.get('/api/client-devices?agent=missing').status_code == 404
+
+
+def test_a_legacy_name_with_a_delete_character_stays_editable(oxidns_app):
+    app, repo = oxidns_app
+    repo.update_profile_transaction('office', lambda config: config['oxidns'].update(
+        device_policies=[{'ip': '192.0.2.5', 'name': 'TV\x7f', 'mode': 'direct'}]))
+    client = app.test_client()
+    assert client.get(URL).get_json()['devices'] == [{'ip': '192.0.2.5', 'name': 'TV', 'mode': 'direct'}]
+    assert client.put(URL, json=change('192.0.2.5', '电视', 'direct', 'TV', 'direct')).status_code == 200
+    assert client.put(URL, json=change('192.0.2.5', '电视', '', '电视', 'direct')).status_code == 200
+
+
+def test_a_publish_with_a_changed_draft_is_marked_for_every_target(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    manager = get_agent_manager()
+    dns = agent()
+    monkeypatch.setattr(manager, 'begin_deployment', lambda *args: (_ for _ in ()).throw(AssertionError('stale draft must not deploy')))
+    stale = app.test_client().get(URL).get_json()['oxidns_revision']
+    repo.update_profile_transaction('office', lambda config: config['oxidns'].update(worker_threads=8))
+    response = app.test_client().post(f'/api/agents/{dns}/push-config',
+                                      json={'expected_profile_id': 'office', 'expected_oxidns_revision': stale})
+    assert response.status_code == 409 and response.get_json()['code'] == 'draft_changed'

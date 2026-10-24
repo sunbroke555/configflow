@@ -1376,7 +1376,8 @@ def push_config_to_agent(agent_id):
             from backend.common.oxidns_device_policy import revision
             if service_type != 'oxidns' or data.get('expected_profile_id') != profile_id or \
                     data.get('expected_oxidns_revision') != revision(config_data.get('oxidns', {})):
-                return jsonify(success=False, message='配置或设备绑定已改变，请重新载入设备策略后发布。'), 409
+                # The code tells multi-device publishers that every target would be rejected.
+                return jsonify(success=False, code='draft_changed', message='配置或设备绑定已改变，请重新载入后发布。'), 409
         if service_type == 'surge':
             content = generate_surge_config(config_data, base_url=base_url)
             restart = data.get('restart', True)

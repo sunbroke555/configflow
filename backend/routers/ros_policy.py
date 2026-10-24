@@ -129,7 +129,7 @@ def smart_sources(rows, gateway):
             networks = subtract(networks, [network])
     networks = subtract(networks, [ipaddress.IPv4Network(gateway + '/32')])
     if len(networks) > 4096:
-        raise RouterError('OxiDNS 来源例外产生过多网段，请简化设备策略')
+        raise RouterError('OxiDNS 来源例外产生过多网段，请简化客户端设备的 DNS 策略')
     return [str(network) for network in networks]
 
 
@@ -159,7 +159,7 @@ def inspect_desired(config, router, desired, content_loader=None):
             raise RouterError(policies['reason'])
         result['sources'] = smart_sources(policies['policies'], desired.get('proxy_gateway') or '')
         if not result['sources']:
-            raise RouterError('请先在当前配置空间的 OxiDNS 设备策略中保存至少一个智能分流 IPv4 地址或网段')
+            raise RouterError('请先在「来源设备」或「当前配置 → 客户端设备」中把至少一个 IPv4 地址或网段设为智能分流')
     except (RouterError, OxidnsSettingsError, ValueError) as error:
         result['error'] = str(error)
     return result

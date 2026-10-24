@@ -140,6 +140,68 @@ describe('client devices page', () => {
     expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('电视机')
   })
 
+  it('never sends back a DNS policy that changed elsewhere while the name was being edited', async () => {
+    const { wrapper } = await render()
+    await nameInput(wrapper, '192.0.2.9').setValue('手机2')
+    // Another page sets a policy for .9, then another row is saved here.
+    stored = stored.map(row => row.ip === '192.0.2.9' ? { ...row, mode: 'direct' } : row)
+    await nameInput(wrapper, '192.0.2.5').setValue('客厅')
+    await nameInput(wrapper, '192.0.2.5').trigger('blur')
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.9').element.value).toBe('手机2')
+    await nameInput(wrapper, '192.0.2.9').trigger('blur')
+    await flushPromises()
+    expect(clientDeviceApi.save).toHaveBeenLastCalledWith('office', { ip: '192.0.2.9', name: '手机2', mode: 'direct' }, { name: '手机', mode: 'direct' })
+  })
+
+  it('keeps other rows being edited when one row conflicts', async () => {
+    const { wrapper } = await render()
+    await wrapper.get('#client-device-ip').setValue('192.0.2.30')
+    await button(wrapper, '添加').trigger('click')
+    await nameInput(wrapper, '192.0.2.9').setValue('typing')
+    vi.mocked(clientDeviceApi.save).mockRejectedValueOnce({ response: { status: 409, data: { message: '此设备已在其他页面修改，请重新载入后再保存。' } } })
+    stored = stored.map(row => row.ip === '192.0.2.5' ? { ...row, name: '电视机' } : row)
+    await nameInput(wrapper, '192.0.2.5').setValue('客厅')
+    await nameInput(wrapper, '192.0.2.5').trigger('blur')
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('电视机')
+    expect(nameInput(wrapper, '192.0.2.9').element.value).toBe('typing')
+    expect(wrapper.find('input[aria-label="192.0.2.30 名称"]').exists()).toBe(true)
+    expect(confirm).not.toHaveBeenCalled()
+  })
+
+  it('clears a save failure when the edit is undone, reloaded or the unsaved row is removed', async () => {
+    const { wrapper } = await render()
+    const fail = () => vi.mocked(clientDeviceApi.save).mockRejectedValueOnce({ response: { status: 500, data: { message: '网络中断' } } })
+    fail()
+    await nameInput(wrapper, '192.0.2.5').setValue('新名')
+    await nameInput(wrapper, '192.0.2.5').trigger('blur')
+    await flushPromises()
+    await nameInput(wrapper, '192.0.2.5').setValue('电视')
+    await button(wrapper, '重试').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('网络中断')
+
+    fail()
+    await nameInput(wrapper, '192.0.2.5').setValue('新名')
+    await nameInput(wrapper, '192.0.2.5').trigger('blur')
+    await flushPromises()
+    await wrapper.get('[aria-label="重新载入"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('网络中断')
+
+    fail()
+    await wrapper.get('#client-device-ip').setValue('192.0.2.30')
+    await button(wrapper, '添加').trigger('click')
+    await nameInput(wrapper, '192.0.2.30').setValue('新设备')
+    await nameInput(wrapper, '192.0.2.30').trigger('blur')
+    await flushPromises()
+    await wrapper.get('[aria-label="移除 192.0.2.30"]').trigger('click')
+    await button(wrapper, '发布到 2 台 OxiDNS').trigger('click')
+    await flushPromises()
+    expect(agentApi.pushConfig).toHaveBeenCalled()
+  })
+
   it('keeps other failures on the row with a retry', async () => {
     const { wrapper } = await render()
     vi.mocked(clientDeviceApi.save).mockRejectedValueOnce({ response: { status: 400, data: { message: '设备备注最多 80 个字符' } } })
@@ -172,6 +234,15 @@ describe('client devices page', () => {
     expect(router.currentRoute.value.path).toBe('/agents/two/oxidns')
   })
 
+  it('switches to the active profile when the navigation drops the Agent', async () => {
+    const { wrapper, router } = await render('/client-devices?agent=two')
+    await router.push('/client-devices')
+    await flushPromises()
+    expect(clientDeviceApi.get).toHaveBeenLastCalledWith({ agentId: undefined })
+    expect(wrapper.text()).not.toContain('返回 OxiDNS 面板')
+    expect(button(wrapper, '发布到 2 台 OxiDNS').exists()).toBe(true)
+  })
+
   it('publishes the saved draft to each selected OxiDNS with the profile guard', async () => {
     const { wrapper } = await render()
     await button(wrapper, '发布到 2 台 OxiDNS').trigger('click')
@@ -183,12 +254,38 @@ describe('client devices page', () => {
 
   it('stops publishing when the draft changed after loading', async () => {
     const { wrapper } = await render()
-    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 409, data: { message: '配置或设备绑定已改变，请重新载入设备策略后发布。' } } })
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 409, data: { code: 'draft_changed', message: '配置或设备绑定已改变，请重新载入后发布。' } } })
     await button(wrapper, '发布到 2 台 OxiDNS').trigger('click')
     await flushPromises()
     expect(agentApi.pushConfig).toHaveBeenCalledTimes(1)
-    expect(notify.error).toHaveBeenCalledWith('发布已停止', '配置或设备绑定已改变，请重新载入设备策略后发布。')
+    expect(notify.error).toHaveBeenCalledWith('发布已停止', '配置或设备绑定已改变，请重新载入后发布。')
     expect(wrapper.text()).toContain('配置或设备绑定已改变')
+  })
+
+  it('continues with the next OxiDNS when one device is busy', async () => {
+    const { wrapper } = await render()
+    vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 409, data: { message: 'Agent update is in progress' } } })
+    await button(wrapper, '发布到 2 台 OxiDNS').trigger('click')
+    await flushPromises()
+    expect(vi.mocked(agentApi.pushConfig).mock.calls.map(call => call[0])).toEqual(['one', 'two'])
+    expect(notify.error).not.toHaveBeenCalledWith('发布已停止', expect.anything())
+    expect(wrapper.text()).toContain('Agent update is in progress')
+  })
+
+  it('shows DNS checks and explains what an uploaded snapshot contains', async () => {
+    vi.mocked(clientDeviceApi.get).mockResolvedValue(response(state(undefined, { agents: [{ ...agents[0], deployment: {
+      deployment_id: 'd1', status: 'ready', dns_checks: [{ name: 'DNS 上游', level: 'warn', message: '上游解析有超时', fix: '检查上游连接' }] } as any }] })))
+    const { wrapper } = await render()
+    expect(wrapper.text()).toContain('上游解析有超时')
+    expect(wrapper.text()).toContain('待激活的是已上传的配置快照，不包含之后保存的草稿修改。')
+    expect(button(wrapper, '应用并启动').exists()).toBe(true)
+  })
+
+  it('toggles a publish target from its name', async () => {
+    const { wrapper } = await render()
+    await wrapper.findAll('label').find(label => label.text() === 'DNS 1')!.trigger('click')
+    await flushPromises()
+    expect(button(wrapper, '发布到 1 台 OxiDNS').exists()).toBe(true)
   })
 
   it('publishes with the revision returned by the latest save', async () => {
