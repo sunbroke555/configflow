@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DNS_COPY, chipClass, choiceLabel, defaultDnsChoice, dnsChip, dnsLabel, dnsWarnings, followRoute, parsePastedRules,
+  DNS_COPY, chipClass, choiceLabel, defaultDnsChoice, dnsChip, dnsLabel, dnsWarnings, followRoute, parsePastedRules, ruleValueError, SUPPORTED_RULE_TYPES,
   pasteToRuleset, pinnedWithheld, publishNote, ruleSetPayload, rulePayload, splitPaste, stateValue, upstreamOptions
 } from '@/lib/ruleDns'
 import type { RuleDnsEngine } from '@/types'
@@ -38,7 +38,45 @@ describe('defaultDnsChoice', () => {
   })
 })
 
+describe('rule value validation', () => {
+  it.each([['DST-PORT', '80,443'], ['DOMAIN-KEYWORD', 'foo,bar']])('rejects comma-separated direct %s values: %s', (kind, value) => {
+    expect(ruleValueError(kind, value)).toContain('值不能包含逗号')
+  })
+  it.each([
+    ['DOMAIN-SHUFFIX', 'tmdb.org'], ['DOMAIN-SUFFIX', '+.tmdb.org'], ['DOMAIN', '999.1.1.1'],
+    ['IP-CIDR', '192.0.2.0/024'], ['IP-CIDR6', '::/00'], ['IP-CIDR', '+.tmdb.org'], ['IP-CIDR6', ':::/64'], ['IP-CIDR', '192.0.2.1'],
+    ['DST-PORT', '65536'], ['SRC-PORT', '90-80'], ['IN-PORT', 'https'], ['DSCP', '64'],
+    ['NETWORK', 'icmp'], ['MATCH', 'tmdb.org'], ['DOMAIN', '']
+  ])('rejects invalid %s values: %s', (kind, value) => { expect(ruleValueError(kind, value)).not.toBe('') })
+  it.each([
+    ['IP-CIDR', '2001:db8::/32'], ['IP-CIDR6', '192.0.2.0/24'], ['IP-CIDR6', '::ffff:192.0.2.1/128'],
+    ['IN-PORT', '0/443/8000-9000/65535'], ['UID', '4294967295'], ['DSCP', '*'], ['MATCH', ''],
+    ['DOMAIN', '中文.example'], ['DOMAIN-WILDCARD', '*.example.com'], ['NETWORK', 'TCP']
+  ])('accepts valid %s values: %s', (kind, value) => { expect(ruleValueError(kind, value)).toBe('') })
+  it('keeps the complete supported vocabulary separate from the short picker', () => {
+    for (const kind of ['PROCESS-PATH-REGEX', 'SRC-GEOIP', 'REMATCH-NAME', 'SUB-RULE', 'DOMAIN-REGEX']) expect(SUPPORTED_RULE_TYPES.has(kind)).toBe(true)
+  })
+})
+
 describe('parsePastedRules', () => {
+  it('ignores both comment styles without losing source line numbers', () => {
+    const result = parsePastedRules('// comment\n  # comment\nDOMAIN,example.com', 'DOMAIN')
+    expect(result.invalid).toEqual([])
+    expect(result.count).toBe(1)
+    expect(result.rows).toEqual([{ line: 3, rule_type: 'DOMAIN', value: 'example.com', no_resolve: false }])
+  })
+  it('keeps MATCH payload empty when a pasted line includes a policy', () => {
+    const result = parsePastedRules('MATCH,DIRECT', 'DOMAIN')
+    expect(result.rows).toEqual([{ line: 1, rule_type: 'MATCH', value: '', no_resolve: false }])
+    expect(result.ignored).toEqual([{ line: 1, value: 'DIRECT' }])
+    expect(result.invalid).toEqual([])
+  })
+  it('rejects misspelled types while preserving full advanced rule values', () => {
+    const result = parsePastedRules('DOMAIN-SHUFFIX,tmdb.org\nDOMAIN-REGEX,^(foo, bar)\nAND,((DOMAIN,x.test),(NETWORK,tcp))\nPROCESS-NAME,curl', 'DOMAIN')
+    expect(result.invalid).toEqual([{ line: 1, text: 'DOMAIN-SHUFFIX,tmdb.org', message: '不支持的规则类型 DOMAIN-SHUFFIX' }])
+    expect(result.rows.map(row => row.value)).toEqual(['^(foo, bar)', '((DOMAIN,x.test),(NETWORK,tcp))', 'curl'])
+    expect(result.ignored).toEqual([])
+  })
   it('reads prefixes, shorthand and comments, keeps no-resolve and ignores trailing policies', () => {
     const result = parsePastedRules([
       '# comment', '', 'openai.com', 'DOMAIN,api.example.org', 'IP-CIDR,1.2.3.0/24,no-resolve', '+.suffix.test',

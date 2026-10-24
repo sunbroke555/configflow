@@ -179,7 +179,15 @@ def _assert_raw_storage_and_mihomo_delivery(client, repository, rule, source, no
     assert client.get(path).get_data(as_text=True) == source
     delivered = client.get(path, query_string={'target': 'mihomo'})
     assert delivered.status_code == 200
-    assert delivered.get_data(as_text=True) == normalized
+    if rule.get('format') == 'yaml':
+        actual = delivered.get_data(as_text=True)
+        assert yaml.safe_load(actual) == yaml.safe_load(normalized)
+        assert not yaml.compose(actual).value[0][1].flow_style
+        for line in source.splitlines():
+            if line.startswith('#'):
+                assert line in actual
+    else:
+        assert delivered.get_data(as_text=True) == normalized
     assert cache.read_text() == source
     assert next(item for item in repository.get_shared()['rule_library'] if item['id'] == rule['id'])['content'] == source
 
@@ -238,3 +246,58 @@ def test_classical_malformed_payload_is_still_rejected_before_any_save(delivery)
         'rule': {'policy': 'DIRECT'}, 'dns': 'default',
     }).status_code == 400
     assert repository.export_all() == original
+
+
+@pytest.mark.parametrize('behavior,payload', [
+    ('classical', ['+.tmdb.org', '192.0.2.1']),
+    ('domain', ['+.tmdb.org']), ('ipcidr', ['192.0.2.0/24']),
+])
+@pytest.mark.parametrize('declared', [None, '', 'yaml', 'text'])
+def test_provider_format_infers_handwritten_yaml_only_when_unspecified(delivery, behavior, payload, declared):
+    client, repository, rule = delivery
+    source = yaml.safe_dump({'payload': payload}, sort_keys=False)
+    rule.update(content=source, behavior=behavior)
+    rule.pop('format', None)
+    if declared is not None:
+        rule['format'] = declared
+    repository.save_shared({'rule_library': [rule]})
+    before = deepcopy(repository.export_all())
+    config = repository.get_compat_config('default')
+    main = yaml.safe_load(generate_mihomo_config(config, preflight_providers=False))
+    expected = declared or 'yaml'
+    assert main['rule-providers']['Mixed']['format'] == expected
+    downloads = get_mihomo_ruleset_downloads(config)
+    assert downloads[0]['local_path'].endswith('.list' if expected == 'text' else '.yaml')
+    assert repository.export_all() == before
+    assert client.get('/api/rules/local/Mixed').get_data(as_text=True) == source
+
+
+@pytest.mark.parametrize('behavior,raw,expected', [
+    ('classical', '+.tmdb.org', 'DOMAIN-SUFFIX,tmdb.org'),
+    ('domain', '+.tmdb.org', '+.tmdb.org'),
+    ('ipcidr', '192.0.2.0/24', '192.0.2.0/24'),
+])
+@pytest.mark.parametrize('source_type', ['content', 'url'])
+def test_mihomo_flow_yaml_is_expanded_only_in_marked_response(delivery, monkeypatch, behavior, raw, expected, source_type):
+    client, repository, rule = delivery
+    source = '# original\npayload: ["' + raw + '"] # keep\n'
+    rule.update(content=source, source_type=source_type, behavior=behavior, format='yaml', url='https://rules.test/payload.yaml')
+    repository.save_shared({'rule_library': [rule]})
+    response = requests.Response()
+    response.status_code = 200
+    response.encoding = 'utf-8'
+    response._content = source.encode()
+    monkeypatch.setattr('backend.routes.rules.request_rule', lambda *_a, **_k: response)
+    config = repository.get_compat_config('default')
+    main = yaml.safe_load(generate_mihomo_config(config, preflight_providers=False))
+    provider = main['rule-providers']['Mixed']
+    assert parse_qs(urlsplit(provider['url']).query)['target'] == ['mihomo']
+    assert get_mihomo_ruleset_downloads(config)[0]['url'] == provider['url']
+    delivered = client.get('/api/rules/local/Mixed?target=mihomo').get_data(as_text=True)
+    assert yaml.safe_load(delivered)['payload'] == [expected]
+    assert not yaml.compose(delivered).value[0][1].flow_style
+    assert '# original' in delivered and '# keep' in delivered
+    for target in ('', '?target=oxidns', '?target=mosdns', '?target=surge'):
+        assert client.get('/api/rules/local/Mixed' + target).get_data(as_text=True) == source
+    assert repository.get_shared()['rule_library'][0]['content'] == source
+    assert (repository.shared_rules_dir() / rule_cache_filename(rule)).read_text() == source

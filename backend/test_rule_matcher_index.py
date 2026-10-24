@@ -17,7 +17,7 @@ def _ruleset(rule_id="set", **overrides):
 
 
 def _linear_match(configs, contents, query):
-    """Pre-index implementation, including its metadata and line parser."""
+    """Linear matching with the same behavior-aware source interpretation."""
     for priority, item in enumerate(configs, 1):
         if not item.get("enabled", True) or not item.get("library_enabled", True):
             continue
@@ -32,8 +32,8 @@ def _linear_match(configs, contents, query):
                     "item_type": "rule", "behavior": "classical",
                 }
         elif item_type == "ruleset":
-            for line in contents.get(item["id"], "").splitlines():
-                parsed = parse_rule_line(line)
+            for value, line in rule_matcher._iter_ruleset_lines(contents.get(item["id"], ""), item.get('format', 'text')):
+                parsed = rule_matcher._parse_ruleset_line(value, item.get('behavior', 'classical'))
                 if parsed and match_query(query, *parsed):
                     name = item.get("name", "规则集")
                     return {
@@ -74,7 +74,7 @@ payload:
   - 'DOMAIN-REGEX,.*'
   - 'localhost' # preserve original displayed line
 """}
-    configs = [_ruleset("disabled", enabled=False), _ruleset("mixed")]
+    configs = [_ruleset("disabled", enabled=False), _ruleset("mixed", format='yaml')]
     matcher = RuleConfigMatcher(configs, [], lambda item, _: contents.get(item["id"], ""))
     assert matcher.match(query) == _linear_match(configs, contents, query)
 
@@ -82,17 +82,14 @@ payload:
 @pytest.mark.parametrize("lines,query,expected", [
     (["DOMAIN-SUFFIX,com", "DOMAIN,a.example.com"], "a.example.com", "DOMAIN-SUFFIX,com"),
     (["DOMAIN,a.example.com", "DOMAIN-SUFFIX,com"], "a.example.com", "DOMAIN,a.example.com"),
-    (["keyword:example", "+.example.com"], "a.example.com", "keyword:example"),
-    (["+.example.com", "keyword:example"], "a.example.com", "+.example.com"),
-    (["regexp:example", "*.example.com"], "a.example.com", "regexp:example"),
-    (["*.example.com", "regexp:example"], "a.example.com", "*.example.com"),
-    ([".example.com", "*.example.com"], "a.example.com", ".example.com"),
-    (["*.example.com", ".example.com"], "a.example.com", "*.example.com"),
-    (["*.example.com", ".example.com"], "a.b.example.com", ".example.com"),
-    (["full:Example.com", "DOMAIN,example.com"], "example.com", "full:Example.com"),
+    (["DOMAIN-KEYWORD,example", "+.example.com"], "a.example.com", "DOMAIN-KEYWORD,example"),
+    (["+.example.com", "DOMAIN-KEYWORD,example"], "a.example.com", "+.example.com"),
+    (["DOMAIN-REGEX,example", "DOMAIN-SUFFIX,example.com"], "a.example.com", "DOMAIN-REGEX,example"),
+    (["DOMAIN-SUFFIX,example.com", "DOMAIN-REGEX,example"], "a.example.com", "DOMAIN-SUFFIX,example.com"),
+    (["full:Example.com", "DOMAIN,example.com"], "example.com", "DOMAIN,example.com"),
     (["IP-CIDR,192.0.2.1/24", "IP-CIDR,192.0.2.0/25", "IP,192.0.2.1"],
      "192.0.2.1", "IP-CIDR,192.0.2.1/24"),
-    (["IP,192.0.2.1", "IP-CIDR6,192.0.2.0/24"], "192.0.2.1", "IP,192.0.2.1"),
+    (["192.0.2.1", "IP-CIDR6,192.0.2.0/24"], "192.0.2.1", "192.0.2.1"),
     (["IP-CIDR,::/0", "IP-CIDR6,2001:db8::/32"], "2001:db8::1", "IP-CIDR,::/0"),
     (["IP,invalid", "IP-CIDR,bad", "IP-CIDR6,fe80::/16"], "fe80::1%eth0", "IP-CIDR6,fe80::/16"),
 ])
@@ -142,13 +139,11 @@ def test_direct_rules_retain_query_classification_and_regex_semantics(rule_type,
     assert matcher.match(query) == _linear_match(configs, {}, query)
 
 
-def test_indexed_regex_retains_case_normalization_and_original_line():
-    # Existing matching lowercases the pattern too; do not change that behavior
-    # incidentally while compiling and indexing rules.
-    content = r"REGEX,^\D+$"
+def test_classical_regex_preserves_regex_escapes_and_original_line():
+    content = r"DOMAIN-REGEX,^\D+$"
     matcher = RuleConfigMatcher([_ruleset()], [], lambda *_: content)
-    assert matcher.match("123")["matched_line"] == content
-    assert matcher.match("abc") is None
+    assert matcher.match("abc")["matched_line"] == content
+    assert matcher.match("123") is None
 
 
 @pytest.mark.parametrize("seed", range(12))
@@ -255,7 +250,7 @@ def test_shared_library_does_not_reuse_item_dependent_loader_by_default():
 
 
 @pytest.mark.parametrize('reverse', [False, True])
-def test_opt_in_reuse_preserves_per_reference_policy_order_and_metadata(reverse):
+def test_opt_in_reuse_separates_behavior_and_preserves_reference_metadata(reverse):
     library = {'id': 'shared', 'name': 'shared-source'}
     configs = [
         _ruleset('first', name='first display', library_rule_id='shared', policy='DIRECT', behavior='domain'),
@@ -266,11 +261,11 @@ def test_opt_in_reuse_preserves_per_reference_policy_order_and_metadata(reverse)
     contents = {item['id']: '+.example.com\nIP-CIDR,192.0.2.0/24' for item in configs}
     loader = Mock(return_value=contents['first'])
     matcher = RuleConfigMatcher(configs, [library], loader, index_key=_library_key)
-    # A miss visits both references, but must load their shared source only once.
+    # Different behavior parses the same source into distinct indexes.
     assert matcher.match('absent.test') is None
     for query in ('example.com', 'sub.example.com', '192.0.2.99'):
         assert matcher.match(query) == _linear_match(configs, contents, query)
-    loader.assert_called_once_with(configs[0], library)
+    assert loader.call_count == 2
 
 
 def test_reuse_is_scoped_to_matcher_and_source_identity_not_display_name():
@@ -362,12 +357,12 @@ def test_streamed_empty_and_mixed_newlines_match_splitlines(content):
 @pytest.mark.parametrize('comment', ['中文', '😀', '\ud800', '\udfff', '\ud800\udc00', '\x00'])
 def test_compact_sources_preserve_unicode_and_malformed_comment_text(comment):
     lines = [f'  DOMAIN-SUFFIX,item{i}.example # {comment}  ' for i in range(300)]
-    content = '\n'.join(lines)
-    configs = [_ruleset()]
-    matcher = RuleConfigMatcher(configs, [], lambda *_: content)
-    for query in ('item0.example', 'sub.item149.example', 'item299.example', 'absent.test'):
-        assert matcher.match(query) == _linear_match(configs, {'set': content}, query)
-    index = next(iter(matcher._indexes.values()))
+    # Storage supports arbitrary original source text independently of whether
+    # a provider parser accepts inline comments in a particular file format.
+    index = rule_matcher._RuleIndex(
+        ('DOMAIN-SUFFIX', f'item{i}.example', line.strip()) for i, line in enumerate(lines))
+    for i in (0, 149, 299):
+        assert index.match_domain(f'sub.item{i}.example') == lines[i].strip()
     assert isinstance(index._source_lines, rule_matcher._PackedSourceLines)
     assert list(index._source_lines) == [line.strip() for line in lines]
 
@@ -395,12 +390,12 @@ def test_mostly_shared_sources_fall_back_without_copying_shared_strings():
 
 
 def test_mixed_compact_sources_keep_order_shared_keys_patterns_and_first_duplicate():
-    lines = ['early.example', 'DOMAIN-SUFFIX,early.example # ignored later duplicate type',
-             'REGEXP,^regex[0-9]+\\.example$ # original',
-             'DOMAIN-KEYWORD,keyword # earlier pattern',
-             'DOMAIN,keyword.example # later exact', 'middle.example']
-    lines += [f'DOMAIN-SUFFIX,item{i}.example # unique source' for i in range(300)]
-    lines += ['DOMAIN-SUFFIX,item0.example # later duplicate', 'last.example']
+    lines = ['early.example', 'DOMAIN-SUFFIX,early.example',
+             'DOMAIN-REGEX,^regex[0-9]+\\.example$',
+             'DOMAIN-KEYWORD,keyword',
+             'DOMAIN,keyword.example', 'middle.example']
+    lines += [f'DOMAIN-SUFFIX,item{i}.example' for i in range(300)]
+    lines += ['DOMAIN-SUFFIX,item0.example', 'last.example']
     content = '\n'.join(lines)
     configs = [_ruleset()]
     matcher = RuleConfigMatcher(configs, [], lambda *_: content)

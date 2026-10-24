@@ -465,6 +465,7 @@
               :placeholder="ruleContentPlaceholder"
             />
             <p class="m-0 text-[12px] text-muted-foreground">{{ ruleContentHelperText }}</p>
+            <RuleContentIssues :check="contentCheck" />
           </div>
 
           <div class="flex flex-col gap-1.5">
@@ -479,6 +480,20 @@
                 <SelectItem value="classical">Classical</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <Label for="lib-format">内容格式</Label>
+            <Select v-model="selectedRuleFormat">
+              <SelectTrigger id="lib-format" class="w-full bg-background/50" aria-label="内容格式"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">自动识别</SelectItem>
+                <SelectItem value="text">Text · 每行一条</SelectItem>
+                <SelectItem value="yaml">YAML · payload 列表</SelectItem>
+                <SelectItem v-if="form.source_type === 'url'" value="mrs">MRS · 二进制规则</SelectItem>
+              </SelectContent>
+            </Select>
+            <p v-if="form.source_type === 'content'" class="m-0 text-xs text-muted-foreground">Text 每行一条；YAML 使用 payload 列表。自动识别会按内容保存格式。</p>
           </div>
 
           <p v-if="form.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
@@ -546,6 +561,7 @@
               :placeholder="currentRuleSet?.behavior === 'ipcidr' ? '192.0.2.0/24\n2001:db8::/64' : 'example.com\napi.example.org'"
             />
           </div>
+          <RuleContentIssues :check="appendContentCheck" />
           <p v-if="currentRuleSet?.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
           <div v-if="addRulePreview" class="flex min-w-0 flex-col gap-1.5">
             <Label>将写入的内容</Label>
@@ -561,8 +577,8 @@
     </Dialog>
 
     <!-- ===== 批量导入 ===== -->
-    <Dialog v-model:open="batchImportDialogVisible">
-      <DialogContent class="max-w-[700px]">
+    <Dialog :open="batchImportDialogVisible" @update:open="value => { if (!batchImporting) batchImportDialogVisible = value }">
+      <DialogContent class="max-w-[700px]" @escape-key-down="event => { if (batchImporting) event.preventDefault() }" @interact-outside="event => { if (batchImporting) event.preventDefault() }">
         <DialogHeader>
           <DialogTitle>批量导入规则</DialogTitle>
           <DialogDescription>粘贴 YAML 格式的 rule-providers 配置。</DialogDescription>
@@ -581,15 +597,19 @@
             v-model="batchImportText"
             class="min-h-[260px] bg-background/50 font-mono text-[12px]"
             :rows="12"
+            :disabled="batchImporting"
             placeholder="粘贴 rule-providers 配置内容…"
           />
+          <ul v-if="batchImportFailures.length" role="alert" class="m-0 max-h-40 list-none space-y-1 overflow-y-auto p-0 text-xs text-destructive-accent">
+            <li v-for="failure in batchImportFailures" :key="failure" class="whitespace-pre-wrap break-words">{{ failure }}</li>
+          </ul>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" @click="batchImportDialogVisible = false">取消</Button>
-          <Button @click="processBatchImport">
+          <Button variant="outline" :disabled="batchImporting" @click="batchImportDialogVisible = false">取消</Button>
+          <Button :disabled="batchImporting" @click="processBatchImport">
             <Upload class="size-4" />
-            导入
+            {{ batchImporting ? '导入中…' : '导入' }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -628,7 +648,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { load as loadYaml } from 'js-yaml'
 import { Motion } from 'motion-v'
 import {
   ArrowUpDown,
@@ -697,9 +718,10 @@ import { useProfileStore } from '@/stores/profile'
 import api, { ruleApi } from '@/api'
 import { activeProfileId, getActiveProfileId } from '@/profileContext'
 import { isAxiosError } from 'axios'
-import { domainRuleLine } from '@/lib/ruleset-format'
-import { CLASSICAL_CONTENT_HINT, prepareRuleContent } from '@/lib/ruleset-content'
+import { detectRuleContentFormat, domainRuleLine } from '@/lib/ruleset-format'
+import { CLASSICAL_CONTENT_HINT, prepareRuleContent, type RuleContentCheck } from '@/lib/ruleset-content'
 import RuleDnsField from '@/components/rules/RuleDnsField.vue'
+import RuleContentIssues from '@/components/rules/RuleContentIssues.vue'
 import {
   DNS_COPY, DNS_FIELD_HELP, PINNED_HINT, confirmSaveWithoutDns, copyKey, defaultDnsChoice, dnsErrorReason, dnsWarnings,
   followRoute, isRoutingLocked, isUpstreamValue, notifyRuleSaved, pinnedWithheld
@@ -707,7 +729,7 @@ import {
 import type { ComposePayload, RuleDnsSnapshot, RuleDnsValue } from '@/types'
 
 const errorMessage = (error: unknown, fallback: string) =>
-  isAxiosError<{ message?: string }>(error) ? error.response?.data?.message || fallback : fallback
+  isAxiosError<{ message?: string }>(error) ? error.response?.data?.message || fallback : error instanceof Error ? error.message : fallback
 
 
 const cfProfileStore = useProfileStore()
@@ -880,6 +902,9 @@ const batchImportDialogVisible = ref(false)
 const addRuleToSetDialogVisible = ref(false)
 const proxyConfigDialogVisible = ref(false)
 const batchImportText = ref('')
+const batchImporting = ref(false)
+const batchImportFailures = ref<string[]>([])
+const batchImportResults = new Map<string, 'saved' | 'pending'>()
 const isEdit = ref(false)
 const testing = ref(false)
 const caching = ref(false) // 批量缓存加载状态
@@ -928,6 +953,15 @@ const form = ref<Partial<RuleLibraryItem>>({
   content: ''
 })
 
+const selectedRuleFormat = computed({
+  get: () => form.value.format || 'auto',
+  set: (value: string) => { form.value.format = value === 'auto' ? undefined : value }
+})
+
+const contentCheck = ref<RuleContentCheck | null>(null)
+const appendContentCheck = ref<RuleContentCheck | null>(null)
+watch(() => [form.value.content, form.value.behavior, form.value.format, dialogVisible.value], () => { contentCheck.value = null })
+
 const ruleContentPlaceholder = computed(() => {
   const behavior = form.value.behavior || 'classical'
   switch (behavior) {
@@ -973,6 +1007,8 @@ const addRuleToSetForm = ref({
   rule_type: 'DOMAIN-SUFFIX',
   value: ''
 })
+
+watch(() => [addRuleToSetForm.value.value, addRuleToSetForm.value.rule_type, addRuleToSetDialogVisible.value], () => { appendContentCheck.value = null })
 
 const addRuleToSetHelperText = computed(() => {
   switch (currentRuleSet.value?.behavior) {
@@ -1069,7 +1105,7 @@ const performSaveRule = async () => {
       notify.warning('请输入规则内容')
       return
     }
-    const checked = await prepareRuleContent(form.value)
+    const checked = await prepareRuleContent({ ...form.value, format: form.value.format || detectRuleContentFormat(form.value.content) }, undefined, check => { contentCheck.value = check })
     if (checked === null) return
     form.value.content = checked
   }
@@ -1091,12 +1127,13 @@ const performSaveRule = async () => {
     }
   }
 
+  const payload = { ...libraryPayload(form.value), ...(form.value.source_type === 'content' ? { format: form.value.format || detectRuleContentFormat(form.value.content || '') } : {}) }
   try {
     if (isEdit.value) {
-      await api.put(`/rule-library/${form.value.id}`, libraryPayload(form.value))
+      await api.put(`/rule-library/${form.value.id}`, payload)
       notify.success('共享来源已更新，各配置的策略、顺序和启用状态保持不变')
     } else {
-      await api.post('/rule-library', libraryPayload(form.value))
+      await api.post('/rule-library', payload)
       notify.success(isAvailable ? '添加成功' : '添加成功（规则已关闭）')
     }
     dialogVisible.value = false
@@ -1174,43 +1211,6 @@ const formatRuleValueForRuleSet = (value: string) => {
 }
 
 const addRulePreview = computed(() => addRuleToSetForm.value.value.split('\n').filter(value => value.trim()).map(formatRuleValueForRuleSet).join('\n'))
-const isValidIpv4Cidr = (value: string) => {
-  const match = value.match(/^(\d{1,3})(?:\.(\d{1,3})){3}\/(\d{1,2})$/)
-  if (!match) return false
-
-  const [address, prefix] = value.split('/')
-  const octets = address.split('.').map(Number)
-  const prefixNumber = Number(prefix)
-
-  return octets.every(octet => octet >= 0 && octet <= 255) && prefixNumber >= 0 && prefixNumber <= 32
-}
-
-const isValidIpv6Cidr = (value: string) => {
-  const match = value.match(/^([0-9a-fA-F:]+)\/(\d{1,3})$/)
-  if (!match || !match[1].includes(':')) return false
-
-  const prefixNumber = Number(match[2])
-  return prefixNumber >= 0 && prefixNumber <= 128
-}
-
-const isValidCidr = (value: string) => isValidIpv4Cidr(value) || isValidIpv6Cidr(value)
-
-const isLikelyDomainValue = (value: string) => {
-  if (value.includes(',') || value.includes('/')) return false
-  return /^[a-zA-Z0-9+*_.-]+$/.test(value)
-}
-
-const getInvalidRuleValue = (values: string[]) => {
-  switch (currentRuleSet.value?.behavior) {
-    case 'domain':
-      return values.find(value => !isLikelyDomainValue(value.trim()))
-    case 'ipcidr':
-      return values.find(value => !isValidCidr(value.trim()))
-    default:
-      return undefined
-  }
-}
-
 const performSaveRuleToSet = async () => {
   if (!currentRuleSet.value) {
     return
@@ -1227,18 +1227,10 @@ const performSaveRuleToSet = async () => {
     notify.warning('使用通配符时请选择「按输入内容」，或只填写域名并在上方选择匹配范围。')
     return
   }
-  const invalidValue = getInvalidRuleValue(values)
-  if (invalidValue) {
-    const behavior = currentRuleSet.value.behavior
-    const expectedText = behavior === 'ipcidr' ? 'CIDR，例如 1.1.1.0/24' : '域名，例如 example.com'
-    notify.warning(`"${invalidValue.trim()}" 不符合 ${currentRuleSet.value.name} 的规则集类型，请输入${expectedText}`)
-    return
-  }
-
   const newRules = values.map(formatRuleValueForRuleSet)
 
   try {
-    const checked = await prepareRuleContent(currentRuleSet.value, newRules)
+    const checked = await prepareRuleContent(currentRuleSet.value, newRules, check => { appendContentCheck.value = check })
     if (checked === null) return
     const updatedRule = {
       ...libraryPayload(currentRuleSet.value),
@@ -1261,35 +1253,47 @@ const saveRuleToSet = async () => {
   finally { savingRule.value = false }
 }
 const showBatchImportDialog = () => {
+  if (batchImporting.value) return
   batchImportText.value = ''
+  batchImportFailures.value = []
+  batchImportResults.clear()
   batchImportDialogVisible.value = true
 }
 
 const processBatchImport = async () => {
+  if (batchImporting.value) return
   const text = batchImportText.value.trim()
   if (!text) {
     notify.warning('请粘贴配置内容')
     return
   }
-
+  batchImportFailures.value = []
+  batchImporting.value = true
   try {
     const rules = parseRuleProviders(text)
-    if (rules.length === 0) {
-      notify.warning('未解析到有效的规则配置')
-      return
-    }
-
     let successCount = 0
     let unconfirmedCount = 0
     for (const rule of rules) {
+      const key = JSON.stringify([rule.name, rule.url, rule.behavior, rule.format])
+      const previous = batchImportResults.get(key)
+      if (previous === 'saved') { successCount++; continue }
+      if (previous === 'pending') {
+        unconfirmedCount++
+        batchImportFailures.value.push(`${rule.name}：保存结果待确认，请核对规则库，勿重复导入。`)
+        continue
+      }
       try {
         await api.post('/rule-library', rule)
+        batchImportResults.set(key, 'saved')
         successCount++
       } catch (error) {
         if (isAxiosError<{ confirmation_required?: boolean }>(error) && error.response?.data?.confirmation_required) {
+          batchImportResults.set(key, 'pending')
           unconfirmedCount++
+          batchImportFailures.value.push(`${rule.name}：保存结果待确认，请核对规则库，勿重复导入。`)
+        } else {
+          batchImportFailures.value.push(`${rule.name}：${errorMessage(error, '导入失败，请重试。')}`)
         }
-        console.error(`导入规则 ${rule.name} 失败:`, error)
       }
     }
 
@@ -1298,51 +1302,44 @@ const processBatchImport = async () => {
     else if (failCount === 0) notify.success(`成功导入 ${successCount} 条规则`)
     else if (successCount === 0) notify.error(`批量导入失败，${failCount} 条规则均未导入`)
     else notify.warning(`批量导入完成：成功 ${successCount} 条，失败 ${failCount} 条`)
-    batchImportDialogVisible.value = false
-    loadRuleLibrary()
+    if (!batchImportFailures.value.length) batchImportDialogVisible.value = false
+    await loadRuleLibrary()
   } catch (error) {
-    notify.error('解析配置失败，请检查格式')
+    const reason = error instanceof Error ? error.message : '解析配置失败，请检查格式'
+    batchImportFailures.value = [reason]
+    notify.error(reason)
+  } finally {
+    batchImporting.value = false
   }
 }
 
 const parseRuleProviders = (text: string): RuleLibraryItem[] => {
+  const document = loadYaml(text)
+  const mapping = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+  if (!mapping(document)) throw new Error('请填写 rule-providers 对象，每个规则集需包含 URL 和类型。')
+  const providers = document['rule-providers'] ?? document
+  if (!mapping(providers) || !Object.keys(providers).length) throw new Error('未解析到有效的规则配置。')
   const rules: RuleLibraryItem[] = []
-
-  text = text.replace(/^rule-providers:\s*$/m, '')
-
-  const lines = text.split('\n')
-
-  let counter = 0
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    const match = trimmed.match(/^([a-zA-Z0-9_-]+):\s*\{(.+)\}/)
-    if (!match) continue
-
-    const name = match[1]
-    const content = match[2]
-
-    const urlMatch = content.match(/url:\s*["']([^"']+)["']/)
-    if (!urlMatch) continue
-    const url = urlMatch[1]
-
-    const behaviorMatch = content.match(/behavior:\s*([a-z]+)/)
-    const behavior = behaviorMatch ? behaviorMatch[1] : 'classical'
-
-    rules.push({
-      id: `lib_${Date.now()}_${counter++}`,
-      name,
-      url,
-      behavior,
-      enabled: true
-    })
+  const errors: string[] = []
+  for (const [name, item] of Object.entries(providers)) {
+    if (!mapping(item)) { errors.push(`${name}：规则集配置必须是对象。`); continue }
+    const behavior = item.behavior ?? 'classical'
+    if (typeof behavior !== 'string' || !['domain', 'ipcidr', 'classical'].includes(behavior)) {
+      errors.push(`${name}：不支持的类型 ${String(behavior)}；请选择 domain、ipcidr 或 classical。`)
+      continue
+    }
+    if (item.type !== undefined && item.type !== 'http') { errors.push(`${name}：批量导入仅支持 http URL 来源。`); continue }
+    if (typeof item.url !== 'string' || !isFullUrl(item.url)) { errors.push(`${name}：请填写有效的 HTTP 或 HTTPS URL。`); continue }
+    if (item.format !== undefined && item.format !== null && item.format !== '' && (typeof item.format !== 'string' || !['text', 'yaml', 'mrs'].includes(item.format))) {
+      errors.push(`${name}：不支持的格式 ${String(item.format)}；请选择 text、yaml 或 mrs。`)
+      continue
+    }
+    rules.push({ id: `lib_${Date.now()}_${rules.length}`, name, url: item.url, behavior,
+      ...(typeof item.format === 'string' && item.format ? { format: item.format } : {}), source_type: 'url', enabled: true })
   }
-
+  if (errors.length) throw new Error(errors.join('\n'))
   return rules
 }
-
-
 
 const getContentPreview = (content?: string) => {
   if (!content) return '无内容'

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { prepareRuleContent } from '@/lib/ruleset-content'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
-import type { RuleContentCheck } from '@/lib/ruleset-format'
+import { detectRuleContentFormat, type RuleContentCheck } from '@/lib/ruleset-format'
 
 const network = vi.hoisted(() => ({ post: vi.fn() }))
 vi.mock('@/api', () => ({ default: { post: network.post } }))
@@ -20,6 +20,15 @@ function respond(data: RuleContentCheck) {
   network.post.mockResolvedValueOnce({ data })
 }
 
+describe('content format detection', () => {
+  it.each(['payload: []', '# keep\n"payload": ["example.org"]', "'payload': [example.org]", '\uFEFFpayload:\n  - example.org', '{"payload":["example.org"]}'])('detects payload YAML without rewriting: %s', content => {
+    expect(detectRuleContentFormat(content)).toBe('yaml')
+  })
+  it.each(['DOMAIN,example.org', '// payload: is just a comment\nexample.org', '2001:db8::/32'])('detects line-based text: %s', content => {
+    expect(detectRuleContentFormat(content)).toBe('text')
+  })
+})
+
 describe('handwritten ruleset content checks', () => {
   it('saves classical bare domains and IPs unchanged without a conversion confirmation', async () => {
     const rule = { behavior: 'classical', content: '# keep\r\n  +.tmdb.org \r\n\r\napi.example.org\r\n192.0.2.1\r\n2001:db8::1\r\n', format: 'text' }
@@ -36,7 +45,7 @@ describe('handwritten ruleset content checks', () => {
     respond({ content, changes: [], errors: [], warnings: [{ line: 2, before: '*.example.org', message: '请手动调整' }] })
     expect(await prepareRuleContent({ behavior: 'classical', content })).toBe(content)
     expect(confirmState.open).toBe(false)
-    expect(notify.warning).not.toHaveBeenCalled()
+    expect(notify.warning).toHaveBeenCalledWith('规则内容有 1 条提醒', '第 2 行：请手动调整')
   })
 
   it.each(['confirm', 'cancel'] as const)('keeps the existing domain conversion confirmation: %s', async choice => {
@@ -60,6 +69,16 @@ describe('handwritten ruleset content checks', () => {
     expect(confirmState.open).toBe(false)
   })
 
+  it.each(['ipcidr', 'unknown'])('returns every server issue for inline feedback and keeps %s input', async behavior => {
+    const content = '+.tmdb.org\nDOMAIN-SHUFFIX,example.com'
+    const checked = { content, changes: [], errors: [{ line: 1, message: '不是有效 CIDR' }, { line: 2, message: '未知规则类型' }], warnings: [] }
+    respond(checked)
+    const onCheck = vi.fn()
+    expect(await prepareRuleContent({ behavior, content }, undefined, onCheck)).toBeNull()
+    expect(onCheck).toHaveBeenCalledExactlyOnceWith(checked)
+    expect(confirmState.open).toBe(false)
+  })
+
   it('retains original bare yaml entries when adding rules, without a confirmation', async () => {
     const content = '# keep\npayload:\n  - +.tmdb.org\n  - 192.0.2.1\n'
     const appended = ['IP-CIDR6,2001:db8::/32,no-resolve']
@@ -72,10 +91,11 @@ describe('handwritten ruleset content checks', () => {
     expect(confirmState.open).toBe(false)
   })
 
-  it('leaves ipcidr drafts on their existing path', async () => {
+  it('checks ipcidr drafts through the same endpoint', async () => {
     const content = '192.0.2.0/24'
+    respond({ content, changes: [], errors: [] })
     expect(await prepareRuleContent({ behavior: 'ipcidr', content })).toBe(content)
-    expect(network.post).not.toHaveBeenCalled()
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', { behavior: 'ipcidr', content, format: undefined, append_lines: [] })
     expect(confirmState.open).toBe(false)
   })
 })

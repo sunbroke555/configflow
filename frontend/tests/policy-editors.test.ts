@@ -24,6 +24,7 @@ async function destination() {
 beforeEach(() => {
   vi.resetAllMocks(); scopedRequests.value = 0
   vi.mocked(confirm).mockResolvedValue(false)
+  vi.mocked(api.post).mockImplementation(async (_url, body: any) => ({ data: { content: body.content, changes: [], errors: [] } }) as any)
   vi.mocked(ruleContentApi.read).mockResolvedValue(response() as any)
   vi.mocked(ruleContentApi.save).mockResolvedValue({ data: { success: true, revision: 'saved-revision' } } as any)
 })
@@ -66,6 +67,20 @@ describe('policy authoring editors', () => {
     expect(ruleContentApi.save).toHaveBeenCalledWith('library', 'read-revision', '9.9.9.9/32')
     expect(w.emitted('saved')).toHaveLength(1)
     expect(scopedRequests.value).toBe(0)
+  })
+  it('shows IP content errors beside the draft and prevents saving', async () => {
+    const w = await destination()
+    await field('destination-edit-content').setValue('+.tmdb.org\nDOMAIN-SHUFFIX,example.com')
+    vi.mocked(api.post).mockResolvedValueOnce({ data: { content: '+.tmdb.org', changes: [], errors: [
+      { line: 1, message: 'IPCIDR 只接受 CIDR' }, { line: 2, message: '不是有效 IP 网段' }
+    ] } })
+    await click('保存规则内容')
+    expect(document.querySelector('[data-rule-content-issues]')?.textContent).toContain('第 1 行：IPCIDR 只接受 CIDR')
+    expect(document.querySelector('[data-rule-content-issues]')?.textContent).toContain('第 2 行：不是有效 IP 网段')
+    expect(ruleContentApi.save).not.toHaveBeenCalled()
+    expect(w.emitted('saved')).toBeUndefined()
+    await field('destination-edit-content').setValue('2001:db8::/32')
+    expect(document.querySelector('[data-rule-content-issues]')).toBeNull()
   })
   it('explains classical delivery and saves the original destination content without confirmation', async () => {
     const data = response()

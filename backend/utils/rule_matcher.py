@@ -10,7 +10,12 @@ from sys import getsizeof
 from threading import RLock
 from typing import Any, Callable, Dict, Hashable, Optional, Tuple
 
+import yaml
+
+from backend.converters.common import ruleset_format
 from backend.utils.logger import get_logger
+from backend.utils.rule_syntax import RULE_TYPES, cidr_error
+from backend.utils.ruleset_content import _classical_line, _valid_pattern, classical_line_error
 from backend.utils.url_utils import safe_exception_details
 
 logger = get_logger(__name__)
@@ -26,6 +31,10 @@ def is_valid_domain(query: str) -> bool:
         是否为有效域名
     """
     if not query or len(query) > 253:
+        return False
+    if '.' in query and all(part.isdigit() for part in query.split('.')):
+        # Invalid dotted IPs must not re-enter discovery as hostnames after
+        # ip_address rejects them; ordinary numeric labels like 3com remain valid.
         return False
 
     # 域名正则表达式
@@ -145,6 +154,11 @@ def match_domain(domain: str, rule_type: str, rule_value: str) -> bool:
         是否匹配
     """
     domain = domain.lower()
+    if rule_type == 'DOMAIN-REGEX':
+        try:
+            return bool(re.search(rule_value, domain, re.IGNORECASE))
+        except re.error:
+            return False
     rule_value = rule_value.lower()
 
     if rule_type == 'DOMAIN':
@@ -239,6 +253,90 @@ def _iter_rule_lines(content):
         start = ending.end()
     if start < len(content):
         yield content[start:]
+
+
+def _iter_ruleset_lines(content, rule_format):
+    """Yield decoded rules and original display lines without splitting large text."""
+    if rule_format == 'text':
+        first = True
+        for raw in _iter_rule_lines(content):
+            value = raw.removeprefix('\ufeff') if first else raw
+            first = False
+            yield value.strip(), raw.strip()
+        return
+    if rule_format != 'yaml':
+        return
+    try:
+        root = yaml.compose(content, Loader=getattr(yaml, 'CSafeLoader', yaml.SafeLoader))
+        if not isinstance(root, yaml.MappingNode):
+            return
+        payloads = [value for key, value in root.value if key.value == 'payload']
+        if len(payloads) != 1 or not isinstance(payloads[0], yaml.SequenceNode):
+            return
+        payload = payloads[0]
+        if any(not isinstance(node, yaml.ScalarNode) or node.tag != 'tag:yaml.org,2002:str'
+               or '\n' in node.value or '\r' in node.value for node in payload.value):
+            return
+        for node in payload.value:
+            if payload.flow_style:
+                source = node.value
+            else:
+                start = content.rfind('\n', 0, node.start_mark.index) + 1
+                end = content.find('\n', node.end_mark.index)
+                source = content[start:end if end >= 0 else len(content)].strip()
+            yield node.value.strip(), source
+    except (yaml.YAMLError, RecursionError):
+        return
+
+
+def _parse_ruleset_line(value, behavior):
+    """Interpret provider entries according to the selected Mihomo behavior.
+
+    The generic parse_rule_line remains available to DNS import/conversion
+    consumers. Its cross-format fallbacks must not create routing test hits.
+    """
+    if not value or value.startswith(('#', '//', '!')):
+        return None
+    if behavior == 'ipcidr':
+        return None if cidr_error(value) else ('IP-CIDR', value)
+    if behavior == 'domain':
+        if not _valid_pattern(value):
+            return None
+        value = value.lower()
+        if '*' in value and not (value.startswith('*.') and '*' not in value[2:]):
+            prefix = ''
+            if value.startswith('+.'):
+                prefix, value = r'(?:[^.]+\.)*', value[2:]
+            elif value.startswith('.'):
+                prefix, value = r'(?:[^.]+\.)+', value[1:]
+            pattern = r'\.'.join(r'[^.]+' if part == '*' else re.escape(part) for part in value.split('.'))
+            return ('DOMAIN-REGEX', '^' + prefix + pattern + '$')
+        if value.startswith('+.'):
+            return ('DOMAIN-SUFFIX', value[2:])
+        if value.startswith('*.'):
+            return ('DIRECT-SUBDOMAIN', value[2:])
+        if value.startswith('.'):
+            return ('SUBDOMAIN-ONLY', value[1:])
+        return ('DOMAIN', value)
+    if behavior != 'classical':
+        return None
+    if ',' not in value and value.upper() in RULE_TYPES:
+        return None
+    try:
+        value = _classical_line(value)
+    except ValueError:
+        return None
+    if classical_line_error(value):
+        return None
+    kind, separator, payload = value.partition(',')
+    kind = kind.strip().upper()
+    if not separator:
+        return None
+    if kind == 'DOMAIN-REGEX':
+        return kind, payload.strip()
+    if kind in ('DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR', 'IP-CIDR6'):
+        return kind, payload.split(',', 1)[0].strip()
+    return None
 
 
 _SOURCE_OFFSET_MAX = (1 << (array('I').itemsize * 8)) - 1
@@ -377,10 +475,12 @@ class _RuleIndex:
             elif rule_type == 'DOMAIN-KEYWORD':
                 self._domain_patterns.append((len(self._source_lines), value.lower(), None))
                 self._source_lines.append(line)
-            elif rule_type in ('REGEX', 'REGEXP'):
+            elif rule_type in ('REGEX', 'REGEXP', 'DOMAIN-REGEX'):
                 try:
                     # match_domain has always lowercased both pattern and query.
-                    pattern = re.compile(value.lower())
+                    # Mihomo DOMAIN-REGEX ignores case without rewriting escapes.
+                    pattern = (re.compile(value, re.IGNORECASE) if rule_type == 'DOMAIN-REGEX'
+                               else re.compile(value.lower()))
                 except re.error:
                     continue
                 self._domain_patterns.append((len(self._source_lines), None, pattern))
@@ -457,6 +557,10 @@ class RuleConfigMatcher:
         self._items = [(index, item) for index, item in enumerate(rule_configs, start=1)
                        if item.get('enabled', True) and item.get('library_enabled', True)]
         self._library = {item.get('id'): item for item in rule_library if item.get('id')}
+        # Match the format emitted by the converter. A declared text provider
+        # must not accidentally gain YAML rules just because its body has payload.
+        self._formats = {index: ruleset_format(item, {'rule_library': rule_library})
+                         for index, item in self._items if item.get('itemType') == 'ruleset'}
         self._load_content = load_content
         # Reuse is opt-in: a custom loader may depend on the individual rule
         # item even when several items reference the same library entry.
@@ -466,7 +570,13 @@ class RuleConfigMatcher:
 
     def _ruleset_key(self, index, rule_item, library_rule):
         source = self._index_key(rule_item, library_rule) if self._index_key is not None else None
-        return ('source', source) if source is not None else ('item', index)
+        behavior = self._ruleset_behavior(rule_item, library_rule)
+        return (('source', source, behavior, self._formats[index]) if source is not None
+                else ('item', index, behavior, self._formats[index]))
+
+    @staticmethod
+    def _ruleset_behavior(rule_item, library_rule):
+        return rule_item.get('behavior', (library_rule or {}).get('behavior', 'domain'))
 
     def invalidate_rulesets(self, predicate: Callable[[dict, Optional[dict]], bool]) -> int:
         """Discard selected source indexes, including all references sharing one.
@@ -497,13 +607,14 @@ class RuleConfigMatcher:
                     logger.warning('Skipping ruleset "%s": unable to fetch content', rule_item.get('name', '规则集'))
 
                 def entries():
-                    for line in _iter_rule_lines(content):
+                    behavior = self._ruleset_behavior(rule_item, library_rule)
+                    for value, source in _iter_ruleset_lines(content, self._formats[index]):
                         try:
-                            parsed = parse_rule_line(line)
+                            parsed = _parse_ruleset_line(value, behavior)
                         except Exception:
                             continue
                         if parsed:
-                            yield parsed[0], parsed[1], line.strip()
+                            yield parsed[0], parsed[1], source
 
                 # Publish only the complete immutable index to concurrent readers.
                 self._indexes[key] = _RuleIndex(entries())
@@ -562,6 +673,6 @@ class RuleConfigMatcher:
                         'priority': index,
                         'rule_id': rule_item.get('id'),
                         'item_type': 'ruleset',
-                        'behavior': rule_item.get('behavior', 'classical'),
+                        'behavior': self._ruleset_behavior(rule_item, library_rule),
                     }
         return None

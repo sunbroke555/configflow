@@ -54,7 +54,6 @@ def test_utf8_bom_is_preserved_without_hiding_the_first_entry(source, expected):
     'DOMAIN-SUFFIX,tmdb.org\nDOMAIN,example.com\nIP-CIDR,192.0.2.0/24',
     'DOMAIN-KEYWORD,google\nIP-CIDR6,2001:db8::/32,no-resolve',
     '  DOMAIN,example.com \r\n# +.tmdb.org\r\n\t// 192.0.2.1\r\n',
-    'UNKNOWN,a,b\nfull:foreign.example,extra',
 ])
 def test_unchanged_lines_are_byte_preserved(source):
     assert normalize_classical_lines(source) == (source, [])
@@ -153,7 +152,8 @@ def test_classical_validation_only_checks_edited_handwritten_content():
     validate_domain_content({**existing, 'enabled': False}, previous=existing)
     validate_domain_content({**existing, 'name': 'Renamed'}, previous=existing)
     validate_domain_content({**existing, 'source_type': 'url'})
-    validate_domain_content({**existing, 'behavior': 'ipcidr'})
+    with pytest.raises(ProfileValidationError):
+        validate_domain_content({**existing, 'behavior': 'ipcidr'})
     validate_domain_content({**existing, 'content': '*.example.com\nfull:example.com'})
     with pytest.raises(ProfileValidationError):
         validate_domain_content({**existing, 'content': 'payload: [true]'})

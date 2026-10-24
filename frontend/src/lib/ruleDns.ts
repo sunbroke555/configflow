@@ -194,7 +194,18 @@ export interface PasteResult {
   overLimit: boolean
 }
 
-const RULE_TYPE = /^[A-Z][A-Z0-9-]*$/
+/** Full Mihomo parser vocabulary; the picker above intentionally shows common types only. */
+export const SUPPORTED_RULE_TYPES = new Set([
+  'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'DOMAIN-WILDCARD',
+  'GEOSITE', 'GEOIP', 'SRC-GEOIP', 'IP-ASN', 'SRC-IP-ASN',
+  'IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'IP-SUFFIX', 'SRC-IP-SUFFIX',
+  'SRC-PORT', 'DST-PORT', 'IN-PORT', 'DSCP',
+  'PROCESS-NAME', 'PROCESS-PATH', 'PROCESS-NAME-REGEX', 'PROCESS-PATH-REGEX',
+  'PROCESS-NAME-WILDCARD', 'PROCESS-PATH-WILDCARD',
+  'NETWORK', 'UID', 'IN-TYPE', 'IN-USER', 'IN-NAME', 'REMATCH-NAME',
+  'SUB-RULE', 'AND', 'OR', 'NOT', 'RULE-SET', 'MATCH'
+])
+const COMMA_PAYLOAD_TYPES = new Set(['AND', 'OR', 'NOT', 'SUB-RULE', 'DOMAIN-REGEX', 'PROCESS-NAME-REGEX', 'PROCESS-PATH-REGEX'])
 const DOMAIN = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/
 
@@ -210,30 +221,50 @@ const isIp = (value: string) => IPV4.test(value) || isIpv6(value)
 
 function isNetwork(value: string) {
   const [address, prefix, ...rest] = value.split('/')
-  if (rest.length || !address) return false
-  if (prefix !== undefined && !/^\d{1,3}$/.test(prefix)) return false
-  const bits = prefix === undefined ? 0 : Number(prefix)
+  if (rest.length || !address || prefix === undefined) return false
+  if (!/^(?:0|[1-9]\d{0,2})$/.test(prefix)) return false
+  const bits = Number(prefix)
   if (IPV4.test(address)) return bits <= 32
   return isIpv6(address) && bits <= 128
 }
 
-/** 与后端 compose 的逐行校验一致；服务端仍会再次校验 */
-function valueError(kind: string, value: string) {
+/** Check obvious input mistakes locally; the backend also validates advanced core syntax. */
+export function ruleValueError(kind: string, value: string): string {
   if (!kind) return '无前缀的行需要选择规则类型'
-  if (!RULE_TYPE.test(kind)) return `不支持的规则类型 ${kind}`
+  if (!SUPPORTED_RULE_TYPES.has(kind)) return `不支持的规则类型 ${kind}`
+  if (/[\r\n]/.test(value)) return '规则值必须是单行文本'
+  if (!COMMA_PAYLOAD_TYPES.has(kind) && value.includes(',')) return '此规则类型的值不能包含逗号；请勿在值中填写策略或附加参数'
+  if (kind === 'MATCH') return value ? 'MATCH 不接受规则值' : ''
   if (!value) return '规则值为空'
-  if ((kind === 'DOMAIN' || kind === 'DOMAIN-SUFFIX') && (isIp(value) || value.length > 253 || !DOMAIN.test(value))) return '不是有效域名'
-  if (IP_DNS_RULE_TYPES.includes(kind) && !isNetwork(value)) return '不是有效 IP 网段'
+  if (kind === 'DOMAIN' || kind === 'DOMAIN-SUFFIX') {
+    let domain = value
+    // URL's hostname parser supplies IDNA conversion, but must not accept URL syntax or IPs as domains.
+    if (/[^\x00-\x7f]/.test(value) && !/[\s/:?#@]/.test(value)) {
+      try { domain = new URL(`http://${value}`).hostname } catch { return '不是有效域名' }
+    }
+    if (isIp(value) || /^[\d.]+$/.test(value) || /(?:^|\.)\d+$/.test(domain) || domain.length > 253 || !DOMAIN.test(domain)) return '不是有效域名'
+  }
+  if (['IP-CIDR', 'IP-CIDR6', 'SRC-IP-CIDR', 'IP-SUFFIX', 'SRC-IP-SUFFIX'].includes(kind) && !isNetwork(value)) return value.includes('/') ? '不是有效 IP 网段' : '不是有效 IP 网段（需要 CIDR 前缀长度）'
+  const maximum = ['SRC-PORT', 'DST-PORT', 'IN-PORT'].includes(kind) ? 65535 : kind === 'DSCP' ? 63 : kind === 'UID' ? 4294967295 : null
+  if (maximum !== null && !(kind === 'DSCP' && value === '*')) {
+    const ranges = value.split(/[\/,]/)
+    if (ranges.length > 28 || ranges.some(range => {
+      const match = /^(\d+)(?:-(\d+))?$/.exec(range)
+      return !match || Number(match[1]) > Number(match[2] ?? match[1]) || Number(match[2] ?? match[1]) > maximum
+    })) return `请填写 0–${maximum} 内的数字或范围，以 / 分隔`
+  }
+  if (['IP-ASN', 'SRC-IP-ASN'].includes(kind) && !/^\d+$/.test(value)) return 'ASN 应为非负整数'
+  if (kind === 'NETWORK' && !['tcp', 'udp'].includes(value.toLowerCase())) return 'NETWORK 只接受 tcp 或 udp'
   return ''
 }
 
 /**
- * 按行解析粘贴的规则：忽略空行和 # 注释；`TYPE,value` 保留行尾 no-resolve、忽略策略等其他字段；
+ * 按行解析粘贴的规则：忽略空行和 # / // 注释；`TYPE,value` 保留行尾 no-resolve、忽略策略等其他字段；
  * `+.x`、`*.x` 为 DOMAIN-SUFFIX，`full:x` 为 DOMAIN，其余行按 defaultType。重复行只添加一次。
  */
 export function parsePastedRules(text: string, defaultType: string): PasteResult {
   const lines = text.split(/\r?\n/).map((raw, index) => ({ line: index + 1, text: raw.trim() }))
-    .filter(entry => entry.text && !entry.text.startsWith('#'))
+    .filter(entry => entry.text && !entry.text.startsWith('#') && !entry.text.startsWith('//'))
   const result: PasteResult = { rows: [], invalid: [], repeated: [], ignored: [], notes: [], count: lines.length, overLimit: lines.length > PASTE_LIMIT }
   const seen = new Set<string>()
   for (const { line, text: entry } of lines) {
@@ -243,8 +274,8 @@ export function parsePastedRules(text: string, defaultType: string): PasteResult
     if (entry.includes(',')) {
       const fields = entry.split(',').map(field => field.trim())
       kind = fields[0]!.toUpperCase()
-      value = fields[1] || ''
-      for (const extra of fields.slice(2)) {
+      value = kind === 'MATCH' ? '' : COMMA_PAYLOAD_TYPES.has(kind) ? entry.slice(entry.indexOf(',') + 1).trim() : fields[1] || ''
+      for (const extra of COMMA_PAYLOAD_TYPES.has(kind) ? [] : fields.slice(kind === 'MATCH' ? 1 : 2)) {
         if (extra.toLowerCase() === 'no-resolve') noResolve = true
         else if (extra) result.ignored.push({ line, value: extra })
       }
@@ -259,7 +290,7 @@ export function parsePastedRules(text: string, defaultType: string): PasteResult
       kind = 'DOMAIN'
       value = entry.slice(5).trim()
     }
-    const message = valueError(kind, value)
+    const message = ruleValueError(kind, value)
     if (message) {
       result.invalid.push({ line, text: entry, message })
       continue

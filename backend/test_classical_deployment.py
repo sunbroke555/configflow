@@ -121,3 +121,24 @@ def test_dns_consumers_keep_existing_conversion(service, monkeypatch):
                            'local_path': './rules/shared.list'}],
         base_url=BASE, local_dns_watchdog=False)
     assert contents(bundle)['rules/shared.list'] == b'domain:tmdb.org\nfull:exact.test'
+
+
+@pytest.mark.parametrize('behavior,raw,expected', [
+    ('classical', '+.tmdb.org', 'DOMAIN-SUFFIX,tmdb.org'),
+    ('domain', '+.tmdb.org', '+.tmdb.org'),
+    ('ipcidr', '192.0.2.0/24', '192.0.2.0/24'),
+])
+def test_marked_yaml_flow_is_expanded_for_mihomo_only(behavior, raw, expected):
+    source = '# original\npayload: ["' + raw + '"] # keep\n'
+    config = snapshot(source)
+    config['rule_library'][0].update(behavior=behavior, format='yaml')
+    before = deepcopy(config)
+    marked = provider(behavior, 'yaml')
+    unmarked = {**marked, 'path': './rules/unmarked.yaml', 'url': marked['url'].split('?')[0]}
+    files = contents(build(config, {'marked': marked, 'unmarked': unmarked}))
+    delivered = files['rules/shared.list'].decode()
+    assert yaml.safe_load(delivered)['payload'] == [expected]
+    assert not yaml.compose(delivered).value[0][1].flow_style
+    assert '# original' in delivered and '# keep' in delivered
+    assert files['rules/unmarked.yaml'].decode() == source
+    assert config == before

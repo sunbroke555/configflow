@@ -719,7 +719,8 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                     rule_name = library_rule.get('name', '')
                     if rule_name:
                         url = profile_api_path(config_data, f"/rules/local/{rule_name}")
-                        if rule_set.get('behavior') == 'classical':
+                        if (rule_set.get('behavior') == 'classical'
+                                or ruleset_format(rule_set, config_data, original_url) == 'yaml'):
                             url = append_url_query(url, {'target': 'mihomo'})
 
             # 如果 URL 是相对路径，动态拼接 server_domain
@@ -889,7 +890,8 @@ def get_mihomo_ruleset_downloads(config_data: Dict[str, Any], base_url: str = ''
                     rule_name = library_rule.get('name', '')
                     if rule_name:
                         url = profile_api_path(config_data, f"/rules/local/{rule_name}")
-                        if rule_set.get('behavior') == 'classical':
+                        if (rule_set.get('behavior') == 'classical'
+                                or ruleset_format(rule_set, config_data, original_url) == 'yaml'):
                             url = append_url_query(url, {'target': 'mihomo'})
 
             # 如果 URL 是相对路径，动态拼接 server_domain

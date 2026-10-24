@@ -30,7 +30,7 @@ from backend.utils.rule_fetch import (
     RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
 )
 from backend.utils.logger import get_logger
-from backend.utils.ruleset_content import normalize_classical_lines
+from backend.utils.ruleset_content import normalize_mihomo_ruleset
 
 logger = get_logger(__name__)
 
@@ -304,7 +304,8 @@ def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
     if '\x00' in text:
         raise DeploymentPreparationError('MosDNS rule source is binary')
     lines = text.splitlines()
-    yaml_payload = 'payload:' in text
+    from backend.utils.ruleset_content import _has_yaml_payload
+    yaml_payload = bool(_has_yaml_payload(text))
     if yaml_payload:
         try:
             document = yaml.safe_load(text)
@@ -558,20 +559,20 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                                      fetch_raw=fetch_raw)
             # Snapshot callbacks bypass /rules/local, so apply the same repair
             # for the final Mihomo consumer without changing shared raw bytes.
-            if (service == 'mihomo' and item.get('behavior') == 'classical'
-                    and item.get('format', 'yaml') in ('text', 'yaml')
+            if (service == 'mihomo' and item.get('format', 'yaml') in ('text', 'yaml')
                     and parse_qs(urlsplit(item.get('url', '')).query).get('target', [''])[0] == 'mihomo'
                     and (local_rule := _local_rule(item['url'], config, base_url)) is not None
-                    and local_rule.get('behavior') == 'classical'):
+                    and local_rule.get('behavior', 'domain') == item.get('behavior', 'domain')):
                 try:
                     text = value.decode('utf-8')
                 except UnicodeDecodeError:
                     pass
                 else:
-                    normalized, warnings = normalize_classical_lines(text)
+                    normalized, warnings = normalize_mihomo_ruleset(
+                        text, item.get('behavior', 'domain'), item.get('format', 'yaml'))
                     value = normalized.encode('utf-8')
                     if warnings:
-                        logger.warning('Mihomo classical provider %s: %s unconverted lines (first 10: %s)',
+                        logger.warning('Mihomo provider %s: %s unconverted lines (first 10: %s)',
                                        item.get('name', ''), len(warnings),
                                        ', '.join(str(warning.get('line')) for warning in warnings[:10]))
         except RuleDownloadError as exc:

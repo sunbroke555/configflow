@@ -23,6 +23,8 @@
           <p v-if="data.rule.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
           <template v-if="data.rule.source_type === 'content'">
             <div class="space-y-2"><Label for="destination-edit-content">规则内容 · {{ data.rule.behavior || '原格式' }}</Label><Textarea id="destination-edit-content" v-model="content" :disabled="saving" class="min-h-64 w-full font-mono text-xs" spellcheck="false" /></div>
+            <RuleContentIssues :check="contentCheck" />
+            <p v-if="contentCheck?.errors.length" class="m-0 text-xs text-muted-foreground">如需更改类型或 Text / YAML 内容格式，请到<a href="/rule-library" target="_blank" rel="noopener noreferrer" class="text-primary-accent underline">规则仓库</a>调整。</p>
             <p class="m-0 text-xs text-muted-foreground">保留原格式；删除原行即移除该条目。若其他规则集也包含同一 IP，发布后仍可能保留。</p>
           </template>
           <div v-else class="space-y-2 text-sm"><p class="m-0">此规则集由订阅源更新，不能在这里修改下载内容。手动添加 IP 请选用内容型规则集。</p><p class="m-0 break-all font-mono text-xs text-muted-foreground">{{ data.rule.url }}</p><Button as-child variant="outline" class="min-h-11"><a href="/rule-library" target="_blank" rel="noopener noreferrer">打开规则仓库<ExternalLink class="size-4" /></a></Button></div>
@@ -38,7 +40,7 @@
   </Dialog>
 </template>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ExternalLink, Info, Loader2 } from '@lucide/vue'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -46,9 +48,10 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import LoadingRows from '@/components/common/LoadingRows.vue'
+import RuleContentIssues from '@/components/rules/RuleContentIssues.vue'
 import { ruleContentApi, type PolicyWorkspace, type RuleContentDraft } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
-import { CLASSICAL_CONTENT_HINT, prepareRuleContent } from '@/lib/ruleset-content'
+import { CLASSICAL_CONTENT_HINT, prepareRuleContent, type RuleContentCheck } from '@/lib/ruleset-content'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 const props = defineProps<{ rules: PolicyWorkspace['rule_sets']; selectedIds: string[]; address?: string }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
@@ -56,6 +59,8 @@ const initialIds = props.selectedIds.filter(id => props.rules.some(rule => rule.
 const selected = ref(initialIds.length === 1 ? initialIds[0]! : props.rules.length === 1 ? props.rules[0]!.id : '')
 const data = ref<RuleContentDraft | null>(null), content = ref(''), error = ref('')
 const loading = ref(false), saving = ref(false)
+const contentCheck = ref<RuleContentCheck | null>(null)
+watch(content, () => { contentCheck.value = null })
 const dirty = computed(() => !!data.value && data.value.rule.source_type === 'content' && content.value !== data.value.rule.content)
 const message = (failure: any) => failure?.response?.data?.message || failure?.message || '操作失败，请重试。'
 let epoch = 0
@@ -83,7 +88,7 @@ async function save() {
   const current = epoch, id = data.value.rule.id
   saving.value = true; error.value = ''; beginScopedRequest()
   try {
-    const checked = await prepareRuleContent({ ...data.value.rule, content: content.value })
+    const checked = await prepareRuleContent({ ...data.value.rule, content: content.value }, undefined, check => { contentCheck.value = check })
     if (current !== epoch || checked === null) return
     content.value = checked
     const response = await ruleContentApi.save(id, data.value.revision, checked)
