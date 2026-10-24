@@ -6,7 +6,7 @@ import MultiSelect from '@/components/common/MultiSelect.vue'
 import SetupInstallation from '@/components/setup/SetupInstallation.vue'
 import { subscriptionApi } from '@/api'
 import { setupApi, type SetupSession } from '@/api/setup'
-import { SETUP_GOALS } from '@/lib/setupFlow'
+import { SETUP_GOALS, useLibraryNamesake } from '@/lib/setupFlow'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn() }, agentApi: {}, routerApi: {}, ruleApi: {},
@@ -272,6 +272,44 @@ describe('首次使用分流向导', () => {
     expect(wrapper!.findAllComponents(MultiSelect)[1]!.props('modelValue')).toEqual(['builtin:telegram'])
   })
 
+  it('内置规则与规则库同名但内容不同时注明来源，可改用规则库的规则集', async () => {
+    vi.mocked(setupApi.index).mockResolvedValue({ data: { sessions: [], suggested: true, subscriptions: [], nodes: [], domain_rules: [
+      ...ruleOptions,
+      { id: 'builtin:grok', name: 'Grok', source: 'builtin', conflict: { id: 'library:my_grok', name: 'Grok' } },
+      { id: 'library:my_grok', name: 'Grok', source: 'library' },
+    ] } } as never)
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2,
+      domain_rules: { direct: ['builtin:direct'], proxy: ['builtin:proxy', 'builtin:grok'] } }) } as never)
+    vi.mocked(setupApi.prepare).mockRejectedValue(new Error('保持草稿'))
+    await open('/setup?session=' + 'a'.repeat(32))
+    const labels = wrapper!.findAllComponents(MultiSelect)[1]!.props('options').map((item: { label: string }) => item.label)
+    expect(labels).toEqual(expect.arrayContaining(['Grok（内置）', 'Grok（规则库）', '工作域名']))
+    expect(wrapper!.get('[data-rule-conflict]').text()).toContain('规则库已有同名的「Grok」')
+    await click('改用规则库的「Grok」')
+    expect(wrapper!.find('[data-rule-conflict]').exists()).toBe(false)
+    await click('生成配置并继续')
+    expect(setupApi.prepare).toHaveBeenLastCalledWith('a'.repeat(32), expect.objectContaining({
+      domain_rules: { direct: ['builtin:direct'], proxy: ['builtin:proxy', 'library:my_grok'] } }))
+  })
+
+  it('副本已建或同名规则集不能选用时，仍注明来源且只提示不提供改用', async () => {
+    vi.mocked(setupApi.index).mockResolvedValue({ data: { sessions: [], suggested: true, subscriptions: [], nodes: [], domain_rules: [
+      ...ruleOptions,
+      { id: 'builtin:grok', name: 'Grok', source: 'builtin', aliases: ['library:builtin_grok'] },
+      { id: 'library:my_grok', name: 'Grok', source: 'library' },
+      { id: 'builtin:openai', name: 'OpenAI', source: 'builtin', conflict: { name: 'OpenAI' } },
+    ] } } as never)
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2,
+      domain_rules: { direct: [], proxy: ['builtin:grok', 'builtin:openai'] } }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    const labels = wrapper!.findAllComponents(MultiSelect)[1]!.props('options').map((item: { label: string }) => item.label)
+    expect(labels).toEqual(expect.arrayContaining(['Grok（内置）', 'Grok（规则库）', 'OpenAI']))
+    const notices = wrapper!.findAll('[data-rule-conflict]')
+    expect(notices).toHaveLength(1)
+    expect(notices[0]!.text()).toContain('规则库已有同名的「OpenAI」')
+    expect(notices[0]!.find('button').exists()).toBe(false)
+  })
+
   it('订阅链接明文显示，读取失败保持来源步骤并使用同一会话重试', async () => {
     vi.mocked(setupApi.source).mockResolvedValue({ data: record({ step: 2, max_step: 2, subscription_ids: ['sub'] }) } as never)
     vi.mocked(subscriptionApi.fetch).mockRejectedValueOnce(new Error('订阅读取失败')).mockResolvedValueOnce({ data: { success: true, count: 3 } } as never)
@@ -422,5 +460,17 @@ describe('主路由分流改为完整 TUN', () => {
     vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 3, prepared: true, legacy_takeover: true }) } as never)
     await open('/setup?session=' + 'a'.repeat(32))
     expect(wrapper!.find('[data-legacy-takeover]').exists()).toBe(false)
+  })
+})
+
+describe('useLibraryNamesake', () => {
+  const grok = { id: 'builtin:grok', name: 'Grok', source: 'builtin' as const, conflict: { id: 'library:my_grok', name: 'Grok' } }
+  it('在原去向就地替换，保留顺序', () => {
+    expect(useLibraryNamesake({ direct: [], proxy: ['builtin:a', 'builtin:grok', 'builtin:b'] }, grok))
+      .toEqual({ direct: [], proxy: ['builtin:a', 'library:my_grok', 'builtin:b'] })
+  })
+  it('同名规则集已在本去向或另一去向时只取消内置项', () => {
+    expect(useLibraryNamesake({ direct: [], proxy: ['library:my_grok', 'builtin:grok'] }, grok)).toEqual({ direct: [], proxy: ['library:my_grok'] })
+    expect(useLibraryNamesake({ direct: ['library:my_grok'], proxy: ['builtin:grok'] }, grok)).toEqual({ direct: ['library:my_grok'], proxy: [] })
   })
 })

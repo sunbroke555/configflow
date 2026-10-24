@@ -2,8 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ArrowRight, Check, CircleCheck, LoaderCircle, Network, Router as RouterIcon } from '@lucide/vue'
-import { setupApi, type SetupGoal, type SetupIndex, type SetupSession } from '@/api/setup'
-import { SETUP_GOALS, SETUP_STEPS, abandonSetup, setupError, setupLocalDnsWarning } from '@/lib/setupFlow'
+import { setupApi, type SetupDomainRule, type SetupGoal, type SetupIndex, type SetupSession } from '@/api/setup'
+import { SETUP_GOALS, SETUP_STEPS, abandonSetup, setupError, setupLocalDnsWarning, setupRuleConflicts, setupRuleOptions, useLibraryNamesake } from '@/lib/setupFlow'
 import { confirm } from '@/lib/feedback'
 import { createDeploymentId } from '@/composables/useAgentDeployments'
 import { useProfileStore } from '@/stores/profile'
@@ -40,8 +40,12 @@ const proxyRules = ref(['builtin:proxy'])
 const ipTakeoverRules = ['builtin:telegram', 'builtin:googlefcm']
 const ipTakeover = computed(() => proxyRules.value.some(id => ipTakeoverRules.includes(id)))
 const localDnsWarning = computed(() => setupLocalDnsWarning(localDns.value))
-const domainRules = computed(() => (options.value.domain_rules || [])
-  .map(item => ({ value: item.id, label: item.name })))
+const domainRules = computed(() => setupRuleOptions(options.value.domain_rules || []))
+const ruleConflicts = computed(() => setupRuleConflicts(options.value.domain_rules || [], { direct: directRules.value, proxy: proxyRules.value }))
+function useNamesake(rule: SetupDomainRule) {
+  const next = useLibraryNamesake({ direct: directRules.value, proxy: proxyRules.value }, rule)
+  directRules.value = next.direct; proxyRules.value = next.proxy
+}
 const directOptions = computed(() => domainRules.value.filter(item => !proxyRules.value.includes(item.value)))
 const proxyOptions = computed(() => domainRules.value.filter(item => !directRules.value.includes(item.value)))
 function setDomainRules(value = options.value.recommended_domain_rules ?? { direct: ['builtin:direct'], proxy: ['builtin:proxy'] }) {
@@ -264,7 +268,7 @@ onUnmounted(() => { disposed = true })
           <Button v-if="step === 1 && session?.prepared" class="mt-4" @click="move(2)">查看规则与 DNS<ArrowRight class="size-4" /></Button>
           <div v-if="step === 2 && session" class="space-y-5">
             <section class="space-y-3" aria-labelledby="setup-domain-title">
-              <div class="flex flex-wrap items-center gap-1"><h3 id="setup-domain-title" class="m-0 text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" text="直接复用 ConfigFlow 原有初始模板的规则库、顺序及默认去向。支持 URL 和内容型的 Domain / Classical text / YAML 规则；Classical 中的域名与 IP 条件由现有转换流程处理。已有相同来源会直接复用，可取消或替换规则，同一规则集只能选择一种去向。两项核心引用相同规则；按模板顺序匹配，未命中时按下方设置处理。策略组沿用默认配置：代理规则各自使用对应的服务组（如 📲 Telegram、🤖 人工智能），默认跟随「✈️ 节点选择」，安装后可在 Mihomo 面板逐个切换；订阅中没有节点的地区组不会生成。" /><Button variant="ghost" size="sm" class="ml-auto min-h-11" :disabled="working || session?.completed" @click="setDomainRules()">恢复推荐</Button></div>
+              <div class="flex flex-wrap items-center gap-1"><h3 id="setup-domain-title" class="m-0 text-sm font-semibold">分流规则</h3><FieldHelp label="分流规则" text="直接复用 ConfigFlow 原有初始模板的规则库、顺序及默认去向。支持 URL 和内容型的 Domain / Classical text / YAML 规则；Classical 中的域名与 IP 条件由现有转换流程处理。已有相同来源，或手写内容匹配的域名相同，会直接复用；规则库已有同名但内容不同的规则集时会提示改用。可取消或替换规则，同一规则集只能选择一种去向。两项核心引用相同规则；按模板顺序匹配，未命中时按下方设置处理。策略组沿用默认配置：代理规则各自使用对应的服务组（如 📲 Telegram、🤖 人工智能），默认跟随「✈️ 节点选择」，安装后可在 Mihomo 面板逐个切换；订阅中没有节点的地区组不会生成。" /><Button variant="ghost" size="sm" class="ml-auto min-h-11" :disabled="working || session?.completed" @click="setDomainRules()">恢复推荐</Button></div>
               <p class="text-xs text-muted-foreground">已选 <span class="num">{{ directRules.length }}</span> 组直连、<span class="num">{{ proxyRules.length }}</span> 组代理规则，可直接继续。</p>
               <div class="grid gap-3 sm:grid-cols-2">
                 <FormField label="直连规则" html-for="setup-direct-rules" hint="使用直连 DNS" persistent-hint>
@@ -273,6 +277,10 @@ onUnmounted(() => { disposed = true })
                 <FormField label="代理规则" html-for="setup-proxy-rules" hint="交给 Mihomo DNS" persistent-hint>
                   <MultiSelect v-model="proxyRules" trigger-id="setup-proxy-rules" :options="proxyOptions" :disabled="working || session?.completed" :max-visible="2" placeholder="选择代理规则集" search-placeholder="搜索域名规则集…" class="min-h-11" />
                 </FormField>
+              </div>
+              <div v-for="rule in ruleConflicts" :key="rule.id" role="status" class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-warning-accent/30 bg-warning-soft px-3 py-2.5 text-xs leading-relaxed" data-rule-conflict>
+                <p class="m-0 min-w-0 flex-1 basis-60">规则库已有同名的「{{ rule.conflict!.name }}」，但内容和内置版本不同。继续会在规则库另建一份内置版本。</p>
+                <Button v-if="rule.conflict!.id" variant="outline" size="sm" class="min-h-11" :disabled="working || session?.completed" @click="useNamesake(rule)">改用规则库的「{{ rule.conflict!.name }}」</Button>
               </div>
               <p v-if="!directRules.length && !proxyRules.length" class="m-0 text-xs text-warning-accent" role="status">未选择域名规则，所有域名将使用下方的默认 DNS。</p>
               <p v-if="goal === 'gateway' && ipTakeover" class="m-0 text-xs leading-relaxed text-muted-foreground">Telegram、Google 推送（FCM）会直接连 IP，它们的 IP 网段也会交给 Mihomo。安装后可在「配置生成 → Linux 网关」的「IP 接管」里调整。</p>

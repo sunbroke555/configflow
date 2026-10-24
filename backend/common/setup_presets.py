@@ -2,10 +2,14 @@
 from copy import deepcopy
 from functools import lru_cache
 from hashlib import sha256
+import ipaddress
 import json
 import re
 from urllib.parse import urlsplit
 
+import yaml
+
+from backend.common.config_repository import ProfileValidationError
 from backend.common.resource import get_backend_resource
 
 _LEGACY_ALIASES = {
@@ -23,6 +27,78 @@ def _source_key(item):
     else:
         return None
     return (*source, item.get('behavior') or 'domain', item.get('format') or 'text')
+
+
+_DOMAIN_KINDS = ('DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD')
+
+
+@lru_cache(maxsize=256)
+def _parsed_rules(content, behavior, rule_format):
+    """What a hand-written rule set matches, ignoring order, case and spelling.
+
+    Only content Mihomo reads the way it is written takes part: anything the
+    editor flags, or YAML that delivery keeps raw (multi-line entries,
+    anchors) and Mihomo reads line by line differently, is incomparable
+    (None) rather than equal by accident. Bare Classical lines take the
+    delivery normalization; a Domain "+.x" is a Classical DOMAIN-SUFFIX and a
+    plain name a DOMAIN. Parameters keep their case, as Mihomo matches
+    "no-resolve" and "src" exactly.
+    """
+    from backend.utils.ruleset_content import inspect_domain_content, normalize_mihomo_ruleset
+    from backend.utils.rule_syntax import split_rule_payload
+    try:
+        if inspect_domain_content(content, behavior, rule_format)['errors']:
+            return None
+        content, warnings = normalize_mihomo_ruleset(content, behavior, rule_format)
+        if warnings:
+            return None
+        if rule_format == 'yaml':
+            lines = yaml.safe_load(content)['payload']
+            if any(line != line.strip() for line in lines):
+                return None
+        else:
+            lines = [line.strip() for line in content.removeprefix('\ufeff').splitlines()]
+        rules = set()
+        for line in lines:
+            if not line or line.startswith(('#', '//')):
+                continue
+            if behavior == 'domain':
+                value = line.lower()
+                if value.startswith('+.'):
+                    rules.add(('DOMAIN-SUFFIX', value[2:]))
+                elif value.startswith('.') or '*' in value:
+                    rules.add(('domain', value))  # No exact Classical counterpart.
+                else:
+                    rules.add(('DOMAIN', value))
+                continue
+            kind, payload, params = split_rule_payload(line)
+            if kind in _DOMAIN_KINDS:
+                payload = payload.lower()
+            elif kind in ('IP-CIDR', 'IP-CIDR6'):
+                payload = str(ipaddress.ip_network(payload, strict=False))
+            rules.add((kind, payload, *sorted(params)))
+    except (AttributeError, KeyError, TypeError, ValueError, yaml.YAMLError, ProfileValidationError):
+        return None
+    return frozenset(rules) or None
+
+
+def _content_rules(item):
+    if item.get('source_type') != 'content' or (item.get('behavior') or 'domain') not in ('domain', 'classical'):
+        return None
+    return _parsed_rules(item.get('content', ''), item.get('behavior') or 'domain', item.get('format') or 'text')
+
+
+def _same_rules(item, wanted):
+    """The same source (URL or exact text), or hand-written rules matching the same."""
+    key = _source_key(item)
+    if key is not None and key == _source_key(wanted):
+        return True
+    rules = _content_rules(item)
+    return rules is not None and rules == _content_rules(wanted)
+
+
+def _builtin_identity(item):
+    return next((identity for identity, wanted in builtin_rule_catalog().items() if _same_rules(item, wanted)), None)
 
 
 def _domain_supported(item):
@@ -144,62 +220,91 @@ def recommended_domain_rules(repository=None):
 
 
 def canonical_domain_rules(repository, selections):
-    by_source = {_source_key(item): identity for identity, item in builtin_rule_catalog().items()}
-    aliases = {**_LEGACY_ALIASES, **{
-        'library:' + item['id']: by_source[_source_key(item)]
-        for item in repository.get_shared()['rule_library'] if _source_key(item) in by_source}}
+    aliases = dict(_LEGACY_ALIASES)
+    for item in repository.get_shared()['rule_library']:
+        identity = _builtin_identity(item)
+        if identity:
+            aliases['library:' + item['id']] = identity
     return {route: list(dict.fromkeys(aliases.get(identity, identity) for identity in values))
             for route, values in selections.items()}
 
 
-def ensure_builtin_library(repository):
+def _copy_name(shared, name):
+    names = {entry['name'] for entry in shared['rule_library']}
+    return name if name not in names else next(
+        candidate for suffix in range(1, len(names) + 2)
+        if (candidate := f'{name}（内置）' if suffix == 1 else f'{name}（内置 {suffix}）') not in names)
+
+
+def ensure_builtin_library(repository, selected=()):
+    """Add the template's rule sets that the shared library does not yet hold.
+
+    A rule set whose name is already taken by different rules is added only
+    when ``selected`` asks for it, so an unrelated wizard run never leaves a
+    "（内置）" copy beside the user's own set.
+    """
     catalog = builtin_rule_catalog()
     def find(shared, wanted):
-        matches = [item for item in shared['rule_library'] if _source_key(item) == _source_key(wanted)]
+        matches = [item for item in shared['rule_library'] if _same_rules(item, wanted)]
         return next((item for item in matches if item.get('enabled', True)), matches[0] if matches else None)
+    def missing(shared):
+        names = {entry['name'] for entry in shared['rule_library']}
+        return [identity for identity, wanted in catalog.items() if not find(shared, wanted)
+                and (wanted['name'] not in names or identity in selected)]
     current = repository.get_shared()
-    if all(find(current, item) for item in catalog.values()):
-        return {identity: deepcopy(find(current, item)) for identity, item in catalog.items()}
-    selected = {}
+    if not missing(current):
+        return {identity: deepcopy(item) for identity, wanted in catalog.items() if (item := find(current, wanted))}
+    selected_items = {}
     def update(shared):
+        added = set(missing(shared))
         for identity, wanted in catalog.items():
             item = find(shared, wanted)
-            if not item:
+            if not item and identity in added:
                 item = {key: deepcopy(value) for key, value in wanted.items() if key not in ('default_route', '_template_order')}
-                item['id'] = identity.replace(':', '_')
                 ids = {entry['id'] for entry in shared['rule_library']}
-                names = {entry['name'] for entry in shared['rule_library']}
-                suffix = 1
-                while item['id'] in ids or item['name'] in names:
-                    suffix += 1
-                    item.update(id=identity.replace(':', '_') + f'_{suffix}', name=wanted['name'] + f'（内置 {suffix}）')
+                item['id'] = next(candidate for suffix in range(1, len(ids) + 2)
+                                  if (candidate := identity.replace(':', '_') + ('' if suffix == 1 else f'_{suffix}')) not in ids)
+                item['name'] = _copy_name(shared, wanted['name'])
                 shared['rule_library'].append(item)
-            selected[identity] = deepcopy(item)
+            if item:
+                selected_items[identity] = deepcopy(item)
     repository.update_shared_transaction(update)
-    return selected
+    return selected_items
 
 
 def domain_rule_options(repository):
+    """Wizard choices: template rule sets first, then the user's other sets.
+
+    A template set the library lacks but whose name a different library set
+    already uses carries ``conflict``: choosing it adds a "（内置）" copy, and
+    ``conflict.id`` names the set the wizard can offer instead, if any.
+    """
     shared = repository.get_shared()['rule_library']
-    disabled_sources = {_source_key(item) for item in shared if not item.get('enabled', True)}
-    disabled_sources -= {_source_key(item) for item in shared if item.get('enabled', True)}
-    options = [{'id': identity, 'name': item['name'], 'source': 'builtin', 'behavior': item['behavior'],
-                'aliases': [alias for alias, target in _LEGACY_ALIASES.items() if target == identity]
-                           + ['library:' + entry['id'] for entry in shared if _source_key(entry) == _source_key(item)]}
-               for identity, item in builtin_rule_catalog().items()
-               if _domain_supported(item) and _source_key(item) not in disabled_sources]
-    builtin_sources = {_source_key(item) for item in builtin_rule_catalog().values()}
-    for item in shared:
-        if (not _domain_supported(item) or _source_key(item) in builtin_sources
-                or 'library:' + item['id'] in _LEGACY_ALIASES):
+    identities = {item['id']: _builtin_identity(item) for item in shared}
+    own = [item for item in shared if _domain_supported(item) and not identities[item['id']]
+           and 'library:' + item['id'] not in _LEGACY_ALIASES]
+    options = []
+    for identity, item in builtin_rule_catalog().items():
+        matches = [entry for entry in shared if identities[entry['id']] == identity]
+        if not _domain_supported(item) or (matches and not any(entry.get('enabled', True) for entry in matches)):
             continue
-        options.append({'id': 'library:' + item['id'], 'name': item['name'], 'source': 'library'})
+        option = {'id': identity, 'name': item['name'], 'source': 'builtin', 'behavior': item['behavior'],
+                  'aliases': [alias for alias, target in _LEGACY_ALIASES.items() if target == identity]
+                             + ['library:' + entry['id'] for entry in matches]}
+        # Any set holding the name blocks the template set (see ensure_builtin_library);
+        # only one the wizard can offer is a swap target.
+        namesake = None if matches else next((entry for entry in sorted(shared, key=lambda entry: entry not in own)
+                                              if entry['name'] == item['name']), None)
+        if namesake:
+            option['conflict'] = {'name': namesake['name'], **({'id': 'library:' + namesake['id']} if namesake in own else {})}
+        options.append(option)
+    options += [{'id': 'library:' + item['id'], 'name': item['name'], 'source': 'library'} for item in own]
     return options
 
 
 def resolve_domain_rules(repository, selections):
     """Resolve selected identities against the existing template library."""
-    builtins = ensure_builtin_library(repository)
+    builtins = ensure_builtin_library(repository, {identity for values in selections.values() for identity in values})
     library = {item['id']: item for item in repository.get_shared()['rule_library']}
     result = {'direct': [], 'proxy': []}
     for route, identities in selections.items():

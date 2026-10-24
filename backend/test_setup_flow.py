@@ -611,6 +611,96 @@ def test_original_first_start_library_is_reused_without_a_second_copy(tmp_path):
     assert all(item['source'] == 'builtin' for item in domain_rule_options(repository))
 
 
+@pytest.mark.parametrize('first, second, same', [
+    (('DOMAIN-SUFFIX,x.ai\nDOMAIN-SUFFIX,grok.com', 'classical', 'text'),
+     ('# AI\n+.GROK.com\n\n+.x.ai\n+.x.ai', 'domain', 'text'), True),
+    (('DOMAIN-SUFFIX,x.ai', 'classical', 'text'), ('payload:\n  - "+.x.ai"', 'domain', 'yaml'), True),
+    (('10.0.0.1/8', 'classical', 'text'), ('IP-CIDR,10.0.0.0/8,no-resolve', 'classical', 'text'), True),
+    # Mihomo matches parameters exactly: an upper-case NO-RESOLVE does nothing.
+    (('IP-CIDR,10.0.0.0/8,no-resolve', 'classical', 'text'), ('IP-CIDR,10.0.0.0/8,NO-RESOLVE', 'classical', 'text'), False),
+    # A bare Classical name is an exact DOMAIN, not a suffix.
+    (('x.ai', 'classical', 'text'), ('DOMAIN-SUFFIX,x.ai', 'classical', 'text'), False),
+    (('.x.ai', 'domain', 'text'), ('DOMAIN-SUFFIX,x.ai', 'classical', 'text'), False),
+    (('DOMAIN-SUFFIX,x.ai,extra', 'classical', 'text'), ('DOMAIN-SUFFIX,x.ai', 'classical', 'text'), False),
+])
+def test_hand_written_rules_compare_by_what_they_match(first, second, same):
+    from backend.common.setup_presets import _parsed_rules
+    assert (_parsed_rules(*first) == _parsed_rules(*second)) is same
+
+
+@pytest.mark.parametrize('content, behavior, rule_format', [
+    ('', 'classical', 'text'), ('# only a comment', 'classical', 'text'), ('not a rule!', 'classical', 'text'),
+    ('payload: 1', 'classical', 'yaml'),
+    # Mihomo reads YAML payload line by line, so these lose rules there that a YAML parser keeps.
+    ('payload:\n  - DOMAIN-SUFFIX,x.ai\n  - "DOMAIN-SUFFIX,\n    grok.com"', 'classical', 'yaml'),
+    ('x: &a DOMAIN-SUFFIX,x.ai\npayload:\n  - *a\n  - DOMAIN-SUFFIX,grok.com', 'classical', 'yaml'),
+    ('payload:\n  - >-\n    DOMAIN-SUFFIX,x.ai\n  - DOMAIN-SUFFIX,grok.com', 'classical', 'yaml'),
+    ("payload:\n  - ' +.x.ai'\n  - '+.grok.com'", 'domain', 'yaml'),
+])
+def test_empty_or_ambiguous_rules_never_compare_equal(content, behavior, rule_format):
+    from backend.common.setup_presets import _parsed_rules
+    assert _parsed_rules(content, behavior, rule_format) is None
+
+
+def test_equivalent_hand_written_set_is_reused_instead_of_copied(setup_api):
+    client, repository = setup_api
+    mine = {'id': 'my_grok', 'name': 'Grok', 'behavior': 'domain', 'format': 'text', 'source_type': 'content',
+            'content': '+.grok.com\n+.x.ai', 'enabled': True}
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(mine)]))
+    session = start(client)
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    grok = next(item for item in client.get('/api/setup').json['domain_rules'] if item['id'] == 'builtin:grok')
+    assert grok['aliases'] == ['library:my_grok'] and 'conflict' not in grok
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': {'direct': [], 'proxy': ['library:my_grok']}})
+    assert response.status_code == 200, response.json
+    assert response.json['domain_rules'] == {'direct': [], 'proxy': ['builtin:grok']}
+    shared = repository.get_shared()['rule_library']
+    assert shared[0] == mine and [item['name'] for item in shared].count('Grok') == 1
+    assert not any('（内置' in item['name'] for item in shared)
+    assert any(rule.get('library_rule_id') == 'my_grok' for rule in repository.get_profile(session['profile_id'])['rule_configs'])
+
+
+def test_namesake_with_different_rules_is_offered_and_copied_only_when_chosen(setup_api):
+    client, repository = setup_api
+    mine = {'id': 'my_grok', 'name': 'Grok', 'behavior': 'classical', 'format': 'text', 'source_type': 'content',
+            'content': 'x.ai\ngrok.com', 'enabled': True}
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(mine)]))
+    session = start(client)
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    options = client.get('/api/setup').json['domain_rules']
+    grok = next(item for item in options if item['id'] == 'builtin:grok')
+    assert grok['conflict'] == {'id': 'library:my_grok', 'name': 'Grok'}
+    assert any(item['id'] == 'library:my_grok' for item in options)
+    # Choosing the user's set leaves no copy behind, even for template sets not chosen at all.
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': {'direct': [], 'proxy': ['library:my_grok']}})
+    assert response.status_code == 200, response.json
+    shared = repository.get_shared()['rule_library']
+    assert [item['name'] for item in shared].count('Grok') == 1
+    assert not any(item['name'].startswith('Grok（') for item in shared)
+    assert len(shared) == len(builtin_rule_catalog())
+    # Choosing the template's set adds it under a name that says where it came from.
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': {'direct': [], 'proxy': ['builtin:grok']}})
+    assert response.status_code == 200, response.json
+    copy = next(item for item in repository.get_shared()['rule_library'] if item['name'].startswith('Grok（'))
+    assert copy['name'] == 'Grok（内置）' and copy['id'] == 'builtin_grok'
+    assert any(rule.get('library_rule_id') == 'builtin_grok' for rule in repository.get_profile(session['profile_id'])['rule_configs'])
+    # Once added it is the template's set: no conflict and no further copy.
+    grok = next(item for item in client.get('/api/setup').json['domain_rules'] if item['id'] == 'builtin:grok')
+    assert 'conflict' not in grok and grok['aliases'] == ['library:builtin_grok']
+
+
+@pytest.mark.parametrize('namesake', [{'enabled': False}, {'behavior': 'ipcidr', 'content': '192.0.2.0/24'}])
+def test_namesake_the_wizard_cannot_offer_still_warns_before_copying(setup_api, namesake):
+    client, repository = setup_api
+    mine = {'id': 'my_grok', 'name': 'Grok', 'behavior': 'classical', 'format': 'text', 'source_type': 'content',
+            'content': 'DOMAIN,foo.test', 'enabled': True, **namesake}
+    repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(mine)]))
+    start(client)
+    options = client.get('/api/setup').json['domain_rules']
+    assert next(item for item in options if item['id'] == 'builtin:grok')['conflict'] == {'name': 'Grok'}
+    assert not any(item['id'] == 'library:my_grok' for item in options)
+
+
 def test_new_choices_after_installation_check_clear_stale_later_steps(installed):
     client, repository, profile_id, _, _ = installed
     response = client.post(f'/api/setup/{SESSION}/check', json={})

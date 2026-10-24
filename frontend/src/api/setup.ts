@@ -2,7 +2,11 @@ import api from '@/api'
 
 export type SetupGoal = 'router' | 'gateway'
 export interface SetupDomainSelection { direct: string[]; proxy: string[] }
-export interface SetupDomainRule { id: string; name: string; source: 'builtin' | 'library'; behavior?: 'domain' | 'classical'; aliases?: string[] }
+export interface SetupDomainRule {
+  id: string; name: string; source: 'builtin' | 'library'; behavior?: 'domain' | 'classical'; aliases?: string[]
+  /** 规则库里同名但内容不同的规则集；选择内置项会另建一份。id 仅在可改用时提供 */
+  conflict?: { name: string; id?: string }
+}
 export interface SetupRouterDraft {
   id: string; name: string; type: 'ikuai' | 'routeros'; endpoint: string; username: string; verify_tls: boolean
   proxy_gateway_agent_id: string; dns_agent_id: string; has_password: boolean
