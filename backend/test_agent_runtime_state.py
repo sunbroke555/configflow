@@ -141,7 +141,7 @@ def test_unknown_agent_writes_and_remembers_nothing(tmp_path):
 def test_deleting_an_agent_forgets_its_heartbeat(tmp_path):
     _, manager, agent = setup(tmp_path)
     assert manager.update_heartbeat(agent["id"], {"system_metrics": METRICS})
-    manager.runtime.record_heartbeat({"id": "stray"}, {"version": "9"})
+    assert manager.runtime.record_heartbeat({"id": "stray"}, {"version": "9"}, manager.runtime.mark())
     # Only registered Agents are shown.
     assert [item["id"] for item in manager.get_all_agents()] == [agent["id"]]
     assert manager.delete_agent(agent["id"])
@@ -270,6 +270,48 @@ def test_concurrent_heartbeats_are_all_recorded(tmp_path):
     assert manager.get_agent_by_id(agent["id"])["service_status"].startswith("s")
 
 
+def test_a_heartbeat_racing_a_delete_leaves_nothing_behind(tmp_path, monkeypatch):
+    # The heartbeat looked the Agent up just before delete_agent committed.
+    repository, manager, agent = setup(tmp_path)
+    record = manager.runtime.record_heartbeat
+
+    def deleted_meanwhile(*args):
+        assert manager.delete_agent(agent["id"])
+        return record(*args)
+    monkeypatch.setattr(manager.runtime, "record_heartbeat", deleted_meanwhile)
+    current_revision = revision(repository)
+
+    assert not manager.update_heartbeat(agent["id"], {"version": "2.0.0", "system_metrics": METRICS})
+    assert manager.runtime._entries == {}
+    assert revision(repository) == current_revision + 1   # the delete only
+
+
+def test_a_delete_after_the_heartbeat_is_recorded_skips_the_version_write(tmp_path, monkeypatch):
+    repository, manager, agent = setup(tmp_path)
+    record = manager.runtime.record_heartbeat
+
+    def deleted_afterwards(*args):
+        assert record(*args)
+        assert manager.delete_agent(agent["id"])
+        return True
+    monkeypatch.setattr(manager.runtime, "record_heartbeat", deleted_afterwards)
+    current_revision = revision(repository)
+
+    assert not manager.update_heartbeat(agent["id"], {"version": "2.0.0", "config_version": "cfg-2"})
+    assert manager.runtime._entries == {}
+    assert revision(repository) == current_revision + 1
+    assert repository.get_system()["agents"] == []
+
+
+def test_an_agent_restored_after_its_deletion_is_heard_again(tmp_path):
+    repository, manager, agent = setup(tmp_path)
+    saved = stored(repository, agent["id"])
+    assert manager.delete_agent(agent["id"])
+    repository.update_system_transaction(lambda system: system["agents"].append(saved))
+    assert manager.update_heartbeat(agent["id"], {"service_status": "running"})
+    assert manager.get_agent_by_id(agent["id"])["service_status"] == "running"
+
+
 # --- one-time import of #369's runtime.sqlite3 ---
 
 def legacy_database(path, rows):
@@ -364,23 +406,48 @@ def test_undecodable_legacy_rows_are_skipped(tmp_path):
     assert stored(repository, stale["id"])["version"] == "2.0.0"
 
 
-def test_a_failed_version_import_keeps_the_file_for_the_next_attempt(tmp_path, monkeypatch):
+def test_a_failed_version_import_is_not_retried_over_newer_versions(tmp_path, monkeypatch, caplog):
     repository, fresh, _ = two_agents(tmp_path)
     legacy_database(tmp_path / "runtime.sqlite3", [legacy_row(fresh["id"], datetime.now(), {"version": "2.0.0"})])
     runtime_state.reset()
 
     def unavailable(self, _changes):
         raise OSError("disk full")
-    with monkeypatch.context() as patch:
+    with monkeypatch.context() as patch, caplog.at_level(logging.INFO, logger="backend.agents.runtime_state"):
         patch.setattr(AgentManager, "_save_reported_fields", unavailable)
         manager = AgentManager(ProfileRepository(tmp_path))
-    # Still shown live meanwhile.
+    assert runtime_logs(caplog) == [logging.WARNING, logging.INFO]
+    # Still shown live meanwhile, and the file is gone either way.
     assert manager.get_agent_by_id(fresh["id"])["version"] == "2.0.0"
-    assert (tmp_path / "runtime.sqlite3").exists()
-
-    AgentManager(ProfileRepository(tmp_path))
-    assert stored(repository, fresh["id"])["version"] == "2.0.0"
     assert not (tmp_path / "runtime.sqlite3").exists()
+
+    # The next heartbeat writes the version it reports.
+    assert manager.update_heartbeat(fresh["id"], {"version": "3.0.0"})
+    restarted = restart(repository)
+    assert stored(repository, fresh["id"])["version"] == "3.0.0"
+    assert restarted.get_agent_by_id(fresh["id"])["version"] == "3.0.0"
+
+
+def test_a_runtime_sqlite_that_cannot_be_removed_is_not_imported(tmp_path, monkeypatch, caplog):
+    repository, fresh, _ = two_agents(tmp_path)
+    database = tmp_path / "runtime.sqlite3"
+    legacy_database(database, [legacy_row(fresh["id"], datetime.now(), {"version": "2.0.0"})])
+    current_revision = revision(repository)
+    unlink = type(database).unlink
+
+    def refuse(self, *args, **kwargs):
+        if self.name == "runtime.sqlite3":
+            raise PermissionError("read-only")
+        return unlink(self, *args, **kwargs)
+    monkeypatch.setattr(type(database), "unlink", refuse)
+    runtime_state.reset()
+    with caplog.at_level(logging.INFO, logger="backend.agents.runtime_state"):
+        manager = AgentManager(ProfileRepository(tmp_path))
+    # Applying it now would make every later start apply the same old rows again.
+    assert runtime_logs(caplog) == [logging.WARNING, logging.WARNING]
+    assert revision(repository) == current_revision
+    assert manager.runtime._entries == {}
+    assert database.exists()
 
 
 # --- presence logging across a restart ---

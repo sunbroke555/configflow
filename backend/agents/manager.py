@@ -44,6 +44,10 @@ class AgentDeploymentConflict(ValueError):
     """A profile binding cannot change during an unfinished deployment."""
 
 
+class _NothingToSave(Exception):
+    """Aborts a configuration transaction that would change nothing."""
+
+
 def _upgrade_busy(agent):
     upgrade = agent.get('latest_upgrade') or {}
     return bool(upgrade) and upgrade.get('status') not in ('succeeded', 'failed', 'rolled_back')
@@ -80,12 +84,24 @@ class AgentManager:
         return self.runtime.overlay(self.repository.get_system().get('agents', []))
 
     def _save_reported_fields(self, changes):
-        """Write {agent_id: {field: value}} reported by heartbeats into the configuration in one transaction."""
+        """Write {agent_id: {field: value}} reported by heartbeats into the configuration in one transaction.
+
+        Returns the IDs written; when none of the Agents exists any more nothing is written.
+        """
+        saved = set()
+
         def update(agents):
             for item in agents:
                 if item['id'] in changes:
                     item.update(changes[item['id']])
-        self._update_agents(update)
+                    saved.add(item['id'])
+            if not saved:
+                raise _NothingToSave()
+        try:
+            self._update_agents(update)
+        except _NothingToSave:
+            pass
+        return saved
 
     def _update_agents(self, updater, profile_id=None):
         result = {}
@@ -346,17 +362,18 @@ class AgentManager:
             bool: 是否更新成功
         """
         heartbeat_data = heartbeat_data or {}
+        mark = self.runtime.mark()
         agent = next((item for item in self.repository.get_system().get('agents', []) if item['id'] == agent_id), None)
-        if agent is None:
+        # 查到 Agent 之后它又被删除时，不能把心跳状态再记回去
+        if agent is None or not self.runtime.record_heartbeat(agent, heartbeat_data, mark):
             return False
-        self.runtime.record_heartbeat(agent, heartbeat_data)
 
         # config_version 是发布基线；version 决定更新检查和版本门槛，重启后不能退回注册时的值。
         # 两者都很少变化，只在变化时写配置。
         changes = {key: heartbeat_data[key] for key in ('version', 'config_version')
                    if key in heartbeat_data and heartbeat_data[key] != agent.get(key)}
-        if changes:
-            self._save_reported_fields({agent_id: changes})
+        if changes and not self._save_reported_fields({agent_id: changes}):
+            return False
 
         if 'system_metrics' in heartbeat_data:
             # 保存监控数据到历史记录
