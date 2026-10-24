@@ -25,6 +25,7 @@ import yaml
 
 from backend.agents.diagnostics import failure_text
 from backend.agents.deployment_locations import DeploymentPreparationError, preparation_context, source_error
+from backend.converters.common import ruleset_format
 from backend.converters.mosdns import RULE_PARTS, empty_rule_part, parse_clash_rule_value
 from backend.utils.rule_fetch import (
     RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
@@ -178,7 +179,7 @@ def deployment_content_fingerprint(manifest):
     return 'v1:' + hashlib.sha256(encoded).hexdigest()
 
 
-def _local_rule(url, config, base_url):
+def _local_rule(url, config, base_url, *, rules_local_only=False):
     """Return the snapshot's library entry only for a recognized local URL."""
     from backend.common.profile_context import profile_api_path
     parsed = urlsplit(url)
@@ -191,8 +192,10 @@ def _local_rule(url, config, base_url):
     for rule in config.get('rule_library', []):
         paths = [profile_api_path(config, '/rules/local/' + rule.get('name', '')),
                  profile_api_path(config, '/rule-library/content/' + rule.get('id', ''))]
-        if path in paths or path in [prefix + p for p in paths]:
+        if path in (paths[0], prefix + paths[0]):
             return rule
+        if path in (paths[1], prefix + paths[1]):
+            return None if rules_local_only else rule
     if '/api/' in path or path.startswith('/rules/local/') or path.startswith('/rule-library/content/'):
         raise DeploymentPreparationError('Rule callback is not part of this profile snapshot')
     return None
@@ -559,9 +562,9 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                                      fetch_raw=fetch_raw)
             # Snapshot callbacks bypass /rules/local, so apply the same repair
             # for the final Mihomo consumer without changing shared raw bytes.
-            if (service == 'mihomo' and item.get('format', 'yaml') in ('text', 'yaml')
+            if (service == 'mihomo'
                     and parse_qs(urlsplit(item.get('url', '')).query).get('target', [''])[0] == 'mihomo'
-                    and (local_rule := _local_rule(item['url'], config, base_url)) is not None
+                    and (local_rule := _local_rule(item['url'], config, base_url, rules_local_only=True)) is not None
                     and local_rule.get('behavior', 'domain') == item.get('behavior', 'domain')):
                 try:
                     text = value.decode('utf-8')
@@ -569,7 +572,7 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                     pass
                 else:
                     normalized, warnings = normalize_mihomo_ruleset(
-                        text, item.get('behavior', 'domain'), item.get('format', 'yaml'))
+                        text, local_rule.get('behavior', 'domain'), ruleset_format(local_rule, config))
                     value = normalized.encode('utf-8')
                     if warnings:
                         logger.warning('Mihomo provider %s: %s unconverted lines (first 10: %s)',

@@ -142,3 +142,30 @@ def test_marked_yaml_flow_is_expanded_for_mihomo_only(behavior, raw, expected):
     assert '# original' in delivered and '# keep' in delivered
     assert files['rules/unmarked.yaml'].decode() == source
     assert config == before
+
+
+def test_content_endpoint_marker_does_not_change_bundle_bytes():
+    source = 'payload: ["+.tmdb.org"]\n'
+    config = snapshot(source)
+    config['rule_library'][0]['format'] = 'yaml'
+    definition = {**provider(rule_format='yaml'),
+                  'url': BASE + '/api/profiles/default/rule-library/content/shared?target=mihomo'}
+    files = contents(build(config, {'shared': definition}))
+    # This raw-content HTTP endpoint ignores target on later core refreshes.
+    assert files['rules/shared.list'].decode() == source
+
+
+@pytest.mark.parametrize('library_format,provider_format', [('yaml', 'text'), ('text', 'yaml')])
+def test_bundle_layout_uses_library_format_like_rules_local_http(library_format, provider_format):
+    source = '# original\npayload: ["+.tmdb.org"]\n'
+    config = snapshot(source)
+    config['rule_library'][0].update(behavior='domain', format=library_format)
+    before = deepcopy(config)
+    files = contents(build(config, {'shared': provider('domain', provider_format)}))
+    delivered = files['rules/shared.list'].decode()
+    assert yaml.safe_load(delivered) == yaml.safe_load(source)
+    if library_format == 'yaml':
+        assert not yaml.compose(delivered).value[0][1].flow_style
+    else:
+        assert delivered == source
+    assert config == before
