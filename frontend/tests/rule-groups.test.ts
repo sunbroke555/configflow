@@ -202,4 +202,11 @@ describe('rule group sections', () => {
     // Every child stays a single draggable card for Sortable.
     expect(children().every(el => el.hasAttribute('data-reorder-item') && el.getAttribute('aria-hidden') !== 'true')).toBe(true)
   })
+
+  it('keeps groups collapsed under the earlier key format and migrates it', async () => {
+    localStorage.setItem('cf-rules-collapsed:default', JSON.stringify(['group_rule-r-a_Proxy']))
+    const wrapper = await render()
+    expect(toggle(wrapper, 'DNS地址').attributes('aria-expanded')).toBe('false')
+    expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-a'])
+  })
 })

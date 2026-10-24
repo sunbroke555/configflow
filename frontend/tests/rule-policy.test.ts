@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import Rules from '@/views/Rules.vue'
+import api from '@/api'
 import { setActiveProfileId } from '@/profileContext'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
 
@@ -160,5 +161,68 @@ describe('inline policy selection', () => {
     expect(wrapper.find('button[aria-label="AI 的策略：Proxy，点击修改整组"]').exists()).toBe(true)
     await pick(wrapper, 'end.test 的策略', 'DIRECT')
     expect(network.rules.setPolicy).toHaveBeenCalledWith(['r-end'], 'DIRECT', { groupName: '' }, 'default')
+  })
+
+  it('lists an imported built-in policy under built-ins without calling it missing', async () => {
+    network.state.rules[0]!.policy = 'REJECT-DROP'
+    const wrapper = await render()
+    await wrapper.get('button[aria-label^="lan.test 的策略"]').trigger('click')
+    await flushPromises()
+    expect(options().map(item => item.textContent?.trim())).toEqual(['DIRECT', 'REJECT', 'REJECT-DROP', 'Proxy', 'Japan'])
+  })
+
+  it('shows DNS skeletons for changed rows until DNS reloads instead of the old follow route', async () => {
+    const wrapper = await render()
+    let resolve!: (value: { data: any }) => void
+    network.rules.getDns.mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    await pick(wrapper, 'lan.test 的策略', 'Japan')
+    const row = wrapper.findAll('.rule-row').find(item => item.text().includes('lan.test'))!
+    expect(row.find('[aria-label="DNS 状态加载中"]').exists()).toBe(true)
+    expect(row.text()).not.toContain('跟随 · 直连')
+    resolve({ data: structuredClone(network.state.dns) })
+    await flushPromises()
+  })
+
+  it('counts parked DNS of disabled rules and explains locked routing in the group confirm', async () => {
+    network.state.dns.engine = { ...engine, editable: false, reason: '自定义结构' }
+    const wrapper = await render()
+    await pick(wrapper, 'AI 的策略', 'DIRECT')
+    expect(confirmState.description).toBe('将把「AI」的 3 项策略从「Proxy」改为「DIRECT」，组名保留。DNS 分流需在完整参数修改，本次只改策略；跟随策略的规则会显示与策略不一致。')
+    settleConfirm('cancel')
+    await flushPromises()
+
+    network.state.dns.engine = engine
+    network.state.rules[2]!.enabled = false
+    network.state.dns.rules['r-b'] = { state: 'disabled', route: 'direct' }
+    network.state.dns.rules['r-c'] = { state: 'disabled', route: 'proxy', follow: true }
+    const again = await render()
+    await pick(again, 'AI 的策略', 'Japan')
+    // Only r-b keeps its own route: the follow rule moves with the policy.
+    expect(confirmState.description).toContain('1 项 DNS 为单独设置，不随策略变化')
+  })
+
+  it('keeps a collapsed group collapsed after changing its policy', async () => {
+    const wrapper = await render()
+    await wrapper.get('button[aria-label="收起分组 AI"]').trigger('click')
+    await pick(wrapper, 'AI 的策略', 'Japan')
+    settleConfirm('confirm')
+    await flushPromises()
+    expect(wrapper.get('button[aria-label$="分组 AI"]').attributes('aria-expanded')).toBe('false')
+    expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-r-a'])
+  })
+
+  it('updates the simulation result when the matched rule changes policy', async () => {
+    vi.stubGlobal('scrollTo', vi.fn())
+    vi.mocked(api.post).mockImplementation(async (path: string) => ({
+      data: path === '/rules/match-test'
+        ? { success: true, matched: true, rule_id: 'r-lan', item_type: 'rule', policy: 'DIRECT', priority: 1, matched_line: 'DOMAIN-SUFFIX,lan.test,DIRECT', elapsed_time: 1 }
+        : { success: true }
+    }))
+    const wrapper = await render()
+    ;(wrapper.vm as any).$.setupState.simQuery = 'lan.test'
+    await (wrapper.vm as any).$.setupState.simulate()
+    await flushPromises()
+    await pick(wrapper, 'lan.test 的策略', 'Japan')
+    expect((wrapper.vm as any).$.setupState.simResult.policy).toBe('Japan')
   })
 })

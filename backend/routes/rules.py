@@ -559,8 +559,7 @@ def set_rule_policy():
             or any(not isinstance(value, str) or not value for value in ids)
             or len(set(ids)) != len(ids)):
         raise ProfileValidationError('规则 ID 列表不能为空或包含重复项')
-    if len(ids) > _DNS_BATCH_LIMIT:
-        raise ProfileValidationError(f'一次最多修改 {_DNS_BATCH_LIMIT} 条规则的策略')
+    # No batch cap: a group of any size is one field change and one routing rebuild.
     policy = body.get('policy')
     if not isinstance(policy, str) or not policy:
         raise ProfileValidationError('请选择策略')

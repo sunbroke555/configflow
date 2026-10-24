@@ -27,11 +27,15 @@ watch(() => [props.disabled, props.loading], () => {
 })
 
 const BUILTIN = ['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS']
-const builtin = computed(() => props.policies.filter(policy => BUILTIN.includes(policy)))
-// 当前策略组已被删除时仍列出，避免选择器里找不到当前值
+// 当前值不在可选列表里时仍列出：内置策略（如导入的 REJECT-DROP）照常显示，策略组标注已不存在
+const missing = computed(() => !!props.modelValue && !props.policies.includes(props.modelValue))
+const builtin = computed(() => {
+  const list = props.policies.filter(policy => BUILTIN.includes(policy))
+  return missing.value && BUILTIN.includes(props.modelValue) ? [...list, props.modelValue] : list
+})
 const groups = computed(() => {
   const names = props.policies.filter(policy => !BUILTIN.includes(policy))
-  return props.modelValue && !props.policies.includes(props.modelValue) ? [props.modelValue, ...names] : names
+  return missing.value && !BUILTIN.includes(props.modelValue) ? [props.modelValue, ...names] : names
 })
 const optionClass = 'min-h-11 cursor-pointer gap-2 px-2 py-1.5 md:min-h-9 [@media(pointer:coarse)]:min-h-11'
 

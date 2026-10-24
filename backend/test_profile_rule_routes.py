@@ -445,6 +445,17 @@ def test_policy_change_on_custom_native_saves_rules_with_warning(space):
     assert [item['policy'] for item in repository.get_profile('other')['rule_configs'] if item['id'] in ('inline', 'off')] == ['Proxy', 'Proxy']
 
 
+def test_policy_change_has_no_batch_cap_for_large_groups(space):
+    client, repository = space
+    response = client.post('/api/rules/batch', headers=HEADERS, json={
+        'rule_type': 'DOMAIN-SUFFIX', 'domains': [f'd{index}.test' for index in range(250)], 'policy': 'DIRECT'})
+    assert response.status_code == 200
+    ids = [item['id'] for item in response.get_json()['rules']]
+    assert put_policy(client, ids=ids, policy='Proxy').status_code == 200
+    rules = {item['id']: item for item in repository.get_profile('other')['rule_configs']}
+    assert {rules[key]['policy'] for key in ids} == {'Proxy'}
+
+
 @pytest.mark.parametrize('body, status', [
     ({'ids': ['inline'], 'policy': 'Missing'}, 400),
     ({'ids': ['inline', 'deleted'], 'policy': 'Proxy'}, 404),
@@ -453,7 +464,6 @@ def test_policy_change_on_custom_native_saves_rules_with_warning(space):
     ({'ids': 'inline', 'policy': 'Proxy'}, 400),
     ({'ids': ['inline'], 'policy': ''}, 400),
     ({'ids': ['inline'], 'policy': 'Proxy', 'group_name': 1}, 400),
-    ({'ids': [f'r{index}' for index in range(201)], 'policy': 'Proxy'}, 400),
 ])
 def test_policy_change_rejects_bad_requests_without_changes(space, body, status):
     client, repository = space

@@ -537,7 +537,7 @@
               :label="`${ruleName(item)} 的策略：${item.policy}，点击修改`"
               :disabled="reorder.active.value"
               :loading="!!policyPending[item.uniqueId]"
-              :trigger-class="cn('chip max-w-[150px]', policyChip(item.policy))"
+              :trigger-class="'h-[22px] max-w-[150px] rounded-full border border-transparent bg-secondary px-2 text-[10.5px] font-medium text-secondary-foreground'"
               @update:model-value="value => setRulePolicy(item, value)"
             />
             <Button variant="ghost" size="icon-sm" class="ml-auto" title="编辑" aria-label="编辑" @click="editItem(item)">
@@ -1163,7 +1163,9 @@ const allRulesAndSets = computed(() => ruleGroups.value.flatMap((group) => {
 watch(() => ruleGroups.value, (groups) => {
   if (!rulesLoaded.value) return
   saveCollapsed(groups
-    .filter(group => group.count > 1 && group.items.some((item: any) => collapsedGroups.value.has(`group_${item.uniqueId}`)))
+    // 也认 group_<首项>_<策略> 的旧格式，升级后已收起的分组不会展开
+    .filter(group => group.count > 1 && group.items.some((item: any) =>
+      collapsedGroups.value.has(`group_${item.uniqueId}`) || collapsedGroups.value.has(`group_${item.uniqueId}_${group.policy}`)))
     .map(group => group.groupId))
 })
 
@@ -1415,10 +1417,11 @@ const openBatch = (group: any) => {
 const policyPending = ref<Record<string, string>>({})
 const ruleName = (item: any) => (item.itemType === 'ruleset' ? item.name || item.id : item.value || item.rule_type || item.id)
 
-/** 改策略后 DNS 仍是单独设置、与新策略不同的项 */
+/** 改策略后 DNS 仍是单独设置、与新策略不同的项；已停用规则暂存的单独设置同样计入 */
 const explicitDnsCount = (items: any[], policy: string) => (dnsColumn.value ? items.filter((item) => {
   const entry = dnsSnapshot.value?.rules[item.id]
-  return entry?.state === 'explicit' && (entry.route ?? null) !== followRoute({ ...item, policy })
+  const own = entry && !entry.follow && (entry.state === 'explicit' || entry.state === 'disabled') ? entry.route ?? null : null
+  return own !== null && own !== followRoute({ ...item, policy })
 }).length : 0)
 
 const applyPolicy = async (key: string, items: any[], policy: string, options: { groupName?: string } = {}) => {
@@ -1427,8 +1430,15 @@ const applyPolicy = async (key: string, items: any[], policy: string, options: {
   try {
     const explicit = explicitDnsCount(items, policy)
     const { data } = await ruleApi.setPolicy(items.map(item => item.id), policy, options, profileId)
-    await loadAllRules()
+    // 跟随策略的 DNS 已在服务端改变：重新读取前显示骨架，读取失败显示「—」，不显示旧路由
+    dnsStale.value = new Set([...dnsStale.value, ...items.map(item => item.id)])
     void loadDns()
+    await loadAllRules()
+    // 命中模拟的结果行被改了策略时，结果栏跟着更新
+    if (simResult.value?.matched && items.some(item => `${item.itemType}-${item.id}` === simMatchKey.value)) {
+      simResult.value = { ...simResult.value, policy }
+      simVia.value = await resolveVia(policy)
+    }
     notifyRuleSaved(items.length > 1 ? `已将 ${items.length} 项的策略改为「${policy}」` : `策略已改为「${policy}」`, {
       agents: dnsSnapshot.value?.engine.agents,
       scopes: [...new Set(items.map(item => (item.itemType === 'ruleset' ? 'library' as const : 'rules' as const)))],
@@ -1448,9 +1458,9 @@ const setRulePolicy = (item: any, policy: string) => applyPolicy(item.uniqueId, 
 
 const setGroupPolicy = async (group: any, policy: string) => {
   const explicit = explicitDnsCount(group.items, policy)
-  const dns = dnsColumn.value
-    ? `跟随策略的 DNS 会一起变化${explicit ? `；${explicit} 项 DNS 为单独设置，不随策略变化` : ''}。`
-    : ''
+  const dns = !dnsColumn.value ? ''
+    : !dnsEditable.value ? 'DNS 分流需在完整参数修改，本次只改策略；跟随策略的规则会显示与策略不一致。'
+    : `跟随策略的 DNS 会一起变化${explicit ? `；${explicit} 项 DNS 为单独设置，不随策略变化` : ''}。`
   const accepted = await confirm(`将把「${groupTitle(group)}」的 ${group.count} 项策略从「${group.policy}」改为「${policy}」，组名保留。${dns}`, {
     title: '修改整组策略', confirmText: '修改'
   })
