@@ -342,6 +342,37 @@ def _join_rule_lines(lines: List[str], part: str = None) -> str:
     return '\n'.join(lines)
 
 
+def domain_pattern_for_mosdns(pattern: str):
+    """Translate Mihomo Domain label patterns without widening their scope.
+
+    A complete '*' label consumes exactly one label, including in the middle
+    of a name. This syntax is distinct from Classical DOMAIN-WILDCARD globs.
+    Both rule-proxy responses and Agent files use the same conversion.
+    """
+    import re
+    from backend.utils.ruleset_content import _valid_pattern
+
+    if not _valid_pattern(pattern):
+        return None
+    pattern = pattern.lower()
+    if pattern.startswith('+.') and '*' not in pattern:
+        return 'domain:' + pattern[2:]
+    if pattern.startswith('.') and '*' not in pattern:
+        return r'regexp:.+\.' + re.escape(pattern[1:]) + '$'
+    if pattern.startswith('*.') and '*' not in pattern[2:]:
+        return r'regexp:^[^.]+\.' + re.escape(pattern[2:]) + '$'
+    if '*' not in pattern:
+        return 'full:' + pattern
+    prefix = ''
+    if pattern.startswith('+.'):
+        prefix, pattern = r'(?:[^.]+\.)*', pattern[2:]
+    elif pattern.startswith('.'):
+        prefix, pattern = r'(?:[^.]+\.)+', pattern[1:]
+    labels = r'\.'.join(r'[^.]+' if label == '*' else re.escape(label)
+                         for label in pattern.split('.'))
+    return 'regexp:^' + prefix + labels + '$'
+
+
 def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
     """把 Clash / List / YAML payload 规则转换为 MosDNS 文本格式
 
@@ -350,7 +381,6 @@ def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
         'domain' 只输出域名规则（domain_set 使用）
         'ip'     只输出 IP/CIDR（ip_set 使用），包括 Clash 的 IP-CIDR/IP-CIDR6
     """
-    import re
     from backend.utils.ruleset_content import _has_yaml_payload
 
     # Match the UTF-8 decoding used by deployment bundles.
@@ -435,18 +465,9 @@ def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
             continue
         if not want_domain:
             continue
-        if line.startswith('+.'):
-            # +.example.com → 匹配域名及所有子域名
-            converted.append(f"domain:{line[2:]}")
-        elif line.startswith('.') and not line.startswith('..'):
-            # .example.com → 仅匹配子域名
-            converted.append(f"regexp:.+\\.{re.escape(line[1:])}$")
-        elif line.startswith('*.'):
-            # *.example.com → 仅匹配直接子域名
-            converted.append(f"regexp:^[^.]+\\.{re.escape(line[2:])}$")
-        elif '.' in line and not line.endswith('.'):
-            # example.com → 精确匹配
-            converted.append(f"full:{line}")
+        expression = domain_pattern_for_mosdns(line)
+        if expression:
+            converted.append(expression)
 
     return _join_rule_lines(converted, part)
 
