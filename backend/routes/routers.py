@@ -507,7 +507,7 @@ def policy_settings(router_id):
     try:
         if request.method == 'PUT':
             body = request.get_json(silent=True)
-            if not isinstance(body, dict) or set(body) != {'revision', 'router', 'policies', 'base_url'} or \
+            if not isinstance(body, dict) or set(body) != {'revision', 'names_revision', 'router', 'policies', 'base_url'} or \
                     not isinstance(body['router'], dict) or set(body['router']) != set(FIELDS) or \
                     not isinstance(body['base_url'], str):
                 return jsonify(success=False, message='策略路由设置格式无效'), 400
@@ -524,6 +524,8 @@ def policy_settings(router_id):
         workspace = read_workspace(config, router, profile_id,
                                    get_repository().get_profile(profile_id)['name'],
                                    get_agent_manager().get_all_agents(), get_default_profile_id())
+        # Read after the draft, so a newer write only makes the publish recheck stricter.
+        workspace['config_revision'] = get_repository().config_revision(profile_id)
         response = jsonify(success=True, workspace=workspace)
         response.headers['Cache-Control'] = 'no-store'
         return response

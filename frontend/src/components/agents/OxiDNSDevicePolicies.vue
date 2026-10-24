@@ -145,6 +145,9 @@ const dirty = computed(() => !!state.value && comparable(rows.value) !== compara
 const AUTOSAVE_DELAY = 800
 let autosaveTimer: ReturnType<typeof setTimeout> | undefined
 let pendingSave: Promise<boolean> | null = null
+// Names add() filled in from the loaded notes. Such a row is sent unnamed until a
+// response carries it, so the server keeps a rename made elsewhere meanwhile.
+const prefilled = new Map<string, string>()
 usePageReloadGuard(() => publishing.value || !!newIP.value.trim())
 const { deployments, busy, track, beginSubmission, endSubmission, activate } = useAgentDeployments(() => emit('published'))
 const task = computed(() => deployments[props.agentId])
@@ -173,6 +176,7 @@ async function load() {
   error.value = ''
   submissionFailure.value = null
   cancelAutosave()
+  prefilled.clear()
   saveError.value = false
   savedOnce.value = false
   try {
@@ -205,7 +209,9 @@ function add(value: string) {
     return
   }
   if (rows.value.some(row => row.ip === ip)) { notify.info('此客户端 IP 或网段已在列表中。'); return }
-  rows.value.push({ ip, name: state.value.device_notes?.[ip] || '', mode: 'smart' })
+  const name = state.value.device_notes?.[ip] || ''
+  prefilled.set(ip, name)
+  rows.value.push({ ip, name, mode: 'smart' })
   newIP.value = ''
   void flushSave()
 }
@@ -242,7 +248,9 @@ async function save(): Promise<boolean> {
     error.value = ''
     submissionFailure.value = null
     try {
-      const { data } = await oxidnsDevicePolicyApi.save(id, { profile_id: state.value.profile_id, revision: state.value.revision, policies: JSON.parse(sent) })
+      const policies = (JSON.parse(sent) as OxiDNSDevicePolicy[]).map(row =>
+        prefilled.get(row.ip) === row.name.trim() ? { ...row, name: '' } : row)
+      const { data } = await oxidnsDevicePolicyApi.save(id, { profile_id: state.value.profile_id, revision: state.value.revision, notes_revision: state.value.notes_revision, policies })
       if (disposed || id !== props.agentId || generation !== epoch) return false
       state.value = data
       // Adopt the server's normalized rows only if nothing changed while saving,
@@ -253,6 +261,14 @@ async function save(): Promise<boolean> {
           const name = local.get(row.ip)
           return { ...row, name: name !== undefined && name.trim() === row.name ? name : row.name }
         })
+      }
+      // Rows still showing their prefilled name take the server's current name.
+      const names = new Map<string, string>(data.policies.map((row: OxiDNSDevicePolicy) => [row.ip, row.name]))
+      for (const row of rows.value) {
+        const name = names.get(row.ip)
+        if (name === undefined || !prefilled.has(row.ip)) continue
+        if (row.name.trim() === prefilled.get(row.ip)) row.name = name
+        prefilled.delete(row.ip)
       }
       saveError.value = false
       savedOnce.value = true

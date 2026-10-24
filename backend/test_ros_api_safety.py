@@ -213,6 +213,7 @@ def _hold_connection_job_lock(data_dir, connection, ready, release):
 @pytest.mark.parametrize('operation', ['delete', 'put', 'policy-settings', 'rule-sync', 'probe'])
 def test_router_mutations_exclude_cross_process_publication(router_api, published, operation):
     from backend.common import config as config_module
+    from backend.common.device_notes import policy_names_revision
     from backend.routers.policy_workspace import FIELDS, draft_revision
 
     client, admin, path, driver, constructed, closed = router_api
@@ -240,7 +241,7 @@ def test_router_mutations_exclude_cross_process_publication(router_api, publishe
             response = client.put(path, headers=admin, json={'name': 'changed'})
         elif operation == 'policy-settings':
             response = client.put(path + '/policy-settings', headers=admin, json={
-                'revision': draft_revision(before, router),
+                'revision': draft_revision(before, router), 'names_revision': policy_names_revision(before),
                 'router': {field: router[field] for field in FIELDS},
                 'policies': [{'ip': '192.168.0.101', 'mode': 'smart'}],
                 'base_url': '',

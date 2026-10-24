@@ -29,7 +29,7 @@ def read(workspace):
 
 
 def body_for(state):
-    return {'revision': state['revision'], 'base_url': '',
+    return {'revision': state['revision'], 'names_revision': state['names_revision'], 'base_url': '',
         'router': {key: state['router'].get(key) for key in ('ip_rule_sets', 'ros_policy_rule_sets', 'proxy_gateway_agent_id')},
         'policies': state['sources']['policies']}
 
@@ -64,6 +64,31 @@ def test_saves_sources_and_router_atomically_preserving_unrelated_settings(works
         if key not in ('oxidns', 'routers', 'device_notes', '_revision', 'updated_at'):
             assert after[key] == before[key]
     assert after['routers']['items'][0]['password'] == 'private-password'
+
+
+def test_renaming_sources_keeps_oxidns_and_rejects_stale_workspace(workspace):
+    client, manager, dns, admin, path = workspace
+    body = body_for(read(workspace))
+    body['policies'] = [{'ip': '192.0.2.105', 'mode': 'smart', 'name': 'NAS'}]
+    assert client.put(path + '/policy-settings', headers=admin, json=body).status_code == 200
+    state = read(workspace)
+    oxidns = copy.deepcopy(get_repository().get_profile('default')['oxidns'])
+    body = body_for(state)
+    body['policies'][0]['name'] = '群晖'
+    renamed = client.put(path + '/policy-settings', headers=admin, json=body)
+    assert renamed.status_code == 200, renamed.get_json()
+    assert get_repository().get_profile('default')['oxidns'] == oxidns
+    assert renamed.get_json()['workspace']['oxidns_revision'] == state['oxidns_revision']
+    assert get_repository().get_profile('default')['device_notes'] == {'192.0.2.105': '群晖'}
+    stale = body_for(renamed.get_json()['workspace'])
+    notes = {'profile_id': 'default', 'ip': '192.0.2.105', 'name': '存储', 'previous_name': '群晖'}
+    assert client.put(f'/api/agents/{dns["id"]}/client-notes', headers=admin, json=notes).status_code == 200
+    # A rename elsewhere does not invalidate previews, only saving stale names. It still advances
+    # the profile revision every DNS push checks, which the panel rechecks before publishing.
+    assert read(workspace)['revision'] == stale['revision']
+    assert read(workspace)['config_revision'] == renamed.get_json()['workspace']['config_revision'] + 1
+    assert client.put(path + '/policy-settings', headers=admin, json=stale).status_code == 409
+    assert read(workspace)['sources']['policies'][0]['name'] == '存储'
 
 
 @pytest.mark.parametrize('failure', ['bad_ip', 'duplicate', 'bad_router', 'extra_field'])

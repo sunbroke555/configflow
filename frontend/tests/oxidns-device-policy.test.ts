@@ -19,7 +19,7 @@ vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(),
 const wrappers: VueWrapper[] = []
 let scrollDescriptor: PropertyDescriptor | undefined
 const response = (data: any) => ({ data } as any)
-const state = (policies: any[] = []) => ({ success: true, draft: true, profile_id: 'office', profile_name: '办公室', revision: 'v1',
+const state = (policies: any[] = []) => ({ success: true, draft: true, profile_id: 'office', profile_name: '办公室', revision: 'v1', notes_revision: 'n1',
   policies, editable: true, reason: '', agents: [{ id: 'one', name: 'DNS 1' }, { id: 'two', name: 'DNS 2' }] })
 const button = (wrapper: VueWrapper, text: string) => wrapper.findAll('button').find(item => item.text() === text)!
 async function render(props: any = {}) {
@@ -142,7 +142,7 @@ describe('OxiDNS device policy editing', () => {
     expect(button(wrapper, '保存草稿')).toBeUndefined()
     await add(wrapper)
     await flushPromises()
-    expect(oxidnsDevicePolicyApi.save).toHaveBeenCalledWith('one', { profile_id: 'office', revision: 'v1', policies: [{ ip: '192.168.50.51', name: '', mode: 'smart' }] })
+    expect(oxidnsDevicePolicyApi.save).toHaveBeenCalledWith('one', { profile_id: 'office', revision: 'v1', notes_revision: 'n1', policies: [{ ip: '192.168.50.51', name: '', mode: 'smart' }] })
     wrapper.getComponent(Select).vm.$emit('update:modelValue', 'direct')
     await wrapper.get('input[aria-label="192.168.50.51 备注"]').setValue('电视')
     // Publishing saves the pending note first, then publishes the saved revision.
@@ -267,13 +267,38 @@ describe('OxiDNS device policy editing', () => {
 
 it('reuses a shared device note when adding a DNS policy', async () => {
   vi.mocked(oxidnsDevicePolicyApi.get).mockResolvedValue(response({ ...state(), device_notes: { '192.168.50.51': '工作电脑' } }))
+  // Like the server, unnamed new rows take the current shared name (renamed elsewhere here).
+  vi.mocked(oxidnsDevicePolicyApi.save).mockImplementation(async (_id, data) => response({ ...state(
+    data.policies.map(row => ({ ...row, name: row.name || '客厅电脑' }))), revision: 'v2' }))
   const wrapper = await render({ recorder: 'query_recorder' })
   expect(wrapper.findComponent(OxiDNSClientSelect).props('notes')).toEqual({ '192.168.50.51': '工作电脑' })
   await add(wrapper)
-  expect(wrapper.get('input[aria-label="192.168.50.51 备注"]').element.value).toBe('工作电脑')
+  expect(vi.mocked(oxidnsDevicePolicyApi.save).mock.lastCall?.[1].policies).toEqual([{ ip: '192.168.50.51', name: '', mode: 'smart' }])
   await flushPromises()
-  expect(vi.mocked(oxidnsDevicePolicyApi.save).mock.lastCall?.[1].policies).toEqual([{ ip: '192.168.50.51', name: '工作电脑', mode: 'smart' }])
+  // The loaded name is not sent back, so a rename made elsewhere is kept and shown.
+  expect(wrapper.get('input[aria-label="192.168.50.51 备注"]').element.value).toBe('客厅电脑')
   expect(agentApi.pushConfig).not.toHaveBeenCalled()
+})
+
+it('keeps a rename made elsewhere when another client is added while the first save is running', async () => {
+  vi.mocked(oxidnsDevicePolicyApi.get).mockResolvedValue(response({ ...state(), device_notes: { '192.168.50.51': '旧名', '192.168.50.52': '音箱' } }))
+  // The server fills unnamed new rows with the current shared name, renamed elsewhere to 新名.
+  const current: Record<string, string> = { '192.168.50.51': '新名', '192.168.50.52': '音箱' }
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  vi.mocked(oxidnsDevicePolicyApi.save).mockImplementation(async (_id, data) => {
+    const first = vi.mocked(oxidnsDevicePolicyApi.save).mock.calls.length === 1
+    if (first) await gate
+    const policies = data.policies.map(row => ({ ...row, name: (current[row.ip] = row.name || current[row.ip] || '') }))
+    return response({ ...state(policies), device_notes: { ...current }, revision: first ? 'v2' : 'v3', notes_revision: first ? 'n2' : 'n3' })
+  })
+  const wrapper = await render()
+  await add(wrapper)
+  await add(wrapper, '192.168.50.52')
+  release(); await flushPromises()
+  expect(vi.mocked(oxidnsDevicePolicyApi.save).mock.calls.map(call => call[1].policies.map(row => row.name))).toEqual([[''], ['新名', '']])
+  expect(current['192.168.50.51']).toBe('新名')
+  expect(wrapper.get('input[aria-label="192.168.50.51 备注"]').element.value).toBe('新名')
 })
 
 describe('OxiDNS device policy autosave', () => {

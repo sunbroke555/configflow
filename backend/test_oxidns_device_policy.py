@@ -183,7 +183,7 @@ def test_api_binding_shared_scope_and_stale_write(oxidns_app):
     assert state['profile_id'] == 'office'
     assert {a['id'] for a in state['agents']} == {aid, peer}
     default = deepcopy(repository.get_profile('default'))
-    body = {'profile_id': 'office', 'revision': state['revision'], 'policies': ROWS}
+    body = {'profile_id': 'office', 'revision': state['revision'], 'notes_revision': state['notes_revision'], 'policies': ROWS}
     saved = client.put(url, json=body)
     assert saved.status_code == 200, saved.get_json()
     assert saved.headers['Cache-Control'] == 'no-store'
@@ -192,6 +192,7 @@ def test_api_binding_shared_scope_and_stale_write(oxidns_app):
     assert 'token' not in saved.get_data(as_text=True)
     assert client.put(url, json=body).status_code == 409
     body['revision'] = saved.get_json()['revision']
+    body['notes_revision'] = saved.get_json()['notes_revision']
     manager.update_agent(aid, {'profile_id': 'default'})
     assert client.put(url, json=body).status_code == 409
 
@@ -218,7 +219,7 @@ def test_api_saves_canonical_networks_and_rejects_duplicate_ranges_without_chang
     client = app.test_client()
     url = f'/api/agents/{aid}/oxidns/device-policies'
     state = client.get(url).get_json()
-    body = {'profile_id': 'office', 'revision': state['revision'], 'policies': [
+    body = {'profile_id': 'office', 'revision': state['revision'], 'notes_revision': state['notes_revision'], 'policies': [
         {'ip': '192.168.50.51/24', 'mode': 'direct'}, {'ip': '192.168.50.50', 'mode': 'smart'}]}
     saved = client.put(url, json=body)
     assert saved.status_code == 200, saved.get_json()
@@ -226,6 +227,7 @@ def test_api_saves_canonical_networks_and_rejects_duplicate_ranges_without_chang
     assert client.get(url).get_json()['editable']
     before = deepcopy(repository.get_profile('office'))
     body['revision'] = saved.get_json()['revision']
+    body['notes_revision'] = saved.get_json()['notes_revision']
     body['policies'].append({'ip': '192.168.50.0/24', 'mode': 'smart'})
     assert client.put(url, json=body).status_code == 400
     assert repository.get_profile('office') == before

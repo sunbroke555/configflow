@@ -157,6 +157,7 @@ export interface OxiDNSDevicePolicies {
   profile_id: string
   profile_name: string
   revision: string
+  notes_revision: string
   policies: OxiDNSDevicePolicy[]
   editable: boolean
   reason: string

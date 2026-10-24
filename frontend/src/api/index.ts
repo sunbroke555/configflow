@@ -278,7 +278,7 @@ export interface PolicyRoutingView {
   source_agents: { id: string; name: string }[]
 }
 export interface PolicyWorkspace {
-  profile_id: string; profile_name: string; revision: string; oxidns_revision: string
+  profile_id: string; profile_name: string; revision: string; names_revision: string; oxidns_revision: string; config_revision: number
   router: { id: string; name: string; ip_rule_sets: string[]; ros_policy_rule_sets: string[]; proxy_gateway_agent_id: string }
   sources: { policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[]; editable: boolean; reason: string }
   source_agents: { id: string; name: string; host: string; status: string }[]
@@ -331,7 +331,7 @@ export const routerApi = {
     api.post<RouterRuleSyncResponse>(`/routers/${id}/rule-sync`, null, profileOptions(profileId)),
   policySettings: (id: string, profileId: string) =>
     api.get<{ success: boolean; message?: string; workspace: PolicyWorkspace }>(`/routers/${id}/policy-settings`, profileOptions(profileId)),
-  savePolicySettings: (id: string, draft: { revision: string; router: Pick<PolicyWorkspace['router'], 'ip_rule_sets' | 'ros_policy_rule_sets' | 'proxy_gateway_agent_id'>; policies: PolicyWorkspace['sources']['policies'] }, profileId: string) =>
+  savePolicySettings: (id: string, draft: { revision: string; names_revision: string; router: Pick<PolicyWorkspace['router'], 'ip_rule_sets' | 'ros_policy_rule_sets' | 'proxy_gateway_agent_id'>; policies: PolicyWorkspace['sources']['policies'] }, profileId: string) =>
     api.put<{ success: boolean; message?: string; workspace: PolicyWorkspace }>(`/routers/${id}/policy-settings`, { ...draft, base_url: getBaseUrl() }, profileOptions(profileId)),
   previewPolicySettings: (id: string, revision: string, targets: string[], profileId: string) =>
     api.post<{ success: boolean; message?: string; preview: PolicyWorkspacePreview }>(`/routers/${id}/policy-settings/preview`, { revision, targets, base_url: getBaseUrl() }, { ...profileOptions(profileId), timeout: 90000 }),
@@ -480,7 +480,7 @@ export const clientToolsApi = {
 export const oxidnsDevicePolicyApi = {
   get: (id: string, options: { signal?: AbortSignal } = {}) =>
     api.get(`/agents/${encodeURIComponent(id)}/oxidns/device-policies`, options),
-  save: (id: string, data: { profile_id: string; revision: string; policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[] }) =>
+  save: (id: string, data: { profile_id: string; revision: string; notes_revision: string; policies: import('@/types/oxidnsMonitor').OxiDNSDevicePolicy[] }) =>
     api.put(`/agents/${encodeURIComponent(id)}/oxidns/device-policies`, { ...data, base_url: getBaseUrl() })
 }
 

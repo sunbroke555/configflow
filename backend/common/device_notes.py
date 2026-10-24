@@ -1,5 +1,13 @@
-"""Display-only client names shared by Mihomo and OxiDNS in one profile."""
-from copy import deepcopy
+"""Display-only client names shared by Mihomo and OxiDNS in one profile.
+
+``device_notes`` is the only place a name is written. Policy rows in the OxiDNS
+settings may still carry names saved by older versions; they are a fallback for
+addresses that ``device_notes`` does not mention, and an empty stored name hides
+such a legacy name. Renaming a client therefore never changes the OxiDNS
+settings, their revisions or anything a router sync compares.
+"""
+from hashlib import sha256
+import json
 
 from backend.common.oxidns_device_policy import normalize_client_range, normalize_policies
 from backend.common.oxidns_settings import OxidnsSettingsError
@@ -25,44 +33,73 @@ def normalize_notes(value):
     return result
 
 
+def _legacy_names(config):
+    rows = normalize_policies(config.get('oxidns', {}).get('device_policies', []))
+    return {row['ip']: row['name'] for row in rows if row['name']}
+
+
+def stored_names(config):
+    """Every address with a known name, including empty names that hide a legacy one."""
+    return {**_legacy_names(config), **normalize_notes(config.get('device_notes', {}))}
+
+
 def read_notes(config):
-    notes = normalize_notes(config.get('device_notes', {}))
-    # Existing DNS policy names remain editable through the original settings UI.
-    for row in normalize_policies(config.get('oxidns', {}).get('device_policies', [])):
-        if row['name']:
-            notes[row['ip']] = row['name']
-        else:
-            notes.pop(row['ip'], None)
-    return notes
+    return {ip: name for ip, name in stored_names(config).items() if name}
+
+
+def _assign(config, notes, ip, name):
+    if name:
+        notes[ip] = name
+    elif ip in _legacy_names(config):
+        notes[ip] = ''
+    else:
+        notes.pop(ip, None)
 
 
 def set_note(config, ip, name):
-    notes = read_notes(config)
-    if name:
-        notes[ip] = name
-    else:
-        notes.pop(ip, None)
+    notes = normalize_notes(config.get('device_notes', {}))
+    _assign(config, notes, ip, name)
     config['device_notes'] = normalize_notes(notes)
-    settings = deepcopy(config.get('oxidns', {}))
-    for section in (settings, settings.get('template_settings', {})):
-        if not isinstance(section, dict):
-            continue
-        for row in section.get('device_policies', []):
-            if normalize_client_range(row['ip']) == ip:
-                row['name'] = name
-    # Do not create a DNS policy or regenerate the native configuration for a note.
-    config['oxidns'] = settings
+
+
+def policy_names_revision(config):
+    """Names shown next to the stored policy rows, for editors that save them."""
+    names = read_notes(config)
+    rows = normalize_policies(config.get('oxidns', {}).get('device_policies', []))
+    text = json.dumps([[row['ip'], names.get(row['ip'], '')] for row in rows],
+                      ensure_ascii=False, separators=(',', ':'))
+    return sha256(text.encode()).hexdigest()
 
 
 def prepare_policy_notes(config, rows):
     rows = normalize_policies(rows)
-    notes = read_notes(config)
+    names = read_notes(config)
+    notes = normalize_notes(config.get('device_notes', {}))
     previous = {row['ip'] for row in normalize_policies(config.get('oxidns', {}).get('device_policies', []))}
     for row in rows:
         if row['ip'] not in previous and not row['name']:
-            row['name'] = notes.get(row['ip'], '')
-        if row['name']:
-            notes[row['ip']] = row['name']
-        else:
-            notes.pop(row['ip'], None)
+            row['name'] = names.get(row['ip'], '')
+        _assign(config, notes, row['ip'], row['name'])
+    kept = {row['ip'] for row in rows}
+    for ip, name in _legacy_names(config).items():
+        if ip in kept:
+            continue
+        if notes.get(ip) == '':
+            # The legacy name leaves with its row, so nothing is left to hide.
+            notes.pop(ip)
+        elif ip not in notes and len(notes) < MAX_NOTES:
+            # Keep a removed row's legacy name for Mihomo and DNS logs while there is room.
+            notes[ip] = name
     return rows, normalize_notes(notes)
+
+
+def save_policy_rows(config, settings, rows, base_url=''):
+    """Write names to device_notes; touch the OxiDNS settings only for address or mode changes."""
+    from backend.common.oxidns_device_policy import apply_policies
+
+    rows, notes = prepare_policy_notes(config, rows)
+    config['device_notes'] = notes
+    current = normalize_policies(settings.get('device_policies', []))
+    if [(row['ip'], row['mode']) for row in rows] == [(row['ip'], row['mode']) for row in current]:
+        return settings
+    return apply_policies(settings, config, rows, base_url)
