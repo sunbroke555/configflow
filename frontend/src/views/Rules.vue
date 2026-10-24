@@ -40,8 +40,6 @@
       </template>
     </PageHeader>
 
-    <DeviceGroupsRuleNotice />
-
     <ReorderBar
       :active="reorder.active.value"
       :saving="reorder.saving.value"
@@ -725,7 +723,6 @@ import LoadingRows from '@/components/common/LoadingRows.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import ViewToggle from '@/components/common/ViewToggle.vue'
 import RuleEditorDialog from '@/components/rules/RuleEditorDialog.vue'
-import DeviceGroupsRuleNotice from '@/components/device-groups/DeviceGroupsRuleNotice.vue'
 import RuleDnsBatchDialog from '@/components/rules/RuleDnsBatchDialog.vue'
 import RuleDnsCell from '@/components/rules/RuleDnsCell.vue'
 import { confirm, notify } from '@/lib/feedback'

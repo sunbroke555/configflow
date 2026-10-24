@@ -46,7 +46,6 @@ def register_blueprints(app):
     from backend.routes.logs import logs_bp  # 日志路由
     from backend.routes.stats import stats_bp  # 统计路由
     from backend.routes import profiles
-    from backend.routes import device_groups
     from backend.routes import linux_gateway
     from backend.routes import linux_gateway_agents
     from backend.routes import gateway_installations
@@ -86,12 +85,6 @@ def register_blueprints(app):
 
     @app.errorhandler(ProfileValidationError)
     def _profile_validation_error(error):
-        return {'success': False, 'message': str(error)}, 400
-
-    from backend.common.device_groups import DeviceGroupsError
-
-    @app.errorhandler(DeviceGroupsError)
-    def _device_group_validation_error(error):
         return {'success': False, 'message': str(error)}, 400
 
     @app.errorhandler(ProfileNotFound)

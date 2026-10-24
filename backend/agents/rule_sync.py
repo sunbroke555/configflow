@@ -121,10 +121,8 @@ def _identity(agent):
 
 
 def _unchanged(manager, agent, settings, *, deployment_id=None):
-    from .device_group_publish import blocks_follow
     latest = manager.get_agent_by_id(agent['id'])
     return (latest and _identity(latest) == _identity(agent) and settings_for(latest) == settings
-            and not blocks_follow(manager, latest)
             and ((latest.get('latest_deployment') or {}).get('status') in (*TERMINAL, None)
                  or (latest.get('latest_deployment') or {}).get('deployment_id') ==
                     deployment_id))
@@ -171,9 +169,6 @@ def prepare_candidate(agent, source, baseline, settings, deployment_id):
     """Generate rule artifacts while pinning every non-rule delivery byte."""
     from .deployment_bundle import build_deployment_bundle, retarget_config_path, _pack
     from .rule_sync_projection import isolate_rule_bundle
-    if source.get('device_groups') != baseline['source'].get('device_groups') or \
-            source.get('policy_routing_sources') != baseline['source'].get('policy_routing_sources'):
-        raise ValueError('设备组和策略路由草稿必须手动发布，不能随规则自动同步')
     base_bundle = baseline['bundle']
     previous = store.bundle_files(base_bundle)
     service = agent['service_type']
@@ -206,11 +201,7 @@ def prepare_candidate(agent, source, baseline, settings, deployment_id):
                 local_dns_watchdog=local_dns_watchdog)
     candidate = retarget_config_path(candidate, base_bundle.manifest['config_path'])
     comparison = next(item for item in candidate.manifest['files'] if item['role'] == 'config')
-    from backend.common.device_groups import compile_groups
-    groups = compile_groups(source)
-    has_segments = any(group['id'] != 'default' and group['mode'] != 'follow' and groups['effective'].get(group['id'])
-                       for group in groups['groups'])
-    candidate = isolate_rule_bundle(base_bundle, candidate, service, device_groups_enabled=has_segments)
+    candidate = isolate_rule_bundle(base_bundle, candidate, service)
     manifest = {**candidate.manifest, 'reload_only': True}
     return _pack(manifest, store.bundle_files(candidate), candidate.config_version, comparison_config=comparison)
 
@@ -287,12 +278,6 @@ class RuleSyncWorker:
         if not any(settings.values()):
             return
         old_state = (agent.get('rule_sync') or {}).get('state') or {}
-        from .device_group_publish import blocks_follow
-        if blocks_follow(self.manager, agent):
-            self._state(agent_id, 'pending', '设备组批次尚未完成，规则自动同步已暂停',
-                        **{key: old_state[key] for key in ('native_task', 'key', 'force_refresh', 'deployment_id', 'noticed_at')
-                           if key in old_state})
-            return
         if old_state.get('retry_at', 0) > self.clock():
             return
         if not agent.get('enabled', True) or agent.get('status') != 'online':

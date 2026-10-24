@@ -46,14 +46,6 @@ async function render(service: keyof typeof labels, agents = [{ id: service as s
 }
 
 describe('Generated config publication diagnostics', () => {
-  it('keeps device group compatibility warnings visible outside the generated file', async () => {
-    vi.mocked(generateApi.previewMosdns).mockResolvedValueOnce({ data: { content: 'plugins: []', warnings: ['MosDNS 不按设备组生成，设备组模式不会生效。'] } } as any)
-    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, id) => ({ data: { deployment_id: id, status: 'succeeded' } }) as any)
-    const wrapper = await render('mosdns')
-    expect(wrapper.get('[aria-label="配置生成提醒"]').text()).toContain('设备组模式不会生效')
-    expect(wrapper.get('pre').text()).toContain('plugins: []')
-    expect(wrapper.get('pre').text()).not.toContain('设备组模式不会生效')
-  })
   it('lists separate device outcomes with one shared history link and a single disclosure for successful logs', async () => {
     const completedName = '家庭网络与办公设备的长名称主网关'
     const tasks: Record<string, Record<string, unknown>> = {
