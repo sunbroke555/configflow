@@ -48,7 +48,7 @@ docker compose up -d
 
 - 部署文件和 `data` 目录需要长期保留。重装或换主机前，停服复制完整数据目录。
 - 修改部署文件中的环境变量后执行 `docker compose up -d`，仅重启容器不会应用修改。
-- 更新镜像前记录当前版本并确认备份成功，不只备份根 `config.json`。
+- 更新镜像前记录当前版本并确认备份成功，不只备份 `configflow.sqlite3` 或根 `config.json`。
 - 完整部署参数、故障排查和升级命令见 [部署指南](module/deployment.md)。
 
 ## 实现参考
