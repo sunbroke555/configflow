@@ -775,14 +775,14 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
     from backend.utils.rule_utils import read_validated_rule_cache, refresh_remote_rule
     from backend.utils.ruleset_content import RemoteRuleValidationError
     source = library_rule or rule_item
-    if source.get('source_type') == 'content':
-        return source.get('content', '')
     cached = read_validated_rule_cache(source, config_data)
     if cached is not None:
         try:
             return cached.decode('utf-8-sig')
         except UnicodeError:
             return ''  # The page matcher cannot interpret MRS binaries.
+    if source.get('source_type') == 'content':
+        return source.get('content', '')
     if not allow_network:
         return ''
     url = source.get('url', '')
@@ -803,6 +803,13 @@ def get_ruleset_content(rule_item: dict, library_rule: dict = None, allow_networ
         raise
     except Exception as error:
         logger.warning('Failed to fetch ruleset %s: %s', source.get('name', ''), safe_exception_details(error))
+        alternate = rule_item.get('url')
+        if library_rule and alternate and alternate != library_rule.get('url'):
+            # Retain the legacy mirror fallback, but bind and validate those
+            # bytes under the actual alternate source rather than the failed URL.
+            from backend.converters.common import ruleset_format
+            mirror = {**library_rule, 'url': alternate, 'format': ruleset_format(library_rule, config_data)}
+            return get_ruleset_content(mirror, config_data=config_data, timeout=timeout)
         return ''
 
 

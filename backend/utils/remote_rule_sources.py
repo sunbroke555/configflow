@@ -18,7 +18,9 @@ def resolve_remote_rule_source(url, config, source_id=None):
     """
     library = config.get('rule_library', [])
     by_id = {str(item.get('id')): item for item in library if item.get('id') is not None}
-    items = [item for item in config.get('rule_configs', []) if item.get('itemType') == 'ruleset']
+    items = [item for item in config.get('rule_configs', [])
+             if isinstance(item, dict) and item.get('itemType') == 'ruleset']
+    items.extend(item for item in config.get('rule_sets', []) if isinstance(item, dict))
     if source_id:
         source = by_id.get(str(source_id))
         if source is None:

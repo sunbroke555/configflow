@@ -1054,6 +1054,10 @@ const loadRuleLibrary = async () => {
   try {
     const { data } = await api.get('/rule-library')
     ruleLibrary.value = data
+    const existingIds = new Set(ruleLibrary.value.map(rule => rule.id))
+    for (const id of Object.keys(cacheFailures.value)) {
+      if (!existingIds.has(id)) delete cacheFailures.value[id]
+    }
   } catch (error) {
     notify.error('加载规则库失败')
   }
@@ -1116,6 +1120,7 @@ const performSaveRule = async () => {
       await api.post('/rule-library', payload)
       notify.success('添加成功')
     }
+    if (form.value.id) delete cacheFailures.value[form.value.id]
     dialogVisible.value = false
     loadRuleLibrary()
   } catch (error) {

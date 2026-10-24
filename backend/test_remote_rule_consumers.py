@@ -215,3 +215,16 @@ def test_custom_mihomo_invalid_declared_behavior_is_rejected(source_env, monkeyp
     monkeypatch.setattr(bundles, '_fetch_bytes', lambda *_args: b'valid.example')
     with pytest.raises(DeploymentPreparationError, match='规则集类型必须'):
         bundles.build_deployment_bundle({'id': 'agent', 'service_type': 'mihomo'}, config, yaml.safe_dump(main))
+
+
+@pytest.mark.parametrize('with_marker', [False, True])
+def test_legacy_rule_sets_declaration_is_resolved_and_validated(source_env, with_marker):
+    _repo, source, config = source_env
+    config['rule_library'] = []
+    config['rule_configs'] = []
+    config['rule_sets'] = [source]
+    marker = source['id'] if with_marker else None
+    assert resolve_remote_rule_source(source['url'], config, marker) == source
+    with pytest.raises(DeploymentPreparationError, match='Domain 不接受 Classical'):
+        materialize_rule(source['url'], config, '', source_id=marker,
+                         fetch_raw=lambda _url: b'DOMAIN,bad.example')

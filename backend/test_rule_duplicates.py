@@ -82,7 +82,7 @@ def test_cached_and_inline_sources_do_not_load_download_configuration(duplicate_
 
     monkeypatch.setattr(rules, 'get_config', unexpected_config_read)
     with app.test_request_context('/api/rules'):
-        assert 'Example.com' in rules.get_ruleset_content({'name': 'A'})
+        assert 'Example.com' in rules.get_ruleset_content({'name': 'A', 'source_type': 'content'})
         assert rules.get_ruleset_content({}, {
             'name': 'Inline', 'source_type': 'content', 'content': 'DOMAIN,example.com',
         }) == 'DOMAIN,example.com'

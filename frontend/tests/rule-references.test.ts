@@ -265,6 +265,32 @@ describe('shared rule library', () => {
     expect((wrapper.vm as any).$.setupState.selectedRules).toEqual([])
   })
 
+  it.each(['save', 'delete'] as const)('clears a stale refresh error after the source is successfully handled by %s', async action => {
+    Object.assign(network.state.library[0]!, { source_type: 'url', url: 'https://rules.test/domain.txt', content: '' })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('[aria-label="选择 Shared domains"]').trigger('click')
+    network.post.mockResolvedValueOnce({ data: { success: true, success_count: 0, failed_count: 1, total_count: 1, results: [
+      { id: 'library-one', name: 'Shared domains', success: false, error: '第 2 行类型不匹配', cache_retained: true }
+    ] } })
+    await clickText('批量下载内容'); settleConfirm('confirm'); await flushPromises()
+    expect(wrapper.find('[data-cache-failure="library-one"]').exists()).toBe(true)
+    if (action === 'save') {
+      await wrapper.get('[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+      await clickText('保存')
+      expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({ source_type: 'url' }))
+    } else {
+      network.remove.mockImplementationOnce(async () => {
+        network.state.library = []
+        return { data: { success: true } }
+      })
+      await wrapper.get('[aria-label="删除 Shared domains"]').trigger('click'); await flushPromises()
+      settleConfirm('confirm'); await flushPromises()
+      expect(network.remove).toHaveBeenCalledWith('/rule-library/library-one')
+    }
+    expect((wrapper.vm as any).$.setupState.cacheFailures).toEqual({})
+    expect(wrapper.find('[data-cache-errors]').exists()).toBe(false)
+  })
+
   it('shows the server reason for a failed refresh request and retains selection for retry', async () => {
     const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
     const wrapper = await render(RuleLibrary)

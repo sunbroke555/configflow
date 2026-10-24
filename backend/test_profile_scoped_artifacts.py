@@ -140,11 +140,11 @@ def test_mosdns_rule_proxy_urls_use_url_encoded_internal_token_for_profile_and_l
 
     assert profile_url == (
         "https://config.test/api/profiles/alpha/mosdns/rule-proxy"
-        "?url=https%3A%2F%2Frules.test%2Flist%3Fa%3D1%26b%3D2&token=internal%20%2F%26%3F"
+        "?url=https%3A%2F%2Frules.test%2Flist%3Fa%3D1%26b%3D2&source_id=rules-1&token=internal%20%2F%26%3F"
     )
     assert legacy_url == (
         "https://config.test/api/mosdns/rule-proxy"
-        "?url=https%3A%2F%2Frules.test%2Flist%3Fa%3D1%26b%3D2&token=internal%20%2F%26%3F"
+        "?url=https%3A%2F%2Frules.test%2Flist%3Fa%3D1%26b%3D2&source_id=rules-1&token=internal%20%2F%26%3F"
     )
 
 
@@ -182,7 +182,7 @@ def _assert_generated_default_url_authenticates(repository, monkeypatch):
     generated_url = get_mosdns_ruleset_downloads(repository.get_compat_config("default"))[0]["url"]
     parsed = urlsplit(generated_url)
     assert parse_qs(parsed.query)["token"] == [token]
-    monkeypatch.setattr("backend.routes.mosdns._fetch_remote_content", lambda url: "domain:example.com")
+    monkeypatch.setattr("backend.routes.mosdns._fetch_remote_content", lambda url, **kwargs: b"+.example.com")
     monkeypatch.setattr(
         "socket.getaddrinfo",
         lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
@@ -232,7 +232,7 @@ def test_generated_profile_rule_proxy_url_downloads_with_auth_enabled(tmp_path, 
     monkeypatch.setattr("backend.routes.auth.is_auth_enabled", lambda: True)
     monkeypatch.setattr(
         "backend.routes.mosdns._fetch_remote_content",
-        lambda url: fetched.append(url) or "domain:example.com",
+        lambda url, **kwargs: fetched.append(url) or b"+.example.com",
     )
     monkeypatch.setattr(
         "socket.getaddrinfo",
@@ -346,7 +346,7 @@ def test_local_rule_refresh_uses_shared_repository_write(tmp_path, monkeypatch):
     monkeypatch.setattr(repository, "write_shared_text", write_shared_text)
     monkeypatch.setattr(
         "backend.routes.rules.requests.get",
-        lambda url, timeout, **kwargs: type("Response", (), {"status_code": 200, "text": "DOMAIN,remote.test"})(),
+        lambda url, timeout, **kwargs: type("Response", (), {"status_code": 200, "content": b"remote.test", "raise_for_status": lambda self: None})(),
     )
 
     response = app.test_client().get(
@@ -356,9 +356,9 @@ def test_local_rule_refresh_uses_shared_repository_write(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     from backend.utils.rule_utils import rule_cache_filename
-    cache = rule_cache_filename({"id": "rule-1"})
+    cache = rule_cache_filename(repository.get_shared()["rule_library"][0])
     assert calls == ["rules/" + cache]
-    assert (repository.shared_rules_dir() / cache).read_text(encoding="utf-8") == "DOMAIN,remote.test"
+    assert (repository.shared_rules_dir() / cache).read_text(encoding="utf-8") == "remote.test"
 
 
 def test_rule_library_content_urls_include_the_selected_profile(tmp_path, monkeypatch):
@@ -432,7 +432,7 @@ def test_ruleset_content_cache_uses_shared_repository_write(tmp_path, monkeypatc
     monkeypatch.setattr(repository, "write_shared_text", write_shared_text)
     monkeypatch.setattr(
         "backend.routes.rules.requests.get",
-        lambda url, timeout, **kwargs: type("Response", (), {"status_code": 200, "text": "DOMAIN,remote.test"})(),
+        lambda url, timeout, **kwargs: type("Response", (), {"status_code": 200, "content": b"remote.test", "raise_for_status": lambda self: None})(),
     )
 
     with app.test_request_context("/", headers={"X-ConfigFlow-Profile": "alpha"}):
@@ -441,9 +441,9 @@ def test_ruleset_content_cache_uses_shared_repository_write(tmp_path, monkeypatc
             {"name": "Remote", "source_type": "url", "url": "https://example.test/rules"},
         )
 
-    assert content == "DOMAIN,remote.test"
+    assert content == "remote.test"
     from backend.utils.rule_utils import rule_cache_filename
-    cache = rule_cache_filename({"name": "Remote"})
+    cache = rule_cache_filename({"name": "Remote", "source_type": "url", "url": "https://example.test/rules"})
     assert calls == ["rules/" + cache]
     assert (repository.shared_rules_dir() / cache).read_text(encoding="utf-8") == content
 

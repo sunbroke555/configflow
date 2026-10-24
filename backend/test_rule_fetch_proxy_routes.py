@@ -28,7 +28,7 @@ def rule_app(tmp_path, monkeypatch):
         'server_domain': 'https://config.test',
     }))
     repository.save_shared({'rule_library': [{
-        'id': 'source', 'name': 'Remote', 'source_type': 'url', 'url': SOURCE,
+        'id': 'source', 'name': 'Remote', 'source_type': 'url', 'url': SOURCE, 'behavior': 'classical',
         'enabled': True,
     }]})
     repository.create_profile({'id': 'alpha', 'name': 'Alpha'})
@@ -59,7 +59,7 @@ def rule_app(tmp_path, monkeypatch):
     ('/api/rule-library/test-single', {'url': SOURCE}, 'get'),
     ('/api/rule-library/test', {}, 'head'),
     ('/api/rule-library/cache', {'rule_ids': ['source']}, 'get'),
-    ('/api/rule-library', {'id': 'new', 'name': 'New', 'source_type': 'url', 'url': SOURCE}, 'get'),
+    ('/api/rule-library', {'id': 'new', 'name': 'New', 'source_type': 'url', 'url': SOURCE, 'behavior': 'classical'}, 'get'),
 ])
 def test_rule_library_fetches_use_global_proxy_and_original_first(rule_app, path, body, method):
     app, _, calls = rule_app
@@ -76,11 +76,11 @@ def test_local_refresh_and_ruleset_fallback_use_proxy(rule_app):
     assert response.status_code == 200
     assert response.get_data(as_text=True) == BODY
     from backend.utils.rule_utils import rule_cache_filename
-    assert (repository.shared_rules_dir() / rule_cache_filename({'id': 'source'})).read_text() == BODY
+    assert (repository.shared_rules_dir() / rule_cache_filename(repository.get_shared()['rule_library'][0])).read_text() == BODY
     with app.test_request_context('/api/profiles/alpha/rules'):
         # Different names exercise the URL fallbacks without hitting the cache.
-        assert get_ruleset_content({'name': 'Fallback', 'url': SOURCE}) == BODY
-        assert get_ruleset_content({}, {'name': 'Library', 'source_type': 'url', 'url': SOURCE}) == BODY
+        assert get_ruleset_content({'name': 'Fallback', 'url': SOURCE, 'behavior': 'classical'}) == BODY
+        assert get_ruleset_content({}, {'name': 'Library', 'source_type': 'url', 'url': SOURCE, 'behavior': 'classical'}) == BODY
     assert len(calls) == 3
     assert all(url == SOURCE for _, url, _ in calls)
     assert all(options['proxies'] == {'http': PROXY, 'https': PROXY} for _, _, options in calls)
@@ -128,7 +128,7 @@ def test_proxy_failure_preserves_cache_and_redacts_errors(rule_app, monkeypatch,
             client.get('/api/rules/local/Remote'),
         ]
         with pytest.raises(requests.RequestException) as error:
-            save_rule_to_local({'name': 'Remote', 'source_type': 'url', 'url': SOURCE})
+            save_rule_to_local({'name': 'Remote', 'source_type': 'url', 'url': SOURCE, 'behavior': 'classical'})
     assert responses[0].status_code == 500
     assert responses[1].json['failed_count'] == 1
     assert responses[2].json['failed_count'] == 1

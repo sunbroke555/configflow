@@ -185,6 +185,11 @@ def test_bundle_layout_uses_library_format_like_rules_local_http(library_format,
     config = snapshot(source)
     config['rule_library'][0].update(behavior='domain', format=library_format)
     before = deepcopy(config)
+    if provider_format == 'text':
+        with pytest.raises(bundles.DeploymentPreparationError, match='声明为 text.*YAML payload'):
+            build(config, {'shared': provider('domain', provider_format)})
+        assert config == before
+        return
     files = contents(build(config, {'shared': provider('domain', provider_format)}))
     delivered = files['rules/shared.list'].decode()
     assert yaml.safe_load(delivered) == yaml.safe_load(source)

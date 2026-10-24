@@ -18,7 +18,7 @@ from backend.converters.mosdns import (
     get_mosdns_ruleset_downloads,
 )
 from backend.routes import mosdns, register_blueprints
-from backend.utils.mosdns_archive import build_mosdns_zip
+from backend.utils.mosdns_archive import build_mosdns_zip, MosdnsArchiveError
 
 
 SOURCE_URL = 'https://rules.test/regex.list'
@@ -87,6 +87,7 @@ def delivery(request, tmp_path, monkeypatch):
         'config': repository.get_compat_config('office'),
         'client': app.test_client(), 'calls': calls,
         'remote': source_type == 'url', 'mixed': behavior == 'classical',
+        'invalid_remote': source_type == 'url' and behavior == 'domain',
     }
     config_module.reset_config_context()
 
@@ -131,6 +132,16 @@ def test_generated_zip_and_web_download_keep_regex_and_split_ip(delivery):
     config = delivery['config']
     yaml_content = generate_mosdns_config(config, base_url=BASE_URL)
     downloads = get_mosdns_ruleset_downloads(config, base_url=BASE_URL)
+    if delivery['invalid_remote']:
+        with pytest.raises(MosdnsArchiveError, match='Domain 不接受 Classical'):
+            build_mosdns_zip(config, yaml_content, downloads, get_mosdns_custom_files(config), base_url=BASE_URL)
+        for path, headers in [('/api/generate/mosdns', {'X-ConfigFlow-Profile': 'office'}),
+                              ('/api/profiles/office/generate/mosdns', {})]:
+            response = delivery['client'].post(path, json={}, headers=headers)
+            assert response.status_code == 500
+            assert 'Domain 不接受 Classical' in response.json['message']
+            assert '第 ' in response.json['message']
+        return
     files = archive_files(build_mosdns_zip(
         config, yaml_content, downloads, get_mosdns_custom_files(config), base_url=BASE_URL,
     ))
@@ -165,6 +176,12 @@ def test_rule_proxy_keeps_regex_and_matches_generated_file_parts(delivery):
         ]:
             delivery['calls'].clear()
             response = delivery['client'].get(path + '?' + callback.query, headers=headers)
+            if delivery['invalid_remote']:
+                assert response.status_code == 422
+                assert response.json['code'] == 'RULE_CONTENT_INVALID'
+                assert 'Domain 不接受 Classical' in response.json['message']
+                assert '第 ' in response.json['message']
+                continue
             assert response.status_code == 200, response.get_data(as_text=True)
             assert response.mimetype == 'text/plain'
             if download['local_path'].endswith('_ip.txt'):
