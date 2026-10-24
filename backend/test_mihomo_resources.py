@@ -70,15 +70,27 @@ def test_geo_progress_names_actual_file_and_checks_without_exposing_source_url(m
 
 
 @pytest.mark.parametrize('document, expected', [
-    ({'rules': ['GEOIP,private,DIRECT']}, []),
+    # Mihomo v1.19.32 NewGEOIP skips the database only for "lan"; "private" is a database category.
+    ({'rules': ['GEOIP,LAN,DIRECT', 'SRC-GEOIP,lan,DIRECT']}, []),
+    ({'rules': ['GEOIP,private,DIRECT']}, ['mmdb']),
     ({'rules': ['GEOIP,CN,DIRECT']}, ['mmdb']),
     ({'rules': ['GEOIP,CN,DIRECT'], 'geodata-mode': True}, ['geoip']),
     ({'sub-rules': {'nested': ['AND,((GEOSITE,cn),(IP-ASN,123)),DIRECT']}}, ['geosite', 'asn']),
-    ({'dns': {'enable': False, 'fallback': ['1.1.1.1'], 'fallback-filter': {'geosite': ['cn']}}}, []),
+    # parseDNS loads its matchers whether or not DNS is enabled.
+    ({'dns': {'enable': False, 'fallback': ['1.1.1.1'], 'fallback-filter': {'geosite': ['cn']}}}, ['geosite', 'mmdb']),
+    ({'dns': {'nameserver-policy': {'geosite:cn,private': '223.5.5.5'}}}, ['geosite']),
     ({'dns': {'enable': True, 'fallback': ['1.1.1.1']}}, ['mmdb']),
+    ({'dns': {'enable': True, 'fallback': ['1.1.1.1'], 'fallback-filter': {'geoip-code': 'LAN'}}}, []),
+    ({'dns': {'enable': True, 'fallback': ['1.1.1.1'], 'fallback-filter': {'geoip-code': 'private'}}}, ['mmdb']),
     ({'dns': {'enable': True, 'nameserver-policy': {'geosite:cn': '223.5.5.5'}}}, ['geosite']),
     ({'dns': {'enable': True, 'fallback': ['1.1.1.1'], 'fallback-filter': {'geosite': ['cn'], 'geoip': False}}}, ['geosite']),
     ({'dns': {'enable': True, 'enhanced-mode': 'fake-ip', 'fake-ip-filter-mode': 'rule', 'fake-ip-filter': ['GEOSITE,cn,real-ip']}}, ['geosite']),
+    ({'dns': {'enhanced-mode': 'redir-host', 'fake-ip-filter': ['geosite:cn']}}, []),
+    # parseSniffer also runs while sniffing is disabled.
+    ({'sniffer': {'enable': False, 'skip-domain': ['geosite:apple']}}, ['geosite']),
+    ({'sniffer': {'force-domain': ['GeoSite:google'], 'skip-dst-address': ['geoip:telegram']}}, ['geosite', 'mmdb']),
+    ({'sniffer': {'skip-src-address': ['geoip:lan,LAN', '192.168.0.0/16']}}, []),
+    ({'sniffer': {'skip-src-address': ['geoip:lan,cn']}, 'geodata-mode': True}, ['geoip']),
 ])
 def test_resource_selection(document, expected):
     assert required_geo_resources(document, {}) == expected

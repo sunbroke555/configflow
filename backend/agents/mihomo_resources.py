@@ -29,8 +29,23 @@ GEO_RESOURCES = {
 
 
 def required_geo_resources(document, files):
-    """Inspect rule consumers, including classical providers and DNS filters."""
+    """Inspect rule consumers, including classical providers, DNS filters and sniffer."""
     required = set()
+
+    def geoip(code):
+        # NewGEOIP skips the database only for the "lan" pseudo code.
+        if str(code).strip().lower() != 'lan':
+            required.add('geoip')
+
+    def geoip_list(values):
+        for value in values if isinstance(values, list) else []:
+            if str(value).lower().startswith('geoip:'):
+                for code in str(value).split(':')[1].split(','):
+                    geoip(code)
+
+    def geosite_list(values):
+        if isinstance(values, list) and any(str(value).lower().startswith('geosite:') for value in values):
+            required.add('geosite')
 
     def rules(value):
         if isinstance(value, dict):
@@ -43,8 +58,7 @@ def required_geo_resources(document, files):
             if re.search(r'(?:^|[,(])\s*GEOSITE\s*,', value, re.I):
                 required.add('geosite')
             for match in re.finditer(r'(?:^|[,(])\s*(?:SRC-)?GEOIP\s*,\s*([^,()]+)', value, re.I):
-                if match[1].strip().lower() != 'private':
-                    required.add('geoip')
+                geoip(match[1])
             if re.search(r'(?:^|[,(])\s*(?:SRC-)?IP-ASN\s*,', value, re.I):
                 required.add('asn')
 
@@ -61,24 +75,31 @@ def required_geo_resources(document, files):
                 rules(yaml.safe_load(text) if provider.get('format', 'yaml') == 'yaml' else text.splitlines())
             except (UnicodeError, yaml.YAMLError):
                 pass  # Let the core report invalid provider content precisely.
+    # parseDNS and parseSniffer load these even when DNS or sniffer is disabled.
     dns = document.get('dns') or {}
-    if isinstance(dns, dict) and dns.get('enable') is True:
+    if isinstance(dns, dict):
         for key in ('nameserver-policy', 'proxy-server-nameserver-policy'):
             policy = dns.get(key) or {}
-            if isinstance(policy, dict) and any(str(name).lower().startswith('geosite:') for name in policy):
-                required.add('geosite')
+            if isinstance(policy, dict):
+                geosite_list(list(policy))
         filters = dns.get('fake-ip-filter') or []
         if dns.get('enhanced-mode') == 'fake-ip' and isinstance(filters, list):
-            if any(str(value).lower().startswith('geosite:') for value in filters):
-                required.add('geosite')
             if dns.get('fake-ip-filter-mode') == 'rule':
                 rules(filters)
+            else:
+                geosite_list(filters)
         fallback = dns.get('fallback-filter') or {}
         if dns.get('fallback') and isinstance(fallback, dict):
-            if fallback.get('geoip', True) and str(fallback.get('geoip-code', 'CN')).lower() != 'private':
-                required.add('geoip')
+            if fallback.get('geoip', True):
+                geoip(fallback.get('geoip-code', 'CN'))
             if fallback.get('geosite'):
                 required.add('geosite')
+    sniffer = document.get('sniffer') or {}
+    if isinstance(sniffer, dict):
+        geosite_list(sniffer.get('force-domain'))
+        geosite_list(sniffer.get('skip-domain'))
+        geoip_list(sniffer.get('skip-src-address'))
+        geoip_list(sniffer.get('skip-dst-address'))
     if 'geoip' in required and document.get('geodata-mode') is not True:
         required.remove('geoip')
         required.add('mmdb')
