@@ -70,17 +70,21 @@ func TestInstallerManagedForwardingDescribesWhatTheInstallerWillDo(t *testing.T)
 
 func TestInstallerManagedForwardingReportsLaterZero(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		files map[string]string
-		where string
+		name   string
+		loader string
+		files  map[string]string
+		where  string
 	}{
-		{"later sysctl.d file", map[string]string{"/etc/sysctl.d/99-zz-test.conf": "net.ipv4.ip_forward = 0\n"}, "/etc/sysctl.d/99-zz-test.conf:1"},
-		{"debian 99-sysctl.conf link", map[string]string{"/etc/sysctl.d/99-sysctl.conf": "# x\nnet.ipv4.ip_forward=0\n", "/etc/sysctl.conf": "# x\nnet.ipv4.ip_forward=0\n"}, "/etc/sysctl.d/99-sysctl.conf:2"},
-		{"sysctl.conf", map[string]string{"/etc/sysctl.conf": "net/ipv4/ip_forward=0\n"}, "/etc/sysctl.conf:1"},
-		{"vendor file", map[string]string{"/usr/lib/sysctl.d/99-zzz-vendor.conf": "net.ipv4.ip_forward=0\n"}, "/usr/lib/sysctl.d/99-zzz-vendor.conf:1"},
+		{"later sysctl.d file", "", map[string]string{"/etc/sysctl.d/99-zz-test.conf": "net.ipv4.ip_forward = 0\n"}, "/etc/sysctl.d/99-zz-test.conf:1"},
+		// On systemd hosts /etc/sysctl.conf takes effect only through Debian's 99-sysctl.conf link.
+		{"debian 99-sysctl.conf link", "systemd", map[string]string{"/etc/sysctl.d/99-sysctl.conf": "# x\nnet.ipv4.ip_forward=0\n", "/etc/sysctl.conf": "# x\nnet.ipv4.ip_forward=0\n"}, "/etc/sysctl.d/99-sysctl.conf:2"},
+		{"sysctl.conf with sysctl --system", "", map[string]string{"/etc/sysctl.conf": "net/ipv4/ip_forward=0\n"}, "/etc/sysctl.conf:1"},
+		{"sysctl.conf on Alpine", "alpine", map[string]string{"/etc/sysctl.conf": "net/ipv4/ip_forward=0\n"}, "/etc/sysctl.conf:1"},
+		{"vendor file", "", map[string]string{"/usr/lib/sysctl.d/99-zzz-vendor.conf": "net.ipv4.ip_forward=0\n"}, "/usr/lib/sysctl.d/99-zzz-vendor.conf:1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := healthySystemFixture()
+			fixture.useLoader(tc.loader)
 			for path, data := range tc.files {
 				fixture.files[path] = []byte(data)
 			}
