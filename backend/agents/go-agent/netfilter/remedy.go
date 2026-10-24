@@ -7,9 +7,11 @@ import (
 )
 
 const (
-	iptablesPersistNote = "这些规则重启后会丢失。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。"
-	dockerPersistNote   = "这两条规则重启后会丢失（重启 Docker 不会清空 DOCKER-USER）。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。"
-	nftPersistNote      = "nft 命令只改当前规则，重启后会丢失；请把这些规则写进 /etc/nftables.conf（或系统加载的 nftables 配置）里对应的链。"
+	// Plain iptables and nft add a rule on every run; firewalld and ufw skip duplicates.
+	runOnceNote         = "执行一次即可；重复执行会多出相同的规则，不影响使用。"
+	iptablesPersistNote = "这些规则重启后会丢失。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。执行一次即可；重复执行会多出相同的规则，不影响使用。"
+	dockerPersistNote   = "这两条规则重启后会丢失（重启 Docker 不会清空 DOCKER-USER）。Debian/Ubuntu 可安装 iptables-persistent 后执行 netfilter-persistent save；Alpine 执行 rc-service iptables save。执行一次即可；重复执行会多出相同的规则，不影响使用。"
+	nftPersistNote      = "nft 命令只改当前规则，重启后会丢失；请把这些规则写进 /etc/nftables.conf（或系统加载的 nftables 配置）里对应的链。执行一次即可；重复执行会多出相同的规则，不影响使用。"
 	firewalldNote       = "把 TUN 设备放进只含它的 configflow-tun 区域（接受从它进来的流量），再用 configflow-fwd 策略只放行转发进这个区域（即进入 TUN 设备）的流量；其他区域和网卡不受影响。"
 	firewalldSavedNote  = "已用 --permanent 保存，重启后仍有效；可以重复执行，提示 ALREADY_ENABLED 可以忽略。"
 	firewalldDNSNote    = "在局域网网卡所在的区域开放 DNS 服务（53/udp 和 53/tcp），只影响这个区域的网卡。"
