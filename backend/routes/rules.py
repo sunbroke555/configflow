@@ -19,6 +19,7 @@ from backend.utils.reorder import reorder_by_ids
 from backend.utils.logger import get_logger
 from backend.utils.url_utils import safe_exception_details, safe_url_for_log
 from backend.utils.rule_fetch import request_rule
+from backend.utils.rule_syntax import COMMA_PAYLOAD_TYPES, rule_value_error
 
 logger = get_logger(__name__)
 
@@ -52,13 +53,19 @@ def attach_full_url_to_rules(rules: list) -> list:
     return rules_copy
 
 
-def normalize_rule_config(rule_item: dict) -> None:
+def normalize_rule_config(rule_item: dict, previous=None) -> None:
     """Persist composition only; shared library owns every source field."""
     from backend.common.config_repository import ProfileValidationError
     if not isinstance(rule_item, dict):
         raise ProfileValidationError('规则请求必须是 JSON 对象')
     rule_item.setdefault('itemType', 'rule' if 'rule_type' in rule_item else 'ruleset')
     if rule_item['itemType'] != 'ruleset':
+        # Keep unrelated edits to legacy rules possible; validate every new or
+        # changed type/value before it reaches the saved profile.
+        if not previous or any(rule_item.get(key) != previous.get(key) for key in ('itemType', 'rule_type', 'value')):
+            error = rule_value_error(rule_item.get('rule_type'), rule_item.get('value', ''))
+            if error:
+                raise ProfileValidationError(error)
         return
     library_id = rule_item.get('library_rule_id')
     if not library_id or not any(item.get('id') == library_id
@@ -210,7 +217,7 @@ def _mutate_rule(rule_id, item_type=None):
         updated = {**original, **payload, 'id': rule_id}
         if item_type:
             updated['itemType'] = item_type
-        normalize_rule_config(updated)
+        normalize_rule_config(updated, original)
         result.update(updated)
         updated = _hydrated(profile, updated)
         # Only a type change is checked, so other edits to older selections still save.
@@ -236,9 +243,7 @@ def handle_rule(rule_id):
 _DNS_BATCH_LIMIT = 200
 _PASTE_LIMIT = 200
 _LIBRARY_LIMIT = 50
-_DOMAIN_TYPES = ('DOMAIN', 'DOMAIN-SUFFIX')
 _BUILTIN_POLICIES = ('DIRECT', 'REJECT', 'REJECT-DROP', 'PASS')
-_RULE_TYPE = re.compile(r'[A-Z][A-Z0-9-]*')
 
 
 @bp.route('/dns', methods=['GET', 'PUT'])
@@ -283,24 +288,6 @@ def handle_rule_dns():
                     'skipped': skipped, 'warnings': warnings, **_pinned_withheld(changed)})
 
 
-def _rule_value_error(kind, value):
-    if not kind:
-        return '无前缀的行需要选择规则类型'
-    if not _RULE_TYPE.fullmatch(kind):
-        return f'不支持的规则类型 {kind}'
-    if not value:
-        return '规则值为空'
-    if kind in _DOMAIN_TYPES and (is_valid_ip(value) or not is_valid_domain(value)):
-        return '不是有效域名'
-    if kind in ('IP-CIDR', 'IP-CIDR6'):
-        import ipaddress
-        try:
-            ipaddress.ip_network(value, strict=False)
-        except ValueError:
-            return '不是有效 IP 网段'
-    return None
-
-
 def _paste_rows(text, rule_type):
     """Rows of a pasted rule list: (rows, warnings, field errors).
 
@@ -310,7 +297,7 @@ def _paste_rows(text, rule_type):
     other lines use rule_type. Repeated lines are added once.
     """
     lines = [(number, raw.strip()) for number, raw in enumerate(text.splitlines(), 1)]
-    lines = [(number, line) for number, line in lines if line and not line.startswith('#')]
+    lines = [(number, line) for number, line in lines if line and not line.startswith(('#', '//'))]
     if len(lines) > _PASTE_LIMIT:
         raise ProfileValidationError(f'一次最多添加 {_PASTE_LIMIT} 条，较多条目请改为新建规则集')
     rows, warnings, errors, seen = [], [], [], set()
@@ -319,7 +306,12 @@ def _paste_rows(text, rule_type):
         if ',' in line:
             fields = [field.strip() for field in line.split(',')]
             kind, value = fields[0].upper(), fields[1]
-            for extra in fields[2:]:
+            if kind in COMMA_PAYLOAD_TYPES:
+                value = line.split(',', 1)[1].strip()
+            elif kind == 'MATCH':
+                value = ''
+            extras = [] if kind in COMMA_PAYLOAD_TYPES else fields[1:] if kind == 'MATCH' else fields[2:]
+            for extra in extras:
                 if extra.lower() == 'no-resolve':
                     no_resolve = True
                 elif extra:
@@ -333,7 +325,7 @@ def _paste_rows(text, rule_type):
             kind, value = 'DOMAIN', line[5:].strip()
         else:
             kind, value = rule_type, line
-        error = _rule_value_error(kind, value)
+        error = rule_value_error(kind, value)
         if error:
             errors.append({'line': number, 'message': error})
             continue
@@ -574,9 +566,17 @@ def reorder_rules():
 @require_auth
 def batch_add_rules():
     """批量添加规则"""
-    data = request.json
+    data = request.get_json()
+    if not isinstance(data, dict):
+        raise ProfileValidationError('规则请求必须是 JSON 对象')
     rule_type = data.get('rule_type')
     domains = data.get('domains', [])  # 域名列表
+    if not isinstance(domains, list) or not domains or not all(isinstance(value, str) for value in domains):
+        raise ProfileValidationError('请提供规则值列表')
+    for number, value in enumerate(domains, 1):
+        error = rule_value_error(rule_type, value.strip())
+        if error:
+            raise ProfileValidationError(f'第 {number} 行：{error}')
     policy = data.get('policy')
 
     new_rules = []
@@ -609,8 +609,8 @@ def batch_add_rules():
 def get_local_rule(name):
     """获取本地缓存的规则文件（通过规则名称）
 
-    这个端点用于 Mihomo 配置中的 rule-providers，
-    提供本地缓存的规则文件，避免外部网络请求。
+    Mihomo 的 Classical 或 YAML provider 通过 target=mihomo 请求兼容内容；
+    无标记请求继续返回原文，供其他客户端及规则转换器使用。
 
     注意：此接口不需要权限校验，因为会被 Mihomo 等客户端直接访问。
 
@@ -638,6 +638,26 @@ def get_local_rule(name):
         filename = rule_cache_filename(rule or {'name': name})
         filepath = rule_cache_read_path(rule or {'name': name}, rule_library)
 
+        def content_response(content):
+            # Transform only the delivered bytes, never the shared source/cache.
+            if rule and request.args.get('target') == 'mihomo':
+                from backend.converters.common import ruleset_format
+                from backend.utils.ruleset_content import normalize_mihomo_ruleset
+                try:
+                    normalized, warnings = normalize_mihomo_ruleset(
+                        content.decode('utf-8'), rule.get('behavior', 'domain'), ruleset_format(rule, config_data))
+                except UnicodeDecodeError:
+                    logger.warning("Rule '%s' is not UTF-8; leaving rule content unchanged", name)
+                else:
+                    content = normalized.encode('utf-8')
+                    if warnings:
+                        logger.warning("Rule '%s': %s entries need manual review (lines %s)",
+                                       name, len(warnings), [item['line'] for item in warnings[:10]])
+            resp = make_response(content, 200)
+            resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
+            resp.headers['Content-Length'] = str(len(content))
+            return resp
+
         logger.info(f"Requesting local rule: {name}, filepath: {filepath}")
 
         # 如果规则仓库中没有找到该规则
@@ -647,10 +667,7 @@ def get_local_rule(name):
                 logger.warning(f"Rule '{name}' not found in library, but cache exists, returning cache")
                 with open(filepath, 'rb') as f:
                     content = f.read()
-                resp = make_response(content, 200)
-                resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-                resp.headers['Content-Length'] = str(len(content))
-                return resp
+                return content_response(content)
             else:
                 logger.error(f"Rule '{name}' not found in rule library and no cache exists")
                 return jsonify({
@@ -673,10 +690,7 @@ def get_local_rule(name):
                     repository.write_shared_text(os.path.join('rules', filename), response.text)
                     # 返回响应并添加 Content-Length 头
                     content = response.text.encode('utf-8')
-                    resp = make_response(content, 200)
-                    resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-                    resp.headers['Content-Length'] = str(len(content))
-                    return resp
+                    return content_response(content)
                 else:
                     logger.warning(f"Failed to fetch rule '{name}', status code: {response.status_code}")
             except requests.Timeout:
@@ -689,10 +703,7 @@ def get_local_rule(name):
             logger.info(f"Returning cached rule file: {filepath}")
             with open(filepath, 'rb') as f:
                 content = f.read()
-            resp = make_response(content, 200)
-            resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-            resp.headers['Content-Length'] = str(len(content))
-            return resp
+            return content_response(content)
         else:
             # 缓存文件不存在，尝试重新生成
             logger.warning(f"Cache file not found for rule '{name}', regenerating...")
@@ -702,10 +713,7 @@ def get_local_rule(name):
                     logger.info(f"Successfully regenerated cache for rule '{name}'")
                     with open(filepath, 'rb') as f:
                         content = f.read()
-                    resp = make_response(content, 200)
-                    resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-                    resp.headers['Content-Length'] = str(len(content))
-                    return resp
+                    return content_response(content)
                 else:
                     logger.error(f"Failed to regenerate cache for rule '{name}'")
                     return jsonify({

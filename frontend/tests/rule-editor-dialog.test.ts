@@ -3,6 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import RuleEditorDialog from '@/components/rules/RuleEditorDialog.vue'
 import { Select } from '@/components/ui/select'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
+import { CLASSICAL_CONTENT_HINT } from '@/lib/ruleset-content'
 import type { RuleDnsSnapshot } from '@/types'
 
 const network = vi.hoisted(() => ({
@@ -47,6 +48,7 @@ const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 
 beforeEach(() => {
   vi.clearAllMocks()
   network.compose.mockImplementation(async () => composeResult())
+  network.post.mockImplementation(async (path, body) => (path === '/rule-library/check-content' ? { data: { content: body.content, changes: [], errors: [] } } : { data: { success: true, available: true } }))
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
     matches: false, media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(),
@@ -105,6 +107,39 @@ async function source(label: string) {
 const save = () => Array.from(dialog().querySelectorAll<HTMLButtonElement>('footer button')).at(-1)!
 
 describe('rule editor dialog', () => {
+  it('blocks misspelled pasted types and invalid values while editing one rule', async () => {
+    await render()
+    await type('#rule-values', 'DOMAIN-SHUFFIX,tmdb.org')
+    expect(text()).toContain('不支持的规则类型 DOMAIN-SHUFFIX')
+    expect(save().disabled).toBe(true)
+    wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = ''
+    const wrapper = await render({ mode: 'edit', item: { id: 'ip', itemType: 'rule', rule_type: 'IP-CIDR6', value: '2001:db8::/32', policy: 'DIRECT' } })
+    await type('#rule-value', '+.tmdb.org')
+    expect(text()).toContain('不是有效 IP 网段')
+    expect(save().disabled).toBe(true)
+    expect(network.update).not.toHaveBeenCalled()
+    await type('#rule-value', '192.0.2.0/24')
+    expect(save().disabled).toBe(false)
+    await click(save())
+    expect(network.update).toHaveBeenCalledWith('ip', expect.objectContaining({ rule_type: 'IP-CIDR6', value: '192.0.2.0/24' }), 'p1')
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+  })
+
+  it('shows new IPCIDR ruleset errors without losing the draft', async () => {
+    const wrapper = await render({ initialSource: 'new_library' })
+    await type('#rule-library-name', 'Networks')
+    await choose(wrapper, '内容类型', 'ipcidr')
+    await source('粘贴内容')
+    await type('#rule-library-content', '+.tmdb.org')
+    network.post.mockResolvedValueOnce({ data: { content: '+.tmdb.org', changes: [], errors: [{ line: 1, message: 'IPCIDR 只接受 CIDR' }] } })
+    await click(save())
+    expect(document.querySelector('[data-rule-content-issues]')?.textContent).toContain('第 1 行：IPCIDR 只接受 CIDR')
+    expect(network.compose).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLTextAreaElement>('#rule-library-content')?.value).toBe('+.tmdb.org')
+    await type('#rule-library-content', '192.0.2.0/24')
+    expect(document.querySelector('[data-rule-content-issues]')).toBeNull()
+  })
+
   it('keeps the policy and DNS when switching between sources', async () => {
     const wrapper = await render()
     await choose(wrapper, '策略', 'Proxy')
@@ -280,6 +315,45 @@ describe('rule editor dialog', () => {
     expect(network.copy).toHaveBeenCalledWith('手写条目')
     expect(network.compose).toHaveBeenCalledTimes(1)
     expect(wrapper.emitted('update:open')).toBeUndefined()
+  })
+
+  it.each(['domain', 'ipcidr', 'classical'])('preserves %s YAML payload and records its detected format', async behavior => {
+    const wrapper = await render({ initialSource: 'new_library' })
+    await type('#rule-library-name', 'YAML rules')
+    await choose(wrapper, '内容类型', behavior)
+    await source('粘贴内容')
+    const content = behavior === 'ipcidr' ? '# keep\npayload:\n  - "192.0.2.0/24"\n  - "2001:db8::/32"\n' : '# keep\npayload:\n  - "+.tmdb.org"\n  - "api.example.org"\n'
+    await type('#rule-library-content', content)
+    expect(text()).toContain('已识别为 YAML payload')
+    expect(wrapper.findAllComponents(Select).some(item => item.find('[aria-label="匹配范围"]').exists())).toBe(false)
+    expect(save().disabled).toBe(false)
+    await click(save())
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', { behavior, content, format: 'yaml', append_lines: [] })
+    expect(network.compose).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'new_library', library: expect.objectContaining({ content, format: 'yaml' }) } }), 'p1')
+    expect(confirmState.open).toBe(false)
+  })
+
+  it('explains classical delivery and creates a ruleset from the unchanged draft without confirmation', async () => {
+    const wrapper = await render({ initialSource: 'new_library' })
+    await type('#rule-library-name', 'Mixed rules')
+    await choose(wrapper, '内容类型', 'classical')
+    // The explanation remains visible for a URL source as well as pasted content.
+    expect(text()).toContain(CLASSICAL_CONTENT_HINT)
+    await source('粘贴内容')
+    expect(text()).toContain(CLASSICAL_CONTENT_HINT)
+    const content = '# keep\n  +.tmdb.org \n\n192.0.2.1\n*.manual.test\n'
+    await type('#rule-library-content', content)
+    network.post.mockResolvedValueOnce({ data: { content, changes: [], errors: [], warnings: [
+      { line: 5, before: '*.manual.test', message: '请手动调整' }
+    ] } })
+    await click(save())
+    expect(confirmState.open).toBe(false)
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', {
+      behavior: 'classical', content, format: 'text', append_lines: []
+    })
+    expect(network.compose).toHaveBeenCalledWith(expect.objectContaining({
+      source: { kind: 'new_library', library: { name: 'Mixed rules', source_type: 'content', content, behavior: 'classical', format: 'text', enabled: true } }
+    }), 'p1')
   })
 
   it('asks before saving an unreachable URL as a disabled ruleset and keeps its DNS for later', async () => {

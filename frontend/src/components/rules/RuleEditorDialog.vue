@@ -14,15 +14,16 @@ import FormField from '@/components/common/FormField.vue'
 import InfoNote from '@/components/common/InfoNote.vue'
 import Segmented from '@/components/common/Segmented.vue'
 import RuleDnsField from '@/components/rules/RuleDnsField.vue'
+import RuleContentIssues from '@/components/rules/RuleContentIssues.vue'
 import api, { ruleApi, ruleSetApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
 import { isDnsRuleType } from '@/lib/oxidns'
-import { prepareRuleContent } from '@/lib/ruleset-content'
-import { domainRuleLine } from '@/lib/ruleset-format'
+import { CLASSICAL_CONTENT_HINT, prepareRuleContent, type RuleContentCheck } from '@/lib/ruleset-content'
+import { detectRuleContentFormat, domainRuleLine } from '@/lib/ruleset-format'
 import {
   DNS_COPY, DNS_FIELD_HELP, IP_DNS_RULE_TYPES, NO_RESOLVE_RULE_TYPES, PASTE_LIMIT, PASTE_SUGGEST_RULESET, PINNED_HINT,
   RULE_TYPES, SINGLE_RULE_TYPES, choiceLabel, confirmSaveWithoutDns, copyKey, defaultDnsChoice, dnsErrorReason, dnsWarnings, followRoute, isRoutingLocked, isUpstreamValue,
-  notifyRuleSaved, parsePastedRules, pasteToRuleset, pinnedWithheld, rulePayload, ruleSetPayload, splitPaste, stateValue, type DnsWarning
+  notifyRuleSaved, parsePastedRules, pasteToRuleset, pinnedWithheld, rulePayload, ruleSetPayload, ruleValueError, splitPaste, stateValue, type DnsWarning
 } from '@/lib/ruleDns'
 import type { ComposePayload, RuleDnsSnapshot, RuleDnsState, RuleDnsValue } from '@/types'
 
@@ -68,6 +69,7 @@ const DOMAIN_SCOPES = [
 ]
 
 const source = ref<SourceKind>('values')
+const contentCheck = ref<RuleContentCheck | null>(null)
 const form = reactive({
   ruleType: 'DOMAIN-SUFFIX',
   text: '',
@@ -100,6 +102,7 @@ const dnsLoaded = computed(() => !!props.dns)
 const inUse = computed(() => engine.value?.oxidns_in_use !== false)
 const locked = computed(() => engine.value?.editable === false)
 const entry = computed(() => (editItem.value ? props.dns?.rules[editItem.value.id] : undefined))
+const libraryFormat = computed(() => detectRuleContentFormat(form.library.content))
 const singleType = computed(() => !editing.value && source.value === 'values' && SINGLE_RULE_TYPES.includes(form.ruleType))
 
 const libraryById = computed(() => new Map(props.library.map(item => [item.id, item])))
@@ -131,6 +134,7 @@ const existingRules = computed(() => {
 })
 const paste = computed(() => (!editing.value && source.value === 'values' && !singleType.value ? parsePastedRules(form.text, form.ruleType) : null))
 /** 服务端 compose 遇到任一无效行会拒绝整批，所以有无效行时不能保存 */
+const singleValueError = computed(() => ((editing.value && !isRuleset.value) || singleType.value) ? ruleValueError(form.ruleType, form.value.trim()) : '')
 const invalidCount = computed(() => paste.value?.invalid.length ?? 0)
 const pasteSummary = computed(() => {
   const result = paste.value
@@ -243,9 +247,10 @@ const addCount = computed(() => {
   if (source.value === 'library') return form.libraryIds.length
   return form.library.name.trim() && (form.library.source_type === 'url' ? form.library.url.trim() : form.library.content.trim()) ? 1 : 0
 })
+watch(() => [form.library.content, form.library.behavior, source.value], () => { contentCheck.value = null })
 const libraryNameTaken = computed(() => source.value === 'new_library' && props.library.some(item => item.name === form.library.name.trim()))
-const blocked = computed(() => !!paste.value?.overLimit || invalidCount.value > 0 || (source.value === 'new_library' && (libraryNameTaken.value
-  || (form.library.source_type === 'content' && form.library.behavior === 'domain' && !form.library.scope))))
+const blocked = computed(() => !!singleValueError.value || !!paste.value?.overLimit || invalidCount.value > 0 || (source.value === 'new_library' && (libraryNameTaken.value
+  || (form.library.source_type === 'content' && form.library.behavior === 'domain' && libraryFormat.value === 'text' && !form.library.scope))))
 const saveLabel = computed(() => {
   if (editing.value) return '保存'
   if (source.value === 'library') return addCount.value ? `添加 ${addCount.value} 个规则集` : '添加规则集'
@@ -366,11 +371,13 @@ async function libraryPayload(): Promise<Extract<ComposePayload['source'], { kin
     }
     return { ...library, url }
   }
+  library.format = libraryFormat.value
   const lines = value.content.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-  const content = value.behavior === 'domain' && value.scope !== 'PATTERN'
-    ? lines.map(line => (line.startsWith('#') ? line : domainRuleLine('domain', value.scope, line))).join('\n')
-    : lines.join('\n')
-  const checked = await prepareRuleContent({ behavior: value.behavior, content, format: 'text' })
+  const content = library.format === 'yaml' || value.behavior === 'classical' ? value.content
+    : value.behavior === 'domain' && value.scope !== 'PATTERN'
+      ? lines.map(line => (line.startsWith('#') || line.startsWith('//') ? line : domainRuleLine('domain', value.scope, line))).join('\n')
+      : lines.join('\n')
+  const checked = await prepareRuleContent({ behavior: value.behavior, content, format: library.format }, undefined, check => { contentCheck.value = check })
   return checked === null ? null : { ...library, content: checked }
 }
 
@@ -512,7 +519,8 @@ async function save() {
             </FormField>
 
             <FormField v-if="editing || singleType" label="匹配值" html-for="rule-value">
-              <Input id="rule-value" v-model="form.value" class="bg-background/50 font-mono" :placeholder="form.ruleType === 'MATCH' ? '留空即可' : '域名、IP 或规则条件'" />
+              <Input id="rule-value" v-model="form.value" class="bg-background/50 font-mono" :placeholder="form.ruleType === 'MATCH' ? '留空即可' : '域名、IP 或规则条件'" :aria-invalid="!!singleValueError" />
+              <p v-if="singleValueError" role="alert" class="text-xs text-destructive-accent">{{ singleValueError }}</p>
             </FormField>
             <FormField
               v-else
@@ -616,6 +624,8 @@ async function save() {
               <Textarea id="rule-library-content" v-model="form.library.content" class="min-h-[120px] bg-background/50 font-mono text-[12.5px]" :rows="5"
                 :placeholder="form.library.behavior === 'domain' ? 'example.com（每行一条）' : form.library.behavior === 'ipcidr' ? '192.0.2.0/24（每行一条）' : 'DOMAIN-SUFFIX,example.com（每行一条）'" />
             </FormField>
+            <p v-if="form.library.source_type === 'content' && libraryFormat === 'yaml'" class="m-0 text-xs text-muted-foreground">已识别为 YAML payload，按各条目中的写法匹配。</p>
+            <RuleContentIssues :check="contentCheck" />
             <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
               <FormField label="内容类型">
                 <Select v-model="form.library.behavior">
@@ -625,7 +635,7 @@ async function save() {
                   </SelectContent>
                 </Select>
               </FormField>
-              <FormField v-if="form.library.source_type === 'content' && form.library.behavior === 'domain'" label="匹配范围"
+              <FormField v-if="form.library.source_type === 'content' && form.library.behavior === 'domain' && libraryFormat === 'text'" label="匹配范围"
                 :hint="form.library.scope ? undefined : '请选择是否包含子域名'" persistent-hint>
                 <Select v-model="form.library.scope">
                   <SelectTrigger class="w-full bg-background/50" aria-label="匹配范围"><SelectValue placeholder="选择匹配范围" /></SelectTrigger>
@@ -635,6 +645,7 @@ async function save() {
                 </Select>
               </FormField>
             </div>
+            <p v-if="form.library.behavior === 'classical'" class="m-0 text-xs leading-relaxed text-muted-foreground">{{ CLASSICAL_CONTENT_HINT }}</p>
           </template>
 
           <div v-if="showNoResolve" class="flex flex-wrap items-center gap-x-2.5 gap-y-1">

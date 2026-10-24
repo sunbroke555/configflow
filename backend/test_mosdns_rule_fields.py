@@ -126,3 +126,25 @@ def test_native_classical_and_converted_regex_validation_agree(tmp_path, payload
     assert (native_converted.returncode == 0) == provider_valid, (
         native_converted.stdout + native_converted.stderr
     )
+
+
+@pytest.mark.parametrize('source', [
+    '\ufeff+.tmdb.org\n192.0.2.0/24\nDOMAIN,exact.test',
+    '"payload": ["+.tmdb.org", "192.0.2.0/24", "DOMAIN,exact.test"]',
+    "'payload':\n  - '+.tmdb.org'\n  - 192.0.2.0/24\n  - DOMAIN,exact.test\n",
+    '{"payload": ["+.tmdb.org", "192.0.2.0/24", "DOMAIN,exact.test"]}',
+    'domain:tmdb.org\nip:192.0.2.0/24\nDOMAIN,exact.test',
+])
+@pytest.mark.parametrize('part,plugin,expected', [
+    ('domain', 'domain_set', 'domain:tmdb.org\nfull:exact.test'),
+    ('ip', 'ip_set', '192.0.2.0/24'),
+])
+def test_dns_refresh_and_bundle_agree_for_mixed_text_bom_and_quoted_yaml(source, part, plugin, expected):
+    assert convert_rule_content_for_mosdns(source, part) == expected
+    assert convert_mosdns_rules(source.encode(), plugin, mixed=True).decode() == expected
+
+
+def test_native_dns_regex_commas_and_ip_prefix_are_classified_per_line():
+    source = r'regexp:^node[0-9]{1,3}\.test$' + '\nip:2001:db8::/32\n+.tmdb.org'
+    assert convert_rule_content_for_mosdns(source, 'domain') == r'regexp:^node[0-9]{1,3}\.test$' + '\ndomain:tmdb.org'
+    assert convert_rule_content_for_mosdns(source, 'ip') == '2001:db8::/32'

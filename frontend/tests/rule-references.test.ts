@@ -10,6 +10,7 @@ import ConfirmHost from '@/components/feedback/ConfirmHost.vue'
 import { Select } from '@/components/ui/select'
 import { setActiveProfileId } from '@/profileContext'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
+import { CLASSICAL_CONTENT_HINT } from '@/lib/ruleset-content'
 
 // Replace only HTTP boundaries; dialogs, selectors, sorting and stores stay real.
 const network = vi.hoisted(() => {
@@ -226,6 +227,99 @@ describe('profile rule references', () => {
 })
 
 describe('shared rule library', () => {
+  it('explains classical delivery for content and URL sources and saves the original draft without confirmation', async () => {
+    const content = '# keep\n  +.tmdb.org \n\n192.0.2.1\n*.manual.test\n'
+    Object.assign(network.state.library[0]!, { behavior: 'classical', content })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
+    const state = (wrapper.vm as any).$.setupState
+    state.form.source_type = 'url'; await flushPromises()
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
+    state.form.source_type = 'content'; await flushPromises()
+    network.post.mockResolvedValueOnce({ data: { content, changes: [], errors: [], warnings: [
+      { line: 5, before: '*.manual.test', message: '请手动调整' }
+    ] } })
+    await clickText('保存')
+    expect(confirmState.open).toBe(false)
+    expect(network.put).toHaveBeenCalledExactlyOnceWith('/rule-library/library-one', expect.objectContaining({ content, behavior: 'classical' }))
+  })
+
+  it('lets content sources fix an explicit format mismatch without overriding their choice', async () => {
+    const content = 'payload:\n  - +.tmdb.org\n'
+    Object.assign(network.state.library[0]!, { behavior: 'classical', format: 'text', content })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    const format = wrapper.findAllComponents(Select).find(item => item.find('[aria-label="内容格式"]').exists())!
+    expect(format.props('modelValue')).toBe('text')
+    network.post.mockResolvedValueOnce({ data: { content, changes: [], errors: [{ line: 0, message: '请选择 YAML 内容格式' }] } })
+    await clickText('保存')
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', expect.objectContaining({ format: 'text', content }))
+    expect(network.put).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-rule-content-issues]')?.textContent).toContain('请选择 YAML 内容格式')
+    format.vm.$emit('update:modelValue', 'yaml'); await flushPromises()
+    await clickText('保存')
+    expect(network.post).toHaveBeenLastCalledWith('/rule-library/check-content', expect.objectContaining({ format: 'yaml', content }))
+    expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({ format: 'yaml', content }))
+  })
+
+  it('records detected YAML for content sources with automatic format', async () => {
+    const content = 'payload: ["+.tmdb.org"]\n'
+    Object.assign(network.state.library[0]!, { behavior: 'classical', format: undefined, content })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    expect(wrapper.findAllComponents(Select).find(item => item.find('[aria-label="内容格式"]').exists())!.props('modelValue')).toBe('auto')
+    await clickText('保存')
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', expect.objectContaining({ format: 'yaml', content }))
+    expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({ format: 'yaml', content }))
+  })
+
+  it('checks full IPCIDR drafts and keeps all line errors beside the content', async () => {
+    Object.assign(network.state.library[0]!, { behavior: 'ipcidr', content: '+.tmdb.org\nDOMAIN-SHUFFIX,example.com' })
+    const wrapper = await render(RuleLibrary)
+    await wrapper.get('button[aria-label="编辑 Shared domains"]').trigger('click'); await flushPromises()
+    network.post.mockResolvedValueOnce({ data: { content: '+.tmdb.org', changes: [], errors: [
+      { line: 1, message: '只接受 CIDR' }, { line: 2, message: '不是有效 IP 网段' }
+    ] } })
+    await clickText('保存')
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', expect.objectContaining({ behavior: 'ipcidr' }))
+    expect(document.querySelector('[data-rule-content-issues]')?.textContent).toContain('第 2 行：不是有效 IP 网段')
+    expect(network.put).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.value).toBe('+.tmdb.org\nDOMAIN-SHUFFIX,example.com')
+  })
+
+  it('validates an appended classical type and value on the server, including IPv6', async () => {
+    Object.assign(network.state.library[0]!, { behavior: 'classical', content: '+.tmdb.org' })
+    const wrapper = await render(RuleLibrary)
+    const state = (wrapper.vm as any).$.setupState
+    state.showAddRuleToSetDialog(network.state.library[0]); await flushPromises()
+    state.addRuleToSetForm.rule_type = 'IP-CIDR6'
+    state.addRuleToSetForm.value = '+.tmdb.org'; await flushPromises()
+    network.post.mockResolvedValueOnce({ data: { content: '+.tmdb.org', changes: [], errors: [{ line: 2, message: '不是有效 IP 网段' }] } })
+    await clickText('添加')
+    expect(network.post).toHaveBeenCalledWith('/rule-library/check-content', expect.objectContaining({ append_lines: ['IP-CIDR6,+.tmdb.org'] }))
+    expect(network.put).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-rule-content-issues]')?.textContent).toContain('第 2 行：不是有效 IP 网段')
+    state.addRuleToSetForm.value = '::ffff:192.0.2.1/128'; await flushPromises()
+    await clickText('添加')
+    expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({ content: '+.tmdb.org\nIP-CIDR6,::ffff:192.0.2.1/128\n' }))
+  })
+
+  it('keeps existing bare classical entries when appending a typed rule', async () => {
+    const content = '# keep\n  +.tmdb.org \n\n192.0.2.1'
+    Object.assign(network.state.library[0]!, { behavior: 'classical', content })
+    const wrapper = await render(RuleLibrary)
+    const state = (wrapper.vm as any).$.setupState
+    state.showAddRuleToSetDialog(network.state.library[0]); await flushPromises()
+    expect(document.body.textContent).toContain(CLASSICAL_CONTENT_HINT)
+    state.addRuleToSetForm.value = 'api.example.com'; await flushPromises()
+    await clickText('添加')
+    expect(confirmState.open).toBe(false)
+    expect(network.put).toHaveBeenCalledWith('/rule-library/library-one', expect.objectContaining({
+      content: content + '\nDOMAIN-SUFFIX,api.example.com\n', behavior: 'classical'
+    }))
+  })
+
   it('offers exact, suffix and explicit wildcard input with the stored format preview', async () => {
     const wrapper = await render(RuleLibrary)
     const state = (wrapper.vm as any).$.setupState
@@ -286,6 +380,81 @@ describe('shared rule library', () => {
     expect(error).toHaveBeenCalled()
     expect(document.querySelector<HTMLTextAreaElement>('#lib-content')?.value).toBe('example.com')
     expect((wrapper.vm as any).$.setupState.savingRule).toBe(false)
+  })
+
+  it('parses quoted YAML behaviors and formats under rule-providers', async () => {
+    await render(RuleLibrary); await menuAction('批量导入')
+    const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
+    input.value = 'rule-providers:\n  networks:\n    type: http\n    behavior: "ipcidr"\n    format: "yaml"\n    url: https://example.test/rules\n'
+    input.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+    await clickText('导入')
+    expect(network.post).toHaveBeenCalledWith('/rule-library', expect.objectContaining({ name: 'networks', behavior: 'ipcidr', format: 'yaml' }))
+  })
+
+  it.each(['classcial', 'DOMAIN-SUFFIX'])('retains unknown behavior %s and explains the rejected source', async behavior => {
+    await render(RuleLibrary); await menuAction('批量导入')
+    const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
+    const original = `source: { type: http, behavior: "${behavior}", url: "https://example.test/rules" }`
+    input.value = original; input.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+    await clickText('导入')
+    expect(network.post).not.toHaveBeenCalled()
+    expect(input.isConnected).toBe(true)
+    expect(input.value).toBe(original)
+    expect(document.querySelector('[role="dialog"] ul[role="alert"]')?.textContent).toContain(`source：不支持的类型 ${behavior}`)
+  })
+
+  it.each([
+    ['source: { url: https://example.test/rules, format: typo }', '不支持的格式 typo'],
+    ['source: [', 'unexpected end'],
+    ['source: { url: https://example.test/rules, format: yaml, behavior: ipcidr }\nsource: { url: https://example.test/other }', 'duplicated mapping key']
+  ])('preserves invalid YAML imports with actionable feedback: %s', async (original, reason) => {
+    await render(RuleLibrary); await menuAction('批量导入')
+    const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
+    input.value = original; input.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+    await clickText('导入')
+    expect(network.post).not.toHaveBeenCalled()
+    expect(input.isConnected).toBe(true)
+    expect(input.value).toBe(original)
+    expect(document.querySelector('[role="dialog"] ul[role="alert"]')?.textContent).toContain(reason)
+  })
+
+  it('cannot close or restart an active import and retains completed-source bookkeeping', async () => {
+    const wrapper = await render(RuleLibrary); await menuAction('批量导入')
+    const state = (wrapper.vm as any).$.setupState
+    const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
+    const original = 'first: { url: https://first.test/rules }\nsecond: { url: https://second.test/rules }'
+    input.value = original; input.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+    let reject!: (reason: unknown) => void
+    network.post.mockResolvedValueOnce({ data: { success: true } })
+    network.post.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail }))
+    await clickText('导入')
+    const popup = document.querySelector<HTMLElement>('[role="dialog"]')!
+    popup.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')!.click(); await flushPromises()
+    popup.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await flushPromises()
+    state.showBatchImportDialog(); await flushPromises()
+    expect(state.batchImportDialogVisible).toBe(true)
+    expect(input.isConnected).toBe(true)
+    expect(input.value).toBe(original)
+    reject(new Error('下载失败')); await flushPromises()
+    await clickText('导入')
+    expect(network.post.mock.calls.filter(([path]) => path === '/rule-library')).toHaveLength(3)
+    expect(network.post.mock.calls.at(-1)?.[1]).toMatchObject({ name: 'second' })
+  })
+
+  it('keeps failed input and retries only failed sources with a specific reason', async () => {
+    await render(RuleLibrary); await menuAction('批量导入')
+    const input = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!
+    const original = 'first: { url: https://first.test/rules }\nsecond: { url: https://second.test/rules }'
+    input.value = original; input.dispatchEvent(new Event('input', { bubbles: true })); await flushPromises()
+    network.post.mockResolvedValueOnce({ data: { success: true } })
+    network.post.mockRejectedValueOnce({ isAxiosError: true, response: { data: { message: '远端内容不是有效 CIDR' } } })
+    await clickText('导入')
+    expect(input.value).toBe(original)
+    expect(input.isConnected).toBe(true)
+    expect(document.querySelector('[role="dialog"] ul[role="alert"]')?.textContent).toContain('second：远端内容不是有效 CIDR')
+    await clickText('导入')
+    expect(network.post.mock.calls.filter(([path]) => path === '/rule-library')).toHaveLength(3)
+    expect(network.post.mock.calls.at(-1)?.[1]).toMatchObject({ name: 'second' })
   })
 
   it.each([

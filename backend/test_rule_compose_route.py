@@ -126,7 +126,7 @@ def test_compose_multiline_prefix_types_comments_wildcards_and_limit(space):
     before = repository.export_all()
     response = compose(client, values('ok.test\nbad_domain!\nIP-CIDR,999.0.0.0/8'))
     assert response.status_code == 400
-    assert response.get_json()['message'] == '第 2 行：不是有效域名'
+    assert response.get_json()['message'].startswith('第 2 行：不是有效域名')
     assert [error['line'] for error in response.get_json()['field_errors']] == [2, 3]
     response = compose(client, values('\n'.join(f'x{index}.test' for index in range(201))))
     assert response.status_code == 400 and '一次最多添加 200 条' in response.get_json()['message']

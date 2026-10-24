@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 
 
 def ruleset_format(rule, config_data, source_url=None):
-    """Prefer the source's declared format; infer legacy URLs from their path."""
+    """Prefer the declared format; infer handwritten payloads or legacy URL paths."""
     library = next((item for item in config_data.get('rule_library', [])
                     if (item.get('id') == rule.get('library_rule_id')
                         if rule.get('library_rule_id') else item.get('name') == rule.get('name'))), {})
@@ -12,6 +12,11 @@ def ruleset_format(rule, config_data, source_url=None):
         declared = source.get('format')
         if declared in ('yaml', 'text', 'mrs'):
             return declared
+    source = library or rule
+    if source.get('source_type') == 'content':
+        from backend.utils.ruleset_content import _has_yaml_payload
+        content = source.get('content', '')
+        return 'yaml' if isinstance(content, str) and _has_yaml_payload(content) else 'text'
     url = library.get('url') or source_url or rule.get('url') or ''
     path = urlsplit(url).path.lower()
     if path.endswith(('.yaml', '.yml')):

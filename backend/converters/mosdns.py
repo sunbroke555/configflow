@@ -351,14 +351,17 @@ def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
         'ip'     只输出 IP/CIDR（ip_set 使用），包括 Clash 的 IP-CIDR/IP-CIDR6
     """
     import re
+    from backend.utils.ruleset_content import _has_yaml_payload
 
+    # Match the UTF-8 decoding used by deployment bundles.
+    content = content.removeprefix("\ufeff")
     want_domain = part in (None, RULE_PART_DOMAIN)
     want_ip = part in (None, RULE_PART_IP)
     want_clash_ip = part == RULE_PART_IP
 
     # 已经是 mosdns 格式（domain:/full:/keyword:/regexp:）时只按 part 过滤
     is_mosdns_format = False
-    is_yaml_format = 'payload:' in content
+    is_yaml_format = bool(_has_yaml_payload(content))
     if not is_yaml_format:
         sample_count = 0
         for line in content.split('\n'):
@@ -374,20 +377,8 @@ def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
                     is_mosdns_format = True
                     break
 
-    if is_mosdns_format:
-        if part is None:
-            return content
-        kept = []
-        for line in content.split('\n'):
-            stripped = line.strip()
-            if not stripped or stripped.startswith('#'):
-                continue
-            if _is_ip_or_cidr(stripped):
-                if want_ip:
-                    kept.append(stripped)
-            elif want_domain:
-                kept.append(stripped)
-        return _join_rule_lines(kept, part)
+    if is_mosdns_format and part is None:
+        return content
 
     rule_lines = []
     if is_yaml_format:
@@ -408,7 +399,19 @@ def convert_rule_content_for_mosdns(content: str, part: str = None) -> str:
         if not isinstance(line, str):
             continue
         line = line.strip()
-        if not line or line.startswith('#'):
+        if not line or line.startswith(('#', '//')):
+            continue
+
+        # Native DNS syntax can be mixed with classical/list lines. Classify
+        # each line before splitting commas, which may belong to a regex.
+        native_prefix, separator, native_value = line.partition(':')
+        if separator and native_prefix.lower() in _MOSDNS_DOMAIN_PREFIXES:
+            if want_domain and native_value:
+                converted.append(native_prefix.lower() + ':' + native_value)
+            continue
+        if separator and native_prefix.lower() == 'ip':
+            if want_ip and _is_ip_or_cidr(native_value.strip()):
+                converted.append(native_value.strip())
             continue
 
         if ',' in line:

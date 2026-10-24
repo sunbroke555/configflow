@@ -21,7 +21,7 @@ def rules(tmp_path, monkeypatch):
              'value': 'first.example', 'policy': 'DIRECT'},
             {'id': 'set', 'itemType': 'ruleset', 'library_rule_id': 'lib', 'name': 'domains', 'policy': 'PROXY'},
         ],
-        'rule_library': [{'id': 'lib', 'name': 'domains', 'source_type': 'content',
+        'rule_library': [{'id': 'lib', 'name': 'domains', 'source_type': 'content', 'behavior': 'classical',
                           'content': 'DOMAIN-SUFFIX,matched.example\n'}],
     }
     yield config, tmp_path
@@ -255,7 +255,7 @@ def test_failed_file_retries_without_rebuilding_healthy_indexes(rules, monkeypat
         {'id': 'broken', 'itemType': 'ruleset', 'library_rule_id': 'broken', 'policy': 'FIRST'},
         config['rule_configs'][1],
     ]
-    config['rule_library'].append({'id': 'broken', 'name': 'broken', 'source_type': 'content',
+    config['rule_library'].append({'id': 'broken', 'name': 'broken', 'source_type': 'content', 'behavior': 'classical',
                                    'content': 'DOMAIN,fallback.example'})
     (root / 'broken.list').write_text('DOMAIN,matched.example\nDOMAIN,recovered.example')
     (root / 'domains.list').write_text('DOMAIN,matched.example')
@@ -271,7 +271,7 @@ def test_failed_file_retries_without_rebuilding_healthy_indexes(rules, monkeypat
     assert matcher.match('fallback.example')['policy'] == 'FIRST'
     assert matcher.match('matched.example')['policy'] == 'PROXY'
     assert matcher.match('recovered.example') is None
-    healthy = matcher._matcher._indexes[('source', 'lib')]
+    healthy = matcher._matcher._indexes[('source', 'lib', 'classical', 'text')]
     fail[0] = False
     now[0] += cache.READ_RETRY_SECONDS - 1
     assert matcher.match('matched.example')['policy'] == 'PROXY'
@@ -279,7 +279,7 @@ def test_failed_file_retries_without_rebuilding_healthy_indexes(rules, monkeypat
     assert matcher.match('matched.example')['policy'] == 'FIRST'
     assert matcher.match('recovered.example')['policy'] == 'FIRST'
     assert matcher.match('fallback.example') is None
-    assert matcher._matcher._indexes[('source', 'lib')] is healthy
+    assert matcher._matcher._indexes[('source', 'lib', 'classical', 'text')] is healthy
     assert reads == ['broken.list', 'domains.list', 'broken.list']
     assert matcher._source.retry_at is None
 

@@ -282,7 +282,7 @@ export interface PolicyWorkspace {
 }
 export interface RuleContentDraft {
   success: boolean; revision: string; usage_count: number
-  rule: { id: string; name: string; source_type: string; behavior: string; content: string; url: string }
+  rule: { id: string; name: string; source_type: string; behavior: string; format?: string; content: string; url: string }
 }
 export const ruleContentApi = {
   read: (id: string) => api.get<RuleContentDraft>(`/rule-library/${encodeURIComponent(id)}/draft-content`),

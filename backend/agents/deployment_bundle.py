@@ -25,10 +25,15 @@ import yaml
 
 from backend.agents.diagnostics import failure_text
 from backend.agents.deployment_locations import DeploymentPreparationError, preparation_context, source_error
+from backend.converters.common import ruleset_format
 from backend.converters.mosdns import RULE_PARTS, empty_rule_part, parse_clash_rule_value
 from backend.utils.rule_fetch import (
     RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
 )
+from backend.utils.logger import get_logger
+from backend.utils.ruleset_content import normalize_mihomo_ruleset
+
+logger = get_logger(__name__)
 
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
@@ -174,7 +179,7 @@ def deployment_content_fingerprint(manifest):
     return 'v1:' + hashlib.sha256(encoded).hexdigest()
 
 
-def _local_rule(url, config, base_url):
+def _local_rule(url, config, base_url, *, rules_local_only=False):
     """Return the snapshot's library entry only for a recognized local URL."""
     from backend.common.profile_context import profile_api_path
     parsed = urlsplit(url)
@@ -187,8 +192,10 @@ def _local_rule(url, config, base_url):
     for rule in config.get('rule_library', []):
         paths = [profile_api_path(config, '/rules/local/' + rule.get('name', '')),
                  profile_api_path(config, '/rule-library/content/' + rule.get('id', ''))]
-        if path in paths or path in [prefix + p for p in paths]:
+        if path in (paths[0], prefix + paths[0]):
             return rule
+        if path in (paths[1], prefix + paths[1]):
+            return None if rules_local_only else rule
     if '/api/' in path or path.startswith('/rules/local/') or path.startswith('/rule-library/content/'):
         raise DeploymentPreparationError('Rule callback is not part of this profile snapshot')
     return None
@@ -300,7 +307,8 @@ def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
     if '\x00' in text:
         raise DeploymentPreparationError('MosDNS rule source is binary')
     lines = text.splitlines()
-    yaml_payload = 'payload:' in text
+    from backend.utils.ruleset_content import _has_yaml_payload
+    yaml_payload = bool(_has_yaml_payload(text))
     if yaml_payload:
         try:
             document = yaml.safe_load(text)
@@ -496,7 +504,9 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
                 continue
             if not definition.get('url'):
                 raise DeploymentPreparationError(f'Rule provider {name} references an unbundled local file; use a managed rule source')
-            downloads.append({'name': name, 'url': definition['url'], 'local_path': path})
+            downloads.append({'name': name, 'url': definition['url'], 'local_path': path,
+                              'behavior': definition.get('behavior'),
+                              'format': definition.get('format', 'yaml')})
     downloads = [item for item in downloads if relative_path(item['local_path']) not in pinned_paths]
     # Share only original response bytes within this captured deployment. A
     # classical source may feed both domain and IP files through different
@@ -550,6 +560,24 @@ def build_deployment_bundle(agent, config, config_content, *, provider_downloads
             value = materialize_rule(item.get('url', ''), config, base_url,
                                      raw_mosdns=relative_path(item['local_path']) in rule_types,
                                      fetch_raw=fetch_raw)
+            # Snapshot callbacks bypass /rules/local, so apply the same repair
+            # for the final Mihomo consumer without changing shared raw bytes.
+            if (service == 'mihomo'
+                    and parse_qs(urlsplit(item.get('url', '')).query).get('target', [''])[0] == 'mihomo'
+                    and (local_rule := _local_rule(item['url'], config, base_url, rules_local_only=True)) is not None
+                    and local_rule.get('behavior', 'domain') == item.get('behavior', 'domain')):
+                try:
+                    text = value.decode('utf-8')
+                except UnicodeDecodeError:
+                    pass
+                else:
+                    normalized, warnings = normalize_mihomo_ruleset(
+                        text, local_rule.get('behavior', 'domain'), ruleset_format(local_rule, config))
+                    value = normalized.encode('utf-8')
+                    if warnings:
+                        logger.warning('Mihomo provider %s: %s unconverted lines (first 10: %s)',
+                                       item.get('name', ''), len(warnings),
+                                       ', '.join(str(warning.get('line')) for warning in warnings[:10]))
         except RuleDownloadError as exc:
             name = item.get('name') or '未命名'
             explanation, _, details = str(exc).partition('\n')
