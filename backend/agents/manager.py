@@ -345,7 +345,11 @@ class AgentManager:
         agent = next((item for item in self.repository.get_system().get('agents', []) if item['id'] == agent_id), None)
         if agent is None:
             return False
-        self.runtime.record_heartbeat(agent, heartbeat_data)
+        try:
+            self.runtime.record_heartbeat(agent, heartbeat_data)
+        except (OSError, sqlite3.Error) as error:
+            # 心跳状态允许丢失；config_version 和监控历史照常保存
+            logger.warning('Agent %s 的心跳状态写入失败：%s', _agent_label(agent), error)
 
         # config_version 是发布基线，仍随配置保存
         if 'config_version' in heartbeat_data and heartbeat_data['config_version'] != agent.get('config_version'):

@@ -17,19 +17,32 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
+import threading
 import time
 
 logger = logging.getLogger(__name__)
 
 RUNTIME_FIELDS = ('version', 'service_status', 'system_metrics', 'cpu', 'memory', 'disk', 'network')
 _METRIC_FIELDS = ('cpu', 'memory', 'disk', 'network')
+_rebuild_lock = threading.Lock()
 
 
 def _timestamp(value):
     try:
-        return datetime.fromisoformat(value).timestamp()
+        moment = datetime.fromisoformat(value).timestamp()
     except (TypeError, ValueError):
         return float('-inf')
+    # A registration time ahead of the clock (time zone changed, clock stepped
+    # back) must not outrank every later heartbeat.
+    return moment if moment <= time.time() else float('-inf')
+
+
+def _fields(raw):
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 class AgentRuntimeStore:
@@ -57,12 +70,20 @@ class AgentRuntimeStore:
         except sqlite3.DatabaseError as error:
             if type(error) is not sqlite3.DatabaseError:
                 raise
-            # Not a database any more; heartbeat state is safe to lose, so start over.
-            corrupt = self.path.with_name(f'{self.path.name}.corrupt-{int(time.time())}')
-            logger.warning('Agent 运行状态库已损坏（%s），已移到 %s 并重建', error, corrupt.name)
-            os.replace(self.path, corrupt)
-            with self._database() as connection:
-                return action(connection)
+            with _rebuild_lock:
+                # Another request may have rebuilt it meanwhile; move it only if still unreadable.
+                try:
+                    with self._database() as connection:
+                        return action(connection)
+                except sqlite3.DatabaseError as again:
+                    if type(again) is not sqlite3.DatabaseError:
+                        raise
+                # Not a database any more; heartbeat state is safe to lose, so start over.
+                corrupt = self.path.with_name(f'{self.path.name}.corrupt-{time.time_ns()}')
+                logger.warning('Agent 运行状态库已损坏（%s），已移到 %s 并重建', error, corrupt.name)
+                os.replace(self.path, corrupt)
+                with self._database() as connection:
+                    return action(connection)
 
     def _rows(self):
         if not self.path.is_file():
@@ -77,8 +98,10 @@ class AgentRuntimeStore:
             # Agents then show their registration state; they are never hidden.
             logger.warning('Agent 运行状态读取失败，暂按注册信息显示：%s', error)
             return {}
-        return {agent_id: (heartbeat_at, last_heartbeat, json.loads(fields))
-                for agent_id, heartbeat_at, last_heartbeat, fields in rows}
+        # A row that does not decode reads as missing; the next heartbeat replaces it.
+        decoded = {agent_id: (heartbeat_at, last_heartbeat, _fields(raw))
+                   for agent_id, heartbeat_at, last_heartbeat, raw in rows}
+        return {agent_id: row for agent_id, row in decoded.items() if row[2] is not None}
 
     def overlay(self, agents):
         """Lay newer heartbeat state over the given (copied) Agents in place."""
@@ -98,9 +121,8 @@ class AgentRuntimeStore:
         def record(connection):
             row = connection.execute('SELECT heartbeat_at, fields FROM agent_runtime WHERE agent_id = ?',
                                      (agent['id'],)).fetchone()
-            if row and row[0] > _timestamp(agent.get('last_heartbeat')):
-                fields = json.loads(row[1])
-            else:
+            fields = _fields(row[1]) if row and row[0] > _timestamp(agent.get('last_heartbeat')) else None
+            if fields is None:
                 fields = {key: agent[key] for key in RUNTIME_FIELDS if key in agent}
             # Fields a heartbeat leaves out keep their last value.
             for key in ('version', 'service_status'):

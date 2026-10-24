@@ -1,7 +1,9 @@
 """Heartbeats are recorded beside config.json and laid over the registered Agent."""
 from datetime import datetime, timedelta
 import os
+import sqlite3
 import stat
+import threading
 
 from flask import Flask
 
@@ -122,7 +124,9 @@ def test_domain_discovery_toggle_returns_the_live_agent(tmp_path):
 def test_newer_heartbeat_in_config_json_wins_after_running_older_code(tmp_path):
     repository, manager, agent = setup(tmp_path)
     assert manager.update_heartbeat(agent["id"], {"version": "2.0.0"})
-    later = (datetime.now() + timedelta(seconds=5)).isoformat()
+    with manager.runtime._database() as connection:
+        connection.execute("UPDATE agent_runtime SET heartbeat_at = heartbeat_at - 5")
+    later = datetime.now().isoformat()
 
     def older_code_heartbeat(system):
         for item in system["agents"]:
@@ -162,3 +166,56 @@ def test_heartbeat_endpoint_records_state_and_rejects_unknown_agents(tmp_path):
     assert manager.get_agent_by_id(agent["id"])["version"] == "2.0.0"
     assert stored(repository, agent["id"])["version"] == "1.0.0"
     assert client.post("/api/agents/missing/heartbeat", headers=headers, json={}).status_code in (401, 404)
+
+
+def test_a_registration_time_ahead_of_the_clock_does_not_hide_heartbeats(tmp_path):
+    repository, manager, agent = setup(tmp_path)
+    ahead = (datetime.now() + timedelta(hours=8)).isoformat()
+    repository.update_system_transaction(lambda system: system["agents"][0].update(last_heartbeat=ahead))
+    assert manager.update_heartbeat(agent["id"], {"version": "2.0.0"})
+    current = manager.get_agent_by_id(agent["id"])
+    assert current["version"] == "2.0.0"
+    assert datetime.fromisoformat(current["last_heartbeat"]) <= datetime.now()
+
+
+def test_runtime_write_failure_still_saves_config_version(tmp_path, monkeypatch):
+    repository, manager, agent = setup(tmp_path)
+
+    def locked(*_args):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(manager.runtime, "record_heartbeat", locked)
+    assert manager.update_heartbeat(agent["id"], {"config_version": "cfg-9"})
+    assert stored(repository, agent["id"])["config_version"] == "cfg-9"
+
+
+def test_an_undecodable_row_reads_as_missing_and_is_replaced(tmp_path):
+    _, manager, agent = setup(tmp_path)
+    assert manager.update_heartbeat(agent["id"], {"version": "2.0.0"})
+    with manager.runtime._database() as connection:
+        connection.execute("UPDATE agent_runtime SET fields = '{bad'")
+    assert manager.get_agent_by_id(agent["id"])["version"] == "1.0.0"
+    assert manager.update_heartbeat(agent["id"], {"service_status": "running"})
+    current = manager.get_agent_by_id(agent["id"])
+    assert current["version"] == "1.0.0" and current["service_status"] == "running"
+
+
+def test_concurrent_heartbeats_rebuild_a_damaged_database_once(tmp_path):
+    _, manager, agent = setup(tmp_path)
+    (tmp_path / "runtime.sqlite3").write_bytes(b"not a database" * 100)
+    start, errors = threading.Barrier(8), []
+
+    def beat():
+        start.wait()
+        try:
+            manager.runtime.record_heartbeat(agent, {"version": "2.0.0"})
+        except Exception as error:  # noqa: BLE001 - collected for the assertion
+            errors.append(error)
+    threads = [threading.Thread(target=beat) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    corrupt = list(tmp_path.glob("runtime.sqlite3.corrupt-*"))
+    assert len(corrupt) == 1 and corrupt[0].read_bytes().startswith(b"not a database")
+    assert manager.get_agent_by_id(agent["id"])["version"] == "2.0.0"
