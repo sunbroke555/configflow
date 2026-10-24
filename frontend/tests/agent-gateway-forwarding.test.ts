@@ -105,6 +105,16 @@ describe('AgentGatewayForwarding row', () => {
     expect(wrapper.get('[data-status-details]').text()).toContain('/etc/sysctl.d/99-configflow-aio-forward.conf')
   })
 
+  it('shows system persistence as done, naming the host\'s own sysctl file', async () => {
+    const wrapper = render({ entry: entry({ state: 'system_persisted', current: '1', system_source: '/etc/sysctl.d/99-ip-forward.conf:1' }) })
+    expect(row(wrapper).attributes('data-tone')).toBe('success')
+    expect(row(wrapper).text()).toContain('已开启，系统已持久化')
+    expect(wrapper.find('[data-status-notice]').exists()).toBe(false)
+    const details = wrapper.get('[data-status-details]').text()
+    expect(details).toContain('/etc/sysctl.d/99-ip-forward.conf:1')
+    expect(details).not.toContain('99-configflow-aio-forward.conf')
+  })
+
   it('asks for an update without a persist button', () => {
     const wrapper = render({ entry: entry({ state: 'upgrade_required', can_persist: false, current: null, minimum_version: '1.8.41-go' }) })
     expect(row(wrapper).text()).toContain('请先更新 Agent')

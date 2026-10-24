@@ -11,7 +11,7 @@ export const STANDALONE_FORWARDING_AGENT_VERSION = '1.8.41-go'
 export const FORWARDING_CONFIG_FILE = '/etc/sysctl.d/99-configflow-aio-forward.conf'
 
 export type GatewayForwardingState =
-  | 'persisted' | 'needs_persist' | 'blocked' | 'unsupported' | 'upgrade_required'
+  | 'persisted' | 'system_persisted' | 'needs_persist' | 'blocked' | 'unsupported' | 'upgrade_required'
   | 'offline' | 'docker' | 'not_mihomo' | 'missing' | 'error'
 
 /** 把流量转给这台 Agent 的路由器；Agent 页的读取跨配置空间，会带上空间信息。 */
@@ -42,6 +42,8 @@ export interface GatewayForwardingEntry {
   preserves_forwarding: boolean
   /** Agent 1.8.42-go 起提供；只作提醒，不影响 state、label 与 action */
   forward_filter?: ForwardFilter | null
+  /** state 为 system_persisted 时，主机自己持久化转发的 sysctl 文件与行号（Agent 1.8.43-go 起） */
+  system_source?: string | null
 }
 
 export interface GatewayForwardingView {
@@ -60,6 +62,13 @@ export function gatewayForwardingView(entry: GatewayForwardingEntry): GatewayFor
   switch (entry.state) {
     case 'persisted':
       return { label: '已开启并持久化', tone: 'success', action: null }
+    case 'system_persisted':
+      // 主机自己的 sysctl 配置保证重启后开启；只有 Linux 网关记录被撤销时才需要 ConfigFlow 的持久化。
+      if (entry.gateway_record) {
+        return { label: '已开启，系统已持久化', tone: 'warning', action: entry.can_persist ? 'persist' : null,
+          note: '这台设备有 Linux 网关记录：撤销记录时 Agent 会把转发改回关闭，由 ConfigFlow 持久化后才会保留。' }
+      }
+      return { label: '已开启，系统已持久化', tone: 'success', action: null }
     case 'needs_persist': {
       const action = entry.can_persist ? 'persist' : null
       if (entry.current === '1') return withNote({ label: '已开启，未持久化', tone: 'warning', action }, message)
@@ -95,6 +104,13 @@ export function gatewayRoutersText(entry: GatewayForwardingEntry): string {
     return profiles.size > 1 && router.profile_name ? `${name}（${router.profile_name}）` : name
   })
   return names.length ? `路由器${names.join('、')}` : '路由器'
+}
+
+/** 展开说明：主机自己的哪项配置持久化了转发。 */
+export function systemPersistenceText(entry: GatewayForwardingEntry): string | null {
+  if (entry.state !== 'system_persisted') return null
+  const where = entry.system_source ? `（${entry.system_source}）` : ''
+  return `这台设备自己的 sysctl 配置${where}已持久化 IPv4 转发，重启后保持开启；ConfigFlow 没有接管，也不会改动它。`
 }
 
 /** 展开说明：为什么这台设备需要 IPv4 转发。 */

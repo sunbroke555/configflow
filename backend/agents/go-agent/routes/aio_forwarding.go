@@ -26,6 +26,10 @@ var aioOpenRCDir = "/etc/init.d"
 var aioAgentRoot = "/opt/configflow-agent"
 var aioSysfsNetRoot = "/sys/class/net"
 var aioPrepareTUN = preflight.PrepareTUNAssumeEnabled
+
+// aioSystemForwarding reads whether the host's own sysctl configuration
+// persists forwarding, for hosts that did so before ConfigFlow managed it.
+var aioSystemForwarding = preflight.SystemForwardingPersistence
 var aioLookPath = exec.LookPath
 
 // daemon-reload and the hook may exceed the 3s diagnostic command timeout.
@@ -349,6 +353,14 @@ func aioForwardingStatus(cfg *Config) map[string]interface{} {
 	}
 	result["config"], result["hook_script"], result["startup_hook"] = config, hook, startup
 	result["persisted"] = config == "managed" && hook == "managed" && startup == "registered"
+	// Persistence the host configured itself keeps forwarding on across
+	// reboots, but only ConfigFlow's own keeps it when a gateway record is
+	// removed, so it is reported separately and never counts as "persisted".
+	source, system := aioSystemForwarding()
+	result["system_persisted"] = system
+	if system {
+		result["system_source"] = source
+	}
 	if len(errs) != 0 {
 		result["error"] = strings.Join(errs, "；")
 	}

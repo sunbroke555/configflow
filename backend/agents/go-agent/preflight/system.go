@@ -438,15 +438,31 @@ func parseForwardingSetting(data []byte, path string) forwardingSetting {
 	return result
 }
 
-func inspectForwardingPersistence(probe systemProbe) Check {
+// systemForwarding is the boot-time IPv4 forwarding the sysctl configuration
+// gives: the last setting in sysctl.d order and the one in /etc/sysctl.conf.
+type systemForwarding struct {
+	effective  forwardingSetting
+	legacy     forwardingSetting
+	unreadable bool
+}
+
+// persisted reports whether the configuration certainly turns forwarding on
+// at boot: sysctl.d ends with '=1' outside /run, everything was readable and
+// /etc/sysctl.conf does not contradict it.
+func (s systemForwarding) persisted() bool {
+	return s.effective.value == "1" && !strings.HasPrefix(s.effective.where, "/run/") && !s.unreadable &&
+		(s.legacy.where == "" || s.legacy.value == "1")
+}
+
+func readSystemForwarding(probe systemProbe) systemForwarding {
 	// systemd-sysctl picks the highest-priority directory for each basename,
 	// then processes selected files in lexical filename order. Merely finding
 	// an earlier '=1' is not evidence that a later '=0' will not replace it.
 	selected := make(map[string]string)
-	unreadable := false
+	var result systemForwarding
 	for _, dir := range []string{"/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d", "/lib/sysctl.d"} {
 		paths, err := probe.glob(dir + "/*.conf")
-		unreadable = unreadable || err != nil
+		result.unreadable = result.unreadable || err != nil
 		for _, path := range paths {
 			base := filepath.Base(path)
 			if _, found := selected[base]; !found {
@@ -459,25 +475,46 @@ func inspectForwardingPersistence(probe systemProbe) Check {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var effective forwardingSetting
 	for _, name := range names {
 		path := selected[name]
 		data, err := probe.readFile(path)
 		if err != nil {
-			unreadable = true
+			result.unreadable = true
 			continue
 		}
 		if setting := parseForwardingSetting(data, path); setting.where != "" {
-			effective = setting
+			result.effective = setting
 		}
 	}
 	legacyData, legacyErr := probe.readFile("/etc/sysctl.conf")
-	legacy := parseForwardingSetting(legacyData, "/etc/sysctl.conf")
+	result.legacy = parseForwardingSetting(legacyData, "/etc/sysctl.conf")
 	if legacyErr != nil && !os.IsNotExist(legacyErr) {
-		unreadable = true
+		result.unreadable = true
 	}
+	return result
+}
+
+// SystemForwardingPersistence reports where the host's own sysctl
+// configuration persists net.ipv4.ip_forward=1 (file:line), if it certainly
+// does. It only reads files; services that change the value after boot are not
+// considered.
+func SystemForwardingPersistence() (string, bool) {
+	return systemForwardingPersistence(defaultSystemProbe())
+}
+
+func systemForwardingPersistence(probe systemProbe) (string, bool) {
+	system := readSystemForwarding(probe)
+	if !system.persisted() {
+		return "", false
+	}
+	return system.effective.where, true
+}
+
+func inspectForwardingPersistence(probe systemProbe) Check {
+	system := readSystemForwarding(probe)
+	effective, legacy, unreadable := system.effective, system.legacy, system.unreadable
 	check := Check{Name: "IPv4 转发持久化", Level: "warn", Fix: forwardingFix}
-	if effective.value == "1" && !strings.HasPrefix(effective.where, "/run/") && !unreadable && (legacy.where == "" || legacy.value == "1") {
+	if system.persisted() {
 		check.Level = "pass"
 		check.Message = "在 sysctl.d 中发现最后可读设置为 net.ipv4.ip_forward=1（" + effective.where + "）；仅确认文件设置，启动服务仍可能覆盖，重启后仍需验证。"
 		check.Fix = ""

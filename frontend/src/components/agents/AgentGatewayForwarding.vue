@@ -6,7 +6,7 @@ import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import ForwardFilterNotice from '@/components/agents/ForwardFilterNotice.vue'
 import { forwardFilterWarning } from '@/lib/forwardFilter'
 import {
-  FORWARDING_CONFIG_FILE, gatewayForwardingReason, gatewayForwardingView, type GatewayForwardingEntry,
+  FORWARDING_CONFIG_FILE, gatewayForwardingReason, gatewayForwardingView, systemPersistenceText, type GatewayForwardingEntry,
 } from '@/lib/gatewayForwarding'
 
 // Agent 卡片上的代理网关 IPv4 转发：只为被路由器用作代理网关的设备显示。
@@ -14,6 +14,7 @@ const props = defineProps<{ entry: GatewayForwardingEntry; busy: boolean; disabl
 const emit = defineEmits<{ persist: [] }>()
 const view = computed(() => gatewayForwardingView(props.entry))
 const reason = computed(() => gatewayForwardingReason(props.entry))
+const systemPersistence = computed(() => systemPersistenceText(props.entry))
 // 转发过滤只作提醒：不改变上面的状态、说明与操作。
 const filterWarning = computed(() => forwardFilterWarning(props.entry.forward_filter))
 </script>
@@ -32,7 +33,8 @@ const filterWarning = computed(() => forwardFilterWarning(props.entry.forward_fi
       </Button>
     </template>
     <p class="m-0">{{ reason }}</p>
-    <p v-if="view.tone === 'success'" class="m-0">已写入 <span class="font-mono">{{ FORWARDING_CONFIG_FILE }}</span>，Agent 启动前会检查并保持开启。</p>
+    <p v-if="systemPersistence" class="m-0">{{ systemPersistence }}</p>
+    <p v-else-if="entry.state === 'persisted'" class="m-0">已写入 <span class="font-mono">{{ FORWARDING_CONFIG_FILE }}</span>，Agent 启动前会检查并保持开启。</p>
   </AgentStatusRow>
   <AgentStatusRow v-if="filterWarning" label="转发过滤" :status="filterWarning.status" tone="warning" data-forward-filter-row>
     <p class="m-0">这台设备的防火墙检查结果，只作提醒，不影响发布和 IPv4 转发。</p>

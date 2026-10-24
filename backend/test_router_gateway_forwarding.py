@@ -430,3 +430,47 @@ def test_sanitize_accepts_each_agent_state(state):
              'sources': [], 'remedies': []}
     result = bridge.sanitize_forward_filter(value)
     assert result['state'] == state and result['sources'] == [] and result['remedies'] == []
+
+
+def test_view_recognises_forwarding_the_host_persisted_itself(home):
+    """Agent 1.8.43-go reports a sysctl file that persists forwarding outside ConfigFlow."""
+    client, headers, agent, routers, seen, replies = home
+    routers('home', agent(9040))
+    replies[(9040, 'status')] = status(current='1', persisted=False, config='absent', hook_script='absent',
+                                       startup_hook='absent', system_persisted=True,
+                                       system_source='/etc/sysctl.d/99-ip-forward.conf:1')
+    [entry] = entries(client, headers)
+    assert entry['state'] == 'system_persisted'
+    assert entry['system_source'] == '/etc/sysctl.d/99-ip-forward.conf:1'
+    # ConfigFlow's own persistence stays available: only it survives removing a gateway record.
+    assert entry['can_persist'] is True and entry['persisted'] is False
+
+
+@pytest.mark.parametrize('fields,state,source', [
+    # Off right now: the configuration only takes effect at boot, so it still needs turning on.
+    ({'current': '0', 'persisted': False, 'system_persisted': True, 'system_source': '/etc/sysctl.d/a.conf:1'}, 'needs_persist', None),
+    # ConfigFlow's own persistence wins.
+    ({'current': '1', 'persisted': True, 'system_persisted': True, 'system_source': '/etc/sysctl.d/a.conf:1'}, 'persisted', None),
+    # An Agent before 1.8.43-go sends neither field.
+    ({'current': '1', 'persisted': False}, 'needs_persist', None),
+    # A malformed source is dropped, the state is kept.
+    ({'current': '1', 'persisted': False, 'system_persisted': True, 'system_source': 'x\n' * 200}, 'system_persisted', None),
+    ({'current': '1', 'persisted': False, 'system_persisted': 'yes'}, 'needs_persist', None),
+])
+def test_view_system_persistence_edges(home, fields, state, source):
+    client, headers, agent, routers, seen, replies = home
+    routers('home', agent(9041))
+    replies[(9041, 'status')] = status(**fields)
+    [entry] = entries(client, headers)
+    assert (entry['state'], entry['system_source']) == (state, source)
+
+
+def test_persisting_a_system_persisted_host_switches_to_configflow_persistence(home):
+    client, headers, agent, routers, seen, replies = home
+    agent_id = agent(9042)
+    routers('home', agent_id)
+    replies[(9042, 'forwarding')] = {'success': True, 'ipv4_forwarding': forwarding(system_persisted=True,
+                                     system_source='/etc/sysctl.d/99-ip-forward.conf:1'), 'managed': {'active': False}}
+    code, data = post(client, headers, {'agent_id': agent_id})
+    assert code == 200, data
+    assert data['gateway']['state'] == 'persisted' and data['gateway']['system_source'] is None

@@ -30,12 +30,16 @@ func newGatewayFixture(t *testing.T) *gatewayFixture {
 	oldWrite := gatewayWriteSysctl
 	oldCoreVersion := gatewayCoreVersion
 	oldAIOSysctl := aioSysctlDir
+	oldSystemForwarding := aioSystemForwarding
+	// Never read the test machine's own sysctl configuration.
+	aioSystemForwarding = func() (string, bool) { return "", false }
 	t.Cleanup(func() {
 		gatewayOS, gatewayGeteuid, gatewaySysctlRoot = oldOS, oldUID, oldRoot
 		gatewayRun, gatewayRunInput, gatewayLookPath = oldRun, oldInput, oldLook
 		gatewayWriteSysctl = oldWrite
 		gatewayCoreVersion = oldCoreVersion
 		aioSysctlDir = oldAIOSysctl
+		aioSystemForwarding = oldSystemForwarding
 	})
 	root := t.TempDir()
 	// Never let a persisted AIO forwarding file on the test host change removal.

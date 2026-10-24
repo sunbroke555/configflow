@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  gatewayForwardingReason, gatewayForwardingView, gatewayRoutersText, persistConfirmText, routerForwardingWarning,
+  gatewayForwardingReason, gatewayForwardingView, gatewayRoutersText, persistConfirmText, routerForwardingWarning, systemPersistenceText,
   STANDALONE_FORWARDING_AGENT_VERSION, type GatewayForwardingEntry
 } from '@/lib/gatewayForwarding'
 import type { ForwardFilter } from '@/lib/forwardFilter'
@@ -28,6 +28,21 @@ describe('gatewayForwardingView', () => {
     expect(gatewayForwardingView(entry({ current: '1', message: '读取 sysctl 失败' })))
       .toEqual({ label: '已开启，未持久化', tone: 'warning', action: 'persist', note: '读取 sysctl 失败' })
     expect(gatewayForwardingView(entry({ can_persist: false })).action).toBeNull()
+  })
+
+  it('accepts forwarding the host persisted itself, offering ConfigFlow persistence only for a gateway record', () => {
+    const system = { state: 'system_persisted', current: '1', system_source: '/etc/sysctl.d/99-ip-forward.conf:1' } as const
+    expect(gatewayForwardingView(entry(system))).toEqual({ label: '已开启，系统已持久化', tone: 'success', action: null })
+    expect(gatewayForwardingView(entry({ ...system, gateway_record: true }))).toEqual({
+      label: '已开启，系统已持久化', tone: 'warning', action: 'persist',
+      note: '这台设备有 Linux 网关记录：撤销记录时 Agent 会把转发改回关闭，由 ConfigFlow 持久化后才会保留。' })
+    expect(systemPersistenceText(entry(system))).toBe(
+      '这台设备自己的 sysctl 配置（/etc/sysctl.d/99-ip-forward.conf:1）已持久化 IPv4 转发，重启后保持开启；ConfigFlow 没有接管，也不会改动它。')
+    expect(systemPersistenceText(entry({ ...system, system_source: null }))).toBe(
+      '这台设备自己的 sysctl 配置已持久化 IPv4 转发，重启后保持开启；ConfigFlow 没有接管，也不会改动它。')
+    expect(systemPersistenceText(entry())).toBeNull()
+    // Forwarding is on, so the router page has nothing to warn about.
+    expect(routerForwardingWarning(entry(system))).toBeNull()
   })
 
   it('asks for an Agent update without its own link (the card has the update banner)', () => {
