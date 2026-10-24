@@ -53,6 +53,7 @@ def register_blueprints(app):
     from backend.routes.domain_discovery import domain_discovery_bp
     from backend.routes import routers
     from backend.routes.tasks import tasks_bp
+    from backend.routes.client_devices import client_devices_bp
 
     # 注册所有蓝图
     app.register_blueprint(auth_bp)
@@ -76,6 +77,7 @@ def register_blueprints(app):
     app.register_blueprint(domain_discovery_bp)
     app.register_blueprint(routers_bp)
     app.register_blueprint(tasks_bp)
+    app.register_blueprint(client_devices_bp)
 
     from backend.common.config_repository import (
         ProfileRepositoryError, ProfileNotFound, ProfileValidationError,
