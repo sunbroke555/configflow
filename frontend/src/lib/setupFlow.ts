@@ -1,5 +1,5 @@
 import { isAxiosError } from 'axios'
-import { setupApi, type SetupAbandonPlan, type SetupGoal } from '@/api/setup'
+import { setupApi, type SetupAbandonPlan, type SetupDomainRule, type SetupDomainSelection, type SetupGoal } from '@/api/setup'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 
 export const SETUP_STEPS = ['使用方式', '节点来源', '规则与 DNS', '安装与检查', '路由与 DNS', '开始使用']
@@ -30,6 +30,24 @@ export async function abandonSetup(id: string): Promise<SetupAbandonPlan | null>
   notify.success(!data.delete_profile ? '已放弃向导，配置空间已保留。'
     : data.subscription_kept ? '已放弃向导并删除配置空间；订阅仍被其他配置使用，已保留。' : '已放弃向导，并删除了它创建的配置。')
   return data
+}
+/** 规则集多选项；内置规则与规则库同名但内容不同时，两项分别注明来源 */
+export function setupRuleOptions(rules: SetupDomainRule[]): { value: string; label: string }[] {
+  const namesakes = new Set(rules.flatMap(item => item.conflict ? [item.conflict.id] : []))
+  return rules.map(item => ({ value: item.id,
+    label: item.conflict ? `${item.name}（内置）` : namesakes.has(item.id) ? `${item.name}（规则库）` : item.name }))
+}
+/** 已选、且会在规则库另建一份的内置规则 */
+export function setupRuleConflicts(rules: SetupDomainRule[], selection: SetupDomainSelection): SetupDomainRule[] {
+  const chosen = new Set([...selection.direct, ...selection.proxy])
+  return rules.filter(item => item.conflict && chosen.has(item.id))
+}
+/** 改用规则库的同名规则集：在原去向就地替换；它已在另一去向时只取消内置项 */
+export function useLibraryNamesake(selection: SetupDomainSelection, rule: SetupDomainRule): SetupDomainSelection {
+  const target = rule.conflict!.id
+  const swap = (values: string[], other: string[]) => [...new Set(values.flatMap(id =>
+    id !== rule.id ? [id] : other.includes(target) ? [] : [target]))]
+  return { direct: swap(selection.direct, selection.proxy), proxy: swap(selection.proxy, selection.direct) }
 }
 export function setupError(error: unknown): string {
   if (isAxiosError<{ message?: string }>(error)) return error.response?.data?.message || '请求未完成，请检查连接后重试'
