@@ -30,7 +30,11 @@
               查找重复
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem :disabled="allRulesAndSets.length < 2" @select="enterReorder">
+            <DropdownMenuItem :disabled="!foldableGroups.length || reorder.active.value" @select="toggleAllGroups">
+              <component :is="allGroupsCollapsed ? ChevronsUpDown : ChevronsDownUp" class="size-4" />
+              {{ allGroupsCollapsed ? '全部展开分组' : '全部收起分组' }}
+            </DropdownMenuItem>
+            <DropdownMenuItem :disabled="reorderUnits.length < 2" @select="enterReorder">
               <ArrowUpDown class="size-4" />
               调整顺序
             </DropdownMenuItem>
@@ -157,16 +161,20 @@
           data-reorder-item
           :data-id="item.uniqueId"
         >
-          <!-- 分组行（收起状态） -->
-          <button
+          <!-- 组头：给一段相邻同策略规则起名；成员行仍按普通行展示，列从上到下对齐 -->
+          <div
             v-if="item.isGroup"
-            type="button"
-            class="flex w-full cursor-pointer items-center gap-2.5 border-0 border-b border-border/40 bg-transparent px-4 py-2.5 text-left transition-colors hover:bg-accent/40"
-            @click="toggleGroup(item.groupId)"
+            :class="cn(
+              'flex w-full items-center gap-2.5 border-0 border-b border-border/40 bg-secondary/40 px-4 py-2 transition-colors',
+              !reorder.active.value && 'cursor-pointer hover:bg-accent/40'
+            )"
+            :title="item.groupLabel"
+            data-group-head
+            @click="!reorder.active.value && toggleGroup(item.groupId)"
           >
             <DragHandle
               v-if="reorder.active.value"
-              :label="item.groupName || item.groupDefaultName"
+              :label="groupTitle(item)"
               :index="cfIndex"
               :total="displayList.length"
               :position="reorder.positionLabel(cfIndex)"
@@ -175,34 +183,54 @@
               @down="reorder.moveDown(cfIndex)"
               @keydown="reorder.onHandleKeydown($event, cfIndex)"
             />
-            <span class="w-9 shrink-0 font-mono text-[11px] text-muted-foreground">{{ groupRange(item) }}</span>
-            <Layers class="size-4 shrink-0 text-warning-accent" aria-hidden="true" />
-            <span class="min-w-0 truncate text-[13px] font-semibold text-foreground">
-              {{ item.groupName || item.groupDefaultName }}
+            <span class="flex w-9 shrink-0 items-center">
+              <Button
+                v-if="!reorder.active.value"
+                variant="ghost"
+                size="icon-sm"
+                class="-ml-2 text-muted-foreground"
+                :aria-expanded="!item.collapsed"
+                :aria-label="`${item.collapsed ? '展开' : '收起'}分组 ${groupTitle(item)}`"
+                @click.stop="toggleGroup(item.groupId)"
+              >
+                <ChevronRight :class="cn('size-4 transition-transform', !item.collapsed && 'rotate-90')" />
+              </Button>
             </span>
-            <Badge variant="warning" class="shrink-0 text-[10.5px]">{{ item.groupLabel }}</Badge>
-            <Badge v-if="item.groupName" variant="outline" class="num shrink-0 text-[10.5px]">
-              {{ item.count }} 个
-            </Badge>
-            <span class="ml-auto flex w-[120px] shrink-0 justify-end">
+            <span class="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+              <span :class="cn('min-w-0 max-w-[60%] truncate text-[13px]', item.groupName ? 'font-medium text-foreground' : 'text-muted-foreground')">
+                {{ groupTitle(item) }}
+              </span>
+              <span class="num shrink-0 font-mono text-[11px] text-muted-foreground">
+                {{ groupRange(item) }}<template v-if="item.groupName"> · {{ item.count }} 项</template>
+              </span>
+              <span v-if="item.collapsed" class="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground" :title="groupPreview(item)">
+                {{ groupPreview(item) }}
+              </span>
+            </span>
+            <span class="w-[160px] shrink-0 max-lg:hidden" aria-hidden="true" />
+            <span class="flex w-[120px] shrink-0 justify-end">
               <span :class="cn('chip max-w-full truncate', policyChip(item.policy))">{{ item.policy }}</span>
             </span>
-            <span v-if="dnsColumn" class="flex w-[148px] shrink-0 items-center pl-2 xl:w-[188px]" data-group-dns>
-              <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-6 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
-              <span v-else :class="cn('min-w-0 truncate text-[12px]', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
-            </span>
-            <span class="flex w-[136px] shrink-0 items-center justify-end gap-0.5">
+            <span v-if="dnsColumn" class="flex w-[148px] shrink-0 items-center gap-1 pl-2 xl:w-[188px]">
+              <span class="flex min-w-0 flex-1 items-center" data-group-dns>
+                <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-6 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
+                <span v-else :class="cn('min-w-0 truncate text-[12px]', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
+              </span>
               <Button
-                v-if="dnsColumn && dnsEditable"
+                v-if="dnsEditable"
                 variant="ghost"
                 size="icon-sm"
                 class="cf-reorder-mute shrink-0"
                 title="批量设置 DNS"
-                :aria-label="`批量设置 ${item.groupName || item.groupDefaultName} 的 DNS`"
+                :aria-label="`批量设置 ${groupTitle(item)} 的 DNS`"
                 @click.stop="openBatch(item)"
               >
                 <Server class="size-4" />
               </Button>
+            </span>
+            <!-- 与成员行的「启停 / 编辑 / 删除」同位，重命名落在编辑的位置 -->
+            <span class="flex w-[136px] shrink-0 items-center justify-end gap-0.5">
+              <span class="size-8" aria-hidden="true" />
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -213,19 +241,18 @@
               >
                 <Pencil class="size-4" />
               </Button>
-              <span class="grid size-8 place-items-center" aria-hidden="true">
-                <ChevronDown class="size-4 text-muted-foreground" />
-              </span>
+              <span class="size-8" aria-hidden="true" />
             </span>
-          </button>
+          </div>
 
           <!-- 普通行 -->
           <div
             v-else
             :data-rule-key="item.uniqueId"
             :class="[
-              'rule-row flex items-center gap-2.5 border-0 border-b border-border/40 px-4 py-[11px] transition-colors hover:bg-accent/30',
-              item.isExpandedGroupItem && 'bg-background/40',
+              'rule-row flex items-center gap-2.5 border-0 border-b px-4 py-[11px] transition-colors hover:bg-accent/30',
+              item.isLastInGroup ? 'border-border' : 'border-border/40',
+              item.isGroupMember && 'in-group',
               !item.enabled && 'opacity-55',
               simScanKey === item.uniqueId && 'is-scan',
               (simMatchKey === item.uniqueId || recentKeys.has(item.uniqueId)) && 'is-match'
@@ -264,7 +291,7 @@
                 </span>
                 <FolderOpen
                   v-if="item.library_rule_id"
-                  class="size-3.5 shrink-0 text-warning-accent"
+                  class="size-3.5 shrink-0 text-muted-foreground"
                   title="来自规则仓库"
                   aria-label="来自规则仓库"
                 />
@@ -275,7 +302,9 @@
             </span>
 
             <span class="flex w-[120px] shrink-0 justify-end">
-              <span :class="cn('chip max-w-full truncate', policyChip(item.policy))">{{ item.policy }}</span>
+              <!-- 组内策略已在组头显示，成员行降为文字 -->
+              <span v-if="item.isGroupMember" class="max-w-full truncate text-[12px] text-muted-foreground">{{ item.policy }}</span>
+              <span v-else :class="cn('chip max-w-full truncate', policyChip(item.policy))">{{ item.policy }}</span>
             </span>
             <span v-if="dnsColumn" class="cf-reorder-mute flex w-[148px] shrink-0 items-center pl-2 xl:w-[188px]">
               <RuleDnsCell
@@ -290,16 +319,6 @@
             </span>
 
             <div class="cf-reorder-mute flex w-[136px] shrink-0 items-center justify-end gap-0.5">
-              <Button
-                v-if="item.isExpandedGroupItem && item.isFirstInGroup"
-                variant="ghost"
-                size="icon-sm"
-                title="收起分组"
-                aria-label="收起分组"
-                @click.stop="toggleGroup(item.groupId)"
-              >
-                <ChevronUp class="size-4" />
-              </Button>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -331,7 +350,7 @@
       </div>
       </div>
       <Separator />
-      <p class="m-0 px-4 py-2.5 text-xs text-muted-foreground">共 {{ displayList.length }} 项</p>
+      <p class="m-0 px-4 py-2.5 text-xs text-muted-foreground">共 {{ allRules.length }} 项</p>
     </SectionCard>
 
     <!-- ===== 卡片视图 ===== -->
@@ -342,24 +361,63 @@
       class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3 max-md:grid-cols-1"
     >
       <Motion
-        v-for="(item, cfIndex) in displayList"
+        v-for="(item, cfIndex) in cardList"
         :key="item.uniqueId"
         v-bind="listItem(cfIndex)"
         data-reorder-item
         :data-id="item.uniqueId"
+        :aria-hidden="item.isGroupEnd || undefined"
         :class="[
-          'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
-          item.isGroup ? 'border-warning-accent/35' : 'border-border/35',
-          item.isExpandedGroupItem && 'border-primary-accent/30',
+          item.isGroupEnd
+            ? 'col-span-full h-0 border-0 border-b border-border'
+            : item.isGroup && !reorder.active.value
+            ? 'col-span-full flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-0 border-b border-border px-1 pt-3 pb-2'
+            : 'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border border-border/35 bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
           !item.isGroup && !item.enabled && 'dark:opacity-60'
         ]"
       >
-        <!-- 分组卡片 -->
-        <template v-if="item.isGroup">
+        <!-- 分段标题：成员卡片紧随其后；排序时收起的分组作为一张卡片整组移动 -->
+        <template v-if="item.isGroupEnd"></template>
+        <template v-else-if="item.isGroup && !reorder.active.value">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            class="text-muted-foreground"
+            :aria-expanded="!item.collapsed"
+            :aria-label="`${item.collapsed ? '展开' : '收起'}分组 ${groupTitle(item)}`"
+            @click="toggleGroup(item.groupId)"
+          >
+            <ChevronRight :class="cn('size-4 transition-transform', !item.collapsed && 'rotate-90')" />
+          </Button>
+          <span :class="cn('min-w-0 truncate text-[14px]', item.groupName ? 'font-medium text-foreground' : 'text-muted-foreground')" :title="item.groupLabel">
+            {{ groupTitle(item) }}
+          </span>
+          <span class="num shrink-0 font-mono text-[11px] text-muted-foreground">
+            {{ groupRange(item) }}<template v-if="item.groupName"> · {{ item.count }} 项</template>
+          </span>
+          <span :class="cn('chip max-w-[150px] truncate', policyChip(item.policy))">{{ item.policy }}</span>
+          <span class="ml-auto flex min-w-0 items-center gap-1">
+            <span v-if="dnsColumn" class="flex min-w-0 items-center gap-1.5 text-[12px]" data-group-dns>
+              <span class="shrink-0 text-muted-foreground">DNS</span>
+              <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-5 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
+              <span v-else :class="cn('min-w-0 truncate', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
+            </span>
+            <Button v-if="dnsColumn && dnsEditable" variant="ghost" size="icon-sm" class="shrink-0" title="批量设置 DNS" :aria-label="`批量设置 ${groupTitle(item)} 的 DNS`" @click="openBatch(item)">
+              <Server class="size-4" />
+            </Button>
+            <Button variant="ghost" size="icon-sm" class="shrink-0" title="重命名" aria-label="重命名分组" @click="showGroupRenameDialog(item)">
+              <Pencil class="size-4" />
+            </Button>
+          </span>
+          <p v-if="item.collapsed" class="m-0 basis-full truncate pl-10 font-mono text-[11.5px] text-muted-foreground" :title="groupPreview(item)">
+            {{ groupPreview(item) }}
+          </p>
+        </template>
+
+        <template v-else-if="item.isGroup">
           <header class="flex items-start gap-2.5">
             <DragHandle
-              v-if="reorder.active.value"
-              :label="item.groupName || item.groupDefaultName"
+              :label="groupTitle(item)"
               :index="cfIndex"
               :total="displayList.length"
               :position="reorder.positionLabel(cfIndex)"
@@ -368,37 +426,15 @@
               @down="reorder.moveDown(cfIndex)"
               @keydown="reorder.onHandleKeydown($event, cfIndex)"
             />
-            <Layers class="mt-0.5 size-4 shrink-0 text-warning-accent" aria-hidden="true" />
-            <p class="m-0 min-w-0 flex-1 truncate text-[14px] font-semibold text-foreground">
-              {{ item.groupName || item.groupDefaultName }}
+            <p :class="cn('m-0 min-w-0 flex-1 truncate text-[14px]', item.groupName ? 'font-medium text-foreground' : 'text-muted-foreground')">
+              {{ groupTitle(item) }}
             </p>
           </header>
-
-          <div class="flex flex-wrap gap-1.5">
-            <Badge variant="warning" class="text-[10.5px]">{{ item.groupLabel }}</Badge>
-            <Badge v-if="item.groupName" variant="outline" class="num text-[10.5px]">{{ item.count }} 个</Badge>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" class="num text-[10.5px]">{{ groupRange(item) }} · {{ item.count }} 项</Badge>
             <Badge variant="secondary" class="min-w-0 max-w-full text-[10.5px]" :title="item.policy"><span class="truncate">{{ item.policy }}</span></Badge>
           </div>
-
-          <div v-if="dnsColumn" class="cf-reorder-mute flex w-full min-w-0 items-center gap-2 text-[12px]" data-group-dns>
-            <span class="shrink-0 text-muted-foreground">DNS</span>
-            <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-5 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
-            <span v-else :class="cn('min-w-0 flex-1 truncate', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
-            <Button v-if="dnsEditable" variant="ghost" size="icon-sm" class="shrink-0" title="批量设置 DNS" :aria-label="`批量设置 ${item.groupName || item.groupDefaultName} 的 DNS`" @click.stop="openBatch(item)">
-              <Server class="size-4" />
-            </Button>
-          </div>
-
-          <footer class="mt-auto flex items-center gap-1 border-0 border-t border-border/50 pt-3 max-sm:pt-2">
-            <Button variant="ghost" size="sm" @click.stop="showGroupRenameDialog(item)">
-              <Pencil class="size-3.5" />
-              重命名
-            </Button>
-            <Button variant="ghost" size="sm" class="ml-auto" @click.stop="toggleGroup(item.groupId)">
-              查看全部
-              <ChevronDown class="size-3.5" />
-            </Button>
-          </footer>
+          <p class="m-0 truncate font-mono text-[11.5px] text-muted-foreground" :title="groupPreview(item)">{{ groupPreview(item) }}</p>
         </template>
 
         <!-- 普通卡片 -->
@@ -419,15 +455,6 @@
               {{ item.itemType === 'rule' ? '规则' : '规则集' }}
             </Badge>
             <div class="cf-reorder-mute ml-auto flex shrink-0 items-center gap-0.5">
-              <Button
-                v-if="item.isExpandedGroupItem && item.isFirstInGroup"
-                variant="ghost"
-                size="sm"
-                @click.stop="toggleGroup(item.groupId)"
-              >
-                <ChevronUp class="size-3.5" />
-                收起
-              </Button>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -458,7 +485,7 @@
                 {{ item.name }}
                 <FolderOpen
                   v-if="item.library_rule_id"
-                  class="size-3.5 shrink-0 text-warning-accent"
+                  class="size-3.5 shrink-0 text-muted-foreground"
                   aria-label="来自规则仓库"
                 />
               </p>
@@ -679,7 +706,9 @@ import { Motion } from 'motion-v'
 import {
   ArrowUpDown,
   ChevronDown,
-  ChevronUp,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   CircleCheck,
   Copy,
   ExternalLink,
@@ -687,7 +716,6 @@ import {
   EyeOff,
   FileText,
   FolderOpen,
-  Layers,
   Loader2,
   Pencil,
   Play,
@@ -789,7 +817,13 @@ const groupRange = (group: any) => {
   const idx = (group.items || []).map((i: any) => rawIndex(i.uniqueId)).filter(Boolean)
   if (!idx.length) return ''
   const pad = (n: number) => String(n).padStart(2, '0')
-  return idx.length > 1 ? `${pad(Math.min(...idx))}+` : pad(idx[0])
+  return idx.length > 1 ? `${pad(Math.min(...idx))}–${pad(Math.max(...idx))}` : pad(idx[0])
+}
+const groupTitle = (group: any) => group.groupName || group.groupDefaultName
+/** 收起时在组头预览前几项，展开后成员行自己会显示 */
+const groupPreview = (group: any) => {
+  const names = group.items.map((item: any) => (item.itemType === 'rule' ? item.value : item.name))
+  return names.slice(0, 3).join('、') + (names.length > 3 ? '…' : '')
 }
 
 /** 示例取自用户自己的域名规则，不写死 */
@@ -843,21 +877,20 @@ const simulate = async (sample?: string) => {
     const { data } = await api.post('/rules/match-test', { query }, { ...profileRequestConfig, timeout: 120000 })
     if (!data.success) throw new Error(data.message || '查询失败')
 
-    // 命中项在收起的分组里时先展开
+    // 命中项在收起的分组里时临时展开，不改动记住的收起状态
     const matchKey = data.matched && data.rule_id ? `${data.item_type}-${data.rule_id}` : ''
-    if (matchKey && viewMode.value === 'list') {
-      const group: any = allRulesAndSets.value.find(
-        (item: any) => item.isGroup && item.items?.some((i: any) => i.uniqueId === matchKey)
-      )
-      if (group && !expandedGroups.value.has(group.groupId)) toggleGroup(group.groupId)
+    if (matchKey) {
+      const group = ruleGroups.value.find(item => item.count > 1 && item.items.some((i: any) => i.uniqueId === matchKey))
+      if (group) revealGroups([group.groupId])
       await nextTick()
     }
 
-    // 逐行扫描到命中行（未命中则扫完全部），总时长控制在 1.6s 内
+    // 逐行扫描到命中行（未命中则扫完全部），总时长控制在 1.6s 内；行多时每帧跳过几行
     const rows = Array.from(rulesContainer.value?.querySelectorAll<HTMLElement>('[data-rule-key]') || [])
     const stop = matchKey ? rows.findIndex(r => r.dataset.ruleKey === matchKey) : rows.length - 1
-    const step = Math.max(16, Math.min(90, 1600 / Math.max(1, stop + 1)))
-    for (let i = 0; i <= stop && i < rows.length; i++) {
+    const stride = Math.max(1, Math.ceil((stop + 1) * 16 / 1600))
+    const step = Math.max(16, Math.min(90, 1600 / Math.max(1, Math.ceil((stop + 1) / stride))))
+    for (let i = 0; i <= stop && i < rows.length; i += stride) {
       simScanKey.value = rows[i].dataset.ruleKey || ''
       await wait(step)
     }
@@ -947,20 +980,54 @@ const availablePolicies = computed(() => {
   return [...policies, ...groupNames]
 })
 
-// 展开的组ID集合
-const expandedGroups = ref<Set<string>>(new Set())
-
-// 切换组的展开/收起状态
-const toggleGroup = (groupId: string) => {
-  const nextExpandedGroups = new Set(expandedGroups.value)
-
-  if (nextExpandedGroups.has(groupId)) {
-    nextExpandedGroups.delete(groupId)
-  } else {
-    nextExpandedGroups.add(groupId)
+/* ---------- 分组展开状态 ----------
+ * 分组默认展开；用户收起的分组按配置空间记在本机，读写失败时按全部展开处理。
+ * 命中模拟、保存后定位只临时展开（revealedGroups），不改写记住的状态。
+ */
+const collapsedStorageKey = `cf-rules-collapsed:${profileId}`
+const readCollapsed = () => {
+  try {
+    const ids = JSON.parse(localStorage.getItem(collapsedStorageKey) || '[]')
+    return new Set<string>(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : [])
+  } catch {
+    return new Set<string>()
   }
+}
+const collapsedGroups = ref<Set<string>>(readCollapsed())
+const revealedGroups = ref<Set<string>>(new Set())
+const rulesLoaded = ref(false)
+const isCollapsed = (groupId: string) => collapsedGroups.value.has(groupId) && !revealedGroups.value.has(groupId)
 
-  expandedGroups.value = nextExpandedGroups
+const saveCollapsed = (ids: Iterable<string>) => {
+  // 只记录现有分组，规则调整后失效的记录随之清理
+  const current = new Set(ruleGroups.value.map(group => group.groupId))
+  const next = new Set([...ids].filter(id => current.has(id)))
+  if (next.size === collapsedGroups.value.size && [...next].every(id => collapsedGroups.value.has(id))) return
+  collapsedGroups.value = next
+  try {
+    localStorage.setItem(collapsedStorageKey, JSON.stringify([...collapsedGroups.value]))
+  } catch {
+    // 本机存储不可用时只在本页生效
+  }
+}
+
+const toggleGroup = (groupId: string) => {
+  const next = new Set(collapsedGroups.value)
+  if (isCollapsed(groupId)) next.delete(groupId)
+  else next.add(groupId)
+  revealedGroups.value = new Set([...revealedGroups.value].filter(id => id !== groupId))
+  saveCollapsed(next)
+}
+
+const revealGroups = (ids: string[]) => {
+  revealedGroups.value = new Set([...revealedGroups.value, ...ids])
+}
+
+const foldableGroups = computed(() => ruleGroups.value.filter(group => group.count > 1))
+const allGroupsCollapsed = computed(() => foldableGroups.value.every(group => isCollapsed(group.groupId)))
+const toggleAllGroups = () => {
+  revealedGroups.value = new Set()
+  saveCollapsed(allGroupsCollapsed.value ? [] : foldableGroups.value.map(group => group.groupId))
 }
 
 // 规则组重命名相关
@@ -1023,86 +1090,57 @@ const saveGroupName = async () => {
   }
 }
 
-// 分组并合并连续相同策略的规则
-const allRulesAndSets = computed(() => {
-  const result: any[] = []
-  let currentGroup: any = null
+// 连续且同策略的规则项合并为一组；分组只影响展示，不进入生成的配置
+const ruleGroups = computed(() => {
+  const groups: any[] = []
+  let current: any = null
 
   allRules.value.forEach((item) => {
-    const uniqueId = `${item.itemType}-${item.id}`
-    const itemWithId = { ...item, uniqueId }
-
-    // 连续且同策略的规则项都参与分组
-    if (currentGroup && currentGroup.policy === item.policy) {
-      currentGroup.items.push(itemWithId)
-      currentGroup.count++
-      if (!currentGroup.groupName && item.group_name) {
-        currentGroup.groupName = item.group_name
-      }
-    } else {
-      if (currentGroup) {
-        result.push(currentGroup)
-      }
-
-      const groupId = `group_${item.id}_${item.policy}`
-      currentGroup = {
-        isGroup: true,
-        groupId,
-        policy: item.policy,
-        groupName: item.group_name || '',
-        count: 1,
-        items: [itemWithId],
-        uniqueId: groupId
-      }
+    const itemWithId = { ...item, uniqueId: `${item.itemType}-${item.id}` }
+    if (current && current.policy === item.policy) {
+      current.items.push(itemWithId)
+      current.count++
+      if (!current.groupName && item.group_name) current.groupName = item.group_name
+      return
     }
+    // 用首项的复合键：规则与规则集的 id 可能重复
+    const groupId = `group_${itemWithId.uniqueId}_${item.policy}`
+    current = { isGroup: true, groupId, uniqueId: groupId, policy: item.policy, groupName: item.group_name || '', count: 1, items: [itemWithId] }
+    groups.push(current)
   })
 
-  if (currentGroup) {
-    result.push(currentGroup)
-  }
+  groups.forEach(group => Object.assign(group, getGroupMeta(group.items)))
+  return groups
+})
 
-  const finalResult: any[] = []
-  result.forEach(item => {
-    const { groupLabel, groupDefaultName } = getGroupMeta(item.items)
-    item.groupLabel = groupLabel
-    item.groupDefaultName = groupDefaultName
+// 展示列表：多项分组先放组头，展开时成员紧随其后，成员行与普通行同结构
+const allRulesAndSets = computed(() => ruleGroups.value.flatMap((group) => {
+  if (group.count === 1) return [group.items[0]]
+  const collapsed = isCollapsed(group.groupId)
+  const header = { ...group, collapsed }
+  if (collapsed) return [header]
+  return [header, ...group.items.map((item: any, index: number) => ({
+    ...item,
+    isGroupMember: true,
+    groupId: group.groupId,
+    isLastInGroup: index === group.items.length - 1
+  }))]
+}))
 
-    if (item.isGroup) {
-      if (item.count === 1) {
-        const singleItem = { ...item.items[0] }
-        delete singleItem.isExpandedGroupItem
-        delete singleItem.isFirstInGroup
-        delete singleItem.isLastInGroup
-        delete singleItem.groupId
-        delete singleItem.groupPolicy
-        finalResult.push(singleItem)
-      }
-      else if (expandedGroups.value.has(item.groupId)) {
-        item.items.forEach((subItem: any, index: number) => {
-          finalResult.push({
-            ...subItem,
-            isExpandedGroupItem: true,
-            groupId: item.groupId,
-            groupPolicy: item.policy,
-            groupLabel: item.groupLabel,
-            isFirstInGroup: index === 0,
-            isLastInGroup: index === item.items.length - 1
-          })
-        })
-      }
-      else {
-        finalResult.push(item)
-      }
-    }
-  })
-
-  return finalResult
+// 组 id 取自组首：新增、删除或移动组首后按成员把收起状态迁到当前的组 id，
+// 避免用户的设置丢失，也避免过期记录日后让分组自己收起。
+watch(() => ruleGroups.value, (groups) => {
+  if (!rulesLoaded.value) return
+  saveCollapsed(groups
+    .filter(group => group.count > 1 && group.items.some((item: any) => collapsedGroups.value.has(`group_${item.uniqueId}_${group.policy}`)))
+    .map(group => group.groupId))
 })
 
 const loadAllRules = async () => {
   try {
     const { data } = await ruleApi.getAll(profileId)
     allRules.value = data
+    rulesLoaded.value = true
   } catch (error) {
     notify.error('加载规则列表失败')
   }
@@ -1183,8 +1221,7 @@ const onEditorSaved = async ({ ids, dns }: { ids: string[]; dns?: Record<string,
   await loadAllRules()
   const keys = allRules.value.filter(item => ids.includes(item.id)).map(getItemKey)
   if (!keys.length) return
-  const groups = allRulesAndSets.value.filter((item: any) => item.isGroup && item.items.some((sub: any) => keys.includes(sub.uniqueId)))
-  if (groups.length) expandedGroups.value = new Set([...expandedGroups.value, ...groups.map((group: any) => group.groupId)])
+  revealGroups(ruleGroups.value.filter(group => group.count > 1 && group.items.some((sub: any) => keys.includes(sub.uniqueId))).map(group => group.groupId))
   recentKeys.value = new Set(keys)
   window.clearTimeout(recentTimer)
   recentTimer = window.setTimeout(() => { recentKeys.value = new Set() }, 4000)
@@ -1547,16 +1584,27 @@ const reorder = useReorder<any>({
   }
 })
 
+/**
+ * 排序单元：收起的分组整组移动，展开的分组逐条移动。展开时的组头不参与排序，
+ * 成员去掉组内样式，移出原组后不会被误读为其他组的成员。
+ */
+const reorderUnits = computed(() => allRulesAndSets.value
+  .filter(item => !(item.isGroup && !item.collapsed))
+  .map(item => (item.isGroupMember ? { ...item, isGroupMember: false, isLastInGroup: false } : item)))
+
+/** 卡片视图：分组成员后插入通栏分隔，后面的卡片另起一行；排序时不插入，保证每个子元素都可拖动 */
+const cardList = computed(() => (reorder.active.value
+  ? displayList.value
+  : displayList.value.flatMap(item => (item.isLastInGroup ? [item, { isGroupEnd: true, uniqueId: `${item.groupId}-end` }] : [item]))))
+
 const enterReorder = () => {
-  reorderDisplayItems.value = [...allRulesAndSets.value]
+  reorderDisplayItems.value = [...reorderUnits.value]
   reorder.enter()
 }
 
 const handleSaveOrder = async () => {
   try {
     await reorder.save()
-    // 折叠分组，让合并后的分组卡片立即反映最新顺序
-    expandedGroups.value = new Set()
     await loadAllRules()
     void loadDns()
     if (reorderWarnings.length) notify.warning('顺序已保存', reorderWarnings.splice(0).join('\n'))
@@ -1580,6 +1628,10 @@ onActivated(() => {
 <style scoped>
 .rule-row.is-scan {
   background: var(--secondary);
+}
+
+.rule-row.in-group {
+  box-shadow: inset 2px 0 0 var(--border-strong);
 }
 
 .rule-row.is-match {
