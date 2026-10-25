@@ -90,6 +90,9 @@
         <TabsContent value="overview"><OxiDNSOverviewPanel v-if="overview" :overview="overview" :qps="qps" :recorder="recorder" :resetting="resettingStatistics"
           @recorder="selectRecorder" /></TabsContent>
         <TabsContent value="queries">
+          <p v-if="clientNotesError" role="alert" class="mb-3 break-words text-xs text-warning-accent">
+            设备备注暂未读取：{{ clientNotesError }}<span v-if="Object.keys(clientNotes).length"> 保留上次成功读取的备注。</span>
+          </p>
           <SectionCard v-if="overview && !overview.recorders.length">
             <EmptyState :icon="Search" title="尚未启用查询记录" description="打开此 Agent 所属配置空间的查询记录设置，启用并保存草稿后，发布到此 Agent 生效。">
               <Button class="min-h-11" :disabled="openingSettings" @click="openSettings('query_recorder')"><Settings class="size-4" />{{ openingSettings ? '正在打开…' : '前往设置' }}</Button>
@@ -201,6 +204,7 @@ async function refreshAll() {
 }
 let disposed = false
 const clientNotes = ref<Record<string, string>>({})
+const clientNotesError = ref('')
 let notesRequest = 0
 async function loadClientNotes() {
   const request = ++notesRequest
@@ -208,13 +212,14 @@ async function loadClientNotes() {
   if (!id) return
   try {
     const { data } = await clientToolsApi.notes(id)
-    if (!disposed && request === notesRequest && id === agentId.value) clientNotes.value = data?.success ? data.notes || {} : {}
-  } catch {
-    // Keep queries usable with raw IPs when optional client names are unavailable.
-    if (!disposed && request === notesRequest && id === agentId.value) clientNotes.value = {}
+    if (disposed || request !== notesRequest || id !== agentId.value) return
+    if (!data?.success) throw new Error(data?.message || '读取备注失败，请重试。')
+    clientNotes.value = data.notes || {}; clientNotesError.value = ''
+  } catch (failure: any) {
+    if (!disposed && request === notesRequest && id === agentId.value) clientNotesError.value = failure?.response?.data?.message || failure?.message || '读取备注失败，请重试。'
   }
 }
-watch(agentId, () => { clientNotes.value = {}; void loadClientNotes() }, { immediate: true })
+watch(agentId, () => { clientNotes.value = {}; clientNotesError.value = ''; void loadClientNotes() }, { immediate: true })
 onUnmounted(() => { disposed = true; notesRequest++ })
 async function confirmResetStatistics() {
   if (resettingStatistics.value || !overview.value?.statistics) return
