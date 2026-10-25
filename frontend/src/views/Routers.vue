@@ -75,7 +75,7 @@
                   <Button size="sm" variant="outline" class="max-md:min-h-11" :disabled="routeBusy || applying || policyLocked" @click="openRouteManager(router)">
                     静态路由
                   </Button>
-                  <Button v-if="router.type === 'routeros'" size="sm" variant="outline" class="max-md:min-h-11" :disabled="routeBusy || applying || policyLocked" @click="openPolicyManager(router)">
+                  <Button v-if="router.type === 'routeros' && (!embedded || router.ros_policy_rule_sets?.length)" size="sm" variant="outline" class="max-md:min-h-11" :disabled="routeBusy || applying || policyLocked" @click="openPolicyManager(router)">
                     策略路由
                   </Button>
                   <Button v-if="router.type === 'routeros'" size="sm" variant="outline" class="max-md:min-h-11" :disabled="routeBusy || applying || policyLocked" @click="openRuleSync(router)">规则同步</Button>
@@ -619,8 +619,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               <MultiSelect :model-value="form.ip_rule_sets" trigger-id="router-ip-rule-sets" :options="ruleSetOptions" placeholder="仅 fake-ip 网段" @update:model-value="selectStaticRuleSets" />
             </div>
           </FormField>
-          <!-- Policy sources are the profile's client devices; a new setup profile has none yet. -->
-          <FormField v-if="form.type === 'routeros' && !setupDraftSession" label="使用策略路由的 IP 规则集" html-for="router-policy-rule-sets" v-bind="routerCopy.policyRules">
+          <FormField v-if="showPolicyOption" label="使用策略路由的 IP 规则集" html-for="router-policy-rule-sets" v-bind="routerCopy.policyRules">
             <div class="[&_[role=combobox]]:min-h-11">
               <MultiSelect :model-value="form.ros_policy_rule_sets" trigger-id="router-policy-rule-sets" :options="ruleSetOptions" placeholder="不使用策略路由" @update:model-value="selectPolicyRuleSets" />
             </div>
@@ -881,6 +880,12 @@ const saving = ref(false)
 const dialogVisible = ref(false)
 const editingId = ref('')
 const editingHasPassword = ref(false)
+// Policy sources are the profile's client devices, and the wizard's new profile
+// has none yet. A router that already uses policy routing keeps the option so it
+// can be cleared; a draft never does, so an older draft's sets are dropped on save.
+const keepPolicyOption = ref(false)
+const showPolicyOption = computed(() => form.type === 'routeros' && !props.setupDraftSession
+  && (!props.embedded || keepPolicyOption.value))
 const busyId = ref('')
 const busyAction = ref<'probe' | 'report' | ''>('')
 const report = ref<any>(null)
@@ -1237,6 +1242,7 @@ const openCreate = async () => {
   Object.assign(form, emptyForm())
   guardBypassText.value = ''
   if (props.embedded) form.name = '主路由'
+  keepPolicyOption.value = false
   if (props.setupAgents && !props.setupDraftSession) Object.assign(form, { proxy_gateway_agent_id: props.setupAgents.mihomo, dns_agent_id: props.setupAgents.oxidns })
   editingId.value = ''
   editingHasPassword.value = false
@@ -1262,6 +1268,7 @@ const openEdit = async (router: RouterItem) => {
     dns_guard: { ...guardDefaults(), ...router.dns_guard, bypass: [...(router.dns_guard?.bypass || [])] }
   })
   guardBypassText.value = (router.dns_guard?.bypass || []).join('\n')
+  keepPolicyOption.value = !!router.ros_policy_rule_sets?.length
   editingId.value = router.id
   editingHasPassword.value = router.has_password
   dialogVisible.value = true
@@ -1296,7 +1303,7 @@ const submit = async () => {
       ...guard, enabled: form.type === 'routeros' && guard.enabled,
       bypass: guardBypassText.value.split(/[\s,，]+/).map(item => item.trim()).filter(Boolean)
     } }),
-    ros_policy_rule_sets: form.type === 'routeros' && !props.setupDraftSession ? [...form.ros_policy_rule_sets] : [],
+    ros_policy_rule_sets: showPolicyOption.value ? [...form.ros_policy_rule_sets] : [],
     manage_return_routing: form.manage_return_routing === true,
     proxy_gateway_agent_id: form.proxy_gateway_agent_id === NONE ? '' : form.proxy_gateway_agent_id,
     dns_agent_id: form.dns_agent_id === NONE ? '' : form.dns_agent_id

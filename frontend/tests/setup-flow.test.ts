@@ -87,6 +87,8 @@ describe('首次使用分流向导', () => {
     expect(nav.findAll('button')[3]!.text()).toContain('4')
     expect(wrapper!.get('button:disabled').exists()).toBe(true)
     expect(wrapper!.findAll('[role="checkbox"]').every(item => item.attributes('disabled') !== undefined)).toBe(true)
+    // Before install the new profile has no OxiDNS to name devices from, and the way back lands on step 3.
+    expect(wrapper!.find('[data-client-devices-link]').exists()).toBe(false)
     await click('完成安装后继续')
     expect(setupApi.finish).not.toHaveBeenCalled()
     expect(setupApi.check).not.toHaveBeenCalled()
@@ -393,9 +395,33 @@ describe('首次使用分流向导', () => {
     const target = new URL(link.attributes('href')!, 'http://configflow.test')
     expect(target.pathname).toBe('/client-devices')
     expect(target.searchParams.get('profile')).toBe('setup_test')
-    expect(target.searchParams.get('from')).toBe('/setup?session=' + 'a'.repeat(32))
+    expect(target.searchParams.get('from')).toBe('/setup?session=' + 'a'.repeat(32) + '&ack=')
     await link.trigger('click'); await flushPromises()
     expect(wrapper!.text()).toContain('客户端设备页')
+  })
+
+  it('从客户端设备返回时保留手动接入和已勾选的确认', async () => {
+    // The manual choice is not saved until finish, so the stored mode can still be managed.
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ router_mode: 'managed' }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    await click('手动配置主路由')
+    const boxes = () => wrapper!.findAll('[role="checkbox"]')
+    await boxes()[0]!.trigger('click'); await flushPromises()
+    const href = wrapper!.get('[data-client-devices-link] a').attributes('href')!
+    const back = new URL(href, 'http://configflow.test').searchParams.get('from')!
+    expect(back).toBe('/setup?session=' + 'a'.repeat(32) + '&ack=routes')
+    wrapper!.unmount()
+    await open(back)
+    expect(wrapper!.text()).toContain('1. 在主路由添加静态路由')
+    expect(boxes().map(box => box.attributes('aria-checked'))).toEqual(['true', 'false'])
+    await boxes()[1]!.trigger('click'); await flushPromises()
+    expect(wrapper!.findAll('button').find(item => item.text() === '确认设置并继续')!.attributes('disabled')).toBeUndefined()
+  })
+
+  it('返回参数只在第 4 步恢复', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ step: 5, max_step: 5, completed: true }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32) + '&ack=routes,dns')
+    expect(wrapper!.text()).toContain('Mihomo + OxiDNS 已准备好')
   })
 
   it('完成页进入 Agent 或客户端设备前切到本次配置空间', async () => {

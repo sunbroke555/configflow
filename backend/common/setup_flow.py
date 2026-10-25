@@ -444,14 +444,17 @@ def save_router_draft(session, body):
     if (payload.get('proxy_gateway_agent_id') or payload.get('dns_agent_id')
             or payload.get('auto_rule_sync')):
         raise SetupError('安装完成后自动关联本次设备，暂不启用规则自动同步')
-    if payload.get('ros_policy_rule_sets'):
-        # Policy routing takes its sources from the profile's client devices,
-        # and a new setup profile has none yet, so publishing would be refused.
-        raise SetupError('新配置空间还没有客户端设备，暂不能使用策略路由；安装后可在上游路由中设置')
     try:
-        session['router_draft'] = normalize(payload, session.get('router_draft'))
+        draft = normalize(payload, session.get('router_draft'))
     except RouterValidationError as error:
         raise SetupError(str(error)) from None
+    if draft['ros_policy_rule_sets']:
+        # Checked on the merged draft: a draft saved earlier may still carry sets.
+        # Policy routing takes its sources from the profile's client devices,
+        # and a new setup profile has none yet, so publishing would be refused.
+        raise SetupError('新配置空间还没有设为智能分流的客户端设备，暂不能使用策略路由；'
+                         '完成向导后先在「客户端设备」中设置，再到上游路由中启用')
+    session['router_draft'] = draft
     session['router_mode'] = 'managed'
 
 

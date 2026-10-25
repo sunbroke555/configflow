@@ -362,6 +362,24 @@ def test_router_draft_accepts_routeros_without_policy_rule_sets(installed):
     assert response.json['router_draft']['ros_policy_rule_sets'] == []
 
 
+def test_router_draft_checks_policy_rule_sets_after_merging_the_saved_draft(installed):
+    """A draft saved before policy routing was refused keeps its sets unless the payload clears them."""
+    client, repository, _, _, _ = installed
+    from backend.common import setup_flow
+    routeros = {**ROUTER_DRAFT, 'type': 'routeros'}
+    assert client.post(f'/api/setup/{SESSION}/router-draft', json={'router': routeros}).status_code == 200
+    stored = setup_flow.read(repository, SESSION)
+    stored['router_draft']['ros_policy_rule_sets'] = ['setup_lan_0']
+    setup_flow.write(repository, stored)
+    response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': {'name': 'Renamed'}})
+    assert response.status_code == 400
+    assert '客户端设备' in response.json['message']
+    assert setup_flow.read(repository, SESSION)['router_draft']['name'] == 'Main'
+    response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': {'name': 'Renamed', 'ros_policy_rule_sets': []}})
+    assert response.status_code == 200, response.json
+    assert response.json['router_draft']['ros_policy_rule_sets'] == []
+
+
 def test_installation_check_requires_both_services_and_healthy_forwarding(installed):
     client, _, _, gateway, status = installed
     status['ipv4_forwarding']['current'] = '0'

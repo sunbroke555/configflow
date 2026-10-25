@@ -126,6 +126,24 @@ describe('routers view', () => {
     expect(setupApi.saveRouterDraft).toHaveBeenCalledWith('setup-session', expect.objectContaining({ type: 'routeros', ros_policy_rule_sets: [] }))
   })
 
+  it('keeps policy routing out of the wizard after install, while the new profile still has no client devices', async () => {
+    vi.mocked(routerApi.update).mockResolvedValue({ data: { success: true } } as any)
+    const SETUP = { embedded: true, profileId: 'setup-profile', setupAgents: { mihomo: 'new-m', oxidns: 'new-o' } }
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros', ip_rule_sets: [], ros_policy_rule_sets: [] }, [], SETUP)
+    expect(wrapper.findAll('button').some(button => button.text() === '策略路由')).toBe(false)
+    await wrapper.get('button[aria-label="编辑"]').trigger('click'); await flushPromises()
+    expect(document.body.querySelector('#router-ip-rule-sets')).not.toBeNull()
+    expect(document.body.querySelector('#router-policy-rule-sets')).toBeNull()
+    buttonInDocument('保存').click(); await flushPromises()
+    expect(routerApi.update).toHaveBeenCalledWith('router_1', expect.objectContaining({ type: 'routeros', ros_policy_rule_sets: [] }), 'setup-profile')
+    wrapper.unmount()
+    // A router that already uses policy routing keeps the option so it can be cleared.
+    const existing = await mountRouter({ ...ROUTER, type: 'routeros', ip_rule_sets: [], ros_policy_rule_sets: ['telegram'] }, [], SETUP)
+    expect(existing.findAll('button').some(button => button.text() === '策略路由')).toBe(true)
+    await existing.get('button[aria-label="编辑"]').trigger('click'); await flushPromises()
+    expect(document.body.querySelector('#router-policy-rule-sets')).not.toBeNull()
+  })
+
   it('pins embedded setup to its profile and preselects the installed pair across sidebar changes', async () => {
     vi.mocked(routerApi.create).mockResolvedValue({ data: { success: true } } as any)
     const wrapper = await mountRouter(null, [

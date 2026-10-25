@@ -29,7 +29,8 @@ async function render(path = '/client-devices') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/client-devices', component: ClientDevices },
     { path: '/agents/:agentId/oxidns', component: OxiDNSMonitor },
-    { path: '/other', component: { template: '<div>other</div>' } }
+    { path: '/other', component: { template: '<div>other</div>' } },
+    { path: '/setup', component: { template: '<div>setup</div>' } }
   ] })
   await router.push(path)
   const wrapper = mount({ template: '<RouterView />' }, { global: { plugins: [router] }, attachTo: document.body })
@@ -248,6 +249,21 @@ describe('client devices page', () => {
     expect(router.currentRoute.value.fullPath).toBe('/other?session=s1')
     const external = await render('/client-devices?from=%2F%2Fevil.example')
     expect(external.wrapper.text()).not.toContain('返回上游路由')
+  })
+
+  it('only names devices while the setup wizard is open, since a DNS policy would change its published OxiDNS', async () => {
+    stored = [{ ip: '192.0.2.9', name: '', mode: '' }, { ip: '192.0.2.5', name: '电视', mode: 'direct' }]
+    const { wrapper, router } = await render('/client-devices?profile=setup_x&from=%2Fsetup%3Fsession%3Ds1')
+    const selects = wrapper.findAllComponents(Select)
+    expect(selects.length).toBe(2)
+    expect(selects.every(select => select.props('disabled'))).toBe(true)
+    expect(wrapper.get('button[aria-label="移除 192.0.2.5"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('完成向导后再设置 DNS 策略')
+    await nameInput(wrapper, '192.0.2.9').setValue('测试手机')
+    await nameInput(wrapper, '192.0.2.9').trigger('blur'); await flushPromises()
+    expect(clientDeviceApi.save).toHaveBeenCalledWith('office', { ip: '192.0.2.9', name: '测试手机', mode: '' }, { name: '', mode: '' })
+    await button(wrapper, '返回配置向导').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/setup?session=s1')
   })
 
   it('switches to the active profile when the navigation drops the Agent', async () => {

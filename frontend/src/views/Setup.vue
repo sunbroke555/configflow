@@ -83,8 +83,16 @@ const missingRuleSets = computed(() => routeInstructions.value?.incomplete ? rou
 const routesIncomplete = computed(() => !!routeInstructions.value?.incomplete)
 const working = computed(() => busy.value || childBusy.value || clientChecking.value)
 const pair = computed(() => session.value?.installation)
-// Opened for this wizard's profile without switching the global one; its back link returns here.
-const clientDevicesLink = computed(() => ({ path: '/client-devices', query: { profile: session.value?.profile_id, from: route.fullPath } }))
+// Opened for this wizard's profile without switching the global one. Its back link
+// carries the unsaved manual choice and ticks, which a remount would otherwise reset.
+const clientDevicesLink = computed(() => ({ path: '/client-devices', query: { profile: session.value?.profile_id,
+  from: router.resolve({ path: '/setup', query: { session: session.value?.id, ack: [ackRoutes.value && 'routes', ackDNS.value && 'dns'].filter(Boolean).join(',') } }).fullPath } }))
+function restoreManualStep(ack: unknown) {
+  const current = session.value
+  if (typeof ack !== 'string' || current?.goal !== 'router' || current.step !== 4 || current.completed) return
+  const acks = ack.split(',')
+  routerMode.value = 'manual'; ackRoutes.value = acks.includes('routes'); ackDNS.value = acks.includes('dns')
+}
 const routerAgents = computed(() => pair.value ? { mihomo: pair.value.mihomo.id, oxidns: pair.value.oxidns.id } : undefined)
 const steps = computed(() => SETUP_STEPS.map((title, i) => i === 4 ? goal.value === 'router' ? '接入主路由' : '客户端设置' : title))
 const help = [
@@ -230,7 +238,9 @@ async function load() {
     if (disposed) return
     options.value = { ...data, sessions: data.sessions.filter(item => SETUP_GOALS.some(goal => goal.id === item.goal)) }
     ready.value = true
-    if (typeof route.query.session === 'string') await resume(route.query.session)
+    // accept() rewrites the query, so read the return state first.
+    const ack = route.query.ack
+    if (typeof route.query.session === 'string') { await resume(route.query.session); restoreManualStep(ack) }
   } catch (failure) { if (!disposed) error.value = setupError(failure) }
   finally { if (!disposed) loading.value = false }
 }
@@ -335,7 +345,7 @@ onUnmounted(() => { disposed = true })
                   <p class="m-0 text-sm">在主路由 DHCP 的「DNS 服务器」中填写下方地址，让测试设备重新连接网络后生效。</p>
                   <p v-if="routeInstructions" class="m-0 break-all font-mono text-sm">{{ routeInstructions.dns }}</p>
                   <p v-else class="m-0 text-xs text-muted-foreground">安装检查完成后自动显示 DNS 地址。</p>
-                  <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-client-devices-link>只改一台测试设备时，可先在<RouterLink :to="clientDevicesLink" class="mx-0.5 inline-flex items-center text-primary-accent underline underline-offset-4 max-md:min-h-11">客户端设备</RouterLink>中给它命名，便于在 DNS 面板中认出，完成后可返回向导。</p>
+                  <p v-if="!previewRouting" class="m-0 text-xs leading-relaxed text-muted-foreground" data-client-devices-link>只改一台测试设备时，可先在<RouterLink :to="clientDevicesLink" class="mx-0.5 inline-flex items-center text-primary-accent underline underline-offset-4 max-md:min-h-11">客户端设备</RouterLink>中给它命名，便于在 DNS 面板中认出，完成后可返回向导。</p>
                 </FormField>
                 <p v-if="routeInstructions?.routes.some(item => item.requires_source_exclusion)" class="m-0 text-sm text-warning-accent">真实 IP 网段需在主路由按来源排除 Linux 本机（策略路由），否则 Linux 直连这些地址时会被转回自己；只能按目的地址配置时，只添加 fake-IP 网段。</p>
                 <p v-for="warning in routeInstructions?.warnings" :key="warning" class="m-0 text-sm text-warning-accent">{{ warning }}</p>
