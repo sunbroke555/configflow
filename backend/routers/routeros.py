@@ -5,7 +5,7 @@ verifies the written fields; compound NAT changes compensate partial failures.
 """
 import ipaddress
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import requests
@@ -52,6 +52,10 @@ class UncertainWrite(RouterError):
     """The request may have reached RouterOS even though its reply was lost."""
 
 
+class PingNotPermitted(RouterError):
+    """The account's group lacks the RouterOS ``test`` policy that /ping needs."""
+
+
 class RouterOSDriver(RouterDriver):
     vendor = 'routeros'
     supports_write = True
@@ -66,9 +70,9 @@ class RouterOSDriver(RouterDriver):
     def close(self):
         self.session.close()
 
-    def _request(self, method: str, path: str, values=None) -> Any:
+    def _request(self, method: str, path: str, values=None, timeout: float = TIMEOUT) -> Any:
         try:
-            kwargs = {'timeout': TIMEOUT, 'allow_redirects': False}
+            kwargs = {'timeout': timeout, 'allow_redirects': False}
             if values is not None:
                 kwargs['json'] = values
             response = getattr(self.session, method.lower())(f'{self.endpoint}/rest{path}', **kwargs)
@@ -104,14 +108,44 @@ class RouterOSDriver(RouterDriver):
             error_type = RouterError if method == 'GET' else UncertainWrite
             raise error_type('RouterOS 返回的不是 JSON') from None
 
-    def _get(self, path: str) -> Any:
-        return self._request('GET', path)
+    def _get(self, path: str, timeout: Optional[float] = None) -> Any:
+        # Only a caller with its own deadline passes timeout; tests replace _request with (method, path, values).
+        return self._request('GET', path) if timeout is None else self._request('GET', path, timeout=timeout)
 
-    def _list(self, path: str) -> List[Dict[str, Any]]:
-        rows = self._get(path)
+    def _list(self, path: str, timeout: Optional[float] = None) -> List[Dict[str, Any]]:
+        rows = self._get(path, timeout)
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise RouterError(f'RouterOS {path} 返回的列表格式无法识别')
         return rows
+
+    def ping(self, address: str, interface: str = '', timeout: float = 4) -> bool:
+        """Whether a LAN host answers RouterOS within about 0.6 s. Changes nothing.
+
+        With ``interface`` this is an ARP ping, which hosts whose firewall drops
+        ICMP still answer. Shapes verified on 7.24.5: HTTP 200 with one row per
+        probe (``received`` counts replies, a lost probe adds ``status: timeout``);
+        a group without the ``test`` policy gets HTTP 500 ``not enough permissions
+        (9)``; an ARP ping without a valid interface gets HTTP 400.
+        """
+        values = {'address': address, 'count': '2', 'interval': '300ms'}
+        if interface:
+            values.update({'arp-ping': 'yes', 'interface': interface})
+        try:
+            response = self.session.post(f'{self.endpoint}/rest/ping', json=values, timeout=timeout,
+                                         allow_redirects=False)
+        except requests.RequestException as error:
+            raise RouterError(f'RouterOS ping 未完成：{error.__class__.__name__}') from None
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if response.status_code == 200 and isinstance(body, list):
+            return any(isinstance(row, dict) and str(row.get('received') or '0').isdigit()
+                       and int(str(row.get('received') or '0')) > 0 for row in body)
+        detail = str(body.get('detail') or body.get('message') or '') if isinstance(body, dict) else ''
+        if re.search(r'\bnot enough permissions\b', detail, re.IGNORECASE):
+            raise PingNotPermitted(f'RouterOS 账号缺少 test 权限（{detail}）')
+        raise RouterError(f'RouterOS ping 返回 HTTP {response.status_code}' + (f'（{detail}）' if detail else ''))
 
     def probe(self) -> RouterInfo:
         resource = self._get('/system/resource')

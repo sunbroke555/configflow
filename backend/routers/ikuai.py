@@ -140,6 +140,35 @@ def _http_error(response: requests.Response, url: str) -> str:
     return f'iKuai {reason}{code}。'
 
 
+def _call_error(func_name: str, data: Dict[str, Any]) -> str:
+    """Explain a failed /Action/call.
+
+    Codes as observed on 4.0.314 (many replies also carry ``"Result": 10000``):
+    1001 no read permission and 1002 no write permission for the account's
+    user group (with ``Label`` naming the feature); 1003 ``Access denied`` for a
+    func_name this firmware does not have (restricted accounts get 1001 for
+    those instead); 1008 session expired; 3001 invalid action or parameter.
+    """
+    code = data.get('code')
+    message = data.get('message') if isinstance(data.get('message'), str) else ''
+    label = data.get('Label') if isinstance(data.get('Label'), str) and data.get('Label') else ''
+    feature = f'「{label}」（{func_name}）' if label else f' {func_name} '
+    if code == 1001:
+        return (f'iKuai 账号没有{feature}的访问权限（错误码 1001）。'
+                '请在 iKuai 的用户组中授予读取权限，或改用管理员账号。')
+    if code == 1002:
+        return (f'iKuai 账号没有{feature}的执行权限（错误码 1002）。'
+                '请在 iKuai 的用户组中授予修改权限，或改用管理员账号。')
+    if code == 1003:
+        return (f'iKuai 不提供 {func_name} 接口（错误码 1003{"：" + message if message else ""}）。'
+                '当前固件可能不支持这项功能，请确认 iKuai 版本。')
+    if code == 1008:
+        return 'iKuai 登录会话已失效（错误码 1008），重新登录后仍未恢复，请稍后重试。'
+    if code is None:
+        return f'iKuai 调用 {func_name} 返回格式无法识别'
+    return f'iKuai 调用 {func_name} 失败：{message or "未知错误"}（错误码 {code}）'
+
+
 class IKuaiDriver(RouterDriver):
     vendor = 'ikuai'
     supports_write = True
@@ -193,20 +222,31 @@ class IKuaiDriver(RouterDriver):
             'pass': base64.b64encode(f'salt_11{self.password}'.encode()).decode(),
         }
         data = self._post('/Action/login', payload)
-        if data.get('Result') != 10000 and data.get('code') != 0:
-            raise RouterError(f'iKuai 登录失败：{data.get("message") or "账号或密码错误"}')
+        # 4.x answers every login with "Result": 10000, failures included
+        # (4.0.314: {"Result":10000,"code":1005,"message":"账号或密码错误"}); only
+        # ``code`` tells them apart. A reply without ``code`` is 3.x style.
+        failed = data.get('code') != 0 if 'code' in data else data.get('Result') != 10000
+        if failed:
+            detail = data.get('message') or data.get('ErrMsg') or '账号或密码错误'
+            code = f'（错误码 {data["code"]}）' if 'code' in data else ''
+            raise RouterError(f'iKuai 登录失败：{detail}{code}')
         self._logged_in = True
 
     def call(self, func_name: str, param: Dict[str, Any], action: str = 'show') -> Dict[str, Any]:
         self._login()
-        data = self._post('/Action/call', {'func_name': func_name, 'action': action, 'param': param})
-        if data.get('code') == 1003:
-            raise RouterError(f'iKuai 拒绝访问 {func_name}（需要管理员账号）')
-        if data.get('code') != 0 or not isinstance(data.get('results'), dict):
-            if 'Data' in data or 'Result' in data:
-                raise RouterError('检测到 iKuai 3.x 的响应格式，只支持 iKuai 4.x')
-            raise RouterError(f'iKuai 调用 {func_name} 失败：{data.get("message") or data.get("code")}')
-        return data['results']
+        payload = {'func_name': func_name, 'action': action, 'param': param}
+        data = self._post('/Action/call', payload)
+        if data.get('code') == 1008:
+            # Session expired (the router restarted, or another login replaced it): log in once more.
+            self._logged_in = False
+            self._login()
+            data = self._post('/Action/call', payload)
+        code = data.get('code')
+        if code == 0 and isinstance(data.get('results'), dict):
+            return data['results']
+        if 'code' not in data and ('Data' in data or 'Result' in data):
+            raise RouterError('检测到 iKuai 3.x 的响应格式，只支持 iKuai 4.x')
+        raise RouterError(_call_error(func_name, data))
 
     def _list(self, func_name: str) -> List[Dict[str, Any]]:
         results = self.call(func_name, {'TYPE': 'total,data', 'limit': LIST_LIMIT})
