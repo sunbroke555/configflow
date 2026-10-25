@@ -1,5 +1,6 @@
 <template>
-  <span v-if="labels.length" class="ml-1.5 inline-flex flex-wrap gap-1 align-middle" :aria-label="`来源：${labels.join('、')}`">
+  <span v-if="labels.length" class="ml-1.5 inline-flex flex-wrap gap-1 align-middle">
+    <span class="sr-only">来源：</span>
     <span v-for="label in labels" :key="label" class="chip h-5 px-1.5 text-[11px]">{{ label }}</span>
   </span>
 </template>

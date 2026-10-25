@@ -35,7 +35,7 @@
         <div v-if="reminder" role="status" class="mb-4 flex flex-wrap items-start gap-x-3 gap-y-2 rounded-lg bg-primary-soft p-3 text-sm max-sm:p-2.5">
           <div class="min-w-0 flex-1">
             <p class="m-0 font-medium text-primary-accent">已添加 {{ reminder }} 台设备</p>
-            <p class="mb-0 mt-1 text-[13px]">DNS 策略要在下方「发布 DNS 策略」发布到 OxiDNS 后生效。<template v-if="policyRouting">已启用 RouterOS 策略路由，智能分流设备还需在<RouterLink to="/routers" class="text-primary-accent underline-offset-2 hover:underline">上游路由</RouterLink>重新发布。</template></p>
+            <p class="mb-0 mt-1 text-[13px]">{{ state.agents.length ? 'DNS 策略要在下方「发布 DNS 策略」发布到 OxiDNS 后生效。' : '此配置空间没有 OxiDNS Agent，DNS 策略会在接入 OxiDNS 并发布后生效。' }}<template v-if="policyRouting">已启用 RouterOS 策略路由，智能分流设备还需在<RouterLink to="/routers" class="text-primary-accent underline-offset-2 hover:underline">上游路由</RouterLink>重新发布。</template></p>
           </div>
           <div class="flex items-center gap-1">
             <Button v-if="state.agents.length" variant="outline" class="min-h-11" @click="toPublish">前往发布</Button>
@@ -97,6 +97,10 @@
               <Button as-child variant="outline" class="min-h-11"><RouterLink to="/routers">前往上游路由</RouterLink></Button>
             </EmptyState>
             <LoadingRows v-else-if="value === 'offline' && !discovery && discovering" :rows="3" />
+            <EmptyState v-else-if="value === 'offline' && discovery?.state === 'failed'" :icon="Router" title="无法判断设备是否离线" :description="discovery.message" />
+            <EmptyState v-else-if="value === 'offline' && !discovery && discoveryError" :icon="Router" title="无法判断设备是否离线" :description="discoveryError">
+              <Button variant="outline" class="min-h-11" :disabled="discovering" @click="rediscover">重试</Button>
+            </EmptyState>
             <div v-else-if="visibleRows.length" class="cf-table-wrap">
               <table class="cf-table cf-mobile-records client-device-records w-full min-w-[760px]" role="table">
                 <thead role="rowgroup">
@@ -109,7 +113,7 @@
                   </tr>
                 </thead>
                 <tbody role="rowgroup">
-                  <tr v-for="row in visibleRows" :key="row.ip" role="row" :data-client-ip="row.ip">
+                  <tr v-for="row in visibleRows" :key="row.ip" role="row" :data-client-ip="row.ip" @focusin="hold(row.ip)">
                     <td role="cell">
                       <Input v-model="row.name" :aria-label="row.ip + ' 名称'" maxlength="80" :placeholder="infoOf(row.ip)?.hostname || '设备或网段名称'" class="min-h-11 min-w-36 max-sm:min-w-0"
                         :disabled="publishing" @blur="save(row.ip)" @keydown.enter.prevent="save(row.ip)" />
@@ -165,8 +169,10 @@
                 <thead role="rowgroup">
                   <tr role="row">
                     <th role="columnheader" scope="col" class="w-11">
-                      <Checkbox :model-value="allPicked ? true : picked.length ? 'indeterminate' : false" :disabled="!pickable.length" :aria-label="search.trim() ? '选择全部搜索结果' : '选择全部设备'"
-                        @update:model-value="value => pickAll(value === true)" />
+                      <label class="-m-2.5 flex size-11 cursor-pointer items-center justify-center">
+                        <Checkbox :model-value="allPicked ? true : somePicked ? 'indeterminate' : false" :disabled="!pickable.length || !!adding" :aria-label="search.trim() ? '选择全部搜索结果' : '选择全部设备'"
+                          @update:model-value="value => pickAll(value === true)" />
+                      </label>
                     </th>
                     <th role="columnheader" scope="col">设备</th>
                     <th role="columnheader" scope="col">IP</th>
@@ -354,8 +360,12 @@ type Tab = 'added' | 'new' | 'offline'
 const savedTabs: Tab[] = ['added', 'offline']
 const tabOf = (value: unknown): Tab => value === 'new' || value === 'offline' ? value : 'added'
 const tab = ref<Tab>(tabOf(route.query.tab))
-watch(() => route.query.tab, value => { tab.value = tabOf(value) })
+watch(() => route.query.tab, value => {
+  if (tab.value !== tabOf(value)) release()
+  tab.value = tabOf(value)
+})
 function changeTab(value: string) {
+  release()
   tab.value = tabOf(value)
   void router.replace({ query: { ...route.query, tab: tab.value === 'added' ? undefined : tab.value } })
 }
@@ -374,11 +384,22 @@ const presenceOf = (ip: string) => infoOf(ip)?.presence || (ip.includes('/') ? '
 const listed = computed(() => new Set(rows.value.map(row => row.ip)))
 const ipKey = (ip: string) => ip.split('.').reduce((total, part) => total * 256 + Number(part), 0)
 /** 未添加：路由器看到、本页还没有这一行的 IPv4 地址（删除的行回到这里） */
-const found = computed(() => [...seen.value.values()]
-  .filter(item => !listed.value.has(item.ip) && !item.ip.includes(':') && !item.ip.includes('/') && item.basis !== 'router'
-    && item.sources.length > 0 && (!!item.mac || item.sources.some(source => source !== 'arp')))
+const found = computed(() => [...(discovery.value?.discovered || []), ...(discovery.value?.devices || []).filter(row => row.discoverable)]
+  .filter(item => !listed.value.has(item.ip))
   .sort((a, b) => ipKey(a.ip) - ipKey(b.ip)))
-const tabRows = computed(() => rows.value.filter(row => (presenceOf(row.ip) === 'offline') === (tab.value === 'offline')))
+/**
+ * 正在编辑的行留在原标签：路由器结果最长约 20 秒才返回，不让输入中的行跳到另一个标签；
+ * 切换标签或重新载入后按最新状态归类。
+ */
+const held = reactive<Record<string, Tab>>({})
+function release() {
+  for (const ip of Object.keys(held)) delete held[ip]
+}
+function hold(ip: string) {
+  if (!held[ip]) held[ip] = tab.value === 'offline' ? 'offline' : 'added'
+}
+const placeOf = (ip: string): Tab => held[ip] || (presenceOf(ip) === 'offline' ? 'offline' : 'added')
+const tabRows = computed(() => rows.value.filter(row => placeOf(row.ip) === tab.value))
 const matches = (term: string, ...values: (string | undefined)[]) => values.some(value => value?.toLowerCase().includes(term))
 const visibleRows = computed(() => {
   const term = search.value.trim().toLowerCase()
@@ -389,8 +410,9 @@ const visibleFound = computed(() => {
   return term ? found.value.filter(item => matches(term, item.ip, item.hostname, item.mac)) : found.value
 })
 const tabItems = computed(() => {
-  const ready = !!discovery.value && !unsupported.value
-  const offline = rows.value.filter(row => presenceOf(row.ip) === 'offline').length
+  // 全部路由器读取失败时数量未知，不显示 0。
+  const ready = !!discovery.value && !unsupported.value && discovery.value.state !== 'failed'
+  const offline = rows.value.filter(row => placeOf(row.ip) === 'offline').length
   return [
     { value: 'added', label: '已添加', count: rows.value.length - offline },
     { value: 'new', label: '未添加', count: ready ? found.value.length : null },
@@ -465,13 +487,16 @@ function covering(ip: string): ClientDevice | null {
   return best
 }
 const modeLabel = (mode: ClientDeviceMode) => ({ smart: '智能分流', direct: '直连', '': '默认' })[mode]
-/** RouterOS 策略路由的来源：智能分流的 IPv4 设备或网段 */
-const routesSource = (row: ClientDevice) => policyRouting.value && row.mode === 'smart' && !!saved(row.ip) && !row.ip.includes(':')
+/** RouterOS 策略路由的来源：智能分流的 IPv4 设备或网段，代理网关本机除外（与上游路由页一致） */
+const routesSource = (row: ClientDevice) => row.mode === 'smart' && !!saved(row.ip) && !row.ip.includes(':')
+  && !!discovery.value?.sources.some(source => source.policy_routing && ![source.gateway, `${source.gateway}/32`].includes(row.ip))
 const cleanName = (value: string) => value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80)
 /** 没有主机名时只能靠 DNS 策略保存这一行 */
 const canAdd = (item: ClientPresenceInfo) => !!state.value && (policyEditable.value || !!cleanName(item.hostname))
 const pickable = computed(() => visibleFound.value.filter(canAdd).map(item => item.ip))
 const allPicked = computed(() => pickable.value.length > 0 && pickable.value.every(ip => picked.value.includes(ip)))
+/** 表头复选框只反映当前搜索结果的勾选情况 */
+const somePicked = computed(() => pickable.value.some(ip => picked.value.includes(ip)))
 const pickedFound = computed(() => found.value.filter(item => picked.value.includes(item.ip)))
 watch(found, items => {
   const present = new Set(items.map(item => item.ip))
@@ -519,6 +544,7 @@ async function load(keep = false) {
       return
     }
     for (const ip of Object.keys(failures)) delete failures[ip]
+    release()
     rows.value = []
     state.value = null
     discovery.value = null
@@ -603,7 +629,7 @@ async function addFound(items: ClientPresenceInfo[]) {
   if (disposed) return
   const done = added.filter(ip => saved(ip) && !failures[ip]).length
   const failed = added.length - done
-  if (failed) notify.error(`${failed} 台设备未能添加`, '失败的设备保留在「已添加」中，可在该行重试。')
+  if (failed) notify.error(`${failed} 台设备未能添加`, '保存失败的行标「未保存」并可在该行重试；被其他页面修改的设备已按最新数据显示。')
   if (!done) return
   if (mode) reminder.value += done
   notify.success(`已添加 ${done} 台设备`, mode ? 'DNS 策略需发布到 OxiDNS 后生效。' : undefined)

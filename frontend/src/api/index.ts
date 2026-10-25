@@ -496,11 +496,15 @@ export interface ClientPresenceInfo {
 }
 export interface DiscoveredClient extends ClientPresenceInfo { network: ClientDevice | null }
 export interface ClientDiscoverySource {
-  id: string; name: string; type: 'routeros' | 'ikuai'; ok: boolean; error: string; notes: string[]; policy_routing?: boolean
+  id: string; name: string; type: 'routeros' | 'ikuai'; ok: boolean; error: string; notes: string[]
+  /** 仅 RouterOS：已启用按来源策略路由；gateway 是不作为来源的代理网关地址 */
+  policy_routing?: boolean; gateway?: string
 }
+/** 已保存的行；discoverable 表示移除后会出现在「未添加」 */
+export type DiscoveredSavedClient = ClientDevice & ClientPresenceInfo & { discoverable: boolean }
 export interface ClientDiscovery {
   success: true; profile_id: string; state: 'ok' | 'partial' | 'failed' | 'unsupported'; message: string; checked_at: string
-  sources: ClientDiscoverySource[]; devices: (ClientDevice & ClientPresenceInfo)[]; discovered: DiscoveredClient[]
+  sources: ClientDiscoverySource[]; devices: DiscoveredSavedClient[]; discovered: DiscoveredClient[]
 }
 /** 当前配置空间的设备名称与 OxiDNS DNS 策略；从 Agent 进入时按设备绑定的空间读取 */
 export const clientDeviceApi = {
