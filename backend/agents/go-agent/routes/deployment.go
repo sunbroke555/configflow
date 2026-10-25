@@ -177,13 +177,30 @@ func durableWrite(name string, data []byte, mode os.FileMode) error {
 	}
 	return syncDirectory(filepath.Dir(name))
 }
-func syncDirectory(name string) error {
+
+// syncDirectory is a variable so tests can count directory flushes.
+var syncDirectory = func(name string) error {
 	f, e := os.Open(name)
 	if e != nil {
 		return e
 	}
 	defer f.Close()
 	return f.Sync()
+}
+
+// syncDirectories flushes each directory of a batch of renames once.
+func syncDirectories(dirs map[string]bool) error {
+	names := make([]string, 0, len(dirs))
+	for name := range dirs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if e := syncDirectory(name); e != nil {
+			return e
+		}
+	}
+	return nil
 }
 func saveDeployment(cfg *Config, s *DeploymentState, status string) error {
 	if cfg.Token != "" {
@@ -710,6 +727,15 @@ func durableCopy(src, dst string, mode os.FileMode) error {
 	return durableCopyOwned(src, dst, mode, -1, -1)
 }
 func durableCopyOwned(src, dst string, mode os.FileMode, uid, gid int) error {
+	if e := copyFileOwned(src, dst, mode, uid, gid); e != nil {
+		return e
+	}
+	return syncDirectory(filepath.Dir(dst))
+}
+
+// copyFileOwned is durableCopyOwned without the final directory flush: a
+// caller copying many files syncs each directory once before relying on them.
+func copyFileOwned(src, dst string, mode os.FileMode, uid, gid int) error {
 	if err := durableMkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
@@ -747,10 +773,7 @@ func durableCopyOwned(src, dst string, mode os.FileMode, uid, gid int) error {
 	if e != nil {
 		return e
 	}
-	if e = os.Rename(tmp, dst); e != nil {
-		return e
-	}
-	return syncDirectory(filepath.Dir(dst))
+	return os.Rename(tmp, dst)
 }
 func managedPaths(cfg *Config, s *DeploymentState) ([]string, error) {
 	set := map[string]bool{}
@@ -786,6 +809,12 @@ func backupDeployment(cfg *Config, s *DeploymentState) error {
 	if e != nil {
 		return e
 	}
+	stage := filepath.Join(deploymentPath(cfg, s.DeploymentID), "stage")
+	staged := map[string]DeploymentFile{}
+	for _, f := range s.Manifest.Files {
+		staged[f.Path] = f
+	}
+	dirs := map[string]bool{}
 	s.Backups = nil
 	for _, rel := range paths {
 		if e = rejectSymlinkPath(root, rel); e != nil {
@@ -803,30 +832,93 @@ func backupDeployment(cfg *Config, s *DeploymentState) error {
 			b.UID, b.GID = fileOwnership(info)
 			b.OwnershipKnown = b.UID >= 0 && b.GID >= 0
 			backup := filepath.Join(deploymentPath(cfg, s.DeploymentID), "backup", rel)
-			if e = deploymentBackupCopy(live, backup, info.Mode().Perm()); e != nil {
-				return e
+			var h string
+			linked := false
+			if f, ok := staged[rel]; ok && f.Size == info.Size() {
+				if h, _, e = hashFile(live); e != nil {
+					return e
+				}
+				// Unchanged content: the verified stage file already holds these
+				// bytes durably and is never written again, so link it instead
+				// of copying the live file. Any link failure falls back to a copy.
+				linked = h == f.SHA256 && linkBackup(filepath.Join(stage, rel), backup) == nil
 			}
-			h, _, e := hashFile(live)
-			if e != nil {
-				return e
+			if !linked {
+				if e = deploymentBackupCopy(live, backup, info.Mode().Perm()); e != nil {
+					return e
+				}
+				if h, _, e = hashFile(live); e != nil {
+					return e
+				}
 			}
 			bh, _, e := hashFile(backup)
 			if e != nil || h != bh {
 				return fmt.Errorf("backup verification failed: %s", rel)
 			}
 			b.SHA256 = h
+			dirs[filepath.Dir(backup)] = true
 		} else if !os.IsNotExist(e) {
 			return e
 		}
 		s.Backups = append(s.Backups, b)
 	}
+	// Every backup entry must be durable before the journal claims them.
+	if e = syncDirectories(dirs); e != nil {
+		return e
+	}
 	s.BackupComplete = true
 	return saveDeployment(cfg, s, "backing_up")
+}
+
+// linkBackup hard-links an immutable staged file as a backup.
+func linkBackup(src, dst string) error {
+	if e := durableMkdirAll(filepath.Dir(dst), 0755); e != nil {
+		return e
+	}
+	if e := os.Remove(dst); e != nil && !os.IsNotExist(e) {
+		return e
+	}
+	return os.Link(src, dst)
+}
+
+// liveFileCurrent reports whether a managed file already holds f's bytes with
+// the mode and owner a copy would give it, so replacing it would change only
+// its inode. Like a fresh copy it gets the current modification time (cores
+// schedule provider refreshes from it) and is flushed, since a core may have
+// written it without fsync. Any doubt answers false and copies.
+func liveFileCurrent(name string, f DeploymentFile, mode os.FileMode, uid, gid int) bool {
+	if uid < 0 || gid < 0 {
+		return false // A copy's owner would then come from this process.
+	}
+	info, e := os.Lstat(name)
+	if e != nil || info.Mode() != mode || info.Size() != f.Size {
+		return false
+	}
+	if owner, group := fileOwnership(info); owner != uid || group != gid {
+		return false
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Nlink != 1 {
+		return false // Replacing would detach other names for this file.
+	}
+	if h, n, e := hashFile(name); e != nil || h != f.SHA256 || n != f.Size {
+		return false
+	}
+	now := time.Now()
+	if os.Chtimes(name, now, now) != nil {
+		return false
+	}
+	file, e := os.Open(name)
+	if e != nil {
+		return false
+	}
+	defer file.Close()
+	return file.Sync() == nil
 }
 func replaceDeployment(cfg *Config, s *DeploymentState) error {
 	root := filepath.Dir(cfg.ConfigPath)
 	stage := filepath.Join(deploymentPath(cfg, s.DeploymentID), "stage")
 	fresh := map[string]bool{}
+	dirs := map[string]bool{}
 	for _, f := range s.Manifest.Files {
 		fresh[f.Path] = true
 		if e := rejectSymlinkPath(root, f.Path); e != nil {
@@ -861,9 +953,14 @@ func replaceDeployment(cfg *Config, s *DeploymentState) error {
 		if e := ensureManagedParent(root, f.Path, uid, gid); e != nil {
 			return e
 		}
-		if e := durableCopyOwned(filepath.Join(stage, f.Path), filepath.Join(root, f.Path), mode, uid, gid); e != nil {
+		live := filepath.Join(root, f.Path)
+		if liveFileCurrent(live, f, mode, uid, gid) {
+			continue
+		}
+		if e := deploymentReplaceCopy(filepath.Join(stage, f.Path), live, mode, uid, gid); e != nil {
 			return e
 		}
+		dirs[filepath.Dir(live)] = true
 	}
 	// A candidate can have been staged before another deployment introduced a
 	// Geo database. Treat prior managed Geo resources as persistent even when
@@ -890,10 +987,11 @@ func replaceDeployment(cfg *Config, s *DeploymentState) error {
 			if e := os.Remove(filepath.Join(root, b.Path)); e != nil && !os.IsNotExist(e) {
 				return e
 			}
-			if e := syncDirectory(filepath.Dir(filepath.Join(root, b.Path))); e != nil {
-				return e
-			}
+			dirs[filepath.Dir(filepath.Join(root, b.Path))] = true
 		}
+	}
+	if e := syncDirectories(dirs); e != nil {
+		return e
 	}
 	return verifyManifestFiles(root, s.Manifest)
 }
@@ -1398,7 +1496,8 @@ var deploymentFreeBytes = func(root string) (uint64, error) {
 	}
 	return uint64(stats.Bavail) * uint64(stats.Bsize), nil
 }
-var deploymentBackupCopy = durableCopy
+var deploymentBackupCopy = func(src, dst string, mode os.FileMode) error { return copyFileOwned(src, dst, mode, -1, -1) }
+var deploymentReplaceCopy = copyFileOwned
 
 // The first durable receiving record precedes archive reception and all live
 // writes. A crash between mkdir and that first rename can therefore only leave
