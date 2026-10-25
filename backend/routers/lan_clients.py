@@ -37,12 +37,14 @@ class Sighting:
     basis: str = ''
     last_seen: Optional[int] = None                    # seconds since the last DHCP contact
     router_id: str = ''
+    fixed_ip: Optional[dict] = None
 
     def public(self) -> dict:
         return {'mac': self.mac, 'hostname': self.hostname,
                 'sources': [item for item in SOURCE_ORDER if item in self.sources],
                 'presence': self.presence, 'basis': self.basis, 'last_seen': self.last_seen,
-                'router_id': self.router_id}
+                'router_id': self.router_id,
+                **({'fixed_ip': self.fixed_ip} if self.fixed_ip is not None else {})}
 
 
 @dataclass

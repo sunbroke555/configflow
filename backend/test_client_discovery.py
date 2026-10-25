@@ -530,6 +530,11 @@ def test_discovery_joins_both_router_types_with_saved_rows(oxidns_app, monkeypat
         {'id': 'ros1', 'name': '主路由', 'type': 'routeros', 'ok': True, 'error': '', 'notes': [], 'policy_routing': True,
          'gateway': ''},
         {'id': 'ik1', 'name': '爱快', 'type': 'ikuai', 'ok': True, 'error': '', 'notes': ['按 2 分钟内经过路由器的流量判断在线']}]
+    # Reservation reads missing in this legacy fake disable only the new control.
+    for row in body['devices'] + body['discovered']:
+        capability = row.pop('fixed_ip', None)
+        if capability:
+            assert capability['eligible'] is False and capability['reason']
     devices = {row['ip']: row for row in body['devices']}
     assert devices['192.168.0.133'] == {**ROWS[0], 'mac': 'E0:BA:AD:94:F2:48', 'hostname': 'C6c_EZVIZ',
                                         'sources': ['arp', 'lease'], 'presence': 'online', 'basis': 'lease',

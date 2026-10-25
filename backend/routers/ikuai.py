@@ -526,6 +526,8 @@ class IKuaiDriver(RouterDriver):
             self._login()
             data = self._post('/Action/call', payload)
         if data.get('code') != 0:
+            if data.get('code') in (1001, 1002, 1003, 1008):
+                raise _Rejected(_call_error(func_name, data))
             details = '；'.join(f'{item.get("field")}: {item.get("msg")}' for item in data.get('details') or []
                                if isinstance(item, dict))
             raise _Rejected(f'iKuai {func_name} {action} 失败：{data.get("message") or data.get("code")}'

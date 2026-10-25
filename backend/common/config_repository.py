@@ -194,7 +194,7 @@ def _default_profile_config() -> Dict[str, Any]:
 
 SHARED_FIELDS = ('subscriptions', 'nodes', 'subscription_aggregations', 'rule_library')
 RESOURCE_FIELDS = SHARED_FIELDS[:3]
-PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes')
+PROFILE_FIELDS = ('proxy_groups', 'rule_configs', 'mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes', 'client_fixed_ips')
 BUILTIN_POLICIES = {'DIRECT', 'REJECT'}
 RULE_SOURCE_FIELDS = ('name', 'url', 'behavior', 'content', 'source_type', 'format')
 # Per-rule OxiDNS DNS fields keyed by (or listing) rule_configs ids.
@@ -378,7 +378,7 @@ class ProfileRepository:
 
     def _empty_profile(self, profile_id, name, description=''):
         defaults = self._legacy_defaults()
-        result = {key: copy.deepcopy(defaults.get(key, {} if key in ('mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes') else []))
+        result = {key: copy.deepcopy(defaults.get(key, {} if key in ('mihomo', 'surge', 'mosdns', 'oxidns', 'loon', 'domain_discovery', 'routers', 'device_notes', 'client_fixed_ips') else []))
                   for key in PROFILE_FIELDS}
         result.update(id=profile_id, name=name, description=description, _revision=0,
                       created_at=_now(), updated_at=_now())
@@ -1071,6 +1071,7 @@ class ProfileRepository:
             if clone_from:
                 # Router credentials, sync settings and ownership belong to the source devices.
                 profile['routers'] = {'items': []}
+                profile['client_fixed_ips'] = {}
             profile.update(id=profile_id, name=name.strip(), description=str(metadata.get('description') or ''),
                            created_at=_now(), updated_at=_now(), _revision=0)
             document['profiles'][profile_id] = profile
@@ -2370,6 +2371,8 @@ class ProfileRepository:
         from backend.common.oxidns_settings import OxidnsSettingsError
         try:
             normalize_notes(profile.get('device_notes', {}))
+            from backend.common.client_fixed_ip import validate_bindings
+            validate_bindings(profile.get('client_fixed_ips', {}))
         except OxidnsSettingsError as exc:
             raise ProfileValidationError(str(exc)) from exc
         # 上游路由器同样是后加字段，缺省为空对象

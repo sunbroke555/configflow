@@ -32,7 +32,10 @@ def open_driver(router):
 def _read(router: dict, priority: frozenset, deadline: float) -> Reading:
     driver = open_driver(router)
     try:
-        return READERS[router['type']](driver, priority=priority, deadline=deadline)
+        reading = READERS[router['type']](driver, priority=priority, deadline=deadline)
+        from backend.common.client_fixed_ip import enrich
+        enrich(driver, reading, router.get('id') or '')
+        return reading
     finally:
         driver.close()
 
