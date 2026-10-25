@@ -24,7 +24,7 @@ import uuid
 
 from backend.agents.linux_gateway import _spec
 from backend.agents.oxidns_monitor import MonitorError
-from backend.agents.manager import _constant_time_ascii_equal, _upgrade_busy, _dns_follow_busy
+from backend.agents.manager import _constant_time_ascii_equal, _upgrade_busy, _dns_follow_busy, is_online, online_status
 
 logger = logging.getLogger(__name__)
 SERVICES = ('mihomo', 'oxidns')
@@ -416,7 +416,9 @@ def public(repository, manager, session):
     for service, agent_id in session['agent_ids'].items():
         agent = manager.get_agent_by_id(agent_id)
         if agent:
-            result['agents'][service] = {key: agent.get(key) for key in ('id', 'name', 'host', 'port', 'profile_id', 'service_type', 'status', 'enabled', 'version')}
+            result['agents'][service] = {key: agent.get(key) for key in ('id', 'name', 'host', 'port', 'profile_id', 'service_type', 'enabled', 'version')}
+            # Same rule as publishing (_pair) and the setup check that reads this.
+            result['agents'][service]['status'] = online_status(agent)
         try:
             _match_agent(session, agent, service)
             if session['phase'] == 'published':
@@ -474,12 +476,7 @@ def _pair(repository, manager, session):
     for service, agent_id in session['agent_ids'].items():
         agent = manager.get_agent_by_id(agent_id)
         _match_agent(session, agent, service)
-        try:
-            heartbeat = datetime.fromisoformat(agent.get('last_heartbeat', ''))
-            stale = (datetime.now(heartbeat.tzinfo) - heartbeat).total_seconds() > 120
-        except (ValueError, TypeError):
-            stale = True
-        if agent.get('enabled') is False or agent.get('status') != 'online' or stale:
+        if agent.get('enabled') is False or not is_online(agent):
             raise InstallationError('安装设备离线或已禁用，请检查连接后继续。', 409)
         deployment_id = session['deployments'].get(service, {}).get('deployment_id')
         if (deployment_id in agent.get('deployments', {})

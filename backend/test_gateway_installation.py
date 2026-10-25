@@ -951,3 +951,50 @@ def test_publication_completion_names_the_next_check(setup, monkeypatch, full_tu
     sessions.run_publication(manager.repository, manager, session['id'], pause=lambda _: None)
     result = sessions._read(manager.repository, session['id'])
     assert result['phase'] == 'published' and result['message'] == message
+
+
+def test_after_a_restart_wizard_publication_and_setup_check_agree_on_offline(setup, monkeypatch):
+    """Until the Agents' next heartbeat the wizard shows 离线, publishing and the setup check refuse alike."""
+    from backend.agents import linux_gateway, runtime_state
+    from backend.agents.manager import AgentManager
+    from backend.common import agent_manager as agent_manager_module
+    from backend.common.setup_completion import check_installation
+    from backend.common.setup_flow import SetupError
+    _, manager, _, _, saved = setup
+    saved = prepare_run(manager, saved)
+    saved.update(phase='published', deployments={s: {'deployment_id': 'job-' + s, 'status': 'succeeded'} for s in sessions.SERVICES})
+    sessions._write(manager.repository, saved)
+    old = (datetime.now() - timedelta(minutes=10)).isoformat()
+
+    def published(agents):
+        for agent in agents:
+            for service, agent_id in saved['agent_ids'].items():
+                if agent['id'] == agent_id:
+                    task = {'deployment_id': 'job-' + service, 'status': 'succeeded'}
+                    agent.update(last_heartbeat=old, deployments={task['deployment_id']: task}, latest_deployment=task)
+    manager._update_agents(published)
+    # A restart: the document keeps the registration-time status and an old heartbeat, memory is empty.
+    runtime_state.reset()
+    restarted = AgentManager(manager.repository)
+    monkeypatch.setattr(agent_manager_module, '_agent_manager', restarted)
+    monkeypatch.setattr(linux_gateway, 'call', lambda *a: {'managed': {}})
+    setup_session = {'profile_id': 'home', 'goal': 'gateway'}
+
+    public = sessions.get(manager.repository, restarted, saved['id'])
+    assert not public['config_changed'] and not public['target_changed']
+    assert {service: agent['status'] for service, agent in public['agents'].items()} == {'mihomo': 'offline', 'oxidns': 'offline'}
+    with pytest.raises(sessions.InstallationError, match='安装设备离线'):
+        sessions._pair(manager.repository, restarted, saved)
+    with pytest.raises(SetupError, match='安装设备离线'):
+        check_installation(manager.repository, setup_session)
+    # Other gates still read the registered Agent unchanged.
+    assert restarted.get_agent_by_id(saved['agent_ids']['mihomo'])['status'] == 'online'
+
+    for agent_id in saved['agent_ids'].values():
+        assert restarted.update_heartbeat(agent_id, {})
+    public = sessions.get(manager.repository, restarted, saved['id'])
+    assert {service: agent['status'] for service, agent in public['agents'].items()} == {'mihomo': 'online', 'oxidns': 'online'}
+    assert set(sessions._pair(manager.repository, restarted, saved)) == set(sessions.SERVICES)
+    # Past the online gate, on to the forwarding check.
+    with pytest.raises(SetupError, match='Linux 转发尚未启用'):
+        check_installation(manager.repository, setup_session)

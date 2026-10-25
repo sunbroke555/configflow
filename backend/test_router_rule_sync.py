@@ -11,6 +11,7 @@ from backend.routers import rule_sync, rule_sync_store as store
 from backend.routers.rule_sync_rules import classify, check_updates, load_sources, loader
 from backend.routers.plan import build_plan
 from backend.routers.release import execute
+from backend.routes.routers import _agent as REAL_AGENT
 from backend.test_ros_policy import MemoryROS, GATEWAY, ADDRESSES, MANGLE, ROUTES, NAT, TABLES
 
 OLD = 'IP-CIDR,1.1.1.0/24\nDOMAIN-SUFFIX,example.com'
@@ -433,3 +434,32 @@ def test_large_input_guard_and_duplicate_cache_names(environment, monkeypatch):
     contents, _ = load_sources(rule_sync.config_for('default'), repo.get_profile('default')['routers']['items'][0])
     assert contents == {'remote': OLD}
     assert not driver.writes
+
+
+def test_remote_sync_right_after_a_backend_restart_uses_the_registered_agents(environment, monkeypatch):
+    """No heartbeat in memory for 30-60s after a restart: the list says 离线, router syncs carry on."""
+    from datetime import datetime, timedelta
+    from backend.agents import runtime_state
+    from backend.common.agent_manager import get_agent_manager
+    from backend.routers.dhcp_dns import dns_agent_settings
+    repo, driver = environment
+    old = (datetime.now() - timedelta(minutes=10)).isoformat()
+    agents = [{'id': 'gw', 'name': 'gw', 'host': GATEWAY, 'port': 8080, 'service_type': 'mihomo', 'token': 't-gw',
+               'status': 'online', 'enabled': True, 'last_heartbeat': old, 'version': '1.8.40-go', 'profile_id': 'default'},
+              {'id': 'dns', 'name': 'dns', 'host': '192.168.0.53', 'port': 8081, 'service_type': 'oxidns', 'token': 't-dns',
+               'status': 'online', 'enabled': True, 'last_heartbeat': old, 'version': '1.8.40-go', 'profile_id': 'default'}]
+    repo.update_system_transaction(lambda system: system['agents'].extend(agents))
+    runtime_state.reset()
+    monkeypatch.setattr('backend.routes.routers._agent', REAL_AGENT)
+    cleanup = []
+    monkeypatch.setattr('backend.routes.routers._return_routing',
+                        lambda agent: cleanup.append(agent['id']) or {'status': 'ok', 'managed': {}})
+    assert {agent['status'] for agent in get_agent_manager().get_all_agents()} == {'offline'}
+
+    publish(environment)
+    result = rule_sync.sync('default', 'ros', lambda *_: NEW)
+    assert result['status'] == 'synced', result
+    assert (result['added'], result['removed']) == (1, 1)
+    assert cleanup and set(cleanup) == {'gw'}
+    settings = dns_agent_settings('dns', REAL_AGENT('dns'))
+    assert settings['dns_error'] == '' and settings['dns_server'] == '192.168.0.53'
