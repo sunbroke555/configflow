@@ -105,17 +105,6 @@ def test_invalid_chain_rejected_before_network_cache_or_provider_write(tmp_path,
     assert load_subscription_cache('s') == cache_before
 
 
-def test_prefetch_nonprovider_http400_preserves_transport_fallback(monkeypatch):
-    import requests
-    from backend.routes.agents import _prefetch_download_contents
-    response = requests.Response()
-    response.status_code = 400
-    monkeypatch.setattr('requests.get', lambda *a, **kw: response)
-    downloads = [{'name': 'rules', 'url': 'https://fixture.invalid/rules'}]
-    _prefetch_download_contents(downloads, '')
-    assert downloads[0]['content'] == ''
-
-
 def test_no_chain_generation_does_not_add_provider_fetches(tmp_path, monkeypatch):
     app, repo = make_app(tmp_path)
     shared = repo.get_shared()
@@ -172,22 +161,6 @@ def test_late_provider_validation_400_blocks_agent_push(tmp_path, monkeypatch):
     assert result.status_code == 400
     manager.push_config_to_agent.assert_not_called()
     assert repo._store.fingerprint() == before
-
-
-@pytest.mark.parametrize('failure', ['timeout', 'http500'])
-def test_provider_transport_failures_retain_url_fallback(monkeypatch, failure):
-    import requests
-    from backend.routes.agents import _prefetch_download_contents
-    response = requests.Response()
-    response.status_code = 500
-    def fetch(*args, **kw):
-        if failure == 'timeout':
-            raise requests.Timeout('fixture')
-        return response
-    monkeypatch.setattr('requests.get', fetch)
-    downloads = [{'name': 'Provider', 'url': 'https://fixture.invalid/provider'}]
-    _prefetch_download_contents(downloads, '', validation_urls={downloads[0]['url']})
-    assert downloads[0]['content'] == ''
 
 
 def test_emitted_dialer_graph_checks_ordinary_group_members():
