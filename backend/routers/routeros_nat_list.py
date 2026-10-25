@@ -832,7 +832,13 @@ def verify(check, state):
     lists = getattr(state, 'nat_lists', None)
     if lists is None:
         raise RouterError('回读校验失败：无法读取 NAT 免转换地址列表')
-    found = inspect_rule(rows, lists.get('mangle_refs') or (), lists.get('firewall_refs') or ())
+    # As strict as the preview: an unreadable table could hide a rule
+    # selecting the lists, which every member change would silently alter.
+    if lists.get('mangle_refs') is None:
+        raise RouterError('回读校验失败：无法读取 Mangle，不能确认 NAT 免转换地址列表未被其他规则引用')
+    if lists.get('firewall_refs') is None:
+        raise RouterError('回读校验失败：无法读取防火墙 filter 或 raw 规则，不能确认 NAT 免转换地址列表未被其他规则引用')
+    found = inspect_rule(rows, lists['mangle_refs'], lists['firewall_refs'])
     present = {str(row.get('.id')) for row in rows}
     if check['withdraw']:
         if found['rule'] is not None or any(candidate(row) for row in rows):

@@ -678,6 +678,50 @@ def test_readback_rejects_members_that_differ_from_the_plan():
         verify_nat(plan['checks'], driver.read_state())
 
 
+@pytest.mark.parametrize('path', [MANGLE, FILTER, RAW])
+def test_readback_fails_when_a_table_that_may_select_the_lists_is_unreadable(path):
+    """Found on RouterOS: a failed filter read after the migration let the read-back pass."""
+    from backend.routers.release import verify_nat
+    driver = device()
+    plan = publish(driver, [FAKE_IP, TARGET])
+    read = driver._list
+
+    def unreadable(target, *args, **kwargs):
+        if target == path:
+            raise RouterError(f'RouterOS GET {path} 无法读取')
+        return read(target, *args, **kwargs)
+    driver._list = unreadable
+    with pytest.raises(RouterError, match='回读校验失败：无法读取'):
+        verify_nat(plan['checks'], driver.read_state())
+
+
+def test_an_unreadable_filter_after_the_migration_rolls_it_back():
+    driver = migrating_device()
+    _, plan = preview(driver, TARGETS)
+    assert list_op(plan)['legacy']
+    before = configurations(driver)
+    read, removed = driver._list, []
+    send = driver._request
+
+    def request(method, path, values=None, **kwargs):
+        if path == NAT + '/remove':
+            removed.append(values)
+        return send(method, path, values, **kwargs)
+
+    def unreadable(target, *args, **kwargs):
+        # Once: the stage read-back fails, the rollback reads it again.
+        if target == FILTER and removed and not failed:
+            failed.append(target)
+            raise RouterError('RouterOS GET /ip/firewall/filter 无法读取')
+        return read(target, *args, **kwargs)
+    failed = []
+    driver._request, driver._list = request, unreadable
+    result = execute(plan, driver, None)
+    assert not result['ok'] and result['failed_stage'] == 'nat_bypass' and failed, result
+    assert not any(item['status'] == 'failed' for item in result['rollback']), result['rollback']
+    assert configurations(driver) == before
+
+
 def test_withdrawal_readback_needs_rule_and_members_gone():
     driver = device()
     publish(driver, [FAKE_IP])
