@@ -43,3 +43,12 @@ def fresh_agent_runtime_state():
     runtime_state.reset()
     yield
     runtime_state.reset()
+
+
+@pytest.fixture(autouse=True)
+def fresh_rule_content_caches():
+    # Parsed rule verdicts are cached in process memory; start each test cold.
+    from backend.utils.ruleset_content import clear_rule_content_caches
+    clear_rule_content_caches()
+    yield
+    clear_rule_content_caches()

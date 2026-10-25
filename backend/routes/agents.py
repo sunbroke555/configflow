@@ -8,7 +8,6 @@ import math
 import os
 import sqlite3
 import time
-from urllib.parse import urlsplit, urlunsplit
 from flask import request, jsonify, send_file
 from werkzeug.datastructures import MultiDict
 
@@ -35,9 +34,7 @@ from backend.common.agent_manager import get_agent_manager
 from backend.common.utils import str_to_bool
 from backend.utils.logger import get_logger
 from backend.agents.diagnostics import failure_text
-from backend.utils.url_utils import safe_url_for_log
 from backend.utils.strategy_references import StrategyReferenceError
-from backend.utils.rule_fetch import is_internal_rule_url, request_rule
 from backend.utils.domain_discovery_service import provider_revisions as discovery_provider_revisions
 from backend.utils.domain_probe import get_probe_store
 from backend.utils.region_check import get_region_store
@@ -1110,69 +1107,6 @@ def get_docker_agent_run():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-def _prefetch_download_contents(downloads, base_url, *, validation_urls=(), config_data=None):
-    """预获取所有下载项的文件内容，写入 item['content']
-
-    Args:
-        downloads: provider_downloads + ruleset_downloads 列表
-        base_url: 服务器基础 URL（server_domain 或前端传递的 base_url）
-    """
-    if not downloads:
-        return
-
-    import requests
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    if config_data is None:
-        from backend.common.config import get_system_config
-        config_data = get_system_config()
-    # Capture the callback origin before entering workers, which have no Flask
-    # request context. Only known API callbacks receive the loopback rewrite.
-    callback_settings = dict(config_data.get('system_config', {}))
-    if base_url:
-        callback_settings['server_domain'] = base_url
-    callback_config = {'system_config': callback_settings}
-    callback_base = callback_settings.get('server_domain', '')
-
-    def fetch_one(item):
-        url = item.get('url', '')
-        if not url:
-            return
-        try:
-            if is_internal_rule_url(url, callback_config):
-                parsed = urlsplit(url)
-                prefix = urlsplit(callback_base).path.rstrip('/')
-                fetch_url = urlunsplit((
-                    'http', '127.0.0.1:5001', parsed.path[len(prefix):], parsed.query, '',
-                ))
-                internal_config = {'system_config': {
-                    **callback_settings, 'server_domain': 'http://127.0.0.1:5001',
-                }}
-                # This recognized callback is direct even when environment
-                # proxies are set; request_rule also contains its redirects.
-                resp = request_rule(fetch_url, timeout=30, config_data=internal_config)
-            elif url in validation_urls:
-                # Legacy provider prefetch keeps its existing transport; the
-                # rule-only setting must not affect subscription providers.
-                resp = requests.get(url, timeout=30)
-            else:
-                resp = request_rule(url, timeout=30, config_data=config_data)
-            if resp.status_code == 400 and url in validation_urls:
-                raise StrategyReferenceError('Provider validation failed (HTTP 400)')
-            resp.raise_for_status()
-            item['content'] = resp.text
-            logger.info(f"预获取成功: {item.get('name') or safe_url_for_log(url)} ({len(resp.text)} 字符)")
-        except StrategyReferenceError:
-            raise
-        except Exception as e:
-            logger.warning(f"预获取失败: {item.get('name') or safe_url_for_log(url)}, Agent 将 fallback 到 URL 下载")
-            item['content'] = ''
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(fetch_one, item): item for item in downloads}
-        for future in as_completed(futures):
-            future.result()  # 触发异常日志（已在 fetch_one 内处理）
-
-
 def _profile_revision(profile_id):
     """推送时配置空间的修订号，仅供诊断。"""
     try:
@@ -1271,7 +1205,16 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
             if source and gateway_was_used(config_data, agent, source):
                 linux_gateway.require_gateway_off_kept(get_agent_manager(), agent)
         provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url, main_config=main)
-        ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
+        from backend.common.linux_gateway import gateway_settings
+        if gateway_settings(config_data)['enabled']:
+            # Same list get_mihomo_ruleset_downloads builds from a second
+            # generation; the LAN hosts and region probe options used here do
+            # not touch rule-providers.
+            ruleset_downloads = [{'name': name, 'url': provider['url'], 'local_path': provider['path']}
+                                 for name, provider in main.get('rule-providers', {}).items()
+                                 if provider.get('type') == 'http' and provider.get('url')]
+        else:
+            ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
         if provider_downloads:
             from functools import partial
             from backend.utils.sub_store_client import get_subscription_proxies_yaml

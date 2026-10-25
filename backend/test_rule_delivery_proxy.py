@@ -10,7 +10,7 @@ from flask import Flask
 from backend.common import config as config_module
 from backend.common.config_repository import ProfileRepository
 from backend.routes import register_blueprints
-from backend.routes import agents, generate
+from backend.routes import generate
 
 
 PROXY = 'http://proxy-user:proxy-password@proxy.test:8080'
@@ -37,82 +37,6 @@ def response(status=200, content='domain:example.test', location=None):
     if location is not None:
         result.headers['Location'] = location
     return result
-
-
-@pytest.mark.parametrize('url', [
-    'https://rules.test/list',
-    'http://127.0.0.1:8080/rules.txt',
-    'https://config.test.evil/api/rules/local/test',
-])
-def test_prefetch_remote_rules_use_proxy_without_loopback_rewrite(repository, monkeypatch, url):
-    observed = []
-
-    def fetch(actual_url, **kwargs):
-        observed.append((actual_url, kwargs))
-        return response()
-
-    monkeypatch.setattr(requests, 'get', fetch)
-    downloads = [{'name': 'Rules', 'url': url}]
-    agents._prefetch_download_contents(downloads, 'https://config.test')
-
-    assert downloads[0]['content'] == 'domain:example.test'
-    assert observed[0][0] == url
-    assert observed[0][1]['proxies'] == {'http': PROXY, 'https': PROXY}
-
-
-def test_prefetch_internal_callback_bypasses_proxy_and_mirror(repository, monkeypatch):
-    repository.update_system_transaction(lambda system: system['system_config'].update({
-        'github_proxy_domain': 'https://mirror.test',
-    }))
-    monkeypatch.setenv('HTTP_PROXY', 'http://environment-proxy.test:8080')
-    monkeypatch.setenv('HTTPS_PROXY', 'http://environment-proxy.test:8080')
-    observed = []
-
-    def fetch(actual_url, **kwargs):
-        observed.append((actual_url, kwargs))
-        return response()
-
-    monkeypatch.setattr(requests, 'get', fetch)
-    suffix = '/api/profiles/default/mosdns/rule-proxy?url=https%3A%2F%2Fraw.githubusercontent.com%2Frules&token=internal-secret'
-    downloads = [{'name': 'Rules', 'url': 'https://config.test/prefix' + suffix}]
-    agents._prefetch_download_contents(downloads, 'https://CONFIG.test:443/prefix')
-
-    assert downloads[0]['content'] == 'domain:example.test'
-    assert observed[0][0] == 'http://127.0.0.1:5001' + suffix
-    assert observed[0][1]['proxies'] == {'http': '', 'https': ''}
-    assert observed[0][1]['allow_redirects'] is False
-
-
-def test_prefetch_internal_callback_rejects_external_redirect(repository, monkeypatch, caplog):
-    observed = []
-
-    def fetch(actual_url, **kwargs):
-        observed.append(actual_url)
-        return response(302, location='https://external.test/api/rules?token=internal-secret')
-
-    monkeypatch.setattr(requests, 'get', fetch)
-    downloads = [{'name': 'Rules', 'url': 'https://config.test/api/mosdns/rule-proxy?token=internal-secret'}]
-    agents._prefetch_download_contents(downloads, 'https://config.test')
-
-    assert downloads[0]['content'] == ''
-    assert len(observed) == 1
-    assert 'internal-secret' not in caplog.text
-
-
-def test_prefetch_provider_transport_is_not_rule_proxy(repository, monkeypatch):
-    observed = []
-
-    def fetch(actual_url, **kwargs):
-        observed.append(kwargs)
-        return response(content='proxies: []')
-
-    monkeypatch.setattr(requests, 'get', fetch)
-    url = 'https://subscription.test/provider'
-    downloads = [{'name': 'Provider', 'url': url}]
-    agents._prefetch_download_contents(downloads, 'https://config.test', validation_urls={url})
-
-    assert downloads[0]['content'] == 'proxies: []'
-    assert 'proxies' not in observed[0]
 
 
 def make_generation_client(monkeypatch, urls):

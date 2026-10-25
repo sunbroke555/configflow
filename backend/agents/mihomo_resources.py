@@ -17,6 +17,7 @@ from backend.agents.deployment_bundle import (
     RuleDownloadError, _fetch_bytes, _pack,
 )
 from backend.agents.diagnostics import failure_text
+from backend.utils.ruleset_content import yaml_safe_load
 
 # Defaults in the installer-supported Mihomo v1.19.32 config/config.go.
 _DEFAULT_BASE = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/'
@@ -72,7 +73,7 @@ def required_geo_resources(document, files):
         if entry and provider.get('format', 'yaml') in ('text', 'yaml'):
             try:
                 text = entry[0].decode('utf-8-sig')
-                rules(yaml.safe_load(text) if provider.get('format', 'yaml') == 'yaml' else text.splitlines())
+                rules(yaml_safe_load(text) if provider.get('format', 'yaml') == 'yaml' else text.splitlines())
             except (UnicodeError, yaml.YAMLError):
                 pass  # Let the core report invalid provider content precisely.
     # parseDNS and parseSniffer load these even when DNS or sniffer is disabled.

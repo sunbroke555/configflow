@@ -1,14 +1,127 @@
 """Inspect editable providers and normalize safe Classical delivery syntax."""
 from bisect import bisect_left
+from collections import OrderedDict
+from copy import deepcopy
+import hashlib
 import ipaddress
 import json
 import re
 import struct
+import threading
 
 import yaml
 
 from backend.common.config_repository import ProfileValidationError
 from backend.utils.rule_syntax import RULE_TYPES, cidr_error, looks_like_ip, rule_value_error, split_rule_payload
+
+
+# libyaml parses several times faster, but on unusual YAML its marks and even
+# what it accepts differ from PyYAML (BOM offsets, tabs, tag syntax, a missing
+# final newline, indentless lists). Use it only for an indented block payload
+# list of plain or simply quoted entries, the usual shape of large rule files,
+# where differential tests show the same nodes, tokens and values. Anything
+# else, and any libyaml failure, goes through PyYAML for identical diagnostics.
+_LIBYAML = getattr(yaml, 'CSafeLoader', None)
+_YAML_COMMENT = '#[\x20-\x7e\xa0-\u2027\u202a-\ud7ff\ue000-\ufefe\uff00-\ufffd\U00010000-\U0010ffff]*'
+_YAML_SCALAR = ("(?:[A-Za-z0-9._+/(][A-Za-z0-9._+/,=:@~^$()|?*\\\\-]*(?<!:)"
+                '|"[ !#-\\[\\]-~]*"'
+                "|'[ -&(-~]*')")
+_YAML_SPACE = f'[ ]*(?:{_YAML_COMMENT})?\\r?\\n'
+_YAML_ITEM = f'-[ ]+{_YAML_SCALAR}(?:[ ]+{_YAML_COMMENT})?[ ]*\\r?\\n'
+_SIMPLE_PAYLOAD = re.compile(
+    f'(?:{_YAML_SPACE})*payload:(?:[ ]+{_YAML_COMMENT})?[ ]*\\r?\\n(?:{_YAML_SPACE})*'
+    f'(?:(?P<indent>[ ]+){_YAML_ITEM}(?:{_YAML_SPACE}|(?P=indent){_YAML_ITEM})*)?')
+
+
+def _libyaml(content):
+    return _LIBYAML is not None and isinstance(content, str) and _SIMPLE_PAYLOAD.fullmatch(content) is not None
+
+
+def yaml_compose(content, fast=None):
+    if _libyaml(content) if fast is None else fast:
+        try:
+            return yaml.compose(content, Loader=_LIBYAML)
+        except Exception:
+            pass
+    return yaml.compose(content)
+
+
+def yaml_scan(content, fast=None):
+    if _libyaml(content) if fast is None else fast:
+        try:
+            return iter(list(yaml.scan(content, Loader=_LIBYAML)))
+        except Exception:
+            pass
+    return yaml.scan(content)
+
+
+def yaml_safe_load(content, fast=None):
+    if _libyaml(content) if fast is None else fast:
+        try:
+            return yaml.load(content, Loader=_LIBYAML)
+        except Exception:
+            pass
+    return yaml.safe_load(content)
+
+
+class ResultCache:
+    """Thread-safe LRU for pure results keyed by content digests.
+
+    Every publication, and each Agent sharing a profile, re-reads the same rule
+    bytes; parsing them again yields nothing new. Bounded by entries and size.
+    """
+
+    instances = []
+
+    def __init__(self, max_entries, max_size=0):
+        ResultCache.instances.append(self)
+        self._entries = OrderedDict()
+        self._lock = threading.Lock()
+        self._max_entries = max_entries
+        self._max_size = max_size
+        self._size = 0
+
+    def get(self, key, default=None):
+        with self._lock:
+            if key not in self._entries:
+                return default
+            self._entries.move_to_end(key)
+            return self._entries[key][0]
+
+    def put(self, key, value, size=0):
+        if self._max_size and size > self._max_size:
+            return
+        with self._lock:
+            previous = self._entries.pop(key, None)
+            self._size -= previous[1] if previous else 0
+            self._entries[key] = (value, size)
+            self._size += size
+            while len(self._entries) > self._max_entries or (self._max_size and self._size > self._max_size):
+                self._size -= self._entries.popitem(last=False)[1][1]
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+            self._size = 0
+
+
+def content_digest(content):
+    """Digest identifying exactly these bytes or text, or None for other values."""
+    if isinstance(content, bytes):
+        return 'b' + hashlib.sha256(content).hexdigest()
+    if isinstance(content, str):
+        return 's' + hashlib.sha256(content.encode('utf-8', 'surrogatepass')).hexdigest()
+    return None
+
+
+# Process memory only: a code change restarts the process and empties them.
+_validated = ResultCache(1024)
+_normalized = ResultCache(256, 16 * 1024 * 1024)
+
+
+def clear_rule_content_caches():
+    for cache in ResultCache.instances:
+        cache.clear()
 
 
 def _valid_pattern(value):
@@ -113,14 +226,15 @@ def normalize_mihomo_yaml(content):
     leave aliases, anchors and multiline entries untouched with a warning.
     """
     try:
-        root = yaml.compose(content)
+        fast = _libyaml(content)
+        root = yaml_compose(content, fast)
         if not isinstance(root, yaml.MappingNode):
             raise ValueError('YAML 规则需要 payload 列表。')
         pairs = [(key, value) for key, value in root.value if key.value == 'payload']
         if len(pairs) != 1 or not isinstance(pairs[0][1], yaml.SequenceNode):
             raise ValueError('YAML 规则需要唯一的 payload 列表。')
         key, payload = pairs[0]
-        tokens = list(yaml.scan(content))
+        tokens = list(yaml_scan(content, fast))
         if any(isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken)) for token in tokens):
             raise ValueError('请先展开 YAML 锚点或别名；Mihomo 下发保留了原文。')
         if any(not isinstance(node, yaml.ScalarNode) or node.tag != 'tag:yaml.org,2002:str'
@@ -145,7 +259,7 @@ def normalize_mihomo_yaml(content):
             return comment_texts[bisect_left(comment_positions, start):bisect_left(comment_positions, end)]
 
         if root.flow_style:
-            document = yaml.safe_load(content)
+            document = yaml_safe_load(content, fast)
             # Loading duplicate keys would silently discard data when writing
             # the flow mapping back out, so refuse that ambiguous structure.
             def unique_mappings(node):
@@ -192,6 +306,18 @@ def normalize_mihomo_ruleset(content, behavior, rule_format):
     """Compose delivery-only syntax and YAML-layout compatibility."""
     if rule_format == 'mrs':
         return content, []
+    # A pure function of its arguments; each publication repeats it.
+    key = (content_digest(content), behavior, rule_format)
+    cached = _normalized.get(key) if key[0] else None
+    if cached is not None:
+        return cached[0], deepcopy(cached[1])
+    normalized, warnings = _normalize_mihomo_ruleset(content, behavior, rule_format)
+    if key[0]:
+        _normalized.put(key, (normalized, deepcopy(warnings)), len(normalized))
+    return normalized, warnings
+
+
+def _normalize_mihomo_ruleset(content, behavior, rule_format):
     # Mihomo splits on LF and treats a text BOM as part of the first domain.
     # Normalize transport framing only; the stored source remains untouched.
     line_break = (r'\r(?!\n)|[\v\f\x1c-\x1e\x85\u2028\u2029]'
@@ -229,7 +355,8 @@ def inspect_domain_content(content, behavior, rule_format=None):
     entries = []
     try:
         if rule_format == 'yaml' or yaml_payload:
-            root = yaml.compose(content)
+            fast = _libyaml(content)
+            root = yaml_compose(content, fast)
             if not isinstance(root, yaml.MappingNode):
                 raise ValueError('YAML 规则需要 payload 列表。')
             pairs = [(key, value) for key, value in root.value if key.value == 'payload']
@@ -240,7 +367,7 @@ def inspect_domain_content(content, behavior, rule_format=None):
                 raise ValueError('请将 payload 的 YAML 别名展开后再编辑。')
             # A tag may precede an anchor (e.g. !!str &host). Replacing that
             # scalar would remove the anchor and break aliases elsewhere.
-            anchors = [token.start_mark.index for token in yaml.scan(content)
+            anchors = [token.start_mark.index for token in yaml_scan(content, fast)
                        if isinstance(token, yaml.tokens.AnchorToken)] if '&' in content else []
             seen = set()
             for node in payload.value:
@@ -368,7 +495,8 @@ def _remote_text_entries(content, rule_format):
         return [(number, value.removeprefix('\ufeff') if number == 1 else value)
                 for number, value in enumerate(source_lines, 1)], errors
     try:
-        root = yaml.compose(content)
+        fast = _libyaml(content)
+        root = yaml_compose(content, fast)
         if not isinstance(root, yaml.MappingNode):
             problem(1, '声明为 YAML，但文件需要包含 payload 列表；请检查订阅链接或文件格式。')
             return [], errors
@@ -382,7 +510,7 @@ def _remote_text_entries(content, rule_format):
         if not isinstance(payload, yaml.SequenceNode):
             problem(payload.start_mark.line + 1, 'YAML payload 必须是列表。')
             return [], errors
-        for token in yaml.scan(content):
+        for token in yaml_scan(content, fast):
             if isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken)):
                 problem(token.start_mark.line + 1, '远端 YAML 规则不支持锚点或别名；请使用展开后的 payload 列表。')
         entries = []
@@ -471,6 +599,19 @@ def validate_remote_rule_content(content, rule, config_data=None, *, rule_format
     if metadata_error:
         raise RemoteRuleValidationError(rule, selected_format,
                                         [{'line': 0, 'before': '', 'message': metadata_error}])
+    # The verdict depends only on these bytes, behavior and format. Cache reads,
+    # each publication and every Agent sharing a profile check the same bytes;
+    # remember passes only, so failures are rebuilt with their own diagnostics.
+    digest = content_digest(content)
+    key = (digest, behavior, selected_format)
+    if digest and _validated.get(key):
+        return
+    _validate_remote_content(content, rule, behavior, selected_format)
+    if digest:
+        _validated.put(key, True)
+
+
+def _validate_remote_content(content, rule, behavior, selected_format):
     if selected_format == 'mrs':
         _validate_remote_mrs(content, rule)
         return

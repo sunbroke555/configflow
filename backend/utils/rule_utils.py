@@ -110,8 +110,30 @@ def write_validated_rule_cache(rule, content, config_data=None):
     if rule.get('source_type', 'url') == 'url':
         validate_remote_rule_content(content, rule, config_data)
     filename = rule_cache_filename(rule)
-    get_repository().write_shared_text(os.path.join('rules', filename), content)
+    relative = os.path.join('rules', filename)
+    repository = get_repository()
+    if not _touch_unchanged_cache(repository.shared_path(relative), content):
+        repository.write_shared_text(relative, content)
     return filename
+
+
+def _touch_unchanged_cache(path, content):
+    """Mark identical bytes as refreshed instead of rewriting them.
+
+    Scheduled refreshes and every router sync round mostly fetch unchanged
+    rules. Rewriting would leave the same file and the same .bak copy beside
+    it; only the modification time, shown as the cache refresh time, moves.
+    """
+    data = content.encode('utf-8') if isinstance(content, str) else content
+    try:
+        for name in (path, f'{path}.bak'):
+            with open(name, 'rb') as handle:
+                if handle.read() != data:
+                    return False
+        os.utime(path)
+    except OSError:
+        return False
+    return True
 
 
 def refresh_remote_rule(rule, config_data=None, *, timeout=10, fetch=None, allow_stale=False):

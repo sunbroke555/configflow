@@ -170,3 +170,30 @@ def test_summary_listing_skips_content_comparison_and_hides_private_baselines(ap
         assert {'id', 'name', 'status', 'service_type'} <= set(agent)
         assert not {'content_sync', 'has_update', 'token', 'applied_content'} & set(agent)
     assert executor.jobs == []
+
+
+@pytest.mark.parametrize('change', ['agent_field', 'remote_source'])
+def test_first_check_after_activation_sees_inputs_changed_since_preparation(api_env, content_env, change):
+    """Preparation and activation can be far apart: a ready release waits for
+    its confirmation. The first drift check after success compares with the
+    inputs current then, not with the preparation's result."""
+    client, manager, config, ids, executor, replies, fetches = api_env
+    _config, remote, _fetches, repository = content_env
+    agent_id = ids['mihomo']
+    replies['status'] = 'ready'
+    assert push(client, agent_id).status_code == 202
+    assert fetches  # The preparation rendered the remote subscription.
+    if change == 'agent_field':
+        manager.set_domain_discovery(agent_id, True)  # Adds the region probe entry.
+    else:
+        # The subscription's source interval ends with new upstream nodes.
+        from backend.utils.subscription_refresh import _download_cache_path
+        remote['provider'] = remote['provider'].replace('first.test', 'second.test')
+        cache_path = _download_cache_path(config['subscriptions'][0]['url'])
+        downloaded = repository.read_shared_json(cache_path)
+        downloaded['fetched_at'] = '2000-01-01T00:00:00+00:00'
+        repository.write_shared_json(cache_path, downloaded)
+    manager.record_deployment(agent_id, 'first', {'status': 'succeeded', 'config_version': 'agent-rewritten-hash'})
+    assert listing(client)['mihomo']['content_sync'] == {'status': 'checking'}
+    executor.run()
+    assert listing(client)['mihomo']['content_sync']['status'] == 'changed'

@@ -31,7 +31,9 @@ from backend.utils.rule_fetch import (
     RuleFetchError, github_download_candidates, is_github_url, is_internal_rule_url, request_rule,
 )
 from backend.utils.logger import get_logger
-from backend.utils.ruleset_content import normalize_mihomo_ruleset, RemoteRuleValidationError
+from backend.utils.ruleset_content import (
+    ResultCache, RemoteRuleValidationError, _has_yaml_payload, content_digest, normalize_mihomo_ruleset, yaml_safe_load,
+)
 from backend.utils.remote_rule_sources import resolve_remote_rule_source
 
 logger = get_logger(__name__)
@@ -315,6 +317,9 @@ def _empty_rule_text(url):
     return empty_rule_part(part).encode('utf-8') if part in RULE_PARTS else b''
 
 
+_converted = ResultCache(256, 16 * 1024 * 1024)
+
+
 def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
     """Convert text for the final MosDNS domain_set or ip_set consumer.
 
@@ -323,6 +328,19 @@ def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
     """
     if rule_type not in ('domain_set', 'ip_set'):
         raise DeploymentPreparationError('Unsupported MosDNS rule plugin type')
+    # A pure function of its arguments that every publication and Agent
+    # repeats for the same sources. Failures are not cached.
+    key = (content_digest(content), rule_type, mixed)
+    cached = _converted.get(key) if key[0] else None
+    if cached is not None:
+        return cached
+    converted = _convert_mosdns_rules(content, rule_type, mixed)
+    if key[0]:
+        _converted.put(key, converted, len(converted))
+    return converted
+
+
+def _convert_mosdns_rules(content, rule_type, mixed):
     try:
         text = content.decode('utf-8-sig')
     except UnicodeError:
@@ -330,11 +348,10 @@ def convert_mosdns_rules(content, rule_type='domain_set', *, mixed=False):
     if '\x00' in text:
         raise DeploymentPreparationError('MosDNS rule source is binary')
     lines = text.splitlines()
-    from backend.utils.ruleset_content import _has_yaml_payload
     yaml_payload = bool(_has_yaml_payload(text))
     if yaml_payload:
         try:
-            document = yaml.safe_load(text)
+            document = yaml_safe_load(text)
             lines = document['payload']
             if not isinstance(lines, list):
                 raise ValueError
