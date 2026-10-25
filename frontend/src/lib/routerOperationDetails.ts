@@ -51,7 +51,8 @@ function objectRow(value: unknown, creating: boolean): DetailRow {
 }
 export function hasOperationDetails(op: RouterPlanOperation) {
   return ['ros_policy_replace', 'dns_guard_replace', 'return_routing_apply', 'route_add', 'route_delete', 'route_comment',
-    'nat_add', 'nat_update', 'dhcp_dns_update', 'policy_route_add', 'policy_route_update', 'policy_route_delete'].includes(op.kind || '')
+    'nat_add', 'nat_update', 'nat_list_sync', 'dhcp_dns_update', 'policy_route_add', 'policy_route_update',
+    'policy_route_delete'].includes(op.kind || '')
 }
 export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
   const groups: DetailGroup[] = []
@@ -67,7 +68,11 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     }
     add('删除旧受管对象', [...list(op.owned)].reverse().map(value => objectRow(value, false)),
       bundle.length ? '新策略启用成功后，按以下顺序清理旧受管对象；其他程序和手工对象不在此列表中。' : '本次撤销策略，仅删除以下已核实归属的对象。')
-    add('迁移主表静态路由', list(op.migrations).map(value => objectRow(value, false)), '新策略启用后删除下列受管主表路由，改由来源策略匹配。')
+    const migrations = (path: string) => list(op.migrations).filter(value => record(value).path === path).map(value => objectRow(value, false))
+    add('迁移主表静态路由', migrations('/ip/route'), '新策略启用后删除下列受管主表路由，改由来源策略匹配。')
+    add('收窄旧 NAT 免转换', migrations('/ip/firewall/nat'), '删除下列规则，并为其余目的网段按原匹配条件重建。')
+    add('移出 NAT 免转换目的列表', migrations('/ip/firewall/address-list'),
+      '这些网段改由来源策略处理；仍需免转换的静态网段会在 NAT 阶段重新加入。')
   } else if (op.kind === 'dns_guard_replace') {
     const guardRow = (value: unknown, fields: unknown): DetailRow => {
       const item = record(value)
@@ -88,6 +93,25 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     add('现有匹配条件', safeFields(op.expected), '扩充时保留这些源地址、接口、协议等匹配限制。')
     add('新增目的网段', strings(op.add_dst).map(value => ({ label: '新增', value, action: '新增' })))
     groups.push(changedFields('备注', record(op.expected), op, ['comment']))
+  } else if (op.kind === 'nat_list_sync') {
+    const address = (value: unknown) => text(record(record(value).config).address)
+    const rule = record(op.rule)
+    if (op.withdraw) {
+      add('删除规则', [objectRow(op.rule, false)], '已没有需要免转换的代理网段：删除规则，再删除 ConfigFlow 写入的列表条目。')
+    } else {
+      const fields: Fields = { chain: 'srcnat', action: 'accept', 'src-address-list': op.src_list, 'dst-address-list': op.dst_list, comment: op.comment }
+      if (op.out_interface) fields['out-interface'] = op.out_interface
+      add('规则字段', [{ label: op.rule && !op.replace_rule ? `现有规则 · ${text(rule.id)}` : '新增规则', value: valuesOf(fields) }],
+        op.replace_rule ? `先新建限定出口的规则，再删除原规则 ${text(rule.id)}。` : '放在 NAT 表最前，回读确认排在所有源 NAT 转换规则之前。')
+    }
+    add('来源列表', [...strings(op.src_add).map(value => ({ label: '新增', value, action: '新增' as const })),
+      ...list(op.src_remove).map(value => ({ label: '移除', value: address(value), action: '移除' as const }))],
+      `${text(op.src_list)}：网关所在 /24 除网关自身外的客户端。`)
+    add('目的列表', [...strings(op.dst_add).map(value => ({ label: '新增', value, action: '新增' as const })),
+      ...list(op.dst_remove).map(value => ({ label: '移除', value: address(value), action: '移除' as const }))],
+      `${text(op.dst_list)}：一个代理网段一个条目。手工加入的条目保留不动。`)
+    add('迁移删除的旧规则', list(op.legacy).map(value => objectRow(value, false)),
+      `共 ${list(op.legacy).length} 条。新规则回读并证明覆盖后批量删除；失败时按原顺序恢复。`)
   } else if (op.kind === 'dhcp_dns_update') {
     add('作用网段', safeFields(op.scope))
     add('现有 DHCP 配置', safeFields(op.expected))
