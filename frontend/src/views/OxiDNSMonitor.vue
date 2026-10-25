@@ -96,7 +96,7 @@
             </EmptyState>
           </SectionCard>
           <OxiDNSQueryTable v-else-if="overview" :agent-id="agentId" :instance-id="overview.core.instance_id" :recorders="overview.recorders" :recorder="recorder" :filters="filters" :data="queries"
-            :collected-at="overview.collected_at" :clock-skew-ms="clockSkewMs"
+            :collected-at="overview.collected_at" :clock-skew-ms="clockSkewMs" :notes="clientNotes"
             :loading="queriesLoading" :error="queriesError" :page="page" :has-next="hasNext"
             @filter="applyFilters" @recorder="selectRecorder" @next="nextPage" @previous="previousPage" @retry="loadQueries(true)" @detail="selectedRecord = $event" />
         </TabsContent>
@@ -111,7 +111,7 @@
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Loader2, MonitorSmartphone, RefreshCw, Search, Server, Settings, TriangleAlert } from '@lucide/vue'
-import { agentApi, profileApi } from '@/api'
+import { agentApi, clientToolsApi, profileApi } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -197,10 +197,25 @@ async function switchDevice(id: string) {
   }
 }
 async function refreshAll() {
-  await Promise.allSettled([loadDevices(), refresh(true)])
+  await Promise.allSettled([loadDevices(), refresh(true), loadClientNotes()])
 }
 let disposed = false
-onUnmounted(() => { disposed = true })
+const clientNotes = ref<Record<string, string>>({})
+let notesRequest = 0
+async function loadClientNotes() {
+  const request = ++notesRequest
+  const id = agentId.value
+  if (!id) return
+  try {
+    const { data } = await clientToolsApi.notes(id)
+    if (!disposed && request === notesRequest && id === agentId.value) clientNotes.value = data?.success ? data.notes || {} : {}
+  } catch {
+    // Keep queries usable with raw IPs when optional client names are unavailable.
+    if (!disposed && request === notesRequest && id === agentId.value) clientNotes.value = {}
+  }
+}
+watch(agentId, () => { clientNotes.value = {}; void loadClientNotes() }, { immediate: true })
+onUnmounted(() => { disposed = true; notesRequest++ })
 async function confirmResetStatistics() {
   if (resettingStatistics.value || !overview.value?.statistics) return
   const requestAgent = agentId.value

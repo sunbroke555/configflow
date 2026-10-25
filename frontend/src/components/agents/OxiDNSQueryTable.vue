@@ -21,7 +21,7 @@
         </template>
       </Toolbar>
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div class="min-w-0 text-xs text-muted-foreground"><span>客户端 IP</span><OxiDNSClientSelect class="mt-1.5" :model-value="draft.client_ip" :agent-id="agentId" :recorder="recorder" :range="draft.range" :collected-at="collectedAt" @update:model-value="selectClient" /></div>
+        <div class="min-w-0 text-xs text-muted-foreground"><span>客户端 IP</span><OxiDNSClientSelect class="mt-1.5" :model-value="draft.client_ip" :agent-id="agentId" :recorder="recorder" :range="draft.range" :collected-at="collectedAt" :notes="notes" @update:model-value="selectClient" /></div>
         <label class="text-xs text-muted-foreground">查询类型<Input v-model="draft.qtype" class="mt-1.5 min-h-11 bg-card font-mono" placeholder="例如 A、AAAA" /></label>
         <label class="text-xs text-muted-foreground">响应码<Input v-model="draft.rcode" class="mt-1.5 min-h-11 bg-card font-mono" placeholder="例如 NOERROR" /></label>
         <label class="text-xs text-muted-foreground">匹配器标签<Input v-model="draft.matcher_tag" class="mt-1.5 min-h-11 bg-card font-mono" placeholder="按实际执行标签查询" /></label>
@@ -46,8 +46,9 @@
             </div>
             <span v-if="!record.questions_json?.length" class="text-muted-foreground">—</span>
           </TableCell>
-          <TableCell class="font-mono text-xs">
-            <span class="flex flex-wrap items-center gap-1.5">{{ record.client_ip || '—' }}<span v-if="isAgentProbe(record)" class="chip shrink-0 font-sans" :title="AGENT_PROBE_NOTE">Agent 检查<span class="sr-only">：{{ AGENT_PROBE_NOTE }}</span></span></span>
+          <TableCell class="max-w-60 whitespace-normal text-xs">
+            <span v-if="note(record.client_ip)" class="mb-0.5 block break-all">{{ note(record.client_ip) }}</span>
+            <span class="flex flex-wrap items-center gap-1.5"><span :class="['break-all font-mono', { 'text-muted-foreground': note(record.client_ip) }]">{{ record.client_ip || '—' }}</span><span v-if="isAgentProbe(record)" class="chip shrink-0 font-sans" :title="AGENT_PROBE_NOTE">Agent 检查<span class="sr-only">：{{ AGENT_PROBE_NOTE }}</span></span></span>
           </TableCell>
           <TableCell>
             <span :class="['chip', record.error ? 'chip-bad' : record.has_response ? 'chip-ok' : 'chip-warn']">
@@ -82,6 +83,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
+import { deviceNote } from '@/lib/device-notes'
 import { useOxiDNSQuerySources } from '@/composables/useOxiDNSQuerySources'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -91,12 +93,13 @@ import { AGENT_PROBE_NOTE, isAgentProbe, formatDNSType, formatDNSCode, formatMon
 const props = defineProps<{
   agentId: string; recorders: string[]; recorder: string; instanceId?: string | null; filters: OxiDNSQueryFilters; data: OxiDNSQueries | null
   loading: boolean; error: string; page: number; hasNext: boolean
-  collectedAt?: string; clockSkewMs?: number | null
+  collectedAt?: string; clockSkewMs?: number | null; notes?: Record<string, string>
 }>()
 const emit = defineEmits<{
   filter: [value: OxiDNSQueryFilters]; recorder: [value: string]; detail: [value: OxiDNSQuery]
   next: []; previous: []; retry: []
 }>()
+const note = (ip: unknown) => typeof ip === 'string' ? deviceNote(props.notes || {}, ip) : ''
 const draft = reactive({ ...props.filters })
 const { sourceOf, retry: retrySource } = useOxiDNSQuerySources(props)
 function selectFilter<K extends 'range' | 'status'>(key: K, value: OxiDNSQueryFilters[K]) {
