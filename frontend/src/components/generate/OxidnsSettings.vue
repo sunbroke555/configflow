@@ -44,7 +44,7 @@
               <p role="alert" class="text-sm text-destructive-accent">{{ projectionError }}</p>
               <Button variant="outline" @click="projectCommon">重新读取常用设置</Button>
             </div>
-            <OxidnsCommonSettings v-else-if="commonValues" :key="commonKey" :initial-feature="initialFeature" :values="commonValues" :capabilities="commonCapabilities" :custom-match-targets="customMatchTargets" :custom-match-target-tags="customMatchTargetTags" :rules="rules" :rule-sets="ruleSets" :disabled="saving" :navigation-disabled="editorLocked" @change="queueChanges" @error="editorErrors.common = $event" @navigate="nativeEditor?.showFull($event)" @full="nativeEditor?.showFull()" />
+            <OxidnsCommonSettings v-else-if="commonValues" :key="commonKey" :initial-feature="initialFeature" :values="commonValues" :capabilities="commonCapabilities" :entry-flow="entryFlow" :flow-busy="saving || applying || Boolean(pendingCount) || Boolean(applyError)" :custom-match-targets="customMatchTargets" :custom-match-target-tags="customMatchTargetTags" :rules="rules" :rule-sets="ruleSets" :disabled="saving" :navigation-disabled="editorLocked" @flow-pending="setFlowPending" @change="queueChanges" @error="editorErrors.common = $event" @navigate="nativeEditor?.showFull($event)" @full="nativeEditor?.showFull()" />
           </template>
         </OxidnsNativeEditor>
         <div ref="filesPanel" v-show="tab === 'files'" class="min-h-0 flex-1 overflow-y-auto">
@@ -96,6 +96,7 @@ import { formatOxidnsIssuePath, readOxidnsValidationResult, type OxidnsValidatio
 import OxidnsNativeEditor from './OxidnsNativeEditor.vue'
 import OxidnsCommonSettings from './OxidnsCommonSettings.vue'
 import type { OxidnsMatchTarget } from '@/lib/oxidnsMatchActions'
+import type { OxidnsEntryFlow } from '@/lib/oxidnsEntryFlows'
 import OxidnsFilesEditor from './OxidnsFilesEditor.vue'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
@@ -129,6 +130,9 @@ const commonValues = ref<Record<string, any> | null>(null)
 const commonCapabilities = ref<Record<string, any>>({})
 const customMatchTargets = ref<OxidnsMatchTarget[]>([])
 const customMatchTargetTags = ref<string[]>([])
+const entryFlow = ref<OxidnsEntryFlow>()
+const flowPending = ref(false)
+function setFlowPending(value: boolean) { flowPending.value = value; if (value) markEdited() }
 const commonKey = ref(0)
 const projecting = ref(false)
 const projectionError = ref('')
@@ -139,7 +143,7 @@ let nativeRequest = 0
 const applyError = ref('')
 const pending = ref<Record<string, unknown>>({})
 const pendingCount = computed(() => Object.keys(pending.value).length)
-const editorLocked = computed(() => saving.value || applying.value || Boolean(pendingCount.value || editorErrors.common || applyError.value))
+const editorLocked = computed(() => saving.value || applying.value || Boolean(pendingCount.value || editorErrors.common || applyError.value || flowPending.value))
 let loadVersion = 0
 // The stored object's ETag at load (or after the last save). The rules page
 // writes per-rule DNS straight into the stored settings, so a whole-object
@@ -159,7 +163,7 @@ const validationError = ref('')
 const validationSource = computed(() => settings.value ? JSON.stringify(settings.value) : '')
 const savedSource = ref('')
 const editedInput = ref(false)
-const dirty = computed(() => Boolean(settings.value) && (validationSource.value !== savedSource.value || applying.value || nativePending.value || Boolean(pendingCount.value) || (editedInput.value && Boolean(editorError.value))))
+const dirty = computed(() => Boolean(settings.value) && (validationSource.value !== savedSource.value || flowPending.value || applying.value || nativePending.value || Boolean(pendingCount.value) || (editedInput.value && Boolean(editorError.value))))
 function markEdited() { if (!loading.value) editedInput.value = true }
 function nativeSyncPending(value: boolean) { nativePending.value = value; if (value) markEdited() }
 async function reconcileNative(before: string, candidate: string, renames?: Record<string, string>, standardAdd?: string[]) {
@@ -186,6 +190,7 @@ function acceptNativeConfig(text: string) {
     commonCapabilities.value = reconciledNative.capabilities
     customMatchTargets.value = reconciledNative.custom_match_targets ?? []
     customMatchTargetTags.value = reconciledNative.custom_match_target_tags ?? []
+    entryFlow.value = reconciledNative.entry_flow
     projecting.value = false
     projectionError.value = ''
     settings.value = reconciledNative.settings
@@ -272,6 +277,8 @@ function resetCommon() {
   commonCapabilities.value = {}
   customMatchTargets.value = []
   customMatchTargetTags.value = []
+  entryFlow.value = undefined
+  flowPending.value = false
   projectionSource = undefined
   projectionError.value = ''
   projecting.value = false
@@ -293,6 +300,7 @@ async function projectCommon() {
     commonCapabilities.value = response.data.capabilities
     customMatchTargets.value = response.data.custom_match_targets ?? []
     customMatchTargetTags.value = response.data.custom_match_target_tags ?? []
+    entryFlow.value = response.data.entry_flow
     projectionSource = source
   } catch (error: any) {
     if (version === loadVersion && request === projectionVersion) projectionError.value = error.response?.data?.message || '读取常用设置失败，请重试或使用完整参数编辑。'
@@ -341,6 +349,7 @@ async function load() {
 }
 function queueChanges(changes: Record<string, unknown>) {
   if (!settings.value || saving.value) return
+  if ('entry_flow' in changes) otherEdits = true
   pending.value = { ...pending.value, ...Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, value === undefined ? null : value])) }
   applyError.value = ''
   saveError.value = ''
@@ -353,17 +362,18 @@ async function flushChanges() {
   pending.value = {}
   const version = loadVersion
   const profileId = props.profileId
-  const source = settings.value.native_config
+  const source = JSON.stringify(settings.value)
   applying.value = true
   try {
     const response = await oxidnsApi.applyCommonSettings(settings.value, changes, profileId)
     if (version !== loadVersion || profileId !== props.profileId) return
-    if (settings.value?.native_config !== source) throw new Error('配置已变化，请撤销未同步修改后重新编辑。')
+    if (JSON.stringify(settings.value) !== source) throw new Error('配置已变化，请撤销未同步修改后重新编辑。')
     projectionSource = JSON.stringify(response.data.settings)
     settings.value = response.data.settings
     commonChanges = { ...commonChanges, ...changes }
     customMatchTargets.value = response.data.custom_match_targets ?? []
     customMatchTargetTags.value = response.data.custom_match_target_tags ?? []
+    entryFlow.value = response.data.entry_flow
     if (!pendingCount.value) {
       commonValues.value = response.data.values
       commonCapabilities.value = response.data.capabilities
@@ -465,7 +475,7 @@ async function resolveChangedElsewhere() {
     notify.info('已载入最新配置并重新应用本页的常用设置修改，检查后再保存')
     return
   }
-  const accepted = await confirm('其他页面（例如策略规则的 DNS）已修改此草稿。本页改过 YAML、完整参数或附加文件，无法在最新配置上自动重做；重新加载会放弃本页未保存的修改。', {
+  const accepted = await confirm('其他页面（例如策略规则的 DNS）已修改此草稿。本页改过流程节点、YAML、完整参数或附加文件，无法在最新配置上自动重做；重新加载会放弃本页未保存的修改。', {
     title, confirmText: '重新加载（放弃本页未保存修改）'
   })
   if (accepted && version === loadVersion && props.open) await load()
