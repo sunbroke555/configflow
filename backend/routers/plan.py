@@ -396,20 +396,20 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         warnings.extend(ros_policy['warnings'])
         route_ops.extend(ros_policy['ops'])
         previous = (desired.get('ros_policy', {}).get('previous') or {}).get('spec') or {}
-        from backend.routers.ros_policy import subtract
+        from backend.routers.ros_policy import network_overlap, subtract
         withdrawn = subtract(_networks(previous.get('destinations', [])),
                              _networks([item['cidr'] for item in desired['ros_policy']['cidrs']]))
         replacements = withdrawn + _networks([
             item['config']['dst-address'] for item in (ros_policy.get('check') or {}).get('migrations', [])
             if item['path'] == '/ip/route'])
-        if any(net.overlaps(old) for net in _networks(skipped) for old in replacements):
+        replaced = network_overlap(replacements)  # thousands of CIDRs on both sides
+        if any(replaced(net) for net in _networks(skipped)):
             blockers.append('替代静态路由存在冲突，不能撤销仍在生效的来源策略，请先处理冲突')
         for op in ros_policy['ops']:
             op['static_checks'] = [{'cidr': item['cidr'], 'gateway': gateway}
                                    for item in desired['proxy_cidrs']
                                    if item['cidr'] not in skipped
-                                   and any(net.overlaps(old) for net in _networks([item['cidr']])
-                                           for old in replacements)]
+                                   and any(replaced(net) for net in _networks([item['cidr']]))]
     stale = stale_routes(state, gateway)
     if stale:
         warnings.append(stale_route_warning(stale, gateway))

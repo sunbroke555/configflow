@@ -5,7 +5,7 @@ import ipaddress
 from backend.routers.base import RouterError, RouterRollbackError
 from backend.routers.ros_policy import ADDRESSES, MANGLE, ROUTES, config_row, owned_rows, snapshot, check_references
 from backend.routers.ros_policy_write import (
-    _create, _create_addresses, _delete, _delete_addresses, _guard, _resource, restore, verify,
+    _create, _create_addresses, _delete, _delete_addresses, _guard_in, _resource, restore, verify,
 )
 
 
@@ -66,12 +66,21 @@ def apply_delta(driver, desired, plan, baseline, ensure_current=lambda **_: None
     Source lists, Mangle, tables, NAT, DHCP and Agent settings are never written.
     The caller persists the possibly remapped policy receipt even after rollback.
     """
-    from backend.routers.release import _verify
+    from backend.routers import ros_address_lists
     operations = restrict_plan(plan, baseline)
+    # Lists NAT or Mangle select on are downloaded once for all reads below;
+    # every address-list write drops what was read.
+    with ros_address_lists.reuse(driver):
+        return _apply_delta(driver, desired, plan, baseline, ensure_current, operations)
+
+
+def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
+    from backend.routers.release import _verify
     previous = copy.deepcopy(getattr(driver, 'ros_policy_manifest', None))
-    for item in baseline['static_resources']:
-        _guard(driver, item)
     live = snapshot(driver, reserve=False)
+    # The snapshot holds each enrolled route as a by-ID read would return it.
+    for item in baseline['static_resources']:
+        _guard_in(live, item)
     wanted = {item['cidr'] for item in desired['proxy_cidrs']}
     known_static = {item['id'] for item in baseline['static_resources']}
     if any(row.get('routing-table', 'main') == 'main' and row.get('dst-address') in wanted
@@ -124,7 +133,7 @@ def apply_delta(driver, desired, plan, baseline, ensure_current=lambda **_: None
                 continue
             ensure_current()
             if any(row.get('routing-table', 'main') == 'main'
-                   and row.get('dst-address') == values['dst-address'] for row in driver._list(ROUTES)):
+                   and row.get('dst-address') == values['dst-address'] for row in driver._scoped(ROUTES, values)):
                 raise RouterError('写入前发现同网段路由，保留手工对象，请重新预览')
             _create(driver, path, values, journal, ids)
             log.append({'status': 'ok', 'summary': f'新增 {values["dst-address"]}'})
@@ -153,8 +162,8 @@ def apply_delta(driver, desired, plan, baseline, ensure_current=lambda **_: None
         driver.ros_policy_manifest = next_manifest
         # Exclude unrelated cf-prefixed static routes deliberately preserved above.
         checks = {**plan['checks'], 'removed_routes': [item['id'] for item in removals if item['path'] == ROUTES]}
-        _verify('routes', checks, driver, None)
-        _verify('nat_bypass', checks, driver, None)
+        state = _verify('routes', checks, driver, None)
+        _verify('nat_bypass', checks, driver, None, state)  # nothing written in between
         ensure_current(force=True)
     except (RouterError, RuntimeError) as error:
         try:

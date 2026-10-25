@@ -256,7 +256,12 @@ def _overlaps(cidr, entries):
 
 def overlap_check(entries):
     """Parse/collapse once for large rule sets instead of comparing every pair."""
-    networks = list(ipaddress.collapse_addresses(ipaddress.IPv4Network(item['cidr']) for item in entries))
+    return network_overlap(ipaddress.IPv4Network(item['cidr']) for item in entries)
+
+
+def network_overlap(networks):
+    """overlaps(cidr): whether a CIDR overlaps any of ``networks``, by bisection."""
+    networks = list(ipaddress.collapse_addresses(networks))
     starts = [int(network.network_address) for network in networks]
     ends = [int(network.broadcast_address) for network in networks]
     def overlaps(cidr):
@@ -374,6 +379,7 @@ def build(desired, state):
     policy_overlap = overlap_check(request['cidrs'])
     policy_only = subtract([ipaddress.IPv4Network(entry['cidr']) for entry in request['cidrs']],
                            [ipaddress.IPv4Network(entry['cidr']) for entry in desired['proxy_cidrs']])
+    policy_only_overlap = network_overlap(policy_only)
     if any(static_overlap(entry['cidr']) for entry in request['cidrs']):
         result['warnings'].append('静态组与策略组包含重叠目的网段；命中策略时使用独立表，其他流量仍按主表路由转发')
 
@@ -392,7 +398,7 @@ def build(desired, state):
         # static plan establishes all still-selected coverage before this bundle.
         if (is_managed(row.get('comment')) and not str(row.get('comment', '')).startswith(PREFIX)
                 and row.get('gateway') == desired.get('proxy_gateway')
-                and any(ipaddress.IPv4Network(row['dst-address']).overlaps(net) for net in policy_only)
+                and policy_only_overlap(row['dst-address'])
                 and str(row.get('dynamic', 'false')).lower() not in ('true', 'yes', '1')):
             from backend.routers.routeros_routes import _entry
             if _entry(row, set())['editable']:

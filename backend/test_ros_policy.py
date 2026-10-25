@@ -18,6 +18,7 @@ from backend.routers.ros_policy import (
 )
 from backend.routers.ros_policy_write import verify
 from backend.routers.routeros import MissingResource, RouterOSDriver, UncertainWrite
+from backend.routeros_test_helpers import is_add_script, print_rows, run_add_script
 from backend.test_agent_upgrade_auth import authenticated_app  # noqa: F401
 
 GATEWAY = '192.168.0.3'
@@ -43,6 +44,7 @@ class MemoryROS(RouterOSDriver):
                            'out-interface': 'pppoe-out1', 'disabled': 'false'}]
         self.writes, self.counts, self.next_id = [], Counter(), 20
         self.fail = self.lost = None
+        self.rejected = []
         self.inactive = False
         self.settings = {'policy-rules': 'mangle,vrf-lookup,vrf-unreach,local,user,main'}
         self.resource = {'version': '7.24.5 (stable)'}
@@ -56,10 +58,14 @@ class MemoryROS(RouterOSDriver):
             return self._execute(values)
         if path == ADDRESSES + '/remove':
             return self._remove(values)
+        if path == ROUTES + '/remove':
+            return self._remove(values, ROUTES)
+        if path == ROUTES + '/print':
+            return copy.deepcopy(print_rows(self.rows[ROUTES], values))
         if query:
-            assert method == 'GET' and path == ADDRESSES
+            assert method == 'GET' and path in (ADDRESSES, ROUTES)
             key, _, value = query.partition('=')
-            return [copy.deepcopy(row) for row in self.rows[ADDRESSES] if row.get(key) == value]
+            return [copy.deepcopy(row) for row in self.rows[path] if _query_match(row, key, value)]
         if path == SETTINGS:
             assert method == 'GET'
             return copy.deepcopy(self.settings)
@@ -80,7 +86,11 @@ class MemoryROS(RouterOSDriver):
         self.writes.append((method, path, copy.deepcopy(values)))
         self.counts[method, collection] += 1
         point = (method, collection, self.counts[method, collection])
-        if point == self.fail:
+        if (point == self.fail or (method == 'PUT' and (collection, values) in self.rejected)
+                or (method == 'DELETE' and (collection, row_id) in self.rejected)):
+            # The router rejects that write however it is sent: a batch
+            # falling back to single writes meets the same failure.
+            self.rejected.append((collection, copy.deepcopy(values) if method == 'PUT' else row_id))
             raise RouterError('injected failure')
         if method == 'PUT':
             assert not row_id
@@ -132,6 +142,9 @@ class MemoryROS(RouterOSDriver):
             names = sorted({row['list'] for row in self.rows[ADDRESSES]
                             if pattern.search(row.get('list', '')) and row['list'] not in excluded})
             return {'ret': 'cf-names:\r\n' + '\r\n'.join(names)}
+        if is_add_script(values['script']):
+            return run_add_script(values['script'], lambda path, fields: self._request('PUT', path, fields)['.id'],
+                                  fatal=(UncertainWrite,))
         match = BATCH.fullmatch(values['script'])
         assert match and values.get('as-string') == '', values['script']
         fields = {key: {'yes': 'true', 'no': 'false'}[bare] if bare else _unescape(quoted)
@@ -157,17 +170,18 @@ class MemoryROS(RouterOSDriver):
                 raise UncertainWrite('response lost after commit')
         return {'ret': f'cf-done:{failed}:{first}'}
 
-    def _remove(self, values):
+    def _remove(self, values, path=ADDRESSES):
         """Comma-separated ids stop at the first missing one, like RouterOS."""
         for row_id in values['.id'].split(','):
-            self.writes.append(('DELETE', ADDRESSES + '/' + row_id, None))
-            self.counts['DELETE', ADDRESSES] += 1
-            if ('DELETE', ADDRESSES, self.counts['DELETE', ADDRESSES]) == self.fail:
+            self.writes.append(('DELETE', path + '/' + row_id, None))
+            self.counts['DELETE', path] += 1
+            if ('DELETE', path, self.counts['DELETE', path]) == self.fail or (path, row_id) in self.rejected:
+                self.rejected.append((path, row_id))
                 raise RouterError('injected failure')
-            current = next((row for row in self.rows[ADDRESSES] if row['.id'] == row_id), None)
+            current = next((row for row in self.rows[path] if row['.id'] == row_id), None)
             if current is None:
-                raise RouterError('RouterOS POST /ip/firewall/address-list/remove 返回 HTTP 404')
-            self.rows[ADDRESSES].remove(current)
+                raise RouterError(f'RouterOS POST {path}/remove 返回 HTTP 404')
+            self.rows[path].remove(current)
         return []
 
 
@@ -182,6 +196,16 @@ NAMES_PATTERN = re.compile(r'find where list~"((?:[^"\\]|\\.)*)"')
 NAMES_EXCLUDED = re.compile(r'list!="((?:[^"\\]|\\.)*)"')
 FIELD = re.compile(r'([\w-]+)=(?:"((?:[^"\\]|\\.)*)"|(yes|no))')
 ITEM = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def _query_match(row, key, value):
+    """RouterOS compares typed values: a destination matches as a network."""
+    if key == 'dst-address':
+        try:
+            return ipaddress.ip_network(row.get(key, ''), strict=False) == ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return False
+    return row.get(key) == value
 
 
 def _unescape(text):

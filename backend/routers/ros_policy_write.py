@@ -19,6 +19,7 @@ from backend.routers.ros_policy import (
     check_policy_order, check_references, check_route_egress, config_row, enabled, owned_rows, snapshot, stable,
 )
 from backend.routers.routeros import ROUTE_FIELDS, MissingResource, UncertainWrite, _comparable, _matches
+from backend.routers import routeros_batch
 from backend.routers.ros_values import comparable_values
 
 
@@ -34,6 +35,14 @@ def _read(driver, path, row_id):
 
 def _guard(driver, item):
     row = _read(driver, item['path'], item['id'])
+    if row is None or config_row(row) != config_row(item['config']):
+        raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + item['path'] + '/' + item['id'])
+    return row
+
+
+def _guard_in(live, item):
+    """_guard against a snapshot just read instead of one GET per object."""
+    row = next((row for row in live.get(item['path'], []) if row.get('.id') == item['id']), None)
     if row is None or config_row(row) != config_row(item['config']):
         raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + item['path'] + '/' + item['id'])
     return row
@@ -59,6 +68,12 @@ def _matches_values(path, row, values):
 
 def _create(driver, path, values, journal, ids, *, restoring=False):
     values = copy.deepcopy(values)
+    row_id, undo = _put(driver, path, values, journal, ids, restoring=restoring)
+    return _confirm(driver, path, values, row_id, undo, _read(driver, path, row_id))
+
+
+def _put(driver, path, values, journal, ids, *, restoring=False):
+    """Write one object and journal it; _confirm checks the read-back."""
     if path == NAT and not restoring:
         rows = driver._list(NAT)
         if rows:
@@ -78,7 +93,10 @@ def _create(driver, path, values, journal, ids, *, restoring=False):
     ids[path].add(row_id)
     undo = {'action': 'delete', **_resource(path, row)}
     journal.append(undo)
-    actual = _read(driver, path, row_id)
+    return row_id, undo
+
+
+def _confirm(driver, path, values, row_id, undo, actual):
     if actual is None or not _matches_values(path, actual, values):
         fields = [key for key, value in values.items()
                   if not _matches_values(path, actual or {}, {key: value})]
@@ -300,6 +318,101 @@ def _delete(driver, item, journal):
         raise RouterError('策略路由回读校验失败：对象仍然存在')
 
 
+def _delete_routes(driver, items, journal):
+    """_delete for many routes: one ID read guards them all, one remove deletes them."""
+    from backend.routers.routeros_batch import REMOVE_BATCH, _query
+    rows = {row.get('.id'): row for row in _query(driver, '.id', [item['id'] for item in items])}
+    failure, guarded = None, []
+    for item in items:
+        row = rows.get(item['id'])
+        try:
+            if row is None or config_row(row) != config_row(item['config']):
+                raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + item['path'] + '/' + item['id'])
+            guarded.append({'action': 'restore', **item, 'values': _writable(ROUTES, row)})
+        except RouterError as error:
+            failure = error  # routes before it are deleted first, as one by one
+            break
+    journal.extend(guarded)
+    removing = [step['id'] for step in guarded]
+    try:
+        for start in range(0, len(removing), REMOVE_BATCH):
+            driver._request('POST', ROUTES + '/remove', {'.id': ','.join(removing[start:start + REMOVE_BATCH])})
+    except RouterError:
+        # A route gone meanwhile stops the remove there; a single DELETE
+        # tolerates that, so delete what is left one by one, as before.
+        for row in _query(driver, '.id', removing):
+            driver._request('DELETE', ROUTES + '/' + quote(row['.id'], safe='*'))
+    if removing and _query(driver, '.id', removing):
+        raise RouterError('策略路由回读校验失败：对象仍然存在')
+    if failure is not None:
+        raise failure
+
+
+def _restore_routes(driver, steps, ids, remapped, failures):
+    """Recreate deleted routes: one ID read before and one after, a PUT for each."""
+    from backend.routers.routeros_batch import _query
+    try:
+        present = {row.get('.id'): row for row in _query(driver, '.id', [step['id'] for step in steps])}
+    except RouterError:
+        for step in steps:  # each step reads and reports on its own, as before
+            try:
+                _restore_step(driver, step, ids, remapped)
+            except RouterError as error:
+                failures.append(str(error))
+        return
+    created = []
+    for step in steps:
+        try:
+            current = present.get(step['id'])
+            if current is not None:
+                if config_row(current) != config_row(step['config']):
+                    raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + step['path'] + '/' + step['id'])
+                continue
+            values = copy.deepcopy(step['values'])
+            created.append((step, values, *_put(driver, ROUTES, values, [], ids, restoring=True)))
+        except RouterError as error:
+            failures.append(str(error))
+    if not created:
+        return
+    try:
+        rows = {row.get('.id'): row for row in _query(driver, '.id', [row_id for _, _, row_id, _ in created])}
+    except RouterError as error:
+        failures.extend(str(error) for _ in created)
+        return
+    for step, values, row_id, undo in created:
+        try:
+            remapped[(ROUTES, step['id'])] = _confirm(driver, ROUTES, values, row_id, undo, rows.get(row_id))['id']
+        except RouterError as error:
+            failures.append(str(error))
+
+
+def _restore_step(driver, step, ids, remapped, delete_safe=True):
+    current = _read(driver, step['path'], step['id'])
+    if step['action'] == 'delete':
+        if not delete_safe or current is None:
+            return
+        _guard(driver, step)
+        # Do not drop an entire table if another writer has started
+        # referencing it since the release. Leave it for inspection.
+        if step['path'] == TABLES:
+            check_references([step], snapshot(driver, reserve=False))
+        driver._request('DELETE', step['path'] + '/' + quote(step['id'], safe='*'))
+        if _read(driver, step['path'], step['id']) is not None:
+            raise RouterError('回滚删除后对象仍存在')
+        return
+    if current is not None:
+        _guard(driver, step)
+        return
+    values = copy.deepcopy(step['values'])
+    before = values.get('place-before')
+    if before:
+        values['place-before'] = remapped.get((step['path'], before), before)
+        if _read(driver, step['path'], values['place-before']) is None:
+            raise RouterError('原规则位置已改变，不能安全恢复顺序')
+    restored = _create(driver, step['path'], values, [], ids, restoring=True)
+    remapped[(step['path'], step['id'])] = restored['id']
+
+
 def _restore_delete_addresses(driver, steps):
     """Remove still-present members of a failed release; keep externally changed ones."""
     ros_address_lists.invalidate(driver)
@@ -381,41 +494,30 @@ def restore(driver, op):
             except RouterError as error:
                 failures.append(str(error))
             continue
-        for step in run:
+        run = list(run)
+        if action == 'operation':
+            # Keep the replacement protection if the old path could not be
+            # restored; report the incomplete rollback for inspection. Route
+            # undo records run in batches and stop at the first failure.
+            if not failures:
+                failures.extend(error for error in driver.restore_many([step['undo'] for step in run],
+                                                                       stop_on_failure=True)
+                                if error and error != routeros_batch.SKIPPED)
+            continue
+        index = 0
+        while index < len(run):
+            end = index
+            while (action == 'restore' and end < len(run) and run[end]['path'] == ROUTES
+                   and not run[end]['values'].get('place-before')):
+                end += 1
+            if end - index >= routeros_batch.BATCH_MIN:
+                _restore_routes(driver, run[index:end], ids, remapped, failures)
+                index = end
+                continue
+            step = run[index]
+            index += 1
             try:
-                if step['action'] == 'operation':
-                    # Keep the replacement protection if the old path could not
-                    # be restored; report the incomplete rollback for inspection.
-                    if failures:
-                        continue
-                    driver.apply(step['undo'])
-                    continue
-                current = _read(driver, step['path'], step['id'])
-                if step['action'] == 'delete':
-                    if not delete_safe:
-                        continue
-                    if current is None:
-                        continue
-                    _guard(driver, step)
-                    # Do not drop an entire table if another writer has started
-                    # referencing it since the release. Leave it for inspection.
-                    if step['path'] == TABLES:
-                        check_references([step], snapshot(driver, reserve=False))
-                    driver._request('DELETE', step['path'] + '/' + quote(step['id'], safe='*'))
-                    if _read(driver, step['path'], step['id']) is not None:
-                        raise RouterError('回滚删除后对象仍存在')
-                else:
-                    if current is not None:
-                        _guard(driver, step)
-                        continue
-                    values = copy.deepcopy(step['values'])
-                    before = values.get('place-before')
-                    if before:
-                        values['place-before'] = remapped.get((step['path'], before), before)
-                        if _read(driver, step['path'], values['place-before']) is None:
-                            raise RouterError('原规则位置已改变，不能安全恢复顺序')
-                    restored = _create(driver, step['path'], values, [], ids, restoring=True)
-                    remapped[(step['path'], step['id'])] = restored['id']
+                _restore_step(driver, step, ids, remapped, delete_safe)
             except RouterError as error:
                 failures.append(str(error))
     previous = copy.deepcopy(op.get('previous'))
@@ -474,13 +576,13 @@ def apply(driver, op):
     owned = owned_rows(op.get('previous'), live)
     check_references(owned, live)
     for migration in op['migrations']:
-        _guard(driver, migration)
+        _guard_in(live, migration)
     journal, resources = [], []
     ids = {path: {row['.id'] for row in rows} for path, rows in live.items()}
     try:
-        for preparation in op.get('prepare_static', []):
-            undo = driver.apply(preparation)
-            journal.append({'action': 'operation', 'undo': undo})
+        # Thousands of replacement routes are written in batches.
+        driver.apply_many(op.get('prepare_static', []),
+                          lambda _, undo: journal.append({'action': 'operation', 'undo': undo}))
         if op.get('static_checks'):
             from backend.routers.base import is_managed, StaticRouteIndex
             state = driver.read_state()
@@ -507,8 +609,17 @@ def apply(driver, op):
         for replacement in op.get('replacements', []):
             _create(driver, replacement['path'], replacement['values'], journal, ids)
         _verify_replacement_nat(driver, op, resources)
-        for migration in op['migrations']:
-            _delete(driver, migration, journal)
+        migrations, index = op['migrations'], 0
+        while index < len(migrations):
+            end = index
+            while end < len(migrations) and migrations[end]['path'] == ROUTES:
+                end += 1
+            if end - index >= routeros_batch.BATCH_MIN:
+                _delete_routes(driver, migrations[index:end], journal)
+                index = end
+                continue
+            _delete(driver, migrations[index], journal)
+            index += 1
         # Reverse creation order: withdraw the old entry rule first, then its
         # private chain/NAT/route/table and finally its list members.
         check_references(owned, snapshot(driver, reserve=False))
@@ -585,8 +696,9 @@ def verify(driver, check):
         if entry['path'] == ROUTES:
             row = _read(driver, ROUTES, entry['id'])
             check_route_egress(row, check['spec']['gateway'], interface)
+    present = {(path, row.get('.id')) for path, rows in live.items() for row in rows}
     for migration in check.get('migrations', []):
-        if any(row.get('.id') == migration['id'] for row in live[migration['path']]):
+        if (migration['path'], migration['id']) in present:
             raise RouterError('应迁移的受管路由或 NAT 免转换仍然存在')
     for replacement in check.get('replacements', []):
         expected = {key: value for key, value in replacement['values'].items() if key != 'place-before'}
