@@ -8,7 +8,8 @@
 <agent_id>_metrics.json 读入后改写为新格式并删除。
 
 文件位于数据目录（DATA_DIR）下的 metrics/，Docker 中即 /data 数据卷，重建容器后
-仍在。旧版本写在 LEGACY_DIRS 中，服务启动时由 adopt_legacy_dirs() 移入。
+仍在。旧版本写在 LEGACY_DIRS 中，旧目录仍在时（源码运行、容器内原地自动更新）
+服务启动时由 adopt_legacy_dirs() 移入；重建容器会先丢弃容器内的旧目录。
 """
 
 import errno
