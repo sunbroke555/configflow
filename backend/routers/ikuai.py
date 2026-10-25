@@ -6,6 +6,7 @@ Only 4.x is supported: responses are ``{"code": 0, "results": {...}}``.
 Write payloads mirror the web UI forms, including its string encoding.
 """
 import base64
+import copy
 import hashlib
 import ipaddress
 import json
@@ -19,10 +20,14 @@ from backend.routers.base import (
     POLICY_PRIORITY, DhcpDnsEntry, DhcpDnsState, NatBypassEntry, PolicyRouteEntry, RouteEntry, RouterDriver,
     RouterError, RouterInfo, RouterRollbackError, RouterState,
 )
+from backend.routers import ikuai_groups
 from backend.routers.dhcp_dns import checked_dns_target
 
 TIMEOUT = 10
 PAGE_SIZE = 1000
+# Writing a rule back on rollback costs iKuai about 1.6 ms per literal entry (4.0.314).
+RESTORE_SLOW_ENTRIES = 1000
+RESTORE_SECONDS_PER_ENTRY = 0.003
 # 4.0.314 answers an empty 200 to larger request bodies (measured: list-sized
 # bodies up to 98267 bytes were accepted, 98308 bytes and more were refused).
 MAX_REQUEST_BYTES = 96 * 1024
@@ -194,11 +199,12 @@ class IKuaiDriver(RouterDriver):
     def close(self):
         self.session.close()
 
-    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(self, path: str, payload: Dict[str, Any], timeout: Optional[float] = None) -> Dict[str, Any]:
         url = f'{self.endpoint}{path}'
+        timeout = timeout or TIMEOUT
         try:
             response = self.session.post(url, json=payload,
-                                         timeout=TIMEOUT, allow_redirects=False)
+                                         timeout=timeout, allow_redirects=False)
         except requests.exceptions.SSLError:
             raise RouterError('iKuai HTTPS 连接失败：请检查证书是否可信、是否过期，'
                               '以及管理地址和 HTTPS 端口是否正确。') from None
@@ -206,7 +212,7 @@ class IKuaiDriver(RouterDriver):
             raise RouterError(f'连接 iKuai 超时（{TIMEOUT} 秒）：请检查管理地址、端口，'
                               '以及 ConfigFlow 所在主机到路由器的网络是否畅通。') from None
         except requests.Timeout:
-            raise RouterError(f'等待 iKuai 响应超时（{TIMEOUT} 秒）：请检查网络连接和路由器负载，稍后重试。') from None
+            raise RouterError(f'等待 iKuai 响应超时（{timeout:g} 秒）：请检查网络连接和路由器负载，稍后重试。') from None
         except requests.ConnectionError:
             raise RouterError('无法连接 iKuai 管理服务：请检查地址、端口和域名解析，'
                               '确认管理服务已开启，并允许 ConfigFlow 所在主机访问。') from None
@@ -316,31 +322,36 @@ class IKuaiDriver(RouterDriver):
             state.routes.append(RouteEntry(
                 id=str(row.get('id', '')), dst=str(network), gateway=str(row.get('gateway') or ''),
                 enabled=row.get('enabled') == 'yes', comment=unquote(str(row.get('comment') or ''))))
-        groups = {str(row.get('group_id')): row for row in self._list_all('route_object', ids=False)}
-        for row in groups.values():
-            state.address_sets[str(row.get('group_name') or row.get('tagname'))] = [
-                str(item.get('ip')) for item in row.get('group_value') or [] if isinstance(item, dict) and item.get('ip')]
-        for row in self._list_all('nat_rule'):
+        # IDs are optional here: only an edit or delete of one of our groups needs one.
+        groups = [ikuai_groups.group_from_row(decode_value(row)) for row in self._list_all('route_object', ids=False)]
+        ikuai_groups.mark_owners(groups)
+        for group in groups:
+            state.address_sets[group['name']] = group['values']
+        by_gid = {group['gid']: group['values'] for group in groups if group['gid']}
+        nat_rows = self._list_all('nat_rule')
+        for row in nat_rows:
             if row.get('action') != 'filter':
                 continue
             state.nat_bypass.append(NatBypassEntry(
-                id=str(row.get('id', '')), dst=_addresses(row.get('dst_addr'), state.address_sets),
-                src=_addresses(row.get('src_addr'), state.address_sets),
+                id=str(row.get('id', '')), dst=_addresses(row.get('dst_addr'), state.address_sets, by_gid),
+                src=_addresses(row.get('src_addr'), state.address_sets, by_gid),
                 enabled=row.get('enabled') == 'yes', comment=unquote(str(row.get('comment') or ''))))
         # Static routes are destination-only: the gateway's own (DIRECT) traffic
         # to a proxy CIDR would bounce between router and gateway forever. Proxy
         # CIDRs are therefore routed by 端口分流 rules that exclude the gateway.
         state.policy_routes = []
-        for row in self._list_all('stream_ipport'):
-            row = decode_value(row)
+        policy_rows = [decode_value(row) for row in self._list_all('stream_ipport')]
+        for row in policy_rows:
             state.policy_routes.append(PolicyRouteEntry(
-                id=str(row.get('id', '')), dst=_addresses(row.get('dst_addr'), state.address_sets),
+                id=str(row.get('id', '')), dst=_addresses(row.get('dst_addr'), state.address_sets, by_gid),
                 gateway=str(row.get('nexthop') or '') if row.get('type') == POLICY_NEXTHOP else '',
                 enabled=row.get('enabled') == 'yes', comment=str(row.get('comment') or ''),
-                src=_addresses(row.get('src_addr'), state.address_sets),
+                src=_addresses(row.get('src_addr'), state.address_sets, by_gid),
                 src_invert=row.get('src_addr_inv') == 1, dst_invert=row.get('dst_addr_inv') == 1,
                 protocol=str(row.get('protocol') or ''),
                 priority=row.get('prio') if type(row.get('prio')) is int else None))
+        state.ikuai_groups = {'groups': groups, 'rules': ikuai_groups.read_rules(
+            groups, [decode_value(row) for row in nat_rows], policy_rows)}
         state.active_routes = self._active_routes()
         return state
 
@@ -516,15 +527,16 @@ class IKuaiDriver(RouterDriver):
 
     # --- writes -------------------------------------------------------------
 
-    def _write(self, func_name: str, action: str, param: Dict[str, Any]) -> Dict[str, Any]:
+    def _write(self, func_name: str, action: str, param: Dict[str, Any],
+               timeout: Optional[float] = None) -> Dict[str, Any]:
         self._login()
         payload = {'func_name': func_name, 'action': action, 'param': encode_value(param)}
-        data = self._post('/Action/call', payload)
+        data = self._post('/Action/call', payload, timeout)
         if data.get('code') == 1008:
             # As in call(): an expired or replaced session ran nothing, so one retry is safe.
             self._logged_in = False
             self._login()
-            data = self._post('/Action/call', payload)
+            data = self._post('/Action/call', payload, timeout)
         if data.get('code') != 0:
             if data.get('code') in (1001, 1002, 1003, 1008):
                 raise _Rejected(_call_error(func_name, data))
@@ -549,7 +561,9 @@ class IKuaiDriver(RouterDriver):
             yield
             return
         self._batch = {'rows': None, 'stale': set(), 'added': [], 'added_since_read': False,
-                       'rollback': rollback}
+                       'rollback': rollback,
+                       # IP groups: one snapshot, the names we changed since, what we wrote.
+                       'groups': None, 'groups_stale': set(), 'groups_written': {}}
         try:
             yield
             self._confirm_added(self._batch['added'])
@@ -644,7 +658,8 @@ class IKuaiDriver(RouterDriver):
         error.undo = {**undo, 'confirmed': bool(tagged)}
         raise error
 
-    def _add(self, func_name: str, payload: Dict[str, Any], match: Dict[str, Any]) -> Dict[str, Any]:
+    def _add(self, func_name: str, payload: Dict[str, Any], match: Dict[str, Any],
+             timeout: Optional[float] = None) -> Dict[str, Any]:
         """Add a named object; return the undo that finds it again by its unique name.
 
         iKuai rejects a duplicate name (code 3001, 4.0.314), so the name
@@ -656,7 +671,7 @@ class IKuaiDriver(RouterDriver):
             self._static_write('add', payload, undo)
             return undo
         try:
-            self._write(func_name, 'add', payload)
+            self._write(func_name, 'add', payload, timeout)
         except _Rejected:
             raise
         except RouterError as error:
@@ -697,10 +712,12 @@ class IKuaiDriver(RouterDriver):
         return payload
 
     @staticmethod
-    def _new_nat(src: List[str], dst: List[str], comment: str) -> Dict[str, Any]:
+    def _new_nat(src: List[str], dst: List[str], comment: str, refs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """A NAT bypass rule; with ``refs`` its destination is those IP groups, ``dst`` only names it."""
+        target = {'custom': dst, 'object': []} if refs is None else {'custom': [], 'object': refs}
         return IKuaiDriver._nat_payload({}, enabled='yes', tagname=_tagname('nat', ','.join(dst)), action='filter',
                                         protocol='any', iinterface='any', ointerface='any',
-                                        src_addr={'custom': src, 'object': []}, dst_addr={'custom': dst, 'object': []},
+                                        src_addr={'custom': src, 'object': []}, dst_addr=target,
                                         nat_addr='', nat_port='', src_addr_inv=0, dst_addr_inv=0, comment=comment)
 
     @staticmethod
@@ -713,40 +730,255 @@ class IKuaiDriver(RouterDriver):
         return payload
 
     @staticmethod
-    def _new_policy(gateway: str, dst: List[str], comment: str) -> Dict[str, Any]:
-        return IKuaiDriver._policy_payload({}, **IKuaiDriver._policy_target(gateway, dst, comment),
+    def _new_policy(gateway: str, dst: List[str], comment: str,
+                    refs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        return IKuaiDriver._policy_payload({}, **IKuaiDriver._policy_target(gateway, dst, comment, refs),
                                            tagname=_tagname('pr', comment), interface='', iface_band=0,
                                            time=POLICY_ALWAYS, mode=0, area_code='', dst_type=0)
 
     @staticmethod
-    def _policy_target(gateway: str, dst: List[str], comment: str) -> Dict[str, Any]:
-        """The fields that make a rule route ``dst`` to the gateway for every source but itself."""
+    def _policy_target(gateway: str, dst: List[str], comment: str,
+                       refs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """The fields that make a rule route ``dst`` to the gateway for every source but itself.
+
+        With ``refs`` the destination is those IP groups and nothing is listed literally.
+        """
+        target = {'custom': list(dst), 'object': []} if refs is None else {'custom': [], 'object': list(refs)}
         return {'enabled': 'yes', 'type': POLICY_NEXTHOP, 'nexthop': gateway, 'protocol': 'any', 'prio': POLICY_PRIORITY,
                 'src_addr': {'custom': [gateway], 'object': []}, 'src_addr_inv': 1,
-                'dst_addr': {'custom': list(dst), 'object': []}, 'dst_addr_inv': 0, 'comment': comment}
+                'dst_addr': target, 'dst_addr_inv': 0, 'comment': comment}
 
-    def _add_policy(self, payload: Dict[str, Any]) -> str:
-        undo = self._add('stream_ipport', payload, {'comment': payload['comment']})
+    def _add_policy(self, payload: Dict[str, Any], timeout: Optional[float] = None) -> str:
+        undo = self._add('stream_ipport', payload, {'comment': payload['comment']}, timeout)
         return self._new_id('stream_ipport', undo)
+
+    def _edit(self, func_name: str, payload: Dict[str, Any], undo: Dict[str, Any],
+              timeout: Optional[float] = None) -> None:
+        """Edit a whole rule; a lost reply carries the idempotent undo (the full old row)."""
+        try:
+            self._write(func_name, 'edit', payload, timeout)
+        except _Rejected:
+            raise
+        except RouterError as error:
+            error.undo = undo
+            raise
+
+    def _target_refs(self, op: Dict[str, Any], field: Any) -> Optional[List[Dict[str, Any]]]:
+        """The destination references an op writes: the user's groups it keeps, then ours."""
+        if 'groups' not in op:
+            return None
+        refs = self._cf_refs(op['groups'])
+        if op.get('keep_foreign'):
+            refs = ikuai_groups.foreign_refs(self._group_rows(), _address_field(field)) + refs
+        return refs
 
     def _apply_policy(self, op: Dict[str, Any]) -> Dict[str, Any]:
         kind = op['kind']
         if kind == 'policy_route_add':
-            rule_id = self._add_policy(self._new_policy(op['gateway'], op['dst'], op['comment']))
+            refs = self._target_refs(op, None)
+            rule_id = self._add_policy(self._new_policy(op['gateway'], op['dst'], op['comment'], refs))
             return {'kind': 'policy_route_delete', 'id': rule_id}
         if kind == 'policy_route_readd':
-            payload = self._policy_payload(op['record'])
+            payload = self._policy_payload(self._rebind(op['record']))
             payload.pop('id', None)
-            return {'kind': 'policy_route_delete', 'id': self._add_policy(payload)}
+            return {'kind': 'policy_route_delete', 'id': self._add_policy(payload, _restore_timeout(payload))}
         if kind == 'policy_route_delete':
             row = self._row('stream_ipport', op['id'])
             self._write('stream_ipport', 'del', {'id': row['id']})
             return {'kind': 'policy_route_readd', 'record': row}
         row = self._row('stream_ipport', op['id'] if kind == 'policy_route_update' else op['record']['id'])
-        payload = (self._policy_payload(row, **self._policy_target(op['gateway'], op['dst'], op['comment']))
-                   if kind == 'policy_route_update' else self._policy_payload(op['record']))
-        self._write('stream_ipport', 'edit', payload)
-        return {'kind': 'policy_route_restore', 'record': row}
+        timeout = None
+        if kind == 'policy_route_update':
+            refs = self._target_refs(op, row.get('dst_addr'))
+            payload = self._policy_payload(row, **self._policy_target(op['gateway'], op['dst'], op['comment'], refs))
+        else:
+            payload = self._policy_payload(self._rebind(op['record']))
+            timeout = _restore_timeout(payload)
+        undo = {'kind': 'policy_route_restore', 'record': row}
+        self._edit('stream_ipport', payload, undo, timeout)
+        return undo
+
+    # --- IP groups (route_object) -------------------------------------------------
+
+    def _group_rows(self, names=(), fresh: bool = False) -> List[Dict[str, Any]]:
+        """Every IP group. In a batch one complete read serves until a group it names changes."""
+        batch = self._batch
+        if (batch is not None and not fresh and batch['groups'] is not None
+                and not set(names) & batch['groups_stale']):
+            return batch['groups']
+        groups = [ikuai_groups.group_from_row(decode_value(row))
+                  for row in self._list_all('route_object', ids=False)]
+        ikuai_groups.mark_owners(groups)
+        if batch is not None:
+            batch['groups'], batch['groups_stale'] = groups, set()
+        return groups
+
+    def _group_changed(self, name: str) -> None:
+        if self._batch is not None:
+            self._batch['groups_stale'].add(name)
+
+    def _named_groups(self, name: str, fresh: bool = False) -> List[Dict[str, Any]]:
+        return [group for group in self._group_rows([name], fresh) if group['name'] == name]
+
+    @staticmethod
+    def _group_role(op: Dict[str, Any]) -> str:
+        role = op.get('role')
+        if role not in ikuai_groups.ROLES or not ikuai_groups.owned_role(op.get('name'), ikuai_groups.ROLES[role]):
+            raise RouterError('iKuai IP 分组操作无效，请重新预览')
+        return role
+
+    def _owned_group(self, op: Dict[str, Any], fresh: bool = False) -> Dict[str, Any]:
+        role = self._group_role(op)
+        found = self._named_groups(op['name'], fresh)
+        if len(found) != 1 or found[0]['role'] != role:
+            raise RouterError(f'iKuai IP 分组「{op["name"]}」不存在或不属于 ConfigFlow，请重新预览')
+        if found[0]['id'] is None:
+            raise RouterError(f'iKuai IP 分组「{op["name"]}」缺少有效 ID，无法安全编辑')
+        return found[0]
+
+    def _group_users(self, group: Dict[str, Any]) -> List[str]:
+        """Every NAT and 端口分流 rule that references the group, read now."""
+        users = []
+        for func, label in (('nat_rule', 'NAT 规则'), ('stream_ipport', '端口分流')):
+            for row in map(decode_value, self._list_all(func)):
+                for field in ('src_addr', 'dst_addr'):
+                    for ref in _address_field(row.get(field))['object']:
+                        if isinstance(ref, dict) and ikuai_groups.resolve([group], ref) is group:
+                            users.append(f'{label}「{row.get("comment") or row.get("id")}」')
+        return list(dict.fromkeys(users))
+
+    def _group_write(self, action: str, name: str, param: Dict[str, Any], undo: Optional[Dict[str, Any]]) -> None:
+        try:
+            self._write('route_object', action, param)
+        except _Rejected:
+            raise
+        except RouterError as error:
+            if undo is not None:
+                # The reply was lost, not refused: the change may have been made.
+                error.undo = undo
+            raise
+        finally:
+            self._group_changed(name)
+
+    def _cf_refs(self, names: List[str]) -> List[Dict[str, Any]]:
+        """References to our groups by their current gid, proving each one we wrote holds what we wrote."""
+        groups = self._group_rows(names)
+        written = self._batch['groups_written'] if self._batch is not None else {}
+        refs, missing = [], []
+        for name in names:
+            found = [group for group in groups if group['name'] == name]
+            parsed = ikuai_groups.name_role(name)
+            if (len(found) != 1 or not parsed or found[0]['role'] != parsed[0] or not found[0]['gid']
+                    or (name in written and ikuai_groups.digest(found[0]['values']) != written[name]['expected'])):
+                missing.append(name)
+                if name in written and not found:
+                    # A complete read without the (unique) name: the add never happened.
+                    written[name]['confirmed'] = False
+                continue
+            refs.append({'type': 0, 'gid': found[0]['gid'], 'gp_name': name})
+        if missing:
+            raise RouterError(f'iKuai IP 分组 {"、".join(missing)} 已提交但读不回预期内容，无法引用')
+        return refs
+
+    def _rebind(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """A saved rule with references to our groups pointed at their current gid.
+
+        A rollback may delete a group and create it again under a new gid; the
+        user's own references are written back exactly as they were.
+        """
+        record = copy.deepcopy(record)
+        names = [ref.get('gp_name') for field in ('src_addr', 'dst_addr')
+                 for ref in _address_field(record.get(field))['object']
+                 if isinstance(ref, dict) and ikuai_groups.name_role(ref.get('gp_name'))]
+        if not names:
+            return record
+        groups = self._group_rows(names)
+        for field in ('src_addr', 'dst_addr'):
+            value = record.get(field)
+            for ref in (value.get('object') if isinstance(value, dict) and isinstance(value.get('object'), list) else []):
+                if not isinstance(ref, dict) or not ikuai_groups.name_role(ref.get('gp_name')):
+                    continue
+                if ikuai_groups.resolve(groups, ref) is not None:
+                    continue
+                found = [group for group in groups if group['name'] == ref['gp_name'] and group['role']]
+                if len(found) != 1:
+                    raise RouterError(f'iKuai IP 分组 {ref["gp_name"]} 不存在，无法恢复规则引用')
+                ref['gid'] = found[0]['gid']
+        return record
+
+    def _apply_group(self, op: Dict[str, Any]) -> Dict[str, Any]:
+        kind = op['kind']
+        name = op.get('name')
+        if kind == 'ikuai_group_add':
+            role = self._group_role(op)
+            if self._named_groups(name):
+                raise RouterError(f'iKuai IP 分组「{name}」已存在，请重新预览')
+            undo = {'kind': 'ikuai_group_undo', 'name': name, 'role': role,
+                    'expected': ikuai_groups.digest(op['values']), 'confirmed': True}
+            self._group_write('add', name, ikuai_groups.payload(name, role, op['values']), {**undo, 'confirmed': False})
+            if self._batch is not None:
+                self._batch['groups_written'][name] = undo
+            return undo
+        if kind == 'ikuai_group_update':
+            group = self._owned_group(op)
+            if ikuai_groups.digest(group['values']) != op['expected']:
+                raise RouterError(f'iKuai IP 分组「{name}」在预览后发生变化，请重新预览')
+            undo = {'kind': 'ikuai_group_restore', 'name': name, 'role': group['role'], 'values': group['values'],
+                    'previous': op['expected'], 'expected': ikuai_groups.digest(op['values'])}
+            self._group_write('edit', name, ikuai_groups.payload(name, group['role'], op['values'], group['id']), undo)
+            if self._batch is not None:
+                self._batch['groups_written'][name] = {'expected': undo['expected']}
+            return undo
+        if kind == 'ikuai_group_delete':
+            group = self._owned_group(op, fresh=True)
+            if ikuai_groups.digest(group['values']) != op['expected']:
+                raise RouterError(f'iKuai IP 分组「{name}」在预览后发生变化，请重新预览')
+            users = self._group_users(group)
+            if users:
+                raise RouterError(f'iKuai IP 分组「{name}」仍被{"、".join(users)}引用，未删除')
+            undo = {'kind': 'ikuai_group_readd', 'name': name, 'role': group['role'], 'values': group['values']}
+            self._group_write('del', name, {'id': group['id']}, undo)
+            return undo
+        if kind == 'ikuai_group_undo':
+            role = self._group_role(op)
+            found = self._named_groups(name, fresh=True)
+            if not found:
+                if op['confirmed']:
+                    raise RouterError(f'iKuai 中找不到本次新增的 IP 分组「{name}」，可能已被手动修改或删除，请检查')
+                return {}
+            group = found[0]
+            if (len(found) != 1 or group['role'] != role
+                    or ikuai_groups.digest(group['values']) != op['expected']):
+                raise RouterError(f'iKuai IP 分组「{name}」已被修改，未自动删除，请检查')
+            if group['id'] is None:
+                raise RouterError(f'iKuai IP 分组「{name}」缺少有效 ID，未自动删除，请检查')
+            users = self._group_users(group)
+            if users:
+                raise RouterError(f'iKuai IP 分组「{name}」仍被{"、".join(users)}引用，未自动删除')
+            self._group_write('del', name, {'id': group['id']}, None)
+            return {}
+        if kind == 'ikuai_group_restore':
+            group = self._owned_group(op, fresh=True)
+            current = ikuai_groups.digest(group['values'])
+            if current == op['previous']:
+                return {}
+            if current != op['expected']:
+                raise RouterError(f'iKuai IP 分组「{name}」已被修改，保留现状，请检查')
+            self._group_write('edit', name, ikuai_groups.payload(name, group['role'], op['values'], group['id']), None)
+            return {}
+        if kind == 'ikuai_group_readd':
+            role = self._group_role(op)
+            found = self._named_groups(name, fresh=True)
+            if found:
+                if (len(found) == 1 and found[0]['role'] == role
+                        and ikuai_groups.digest(found[0]['values']) == ikuai_groups.digest(op['values'])):
+                    return {}
+                raise RouterError(f'iKuai IP 分组「{name}」已被其他配置占用，无法恢复，请检查')
+            undo = {'kind': 'ikuai_group_undo', 'name': name, 'role': role,
+                    'expected': ikuai_groups.digest(op['values']), 'confirmed': True}
+            self._group_write('add', name, ikuai_groups.payload(name, role, op['values']), {**undo, 'confirmed': False})
+            return undo
+        raise RouterError(f'不支持的操作 {kind}')
 
     def _add_route(self, cidr: str, gateway: str, comment: str) -> Dict[str, Any]:
         network = ipaddress.IPv4Network(cidr)
@@ -777,6 +1009,8 @@ class IKuaiDriver(RouterDriver):
             self._confirm_added(added)
         if kind in ('dhcp_dns_update', 'dhcp_dns_restore'):
             return self._dhcp_apply(op)
+        if kind.startswith('ikuai_group_'):
+            return self._apply_group(op)
         if kind in ('policy_route_add', 'policy_route_update', 'policy_route_restore',
                     'policy_route_delete', 'policy_route_readd'):
             return self._apply_policy(op)
@@ -800,22 +1034,36 @@ class IKuaiDriver(RouterDriver):
         if kind == 'nat_update':
             row = self._row('nat_rule', op['id'])
             dst = _address_field(row.get('dst_addr'))
-            dst['custom'] = dst['custom'] + [cidr for cidr in op.get('add_dst') or [] if cidr not in dst['custom']]
-            self._write('nat_rule', 'edit', self._nat_payload(row, dst_addr=dst, comment=op['comment']))
-            return {'kind': 'nat_restore', 'record': row}
+            refs = self._target_refs(op, dst)
+            if refs is None:
+                dst['custom'] = dst['custom'] + [cidr for cidr in op.get('add_dst') or [] if cidr not in dst['custom']]
+            else:
+                # Destinations move into our groups; the user's groups and the sources stay.
+                dst = {'custom': [], 'object': refs}
+            undo = {'kind': 'nat_restore', 'record': row}
+            self._edit('nat_rule', self._nat_payload(row, dst_addr=dst, comment=op['comment']), undo)
+            return undo
         if kind == 'nat_restore':
             row = self._row('nat_rule', op['record']['id'])
-            self._write('nat_rule', 'edit', self._nat_payload(op['record']))
-            return {'kind': 'nat_restore', 'record': row}
+            payload = self._nat_payload(self._rebind(op['record']))
+            undo = {'kind': 'nat_restore', 'record': row}
+            self._edit('nat_rule', payload, undo, _restore_timeout(payload))
+            return undo
         if kind == 'nat_add':
-            payload = self._new_nat(op['src'], op['dst'], op['comment'])
+            payload = self._new_nat(op['src'], op['dst'], op['comment'], self._target_refs(op, None))
             undo = self._add('nat_rule', payload, {'action': 'filter', 'comment': op['comment']})
+            return {'kind': 'nat_delete', 'id': self._new_id('nat_rule', undo)}
+        if kind == 'nat_readd':
+            payload = self._nat_payload(self._rebind(op['record']))
+            payload.pop('id', None)
+            undo = self._add('nat_rule', payload, {'action': 'filter', 'comment': payload.get('comment')},
+                             _restore_timeout(payload))
             return {'kind': 'nat_delete', 'id': self._new_id('nat_rule', undo)}
         if kind == 'nat_delete':
             row = self._row('nat_rule', op['id'])
             self._write('nat_rule', 'del', {'id': row['id']})
-            return {'kind': 'nat_add', 'src': _address_field(row.get('src_addr'))['custom'],
-                    'dst': _address_field(row.get('dst_addr'))['custom'], 'comment': row.get('comment') or ''}
+            # The whole rule, group references included.
+            return {'kind': 'nat_readd', 'record': row}
         raise RouterError(f'不支持的操作 {kind}')
 
 
@@ -828,20 +1076,36 @@ def request_bytes(func_name: str, action: str, param: Dict[str, Any]) -> int:
     return len(json.dumps({'func_name': func_name, 'action': action, 'param': encode_value(param)}).encode())
 
 
+def _placeholder_refs(names: List[str]) -> List[Dict[str, Any]]:
+    return [{'type': 0, 'gid': 'IPGP99999', 'gp_name': name} for name in names]
+
+
 def oversized_requests(ops: List[Dict[str, Any]]) -> List[str]:
-    """Blockers for rules whose single request iKuai would refuse as too large."""
+    """Blockers for writes whose single request iKuai would refuse as too large.
+
+    Destinations go into IP groups split to fit one request, so this is a
+    defence: it sizes the payload the driver would send for each op.
+    """
     blockers = []
     for op in ops:
         kind = op['kind']
-        if kind in ('policy_route_add', 'policy_route_update'):
-            func_name, label, dst = 'stream_ipport', '端口分流', op['dst']
-            payload = IKuaiDriver._new_policy(op['gateway'], dst, op['comment'])
+        if kind in ('ikuai_group_add', 'ikuai_group_update'):
+            func_name, label, count = 'route_object', 'IP 分组', len(op['values'])
+            payload = ikuai_groups.payload(op['name'], op['role'], op['values'])
+            name = op['name']
+        elif kind in ('policy_route_add', 'policy_route_update'):
+            func_name, label, name = 'stream_ipport', '端口分流', op['comment']
+            refs = _placeholder_refs(op['groups']) if 'groups' in op else None
+            count = len(op['groups']) if refs is not None else len(op['dst'])
+            payload = IKuaiDriver._new_policy(op['gateway'], op['dst'], op['comment'], refs)
         elif kind in ('nat_add', 'nat_update'):
             # An update also keeps the rule's own entries; counting only the
             # added ones may miss an oversize, but never blocks one that fits.
-            func_name, label = 'nat_rule', 'NAT 免转换规则'
+            func_name, label, name = 'nat_rule', 'NAT 免转换规则', op['comment']
             dst = op['dst'] if kind == 'nat_add' else op.get('add_dst') or []
-            payload = IKuaiDriver._new_nat(op.get('src') or [], dst, op['comment'])
+            refs = _placeholder_refs(op['groups']) if 'groups' in op else None
+            count = len(op['groups']) if refs is not None else len(dst)
+            payload = IKuaiDriver._new_nat(op.get('src') or [], dst, op['comment'], refs)
         else:
             continue
         action = 'add' if kind.endswith('_add') else 'edit'
@@ -849,10 +1113,17 @@ def oversized_requests(ops: List[Dict[str, Any]]) -> List[str]:
             payload['id'] = 0
         size = request_bytes(func_name, action, payload)
         if size > MAX_REQUEST_BYTES:
-            blockers.append(f'iKuai {label}「{op["comment"]}」需要一次写入 {len(dst)} 个网段，请求约 {size // 1024} KB，'
+            unit = '个 IP 分组引用' if kind not in ('ikuai_group_add', 'ikuai_group_update') and 'groups' in op else '个网段'
+            blockers.append(f'iKuai {label}「{name}」需要一次写入 {count} {unit}，请求约 {size // 1024} KB，'
                             f'超过 iKuai 单次请求上限（约 {MAX_REQUEST_BYTES // 1024} KB），发布会被拒绝。'
                             '请减少代理网段（例如少选规则集）后重试')
     return blockers
+
+
+def _restore_timeout(payload: Dict[str, Any]) -> Optional[float]:
+    """More time to write back a rule that lists many entries literally (a rollback of a migration)."""
+    count = sum(len(_address_field(payload.get(field))['custom']) for field in ('src_addr', 'dst_addr'))
+    return TIMEOUT + RESTORE_SECONDS_PER_ENTRY * count if count > RESTORE_SLOW_ENTRIES else None
 
 
 def _tagname(kind: str, key: str) -> str:
@@ -860,13 +1131,24 @@ def _tagname(kind: str, key: str) -> str:
     return f'cf_{kind}_{hashlib.sha1(key.encode()).hexdigest()[:15 - len(kind) - 4]}'
 
 
-def _addresses(value: Any, address_sets: Dict[str, List[str]]) -> List[str]:
-    """Flatten iKuai ``{"custom": [...], "object": [...]}`` into concrete CIDRs/ranges."""
+def _addresses(value: Any, address_sets: Dict[str, List[str]],
+               by_gid: Optional[Dict[str, List[str]]] = None) -> List[str]:
+    """Flatten iKuai ``{"custom": [...], "object": [...]}`` into concrete CIDRs/ranges.
+
+    A reference resolves by its group ID; only one without an ID falls back to
+    the name. A reference to a group that no longer exists adds nothing, so a
+    coverage check fails closed instead of reading a same-named group.
+    """
     if not isinstance(value, dict):
         return []
     result = [str(item) for item in value.get('custom') or [] if isinstance(item, str)]
     objects = value.get('object')
     for ref in objects if isinstance(objects, list) else []:
-        if isinstance(ref, dict):
+        if not isinstance(ref, dict):
+            continue
+        gid = str(ref.get('gid') or '')
+        if gid and by_gid is not None:
+            result.extend(by_gid.get(gid, []))
+        else:
             result.extend(address_sets.get(str(ref.get('gp_name')), []))
     return result

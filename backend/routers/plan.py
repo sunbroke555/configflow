@@ -25,6 +25,7 @@ from backend.routers.base import (
     policy_route_ok, stale_route_warning, stale_routes, StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
+from backend.routers.ikuai_groups import GroupPlanner, span
 from backend.routers.report import _networks, SupernetIndex
 
 MANAGED_RETURN_TABLE = 'configflow_return'
@@ -207,13 +208,46 @@ def _policy_op(rule, gateway: str, dst: List[str], comment: str):
             'summary': f'更新策略路由「{comment}」：{scope}'}
 
 
-def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, warnings: List[str]):
+def _grouped_policy_op(planner: GroupPlanner, role: str, rule, gateway: str, want: List[str], dst: List[str],
+                       comment: str, keep_foreign: bool, group_ops: List[Dict[str, Any]]):
+    """An iKuai rule whose destination is ConfigFlow's IP groups; written only when the
+    rule itself must change, not when only the groups' contents do."""
+    key = f'policy:{rule.id}' if rule is not None else None
+    final, ops = planner.family(role, want)
+    group_ops.extend(ops)
+    planner.route_rules.append({'func': 'stream_ipport', 'comment': comment, 'groups': final,
+                                'keep_foreign': keep_foreign})
+    if rule is not None and policy_route_ok(rule, gateway) and not planner.needs_rewrite(key, role, keep_foreign):
+        return None
+    total = sum(len(values) for values in planner.contents[role].values())
+    targets = f'IP 分组 {span(final)}（共 {total} 个网段）'
+    if rule is None:
+        return {'kind': 'policy_route_add', 'gateway': gateway, 'dst': dst, 'groups': final, 'comment': comment,
+                **({'keep_foreign': True} if keep_foreign else {}),
+                'summary': f'新增策略路由「{comment}」：除 {gateway} 自身外的设备访问 {targets} → {gateway}'}
+    planner.rewritten[key] = final
+    if planner.migration(key, '端口分流', comment):
+        summary = (f'迁移策略路由「{comment}」到 IP 分组：目的地址改为引用 {span(final)}（共 {total} 个网段），'
+                   '规则内不再逐条填写网段')
+    else:
+        summary = f'更新策略路由「{comment}」：除 {gateway} 自身外的设备访问 {targets} → {gateway}'
+    dropped = [] if keep_foreign else planner.dropped_foreign(key)
+    if dropped:
+        summary += f'；移除对非 ConfigFlow 分组「{"、".join(dropped)}」的引用'
+    return {'kind': 'policy_route_update', 'id': rule.id, 'gateway': gateway, 'dst': dst, 'groups': final,
+            'comment': comment, **({'keep_foreign': True} if keep_foreign else {}), 'summary': summary}
+
+
+def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, warnings: List[str],
+                      planner: Optional[GroupPlanner] = None):
     """Route proxy CIDRs by policy rules excluding the gateway, then drop the static routes.
 
     The rules are written first; static routes take precedence over them, so
     traffic keeps flowing to the gateway until each static route is deleted.
+    With iKuai IP groups, new groups are written before the rules reference them
+    and groups no rule uses any more are deleted last.
     """
-    ops, skipped = [], set()
+    ops, skipped, group_ops = [], set(), []
     for item in report['routes']['items']:
         if item['status'] == 'conflict':
             skipped.add(item['cidr'])
@@ -223,12 +257,15 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
     auto = policy_route(state, POLICY_AUTO_COMMENT)
     checks = []
     if target:
-        op = _policy_op(auto, gateway, target, POLICY_AUTO_COMMENT)
+        op = (_grouped_policy_op(planner, 'pa', auto, gateway, target, target, POLICY_AUTO_COMMENT, False, group_ops)
+              if planner else _policy_op(auto, gateway, target, POLICY_AUTO_COMMENT))
         ops.extend([op] if op else [])
         checks.append({'comment': POLICY_AUTO_COMMENT, 'gateway': gateway, 'dst': target})
     elif auto is not None:
         ops.append({'kind': 'policy_route_delete', 'id': auto.id,
                     'summary': f'删除不再需要的策略路由「{POLICY_AUTO_COMMENT}」'})
+        if planner:
+            planner.deleted_rules.add(f'policy:{auto.id}')
 
     def inside(cidr):
         return any(covered.covers(network) for network in _networks([cidr]))
@@ -237,8 +274,19 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
     # derived CIDR need no rule of their own.
     migrate = [item['cidr'] for item in report['routes']['unmanaged_other'] if item.get('migrate') and not inside(item['cidr'])]
     manual = policy_route(state, POLICY_MANUAL_COMMENT)
+    if planner and (migrate or manual is not None):
+        # Add-only: what the rule lists itself and its groups hold, plus new CIDRs.
+        # The user's own groups stay referenced, their entries are not copied.
+        current = list(manual.dst) if manual else []
+        new = [cidr for cidr in migrate if cidr not in current]
+        key = f'policy:{manual.id}' if manual else None
+        want = planner.refs(key)['custom'] + planner.referenced_values(key) + new
+        op = _grouped_policy_op(planner, 'pm', manual, gateway, want, current + new, POLICY_MANUAL_COMMENT, True,
+                                group_ops)
+        ops.extend([op] if op else [])
+        checks.append({'comment': POLICY_MANUAL_COMMENT, 'gateway': gateway, 'dst': current + new})
     # An existing manual rule is repaired too (e.g. a lower priority), keeping its CIDRs.
-    if migrate or (manual is not None and not policy_route_ok(manual, gateway)):
+    elif not planner and (migrate or (manual is not None and not policy_route_ok(manual, gateway))):
         current = list(manual.dst) if manual else []
         dst = current + [cidr for cidr in migrate if cidr not in current]
         op = _policy_op(manual, gateway, dst, POLICY_MANUAL_COMMENT)
@@ -264,14 +312,63 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
             continue
         ops.append({'kind': 'route_delete', 'id': extra['route_id'], 'cidr': extra['cidr'],
                     'summary': f'删除不再需要的受管路由 {extra["cidr"]} → {extra["gateway"]}'})
-    return ops, skipped, checks
+    return group_ops + ops, skipped, checks
+
+
+def _grouped_nat_ops(planner: GroupPlanner, rules, target, adopt_ids: List[str], missing: List[str], gateway: str):
+    """iKuai: the target rule's destinations live in ConfigFlow's IP groups (add-only).
+
+    The rule is rewritten only to adopt or migrate it, or when its group list
+    changes; new CIDRs usually just extend a group. Sources stay as they are.
+    """
+    key = f'nat:{target.id}' if target is not None else None
+    final, ops = [], []
+    if target is not None or missing:
+        want = planner.refs(key)['custom'] + planner.referenced_values(key) + missing
+        final, ops = planner.family('nat', want)
+    total = sum(len(values) for values in planner.contents.get('nat', {}).values())
+    for rule_id in adopt_ids:
+        if target is not None and rule_id == target.id:
+            continue
+        rule = rules[rule_id]
+        comment = managed_comment(rule.comment)
+        ops.append({'kind': 'nat_update', 'id': rule.id, 'add_dst': [], 'comment': comment,
+                    'summary': f'接管 NAT 免转换规则「{rule.comment or rule.id}」（备注 → {comment}）'})
+    check = None
+    if target is not None:
+        adopting = target.id in adopt_ids
+        comment = managed_comment(target.comment) if adopting else target.comment
+        check = {'func': 'nat_rule', 'id': target.id, 'comment': comment, 'groups': final, 'keep_foreign': True}
+        if adopting or planner.needs_rewrite(key, 'nat', True):
+            planner.rewritten[key] = final
+            added = f'，含新增 {len(missing)} 个' if missing else ''
+            if adopting:
+                summary = (f'接管 NAT 免转换规则「{target.comment or target.id}」（备注 → {comment}），'
+                           f'目的地址改为引用 IP 分组 {span(final)}（{total} 个网段{added}）')
+            elif planner.migration(key, 'NAT 免转换', comment):
+                summary = (f'迁移 NAT 免转换规则「{comment}」到 IP 分组：目的地址改为引用 {span(final)}'
+                           f'（共 {total} 个网段{added}），源地址保持不变')
+            else:
+                summary = f'受管 NAT 免转换规则「{comment}」改为引用 IP 分组 {span(final)}（共 {total} 个网段{added}）'
+            ops.append({'kind': 'nat_update', 'id': target.id, 'add_dst': missing, 'groups': final,
+                        'keep_foreign': True, 'comment': comment, 'summary': summary})
+    elif missing:
+        src = _lan_except(gateway)
+        check = {'func': 'nat_rule', 'id': None, 'comment': 'cf-mihomo', 'groups': final, 'keep_foreign': True}
+        ops.append({'kind': 'nat_add', 'src': src, 'dst': missing, 'groups': final, 'comment': 'cf-mihomo',
+                    'summary': f'新增 NAT 免转换规则：源 {", ".join(src)}，目的 IP 分组 {span(final)}'
+                               f'（共 {total} 个网段）'})
+    removed = planner.cleanup(('nat',))
+    planner.stage_checks['nat_bypass'] = planner.check(('nat',), [check] if check else [],
+                                                       [op['name'] for op in removed])
+    return ops + removed
 
 
 def _nat_ops(report: Dict[str, Any], state: RouterState, gateway: str, skipped: set, vendor: str = '',
-             listed: Optional[Dict[str, Any]] = None):
+             listed: Optional[Dict[str, Any]] = None, planner: Optional[GroupPlanner] = None):
     if vendor == 'routeros' and state.nat_context is not None:
         # One rule over two address lists once an exemption must be written;
-        # otherwise (and on iKuai) the per-rule plan below, unchanged.
+        # otherwise the per-rule plan below, unchanged (iKuai: IP groups).
         from backend.routers import routeros_nat_list
         result = routeros_nat_list.plan(report, state, gateway, skipped)
         if result is not None:
@@ -303,6 +400,12 @@ def _nat_ops(report: Dict[str, Any], state: RouterState, gateway: str, skipped: 
         candidates = managed if managed else [rules[rule_id] for rule_id in adopt_ids]
         targets = [rule for rule in candidates if group(rule) == group(target)]
     target_ids = {rule.id for rule in targets}
+
+    if planner is not None:
+        ops = _grouped_nat_ops(planner, rules, target, adopt_ids, missing, gateway)
+        # New CIDRs may only extend a group; they are proxy CIDRs either way.
+        exempt = [cidr for rule in rules.values() for cidr in rule.dst] + missing
+        return ops, exempt + [cidr for op in ops for cidr in op.get('add_dst') or op.get('dst') or []]
 
     ops = []
     for rule_id in adopt_ids:
@@ -389,8 +492,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                 'empty': True}
 
     policy = state.policy_routes is not None
+    planner = GroupPlanner(state.ikuai_groups, warnings, blockers) if state.ikuai_groups is not None else None
     if policy:
-        route_ops, skipped, policy_checks = _policy_route_ops(report, state, gateway, warnings)
+        route_ops, skipped, policy_checks = _policy_route_ops(report, state, gateway, warnings, planner)
     else:
         route_ops, skipped = _route_ops(report, state, gateway, warnings)
     restored = []
@@ -398,9 +502,17 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         targets = [entry['cidr'] for entry in desired['proxy_cidrs'] if entry['cidr'] not in skipped]
         retire_ops, restored = _retired_policy_ops(state, targets, skipped, warnings, blockers)
         route_ops.extend(retire_ops)
+        if planner:
+            planner.deleted_rules.update(f'policy:{entry.id}' for entry in state.retired_policy_routes)
         if any(cidr != desired.get('fake_ip_range') for cidr in targets):
             warnings.append('静态路由只看目的地址：mihomo 自身直连这些网段时，流量会被送回 mihomo 形成回环。'
                             '如需避免，请开启「自动配置回流」，改用排除 mihomo 的端口分流。')
+    if planner:
+        # Groups of the 端口分流 rules nothing references any more go last, after the rules.
+        removed = planner.cleanup(('pa', 'pm'))
+        route_ops.extend(removed)
+        planner.stage_checks['routes'] = planner.check(('pa', 'pm'), planner.route_rules,
+                                                       [op['name'] for op in removed])
     ros_policy = state.ros_policy_plan
     if ros_policy is not None:
         blockers.extend(ros_policy['blockers'])
@@ -445,7 +557,7 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     blockers.extend(f'{item["cidr"]}：无法确认是否需要 NAT 免转换。{item["detail"]}'
                     for item in nat_items if item['status'] == 'unknown')
     listed: Dict[str, Any] = {}
-    nat_ops, exempt = _nat_ops(report, state, gateway, skipped, router.get('type', ''), listed)
+    nat_ops, exempt = _nat_ops(report, state, gateway, skipped, router.get('type', ''), listed, planner)
     blockers.extend(listed.get('blockers') or [])
     warnings.extend(listed.get('warnings') or [])
     if router.get('type') == 'ikuai':
@@ -559,6 +671,11 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         checks['return_routing'] = dict(spec)
     if guard is not None:
         checks['dns_guard'] = {'roles': guard['roles']}
+    if planner:
+        checks['ikuai_groups'] = planner.stage_checks
+        migration = planner.migration_warning()
+        if migration:
+            warnings.insert(0, migration)
     if manage_dns and dns['status'] in {'synced', 'pending'}:
         item = dns['items'][0]
         checks['dhcp_dns'] = {'id': item['id'], 'network': item['network'], 'gateway': gateway,

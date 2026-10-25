@@ -256,4 +256,12 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
         result['in_sync'] = (result['in_sync'] and guard['status'] in {'disabled', 'synced'}
                              and not guard['blockers'] and not state.dns_guard_plan['ops'])
     result['desired'].pop('dns_guard', None)
+    if state.ikuai_groups is not None:
+        from backend.routers.ikuai_groups import report_section
+        groups = result['ikuai_groups'] = report_section(state)
+        # Rules still listing CIDRs themselves, or groups nothing uses: a release is due.
+        due = len(groups['migrations']) + len(groups['orphans'])
+        if due:
+            summary['pending'] = summary.get('pending', 0) + due
+        result['in_sync'] = result['in_sync'] and not due
     return result
