@@ -303,6 +303,12 @@ describe('settings save and publish', () => {
     expect(failed.text()).toContain('发布到：客厅 DNS')
   })
 
+  it.each([['网络错误', '网络错误'], ['服务暂时不可用。', '服务暂时不可用']])('ends a target read failure (%s) with one full stop before the draft hint', async (message, body) => {
+    vi.mocked(agentApi.getAll).mockRejectedValueOnce(new Error(message))
+    const failed = await render()
+    expect(failed.text()).toContain(`暂时无法读取目标设备：${body}。仍可保存草稿。`)
+  })
+
   it.each([{ profile_id: 'home' }, { service_type: 'mihomo' }, { status: 'offline' }, { enabled: false }])('rechecks the selected device after saving (%j)', async change => {
     vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent()])).mockResolvedValueOnce(response([agent(change)]))
     const wrapper = await render()
