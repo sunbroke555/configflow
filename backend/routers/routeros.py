@@ -6,7 +6,7 @@ verifies the written fields; compound NAT changes compensate partial failures.
 import ipaddress
 import re
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -29,6 +29,12 @@ MANGLE = '/ip/firewall/mangle'
 FILTER = '/ip/firewall/filter'
 NETWATCH = '/tool/netwatch'
 DHCP_NETWORKS = '/ip/dhcp-server/network'
+ADDRESSES = '/ip/firewall/address-list'
+# Paths read one row by ID instead of as a whole table. An address list may
+# hold tens of thousands of foreign entries (blocklists, policy destinations):
+# 22.8 s for 20k on 7.24.5, against 0.37 s for one row. Unordered, so no
+# neighbour is ever needed.
+SINGLE_ROW_PATHS = frozenset({ADDRESSES})
 DHCP_SERVERS = '/ip/dhcp-server'
 DHCP_LEASES = '/ip/dhcp-server/lease'
 DHCP_OPTIONS = '/ip/dhcp-server/option'
@@ -361,11 +367,23 @@ class RouterOSDriver(RouterDriver):
         return DhcpDnsState(entries=entries, evidence=evidence)
 
 
+    def _find(self, path: str, row_id: str) -> Optional[Dict[str, Any]]:
+        """One row by ID, or None when RouterOS has no such row."""
+        if path not in SINGLE_ROW_PATHS:
+            return next((row for row in self._list(path) if str(row.get('.id')) == str(row_id)), None)
+        try:
+            row = self._get(f'{path}/{quote(str(row_id), safe="*")}')
+        except MissingResource:
+            return None  # 404: no such item
+        if not isinstance(row, dict) or str(row.get('.id')) != str(row_id):
+            raise RouterError(f'RouterOS {path} 返回的对象格式无法识别')
+        return row
+
     def _row(self, path: str, row_id: str) -> Dict[str, Any]:
-        for row in self._list(path):
-            if str(row.get('.id')) == str(row_id):
-                return row
-        raise RouterError(f'RouterOS {path} 中找不到 id={row_id}，可能已被手动删除')
+        row = self._find(path, row_id)
+        if row is None:
+            raise RouterError(f'RouterOS {path} 中找不到 id={row_id}，可能已被手动删除')
+        return row
 
     @staticmethod
     def _payload(path: str, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -401,8 +419,11 @@ class RouterOSDriver(RouterDriver):
         method, path = change['method'], change['path']
         values = dict(change.get('values') or {})
         if method == 'RESTORE':
-            rows = self._list(path)
-            current = next((row for row in rows if str(row.get('.id')) == str(change['id'])), None)
+            if path in SINGLE_ROW_PATHS:
+                rows, current = [], self._find(path, change['id'])
+            else:
+                rows = self._list(path)
+                current = next((row for row in rows if str(row.get('.id')) == str(change['id'])), None)
             if current is not None:
                 if self._ownership_snapshot(path, current) != change.get('expected'):
                     raise RouterError('回滚对象已发生外部变化，保留现有配置')
@@ -416,7 +437,10 @@ class RouterOSDriver(RouterDriver):
                 raise RouterError('原 NAT 规则位置已变化，无法安全恢复顺序')
             return self._perform({'method': 'PUT', 'path': path, 'values': values}, undo)
         if method == 'PUT':
-            before = {str(row.get('.id')) for row in self._list(path)}
+            # An address-list member is new if its list did not hold the ID; the
+            # read-back then checks every field, the list name included.
+            scope = path + '?' + urlencode({'list': values.get('list', '')}) if path in SINGLE_ROW_PATHS else path
+            before = {str(row.get('.id')) for row in self._list(scope)}
             try:
                 row = self._request(method, path, values)
                 row_id = row.get('.id') if isinstance(row, dict) else None
@@ -433,8 +457,12 @@ class RouterOSDriver(RouterDriver):
 
         row_id = str(change['id'])
         resource = f'{path}/{quote(row_id, safe="*")}'
-        rows = self._list(path)
-        row = next((row for row in rows if str(row.get('.id')) == row_id), None)
+        if path in SINGLE_ROW_PATHS:
+            row = self._find(path, row_id)
+            rows = [row] if row is not None else []
+        else:
+            rows = self._list(path)
+            row = next((row for row in rows if str(row.get('.id')) == row_id), None)
         if row is None and method == 'DELETE':
             # A missing/hidden row gives no evidence it still has our last values.
             # Never delete an unreadable object merely because its ID is known.
@@ -478,8 +506,12 @@ class RouterOSDriver(RouterDriver):
         raise RouterError(f'不支持的 RouterOS 写入方法 {method}')
 
     def _verify_change(self, check: Dict[str, Any]):
-        rows = self._list(check['path'])
-        row = next((row for row in rows if str(row.get('.id')) == check['id']), None)
+        if check['path'] in SINGLE_ROW_PATHS:
+            row = self._find(check['path'], check['id'])
+            rows = [row] if row is not None else []
+        else:
+            rows = self._list(check['path'])
+            row = next((row for row in rows if str(row.get('.id')) == check['id']), None)
         if check.get('absent'):
             if row is not None:
                 raise RouterError('RouterOS 回读校验失败：应删除的对象仍然存在')
