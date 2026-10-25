@@ -897,7 +897,8 @@ def _apply_aliased_custom(document, settings, state, changes):
     position = changes.get('custom_match_position', state['values']['custom_match_position'] or 'tail')
     if position not in ('head', 'tail'):
         raise OxidnsSettingsError('自定义匹配位置必须为 head 或 tail。')
-    custom = _normalize_custom_matches(changes.get('custom_matches', state['values']['custom_matches']))
+    custom = _normalize_custom_matches(changes['custom_matches']) if 'custom_matches' in changes else \
+        deepcopy(state['values']['custom_matches'])
     result = deepcopy(document)
     main = _plugins(result)[state['actual_main_tag']]
     args = main['args']

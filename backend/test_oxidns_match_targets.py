@@ -188,6 +188,28 @@ def test_renamed_match_insertion_and_removal_preserve_empty_regions(with_domain,
     assert removed['values']['custom_match_position'] is None
 
 
+@pytest.mark.parametrize('enabled', [True, False])
+def test_renamed_match_position_only_preserves_enabled_and_extension_fields(enabled):
+    config = fixture_config()
+    settings = renamed(prepared(config, direct_rules=['a'], default_forward='forward_local',
+                                custom_matches=[{'matches': ['qname full:custom.test'], 'exec': 'goto china_dns'}]),
+                       {'china_dns': 'local_dns'}, config)
+    def extend(doc):
+        entry = next(entry for entry in plugin(doc, 'sequence_main')['args']
+                     if entry.get('matches') == ['qname full:custom.test'])
+        entry.update(enabled=enabled, future={'off': False, 'nil': None, 'zero': 0})
+    settings = edited(settings, extend)
+    before = document(settings)
+    expected = {'matches': ['qname full:custom.test'], 'exec': 'goto local_dns', 'enabled': enabled,
+                'future': {'off': False, 'nil': None, 'zero': 0}}
+    moved = apply_common_settings(settings, {'custom_match_position': 'head'}, config)
+    assert moved['values']['custom_matches'] == [expected]
+    assert moved['values']['custom_match_position'] == 'head'
+    restored = apply_common_settings(moved['settings'], {'custom_match_position': 'tail'}, config)
+    assert document(restored['settings']) == before
+    assert document(settings) == before
+
+
 def test_renamed_main_and_transitive_callers_are_not_offered():
     settings = renamed(prepared(), {'sequence_main': 'entry_dns'})
     settings = edited(settings, lambda doc: doc['plugins'].append(
