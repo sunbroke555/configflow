@@ -575,7 +575,7 @@ def test_gateway_move_rewrites_only_the_source_list():
     assert {item['config']['address'] for item in op['src_remove']} == {
         str(ipaddress.ip_network(value).network_address) if value.endswith('/32') else value
         for value in sources() - sources('192.168.0.5')}
-    assert '源列表随网关 192.168.0.5 更新' in op['summary']
+    assert '源地址列表 cf-mihomo-nat-src 随网关 192.168.0.5 更新' in op['summary']
     assert execute(plan, driver, None)['ok']
     assert members(driver, SRC) == sources('192.168.0.5')
     report, again = preview(driver, [TARGET], '192.168.0.5')
@@ -1017,7 +1017,7 @@ def test_stale_rules_also_go_once_the_list_rule_exists():
     _, plan = preview(driver, [FAKE_IP, TARGET])
     [op] = nat_ops(plan)
     assert op['rule'] is not None and not op['legacy'] and len(op['stale']) == 14
-    assert op['summary'].startswith('NAT 免转换规则「cf-mihomo-nat」；删除 14 条残留的旧逐条免转换规则')
+    assert op['summary'].startswith('删除 14 条残留的旧逐条免转换规则')
     assert execute(plan, driver, None)['ok']
     assert [row.get('comment') for row in driver.rows[NAT]] == ['cf-mihomo-nat', None]
     assert preview(driver, [FAKE_IP, TARGET])[1]['empty']

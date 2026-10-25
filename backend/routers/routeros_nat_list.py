@@ -457,10 +457,10 @@ def _summary(op, gateway, create, fresh=None):
         if op['dst_remove']:
             changes.append(f'移除 {len(op["dst_remove"])} 个不再代理的网段'
                            f'（{_sample(item["config"].get("address", "") for item in op["dst_remove"])}）')
-        head = (f'NAT 免转换目的列表 {DST_LIST}：' + '、'.join(changes) if changes
-                else '' if op['rule'] is None else f'NAT 免转换规则「{COMMENT}」')
+        head = f'NAT 免转换目的列表 {DST_LIST}：' + '、'.join(changes) if changes else ''
         if op['src_add'] or op['src_remove']:
-            parts.append(f'源列表随网关 {gateway} 更新：新增 {len(op["src_add"])} 段、移除 {len(op["src_remove"])} 段')
+            parts.append(f'源地址列表 {SRC_LIST} 随网关 {gateway} 更新：'
+                         f'新增 {len(op["src_add"])} 段、移除 {len(op["src_remove"])} 段')
         if op['legacy']:
             parts.append(f'将 {len(op["legacy"])} 条旧的逐条 NAT 免转换规则（备注 {LEGACY_COMMENT}）与「{COMMENT}」'
                          f'合并为 1 条：{WHY_MERGE}；先回读校验列表规则的覆盖，再删除旧规则')
