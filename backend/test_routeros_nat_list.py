@@ -678,3 +678,18 @@ def test_failed_member_removal_puts_the_new_member_back_out():
     assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
     assert not any(item['status'] == 'failed' for item in result['rollback'])
     assert configurations(driver) == before and members(driver, DST) == {FAKE_IP, TARGET}
+
+
+@pytest.mark.parametrize(('before', 'after'), [('91.108.0.0/16', TARGET), (TARGET, '91.108.0.0/16')])
+def test_a_wider_or_narrower_member_is_replaced_by_the_desired_cidr(before, after):
+    driver = device()
+    driver.rows[ROUTES] = [driver.rows[ROUTES][0]]
+    publish(driver, [before])
+    report, plan = preview(driver, [after])
+    # Covered by a wider member, or only partly by a narrower one: never unknown.
+    assert report['nat_bypass']['items'][0]['status'] == ('synced' if before == '91.108.0.0/16' else 'missing')
+    op = list_op(plan)
+    assert op['dst_add'] == [after] and [item['config']['address'] for item in op['dst_remove']] == [before]
+    assert execute(plan, driver, None)['ok']
+    assert members(driver, DST) == {after}
+    assert preview(driver, [after])[1]['empty']
