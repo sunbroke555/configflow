@@ -252,7 +252,7 @@ async function disable(force: boolean) {
         <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground">
           <span v-if="holdsVip" class="chip chip-ok shrink-0" data-dns-ha-holder>主 · VIP <span class="font-mono">{{ config.vip }}</span></span>
           <span v-else-if="standby" class="chip shrink-0">备</span>
-          <span class="min-w-0 [overflow-wrap:anywhere]">与 {{ peerName }} 共用虚拟 IP<template v-if="!holdsVip"> <span class="font-mono">{{ config.vip }}</span></template></span>
+          <span class="min-w-0 [overflow-wrap:anywhere]">与 {{ peerName }} 共用虚拟 IP<span v-if="!holdsVip" class="ml-1 font-mono">{{ config.vip }}</span></span>
         </div>
         <p v-if="haState?.status === 'failed' && haState.error" role="alert" class="m-0 whitespace-pre-wrap text-destructive-accent">{{ haState.error }}</p>
         <p v-else-if="haState?.error" class="m-0 whitespace-pre-wrap text-warning-accent" data-dns-ha-last-error>{{ haState.error }}</p>

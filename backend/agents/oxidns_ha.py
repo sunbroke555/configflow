@@ -26,6 +26,8 @@ from backend.agents.diagnostics import failure_text
 PROTOCOL = 1
 PRIORITY = {'primary': 150, 'secondary': 100}
 REQUEST_FIELDS = {'peer_id', 'vip', 'vrid'}
+# Measured in the lab: the holder is elected about 4 s after keepalived starts.
+SETTLE_SECONDS = 10
 _logger = logging.getLogger(__name__)
 
 
@@ -389,9 +391,19 @@ def configure(manager, agent_id, request):
                 _logger.exception('DNS 高可用保存记录失败')
                 error = '保存 DNS 高可用记录失败，请重试'
             _fail(manager, [peer, agent], previous, by_id, set(roles), str(error))
-    result = status(manager, agent_id)
+    result = _settled_status(manager, agent_id)
     result.update(warnings=warnings, routers=routers_using(manager, {agent['id'], peer['id']}))
     return result
+
+
+def _settled_status(manager, agent_id):
+    """keepalived elects the VIP holder a few seconds after starting; report that, not the election."""
+    deadline = time.monotonic() + SETTLE_SECONDS
+    while True:
+        result = status(manager, agent_id)
+        if result['health'] not in ('split', 'down') or time.monotonic() >= deadline:
+            return result
+        time.sleep(1)
 
 
 def disable(manager, agent_id, force=False):

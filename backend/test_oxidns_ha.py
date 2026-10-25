@@ -71,6 +71,7 @@ def pair(tmp_path, monkeypatch):
     config_store.set_repository(repository)
     manager = AgentManager(repository)
     devices = Devices()
+    monkeypatch.setattr(oxidns_ha, 'SETTLE_SECONDS', 0)
     monkeypatch.setattr(manager, '_deployment_request', devices.capabilities)
     for name in ('status', 'preview', 'apply', 'remove'):
         monkeypatch.setattr(manager, f'oxidns_ha_{name}', getattr(devices, name))
@@ -109,6 +110,15 @@ def test_enable_applies_secondary_first_and_writes_both_records(pair):
     assert [member['agent_id'] for member in result['members']] == [primary['id'], secondary['id']]
     assert result['routers'] == [] and result['warnings'] == []
 
+
+def test_enable_reports_the_elected_holder_not_the_election(pair, monkeypatch):
+    manager, devices, primary, secondary = pair
+    monkeypatch.setattr(oxidns_ha, 'SETTLE_SECONDS', 10)
+    monkeypatch.setattr(oxidns_ha.time, 'sleep', lambda _: devices.runtime.update({PRIMARY_HOST: {
+        'keepalived_running': True, 'role': 'master', 'vip_present': True, 'healthy': True}}))
+    result = enable(manager, primary, secondary)
+    assert result['health'] == 'ok'
+    assert devices.kinds().count(('status', PRIMARY_HOST)) == 2
 
 @pytest.mark.parametrize(('vip', 'vrid', 'expected'), [('192.168.1.0', None, 53), ('192.168.1.255', None, 53),
                                                        ('192.168.1.7', None, 7), (VIP, 200, 200)])
