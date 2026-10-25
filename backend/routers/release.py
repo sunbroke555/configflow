@@ -1,5 +1,6 @@
 """Execute a release plan stage by stage, verify each stage, roll back in reverse on failure."""
 import ipaddress
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -179,46 +180,58 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
     return state
 
 
+def _batch(driver, rollback: bool = False):
+    """A driver may share its reads across one stage's writes (iKuai static routes)."""
+    batch = getattr(type(driver), 'batch', None)
+    return driver.batch(rollback=rollback) if callable(batch) else nullcontext()
+
+
 def _rollback(done: List[Tuple[str, Dict[str, Any], Dict[str, Any]]], driver, agent) -> List[Dict[str, Any]]:
     from backend.routers import ros_address_lists
     results = []
-    entries = [entry for entry in reversed(done) if entry[2]]
-    batchable = getattr(driver, 'batch_restorable', lambda undo: False)
-    index = 0
-    while index < len(entries):
-        end = index
-        while end < len(entries) and batchable(entries[end][2]):
-            end += 1
-        if end - index > 1:
-            # Consecutive single-route undo records run in batches, each with
-            # its own result, exactly as one-by-one rollback reports them.
-            run = entries[index:end]
-            ros_address_lists.invalidate(driver)
-            try:
-                errors = driver.restore_many([undo for _, _, undo in run])
-            except (RouterError, RuntimeError, requests.RequestException) as error:
-                # restore_many reports each record; should it still fail, part
-                # of the run may be done. Running it again would report routes
-                # it recreated as foreign, so keep it for inspection instead.
-                errors = [str(error)] * len(run)
-            for (stage, op, _), error in zip(run, errors):
-                results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'}
-                               if error else {'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
-            index = end
-            continue
-        end = index + 1
-        for stage, op, undo in entries[index:end]:
-            try:
-                _apply(undo, driver, agent)
-                results.append({'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
-            except (RouterError, RuntimeError, requests.RequestException) as error:
-                results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'})
-        index = end
+    try:
+        with _batch(driver, rollback=True):
+            entries = [entry for entry in reversed(done) if entry[2]]
+            batchable = getattr(driver, 'batch_restorable', lambda undo: False)
+            index = 0
+            while index < len(entries):
+                end = index
+                while end < len(entries) and batchable(entries[end][2]):
+                    end += 1
+                if end - index > 1:
+                    # Consecutive single-route undo records run in batches, each with
+                    # its own result, exactly as one-by-one rollback reports them.
+                    run = entries[index:end]
+                    ros_address_lists.invalidate(driver)
+                    try:
+                        errors = driver.restore_many([undo for _, _, undo in run])
+                    except (RouterError, RuntimeError, requests.RequestException) as error:
+                        # restore_many reports each record; should it still fail, part
+                        # of the run may be done. Running it again would report routes
+                        # it recreated as foreign, so keep it for inspection instead.
+                        errors = [str(error)] * len(run)
+                    for (stage, op, _), error in zip(run, errors):
+                        results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'}
+                                       if error else {'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
+                    index = end
+                    continue
+                end = index + 1
+                for stage, op, undo in entries[index:end]:
+                    try:
+                        _apply(undo, driver, agent)
+                        results.append({'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
+                    except (RouterError, RuntimeError, requests.RequestException) as error:
+                        results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'})
+                index = end
+    except (RouterError, RuntimeError, requests.RequestException) as error:
+        # Routes put back by the rollback are read back together at its end.
+        results.append({'stage': done[0][0], 'summary': f'撤销失败：{error}', 'status': 'failed'})
     return results
 
 
 def _apply_stage(ops: List[Dict[str, Any]], driver, agent, finished) -> None:
-    """Apply ops in order; ``finished(op, undo)`` each one as soon as it is done."""
+    """Apply ops in order; ``finished(op, undo)`` each one as soon as it is done
+    (``ok=False`` for one written before it failed)."""
     from backend.routers import ros_address_lists
     batch_kinds = getattr(driver, 'batch_kinds', frozenset())
     index = 0
@@ -230,7 +243,14 @@ def _apply_stage(ops: List[Dict[str, Any]], driver, agent, finished) -> None:
             ros_address_lists.invalidate(driver)
             driver.apply_many(ops[index:end], finished)
         else:
-            finished(ops[index], _apply(ops[index], driver, agent))
+            try:
+                undo = _apply(ops[index], driver, agent)
+            except RouterError as error:
+                # Written before failing (e.g. a lost reply): the driver says how to undo it.
+                if getattr(error, 'undo', None):
+                    finished(ops[index], error.undo, ok=False)
+                raise
+            finished(ops[index], undo)
         index = end
 
 
@@ -299,13 +319,15 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 state = _verify('routes', plan['checks'], driver, agent)
                 _verify('nat_bypass', plan['checks'], driver, agent, state)
 
-            def finished(op, undo):
+            def finished(op, undo, ok=True):
                 op = {key: value for key, value in op.items() if key != 'checked_dhcp_dns'}
                 done.append((current, op, undo))
-                record({'stage': current, 'summary': op['summary'], 'status': 'ok'})
+                if ok:
+                    record({'stage': current, 'summary': op['summary'], 'status': 'ok'})
 
             unchanged = None
-            _apply_stage(ops, driver, agent, finished)
+            with _batch(driver):
+                _apply_stage(ops, driver, agent, finished)
             unchanged = state = _verify(current, plan['checks'], driver, agent)
             record({'stage': current, 'summary': '回读校验通过', 'status': 'verified'})
             if current == 'routes':

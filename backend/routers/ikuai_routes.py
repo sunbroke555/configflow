@@ -10,7 +10,6 @@ import uuid
 from backend.routers.base import RouterConflictError, RouterError, RouterRollbackError, is_managed
 from backend.routers.ikuai import ROUTE_FIELDS, decode_value
 
-PAGE_SIZE = 1000
 # status is the computed running status, not part of the static_rt edit form.
 RUNTIME_FIELDS = {'status'}
 ENTRY_IDENTITY = ('id', 'cidr', 'gateway', 'enabled', 'comment', 'table', 'snapshot')
@@ -70,25 +69,7 @@ def _entry(raw):
 
 def read_routes(driver):
     """Read every page, failing closed on truncation or inconsistent identities."""
-    rows, total, offset, ids = [], None, 0, set()
-    while total is None or offset < total:
-        result = driver.call('static_rt', {'TYPE': 'total,data', 'limit': f'{offset},{PAGE_SIZE}'})
-        count, page = result.get('total'), result.get('data')
-        if (type(count) is not int or count < 0 or not isinstance(page, list)
-                or (total is not None and count != total)
-                or len(page) != min(PAGE_SIZE, max(0, count - offset))):
-            raise RouterError('iKuai 静态路由列表读取不完整或读取期间发生变化，请重试')
-        total = count
-        for raw in page:
-            if (not isinstance(raw, dict) or type(raw.get('id')) is not int or raw['id'] < 1
-                    or raw['id'] in ids):
-                raise RouterError('iKuai 静态路由列表缺少唯一有效 ID，无法安全编辑')
-            ids.add(raw['id'])
-            rows.append(_entry(raw))
-        offset += len(page)
-        if not total:
-            break
-    return rows
+    return [_entry(raw) for raw in driver._list_all('static_rt')]
 
 
 def _values(values):
