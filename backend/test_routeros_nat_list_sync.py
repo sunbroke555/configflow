@@ -72,3 +72,30 @@ def test_auto_sync_failure_restores_routes_and_members_and_pauses(environment):
     key = lambda row: sorted(row.items())  # noqa: E731
     assert sorted(after.pop(ADDRESSES), key=key) == sorted(before.pop(ADDRESSES), key=key)
     assert after == before
+
+
+@pytest.mark.parametrize('when', ['before-preview', 'after-preview'])
+def test_auto_sync_leaves_lists_another_firewall_rule_selects(environment, when):
+    from backend.routers import rule_sync
+    from backend.test_ros_policy import FILTER
+    _, driver, _ = static_sync(environment)
+    reference = {'.id': '*F1', 'chain': 'forward', 'action': 'drop', 'dst-address-list': DST, 'disabled': 'false'}
+    if when == 'before-preview':
+        driver.rows[FILTER].append(reference)
+    else:
+        read_state = driver.read_state
+
+        def read_then_reference():
+            state = read_state()
+            if reference not in driver.rows[FILTER]:
+                driver.rows[FILTER].append(copy.deepcopy(reference))
+            return state
+        driver.read_state = read_then_reference
+    before = configurations(driver)
+    result = rule_sync.sync('default', 'ros', lambda *_: NEW)
+    assert result['status'] == 'paused', result
+    assert f'{FILTER}/*F1' in result['message'] and DST in result['message'], result
+    after = configurations(driver)
+    assert after.pop(FILTER) == [{key: value for key, value in reference.items() if key != '.id'}]
+    before.pop(FILTER)
+    assert not driver.writes and after == before

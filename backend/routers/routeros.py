@@ -198,7 +198,7 @@ class RouterOSDriver(RouterDriver):
                 if not _truthy(row.get('disabled')):
                     state.address_sets.setdefault(name, []).append(str(row.get('address') or ''))
         if own:
-            state.nat_lists = routeros_nat_list.state_lists(lists, mangle)
+            state.nat_lists = routeros_nat_list.state_lists(self, nats, lists, mangle)
         assessed = nats
         if getattr(self, 'dns_guard_manifest', None):
             # Proven DNS guard hairpins only translate queries to OxiDNS:53, never

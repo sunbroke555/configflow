@@ -483,7 +483,9 @@ def test_release_rollback_keeps_the_results_of_batches_before_a_lost_reply(small
     session.fail, session.executed, session.lose = ('PUT', ADDRESSES, 1), 0, (4,)
     result = execute(plan, driver, None)
     assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
-    restored = [item for item in result['rollback'] if any(cidr in item['summary'] for cidr in cidrs(50))]
+    # The NAT list removal runs ahead of the route deletions and is undone too.
+    restored = [item for item in result['rollback'] if any(cidr in item['summary'] for cidr in cidrs(50))
+                and 'NAT 免转换' not in item['summary']]
     assert len(restored) == 50
     failed = [item for item in restored if item['status'] == 'failed']
     # Only the batch whose reply was lost is unknown; nothing is misreported

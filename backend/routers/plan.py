@@ -490,6 +490,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                     'nat_not_required': [{'cidr': item['cidr'], 'gateway': gateway}
                                          for item in nat_items if item['status'] == 'not_required']}
                 nat_ops = []
+    if listed.get('check') is not None and nat_ops:
+        from backend.routers.routeros_nat_list import removals_first
+        nat_ops, route_ops = removals_first(nat_ops, route_ops, gateway)
     return_ops = []
     if manage_return:
         allocation = return_allocation(return_routing)

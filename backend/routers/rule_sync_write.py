@@ -3,7 +3,9 @@ import copy
 import ipaddress
 
 from backend.routers.base import RouterError, RouterRollbackError
-from backend.routers.ros_policy import ADDRESSES, MANGLE, ROUTES, config_row, owned_rows, snapshot, check_references
+from backend.routers.ros_policy import (
+    ADDRESSES, FILTER, MANGLE, NAT, RAW, ROUTES, config_row, owned_rows, snapshot, check_references,
+)
 from backend.routers.ros_policy_write import (
     _create, _create_addresses, _delete, _delete_addresses, _guard_in, _resource, restore, verify,
 )
@@ -32,9 +34,11 @@ def static_resources(driver, desired):
 def restrict_plan(plan, baseline):
     if plan['blockers']:
         raise RouterError('；'.join(plan['blockers']))
+    from backend.routers.plan import STAGE_TITLES
     from backend.routers.routeros_nat_list import member_update
+    nat = member_update(plan, baseline)
     for stage in plan['stages']:
-        if stage['key'] == 'nat_bypass' and member_update(stage['ops'], baseline) is not None:
+        if stage['key'] == 'nat_bypass' and nat is not None:
             continue  # only destination members of the enrolled NAT list rule
         if stage['key'] != 'routes' and stage['ops']:
             raise RouterError(f'本次更新还需要修改「{stage["title"]}」，请手动预览发布')
@@ -42,7 +46,11 @@ def restrict_plan(plan, baseline):
     old_ids = {item['id'] for item in baseline['static_resources']}
     operations = []
     for op in route_stage['ops']:
-        if op['kind'] == 'ros_policy_replace':
+        if op['kind'] == 'nat_list_sync':
+            # NAT list removals run ahead of the route deletions.
+            if nat is None:
+                raise RouterError(f'本次更新还需要修改「{STAGE_TITLES["nat_bypass"]}」，请手动预览发布')
+        elif op['kind'] == 'ros_policy_replace':
             if op.get('migrations'):
                 raise RouterError('更新需要迁移主表路由，请手动预览发布')
             previous = op.get('previous')
@@ -87,14 +95,21 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
     for item in baseline['static_resources']:
         _guard_in(live, item)
     from backend.routers import routeros_nat_list
-    nat = routeros_nat_list.member_update(
-        next((stage['ops'] for stage in plan['stages'] if stage['key'] == 'nat_bypass'), []), baseline)
+    nat = routeros_nat_list.member_update(plan, baseline)
     retained_nat = []
     if nat is not None:
         # The list rule and its sources stay exactly as the manual release left them.
         enrolled = baseline['nat_list']
         for item in [enrolled['rule']] + enrolled['src']:
             _guard_in(live, item)
+        # As strict as the manual release: no other firewall rule may select
+        # the lists, or a member change would silently change that rule too.
+        foreign = [(path, row_id, name) for path in (NAT, MANGLE, FILTER, RAW)
+                   for row_id, name in routeros_nat_list.references(live[path])
+                   if not (path == NAT and row_id == enrolled['rule']['id'])]
+        if foreign:
+            path, row_id, name = foreign[0]
+            raise RouterError(f'其他防火墙规则 {path}/{row_id} 正在引用 {name}，自动同步不会修改，请手动预览发布')
         sources = {row['.id'] for row in live[ADDRESSES] if row.get('list') == routeros_nat_list.SRC_LIST
                    and row.get('comment') == routeros_nat_list.COMMENT}
         if sources != {item['id'] for item in enrolled['src']}:

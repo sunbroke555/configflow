@@ -19,6 +19,7 @@ no new exemption keep exactly the earlier plan (``plan`` returns None).
 """
 import copy
 import ipaddress
+from itertools import groupby
 from urllib.parse import quote
 
 from backend.routers.base import RouterError, RouterRollbackError, is_managed, managed_comment
@@ -98,13 +99,24 @@ def references(rows):
     return found
 
 
-def inspect_rule(rows, mangle_references=()):
+def candidate(row):
+    """A NAT row that may be the list rule: its comment and a selector of either list.
+
+    The comment alone is not ownership: adopting a hand-made exemption
+    commented ``mihomo-nat`` writes this very comment onto a rule that
+    selects no list, and that rule stays an ordinary adopted one.
+    """
+    return row.get('comment') == COMMENT and bool(references([row]))
+
+
+def inspect_rule(rows, mangle_references=(), firewall_references=()):
     """Find the rule in an ordered NAT table: ``{'rule', 'problem', 'out_interface'}``.
 
     ``rule`` is None when there is none. A problem means the device holds
-    something only a person can sort out; nothing is then written.
+    something only a person can sort out; nothing is then written. Mangle
+    references are (id, list name); filter and raw ones (path, id, list name).
     """
-    found = [row for row in rows if row.get('comment') == COMMENT]
+    found = [row for row in rows if candidate(row)]
     result = {'rule': None, 'problem': '', 'out_interface': ''}
     if len(found) > 1:
         result['problem'] = (f'发现多条 ConfigFlow NAT 免转换列表规则（{COMMENT}），无法确认归属，'
@@ -113,6 +125,7 @@ def inspect_rule(rows, mangle_references=()):
     own = str(found[0].get('.id')) if found else None
     others = [(f'{NAT}/{row_id}', name) for row_id, name in references(rows) if row_id != own]
     others += [(f'{MANGLE}/{row_id}', name) for row_id, name in mangle_references]
+    others += [(f'{path}/{row_id}', name) for path, row_id, name in firewall_references]
     if others:
         result['problem'] = f'其他规则 {others[0][0]} 正在引用 ConfigFlow 的免转换地址列表 {others[0][1]}，请先解除引用'
         return result
@@ -237,7 +250,7 @@ def plan(report, state, gateway, skipped):
     rows = state.nat_context.get('rules') or []
     items = [item for item in report['nat_bypass']['items'] if item['cidr'] not in skipped]
     lists = state.nat_lists
-    found = inspect_rule(rows, (lists or {}).get('mangle_refs') or ())
+    found = inspect_rule(rows, (lists or {}).get('mangle_refs') or (), (lists or {}).get('firewall_refs') or ())
     missing = [item['cidr'] for item in items if item['status'] == 'missing']
     if found['rule'] is None and not found['problem'] and not missing:
         return None
@@ -248,6 +261,8 @@ def plan(report, state, gateway, skipped):
     result['evidence'] = _evidence(lists)
     if lists.get('mangle_refs') is None:
         result['blockers'].append('无法读取 Mangle，不能确认 NAT 免转换地址列表未被其他规则引用')
+    if lists.get('firewall_refs') is None:
+        result['blockers'].append('无法读取防火墙 filter 或 raw 规则，不能确认 NAT 免转换地址列表未被其他规则引用')
     if found['problem']:
         result['blockers'].append(found['problem'])
     rule = found['rule']
@@ -358,6 +373,37 @@ def _summary(op, gateway, create):
     return '；'.join([head] + parts)
 
 
+def removals_first(nat_ops, route_ops, gateway):
+    """Move list removals ahead of the route deletions: ``(nat_ops, route_ops)``.
+
+    A CIDR no longer proxied loses its route in the routes stage. Were its
+    member removed only afterwards, the list rule (which exempts every egress
+    whenever an exemption is needed at all) would meanwhile let its traffic
+    leave the WAN with a LAN source. Removed first, it is only translated on
+    its way to mihomo for a moment, the order auto-sync writes too.
+    Withdrawing the rule moves whole; additions stay after the routes.
+    """
+    if not any(op['kind'] == 'route_delete' for op in route_ops):
+        return nat_ops, route_ops
+    early, rest = [], []
+    for op in nat_ops:
+        if (op['kind'] != 'nat_list_sync' or op['rule'] is None or op['replace_rule']
+                or not (op['withdraw'] or op['dst_remove'])):
+            rest.append(op)
+            continue
+        if op['withdraw']:
+            early.append(op)
+            continue
+        prune = {**copy.deepcopy(op), 'src_add': [], 'src_remove': [], 'dst_add': [], 'legacy': []}
+        prune['summary'] = _summary(prune, gateway, False) + '；在删除对应路由之前执行'
+        early.append(prune)
+        op = {**op, 'dst_remove': []}
+        if op['src_add'] or op['src_remove'] or op['dst_add'] or op['legacy']:
+            op['summary'] = _summary(op, gateway, False)
+            rest.append(op)
+    return rest, early + route_ops
+
+
 def restrict_egress(op, check, interface):
     """Withdrawing source policy: the list rule may only exempt the LAN egress.
 
@@ -408,15 +454,29 @@ def wanted(nats, driver):
     """Whether read_state reads the two lists: the rule or a list reference is
     there, a rule may translate (an exemption may be planned), or this driver
     wrote them."""
-    return (any(row.get('comment') == COMMENT for row in nats) or bool(references(nats))
+    return (bool(references(nats))
             or any(_enabled(row) and row.get('chain') == 'srcnat' and row.get('action') not in NON_TRANSLATING
                    for row in nats)
             or bool(getattr(driver, 'nat_list_touched', False)))
 
 
-def state_lists(rows_by_name, mangle):
-    return {'src': rows_by_name.get(SRC_LIST, []), 'dst': rows_by_name.get(DST_LIST, []),
-            'mangle_refs': None if mangle is None else references(mangle)}
+def state_lists(driver, nats, rows_by_name, mangle):
+    """The two lists and every rule outside NAT selecting them (None: unreadable).
+
+    Filter and raw are read only while the lists or the rule exist, so
+    devices without them keep the reads they had before. A rule selecting a
+    list before ConfigFlow first creates it is still refused when writing.
+    """
+    src, dst = rows_by_name.get(SRC_LIST, []), rows_by_name.get(DST_LIST, [])
+    firewall = []
+    if src or dst or any(candidate(row) for row in nats):
+        try:
+            for path in (FILTER, RAW):
+                firewall.extend((path, row_id, name) for row_id, name in references(driver._list(path)))
+        except RouterError:
+            firewall = None
+    return {'src': src, 'dst': dst, 'mangle_refs': None if mangle is None else references(mangle),
+            'firewall_refs': firewall}
 
 
 def _assessed(driver, rows):
@@ -457,24 +517,28 @@ def nat_resources(driver):
             'src': [_resource(ADDRESSES, row) for row in lists[SRC_LIST] if row.get('comment') == COMMENT]}
 
 
-def member_update(ops, baseline):
+def member_update(plan, baseline):
     """The one NAT change auto-sync may write, or None.
 
     Only destination members of the list rule enrolled by a manual release:
     the rule (ID, configuration, egress) and its source members must match
     the baseline. Creating, replacing or withdrawing the rule, migrating old
-    rules, source or adoption changes still need a manual release.
+    rules, source or adoption changes still need a manual release. Removals
+    the plan put in the routes stage (``removals_first``) are merged in.
     """
     enrolled = (baseline or {}).get('nat_list')
-    if len(ops) != 1 or ops[0]['kind'] != 'nat_list_sync' or not enrolled:
+    stages = {stage['key']: stage['ops'] for stage in plan['stages']}
+    ops = [op for op in stages.get('routes', []) if op['kind'] == 'nat_list_sync'] + stages.get('nat_bypass', [])
+    if not ops or not enrolled or any(op['kind'] != 'nat_list_sync' for op in ops):
         return None
-    op = ops[0]
-    if (op['rule'] is None or op['replace_rule'] or op['withdraw'] or op['legacy'] or op['src_add']
-            or op['src_remove'] or op['rule']['id'] != enrolled['rule']['id']
-            or _config(op['rule']['config']) != _config(enrolled['rule']['config'])
-            or op['out_interface'] != str(enrolled['rule']['config'].get('out-interface') or '')):
-        return None
-    return op
+    for op in ops:
+        if (op['rule'] is None or op['replace_rule'] or op['withdraw'] or op['legacy'] or op['src_add']
+                or op['src_remove'] or op['rule']['id'] != enrolled['rule']['id']
+                or _config(op['rule']['config']) != _config(enrolled['rule']['config'])
+                or op['out_interface'] != str(enrolled['rule']['config'].get('out-interface') or '')):
+            return None
+    return {**ops[-1], 'dst_add': [value for op in ops for value in op['dst_add']],
+            'dst_remove': [item for op in ops for item in op['dst_remove']]}
 
 
 def entries(name, addresses):
@@ -583,9 +647,11 @@ def delete_rules(driver, items, journal):
         values = _writable(NAT, by_id[item['id']])
         index = position[item['id']]
         following = next((row_id for row_id in order[index + 1:] if row_id not in deleting), None)
+        step = {'action': 'restore', **item, 'values': values, 'order': index}
         if following:
             values['place-before'] = following
-        steps.append({'action': 'restore', **item, 'values': values, 'order': index})
+            step['following_order'] = position[following]
+        steps.append(step)
     journal.extend(steps)
     ids = [item['id'] for item in items]
     try:
@@ -605,10 +671,11 @@ def restore_rules(driver, steps, ids, remapped, failures):
     """Recreate deleted NAT rules in their original order with console batches.
 
     Rules still present must be unchanged. An absent rule goes back before
-    the next rule of the same deletion that is still there or, after the last
-    one, before the rule that followed them all, which must still exist.
-    Absent rules sharing an anchor go in their original order. What a batch
-    cannot prove is restored one by one.
+    whichever came first originally: the next rule of the same deletion that
+    is still there, or the rule outside it that followed it (possibly
+    recreated under a new ID), which must then still exist. Absent rules
+    sharing an anchor go in their original order. What a batch cannot prove
+    is restored one by one.
     """
     from bisect import bisect_right
     from backend.routers import routeros_batch
@@ -627,10 +694,15 @@ def restore_rules(driver, steps, ids, remapped, failures):
             continue
         values = copy.deepcopy(step['values'])
         index = bisect_right(orders, step['order'])
-        if index < len(present):
-            values['place-before'] = present[index]['id']
-        elif values.get('place-before'):
-            values['place-before'] = remapped.get((NAT, values['place-before']), values['place-before'])
+        sibling = present[index] if index < len(present) else None
+        following = values.get('place-before')
+        if following:
+            following = values['place-before'] = remapped.get((NAT, following), following)
+        # The rule outside the deletion wins when it sat closer: a sibling
+        # further down would put the rules in between behind the restored ones.
+        if sibling is not None and not (following in by_id and step.get('following_order') is not None
+                                        and step['following_order'] < sibling['order']):
+            values['place-before'] = sibling['id']
         if values.get('place-before') and values['place-before'] not in by_id:
             failures.append('原规则位置已改变，不能安全恢复顺序')
             continue
@@ -681,10 +753,12 @@ def apply(driver, op):
                 if op[kind + '_remove']:
                     _delete_addresses(driver, op[kind + '_remove'], journal)
             return {'kind': 'nat_list_restore', 'steps': list(reversed(journal)), 'keep': keep}
-        if op['src_remove']:
-            _delete_addresses(driver, op['src_remove'], journal)
+        # Add before remove: removing first would translate new connections
+        # of clients both ranges cover until the new fragments are in.
         if op['src_add']:
             _create_addresses(driver, entries(SRC_LIST, op['src_add']), journal, ids)
+        if op['src_remove']:
+            _delete_addresses(driver, op['src_remove'], journal)
         rule_id = op['rule']['id'] if op['rule'] else None
         if op['replace_rule']:
             # Narrow first: no member is added while the rule exempts every egress.
@@ -735,7 +809,16 @@ def restore(driver, op):
     except RouterError as error:
         delete_safe = False
         failures.append(str(error))
-    run_steps(driver, op['steps'], ids, remapped, configs, failures, delete_safe, nat_batch=True)
+    # What this release wrote goes only once everything it took away is back:
+    # deleting the new rule beside old rules that could not return would
+    # leave the masquerade translating every client. Keep it for inspection.
+    kept = False
+    for deleting, run in groupby(op['steps'], key=lambda step: step['action'] == 'delete'):
+        if deleting and failures and delete_safe:
+            kept = True
+        run_steps(driver, list(run), ids, remapped, configs, failures, delete_safe and not failures, nat_batch=True)
+    if kept:
+        failures.append('原有免转换对象未能全部恢复，已保留新的 NAT 免转换规则和地址列表条目，请检查后处理')
     if failures:
         raise RouterRollbackError('NAT 免转换回滚未完成：' + '；'.join(failures))
     return {}
@@ -749,10 +832,10 @@ def verify(check, state):
     lists = getattr(state, 'nat_lists', None)
     if lists is None:
         raise RouterError('回读校验失败：无法读取 NAT 免转换地址列表')
-    found = inspect_rule(rows, lists.get('mangle_refs') or ())
+    found = inspect_rule(rows, lists.get('mangle_refs') or (), lists.get('firewall_refs') or ())
     present = {str(row.get('.id')) for row in rows}
     if check['withdraw']:
-        if found['rule'] is not None or any(row.get('comment') == COMMENT for row in rows):
+        if found['rule'] is not None or any(candidate(row) for row in rows):
             raise RouterError('回读校验失败：应删除的 NAT 免转换规则仍然存在')
     else:
         if found['problem']:

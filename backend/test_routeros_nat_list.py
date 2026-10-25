@@ -13,7 +13,8 @@ from backend.routers.routeros import UncertainWrite
 from backend.routers.routeros_nat import client_source_networks
 from backend.test_nat_list_unchanged import legacy_rules
 from backend.test_ros_policy import (
-    ADDRESSES, GATEWAY, MANGLE, NAT, ROUTER, ROUTES, TARGET, MemoryROS, configurations, desired_for, inspect, release,
+    ADDRESSES, FILTER, GATEWAY, MANGLE, NAT, RAW, ROUTER, ROUTES, TARGET, MemoryROS, configurations, desired_for,
+    inspect, release,
 )
 
 MASQUERADE = {'.id': '*3', 'chain': 'srcnat', 'action': 'masquerade', 'disabled': 'false'}
@@ -59,6 +60,14 @@ def nat_ops(plan):
 
 def list_op(plan):
     return next(op for op in nat_ops(plan) if op['kind'] == 'nat_list_sync')
+
+
+def removal_op(plan):
+    """The list removal the plan runs ahead of the route deletions."""
+    routes = next(stage['ops'] for stage in plan['stages'] if stage['key'] == 'routes')
+    [op] = [op for op in routes if op['kind'] == 'nat_list_sync']
+    assert routes[0] is op
+    return op
 
 
 def members(driver, name, comment=nat_list.COMMENT):
@@ -138,10 +147,12 @@ def test_destination_changes_write_members_only():
     rule, nats = copy.deepcopy(rule_rows(driver)), copy.deepcopy(driver.rows[NAT])
     added = '149.154.160.0/20'
     _, plan = preview(driver, [FAKE_IP, added])
-    op = list_op(plan)
-    assert op['dst_add'] == [added] and [item['config']['address'] for item in op['dst_remove']] == [TARGET]
-    assert op['summary'] == ('NAT 免转换目的列表 cf-mihomo-nat-dst：新增 1 个网段（149.154.160.0/20）、'
-                             '移除 1 个不再代理的网段（91.108.4.0/22）')
+    op, removal = list_op(plan), removal_op(plan)
+    assert op['dst_add'] == [added] and op['dst_remove'] == [] and removal['dst_add'] == []
+    assert [item['config']['address'] for item in removal['dst_remove']] == [TARGET]
+    assert op['summary'] == 'NAT 免转换目的列表 cf-mihomo-nat-dst：新增 1 个网段（149.154.160.0/20）'
+    assert removal['summary'] == ('NAT 免转换目的列表 cf-mihomo-nat-dst：移除 1 个不再代理的网段（91.108.4.0/22）；'
+                                  '在删除对应路由之前执行')
     driver.writes.clear()
     assert execute(plan, driver, None)['ok']
     assert driver.rows[NAT] == nats and rule_rows(driver) == rule
@@ -631,6 +642,29 @@ def test_failed_withdrawal_restores_the_original_rule_and_policy(point):
     assert configurations(driver) == before and driver.ros_policy_manifest['spec'] == manifest['spec']
 
 
+def test_failed_withdrawal_keeps_the_narrowed_rule_when_the_old_one_cannot_return():
+    driver = policy_device()
+    release(driver)
+    [old] = rule_rows(driver)
+    driver.fail = ('PUT', ROUTES, driver.counts['PUT', ROUTES] + 1)
+    _, plan = inspect(driver, desired_for(driver, selected=False))
+    send = driver._request
+
+    def request(method, path, values=None, **kwargs):
+        if (method == 'PUT' and path == NAT and (values or {}).get('comment') == nat_list.COMMENT
+                and 'out-interface' not in values):
+            raise RouterError('injected restore failure')
+        return send(method, path, values, **kwargs)
+    driver._request = request
+    result = execute(plan, driver, None)
+    assert not result['ok']
+    assert any('已保留新的 NAT 免转换规则' in item['summary'] for item in result['rollback']
+               if item['status'] == 'failed'), result['rollback']
+    [rule] = rule_rows(driver)
+    assert rule['.id'] != old['.id'] and rule['out-interface'] == 'bridge'
+    assert members(driver, DST) >= {FAKE_IP}
+
+
 # --- verification ----------------------------------------------------------------
 
 def test_readback_rejects_members_that_differ_from_the_plan():
@@ -675,7 +709,8 @@ def test_failed_member_removal_puts_the_new_member_back_out():
     before = configurations(driver)
     driver.fail = ('DELETE', ADDRESSES, driver.counts['DELETE', ADDRESSES] + 1)
     result = execute(plan, driver, None)
-    assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
+    # The removal runs first, in the routes stage, ahead of the route deletion.
+    assert not result['ok'] and result['failed_stage'] == 'routes'
     assert not any(item['status'] == 'failed' for item in result['rollback'])
     assert configurations(driver) == before and members(driver, DST) == {FAKE_IP, TARGET}
 
@@ -688,8 +723,148 @@ def test_a_wider_or_narrower_member_is_replaced_by_the_desired_cidr(before, afte
     report, plan = preview(driver, [after])
     # Covered by a wider member, or only partly by a narrower one: never unknown.
     assert report['nat_bypass']['items'][0]['status'] == ('synced' if before == '91.108.0.0/16' else 'missing')
-    op = list_op(plan)
-    assert op['dst_add'] == [after] and [item['config']['address'] for item in op['dst_remove']] == [before]
+    assert list_op(plan)['dst_add'] == [after] and list_op(plan)['dst_remove'] == []
+    assert [item['config']['address'] for item in removal_op(plan)['dst_remove']] == [before]
     assert execute(plan, driver, None)['ok']
     assert members(driver, DST) == {after}
     assert preview(driver, [after])[1]['empty']
+
+
+# --- review fixes ---------------------------------------------------------------
+
+@pytest.mark.parametrize('cause', ['lost-restore-batch', 'anchor-replaced'])
+def test_old_rules_not_restored_keep_the_new_rule_and_members(cause, monkeypatch):
+    """Rolling back a migration never leaves the masquerade without any exemption."""
+    hijack = {'.id': '*Z', 'chain': 'dstnat', 'action': 'dst-nat', 'protocol': 'udp', 'dst-port': '53',
+              'to-addresses': '192.168.0.9', 'disabled': 'false', 'comment': 'other'}
+    driver = device(legacy_rules() + [hijack, MASQUERADE])
+    _, plan = preview(driver, TARGETS)
+    send = driver._request
+
+    def broken(check, state):
+        if cause == 'anchor-replaced':
+            # Another writer recreated the rule after the old ones under a new ID.
+            next(row for row in driver.rows[NAT] if row['.id'] == '*Z')['.id'] = '*Z2'
+        raise RouterError('injected')
+    monkeypatch.setattr(nat_list, 'verify', broken)
+
+    def request(method, path, values=None, **kwargs):
+        if (cause == 'lost-restore-batch' and method == 'POST' and path == '/execute'
+                and '/ip/firewall/nat/add' in values['script']):
+            raise UncertainWrite('reply lost before commit')
+        return send(method, path, values, **kwargs)
+    driver._request = request
+    result = execute(plan, driver, None)
+    assert not result['ok']
+    failed = [item['summary'] for item in result['rollback'] if item['status'] == 'failed']
+    assert failed and any('已保留新的 NAT 免转换规则' in summary for summary in failed), failed
+    assert len(rule_rows(driver)) == 1
+    assert members(driver, DST) == set(TARGETS) and members(driver, SRC) == sources()
+    assert driver.rows[NAT].index(rule_rows(driver)[0]) == 0
+
+
+def test_partly_deleted_old_rules_go_back_before_the_rule_that_followed_them():
+    targets = cidrs(40)
+    rows = legacy_for(targets)
+    rows.insert(100, {'.id': '*OTHER', 'chain': 'dstnat', 'action': 'accept', 'disabled': 'false'})
+    driver = device(rows + [MASQUERADE])
+    _, plan = preview(driver, targets + ['149.154.160.0/20'])
+    assert len(list_op(plan)['legacy']) == 560
+    before = configurations(driver)
+    # The first remove batch (500 rules) succeeds; the rest cannot be deleted.
+    driver.fail = ('DELETE', NAT, 501)
+    result = execute(plan, driver, None)
+    assert not result['ok'] and not any(item['status'] == 'failed' for item in result['rollback'])
+    assert [row['.id'] for row in driver.rows[NAT]].index('*OTHER') == 100
+    assert configurations(driver) == before
+
+
+def test_a_removed_cidr_leaves_the_list_before_its_route_goes():
+    driver = device()
+    publish(driver, [FAKE_IP, TARGET])
+    _, plan = preview(driver, [FAKE_IP])
+    send = driver._request
+    states = []
+
+    def request(method, path, values=None, **kwargs):
+        result = send(method, path, values, **kwargs)
+        if method != 'GET':
+            states.append((any(row.get('dst-address') == TARGET for row in driver.rows[ROUTES]),
+                           TARGET in members(driver, DST)))
+        return result
+    driver._request = request
+    assert execute(plan, driver, None)['ok']
+    # Never exempt from translation while no route sends it to mihomo.
+    assert (False, True) not in states and states[-1] == (False, False)
+    assert members(driver, DST) == {FAKE_IP} and len(rule_rows(driver)) == 1
+    report, again = preview(driver, [FAKE_IP])
+    assert again['empty'] and report['in_sync']
+
+
+def test_a_removed_cidr_rolls_back_with_its_route():
+    driver = device()
+    publish(driver, [FAKE_IP, TARGET])
+    _, plan = preview(driver, [FAKE_IP])
+    before = configurations(driver)
+    driver.fail = ('DELETE', ROUTES, driver.counts['DELETE', ROUTES] + 1)
+    result = execute(plan, driver, None)
+    assert not result['ok'] and not any(item['status'] == 'failed' for item in result['rollback'])
+    after = configurations(driver)
+    key = lambda row: sorted(row.items())  # noqa: E731
+    assert sorted(after.pop(ADDRESSES), key=key) == sorted(before.pop(ADDRESSES), key=key)
+    assert after == before
+
+
+def test_gateway_move_adds_new_source_fragments_before_removing_old_ones():
+    driver = device()
+    driver.rows[ROUTES] = [driver.rows[ROUTES][0]]
+    publish(driver, [TARGET])
+    driver.rows[ROUTES] = [driver.rows[ROUTES][0]]
+    _, plan = preview(driver, [TARGET], '192.168.0.100')
+    send = driver._request
+    clients = [address for address in ipaddress.ip_network('192.168.0.0/24').hosts()
+               if str(address) not in (GATEWAY, '192.168.0.100')]
+    checked = []
+
+    def request(method, path, values=None, **kwargs):
+        result = send(method, path, values, **kwargs)
+        if method != 'GET':
+            listed = [ipaddress.ip_network(row['address']) for row in driver.rows[ADDRESSES] if row['list'] == SRC]
+            uncovered = [str(client) for client in clients if not any(client in network for network in listed)]
+            assert not uncovered, (method, path, uncovered[:3])
+            checked.append(path)
+        return result
+    driver._request = request
+    assert execute(plan, driver, None)['ok'] and checked
+    assert members(driver, SRC) == sources('192.168.0.100')
+
+
+def test_an_adopted_hand_rule_commented_like_the_list_rule_is_not_mistaken_for_it():
+    # A hand-made exemption named "mihomo-nat" is adopted as "cf-mihomo-nat".
+    manual = {'.id': '*A', 'chain': 'srcnat', 'action': 'accept', 'comment': 'mihomo-nat',
+              'src-address': '192.168.0.0/24', 'disabled': 'false'}
+    driver = device([manual, MASQUERADE])
+    publish(driver, [FAKE_IP, TARGET])
+    assert driver.rows[NAT][0] == {**manual, 'comment': nat_list.COMMENT}
+    report, plan = preview(driver, [FAKE_IP, TARGET])
+    assert report['in_sync'] and not plan['blockers'] and plan['empty'], plan['blockers']
+    # A CIDR the hand rule does not cover still gets the list rule beside it.
+    driver.rows[NAT][0]['dst-address'] = FAKE_IP
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    assert not plan['blockers'], plan['blockers']
+    assert execute(plan, driver, None)['ok']
+    assert [row['.id'] for row in driver.rows[NAT] if row.get('comment') == nat_list.COMMENT][1:] == ['*A']
+    assert len([row for row in driver.rows[NAT] if nat_list.is_rule(row)]) == 1
+    assert preview(driver, [FAKE_IP, TARGET])[1]['empty']
+
+
+@pytest.mark.parametrize('path', [FILTER, RAW])
+def test_filter_or_raw_selecting_the_lists_blocks_the_preview(path):
+    driver = device()
+    publish(driver, [FAKE_IP])
+    driver.rows[path].append({'.id': '*F1', 'chain': 'forward' if path == FILTER else 'prerouting',
+                              'action': 'accept', 'src-address-list': SRC, 'disabled': 'false'})
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    assert any(f'{path}/*F1' in blocker and SRC in blocker for blocker in plan['blockers']), plan['blockers']
+    driver.writes.clear()
+    assert not execute(plan, driver, None)['ok'] and not driver.writes
