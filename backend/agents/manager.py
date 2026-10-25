@@ -497,6 +497,12 @@ class AgentManager:
                 handle.close()
                 return {'success': False, 'message': 'Deployment preparation already running', 'http_status': 409}
             self._preparation_files[(agent_id, deployment_id)] = handle
+            # Earlier tasks can no longer become the latest one, the only task
+            # whose per-file digests are read (copied to applied_content on
+            # success). Keep their fingerprint; drop a digest per bundled file.
+            for previous in deployments.values():
+                if isinstance(previous.get('prepared_content'), dict):
+                    previous['prepared_content'].pop('files', None)
             deployments[deployment_id] = record
             agent['latest_deployment'] = record.copy()
             started.append(agent)
@@ -517,8 +523,13 @@ class AgentManager:
                     logger.info('开始向 Agent %s 发布配置（任务 %s）', _agent_label(started[0]), deployment_id[:12])
             return result
 
-    def record_deployment(self, agent_id, deployment_id, updates, *, only_unsubmitted=False, upload_receipt=False, activation_receipt=False):
-        """Only a confirmed successful activation changes the displayed version."""
+    def record_deployment(self, agent_id, deployment_id, updates, *, only_unsubmitted=False, upload_receipt=False,
+                          activation_receipt=False, skip_unchanged=False):
+        """Only a confirmed successful activation changes the displayed version.
+
+        skip_unchanged: a status poll that would only move updated_at returns
+        the stored task without rewriting the configuration document.
+        """
         def record(agents):
             agent = next((item for item in agents if item['id'] == agent_id), None)
             if agent is None:
@@ -614,6 +625,11 @@ class AgentManager:
             return state.copy()
         from backend.utils.logger import log_text
         finished = []
+        if skip_unchanged:
+            unchanged = self._unchanged_deployment(record, agent_id, deployment_id)
+            finished.clear()
+            if unchanged is not None:
+                return unchanged
         result = self._update_agents(record)
         for label, state in finished[-1:]:
             level, text = _DEPLOYMENT_RESULTS[state['status']]
@@ -621,6 +637,32 @@ class AgentManager:
             logger.log(level, 'Agent %s %s（任务 %s）%s', label, text, deployment_id[:12],
                        '：' + log_text(detail, 300) if detail and state['status'] != 'succeeded' else '')
         return result
+
+    def _unchanged_deployment(self, record, agent_id, deployment_id):
+        """The stored task if record() would change nothing but its updated_at.
+
+        Polls during activation mostly repeat the stored status, and each write
+        rewrites the whole configuration document. This is decided on a read
+        snapshot; a write by another request meanwhile simply comes after it.
+        """
+        try:
+            agents = self.repository.get_system().get('agents', [])
+            agent = next((item for item in agents if item['id'] == agent_id), None)
+            state = ((agent or {}).get('deployments') or {}).get(deployment_id)
+            if state is None:
+                return None
+            stored = deepcopy(agent)
+            record(agents)  # Changes only this Agent's entry.
+        except Exception:
+            return None  # Let the real transaction report it.
+        for old, new in ((stored['deployments'][deployment_id], agent['deployments'].get(deployment_id)),
+                         (stored.get('latest_deployment'), agent.get('latest_deployment'))):
+            if isinstance(old, dict) and isinstance(new, dict):
+                if 'updated_at' in old:
+                    new['updated_at'] = old['updated_at']
+                else:
+                    new.pop('updated_at', None)
+        return stored['deployments'][deployment_id].copy() if agent == stored else None
 
     def _deployment_request(self, agent, method, suffix, **kwargs):
         url = f"http://{agent['host']}:{agent['port']}/api/{suffix}"
@@ -713,7 +755,7 @@ class AgentManager:
                     'success': False, 'status': 'failed', 'message': 'Agent has no record of the uploaded deployment'})
             if result.get('http_status') or not isinstance(result.get('status'), str):
                 return {**state, 'message': 'Deployment status temporarily unavailable', 'pending': True}
-            return self.record_deployment(agent_id, deployment_id, result)
+            return self.record_deployment(agent_id, deployment_id, result, skip_unchanged=True)
         except requests.RequestException:
             return {**state, 'message': 'Deployment status temporarily unavailable', 'pending': True}
 
