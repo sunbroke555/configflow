@@ -190,7 +190,8 @@ def test_deleting_routes_reads_static_routes_a_constant_number_of_times():
     assert _managed(session) == [] and len(session.rows['static_rt']) == 1500
 
 
-def test_adopting_routes_edits_full_rows_from_one_snapshot():
+def test_adopting_routes_reads_each_row_just_before_editing_it():
+    # An edit sends the whole row, so it is read fresh (as before batching), never from the snapshot.
     manual = [_route(1501 + index, cidr, GATEWAY, f'manual {index}') for index, cidr in enumerate(_cidrs(50))]
     session = PagedIKuai(_bulk(1500) + manual, [])
     driver = _driver(session)
@@ -198,9 +199,93 @@ def test_adopting_routes_edits_full_rows_from_one_snapshot():
     assert [op['kind'] for op in plan['stages'][1]['ops']] == ['route_comment'] * 50
     session.shows.clear()
     assert execute(plan, driver, None)['ok']
-    assert len(session.static_shows()) <= 8
+    assert len(session.static_shows()) <= 2 * 50 + 8
     edits = [param for func, action, param in session.writes if action == 'edit']
     assert edits == [{**row, 'comment': f'cf-manual%20{index}'} for index, row in enumerate(manual)]
+
+
+def test_adoption_keeps_a_change_made_by_hand_during_the_stage():
+    manual = [_route(11, '10.1.0.0/24', GATEWAY, 'a'), _route(12, '10.2.0.0/24', GATEWAY, 'b')]
+    session = PagedIKuai(_bulk(5) + manual, [])
+    driver = _driver(session)
+    plan = _static_plan(driver, ['10.1.0.0/24', '10.2.0.0/24'])
+    assert [op['kind'] for op in plan['stages'][1]['ops']] == ['route_comment'] * 2
+
+    def disable_second_by_hand(func, action, param, current):
+        if (func, action) == ('static_rt', 'edit') and param['id'] == 11:
+            next(row for row in current.rows['static_rt'] if row['id'] == 12)['enabled'] = 'no'
+    session.on_write = disable_second_by_hand
+    result = execute(plan, driver, None)
+    # The disabled route is edited as it now is; the stage check then fails and rolls back.
+    edits = [param for func, action, param in session.writes if action == 'edit']
+    assert edits[1]['id'] == 12 and edits[1]['enabled'] == 'no'
+    assert not result['ok'] and result['failed_stage'] == 'routes'
+    assert next(row for row in session.rows['static_rt'] if row['id'] == 12)['enabled'] == 'no'
+
+
+class SwallowedRouteAdds(PagedIKuai):
+    """Accepts static_rt adds with code 0 but never stores them."""
+
+    def post(self, url, json=None, **kwargs):
+        if json and (json.get('func_name'), json.get('action')) == ('static_rt', 'add'):
+            self.writes.append(('static_rt', 'add', copy.deepcopy(json['param'])))
+            return FakeResponse({'code': 0, 'results': {}})
+        return super().post(url, json=json, **kwargs)
+
+
+def test_policy_rules_are_kept_until_their_replacement_routes_exist():
+    # Retiring 端口分流 re-routes each CIDR first; an add that never landed must stop the deletes.
+    session = SwallowedRouteAdds([], HOME_NATS, policies=MIGRATED)
+    driver = _driver(session)
+    plan = _plan_without_return(driver)
+    assert [op['kind'] for op in plan['stages'][1]['ops']] == ['route_add'] * 4 + ['policy_route_delete'] * 2
+    before = copy.deepcopy(session.rows['stream_ipport'])
+    result = execute(plan, driver, None)
+    assert not result['ok'] and '已提交但读不回新对象' in result['log'][-1]['summary']
+    assert [(func, action) for func, action, _ in session.writes] == [('static_rt', 'add')] * 4
+    assert session.rows['stream_ipport'] == before
+
+
+def test_covered_route_is_kept_until_the_wider_route_exists():
+    narrow = _route(50, '91.108.4.0/22', GATEWAY, 'cf-lab', _tagname('rt', '91.108.4.0/22'))
+    session = SwallowedRouteAdds(_bulk(5) + [narrow], [])
+    driver = _driver(session)
+    plan = _static_plan(driver, ['91.108.0.0/16'])
+    assert [op['kind'] for op in plan['stages'][1]['ops']] == ['route_add', 'route_delete']
+    result = execute(plan, driver, None)
+    assert not result['ok']
+    assert [action for func, action, _ in session.writes if func == 'static_rt'] == ['add']
+    assert narrow in session.rows['static_rt']
+
+
+def test_rollback_still_attempts_every_undo_after_a_re_add_is_lost():
+    # As before batching, a re-added route that cannot be read back does not stop the other undos.
+    managed = [_route(50 + index, cidr, GATEWAY, 'cf-mihomo', _tagname('rt', cidr))
+               for index, cidr in enumerate(['91.108.0.0/16', '149.154.160.0/20', '198.18.0.0/16'])]
+    session = SwallowedRouteAdds(managed, HOME_NATS)
+    session.fail = ('nat_rule', 'edit')
+    driver = _driver(session)
+    plan = _plan(driver)
+    assert [op['kind'] for op in plan['stages'][1]['ops']] == ['policy_route_add'] + ['route_delete'] * 3
+    result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
+    assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
+    undone = [(func, action) for func, action, _ in session.writes][5:]
+    assert undone == [('static_rt', 'add')] * 3 + [('stream_ipport', 'del')]
+    assert session.rows['stream_ipport'] == []
+    assert result['rollback'][-1]['status'] == 'failed'
+
+
+def test_new_routes_are_read_back_once_before_the_deletes_that_follow():
+    managed = [_route(1501 + index, cidr, GATEWAY, 'cf-lab', _tagname('rt', cidr))
+               for index, cidr in enumerate(_cidrs(100, '10.220.0.0/16'))]
+    session = PagedIKuai(_bulk(1500) + managed, [])
+    driver = _driver(session)
+    plan = _static_plan(driver, _cidrs(100))
+    assert [op['kind'] for op in plan['stages'][1]['ops']] == ['route_add'] * 100 + ['route_delete'] * 100
+    session.shows.clear()
+    assert execute(plan, driver, None)['ok']
+    # The readback of the adds doubles as the deletes' snapshot.
+    assert len(session.static_shows()) <= 8
 
 
 def test_same_writes_as_one_read_per_operation():

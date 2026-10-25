@@ -176,16 +176,16 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         verify_nat(checks, state)
 
 
-def _batch(driver):
+def _batch(driver, rollback: bool = False):
     """A driver may share its reads across one stage's writes (iKuai static routes)."""
     batch = getattr(type(driver), 'batch', None)
-    return driver.batch() if callable(batch) else nullcontext()
+    return driver.batch(rollback=rollback) if callable(batch) else nullcontext()
 
 
 def _rollback(done: List[Tuple[str, Dict[str, Any], Dict[str, Any]]], driver, agent) -> List[Dict[str, Any]]:
     results = []
     try:
-        with _batch(driver):
+        with _batch(driver, rollback=True):
             for stage, op, undo in reversed(done):
                 if not undo:
                     continue

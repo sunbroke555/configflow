@@ -533,17 +533,21 @@ class IKuaiDriver(RouterDriver):
         return data.get('results') if isinstance(data.get('results'), dict) else {}
 
     @contextmanager
-    def batch(self):
+    def batch(self, rollback: bool = False):
         """One release stage or rollback: read static_rt once instead of around every write.
 
-        Deletes and edits take their rows from one complete snapshot, kept in
-        step with our own writes; routes added here are confirmed by a single
-        readback when the batch ends. Nothing carries over to the next batch.
+        Deletes take their rows from one complete snapshot, kept in step with
+        our own writes; edits still read the latest row so a concurrent change
+        by hand is never overwritten. Consecutive new routes are confirmed by
+        one readback before the next other write (a stage may delete what they
+        replace) and at the end. A rollback attempts every undo even after a
+        failed re-add, so it confirms only at the end. Nothing carries over.
         """
         if self._batch is not None:
             yield
             return
-        self._batch = {'rows': None, 'stale': set(), 'added': [], 'added_since_read': False}
+        self._batch = {'rows': None, 'stale': set(), 'added': [], 'added_since_read': False,
+                       'rollback': rollback}
         try:
             yield
             self._confirm_added(self._batch['added'])
@@ -580,9 +584,9 @@ class IKuaiDriver(RouterDriver):
         else:
             batch['added_since_read'] = True
 
-    def _row(self, func_name: str, row_id: Any) -> Dict[str, Any]:
+    def _row(self, func_name: str, row_id: Any, fresh: bool = False) -> Dict[str, Any]:
         if func_name == 'static_rt' and self._batch is not None:
-            if str(row_id) in self._batch['stale']:
+            if fresh or str(row_id) in self._batch['stale']:
                 self._batch['rows'] = None
             row = self._snapshot().get(str(row_id))
         else:
@@ -605,9 +609,13 @@ class IKuaiDriver(RouterDriver):
         """Prove each route added in this batch exists, with one complete readback."""
         if not added:
             return
+        listed = self._list_all('static_rt')
+        if self._batch is not None:
+            # A complete read: it also serves as the snapshot for the writes that follow.
+            self._batch['rows'] = {str(row['id']): row for row in listed}
+            self._batch['stale'], self._batch['added_since_read'] = set(), False
         rows = {}
-        for row in self._list_all('static_rt'):
-            row = decode_value(row)
+        for row in map(decode_value, listed):
             rows.setdefault(row.get('tagname'), []).append(row)
         missing = []
         for undo in added:
@@ -759,6 +767,12 @@ class IKuaiDriver(RouterDriver):
 
     def apply(self, op: Dict[str, Any]) -> Dict[str, Any]:
         kind = op['kind']
+        batch = self._batch
+        if kind != 'route_add' and batch is not None and batch['added'] and not batch['rollback']:
+            # As when each add was read back at once: nothing else is written (e.g. the
+            # 端口分流 rule or covered route a new route replaces) until the new routes exist.
+            added, batch['added'] = batch['added'], []
+            self._confirm_added(added)
         if kind in ('dhcp_dns_update', 'dhcp_dns_restore'):
             return self._dhcp_apply(op)
         if kind in ('policy_route_add', 'policy_route_update', 'policy_route_restore',
@@ -775,7 +789,8 @@ class IKuaiDriver(RouterDriver):
             return {'kind': 'route_add', 'cidr': str(network), 'gateway': row.get('gateway'),
                     'comment': row.get('comment') or ''}
         if kind in ('route_comment', 'route_restore'):
-            row = self._row('static_rt', op['id'] if kind == 'route_comment' else op['record']['id'])
+            # Edits send the whole row: read it just before writing, never from the snapshot.
+            row = self._row('static_rt', op['id'] if kind == 'route_comment' else op['record']['id'], fresh=True)
             payload = (self._route_payload(row, comment=op['comment']) if kind == 'route_comment'
                        else self._route_payload(op['record']))
             self._static_write('edit', payload)
