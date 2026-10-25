@@ -5,6 +5,7 @@ import { gatewayOnboardingApi, type GatewayConfigurationPreview, type GatewayIns
 import { linuxGatewayApi, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewayStatus } from '@/api/linuxGateway'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
 import { setupServerError } from '@/lib/setupFlow'
+import { stripTrailingPunctuation } from '@/lib/text'
 import type { SetupGoal } from '@/api/setup'
 import { gatewayEnvironmentErrors, installationHostMatches, installationMatches, onboardingSettingsKey } from '@/lib/gatewayOnboarding'
 import { copyText } from '@/lib/clipboard'
@@ -320,7 +321,7 @@ async function publish() {
     if (current(captured) && installation.value?.id === id) acceptInstallation(data)
   } catch (failure) {
     if (current(captured)) {
-      const message = gatewayErrorMessage(failure).replace(/[。.!！?？…；;，,：:\s]+$/u, '')
+      const message = stripTrailingPunctuation(gatewayErrorMessage(failure))
       error.value = `发布状态需要确认：${message}。请刷新进度，不要重复安装。`
       void refreshInstallation()
     }

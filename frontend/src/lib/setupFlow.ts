@@ -1,6 +1,7 @@
 import { isAxiosError } from 'axios'
 import { setupApi, type SetupAbandonPlan, type SetupDomainRule, type SetupDomainSelection, type SetupGoal } from '@/api/setup'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { stripTrailingPunctuation } from '@/lib/text'
 
 export const SETUP_STEPS = ['使用方式', '节点来源', '规则与 DNS', '安装与检查', '路由与 DNS', '开始使用']
 
@@ -24,7 +25,7 @@ export async function abandonSetup(id: string): Promise<SetupAbandonPlan | null>
   const title = '放弃向导'
   const confirmed = plan.delete_profile
     ? await confirmDanger(`结束向导「${plan.name}」，并删除它创建的配置空间「${plan.profile.name}」${plan.subscription ? `和订阅「${plan.subscription.name}」` : ''}。其他配置空间和已有设备不受影响，删除后无法恢复。`, { title, confirmText: '放弃并删除' })
-    : await confirm(`结束向导「${plan.name}」。配置空间「${plan.profile.name}」会保留，因为${plan.kept_reason}。${plan.guidance}`, { title, confirmText: '放弃向导' })
+    : await confirm(`结束向导「${plan.name}」。配置空间「${plan.profile.name}」会保留，因为${stripTrailingPunctuation(plan.kept_reason || '')}。${plan.guidance}`, { title, confirmText: '放弃向导' })
   if (!confirmed) return null
   const { data } = await setupApi.abandon(id)
   notify.success(!data.delete_profile ? '已放弃向导，配置空间已保留。'

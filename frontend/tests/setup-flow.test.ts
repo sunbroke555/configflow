@@ -77,6 +77,15 @@ describe('首次使用分流向导', () => {
     expect(wrapper!.findAll('button').find(button => button.text().includes('确认设置并继续'))!.attributes('disabled')).toBeDefined()
     expect(setupApi.finish).not.toHaveBeenCalled()
   })
+  it.each(['', '。', '。。', '！', '？', '!?', '...', '； \n'])('客户端检查错误与后续提示之间只保留一个句号（后缀=%j）', async suffix => {
+    const message = '暂时无法连接 Agent，请检查网络和 Agent 运行状态'
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ goal: 'gateway' }) } as never)
+    vi.mocked(setupApi.check).mockRejectedValue({ isAxiosError: true, response: { data: { code: 'AGENT_UNREACHABLE', message: message + suffix } } })
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.get('[role="alert"]').text()).toBe(`${message}。请先返回安装与检查，暂时保持客户端原来的网关和 DNS。`)
+    expect(wrapper!.findAll('button').find(button => button.text().includes('确认设置并继续'))!.attributes('disabled')).toBeDefined()
+    expect(setupApi.finish).not.toHaveBeenCalled()
+  })
   it.each(['router'] as const)('可预览 %s 接入设置，保留安装进度且不能确认完成', async goal => {
     vi.mocked(setupApi.get).mockResolvedValue({ data: record({ goal, step: 3, max_step: 3, prepared: true }) } as never)
     await open('/setup?session=' + 'a'.repeat(32))

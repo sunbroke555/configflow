@@ -50,8 +50,8 @@ describe('abandoning an unfinished setup', () => {
     expect(wrapper.emitted('abandoned')).toHaveLength(1)
   })
 
-  it('explains why a profile in use is kept and only ends the wizard', async () => {
-    const kept = plan({ delete_profile: false, subscription: null, kept_reason: '已有设备在使用它（网关 Mihomo）', guidance: '如不再需要，先在 Agent 页解绑或删除这些设备，再到「配置空间」删除。' })
+  it.each(['', '。', '！'])('explains why a profile in use is kept without duplicate sentence punctuation (suffix=%j)', async suffix => {
+    const kept = plan({ delete_profile: false, subscription: null, kept_reason: '已有设备在使用它（网关 Mihomo）' + suffix, guidance: '如不再需要，先在 Agent 页解绑或删除这些设备，再到「配置空间」删除。' })
     vi.mocked(setupApi.abandon).mockResolvedValue({ data: kept } as never)
     vi.mocked(confirm).mockResolvedValue(true)
     const wrapper = await render()

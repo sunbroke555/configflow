@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, Check, CircleCheck, LoaderCircle, Network, Route
 import { setupApi, type SetupDomainRule, type SetupGoal, type SetupIndex, type SetupSession } from '@/api/setup'
 import { SETUP_GOALS, SETUP_STEPS, abandonSetup, setupError, setupLocalDnsWarning, setupRuleConflicts, setupRuleOptions, useLibraryNamesake } from '@/lib/setupFlow'
 import { confirm } from '@/lib/feedback'
+import { stripTrailingPunctuation } from '@/lib/text'
 import { createDeploymentId } from '@/composables/useAgentDeployments'
 import { useProfileStore } from '@/stores/profile'
 import { setActiveProfileId } from '@/profileContext'
@@ -361,7 +362,7 @@ onUnmounted(() => { disposed = true })
             </template>
             <template v-else>
               <p v-if="clientChecking" class="m-0 flex items-center gap-2 text-sm text-muted-foreground" role="status"><LoaderCircle class="size-4 animate-spin" />正在确认转发仍已启用且健康…</p>
-              <div v-else-if="clientError" class="flex flex-col gap-3"><p class="m-0 text-sm text-destructive-accent" role="alert">{{ clientError }}。请先返回安装与检查，暂时保持客户端原来的网关和 DNS。</p><Button variant="outline" @click="checkClientReadiness">重新检查转发</Button></div>
+              <div v-else-if="clientError" class="flex flex-col gap-3"><p class="m-0 text-sm text-destructive-accent" role="alert">{{ stripTrailingPunctuation(clientError) }}。请先返回安装与检查，暂时保持客户端原来的网关和 DNS。</p><Button variant="outline" @click="checkClientReadiness">重新检查转发</Button></div>
               <GatewayClientInstructions v-if="clientReady && routeInstructions" :address="routeInstructions.gateway" />
               <Button variant="outline" :disabled="working" @click="move(3)">管理网络与撤销转发</Button>
             </template>
