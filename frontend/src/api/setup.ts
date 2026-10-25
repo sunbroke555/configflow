@@ -22,7 +22,7 @@ export interface SetupSession {
   /** 主路由分流仍使用旧版 Linux 网关接管（升级前准备的方案） */
   legacy_takeover?: boolean
   subscription_ids: string[]; node_ids: string[]; dns_fallback?: 'mihomo' | 'direct'; traffic_fallback?: 'proxy' | 'direct'
-  local_dns?: string
+  local_dns?: string; query_recorder?: boolean
   domain_rules?: SetupDomainSelection
   node_count?: number; config_revision?: number; updated_at: string
   installation?: { id: string; mihomo: { id: string; name: string; host: string }; oxidns: { id: string; name: string; host: string } }
@@ -49,7 +49,7 @@ export const setupApi = {
   get: (id: string) => api.get<SetupSession>(path(id)),
   progress: (id: string, data: { step?: number; router_id?: string; router_mode?: 'manual' | 'managed' }) => api.patch<SetupSession>(path(id), data),
   source: (id: string, data: { url?: string; subscription_ids?: string[]; node_ids?: string[] }) => api.post<SetupSession>(`${path(id)}/source`, data),
-  prepare: (id: string, settings: { dns_fallback: 'mihomo' | 'direct'; traffic_fallback: 'proxy' | 'direct'; local_dns: string; domain_rules: SetupDomainSelection }) => api.post<SetupSession>(`${path(id)}/prepare`, settings, { timeout: 90000 }),
+  prepare: (id: string, settings: { dns_fallback: 'mihomo' | 'direct'; traffic_fallback: 'proxy' | 'direct'; local_dns: string; domain_rules: SetupDomainSelection; query_recorder: boolean }) => api.post<SetupSession>(`${path(id)}/prepare`, settings, { timeout: 90000 }),
   check: (id: string) => api.post<SetupSession>(`${path(id)}/check`, {}, { timeout: 90000 }),
   saveRouterDraft: (id: string, router: unknown) => api.post<SetupSession>(`${path(id)}/router-draft`, { router }),
   abandon: (id: string, dryRun = false) => api.post<SetupAbandonPlan>(`${path(id)}/abandon`, dryRun ? { dry_run: true } : {}),

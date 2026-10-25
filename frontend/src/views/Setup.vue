@@ -18,8 +18,10 @@ import GatewayClientInstructions from '@/components/agents/GatewayClientInstruct
 import Routers from '@/views/Routers.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
 import Segmented from '@/components/common/Segmented.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 
@@ -34,6 +36,7 @@ const dnsFallback = ref<'mihomo' | 'direct'>('mihomo')
 const trafficFallback = ref<'proxy' | 'direct'>('proxy')
 const defaultLocalDns = 'https://223.5.5.5/dns-query'
 const localDns = ref(defaultLocalDns)
+const queryRecorder = ref(true)
 const directRules = ref(['builtin:direct'])
 const proxyRules = ref(['builtin:proxy'])
 // Kept in step with IP_TAKEOVER_RULES in backend/common/setup_presets.py.
@@ -80,6 +83,8 @@ const missingRuleSets = computed(() => routeInstructions.value?.incomplete ? rou
 const routesIncomplete = computed(() => !!routeInstructions.value?.incomplete)
 const working = computed(() => busy.value || childBusy.value || clientChecking.value)
 const pair = computed(() => session.value?.installation)
+// Opened for this wizard's profile without switching the global one; its back link returns here.
+const clientDevicesLink = computed(() => ({ path: '/client-devices', query: { profile: session.value?.profile_id, from: route.fullPath } }))
 const routerAgents = computed(() => pair.value ? { mihomo: pair.value.mihomo.id, oxidns: pair.value.oxidns.id } : undefined)
 const steps = computed(() => SETUP_STEPS.map((title, i) => i === 4 ? goal.value === 'router' ? '接入主路由' : '客户端设置' : title))
 const help = [
@@ -101,6 +106,8 @@ async function accept(value: SetupSession) {
   dnsFallback.value = value.dns_fallback || 'mihomo'
   trafficFallback.value = value.traffic_fallback || 'proxy'
   localDns.value = value.local_dns ?? defaultLocalDns
+  // A setup prepared before this switch existed wrote the recorder off.
+  queryRecorder.value = value.query_recorder ?? !value.prepared
   setDomainRules(value.domain_rules)
   routerMode.value = value.router_mode || 'manual'; routerId.value = value.router_id || ''
   await router.replace({ path: '/setup', query: { session: value.id } })
@@ -136,7 +143,7 @@ async function prepare() {
   if (!current) return
   await run(async () => {
     const { data } = await setupApi.prepare(current.id, { dns_fallback: dnsFallback.value, traffic_fallback: trafficFallback.value,
-      local_dns: localDns.value, domain_rules: { direct: directRules.value, proxy: proxyRules.value } })
+      local_dns: localDns.value, domain_rules: { direct: directRules.value, proxy: proxyRules.value }, query_recorder: queryRecorder.value })
     await accept(data); await profileStore.refreshProfiles()
   })
 }
@@ -192,7 +199,7 @@ watch(() => session.value?.goal === 'gateway' && step.value === 4 ? session.valu
   if (id && freshlyCheckedClient === id) { freshlyCheckedClient = ''; clientReady.value = true }
   else if (id) void checkClientReadiness()
 })
-async function manage(target: '/agents' | '/routers' | '/profiles' | '/subscriptions') {
+async function manage(target: '/agents' | '/routers' | '/profiles' | '/subscriptions' | '/client-devices') {
   if (!session.value) return
   await profileStore.refreshProfiles(); setActiveProfileId(session.value.profile_id); await router.push(target)
 }
@@ -302,6 +309,12 @@ onUnmounted(() => { disposed = true })
                 <Segmented v-model="trafficFallback" :disabled="working || session?.completed" class="shrink-0 self-start sm:self-center" :options="[{value:'proxy',label:'走代理'},{value:'direct',label:'直连'}]" label="Mihomo 未匹配连接的出口" />
               </div>
             </section>
+            <section class="border-t border-border pt-3" aria-label="DNS 查询记录">
+              <div class="flex min-h-11 flex-wrap items-center justify-between gap-x-2">
+                <div class="flex items-center gap-1 text-[13px] font-medium max-sm:text-xs"><Label for="setup-query-recorder">记录 DNS 查询（OxiDNS 面板用）</Label><span class="cf-compact-help"><FieldHelp label="记录 DNS 查询" text="OxiDNS 面板的「查询记录」靠它查看每条查询的域名、结果和耗时，客户端设备页也从中找出最近查询过的设备。记录写入 OxiDNS 工作目录下 state/ 的 SQLite，默认保留 7 天并持续写盘；闪存或 SD 卡设备可关闭。之后可在 OxiDNS 设置中修改。" /></span></div>
+                <Switch id="setup-query-recorder" v-model="queryRecorder" :disabled="working || session?.completed" class="shrink-0" />
+              </div>
+            </section>
             <div class="space-y-2 border-t border-border pt-4"><p class="text-xs text-muted-foreground">{{ session?.subscription_ids.length }} 个订阅 · {{ session?.node_ids.length }} 个已有节点</p><Button :disabled="working || session?.completed || !!localDnsWarning" class="min-h-11" @click="prepare"><LoaderCircle v-if="working" class="size-4 animate-spin" />生成配置并继续<ArrowRight class="size-4" /></Button></div>
           </div>
           <div v-if="step === 3 && session" class="space-y-4">
@@ -322,6 +335,7 @@ onUnmounted(() => { disposed = true })
                   <p class="m-0 text-sm">在主路由 DHCP 的「DNS 服务器」中填写下方地址，让测试设备重新连接网络后生效。</p>
                   <p v-if="routeInstructions" class="m-0 break-all font-mono text-sm">{{ routeInstructions.dns }}</p>
                   <p v-else class="m-0 text-xs text-muted-foreground">安装检查完成后自动显示 DNS 地址。</p>
+                  <p class="m-0 text-xs leading-relaxed text-muted-foreground" data-client-devices-link>只改一台测试设备时，可先在<RouterLink :to="clientDevicesLink" class="mx-0.5 inline-flex items-center text-primary-accent underline underline-offset-4 max-md:min-h-11">客户端设备</RouterLink>中给它命名，便于在 DNS 面板中认出，完成后可返回向导。</p>
                 </FormField>
                 <p v-if="routeInstructions?.routes.some(item => item.requires_source_exclusion)" class="m-0 text-sm text-warning-accent">真实 IP 网段需在主路由按来源排除 Linux 本机（策略路由），否则 Linux 直连这些地址时会被转回自己；只能按目的地址配置时，只添加 fake-IP 网段。</p>
                 <p v-for="warning in routeInstructions?.warnings" :key="warning" class="m-0 text-sm text-warning-accent">{{ warning }}</p>
@@ -341,7 +355,7 @@ onUnmounted(() => { disposed = true })
               <GatewayClientInstructions v-if="clientReady && routeInstructions" :address="routeInstructions.gateway" />
               <Button variant="outline" :disabled="working" @click="move(3)">管理网络与撤销转发</Button>
             </template>
-            <label v-if="session.default_profile && !session.default_profile.is_default" class="flex items-start gap-2 text-sm"><Checkbox v-model="makeDefault" :disabled="working" class="mt-0.5" /><span><span class="font-medium">设为默认配置空间</span><span class="mt-1 block text-xs leading-relaxed text-muted-foreground">新打开的页面、未指定配置空间的配置链接和新注册的 Agent 都会使用它。现在的默认是「{{ session.default_profile.current.name }}」，已绑定的设备不受影响，之后也可以在配置空间里更改。</span></span></label>
+            <label v-if="session.default_profile && !session.default_profile.is_default" class="flex items-start gap-2 text-sm"><Checkbox v-model="makeDefault" :disabled="working" class="mt-0.5" /><span><span class="font-medium">设为默认配置空间</span><span class="mt-1 block text-xs leading-relaxed text-muted-foreground">新打开的页面、未指定配置空间的配置链接和新注册的 Agent 都会使用它。现在的默认是「{{ session.default_profile.current.name }}」，已绑定的设备不受影响，之后也可以在配置空间里更改。「{{ session.default_profile.current.name }}」中的客户端设备名称和 DNS 策略不会带过来，需要时在客户端设备中重新设置。</span></span></label>
             <Button :disabled="previewRouting || working || (goal === 'gateway' && !clientReady) || (goal === 'router' && (routerMode === 'manual' ? !ackRoutes || !ackDNS || routesIncomplete : !routerId))" class="min-h-11" @click="finish"><LoaderCircle v-if="working" class="size-4 animate-spin" />{{ previewRouting ? '完成安装后继续' : goal === 'router' && routerMode === 'managed' ? '检查路由器并完成' : '确认设置并继续' }}<ArrowRight class="size-4" /></Button>
           </div>
           <div v-if="step === 5 && session" class="space-y-5">
@@ -354,7 +368,7 @@ onUnmounted(() => { disposed = true })
               <p v-if="session.default_profile.leftovers?.profile" class="m-0 text-muted-foreground">原来的「{{ session.default_profile.leftovers.profile.name }}」没有设备在用，不需要的话可以在<button type="button" class="text-primary-accent underline-offset-2 hover:underline" @click="manage('/profiles')">配置空间</button>里删除。</p>
               <p v-if="session.default_profile.leftovers?.subscriptions.length" class="m-0 text-muted-foreground">示例订阅「{{ session.default_profile.leftovers.subscriptions.map(item => item.name).join('、') }}」只被原来的默认配置使用，不需要的话可以在<button type="button" class="text-primary-accent underline-offset-2 hover:underline" @click="manage('/subscriptions')">订阅来源</button>里删除。</p>
             </div>
-            <div class="flex flex-wrap gap-2"><Button class="min-h-11" :disabled="working" @click="manage('/agents')">进入设备管理<ArrowRight class="size-4" /></Button><Button v-if="goal === 'router'" variant="outline" class="min-h-11" @click="manage('/routers')">进入上游路由</Button></div>
+            <div class="flex flex-wrap gap-2"><Button class="min-h-11" :disabled="working" @click="manage('/agents')">进入 Agent<ArrowRight class="size-4" /></Button><Button variant="outline" class="min-h-11" :disabled="working" @click="manage('/client-devices')">客户端设备</Button><Button v-if="goal === 'router'" variant="outline" class="min-h-11" @click="manage('/routers')">进入上游路由</Button></div>
           </div>
           <footer v-if="session && step > 0 && step < 5" class="mt-6 flex items-center gap-2 border-t border-border pt-4"><Button variant="ghost" :disabled="working" @click="move(previewRouting ? session.step : step - 1)"><ArrowLeft class="size-3.5" />{{ previewRouting ? '返回安装与检查' : '上一步' }}</Button><span class="ml-auto text-xs text-muted-foreground">{{ previewRouting ? '安装进度未改变' : '进度已保存' }}</span></footer>
         </SectionCard>

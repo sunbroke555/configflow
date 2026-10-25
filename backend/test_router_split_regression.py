@@ -48,7 +48,8 @@ def gateway_goal_fields(tmp_path):
         repository.update_shared_transaction(lambda shared: shared.update(
             nodes=[deepcopy(NODE)], rule_library=[deepcopy(IP_RULE)]))
         assert client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']}).status_code == 200
-        response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': DOMAIN_RULES})
+        # The DNS query recorder switch postdates 0ef9e89, which left it off.
+        response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': DOMAIN_RULES, 'query_recorder': False})
         assert response.status_code == 200, response.get_json()
         url = f"/api/profiles/{session['profile_id']}/gateway-onboarding"
         state = client.get(url).get_json()

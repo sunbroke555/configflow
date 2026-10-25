@@ -619,7 +619,8 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               <MultiSelect :model-value="form.ip_rule_sets" trigger-id="router-ip-rule-sets" :options="ruleSetOptions" placeholder="仅 fake-ip 网段" @update:model-value="selectStaticRuleSets" />
             </div>
           </FormField>
-          <FormField v-if="form.type === 'routeros'" label="使用策略路由的 IP 规则集" html-for="router-policy-rule-sets" v-bind="routerCopy.policyRules">
+          <!-- Policy sources are the profile's client devices; a new setup profile has none yet. -->
+          <FormField v-if="form.type === 'routeros' && !setupDraftSession" label="使用策略路由的 IP 规则集" html-for="router-policy-rule-sets" v-bind="routerCopy.policyRules">
             <div class="[&_[role=combobox]]:min-h-11">
               <MultiSelect :model-value="form.ros_policy_rule_sets" trigger-id="router-policy-rule-sets" :options="ruleSetOptions" placeholder="不使用策略路由" @update:model-value="selectPolicyRuleSets" />
             </div>
@@ -1295,7 +1296,7 @@ const submit = async () => {
       ...guard, enabled: form.type === 'routeros' && guard.enabled,
       bypass: guardBypassText.value.split(/[\s,，]+/).map(item => item.trim()).filter(Boolean)
     } }),
-    ros_policy_rule_sets: form.type === 'routeros' ? [...form.ros_policy_rule_sets] : [],
+    ros_policy_rule_sets: form.type === 'routeros' && !props.setupDraftSession ? [...form.ros_policy_rule_sets] : [],
     manage_return_routing: form.manage_return_routing === true,
     proxy_gateway_agent_id: form.proxy_gateway_agent_id === NONE ? '' : form.proxy_gateway_agent_id,
     dns_agent_id: form.dns_agent_id === NONE ? '' : form.dns_agent_id

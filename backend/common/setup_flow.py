@@ -270,7 +270,7 @@ def _resources(config, session):
 
 
 def prepare(repository, session, body, base_url):
-    if set(body) - {'dns_fallback', 'traffic_fallback', 'local_dns', 'domain_rules', 'template'}:
+    if set(body) - {'dns_fallback', 'traffic_fallback', 'local_dns', 'domain_rules', 'template', 'query_recorder'}:
         raise SetupError('漏网处理参数无效')
     if body.get('template', 'basic') != 'basic':
         raise SetupError('代理优先模式已移除，请刷新向导并分别选择 DNS 与连接的漏网处理')
@@ -278,6 +278,11 @@ def prepare(repository, session, body, base_url):
     traffic_fallback = body.get('traffic_fallback', 'proxy')
     if dns_fallback not in ('mihomo', 'direct') or traffic_fallback not in ('proxy', 'direct'):
         raise SetupError('请选择有效的 DNS 与连接漏网处理方式')
+    # On by default for new wizards; one prepared before the switch existed
+    # wrote it off and keeps that until the user chooses.
+    query_recorder = body.get('query_recorder', session.get('query_recorder', not session['prepared']))
+    if type(query_recorder) is not bool:
+        raise SetupError('DNS 查询记录开关必须为布尔值')
     local_dns = body.get('local_dns', session.get('local_dns', DEFAULT_LOCAL_DNS))
     try:
         _local_upstreams(local_dns)
@@ -336,6 +341,7 @@ def prepare(repository, session, body, base_url):
                proxy_rulesets=[identity for identity, _ in domain_rules['proxy']],
                default_forward='forward_remote' if dns_fallback == 'mihomo' else 'forward_local')
     dns['rule_update']['enabled'] = bool(domain_rules['direct'] or domain_rules['proxy'])
+    dns['query_recorder']['enabled'] = query_recorder
     fields = {'proxy_groups': groups, 'rule_configs': rules, 'oxidns': dns,
               'mihomo': {**config.get('mihomo', {}), 'custom_config': yaml.safe_dump(settings, sort_keys=False)}}
     if full_tun:
@@ -396,7 +402,7 @@ def prepare(repository, session, body, base_url):
     if session['goal'] == 'router':
         session['legacy_takeover'] = legacy
     session.update(prepared=True, dns_fallback=dns_fallback, traffic_fallback=traffic_fallback, local_dns=local_dns,
-                   domain_rules=selections,
+                   domain_rules=selections, query_recorder=query_recorder,
                    node_count=count, profile_revision=saved['_revision'], owned_digest=owned_digest(saved),
                    config_revision=repository.config_revision(session['profile_id']), step=3,
                    max_step=max(session['max_step'], 3), completed=False)
@@ -438,6 +444,10 @@ def save_router_draft(session, body):
     if (payload.get('proxy_gateway_agent_id') or payload.get('dns_agent_id')
             or payload.get('auto_rule_sync')):
         raise SetupError('安装完成后自动关联本次设备，暂不启用规则自动同步')
+    if payload.get('ros_policy_rule_sets'):
+        # Policy routing takes its sources from the profile's client devices,
+        # and a new setup profile has none yet, so publishing would be refused.
+        raise SetupError('新配置空间还没有客户端设备，暂不能使用策略路由；安装后可在上游路由中设置')
     try:
         session['router_draft'] = normalize(payload, session.get('router_draft'))
     except RouterValidationError as error:
