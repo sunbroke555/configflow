@@ -371,6 +371,10 @@ def _restore_removed(driver, changes, stop_on_failure) -> List[Optional[str]]:
             checks[index] = driver._perform({'method': 'PUT', 'path': ROUTES, 'values': values}, [])
         except RouterError as error:
             errors[index] = _rollback_failed(str(error))
+            continue
+        # A later same-destination route sees this one as new, as one by one.
+        rows.append({'.id': checks[index]['id'], 'dst-address': values.get('dst-address'),
+                     'routing-table': values.get('routing-table', 'main')})
     if checks:
         try:
             written = {str(row.get('.id')): row

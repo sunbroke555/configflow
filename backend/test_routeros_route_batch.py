@@ -380,3 +380,22 @@ def test_unchanged_nat_check_reuses_the_routes_read_back():
     session.calls.clear()
     assert execute(plan, driver, None)['ok']
     assert whole_table_reads(session) == 1
+
+
+def test_restoring_same_destination_routes_matches_one_by_one(monkeypatch):
+    def run_restore():
+        routes = unrelated(6)
+        for row in routes[3:]:
+            row['dst-address'] = routes[0]['dst-address']  # four routes to one destination
+        session = StatefulRouterOS(routes=routes, nats=COVERED_NAT)
+        driver = driver_for(session)
+        undos = []
+        driver.apply_many([{'kind': 'route_delete', 'id': row['.id'], 'cidr': row['dst-address'], 'summary': ''}
+                           for row in routes], lambda op, undo: undos.append(undo))
+        errors = driver.restore_many(list(reversed(undos)))
+        return errors, configured(session.rows[ROUTES])
+
+    batched = run_restore()
+    single_writes(monkeypatch)
+    assert batched == run_restore()
+    assert sum(1 for error in batched[0] if error and '同网段' in error) == 3
