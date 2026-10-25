@@ -7,6 +7,7 @@ import unicodedata
 import requests
 
 from backend.common.config import get_config
+from .manager import is_online
 from .oxidns_monitor import MonitorError, _agent_origin
 from .version import compare_versions
 
@@ -558,18 +559,6 @@ def sanitize_forward_filter(value):
     }
 
 
-def _online(agent):
-    """Heartbeat within two minutes, as the Agent list shows it; a stale one is never asked."""
-    from datetime import datetime
-    if agent.get('status') != 'online':
-        return False
-    try:
-        heartbeat = datetime.fromisoformat(agent.get('last_heartbeat', ''))
-        return (datetime.now(heartbeat.tzinfo) - heartbeat).total_seconds() <= 120
-    except (ValueError, TypeError):
-        return False
-
-
 def _gateway_entry(agent_id, agent, routers, state, message='', status=None, can_persist=False):
     forwarding = status.get('ipv4_forwarding') if isinstance(status, dict) else None
     forwarding = forwarding if isinstance(forwarding, dict) else {}
@@ -631,7 +620,7 @@ def _gateway_precheck(agent_id, agent, routers):
         return _gateway_entry(agent_id, agent, routers, 'not_mihomo', GATEWAY_FORWARDING_MESSAGES['not_mihomo'])
     if agent.get('deployment_method') == 'docker':
         return _gateway_entry(agent_id, agent, routers, 'docker', GATEWAY_FORWARDING_MESSAGES['docker'])
-    if not _online(agent):
+    if not is_online(agent):
         return _gateway_entry(agent_id, agent, routers, 'offline', GATEWAY_FORWARDING_MESSAGES['offline'])
     if not supports_forwarding(agent):
         # Below 1.8.40-go no Agent persists forwarding; offer the update directly.
@@ -664,7 +653,7 @@ def persist_gateway_forwarding(manager, agent_id, routers):
         raise _error('WRONG_SERVICE', 400, GATEWAY_FORWARDING_MESSAGES['not_mihomo'])
     if agent.get('deployment_method') == 'docker':
         raise _error('UNSUPPORTED_ENVIRONMENT', 409, GATEWAY_FORWARDING_MESSAGES['docker'])
-    if not _online(agent):
+    if not is_online(agent):
         raise _error('AGENT_OFFLINE', 409, 'Agent 离线，无法开启转发。')
     if not supports_forwarding(agent):
         raise _error('UPGRADE_REQUIRED', 409, GATEWAY_FORWARDING_MESSAGES['upgrade_required'])

@@ -9,7 +9,7 @@ from flask import Flask
 import pytest
 
 from backend.agents import presence_log, runtime_state
-from backend.agents.manager import AgentManager
+from backend.agents.manager import AgentManager, HEARTBEAT_FRESH_SECONDS, heartbeat_fresh, is_online, is_usable, online_status
 from backend.common import config as config_module
 from backend.common.agent_manager import init_agent_manager
 from backend.common.config_repository import ProfileRepository
@@ -205,6 +205,37 @@ def test_stale_heartbeat_reads_as_offline_only_in_the_list(tmp_path):
     manager.runtime._entries[agent["id"]] = (timestamp, (datetime.now() - timedelta(minutes=5)).isoformat(), fields)
     assert manager.get_all_agents()[0]["status"] == "offline"
     assert manager.get_agent_by_id(agent["id"])["status"] == "online"
+
+
+def test_one_freshness_rule_two_minutes_inclusive():
+    now = datetime(2026, 10, 25, 12, 0, 0)
+    def agent(seconds, status="online"):
+        return {"status": status, "last_heartbeat": (now - timedelta(seconds=seconds)).isoformat()}
+    assert HEARTBEAT_FRESH_SECONDS == 120
+    assert heartbeat_fresh(agent(0), now) and heartbeat_fresh(agent(120), now)
+    assert not heartbeat_fresh(agent(120.001), now)
+    assert online_status(agent(120), now) == "online" and online_status(agent(121), now) == "offline"
+    assert is_online(agent(30), now) and not is_online(agent(30, "offline"), now)
+    # A fresh heartbeat keeps whatever else the document says.
+    assert online_status(agent(30, "error"), now) == "error"
+    for broken in ({}, {"last_heartbeat": ""}, {"last_heartbeat": "yesterday"}, {"last_heartbeat": None},
+                   {"last_heartbeat": 5}, None):
+        assert not heartbeat_fresh(broken, now) and online_status(broken, now) == "offline"
+    aware = datetime.now().astimezone()
+    assert is_online({"status": "online", "last_heartbeat": (aware - timedelta(seconds=30)).isoformat()})
+    assert not is_online({"status": "online", "last_heartbeat": (aware - timedelta(minutes=3)).isoformat()})
+    # Usable: online and not disabled; a missing flag means enabled.
+    assert is_usable(agent(30), now) and is_usable({**agent(30), "enabled": True}, now)
+    assert not is_usable({**agent(30), "enabled": False}, now) and not is_usable(agent(121), now)
+
+
+def test_the_list_derives_status_with_the_shared_rule(tmp_path):
+    repository, manager, agent = setup(tmp_path)
+    assert manager.get_all_agents()[0]["status"] == "online"
+    age_registration(repository, minutes=3)
+    restarted = restart(repository)
+    listed = restarted.get_all_agents()[0]
+    assert listed["status"] == online_status(restarted.get_agent_by_id(agent["id"])) == "offline"
 
 
 def test_a_registration_time_ahead_of_the_clock_does_not_hide_heartbeats(tmp_path):

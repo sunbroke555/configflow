@@ -146,6 +146,14 @@ function hostError(failure: any) {
   const code = failure?.response?.data?.code
   return code ? routerSplitErrorMessage(code, failure.response.data.message) : gatewayErrorMessage(failure, true)
 }
+// 发布与安装检查都拒绝离线或已禁用的设备，这里按同样的判断显示。
+function agentRow(agent?: GatewayInstallation['agents']['mihomo']): { status: string; tone: StatusTone } {
+  if (!agent) return { status: '等待登记', tone: 'neutral' }
+  if (agent.enabled === false) return { status: '已禁用', tone: 'warning' }
+  if (agent.status === 'online') return { status: '在线', tone: 'success' }
+  if (agent.status === 'offline') return { status: '离线', tone: 'warning' }
+  return { status: agent.status || '已登记', tone: 'neutral' }
+}
 function stopPolling() { if (poll) clearTimeout(poll); poll = undefined }
 function continueToRules() {
   if (busy.value || !config.value || locked.value) return
@@ -623,7 +631,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           </div>
           <p class="m-0 text-xs leading-relaxed">安装命令含临时凭据，请勿公开分享。完成检查前，请勿修改客户端网关或 DNS。</p>
           <div class="divide-y divide-border border-y border-border">
-            <AgentStatusRow v-for="service in (['mihomo', 'oxidns'] as const)" :key="service" :label="`${service === 'mihomo' ? 'Mihomo' : 'OxiDNS'} Agent`" :status="!installation?.agents[service] ? '等待登记' : installation.agents[service]?.status === 'online' ? '在线' : installation.agents[service]?.status === 'offline' ? '离线' : installation.agents[service]?.status || '已登记'" :tone="installation?.agents[service]?.status === 'online' ? 'success' : installation?.agents[service]?.status === 'offline' ? 'warning' : 'neutral'">
+            <AgentStatusRow v-for="service in (['mihomo', 'oxidns'] as const)" :key="service" :label="`${service === 'mihomo' ? 'Mihomo' : 'OxiDNS'} Agent`" v-bind="agentRow(installation?.agents[service])">
               <template v-if="installation?.agents[service]?.name" #default><p class="m-0">设备：{{ installation.agents[service]?.name }}</p></template>
             </AgentStatusRow>
           </div>

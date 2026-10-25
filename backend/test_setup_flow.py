@@ -1188,6 +1188,7 @@ def test_router_draft_attaches_with_the_forwarded_rule_sets(installed, monkeypat
     (lambda status, agents: status['tun'].update(present=False), 'Mihomo TUN（Meta）未运行'),
     (lambda status, agents: status['tun'].update(present=False, device='utun'), 'Mihomo TUN（utun）未运行'),
     (lambda status, agents: agents['oxidns'].update(status='offline'), '安装设备离线'),
+    (lambda status, agents: agents['mihomo'].update(enabled=False), '安装设备离线或已禁用'),
 ])
 def test_full_tun_installation_check_covers_forwarding_and_tun(installed, change, message):
     client, _, _, gateway, status = installed

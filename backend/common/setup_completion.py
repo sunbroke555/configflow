@@ -137,8 +137,11 @@ def check_installation(repository, session):
     agents = gateway['agents']
     if not all(agents.get(service, {}).get('id') for service in ('mihomo', 'oxidns')):
         raise SetupError('两个核心的设备尚未确认，请继续安装向导', 409)
-    if any(agents[service].get('status') != 'online' for service in ('mihomo', 'oxidns')):
-        raise SetupError('安装设备离线，请检查连接后再检查', 409)
+    # The public view's status already follows the freshness rule; refuse a disabled
+    # Agent too, as publishing (_pair) does.
+    if any(agents[service].get('enabled') is False or agents[service].get('status') != 'online'
+           for service in ('mihomo', 'oxidns')):
+        raise SetupError('安装设备离线或已禁用，请检查连接后再检查', 409)
     full_tun = session['goal'] == 'router' and is_full_tun(config) and not session.get('legacy_takeover')
     try:
         status = linux_gateway.call(manager, agents['mihomo']['id'], 'status', 'GET', session['profile_id'])

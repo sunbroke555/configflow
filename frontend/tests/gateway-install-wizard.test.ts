@@ -620,6 +620,21 @@ it('tells an embedded user to publish once both Agents have enrolled', async () 
   expect(wrapper.text()).not.toContain('请在目标 Linux 执行命令，完成登记后继续发布与检查。')
 })
 
+it('shows the enrolled Agents as online, offline or disabled, as publishing judges them', async () => {
+  const rows = async (change: (agents: any) => void) => {
+    const enrolled = session('enrolled'); change(enrolled.agents)
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: enrolled }))
+    const wrapper = await render()
+    await stepButton(wrapper, 2).trigger('click'); await flushPromises()
+    const row = (label: string) => wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === label)?.props()
+    return { mihomo: row('Mihomo Agent'), oxidns: row('OxiDNS Agent') }
+  }
+  expect(await rows(agents => { agents.mihomo.enabled = false; agents.oxidns.status = 'offline' })).toMatchObject({
+    mihomo: { status: '已禁用', tone: 'warning' }, oxidns: { status: '离线', tone: 'warning' } })
+  expect(await rows(agents => { agents.mihomo.enabled = true })).toMatchObject({
+    mihomo: { status: '在线', tone: 'success' }, oxidns: { status: '在线', tone: 'success' } })
+})
+
 it('does not offer to continue before a reinstalled host publishes, even if forwarding is still active', async () => {
   vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('enrolled') }))
   vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ success: true, enabled_in_config: true, supported: true, managed: { active: true, healthy: true, spec } }))

@@ -9,7 +9,7 @@ import logging
 import threading
 import time
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import requests
 from . import runtime_state
@@ -38,6 +38,40 @@ def _constant_time_ascii_equal(provided: Any, expected: Any) -> bool:
         return hmac.compare_digest(provided.encode('ascii'), expected.encode('ascii'))
     except UnicodeEncodeError:
         return False
+
+
+# An Agent heartbeats every 30-60 seconds; one silent for longer than this is offline.
+HEARTBEAT_FRESH_SECONDS = 120
+
+
+def heartbeat_fresh(agent, now=None):
+    """Whether the Agent's last heartbeat is at most two minutes old.
+
+    The one freshness rule for every place that shows or relies on an Agent
+    being online. After a backend restart an Agent has no heartbeat in memory
+    and the document only holds an old one, so it reads as offline until its
+    next heartbeat.
+    """
+    try:
+        heartbeat = datetime.fromisoformat((agent or {}).get('last_heartbeat') or '')
+        current = now if now is not None else datetime.now(heartbeat.tzinfo)
+        return (current - heartbeat).total_seconds() <= HEARTBEAT_FRESH_SECONDS
+    except (ValueError, TypeError):
+        return False
+
+
+def online_status(agent, now=None):
+    """The status to show: the stored one, or 'offline' once the heartbeat is stale."""
+    return (agent or {}).get('status') if heartbeat_fresh(agent, now) else 'offline'
+
+
+def is_online(agent, now=None):
+    return online_status(agent, now) == 'online'
+
+
+def is_usable(agent, now=None):
+    """Online by the freshness rule and not disabled: what publishing and the setup check require."""
+    return (agent or {}).get('enabled') is not False and is_online(agent, now)
 
 
 class AgentDeploymentConflict(ValueError):
@@ -231,19 +265,17 @@ class AgentManager:
         agents = self._agents()
 
         # 更新在线状态（超过 2 分钟未心跳视为离线）
-        now = datetime.now()
         for agent in agents:
-            try:
-                last_heartbeat = datetime.fromisoformat(agent.get('last_heartbeat', ''))
-                if now - last_heartbeat > timedelta(minutes=2):
-                    agent['status'] = 'offline'
-            except (ValueError, TypeError):
-                agent['status'] = 'offline'
-
+            agent['status'] = online_status(agent)
         return agents
 
     def get_agent_by_id(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        """根据 ID 获取 Agent"""
+        """根据 ID 获取 Agent
+
+        Keeps the stored status and never derives offline: syncs and gates that
+        run right after a restart act on the registered Agent. Where freshness
+        matters, check it with is_online / online_status.
+        """
         agents = self._agents()
         return next((a for a in agents if a['id'] == agent_id), None)
 
