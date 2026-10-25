@@ -35,6 +35,58 @@
 - 核心离线或查询记录未开启时，可以手动添加 IP。已有客户端列表来自查询记录，不是 DHCP 设备清单。
 - 每行单独保存：只有这一行在别处被改过时才会要求重新载入，修改其他设备或其他 OxiDNS 设置不影响。发布时如果草稿已在别处改变，会停止发布并要求重新载入。
 
+## 设备发现（读取主路由）
+
+`GET /api/client-devices/discovery?profile=<配置空间>`（或 `?agent=<OxiDNS Agent>`，与 `GET /api/client-devices` 相同的配置空间解析和登录要求）实时读取该配置空间中所有 RouterOS 与 iKuai 4.x 主路由，并发进行，每台最多约 20 秒。结果不保存，也不新增数据表：每次打开或刷新页面都重新读取。
+
+```jsonc
+{
+  "success": true,
+  "profile_id": "office",
+  "state": "ok",            // ok | partial（部分路由器失败）| failed（全部失败）| unsupported（没有 RouterOS / iKuai）
+  "message": "",            // unsupported 时为「需要在当前配置接入 RouterOS 或 iKuai 才能发现设备」
+  "checked_at": "2026-10-25T10:46:34+08:00",
+  "sources": [              // 每台路由器一条
+    {"id": "router_x", "name": "主路由", "type": "routeros", "ok": true, "error": "",
+     "notes": ["账号缺少 test 权限，无法确认静态 IP 设备是否在线"],
+     "policy_routing": true}  // 仅 RouterOS：已启用按来源策略路由（智能分流 IPv4 设备参与）
+  ],
+  "devices": [              // 每条已保存的行：{ip, name, mode} 加上下列字段
+    {"ip": "192.168.0.133", "name": "摄像头", "mode": "direct",
+     "presence": "online", "basis": "lease", "mac": "E0:BA:AD:94:F2:48", "hostname": "C6c_EZVIZ",
+     "sources": ["arp", "lease"], "last_seen": 523, "router_id": "router_x"}
+  ],
+  "discovered": [           // 路由器看到、但没有自己那一行的 IPv4 地址，按地址排序
+    {"ip": "192.168.0.147", "mac": "16:F7:C5:8A:16:A4", "hostname": "iPhone", "sources": ["arp", "lease"],
+     "presence": "online", "basis": "arp", "last_seen": 286, "router_id": "router_x",
+     "network": {"ip": "192.168.0.0/24", "name": "家里", "mode": "smart"}}   // 覆盖它的最具体已保存网段，没有则为 null
+  ]
+}
+```
+
+- `presence`：`online` 在线、`recent` 近期见过（路由器记得它但无法确认）、`offline` 离线、`unknown` 未知；已保存的网段行为 `network`，IPv6 行为 `unknown`。
+- `basis` 说明依据：`arp`（ARP 状态）、`lease`（DHCP 续租时间）、`probe`（经路由器主动确认）、`terminal`（iKuai 终端监控）、`stale`（只有未确认的 ARP 记录或租约）、`absent`（所有路由器都读取成功但没有该地址）。
+- `sources`：`arp`、`lease`（DHCP 租约）、`online`（iKuai 在线终端）。`last_seen` 是距上次 DHCP 通信的秒数，未知为 `null`。
+- 已保存的单个 IPv4 没有出现在任何路由器中：所有路由器读取成功时为 `offline`，否则为 `unknown`。
+- `discovered` 不含路由器自己的地址、路由器管理地址和本配置空间 Agent 主机的地址，也不含只有失败 ARP 记录（无 MAC、无租约）的地址。
+
+### RouterOS 判断规则
+
+只看局域网：启用的 DHCP 服务所在接口；没有 DHCP 服务时，改用配置了静态私有地址（RFC1918）的接口，排除动态地址（例如 DHCP 获取地址的 WAN）和接口列表 `WAN` 的成员。WAN 侧大量 `failed` ARP 记录不会出现。
+
+1. ARP 状态 `reachable` / `delay` / `probe`：在线。
+2. 租约 `bound` 且 20 分钟内续租过：在线（默认租期 30 分钟，在线客户端约每 15 分钟续租）。
+3. ARP `failed` / `incomplete`：离线。
+4. 租约错过续租（超过租期一半再加 5 分钟，至少 20 分钟）：离线。静态租约显示 `waiting` 而主机使用静态 IP 的情况不算错过续租。
+5. 只剩 `stale` / `permanent` ARP 记录（RouterOS 中 stale 记录不会过期，常见于静态 IP 的虚拟机），或租约较新但没有 ARP：经路由器主动确认。在该接口上发 ARP ping（`POST /rest/ping {"address","count":"2","interval":"300ms","arp-ping":"yes","interface"}`，屏蔽 ICMP 的主机也会应答）；接口不支持时改用普通 ping，并再读一次 ARP 表：`reachable` 为在线，`failed` / `incomplete` 为离线。已保存的地址优先，每次最多确认 32 台、6 个并发、单次请求 4 秒。
+6. RouterOS 的 `/ping` 需要用户组带 `test` 权限；没有时返回 HTTP 500 `not enough permissions (9)`，此时不再继续，这些设备显示为「近期见过」，并提示「账号缺少 test 权限，无法确认静态 IP 设备是否在线」。超时或超过上限的设备同样显示为近期见过。读取和确认都不修改路由器配置。
+
+### iKuai 4.x 判断规则
+
+- `monitor_lanip`（终端监控，`TYPE: data,total` 分页读取）中的地址为在线，名称取备注、终端名、主机名中第一个非空值。终端监控只列出约 2 分钟内有流量经过路由器的设备，来源提示「按 2 分钟内经过路由器的流量判断在线」。
+- `dhcp_lease` 只用于发现设备；不在终端监控中的地址为离线。读取失败只记为提示。
+- iKuai 返回错误码 1003 时，可能是账号没有该功能的权限，也可能是固件不提供该功能。
+
 ## 网络条件
 
 设备需通过 OxiDNS 查询，并且 OxiDNS 能看到真实客户端来源 IP。可以由路由器 DHCP 统一下发 OxiDNS 地址，建议固定 DHCP 租约。若所有查询先由路由器转发，OxiDNS 可能只看到路由器的地址。

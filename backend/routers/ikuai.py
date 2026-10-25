@@ -201,7 +201,11 @@ class IKuaiDriver(RouterDriver):
         self._login()
         data = self._post('/Action/call', {'func_name': func_name, 'action': action, 'param': param})
         if data.get('code') == 1003:
-            raise RouterError(f'iKuai 拒绝访问 {func_name}（需要管理员账号）')
+            # 1003 is returned both for missing account permissions and for a
+            # function this firmware does not provide, so name neither as fact.
+            detail = f'：{data["message"]}' if isinstance(data.get('message'), str) and data['message'] else ''
+            raise RouterError(f'iKuai 未执行 {func_name}（错误码 1003{detail}）。'
+                              '可能是当前账号没有这项功能的权限，也可能是此固件不提供该功能。')
         if data.get('code') != 0 or not isinstance(data.get('results'), dict):
             if 'Data' in data or 'Result' in data:
                 raise RouterError('检测到 iKuai 3.x 的响应格式，只支持 iKuai 4.x')

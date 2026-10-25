@@ -1,0 +1,507 @@
+"""Device discovery for 「客户端设备」: live RouterOS / iKuai reads joined with the saved rows.
+
+RouterOS fixtures are a read-only CLI snapshot of a RouterOS 7.24.5 home router
+converted to the REST JSON shape (testdata/routeros_clients_7245.json, MACs and
+personal host names anonymized). Ping request/response/error shapes were
+captured from a RouterOS 7.24.5 CHR over REST. iKuai rows use the documented
+4.x field names (jakeslee/ikuai v4/action/monitor.go).
+"""
+import copy
+import json
+import threading
+import time
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import pytest
+import requests
+
+from backend.common import client_discovery
+from backend.common.agent_manager import get_agent_manager
+from backend.common.oxidns_device_policy import apply_policies
+from backend.routers import ikuai_clients, ros_clients
+from backend.routers.base import RouterError
+from backend.routers.ikuai import IKuaiDriver
+from backend.routers.routeros import PingNotPermitted, RouterOSDriver
+from backend.test_oxidns_integration import oxidns_app  # noqa: F401
+
+SNAPSHOT = json.loads((Path(__file__).parent / 'testdata' / 'routeros_clients_7245.json').read_text())
+TABLES = {'/ip/arp': SNAPSHOT['arp'], '/ip/dhcp-server/lease': SNAPSHOT['leases'],
+          '/ip/dhcp-server': SNAPSHOT['dhcp_servers'], '/ip/address': SNAPSHOT['addresses']}
+# Stale LAN entries with no fresh DHCP renewal: these need an active check.
+STALE = ['192.168.0.5', '192.168.0.7', '192.168.0.13', '192.168.0.23', '192.168.0.32', '192.168.0.34',
+         '192.168.0.36', '192.168.0.42', '192.168.0.45', '192.168.0.56', '192.168.0.72', '192.168.0.80',
+         '192.168.0.91', '192.168.0.100', '192.168.0.103', '192.168.0.107', '192.168.0.241']
+# Captured on RouterOS 7.24.5 CHR: POST /rest/ping {"address", "count": "2", "interval": "300ms", ...}.
+ARP_ANSWER = [{'avg-rtt': '479us', 'host': 'BC:24:11:C0:F5:77', 'max-rtt': '479us', 'min-rtt': '479us',
+               'packet-loss': '0', 'received': '1', 'sent': '1', 'seq': '0', 'time': '479us'},
+              {'avg-rtt': '441us', 'host': 'BC:24:11:C0:F5:77', 'max-rtt': '479us', 'min-rtt': '403us',
+               'packet-loss': '0', 'received': '2', 'sent': '2', 'seq': '1', 'time': '403us'}]
+ICMP_ANSWER = [{'avg-rtt': '137us', 'host': '10.97.0.1', 'max-rtt': '137us', 'min-rtt': '137us', 'packet-loss': '0',
+                'received': '1', 'sent': '1', 'seq': '0', 'size': '56', 'time': '137us', 'ttl': '64'}]
+SILENT = [{'host': '10.97.0.222', 'packet-loss': '100', 'received': '0', 'sent': '1', 'seq': '0', 'status': 'timeout'},
+          {'host': '10.97.0.222', 'packet-loss': '100', 'received': '0', 'sent': '2', 'seq': '1', 'status': 'timeout'}]
+NO_TEST_POLICY = (500, {'detail': 'not enough permissions (9)', 'error': 500, 'message': 'Internal Server Error'})
+NO_INTERFACE = (400, {'detail': 'failure: interface needs to be specified for arp ping', 'error': 400,
+                      'message': 'Bad Request'})
+
+
+def response(status, body):
+    result = requests.Response()
+    result.status_code = status
+    result._content = json.dumps(body).encode()
+    return result
+
+
+class FakeRouterOS:
+    """The REST surface ros_clients uses, behind a real RouterOSDriver session."""
+
+    def __init__(self, tables=None, ping=None, rearp=None):
+        self.tables = copy.deepcopy(TABLES if tables is None else tables)
+        self.ping = ping or (lambda values: (200, SILENT))
+        self.rearp = rearp            # /ip/arp rows served after the first read
+        self.pings = []
+        self.reads = []
+        self.lock = threading.Lock()
+
+    def request(self, method, url, **kwargs):
+        path = urlsplit(url).path.removeprefix('/rest')
+        with self.lock:
+            if method.upper() == 'POST' and path == '/ping':
+                self.pings.append(kwargs['json'])
+                result = self.ping(kwargs['json'])
+                if isinstance(result, Exception):
+                    raise result
+                return response(*result)
+            assert method.upper() == 'GET', (method, path)
+            self.reads.append(path)
+            if path == '/ip/arp' and self.rearp is not None and self.reads.count('/ip/arp') > 1:
+                return response(200, self.rearp)
+            if path not in self.tables:
+                return response(404, {})
+            rows = self.tables[path]
+            return response(*rows) if isinstance(rows, tuple) else response(200, rows)
+
+    def driver(self, monkeypatch, user='configflow'):
+        driver = RouterOSDriver('http://192.0.2.1', user, 'private-test-password')
+        monkeypatch.setattr(driver.session, 'request', self.request)
+        return driver
+
+
+def answers(*ips):
+    return lambda values: (200, ARP_ANSWER if values['address'] in ips else SILENT)
+
+
+def read(fake, monkeypatch, priority=(), deadline=None):
+    return ros_clients.read(fake.driver(monkeypatch), priority=priority, deadline=deadline)
+
+
+# --- RouterOS -----------------------------------------------------------------------------------------------
+
+def test_snapshot_only_reads_the_lan_and_decides_presence_from_arp_and_leases(monkeypatch):
+    fake = FakeRouterOS(ping=answers(*STALE[:9]))
+    reading = read(fake, monkeypatch)
+    seen = reading.sightings
+    # The WAN carries 252 entries (251 failed); none are clients.
+    assert not [ip for ip in seen if ip.startswith('192.168.1.')]
+    assert len(seen) == 47 and reading.own == {'192.168.0.1', '192.168.1.2'}
+    assert reading.notes == []
+    expected = {
+        '192.168.0.8': ('online', 'arp'),          # reachable
+        '192.168.0.134': ('online', 'arp'),        # delay
+        '192.168.0.133': ('online', 'lease'),      # stale ARP, dynamic lease renewed 8m43s ago
+        '192.168.0.102': ('online', 'arp'),        # static lease "waiting" while the static-IP VM is reachable
+        '192.168.0.96': ('offline', 'arp'),        # failed
+    }
+    for ip, (presence, basis) in expected.items():
+        assert (seen[ip].presence, seen[ip].basis) == (presence, basis), ip
+    for ip in STALE[:9]:
+        assert (seen[ip].presence, seen[ip].basis) == ('online', 'probe'), ip
+    for ip in STALE[9:]:
+        assert (seen[ip].presence, seen[ip].basis) == ('offline', 'probe'), ip
+    assert seen['192.168.0.133'].public() == {
+        'mac': 'E0:BA:AD:94:F2:48', 'hostname': 'C6c_EZVIZ', 'sources': ['arp', 'lease'], 'presence': 'online',
+        'basis': 'lease', 'last_seen': 523, 'router_id': ''}
+    assert seen['192.168.0.102'].hostname == 'Win11 VM static'     # the lease comment names it
+    # One MAC owns two addresses: both are listed.
+    assert seen['192.168.0.35'].mac == seen['192.168.0.241'].mac == 'BC:24:11:A2:84:D0'
+    # Every stale host got exactly one ARP ping on its own interface.
+    assert sorted(item['address'] for item in fake.pings) == sorted(STALE)
+    assert fake.pings[0] == {'address': fake.pings[0]['address'], 'count': '2', 'interval': '300ms',
+                             'arp-ping': 'yes', 'interface': 'lan4'}
+    assert 'private-test-password' not in json.dumps(fake.pings)
+
+
+def test_saved_addresses_are_confirmed_first_and_the_rest_are_capped(monkeypatch):
+    monkeypatch.setattr(ros_clients, 'PROBE_LIMIT', 3)
+    fake = FakeRouterOS(ping=answers(*STALE))
+    reading = read(fake, monkeypatch, priority={'192.168.0.100', '192.168.0.241'})
+    assert sorted(item['address'] for item in fake.pings) == ['192.168.0.100', '192.168.0.241', '192.168.0.5']
+    assert reading.sightings['192.168.0.7'].presence == 'recent'
+    assert reading.notes == ['待确认的设备较多，只主动确认了 3 台，其余 14 台显示为近期见过']
+
+
+def test_a_group_without_the_test_policy_stops_pinging_and_keeps_hosts_recent(monkeypatch):
+    fake = FakeRouterOS(ping=lambda values: NO_TEST_POLICY)
+    reading = read(fake, monkeypatch)
+    assert {reading.sightings[ip].presence for ip in STALE} == {'recent'}
+    assert {reading.sightings[ip].basis for ip in STALE} == {'stale'}
+    assert reading.notes == [ros_clients.NOTE_NO_TEST]
+    assert 'test 权限' in ros_clients.NOTE_NO_TEST
+    assert len(fake.pings) <= ros_clients.PROBE_WORKERS     # no point trying every host
+    assert fake.reads.count('/ip/arp') == 1
+
+
+def test_icmp_fallback_settles_silent_hosts_from_the_arp_table_read_afterwards(monkeypatch):
+    tables = copy.deepcopy(TABLES)
+    tables['/ip/arp'] = [row for row in tables['/ip/arp'] if row['address'] in ('192.168.0.5', '192.168.0.7',
+                                                                                   '192.168.0.13', '192.168.0.23')]
+
+    def ping(values):
+        if 'arp-ping' in values:
+            return NO_INTERFACE
+        return (200, ICMP_ANSWER) if values['address'] == '192.168.0.5' else (200, SILENT)
+    later = {'192.168.0.5': 'reachable', '192.168.0.7': 'reachable', '192.168.0.13': 'failed', '192.168.0.23': 'delay'}
+    rearp = [{**row, 'status': later[row['address']]} for row in tables['/ip/arp']]
+    fake = FakeRouterOS(tables, ping, rearp)
+    seen = read(fake, monkeypatch).sightings
+    assert [(seen[ip].presence, seen[ip].basis) for ip in ('192.168.0.5', '192.168.0.7', '192.168.0.13', '192.168.0.23')] == [
+        ('online', 'probe'),     # answered ICMP
+        ('online', 'probe'),     # dropped ICMP, ARP answered meanwhile
+        ('offline', 'probe'),    # ARP resolution failed
+        ('recent', 'stale'),     # still in delay: not decided yet
+    ]
+    assert len([item for item in fake.pings if 'arp-ping' not in item]) == 4
+    assert {'address': '192.168.0.5', 'count': '2', 'interval': '300ms'} in fake.pings
+
+
+def test_timeouts_and_the_deadline_leave_hosts_recent(monkeypatch):
+    fake = FakeRouterOS(ping=lambda values: requests.ReadTimeout())
+    reading = read(fake, monkeypatch)
+    assert {reading.sightings[ip].presence for ip in STALE} == {'recent'}
+    assert reading.notes == [f'{len(STALE)} 台设备未能及时确认，显示为近期见过']
+    late = FakeRouterOS(ping=answers(*STALE))
+    reading = read(late, monkeypatch, deadline=time.monotonic())
+    assert late.pings == [] and reading.sightings[STALE[0]].presence == 'recent'
+
+
+def lease(ip, last_seen, status='bound', dynamic='true', **extra):
+    return {'.id': '*1', 'address': ip, 'mac-address': '02:00:00:00:00:01', 'server': 'server1', 'status': status,
+            'last-seen': last_seen, 'dynamic': dynamic, 'disabled': 'false', **extra}
+
+
+def arp(ip, status, interface='lan4'):
+    return {'.id': '*1', 'address': ip, 'mac-address': '02:00:00:00:00:02', 'interface': interface,
+            'status': status, 'disabled': 'false', 'invalid': 'false', 'dynamic': 'true'}
+
+
+SERVER = [{'.id': '*1', 'name': 'server1', 'interface': 'lan4', 'lease-time': '30m', 'disabled': 'false'}]
+
+
+@pytest.mark.parametrize('rows, leases, server, expected, probed', [
+    # A dynamic lease that missed its renewal (half of 30m + 5m grace) is gone, even with a stale ARP entry.
+    ([arp('10.0.0.2', 'stale')], [lease('10.0.0.2', '25m10s')], SERVER, ('offline', 'lease'), False),
+    # With a 1-day lease a 3h-old renewal proves nothing: confirm actively.
+    ([arp('10.0.0.2', 'stale')], [lease('10.0.0.2', '3h')], [{**SERVER[0], 'lease-time': '1d'}], ('online', 'probe'), True),
+    # A bound lease with no ARP entry is checked on the DHCP server's interface.
+    ([], [lease('10.0.0.2', '3h')], [{**SERVER[0], 'lease-time': '1d'}], ('online', 'probe'), True),
+    # A static lease nobody has used and no ARP entry: not on the network.
+    ([], [lease('10.0.0.2', 'never', 'waiting', 'false')], SERVER, ('offline', 'lease'), False),
+    # A fresh renewal wins over a failed ARP entry (the client changed interface or MAC).
+    ([arp('10.0.0.2', 'failed')], [lease('10.0.0.2', '1m')], SERVER, ('online', 'lease'), False),
+    # A static lease past its renewal on a host using a static IP: not evidence of absence.
+    ([arp('10.0.0.2', 'stale')], [lease('10.0.0.2', '2h', 'waiting', 'false')], SERVER, ('online', 'probe'), True),
+    # Permanent (static) ARP entries say nothing about liveness either.
+    ([arp('10.0.0.2', 'permanent')], [], SERVER, ('online', 'probe'), True),
+])
+def test_lease_and_arp_rules(monkeypatch, rows, leases, server, expected, probed):
+    fake = FakeRouterOS({'/ip/arp': rows, '/ip/dhcp-server/lease': leases, '/ip/dhcp-server': server,
+                         '/ip/address': [{'address': '10.0.0.1/24', 'interface': 'lan4', 'dynamic': 'false'}]},
+                        answers('10.0.0.2'))
+    sighting = read(fake, monkeypatch).sightings['10.0.0.2']
+    assert (sighting.presence, sighting.basis) == expected
+    assert bool(fake.pings) is probed
+    if probed:
+        assert fake.pings[0]['interface'] == 'lan4'
+
+
+def test_without_a_dhcp_server_static_private_interfaces_except_wan_are_the_lan(monkeypatch):
+    addresses = [{'address': '192.168.88.1/24', 'interface': 'bridge', 'dynamic': 'false'},
+                 {'address': '192.168.1.20/24', 'interface': 'ether1', 'dynamic': 'true'},     # DHCP client WAN
+                 {'address': '10.9.0.2/30', 'interface': 'ether2', 'dynamic': 'false'},        # static WAN, in list WAN
+                 {'address': '203.0.113.2/24', 'interface': 'ether3', 'dynamic': 'false'}]
+    rows = [arp('192.168.88.10', 'reachable', 'bridge'), arp('192.168.1.1', 'reachable', 'ether1'),
+            arp('10.9.0.1', 'reachable', 'ether2'), arp('203.0.113.1', 'reachable', 'ether3')]
+    fake = FakeRouterOS({'/ip/arp': rows, '/ip/address': addresses, '/ip/dhcp-server': [],
+                         '/ip/dhcp-server/lease': [],
+                         '/interface/list/member': [{'list': 'WAN', 'interface': 'ether2'},
+                                                    {'list': 'LAN', 'interface': 'bridge'}]})
+    reading = read(fake, monkeypatch)
+    assert list(reading.sightings) == ['192.168.88.10']
+    assert reading.notes == ['未发现启用的 DHCP 服务，按带私有地址的接口（bridge）判断局域网']
+    assert reading.own == {'192.168.88.1', '192.168.1.20', '10.9.0.2', '203.0.113.2'}
+    fake = FakeRouterOS({'/ip/arp': rows, '/ip/address': addresses[1:], '/ip/dhcp-server': [],
+                         '/ip/dhcp-server/lease': [], '/interface/list/member': [{'list': 'WAN', 'interface': 'ether2'}]})
+    with pytest.raises(RouterError, match='无法确定局域网接口'):
+        read(fake, monkeypatch)
+
+
+def test_unreadable_lease_table_degrades_to_a_note_but_arp_is_required(monkeypatch):
+    tables = {**TABLES, '/ip/dhcp-server/lease': (403, {})}
+    reading = read(FakeRouterOS(tables, answers()), monkeypatch)
+    assert reading.notes[0].startswith('无法读取 DHCP 租约：RouterOS 拒绝访问')
+    assert reading.sightings['192.168.0.133'].sources == {'arp'}
+    with pytest.raises(RouterError, match='认证失败'):
+        read(FakeRouterOS({**TABLES, '/ip/arp': (401, {})}), monkeypatch)
+
+
+@pytest.mark.parametrize('text, seconds', [('13m39s', 819), ('2d1h36m57s', 178617), ('15s', 15), ('1w', 604800),
+                                           ('500ms', 0), ('00:30:00', 1800), ('never', None), ('', None),
+                                           ('3x', None)])
+def test_routeros_durations(text, seconds):
+    assert ros_clients.duration(text) == seconds
+
+
+def test_driver_ping_reads_the_captured_responses(monkeypatch):
+    calls = []
+    replies = iter([(200, ARP_ANSWER), (200, SILENT), (200, ICMP_ANSWER), NO_TEST_POLICY, NO_INTERFACE,
+                    (400, {'detail': 'failure: resolve failed', 'error': 400, 'message': 'Bad Request'})])
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs['json'], kwargs['timeout']))
+        return response(*next(replies))
+    driver = RouterOSDriver('http://192.0.2.1', 'u', 'p')
+    monkeypatch.setattr(driver.session, 'request', request)
+    assert driver.ping('10.97.0.200', 'ether1') is True
+    assert driver.ping('10.97.0.222', 'ether1') is False
+    assert driver.ping('10.97.0.1', timeout=2) is True
+    with pytest.raises(PingNotPermitted, match='test 权限'):
+        driver.ping('10.97.0.1')
+    with pytest.raises(RouterError, match='interface needs to be specified'):
+        driver.ping('10.97.0.1', 'nosuch')
+    with pytest.raises(RouterError, match='HTTP 400'):
+        driver.ping('nope')
+    assert calls[0] == ('POST', 'http://192.0.2.1/rest/ping', {'address': '10.97.0.200', 'count': '2',
+                        'interval': '300ms', 'arp-ping': 'yes', 'interface': 'ether1'}, 4)
+    assert calls[2][2:] == ({'address': '10.97.0.1', 'count': '2', 'interval': '300ms'}, 2)
+
+
+# --- iKuai --------------------------------------------------------------------------------------------------
+
+def terminal(ip, mac, **extra):
+    # Documented 4.x monitor_lanip row (subset; unknown fields are ignored).
+    return {'id': 1, 'ip_addr': ip, 'ip_addr_int': 0, 'mac': mac, 'interface': 'lan1', 'hostname': '', 'termname': '',
+            'comment': '', 'uptime': '2026-10-25 09:00:01', 'connect_num': 3, 'upload': 0, 'download': 0,
+            'client_type': 'Android', **extra}
+
+
+class FakeIKuai:
+    def __init__(self, terminals=(), leases=(), failures=None):
+        self.data = {'monitor_lanip': list(terminals), 'dhcp_lease': list(leases)}
+        self.failures = failures or {}
+        self.calls = []
+
+    def call(self, func_name, param, action='show'):
+        self.calls.append((func_name, action, dict(param)))
+        if func_name in self.failures:
+            raise RouterError(self.failures[func_name])
+        start, size = (int(part) for part in param['limit'].split(','))
+        rows = self.data[func_name]
+        return {'total': len(rows), 'data': rows[start:start + size]}
+
+    def close(self):
+        pass
+
+
+def test_ikuai_terminals_are_online_and_leases_only_discover(monkeypatch):
+    monkeypatch.setattr(ikuai_clients, 'PAGE', 2)
+    fake = FakeIKuai(
+        [terminal('192.168.9.10', 'aa:bb:cc:00:00:01', comment='客厅%20电视', hostname='tv'),
+         terminal('192.168.9.11', 'aa:bb:cc:00:00:02', termname='NAS'),
+         terminal('192.168.9.12', 'aa:bb:cc:00:00:03', hostname='iPhone'),
+         terminal('fe80::1', 'aa:bb:cc:00:00:04'), {'ip_addr': 'garbage'}],
+        [{'ip_addr': '192.168.9.11', 'mac': 'aa:bb:cc:00:00:02', 'hostname': 'nas-box', 'interface': 'lan1'},
+         {'ip_addr': '192.168.9.20', 'mac': 'AA-BB-CC-00-00-05', 'hostname': 'printer', 'interface': 'lan1'}])
+    reading = ikuai_clients.read(fake)
+    seen = {ip: sighting.public() for ip, sighting in reading.sightings.items()}
+    assert seen == {
+        '192.168.9.10': {'mac': 'AA:BB:CC:00:00:01', 'hostname': '客厅 电视', 'sources': ['online'],
+                         'presence': 'online', 'basis': 'terminal', 'last_seen': None, 'router_id': ''},
+        '192.168.9.11': {'mac': 'AA:BB:CC:00:00:02', 'hostname': 'NAS', 'sources': ['lease', 'online'],
+                         'presence': 'online', 'basis': 'terminal', 'last_seen': None, 'router_id': ''},
+        '192.168.9.12': {'mac': 'AA:BB:CC:00:00:03', 'hostname': 'iPhone', 'sources': ['online'],
+                         'presence': 'online', 'basis': 'terminal', 'last_seen': None, 'router_id': ''},
+        '192.168.9.20': {'mac': 'AA:BB:CC:00:00:05', 'hostname': 'printer', 'sources': ['lease'],
+                         'presence': 'offline', 'basis': 'absent', 'last_seen': None, 'router_id': ''},
+    }
+    assert reading.notes == ['按 2 分钟内经过路由器的流量判断在线']
+    pages = [call for call in fake.calls if call[0] == 'monitor_lanip']
+    assert [call[2] for call in pages] == [{'TYPE': 'data,total', 'limit': f'{start},2'} for start in (0, 2, 4)]
+    assert all(call[1] == 'show' for call in fake.calls)
+
+
+def test_ikuai_lease_failure_is_a_note_but_the_terminal_monitor_is_required():
+    reading = ikuai_clients.read(FakeIKuai([terminal('192.168.9.10', 'aa:bb:cc:00:00:01')],
+                                           failures={'dhcp_lease': 'iKuai 未执行 dhcp_lease（错误码 1003）'}))
+    assert reading.notes[1] == '无法读取 DHCP 租约：iKuai 未执行 dhcp_lease（错误码 1003）'
+    assert list(reading.sightings) == ['192.168.9.10']
+    with pytest.raises(RouterError):
+        ikuai_clients.read(FakeIKuai(failures={'monitor_lanip': 'x'}))
+
+
+def test_ikuai_code_1003_is_worded_neutrally(monkeypatch):
+    driver = IKuaiDriver('http://192.0.2.2', 'admin', 'secret')
+    driver._logged_in = True
+    monkeypatch.setattr(driver, '_post', lambda path, payload: {'code': 1003, 'message': 'no permission'})
+    with pytest.raises(RouterError) as caught:
+        driver.call('monitor_lanip', {'TYPE': 'data,total'})
+    message = str(caught.value)
+    assert 'monitor_lanip' in message and '1003' in message and 'no permission' in message
+    assert '权限' in message and '固件' in message and '管理员账号' not in message
+
+
+# --- Profile endpoint ---------------------------------------------------------------------------------------
+
+URL = '/api/client-devices/discovery?profile=office'
+ROS = {'id': 'ros1', 'name': '主路由', 'type': 'routeros', 'endpoint': 'https://192.168.0.1', 'username': 'cf',
+       'password': 'router-secret', 'ros_policy_rule_sets': ['rs']}
+IKUAI = {'id': 'ik1', 'name': '爱快', 'type': 'ikuai', 'endpoint': 'http://192.168.9.1', 'username': 'admin',
+         'password': 'router-secret'}
+
+
+def setup_profile(repo, routers, rows):
+    def update(config):
+        config['oxidns'] = apply_policies(config['oxidns'], config, [row for row in rows if row['mode']])
+        config['device_notes'] = {row['ip']: row['name'] for row in rows if row['name']}
+        config['routers'] = {'items': copy.deepcopy(routers)}
+    repo.update_profile_transaction('office', update)
+
+
+ROWS = [{'ip': '192.168.0.133', 'name': '摄像头', 'mode': 'direct'},
+        {'ip': '192.168.0.5', 'name': '旧电脑', 'mode': 'smart'},
+        {'ip': '192.168.0.199', 'name': '已拆除', 'mode': 'smart'},
+        {'ip': '192.168.0.0/24', 'name': '家里', 'mode': 'smart'},
+        {'ip': '192.168.0.96/28', 'name': '实验', 'mode': 'direct'},
+        {'ip': '2001:db8::5', 'name': 'v6', 'mode': 'smart'}]
+
+
+def test_profile_without_ros_or_ikuai_is_unsupported(oxidns_app):
+    app, repo = oxidns_app
+    setup_profile(repo, [], ROWS)
+    result = app.test_client().get(URL)
+    body = result.get_json()
+    assert result.status_code == 200 and result.headers['Cache-Control'] == 'no-store'
+    assert body['state'] == 'unsupported' and body['message'] == '需要在当前配置接入 RouterOS 或 iKuai 才能发现设备'
+    assert body['sources'] == [] and body['discovered'] == []
+    assert {row['ip']: row['presence'] for row in body['devices']} == {
+        '192.168.0.133': 'unknown', '192.168.0.5': 'unknown', '192.168.0.199': 'unknown',
+        '192.168.0.0/24': 'network', '192.168.0.96/28': 'network', '2001:db8::5': 'unknown'}
+
+
+def test_discovery_joins_both_router_types_with_saved_rows(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    setup_profile(repo, [ROS, IKUAI], ROWS)
+    get_agent_manager().register_agent({'name': 'dns', 'host': '192.168.0.8', 'port': 18000,
+                                        'service_type': 'oxidns', 'profile_id': 'office'})
+    get_agent_manager().register_agent({'name': 'other', 'host': '192.168.0.2', 'port': 18000,
+                                        'service_type': 'mihomo', 'profile_id': 'default'})
+    ros = FakeRouterOS(ping=answers('192.168.0.5'))
+    ikuai = FakeIKuai([terminal('192.168.9.10', 'aa:bb:cc:00:00:01', comment='电视'),
+                       terminal('192.168.9.1', 'aa:bb:cc:00:00:09')])
+    opened = []
+
+    def open_driver(router):
+        opened.append((router['id'], router['password']))
+        return ros.driver(monkeypatch) if router['type'] == 'routeros' else ikuai
+    monkeypatch.setattr(client_discovery, 'open_driver', open_driver)
+    body = app.test_client().get(URL).get_json()
+    assert sorted(opened) == [('ik1', 'router-secret'), ('ros1', 'router-secret')]
+    assert 'router-secret' not in json.dumps(body)
+    assert body['success'] and body['profile_id'] == 'office' and body['state'] == 'ok' and body['message'] == ''
+    assert body['sources'] == [
+        {'id': 'ros1', 'name': '主路由', 'type': 'routeros', 'ok': True, 'error': '', 'notes': [], 'policy_routing': True},
+        {'id': 'ik1', 'name': '爱快', 'type': 'ikuai', 'ok': True, 'error': '', 'notes': ['按 2 分钟内经过路由器的流量判断在线']}]
+    devices = {row['ip']: row for row in body['devices']}
+    assert devices['192.168.0.133'] == {**ROWS[0], 'mac': 'E0:BA:AD:94:F2:48', 'hostname': 'C6c_EZVIZ',
+                                        'sources': ['arp', 'lease'], 'presence': 'online', 'basis': 'lease',
+                                        'last_seen': 523, 'router_id': 'ros1'}
+    # Saved addresses are confirmed first.
+    assert ros.pings[0]['address'] == '192.168.0.5'
+    assert (devices['192.168.0.5']['presence'], devices['192.168.0.5']['basis']) == ('online', 'probe')
+    assert (devices['192.168.0.199']['presence'], devices['192.168.0.199']['basis']) == ('offline', 'absent')
+    assert devices['192.168.0.0/24']['presence'] == 'network' and devices['2001:db8::5']['presence'] == 'unknown'
+    discovered = {row['ip']: row for row in body['discovered']}
+    # Saved rows, the routers' own addresses, the management endpoint and this profile's Agent hosts are excluded.
+    for ip in ('192.168.0.133', '192.168.0.5', '192.168.0.1', '192.168.9.1', '192.168.0.8'):
+        assert ip not in discovered
+    assert '192.168.0.2' in discovered          # an Agent of another profile is just a device here
+    assert not [ip for ip in discovered if ip.startswith('192.168.1.')]
+    assert discovered['192.168.9.10'] == {'ip': '192.168.9.10', 'mac': 'AA:BB:CC:00:00:01', 'hostname': '电视',
+                                          'sources': ['online'], 'presence': 'online', 'basis': 'terminal',
+                                          'last_seen': None, 'router_id': 'ik1', 'network': None}
+    # The most specific saved network covers an address.
+    assert discovered['192.168.0.100']['network'] == {'ip': '192.168.0.96/28', 'name': '实验', 'mode': 'direct'}
+    assert discovered['192.168.0.147']['network'] == {'ip': '192.168.0.0/24', 'name': '家里', 'mode': 'smart'}
+    assert discovered['192.168.0.96']['presence'] == 'offline'
+    assert list(discovered) == sorted(discovered, key=lambda ip: tuple(int(part) for part in ip.split('.')))
+
+
+def test_a_failed_router_makes_missing_saved_rows_unknown(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    setup_profile(repo, [ROS, IKUAI], ROWS)
+    ikuai = FakeIKuai([terminal('192.168.9.10', 'aa:bb:cc:00:00:01')])
+    monkeypatch.setattr(client_discovery, 'open_driver', lambda router: (
+        FakeRouterOS({'/ip/arp': (401, {})}).driver(monkeypatch) if router['type'] == 'routeros' else ikuai))
+    body = app.test_client().get(URL).get_json()
+    assert body['state'] == 'partial' and body['message'] == '部分路由器读取失败，未出现的设备显示为未知'
+    assert body['sources'][0]['ok'] is False and '认证失败' in body['sources'][0]['error']
+    assert {row['ip']: row['presence'] for row in body['devices']}['192.168.0.199'] == 'unknown'
+    assert [row['ip'] for row in body['discovered']] == ['192.168.9.10']
+
+
+def test_a_slow_router_times_out_without_holding_the_others(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    setup_profile(repo, [ROS, IKUAI], [])
+    release = threading.Event()
+
+    class Stuck(FakeIKuai):
+        def call(self, func_name, param, action='show'):
+            release.wait(5)
+            raise RouterError('closed')
+    monkeypatch.setattr(client_discovery, 'open_driver', lambda router: (
+        Stuck() if router['type'] == 'ikuai' else FakeRouterOS(ping=answers()).driver(monkeypatch)))
+    monkeypatch.setattr(client_discovery, 'ROUTER_TIMEOUT', 3)
+    started = time.monotonic()
+    body = app.test_client().get(URL).get_json()
+    release.set()
+    assert time.monotonic() - started < 4.5
+    assert body['state'] == 'partial'
+    assert body['sources'][1] == {'id': 'ik1', 'name': '爱快', 'type': 'ikuai', 'ok': False,
+                                  'error': '读取超时（3 秒），请检查路由器负载和网络', 'notes': []}
+    assert body['sources'][0]['ok'] and body['discovered']
+
+
+def test_an_unexpected_reader_bug_is_contained(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    setup_profile(repo, [IKUAI], [{'ip': '192.168.9.10', 'name': '电视', 'mode': ''}])
+
+    class Broken(FakeIKuai):
+        def call(self, func_name, param, action='show'):
+            return {'total': 'x', 'data': [{'ip_addr': '192.168.9.10', 'mac': {'odd': 1}}, 'junk']}
+    monkeypatch.setattr(client_discovery, 'open_driver', lambda router: Broken())
+    monkeypatch.setattr(ikuai_clients, 'parse_terminal', lambda row: 1 / 0)
+    body = app.test_client().get(URL).get_json()
+    assert body['state'] == 'failed' and body['message'] == '路由器读取失败，暂时无法发现设备'
+    assert body['sources'][0]['error'] == '读取失败：ZeroDivisionError'
+    assert body['devices'][0]['presence'] == 'unknown'
+
+
+def test_the_agent_entry_point_reads_that_agents_profile(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    setup_profile(repo, [], [])
+    agent_id = get_agent_manager().register_agent({'name': 'dns', 'host': '127.0.0.1', 'port': 18000,
+                                                   'service_type': 'oxidns', 'profile_id': 'office'})['id']
+    client = app.test_client()
+    assert client.get(f'/api/client-devices/discovery?agent={agent_id}').get_json()['profile_id'] == 'office'
+    missing = client.get('/api/client-devices/discovery?agent=nope')
+    assert missing.status_code == 404 and 'Agent' in missing.get_json()['message']

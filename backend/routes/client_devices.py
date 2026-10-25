@@ -30,6 +30,20 @@ def _response(payload, status=200):
     return result, status
 
 
+def _profile_id(by_agent):
+    """(profile_id, None) or (None, error response). ?agent=<OxiDNS Agent> pins that device's profile."""
+    from backend.common.agent_manager import get_agent_manager
+    from backend.common.config import get_default_profile_id
+    from backend.common.profile_context import resolve_profile_id
+    agent_id = request.args.get('agent')
+    if agent_id is not None and by_agent:
+        agent = get_agent_manager().get_agent_by_id(agent_id)
+        if not agent or agent.get('service_type') != 'oxidns':
+            return None, _response({'success': False, 'message': '这台 OxiDNS Agent 已不存在，请返回 Agent 页刷新。'}, 404)
+        return agent.get('profile_id') or get_default_profile_id(), None
+    return resolve_profile_id(), None
+
+
 @client_devices_bp.route('', methods=['GET', 'PUT'])
 @require_auth
 def client_devices():
@@ -37,17 +51,10 @@ def client_devices():
 
     PUT {profile_id, ip, name, mode, previous_name, previous_mode, base_url}；mode 为空表示不设 DNS 策略。
     """
-    from backend.common.agent_manager import get_agent_manager
-    from backend.common.config import get_default_profile_id, update_config_transaction
-    from backend.common.profile_context import resolve_profile_id
-    agent_id = request.args.get('agent')
-    if agent_id is not None and request.method == 'GET':
-        agent = get_agent_manager().get_agent_by_id(agent_id)
-        if not agent or agent.get('service_type') != 'oxidns':
-            return _response({'success': False, 'message': '这台 OxiDNS Agent 已不存在，请返回 Agent 页刷新。'}, 404)
-        profile_id = agent.get('profile_id') or get_default_profile_id()
-    else:
-        profile_id = resolve_profile_id()
+    from backend.common.config import update_config_transaction
+    profile_id, error = _profile_id(request.method == 'GET')
+    if error:
+        return error
     try:
         if request.method == 'PUT':
             body = request.get_json(silent=True)
@@ -63,3 +70,23 @@ def client_devices():
         return _response({'success': False, 'message': str(error)}, 409)
     except OxidnsSettingsError as error:
         return _response({'success': False, 'message': str(error)}, 400)
+
+
+@client_devices_bp.route('/discovery', methods=['GET'])
+@require_auth
+def client_device_discovery():
+    """实时读取配置空间内 RouterOS / iKuai 主路由看到的局域网设备，不保存结果。
+
+    配置空间解析同 GET /api/client-devices（?profile= 或 ?agent=）。返回格式见 doc/oxidns-device-policies.md。
+    """
+    from backend.common.agent_manager import get_agent_manager
+    from backend.common.client_discovery import discover
+    from backend.common.config import get_config, get_default_profile_id
+    profile_id, error = _profile_id(True)
+    if error:
+        return error
+    default = get_default_profile_id()
+    # Agent hosts are infrastructure, not client devices to add.
+    hosts = [agent.get('host') or '' for agent in get_agent_manager().get_all_agents()
+             if (agent.get('profile_id') or default) == profile_id]
+    return _response({'success': True, 'profile_id': profile_id, **discover(get_config(profile_id), hosts)})
