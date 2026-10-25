@@ -33,7 +33,8 @@ class StatefulIKuai:
         pass
 
     def ref_count(self, group):
-        """References iKuai counts: each NAT/端口分流 address field naming the group, plus
+        """References iKuai counts: one per NAT/端口分流 rule naming the group (in either
+        address field, any number of times, enabled or not; measured on 4.0.314), plus
         ``hidden_refs`` from features ConfigFlow does not read (ACL, 流控…)."""
         count = group.get('hidden_refs', 0)
         for func in ('nat_rule', 'stream_ipport'):
@@ -41,8 +42,10 @@ class StatefulIKuai:
                 for field in ('src_addr', 'dst_addr'):
                     value = row.get(field)
                     objects = value.get('object') if isinstance(value, dict) else None
-                    count += sum(1 for ref in objects if isinstance(ref, dict)
-                                 and ref.get('gid') == group.get('group_id')) if isinstance(objects, list) else 0
+                    if isinstance(objects, list) and any(isinstance(ref, dict) and ref.get('gid') == group.get('group_id')
+                                                         for ref in objects):
+                        count += 1
+                        break
         return count
 
     def post(self, url, json=None, **_):

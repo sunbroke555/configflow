@@ -29,9 +29,9 @@ back. Notes the user gives other entries stay with their entries. Groups hold
 at most 2000 entries and are split by request bytes, notes included, so a
 group write always fits in one request.
 
-iKuai counts every reference to a group (``ref_count``), including ones from
-features ConfigFlow does not read (ACL, 流控…), and refuses to delete a group
-still referenced. A group with such references is never deleted or edited.
+iKuai counts the rules referencing a group (``ref_count``: one per rule, enabled
+or not, however often it names the group), including rules of features ConfigFlow
+does not read (ACL, 流控…), and refuses to delete a group still referenced. A group with such references is never deleted or edited.
 """
 import hashlib
 import ipaddress
@@ -169,8 +169,12 @@ def mark_owners(groups: List[Dict[str, Any]]) -> None:
 
 
 def hidden_refs(group: Dict[str, Any]) -> int:
-    """References iKuai counts that no NAT or 端口分流 rule accounts for (ACL, 流控…)."""
-    return max(0, group.get('refs', 0) - len(group['users']))
+    """References iKuai counts that no NAT or 端口分流 rule accounts for (ACL, 流控…).
+
+    iKuai 4.0.314 counts each rule once, however many times its address fields
+    name the group, and counts disabled rules too; ``users`` lists every field.
+    """
+    return max(0, group.get('refs', 0) - len({user['rule'] for user in group['users']}))
 
 
 def _role_rule(role: str, rule: Dict[str, Any]) -> bool:

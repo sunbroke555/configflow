@@ -722,6 +722,30 @@ def test_a_group_referenced_where_configflow_cannot_see_is_never_deleted():
     assert build_report(_desired(CIDRS[:10]), _driver(session).read_state())['ikuai_groups']['orphans'] == []
 
 
+@pytest.mark.parametrize('extra', ['src_addr', 'dst_addr'])
+def test_ref_count_is_one_per_rule_so_a_rule_naming_a_group_twice_hides_no_acl(extra):
+    # iKuai 4.0.314 counts a rule once however many times it names the group (src
+    # and dst, or the same reference twice) and counts disabled rules too. A rule
+    # naming cf_pa_1 twice must not cancel out the ACL reference: the group is still
+    # referenced after the rule is deleted, and a delete would hit 2021 every release.
+    session = Device([], [], policies=[])
+    assert _publish(session, CIDRS[:10])[1]['ok']
+    rule = _rule(session, 'stream_ipport', 'cf-mihomo')
+    group = _group_row(session, 'cf_pa_1')
+    rule[extra] = {'custom': list(rule[extra].get('custom') or []) if extra == 'src_addr' else [],
+                   'object': [*(rule[extra].get('object') or []), _ref(group['id'], 'cf_pa_1')]}
+    rule['enabled'] = 'no'
+    group['hidden_refs'] = 1
+    driver = _driver(session)
+    plan = _plan_without_return(driver, _desired(CIDRS[:10]))
+    assert ('ikuai_group_delete', 'cf_pa_1') not in [(op['kind'], op.get('name')) for op in _ops(plan, 'routes')]
+    assert any('cf_pa_1 还被 iKuai 中 ConfigFlow 读不到的配置（如 ACL、流控）引用 1 处，已保留' in warning
+               for warning in plan['warnings'])
+    result = execute(plan, driver, None)
+    assert result['ok'], result['log'][-3:]
+    assert _groups(session)['cf_pa_1'] == CIDRS[:10]
+
+
 def test_a_group_referenced_where_configflow_cannot_see_is_frozen():
     session = Device([], [], policies=[])
     _, result, agent = _publish(session, CIDRS)
