@@ -9,7 +9,7 @@ from flask import Flask
 import pytest
 
 from backend.agents import presence_log, runtime_state
-from backend.agents.manager import AgentManager, HEARTBEAT_FRESH_SECONDS, heartbeat_fresh, is_online, online_status
+from backend.agents.manager import AgentManager, HEARTBEAT_FRESH_SECONDS, heartbeat_fresh, is_online, is_usable, online_status
 from backend.common import config as config_module
 from backend.common.agent_manager import init_agent_manager
 from backend.common.config_repository import ProfileRepository
@@ -224,6 +224,9 @@ def test_one_freshness_rule_two_minutes_inclusive():
     aware = datetime.now().astimezone()
     assert is_online({"status": "online", "last_heartbeat": (aware - timedelta(seconds=30)).isoformat()})
     assert not is_online({"status": "online", "last_heartbeat": (aware - timedelta(minutes=3)).isoformat()})
+    # Usable: online and not disabled; a missing flag means enabled.
+    assert is_usable(agent(30), now) and is_usable({**agent(30), "enabled": True}, now)
+    assert not is_usable({**agent(30), "enabled": False}, now) and not is_usable(agent(121), now)
 
 
 def test_the_list_derives_status_with_the_shared_rule(tmp_path):

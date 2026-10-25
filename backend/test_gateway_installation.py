@@ -998,3 +998,41 @@ def test_after_a_restart_wizard_publication_and_setup_check_agree_on_offline(set
     # Past the online gate, on to the forwarding check.
     with pytest.raises(SetupError, match='Linux 转发尚未启用'):
         check_installation(manager.repository, setup_session)
+
+
+def test_a_disabled_agent_with_a_fresh_heartbeat_is_refused_by_publishing_and_the_setup_check(setup, monkeypatch):
+    """Disabling is not part of the freshness rule, but both gates treat it the same way."""
+    from backend.agents import linux_gateway
+    from backend.common import agent_manager as agent_manager_module
+    from backend.common.setup_completion import check_installation
+    from backend.common.setup_flow import SetupError
+    _, manager, _, _, saved = setup
+    saved = prepare_run(manager, saved)
+    saved.update(phase='published', deployments={s: {'deployment_id': 'job-' + s, 'status': 'succeeded'} for s in sessions.SERVICES})
+    sessions._write(manager.repository, saved)
+
+    def published(agents):
+        for agent in agents:
+            for service, agent_id in saved['agent_ids'].items():
+                if agent['id'] == agent_id:
+                    task = {'deployment_id': 'job-' + service, 'status': 'succeeded'}
+                    agent.update(deployments={task['deployment_id']: task}, latest_deployment=task)
+    manager._update_agents(published)
+    for agent_id in saved['agent_ids'].values():
+        assert manager.update_heartbeat(agent_id, {})
+    assert manager.update_agent(saved['agent_ids']['mihomo'], {'enabled': False})
+    monkeypatch.setattr(agent_manager_module, '_agent_manager', manager)
+    monkeypatch.setattr(linux_gateway, 'call', lambda *a: {'managed': {}})
+    setup_session = {'profile_id': 'home', 'goal': 'gateway'}
+
+    public = sessions.get(manager.repository, manager, saved['id'])
+    assert public['agents']['mihomo']['status'] == 'online' and public['agents']['mihomo']['enabled'] is False
+    with pytest.raises(sessions.InstallationError, match='安装设备离线或已禁用'):
+        sessions._pair(manager.repository, manager, saved)
+    with pytest.raises(SetupError, match='安装设备离线或已禁用'):
+        check_installation(manager.repository, setup_session)
+
+    assert manager.update_agent(saved['agent_ids']['mihomo'], {'enabled': True})
+    assert set(sessions._pair(manager.repository, manager, saved)) == set(sessions.SERVICES)
+    with pytest.raises(SetupError, match='Linux 转发尚未启用'):
+        check_installation(manager.repository, setup_session)

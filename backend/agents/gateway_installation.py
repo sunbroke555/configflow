@@ -24,7 +24,7 @@ import uuid
 
 from backend.agents.linux_gateway import _spec
 from backend.agents.oxidns_monitor import MonitorError
-from backend.agents.manager import _constant_time_ascii_equal, _upgrade_busy, _dns_follow_busy, is_online, online_status
+from backend.agents.manager import _constant_time_ascii_equal, _upgrade_busy, _dns_follow_busy, is_usable, online_status
 
 logger = logging.getLogger(__name__)
 SERVICES = ('mihomo', 'oxidns')
@@ -476,7 +476,7 @@ def _pair(repository, manager, session):
     for service, agent_id in session['agent_ids'].items():
         agent = manager.get_agent_by_id(agent_id)
         _match_agent(session, agent, service)
-        if agent.get('enabled') is False or not is_online(agent):
+        if not is_usable(agent):
             raise InstallationError('安装设备离线或已禁用，请检查连接后继续。', 409)
         deployment_id = session['deployments'].get(service, {}).get('deployment_id')
         if (deployment_id in agent.get('deployments', {})

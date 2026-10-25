@@ -69,6 +69,11 @@ def is_online(agent, now=None):
     return online_status(agent, now) == 'online'
 
 
+def is_usable(agent, now=None):
+    """Online by the freshness rule and not disabled: what publishing and the setup check require."""
+    return (agent or {}).get('enabled') is not False and is_online(agent, now)
+
+
 class AgentDeploymentConflict(ValueError):
     """A profile binding cannot change during an unfinished deployment."""
 
