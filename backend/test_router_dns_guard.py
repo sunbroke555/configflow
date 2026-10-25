@@ -478,6 +478,24 @@ def test_an_address_member_is_new_only_with_an_unseen_id():
     assert whole_address_reads(session) == []
 
 
+def test_a_reply_naming_another_lists_member_is_never_rolled_back():
+    from backend.routers.base import RouterRollbackError
+    foreign = {'.id': '*F1', 'list': 'blocklist', 'address': '203.0.113.9', 'disabled': 'false', 'dynamic': 'false'}
+    session, driver = device(addresses=[foreign])
+    original = session.request
+
+    def reused(method, url, json=None, **kwargs):
+        if method == 'PUT':
+            return Response(dict(foreign), 201)
+        return original(method, url, json=json, **kwargs)
+    session.request = reused
+    undo = []
+    with pytest.raises(RouterRollbackError, match='没有返回可信的新对象 ID'):
+        driver._perform({'method': 'PUT', 'path': ADDRESSES,
+                         'values': {'list': BYPASS_LIST, 'address': '10.0.0.9', 'disabled': 'false'}}, undo)
+    assert undo == [] and session.rows[ADDRESSES] == [foreign]
+
+
 def test_missing_address_members_read_as_absent_by_id():
     from backend.routers.base import RouterError
     session, driver = device(addresses=[{'.id': '*A1', 'list': BYPASS_LIST, 'address': '10.0.0.9',

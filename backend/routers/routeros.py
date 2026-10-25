@@ -437,15 +437,17 @@ class RouterOSDriver(RouterDriver):
                 raise RouterError('原 NAT 规则位置已变化，无法安全恢复顺序')
             return self._perform({'method': 'PUT', 'path': path, 'values': values}, undo)
         if method == 'PUT':
-            # An address-list member is new if its list did not hold the ID; the
-            # read-back then checks every field, the list name included.
-            scope = path + '?' + urlencode({'list': values.get('list', '')}) if path in SINGLE_ROW_PATHS else path
-            before = {str(row.get('.id')) for row in self._list(scope)}
+            # An address-list member is new only if its list did not hold the ID
+            # and the reply is in that list: an existing member of another list
+            # would otherwise be recorded for deletion by the rollback.
+            scoped = path in SINGLE_ROW_PATHS
+            before = {str(row.get('.id')) for row in self._list(
+                path + '?' + urlencode({'list': values.get('list', '')}) if scoped else path)}
             try:
                 row = self._request(method, path, values)
                 row_id = row.get('.id') if isinstance(row, dict) else None
                 if (not isinstance(row_id, str) or not re.fullmatch(r'\*[0-9a-fA-F]+', row_id)
-                        or row_id in before):
+                        or row_id in before or (scoped and row.get('list') != values.get('list'))):
                     raise UncertainWrite(f'RouterOS {path} 已提交但没有返回可信的新对象 ID')
             except UncertainWrite as error:
                 # Identical newly appearing values may belong to another writer.
