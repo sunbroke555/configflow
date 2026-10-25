@@ -1,12 +1,13 @@
-"""Batched RouterOS static-route writes for releases with thousands of CIDRs.
+"""Batched RouterOS static-route (and NAT rule) writes for thousands of CIDRs.
 
 Written one at a time, every route costs a destination read, the write and a
 read-back. Runs of additions instead go to the router as /execute scripts of
-up to ROUTE_BATCH adds, proven by the ID each console add returns and one
+up to ROUTE_BATCH console adds, proven by the ID each add returns and one
 destination-filtered read before and after. Runs of deletions are one
-comma-separated remove, checked with one ID-filtered read. Measured on
-RouterOS 7.24.5 (x86 CHR, 3000 other routes): 100 console adds 0.17 s, a read
-of 200 destinations 0.08 s and of 200 IDs 0.8 s, against 4-8 s for the table.
+comma-separated remove, checked with one ID-filtered read. Rollback uses the
+same batches. Measured on RouterOS 7.24.5 (x86 CHR, 3000 other routes): 100
+console adds 0.17 s, a read of 200 destinations 0.08 s and of 200 IDs 0.8 s,
+against 4-8 s for the table.
 
 A batch records only operations it has fully proven. Whatever it cannot prove,
 or the router rejects, goes through the single-route transaction, which reads,
@@ -30,6 +31,11 @@ QUERY_TERMS = 200
 REMOVE_BATCH = 500
 ROW_ID = re.compile(r'\*[0-9a-fA-F]+')
 SKIPPED = 'skipped'
+UNCERTAIN = f'RouterOS {ROUTES} 已提交但没有返回可信的新对象 ID；无法确认新增对象归属，已保留现场，请检查路由器'
+# Fields a console add takes as they read back over REST. Others (blackhole is
+# a bare flag on the console, a bare false a syntax error) use REST writes.
+CONSOLE_FIELDS = frozenset({'dst-address', 'gateway', 'routing-table', 'distance', 'scope', 'target-scope',
+                            'comment', 'disabled'})
 
 
 def _query(driver, field: str, values: List[str]) -> List[Dict[str, Any]]:
@@ -110,13 +116,6 @@ def apply_routes(driver, ops: List[Dict[str, Any]], record: Callable[[Dict[str, 
 def _check(driver, row_id: str, values: Dict[str, Any], row: Optional[Dict[str, Any]]) -> None:
     """The single-route read-back check of a new route."""
     driver._check_written({'id': row_id, 'values': values}, row, [])
-
-
-UNCERTAIN = f'RouterOS {ROUTES} 已提交但没有返回可信的新对象 ID；无法确认新增对象归属，已保留现场，请检查路由器'
-# Fields a console add takes as they read back over REST. Others (blackhole is
-# a bare flag on the console, a bare false a syntax error) use REST writes.
-CONSOLE_FIELDS = frozenset({'dst-address', 'gateway', 'routing-table', 'distance', 'scope', 'target-scope',
-                            'comment', 'disabled'})
 
 
 def console_safe(values: Dict[str, Any]) -> bool:
