@@ -495,7 +495,7 @@ def test_write_logs_in_again_once_after_session_expiry():
 
     session = ExpiringSession(expire=2)
     driver = _driver(session)
-    with pytest.raises(RouterError, match='session expired'):
+    with pytest.raises(RouterError, match='错误码 1008'):
         driver._write('static_rt', 'add', _route(0, '10.9.0.0/24', tagname='T1'))
     assert session.logins == 2 and session.rows['static_rt'] == []
 

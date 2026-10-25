@@ -745,5 +745,102 @@
         }
       }
     }
-  ]
+  ],
+  "auth_errors": [
+    {
+      "case": "unsupported_interface_admin",
+      "request": {
+        "func_name": "not_an_interface",
+        "action": "show",
+        "param": {}
+      },
+      "response": {
+        "code": 1003,
+        "message": "Access denied"
+      }
+    },
+    {
+      "case": "invalid_password",
+      "request": "POST /Action/login; login credential fields omitted",
+      "response": {
+        "Result": 10000,
+        "code": 1005,
+        "message": "账号或密码错误"
+      }
+    },
+    {
+      "case": "missing_or_expired_session",
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "show",
+        "param": {
+          "TYPE": "static_total,static_data"
+        }
+      },
+      "response": {
+        "Result": 10000,
+        "code": 1008,
+        "message": "会话已过期"
+      }
+    }
+  ],
+  "hostname_runtime": {
+    "binding": {
+      "vendor": "ikuai",
+      "id": "1",
+      "ip": "192.168.77.100",
+      "mac": "02:CF:77:00:01:40",
+      "comment": "cf-client:主机名变化验证",
+      "interface": "lan1",
+      "gateway": "192.168.77.1",
+      "undo": {
+        "expected": {
+          "interface": "lan1",
+          "gateway": "192.168.77.1",
+          "ip_addr": "192.168.77.100",
+          "mac": "02:CF:77:00:01:40",
+          "dns1": "",
+          "dns2": "",
+          "enabled": "yes",
+          "comment": "cf-client:主机名变化验证",
+          "tagname": "cfip_884734ca1b"
+        }
+      }
+    },
+    "before": [
+      {
+        "enabled": "yes",
+        "tagname": "cfip_884734ca1b",
+        "interface": "lan1",
+        "mac": "02:cf:77:00:01:40",
+        "gateway": "192.168.77.1",
+        "hostname": "",
+        "dns1": "",
+        "dns2": "",
+        "ip_addr": "192.168.77.100",
+        "ip_addr_int": 3232255332,
+        "comment": "cf-client:主机名变化验证",
+        "termname": "",
+        "id": 1
+      }
+    ],
+    "after": [
+      {
+        "enabled": "yes",
+        "tagname": "cfip_884734ca1b",
+        "interface": "lan1",
+        "mac": "02:cf:77:00:01:40",
+        "gateway": "192.168.77.1",
+        "hostname": "cf-fixed-changed",
+        "dns1": "",
+        "dns2": "",
+        "ip_addr": "192.168.77.100",
+        "ip_addr_int": 3232255332,
+        "comment": "cf-client:主机名变化验证",
+        "termname": "",
+        "id": 1
+      }
+    ],
+    "final": []
+  }
 }

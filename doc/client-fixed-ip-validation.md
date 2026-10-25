@@ -19,7 +19,7 @@
 | VM140 | iKuai 4.0.314，2C/2G、e1000、cfik、onboot=0 | 管理 192.168.77.1；固定 MAC 客户端 192.168.77.100 |
 | VM141 | 指定 CHR 7.24.5 镜像副本、cfgt、onboot=0 | 独立管理 10.241.141.1；VLAN 子接口 DHCP 10.97.71.0/24 |
 
-开工前登记 `/root/cf-gwip-lab/fixed-ip-owner.json`，记录客体、地址、快照、拆除命令和最终状态。未操作 VM117、10.97.0.50、生产路由器或其他既有客体。
+开工前登记 `/root/cf-gwip-lab/fixed-ip-owner.json`，记录客体、地址、快照、拆除命令和最终状态。最终两台 VM 均回滚 `fixed-ip-baseline` 并停止，owner 状态为 `completed-cleaned`；本次 netns、VLAN、管理 macvlan 和 SSH 隧道已删除/关闭，保留共享网桥。未操作 VM117、10.97.0.50、生产路由器或其他既有客体。
 
 准备 CHR 管理地址时发现候选 10.97.0.71 的邻居 MAC 不属于本次 VM；两次连接被拒绝后停止该候选地址，改用本次独立管理网段并核对新 VM MAC。没有成功读取或修改该候选地址上的设备。后续所有管理操作均通过核对 MAC 的实验地址。
 
@@ -27,7 +27,7 @@
 
 通过真实 REST 请求确认：
 
-- `POST /rest/ip/dhcp-server/lease/make-static`，请求 `{“.id”: “*…”}`，返回 `[]`；原租约 ID、server 和 address 保留。
+- `POST /rest/ip/dhcp-server/lease/make-static`，请求 `{".id": "*…"}`，返回 `[]`；原租约 ID、server 和 address 保留。
 - 无匹配动态租约时 `PUT` 新增，带 MAC、地址、明确 DHCP server 和唯一 `cf-client:` comment；按返回 ID 回读。客户端位于 VLAN 子接口网段，固定后续租仍为 10.97.71.149，DNS 为网段 10.97.71.2 / 10.97.71.3。
 - 删除、删除后恢复原稳定配置、新 ID 回读；同 MAC 已有静态、同 IP 属其他 MAC、网段外、无 MAC、非 ConfigFlow 归属均拒绝覆盖/删除。
 - 只读账号写入返回 HTTP 500 / `not enough permissions`，界面提示需要 write 等权限。
@@ -47,7 +47,7 @@ RouterOS 故障注入在真实 driver 请求边界丢弃响应或拒发指定请
 - `show TYPE=static_total,static_data` 才返回静态配置；`total,data` 实测返回租约视图，缺少 DNS/comment，不能用于核验。读取使用完整分页，按 ID 核对。
 - `del` 请求 `{"id":"1"}`，成功 code=0，回读 static_total=0。支持删除失败/批量失败时恢复原稳定字段并记录新 ID。
 - `hostname` 实测随 DHCP 客户端报文更新，即使 add 提交空值也可能立即返回非空值，因此与 termname、ip_addr_int 一样视为运行字段；带非空主机名及续租改名后的写入、核验、删除均通过。
-- 真实验证同 MAC、同 IP 异 MAC、网段外、无写权限、非本项目归属保护。缺少必填字段、重复 MAC/IP 返回 3001；受限账号可读，add/del 返回 1002，并显示需要修改权限。
+- 真实验证同 MAC、同 IP 异 MAC、网段外、无写权限、非本项目归属保护。缺少必填字段、重复 MAC/IP 返回 3001；受限账号可读，add/del 返回 1002，并显示需要修改权限；另实测 1001（受限账号无访问权限）、1003（管理员请求不存在接口）、1005（错误密码）、1008（无/过期会话），均整理为测试数据。
 - 通过真实 HTTPS 转发代理注入新增成功但丢响应、按 ID 回读失败、删除后首次回读失败。新增失败清除本次绑定；删除回读瞬时失败再次核对已消失后报告成功，不额外重建。
 
 请求/响应、必填字段与权限错误测试数据：`backend/testdata/ikuai_fixed_ip_40314.json`。实验凭据、会话和密钥不进入仓库。
