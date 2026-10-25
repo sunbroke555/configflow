@@ -377,12 +377,58 @@ def _recognize(document, settings, config, claim):
             caps[key] = _cap(False, reason)
     state.update(plugins=plugins, main=main, groups=groups, prefix=args[:prefix_end],
                  dynamic=[entry for _, entry in dynamic], custom=custom, final=final,
-                 records=records, claimed=claimed)
+                 records=records, claimed=claimed, custom_indices=[index for index, _ in custom_pairs])
+    return state
+
+
+_CUSTOM_FIELDS = frozenset(('custom_matches', 'custom_match_position'))
+
+
+def _aliased_custom_state(document, settings, config):
+    """Recognize recorded managed renames without changing their native names.
+
+    Only custom-match controls use this view. General rule regeneration still
+    requires its original managed structure, and unrecorded names stay custom.
+    """
+    parked = settings.get('_common_disabled')
+    aliases = parked.get('renamed_plugins') if isinstance(parked, dict) else None
+    if not isinstance(aliases, dict) or not aliases:
+        return None
+    from backend.common.oxidns_native_apply import _MANAGED, _TAG_TYPES, _rename
+    from backend.common.oxidns_native import TAG, native_document
+    aliases = {old: new for old, new in aliases.items() if old in _MANAGED}
+    if not aliases or any(not isinstance(new, str) or not 0 < len(new) <= 64 or not TAG.fullmatch(new)
+                          or new.startswith(('qs.exec.', 'qs.match.', 'qs.cron.')) for new in aliases.values()):
+        return None
+    plugins = _plugins(document)
+    expanded = _plugins(native_document(settings, validate_arguments=False)) if document.get('include') else plugins
+    if not expanded or len(set(aliases.values())) != len(aliases) or any(
+            old in expanded or new not in plugins or plugins[new].get('type') != _TAG_TYPES.get(old, 'sequence')
+            for old, new in aliases.items()):
+        return None
+    canonical = deepcopy(document)
+    by_tag = _plugins(canonical)
+    for old, new in aliases.items():
+        by_tag[new]['tag'] = old
+        _rename(canonical, new, old)
+    state = _analyze(canonical, settings, config)
+    main_tag = aliases.get('sequence_main', 'sequence_main')
+    main = plugins.get(main_tag, {})
+    if 'custom_indices' in state:
+        state['values']['custom_matches'] = [deepcopy(main['args'][index]) for index in state['custom_indices']]
+    for field in _CUSTOM_FIELDS:
+        state['capabilities'][field]['target'] = main_tag
+    state['actual_main_tag'] = main_tag
     return state
 
 
 def read_routing(document, settings, config):
     state = _analyze(document, settings, config)
+    aliased = _aliased_custom_state(document, settings, config)
+    if aliased is not None:
+        for field in _CUSTOM_FIELDS:
+            state['values'][field] = aliased['values'][field]
+            state['capabilities'][field] = aliased['capabilities'][field]
     return {'values': deepcopy(state['values']), 'capabilities': deepcopy(state['capabilities'])}
 
 
@@ -827,6 +873,45 @@ def _settle(values, settings, changes, current, known, active):
     return parked, follow
 
 
+def _normalize_custom_matches(value):
+    if not isinstance(value, list):
+        raise OxidnsSettingsError('自定义匹配必须为列表。')
+    normalized = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise OxidnsSettingsError('每条自定义匹配必须为对象。')
+        if entry.get('enabled') is False:
+            raise OxidnsSettingsError('常用设置直接编辑执行中的匹配条目，不支持 enabled: false；请移除该条目或改为启用。')
+        match = _matches(entry)
+        if not isinstance(match, list) or not match or any(not isinstance(item, str) or not item.strip() for item in match) or \
+                not isinstance(entry.get('exec'), str) or not entry['exec'].strip():
+            raise OxidnsSettingsError('自定义匹配需填写非空条件与执行动作。')
+        normalized.append({key: deepcopy(item) for key, item in entry.items() if key != 'enabled'})
+    return normalized
+
+
+def _apply_aliased_custom(document, settings, state, changes):
+    for field in changes:
+        if not state['capabilities'][field]['editable']:
+            raise OxidnsSettingsError(state['capabilities'][field]['reason'])
+    position = changes.get('custom_match_position', state['values']['custom_match_position'] or 'tail')
+    if position not in ('head', 'tail'):
+        raise OxidnsSettingsError('自定义匹配位置必须为 head 或 tail。')
+    custom = _normalize_custom_matches(changes['custom_matches']) if 'custom_matches' in changes else \
+        deepcopy(state['values']['custom_matches'])
+    result = deepcopy(document)
+    main = _plugins(result)[state['actual_main_tag']]
+    args = main['args']
+    prefix_end = len(state['prefix'])
+    middle_end = prefix_end + len(state['custom_indices']) + len(state['groups']['domain'])
+    # Indexes come from a read-only recognition copy. All retained entries come
+    # from the original document, including renamed actions and future fields.
+    domain = [args[group['index']] for group in state['groups']['domain']]
+    main['args'] = [*args[:prefix_end], *(custom if position == 'head' else []), *domain,
+                    *(custom if position == 'tail' else []), *args[middle_end:]]
+    return result, deepcopy(settings)
+
+
 def apply_routing(document, settings, config, changes, base_url='', *, before_config=None, notices=None):
     """Apply one atomic routing edit to copies; never persist or regenerate all YAML.
 
@@ -841,6 +926,12 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
     rebuild = before_config is not None
     if not changes and not rebuild:
         return deepcopy(document), deepcopy(settings)
+    if not rebuild and changes.keys() & _CUSTOM_FIELDS:
+        aliased = _aliased_custom_state(document, settings, config)
+        if aliased is not None:
+            if changes.keys() <= _CUSTOM_FIELDS:
+                return _apply_aliased_custom(document, settings, aliased, changes)
+            raise OxidnsSettingsError('执行链已重命名，请单独调整自定义匹配，再编辑其他分流设置。')
     current = _analyze(document, settings, before_config if rebuild else config)
     for key in changes:
         cap = current['capabilities'][key]
@@ -872,20 +963,7 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
     if 'custom_match_position' in changes and values['custom_match_position'] not in ('head', 'tail'):
         raise OxidnsSettingsError('自定义匹配执行顺序必须为 head 或 tail。')
     if 'custom_matches' in changes:
-        if not isinstance(values['custom_matches'], list):
-            raise OxidnsSettingsError('自定义匹配必须为列表。')
-        normalized = []
-        for entry in values['custom_matches']:
-            if not isinstance(entry, dict):
-                raise OxidnsSettingsError('每条自定义匹配必须为对象。')
-            if entry.get('enabled') is False:
-                raise OxidnsSettingsError('常用设置直接编辑执行中的匹配条目，不支持 enabled: false；请移除该条目或改为启用。')
-            match = _matches(entry)
-            if not isinstance(match, list) or not match or any(not isinstance(value, str) or not value.strip() for value in match) or \
-                    not isinstance(entry.get('exec'), str) or not entry['exec'].strip():
-                raise OxidnsSettingsError('自定义匹配需填写非空条件与执行动作。')
-            normalized.append({key: deepcopy(value) for key, value in entry.items() if key != 'enabled'})
-        values['custom_matches'] = normalized
+        values['custom_matches'] = _normalize_custom_matches(values['custom_matches'])
     result, result_settings = deepcopy(document), deepcopy(settings)
     main = _plugins(result)['sequence_main']
     routing_changed = rebuild or any(key in changes for key in (*SELECTORS, 'aggregate_rules', 'rule_actions'))

@@ -37,7 +37,8 @@ def _uint_value(raw):
     return int(raw.lstrip('+').lstrip('0') or '0')
 
 
-def collect_reference_issues(document, plugin_schemas):
+def collect_reference_issues(document, plugin_schemas, *, dependency_graph=None):
+    """Collect diagnostics, optionally exposing the same parsed dependency edges."""
     from backend.common.oxidns_validation import validate_schema, format_error, dns_code_valid
     from backend.common.oxidns_plugin_constraints import collect_plugin_issues
 
@@ -339,6 +340,9 @@ def collect_reference_issues(document, plugin_schemas):
                 values = _mapping(job).get('executors')
                 for k, value in enumerate(values if isinstance(values, list) else []):
                     expression(owner, value, path + ['jobs', j, 'executors', k], 'executor', cron=True)
+
+    if dependency_graph is not None:
+        dependency_graph.update({tag: [target for target, _ in references] for tag, references in edges.items()})
 
     # Iterative DFS avoids Python recursion limits on large valid configurations.
     done, active = set(), set()

@@ -6,8 +6,14 @@ import { Select } from '@/components/ui/select'
 
 const wrappers: VueWrapper[] = []
 const direct = () => ({ matches: 'qname full:example.test', exec: 'goto china_dns' })
-function render(modelValue: Record<string, any>[] = []) {
-  const wrapper = mount(OxidnsMatchEditor, { props: { modelValue } })
+const targets = [
+  { tag: 'china_dns', type: 'sequence', exec: 'goto china_dns', source: 'config.yaml' },
+  { tag: 'local_dns', type: 'sequence', exec: 'goto local_dns', source: 'config.yaml' },
+  { tag: 'proxy_dns_seq', type: 'sequence', exec: 'goto proxy_dns_seq', source: 'plugins/extra.yaml' },
+  { tag: 'local_forward', type: 'forward', exec: '$local_forward', source: 'config.yaml' },
+]
+function render(modelValue: Record<string, any>[] = [], extra: Record<string, any> = {}) {
+  const wrapper = mount(OxidnsMatchEditor, { props: { modelValue, targets, targetTags: targets.map(target => target.tag), ...extra } })
   wrappers.push(wrapper)
   return wrapper
 }
@@ -35,8 +41,13 @@ describe('OxiDNS custom match editor', () => {
     expect(valid(wrapper)).toBe(false)
     expect(latest(wrapper)).toBeUndefined()
     await wrapper.get('[aria-label="匹配项 1 条件 1"]').setValue('qname full:new.test')
+    expect(valid(wrapper)).toBe(false)
+    expect(latest(wrapper)).toBeUndefined()
+    expect(wrapper.get('[aria-label="匹配项 1 目标流程"]').text()).not.toContain('china_dns')
+    wrapper.findAllComponents(Select)[1].vm.$emit('update:modelValue', 'goto local_dns')
+    await flushPromises()
     expect(valid(wrapper)).toBe(true)
-    expect(latest(wrapper)).toEqual([{ enabled: true, matches: ['qname full:new.test'], exec: 'goto china_dns' }])
+    expect(latest(wrapper)).toEqual([{ enabled: true, matches: ['qname full:new.test'], exec: 'goto local_dns' }])
     await wrapper.get('[aria-label="删除匹配项 1"]').trigger('click')
     expect(latest(wrapper)).toEqual([])
   })
@@ -127,7 +138,11 @@ describe('OxiDNS custom match editor', () => {
   it('supports preset and custom actions while preserving unedited fields', async () => {
     const wrapper = render([{ ...direct(), exec: '$existing', extension: { keep: 'yes' } }])
     expect((wrapper.get('[aria-label="匹配项 1 自定义动作"]').element as HTMLInputElement).value).toBe('$existing')
-    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'goto proxy_dns_seq')
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'sequence')
+    await flushPromises()
+    expect(valid(wrapper)).toBe(false)
+    expect(latest(wrapper)).toBeUndefined()
+    wrapper.findAllComponents(Select)[1].vm.$emit('update:modelValue', 'goto proxy_dns_seq')
     await flushPromises()
     expect(latest(wrapper)![0].exec).toBe('goto proxy_dns_seq')
     wrapper.findComponent(Select).vm.$emit('update:modelValue', 'custom')
@@ -137,6 +152,87 @@ describe('OxiDNS custom match editor', () => {
     await wrapper.get('[aria-label="匹配项 1 自定义动作"]').setValue('')
     expect(valid(wrapper)).toBe(false)
     expect(latest(wrapper)![0].exec).toBe('goto my_sequence')
+  })
+
+
+  it('switches between explicit workflow and plugin choices without choosing a default', async () => {
+    const wrapper = render([{ ...direct(), extra: { retained: true } }])
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'plugin')
+    await flushPromises()
+    expect(valid(wrapper)).toBe(false)
+    expect(latest(wrapper)).toBeUndefined()
+    expect(wrapper.get('[aria-label="匹配项 1 目标插件"]').text()).not.toContain('local_forward')
+    // An event for a workflow is not a valid selection in the plugin picker.
+    wrapper.findAllComponents(Select)[1].vm.$emit('update:modelValue', 'goto local_dns')
+    await flushPromises()
+    expect(latest(wrapper)).toBeUndefined()
+    wrapper.findAllComponents(Select)[1].vm.$emit('update:modelValue', '$local_forward')
+    await flushPromises()
+    expect(latest(wrapper)![0]).toEqual({ ...direct(), exec: '$local_forward', extra: { retained: true } })
+    expect(valid(wrapper)).toBe(true)
+  })
+
+  it('keeps a removed target visible and never changes an existing action on catalog refresh', async () => {
+    const original = [{ ...direct(), exec: 'goto local_dns', future: [false, null] }]
+    const wrapper = render(original)
+    expect(latest(wrapper)).toBeUndefined()
+    await wrapper.setProps({ targets: targets.filter(target => target.tag !== 'local_dns'), targetTags: ['china_dns', 'proxy_dns_seq', 'local_forward'] })
+    expect(wrapper.get('[aria-label="匹配项 1 目标流程"]').text()).toContain('local_dns')
+    expect(wrapper.get('[role="status"]').text()).toContain('目标「local_dns」不在当前配置中')
+    expect(latest(wrapper)).toBeUndefined()
+    expect(valid(wrapper)).toBe(true)
+    await wrapper.get('[aria-label="匹配项 1 条件 1"]').setValue('qtype 28')
+    expect(latest(wrapper)![0]).toEqual({ ...original[0], matches: 'qtype 28' })
+    await click(wrapper, 'YAML')
+    expect(wrapper.get('[role="status"]').text()).toContain('local_dns')
+    expect(load((wrapper.get('#oxi-custom-matches').element as HTMLTextAreaElement).value)).toEqual(latest(wrapper))
+    expect(original[0].exec).toBe('goto local_dns')
+  })
+
+  it.each(['$china_dns', 'jump local_dns', 'goto   local_dns', 'forward 192.0.2.53', '$future_plugin'])('preserves the call semantics and spelling of %s', async exec => {
+    const original = [{ ...direct(), exec, future: { keep: true } }]
+    const wrapper = render(original, { targetTags: [...targets.map(target => target.tag), 'future_plugin'] })
+    expect((wrapper.get('[aria-label="匹配项 1 自定义动作"]').element as HTMLInputElement).value).toBe(exec)
+    expect(latest(wrapper)).toBeUndefined()
+    await wrapper.get('[aria-label="匹配项 1 条件 1"]').setValue('qtype 28')
+    expect(latest(wrapper)![0]).toEqual({ ...original[0], matches: 'qtype 28' })
+    await click(wrapper, 'YAML')
+    await click(wrapper, '条目')
+    expect(latest(wrapper)![0].exec).toBe(exec)
+    expect(original[0].exec).toBe(exec)
+  })
+
+  it('distinguishes an existing unavailable target from a deleted target', async () => {
+    const wrapper = render([{ ...direct(), exec: 'goto local_forward' }])
+    expect(wrapper.get('[role="status"]').text()).toContain('不在当前可选目标中')
+    expect(wrapper.get('[role="status"]').text()).not.toContain('不在当前配置中')
+    expect(latest(wrapper)).toBeUndefined()
+    await wrapper.setProps({ modelValue: [{ ...direct(), exec: '$missing' }] })
+    expect(wrapper.get('[role="status"]').text()).toContain('目标「missing」不在当前配置中')
+    expect((wrapper.get('[aria-label="匹配项 1 自定义动作"]').element as HTMLInputElement).value).toBe('$missing')
+    expect(latest(wrapper)).toBeUndefined()
+  })
+
+  it('offers no fabricated target for an empty configuration and still supports direct responses', async () => {
+    const wrapper = render([], { targets: [], targetTags: [] })
+    await click(wrapper, '添加匹配项')
+    await wrapper.get('[aria-label="匹配项 1 条件 1"]').setValue('qtype 65')
+    expect(wrapper.text()).toContain('当前没有可选流程')
+    expect(wrapper.text()).not.toContain('china_dns')
+    expect(latest(wrapper)).toBeUndefined()
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'reject 0')
+    await flushPromises()
+    expect(latest(wrapper)![0].exec).toBe('reject 0')
+    expect(valid(wrapper)).toBe(true)
+  })
+
+  it('does not overwrite an invalid YAML draft when the target catalog changes', async () => {
+    const wrapper = render([direct()])
+    await yaml(wrapper, '- matches: [unfinished')
+    await wrapper.setProps({ targets: [], targetTags: [] })
+    expect((wrapper.get('#oxi-custom-matches').element as HTMLTextAreaElement).value).toBe('- matches: [unfinished')
+    expect(valid(wrapper)).toBe(false)
+    expect(latest(wrapper)).toBeUndefined()
   })
 
   it('names the three reject responses after the DNS handling labels used by policy rules', async () => {

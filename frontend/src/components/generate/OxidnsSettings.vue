@@ -44,7 +44,7 @@
               <p role="alert" class="text-sm text-destructive-accent">{{ projectionError }}</p>
               <Button variant="outline" @click="projectCommon">重新读取常用设置</Button>
             </div>
-            <OxidnsCommonSettings v-else-if="commonValues" :key="commonKey" :initial-feature="initialFeature" :values="commonValues" :capabilities="commonCapabilities" :rules="rules" :rule-sets="ruleSets" :disabled="saving" :navigation-disabled="editorLocked" @change="queueChanges" @error="editorErrors.common = $event" @navigate="nativeEditor?.showFull($event)" @full="nativeEditor?.showFull()" />
+            <OxidnsCommonSettings v-else-if="commonValues" :key="commonKey" :initial-feature="initialFeature" :values="commonValues" :capabilities="commonCapabilities" :custom-match-targets="customMatchTargets" :custom-match-target-tags="customMatchTargetTags" :rules="rules" :rule-sets="ruleSets" :disabled="saving" :navigation-disabled="editorLocked" @change="queueChanges" @error="editorErrors.common = $event" @navigate="nativeEditor?.showFull($event)" @full="nativeEditor?.showFull()" />
           </template>
         </OxidnsNativeEditor>
         <div ref="filesPanel" v-show="tab === 'files'" class="min-h-0 flex-1 overflow-y-auto">
@@ -95,6 +95,7 @@ import { choose, confirm, notify } from '@/lib/feedback'
 import { formatOxidnsIssuePath, readOxidnsValidationResult, type OxidnsValidationIssue } from '@/lib/oxidnsNativeValidation'
 import OxidnsNativeEditor from './OxidnsNativeEditor.vue'
 import OxidnsCommonSettings from './OxidnsCommonSettings.vue'
+import type { OxidnsMatchTarget } from '@/lib/oxidnsMatchActions'
 import OxidnsFilesEditor from './OxidnsFilesEditor.vue'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
@@ -126,6 +127,8 @@ const editorErrors = reactive<Record<string, string>>({})
 const editorError = computed(() => Object.values(editorErrors).find(Boolean) || '')
 const commonValues = ref<Record<string, any> | null>(null)
 const commonCapabilities = ref<Record<string, any>>({})
+const customMatchTargets = ref<OxidnsMatchTarget[]>([])
+const customMatchTargetTags = ref<string[]>([])
 const commonKey = ref(0)
 const projecting = ref(false)
 const projectionError = ref('')
@@ -178,9 +181,11 @@ function acceptNativeConfig(text: string) {
   otherEdits = true
   if (reconciledNative?.settings.native_config === text) {
     ++projectionVersion
-    projectionSource = text
+    projectionSource = JSON.stringify(reconciledNative.settings)
     commonValues.value = reconciledNative.values
     commonCapabilities.value = reconciledNative.capabilities
+    customMatchTargets.value = reconciledNative.custom_match_targets ?? []
+    customMatchTargetTags.value = reconciledNative.custom_match_target_tags ?? []
     projecting.value = false
     projectionError.value = ''
     settings.value = reconciledNative.settings
@@ -265,6 +270,8 @@ function resetCommon() {
   ++commonKey.value
   commonValues.value = null
   commonCapabilities.value = {}
+  customMatchTargets.value = []
+  customMatchTargetTags.value = []
   projectionSource = undefined
   projectionError.value = ''
   projecting.value = false
@@ -276,14 +283,16 @@ async function projectCommon() {
   if (!settings.value || applying.value || pendingCount.value) return
   const version = loadVersion
   const request = ++projectionVersion
-  const source = settings.value.native_config
+  const source = validationSource.value
   projecting.value = true
   projectionError.value = ''
   try {
     const response = await oxidnsApi.readCommonSettings(settings.value, props.profileId)
-    if (version !== loadVersion || request !== projectionVersion || settings.value?.native_config !== source) return
+    if (version !== loadVersion || request !== projectionVersion || validationSource.value !== source) return
     commonValues.value = response.data.values
     commonCapabilities.value = response.data.capabilities
+    customMatchTargets.value = response.data.custom_match_targets ?? []
+    customMatchTargetTags.value = response.data.custom_match_target_tags ?? []
     projectionSource = source
   } catch (error: any) {
     if (version === loadVersion && request === projectionVersion) projectionError.value = error.response?.data?.message || '读取常用设置失败，请重试或使用完整参数编辑。'
@@ -350,9 +359,11 @@ async function flushChanges() {
     const response = await oxidnsApi.applyCommonSettings(settings.value, changes, profileId)
     if (version !== loadVersion || profileId !== props.profileId) return
     if (settings.value?.native_config !== source) throw new Error('配置已变化，请撤销未同步修改后重新编辑。')
-    projectionSource = response.data.settings.native_config
+    projectionSource = JSON.stringify(response.data.settings)
     settings.value = response.data.settings
     commonChanges = { ...commonChanges, ...changes }
+    customMatchTargets.value = response.data.custom_match_targets ?? []
+    customMatchTargetTags.value = response.data.custom_match_target_tags ?? []
     if (!pendingCount.value) {
       commonValues.value = response.data.values
       commonCapabilities.value = response.data.capabilities
@@ -471,9 +482,9 @@ async function showInitialTab() {
 watch(validationSource, () => { if (!loading.value && props.open) scheduleValidation() }, { flush: 'sync' })
 // Flush early only when an error is actually cleared; the first empty report is not a change.
 watch(() => editorErrors.common, (value, previous) => { if (!value && previous && pendingCount.value) { applyError.value = ''; void flushChanges() } })
-watch(() => [nativeView.value, settings.value?.native_config], () => {
+watch(() => [nativeView.value, validationSource.value], () => {
   if (!loading.value && props.open && nativeView.value === 'common' && !applying.value && !pendingCount.value
-    && settings.value && settings.value.native_config !== projectionSource) void projectCommon()
+    && settings.value && validationSource.value !== projectionSource) void projectCommon()
 }, { flush: 'post' })
 watch(() => [props.open, props.profileId], () => {
   pendingInitialTab = props.open ? props.initialTab : undefined
