@@ -74,7 +74,7 @@
           v-bind="listItem(index)"
           :class="cn(
             'relative flex flex-col overflow-hidden rounded-[18px] border border-border bg-card/90 p-[18px] shadow-surface max-sm:p-3',
-            agent.status !== 'online' && !deployments[agent.id] && !upgrades[agent.id] && !agent.dns_follow && !ruleUpdateRefs[agent.id]?.hasStatus && 'opacity-80'
+            agent.status !== 'online' && !deployments[agent.id] && !upgrades[agent.id] && !agent.dns_follow && agent.oxidns_ha?.enabled !== true && !ruleUpdateRefs[agent.id]?.hasStatus && 'opacity-80'
           )"
         >
           <header class="flex items-center gap-2.5">
@@ -194,6 +194,14 @@
               v-if="agent.service_type === 'oxidns'"
               :agent="agent"
               :source-name="agents.find(item => item.id === agent.dns_follow?.source_agent_id)?.name"
+              :blocked="deploymentBusy(agent.id) || upgradeBusy(agent.id) || pushingIds.has(agent.id)"
+              @changed="loadAgents"
+            />
+
+            <AgentDNSHA
+              v-if="agent.service_type === 'oxidns'"
+              :agent="agent"
+              :agents="agents"
               :blocked="deploymentBusy(agent.id) || upgradeBusy(agent.id) || pushingIds.has(agent.id)"
               @changed="loadAgents"
             />
@@ -914,6 +922,7 @@ import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
+import AgentDNSHA from '@/components/agents/AgentDNSHA.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentUpgradeStatus from '@/components/agents/AgentUpgradeStatus.vue'

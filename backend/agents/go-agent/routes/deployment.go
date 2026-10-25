@@ -277,6 +277,9 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 			result["config_directory"] = filepath.Dir(cfg.ConfigPath)
 			result["aio_forwarding_protocols"] = []int{1}
 		}
+		if cfg.ServiceType == "oxidns" {
+			result["oxidns_ha_protocols"] = []int{oxidnsHAProtocol}
+		}
 		JsonResponse(w, 200, result)
 	}
 }

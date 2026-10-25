@@ -87,6 +87,13 @@ def _upgrade_busy(agent):
     return bool(upgrade) and upgrade.get('status') not in ('succeeded', 'failed', 'rolled_back')
 
 
+def _oxidns_ha_enabled(agent):
+    return ((agent or {}).get('oxidns_ha') or {}).get('enabled') is True
+
+
+OXIDNS_HA_LOCKED = 'DNS 高可用已开启，请先停用 DNS 高可用'
+
+
 def _dns_follow_busy(agents, agent_id):
     return any((item.get('dns_follow_state') or {}).get('status') in ('preparing', 'publishing')
                and (item['id'] == agent_id or (item.get('dns_follow') or {}).get('source_agent_id') == agent_id)
@@ -195,6 +202,10 @@ class AgentManager:
                         or (requested_profile_id and requested_profile_id != existing_agent.get('profile_id'))
                         or agent_data.get('port', 8080) != existing_agent.get('port')):
                     raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再改变 Agent 注册信息')
+                if _oxidns_ha_enabled(existing_agent) and (
+                        agent_data.get('service_type', 'mihomo') != existing_agent.get('service_type')
+                        or (requested_profile_id and requested_profile_id != existing_agent.get('profile_id'))):
+                    raise AgentDeploymentConflict(OXIDNS_HA_LOCKED)
                 agent_id = existing_agent['id']
                 token = existing_agent['token']
                 updated_agent = {
@@ -219,7 +230,8 @@ class AgentManager:
                     # 管理端设置的开关，重新注册不能把它清掉
                     'domain_discovery_enabled': existing_agent.get('domain_discovery_enabled', False),
                 }
-                for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job', 'rule_sync'):
+                for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job', 'rule_sync',
+                              'oxidns_ha', 'oxidns_ha_state'):
                     if field in existing_agent:
                         updated_agent[field] = deepcopy(existing_agent[field])
                 if existing_agent.get('gateway_installation_id'):
@@ -308,6 +320,10 @@ class AgentManager:
                         key in updates and updates[key] != agent.get(key)
                         for key in ('host', 'port', 'enabled', 'service_type', 'profile_id')):
                     raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再修改 Agent')
+                if _oxidns_ha_enabled(agent) and any(
+                        key in updates and updates[key] != agent.get(key)
+                        for key in ('host', 'port', 'enabled', 'service_type', 'profile_id')):
+                    raise AgentDeploymentConflict(OXIDNS_HA_LOCKED)
                 if ('profile_id' in updates and updates['profile_id'] != (agent.get('profile_id') or self.repository.default_profile_id())
                         and any(task.get('status') not in ('succeeded', 'failed', 'rolled_back')
                                 for task in agent.get('deployments', {}).values())):
@@ -368,6 +384,8 @@ class AgentManager:
                 raise AgentDeploymentConflict('Agent 正在更新或等待恢复')
             if _dns_follow_busy(agents, agent_id):
                 raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再删除 Agent')
+            if _oxidns_ha_enabled(agent):
+                raise AgentDeploymentConflict(OXIDNS_HA_LOCKED)
             initial_len = len(agents)
             agents[:] = [agent for agent in agents if agent['id'] != agent_id]
             if len(agents) < initial_len:
@@ -1481,6 +1499,47 @@ class AgentManager:
         """仅撤销归属可验证的回流对象；新版 Agent 拒绝 legacy 恢复请求。"""
         return self._agent_json_request(agent, 'delete', '/api/return-routing', 60, '回流规则管理',
                                         params={'restore_legacy': '1'} if restore_legacy else None)
+
+    def _oxidns_ha_request(self, agent: Dict[str, Any], method: str, timeout, path: str = '',
+                           **kwargs) -> Dict[str, Any]:
+        """调用 Agent 的 DNS 高可用接口；失败时抛出可展示给用户的异常。
+
+        与 _agent_json_request 相同的 404 → 升级提示；成功响应是状态本身，不带 success 字段。
+        """
+        response = getattr(requests, method)(
+            f"http://{agent['host']}:{agent['port']}/api/oxidns-ha{path}",
+            headers={'Authorization': f'Bearer {agent["token"]}'},
+            timeout=timeout,
+            **kwargs,
+        )
+        if response.status_code == 404:
+            raise RuntimeError(f'Agent {agent.get("name") or agent["id"]} 不支持 DNS 高可用，请升级')
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        if response.status_code != 200 or body.get('success') is False:
+            message = body.get('error') or body.get('message') or f'Agent 返回 HTTP {response.status_code}'
+            raise RuntimeError(failure_text(str(message), (agent.get('token'),)))
+        return body
+
+    def oxidns_ha_status(self, agent: Dict[str, Any]) -> Dict[str, Any]:
+        """读取 keepalived 受管状态与运行状态（本机是否持有虚拟 IP、健康检查结果）。"""
+        return self._oxidns_ha_request(agent, 'get', (5, 15))
+
+    def oxidns_ha_preview(self, agent: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
+        """只做预检：返回阻止项以及 Agent 探测到的网卡和网段，不写入任何东西。"""
+        return self._oxidns_ha_request(agent, 'post', (5, 30), '/preview', json=spec)
+
+    def oxidns_ha_apply(self, agent: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
+        """写入 keepalived 配置并启动服务；Agent 失败时自行恢复原状。"""
+        return self._oxidns_ha_request(agent, 'put', (5, 90), json=spec)
+
+    def oxidns_ha_remove(self, agent: Dict[str, Any]) -> Dict[str, Any]:
+        """只撤销归属可验证的 keepalived 配置，并恢复服务原来的启用和运行状态。"""
+        return self._oxidns_ha_request(agent, 'delete', (5, 90))
 
     def region_targets(self, agent: Dict[str, Any]) -> List[Dict[str, Any]]:
         """探测组可切换的目标（节点与策略组）。"""

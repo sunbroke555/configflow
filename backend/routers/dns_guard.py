@@ -172,9 +172,57 @@ def _connected(context: Optional[Dict[str, Any]], address: ipaddress.IPv4Address
     return interface, str(network)
 
 
+def _ha_desired_spec(settings: Dict[str, Any], desired: Dict[str, Any], state) -> Dict[str, Any]:
+    """Spec for an OxiDNS pair behind a virtual IP (VIP), with real hosts R1 and R2.
+
+    The hijack and hairpin target the VIP. Both real hosts are exempt: their
+    upstream queries leave from the real address, and whichever holds the VIP
+    after a failover must not be hijacked back to itself. ``exempt`` keeps the
+    single addresses before collapsing, so the resume flush can spare them even
+    when they merge into a network larger than /30.
+    """
+    ha = desired['dns_ha']
+    try:
+        vip = ipaddress.IPv4Address(ha['vip'])
+        hosts = [ipaddress.IPv4Address(host) for host in ha['hosts']]
+    except (KeyError, TypeError, ValueError):
+        raise RouterError('无法确定 OxiDNS 高可用的虚拟 IP 和主机地址') from None
+    interface, network = _connected(state.nat_context, vip)
+    for host in hosts:
+        try:
+            same = _connected(state.nat_context, host) == (interface, network)
+        except RouterError:
+            same = False
+        if not same:
+            raise RouterError(f'OxiDNS 高可用主机 {host} 必须与虚拟 IP {vip} 在同一直连网段 {network}')
+    targets = [entry['cidr'] for entry in desired.get('proxy_cidrs') or []]
+    targets += [entry['cidr'] for entry in (desired.get('ros_policy') or {}).get('cidrs') or []]
+    for address in [vip, *hosts]:
+        if any(address in ipaddress.IPv4Network(cidr, strict=False) for cidr in targets):
+            raise RouterError(f'OxiDNS 地址 {address} 落在代理目的网段内，劫持后的查询会被送往 Mihomo，请检查网段设置')
+    singles = [vip, *hosts]
+    try:
+        singles.append(ipaddress.IPv4Address(desired.get('proxy_gateway') or ''))
+    except ValueError:
+        pass  # no linked gateway: nothing else on the LAN needs upstream DNS
+    bypass = [ipaddress.IPv4Network(str(address)) for address in singles]
+    bypass += [ipaddress.IPv4Network(item) for item in settings['bypass']]
+    exempt = [str(address) for address in singles]
+    for item in settings['bypass']:
+        small = ipaddress.IPv4Network(item)
+        if small.prefixlen >= SMALL_EXEMPT_PREFIX:
+            exempt.extend(str(address) for address in small)
+    return {'agent': str(vip), 'interface': interface, 'network': network,
+            'bypass': [str(item) for item in ipaddress.collapse_addresses(bypass)],
+            'block_dot': settings['block_dot'], 'failover': settings['failover'],
+            'exempt': list(dict.fromkeys(exempt))[:MAX_EXEMPT_HOSTS]}
+
+
 def desired_spec(settings: Dict[str, Any], desired: Dict[str, Any], state) -> Dict[str, Any]:
     if desired.get('dns_error'):
         raise RouterError('强制 DNS 依赖 DHCP DNS 设置：' + desired['dns_error'])
+    if desired.get('dns_ha'):
+        return _ha_desired_spec(settings, desired, state)
     try:
         agent = ipaddress.IPv4Address(desired.get('dns_server') or '')
     except ValueError:
@@ -257,7 +305,8 @@ def _netwatch_script(spec: Dict[str, Any], event: str) -> str:
     else:
         toggle = f'/ip firewall nat enable [find comment="{HIJACK_COMMENT}"]'
         stale = ' and '.join(['dst-port=53 and !dstnat', f'dst-address!={agent}']
-                             + [f'src-address!={host}' for host in _exempt_hosts(spec['bypass'])])
+                             + [f'src-address!={host}' for host in
+                                (spec['exempt'] if 'exempt' in spec else _exempt_hosts(spec['bypass']))])
     flush = (f':foreach c in=[/ip firewall connection find where {stale}] do={{'
              ':do {/ip firewall connection remove $c} on-error={}}')
     if event == 'down':

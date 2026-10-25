@@ -33,6 +33,50 @@ def dns_agent_settings(agent_id: str, agent: Optional[Dict[str, Any]]) -> Dict[s
     return settings
 
 
+def _client_ipv4(value) -> str:
+    """The same client-reachable IPv4 rule as dns_agent_settings, or ''."""
+    try:
+        if not isinstance(value, str):
+            raise ValueError
+        address = ipaddress.IPv4Address(value)
+    except (ValueError, TypeError):
+        return ''
+    if address.is_unspecified or address.is_loopback or address.is_multicast or int(address) == 0xffffffff:
+        return ''
+    return str(address)
+
+
+def dns_ha_settings(agent_id: str, agent: Dict[str, Any], peer: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """DHCP DNS for an OxiDNS pair sharing a virtual IP; only called while HA is enabled.
+
+    The VIP is served by whichever member holds it, so one member being offline
+    does not block publishing. ``dns_ha`` is present only when the pair is usable.
+    """
+    settings = {'dns_agent_id': agent_id, 'dns_server': '', 'dns_error': ''}
+    ha = agent.get('oxidns_ha') or {}
+    peer_ha = (peer or {}).get('oxidns_ha') or {}
+    if agent.get('service_type') != 'oxidns':
+        settings['dns_error'] = 'DHCP DNS 必须选择 OxiDNS Agent'
+    elif (not peer or peer.get('service_type') != 'oxidns' or peer_ha.get('enabled') is not True
+          or not ha.get('group_id') or peer_ha.get('group_id') != ha.get('group_id')
+          or ha.get('peer_id') != peer.get('id') or peer_ha.get('peer_id') != agent.get('id')
+          or peer_ha.get('vip') != ha.get('vip')):
+        settings['dns_error'] = '所选 DNS Agent 的高可用配对不完整，请到 Agent 页重新设置 DNS 高可用'
+    elif any((item.get('oxidns_ha_state') or {}).get('status') != 'succeeded' for item in (agent, peer)):
+        settings['dns_error'] = '所选 DNS Agent 的高可用尚未部署成功，请到 Agent 页查看'
+    elif all(item.get('status') != 'online' for item in (agent, peer)):
+        settings['dns_error'] = '所选 DNS 高可用的两台 Agent 均离线，无法下发 DHCP DNS'
+    else:
+        vip = _client_ipv4(ha.get('vip'))
+        hosts = [_client_ipv4(item.get('host')) for item in (agent, peer)]
+        if not vip or not all(hosts):
+            settings['dns_error'] = '所选 DNS 高可用的虚拟 IP 和两台主机地址必须是客户端可访问的 IPv4 地址'
+        else:
+            settings['dns_server'] = vip
+            settings['dns_ha'] = {'vip': vip, 'hosts': hosts, 'peer_id': peer['id']}
+    return settings
+
+
 def matching_networks(state: DhcpDnsState, gateway: str):
     try:
         address = ipaddress.IPv4Address(gateway)

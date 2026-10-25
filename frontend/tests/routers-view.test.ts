@@ -532,6 +532,24 @@ describe('routers view', () => {
     }))
   })
 
+  it('names the virtual IP only when the selected DHCP DNS Agent has high availability enabled', async () => {
+    const wrapper = await mountRouter({ ...ROUTER, dns_agent_id: 'dns1' }, [
+      { id: 'dns1', name: 'OxiDNS', host: '192.0.2.53', service_type: 'oxidns' },
+      { id: 'dns2', name: 'OxiDNS 主', host: '192.0.2.54', service_type: 'oxidns', oxidns_ha: { enabled: true, vip: '192.0.2.2', peer_id: 'dns3' } },
+      { id: 'dns3', name: 'OxiDNS 停用', host: '192.0.2.55', service_type: 'oxidns', oxidns_ha: { enabled: false, vip: '192.0.2.9' } },
+    ])
+    await wrapper.find('button[aria-label="编辑"]').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-dns-ha-vip]')).toBeNull()
+    const dnsSelect = wrapper.findAllComponents(Select).at(-1)!
+    dnsSelect.vm.$emit('update:modelValue', 'dns2')
+    await flushPromises()
+    expect(document.body.querySelector('[data-dns-ha-vip]')?.textContent).toContain('将下发虚拟 IP 192.0.2.2')
+    dnsSelect.vm.$emit('update:modelValue', 'dns3')
+    await flushPromises()
+    expect(document.body.querySelector('[data-dns-ha-vip]')).toBeNull()
+  })
+
   it.each([
     { status: 'disabled', label: '未关联', tone: 'muted' },
     { status: 'synced', label: '已同步', tone: 'success' },

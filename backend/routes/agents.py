@@ -183,6 +183,27 @@ def retry_agent_dns_follow(agent_id):
         return jsonify({'success': False, 'message': failure_text(str(error), secrets)}), 409
 
 
+@bp.route('/<agent_id>/oxidns-ha', methods=['GET', 'PUT', 'DELETE'])
+@require_auth
+def agent_oxidns_ha(agent_id):
+    from backend.agents import oxidns_ha
+    manager = get_agent_manager()
+    try:
+        if request.method == 'PUT':
+            result = oxidns_ha.configure(manager, agent_id, request.get_json(silent=True))
+        elif request.method == 'DELETE':
+            result = oxidns_ha.disable(manager, agent_id, force=request.args.get('force', '').lower() in ('1', 'true'))
+        else:
+            result = oxidns_ha.status(manager, agent_id)
+        return jsonify(result)
+    except ValueError as error:
+        secrets = tuple(agent.get('token') for agent in manager.get_all_agents())
+        body = {'success': False, 'message': failure_text(str(error), secrets)}
+        for key, value in getattr(error, 'details', {}).items():
+            body[key] = [failure_text(item, secrets) for item in value] if isinstance(value, list) else value
+        return jsonify(body), 409
+
+
 def _public_deployment(record):
     return public_deployment_messages({key: value for key, value in record.items()
                                       if key not in ('prepared_content', 'oxidns_validation_receipt')})

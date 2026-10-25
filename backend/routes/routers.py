@@ -9,7 +9,7 @@ from backend.common.config import get_config, get_repository, reset_config_conte
 from backend.routers import dns_guard
 from backend.routers.base import RouterConflictError, RouterError, as_dict, retire_policy_routes
 from backend.routers.desired import compute_desired
-from backend.routers.dhcp_dns import dns_agent_settings
+from backend.routers.dhcp_dns import dns_agent_settings, dns_ha_settings
 from backend.routers.ikuai import IKuaiDriver
 from backend.routers.plan import build_plan
 from backend.routers.release import AgentReturnRouting, execute
@@ -216,6 +216,15 @@ def probe_router(router_id):
     return jsonify({'success': probe['ok'], 'probe': probe, 'message': probe.get('message', '')}), 200 if probe['ok'] else 502
 
 
+def _dns_settings(dns_id):
+    """DHCP DNS target: the selected OxiDNS, or its pair's virtual IP once DNS HA is enabled."""
+    dns_agent = _agent(dns_id) if dns_id else None
+    ha = (dns_agent or {}).get('oxidns_ha') or {}
+    if ha.get('enabled') is True:
+        return dns_ha_settings(dns_id, dns_agent, _agent(ha.get('peer_id')))
+    return dns_agent_settings(dns_id, dns_agent)
+
+
 def _inspect(config, router, driver, content_loader=None):
     """Desired state, router state, drift report and Agent return-routing state."""
     from backend.routers import ros_address_lists
@@ -231,7 +240,7 @@ def _inspect_state(config, router, driver, content_loader=None):
     desired = dict(compute_desired(config, gateway_agent.get('host') if gateway_agent else None, static_sets,
                                    **({'content_loader': content_loader} if content_loader else {})))
     dns_id = router.get('dns_agent_id') or ''
-    desired.update(dns_agent_settings(dns_id, _agent(dns_id) if dns_id else None))
+    desired.update(_dns_settings(dns_id))
     if router['type'] == 'routeros' and (policy_sets or router.get('ros_policy_state')):
         driver.ros_policy_manifest = router.get('ros_policy_state')
     guard = dns_guard.relevant(router)
