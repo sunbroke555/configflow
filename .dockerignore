@@ -39,6 +39,8 @@ backend/node-probe/configflow-node-probe
 # Config and data files (will be created at runtime)
 backend/config.json
 backend/configflow.sqlite3*
+backend/metrics/
+backend/data/metrics/
 backend/*.yaml
 backend/*.conf
 data/

@@ -133,15 +133,6 @@ def environment(workspace, agent_directory):
 
 
 def create_app(workspace):
-    # MetricsHistory predates DATA_DIR and otherwise writes beneath the checkout
-    # or /opt/configflow. Redirect only its storage path before app initialization.
-    from backend.agents.metrics_history import MetricsHistory
-    original_metrics_init = MetricsHistory.__init__
-
-    def temporary_metrics(self, data_dir=None):
-        original_metrics_init(self, str(workspace / 'metrics'))
-
-    MetricsHistory.__init__ = temporary_metrics
     # Use empty defaults, not the developer's initial config_template.json.
     from backend.common import config as store
     from backend.common.config_repository import ProfileRepository

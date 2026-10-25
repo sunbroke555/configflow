@@ -41,6 +41,8 @@ dist/
 /backend/providers/
 /backend/subscribes/
 /data/
+/metrics/
+/backend/metrics/
 /backend/data/metrics/
 
 !*.example.json

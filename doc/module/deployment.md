@@ -78,8 +78,11 @@ data/
 ├── profiles/<id>/       # 每个配置的生成文件、Provider 和转换规则
 ├── sub-store/           # 内置 Sub-Store 数据及在线更新组件
 ├── migrations/          # 迁移/导入快照（含数据库备份）与删除配置的保留数据（含 deleted-profile.json）
+├── metrics/             # Agent 主机最近 24 小时的监控历史（每台 Agent 一个 .jsonl 文件）
 └── app.log              # 服务日志，路径可由 LOG_FILE 调整
 ```
+
+Agent 主机监控图表（CPU、内存、磁盘和流量，最近 24 小时）的数据先保存在内存中，每台 Agent 最多保留 4000 个点。「系统设置 → 定时任务 → 监控历史保存」按间隔把新增数据追加写入磁盘，可选 5、10、30 或 60 分钟，默认 30 分钟；文件明显大于内存数据时自动整理。`docker compose stop` / `restart` 等正常停止（包括 `LOG_LEVEL=DEBUG` 调试模式）会先保存再退出；意外断电或强制结束最多丢失一个间隔的数据。写入失败（如磁盘已满、没有权限）会显示在该任务的上次运行结果中。这些文件位于数据目录的 `metrics/`（容器内为 `/data/metrics/`），更新镜像、重建容器后仍在；它们不在 JSON 导出和 WebDAV 备份里，停服复制整个数据目录时会一并保留。旧版本把监控历史写在容器内的 `/opt/configflow/data/metrics/`（源码运行时为 `backend/data/metrics/`）。升级后首次启动时，如果旧目录仍在，会自动移入 `metrics/`；若 `metrics/` 中已有同一 Agent 的历史，以 `metrics/` 中的为准，旧文件原样保留。只有源码运行和容器内原地自动更新（不重建容器）会保留旧目录；`docker compose pull && docker compose up -d` 等更新镜像、重建容器的方式会先丢弃容器内的旧目录，这次升级后监控历史从空开始，此后不再丢失。删除 Agent 时同时删除它的监控历史；恢复备份或重置后不再存在的 Agent，其监控历史在下次保存时删除。
 
 旧实例还可能保留 `system.json`、旧 `profiles/<id>/config.json` 等文件。不要只看根配置就清理旧数据；迁移和恢复需要保留完整目录。
 
@@ -122,7 +125,7 @@ docker compose logs --tail=100 config-flow
 
 `latest` 是可变化的标签，不代表已核实包含某个修复。重要实例应记录可回退的版本或摘要，并先用数据副本验证。
 
-Agent 最近一次心跳的状态（在线时间、服务状态、当前监控指标）只保存在内存里，不写入配置，也不在 JSON 导出和 WebDAV 备份里。服务重启后，各 Agent 在下一次心跳（通常 30–60 秒内）前显示为离线；版本号在变化时已写入配置数据库，会随备份保留。监控历史曲线（最近 24 小时）是另一回事：每次带监控数据的心跳都会写入磁盘上的 `metrics` 目录（容器内是 `/opt/configflow/data/metrics`，不在挂载的 `./data` 里；直接运行源码时是 `backend/data/metrics`），服务重启后仍在，重建容器后清空，也不在备份里。旧版本留下的 `runtime.sqlite3` 会在升级后首次启动时读入并删除。
+Agent 最近一次心跳的状态（在线时间、服务状态、当前监控指标）只保存在内存里，不写入配置，也不在 JSON 导出和 WebDAV 备份里。服务重启后，各 Agent 在下一次心跳（通常 30–60 秒内）前显示为离线；版本号在变化时已写入配置数据库，会随备份保留。监控历史曲线（最近 24 小时）按上文「监控历史保存」的间隔写入磁盘，不随每次心跳写入。旧版本留下的 `runtime.sqlite3` 会在升级后首次启动时读入并删除。
 
 旧版多配置必须完整备份 `system.json`、`profiles/`、`.bak` 和缓存，不能只备份根 `config.json`。完整 JSON 导出也不包含主机上所有运行文件。迁移边界和恢复方法见 [升级、备份与恢复](../design/multi-config-management.md#升级备份与恢复)。
 
