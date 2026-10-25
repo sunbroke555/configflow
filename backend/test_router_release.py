@@ -56,8 +56,13 @@ class StatefulIKuai:
                 row['group_name'] == param['group_name'] and row['id'] != param.get('id') for row in rows):
             return FakeResponse({'code': 3001, 'message': '请求参数不合法',
                                  'details': [{'field': 'group_name', 'msg': '名称已存在，请重新输入'}]})
+        if func == 'route_object' and action in ('add', 'edit'):
+            # IP groups (4.0.314) keep no group comment: the field is accepted and
+            # dropped, and the name doubles as tagname. Entry comments are kept.
+            param = {key: value for key, value in param.items() if key != 'comment'}
+            param['tagname'] = param['group_name']
         if func == 'route_object' and action == 'add':
-            # IP groups (4.0.314): referenced by group_id IPGP<n>, never renumbered.
+            # IP groups (4.0.314): referenced by group_id IPGP<n>.
             rows.append({**param, 'id': self.next_id, 'group_id': f'IPGP{self.next_id}'})
             self.next_id += 1
         elif action == 'add':
@@ -291,8 +296,11 @@ MIGRATED = [_policy(1, 'cf-mihomo', ['91.108.0.0/16', '149.154.160.0/20', '198.1
 
 
 def _ip_group(row_id, name, comment, values):
-    return {'id': row_id, 'group_id': f'IPGP{row_id}', 'group_name': name, 'type': 0, 'comment': comment,
-            'group_value': [{'ip': value, 'comment': ''} for value in values]}
+    """A route_object row as 4.0.314 returns it: no group comment; ``comment`` goes on the first entry."""
+    return {'id': row_id, 'group_id': f'IPGP{row_id}', 'group_name': name, 'tagname': name, 'type': 0,
+            'ref_count': 0,
+            'group_value': [{'ip': value, 'comment': comment if position == 0 else ''}
+                            for position, value in enumerate(values)]}
 
 
 def _ref(row_id, name):

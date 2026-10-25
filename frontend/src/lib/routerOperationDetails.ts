@@ -92,7 +92,8 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     scope.note = '对比当前受管回流配置与本次目标网段。'
     groups.push(scope)
   } else if (op.kind === 'ikuai_group_add') {
-    add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '备注', value: text(op.comment) }])
+    add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '归属标记', value: text(op.comment) }],
+      'iKuai 的 IP 分组没有分组备注，归属标记写在第一个网段的备注里。')
     add('分组网段', strings(op.values).map(value => ({ label: '新增', value, action: '新增' })), '新建分组时写入的全部网段。')
   } else if (op.kind === 'ikuai_group_update') {
     add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '更新后网段数', value: String(strings(op.values).length) }])

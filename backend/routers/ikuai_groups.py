@@ -10,17 +10,20 @@ rule; a group edit takes effect at once without touching the rule.
 Each role is one family of groups used by exactly one rule:
 
 =====  ===========================  =============  ==================
-role   rule                          group name     group comment
+role   rule                          group name     marker
 =====  ===========================  =============  ==================
 pa     端口分流 cf-mihomo            cf_pa_<n>      cf-mihomo
 pm     端口分流 cf-mihomo-manual     cf_pm_<n>      cf-mihomo-manual
 nat    the NAT bypass target rule    cf_nat_<n>     cf-mihomo-nat
 =====  ===========================  =============  ==================
 
-A group is ours only when both its name and its comment match; anything else
-is the user's, never edited, deleted or referenced (a matching name only
-reserves its number). Groups hold at most 2000 entries and are split by request
-bytes too, so a group write always fits in one request.
+iKuai 4.0.314 keeps no comment on a group (``route_object`` accepts the field
+and drops it; rows read back with ``tagname`` = ``group_name``), but it keeps
+each entry's comment and the entry order. The marker is therefore the first
+entry's comment. A group is ours only when both its name and its marker match;
+anything else is the user's, never edited, deleted or referenced (a matching
+name only reserves its number). Groups hold at most 2000 entries and are split
+by request bytes too, so a group write always fits in one request.
 """
 import hashlib
 import ipaddress
@@ -52,7 +55,7 @@ def name_role(name: Any) -> Optional[Tuple[str, int]]:
 
 
 def owned_role(name: Any, comment: Any) -> Optional[Tuple[str, int]]:
-    """``(role, n)`` for a group ConfigFlow owns: managed name AND that role's comment."""
+    """``(role, n)`` for a group ConfigFlow owns: managed name AND that role's marker."""
     parsed = name_role(name)
     return parsed if parsed and comment == ROLES[parsed[0]] else None
 
@@ -74,9 +77,11 @@ def digest(values: List[str]) -> str:
 
 
 def payload(name: str, role: str, values: List[str], row_id: Any = None) -> Dict[str, Any]:
-    """The route_object add/edit form; entry comments stay empty to save request bytes."""
-    form = {'group_name': name, 'type': 0, 'comment': ROLES[role],
-            'group_value': [{'ip': value, 'comment': ''} for value in values]}
+    """The route_object add/edit form: the first entry carries the marker, the
+    other entries' comments stay empty to save request bytes."""
+    form = {'group_name': name, 'type': 0,
+            'group_value': [{'ip': value, 'comment': ROLES[role] if position == 0 else ''}
+                            for position, value in enumerate(values)]}
     return {'id': row_id, **form} if row_id is not None else form
 
 
@@ -85,10 +90,11 @@ _BASE_BYTES: List[int] = []
 
 def _base_bytes() -> int:
     if not _BASE_BYTES:
-        from backend.routers.ikuai import request_bytes
-        # Worst case of every variable part: a 10-digit ID, the longest name and comment.
+        from backend.routers.ikuai import encode_value, request_bytes
+        # Worst case of every variable part: a 10-digit ID, the longest name and marker.
         worst = payload('cf_nat_9999', 'pm', [], 9999999999)
-        _BASE_BYTES.append(request_bytes('route_object', 'edit', worst))
+        marker = max(len(encode_value(comment, 'comment').encode()) for comment in ROLES.values())
+        _BASE_BYTES.append(request_bytes('route_object', 'edit', worst) + marker)
     return _BASE_BYTES[0]
 
 
@@ -108,10 +114,11 @@ def group_bytes(name: str, role: str, values: List[str]) -> int:
 def group_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """A decoded route_object row as the planner and driver see it."""
     name = str(row.get('group_name') or '')
-    comment = str(row.get('comment') or '')
+    entries = [item for item in row.get('group_value') or [] if isinstance(item, dict)]
+    # The marker: the first entry's comment (a group itself has no comment on iKuai).
+    comment = str(entries[0].get('comment') or '') if entries else ''
     owned = owned_role(name, comment)
-    values = [str(item.get('ip')) for item in row.get('group_value') or []
-              if isinstance(item, dict) and item.get('ip')]
+    values = [str(item.get('ip')) for item in entries if item.get('ip')]
     return {'id': row.get('id') if type(row.get('id')) is int else None, 'gid': str(row.get('group_id') or ''),
             'name': name, 'comment': comment, 'values': values, 'type': row.get('type', 0),
             'role': owned[0] if owned else None, 'index': owned[1] if owned else None, 'users': []}

@@ -124,8 +124,8 @@ def _device(session):
                            row.get('prio'), _address(row.get('src_addr')), _address(row.get('dst_addr')),
                            tuple(_resolved(session, row) or ()))
                           for row in session.rows[func]) for func in ('stream_ipport', 'nat_rule')}
-    return {**rules, 'route_object': sorted((row['group_name'], row['comment'],
-                                             tuple(item['ip'] for item in row['group_value']))
+    return {**rules, 'route_object': sorted((row['group_name'],
+                                             tuple((item['ip'], item['comment']) for item in row['group_value']))
                                             for row in session.rows['route_object']),
             'static_rt': sorted((row['dst_addr'], row['netmask'], row['gateway'], row['comment'])
                                 for row in session.rows['static_rt'])}
@@ -232,6 +232,27 @@ def test_first_release_writes_groups_then_rules_that_only_reference_them():
     assert nat['dst_addr']['custom'] == [] and nat['src_addr']['custom'] == ['10.0.0.1-10.0.0.3', '10.0.0.5-10.0.0.254']
     assert _resolved(session, rule) == cidrs and _resolved(session, nat) == cidrs
     assert max(request_bytes(func, action, param) for func, action, param in session.writes) <= MAX_REQUEST_BYTES
+
+
+def test_ownership_marker_is_the_first_entry_comment_since_groups_keep_no_comment():
+    # 4.0.314 accepts a group comment and drops it; a marker there made every group
+    # look like the user's: the first release failed and its rollback kept the group.
+    session = Device([], [], policies=[])
+    plan, result, agent = _publish(session, CIDRS[:3])
+    assert result['ok'], result['log'][-3:]
+    for row in session.rows['route_object']:
+        assert 'comment' not in row
+        assert [item['comment'] for item in row['group_value']] == [
+            {'cf_pa_1': 'cf-mihomo', 'cf_nat_1': 'cf-mihomo-nat'}[row['group_name']], '', '']
+    driver = _driver(session)
+    assert _plan(driver, status={**agent.status(), 'status': 'ok'}, desired=_desired(CIDRS[:3]))['empty']
+    # A same-named group without the marker on its first entry stays the user's.
+    unmarked = _ip_group(50, 'cf_pa_1', '', CIDRS[:3])
+    unmarked['group_value'][1]['comment'] = 'cf-mihomo'
+    session = Device([], [], policies=[], groups=[unmarked])
+    plan, result, _ = _publish(session, CIDRS[:3])
+    assert result['ok'] and session.rows['route_object'][0] == unmarked
+    assert [ref['gp_name'] for ref in _rule(session, 'stream_ipport', 'cf-mihomo')['dst_addr']['object']] == ['cf_pa_2']
 
 
 def test_rules_listing_cidrs_are_migrated_only_by_a_release():
@@ -489,7 +510,8 @@ def test_structure_read_back_catches_what_coverage_cannot(tamper):
             if tamper == 'custom':
                 current.rows['stream_ipport'][-1]['dst_addr']['custom'] = [CIDRS[0]]
             else:
-                current.rows['route_object'][0]['comment'] = 'renamed'
+                # The marker: the first entry's comment (iKuai keeps no group comment).
+                current.rows['route_object'][0]['group_value'][0]['comment'] = 'renamed'
     session.on_write = change
     driver = _driver(session)
     result = execute(_plan(driver, desired=_desired(CIDRS[:3])), driver, FakeAgent(SAFE_RETURN_STATUS))
