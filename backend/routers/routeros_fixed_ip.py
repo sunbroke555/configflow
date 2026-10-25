@@ -219,8 +219,19 @@ def _remove(driver, binding, expected=None):
         driver._request('DELETE', f'{DHCP_LEASES}/{quote(binding["id"], safe="*")}')
     except UncertainWrite as error:
         failure = error
-    if _row(driver, binding['id']) is not None:
-        raise failure or RouterError('RouterOS 删除回读校验失败：静态租约仍存在')
+    readback_error = None
+    try:
+        remaining = _row(driver, binding['id'])
+    except RouterError as error:
+        # DELETE may already be committed. Resolve a transient read failure
+        # before returning, so the caller can safely remove persisted metadata.
+        readback_error = error
+        try:
+            remaining = _row(driver, binding['id'])
+        except RouterError as retry_error:
+            raise RouterRollbackError(f'RouterOS 删除结果未知，无法确认租约是否仍存在；请检查路由器：{retry_error}') from error
+    if remaining is not None:
+        raise failure or readback_error or RouterError('RouterOS 删除回读校验失败：静态租约仍存在')
 
 
 def apply(driver, op):

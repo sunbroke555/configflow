@@ -445,6 +445,305 @@
           "static_data": []
         }
       }
+    },
+    {
+      "timestamp": 1792941516.7973135,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "interface": "lan1",
+          "ip_addr": "192.168.77.100",
+          "mac": "02:cf:77:00:01:40",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "code": 3001,
+        "message": "请求参数不合法",
+        "errors": "参数错误: tagname",
+        "details": []
+      }
+    },
+    {
+      "timestamp": 1792941516.8659585,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "ip_addr": "192.168.77.100",
+          "mac": "02:cf:77:00:01:40",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "tagname": "cf_validate",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "code": 3001,
+        "message": "请求参数不合法",
+        "errors": "参数错误: interface",
+        "details": []
+      }
+    },
+    {
+      "timestamp": 1792941516.9329371,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "interface": "lan1",
+          "mac": "02:cf:77:00:01:40",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "tagname": "cf_validate",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "code": 3001,
+        "message": "请求参数不合法",
+        "errors": "参数错误: ip_addr",
+        "details": []
+      }
+    },
+    {
+      "timestamp": 1792941517.0009205,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "interface": "lan1",
+          "ip_addr": "192.168.77.100",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "tagname": "cf_validate",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "code": 3001,
+        "message": "请求参数不合法",
+        "errors": "参数错误: mac",
+        "details": []
+      }
+    },
+    {
+      "timestamp": 1792941517.1665998,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "interface": "lan1",
+          "ip_addr": "192.168.77.100",
+          "mac": "02:cf:77:00:01:40",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "tagname": "cf_validate",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "code": 0,
+        "message": "Success",
+        "rowid": 1
+      }
+    },
+    {
+      "timestamp": 1792941517.2929077,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "interface": "lan1",
+          "ip_addr": "192.168.77.101",
+          "mac": "02:cf:77:00:01:40",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "tagname": "cf_mac2",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "code": 3001,
+        "message": "请求参数不合法",
+        "errors": "",
+        "details": [
+          {
+            "field": "interface:mac",
+            "type": "unique",
+            "msg": "已存在相同内容"
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": 1792941517.4087763,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "interface": "lan1",
+          "ip_addr": "192.168.77.100",
+          "mac": "02:cf:77:00:01:99",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "tagname": "cf_ip2",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "code": 3001,
+        "message": "请求参数不合法",
+        "errors": "",
+        "details": [
+          {
+            "field": "ip_addr",
+            "type": "unique",
+            "msg": "IP地址已存在，请重新输入"
+          }
+        ]
+      }
+    },
+    {
+      "timestamp": 1792941517.6251822,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "show",
+        "param": {
+          "TYPE": "static_total,static_data"
+        }
+      },
+      "response": {
+        "code": 0,
+        "message": "Success",
+        "results": {
+          "static_total": 1,
+          "static_data": [
+            {
+              "ip_addr": "192.168.77.100",
+              "ip_addr_int": 3232255332,
+              "comment": "cf-client:lab-validation",
+              "id": 1,
+              "enabled": "yes",
+              "tagname": "cf_validate",
+              "interface": "lan1",
+              "hostname": "",
+              "mac": "02:cf:77:00:01:40",
+              "gateway": "192.168.77.1",
+              "termname": "",
+              "dns1": "",
+              "dns2": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "timestamp": 1792941517.6335242,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "add",
+        "param": {
+          "interface": "lan1",
+          "ip_addr": "192.168.77.120",
+          "mac": "02:cf:77:00:01:20",
+          "gateway": "192.168.77.1",
+          "dns1": "",
+          "dns2": "",
+          "comment": "cf-client:lab-validation",
+          "tagname": "cf_denied",
+          "enabled": "yes",
+          "hostname": ""
+        }
+      },
+      "response": {
+        "Label": "DHCP静态分配",
+        "code": 1002,
+        "message": "你的账号没有执行权限"
+      }
+    },
+    {
+      "timestamp": 1792941517.6415195,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "del",
+        "param": {
+          "id": "1"
+        }
+      },
+      "response": {
+        "Label": "DHCP静态分配",
+        "code": 1002,
+        "message": "你的账号没有执行权限"
+      }
+    },
+    {
+      "timestamp": 1792941517.6496913,
+      "request": {
+        "func_name": "not_an_interface",
+        "action": "show",
+        "param": {}
+      },
+      "response": {
+        "code": 1001,
+        "message": "你的账号没有访问权限"
+      }
+    },
+    {
+      "timestamp": 1792941517.8861802,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "del",
+        "param": {
+          "id": "1"
+        }
+      },
+      "response": {
+        "code": 0,
+        "message": "Success"
+      }
+    },
+    {
+      "timestamp": 1792941517.9697626,
+      "request": {
+        "func_name": "dhcp_static",
+        "action": "show",
+        "param": {
+          "TYPE": "static_total,static_data"
+        }
+      },
+      "response": {
+        "code": 0,
+        "message": "Success",
+        "results": {
+          "static_total": 0,
+          "static_data": []
+        }
+      }
     }
   ]
 }

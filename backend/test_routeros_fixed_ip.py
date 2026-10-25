@@ -1,5 +1,7 @@
 """Reservation safety: VLAN scope, explicit target, ownership and compensation."""
 from copy import deepcopy
+import json
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -51,6 +53,9 @@ class REST:
         if self.fail == 'readback' and self.writes and not self.fired:
             self.fired = True
             raise requests.Timeout('injected readback fault')
+        if self.fail in ('delete_readback', 'delete_readback_persistent') and self.writes and self.writes[-1][0] == 'DELETE' and (not self.fired or self.fail == 'delete_readback_persistent'):
+            self.fired = True
+            raise requests.Timeout('injected delete readback failure')
         row = next((item for item in self.tables[DHCP_LEASES] if path.endswith('/' + item['.id'])), None)
         return Response(row, 200 if row else 404)
 
@@ -58,7 +63,7 @@ class REST:
         assert self.path(url) == DHCP_LEASES + '/make-static'
         assert set(json) == {'.id'}
         if self.fail == 'permission':
-            return Response({'message': 'failure', 'detail': 'not enough permissions (9)'}, 403)
+            return Response({'message': 'Internal Server Error', 'detail': 'not enough permissions (9)'}, 500)
         self.writes.append(('POST', self.path(url), deepcopy(json)))
         row = next(row for row in self.tables[DHCP_LEASES] if row['.id'] == json['.id'])
         row['dynamic'] = 'false'
@@ -321,3 +326,45 @@ def test_lost_readback_after_new_reservation_compensates_its_proven_id():
         fixed.apply(driver, op)
     assert rest.tables[DHCP_LEASES] == []
     assert [method for method, _, _ in rest.writes] == ['PUT', 'DELETE']
+
+
+def test_delete_first_readback_failure_is_retried_before_metadata_can_be_kept():
+    driver, rest = setup()
+    binding = fixed.apply(driver, fixed.preview(driver, IP, MAC, '电脑'))
+    op = fixed.preview_delete(driver, binding)
+    rest.fail = 'delete_readback'
+    receipt = fixed.delete(driver, op)
+    assert receipt['id'] == binding['id'] and rest.tables[DHCP_LEASES] == []
+
+
+def test_delete_unreadable_outcome_is_reported_explicitly():
+    driver, rest = setup()
+    binding = fixed.apply(driver, fixed.preview(driver, IP, MAC, '电脑'))
+    op = fixed.preview_delete(driver, binding)
+    rest.fail = 'delete_readback_persistent'
+    with pytest.raises(RouterRollbackError, match='删除结果未知'):
+        fixed.delete(driver, op)
+
+
+def test_captured_routeros_7245_dynamic_and_static_rows_have_identical_stable_fields():
+    evidence = json.loads((Path(__file__).parent / 'testdata' / 'routeros_fixed_ip_7245.json').read_text())
+    before = evidence['commands'][0]['response'][0]
+    converted = evidence['commands'][2]['response']
+    assert before['dynamic'] == 'true' and converted['dynamic'] == 'false'
+    assert fixed._fields(before) == fixed._fields(converted)
+    changed_runtime = {**before, 'age': '1h', 'last-seen': '15m', 'expires-after': '15m',
+                       'active-agent-circuit-id': 'new-runtime-value', 'class-id': 'renewed-client-vendor'}
+    assert fixed._fields(changed_runtime) == fixed._fields(before)
+    assert evidence['commands'][1]['request'] == {'.id': before['.id']}
+    assert evidence['commands'][1]['response'] == []
+    assert 'unknown parameter dynamic' in evidence['commands'][3]['error']
+    assert 'no such command' in evidence['commands'][4]['error']
+
+
+def test_dynamic_preview_and_successful_failure_compensation_explain_renewal_limit():
+    driver, rest = setup()
+    op = fixed.preview(driver, IP, MAC, '电脑')
+    assert 'IP 可能变化' in op['summary']
+    rest.fail = 'patch'
+    with pytest.raises(RouterError, match='客户端续租恢复动态 DHCP，IP 可能变化'):
+        fixed.apply(driver, op)

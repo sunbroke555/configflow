@@ -80,7 +80,7 @@ beforeEach(() => {
   vi.mocked(choose).mockResolvedValue('confirm')
   vi.mocked(clientDeviceApi.previewFixedIP).mockImplementation(async (_profile, devices, operation) => response({
     token: 'confirmed-change', actions: devices.map(device => ({ ip: device.ip, router_id: device.router_id, router_name: device.router_id === 'ik1' ? '爱快实验路由' : '主路由',
-      router_type: device.router_id === 'ik1' ? 'ikuai' : 'routeros', description: `${operation === 'delete' ? '删除' : '固定'} ${device.ip}（MAC ${device.mac}）` }))
+      router_type: device.router_id === 'ik1' ? 'ikuai' : 'routeros', description: `${device.router_id === 'ik1' ? 'iKuai' : 'RouterOS'}：${operation === 'delete' ? '删除' : '固定'} ${device.ip}（MAC ${device.mac}）` }))
   }))
   vi.mocked(clientDeviceApi.applyFixedIP).mockImplementation(async () => response(state(stored)))
 })

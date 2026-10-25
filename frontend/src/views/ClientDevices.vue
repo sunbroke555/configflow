@@ -732,7 +732,7 @@ async function previewFixed(profileId: string, targets: ClientFixedIPTarget[], o
   const { data } = await clientDeviceApi.previewFixedIP(profileId, targets, operation)
   if (!fixedContext(profileId)) return null
   if (!data.token || !data.actions.length) throw new Error('路由器没有返回可执行的变更，请重新载入。')
-  const lines = data.actions.map(action => `「${action.router_name}」${action.router_type === 'ikuai' ? 'iKuai' : 'RouterOS'}：${action.description}`)
+  const lines = data.actions.map(action => `「${action.router_name}」${action.description}`)
   const accepted = await confirm(`${lines.join('\n\n')}\n\n${operation === 'delete' ? '将删除以上由 ConfigFlow 创建的 DHCP 静态绑定，设备之后可能获得其他 IP。' : '将修改以上来源主路由的 DHCP 设置，让这些 MAC 保持当前 IP。设备继续沿用网段的 DNS。'}`, {
     title: operation === 'delete' ? '预览删除固定 IP' : '预览固定 IP',
     confirmText: operation === 'delete' ? '确认删除固定 IP' : '确认固定 IP', danger: operation === 'delete'
