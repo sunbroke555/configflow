@@ -43,6 +43,9 @@ const settingsPayload = (configured = false, overrides: Record<string, unknown> 
 })
 const requestCount = (url: string) => requests.filter(config => config.url === `/domain-discovery/${url}`).length
 const timeout = (config: InternalAxiosRequestConfig) => new AxiosError('timeout', 'ECONNABORTED', config)
+const serverError = (config: InternalAxiosRequestConfig, message: string) => new AxiosError('Request failed', 'ERR_BAD_RESPONSE', config, null, {
+  config, data: { message }, status: 500, statusText: 'Internal Server Error', headers: new AxiosHeaders()
+})
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -201,6 +204,19 @@ describe('domain discovery request and empty states', () => {
     expect(wrapper.text()).toContain('保留上次成功读取的结果')
     expect(wrapper.text()).toContain('保留上次采集设备状态')
     expect(wrapper.text()).not.toContain('当前配置没有 Mihomo Agent')
+  })
+
+  it('joins retained-state notes after server messages without doubled punctuation', async () => {
+    settingsHandler = async config => response(config, settingsPayload(true))
+    const wrapper = await render()
+    domainHandler = async config => { throw serverError(config, '域名数据读取失败。') }
+    agentHandler = async config => { throw serverError(config, '采集设备读取失败。') }
+    settingsHandler = async config => { throw serverError(config, '默认规则集读取失败。') }
+    await click(wrapper, '刷新')
+    expect(wrapper.text()).toContain('域名数据读取失败，下方保留上次成功读取的结果。')
+    expect(wrapper.text()).toContain('采集设备读取失败，保留上次采集设备状态。')
+    expect(wrapper.text()).toContain('默认规则集读取失败，保留上次默认规则集设置。')
+    expect(wrapper.text()).not.toContain('。，')
   })
 
   it('coalesces repeated requests for the same view while refresh is running', async () => {

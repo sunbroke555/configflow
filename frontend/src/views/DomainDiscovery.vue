@@ -34,7 +34,7 @@
     <div id="domain-discovery-configuration" class="mb-4 grid gap-4 lg:grid-cols-2" :class="configurationReady && !configurationOpen && 'max-sm:hidden'" @focusin="configurationOpen = true">
       <!-- 采集设备 -->
       <SectionCard title="采集设备" description="开启后，Agent 会把本机 Mihomo 访问过的域名、命中规则和直连失败汇总上报（只含域名，不含网址路径和设备 IP，保留 7 天）。" :icon="Radar">
-        <p v-if="agentsError && agentsLoaded" role="alert" class="mb-3 text-[12.5px] text-warning-accent">{{ agentsError }}，保留上次采集设备状态。</p>
+        <p v-if="agentsError && agentsLoaded" role="alert" class="mb-3 text-[12.5px] text-warning-accent">{{ stripTrailingPunctuation(agentsError) }}，保留上次采集设备状态。</p>
         <LoadingRows v-if="agentsLoading && !agentsLoaded" :rows="2" />
         <EmptyState v-else-if="agentsError && !agentsLoaded" title="采集设备读取失败" :description="agentsError" :icon="TriangleAlert">
           <Button variant="outline" size="sm" :disabled="agentsLoading" @click="loadAgents">重试</Button>
@@ -92,7 +92,7 @@
 
       <!-- 默认规则集 -->
       <SectionCard title="默认规则集" description="「加入直连 / 加入代理」会把域名追加到这两个规则集。规则集需要在策略规则里启用，并位于兜底规则之前。" :icon="ListPlus">
-        <p v-if="settingsError && settings" role="alert" class="mb-3 text-[12.5px] text-warning-accent">{{ settingsError }}，保留上次默认规则集设置。</p>
+        <p v-if="settingsError && settings" role="alert" class="mb-3 text-[12.5px] text-warning-accent">{{ stripTrailingPunctuation(settingsError) }}，保留上次默认规则集设置。</p>
         <EmptyState v-if="settingsError && !settings" title="默认规则集读取失败" :description="settingsError" :icon="TriangleAlert">
           <Button variant="outline" size="sm" @click="loadSettings">重试</Button>
         </EmptyState>
@@ -230,7 +230,7 @@
 
     <div v-if="loadError && hasCurrentData" role="alert" class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-warning/30 bg-warning-soft px-4 py-3 text-[13px] text-warning-accent">
       <TriangleAlert class="size-4 shrink-0" aria-hidden="true" />
-      <span>{{ loadError }}，下方保留上次成功读取的结果。</span>
+      <span>{{ stripTrailingPunctuation(loadError) }}，下方保留上次成功读取的结果。</span>
       <Button variant="outline" size="sm" :disabled="loading" @click="loadDomains">重试</Button>
     </div>
     <SectionCard v-if="loading && !hasCurrentData" :padded="false"><LoadingRows /></SectionCard>
@@ -476,6 +476,7 @@ import WebsiteDialog, { type WebsiteInfo } from '@/components/domain-discovery/W
 import api from '@/api'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { relativeTime } from '@/lib/format'
+import { stripTrailingPunctuation } from '@/lib/text'
 
 type Target = 'direct' | 'proxy'
 type View = 'uncovered' | 'failing' | 'all' | 'ignored' | 'history' | 'region'
