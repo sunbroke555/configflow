@@ -202,8 +202,17 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
     for value in want:
         wanted.setdefault(canon(value), value)
     placed = set()
-    slots = []
+    slots, fixed = [], []
     for group in sorted(existing, key=lambda item: item['index']):
+        if group.get('frozen'):
+            # Another rule uses it too: never edited or deleted here, only
+            # referenced as it is when every entry is wanted.
+            keys = [canon(value) for value in group['values']]
+            if keys and len(set(keys)) == len(keys) and all(key in wanted and key not in placed for key in keys):
+                placed.update(keys)
+                fixed.append({'name': group['name'], 'index': group['index'], 'before': group['values'],
+                              'new': False, 'values': list(group['values'])})
+            continue
         kept = []
         for value in group['values']:
             key = canon(value)
@@ -213,7 +222,7 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
         slots.append({'name': group['name'], 'index': group['index'], 'before': group['values'], 'new': False,
                       'values': kept, 'size': base + sum(_entry_bytes(value) for value in kept)})
     pending = [value for key, value in wanted.items() if key not in placed]
-    used = set(taken) | {slot['index'] for slot in slots}
+    used = set(taken) | {slot['index'] for slot in slots} | {group['index'] for group in existing}
     error = ''
 
     def new_slots(queue, position):
@@ -237,7 +246,8 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
     position = _pack(slots, pending, 0)
     created = new_slots(pending, position)
     groups = [slot for slot in slots + created if slot['values']]
-    needed = _minimum(list(wanted.values()), base)
+    fixed_keys = {canon(value) for slot in fixed for value in slot['values']}
+    needed = _minimum([value for key, value in wanted.items() if key not in fixed_keys], base)
     if len(groups) > needed + 2:
         # Repack in number order, existing groups first: entries only move down.
         sequence = [value for slot in slots for value in slot['values']] + pending
@@ -247,7 +257,7 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
             used.discard(slot['index'])
         position = _pack(slots, sequence, 0)
         created = new_slots(sequence, position)
-    final = sorted([slot for slot in slots + created if slot['values']], key=lambda slot: slot['index'])
+    final = sorted([slot for slot in slots + created + fixed if slot['values']], key=lambda slot: slot['index'])
     result = {
         'final': [(slot['name'], slot['values']) for slot in final],
         'adds': [(slot['name'], slot['values']) for slot in final if slot['new']],
@@ -297,6 +307,7 @@ class GroupPlanner:
 
     def __init__(self, gstate: Dict[str, Any], warnings: List[str], blockers: List[str]):
         self.groups = gstate['groups']
+        self.gstate = gstate
         self.rules = gstate['rules']
         self.warnings = warnings
         self.blockers = blockers
@@ -328,9 +339,19 @@ class GroupPlanner:
                 values.extend(group['values'])
         return values
 
-    def family(self, role: str, want: List[str]) -> Tuple[List[str], List[Dict[str, Any]]]:
-        """Group adds and updates for one role; their final names."""
-        result = layout(role, self.owned(role), want, self.taken(role))
+    def shared(self, group: Dict[str, Any], subject: Optional[str]) -> bool:
+        """Whether a rule other than ``subject``'s destination uses the group (and keeps it)."""
+        return any(user['rule'] not in self.deleted_rules and (user['rule'] != subject or user['field'] != 'dst_addr')
+                   for user in group['users'])
+
+    def family(self, role: str, want: List[str], subject: Optional[str]) -> Tuple[List[str], List[Dict[str, Any]]]:
+        """Group adds and updates for one role; their final names.
+
+        ``subject`` is the rule that will reference the family. A group some other
+        rule uses as well is frozen: editing it would change that rule too.
+        """
+        existing = [{**group, 'frozen': self.shared(group, subject)} for group in self.owned(role)]
+        result = layout(role, existing, want, self.taken(role))
         if result['error']:
             self.blockers.append(result['error'])
         self.finals[role] = [name for name, _ in result['final']]
@@ -400,7 +421,8 @@ class GroupPlanner:
                 if users:
                     names = '、'.join(dict.fromkeys(f'{user["label"]}「{user["comment"] or user["rule"]}」'
                                                     for user in users))
-                    self.warnings.append(f'ConfigFlow 的 IP 分组 {group["name"]} 被手工规则{names}引用，已保留，'
+                    owner = '规则' if all(_is_managed(user['comment']) for user in users) else '手工规则'
+                    self.warnings.append(f'ConfigFlow 的 IP 分组 {group["name"]} 被{owner}{names}引用，已保留，'
                                          '请先在 iKuai 中解除引用')
                     continue
                 ops.append({'kind': 'ikuai_group_delete', 'name': group['name'], 'role': role,
@@ -427,6 +449,31 @@ class GroupPlanner:
                 '本次发布失败会自动恢复原规则并删除新建的分组。')
 
 
+def _is_managed(comment: str) -> bool:
+    from backend.routers.base import is_managed
+    return is_managed(comment)
+
+
+def nat_target(gstate: Dict[str, Any], managed: List[Any]):
+    """The managed NAT bypass rule whose destinations live in the cf_nat groups.
+
+    Stable across releases: the rule already referencing cf_nat groups; before
+    any does, the one listing the most CIDRs (the rule earlier releases added
+    to), the first on ties. Other managed rules keep what they list.
+    """
+    groups, rules = gstate['groups'], gstate['rules']
+
+    def grouped(rule) -> bool:
+        return any(kind == 'owned' and group['role'] == 'nat'
+                   for kind, group in (classify(groups, ref)
+                                       for ref in (rules.get(f'nat:{rule.id}') or {}).get('objects', [])))
+
+    holder = next((rule for rule in managed if grouped(rule)), None)
+    if holder is not None or not managed:
+        return holder
+    return max(managed, key=lambda rule: len((rules.get(f'nat:{rule.id}') or {}).get('custom') or []))
+
+
 def report_section(state) -> Dict[str, Any]:
     """Pending migrations and unreferenced groups; either keeps the router out of sync."""
     from backend.routers.base import POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT, is_managed, policy_route
@@ -438,7 +485,7 @@ def report_section(state) -> Dict[str, Any]:
             custom = (gstate['rules'].get(f'policy:{rule.id}') or {}).get('custom') if rule else None
             if custom:
                 migrations.append({'rule': comment, 'kind': '端口分流', 'count': len(custom)})
-    target = next((rule for rule in state.nat_bypass if rule.enabled and is_managed(rule.comment)), None)
+    target = nat_target(gstate, [rule for rule in state.nat_bypass if rule.enabled and is_managed(rule.comment)])
     custom = (gstate['rules'].get(f'nat:{target.id}') or {}).get('custom') if target else None
     if custom:
         migrations.append({'rule': target.comment, 'kind': 'NAT 免转换', 'count': len(custom)})

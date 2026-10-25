@@ -17,6 +17,7 @@ from backend.routers.base import (
     StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
+from backend.routers.ikuai_groups import canon
 from backend.routers.routeros_nat import assess_bypass, RouteEgressIndex
 
 
@@ -114,8 +115,10 @@ def _policy_route_items(desired: Dict[str, Any], state: RouterState) -> Dict[str
     extra = [{'cidr': route.dst, 'gateway': route.gateway, 'route_id': route.id, 'comment': route.comment}
              for route in state.routes if is_managed(route.comment) and route.dst not in desired_cidrs]
     if auto:
+        # iKuai may read an IP group's 1.1.1.1/32 back as 1.1.1.1: compare addresses.
+        wanted = {canon(cidr) for cidr in desired_cidrs}
         extra += [{'cidr': cidr, 'gateway': auto.gateway, 'route_id': f'policy:{auto.id}', 'comment': auto.comment}
-                  for cidr in auto.dst if cidr not in desired_cidrs]
+                  for cidr in auto.dst if canon(cidr) not in wanted]
     unmanaged_other = [{'cidr': route.dst, 'gateway': route.gateway, 'comment': route.comment, 'enabled': route.enabled,
                         'migrate': route.enabled}
                        for route in state.routes

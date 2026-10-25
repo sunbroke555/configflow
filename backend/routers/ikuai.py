@@ -898,12 +898,15 @@ class IKuaiDriver(RouterDriver):
             for ref in (value.get('object') if isinstance(value, dict) and isinstance(value.get('object'), list) else []):
                 if not isinstance(ref, dict) or not ikuai_groups.name_role(ref.get('gp_name')):
                     continue
-                if ikuai_groups.resolve(groups, ref) is not None:
+                current = ikuai_groups.resolve(groups, ref)
+                if current is not None and current['name'] == ref['gp_name']:
                     continue
+                # Gone, or its gid now belongs to another group (iKuai may reuse a freed ID).
                 found = [group for group in groups if group['name'] == ref['gp_name'] and group['role']]
-                if len(found) != 1:
+                if len(found) == 1:
+                    ref['gid'] = found[0]['gid']
+                elif current is None:
                     raise RouterError(f'iKuai IP 分组 {ref["gp_name"]} 不存在，无法恢复规则引用')
-                ref['gid'] = found[0]['gid']
         return record
 
     def _apply_group(self, op: Dict[str, Any]) -> Dict[str, Any]:

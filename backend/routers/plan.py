@@ -25,7 +25,7 @@ from backend.routers.base import (
     policy_route_ok, stale_route_warning, stale_routes, StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
-from backend.routers.ikuai_groups import GroupPlanner, span
+from backend.routers.ikuai_groups import GroupPlanner, nat_target, span
 from backend.routers.report import _networks, SupernetIndex
 
 MANAGED_RETURN_TABLE = 'configflow_return'
@@ -213,7 +213,7 @@ def _grouped_policy_op(planner: GroupPlanner, role: str, rule, gateway: str, wan
     """An iKuai rule whose destination is ConfigFlow's IP groups; written only when the
     rule itself must change, not when only the groups' contents do."""
     key = f'policy:{rule.id}' if rule is not None else None
-    final, ops = planner.family(role, want)
+    final, ops = planner.family(role, want, key)
     group_ops.extend(ops)
     planner.route_rules.append({'func': 'stream_ipport', 'comment': comment, 'groups': final,
                                 'keep_foreign': keep_foreign})
@@ -325,7 +325,7 @@ def _grouped_nat_ops(planner: GroupPlanner, rules, target, adopt_ids: List[str],
     final, ops = [], []
     if target is not None or missing:
         want = planner.refs(key)['custom'] + planner.referenced_values(key) + missing
-        final, ops = planner.family('nat', want)
+        final, ops = planner.family('nat', want, key)
     total = sum(len(values) for values in planner.contents.get('nat', {}).values())
     for rule_id in adopt_ids:
         if target is not None and rule_id == target.id:
@@ -402,6 +402,8 @@ def _nat_ops(report: Dict[str, Any], state: RouterState, gateway: str, skipped: 
     target_ids = {rule.id for rule in targets}
 
     if planner is not None:
+        # Not the lowest ID: adopting a hand-made rule must not move the groups to it.
+        target = nat_target(planner.gstate, managed) or (rules[adopt_ids[0]] if adopt_ids else None)
         ops = _grouped_nat_ops(planner, rules, target, adopt_ids, missing, gateway)
         # New CIDRs may only extend a group; they are proxy CIDRs either way.
         exempt = [cidr for rule in rules.values() for cidr in rule.dst] + missing

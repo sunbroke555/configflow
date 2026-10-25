@@ -512,3 +512,127 @@ def test_static_routing_mode_keeps_only_the_nat_groups():
     assert result['ok'], result['log'][-3:]
     assert list(_groups(session)) == ['cf_nat_1'] and session.rows['stream_ipport'] == []
     assert _plan_without_return(driver, _desired(cidrs))['empty']
+
+
+# --- shared groups and a stable NAT target ---------------------------------------------------
+
+A, B, C = '91.108.0.0/16', '149.154.160.0/20', '8.8.8.0/24'
+
+
+def _release(session, cidrs):
+    """One manual release with auto return routing; the plan and its result."""
+    driver = _driver(session)
+    agent = FakeAgent(SAFE_RETURN_STATUS)
+    plan = _plan(driver, status={**agent.status(), 'status': 'ok'}, desired=_desired(cidrs))
+    assert plan['blockers'] == [], plan['blockers']
+    return plan, execute(plan, driver, agent)
+
+
+def _settled(session, cidrs):
+    """The next preview has nothing to do and the router reads as in sync."""
+    driver = _driver(session)
+    plan = _plan(driver, desired=_desired(cidrs))
+    assert _ops(plan, 'nat_bypass') == [] and _ops(plan, 'routes') == []
+    assert build_report(_desired(cidrs), driver.read_state())['in_sync'] is True
+
+
+@pytest.mark.parametrize('nat_rules, cidrs', [
+    # Adoption order (report order) picks rule 2 first, not the lowest ID.
+    ([_nat(1, 'mine-a', ['10.1.0.0/16']), _nat(2, 'mine-b', ['10.2.0.0/16'])],
+     ['10.2.0.0/16', '10.1.0.0/16', '10.3.0.0/16']),
+    ([_nat(3, 'x', [B]), _nat(5, 'y', [A])], [A, B, C]),
+])
+def test_adopted_nat_rules_keep_the_groups_on_the_rule_that_references_them(nat_rules, cidrs):
+    session = Device([], nat_rules, policies=[])
+    _, first = _release(session, cidrs)
+    assert first['ok'], first['log'][-3:]
+    grouped = [row for row in session.rows['nat_rule'] if row['dst_addr']['object']]
+    assert len(grouped) == 1
+    before = _groups(session)['cf_nat_1']
+    _settled(session, cidrs)
+    _, second = _release(session, cidrs)
+    assert second['ok'], second['log'][-3:]
+    assert _groups(session)['cf_nat_1'] == before
+    assert [row for row in session.rows['nat_rule'] if row['dst_addr']['object']] == grouped
+
+
+def test_adopting_a_lower_id_hand_made_rule_later_does_not_move_the_nat_groups():
+    session = Device([], [_nat(3, 'office', [B])], policies=[])
+    assert _release(session, [A])[1]['ok']
+    assert _release(session, [A, B])[1]['ok']
+    office = _rule(session, 'nat_rule', 'cf-office')
+    assert office['dst_addr'] == {'custom': [B], 'object': []}
+    _settled(session, [A, B])
+    _, third = _release(session, [A, B])
+    assert third['ok'], third['log'][-3:]
+    assert _groups(session)['cf_nat_1'] == [A]
+    assert _resolved(session, _rule(session, 'nat_rule', 'cf-mihomo')) == [A]
+
+
+def test_legacy_nat_rules_migrate_the_one_releases_added_to():
+    # Before IP groups, new CIDRs went to the lowest-ID managed rule; adopting a
+    # hand-made lower-ID rule later left the big list on cf-mihomo.
+    session = Device([], [_nat(3, 'cf-office', [B]), _nat(9, 'cf-mihomo', [A, C])], policies=[])
+    plan, result = _release(session, [A, B, C])
+    assert result['ok'], result['log'][-3:]
+    assert [(op['kind'], op.get('id')) for op in _ops(plan, 'nat_bypass')] == [
+        ('ikuai_group_add', None), ('nat_update', '9')]
+    assert _rule(session, 'nat_rule', 'cf-office')['dst_addr'] == {'custom': [B], 'object': []}
+    _settled(session, [A, B, C])
+
+
+def test_a_group_another_rule_also_uses_is_never_edited():
+    groups = [_ip_group(31, 'cf_pa_1', 'cf-mihomo', [A, B])]
+    rules = [_grouped(1, 'cf-mihomo', [_ref(31, 'cf_pa_1')]), _grouped(7, 'my split', [_ref(31, 'cf_pa_1')])]
+    session = Device([], [], policies=rules, groups=groups)
+    plan, result = _release(session, [A])
+    assert result['ok'], result['log'][-3:]
+    assert [(op['kind'], op.get('name')) for op in _ops(plan, 'routes')] == [
+        ('ikuai_group_add', 'cf_pa_2'), ('policy_route_update', None)]
+    assert any('cf_pa_1 被手工规则端口分流「my split」引用，已保留' in warning for warning in plan['warnings'])
+    assert _groups(session)['cf_pa_1'] == [A, B]
+    assert _resolved(session, _rule(session, 'stream_ipport', 'my split')) == [A, B]
+    assert _resolved(session, _rule(session, 'stream_ipport', 'cf-mihomo')) == [A]
+
+
+def test_a_shared_group_holding_only_wanted_entries_is_referenced_as_it_is():
+    existing = [{'name': 'cf_nat_1', 'index': 1, 'values': [A], 'frozen': True},
+                {'name': 'cf_nat_2', 'index': 2, 'values': [A, C], 'frozen': True}]
+    result = layout('nat', existing, [A, B], set())
+    assert result['final'] == [('cf_nat_1', [A]), ('cf_nat_3', [B])]
+    assert (result['updates'], result['deletes']) == ([], [])
+
+
+class BareIPDevice(Device):
+    """Reads an IP group's x/32 entry back as x, as canon() allows for."""
+
+    def post(self, url, json=None, **kwargs):
+        response = super().post(url, json=json, **kwargs)
+        if json and json.get('func_name') == 'route_object' and json.get('action') == 'show':
+            for row in response._data['results']['data']:
+                for item in row.get('group_value') or []:
+                    for suffix in ('%2F32', '/32'):
+                        if isinstance(item.get('ip'), str) and item['ip'].endswith(suffix):
+                            item['ip'] = item['ip'][:-len(suffix)]
+        return response
+
+
+def test_a_host_read_back_without_its_prefix_is_not_an_extra_destination():
+    cidrs = [A, '1.1.1.1/32']
+    session = BareIPDevice([], [], policies=[])
+    assert _release(session, cidrs)[1]['ok']
+    report = build_report(_desired(cidrs), _driver(session).read_state())
+    assert report['routes']['extra'] == [] and report['in_sync'] is True
+
+
+def test_a_rollback_rebinds_a_reused_group_id_by_name():
+    nat = _ip_group(7, 'cf_nat_1', 'cf-mihomo-nat', ['9.9.9.0/24'])
+    pa = _ip_group(9, 'cf_pa_2', 'cf-mihomo', ['1.1.1.0/24'])
+    session = Device([], [], policies=[], groups=[nat, pa])
+    driver = _driver(session)
+    record = {'comment': 'cf-mihomo', 'src_addr': {'custom': ['10.0.0.2'], 'object': []},
+              'dst_addr': {'custom': [], 'object': [{'type': 0, 'gid': 'IPGP7', 'gp_name': 'cf_pa_2'}]}}
+    assert driver._rebind(record)['dst_addr']['object'] == [{'type': 0, 'gid': 'IPGP9', 'gp_name': 'cf_pa_2'}]
+    # A reference to the user's group is written back exactly.
+    own = {'dst_addr': {'custom': [], 'object': [{'type': 0, 'gid': 'IPGP7', 'gp_name': 'tg'}]}}
+    assert driver._rebind(own) == own
