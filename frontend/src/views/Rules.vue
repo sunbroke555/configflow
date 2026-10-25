@@ -161,7 +161,7 @@
           data-reorder-item
           :data-id="item.uniqueId"
         >
-          <!-- 组头：给一段相邻同策略规则起名；成员行仍按普通行展示，列从上到下对齐 -->
+          <!-- 组头：相邻、同策略且同名的规则为一段；成员行仍按普通行展示，列从上到下对齐 -->
           <div
             v-if="item.isGroup"
             :class="cn(
@@ -1121,22 +1121,23 @@ const saveGroupName = async () => {
   }
 }
 
-// 连续且同策略的规则项合并为一组；分组只影响展示，不进入生成的配置
+// 只合并相邻、同策略且 trim 后同名的规则；缺失或空白名称均为无名。
+// 分组只影响展示和整组操作的范围，不改写原始名称，也不进入生成的配置。
 const ruleGroups = computed(() => {
   const groups: any[] = []
   let current: any = null
 
   allRules.value.forEach((item) => {
     const itemWithId = { ...item, uniqueId: `${item.itemType}-${item.id}` }
-    if (current && current.policy === item.policy) {
+    const groupName = (item.group_name || '').trim()
+    if (current && current.policy === item.policy && current.groupName === groupName) {
       current.items.push(itemWithId)
       current.count++
-      if (!current.groupName && item.group_name) current.groupName = item.group_name
       return
     }
     // 用首项的复合键：规则与规则集的 id 可能重复；不含策略，整组改策略后收起状态不变
     const groupId = `group_${itemWithId.uniqueId}`
-    current = { isGroup: true, groupId, uniqueId: groupId, policy: item.policy, groupName: item.group_name || '', count: 1, items: [itemWithId] }
+    current = { isGroup: true, groupId, uniqueId: groupId, policy: item.policy, groupName, count: 1, items: [itemWithId] }
     groups.push(current)
   })
 

@@ -134,9 +134,10 @@ describe('inline policy selection', () => {
     await flushPromises()
     expect(network.rules.setPolicy).toHaveBeenCalledExactlyOnceWith(['r-a', 'r-b', 'r-c'], 'DIRECT', {}, 'default')
     expect(notify.warning).toHaveBeenCalledWith('已将 3 项的策略改为「DIRECT」', expect.stringContaining('1 项 DNS 为单独设置'), expect.anything())
-    // DIRECT now spans lan.test and the group; the merged group keeps the AI name.
+    // Equal policies do not pull the neighboring unnamed rule into the named group.
     expect(wrapper.find('[data-group-head]').text()).toContain('AI')
-    expect(wrapper.find('[data-group-head]').text()).toContain('01–04')
+    expect(wrapper.find('[data-group-head]').text()).toContain('02–04')
+    expect(wrapper.get('[data-rule-key="rule-r-lan"]').classes()).not.toContain('in-group')
   })
 
   it('reports a failed change and stays usable', async () => {

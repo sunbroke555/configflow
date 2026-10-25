@@ -707,7 +707,7 @@ async function save() {
                   <Input id="rule-remark" v-model="form.remark" class="bg-background/50" placeholder="可选，添加备注说明" />
                 </FormField>
                 <FormField label="分组名" html-for="rule-group">
-                  <Input id="rule-group" v-model="form.group_name" class="bg-background/50" placeholder="可选，相邻同策略规则共用" />
+                  <Input id="rule-group" v-model="form.group_name" class="bg-background/50" placeholder="可选，相邻同策略且同名规则成组" />
                 </FormField>
               </div>
               <FormField v-if="!editing && !singleType" label="插入位置">
