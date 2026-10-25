@@ -708,7 +708,8 @@ def _read(document, settings, config):
         routing = read_routing(document, settings, config)
         values.update(routing['values'])
         capabilities.update(routing['capabilities'])
-    return {'values': values, 'capabilities': capabilities}
+    from backend.common.oxidns_match_targets import read_match_targets
+    return {'values': values, 'capabilities': capabilities, **read_match_targets(document, settings)}
 
 
 def read_common_settings(settings, config, base_url=''):

@@ -67,7 +67,7 @@
         <TabsContent v-if="visitedTabs.has('advanced')" force-mount value="advanced" class="mt-0 space-y-4 data-[state=inactive]:hidden">
           <OxidnsFields :settings="draft" :fields="positionFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
           <div v-if="isCustom('custom_matches')" class="flex items-center gap-1 text-xs text-muted-foreground"><span>自定义匹配使用手工结构</span><FieldHelp label="自定义匹配配置状态" :text="capability('custom_matches')?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability('custom_matches')?.target || 'custom_matches')">完整参数<ChevronRight class="size-3.5" /></Button></div>
-          <OxidnsMatchEditor v-else :model-value="customMatches" :disabled="disabled" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
+          <OxidnsMatchEditor v-else :model-value="customMatches" :targets="customMatchTargets" :target-tags="customMatchTargetTags" :disabled="disabled" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
           <div class="flex flex-wrap items-center gap-2 border-t border-border pt-3"><span class="text-xs text-muted-foreground">其他插件、网络出站和扩展字段</span><Button type="button" variant="outline" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">完整参数<ChevronRight class="size-3.5" /></Button></div>
         </TabsContent>
       </div>
@@ -81,6 +81,7 @@ import { ChevronDown, ChevronRight } from '@lucide/vue'
 import { RouterLink } from 'vue-router'
 import { apiAuthFields, apiExtraFields, apiFields, applyVerifiedOxidnsTemplate, logFields, cacheFields, isDnsRuleType, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
 import { optionCopy, optionHelp } from '@/lib/optionCopy'
+import type { OxidnsMatchTarget } from '@/lib/oxidnsMatchActions'
 import OxidnsFields, { type OxidnsFieldCapability } from './OxidnsFields.vue'
 import OxidnsMatchEditor from './OxidnsMatchEditor.vue'
 import FormField from '@/components/common/FormField.vue'
@@ -94,7 +95,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { BLOCK_ROUTES, CHOICE_LABELS } from '@/lib/ruleDns'
 
-const props = withDefaults(defineProps<{ values: Record<string, any>; capabilities: Record<string, OxidnsFieldCapability>; rules: any[]; ruleSets: any[]; disabled?: boolean; navigationDisabled?: boolean; initialFeature?: string }>(), { disabled: false, navigationDisabled: false })
+const props = withDefaults(defineProps<{ values: Record<string, any>; capabilities: Record<string, OxidnsFieldCapability>; rules: any[]; ruleSets: any[]; customMatchTargets?: OxidnsMatchTarget[]; customMatchTargetTags?: string[]; disabled?: boolean; navigationDisabled?: boolean; initialFeature?: string }>(), { disabled: false, navigationDisabled: false, customMatchTargets: () => [] })
 const emit = defineEmits<{ change: [changes: Record<string, unknown>]; error: [message: string]; navigate: [target: string]; full: [] }>()
 const clone = <T,>(value: T): T => value === undefined ? value : JSON.parse(JSON.stringify(value))
 const draft = reactive<Record<string, any>>(clone(props.values))

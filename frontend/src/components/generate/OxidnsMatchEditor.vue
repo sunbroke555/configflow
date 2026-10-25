@@ -41,34 +41,53 @@
             <Button type="button" variant="ghost" size="icon" class="size-11 shrink-0 text-muted-foreground" :aria-label="`删除匹配项 ${index + 1} 条件 ${conditionIndex + 1}`" :disabled="disabled" @click="removeCondition(item, conditionIndex)"><Trash2 class="size-4" /></Button>
           </div>
         </div>
-        <FormField label="执行动作" :html-for="`${item.key}-action`" hint="条件全部满足时，使用所选 DNS 或返回指定应答。" :help="optionHelp('同一匹配项的条件全部满足后，执行所选动作。', '直连、代理、备用进入对应 DNS 流程；拒绝返回 REFUSED，不存在返回 NXDOMAIN，空应答返回无答案的 NOERROR。自定义可用 $插件名 或 goto 序列名。')">
-          <Select :model-value="item.customAction ? 'custom' : String(item.data.exec)" :disabled="disabled" @update:model-value="setAction(item, String($event))">
+        <FormField label="执行动作" :html-for="`${item.key}-action`" hint="选择当前配置中的流程、插件，或直接返回应答。" :help="optionHelp('需要让匹配请求执行某个现有流程或插件时选择。', '流程按实际名称选择，进入后不再继续当前流程；插件调用后可能继续后续规则。多个目标需明确选一个，不按名称猜测直连或代理。自定义动作及 YAML 保留原始写法。')">
+          <Select :model-value="item.action" :disabled="disabled" @update:model-value="setAction(item, String($event))">
             <SelectTrigger :id="`${item.key}-action`" class="min-h-11 w-full" :aria-label="`匹配项 ${index + 1} 执行动作`"><SelectValue placeholder="选择执行动作" /></SelectTrigger>
             <SelectContent>
-              <SelectItem v-for="action in actions" :key="action.value" :value="action.value">{{ action.label }}</SelectItem>
-              <SelectItem value="custom">自定义动作</SelectItem>
+              <SelectItem value="sequence" class="min-h-11">执行流程</SelectItem>
+              <SelectItem value="plugin" class="min-h-11">调用插件</SelectItem>
+              <SelectItem v-for="action in actions" :key="action.value" :value="action.value" class="min-h-11">{{ action.label }}</SelectItem>
+              <SelectItem value="custom" class="min-h-11">自定义动作</SelectItem>
             </SelectContent>
           </Select>
-          <Input v-if="item.customAction" :model-value="item.data.exec ?? ''" class="min-h-11 min-w-0 font-mono text-xs" :aria-label="`匹配项 ${index + 1} 自定义动作`" :disabled="disabled" placeholder="例如 $my_plugin 或 goto my_sequence" @update:model-value="setCustomAction(item, String($event))" />
+          <Input v-if="item.action === 'custom'" :model-value="item.data.exec ?? ''" class="min-h-11 min-w-0 font-mono text-xs" :aria-label="`匹配项 ${index + 1} 自定义动作`" :aria-describedby="targetWarning(item) ? `${item.key}-target-warning` : undefined" :disabled="disabled" placeholder="例如 $my_plugin 或 goto my_sequence" @update:model-value="setCustomAction(item, String($event))" />
         </FormField>
+        <FormField v-if="isTargetAction(item.action)" :label="item.action === 'sequence' ? '目标流程' : '目标插件'" :html-for="`${item.key}-target`">
+          <Select :model-value="String(item.data.exec || '')" :disabled="disabled" @update:model-value="setTarget(item, String($event))">
+            <SelectTrigger :id="`${item.key}-target`" class="min-h-11 w-full" :aria-label="`匹配项 ${index + 1} ${item.action === 'sequence' ? '目标流程' : '目标插件'}`" :aria-describedby="targetWarning(item) ? `${item.key}-target-warning` : undefined" :title="selectedTargetLabel(item)">
+              <SelectValue :placeholder="item.action === 'sequence' ? '选择一个流程' : '选择一个插件'" class="min-w-0 truncate"><span v-if="item.data.exec" class="min-w-0 truncate">{{ selectedTargetLabel(item) }}</span></SelectValue>
+            </SelectTrigger>
+            <SelectContent class="max-w-[calc(100vw-2rem)]">
+              <SelectItem v-for="target in availableTargets(item.action)" :key="target.exec" :value="target.exec" class="min-h-11" :title="targetLabel(target)"><span class="min-w-0 break-all whitespace-normal">{{ targetLabel(target) }}</span></SelectItem>
+              <p v-if="!availableTargets(item.action).length" class="m-0 max-w-72 px-2 py-3 text-xs text-muted-foreground">{{ item.action === 'sequence' ? '当前没有可选流程' : '当前没有可选插件' }}</p>
+            </SelectContent>
+          </Select>
+          <p v-if="!availableTargets(item.action).length" class="m-0 text-xs text-muted-foreground">{{ item.action === 'sequence' ? '当前没有可选流程' : '当前没有可选插件' }}，可在完整参数中添加或检查配置。</p>
+        </FormField>
+        <p v-if="targetWarning(item)" :id="`${item.key}-target-warning`" role="status" class="m-0 break-words text-xs text-warning-accent">{{ targetWarning(item) }}</p>
         <p v-if="hasExtensions(item)" class="m-0 text-xs text-muted-foreground">此条目还有扩展字段，已保留；可切换到 YAML 查看。</p>
       </section>
     </template>
 
     <FormField v-else label="自定义匹配 YAML" html-for="oxi-custom-matches" :help="allowDisable ? '使用 YAML 列表。每项的 matches 可为字符串或字符串列表，exec 为执行动作，enabled: false 表示暂停。清空所有匹配项可填写 []。' : '使用实际执行的 YAML 列表。每项的 matches 可为字符串或字符串列表，exec 为执行动作，不支持 enabled 暂停字段。清空所有匹配项可填写 []。'">
-      <Textarea id="oxi-custom-matches" :model-value="yamlDraft" :rows="12" class="min-w-0 font-mono text-xs" :disabled="disabled" :aria-invalid="Boolean(error)" :aria-describedby="error ? 'oxi-match-error' : undefined" spellcheck="false" placeholder="- matches: qname full:example.com&#10;  exec: goto china_dns" @update:model-value="updateYaml(String($event))" />
+      <Textarea id="oxi-custom-matches" :model-value="yamlDraft" :rows="12" class="min-w-0 font-mono text-xs" :disabled="disabled" :aria-invalid="Boolean(error)" :aria-describedby="error ? 'oxi-match-error' : undefined" spellcheck="false" placeholder="- matches: qname full:example.com&#10;  exec: goto my_sequence" @update:model-value="updateYaml(String($event))" />
     </FormField>
+    <template v-if="mode === 'yaml' && !error">
+      <p v-for="warning in yamlTargetWarnings" :key="warning" role="status" class="m-0 break-words text-xs text-warning-accent">{{ warning }}</p>
+    </template>
     <p v-if="error" id="oxi-match-error" role="alert" class="m-0 whitespace-pre-wrap break-words rounded-lg bg-destructive-soft p-3 text-xs text-destructive-accent">{{ error }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { dump, JSON_SCHEMA, load } from 'js-yaml'
 import { ChevronDown, ChevronUp, Plus, Trash2 } from '@lucide/vue'
 import FormField from '@/components/common/FormField.vue'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import { optionHelp } from '@/lib/optionCopy'
+import { oxidnsMatchAction, oxidnsMatchBuiltinActions, oxidnsMatchTargetWarning, type OxidnsMatchTarget } from '@/lib/oxidnsMatchActions'
 import OxidnsEditorModeToggle from './OxidnsEditorModeToggle.vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -77,8 +96,8 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
 type Match = Record<string, any>
-type Item = { key: string; data: Match; customAction: boolean }
-const props = withDefaults(defineProps<{ modelValue: Match[]; disabled?: boolean; allowDisable?: boolean }>(), { disabled: false, allowDisable: true })
+type Item = { key: string; data: Match; action: string }
+const props = withDefaults(defineProps<{ modelValue: Match[]; targets?: OxidnsMatchTarget[]; targetTags?: string[]; disabled?: boolean; allowDisable?: boolean }>(), { disabled: false, allowDisable: true, targets: () => [] })
 const emit = defineEmits<{
   (event: 'update:modelValue', value: Match[]): void
   (event: 'validity', valid: boolean): void
@@ -90,20 +109,23 @@ const yamlDraft = ref('[]\n')
 const error = ref('')
 let sequence = 0
 let lastEmitted: string | undefined
-const actions = [
-  { value: 'goto china_dns', label: '直连 DNS' },
-  { value: 'goto proxy_dns_seq', label: '代理 DNS' },
-  { value: 'goto fallback_dns', label: '备用 DNS' },
-  { value: 'reject', label: '拒绝（REFUSED）' },
-  { value: 'reject 3', label: '不存在（NXDOMAIN）' },
-  { value: 'reject 0', label: '空应答（NOERROR）' },
-  { value: 'accept', label: '接受响应并结束' },
-  { value: 'return', label: '返回上级序列' },
-]
+const actions = oxidnsMatchBuiltinActions
+const isTargetAction = (action: string) => action === 'sequence' || action === 'plugin'
+const availableTargets = (action: string) => props.targets.filter(target => action === 'sequence' ? target.type === 'sequence' : target.type !== 'sequence')
+const targetLabel = (target: OxidnsMatchTarget) => `${target.tag} · ${target.type}${target.source && target.source !== 'config.yaml' ? ` · ${target.source}` : ''}`
+const selectedTargetLabel = (item: Item) => {
+  const target = availableTargets(item.action).find(target => target.exec === item.data.exec)
+  return target ? targetLabel(target) : String(item.data.exec || '').replace(/^(?:goto |\$)/, '')
+}
+const targetWarning = (item: Item) => oxidnsMatchTargetWarning(item.data.exec, props.targets, props.targetTags)
+const yamlTargetWarnings = computed(() => items.value.flatMap((item, index) => {
+  const warning = targetWarning(item)
+  return warning ? [`匹配项 ${index + 1}：${warning}`] : []
+}))
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 const serialize = (value: unknown) => dump(value, { schema: JSON_SCHEMA, noRefs: true, lineWidth: -1 })
 const makeItems = (value: Match[]) => value.map(data => ({
-  key: `oxi-match-${++sequence}`, data: clone(data), customAction: !actions.some(action => action.value === data.exec),
+  key: `oxi-match-${++sequence}`, data: clone(data), action: oxidnsMatchAction(data.exec, props.targets),
 }))
 const report = (message: string) => {
   error.value = message
@@ -188,7 +210,7 @@ function changeMode(next: 'entries' | 'yaml') {
   mode.value = next
 }
 function addItem() {
-  items.value.push(...makeItems([{ ...(props.allowDisable ? { enabled: true } : {}), matches: [''], exec: 'goto china_dns' }]))
+  items.value.push(...makeItems([{ ...(props.allowDisable ? { enabled: true } : {}), matches: [''], exec: '' }]))
   publishItems()
 }
 function removeItem(index: number) {
@@ -216,8 +238,19 @@ function setCondition(item: Item, index: number, text: string) {
 function removeCondition(item: Item, index: number) { writeConditions(item, conditions(item).filter((_, position) => position !== index)) }
 function setEnabled(item: Item, enabled: boolean) { item.data.enabled = enabled; publishItems() }
 function setAction(item: Item, action: string) {
-  item.customAction = action === 'custom'
-  if (!item.customAction) { item.data.exec = action; publishItems() }
+  const previous = item.action
+  item.action = action
+  if (action === 'custom') return
+  // Choosing a category never silently selects the first target.
+  if (isTargetAction(action)) {
+    if (previous !== action) item.data.exec = ''
+  } else item.data.exec = action
+  publishItems()
+}
+function setTarget(item: Item, exec: string) {
+  if (!availableTargets(item.action).some(target => target.exec === exec)) return
+  item.data.exec = exec
+  publishItems()
 }
 function setCustomAction(item: Item, action: string) { item.data.exec = action; publishItems() }
 const hasExtensions = (item: Item) => Object.keys(item.data).some(key => !['enabled', 'matches', 'exec'].includes(key))
