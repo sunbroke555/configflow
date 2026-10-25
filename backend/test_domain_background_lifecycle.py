@@ -156,12 +156,9 @@ def test_auto_loop_clears_context_after_every_profile_before_sleep(tmp_path, mon
 
 def test_application_startup_discards_only_temporary_views(tmp_path):
     # Exercise the real import/initialization in a fresh process; all writes go
-    # to this test's temporary directory, including MetricsHistory's fallback.
+    # to this test's temporary directory (DATA_DIR), including monitoring history.
     code = '''
 import os
-from backend.agents import manager
-from backend.agents.metrics_history import MetricsHistory
-manager.MetricsHistory = lambda: MetricsHistory(os.path.join(os.environ['DATA_DIR'], 'metrics'))
 from backend import app
 from backend.common import config
 assert config._CONFIG_CACHE.get() is None
@@ -171,6 +168,8 @@ response = app.app.test_client().get('/api/profiles')
 assert response.status_code == 200
 assert config._CONFIG_CACHE.get() is None
 assert config._CONFIG_BASELINES.get() is None
+from backend.common.agent_manager import get_agent_manager
+assert get_agent_manager().metrics_history.data_dir == os.path.join(os.path.realpath(os.environ['DATA_DIR']), 'metrics')
 '''
     env = dict(os.environ, DATA_DIR=str(tmp_path), LOG_FILE=str(tmp_path / 'app.log'),
                ADMIN_USERNAME='', ADMIN_PASSWORD='', PYTHONDONTWRITEBYTECODE='1')

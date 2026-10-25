@@ -6,6 +6,9 @@
 每台 Agent 的 JSON Lines 文件；文件行数明显多于内存保留的点时，从内存重写
 临时文件后原子替换。服务启动时读回文件（容忍写到一半的行），旧版
 <agent_id>_metrics.json 读入后改写为新格式并删除。
+
+文件位于数据目录（DATA_DIR）下的 metrics/，Docker 中即 /data 数据卷，重建容器后
+仍在。旧版本写在 LEGACY_DIRS 中，服务启动时由 adopt_legacy_dirs() 移入。
 """
 
 import errno
@@ -13,6 +16,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from collections import deque
 from datetime import datetime, timedelta
@@ -29,6 +33,12 @@ COMPACT_RATIO = 1.5
 FILE_SUFFIX = '_metrics.jsonl'
 LEGACY_SUFFIX = '_metrics.json'
 _AGENT_ID = re.compile(r'^[A-Za-z0-9_.-]+$')
+# 旧版本的默认目录：Docker 镜像里的 /opt/configflow/data/metrics（不在 /data 数据卷中，
+# 重建容器即丢失；auto_update 原地更新时仍在），源码运行时的 backend/data/metrics
+LEGACY_DIRS = (
+    '/opt/configflow/data/metrics',
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'metrics'),
+)
 _ERRNO_TEXT = {
     errno.ENOSPC: '磁盘空间不足',
     errno.EDQUOT: '超出磁盘配额',
@@ -60,24 +70,14 @@ def _encode(point: Dict[str, Any]) -> str:
 class MetricsHistory:
     """Agent 监控数据历史管理"""
 
-    def __init__(self, data_dir: str = None, max_points: int = MAX_POINTS_PER_AGENT):
+    def __init__(self, data_dir: str, max_points: int = MAX_POINTS_PER_AGENT):
         """
         初始化监控历史管理器
 
         Args:
-            data_dir: 数据存储目录，None 则自动选择
+            data_dir: 数据存储目录，AgentManager 使用配置仓库数据目录下的 metrics
             max_points: 每台 Agent 在内存中最多保留的监控点
         """
-        # 如果未指定目录，根据环境自动选择
-        if data_dir is None:
-            # 检查是否在生产环境（/opt/configflow 存在）
-            if os.path.exists('/opt/configflow'):
-                data_dir = "/opt/configflow/data/metrics"
-            else:
-                # 开发环境：使用项目根目录下的 data 目录
-                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                data_dir = os.path.join(project_root, "data", "metrics")
-
         self.data_dir = data_dir
         self.max_points = max_points
         # lock 保护内存；flush_lock 让保存、整理与删除逐个进行，写盘时不阻塞心跳
@@ -160,6 +160,95 @@ class MetricsHistory:
         metrics = data.get('metrics', []) if isinstance(data, dict) else []
         points, _ = self._parse_lines((_encode(item) for item in metrics if isinstance(item, dict)), cutoff)
         return points
+
+    def _same_dir(self, directory: str) -> bool:
+        try:
+            # 也认出符号链接和挂载到两处的同一目录（例如 DATA_DIR 为 . 时）
+            return os.path.samefile(directory, self.data_dir)
+        except OSError:
+            return False
+
+    def _fsync_data_dir(self):
+        try:
+            descriptor = os.open(self.data_dir, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            pass
+        finally:
+            os.close(descriptor)
+
+    def _move_in(self, source: str, agent_id: str, name: str):
+        """Move one file into data_dir; the source is removed only after the copy is durable."""
+        target = os.path.join(self.data_dir, name)
+        try:
+            os.rename(source, target)
+            self._fsync_data_dir()
+            return
+        except OSError as error:
+            if error.errno != errno.EXDEV:
+                raise
+        # 跨文件系统（容器层到 /data 数据卷）：复制到数据目录的临时文件，写入磁盘后
+        # 原子改名，再删除源文件。中途中断时只剩临时文件（load() 清理）或两边都有
+        descriptor, temporary = tempfile.mkstemp(dir=self.data_dir, prefix=f'.{agent_id}', suffix='.tmp')
+        try:
+            with os.fdopen(descriptor, 'wb') as handle, open(source, 'rb') as original:
+                shutil.copyfileobj(original, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        self._fsync_data_dir()
+        if self._remove(source, report=True) is None:
+            logger.warning('旧目录中的 %s 已复制到数据目录，但没能删除，之后会一直保留', name)
+
+    def adopt_legacy_dirs(self, agent_ids, legacy_dirs=None) -> Dict[str, int]:
+        """把旧版默认目录中现有 Agent 的历史文件移入 data_dir；服务启动时在 load() 之前调用。
+
+        规则：data_dir 已有某台 Agent 的文件（任一格式）时以它为准，旧目录中这台
+        Agent 的文件原样保留，不合并；不在 agent_ids 中的 Agent 的文件也原样保留。
+        移入的文件由 load() 照常读回、改写旧格式。返回 moved（移入的文件数）和
+        kept（因数据目录已有而保留的文件数）。
+        """
+        agent_ids = set(agent_ids)
+        result = {'moved': 0, 'kept': 0}
+        for directory in LEGACY_DIRS if legacy_dirs is None else legacy_dirs:
+            if not os.path.isdir(directory) or self._same_dir(directory):
+                continue
+            try:
+                names = os.listdir(directory)
+            except OSError as error:
+                logger.warning('读取旧监控历史目录 %s 失败：%s', directory, describe_os_error(error))
+                continue
+            groups: Dict[str, List[str]] = {}
+            # 新格式在前：它移入失败时不再移入同一 Agent 的旧格式文件
+            for suffix in (FILE_SUFFIX, LEGACY_SUFFIX):
+                for name in sorted(names):
+                    agent_id = name[:-len(suffix)]
+                    if name.endswith(suffix) and agent_id in agent_ids and _AGENT_ID.match(agent_id):
+                        groups.setdefault(agent_id, []).append(name)
+            with self.flush_lock:
+                for agent_id, files in sorted(groups.items()):
+                    if any(os.path.lexists(os.path.join(self.data_dir, agent_id + suffix))
+                           for suffix in (FILE_SUFFIX, LEGACY_SUFFIX)):
+                        result['kept'] += len(files)
+                        continue
+                    for name in files:
+                        try:
+                            self._move_in(os.path.join(directory, name), agent_id, name)
+                        except OSError as error:
+                            logger.warning('旧目录中的监控历史 %s 移入数据目录失败，已保留原文件：%s',
+                                           name, describe_os_error(error))
+                            break
+                        result['moved'] += 1
+        if result['moved'] or result['kept']:
+            logger.info('已将 %d 个监控历史文件从旧目录移入 %s；数据目录已有同一 Agent 历史而保留在旧目录的 %d 个',
+                        result['moved'], self.data_dir, result['kept'])
+        return result
 
     def load(self, agent_ids) -> Dict[str, int]:
         """服务启动时读回现有 Agent 的历史，删除已删除 Agent 的文件。

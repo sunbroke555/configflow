@@ -134,17 +134,29 @@ def _loop():
 
 
 def load_history():
-    """Read saved history back at service startup; migrates the old format.
+    """Read saved history back at service startup; adopts files from the old
+    default directories and migrates the old format.
 
-    Only the service process does this: it also deletes files of Agents that no
-    longer exist, and the default directory is shared by every AgentManager
-    built from this checkout (tests, integration harnesses, other repositories).
+    Only the service process does this. Every AgentManager now keeps its history
+    under its own repository's data directory, but other processes can still open
+    the same DATA_DIR (the debug reloader's parent, command-line tools): load()
+    deletes leftover compaction temp files and files of Agents that no longer
+    exist, which would race the service's own saves.
     """
     from backend.common.agent_manager import get_agent_manager
     manager = get_agent_manager()
+    history = manager.metrics_history
     try:
-        return manager.metrics_history.load(
-            agent['id'] for agent in manager.repository.get_system().get('agents', []))
+        agent_ids = [agent['id'] for agent in manager.repository.get_system().get('agents', [])]
+    except Exception as error:
+        logger.warning('监控历史加载失败：%s', error)
+        return None
+    try:
+        history.adopt_legacy_dirs(agent_ids)
+    except Exception as error:
+        logger.warning('旧目录中的监控历史移入失败：%s', error)
+    try:
+        return history.load(agent_ids)
     except Exception as error:
         logger.warning('监控历史加载失败：%s', error)
         return None

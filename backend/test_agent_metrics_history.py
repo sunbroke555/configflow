@@ -341,17 +341,135 @@ def test_history_of_agents_removed_by_import_is_dropped_on_the_next_save(tasks_a
     assert history.flush() == {'agents': 0, 'appended': 0, 'compacted': 0}
 
 
-def test_building_an_agent_manager_does_not_touch_saved_history(tmp_path):
-    # Tests, integration harnesses and other repositories build AgentManagers
-    # that share the checkout's default directory; only the service loads it.
-    metrics_dir = tmp_path / 'metrics'
-    metrics_dir.mkdir()
+def test_agent_manager_keeps_history_in_its_repository_data_directory(tmp_path):
+    manager, repo = agent_manager(tmp_path)
+    try:
+        assert manager.metrics_history.data_dir == str(tmp_path / 'config' / 'metrics')
+        assert Path(manager.metrics_history.data_dir) == repo.data_dir / 'metrics'
+        assert manager.update_heartbeat('agent_1', {'system_metrics': metrics(1)})
+        manager.metrics_history.flush()
+        assert (tmp_path / 'config' / 'metrics' / 'agent_1_metrics.jsonl').exists()
+    finally:
+        config_module.reset_config_context()
+
+
+def test_building_an_agent_manager_does_not_touch_saved_history(tmp_path, monkeypatch):
+    # Other processes on the same DATA_DIR (debug reloader parent, command-line
+    # tools) build AgentManagers too; only the service loads, cleans and adopts.
+    metrics_dir = tmp_path / 'config' / 'metrics'
+    metrics_dir.mkdir(parents=True)
     (metrics_dir / 'someone_else_metrics.jsonl').write_text('{"timestamp":"2026-10-24T12:00:00"}\n', encoding='utf-8')
     (metrics_dir / 'agent_1_metrics.json').write_text('{"metrics":[]}', encoding='utf-8')
+    (metrics_dir / '.agent_1_compacting.tmp').write_text('in progress', encoding='utf-8')
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    (legacy / 'agent_1_metrics.jsonl').write_text('{"timestamp":"2026-10-24T12:00:00"}\n', encoding='utf-8')
+    monkeypatch.setattr(module, 'LEGACY_DIRS', (str(legacy),))
     manager, _ = agent_manager(tmp_path)
     config_module.reset_config_context()
     assert manager.metrics_history.data_dir == str(metrics_dir)
-    assert sorted(path.name for path in metrics_dir.iterdir()) == ['agent_1_metrics.json', 'someone_else_metrics.jsonl']
+    assert sorted(path.name for path in metrics_dir.iterdir()) == [
+        '.agent_1_compacting.tmp', 'agent_1_metrics.json', 'someone_else_metrics.jsonl']
+    assert [path.name for path in legacy.iterdir()] == ['agent_1_metrics.jsonl']
+
+
+def point(minutes, cpu):
+    return {'timestamp': (START - timedelta(minutes=minutes)).isoformat(), 'cpu': {'usage_percent': cpu},
+            'memory': {}, 'disk': {}, 'network': {}}
+
+
+def test_files_in_the_old_default_directories_move_into_the_data_directory(tmp_path, clock):
+    container, checkout, data = tmp_path / 'opt', tmp_path / 'checkout', tmp_path / 'data' / 'metrics'
+    container.mkdir()
+    checkout.mkdir()
+    (container / 'a1_metrics.jsonl').write_text(json.dumps(point(2, 1)) + '\n', encoding='utf-8')
+    (container / 'gone_metrics.jsonl').write_text(json.dumps(point(2, 9)) + '\n', encoding='utf-8')
+    (container / 'notes.txt').write_text('not history', encoding='utf-8')
+    (checkout / 'a2_metrics.json').write_text(json.dumps({'metrics': [point(3, 2)]}), encoding='utf-8')
+    history = MetricsHistory(str(data))
+    legacy_dirs = (str(container), str(checkout), str(tmp_path / 'missing'))
+    assert history.adopt_legacy_dirs(['a1', 'a2'], legacy_dirs) == {'moved': 2, 'kept': 0}
+    # Files of Agents that no longer exist, and anything else, stay where they were.
+    assert sorted(path.name for path in container.iterdir()) == ['gone_metrics.jsonl', 'notes.txt']
+    assert list(checkout.iterdir()) == []
+    # load() then reads them back and rewrites the old format, as for files written in place.
+    assert history.load(['a1', 'a2']) == {'loaded': 2, 'migrated': 1, 'removed': 0}
+    assert sorted(path.name for path in data.iterdir()) == ['a1_metrics.jsonl', 'a2_metrics.jsonl']
+    assert history.get_metrics('a1') == [point(2, 1)] and history.get_metrics('a2') == [point(3, 2)]
+    # Nothing left to move the next time.
+    assert history.adopt_legacy_dirs(['a1', 'a2'], legacy_dirs) == {'moved': 0, 'kept': 0}
+
+
+def test_history_already_in_the_data_directory_wins_and_the_old_file_stays(tmp_path):
+    legacy, data = tmp_path / 'legacy', tmp_path / 'metrics'
+    legacy.mkdir()
+    data.mkdir()
+    (legacy / 'a1_metrics.jsonl').write_text('old\n', encoding='utf-8')
+    (legacy / 'a1_metrics.json').write_text('{"metrics": []}', encoding='utf-8')
+    (legacy / 'a2_metrics.jsonl').write_text('old\n', encoding='utf-8')
+    (data / 'a1_metrics.jsonl').write_text('new\n', encoding='utf-8')
+    (data / 'a2_metrics.json').write_text('{"metrics": []}', encoding='utf-8')
+    history = MetricsHistory(str(data))
+    assert history.adopt_legacy_dirs(['a1', 'a2'], [str(legacy)]) == {'moved': 0, 'kept': 3}
+    assert (data / 'a1_metrics.jsonl').read_text(encoding='utf-8') == 'new\n'
+    assert sorted(path.name for path in legacy.iterdir()) == ['a1_metrics.json', 'a1_metrics.jsonl', 'a2_metrics.jsonl']
+
+
+def test_the_data_directory_itself_is_never_adopted(tmp_path):
+    data = tmp_path / 'metrics'
+    data.mkdir()
+    (data / 'a1_metrics.jsonl').write_text('kept\n', encoding='utf-8')
+    (tmp_path / 'link').symlink_to(data)
+    history = MetricsHistory(str(data))
+    # The same directory under another name, e.g. DATA_DIR=. next to the old default.
+    for directory in (str(data), str(tmp_path / 'link'), str(tmp_path / '.' / 'metrics')):
+        assert history.adopt_legacy_dirs(['a1'], [directory]) == {'moved': 0, 'kept': 0}
+    assert [path.name for path in data.iterdir()] == ['a1_metrics.jsonl']
+
+
+def test_moving_across_file_systems_copies_durably_before_removing_the_source(tmp_path, monkeypatch):
+    legacy, data = tmp_path / 'legacy', tmp_path / 'metrics'
+    legacy.mkdir()
+    for agent in ('a1', 'a2'):
+        (legacy / f'{agent}_metrics.jsonl').write_text(f'{agent}\n', encoding='utf-8')
+    history = MetricsHistory(str(data))
+
+    def cross_device(source, target):
+        raise OSError(errno.EXDEV, 'Invalid cross-device link')
+    monkeypatch.setattr(module.os, 'rename', cross_device)
+    copied = []
+    original_replace = module.os.replace
+
+    def replace(source, target):
+        # The temporary copy is complete before it takes the final name.
+        copied.append((Path(source).name, Path(target).read_text(encoding='utf-8') if Path(target).exists() else None,
+                       Path(source).read_text(encoding='utf-8'), (legacy / Path(target).name).exists()))
+        if Path(target).name == 'a2_metrics.jsonl':
+            raise OSError(errno.ENOSPC, 'No space left on device')
+        original_replace(source, target)
+    monkeypatch.setattr(module.os, 'replace', replace)
+    assert history.adopt_legacy_dirs(['a1', 'a2'], [str(legacy)]) == {'moved': 1, 'kept': 0}
+    assert [(name.startswith('.a1') and name.endswith('.tmp'), before, content, source_present)
+            for name, before, content, source_present in copied] == [(True, None, 'a1\n', True), (False, None, 'a2\n', True)]
+    assert copied[1][0].startswith('.a2')
+    # a1 moved; a2's copy failed, so its source stays and no temporary file is left behind.
+    assert [path.name for path in data.iterdir()] == ['a1_metrics.jsonl']
+    assert (data / 'a1_metrics.jsonl').read_text(encoding='utf-8') == 'a1\n'
+    assert [path.name for path in legacy.iterdir()] == ['a2_metrics.jsonl']
+
+
+def test_service_startup_adopts_old_files_before_loading(tasks_app, monkeypatch, tmp_path):
+    _, repo, manager = tasks_app
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    recent = {'timestamp': (datetime.now() - timedelta(minutes=1)).isoformat(), 'cpu': {'usage_percent': 4},
+              'memory': {}, 'disk': {}, 'network': {}}
+    (legacy / 'agent_1_metrics.json').write_text(json.dumps({'metrics': [recent]}), encoding='utf-8')
+    monkeypatch.setattr(module, 'LEGACY_DIRS', (str(legacy),))
+    assert metrics_flush.load_history() == {'loaded': 1, 'migrated': 1, 'removed': 0}
+    assert manager.metrics_history.get_metrics('agent_1') == [recent]
+    assert sorted(path.name for path in (repo.data_dir / 'metrics').iterdir()) == ['agent_1_metrics.jsonl']
+    assert list(legacy.iterdir()) == []
 
 
 def test_points_are_kept_as_compact_lines_and_read_back_as_fresh_dicts(tmp_path, clock):
@@ -419,9 +537,9 @@ def test_stop_signal_during_a_shutdown_save_is_ignored_instead_of_deadlocking(ta
 SHUTDOWN_SCRIPT = r'''
 import json, os, sys, time
 from concurrent.futures import ThreadPoolExecutor
-from backend.agents import manager
-from backend.agents.metrics_history import MetricsHistory
-manager.MetricsHistory = lambda: MetricsHistory(os.path.join(os.environ['DATA_DIR'], 'metrics'))
+from backend.agents import metrics_history
+# Adopt only from this test's stand-in for the old default directory.
+metrics_history.LEGACY_DIRS = (os.environ['LEGACY_METRICS_DIR'],)
 from backend.common.config import get_repository
 # The Agent exists before startup, so the service loads (and migrates) its history.
 get_repository().update_system_transaction(lambda system: system.update(agents=[
@@ -463,15 +581,19 @@ print('exited', flush=True)
 
 
 def start_service(tmp_path, log_level):
-    metrics_dir = tmp_path / 'metrics'
+    metrics_dir, legacy_dir = tmp_path / 'metrics', tmp_path / 'legacy-metrics'
     metrics_dir.mkdir()
-    # An old-format file to migrate, and a deleted Agent's file to remove.
+    legacy_dir.mkdir()
+    # An old-format file in the old default directory to adopt and migrate, a
+    # deleted Agent's file to remove, and one in the old directory to leave alone.
     old_point = {'timestamp': (datetime.now() - timedelta(minutes=1)).isoformat(), 'cpu': {'usage_percent': 3},
                  'memory': {}, 'disk': {}, 'network': {}}
-    (metrics_dir / 'agent_1_metrics.json').write_text(json.dumps({'agent_id': 'agent_1', 'metrics': [old_point]}),
-                                                      encoding='utf-8')
+    (legacy_dir / 'agent_1_metrics.json').write_text(json.dumps({'agent_id': 'agent_1', 'metrics': [old_point]}),
+                                                     encoding='utf-8')
+    (legacy_dir / 'deleted_metrics.jsonl').write_text(json.dumps(old_point) + '\n', encoding='utf-8')
     (metrics_dir / 'deleted_metrics.jsonl').write_text(json.dumps(old_point) + '\n', encoding='utf-8')
     env = dict(os.environ, DATA_DIR=str(tmp_path), LOG_FILE=str(tmp_path / 'app.log'), LOG_LEVEL=log_level,
+               LEGACY_METRICS_DIR=str(legacy_dir),
                ADMIN_USERNAME='', ADMIN_PASSWORD='', PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1')
     env.pop('WERKZEUG_RUN_MAIN', None)
     env.pop('WERKZEUG_SERVER_FD', None)
@@ -491,6 +613,7 @@ def start_service(tmp_path, log_level):
 def assert_saved(tmp_path):
     metrics_dir = tmp_path / 'metrics'
     assert sorted(path.name for path in metrics_dir.iterdir()) == ['agent_1_metrics.jsonl']
+    assert [path.name for path in (tmp_path / 'legacy-metrics').iterdir()] == ['deleted_metrics.jsonl']
     saved = lines(metrics_dir / 'agent_1_metrics.jsonl')
     assert [json.loads(line)['cpu'] for line in saved] == [{'usage_percent': 3}, {'usage_percent': 7}]
     status = json.loads((tmp_path / 'task-status.json').read_text(encoding='utf-8'))['metrics_history_flush']

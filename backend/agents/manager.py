@@ -74,9 +74,9 @@ class AgentManager:
         self._preparation_files = {}
         self._deployment_lock = threading.RLock()
 
-        # 初始化监控历史管理器（只在内存中）；服务进程启动时由
-        # metrics_flush.load_history() 读回文件并迁移旧格式
-        self.metrics_history = MetricsHistory()
+        # 监控历史在内存中，文件位于数据目录的 metrics/；服务进程启动时由
+        # metrics_flush.load_history() 移入旧目录的文件、读回并迁移旧格式
+        self.metrics_history = MetricsHistory(os.path.join(str(repository.data_dir), 'metrics'))
         # 心跳状态只放在内存，不再每次心跳重写整份配置；版本号变化时才写配置
         self.runtime = runtime_state.for_data_dir(repository.data_dir)
         runtime_state.import_legacy_database(repository, self.runtime, self._save_reported_fields)

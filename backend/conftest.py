@@ -19,16 +19,21 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
-def isolated_agent_metrics(tmp_path, monkeypatch):
-    # MetricsHistory has its own default outside DATA_DIR. Keep its real I/O,
-    # but direct AgentManager's default history into this test's directory.
-    from backend.agents import manager
-    from backend.agents.metrics_history import MetricsHistory
+def isolated_agent_metrics(monkeypatch):
+    # AgentManager keeps history under its repository's data directory, which
+    # tests place in temporary directories. Never adopt or create files in the
+    # real old default directories (the checkout's backend/data/metrics,
+    # /opt/configflow/data/metrics); tests that need one patch LEGACY_DIRS.
+    from backend.agents import metrics_history as module
+    real_legacy = [Path(directory).resolve() for directory in module.LEGACY_DIRS]
+    original_init = module.MetricsHistory.__init__
 
-    def metrics_history(data_dir=None):
-        return MetricsHistory(data_dir if data_dir is not None else str(tmp_path / 'metrics'))
+    def guarded_init(self, data_dir, *args, **kwargs):
+        assert Path(data_dir).resolve() not in real_legacy, f'test would write into {data_dir}'
+        original_init(self, data_dir, *args, **kwargs)
 
-    monkeypatch.setattr(manager, 'MetricsHistory', metrics_history)
+    monkeypatch.setattr(module.MetricsHistory, '__init__', guarded_init)
+    monkeypatch.setattr(module, 'LEGACY_DIRS', ())
 
 
 @pytest.fixture(autouse=True)
