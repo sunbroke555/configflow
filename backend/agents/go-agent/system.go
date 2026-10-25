@@ -12,10 +12,16 @@ import (
 )
 
 var detectLocalIPv4 = localip.Detect
+var detectLocalIPv4Except = localip.DetectExcept
 
 // getLocalIP 优先使用 LAN IPv4，兼容仅有 VPN 或点对点接口的注册。
-func getLocalIP() (string, error) {
-	ip, err := detectLocalIPv4()
+// excluded 是本机可能临时持有的 DNS 高可用虚拟 IP，不能当作 Agent 地址上报。
+func getLocalIP(excluded ...string) (string, error) {
+	detect := detectLocalIPv4
+	if len(excluded) > 0 {
+		detect = func() (string, error) { return detectLocalIPv4Except(excluded) }
+	}
+	ip, err := detect()
 	if err != nil {
 		log.Printf("Failed to detect local IPv4 address: %v", err)
 		return "", err

@@ -158,3 +158,19 @@ func TestDetectReportsFailuresWithoutLoopbackFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectExceptSkipsFloatingAddresses(t *testing.T) {
+	interfaces := []net.Interface{{Name: "eth0", Flags: net.FlagUp}}
+	addresses := func(net.Interface) ([]net.Addr, error) {
+		return []net.Addr{testAddress("192.168.0.2"), testAddress("192.168.0.20")}, nil
+	}
+	if ip, err := detect(func() ([]net.Interface, error) { return interfaces, nil }, addresses); err != nil || ip != "192.168.0.2" {
+		t.Fatalf("Detect() = %q, %v", ip, err)
+	}
+	if ip, err := detect(func() ([]net.Interface, error) { return interfaces, nil }, without(addresses, []string{"192.168.0.2"})); err != nil || ip != "192.168.0.20" {
+		t.Fatalf("DetectExcept() = %q, %v", ip, err)
+	}
+	if _, err := detect(func() ([]net.Interface, error) { return interfaces, nil }, without(addresses, []string{"192.168.0.2", "192.168.0.20"})); err == nil {
+		t.Fatal("excluded every address but still detected one")
+	}
+}

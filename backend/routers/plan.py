@@ -542,6 +542,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         evidence = {'nat': evidence, 'ros_policy': ros_policy.get('evidence'), 'request': ros_policy.get('request')}
     dns_evidence = ({'agent_id': router['dns_agent_id'], 'target_dns': dns['target_dns'], 'gateway': gateway,
                      'state': as_dict(state.dhcp_dns)} if manage_dns else None)
+    if dns_evidence is not None and desired.get('dns_ha'):
+        # Only with DNS HA: the VIP alone does not show which pair answers it.
+        dns_evidence['ha'] = desired['dns_ha']
     return {'stages': stages, 'checks': checks, 'blockers': blockers, 'warnings': warnings, 'script': script,
             'fingerprint': fingerprint(stages, evidence, dns_evidence,
                                        return_routing['safety'] if manage_return else None),

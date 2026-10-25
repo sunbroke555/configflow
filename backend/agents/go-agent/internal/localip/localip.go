@@ -22,8 +22,48 @@ func DetectAll() ([]string, error) {
 	return detectAll(net.Interfaces, interfaceAddresses)
 }
 
+// DetectExcept is Detect without the given addresses, such as a floating
+// virtual IP that this host may hold only temporarily.
+func DetectExcept(excluded []string) (string, error) {
+	return detect(net.Interfaces, without(interfaceAddresses, excluded))
+}
+
 func interfaceAddresses(iface net.Interface) ([]net.Addr, error) {
 	return iface.Addrs()
+}
+
+func without(addresses func(net.Interface) ([]net.Addr, error), excluded []string) func(net.Interface) ([]net.Addr, error) {
+	skip := make(map[string]bool, len(excluded))
+	for _, value := range excluded {
+		if ip := net.ParseIP(strings.TrimSpace(value)); ip != nil {
+			skip[ip.String()] = true
+		}
+	}
+	return func(iface net.Interface) ([]net.Addr, error) {
+		addrs, err := addresses(iface)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]net.Addr, 0, len(addrs))
+		for _, addr := range addrs {
+			var ip net.IP
+			switch value := addr.(type) {
+			case *net.IPNet:
+				if value != nil {
+					ip = value.IP
+				}
+			case *net.IPAddr:
+				if value != nil {
+					ip = value.IP
+				}
+			}
+			if ip != nil && skip[ip.String()] {
+				continue
+			}
+			result = append(result, addr)
+		}
+		return result, nil
+	}
 }
 
 func detect(list func() ([]net.Interface, error), addresses func(net.Interface) ([]net.Addr, error)) (string, error) {

@@ -22,6 +22,11 @@ func RegisterRoutes(mux *http.ServeMux, cfg *Config) {
 	mux.HandleFunc("/api/dns/active", AuthMiddleware(cfg, DNSActiveHandler(cfg)))
 	mux.HandleFunc("/api/dns/peer", AuthMiddleware(cfg, DNSPeerHandler(cfg)))
 	mux.HandleFunc("/api/return-routing", AuthMiddleware(cfg, ReturnRoutingHandler(cfg)))
+	// DNS 高可用只属于 OxiDNS Agent；其他类型不注册，请求得到 404。
+	if cfg.ServiceType == "oxidns" {
+		mux.HandleFunc("/api/oxidns-ha", AuthMiddleware(cfg, OxiDNSHAHandler(cfg)))
+		mux.HandleFunc("/api/oxidns-ha/preview", AuthMiddleware(cfg, OxiDNSHAPreviewHandler(cfg)))
+	}
 	for _, action := range []string{"status", "preview", "apply", "remove", "forwarding"} {
 		mux.HandleFunc("/api/linux-gateway/"+action, AuthMiddleware(cfg, LinuxGatewayHandler(cfg, action)))
 	}

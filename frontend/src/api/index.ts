@@ -430,6 +430,10 @@ export const agentApi = {
   setDNSFollow: (id: string, data: import('@/types/agentDNSFollow').AgentDNSFollowInput) => api.put(`/agents/${encodeURIComponent(id)}/dns-follow`, data),
   removeDNSFollow: (id: string) => api.delete(`/agents/${encodeURIComponent(id)}/dns-follow`),
   retryDNSFollow: (id: string) => api.post(`/agents/${encodeURIComponent(id)}/dns-follow/retry`, {}),
+  /** DNS 高可用：未开启时后端返回 `{config: null}`；开启与停用会同时操作两台 Agent 的 keepalived */
+  getDNSHA: (id: string) => api.get<import('@/types/agentDNSHA').AgentDNSHAStatus>(`/agents/${encodeURIComponent(id)}/oxidns-ha`, { timeout: 60000 }),
+  setDNSHA: (id: string, data: import('@/types/agentDNSHA').AgentDNSHAInput) => api.put<import('@/types/agentDNSHA').AgentDNSHAStatus>(`/agents/${encodeURIComponent(id)}/oxidns-ha`, data, { timeout: 180000 }),
+  removeDNSHA: (id: string, force = false) => api.delete<import('@/types/agentDNSHA').AgentDNSHARemoveResult>(`/agents/${encodeURIComponent(id)}/oxidns-ha`, { timeout: 180000, ...(force ? { params: { force: 1 } } : {}) }),
   bindProfile: (id: string, profileId: string) => api.put(`/agents/${id}`, { profile_id: profileId }),
   /** 所有配置空间中被路由器用作代理网关的 Agent 的 IPv4 转发状态 */
   gatewayForwarding: () =>

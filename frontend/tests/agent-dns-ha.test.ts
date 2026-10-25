@@ -1,0 +1,283 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import AgentDNSHA from '@/components/agents/AgentDNSHA.vue'
+import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import { Select } from '@/components/ui/select'
+import { agentApi } from '@/api'
+import { confirm, confirmDanger, notify } from '@/lib/feedback'
+
+vi.mock('@/api', () => ({ agentApi: { getDNSHA: vi.fn(), setDNSHA: vi.fn(), removeDNSHA: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({
+  notify: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+  confirm: vi.fn(),
+  confirmDanger: vi.fn(),
+}))
+
+const wrappers: ReturnType<typeof mount>[] = []
+const ha = { enabled: true, group_id: 'g1', peer_id: 'oxi-2', vip: '192.168.0.2', vrid: 2, role: 'primary' }
+function agent(id: string, overrides: Record<string, unknown> = {}) {
+  return { id, name: id === 'oxi-1' ? '主 OxiDNS' : `OxiDNS ${id}`, host: `192.168.0.${id === 'oxi-1' ? 20 : 21}`, service_type: 'oxidns', status: 'online', profile_id: 'default', ...overrides } as any
+}
+const others = [
+  agent('oxi-2'),
+  agent('oxi-3', { host: '192.168.0.22', profile_id: 'other' }),
+  agent('oxi-4', { host: '192.168.0.23', oxidns_ha: { ...ha, group_id: 'g2', peer_id: 'oxi-5' } }),
+  agent('mihomo-1', { service_type: 'mihomo', host: '192.168.0.3' }),
+]
+function member(id: string, runtime: Record<string, unknown> | null, overrides: Record<string, unknown> = {}) {
+  return { agent_id: id, name: id === 'oxi-1' ? '主 OxiDNS' : `OxiDNS ${id}`, host: id === 'oxi-1' ? '192.168.0.20' : '192.168.0.21', online: true,
+    role_config: id === 'oxi-1' ? 'primary' : 'secondary',
+    runtime: runtime && { keepalived_running: true, vip_present: false, role: 'backup', healthy: true, ...runtime }, error: '', ...overrides }
+}
+function status(health: string, members: unknown[]) {
+  return { config: ha, state: { status: 'succeeded', error: '', updated_at: 1 }, members, health }
+}
+function render(overrides: Record<string, unknown> = {}, list = others) {
+  const self = agent('oxi-1', overrides)
+  const wrapper = mount(AgentDNSHA, { props: { agent: self, agents: [self, ...list] }, attachTo: document.body })
+  wrappers.push(wrapper)
+  return wrapper
+}
+function button(text: string) {
+  const found = Array.from(document.querySelectorAll('button')).find(item => item.textContent?.trim() === text || item.getAttribute('aria-label') === text)
+  expect(found, `button ${text}`).toBeTruthy()
+  return found!
+}
+async function click(text: string) {
+  button(text).click()
+  await flushPromises()
+}
+async function type(id: string, value: string) {
+  const field = document.getElementById(id) as HTMLInputElement
+  field.value = value
+  field.dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+}
+async function submit() {
+  document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  await flushPromises()
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(confirm).mockResolvedValue(true)
+  vi.mocked(confirmDanger).mockResolvedValue(true)
+  vi.mocked(agentApi.getDNSHA).mockResolvedValue({ data: status('ok', [member('oxi-1', { vip_present: true, role: 'master' }), member('oxi-2', {})]) } as any)
+  vi.mocked(agentApi.setDNSHA).mockResolvedValue({ data: status('ok', []) } as any)
+  vi.mocked(agentApi.removeDNSHA).mockResolvedValue({ data: { removed: true } } as any)
+})
+afterEach(() => {
+  wrappers.splice(0).forEach(wrapper => wrapper.unmount())
+  document.body.innerHTML = ''
+})
+
+describe('DNS high availability when not enabled', () => {
+  it('shows a neutral row and sends no request, including after opening the dialog', async () => {
+    const wrapper = render()
+    await flushPromises()
+    const row = wrapper.findComponent(AgentStatusRow)
+    expect(row.props()).toMatchObject({ label: 'DNS 高可用', status: '未开启', tone: 'neutral' })
+    expect(wrapper.find('[data-status-notice]').exists()).toBe(false)
+    await wrapper.setProps({ agent: agent('oxi-1', { status: 'offline' }) })
+    await click('设置 DNS 高可用')
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(agentApi.getDNSHA).not.toHaveBeenCalled()
+    expect(agentApi.setDNSHA).not.toHaveBeenCalled()
+    expect(agentApi.removeDNSHA).not.toHaveBeenCalled()
+  })
+
+  it('offers only same-profile OxiDNS peers that are not in another group', async () => {
+    render()
+    await click('设置 DNS 高可用')
+    const wrapper = wrappers[0]
+    const items = wrapper.findComponent(Select).findAllComponents({ name: 'SelectItem' })
+    const values = [...new Set(items.map(item => item.props('value')))]
+    expect(values).toEqual(['oxi-2'])
+  })
+
+  it('validates the peer, VIP and VRID before enabling, keeps VRID collapsed and omits it when left empty', async () => {
+    const wrapper = render()
+    await click('设置 DNS 高可用')
+    expect((document.querySelector('[data-dns-ha-advanced]') as HTMLDetailsElement).open).toBe(false)
+    expect(button('开启').disabled).toBe(true)
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'oxi-2')
+    await flushPromises()
+    expect(button('开启').disabled).toBe(true)
+    await type('dns-ha-vip-oxi-1', '192.168.0.300')
+    expect(document.body.textContent).toContain('请填写 IPv4 地址')
+    expect(button('开启').disabled).toBe(true)
+    await type('dns-ha-vip-oxi-1', '192.168.0.21')
+    expect(document.body.textContent).toContain('不能与两台 OxiDNS 的地址相同')
+    expect(button('开启').disabled).toBe(true)
+    await type('dns-ha-vip-oxi-1', '224.0.0.18')
+    expect(document.body.textContent).toContain('单播地址')
+    await type('dns-ha-vip-oxi-1', ' 192.168.0.2 ')
+    expect(button('开启').disabled).toBe(false)
+    await type('dns-ha-vrid-oxi-1', '256')
+    expect(document.body.textContent).toContain('VRID 范围为 1–255')
+    expect(button('开启').disabled).toBe(true)
+    await type('dns-ha-vrid-oxi-1', '')
+    await submit()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(confirmDanger).not.toHaveBeenCalled()
+    expect(agentApi.setDNSHA).toHaveBeenCalledExactlyOnceWith('oxi-1', { peer_id: 'oxi-2', vip: '192.168.0.2' })
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    expect(notify.success).toHaveBeenCalled()
+  })
+
+  it('sends an explicit VRID and does nothing when the confirmation is cancelled', async () => {
+    const wrapper = render()
+    await click('设置 DNS 高可用')
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'oxi-2')
+    await type('dns-ha-vip-oxi-1', '192.168.0.2')
+    await type('dns-ha-vrid-oxi-1', '77')
+    vi.mocked(confirm).mockResolvedValueOnce(false)
+    await submit()
+    expect(agentApi.setDNSHA).not.toHaveBeenCalled()
+    await submit()
+    expect(agentApi.setDNSHA).toHaveBeenCalledWith('oxi-1', { peer_id: 'oxi-2', vip: '192.168.0.2', vrid: 77 })
+  })
+
+  it('shows the backend warnings instead of a plain success after enabling', async () => {
+    vi.mocked(agentApi.setDNSHA).mockResolvedValue({ data: { ...status('ok', []), warnings: ['无法解析 OxiDNS 配置，未能确认两台 OxiDNS 转发到同一个 mihomo'] } } as any)
+    const wrapper = render()
+    await click('设置 DNS 高可用')
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'oxi-2')
+    await type('dns-ha-vip-oxi-1', '192.168.0.2')
+    await submit()
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(notify.warning).toHaveBeenCalledWith(expect.stringContaining('已开启 DNS 高可用'), expect.stringContaining('未能确认两台 OxiDNS 转发到同一个 mihomo'))
+  })
+
+  it('offers to clean up what a failed first enable left on the devices', async () => {
+    const failed = { status: 'failed', error: '主 OxiDNS 无法连接；回滚未完成', updated_at: 2, members: ['oxi-2', 'oxi-1'] }
+    vi.mocked(agentApi.removeDNSHA).mockRejectedValueOnce({ response: { data: { success: false, message: 'OxiDNS oxi-2 离线' } } })
+    const wrapper = render({ oxidns_ha_state: failed })
+    await flushPromises()
+    expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '未开启', tone: 'neutral' })
+    expect(document.querySelector('[data-dns-ha-leftover]')?.textContent).toContain('回滚未完成')
+    expect(agentApi.getDNSHA).not.toHaveBeenCalled()
+    await click('设置 DNS 高可用')
+    expect(document.querySelector('[data-dns-ha-leftover-hint]')).not.toBeNull()
+    await click('清除残留配置')
+    expect(confirmDanger).toHaveBeenCalledWith(expect.stringContaining('仍保留 keepalived 配置'), expect.objectContaining({ title: '清除残留配置' }))
+    expect(agentApi.removeDNSHA).toHaveBeenCalledExactlyOnceWith('oxi-1')
+    expect(notify.error).toHaveBeenCalledWith('无法清除残留配置', expect.stringContaining('离线'))
+    await click('强制清除记录')
+    expect(agentApi.removeDNSHA).toHaveBeenLastCalledWith('oxi-1', true)
+    expect(notify.success).toHaveBeenCalledWith('已清除残留配置')
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+  })
+
+  it('keeps the dialog open with the backend blockers when enabling fails', async () => {
+    vi.mocked(agentApi.setDNSHA).mockRejectedValue({ response: { data: { success: false, message: '主 OxiDNS：缺少 keepalived，请运行 apt install keepalived' } } })
+    const wrapper = render()
+    await click('设置 DNS 高可用')
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'oxi-2')
+    await type('dns-ha-vip-oxi-1', '192.168.0.2')
+    await submit()
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('apt install keepalived')
+    expect(wrapper.emitted('changed')).toBeUndefined()
+    expect(notify.success).not.toHaveBeenCalled()
+  })
+})
+
+describe('DNS high availability status', () => {
+  it('reads status once when enabled, marks the VIP holder and keeps heartbeat polling from re-reading', async () => {
+    const wrapper = render({ oxidns_ha: ha, oxidns_ha_state: { status: 'succeeded', updated_at: 1 } })
+    await flushPromises()
+    expect(agentApi.getDNSHA).toHaveBeenCalledExactlyOnceWith('oxi-1')
+    expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '主备正常', tone: 'success' })
+    expect(wrapper.get('[data-dns-ha-holder]').text()).toBe('主 · VIP 192.168.0.2')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await wrapper.setProps({ agent: agent('oxi-1', { oxidns_ha: ha, oxidns_ha_state: { status: 'succeeded', updated_at: 1 }, last_heartbeat: 'later' }) })
+    await flushPromises()
+    expect(agentApi.getDNSHA).toHaveBeenCalledTimes(1)
+    await wrapper.setProps({ agents: [agent('oxi-1', { oxidns_ha: ha }), agent('oxi-2', { status: 'offline' })] })
+    await flushPromises()
+    expect(agentApi.getDNSHA).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the warning colour for a degraded group and explains which member is affected', async () => {
+    vi.mocked(agentApi.getDNSHA).mockResolvedValue({ data: status('degraded', [
+      member('oxi-1', { vip_present: true, role: 'master' }), member('oxi-2', null, { online: false }),
+    ]) } as any)
+    const wrapper = render({ oxidns_ha: ha })
+    await flushPromises()
+    expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '部分异常', tone: 'warning' })
+    expect(wrapper.get('[data-dns-ha-problems]').text()).toContain('OxiDNS oxi-2离线')
+    expect(wrapper.get('[data-dns-ha-problems]').attributes('role')).toBeUndefined()
+  })
+
+  it('uses the danger colour with role="alert" for split and down groups', async () => {
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: status('split', [
+      member('oxi-1', { vip_present: true, role: 'master' }), member('oxi-2', { vip_present: true, role: 'master' }),
+    ]) } as any)
+    const split = render({ oxidns_ha: ha })
+    await flushPromises()
+    expect(split.findComponent(AgentStatusRow).props()).toMatchObject({ status: '虚拟 IP 冲突', tone: 'danger' })
+    expect(split.get('[role="alert"]').text()).toContain('两台都持有虚拟 IP')
+
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: status('down', [
+      member('oxi-1', { keepalived_running: false, healthy: false }), member('oxi-2', { healthy: false }),
+    ]) } as any)
+    const down = render({ oxidns_ha: { ...ha, role: 'secondary' } })
+    await flushPromises()
+    expect(down.findComponent(AgentStatusRow).props()).toMatchObject({ status: '不可用', tone: 'danger' })
+    expect(down.get('[role="alert"]').text()).toContain('本机的 keepalived 未运行')
+    expect(down.find('[data-dns-ha-holder]').exists()).toBe(false)
+  })
+
+  it('keeps the last result when a refresh fails', async () => {
+    const wrapper = render({ oxidns_ha: ha })
+    await flushPromises()
+    vi.mocked(agentApi.getDNSHA).mockRejectedValueOnce({ response: { data: { message: 'Agent 超时' } } })
+    await wrapper.get('[aria-expanded]').trigger('click')
+    await click('刷新状态')
+    expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '主备正常', tone: 'success' })
+    expect(wrapper.text()).toContain('刷新失败，显示上次结果：Agent 超时')
+    expect(notify.error).not.toHaveBeenCalled()
+  })
+})
+
+describe('disabling DNS high availability', () => {
+  it('asks with confirmDanger, then tells which routers need republishing', async () => {
+    vi.mocked(agentApi.removeDNSHA).mockResolvedValue({ data: { success: true, routers: [{ id: 'r1', name: '主路由' }] } } as any)
+    const wrapper = render({ oxidns_ha: ha })
+    await flushPromises()
+    await click('设置 DNS 高可用')
+    expect(document.querySelector('form')).toBeNull()
+    vi.mocked(confirmDanger).mockResolvedValueOnce(false)
+    await click('停用')
+    expect(agentApi.removeDNSHA).not.toHaveBeenCalled()
+    await click('停用')
+    expect(confirmDanger).toHaveBeenCalledTimes(2)
+    expect(confirm).not.toHaveBeenCalled()
+    expect(agentApi.removeDNSHA).toHaveBeenCalledExactlyOnceWith('oxi-1')
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    expect(notify.warning).toHaveBeenCalledWith('已停用 DNS 高可用', expect.stringContaining('主路由'))
+  })
+
+  it('shows a refused disable as a warning while the pair keeps working', async () => {
+    render({ oxidns_ha: ha, oxidns_ha_state: { status: 'succeeded', error: '停用未完成：OxiDNS oxi-2 无法连接', updated_at: 3 } })
+    await flushPromises()
+    const notice = document.querySelector('[data-dns-ha-last-error]')
+    expect(notice?.textContent).toContain('停用未完成')
+    expect(notice?.getAttribute('role')).toBeNull()
+  })
+
+  it('offers an explicit force clear only after a normal disable fails', async () => {
+    vi.mocked(agentApi.removeDNSHA).mockRejectedValueOnce({ response: { data: { success: false, message: 'OxiDNS oxi-2 离线' } } })
+    render({ oxidns_ha: ha })
+    await flushPromises()
+    await click('设置 DNS 高可用')
+    expect(Array.from(document.querySelectorAll('button')).some(item => item.textContent?.includes('强制清除记录'))).toBe(false)
+    await click('停用')
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('离线')
+    await click('强制清除记录')
+    expect(confirmDanger).toHaveBeenCalledTimes(2)
+    expect(agentApi.removeDNSHA).toHaveBeenLastCalledWith('oxi-1', true)
+  })
+})

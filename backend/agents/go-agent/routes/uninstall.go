@@ -39,6 +39,11 @@ func UninstallHandler(cfg *Config) http.HandlerFunc {
 			deploymentFailure(w, http.StatusConflict, err)
 			return
 		}
+		if err = checkOxiDNSHAUninstall(cfg); err != nil {
+			release()
+			deploymentFailure(w, http.StatusConflict, err)
+			return
+		}
 		log.Println("Received uninstall request.")
 
 		// 立即返回成功响应，避免连接中断

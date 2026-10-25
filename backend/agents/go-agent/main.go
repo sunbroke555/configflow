@@ -33,9 +33,14 @@ func runAgent() int {
 	assumeTUN := flag.Bool("assume-tun-enabled", false, "With -prepare-tun: prepare TUN even when the bootstrap config has TUN disabled (gateway installer)")
 	environmentPeerConfig := flag.String("environment-peer-config", "", "Peer Agent candidate configuration for a joint native AIO environment check")
 	verbose := flag.Bool("verbose", false, "Expand one-shot command diagnostics; full details are always saved to a private log")
+	haCheck := flag.Bool("ha-check", false, "keepalived health check: exit 0 only when the local OxiDNS answers; no registration, listening or writes")
 
 	// 解析命令行参数
 	flag.Parse()
+	if *haCheck {
+		// keepalived runs this every second: no logs, no migration, no side effects.
+		return routes.RunOxiDNSHACheck(*configPath)
+	}
 	if *assumeTUN && !*prepareTUN {
 		fmt.Fprintln(os.Stderr, "-assume-tun-enabled 只能与 -prepare-tun 一起使用。")
 		return 2
@@ -238,6 +243,7 @@ func runAgent() int {
 	StartHeartbeatLoop(cfg)
 	routes.ReapplyReturnRouting(toRoutesConfig(cfg))
 	routes.ReapplyLinuxGateway(toRoutesConfig(cfg))
+	routes.ReapplyOxiDNSHA(toRoutesConfig(cfg))
 	routes.StartDNSWatchdog(toRoutesConfig(cfg))
 
 	// 4. 在前台启动 API 服务器 (这是一个阻塞操作)

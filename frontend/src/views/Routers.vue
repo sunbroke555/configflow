@@ -636,6 +636,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
                 </SelectItem>
               </SelectContent>
             </Select>
+            <p v-if="dnsHaVip" class="m-0 text-xs leading-relaxed text-muted-foreground" data-dns-ha-vip>所选 OxiDNS 已开启 DNS 高可用，将下发虚拟 IP <span class="font-mono">{{ dnsHaVip }}</span>。</p>
           </FormField>
           <template v-if="form.type === 'routeros' && !setupDraftSession">
             <div class="flex flex-col gap-1.5">
@@ -813,6 +814,7 @@ interface AgentItem {
   name: string
   host: string
   service_type: string
+  oxidns_ha?: { enabled?: boolean; vip?: string } | null
 }
 
 const NONE = '__none__'
@@ -955,6 +957,11 @@ const selectPolicyRuleSets = (selected: string[]) => {
   form.ip_rule_sets = form.ip_rule_sets.filter(id => !selected.includes(id))
 }
 const agentsOf = (serviceType: string) => agents.value.filter(agent => agent.service_type === serviceType)
+/** 所选 DHCP DNS Agent 开启高可用时下发的虚拟 IP；未开启时为空，界面不变。 */
+const dnsHaVip = computed(() => {
+  const ha = agents.value.find(agent => agent.id === form.dns_agent_id)?.oxidns_ha
+  return ha?.enabled === true ? ha.vip || '' : ''
+})
 const accountHelp = computed(() => form.type === 'routeros'
   ? '如何设置 RouterOS 账号权限：\n1. 使用管理员账号登录 WinBox，打开 System → Users。\n2. 在 Groups 中新建专用用户组（例如 configflow），勾选 read、write、api、rest-api；已有专用组可补齐这些权限。\n3. 在 Users 中新建或选择供 ConfigFlow 使用的账号，将 Group 设为该专用组，再填写账号和密码。'
     + (form.username ? `\n\n当前填写的账号：${form.username}。请检查这个账号所属的组。` : '')

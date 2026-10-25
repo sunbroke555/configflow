@@ -1,6 +1,7 @@
 package main
 
 import (
+	"agent/routes"
 	"agent/upgrade"
 	"bytes"
 	"encoding/json"
@@ -135,7 +136,7 @@ func (c *Config) RegisterAgent() error {
 	// 优先使用配置中的 AgentIP
 	hostIP := strings.TrimSpace(c.AgentIP)
 	if hostIP == "" {
-		localIP, err := getLocalIP()
+		localIP, err := getLocalIP(routes.OxiDNSHAVirtualIPs(&routes.Config{AgentConfigFile: c.filePath, ServiceType: c.ServiceType, NativeAIO: c.NativeAIO})...)
 		if err != nil {
 			// A wildcard listener is not an address the server can connect to.
 			// Empty Host lets the server use the registration request's source IP.

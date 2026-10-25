@@ -27,6 +27,20 @@ func agentLANIPv4s(cfg *Config) ([]net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("获取本机 LAN IPv4 失败：%w；请检查网络接口和 Agent 配置中的 agent_ip", err)
 	}
+	// A DNS HA virtual IP floats between hosts and is not this Agent's address.
+	if excluded := OxiDNSHAVirtualIPs(cfg); len(excluded) > 0 {
+		kept := make([]string, 0, len(values))
+		for _, value := range values {
+			skip := false
+			for _, vip := range excluded {
+				skip = skip || strings.TrimSpace(value) == vip
+			}
+			if !skip {
+				kept = append(kept, value)
+			}
+		}
+		values = kept
+	}
 	if len(values) == 0 {
 		return nil, fmt.Errorf("无法获得有效的本机 LAN IPv4；请检查 Agent 配置中的 agent_ip 和网络接口")
 	}
