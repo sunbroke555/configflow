@@ -7,6 +7,7 @@ import SetupInstallation from '@/components/setup/SetupInstallation.vue'
 import { subscriptionApi } from '@/api'
 import { setupApi, type SetupSession } from '@/api/setup'
 import { SETUP_GOALS, useLibraryNamesake } from '@/lib/setupFlow'
+import { setActiveProfileId } from '@/profileContext'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn() }, agentApi: {}, routerApi: {}, ruleApi: {},
@@ -14,6 +15,7 @@ vi.mock('@/api', () => ({
 }))
 vi.mock('@/api/setup', () => ({ setupApi: { index: vi.fn(), create: vi.fn(), get: vi.fn(), source: vi.fn(), progress: vi.fn(), prepare: vi.fn(), check: vi.fn(), saveRouterDraft: vi.fn(), finish: vi.fn(), abandon: vi.fn() } }))
 vi.mock('@/stores/profile', () => ({ useProfileStore: () => ({ refreshProfiles: vi.fn().mockResolvedValue([]) }) }))
+vi.mock('@/profileContext', () => ({ setActiveProfileId: vi.fn() }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn().mockResolvedValue(false), confirmDanger: vi.fn().mockResolvedValue(true), notify: { error: vi.fn(), success: vi.fn() } }))
 
 const record = (changes: Partial<SetupSession> = {}): SetupSession => ({
@@ -31,7 +33,8 @@ const installed = (changes: Partial<SetupSession> = {}) => record({ prepared: tr
   route_instructions: { gateway: '192.0.2.10', dns: '192.0.2.10', routes: [{ cidr: '198.18.0.0/16', sources: ['fake-ip'] }], warnings: [] }, ...changes })
 let wrapper: VueWrapper | undefined
 async function open(path = '/setup') {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/setup', component: Setup }, { path: '/dashboard', component: { template: '<div />' } }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/setup', component: Setup }, { path: '/dashboard', component: { template: '<div />' } },
+    { path: '/client-devices', component: { template: '<div>客户端设备页</div>' } }, { path: '/agents', component: { template: '<div>Agent 页</div>' } }] })
   await router.push(path); await router.isReady()
   wrapper = mount(RouterView, { global: { plugins: [router], stubs: { SetupInstallation: true, Routers: { name: 'Routers', props: ['profileId', 'setupAgents', 'setupDraftSession'], emits: ['selected', 'busy'], template: '<button @click="$emit(\'selected\', \'router-1\')">选择路由器</button>' } } } })
   await flushPromises()
@@ -84,6 +87,8 @@ describe('首次使用分流向导', () => {
     expect(nav.findAll('button')[3]!.text()).toContain('4')
     expect(wrapper!.get('button:disabled').exists()).toBe(true)
     expect(wrapper!.findAll('[role="checkbox"]').every(item => item.attributes('disabled') !== undefined)).toBe(true)
+    // Before install the new profile has no OxiDNS to name devices from, and the way back lands on step 3.
+    expect(wrapper!.find('[data-client-devices-link]').exists()).toBe(false)
     await click('完成安装后继续')
     expect(setupApi.finish).not.toHaveBeenCalled()
     expect(setupApi.check).not.toHaveBeenCalled()
@@ -163,7 +168,31 @@ describe('首次使用分流向导', () => {
     expect(wrapper!.text()).toContain('自动配置，无需填写')
     expect(dnsGroup.classes()).toContain('self-start')
     await click('生成配置并继续')
-    expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: dns, traffic_fallback: traffic, local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules })
+    expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), { dns_fallback: dns, traffic_fallback: traffic, local_dns: 'https://223.5.5.5/dns-query', domain_rules: defaultRules, query_recorder: true })
+  })
+
+  it('DNS 查询记录默认开启，可关闭后随方案提交', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 2, node_ids: ['node'] }) } as never)
+    vi.mocked(setupApi.prepare).mockResolvedValue({ data: record({ step: 3, max_step: 3, prepared: true, query_recorder: false }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.text()).toContain('记录 DNS 查询（OxiDNS 面板用）')
+    const toggle = wrapper!.get('#setup-query-recorder')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    await toggle.trigger('click'); await flushPromises()
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    await click('生成配置并继续')
+    expect(setupApi.prepare).toHaveBeenCalledWith('a'.repeat(32), expect.objectContaining({ query_recorder: false }))
+  })
+
+  it.each([
+    [{ query_recorder: false }, 'false'],
+    [{ query_recorder: true }, 'true'],
+    // Prepared before the switch existed: the profile was written with it off.
+    [{}, 'false'],
+  ])('恢复已生成方案的 DNS 查询记录选择 %o', async (changes, checked) => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: record({ step: 2, max_step: 3, prepared: true, ...changes }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.get('#setup-query-recorder').attributes('aria-checked')).toBe(checked)
   })
 
   it('网关模式说明默认接管 Telegram 等应用的 IP，不选这两个规则集时不显示', async () => {
@@ -207,7 +236,7 @@ describe('首次使用分流向导', () => {
     const localDns = 'https://223.6.6.6/dns-query\ntls://223.5.5.5:853'
     await wrapper!.get('#setup-local-dns').setValue(localDns)
     await click('生成配置并继续')
-    expect(setupApi.prepare).toHaveBeenLastCalledWith('a'.repeat(32), { dns_fallback: 'mihomo', traffic_fallback: 'proxy', local_dns: localDns, domain_rules: defaultRules })
+    expect(setupApi.prepare).toHaveBeenLastCalledWith('a'.repeat(32), { dns_fallback: 'mihomo', traffic_fallback: 'proxy', local_dns: localDns, domain_rules: defaultRules, query_recorder: true })
     expect(wrapper!.get('[role="alert"]').text()).toContain('直连 DNS 地址无效')
     expect((wrapper!.get('#setup-local-dns').element as HTMLTextAreaElement).value).toBe(localDns)
     await click('生成配置并继续')
@@ -356,6 +385,58 @@ describe('首次使用分流向导', () => {
     expect(wrapper!.text()).toContain('已设为默认配置空间')
     expect(wrapper!.text()).toContain('原来的「默认配置」没有设备在用')
     expect(wrapper!.text()).toContain('示例订阅「subscribe」只被原来的默认配置使用')
+  })
+
+  it('手动接入时可先到客户端设备给测试设备命名，再返回本向导', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed() } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    const link = wrapper!.get('[data-client-devices-link] a')
+    expect(link.text()).toBe('客户端设备')
+    const target = new URL(link.attributes('href')!, 'http://configflow.test')
+    expect(target.pathname).toBe('/client-devices')
+    expect(target.searchParams.get('profile')).toBe('setup_test')
+    expect(target.searchParams.get('from')).toBe('/setup?session=' + 'a'.repeat(32) + '&ack=')
+    await link.trigger('click'); await flushPromises()
+    expect(wrapper!.text()).toContain('客户端设备页')
+  })
+
+  it('从客户端设备返回时保留手动接入和已勾选的确认', async () => {
+    // The manual choice is not saved until finish, so the stored mode can still be managed.
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ router_mode: 'managed' }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    await click('手动配置主路由')
+    const boxes = () => wrapper!.findAll('[role="checkbox"]')
+    await boxes()[0]!.trigger('click'); await flushPromises()
+    const href = wrapper!.get('[data-client-devices-link] a').attributes('href')!
+    const back = new URL(href, 'http://configflow.test').searchParams.get('from')!
+    expect(back).toBe('/setup?session=' + 'a'.repeat(32) + '&ack=routes')
+    wrapper!.unmount()
+    await open(back)
+    expect(wrapper!.text()).toContain('1. 在主路由添加静态路由')
+    expect(boxes().map(box => box.attributes('aria-checked'))).toEqual(['true', 'false'])
+    await boxes()[1]!.trigger('click'); await flushPromises()
+    expect(wrapper!.findAll('button').find(item => item.text() === '确认设置并继续')!.attributes('disabled')).toBeUndefined()
+  })
+
+  it('返回参数只在第 4 步恢复', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ step: 5, max_step: 5, completed: true }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32) + '&ack=routes,dns')
+    expect(wrapper!.text()).toContain('Mihomo + OxiDNS 已准备好')
+  })
+
+  it('完成页进入 Agent 或客户端设备前切到本次配置空间', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ step: 5, max_step: 5, completed: true }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.text()).not.toContain('进入设备管理')
+    await click('客户端设备')
+    expect(setActiveProfileId).toHaveBeenCalledWith('setup_test')
+    expect(wrapper!.text()).toContain('客户端设备页')
+  })
+
+  it('设为默认时说明原配置空间的客户端设备名称和 DNS 策略不会带过来', async () => {
+    vi.mocked(setupApi.get).mockResolvedValue({ data: installed({ default_profile: { is_default: false, suggested: true, current: { id: 'default', name: '默认配置' } } }) } as never)
+    await open('/setup?session=' + 'a'.repeat(32))
+    expect(wrapper!.text()).toContain('「默认配置」中的客户端设备名称和 DNS 策略不会带过来')
   })
 
   it('默认配置空间有设备在用时不预先勾选', async () => {

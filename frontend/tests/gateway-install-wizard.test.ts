@@ -816,7 +816,7 @@ describe('router split with full TUN', () => {
   it('shows a leftover gateway record and keeps the step blocked', async () => {
     const wrapper = await renderPublished(ready({ managed: { active: true, healthy: true, error: '旧规则仍存在' } }), true, 'full_tun', { AgentStatusRow: false })
     expect(row(wrapper, '旧网关记录')).toMatchObject({ status: '仍存在', tone: 'warning' })
-    expect(wrapper.text()).toContain('请在生成工作台 → Mihomo → Linux 网关中清理。')
+    expect(wrapper.text()).toContain('请在配置生成 → Mihomo → Linux 网关中清理。')
     expect(wrapper.text()).toContain('旧规则仍存在')
     expect(button(wrapper, '撤销网关转发')).toBeUndefined()
     expect(button(wrapper, '继续接入主路由')).toBeUndefined()

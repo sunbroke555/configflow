@@ -6,7 +6,7 @@
       </template>
       <template #actions>
         <Button v-if="fromAgent" variant="outline" class="min-h-11" @click="router.push(oxidnsMonitorPath(fromAgent))"><ArrowLeft class="size-4" />返回 OxiDNS 面板</Button>
-        <Button v-else-if="backTo" variant="outline" class="min-h-11" @click="router.push(backTo)"><ArrowLeft class="size-4" />{{ backTo.startsWith('/setup') ? '返回配置向导' : '返回上游路由' }}</Button>
+        <Button v-else-if="backTo" variant="outline" class="min-h-11" @click="router.push(backTo)"><ArrowLeft class="size-4" />{{ fromSetup ? '返回配置向导' : '返回上游路由' }}</Button>
         <Button variant="outline" class="min-h-11 max-sm:size-11 max-sm:gap-0" aria-label="重新载入" title="重新载入" :disabled="loading || publishing" @click="reload">
           <RefreshCw class="size-4" :class="{ 'animate-spin motion-reduce:animate-none': loading }" /><span class="max-sm:sr-only">重新载入</span>
         </Button>
@@ -30,6 +30,7 @@
           </span>
         </template>
         <p v-if="!state.editable" role="alert" class="mb-4 mt-0 rounded-lg bg-warning-soft p-3 text-sm text-warning-accent">{{ state.reason }} 名称仍可修改。</p>
+        <p v-else-if="fromSetup" role="status" class="mb-4 mt-0 rounded-lg bg-info-soft p-3 text-sm text-info-accent" data-setup-names-only>配置向导进行中，这里只用于命名。DNS 策略会改动向导刚发布的 OxiDNS 配置，请完成向导后再设置 DNS 策略。</p>
         <p v-if="error" role="alert" class="mb-4 mt-0 text-sm text-destructive-accent">{{ error }}</p>
         <div class="mb-4 grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
           <div class="min-w-0">
@@ -72,7 +73,7 @@
                     :disabled="publishing" @blur="save(row.ip)" @keydown.enter.prevent="save(row.ip)" />
                 </td>
                 <td role="cell" data-label="DNS 策略">
-                  <Select :model-value="row.mode || 'default'" :disabled="publishing || !state.editable" @update:model-value="value => setMode(row, String(value))">
+                  <Select :model-value="row.mode || 'default'" :disabled="publishing || !policyEditable" @update:model-value="value => setMode(row, String(value))">
                     <SelectTrigger :aria-label="row.ip + ' DNS 策略'" class="min-h-11 w-36 max-sm:w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="default">默认</SelectItem>
@@ -87,7 +88,7 @@
                     <span v-else-if="failures[row.ip]" class="flex items-center gap-1 text-xs text-destructive-accent" role="alert">
                       {{ failures[row.ip] }}<Button variant="ghost" class="min-h-11 px-2 text-xs" @click="save(row.ip)">重试</Button>
                     </span>
-                    <Button variant="ghost" size="icon" class="size-11" :aria-label="'移除 ' + row.ip" :disabled="publishing || (!state.editable && !!saved(row.ip)?.mode)" @click="remove(row)"><Trash2 class="size-4" /></Button>
+                    <Button variant="ghost" size="icon" class="size-11" :aria-label="'移除 ' + row.ip" :disabled="publishing || (!policyEditable && !!saved(row.ip)?.mode)" @click="remove(row)"><Trash2 class="size-4" /></Button>
                   </div>
                 </td>
               </tr>
@@ -186,11 +187,14 @@ const agentOf = (value: unknown) => typeof value === 'string' ? value : ''
 const fromAgent = ref(agentOf(route.query.agent))
 /** 从上游路由或配置向导进入时的返回地址，只接受站内路径 */
 const backTo = computed(() => { const value = route.query.from; return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') ? value : '' })
+/** 配置向导进行中只命名：DNS 策略会改动向导已发布并检查过的 OxiDNS 配置 */
+const fromSetup = computed(() => !fromAgent.value && backTo.value.startsWith('/setup'))
 /** 从上游路由等页面进入其他配置空间时同样不切换全局空间 */
 const fromProfile = ref(agentOf(route.query.profile))
 // Matches the breakpoint where .cf-mobile-records hides the table header and its help.
 const phone = useMediaQuery('(width < 640px)')
 const state = ref<ClientDevicesState | null>(null)
+const policyEditable = computed(() => !!state.value?.editable && !fromSetup.value)
 const rows = ref<ClientDevice[]>([])
 const loading = ref(false)
 const error = ref('')

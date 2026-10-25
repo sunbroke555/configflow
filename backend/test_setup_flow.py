@@ -134,6 +134,60 @@ def test_prepare_is_resumable_scoped_and_has_a_real_proxy_exit(setup_api, goal):
     assert client.get(f'/api/setup/{SESSION}').json['local_dns'] == profile['oxidns']['local_dns']
 
 
+def _recorder(repository, profile_id):
+    return repository.get_profile(profile_id)['oxidns']['query_recorder']
+
+
+def test_dns_query_recorder_is_on_by_default_and_follows_the_switch(setup_api):
+    from backend.common.oxidns_settings import get_default_oxidns_settings
+    client, repository = setup_api
+    session = start(client)
+    profile_id = session['profile_id']
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={})
+    assert response.status_code == 200, response.json
+    assert response.json['query_recorder'] is True
+    default_args = get_default_oxidns_settings()['query_recorder']['args']
+    assert _recorder(repository, profile_id) == {'enabled': True, 'args': default_args}
+    # The embedded installer starts from the profile, so it keeps the choice.
+    assert client.get(f'/api/profiles/{profile_id}/gateway-onboarding').json['settings']['query_recorder'] is True
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'query_recorder': False})
+    assert response.status_code == 200, response.json
+    assert _recorder(repository, profile_id) == {'enabled': False, 'args': default_args}
+    # A later prepare without the field keeps the saved choice.
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={}).json['query_recorder'] is False
+    assert _recorder(repository, profile_id)['enabled'] is False
+    assert client.get(f'/api/profiles/{profile_id}/gateway-onboarding').json['settings']['query_recorder'] is False
+
+
+def test_setup_prepared_before_the_recorder_switch_keeps_it_off(setup_api):
+    client, repository = setup_api
+    session = start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    assert client.post(f'/api/setup/{SESSION}/prepare', json={'query_recorder': False}).status_code == 200
+    from backend.common import setup_flow
+    stored = setup_flow.read(repository, SESSION)
+    del stored['query_recorder']
+    setup_flow.write(repository, stored)
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={})
+    assert response.status_code == 200, response.json
+    assert _recorder(repository, session['profile_id'])['enabled'] is False
+
+
+@pytest.mark.parametrize('value', ['yes', 1, None])
+def test_invalid_recorder_switch_does_not_change_the_profile(setup_api, value):
+    client, repository = setup_api
+    start(client)
+    repository.update_shared_transaction(lambda shared: shared['nodes'].append(deepcopy(NODE)))
+    client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']})
+    before = repository.export_all()
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'query_recorder': value})
+    assert response.status_code == 400
+    assert repository.export_all() == before
+
+
 def test_subscription_cache_and_manual_profile_changes_are_checked(setup_api):
     client, repository = setup_api
     session = start(client)
@@ -290,13 +344,40 @@ def test_router_draft_retries_after_interruption_between_profile_and_session_com
 
 
 @pytest.mark.parametrize('change', [{'proxy_gateway_agent_id': 'other'}, {'dns_agent_id': 'other'},
-                                   {'auto_rule_sync': True}, {'unknown': True}, {'endpoint': 'file:///etc/passwd'}])
+                                   {'auto_rule_sync': True}, {'unknown': True}, {'endpoint': 'file:///etc/passwd'},
+                                   {'type': 'routeros', 'ros_policy_rule_sets': ['setup_lan_0']}])
 def test_router_draft_rejects_invalid_or_premature_links(installed, change):
     client, repository, _, _, _ = installed
     before = repository.export_all()
     assert client.post(f'/api/setup/{SESSION}/router-draft', json={'router': {**ROUTER_DRAFT, **change}}).status_code == 400
     assert repository.export_all() == before
     assert 'router_draft' not in client.get(f'/api/setup/{SESSION}').json
+
+
+def test_router_draft_accepts_routeros_without_policy_rule_sets(installed):
+    client, _, _, _, _ = installed
+    response = client.post(f'/api/setup/{SESSION}/router-draft',
+                           json={'router': {**ROUTER_DRAFT, 'type': 'routeros', 'ros_policy_rule_sets': []}})
+    assert response.status_code == 200, response.json
+    assert response.json['router_draft']['ros_policy_rule_sets'] == []
+
+
+def test_router_draft_checks_policy_rule_sets_after_merging_the_saved_draft(installed):
+    """A draft saved before policy routing was refused keeps its sets unless the payload clears them."""
+    client, repository, _, _, _ = installed
+    from backend.common import setup_flow
+    routeros = {**ROUTER_DRAFT, 'type': 'routeros'}
+    assert client.post(f'/api/setup/{SESSION}/router-draft', json={'router': routeros}).status_code == 200
+    stored = setup_flow.read(repository, SESSION)
+    stored['router_draft']['ros_policy_rule_sets'] = ['setup_lan_0']
+    setup_flow.write(repository, stored)
+    response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': {'name': 'Renamed'}})
+    assert response.status_code == 400
+    assert '客户端设备' in response.json['message']
+    assert setup_flow.read(repository, SESSION)['router_draft']['name'] == 'Main'
+    response = client.post(f'/api/setup/{SESSION}/router-draft', json={'router': {'name': 'Renamed', 'ros_policy_rule_sets': []}})
+    assert response.status_code == 200, response.json
+    assert response.json['router_draft']['ros_policy_rule_sets'] == []
 
 
 def test_installation_check_requires_both_services_and_healthy_forwarding(installed):
@@ -1018,7 +1099,8 @@ def test_gateway_setup_fields_match_the_previous_release(setup_api):
     repository.update_shared_transaction(lambda shared: shared.update(nodes=[deepcopy(NODE)], rule_library=[deepcopy(IP_RULE)]))
     assert client.post(f'/api/setup/{SESSION}/source', json={'node_ids': ['node']}).status_code == 200
     selections = {'direct': ['builtin:direct'], 'proxy': ['builtin:telegram', 'library:chat', 'builtin:proxy']}
-    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections})
+    # The DNS query recorder switch postdates 0ef9e89, which left it off.
+    response = client.post(f'/api/setup/{SESSION}/prepare', json={'domain_rules': selections, 'query_recorder': False})
     assert response.status_code == 200, response.json
     assert 'legacy_takeover' not in response.json
     profile = repository.get_profile(session['profile_id'])

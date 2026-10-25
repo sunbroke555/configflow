@@ -671,7 +671,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
               <template #notice><ForwardFilterNotice :filter="networkStatus?.forward_filter" /></template>
             </AgentStatusRow>
             <AgentStatusRow v-if="gatewayLeftover(networkStatus)" label="旧网关记录" :status="gatewayLeftover(networkStatus) === 'present' ? '仍存在' : '无法确认'" tone="warning">
-              <template #notice><p class="m-0">请在生成工作台 → Mihomo → Linux 网关中清理。</p><p v-if="networkStatus?.managed?.error" role="alert" class="m-0 text-destructive-accent">{{ networkStatus.managed.error }}</p></template>
+              <template #notice><p class="m-0">请在配置生成 → Mihomo → Linux 网关中清理。</p><p v-if="networkStatus?.managed?.error" role="alert" class="m-0 text-destructive-accent">{{ networkStatus.managed.error }}</p></template>
             </AgentStatusRow>
             <dl class="m-0 grid grid-cols-2 gap-3 py-3 text-xs sm:grid-cols-4"><div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr }}</dd></div></dl>
           </div>
@@ -705,7 +705,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           <GatewayClientInstructions v-else-if="activeNetwork && !embedded" :address="network.address" />
           <div v-else-if="networkRemoved" class="space-y-2 text-xs" role="status">
             <p class="m-0 leading-relaxed">恢复原网关和 DNS（原来自动获取的改回自动获取），以及测试前的 IPv6、浏览器安全 DNS 和系统私有 DNS。修改过主路由 DHCP 时，也恢复原值。</p>
-            <p class="m-0 leading-relaxed text-muted-foreground">核心和已发布配置仍保留。撤销转发不会关闭 Mihomo TUN；要停用，请到「生成工作台 → Mihomo → Linux 网关」关闭模式，再保存并发布。</p>
+            <p class="m-0 leading-relaxed text-muted-foreground">核心和已发布配置仍保留。撤销转发不会关闭 Mihomo TUN；要停用，请到「配置生成 → Mihomo → Linux 网关」关闭模式，再保存并发布。</p>
           </div>
           <p v-else-if="!activeNetwork" class="m-0 text-xs leading-relaxed">应用成功后再修改客户端。接入前记下原网关、DNS、IPv6 和安全 DNS 设置，以便恢复。</p>
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
@@ -713,7 +713,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
             <p v-if="managedNetwork" class="m-0">{{ legacy ? '撤销前，先删除主路由上指向这台 Linux 的静态路由。' : '撤销前，先恢复客户端原来的网关与 DNS。' }}</p>
             <Button v-else variant="ghost" class="min-h-11 px-2" :disabled="busy || !canInspectNetwork" @click="inspectNetwork">重新读取网络状态</Button>
           </div>
-          <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="legacy" class="m-0">主路由转发的网段在「上游路由」管理。</p><p v-else-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">生成工作台 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
+          <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="legacy" class="m-0">主路由转发的网段在「上游路由」管理。</p><p v-else-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">配置生成 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
           </template>
         </section>
         </TabsContent>
