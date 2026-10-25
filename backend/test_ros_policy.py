@@ -60,6 +60,8 @@ class MemoryROS(RouterOSDriver):
             return self._remove(values)
         if path == ROUTES + '/remove':
             return self._remove(values, ROUTES)
+        if path == NAT + '/remove':
+            return self._remove(values, NAT)
         if path == ROUTES + '/print':
             return copy.deepcopy(print_rows(self.rows[ROUTES], values))
         if query:
@@ -382,8 +384,10 @@ def test_readable_names_share_one_group_and_all_references_resolve(needs_nat):
     if needs_nat:
         driver.rows[NAT][0].pop('out-interface')
     _, plan = release(driver)
+    # With source NAT on every egress the static CIDR also needs ConfigFlow's NAT lists.
     assert {row['list'] for row in driver.rows[ADDRESSES]} == {
-        'CF_Source_Proxy_IP_01', 'CF_Destination_Proxy_IP_01', 'CF_Bypass_IP_01'}
+        'CF_Source_Proxy_IP_01', 'CF_Destination_Proxy_IP_01', 'CF_Bypass_IP_01',
+        *(('cf-mihomo-nat-src', 'cf-mihomo-nat-dst') if needs_nat else ())}
     assert driver.rows[TABLES][-1]['name'] == 'CF_Proxy_Routing_01'
     assert driver.rows[ROUTES][-1]['routing-table'] == 'CF_Proxy_Routing_01'
     bypass, mark, entry = driver.rows[MANGLE]

@@ -11,7 +11,8 @@ from backend.routers.plan import build_plan
 from backend.routers.release import execute
 from backend.routers.report import _networks, build_report
 from backend.routers.routeros import RouterOSDriver
-from backend.routeros_test_helpers import is_add_script, print_rows, run_add_script
+from backend.routers.routeros_nat import client_source_networks
+from backend.routeros_test_helpers import is_add_script, print_rows, run_add_script, run_list_script, stored_address
 from backend.test_agent_upgrade_auth import authenticated_app  # noqa: F401 (pytest fixture)
 from backend.test_router_release import DESIRED, FakeAgent, GATEWAY, SAFE_RETURN_STATUS
 
@@ -55,7 +56,11 @@ HOME_ADDRESSES = [
 ]
 BROAD_SOURCE_NAT = {'.id': '*F', 'chain': 'srcnat', 'action': 'masquerade',
                     'disabled': 'false', 'comment': 'source NAT'}
-POLICY_PATHS = ('/routing/rule', '/ip/firewall/mangle', '/ip/vrf', '/interface/list', '/interface/list/member')
+POLICY_PATHS = ('/routing/rule', '/ip/firewall/mangle', '/ip/vrf', '/interface/list', '/interface/list/member',
+                '/ip/firewall/filter', '/ip/firewall/raw')
+# The only address lists a release may write: ConfigFlow's NAT bypass lists.
+OWN_LISTS = ('cf-mihomo-nat-src', 'cf-mihomo-nat-dst')
+ADDRESS_WRITABLE = {'list', 'address', 'comment', 'disabled'}
 
 
 class RESTResponse:
@@ -133,10 +138,12 @@ class StatefulRouterOS:
                 # writes meets the same failure.
                 self.rejected.append((collection, copy.deepcopy(json)))
             return RESTResponse(self.error_body, self.error_status)
-        assert collection != ADDRESSES, 'Releases must not mutate shared address lists'
+        if collection == ADDRESSES:
+            target = json if method == 'PUT' else next((row for row in rows if row['.id'] == row_id), {})
+            assert (target or {}).get('list') in OWN_LISTS, 'Releases must not mutate shared address lists'
         if method in ('PUT', 'PATCH'):
             assert isinstance(json, dict)
-            allowed = ROUTE_WRITABLE if collection == ROUTES else NAT_WRITABLE
+            allowed = {ROUTES: ROUTE_WRITABLE, ADDRESSES: ADDRESS_WRITABLE}.get(collection, NAT_WRITABLE)
             assert set(json) <= allowed, f'Non-writable properties: {set(json) - allowed}'
             assert not (set(json) & READ_ONLY)
         if method == 'PUT':
@@ -144,6 +151,12 @@ class StatefulRouterOS:
             self.next_id += 1
             new_id = f'*{self.next_id:X}'
             row = {'.id': new_id, 'disabled': 'false', **copy.deepcopy(json)}
+            if collection == ADDRESSES:
+                if any(item.get('list') == row['list'] and item.get('address') == stored_address(row['address'])
+                       for item in rows):
+                    return RESTResponse({'error': 400, 'message': 'Bad Request',
+                                         'detail': 'failure: already have such entry'}, 400)
+                row['address'] = stored_address(row['address'])
             before = row.pop('place-before', None)
             if before is not None:
                 assert str(before).startswith('*'), 'RouterOS REST place-before needs an internal rule ID'
@@ -174,21 +187,28 @@ class StatefulRouterOS:
                 if not 200 <= response.status_code < 300:
                     raise RuntimeError((response.data or {}).get('detail') or 'failure')
                 return response.data['.id']
-            assert is_add_script(body['script']), body['script']
-            return RESTResponse(run_add_script(body['script'], add, fatal=(requests.RequestException,)))
+            if is_add_script(body['script']):
+                return RESTResponse(run_add_script(body['script'], add, fatal=(requests.RequestException,)))
+            return RESTResponse(run_list_script(body['script'], self.rows[ADDRESSES],
+                                                lambda fields: add(ADDRESSES, fields)))
         if path == ROUTES + '/print':
             visible = [row for row in self.rows[ROUTES] if row.get('.id') not in self.hidden_ids]
             return RESTResponse(print_rows(visible, body))
-        assert path == ROUTES + '/remove', path
+        collection = path.removesuffix('/remove')
+        assert path.endswith('/remove') and collection in (ROUTES, NAT, ADDRESSES), path
         for row_id in body['.id'].split(','):
-            self.writes.append(('DELETE', ROUTES + '/' + row_id, None))
-            self.counts[('DELETE', ROUTES)] = self.counts.get(('DELETE', ROUTES), 0) + 1
-            if self.fail == ('DELETE', ROUTES, self.counts[('DELETE', ROUTES)]):
+            self.writes.append(('DELETE', collection + '/' + row_id, None))
+            self.counts[('DELETE', collection)] = self.counts.get(('DELETE', collection), 0) + 1
+            if (self.fail == ('DELETE', collection, self.counts[('DELETE', collection)])
+                    or (isinstance(self.fail, (set, frozenset, list))
+                        and ('DELETE', collection, self.counts[('DELETE', collection)]) in self.fail)):
                 return RESTResponse(self.error_body, self.error_status)
-            row = next((row for row in self.rows[ROUTES] if row['.id'] == row_id), None)
+            row = next((row for row in self.rows[collection] if row['.id'] == row_id), None)
             if row is None:
                 return RESTResponse({'error': 404, 'message': 'Not Found'}, 404)
-            self.rows[ROUTES].remove(row)
+            if collection == ADDRESSES:
+                assert row.get('list') in OWN_LISTS, 'Releases must not mutate shared address lists'
+            self.rows[collection].remove(row)
             self.hidden_ids.discard(row_id)
         return RESTResponse([])
 
@@ -234,6 +254,10 @@ def release_plan(driver, status=SAFE_RETURN_STATUS, desired=DESIRED):
     state = driver.read_state()
     return build_plan({'type': 'routeros', 'endpoint': 'https://10.0.0.1', 'manage_return_routing': True}, desired, state,
                       build_report(desired, state), status, driver)
+
+
+def own_members(session, name):
+    return {str(ipaddress.ip_network(row['address'])) for row in session.rows[ADDRESSES] if row['list'] == name}
 
 
 def configured(rows):
@@ -335,31 +359,38 @@ def test_release_writes_and_verifies_all_stages_then_has_no_remaining_changes():
         'return_routing', 'routes', 'nat_bypass']
     assert not result['rollback']
     assert release_plan(driver, status={**agent.status(), 'status': 'ok'})['empty']
-    assert session.rows[ADDRESSES] == HOME_ADDRESSES
+    # Shared lists stay untouched; the two new CIDRs join ConfigFlow's NAT list.
+    assert [row for row in session.rows[ADDRESSES] if row['list'] not in OWN_LISTS] == HOME_ADDRESSES
+    assert own_members(session, 'cf-mihomo-nat-dst') == {'91.108.0.0/16', '149.154.160.0/20'}
+    assert session.rows[NAT][0]['comment'] == 'cf-mihomo-nat'
+    assert next(row for row in session.rows[NAT] if row['.id'] == '*A')['comment'] == 'cf-mihomo'
     assert next(row for row in session.rows[ROUTES] if row['.id'] == '*2') == HOME_ROUTES[1]
     assert not any(path == ROUTES + '/*2' for _, path, _ in session.writes)
 
 
-def test_later_release_expands_new_destination_for_every_original_source_fragment():
+def test_later_release_adds_only_one_list_member_for_a_new_destination():
     session = release_session(routes=[], nats=[BROAD_SOURCE_NAT])
     driver = driver_for(session)
     agent = FakeAgent(SAFE_RETURN_STATUS)
     initial = execute(release_plan(driver), driver, agent)
     assert initial['ok'], initial
-    expected_sources = list(ipaddress.collapse_addresses(_networks([
-        '10.0.0.1-10.0.0.3', '10.0.0.5-10.0.0.254'])))
-    original_rules = [copy.deepcopy(row) for row in session.rows[NAT] if row.get('action') == 'accept']
-    assert len({row['src-address'] for row in original_rules}) > 1
+    # Every client source fragment is one member of the source list.
+    assert own_members(session, 'cf-mihomo-nat-src') == {str(network) for network in client_source_networks(GATEWAY)}
+    accepts = [row for row in session.rows[NAT] if row.get('action') == 'accept']
+    assert len(accepts) == 1 and session.rows[NAT].index(accepts[0]) == 0
+    nats_before = copy.deepcopy(session.rows[NAT])
 
     expanded = copy.deepcopy(DESIRED)
     target = '185.76.151.0/24'
     expanded['proxy_cidrs'].append({'cidr': target, 'sources': ['Telegram']})
     plan = release_plan(driver, status={**agent.status(), 'status': 'ok'}, desired=expanded)
+    session.writes.clear()
     result = execute(plan, driver, agent)
     assert result['ok'], result
-    actual_sources = [row['src-address'] for row in session.rows[NAT] if row.get('dst-address') == target]
-    assert list(ipaddress.collapse_addresses(_networks(actual_sources))) == expected_sources
-    assert all(row in session.rows[NAT] for row in original_rules)
+    assert session.rows[NAT] == nats_before
+    assert [(method, path, body['address']) for method, path, body in session.writes if path.startswith(ADDRESSES)] == [
+        ('PUT', ADDRESSES, target)]
+    assert target in own_members(session, 'cf-mihomo-nat-dst')
     assert release_plan(driver, status={**agent.status(), 'status': 'ok'}, desired=expanded)['empty']
 
 
@@ -379,33 +410,43 @@ def test_nat_source_drift_changes_fingerprint_and_rejects_stale_operation(field,
 
 
 def test_release_nat_failure_rolls_back_routes_and_agent_in_reverse_order():
-    session = release_session(fail=('PUT', NAT, 2))
+    session = release_session(fail=('PUT', NAT, 1))
     driver = driver_for(session)
     agent = FakeAgent(SAFE_RETURN_STATUS)
     routes_before = configured(session.rows[ROUTES])
     nats_before = copy.deepcopy(session.rows[NAT])
     plan = release_plan(driver)
     route_ops = next(stage['ops'] for stage in plan['stages'] if stage['key'] == 'routes')
+    adopt = next(stage['ops'][0] for stage in plan['stages'] if stage['key'] == 'nat_bypass')
     result = execute(plan, driver, agent)
     assert result['ok'] is False and result['failed_stage'] == 'nat_bypass'
-    assert [item['stage'] for item in result['rollback']] == ['routes'] * len(route_ops) + ['return_routing']
+    # The list rule failed first and undid its own members; the adoption and
+    # everything before it are undone in reverse order.
+    assert [item['stage'] for item in result['rollback']] == ['nat_bypass'] + ['routes'] * len(route_ops) + ['return_routing']
     assert [item['summary'] for item in result['rollback'][:-1]] == [
-        f'已撤销：{op["summary"]}' for op in reversed(route_ops)]
+        f'已撤销：{op["summary"]}' for op in [adopt] + list(reversed(route_ops))]
     assert all(item['status'] == 'ok' for item in result['rollback'])
     assert configured(session.rows[ROUTES]) == routes_before
     assert session.rows[NAT] == nats_before
+    assert session.rows[ADDRESSES] == HOME_ADDRESSES
     assert agent.calls[-1] == ('remove', False)
 
 
 def test_failed_local_nat_rollback_is_reported_with_current_stage():
-    session = release_session(fail={('PUT', NAT, 2), ('DELETE', NAT, 1)})
+    # The first destination member fails; removing the one written after it fails too.
+    sources = len(client_source_networks(GATEWAY))
+    session = release_session(fail={('PUT', ADDRESSES, sources + 1), ('DELETE', ADDRESSES, 1)})
     driver = driver_for(session)
     agent = FakeAgent(SAFE_RETURN_STATUS)
     routes_before = configured(session.rows[ROUTES])
     result = execute(release_plan(driver), driver, agent)
     assert result['ok'] is False and result['failed_stage'] == 'nat_bypass'
     assert any(item['stage'] == 'nat_bypass' and item['status'] == 'failed' for item in result['rollback'])
-    assert len(session.rows[NAT]) == 3
+    # One remove carries every member written; it stopped at the failure, so
+    # they are kept for inspection. No rule uses them.
+    assert own_members(session, 'cf-mihomo-nat-dst') == {'149.154.160.0/20'}
+    assert len(own_members(session, 'cf-mihomo-nat-src')) == len(client_source_networks(GATEWAY))
+    assert not any(row.get('comment') == 'cf-mihomo-nat' for row in session.rows[NAT])
     assert next(row for row in session.rows[NAT] if row['.id'] == '*A')['comment'] == 'mihomo'
     assert configured(session.rows[ROUTES]) == routes_before
     assert agent.calls[-1] == ('remove', False)

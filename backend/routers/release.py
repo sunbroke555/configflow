@@ -96,6 +96,9 @@ def verify_nat(checks: Dict[str, Any], state: RouterState) -> None:
                      if state.nat_context is not None else not _covered(cidr, state, nat_index))]
     if uncovered:
         raise RouterError(f'回读校验失败：{", ".join(uncovered)} 没有被受管 NAT 免转换规则覆盖')
+    if checks.get('nat_list') is not None:
+        from backend.routers.routeros_nat_list import verify
+        verify(checks['nat_list'], state)
     for check in checks.get('nat_not_required') or []:
         # Re-prove with the preview's assessment: the egress-only check alone
         # rejects LAN-egress rules (e.g. DNS hairpins) that the ordered-chain

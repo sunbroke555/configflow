@@ -58,3 +58,52 @@ def print_rows(rows, body):
     """POST .../print with an OR'ed .query of key=value terms."""
     terms = [term for term in (body or {}).get('.query', []) if not term.startswith('#')]
     return [row for row in rows if any(_matches(row, term) for term in terms)]
+
+
+ADDRESS_BATCH = re.compile(r':local n 0\n:local m ""\n:foreach a in=\{(?P<items>.*)\} do=\{:onerror e in=\{'
+                           r'/ip/firewall/address-list/add (?P<params>.*) address=\$a\} do=\{:set n \(\$n\+1\); '
+                           r':if \(\$n=1\) do=\{:set m \(\$a \. " " \. \$e\)\}\}\}\n:put \("cf-done:" \. \$n \. ":" \. \$m\)',
+                           re.DOTALL)
+DIGEST_LIST = re.compile(r'\(\$groups->"((?:[^"\\]|\\.)*)"\)')
+FETCH_LIST = re.compile(r'print as-value where list="((?:[^"\\]|\\.)*)"')
+FETCH_RANGE = re.compile(r'\$i >= (\d+) && \$i < (\d+)')
+QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def run_list_script(script, rows, add):
+    """Address-list console scripts: digests, paged prints and batch adds.
+
+    ``rows`` are the fake's address-list rows; ``add(fields)`` stores one
+    member and returns its ID or raises with the console's message.
+    """
+    from backend.routers import ros_address_lists
+    if 'cf-digest:' in script:
+        lines = []
+        for index, name in enumerate(_unescape(name) for name in DIGEST_LIST.findall(script)):
+            count, value = ros_address_lists.digest([row for row in rows if row.get('list') == name])
+            lines.append(f'cf-digest:{index}:{count}:{value}')
+        return {'ret': '\r\n'.join(lines)}
+    if 'cf-rows:' in script:
+        name = _unescape(FETCH_LIST.search(script)[1])
+        start, end = map(int, FETCH_RANGE.search(script).groups())
+        members = [row for row in rows if row.get('list') == name]
+        lines = [f'cf-row:{ros_address_lists._encode(row).decode().rstrip(chr(10))}' for row in members[start:end]]
+        return {'ret': '\r\n'.join(lines + [f'cf-rows:{len(members)}'])}
+    match = ADDRESS_BATCH.fullmatch(script)
+    assert match, script
+    fields = {key: {'yes': 'true', 'no': 'false'}[bare] if bare else _unescape(quoted)
+              for key, quoted, bare in FIELD.findall(match['params'])}
+    failed, first = 0, ''
+    for address in (_unescape(item) for item in QUOTED.findall(match['items'])):
+        try:
+            add({**fields, 'address': address})
+        except Exception as error:  # noqa: BLE001 - the console prints any failure
+            failed += 1
+            first = first or f'{address} {error}'
+    return {'ret': f'cf-done:{failed}:{first}'}
+
+
+def stored_address(address):
+    """RouterOS prints a host member without /32."""
+    network = ipaddress.ip_network(address, strict=False)
+    return str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)

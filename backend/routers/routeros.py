@@ -185,11 +185,20 @@ class RouterOSDriver(RouterDriver):
         except RouterError:
             mangle = None
         # Only lists NAT and Mangle selectors use are resolved; other lists
-        # (blocklists, dynamic detection lists) are never downloaded.
-        for name, rows in ros_address_lists.read(self, ros_address_lists.referenced(nats + (mangle or []))).items():
+        # (blocklists, dynamic detection lists) are never downloaded. The NAT
+        # bypass lists are read with them when an exemption may be planned.
+        from backend.routers import routeros_nat_list
+        names = ros_address_lists.referenced(nats + (mangle or []))
+        own = set(routeros_nat_list.NAMES) if routeros_nat_list.wanted(nats, self) else set()
+        lists = ros_address_lists.read(self, names | own)
+        for name, rows in lists.items():
+            if name not in names:
+                continue
             for row in rows:
                 if not _truthy(row.get('disabled')):
                     state.address_sets.setdefault(name, []).append(str(row.get('address') or ''))
+        if own:
+            state.nat_lists = routeros_nat_list.state_lists(lists, mangle)
         assessed = nats
         if getattr(self, 'dns_guard_manifest', None):
             # Proven DNS guard hairpins only translate queries to OxiDNS:53, never
@@ -613,6 +622,9 @@ class RouterOSDriver(RouterDriver):
         if kind in ('ros_policy_replace', 'ros_policy_restore'):
             from backend.routers import ros_policy_write
             return (ros_policy_write.apply if kind == 'ros_policy_replace' else ros_policy_write.restore)(self, op)
+        if kind in ('nat_list_sync', 'nat_list_restore'):
+            from backend.routers import routeros_nat_list
+            return (routeros_nat_list.apply if kind == 'nat_list_sync' else routeros_nat_list.restore)(self, op)
         if kind in ('dns_guard_replace', 'dns_guard_restore'):
             from backend.routers import dns_guard
             return (dns_guard.apply if kind == 'dns_guard_replace' else dns_guard.restore)(self, op)

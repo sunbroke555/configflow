@@ -16,7 +16,7 @@ from backend.routers.ros_policy import network_overlap
 from backend.routers.routeros import UncertainWrite
 from backend.test_router_rule_sync import environment  # noqa: F401 (pytest fixture)
 from backend.test_routeros_release import (
-    BROAD_SOURCE_NAT, NAT, ROUTES, RESTResponse, StatefulRouterOS, configured, driver_for,
+    ADDRESSES, BROAD_SOURCE_NAT, NAT, ROUTES, RESTResponse, StatefulRouterOS, configured, driver_for,
 )
 
 GATEWAY = '10.0.0.4'
@@ -477,9 +477,10 @@ def test_release_rollback_keeps_the_results_of_batches_before_a_lost_reply(small
     assert execute(plan_for(driver, cidrs(50)), driver, None)['ok']
     plan = plan_for(driver, cidrs(30, 500))
     # The withdrawal adds 30 routes (two batches) and deletes 50; the NAT
-    # stage then fails and the rollback recreates them in batches of 20.
+    # stage then fails (its first new list member) and the rollback
+    # recreates them in batches of 20.
     session.counts.clear()
-    session.fail, session.executed, session.lose = ('PUT', NAT, 2), 0, (4,)
+    session.fail, session.executed, session.lose = ('PUT', ADDRESSES, 1), 0, (4,)
     result = execute(plan, driver, None)
     assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
     restored = [item for item in result['rollback'] if any(cidr in item['summary'] for cidr in cidrs(50))]

@@ -267,7 +267,17 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
     return ops, skipped, checks
 
 
-def _nat_ops(report: Dict[str, Any], state: RouterState, gateway: str, skipped: set, vendor: str = ''):
+def _nat_ops(report: Dict[str, Any], state: RouterState, gateway: str, skipped: set, vendor: str = '',
+             listed: Optional[Dict[str, Any]] = None):
+    if vendor == 'routeros' and state.nat_context is not None:
+        # One rule over two address lists once an exemption must be written;
+        # otherwise (and on iKuai) the per-rule plan below, unchanged.
+        from backend.routers import routeros_nat_list
+        result = routeros_nat_list.plan(report, state, gateway, skipped)
+        if result is not None:
+            if listed is not None:
+                listed.update(result)
+            return result['ops'], result['exempt']
     items = [item for item in report['nat_bypass']['items'] if item['cidr'] not in skipped]
     check = (state.ros_policy_plan or {}).get('check') or {}
     migrating = {item['id'] for item in check.get('migrations', [])
@@ -434,7 +444,10 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     nat_items = [item for item in report['nat_bypass']['items'] if item['cidr'] not in skipped]
     blockers.extend(f'{item["cidr"]}：无法确认是否需要 NAT 免转换。{item["detail"]}'
                     for item in nat_items if item['status'] == 'unknown')
-    nat_ops, exempt = _nat_ops(report, state, gateway, skipped, router.get('type', ''))
+    listed: Dict[str, Any] = {}
+    nat_ops, exempt = _nat_ops(report, state, gateway, skipped, router.get('type', ''), listed)
+    blockers.extend(listed.get('blockers') or [])
+    warnings.extend(listed.get('warnings') or [])
     if router.get('type') == 'ikuai':
         from backend.routers.ikuai import oversized_requests
         blockers.extend(oversized_requests(route_ops + nat_ops))
@@ -459,8 +472,13 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                     if interface is None:
                         blockers.append('无法安全准备替代路径的 LAN NAT 保护：' + reason)
                     else:
+                        from backend.routers.routeros_nat_list import restrict_egress
                         for preparation in nat_ops:
-                            preparation['out_interface'] = interface
+                            if preparation['kind'] == 'nat_list_sync':
+                                problem = restrict_egress(preparation, listed['check'], interface)
+                                blockers.extend([problem] if problem else [])
+                            else:
+                                preparation['out_interface'] = interface
                 # NAT and return protection must precede activation of the
                 # replacement routes, not just withdrawal of the old policy.
                 op['summary'] += '；先准备 NAT 保护，再建立并回读替代静态路径'
@@ -525,6 +543,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         'nat_not_required': [{'cidr': item['cidr'], 'gateway': gateway}
                              for item in nat_items if item['status'] == 'not_required'],
     }
+    if listed.get('check') is not None:
+        checks['nat_list'] = listed['check']
     if policy:
         checks['policy_routes'] = policy_checks
     if state.retired_policy_routes:
@@ -542,6 +562,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                               'dns': item['desired_dns']}
     script = driver.render_script(route_ops + nat_ops + dns_ops + guard_ops) if manual else ''
     evidence = {'context': state.nat_context, 'address_sets': state.address_sets} if state.nat_context is not None else None
+    if listed.get('evidence') is not None:
+        evidence['nat_list'] = listed['evidence']
     if ros_policy is not None:
         evidence = {'nat': evidence, 'ros_policy': ros_policy.get('evidence'), 'request': ros_policy.get('request')}
     dns_evidence = ({'agent_id': router['dns_agent_id'], 'target_dns': dns['target_dns'], 'gateway': gateway,

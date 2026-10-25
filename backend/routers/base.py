@@ -232,6 +232,10 @@ class RouterState:
     # ROS forwarding/NAT evidence. None keeps legacy drivers' coverage checks;
     # an empty rules list explicitly means there are no source-NAT rules.
     nat_context: Optional[Dict[str, Any]] = None
+    # RouterOS: members of the two NAT bypass address lists ConfigFlow owns
+    # ('src', 'dst') and Mangle rows selecting them ('mangle_refs'). Read only
+    # when they may matter; kept out of address_sets and the NAT evidence.
+    nat_lists: Optional[Dict[str, Any]] = None
     dhcp_dns: Optional[DhcpDnsState] = None
     # None: the vendor routes proxy CIDRs with static routes. A list (possibly
     # empty) means proxy CIDRs are routed by policy rules excluding the gateway.
