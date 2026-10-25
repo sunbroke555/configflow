@@ -374,7 +374,14 @@ def _restore_routes(driver, steps, ids, remapped, failures):
     single = [item for item in absent if not console_safe(item[1])]
     for start in range(0, len(batched), ROUTE_BATCH):
         chunk = batched[start:start + ROUTE_BATCH]
-        added = _console_add(driver, [values for _, values in chunk]) if len(chunk) >= BATCH_MIN else None
+        try:
+            added = _console_add(driver, [values for _, values in chunk]) if len(chunk) >= BATCH_MIN else None
+        except RouterError as error:
+            # Which of them were written is unknown: none is retried, the
+            # other steps go on as one by one.
+            for index, _ in chunk:
+                errors[index] = str(error)
+            continue
         count = added['count'] if added else 0
         for position, (index, values) in enumerate(chunk[:count]):
             if position not in added['rows']:
@@ -530,9 +537,12 @@ def restore(driver, op):
             # restored; report the incomplete rollback for inspection. Route
             # undo records run in batches and stop at the first failure.
             if not failures:
-                failures.extend(error for error in driver.restore_many([step['undo'] for step in run],
-                                                                       stop_on_failure=True)
-                                if error and error != routeros_batch.SKIPPED)
+                try:
+                    failures.extend(error for error in driver.restore_many([step['undo'] for step in run],
+                                                                           stop_on_failure=True)
+                                    if error and error != routeros_batch.SKIPPED)
+                except RouterError as error:  # the later steps and the manifest still run
+                    failures.append(str(error))
             continue
         index = 0
         while index < len(run):
@@ -541,7 +551,10 @@ def restore(driver, op):
                    and not run[end]['values'].get('place-before')):
                 end += 1
             if end - index >= routeros_batch.BATCH_MIN:
-                _restore_routes(driver, run[index:end], ids, remapped, failures)
+                try:
+                    _restore_routes(driver, run[index:end], ids, remapped, failures)
+                except RouterError as error:  # the later steps and the manifest still run
+                    failures.append(str(error))
                 index = end
                 continue
             step = run[index]

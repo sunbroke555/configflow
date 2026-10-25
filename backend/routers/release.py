@@ -196,16 +196,17 @@ def _rollback(done: List[Tuple[str, Dict[str, Any], Dict[str, Any]]], driver, ag
             ros_address_lists.invalidate(driver)
             try:
                 errors = driver.restore_many([undo for _, _, undo in run])
-            except (RouterError, RuntimeError, requests.RequestException):
-                errors = None  # every undo record is safe to run again one by one
-            if errors is not None:
-                for (stage, op, _), error in zip(run, errors):
-                    results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'}
-                                   if error else {'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
-                index = end
-                continue
-        else:
-            end = index + 1
+            except (RouterError, RuntimeError, requests.RequestException) as error:
+                # restore_many reports each record; should it still fail, part
+                # of the run may be done. Running it again would report routes
+                # it recreated as foreign, so keep it for inspection instead.
+                errors = [str(error)] * len(run)
+            for (stage, op, _), error in zip(run, errors):
+                results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'}
+                               if error else {'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
+            index = end
+            continue
+        end = index + 1
         for stage, op, undo in entries[index:end]:
             try:
                 _apply(undo, driver, agent)

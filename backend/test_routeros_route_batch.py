@@ -13,6 +13,7 @@ from backend.routers.plan import build_plan
 from backend.routers.release import execute
 from backend.routers.report import build_report
 from backend.routers.ros_policy import network_overlap
+from backend.routers.routeros import UncertainWrite
 from backend.test_router_rule_sync import environment  # noqa: F401 (pytest fixture)
 from backend.test_routeros_release import (
     BROAD_SOURCE_NAT, NAT, ROUTES, RESTResponse, StatefulRouterOS, configured, driver_for,
@@ -355,7 +356,8 @@ def test_static_sync_checks_enrolled_routes_from_one_snapshot(environment):
     # Before: one whole-table read per added route, on top of the round's reads.
     assert sum(1 for method, path in driver.sent if (method, path) == ('GET', ROUTES)) <= 6
     downloads = [path for method, path in driver.sent if method == 'GET' and path.endswith('?list=CN')]
-    assert len(downloads) <= 2  # the preview's read, and one for the whole write
+    # The preview's read, one before writing and a fresh one for the final read-back.
+    assert len(downloads) == 3
 
 
 def test_dhcp_update_reuses_the_snapshot_the_release_just_checked():
@@ -427,3 +429,209 @@ def test_nat_batch_waits_until_new_rules_are_installed(monkeypatch):
                                       'comment': 'cf-mihomo'})
     assert len(undo['changes']) == 12 and reads['count'] == 4
     assert all('invalid' not in row for row in session.rows[NAT])
+
+
+def test_static_sync_reads_foreign_lists_afresh_for_the_final_check(environment):
+    from backend.routers import rule_sync
+    from backend.test_router_rule_sync import publish
+    repository, driver = environment
+    spaced = [f'45.{index}.0.0/24' for index in range(25)]
+    repository.update_profile_transaction('default', lambda doc: doc['routers']['items'][0].update(
+        ros_policy_rule_sets=[], ip_rule_sets=['remote']))
+    repository.write_shared_text('rules/Remote.list', '\n'.join(f'IP-CIDR,{cidr}' for cidr in spaced[:20]))
+    # Only destinations in CN, a list ConfigFlow does not manage, are masqueraded.
+    driver.rows[NAT] = [{'.id': '*3', 'chain': 'srcnat', 'action': 'masquerade', 'dst-address-list': 'CN',
+                         'disabled': 'false'}]
+    driver.rows['/ip/firewall/address-list'].append({'.id': '*CN1', 'list': 'CN', 'address': '1.0.1.0/24'})
+    publish(environment)
+    send = driver._request
+
+    def request(method, path, values=None, **kwargs):
+        if method == 'PUT' and path == ROUTES:
+            # A router script adds the proxy destinations to CN while routes are written.
+            driver.rows['/ip/firewall/address-list'].append({'.id': '*CN2', 'list': 'CN', 'address': '45.0.0.0/8'})
+        return send(method, path, values, **kwargs)
+    driver._request = request
+    result = rule_sync.sync('default', 'ros', lambda *_: '\n'.join(f'IP-CIDR,{cidr}' for cidr in spaced[1:]))
+    # Before, the final check reused the CN members read before the writes.
+    assert result['status'] == 'paused' and '无需 NAT 免转换' in result['message'], result
+
+
+class LostExecuteReply(StatefulRouterOS):
+    """The reply of chosen route-add /execute calls is lost after the router ran them."""
+    lose = ()
+    executed = 0
+
+    def _post(self, path, body):
+        response = super()._post(path, body)
+        if path == '/execute' and '/ip/route/add' in body['script']:
+            self.executed += 1
+            if self.executed in self.lose:
+                raise requests.Timeout('Response lost after the router ran the script')
+        return response
+
+
+def test_release_rollback_keeps_the_results_of_batches_before_a_lost_reply(small_batches):
+    session = LostExecuteReply(routes=unrelated(20), nats=[BROAD_SOURCE_NAT])
+    driver = driver_for(session)
+    assert execute(plan_for(driver, cidrs(50)), driver, None)['ok']
+    plan = plan_for(driver, cidrs(30, 500))
+    # The withdrawal adds 30 routes (two batches) and deletes 50; the NAT
+    # stage then fails and the rollback recreates them in batches of 20.
+    session.counts.clear()
+    session.fail, session.executed, session.lose = ('PUT', NAT, 2), 0, (4,)
+    result = execute(plan, driver, None)
+    assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
+    restored = [item for item in result['rollback'] if any(cidr in item['summary'] for cidr in cidrs(50))]
+    assert len(restored) == 50
+    failed = [item for item in restored if item['status'] == 'failed']
+    # Only the batch whose reply was lost is unknown; nothing is misreported
+    # as another program's route, and the second batch is not written again.
+    assert len(failed) == 20 and all('结果未知' in item['summary'] for item in failed)
+    assert not any('同网段' in item['summary'] for item in result['rollback'])
+    assert sorted(row['dst-address'] for row in session.rows[ROUTES] if row.get('comment') == 'cf-bench') == sorted(
+        cidrs(50))
+
+
+def test_policy_rollback_finishes_after_a_lost_batch_reply():
+    from backend.test_ros_policy import MANGLE, configurations
+    from backend.routers.ros_policy import ADDRESSES
+
+    driver = migration_driver(12)
+    before = configurations(driver)
+    driver.fail = ('DELETE', ROUTES, 7)
+    execute_script = driver._execute
+
+    def lose_route_batch(values):
+        result = execute_script(values)
+        if '/ip/route/add' in values['script']:
+            raise UncertainWrite('response lost after commit')
+        return result
+    driver._execute = lose_route_batch
+    driver, result = switch_to_policy(driver)
+    assert not result['ok']
+    assert any('结果未知' in item['summary'] for item in result['rollback'])
+    # The rest of the rollback still ran: the new policy bundle is gone and
+    # the receipt is restored; the six recreated routes are left to inspect.
+    after = configurations(driver)
+    assert after[MANGLE] == before[MANGLE] and after[ADDRESSES] == before[ADDRESSES]
+    assert driver.ros_policy_manifest is None
+    assert sum(1 for row in driver.rows[ROUTES] if row.get('comment') == 'cf-Telegram') == 12
+
+
+def removed_routes(session, routes):
+    """Delete ``routes`` (rows already in the session) in one batch; their undo records."""
+    driver = driver_for(session)
+    undos = []
+    driver.apply_many([{'kind': 'route_delete', 'id': row['.id'], 'cidr': row['dst-address'], 'summary': ''}
+                       for row in routes], lambda op, undo: undos.append(undo))
+    return driver, list(reversed(undos))
+
+
+def test_restore_rechecks_a_destination_after_an_unknown_write(monkeypatch):
+    def run_restore():
+        routes = unrelated(6)
+        routes[4]['dst-address'] = routes[5]['dst-address'] = '100.64.9.0/24'
+        routes[5]['distance'] = '2'
+        session = StatefulRouterOS(routes=routes, nats=COVERED_NAT)
+        driver, undos = removed_routes(session, routes)
+        # Undo runs newest first: the reply of the distance-2 route is lost.
+        session.timeout_after = ('PUT', ROUTES, 1)
+        return driver.restore_many(undos), configured(session.rows[ROUTES])
+
+    batched = run_restore()
+    single_writes(monkeypatch)
+    assert batched == run_restore()
+    errors, rows = batched
+    assert '无法确认新增对象归属' in errors[0] and '同网段' in errors[1]
+    assert sum(1 for row in rows if row['dst-address'] == '100.64.9.0/24') == 1
+
+
+def gateway_routes(count):
+    """Routes a console add can recreate (a blackhole flag cannot be written there)."""
+    routes = unrelated(count)
+    for row in routes:
+        del row['blackhole']
+        row['gateway'] = GATEWAY
+    return routes
+
+
+def test_restore_sees_a_route_another_program_adds_meanwhile(monkeypatch):
+    monkeypatch.setattr(routeros_batch, 'ROUTE_BATCH', 4)
+
+    def run_restore():
+        routes = gateway_routes(8)
+        session = StatefulRouterOS(routes=routes, nats=COVERED_NAT)
+        driver, undos = removed_routes(session, routes)
+        original = session.request
+
+        def request(method, url, json=None, **kwargs):
+            if method == 'PUT' and session.counts.get(('PUT', ROUTES)) is None:
+                # With the first write another program adds one of the destinations.
+                session.rows[ROUTES].append({'.id': '*F00D', 'dst-address': routes[1]['dst-address'],
+                                             'gateway': '10.0.0.9', 'routing-table': 'main', 'disabled': 'false'})
+            return original(method, url, json=json, **kwargs)
+        session.request = request
+        return driver.restore_many(undos), configured(session.rows[ROUTES])
+
+    batched = run_restore()
+    single_writes(monkeypatch)
+    assert batched == run_restore()
+    errors, _ = batched
+    assert [bool(error) for error in errors] == [False] * 6 + [True, False]
+    assert '同网段' in errors[6]
+
+
+def test_execute_refused_for_permissions_falls_back_to_single_writes():
+    class NoExecute(StatefulRouterOS):
+        def _post(self, path, body):
+            if path == '/execute':
+                return RESTResponse({'error': 500, 'message': 'Internal Server Error',
+                                     'detail': 'not enough permissions (9)'}, 500)
+            return super()._post(path, body)
+
+    session = NoExecute(routes=unrelated(5), nats=COVERED_NAT)
+    driver = driver_for(session)
+    result = execute(plan_for(driver, cidrs(6)), driver, None)
+    assert result['ok'], result
+    assert {row['dst-address'] for row in session.rows[ROUTES]} >= set(cidrs(6))
+    session = NoExecute(nats=[BROAD_SOURCE_NAT])
+    undo = driver_for(session).apply({'kind': 'nat_add', 'src': ['10.0.0.1-10.0.0.3'], 'dst': cidrs(6),
+                                      'comment': 'cf-mihomo'})
+    assert len(undo['changes']) == 12 and len(session.rows[NAT]) == 13
+
+
+@pytest.mark.parametrize('method', ['DELETE', 'RESTORE'])
+def test_stopping_restore_touches_nothing_after_the_first_failure(monkeypatch, method):
+    def run_restore():
+        session = StatefulRouterOS(routes=gateway_routes(6), nats=COVERED_NAT)
+        driver = driver_for(session)
+        if method == 'DELETE':
+            undos = []
+            driver.apply_many([{'kind': 'route_add', 'cidr': cidr, 'gateway': GATEWAY, 'comment': 'cf-x'}
+                               for cidr in cidrs(6)], lambda op, undo: undos.append(undo))
+            undos.reverse()
+            original = session._post
+
+            def remove(path, body):
+                if path == ROUTES + '/remove':
+                    # Someone edits the first route; the remove stops at it.
+                    first = next(row for row in session.rows[ROUTES] if row['.id'] == body['.id'].split(',')[0])
+                    first['comment'] = 'edited'
+                    return RESTResponse({'error': 400, 'detail': 'failure: edited'}, 400)
+                return original(path, body)
+            session._post = remove
+        else:
+            driver, undos = removed_routes(session, session.rows[ROUTES])
+            session.fail = ('PUT', ROUTES, 1)  # the first route cannot be recreated
+        errors = driver.restore_many(undos, stop_on_failure=True)
+        return errors, configured(session.rows[ROUTES])
+
+    errors, rows = run_restore()
+    assert errors[0] and errors[1:] == [routeros_batch.SKIPPED] * 5
+    # Nothing after the failed one is removed (or recreated): before, the
+    # batch went on past it.
+    assert len(rows) == (12 if method == 'DELETE' else 0)
+    if method == 'RESTORE':
+        single_writes(monkeypatch)
+        assert (errors, rows) == run_restore()

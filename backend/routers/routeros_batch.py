@@ -123,9 +123,23 @@ def console_safe(values: Dict[str, Any]) -> bool:
             and _comparable('disabled', values.get('disabled', 'false')) in ('true', 'false'))
 
 
-def _console_add(driver, values: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _refused(error: RouterError) -> bool:
+    """Whether a failed /execute certainly ran none of its adds.
+
+    RouterOS answers a refused script with HTTP 4xx, or with HTTP 500 "not
+    enough permissions" (UncertainWrite for any other write). Every add in
+    one script needs the same policy and catches its own errors, so a
+    permission refusal cannot follow a successful add.
+    """
+    return not isinstance(error, UncertainWrite) or bool(
+        re.search(r'\bnot enough permissions\b', str(error), re.IGNORECASE))
+
+
+def _console_add(driver, values: List[Dict[str, Any]],
+                 current: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """Add routes with one /execute and prove which rows are ours.
 
+    ``current`` is a read of these destinations made just before, if any.
     None when nothing ran. Otherwise ``rows`` maps the index of each reported
     add to its row (None when it is gone); ``count`` adds were reported, in
     order; ``failure`` is the first reported add whose ID cannot be proven
@@ -134,16 +148,18 @@ def _console_add(driver, values: List[Dict[str, Any]]) -> Optional[Dict[str, Any
     """
     destinations = [item['dst-address'] for item in values]
     try:
-        before = {str(row.get('.id')) for row in _query(driver, 'dst-address', destinations)}
+        if current is None:
+            current = _query(driver, 'dst-address', destinations)
+        before = {str(row.get('.id')) for row in current}
     except RouterError:
         return None  # nothing written
     script = ':local f 0\n' + '\n'.join(_add_line(index, item) for index, item in enumerate(values)) + '\n:put "cf-done"'
     try:
         result = driver._request('POST', '/execute', {'script': script, 'as-string': ''})
-    except UncertainWrite as error:
+    except RouterError as error:
+        if _refused(error):
+            return None  # e.g. without the policy /execute needs: single writes follow
         raise RouterRollbackError(f'{error}；批量新增路由的结果未知，无法确认新增对象归属，已保留现场，请检查路由器') from error
-    except RouterError:
-        return None  # refused before running, e.g. without the policy /execute needs
     lines = (str(result.get('ret', '')) if isinstance(result, dict) else '').replace('\r', '').split('\n')
     ids, rejected = [], False
     for line in lines:
@@ -290,9 +306,12 @@ def restore_routes(driver, undos: List[Dict[str, Any]], stop_on_failure: bool = 
         while method and end < len(undos) and batch_restorable(undos[end]) and undos[end]['changes'][0]['method'] == method:
             end += 1
         group = undos[index:end]
-        if method and len(group) >= BATCH_MIN:
+        # A console batch cannot stop at a failed add (later ones are already
+        # written), so stopping restores go one by one.
+        if method and len(group) >= BATCH_MIN and not (stop_on_failure and method == 'RESTORE'):
             changes = [undo['changes'][0] for undo in group]
-            errors.extend((_restore_deleted if method == 'DELETE' else _restore_removed)(driver, changes, stop_on_failure))
+            errors.extend(_restore_deleted(driver, changes, stop_on_failure) if method == 'DELETE'
+                          else _restore_removed(driver, changes))
         else:
             for undo in group:
                 if stop_on_failure and any(error for error in errors):
@@ -313,15 +332,20 @@ def _single(action) -> Optional[str]:
 
 def _restore_deleted(driver, changes, stop_on_failure) -> List[Optional[str]]:
     """Remove routes this release added, unless they changed since."""
-    def single(change):
-        return _single(lambda: driver._restore([change]))
+    errors: List[Optional[str]] = [None] * len(changes)
+
+    def fail(index, error):
+        # With stop_on_failure nothing after the first failure is touched.
+        errors[index] = SKIPPED if stop_on_failure and any(errors[:index]) else error()
+
+    def single(index):
+        fail(index, lambda: _single(lambda: driver._restore([changes[index]])))
 
     try:
         rows = _query(driver, 'dst-address', [str(change['expected'].get('dst-address', '')) for change in changes])
     except RouterError:
         rows = None
     by_id = {str(row.get('.id')): row for row in rows or []}
-    errors: List[Optional[str]] = [None] * len(changes)
     pending: List[int] = []
 
     def flush():
@@ -332,14 +356,14 @@ def _restore_deleted(driver, changes, stop_on_failure) -> List[Optional[str]]:
             try:
                 driver._request('POST', ROUTES + '/remove', {'.id': ','.join(ids[start:start + REMOVE_BATCH])})
             except RouterError:
-                break
+                break  # the remove stops at the first failure: the rest are still there
         try:
             remaining = {str(row.get('.id')) for row in _retry(lambda: _query(driver, '.id', ids))}
         except RouterError:
             remaining = set(ids)  # the single path re-reads each one
         for index in pending:
             if str(changes[index]['id']) in remaining:
-                errors[index] = single(changes[index])
+                single(index)
         pending.clear()
 
     for index, change in enumerate(changes):
@@ -347,80 +371,90 @@ def _restore_deleted(driver, changes, stop_on_failure) -> List[Optional[str]]:
             errors[index:] = [SKIPPED] * (len(changes) - index)
             break
         row = by_id.get(str(change['id']))
-        if rows is None or row is None or 'expected' not in change:
-            flush()  # keep the order: earlier routes go first
-            errors[index] = single(change)  # absent or moved: the single path reads it by ID
-        elif _truthy(row.get('dynamic')):
-            errors[index] = _rollback_failed('RouterOS 动态对象不能接管、修改或删除')
-        elif driver._ownership_snapshot(ROUTES, row) != change.get('expected'):
-            errors[index] = _rollback_failed('对象在操作期间发生外部变化，保留现有配置')
-        else:
+        if rows is not None and row is not None and 'expected' in change and not _truthy(row.get('dynamic')) \
+                and driver._ownership_snapshot(ROUTES, row) == change.get('expected'):
             pending.append(index)
-    if pending:
-        flush()
+            continue
+        flush()  # keep the order: earlier routes go first
+        if rows is None or row is None or 'expected' not in change:
+            single(index)  # absent or moved: the single path reads it by ID
+        elif _truthy(row.get('dynamic')):
+            fail(index, lambda: _rollback_failed('RouterOS 动态对象不能接管、修改或删除'))
+        else:
+            fail(index, lambda: _rollback_failed('对象在操作期间发生外部变化，保留现有配置'))
+    flush()
     return errors
 
 
-def _restore_removed(driver, changes, stop_on_failure) -> List[Optional[str]]:
-    """Recreate routes this release deleted: one presence and one destination
-    read, console adds in batches (single REST writes for the rest)."""
+def _restore_removed(driver, changes) -> List[Optional[str]]:
+    """Recreate routes this release deleted: one presence read, then console
+    adds in batches, each checked against a fresh read of its destinations
+    (the rest take the single-route path)."""
     errors: List[Optional[str]] = [None] * len(changes)
+
+    def single(index):
+        errors[index] = _single(lambda: driver._restore([changes[index]]))
+
     try:
         present = {str(row.get('.id')): row for row in _query(driver, '.id', [str(change['id']) for change in changes])}
-        rows = _query(driver, 'dst-address', [str(change['values'].get('dst-address', '')) for change in changes])
     except RouterError:
-        for index, change in enumerate(changes):
-            if stop_on_failure and any(errors[:index]):
-                errors[index:] = [SKIPPED] * (len(changes) - index)
-                break
-            errors[index] = _single(lambda: driver._restore([change]))
+        for index in range(len(changes)):
+            single(index)
         return errors
-    checks, pending = {}, []
-
-    def written(index, values, row_id):
-        # A later same-destination route sees this one as new, as one by one.
-        rows.append({'.id': row_id, 'dst-address': values.get('dst-address'),
-                     'routing-table': values.get('routing-table', 'main')})
-
-    def put(index, values):
-        try:
-            checks[index] = driver._perform({'method': 'PUT', 'path': ROUTES, 'values': values}, [])
-        except RouterError as error:
-            errors[index] = _rollback_failed(str(error))
-            return
-        written(index, values, checks[index]['id'])
+    pending: List[int] = []
 
     def flush():
         chunk = pending[:]
         pending.clear()
-        added = _console_add(driver, [values for _, values in chunk]) if len(chunk) >= BATCH_MIN else None
-        start = 0
-        if added is not None:
-            failure = added['failure']
-            for position in range(added['count']):
-                index, values = chunk[position]
-                if position not in added['rows']:
-                    errors[index] = _rollback_failed(str(failure[1]) if failure and failure[0] == position else UNCERTAIN)
-                    continue
-                row = added['rows'][position]
-                try:
-                    _check(driver, (row or {}).get('.id', ''), values, row)
-                except RouterError as error:
-                    errors[index] = _rollback_failed(str(error))
-                    continue
-                written(index, values, row['.id'])
-            start = added['count']
+        try:
+            # As one by one: the same-destination check reads just before the
+            # write, so it sees what this rollback (or anyone) wrote, or may have.
+            rows = _query(driver, 'dst-address', [changes[index]['values']['dst-address'] for index in chunk]) \
+                if len(chunk) >= BATCH_MIN else None
+        except RouterError:
+            rows = None
+        if rows is None:
+            for index in chunk:
+                single(index)
+            return
+        adding = []
+        for index in chunk:
+            values = changes[index]['values']
+            if any(str(row.get('.id')) not in changes[index].get('known_ids', [])
+                   and row.get('dst-address') == values.get('dst-address')
+                   and row.get('routing-table', 'main') == values.get('routing-table', 'main') for row in rows):
+                errors[index] = _rollback_failed('回滚期间已有其他程序新增同网段路由，保留现有配置')
+            else:
+                adding.append(index)
+        try:
+            added = _console_add(driver, [changes[index]['values'] for index in adding], rows) \
+                if len(adding) >= BATCH_MIN else None
+        except RouterError as error:
+            # Which of them were written is unknown: none is retried.
+            for index in adding:
+                errors[index] = _rollback_failed(str(error))
+            return
+        if added is None:
+            for index in adding:
+                single(index)
+            return
+        failure = added['failure']
+        for position, index in enumerate(adding[:added['count']]):
+            if position not in added['rows']:
+                errors[index] = _rollback_failed(str(failure[1]) if failure and failure[0] == position else UNCERTAIN)
+                continue
+            row = added['rows'][position]
+            try:
+                _check(driver, (row or {}).get('.id', ''), changes[index]['values'], row)
+            except RouterError as error:
+                errors[index] = _rollback_failed(str(error))
+        for index in adding[added['count']:]:
             if added['unexplained']:
-                for index, _ in chunk[start:]:
-                    errors[index] = _rollback_failed(f'RouterOS {ROUTES} 批量写入未执行完成；无法确认新增对象归属，已保留现场，请检查路由器')
-                return
-        for index, values in chunk[start:]:
-            put(index, values)  # the console rejected it, or too few for a batch
+                errors[index] = _rollback_failed(f'RouterOS {ROUTES} 批量写入未执行完成；无法确认新增对象归属，已保留现场，请检查路由器')
+            else:
+                single(index)  # the console rejected it: the single path reports why
 
     for index, change in enumerate(changes):
-        if stop_on_failure and any(errors[:index]):
-            errors[index:] = [SKIPPED] * (len(changes) - index)
-            break
         values = change['values']
         current = present.get(str(change['id']))
         if current is not None:
@@ -430,35 +464,16 @@ def _restore_removed(driver, changes, stop_on_failure) -> List[Optional[str]]:
             except RouterError as error:
                 errors[index] = _rollback_failed(str(error))
             continue
-        if any(_comparable('dst-address', item.get('dst-address', '')) == _comparable('dst-address', values.get('dst-address', ''))
-               for _, item in pending):
-            flush()  # its outcome decides the same-destination check below
-        if any(str(row.get('.id')) not in change.get('known_ids', [])
-               and row.get('dst-address') == values.get('dst-address')
-               and row.get('routing-table', 'main') == values.get('routing-table', 'main') for row in rows):
-            errors[index] = _rollback_failed('回滚期间已有其他程序新增同网段路由，保留现有配置')
-            continue
+        if any(_comparable('dst-address', changes[item]['values'].get('dst-address', ''))
+               == _comparable('dst-address', values.get('dst-address', '')) for item in pending):
+            flush()  # its outcome decides the same-destination check of this one
         if not console_safe(values):
-            flush()  # keep the order
-            put(index, values)
+            single(index)
             continue
-        pending.append((index, values))
+        pending.append(index)
         if len(pending) == ROUTE_BATCH:
             flush()
     flush()
-    if checks:
-        try:
-            written_rows = {str(row.get('.id')): row
-                            for row in _retry(lambda: _query(driver, '.id', [check['id'] for check in checks.values()]))}
-        except RouterError as error:
-            for index in checks:
-                errors[index] = _rollback_failed(str(error))
-            return errors
-        for index, check in checks.items():
-            try:
-                _check(driver, check['id'], check['values'], written_rows.get(check['id']))
-            except RouterError as error:
-                errors[index] = _rollback_failed(str(error))
     return errors
 
 
@@ -516,10 +531,10 @@ def _nat_batch(driver, values, rows, undo):
     script = ':local f 0\n' + '\n'.join(_nat_line(index, item) for index, item in enumerate(values)) + '\n:put "cf-done"'
     try:
         result = driver._request('POST', '/execute', {'script': script, 'as-string': ''})
-    except UncertainWrite as error:
+    except RouterError as error:
+        if _refused(error):
+            return None
         raise RouterRollbackError(f'{error}；批量新增 NAT 规则的结果未知，无法确认新增对象归属，已保留现场，请检查路由器') from error
-    except RouterError:
-        return None
     output = (str(result.get('ret', '')) if isinstance(result, dict) else '').replace('\r', '').split('\n')
     ids = []
     for line in output:

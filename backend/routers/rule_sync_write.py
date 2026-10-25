@@ -75,6 +75,7 @@ def apply_delta(driver, desired, plan, baseline, ensure_current=lambda **_: None
 
 
 def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
+    from backend.routers import ros_address_lists
     from backend.routers.release import _verify
     previous = copy.deepcopy(getattr(driver, 'ros_policy_manifest', None))
     live = snapshot(driver, reserve=False)
@@ -162,6 +163,9 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
         driver.ros_policy_manifest = next_manifest
         # Exclude unrelated cf-prefixed static routes deliberately preserved above.
         checks = {**plan['checks'], 'removed_routes': [item['id'] for item in removals if item['path'] == ROUTES]}
+        # The final read-back proves the lists afresh: others may have changed
+        # them while the routes were written.
+        ros_address_lists.invalidate(driver)
         state = _verify('routes', checks, driver, None)
         _verify('nat_bypass', checks, driver, None, state)  # nothing written in between
         ensure_current(force=True)
