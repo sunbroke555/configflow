@@ -482,15 +482,33 @@ body {
   .router-records td:nth-child(5) { grid-area: status; }
   .router-records td:last-child { grid-area: actions; }
 
-  /* 客户端设备：地址与移除同排，名称与 DNS 策略同排。 */
+  /* 客户端设备：地址与移除同排，名称占一行，状态与 DNS 策略同排。 */
   .client-device-records tbody tr {
-    grid-template-areas: 'ip actions' 'name mode';
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas: 'ip ip actions' 'name name name' 'status mode mode';
   }
 
-  .client-device-records td:nth-child(1) { grid-area: ip; }
-  .client-device-records td:nth-child(2) { grid-area: name; }
-  .client-device-records td:nth-child(3) { grid-area: mode; }
+  .client-device-records td:nth-child(1) { grid-area: name; }
+  .client-device-records td:nth-child(2) { grid-area: ip; align-self: center; }
+  .client-device-records td:nth-child(3) { grid-area: status; }
+  .client-device-records td:nth-child(4) { grid-area: mode; }
   .client-device-records td:last-child { grid-area: actions; align-self: start; }
+
+  /* 未添加：勾选、设备与添加同排，地址与状态同排；没有网段策略时不占一行。 */
+  .client-discovery-records tbody tr {
+    grid-template-columns: var(--cf-touch) minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas: 'check device device actions' '. ip ip ip' '. status status status' '. mode mode mode';
+    row-gap: var(--cf-sp-2);
+    column-gap: var(--cf-sp-2);
+  }
+
+  .client-discovery-records td:nth-child(1) { grid-area: check; }
+  .client-discovery-records td:nth-child(2) { grid-area: device; align-self: center; }
+  .client-discovery-records td:nth-child(3) { grid-area: ip; }
+  .client-discovery-records td:nth-child(4) { grid-area: status; }
+  .client-discovery-records td:nth-child(5) { grid-area: mode; }
+  .client-discovery-records td:last-child { grid-area: actions; align-self: start; }
+  .client-discovery-records td.client-found-default { display: none; }
 
   .router-record-actions {
     display: grid;

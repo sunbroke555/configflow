@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { agentApi, clientDeviceApi, oxidnsMonitorApi, type ClientDevice, type ClientDevicesState } from '@/api'
+import { agentApi, clientDeviceApi, oxidnsMonitorApi, type ClientDevice, type ClientDevicesState, type ClientDiscovery, type ClientPresenceInfo } from '@/api'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import ClientDevices from '@/views/ClientDevices.vue'
 import OxiDNSMonitor from '@/views/OxiDNSMonitor.vue'
 import { Select } from '@/components/ui/select'
+import FieldHelp from '@/components/common/FieldHelp.vue'
 
 vi.mock('@/api', () => ({
-  clientDeviceApi: { get: vi.fn(), save: vi.fn() },
+  clientDeviceApi: { get: vi.fn(), save: vi.fn(), discover: vi.fn() },
   oxidnsMonitorApi: { overview: vi.fn(), clients: vi.fn(), queries: vi.fn() },
   agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() }
@@ -22,6 +23,21 @@ const agents = [{ id: 'one', name: 'DNS 1', host: '192.0.2.2', status: 'online',
 const state = (devices: ClientDevice[] = [{ ip: '192.0.2.5', name: '电视', mode: 'direct' }, { ip: '192.0.2.9', name: '手机', mode: '' }],
   extra: Partial<ClientDevicesState> = {}): ClientDevicesState =>
   ({ success: true, profile_id: 'office', profile_name: '办公室', oxidns_revision: 'dns-1', devices, editable: true, reason: '', agents, ...extra })
+const seen = (ip: string, extra: Partial<ClientPresenceInfo> = {}): ClientPresenceInfo =>
+  ({ ip, mac: '', hostname: '', sources: [], presence: 'unknown', basis: '', last_seen: null, router_id: 'ros1', ...extra })
+const discovery = (extra: Partial<ClientDiscovery> = {}): ClientDiscovery => ({
+  success: true, profile_id: 'office', state: 'ok', message: '', checked_at: '2026-10-25T10:46:34+08:00',
+  sources: [{ id: 'ros1', name: '主路由', type: 'routeros', ok: true, error: '', notes: [], policy_routing: false }],
+  devices: [
+    { name: '电视', mode: 'direct', ...seen('192.0.2.5', { mac: 'E0:BA:AD:94:F2:48', hostname: 'TV', sources: ['arp', 'lease'], presence: 'online', basis: 'lease', last_seen: 523 }), discoverable: true },
+    { name: '手机', mode: '', ...seen('192.0.2.9', { basis: 'outside', router_id: '' }), discoverable: false }
+  ],
+  discovered: [
+    { ...seen('192.0.2.147', { mac: '16:F7:C5:8A:16:A4', hostname: 'iPhone', sources: ['arp', 'lease'], presence: 'online', basis: 'arp', last_seen: 286 }), network: null },
+    { ...seen('192.0.2.150', { mac: 'AA:BB:CC:00:00:01', sources: ['arp'], presence: 'recent', basis: 'stale' }), network: null }
+  ],
+  ...extra
+})
 const wrappers: VueWrapper[] = []
 let stored: ClientDevice[]
 
@@ -39,6 +55,7 @@ async function render(path = '/client-devices') {
   return { wrapper, router }
 }
 const nameInput = (wrapper: VueWrapper, ip: string) => wrapper.get<HTMLInputElement>(`input[aria-label="${ip} 名称"]`)
+const addButton = (wrapper: VueWrapper) => wrapper.findAll('button').find(item => item.text().trim() === '添加')!
 const button = (wrapper: VueWrapper, text: string) => wrapper.findAll('button').find(item => item.text().includes(text))!
 
 beforeEach(() => {
@@ -56,6 +73,7 @@ beforeEach(() => {
     return response(state(stored, { oxidns_revision: 'dns-2' }))
   })
   vi.mocked(oxidnsMonitorApi.overview).mockResolvedValue(response({ recorders: ['queries'] }))
+  vi.mocked(clientDeviceApi.discover).mockImplementation(async () => response(discovery()))
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
   vi.mocked(confirm).mockResolvedValue(true)
   vi.mocked(confirmDanger).mockResolvedValue(true)
@@ -76,7 +94,8 @@ describe('client devices page', () => {
     const boxes = wrapper.findAll('[role="checkbox"]')
     expect(boxes.map(box => box.attributes('aria-checked'))).toEqual(['true', 'true', 'false'])
     expect(button(wrapper, '发布到 2 台 OxiDNS').exists()).toBe(true)
-    expect(oxidnsMonitorApi.overview).toHaveBeenCalledWith('one')
+    expect(clientDeviceApi.discover).toHaveBeenCalledWith('office')
+    expect(oxidnsMonitorApi.overview).not.toHaveBeenCalled()
   })
 
   it('saves a rename on its own with the values the editor showed', async () => {
@@ -105,7 +124,7 @@ describe('client devices page', () => {
   it('keeps a manually added address in place until it is named, then saves it', async () => {
     const { wrapper } = await render()
     await wrapper.get('#client-device-ip').setValue('192.0.2.77/24')
-    await button(wrapper, '添加').trigger('click')
+    await addButton(wrapper).trigger('click')
     await flushPromises()
     expect(wrapper.findAll('tbody tr')[0].text()).toContain('192.0.2.0/24')
     expect(wrapper.text()).toContain('未保存')
@@ -158,7 +177,7 @@ describe('client devices page', () => {
   it('keeps other rows being edited when one row conflicts', async () => {
     const { wrapper } = await render()
     await wrapper.get('#client-device-ip').setValue('192.0.2.30')
-    await button(wrapper, '添加').trigger('click')
+    await addButton(wrapper).trigger('click')
     await nameInput(wrapper, '192.0.2.9').setValue('typing')
     vi.mocked(clientDeviceApi.save).mockRejectedValueOnce({ response: { status: 409, data: { message: '此设备已在其他页面修改，请重新载入后再保存。' } } })
     stored = stored.map(row => row.ip === '192.0.2.5' ? { ...row, name: '电视机' } : row)
@@ -193,7 +212,7 @@ describe('client devices page', () => {
 
     fail()
     await wrapper.get('#client-device-ip').setValue('192.0.2.30')
-    await button(wrapper, '添加').trigger('click')
+    await addButton(wrapper).trigger('click')
     await nameInput(wrapper, '192.0.2.30').setValue('新设备')
     await nameInput(wrapper, '192.0.2.30').trigger('blur')
     await flushPromises()
@@ -215,10 +234,10 @@ describe('client devices page', () => {
     expect(stored[0].name).toBe('新名')
   })
 
-  it('reads query records from an online OxiDNS and asks for a target when none is selected', async () => {
+  it('asks for a publish target when the entry OxiDNS is not selected', async () => {
     vi.mocked(clientDeviceApi.get).mockResolvedValue(response(state(undefined, { agents: agents.map(agent => ({ ...agent, status: agent.id === 'two' ? 'online' : 'offline' })) })))
     const { wrapper } = await render('/client-devices?agent=one')
-    expect(oxidnsMonitorApi.overview).toHaveBeenCalledWith('two')
+    expect(clientDeviceApi.discover).toHaveBeenCalledWith('office')
     await wrapper.get('[aria-label="发布到 DNS 1"]').trigger('click')
     await flushPromises()
     expect(button(wrapper, '选择要发布的 OxiDNS').attributes('disabled')).toBeDefined()
@@ -229,7 +248,7 @@ describe('client devices page', () => {
     expect(clientDeviceApi.get).toHaveBeenCalledWith({ agentId: 'two' })
     expect(wrapper.text()).toContain('配置：办公室')
     expect(wrapper.findAll('[role="checkbox"]').map(box => box.attributes('aria-checked'))).toEqual(['false', 'true', 'false'])
-    expect(oxidnsMonitorApi.overview).toHaveBeenCalledWith('two')
+    expect(clientDeviceApi.discover).toHaveBeenCalledWith('office')
     await button(wrapper, '返回 OxiDNS 面板').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/agents/two/oxidns')
@@ -343,4 +362,285 @@ it('sends old OxiDNS device policy links to the client devices page of that Agen
   vi.mocked(oxidnsMonitorApi.overview).mockRejectedValue(new Error('核心离线'))
   const { router } = await render('/agents/one/oxidns?tab=devices')
   expect(router.currentRoute.value.fullPath).toBe('/client-devices?agent=one')
+})
+
+describe('client device discovery tabs', () => {
+  const tabButton = (wrapper: VueWrapper, label: string) => wrapper.findAll('[role="tab"]').find(item => item.text().startsWith(label))!
+  const openTab = async (wrapper: VueWrapper, label: string) => {
+    await tabButton(wrapper, label).trigger('mousedown', { button: 0, ctrlKey: false })
+    await flushPromises()
+  }
+  const listedIps = (wrapper: VueWrapper) => wrapper.findAll('tbody tr').map(row => row.attributes('data-client-ip') || row.attributes('data-found-ip'))
+  const offline = (ip: string) => ({ ...seen(ip, { presence: 'offline', basis: 'absent', router_id: '' }) })
+
+  it('splits saved rows into added and offline, and lists unsaved router devices with counts', async () => {
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({
+      devices: [{ name: '电视', mode: 'direct', ...seen('192.0.2.5', { presence: 'online', basis: 'arp' }), discoverable: false }, { name: '手机', mode: '', ...offline('192.0.2.9'), discoverable: false }]
+    })))
+    const { wrapper, router } = await render()
+    expect(wrapper.findAll('[role="tab"]').map(item => item.text().replace(/\s+/g, ''))).toEqual(['已添加1', '未添加2', '已离线1'])
+    expect(listedIps(wrapper)).toEqual(['192.0.2.5'])
+    expect(wrapper.text()).toContain('ARP 可达')
+    await openTab(wrapper, '已离线')
+    expect(router.currentRoute.value.query.tab).toBe('offline')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.9'])
+    expect(wrapper.text()).toContain('路由器没有看到这个地址')
+    await openTab(wrapper, '未添加')
+    expect(router.currentRoute.value.query.tab).toBe('new')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.147', '192.0.2.150'])
+    expect(wrapper.text()).toContain('iPhone')
+    expect(wrapper.text()).toContain('近期见过')
+    expect(wrapper.text()).toContain('未命名设备')
+    await openTab(wrapper, '已添加')
+    expect(router.currentRoute.value.query.tab).toBeUndefined()
+  })
+
+  it('opens the tab named in the address and searches hostnames and MAC addresses', async () => {
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(tabButton(wrapper, '未添加').attributes('aria-selected')).toBe('true')
+    await wrapper.get('[aria-label="搜索设备"]').setValue('aa:bb')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.150'])
+    await wrapper.get('[aria-label="搜索设备"]').setValue('iphone')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.147'])
+  })
+
+  it('adds a found device with its hostname as smart and reminds to publish', async () => {
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({
+      sources: [{ id: 'ros1', name: '主路由', type: 'routeros', ok: true, error: '', notes: [], policy_routing: true }]
+    })))
+    const { wrapper } = await render('/client-devices?tab=new')
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click')
+    await flushPromises()
+    expect(clientDeviceApi.save).toHaveBeenCalledWith('office', { ip: '192.0.2.147', name: 'iPhone', mode: 'smart' }, { name: '', mode: '' })
+    expect(listedIps(wrapper)).toEqual(['192.0.2.150'])
+    expect(wrapper.text()).toContain('已添加 1 台设备')
+    expect(wrapper.text()).toContain('智能分流设备还需在上游路由重新发布')
+    expect(notify.success).toHaveBeenCalledWith('已添加 1 台设备', expect.any(String))
+    await openTab(wrapper, '已添加')
+    expect(listedIps(wrapper)).toContain('192.0.2.147')
+    const row = wrapper.get('[data-client-ip="192.0.2.147"]')
+    expect(row.text()).toContain('参与策略路由')
+    expect(row.text()).toContain('16:F7:C5:8A:16:A4')
+    expect(wrapper.get('[data-client-ip="192.0.2.5"]').text()).not.toContain('参与策略路由')
+  })
+
+  it('adds the selected devices one after another through the save queue', async () => {
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.text()).not.toContain('添加所选')
+    await wrapper.get('[aria-label="选择全部设备"]').trigger('click')
+    await flushPromises()
+    let resolveFirst!: () => void
+    const original = vi.mocked(clientDeviceApi.save).getMockImplementation()!
+    vi.mocked(clientDeviceApi.save).mockImplementationOnce(async (...args) => {
+      await new Promise<void>(resolve => { resolveFirst = resolve })
+      return original(...args)
+    })
+    await button(wrapper, '添加所选（2）').trigger('click')
+    await flushPromises()
+    // The second row waits for the first save.
+    expect(clientDeviceApi.save).toHaveBeenCalledTimes(1)
+    resolveFirst()
+    await flushPromises()
+    expect(vi.mocked(clientDeviceApi.save).mock.calls.map(call => call[1])).toEqual([
+      { ip: '192.0.2.147', name: 'iPhone', mode: 'smart' },
+      { ip: '192.0.2.150', name: '', mode: 'smart' }
+    ])
+    expect(wrapper.text()).toContain('已添加 2 台设备')
+    expect(wrapper.text()).toContain('没有未添加的设备')
+    expect(wrapper.text()).not.toContain('添加所选')
+  })
+
+  it('keeps a removed device findable under 未添加', async () => {
+    const { wrapper } = await render()
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click')
+    await flushPromises()
+    await openTab(wrapper, '未添加')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.5', '192.0.2.147', '192.0.2.150'])
+    expect(wrapper.get('[data-found-ip="192.0.2.5"]').text()).toContain('TV')
+  })
+
+  it('shows the saved network policy that covers a found device', async () => {
+    stored = [...stored, { ip: '192.0.2.128/25', name: '访客', mode: 'direct' }, { ip: '192.0.2.0/24', name: '家里', mode: 'smart' }, { ip: '192.0.2.144/28', name: '只命名', mode: '' }]
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.get('[data-found-ip="192.0.2.147"]').text()).toContain('随网段 192.0.2.128/25 · 直连')
+  })
+
+  it('names devices but leaves policies alone when DNS policies are read-only', async () => {
+    vi.mocked(clientDeviceApi.get).mockImplementation(async () => response(state(stored, { editable: false, reason: '处理链已手动修改。' })))
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.get('[aria-label="添加 192.0.2.150"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click')
+    await flushPromises()
+    expect(clientDeviceApi.save).toHaveBeenCalledWith('office', { ip: '192.0.2.147', name: 'iPhone', mode: '' }, { name: '', mode: '' })
+    expect(wrapper.text()).not.toContain('已添加 1 台设备')
+  })
+
+  it('adds found devices by name only while the setup wizard is open', async () => {
+    const { wrapper } = await render('/client-devices?profile=setup_x&from=%2Fsetup%3Fsession%3Ds1&tab=new')
+    expect(wrapper.get('[aria-label="添加 192.0.2.150"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click')
+    await flushPromises()
+    expect(clientDeviceApi.save).toHaveBeenCalledWith('office', { ip: '192.0.2.147', name: 'iPhone', mode: '' }, { name: '', mode: '' })
+    expect(wrapper.text()).not.toContain('已添加 1 台设备')
+    expect(wrapper.text()).toContain('完成向导后再设置 DNS 策略')
+    const help = wrapper.findAllComponents(FieldHelp).map(item => String(item.props('text')))
+    expect(help.some(text => text.includes('只写入名称'))).toBe(true)
+    expect(help.some(text => text.includes('默认设为智能分流'))).toBe(false)
+  })
+
+  it('explains that discovery needs RouterOS or iKuai on the unadded and offline tabs', async () => {
+    const message = '需要在当前配置接入 RouterOS 或 iKuai 才能发现设备'
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({ state: 'unsupported', message, sources: [], discovered: [],
+      devices: [{ name: '电视', mode: 'direct', ...seen('192.0.2.5', { router_id: '' }), discoverable: false }, { name: '手机', mode: '', ...seen('192.0.2.9', { router_id: '' }), discoverable: false }] })))
+    const { wrapper } = await render()
+    expect(wrapper.findAll('[role="tab"]').map(item => item.text().replace(/\s+/g, ''))).toEqual(['已添加2', '未添加', '已离线'])
+    expect(wrapper.text()).toContain('未接入 RouterOS / iKuai')
+    await openTab(wrapper, '未添加')
+    expect(wrapper.text()).toContain(message)
+    expect(wrapper.find('a[href="/routers"]').exists()).toBe(true)
+    await openTab(wrapper, '已离线')
+    expect(wrapper.text()).toContain(message)
+  })
+
+  it('lists router failures and source notes', async () => {
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({ state: 'partial', message: '部分路由器读取失败，未出现的设备显示为未知',
+      sources: [
+        { id: 'ros1', name: '主路由', type: 'routeros', ok: true, error: '', notes: ['账号缺少 test 权限，无法确认静态 IP 设备是否在线'], policy_routing: false },
+        { id: 'ik1', name: '爱快', type: 'ikuai', ok: false, error: '登录失败：账号或密码错误', notes: [] }
+      ] })))
+    const { wrapper } = await render()
+    expect(wrapper.get('[role="alert"]').text()).toContain('「爱快」读取失败：登录失败：账号或密码错误')
+    expect(wrapper.text()).toContain('「主路由」账号缺少 test 权限')
+    expect(wrapper.text()).toContain('主路由（RouterOS）')
+    expect(wrapper.text()).toContain('爱快（iKuai）')
+  })
+
+  it('does not call devices offline-free when the discovery request failed', async () => {
+    vi.mocked(clientDeviceApi.discover).mockRejectedValueOnce({ response: { data: { message: '服务暂时不可用' } } })
+    const { wrapper } = await render('/client-devices?tab=offline')
+    expect(wrapper.text()).toContain('无法判断设备是否离线')
+    expect(wrapper.text()).not.toContain('没有离线的设备')
+    await button(wrapper, '重试').trigger('click')
+    await flushPromises()
+    expect(clientDeviceApi.discover).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a discovery request failure and retries it', async () => {
+    vi.mocked(clientDeviceApi.discover).mockRejectedValueOnce({ response: { data: { message: '服务暂时不可用' } } })
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.text()).toContain('暂时无法读取路由器：服务暂时不可用')
+    await button(wrapper, '重试').trigger('click')
+    await flushPromises()
+    expect(clientDeviceApi.discover).toHaveBeenCalledTimes(2)
+    expect(listedIps(wrapper)).toEqual(['192.0.2.147', '192.0.2.150'])
+  })
+
+  it('ignores a discovery result that arrives after a reload', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.discover).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.text()).toContain('正在读取路由器')
+    await wrapper.get('[aria-label="重新载入"]').trigger('click')
+    await flushPromises()
+    finish(response(discovery({ discovered: [] })))
+    await flushPromises()
+    expect(listedIps(wrapper)).toEqual(['192.0.2.147', '192.0.2.150'])
+  })
+
+  it('lays out both lists as mobile records without an empty batch bar', async () => {
+    const { wrapper } = await render()
+    expect(wrapper.get('table').classes()).toEqual(expect.arrayContaining(['cf-mobile-records', 'client-device-records']))
+    expect(wrapper.find('#client-device-ip').exists()).toBe(true)
+    await openTab(wrapper, '未添加')
+    expect(wrapper.get('table').classes()).toEqual(expect.arrayContaining(['cf-mobile-records', 'client-discovery-records']))
+    expect(wrapper.find('#client-device-ip').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('添加所选')
+    expect(wrapper.text()).not.toContain('取消选择')
+    // A device without a covering network hides its empty policy cell on phones.
+    expect(wrapper.get('[data-found-ip="192.0.2.147"] td.client-found-default').exists()).toBe(true)
+    await wrapper.get('[aria-label="选择 192.0.2.147"]').trigger('click')
+    await flushPromises()
+    expect(button(wrapper, '添加所选（1）').exists()).toBe(true)
+  })
+
+  it('moves a manually added offline address to the offline tab and focuses its name', async () => {
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({ discovered: [{ ...offline('192.0.2.77'), sources: ['lease'], mac: 'AA:00:00:00:00:77', network: null }] })))
+    const { wrapper, router } = await render()
+    await wrapper.get('#client-device-ip').setValue('192.0.2.77')
+    await addButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.tab).toBe('offline')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.77'])
+    expect(document.activeElement).toBe(nameInput(wrapper, '192.0.2.77').element)
+  })
+
+  it('does not offer a removed Agent host or router address again', async () => {
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({ devices: [
+      ...discovery().devices.slice(0, 1),
+      { name: '手机', mode: '', ...seen('192.0.2.9', { mac: 'AA:00:00:00:00:09', sources: ['arp'], presence: 'online', basis: 'arp' }), discoverable: false }
+    ] })))
+    const { wrapper } = await render()
+    await wrapper.get('[aria-label="移除 192.0.2.9"]').trigger('click')
+    await flushPromises()
+    await openTab(wrapper, '未添加')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.147', '192.0.2.150'])
+  })
+
+  it('leaves the proxy gateway out of policy routing like the router page', async () => {
+    stored = [{ ip: '192.0.2.5', name: '网关', mode: 'smart' }, { ip: '192.0.2.9', name: '手机', mode: 'smart' }]
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({
+      sources: [{ id: 'ros1', name: '主路由', type: 'routeros', ok: true, error: '', notes: [], policy_routing: true, gateway: '192.0.2.5' }]
+    })))
+    const { wrapper } = await render()
+    expect(wrapper.get('[data-client-ip="192.0.2.5"]').text()).not.toContain('参与策略路由')
+    expect(wrapper.get('[data-client-ip="192.0.2.9"]').text()).toContain('参与策略路由')
+  })
+
+  it('marks the header checkbox only from the devices the search shows', async () => {
+    const { wrapper } = await render('/client-devices?tab=new')
+    await wrapper.get('[aria-label="选择 192.0.2.147"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[aria-label="选择全部设备"]').attributes('data-state')).toBe('indeterminate')
+    await wrapper.get('[aria-label="搜索设备"]').setValue('aa:bb')
+    expect(wrapper.get('[aria-label="选择全部搜索结果"]').attributes('data-state')).toBe('unchecked')
+    expect(button(wrapper, '添加所选（1）').exists()).toBe(true)
+  })
+
+  it('shows no counts and explains the offline tab when every router failed', async () => {
+    const message = '路由器读取失败，暂时无法发现设备'
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({ state: 'failed', message, discovered: [],
+      sources: [{ id: 'ros1', name: '主路由', type: 'routeros', ok: false, error: '连接超时', notes: [] }],
+      devices: [{ name: '电视', mode: 'direct', ...seen('192.0.2.5'), discoverable: false }, { name: '手机', mode: '', ...seen('192.0.2.9'), discoverable: false }] })))
+    const { wrapper } = await render('/client-devices?tab=offline')
+    expect(wrapper.findAll('[role="tab"]').map(item => item.text().replace(/\s+/g, ''))).toEqual(['已添加2', '未添加', '已离线'])
+    expect(wrapper.text()).toContain('无法判断设备是否离线')
+    expect(wrapper.text()).toContain(message)
+  })
+
+  it('keeps a row being edited in its tab when the routers answer later', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.discover).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const { wrapper } = await render()
+    await nameInput(wrapper, '192.0.2.9').trigger('focusin')
+    await nameInput(wrapper, '192.0.2.9').setValue('手机（改名中')
+    finish(response(discovery({ devices: [discovery().devices[0], { name: '手机', mode: '', ...offline('192.0.2.9'), discoverable: false }] })))
+    await flushPromises()
+    expect(listedIps(wrapper)).toEqual(['192.0.2.5', '192.0.2.9'])
+    expect(wrapper.get('[data-client-ip="192.0.2.9"]').text()).toContain('离线')
+    await openTab(wrapper, '已离线')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.9'])
+    await openTab(wrapper, '已添加')
+    expect(listedIps(wrapper)).toEqual(['192.0.2.5'])
+  })
+
+  it('says where policies take effect when the profile has no OxiDNS', async () => {
+    vi.mocked(clientDeviceApi.get).mockImplementation(async () => response(state(stored, { agents: [] })))
+    const original = vi.mocked(clientDeviceApi.save).getMockImplementation()!
+    vi.mocked(clientDeviceApi.save).mockImplementation(async (...args) => response({ ...(await original(...args)).data, agents: [] }))
+    const { wrapper } = await render('/client-devices?tab=new')
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('此配置空间没有 OxiDNS Agent，DNS 策略会在接入 OxiDNS 并发布后生效。')
+    expect(wrapper.text()).not.toContain('前往发布')
+  })
 })

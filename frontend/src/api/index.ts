@@ -486,8 +486,31 @@ export interface ClientDevicesState {
   success: true; profile_id: string; profile_name: string; oxidns_revision: string
   devices: ClientDevice[]; editable: boolean; reason: string; agents: ClientDeviceAgent[]
 }
+export type ClientPresence = 'online' | 'recent' | 'offline' | 'unknown' | 'network'
+export type ClientPresenceBasis = '' | 'arp' | 'lease' | 'probe' | 'terminal' | 'stale' | 'absent' | 'router' | 'outside'
+export type ClientSighting = 'arp' | 'lease' | 'online'
+/** 路由器对一个地址的判断；last_seen 是距上次 DHCP 通信的秒数 */
+export interface ClientPresenceInfo {
+  ip: string; mac: string; hostname: string; sources: ClientSighting[]
+  presence: ClientPresence; basis: ClientPresenceBasis; last_seen: number | null; router_id: string
+}
+export interface DiscoveredClient extends ClientPresenceInfo { network: ClientDevice | null }
+export interface ClientDiscoverySource {
+  id: string; name: string; type: 'routeros' | 'ikuai'; ok: boolean; error: string; notes: string[]
+  /** 仅 RouterOS：已启用按来源策略路由；gateway 是不作为来源的代理网关地址 */
+  policy_routing?: boolean; gateway?: string
+}
+/** 已保存的行；discoverable 表示移除后会出现在「未添加」 */
+export type DiscoveredSavedClient = ClientDevice & ClientPresenceInfo & { discoverable: boolean }
+export interface ClientDiscovery {
+  success: true; profile_id: string; state: 'ok' | 'partial' | 'failed' | 'unsupported'; message: string; checked_at: string
+  sources: ClientDiscoverySource[]; devices: DiscoveredSavedClient[]; discovered: DiscoveredClient[]
+}
 /** 当前配置空间的设备名称与 OxiDNS DNS 策略；从 Agent 进入时按设备绑定的空间读取 */
 export const clientDeviceApi = {
+  /** 实时读取配置空间内 RouterOS / iKuai 看到的局域网设备（最长约 20 秒），结果不保存 */
+  discover: (profileId: string, options: { signal?: AbortSignal } = {}) =>
+    api.get<ClientDiscovery>('/client-devices/discovery', { params: { profile: profileId }, timeout: 45000, signal: options.signal }),
   get: (options: { agentId?: string; profileId?: string; signal?: AbortSignal } = {}) =>
     api.get<ClientDevicesState>('/client-devices', {
       ...(options.profileId ? profileOptions(options.profileId) : {}),
