@@ -1,5 +1,6 @@
 """Execute a release plan stage by stage, verify each stage, roll back in reverse on failure."""
 import ipaddress
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -179,16 +180,28 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         verify_nat(checks, state)
 
 
+def _batch(driver, rollback: bool = False):
+    """A driver may share its reads across one stage's writes (iKuai static routes)."""
+    batch = getattr(type(driver), 'batch', None)
+    return driver.batch(rollback=rollback) if callable(batch) else nullcontext()
+
+
 def _rollback(done: List[Tuple[str, Dict[str, Any], Dict[str, Any]]], driver, agent) -> List[Dict[str, Any]]:
     results = []
-    for stage, op, undo in reversed(done):
-        if not undo:
-            continue
-        try:
-            _apply(undo, driver, agent)
-            results.append({'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
-        except (RouterError, RuntimeError, requests.RequestException) as error:
-            results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'})
+    try:
+        with _batch(driver, rollback=True):
+            for stage, op, undo in reversed(done):
+                if not undo:
+                    continue
+                try:
+                    _apply(undo, driver, agent)
+                    results.append({'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
+                except (RouterError, RuntimeError, requests.RequestException) as error:
+                    results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）',
+                                    'status': 'failed'})
+    except (RouterError, RuntimeError, requests.RequestException) as error:
+        # Routes put back by the rollback are read back together at its end.
+        results.append({'stage': done[0][0], 'summary': f'撤销失败：{error}', 'status': 'failed'})
     return results
 
 
@@ -246,10 +259,17 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 # routes and their NAT protection must already be in place.
                 _verify('routes', plan['checks'], driver, agent)
                 _verify('nat_bypass', plan['checks'], driver, agent)
-            for op in stage['ops']:
-                undo = _apply(op, driver, agent)
-                done.append((current, op, undo))
-                record({'stage': current, 'summary': op['summary'], 'status': 'ok'})
+            with _batch(driver):
+                for op in stage['ops']:
+                    try:
+                        undo = _apply(op, driver, agent)
+                    except RouterError as error:
+                        # Written before failing (e.g. a lost reply): the driver says how to undo it.
+                        if getattr(error, 'undo', None):
+                            done.append((current, op, error.undo))
+                        raise
+                    done.append((current, op, undo))
+                    record({'stage': current, 'summary': op['summary'], 'status': 'ok'})
             _verify(current, plan['checks'], driver, agent)
             record({'stage': current, 'summary': '回读校验通过', 'status': 'verified'})
             if current == 'routes':

@@ -435,6 +435,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     blockers.extend(f'{item["cidr"]}：无法确认是否需要 NAT 免转换。{item["detail"]}'
                     for item in nat_items if item['status'] == 'unknown')
     nat_ops, exempt = _nat_ops(report, state, gateway, skipped, router.get('type', ''))
+    if router.get('type') == 'ikuai':
+        from backend.routers.ikuai import oversized_requests
+        blockers.extend(oversized_requests(route_ops + nat_ops))
     if router.get('type') == 'routeros' and state.nat_context is not None:
         from backend.routers.routeros_nat import planned_bypass_conflicts
         blockers.extend(planned_bypass_conflicts(nat_ops, state, gateway))
