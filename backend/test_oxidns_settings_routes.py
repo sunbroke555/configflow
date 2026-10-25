@@ -30,6 +30,22 @@ def test_settings_post_stale_if_match_409_with_code(space):
     assert repository.export_all() == before
 
 
+def test_settings_post_accepts_validator_weakened_by_gzip_proxy(space):
+    """nginx gzip turns the ETag into W/"..."; saving with it must not look like a conflict."""
+    client, repository = space
+    loaded = client.get(settings_url(), headers=HEADERS)
+    weak = 'W/' + loaded.headers['ETag']
+    saved = client.post(settings_url(), headers={**HEADERS, 'If-Match': weak},
+                        json={**loaded.get_json(), 'prefer_ipv4': False})
+    assert saved.status_code == 200
+    assert oxidns(repository)['prefer_ipv4'] is False
+    # A weakened stale validator is still a conflict.
+    assert set_dns(client, {'inline': 'nxdomain'}).status_code == 200
+    stale = client.post(settings_url(), headers={**HEADERS, 'If-Match': 'W/' + saved.headers['ETag']},
+                        json={**saved.get_json()['settings'], 'prefer_ipv4': True})
+    assert stale.status_code == 409 and stale.get_json()['code'] == 'oxidns_changed_elsewhere'
+
+
 def test_settings_post_returns_new_etag(space):
     client, repository = space
     loaded = client.get(settings_url(), headers=HEADERS)

@@ -46,7 +46,9 @@ def oxidns_settings():
         value = request.get_json(silent=True)
         if not isinstance(value, dict):
             raise OxidnsSettingsError('OxiDNS 设置必须是对象')
-        expected = (request.headers.get('If-Match') or '').strip()
+        # Reverse proxies that compress the response (the Docker image's nginx gzips
+        # JSON) turn the strong ETag into W/"…"; the browser echoes it back as is.
+        expected = (request.headers.get('If-Match') or '').strip().removeprefix('W/')
         # Whole-object updates are deliberate: the editor always loads defaults,
         # and callers can reset a feature without stale fields surviving.
         settings = normalize_oxidns_settings(value, validate_native_arguments=False)
