@@ -8,6 +8,8 @@ Write payloads mirror the web UI forms, including its string encoding.
 import base64
 import hashlib
 import ipaddress
+import json
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urljoin, urlsplit
 
@@ -20,7 +22,12 @@ from backend.routers.base import (
 from backend.routers.dhcp_dns import checked_dns_target
 
 TIMEOUT = 10
-LIST_LIMIT = '0,1000'
+PAGE_SIZE = 1000
+# 4.0.314 answers an empty 200 to larger request bodies (measured: list-sized
+# bodies up to 98267 bytes were accepted, 98308 bytes and more were refused).
+MAX_REQUEST_BYTES = 96 * 1024
+LIST_LABELS = {'static_rt': '静态路由', 'static_rt_table': '当前路由表', 'route_object': 'IP 分组',
+               'nat_rule': 'NAT 规则', 'stream_ipport': '端口分流'}
 
 # Escapes used by the web UI besides '%' (escaped first) and whitespace (-> %20).
 _ENCODE = [('"', '%22'), ('`', '%60'), ('$', '%24'), ('&', '%26'), (';', '%3B'),
@@ -181,6 +188,8 @@ class IKuaiDriver(RouterDriver):
         self.session.trust_env = False
         self.session.verify = verify_tls
         self._logged_in = False
+        # Inside batch(): one static_rt snapshot and the routes added since.
+        self._batch = None
 
     def close(self):
         self.session.close()
@@ -208,6 +217,10 @@ class IKuaiDriver(RouterDriver):
         try:
             data = response.json()
         except ValueError:
+            content = getattr(response, 'content', None)
+            if isinstance(content, bytes) and not content.strip():
+                # The management page itself is never empty; iKuai drops oversized requests this way.
+                raise RouterError('iKuai 没有返回任何内容：请求可能过大或被 iKuai 拒绝') from None
             raise RouterError('iKuai 返回的不是 JSON，请确认地址指向管理页面') from None
         if not isinstance(data, dict):
             raise RouterError('iKuai 返回格式无法识别')
@@ -248,10 +261,34 @@ class IKuaiDriver(RouterDriver):
             raise RouterError('检测到 iKuai 3.x 的响应格式，只支持 iKuai 4.x')
         raise RouterError(_call_error(func_name, data))
 
-    def _list(self, func_name: str) -> List[Dict[str, Any]]:
-        results = self.call(func_name, {'TYPE': 'total,data', 'limit': LIST_LIMIT})
-        rows = results.get('data') or []
-        return [row for row in rows if isinstance(row, dict)]
+    def _list_all(self, func_name: str, prefix: str = '', ids: bool = True,
+                  incomplete: str = '') -> List[Dict[str, Any]]:
+        """Every row, page by page; fail closed on truncation, drift between pages or unclear IDs."""
+        label = LIST_LABELS.get(func_name, func_name)
+        incomplete = incomplete or f'iKuai {label}列表读取不完整或读取期间发生变化，请重试'
+        rows, total, offset, seen = [], None, 0, set()
+        while total is None or offset < total:
+            result = self.call(func_name, {'TYPE': f'{prefix}total,{prefix}data', 'limit': f'{offset},{PAGE_SIZE}'})
+            count, page = result.get(f'{prefix}total'), result.get(f'{prefix}data')
+            if (type(count) is not int or count < 0 or not isinstance(page, list)
+                    or (total is not None and count != total)
+                    or len(page) != min(PAGE_SIZE, max(0, count - offset))):
+                raise RouterError(incomplete)
+            total = count
+            for row in page:
+                if not ids:
+                    if not isinstance(row, dict):
+                        raise RouterError(incomplete)
+                elif (not isinstance(row, dict) or type(row.get('id')) is not int or row['id'] < 1
+                      or row['id'] in seen):
+                    raise RouterError(f'iKuai {label}列表缺少唯一有效 ID，无法安全编辑')
+                else:
+                    seen.add(row['id'])
+                rows.append(row)
+            offset += len(page)
+            if not total:
+                break
+        return rows
 
     def probe(self) -> RouterInfo:
         verinfo = self.call('sysstat', {'TYPE': 'verinfo'}).get('verinfo') or {}
@@ -262,7 +299,7 @@ class IKuaiDriver(RouterDriver):
         for func, capability in (('static_rt', 'routes'), ('nat_rule', 'nat_bypass'), ('route_object', 'address_sets'),
                                  ('stream_ipport', 'policy_routes')):
             try:
-                self._list(func)
+                self.call(func, {'TYPE': 'total,data', 'limit': '0,1'})
                 capabilities.append(capability)
             except RouterError:
                 pass
@@ -271,7 +308,7 @@ class IKuaiDriver(RouterDriver):
 
     def read_state(self) -> RouterState:
         state = RouterState()
-        for row in self._list('static_rt'):
+        for row in self._list_all('static_rt'):
             try:
                 network = ipaddress.ip_network(f'{row.get("dst_addr")}/{row.get("netmask")}', strict=False)
             except ValueError:
@@ -279,11 +316,11 @@ class IKuaiDriver(RouterDriver):
             state.routes.append(RouteEntry(
                 id=str(row.get('id', '')), dst=str(network), gateway=str(row.get('gateway') or ''),
                 enabled=row.get('enabled') == 'yes', comment=unquote(str(row.get('comment') or ''))))
-        groups = {str(row.get('group_id')): row for row in self._list('route_object')}
+        groups = {str(row.get('group_id')): row for row in self._list_all('route_object', ids=False)}
         for row in groups.values():
             state.address_sets[str(row.get('group_name') or row.get('tagname'))] = [
                 str(item.get('ip')) for item in row.get('group_value') or [] if isinstance(item, dict) and item.get('ip')]
-        for row in self._list('nat_rule'):
+        for row in self._list_all('nat_rule'):
             if row.get('action') != 'filter':
                 continue
             state.nat_bypass.append(NatBypassEntry(
@@ -294,7 +331,7 @@ class IKuaiDriver(RouterDriver):
         # to a proxy CIDR would bounce between router and gateway forever. Proxy
         # CIDRs are therefore routed by 端口分流 rules that exclude the gateway.
         state.policy_routes = []
-        for row in self._list('stream_ipport'):
+        for row in self._list_all('stream_ipport'):
             row = decode_value(row)
             state.policy_routes.append(PolicyRouteEntry(
                 id=str(row.get('id', '')), dst=_addresses(row.get('dst_addr'), state.address_sets),
@@ -310,7 +347,7 @@ class IKuaiDriver(RouterDriver):
     def _active_routes(self) -> Optional[List[RouteEntry]]:
         """当前路由表: what the kernel forwards with, including routes no config explains."""
         try:
-            rows = self._list('static_rt_table')
+            rows = self._list_all('static_rt_table', ids=False)
         except RouterError:
             return None
         routes = []
@@ -325,12 +362,9 @@ class IKuaiDriver(RouterDriver):
         return routes
 
     def _dhcp_list(self, func: str, prefix: str = '') -> List[Dict[str, Any]]:
-        results = self.call(func, {'TYPE': f'{prefix}total,{prefix}data', 'limit': LIST_LIMIT})
-        rows, total = results.get(f'{prefix}data'), results.get(f'{prefix}total')
         # Vendor include/sqlite.sh prints literal [] for an empty JSON query.
-        if (not isinstance(rows, list) or type(total) is not int or total != len(rows)
-                or any(not isinstance(row, dict) for row in rows)):
-            raise RouterError(f'iKuai {func} 配置读取不完整，无法安全下发 DHCP DNS')
+        rows = self._list_all(func, prefix, ids=False,
+                              incomplete=f'iKuai {func} 配置读取不完整，无法安全下发 DHCP DNS')
         return [decode_value(row) for row in rows]
 
     def read_dhcp_dns(self) -> DhcpDnsState:
@@ -484,25 +518,159 @@ class IKuaiDriver(RouterDriver):
 
     def _write(self, func_name: str, action: str, param: Dict[str, Any]) -> Dict[str, Any]:
         self._login()
-        data = self._post('/Action/call', {'func_name': func_name, 'action': action, 'param': encode_value(param)})
+        payload = {'func_name': func_name, 'action': action, 'param': encode_value(param)}
+        data = self._post('/Action/call', payload)
+        if data.get('code') == 1008:
+            # As in call(): an expired or replaced session ran nothing, so one retry is safe.
+            self._logged_in = False
+            self._login()
+            data = self._post('/Action/call', payload)
         if data.get('code') != 0:
             details = '；'.join(f'{item.get("field")}: {item.get("msg")}' for item in data.get('details') or []
                                if isinstance(item, dict))
-            raise RouterError(f'iKuai {func_name} {action} 失败：{data.get("message") or data.get("code")}'
-                              + (f'（{details}）' if details else ''))
+            raise _Rejected(f'iKuai {func_name} {action} 失败：{data.get("message") or data.get("code")}'
+                            + (f'（{details}）' if details else ''))
         return data.get('results') if isinstance(data.get('results'), dict) else {}
 
+    @contextmanager
+    def batch(self):
+        """One release stage or rollback: read static_rt once instead of around every write.
+
+        Deletes and edits take their rows from one complete snapshot, kept in
+        step with our own writes; routes added here are confirmed by a single
+        readback when the batch ends. Nothing carries over to the next batch.
+        """
+        if self._batch is not None:
+            yield
+            return
+        self._batch = {'rows': None, 'stale': set(), 'added': [], 'added_since_read': False}
+        try:
+            yield
+            self._confirm_added(self._batch['added'])
+        finally:
+            self._batch = None
+
+    def _snapshot(self, fresh_tags: bool = False) -> Dict[str, Dict[str, Any]]:
+        batch = self._batch
+        if (batch['rows'] is None or (fresh_tags and batch['added_since_read'])):
+            batch['rows'] = {str(row['id']): row for row in self._list_all('static_rt')}
+            batch['stale'], batch['added_since_read'] = set(), False
+        return batch['rows']
+
+    def _static_write(self, action: str, param: Dict[str, Any], undo: Optional[Dict[str, Any]] = None):
+        """Write static_rt and keep the batch snapshot true to what we changed."""
+        batch = self._batch
+        try:
+            self._write('static_rt', action, param)
+        except _Rejected:
+            raise
+        except RouterError as error:
+            if batch is not None:
+                batch['rows'] = None
+            if undo is not None:
+                # The reply was lost, not refused: the route may exist.
+                error.undo = {**undo, 'confirmed': False}
+            raise
+        if batch is None or batch['rows'] is None:
+            return
+        if action == 'del':
+            batch['rows'].pop(str(param['id']), None)
+        elif action == 'edit':
+            batch['stale'].add(str(param['id']))
+        else:
+            batch['added_since_read'] = True
+
     def _row(self, func_name: str, row_id: Any) -> Dict[str, Any]:
-        for row in self._list(func_name):
-            if str(row.get('id')) == str(row_id):
-                return decode_value(row)
-        raise RouterError(f'iKuai {func_name} 中找不到 id={row_id}，可能已被手动删除')
+        if func_name == 'static_rt' and self._batch is not None:
+            if str(row_id) in self._batch['stale']:
+                self._batch['rows'] = None
+            row = self._snapshot().get(str(row_id))
+        else:
+            row = next((row for row in self._list_all(func_name) if str(row.get('id')) == str(row_id)), None)
+        if row is None:
+            raise RouterError(f'iKuai {func_name} 中找不到 id={row_id}，可能已被手动删除')
+        return decode_value(row)
 
     def _find_id(self, func_name: str, match) -> str:
-        for row in self._list(func_name):
+        for row in self._list_all(func_name):
             if match(decode_value(row)):
                 return str(row.get('id'))
         raise RouterError(f'iKuai {func_name} 已提交但读不回新对象')
+
+    @staticmethod
+    def _matches(row: Dict[str, Any], match: Dict[str, Any]) -> bool:
+        return all(row.get(key) == value for key, value in match.items())
+
+    def _confirm_added(self, added: List[Dict[str, Any]]) -> None:
+        """Prove each route added in this batch exists, with one complete readback."""
+        if not added:
+            return
+        rows = {}
+        for row in self._list_all('static_rt'):
+            row = decode_value(row)
+            rows.setdefault(row.get('tagname'), []).append(row)
+        missing = []
+        for undo in added:
+            tagged = rows.get(undo['match']['tagname'], [])
+            if len(tagged) != 1 or not self._matches(tagged[0], undo['match']):
+                missing.append(undo)
+                # A complete read without the (unique) name proves nothing was created.
+                undo['confirmed'] = bool(tagged)
+        if missing:
+            raise RouterError('iKuai static_rt 已提交但读不回新对象：'
+                              + '、'.join(undo['cidr'] for undo in missing))
+
+    def _new_id(self, func_name: str, undo: Dict[str, Any]) -> str:
+        """The ID of an object just added; on failure the error carries its undo."""
+        try:
+            tagged = [row for row in map(decode_value, self._list_all(func_name))
+                      if row.get('tagname') == undo['match']['tagname']]
+        except RouterError as error:
+            error.undo = undo
+            raise
+        if len(tagged) == 1 and self._matches(tagged[0], undo['match']):
+            return str(tagged[0]['id'])
+        error = RouterError(f'iKuai {func_name} 已提交但读不回新对象')
+        error.undo = {**undo, 'confirmed': bool(tagged)}
+        raise error
+
+    def _add(self, func_name: str, payload: Dict[str, Any], match: Dict[str, Any]) -> Dict[str, Any]:
+        """Add a named object; return the undo that finds it again by its unique name.
+
+        iKuai rejects a duplicate name (code 3001, 4.0.314), so the name
+        identifies the new object even when its ID is never read back.
+        """
+        undo = {'kind': 'add_undo', 'func': func_name, 'match': {'tagname': payload['tagname'], **match},
+                'confirmed': True}
+        if func_name == 'static_rt':
+            self._static_write('add', payload, undo)
+            return undo
+        try:
+            self._write(func_name, 'add', payload)
+        except _Rejected:
+            raise
+        except RouterError as error:
+            error.undo = {**undo, 'confirmed': False}
+            raise
+        return undo
+
+    def _revert_add(self, op: Dict[str, Any]) -> Dict[str, Any]:
+        func_name, match = op['func'], op['match']
+        rows = (self._snapshot(fresh_tags=True).values() if func_name == 'static_rt' and self._batch is not None
+                else self._list_all(func_name))
+        tagged = [row for row in map(decode_value, rows) if row.get('tagname') == match['tagname']]
+        if not tagged:
+            if op['confirmed']:
+                raise RouterError(f'iKuai {func_name} 中找不到本次新增的对象（名称 {match["tagname"]}），'
+                                  '可能已被手动修改或删除，请检查')
+            return {}
+        if len(tagged) != 1 or not self._matches(tagged[0], match):
+            raise RouterError(f'iKuai {func_name} 中名称为 {match["tagname"]} 的对象已被修改，未自动删除，请检查')
+        if func_name == 'static_rt':
+            self._static_write('del', {'id': tagged[0]['id']})
+        else:
+            self._write(func_name, 'del', {'id': tagged[0]['id']})
+        return {}
 
     def _route_payload(self, row: Dict[str, Any], **changes) -> Dict[str, Any]:
         payload = {key: row.get(key) for key in ROUTE_FIELDS if key in row}
@@ -510,14 +678,23 @@ class IKuaiDriver(RouterDriver):
         payload['netmask'] = str(payload.get('netmask') or '').split(' ')[0]
         return payload
 
-    def _nat_payload(self, row: Dict[str, Any], **changes) -> Dict[str, Any]:
+    @staticmethod
+    def _nat_payload(row: Dict[str, Any], **changes) -> Dict[str, Any]:
         payload = {key: row.get(key) for key in NAT_FIELDS if key in row}
         for key in ('src_addr', 'dst_addr', 'src_port', 'dst_port'):
             payload[key] = _address_field(payload.get(key))
         payload.update(changes)
         return payload
 
-    def _policy_payload(self, row: Dict[str, Any], **changes) -> Dict[str, Any]:
+    @staticmethod
+    def _new_nat(src: List[str], dst: List[str], comment: str) -> Dict[str, Any]:
+        return IKuaiDriver._nat_payload({}, enabled='yes', tagname=_tagname('nat', ','.join(dst)), action='filter',
+                                        protocol='any', iinterface='any', ointerface='any',
+                                        src_addr={'custom': src, 'object': []}, dst_addr={'custom': dst, 'object': []},
+                                        nat_addr='', nat_port='', src_addr_inv=0, dst_addr_inv=0, comment=comment)
+
+    @staticmethod
+    def _policy_payload(row: Dict[str, Any], **changes) -> Dict[str, Any]:
         """A complete 端口分流 form: omitted fields would reset the rule's other settings."""
         payload = {key: row.get(key) for key in POLICY_FIELDS if key in row}
         for key in ('src_addr', 'dst_addr', 'src_port', 'dst_port', 'time'):
@@ -525,10 +702,11 @@ class IKuaiDriver(RouterDriver):
         payload.update(changes)
         return payload
 
-    def _new_policy(self, gateway: str, dst: List[str], comment: str) -> Dict[str, Any]:
-        return self._policy_payload({}, **self._policy_target(gateway, dst, comment), tagname=_tagname('pr', comment),
-                                    interface='', iface_band=0, time=POLICY_ALWAYS, mode=0,
-                                    area_code='', dst_type=0)
+    @staticmethod
+    def _new_policy(gateway: str, dst: List[str], comment: str) -> Dict[str, Any]:
+        return IKuaiDriver._policy_payload({}, **IKuaiDriver._policy_target(gateway, dst, comment),
+                                           tagname=_tagname('pr', comment), interface='', iface_band=0,
+                                           time=POLICY_ALWAYS, mode=0, area_code='', dst_type=0)
 
     @staticmethod
     def _policy_target(gateway: str, dst: List[str], comment: str) -> Dict[str, Any]:
@@ -538,9 +716,8 @@ class IKuaiDriver(RouterDriver):
                 'dst_addr': {'custom': list(dst), 'object': []}, 'dst_addr_inv': 0, 'comment': comment}
 
     def _add_policy(self, payload: Dict[str, Any]) -> str:
-        self._write('stream_ipport', 'add', payload)
-        return self._find_id('stream_ipport', lambda row: row.get('tagname') == payload['tagname']
-                             and row.get('comment') == payload['comment'])
+        undo = self._add('stream_ipport', payload, {'comment': payload['comment']})
+        return self._new_id('stream_ipport', undo)
 
     def _apply_policy(self, op: Dict[str, Any]) -> Dict[str, Any]:
         kind = op['kind']
@@ -561,15 +738,24 @@ class IKuaiDriver(RouterDriver):
         self._write('stream_ipport', 'edit', payload)
         return {'kind': 'policy_route_restore', 'record': row}
 
-    def _add_route(self, cidr: str, gateway: str, comment: str) -> str:
+    def _add_route(self, cidr: str, gateway: str, comment: str) -> Dict[str, Any]:
         network = ipaddress.IPv4Network(cidr)
-        self._write('static_rt', 'add', {
+        undo = self._add('static_rt', {
             'enabled': 'yes', 'tagname': _tagname('rt', cidr), 'ip_type': '4', 'interface': 'auto',
             'dst_addr': str(network.network_address), 'gateway': gateway, 'netmask': str(network.netmask),
-            'prio': 1, 'comment': comment})
-        return self._find_id('static_rt', lambda row: row.get('dst_addr') == str(network.network_address)
-                             and row.get('netmask') == str(network.netmask) and row.get('gateway') == gateway
-                             and row.get('comment') == comment)
+            'prio': 1, 'comment': comment}, {'dst_addr': str(network.network_address),
+                                             'netmask': str(network.netmask), 'gateway': gateway, 'comment': comment})
+        undo['cidr'] = cidr
+        if self._batch is not None:
+            # Confirmed with every other new route when the batch ends.
+            self._batch['added'].append(undo)
+            return undo
+        try:
+            self._confirm_added([undo])
+        except RouterError as error:
+            error.undo = undo
+            raise
+        return undo
 
     def apply(self, op: Dict[str, Any]) -> Dict[str, Any]:
         kind = op['kind']
@@ -578,12 +764,13 @@ class IKuaiDriver(RouterDriver):
         if kind in ('policy_route_add', 'policy_route_update', 'policy_route_restore',
                     'policy_route_delete', 'policy_route_readd'):
             return self._apply_policy(op)
+        if kind == 'add_undo':
+            return self._revert_add(op)
         if kind == 'route_add':
-            route_id = self._add_route(op['cidr'], op['gateway'], op['comment'])
-            return {'kind': 'route_delete', 'id': route_id}
+            return self._add_route(op['cidr'], op['gateway'], op['comment'])
         if kind == 'route_delete':
             row = self._row('static_rt', op['id'])
-            self._write('static_rt', 'del', {'id': row['id']})
+            self._static_write('del', {'id': row['id']})
             network = ipaddress.ip_network(f'{row["dst_addr"]}/{row["netmask"]}', strict=False)
             return {'kind': 'route_add', 'cidr': str(network), 'gateway': row.get('gateway'),
                     'comment': row.get('comment') or ''}
@@ -591,7 +778,7 @@ class IKuaiDriver(RouterDriver):
             row = self._row('static_rt', op['id'] if kind == 'route_comment' else op['record']['id'])
             payload = (self._route_payload(row, comment=op['comment']) if kind == 'route_comment'
                        else self._route_payload(op['record']))
-            self._write('static_rt', 'edit', payload)
+            self._static_write('edit', payload)
             return {'kind': 'route_restore', 'record': row}
         if kind == 'nat_update':
             row = self._row('nat_rule', op['id'])
@@ -604,22 +791,51 @@ class IKuaiDriver(RouterDriver):
             self._write('nat_rule', 'edit', self._nat_payload(op['record']))
             return {'kind': 'nat_restore', 'record': row}
         if kind == 'nat_add':
-            self._write('nat_rule', 'add', self._nat_payload({}, enabled='yes', tagname=_tagname('nat', ','.join(op['dst'])),
-                                                             action='filter',
-                                                             protocol='any', iinterface='any', ointerface='any',
-                                                             src_addr={'custom': op['src'], 'object': []},
-                                                             dst_addr={'custom': op['dst'], 'object': []},
-                                                             nat_addr='', nat_port='', src_addr_inv=0,
-                                                             dst_addr_inv=0, comment=op['comment']))
-            rule_id = self._find_id('nat_rule', lambda row: row.get('action') == 'filter'
-                                    and row.get('comment') == op['comment'])
-            return {'kind': 'nat_delete', 'id': rule_id}
+            payload = self._new_nat(op['src'], op['dst'], op['comment'])
+            undo = self._add('nat_rule', payload, {'action': 'filter', 'comment': op['comment']})
+            return {'kind': 'nat_delete', 'id': self._new_id('nat_rule', undo)}
         if kind == 'nat_delete':
             row = self._row('nat_rule', op['id'])
             self._write('nat_rule', 'del', {'id': row['id']})
             return {'kind': 'nat_add', 'src': _address_field(row.get('src_addr'))['custom'],
                     'dst': _address_field(row.get('dst_addr'))['custom'], 'comment': row.get('comment') or ''}
         raise RouterError(f'不支持的操作 {kind}')
+
+
+class _Rejected(RouterError):
+    """iKuai answered and refused the write: nothing was changed."""
+
+
+def request_bytes(func_name: str, action: str, param: Dict[str, Any]) -> int:
+    """The JSON body _write sends (requests serialises ``json=`` the same way)."""
+    return len(json.dumps({'func_name': func_name, 'action': action, 'param': encode_value(param)}).encode())
+
+
+def oversized_requests(ops: List[Dict[str, Any]]) -> List[str]:
+    """Blockers for rules whose single request iKuai would refuse as too large."""
+    blockers = []
+    for op in ops:
+        kind = op['kind']
+        if kind in ('policy_route_add', 'policy_route_update'):
+            func_name, label, dst = 'stream_ipport', '端口分流', op['dst']
+            payload = IKuaiDriver._new_policy(op['gateway'], dst, op['comment'])
+        elif kind in ('nat_add', 'nat_update'):
+            # An update also keeps the rule's own entries; counting only the
+            # added ones may miss an oversize, but never blocks one that fits.
+            func_name, label = 'nat_rule', 'NAT 免转换规则'
+            dst = op['dst'] if kind == 'nat_add' else op.get('add_dst') or []
+            payload = IKuaiDriver._new_nat(op.get('src') or [], dst, op['comment'])
+        else:
+            continue
+        action = 'add' if kind.endswith('_add') else 'edit'
+        if action == 'edit':
+            payload['id'] = 0
+        size = request_bytes(func_name, action, payload)
+        if size > MAX_REQUEST_BYTES:
+            blockers.append(f'iKuai {label}「{op["comment"]}」需要一次写入 {len(dst)} 个网段，请求约 {size // 1024} KB，'
+                            f'超过 iKuai 单次请求上限（约 {MAX_REQUEST_BYTES // 1024} KB），发布会被拒绝。'
+                            '请减少代理网段（例如少选规则集）后重试')
+    return blockers
 
 
 def _tagname(kind: str, key: str) -> str:
