@@ -239,11 +239,15 @@ def test_two_agents_parse_a_shared_rule_source_once(library_env, monkeypatch, se
     original_convert = deployment_bundle._convert_mosdns_rules
     monkeypatch.setattr(deployment_bundle, '_convert_mosdns_rules',
                         lambda *args: parses.append('convert') or original_convert(*args))
-    first, second = prepare(library_env, service, 'agent-a'), prepare(library_env, service, 'agent-b')
-    per_agent = len(parses)
+    first = prepare(library_env, service, 'agent-a')
+    parsed_first = list(parses)
+    second = prepare(library_env, service, 'agent-b')
     # Before: every Agent re-validated the cache read, normalized and
     # validated the normalized bytes (Mihomo), or converted again (DNS cores).
-    assert per_agent == 3, parses
+    assert parses == parsed_first, parses
+    # Not an exact count: the release's parallel downloads of one source (its
+    # domain and IP files) may both validate it before either caches the verdict.
+    assert len(parsed_first) >= 3, parsed_first
     assert deployment_content_fingerprint(first['bundle'].manifest) == \
         deployment_content_fingerprint(second['bundle'].manifest)
     cached = bundle_files(second)
