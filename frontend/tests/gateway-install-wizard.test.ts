@@ -761,14 +761,91 @@ describe('router split with full TUN', () => {
     ipv4_forwarding: { protocol: 1, current: '1', config: 'managed', hook_script: 'managed', startup_hook: 'registered', persisted: true, supported: true },
     tun: { configured: true, device: 'Meta', present: true, gateway_marker: false }, ...changes })
   const row = (wrapper: ReturnType<typeof shallowMount>, label: string) => wrapper.findAllComponents(AgentStatusRow).find(item => item.props('label') === label)?.props()
-  async function renderPublished(status: unknown, embedded = true, takeover: 'full_tun' | 'legacy' = 'full_tun', extraStubs: Record<string, boolean> = {}) {
+  async function renderPublished(status: unknown, embedded = true, takeover: 'full_tun' | 'legacy' = 'full_tun', extraStubs: Record<string, boolean> = {}, sessionChanges: Record<string, unknown> = {}) {
     vi.mocked(gatewayOnboardingApi.get).mockResolvedValue(response({ ...config(), takeover }))
-    const published = session('published', takeover === 'full_tun' ? { takeover: 'full_tun' } : {})
+    const published = session('published', { ...(takeover === 'full_tun' ? { takeover: 'full_tun' } : {}), ...sessionChanges })
     vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: published }))
     vi.mocked(gatewayOnboardingApi.session).mockResolvedValue(response(published))
     vi.mocked(linuxGatewayApi.status).mockResolvedValue(response(status))
     return render(false, embedded, 'router', extraStubs)
   }
+
+  it.each([
+    ['mihomo', 'disabled', 'Mihomo Agent 已在管理中停用，启用后才能继续。'],
+    ['oxidns', 'disabled', 'OxiDNS Agent 已在管理中停用，启用后才能继续。'],
+    ['mihomo', 'offline', 'Mihomo Agent 离线，请恢复连接后重新检查。'],
+    ['oxidns', 'offline', 'OxiDNS Agent 离线，请恢复连接后重新检查。'],
+  ])('keeps physical checks visible but blocks continuing for %s %s, then refreshes recovery', async (service, state, warning) => {
+    const agents = session('published').agents
+    if (state === 'disabled') agents[service].enabled = false
+    else agents[service].status = 'offline'
+    const wrapper = await renderPublished(ready(), true, 'full_tun', {}, { agents })
+    expect(row(wrapper, 'IPv4 转发')).toMatchObject({ status: '已开启并持久化', tone: 'success' })
+    expect(row(wrapper, 'Mihomo TUN')).toMatchObject({ status: '运行中 · Meta', tone: 'success' })
+    expect(wrapper.text()).toContain(warning)
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+    expect(wrapper.emitted('completed')).toBeUndefined()
+
+    vi.mocked(gatewayOnboardingApi.session).mockResolvedValue(response(session('published', { takeover: 'full_tun' })))
+    await button(wrapper, '重新检查').trigger('click'); await flushPromises()
+    expect(gatewayOnboardingApi.session).toHaveBeenCalledExactlyOnceWith('installation-1', 'office')
+    expect(wrapper.text()).not.toContain(warning)
+    await button(wrapper, '继续接入主路由').trigger('click')
+    expect(wrapper.emitted('completed')).toEqual([[]])
+    expect(linuxGatewayApi.status).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes Agent availability even when the host network remains healthy', async () => {
+    const wrapper = await renderPublished(ready())
+    const fresh = session('published', { takeover: 'full_tun' })
+    fresh.agents.oxidns.enabled = false
+    vi.mocked(gatewayOnboardingApi.session).mockResolvedValue(response(fresh))
+    await button(wrapper, '重新检查').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('OxiDNS Agent 已在管理中停用')
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+    expect(row(wrapper, 'Mihomo TUN')?.tone).toBe('success')
+  })
+
+  it('does not treat a failed Agent refresh as permission to continue', async () => {
+    const wrapper = await renderPublished(ready())
+    vi.mocked(gatewayOnboardingApi.session).mockRejectedValue(new Error('刷新失败'))
+    await button(wrapper, '重新检查').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('状态暂时无法确认')
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+    expect(row(wrapper, 'Mihomo TUN')?.tone).toBe('success')
+  })
+
+  it('keeps recovered Agents blocked until the physical recheck also succeeds', async () => {
+    const agents = session('published').agents
+    agents.oxidns.status = 'offline'
+    const wrapper = await renderPublished(ready(), true, 'full_tun', {}, { agents })
+    vi.mocked(gatewayOnboardingApi.session).mockResolvedValue(response(session('published', { takeover: 'full_tun' })))
+    vi.mocked(linuxGatewayApi.status).mockRejectedValueOnce(new Error('网络超时'))
+    await button(wrapper, '重新检查').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('网络超时')
+    expect(row(wrapper, 'Mihomo TUN')?.tone).toBe('success')
+    expect(button(wrapper, '继续接入主路由')).toBeUndefined()
+    await button(wrapper, '重新检查').trigger('click'); await flushPromises()
+    await button(wrapper, '继续接入主路由').trigger('click')
+    expect(wrapper.emitted('completed')).toEqual([[]])
+  })
+
+  it.each(['selective', 'legacy'])('offers a read-only Agent recovery check while %s forwarding is active', async takeover => {
+    const published = session('published', { takeover })
+    published.agents.mihomo.enabled = false
+    vi.mocked(gatewayOnboardingApi.get).mockResolvedValue(response({ ...config(), takeover }))
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: published }))
+    vi.mocked(linuxGatewayApi.status).mockResolvedValue(response({ success: true, managed: { active: true, healthy: true } }))
+    const wrapper = await render(false, true, 'gateway')
+    expect(button(wrapper, '继续设置测试客户端')).toBeUndefined()
+    expect(button(wrapper, '重新读取网络状态')).toBeTruthy()
+    vi.mocked(gatewayOnboardingApi.session).mockResolvedValue(response(session('published', { takeover })))
+    await button(wrapper, '重新读取网络状态').trigger('click'); await flushPromises()
+    await button(wrapper, '继续设置测试客户端').trigger('click')
+    expect(wrapper.emitted('completed')).toEqual([[]])
+    expect(linuxGatewayApi.remove).not.toHaveBeenCalled()
+    expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
+  })
 
   it.each([false, true])('checks forwarding and TUN instead of offering gateway forwarding (embedded=%s)', async embedded => {
     const wrapper = await renderPublished(ready(), embedded)
