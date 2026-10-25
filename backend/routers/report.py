@@ -10,7 +10,7 @@ Statuses per desired item:
 Managed objects that are no longer desired are reported as ``extra``.
 """
 import ipaddress
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Set, Tuple
 
 from backend.routers.base import (
     POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT, RouterState, as_dict, is_managed, policy_route, policy_route_ok,
@@ -38,6 +38,48 @@ def _networks(values: Iterable[str]) -> List[ipaddress.IPv4Network]:
     return result
 
 
+class SupernetIndex:
+    """Answers ``target.subnet_of(network)`` against many networks at once.
+
+    A network containing ``target`` is one of its supernets (at most 33 for
+    IPv4), so a lookup hashes those instead of scanning every network: large
+    rule sets made the pairwise scan quadratic.  Each network may carry owner
+    positions, e.g. the rule it came from.
+    """
+
+    def __init__(self, networks: Iterable[ipaddress.IPv4Network] = ()):
+        self._owners: Dict[Tuple[int, int, int], Set[int]] = {}
+        self._prefixlens: Dict[int, List[int]] = {}
+        self.add(networks)
+
+    def add(self, networks: Iterable[ipaddress.IPv4Network], owner: int = 0) -> None:
+        for network in networks:
+            key = (network.version, int(network.network_address), network.prefixlen)
+            self._owners.setdefault(key, set()).add(owner)
+            lengths = self._prefixlens.setdefault(network.version, [])
+            if network.prefixlen not in lengths:
+                lengths.append(network.prefixlen)
+                lengths.sort()
+
+    def _supernet_keys(self, target: ipaddress.IPv4Network):
+        address, width = int(target.network_address), target.max_prefixlen
+        for prefixlen in self._prefixlens.get(target.version, ()):
+            if prefixlen > target.prefixlen:
+                break
+            mask = ((1 << width) - 1) ^ ((1 << (width - prefixlen)) - 1)
+            yield target.version, address & mask, prefixlen
+
+    def owners(self, target: ipaddress.IPv4Network) -> Set[int]:
+        """Owners of every indexed network that contains ``target``."""
+        found: Set[int] = set()
+        for key in self._supernet_keys(target):
+            found.update(self._owners.get(key, ()))
+        return found
+
+    def covers(self, target: ipaddress.IPv4Network) -> bool:
+        return any(key in self._owners for key in self._supernet_keys(target))
+
+
 def _policy_route_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     """Proxy CIDRs routed by a policy rule that excludes the gateway as a source.
 
@@ -48,18 +90,22 @@ def _policy_route_items(desired: Dict[str, Any], state: RouterState) -> Dict[str
     gateway = desired.get('proxy_gateway') or ''
     desired_cidrs = {entry['cidr'] for entry in desired['proxy_cidrs']}
     auto = policy_route(state, POLICY_AUTO_COMMENT)
-    covered = _networks(auto.dst) if auto and policy_route_ok(auto, gateway) else []
+    covered = SupernetIndex(_networks(auto.dst) if auto and policy_route_ok(auto, gateway) else [])
+    # A disabled static route forwards nothing, so the policy rule decides: leave it be.
+    enabled_by_dst: Dict[str, List[Any]] = {}
+    for route in state.routes:
+        if route.enabled:
+            enabled_by_dst.setdefault(route.dst, []).append(route)
     items = []
     for entry in desired['proxy_cidrs']:
         target = ipaddress.IPv4Network(entry['cidr'])
-        # A disabled static route forwards nothing, so the policy rule decides: leave it be.
-        matches = [route for route in state.routes if route.dst == entry['cidr'] and route.enabled]
+        matches = enabled_by_dst.get(entry['cidr'], [])
         bad = [route for route in matches if not (gateway and route.gateway == gateway)]
         if bad:
             status, detail = 'conflict', f'同网段路由下一跳为 {bad[0].gateway}，期望下一跳 {gateway or "未知"}'
         elif matches:
             status, detail = 'adoptable', '静态路由会让 mihomo 自身的流量回环，将迁移为排除 mihomo 的策略路由'
-        elif any(target.subnet_of(network) for network in covered):
+        elif covered.covers(target):
             status, detail = 'synced', ''
         else:
             status, detail = 'missing', ''
@@ -127,6 +173,7 @@ def _route_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
 def _nat_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     rules = [rule for rule in state.nat_bypass if rule.enabled]
     route_index = RouteEgressIndex(state.nat_context)
+    cover_index = None
     items = []
     for entry in desired['proxy_cidrs']:
         if state.nat_context is not None:
@@ -136,7 +183,13 @@ def _nat_items(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
             rule_ids = assessment['rule_ids']
         else:
             target = ipaddress.IPv4Network(entry['cidr'])
-            covering = [rule for rule in rules if any(target.subnet_of(net) for net in _networks(rule.dst))]
+            if cover_index is None:
+                # Parse each rule's destinations once, not once per CIDR. RouterOS
+                # (nat_context set) proves coverage with its raw selectors instead.
+                cover_index = SupernetIndex()
+                for position, rule in enumerate(rules):
+                    cover_index.add(_networks(rule.dst), position)
+            covering = [rules[position] for position in sorted(cover_index.owners(target))]
             if any(is_managed(rule.comment) for rule in covering):
                 status, detail = 'synced', ''
                 rule_ids = [rule.id for rule in covering]

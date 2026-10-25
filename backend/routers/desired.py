@@ -7,6 +7,7 @@ from policies: other IP rules usually have domain counterparts that already reac
 mihomo through fake-ip, and the active choice of a select group is unknown.
 """
 import ipaddress
+from bisect import bisect_right
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -74,6 +75,18 @@ def _public_ipv4_networks(lines: str) -> List[ipaddress.IPv4Network]:
     return result
 
 
+def merge_sources(sources: Dict[ipaddress.IPv4Network, List[str]]) -> List[Dict[str, Any]]:
+    """Collapse the source networks; each result lists every source name inside it."""
+    collapsed = sorted(ipaddress.collapse_addresses(sources))
+    # Collapsed networks are disjoint and cover every source, so each source lies
+    # in the last one starting at or before it: a bisect, not a scan per network.
+    starts = [int(network.network_address) for network in collapsed]
+    labels: List[set] = [set() for _ in collapsed]
+    for original, names in sources.items():
+        labels[bisect_right(starts, int(original.network_address)) - 1].update(names)
+    return [{'cidr': str(network), 'sources': sorted(names)} for network, names in zip(collapsed, labels)]
+
+
 def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
                     ip_rule_sets: Optional[List[str]] = None, content_loader=None) -> Dict[str, Any]:
     """Build the desired router state.
@@ -128,12 +141,7 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
         for network in _public_ipv4_networks(convert_rule_content_for_mosdns(content, 'ip')):
             sources.setdefault(network, []).append(name)
 
-    collapsed = list(ipaddress.collapse_addresses(sources))
-    proxy_cidrs = []
-    for network in collapsed:
-        names = sorted({name for original, labels in sources.items() if original.subnet_of(network) for name in labels})
-        proxy_cidrs.append({'cidr': str(network), 'sources': names})
-    proxy_cidrs.sort(key=lambda entry: ipaddress.IPv4Network(entry['cidr']))
+    proxy_cidrs = merge_sources(sources)
 
     if not proxy_gateway:
         incomplete('未关联 mihomo Agent，无法确定代理路由的下一跳')
