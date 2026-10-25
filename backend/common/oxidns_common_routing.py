@@ -297,8 +297,8 @@ def _recognize(document, settings, config, claim):
     if custom_valid:
         caps['custom_matches'] = _cap()
         caps['custom_match_position'] = _cap(bool(custom),
-            '请先添加自定义匹配，再选择前后位置。' if not custom else
-            '当前没有域名分流规则，前后位置效果相同。' if not domain_indices else '')
+            '请先添加自定义匹配，再设置执行顺序。' if not custom else
+            '当前没有域名分流规则，两种执行顺序效果相同。' if not domain_indices else '')
     else:
         recognized = False
     if invalid:
@@ -870,7 +870,7 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
     if 'aggregate_rules' in changes and type(values['aggregate_rules']) is not bool:
         raise OxidnsSettingsError('合并相邻规则必须为布尔值。')
     if 'custom_match_position' in changes and values['custom_match_position'] not in ('head', 'tail'):
-        raise OxidnsSettingsError('自定义匹配位置必须为 head 或 tail。')
+        raise OxidnsSettingsError('自定义匹配执行顺序必须为 head 或 tail。')
     if 'custom_matches' in changes:
         if not isinstance(values['custom_matches'], list):
             raise OxidnsSettingsError('自定义匹配必须为列表。')

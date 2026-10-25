@@ -168,7 +168,7 @@ def normalize_oxidns_settings(value=None, *, validate_native_arguments=True):
     if settings['default_forward'] not in ('forward_local', 'forward_remote'):
         raise OxidnsSettingsError('默认转发目标无效')
     if settings['custom_match_position'] not in ('head', 'tail'):
-        raise OxidnsSettingsError('自定义匹配位置无效')
+        raise OxidnsSettingsError('自定义匹配执行顺序无效')
     if not isinstance(settings['custom_matches'], list):
         raise OxidnsSettingsError('自定义匹配必须为数组')
     for entry in settings['custom_matches']:
