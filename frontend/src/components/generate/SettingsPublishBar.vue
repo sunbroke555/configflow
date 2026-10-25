@@ -11,6 +11,7 @@ import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { createDeploymentId, deploymentNeedsNotice, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { stripTrailingPunctuation } from '@/lib/text'
 
 type ServiceType = 'mihomo' | 'mosdns' | 'oxidns' | 'surge'
 type Agent = { id: string; name: string; profile_id?: string; service_type: string; status?: string; enabled?: boolean; latest_deployment?: AgentDeployment; dns_follow?: { source_agent_id: string } | null }
@@ -148,7 +149,7 @@ async function loadTargets() {
     updateTargets(data)
     restorePending()
   } catch (failure) {
-    if (!disposed && generation === session) loadError.value = `暂时无法读取目标设备：${messageOf(failure)}仍可保存草稿。`
+    if (!disposed && generation === session) loadError.value = `暂时无法读取目标设备：${stripTrailingPunctuation(messageOf(failure))}。仍可保存草稿。`
   } finally { if (!disposed && generation === session) loading.value = false }
 }
 
