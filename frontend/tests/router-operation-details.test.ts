@@ -71,6 +71,23 @@ describe('reviewable release operation details', () => {
     expect(groups.find(g => g.title === '迁移主表静态路由')!.rows).toHaveLength(1)
     expect(groups.find(g => g.title === '移出 NAT 免转换目的列表')!.rows[0].label).toContain('*M')
   })
+  it('shows iKuai IP group writes and the groups a rule references', () => {
+    const add = operationDetails({ kind: 'ikuai_group_add', summary: '新建', name: 'cf_pa_1', comment: 'cf-mihomo', values: ['198.51.100.0/24', '203.0.113.0/24'] })
+    expect(add.find(g => g.title === 'IP 分组')!.rows[0]).toEqual({ label: '名称', value: 'cf_pa_1' })
+    expect(add.find(g => g.title === '分组网段')!.rows.map(row => row.value)).toEqual(['198.51.100.0/24', '203.0.113.0/24'])
+    const update = operationDetails({ kind: 'ikuai_group_update', summary: '更新', name: 'cf_pa_2', values: ['192.0.2.0/24', '198.51.100.0/24'],
+      added: ['192.0.2.0/24'], removed: ['203.0.113.0/24'], expected: 'abc' })
+    expect(update.find(g => g.title === '分组网段变化')!.rows).toEqual([
+      { label: '新增', value: '192.0.2.0/24', action: '新增' }, { label: '移除', value: '203.0.113.0/24', action: '移除' }])
+    expect(update.find(g => g.title === 'IP 分组')!.rows[1]).toEqual({ label: '更新后网段数', value: '2' })
+    const removal = operationDetails({ kind: 'ikuai_group_delete', summary: '删除', name: 'cf_pa_3', count: 20 })
+    expect(removal[0].rows.map(row => row.value)).toEqual(['cf_pa_3', '20'])
+    const rule = operationDetails({ kind: 'policy_route_update', summary: '迁移', id: '1', gateway: '192.0.2.3', comment: 'cf-mihomo',
+      groups: ['cf_pa_1', 'cf_pa_2'], dst: ['198.51.100.0/24'] })
+    expect(rule.find(g => g.title === '引用 IP 分组')!.rows.map(row => row.value)).toEqual(['cf_pa_1', 'cf_pa_2'])
+    const nat = operationDetails({ kind: 'nat_add', summary: '新增', src: ['192.0.2.1-192.0.2.2'], dst: ['198.51.100.0/24'], groups: ['cf_nat_1'], comment: 'cf-mihomo' })
+    expect(nat.map(g => g.title)).toEqual(['来源范围', '目的网段', '引用 IP 分组', '规则备注'])
+  })
   it('mounts detail rows only when expanded, searches every address and paginates large plans', async () => {
     const op = fixture(); op.previous = null
     op.spec = { sources: Array.from({ length: 120 }, (_, i) => `192.0.2.${i + 1}/32`), destinations: [], gateway: '192.0.2.3' }
