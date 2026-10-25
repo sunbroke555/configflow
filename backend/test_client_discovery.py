@@ -3,8 +3,8 @@
 RouterOS fixtures are a read-only CLI snapshot of a RouterOS 7.24.5 home router
 converted to the REST JSON shape (testdata/routeros_clients_7245.json, MACs and
 personal host names anonymized). Ping request/response/error shapes were
-captured from a RouterOS 7.24.5 CHR over REST. iKuai rows use the documented
-4.x field names (jakeslee/ikuai v4/action/monitor.go).
+captured from a RouterOS 7.24.5 CHR over REST. iKuai replies were captured from
+an isolated iKuai 4.0.314 lab (testdata/ikuai_clients_40314.json).
 """
 import copy
 import json
@@ -26,6 +26,7 @@ from backend.routers.routeros import PingNotPermitted, RouterOSDriver
 from backend.test_oxidns_integration import oxidns_app  # noqa: F401
 
 SNAPSHOT = json.loads((Path(__file__).parent / 'testdata' / 'routeros_clients_7245.json').read_text())
+IKUAI_LAB = json.loads((Path(__file__).parent / 'testdata' / 'ikuai_clients_40314.json').read_text())
 TABLES = {'/ip/arp': SNAPSHOT['arp'], '/ip/dhcp-server/lease': SNAPSHOT['leases'],
           '/ip/dhcp-server': SNAPSHOT['dhcp_servers'], '/ip/address': SNAPSHOT['addresses']}
 # Stale LAN entries with no fresh DHCP renewal: these need an active check.
@@ -289,15 +290,22 @@ def test_driver_ping_reads_the_captured_responses(monkeypatch):
 # --- iKuai --------------------------------------------------------------------------------------------------
 
 def terminal(ip, mac, **extra):
-    # Documented 4.x monitor_lanip row (subset; unknown fields are ignored).
-    return {'id': 1, 'ip_addr': ip, 'ip_addr_int': 0, 'mac': mac, 'interface': 'lan1', 'hostname': '', 'termname': '',
-            'comment': '', 'uptime': '2026-10-25 09:00:01', 'connect_num': 3, 'upload': 0, 'download': 0,
-            'client_type': 'Android', **extra}
+    """A captured 4.0.314 monitor_lanip row for a static-IP client (no hostname key), re-addressed."""
+    row = copy.deepcopy(IKUAI_LAB['monitor_lanip']['results']['data'][0])
+    assert 'hostname' not in row
+    row.update(ip_addr=ip, mac=mac, **extra)
+    return row
+
+
+def lab_rows(func_name):
+    return copy.deepcopy(IKUAI_LAB[func_name]['results']['data'])
 
 
 class FakeIKuai:
-    def __init__(self, terminals=(), leases=(), failures=None):
-        self.data = {'monitor_lanip': list(terminals), 'dhcp_lease': list(leases)}
+    """``show`` lists the way 4.0.314 serves them: limit is "<offset>,<count>", total is the full count."""
+
+    def __init__(self, terminals=(), leases=(), failures=None, lan=()):
+        self.data = {'monitor_lanip': list(terminals), 'dhcp_lease': list(leases), 'lan': list(lan)}
         self.failures = failures or {}
         self.calls = []
 
@@ -307,57 +315,153 @@ class FakeIKuai:
             raise RouterError(self.failures[func_name])
         start, size = (int(part) for part in param['limit'].split(','))
         rows = self.data[func_name]
-        return {'total': len(rows), 'data': rows[start:start + size]}
+        return {'data': rows[start:start + size], 'total': len(rows)}
 
     def close(self):
         pass
 
 
-def test_ikuai_terminals_are_online_and_leases_only_discover(monkeypatch):
+def test_ikuai_lab_capture_reads_terminals_leases_and_own_address():
+    fake = FakeIKuai(lab_rows('monitor_lanip'), lab_rows('dhcp_lease'), lan=lab_rows('lan'))
+    reading = ikuai_clients.read(fake)
+    seen = {ip: sighting.public() for ip, sighting in reading.sightings.items()}
+    assert seen == {
+        # Static IP (also bound in dhcp_static): no hostname key in the terminal row.
+        '192.168.77.3': {'mac': 'BC:24:11:98:C7:BD', 'hostname': '', 'sources': ['online'], 'presence': 'online',
+                         'basis': 'terminal', 'last_seen': None, 'router_id': ''},
+        # DHCP client: lease end_time - start_time = 7200, timeout 6901 left -> renewed 299 s ago.
+        '192.168.77.100': {'mac': 'BC:24:11:71:F6:CC', 'hostname': 'cf-ik-client', 'sources': ['lease', 'online'],
+                           'presence': 'online', 'basis': 'terminal', 'last_seen': 299, 'router_id': ''},
+        '192.168.77.250': {'mac': '76:58:BD:A9:09:0F', 'hostname': '', 'sources': ['online'], 'presence': 'online',
+                           'basis': 'terminal', 'last_seen': None, 'router_id': ''},
+    }
+    assert reading.own == {'192.168.77.1'}
+    assert reading.notes == ['按 2 分钟内经过路由器的流量判断在线']
+    assert [call[:2] for call in fake.calls] == [('monitor_lanip', 'show'), ('dhcp_lease', 'show'), ('lan', 'show')]
+    assert all(call[2] == {'TYPE': 'data,total', 'limit': '0,1000'} for call in fake.calls)
+
+
+def test_ikuai_lease_without_traffic_is_offline_with_its_renewal_age():
+    reading = ikuai_clients.read(FakeIKuai([], lab_rows('dhcp_lease')))
+    assert reading.sightings['192.168.77.100'].public() == {
+        'mac': 'BC:24:11:71:F6:CC', 'hostname': 'cf-ik-client', 'sources': ['lease'], 'presence': 'offline',
+        'basis': 'absent', 'last_seen': 299, 'router_id': ''}
+    assert reading.own == set()
+
+
+def test_ikuai_names_paging_and_odd_rows(monkeypatch):
     monkeypatch.setattr(ikuai_clients, 'PAGE', 2)
     fake = FakeIKuai(
         [terminal('192.168.9.10', 'aa:bb:cc:00:00:01', comment='客厅%20电视', hostname='tv'),
          terminal('192.168.9.11', 'aa:bb:cc:00:00:02', termname='NAS'),
          terminal('192.168.9.12', 'aa:bb:cc:00:00:03', hostname='iPhone'),
          terminal('fe80::1', 'aa:bb:cc:00:00:04'), {'ip_addr': 'garbage'}],
-        [{'ip_addr': '192.168.9.11', 'mac': 'aa:bb:cc:00:00:02', 'hostname': 'nas-box', 'interface': 'lan1'},
-         {'ip_addr': '192.168.9.20', 'mac': 'AA-BB-CC-00-00-05', 'hostname': 'printer', 'interface': 'lan1'}])
+        [{**lab_rows('dhcp_lease')[0], 'ip_addr': '192.168.9.11', 'mac': 'aa:bb:cc:00:00:02', 'hostname': 'nas-box'},
+         {**lab_rows('dhcp_lease')[0], 'ip_addr': '192.168.9.20', 'mac': 'AA-BB-CC-00-00-05', 'hostname': 'printer',
+          'timeout': 'x'}])
     reading = ikuai_clients.read(fake)
-    seen = {ip: sighting.public() for ip, sighting in reading.sightings.items()}
+    seen = {ip: (s.hostname, s.mac, sorted(s.sources), s.presence, s.last_seen) for ip, s in reading.sightings.items()}
     assert seen == {
-        '192.168.9.10': {'mac': 'AA:BB:CC:00:00:01', 'hostname': '客厅 电视', 'sources': ['online'],
-                         'presence': 'online', 'basis': 'terminal', 'last_seen': None, 'router_id': ''},
-        '192.168.9.11': {'mac': 'AA:BB:CC:00:00:02', 'hostname': 'NAS', 'sources': ['lease', 'online'],
-                         'presence': 'online', 'basis': 'terminal', 'last_seen': None, 'router_id': ''},
-        '192.168.9.12': {'mac': 'AA:BB:CC:00:00:03', 'hostname': 'iPhone', 'sources': ['online'],
-                         'presence': 'online', 'basis': 'terminal', 'last_seen': None, 'router_id': ''},
-        '192.168.9.20': {'mac': 'AA:BB:CC:00:00:05', 'hostname': 'printer', 'sources': ['lease'],
-                         'presence': 'offline', 'basis': 'absent', 'last_seen': None, 'router_id': ''},
+        '192.168.9.10': ('客厅 电视', 'AA:BB:CC:00:00:01', ['online'], 'online', None),
+        '192.168.9.11': ('NAS', 'AA:BB:CC:00:00:02', ['lease', 'online'], 'online', 299),
+        '192.168.9.12': ('iPhone', 'AA:BB:CC:00:00:03', ['online'], 'online', None),
+        '192.168.9.20': ('printer', 'AA:BB:CC:00:00:05', ['lease'], 'offline', None),
     }
-    assert reading.notes == ['按 2 分钟内经过路由器的流量判断在线']
     pages = [call for call in fake.calls if call[0] == 'monitor_lanip']
     assert [call[2] for call in pages] == [{'TYPE': 'data,total', 'limit': f'{start},2'} for start in (0, 2, 4)]
     assert all(call[1] == 'show' for call in fake.calls)
 
 
-def test_ikuai_lease_failure_is_a_note_but_the_terminal_monitor_is_required():
+def test_ikuai_rows_stop_when_total_is_missing():
+    """Sent without TYPE, 4.0.314 answers only ``data`` (monitor_lanip_noparam)."""
+    class NoTotal(FakeIKuai):
+        def call(self, func_name, param, action='show'):
+            self.calls.append(func_name)
+            return copy.deepcopy(IKUAI_LAB['monitor_lanip_noparam']['results'])
+    fake = NoTotal()
+    assert [row['ip_addr'] for row in ikuai_clients.rows(fake, 'monitor_lanip')] == [
+        '192.168.77.3', '192.168.77.100', '192.168.77.250']
+    assert fake.calls == ['monitor_lanip']
+
+
+def test_ikuai_lease_and_lan_failures_are_notes_but_the_terminal_monitor_is_required():
     reading = ikuai_clients.read(FakeIKuai([terminal('192.168.9.10', 'aa:bb:cc:00:00:01')],
-                                           failures={'dhcp_lease': 'iKuai 未执行 dhcp_lease（错误码 1003）'}))
-    assert reading.notes[1] == '无法读取 DHCP 租约：iKuai 未执行 dhcp_lease（错误码 1003）'
-    assert list(reading.sightings) == ['192.168.9.10']
+                                           failures={'dhcp_lease': 'iKuai 账号没有「IPv4」（dhcp_lease）的访问权限（错误码 1001）',
+                                                     'lan': 'x'}))
+    assert reading.notes[1] == '无法读取 DHCP 租约：iKuai 账号没有「IPv4」（dhcp_lease）的访问权限（错误码 1001）'
+    assert list(reading.sightings) == ['192.168.9.10'] and reading.own == set()
     with pytest.raises(RouterError):
         ikuai_clients.read(FakeIKuai(failures={'monitor_lanip': 'x'}))
 
 
-def test_ikuai_code_1003_is_worded_neutrally(monkeypatch):
-    driver = IKuaiDriver('http://192.0.2.2', 'admin', 'secret')
-    driver._logged_in = True
-    monkeypatch.setattr(driver, '_post', lambda path, payload: {'code': 1003, 'message': 'no permission'})
-    with pytest.raises(RouterError) as caught:
+class LabSession:
+    """Replays captured 4.0.314 replies: login first, then one reply per call."""
+
+    def __init__(self, login, *replies):
+        self.replies = [login, *replies]
+        self.posts = []
+        self.trust_env = True
+        self.verify = True
+
+    def post(self, url, **_):
+        self.posts.append(url.rsplit('/', 1)[-1])
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps(self.replies.pop(0)).encode()
+        return response
+
+    def close(self):
+        pass
+
+
+def lab_driver(*replies, login=None):
+    driver = IKuaiDriver('https://192.0.2.2', 'cfro', 'secret')
+    driver.session = LabSession(login or IKUAI_LAB['login_ok'], *replies)
+    return driver
+
+
+def test_ikuai_wrong_password_is_a_login_failure_despite_result_10000():
+    driver = lab_driver(login=IKUAI_LAB['login_wrong_password'])
+    with pytest.raises(RouterError, match=r'^iKuai 登录失败：账号或密码错误（错误码 1005）$'):
         driver.call('monitor_lanip', {'TYPE': 'data,total'})
-    message = str(caught.value)
-    assert 'monitor_lanip' in message and '1003' in message and 'no permission' in message
-    assert '权限' in message and '固件' in message and '管理员账号' not in message
+    assert driver.session.posts == ['login']
+
+
+@pytest.mark.parametrize('reply, expected', [
+    ('no_read_permission', 'iKuai 账号没有「终端监控IPv4」（monitor_lanip）的访问权限（错误码 1001）。'
+                           '请在 iKuai 的用户组中授予读取权限，或改用管理员账号。'),
+    ('no_read_permission_with_result', 'iKuai 账号没有「IPv4」（monitor_lanip）的访问权限（错误码 1001）。'
+                                       '请在 iKuai 的用户组中授予读取权限，或改用管理员账号。'),
+    ('restricted_no_such_func', 'iKuai 账号没有 monitor_lanip 的访问权限（错误码 1001）。'
+                                '请在 iKuai 的用户组中授予读取权限，或改用管理员账号。'),
+    ('no_write_permission', 'iKuai 账号没有「DHCP服务端」（monitor_lanip）的执行权限（错误码 1002）。'
+                            '请在 iKuai 的用户组中授予修改权限，或改用管理员账号。'),
+    ('no_such_func', 'iKuai 不提供 monitor_lanip 接口（错误码 1003：Access denied）。当前固件可能不支持这项功能，请确认 iKuai 版本。'),
+    ('invalid_action', 'iKuai 调用 monitor_lanip 失败：invalid action（错误码 3001）'),
+])
+def test_ikuai_call_errors_use_the_codes_seen_on_4_0_314(reply, expected):
+    """Many 4.x errors carry "Result": 10000 too; none of them may be reported as 3.x."""
+    with pytest.raises(RouterError) as caught:
+        lab_driver(IKUAI_LAB['errors'][reply]).call('monitor_lanip', {'TYPE': 'data,total'})
+    assert str(caught.value) == expected
+
+
+def test_ikuai_expired_session_logs_in_again_once():
+    driver = lab_driver(IKUAI_LAB['errors']['session_expired'], IKUAI_LAB['login_ok'], IKUAI_LAB['dhcp_lease'])
+    assert driver.call('dhcp_lease', {'TYPE': 'data,total'})['total'] == 1
+    assert driver.session.posts == ['login', 'call', 'login', 'call']
+    expired = IKUAI_LAB['errors']['session_expired']
+    driver = lab_driver(expired, IKUAI_LAB['login_ok'], expired)
+    with pytest.raises(RouterError, match='错误码 1008'):
+        driver.call('dhcp_lease', {'TYPE': 'data,total'})
+
+
+def test_ikuai_3x_replies_are_still_recognized():
+    driver = lab_driver({'Result': 30000, 'ErrMsg': 'Success', 'Data': {}}, login={'Result': 10000, 'ErrMsg': 'Success'})
+    with pytest.raises(RouterError, match='iKuai 3.x'):
+        driver.call('sysstat', {'TYPE': 'verinfo'})
+    with pytest.raises(RouterError, match='登录失败：bad'):
+        lab_driver(login={'Result': 10001, 'ErrMsg': 'bad'}).call('sysstat', {})
 
 
 # --- Profile endpoint ---------------------------------------------------------------------------------------

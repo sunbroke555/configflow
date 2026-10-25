@@ -2,13 +2,22 @@
 
 ``monitor_lanip`` (终端监控) lists the clients that sent traffic through the
 router in roughly the last two minutes: those are online. ``dhcp_lease`` only
-adds addresses to discover. Field names follow the 4.x web API as published by
-jakeslee/ikuai (v4/action/monitor.go): ip_addr, mac, hostname, termname,
-comment, interface, uptime. Parsing is tolerant on purpose: rows without an
-IPv4 address are skipped and unknown fields ignored, so captured firmware
-responses can replace the fixtures without code changes.
+adds addresses to discover. ``lan`` gives the router's own LAN addresses.
+
+Shapes verified on 4.0.314 (fixtures: backend/testdata/ikuai_clients_40314.json):
+  - ``show`` with ``TYPE: data,total`` and ``limit: "<offset>,<count>"`` returns
+    ``{"data": [...], "total": N}``; without TYPE only ``data`` comes back.
+  - monitor_lanip rows: ip_addr, mac, interface, comment, termname, uptime
+    ("YYYY-MM-DD HH:MM:SS"), static_status ... ``hostname`` is present only for
+    DHCP clients; static-IP rows have no such key.
+  - dhcp_lease rows: ip_addr, mac, hostname, termname, interface, start_time and
+    end_time (router epoch; start_time moves on every renewal), timeout (seconds
+    left), static_status, status.
+  - lan rows: ``ip_mask`` like "192.168.77.1/255.255.255.0".
+Rows without an IPv4 address are skipped and unknown fields ignored.
 """
-from typing import List, Optional
+import ipaddress
+from typing import List, Optional, Set
 
 from backend.routers.base import RouterError
 from backend.routers.ikuai import decode_value
@@ -46,7 +55,7 @@ def _name(row: dict) -> str:
 
 
 def _address(row: dict) -> str:
-    return next((ip for key in ('ip_addr', 'ip', 'addr') if (ip := ipv4(row.get(key)))), '')
+    return ipv4(row.get('ip_addr'))
 
 
 def parse_terminal(row: dict) -> Optional[Sighting]:
@@ -57,13 +66,39 @@ def parse_terminal(row: dict) -> Optional[Sighting]:
                     presence='online', basis='terminal')
 
 
+def _int(row: dict, key: str) -> Optional[int]:
+    value = row.get(key)
+    return value if type(value) is int else None
+
+
 def parse_lease(row: dict) -> Optional[Sighting]:
     ip = _address(row)
     if not ip:
         return None
+    # Seconds since the lease was granted or renewed, from the router's own
+    # clock only: (end_time - start_time) is the lease length, timeout what is left.
+    start, end, left = _int(row, 'start_time'), _int(row, 'end_time'), _int(row, 'timeout')
+    last_seen = end - start - left if None not in (start, end, left) and end - start >= left >= 0 else None
     # Not in the terminal monitor: no traffic in the last ~2 minutes.
     return Sighting(ip=ip, mac=normalize_mac(row.get('mac')), hostname=_name(row), sources={'lease'},
-                    presence='offline', basis='absent')
+                    presence='offline', basis='absent', last_seen=last_seen)
+
+
+def own_addresses(driver) -> Set[str]:
+    """The router's LAN addresses (``lan`` ip_mask); best effort."""
+    try:
+        results = driver.call('lan', {'TYPE': 'data,total', 'limit': f'0,{PAGE}'})
+    except RouterError:
+        return set()
+    addresses = set()
+    for row in results.get('data') or []:
+        text = str(row.get('ip_mask') or '') if isinstance(row, dict) else ''
+        for item in text.replace(',', ' ').split():
+            try:
+                addresses.add(str(ipaddress.IPv4Interface(item).ip))
+            except ValueError:
+                continue
+    return addresses
 
 
 def read(driver, priority=(), deadline=None) -> Reading:
@@ -91,6 +126,9 @@ def read(driver, priority=(), deadline=None) -> Reading:
             current.sources.add('lease')
             current.mac = current.mac or sighting.mac
             current.hostname = current.hostname or sighting.hostname
+            if current.last_seen is None:
+                current.last_seen = sighting.last_seen
         else:
             reading.sightings[sighting.ip] = sighting
+    reading.own = own_addresses(driver)
     return reading
