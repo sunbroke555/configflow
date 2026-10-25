@@ -123,7 +123,10 @@ def _return_rule_matches(rule: Dict[str, Any], expected: Dict[str, Any]) -> bool
         return False
 
 
-def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRouting) -> None:
+def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRouting,
+            state: Optional[RouterState] = None) -> Optional[RouterState]:
+    """Read back one stage. ``state`` reuses a read made with no write since;
+    routes and NAT return the state they checked."""
     if stage == 'dns_guard':
         from backend.routers.dns_guard import verify
         verify(driver, checks['dns_guard'])
@@ -152,7 +155,7 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         if not any(_return_rule_matches(rule, expected) for rule in status.get('fwmark_rules') or []):
             raise ReleaseError('没有找到与计划一致的回流策略路由（ip rule）')
         return
-    state = driver.read_state()
+    state = driver.read_state() if state is None else state
     if stage == 'routes':
         if checks.get('ros_policy') is not None:
             from backend.routers.ros_policy_write import verify
@@ -178,6 +181,7 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
             raise ReleaseError('回读校验失败：应删除的端口分流规则仍然存在')
     elif stage == 'nat_bypass':
         verify_nat(checks, state)
+    return state
 
 
 def _batch(driver, rollback: bool = False):
@@ -187,22 +191,71 @@ def _batch(driver, rollback: bool = False):
 
 
 def _rollback(done: List[Tuple[str, Dict[str, Any], Dict[str, Any]]], driver, agent) -> List[Dict[str, Any]]:
+    from backend.routers import ros_address_lists
     results = []
     try:
         with _batch(driver, rollback=True):
-            for stage, op, undo in reversed(done):
-                if not undo:
+            entries = [entry for entry in reversed(done) if entry[2]]
+            batchable = getattr(driver, 'batch_restorable', lambda undo: False)
+            index = 0
+            while index < len(entries):
+                end = index
+                while end < len(entries) and batchable(entries[end][2]):
+                    end += 1
+                if end - index > 1:
+                    # Consecutive single-route undo records run in batches, each with
+                    # its own result, exactly as one-by-one rollback reports them.
+                    run = entries[index:end]
+                    ros_address_lists.invalidate(driver)
+                    try:
+                        errors = driver.restore_many([undo for _, _, undo in run])
+                    except (RouterError, RuntimeError, requests.RequestException) as error:
+                        # restore_many reports each record; should it still fail, part
+                        # of the run may be done. Running it again would report routes
+                        # it recreated as foreign, so keep it for inspection instead.
+                        errors = [str(error)] * len(run)
+                    for (stage, op, _), error in zip(run, errors):
+                        results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'}
+                                       if error else {'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
+                    index = end
                     continue
-                try:
-                    _apply(undo, driver, agent)
-                    results.append({'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
-                except (RouterError, RuntimeError, requests.RequestException) as error:
-                    results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）',
-                                    'status': 'failed'})
+                end = index + 1
+                for stage, op, undo in entries[index:end]:
+                    try:
+                        _apply(undo, driver, agent)
+                        results.append({'stage': stage, 'summary': f'已撤销：{op["summary"]}', 'status': 'ok'})
+                    except (RouterError, RuntimeError, requests.RequestException) as error:
+                        results.append({'stage': stage, 'summary': f'撤销失败：{op["summary"]}（{error}）', 'status': 'failed'})
+                index = end
     except (RouterError, RuntimeError, requests.RequestException) as error:
         # Routes put back by the rollback are read back together at its end.
         results.append({'stage': done[0][0], 'summary': f'撤销失败：{error}', 'status': 'failed'})
     return results
+
+
+def _apply_stage(ops: List[Dict[str, Any]], driver, agent, finished) -> None:
+    """Apply ops in order; ``finished(op, undo)`` each one as soon as it is done
+    (``ok=False`` for one written before it failed)."""
+    from backend.routers import ros_address_lists
+    batch_kinds = getattr(driver, 'batch_kinds', frozenset())
+    index = 0
+    while index < len(ops):
+        end = index + 1
+        while ops[index]['kind'] in batch_kinds and end < len(ops) and ops[end]['kind'] == ops[index]['kind']:
+            end += 1
+        if end - index > 1:
+            ros_address_lists.invalidate(driver)
+            driver.apply_many(ops[index:end], finished)
+        else:
+            try:
+                undo = _apply(ops[index], driver, agent)
+            except RouterError as error:
+                # Written before failing (e.g. a lost reply): the driver says how to undo it.
+                if getattr(error, 'undo', None):
+                    finished(ops[index], error.undo, ok=False)
+                raise
+            finished(ops[index], undo)
+        index = end
 
 
 def execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -> Dict[str, Any]:
@@ -218,6 +271,9 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
     record = log.append
 
     current = ''
+    # The last routes/NAT read-back while nothing has been written since; a
+    # no-op NAT check right after the routes stage needs no second table read.
+    unchanged = None
     try:
         if plan.get('blockers'):
             raise ReleaseError('发布计划存在阻止项：' + '；'.join(plan['blockers']))
@@ -229,13 +285,13 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 continue
             if not stage['ops']:
                 if current == 'routes' and plan.get('checks', {}).get('ros_policy') is not None:
-                    _verify(current, plan['checks'], driver, agent)
+                    unchanged = _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认来源策略路由与计划一致', 'status': 'verified'})
                 if current == 'return_routing' and plan.get('checks', {}).get('return_routing'):
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认受管回流配置与占用安全检查通过', 'status': 'verified'})
                 elif current == 'nat_bypass' and plan.get('checks', {}).get('nat_not_required'):
-                    _verify(current, plan['checks'], driver, agent)
+                    unchanged = _verify(current, plan['checks'], driver, agent, unchanged)
                     record({'stage': current, 'summary': '回读确认无需额外 NAT 免转换', 'status': 'verified'})
                 elif current == 'dhcp_dns' and plan.get('checks', {}).get('dhcp_dns'):
                     _verify(current, plan['checks'], driver, agent)
@@ -247,35 +303,42 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
             if stage['manual']:
                 record({'stage': current, 'summary': '需要在路由器上手动导入脚本', 'status': 'manual'})
                 continue
+            ops = stage['ops']
             if current == 'dhcp_dns':
                 # DNS can start directing clients to proxy destinations as soon
                 # as a lease renews. Recheck its scope and forwarding prerequisites
                 # immediately before advertising it, including unchanged routes.
-                _verify('routes', plan['checks'], driver, agent)
-                _verify('nat_bypass', plan['checks'], driver, agent)
-                checked_dns_target(plan['checks']['dhcp_dns'], driver.read_dhcp_dns())
+                # Both checks share one read: nothing is written in between.
+                state = _verify('routes', plan['checks'], driver, agent)
+                _verify('nat_bypass', plan['checks'], driver, agent, state)
+                dhcp = driver.read_dhcp_dns()
+                checked_dns_target(plan['checks']['dhcp_dns'], dhcp)
+                # The update checks its target again; the read just made is current.
+                if getattr(driver, 'vendor', '') == 'routeros':
+                    ops = [{**op, 'checked_dhcp_dns': dhcp} if index == 0 and op['kind'] == 'dhcp_dns_update'
+                           else op for index, op in enumerate(ops)]
             if current == 'dns_guard' and plan['checks']['dns_guard']['roles']:
                 # Hijacked clients receive fake-ip answers at once; the proxy
                 # routes and their NAT protection must already be in place.
-                _verify('routes', plan['checks'], driver, agent)
-                _verify('nat_bypass', plan['checks'], driver, agent)
-            with _batch(driver):
-                for op in stage['ops']:
-                    try:
-                        undo = _apply(op, driver, agent)
-                    except RouterError as error:
-                        # Written before failing (e.g. a lost reply): the driver says how to undo it.
-                        if getattr(error, 'undo', None):
-                            done.append((current, op, error.undo))
-                        raise
-                    done.append((current, op, undo))
+                state = _verify('routes', plan['checks'], driver, agent)
+                _verify('nat_bypass', plan['checks'], driver, agent, state)
+
+            def finished(op, undo, ok=True):
+                op = {key: value for key, value in op.items() if key != 'checked_dhcp_dns'}
+                done.append((current, op, undo))
+                if ok:
                     record({'stage': current, 'summary': op['summary'], 'status': 'ok'})
-            _verify(current, plan['checks'], driver, agent)
+
+            unchanged = None
+            with _batch(driver):
+                _apply_stage(ops, driver, agent, finished)
+            unchanged = state = _verify(current, plan['checks'], driver, agent)
             record({'stage': current, 'summary': '回读校验通过', 'status': 'verified'})
             if current == 'routes':
                 # Config readback cannot see kernel leftovers; the active table can.
                 # Rolling back would not remove them either, so report, don't fail.
-                stale = stale_routes(driver.read_state(), plan['checks'].get('gateway') or '')
+                # The routes read-back above is that table, with nothing written since.
+                stale = stale_routes(state, plan['checks'].get('gateway') or '')
                 if stale:
                     record({'stage': current, 'summary': stale_route_warning(stale, plan['checks']['gateway']),
                             'status': 'warning'})

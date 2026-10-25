@@ -32,9 +32,11 @@ DHCP_NETWORKS = '/ip/dhcp-server/network'
 ADDRESSES = '/ip/firewall/address-list'
 # Paths read one row by ID instead of as a whole table. An address list may
 # hold tens of thousands of foreign entries (blocklists, policy destinations):
-# 22.8 s for 20k on 7.24.5, against 0.37 s for one row. Unordered, so no
-# neighbour is ever needed.
-SINGLE_ROW_PATHS = frozenset({ADDRESSES})
+# 22.8 s for 20k on 7.24.5, against 0.37 s for one row. A 3000-route table
+# takes 4-5 s, one route by ID 54 ms and a ?dst-address= read 11 ms. Both are
+# unordered, so no neighbour is ever needed; checks that concern other rows
+# (new IDs, same-destination routes) read only the rows sharing the key.
+SINGLE_ROW_PATHS = frozenset({ADDRESSES, ROUTES})
 DHCP_SERVERS = '/ip/dhcp-server'
 DHCP_LEASES = '/ip/dhcp-server/lease'
 DHCP_OPTIONS = '/ip/dhcp-server/option'
@@ -379,6 +381,19 @@ class RouterOSDriver(RouterDriver):
             raise RouterError(f'RouterOS {path} 返回的对象格式无法识别')
         return row
 
+    def _scoped(self, path: str, values: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Rows sharing the scope key with ``values``: its list, or its destination."""
+        key = 'list' if path == ADDRESSES else 'dst-address'
+        return self._list(path + '?' + urlencode({key: values.get(key, '')}))
+
+    @staticmethod
+    def _in_scope(path: str, row: Dict[str, Any], values: Dict[str, Any]) -> bool:
+        if path == ADDRESSES:
+            return row.get('list') == values.get('list')
+        return (_comparable('dst-address', row.get('dst-address', ''))
+                == _comparable('dst-address', values.get('dst-address', ''))
+                and row.get('routing-table', 'main') == values.get('routing-table', 'main'))
+
     def _row(self, path: str, row_id: str) -> Dict[str, Any]:
         row = self._find(path, row_id)
         if row is None:
@@ -420,7 +435,9 @@ class RouterOSDriver(RouterDriver):
         values = dict(change.get('values') or {})
         if method == 'RESTORE':
             if path in SINGLE_ROW_PATHS:
-                rows, current = [], self._find(path, change['id'])
+                current = self._find(path, change['id'])
+                # The same-destination check below needs only that destination.
+                rows = self._scoped(path, values) if path == ROUTES and current is None else []
             else:
                 rows = self._list(path)
                 current = next((row for row in rows if str(row.get('.id')) == str(change['id'])), None)
@@ -437,17 +454,17 @@ class RouterOSDriver(RouterDriver):
                 raise RouterError('原 NAT 规则位置已变化，无法安全恢复顺序')
             return self._perform({'method': 'PUT', 'path': path, 'values': values}, undo)
         if method == 'PUT':
-            # An address-list member is new only if its list did not hold the ID
-            # and the reply is in that list: an existing member of another list
-            # would otherwise be recorded for deletion by the rollback.
+            # An address-list member (route) is new only if its list (destination)
+            # did not hold the ID and the reply is in that list (destination and
+            # table): an existing row elsewhere would otherwise be recorded for
+            # deletion by the rollback.
             scoped = path in SINGLE_ROW_PATHS
-            before = {str(row.get('.id')) for row in self._list(
-                path + '?' + urlencode({'list': values.get('list', '')}) if scoped else path)}
+            before = {str(row.get('.id')) for row in (self._scoped(path, values) if scoped else self._list(path))}
             try:
                 row = self._request(method, path, values)
                 row_id = row.get('.id') if isinstance(row, dict) else None
                 if (not isinstance(row_id, str) or not re.fullmatch(r'\*[0-9a-fA-F]+', row_id)
-                        or row_id in before or (scoped and row.get('list') != values.get('list'))):
+                        or row_id in before or (scoped and not self._in_scope(path, row, values))):
                     raise UncertainWrite(f'RouterOS {path} 已提交但没有返回可信的新对象 ID')
             except UncertainWrite as error:
                 # Identical newly appearing values may belong to another writer.
@@ -462,6 +479,9 @@ class RouterOSDriver(RouterDriver):
         if path in SINGLE_ROW_PATHS:
             row = self._find(path, row_id)
             rows = [row] if row is not None else []
+            if path == ROUTES and row is not None and method == 'DELETE':
+                # Only same-destination routes matter to the restore check.
+                rows = [row] + [item for item in self._scoped(path, row) if str(item.get('.id')) != row_id]
         else:
             rows = self._list(path)
             row = next((row for row in rows if str(row.get('.id')) == row_id), None)
@@ -514,6 +534,11 @@ class RouterOSDriver(RouterDriver):
         else:
             rows = self._list(check['path'])
             row = next((row for row in rows if str(row.get('.id')) == check['id']), None)
+        self._check_written(check, row, rows)
+
+    @staticmethod
+    def _check_written(check: Dict[str, Any], row: Optional[Dict[str, Any]], rows: List[Dict[str, Any]]):
+        """Compare one read-back row (and, for NAT order, its table) with what was written."""
         if check.get('absent'):
             if row is not None:
                 raise RouterError('RouterOS 回读校验失败：应删除的对象仍然存在')
@@ -541,11 +566,22 @@ class RouterOSDriver(RouterDriver):
         return {'kind': 'ros_restore', 'changes': list(reversed(undo))}
 
     def _transaction(self, changes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        from backend.routers import routeros_batch
         undo = []
         try:
-            for change in changes:
-                check = self._perform(change, undo)
-                self._verify_change(check)
+            index = 0
+            while index < len(changes):
+                end = index
+                while end < len(changes) and changes[end]['method'] == 'PUT' and changes[end]['path'] == NAT:
+                    end += 1
+                # Many NAT rules from one operation go in batches; what a batch
+                # cannot prove is written one by one, as before.
+                if end - index >= routeros_batch.BATCH_MIN:
+                    index += routeros_batch.put_nat(self, changes[index:end], undo)
+                for change in changes[index:max(end, index + 1)]:
+                    check = self._perform(change, undo)
+                    self._verify_change(check)
+                index = max(end, index + 1)
         except RouterError as error:
             try:
                 self._restore(list(reversed(undo)))
@@ -553,6 +589,24 @@ class RouterOSDriver(RouterDriver):
                 raise RouterRollbackError(f'{error}；{rollback_error}') from error
             raise
         return {'kind': 'ros_restore', 'changes': list(reversed(undo))}
+
+    # Kinds apply_many can write in batches (see routeros_batch).
+    batch_kinds = frozenset({'route_add', 'route_delete'})
+
+    def apply_many(self, ops: List[Dict[str, Any]], record) -> None:
+        """Apply ops in order like apply(); record(op, undo) each one as soon as it is proven."""
+        from backend.routers.routeros_batch import apply_routes
+        apply_routes(self, ops, record)
+
+    @staticmethod
+    def batch_restorable(undo: Dict[str, Any]) -> bool:
+        from backend.routers.routeros_batch import batch_restorable
+        return batch_restorable(undo)
+
+    def restore_many(self, undos: List[Dict[str, Any]], stop_on_failure: bool = False) -> List[Optional[str]]:
+        """Run undo records like apply(); return each one's error text or None (see routeros_batch.SKIPPED)."""
+        from backend.routers.routeros_batch import restore_routes
+        return restore_routes(self, undos, stop_on_failure)
 
     def apply(self, op: Dict[str, Any]) -> Dict[str, Any]:
         kind = op['kind']
@@ -579,10 +633,12 @@ class RouterOSDriver(RouterDriver):
                            for key in ('id', 'network', 'gateway'))
                     or scope['id'] != str(op.get('id') or '')):
                 raise RouterError('RouterOS DHCP DNS 缺少完整且一致的目标范围，请重新预览')
-            # Reuse the latest complete snapshot instead of looking up only the
+            # Check the latest complete snapshot instead of looking up only the
             # old ID: another overlapping network may have appeared since the
-            # release stage checked forwarding prerequisites.
-            entry = checked_dns_target(scope, self.read_dhcp_dns())
+            # release stage checked forwarding prerequisites. The release passes
+            # the snapshot it read for that check when nothing was written since.
+            checked = op.get('checked_dhcp_dns')
+            entry = checked_dns_target(scope, checked if isinstance(checked, DhcpDnsState) else self.read_dhcp_dns())
             if entry.attributes != op.get('expected'):
                 raise RouterError('RouterOS DHCP 网段在预览后发生变化，请重新预览')
             return self._transaction([{'method': 'PATCH', 'path': DHCP_NETWORKS, 'id': entry.id,

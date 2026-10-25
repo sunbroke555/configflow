@@ -11,6 +11,7 @@ from backend.routers.plan import build_plan
 from backend.routers.release import execute
 from backend.routers.report import _networks, build_report
 from backend.routers.routeros import RouterOSDriver
+from backend.routeros_test_helpers import is_add_script, print_rows, run_add_script
 from backend.test_agent_upgrade_auth import authenticated_app  # noqa: F401 (pytest fixture)
 from backend.test_router_release import DESIRED, FakeAgent, GATEWAY, SAFE_RETURN_STATUS
 
@@ -91,6 +92,7 @@ class StatefulRouterOS:
         self.write_exception = None
         self.timeout_after = timeout_after
         self.read_failures = set()
+        self.rejected = []
 
     def close(self):
         pass
@@ -98,7 +100,10 @@ class StatefulRouterOS:
     def request(self, method, url, json=None, **_):
         method = method.upper()
         path = unquote(urlsplit(url).path).removeprefix('/rest')
-        self.calls.append((method, path, copy.deepcopy(json)))
+        query = unquote(urlsplit(url).query)
+        self.calls.append((method, path + ('?' + query if query else ''), copy.deepcopy(json)))
+        if method == 'POST':
+            return self._post(path, json)
         collection = next((key for key in sorted(self.rows, key=len, reverse=True)
                            if path == key or path.startswith(key + '/')), None)
         assert collection is not None, path
@@ -111,6 +116,8 @@ class StatefulRouterOS:
             if row_id:
                 row = next((row for row in rows if row.get('.id') == row_id), None)
                 return RESTResponse(row, 200 if row is not None else 404)
+            if query:
+                visible = print_rows(visible, {'.query': [query]})
             return RESTResponse(visible)
 
         self.writes.append((method, path, copy.deepcopy(json)))
@@ -119,7 +126,12 @@ class StatefulRouterOS:
         key = (method, collection)
         self.counts[key] = self.counts.get(key, 0) + 1
         failure = (method, collection, self.counts[key])
-        if self.fail == failure or (isinstance(self.fail, (set, frozenset, list)) and failure in self.fail):
+        if (self.fail == failure or (isinstance(self.fail, (set, frozenset, list)) and failure in self.fail)
+                or (method == 'PUT' and (collection, json) in self.rejected)):
+            if method == 'PUT':
+                # Rejected however it is sent: a batch falling back to single
+                # writes meets the same failure.
+                self.rejected.append((collection, copy.deepcopy(json)))
             return RESTResponse(self.error_body, self.error_status)
         assert collection != ADDRESSES, 'Releases must not mutate shared address lists'
         if method in ('PUT', 'PATCH'):
@@ -153,6 +165,35 @@ class StatefulRouterOS:
             self.hidden_ids.discard(row_id)
             return self._written_response(method, collection, RESTResponse(status=204))
         raise AssertionError(f'Unexpected write verb {method}')
+
+    def _post(self, path, body):
+        """Console batches, OR'ed print queries and comma-separated removes."""
+        if path == '/execute':
+            def add(collection, fields):
+                response = self.request('PUT', f'https://10.0.0.1/rest{collection}', json=fields)
+                if not 200 <= response.status_code < 300:
+                    raise RuntimeError((response.data or {}).get('detail') or 'failure')
+                return response.data['.id']
+            assert is_add_script(body['script']), body['script']
+            return RESTResponse(run_add_script(body['script'], add, fatal=(requests.RequestException,)))
+        if path == ROUTES + '/print':
+            visible = [row for row in self.rows[ROUTES] if row.get('.id') not in self.hidden_ids]
+            return RESTResponse(print_rows(visible, body))
+        assert path == ROUTES + '/remove', path
+        for row_id in body['.id'].split(','):
+            self.writes.append(('DELETE', ROUTES + '/' + row_id, None))
+            self.counts[('DELETE', ROUTES)] = self.counts.get(('DELETE', ROUTES), 0) + 1
+            if self.fail == ('DELETE', ROUTES, self.counts[('DELETE', ROUTES)]):
+                return RESTResponse(self.error_body, self.error_status)
+            row = next((row for row in self.rows[ROUTES] if row['.id'] == row_id), None)
+            if row is None:
+                return RESTResponse({'error': 404, 'message': 'Not Found'}, 404)
+            self.rows[ROUTES].remove(row)
+            self.hidden_ids.discard(row_id)
+        return RESTResponse([])
+
+    def post(self, url, **kwargs):
+        return self.request('POST', url, **kwargs)
 
     def _written_response(self, method, collection, response):
         if self.timeout_after == (method, collection, self.counts[(method, collection)]):

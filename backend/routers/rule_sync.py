@@ -80,34 +80,40 @@ def capture_manual(profile_id, config, router, driver, desired):
     if router['type'] != 'routeros':
         return
     timestamp = now()
+    from backend.routers import ros_address_lists
     try:
-        contents, records = load_sources(config, router)
-        current = config_for(profile_id)
-        live_router = find_router(current, router['id'])
-        signature = controls(config, router)
-        if live_router is None or controls(current, live_router) != signature:
-            raise RouterError('发布期间设置有变化，请重新手动预览发布后建立基准')
-        pinned = _targets(config, router, records, desired['proxy_gateway'])
-        if pinned['proxy_cidrs'] != desired['proxy_cidrs']:
-            raise RouterError('发布期间规则缓存已变化，请重新手动预览发布后建立基准')
-        policy = getattr(driver, 'ros_policy_manifest', None)
-        if router.get('ros_policy_rule_sets'):
-            from backend.routers.desired import compute_desired
-            from backend.routers.ros_policy_write import verify
-            expected = compute_desired(config, desired['proxy_gateway'], router['ros_policy_rule_sets'], ip_loader(records))
-            destinations = [item['cidr'] for item in expected['proxy_cidrs'] if item['sources'] != ['fake-ip']]
-            if not policy or set(destinations) != set(policy['spec']['destinations']):
-                raise RouterError('已发布策略与规则内容不一致，无法建立自动同步基准')
-            verify(driver, {'spec': policy['spec'], 'previous': policy})
-        baseline = {'control': signature, 'rules': records, 'desired': pinned,
-                    'static_resources': static_resources(driver, pinned), 'policy': copy.deepcopy(policy)}
-        store.write(profile_id, router['id'], {'status': 'synced', 'message': '已建立成功发布的同步基准',
-                    'synced_at': timestamp, 'updated_at': timestamp, 'baseline': baseline, 'rules': records})
+        with ros_address_lists.reuse(driver):
+            _capture(profile_id, config, router, driver, desired, timestamp)
     except (RouterError, OSError, ValueError, RuntimeError) as error:
         # Do not reuse an older receipt after an explicit publish changed objects.
         store.write(profile_id, router['id'], {'status': 'waiting',
                     'message': '本次发布未建立自动同步基准：' + (str(error) if isinstance(error, RouterError) else '同步记录无法保存，请重新预览发布'),
                     'checked_at': timestamp})
+
+
+def _capture(profile_id, config, router, driver, desired, timestamp):
+    contents, records = load_sources(config, router)
+    current = config_for(profile_id)
+    live_router = find_router(current, router['id'])
+    signature = controls(config, router)
+    if live_router is None or controls(current, live_router) != signature:
+        raise RouterError('发布期间设置有变化，请重新手动预览发布后建立基准')
+    pinned = _targets(config, router, records, desired['proxy_gateway'])
+    if pinned['proxy_cidrs'] != desired['proxy_cidrs']:
+        raise RouterError('发布期间规则缓存已变化，请重新手动预览发布后建立基准')
+    policy = getattr(driver, 'ros_policy_manifest', None)
+    if router.get('ros_policy_rule_sets'):
+        from backend.routers.desired import compute_desired
+        from backend.routers.ros_policy_write import verify
+        expected = compute_desired(config, desired['proxy_gateway'], router['ros_policy_rule_sets'], ip_loader(records))
+        destinations = [item['cidr'] for item in expected['proxy_cidrs'] if item['sources'] != ['fake-ip']]
+        if not policy or set(destinations) != set(policy['spec']['destinations']):
+            raise RouterError('已发布策略与规则内容不一致，无法建立自动同步基准')
+        verify(driver, {'spec': policy['spec'], 'previous': policy})
+    baseline = {'control': signature, 'rules': records, 'desired': pinned,
+                'static_resources': static_resources(driver, pinned), 'policy': copy.deepcopy(policy)}
+    store.write(profile_id, router['id'], {'status': 'synced', 'message': '已建立成功发布的同步基准',
+                'synced_at': timestamp, 'updated_at': timestamp, 'baseline': baseline, 'rules': records})
 
 
 class Downloads:
