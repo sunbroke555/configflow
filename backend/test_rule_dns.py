@@ -362,7 +362,10 @@ def test_default_dns_classical_without_probe_is_default():
     assert not has_ip_part({'itemType': 'ruleset', 'behavior': 'domain'})
     assert has_ip_part({'itemType': 'rule', 'rule_type': 'IP-CIDR6'})
     assert rule_dns_state(space(direct_rules=['a']))['engine']['local_probe_active'] is False
-    assert rule_dns_state(space(proxy_rulesets=['mixed']))['engine']['local_probe_active'] is True
+    # Unknown content: a classical set is still assumed to have IP lines.
+    assert rule_dns_state(space(direct_rulesets=['mixed']))['engine']['local_probe_active'] is True
+    # Proxy like the proxy fallback: the probe could not change any answer.
+    assert rule_dns_state(space(proxy_rulesets=['mixed']))['engine']['local_probe_active'] is False
 
 
 def test_policy_change_creating_first_ip_group_warns():

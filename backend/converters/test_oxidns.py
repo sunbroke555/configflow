@@ -43,13 +43,14 @@ def test_verified_defaults_independent_from_mosdns():
 
 
 def test_probe_cache_isolated_child_returns_to_ip_classification():
-    p = plugins({'proxy_rules': ['ip']}, [rule('ip', '203.0.113.0/24', 'IP-CIDR')])
+    # A direct IP route differs from the proxy fallback, so the probe is written.
+    p = plugins({'direct_rules': ['ip']}, [rule('ip', '203.0.113.0/24', 'IP-CIDR')])
     assert p['local_probe_cache']['args'] == {'size': 2048, 'short_circuit': False}
     assert p['local_probe']['args'] == [
         {'exec': '$local_probe_cache'}, {'matches': ['!has_resp'], 'exec': '$forward_local'}, {'exec': 'return'}]
     main = p['sequence_main']['args']
     probe_index = main.index({'exec': 'jump local_probe'})
-    assert main[probe_index + 1] == {'matches': ['resp_ip $rules_ip_1'], 'exec': 'goto ip_requery_proxy'}
+    assert main[probe_index + 1] == {'matches': ['resp_ip $rules_ip_1'], 'exec': 'goto direct_ip'}
     assert p['ip_requery_proxy']['args'][0] == {'exec': 'drop_resp'}
     assert not any('$lazy_cache' in str(entry) for entry in p['proxy_dns_seq']['args'])
 
@@ -90,7 +91,7 @@ def test_advanced_features_preserve_real_response_boundaries_and_runtime_state()
     for name in ('query_recorder', 'ip_selector', 'dynamic_domain_set'):
         s[name]['enabled'] = True
     s['dynamic_domain_set']['learn'] = True
-    s['direct_rules'] = ['ip']
+    s['proxy_rules'] = ['ip']
     s['default_forward'] = 'forward_local'
     p = plugins(s, [rule('ip', '203.0.113.0/24', 'IP-CIDR')])
     assert p['china_dns']['args'][:2] == [{'exec': '$ip_selector'}, {'exec': '$lazy_cache'}]

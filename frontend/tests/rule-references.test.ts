@@ -727,7 +727,7 @@ describe('shared rule library', () => {
     field.vm.$emit('update:modelValue', 'blackhole')
     await flushPromises()
     // Routing an IP ruleset in DNS turns on local probing for every query.
-    expect(field.props('warnings').map((item: any) => item.text).join('\n')).toContain('这是第一条参与 DNS 的 IP 规则')
+    expect(field.props('warnings').map((item: any) => item.text).join('\n')).toContain('保存后会开启本地探测')
     await clickText('加入配置')
     expect(network.rules.compose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       source: { kind: 'library', library_rule_ids: ['library-ip'] }, dns: 'blackhole',

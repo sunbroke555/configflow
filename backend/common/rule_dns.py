@@ -415,11 +415,34 @@ def convertible(item):
     return item.get('itemType') == 'ruleset' or item.get('rule_type') in DNS_RULE_TYPES
 
 
-def has_ip_part(item):
-    """Whether routing this rule creates an IP group (and with it the local probe)."""
+def has_ip_part(item, config=None):
+    """Whether routing this rule creates an IP group.
+
+    A classical set counts only when its known content has IP lines; unknown
+    content, or no config to look it up in, keeps the old assumption that it does.
+    """
     if item.get('itemType') == 'ruleset':
-        return item.get('behavior', 'domain') in _IP_BEHAVIORS
+        behavior = item.get('behavior', 'domain')
+        if behavior != 'classical' or config is None:
+            return behavior in _IP_BEHAVIORS
+        from backend.common.rule_ip_presence import classical_ip_lines
+        return classical_ip_lines(item, config) is not False
     return item.get('rule_type') in IP_RULE_TYPES
+
+
+def default_route(default_forward):
+    """Where a query goes when no rule matched it."""
+    return 'direct' if default_forward == 'forward_local' else 'proxy'
+
+
+def probe_needed(routes, default_forward):
+    """IP groups only change an answer when one routes away from the fallback.
+
+    Without such a group the local probe would send every unmatched query to the
+    local upstream and still end at the fallback, so it is left out.
+    """
+    fallback = default_route(default_forward)
+    return any(route != fallback for route in routes)
 
 
 def profile_agents(config):
@@ -496,10 +519,14 @@ def _active(config):
     return {item['id'] for item in _items(config) if isinstance(item.get('id'), str)}
 
 
-def _first_ip(config, values):
-    """1-based position of the first routed rule that creates an IP group."""
+def _first_ip(config, values, default_forward=None):
+    """1-based position of the first routed rule that turns the local probe on."""
     from backend.converters.oxidns import _selected
-    routed = {item['id'] for item, _ in _selected(config, values) if convertible(item) and has_ip_part(item)}
+    if default_forward is None:
+        default_forward = _oxidns(config).get('default_forward', 'forward_remote')
+    fallback = default_route(default_forward)
+    routed = {item['id'] for item, route in _selected(config, values)
+              if convertible(item) and has_ip_part(item, config) and route != fallback}
     return next((index for index, item in enumerate(config.get('rule_configs') or [], 1)
                  if isinstance(item, dict) and item.get('id') in routed), None)
 
@@ -581,8 +608,9 @@ def rule_dns_state(config, base_url='', agents=None):
     plugins = document.get('plugins') if isinstance(document.get('plugins'), list) else []
     main = next((item for item in plugins if isinstance(item, dict) and item.get('tag') == 'sequence_main'), {})
     steps = main.get('args') if isinstance(main.get('args'), list) else []
+    default_forward = routing.get('default_forward') or settings.get('default_forward', 'forward_remote')
     try:
-        probe = _first_ip(config, values) is not None
+        probe = _first_ip(config, values, default_forward) is not None
     except (KeyError, TypeError, OxidnsSettingsError):
         probe = False
     in_use = (native or any(agent.get('service_type') == 'oxidns' for agent in agents) or
@@ -591,7 +619,7 @@ def rule_dns_state(config, base_url='', agents=None):
     engine = {
         'mode': settings.get('config_mode', 'template'),
         'editable': current['editable'], 'reason': current['reason'],
-        'default_forward': routing.get('default_forward') or settings.get('default_forward', 'forward_remote'),
+        'default_forward': default_forward,
         'prefer_ipv4': (any(isinstance(step, dict) and step.get('exec') == 'prefer_ipv4' for step in steps)
                         if native else settings.get('prefer_ipv4', True) is not False),
         'local_probe_active': probe,
@@ -755,7 +783,8 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
             _place(values, rules[identity], None if route is None else {'action': route})
     warnings = []
     try:
-        before_ip = _first_ip(before, current['values'])
+        before_ip = _first_ip(before, current['values'], (current['routing'] or {}).get('default_forward')
+                              or settings.get('default_forward', 'forward_remote'))
     except (KeyError, TypeError, OxidnsSettingsError):
         before_ip = None
     if not native:
@@ -796,7 +825,7 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
             settings[key] = deepcopy(result_settings[key])
         final = read_routing(result, result_settings, after)['values']
     try:
-        after_ip = _first_ip(after, final)
+        after_ip = _first_ip(after, final, final.get('default_forward') or _oxidns(after).get('default_forward', 'forward_remote'))
     except (KeyError, TypeError, OxidnsSettingsError):
         after_ip = None
     if before_ip is None and after_ip is not None:

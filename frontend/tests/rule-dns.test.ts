@@ -201,13 +201,21 @@ describe('dnsWarnings', () => {
     expect(warnings[0]).toMatchObject({ action: 'open-config', text: 'DNS 处理需在完整参数修改：自定义匹配' })
     const rest = dnsWarnings({ ...base, value: 'blackhole', engine: engine(), ipRouted: true, mosdns: { route: 'direct' }, explainExplicit: true })
     expect(rest.map(item => item.kind)).toEqual(['ip', 'ip', 'mosdns', 'policy'])
-    expect(rest[0]!.text).toContain('这是第一条参与 DNS 的 IP 规则')
+    expect(rest[0]!.text).toContain('保存后会开启本地探测')
     expect(rest[2]!.text).toBe('MosDNS 仍按直连 DNS处理此规则，与这里的「黑洞」不同；本字段只对 OxiDNS 生效。')
     expect(rest[3]).toMatchObject({ text: 'DNS 为单独设置的黑洞，不随策略变化', action: 'follow', actionLabel: '改为跟随策略' })
   })
   it('skips the first-IP warning once the local probe is already active', () => {
     const warnings = dnsWarnings({ ...base, engine: engine({ local_probe_active: true }), ipRouted: true })
     expect(warnings.map(item => item.text)).toEqual(['IP 规则按直连 DNS 的解析结果匹配：查询已先发给直连 DNS，命中后再替换为所选结果；IPv4 网段不影响 IPv6 查询。'])
+  })
+  it('does not warn about probing when the IP route equals the unmatched route', () => {
+    const same = dnsWarnings({ ...base, engine: engine(), ipRouted: true })
+    expect(same.map(item => [item.tone, item.text])).toEqual([['info', 'IP 规则和未匹配时的去向（代理 DNS）相同，不需要开启本地探测。']])
+    const local = dnsWarnings({ ...base, value: 'direct', engine: engine({ default_forward: 'forward_local' }), ipRouted: true })
+    expect(local.map(item => item.text)).toEqual(['IP 规则和未匹配时的去向（直连 DNS）相同，不需要开启本地探测。'])
+    const differs = dnsWarnings({ ...base, value: 'direct', engine: engine(), ipRouted: true })
+    expect(differs[0]).toMatchObject({ tone: 'warning', text: '保存后会开启本地探测：没命中域名规则的域名会先发给直连 DNS 解析一次，再用解析出的 IP 对照 IP 规则。' })
   })
   it('explains REJECT under follow and offers to resolve a drift', () => {
     expect(dnsWarnings({ ...base, engine: engine(), policy: 'REJECT', policyRoute: null }).map(item => item.text))

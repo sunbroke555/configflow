@@ -169,7 +169,8 @@ def test_compose_existing_library_multiple_ids(space):
     assert stored == created and all('url' not in item and 'behavior' not in item for item in stored)
     assert stored[0]['remark'] == 'note'
     assert oxidns(repository)['proxy_rulesets'] == [item['id'] for item in created]
-    assert response.get_json()['warnings'] == ['#2 开始参与 DNS 分流：所有未命中域名规则的查询将先向直连 DNS 探测一次']
+    # Proxy like the proxy fallback: the IP part cannot change an answer, so no probe starts.
+    assert response.get_json()['warnings'] == []
 
 
 def test_compose_library_already_referenced_409_code_in_usages(space):

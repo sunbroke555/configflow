@@ -157,10 +157,11 @@ const parts = computed(() => splitPaste(newRows.value))
 
 /** 当前来源的单条规则类型；规则集为 null */
 const ruleType = computed(() => (editing.value ? (isRuleset.value ? null : form.ruleType) : singleType.value ? form.ruleType : null))
-const behaviors = computed(() => (editing.value
-  ? (isRuleset.value ? selectedLibrary.value.map(item => item.behavior || 'domain') : [])
-  : source.value === 'library' ? selectedLibrary.value.map(item => item.behavior || 'domain')
-    : source.value === 'new_library' ? [form.library.behavior] : []))
+const libraryItems = computed<Item[]>(() => (editing.value
+  ? (isRuleset.value ? selectedLibrary.value : [])
+  : source.value === 'library' ? selectedLibrary.value
+    : source.value === 'new_library' ? [form.library] : []))
+const behaviors = computed(() => libraryItems.value.map(item => item.behavior || 'domain'))
 const hasDomainPart = computed(() => (ruleType.value
   ? isDnsRuleType(ruleType.value) && !IP_DNS_RULE_TYPES.includes(ruleType.value)
   : source.value === 'values' && !editing.value ? parts.value.domain.length > 0
@@ -168,7 +169,8 @@ const hasDomainPart = computed(() => (ruleType.value
 const hasIpPart = computed(() => (ruleType.value
   ? IP_DNS_RULE_TYPES.includes(ruleType.value)
   : source.value === 'values' && !editing.value ? parts.value.ip.length > 0
-    : behaviors.value.some(behavior => behavior === 'ipcidr' || behavior === 'classical')))
+    // classical 规则集按后端读到的内容判断；还没有缓存的按可能含 IP 处理。
+    : libraryItems.value.some(item => item.has_ip_part ?? ['ipcidr', 'classical'].includes(item.behavior || 'domain'))))
 /** 不参与 DNS 分流的类型：字段禁用并固定为默认上游 */
 const unsupportedType = computed(() => {
   if (ruleType.value) return isDnsRuleType(ruleType.value) ? '' : ruleType.value
