@@ -467,6 +467,7 @@ def _restore_removed(driver, changes, stop_on_failure) -> List[Optional[str]]:
 # syntax error. Every other value is quoted, and a rule the console rejects
 # makes the whole batch fall back to single REST writes.
 NAT_FLAGS = ('disabled', 'log')
+NAT_SETTLE_READS = 8
 
 
 def _nat_value(key: str, value: Any) -> str:
@@ -528,6 +529,15 @@ def _nat_batch(driver, values, rows, undo):
             ids.append(match[2].strip())
     try:
         rows = _retry(lambda: driver._list(NAT))
+        # RouterOS reports freshly installed rules invalid=true for about half
+        # a second (319 of 320 just after a batch on the CHR, none 0.6 s later),
+        # and the NAT read-back does not count invalid rules. Wait for that
+        # runtime transition only, as the policy read-back does.
+        for _ in range(NAT_SETTLE_READS):
+            if not any(_truthy(row.get('invalid')) and str(row.get('.id')) in ids for row in rows):
+                break
+            time.sleep(0.25)
+            rows = _retry(lambda: driver._list(NAT))
     except RouterError as error:
         raise RouterRollbackError(f'{error}；批量新增的 NAT 规则无法回读，未删除任何不明归属的对象，请检查路由器') from error
     by_id = {str(row.get('.id')): row for row in rows}

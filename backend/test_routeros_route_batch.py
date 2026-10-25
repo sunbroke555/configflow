@@ -405,3 +405,25 @@ def test_restoring_same_destination_routes_matches_one_by_one(monkeypatch):
     single_writes(monkeypatch)
     assert batched == run_restore()
     assert sum(1 for error in batched[0] if error and '同网段' in error) == 3
+
+
+def test_nat_batch_waits_until_new_rules_are_installed(monkeypatch):
+    monkeypatch.setattr(routeros_batch.time, 'sleep', lambda _: None)
+    session = StatefulRouterOS(nats=[BROAD_SOURCE_NAT])
+    reads = {'count': 0}
+    original = session.request
+
+    def request(method, url, **kwargs):
+        response = original(method, url, **kwargs)
+        if method.upper() == 'GET' and url.endswith(NAT) and isinstance(response.data, list):
+            reads['count'] += 1
+            # Freshly added rules read back invalid twice before they settle.
+            if reads['count'] in (2, 3):
+                response.data = [{**row, 'invalid': 'true'} if row['.id'] != BROAD_SOURCE_NAT['.id'] else row
+                                 for row in response.data]
+        return response
+    session.request = request
+    undo = driver_for(session).apply({'kind': 'nat_add', 'src': ['10.0.0.1-10.0.0.3'], 'dst': cidrs(6),
+                                      'comment': 'cf-mihomo'})
+    assert len(undo['changes']) == 12 and reads['count'] == 4
+    assert all('invalid' not in row for row in session.rows[NAT])
