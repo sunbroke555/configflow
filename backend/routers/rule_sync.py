@@ -11,6 +11,7 @@ from backend.routers.rule_sync_rules import (
     MAX_BYTES, check_updates, digest, load_sources, ip_loader, selected_sources,
 )
 from backend.routers import rule_sync_store as store
+from backend.routers.routeros_nat_list import nat_resources
 from backend.routers.rule_sync_write import apply_delta, static_resources
 
 _INTERVALS = (15, 30, 60, 180, 360, 720, 1440)
@@ -111,7 +112,8 @@ def _capture(profile_id, config, router, driver, desired, timestamp):
             raise RouterError('已发布策略与规则内容不一致，无法建立自动同步基准')
         verify(driver, {'spec': policy['spec'], 'previous': policy})
     baseline = {'control': signature, 'rules': records, 'desired': pinned,
-                'static_resources': static_resources(driver, pinned), 'policy': copy.deepcopy(policy)}
+                'static_resources': static_resources(driver, pinned), 'policy': copy.deepcopy(policy),
+                'nat_list': nat_resources(driver)}
     store.write(profile_id, router['id'], {'status': 'synced', 'message': '已建立成功发布的同步基准',
                 'synced_at': timestamp, 'updated_at': timestamp, 'baseline': baseline, 'rules': records})
 
@@ -252,7 +254,8 @@ def sync(profile_id, router_id, download=None):
                 baseline = {**baseline, 'rules': records, 'desired': {key: desired[key] for key in
                             ('fake_ip_range', 'proxy_gateway', 'proxy_cidrs', 'warnings')},
                             'static_resources': static_resources(driver, desired),
-                            'policy': copy.deepcopy(getattr(driver, 'ros_policy_manifest', None))}
+                            'policy': copy.deepcopy(getattr(driver, 'ros_policy_manifest', None)),
+                            'nat_list': nat_resources(driver)}
                 receipt.update(baseline=baseline, rules=records, status='running',
                                message='ROS 已核对，正在更新规则缓存', synced_at=now(), **outcome)
                 store.write(profile_id, router_id, receipt)

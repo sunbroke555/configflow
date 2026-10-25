@@ -32,7 +32,10 @@ def static_resources(driver, desired):
 def restrict_plan(plan, baseline):
     if plan['blockers']:
         raise RouterError('；'.join(plan['blockers']))
+    from backend.routers.routeros_nat_list import member_update
     for stage in plan['stages']:
+        if stage['key'] == 'nat_bypass' and member_update(stage['ops'], baseline) is not None:
+            continue  # only destination members of the enrolled NAT list rule
         if stage['key'] != 'routes' and stage['ops']:
             raise RouterError(f'本次更新还需要修改「{stage["title"]}」，请手动预览发布')
     route_stage = next(stage for stage in plan['stages'] if stage['key'] == 'routes')
@@ -63,7 +66,8 @@ def restrict_plan(plan, baseline):
 def apply_delta(driver, desired, plan, baseline, ensure_current=lambda **_: None):
     """Write additions first, then removals; compensate with the existing journal.
 
-    Source lists, Mangle, tables, NAT, DHCP and Agent settings are never written.
+    Source lists, Mangle, tables, NAT rules, DHCP and Agent settings are never
+    written; of NAT only destination members of the enrolled list rule are.
     The caller persists the possibly remapped policy receipt even after rollback.
     """
     from backend.routers import ros_address_lists
@@ -82,6 +86,23 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
     # The snapshot holds each enrolled route as a by-ID read would return it.
     for item in baseline['static_resources']:
         _guard_in(live, item)
+    from backend.routers import routeros_nat_list
+    nat = routeros_nat_list.member_update(
+        next((stage['ops'] for stage in plan['stages'] if stage['key'] == 'nat_bypass'), []), baseline)
+    retained_nat = []
+    if nat is not None:
+        # The list rule and its sources stay exactly as the manual release left them.
+        enrolled = baseline['nat_list']
+        for item in [enrolled['rule']] + enrolled['src']:
+            _guard_in(live, item)
+        sources = {row['.id'] for row in live[ADDRESSES] if row.get('list') == routeros_nat_list.SRC_LIST
+                   and row.get('comment') == routeros_nat_list.COMMENT}
+        if sources != {item['id'] for item in enrolled['src']}:
+            raise RouterError('NAT 免转换源列表与同步基准不一致，请手动预览发布')
+        # Rollback may remove members it wrote while the rule and the
+        # list's other members, which all name the list, stay.
+        retained_nat = [enrolled['rule']] + [_resource(ADDRESSES, row) for row in live[ADDRESSES]
+                                             if row.get('list') == routeros_nat_list.DST_LIST]
     wanted = {item['cidr'] for item in desired['proxy_cidrs']}
     known_static = {item['id'] for item in baseline['static_resources']}
     if any(row.get('routing-table', 'main') == 'main' and row.get('dst-address') in wanted
@@ -149,6 +170,18 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
                                      if item['path'] != ADDRESSES), len(next_manifest['resources']))
                     next_manifest['resources'].insert(position, resource)
                 log.append({'status': 'ok', 'summary': f'新增 {values["address"]}'})
+        # NAT members follow the routes they protect: added after them,
+        # removed before them, so no CIDR is exempted on its way out the WAN.
+        if nat is not None and nat['dst_add']:
+            ensure_current()
+            _create_addresses(driver, routeros_nat_list.entries(routeros_nat_list.DST_LIST, nat['dst_add']),
+                              journal, ids)
+            log.extend({'status': 'ok', 'summary': f'NAT 免转换新增 {cidr}'} for cidr in nat['dst_add'])
+        if nat is not None and nat['dst_remove']:
+            ensure_current()
+            _delete_addresses(driver, nat['dst_remove'], journal)
+            log.extend({'status': 'ok', 'summary': f'NAT 免转换移除 {item["config"].get("address")}'}
+                       for item in nat['dst_remove'])
         for item in removals:
             if item['path'] == ADDRESSES:
                 continue
@@ -172,8 +205,9 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
     except (RouterError, RuntimeError) as error:
         try:
             restore(driver, {'steps': list(reversed(journal)), 'previous': previous,
-                             'retained': (previous or {}).get('resources', [])})
+                             'retained': (previous or {}).get('resources', []) + retained_nat})
         except RouterError as rollback_error:
             raise RouterRollbackError(f'{error}；{rollback_error}') from error
         raise
-    return {'added': len(additions), 'removed': len(removals), 'log': log[-20:]}
+    members = (len(nat['dst_add']), len(nat['dst_remove'])) if nat is not None else (0, 0)
+    return {'added': len(additions) + members[0], 'removed': len(removals) + members[1], 'log': log[-20:]}
