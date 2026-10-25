@@ -25,7 +25,7 @@ from backend.routers.base import (
     policy_route_ok, stale_route_warning, stale_routes, StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
-from backend.routers.report import _networks
+from backend.routers.report import _networks, SupernetIndex
 
 MANAGED_RETURN_TABLE = 'configflow_return'
 RETURN_SAFETY_VERSION = 1
@@ -219,7 +219,7 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
             skipped.add(item['cidr'])
             warnings.append(f'{item["cidr"]}：{item["detail"]}。本次跳过该网段（路由、NAT、回流都不处理），请先手动处理')
     target = [item['cidr'] for item in report['routes']['items'] if item['cidr'] not in skipped]
-    covered = _networks(target)
+    covered = SupernetIndex(_networks(target))
     auto = policy_route(state, POLICY_AUTO_COMMENT)
     checks = []
     if target:
@@ -231,7 +231,7 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
                     'summary': f'删除不再需要的策略路由「{POLICY_AUTO_COMMENT}」'})
 
     def inside(cidr):
-        return any(network.subnet_of(outer) for network in _networks([cidr]) for outer in covered)
+        return any(covered.covers(network) for network in _networks([cidr]))
 
     # Hand-made routes keep routing to the gateway, minus the loop. Subnets of a
     # derived CIDR need no rule of their own.
@@ -245,8 +245,9 @@ def _policy_route_ops(report: Dict[str, Any], state: RouterState, gateway: str, 
         ops.extend([op] if op else [])
         checks.append({'comment': POLICY_MANUAL_COMMENT, 'gateway': gateway, 'dst': dst})
 
+    migrating = set(migrate)
     migrated = [route for route in state.routes
-                if route.enabled and route.gateway == gateway and (route.dst in migrate or inside(route.dst))]
+                if route.enabled and route.gateway == gateway and (route.dst in migrating or inside(route.dst))]
     for route in migrated:
         ops.append({'kind': 'route_delete', 'id': route.id, 'cidr': route.dst,
                     'summary': f'删除静态路由 {route.dst} → {gateway}（{route.comment or "无备注"}），'
