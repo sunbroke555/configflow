@@ -436,7 +436,7 @@ async function submitEdit(withDns = true) {
   const changed = dnsLoaded.value && !locked.value && (effectiveDns.value !== initialDns || resync.value)
   const dnsField = withDns && changed ? { dns: resync.value && effectiveDns.value === 'follow' ? 'follow' : effectiveDns.value } : {}
   // 改策略会离开原分组：只有用户没有同时改分组名时才清空
-  const groupName = item.policy !== form.policy && form.group_name.trim() === (item.group_name || '') ? '' : form.group_name.trim()
+  const groupName = item.policy !== form.policy && form.group_name.trim() === (item.group_name || '').trim() ? '' : form.group_name.trim()
   let response
   if (item.itemType === 'ruleset') {
     const payload = { ...ruleSetPayload(item), library_rule_id: form.libraryIds[0] || item.library_rule_id,
