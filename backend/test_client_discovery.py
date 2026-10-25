@@ -527,12 +527,13 @@ def test_discovery_joins_both_router_types_with_saved_rows(oxidns_app, monkeypat
     assert 'router-secret' not in json.dumps(body)
     assert body['success'] and body['profile_id'] == 'office' and body['state'] == 'ok' and body['message'] == ''
     assert body['sources'] == [
-        {'id': 'ros1', 'name': '主路由', 'type': 'routeros', 'ok': True, 'error': '', 'notes': [], 'policy_routing': True},
+        {'id': 'ros1', 'name': '主路由', 'type': 'routeros', 'ok': True, 'error': '', 'notes': [], 'policy_routing': True,
+         'gateway': ''},
         {'id': 'ik1', 'name': '爱快', 'type': 'ikuai', 'ok': True, 'error': '', 'notes': ['按 2 分钟内经过路由器的流量判断在线']}]
     devices = {row['ip']: row for row in body['devices']}
     assert devices['192.168.0.133'] == {**ROWS[0], 'mac': 'E0:BA:AD:94:F2:48', 'hostname': 'C6c_EZVIZ',
                                         'sources': ['arp', 'lease'], 'presence': 'online', 'basis': 'lease',
-                                        'last_seen': 523, 'router_id': 'ros1'}
+                                        'last_seen': 523, 'router_id': 'ros1', 'discoverable': True}
     # Saved addresses are confirmed first.
     assert ros.pings[0]['address'] == '192.168.0.5'
     assert (devices['192.168.0.5']['presence'], devices['192.168.0.5']['basis']) == ('online', 'probe')
@@ -634,6 +635,24 @@ def test_a_saved_router_address_is_online_not_absent(oxidns_app, monkeypatch):
     assert body['state'] == 'ok'
     for ip in ('192.168.0.1', '192.168.1.2'):
         assert (devices[ip]['presence'], devices[ip]['basis'], devices[ip]['router_id']) == ('online', 'router', 'ros1')
+
+
+def test_saved_infrastructure_is_never_offered_again_and_the_gateway_is_named(oxidns_app, monkeypatch):
+    """A removed row returns to 未添加 only when discovery would list it; Agent hosts never do."""
+    app, repo = oxidns_app
+    gateway = get_agent_manager().register_agent({'name': 'mihomo', 'host': '192.168.0.8', 'port': 18000,
+                                                  'service_type': 'mihomo', 'profile_id': 'office'})['id']
+    rows = [{'ip': '192.168.0.8', 'name': '网关', 'mode': 'direct'}, {'ip': '192.168.0.133', 'name': '摄像头', 'mode': ''},
+            {'ip': '192.168.0.1', 'name': '主路由', 'mode': ''}, {'ip': '192.168.0.0/24', 'name': '家里', 'mode': 'smart'}]
+    setup_profile(repo, [{**ROS, 'proxy_gateway_agent_id': gateway}], rows)
+    fake = FakeRouterOS(None, answers())
+    monkeypatch.setattr(client_discovery, 'open_driver', lambda router: fake.driver(monkeypatch))
+    body = app.test_client().get(URL).get_json()
+    devices = {row['ip']: row for row in body['devices']}
+    assert body['sources'][0]['gateway'] == '192.168.0.8'
+    assert devices['192.168.0.8']['presence'] == 'online'
+    assert {ip: row['discoverable'] for ip, row in devices.items()} == {
+        '192.168.0.8': False, '192.168.0.133': True, '192.168.0.1': False, '192.168.0.0/24': False}
 
 
 def test_saved_addresses_outside_the_scanned_lan_are_unknown(oxidns_app, monkeypatch):

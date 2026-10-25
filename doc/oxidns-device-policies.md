@@ -49,12 +49,14 @@
   "sources": [              // 每台路由器一条
     {"id": "router_x", "name": "主路由", "type": "routeros", "ok": true, "error": "",
      "notes": ["账号缺少 test 权限，无法确认静态 IP 设备是否在线"],
-     "policy_routing": true}  // 仅 RouterOS：已启用按来源策略路由（智能分流 IPv4 设备参与）
+     "policy_routing": true,  // 仅 RouterOS：已启用按来源策略路由（智能分流 IPv4 设备参与）
+     "gateway": "192.168.0.8"} // 仅 policy_routing 为 true 时：代理网关 Agent 的 IPv4，策略路由不把它当来源；未关联为空
   ],
   "devices": [              // 每条已保存的行：{ip, name, mode} 加上下列字段
     {"ip": "192.168.0.133", "name": "摄像头", "mode": "direct",
      "presence": "online", "basis": "lease", "mac": "E0:BA:AD:94:F2:48", "hostname": "C6c_EZVIZ",
-     "sources": ["arp", "lease"], "last_seen": 523, "router_id": "router_x"}
+     "sources": ["arp", "lease"], "last_seen": 523, "router_id": "router_x",
+     "discoverable": true}  // 这一行移除后是否会出现在 discovered（路由器、Agent 主机等为 false）
   ],
   "discovered": [           // 路由器看到、但没有自己那一行的 IPv4 地址，按地址排序
     {"ip": "192.168.0.147", "mac": "16:F7:C5:8A:16:A4", "hostname": "iPhone", "sources": ["arp", "lease"],

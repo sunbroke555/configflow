@@ -59,6 +59,16 @@ def _read_all(routers: List[dict], priority: frozenset, timeout: float) -> List[
     return results
 
 
+def gateway_host(router: dict) -> str:
+    """IPv4 of the router's proxy gateway Agent; smart_sources never routes it as a source."""
+    agent_id = router.get('proxy_gateway_agent_id')
+    if not agent_id or not isinstance(agent_id, str):
+        return ''
+    from backend.common.agent_manager import get_agent_manager
+    agent = get_agent_manager().get_agent_by_id(agent_id)
+    return ipv4(agent.get('host')) if agent else ''
+
+
 def _endpoint_ip(router: dict) -> str:
     try:
         return ipv4(urlparse(str(router.get('endpoint') or '')).hostname)
@@ -84,7 +94,7 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
               'devices': [], 'discovered': []}
     if not routers:
         result.update(state='unsupported', message=UNSUPPORTED)
-        result['devices'] = [{**row, **_saved(networks[row['ip']])} for row in devices]
+        result['devices'] = [{**row, **_saved(networks[row['ip']]), 'discoverable': False} for row in devices]
         return result
     readings = _read_all(routers, frozenset(saved_hosts), timeout or ROUTER_TIMEOUT)
     merged: Dict[str, Sighting] = {}
@@ -97,6 +107,8 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
         if router['type'] == 'routeros':
             # Smart IPv4 rows are the sources of RouterOS policy routing when it is enabled.
             source['policy_routing'] = bool(router.get('ros_policy_rule_sets'))
+            if source['policy_routing']:
+                source['gateway'] = gateway_host(router)
         result['sources'].append(source)
         endpoint = {ip for ip in [_endpoint_ip(router)] if ip}
         excluded |= endpoint
@@ -115,14 +127,20 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
     result['message'] = '' if complete else ('部分路由器读取失败，未出现的设备显示为未知' if any(ok)
                                               else '路由器读取失败，暂时无法发现设备')
     evidence = Evidence(merged, routers_at, done if complete else None)
-    result['devices'] = [{**row, **_saved(networks[row['ip']], evidence)} for row in devices]
+
+    def listable(ip: str) -> bool:
+        # A failed ARP entry without MAC or lease is only an address someone tried to reach.
+        sighting = merged.get(ip)
+        return ip not in excluded and sighting is not None and bool(sighting.mac or sighting.sources - {'arp'})
+    # discoverable: the row would be listed under discovered if it were not saved (UI: a removed row returns there).
+    result['devices'] = [{**row, **_saved(networks[row['ip']], evidence), 'discoverable': row['ip'] in saved_hosts
+                          and listable(row['ip'])} for row in devices]
     # Only rows with a mode set a policy; OxiDNS and RouterOS smart_sources apply the most specific one.
     covering = sorted(((net, row) for row in devices if row['mode'] and (net := networks[row['ip']]) is not None
                        and net.version == 4 and net.num_addresses > 1), key=lambda item: -item[0].prefixlen)
     for ip in sorted(merged, key=ipaddress.IPv4Address):
         sighting = merged[ip]
-        # A failed ARP entry without MAC or lease is only an address someone tried to reach.
-        if ip in saved_hosts or ip in excluded or not (sighting.mac or sighting.sources - {'arp'}):
+        if ip in saved_hosts or not listable(ip):
             continue
         address = ipaddress.IPv4Address(ip)
         network = next(({'ip': row['ip'], 'name': row['name'], 'mode': row['mode']}
