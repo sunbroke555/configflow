@@ -80,6 +80,10 @@ describe('reviewable release operation details', () => {
     expect(update.find(g => g.title === '分组网段变化')!.rows).toEqual([
       { label: '新增', value: '192.0.2.0/24', action: '新增' }, { label: '移除', value: '203.0.113.0/24', action: '移除' }])
     expect(update.find(g => g.title === 'IP 分组')!.rows[1]).toEqual({ label: '更新后网段数', value: '2' })
+    const mark = operationDetails({ kind: 'ikuai_group_update', summary: '恢复标记', name: 'cf_pa_1', comment: 'cf-mihomo', mark: true,
+      values: ['192.0.2.0/24'], added: [], removed: [], expected: 'abc' })
+    expect(mark.map(g => g.title)).toEqual(['IP 分组'])
+    expect(mark[0].rows[1]).toEqual({ label: '归属标记', value: '改回 cf-mihomo' })
     const removal = operationDetails({ kind: 'ikuai_group_delete', summary: '删除', name: 'cf_pa_3', count: 20 })
     expect(removal[0].rows.map(row => row.value)).toEqual(['cf_pa_3', '20'])
     const rule = operationDetails({ kind: 'policy_route_update', summary: '迁移', id: '1', gateway: '192.0.2.3', comment: 'cf-mihomo',

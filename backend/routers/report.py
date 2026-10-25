@@ -262,8 +262,9 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
     if state.ikuai_groups is not None:
         from backend.routers.ikuai_groups import report_section
         groups = result['ikuai_groups'] = report_section(state)
-        # Rules still listing CIDRs themselves, or groups nothing uses: a release is due.
-        due = len(groups['migrations']) + len(groups['orphans'])
+        # Rules still listing CIDRs themselves, groups nothing uses, or a marker to
+        # write back: a release is due.
+        due = len(groups['migrations']) + len(groups['orphans']) + len(groups['marks'])
         if due:
             summary['pending'] = summary.get('pending', 0) + due
         result['in_sync'] = result['in_sync'] and not due

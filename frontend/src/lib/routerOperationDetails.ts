@@ -95,6 +95,10 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '归属标记', value: text(op.comment) }],
       'iKuai 的 IP 分组没有分组备注，归属标记写在第一个网段的备注里。')
     add('分组网段', strings(op.values).map(value => ({ label: '新增', value, action: '新增' })), '新建分组时写入的全部网段。')
+  } else if (op.kind === 'ikuai_group_update' && op.mark) {
+    add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '归属标记', value: `改回 ${text(op.comment)}` },
+      { label: '网段数', value: String(strings(op.values).length) }],
+    '归属标记写在第一个网段的备注里，被改掉后 ConfigFlow 只凭规则引用认出这个分组。这次只写回标记，网段和其他备注不变。')
   } else if (op.kind === 'ikuai_group_update') {
     add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '更新后网段数', value: String(strings(op.values).length) }])
     add('分组网段变化', [

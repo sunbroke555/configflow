@@ -22,8 +22,16 @@ and drops it; rows read back with ``tagname`` = ``group_name``), but it keeps
 each entry's comment and the entry order. The marker is therefore the first
 entry's comment. A group is ours only when both its name and its marker match;
 anything else is the user's, never edited, deleted or referenced (a matching
-name only reserves its number). Groups hold at most 2000 entries and are split
-by request bytes too, so a group write always fits in one request.
+name only reserves its number). The one exception is a group with our name
+that lost its marker (the user edited the first entry) while that role's
+managed rule still references it: it is still ours and the marker is written
+back. Notes the user gives other entries stay with their entries. Groups hold
+at most 2000 entries and are split by request bytes, notes included, so a
+group write always fits in one request.
+
+iKuai counts every reference to a group (``ref_count``), including ones from
+features ConfigFlow does not read (ACL, 流控…), and refuses to delete a group
+still referenced. A group with such references is never deleted or edited.
 """
 import hashlib
 import ipaddress
@@ -76,13 +84,35 @@ def digest(values: List[str]) -> str:
     return hashlib.sha1('\n'.join(sorted({canon(value) for value in values})).encode()).hexdigest()[:16]
 
 
-def payload(name: str, role: str, values: List[str], row_id: Any = None) -> Dict[str, Any]:
-    """The route_object add/edit form: the first entry carries the marker, the
-    other entries' comments stay empty to save request bytes."""
-    form = {'group_name': name, 'type': 0,
-            'group_value': [{'ip': value, 'comment': ROLES[role] if position == 0 else ''}
-                            for position, value in enumerate(values)]}
+def payload(name: str, role: str, values: List[str], row_id: Any = None,
+            notes: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """The route_object add/edit form: the first entry carries the marker.
+
+    ``notes`` (by :func:`canon` address) are the user's own entry comments; the
+    marker goes on an entry without one, moved to the front, so none is lost.
+    """
+    entries = [{'ip': value, 'comment': notes.get(canon(value), '') if notes else ''} for value in values]
+    if entries:
+        spare = next((position for position, entry in enumerate(entries) if not entry['comment']), 0)
+        entries.insert(0, entries.pop(spare))
+        entries[0]['comment'] = ROLES[role]
+    return entry_payload(name, entries, row_id)
+
+
+def entry_payload(name: str, entries: List[Dict[str, str]], row_id: Any = None) -> Dict[str, Any]:
+    """The form writing exactly these entries (a rollback restores what it read)."""
+    form = {'group_name': name, 'type': 0, 'group_value': [dict(entry) for entry in entries]}
     return {'id': row_id, **form} if row_id is not None else form
+
+
+def entry_notes(group: Dict[str, Any]) -> Dict[str, str]:
+    """The user's own entry comments: everything but our marker on the first entry."""
+    notes = {}
+    for position, entry in enumerate(group.get('entries') or []):
+        comment = entry['comment']
+        if comment and comment not in ROLES.values() and (position or not group['role'] or group.get('adopted')):
+            notes.setdefault(canon(entry['ip']), comment)
+    return notes
 
 
 _BASE_BYTES: List[int] = []
@@ -98,15 +128,15 @@ def _base_bytes() -> int:
     return _BASE_BYTES[0]
 
 
-def _entry_bytes(value: str) -> int:
+def _entry_bytes(value: str, note: str = '') -> int:
     from backend.routers.ikuai import encode_value
     # One list item plus its ", " separator, exactly as json.dumps writes it.
-    return len(json.dumps(encode_value({'ip': value, 'comment': ''})).encode()) + 2
+    return len(json.dumps(encode_value({'ip': value, 'comment': note})).encode()) + 2
 
 
-def group_bytes(name: str, role: str, values: List[str]) -> int:
+def group_bytes(name: str, role: str, values: List[str], notes: Optional[Dict[str, str]] = None) -> int:
     from backend.routers.ikuai import request_bytes
-    return request_bytes('route_object', 'edit', payload(name, role, values, 9999999999))
+    return request_bytes('route_object', 'edit', payload(name, role, values, 9999999999, notes))
 
 
 # --- what the router has ------------------------------------------------------------------
@@ -118,9 +148,12 @@ def group_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
     # The marker: the first entry's comment (a group itself has no comment on iKuai).
     comment = str(entries[0].get('comment') or '') if entries else ''
     owned = owned_role(name, comment)
-    values = [str(item.get('ip')) for item in entries if item.get('ip')]
+    kept = [{'ip': str(item.get('ip')), 'comment': str(item.get('comment') or '')}
+            for item in entries if item.get('ip')]
+    refs = row.get('ref_count')
     return {'id': row.get('id') if type(row.get('id')) is int else None, 'gid': str(row.get('group_id') or ''),
-            'name': name, 'comment': comment, 'values': values, 'type': row.get('type', 0),
+            'name': name, 'comment': comment, 'values': [entry['ip'] for entry in kept], 'entries': kept,
+            'type': row.get('type', 0), 'refs': refs if type(refs) is int and refs > 0 else 0,
             'role': owned[0] if owned else None, 'index': owned[1] if owned else None, 'users': []}
 
 
@@ -132,6 +165,31 @@ def mark_owners(groups: List[Dict[str, Any]]) -> None:
     for group in groups:
         if counts[group['name']] > 1:
             group['role'] = group['index'] = None
+            group['dup'] = True
+
+
+def hidden_refs(group: Dict[str, Any]) -> int:
+    """References iKuai counts that no NAT or 端口分流 rule accounts for (ACL, 流控…)."""
+    return max(0, group.get('refs', 0) - len(group['users']))
+
+
+def _role_rule(role: str, rule: Dict[str, Any]) -> bool:
+    """Whether ``rule`` is the managed rule a ``role`` family belongs to."""
+    if role == 'nat':
+        return rule['func'] == 'nat_rule' and rule['action'] == 'filter' and _is_managed(rule['comment'])
+    return rule['func'] == 'stream_ipport' and rule['comment'] == ROLES[role]
+
+
+def adopt(groups: List[Dict[str, Any]], rules: Dict[str, Dict[str, Any]]) -> None:
+    """Our groups whose marker the user removed: our name, and that role's managed
+    rule references them. Marked ``adopted``; the next release writes the marker back."""
+    for group in groups:
+        parsed = name_role(group['name'])
+        if group['role'] or group.get('dup') or not parsed:
+            continue
+        if any(user['field'] == 'dst_addr' and _role_rule(parsed[0], rules[user['rule']])
+               for user in group['users']):
+            group['role'], group['index'], group['adopted'] = parsed[0], parsed[1], True
 
 
 def resolve(groups: List[Dict[str, Any]], ref: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -179,16 +237,17 @@ def read_rules(groups: List[Dict[str, Any]], nat_rows, policy_rows) -> Dict[str,
                           'enabled': row.get('enabled') == 'yes', 'action': row.get('action'),
                           'custom': fields['dst_addr']['custom'], 'objects': fields['dst_addr']['objects'],
                           'src_objects': fields['src_addr']['objects']}
+    adopt(groups, rules)
     return rules
 
 
 # --- layout ---------------------------------------------------------------------------------
 
-def _pack(slots: List[Dict[str, Any]], queue: List[str], position: int) -> int:
+def _pack(slots: List[Dict[str, Any]], queue: List[str], position: int, size_of=_entry_bytes) -> int:
     """Fill each slot in order from ``queue[position:]``; return the new position."""
     for slot in slots:
         while position < len(queue):
-            size = _entry_bytes(queue[position])
+            size = size_of(queue[position])
             if len(slot['values']) >= GROUP_MAX_ENTRIES or slot['size'] + size > GROUP_MAX_BYTES:
                 break
             slot['values'].append(queue[position])
@@ -197,14 +256,20 @@ def _pack(slots: List[Dict[str, Any]], queue: List[str], position: int) -> int:
     return position
 
 
-def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: set) -> Dict[str, Any]:
+def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: set,
+           notes: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Place ``want`` into this role's groups, writing as little as possible.
 
     Entries stay where they are; new ones fill free space from the lowest number,
     then new groups. Emptied groups are deleted. Only a badly fragmented family
     is repacked, and then every entry moves to a group with a lower or equal number.
+    ``notes`` are entry comments the groups keep, counted in each request's size.
     """
     base = _base_bytes()
+
+    def size_of(value: str) -> int:
+        return _entry_bytes(value, notes.get(canon(value), '')) if notes else _entry_bytes(value)
+
     wanted: Dict[str, str] = {}
     for value in want:
         wanted.setdefault(canon(value), value)
@@ -227,7 +292,7 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
                 placed.add(key)
                 kept.append(value)
         slots.append({'name': group['name'], 'index': group['index'], 'before': group['values'], 'new': False,
-                      'values': kept, 'size': base + sum(_entry_bytes(value) for value in kept)})
+                      'values': kept, 'size': base + sum(size_of(value) for value in kept)})
     pending = [value for key, value in wanted.items() if key not in placed]
     used = set(taken) | {slot['index'] for slot in slots} | {group['index'] for group in existing}
     error = ''
@@ -244,17 +309,17 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
             slot = {'name': group_name(role, index), 'index': index, 'before': [], 'new': True,
                     'values': [], 'size': base}
             created.append(slot)
-            position = _pack([slot], queue, position)
+            position = _pack([slot], queue, position, size_of)
             if not slot['values']:
                 error = f'iKuai IP 分组条目「{queue[position][:64]}」过长，无法写入'
                 break
         return created
 
-    position = _pack(slots, pending, 0)
+    position = _pack(slots, pending, 0, size_of)
     created = new_slots(pending, position)
     groups = [slot for slot in slots + created if slot['values']]
     fixed_keys = {canon(value) for slot in fixed for value in slot['values']}
-    needed = _minimum([value for key, value in wanted.items() if key not in fixed_keys], base)
+    needed = _minimum([value for key, value in wanted.items() if key not in fixed_keys], base, size_of)
     if len(groups) > needed + 2:
         # Repack in number order, existing groups first: entries only move down.
         sequence = [value for slot in slots for value in slot['values']] + pending
@@ -262,7 +327,7 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
             slot['values'], slot['size'] = [], base
         for slot in created:
             used.discard(slot['index'])
-        position = _pack(slots, sequence, 0)
+        position = _pack(slots, sequence, 0, size_of)
         created = new_slots(sequence, position)
     final = sorted([slot for slot in slots + created + fixed if slot['values']], key=lambda slot: slot['index'])
     result = {
@@ -279,13 +344,13 @@ def layout(role: str, existing: List[Dict[str, Any]], want: List[str], taken: se
     return result
 
 
-def _minimum(values: List[str], base: int) -> int:
+def _minimum(values: List[str], base: int, size_of=_entry_bytes) -> int:
     slots: List[Dict[str, Any]] = []
     position = 0
     while position < len(values):
         slot = {'values': [], 'size': base}
         slots.append(slot)
-        position = _pack([slot], values, position)
+        position = _pack([slot], values, position, size_of)
     return len(slots)
 
 
@@ -326,6 +391,31 @@ class GroupPlanner:
         self.migrations: List[Dict[str, Any]] = []
         self.route_rules: List[Dict[str, Any]] = []
         self.stage_checks: Dict[str, Dict[str, Any]] = {}
+        self.marked: set = set()
+
+    def notes(self, role: str) -> Dict[str, str]:
+        """The user's entry comments in this role's groups; they follow their entries."""
+        notes: Dict[str, str] = {}
+        for group in self.owned(role):
+            for key, note in entry_notes(group).items():
+                notes.setdefault(key, note)
+        return notes
+
+    def mark_ops(self, role: str) -> List[Dict[str, Any]]:
+        """Write the marker back on adopted groups first; later ops then find them ours."""
+        ops = []
+        notes = self.notes(role)
+        for group in self.owned(role):
+            if not group.get('adopted') or group['name'] in self.marked:
+                continue
+            self.marked.add(group['name'])
+            ops.append({'kind': 'ikuai_group_update', 'name': group['name'], 'role': role, 'comment': ROLES[role],
+                        'values': group['values'], 'expected': digest(group['values']), 'added': [], 'removed': [],
+                        'mark': True, **_notes_for(notes, group['values']),
+                        'summary': f'恢复 IP 分组「{group["name"]}」的 ConfigFlow 归属标记：第一个条目的备注不是'
+                                   f'「{ROLES[role]}」（可能在 iKuai 中被改过），{ROLE_RULES[role]}仍在引用它，'
+                                   f'改回标记，网段和其他备注不变'})
+        return ops
 
     def owned(self, role: str) -> List[Dict[str, Any]]:
         return sorted((group for group in self.groups if group['role'] == role), key=lambda group: group['index'])
@@ -347,9 +437,11 @@ class GroupPlanner:
         return values
 
     def shared(self, group: Dict[str, Any], subject: Optional[str]) -> bool:
-        """Whether a rule other than ``subject``'s destination uses the group (and keeps it)."""
-        return any(user['rule'] not in self.deleted_rules and (user['rule'] != subject or user['field'] != 'dst_addr')
-                   for user in group['users'])
+        """Whether anything but ``subject``'s destination uses the group (and keeps it):
+        another rule, or a feature ConfigFlow does not read."""
+        return hidden_refs(group) > 0 or any(
+            user['rule'] not in self.deleted_rules and (user['rule'] != subject or user['field'] != 'dst_addr')
+            for user in group['users'])
 
     def family(self, role: str, want: List[str], subject: Optional[str]) -> Tuple[List[str], List[Dict[str, Any]]]:
         """Group adds and updates for one role; their final names.
@@ -358,15 +450,17 @@ class GroupPlanner:
         rule uses as well is frozen: editing it would change that rule too.
         """
         existing = [{**group, 'frozen': self.shared(group, subject)} for group in self.owned(role)]
-        result = layout(role, existing, want, self.taken(role))
+        notes = self.notes(role)
+        result = layout(role, existing, want, self.taken(role), notes)
         if result['error']:
             self.blockers.append(result['error'])
         self.finals[role] = [name for name, _ in result['final']]
         self.contents[role] = dict(result['final'])
         user = ROLE_RULES[role]
-        ops = []
+        ops = self.mark_ops(role)
         for name, values in result['adds']:
             ops.append({'kind': 'ikuai_group_add', 'name': name, 'role': role, 'comment': ROLES[role], 'values': values,
+                        **_notes_for(notes, values),
                         'summary': f'新建 IP 分组「{name}」（{user}使用，{len(values)} 个网段）'})
         for name, values, before in result['updates']:
             old, new = {canon(value) for value in before}, {canon(value) for value in values}
@@ -382,6 +476,7 @@ class GroupPlanner:
                                                     f'移除 {_samples(removed)}' if removed else '') if item)
             ops.append({'kind': 'ikuai_group_update', 'name': name, 'role': role, 'comment': ROLES[role],
                         'values': values, 'expected': digest(before), 'added': added, 'removed': removed,
+                        **_notes_for(notes, values),
                         'summary': f'更新 IP 分组「{name}」：{detail}网段（现 {len(values)} 个）'
                                    + (f'：{examples}' if examples else '')})
         return self.finals[role], ops
@@ -414,9 +509,15 @@ class GroupPlanner:
         return count
 
     def cleanup(self, roles: Tuple[str, ...]) -> List[Dict[str, Any]]:
-        """Delete our groups of these roles that nothing will reference; warn about the rest."""
+        """Delete our groups of these roles that nothing will reference; warn about the rest.
+
+        Returns marker write-backs (before their deletes) and the deletes.
+        """
         ops = []
         for role in roles:
+            self._unmarked_hints(role)
+            # Any adopted group no family wrote back yet (e.g. only a disabled rule uses it).
+            ops.extend(self.mark_ops(role))
             final = set(self.finals.get(role, []))
             for group in self.owned(role):
                 if group['name'] in final:
@@ -425,17 +526,41 @@ class GroupPlanner:
                          if user['rule'] not in self.deleted_rules
                          and not (user['field'] == 'dst_addr' and user['rule'] in self.rewritten
                                   and group['name'] not in self.rewritten[user['rule']])]
-                if users:
+                hidden = hidden_refs(group)
+                if users and not hidden and role == 'nat' and all(
+                        user['field'] == 'dst_addr' and _role_rule('nat', self.rules[user['rule']]) for user in users):
+                    # Another managed NAT bypass rule's destinations (e.g. one added while
+                    # the target was disabled): ConfigFlow's own, kept as it is.
+                    continue
+                if users or hidden:
                     names = '、'.join(dict.fromkeys(f'{user["label"]}「{user["comment"] or user["rule"]}」'
                                                     for user in users))
                     owner = '规则' if all(_is_managed(user['comment']) for user in users) else '手工规则'
-                    self.warnings.append(f'ConfigFlow 的 IP 分组 {group["name"]} 被{owner}{names}引用，已保留，'
-                                         '请先在 iKuai 中解除引用')
+                    unseen = f'iKuai 中 ConfigFlow 读不到的配置（如 ACL、流控）引用 {hidden} 处'
+                    if not hidden:
+                        by = f'被{owner}{names}引用'
+                    elif users:
+                        by = f'被{owner}{names}引用，还被 {unseen}'
+                    else:
+                        by = f'还被 {unseen}'
+                    self.warnings.append(f'ConfigFlow 的 IP 分组 {group["name"]} {by}，已保留，请先在 iKuai 中解除引用')
                     continue
                 ops.append({'kind': 'ikuai_group_delete', 'name': group['name'], 'role': role,
                             'expected': digest(group['values']), 'count': len(group['values']),
                             'summary': f'删除不再使用的 IP 分组「{group["name"]}」（原 {len(group["values"])} 个网段）'})
         return ops
+
+    def _unmarked_hints(self, role: str) -> None:
+        """A group with our name but no marker that nothing uses: the user's, so left
+        alone; but if ConfigFlow made it (its first entry edited), say how to get it back."""
+        for group in self.groups:
+            parsed = name_role(group['name'])
+            if (parsed and parsed[0] == role and not group['role'] and not group.get('dup')
+                    and not group['users'] and not hidden_refs(group)):
+                self.warnings.append(
+                    f'IP 分组「{group["name"]}」名称是 ConfigFlow 的格式，但第一个条目的备注不是「{ROLES[role]}」，'
+                    f'按用户分组处理（不修改、不删除，只占用这个序号）。如果它是 ConfigFlow 建的，把第一个条目的备注'
+                    f'改回「{ROLES[role]}」后重新预览即可清理；如果是你自己的分组，建议改名')
 
     def check(self, roles: Tuple[str, ...], rules: List[Dict[str, Any]], removed: List[str]) -> Dict[str, Any]:
         return {'groups': {name: digest(values) for role in roles
@@ -454,6 +579,12 @@ class GroupPlanner:
                 '规则改为引用分组。原因：单条规则直接填写约 5000 个网段就会超过 iKuai 单次请求上限，'
                 '大规则写入还容易超时；改用分组后，以后增删网段只改分组内容，不再重写整条规则。'
                 '本次发布失败会自动恢复原规则并删除新建的分组。')
+
+
+def _notes_for(notes: Dict[str, str], values: List[str]) -> Dict[str, Any]:
+    """``{'notes': ...}`` for the entries of ``values`` that carry one, else nothing."""
+    picked = {key: notes[key] for key in (canon(value) for value in values) if key in notes} if notes else {}
+    return {'notes': picked} if picked else {}
 
 
 def _is_managed(comment: str) -> bool:
@@ -496,8 +627,11 @@ def report_section(state) -> Dict[str, Any]:
     custom = (gstate['rules'].get(f'nat:{target.id}') or {}).get('custom') if target else None
     if custom:
         migrations.append({'rule': target.comment, 'kind': 'NAT 免转换', 'count': len(custom)})
-    orphans = [group['name'] for group in gstate['groups'] if group['role'] and not group['users']]
-    return {'migrations': migrations, 'orphans': orphans}
+    orphans = [group['name'] for group in gstate['groups']
+               if group['role'] and not group['users'] and not hidden_refs(group)]
+    # Groups whose marker a release writes back: until then only the rule ties them to us.
+    marks = [group['name'] for group in gstate['groups'] if group.get('adopted')]
+    return {'migrations': migrations, 'orphans': orphans, 'marks': marks}
 
 
 def verify(stage_checks: Dict[str, Any], state) -> None:
@@ -512,7 +646,9 @@ def verify(stage_checks: Dict[str, Any], state) -> None:
         by_name.setdefault(group['name'], []).append(group)
     for name, expected in stage_checks['groups'].items():
         found = by_name.get(name, [])
-        if len(found) != 1 or not found[0]['role'] or digest(found[0]['values']) != expected:
+        # Marked, not just adopted: every group the stage planned now carries the marker.
+        if (len(found) != 1 or not found[0]['role'] or found[0].get('adopted')
+                or digest(found[0]['values']) != expected):
             raise RouterError(f'回读校验失败：IP 分组「{name}」内容与计划不一致')
     for check in stage_checks['rules']:
         candidates = [rule for rule in gstate['rules'].values()

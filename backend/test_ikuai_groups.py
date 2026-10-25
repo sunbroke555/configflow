@@ -12,7 +12,7 @@ import requests
 
 from backend.routers.ikuai import MAX_REQUEST_BYTES, _addresses, decode_value, request_bytes
 from backend.routers.ikuai_groups import (
-    GROUP_MAX_BYTES, GROUP_MAX_ENTRIES, MAX_RULE_GROUPS, canon, digest, group_bytes, layout,
+    GROUP_MAX_BYTES, GROUP_MAX_ENTRIES, MAX_RULE_GROUPS, canon, digest, group_bytes, layout, payload,
 )
 from backend.routers.release import execute
 from backend.routers.report import build_report
@@ -287,7 +287,7 @@ def test_rules_listing_cidrs_are_migrated_only_by_a_release():
     again = _plan(driver, status={**agent.status(), 'status': 'ok'}, desired=_desired(CIDRS))
     assert again['empty'] and not any(warning.startswith('将把') for warning in again['warnings'])
     state = driver.read_state()
-    assert build_report(_desired(CIDRS), state)['ikuai_groups'] == {'migrations': [], 'orphans': []}
+    assert build_report(_desired(CIDRS), state)['ikuai_groups'] == {'migrations': [], 'orphans': [], 'marks': []}
 
 
 def test_hand_made_rules_and_other_managed_nat_rules_are_left_alone():
@@ -658,3 +658,143 @@ def test_a_rollback_rebinds_a_reused_group_id_by_name():
     # A reference to the user's group is written back exactly.
     own = {'dst_addr': {'custom': [], 'object': [{'type': 0, 'gid': 'IPGP7', 'gp_name': 'tg'}]}}
     assert driver._rebind(own) == own
+
+
+# --- what the user does to our groups in the iKuai UI -------------------------------------
+
+def _group_row(session, name):
+    [row] = [row for row in session.rows['route_object'] if row['group_name'] == name]
+    return row
+
+
+def _notes(session, name):
+    return [(decode_value(item['ip']), decode_value(item['comment'], 'comment'))
+            for item in _group_row(session, name)['group_value']]
+
+
+def test_entry_notes_survive_updates_and_rollbacks():
+    session = Device([], [], policies=[])
+    _, result, agent = _publish(session, MANY[:10])
+    assert result['ok'], result['log'][-3:]
+    _group_row(session, 'cf_nat_1')['group_value'][3]['comment'] = 'office'
+    before = _device(session)
+    # The cf_nat_1 edit is made but its reply is lost: the release rolls back.
+    session.lose.add(('route_object', 'edit', 2))
+    _, failed, _ = _publish(session, MANY[:11], agent)
+    assert not failed['ok'] and all(entry['status'] != 'failed' for entry in failed['rollback'])
+    assert _device(session) == before
+    _, result, _ = _publish(session, MANY[:11], agent)
+    assert result['ok'], result['log'][-3:]
+    notes = _notes(session, 'cf_nat_1')
+    assert notes[0][1] == 'cf-mihomo-nat' and (MANY[3], 'office') in notes
+    assert sorted(value for value, _ in notes) == sorted(MANY[:11])
+
+
+def test_entry_notes_count_toward_the_request_size():
+    note = '办公室-香港-专线' * 4
+    notes = {canon(value): note for value in MANY[:GROUP_MAX_ENTRIES]}
+    result = layout('pm', [], MANY[:GROUP_MAX_ENTRIES], set(), notes)
+    assert len(result['final']) > 1
+    for name, values in result['final']:
+        assert group_bytes(name, 'pm', values, notes) <= GROUP_MAX_BYTES
+    # The marker goes on an entry without a note, moved to the front; no note is lost.
+    entries = payload('cf_pm_1', 'pm', [A, B, C], notes={canon(A): 'tg', canon(C): 'dns'})['group_value']
+    assert entries == [{'ip': B, 'comment': 'cf-mihomo-manual'}, {'ip': A, 'comment': 'tg'},
+                       {'ip': C, 'comment': 'dns'}]
+
+
+def test_a_group_referenced_where_configflow_cannot_see_is_never_deleted():
+    # ACL, 流控 and other features can reference an IP group; iKuai counts them in
+    # ref_count and refuses (2021) to delete the group.
+    session = Device([], [], policies=[])
+    assert _publish(session, CIDRS[:10])[1]['ok']
+    _group_row(session, 'cf_pa_1')['hidden_refs'] = 1
+    for _ in range(2):
+        driver = _driver(session)
+        plan = _plan_without_return(driver, _desired(CIDRS[:10]))
+        assert ('ikuai_group_delete', 'cf_pa_1') not in [(op['kind'], op.get('name')) for op in _ops(plan, 'routes')]
+        assert any('cf_pa_1 还被 iKuai 中 ConfigFlow 读不到的配置（如 ACL、流控）引用 1 处，已保留' in warning
+                   for warning in plan['warnings'])
+        result = execute(plan, driver, None)
+        assert result['ok'], result['log'][-3:]
+    assert not [row for row in session.rows['stream_ipport'] if decode_value(row['comment']) == 'cf-mihomo']
+    assert _groups(session)['cf_pa_1'] == CIDRS[:10]
+    assert build_report(_desired(CIDRS[:10]), _driver(session).read_state())['ikuai_groups']['orphans'] == []
+
+
+def test_a_group_referenced_where_configflow_cannot_see_is_frozen():
+    session = Device([], [], policies=[])
+    _, result, agent = _publish(session, CIDRS)
+    assert result['ok'] and len(_groups(session)['cf_pa_2']) == 500
+    _group_row(session, 'cf_pa_2')['hidden_refs'] = 1
+    # Fewer CIDRs: cf_pa_2 keeps what the other reference sees, the rule stops using it.
+    _, result, _ = _publish(session, CIDRS[:1500], agent)
+    assert result['ok'], result['log'][-3:]
+    assert _groups(session)['cf_pa_2'] == CIDRS[2000:]
+    assert sorted(_resolved(session, _rule(session, 'stream_ipport', 'cf-mihomo'))) == sorted(CIDRS[:1500])
+    # More CIDRs never go into it either.
+    _group_row(session, 'cf_pa_1')['hidden_refs'] = 1
+    plan, result, _ = _publish(session, CIDRS[:1501], agent)
+    assert result['ok'], result['log'][-3:]
+    assert ('ikuai_group_update', 'cf_pa_1') not in [(op['kind'], op.get('name')) for op in _ops(plan, 'routes')]
+    assert _groups(session)['cf_pa_1'] == CIDRS[:1500] and _groups(session)['cf_pa_2'] == CIDRS[2000:]
+    assert sorted(_resolved(session, _rule(session, 'stream_ipport', 'cf-mihomo'))) == sorted(CIDRS[:1501])
+
+
+@pytest.mark.parametrize('note', ['telegram', ''])
+def test_a_lost_marker_on_a_group_our_rule_references_is_written_back(note):
+    session = Device([], [], policies=[])
+    assert _publish(session, CIDRS[:10])[1]['ok']
+    _group_row(session, 'cf_pa_1')['group_value'][0]['comment'] = note
+    report = build_report(_desired(CIDRS[:10]), _driver(session).read_state())
+    assert report['in_sync'] is False and report['ikuai_groups']['marks'] == ['cf_pa_1']
+    plan, result = _release(session, CIDRS[:10])
+    assert result['ok'], result['log'][-3:]
+    [op] = _ops(plan, 'routes')
+    assert (op['kind'], op['name'], op.get('mark')) == ('ikuai_group_update', 'cf_pa_1', True)
+    assert '恢复 IP 分组「cf_pa_1」的 ConfigFlow 归属标记' in op['summary']
+    assert sorted(_groups(session)) == ['cf_nat_1', 'cf_pa_1']
+    notes = _notes(session, 'cf_pa_1')
+    assert notes[0][1] == 'cf-mihomo' and sorted(value for value, _ in notes) == sorted(CIDRS[:10])
+    assert ((CIDRS[0], 'telegram') in notes) is bool(note)
+    _settled(session, CIDRS[:10])
+
+
+def test_a_lost_marker_does_not_move_the_nat_groups_to_another_rule():
+    session = Device([], [_nat(1, 'cf-mihomo', [])], policies=[])
+    assert _publish(session, CIDRS[:10])[1]['ok']
+    session.rows['nat_rule'].append(_nat(50, 'cf-extra', ['203.0.113.0/24']))
+    _group_row(session, 'cf_nat_1')['group_value'][0]['comment'] = ''
+    plan, result = _release(session, CIDRS[:11])
+    assert result['ok'], result['log'][-3:]
+    assert [(op['kind'], op.get('name'), op.get('mark')) for op in _ops(plan, 'nat_bypass')] == [
+        ('ikuai_group_update', 'cf_nat_1', True), ('ikuai_group_update', 'cf_nat_1', None)]
+    assert sorted(_groups(session)) == ['cf_nat_1', 'cf_pa_1']
+    assert _rule(session, 'nat_rule', 'cf-extra')['dst_addr'] == {'custom': ['203.0.113.0/24'], 'object': []}
+    assert sorted(_resolved(session, _rule(session, 'nat_rule', 'cf-mihomo'))) == sorted(CIDRS[:11])
+    _settled(session, CIDRS[:11])
+
+
+def test_an_unmarked_group_with_our_name_is_the_users_but_is_pointed_out():
+    mine = _ip_group(40, 'cf_pa_1', 'my own', CIDRS[:3])
+    split = _ip_group(41, 'cf_pa_2', '', CIDRS[3:6])
+    session = Device([], [], policies=[_grouped(7, 'my split', [_ref(41, 'cf_pa_2')])], groups=[mine, split])
+    plan, result = _release(session, CIDRS[:6])
+    assert result['ok'], result['log'][-3:]
+    assert [row for row in session.rows['route_object'] if row['id'] in (40, 41)] == [mine, split]
+    assert any('IP 分组「cf_pa_1」名称是 ConfigFlow 的格式' in warning for warning in plan['warnings'])
+    # One a hand-made rule uses is plainly the user's: no hint.
+    assert not any('「cf_pa_2」名称是' in warning for warning in plan['warnings'])
+
+
+def test_a_managed_nat_rule_disabled_for_a_while_keeps_its_groups_quietly():
+    session = Device([], [], policies=[])
+    _, result, agent = _publish(session, CIDRS[:10])
+    assert result['ok']
+    holder = _rule(session, 'nat_rule', 'cf-mihomo')
+    holder['enabled'] = 'no'
+    _, result, _ = _publish(session, CIDRS[:10] + [A], agent)
+    assert result['ok'], result['log'][-3:]
+    holder['enabled'] = 'yes'
+    plan = _plan(_driver(session), status={**agent.status(), 'status': 'ok'}, desired=_desired(CIDRS[:10] + [A]))
+    assert plan['empty'] and not any('cf_nat' in warning for warning in plan['warnings']), plan['warnings']

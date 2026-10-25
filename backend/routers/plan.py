@@ -360,7 +360,8 @@ def _grouped_nat_ops(planner: GroupPlanner, rules, target, adopt_ids: List[str],
                                f'（共 {total} 个网段）'})
     removed = planner.cleanup(('nat',))
     planner.stage_checks['nat_bypass'] = planner.check(('nat',), [check] if check else [],
-                                                       [op['name'] for op in removed])
+                                                       [op['name'] for op in removed
+                                                        if op['kind'] == 'ikuai_group_delete'])
     return ops + removed
 
 
@@ -514,7 +515,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         removed = planner.cleanup(('pa', 'pm'))
         route_ops.extend(removed)
         planner.stage_checks['routes'] = planner.check(('pa', 'pm'), planner.route_rules,
-                                                       [op['name'] for op in removed])
+                                                       [op['name'] for op in removed
+                                                        if op['kind'] == 'ikuai_group_delete'])
     ros_policy = state.ros_policy_plan
     if ros_policy is not None:
         blockers.extend(ros_policy['blockers'])

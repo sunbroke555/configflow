@@ -32,6 +32,19 @@ class StatefulIKuai:
     def close(self):
         pass
 
+    def ref_count(self, group):
+        """References iKuai counts: each NAT/端口分流 address field naming the group, plus
+        ``hidden_refs`` from features ConfigFlow does not read (ACL, 流控…)."""
+        count = group.get('hidden_refs', 0)
+        for func in ('nat_rule', 'stream_ipport'):
+            for row in self.rows[func]:
+                for field in ('src_addr', 'dst_addr'):
+                    value = row.get(field)
+                    objects = value.get('object') if isinstance(value, dict) else None
+                    count += sum(1 for ref in objects if isinstance(ref, dict)
+                                 and ref.get('gid') == group.get('group_id')) if isinstance(objects, list) else 0
+        return count
+
     def post(self, url, json=None, **_):
         if url.endswith('/Action/login'):
             return FakeResponse({'Result': 10000, 'code': 0})
@@ -43,10 +56,19 @@ class StatefulIKuai:
             return FakeResponse({'code': 0, 'results': {'total': len(active), 'data': active}})
         rows = self.rows[func]
         if action == 'show':
-            return FakeResponse({'code': 0, 'results': {'total': len(rows), 'data': copy.deepcopy(rows)}})
+            data = copy.deepcopy(rows)
+            if func == 'route_object':
+                for row in data:
+                    row['ref_count'] = self.ref_count(row)
+            return FakeResponse({'code': 0, 'results': {'total': len(rows), 'data': data}})
         self.writes.append((func, action, copy.deepcopy(param)))
         if self.fail == (func, action):
             return FakeResponse({'code': 2, 'message': '参数错误'})
+        if func == 'route_object' and action == 'del':
+            row = next((row for row in rows if row['id'] == param['id']), None)
+            if row is not None and self.ref_count(row):
+                # 4.0.314 refuses to delete a referenced group and keeps it.
+                return FakeResponse({'code': 2021, 'message': '该资源正在使用'})
         # Real iKuai 4.x: name is required, 1-15 characters (web UI form rule).
         name = 'group_name' if func == 'route_object' else 'tagname'
         if action in ('add', 'edit') and not 1 <= len(str(param.get(name) or '')) <= 15:

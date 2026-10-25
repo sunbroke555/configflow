@@ -827,10 +827,11 @@ class IKuaiDriver(RouterDriver):
             raise RouterError('iKuai IP 分组操作无效，请重新预览')
         return role
 
-    def _owned_group(self, op: Dict[str, Any], fresh: bool = False) -> Dict[str, Any]:
+    def _owned_group(self, op: Dict[str, Any], fresh: bool = False, unmarked: bool = False) -> Dict[str, Any]:
+        """Our group the op names; with ``unmarked`` also one with our name that lost its marker."""
         role = self._group_role(op)
         found = self._named_groups(op['name'], fresh)
-        if len(found) != 1 or found[0]['role'] != role:
+        if len(found) != 1 or (found[0]['role'] != role and not (unmarked and found[0]['role'] is None)):
             raise RouterError(f'iKuai IP 分组「{op["name"]}」不存在或不属于 ConfigFlow，请重新预览')
         if found[0]['id'] is None:
             raise RouterError(f'iKuai IP 分组「{op["name"]}」缺少有效 ID，无法安全编辑')
@@ -918,17 +919,30 @@ class IKuaiDriver(RouterDriver):
                 raise RouterError(f'iKuai IP 分组「{name}」已存在，请重新预览')
             undo = {'kind': 'ikuai_group_undo', 'name': name, 'role': role,
                     'expected': ikuai_groups.digest(op['values']), 'confirmed': True}
-            self._group_write('add', name, ikuai_groups.payload(name, role, op['values']), {**undo, 'confirmed': False})
+            self._group_write('add', name, ikuai_groups.payload(name, role, op['values'], notes=op.get('notes')),
+                              {**undo, 'confirmed': False})
             if self._batch is not None:
                 self._batch['groups_written'][name] = undo
             return undo
+        if kind == 'ikuai_group_update' and op.get('mark'):
+            # The marker back on the first entry; addresses and notes unchanged. Not
+            # undone: a rollback leaves the marker, which only restores ownership.
+            group = self._owned_group(op, unmarked=True)
+            if ikuai_groups.digest(group['values']) != op['expected']:
+                raise RouterError(f'iKuai IP 分组「{name}」在预览后发生变化，请重新预览')
+            self._group_write('edit', name, ikuai_groups.payload(name, op['role'], op['values'], group['id'],
+                                                                 op.get('notes')), None)
+            return {}
         if kind == 'ikuai_group_update':
             group = self._owned_group(op)
             if ikuai_groups.digest(group['values']) != op['expected']:
                 raise RouterError(f'iKuai IP 分组「{name}」在预览后发生变化，请重新预览')
+            # The entries exactly as read, notes included: a rollback writes them back.
             undo = {'kind': 'ikuai_group_restore', 'name': name, 'role': group['role'], 'values': group['values'],
-                    'previous': op['expected'], 'expected': ikuai_groups.digest(op['values'])}
-            self._group_write('edit', name, ikuai_groups.payload(name, group['role'], op['values'], group['id']), undo)
+                    'entries': group['entries'], 'previous': op['expected'],
+                    'expected': ikuai_groups.digest(op['values'])}
+            self._group_write('edit', name, ikuai_groups.payload(name, group['role'], op['values'], group['id'],
+                                                                 op.get('notes')), undo)
             if self._batch is not None:
                 self._batch['groups_written'][name] = {'expected': undo['expected']}
             return undo
@@ -939,7 +953,8 @@ class IKuaiDriver(RouterDriver):
             users = self._group_users(group)
             if users:
                 raise RouterError(f'iKuai IP 分组「{name}」仍被{"、".join(users)}引用，未删除')
-            undo = {'kind': 'ikuai_group_readd', 'name': name, 'role': group['role'], 'values': group['values']}
+            undo = {'kind': 'ikuai_group_readd', 'name': name, 'role': group['role'], 'values': group['values'],
+                    'entries': group['entries']}
             self._group_write('del', name, {'id': group['id']}, undo)
             return undo
         if kind == 'ikuai_group_undo':
@@ -963,23 +978,30 @@ class IKuaiDriver(RouterDriver):
         if kind == 'ikuai_group_restore':
             group = self._owned_group(op, fresh=True)
             current = ikuai_groups.digest(group['values'])
-            if current == op['previous']:
+            entries = op.get('entries')
+            if group['entries'] == entries if entries is not None else current == op['previous']:
                 return {}
             if current != op['expected']:
                 raise RouterError(f'iKuai IP 分组「{name}」已被修改，保留现状，请检查')
-            self._group_write('edit', name, ikuai_groups.payload(name, group['role'], op['values'], group['id']), None)
+            param = (ikuai_groups.entry_payload(name, entries, group['id']) if entries is not None
+                     else ikuai_groups.payload(name, group['role'], op['values'], group['id']))
+            self._group_write('edit', name, param, None)
             return {}
         if kind == 'ikuai_group_readd':
             role = self._group_role(op)
             found = self._named_groups(name, fresh=True)
+            entries = op.get('entries')
             if found:
                 if (len(found) == 1 and found[0]['role'] == role
-                        and ikuai_groups.digest(found[0]['values']) == ikuai_groups.digest(op['values'])):
+                        and (found[0]['entries'] == entries if entries is not None
+                             else ikuai_groups.digest(found[0]['values']) == ikuai_groups.digest(op['values']))):
                     return {}
                 raise RouterError(f'iKuai IP 分组「{name}」已被其他配置占用，无法恢复，请检查')
             undo = {'kind': 'ikuai_group_undo', 'name': name, 'role': role,
                     'expected': ikuai_groups.digest(op['values']), 'confirmed': True}
-            self._group_write('add', name, ikuai_groups.payload(name, role, op['values']), {**undo, 'confirmed': False})
+            param = (ikuai_groups.entry_payload(name, entries) if entries is not None
+                     else ikuai_groups.payload(name, role, op['values']))
+            self._group_write('add', name, param, {**undo, 'confirmed': False})
             return undo
         raise RouterError(f'不支持的操作 {kind}')
 
@@ -1094,7 +1116,7 @@ def oversized_requests(ops: List[Dict[str, Any]]) -> List[str]:
         kind = op['kind']
         if kind in ('ikuai_group_add', 'ikuai_group_update'):
             func_name, label, count = 'route_object', 'IP 分组', len(op['values'])
-            payload = ikuai_groups.payload(op['name'], op['role'], op['values'])
+            payload = ikuai_groups.payload(op['name'], op['role'], op['values'], notes=op.get('notes'))
             name = op['name']
         elif kind in ('policy_route_add', 'policy_route_update'):
             func_name, label, name = 'stream_ipport', '端口分流', op['comment']
