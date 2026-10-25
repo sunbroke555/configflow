@@ -349,8 +349,11 @@ def _delete_routes(driver, items, journal):
 
 
 def _restore_routes(driver, steps, ids, remapped, failures):
-    """Recreate deleted routes: one ID read before and one after, a PUT for each."""
-    from backend.routers.routeros_batch import _query
+    """Recreate deleted routes: one ID read, console adds in batches, REST for the rest.
+
+    Each step fails or succeeds on its own, reported in step order as before.
+    """
+    from backend.routers.routeros_batch import BATCH_MIN, ROUTE_BATCH, UNCERTAIN, _console_add, _query, console_safe
     try:
         present = {row.get('.id'): row for row in _query(driver, '.id', [step['id'] for step in steps])}
     except RouterError:
@@ -360,30 +363,57 @@ def _restore_routes(driver, steps, ids, remapped, failures):
             except RouterError as error:
                 failures.append(str(error))
         return
-    created = []
-    for step in steps:
-        try:
-            current = present.get(step['id'])
-            if current is not None:
-                if config_row(current) != config_row(step['config']):
-                    raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + step['path'] + '/' + step['id'])
+    errors, absent = {}, []
+    for index, step in enumerate(steps):
+        current = present.get(step['id'])
+        if current is None:
+            absent.append((index, copy.deepcopy(step['values'])))
+        elif config_row(current) != config_row(step['config']):
+            errors[index] = '策略路由对象在操作期间发生变化，保留现场：' + step['path'] + '/' + step['id']
+    batched = [item for item in absent if console_safe(item[1])]
+    single = [item for item in absent if not console_safe(item[1])]
+    for start in range(0, len(batched), ROUTE_BATCH):
+        chunk = batched[start:start + ROUTE_BATCH]
+        added = _console_add(driver, [values for _, values in chunk]) if len(chunk) >= BATCH_MIN else None
+        count = added['count'] if added else 0
+        for position, (index, values) in enumerate(chunk[:count]):
+            if position not in added['rows']:
+                failure = added['failure']
+                errors[index] = str(failure[1]) if failure and failure[0] == position else UNCERTAIN
                 continue
-            values = copy.deepcopy(step['values'])
-            created.append((step, values, *_put(driver, ROUTES, values, [], ids, restoring=True)))
-        except RouterError as error:
-            failures.append(str(error))
-    if not created:
-        return
-    try:
-        rows = {row.get('.id'): row for row in _query(driver, '.id', [row_id for _, _, row_id, _ in created])}
-    except RouterError as error:
-        failures.extend(str(error) for _ in created)
-        return
-    for step, values, row_id, undo in created:
+            row = added['rows'][position]
+            try:
+                if row is not None:
+                    ids[ROUTES].add(row['.id'])
+                undo = {'action': 'delete', **_resource(ROUTES, row)} if row else {}
+                remapped[(ROUTES, steps[index]['id'])] = _confirm(
+                    driver, ROUTES, values, (row or {}).get('.id'), undo, row)['id']
+            except RouterError as error:
+                errors[index] = str(error)
+        if added and added['unexplained']:
+            for index, _ in chunk[count:]:
+                errors[index] = f'RouterOS {ROUTES} 批量写入未执行完成；无法确认新增对象归属，已保留现场，请检查路由器'
+            continue
+        single.extend(chunk[count:])  # the console rejected it, or too few for a batch
+    created = []
+    for index, values in sorted(single):
         try:
-            remapped[(ROUTES, step['id'])] = _confirm(driver, ROUTES, values, row_id, undo, rows.get(row_id))['id']
+            created.append((index, values, *_put(driver, ROUTES, values, [], ids, restoring=True)))
         except RouterError as error:
-            failures.append(str(error))
+            errors[index] = str(error)
+    if created:
+        try:
+            rows = {row.get('.id'): row for row in _query(driver, '.id', [row_id for _, _, row_id, _ in created])}
+        except RouterError as error:
+            rows = None
+            for index, *_ in created:
+                errors[index] = str(error)
+        for index, values, row_id, undo in created if rows is not None else []:
+            try:
+                remapped[(ROUTES, steps[index]['id'])] = _confirm(driver, ROUTES, values, row_id, undo, rows.get(row_id))['id']
+            except RouterError as error:
+                errors[index] = str(error)
+    failures.extend(errors[index] for index in sorted(errors))
 
 
 def _restore_step(driver, step, ids, remapped, delete_safe=True):

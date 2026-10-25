@@ -320,6 +320,12 @@ def test_policy_switch_migrates_managed_routes_in_batches(monkeypatch, fail_at):
         assert result['ok'] and not any(row.get('comment') == 'cf-Telegram' for row in driver.rows[ROUTES])
     # One by one: a guard read per route before writing, another before and after each delete.
     single_by_id = [path for method, path in single.sent if method == 'GET' and path.startswith(ROUTES + '/*')]
+    if fail_at:
+        # The six removed routes come back with one console batch, not a PUT
+        # and a read-back each (the fake runs console adds as PUTs).
+        def executes(sent):
+            return sum(1 for call in sent if call == ('POST', '/execute'))
+        assert executes(driver.sent) == executes(single.sent) + 1
     migrated = [path for path in single_by_id if path.startswith(ROUTES + '/*B0')]
     assert len(migrated) >= (12 if fail_at else 24) and not any(path.startswith(ROUTES + '/*B0') for path in by_id)
 
