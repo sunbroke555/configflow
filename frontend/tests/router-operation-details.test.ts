@@ -49,7 +49,12 @@ describe('reviewable release operation details', () => {
     expect(groups.map(g => g.title)).toEqual(['规则字段', '来源列表', '目的列表', '迁移删除的旧规则'])
     expect(groups[0].rows[0].value).toContain('目的地址列表 · dst-address-list: cf-mihomo-nat-dst')
     expect(groups[2].rows).toEqual([{ label: '新增', value: '203.0.113.0/24', action: '新增' }, { label: '移除', value: '198.51.100.0/24', action: '移除' }])
-    expect(groups[3].rows).toHaveLength(3); expect(groups[3].note).toContain('共 3 条')
+    expect(groups[3].rows).toHaveLength(3); expect(groups[3].note).toContain('共 3 条，合并为上面的 1 条规则')
+    const stale = operationDetails({ kind: 'nat_list_sync', summary: '删除残留', comment: 'cf-mihomo-nat', src_list: 'cf-mihomo-nat-src',
+      dst_list: 'cf-mihomo-nat-dst', rule: { id: '*R', path: '/ip/firewall/nat', config: {} }, out_interface: '', replace_rule: false,
+      withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [], stale: legacy.slice(0, 2) })
+    expect(stale.map(g => g.title)).toEqual(['规则字段', '删除残留的旧规则'])
+    expect(stale[1].rows).toHaveLength(2); expect(stale[1].note).toContain('目的网段已不再代理')
     const narrowed = operationDetails({ kind: 'nat_list_sync', summary: '限定出口', comment: 'cf-mihomo-nat', src_list: 'cf-mihomo-nat-src',
       dst_list: 'cf-mihomo-nat-dst', rule: { id: '*R', path: '/ip/firewall/nat', config: {} }, out_interface: 'bridge', replace_rule: true,
       withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [] })

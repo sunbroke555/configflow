@@ -186,10 +186,11 @@ class RouterOSDriver(RouterDriver):
             mangle = None
         # Only lists NAT and Mangle selectors use are resolved; other lists
         # (blocklists, dynamic detection lists) are never downloaded. The NAT
-        # bypass lists are read with them when an exemption may be planned.
+        # bypass lists are read with them once a rule selects them or this
+        # driver wrote them; otherwise only when a plan asks for them.
         from backend.routers import routeros_nat_list
         names = ros_address_lists.referenced(nats + (mangle or []))
-        own = set(routeros_nat_list.NAMES) if routeros_nat_list.wanted(nats, self) else set()
+        own = set(routeros_nat_list.NAMES) if routeros_nat_list.eager(names, self) else set()
         lists = ros_address_lists.read(self, names | own)
         for name, rows in lists.items():
             if name not in names:
@@ -199,6 +200,8 @@ class RouterOSDriver(RouterDriver):
                     state.address_sets.setdefault(name, []).append(str(row.get('address') or ''))
         if own:
             state.nat_lists = routeros_nat_list.state_lists(self, nats, lists, mangle)
+        else:
+            state.nat_lists_reader = routeros_nat_list.reader(self, nats, mangle)
         assessed = nats
         if getattr(self, 'dns_guard_manifest', None):
             # Proven DNS guard hairpins only translate queries to OxiDNS:53, never

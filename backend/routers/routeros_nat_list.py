@@ -12,10 +12,13 @@ every rule that may translate, and no other rule selecting the lists. Members
 are ours by their comment; anything else in the lists is kept and never written.
 
 Earlier releases wrote one rule per source fragment and destination (comment
-``cf-mihomo``). They move into the lists only when a NAT write is needed anyway:
-the lists and the rule are written and proven first, then the old rules go in
-batches; any failure restores them in their original order. Devices that need
-no new exemption keep exactly the earlier plan (``plan`` returns None).
+``cf-mihomo``). A preview offers to merge them into the lists whenever the
+device holds any, even with nothing else to change: thousands of rules slow
+every new connection down, and auto-sync cannot update them. The release a
+person starts writes and proves the lists and the rule first, then removes
+the old rules in batches; any failure restores them in their original order.
+Auto-sync never migrates. Devices without such rules and without a missing
+exemption keep exactly the earlier plan and reads (``plan`` returns None).
 """
 import copy
 import ipaddress
@@ -24,7 +27,7 @@ from urllib.parse import quote
 
 from backend.routers.base import RouterError, RouterRollbackError, is_managed, managed_comment
 from backend.routers.report import _networks
-from backend.routers.routeros_nat import NON_TRANSLATING, _interface, client_source_networks
+from backend.routers.routeros_nat import _interface, client_source_networks
 
 COMMENT = 'cf-mihomo-nat'
 SRC_LIST = 'cf-mihomo-nat-src'
@@ -48,6 +51,7 @@ LEGACY_FIELDS = frozenset({'chain', 'action', 'disabled', 'comment', 'log', 'log
 REMOVE_BATCH = 500
 SETTLE_READS = 8
 CHANGED = 'NAT 免转换规则或地址列表在预览后发生变化，请重新预览'
+WHY_MERGE = '逐条规则过多会拖慢每个新连接的源 NAT 匹配，自动同步也无法更新逐条规则'
 
 
 def _truthy(value):
@@ -188,39 +192,56 @@ def _evidence(lists):
             for kind in ('src', 'dst')}
 
 
-def _legacy(rows, sources, items, skipped, excluded, out_interface):
-    """Per-destination rules the earlier writer made, by their exact shape.
+def _legacy_shape(row, excluded, out_interface):
+    """Exactly what the per-destination writer produced, nothing added since."""
+    return (row.get('comment') == LEGACY_COMMENT and str(row.get('.id')) not in excluded
+            and row.get('chain') == 'srcnat' and row.get('action') == 'accept' and _enabled(row)
+            and not _truthy(row.get('dynamic')) and not _truthy(row.get('invalid'))
+            and not set(_config(row)) - LEGACY_FIELDS and not _truthy(row.get('log')) and not row.get('log-prefix')
+            and bool(row.get('src-address')) and bool(row.get('dst-address'))
+            and str(row.get('out-interface') or '') in ('', out_interface))
 
-    Only a desired CIDR protected by one rule for every current source
-    fragment, with nothing else on them, is taken over: what an adopted
-    hand-made rule (also ``cf-…``) could not look like by chance.
+
+def _legacy(rows, sources, items, desired, skipped, excluded, out_interface):
+    """Per-destination rules the earlier writer made, by their exact shape:
+    ``(merged, their destinations, stale)``.
+
+    Only a destination with one rule for every current source fragment, and
+    nothing else on them, is taken over: what an adopted hand-made rule (also
+    ``cf-…``) could not look like by chance. A desired CIDR that needs an
+    exemption moves into the lists. A destination overlapping no desired CIDR
+    is stale: earlier releases never removed these rules when a CIDR stopped
+    being proxied, so traffic to it left the WAN untranslated. Anything in
+    between (a wider or narrower destination, a CIDR skipped for a route
+    conflict, not required or adopted) is left as it is.
     """
     wanted = {_key(item['cidr']): item['cidr'] for item in items if item['status'] in ('synced', 'missing')}
     source_keys = {_key(source) for source in sources}
     blocked = _networks(skipped)
+    proxied = _networks(desired)
     position = {id(row): index for index, row in enumerate(rows)}
     groups = {}
     for row in rows:
-        if row.get('comment') != LEGACY_COMMENT or str(row.get('.id')) in excluded:
-            continue
-        if (row.get('chain') != 'srcnat' or row.get('action') != 'accept' or not _enabled(row)
-                or _truthy(row.get('dynamic')) or _truthy(row.get('invalid'))
-                or set(_config(row)) - LEGACY_FIELDS or _truthy(row.get('log')) or row.get('log-prefix')
-                or not row.get('src-address') or not row.get('dst-address')
-                or str(row.get('out-interface') or '') not in ('', out_interface)):
-            continue
-        if _key(row['dst-address']) in wanted and _key(row['src-address']) in source_keys:
+        if _legacy_shape(row, excluded, out_interface) and _key(row['src-address']) in source_keys:
             groups.setdefault(_key(row['dst-address']), []).append(row)
-    selected, destinations = [], []
+    selected, destinations, stale = [], [], []
     for key, group in groups.items():
         if ({_key(row['src-address']) for row in group} != source_keys
-                or len({str(row.get('out-interface') or '') for row in group}) != 1
-                or any(ipaddress.IPv4Network(key).overlaps(network) for network in blocked)):
+                or len({str(row.get('out-interface') or '') for row in group}) != 1):
             continue
-        selected.extend(group)
-        destinations.append(wanted[key])
+        try:
+            network = ipaddress.IPv4Network(key)
+        except ValueError:
+            continue
+        if key in wanted:
+            if not any(network.overlaps(other) for other in blocked):
+                selected.extend(group)
+                destinations.append(wanted[key])
+        elif not any(network.overlaps(other) for other in proxied):
+            stale.extend(group)
     selected.sort(key=lambda row: position[id(row)])
-    return [_resource(NAT, row) for row in selected], destinations
+    stale.sort(key=lambda row: position[id(row)])
+    return [_resource(NAT, row) for row in selected], destinations, [_resource(NAT, row) for row in stale]
 
 
 def _adopt_ops(items, rules):
@@ -240,24 +261,37 @@ def _adopt_ops(items, rules):
     return ops
 
 
+def _refs(lists):
+    return (lists or {}).get('mangle_refs') or (), (lists or {}).get('firewall_refs') or ()
+
+
 def plan(report, state, gateway, skipped):
     """The list-based NAT plan, or None when the earlier per-rule plan stays.
 
-    None only while no list rule exists (nor anything named like it) and no
-    CIDR is missing an exemption: not required, covered, adopt-only and
-    unknown plans keep their earlier operations and fingerprint.
+    None only while no list rule exists (nor anything named like it), no CIDR
+    is missing an exemption and no per-destination rule of earlier releases
+    can be merged: not required, adopt-only and unknown plans keep their
+    earlier operations, fingerprint and reads (the lists are not read).
     """
     rows = state.nat_context.get('rules') or []
     items = [item for item in report['nat_bypass']['items'] if item['cidr'] not in skipped]
-    lists = state.nat_lists
-    found = inspect_rule(rows, (lists or {}).get('mangle_refs') or (), (lists or {}).get('firewall_refs') or ())
+    found = inspect_rule(rows, *_refs(state.nat_lists))
     missing = [item['cidr'] for item in items if item['status'] == 'missing']
-    if found['rule'] is None and not found['problem'] and not missing:
+    check = (state.ros_policy_plan or {}).get('check') or {}
+    moving = {(item['path'], item['id']) for item in check.get('migrations', [])}
+    sources = [str(network) for network in client_source_networks(gateway)]
+    desired = [item['cidr'] for item in report['nat_bypass']['items']]
+    legacy, legacy_destinations, stale = _legacy(
+        rows, sources, items, desired, skipped, {item_id for path, item_id in moving if path == NAT},
+        found['out_interface'])
+    if found['rule'] is None and not found['problem'] and not missing and not legacy:
         return None
     result = {'ops': [], 'blockers': [], 'warnings': [], 'evidence': None, 'check': None, 'exempt': []}
+    lists = lists_of(state)
     if lists is None:
         result['blockers'].append('无法读取 NAT 免转换地址列表，请重新预览')
         return result
+    found = inspect_rule(rows, *_refs(lists))
     result['evidence'] = _evidence(lists)
     if lists.get('mangle_refs') is None:
         result['blockers'].append('无法读取 Mangle，不能确认 NAT 免转换地址列表未被其他规则引用')
@@ -266,7 +300,6 @@ def plan(report, state, gateway, skipped):
     if found['problem']:
         result['blockers'].append(found['problem'])
     rule = found['rule']
-    sources = [str(network) for network in client_source_networks(gateway)]
     src_ours, src_foreign, problems = _members(SRC_LIST, lists.get('src') or [])
     dst_ours, dst_foreign, more = _members(DST_LIST, lists.get('dst') or [])
     result['blockers'].extend(problems + more)
@@ -278,22 +311,20 @@ def plan(report, state, gateway, skipped):
     if result['blockers']:
         return result
 
-    check = (state.ros_policy_plan or {}).get('check') or {}
-    moving = {(item['path'], item['id']) for item in check.get('migrations', [])}
     nat_rules = {entry.id: entry for entry in state.nat_bypass if entry.enabled and (NAT, entry.id) not in moving}
     rule_id = str(rule['.id']) if rule is not None else None
     egress = found['out_interface']
-    legacy, legacy_destinations = _legacy(rows, sources, items, skipped,
-                                          {item_id for path, item_id in moving if path == NAT}, egress)
     covered = [item['cidr'] for item in items if item['status'] == 'synced' and rule_id in item['rule_ids']]
     targets = {}
     for cidr in missing + covered + legacy_destinations:
         targets.setdefault(_key(cidr), cidr)
-    desired = {_key(item['cidr']) for item in report['nat_bypass']['items']}
+    desired = {_key(cidr) for cidr in desired}
     # A CIDR skipped for a route conflict keeps whatever protects it today.
     held = _networks(skipped)
     withdraw = rule is not None and not targets and not any(
         network.overlaps(other) for row in dst_ours for network in _networks([row.get('address', '')]) for other in held)
+    if withdraw:
+        stale = []  # withdrawing touches the list rule only
 
     def split(ours, foreign, keep):
         """(ours to remove, keys present afterwards, keys of ours kept): duplicates and
@@ -320,20 +351,22 @@ def plan(report, state, gateway, skipped):
                   'dst': sorted(dst_kept | {_key(value) for value in dst_add})}
 
     result['ops'] = _adopt_ops(items, nat_rules)
-    if create or withdraw or src_add or src_remove or dst_add or dst_remove or legacy:
+    if create or withdraw or src_add or src_remove or dst_add or dst_remove or legacy or stale:
         op = {'kind': 'nat_list_sync', 'comment': COMMENT, 'src_list': SRC_LIST, 'dst_list': DST_LIST,
               'rule': None if rule is None else _resource(NAT, rule), 'out_interface': egress,
               'replace_rule': False, 'sources': sources, 'destinations': list(targets.values()),
               'src_add': src_add, 'src_remove': src_remove, 'dst_add': dst_add, 'dst_remove': dst_remove,
-              'legacy': legacy, 'withdraw': withdraw}
-        op['summary'] = _summary(op, gateway, create)
+              'legacy': legacy, 'stale': stale, 'withdraw': withdraw}
+        merged = {_key(cidr) for cidr in legacy_destinations}
+        op['summary'] = _summary(op, gateway, create, [cidr for key, cidr in targets.items() if key not in merged])
         result['ops'].append(op)
     result['check'] = {'rule': rule_id, 'out_interface': egress, 'sources': sources,
-                       'destinations': list(targets.values()), 'removed': [item['id'] for item in legacy],
+                       'destinations': list(targets.values()),
+                       'removed': [item['id'] for item in legacy + stale],
                        'members': ours_after, 'withdraw': withdraw}
 
     # Return routing covers what stays exempt after this stage.
-    gone = {item['id'] for item in legacy}
+    gone = {item['id'] for item in legacy + stale}
     removed = {_key(item['config'].get('address')) for item in dst_remove}
     exempt = []
     for entry in nat_rules.values():
@@ -346,14 +379,22 @@ def plan(report, state, gateway, skipped):
     return result
 
 
-def _summary(op, gateway, create):
+def _summary(op, gateway, create, fresh=None):
+    """One line: what changes, and for old per-destination rules why they merge."""
     if op['withdraw']:
         return f'删除 NAT 免转换规则「{COMMENT}」及其地址列表：已没有需要免转换的代理网段'
     parts, head = [], ''
+    stale = op.get('stale') or []
     if create:
-        head = (f'新增 NAT 免转换规则「{COMMENT}」：源地址列表 {SRC_LIST}（{gateway} 所在 /24 除 {gateway} 外，'
-                f'{len(op["sources"])} 段）→ 目的地址列表 {DST_LIST}（{len(op["destinations"])} 个网段），'
-                '放在所有源 NAT 转换规则之前')
+        target = (f'源地址列表 {SRC_LIST}（{gateway} 所在 /24 除 {gateway} 外，{len(op["sources"])} 段）'
+                  f'→ 目的地址列表 {DST_LIST}（{len(op["destinations"])} 个网段），放在所有源 NAT 转换规则之前')
+        if op['legacy']:
+            head = f'将 {len(op["legacy"])} 条 NAT 免转换规则合并为 1 条「{COMMENT}」：{target}'
+            if fresh:
+                parts.append(f'其中新增 {len(fresh)} 个网段（{_sample(fresh)}）')
+            parts.append(f'{WHY_MERGE}；先建立并回读校验新规则，再删除旧规则（备注 {LEGACY_COMMENT}）')
+        else:
+            head = f'新增 NAT 免转换规则「{COMMENT}」：{target}'
     else:
         changes = []
         if op['dst_add']:
@@ -365,11 +406,15 @@ def _summary(op, gateway, create):
                 else f'NAT 免转换规则「{COMMENT}」')
         if op['src_add'] or op['src_remove']:
             parts.append(f'源列表随网关 {gateway} 更新：新增 {len(op["src_add"])} 段、移除 {len(op["src_remove"])} 段')
+        if op['legacy']:
+            parts.append(f'将 {len(op["legacy"])} 条旧的逐条 NAT 免转换规则（备注 {LEGACY_COMMENT}）与「{COMMENT}」'
+                         f'合并为 1 条：{WHY_MERGE}；先回读校验列表规则的覆盖，再删除旧规则')
     if create and op['dst_remove']:
         parts.append(f'移除 {len(op["dst_remove"])} 个不再代理的残留网段')
-    if op['legacy']:
-        parts.append(f'迁移 {len(op["legacy"])} 条旧的逐条免转换规则（备注 {LEGACY_COMMENT}）：'
-                     '先建立并回读校验新规则，再删除旧规则')
+    if stale:
+        destinations = list(dict.fromkeys(item['config'].get('dst-address', '') for item in stale))
+        parts.append(f'删除 {len(stale)} 条残留的旧逐条免转换规则（备注 {LEGACY_COMMENT}，目的 {_sample(destinations)}）：'
+                     '这些网段已不再代理，保留它们会让去往这些网段的流量经 WAN 出去时不做源 NAT')
     return '；'.join([head] + parts)
 
 
@@ -394,11 +439,11 @@ def removals_first(nat_ops, route_ops, gateway):
         if op['withdraw']:
             early.append(op)
             continue
-        prune = {**copy.deepcopy(op), 'src_add': [], 'src_remove': [], 'dst_add': [], 'legacy': []}
+        prune = {**copy.deepcopy(op), 'src_add': [], 'src_remove': [], 'dst_add': [], 'legacy': [], 'stale': []}
         prune['summary'] = _summary(prune, gateway, False) + '；在删除对应路由之前执行'
         early.append(prune)
         op = {**op, 'dst_remove': []}
-        if op['src_add'] or op['src_remove'] or op['dst_add'] or op['legacy']:
+        if op['src_add'] or op['src_remove'] or op['dst_add'] or op['legacy'] or op.get('stale'):
             op['summary'] = _summary(op, gateway, False)
             rest.append(op)
     return rest, early + route_ops
@@ -450,14 +495,10 @@ def policy_migrations(row, addresses, exclusions):
 
 # --- reads -----------------------------------------------------------------
 
-def wanted(nats, driver):
-    """Whether read_state reads the two lists: the rule or a list reference is
-    there, a rule may translate (an exemption may be planned), or this driver
-    wrote them."""
-    return (bool(references(nats))
-            or any(_enabled(row) and row.get('chain') == 'srcnat' and row.get('action') not in NON_TRANSLATING
-                   for row in nats)
-            or bool(getattr(driver, 'nat_list_touched', False)))
+def eager(names, driver):
+    """Whether read_state reads the two lists with the others: a NAT or Mangle
+    rule selects them, or this driver wrote them (read-back and rollback)."""
+    return bool(set(NAMES) & set(names)) or bool(getattr(driver, 'nat_list_touched', False))
 
 
 def state_lists(driver, nats, rows_by_name, mangle):
@@ -467,7 +508,10 @@ def state_lists(driver, nats, rows_by_name, mangle):
     devices without them keep the reads they had before. A rule selecting a
     list before ConfigFlow first creates it is still refused when writing.
     """
+    from backend.routers import ros_address_lists
     src, dst = rows_by_name.get(SRC_LIST, []), rows_by_name.get(DST_LIST, [])
+    for name, rows in ((SRC_LIST, src), (DST_LIST, dst)):
+        ros_address_lists.expect(driver, name, rows)
     firewall = []
     if src or dst or any(candidate(row) for row in nats):
         try:
@@ -477,6 +521,26 @@ def state_lists(driver, nats, rows_by_name, mangle):
             firewall = None
     return {'src': src, 'dst': dst, 'mangle_refs': None if mangle is None else references(mangle),
             'firewall_refs': firewall}
+
+
+def reader(driver, nats, mangle):
+    """Read the lists later, for a plan that turns out to need them."""
+    def read():
+        from backend.routers import ros_address_lists
+        return state_lists(driver, nats, ros_address_lists.read(driver, list(NAMES)), mangle)
+    return read
+
+
+def lists_of(state):
+    """The state's lists, read now when read_state left them for later (None: unreadable)."""
+    read = getattr(state, 'nat_lists_reader', None)
+    if state.nat_lists is None and read is not None:
+        state.nat_lists_reader = None
+        try:
+            state.nat_lists = read()
+        except RouterError:
+            state.nat_lists = None
+    return state.nat_lists
 
 
 def _assessed(driver, rows):
@@ -490,8 +554,12 @@ def _assessed(driver, rows):
 
 
 def _read_lists(driver):
+    """Both lists; within this session they are proven by digest afterwards."""
     from backend.routers import ros_address_lists
-    return ros_address_lists.read(driver, list(NAMES))
+    lists = ros_address_lists.read(driver, list(NAMES))
+    for name in NAMES:
+        ros_address_lists.expect(driver, name, lists[name])
+    return lists
 
 
 def _foreign_references(driver, rule_ids, nat_rows=None):
@@ -522,9 +590,10 @@ def member_update(plan, baseline):
 
     Only destination members of the list rule enrolled by a manual release:
     the rule (ID, configuration, egress) and its source members must match
-    the baseline. Creating, replacing or withdrawing the rule, migrating old
-    rules, source or adoption changes still need a manual release. Removals
-    the plan put in the routes stage (``removals_first``) are merged in.
+    the baseline. Creating, replacing or withdrawing the rule, migrating or
+    removing old rules, source or adoption changes still need a manual
+    release. Removals the plan put in the routes stage (``removals_first``)
+    are merged in.
     """
     enrolled = (baseline or {}).get('nat_list')
     stages = {stage['key']: stage['ops'] for stage in plan['stages']}
@@ -532,13 +601,22 @@ def member_update(plan, baseline):
     if not ops or not enrolled or any(op['kind'] != 'nat_list_sync' for op in ops):
         return None
     for op in ops:
-        if (op['rule'] is None or op['replace_rule'] or op['withdraw'] or op['legacy'] or op['src_add']
+        if (op['rule'] is None or op['replace_rule'] or op['withdraw'] or op['legacy'] or op.get('stale')
+                or op['src_add']
                 or op['src_remove'] or op['rule']['id'] != enrolled['rule']['id']
                 or _config(op['rule']['config']) != _config(enrolled['rule']['config'])
                 or op['out_interface'] != str(enrolled['rule']['config'].get('out-interface') or '')):
             return None
     return {**ops[-1], 'dst_add': [value for op in ops for value in op['dst_add']],
             'dst_remove': [item for op in ops for item in op['dst_remove']]}
+
+
+def migration(plan):
+    """Old per-destination rules a plan merges or removes: (count, stale count)."""
+    ops = [inner for stage in plan['stages'] for op in stage['ops'] for inner in op.get('prepare_static', [op])
+           if inner['kind'] == 'nat_list_sync']
+    return (sum(len(op['legacy']) for op in ops if op.get('legacy')),
+            sum(len(op['stale']) for op in ops if op.get('stale')))
 
 
 def entries(name, addresses):
@@ -564,7 +642,7 @@ def _check_unchanged(driver, op, full, rows, lists):
           or _config(found['rule']) != _config(op['rule']['config'])):
         raise RouterError(CHANGED)
     by_id = {str(row.get('.id')): row for row in rows}
-    for item in op['legacy']:
+    for item in op['legacy'] + op.get('stale', []):
         row = by_id.get(item['id'])
         if row is None or _config(row) != _config(item['config']):
             raise RouterError(CHANGED)
@@ -612,7 +690,7 @@ def _create_rule(driver, op, journal, ids):
 def _prove(driver, op, rule_id):
     """Before old rules go: with them gone, the list rule alone still covers every pair."""
     from backend.routers.routeros_nat import preserves_sources
-    legacy = {item['id'] for item in op['legacy']}
+    legacy = {item['id'] for item in op['legacy'] + op.get('stale', [])}
     rows = [row for row in _assessed(driver, driver._list(NAT)) if str(row.get('.id')) not in legacy]
     found = inspect_rule(rows)
     lists = _read_lists(driver)
@@ -771,9 +849,11 @@ def apply(driver, op):
             rule_id = _create_rule(driver, op, journal, ids)
             keep.append(rule_id)
         _settle(driver, rule_id)
-        if op['legacy']:
+        if op['legacy'] or op.get('stale'):
             _prove(driver, op, rule_id)
-            delete_rules(driver, op['legacy'], journal)
+            order = {str(row.get('.id')): index for index, row in enumerate(full)}
+            delete_rules(driver, sorted(op['legacy'] + op.get('stale', []), key=lambda item: order[item['id']]),
+                         journal)
         # Narrowing comes last, once the new state is in place.
         if op['dst_remove']:
             _delete_addresses(driver, op['dst_remove'], journal)
@@ -829,7 +909,7 @@ def restore(driver, op):
 def verify(check, state):
     """Read-back of the NAT stage beyond per-CIDR coverage: shape, removals, members."""
     rows = (state.nat_context or {}).get('rules') or []
-    lists = getattr(state, 'nat_lists', None)
+    lists = lists_of(state)
     if lists is None:
         raise RouterError('回读校验失败：无法读取 NAT 免转换地址列表')
     # As strict as the preview: an unreadable table could hide a rule

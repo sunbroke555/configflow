@@ -99,3 +99,42 @@ def test_auto_sync_leaves_lists_another_firewall_rule_selects(environment, when)
     assert after.pop(FILTER) == [{key: value for key, value in reference.items() if key != '.id'}]
     before.pop(FILTER)
     assert not driver.writes and after == before
+
+
+def legacy_sync(environment):
+    """A device enrolled for auto-sync while an earlier release kept per-destination rules."""
+    repo, driver = environment
+    repo.update_profile_transaction('default', lambda doc: doc['routers']['items'][0].update(
+        ros_policy_rule_sets=[], ip_rule_sets=['remote']))
+    # No exemption needed at enrollment (WAN-limited masquerade): the baseline has no list rule.
+    receipt = sync_publish(environment)
+    assert receipt['baseline']['nat_list'] is None and not rule_rows(driver)
+    driver.rows[NAT][0].pop('out-interface')
+    driver.rows[NAT][0:0] = legacy_for([FAKE_IP, '1.1.1.0/24'])
+    return repo, driver
+
+
+@pytest.mark.parametrize('content', ['unchanged', 'changed'])
+def test_auto_sync_never_migrates_old_rules_and_pauses_without_writing(environment, content):
+    from backend.routers import rule_sync
+    from backend.test_router_rule_sync import OLD
+    _, driver = legacy_sync(environment)
+    before = configurations(driver)
+    result = rule_sync.sync('default', 'ros', lambda *_: OLD if content == 'unchanged' else NEW)
+    assert result['status'] == 'paused', result
+    # A CIDR the update drops leaves its old rules stale; they are not removed either.
+    detail = '28 条待合并为 1 条列表规则' if content == 'unchanged' else '14 条待合并为 1 条列表规则，14 条的目的网段已不再代理'
+    assert result['message'] == (f'路由器上还有旧的逐条 NAT 免转换规则（{detail}），'
+                                 '自动同步不会迁移，请手动预览并发布一次完成迁移'), result
+    assert not driver.writes and configurations(driver) == before
+
+
+def test_auto_sync_never_removes_stale_old_rules(environment):
+    from backend.routers import rule_sync
+    _, driver, _ = static_sync(environment)
+    driver.rows[NAT][1:1] = legacy_for(['9.9.9.0/24'])
+    before = configurations(driver)
+    result = rule_sync.sync('default', 'ros', lambda *_: NEW)
+    assert result['status'] == 'paused', result
+    assert '（14 条的目的网段已不再代理）' in result['message'] and '请手动预览并发布一次完成迁移' in result['message']
+    assert not driver.writes and configurations(driver) == before

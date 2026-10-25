@@ -35,7 +35,14 @@ def restrict_plan(plan, baseline):
     if plan['blockers']:
         raise RouterError('；'.join(plan['blockers']))
     from backend.routers.plan import STAGE_TITLES
-    from backend.routers.routeros_nat_list import member_update
+    from backend.routers.routeros_nat_list import member_update, migration
+    merged, stale = migration(plan)
+    if merged or stale:
+        # Merging or removing old per-destination rules is always a release a person starts.
+        detail = [f'{merged} 条待合并为 1 条列表规则'] if merged else []
+        detail += [f'{stale} 条的目的网段已不再代理'] if stale else []
+        raise RouterError(f'路由器上还有旧的逐条 NAT 免转换规则（{"，".join(detail)}），'
+                          '自动同步不会迁移，请手动预览并发布一次完成迁移')
     nat = member_update(plan, baseline)
     for stage in plan['stages']:
         if stage['key'] == 'nat_bypass' and nat is not None:

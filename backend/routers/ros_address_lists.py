@@ -168,6 +168,23 @@ def remember(driver, name, rows):
     cache[name] = [copy.deepcopy(row) for row in rows]
 
 
+def expect(driver, name, rows):
+    """Prove a list read in full earlier in this session by digest next time.
+
+    Unlike ``remember`` the list does not become known: readers that include
+    every known list (the source policy snapshot) keep their scope. Any
+    difference still falls back to a full read, which refreshes the rows.
+    """
+    hints = getattr(driver, 'address_list_expected', None)
+    if hints is None:
+        hints = driver.address_list_expected = {}
+    hints[name] = [copy.deepcopy(row) for row in rows]
+
+
+def expected_lists(driver):
+    return getattr(driver, 'address_list_expected', None) or {}
+
+
 @contextmanager
 def reuse(driver):
     """Within one preview or release, reuse what was read until ConfigFlow writes.
@@ -196,18 +213,20 @@ def read(driver, names):
     """Rows of each named list; known lists are proven by digest, not downloaded."""
     names = sorted(set(names))
     known = known_lists(driver)
+    hints = expected_lists(driver)
+    proof = {**hints, **known}
     reads = getattr(driver, 'address_list_reads', None)
     reads = reads if reads is not None else {}
     # A read in this scope is reusable when it proved exactly the rows we now
     # expect; lists we know nothing about reuse a download from this scope.
-    expected = {name: digest(known[name]) for name in names if name in known}
+    expected = {name: digest(proof[name]) for name in names if name in proof}
     reusable = {name for name in names if name in reads and reads[name][0] == expected.get(name, 'downloaded')}
     unproven = [name for name in expected if name not in reusable]
     if unproven:
         actual = router_digests(driver, unproven)
         for name in unproven:
             if actual[name] == expected[name]:
-                reads[name] = (expected[name], known[name])
+                reads[name] = (expected[name], proof[name])
                 reusable.add(name)
     rows = {}
     for name in names:
@@ -217,6 +236,9 @@ def read(driver, names):
         rows[name] = filtered(driver, name)
         if name in known:
             remember(driver, name, rows[name])
+            reads[name] = (digest(rows[name]), rows[name])
+        elif name in hints:
+            expect(driver, name, rows[name])
             reads[name] = (digest(rows[name]), rows[name])
         else:
             reads[name] = ('downloaded', rows[name])

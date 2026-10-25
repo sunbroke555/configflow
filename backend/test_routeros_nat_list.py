@@ -210,7 +210,8 @@ def test_old_per_destination_rules_move_into_the_lists(count):
     _, plan = preview(driver, targets + ['149.154.160.0/20'])
     op = list_op(plan)
     assert len(op['legacy']) == 14 * count
-    assert f'迁移 {14 * count} 条旧的逐条免转换规则（备注 cf-mihomo）' in op['summary']
+    assert op['summary'].startswith(f'将 {14 * count} 条 NAT 免转换规则合并为 1 条「cf-mihomo-nat」')
+    assert '其中新增 1 个网段（149.154.160.0/20）' in op['summary'] and nat_list.WHY_MERGE in op['summary']
     driver.sent.clear()
     assert execute(plan, driver, None)['ok']
     assert [row.get('comment') for row in driver.rows[NAT]] == ['cf-mihomo-nat', None]
@@ -258,7 +259,7 @@ def test_migration_keeps_every_client_protected_at_every_write():
     assert checked
 
 
-@pytest.mark.parametrize('variant', ['hand-made', 'other-matcher', 'incomplete', 'not-desired', 'old-gateway'])
+@pytest.mark.parametrize('variant', ['hand-made', 'other-matcher', 'incomplete', 'wider', 'old-gateway'])
 def test_rules_that_are_not_the_old_writer_shape_are_never_deleted_or_widened(variant):
     rows = legacy_for([TARGET])
     if variant == 'hand-made':
@@ -268,8 +269,9 @@ def test_rules_that_are_not_the_old_writer_shape_are_never_deleted_or_widened(va
         rows[0]['protocol'] = 'tcp'
     elif variant == 'incomplete':
         rows = rows[1:]
-    elif variant == 'not-desired':
-        rows = legacy_for(['203.0.113.0/24'])
+    elif variant == 'wider':
+        # Covers the desired CIDR without being it: neither merged nor stale.
+        rows = legacy_for(['91.108.0.0/16'])
     else:
         rows = legacy_for([TARGET], '192.168.0.5')
     driver = device(rows + [MASQUERADE])
@@ -280,10 +282,10 @@ def test_rules_that_are_not_the_old_writer_shape_are_never_deleted_or_widened(va
         assert variant in ('other-matcher', 'incomplete', 'old-gateway')
         assert not execute(plan, driver, None)['ok']
     else:
-        assert not list_op(plan)['legacy']
+        assert not list_op(plan)['legacy'] and not list_op(plan)['stale']
         assert execute(plan, driver, None)['ok']
     assert [row for row in driver.rows[NAT] if row.get('comment') != nat_list.COMMENT][:-1] == before
-    assert bool(rule_rows(driver)) == (variant in ('hand-made', 'not-desired'))
+    assert bool(rule_rows(driver)) == (variant in ('hand-made', 'wider'))
 
 
 def test_adopted_hand_made_rule_is_only_recommented():
@@ -324,12 +326,25 @@ def fail_after(driver, method, path, after=0, error=None):
     driver._request = request
 
 
+STALE = '203.0.113.0/24'
+# What a migration may start from: a new CIDR to add, nothing changed at all,
+# or nothing changed with rules of a CIDR no longer proxied left behind.
+MIGRATIONS = {
+    'new-cidr': (lambda: legacy_rules() + [MASQUERADE], TARGETS),
+    'unchanged': (lambda: legacy_rules() + [MASQUERADE], [FAKE_IP, TARGET]),
+    'with-stale': (lambda: legacy_for([STALE]) + legacy_rules() + [MASQUERADE], [FAKE_IP, TARGET]),
+}
+
+
+@pytest.mark.parametrize('start', list(MIGRATIONS))
 @pytest.mark.parametrize('inject', [
     'source-batch', 'destination-batch', 'destination-lost', 'rule-put', 'rule-lost', 'remove-second',
     'remove-lost-then-readback', 'readback', 'invalid-rule'])
-def test_every_failure_restores_the_exact_table_and_lists(inject, monkeypatch):
-    driver = migrating_device()
-    _, plan = preview(driver, TARGETS)
+def test_every_failure_restores_the_exact_table_and_lists(inject, start, monkeypatch):
+    rows, targets = MIGRATIONS[start]
+    driver = device(rows())
+    _, plan = preview(driver, targets)
+    assert list_op(plan)['legacy'] and bool(list_op(plan)['stale']) == (start == 'with-stale')
     before = configurations(driver)
     if inject == 'source-batch':
         driver.fail = ('PUT', ADDRESSES, 3)
@@ -362,9 +377,11 @@ def test_every_failure_restores_the_exact_table_and_lists(inject, monkeypatch):
     assert configurations(driver) == before
 
 
-def test_coverage_proof_runs_before_old_rules_go(monkeypatch):
-    driver = migrating_device()
-    _, plan = preview(driver, TARGETS)
+@pytest.mark.parametrize('start', list(MIGRATIONS))
+def test_coverage_proof_runs_before_old_rules_go(start, monkeypatch):
+    rows, targets = MIGRATIONS[start]
+    driver = device(rows())
+    _, plan = preview(driver, targets)
     before = configurations(driver)
     send = driver._request
 
@@ -912,3 +929,319 @@ def test_filter_or_raw_selecting_the_lists_blocks_the_preview(path):
     assert any(f'{path}/*F1' in blocker and SRC in blocker for blocker in plan['blockers']), plan['blockers']
     driver.writes.clear()
     assert not execute(plan, driver, None)['ok'] and not driver.writes
+
+
+# --- active migration ------------------------------------------------------------
+
+def test_old_rules_merge_into_one_rule_even_when_no_cidr_changes():
+    driver = recorded(device(legacy_rules() + [MASQUERADE]))
+    report, plan = preview(driver, [FAKE_IP, TARGET])
+    assert {item['status'] for item in report['nat_bypass']['items']} == {'synced'}
+    assert not plan['empty'] and not plan['blockers']
+    [op] = nat_ops(plan)
+    assert len(op['legacy']) == 28 and not op['stale'] and op['rule'] is None
+    assert op['dst_add'] == [FAKE_IP, TARGET] and set(op['src_add']) == sources()
+    assert op['summary'] == (
+        '将 28 条 NAT 免转换规则合并为 1 条「cf-mihomo-nat」：源地址列表 cf-mihomo-nat-src（192.168.0.3 所在 /24 '
+        '除 192.168.0.3 外，14 段）→ 目的地址列表 cf-mihomo-nat-dst（2 个网段），放在所有源 NAT 转换规则之前；'
+        '逐条规则过多会拖慢每个新连接的源 NAT 匹配，自动同步也无法更新逐条规则；先建立并回读校验新规则，再删除旧规则（备注 cf-mihomo）')
+    driver.sent.clear()
+    result = execute(plan, driver, None)
+    assert result['ok'], result
+    assert [row.get('comment') for row in driver.rows[NAT]] == ['cf-mihomo-nat', None]
+    assert members(driver, DST) == {FAKE_IP, TARGET} and members(driver, SRC) == sources()
+    assert [values for method, path, values in driver.sent if path == NAT + '/remove']
+    report, again = preview(driver, [FAKE_IP, TARGET])
+    assert again['empty'] and not again['blockers'] and report['in_sync']
+    assert not nat_ops(again)
+
+
+def test_merge_keeps_the_rules_of_other_programs_and_their_order():
+    hand = {'.id': '*H', 'chain': 'srcnat', 'action': 'accept', 'comment': 'vpn', 'src-address': '192.168.0.0/24',
+            'dst-address': '10.8.0.0/16', 'disabled': 'false'}
+    log = {'.id': '*G', 'chain': 'srcnat', 'action': 'log', 'disabled': 'false', 'log-prefix': 'nat'}
+    rows = legacy_rules()
+    driver = device(rows[:5] + [hand] + rows[5:] + [log, MASQUERADE])
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    assert len(list_op(plan)['legacy']) == 28
+    assert execute(plan, driver, None)['ok']
+    assert [row['.id'] for row in driver.rows[NAT][1:]] == ['*H', '*G', '*3']
+    assert driver.rows[NAT][1] == hand and rule_rows(driver) == [driver.rows[NAT][0]]
+
+
+def test_merge_without_change_keeps_every_client_protected_at_every_write():
+    driver = device(legacy_for([STALE]) + legacy_rules() + [MASQUERADE])
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    send = driver._request
+    writes = []
+
+    def protected(source, destination):
+        from backend.test_ros_mode_transitions import nat_action
+        return nat_action(driver, source, destination, 'pppoe-out1') == 'accept'
+
+    def request(method, path, values=None, **kwargs):
+        result = send(method, path, values, **kwargs)
+        script = str((values or {}).get('script', ''))
+        if method != 'GET' and 'cf-digest:' not in script and 'cf-rows:' not in script:  # list reads
+            writes.append(path)
+            for client in ('192.168.0.1', '192.168.0.2', '192.168.0.4', '192.168.0.254'):
+                for target in ('198.18.0.1', '91.108.4.1'):
+                    assert protected(client, target), (method, path, client, target)
+        return result
+    driver._request = request
+    assert execute(plan, driver, None)['ok']
+    assert writes
+    # The rules of a CIDR no longer proxied are gone: its traffic is translated on the WAN again.
+    assert not protected('192.168.0.2', '203.0.113.1')
+
+
+def test_stale_rules_of_a_cidr_no_longer_proxied_go_with_the_merge():
+    driver = device(legacy_rules()[:14] + legacy_for([STALE]) + legacy_rules()[14:] + [MASQUERADE])
+    report, plan = preview(driver, [FAKE_IP, TARGET])
+    op = list_op(plan)
+    assert len(op['legacy']) == 28 and len(op['stale']) == 14
+    assert {item['config']['dst-address'] for item in op['stale']} == {STALE}
+    assert ('删除 14 条残留的旧逐条免转换规则（备注 cf-mihomo，目的 203.0.113.0/24）：这些网段已不再代理，'
+            '保留它们会让去往这些网段的流量经 WAN 出去时不做源 NAT') in op['summary']
+    assert set(plan['checks']['nat_list']['removed']) == {item['id'] for item in op['legacy'] + op['stale']}
+    assert execute(plan, driver, None)['ok']
+    assert [row.get('comment') for row in driver.rows[NAT]] == ['cf-mihomo-nat', None]
+    assert members(driver, DST) == {FAKE_IP, TARGET}
+    assert preview(driver, [FAKE_IP, TARGET])[1]['empty']
+
+
+def test_stale_rules_also_go_once_the_list_rule_exists():
+    driver = device()
+    publish(driver, [FAKE_IP, TARGET])
+    driver.rows[NAT][1:1] = legacy_for([STALE])
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    [op] = nat_ops(plan)
+    assert op['rule'] is not None and not op['legacy'] and len(op['stale']) == 14
+    assert op['summary'].startswith('NAT 免转换规则「cf-mihomo-nat」；删除 14 条残留的旧逐条免转换规则')
+    assert execute(plan, driver, None)['ok']
+    assert [row.get('comment') for row in driver.rows[NAT]] == ['cf-mihomo-nat', None]
+    assert preview(driver, [FAKE_IP, TARGET])[1]['empty']
+
+
+@pytest.mark.parametrize('variant', ['hand-made', 'other-matcher', 'incomplete', 'egress', 'overlaps-desired',
+                                     'overlaps-skipped', 'old-gateway'])
+def test_stale_looking_rules_that_cannot_be_proven_stay(variant):
+    stale = legacy_for([STALE])
+    targets = [FAKE_IP, TARGET]
+    if variant == 'hand-made':
+        for row in stale:
+            row['comment'] = 'cf-tg'
+    elif variant == 'other-matcher':
+        stale[3]['protocol'] = 'tcp'
+    elif variant == 'incomplete':
+        stale = stale[1:]
+    elif variant == 'egress':
+        for row in stale:
+            row['out-interface'] = 'ether9'
+    elif variant == 'overlaps-desired':
+        stale = legacy_for(['91.108.0.0/16'])
+    elif variant == 'overlaps-skipped':
+        targets = [FAKE_IP, TARGET, '203.0.113.0/25']
+    elif variant == 'old-gateway':
+        stale = legacy_for([STALE], '192.168.0.5')
+    driver = device(legacy_rules() + stale + [MASQUERADE])
+    if variant == 'overlaps-skipped':
+        # A hand-made route to another gateway makes 203.0.113.0/25 a conflict.
+        driver.rows[ROUTES].append({'.id': '*C1', 'dst-address': '203.0.113.0/25', 'gateway': '192.168.0.9',
+                                    'routing-table': 'main', 'disabled': 'false', 'comment': 'mine'})
+    before = copy.deepcopy(stale)
+    _, plan = preview(driver, targets)
+    if variant == 'overlaps-skipped':
+        assert plan['warnings'] == ['203.0.113.0/25：同网段路由下一跳为 192.168.0.9，期望下一跳 192.168.0.3。'
+                                    '本次跳过该网段（路由、NAT、回流都不处理），请先手动处理']
+    assert not plan['blockers'], plan['blockers']
+    op = list_op(plan)
+    assert len(op['legacy']) == 28 and not op['stale'], variant
+    assert '残留' not in op['summary']
+    assert execute(plan, driver, None)['ok']
+    assert [row for row in driver.rows[NAT] if row['.id'] in {item['.id'] for item in before}] == before
+
+
+def test_auto_sync_refuses_to_migrate():
+    from backend.routers.rule_sync_write import restrict_plan
+    driver = device(legacy_for([STALE]) + legacy_rules() + [MASQUERADE])
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    with pytest.raises(RouterError) as error:
+        restrict_plan(plan, {'static_resources': [], 'nat_list': None})
+    assert str(error.value) == ('路由器上还有旧的逐条 NAT 免转换规则（28 条待合并为 1 条列表规则，14 条的目的网段已不再代理），'
+                                '自动同步不会迁移，请手动预览并发布一次完成迁移')
+
+
+def test_paths_needing_no_list_never_read_the_lists():
+    driver = recorded(device([{'.id': '*3', 'chain': 'srcnat', 'action': 'masquerade', 'out-interface': 'pppoe-out1',
+                               'disabled': 'false'}]))
+    state = driver.read_state()
+    assert state.nat_lists is None and state.nat_lists_reader is not None
+    report, plan = preview(driver, [FAKE_IP, TARGET])
+    assert {item['status'] for item in report['nat_bypass']['items']} == {'not_required'}
+    assert not any(SRC in str(path) + str(values) or DST in str(path) + str(values) or path in (FILTER, RAW)
+                   for _, path, values in driver.sent)
+
+
+def test_lists_are_read_once_a_plan_needs_them_and_an_unreadable_read_blocks(monkeypatch):
+    driver = recorded(device(legacy_rules() + [MASQUERADE]))
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    reads = [path for method, path, _ in driver.sent if method == 'GET' and path.startswith(ADDRESSES)]
+    assert sorted(reads) == sorted(f'{ADDRESSES}?list={name}' for name in (SRC, DST))
+    assert plan['fingerprint'] and not plan['blockers']
+    from backend.routers import ros_address_lists
+    real = ros_address_lists.read
+
+    def unreadable(drv, names, *args, **kwargs):
+        if set(names) & {SRC, DST}:
+            raise RouterError('list read timed out')
+        return real(drv, names, *args, **kwargs)
+    monkeypatch.setattr(ros_address_lists, 'read', unreadable)
+    _, plan = preview(device(legacy_rules() + [MASQUERADE]), [FAKE_IP, TARGET])
+    assert plan['blockers'] == ['无法读取 NAT 免转换地址列表，请重新预览']
+
+
+# --- reads at scale ---------------------------------------------------------------
+
+def scaled_device(count):
+    """A device the list rule already serves for ``count`` CIDRs, routes included."""
+    driver = device()
+    targets = cidrs(count)
+    rows = [{'.id': f'*S{index:X}', 'list': SRC, 'address': source, 'comment': nat_list.COMMENT, 'disabled': 'false'}
+            for index, source in enumerate(sorted(sources()))]
+    rows += [{'.id': f'*D{index:X}', 'list': DST, 'address': cidr, 'comment': nat_list.COMMENT, 'disabled': 'false'}
+             for index, cidr in enumerate(targets)]
+    driver.rows[ADDRESSES] = rows
+    driver.rows[NAT].insert(0, {'.id': '*R', 'chain': 'srcnat', 'action': 'accept', 'src-address-list': SRC,
+                                'dst-address-list': DST, 'comment': nat_list.COMMENT, 'disabled': 'false'})
+    driver.rows[ROUTES] += [{'.id': f'*T{index:X}', 'dst-address': cidr, 'gateway': GATEWAY, 'routing-table': 'main',
+                             'active': 'true', 'immediate-gw': GATEWAY + '%bridge', 'disabled': 'false',
+                             'comment': 'cf-test'} for index, cidr in enumerate(targets)]
+    return driver, targets
+
+
+def test_adding_and_removing_cidrs_downloads_the_destination_list_once_per_request():
+    from backend.routers import ros_address_lists
+    driver, targets = scaled_device(2000)
+    changed = targets[5:] + cidrs(5, 2000)
+    downloads = []
+    send = driver._request
+
+    def request(method, path, values=None, **kwargs):
+        script = str((values or {}).get('script', '')) if isinstance(values, dict) else ''
+        if method == 'GET' and path == f'{ADDRESSES}?list={DST}':
+            downloads.append('rest')
+        elif DST in script and 'cf-rows:' in script:
+            downloads.append('console')
+        elif DST in script and 'cf-digest:' in script:
+            downloads.append('digest')
+        return send(method, path, values, **kwargs)
+    driver._request = request
+    # Each HTTP request builds its own driver: nothing is known in advance.
+    with ros_address_lists.reuse(driver):
+        _, plan = preview(driver, changed)
+    assert downloads == ['rest']
+    downloads.clear()
+    driver.address_list_cache = driver.address_list_expected = None
+    with ros_address_lists.reuse(driver):
+        _, plan = preview(driver, changed)
+    assert execute(plan, driver, None)['ok']
+    assert members(driver, DST) == set(changed)
+    # One REST download proves the list; afterwards only the member write
+    # itself reads it in full (console), every other read is a digest.
+    # (Before: six REST downloads of 2000 members, about 1.3 s each on a CHR.)
+    assert downloads == ['rest', 'digest', 'digest', 'digest', 'digest', 'digest', 'console', 'digest']
+
+
+# --- source policy beside old rules ---------------------------------------------
+
+def policy_with_old_rules():
+    """Source policy published, while FAKE_IP is still exempted by per-destination rules."""
+    driver = policy_device()
+    release(driver)
+    driver.rows[NAT] = [row for row in driver.rows[NAT] if row.get('comment') != nat_list.COMMENT]
+    driver.rows[ADDRESSES] = [row for row in driver.rows[ADDRESSES] if row['list'] not in (SRC, DST)]
+    driver.rows[NAT][0:0] = legacy_for([FAKE_IP])
+    return driver
+
+
+@pytest.mark.parametrize('fail', [None, 'rule-put', 'remove', 'readback'])
+def test_enabling_policy_merges_what_stays_static_and_leaves_the_policy_its_rules(fail, monkeypatch):
+    from backend.test_ros_mode_transitions import nat_action
+    driver = device(legacy_rules() + [MASQUERADE])
+    report, plan = inspect(driver)
+    assert not plan['blockers'], plan['blockers']
+    policy = next(op for stage in plan['stages'] for op in stage['ops'] if op['kind'] == 'ros_policy_replace')
+    op = list_op(plan)
+    # The policy takes the old rules of its destination; the merge only those of FAKE_IP.
+    assert {item['config']['dst-address'] for item in policy['migrations']} == {TARGET}
+    assert {item['config']['dst-address'] for item in op['legacy']} == {FAKE_IP} and not op['stale']
+    assert not {item['id'] for item in policy['migrations']} & {item['id'] for item in op['legacy']}
+    before = configurations(driver)
+    if fail == 'rule-put':
+        driver.fail = ('PUT', NAT, driver.counts['PUT', NAT] + 2)  # the policy NAT rule, then ours
+    elif fail == 'remove':
+        driver.rejected.append((NAT, op['legacy'][5]['id']))  # however it is deleted
+    elif fail == 'readback':
+        monkeypatch.setattr(nat_list, 'verify', lambda check, state: (_ for _ in ()).throw(RouterError('injected')))
+    result = execute(plan, driver, None)
+    if fail:
+        assert not result['ok'] and result['failed_stage'] == 'nat_bypass', result
+        assert not any(item['status'] == 'failed' for item in result['rollback']), result['rollback']
+        assert configurations(driver) == before
+        return
+    assert result['ok'], result
+    assert [row.get('comment') for row in driver.rows[NAT]] == ['cf-mihomo-nat', 'cf-ros-policy-test', None]
+    assert members(driver, DST) == {FAKE_IP}
+    assert nat_action(driver, '192.168.0.101', '91.108.4.1', 'bridge') == 'accept'
+    assert nat_action(driver, '192.168.0.102', '91.108.4.1', 'pppoe-out1') == 'masquerade'
+    assert nat_action(driver, '192.168.0.102', '198.18.0.1', 'bridge') == 'accept'
+    assert inspect(driver)[1]['empty']
+
+
+def test_merging_while_policy_is_active_leaves_every_policy_object():
+    driver = policy_with_old_rules()
+    manifest = copy.deepcopy(driver.ros_policy_manifest)
+    policy_rules = [copy.deepcopy(row) for row in driver.rows[NAT] if row.get('comment', '').startswith('cf-ros-policy')]
+    policy_lists = [copy.deepcopy(row) for row in driver.rows[ADDRESSES] if row['list'].startswith('CF_')]
+    mangle = copy.deepcopy(driver.rows[MANGLE])
+    _, plan = inspect(driver)
+    assert [op['kind'] for stage in plan['stages'] for op in stage['ops']] == ['nat_list_sync']
+    assert len(list_op(plan)['legacy']) == 14
+    assert execute(plan, driver, None)['ok']
+    assert driver.ros_policy_manifest == manifest and driver.rows[MANGLE] == mangle
+    assert [row for row in driver.rows[NAT] if row.get('comment', '').startswith('cf-ros-policy')] == policy_rules
+    assert [row for row in driver.rows[ADDRESSES] if row['list'].startswith('CF_')] == policy_lists
+    assert not [row for row in driver.rows[NAT] if row.get('comment') == 'cf-mihomo']
+    assert inspect(driver)[1]['empty']
+
+
+def test_withdrawing_policy_merges_old_rules_into_the_narrowed_rule():
+    from backend.test_ros_mode_transitions import nat_action
+    driver = policy_with_old_rules()
+    _, plan = inspect(driver, desired_for(driver, selected=False))
+    assert not plan['blockers'], plan['blockers']
+    op = next(op for stage in plan['stages'] for op in stage['ops'] for op in op.get('prepare_static', [op])
+              if op['kind'] == 'nat_list_sync')
+    assert len(op['legacy']) == 14 and op['out_interface'] == 'bridge' and set(op['dst_add']) == {FAKE_IP, TARGET}
+    assert op['summary'].startswith('将 14 条 NAT 免转换规则合并为 1 条') and '限定出口 bridge' in op['summary']
+    assert execute(plan, driver, None)['ok']
+    assert [(row.get('comment'), row.get('out-interface')) for row in driver.rows[NAT]] == [
+        ('cf-mihomo-nat', 'bridge'), (None, None)]
+    assert nat_action(driver, '192.168.0.101', '91.108.4.1', 'bridge') == 'accept'
+    assert nat_action(driver, '192.168.0.102', '91.108.4.1', 'bridge') == 'accept'
+    assert nat_action(driver, '192.168.0.102', '8.8.8.8', 'pppoe-out1') == 'masquerade'
+    assert inspect(driver, desired_for(driver, selected=False))[1]['empty']
+
+
+@pytest.mark.parametrize('point', [('PUT', NAT, 1), ('PUT', ROUTES, 1), ('DELETE', MANGLE, 1)])
+def test_failed_policy_withdrawal_puts_the_old_rules_back(point):
+    driver = policy_with_old_rules()
+    before = configurations(driver)
+    manifest = copy.deepcopy(driver.ros_policy_manifest)
+    driver.fail = (point[0], point[1], driver.counts[point[0], point[1]] + point[2])
+    _, plan = inspect(driver, desired_for(driver, selected=False))
+    result = execute(plan, driver, None)
+    assert not result['ok']
+    assert not any(item['status'] == 'failed' for item in result['rollback']), result
+    assert configurations(driver) == before and driver.ros_policy_manifest['spec'] == manifest['spec']

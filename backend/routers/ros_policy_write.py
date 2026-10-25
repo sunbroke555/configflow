@@ -285,6 +285,9 @@ def _forget(driver, items, removed):
     known = ros_address_lists.known_lists(driver)
     for name in names & set(known):
         ros_address_lists.remember(driver, name, [row for row in known[name] if row['.id'] not in removed])
+    hints = ros_address_lists.expected_lists(driver)
+    for name in names & set(hints) - set(known):
+        ros_address_lists.expect(driver, name, [row for row in hints[name] if row['.id'] not in removed])
 
 
 def _delete_addresses(driver, items, journal):

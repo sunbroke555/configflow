@@ -111,7 +111,9 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
       ...list(op.dst_remove).map(value => ({ label: '移除', value: address(value), action: '移除' as const }))],
       `${text(op.dst_list)}：一个代理网段一个条目。手工加入的条目保留不动。`)
     add('迁移删除的旧规则', list(op.legacy).map(value => objectRow(value, false)),
-      `共 ${list(op.legacy).length} 条。新规则回读并证明覆盖后批量删除；失败时按原顺序恢复。`)
+      `共 ${list(op.legacy).length} 条，合并为上面的 1 条规则：逐条规则过多会拖慢新连接，自动同步也无法更新它们。新规则回读并证明覆盖后批量删除；失败时按原顺序恢复。`)
+    add('删除残留的旧规则', list(op.stale).map(value => objectRow(value, false)),
+      `共 ${list(op.stale).length} 条，目的网段已不再代理；保留会让去往这些网段的流量经 WAN 出去时不做源 NAT。与迁移一起删除，失败时按原顺序恢复。`)
   } else if (op.kind === 'dhcp_dns_update') {
     add('作用网段', safeFields(op.scope))
     add('现有 DHCP 配置', safeFields(op.expected))

@@ -176,6 +176,27 @@ EXPECTED = {'ikuai:empty': {'blockers': [],
                                'warnings': []}}
 
 
+# User decision (2026-10-25): per-destination rules of earlier releases are
+# merged into the list rule as soon as a preview sees them, CIDRs changed or
+# not. That is the only recorded value allowed to differ: the per-destination
+# fixture now plans that merge. Its report, state read, blockers, warnings and
+# routes stage stay as recorded above.
+MERGED = {'legacy_synced': {
+    'checks': '0e2451fd3484780e26740357fe329d2cbd451ca47eaa351112d77569c093998a',
+    'fingerprint': 'd4df26a580b360b8',
+    'log': [('routes', '新增路由 91.108.4.0/22 → 192.168.0.3（备注 cf-Telegram）', 'ok'),
+            ('routes', '回读校验通过', 'verified'),
+            ('nat_bypass', '将 28 条 NAT 免转换规则合并为 1 条「cf-mihomo-nat」：源地址列表 cf-mihomo-nat-src'
+                           '（192.168.0.3 所在 /24 除 192.168.0.3 外，14 段）→ 目的地址列表 cf-mihomo-nat-dst（2 个网段），'
+                           '放在所有源 NAT 转换规则之前；逐条规则过多会拖慢每个新连接的源 NAT 匹配，自动同步也无法更新逐条规则；'
+                           '先建立并回读校验新规则，再删除旧规则（备注 cf-mihomo）', 'ok'),
+            ('nat_bypass', '回读校验通过', 'verified')],
+    'nat_ops': 'd23f4c1a97a89d33ac2c8ce1c6657a40b2c80b55f7d5e87d8cfd160f5f70b7f9',
+    'stages': '01261f69d67d4968f749a6ce64ca14f3188ba97de98f96b76321297c4f779761',
+    'writes': '82fc3eea4d099fbd9898db1a30b56b62832936d500f2e680e5bca9b41fda5a38',
+}}
+
+
 def static_device(scenario):
     driver = MemoryROS()
     driver.rows[NAT] = SCENARIOS[scenario]()
@@ -267,7 +288,18 @@ def observe_all():
 
 @pytest.mark.parametrize('scenario', list(SCENARIOS))
 def test_static_ros_paths_without_a_list_need_are_unchanged(scenario):
-    assert observe_static(scenario) == EXPECTED[f'static:{scenario}']
+    assert observe_static(scenario) == {**EXPECTED[f'static:{scenario}'], **MERGED.get(scenario, {})}
+
+
+def test_merging_old_rules_leaves_the_routes_stage_as_recorded():
+    driver = static_device('legacy_synced')
+    _, _, plan = static_preview(driver)
+    merged = next(stage for stage in plan['stages'] if stage['key'] == 'nat_bypass')
+    [op] = merged['ops']
+    assert op['kind'] == 'nat_list_sync' and len(op['legacy']) == 28 and not op['stale']
+    reference = static_preview(static_device('no_source_nat'))[2]
+    assert ([stage for stage in plan['stages'] if stage['key'] != 'nat_bypass']
+            == [stage for stage in reference['stages'] if stage['key'] != 'nat_bypass'])
 
 
 @pytest.mark.parametrize('variant', ['home', 'managed', 'empty'])
@@ -298,3 +330,65 @@ def test_legacy_fixture_matches_the_per_destination_writer():
     written = sorted((row['dst-address'], str(ipaddress.ip_network(row['src-address']))) for row in driver.rows[NAT])
     expected = sorted((row['dst-address'], row['src-address']) for row in legacy_rules())
     assert written == expected
+
+
+# --- reads ---------------------------------------------------------------------
+
+# Every request (method, path, body) of a preview and of the release that
+# follows, recorded on claude/ros-release-batch (d998f08a). Paths that need no
+# NAT list must not read the two lists, nor filter or raw, at all.
+REQUESTS = {
+    'adopt_only': ('e15a0b51fe155ba58dd6d02141e45202f534f886e027a40bc5057a449f3be462', 3,
+                   'a67474d6856298988e9f28ebdf17cba59dc8e4e5be5c3608b87092d7b46dfd69', 13),
+    'hairpin': ('b80a25c35b3823aaa6c33206be380aa0ceb297eb45567a12d8bf393044be77e7', 5,
+                '26f5dab85ddcc3eedc7c6418208db9f710ec6ee25b4d24c59f08cc89bc4c83c6', 8),
+    'no_source_nat': ('e15a0b51fe155ba58dd6d02141e45202f534f886e027a40bc5057a449f3be462', 3,
+                      '19886ff50f66f29cc5ab7206de6601d86402c74db0fce3aa1f85d2ba37385665', 6),
+    'not_required': ('b80a25c35b3823aaa6c33206be380aa0ceb297eb45567a12d8bf393044be77e7', 5,
+                     '26f5dab85ddcc3eedc7c6418208db9f710ec6ee25b4d24c59f08cc89bc4c83c6', 8),
+    'unknown': ('e15a0b51fe155ba58dd6d02141e45202f534f886e027a40bc5057a449f3be462', 3,
+                '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945', 0),
+    'policy': ('35dac5389cdb083e460be41272f7571d5774b35cc230bdb9e0f389c6c17d0b08', 15,
+               '9265fce070493e6879c92eb87b89565d28a32de6cb15fa279868fd130d83e338', 60),
+}
+READ_SCENARIOS = {
+    **{name: SCENARIOS[name] for name in ('not_required', 'no_source_nat', 'adopt_only', 'unknown')},
+    # A DNS guard style LAN hairpin translates, but needs no exemption either.
+    'hairpin': lambda: [{'.id': '*3', 'chain': 'srcnat', 'action': 'masquerade',
+                         'out-interface': 'pppoe-out1', 'disabled': 'false'},
+                        {'.id': '*4', 'chain': 'srcnat', 'action': 'masquerade', 'protocol': 'udp',
+                         'dst-port': '53', 'dst-address': '192.168.0.53', 'src-address': '192.168.0.0/24',
+                         'out-interface': 'bridge', 'disabled': 'false'}],
+}
+
+
+def _recorded(driver):
+    sent = []
+    send = driver._request
+
+    def request(method, path, values=None, **kwargs):
+        sent.append((method, path, values))
+        return send(method, path, values, **kwargs)
+    driver._request = request
+    return sent
+
+
+def observe_requests(scenario):
+    driver = MemoryROS()
+    if scenario == 'policy':
+        sent = _recorded(driver)
+        _, plan = inspect(driver)
+    else:
+        driver.rows[NAT] = READ_SCENARIOS[scenario]()
+        sent = _recorded(driver)
+        plan = static_preview(driver)[2]
+    preview = list(sent)
+    sent.clear()
+    if not plan['blockers']:
+        assert execute(plan, driver, None)['ok']
+    return _hash(preview), len(preview), _hash(sent), len(sent)
+
+
+@pytest.mark.parametrize('scenario', list(REQUESTS))
+def test_paths_without_a_list_need_send_the_recorded_requests(scenario):
+    assert observe_requests(scenario) == REQUESTS[scenario]
