@@ -202,18 +202,20 @@ def _legacy_shape(row, excluded, out_interface):
             and str(row.get('out-interface') or '') in ('', out_interface))
 
 
-def _legacy(rows, sources, items, desired, skipped, excluded, out_interface):
+def _legacy(rows, sources, items, desired, skipped, excluded, out_interface, routed):
     """Per-destination rules the earlier writer made, by their exact shape:
-    ``(merged, their destinations, stale)``.
+    ``(merged, their destinations, stale, retained)``.
 
     Only a destination with one rule for every current source fragment, and
     nothing else on them, is taken over: what an adopted hand-made rule (also
     ``cf-…``) could not look like by chance. A desired CIDR that needs an
     exemption moves into the lists. A destination overlapping no desired CIDR
-    is stale: earlier releases never removed these rules when a CIDR stopped
-    being proxied, so traffic to it left the WAN untranslated. Anything in
-    between (a wider or narrower destination, a CIDR skipped for a route
-    conflict, not required or adopted) is left as it is.
+    and nothing else still sent to mihomo (``routed``; None when that is
+    unknown) is stale: earlier releases never removed these rules when a CIDR
+    stopped being proxied, so traffic to it left the WAN untranslated. Anything
+    in between (a wider or narrower destination, a CIDR skipped for a route
+    conflict, not required or adopted, still routed to mihomo) is left as it
+    is; stale-looking groups kept only for a route come back as ``retained``.
     """
     wanted = {_key(item['cidr']): item['cidr'] for item in items if item['status'] in ('synced', 'missing')}
     source_keys = {_key(source) for source in sources}
@@ -224,7 +226,7 @@ def _legacy(rows, sources, items, desired, skipped, excluded, out_interface):
     for row in rows:
         if _legacy_shape(row, excluded, out_interface) and _key(row['src-address']) in source_keys:
             groups.setdefault(_key(row['dst-address']), []).append(row)
-    selected, destinations, stale = [], [], []
+    selected, destinations, stale, retained = [], [], [], []
     for key, group in groups.items():
         if ({_key(row['src-address']) for row in group} != source_keys
                 or len({str(row.get('out-interface') or '') for row in group}) != 1):
@@ -238,10 +240,58 @@ def _legacy(rows, sources, items, desired, skipped, excluded, out_interface):
                 selected.extend(group)
                 destinations.append(wanted[key])
         elif not any(network.overlaps(other) for other in proxied):
-            stale.extend(group)
-    selected.sort(key=lambda row: position[id(row)])
-    stale.sort(key=lambda row: position[id(row)])
-    return [_resource(NAT, row) for row in selected], destinations, [_resource(NAT, row) for row in stale]
+            if routed is not None and not any(network.overlaps(other) for other in routed):
+                stale.extend(group)
+            else:
+                retained.extend(group)
+    for found in (selected, stale, retained):
+        found.sort(key=lambda row: position[id(row)])
+    return ([_resource(NAT, row) for row in selected], destinations, [_resource(NAT, row) for row in stale],
+            [_resource(NAT, row) for row in retained])
+
+
+def _via(gateway, value):
+    """Whether a RouterOS route gateway (``a``, ``a%iface``, ``a@table``, ECMP ``a,b``) names this next hop."""
+    return any(part.split('%')[0].split('@')[0].strip() == gateway for part in str(value or '').split(','))
+
+
+def still_routed(report, state, gateway):
+    """Destinations that keep reaching mihomo after this release besides the
+    desired CIDRs, as networks; None when the routes cannot be read.
+
+    Every enabled route to the gateway counts, in any table and however it
+    came there (public DNS routed for TUN DNS hijack, a person's own route),
+    except the managed routes this release deletes. The source policy's own
+    default route stands for its destinations. A destination ConfigFlow no
+    longer proxies may still be sent to mihomo this way, and its old
+    exemption then still keeps the client's address.
+    """
+    context = state.nat_context or {}
+    rows = context.get('routes')
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return None
+    deleting = {str(extra['route_id']) for extra in report['routes'].get('extra') or []}
+    check = (state.ros_policy_plan or {}).get('check') or {}
+    previous = check.get('previous') or {}
+    policy_ids = {str(item['id']) for item in previous.get('resources', []) if item.get('path') == '/ip/route'}
+    policy = [cidr for spec in (check.get('spec'), previous.get('spec')) for cidr in (spec or {}).get('destinations', [])]
+    everything = ipaddress.IPv4Network('0.0.0.0/0')
+    routed = []
+    for row in rows:
+        if not _enabled(row) or not _via(gateway, row.get('gateway')) or str(row.get('.id')) in deleting:
+            continue
+        if str(row.get('.id')) in policy_ids:
+            routed.extend(_networks(policy))
+            continue
+        networks = _networks([str(row.get('dst-address') or '')])
+        routed.extend(networks if networks or ':' in str(row.get('dst-address') or '') else [everything])
+    for entry in (state.policy_routes or []) + (state.retired_policy_routes or []):
+        if entry.enabled and _via(gateway, entry.gateway):
+            routed.extend(_networks(entry.dst) if entry.dst else [everything])
+    for row in context.get('mangle') or []:
+        if _enabled(row) and row.get('action') == 'route' and _via(gateway, row.get('route-dst')):
+            routed.append(everything)
+    return routed
 
 
 def _adopt_ops(items, rules):
@@ -281,9 +331,9 @@ def plan(report, state, gateway, skipped):
     moving = {(item['path'], item['id']) for item in check.get('migrations', [])}
     sources = [str(network) for network in client_source_networks(gateway)]
     desired = [item['cidr'] for item in report['nat_bypass']['items']]
-    legacy, legacy_destinations, stale = _legacy(
+    legacy, legacy_destinations, stale, retained = _legacy(
         rows, sources, items, desired, skipped, {item_id for path, item_id in moving if path == NAT},
-        found['out_interface'])
+        found['out_interface'], still_routed(report, state, gateway))
     if found['rule'] is None and not found['problem'] and not missing and not legacy:
         return None
     result = {'ops': [], 'blockers': [], 'warnings': [], 'evidence': None, 'check': None, 'exempt': []}
@@ -310,6 +360,11 @@ def plan(report, state, gateway, skipped):
             result['warnings'].append(f'地址列表 {name} 中有 {len(foreign)} 条不是 ConfigFlow 写入的条目，保留不动')
     if result['blockers']:
         return result
+    if retained:
+        kept = list(dict.fromkeys(item['config'].get('dst-address', '') for item in retained))
+        result['warnings'].append(
+            f'保留 {len(retained)} 条旧的逐条 NAT 免转换规则（备注 {LEGACY_COMMENT}，目的 {_sample(kept)}）：'
+            '这些网段已不在代理网段中，但仍有路由把它们送往 mihomo，删除会让这部分流量被源 NAT、丢失客户端 IP')
 
     nat_rules = {entry.id: entry for entry in state.nat_bypass if entry.enabled and (NAT, entry.id) not in moving}
     rule_id = str(rule['.id']) if rule is not None else None
@@ -403,7 +458,7 @@ def _summary(op, gateway, create, fresh=None):
             changes.append(f'移除 {len(op["dst_remove"])} 个不再代理的网段'
                            f'（{_sample(item["config"].get("address", "") for item in op["dst_remove"])}）')
         head = (f'NAT 免转换目的列表 {DST_LIST}：' + '、'.join(changes) if changes
-                else f'NAT 免转换规则「{COMMENT}」')
+                else '' if op['rule'] is None else f'NAT 免转换规则「{COMMENT}」')
         if op['src_add'] or op['src_remove']:
             parts.append(f'源列表随网关 {gateway} 更新：新增 {len(op["src_add"])} 段、移除 {len(op["src_remove"])} 段')
         if op['legacy']:
@@ -415,7 +470,7 @@ def _summary(op, gateway, create, fresh=None):
         destinations = list(dict.fromkeys(item['config'].get('dst-address', '') for item in stale))
         parts.append(f'删除 {len(stale)} 条残留的旧逐条免转换规则（备注 {LEGACY_COMMENT}，目的 {_sample(destinations)}）：'
                      '这些网段已不再代理，保留它们会让去往这些网段的流量经 WAN 出去时不做源 NAT')
-    return '；'.join([head] + parts)
+    return '；'.join(part for part in [head] + parts if part)
 
 
 def removals_first(nat_ops, route_ops, gateway):
@@ -425,26 +480,38 @@ def removals_first(nat_ops, route_ops, gateway):
     member removed only afterwards, the list rule (which exempts every egress
     whenever an exemption is needed at all) would meanwhile let its traffic
     leave the WAN with a LAN source. Removed first, it is only translated on
-    its way to mihomo for a moment, the order auto-sync writes too.
-    Withdrawing the rule moves whole; additions stay after the routes.
+    its way to mihomo for a moment, the order auto-sync writes too. Stale old
+    per-destination rules go early for the same reason, with or without the
+    list rule: their destinations reach mihomo only through routes this
+    release deletes, if at all. Withdrawing the rule moves whole; additions
+    and merges stay after the routes.
     """
     if not any(op['kind'] == 'route_delete' for op in route_ops):
         return nat_ops, route_ops
     early, rest = [], []
     for op in nat_ops:
-        if (op['kind'] != 'nat_list_sync' or op['rule'] is None or op['replace_rule']
-                or not (op['withdraw'] or op['dst_remove'])):
+        if op['kind'] != 'nat_list_sync' or op['replace_rule']:
             rest.append(op)
             continue
         if op['withdraw']:
             early.append(op)
             continue
-        prune = {**copy.deepcopy(op), 'src_add': [], 'src_remove': [], 'dst_add': [], 'legacy': [], 'stale': []}
+        # Without the rule its members exempt nothing: they may go any time.
+        pruning = op['dst_remove'] if op['rule'] is not None else []
+        if not (pruning or op['stale']):
+            rest.append(op)
+            continue
+        prune = {**copy.deepcopy(op), 'src_add': [], 'src_remove': [], 'dst_add': [], 'legacy': [],
+                 'destinations': [], 'dst_remove': copy.deepcopy(pruning)}
         prune['summary'] = _summary(prune, gateway, False) + '；在删除对应路由之前执行'
         early.append(prune)
-        op = {**op, 'dst_remove': []}
-        if op['src_add'] or op['src_remove'] or op['dst_add'] or op['legacy'] or op.get('stale'):
-            op['summary'] = _summary(op, gateway, False)
+        op = {**op, 'dst_remove': [] if pruning else op['dst_remove'], 'stale': []}
+        if (op['rule'] is None or op['src_add'] or op['src_remove'] or op['dst_add'] or op['dst_remove']
+                or op['legacy']):
+            op['summary'] = _summary(op, gateway, op['rule'] is None,
+                                     [cidr for cidr in op['destinations']
+                                      if _key(cidr) not in {_key(item['config'].get('dst-address'))
+                                                            for item in op['legacy']}])
             rest.append(op)
     return rest, early + route_ops
 
@@ -845,12 +912,16 @@ def apply(driver, op):
             _delete(driver, op['rule'], journal)
         if op['dst_add']:
             _create_addresses(driver, entries(DST_LIST, op['dst_add']), journal, ids)
-        if op['rule'] is None:
+        if op['rule'] is None and op['destinations']:
             rule_id = _create_rule(driver, op, journal, ids)
             keep.append(rule_id)
-        _settle(driver, rule_id)
-        if op['legacy'] or op.get('stale'):
+        if rule_id is not None:
+            _settle(driver, rule_id)
+        # Stale rules alone, ahead of the routes and before any list rule
+        # exists, protect no desired CIDR: there is nothing to prove.
+        if rule_id is not None and (op['legacy'] or op.get('stale')):
             _prove(driver, op, rule_id)
+        if op['legacy'] or op.get('stale'):
             order = {str(row.get('.id')): index for index, row in enumerate(full)}
             delete_rules(driver, sorted(op['legacy'] + op.get('stale', []), key=lambda item: order[item['id']]),
                          journal)

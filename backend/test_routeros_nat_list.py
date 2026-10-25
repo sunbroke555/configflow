@@ -1062,6 +1062,148 @@ def test_stale_looking_rules_that_cannot_be_proven_stay(variant):
     assert [row for row in driver.rows[NAT] if row['.id'] in {item['.id'] for item in before}] == before
 
 
+HAND_ROUTES = {
+    'same-cidr': {'dst-address': STALE, 'gateway': GATEWAY},
+    'dns-address-inside': {'dst-address': '203.0.113.53/32', 'gateway': GATEWAY},
+    'via-interface': {'dst-address': STALE, 'gateway': GATEWAY + '%bridge'},
+    'ecmp': {'dst-address': STALE, 'gateway': '192.168.0.9,' + GATEWAY},
+    'other-table-default': {'dst-address': '0.0.0.0/0', 'gateway': GATEWAY + '@main', 'routing-table': 'mine'},
+}
+
+
+@pytest.mark.parametrize('variant', list(HAND_ROUTES))
+def test_old_rules_of_a_cidr_still_routed_to_mihomo_stay(variant):
+    from backend.routers.routeros_nat import assess_bypass
+    driver = device(legacy_rules() + legacy_for([STALE]) + [MASQUERADE])
+    driver.rows[ROUTES].append({'.id': '*C1', 'routing-table': 'main', 'disabled': 'false', 'comment': 'mine',
+                                **HAND_ROUTES[variant]})
+    kept = [copy.deepcopy(row) for row in driver.rows[NAT] if row.get('dst-address') == STALE]
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    assert not plan['blockers'], plan['blockers']
+    op = list_op(plan)
+    assert len(op['legacy']) == 28 and not op['stale'], variant
+    assert '残留' not in op['summary']
+    assert ('保留 14 条旧的逐条 NAT 免转换规则（备注 cf-mihomo，目的 203.0.113.0/24）：这些网段已不在代理网段中，'
+            '但仍有路由把它们送往 mihomo，删除会让这部分流量被源 NAT、丢失客户端 IP') in plan['warnings']
+    assert execute(plan, driver, None)['ok']
+    assert [row for row in driver.rows[NAT] if row.get('dst-address') == STALE] == kept
+    # Client traffic mihomo still receives for it keeps the client's address.
+    assert assess_bypass(STALE, GATEWAY, driver.read_state())['status'] == 'synced'
+    assert preview(driver, [FAKE_IP, TARGET])[1]['empty']
+
+
+@pytest.mark.parametrize('variant', ['disabled', 'other-gateway'])
+def test_routes_that_do_not_reach_mihomo_leave_old_rules_stale(variant):
+    driver = device(legacy_rules() + legacy_for([STALE]) + [MASQUERADE])
+    route = {'.id': '*C1', 'dst-address': STALE, 'gateway': GATEWAY, 'routing-table': 'main', 'disabled': 'false',
+             'comment': 'mine'}
+    if variant == 'disabled':
+        route['disabled'] = 'true'
+    else:
+        route['gateway'] = '192.168.0.33'
+    driver.rows[ROUTES].append(route)
+    _, plan = preview(driver, [FAKE_IP, TARGET])
+    assert len(list_op(plan)['stale']) == 14 and not any('保留' in warning for warning in plan['warnings'])
+
+
+def test_old_rules_are_not_stale_while_the_routes_are_unreadable():
+    from types import SimpleNamespace
+    report = {'routes': {'extra': []}}
+    assert nat_list.still_routed(report, SimpleNamespace(nat_context={'routes': None}, ros_policy_plan=None,
+                                                         policy_routes=None, retired_policy_routes=None),
+                                 GATEWAY) is None
+    driver = device(legacy_rules() + legacy_for([STALE]) + [MASQUERADE])
+    state = driver.read_state()
+    state.nat_context['routes'] = None
+    rows = legacy_for([STALE])
+    stale = nat_list._legacy(state.nat_context['rules'], sorted(sources()), [], [FAKE_IP, TARGET], set(), set(), '',
+                             None)[2:]
+    assert stale == ([], [nat_list._resource(NAT, row) for row in rows])
+
+
+def test_policy_route_stands_for_the_policy_destinations_only():
+    from types import SimpleNamespace
+    routes = [{'.id': '*P1', 'dst-address': '0.0.0.0/0', 'gateway': GATEWAY + '@main', 'routing-table': 'cf-pol',
+               'disabled': 'false'},
+              {'.id': '*X1', 'dst-address': '203.0.113.0/24', 'gateway': GATEWAY, 'disabled': 'false'},
+              {'.id': '*M1', 'dst-address': '91.108.4.0/22', 'gateway': GATEWAY, 'disabled': 'false'}]
+    plan = {'check': {'spec': {'destinations': ['149.154.160.0/20']},
+                      'previous': {'resources': [{'path': '/ip/route', 'id': '*P1'}],
+                                   'spec': {'destinations': ['8.8.8.0/24']}}}}
+    state = SimpleNamespace(nat_context={'routes': routes, 'mangle': None}, ros_policy_plan=plan,
+                            policy_routes=None, retired_policy_routes=None)
+    report = {'routes': {'extra': [{'route_id': '*M1'}]}}
+    assert sorted(map(str, nat_list.still_routed(report, state, GATEWAY))) == [
+        '149.154.160.0/20', '203.0.113.0/24', '8.8.8.0/24']
+    plan['check']['previous']['resources'] = []  # not ours: the default route sends everything
+    assert '0.0.0.0/0' in map(str, nat_list.still_routed(report, state, GATEWAY))
+
+
+def routed_legacy_device(rule=False):
+    """Old rules for FAKE_IP and TARGET with their managed routes; TARGET is about to go."""
+    driver = device()
+    if rule:
+        publish(driver, [FAKE_IP])
+        driver.rows[NAT][1:1] = legacy_for([TARGET])
+    else:
+        driver.rows[NAT][0:0] = legacy_rules()
+    for index, cidr in enumerate((FAKE_IP, TARGET)):
+        if not any(row['dst-address'] == cidr for row in driver.rows[ROUTES]):
+            driver.rows[ROUTES].append({'.id': f'*R{index}', 'dst-address': cidr, 'gateway': GATEWAY,
+                                        'routing-table': 'main', 'disabled': 'false', 'comment': 'cf-mihomo'})
+    return driver
+
+
+@pytest.mark.parametrize('rule', [False, True], ids=['merging', 'list-rule'])
+def test_stale_rules_go_before_the_route_of_their_cidr(rule):
+    driver = routed_legacy_device(rule)
+    _, plan = preview(driver, [FAKE_IP])
+    assert not plan['blockers'], plan['blockers']
+    early = removal_op(plan)
+    assert {item['config']['dst-address'] for item in early['stale']} == {TARGET} and not early['legacy']
+    assert early['summary'] == ('删除 14 条残留的旧逐条免转换规则（备注 cf-mihomo，目的 91.108.4.0/22）：'
+                                '这些网段已不再代理，保留它们会让去往这些网段的流量经 WAN 出去时不做源 NAT'
+                                '；在删除对应路由之前执行') or rule
+    if not rule:
+        op = list_op(plan)
+        assert len(op['legacy']) == 14 and not op['stale'] and '残留' not in op['summary']
+        assert op['summary'].startswith('将 14 条 NAT 免转换规则合并为 1 条「cf-mihomo-nat」')
+    send = driver._request
+    states = []
+
+    def request(method, path, values=None, **kwargs):
+        result = send(method, path, values, **kwargs)
+        if method != 'GET':
+            states.append((any(row.get('dst-address') == TARGET for row in driver.rows[ROUTES]),
+                           any(row.get('dst-address') == TARGET for row in driver.rows[NAT])))
+        return result
+    driver._request = request
+    assert execute(plan, driver, None)['ok']
+    # Never exempt from translation while no route sends it to mihomo.
+    assert (False, True) not in states and states[-1] == (False, False)
+    assert [row.get('comment') for row in driver.rows[NAT]] == ['cf-mihomo-nat', None]
+    report, again = preview(driver, [FAKE_IP])
+    assert again['empty'] and report['in_sync']
+
+
+@pytest.mark.parametrize('rule', [False, True], ids=['merging', 'list-rule'])
+@pytest.mark.parametrize('point, stage', [(('DELETE', ROUTES), 'routes'), (('PUT', ADDRESSES), 'nat_bypass')])
+def test_stale_rules_removed_early_come_back_when_the_release_fails(rule, point, stage):
+    driver = routed_legacy_device(rule)
+    # A CIDR to add makes the NAT stage after the routes write members.
+    _, plan = preview(driver, [FAKE_IP] if stage == 'routes' else ['149.154.160.0/20', FAKE_IP])
+    assert len(removal_op(plan)['stale']) == 14
+    before = configurations(driver)
+    driver.fail = (point[0], point[1], driver.counts[point[0], point[1]] + 1)
+    result = execute(plan, driver, None)
+    assert not result['ok'] and result['failed_stage'] == stage, result
+    assert not any(item['status'] == 'failed' for item in result['rollback']), result
+    after = configurations(driver)
+    key = lambda row: sorted(row.items())  # noqa: E731
+    assert sorted(after.pop(ADDRESSES), key=key) == sorted(before.pop(ADDRESSES), key=key)
+    assert after == before
+
+
 def test_auto_sync_refuses_to_migrate():
     from backend.routers.rule_sync_write import restrict_plan
     driver = device(legacy_for([STALE]) + legacy_rules() + [MASQUERADE])
@@ -1069,6 +1211,18 @@ def test_auto_sync_refuses_to_migrate():
     with pytest.raises(RouterError) as error:
         restrict_plan(plan, {'static_resources': [], 'nat_list': None})
     assert str(error.value) == ('路由器上还有旧的逐条 NAT 免转换规则（28 条待合并为 1 条列表规则，14 条的目的网段已不再代理），'
+                                '自动同步不会迁移，请手动预览并发布一次完成迁移')
+
+
+def test_auto_sync_refuses_stale_rules_moved_ahead_of_the_routes():
+    from backend.routers.rule_sync_write import restrict_plan
+    driver = routed_legacy_device(rule=True)
+    baseline = {'static_resources': [], 'nat_list': nat_list.nat_resources(driver)}
+    _, plan = preview(driver, [FAKE_IP])
+    assert removal_op(plan)['stale']
+    with pytest.raises(RouterError) as error:
+        restrict_plan(plan, baseline)
+    assert str(error.value) == ('路由器上还有旧的逐条 NAT 免转换规则（14 条的目的网段已不再代理），'
                                 '自动同步不会迁移，请手动预览并发布一次完成迁移')
 
 
@@ -1151,6 +1305,24 @@ def test_adding_and_removing_cidrs_downloads_the_destination_list_once_per_reque
     # itself reads it in full (console), every other read is a digest.
     # (Before: six REST downloads of 2000 members, about 1.3 s each on a CHR.)
     assert downloads == ['rest', 'digest', 'digest', 'digest', 'digest', 'digest', 'console', 'digest']
+
+
+def test_lists_downloaded_while_reading_state_are_not_proven_again_in_the_same_scope():
+    from backend.routers import ros_address_lists
+    driver = device()
+    publish(driver, [FAKE_IP, TARGET])
+    fresh = recorded(device(driver.rows[NAT]))
+    fresh.rows[ADDRESSES] = copy.deepcopy(driver.rows[ADDRESSES])
+    with ros_address_lists.reuse(fresh):
+        fresh.read_state()
+        sent = len(fresh.sent)
+        rows = ros_address_lists.read(fresh, list(nat_list.NAMES))
+        assert fresh.sent[sent:] == []
+        assert members(fresh, DST) == {str(ipaddress.ip_network(row['address'])) for row in rows[DST]}
+        fresh.rows[ADDRESSES].append({'.id': '*FF', 'list': DST, 'address': '1.2.3.0/24', 'comment': 'x',
+                                      'disabled': 'false'})
+        ros_address_lists.invalidate(fresh)
+        assert len(ros_address_lists.read(fresh, [DST])[DST]) == len(rows[DST]) + 1
 
 
 # --- source policy beside old rules ---------------------------------------------

@@ -44,7 +44,7 @@ describe('reviewable release operation details', () => {
       config: { chain: 'srcnat', action: 'accept', 'src-address': '192.0.2.1/32', 'dst-address': `203.0.113.${i}/32`, comment: 'cf-mihomo' } }))
     const groups = operationDetails({ kind: 'nat_list_sync', summary: '新增 NAT 免转换规则', comment: 'cf-mihomo-nat',
       src_list: 'cf-mihomo-nat-src', dst_list: 'cf-mihomo-nat-dst', rule: null, out_interface: '', replace_rule: false, withdraw: false,
-      src_add: ['192.0.2.1/32'], src_remove: [], dst_add: ['203.0.113.0/24'],
+      src_add: ['192.0.2.1/32'], src_remove: [], dst_add: ['203.0.113.0/24'], destinations: ['203.0.113.0/24'],
       dst_remove: [{ id: '*9', path: address, config: { list: 'cf-mihomo-nat-dst', address: '198.51.100.0/24' } }], legacy })
     expect(groups.map(g => g.title)).toEqual(['规则字段', '来源列表', '目的列表', '迁移删除的旧规则'])
     expect(groups[0].rows[0].value).toContain('目的地址列表 · dst-address-list: cf-mihomo-nat-dst')
@@ -55,6 +55,11 @@ describe('reviewable release operation details', () => {
       withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [], stale: legacy.slice(0, 2) })
     expect(stale.map(g => g.title)).toEqual(['规则字段', '删除残留的旧规则'])
     expect(stale[1].rows).toHaveLength(2); expect(stale[1].note).toContain('目的网段已不再代理')
+    // Removed ahead of the routes before any list rule exists: no rule to show.
+    const early = operationDetails({ kind: 'nat_list_sync', summary: '删除残留', comment: 'cf-mihomo-nat', src_list: 'cf-mihomo-nat-src',
+      dst_list: 'cf-mihomo-nat-dst', rule: null, out_interface: '', replace_rule: false, destinations: [],
+      withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [], stale: legacy.slice(0, 2) })
+    expect(early.map(g => g.title)).toEqual(['删除残留的旧规则'])
     const narrowed = operationDetails({ kind: 'nat_list_sync', summary: '限定出口', comment: 'cf-mihomo-nat', src_list: 'cf-mihomo-nat-src',
       dst_list: 'cf-mihomo-nat-dst', rule: { id: '*R', path: '/ip/firewall/nat', config: {} }, out_interface: 'bridge', replace_rule: true,
       withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [] })

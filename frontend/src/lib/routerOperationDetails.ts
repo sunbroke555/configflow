@@ -98,7 +98,7 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     const rule = record(op.rule)
     if (op.withdraw) {
       add('删除规则', [objectRow(op.rule, false)], '已没有需要免转换的代理网段：删除规则，再删除 ConfigFlow 写入的列表条目。')
-    } else {
+    } else if (op.rule || list(op.destinations).length) {
       const fields: Fields = { chain: 'srcnat', action: 'accept', 'src-address-list': op.src_list, 'dst-address-list': op.dst_list, comment: op.comment }
       if (op.out_interface) fields['out-interface'] = op.out_interface
       add('规则字段', [{ label: op.rule && !op.replace_rule ? `现有规则 · ${text(rule.id)}` : '新增规则', value: valuesOf(fields) }],
@@ -113,7 +113,7 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     add('迁移删除的旧规则', list(op.legacy).map(value => objectRow(value, false)),
       `共 ${list(op.legacy).length} 条，合并为上面的 1 条规则：逐条规则过多会拖慢新连接，自动同步也无法更新它们。新规则回读并证明覆盖后批量删除；失败时按原顺序恢复。`)
     add('删除残留的旧规则', list(op.stale).map(value => objectRow(value, false)),
-      `共 ${list(op.stale).length} 条，目的网段已不再代理；保留会让去往这些网段的流量经 WAN 出去时不做源 NAT。与迁移一起删除，失败时按原顺序恢复。`)
+      `共 ${list(op.stale).length} 条，目的网段已不再代理，也没有其他路由把它们送往 mihomo；保留会让去往这些网段的流量经 WAN 出去时不做源 NAT。要删除对应路由时先删这些规则；失败时按原顺序恢复。`)
   } else if (op.kind === 'dhcp_dns_update') {
     add('作用网段', safeFields(op.scope))
     add('现有 DHCP 配置', safeFields(op.expected))

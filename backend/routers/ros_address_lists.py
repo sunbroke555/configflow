@@ -218,8 +218,12 @@ def read(driver, names):
     reads = getattr(driver, 'address_list_reads', None)
     reads = reads if reads is not None else {}
     # A read in this scope is reusable when it proved exactly the rows we now
-    # expect; lists we know nothing about reuse a download from this scope.
+    # expect; lists we know nothing about reuse a download from this scope,
+    # and so does a list expected only after that download (``expect``).
     expected = {name: digest(proof[name]) for name in names if name in proof}
+    for name in names:
+        if name in reads and reads[name][0] == 'downloaded' and digest(reads[name][1]) == expected.get(name):
+            reads[name] = (expected[name], reads[name][1])
     reusable = {name for name in names if name in reads and reads[name][0] == expected.get(name, 'downloaded')}
     unproven = [name for name in expected if name not in reusable]
     if unproven:
