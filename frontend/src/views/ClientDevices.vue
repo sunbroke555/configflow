@@ -305,7 +305,8 @@ const rangeHelp = [
   '支持单个 IPv4 / IPv6 和 CIDR 网段，例如 192.168.50.50、192.168.50.0/24，网段会整理为标准写法。',
   '设备需使用 OxiDNS 作为 DNS，且 OxiDNS 能识别真实客户端 IP；填写地址不会修改设备的 DNS。',
 ].join('\n\n')
-const foundHelp = '添加后默认设为智能分流，名称取设备主机名。地址落在已设策略的网段内时，未添加前沿用该网段的策略。'
+const foundHelp = computed(() => (policyEditable.value ? '添加后默认设为智能分流，名称取设备主机名。' : '添加时只写入名称（取设备主机名），不设置 DNS 策略。')
+  + '地址落在已设策略的网段内时，未添加前沿用该网段的策略。')
 const publishHelp = '只发布到勾选的 OxiDNS。未勾选的设备保持现有配置；同一配置空间的 OxiDNS 共用这份草稿。'
 
 const route = useRoute()

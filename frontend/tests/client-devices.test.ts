@@ -6,6 +6,7 @@ import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import ClientDevices from '@/views/ClientDevices.vue'
 import OxiDNSMonitor from '@/views/OxiDNSMonitor.vue'
 import { Select } from '@/components/ui/select'
+import FieldHelp from '@/components/common/FieldHelp.vue'
 
 vi.mock('@/api', () => ({
   clientDeviceApi: { get: vi.fn(), save: vi.fn(), discover: vi.fn() },
@@ -472,6 +473,19 @@ describe('client device discovery tabs', () => {
     await flushPromises()
     expect(clientDeviceApi.save).toHaveBeenCalledWith('office', { ip: '192.0.2.147', name: 'iPhone', mode: '' }, { name: '', mode: '' })
     expect(wrapper.text()).not.toContain('已添加 1 台设备')
+  })
+
+  it('adds found devices by name only while the setup wizard is open', async () => {
+    const { wrapper } = await render('/client-devices?profile=setup_x&from=%2Fsetup%3Fsession%3Ds1&tab=new')
+    expect(wrapper.get('[aria-label="添加 192.0.2.150"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click')
+    await flushPromises()
+    expect(clientDeviceApi.save).toHaveBeenCalledWith('office', { ip: '192.0.2.147', name: 'iPhone', mode: '' }, { name: '', mode: '' })
+    expect(wrapper.text()).not.toContain('已添加 1 台设备')
+    expect(wrapper.text()).toContain('完成向导后再设置 DNS 策略')
+    const help = wrapper.findAllComponents(FieldHelp).map(item => String(item.props('text')))
+    expect(help.some(text => text.includes('只写入名称'))).toBe(true)
+    expect(help.some(text => text.includes('默认设为智能分流'))).toBe(false)
   })
 
   it('explains that discovery needs RouterOS or iKuai on the unadded and offline tabs', async () => {
