@@ -4,7 +4,7 @@ import { oxidnsMonitorApi } from '@/api'
 import { ListboxFilter } from 'reka-ui'
 import OxiDNSClientSelect from '@/components/agents/OxiDNSClientSelect.vue'
 import OxiDNSQueryTable from '@/components/agents/OxiDNSQueryTable.vue'
-import { emptyQueryFilters } from '@/types/oxidnsMonitor'
+import { emptyQueryFilters, type OxiDNSQuery } from '@/types/oxidnsMonitor'
 
 vi.mock('@/api', () => ({ oxidnsMonitorApi: { clients: vi.fn() } }))
 const wrappers: VueWrapper[] = []
@@ -227,4 +227,70 @@ it('searches notes locally without passing a name to the core IP search', async 
   const options = [...document.querySelectorAll('[role="option"]')]
   expect(options).toHaveLength(1); expect(options[0].textContent).toContain('192.0.2.10')
   await choose('192.0.2.10'); expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['192.0.2.10'])
+})
+
+describe('query table client names', () => {
+  function table(notes?: Record<string, string>) {
+    const row = (id: number, ip: string): OxiDNSQuery => ({
+      id, client_ip: ip, created_at_ms: 1700000000000, elapsed_ms: 1,
+      questions_json: [{ name: 'example.com.', qtype: 'A', qclass: 'IN' }],
+      error: null, has_response: true, rcode: 'NOERROR', answer_count: 0, answers_json: [], resolution_source: 'local'
+    })
+    const wrapper = mount(OxiDNSQueryTable, { attachTo: document.body, props: {
+      agentId: 'one', recorders: ['recorder'], recorder: 'recorder', filters: emptyQueryFilters(), notes,
+      data: { success: true, recorder: 'recorder', next_cursor: null,
+        records: [row(1, '192.0.2.10'), row(2, '192.0.2.1'), row(3, '127.0.0.1')] },
+      loading: false, error: '', page: 1, hasNext: false
+    } })
+    wrappers.push(wrapper)
+    return wrapper
+  }
+  it('shows names with the IP, keeps unnamed clients as IPs, and retains Agent checks', () => {
+    const wrapper = table({ '192.0.2.10': '客厅电视', '127.0.0.1': '本机' })
+    const clients = wrapper.findAll('tbody tr').map(row => row.findAll('td')[2])
+    expect(clients[0].text()).toContain('客厅电视')
+    expect(clients[0].text()).toContain('192.0.2.10')
+    expect(clients[0].classes()).toContain('whitespace-normal')
+    expect(clients[0].classes()).not.toContain('whitespace-nowrap')
+    expect(clients[1].text()).toBe('192.0.2.1')
+    expect(clients[2].text()).toContain('本机')
+    expect(clients[2].text()).toContain('127.0.0.1')
+    expect(clients[2].text()).toContain('Agent 检查')
+  })
+  it('renders IPs when no notes are available', () => {
+    const wrapper = table()
+    const clients = wrapper.findAll('tbody tr').map(row => row.findAll('td')[2].text())
+    expect(clients[0]).toBe('192.0.2.10')
+    expect(clients[1]).toBe('192.0.2.1')
+  })
+  it.each([null, undefined])('renders missing client addresses as a dash (%s)', async ip => {
+    const wrapper = table({ '192.0.2.10': '客厅电视' })
+    const data = wrapper.props('data')!
+    // Core history may carry null or omit client_ip entirely.
+    const record: Partial<OxiDNSQuery> = { ...data.records[0] }
+    if (ip === undefined) delete record.client_ip
+    else record.client_ip = ip as unknown as string
+    await wrapper.setProps({ data: { ...data, records: [record as OxiDNSQuery] } })
+    const client = wrapper.get('tbody tr').findAll('td')[2]
+    expect(client.text()).toBe('—')
+    expect(client.text()).not.toContain('客厅电视')
+  })
+  it('passes query names to the existing picker for display and local name search', async () => {
+    vi.useFakeTimers()
+    const wrapper = table({ '192.0.2.10': '客厅电视' })
+    const picker = wrapper.getComponent(OxiDNSClientSelect)
+    await open(picker)
+    const input = new DOMWrapper(document.querySelector<HTMLInputElement>('input[aria-label="搜索已有客户端 IP"]')!)
+    await input.setValue('电视')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    const options = [...document.querySelectorAll('[role="option"]')]
+    expect(options).toHaveLength(1)
+    expect(options[0].textContent).toContain('客厅电视')
+    expect(options[0].textContent).toContain('192.0.2.10')
+    expect(vi.mocked(oxidnsMonitorApi.clients).mock.lastCall?.[1].search).toBeUndefined()
+    await choose('192.0.2.10')
+    expect(wrapper.emitted('filter')?.[0]?.[0]).toMatchObject({ client_ip: '192.0.2.10' })
+    expect(picker.get('[role="combobox"]').text()).toContain('客厅电视')
+  })
 })

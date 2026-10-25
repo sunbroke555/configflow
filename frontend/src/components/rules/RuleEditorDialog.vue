@@ -436,7 +436,7 @@ async function submitEdit(withDns = true) {
   const changed = dnsLoaded.value && !locked.value && (effectiveDns.value !== initialDns || resync.value)
   const dnsField = withDns && changed ? { dns: resync.value && effectiveDns.value === 'follow' ? 'follow' : effectiveDns.value } : {}
   // 改策略会离开原分组：只有用户没有同时改分组名时才清空
-  const groupName = item.policy !== form.policy && form.group_name.trim() === (item.group_name || '') ? '' : form.group_name.trim()
+  const groupName = item.policy !== form.policy && form.group_name.trim() === (item.group_name || '').trim() ? '' : form.group_name.trim()
   let response
   if (item.itemType === 'ruleset') {
     const payload = { ...ruleSetPayload(item), library_rule_id: form.libraryIds[0] || item.library_rule_id,
@@ -707,7 +707,7 @@ async function save() {
                   <Input id="rule-remark" v-model="form.remark" class="bg-background/50" placeholder="可选，添加备注说明" />
                 </FormField>
                 <FormField label="分组名" html-for="rule-group">
-                  <Input id="rule-group" v-model="form.group_name" class="bg-background/50" placeholder="可选，相邻同策略规则共用" />
+                  <Input id="rule-group" v-model="form.group_name" class="bg-background/50" placeholder="可选，相邻同策略且同名规则成组" />
                 </FormField>
               </div>
               <FormField v-if="!editing && !singleType" label="插入位置">

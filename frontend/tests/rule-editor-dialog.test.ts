@@ -529,6 +529,18 @@ describe('rule editor dialog', () => {
     expect(network.update.mock.calls[1]![1]).toMatchObject({ policy: 'Proxy', group_name: '' })
   })
 
+  it.each(['rule', 'ruleset'] as const)('clears an unchanged padded group name when only the %s policy changes', async itemType => {
+    const item = { ...existing[itemType === 'rule' ? 0 : 2]!, policy: 'DIRECT', group_name: '国内  ' }
+    const wrapper = await render({ mode: 'edit', item })
+    expect(dialog().querySelector<HTMLInputElement>('#rule-group')!.value).toBe('国内  ')
+    await choose(wrapper, '策略', 'Proxy')
+    await click(save())
+    const update = itemType === 'rule' ? network.update : network.setUpdate
+    expect(update).toHaveBeenCalledExactlyOnceWith(item.id, expect.objectContaining({ policy: 'Proxy', group_name: '' }), 'p1')
+    expect(item.group_name).toBe('国内  ')
+    expect(wrapper.emitted('saved')).toEqual([[{ ids: [item.id] }]])
+  })
+
   it('does not call a never-configured default upstream a separate choice, but does for a saved one', async () => {
     const item = { id: 'rule-l', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'baidu.com', policy: 'DIRECT', enabled: true }
     await render({ mode: 'edit', item })

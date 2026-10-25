@@ -5,6 +5,7 @@ import { gatewayOnboardingApi, type GatewayConfigurationPreview, type GatewayIns
 import { linuxGatewayApi, type LinuxGatewayCandidate, type LinuxGatewayPreview, type LinuxGatewayStatus } from '@/api/linuxGateway'
 import { cleanGatewaySpec, emptyGatewaySpec, gatewayErrorMessage, gatewaySpecErrors, gatewaySpecKey } from '@/lib/linuxGateway'
 import { setupServerError } from '@/lib/setupFlow'
+import { stripTrailingPunctuation } from '@/lib/text'
 import type { SetupGoal } from '@/api/setup'
 import { gatewayEnvironmentErrors, installationHostMatches, installationMatches, onboardingSettingsKey } from '@/lib/gatewayOnboarding'
 import { copyText } from '@/lib/clipboard'
@@ -154,6 +155,14 @@ function agentRow(agent?: GatewayInstallation['agents']['mihomo']): { status: st
   if (agent.status === 'offline') return { status: '离线', tone: 'warning' }
   return { status: agent.status || '已登记', tone: 'neutral' }
 }
+const agentWarnings = computed(() => (['mihomo', 'oxidns'] as const).flatMap(service => {
+  const row = agentRow(installation.value?.agents[service])
+  if (row.tone === 'success') return []
+  const label = `${service === 'mihomo' ? 'Mihomo' : 'OxiDNS'} Agent`
+  if (row.status === '已禁用') return [`${label} 已在管理中停用，启用后才能继续。`]
+  if (row.status === '离线') return [`${label} 离线，请恢复连接后重新检查。`]
+  return [`${label} 状态尚未确认，请重新检查后继续。`]
+}))
 function stopPolling() { if (poll) clearTimeout(poll); poll = undefined }
 function continueToRules() {
   if (busy.value || !config.value || locked.value) return
@@ -311,14 +320,21 @@ async function publish() {
     const { data } = await gatewayOnboardingApi.publish(id, captured.profileId, installation.value.phase === 'publish_failed')
     if (current(captured) && installation.value?.id === id) acceptInstallation(data)
   } catch (failure) {
-    if (current(captured)) { error.value = `发布状态需要确认：${gatewayErrorMessage(failure)}。请刷新进度，不要重复安装。`; void refreshInstallation() }
+    if (current(captured)) {
+      const message = stripTrailingPunctuation(gatewayErrorMessage(failure))
+      error.value = `发布状态需要确认：${message}。请刷新进度，不要重复安装。`
+      void refreshInstallation()
+    }
   } finally { if (current(captured)) action.value = '' }
 }
-async function inspectNetwork() {
-  if (!canInspectNetwork.value || !hostAgent.value || action.value) return
+async function inspectNetwork(refreshAgents = false) {
+  if (!canInspectNetwork.value || !hostAgent.value || action.value || refreshPending.value) return
   const captured = token(), agentId = hostAgent.value.id
   action.value = 'inspect'; error.value = ''
   try {
+    // Keep physical host checks independent of the pair's management/heartbeat state.
+    if (refreshAgents) await refreshInstallation()
+    if (!current(captured) || !canInspectNetwork.value || hostAgent.value?.id !== agentId) return
     const { data } = await linuxGatewayApi.status(agentId, captured.profileId)
     if (!current(captured) || hostAgent.value?.id !== agentId) return
     networkStatus.value = data
@@ -662,6 +678,9 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
         </section>
 
         <section v-else class="space-y-4" :aria-label="steps[4]">
+          <div v-if="agentWarnings.length" class="space-y-1 text-sm text-warning-accent" role="status">
+            <p v-for="warning in agentWarnings" :key="warning" class="m-0 break-words">{{ warning }}</p>
+          </div>
           <div v-if="legacy && !embedded" class="rounded-lg border border-warning-accent/30 bg-warning-soft px-3 py-2.5 text-xs leading-relaxed" role="status" data-legacy-router-split>
             <p class="m-0 text-sm font-semibold text-warning-accent">旧版主路由分流</p>
             <p class="mt-1 mb-0 text-foreground">这台设备使用 Linux 网关的选择性接管，主路由转来的连接依赖它；撤销转发会让这些连接中断。</p>
@@ -684,7 +703,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
             <dl class="m-0 grid grid-cols-2 gap-3 py-3 text-xs sm:grid-cols-4"><div class="min-w-0"><dt class="text-muted-foreground">Linux IPv4</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.address }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">主路由</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.upstream_gateway }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网卡</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.interface }}</dd></div><div class="min-w-0"><dt class="text-muted-foreground">LAN 网段</dt><dd class="mx-0 mt-1 break-all font-mono">{{ network.lan_cidr }}</dd></div></dl>
           </div>
           <div class="flex flex-wrap gap-2">
-            <Button variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="inspectNetwork"><LoaderCircle v-if="action === 'inspect'" class="size-4 animate-spin" /><RefreshCw v-else class="size-4" />重新检查</Button>
+            <Button variant="outline" class="min-h-11" :disabled="busy || refreshPending || !canInspectNetwork" @click="inspectNetwork(true)"><LoaderCircle v-if="action === 'inspect'" class="size-4 animate-spin" /><RefreshCw v-else class="size-4" />重新检查</Button>
             <Button v-if="canPersistForwarding" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="persistForwarding"><LoaderCircle v-if="action === 'forwarding'" class="size-4 animate-spin" />开启并持久化 IPv4 转发</Button>
           </div>
           <p v-if="activeNetwork" class="m-0 text-xs leading-relaxed">转发与 TUN 正常。接入主路由后，先用一台客户端测试国内网站和代理网站。</p>
@@ -719,7 +738,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
           <div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
             <Button v-if="managedNetwork" variant="outline" class="min-h-11" :disabled="busy || !canInspectNetwork" @click="removeNetwork">撤销网关转发</Button>
             <p v-if="managedNetwork" class="m-0">{{ legacy ? '撤销前，先删除主路由上指向这台 Linux 的静态路由。' : '撤销前，先恢复客户端原来的网关与 DNS。' }}</p>
-            <Button v-else variant="ghost" class="min-h-11 px-2" :disabled="busy || !canInspectNetwork" @click="inspectNetwork">重新读取网络状态</Button>
+            <Button variant="ghost" class="min-h-11 px-2" :disabled="busy || refreshPending || !canInspectNetwork" @click="inspectNetwork(true)">重新读取网络状态</Button>
           </div>
           <details class="border-b border-border text-xs"><summary class="min-h-11 cursor-pointer content-center py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-primary-accent">后续管理</summary><div class="space-y-2 pt-1 pb-3 leading-relaxed text-muted-foreground"><p v-if="legacy" class="m-0">主路由转发的网段在「上游路由」管理。</p><p v-else-if="activeNetwork" class="m-0">测试通过后再接入其他设备。支持 DHCP 分发网关与 DNS 的主路由，可将两项都设为 <code class="font-mono">{{ network.address }}</code>。</p><p class="m-0">配置生成 → Mihomo → Linux 网关。未选 IP、应用自带 DoH 或绕过网关的流量不自动代理。</p></div></details>
           </template>
@@ -730,7 +749,7 @@ onBeforeUnmount(() => { disposed = true; generation++; stopPolling(); emit('busy
     <template #footer>
       <div v-if="embedded" class="flex flex-wrap items-center gap-2">
         <Button v-if="!locked" class="min-h-11" :disabled="busy || !config || !!pollError" @click="generatePreparedInstallation"><LoaderCircle v-if="busy" class="size-4 animate-spin" />生成安装命令</Button>
-        <Button v-else-if="activeNetwork && installation?.phase === 'published' && !installationBlocked" class="min-h-11" :disabled="busy" @click="emit('completed')">{{ goal === 'router' ? '继续接入主路由' : '继续设置测试客户端' }}</Button>
+        <Button v-else-if="activeNetwork && installation?.phase === 'published' && !installationBlocked && !agentWarnings.length && !pollError && !error" class="min-h-11" :disabled="busy || refreshPending" @click="emit('completed')">{{ goal === 'router' ? '继续接入主路由' : '继续设置测试客户端' }}</Button>
         <span v-else class="text-xs text-muted-foreground">{{ step === 4 ? (fullTun ? '转发与 TUN 检查通过后，再接入主路由。' : goal === 'router' ? '检查并启用转发后，再接入主路由。' : '检查并启用转发后，才能接入客户端。') : step === 3 ? (fullTun ? '按顺序发布并检查两项配置后，再检查转发与 TUN。' : '按顺序发布并检查两项配置后，再启用转发。') : '请在目标 Linux 执行命令，完成登记后继续发布与检查。' }}</span>
       </div>
       <div v-else class="flex min-w-0 flex-wrap items-center justify-between gap-2">

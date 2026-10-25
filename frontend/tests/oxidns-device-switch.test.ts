@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import { createMemoryHistory, createRouter, RouterView, useRoute } from 'vue-router'
-import { agentApi, oxidnsMonitorApi, profileApi } from '@/api'
+import { agentApi, clientToolsApi, oxidnsMonitorApi, profileApi } from '@/api'
 import { invalidateAgentSummaries } from '@/lib/agentSummaries'
 import OxiDNSMonitor from '@/views/OxiDNSMonitor.vue'
 import { Select } from '@/components/ui/select'
 import { confirm, notify } from '@/lib/feedback'
 import { OXIDNS_DEVICE_STORAGE_KEY } from '@/composables/useOxiDNSDevices'
 
-vi.mock('@/api', () => ({ agentApi: { getAll: vi.fn(), summaries: vi.fn() }, profileApi: { list: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn(), queries: vi.fn(), query: vi.fn(), resetStatistics: vi.fn() } }))
+vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn() }, agentApi: { getAll: vi.fn(), summaries: vi.fn() }, profileApi: { list: vi.fn() }, oxidnsMonitorApi: { overview: vi.fn(), queries: vi.fn(), query: vi.fn(), resetStatistics: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn() } }))
 const wrappers: VueWrapper[] = []
 function stubStorage() {
@@ -30,18 +30,18 @@ const snapshot = (id: string) => ({
   core: { status: 'running', version: '1.6.1', uptime_ms: 1000, instance_id: id }, recorders: ['queries'],
   metrics: { requests_total: 100, failed_total: 0, avg_latency_ms: 1, inflight: 0, cache_hit_rate: 50 }, caches: [], servers: []
 })
-async function render(path = '/agents/one/oxidns') {
+async function render(path = '/agents/one/oxidns', remount = true) {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/agents/:agentId/oxidns', component: OxiDNSMonitor }, { path: '/agents', component: { template: '<div>Agents</div>' } }
   ] })
   await router.push(path)
   await router.isReady()
   // App.vue keys routed pages by path; this reproduces a real device switch remount.
-  const shell = defineComponent({ components: { RouterView }, setup: () => ({ route: useRoute() }), template: '<RouterView :key="route.path" />' })
+  const shell = defineComponent({ components: { RouterView }, setup: () => ({ route: useRoute() }), template: remount ? '<RouterView :key="route.path" />' : '<RouterView />' })
   const wrapper = mount(shell, { global: { plugins: [router], stubs: {
     OxidnsSettings: { props: ['profileId', 'initialFeature', 'contextLabel'], template: '<div data-test="recorder-settings">{{ profileId }} · {{ initialFeature }} · {{ contextLabel }}</div>' },
     OxiDNSOverviewPanel: { props: ['overview', 'resetting'], template: '<div data-test="overview" :data-resetting="String(resetting)">{{ overview.agent.name }}</div>' },
-    OxiDNSQueryTable: { props: ['data'], emits: ['detail'], template: '<div data-test="queries">{{ data?.records[0]?.client_ip }}<button data-test="detail" @click="$emit(\'detail\', { id: 12 })">详情</button></div>' },
+    OxiDNSQueryTable: { props: ['data', 'notes'], emits: ['detail'], template: '<div data-test="queries">{{ data?.records[0]?.client_ip }}<span data-test="client-name">{{ notes?.["192.0.2.10"] }}</span><button data-test="detail" @click="$emit(\'detail\', { id: 12 })">详情</button></div>' },
     OxiDNSQueryDetail: { props: ['agentId'], template: '<div data-test="query-detail">{{ agentId }}</div>' }
   } } })
   wrappers.push(wrapper)
@@ -54,6 +54,7 @@ beforeEach(() => {
   stubStorage()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} })))
+  vi.mocked(clientToolsApi.notes).mockResolvedValue(response({ success: true, profile_id: 'default', profile_name: '默认配置', notes: {} }))
   vi.mocked(confirm).mockResolvedValue(true)
   vi.mocked(oxidnsMonitorApi.resetStatistics).mockImplementation(async id => response({ ...snapshot(id), statistics: { generation: 'reset', started_at_ms: 0, reason: 'manual', partial: false } }))
   vi.mocked(agentApi.getAll).mockResolvedValue(response([device('one'), device('two', 'offline'), device('proxy', 'online', 'mihomo')]))
@@ -238,5 +239,73 @@ describe('OxiDNS dashboard reset confirmation', () => {
     accept(true)
     await flushPromises()
     expect(oxidnsMonitorApi.resetStatistics).not.toHaveBeenCalled()
+  })
+})
+
+describe('OxiDNS query names follow the Agent binding', () => {
+  const notes = (name: string, profile = 'office') => response({
+    success: true, profile_id: profile, profile_name: profile, notes: { '192.0.2.10': name }
+  })
+  it('uses the Agent notes endpoint even when the overview belongs to a different profile', async () => {
+    vi.mocked(clientToolsApi.notes).mockResolvedValue(notes('办公室电脑'))
+    const { wrapper } = await render('/agents/one/oxidns?tab=queries')
+    expect(clientToolsApi.notes).toHaveBeenCalledWith('one')
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('办公室电脑')
+    expect(profileApi.list).not.toHaveBeenCalled()
+    expect(agentApi.getAll).not.toHaveBeenCalled()
+  })
+  it('clears the previous profile name while a newly selected Agent is loading', async () => {
+    vi.mocked(clientToolsApi.notes).mockResolvedValueOnce(notes('办公室电脑'))
+    const { wrapper, router } = await render('/agents/one/oxidns?tab=queries', false)
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('办公室电脑')
+    let finish!: (value: any) => void
+    vi.mocked(clientToolsApi.notes).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await router.replace('/agents/two/oxidns?tab=queries')
+    await flushPromises()
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('')
+    finish(notes('家庭电脑', 'home'))
+    await flushPromises()
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('家庭电脑')
+    expect(wrapper.text()).not.toContain('办公室电脑')
+  })
+  it.each([true, false])('ignores old Agent notes after switching (remount=%s)', async remount => {
+    let finish!: (value: any) => void
+    vi.mocked(clientToolsApi.notes).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    const { wrapper, router } = await render('/agents/one/oxidns?tab=queries', remount)
+    vi.mocked(clientToolsApi.notes).mockResolvedValueOnce(notes('家庭电脑', 'home'))
+    await router.replace('/agents/two/oxidns?tab=queries')
+    await flushPromises()
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('家庭电脑')
+    finish(notes('旧空间电脑'))
+    await flushPromises()
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('家庭电脑')
+    expect(wrapper.text()).not.toContain('旧空间电脑')
+  })
+  it.each(['rejected', 'unsuccessful'] as const)('preserves successful notes after a %s refresh and recovers on retry', async failure => {
+    vi.mocked(clientToolsApi.notes).mockResolvedValueOnce(notes('办公室电脑'))
+    const { wrapper } = await render('/agents/one/oxidns?tab=queries')
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('办公室电脑')
+    if (failure === 'rejected') vi.mocked(clientToolsApi.notes).mockRejectedValueOnce(new Error('备注暂不可用'))
+    else vi.mocked(clientToolsApi.notes).mockResolvedValueOnce(response({ success: false, message: '备注暂不可用', notes: {} }))
+    await wrapper.get('[aria-label="刷新监控"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('办公室电脑')
+    expect(wrapper.get('[role="alert"]').text()).toContain('备注暂不可用')
+    expect(wrapper.get('[role="alert"]').text()).toContain('保留上次成功读取的备注')
+    vi.mocked(clientToolsApi.notes).mockResolvedValueOnce(notes('更新后的名称'))
+    await wrapper.get('[aria-label="刷新监控"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('更新后的名称')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+  it('keeps queries usable after a notes failure and retries on manual refresh', async () => {
+    vi.mocked(clientToolsApi.notes).mockRejectedValueOnce(new Error('备注暂不可用'))
+    const { wrapper } = await render('/agents/one/oxidns?tab=queries')
+    expect(wrapper.get('[data-test="queries"]').text()).toContain('client-one')
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('')
+    vi.mocked(clientToolsApi.notes).mockResolvedValueOnce(notes('恢复后的名称'))
+    await wrapper.get('[aria-label="刷新监控"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="client-name"]').text()).toBe('恢复后的名称')
   })
 })

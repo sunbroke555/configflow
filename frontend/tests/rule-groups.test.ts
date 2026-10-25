@@ -176,7 +176,7 @@ describe('rule group sections', () => {
   it('keeps a collapsed group collapsed when a new rule becomes its first member', async () => {
     const wrapper = await render()
     await toggle(wrapper, 'DNS地址').trigger('click')
-    network.state.rules.splice(1, 0, rule('r-new', 'new.test', 'Proxy'))
+    network.state.rules.splice(1, 0, rule('r-new', 'new.test', 'Proxy', { group_name: 'DNS地址' }))
     await (wrapper.vm as any).$.setupState.loadAllRules()
     await flushPromises()
     expect(toggle(wrapper, 'DNS地址').attributes('aria-expanded')).toBe('false')

@@ -14,7 +14,7 @@ import type { RuleDnsSnapshot, RuleDnsState, RuleDnsValue } from '@/types'
 
 type Item = { id: string; itemType?: string; rule_type?: string; policy?: string }
 
-/** 一组相邻同策略规则的 DNS 批量设置；覆盖单独设置前先确认影响 */
+/** 当前展示分组的 DNS 批量设置；覆盖单独设置前先确认影响 */
 const props = defineProps<{
   open: boolean
   items: Item[]
