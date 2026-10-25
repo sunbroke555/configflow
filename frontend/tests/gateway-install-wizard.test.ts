@@ -508,6 +508,15 @@ describe('gateway installation wizard', () => {
     expect(gatewayOnboardingApi.publish).toHaveBeenCalledWith('installation-1', 'office', true)
     expect(linuxGatewayApi.apply).not.toHaveBeenCalled()
   })
+  it.each(['', '。', '。。', '！', '？', '!?', '...', '； \n'])('joins the publish failure with one sentence ending (suffix=%j)', async suffix => {
+    const message = '安装设备离线或已禁用，请检查连接后继续'
+    vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('enrolled') }))
+    vi.mocked(gatewayOnboardingApi.publish).mockRejectedValue({ response: { status: 409, data: { message: message + suffix } } })
+    const wrapper = await render()
+    await button(wrapper, '按顺序发布两项配置').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain(`发布状态需要确认：${message}。请刷新进度，不要重复安装。`)
+    expect(wrapper.text()).not.toContain('。。')
+  })
   it('offers the download remedy only for rule download failures', async () => {
     vi.mocked(gatewayOnboardingApi.sessions).mockResolvedValue(response({ success: true, session: session('publish_failed', { message: '无法下载「Telegram」规则集', remedy: { kind: 'rule_download', github: true } }) }))
     const wrapper = await render()

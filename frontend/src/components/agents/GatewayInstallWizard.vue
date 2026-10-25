@@ -319,7 +319,11 @@ async function publish() {
     const { data } = await gatewayOnboardingApi.publish(id, captured.profileId, installation.value.phase === 'publish_failed')
     if (current(captured) && installation.value?.id === id) acceptInstallation(data)
   } catch (failure) {
-    if (current(captured)) { error.value = `发布状态需要确认：${gatewayErrorMessage(failure)}。请刷新进度，不要重复安装。`; void refreshInstallation() }
+    if (current(captured)) {
+      const message = gatewayErrorMessage(failure).replace(/[。.!！?？…；;，,：:\s]+$/u, '')
+      error.value = `发布状态需要确认：${message}。请刷新进度，不要重复安装。`
+      void refreshInstallation()
+    }
   } finally { if (current(captured)) action.value = '' }
 }
 async function inspectNetwork(refreshAgents = false) {
