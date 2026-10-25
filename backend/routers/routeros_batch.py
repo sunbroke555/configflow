@@ -5,8 +5,8 @@ read-back. Runs of additions instead go to the router as /execute scripts of
 up to ROUTE_BATCH adds, proven by the ID each console add returns and one
 destination-filtered read before and after. Runs of deletions are one
 comma-separated remove, checked with one ID-filtered read. Measured on
-RouterOS 7.24.5 (x86 CHR, 3000 other routes): 100 console adds ~0.45 s, a read
-of 200 destinations 0.08 s and of 200 IDs 0.64 s, against 4-5 s for the table.
+RouterOS 7.24.5 (x86 CHR, 3000 other routes): 100 console adds 0.17 s, a read
+of 200 destinations 0.08 s and of 200 IDs 0.8 s, against 4-8 s for the table.
 
 A batch records only operations it has fully proven. Whatever it cannot prove,
 or the router rejects, goes through the single-route transaction, which reads,
@@ -19,11 +19,13 @@ from typing import Any, Callable, Dict, List, Optional
 from backend.routers.base import RouterError, RouterRollbackError
 from backend.routers.routeros import NAT, ROUTES, UncertainWrite, _comparable, _truthy
 
+# 100 adds (21 kB) ran in 0.17 s and 300 (63 kB) in 0.39 s on the CHR: a wide
+# margin under the 10 s request timeout on boards ten times slower.
 ROUTE_BATCH = 100
 # Smaller runs keep single writes: no fewer requests would be needed.
 BATCH_MIN = 4
 # The console caps one executed script at 64 kB.
-SCRIPT_BYTES = 16 * 1024
+SCRIPT_BYTES = 32 * 1024
 QUERY_TERMS = 200
 REMOVE_BATCH = 500
 ROW_ID = re.compile(r'\*[0-9a-fA-F]+')

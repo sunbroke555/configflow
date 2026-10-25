@@ -246,6 +246,9 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
     record = log.append
 
     current = ''
+    # The last routes/NAT read-back while nothing has been written since; a
+    # no-op NAT check right after the routes stage needs no second table read.
+    unchanged = None
     try:
         if plan.get('blockers'):
             raise ReleaseError('发布计划存在阻止项：' + '；'.join(plan['blockers']))
@@ -257,13 +260,13 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 continue
             if not stage['ops']:
                 if current == 'routes' and plan.get('checks', {}).get('ros_policy') is not None:
-                    _verify(current, plan['checks'], driver, agent)
+                    unchanged = _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认来源策略路由与计划一致', 'status': 'verified'})
                 if current == 'return_routing' and plan.get('checks', {}).get('return_routing'):
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认受管回流配置与占用安全检查通过', 'status': 'verified'})
                 elif current == 'nat_bypass' and plan.get('checks', {}).get('nat_not_required'):
-                    _verify(current, plan['checks'], driver, agent)
+                    unchanged = _verify(current, plan['checks'], driver, agent, unchanged)
                     record({'stage': current, 'summary': '回读确认无需额外 NAT 免转换', 'status': 'verified'})
                 elif current == 'dhcp_dns' and plan.get('checks', {}).get('dhcp_dns'):
                     _verify(current, plan['checks'], driver, agent)
@@ -300,8 +303,9 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 done.append((current, op, undo))
                 record({'stage': current, 'summary': op['summary'], 'status': 'ok'})
 
+            unchanged = None
             _apply_stage(ops, driver, agent, finished)
-            state = _verify(current, plan['checks'], driver, agent)
+            unchanged = state = _verify(current, plan['checks'], driver, agent)
             record({'stage': current, 'summary': '回读校验通过', 'status': 'verified'})
             if current == 'routes':
                 # Config readback cannot see kernel leftovers; the active table can.

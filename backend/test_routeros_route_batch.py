@@ -97,7 +97,7 @@ def test_publishing_300_routes_reads_the_route_table_a_constant_number_of_times(
     assert result['ok'], result
     # One-by-one: two whole-table reads per route (603 GETs, 121k rows); now
     # one stage read-back and a handful of batch requests.
-    assert whole_table_reads(session) <= 2
+    assert whole_table_reads(session) == 2
     assert len(driver.sent) <= 25
     assert sum(1 for method, path, _ in session.calls if (method, path) == ('POST', '/execute')) <= 4
     assert {row['dst-address'] for row in session.rows[ROUTES]} >= set(cidrs(300))
@@ -233,8 +233,8 @@ def test_release_reads_state_once_per_routes_verification():
     plan = plan_for(driver, cidrs(2))
     session.calls.clear()
     assert execute(plan, driver, None)['ok']
-    # The routes and NAT stage read-backs. Before: two reads per route, and
-    # another for stale kernel routes, which RouterOS never reports.
+    # The routes and NAT stage read-backs; stale kernel routes (RouterOS
+    # reports none) reuse the first. Before: seven.
     assert whole_table_reads(session) == 2
 
 
@@ -369,3 +369,14 @@ def test_dhcp_update_reuses_the_snapshot_the_release_just_checked():
     assert (undo, writes) == (single_undo, single_writes_)
     # Without the snapshot the six DHCP tables are read again before the write.
     assert len(single_reads) == len(reads) + 6
+
+
+def test_unchanged_nat_check_reuses_the_routes_read_back():
+    session = StatefulRouterOS(routes=unrelated(5), nats=[])  # no source NAT: nothing to exempt
+    driver = driver_for(session)
+    plan = plan_for(driver, cidrs(2))
+    assert [len(stage['ops']) for stage in plan['stages'] if stage['key'] == 'nat_bypass'] == [0]
+    assert plan['checks']['nat_not_required']
+    session.calls.clear()
+    assert execute(plan, driver, None)['ok']
+    assert whole_table_reads(session) == 1
