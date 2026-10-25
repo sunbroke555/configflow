@@ -182,8 +182,12 @@ def test_timeouts_and_the_deadline_leave_hosts_recent(monkeypatch):
     assert {reading.sightings[ip].presence for ip in STALE} == {'recent'}
     assert reading.notes == [f'{len(STALE)} 台设备未能及时确认，显示为近期见过']
     late = FakeRouterOS(ping=answers(*STALE))
-    reading = read(late, monkeypatch, deadline=time.monotonic())
-    assert late.pings == [] and reading.sightings[STALE[0]].presence == 'recent'
+    sightings = {ip: ros_clients.Sighting(ip=ip, presence='recent', basis='stale') for ip in STALE}
+    ros_clients.confirm(late.driver(monkeypatch), sightings, [(ip, 'lan4') for ip in STALE], {'lan4'},
+                        deadline=time.monotonic() + 0.9)
+    assert late.pings == [] and sightings[STALE[0]].presence == 'recent'
+    with pytest.raises(RouterError, match='读取时间已用完'):
+        read(late, monkeypatch, deadline=time.monotonic())
 
 
 def lease(ip, last_seen, status='bound', dynamic='true', **extra):
@@ -574,14 +578,15 @@ def test_a_slow_router_times_out_without_holding_the_others(oxidns_app, monkeypa
             raise RouterError('closed')
     monkeypatch.setattr(client_discovery, 'open_driver', lambda router: (
         Stuck() if router['type'] == 'ikuai' else FakeRouterOS(ping=answers()).driver(monkeypatch)))
-    monkeypatch.setattr(client_discovery, 'ROUTER_TIMEOUT', 3)
+    # Readers stop 2 s before the router timeout; RouterOS needs at least 1 s left to start a read.
+    monkeypatch.setattr(client_discovery, 'ROUTER_TIMEOUT', 4)
     started = time.monotonic()
     body = app.test_client().get(URL).get_json()
     release.set()
-    assert time.monotonic() - started < 4.5
+    assert time.monotonic() - started < 5.5
     assert body['state'] == 'partial'
     assert body['sources'][1] == {'id': 'ik1', 'name': '爱快', 'type': 'ikuai', 'ok': False,
-                                  'error': '读取超时（3 秒），请检查路由器负载和网络', 'notes': []}
+                                  'error': '读取超时（4 秒），请检查路由器负载和网络', 'notes': []}
     assert body['sources'][0]['ok'] and body['discovered']
 
 
@@ -609,3 +614,148 @@ def test_the_agent_entry_point_reads_that_agents_profile(oxidns_app, monkeypatch
     assert client.get(f'/api/client-devices/discovery?agent={agent_id}').get_json()['profile_id'] == 'office'
     missing = client.get('/api/client-devices/discovery?agent=nope')
     assert missing.status_code == 404 and 'Agent' in missing.get_json()['message']
+
+
+# --- Review regressions -------------------------------------------------------------------------------------
+
+def ros_only(app, repo, monkeypatch, rows, tables=None, ping=None):
+    setup_profile(repo, [ROS], rows)
+    fake = FakeRouterOS(tables, ping or answers())
+    monkeypatch.setattr(client_discovery, 'open_driver', lambda router: fake.driver(monkeypatch))
+    body = app.test_client().get(URL).get_json()
+    return body, {row['ip']: row for row in body['devices']}
+
+
+def test_a_saved_router_address_is_online_not_absent(oxidns_app, monkeypatch):
+    """Clients forwarding DNS through the router make OxiDNS see only the router's address."""
+    app, repo = oxidns_app
+    body, devices = ros_only(app, repo, monkeypatch, [{'ip': '192.168.0.1', 'name': '主路由', 'mode': 'smart'},
+                                                      {'ip': '192.168.1.2', 'name': 'WAN', 'mode': ''}])
+    assert body['state'] == 'ok'
+    for ip in ('192.168.0.1', '192.168.1.2'):
+        assert (devices[ip]['presence'], devices[ip]['basis'], devices[ip]['router_id']) == ('online', 'router', 'ros1')
+
+
+def test_saved_addresses_outside_the_scanned_lan_are_unknown(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    tables = copy.deepcopy(TABLES)
+    # DHCP only on lan4; vlan20 is a static-only server VLAN the reader does not scan.
+    tables['/ip/address'] = tables['/ip/address'] + [
+        {'address': '192.168.20.1/24', 'interface': 'vlan20', 'dynamic': 'false', 'disabled': 'false'}]
+    tables['/ip/arp'] = tables['/ip/arp'] + [arp('192.168.20.5', 'reachable', 'vlan20')]
+    rows = [{'ip': '10.8.0.2', 'name': 'WireGuard 手机', 'mode': 'smart'},
+            {'ip': '192.168.20.5', 'name': 'NAS', 'mode': 'direct'},
+            {'ip': '192.168.0.199', 'name': '已拆除', 'mode': 'smart'}]
+    _, devices = ros_only(app, repo, monkeypatch, rows, tables)
+    assert (devices['10.8.0.2']['presence'], devices['10.8.0.2']['basis']) == ('unknown', 'outside')
+    assert (devices['192.168.20.5']['presence'], devices['192.168.20.5']['basis']) == ('unknown', 'outside')
+    # Inside the scanned LAN, absence is still evidence.
+    assert (devices['192.168.0.199']['presence'], devices['192.168.0.199']['basis']) == ('offline', 'absent')
+
+
+def test_ikuai_absence_counts_only_inside_its_lan_addresses(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    rows = [{'ip': '192.168.77.50', 'name': '打印机', 'mode': ''}, {'ip': '10.8.0.2', 'name': 'VPN', 'mode': ''}]
+    setup_profile(repo, [IKUAI], rows)
+    fake = FakeIKuai(lab_rows('monitor_lanip'), lab_rows('dhcp_lease'), lan=lab_rows('lan'))
+    monkeypatch.setattr(client_discovery, 'open_driver', lambda router: fake)
+    devices = {row['ip']: row for row in app.test_client().get(URL).get_json()['devices']}
+    assert (devices['192.168.77.50']['presence'], devices['192.168.77.50']['basis']) == ('offline', 'absent')
+    assert devices['10.8.0.2']['presence'] == 'unknown'
+    # Without the router's LAN addresses nothing proves absence.
+    fake = FakeIKuai(lab_rows('monitor_lanip'), lab_rows('dhcp_lease'), failures={'lan': 'x'})
+    body = app.test_client().get(URL).get_json()
+    assert {row['ip']: row['presence'] for row in body['devices']} == {'192.168.77.50': 'unknown', '10.8.0.2': 'unknown'}
+    assert any('局域网地址' in note for note in body['sources'][0]['notes'])
+
+
+def test_the_covering_network_is_the_policy_that_applies(oxidns_app, monkeypatch):
+    """A name-only network row (mode '') sets no policy; OxiDNS and smart_sources use the most specific policy row."""
+    app, repo = oxidns_app
+    rows = [{'ip': '192.168.0.0/24', 'name': '家里', 'mode': 'smart'},
+            {'ip': '192.168.0.96/28', 'name': '实验', 'mode': ''},
+            {'ip': '192.168.0.128/25', 'name': '访客', 'mode': 'direct'}]
+    body, _ = ros_only(app, repo, monkeypatch, rows)
+    discovered = {row['ip']: row for row in body['discovered']}
+    assert discovered['192.168.0.100']['network'] == {'ip': '192.168.0.0/24', 'name': '家里', 'mode': 'smart'}
+    assert discovered['192.168.0.147']['network'] == {'ip': '192.168.0.128/25', 'name': '访客', 'mode': 'direct'}
+
+
+def test_an_unreadable_lease_table_makes_absent_saved_rows_unknown(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    tables = {**TABLES, '/ip/dhcp-server/lease': (403, {})}
+    body, devices = ros_only(app, repo, monkeypatch, [{'ip': '192.168.0.199', 'name': '打印机', 'mode': ''}], tables)
+    assert body['sources'][0]['ok'] is True
+    assert devices['192.168.0.199']['presence'] == 'unknown'
+    assert any(note.startswith('无法读取 DHCP 租约') for note in body['sources'][0]['notes'])
+
+
+class SlowPings:
+    """A RouterOS driver whose pings use up their whole timeout."""
+
+    def __init__(self, answer, arp_delay=0.0):
+        self.answer = answer
+        self.arp_delay = arp_delay
+        self.pings = []
+        self.arp_reads = []
+
+    def ping(self, address, interface='', timeout=4):
+        self.pings.append((address, interface, timeout))
+        time.sleep(timeout)
+        if self.answer is None:
+            raise RouterError('RouterOS ping 未完成：ReadTimeout')
+        return self.answer
+
+    def _list(self, path, timeout=None):
+        self.arp_reads.append(timeout)
+        time.sleep(min(self.arp_delay, timeout or self.arp_delay))
+        return []
+
+
+def test_the_active_check_never_runs_past_its_deadline():
+    sightings = {'10.0.0.2': ros_clients.Sighting(ip='10.0.0.2', presence='recent', basis='stale')}
+    # A timed-out ARP ping must not spend the same budget again on ICMP.
+    driver = SlowPings(None)
+    started = time.monotonic()
+    notes = ros_clients.confirm(driver, sightings, [('10.0.0.2', 'lan4')], {'lan4'}, deadline=started + 1.5)
+    assert time.monotonic() - started < 1.8
+    assert [item[1] for item in driver.pings] == ['lan4']
+    assert sightings['10.0.0.2'].presence == 'recent' and notes == ['1 台设备未能及时确认，显示为近期见过']
+    # A silent ICMP ping that ends near the deadline skips the ARP re-read instead of overrunning.
+    driver = SlowPings(False, arp_delay=3)
+    started = time.monotonic()
+    ros_clients.confirm(driver, sightings, [('10.0.0.2', '')], {'lan4'}, deadline=started + 1.5)
+    assert time.monotonic() - started < 1.8
+    assert sightings['10.0.0.2'].presence == 'recent'
+    # With time left the re-read is bounded by what remains.
+    driver = SlowPings(False, arp_delay=10)
+    driver.ping = lambda address, interface='', timeout=4: False
+    started = time.monotonic()
+    ros_clients.confirm(driver, sightings, [('10.0.0.2', '')], {'lan4'}, deadline=started + 2)
+    assert time.monotonic() - started < 2.3
+    assert driver.arp_reads and 0 < driver.arp_reads[0] <= 2
+
+
+class SlowRouterOS(SlowPings):
+    """Every table read takes 0.5 s and every ping times out."""
+
+    def __init__(self):
+        super().__init__(None)
+        self.reads = []
+
+    def _list(self, path, timeout=None):
+        self.reads.append((path, timeout))
+        time.sleep(min(0.5, timeout))
+        return copy.deepcopy(TABLES[path])
+
+
+def test_a_slow_router_still_returns_its_tables_within_the_deadline():
+    driver = SlowRouterOS()
+    started = time.monotonic()
+    reading = ros_clients.read(driver, deadline=started + 3)
+    assert time.monotonic() - started < 3.3
+    assert [path for path, _ in driver.reads] == ['/ip/arp', '/ip/address', '/ip/dhcp-server', '/ip/dhcp-server/lease']
+    assert all(timeout <= 3 for _, timeout in driver.reads)
+    assert reading.complete and len(reading.sightings) == 47
+    assert {reading.sightings[ip].presence for ip in STALE} == {'recent'}
+    assert all(interface == 'lan4' for _, interface, _ in driver.pings)     # no ICMP retry after a timeout

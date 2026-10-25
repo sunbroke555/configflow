@@ -5,7 +5,7 @@ verifies the written fields; compound NAT changes compensate partial failures.
 """
 import ipaddress
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import requests
@@ -70,9 +70,9 @@ class RouterOSDriver(RouterDriver):
     def close(self):
         self.session.close()
 
-    def _request(self, method: str, path: str, values=None) -> Any:
+    def _request(self, method: str, path: str, values=None, timeout: float = TIMEOUT) -> Any:
         try:
-            kwargs = {'timeout': TIMEOUT, 'allow_redirects': False}
+            kwargs = {'timeout': timeout, 'allow_redirects': False}
             if values is not None:
                 kwargs['json'] = values
             response = getattr(self.session, method.lower())(f'{self.endpoint}/rest{path}', **kwargs)
@@ -108,11 +108,12 @@ class RouterOSDriver(RouterDriver):
             error_type = RouterError if method == 'GET' else UncertainWrite
             raise error_type('RouterOS 返回的不是 JSON') from None
 
-    def _get(self, path: str) -> Any:
-        return self._request('GET', path)
+    def _get(self, path: str, timeout: Optional[float] = None) -> Any:
+        # Only a caller with its own deadline passes timeout; tests replace _request with (method, path, values).
+        return self._request('GET', path) if timeout is None else self._request('GET', path, timeout=timeout)
 
-    def _list(self, path: str) -> List[Dict[str, Any]]:
-        rows = self._get(path)
+    def _list(self, path: str, timeout: Optional[float] = None) -> List[Dict[str, Any]]:
+        rows = self._get(path, timeout)
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise RouterError(f'RouterOS {path} 返回的列表格式无法识别')
         return rows

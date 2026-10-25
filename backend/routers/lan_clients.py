@@ -15,7 +15,9 @@ Readers (``ros_clients``, ``ikuai_clients``) turn one router's tables into
   probe     active check through the router (answered, or no answer)
   terminal  iKuai terminal monitor (traffic through the router in the last ~2 minutes)
   stale     only an unconfirmed ARP entry or lease remains
-  absent    every router was read and none lists the address
+  absent    every router was read and none lists the address, which lies in a scanned LAN
+  router    one of the routers' own addresses (the router was just read)
+  outside   (unknown) every router was read, but the address is outside their scanned LANs
 """
 import ipaddress
 from dataclasses import dataclass, field
@@ -47,7 +49,14 @@ class Sighting:
 class Reading:
     sightings: Dict[str, Sighting] = field(default_factory=dict)
     own: Set[str] = field(default_factory=set)         # the router's own addresses
+    lan: Set[ipaddress.IPv4Network] = field(default_factory=set)   # subnets whose clients were scanned
+    complete: bool = True                              # False: a missing address proves nothing
     notes: List[str] = field(default_factory=list)
+
+    def covers(self, ip: str) -> bool:
+        """Whether absence from this reading is evidence that ``ip`` is gone."""
+        address = ipaddress.IPv4Address(ip)
+        return self.complete and any(address in net for net in self.lan)
 
 
 def ipv4(value) -> str:

@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from backend.routers.base import RouterError
 from backend.routers.lan_clients import Reading, Sighting, ipv4, normalize_mac
-from backend.routers.routeros import PingNotPermitted
+from backend.routers.routeros import TIMEOUT, PingNotPermitted
 
 ONLINE_ARP = frozenset({'reachable', 'delay', 'probe'})
 GONE_ARP = frozenset({'failed', 'incomplete'})
@@ -69,6 +69,19 @@ def lan_interfaces(servers: List[dict], addresses: List[dict], wan_members: Iter
             if row.get('interface') and not _true(row.get('disabled')) and not _true(row.get('dynamic'))
             and not _true(row.get('invalid')) and _private(str(row.get('address') or '').split('/')[0])
             } - set(wan_members)
+
+
+def lan_networks(addresses: List[dict], interfaces: Set[str]) -> Set[ipaddress.IPv4Network]:
+    """Subnets of the scanned LAN interfaces: only there is a missing address evidence of absence."""
+    networks = set()
+    for row in addresses:
+        if str(row.get('interface') or '') not in interfaces or _true(row.get('disabled')) or _true(row.get('invalid')):
+            continue
+        try:
+            networks.add(ipaddress.IPv4Interface(str(row.get('address') or '')).network)
+        except ValueError:
+            continue
+    return networks
 
 
 def _lease_time(row: dict, servers: Dict[str, int]) -> Optional[int]:
@@ -169,19 +182,26 @@ def confirm(driver, sightings: Dict[str, Sighting], candidates: List[Tuple[str, 
     chosen, skipped = order[:PROBE_LIMIT], order[PROBE_LIMIT:]
     denied = threading.Event()
 
+    def budget() -> Optional[float]:
+        """Seconds a request may take and still end by the deadline; None when too little is left."""
+        left = deadline - time.monotonic()
+        return min(PROBE_TIMEOUT, left) if left >= 1 else None
+
     def check(candidate):
         ip, interface = candidate
-        if denied.is_set() or time.monotonic() + 1 > deadline:
-            return ip, None, ''
-        timeout = max(1.0, min(PROBE_TIMEOUT, deadline - time.monotonic()))
         try:
             if interface:
+                if denied.is_set() or (timeout := budget()) is None:
+                    return ip, None, ''
                 try:
                     return ip, driver.ping(ip, interface, timeout=timeout), 'arp'
                 except PingNotPermitted:
                     raise
                 except RouterError:
                     pass  # e.g. ARP ping refused on this interface type: fall back to ICMP
+            # Recomputed: a timed-out ARP ping has already spent this host's share.
+            if denied.is_set() or (timeout := budget()) is None:
+                return ip, None, ''
             return ip, driver.ping(ip, timeout=timeout), 'icmp'
         except PingNotPermitted:
             denied.set()
@@ -196,8 +216,11 @@ def confirm(driver, sightings: Dict[str, Sighting], candidates: List[Tuple[str, 
         if answered:
             sightings[ip].presence, sightings[ip].basis = 'online', 'probe'
     if silent:
+        # Without time for the re-read, ICMP-silent hosts stay recent; ARP-silent ones are still decided.
+        timeout = budget()
         try:
-            now = {ipv4(row.get('address')): str(row.get('status') or '').lower() for row in driver._list('/ip/arp')
+            rows = driver._list('/ip/arp', timeout=timeout) if timeout else []
+            now = {ipv4(row.get('address')): str(row.get('status') or '').lower() for row in rows
                    if str(row.get('interface') or '') in interfaces}
         except RouterError:
             now = {}
@@ -223,22 +246,32 @@ def read(driver, priority: Iterable[str] = (), deadline: Optional[float] = None)
     """One live read. /ip/arp is required; the other tables degrade to notes."""
     deadline = deadline if deadline is not None else time.monotonic() + 15
     reading = Reading()
-    arp = driver._list('/ip/arp')
+
+    def listing(path):
+        # Each table gets only what is left, so a slow router still returns what it read in time.
+        left = deadline - time.monotonic()
+        if left < 1:
+            raise RouterError('路由器响应太慢，读取时间已用完')
+        return driver._list(path, timeout=min(TIMEOUT, left))
+
+    arp = listing('/ip/arp')
 
     def optional(path, label):
         try:
-            return driver._list(path), True
+            return listing(path), True
         except RouterError as error:
             reading.notes.append(f'无法读取{label}：{error}')
             return [], False
 
-    addresses, _ = optional('/ip/address', ' IP 地址')
-    servers, _ = optional('/ip/dhcp-server', ' DHCP 服务')
-    leases, _ = optional('/ip/dhcp-server/lease', ' DHCP 租约')
+    addresses, has_addresses = optional('/ip/address', ' IP 地址')
+    servers, has_servers = optional('/ip/dhcp-server', ' DHCP 服务')
+    leases, has_leases = optional('/ip/dhcp-server/lease', ' DHCP 租约')
+    # Without these a host that only proves itself through DHCP, or the LAN's extent, is unknown.
+    reading.complete = has_addresses and has_servers and has_leases
     interfaces = lan_interfaces(servers, [])
     if not interfaces:
         try:
-            members = [str(row.get('interface') or '') for row in driver._list('/interface/list/member')
+            members = [str(row.get('interface') or '') for row in listing('/interface/list/member')
                        if str(row.get('list') or '').upper() == 'WAN']
         except RouterError:
             members = []
@@ -248,6 +281,9 @@ def read(driver, priority: Iterable[str] = (), deadline: Optional[float] = None)
     if not interfaces:
         raise RouterError('无法确定局域网接口：没有启用的 DHCP 服务，也没有配置私有地址的接口')
     reading.own = {ip for row in addresses if (ip := ipv4(str(row.get('address') or '').split('/')[0]))}
+    reading.lan = lan_networks(addresses, interfaces)
+    if not reading.complete:
+        reading.notes.append('部分表读取失败，没有出现的已保存设备显示为未知')
     reading.sightings, candidates = classify(arp, leases, servers, interfaces)
     reading.notes += confirm(driver, reading.sightings, candidates, interfaces, priority, deadline)
     return reading

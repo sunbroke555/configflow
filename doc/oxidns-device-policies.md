@@ -59,26 +59,32 @@
   "discovered": [           // 路由器看到、但没有自己那一行的 IPv4 地址，按地址排序
     {"ip": "192.168.0.147", "mac": "16:F7:C5:8A:16:A4", "hostname": "iPhone", "sources": ["arp", "lease"],
      "presence": "online", "basis": "arp", "last_seen": 286, "router_id": "router_x",
-     "network": {"ip": "192.168.0.0/24", "name": "家里", "mode": "smart"}}   // 覆盖它的最具体已保存网段，没有则为 null
+     "network": {"ip": "192.168.0.0/24", "name": "家里", "mode": "smart"}}   // 对它生效的网段策略，没有则为 null
   ]
 }
 ```
 
 - `presence`：`online` 在线、`recent` 近期见过（路由器记得它但无法确认）、`offline` 离线、`unknown` 未知；已保存的网段行为 `network`，IPv6 行为 `unknown`。
-- `basis` 说明依据：`arp`（ARP 状态）、`lease`（DHCP 续租时间）、`probe`（经路由器主动确认）、`terminal`（iKuai 终端监控）、`stale`（只有未确认的 ARP 记录或租约）、`absent`（所有路由器都读取成功但没有该地址）。
+- `basis` 说明依据：`arp`（ARP 状态）、`lease`（DHCP 续租时间）、`probe`（经路由器主动确认）、`terminal`（iKuai 终端监控）、`stale`（只有未确认的 ARP 记录或租约）、`absent`（所有路由器都读取成功，地址在某台路由器扫描的局域网网段内，但没有出现）、`router`（路由器自己的地址）、`outside`（与 `unknown` 一起出现：地址不在任何路由器扫描的局域网网段内）。其他 `unknown` 的 `basis` 为空。
 - `sources`：`arp`、`lease`（DHCP 租约）、`online`（iKuai 在线终端）。`last_seen` 是距上次 DHCP 通信的秒数，未知为 `null`。
-- 已保存的单个 IPv4 没有出现在任何路由器中：所有路由器读取成功时为 `offline`，否则为 `unknown`。
+- 已保存的单个 IPv4 是某台读取成功的路由器自己的地址（含管理地址）：`online`，`basis` 为 `router`，`router_id` 为该路由器。客户端把路由器当 DNS 转发时 OxiDNS 只看到路由器地址，这样的行不会被当成离线。
+- 已保存的单个 IPv4 没有出现在任何路由器中：只有所有路由器都读取成功、所需的表都读到，并且地址落在某台路由器扫描的局域网网段内，才为 `offline`（`absent`）。网段外的地址（例如没开 DHCP 的服务器 VLAN、WireGuard 对端、其他设备后面的子网）为 `unknown`（`outside`）。有路由器读取失败，或 RouterOS 的 IP 地址、DHCP 服务、DHCP 租约表读取失败，或 iKuai 的 `lan` 读取失败时为 `unknown`，来源提示中会说明。
+- `network` 只看设置了 DNS 策略（`mode` 非空）的网段行，取其中前缀最长的一条，与 OxiDNS 和 RouterOS 策略路由（`smart_sources`）实际生效的策略一致；只有名称、没有策略的网段行不会出现在这里。
 - `discovered` 不含路由器自己的地址、路由器管理地址和本配置空间 Agent 主机的地址，也不含只有失败 ARP 记录（无 MAC、无租约）的地址。
 
 ### RouterOS 判断规则
 
-只看局域网：启用的 DHCP 服务所在接口；没有 DHCP 服务时，改用配置了静态私有地址（RFC1918）的接口，排除动态地址（例如 DHCP 获取地址的 WAN）和接口列表 `WAN` 的成员。WAN 侧大量 `failed` ARP 记录不会出现。
+只看局域网：启用的 DHCP 服务所在接口；没有 DHCP 服务时，改用配置了静态私有地址（RFC1918）的接口，排除动态地址（例如 DHCP 获取地址的 WAN）和接口列表 `WAN` 的成员。WAN 侧大量 `failed` ARP 记录不会出现。这些接口上 `/ip/address` 的网段就是判断离线的范围；其他接口（如只配静态地址的服务器 VLAN）上的已保存设备显示为未知。
 
 1. ARP 状态 `reachable` / `delay` / `probe`：在线。
 2. 租约 `bound` 且 20 分钟内续租过：在线（默认租期 30 分钟，在线客户端约每 15 分钟续租）。
 3. ARP `failed` / `incomplete`：离线。
 4. 租约错过续租（超过租期一半再加 5 分钟，至少 20 分钟）：离线。静态租约显示 `waiting` 而主机使用静态 IP 的情况不算错过续租。
-5. 只剩 `stale` / `permanent` ARP 记录（RouterOS 中 stale 记录不会过期，常见于静态 IP 的虚拟机），或租约较新但没有 ARP：经路由器主动确认。在该接口上发 ARP ping（`POST /rest/ping {"address","count":"2","interval":"300ms","arp-ping":"yes","interface"}`，屏蔽 ICMP 的主机也会应答）；接口不支持时改用普通 ping，并再读一次 ARP 表：`reachable` 为在线，`failed` / `incomplete` 为离线。已保存的地址优先，每次最多确认 32 台、6 个并发、单次请求 4 秒。
+5. 只剩 `stale` / `permanent` ARP 记录（RouterOS 中 stale 记录不会过期，常见于静态 IP 的虚拟机），或租约较新但没有 ARP：经路由器主动确认。在该接口上发 ARP ping（`POST /rest/ping {"address","count":"2","interval":"300ms","arp-ping":"yes","interface"}`，屏蔽 ICMP 的主机也会应答）：
+   - 有应答：在线（`probe`）。
+   - 两次 ARP ping 都没有应答：直接判为离线（`probe`）。同一网段内在线的主机必须应答 ARP，所以这条不再等 ARP 表变化；之后若有时间再读一次 ARP 表，`reachable` 仍会改判为在线。已在 RouterOS 7.24.5 CHR 上实测：不存在的地址无应答、判为离线，在线主机应答、判为在线。注意：处于深度休眠、暂时不应答 ARP 的设备可能因此显示在「已离线」，这一点尚未在真实设备上实测。
+   - ARP ping 请求失败（例如该接口类型不支持 ARP ping）：改用普通 ping。有应答为在线；没有应答时再读一次 ARP 表：`reachable` 为在线，`failed` / `incomplete` 为离线，其余仍为近期见过。
+   - 已保存的地址优先，每次最多确认 32 台、6 个并发。每个请求只用到截止时间前剩余的时间（单次最多 4 秒，不足 1 秒就不再发起），ARP ping 超时后不会再用普通 ping 重试同样长的时间；来不及确认的设备显示为近期见过。各表的读取同样只用剩余时间。这样确认阶段不会超过整台路由器的读取时限，已读到的 ARP 和租约不会因超时被丢弃。
 6. RouterOS 的 `/ping` 需要用户组带 `test` 权限；没有时返回 HTTP 500 `not enough permissions (9)`，此时不再继续，这些设备显示为「近期见过」，并提示「账号缺少 test 权限，无法确认静态 IP 设备是否在线」。超时或超过上限的设备同样显示为近期见过。读取和确认都不修改路由器配置。
 
 ### iKuai 4.x 判断规则
@@ -87,7 +93,7 @@
 
 - `monitor_lanip`（终端监控）中的地址为在线。名称取备注 `comment`、终端名 `termname`、主机名 `hostname` 中第一个非空值；只有 DHCP 客户端有 `hostname`，静态 IP 设备没有这个字段。终端监控只列出最近有流量经过路由器的设备（4.0.314 实测：客户端停止流量后 100–120 秒从列表消失，租约仍在），来源提示「按 2 分钟内经过路由器的流量判断在线」。
 - `dhcp_lease` 只用于发现设备；不在终端监控中的地址为离线。`last_seen` 取距上次分配或续租的秒数（`end_time - start_time - timeout`，只用路由器自己的时钟；续租时 `start_time` 会更新）。读取失败只记为提示。
-- `lan` 的 `ip_mask`（如 `192.168.77.1/255.255.255.0`）是路由器自己的局域网地址，不会出现在 `discovered` 中；读取失败时忽略。
+- `lan` 的 `ip_mask`（如 `192.168.77.1/255.255.255.0`）是路由器自己的局域网地址，不会出现在 `discovered` 中；它的网段也是判断离线的范围：已保存的地址只有在这些网段内、又不在终端监控中时才算离线。`lan` 读取失败时，未出现的已保存设备显示为未知，并提示「无法读取路由器的局域网地址，没有出现的已保存设备显示为未知」。
 - 错误码（4.0.314 实测，很多错误响应也带 `"Result":10000`，不能据此判断为 3.x）：
   - `1001`：账号没有该功能的读取权限，`Label` 为功能名（如「终端监控IPv4」）；受限账号调用不存在的接口也返回 1001。
   - `1002`：账号没有执行（修改）权限。

@@ -84,11 +84,13 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
               'devices': [], 'discovered': []}
     if not routers:
         result.update(state='unsupported', message=UNSUPPORTED)
-        result['devices'] = [{**row, **_saved(networks[row['ip']], {}, False)} for row in devices]
+        result['devices'] = [{**row, **_saved(networks[row['ip']])} for row in devices]
         return result
     readings = _read_all(routers, frozenset(saved_hosts), timeout or ROUTER_TIMEOUT)
     merged: Dict[str, Sighting] = {}
     excluded = {ip for ip in (ipv4(host) for host in agent_hosts) if ip}
+    routers_at: Dict[str, str] = {}       # own address of a router that was just read -> its id
+    done: List[Reading] = []
     for router, reading, error in readings:
         source = {'id': router.get('id'), 'name': router.get('name') or router.get('id'), 'type': router['type'],
                   'ok': reading is not None, 'error': error, 'notes': list(reading.notes) if reading else []}
@@ -96,10 +98,14 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
             # Smart IPv4 rows are the sources of RouterOS policy routing when it is enabled.
             source['policy_routing'] = bool(router.get('ros_policy_rule_sets'))
         result['sources'].append(source)
-        excluded |= {ip for ip in [_endpoint_ip(router)] if ip}
+        endpoint = {ip for ip in [_endpoint_ip(router)] if ip}
+        excluded |= endpoint
         if reading is None:
             continue
+        done.append(reading)
         excluded |= reading.own
+        for ip in endpoint | reading.own:
+            routers_at.setdefault(ip, router.get('id') or '')
         for ip, sighting in reading.sightings.items():
             sighting.router_id = router.get('id') or ''
             merged[ip] = better(merged.get(ip), sighting)
@@ -108,8 +114,10 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
     result['state'] = 'ok' if complete else ('partial' if any(ok) else 'failed')
     result['message'] = '' if complete else ('部分路由器读取失败，未出现的设备显示为未知' if any(ok)
                                               else '路由器读取失败，暂时无法发现设备')
-    result['devices'] = [{**row, **_saved(networks[row['ip']], merged, complete)} for row in devices]
-    covering = sorted(((net, row) for row in devices if (net := networks[row['ip']]) is not None
+    evidence = Evidence(merged, routers_at, done if complete else None)
+    result['devices'] = [{**row, **_saved(networks[row['ip']], evidence)} for row in devices]
+    # Only rows with a mode set a policy; OxiDNS and RouterOS smart_sources apply the most specific one.
+    covering = sorted(((net, row) for row in devices if row['mode'] and (net := networks[row['ip']]) is not None
                        and net.version == 4 and net.num_addresses > 1), key=lambda item: -item[0].prefixlen)
     for ip in sorted(merged, key=ipaddress.IPv4Address):
         sighting = merged[ip]
@@ -123,13 +131,38 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
     return result
 
 
-def _saved(net, merged: Dict[str, Sighting], complete: bool) -> dict:
+class Evidence:
+    """What the routers said, for the saved rows.
+
+    ``readings`` is None unless every router was read: then a saved address
+    that no router lists is offline if it lies in a LAN subnet some router
+    scanned completely, and unknown ('outside') otherwise.
+    """
+
+    def __init__(self, merged: Dict[str, Sighting], routers_at: Dict[str, str], readings: Optional[List[Reading]]):
+        self.merged, self.routers_at, self.readings = merged, routers_at, readings
+
+
+def _saved(net, evidence: Optional[Evidence] = None) -> dict:
     empty = {'mac': '', 'hostname': '', 'sources': [], 'basis': '', 'last_seen': None, 'router_id': ''}
     if net is None or net.version == 6:
         return {**empty, 'presence': 'unknown'}
     if net.num_addresses > 1:
         return {**empty, 'presence': 'network'}
-    sighting = merged.get(str(net.network_address))
+    if evidence is None:
+        return {**empty, 'presence': 'unknown'}
+    ip = str(net.network_address)
+    sighting = evidence.merged.get(ip)
+    if ip in evidence.routers_at:
+        # The router itself is never in its own ARP or lease table; it was just read.
+        return {**(sighting.public() if sighting else empty), 'presence': 'online', 'basis': 'router',
+                'router_id': evidence.routers_at[ip]}
     if sighting:
         return sighting.public()
-    return {**empty, 'presence': 'offline', 'basis': 'absent'} if complete else {**empty, 'presence': 'unknown'}
+    if evidence.readings is None:
+        return {**empty, 'presence': 'unknown'}
+    if any(reading.covers(ip) for reading in evidence.readings):
+        return {**empty, 'presence': 'offline', 'basis': 'absent'}
+    if all(reading.complete for reading in evidence.readings):
+        return {**empty, 'presence': 'unknown', 'basis': 'outside'}
+    return {**empty, 'presence': 'unknown'}

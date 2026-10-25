@@ -2,7 +2,8 @@
 
 ``monitor_lanip`` (终端监控) lists the clients that sent traffic through the
 router in roughly the last two minutes: those are online. ``dhcp_lease`` only
-adds addresses to discover. ``lan`` gives the router's own LAN addresses.
+adds addresses to discover. ``lan`` gives the router's own LAN addresses and
+subnets: only inside them does a missing address count as offline.
 
 Shapes verified on 4.0.314 (fixtures: backend/testdata/ikuai_clients_40314.json):
   - ``show`` with ``TYPE: data,total`` and ``limit: "<offset>,<count>"`` returns
@@ -17,7 +18,7 @@ Shapes verified on 4.0.314 (fixtures: backend/testdata/ikuai_clients_40314.json)
 Rows without an IPv4 address are skipped and unknown fields ignored.
 """
 import ipaddress
-from typing import List, Optional, Set
+from typing import List, Optional
 
 from backend.routers.base import RouterError
 from backend.routers.ikuai import decode_value
@@ -26,6 +27,7 @@ from backend.routers.lan_clients import Reading, Sighting, ipv4, normalize_mac
 PAGE = 1000
 MAX_PAGES = 10
 NOTE_TRAFFIC = '按 2 分钟内经过路由器的流量判断在线'
+NOTE_NO_LAN = '无法读取路由器的局域网地址，没有出现的已保存设备显示为未知'
 
 
 def rows(driver, func_name: str) -> List[dict]:
@@ -84,18 +86,18 @@ def parse_lease(row: dict) -> Optional[Sighting]:
                     presence='offline', basis='absent', last_seen=last_seen)
 
 
-def own_addresses(driver) -> Set[str]:
-    """The router's LAN addresses (``lan`` ip_mask); best effort."""
+def lan_addresses(driver) -> Optional[List[ipaddress.IPv4Interface]]:
+    """The router's LAN interfaces (``lan`` ip_mask), or None when ``lan`` cannot be read."""
     try:
         results = driver.call('lan', {'TYPE': 'data,total', 'limit': f'0,{PAGE}'})
     except RouterError:
-        return set()
-    addresses = set()
+        return None
+    addresses = []
     for row in results.get('data') or []:
         text = str(row.get('ip_mask') or '') if isinstance(row, dict) else ''
         for item in text.replace(',', ' ').split():
             try:
-                addresses.add(str(ipaddress.IPv4Interface(item).ip))
+                addresses.append(ipaddress.IPv4Interface(item))
             except ValueError:
                 continue
     return addresses
@@ -130,5 +132,11 @@ def read(driver, priority=(), deadline=None) -> Reading:
                 current.last_seen = sighting.last_seen
         else:
             reading.sightings[sighting.ip] = sighting
-    reading.own = own_addresses(driver)
+    lan = lan_addresses(driver)
+    if lan is None:
+        # Without the LAN subnets a saved address missing from the monitor may simply be elsewhere.
+        reading.complete = False
+        reading.notes.append(NOTE_NO_LAN)
+    reading.own = {str(item.ip) for item in lan or []}
+    reading.lan = {item.network for item in lan or []}
     return reading
