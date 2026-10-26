@@ -479,7 +479,9 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
               {{ item }}
             </li>
           </ul>
-          <p v-if="!plan.blockers.length && plan.empty" class="m-0 text-muted-foreground">已全部同步，无需发布。</p>
+          <p v-if="!plan.blockers.length && plan.empty" class="m-0 text-muted-foreground">
+            {{ plan.sync_baseline ? '路由器上的内容已和设置一致，没有需要写入的变更。确认后会重新建立规则同步的基准，自动同步随后恢复。' : '已全部同步，无需发布。' }}
+          </p>
 
           <ol v-if="plan.stages.length" class="m-0 flex list-none flex-col gap-3 p-0">
             <li v-for="(stage, index) in plan.stages" :key="stage.key" class="rounded-md border border-border px-3 py-2.5">
@@ -529,7 +531,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
           <Button variant="outline" @click="planVisible = false">{{ releaseResult ? '关闭' : '取消' }}</Button>
           <Button v-if="!releaseResult" :disabled="!canApply || applying" @click="applyPlan">
             <Loader2 v-if="applying" class="size-4 animate-spin" />
-            确认发布
+            {{ plan?.empty && plan.sync_baseline ? '重新建立同步基准' : '确认发布' }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -867,6 +869,8 @@ interface Plan {
   warnings: string[]
   fingerprint: string
   empty: boolean
+  /** 无需写入，但确认后会建立规则自动同步的基准 */
+  sync_baseline?: boolean
 }
 interface ReleaseResult {
   ok: boolean
@@ -1405,7 +1409,7 @@ const loadReport = async (router: RouterItem) => {
   }
 }
 
-const canApply = computed(() => Boolean(plan.value && !plan.value.blockers.length && !plan.value.empty))
+const canApply = computed(() => Boolean(plan.value && !plan.value.blockers.length && (!plan.value.empty || plan.value.sync_baseline)))
 const stageTitle = (key: string) => plan.value?.stages.find(stage => stage.key === key)?.title || key
 
 const openPlan = async () => {
@@ -1437,7 +1441,7 @@ const applyPlan = async () => {
     const { data } = await withPageReloadBlocked(() => routerApi.apply(router.id, fingerprint))
     if (revision !== inspectionRevision) return
     releaseResult.value = data.result
-    if (data.result.ok) notify.success('发布完成')
+    if (data.result.ok) notify.success(plan.value?.empty ? '已重新建立同步基准' : '发布完成')
     else notify.error('发布失败，请检查发布与回滚记录')
   } catch (error: any) {
     if (revision !== inspectionRevision) return

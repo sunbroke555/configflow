@@ -89,6 +89,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { routerApi, type RouterRuleSyncSettings, type RouterRuleSyncState } from '@/api'
 import { notify } from '@/lib/feedback'
 import { optionHelp } from '@/lib/optionCopy'
+import { stripTrailingPunctuation } from '@/lib/text'
 import { beginScopedRequest, endScopedRequest } from '@/profileContext'
 const props = defineProps<{ id: string; name: string; profile: string; disabled?: boolean }>()
 const emit = defineEmits<{ preview: []; busy: [value: boolean] }>()
@@ -120,6 +121,10 @@ const tone = computed(() => state.value?.status === 'failed' ? 'text-destructive
 const statusNote = computed(() => {
   const current = state.value
   if (!current) return ''
+  // A paused sync resumes only after a confirmed release records a new baseline.
+  if (current.status === 'paused' && !current.message.includes('预览发布')) {
+    return `${stripTrailingPunctuation(current.message)}。处理后点「预览发布」并确认，重新建立同步基准。`
+  }
   if (needsAttention.value || running.value) return current.message
   if (!current.ready) {
     if (current.message.startsWith('本次发布未建立自动同步基准：')) {
@@ -169,6 +174,8 @@ function save(value: RouterRuleSyncSettings) { return mutate(() => routerApi.sav
 function syncNow() { return mutate(() => routerApi.startRuleSync(props.id, props.profile), '已开始检查远程规则') }
 function visible() { if (!document.hidden && running.value && !saving.value) void load() }
 document.addEventListener('visibilitychange', visible)
+// A release from the page (disabled while it runs) may have recorded a new baseline.
+watch(() => props.disabled, (now, before) => { if (before && !now && !saving.value) void load() })
 watch(() => [props.id, props.profile], () => { settings.value = null; state.value = null; saving.value = false; emit('busy', false); void load() }, { immediate: true })
 onBeforeUnmount(() => { epoch++; clearTimeout(timer); document.removeEventListener('visibilitychange', visible); emit('busy', false) })
 </script>

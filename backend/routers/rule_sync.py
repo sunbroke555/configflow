@@ -184,7 +184,27 @@ def _cache_sources(config, router, contents):
         write_validated_rule_cache(source, contents[rule_id], config_data=config)
 
 
-def sync(profile_id, router_id, download=None):
+RESUME_HINT = '请先「预览发布」并确认，重新建立同步基准'
+
+
+def paused_message(receipt):
+    """Why a paused sync is waiting, and how to resume it."""
+    reason = (receipt.get('message') or '').rstrip('。.；;，, ')
+    if not reason:
+        return f'同步已暂停。{RESUME_HINT}'
+    # Most pause reasons already say to preview and publish.
+    return f'同步已暂停：{reason}' + ('' if '预览发布' in reason else f'。{RESUME_HINT}')
+
+
+def needs_baseline(profile_id, router):
+    """An automatic sync waits for a manual release to record its baseline."""
+    if router.get('type') != 'routeros' or not router.get('auto_rule_sync'):
+        return False
+    receipt = store.read(profile_id, router['id'])
+    return not receipt.get('baseline') or receipt.get('status') in ('paused', 'failed', 'waiting')
+
+
+def sync(profile_id, router_id, download=None, trigger='schedule'):
     from backend.routers.route_editor import router_operation_lock
     from backend.routes.routers import _driver, _inspect
     from backend.routers.plan import build_plan
@@ -288,7 +308,7 @@ def sync(profile_id, router_id, download=None):
         from backend.utils import task_status
         started = task_status.parse_time(timestamp)
         task_status.record(f'router_rule_sync:{profile_id}:{router_id}', ok=receipt.get('status') == 'synced',
-                           started_at=timestamp, error=receipt.get('message', ''),
+                           started_at=timestamp, error=receipt.get('message', ''), trigger=trigger,
                            duration_ms=(datetime.now(timezone.utc) - started).total_seconds() * 1000 if started else 0)
         return store.public(receipt, True)
 
@@ -347,8 +367,10 @@ def start_job(profile_id, router_id):
             receipt = store.read(profile_id, router_id)
             if not router or not router.get('auto_rule_sync') or not receipt.get('baseline'):
                 raise RouterError('请开启自动同步，并先手动预览发布一次')
-            if receipt.get('status') in ('running', 'paused', 'queued'):
-                raise RouterError('上次同步尚未完成或需要人工确认')
+            if receipt.get('status') == 'paused':
+                raise RouterError(paused_message(receipt))
+            if receipt.get('status') in ('running', 'queued'):
+                raise RouterError('上次同步尚未完成，请稍后重试')
             receipt.update(status='queued', message='已加入同步任务', checked_at=now())
             store.write(profile_id, router_id, receipt)
     except Exception:
@@ -357,7 +379,7 @@ def start_job(profile_id, router_id):
     def run():
         from backend.common.config import reset_config_context
         try:
-            sync(profile_id, router_id)
+            sync(profile_id, router_id, trigger='manual')
         except RouterError as error:
             # A disable/cancel between enqueue and execution must not leave a
             # permanent loading indicator. Other workers cannot overlap this job.

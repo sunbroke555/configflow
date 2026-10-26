@@ -463,6 +463,34 @@ describe('routers view', () => {
     expect(routerApi.apply).not.toHaveBeenCalled()
   })
 
+  it('confirms an empty plan when it only re-records the rule sync baseline', async () => {
+    vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, generated_at: '2026-10-17T10:00:00', report: {
+      ...REPORT,
+      in_sync: true, summary: { synced: 1, not_required: 1 },
+      desired: { ...REPORT.desired, warnings: [] },
+      routes: { ...REPORT.routes, items: [REPORT.routes.items[0]] },
+      nat_bypass: { items: [], disabled_rules: [] },
+      return_routing: { status: 'disabled', message: RETURN_DISABLED_MESSAGE }
+    } } } as any)
+    vi.mocked(routerApi.plan).mockResolvedValue({ data: { success: true, plan: {
+      blockers: [], warnings: [], fingerprint: 'baseline123', empty: true, sync_baseline: true,
+      stages: [{ key: 'routes', title: '主路由代理路由', enabled: true, ops: [] }]
+    } } } as any)
+    vi.mocked(routerApi.apply).mockResolvedValue({ data: { success: true, result: { ok: true, rollback: [], log: [] } } } as any)
+    const wrapper = await mountRouter({ ...ROUTER, type: 'routeros', manage_return_routing: false })
+    await wrapper.findAll('button').find(button => button.text().includes('差异报告'))!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('预览发布'))!.trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('确认后会重新建立规则同步的基准，自动同步随后恢复。')
+    expect(document.body.textContent).not.toContain('已全部同步，无需发布')
+    expect(buttonInDocument('确认发布')).toBeUndefined()
+    buttonInDocument('重新建立同步基准').click()
+    await flushPromises()
+    expect(routerApi.apply).toHaveBeenCalledWith('router_1', 'baseline123')
+    expect(notify.success).toHaveBeenCalledWith('已重新建立同步基准')
+  })
+
   it('lists iKuai policy rules that go back to static routes without return routing', async () => {
     vi.mocked(routerApi.report).mockResolvedValue({ data: { success: true, generated_at: '2026-10-17T10:00:00', report: {
       ...REPORT,

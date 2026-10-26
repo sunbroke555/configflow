@@ -356,6 +356,12 @@ def router_plan(router_id):
         return jsonify({'success': False, 'message': str(error)}), 502
     finally:
         driver.close()
+    if plan['empty'] and not plan['blockers']:
+        from backend.common.profile_context import resolve_profile_id
+        from backend.routers.rule_sync import needs_baseline
+        # Nothing to write, but confirming still records the automatic sync
+        # baseline, which is how a paused sync resumes.
+        plan['sync_baseline'] = needs_baseline(resolve_profile_id(), router)
     return jsonify({'success': True, 'plan': plan, 'generated_at': _now()})
 
 
@@ -714,7 +720,10 @@ def router_rule_sync(router_id):
             receipt = sync_store.read(profile_id, router_id)
             if not router.get('auto_rule_sync') or not receipt.get('baseline'):
                 return jsonify(success=False, message='请开启自动同步，并先手动预览发布一次'), 409
-            if receipt.get('status') in ('paused', 'running', 'queued'):
+            if receipt.get('status') == 'paused':
+                from backend.routers.rule_sync import paused_message
+                return jsonify(success=False, message=paused_message(receipt)), 409
+            if receipt.get('status') in ('running', 'queued'):
                 return jsonify(success=False, message=receipt.get('message') or '同步尚未就绪'), 409
             start_job(profile_id, router_id)
         response = jsonify(success=True, settings={
