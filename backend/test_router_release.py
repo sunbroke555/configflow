@@ -146,7 +146,8 @@ class FakeAgent:
                                       if str(rule['priority']) != str(spec['priority'])]
         self.state['fwmark_rules'].append({'priority': str(spec['priority']),
                                           'mark': spec['mark'] + '/' + spec['mark'], 'table': str(spec['table'])})
-        self.state['managed'] = {'spec': copy.deepcopy(spec), 'table_present': True}
+        # Like the Go Agent, report a protocol 2 spec with "proxy_dst": null.
+        self.state['managed'] = {'spec': {'proxy_dst': None, **copy.deepcopy(spec)}, 'table_present': True}
         self.state['safety']['allocation'] = {
             'version': 1, 'reused': True, **{key: spec[key] for key in ('table', 'priority', 'mark')}}
         return {'success': True}

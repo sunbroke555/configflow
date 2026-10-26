@@ -602,7 +602,7 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     current_return = (return_routing.get('managed') or {}).get('spec') or {}
     retained_return = [
         str(old if old.subnet_of(target) else target)
-        for old in _networks(current_return.get('proxy_dst', []))
+        for old in _networks(current_return.get('proxy_dst') or [])
         for target in _networks(skipped) if old.overlaps(target)]
     if ros_policy is not None:
         for op in ros_policy['ops']:
