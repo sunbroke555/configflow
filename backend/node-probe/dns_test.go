@@ -116,8 +116,10 @@ func proxyTestDNS(t *testing.T, answer string, rcode int) (string, *atomic.Int32
 		if len(req.Question) != 1 || req.Question[0].Name != "proxy.test." {
 			t.Errorf("worker resolved the wrong domain: %v", req.Question)
 			response.Rcode = D.RcodeNameError
-		} else if answer != "" && req.Question[0].Qtype == D.TypeA {
+		} else if ip := net.ParseIP(answer); ip != nil && ip.To4() != nil && req.Question[0].Qtype == D.TypeA {
 			response.Answer = []D.RR{&D.A{Hdr: D.RR_Header{Name: "proxy.test.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60}, A: net.ParseIP(answer)}}
+		} else if ip != nil && ip.To4() == nil && req.Question[0].Qtype == D.TypeAAAA {
+			response.Answer = []D.RR{&D.AAAA{Hdr: D.RR_Header{Name: "proxy.test.", Rrtype: D.TypeAAAA, Class: D.ClassINET, Ttl: 60}, AAAA: ip}}
 		}
 		_ = w.WriteMsg(response)
 	})}
@@ -128,6 +130,15 @@ func proxyTestDNS(t *testing.T, answer string, rcode int) (string, *atomic.Int32
 
 func dnsTLSProxy(t *testing.T) (map[string]any, *atomic.Int32) {
 	t.Helper()
+	return dnsTLSProxyNetwork(t, "tcp4", "127.0.0.1:0")
+}
+
+func dnsTLSProxyNetwork(t *testing.T, network, address string) (map[string]any, *atomic.Int32) {
+	t.Helper()
+	listener, err := net.Listen(network, address)
+	if err != nil {
+		t.Fatal(err)
+	}
 	target := targetServer(t, 204)
 	clientHellos := &atomic.Int32{}
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -152,6 +163,8 @@ func dnsTLSProxy(t *testing.T) (map[string]any, *atomic.Int32) {
 		go func() { _, _ = io.Copy(upstream, rw); _ = upstream.Close() }()
 		_, _ = io.Copy(conn, upstream)
 	}))
+	_ = server.Listener.Close()
+	server.Listener = listener
 	server.TLS = &tls.Config{GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
 		if info.ServerName != "proxy.test" {
 			t.Errorf("DNS override changed TLS SNI: %q", info.ServerName)
@@ -252,6 +265,32 @@ func TestProxyDNSWorkerProcess(t *testing.T) {
 			}
 			if bytes.Contains(output, []byte("private-")) || bytes.Contains(output, []byte("proxy.test")) {
 				t.Fatalf("private details escaped in result: %s", output)
+			}
+		})
+	}
+}
+
+func TestProxyDNSWorkerIPv6(t *testing.T) {
+	for _, mode := range []string{"literal/system DNS", "literal/custom DNS", "AAAA/custom DNS"} {
+		t.Run(mode, func(t *testing.T) {
+			node, hellos := dnsTLSProxyNetwork(t, "tcp6", "[::1]:0")
+			literal := strings.HasPrefix(mode, "literal/")
+			if literal {
+				node["server"] = "::1"
+				node["sni"] = "proxy.test"
+			}
+			var servers []string
+			var calls *atomic.Int32
+			if strings.HasSuffix(mode, "/custom DNS") {
+				address, count := proxyTestDNS(t, "::1", D.RcodeSuccess)
+				servers, calls = []string{address}, count
+			}
+			item, output, err := dnsWorker(t, node, servers, "")
+			if err != nil || item.Latency == nil || item.Error != "" || hellos.Load() != 1 {
+				t.Fatalf("IPv6 worker=%+v, err=%v, TLS hellos=%d: %s", item, err, hellos.Load(), output)
+			}
+			if calls != nil && ((literal && calls.Load() != 0) || (!literal && calls.Load() == 0)) {
+				t.Fatalf("unexpected proxy DNS queries for %s: %d", mode, calls.Load())
 			}
 		})
 	}
