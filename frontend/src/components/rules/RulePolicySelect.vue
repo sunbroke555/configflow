@@ -6,8 +6,8 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { cn } from '@/lib/utils'
 
 /**
- * 列表与卡片里的策略快速切换：触发器保持原来的 chip / 文字外观，
- * 箭头只在悬停、聚焦或触屏时出现，平时不增加视觉噪点。
+ * 列表与卡片里的策略快速切换：与 DNS 共用轻量文字外观，
+ * 常驻淡箭头标明可修改，悬停、聚焦或展开时加深。
  */
 const props = defineProps<{
   modelValue: string
@@ -54,20 +54,20 @@ function choose(value: string) {
         :disabled="disabled || loading"
         :aria-label="label"
         :title="label"
-        :class="cn('group/policy rule-policy-trigger relative inline-flex max-w-full min-w-0 items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:cursor-default', triggerClass)"
+        :class="cn('group/policy rule-policy-trigger relative inline-flex h-[30px] w-full max-w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-left text-[12px] transition-colors hover:bg-accent/60 outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:cursor-default', triggerClass)"
         @click.stop
       >
         <Loader2 v-if="loading" class="size-3.5 shrink-0 animate-spin text-primary-accent" aria-hidden="true" />
-        <span class="min-w-0 truncate"><slot>{{ modelValue }}</slot></span>
+        <span class="min-w-0 flex-1 truncate"><slot>{{ modelValue }}</slot></span>
         <ChevronDown
           v-if="!disabled && !loading"
-          class="size-3 shrink-0 opacity-0 transition-opacity group-hover/policy:opacity-70 group-focus-visible/policy:opacity-70 group-data-[state=open]/policy:opacity-70 [@media(pointer:coarse)]:opacity-70"
+          class="size-3 shrink-0 text-muted-foreground opacity-60 transition-opacity group-hover/policy:opacity-100 group-focus-visible/policy:opacity-100 group-data-[state=open]/policy:opacity-100"
           aria-hidden="true"
         />
       </button>
     </PopoverTrigger>
     <PopoverContent
-      align="end"
+      align="start"
       :collision-padding="12"
       class="w-[18rem] max-w-[min(calc(100vw-1.5rem),var(--reka-popover-content-available-width))] overflow-hidden p-0 shadow-overlay"
       :aria-label="`${label} 选择`"

@@ -150,7 +150,7 @@
         <span class="w-[118px] max-md:w-[92px]">类型</span>
         <span class="min-w-0 flex-1">匹配值</span>
         <span class="w-[160px] max-lg:hidden">备注</span>
-        <span class="w-[120px] text-right">策略</span>
+        <span class="w-[120px] pl-2">策略</span>
         <span v-if="dnsColumn" class="w-[148px] pl-2 xl:w-[188px]">DNS</span>
         <span class="w-[136px]" />
       </div>
@@ -165,7 +165,8 @@
           <div
             v-if="item.isGroup"
             :class="cn(
-              'flex w-full items-center gap-2.5 border-0 border-b border-border/40 bg-secondary/40 px-4 py-2 transition-colors',
+              'flex w-full items-center gap-2.5 border-0 border-b border-border px-4 py-2 transition-colors',
+              !reorder.active.value && 'mt-4',
               !reorder.active.value && 'cursor-pointer hover:bg-accent/40'
             )"
             :title="item.groupLabel"
@@ -197,7 +198,7 @@
               </Button>
             </span>
             <span class="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-              <span :class="cn('min-w-0 max-w-[60%] truncate text-[13px]', item.groupName ? 'font-medium text-foreground' : 'text-muted-foreground')">
+              <span :class="cn('min-w-0 max-w-[60%] truncate text-[14px]', item.groupName ? 'font-medium text-foreground' : 'text-muted-foreground')">
                 {{ groupTitle(item) }}
               </span>
               <span class="num shrink-0 font-mono text-[11px] text-muted-foreground">
@@ -208,33 +209,32 @@
               </span>
             </span>
             <span class="w-[160px] shrink-0 max-lg:hidden" aria-hidden="true" />
-            <span class="flex w-[120px] shrink-0 justify-end">
+            <span class="flex w-[120px] shrink-0">
               <RulePolicySelect
                 :model-value="item.policy"
                 :policies="availablePolicies"
                 :label="`${groupTitle(item)} 的策略：${item.policy}，点击修改整组`"
                 :disabled="reorder.active.value"
                 :loading="!!policyPending[item.groupId]"
-                :trigger-class="cn('chip', policyChip(item.policy))"
+                trigger-class="text-foreground"
                 @update:model-value="value => setGroupPolicy(item, value)"
               />
             </span>
-            <span v-if="dnsColumn" class="flex w-[148px] shrink-0 items-center gap-1 pl-2 xl:w-[188px]">
-              <span class="flex min-w-0 flex-1 items-center" data-group-dns>
-                <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-6 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
-                <span v-else :class="cn('min-w-0 truncate text-[12px]', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
-              </span>
-              <Button
-                v-if="dnsEditable"
-                variant="ghost"
-                size="icon-sm"
-                class="cf-reorder-mute shrink-0"
-                title="批量设置 DNS"
+            <span v-if="dnsColumn" class="cf-reorder-mute flex w-[148px] shrink-0 items-center xl:w-[188px]">
+              <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="ml-2 inline-block h-6 w-24 animate-pulse rounded-md bg-primary/10" role="status" aria-label="DNS 状态加载中" />
+              <button
+                v-else-if="dnsEditable"
+                type="button"
+                :disabled="reorder.active.value"
+                :class="cn('rule-group-dns-trigger relative inline-flex h-[30px] w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-left text-[12px] transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:cursor-default', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')"
+                :title="groupDns(item).title"
                 :aria-label="`批量设置 ${groupTitle(item)} 的 DNS`"
                 @click.stop="openBatch(item)"
               >
-                <Server class="size-4" />
-              </Button>
+                <span class="min-w-0 flex-1 truncate" data-group-dns>{{ groupDns(item).text }}</span>
+                <ChevronDown class="size-3 shrink-0 opacity-60" aria-hidden="true" />
+              </button>
+              <span v-else :class="cn('min-w-0 truncate px-2 text-[12px]', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title" data-group-dns>{{ groupDns(item).text }}</span>
             </span>
             <!-- 与成员行的「启停 / 编辑 / 删除」同位，重命名落在编辑的位置 -->
             <span class="flex w-[136px] shrink-0 items-center justify-end gap-0.5">
@@ -259,7 +259,7 @@
             :data-rule-key="item.uniqueId"
             :class="[
               'rule-row flex items-center gap-2.5 border-0 border-b px-4 py-[11px] transition-colors hover:bg-accent/30',
-              item.isLastInGroup ? 'border-border' : 'border-border/40',
+              item.isGroupMember && !item.isLastInGroup ? 'border-transparent' : item.isLastInGroup ? 'border-border' : 'border-border/40',
               item.isGroupMember && 'in-group',
               !item.enabled && 'opacity-55',
               simScanKey === item.uniqueId && 'is-scan',
@@ -309,7 +309,7 @@
               {{ item.remark || '—' }}
             </span>
 
-            <span class="flex w-[120px] shrink-0 justify-end">
+            <span class="flex w-[120px] shrink-0">
               <!-- 组内策略已在组头显示，成员行降为文字；改单条会离开原分组 -->
               <RulePolicySelect
                 :model-value="item.policy"
@@ -317,11 +317,11 @@
                 :label="`${ruleName(item)} 的策略：${item.policy}，点击修改`"
                 :disabled="reorder.active.value"
                 :loading="!!policyPending[item.uniqueId]"
-                :trigger-class="item.isGroupMember ? 'h-[30px] text-[12px] text-muted-foreground hover:text-foreground' : cn('chip', policyChip(item.policy))"
+                :trigger-class="item.isGroupMember ? 'text-muted-foreground hover:text-foreground' : 'text-foreground'"
                 @update:model-value="value => setRulePolicy(item, value)"
               />
             </span>
-            <span v-if="dnsColumn" class="cf-reorder-mute flex w-[148px] shrink-0 items-center pl-2 xl:w-[188px]">
+            <span v-if="dnsColumn" class="cf-reorder-mute flex w-[148px] shrink-0 items-center xl:w-[188px]">
               <RuleDnsCell
                 :item="item"
                 :snapshot="dnsSnapshot"
@@ -415,18 +415,19 @@
             :policies="availablePolicies"
             :label="`${groupTitle(item)} 的策略：${item.policy}，点击修改整组`"
             :loading="!!policyPending[item.groupId]"
-            :trigger-class="cn('chip max-w-[150px]', policyChip(item.policy))"
+            trigger-class="max-w-[150px] text-foreground"
             @update:model-value="value => setGroupPolicy(item, value)"
           />
           <span class="ml-auto flex min-w-0 items-center gap-1">
-            <span v-if="dnsColumn" class="flex min-w-0 items-center gap-1.5 text-[12px]" data-group-dns>
+            <span v-if="dnsColumn" class="flex min-w-0 items-center gap-1.5 text-[12px]">
               <span class="shrink-0 text-muted-foreground">DNS</span>
-              <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-5 w-24 animate-pulse rounded-full bg-primary/10" role="status" aria-label="DNS 状态加载中" />
-              <span v-else :class="cn('min-w-0 truncate', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title">{{ groupDns(item).text }}</span>
+              <span v-if="dnsLoading && (!dnsSnapshot || groupStale(item))" class="inline-block h-5 w-24 animate-pulse rounded-md bg-primary/10" role="status" aria-label="DNS 状态加载中" />
+              <button v-else-if="dnsEditable" type="button" :class="cn('rule-group-dns-trigger relative inline-flex h-[30px] min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accent', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title" :aria-label="`批量设置 ${groupTitle(item)} 的 DNS`" @click.stop="openBatch(item)">
+                <span class="min-w-0 truncate" data-group-dns>{{ groupDns(item).text }}</span>
+                <ChevronDown class="size-3 shrink-0 opacity-60" aria-hidden="true" />
+              </button>
+              <span v-else :class="cn('min-w-0 truncate', groupDns(item).tone === 'warn' ? 'text-warning-accent' : 'text-muted-foreground')" :title="groupDns(item).title" data-group-dns>{{ groupDns(item).text }}</span>
             </span>
-            <Button v-if="dnsColumn && dnsEditable" variant="ghost" size="icon-sm" class="shrink-0" title="批量设置 DNS" :aria-label="`批量设置 ${groupTitle(item)} 的 DNS`" @click="openBatch(item)">
-              <Server class="size-4" />
-            </Button>
             <Button variant="ghost" size="icon-sm" class="shrink-0" title="重命名" aria-label="重命名分组" @click="showGroupRenameDialog(item)">
               <Pencil class="size-4" />
             </Button>
@@ -537,7 +538,7 @@
               :label="`${ruleName(item)} 的策略：${item.policy}，点击修改`"
               :disabled="reorder.active.value"
               :loading="!!policyPending[item.uniqueId]"
-              :trigger-class="'h-[22px] max-w-[150px] rounded-full border border-transparent bg-secondary px-2 text-[10.5px] font-medium text-secondary-foreground'"
+              trigger-class="max-w-[150px] text-foreground"
               @update:model-value="value => setRulePolicy(item, value)"
             />
             <Button variant="ghost" size="icon-sm" class="ml-auto" title="编辑" aria-label="编辑" @click="editItem(item)">
@@ -750,7 +751,6 @@ import {
   Pencil,
   Play,
   Plus,
-  Server,
   Trash2,
   Workflow
 } from '@lucide/vue'
@@ -1721,8 +1721,11 @@ onActivated(() => {
   background: var(--secondary);
 }
 
-.rule-row.in-group {
-  box-shadow: inset 2px 0 0 var(--border-strong);
+/* 与两列的行内选择器一致：视觉 30px，透明区域补足 44px 点击区。 */
+.rule-group-dns-trigger::before {
+  content: '';
+  position: absolute;
+  inset: calc((30px - var(--cf-touch, 44px)) / 2) 0;
 }
 
 .rule-row.is-match {

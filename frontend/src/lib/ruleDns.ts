@@ -133,7 +133,7 @@ export function dnsChip(entry: RuleDnsState | undefined, engine: Pick<RuleDnsEng
   }
   const route = entry?.route || null
   if (entry?.state === 'follow') {
-    const text = `跟随 · ${route ? SHORT_LABELS[route] || routeLabel(route) : '默认'}`
+    const text = `跟随策略 · ${route ? SHORT_LABELS[route] || routeLabel(route) : '默认'}`
     return { text, tone: 'muted', title: `跟随策略：${routeLabel(route)}` }
   }
   if (entry?.state === 'follow_drift') {
@@ -143,7 +143,7 @@ export function dnsChip(entry: RuleDnsState | undefined, engine: Pick<RuleDnsEng
       title: `跟随策略，但 DNS 仍为${routeLabel(route, entry.upstream_label)}，与策略不一致` }
   }
   if (!route) {
-    const text = `默认 · ${forwardLabel(engine.default_forward)}`
+    const text = `默认上游 · ${forwardLabel(engine.default_forward).replace(/ DNS$/, '')}`
     return { text, tone: 'muted', title: `默认上游：${forwardLabel(engine.default_forward)}` }
   }
   if (isUpstreamValue(route)) {
@@ -152,7 +152,7 @@ export function dnsChip(entry: RuleDnsState | undefined, engine: Pick<RuleDnsEng
     return { text, tone: 'neutral', icon: 'upstream', title: routeLabel(route, entry?.upstream_label) }
   }
   if (isBlockRoute(route)) return { text: ROUTE_LABELS[route], tone: 'bad', title: ROUTE_LABELS[route] }
-  return { text: ROUTE_LABELS[route] || route, tone: 'neutral', icon: route === 'direct' ? 'direct' : 'proxy', title: ROUTE_LABELS[route] || route }
+  return { text: `指定 · ${SHORT_LABELS[route] || ROUTE_LABELS[route] || route}`, tone: 'neutral', title: ROUTE_LABELS[route] || route }
 }
 
 /** 一行文字的 DNS 摘要，用于命中模拟与确认文案 */

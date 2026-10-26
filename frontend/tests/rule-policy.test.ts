@@ -179,7 +179,7 @@ describe('inline policy selection', () => {
     await pick(wrapper, 'lan.test 的策略', 'Japan')
     const row = wrapper.findAll('.rule-row').find(item => item.text().includes('lan.test'))!
     expect(row.find('[aria-label="DNS 状态加载中"]').exists()).toBe(true)
-    expect(row.text()).not.toContain('跟随 · 直连')
+    expect(row.text()).not.toContain('跟随策略 · 直连')
     resolve({ data: structuredClone(network.state.dns) })
     await flushPromises()
   })

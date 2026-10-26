@@ -93,9 +93,9 @@ describe('rule group sections', () => {
     expect(rowValues(wrapper)).toEqual(['lan', 'a.test', 'b.test', 'c.test', '192.168.0.0/24', 'x.test', 'y.test'])
     const member = wrapper.findAll('.rule-row')[1]!
     expect(member.classes()).toContain('in-group')
-    expect(member.find('.chip').exists()).toBe(false) // the header carries the policy chip
+    expect(member.find('.chip').exists()).toBe(false) // both selectors use plain text
     expect(wrapper.findAll('.rule-row')[3]!.classes()).toContain('border-border')
-    expect(wrapper.findAll('.rule-row')[0]!.find('.chip').text()).toBe('DIRECT')
+    expect(wrapper.findAll('.rule-row')[0]!.find('.rule-policy-trigger').text()).toBe('DIRECT')
     expect(wrapper.text()).toContain('共 7 项')
   })
 
@@ -188,7 +188,7 @@ describe('rule group sections', () => {
     ;(wrapper.vm as any).$.setupState.enterReorder()
     await flushPromises()
     expect(wrapper.findAll('.rule-row.in-group')).toHaveLength(0)
-    expect(wrapper.findAll('.rule-row')[1]!.find('.chip').text()).toBe('Proxy')
+    expect(wrapper.findAll('.rule-row')[1]!.find('.rule-policy-trigger').text()).toBe('Proxy')
   })
 
   it('ends each card section with a full-width divider outside reorder mode only', async () => {

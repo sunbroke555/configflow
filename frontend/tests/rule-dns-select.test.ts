@@ -107,7 +107,7 @@ describe('rule DNS selector', () => {
     expect(document.body.textContent).not.toContain('没有可固定的上游')
   })
 
-  it('renders the cell variant as a labelled chip with a 44px hit area', async () => {
+  it('renders the cell variant as a labelled text selector with a 44px hit area', async () => {
     const wrapper = mount(RuleDnsSelect, {
       props: { modelValue: 'blackhole', label: 'ads.test 的 DNS：黑洞，点击修改', variant: 'cell', upstreams },
       slots: { default: '<span>黑洞</span>' },
@@ -116,7 +116,7 @@ describe('rule DNS selector', () => {
     wrappers.push(wrapper)
     const trigger = wrapper.get('button')
     expect(trigger.attributes('aria-label')).toBe('ads.test 的 DNS：黑洞，点击修改')
-    expect(trigger.classes()).toEqual(expect.arrayContaining(['chip', 'rule-dns-cell-trigger', 'h-[30px]']))
+    expect(trigger.classes()).toEqual(expect.arrayContaining(['rule-dns-cell-trigger', 'h-[30px]', 'text-left']))
     await wrapper.setProps({ disabled: true })
     await trigger.trigger('click')
     await flushPromises()

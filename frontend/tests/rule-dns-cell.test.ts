@@ -110,9 +110,9 @@ describe('rule DNS column', () => {
     const text = (value: string) => row(wrapper, value).text()
     expect(text('doubleclick.net')).toContain('不存在')
     expect(dnsTrigger(wrapper, 'doubleclick.net').classes()).toContain('chip-bad')
-    expect(text('openai.com')).toContain('跟随 · 代理')
-    expect(text('baidu.com')).toContain('跟随 · 直连')
-    expect(text('10.0.0.0/8')).toContain('默认 · 代理 DNS')
+    expect(text('openai.com')).toContain('跟随策略 · 代理')
+    expect(text('baidu.com')).toContain('跟随策略 · 直连')
+    expect(text('10.0.0.0/8')).toContain('默认上游 · 代理')
     expect(row(wrapper, 'CN').get('[aria-label="GEOIP 规则不参与 DNS 分流"]').text()).toBe('不参与')
     expect(text('moved.example')).toContain('代理 · 与策略不一致')
     expect(dnsTrigger(wrapper, 'moved.example').classes()).toContain('chip-warn')
@@ -135,7 +135,7 @@ describe('rule DNS column', () => {
     network.rules.getDns.mockImplementationOnce(() => new Promise(done => { resolve = done }))
     const wrapper = await render()
     expect(wrapper.findAll('[aria-label="DNS 状态加载中"]').length).toBeGreaterThan(0)
-    expect(wrapper.text()).not.toContain('默认 · ')
+    expect(wrapper.text()).not.toContain('默认上游 · ')
     resolve({ data: structuredClone(network.state.dns) })
     await flushPromises()
     expect(wrapper.find('[aria-label="DNS 状态加载中"]').exists()).toBe(false)
@@ -156,7 +156,7 @@ describe('rule DNS column', () => {
     reject({ isAxiosError: true, response: { status: 409, data: { message: '规则仍在使用', usages: [{ code: 'oxidns_routing_custom', reason: 'sequence_main 含手写条目' }] } } })
     await flushPromises()
     expect(notify.error).toHaveBeenCalledWith('sequence_main 含手写条目')
-    expect(dnsTrigger(wrapper, 'openai.com').text()).toContain('跟随 · 代理')
+    expect(dnsTrigger(wrapper, 'openai.com').text()).toContain('跟随策略 · 代理')
     expect(dnsTrigger(wrapper, 'openai.com').find('.animate-spin').exists()).toBe(false)
   })
 
@@ -202,13 +202,13 @@ describe('rule DNS column', () => {
     await retry.trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-dns-error]').exists()).toBe(false)
-    expect(row(wrapper, 'openai.com').text()).toContain('跟随 · 代理')
+    expect(row(wrapper, 'openai.com').text()).toContain('跟随策略 · 代理')
   })
 
   it('hides the column for profiles that do not use OxiDNS', async () => {
     network.state.dns.engine.oxidns_in_use = false
     const wrapper = await render()
-    expect(wrapper.text()).not.toContain('跟随 · ')
+    expect(wrapper.text()).not.toContain('跟随策略 · ')
     expect(wrapper.find('[aria-label="策略规则列表"] > div').classes()).toContain('min-w-[680px]')
   })
 
@@ -293,7 +293,7 @@ describe('rule DNS column', () => {
     expect(row(wrapper, 'new.example').text()).not.toContain('默认')
     // An edited row may have changed too; untouched rows keep their chip.
     expect(row(wrapper, 'openai.com').find('[aria-label="DNS 状态加载中"]').exists()).toBe(true)
-    expect(row(wrapper, 'baidu.com').text()).toContain('跟随 · 直连')
+    expect(row(wrapper, 'baidu.com').text()).toContain('跟随策略 · 直连')
     // The editor treats the unknown state as not loaded rather than as the default upstream.
     ;(wrapper.vm as any).$.setupState.editItem({ id: 'r-new', itemType: 'rule' })
     await flushPromises()
@@ -330,10 +330,10 @@ describe('rule DNS column', () => {
     await setup.loadAllRules()
     await flushPromises()
     expect(row(wrapper, 'lib.example').find('[aria-label="DNS 状态加载中"]').exists()).toBe(true)
-    expect(row(wrapper, 'openai.com').text()).toContain('跟随 · 代理')
+    expect(row(wrapper, 'openai.com').text()).toContain('跟随策略 · 代理')
     resolve({ data: structuredClone(network.state.dns) })
     await flushPromises()
-    expect(row(wrapper, 'lib.example').text()).toContain('默认 · 代理 DNS')
+    expect(row(wrapper, 'lib.example').text()).toContain('默认上游 · 代理')
   })
 
   it('keeps rows read-only and the editor unloaded after a failed refresh, as the banner says', async () => {
