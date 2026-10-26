@@ -337,6 +337,81 @@ func TestValidateSpec(t *testing.T) {
 	if _, err := validateSpec(sampleSpec()); err != nil {
 		t.Fatal(err)
 	}
+	byRouter := routerSpec()
+	if _, err := validateSpec(byRouter); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*ReturnRoutingSpec){
+		"router_protocol_with_dst": func(s *ReturnRoutingSpec) { s.ProxyDst = []string{"198.18.0.0/16"} },
+		"unknown_protocol":         func(s *ReturnRoutingSpec) { s.SafetyVersion = 3 },
+	} {
+		spec := routerSpec()
+		mutate(&spec)
+		if _, err := validateSpec(spec); err == nil {
+			t.Fatalf("%s: expected validation error", name)
+		}
+	}
+}
+
+// routerSpec is sampleSpec on protocol 2: no destination list.
+func routerSpec() ReturnRoutingSpec {
+	spec := sampleSpec()
+	spec.SafetyVersion, spec.ProxyDst = returnProtocolByRouter, nil
+	return spec
+}
+
+func TestReturnRoutingMovesBetweenDestinationAndRouterProtocols(t *testing.T) {
+	host := &fakeHost{}
+	installFakeHost(t, host)
+	cfg := testConfig(t, tunConfig)
+	if _, err := ApplyReturnRouting(cfg, sampleSpec()); err != nil {
+		t.Fatal(err)
+	}
+	initial := readStateJSON(t, cfg)["ownership"].(map[string]interface{})
+	result, err := ApplyReturnRouting(cfg, routerSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["safety_version"] != returnProtocolByRouter {
+		t.Fatalf("apply result = %v", result)
+	}
+	rules := jsonText(host.nft)
+	if strings.Contains(rules, "daddr") || strings.Contains(rules, "198.18.0.0") || !strings.Contains(rules, `"nfproto"`) ||
+		!strings.Contains(rules, "00:e0:b4:66:d5:f9") {
+		t.Fatalf("protocol 2 must match the router, not destinations: %s", rules)
+	}
+	if len(host.routes) != 2 || len(host.rules) != 1 || len(host.nft) != 6 {
+		t.Fatalf("switching protocols must not accumulate resources: %v %v %v", host.routes, host.rules, host.nft)
+	}
+	state := readStateJSON(t, cfg)
+	owner := state["ownership"].(map[string]interface{})
+	if owner["token"] != initial["token"] || state["active"] != true || owner["pending"] != false {
+		t.Fatalf("ownership was lost switching protocols: %v", state)
+	}
+	if status := managedReturnStatus(cfg); status["safety_version"] != returnProtocolByRouter || status["table_present"] != true {
+		t.Fatalf("status = %v", status)
+	}
+	// An Agent restart finds the protocol 2 resources current and leaves them alone.
+	before := len(host.mutations)
+	reapplyReturnRouting(cfg)
+	if len(host.mutations) != before {
+		t.Fatalf("replay rewrote current protocol 2 resources: %v", host.mutations[before:])
+	}
+	// A release rollback can go back to the destination list.
+	if _, err = ApplyReturnRouting(cfg, sampleSpec()); err != nil {
+		t.Fatal(err)
+	}
+	if rules = jsonText(host.nft); !strings.Contains(rules, "198.18.0.0") || strings.Contains(rules, `"nfproto"`) {
+		t.Fatalf("protocol 1 destinations not restored: %s", rules)
+	}
+}
+
+func TestReturnSafetyStatusListsProtocols(t *testing.T) {
+	installFakeHost(t, &fakeHost{})
+	status := returnSafetyStatus(testConfig(t, tunConfig))
+	if status["version"] != 1 || !sameJSON(status["protocols"], []int{1, 2}) {
+		t.Fatalf("status = %v", status)
+	}
 }
 func TestMihomoConflicts(t *testing.T) {
 	cfg := testConfig(t, tunConfig+"routing-mark: 6666\n")

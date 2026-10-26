@@ -393,3 +393,57 @@ def test_api_switching_off_removes_rules_unless_another_router_still_uses_them(a
     assert session.rows['stream_ipport'] == []
     plan = client.post(f'/api/routers/{router["id"]}/plan', headers=admin).get_json()['plan']
     assert plan['empty'] and 'return_cleanup' not in [stage['key'] for stage in plan['stages']]
+
+
+ROUTER_PROTOCOL_STATUS = {**SAFE_RETURN_STATUS, 'safety': {**SAFE_RETURN_STATUS['safety'], 'protocols': [1, 2]}}
+IKUAI_RETURN = {'type': 'ikuai', 'endpoint': 'http://10.0.0.1', 'manage_return_routing': True}
+
+
+def test_router_protocol_marks_by_source_and_ignores_destination_changes():
+    driver, _ = router_driver('ikuai')
+    agent = FakeAgent(ROUTER_PROTOCOL_STATUS)
+    plan = plan_for(IKUAI_RETURN, driver, agent.status())
+    [op] = return_stage(plan)['ops']
+    assert op['spec'] == {'router_ip': '10.0.0.1', 'table': 104, 'priority': 104, 'mark': '0x400000', 'safety_version': 2}
+    assert '标记主路由转来的全部新连接' in op['summary'] and '迁移' not in op['summary']
+    assert execute(plan, driver, agent)['ok']
+    # New destinations change routes and NAT, never the return rule.
+    more = {**DESIRED, 'proxy_cidrs': [*DESIRED['proxy_cidrs'], {'cidr': '203.0.113.0/24', 'sources': ['Telegram']}]}
+    plan = plan_for(IKUAI_RETURN, driver, agent.status(), more)
+    assert return_stage(plan)['ops'] == []
+    assert any(stage['ops'] for stage in plan['stages'] if stage['key'] == 'routes')
+
+
+def test_destination_rules_move_to_router_protocol_and_roll_back_on_failure():
+    driver, _ = router_driver('ikuai')
+    agent = FakeAgent(SAFE_RETURN_STATUS)
+    assert execute(plan_for(IKUAI_RETURN, driver, agent.status()), driver, agent)['ok']
+    old = agent.status()['managed']['spec']
+    assert old['safety_version'] == 1 and old['proxy_dst']
+    # The Agent is upgraded: the next preview moves the rule to protocol 2.
+    agent.state['safety']['protocols'] = [1, 2]
+    more = {**DESIRED, 'proxy_cidrs': [*DESIRED['proxy_cidrs'], {'cidr': '203.0.113.0/24', 'sources': ['Telegram']}]}
+    plan = plan_for(IKUAI_RETURN, driver, agent.status(), more)
+    [op] = return_stage(plan)['ops']
+    assert op['spec']['safety_version'] == 2 and op['previous'] == old
+    assert '由按目的网段改为按来源标记' in op['summary']
+    from backend.routers.base import RouterError
+
+    def broken(op):
+        raise RouterError('注入的路由器写入失败')
+    driver.apply = broken
+    result = execute(plan, driver, agent)
+    assert not result['ok']
+    # The rollback restores the protocol 1 destination list.
+    assert agent.status()['managed']['spec'] == old
+
+
+def test_router_protocol_is_refused_once_the_agent_no_longer_declares_it():
+    driver, session = router_driver('ikuai')
+    agent = FakeAgent(ROUTER_PROTOCOL_STATUS)
+    plan = plan_for(IKUAI_RETURN, driver, agent.status())
+    agent.state['safety'].pop('protocols')
+    result = execute(plan, driver, agent)
+    assert not result['ok'] and result['failed_stage'] == 'return_routing'
+    assert '不支持按来源标记' in str(result)
+    assert session.writes == [] and agent.calls == []

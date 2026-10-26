@@ -12,7 +12,8 @@ from backend.routers.base import (
 from backend.routers.dhcp_dns import checked_dns_target, verify_dns
 from backend.routers.ikuai_groups import canon, verify as verify_groups
 from backend.routers.plan import (
-    RETURN_ALLOCATION_FIELDS, RETURN_SAFETY_VERSION, return_allocation, return_safety_blockers,
+    RETURN_ALLOCATION_FIELDS, RETURN_PROTOCOLS, return_allocation, return_protocol,
+    return_safety_blockers,
 )
 from backend.routers.report import _networks, SupernetIndex
 from backend.routers.routeros_nat import assess_bypass, RouteEgressIndex
@@ -46,6 +47,8 @@ def _check_return_allocation(status: Dict[str, Any], spec: Dict[str, Any]) -> No
     allocation = return_allocation(status)
     if any(allocation[key] != spec.get(key) for key in RETURN_ALLOCATION_FIELDS):
         raise RouterError('回流资源分配在预览后发生变化，请重新预览后发布')
+    if (spec.get('safety_version') or 0) > return_protocol(status):
+        raise RouterError('mihomo Agent 不支持按来源标记的回流规则，请重新预览后发布')
 
 
 def _apply(op: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -> Dict[str, Any]:
@@ -57,7 +60,7 @@ def _apply(op: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) -> D
         raise RouterError('未启用 Agent 回流配置，无法执行回流操作')
     if kind == 'return_routing_apply':
         spec = op['spec']
-        if (type(spec.get('safety_version')) is not int or spec['safety_version'] != RETURN_SAFETY_VERSION
+        if (type(spec.get('safety_version')) is not int or spec['safety_version'] not in RETURN_PROTOCOLS
                 or spec.get('adopt_legacy')):
             raise RouterError('回流操作缺少安全握手或包含手工规则接管，请重新预览')
         _check_return_allocation(agent.status(), spec)
@@ -151,7 +154,7 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         if not managed.get('table_present'):
             raise ReleaseError('Agent 上没有找到 configflow_return 表')
         actual = managed.get('spec') or {}
-        if set(actual.get('proxy_dst') or []) != set(expected['proxy_dst']):
+        if set(actual.get('proxy_dst') or []) != set(expected.get('proxy_dst') or []):
             raise ReleaseError('Agent 上的回流网段与计划不一致')
         if any(actual.get(key) != expected[key]
                for key in ('router_ip', 'mark', 'table', 'priority', 'safety_version')):

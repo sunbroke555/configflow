@@ -88,9 +88,16 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
   } else if (op.kind === 'return_routing_apply') {
     const before = record(op.previous), after = record(op.spec)
     groups.push(changedFields('回流参数', before, after, ['router_ip', 'mark', 'table', 'priority']))
-    const scope = addressDiff('回流目的网段', before.proxy_dst, after.proxy_dst)
-    scope.note = '对比当前受管回流配置与本次目标网段。'
-    groups.push(scope)
+    if (after.safety_version === 2) {
+      // Protocol 2 marks by source: there is no destination list to compare.
+      const marks = (spec: Fields) => spec.safety_version === 2 ? '主路由转来的全部新连接' : `${strings(spec.proxy_dst).length} 个目的网段`
+      groups.push({ title: '回流标记范围', note: '按来源标记后，规则集网段变化不再需要修改回流规则。',
+        rows: [{ label: '标记', ...(op.previous ? { before: marks(before) } : {}), value: marks(after) }] })
+    } else {
+      const scope = addressDiff('回流目的网段', before.proxy_dst, after.proxy_dst)
+      scope.note = '对比当前受管回流配置与本次目标网段。'
+      groups.push(scope)
+    }
   } else if (op.kind === 'ikuai_group_add') {
     add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '归属标记', value: text(op.comment) }],
       'iKuai 的 IP 分组没有分组备注，归属标记写在第一个网段的备注里。')

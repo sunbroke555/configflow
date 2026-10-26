@@ -136,7 +136,9 @@ class FakeAgent:
         self.calls.append(('apply', spec))
         if self.fail_apply:
             raise RuntimeError('缺少 nft（nftables），无法管理回流规则')
-        assert spec['safety_version'] == 1 and not spec.get('adopt_legacy')
+        assert spec['safety_version'] in (1, 2) and not spec.get('adopt_legacy')
+        # Protocol 2 needs an Agent that declares it and carries no destination list.
+        assert spec['safety_version'] == 1 or (2 in self.state['safety'].get('protocols', []) and 'proxy_dst' not in spec)
         self.state['return_tables'] = [table for table in self.state['return_tables']
                                        if table['name'] != 'configflow_return']
         self.state['return_tables'].append({'family': 'inet', 'name': 'configflow_return', 'marks': [spec['mark']]})

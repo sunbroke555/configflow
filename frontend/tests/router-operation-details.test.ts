@@ -26,6 +26,16 @@ describe('reviewable release operation details', () => {
     expect(groups.find(g => g.title === '迁移主表静态路由')!.rows[0].label).toContain('*static')
     expect(JSON.stringify(groups)).not.toContain('*missing'); expect(JSON.stringify(groups)).not.toContain('do-not-render-evidence')
   })
+  it('shows return marking by source instead of a destination list', () => {
+    const spec = { router_ip: '192.0.2.1', mark: '0x400000', table: 104, priority: 104, safety_version: 2 }
+    const moved = operationDetails({ kind: 'return_routing_apply', summary: '应用回流规则', spec,
+      previous: { ...spec, safety_version: 1, proxy_dst: ['198.18.0.0/16', '91.108.0.0/16'] } })
+    expect(moved.find(g => g.title === '回流标记范围')!.rows).toEqual([
+      { label: '标记', before: '2 个目的网段', value: '主路由转来的全部新连接' }])
+    expect(moved.some(g => g.title === '回流目的网段')).toBe(false)
+    const fresh = operationDetails({ kind: 'return_routing_apply', summary: '应用回流规则', spec, previous: null })
+    expect(fresh.find(g => g.title === '回流标记范围')!.rows).toEqual([{ label: '标记', value: '主路由转来的全部新连接' }])
+  })
   it('shows withdrawal as removals without inventing new objects', () => {
     const op = fixture(); op.bundle = []; op.spec = null; op.migrations = []
     const groups = operationDetails(op)

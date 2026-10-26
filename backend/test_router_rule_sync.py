@@ -510,3 +510,32 @@ def test_paused_sync_resumes_through_an_empty_confirmed_release(authenticated_ap
 ])
 def test_paused_message_gives_one_resume_hint(message, expected):
     assert rule_sync.paused_message({'message': message}) == expected
+
+
+@pytest.mark.parametrize('protocols, expected', [([1], 'paused'), ([1, 2], 'synced')])
+def test_auto_sync_with_return_routing_pauses_only_on_destination_marking(environment, monkeypatch, protocols, expected):
+    from backend.routes.routers import _inspect
+    from backend.test_router_release import SAFE_RETURN_STATUS, FakeAgent
+    repo, driver = environment
+    repo.update_profile_transaction('default', lambda config: config['routers']['items'][0].update(manage_return_routing=True))
+    agent = FakeAgent({**SAFE_RETURN_STATUS, 'safety': {**SAFE_RETURN_STATUS['safety'], 'protocols': protocols}})
+    monkeypatch.setattr('backend.routes.routers._return_routing', lambda gateway: agent.status())
+    config = rule_sync.config_for('default')
+    router = config['routers']['items'][0]
+    _, desired, state, report = _inspect(config, router, driver)
+    plan = build_plan(router, desired, state, report, report['return_routing'], driver)
+    assert not plan['blockers'], plan['blockers']
+    assert execute(plan, driver, agent)['ok']
+    rule_sync._save_manifest('default', router, driver)
+    rule_sync.capture_manual('default', config, router, driver, desired)
+    assert store.read('default', 'ros').get('baseline')
+    driver.writes.clear()
+
+    result = rule_sync.sync('default', 'ros', lambda *_: NEW)
+    assert result['status'] == expected, result
+    if expected == 'paused':
+        # Destination marking has to follow every changed CIDR on the gateway.
+        assert 'mihomo 回流规则' in result['message'] and not driver.writes
+    else:
+        assert (result['added'], result['removed']) == (1, 1)
+        assert [call[0] for call in agent.calls] == ['apply']

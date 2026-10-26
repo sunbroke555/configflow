@@ -25,7 +25,14 @@ import (
 const (
 	managedReturnTable = "configflow_return"
 	returnStateFile    = "return-routing.json"
+	// Protocol 1 marks only connections to proxy_dst. Protocol 2 marks every
+	// new connection the router forwards, so routing changes never touch it.
+	returnProtocolByDestination = 1
+	returnProtocolByRouter      = 2
 )
+
+// returnProtocols lists the spec protocols this Agent can apply.
+var returnProtocols = []int{returnProtocolByDestination, returnProtocolByRouter}
 
 // runCommandInput runs a command with stdin; replaceable in tests.
 var runCommandInput = func(input string, name string, args ...string) (string, error) {
@@ -105,8 +112,8 @@ func parseMark(text string) (uint32, error) {
 
 func validateSpec(spec ReturnRoutingSpec) (resolvedSpec, error) {
 	resolved := resolvedSpec{ReturnRoutingSpec: spec}
-	if spec.SafetyVersion != 1 {
-		return resolved, fmt.Errorf("需要回流安全协议 1；请更新 ConfigFlow 后重新预览")
+	if spec.SafetyVersion != returnProtocolByDestination && spec.SafetyVersion != returnProtocolByRouter {
+		return resolved, fmt.Errorf("需要回流安全协议 1 或 2；请更新 ConfigFlow 后重新预览")
 	}
 	if len(spec.AdoptLegacy) != 0 {
 		return resolved, fmt.Errorf("不允许接管其他程序或手工回流规则，请保留原配置并先处理冲突")
@@ -125,7 +132,10 @@ func validateSpec(spec ReturnRoutingSpec) (resolvedSpec, error) {
 	if spec.Priority < 1 || spec.Priority > 32765 {
 		return resolved, fmt.Errorf("priority 必须在 1-32765 之间")
 	}
-	if len(spec.ProxyDst) == 0 {
+	if spec.SafetyVersion == returnProtocolByRouter && len(spec.ProxyDst) != 0 {
+		return resolved, fmt.Errorf("回流安全协议 2 按来源标记，不接受 proxy_dst")
+	}
+	if spec.SafetyVersion == returnProtocolByDestination && len(spec.ProxyDst) == 0 {
 		return resolved, fmt.Errorf("proxy_dst 不能为空")
 	}
 	for _, cidr := range spec.ProxyDst {
@@ -416,7 +426,7 @@ func managedReturnStatus(cfg *Config) map[string]interface{} {
 	complete := returnResourcesComplete(state)
 	return map[string]interface{}{"spec": state.Spec, "applied_at": state.AppliedAt,
 		"table_present": complete, "legacy": state.Legacy,
-		"safety_version": 1, "active": state.Active}
+		"safety_version": state.Spec.SafetyVersion, "active": state.Active}
 }
 
 func returnRoutingWrite(cfg *Config, w http.ResponseWriter, r *http.Request) {
