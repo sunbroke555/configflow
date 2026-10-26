@@ -136,6 +136,16 @@ const providers = ref<MihomoProvider[]>([])
 const coreProxyNames = ref(new Set<string>())
 /** 同名节点可能来自多个代理集合，不能只保留最后一个来源。 */
 const nodeProviders = ref(new Map<string, Set<string>>())
+/** ConfigFlow 给带排除条件的策略组生成的「<组>_<集合>_筛选」副本，与原集合下载同一订阅。 */
+const FILTER_COPY = /_筛选(?: \(\d+\))?$/
+/** 节点的来源集合；与原集合同时出现的筛选副本是同一批节点，不算另一个来源。 */
+function sourcesOf(name: string): string[] {
+  const sources = [...(nodeProviders.value.get(name) || [])]
+  return sources.filter(source => {
+    const base = source.replace(FILTER_COPY, '')
+    return base === source || !sources.some(original => original !== source && base.endsWith(`_${original}`))
+  })
+}
 const settings = ref<ProxyPanelSettings>(loadProxySettings())
 const settingsOpen = ref(false)
 function applySettings(value: ProxyPanelSettings) {
@@ -203,7 +213,7 @@ function sectionsOf(group: MihomoProxy): Array<{ title: string; members: string[
   if (!settings.value.groupByProvider) return members.length ? [{ title: '', members }] : []
   const sections = new Map<string, string[]>()
   for (const member of members) {
-    const sources = [...(nodeProviders.value.get(member) || [])]
+    const sources = sourcesOf(member)
     const title = GROUP_TYPES.has(proxies.value[member]?.type || '') ? '策略组'
       : sources.length > 1 ? '多个代理集合'
       : !sources.length || sources[0] === 'default' ? '配置节点' : sources[0]
@@ -333,12 +343,14 @@ async function testNode(name: string, group: MihomoProxy) {
     const nativeRoute = !proxy.now && ['LoadBalance', 'Relay'].includes(proxy.type)
     if (GROUP_TYPES.has(proxy.type) && !nativeRoute) throw new Error('策略组没有可用的当前出口，请刷新后重试。')
     if (['Reject', 'RejectDrop'].includes(proxy.type)) throw new Error('当前出口拒绝连接，无法测速。')
-    const sources = [...(nodeProviders.value.get(target) || [])]
+    const sources = sourcesOf(target)
     const inCore = coreProxyNames.value.has(target)
-    if (sources.length > 1) throw new Error('多个来源中存在同名节点，请使用所属策略组的分组测速。')
-    if (!inCore && !sources.length) throw new Error('找不到该节点，请刷新后重试。')
-    const { data } = await (inCore
-      ? mihomoPanelApi.proxyDelay(agentId, target, group.testUrl)
+    // 点的是策略组成员时，由核心沿这个组当前的路线测速，不必判断出口节点来自哪个集合。
+    const viaGroup = sources.length > 1 && name !== target && coreProxyNames.value.has(name)
+    if (sources.length > 1 && !viaGroup) throw new Error('多个来源中存在同名节点，请使用所属策略组的分组测速。')
+    if (!viaGroup && !inCore && !sources.length) throw new Error('找不到该节点，请刷新后重试。')
+    const { data } = await (viaGroup || inCore
+      ? mihomoPanelApi.proxyDelay(agentId, viaGroup ? name : target, group.testUrl)
       : mihomoPanelApi.providerProxyDelay(agentId, sources[0], target, group.testUrl))
     if (disposed || generation !== testEpoch) return
     const delay = data.data?.delay
