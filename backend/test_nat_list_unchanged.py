@@ -18,7 +18,7 @@ from backend.routers.release import execute
 from backend.routers.report import build_report
 from backend.routers.routeros_nat import client_source_networks
 from backend.routers.rule_sync_write import restrict_plan
-from backend.test_ros_policy import GATEWAY, NAT, ROUTER, TARGET, MemoryROS, desired_for, inspect
+from backend.test_ros_policy import FILTER, GATEWAY, NAT, ROUTER, TARGET, MemoryROS, desired_for, inspect
 
 STATIC = {'fake_ip_range': '198.18.0.0/16', 'proxy_gateway': GATEWAY, 'warnings': [],
           'proxy_cidrs': [{'cidr': '198.18.0.0/16', 'sources': ['fake-ip']},
@@ -306,7 +306,8 @@ def test_legacy_fixture_matches_the_per_destination_writer():
 
 # Every request (method, path, body) of a preview and of the release that
 # follows, recorded on claude/ros-release-batch (d998f08a). Paths that need no
-# NAT list must not read the two lists, nor filter or raw, at all.
+# NAT list must not read the two lists or raw. The return-routing advisory adds
+# one read-only filter snapshot; every pre-existing request stays identical.
 REQUESTS = {
     'adopt_only': ('e15a0b51fe155ba58dd6d02141e45202f534f886e027a40bc5057a449f3be462', 3,
                    'a67474d6856298988e9f28ebdf17cba59dc8e4e5be5c3608b87092d7b46dfd69', 13),
@@ -353,6 +354,9 @@ def observe_requests(scenario):
         sent = _recorded(driver)
         plan = static_preview(driver)[2]
     preview = list(sent)
+    if scenario != 'policy':
+        assert preview.count(('GET', FILTER, None)) == 1
+        preview.remove(('GET', FILTER, None))
     sent.clear()
     if not plan['blockers']:
         assert execute(plan, driver, None)['ok']

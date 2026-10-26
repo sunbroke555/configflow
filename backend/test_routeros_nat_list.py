@@ -1233,8 +1233,9 @@ def test_paths_needing_no_list_never_read_the_lists():
     assert state.nat_lists is None and state.nat_lists_reader is not None
     report, plan = preview(driver, [FAKE_IP, TARGET])
     assert {item['status'] for item in report['nat_bypass']['items']} == {'not_required'}
-    assert not any(SRC in str(path) + str(values) or DST in str(path) + str(values) or path in (FILTER, RAW)
+    assert not any(SRC in str(path) + str(values) or DST in str(path) + str(values) or path == RAW
                    for _, path, values in driver.sent)
+    assert driver.sent.count(('GET', FILTER, None)) == 1  # Optional return-routing advisory, no list reads.
 
 
 def test_lists_are_read_once_a_plan_needs_them_and_an_unreadable_read_blocks(monkeypatch):
