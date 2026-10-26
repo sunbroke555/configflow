@@ -17,6 +17,7 @@ from backend.routers.base import (
     StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import build_dns_report
+from backend.routers.ikuai_groups import canon
 from backend.routers.routeros_nat import assess_bypass, RouteEgressIndex
 
 
@@ -114,8 +115,10 @@ def _policy_route_items(desired: Dict[str, Any], state: RouterState) -> Dict[str
     extra = [{'cidr': route.dst, 'gateway': route.gateway, 'route_id': route.id, 'comment': route.comment}
              for route in state.routes if is_managed(route.comment) and route.dst not in desired_cidrs]
     if auto:
+        # iKuai may read an IP group's 1.1.1.1/32 back as 1.1.1.1: compare addresses.
+        wanted = {canon(cidr) for cidr in desired_cidrs}
         extra += [{'cidr': cidr, 'gateway': auto.gateway, 'route_id': f'policy:{auto.id}', 'comment': auto.comment}
-                  for cidr in auto.dst if cidr not in desired_cidrs]
+                  for cidr in auto.dst if canon(cidr) not in wanted]
     unmanaged_other = [{'cidr': route.dst, 'gateway': route.gateway, 'comment': route.comment, 'enabled': route.enabled,
                         'migrate': route.enabled}
                        for route in state.routes
@@ -256,4 +259,13 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
         result['in_sync'] = (result['in_sync'] and guard['status'] in {'disabled', 'synced'}
                              and not guard['blockers'] and not state.dns_guard_plan['ops'])
     result['desired'].pop('dns_guard', None)
+    if state.ikuai_groups is not None:
+        from backend.routers.ikuai_groups import report_section
+        groups = result['ikuai_groups'] = report_section(state)
+        # Rules still listing CIDRs themselves, groups nothing uses, or a marker to
+        # write back: a release is due.
+        due = len(groups['migrations']) + len(groups['orphans']) + len(groups['marks'])
+        if due:
+            summary['pending'] = summary.get('pending', 0) + due
+        result['in_sync'] = result['in_sync'] and not due
     return result

@@ -10,6 +10,7 @@ from backend.routers.base import (
     stale_routes, StaticRouteIndex,
 )
 from backend.routers.dhcp_dns import checked_dns_target, verify_dns
+from backend.routers.ikuai_groups import canon, verify as verify_groups
 from backend.routers.plan import (
     RETURN_ALLOCATION_FIELDS, RETURN_SAFETY_VERSION, return_allocation, return_safety_blockers,
 )
@@ -170,7 +171,9 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
                 raise ReleaseError(f'回读校验失败：{check["cidr"]} 没有有效且无冲突的受管主路由指向 {check["gateway"]}')
         for check in checks.get('policy_routes') or []:
             rule = policy_route(state, check['comment'])
-            if rule is None or not policy_route_ok(rule, check['gateway']) or set(rule.dst) != set(check['dst']):
+            # iKuai may read an IP group's 1.1.1.1/32 back as 1.1.1.1.
+            if (rule is None or not policy_route_ok(rule, check['gateway'])
+                    or {canon(cidr) for cidr in rule.dst} != {canon(cidr) for cidr in check['dst']}):
                 raise ReleaseError(f'回读校验失败：策略路由「{check["comment"]}」没有按计划排除 {check["gateway"]} '
                                    f'并转发到 {check["gateway"]}')
         remaining = {route.id for route in state.routes} & set(checks['removed_routes'])
@@ -182,8 +185,12 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
                 raise ReleaseError(f'回读校验失败：没有找到恢复的静态路由 {check["cidr"]} → {check["gateway"]}')
         if {rule.id for rule in state.policy_routes or []} & set(checks.get('removed_policy_routes') or []):
             raise ReleaseError('回读校验失败：应删除的端口分流规则仍然存在')
+        if checks.get('ikuai_groups'):
+            verify_groups(checks['ikuai_groups']['routes'], state)
     elif stage == 'nat_bypass':
         verify_nat(checks, state)
+        if checks.get('ikuai_groups'):
+            verify_groups(checks['ikuai_groups']['nat_bypass'], state)
     return state
 
 

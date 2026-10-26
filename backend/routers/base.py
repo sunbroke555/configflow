@@ -256,6 +256,9 @@ class RouterState:
     # RouterOS DNS guard: live rows by REST path, and the plan built from them.
     dns_guard: Optional[Dict[str, Any]] = None
     dns_guard_plan: Optional[Dict[str, Any]] = None
+    # iKuai only: route_object groups (with ConfigFlow ownership), each rule's
+    # literal destinations and group references. None for every other vendor.
+    ikuai_groups: Optional[Dict[str, Any]] = None
 
 
 class RouterDriver:

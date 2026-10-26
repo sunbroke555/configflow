@@ -49,10 +49,12 @@ function objectRow(value: unknown, creating: boolean): DetailRow {
   const identity = item.id || fields.list || fields.name || fields.chain || fields['routing-table'] || ''
   return { label: `${pathNames[String(item.path)] || text(item.path)}${identity ? ` · ${identity}` : ''}`, value: valuesOf(fields) }
 }
+const groupRefs = (op: RouterPlanOperation): DetailRow[] => strings(op.groups).map(value => ({ label: 'IP 分组', value }))
+const groupNote = 'iKuai 规则只引用 ConfigFlow 管理的 IP 分组，不再逐条填写网段；增删网段时只改分组内容。'
 export function hasOperationDetails(op: RouterPlanOperation) {
   return ['ros_policy_replace', 'dns_guard_replace', 'return_routing_apply', 'route_add', 'route_delete', 'route_comment',
     'nat_add', 'nat_update', 'nat_list_sync', 'dhcp_dns_update', 'policy_route_add', 'policy_route_update',
-    'policy_route_delete'].includes(op.kind || '')
+    'policy_route_delete', 'ikuai_group_add', 'ikuai_group_update', 'ikuai_group_delete'].includes(op.kind || '')
 }
 export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
   const groups: DetailGroup[] = []
@@ -89,9 +91,27 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     const scope = addressDiff('回流目的网段', before.proxy_dst, after.proxy_dst)
     scope.note = '对比当前受管回流配置与本次目标网段。'
     groups.push(scope)
+  } else if (op.kind === 'ikuai_group_add') {
+    add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '归属标记', value: text(op.comment) }],
+      'iKuai 的 IP 分组没有分组备注，归属标记写在第一个网段的备注里。')
+    add('分组网段', strings(op.values).map(value => ({ label: '新增', value, action: '新增' })), '新建分组时写入的全部网段。')
+  } else if (op.kind === 'ikuai_group_update' && op.mark) {
+    add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '归属标记', value: `改回 ${text(op.comment)}` },
+      { label: '网段数', value: String(strings(op.values).length) }],
+    '归属标记写在第一个网段的备注里，被改掉后 ConfigFlow 只凭规则引用认出这个分组。这次只写回标记，网段和其他备注不变。')
+  } else if (op.kind === 'ikuai_group_update') {
+    add('IP 分组', [{ label: '名称', value: text(op.name) }, { label: '更新后网段数', value: String(strings(op.values).length) }])
+    add('分组网段变化', [
+      ...strings(op.added).map(value => ({ label: '新增', value, action: '新增' as const })),
+      ...strings(op.removed).map(value => ({ label: '移除', value, action: '移除' as const }))
+    ], '只列出本次加入或移除的网段，其余网段保持不变；引用该分组的规则不需要改写。')
+  } else if (op.kind === 'ikuai_group_delete') {
+    add('删除 IP 分组', [{ label: '名称', value: text(op.name) }, { label: '原网段数', value: text(op.count) }],
+      '删除前会再次确认没有规则引用该分组；非 ConfigFlow 管理的分组不会被删除。')
   } else if (op.kind === 'nat_update') {
     add('现有匹配条件', safeFields(op.expected), '扩充时保留这些源地址、接口、协议等匹配限制。')
     add('新增目的网段', strings(op.add_dst).map(value => ({ label: '新增', value, action: '新增' })))
+    add('引用 IP 分组', groupRefs(op), groupNote)
     groups.push(changedFields('备注', record(op.expected), op, ['comment']))
   } else if (op.kind === 'nat_list_sync') {
     const address = (value: unknown) => text(record(record(value).config).address)
@@ -121,11 +141,13 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
   } else if (op.kind === 'nat_add') {
     add('来源范围', strings(op.src).map(value => ({ label: '来源', value })))
     add('目的网段', strings(op.dst).map(value => ({ label: '目的', value })))
+    add('引用 IP 分组', groupRefs(op), groupNote)
     add('规则备注', [{ label: '备注', value: text(op.comment) }])
   } else if (hasOperationDetails(op)) {
     const values: Fields = {}
     for (const key of ['id', 'cidr', 'gateway', 'comment']) if (key in op) values[key] = op[key]
     add(op.kind?.endsWith('_delete') ? '删除对象' : '提交字段', safeFields(values), '仅列出本次计划提供的字段；概要中的接管或删除含义保持不变。')
+    add('引用 IP 分组', groupRefs(op), groupNote)
     add('目的网段', strings(op.dst).map(value => ({ label: '目的', value })))
   }
   return groups.filter(group => group.rows.length)

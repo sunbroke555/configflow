@@ -26,7 +26,7 @@ class Device:
         self.driver = IKuaiDriver('https://192.0.2.1', 'test', 'test')
         self.driver._post = self.post
 
-    def post(self, path, payload):
+    def post(self, path, payload, timeout=None):
         if path == '/Action/login':
             return {'Result': 10000, 'code': 0}
         self.calls.append(deepcopy(payload))

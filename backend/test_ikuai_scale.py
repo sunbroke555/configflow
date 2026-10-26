@@ -42,7 +42,8 @@ class PagedIKuai(StatefulIKuai):
             offset, size = map(int, param['limit'].split(','))
             response._data['results']['data'] = response._data['results']['data'][offset:offset + size]
             return response
-        if action == 'add' and any(row.get('tagname') == param.get('tagname') for row in self.rows[func]):
+        if action == 'add' and func != 'route_object' and any(
+                row.get('tagname') == param.get('tagname') for row in self.rows[func]):
             self.writes.append((func, action, copy.deepcopy(param)))
             return FakeResponse({'code': 3001, 'message': '请求参数不合法',
                                  'details': [{'field': 'tagname', 'msg': '名称已存在，请重新输入'}]})
@@ -266,12 +267,14 @@ def test_rollback_still_attempts_every_undo_after_a_re_add_is_lost():
     session.fail = ('nat_rule', 'edit')
     driver = _driver(session)
     plan = _plan(driver)
-    assert [op['kind'] for op in plan['stages'][1]['ops']] == ['policy_route_add'] + ['route_delete'] * 3
+    assert [op['kind'] for op in plan['stages'][1]['ops']] == ['ikuai_group_add', 'policy_route_add'] + [
+        'route_delete'] * 3
     result = execute(plan, driver, FakeAgent(SAFE_RETURN_STATUS))
     assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
-    undone = [(func, action) for func, action, _ in session.writes][5:]
-    assert undone == [('static_rt', 'add')] * 3 + [('stream_ipport', 'del')]
-    assert session.rows['stream_ipport'] == []
+    undone = [(func, action) for func, action, _ in session.writes][7:]
+    assert undone == [('route_object', 'del')] + [('static_rt', 'add')] * 3 + [('stream_ipport', 'del'),
+                                                                              ('route_object', 'del')]
+    assert session.rows['stream_ipport'] == [] and session.rows['route_object'] == []
     assert result['rollback'][-1]['status'] == 'failed'
 
 
@@ -328,8 +331,9 @@ def test_rollback_removes_every_added_route_with_one_snapshot():
     session.shows.clear()
     result = execute(plan, driver, None)
     assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
-    assert [entry['status'] for entry in result['rollback']] == ['ok'] * 300
-    assert session.rows['static_rt'] == before
+    # The NAT stage's new IP group, then every route.
+    assert [entry['status'] for entry in result['rollback']] == ['ok'] * 301
+    assert session.rows['static_rt'] == before and session.rows['route_object'] == []
     assert len(session.static_shows()) <= 10
 
 
@@ -408,7 +412,8 @@ def test_route_changed_after_adding_is_not_deleted_on_rollback():
             current.rows['static_rt'][-1]['gateway'] = '10.0.0.99'
     session.on_write = edit_by_hand
     result = execute(plan, driver, None)
-    [entry] = result['rollback']
+    group, entry = result['rollback']
+    assert group['status'] == 'ok' and session.rows['route_object'] == []
     assert entry['status'] == 'failed' and '已被修改，未自动删除' in entry['summary']
     assert len(session.rows['static_rt']) == 11
 
@@ -440,9 +445,10 @@ def test_nat_rule_whose_reply_was_lost_is_rolled_back():
     session.on_write = lose_nat_reply
     result = execute(plan, driver, None)
     assert not result['ok'] and result['failed_stage'] == 'nat_bypass'
-    assert [entry['stage'] for entry in result['rollback'] if entry['status'] == 'ok'] == ['nat_bypass', 'routes',
-                                                                                          'routes']
+    assert [entry['stage'] for entry in result['rollback'] if entry['status'] == 'ok'] == [
+        'nat_bypass', 'nat_bypass', 'routes', 'routes']
     assert session.rows['nat_rule'] == [] and len(session.rows['static_rt']) == 5
+    assert session.rows['route_object'] == []
 
 
 def test_rollback_reports_restored_routes_it_cannot_read_back():
@@ -519,16 +525,21 @@ def test_empty_reply_points_at_request_size(content, message):
         driver._post('/Action/call', {})
 
 
-def test_rules_too_large_for_one_request_are_blocked_in_the_preview():
+def test_requests_too_large_for_one_request_are_still_blocked_in_the_preview():
+    # Plans split destinations into IP groups that fit; anything else that would not fit is refused.
     cidrs = _cidrs(6000, '10.0.0.0/8', 24)
     blockers = oversized_requests([
         {'kind': 'policy_route_add', 'gateway': GATEWAY, 'dst': cidrs, 'comment': 'cf-mihomo'},
         {'kind': 'nat_add', 'src': ['10.0.0.1-10.0.0.3'], 'dst': cidrs, 'comment': 'cf-mihomo'},
-        {'kind': 'policy_route_update', 'id': '1', 'gateway': GATEWAY, 'dst': cidrs[:100], 'comment': 'cf-mihomo'},
+        {'kind': 'ikuai_group_add', 'name': 'cf_pa_1', 'role': 'pa', 'values': cidrs[:3000]},
+        {'kind': 'policy_route_add', 'gateway': GATEWAY, 'dst': cidrs, 'groups': ['cf_pa_1', 'cf_pa_2', 'cf_pa_3'],
+         'comment': 'cf-mihomo'},
+        {'kind': 'ikuai_group_add', 'name': 'cf_pa_2', 'role': 'pa', 'values': cidrs[:2000]},
         {'kind': 'route_add', 'cidr': cidrs[0], 'gateway': GATEWAY, 'comment': 'cf-x'}])
-    assert len(blockers) == 2
+    assert len(blockers) == 3
     assert blockers[0].startswith('iKuai 端口分流「cf-mihomo」需要一次写入 6000 个网段')
     assert blockers[1].startswith('iKuai NAT 免转换规则「cf-mihomo」需要一次写入 6000 个网段')
+    assert blockers[2].startswith('iKuai IP 分组「cf_pa_1」需要一次写入 3000 个网段')
 
 
 def test_request_size_limit_matches_what_ikuai_accepts():
@@ -539,14 +550,26 @@ def test_request_size_limit_matches_what_ikuai_accepts():
     assert size(5706) <= MAX_REQUEST_BYTES < size(5712)
 
 
-def test_oversized_policy_rule_blocks_the_release_plan():
-    desired = {**DESIRED, 'proxy_cidrs': [{'cidr': cidr, 'sources': ['lab']}
-                                          for cidr in _cidrs(6000, '10.0.0.0/8', 24)]}
-    driver = _driver(StatefulIKuai([], [], policies=MIGRATED))
+@pytest.mark.parametrize('count', [6000, 20000])
+def test_large_destination_sets_publish_in_requests_that_fit(count):
+    # A rule listing ~5000 CIDRs used to exceed the request limit; IP groups split them.
+    from backend.routers.ikuai_groups import GROUP_MAX_BYTES
+    cidrs = _cidrs(count, '10.0.0.0/8', 24)
+    desired = {**DESIRED, 'proxy_cidrs': [{'cidr': cidr, 'sources': ['lab']} for cidr in cidrs]}
+    session = PagedIKuai([], [], policies=MIGRATED)
+    driver = _driver(session)
     plan = _plan(driver, desired=desired)
-    assert any(blocker.startswith('iKuai 端口分流「cf-mihomo」') for blocker in plan['blockers'])
-    small = _plan(_driver(StatefulIKuai([], [], policies=MIGRATED)))
-    assert small['blockers'] == []
+    assert plan['blockers'] == []
+    agent = FakeAgent(SAFE_RETURN_STATUS)
+    result = execute(plan, driver, agent)
+    assert result['ok'], result['log'][-3:]
+    sizes = [request_bytes(func, action, param) for func, action, param in session.writes]
+    assert max(sizes) <= GROUP_MAX_BYTES < MAX_REQUEST_BYTES
+    groups = session.rows['route_object']
+    for prefix in ('cf_pa_', 'cf_nat_'):
+        assert len([row for row in groups if row['group_name'].startswith(prefix)]) == -(-count // 2000)
+    assert all(len(row['group_value']) <= 2000 for row in groups)
+    assert _plan(driver, status={**agent.status(), 'status': 'ok'}, desired=desired)['empty']
 
 
 def test_router_plan_for_routeros_is_never_size_checked():

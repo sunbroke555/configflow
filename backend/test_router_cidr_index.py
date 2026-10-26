@@ -17,6 +17,7 @@ from backend.routers.base import (
     as_dict, is_managed, NatBypassEntry, POLICY_AUTO_COMMENT, POLICY_MANUAL_COMMENT, policy_route, policy_route_ok,
     PolicyRouteEntry, RouteEntry, RouterError, RouterState,
 )
+from backend.routers.ikuai_groups import canon
 from backend.routers.plan import _policy_op
 from backend.routers.report import _nat_items, _policy_route_items, SupernetIndex
 
@@ -106,8 +107,10 @@ def legacy_policy_route_items(desired, state):
     extra = [{'cidr': route.dst, 'gateway': route.gateway, 'route_id': route.id, 'comment': route.comment}
              for route in state.routes if is_managed(route.comment) and route.dst not in desired_cidrs]
     if auto:
+        # A rule's entries are compared as addresses (an IP group may read 1.1.1.1/32 back as 1.1.1.1).
+        wanted = {canon(cidr) for cidr in desired_cidrs}
         extra += [{'cidr': cidr, 'gateway': auto.gateway, 'route_id': f'policy:{auto.id}', 'comment': auto.comment}
-                  for cidr in auto.dst if cidr not in desired_cidrs]
+                  for cidr in auto.dst if canon(cidr) not in wanted]
     unmanaged_other = [{'cidr': route.dst, 'gateway': route.gateway, 'comment': route.comment, 'enabled': route.enabled,
                         'migrate': route.enabled}
                        for route in state.routes
