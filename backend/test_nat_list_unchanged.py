@@ -2,8 +2,8 @@
 
 These values were recorded before the list-based NAT bypass existed. Plans that
 need no new exemption (not required, already covered by per-destination
-rules, adopt-only, unknown), iKuai and source-policy plans keep producing the
-same operations, fingerprints, checks and writes.
+rules, adopt-only, unknown) and source-policy plans keep producing the same
+operations, fingerprints, checks and writes; iKuai never gets the list rule.
 """
 import copy
 import hashlib
@@ -54,39 +54,7 @@ SCENARIOS = {
 }
 
 # Recorded on claude/ros-release-batch (d998f08a), before list-based NAT bypass.
-EXPECTED = {'ikuai:empty': {'blockers': [],
-                            'checks': '112917e7d2bac9c288ec21151e1c331f5156149e45006d68ed3d8208cda9d876',
-                            'desired': 'f35a89ec929d53c0a896090af2f495761f163c4713d8ab3a0a675d94d81e2f5c',
-                            'fingerprint': 'e139c29845eb23d2',
-                            'nat_ops': [{'comment': 'cf-mihomo',
-                                         'dst': ['91.108.0.0/16', '149.154.160.0/20', '198.18.0.0/16'],
-                                         'kind': 'nat_add',
-                                         'src': ['10.0.0.1-10.0.0.3', '10.0.0.5-10.0.0.254'],
-                                         'summary': '新增 NAT 免转换规则：源 10.0.0.1-10.0.0.3, 10.0.0.5-10.0.0.254，目的 '
-                                                    '91.108.0.0/16, 149.154.160.0/20, 198.18.0.0/16'}],
-                            'stages': '2c6fab74a4b660a3d268b9270e0c76f242f363f8b53ad56f02ad86d9ed126311'},
-            'ikuai:home': {'blockers': [],
-                           'checks': 'ed054f48cb82f332f15583899f08895275d4db8905532116e9e423c49a6d56af',
-                           'desired': 'f35a89ec929d53c0a896090af2f495761f163c4713d8ab3a0a675d94d81e2f5c',
-                           'fingerprint': '03d45f4de28f72b7',
-                           'nat_ops': [{'add_dst': ['91.108.0.0/16', '149.154.160.0/20'],
-                                        'comment': 'cf-mihomo',
-                                        'id': '1',
-                                        'kind': 'nat_update',
-                                        'summary': '接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo），并加入 91.108.0.0/16, '
-                                                   '149.154.160.0/20'}],
-                           'stages': '51e3ec28b87fc4632b1877f4b6cc302b9b6c2723be2fadf54440f09e97bd3258'},
-            'ikuai:managed': {'blockers': [],
-                              'checks': 'ed054f48cb82f332f15583899f08895275d4db8905532116e9e423c49a6d56af',
-                              'desired': 'f35a89ec929d53c0a896090af2f495761f163c4713d8ab3a0a675d94d81e2f5c',
-                              'fingerprint': '6949252ae6f0b3a6',
-                              'nat_ops': [{'add_dst': ['91.108.0.0/16', '149.154.160.0/20'],
-                                           'comment': 'cf-mihomo',
-                                           'id': '1',
-                                           'kind': 'nat_update',
-                                           'summary': '受管 NAT 免转换规则「cf-mihomo」加入 91.108.0.0/16, 149.154.160.0/20'}],
-                              'stages': '0e4e8665d0d8c61cb7876753551bdfa4becc62ee9d118579f2981aa98c609f4a'},
-            'policy': {'bundle': 'd34900c79f390f0cb7195ac5f59b61bb46a322e8a486106488e2e8f8b25d59f1',
+EXPECTED = {'policy': {'bundle': 'd34900c79f390f0cb7195ac5f59b61bb46a322e8a486106488e2e8f8b25d59f1',
                        'checks': '2940f8036634166f0075a1c9de295ab3827a58a0fae8ad4fd572b0335f6b2972',
                        'fingerprint': '074288f26a91a9e1',
                        'spec': '07c8ffd07742f7e7dbe1a2975ee59928b8a2d5e3ed85b56ec5d24d20d1e71adc',
@@ -279,7 +247,6 @@ def restrict_message(kind):
 
 def observe_all():
     result = {f'static:{name}': observe_static(name) for name in SCENARIOS}
-    result.update({f'ikuai:{name}': observe_ikuai(name) for name in ('home', 'managed', 'empty')})
     result['policy'] = observe_policy()
     result['policy_literal_migration'] = observe_policy_literal_migration()
     result['restrict'] = {kind: restrict_message(kind) for kind in ('nat_add', 'nat_update')}
@@ -303,8 +270,11 @@ def test_merging_old_rules_leaves_the_routes_stage_as_recorded():
 
 
 @pytest.mark.parametrize('variant', ['home', 'managed', 'empty'])
-def test_ikuai_nat_bypass_is_unchanged(variant):
-    assert observe_ikuai(variant) == EXPECTED[f'ikuai:{variant}']
+def test_ikuai_never_gets_the_routeros_list_rule(variant):
+    # iKuai NAT now references ConfigFlow IP groups (test_ikuai_groups.py);
+    # the RouterOS address-list rule must still never reach it.
+    nat_ops = observe_ikuai(variant)['nat_ops']
+    assert nat_ops and all(op['kind'] != 'nat_list_sync' for op in nat_ops)
 
 
 def test_source_policy_bundle_and_its_nat_are_unchanged():

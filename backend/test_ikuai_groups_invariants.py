@@ -1,9 +1,9 @@
-"""iKuai IP groups for proxy destinations leave every other router path exactly as 4f07e227 had it.
+"""iKuai IP groups for proxy destinations leave every other router path exactly as c877e3cc had it.
 
 RouterOS plans, fingerprints, REST writes and final rows, and the iKuai static
 route stage (``static_rt`` one row per CIDR), are pinned here. The helpers only
-use code that already existed in 4f07e227, so the fixture in
-``testdata/router_plans_pre_ikuai_groups_4f07e227.json`` was produced by running
+use code that already existed in c877e3cc, so the fixture in
+``testdata/router_plans_pre_ikuai_groups_c877e3cc.json`` was produced by running
 them against that commit (``python -m backend.test_ikuai_groups_invariants``).
 """
 import copy
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-BASELINE = Path(__file__).parent / 'testdata' / 'router_plans_pre_ikuai_groups_4f07e227.json'
+BASELINE = Path(__file__).parent / 'testdata' / 'router_plans_pre_ikuai_groups_c877e3cc.json'
 PLAN_KEYS = ('stages', 'checks', 'blockers', 'warnings', 'fingerprint', 'empty')
 STATIC_CHECKS = ('gateway', 'routes', 'removed_routes', 'restored_routes', 'removed_policy_routes')
 

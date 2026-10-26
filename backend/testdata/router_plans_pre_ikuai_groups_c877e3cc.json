@@ -10327,6 +10327,56 @@
       "149.154.160.0/20",
       "198.18.0.0/16"
      ],
+     "nat_list": {
+      "destinations": [
+       "91.108.0.0/16",
+       "149.154.160.0/20"
+      ],
+      "members": {
+       "dst": [
+        "149.154.160.0/20",
+        "91.108.0.0/16"
+       ],
+       "src": [
+        "10.0.0.1/32",
+        "10.0.0.128/26",
+        "10.0.0.16/28",
+        "10.0.0.192/27",
+        "10.0.0.2/31",
+        "10.0.0.224/28",
+        "10.0.0.240/29",
+        "10.0.0.248/30",
+        "10.0.0.252/31",
+        "10.0.0.254/32",
+        "10.0.0.32/27",
+        "10.0.0.5/32",
+        "10.0.0.6/31",
+        "10.0.0.64/26",
+        "10.0.0.8/29"
+       ]
+      },
+      "out_interface": "",
+      "removed": [],
+      "rule": "*78",
+      "sources": [
+       "10.0.0.1/32",
+       "10.0.0.2/31",
+       "10.0.0.5/32",
+       "10.0.0.6/31",
+       "10.0.0.8/29",
+       "10.0.0.16/28",
+       "10.0.0.32/27",
+       "10.0.0.64/26",
+       "10.0.0.128/26",
+       "10.0.0.192/27",
+       "10.0.0.224/28",
+       "10.0.0.240/29",
+       "10.0.0.248/30",
+       "10.0.0.252/31",
+       "10.0.0.254/32"
+      ],
+      "withdraw": false
+     },
      "nat_not_required": [],
      "removed_routes": [],
      "return_routing": {
@@ -10357,7 +10407,7 @@
      ]
     },
     "empty": true,
-    "fingerprint": "95a10143f6eec127",
+    "fingerprint": "347175a55bdf5bda",
     "stages": [
      {
       "enabled": true,
@@ -10399,6 +10449,56 @@
       "149.154.160.0/20",
       "198.18.0.0/16"
      ],
+     "nat_list": {
+      "destinations": [
+       "91.108.0.0/16",
+       "149.154.160.0/20"
+      ],
+      "members": {
+       "dst": [
+        "149.154.160.0/20",
+        "91.108.0.0/16"
+       ],
+       "src": [
+        "10.0.0.1/32",
+        "10.0.0.128/26",
+        "10.0.0.16/28",
+        "10.0.0.192/27",
+        "10.0.0.2/31",
+        "10.0.0.224/28",
+        "10.0.0.240/29",
+        "10.0.0.248/30",
+        "10.0.0.252/31",
+        "10.0.0.254/32",
+        "10.0.0.32/27",
+        "10.0.0.5/32",
+        "10.0.0.6/31",
+        "10.0.0.64/26",
+        "10.0.0.8/29"
+       ]
+      },
+      "out_interface": "",
+      "removed": [],
+      "rule": null,
+      "sources": [
+       "10.0.0.1/32",
+       "10.0.0.2/31",
+       "10.0.0.5/32",
+       "10.0.0.6/31",
+       "10.0.0.8/29",
+       "10.0.0.16/28",
+       "10.0.0.32/27",
+       "10.0.0.64/26",
+       "10.0.0.128/26",
+       "10.0.0.192/27",
+       "10.0.0.224/28",
+       "10.0.0.240/29",
+       "10.0.0.248/30",
+       "10.0.0.252/31",
+       "10.0.0.254/32"
+      ],
+      "withdraw": false
+     },
      "nat_not_required": [],
      "removed_routes": [],
      "return_routing": {
@@ -10429,7 +10529,7 @@
      ]
     },
     "empty": false,
-    "fingerprint": "6c564687f649ef45",
+    "fingerprint": "7ca88e985e036483",
     "stages": [
      {
       "enabled": true,
@@ -10490,10 +10590,7 @@
       "manual": false,
       "ops": [
        {
-        "add_dst": [
-         "91.108.0.0/16",
-         "149.154.160.0/20"
-        ],
+        "add_dst": [],
         "comment": "cf-mihomo",
         "expected": {
          "action": "accept",
@@ -10505,7 +10602,64 @@
         },
         "id": "*A",
         "kind": "nat_update",
-        "summary": "接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo），并加入 91.108.0.0/16, 149.154.160.0/20"
+        "summary": "接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo）"
+       },
+       {
+        "comment": "cf-mihomo-nat",
+        "destinations": [
+         "91.108.0.0/16",
+         "149.154.160.0/20"
+        ],
+        "dst_add": [
+         "91.108.0.0/16",
+         "149.154.160.0/20"
+        ],
+        "dst_list": "cf-mihomo-nat-dst",
+        "dst_remove": [],
+        "kind": "nat_list_sync",
+        "legacy": [],
+        "out_interface": "",
+        "replace_rule": false,
+        "rule": null,
+        "sources": [
+         "10.0.0.1/32",
+         "10.0.0.2/31",
+         "10.0.0.5/32",
+         "10.0.0.6/31",
+         "10.0.0.8/29",
+         "10.0.0.16/28",
+         "10.0.0.32/27",
+         "10.0.0.64/26",
+         "10.0.0.128/26",
+         "10.0.0.192/27",
+         "10.0.0.224/28",
+         "10.0.0.240/29",
+         "10.0.0.248/30",
+         "10.0.0.252/31",
+         "10.0.0.254/32"
+        ],
+        "src_add": [
+         "10.0.0.1/32",
+         "10.0.0.2/31",
+         "10.0.0.5/32",
+         "10.0.0.6/31",
+         "10.0.0.8/29",
+         "10.0.0.16/28",
+         "10.0.0.32/27",
+         "10.0.0.64/26",
+         "10.0.0.128/26",
+         "10.0.0.192/27",
+         "10.0.0.224/28",
+         "10.0.0.240/29",
+         "10.0.0.248/30",
+         "10.0.0.252/31",
+         "10.0.0.254/32"
+        ],
+        "src_list": "cf-mihomo-nat-src",
+        "src_remove": [],
+        "stale": [],
+        "summary": "新增 NAT 免转换规则「cf-mihomo-nat」：源地址列表 cf-mihomo-nat-src（10.0.0.4 所在 /24 除 10.0.0.4 外，15 段）→ 目的地址列表 cf-mihomo-nat-dst（2 个网段），放在所有源 NAT 转换规则之前",
+        "withdraw": false
        }
       ],
       "title": "主路由 NAT 免转换"
@@ -10556,7 +10710,12 @@
      {
       "stage": "nat_bypass",
       "status": "ok",
-      "summary": "接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo），并加入 91.108.0.0/16, 149.154.160.0/20"
+      "summary": "接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo）"
+     },
+     {
+      "stage": "nat_bypass",
+      "status": "ok",
+      "summary": "新增 NAT 免转换规则「cf-mihomo-nat」：源地址列表 cf-mihomo-nat-src（10.0.0.4 所在 /24 除 10.0.0.4 外，15 段）→ 目的地址列表 cf-mihomo-nat-dst（2 个网段），放在所有源 NAT 转换规则之前"
      },
      {
       "stage": "nat_bypass",
@@ -10580,27 +10739,138 @@
       ".id": "*C",
       "address": "10.0.0.1-10.0.0.3",
       "list": "limited-clients"
-     }
-    ],
-    "/ip/firewall/mangle": [],
-    "/ip/firewall/nat": [
+     },
      {
       ".id": "*67",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.1",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.0/24"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*68",
+      "address": "10.0.0.2/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*69",
+      "address": "10.0.0.5",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6A",
+      "address": "10.0.0.6/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6B",
+      "address": "10.0.0.8/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6C",
+      "address": "10.0.0.16/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6D",
+      "address": "10.0.0.32/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6E",
+      "address": "10.0.0.64/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6F",
+      "address": "10.0.0.128/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*70",
+      "address": "10.0.0.192/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*71",
+      "address": "10.0.0.224/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*72",
+      "address": "10.0.0.240/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*73",
+      "address": "10.0.0.248/30",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*74",
+      "address": "10.0.0.252/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*75",
+      "address": "10.0.0.254",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*76",
+      "address": "91.108.0.0/16",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
+     },
+     {
+      ".id": "*77",
+      "address": "149.154.160.0/20",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
+     }
+    ],
+    "/ip/firewall/filter": [],
+    "/ip/firewall/mangle": [],
+    "/ip/firewall/nat": [
+     {
+      ".id": "*78",
       "action": "accept",
       "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.0/24"
+      "dst-address-list": "cf-mihomo-nat-dst",
+      "src-address-list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*A",
@@ -10619,6 +10889,7 @@
       "disabled": "false"
      }
     ],
+    "/ip/firewall/raw": [],
     "/ip/route": [
      {
       ".id": "*1",
@@ -10702,15 +10973,172 @@
     ],
     [
      "PUT",
-     "/ip/firewall/nat",
+     "/ip/firewall/address-list",
      {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.1/32",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "place-before": "*A",
-      "src-address": "10.0.0.0/24"
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.2/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.5/32",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.6/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.8/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.16/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.32/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.64/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.128/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.192/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.224/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.240/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.248/30",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.252/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.254/32",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "91.108.0.0/16",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "149.154.160.0/20",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
      }
     ],
     [
@@ -10719,11 +11147,11 @@
      {
       "action": "accept",
       "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
+      "dst-address-list": "cf-mihomo-nat-dst",
       "place-before": "*A",
-      "src-address": "10.0.0.0/24"
+      "src-address-list": "cf-mihomo-nat-src"
      }
     ]
    ]
@@ -10739,6 +11167,60 @@
       "198.18.0.0/16",
       "185.76.151.0/24"
      ],
+     "nat_list": {
+      "destinations": [
+       "185.76.151.0/24",
+       "91.108.0.0/16",
+       "149.154.160.0/20",
+       "198.18.0.0/16"
+      ],
+      "members": {
+       "dst": [
+        "149.154.160.0/20",
+        "185.76.151.0/24",
+        "198.18.0.0/16",
+        "91.108.0.0/16"
+       ],
+       "src": [
+        "10.0.0.1/32",
+        "10.0.0.128/26",
+        "10.0.0.16/28",
+        "10.0.0.192/27",
+        "10.0.0.2/31",
+        "10.0.0.224/28",
+        "10.0.0.240/29",
+        "10.0.0.248/30",
+        "10.0.0.252/31",
+        "10.0.0.254/32",
+        "10.0.0.32/27",
+        "10.0.0.5/32",
+        "10.0.0.6/31",
+        "10.0.0.64/26",
+        "10.0.0.8/29"
+       ]
+      },
+      "out_interface": "",
+      "removed": [],
+      "rule": "*7A",
+      "sources": [
+       "10.0.0.1/32",
+       "10.0.0.2/31",
+       "10.0.0.5/32",
+       "10.0.0.6/31",
+       "10.0.0.8/29",
+       "10.0.0.16/28",
+       "10.0.0.32/27",
+       "10.0.0.64/26",
+       "10.0.0.128/26",
+       "10.0.0.192/27",
+       "10.0.0.224/28",
+       "10.0.0.240/29",
+       "10.0.0.248/30",
+       "10.0.0.252/31",
+       "10.0.0.254/32"
+      ],
+      "withdraw": false
+     },
      "nat_not_required": [],
      "removed_routes": [],
      "return_routing": {
@@ -10774,7 +11256,7 @@
      ]
     },
     "empty": false,
-    "fingerprint": "88251278d4d11ad1",
+    "fingerprint": "f3fe5ddf19dfa915",
     "stages": [
      {
       "enabled": true,
@@ -10833,259 +11315,57 @@
       "manual": false,
       "ops": [
        {
-        "add_dst": [
+        "comment": "cf-mihomo-nat",
+        "destinations": [
+         "185.76.151.0/24",
+         "91.108.0.0/16",
+         "149.154.160.0/20",
+         "198.18.0.0/16"
+        ],
+        "dst_add": [
          "185.76.151.0/24"
         ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.1/32"
+        "dst_list": "cf-mihomo-nat-dst",
+        "dst_remove": [],
+        "kind": "nat_list_sync",
+        "legacy": [],
+        "out_interface": "",
+        "replace_rule": false,
+        "rule": {
+         "config": {
+          "action": "accept",
+          "chain": "srcnat",
+          "comment": "cf-mihomo-nat",
+          "disabled": "false",
+          "dst-address-list": "cf-mihomo-nat-dst",
+          "src-address-list": "cf-mihomo-nat-src"
+         },
+         "id": "*7A",
+         "path": "/ip/firewall/nat"
         },
-        "id": "*68",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.1/32）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
+        "sources": [
+         "10.0.0.1/32",
+         "10.0.0.2/31",
+         "10.0.0.5/32",
+         "10.0.0.6/31",
+         "10.0.0.8/29",
+         "10.0.0.16/28",
+         "10.0.0.32/27",
+         "10.0.0.64/26",
+         "10.0.0.128/26",
+         "10.0.0.192/27",
+         "10.0.0.224/28",
+         "10.0.0.240/29",
+         "10.0.0.248/30",
+         "10.0.0.252/31",
+         "10.0.0.254/32"
         ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.2/31"
-        },
-        "id": "*6B",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.2/31）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.5/32"
-        },
-        "id": "*6E",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.5/32）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.6/31"
-        },
-        "id": "*71",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.6/31）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.8/29"
-        },
-        "id": "*74",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.8/29）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.16/28"
-        },
-        "id": "*77",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.16/28）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.32/27"
-        },
-        "id": "*7A",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.32/27）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.64/26"
-        },
-        "id": "*7D",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.64/26）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.128/26"
-        },
-        "id": "*80",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.128/26）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.192/27"
-        },
-        "id": "*83",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.192/27）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.224/28"
-        },
-        "id": "*86",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.224/28）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.240/29"
-        },
-        "id": "*89",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.240/29）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.248/30"
-        },
-        "id": "*8C",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.248/30）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.252/31"
-        },
-        "id": "*8F",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.252/31）"
-       },
-       {
-        "add_dst": [
-         "185.76.151.0/24"
-        ],
-        "comment": "cf-mihomo",
-        "expected": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.0.0/16",
-         "src-address": "10.0.0.254/32"
-        },
-        "id": "*92",
-        "kind": "nat_update",
-        "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.254/32）"
+        "src_add": [],
+        "src_list": "cf-mihomo-nat-src",
+        "src_remove": [],
+        "stale": [],
+        "summary": "NAT 免转换目的列表 cf-mihomo-nat-dst：新增 1 个网段（185.76.151.0/24）",
+        "withdraw": false
        }
       ],
       "title": "主路由 NAT 免转换"
@@ -11126,77 +11406,7 @@
      {
       "stage": "nat_bypass",
       "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.1/32）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.2/31）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.5/32）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.6/31）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.8/29）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.16/28）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.32/27）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.64/26）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.128/26）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.192/27）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.224/28）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.240/29）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.248/30）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.252/31）"
-     },
-     {
-      "stage": "nat_bypass",
-      "status": "ok",
-      "summary": "受管 NAT 免转换规则「cf-mihomo」加入 185.76.151.0/24（源 10.0.0.254/32）"
+      "summary": "NAT 免转换目的列表 cf-mihomo-nat-dst：新增 1 个网段（185.76.151.0/24）"
      },
      {
       "stage": "nat_bypass",
@@ -11220,549 +11430,152 @@
       ".id": "*C",
       "address": "10.0.0.1-10.0.0.3",
       "list": "limited-clients"
-     }
-    ],
-    "/ip/firewall/mangle": [],
-    "/ip/firewall/nat": [
-     {
-      ".id": "*96",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.1/32"
      },
      {
       ".id": "*68",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.1",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.1/32"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*69",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.2/31",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.1/32"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*6A",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.5",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.1/32"
-     },
-     {
-      ".id": "*97",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.2/31"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*6B",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.6/31",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.2/31"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*6C",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.8/29",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.2/31"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*6D",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.16/28",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.2/31"
-     },
-     {
-      ".id": "*98",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.5/32"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*6E",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.32/27",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.5/32"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*6F",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.64/26",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.5/32"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*70",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.128/26",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.5/32"
-     },
-     {
-      ".id": "*99",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.6/31"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*71",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.192/27",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.6/31"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*72",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.224/28",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.6/31"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*73",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.240/29",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.6/31"
-     },
-     {
-      ".id": "*9A",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.8/29"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*74",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.248/30",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.8/29"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*75",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.252/31",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.8/29"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*76",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.254",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.8/29"
-     },
-     {
-      ".id": "*9B",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.16/28"
+      "list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*77",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "91.108.0.0/16",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.16/28"
+      "list": "cf-mihomo-nat-dst"
      },
      {
       ".id": "*78",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "149.154.160.0/20",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.16/28"
+      "list": "cf-mihomo-nat-dst"
      },
      {
       ".id": "*79",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "198.18.0.0/16",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.16/28"
+      "list": "cf-mihomo-nat-dst"
      },
      {
-      ".id": "*9C",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      ".id": "*7C",
+      "address": "185.76.151.0/24",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.32/27"
-     },
+      "list": "cf-mihomo-nat-dst"
+     }
+    ],
+    "/ip/firewall/filter": [],
+    "/ip/firewall/mangle": [],
+    "/ip/firewall/nat": [
      {
       ".id": "*7A",
       "action": "accept",
       "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.32/27"
-     },
-     {
-      ".id": "*7B",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.32/27"
-     },
-     {
-      ".id": "*7C",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.32/27"
-     },
-     {
-      ".id": "*9D",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.64/26"
-     },
-     {
-      ".id": "*7D",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.64/26"
-     },
-     {
-      ".id": "*7E",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.64/26"
-     },
-     {
-      ".id": "*7F",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.64/26"
-     },
-     {
-      ".id": "*9E",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.128/26"
-     },
-     {
-      ".id": "*80",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.128/26"
-     },
-     {
-      ".id": "*81",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.128/26"
-     },
-     {
-      ".id": "*82",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.128/26"
-     },
-     {
-      ".id": "*9F",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.192/27"
-     },
-     {
-      ".id": "*83",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.192/27"
-     },
-     {
-      ".id": "*84",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.192/27"
-     },
-     {
-      ".id": "*85",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.192/27"
-     },
-     {
-      ".id": "*A0",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.224/28"
-     },
-     {
-      ".id": "*86",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.224/28"
-     },
-     {
-      ".id": "*87",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.224/28"
-     },
-     {
-      ".id": "*88",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.224/28"
-     },
-     {
-      ".id": "*A1",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.240/29"
-     },
-     {
-      ".id": "*89",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.240/29"
-     },
-     {
-      ".id": "*8A",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.240/29"
-     },
-     {
-      ".id": "*8B",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.240/29"
-     },
-     {
-      ".id": "*A2",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.248/30"
-     },
-     {
-      ".id": "*8C",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.248/30"
-     },
-     {
-      ".id": "*8D",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.248/30"
-     },
-     {
-      ".id": "*8E",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.248/30"
-     },
-     {
-      ".id": "*A3",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.252/31"
-     },
-     {
-      ".id": "*8F",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.252/31"
-     },
-     {
-      ".id": "*90",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.252/31"
-     },
-     {
-      ".id": "*91",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.252/31"
-     },
-     {
-      ".id": "*A4",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "src-address": "10.0.0.254/32"
-     },
-     {
-      ".id": "*92",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "src-address": "10.0.0.254/32"
-     },
-     {
-      ".id": "*93",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "149.154.160.0/20",
-      "src-address": "10.0.0.254/32"
-     },
-     {
-      ".id": "*94",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "10.0.0.254/32"
+      "dst-address-list": "cf-mihomo-nat-dst",
+      "src-address-list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*F",
@@ -11772,6 +11585,7 @@
       "disabled": "false"
      }
     ],
+    "/ip/firewall/raw": [],
     "/ip/route": [
      {
       ".id": "*65",
@@ -11795,7 +11609,7 @@
       "gateway": "10.0.0.4"
      },
      {
-      ".id": "*95",
+      ".id": "*7B",
       "comment": "cf-Telegram",
       "disabled": "false",
       "dst-address": "185.76.151.0/24",
@@ -11818,197 +11632,12 @@
     ],
     [
      "PUT",
-     "/ip/firewall/nat",
+     "/ip/firewall/address-list",
      {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "185.76.151.0/24",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*68",
-      "src-address": "10.0.0.1/32"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*6B",
-      "src-address": "10.0.0.2/31"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*6E",
-      "src-address": "10.0.0.5/32"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*71",
-      "src-address": "10.0.0.6/31"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*74",
-      "src-address": "10.0.0.8/29"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*77",
-      "src-address": "10.0.0.16/28"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*7A",
-      "src-address": "10.0.0.32/27"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*7D",
-      "src-address": "10.0.0.64/26"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*80",
-      "src-address": "10.0.0.128/26"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*83",
-      "src-address": "10.0.0.192/27"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*86",
-      "src-address": "10.0.0.224/28"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*89",
-      "src-address": "10.0.0.240/29"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*8C",
-      "src-address": "10.0.0.248/30"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*8F",
-      "src-address": "10.0.0.252/31"
-     }
-    ],
-    [
-     "PUT",
-     "/ip/firewall/nat",
-     {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "185.76.151.0/24",
-      "place-before": "*92",
-      "src-address": "10.0.0.254/32"
+      "list": "cf-mihomo-nat-dst"
      }
     ]
    ]
@@ -12023,6 +11652,56 @@
       "149.154.160.0/20",
       "198.18.0.0/16"
      ],
+     "nat_list": {
+      "destinations": [
+       "91.108.0.0/16",
+       "149.154.160.0/20"
+      ],
+      "members": {
+       "dst": [
+        "149.154.160.0/20",
+        "91.108.0.0/16"
+       ],
+       "src": [
+        "10.0.0.1/32",
+        "10.0.0.128/26",
+        "10.0.0.16/28",
+        "10.0.0.192/27",
+        "10.0.0.2/31",
+        "10.0.0.224/28",
+        "10.0.0.240/29",
+        "10.0.0.248/30",
+        "10.0.0.252/31",
+        "10.0.0.254/32",
+        "10.0.0.32/27",
+        "10.0.0.5/32",
+        "10.0.0.6/31",
+        "10.0.0.64/26",
+        "10.0.0.8/29"
+       ]
+      },
+      "out_interface": "",
+      "removed": [],
+      "rule": null,
+      "sources": [
+       "10.0.0.1/32",
+       "10.0.0.2/31",
+       "10.0.0.5/32",
+       "10.0.0.6/31",
+       "10.0.0.8/29",
+       "10.0.0.16/28",
+       "10.0.0.32/27",
+       "10.0.0.64/26",
+       "10.0.0.128/26",
+       "10.0.0.192/27",
+       "10.0.0.224/28",
+       "10.0.0.240/29",
+       "10.0.0.248/30",
+       "10.0.0.252/31",
+       "10.0.0.254/32"
+      ],
+      "withdraw": false
+     },
      "nat_not_required": [],
      "removed_routes": [],
      "return_routing": {
@@ -12053,7 +11732,7 @@
      ]
     },
     "empty": false,
-    "fingerprint": "6c564687f649ef45",
+    "fingerprint": "7ca88e985e036483",
     "stages": [
      {
       "enabled": true,
@@ -12114,10 +11793,7 @@
       "manual": false,
       "ops": [
        {
-        "add_dst": [
-         "91.108.0.0/16",
-         "149.154.160.0/20"
-        ],
+        "add_dst": [],
         "comment": "cf-mihomo",
         "expected": {
          "action": "accept",
@@ -12129,7 +11805,64 @@
         },
         "id": "*A",
         "kind": "nat_update",
-        "summary": "接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo），并加入 91.108.0.0/16, 149.154.160.0/20"
+        "summary": "接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo）"
+       },
+       {
+        "comment": "cf-mihomo-nat",
+        "destinations": [
+         "91.108.0.0/16",
+         "149.154.160.0/20"
+        ],
+        "dst_add": [
+         "91.108.0.0/16",
+         "149.154.160.0/20"
+        ],
+        "dst_list": "cf-mihomo-nat-dst",
+        "dst_remove": [],
+        "kind": "nat_list_sync",
+        "legacy": [],
+        "out_interface": "",
+        "replace_rule": false,
+        "rule": null,
+        "sources": [
+         "10.0.0.1/32",
+         "10.0.0.2/31",
+         "10.0.0.5/32",
+         "10.0.0.6/31",
+         "10.0.0.8/29",
+         "10.0.0.16/28",
+         "10.0.0.32/27",
+         "10.0.0.64/26",
+         "10.0.0.128/26",
+         "10.0.0.192/27",
+         "10.0.0.224/28",
+         "10.0.0.240/29",
+         "10.0.0.248/30",
+         "10.0.0.252/31",
+         "10.0.0.254/32"
+        ],
+        "src_add": [
+         "10.0.0.1/32",
+         "10.0.0.2/31",
+         "10.0.0.5/32",
+         "10.0.0.6/31",
+         "10.0.0.8/29",
+         "10.0.0.16/28",
+         "10.0.0.32/27",
+         "10.0.0.64/26",
+         "10.0.0.128/26",
+         "10.0.0.192/27",
+         "10.0.0.224/28",
+         "10.0.0.240/29",
+         "10.0.0.248/30",
+         "10.0.0.252/31",
+         "10.0.0.254/32"
+        ],
+        "src_list": "cf-mihomo-nat-src",
+        "src_remove": [],
+        "stale": [],
+        "summary": "新增 NAT 免转换规则「cf-mihomo-nat」：源地址列表 cf-mihomo-nat-src（10.0.0.4 所在 /24 除 10.0.0.4 外，15 段）→ 目的地址列表 cf-mihomo-nat-dst（2 个网段），放在所有源 NAT 转换规则之前",
+        "withdraw": false
        }
       ],
       "title": "主路由 NAT 免转换"
@@ -12146,7 +11879,6 @@
     "warnings": []
    },
    "result": {
-    "failed_stage": "nat_bypass",
     "log": [
      {
       "stage": "return_routing",
@@ -12180,33 +11912,22 @@
      },
      {
       "stage": "nat_bypass",
-      "status": "failed",
-      "summary": "RouterOS PUT /ip/firewall/nat 返回 HTTP 400（Bad Request: injected write failure）"
+      "status": "ok",
+      "summary": "接管 NAT 免转换规则「mihomo」（备注 → cf-mihomo）"
+     },
+     {
+      "stage": "nat_bypass",
+      "status": "ok",
+      "summary": "新增 NAT 免转换规则「cf-mihomo-nat」：源地址列表 cf-mihomo-nat-src（10.0.0.4 所在 /24 除 10.0.0.4 外，15 段）→ 目的地址列表 cf-mihomo-nat-dst（2 个网段），放在所有源 NAT 转换规则之前"
+     },
+     {
+      "stage": "nat_bypass",
+      "status": "verified",
+      "summary": "回读校验通过"
      }
     ],
-    "ok": false,
-    "rollback": [
-     {
-      "stage": "routes",
-      "status": "ok",
-      "summary": "已撤销：接管路由 198.18.0.0/16（备注「fake-ip」→「cf-fake-ip」）"
-     },
-     {
-      "stage": "routes",
-      "status": "ok",
-      "summary": "已撤销：新增路由 149.154.160.0/20 → 10.0.0.4（备注 cf-Telegram）"
-     },
-     {
-      "stage": "routes",
-      "status": "ok",
-      "summary": "已撤销：新增路由 91.108.0.0/16 → 10.0.0.4（备注 cf-Telegram）"
-     },
-     {
-      "stage": "return_routing",
-      "status": "ok",
-      "summary": "已撤销：应用回流规则（表 inet configflow_return，mark 0x400000，路由表 104 → 10.0.0.1，优先级 104）；标记 3 个网段"
-     }
-    ]
+    "ok": true,
+    "rollback": []
    },
    "rows": {
     "/interface/list": [],
@@ -12221,15 +11942,144 @@
       ".id": "*C",
       "address": "10.0.0.1-10.0.0.3",
       "list": "limited-clients"
+     },
+     {
+      ".id": "*67",
+      "address": "10.0.0.1",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*68",
+      "address": "10.0.0.2/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*69",
+      "address": "10.0.0.5",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6A",
+      "address": "10.0.0.6/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6B",
+      "address": "10.0.0.8/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6C",
+      "address": "10.0.0.16/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6D",
+      "address": "10.0.0.32/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6E",
+      "address": "10.0.0.64/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*6F",
+      "address": "10.0.0.128/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*70",
+      "address": "10.0.0.192/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*71",
+      "address": "10.0.0.224/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*72",
+      "address": "10.0.0.240/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*73",
+      "address": "10.0.0.248/30",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*74",
+      "address": "10.0.0.252/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*75",
+      "address": "10.0.0.254",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*76",
+      "address": "91.108.0.0/16",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
+     },
+     {
+      ".id": "*77",
+      "address": "149.154.160.0/20",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
      }
     ],
+    "/ip/firewall/filter": [],
     "/ip/firewall/mangle": [],
     "/ip/firewall/nat": [
+     {
+      ".id": "*78",
+      "action": "accept",
+      "chain": "srcnat",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "dst-address-list": "cf-mihomo-nat-dst",
+      "src-address-list": "cf-mihomo-nat-src"
+     },
      {
       ".id": "*A",
       "action": "accept",
       "chain": "srcnat",
-      "comment": "mihomo",
+      "comment": "cf-mihomo",
       "disabled": "false",
       "dst-address": "198.18.0.0/16",
       "src-address": "10.0.0.0/24"
@@ -12242,11 +12092,12 @@
       "disabled": "false"
      }
     ],
+    "/ip/firewall/raw": [],
     "/ip/route": [
      {
       ".id": "*1",
       "active": "true",
-      "comment": "fake-ip",
+      "comment": "cf-fake-ip",
       "disabled": "false",
       "distance": "3",
       "dst-address": "198.18.0.0/16",
@@ -12269,6 +12120,20 @@
       "scope": "20",
       "suppress-hw-offload": "true",
       "target-scope": "12"
+     },
+     {
+      ".id": "*65",
+      "comment": "cf-Telegram",
+      "disabled": "false",
+      "dst-address": "91.108.0.0/16",
+      "gateway": "10.0.0.4"
+     },
+     {
+      ".id": "*66",
+      "comment": "cf-Telegram",
+      "disabled": "false",
+      "dst-address": "149.154.160.0/20",
+      "gateway": "10.0.0.4"
      }
     ],
     "/ip/vrf": [],
@@ -12311,15 +12176,172 @@
     ],
     [
      "PUT",
-     "/ip/firewall/nat",
+     "/ip/firewall/address-list",
      {
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "address": "10.0.0.1/32",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "91.108.0.0/16",
-      "place-before": "*A",
-      "src-address": "10.0.0.0/24"
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.2/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.5/32",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.6/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.8/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.16/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.32/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.64/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.128/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.192/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.224/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.240/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.248/30",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.252/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "10.0.0.254/32",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "91.108.0.0/16",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
+     }
+    ],
+    [
+     "PUT",
+     "/ip/firewall/address-list",
+     {
+      "address": "149.154.160.0/20",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
      }
     ],
     [
@@ -12328,41 +12350,12 @@
      {
       "action": "accept",
       "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "149.154.160.0/20",
+      "dst-address-list": "cf-mihomo-nat-dst",
       "place-before": "*A",
-      "src-address": "10.0.0.0/24"
+      "src-address-list": "cf-mihomo-nat-src"
      }
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*67",
-     null
-    ],
-    [
-     "PATCH",
-     "/ip/firewall/nat/*A",
-     {
-      "comment": "mihomo"
-     }
-    ],
-    [
-     "PATCH",
-     "/ip/route/*1",
-     {
-      "comment": "fake-ip"
-     }
-    ],
-    [
-     "DELETE",
-     "/ip/route/*66",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/route/*65",
-     null
     ]
    ]
   },
@@ -13077,6 +13070,52 @@
      "nat_bypass": [
       "198.18.0.0/16"
      ],
+     "nat_list": {
+      "destinations": [
+       "198.18.0.0/16"
+      ],
+      "members": {
+       "dst": [
+        "198.18.0.0/16"
+       ],
+       "src": [
+        "192.168.0.1/32",
+        "192.168.0.128/26",
+        "192.168.0.16/28",
+        "192.168.0.192/27",
+        "192.168.0.2/32",
+        "192.168.0.224/28",
+        "192.168.0.240/29",
+        "192.168.0.248/30",
+        "192.168.0.252/31",
+        "192.168.0.254/32",
+        "192.168.0.32/27",
+        "192.168.0.4/30",
+        "192.168.0.64/26",
+        "192.168.0.8/29"
+       ]
+      },
+      "out_interface": "",
+      "removed": [],
+      "rule": "*26",
+      "sources": [
+       "192.168.0.1/32",
+       "192.168.0.2/32",
+       "192.168.0.4/30",
+       "192.168.0.8/29",
+       "192.168.0.16/28",
+       "192.168.0.32/27",
+       "192.168.0.64/26",
+       "192.168.0.128/26",
+       "192.168.0.192/27",
+       "192.168.0.224/28",
+       "192.168.0.240/29",
+       "192.168.0.248/30",
+       "192.168.0.252/31",
+       "192.168.0.254/32"
+      ],
+      "withdraw": false
+     },
      "nat_not_required": [],
      "removed_routes": [],
      "ros_policy": {
@@ -13093,171 +13132,13 @@
        },
        {
         "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
+         "address": "91.108.4.0/22",
+         "comment": "cf-mihomo-nat",
          "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.1/32"
-        },
-        "id": "*17",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.2/32"
-        },
-        "id": "*19",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.4/30"
-        },
-        "id": "*1B",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.8/29"
-        },
-        "id": "*1D",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.16/28"
-        },
-        "id": "*1F",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.32/27"
-        },
-        "id": "*21",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.64/26"
-        },
-        "id": "*23",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.128/26"
+         "list": "cf-mihomo-nat-dst"
         },
         "id": "*25",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.192/27"
-        },
-        "id": "*27",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.224/28"
-        },
-        "id": "*29",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.240/29"
-        },
-        "id": "*2B",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.248/30"
-        },
-        "id": "*2D",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.252/31"
-        },
-        "id": "*2F",
-        "path": "/ip/firewall/nat"
-       },
-       {
-        "config": {
-         "action": "accept",
-         "chain": "srcnat",
-         "comment": "cf-mihomo",
-         "disabled": "false",
-         "dst-address": "91.108.4.0/22",
-         "src-address": "192.168.0.254/32"
-        },
-        "id": "*31",
-        "path": "/ip/firewall/nat"
+        "path": "/ip/firewall/address-list"
        }
       ],
       "previous": null,
@@ -13284,7 +13165,7 @@
      ]
     },
     "empty": false,
-    "fingerprint": "27467d98676bd879",
+    "fingerprint": "984bdc26ca2d317e",
     "stages": [
      {
       "enabled": false,
@@ -13392,262 +13273,132 @@
          }
         ],
         "evidence": {
-         "/ip/firewall/address-list": [],
+         "/ip/firewall/address-list": [
+          {
+           ".id": "*24",
+           "address": "198.18.0.0/16",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-dst"
+          },
+          {
+           ".id": "*25",
+           "address": "91.108.4.0/22",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-dst"
+          },
+          {
+           ".id": "*16",
+           "address": "192.168.0.1",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*17",
+           "address": "192.168.0.2",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*18",
+           "address": "192.168.0.4/30",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*19",
+           "address": "192.168.0.8/29",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*1A",
+           "address": "192.168.0.16/28",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*1B",
+           "address": "192.168.0.32/27",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*1C",
+           "address": "192.168.0.64/26",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*1D",
+           "address": "192.168.0.128/26",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*1E",
+           "address": "192.168.0.192/27",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*1F",
+           "address": "192.168.0.224/28",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*20",
+           "address": "192.168.0.240/29",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*21",
+           "address": "192.168.0.248/30",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*22",
+           "address": "192.168.0.252/31",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          },
+          {
+           ".id": "*23",
+           "address": "192.168.0.254",
+           "comment": "cf-mihomo-nat",
+           "disabled": "false",
+           "list": "cf-mihomo-nat-src"
+          }
+         ],
          "/ip/firewall/address-list#names": [],
          "/ip/firewall/filter": [],
          "/ip/firewall/mangle": [],
          "/ip/firewall/nat": [
           {
-           ".id": "*16",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.1/32"
-          },
-          {
-           ".id": "*17",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.1/32"
-          },
-          {
-           ".id": "*18",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.2/32"
-          },
-          {
-           ".id": "*19",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.2/32"
-          },
-          {
-           ".id": "*1A",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.4/30"
-          },
-          {
-           ".id": "*1B",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.4/30"
-          },
-          {
-           ".id": "*1C",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.8/29"
-          },
-          {
-           ".id": "*1D",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.8/29"
-          },
-          {
-           ".id": "*1E",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.16/28"
-          },
-          {
-           ".id": "*1F",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.16/28"
-          },
-          {
-           ".id": "*20",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.32/27"
-          },
-          {
-           ".id": "*21",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.32/27"
-          },
-          {
-           ".id": "*22",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.64/26"
-          },
-          {
-           ".id": "*23",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.64/26"
-          },
-          {
-           ".id": "*24",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.128/26"
-          },
-          {
-           ".id": "*25",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.128/26"
-          },
-          {
            ".id": "*26",
            "action": "accept",
            "chain": "srcnat",
-           "comment": "cf-mihomo",
+           "comment": "cf-mihomo-nat",
            "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.192/27"
-          },
-          {
-           ".id": "*27",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.192/27"
-          },
-          {
-           ".id": "*28",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.224/28"
-          },
-          {
-           ".id": "*29",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.224/28"
-          },
-          {
-           ".id": "*2A",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.240/29"
-          },
-          {
-           ".id": "*2B",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.240/29"
-          },
-          {
-           ".id": "*2C",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.248/30"
-          },
-          {
-           ".id": "*2D",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.248/30"
-          },
-          {
-           ".id": "*2E",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.252/31"
-          },
-          {
-           ".id": "*2F",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.252/31"
-          },
-          {
-           ".id": "*30",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "198.18.0.0/16",
-           "src-address": "192.168.0.254/32"
-          },
-          {
-           ".id": "*31",
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.254/32"
+           "dst-address-list": "cf-mihomo-nat-dst",
+           "src-address-list": "cf-mihomo-nat-src"
           },
           {
            ".id": "*3",
@@ -13712,171 +13463,13 @@
          },
          {
           "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
+           "address": "91.108.4.0/22",
+           "comment": "cf-mihomo-nat",
            "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.1/32"
-          },
-          "id": "*17",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.2/32"
-          },
-          "id": "*19",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.4/30"
-          },
-          "id": "*1B",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.8/29"
-          },
-          "id": "*1D",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.16/28"
-          },
-          "id": "*1F",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.32/27"
-          },
-          "id": "*21",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.64/26"
-          },
-          "id": "*23",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.128/26"
+           "list": "cf-mihomo-nat-dst"
           },
           "id": "*25",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.192/27"
-          },
-          "id": "*27",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.224/28"
-          },
-          "id": "*29",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.240/29"
-          },
-          "id": "*2B",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.248/30"
-          },
-          "id": "*2D",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.252/31"
-          },
-          "id": "*2F",
-          "path": "/ip/firewall/nat"
-         },
-         {
-          "config": {
-           "action": "accept",
-           "chain": "srcnat",
-           "comment": "cf-mihomo",
-           "disabled": "false",
-           "dst-address": "91.108.4.0/22",
-           "src-address": "192.168.0.254/32"
-          },
-          "id": "*31",
-          "path": "/ip/firewall/nat"
+          "path": "/ip/firewall/address-list"
          }
         ],
         "owned": [],
@@ -13896,7 +13489,7 @@
          ]
         },
         "static_checks": [],
-        "summary": "发布来源策略：1 个来源范围、1 个目的网段 → 192.168.0.3；仅为这些来源和目的网段添加 LAN 出口 NAT 免转换；迁移 1 条受管主表路由，收窄 14 条旧 NAT 免转换"
+        "summary": "发布来源策略：1 个来源范围、1 个目的网段 → 192.168.0.3；仅为这些来源和目的网段添加 LAN 出口 NAT 免转换；迁移 1 条受管主表路由，收窄 0 条旧 NAT 免转换；从 NAT 免转换目的列表移除 1 个改由来源策略的网段"
        }
       ],
       "title": "主路由代理路由"
@@ -13923,21 +13516,126 @@
     "/interface/list/member": [],
     "/ip/firewall/address-list": [
      {
-      ".id": "*32",
+      ".id": "*16",
+      "address": "192.168.0.1",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*17",
+      "address": "192.168.0.2",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*18",
+      "address": "192.168.0.4/30",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*19",
+      "address": "192.168.0.8/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*1A",
+      "address": "192.168.0.16/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*1B",
+      "address": "192.168.0.32/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*1C",
+      "address": "192.168.0.64/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*1D",
+      "address": "192.168.0.128/26",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*1E",
+      "address": "192.168.0.192/27",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*1F",
+      "address": "192.168.0.224/28",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*20",
+      "address": "192.168.0.240/29",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*21",
+      "address": "192.168.0.248/30",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*22",
+      "address": "192.168.0.252/31",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*23",
+      "address": "192.168.0.254",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-src"
+     },
+     {
+      ".id": "*24",
+      "address": "198.18.0.0/16",
+      "comment": "cf-mihomo-nat",
+      "disabled": "false",
+      "list": "cf-mihomo-nat-dst"
+     },
+     {
+      ".id": "*27",
       "address": "192.168.0.101",
       "comment": "cf-ros-policy-test",
       "disabled": "false",
       "list": "CF_Source_Proxy_IP_01"
      },
      {
-      ".id": "*33",
+      ".id": "*28",
       "address": "91.108.4.0/22",
       "comment": "cf-ros-policy-test",
       "disabled": "false",
       "list": "CF_Destination_Proxy_IP_01"
      },
      {
-      ".id": "*34",
+      ".id": "*29",
       "address": "192.168.0.3",
       "comment": "cf-ros-policy-test",
       "disabled": "false",
@@ -13947,7 +13645,7 @@
     "/ip/firewall/filter": [],
     "/ip/firewall/mangle": [
      {
-      ".id": "*38",
+      ".id": "*2D",
       "action": "return",
       "chain": "CF_Proxy_Routing_01",
       "comment": "cf-ros-policy-test",
@@ -13955,7 +13653,7 @@
       "src-address-list": "CF_Bypass_IP_01"
      },
      {
-      ".id": "*39",
+      ".id": "*2E",
       "action": "mark-routing",
       "chain": "CF_Proxy_Routing_01",
       "comment": "cf-ros-policy-test",
@@ -13964,7 +13662,7 @@
       "passthrough": "false"
      },
      {
-      ".id": "*3A",
+      ".id": "*2F",
       "action": "jump",
       "chain": "prerouting",
       "comment": "cf-ros-policy-test",
@@ -13977,7 +13675,7 @@
     ],
     "/ip/firewall/nat": [
      {
-      ".id": "*37",
+      ".id": "*2C",
       "action": "accept",
       "chain": "srcnat",
       "comment": "cf-ros-policy-test",
@@ -13987,130 +13685,13 @@
       "src-address-list": "CF_Source_Proxy_IP_01"
      },
      {
-      ".id": "*16",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.1/32"
-     },
-     {
-      ".id": "*18",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.2/32"
-     },
-     {
-      ".id": "*1A",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.4/30"
-     },
-     {
-      ".id": "*1C",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.8/29"
-     },
-     {
-      ".id": "*1E",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.16/28"
-     },
-     {
-      ".id": "*20",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.32/27"
-     },
-     {
-      ".id": "*22",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.64/26"
-     },
-     {
-      ".id": "*24",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.128/26"
-     },
-     {
       ".id": "*26",
       "action": "accept",
       "chain": "srcnat",
-      "comment": "cf-mihomo",
+      "comment": "cf-mihomo-nat",
       "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.192/27"
-     },
-     {
-      ".id": "*28",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.224/28"
-     },
-     {
-      ".id": "*2A",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.240/29"
-     },
-     {
-      ".id": "*2C",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.248/30"
-     },
-     {
-      ".id": "*2E",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.252/31"
-     },
-     {
-      ".id": "*30",
-      "action": "accept",
-      "chain": "srcnat",
-      "comment": "cf-mihomo",
-      "disabled": "false",
-      "dst-address": "198.18.0.0/16",
-      "src-address": "192.168.0.254/32"
+      "dst-address-list": "cf-mihomo-nat-dst",
+      "src-address-list": "cf-mihomo-nat-src"
      },
      {
       ".id": "*3",
@@ -14142,7 +13723,7 @@
       "routing-table": "main"
      },
      {
-      ".id": "*36",
+      ".id": "*2B",
       "active": "true",
       "comment": "cf-ros-policy-test",
       "disabled": "false",
@@ -14161,7 +13742,7 @@
       "name": "main"
      },
      {
-      ".id": "*35",
+      ".id": "*2A",
       "fib": "true",
       "name": "CF_Proxy_Routing_01"
      }
@@ -14227,7 +13808,7 @@
       "disabled": "false",
       "dst-address-list": "CF_Destination_Proxy_IP_01",
       "out-interface": "bridge",
-      "place-before": "*16",
+      "place-before": "*26",
       "src-address-list": "CF_Source_Proxy_IP_01"
      }
     ],
@@ -14270,77 +13851,12 @@
     ],
     [
      "DELETE",
+     "/ip/firewall/address-list/*25",
+     null
+    ],
+    [
+     "DELETE",
      "/ip/route/*15",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*17",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*19",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*1B",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*1D",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*1F",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*21",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*23",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*25",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*27",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*29",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*2B",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*2D",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*2F",
-     null
-    ],
-    [
-     "DELETE",
-     "/ip/firewall/nat/*31",
      null
     ]
    ]
