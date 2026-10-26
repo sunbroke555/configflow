@@ -418,6 +418,40 @@ describe('individual and all-group delay tests', () => {
     expect(mihomoPanelApi.groupDelay).toHaveBeenCalledWith('gw', 'Proxy', undefined)
     expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(70)
   })
+  it.each(['Proxy_sub_筛选', 'Proxy_sub_筛选 (2)'])('treats the ConfigFlow filter copy %s as the same source as its provider', async copy => {
+    vi.mocked(mihomoPanelApi.proxyProviders).mockResolvedValue({ data: { data: { providers: {
+      ...PROVIDERS, [copy]: { ...PROVIDERS.sub, name: copy }
+    } } } } as any)
+    const { state, wrapper } = await render()
+    await state.testNode('Fast', PROXIES.Proxy)
+    expect(mihomoPanelApi.providerProxyDelay).toHaveBeenCalledWith('gw', 'sub', 'Fast', undefined)
+    expect(notify.error).not.toHaveBeenCalled()
+    expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(123)
+    state.applySettings({ ...state.settings, groupByProvider: true })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('多个代理集合')
+  })
+  it('does not merge a provider that only resembles a filter copy of another', async () => {
+    vi.mocked(mihomoPanelApi.proxyProviders).mockResolvedValue({ data: { data: { providers: {
+      ...PROVIDERS, Proxy_other_筛选: { ...PROVIDERS.sub, name: 'Proxy_other_筛选' }
+    } } } } as any)
+    const { state } = await render()
+    await state.testNode('Fast', PROXIES.Proxy)
+    expect(mihomoPanelApi.providerProxyDelay).not.toHaveBeenCalled()
+    expect(notify.error).toHaveBeenCalledWith('Fast 测速失败', '多个来源中存在同名节点，请使用所属策略组的分组测速。')
+  })
+  it('tests an ambiguous group exit along the group itself', async () => {
+    vi.mocked(mihomoPanelApi.proxyProviders).mockResolvedValue({ data: { data: { providers: {
+      ...PROVIDERS, other: { ...PROVIDERS.sub, name: 'other' }
+    } } } } as any)
+    const { state } = await render()
+    await state.testNode('Auto', PROXIES.Proxy)
+    expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledWith('gw', 'Auto', undefined)
+    expect(mihomoPanelApi.providerProxyDelay).not.toHaveBeenCalled()
+    expect(notify.error).not.toHaveBeenCalled()
+    expect(state.delayOf('Auto', PROXIES.Proxy)).toBe(123)
+    expect(mihomoPanelApi.selectProxy).not.toHaveBeenCalled()
+  })
   it('supports the default Compatible provider without treating repeated entries as ambiguity', async () => {
     vi.mocked(mihomoPanelApi.proxyProviders).mockResolvedValue({ data: { data: { providers: {
       default: { name: 'default', type: 'Proxy', vehicleType: 'Compatible', proxies: [
