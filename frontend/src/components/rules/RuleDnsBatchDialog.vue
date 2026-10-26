@@ -39,6 +39,14 @@ watch(() => props.open, open => {
   value.value = values.size === 1 ? [...values][0]! : 'follow'
 })
 
+// 默认自动聚焦会选中标签旁的问号，导致弹窗一打开就显示帮助。
+function focusDns(event: Event) {
+  const trigger = document.getElementById('rule-dns-batch')
+  if (!trigger) return
+  event.preventDefault()
+  trigger.focus({ preventScroll: true })
+}
+
 /** 应用前的影响：会被覆盖的单独设置与不参与 DNS 的规则 */
 const impact = computed(() => {
   const overwritten = new Map<string, number>()
@@ -92,7 +100,7 @@ async function apply() {
 
 <template>
   <Dialog :open="open" @update:open="next => { if (!saving) emit('update:open', next) }">
-    <DialogContent class="max-w-[480px]">
+    <DialogContent class="max-w-[480px]" @open-auto-focus="focusDns">
       <DialogHeader>
         <DialogTitle>批量设置 DNS</DialogTitle>
         <DialogDescription>{{ groupName }} · 共 {{ items.length }} 项。只修改这一组规则的 DNS，不参与 DNS 分流的规则会被跳过。</DialogDescription>

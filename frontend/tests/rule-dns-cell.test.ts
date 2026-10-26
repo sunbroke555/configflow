@@ -223,6 +223,31 @@ describe('rule DNS column', () => {
     expect(chip.attributes('aria-label')).toBe('openai.com 的 DNS：代理 DNS，需在完整参数修改')
   })
 
+  it('focuses the DNS selector instead of opening help when batch settings open', async () => {
+    network.state.rules = [rule('g1', 'a.test', 'Proxy'), rule('g2', 'b.test', 'Proxy')]
+    network.state.dns.rules = {
+      g1: { state: 'follow', route: 'proxy', follow_route: 'proxy' },
+      g2: { state: 'follow', route: 'proxy', follow_route: 'proxy' }
+    }
+    const wrapper = await render()
+    await wrapper.get('button[aria-label="批量设置 2 条规则 的 DNS"]').trigger('click')
+    await flushPromises()
+    const trigger = document.querySelector<HTMLButtonElement>('#rule-dns-batch')!
+    expect(trigger).toBeTruthy()
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger))
+    expect(document.querySelector('[data-field-help-content]')).toBeNull()
+
+    trigger.click()
+    await flushPromises()
+    const direct = options().find(item => item.textContent?.trim().startsWith('直连 DNS'))!
+    expect(direct).toBeTruthy()
+    direct.click()
+    await flushPromises()
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger))
+    expect(trigger.textContent).toContain('直连 DNS')
+    expect(document.querySelector('[data-field-help-content]')).toBeNull()
+  })
+
   it('summarizes groups read-only and confirms the impact before a batch change', async () => {
     network.state.rules = [rule('g1', 'a.test', 'Proxy'), rule('g2', 'b.test', 'Proxy'), rule('g3', 'c.test', 'Proxy'), rule('g4', 'CN', 'Proxy', { rule_type: 'GEOIP' })]
     network.state.dns.rules = {
