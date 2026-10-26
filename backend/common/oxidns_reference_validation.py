@@ -37,7 +37,7 @@ def _uint_value(raw):
     return int(raw.lstrip('+').lstrip('0') or '0')
 
 
-def collect_reference_issues(document, plugin_schemas, *, dependency_graph=None, reference_edges=None):
+def collect_reference_issues(document, plugin_schemas, *, dependency_graph=None):
     """Collect diagnostics, optionally exposing the same parsed dependency edges."""
     from backend.common.oxidns_validation import validate_schema, format_error, dns_code_valid
     from backend.common.oxidns_plugin_constraints import collect_plugin_issues
@@ -67,8 +67,6 @@ def collect_reference_issues(document, plugin_schemas, *, dependency_graph=None,
         if not tag:
             issue(path, '插件引用不能为空')
             return
-        if reference_edges is not None:
-            reference_edges.append({'owner': owner, 'target': tag, 'path': list(path)})
         target = registry.get(tag)
         if target is None:
             issue(path, '引用的插件 tag 不存在')

@@ -2,7 +2,7 @@
   <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border" aria-label="OxiDNS 常用设置">
     <Tabs v-model="tab" class="flex min-h-0 flex-1 flex-col gap-0">
       <TabsList variant="strip" class="h-auto w-full shrink-0 justify-start gap-0.5 overflow-x-auto rounded-none border-b border-border bg-muted/30 p-2">
-        <TabsTrigger v-for="item in tabs" :key="item.value" :value="item.value" class="h-11 min-h-11 flex-none px-3 text-xs md:flex-1" :disabled="disabled || flowDraftPending || flowBusy">{{ item.label }}</TabsTrigger>
+        <TabsTrigger v-for="item in tabs" :key="item.value" :value="item.value" class="h-11 min-h-11 flex-none px-3 text-xs md:flex-1" :disabled="disabled">{{ item.label }}</TabsTrigger>
       </TabsList>
       <div class="min-h-0 min-w-0 flex-1 overflow-y-auto p-3 md:p-5">
         <TabsContent v-if="visitedTabs.has('core')" force-mount value="core" class="mt-0 space-y-5 data-[state=inactive]:hidden">
@@ -65,22 +65,18 @@
           <OxidnsFields :settings="draft" :fields="logFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
         </TabsContent>
         <TabsContent v-if="visitedTabs.has('advanced')" force-mount value="advanced" class="mt-0 space-y-4 data-[state=inactive]:hidden">
-          <OxidnsEntryFlowEditor v-if="entryFlow" :flow="entryFlow" :disabled="disabled || flowBusy" :simple-target="capability('custom_matches')?.target || 'sequence_main'" :simple-enabled="!isCustom('custom_matches')" :simple-invalid="Boolean(errors.custom_matches)" @change="emit('change', { entry_flow: $event })" @pending="setFlowPending" @error="setError('entry_flow', $event)">
-            <template #simple>
-              <OxidnsFields :settings="draft" :fields="positionFields" :disabled="disabled || flowBusy" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
-              <OxidnsMatchEditor :model-value="customMatches" :targets="customMatchTargets" :target-tags="customMatchTargetTags" :disabled="disabled || flowBusy" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
-            </template>
-          </OxidnsEntryFlowEditor>
-          <template v-else>
           <OxidnsFields :settings="draft" :fields="positionFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
+          <div v-if="customMatches.length && read('custom_match_position') === 'tail' && !isCustom('custom_match_position')" role="status" class="flex flex-wrap items-center gap-2 rounded-lg bg-warning-soft p-3 text-xs">
+            <p class="m-0 min-w-0 flex-1 basis-64">当前先执行分流规则，已被域名分流规则处理的请求不会再执行下方匹配。需要覆盖分流结果时，请先执行自定义匹配。</p>
+            <Button type="button" variant="outline" class="min-h-11 text-xs" :disabled="disabled" @click="change('custom_match_position', 'head')">先执行自定义匹配</Button>
+          </div>
           <div v-if="isCustom('custom_matches')" class="flex items-center gap-1 text-xs text-muted-foreground"><span>自定义匹配使用手工结构</span><FieldHelp label="自定义匹配配置状态" :text="capability('custom_matches')?.reason || customReason" /><Button type="button" variant="ghost" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="navigate(capability('custom_matches')?.target || 'custom_matches')">完整参数<ChevronRight class="size-3.5" /></Button></div>
           <OxidnsMatchEditor v-else :model-value="customMatches" :targets="customMatchTargets" :target-tags="customMatchTargetTags" :disabled="disabled" :allow-disable="false" @update:model-value="change('custom_matches', $event)" @error="setError('custom_matches', $event ? `自定义匹配：${$event}` : '')" />
-          </template>
           <div class="flex flex-wrap items-center gap-2 border-t border-border pt-3"><span class="text-xs text-muted-foreground">其他插件、网络出站和扩展字段</span><Button type="button" variant="outline" class="ml-auto min-h-11 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">完整参数<ChevronRight class="size-3.5" /></Button></div>
         </TabsContent>
       </div>
     </Tabs>
-    <div class="flex shrink-0 items-center gap-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground"><span>编辑当前配置，最后统一保存</span><FieldHelp label="常用设置同步" :text="optionHelp('希望通过表单修改现有配置，无需反复切换编辑入口。', '这里展示实际配置值，修改会同步到完整参数和 YAML。原生插件、未展示参数及附加文件均保留；高级页可按实际入口查看和编辑手写流程。')" /><Button type="button" variant="ghost" class="ml-auto min-h-11 shrink-0 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">全部功能<ChevronRight class="size-3.5" /></Button></div>
+    <div class="flex shrink-0 items-center gap-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground"><span>编辑当前配置，最后统一保存</span><FieldHelp label="常用设置同步" :text="optionHelp('希望通过表单修改现有配置，无需反复切换编辑入口。', '这里展示实际配置值，修改会同步到完整参数和 YAML。原生插件、未展示参数及附加文件均保留；自定义结构请到完整参数编辑。')" /><Button type="button" variant="ghost" class="ml-auto min-h-11 shrink-0 text-xs" :disabled="disabled || navigationDisabled" @click="emit('full')">全部功能<ChevronRight class="size-3.5" /></Button></div>
   </section>
 </template>
 <script setup lang="ts">
@@ -90,8 +86,6 @@ import { RouterLink } from 'vue-router'
 import { apiAuthFields, apiExtraFields, apiFields, applyVerifiedOxidnsTemplate, logFields, cacheFields, isDnsRuleType, coreFields as sourceCoreFields, featureGroups, upstreamFields as sourceUpstreamFields, type OxidnsField } from '@/lib/oxidns'
 import { optionCopy, optionHelp } from '@/lib/optionCopy'
 import type { OxidnsMatchTarget } from '@/lib/oxidnsMatchActions'
-import type { OxidnsEntryFlow } from '@/lib/oxidnsEntryFlows'
-import OxidnsEntryFlowEditor from './OxidnsEntryFlowEditor.vue'
 import OxidnsFields, { type OxidnsFieldCapability } from './OxidnsFields.vue'
 import OxidnsMatchEditor from './OxidnsMatchEditor.vue'
 import FormField from '@/components/common/FormField.vue'
@@ -105,10 +99,8 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { BLOCK_ROUTES, CHOICE_LABELS } from '@/lib/ruleDns'
 
-const props = withDefaults(defineProps<{ values: Record<string, any>; capabilities: Record<string, OxidnsFieldCapability>; rules: any[]; ruleSets: any[]; entryFlow?: OxidnsEntryFlow; flowBusy?: boolean; customMatchTargets?: OxidnsMatchTarget[]; customMatchTargetTags?: string[]; disabled?: boolean; navigationDisabled?: boolean; initialFeature?: string }>(), { disabled: false, navigationDisabled: false, customMatchTargets: () => [] })
-const emit = defineEmits<{ change: [changes: Record<string, unknown>]; error: [message: string]; navigate: [target: string]; full: []; flowPending: [value: boolean] }>()
-const flowDraftPending = ref(false)
-function setFlowPending(value: boolean) { flowDraftPending.value = value; emit('flowPending', value) }
+const props = withDefaults(defineProps<{ values: Record<string, any>; capabilities: Record<string, OxidnsFieldCapability>; rules: any[]; ruleSets: any[]; customMatchTargets?: OxidnsMatchTarget[]; customMatchTargetTags?: string[]; disabled?: boolean; navigationDisabled?: boolean; initialFeature?: string }>(), { disabled: false, navigationDisabled: false, customMatchTargets: () => [] })
+const emit = defineEmits<{ change: [changes: Record<string, unknown>]; error: [message: string]; navigate: [target: string]; full: [] }>()
 const clone = <T,>(value: T): T => value === undefined ? value : JSON.parse(JSON.stringify(value))
 const draft = reactive<Record<string, any>>(clone(props.values))
 const errors = reactive<Record<string, string>>({})

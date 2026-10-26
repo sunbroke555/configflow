@@ -3,6 +3,7 @@ import { flushPromises } from '@vue/test-utils'
 import { load as loadYaml, dump as dumpYaml } from 'js-yaml'
 import OxidnsNativeEditor from '@/components/generate/OxidnsNativeEditor.vue'
 import OxidnsCommonSettings from '@/components/generate/OxidnsCommonSettings.vue'
+import OxidnsFilesEditor from '@/components/generate/OxidnsFilesEditor.vue'
 import { agentApi, profileApi, oxidnsApi, ruleApi, ruleSetApi } from '@/api'
 import { confirmState, settleConfirm } from '@/lib/feedback'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
@@ -207,6 +208,54 @@ describe('unified OxiDNS profile settings', () => {
     expect((document.querySelector(worker) as HTMLInputElement).value).toBe('6')
     await click('保存草稿')
     expect(oxidnsApi.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ native_config: expect.stringContaining('worker_threads: 6') }), 'next-profile', undefined)
+  })
+
+  it('keeps a completed file upload when an older common-settings response arrives and retries with that file', async () => {
+    const wrapper = await render()
+    await click('附加文件')
+    const files = wrapper.getComponent(OxidnsFilesEditor)
+    const upload = files.get('[aria-label="上传附加文件"]')
+    const content = 'full:tracker.hhanclub.net\n'
+    const bytes = new TextEncoder().encode(content)
+    let finishUpload!: (value: ArrayBuffer) => void
+    const pendingUpload = new Promise<ArrayBuffer>(resolve => { finishUpload = resolve })
+    Object.defineProperty(upload.element, 'files', { configurable: true, value: [
+      { name: 'custom.txt', size: bytes.length, arrayBuffer: () => pendingUpload },
+    ] })
+    await upload.trigger('change')
+    expect(files.text()).toContain('正在读取…')
+    await click('配置')
+
+    let resolveApply!: (value: any) => void
+    vi.mocked(oxidnsApi.applyCommonSettings).mockImplementationOnce(() => new Promise(resolve => { resolveApply = resolve }))
+    await input(worker, '3')
+    expect(oxidnsApi.applyCommonSettings).toHaveBeenCalledOnce()
+    expect(files.props('disabled')).toBe(true)
+    finishUpload(bytes.buffer as ArrayBuffer)
+    await flushPromises()
+    const uploaded = { path: 'custom.txt', content, encoding: 'text' }
+    expect(files.props('modelValue')).toEqual([uploaded])
+
+    const stale = { ...settings(), native_config: config.replace('worker_threads: 8', 'worker_threads: 3') }
+    resolveApply({ data: { settings: stale, ...projection(stale) } })
+    await flushPromises()
+    await settleValidation()
+    expect(document.body.textContent).toContain('配置已变化，请撤销未同步修改后重新编辑。')
+    expect(files.props('modelValue')).toEqual([uploaded])
+    expect(wrapper.getComponent(OxidnsNativeEditor).props('modelValue')).toBe(config)
+    expect(button('保存草稿').disabled).toBe(true)
+    expect(oxidnsApi.saveSettings).not.toHaveBeenCalled()
+
+    await click('重试同步')
+    await settleValidation()
+    expect(oxidnsApi.applyCommonSettings).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(oxidnsApi.applyCommonSettings).mock.calls[1]).toEqual([
+      expect.objectContaining({ native_config: config, additional_files: [uploaded] }), { worker_threads: 3 }, 'oxi-profile',
+    ])
+    expect(button('保存草稿').disabled).toBe(false)
+    await click('保存草稿')
+    expect(savedPayload().additional_files).toEqual([uploaded])
+    expect((loadYaml(savedPayload().native_config) as any).runtime.worker_threads).toBe(3)
   })
 
   it('allows complete editing when projection fails and retries common settings', async () => {

@@ -211,6 +211,23 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('change')).toBeUndefined()
   })
 
+  it('opens the match form directly and changes precedence without replacing the selected target', async () => {
+    const matches = [{matches: 'qname full:tracker.hhanclub.net', exec: 'goto remote_dns'}]
+    const wrapper = await render({values: {...values(), custom_matches: matches, custom_match_position: 'tail'},
+      customMatchTargets: [{tag: 'remote_dns', type: 'sequence', exec: 'goto remote_dns', source: 'config.yaml'}]})
+    await click('高级')
+    expect(document.querySelector('[aria-label="处理流程图"]')).toBeNull()
+    expect(document.querySelector('[aria-label="流程编辑方式"]')).toBeNull()
+    expect(wrapper.getComponent(OxidnsMatchEditor).props('modelValue')).toEqual(matches)
+    expect(document.getElementById('oxi-custom_match_position')).not.toBeNull()
+    expect(wrapper.get('[role="status"]').text()).toContain('已被域名分流规则处理的请求不会再执行下方匹配')
+    expect(wrapper.emitted('change')).toBeUndefined()
+    await click('先执行自定义匹配')
+    expect(lastChange(wrapper)).toEqual({custom_match_position: 'head'})
+    expect(wrapper.getComponent(OxidnsMatchEditor).props('modelValue')).toEqual(matches)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+  })
+
   it('applies only editable performance fields and separately disables navigation', async () => {
     const wrapper = await render({navigationDisabled: true, capabilities: {aggregate_rules: {editable: false, reason: '当前无需合并'}, worker_threads: {editable: false, reason: '手工结构'}}})
     await click('填入已验证性能参数')
