@@ -121,7 +121,7 @@
                   <tr v-for="row in visibleRows" :key="row.ip" role="row" :data-client-ip="row.ip" @focusin="hold(row.ip)">
                     <td role="cell">
                       <Input v-model="row.name" :aria-label="row.ip + ' 名称'" maxlength="80" :placeholder="infoOf(row.ip)?.hostname || '设备或网段名称'" class="min-h-11 min-w-36 max-sm:min-w-0"
-                        :disabled="previewing || publishing || fixing" @blur="save(row.ip)" @keydown.enter.prevent="save(row.ip)" />
+                        :readonly="previewing" :disabled="publishing || fixing" @blur="save(row.ip)" @keydown.enter.prevent="save(row.ip)" />
                       <p v-if="infoOf(row.ip)?.mac" class="mb-0 mt-1 font-mono text-[11px] text-muted-foreground">{{ infoOf(row.ip)!.mac }}</p>
                     </td>
                     <td role="cell">
@@ -596,7 +596,6 @@ function rememberSnapshot() {
   if (sameSession() && state.value && !previewing.value) rememberClientDevicesSnapshot(snapshotKey(), state.value, discovery.value)
 }
 
-/** keep：保留本页未保存的修改，只合并最新数据（单行冲突后使用） */
 type DiscoveryReply = { data: ClientDiscovery } | { failure: unknown }
 
 // Observe rejections immediately even when the device-record request is slower.
@@ -607,6 +606,7 @@ async function requestDiscovery(profileId: string, refresh: boolean): Promise<Di
   } catch (failure) { return { failure } }
 }
 
+/** keep：保留本页未保存的修改，只合并最新数据（单行冲突后使用） */
 async function load(keep = false, refresh = false) {
   const run = ++loadRun
   ++discoveryRun

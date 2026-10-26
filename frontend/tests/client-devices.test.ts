@@ -973,13 +973,13 @@ describe('client device page reopening', () => {
     await router.push('/client-devices')
     await flushPromises()
     expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('电视')
-    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(true)
+    expect(nameInput(wrapper, '192.0.2.5').element.readOnly).toBe(true)
     expect(wrapper.find('[aria-label="正在加载"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('正在核对最新记录')
     finish(response(state([{ ip: '192.0.2.5', name: '别处改过的名称', mode: 'direct' }])))
     await flushPromises()
     expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('别处改过的名称')
-    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(false)
+    expect(nameInput(wrapper, '192.0.2.5').element.readOnly).toBe(false)
   })
 
   it('starts router discovery while the record request is still pending', async () => {
@@ -1013,7 +1013,7 @@ describe('client device page reopening', () => {
     vi.mocked(clientDeviceApi.get).mockRejectedValueOnce(new Error('网络中断'))
     await router.push('/client-devices')
     await flushPromises()
-    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(true)
+    expect(nameInput(wrapper, '192.0.2.5').element.readOnly).toBe(true)
     expect(wrapper.text()).toContain('网络中断')
     expect(wrapper.text()).toContain('上次记录 · 暂不可编辑')
     expect(button(wrapper, '发布到 2 台 OxiDNS').attributes('disabled')).toBeDefined()
@@ -1021,7 +1021,7 @@ describe('client device page reopening', () => {
     expect(clientDeviceApi.save).not.toHaveBeenCalled()
     await wrapper.get('[aria-label="重新载入"]').trigger('click')
     await flushPromises()
-    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(false)
+    expect(nameInput(wrapper, '192.0.2.5').element.readOnly).toBe(false)
   })
 
   it('discards previews when the authenticated session changes', async () => {
@@ -1074,7 +1074,7 @@ it('does not start discovery in an Agents previous profile before checking its b
   await router.push('/client-devices?agent=one')
   await flushPromises()
   expect(clientDeviceApi.discover).not.toHaveBeenCalled()
-  expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(true)
+  expect(nameInput(wrapper, '192.0.2.5').element.readOnly).toBe(true)
   finish(response(state([], { profile_id: 'home' })))
   await flushPromises()
   expect(clientDeviceApi.discover).toHaveBeenCalledWith('home')
