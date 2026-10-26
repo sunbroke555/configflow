@@ -946,7 +946,7 @@ describe('client device router snapshots', () => {
     vi.mocked(clientDeviceApi.discover)
       .mockResolvedValueOnce(response(discovery({ cached: true, stale: true })))
       .mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-      .mockResolvedValueOnce(response(discovery({ profile_id: 'home', discovered: [] })))
+      .mockResolvedValueOnce(response(discovery({ profile_id: 'home', devices: [], discovered: [] })))
     const { wrapper, router } = await render('/client-devices?tab=new')
     vi.mocked(clientDeviceApi.get).mockResolvedValue(response(state([], { profile_id: 'home', profile_name: '家里' })))
     await router.push('/client-devices?profile=home&tab=new')
