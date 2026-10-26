@@ -102,7 +102,8 @@ const stillCurrent = (current: Attempt) => !disposed && props.open && session ==
   && props.profileId === current.profileId && props.serviceType === current.serviceType
 
 async function readTargets() {
-  const [agentResponse, profileResponse] = await Promise.all([agentApi.getAll(), profileApi.list()])
+  // Always re-read bindings before publishing; content-sync metadata is unused.
+  const [agentResponse, profileResponse] = await Promise.all([agentApi.summaries(), profileApi.list()])
   if (!Array.isArray(agentResponse.data) || !Array.isArray(profileResponse.data)) throw new Error('设备列表响应无效。')
   return { agents: agentResponse.data as Agent[], profiles: profileResponse.data as Profile[] }
 }

@@ -152,7 +152,9 @@ async function openSettings(initialFeature?: string) {
   try {
     // Agent binding is independent of the active sidebar profile. Re-read it
     // before opening the editor rather than trusting a stale monitor snapshot.
-    const [agents, profiles] = await Promise.all([agentApi.getAll(), profileApi.list()])
+    // Binding lookup needs no full-profile content comparison. Bypass the picker
+    // cache so a just-rebound device still opens the current profile.
+    const [agents, profiles] = await Promise.all([agentApi.summaries(), profileApi.list()])
     if (disposed || current !== settingsRequest || id !== agentId.value) return
     const agent = agents.data.find((item: any) => item.id === id && item.service_type === 'oxidns')
     if (!agent) throw new Error('这台 OxiDNS Agent 已不存在，请刷新设备列表。')

@@ -74,9 +74,22 @@ function settingsButton(wrapper: VueWrapper) {
 }
 
 describe('Mihomo settings entry', () => {
+  it('opens from a fresh lightweight lookup without waiting for content comparison', async () => {
+    const wrapper = await panel()
+    const slowContentComparison = deferred()
+    vi.mocked(agentApi.getAll).mockReturnValue(slowContentComparison.promise)
+    // The picker cache still contains the old binding at this point.
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([{ ...device, profile_id: 'default' }]))
+    await settingsButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent({ name: 'MihomoSettings' }).props('profileId')).toBe('default')
+    expect(agentApi.getAll).not.toHaveBeenCalled()
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
+  })
+
   it('re-reads the device binding and opens its profile instead of the sidebar profile', async () => {
     const wrapper = await panel()
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([{ ...device, profile_id: 'default' }]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([{ ...device, profile_id: 'default' }]))
     await settingsButton(wrapper).trigger('click')
     await flushPromises()
     expect(wrapper.getComponent({ name: 'MihomoSettings' }).props()).toMatchObject({
@@ -86,7 +99,7 @@ describe('Mihomo settings entry', () => {
   })
 
   it('supports legacy Mihomo devices and uses the declared default profile', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([{ ...device, service_type: undefined, profile_id: undefined }]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([{ ...device, service_type: undefined, profile_id: undefined }]))
     vi.mocked(profileApi.list).mockResolvedValue(response([{ id: 'default', name: '旧默认', is_default: false }, { id: 'bound', name: '新默认', is_default: true }]))
     const wrapper = await panel()
     await settingsButton(wrapper).trigger('click')

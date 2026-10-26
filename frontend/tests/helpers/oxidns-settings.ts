@@ -51,7 +51,7 @@ beforeEach(() => {
   })
   vi.mocked(oxidnsApi.saveSettings).mockResolvedValue({ data: { success: true, publish_guard: publishGuard }, headers: { etag: etags.saved } } as any)
   vi.mocked(profileApi.list).mockResolvedValue({ data: [{ id: 'oxi-profile', name: 'DNS配置', is_default: true }] } as any)
-  vi.mocked(agentApi.getAll).mockResolvedValue({ data: [{ id: 'dns', name: 'OxiDNS', profile_id: 'oxi-profile', service_type: 'oxidns', status: 'online' }] } as any)
+  vi.mocked(agentApi.summaries).mockResolvedValue({ data: [{ id: 'dns', name: 'OxiDNS', profile_id: 'oxi-profile', service_type: 'oxidns', status: 'online' }] } as any)
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => ({ data: { success: true, deployment_id: deploymentId, status: 'verifying' } }) as any)
   vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, deploymentId) => ({ data: { deployment_id: deploymentId, status: 'verifying' } }) as any)
   vi.mocked(oxidnsApi.prepareEditor).mockImplementation(async value => ({ data: { settings: structuredClone(value) } }) as any)

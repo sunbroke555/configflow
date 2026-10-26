@@ -17,7 +17,7 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import selectiveBaseline from './fixtures/linux-gateway-selective-0ef9e89.json'
 import { DOCKER_COMMANDS, DOCKER_HINT, mayDrop, quiet } from './fixtures/forward-filter'
 
-vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, profileApi: { list: vi.fn() } }))
+vi.mock('@/api', () => ({ default: {}, agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() }, profileApi: { list: vi.fn() } }))
 vi.mock('@/api/linuxGateway', () => ({ linuxGatewayApi: {
   get: vi.fn(), save: vi.fn(), status: vi.fn(), preview: vi.fn(), apply: vi.fn(), remove: vi.fn(),
   previewDraft: vi.fn(), previewRestore: vi.fn(), restoreDraft: vi.fn(),
@@ -85,6 +85,8 @@ beforeEach(() => {
   writeText.mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
   vi.mocked(agentApi.getAll).mockResolvedValue(response([agent()]))
+  // Both endpoints read the same fixture, including later binding changes.
+  vi.mocked(agentApi.summaries).mockImplementation(() => agentApi.getAll())
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, id) => response({ deployment_id: id, status: 'succeeded' }))
   vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, id) => response({ deployment_id: id, status: 'uploading' }))
   vi.mocked(agentApi.activateDeployment).mockImplementation(async (_id, id) => response({ deployment_id: id, status: 'succeeded' }))

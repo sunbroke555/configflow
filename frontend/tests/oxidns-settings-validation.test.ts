@@ -8,7 +8,7 @@ import { agentApi, profileApi, oxidnsApi, ruleApi, ruleSetApi } from '@/api'
 import { config, settings, render, button, click, settleValidation, input, savedPayload, views, worker, yamlInput } from './helpers/oxidns-settings'
 
 vi.mock('@/api', () => ({
-  agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
+  agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() },
   oxidnsApi: { getSettings: vi.fn(), saveSettings: vi.fn(), prepareEditor: vi.fn(), readCommonSettings: vi.fn(), applyCommonSettings: vi.fn(), applyNativeSettings: vi.fn(), validateSettings: vi.fn() },
   ruleApi: { getAll: vi.fn() }, ruleSetApi: { getAll: vi.fn() }
