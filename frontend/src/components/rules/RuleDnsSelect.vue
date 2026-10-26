@@ -77,11 +77,11 @@ function choose(value: RuleDnsValue, disabled = false) {
         :disabled="disabled || loading"
         :aria-label="label"
         :title="label"
-        :class="cn('chip rule-dns-cell-trigger relative h-[30px] max-w-full min-w-0 gap-1.5 bg-transparent px-2.5 outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:cursor-default', triggerClass)"
+        :class="cn('rule-dns-cell-trigger relative inline-flex h-[30px] w-full max-w-full min-w-0 items-center gap-1.5 rounded-md bg-transparent px-2 text-left text-[12px] transition-colors hover:bg-accent/60 outline-none focus-visible:ring-2 focus-visible:ring-primary-accent disabled:cursor-default', triggerClass)"
       >
         <Loader2 v-if="loading" class="size-3.5 shrink-0 animate-spin text-primary-accent" aria-hidden="true" />
         <slot />
-        <ChevronDown v-if="!disabled && !loading" class="size-3 shrink-0 opacity-70" aria-hidden="true" />
+        <ChevronDown v-if="!disabled && !loading" class="ml-auto size-3 shrink-0 text-muted-foreground opacity-60" aria-hidden="true" />
       </button>
     </PopoverTrigger>
     <PopoverContent

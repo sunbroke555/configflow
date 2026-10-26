@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { chipClass, choiceLabel, dnsChip, followRoute, stateValue } from '@/lib/ruleDns'
 import type { RuleDnsSnapshot, RuleDnsValue } from '@/types'
 
-/** 列表与卡片中一条规则的 DNS：只读状态直接显示，可修改时为带下拉的 chip */
+/** 列表与卡片中一条规则的 DNS：只读状态直接显示，可修改时为轻量文字选择器。 */
 const props = defineProps<{
   item: { id: string; itemType?: string; rule_type?: string; value?: string; name?: string; policy?: string }
   snapshot: RuleDnsSnapshot | null
@@ -34,24 +34,24 @@ const readOnly = computed(() => !chip.value || entry.value?.state === 'unsupport
 </script>
 
 <template>
-  <span :class="cn('inline-flex min-w-0 max-w-full items-center', props.class)">
+  <span :class="cn('inline-flex w-full min-w-0 max-w-full items-center', props.class)">
     <span
       v-if="loading && (!snapshot || stale)"
       role="status"
       aria-label="DNS 状态加载中"
       class="inline-block h-6 w-24 max-w-full animate-pulse rounded-full bg-primary/10"
     />
-    <span v-else-if="!chip || stale" class="text-[12px] text-muted-foreground" title="DNS 状态读取失败" aria-label="DNS 状态读取失败">—</span>
+    <span v-else-if="!chip || stale" class="px-2 text-[12px] text-muted-foreground" title="DNS 状态读取失败" aria-label="DNS 状态读取失败">—</span>
     <span
       v-else-if="entry?.state === 'unsupported'"
-      class="truncate text-[12px] text-muted-foreground"
+      class="truncate px-2 text-[12px] text-muted-foreground"
       :title="chip.title"
       :aria-label="chip.title"
     >{{ chip.text }}</span>
     <span v-else-if="readOnly" class="inline-flex min-w-0 max-w-full items-center gap-0.5">
-      <span :class="cn('chip h-[30px] min-w-0 max-w-full', chipClass(chip.tone))" :title="chip.title" :aria-label="`${name} 的 DNS：${chip.title}`">
+      <span :class="cn('inline-flex h-[30px] min-w-0 max-w-full items-center gap-1.5 px-2 text-[12px]', chipClass(chip.tone))" :title="chip.title" :aria-label="`${name} 的 DNS：${chip.title}`">
         <component :is="icons[chip.icon]" v-if="chip.icon" class="size-3.5 shrink-0" aria-hidden="true" />
-        <span class="truncate" :class="chip.icon === 'upstream' && 'font-mono'">{{ chip.text }}</span>
+        <span class="min-w-0 flex-1 truncate" :class="chip.icon === 'upstream' && 'font-mono'">{{ chip.text }}</span>
       </span>
       <FieldHelp v-if="chip.icon === 'lock' && engine?.reason" :label="`${name} 的 DNS`" :text="engine.reason" />
     </span>
@@ -74,7 +74,7 @@ const readOnly = computed(() => !chip.value || entry.value?.state === 'unsupport
       </template>
       <template v-else>
         <component :is="icons[chip.icon]" v-if="chip.icon" class="size-3.5 shrink-0" aria-hidden="true" />
-        <span class="truncate" :class="chip.icon === 'upstream' && 'font-mono'">{{ chip.text }}</span>
+        <span class="min-w-0 flex-1 truncate" :class="chip.icon === 'upstream' && 'font-mono'">{{ chip.text }}</span>
       </template>
     </RuleDnsSelect>
   </span>

@@ -130,11 +130,11 @@ describe('labels and chips', () => {
     expect(choiceLabel('nodata')).toBe('空应答')
   })
   it.each([
-    [{ state: 'follow', route: 'direct', follow_route: 'direct' }, '跟随 · 直连', 'muted', undefined],
-    [{ state: 'follow', route: null, follow_route: null }, '跟随 · 默认', 'muted', undefined],
+    [{ state: 'follow', route: 'direct', follow_route: 'direct' }, '跟随策略 · 直连', 'muted', undefined],
+    [{ state: 'follow', route: null, follow_route: null }, '跟随策略 · 默认', 'muted', undefined],
     [{ state: 'follow_drift', route: 'proxy', follow_route: 'direct' }, '代理 · 与策略不一致', 'warn', 'drift'],
-    [undefined, '默认 · 代理 DNS', 'muted', undefined],
-    [{ state: 'explicit', route: 'direct' }, '直连 DNS', 'neutral', 'direct'],
+    [undefined, '默认上游 · 代理', 'muted', undefined],
+    [{ state: 'explicit', route: 'direct' }, '指定 · 直连', 'neutral', undefined],
     // The 148px column shows only the address; the 直连 / 代理 source stays in the title.
     [{ state: 'explicit', route: 'upstream:b2e55ef47454', upstream_label: '直连 · 223.5.5.5' }, '223.5.5.5', 'neutral', 'upstream'],
     [{ state: 'follow_drift', route: 'upstream:b2e55ef47454', upstream_label: '代理 · tls://dns.example', follow_route: 'direct' }, 'tls://dns.example · 与策略不一致', 'warn', 'drift'],
@@ -148,7 +148,7 @@ describe('labels and chips', () => {
     expect(chip.icon).toBe(icon)
   })
   it('shows the default upstream destination and the locked state', () => {
-    expect(dnsChip(undefined, engine({ default_forward: 'forward_local' })).text).toBe('默认 · 直连 DNS')
+    expect(dnsChip(undefined, engine({ default_forward: 'forward_local' })).text).toBe('默认上游 · 直连')
     expect(dnsChip({ state: 'explicit', route: 'nxdomain' }, engine({ editable: false })))
       .toEqual({ text: '完整参数', tone: 'muted', icon: 'lock', title: '不存在，需在完整参数修改' })
     expect(dnsChip({ state: 'explicit', route: 'upstream:b2e55ef47454', upstream_label: '直连 · 223.5.5.5' }, engine()).title)
