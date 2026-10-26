@@ -144,7 +144,8 @@ async function openSettings() {
   settingsError.value = ''
   try {
     // Read the selected device's binding; the sidebar may show another profile.
-    const [agents, profiles] = await Promise.all([agentApi.getAll(), profileApi.list()])
+    // Read fresh bindings without loading/hashing every profile's full config.
+    const [agents, profiles] = await Promise.all([agentApi.summaries(), profileApi.list()])
     if (disposed || request !== settingsRequest || id !== agentId.value) return
     const agent = agents.data.find((item: Agent) => item.id === id && (item.service_type || 'mihomo') === 'mihomo')
     if (!agent) throw new Error('这台 Mihomo Agent 已不存在，请刷新设备列表。')

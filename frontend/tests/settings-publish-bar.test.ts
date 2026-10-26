@@ -8,7 +8,7 @@ import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
 import { ruleLocationDetails } from './fixtures/agent-failure'
 
 vi.mock('@/api', () => ({
-  agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
+  agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() },
 }))
 vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
@@ -45,7 +45,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} })))
-  vi.mocked(agentApi.getAll).mockResolvedValue(response([agent()]))
+  vi.mocked(agentApi.summaries).mockResolvedValue(response([agent()]))
   vi.mocked(profileApi.list).mockResolvedValue(response([{ id: 'office', name: '办公室', is_default: true }, { id: 'home', name: '家里' }]))
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
   vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'uploading' }))
@@ -59,10 +59,21 @@ afterEach(() => {
 })
 
 describe('settings save and publish', () => {
+  it('loads and rechecks publish targets without waiting for full content comparison', async () => {
+    vi.mocked(agentApi.getAll).mockReturnValue(new Promise(() => {}))
+    const wrapper = await render()
+    expect(publishButton(wrapper).attributes('disabled')).toBeUndefined()
+    expect(agentApi.summaries).toHaveBeenCalledTimes(1)
+    await publish(wrapper)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
+    expect(agentApi.getAll).not.toHaveBeenCalled()
+    expect(agentApi.pushConfig).toHaveBeenCalledWith('one', expect.any(String), guard())
+  })
+
   it('uses real preflight stages without inventing deployment steps before submission', async () => {
     const saved = deferred<PublishGuard>()
     const checked = deferred<any>()
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent()])).mockImplementationOnce(() => checked.promise)
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([agent()])).mockImplementationOnce(() => checked.promise)
     const wrapper = await render({ save: vi.fn(() => saved.promise) })
     await publish(wrapper)
     const row = wrapper.get('[data-agent-status-row="配置发布"]')
@@ -129,7 +140,7 @@ describe('settings save and publish', () => {
     ] })
     await router.push('/')
     await router.isReady()
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([
       agent({ service_type: 'mihomo', name: '家庭 Mihomo' }),
       agent({ id: 'dns-target', dns_follow: bound ? { source_agent_id: 'one' } : null }),
     ]))
@@ -156,7 +167,7 @@ describe('settings save and publish', () => {
     expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
     saved.resolve(guard())
     await flushPromises()
-    expect(agentApi.getAll).toHaveBeenCalledTimes(2)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
     expect(agentApi.pushConfig).toHaveBeenCalledWith('one', expect.any(String), guard())
     expect(wrapper.text()).toContain('草稿已保存，发布成功，服务检查已通过。')
   })
@@ -196,7 +207,7 @@ describe('settings save and publish', () => {
   })
 
   it('uses the actual default profile for unbound legacy agents and excludes other profiles and services', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([
       agent({ profile_id: undefined }),
       agent({ id: 'other', name: '家里 DNS', profile_id: 'home' }),
       agent({ id: 'wrong-service', name: '代理核心', service_type: 'mihomo' }),
@@ -209,7 +220,7 @@ describe('settings save and publish', () => {
   })
 
   it('requires an explicit selection when several targets match and sends to only that device', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS' })]))
     const save = vi.fn().mockResolvedValue(guard())
     const wrapper = await render({ save })
     expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
@@ -222,7 +233,7 @@ describe('settings save and publish', () => {
   })
 
   it('preselects the requested agent among several devices in the same profile and service', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS' })]))
     const wrapper = await render({ preferredAgentId: 'two' })
     expect(wrapper.getComponent(Select).props('modelValue')).toBe('two')
     expect(publishButton(wrapper).attributes('disabled')).toBeUndefined()
@@ -236,7 +247,7 @@ describe('settings save and publish', () => {
     { unavailable: [agent({ profile_id: 'home' })] },
     { unavailable: [agent({ service_type: 'mihomo' })] },
   ])('requires an explicit choice when the requested agent is absent from the current scope (%j)', async ({ unavailable }) => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([...unavailable, agent({ id: 'two', name: '书房 DNS' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([...unavailable, agent({ id: 'two', name: '书房 DNS' })]))
     const save = vi.fn().mockResolvedValue(guard())
     const wrapper = await render({ preferredAgentId: 'one', save })
     expect(wrapper.getComponent(Select).props('modelValue')).toBe('')
@@ -256,7 +267,7 @@ describe('settings save and publish', () => {
   })
 
   it.each([{ status: 'offline' }, { enabled: false }])('preserves an unavailable preferred device instead of selecting an online alternative (%j)', async change => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent(change), agent({ id: 'two', name: '书房 DNS' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent(change), agent({ id: 'two', name: '书房 DNS' })]))
     const save = vi.fn().mockResolvedValue(guard())
     const wrapper = await render({ preferredAgentId: 'one', save })
     expect(wrapper.getComponent(Select).props('modelValue')).toBe('one')
@@ -269,7 +280,7 @@ describe('settings save and publish', () => {
   })
 
   it('applies the preferred target after retrying an initial list failure', async () => {
-    vi.mocked(agentApi.getAll)
+    vi.mocked(agentApi.summaries)
       .mockRejectedValueOnce(new Error('网络错误'))
       .mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS' })]))
     const wrapper = await render({ preferredAgentId: 'two' })
@@ -281,7 +292,7 @@ describe('settings save and publish', () => {
   })
 
   it.each([{ status: 'offline' }, { enabled: false }])('keeps offline or disabled targets unavailable (%j)', async extra => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent(extra)]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent(extra)]))
     const wrapper = await render()
     expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
     expect(button(wrapper, '保存草稿').attributes('disabled')).toBeUndefined()
@@ -290,11 +301,11 @@ describe('settings save and publish', () => {
   })
 
   it('allows saving a draft when no targets exist or the list cannot be read', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([]))
     const empty = await render()
     expect(empty.text()).toContain('尚未绑定 OxiDNS 设备')
     expect(button(empty, '保存草稿').attributes('disabled')).toBeUndefined()
-    vi.mocked(agentApi.getAll).mockRejectedValueOnce(new Error('网络错误'))
+    vi.mocked(agentApi.summaries).mockRejectedValueOnce(new Error('网络错误'))
     const failed = await render()
     expect(failed.text()).toContain('暂时无法读取目标设备')
     expect(button(failed, '保存草稿').attributes('disabled')).toBeUndefined()
@@ -304,13 +315,13 @@ describe('settings save and publish', () => {
   })
 
   it.each([['网络错误', '网络错误'], ['服务暂时不可用。', '服务暂时不可用']])('ends a target read failure (%s) with one full stop before the draft hint', async (message, body) => {
-    vi.mocked(agentApi.getAll).mockRejectedValueOnce(new Error(message))
+    vi.mocked(agentApi.summaries).mockRejectedValueOnce(new Error(message))
     const failed = await render()
     expect(failed.text()).toContain(`暂时无法读取目标设备：${body}。仍可保存草稿。`)
   })
 
   it.each([{ profile_id: 'home' }, { service_type: 'mihomo' }, { status: 'offline' }, { enabled: false }])('rechecks the selected device after saving (%j)', async change => {
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent()])).mockResolvedValueOnce(response([agent(change)]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([agent()])).mockResolvedValueOnce(response([agent(change)]))
     const wrapper = await render()
     await publish(wrapper)
     expect(agentApi.pushConfig).not.toHaveBeenCalled()
@@ -319,7 +330,7 @@ describe('settings save and publish', () => {
 
   it.each([undefined, 'one'])('does not fall back to the sole remaining target after a binding changes during save (preferred: %s)', async preferredAgentId => {
     const replacement = agent({ id: 'two', name: '书房 DNS' })
-    vi.mocked(agentApi.getAll)
+    vi.mocked(agentApi.summaries)
       .mockResolvedValueOnce(response([agent(), replacement]))
       .mockResolvedValue(response([agent({ profile_id: 'home' }), replacement]))
     const save = vi.fn().mockResolvedValue(guard())
@@ -353,7 +364,7 @@ describe('settings save and publish', () => {
 
   it('does not submit after closing while the final target check is pending', async () => {
     const check = deferred<any>()
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent()])).mockImplementationOnce(() => check.promise)
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([agent()])).mockImplementationOnce(() => check.promise)
     const wrapper = await render()
     await publish(wrapper)
     await wrapper.setProps({ open: false })
@@ -443,7 +454,7 @@ describe('settings save and publish', () => {
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(() => post.promise)
     const wrapper = await render()
     await publish(wrapper)
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ profile_id: 'home' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ profile_id: 'home' })]))
     await wrapper.setProps({ profileId: 'home' })
     await flushPromises()
     expect(wrapper.text()).not.toContain('准备文件')
@@ -474,7 +485,7 @@ describe('settings save and publish', () => {
   })
 
   it('restores a previously ready snapshot and blocks a new publication', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ latest_deployment: { deployment_id: 'old-ready', profile_id: 'office', status: 'ready' } })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ latest_deployment: { deployment_id: 'old-ready', profile_id: 'office', status: 'ready' } })]))
     const wrapper = await render()
     expect(wrapper.text()).toContain('设备上次发布：已校验，待激活')
     expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
@@ -484,9 +495,9 @@ describe('settings save and publish', () => {
   })
 
   it('checks the binding again before activating an already validated snapshot', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent({ latest_deployment: { deployment_id: 'old-ready', profile_id: 'office', status: 'ready' } })]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([agent({ latest_deployment: { deployment_id: 'old-ready', profile_id: 'office', status: 'ready' } })]))
     const wrapper = await render()
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent({ profile_id: 'home' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([agent({ profile_id: 'home' })]))
     await button(wrapper, '应用并启动').trigger('click')
     await flushPromises()
     expect(agentApi.activateDeployment).not.toHaveBeenCalled()
@@ -495,7 +506,7 @@ describe('settings save and publish', () => {
 
   it('allows an explicit replacement when the preferred device with a ready snapshot is rebound', async () => {
     const replacement = agent({ id: 'two', name: '书房 DNS' })
-    vi.mocked(agentApi.getAll)
+    vi.mocked(agentApi.summaries)
       .mockResolvedValueOnce(response([agent({ latest_deployment: { deployment_id: 'old-ready', profile_id: 'office', status: 'ready' } }), replacement]))
       .mockResolvedValue(response([agent({ profile_id: 'home' }), replacement]))
     const wrapper = await render({ preferredAgentId: 'one' })
@@ -511,7 +522,7 @@ describe('settings save and publish', () => {
   })
 
   it('does not restore a ready candidate created for a different service type', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: 'mosdns', latest_deployment: {
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'mosdns', latest_deployment: {
       deployment_id: 'old-mihomo', profile_id: 'office', service_type: 'mihomo', status: 'ready',
     } })]))
     const wrapper = await render({ serviceType: 'mosdns', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'mosdns' })) })
@@ -525,9 +536,9 @@ describe('settings save and publish', () => {
 
   it.each([{ profile_id: 'home' }, { service_type: 'mosdns' }])('rechecks a ready candidate scope using fresh deployment metadata before activation (%j)', async change => {
     const recorded = { deployment_id: 'old-ready', profile_id: 'office', service_type: 'oxidns', status: 'ready' }
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent({ latest_deployment: recorded })]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([agent({ latest_deployment: recorded })]))
     const wrapper = await render()
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([agent({ latest_deployment: { ...recorded, ...change } })]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([agent({ latest_deployment: { ...recorded, ...change } })]))
     await button(wrapper, '应用并启动').trigger('click')
     await flushPromises()
     expect(agentApi.activateDeployment).not.toHaveBeenCalled()
@@ -554,7 +565,7 @@ describe('settings save and publish', () => {
   })
 
   it('handles Surge synchronous success without claiming transactional service checks', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: 'surge' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'surge' })]))
     vi.mocked(agentApi.pushConfig).mockResolvedValueOnce(response({ success: true, restart: { success: true } }))
     const wrapper = await render({ serviceType: 'surge', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'surge' })) })
     await publish(wrapper)
@@ -573,7 +584,7 @@ describe('settings save and publish', () => {
   })
 
   it('keeps an uncertain Surge result separate from a confirmed restart failure', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: 'surge' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'surge' })]))
     vi.mocked(agentApi.pushConfig).mockResolvedValueOnce(response({ success: true, restart: { success: false, message: '启动失败' } }))
     const wrapper = await render({ serviceType: 'surge', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'surge' })) })
     await publish(wrapper)
@@ -601,7 +612,7 @@ describe('settings save and publish', () => {
 
 describe('Settings publication failure details', () => {
   it.each(['mihomo', 'mosdns', 'oxidns'])('keeps %s validation and rollback diagnostics in the settings workspace', async serviceType => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: serviceType })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: serviceType })]))
     vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'rollback_failed', failed_stage: 'verifying', error: '配置检查失败', error_details: ruleLocationDetails, rollback_error: '恢复失败', rollback_error_details: 'failed to bind :53' }))
     const wrapper = await render({ serviceType, save: vi.fn().mockResolvedValue(guard({ expected_service_type: serviceType as any })) })
     await publish(wrapper)
@@ -610,7 +621,7 @@ describe('Settings publication failure details', () => {
     expect(notify.error).toHaveBeenCalledWith('回滚失败，需要处理', '配置检查失败')
   })
   it('keeps Surge partial-success restart details without reporting the file write as failed', async () => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: 'surge' })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'surge' })]))
     vi.mocked(agentApi.pushConfig).mockResolvedValueOnce(response({ success: true, restart: { success: false, message: 'Surge reload failed', error_details: 'invalid policy on line 4' } }))
     const wrapper = await render({ serviceType: 'surge', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'surge' })) })
     await publish(wrapper)
@@ -619,7 +630,7 @@ describe('Settings publication failure details', () => {
     expect(wrapper.text()).not.toContain('配置已推送')
   })
   it.each(['mihomo', 'mosdns', 'oxidns', 'surge'] as const)('preserves a %s pre-submission rejection and clears it when changing the editing session', async serviceType => {
-    vi.mocked(agentApi.getAll).mockResolvedValue(response([agent({ service_type: serviceType })]))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: serviceType })]))
     vi.mocked(agentApi.pushConfig).mockRejectedValueOnce({ response: { status: 400, data: { message: '本地校验失败', error_details: ruleLocationDetails } } })
     const wrapper = await render({ serviceType, save: vi.fn().mockResolvedValue(guard({ expected_service_type: serviceType })) })
     await publish(wrapper)

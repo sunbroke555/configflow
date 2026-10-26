@@ -49,7 +49,7 @@ async function render(path = '/agents/one/oxidns', remount = true) {
   return { wrapper, router }
 }
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   invalidateAgentSummaries()
   stubStorage()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
@@ -70,10 +70,22 @@ afterEach(() => {
 })
 
 describe('OxiDNS monitor device selection', () => {
+  it('opens from a fresh lightweight lookup without waiting for content comparison', async () => {
+    const { wrapper } = await render()
+    vi.mocked(agentApi.getAll).mockReturnValue(new Promise(() => {}))
+    // The picker cache and monitor snapshot still refer to the default profile.
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([{ ...device('one'), profile_id: 'office' }]))
+    await wrapper.findAll('button').find(button => button.text() === '设置')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="recorder-settings"]').text()).toBe('office ·  · 办公室 · Device one')
+    expect(agentApi.getAll).not.toHaveBeenCalled()
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
+  })
+
   it('opens general settings for the selected offline Agent without requiring monitor data', async () => {
     vi.mocked(oxidnsMonitorApi.overview).mockRejectedValueOnce(new Error('核心未运行'))
     const { wrapper } = await render('/agents/two/oxidns')
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([{ ...device('two', 'offline'), profile_id: 'office' }]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([{ ...device('two', 'offline'), profile_id: 'office' }]))
     await wrapper.findAll('button').find(button => button.text() === '设置')!.trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-test="recorder-settings"]').text()).toBe('office ·  · 办公室 · Device two')
@@ -81,7 +93,7 @@ describe('OxiDNS monitor device selection', () => {
   it('ignores a settings lookup that returns after switching devices', async () => {
     const { wrapper, router } = await render()
     let finish!: (value: any) => void
-    vi.mocked(agentApi.getAll).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    vi.mocked(agentApi.summaries).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
     await wrapper.findAll('button').find(button => button.text() === '设置')!.trigger('click')
     await router.replace('/agents/two/oxidns')
     await flushPromises()
@@ -93,7 +105,7 @@ describe('OxiDNS monitor device selection', () => {
   it('opens recorder settings for the fresh Agent binding, not the sidebar or old snapshot profile', async () => {
     vi.mocked(oxidnsMonitorApi.overview).mockImplementation(async id => response({ ...snapshot(id), recorders: [] }))
     const { wrapper } = await render('/agents/one/oxidns?tab=queries')
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce(response([{ ...device('one'), profile_id: 'office' }]))
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([{ ...device('one'), profile_id: 'office' }]))
     await wrapper.findAll('button').find(button => button.text() === '前往设置')!.trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-test="recorder-settings"]').text()).toBe('office · query_recorder · 办公室 · Device one')
