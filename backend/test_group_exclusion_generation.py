@@ -128,7 +128,13 @@ def test_chain_inherits_exclusions_on_refresh_and_keeps_manual_candidates(includ
     assert groups['Exit']['proxies'] == ['US-expired-manual']
     assert len(groups['Chain']['proxies']) == 1
     provider = main['proxy-providers'][groups['Chain']['use'][0]]
-    assert provider['exclude-filter'] == exclude
+    if '`' in include:
+        # Buckets keep the per-source copy and its exclude-filter.
+        assert provider['exclude-filter'] == exclude
+    else:
+        # One shared rule is folded into the filter: no source copy, no exclude-filter.
+        assert 'exclude-filter' not in provider and provider['filter']
+        assert not any('_筛选' in name for name in main['proxy-providers'])
     assert provider['override']['dialer-proxy'] == 'A'
     assert len(calls) == 1
     membership[:] = ['HK-second', 'US-expired-new', 'US-second']
@@ -159,3 +165,27 @@ def test_chain_combines_managed_and_native_exclusions(native):
         provider.get('filter', ''), provider.get('exclude-filter', ''))
     expected = ['US-new'] if native else ['US-new', 'US-slow']
     assert selected == [{'name': name} for name in expected]
+
+
+@pytest.mark.parametrize('include, exclude', [('', 'expired'), ('^US', '(?i)EXPIRED'), ('', 'US`old'), ('US', r'(?<=US-)\w+ed$')])
+def test_one_shared_rule_becomes_the_group_filter_without_a_source_copy(include, exclude):
+    config = config_with_sources(regex=include, exclude_regex=exclude, aggregations=[])
+    main = yaml.safe_load(generate_mihomo_config(config, preflight_providers=False))
+    group = main['proxy-groups'][0]
+    assert group['use'] == ['Feed'] and list(main['proxy-providers']) == ['Feed']
+    assert 'exclude-filter' not in main['proxy-providers']['Feed'] and '`' not in group['filter']
+    # The group filter never touches the group's own members.
+    assert group['proxies'] == ['Manual-expired']
+    nodes = [{'name': name} for name in ['US-new', 'US-EXPIRED', 'US-expired', 'HK-new', 'US`old']]
+    assert filter_provider_candidates(nodes, group['filter']) == filter_candidates(nodes, include, exclude)
+
+
+@pytest.mark.parametrize('fields', [{'regex': '^US`^HK', 'exclude_regex': 'expired', 'aggregations': []},
+                                    {'exclude_regex': 'expired'}])
+def test_bucketed_include_or_differing_source_rules_keep_the_source_copy(fields):
+    # Buckets reorder the group's own members too; differing rules need one filter per source.
+    config = config_with_sources(**fields)
+    main = yaml.safe_load(generate_mihomo_config(config, preflight_providers=False))
+    group = main['proxy-groups'][0]
+    copy = next(name for name in group['use'] if name.startswith('Selected_Feed_筛选'))
+    assert main['proxy-providers'][copy]['exclude-filter'] == 'expired'

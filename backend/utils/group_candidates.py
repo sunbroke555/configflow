@@ -126,6 +126,42 @@ def validate_filters(group, original=None):
                 raise CandidateValidationError(f'{field} 正则表达式无效') from exc
 
 
+_LEADING_FLAGS = re.compile(r'\(\?([aiLmsux]+)\)')
+
+
+def _embedded(pattern):
+    """A user pattern as one group that keeps its meaning inside a larger one.
+
+    Leading global flags such as (?i) become scoped flags: Python rejects global
+    flags after the start, and both engines accept (?i:...). The group does not
+    capture, so the user's own group numbers stay the same.
+    """
+    flags = ''
+    while match := _LEADING_FLAGS.match(pattern):
+        flags += match[1]
+        pattern = pattern[match.end():]
+    return f'(?{flags}:{pattern})' if flags else f'(?:{pattern})'
+
+
+def _literal_backticks(pattern):
+    # Backticks separate Mihomo filters; in an exclusion they are name characters.
+    return re.sub(r'(\\*)`', lambda match: match[1][:len(match[1]) // 2 * 2] + r'\x60', pattern)
+
+
+def exclusion_filter(include, exclude):
+    """One Mihomo group filter that keeps include and drops exclude.
+
+    A group filter leaves the group's own proxies and groups alone, so this
+    excludes provider nodes only, like the per-provider exclude-filter it
+    replaces. Only for a single include: with backtick buckets Mihomo reorders
+    every member, the group's own ones too, by the buckets they match.
+    """
+    if not exclude:
+        return include
+    without = f'^(?![\\s\\S]*?{_embedded(_literal_backticks(exclude))})'
+    return without + (f'(?=[\\s\\S]*?{_embedded(include)})' if include else '')
+
+
 def lower_group_provider_filters(config, main):
     """Keep managed exclusions scoped to each live provider, never manual nodes.
 
@@ -150,6 +186,15 @@ def lower_group_provider_filters(config, main):
         selected = [(name, *selections[name]) for name in group.get('use', [])
                     if name in selections and name in providers]
         if not selected:
+            continue
+        rules = {(include, exclude) for _, include, exclude in selected}
+        if len(rules) == 1 and len(selected) == len(group.get('use', [])) and '`' not in next(iter(rules))[0]:
+            # Every provider shares one rule: the group filter expresses it, so
+            # the providers stay shared and no node is listed twice.
+            filter_value = exclusion_filter(*next(iter(rules)))
+            group.pop('filter', None)
+            if filter_value:
+                group['filter'] = filter_value
             continue
         # A shared include stays at group level to preserve Mihomo's backtick
         # bucket ordering, including when the group becomes a chain exit.
@@ -178,9 +223,7 @@ def lower_group_provider_filters(config, main):
                 if provider_include:
                     provider['filter'] = provider_include
                 if exclude:
-                    # Backticks in a managed regex are literal name characters.
-                    provider['exclude-filter'] = re.sub(
-                        r'(\\*)`', lambda match: match[1][:len(match[1]) // 2 * 2] + r'\x60', exclude)
+                    provider['exclude-filter'] = _literal_backticks(exclude)
                 providers[name] = provider
                 clones[key] = name
             use.append(clones[key])
