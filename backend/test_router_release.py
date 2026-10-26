@@ -136,7 +136,9 @@ class FakeAgent:
         self.calls.append(('apply', spec))
         if self.fail_apply:
             raise RuntimeError('缺少 nft（nftables），无法管理回流规则')
-        assert spec['safety_version'] == 1 and not spec.get('adopt_legacy')
+        assert spec['safety_version'] in (1, 2) and not spec.get('adopt_legacy')
+        # Protocol 2 needs an Agent that declares it and carries no destination list.
+        assert spec['safety_version'] == 1 or (2 in self.state['safety'].get('protocols', []) and 'proxy_dst' not in spec)
         self.state['return_tables'] = [table for table in self.state['return_tables']
                                        if table['name'] != 'configflow_return']
         self.state['return_tables'].append({'family': 'inet', 'name': 'configflow_return', 'marks': [spec['mark']]})
@@ -144,7 +146,8 @@ class FakeAgent:
                                       if str(rule['priority']) != str(spec['priority'])]
         self.state['fwmark_rules'].append({'priority': str(spec['priority']),
                                           'mark': spec['mark'] + '/' + spec['mark'], 'table': str(spec['table'])})
-        self.state['managed'] = {'spec': copy.deepcopy(spec), 'table_present': True}
+        # Like the Go Agent, report a protocol 2 spec with "proxy_dst": null.
+        self.state['managed'] = {'spec': {'proxy_dst': None, **copy.deepcopy(spec)}, 'table_present': True}
         self.state['safety']['allocation'] = {
             'version': 1, 'reused': True, **{key: spec[key] for key in ('table', 'priority', 'mark')}}
         return {'success': True}

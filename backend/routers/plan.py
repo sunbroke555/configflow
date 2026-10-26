@@ -29,7 +29,13 @@ from backend.routers.ikuai_groups import GroupPlanner, nat_target, span
 from backend.routers.report import _networks, SupernetIndex
 
 MANAGED_RETURN_TABLE = 'configflow_return'
+# Version of the Agent's safety status; the spec carries its own protocol.
 RETURN_SAFETY_VERSION = 1
+# Protocol 1 marks connections to listed destinations; protocol 2 marks every
+# new connection the router forwards, so routing changes never touch it.
+RETURN_PROTOCOL_BY_DESTINATION = 1
+RETURN_PROTOCOL_BY_ROUTER = 2
+RETURN_PROTOCOLS = (RETURN_PROTOCOL_BY_DESTINATION, RETURN_PROTOCOL_BY_ROUTER)
 RETURN_ALLOCATION_VERSION = 1
 RETURN_ALLOCATION_FIELDS = ('table', 'priority', 'mark')
 
@@ -73,6 +79,22 @@ def return_allocation(status: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if number == 0 or number & (number - 1):
         return None
     return {**allocation, 'mark': f'0x{number:x}'}
+
+
+def return_protocol(status: Dict[str, Any]) -> int:
+    """The newest spec protocol the Agent declares; Agents before protocol 2 list none."""
+    safety = status.get('safety') if isinstance(status, dict) else None
+    protocols = safety.get('protocols') if isinstance(safety, dict) else None
+    if isinstance(protocols, list) and RETURN_PROTOCOL_BY_ROUTER in protocols:
+        return RETURN_PROTOCOL_BY_ROUTER
+    return RETURN_PROTOCOL_BY_DESTINATION
+
+
+def return_scope(spec: Dict[str, Any]) -> str:
+    """What the return rule marks, for plan summaries."""
+    if spec.get('safety_version') == RETURN_PROTOCOL_BY_ROUTER:
+        return '标记主路由转来的全部新连接'
+    return f'标记 {len(spec.get("proxy_dst") or [])} 个网段'
 
 
 def return_safety_blockers(status: Dict[str, Any], *, require_safe: bool = True) -> List[str]:
@@ -194,7 +216,7 @@ def _return_cleanup_ops(return_routing: Dict[str, Any], warnings: List[str]):
     spec = cleanup['spec']
     return [{'kind': 'return_routing_remove', 'restore_legacy': False, 'previous': spec,
              'summary': f'移除回流规则（表 inet {MANAGED_RETURN_TABLE}，路由表 {spec.get("table")} → '
-                        f'{spec.get("router_ip")}，标记 {len(spec.get("proxy_dst") or [])} 个网段）'}]
+                        f'{spec.get("router_ip")}，{return_scope(spec)}）'}]
 
 
 def _policy_op(rule, gateway: str, dst: List[str], comment: str):
@@ -447,17 +469,21 @@ def _return_op(return_routing: Dict[str, Any], spec: Dict[str, Any]):
     managed = return_routing.get('managed') or {}
     current = (managed.get('spec') or None) if managed.get('table_present') else None
     same = (current and managed.get('table_present')
-            and set(current.get('proxy_dst') or []) == set(spec['proxy_dst'])
+            and set(current.get('proxy_dst') or []) == set(spec.get('proxy_dst') or [])
             and all(current.get(key) == spec[key]
                     for key in ('router_ip', 'mark', 'table', 'priority', 'safety_version')))
     if same:
         return []
-    added = sorted(set(spec['proxy_dst']) - set((current or {}).get('proxy_dst') or []))
     parts = [f'应用回流规则（表 inet {MANAGED_RETURN_TABLE}，mark {spec["mark"]}，'
              f'路由表 {spec["table"]} → {spec["router_ip"]}，优先级 {spec["priority"]}）',
-             f'标记 {len(spec["proxy_dst"])} 个网段']
-    if current and added:
-        parts.append(f'新增 {", ".join(added)}')
+             return_scope(spec)]
+    if spec['safety_version'] == RETURN_PROTOCOL_BY_ROUTER:
+        if current and current.get('safety_version') != RETURN_PROTOCOL_BY_ROUTER:
+            parts.append('由按目的网段改为按来源标记，之后规则集网段变化不再需要修改回流规则，自动同步也不会因此暂停')
+    else:
+        added = sorted(set(spec['proxy_dst']) - set((current or {}).get('proxy_dst') or []))
+        if current and added:
+            parts.append(f'新增 {", ".join(added)}')
     return [{'kind': 'return_routing_apply', 'spec': spec, 'previous': current,
              'summary': '；'.join(parts)}]
 
@@ -576,7 +602,7 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     current_return = (return_routing.get('managed') or {}).get('spec') or {}
     retained_return = [
         str(old if old.subnet_of(target) else target)
-        for old in _networks(current_return.get('proxy_dst', []))
+        for old in _networks(current_return.get('proxy_dst') or [])
         for target in _networks(skipped) if old.overlaps(target)]
     if ros_policy is not None:
         for op in ros_policy['ops']:
@@ -612,10 +638,12 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     return_ops = []
     if manage_return:
         allocation = return_allocation(return_routing)
-        policy_cidrs = [item['cidr'] for item in desired.get('ros_policy', {}).get('cidrs', [])]
-        spec = {'router_ip': upstream, 'proxy_dst': _collapse(proxy_cidrs + policy_cidrs + exempt + retained_return),
-                **{key: allocation[key] for key in RETURN_ALLOCATION_FIELDS},
-                'safety_version': RETURN_SAFETY_VERSION}
+        spec = {'router_ip': upstream, **{key: allocation[key] for key in RETURN_ALLOCATION_FIELDS},
+                'safety_version': return_protocol(return_routing)}
+        if spec['safety_version'] == RETURN_PROTOCOL_BY_DESTINATION:
+            # An Agent without protocol 2 still marks only listed destinations.
+            policy_cidrs = [item['cidr'] for item in desired.get('ros_policy', {}).get('cidrs', [])]
+            spec['proxy_dst'] = _collapse(proxy_cidrs + policy_cidrs + exempt + retained_return)
         return_ops = _return_op(return_routing, spec)
 
     guard = state.dns_guard_plan

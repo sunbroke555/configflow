@@ -114,7 +114,7 @@ func returnSafetyStatus(cfg *Config) map[string]interface{} {
 	if err != nil {
 		blockers = append(blockers, err.Error())
 	}
-	status := map[string]interface{}{"version": 1, "ok": len(blockers) == 0, "blockers": blockers}
+	status := map[string]interface{}{"version": 1, "protocols": returnProtocols, "ok": len(blockers) == 0, "blockers": blockers}
 	if err == nil {
 		status["allocation"] = allocation
 	}
@@ -182,13 +182,21 @@ func desiredReturnNFT(spec resolvedSpec, owner *returnOwnership) []map[string]in
 		objects = append(objects, nftObject("rule", map[string]interface{}{"family": "inet", "table": managedReturnTable,
 			"chain": chain, "expr": expr, "comment": tag + ":" + suffix}))
 	}
-	addRule(pre, "incoming", []interface{}{
+	incoming := []interface{}{
 		nftMatch(meta("iifname"), spec.LanInterface, "=="),
 		nftMatch(payload("ether", "saddr"), spec.routerMAC, "=="),
-		nftMatch(payload("ip", "daddr"), map[string]interface{}{"set": addresses}, "=="),
+	}
+	if spec.SafetyVersion == returnProtocolByDestination {
+		incoming = append(incoming, nftMatch(payload("ip", "daddr"), map[string]interface{}{"set": addresses}, "=="))
+	} else {
+		// Every connection the router forwards here gets its replies back through
+		// the router, whatever the destination; IPv4 only, like the routes.
+		incoming = append(incoming, nftMatch(meta("nfproto"), "ipv4", "=="))
+	}
+	addRule(pre, "incoming", append(incoming,
 		nftMatch(map[string]interface{}{"ct": map[string]interface{}{"key": "state"}}, "new", "in"),
 		setMark("ct"),
-	})
+	))
 	marked := func() interface{} {
 		return nftMatch(map[string]interface{}{"&": []interface{}{markExpr("ct"), spec.mark}}, spec.mark, "==")
 	}
@@ -658,7 +666,7 @@ func ApplyReturnRouting(cfg *Config, input ReturnRoutingSpec) (map[string]interf
 	if err = saveReturnState(cfg, state); err != nil {
 		return nil, fmt.Errorf("回流状态保存失败，保留事务记录：%w", err)
 	}
-	return map[string]interface{}{"success": true, "safety_version": 1, "lan_interface": spec.LanInterface,
+	return map[string]interface{}{"success": true, "safety_version": spec.SafetyVersion, "lan_interface": spec.LanInterface,
 		"lan_cidr": spec.lanCIDR, "router_mac": spec.routerMAC, "tun_device": spec.TunDevice}, nil
 }
 
