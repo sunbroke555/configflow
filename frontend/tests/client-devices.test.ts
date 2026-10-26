@@ -26,7 +26,7 @@ const state = (devices: ClientDevice[] = [{ ip: '192.0.2.5', name: '电视', mod
 const seen = (ip: string, extra: Partial<ClientPresenceInfo> = {}): ClientPresenceInfo =>
   ({ ip, mac: '', hostname: '', sources: [], presence: 'unknown', basis: '', last_seen: null, router_id: 'ros1', ...extra })
 const discovery = (extra: Partial<ClientDiscovery> = {}): ClientDiscovery => ({
-  success: true, profile_id: 'office', state: 'ok', message: '', checked_at: '2026-10-25T10:46:34+08:00',
+  success: true, profile_id: 'office', state: 'ok', message: '', cached: false, stale: false, refresh_error: '', checked_at: '2026-10-25T10:46:34+08:00',
   sources: [{ id: 'ros1', name: '主路由', type: 'routeros', ok: true, error: '', notes: [], policy_routing: false }],
   devices: [
     { name: '电视', mode: 'direct', ...seen('192.0.2.5', { mac: 'E0:BA:AD:94:F2:48', hostname: 'TV', sources: ['arp', 'lease'], presence: 'online', basis: 'lease', last_seen: 523 }), discoverable: true },
@@ -881,5 +881,79 @@ describe('client device discovery tabs', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('此配置空间没有 OxiDNS Agent，DNS 策略会在接入 OxiDNS 并发布后生效。')
     expect(wrapper.text()).not.toContain('前往发布')
+  })
+})
+
+
+describe('client device router snapshots', () => {
+  it('shows a fresh cached list without starting a router refresh', async () => {
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({ cached: true, checked_at: '2000-01-02T10:46:34+08:00' })))
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.find('[data-found-ip="192.0.2.147"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('上次读取')
+    // Cross-day snapshots must show the date as well as the time.
+    expect(wrapper.text()).toContain('2000/01/02')
+    expect(clientDeviceApi.discover).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps stale devices visible and editable while refreshing in the background', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.discover)
+      .mockResolvedValueOnce(response(discovery({ cached: true, stale: true })))
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const { wrapper } = await render()
+    expect(wrapper.text()).toContain('正在后台更新路由器上的设备')
+    expect(wrapper.text()).toContain('上次读取')
+    expect(clientDeviceApi.discover).toHaveBeenLastCalledWith('office', { refresh: true })
+    await nameInput(wrapper, '192.0.2.5').setValue('正在输入的新名称')
+    finish(response(discovery({ discovered: [] })))
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('正在输入的新名称')
+    expect(wrapper.text()).not.toContain('正在后台更新路由器上的设备')
+  })
+
+  it('retains the cached list and explains a background request failure', async () => {
+    vi.mocked(clientDeviceApi.discover)
+      .mockResolvedValueOnce(response(discovery({ cached: true, stale: true })))
+      .mockRejectedValueOnce(new Error('连接中断'))
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.find('[data-found-ip="192.0.2.147"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('连接中断；仍显示上次结果')
+  })
+
+  it('shows router refresh failures retained alongside the server snapshot', async () => {
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(discovery({ cached: true, refresh_error: '认证失败' })))
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.find('[data-found-ip="192.0.2.147"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('认证失败；仍显示上次结果')
+  })
+
+  it('forces a manual refresh and keeps the previous devices visible until it finishes', async () => {
+    const { wrapper } = await render('/client-devices?tab=new')
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.discover).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await wrapper.get('[aria-label="重新载入"]').trigger('click')
+    await flushPromises()
+    expect(clientDeviceApi.discover).toHaveBeenLastCalledWith('office', { refresh: true })
+    expect(wrapper.find('[data-found-ip="192.0.2.147"]').exists()).toBe(true)
+    finish(response(discovery({ discovered: [] })))
+    await flushPromises()
+    expect(wrapper.text()).toContain('没有未添加的设备')
+  })
+
+  it('discards a background refresh after switching profiles', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.discover)
+      .mockResolvedValueOnce(response(discovery({ cached: true, stale: true })))
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      .mockResolvedValueOnce(response(discovery({ profile_id: 'home', discovered: [] })))
+    const { wrapper, router } = await render('/client-devices?tab=new')
+    vi.mocked(clientDeviceApi.get).mockResolvedValue(response(state([], { profile_id: 'home', profile_name: '家里' })))
+    await router.push('/client-devices?profile=home&tab=new')
+    await flushPromises()
+    finish(response(discovery()))
+    await flushPromises()
+    expect(wrapper.find('[data-found-ip="192.0.2.147"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('没有未添加的设备')
   })
 })

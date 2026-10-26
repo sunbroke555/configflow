@@ -55,17 +55,15 @@
           </TabsList>
 
           <div v-if="!unsupported || tab === 'added'" class="mb-3 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-live="polite">
-            <template v-if="discovering"><Loader2 class="size-3.5 animate-spin motion-reduce:animate-none" />正在读取路由器上的设备，最长约 20 秒…</template>
-            <template v-else-if="discoveryError">
-              <span role="alert" class="text-destructive-accent">暂时无法读取路由器：{{ discoveryError }}</span>
-            </template>
-            <template v-else-if="discovery?.state === 'unsupported'">{{ discovery.message }}</template>
-            <template v-else-if="discovery">
+            <template v-if="discovery && discovery.state !== 'unsupported'">
               <span>设备来源</span>
               <StatusDot v-for="source in discovery.sources" :key="source.id" :tone="source.ok ? 'success' : 'danger'"
                 :label="`${source.name}（${source.type === 'ikuai' ? 'iKuai' : 'RouterOS'}）`" />
-              <span v-if="checkedAt" class="num">{{ checkedAt }} 读取</span>
+              <span v-if="checkedAt" class="num" :class="{ 'text-warning-accent': discovery.cached }">{{ discovery.cached ? '上次读取' : '读取时间' }} {{ checkedAt }}</span>
             </template>
+            <template v-if="discovering"><Loader2 class="size-3.5 animate-spin text-primary-accent motion-reduce:animate-none" />{{ discovery ? '正在后台更新路由器上的设备…' : '正在读取路由器上的设备，最长约 20 秒…' }}</template>
+            <span v-if="discoveryError" role="alert" class="text-destructive-accent">暂时无法读取路由器：{{ discoveryError }}{{ discovery ? '；仍显示上次结果。' : '' }}</span>
+            <template v-else-if="discovery?.state === 'unsupported'">{{ discovery.message }}</template>
           </div>
           <ul v-if="sourceProblems.length" class="mb-3 mt-0 list-none space-y-1 p-0 text-xs" aria-label="设备来源提示">
             <li v-for="item in sourceProblems" :key="item.key" :role="item.error ? 'alert' : undefined"
@@ -313,12 +311,12 @@ import { choose, confirm, confirmDanger, notify } from '@/lib/feedback'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 
-const pageHelp = '为局域网设备命名，并按需设置 OxiDNS 的 DNS 策略。设备从 RouterOS / iKuai 主路由实时读取；名称在本配置空间共用，Mihomo 连接、数据统计和 OxiDNS 查询记录都按它显示。'
+const pageHelp = '为局域网设备命名，并按需设置 OxiDNS 的 DNS 策略。设备从 RouterOS / iKuai 主路由读取，优先显示上次结果，过期后后台更新；名称在本配置空间共用，Mihomo 连接、数据统计和 OxiDNS 查询记录都按它显示。'
 const listHelp = [
   '「已添加」：在本页保存过的设备，可以起名字、设置 DNS 策略。只是方便管理，不代表走代理。',
   '「未添加」：主路由能看到、但还没保存的设备。它们照常上网，按全局的分流规则走。',
   '「已离线」：已添加、但路由器判断已经离线的设备。',
-  '在线状态在每次打开或点「重新载入」时从路由器读取，不会保存。',
+  '打开页面先显示上次读取的设备和状态；一分钟内复用，超过一分钟在后台更新。点「重新载入」立即重查。服务重启后的首次读取最长约 20 秒。',
   '改名字：立即生效，不用发布。\n改 DNS 策略：先存为草稿，在下方「发布 DNS 策略」发布到 OxiDNS 后才生效。开了策略路由时，智能分流的设备有变化，还要到上游路由重新发布。',
   '固定 IP：避免设备续租换了地址后，名字和策略对不上。它会修改来源主路由的 DHCP 静态绑定，要先预览确认再执行。',
   '名称和 DNS 策略都清空后，设备会从「已添加」中移除；已有的固定 IP 默认保留。',
@@ -454,7 +452,9 @@ const tabItems = computed(() => {
 })
 const checkedAt = computed(() => {
   const time = discovery.value?.checked_at ? new Date(discovery.value.checked_at) : null
-  return time && !Number.isNaN(time.getTime()) ? time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''
+  if (!time || Number.isNaN(time.getTime())) return ''
+  const options = { hour: '2-digit', minute: '2-digit' } as const
+  return time.toDateString() === new Date().toDateString() ? time.toLocaleTimeString('zh-CN', options) : time.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', ...options })
 })
 /** 路由器读取失败与来源说明，逐台列出 */
 const sourceProblems = computed(() => (discovery.value?.sources || []).flatMap(source => [
@@ -581,7 +581,7 @@ function adopt(data: ClientDevicesState) {
 }
 
 /** keep：保留本页未保存的修改，只合并最新数据（单行冲突后使用） */
-async function load(keep = false) {
+async function load(keep = false, refresh = false) {
   loading.value = true
   error.value = ''
   try {
@@ -595,8 +595,11 @@ async function load(keep = false) {
     for (const ip of Object.keys(failures)) delete failures[ip]
     release()
     rows.value = []
+    if (data.profile_id !== state.value?.profile_id) {
+      ++discoveryRun
+      discovery.value = null
+    }
     state.value = null
-    discovery.value = null
     picked.value = []
     fixedPicked.value = []
     fixedError.value = ''
@@ -605,7 +608,7 @@ async function load(keep = false) {
     const online = data.agents.filter(agent => agent.status === 'online').map(agent => agent.id)
     selected.value = fromAgent.value ? data.agents.filter(agent => agent.id === fromAgent.value).map(agent => agent.id) : online
     for (const agent of data.agents) if (agent.deployment) track(agent.id, agent.deployment, false)
-    void discover(data.profile_id)
+    void discover(data.profile_id, refresh)
   } catch (failure) {
     if (!disposed) error.value = messageOf(failure)
   } finally {
@@ -613,15 +616,21 @@ async function load(keep = false) {
   }
 }
 
-/** 实时读取主路由；只采用最后一次、且仍是当前配置空间的结果 */
-async function discover(profileId: string) {
+/** 先显示快照，过期后后台重查；只采用当前配置空间最后一次请求的结果。 */
+async function discover(profileId: string, refresh = false) {
   const run = ++discoveryRun
   discovering.value = true
   discoveryError.value = ''
   try {
-    const { data } = await clientDeviceApi.discover(profileId)
-    if (disposed || run !== discoveryRun || state.value?.profile_id !== profileId) return
-    discovery.value = data
+    const current = () => !disposed && run === discoveryRun && state.value?.profile_id === profileId
+    const apply = (data: ClientDiscovery) => { discovery.value = data; discoveryError.value = data.refresh_error }
+    const { data } = await (refresh ? clientDeviceApi.discover(profileId, { refresh: true }) : clientDeviceApi.discover(profileId))
+    if (!current()) return
+    apply(data)
+    if (data.stale && !refresh) {
+      const { data: latest } = await clientDeviceApi.discover(profileId, { refresh: true })
+      if (current()) apply(latest)
+    }
   } catch (failure) {
     if (!disposed && run === discoveryRun) discoveryError.value = messageOf(failure)
   } finally {
@@ -630,12 +639,12 @@ async function discover(profileId: string) {
 }
 
 function rediscover() {
-  if (state.value) void discover(state.value.profile_id)
+  if (state.value) void discover(state.value.profile_id, true)
 }
 
 async function reload() {
   await queue
-  if (!unsaved().length || await confirm('重新载入会丢弃尚未保存的修改。', { title: '重新载入客户端设备', confirmText: '重新载入' })) await load()
+  if (!unsaved().length || await confirm('重新载入会丢弃尚未保存的修改。', { title: '重新载入客户端设备', confirmText: '重新载入' })) await load(false, true)
 }
 
 function add(value: string) {
@@ -702,7 +711,7 @@ async function addFound(items: ClientPresenceInfo[]) {
           notify.error('固定 IP 失败', fixedError.value)
         }
       }
-      await discover(profileId)
+      await discover(profileId, true)
     }
   } catch (failure) {
     fixedError.value = `无法预览固定 IP：${messageOf(failure)}`
@@ -763,7 +772,7 @@ async function fixExisting(row: ClientDevice) {
     fixedError.value = `固定 IP 失败：${messageOf(failure)}`
     notify.error('固定 IP 失败', fixedError.value)
   } finally {
-    if (fixedContext(profileId)) await discover(profileId)
+    if (fixedContext(profileId)) await discover(profileId, true)
     fixing.value = false
   }
 }
@@ -793,7 +802,7 @@ async function removeFixedIP(row: ClientDevice, previous: ClientDevice): Promise
     notify.error('无法删除固定 IP', fixedError.value)
     return false
   } finally {
-    if (fixedContext(profileId)) await discover(profileId)
+    if (fixedContext(profileId)) await discover(profileId, true)
     fixing.value = false
   }
 }
