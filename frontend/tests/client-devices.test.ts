@@ -7,6 +7,9 @@ import ClientDevices from '@/views/ClientDevices.vue'
 import OxiDNSMonitor from '@/views/OxiDNSMonitor.vue'
 import { Select } from '@/components/ui/select'
 import FieldHelp from '@/components/common/FieldHelp.vue'
+import { forgetClientDevicesSnapshot } from '@/lib/clientDevicesSnapshot'
+import { setActiveProfileId } from '@/profileContext'
+import { invalidateAuthSession } from '@/authSession'
 
 vi.mock('@/api', () => ({
   clientDeviceApi: { get: vi.fn(), save: vi.fn(), discover: vi.fn(), previewFixedIP: vi.fn(), applyFixedIP: vi.fn() },
@@ -59,6 +62,8 @@ const addButton = (wrapper: VueWrapper) => wrapper.findAll('button').find(item =
 const button = (wrapper: VueWrapper, text: string) => wrapper.findAll('button').find(item => item.text().includes(text))!
 
 beforeEach(() => {
+  forgetClientDevicesSnapshot()
+  setActiveProfileId('office')
   vi.clearAllMocks()
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} })))
@@ -956,4 +961,122 @@ describe('client device router snapshots', () => {
     expect(wrapper.find('[data-found-ip="192.0.2.147"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('没有未添加的设备')
   })
+})
+
+
+describe('client device page reopening', () => {
+  it('shows the previous saved list immediately, then validates records without a skeleton', async () => {
+    const { wrapper, router } = await render()
+    await router.push('/other')
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.get).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await router.push('/client-devices')
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('电视')
+    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(true)
+    expect(wrapper.find('[aria-label="正在加载"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('正在核对最新记录')
+    finish(response(state([{ ip: '192.0.2.5', name: '别处改过的名称', mode: 'direct' }])))
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('别处改过的名称')
+    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(false)
+  })
+
+  it('starts router discovery while the record request is still pending', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.get).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const { wrapper } = await render()
+    expect(clientDeviceApi.discover).toHaveBeenCalledWith('office')
+    expect(wrapper.find('[aria-label="正在加载"]').exists()).toBe(true)
+    finish(response(state()))
+    await flushPromises()
+    expect(clientDeviceApi.discover).toHaveBeenCalledTimes(1)
+    expect(nameInput(wrapper, '192.0.2.5').exists()).toBe(true)
+  })
+
+  it('never stores an unsaved input as the next page preview', async () => {
+    const { wrapper, router } = await render()
+    await nameInput(wrapper, '192.0.2.5').setValue('未保存的输入')
+    await router.push('/other')
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.get).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await router.push('/client-devices')
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('电视')
+    finish(response(state()))
+    await flushPromises()
+  })
+
+  it('keeps a failed preview read-only and disables publishing until records are verified', async () => {
+    const { wrapper, router } = await render()
+    await router.push('/other')
+    vi.mocked(clientDeviceApi.get).mockRejectedValueOnce(new Error('网络中断'))
+    await router.push('/client-devices')
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(true)
+    expect(wrapper.text()).toContain('网络中断')
+    expect(wrapper.text()).toContain('上次记录 · 暂不可编辑')
+    expect(button(wrapper, '发布到 2 台 OxiDNS').attributes('disabled')).toBeDefined()
+    await nameInput(wrapper, '192.0.2.5').trigger('blur')
+    expect(clientDeviceApi.save).not.toHaveBeenCalled()
+    await wrapper.get('[aria-label="重新载入"]').trigger('click')
+    await flushPromises()
+    expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(false)
+  })
+
+  it('discards previews when the authenticated session changes', async () => {
+    const { wrapper, router } = await render()
+    await router.push('/other')
+    invalidateAuthSession()
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.get).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await router.push('/client-devices')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="192.0.2.5 名称"]').exists()).toBe(false)
+    finish(response(state()))
+    await flushPromises()
+  })
+
+  it('does not preview another profile or adopt its late record response', async () => {
+    const { wrapper, router } = await render()
+    let finishHome!: (value: any) => void
+    vi.mocked(clientDeviceApi.get).mockImplementationOnce(() => new Promise(resolve => { finishHome = resolve }))
+    await router.push('/client-devices?profile=home')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="192.0.2.5 名称"]').exists()).toBe(false)
+    vi.mocked(clientDeviceApi.get).mockResolvedValueOnce(response(state([], { profile_id: 'work', profile_name: '工作' })))
+    await router.push('/client-devices?profile=work')
+    await flushPromises()
+    finishHome(response(state([{ ip: '192.0.2.77', name: '家里', mode: '' }], { profile_id: 'home' })))
+    await flushPromises()
+    expect(wrapper.find('[aria-label="192.0.2.77 名称"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('配置：工作')
+  })
+})
+
+
+it('drops a preview when its profile no longer exists', async () => {
+  const { wrapper, router } = await render()
+  await router.push('/other')
+  vi.mocked(clientDeviceApi.get).mockRejectedValueOnce({ response: { status: 404, data: { message: '配置空间已删除' } } })
+  await router.push('/client-devices')
+  await flushPromises()
+  expect(wrapper.find('[aria-label="192.0.2.5 名称"]').exists()).toBe(false)
+  expect(wrapper.text()).toContain('配置空间已删除')
+})
+
+it('does not start discovery in an Agents previous profile before checking its binding', async () => {
+  const { wrapper, router } = await render('/client-devices?agent=one')
+  await router.push('/other')
+  vi.mocked(clientDeviceApi.discover).mockClear()
+  let finish!: (value: any) => void
+  vi.mocked(clientDeviceApi.get).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  await router.push('/client-devices?agent=one')
+  await flushPromises()
+  expect(clientDeviceApi.discover).not.toHaveBeenCalled()
+  expect(nameInput(wrapper, '192.0.2.5').element.disabled).toBe(true)
+  finish(response(state([], { profile_id: 'home' })))
+  await flushPromises()
+  expect(clientDeviceApi.discover).toHaveBeenCalledWith('home')
+  expect(wrapper.find('[aria-label="192.0.2.5 名称"]').exists()).toBe(false)
 })

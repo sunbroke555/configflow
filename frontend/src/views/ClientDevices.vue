@@ -14,7 +14,7 @@
     </PageHeader>
     <p class="mb-5 mt-0 max-w-3xl text-[13px] leading-relaxed text-muted-foreground max-md:hidden">{{ pageHelp }}</p>
 
-    <LoadingRows v-if="loading && !state" :rows="4" />
+    <SectionCard v-if="loading && !state" title="设备列表"><LoadingRows :rows="4" /></SectionCard>
     <SectionCard v-else-if="!state">
       <EmptyState :icon="MonitorSmartphone" title="暂时无法读取客户端设备" :description="error || '正在读取配置空间。'">
         <Button variant="outline" class="min-h-11" :disabled="loading" @click="load">重试</Button>
@@ -24,7 +24,8 @@
       <SectionCard title="设备列表" :help="phone ? `${listHelp}\n\n${modeHelp}` : listHelp" class="mb-5">
         <template #actions>
           <span class="flex min-h-11 items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
-            <template v-if="savingIp"><Loader2 class="size-3.5 animate-spin motion-reduce:animate-none" />正在保存…</template>
+            <template v-if="previewing"><Loader2 v-if="loading" class="size-3.5 animate-spin motion-reduce:animate-none" />{{ loading ? '正在核对最新记录…' : '上次记录 · 暂不可编辑' }}</template>
+            <template v-else-if="savingIp"><Loader2 class="size-3.5 animate-spin motion-reduce:animate-none" />正在保存…</template>
             <template v-else-if="savedOnce"><Check class="size-3.5" />已保存</template>
             <template v-else>修改自动保存</template>
           </span>
@@ -79,20 +80,20 @@
               <Input v-model="search" class="min-h-11 pl-9" aria-label="搜索设备" placeholder="搜索名称、IP 或 MAC…" />
             </div>
             <div v-if="tab === 'added'" class="flex min-w-0 items-center gap-1 max-sm:w-full sm:ml-auto">
-              <Input id="client-device-ip" v-model="newIP" aria-label="手动添加 IP / 网段" class="min-h-11 min-w-0 flex-1 font-mono sm:w-60" :placeholder="phone ? 'IP / 网段' : '192.168.50.0/24 或 IPv6'"
+              <Input id="client-device-ip" v-model="newIP" :disabled="previewing" aria-label="手动添加 IP / 网段" class="min-h-11 min-w-0 flex-1 font-mono sm:w-60" :placeholder="phone ? 'IP / 网段' : '192.168.50.0/24 或 IPv6'"
                 @keydown.enter.prevent="add(newIP)" />
               <FieldHelp label="手动添加 IP / 网段" :text="rangeHelp" />
-              <Button variant="outline" class="min-h-11" :disabled="!newIP.trim()" @click="add(newIP)"><Plus class="size-4" />添加</Button>
+              <Button variant="outline" class="min-h-11" :disabled="previewing || !newIP.trim()" @click="add(newIP)"><Plus class="size-4" />添加</Button>
             </div>
             <div v-else-if="tab === 'new' && picked.length" class="flex flex-wrap items-center gap-1 max-sm:w-full sm:ml-auto">
               <label v-if="!fromSetup" class="mr-2 flex min-h-11 items-center gap-2 text-xs max-sm:basis-full" :title="pickedFixable.length ? '仅固定已选择且符合条件的设备，其余设备只添加记录' : '所选设备均不满足固定 IP 条件，原因见各行'">
                 <Checkbox :model-value="allFixedPicked ? true : someFixedPicked ? 'indeterminate' : false" :disabled="!pickedFixable.length || !!adding || fixing" aria-label="同时固定所选设备 IP" @update:model-value="value => pickFixedBatch(value === true)" />
                 同时固定 IP<span class="num">（{{ pickedFixable.length }} 台可用）</span>
               </label>
-              <Button class="min-h-11 max-sm:flex-1" :disabled="publishing || !!adding || fixing" @click="addFound(pickedFound)">
+              <Button class="min-h-11 max-sm:flex-1" :disabled="previewing || publishing || !!adding || fixing" @click="addFound(pickedFound)">
                 <Loader2 v-if="adding" class="size-4 animate-spin motion-reduce:animate-none" /><Plus v-else class="size-4" />{{ adding ? `正在添加（${adding}）…` : `添加所选（${picked.length}）` }}
               </Button>
-              <Button variant="ghost" class="min-h-11" :disabled="!!adding" @click="picked = []">取消选择</Button>
+              <Button variant="ghost" class="min-h-11" :disabled="previewing || !!adding" @click="picked = []">取消选择</Button>
             </div>
           </div>
 
@@ -120,7 +121,7 @@
                   <tr v-for="row in visibleRows" :key="row.ip" role="row" :data-client-ip="row.ip" @focusin="hold(row.ip)">
                     <td role="cell">
                       <Input v-model="row.name" :aria-label="row.ip + ' 名称'" maxlength="80" :placeholder="infoOf(row.ip)?.hostname || '设备或网段名称'" class="min-h-11 min-w-36 max-sm:min-w-0"
-                        :disabled="publishing || fixing" @blur="save(row.ip)" @keydown.enter.prevent="save(row.ip)" />
+                        :disabled="previewing || publishing || fixing" @blur="save(row.ip)" @keydown.enter.prevent="save(row.ip)" />
                       <p v-if="infoOf(row.ip)?.mac" class="mb-0 mt-1 font-mono text-[11px] text-muted-foreground">{{ infoOf(row.ip)!.mac }}</p>
                     </td>
                     <td role="cell">
@@ -135,7 +136,7 @@
                     </td>
                     <td role="cell" data-label="DNS 策略">
                       <div class="flex flex-wrap items-center gap-2">
-                        <Select :model-value="row.mode || 'default'" :disabled="publishing || fixing || !policyEditable" @update:model-value="value => setMode(row, String(value))">
+                        <Select :model-value="row.mode || 'default'" :disabled="previewing || publishing || fixing || !policyEditable" @update:model-value="value => setMode(row, String(value))">
                           <SelectTrigger :aria-label="row.ip + ' DNS 策略'" class="min-h-11 w-36 max-sm:w-full"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="default">默认</SelectItem>
@@ -149,14 +150,14 @@
                     <td role="cell" class="text-right">
                       <div class="flex items-center justify-end gap-2">
                         <div v-if="!fromSetup && infoOf(row.ip)?.fixed_ip?.status === 'dynamic'" class="min-w-0">
-                          <Button variant="outline" class="min-h-11" :aria-label="`固定 IP ${row.ip}`" :disabled="publishing || fixing || !!adding || !canFix(infoOf(row.ip))" @click="fixExisting(row)">固定 IP</Button>
-                          <p v-if="!canFix(infoOf(row.ip))" class="mb-0 mt-1 max-w-48 text-left text-[11.5px] text-muted-foreground">{{ fixedReason(infoOf(row.ip)) }}</p>
+                          <Button variant="outline" class="min-h-11" :aria-label="`固定 IP ${row.ip}`" :disabled="previewing || publishing || fixing || !!adding || !canFix(infoOf(row.ip))" @click="fixExisting(row)">固定 IP</Button>
+                          <p v-if="!previewing && !canFix(infoOf(row.ip))" class="mb-0 mt-1 max-w-48 text-left text-[11.5px] text-muted-foreground">{{ fixedReason(infoOf(row.ip)) }}</p>
                         </div>
                         <Loader2 v-if="savingIp === row.ip" class="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" aria-label="正在保存" />
                         <span v-else-if="failures[row.ip]" class="flex items-center gap-1 text-xs text-destructive-accent" role="alert">
                           {{ failures[row.ip] }}<Button variant="ghost" class="min-h-11 px-2 text-xs" @click="save(row.ip)">重试</Button>
                         </span>
-                        <Button variant="ghost" size="icon" class="size-11" :aria-label="'移除 ' + row.ip" :disabled="publishing || fixing || (!policyEditable && !!saved(row.ip)?.mode)" @click="remove(row)"><Trash2 class="size-4" /></Button>
+                        <Button variant="ghost" size="icon" class="size-11" :aria-label="'移除 ' + row.ip" :disabled="previewing || publishing || fixing || (!policyEditable && !!saved(row.ip)?.mode)" @click="remove(row)"><Trash2 class="size-4" /></Button>
                       </div>
                     </td>
                   </tr>
@@ -226,7 +227,7 @@
                       <span v-else class="text-xs text-muted-foreground">默认</span>
                     </td>
                     <td role="cell" class="text-right">
-                      <Button variant="outline" class="min-h-11" :disabled="publishing || !canAdd(item) || !!adding || fixing" :title="canAdd(item) ? '' : 'DNS 策略只读，且没有主机名可作名称'"
+                      <Button variant="outline" class="min-h-11" :disabled="publishing || !canAdd(item) || !!adding || fixing" :title="previewing ? '正在核对最新记录，请稍候。' : canAdd(item) ? '' : 'DNS 策略只读，且没有主机名可作名称'"
                         :aria-label="`添加 ${item.hostname || item.ip}`" @click="addFound([item])"><Plus class="size-4" />添加</Button>
                     </td>
                   </tr>
@@ -249,13 +250,13 @@
           <li v-for="agent in state.agents" :key="agent.id" class="py-2">
             <div class="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1">
               <label class="flex min-h-11 min-w-0 cursor-pointer items-center gap-3">
-                <Checkbox :model-value="selected.includes(agent.id)" :disabled="publishing" :aria-label="`发布到 ${agent.name}`"
+                <Checkbox :model-value="selected.includes(agent.id)" :disabled="previewing || publishing" :aria-label="`发布到 ${agent.name}`"
                   @update:model-value="value => toggle(agent.id, value === true)" />
                 <span class="min-w-0 break-all font-medium">{{ agent.name }}</span>
               </label>
               <span class="min-w-0 break-all font-mono text-xs text-muted-foreground">{{ agent.host || '—' }}</span>
               <StatusDot :tone="agent.status === 'online' ? 'success' : 'muted'" :label="agent.status === 'online' ? '在线' : '离线'" />
-              <Button v-if="deployments[agent.id]?.status === 'ready'" class="ml-auto min-h-11" :disabled="publishing" @click="activate(agent.id)">应用并启动</Button>
+              <Button v-if="deployments[agent.id]?.status === 'ready'" class="ml-auto min-h-11" :disabled="previewing || publishing" @click="activate(agent.id)">应用并启动</Button>
             </div>
             <AgentDeploymentStatus v-if="deployments[agent.id]" :task="deployments[agent.id]" compact>
               <template v-if="needsNotice(agent.id)" #notice>
@@ -273,7 +274,7 @@
         </ul>
         <div v-if="state.agents.length" class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
           <p class="m-0 min-w-0 flex-1 text-xs text-muted-foreground">发布的是「{{ state.profile_name }}」的完整已保存配置，包含其他草稿修改。</p>
-          <Button class="min-h-11" :disabled="!selected.length || publishing || fixing || !!savingIp || selected.some(busy)" @click="publish">
+          <Button class="min-h-11" :disabled="previewing || !selected.length || publishing || fixing || !!savingIp || selected.some(busy)" @click="publish">
             <Loader2 v-if="publishing" class="size-4 animate-spin" /><Upload v-else class="size-4" />{{ publishing ? '发布中…' : selected.length ? `发布到 ${selected.length} 台 OxiDNS` : '选择要发布的 OxiDNS' }}
           </Button>
         </div>
@@ -310,6 +311,9 @@ import { oxidnsMonitorPath } from '@/composables/useOxiDNSDevices'
 import { choose, confirm, confirmDanger, notify } from '@/lib/feedback'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
+import { getActiveProfileId } from '@/profileContext'
+import { getAuthSessionGeneration, getAuthToken } from '@/authSession'
+import { forgetClientDevicesSnapshot, readClientDevicesSnapshot, rememberClientDevicesSnapshot } from '@/lib/clientDevicesSnapshot'
 
 const pageHelp = '为局域网设备命名，并按需设置 OxiDNS 的 DNS 策略。设备从 RouterOS / iKuai 主路由读取，优先显示上次结果，过期后后台更新；名称在本配置空间共用，Mihomo 连接、数据统计和 OxiDNS 查询记录都按它显示。'
 const listHelp = [
@@ -348,9 +352,15 @@ const fromSetup = computed(() => !fromAgent.value && backTo.value.startsWith('/s
 const fromProfile = ref(agentOf(route.query.profile))
 // Matches the breakpoint where .cf-mobile-records hides the table header and its help.
 const phone = useMediaQuery('(width < 640px)')
-const state = ref<ClientDevicesState | null>(null)
+const snapshotKey = () => fromAgent.value ? `agent:${fromAgent.value}` : `profile:${fromProfile.value || getActiveProfileId()}`
+const initialSnapshot = readClientDevicesSnapshot(snapshotKey())
+const pageToken = getAuthToken()
+const pageSession = getAuthSessionGeneration()
+const sameSession = () => getAuthToken() === pageToken && getAuthSessionGeneration() === pageSession
+const previewing = ref(!!initialSnapshot)
+const state = ref<ClientDevicesState | null>(initialSnapshot?.state || null)
 const policyEditable = computed(() => !!state.value?.editable && !fromSetup.value)
-const rows = ref<ClientDevice[]>([])
+const rows = ref<ClientDevice[]>(initialSnapshot?.state.devices.map(row => ({ ...row })) || [])
 const loading = ref(false)
 const error = ref('')
 const newIP = ref('')
@@ -358,10 +368,10 @@ const search = ref('')
 const savingIp = ref('')
 const savedOnce = ref(false)
 const failures = reactive<Record<string, string>>({})
-const selected = ref<string[]>([])
+const selected = ref<string[]>(initialSnapshot?.state.agents.filter(agent => fromAgent.value ? agent.id === fromAgent.value : agent.status === 'online').map(agent => agent.id) || [])
 const publishing = ref(false)
 const rejected = reactive<Record<string, Partial<AgentDeployment>>>({})
-const discovery = ref<ClientDiscovery | null>(null)
+const discovery = ref<ClientDiscovery | null>(initialSnapshot?.discovery ? { ...initialSnapshot.discovery, cached: true } : null)
 const discovering = ref(false)
 const discoveryError = ref('')
 /** 未添加标签中勾选的地址；添加后移出 */
@@ -374,6 +384,7 @@ const adding = ref(0)
 /** 刚添加的设备数，用于提醒发布 */
 const reminder = ref(0)
 let discoveryRun = 0
+let loadRun = 0
 let disposed = false
 let queue: Promise<unknown> = Promise.resolve()
 
@@ -525,13 +536,13 @@ const routesSource = (row: ClientDevice) => row.mode === 'smart' && !!saved(row.
   && !!discovery.value?.sources.some(source => source.policy_routing && ![source.gateway, `${source.gateway}/32`].includes(row.ip))
 const cleanName = (value: string) => value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80)
 /** 没有主机名时只能靠 DNS 策略保存这一行 */
-const canAdd = (item: ClientPresenceInfo) => !!state.value && (policyEditable.value || !!cleanName(item.hostname))
+const canAdd = (item: ClientPresenceInfo) => !previewing.value && !!state.value && (policyEditable.value || !!cleanName(item.hostname))
 const pickable = computed(() => visibleFound.value.filter(canAdd).map(item => item.ip))
 const allPicked = computed(() => pickable.value.length > 0 && pickable.value.every(ip => picked.value.includes(ip)))
 /** 表头复选框只反映当前搜索结果的勾选情况 */
 const somePicked = computed(() => pickable.value.some(ip => picked.value.includes(ip)))
 const pickedFound = computed(() => found.value.filter(item => picked.value.includes(item.ip)))
-const canFix = (item?: ClientPresenceInfo) => !fromSetup.value && !!item?.mac && !!item?.router_id && item.fixed_ip?.eligible === true && item.fixed_ip.status !== 'static'
+const canFix = (item?: ClientPresenceInfo) => !previewing.value && !fromSetup.value && !!item?.mac && !!item?.router_id && item.fixed_ip?.eligible === true && item.fixed_ip.status !== 'static'
 function fixedReason(item?: ClientPresenceInfo) {
   if (!item?.mac) return '路由器未提供 MAC，无法固定 IP。'
   return item.fixed_ip?.reason || (item.router_id ? '尚未确认此路由器的固定 IP 能力，请重新载入。' : '无法确定设备的来源路由器。')
@@ -578,16 +589,40 @@ function adopt(data: ClientDevicesState) {
   })
   const listed = new Set(local.map(row => row.ip))
   rows.value = [...local, ...data.devices.filter(row => !listed.has(row.ip)).map(row => ({ ...row }))]
+  rememberSnapshot()
+}
+
+function rememberSnapshot() {
+  if (sameSession() && state.value && !previewing.value) rememberClientDevicesSnapshot(snapshotKey(), state.value, discovery.value)
 }
 
 /** keep：保留本页未保存的修改，只合并最新数据（单行冲突后使用） */
+type DiscoveryReply = { data: ClientDiscovery } | { failure: unknown }
+
+// Observe rejections immediately even when the device-record request is slower.
+async function requestDiscovery(profileId: string, refresh: boolean): Promise<DiscoveryReply> {
+  try {
+    const { data } = await (refresh ? clientDeviceApi.discover(profileId, { refresh: true }) : clientDeviceApi.discover(profileId))
+    return { data }
+  } catch (failure) { return { failure } }
+}
+
 async function load(keep = false, refresh = false) {
+  const run = ++loadRun
+  ++discoveryRun
+  discovering.value = false
+  const key = snapshotKey()
+  const profileId = fromProfile.value || getActiveProfileId()
   loading.value = true
   error.value = ''
+  const records = clientDeviceApi.get({ agentId: fromAgent.value || undefined, profileId: fromProfile.value || undefined })
+  // The navigation already knows a profile; Agent-bound profiles must first be resolved by the server.
+  const pending = !fromAgent.value && !keep ? requestDiscovery(profileId, refresh) : undefined
   try {
-    const { data } = await clientDeviceApi.get({ agentId: fromAgent.value || undefined, profileId: fromProfile.value || undefined })
-    if (disposed) return
+    const { data } = await records
+    if (disposed || !sameSession() || run !== loadRun || key !== snapshotKey()) return
     const merge = keep && data.profile_id === state.value?.profile_id
+    previewing.value = false
     if (merge) {
       adopt(data)
       return
@@ -595,10 +630,7 @@ async function load(keep = false, refresh = false) {
     for (const ip of Object.keys(failures)) delete failures[ip]
     release()
     rows.value = []
-    if (data.profile_id !== state.value?.profile_id) {
-      ++discoveryRun
-      discovery.value = null
-    }
+    if (data.profile_id !== state.value?.profile_id) discovery.value = null
     state.value = null
     picked.value = []
     fixedPicked.value = []
@@ -608,27 +640,40 @@ async function load(keep = false, refresh = false) {
     const online = data.agents.filter(agent => agent.status === 'online').map(agent => agent.id)
     selected.value = fromAgent.value ? data.agents.filter(agent => agent.id === fromAgent.value).map(agent => agent.id) : online
     for (const agent of data.agents) if (agent.deployment) track(agent.id, agent.deployment, false)
-    void discover(data.profile_id, refresh)
-  } catch (failure) {
-    if (!disposed) error.value = messageOf(failure)
+    void discover(data.profile_id, refresh, data.profile_id === profileId ? pending : undefined)
+  } catch (failure: any) {
+    if (disposed || !sameSession() || run !== loadRun || key !== snapshotKey()) return
+    error.value = messageOf(failure)
+    forgetClientDevicesSnapshot(key)
+    if ([401, 404].includes(failure?.response?.status)) {
+      state.value = null
+      rows.value = []
+      discovery.value = null
+    }
   } finally {
-    loading.value = false
+    if (run === loadRun) loading.value = false
   }
 }
 
 /** 先显示快照，过期后后台重查；只采用当前配置空间最后一次请求的结果。 */
-async function discover(profileId: string, refresh = false) {
+async function discover(profileId: string, refresh = false, pending = requestDiscovery(profileId, refresh)) {
   const run = ++discoveryRun
   discovering.value = true
   discoveryError.value = ''
   try {
-    const current = () => !disposed && run === discoveryRun && state.value?.profile_id === profileId
-    const apply = (data: ClientDiscovery) => { discovery.value = data; discoveryError.value = data.refresh_error }
-    const { data } = await (refresh ? clientDeviceApi.discover(profileId, { refresh: true }) : clientDeviceApi.discover(profileId))
+    const current = () => !disposed && sameSession() && run === discoveryRun && state.value?.profile_id === profileId
+    const apply = (reply: DiscoveryReply) => {
+      if ('failure' in reply) throw reply.failure
+      discovery.value = reply.data
+      discoveryError.value = reply.data.refresh_error
+      rememberSnapshot()
+      return reply.data
+    }
+    const reply = await pending
     if (!current()) return
-    apply(data)
+    const data = apply(reply)
     if (data.stale && !refresh) {
-      const { data: latest } = await clientDeviceApi.discover(profileId, { refresh: true })
+      const latest = await requestDiscovery(profileId, true)
       if (current()) apply(latest)
     }
   } catch (failure) {
@@ -648,6 +693,7 @@ async function reload() {
 }
 
 function add(value: string) {
+  if (previewing.value) return
   let ip = value.trim()
   if (!ip) return
   try {
@@ -817,6 +863,7 @@ function setMode(row: ClientDevice, value: string) {
 }
 
 async function remove(row: ClientDevice) {
+  if (previewing.value) return
   const previous = saved(row.ip)
   if (previous && (!ownsFixedIP(row.ip) || fromSetup.value) && !await confirmDanger(`将清除「${previous.name || row.ip}」的名称${previous.mode ? '和 DNS 策略' : ''}。${previous.mode ? 'DNS 策略的修改需要发布后生效。' : ''}`,
     { title: '移除客户端设备', confirmText: '移除' })) return
@@ -832,6 +879,7 @@ async function remove(row: ClientDevice) {
 
 /** 逐行保存，排队执行，避免同一行的两次修改乱序 */
 function save(ip: string): Promise<unknown> {
+  if (previewing.value) return Promise.resolve(false)
   const profileId = state.value?.profile_id
   queue = queue.then(() => profileId ? saveNow(ip, profileId) : false)
   return queue
@@ -877,6 +925,7 @@ function toggle(id: string, value: boolean) {
 }
 
 async function publish() {
+  if (previewing.value) return
   await queue
   const failing = rows.value.some(row => failures[row.ip])
   if (!state.value || publishing.value || fixing.value || failing) {
@@ -926,6 +975,11 @@ onBeforeRouteUpdate(async to => {
   if (unsaved().length && !await confirm('有设备尚未保存，切换后会丢失这些修改。', { title: '离开客户端设备', confirmText: '放弃修改' })) return false
   fromAgent.value = next
   fromProfile.value = profile
+  const snapshot = readClientDevicesSnapshot(snapshotKey())
+  previewing.value = !!snapshot
+  state.value = snapshot?.state || null
+  rows.value = snapshot?.state.devices.map(row => ({ ...row })) || []
+  discovery.value = snapshot?.discovery ? { ...snapshot.discovery, cached: true } : null
   void load()
 })
 onMounted(() => load())
