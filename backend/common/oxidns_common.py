@@ -709,9 +709,7 @@ def _read(document, settings, config):
         values.update(routing['values'])
         capabilities.update(routing['capabilities'])
     from backend.common.oxidns_match_targets import read_match_targets
-    from backend.common.oxidns_entry_flows import read_entry_flows
-    return {'values': values, 'capabilities': capabilities, **read_match_targets(document, settings),
-            'entry_flow': read_entry_flows(document, settings)}
+    return {'values': values, 'capabilities': capabilities, **read_match_targets(document, settings)}
 
 
 def read_common_settings(settings, config, base_url=''):
@@ -1079,12 +1077,6 @@ def _patch_resources(ctx, changes, config, base_url):
 def apply_common_settings(settings, changes, config, base_url=''):
     if not isinstance(changes, dict) or not changes:
         raise OxidnsSettingsError('changes 必须为非空参数对象')
-    if 'entry_flow' in changes:
-        if len(changes) != 1:
-            raise OxidnsSettingsError('请单独保存流程节点，再修改其他常用设置。')
-        from backend.common.oxidns_entry_flows import apply_entry_flow
-        current = apply_entry_flow(prepare_editor(settings, config, base_url), changes['entry_flow'])
-        return {'settings': current, **_read(load_native_yaml(current['native_config']), current, config)}
     from backend.common.oxidns_common_routing import ROUTING_FIELDS, apply_routing
     unknown = set(changes) - COMMON_FIELDS - ROUTING_FIELDS
     if unknown:
