@@ -90,3 +90,50 @@ def client_device_discovery():
     hosts = [agent.get('host') or '' for agent in get_agent_manager().get_all_agents()
              if (agent.get('profile_id') or default) == profile_id]
     return _response({'success': True, 'profile_id': profile_id, **discover(get_config(profile_id), hosts)})
+
+
+@client_devices_bp.route('/fixed-ip/preview', methods=['POST'])
+@require_auth
+def preview_fixed_ip():
+    from backend.common import client_fixed_ip
+    from backend.common.config import get_config
+    from backend.routers.base import RouterConflictError, RouterError
+    profile_id, error = _profile_id(False)
+    if error:
+        return error
+    try:
+        body = request.get_json(silent=True)
+        intent = client_fixed_ip.normalize_request(body)
+        if body['profile_id'] != profile_id:
+            raise RouterConflictError('配置空间已切换，请重新载入。')
+        return _response({'success': True, **client_fixed_ip.preview(get_config(profile_id), profile_id, intent)})
+    except OxidnsSettingsError as error:
+        return _response({'success': False, 'message': str(error)}, 400)
+    except RouterConflictError as error:
+        return _response({'success': False, 'message': str(error)}, 409)
+    except RouterError as error:
+        return _response({'success': False, 'message': str(error)}, 502)
+
+
+@client_devices_bp.route('/fixed-ip/apply', methods=['POST'])
+@require_auth
+def apply_fixed_ip():
+    from backend.common import client_fixed_ip
+    from backend.routers.base import RouterConflictError, RouterError
+    profile_id, error = _profile_id(False)
+    if error:
+        return error
+    try:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) != {'profile_id', 'token'}:
+            raise OxidnsSettingsError('固定 IP 确认请求格式无效。')
+        if body['profile_id'] != profile_id:
+            raise RouterConflictError('配置空间已切换，请重新载入。')
+        client_fixed_ip.apply(profile_id, body['token'])
+        return _response(_state(profile_id))
+    except OxidnsSettingsError as error:
+        return _response({'success': False, 'message': str(error)}, 400)
+    except RouterConflictError as error:
+        return _response({'success': False, 'message': str(error)}, 409)
+    except RouterError as error:
+        return _response({'success': False, 'message': str(error)}, 502)

@@ -20,6 +20,10 @@ def list_devices(config):
     devices = [dict(row) for row in policies['policies']]
     listed = {row['ip'] for row in devices}
     devices += [{'ip': ip, 'name': name, 'mode': ''} for ip, name in read_notes(config).items() if ip not in listed]
+    from backend.common.client_fixed_ip import bindings
+    for row in devices:
+        if row['ip'] in bindings(config):
+            row['fixed_ip'] = dict(bindings(config)[row['ip']])
     return {'devices': devices, 'editable': policies['editable'], 'reason': policies['reason']}
 
 
@@ -53,3 +57,6 @@ def update_device(config, change, base_url=''):
         config['oxidns'] = apply_policies(config.get('oxidns') or {}, config, rows, base_url)
     # After the policy change, so a removed row leaves no empty name behind.
     set_note(config, ip, name)
+    if not name and not mode and 'client_fixed_ips' in config:
+        # Removing a record keeps router reservations unless separately previewed and confirmed.
+        config['client_fixed_ips'].pop(ip, None)

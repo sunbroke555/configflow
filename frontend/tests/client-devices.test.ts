@@ -2,19 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { agentApi, clientDeviceApi, oxidnsMonitorApi, type ClientDevice, type ClientDevicesState, type ClientDiscovery, type ClientPresenceInfo } from '@/api'
-import { confirm, confirmDanger, notify } from '@/lib/feedback'
+import { choose, confirm, confirmDanger, notify } from '@/lib/feedback'
 import ClientDevices from '@/views/ClientDevices.vue'
 import OxiDNSMonitor from '@/views/OxiDNSMonitor.vue'
 import { Select } from '@/components/ui/select'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 
 vi.mock('@/api', () => ({
-  clientDeviceApi: { get: vi.fn(), save: vi.fn(), discover: vi.fn() },
+  clientDeviceApi: { get: vi.fn(), save: vi.fn(), discover: vi.fn(), previewFixedIP: vi.fn(), applyFixedIP: vi.fn() },
   oxidnsMonitorApi: { overview: vi.fn(), clients: vi.fn(), queries: vi.fn() },
   agentApi: { getAll: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() }
 }))
-vi.mock('@/lib/feedback', () => ({ confirm: vi.fn(), confirmDanger: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ choose: vi.fn(), confirm: vi.fn(), confirmDanger: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
 
 const response = (data: any) => ({ data } as any)
 const agents = [{ id: 'one', name: 'DNS 1', host: '192.0.2.2', status: 'online', deployment: null },
@@ -77,6 +77,12 @@ beforeEach(() => {
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
   vi.mocked(confirm).mockResolvedValue(true)
   vi.mocked(confirmDanger).mockResolvedValue(true)
+  vi.mocked(choose).mockResolvedValue('confirm')
+  vi.mocked(clientDeviceApi.previewFixedIP).mockImplementation(async (_profile, devices, operation) => response({
+    token: 'confirmed-change', actions: devices.map(device => ({ ip: device.ip, router_id: device.router_id, router_name: device.router_id === 'ik1' ? '爱快实验路由' : '主路由',
+      router_type: device.router_id === 'ik1' ? 'ikuai' : 'routeros', description: `${device.router_id === 'ik1' ? 'iKuai' : 'RouterOS'}：${operation === 'delete' ? '删除' : '固定'} ${device.ip}（MAC ${device.mac}）` }))
+  }))
+  vi.mocked(clientDeviceApi.applyFixedIP).mockImplementation(async () => response(state(stored)))
 })
 afterEach(async () => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount())
@@ -354,6 +360,239 @@ describe('client devices page', () => {
     expect(wrapper.get('[aria-label="192.0.2.5 DNS 策略"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[aria-label="移除 192.0.2.5"]').attributes('disabled')).toBeDefined()
     expect(nameInput(wrapper, '192.0.2.5').attributes('disabled')).toBeUndefined()
+  })
+})
+
+describe('client device fixed IP', () => {
+  const dynamic = { eligible: true, reason: '', status: 'dynamic' as const, owned: false, router_id: 'ros1' }
+  const owned = { router_id: 'ros1', mac: 'E0:BA:AD:94:F2:48', id: '*1', comment: 'cf-client:电视', vendor: 'routeros' }
+  const setDiscovery = (alter?: (result: ClientDiscovery) => void) => {
+    const result = discovery()
+    result.devices[0].fixed_ip = { ...dynamic }
+    result.discovered[0].fixed_ip = { ...dynamic }
+    result.discovered[1].fixed_ip = { ...dynamic, eligible: false, reason: 'IP 不在已启用的 DHCP 网段内。' }
+    alter?.(result)
+    vi.mocked(clientDeviceApi.discover).mockResolvedValue(response(result))
+  }
+  const selectFixed = async (wrapper: VueWrapper, ip = '192.0.2.147') => {
+    await wrapper.get(`[aria-label="同时固定 IP ${ip}"]`).trigger('click')
+    await flushPromises()
+  }
+  const setOwned = () => {
+    stored[0] = { ...stored[0], fixed_ip: owned }
+    setDiscovery(result => { result.devices[0].fixed_ip = { ...dynamic, eligible: false, status: 'static', owned: true } })
+  }
+
+  it('leaves fixed IP unchecked and adds a device without changing the router by default', async () => {
+    setDiscovery()
+    const { wrapper } = await render('/client-devices?tab=new')
+    expect(wrapper.get('[aria-label="同时固定 IP 192.0.2.147"]').attributes('aria-checked')).toBe('false')
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.save).toHaveBeenCalledTimes(1)
+    expect(clientDeviceApi.previewFixedIP).not.toHaveBeenCalled()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+  })
+
+  it('explains disabled options for missing MAC, unsupported routers and addresses outside enabled DHCP networks', async () => {
+    setDiscovery(result => {
+      result.discovered[0].mac = ''
+      result.discovered.push({ ...seen('192.0.2.151', { mac: 'AA:BB:CC:00:00:02', fixed_ip: { ...dynamic, eligible: false, reason: '来源路由器不支持 DHCP 写入。' } }), network: null })
+    })
+    const { wrapper } = await render('/client-devices?tab=new')
+    for (const ip of ['192.0.2.147', '192.0.2.150', '192.0.2.151']) expect(wrapper.get(`[aria-label="同时固定 IP ${ip}"]`).attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('路由器未提供 MAC')
+    expect(wrapper.text()).toContain('IP 不在已启用的 DHCP 网段内')
+    expect(wrapper.text()).toContain('来源路由器不支持 DHCP 写入')
+  })
+
+  it('waits for the router preview confirmation before saving and writing, and uses the discovered router', async () => {
+    setDiscovery(result => { result.discovered[0].router_id = 'ik1'; result.discovered[0].fixed_ip!.router_id = 'ik1' })
+    let answer!: (result: boolean) => void
+    vi.mocked(confirm).mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const { wrapper } = await render('/client-devices?tab=new')
+    await selectFixed(wrapper)
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.previewFixedIP).toHaveBeenCalledWith('office', [{ ip: '192.0.2.147', mac: '16:F7:C5:8A:16:A4', router_id: 'ik1', name: 'iPhone' }], 'add')
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('「爱快实验路由」iKuai：固定 192.0.2.147（MAC 16:F7:C5:8A:16:A4）'), expect.objectContaining({ confirmText: '确认固定 IP' }))
+    expect(clientDeviceApi.save).not.toHaveBeenCalled()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+    answer(true); await flushPromises()
+    expect(clientDeviceApi.applyFixedIP).toHaveBeenCalledWith('office', 'confirmed-change')
+    expect(vi.mocked(clientDeviceApi.save).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(clientDeviceApi.applyFixedIP).mock.invocationCallOrder[0])
+    expect(clientDeviceApi.discover).toHaveBeenCalledTimes(2)
+  })
+
+  it('cancels without saving or writing to a router', async () => {
+    setDiscovery()
+    vi.mocked(confirm).mockResolvedValueOnce(false)
+    const { wrapper } = await render('/client-devices?tab=new')
+    await selectFixed(wrapper)
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.save).not.toHaveBeenCalled()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-found-ip="192.0.2.147"]').exists()).toBe(true)
+  })
+
+  it('previews only eligible selected devices in a batch and preserves the default add-only behavior for others', async () => {
+    setDiscovery()
+    const { wrapper } = await render('/client-devices?tab=new')
+    await wrapper.get('[aria-label="选择全部设备"]').trigger('click'); await flushPromises()
+    await wrapper.get('[aria-label="同时固定所选设备 IP"]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[aria-label="同时固定 IP 192.0.2.147"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[aria-label="同时固定 IP 192.0.2.150"]').attributes('aria-checked')).toBe('false')
+    await button(wrapper, '添加所选（2）').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.previewFixedIP).toHaveBeenCalledWith('office', [expect.objectContaining({ ip: '192.0.2.147' })], 'add')
+    expect(clientDeviceApi.save).toHaveBeenCalledTimes(2)
+    expect(clientDeviceApi.applyFixedIP).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not apply a batch if any device record could not be saved', async () => {
+    setDiscovery()
+    vi.mocked(clientDeviceApi.save).mockRejectedValueOnce(new Error('保存失败'))
+    const { wrapper } = await render('/client-devices?tab=new')
+    await wrapper.get('[aria-label="选择全部设备"]').trigger('click'); await flushPromises()
+    await wrapper.get('[aria-label="同时固定所选设备 IP"]').trigger('click'); await flushPromises()
+    await button(wrapper, '添加所选（2）').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('部分设备记录未保存，本次未执行固定 IP')
+  })
+
+  it('does not mistake a record concurrently added elsewhere for a successful save in this batch', async () => {
+    setDiscovery()
+    vi.mocked(clientDeviceApi.save).mockImplementationOnce(async (_profile, device) => {
+      stored.push({ ...device, name: '其他页面添加的设备' })
+      throw { response: { status: 409, data: { message: '设备已在其他页面修改' } } }
+    })
+    const { wrapper } = await render('/client-devices?tab=new')
+    await selectFixed(wrapper)
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('部分设备记录未保存，本次未执行固定 IP')
+  })
+
+  it('blocks profile switching while a confirmed DHCP apply is pending', async () => {
+    setDiscovery()
+    let finish!: (value: any) => void
+    vi.mocked(clientDeviceApi.applyFixedIP).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const { wrapper, router } = await render('/client-devices?profile=office')
+    await wrapper.get('[aria-label="固定 IP 192.0.2.5"]').trigger('click'); await flushPromises()
+    await router.push('/client-devices?profile=another'); await flushPromises()
+    expect(router.currentRoute.value.query.profile).toBe('office')
+    finish(response(state(stored))); await flushPromises()
+    expect(clientDeviceApi.applyFixedIP).toHaveBeenCalledWith('office', 'confirmed-change')
+  })
+
+  it('does not clear another profile when navigation waits for a canceled removal choice', async () => {
+    setOwned()
+    let answer!: (value: 'cancel') => void
+    vi.mocked(choose).mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const { wrapper, router } = await render('/client-devices?profile=office')
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click'); await flushPromises()
+    const navigation = router.push('/client-devices?profile=another')
+    await flushPromises()
+    expect(router.currentRoute.value.query.profile).toBe('office')
+    answer('cancel'); await navigation; await flushPromises()
+    expect(clientDeviceApi.save).not.toHaveBeenCalled()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+  })
+
+  it('reports an apply failure separately from saved device records and refreshes router state', async () => {
+    setDiscovery()
+    vi.mocked(clientDeviceApi.applyFixedIP).mockRejectedValueOnce({ response: { data: { message: '账号需要 DHCP 写入权限' } } })
+    const { wrapper } = await render('/client-devices?tab=new')
+    await selectFixed(wrapper)
+    await wrapper.get('[aria-label="添加 iPhone"]').trigger('click'); await flushPromises()
+    expect(stored.some(row => row.ip === '192.0.2.147')).toBe(true)
+    expect(wrapper.text()).toContain('设备记录已保存，固定 IP 失败：账号需要 DHCP 写入权限')
+    expect(clientDeviceApi.discover).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers fixed IP for saved dynamic leases and marks existing static leases without an overwrite action', async () => {
+    setDiscovery(result => { result.devices[1].fixed_ip = { ...dynamic, eligible: false, status: 'static' } })
+    const { wrapper } = await render()
+    expect(wrapper.get('[data-client-ip="192.0.2.9"]').text()).toContain('已固定')
+    expect(wrapper.find('[aria-label="固定 IP 192.0.2.9"]').exists()).toBe(false)
+    await wrapper.get('[aria-label="固定 IP 192.0.2.5"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.applyFixedIP).toHaveBeenCalledTimes(1)
+    expect(clientDeviceApi.save).not.toHaveBeenCalled()
+  })
+
+  it('keeps a ConfigFlow DHCP binding by default when its device record is removed', async () => {
+    setOwned()
+    const { wrapper } = await render()
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click'); await flushPromises()
+    expect(choose).toHaveBeenCalledWith(expect.stringContaining('默认保留'), expect.objectContaining({ confirmText: '仅移除设备，保留固定 IP', altText: '一并删除固定 IP' }))
+    expect(clientDeviceApi.save).toHaveBeenCalledWith('office', { ip: '192.0.2.5', name: '', mode: '' }, { name: '电视', mode: 'direct' })
+    expect(clientDeviceApi.previewFixedIP).not.toHaveBeenCalled()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+  })
+
+  it('previews and deletes the owned lease before clearing its device record', async () => {
+    setOwned()
+    vi.mocked(choose).mockResolvedValueOnce('alt')
+    const { wrapper } = await render()
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.previewFixedIP).toHaveBeenCalledWith('office', [{ ip: '192.0.2.5', mac: owned.mac, router_id: 'ros1', name: '电视' }], 'delete')
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('删除 192.0.2.5'), expect.objectContaining({ confirmText: '确认删除固定 IP', danger: true }))
+    expect(vi.mocked(clientDeviceApi.applyFixedIP).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(clientDeviceApi.save).mock.invocationCallOrder[0])
+  })
+
+  it('can remove a retained ConfigFlow binding after the device was added again without saved binding metadata', async () => {
+    setDiscovery(result => {
+      result.devices[0].router_id = ''
+      result.devices[0].mac = ''
+      result.devices[0].fixed_ip = { ...dynamic, eligible: false, status: 'static', owned: true, binding: owned }
+    })
+    vi.mocked(choose).mockResolvedValueOnce('alt')
+    const { wrapper } = await render()
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.previewFixedIP).toHaveBeenCalledWith('office', [{ ip: '192.0.2.5', mac: owned.mac, router_id: owned.router_id, name: '电视' }], 'delete')
+    expect(clientDeviceApi.applyFixedIP).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains the record and restores its edited fields when DHCP deletion fails', async () => {
+    setOwned()
+    vi.mocked(choose).mockResolvedValueOnce('alt')
+    vi.mocked(clientDeviceApi.applyFixedIP).mockRejectedValueOnce(new Error('路由器连接失败'))
+    const { wrapper } = await render()
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click'); await flushPromises()
+    expect(clientDeviceApi.save).not.toHaveBeenCalled()
+    expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('电视')
+    expect(wrapper.text()).toContain('固定 IP 未能删除，设备记录已保留：路由器连接失败')
+  })
+
+  it('asks the same removal question when name and policy are cleared, and restores them on cancel', async () => {
+    setOwned()
+    stored[0].mode = ''
+    vi.mocked(choose).mockResolvedValueOnce('cancel')
+    const { wrapper } = await render()
+    await nameInput(wrapper, '192.0.2.5').setValue('')
+    await nameInput(wrapper, '192.0.2.5').trigger('blur'); await flushPromises()
+    expect(choose).toHaveBeenCalledTimes(1)
+    expect(clientDeviceApi.save).not.toHaveBeenCalled()
+    expect(nameInput(wrapper, '192.0.2.5').element.value).toBe('电视')
+  })
+
+  it('never offers DHCP deletion for a static lease owned by someone else', async () => {
+    setDiscovery(result => { result.devices[0].fixed_ip = { ...dynamic, status: 'static', eligible: false, owned: false } })
+    const { wrapper } = await render()
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click'); await flushPromises()
+    expect(confirmDanger).toHaveBeenCalledTimes(1)
+    expect(choose).not.toHaveBeenCalled()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
+  })
+
+  it('hides fixed IP and lease deletion actions throughout the naming-only setup flow', async () => {
+    setOwned()
+    stored[0].mode = ''
+    const { wrapper, router } = await render('/client-devices?from=%2Fsetup')
+    expect(wrapper.find('[aria-label^="固定 IP"]').exists()).toBe(false)
+    await wrapper.get('[aria-label="移除 192.0.2.5"]').trigger('click'); await flushPromises()
+    expect(choose).not.toHaveBeenCalled()
+    await router.push('/client-devices?from=%2Fsetup&tab=new'); await flushPromises()
+    expect(wrapper.find('[aria-label^="同时固定"]').exists()).toBe(false)
+    expect(clientDeviceApi.previewFixedIP).not.toHaveBeenCalled()
+    expect(clientDeviceApi.applyFixedIP).not.toHaveBeenCalled()
   })
 })
 

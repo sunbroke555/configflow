@@ -481,7 +481,17 @@ export const clientToolsApi = {
 }
 
 export type ClientDeviceMode = '' | 'smart' | 'direct'
-export interface ClientDevice { ip: string; name: string; mode: ClientDeviceMode }
+export interface ClientFixedIPRecord { router_id: string; mac: string; id: string; comment: string; vendor: string }
+export interface ClientDevice { ip: string; name: string; mode: ClientDeviceMode; fixed_ip?: ClientFixedIPRecord }
+export interface ClientFixedIPStatus {
+  eligible: boolean; reason: string; status: 'dynamic' | 'static' | 'none'; owned: boolean; router_id: string
+  binding?: ClientFixedIPRecord
+}
+export interface ClientFixedIPTarget { ip: string; mac: string; router_id: string; name: string }
+export interface ClientFixedIPPreview {
+  token: string
+  actions: { ip: string; router_id: string; router_name: string; router_type: string; description: string }[]
+}
 export interface ClientDeviceAgent {
   id: string; name: string; host: string; status: string
   deployment: import('@/composables/useAgentDeployments').AgentDeployment | null
@@ -497,6 +507,7 @@ export type ClientSighting = 'arp' | 'lease' | 'online'
 export interface ClientPresenceInfo {
   ip: string; mac: string; hostname: string; sources: ClientSighting[]
   presence: ClientPresence; basis: ClientPresenceBasis; last_seen: number | null; router_id: string
+  fixed_ip?: ClientFixedIPStatus
 }
 export interface DiscoveredClient extends ClientPresenceInfo { network: ClientDevice | null }
 export interface ClientDiscoverySource {
@@ -505,7 +516,7 @@ export interface ClientDiscoverySource {
   policy_routing?: boolean; gateway?: string
 }
 /** 已保存的行；discoverable 表示移除后会出现在「未添加」 */
-export type DiscoveredSavedClient = ClientDevice & ClientPresenceInfo & { discoverable: boolean }
+export type DiscoveredSavedClient = Omit<ClientDevice, 'fixed_ip'> & ClientPresenceInfo & { discoverable: boolean }
 export interface ClientDiscovery {
   success: true; profile_id: string; state: 'ok' | 'partial' | 'failed' | 'unsupported'; message: string; checked_at: string
   sources: ClientDiscoverySource[]; devices: DiscoveredSavedClient[]; discovered: DiscoveredClient[]
@@ -525,7 +536,11 @@ export const clientDeviceApi = {
     api.put<ClientDevicesState>('/client-devices', {
       profile_id: profileId, ip: device.ip, name: device.name, mode: device.mode,
       previous_name: previous.name, previous_mode: previous.mode, base_url: getBaseUrl()
-    }, profileOptions(profileId))
+    }, profileOptions(profileId)),
+  previewFixedIP: (profileId: string, devices: ClientFixedIPTarget[], operation: 'add' | 'delete' = 'add') =>
+    api.post<ClientFixedIPPreview>('/client-devices/fixed-ip/preview', { profile_id: profileId, devices, operation }, { ...profileOptions(profileId), timeout: 45000 }),
+  applyFixedIP: (profileId: string, token: string) =>
+    api.post<ClientDevicesState>('/client-devices/fixed-ip/apply', { profile_id: profileId, token }, { ...profileOptions(profileId), timeout: 90000 })
 }
 
 // OxiDNS monitoring never sends core credentials or addresses from the browser.
