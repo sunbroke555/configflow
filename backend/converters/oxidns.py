@@ -12,7 +12,7 @@ import re
 import yaml
 
 from backend.common.oxidns_settings import BLOCK_QTYPES_EXEC, normalize_oxidns_settings, OxidnsSettingsError
-from backend.common.rule_dns import helper_plugins, route_exec, route_key
+from backend.common.rule_dns import has_ip_part, helper_plugins, probe_needed, route_exec, route_key
 from backend.common.oxidns_native import (managed_files, native_document,
     relative_resource, resource_references)
 from backend.converters.mosdns import (
@@ -115,9 +115,12 @@ def get_oxidns_ruleset_downloads(config_data, base_url=''):
     for item, _ in candidates:
         if item.get('itemType') != 'ruleset':
             continue
-        parts = _ruleset_parts(item.get('behavior', 'domain'))
         if native_paths is not None:
-            parts = [part for part in parts if relative_resource(_rule_path(item, part)) in native_paths]
+            # Native YAML decides; an older document may still reference an IP part.
+            parts = [part for part in _ruleset_parts(item.get('behavior', 'domain'))
+                     if relative_resource(_rule_path(item, part)) in native_paths]
+        else:
+            parts = ruleset_parts(item, config_data)
         if not parts:
             continue
         url = item.get('url', '')
@@ -201,12 +204,22 @@ def _hosts_file_content(text):
     return ''.join(output)
 
 
-def _routing_groups(config, settings):
+def ruleset_parts(item, config):
+    """The parts a ruleset routes in OxiDNS; a classical set without IP lines has no IP part."""
+    parts = _ruleset_parts(item.get('behavior', 'domain'))
+    if 'ip' in parts and not has_ip_part(item, config):
+        parts = [part for part in parts if part != 'ip']
+    return parts
+
+
+def _routing_groups(config, settings, *, legacy=False):
+    """Ordered routing groups; legacy=True gives the shape before content-aware IP parts."""
     groups = {'domain': [], 'ip': []}
     for item, route in _selected(config, settings):
         if item.get('itemType') == 'ruleset':
-            entries = [(part, {'files': [_rule_path(item, part)]})
-                       for part in _ruleset_parts(item.get('behavior', 'domain'))]
+            parts = (_ruleset_parts(item.get('behavior', 'domain')) if legacy
+                     else ruleset_parts(item, config))
+            entries = [(part, {'files': [_rule_path(item, part)]}) for part in parts]
         else:
             kind, value = item.get('rule_type', ''), item.get('value', '')
             part = 'ip' if kind in ('IP-CIDR', 'IP-CIDR6') else 'domain'
@@ -406,10 +419,15 @@ def generate_oxidns_config(config_data, base_url=''):
     # Explicit rules override previously learned classifications.
     if dynamic['enabled']:
         main.append({'matches': ['qname $dynamic_domains'], 'exec': 'goto ' + ('china_dns' if dynamic['route'] == 'direct' else 'proxy_dns_seq')})
-    if groups['ip']:
+    probe = probe_needed([group['route'] for group in groups['ip']], s['default_forward'])
+    if probe:
         main.append({'exec': 'jump local_probe'})
-        for group in groups['ip']:
-            main.append({'matches': [f'resp_ip ${group["tag"]}'], 'exec': route_exec(group['route'], 'ip')})
+    for group in groups['ip']:
+        # Without the probe nothing has answered yet, so these never match and every
+        # query reaches the fallback, which every IP route here equals. They stay so
+        # the routes remain readable from the document.
+        main.append({'matches': [f'resp_ip ${group["tag"]}'], 'exec': route_exec(group['route'], 'ip')})
+    if probe:
         if s['default_forward'] == 'forward_local':
             main.append({'matches': ['has_resp'], 'exec': 'goto default_direct_ip'})
         else:

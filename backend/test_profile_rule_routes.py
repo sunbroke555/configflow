@@ -161,7 +161,10 @@ def test_deleting_a_rule_removes_it_from_native_oxidns_routing(compositions):
         'settings': native, 'changes': {'direct_rulesets': ['set'], 'proxy_rules': ['inline']}})
     assert response.status_code == 200, response.get_json()
     assert client.post('/api/oxidns/settings', headers=headers, json=response.get_json()['settings']).status_code == 200
-    assert _rule_path({'id': 'set'}, 'ip').removeprefix('./') in client.get('/api/oxidns/settings', headers=headers).get_json()['native_config']
+    native_config = client.get('/api/oxidns/settings', headers=headers).get_json()['native_config']
+    assert _rule_path({'id': 'set'}, 'domain').removeprefix('./') in native_config
+    # The classical content has no IP lines, so no IP part is generated.
+    assert _rule_path({'id': 'set'}, 'ip').removeprefix('./') not in native_config
 
     assert client.delete('/api/rules/set', headers=headers).status_code == 200
     config = repository.get_compat_config('other')
@@ -194,6 +197,14 @@ def test_rule_delete_is_refused_while_unrecognized_native_routing_uses_it(compos
     response = client.delete('/api/rules/set', headers=headers)
     assert response.status_code == 400 and 'YAML 中删掉' in response.get_json()['message']
     assert any(item['id'] == 'set' for item in repository.get_profile('other')['rule_configs'])
+
+
+def test_library_reports_ip_part_from_classical_content(compositions):
+    client, repository, headers = compositions
+    library = lambda: next(item for item in client.get('/api/rule-library', headers=headers).get_json() if item['id'] == 'library')
+    assert library()['has_ip_part'] is False
+    repository.update_shared_transaction(lambda shared: shared['rule_library'][0].update(content='DOMAIN,example.test\nIP-CIDR,192.0.2.0/24'))
+    assert library()['has_ip_part'] is True
 
 
 def test_scoped_content_rule_proxy_avoids_network(compositions, monkeypatch):

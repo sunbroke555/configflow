@@ -211,9 +211,9 @@ describe('rule editor dialog', () => {
     await render()
     await type('#rule-values', 'IP-CIDR,1.2.3.0/24')
     expect(dnsTrigger().textContent).toContain('默认上游')
-    expect(text()).not.toContain('第一条参与 DNS 的 IP 规则')
+    expect(text()).not.toContain('保存后会开启本地探测')
     await pickDns('直连 DNS')
-    expect(text()).toContain('这是第一条参与 DNS 的 IP 规则')
+    expect(text()).toContain('保存后会开启本地探测')
     await click(button('另有 1 条提示'))
     expect(text()).toContain('IPv4 网段不影响 IPv6 查询')
     expect(dialog().querySelector('#rule-noresolve')).not.toBeNull()
@@ -226,7 +226,16 @@ describe('rule editor dialog', () => {
     // A classical ruleset may create an IP group: default upstream until chosen, then the first-IP warning.
     expect(dnsTrigger().textContent).toContain('默认上游')
     await pickDns('跟随策略')
-    expect(text()).toContain('这是第一条参与 DNS 的 IP 规则')
+    expect(text()).toContain('保存后会开启本地探测')
+  })
+
+  it('treats a classical ruleset whose content has no IP lines as domain only', async () => {
+    const tiktok = { id: 'lib-c', name: 'TikTok', behavior: 'classical', source_type: 'url', url: 'https://rules.test/tiktok.list', enabled: true, has_ip_part: false }
+    await render({ initialSource: 'library', library: [...library, tiktok] })
+    ;(wrappers[0]!.vm as any).$.setupState.form.libraryIds = ['lib-c']
+    await flushPromises()
+    expect(dnsTrigger().textContent).toContain('跟随策略')
+    expect(text()).not.toContain('本地探测')
   })
 
   it('keeps pasted IP lines on the default upstream and sends dns_ip until DNS is chosen', async () => {
@@ -246,7 +255,7 @@ describe('rule editor dialog', () => {
     await render()
     await type('#rule-values', 'openai.com\nIP-CIDR,1.2.3.0/24')
     await pickDns('黑洞')
-    expect(text()).toContain('这是第一条参与 DNS 的 IP 规则')
+    expect(text()).toContain('保存后会开启本地探测')
     await click(save())
     const [payload] = network.compose.mock.calls[0]!
     expect(payload).toMatchObject({ dns: 'blackhole' })

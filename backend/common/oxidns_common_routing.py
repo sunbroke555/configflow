@@ -19,9 +19,10 @@ from backend.common.dns_watchdog import WATCHDOG_RULE
 from backend.common.oxidns_native import resource_references, relative_resource
 from backend.common.rule_dns import (
     BLACKHOLE_TAG, GROUP_TAG_RE, LIST_ROUTES, REAL_WRAPPERS, ROUTE_LABELS, UPSTREAM_PREFIX, Invalid,
-    chain_features, follow_route, helper_plugins, normalize_action, parse_exec, pinned_action, route_exec, route_key,
+    chain_features, follow_route, helper_plugins, normalize_action, parse_exec, pinned_action, probe_needed,
+    route_exec, route_key,
 )
-from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag, unavailable_rulesets
+from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag, ruleset_parts, unavailable_rulesets
 from backend.converters.mosdns import _build_rule_proxy_url
 
 SELECTORS = ('direct_rules', 'proxy_rules', 'direct_rulesets', 'proxy_rulesets')
@@ -115,7 +116,9 @@ def _catalog(config):
         settings.update(aggregate_rules=False)
         settings['direct_' + suffix] = [identity]
         try:
-            groups = _routing_groups(config, settings)
+            # Legacy shape: documents written before content-aware IP parts still
+            # reference the IP file of a classical set without IP lines.
+            groups = _routing_groups(config, settings, legacy=True)
         except (OxidnsSettingsError, KeyError, TypeError, ValueError):
             continue
         parts = set()
@@ -127,12 +130,29 @@ def _catalog(config):
                         if atom is not None:
                             atoms.setdefault(atom, set()).add(identity)
                             parts.add(part)
-        records[identity] = {'suffix': suffix, 'parts': parts, 'item': item}
+        current = set(ruleset_parts(item, config)) if item.get('itemType') == 'ruleset' else parts
+        records[identity] = {'suffix': suffix, 'parts': parts, 'shapes': ({frozenset(parts), frozenset(current)}),
+                             'item': item}
     return records, atoms
 
 
 def _describe(group):
     return {'route': group['route'], 'args': group['args']}
+
+
+def _ip_suffix(entries, default_forward, probe):
+    """The IP routing clauses before the final fallback.
+
+    The probe gives the IP groups an answer to match. Without one they never
+    match, which is only written when every IP route equals the fallback.
+    """
+    if not entries:
+        return []
+    if not probe:
+        return [*entries]
+    return [{'exec': 'jump local_probe'}, *entries,
+            {'matches': ['has_resp'], 'exec': 'goto default_direct_ip'} if default_forward == 'forward_local'
+            else {'exec': 'drop_resp'}]
 
 
 def _suffix(item):
@@ -263,18 +283,15 @@ def _recognize(document, settings, config, claim):
     if len(dynamic) > 1:
         return state
     # The generated suffix has a single probe, ordered IP routes, and one final fallback.
-    suffix = []
-    if dynamic:
-        suffix.append(dynamic[0][1])
-    if groups['ip']:
-        suffix.append({'exec': 'jump local_probe'})
-        suffix.extend(group['entry'] for group in groups['ip'])
-        suffix.append({'matches': ['has_resp'], 'exec': 'goto default_direct_ip'} if values['default_forward'] == 'forward_local'
-                      else {'exec': 'drop_resp'})
-    suffix.append(final)
+    entries = [group['entry'] for group in groups['ip']]
+    candidates = [_ip_suffix(entries, values['default_forward'], probe=True)]
+    if not probe_needed([group['route'] for group in groups['ip']], values['default_forward']):
+        # Written without the probe; older documents still carry it.
+        candidates.insert(0, _ip_suffix(entries, values['default_forward'], probe=False))
+    head = [dynamic[0][1]] if dynamic else []
     # Extensions on IP clauses are preserved by direct edits, but regeneration of
     # these owned clauses is refused below. The probe/fallback wrappers must be exact.
-    if not _same(args[middle_end:], suffix):
+    if not any(_same(args[middle_end:], [*head, *candidate, final]) for candidate in candidates):
         caps['default_forward'] = _cap(False, _REASON)
         return state
     prefix_end = _prefix_end(args[:middle_end])
@@ -338,7 +355,7 @@ def _recognize(document, settings, config, claim):
     for identity, parts in assigned.items():
         record = records[identity]
         routes = set(parts.values())
-        if set(parts) != record['parts'] or len(routes) != 1:
+        if frozenset(parts) not in record['shapes'] or len(routes) != 1:
             recognized = False
             continue
         route = next(iter(routes))
@@ -355,10 +372,12 @@ def _recognize(document, settings, config, claim):
     matches = []
     if recognized:
         for aggregate in (True, False):
-            expected = _routing_groups(config, {**values, 'aggregate_rules': aggregate})
-            if all(_same([_describe(group) for group in groups[part]], [_describe(group) for group in expected[part]])
-                   for part in groups):
-                matches.append(aggregate)
+            for legacy in (False, True):
+                expected = _routing_groups(config, {**values, 'aggregate_rules': aggregate}, legacy=legacy)
+                if all(_same([_describe(group) for group in groups[part]], [_describe(group) for group in expected[part]])
+                       for part in groups):
+                    matches.append(aggregate)
+                    break
         recognized = bool(matches)
     if recognized:
         values['aggregate_rules'] = matches[0] if len(matches) == 1 else None
@@ -950,8 +969,19 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
         if _plugins(result).get(target, {}).get('type') != 'sequence':
             raise OxidnsSettingsError('目标分流执行链未配置，请在完整参数中添加后再切换。')
         args[-1]['exec'] = 'goto ' + target
-        if current['groups']['ip']:
-            args[-2] = {'matches': ['has_resp'], 'exec': 'goto default_direct_ip'} if direct else {'exec': 'drop_resp'}
+        ip_groups = current['groups']['ip']
+        if ip_groups:
+            # The fallback also decides whether the probe is written; rewrite only
+            # the IP block, so an unrecognized custom middle stays untouched.
+            first = min(group['index'] for group in ip_groups)
+            start = first - 1 if first and args[first - 1] == {'exec': 'jump local_probe'} else first
+            probe = probe_needed([group['route'] for group in ip_groups], values['default_forward'])
+            if probe:
+                for helper in ('local_probe', *(('default_direct_ip',) if direct else ())):
+                    if _plugins(result).get(helper, {}).get('type') != 'sequence':
+                        raise OxidnsSettingsError(f'分流执行链 {helper} 未配置，请在完整参数中添加后再调整。')
+            args[start:len(args) - 1] = _ip_suffix([args[group['index']] for group in ip_groups],
+                                                   values['default_forward'], probe)
         return result, deepcopy(settings)
     known = _known(config)
     active = _catalog(config)[0] if rebuild else current['records']
@@ -1009,19 +1039,17 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
     final = deepcopy(current['final'])
     final['exec'] = 'goto china_dns' if values['default_forward'] == 'forward_local' else 'goto proxy_dns_seq'
     suffix = deepcopy(current['dynamic'])
-    if ip:
-        suffix.extend([{'exec': 'jump local_probe'}, *ip,
-                       {'matches': ['has_resp'], 'exec': 'goto default_direct_ip'} if values['default_forward'] == 'forward_local'
-                       else {'exec': 'drop_resp'}])
+    probe = probe_needed([group['route'] for group in groups['ip']], values['default_forward'])
+    suffix.extend(_ip_suffix(ip, values['default_forward'], probe))
     # Do not create a new jump into an absent helper sequence in a partial native
     # document. Existing unrelated custom references remain untouched.
     affected = [final] if 'default_forward' in changes else []
     if routing_changed:
         affected.extend(domain + ip)
-        if ip:
-            affected.append({'exec': 'jump local_probe'})
-            if values['default_forward'] == 'forward_local':
-                affected.append({'exec': 'goto default_direct_ip'})
+    if ip and probe and (routing_changed or 'default_forward' in changes):
+        affected.append({'exec': 'jump local_probe'})
+        if values['default_forward'] == 'forward_local':
+            affected.append({'exec': 'goto default_direct_ip'})
     available = _plugins(result)
     for entry in affected:
         verb, _, target = entry['exec'].partition(' ')

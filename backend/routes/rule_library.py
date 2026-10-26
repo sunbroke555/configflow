@@ -103,8 +103,10 @@ def handle_rule_library():
     config_data = get_shared_config()
     if request.method == 'GET':
         from backend.common.rule_dns import has_ip_part
-        # has_ip_part: routing this source in OxiDNS DNS creates an IP group.
-        return jsonify([{**rule, 'has_ip_part': has_ip_part({**rule, 'itemType': 'ruleset'})}
+        # has_ip_part: routing this source in OxiDNS DNS creates an IP group;
+        # a classical source counts only when its known content has IP lines.
+        return jsonify([{**rule, 'has_ip_part': has_ip_part({**rule, 'itemType': 'ruleset', 'library_rule_id': rule.get('id')},
+                                                             config_data)}
                         for rule in config_data.get('rule_library', [])])
 
     elif request.method == 'POST':

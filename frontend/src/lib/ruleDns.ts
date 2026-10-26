@@ -78,6 +78,10 @@ export function followRoute(item: PolicyItem): 'direct' | 'proxy' | null {
 export const forwardLabel = (defaultForward?: string) =>
   defaultForward === 'forward_local' ? '直连 DNS' : defaultForward === 'forward_fallback' ? '备用 DNS' : '代理 DNS'
 
+/** 未命中任何规则时的去向；IP 规则都和它相同时不需要本地探测 */
+export const defaultRoute = (defaultForward?: string): 'direct' | 'proxy' =>
+  defaultForward === 'forward_local' ? 'direct' : 'proxy'
+
 /** 指定上游标签（「直连 · 地址」）中的地址部分 */
 export const upstreamAddress = (label: string) => label.replace(/^(直连|代理|备用) · /, '')
 
@@ -368,10 +372,15 @@ export function dnsWarnings(context: DnsWarningContext): DnsWarning[] {
   const route = value === 'follow' ? policyRoute : value === 'default' ? null : value
   if (!context.unloaded && engine?.editable !== false) {
     if (route && context.ipRouted) {
-      if (!engine?.local_probe_active) {
-        warnings.push({ kind: 'ip', tone: 'warning', text: '这是第一条参与 DNS 的 IP 规则：保存后所有未命中域名规则的查询都会先向直连 DNS 探测一次。' })
+      // 去向和「未匹配时转发到」相同的 IP 规则不改变结果，不会开启本地探测。
+      if (engine?.local_probe_active || !engine || route !== defaultRoute(engine.default_forward)) {
+        if (!engine?.local_probe_active) {
+          warnings.push({ kind: 'ip', tone: 'warning', text: '保存后会开启本地探测：没命中域名规则的域名会先发给直连 DNS 解析一次，再用解析出的 IP 对照 IP 规则。' })
+        }
+        warnings.push({ kind: 'ip', tone: 'info', text: 'IP 规则按直连 DNS 的解析结果匹配：查询已先发给直连 DNS，命中后再替换为所选结果；IPv4 网段不影响 IPv6 查询。' })
+      } else {
+        warnings.push({ kind: 'ip', tone: 'info', text: `IP 规则和未匹配时的去向（${forwardLabel(engine.default_forward)}）相同，不需要开启本地探测。` })
       }
-      warnings.push({ kind: 'ip', tone: 'info', text: 'IP 规则按直连 DNS 的解析结果匹配：查询已先发给直连 DNS，命中后再替换为所选结果；IPv4 网段不影响 IPv6 查询。' })
     }
     if (context.ipKeptDefault) warnings.push({ kind: 'ip', tone: 'info', text: 'IP 规则保持默认上游，避免为所有查询开启本地探测。' })
     // MosDNS 只有直连 / 代理两种分流；拦截和指定上游在 MosDNS 中没有对应行为。

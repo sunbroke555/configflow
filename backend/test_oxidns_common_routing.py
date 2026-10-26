@@ -102,9 +102,13 @@ def test_default_change_updates_ip_fallback_without_touching_custom_middle():
     before = deepcopy(document)
     updated, _ = apply_routing(document, settings, config, {'default_forward': 'forward_local'})
     new_main = plugin(updated, 'sequence_main')['args']
-    assert new_main[:-2] == main[:-2]
-    assert new_main[-2:] == [{'matches': ['has_resp'], 'exec': 'goto default_direct_ip'}, {'exec': 'goto china_dns'}]
+    # Every IP route is direct like the new fallback: the probe and its wrapper go,
+    # the IP clauses and the custom middle stay.
+    assert new_main == [entry for entry in main[:-1] if entry not in ({'exec': 'jump local_probe'}, {'exec': 'drop_resp'})] \
+        + [{'exec': 'goto china_dns'}]
     assert document == before
+    restored, _ = apply_routing(updated, settings, config, {'default_forward': 'forward_remote'})
+    assert plugin(restored, 'sequence_main')['args'] == main
 
 
 def test_custom_match_extension_fields_and_position_are_actual_and_roundtrip():
