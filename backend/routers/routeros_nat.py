@@ -450,6 +450,12 @@ def assess_bypass(cidr, gateway, state, *, route_index=None):
                 'detail': '' if managed else '现有免转换规则可保护客户端流量，将直接接管'}
     retiring = {item['id'] for op in (getattr(state, 'ros_policy_plan', None) or {}).get('ops', [])
                 for item in op.get('owned', []) if item['path'] == '/ip/firewall/nat'}
+    # ConfigFlow's list rule, intact and first, is maintained rather than
+    # preserved: a stale source list (the gateway moved) or a member narrower
+    # than this CIDR makes it missing, and the plan rewrites the members.
+    own = _list_rule(rows, route_index)
+    if own is not None and (not own['out_interface'] or own['out_interface'] == interface):
+        retiring = retiring | {own['rule'].get('.id')}
     # An existing exemption with any potentially overlapping destination must
     # be preserved. Do not compensate for its restrictions with a broader rule.
     for row in rows:
@@ -463,6 +469,19 @@ def assess_bypass(cidr, gateway, state, *, route_index=None):
             return {'status': 'unknown', 'rule_ids': [],
                     'detail': '已有免转换规则的顺序或来源、地址列表、接口、协议等条件不能保证客户端流量均免转换；请先检查现有规则'}
     return {**assessment, 'rule_ids': []}
+
+
+def _list_rule(rows, route_index):
+    """The valid ConfigFlow list rule of this read, once per route index."""
+    from backend.routers.routeros_nat_list import inspect_rule
+    cached = getattr(route_index, 'nat_list_rule', False) if route_index is not None else False
+    if cached is not False and cached[0] is rows:
+        return cached[1]
+    found = inspect_rule(rows)
+    own = found if found['rule'] is not None and not found['problem'] else None
+    if route_index is not None:
+        route_index.nat_list_rule = (rows, own)
+    return own
 
 
 def planned_bypass_conflicts(operations, state, gateway):

@@ -39,6 +39,38 @@ describe('reviewable release operation details', () => {
     expect(groups.find(g => g.title === '新增目的网段')!.rows[0].value).toBe('203.0.113.0/24')
     expect(JSON.stringify(groups)).not.toContain('not-public')
   })
+  it('shows the NAT list rule, member changes and the old rules it replaces', () => {
+    const legacy = Array.from({ length: 3 }, (_, i) => ({ id: `*L${i}`, path: '/ip/firewall/nat',
+      config: { chain: 'srcnat', action: 'accept', 'src-address': '192.0.2.1/32', 'dst-address': `203.0.113.${i}/32`, comment: 'cf-mihomo' } }))
+    const groups = operationDetails({ kind: 'nat_list_sync', summary: '新增 NAT 免转换规则', comment: 'cf-mihomo-nat',
+      src_list: 'cf-mihomo-nat-src', dst_list: 'cf-mihomo-nat-dst', rule: null, out_interface: '', replace_rule: false, withdraw: false,
+      src_add: ['192.0.2.1/32'], src_remove: [], dst_add: ['203.0.113.0/24'], destinations: ['203.0.113.0/24'],
+      dst_remove: [{ id: '*9', path: address, config: { list: 'cf-mihomo-nat-dst', address: '198.51.100.0/24' } }], legacy })
+    expect(groups.map(g => g.title)).toEqual(['规则字段', '来源列表', '目的列表', '迁移删除的旧规则'])
+    expect(groups[0].rows[0].value).toContain('目的地址列表 · dst-address-list: cf-mihomo-nat-dst')
+    expect(groups[2].rows).toEqual([{ label: '新增', value: '203.0.113.0/24', action: '新增' }, { label: '移除', value: '198.51.100.0/24', action: '移除' }])
+    expect(groups[3].rows).toHaveLength(3); expect(groups[3].note).toContain('共 3 条，合并为上面的 1 条规则')
+    const stale = operationDetails({ kind: 'nat_list_sync', summary: '删除残留', comment: 'cf-mihomo-nat', src_list: 'cf-mihomo-nat-src',
+      dst_list: 'cf-mihomo-nat-dst', rule: { id: '*R', path: '/ip/firewall/nat', config: {} }, out_interface: '', replace_rule: false,
+      withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [], stale: legacy.slice(0, 2) })
+    expect(stale.map(g => g.title)).toEqual(['规则字段', '删除残留的旧规则'])
+    expect(stale[1].rows).toHaveLength(2); expect(stale[1].note).toContain('目的网段已不再代理')
+    // Removed ahead of the routes before any list rule exists: no rule to show.
+    const early = operationDetails({ kind: 'nat_list_sync', summary: '删除残留', comment: 'cf-mihomo-nat', src_list: 'cf-mihomo-nat-src',
+      dst_list: 'cf-mihomo-nat-dst', rule: null, out_interface: '', replace_rule: false, destinations: [],
+      withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [], stale: legacy.slice(0, 2) })
+    expect(early.map(g => g.title)).toEqual(['删除残留的旧规则'])
+    const narrowed = operationDetails({ kind: 'nat_list_sync', summary: '限定出口', comment: 'cf-mihomo-nat', src_list: 'cf-mihomo-nat-src',
+      dst_list: 'cf-mihomo-nat-dst', rule: { id: '*R', path: '/ip/firewall/nat', config: {} }, out_interface: 'bridge', replace_rule: true,
+      withdraw: false, src_add: [], src_remove: [], dst_add: [], dst_remove: [], legacy: [] })
+    expect(narrowed[0].rows[0].value).toContain('出口接口 · out-interface: bridge'); expect(narrowed[0].note).toContain('*R')
+  })
+  it('separates policy migrations by object type', () => {
+    const op = fixture(); op.migrations = [...(op.migrations as unknown[]), { id: '*M', path: address, config: { list: 'cf-mihomo-nat-dst', address: '203.0.113.0/24' } }]
+    const groups = operationDetails(op)
+    expect(groups.find(g => g.title === '迁移主表静态路由')!.rows).toHaveLength(1)
+    expect(groups.find(g => g.title === '移出 NAT 免转换目的列表')!.rows[0].label).toContain('*M')
+  })
   it('mounts detail rows only when expanded, searches every address and paginates large plans', async () => {
     const op = fixture(); op.previous = null
     op.spec = { sources: Array.from({ length: 120 }, (_, i) => `192.0.2.${i + 1}/32`), destinations: [], gateway: '192.0.2.3' }

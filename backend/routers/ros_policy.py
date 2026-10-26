@@ -300,6 +300,7 @@ def bundle_health(manifest, live):
 
 def _nat_migrations(live, exclusions, owned_keys):
     """Subtract policy-only destinations without broadening any other NAT matcher."""
+    from backend.routers import routeros_nat_list
     from backend.routers.report import _networks
     migrations, replacements = [], []
     if not exclusions:
@@ -308,6 +309,10 @@ def _nat_migrations(live, exclusions, owned_keys):
         if (not enabled(row) or row.get('chain') != 'srcnat' or row.get('action') != 'accept'
                 or not is_managed(row.get('comment')) or str(row.get('comment', '')).startswith(PREFIX)
                 or (NAT, row.get('.id')) in owned_keys):
+            continue
+        if routeros_nat_list.is_rule(row):
+            # The list rule keeps its selectors; only its overlapping members go.
+            migrations.extend(routeros_nat_list.policy_migrations(row, live[ADDRESSES], exclusions))
             continue
         selectors = []
         for key in ('dst-address', 'dst-address-list'):
@@ -504,7 +509,10 @@ def build(desired, state):
         summary += '；仅为这些来源和目的网段添加 LAN 出口 NAT 免转换'
     if migrations:
         summary += (f'；迁移 {sum(item["path"] == ROUTES for item in migrations)} 条受管主表路由'
-                    f'，收窄 {len(nat_migrations)} 条旧 NAT 免转换')
+                    f'，收窄 {sum(item["path"] == NAT for item in nat_migrations)} 条旧 NAT 免转换')
+        members = sum(item['path'] == ADDRESSES for item in nat_migrations)
+        if members:
+            summary += f'；从 NAT 免转换目的列表移除 {members} 个改由来源策略的网段'
     result['ops'] = [{'kind': 'ros_policy_replace', 'bundle': bundle, 'previous': previous,
                        'owned': owned, 'migrations': migrations, 'replacements': replacements,
                        'spec': spec if bundle else None,

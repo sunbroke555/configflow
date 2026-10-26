@@ -96,6 +96,9 @@ def verify_nat(checks: Dict[str, Any], state: RouterState) -> None:
                      if state.nat_context is not None else not _covered(cidr, state, nat_index))]
     if uncovered:
         raise RouterError(f'回读校验失败：{", ".join(uncovered)} 没有被受管 NAT 免转换规则覆盖')
+    if checks.get('nat_list') is not None:
+        from backend.routers.routeros_nat_list import verify
+        verify(checks['nat_list'], state)
     for check in checks.get('nat_not_required') or []:
         # Re-prove with the preview's assessment: the egress-only check alone
         # rejects LAN-egress rules (e.g. DNS hairpins) that the ordered-chain
@@ -293,6 +296,10 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 elif current == 'nat_bypass' and plan.get('checks', {}).get('nat_not_required'):
                     unchanged = _verify(current, plan['checks'], driver, agent, unchanged)
                     record({'stage': current, 'summary': '回读确认无需额外 NAT 免转换', 'status': 'verified'})
+                elif current == 'nat_bypass' and plan.get('checks', {}).get('nat_list') is not None:
+                    # List removals ran in the routes stage: prove the NAT stage all the same.
+                    unchanged = _verify(current, plan['checks'], driver, agent, unchanged)
+                    record({'stage': current, 'summary': '回读确认 NAT 免转换与计划一致', 'status': 'verified'})
                 elif current == 'dhcp_dns' and plan.get('checks', {}).get('dhcp_dns'):
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认 DHCP DNS 与所选服务器一致', 'status': 'verified'})

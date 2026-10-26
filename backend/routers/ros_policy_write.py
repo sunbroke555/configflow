@@ -285,6 +285,9 @@ def _forget(driver, items, removed):
     known = ros_address_lists.known_lists(driver)
     for name in names & set(known):
         ros_address_lists.remember(driver, name, [row for row in known[name] if row['.id'] not in removed])
+    hints = ros_address_lists.expected_lists(driver)
+    for name in names & set(hints) - set(known):
+        ros_address_lists.expect(driver, name, [row for row in hints[name] if row['.id'] not in removed])
 
 
 def _delete_addresses(driver, items, journal):
@@ -493,6 +496,73 @@ def _restore_addresses(driver, steps, ids, remapped, configs):
         raise RouterError('策略路由对象在操作期间发生变化，保留现场：' + ADDRESSES + '/' + changed[0]['id'])
 
 
+def run_steps(driver, steps, ids, remapped, configs, failures, delete_safe, nat_batch=False):
+    """Undo journal steps in order, batching members (and routes, and with
+    ``nat_batch`` NAT rules that delete_rules removed); errors go to ``failures``."""
+    from backend.routers import routeros_nat_list
+    for (action, is_address), run in groupby(steps, key=lambda step: (step['action'], step.get('path') == ADDRESSES)):
+        if is_address and action in ('delete', 'restore', 'sweep'):
+            # Members are batched: one read per list instead of one per member.
+            try:
+                if action == 'restore':
+                    _restore_addresses(driver, list(run), ids, remapped, configs)
+                elif action == 'sweep' and delete_safe:
+                    for step in run:
+                        _restore_sweep(driver, step)
+                elif delete_safe:
+                    _restore_delete_addresses(driver, list(run))
+            except RouterError as error:
+                failures.append(str(error))
+            continue
+        run = list(run)
+        if action == 'operation':
+            # Keep the replacement protection if the old path could not be
+            # restored; report the incomplete rollback for inspection. Route
+            # undo records run in batches and stop at the first failure.
+            if not failures:
+                # NAT list undo puts old rules back before rules this rollback
+                # may already have recreated under new IDs.
+                moved = [[path, old, new] for (path, old), new in remapped.items()]
+                undos = [{**step['undo'], 'remapped': moved} if step['undo'].get('kind') == 'nat_list_restore'
+                         else step['undo'] for step in run]
+                try:
+                    failures.extend(error for error in driver.restore_many(undos, stop_on_failure=True)
+                                    if error and error != routeros_batch.SKIPPED)
+                except RouterError as error:  # the later steps and the manifest still run
+                    failures.append(str(error))
+            continue
+        index = 0
+        while index < len(run):
+            if nat_batch and action == 'restore':
+                end = index
+                while end < len(run) and run[end]['path'] == NAT:
+                    end += 1
+                if end - index >= routeros_batch.BATCH_MIN:
+                    try:
+                        routeros_nat_list.restore_rules(driver, run[index:end], ids, remapped, failures)
+                    except RouterError as error:  # the later steps still run
+                        failures.append(str(error))
+                    index = end
+                    continue
+            end = index
+            while (action == 'restore' and end < len(run) and run[end]['path'] == ROUTES
+                   and not run[end]['values'].get('place-before')):
+                end += 1
+            if end - index >= routeros_batch.BATCH_MIN:
+                try:
+                    _restore_routes(driver, run[index:end], ids, remapped, failures)
+                except RouterError as error:  # the later steps and the manifest still run
+                    failures.append(str(error))
+                index = end
+                continue
+            step = run[index]
+            index += 1
+            try:
+                _restore_step(driver, step, ids, remapped, delete_safe)
+            except RouterError as error:
+                failures.append(str(error))
+
+
 def restore(driver, op):
     failures = []
     remapped = {}
@@ -517,52 +587,7 @@ def restore(driver, op):
         failures.append(str(error))
         delete_safe = False
     configs = {}
-    for (action, is_address), run in groupby(op['steps'], key=lambda step: (step['action'], step.get('path') == ADDRESSES)):
-        if is_address and action in ('delete', 'restore', 'sweep'):
-            # Members are batched: one read per list instead of one per member.
-            try:
-                if action == 'restore':
-                    _restore_addresses(driver, list(run), ids, remapped, configs)
-                elif action == 'sweep' and delete_safe:
-                    for step in run:
-                        _restore_sweep(driver, step)
-                elif delete_safe:
-                    _restore_delete_addresses(driver, list(run))
-            except RouterError as error:
-                failures.append(str(error))
-            continue
-        run = list(run)
-        if action == 'operation':
-            # Keep the replacement protection if the old path could not be
-            # restored; report the incomplete rollback for inspection. Route
-            # undo records run in batches and stop at the first failure.
-            if not failures:
-                try:
-                    failures.extend(error for error in driver.restore_many([step['undo'] for step in run],
-                                                                           stop_on_failure=True)
-                                    if error and error != routeros_batch.SKIPPED)
-                except RouterError as error:  # the later steps and the manifest still run
-                    failures.append(str(error))
-            continue
-        index = 0
-        while index < len(run):
-            end = index
-            while (action == 'restore' and end < len(run) and run[end]['path'] == ROUTES
-                   and not run[end]['values'].get('place-before')):
-                end += 1
-            if end - index >= routeros_batch.BATCH_MIN:
-                try:
-                    _restore_routes(driver, run[index:end], ids, remapped, failures)
-                except RouterError as error:  # the later steps and the manifest still run
-                    failures.append(str(error))
-                index = end
-                continue
-            step = run[index]
-            index += 1
-            try:
-                _restore_step(driver, step, ids, remapped, delete_safe)
-            except RouterError as error:
-                failures.append(str(error))
+    run_steps(driver, op['steps'], ids, remapped, configs, failures, delete_safe)
     previous = copy.deepcopy(op.get('previous'))
     if previous:
         for item in previous['resources']:
@@ -590,6 +615,9 @@ def _verify_replacement_nat(driver, op, resources):
     policy = removing | {(item['path'], item['id']) for item in resources}
     context = state.nat_context or {}
     context['mangle'] = [row for row in live[MANGLE] if (MANGLE, row['.id']) not in policy]
+    # List selectors (ConfigFlow's NAT bypass lists among them) prove coverage
+    # with the members this read found, as the NAT assessment does.
+    context['address_sets'] = state.address_sets
     route_index = RouteEgressIndex(context)
     rows = [row for row in live[NAT] if (NAT, row['.id']) not in removing]
     sources = [ipaddress.IPv4Network(value) for value in previous['sources']]
@@ -652,7 +680,12 @@ def apply(driver, op):
         for replacement in op.get('replacements', []):
             _create(driver, replacement['path'], replacement['values'], journal, ids)
         _verify_replacement_nat(driver, op, resources)
-        migrations, index = op['migrations'], 0
+        # NAT list members first: until the static route goes, traffic to them
+        # is only translated, never exempted on its way out of the WAN.
+        members = [item for item in op['migrations'] if item['path'] == ADDRESSES]
+        if members:
+            _delete_addresses(driver, members, journal)
+        migrations, index = [item for item in op['migrations'] if item['path'] != ADDRESSES], 0
         while index < len(migrations):
             end = index
             while end < len(migrations) and migrations[end]['path'] == ROUTES:

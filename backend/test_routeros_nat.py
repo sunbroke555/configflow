@@ -92,7 +92,7 @@ def test_source_nat_matches_proxy_egress_and_ignores_disabled_or_dstnat(rule, ex
     ops = next(stage['ops'] for stage in plan['stages'] if stage['key'] == 'nat_bypass')
     assert bool(ops) == (expected == 'missing')
     if ops:
-        assert ops[0]['kind'] == 'nat_add'
+        assert [op['kind'] for op in ops] == ['nat_list_sync'] and ops[0]['dst_add'] == [CIDR]
 
 
 @pytest.mark.parametrize('selector', ['all-ethernet', '!all-ppp'])

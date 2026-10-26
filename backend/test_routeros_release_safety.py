@@ -114,37 +114,39 @@ def test_routeros_nat_report_does_not_reparse_legacy_destination_coverage(monkey
     assert result['items'][0]['status'] == 'synced'
 
 
-def test_expansion_cannot_clone_a_restricted_bypass_and_claim_complete_coverage():
-    session = StatefulRouterOS(routes=[ROUTE], nats=[{**BYPASS, 'protocol': 'tcp'}, MASQUERADE], addresses=[])
+def test_restricted_managed_bypass_is_neither_cloned_nor_widened_for_a_new_destination():
+    from backend.routers.release import execute
+
+    restricted = {**BYPASS, 'protocol': 'tcp'}
+    session = StatefulRouterOS(routes=[ROUTE], nats=[restricted, MASQUERADE], addresses=[])
     desired = {**DESIRED, 'proxy_cidrs': [{'cidr': '91.108.0.0/16', 'sources': ['custom']}]}
-    _, _, plan = inspect(session, desired)
-    assert plan['blockers']
-    assert session.writes == []
+    driver, _, plan = inspect(session, desired)
+    assert not plan['blockers'], plan['blockers']
+    ops = next(stage['ops'] for stage in plan['stages'] if stage['key'] == 'nat_bypass')
+    assert [op['kind'] for op in ops] == ['nat_list_sync'] and ops[0]['dst_add'] == ['91.108.0.0/16']
+    assert execute(plan, driver, None)['ok']
+    assert restricted in session.rows[NAT]
+    assert sum(row.get('protocol') == 'tcp' for row in session.rows[NAT]) == 1
 
 
 @pytest.mark.parametrize('list_covers_new_target', [False, True])
-def test_expansion_keeps_destination_list_and_requires_it_to_cover_new_target(list_covers_new_target):
+def test_bypass_with_a_destination_list_is_kept_and_new_targets_join_the_nat_list(list_covers_new_target):
     from backend.routers.release import execute
 
     target = '91.108.0.0/16'
     addresses = [{'.id': '*L1', 'list': 'targets', 'address': CIDR}]
     if list_covers_new_target:
         addresses.append({'.id': '*L2', 'list': 'targets', 'address': target})
-    session = StatefulRouterOS(routes=[ROUTE], nats=[
-        {**BYPASS, 'dst-address-list': 'targets'}, MASQUERADE,
-    ], addresses=addresses)
+    original = {**BYPASS, 'dst-address-list': 'targets'}
+    session = StatefulRouterOS(routes=[ROUTE], nats=[copy.deepcopy(original), MASQUERADE], addresses=addresses)
     desired = {**DESIRED, 'proxy_cidrs': [*DESIRED['proxy_cidrs'],
                                         {'cidr': target, 'sources': ['custom']}]}
     driver, _, plan = inspect(session, desired)
-    if not list_covers_new_target:
-        assert plan['blockers']
-        assert session.writes == []
-        assert session.rows[NAT][0]['dst-address-list'] == 'targets'
-        return
-    assert not plan['blockers']
+    assert not plan['blockers'], plan['blockers']
     assert execute(plan, driver, None)['ok']
-    clone = next(row for row in session.rows[NAT] if row.get('dst-address') == target)
-    assert clone['dst-address-list'] == 'targets'
+    assert original in session.rows[NAT]
+    assert [row['address'] for row in session.rows['/ip/firewall/address-list']
+            if row['list'] == 'cf-mihomo-nat-dst'] == [target]
     _verify('nat_bypass', plan['checks'], driver, None)
 
 

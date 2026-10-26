@@ -51,24 +51,53 @@ def nat_action(driver, source, destination, interface):
     return None
 
 
-def test_static_to_policy_replaces_broad_nat_without_exempting_direct_wan():
+def own_destinations(driver):
+    from backend.routers.ros_policy import ADDRESSES
+    return {row['address'] for row in driver.rows[ADDRESSES] if row['list'] == 'cf-mihomo-nat-dst'}
+
+
+def test_static_to_policy_moves_the_nat_list_member_without_exempting_direct_wan():
     driver = MemoryROS()
     driver.rows[NAT][0].pop('out-interface')
     desired = desired_for(driver, selected=False)
     desired.pop('ros_policy')
     static_release(driver, desired)
-    old_ids = {row['.id'] for row in driver.rows[NAT]
-               if row.get('action') == 'accept' and row.get('dst-address') == TARGET}
-    assert old_ids
+    assert own_destinations(driver) == {'198.18.0.0/16', TARGET}
+    rule = copy.deepcopy(driver.rows[NAT][0])
+    assert rule['comment'] == 'cf-mihomo-nat'
     _, plan = release(driver)
-    assert not old_ids & {row['.id'] for row in driver.rows[NAT]}
+    summary = next(op['summary'] for stage in plan['stages'] for op in stage['ops']
+                   if op['kind'] == 'ros_policy_replace')
+    assert '从 NAT 免转换目的列表移除 1 个改由来源策略的网段' in summary
+    # The list rule stays as it was; only the member the policy now serves goes.
+    assert [row for row in driver.rows[NAT] if row.get('comment') == 'cf-mihomo-nat'] == [rule]
+    assert own_destinations(driver) == {'198.18.0.0/16'}
+    assert nat_action(driver, '192.168.0.102', '91.108.4.1', 'pppoe-out1') == 'masquerade'
+    assert nat_action(driver, '192.168.0.101', '91.108.4.1', 'bridge') == 'accept'
+    assert nat_action(driver, '192.168.0.102', '198.18.0.1', 'bridge') == 'accept'
     accepts = [row for row in driver.rows[NAT] if row.get('action') == 'accept']
-    assert not any(matches_destination(row, '91.108.4.1') and not row.get('out-interface')
-                   and not row.get('dst-address-list') for row in accepts)
-    assert any(row.get('out-interface') == 'bridge' and row.get('src-address-list')
-               and row.get('dst-address-list') for row in accepts)
-    assert any(row.get('dst-address') == '198.18.0.0/16' for row in accepts)
+    assert any(row.get('out-interface') == 'bridge' and row.get('src-address-list', '').startswith('CF_')
+               for row in accepts)
     assert inspect(driver)[1]['empty']
+
+
+@pytest.mark.parametrize('comment', ['manual', 'cf-mihomo-nat'])
+def test_static_to_policy_keeps_foreign_or_dynamic_list_members(comment):
+    from backend.routers.ros_policy import ADDRESSES
+    driver = MemoryROS()
+    driver.rows[NAT][0].pop('out-interface')
+    desired = desired_for(driver, selected=False)
+    desired.pop('ros_policy')
+    static_release(driver, desired)
+    member = next(row for row in driver.rows[ADDRESSES] if row['address'] == TARGET)
+    member['comment'] = comment
+    if comment == 'cf-mihomo-nat':
+        member['dynamic'] = 'true'
+    before = configurations(driver)
+    _, plan = inspect(driver)
+    assert any('非 ConfigFlow 条目与策略目的重叠' in item for item in plan['blockers']), plan['blockers']
+    assert not execute(plan, driver, None)['ok']
+    assert configurations(driver) == before
 
 
 @pytest.mark.parametrize('disabled', ['false', 'true'])

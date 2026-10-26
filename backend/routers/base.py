@@ -9,7 +9,7 @@ import ipaddress
 from bisect import bisect_left, bisect_right
 from heapq import heappop, heappush
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Prefix used by generated deployments. Unmarked objects are only adopted
 # during a release or changed through an explicitly confirmed manual edit.
@@ -232,6 +232,15 @@ class RouterState:
     # ROS forwarding/NAT evidence. None keeps legacy drivers' coverage checks;
     # an empty rules list explicitly means there are no source-NAT rules.
     nat_context: Optional[Dict[str, Any]] = None
+    # RouterOS: members of the two NAT bypass address lists ConfigFlow owns
+    # ('src', 'dst'), Mangle rows selecting them ('mangle_refs') and filter/raw
+    # rows selecting them ('firewall_refs'). Read only
+    # when they may matter; kept out of address_sets and the NAT evidence.
+    nat_lists: Optional[Dict[str, Any]] = None
+    # RouterOS: reads nat_lists on demand when nothing selects the lists yet,
+    # so plans that never need them read exactly what they did before.
+    nat_lists_reader: Optional[Callable[[], Optional[Dict[str, Any]]]] = field(default=None, repr=False,
+                                                                                 compare=False)
     dhcp_dns: Optional[DhcpDnsState] = None
     # None: the vendor routes proxy CIDRs with static routes. A list (possibly
     # empty) means proxy CIDRs are routed by policy rules excluding the gateway.

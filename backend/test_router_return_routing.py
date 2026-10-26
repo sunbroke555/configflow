@@ -100,7 +100,8 @@ def test_turning_off_does_not_clean_up_existing_managed_or_legacy_return_rules(v
 @pytest.mark.parametrize('vendor', ['ikuai', 'routeros'])
 def test_failed_release_does_not_touch_agent_when_return_routing_is_disabled(vendor):
     driver, session = router_driver(vendor)
-    session.fail = ('nat_rule', 'edit') if vendor == 'ikuai' else ('PUT', '/ip/firewall/nat', 2)
+    # RouterOS writes one NAT rule (the list rule) after the adoption.
+    session.fail = ('nat_rule', 'edit') if vendor == 'ikuai' else ('PUT', '/ip/firewall/nat', 1)
     plan = plan_for({'type': vendor, 'endpoint': 'http://router.local'}, driver, {'status': 'disabled'})
     result = execute(plan, driver, NoAgentCalls())
     assert result['ok'] is False and result['failed_stage'] == 'nat_bypass'
