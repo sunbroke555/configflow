@@ -124,6 +124,8 @@ class RouterOSDriver(RouterDriver):
         rows = self._get(path, timeout)
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
             raise RouterError(f'RouterOS {path} 返回的列表格式无法识别')
+        if path == FILTER:
+            self._forward_filter_rows = rows
         return rows
 
     def ping(self, address: str, interface: str = '', timeout: float = 4) -> bool:
@@ -177,6 +179,8 @@ class RouterOSDriver(RouterDriver):
 
     def read_state(self) -> RouterState:
         from backend.routers import ros_address_lists
+        # Only this preview/readback's snapshot; never reuse across reads.
+        self._forward_filter_rows = None
         state = RouterState()
         routes = self._list(ROUTES)
         nats = self._list(NAT)

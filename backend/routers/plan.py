@@ -723,6 +723,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     if dns_evidence is not None and desired.get('dns_ha'):
         # Only with DNS HA: the VIP alone does not show which pair answers it.
         dns_evidence['ha'] = desired['dns_ha']
+    if router.get('type') == 'routeros' and not manage_return:
+        from backend.routers.ros_return_advisory import warnings_for
+        warnings.extend(warnings_for(desired, state, driver))
     return {'stages': stages, 'checks': checks, 'blockers': blockers, 'warnings': warnings, 'script': script,
             'fingerprint': fingerprint(stages, evidence, dns_evidence,
                                        return_routing['safety'] if manage_return else None),
