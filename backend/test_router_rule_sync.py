@@ -463,3 +463,50 @@ def test_remote_sync_right_after_a_backend_restart_uses_the_registered_agents(en
     assert cleanup and set(cleanup) == {'gw'}
     settings = dns_agent_settings('dns', REAL_AGENT('dns'))
     assert settings['dns_error'] == '' and settings['dns_server'] == '192.168.0.53'
+
+
+def test_paused_sync_resumes_through_an_empty_confirmed_release(authenticated_app, environment, monkeypatch):
+    import time
+    from backend.utils import task_status
+    client, _, _, admin, _ = authenticated_app
+    publish(environment)
+    path = '/api/routers/ros'
+    # Nothing to write and a recorded baseline: the confirm stays unnecessary.
+    assert client.post(path + '/plan', headers=admin).get_json()['plan']['sync_baseline'] is False
+    receipt = store.read('default', 'ros')
+    receipt.update(status='paused', message='无法连接 RouterOS：timeout。')
+    store.write('default', 'ros', receipt)
+
+    response = client.post(path + '/rule-sync', headers=admin)
+    assert response.status_code == 409
+    assert response.get_json()['message'] == '同步已暂停：无法连接 RouterOS：timeout。请先「预览发布」并确认，重新建立同步基准'
+    with pytest.raises(RouterError, match='^同步已暂停：无法连接 RouterOS：timeout。请先「预览发布」'):
+        rule_sync.start_job('default', 'ros')
+
+    plan = client.post(path + '/plan', headers=admin).get_json()['plan']
+    assert plan['empty'] and plan['sync_baseline'] is True
+    response = client.post(path + '/apply', headers=admin, json={'fingerprint': plan['fingerprint']})
+    assert response.status_code == 200 and response.get_json()['result']['ok']
+    state = client.get(path + '/rule-sync', headers=admin).get_json()['sync']
+    assert (state['status'], state['message']) == ('synced', '已建立成功发布的同步基准')
+
+    # The resumed manual run is labelled manual on the task page.
+    monkeypatch.setattr(rule_sync, 'Downloads', lambda: lambda *_: NEW)
+    assert client.post(path + '/rule-sync', headers=admin).status_code == 202
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        state = client.get(path + '/rule-sync', headers=admin).get_json()['sync']
+        if state['status'] not in ('running', 'queued') and rule_sync._worker.acquire(blocking=False):
+            rule_sync._worker.release()
+            break
+        time.sleep(.01)
+    assert state['status'] == 'synced', state
+    assert task_status.get('router_rule_sync:default:ros')['last_trigger'] == 'manual'
+
+
+@pytest.mark.parametrize('message, expected', [
+    ('', '同步已暂停。请先「预览发布」并确认，重新建立同步基准'),
+    ('本次更新还需要修改「mihomo 回流规则」，请手动预览发布', '同步已暂停：本次更新还需要修改「mihomo 回流规则」，请手动预览发布'),
+])
+def test_paused_message_gives_one_resume_hint(message, expected):
+    assert rule_sync.paused_message({'message': message}) == expected

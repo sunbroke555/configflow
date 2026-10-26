@@ -48,9 +48,27 @@ describe('remote rule synchronization', () => {
     vi.mocked(routerApi.ruleSync).mockResolvedValue(data('paused', false) as any)
     const wrapper = await setup()
     expect(wrapper.text()).toContain('已暂停，需核对')
-    expect(wrapper.text()).toContain('保留原状态')
+    expect(wrapper.text()).toContain('规则集的 IPv4 变为零，保留原状态。处理后点「预览发布」并确认，重新建立同步基准。')
     expect(button(wrapper, '立即同步').attributes('disabled')).toBeDefined()
     expect(button(wrapper, '预览发布').attributes('disabled')).toBeUndefined()
+  })
+  it('does not repeat the resume hint when the pause reason already gives it', async () => {
+    const paused = data('paused') as any
+    paused.data.sync.message = '本次更新还需要修改「mihomo 回流规则」，请手动预览发布'
+    vi.mocked(routerApi.ruleSync).mockResolvedValue(paused)
+    const wrapper = await setup()
+    expect(wrapper.text()).toContain('本次更新还需要修改「mihomo 回流规则」，请手动预览发布')
+    expect(wrapper.text()).not.toContain('重新建立同步基准')
+  })
+  it('reloads its state once a release from the page finishes', async () => {
+    vi.mocked(routerApi.ruleSync).mockResolvedValue(data('paused') as any)
+    const wrapper = await setup()
+    await wrapper.setProps({ disabled: true }); await flushPromises()
+    expect(routerApi.ruleSync).toHaveBeenCalledTimes(1)
+    vi.mocked(routerApi.ruleSync).mockResolvedValue(data('synced') as any)
+    await wrapper.setProps({ disabled: false }); await flushPromises()
+    expect(routerApi.ruleSync).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('已同步')
   })
   it('polls an explicitly started job and stops once complete', async () => {
     vi.useFakeTimers()
