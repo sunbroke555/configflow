@@ -1,5 +1,5 @@
 """「客户端设备」页：当前配置空间的设备名称与 OxiDNS DNS 策略，逐行保存为草稿。"""
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from backend.common.auth import require_auth
 from backend.common.client_devices import DeviceChanged, list_devices, normalize_change, update_device
@@ -7,6 +7,11 @@ from backend.common.oxidns_device_policy import revision
 from backend.common.oxidns_settings import OxidnsSettingsError
 
 client_devices_bp = Blueprint('client_devices', __name__, url_prefix='/api/client-devices')
+
+
+def _discovery_cache():
+    from backend.common.client_discovery_cache import DiscoveryCache
+    return current_app.extensions.setdefault('client_discovery_cache', DiscoveryCache())
 
 
 def _state(profile_id):
@@ -75,7 +80,7 @@ def client_devices():
 @client_devices_bp.route('/discovery', methods=['GET'])
 @require_auth
 def client_device_discovery():
-    """实时读取配置空间内 RouterOS / iKuai 主路由看到的局域网设备，不保存结果。
+    """读取配置空间内 RouterOS / iKuai 主路由设备，默认先返回内存快照；?refresh=1 强制重查。
 
     配置空间解析同 GET /api/client-devices（?profile= 或 ?agent=）。返回格式见 doc/oxidns-device-policies.md。
     """
@@ -89,7 +94,9 @@ def client_device_discovery():
     # Agent hosts are infrastructure, not client devices to add.
     hosts = [agent.get('host') or '' for agent in get_agent_manager().get_all_agents()
              if (agent.get('profile_id') or default) == profile_id]
-    return _response({'success': True, 'profile_id': profile_id, **discover(get_config(profile_id), hosts)})
+    return _response({'success': True, 'profile_id': profile_id, **discover(
+        get_config(profile_id), hosts, cache=_discovery_cache(), profile_id=profile_id,
+        refresh=request.args.get('refresh') == '1')})
 
 
 @client_devices_bp.route('/fixed-ip/preview', methods=['POST'])
@@ -129,7 +136,13 @@ def apply_fixed_ip():
             raise OxidnsSettingsError('固定 IP 确认请求格式无效。')
         if body['profile_id'] != profile_id:
             raise RouterConflictError('配置空间已切换，请重新载入。')
-        client_fixed_ip.apply(profile_id, body['token'])
+        cache = _discovery_cache()
+        cache.invalidate(profile_id)
+        try:
+            client_fixed_ip.apply(profile_id, body['token'])
+        finally:
+            # A discovery started during the write must not leave an old snapshot.
+            cache.invalidate(profile_id)
         return _response(_state(profile_id))
     except OxidnsSettingsError as error:
         return _response({'success': False, 'message': str(error)}, 400)

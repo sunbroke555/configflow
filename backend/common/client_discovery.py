@@ -1,8 +1,8 @@
 """Device discovery for the 「客户端设备」 page.
 
 Reads every RouterOS / iKuai main router of a profile live and concurrently,
-then joins what they see with the saved rows ({ip, name, mode}). Nothing is
-stored: each request reads the routers again. See doc/oxidns-device-policies.md.
+then joins what they see with the current saved rows ({ip, name, mode}).
+Router snapshots can be reused in memory. See doc/oxidns-device-policies.md.
 """
 import ipaddress
 import time
@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
+from backend.common.client_discovery_cache import DiscoveryCache, Snapshot
 from backend.common.client_devices import list_devices
 from backend.routers import ikuai_clients, ros_clients
 from backend.routers.base import RouterError
@@ -86,7 +87,8 @@ def _network(value: str):
         return None
 
 
-def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[float] = None) -> dict:
+def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[float] = None, *,
+             cache: Optional[DiscoveryCache] = None, profile_id: str = '', refresh: bool = False) -> dict:
     """Discovery payload for one profile's config (see doc/oxidns-device-policies.md)."""
     devices = list_devices(config)['devices']
     routers = [router for router in routers_of(config) if router.get('type') in READERS]
@@ -94,12 +96,25 @@ def discover(config: dict, agent_hosts: Iterable[str] = (), timeout: Optional[fl
     saved_hosts = {str(net.network_address) for net in networks.values()
                    if net is not None and net.version == 4 and net.num_addresses == 1}
     result = {'checked_at': datetime.now().astimezone().isoformat(timespec='seconds'), 'sources': [],
-              'devices': [], 'discovered': []}
+              'devices': [], 'discovered': [], 'cached': False, 'stale': False, 'refresh_error': ''}
     if not routers:
+        if cache is not None:
+            cache.invalidate(profile_id)
         result.update(state='unsupported', message=UNSUPPORTED)
         result['devices'] = [{**row, **_saved(networks[row['ip']]), 'discoverable': False} for row in devices]
         return result
-    readings = _read_all(routers, frozenset(saved_hosts), timeout or ROUTER_TIMEOUT)
+
+    def load():
+        readings = _read_all(routers, frozenset(saved_hosts), timeout or ROUTER_TIMEOUT)
+        return Snapshot([(reading, error) for _, reading, error in readings], result['checked_at'])
+
+    if cache is None:
+        snapshot = load()
+    else:
+        snapshot, metadata = cache.read(profile_id, routers, load, refresh)
+        result.update(metadata)
+    result['checked_at'] = snapshot.checked_at
+    readings = [(router, reading, error) for router, (reading, error) in zip(routers, snapshot.readings)]
     merged: Dict[str, Sighting] = {}
     excluded = {ip for ip in (ipv4(host) for host in agent_hosts) if ip}
     routers_at: Dict[str, str] = {}       # own address of a router that was just read -> its id

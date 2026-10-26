@@ -688,7 +688,7 @@ def test_ikuai_absence_counts_only_inside_its_lan_addresses(oxidns_app, monkeypa
     assert devices['10.8.0.2']['presence'] == 'unknown'
     # Without the router's LAN addresses nothing proves absence.
     fake = FakeIKuai(lab_rows('monitor_lanip'), lab_rows('dhcp_lease'), failures={'lan': 'x'})
-    body = app.test_client().get(URL).get_json()
+    body = app.test_client().get(URL + '&refresh=1').get_json()
     assert {row['ip']: row['presence'] for row in body['devices']} == {'192.168.77.50': 'unknown', '10.8.0.2': 'unknown'}
     assert any('局域网地址' in note for note in body['sources'][0]['notes'])
 
@@ -783,3 +783,49 @@ def test_a_slow_router_still_returns_its_tables_within_the_deadline():
     assert reading.complete and len(reading.sightings) == 47
     assert {reading.sightings[ip].presence for ip in STALE} == {'recent'}
     assert all(interface == 'lan4' for _, interface, _ in driver.pings)     # no ICMP retry after a timeout
+
+
+def test_endpoint_reuses_snapshots_but_explicit_refresh_rechecks(oxidns_app, monkeypatch):
+    app, repo = oxidns_app
+    setup_profile(repo, [IKUAI], [])
+    opened = []
+
+    def open_driver(router):
+        opened.append(router['id'])
+        return FakeIKuai([terminal('192.168.9.10', 'aa:bb:cc:00:00:01')])
+    monkeypatch.setattr(client_discovery, 'open_driver', open_driver)
+    client = app.test_client()
+    before = repo.get_profile('office')
+    first = client.get(URL).get_json()
+    second = client.get(URL)
+    assert not first['cached'] and second.get_json()['cached']
+    assert second.headers['Cache-Control'] == 'no-store'
+    assert second.get_json()['checked_at'] == first['checked_at'] and opened == ['ik1']
+    refreshed = client.get(URL + '&refresh=1').get_json()
+    assert not refreshed['cached'] and opened == ['ik1', 'ik1']
+    assert repo.get_profile('office') == before
+
+
+def test_fixed_ip_write_discards_snapshots_started_during_the_write(oxidns_app, monkeypatch):
+    from backend.common import client_fixed_ip
+    from backend.routers.lan_clients import Reading, Sighting
+    app, repo = oxidns_app
+    setup_profile(repo, [IKUAI], [])
+    client = app.test_client()
+    phase = ['before']
+
+    def read_all(routers, *_):
+        reading = Reading(sightings={'192.168.9.10': Sighting('192.168.9.10', mac='AA:BB:CC:00:00:01', hostname=phase[0])})
+        return [(routers[0], reading, '')]
+    monkeypatch.setattr(client_discovery, '_read_all', read_all)
+    client.get(URL)
+
+    def write(*_):
+        # Another browser can open discovery while a DHCP binding is changing.
+        assert not client.get(URL).get_json()['cached']
+        phase[0] = 'after'
+    monkeypatch.setattr(client_fixed_ip, 'apply', write)
+    assert client.post('/api/client-devices/fixed-ip/apply?profile=office',
+                       json={'profile_id': 'office', 'token': 'confirmed'}).status_code == 200
+    result = client.get(URL).get_json()
+    assert not result['cached'] and result['discovered'][0]['hostname'] == 'after'

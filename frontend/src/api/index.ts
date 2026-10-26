@@ -520,12 +520,13 @@ export type DiscoveredSavedClient = Omit<ClientDevice, 'fixed_ip'> & ClientPrese
 export interface ClientDiscovery {
   success: true; profile_id: string; state: 'ok' | 'partial' | 'failed' | 'unsupported'; message: string; checked_at: string
   sources: ClientDiscoverySource[]; devices: DiscoveredSavedClient[]; discovered: DiscoveredClient[]
+  cached: boolean; stale: boolean; refresh_error: string
 }
 /** 当前配置空间的设备名称与 OxiDNS DNS 策略；从 Agent 进入时按设备绑定的空间读取 */
 export const clientDeviceApi = {
-  /** 实时读取配置空间内 RouterOS / iKuai 看到的局域网设备（最长约 20 秒），结果不保存 */
-  discover: (profileId: string, options: { signal?: AbortSignal } = {}) =>
-    api.get<ClientDiscovery>('/client-devices/discovery', { params: { profile: profileId }, timeout: 45000, signal: options.signal }),
+  /** 优先读取路由器快照；stale 时后台 refresh，手动刷新也传 refresh */
+  discover: (profileId: string, options: { signal?: AbortSignal; refresh?: boolean } = {}) =>
+    api.get<ClientDiscovery>('/client-devices/discovery', { params: { profile: profileId, refresh: options.refresh ? '1' : undefined }, timeout: 45000, signal: options.signal }),
   get: (options: { agentId?: string; profileId?: string; signal?: AbortSignal } = {}) =>
     api.get<ClientDevicesState>('/client-devices', {
       ...(options.profileId ? profileOptions(options.profileId) : {}),
