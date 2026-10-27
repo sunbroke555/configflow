@@ -831,6 +831,8 @@ def handle_agents():
             agent_data = request.json
             result = agent_manager.register_agent(agent_data)
             return jsonify({'success': True, 'data': result}), 200
+        except AgentDeploymentConflict as exc:
+            return jsonify({'success': False, 'message': str(exc)}), 409
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
 

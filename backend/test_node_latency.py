@@ -58,7 +58,7 @@ def test_worker_gets_stdin_json_and_no_credentials_in_command(repository, monkey
         assert payload['nodes'][0]['password'] == 'secret'
         assert payload['nodes'][0]['name'] == NODE_A
         assert kwargs['timeout'] == 10
-        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 3, 'results': [
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 4, 'results': [
             {'name': NODE_A, 'latency': 99, 'first_latency': 250}]}))
     monkeypatch.setattr(latency.subprocess, 'run', run)
     result = latency.run_tests(['A'])['results']['A']
@@ -80,9 +80,9 @@ def test_subscription_cache_keeps_protocol_options_and_distinct_sources(reposito
     assert proxy['password'] == 'cached-secret' and proxy['sni'] == 'tls.invalid'
 
 
-@pytest.mark.parametrize('output', ['not JSON', '{}', '{"version":3,"results":[]}',
-    json.dumps({'version': 3, 'results': [{'name': NODE_A, 'latency': True}]}),
-    json.dumps({'version': 3, 'results': [{'name': NODE_A, 'latency': None}]})])
+@pytest.mark.parametrize('output', ['not JSON', '{}', '{"version":4,"results":[]}',
+    json.dumps({'version': 4, 'results': [{'name': NODE_A, 'latency': True}]}),
+    json.dumps({'version': 4, 'results': [{'name': NODE_A, 'latency': None}]})])
 def test_invalid_worker_output_does_not_replace_history(repository, monkeypatch, output):
     monkeypatch.setattr(latency.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=output))
     with pytest.raises(latency.ProbeUnavailable):
@@ -115,7 +115,7 @@ def test_invalid_worker_dns_is_explained_without_leaking_settings(repository, mo
     assert latency.load_results() == previous
 
 
-@pytest.mark.parametrize('old_version', [1, 2])
+@pytest.mark.parametrize('old_version', [1, 2, 3])
 def test_old_worker_is_rejected_without_replacing_current_history(repository, monkeypatch, old_version):
     previous = {NODE_A: {'latency': 100, 'history': [100], 'method': latency.METHOD}}
     repository.write_shared_json(latency.LATENCY_FILE, previous)
@@ -136,7 +136,7 @@ def test_full_batch_uses_one_probe_timeout_and_preserves_every_result(repository
         payload = json.loads(kwargs['input'])
         calls.append(payload)
         assert kwargs['timeout'] == payload['timeout_ms'] / 1000 + 5
-        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 3, 'results': [
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 4, 'results': [
             {'name': node['name'], 'latency': None, 'error_code': 'timeout', 'error': '连接或请求超时'}
             for node in payload['nodes']]}))
 
@@ -354,6 +354,9 @@ def test_dns_settings_persist_without_changing_nodes_or_other_settings(repositor
     assert response.get_json()['dns_servers'] == ['192.0.2.53', '127.0.0.1:5353']
     expected = original_system
     expected.setdefault('system_config', {})['node_test_dns'] = ['192.0.2.53', '127.0.0.1:5353']
+    expected['system_config']['node_test_dns_config'] = {
+        'mode': 'custom', 'servers': expected['system_config']['node_test_dns'],
+        'bootstrap': [], 'managed': {}}
     persisted = repository.get_system()
     assert {k: v for k, v in persisted.items() if k != '_revision'} == {
         k: v for k, v in expected.items() if k != '_revision'}
@@ -380,7 +383,7 @@ def test_saved_dns_reaches_worker_and_changing_it_starts_new_history(repository,
     payloads = []
     def probe(command, **kwargs):
         payloads.append(json.loads(kwargs['input']))
-        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 3, 'results': [
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'version': 4, 'results': [
             {'name': NODE_A, 'latency': 10}]}))
     monkeypatch.setattr(latency.subprocess, 'run', probe)
     assert client.post('/api/nodes/latency', json={'names': ['A']}).status_code == 200

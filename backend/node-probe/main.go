@@ -24,12 +24,15 @@ import (
 )
 
 const maxNodes = 20
+const responseVersion = 4
 
 type request struct {
+	Operation    string           `json:"operation,omitempty"`
 	URL          string           `json:"url"`
 	TimeoutMS    int              `json:"timeout_ms"`
 	UnifiedDelay bool             `json:"unified_delay"`
 	DNSServers   []string         `json:"dns_servers,omitempty"`
+	DNSBootstrap []string         `json:"dns_bootstrap,omitempty"`
 	Nodes        []map[string]any `json:"nodes"`
 }
 
@@ -210,8 +213,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "invalid input")
 		os.Exit(2)
 	}
-	if err := configureProxyDNS(input.DNSServers); err != nil {
-		fmt.Fprintln(os.Stderr, "invalid node test DNS: use IPv4 or IPv4:port")
+	if input.Operation == "dns_check" {
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"version": responseVersion, "dns_check": checkDNS(input)}); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	if input.Operation != "" {
+		fmt.Fprintln(os.Stderr, "invalid operation")
+		os.Exit(2)
+	}
+	if err := configureProxyDNS(input.DNSServers, input.DNSBootstrap); err != nil {
+		fmt.Fprintln(os.Stderr, "invalid node test DNS or bootstrap configuration")
 		os.Exit(3)
 	}
 	results, err := execute(input)
@@ -219,7 +232,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"version": 3, "results": results}); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"version": responseVersion, "results": results}); err != nil {
 		os.Exit(1)
 	}
 }
