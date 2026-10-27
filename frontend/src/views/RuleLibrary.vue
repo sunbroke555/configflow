@@ -1,5 +1,5 @@
 <template>
-  <div :class="reorder.active.value && 'cf-reordering'">
+  <div ref="libraryPage" :class="reorder.active.value && 'cf-reordering'">
     <PageHeader title="规则库">
       <template #actions>
         <Button @click="showAddDialog">
@@ -160,8 +160,14 @@
             v-for="(rule, cfIndex) in visibleRules"
             :key="rule.id"
             :data-id="rule.id"
+            :data-library-rule-id="rule.id"
+            :data-highlighted="highlightedRuleId === rule.id || undefined"
+            :tabindex="highlightedRuleId === rule.id ? -1 : undefined"
             data-reorder-item
-            :class="!rule.enabled && 'dark:opacity-55'"
+            :class="[
+              !rule.enabled && 'dark:opacity-55',
+              highlightedRuleId === rule.id && 'bg-primary-soft hover:bg-primary-soft outline-2 -outline-offset-2 outline-primary-accent'
+            ]"
           >
             <TableCell v-if="reorder.active.value">
               <DragHandle
@@ -193,6 +199,7 @@
                   aria-hidden="true"
                 />
                 <span class="min-w-0 truncate font-medium text-foreground" :title="rule.name">{{ rule.name }}</span>
+                <span v-if="highlightedRuleId === rule.id" class="shrink-0 text-[11px] text-primary-accent">已定位</span>
               </div>
             </TableCell>
             <TableCell>
@@ -287,11 +294,15 @@
           :key="rule.id"
           v-bind="listItem(cfIndex)"
           :data-id="rule.id"
+          :data-library-rule-id="rule.id"
+          :data-highlighted="highlightedRuleId === rule.id || undefined"
+          :tabindex="highlightedRuleId === rule.id ? -1 : undefined"
           data-reorder-item
           :class="[
             'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border bg-card/90 p-4 shadow-surface transition-colors duration-200 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
             selectedRules.includes(rule.id) ? 'border-primary-accent' : 'border-border',
-            !rule.enabled && 'dark:opacity-60'
+            !rule.enabled && 'dark:opacity-60',
+            highlightedRuleId === rule.id && 'outline-2 -outline-offset-2 outline-primary-accent'
           ]"
         >
           <header class="flex items-start gap-2.5">
@@ -315,6 +326,7 @@
             <p class="m-0 min-w-0 flex-1 truncate text-[14px] font-semibold text-foreground">
               {{ rule.name }}
             </p>
+            <span v-if="highlightedRuleId === rule.id" class="shrink-0 text-[11px] text-primary-accent">已定位</span>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -670,7 +682,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { load as loadYaml } from 'js-yaml'
 import { Motion } from 'motion-v'
 import {
@@ -919,6 +932,11 @@ function notifyAdded(added: number, skipped: number, warnings: string[], pinned:
   notifyRuleSaved(title, { agents: referenceEngine.value?.agents, scopes: ['library'], pinned, extra: warnings, warn: cancelled > 0 })
 }
 
+const route = useRoute()
+const libraryPage = ref<HTMLElement | null>(null)
+const libraryLoaded = ref(false)
+const linkedRuleId = computed(() => typeof route?.query.rule === 'string' ? route.query.rule : '')
+const highlightedRuleId = ref('')
 const ruleLibrary = ref<RuleLibraryItem[]>([])
 const dialogVisible = ref(false)
 const batchImportDialogVisible = ref(false)
@@ -1059,6 +1077,7 @@ const loadRuleLibrary = async () => {
   try {
     const { data } = await api.get('/rule-library')
     ruleLibrary.value = data
+    libraryLoaded.value = true
     const existingIds = new Set(ruleLibrary.value.map(rule => rule.id))
     for (const id of Object.keys(cacheFailures.value)) {
       if (!existingIds.has(id)) delete cacheFailures.value[id]
@@ -1604,6 +1623,36 @@ const reorder = useReorder<any>({
     })
   }
 })
+
+// 链接按共享来源 ID 定位；首次请求失败时只显示加载错误，不误报条目已删除。
+let reportedMissingRuleId = ''
+watch([linkedRuleId, libraryLoaded, effectiveView], async ([id, loaded], _previous, onCleanup) => {
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  highlightedRuleId.value = ''
+  if (!id) {
+    reportedMissingRuleId = ''
+    return
+  }
+  if (!loaded) return
+  if (!ruleLibrary.value.some(rule => rule.id === id)) {
+    if (reportedMissingRuleId !== id) notify.warning('未找到对应的规则集，可能已被删除')
+    reportedMissingRuleId = id
+    return
+  }
+  reportedMissingRuleId = ''
+  if (!visibleRules.value.some(rule => rule.id === id)) {
+    keyword.value = ''
+    behaviorFilter.value = 'all'
+  }
+  highlightedRuleId.value = id
+  await nextTick()
+  if (cancelled) return
+  const target = Array.from(libraryPage.value?.querySelectorAll<HTMLElement>('[data-library-rule-id]') || [])
+    .find(element => element.dataset.libraryRuleId === id)
+  target?.focus({ preventScroll: true })
+  target?.scrollIntoView?.({ block: 'center', behavior: 'auto' })
+}, { immediate: true })
 
 const handleSaveOrder = async () => {
   try {

@@ -297,11 +297,27 @@
                 >
                   {{ item.name }}
                 </span>
+                <Button
+                  v-if="item.library_rule_id && !reorder.active.value"
+                  as-child
+                  variant="ghost"
+                  size="icon-xs"
+                  class="cf-reorder-mute text-muted-foreground hover:text-primary-accent"
+                >
+                  <RouterLink
+                    :to="{ path: '/rule-library', query: { rule: item.library_rule_id } }"
+                    :title="`在规则库中查看 ${item.name}`"
+                    :aria-label="`在规则库中查看 ${item.name}`"
+                    @click.stop
+                  >
+                    <FolderOpen class="size-3.5" aria-hidden="true" />
+                  </RouterLink>
+                </Button>
                 <FolderOpen
-                  v-if="item.library_rule_id"
+                  v-else-if="item.library_rule_id"
                   class="size-3.5 shrink-0 text-muted-foreground"
-                  title="来自规则仓库"
-                  aria-label="来自规则仓库"
+                  title="排序时无法跳转规则库"
+                  aria-label="排序时无法跳转规则库"
                 />
               </template>
             </div>
@@ -506,10 +522,27 @@
                 :title="`类型: ${item.behavior}\nURL: ${item.url}`"
               >
                 {{ item.name }}
+                <Button
+                  v-if="item.library_rule_id && !reorder.active.value"
+                  as-child
+                  variant="ghost"
+                  size="icon-xs"
+                  class="cf-reorder-mute text-muted-foreground hover:text-primary-accent"
+                >
+                  <RouterLink
+                    :to="{ path: '/rule-library', query: { rule: item.library_rule_id } }"
+                    :title="`在规则库中查看 ${item.name}`"
+                    :aria-label="`在规则库中查看 ${item.name}`"
+                    @click.stop
+                  >
+                    <FolderOpen class="size-3.5" aria-hidden="true" />
+                  </RouterLink>
+                </Button>
                 <FolderOpen
-                  v-if="item.library_rule_id"
+                  v-else-if="item.library_rule_id"
                   class="size-3.5 shrink-0 text-muted-foreground"
-                  aria-label="来自规则仓库"
+                  title="排序时无法跳转规则库"
+                  aria-label="排序时无法跳转规则库"
                 />
               </p>
             </template>
