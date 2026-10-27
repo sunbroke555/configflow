@@ -97,10 +97,13 @@ func configureProxyDNS(addresses []string) error {
 	if err != nil {
 		return err
 	}
+	// Standalone workers do not load Mihomo's global config. Its resolver
+	// defaults to IPv4-only, which also rejects literal IPv6 endpoints.
+	resolver.DisableIPv6 = false
 	base := resolver.SystemResolver
 	if len(servers) != 0 {
 		// Nameserver addresses are literal IPv4 addresses, so this needs no
-		// bootstrap DNS and does not change the worker's existing IPv6 policy.
+		// bootstrap DNS; they can still return AAAA answers for IPv6 endpoints.
 		// Core DNS also retries truncated UDP replies over TCP.
 		base = coreDNS.NewResolver(coreDNS.Config{Main: servers, IPv6: true}).Resolver
 	}
