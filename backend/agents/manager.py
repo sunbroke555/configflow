@@ -151,6 +151,7 @@ class AgentManager:
         return saved
 
     def _update_agents(self, updater, profile_id=None):
+        from backend.common.config_repository import ProfileInUse
         result = {}
 
         def update(system):
@@ -158,7 +159,10 @@ class AgentManager:
                 self.repository._profile_metadata(profile_id)
             result['value'] = updater(system.setdefault('agents', []))
 
-        self.repository.update_system_transaction(update)
+        try:
+            self.repository.update_system_transaction(update)
+        except ProfileInUse as error:
+            raise AgentDeploymentConflict(str(error)) from None
         return result.get('value')
 
     def register_agent(
@@ -237,7 +241,7 @@ class AgentManager:
                     'domain_discovery_enabled': existing_agent.get('domain_discovery_enabled', False),
                 }
                 for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job', 'rule_sync',
-                              'oxidns_ha', 'oxidns_ha_state', 'oxidns_ha_publication'):
+                              'oxidns_ha', 'oxidns_ha_state', 'oxidns_ha_publication', 'node_test_dns_endpoints'):
                     if field in existing_agent:
                         updated_agent[field] = deepcopy(existing_agent[field])
                 if existing_agent.get('gateway_installation_id'):
@@ -476,6 +480,10 @@ class AgentManager:
             agent = next((item for item in agents if item['id'] == agent_id), None)
             if agent is None:
                 return {'success': False, 'message': 'Agent not found', 'http_status': 404}
+            from .node_test_dns import deployment_conflict
+            if deployment_conflict(agent, deployment_id):
+                return {'success': False, 'message': '托管测速 DNS 正在发布或检查，请等待完成后再发布其他配置',
+                        'http_status': 409}
             from .oxidns_ha_publish import conflict
             pair_conflict = conflict(agent, deployment_id)
             if pair_conflict:
