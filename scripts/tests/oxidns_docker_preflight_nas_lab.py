@@ -182,7 +182,17 @@ def export():
         if isinstance(value, dict): return {k: clean(v) for k, v in value.items() if k != 'host_fingerprint'}
         if isinstance(value, list): return [clean(v) for v in value]
         return value
-    report = clean(report); report.update(raw_samples_exported=False, fingerprints_exported=False)
+    report = clean(report)
+    for sample in report['samples']:
+        sample['reports'] = {mode: {
+            'status': value['status'],
+            'check_count': len(value['checks']),
+            'selected_checks': {item['id']: item['status'] for item in value['checks']
+                                if item['id'] in ('docker_daemon', 'compose', 'udp53', 'tcp53')},
+        } for mode, value in sample['reports'].items()}
+    report.update(raw_samples_exported=False, fingerprints_exported=False,
+                  awk_implementation=str(Path(shutil.which('awk')).resolve()),
+                  busybox_available=shutil.which('busybox') is not None)
     write(ROOT / 'public-report.json', report)
 
 
