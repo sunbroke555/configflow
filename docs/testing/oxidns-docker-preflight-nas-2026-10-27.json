@@ -1,0 +1,280 @@
+{
+  "module_sha256": "bbeaeea6673c26e10aa082e5e72d9712d312fafe30b6eb10c01cd39c438d644c",
+  "collector_script_sha256": "df15bc95103e1089e0f3e32683a8fc33747b6815394d4949d1c99354b6af9933",
+  "baseline": {
+    "docker": "inactive",
+    "docker_socket": "inactive",
+    "udp53": [
+      "UNCONN 0      0         127.0.0.54:53 0.0.0.0:*",
+      "UNCONN 0      0      127.0.0.53%lo:53 0.0.0.0:*"
+    ],
+    "tcp53": [
+      "LISTEN 0      4096      127.0.0.54:53 0.0.0.0:*",
+      "LISTEN 0      4096   127.0.0.53%lo:53 0.0.0.0:*"
+    ]
+  },
+  "after_capture": {
+    "docker": "inactive",
+    "docker_socket": "inactive",
+    "udp53": [
+      "UNCONN 0      0         127.0.0.54:53 0.0.0.0:*",
+      "UNCONN 0      0      127.0.0.53%lo:53 0.0.0.0:*"
+    ],
+    "tcp53": [
+      "LISTEN 0      4096      127.0.0.54:53 0.0.0.0:*",
+      "LISTEN 0      4096   127.0.0.53%lo:53 0.0.0.0:*"
+    ]
+  },
+  "comparison": {
+    "udp": {
+      "same_bound_addresses": true,
+      "ss_count": 2,
+      "proc_count": 2
+    },
+    "tcp": {
+      "same_bound_addresses": true,
+      "ss_count": 2,
+      "proc_count": 2
+    }
+  },
+  "daemon_started": false,
+  "pve_modified": false,
+  "actual_nas_contacted": false,
+  "samples": [
+    {
+      "name": "real-ss",
+      "origin": "Real Arch Linux .32, normal ss, default Docker inactive",
+      "sha256": "085b5b09acaa28aafea5432c11644ac544aa9ea91541aaf501b90dd2bd83f827",
+      "reports": {
+        "host": {
+          "status": "fail",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "fail",
+            "compose": "pass",
+            "udp53": "fail",
+            "tcp53": "fail"
+          }
+        },
+        "macvlan": {
+          "status": "fail",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "fail",
+            "compose": "pass",
+            "udp53": "pass",
+            "tcp53": "pass"
+          }
+        }
+      }
+    },
+    {
+      "name": "real-proc",
+      "origin": "Same real Linux /proc tables; PATH fixture removes ss only",
+      "sha256": "17db49ea87371dd3a4c112dcea94805d75a7ab715a934853b13ac8804d819043",
+      "reports": {
+        "host": {
+          "status": "fail",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "fail",
+            "compose": "pass",
+            "udp53": "fail",
+            "tcp53": "fail"
+          }
+        },
+        "macvlan": {
+          "status": "fail",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "fail",
+            "compose": "pass",
+            "udp53": "pass",
+            "tcp53": "pass"
+          }
+        }
+      }
+    },
+    {
+      "name": "nas-redacted",
+      "origin": "User sample redacted reconstruction: decoded fields retained, fingerprint replaced, horizontal whitespace reflowed; not original bytes or a NAS connection",
+      "sha256": "44e4f015e50d14780d828a5172d5384048d8b4b4cb18ba1b8e6416d56de57893",
+      "reports": {
+        "host": {
+          "status": "unknown",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "pass",
+            "compose": "warning",
+            "udp53": "unknown",
+            "tcp53": "unknown"
+          }
+        },
+        "macvlan": {
+          "status": "warning",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "pass",
+            "compose": "warning",
+            "udp53": "pass",
+            "tcp53": "pass"
+          }
+        }
+      }
+    },
+    {
+      "name": "nas-markdown",
+      "origin": "Same user-derived redacted reconstruction with Markdown trailing line escapes; not a NAS connection",
+      "sha256": "44868997d6d6440c276529ff3dd7972a0c2e90110366630cabd70cdad791b2ae",
+      "reports": {
+        "host": {
+          "status": "unknown",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "pass",
+            "compose": "warning",
+            "udp53": "unknown",
+            "tcp53": "unknown"
+          }
+        },
+        "macvlan": {
+          "status": "warning",
+          "check_count": 12,
+          "selected_checks": {
+            "docker_daemon": "pass",
+            "compose": "warning",
+            "udp53": "pass",
+            "tcp53": "pass"
+          }
+        }
+      }
+    }
+  ],
+  "api": {
+    "authenticated_real_api": true,
+    "mocked_responses": false,
+    "cases": [
+      {
+        "sample": "real-ss",
+        "mode": "host",
+        "http": 200,
+        "status": "fail",
+        "checks": 12
+      },
+      {
+        "sample": "real-ss",
+        "mode": "macvlan",
+        "http": 200,
+        "status": "fail",
+        "checks": 12
+      },
+      {
+        "sample": "real-proc",
+        "mode": "host",
+        "http": 200,
+        "status": "fail",
+        "checks": 12
+      },
+      {
+        "sample": "real-proc",
+        "mode": "macvlan",
+        "http": 200,
+        "status": "fail",
+        "checks": 12
+      },
+      {
+        "sample": "nas-redacted",
+        "mode": "host",
+        "http": 200,
+        "status": "unknown",
+        "checks": 12
+      },
+      {
+        "sample": "nas-redacted",
+        "mode": "macvlan",
+        "http": 200,
+        "status": "warning",
+        "checks": 12
+      },
+      {
+        "sample": "nas-markdown",
+        "mode": "host",
+        "http": 200,
+        "status": "unknown",
+        "checks": 12
+      },
+      {
+        "sample": "nas-markdown",
+        "mode": "macvlan",
+        "http": 200,
+        "status": "warning",
+        "checks": 12
+      }
+    ]
+  },
+  "browser": {
+    "authenticatedPreview": "http://192.168.0.32:15810",
+    "mockedResponses": false,
+    "rawTextareaMasked": true,
+    "provenance": "User sample reconstructed after replacing machine fingerprint and reformatting horizontal whitespace; Markdown variant adds trailing line escapes. Not an actual NAS test.",
+    "scenarios": [
+      {
+        "width": 1440,
+        "theme": "light",
+        "fixture": "nas-redacted",
+        "checks": [
+          {
+            "mode": "host",
+            "http": 200,
+            "status": "unknown",
+            "checkCount": 12
+          },
+          {
+            "mode": "macvlan",
+            "http": 200,
+            "status": "warning",
+            "checkCount": 12
+          }
+        ],
+        "metrics": {
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        "screenshot": "desktop-nas-itemized.png"
+      },
+      {
+        "width": 375,
+        "theme": "dark",
+        "fixture": "nas-markdown",
+        "checks": [
+          {
+            "mode": "host",
+            "http": 200,
+            "status": "unknown",
+            "checkCount": 12
+          },
+          {
+            "mode": "macvlan",
+            "http": 200,
+            "status": "warning",
+            "checkCount": 12
+          }
+        ],
+        "metrics": {
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        "screenshot": "mobile-nas-markdown.png"
+      }
+    ],
+    "pageErrors": []
+  },
+  "raw_samples_exported": false,
+  "fingerprints_exported": false,
+  "awk_implementation": "/usr/bin/gawk",
+  "busybox_available": false
+}

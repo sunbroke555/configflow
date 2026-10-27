@@ -1,0 +1,23 @@
+{
+  "default_docker_and_dns_unchanged": true,
+  "after": {
+    "docker": "inactive",
+    "docker_socket": "inactive",
+    "udp53": [
+      "UNCONN 0      0         127.0.0.54:53 0.0.0.0:*",
+      "UNCONN 0      0      127.0.0.53%lo:53 0.0.0.0:*"
+    ],
+    "tcp53": [
+      "LISTEN 0      4096      127.0.0.54:53 0.0.0.0:*",
+      "LISTEN 0      4096   127.0.0.53%lo:53 0.0.0.0:*"
+    ]
+  },
+  "previews_http": {
+    "15800": 200,
+    "15810": 200
+  },
+  "pve_modified": false,
+  "daemon_started": false,
+  "preview_credentials_preserved": true,
+  "private_lab_and_raw_samples_removed": true
+}

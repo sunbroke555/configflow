@@ -79,6 +79,18 @@ describe('Docker HA installation guide', () => {
     expect(wrapper.text()).not.toContain('安装完成')
   })
 
+  it('limits host port-conflict guidance to Host mode and explains macvlan isolation', async () => {
+    const wrapper = render()
+    expect(wrapper.get('[data-docker-ha-port-note]').text()).toContain('Host 使用宿主机网络')
+    expect(wrapper.get('[data-docker-ha-port-note]').text()).toContain('默认配置需要 TCP / UDP 53')
+    await radio(wrapper, 'Docker HA 网络模式', 'macvlan')
+    expect(wrapper.get('[data-docker-ha-port-note]').text()).toContain('宿主机 TCP / UDP 53 的占用不直接阻断')
+    expect(wrapper.get('[data-docker-ha-port-note]').text()).toContain('容器地址与 VIP 未被其他设备使用')
+    expect(wrapper.get('[data-docker-ha-port-note]').text()).not.toContain('已有监听需先核对并处理')
+    await radio(wrapper, 'Docker HA 网络模式', 'host')
+    expect(wrapper.get('[data-docker-ha-port-note]').text()).not.toContain('占用不直接阻断')
+  })
+
   it('keeps optional preflight inputs and results when leaving and returning to the preparation step', async () => {
     const wrapper = render()
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValueOnce({ data: { success: true, preflight_report: { status: 'fail', summary: 'Docker 尚未启动', checks: [

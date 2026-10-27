@@ -303,3 +303,146 @@ def test_ipv4_report_cleans_control_and_markup_and_limits_interface_name():
     assert '<' not in detail and '>' not in detail and '\x1b' not in detail
     assert 'x' * 49 not in detail
     assert '名称已截短或清理' in detail and ' · 192.168.10.20/24' in detail
+
+
+@pytest.mark.parametrize('markdown', [False, True])
+def test_synology_sanitized_reconstructed_copy_preserves_actionable_checks(markdown):
+    # Reconstructed from the reported fields; not a byte-for-byte user transcript.
+    # The original machine fingerprint is replaced by a fixed synthetic value.
+    output = (Path(__file__).parent / 'testdata/docker_ha_preflight_synology_reconstructed.txt').read_text()
+    if markdown:
+        output = '\n'.join(line + '\\' for line in output.splitlines()) + '\n'
+    report = check.parse_report(output)
+    assert report['status'] == 'unknown'
+    assert item(report, 'udp53')['status'] == item(report, 'tcp53')['status'] == 'unknown'
+    assert item(report, 'compose')['status'] == 'warning'
+    assert item(report, 'docker_daemon')['status'] == 'pass'
+    assert 'ovs_eth0 · 192.168.0.105/24' in item(report, 'ipv4')['detail']
+    assert '12 个候选' in item(report, 'ipv4')['detail']
+    assert report['host_fingerprint'] == 'a' * 64
+    macvlan = check.parse_report(output, 'macvlan')
+    assert macvlan['status'] == 'warning'
+    assert item(macvlan, 'udp53')['status'] == item(macvlan, 'tcp53')['status'] == 'pass'
+    assert '尚未验证' in item(macvlan, 'udp53')['detail']
+
+
+@pytest.mark.parametrize('separator', [' ', '   ', '\t ', ' \t'])
+def test_explicit_empty_sentinel_survives_horizontal_whitespace_copy(separator):
+    output = block().replace('\t0\t\n', '\t0\t-\n').replace('\t', separator)
+    assert check.parse_report(output)['status'] == 'pass'
+    output = output.replace('CFHA1' + separator + 'udp53' + separator + '0' + separator + '-',
+                            'CFHA1' + separator + 'udp53' + separator + '127')
+    assert item(check.parse_report(output), 'udp53')['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('row', [
+    'CFHA1 udp53 0', 'CFHA1 udp53 0   ', 'CFHA1\tudp53\t0',
+    'CFHA1\u00a0udp53\u00a00\u00a0-', 'CFHA1 udp53 0 --',
+    'CFHA1 udp53 0 -\\\\', 'CFHA1 udp53 0 \\',
+    'CFHA1 udp53 0 c291\\\ncmNl', 'CFHA1 udp53 0 !!!!\\',
+])
+def test_copy_normalization_never_repairs_ambiguous_or_invalid_success(row):
+    output = block().replace('CFHA1\tudp53\t0\t', row)
+    assert check.parse_report(output)['status'] == 'unknown'
+    assert check.parse_report(output, 'macvlan')['status'] == 'unknown'
+
+
+def test_copy_normalization_still_rejects_duplicate_and_unknown_fields():
+    output = block().replace('\t0\t\n', '\t0\t-\n').replace('\t', '  ')
+    for changed in (output.replace('tcp53', 'udp53'), output.replace('tcp53', 'unexpected')):
+        assert check.parse_report(changed)['status'] == 'unknown'
+    assert check.parse_report(output + 'CFHA1 udp53 127\n')['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('proto,rows,busy', [
+    ('udp', '', False), ('tcp', '', False),
+    ('udp', 'udp 4 0100007F:0035 07\n', True),
+    ('udp', 'udp 6 00000000000000000000000000000000:0035 01\n', True),
+    ('tcp', 'tcp 4 00000000:0035 0A\n', True),
+])
+def test_explicit_proc_source_records_occupied_and_empty_tables(proto, rows, busy):
+    payload = f'source=proc-net-v1\ntables={proto},{proto}6\n' + rows
+    report = check.parse_report(block(evidence(**{proto + '53': (0, payload)})))
+    result = item(report, proto + '53')
+    assert result['status'] == ('fail' if busy else 'pass')
+    assert '/proc/net' in result['detail']
+    assert item(check.parse_report(block(evidence(**{proto + '53': (0, payload)})), 'macvlan'), proto + '53')['status'] == 'pass'
+
+
+@pytest.mark.parametrize('payload', [
+    'source=proc-net-v1', 'source=proc-net-v1\ntables=udp',
+    'source=proc-net-v1\ntables=tcp,tcp6',
+    'source=proc-net-v1\ntables=udp,udp6\nudp 4 00000000:0035 FF',
+    'source=proc-net-v1\ntables=udp,udp6\nudp 6 00000000:0035 07',
+    'source=proc-net-v1\ntables=udp,udp6\nudp 4 00000000:0036 07',
+    'source=unknown',
+])
+def test_malformed_proc_evidence_never_implies_host_port_is_free(payload):
+    report = check.parse_report(block(evidence(udp53=(0, payload))))
+    assert item(report, 'udp53')['status'] == 'unknown'
+
+
+PROC_HEADER = 'sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n'
+
+
+def proc_row(family=4, state='07', port='0035'):
+    address = '0100007F' if family == 4 else '0' * 32
+    return f'0: {address}:{port} {"0" * len(address)}:0000 {state} 00000000:00000000 00:00000000 00000000 0 0 123 1 00000000\n'
+
+
+def proc_collector(tmp_path, tables):
+    env = collector_env(tmp_path)
+    command(tmp_path, 'ss', '#!/bin/sh\nexit 127\n')
+    proc = tmp_path / 'proc-net'
+    proc.mkdir()
+    for name, contents in tables.items():
+        (proc / name).write_text(contents)
+    source = check.collector_script().replace('/proc/net/', str(proc) + '/')
+    result = subprocess.run(['bash'], input=source, text=True, capture_output=True, env=env)
+    assert result.returncode == 0, result.stderr
+    values, error = check._decode(result.stdout)
+    assert error is None
+    return values, check.parse_report(result.stdout)
+
+
+def test_collector_proc_fallback_accepts_valid_dual_tables_and_conservative_udp_bindings(tmp_path):
+    values, report = proc_collector(tmp_path, {
+        'tcp': PROC_HEADER + proc_row(state='01'),  # Established TCP is not a listener.
+        'tcp6': PROC_HEADER,
+        'udp': PROC_HEADER + proc_row(state='01'),  # Connected UDP still owns its local port.
+        'udp6': PROC_HEADER + proc_row(6, state='07'),
+    })
+    assert values['tcp53'] == (0, 'source=proc-net-v1\ntables=tcp,tcp6')
+    assert item(report, 'tcp53')['status'] == 'pass'
+    assert item(report, 'udp53')['status'] == 'fail'
+    assert '2 项' in item(report, 'udp53')['detail']
+    assert values['udp53'][1].startswith('source=proc-net-v1\ntables=udp,udp6\n')
+
+
+@pytest.mark.parametrize('fault', ['missing-v6', 'empty-v6', 'bad-header', 'bad-row', 'bad-state', 'bad-address'])
+def test_collector_proc_fallback_requires_every_table_and_valid_nonmatching_rows(tmp_path, fault):
+    tables = {name: PROC_HEADER for name in ('udp', 'udp6', 'tcp', 'tcp6')}
+    if fault == 'missing-v6':
+        del tables['udp6']
+    elif fault == 'empty-v6':
+        tables['udp6'] = ''
+    elif fault == 'bad-header':
+        tables['udp6'] = 'unrecognized table\n'
+    elif fault == 'bad-row':
+        tables['udp'] += 'not a proc socket row\n'
+    elif fault == 'bad-state':
+        tables['udp'] += proc_row(state='FF', port='1234')
+    else:
+        tables['udp'] += proc_row(port='1234').replace('0100007F', 'invalid')
+    values, report = proc_collector(tmp_path, tables)
+    assert values['udp53'][0] != 0
+    assert item(report, 'udp53')['status'] == 'unknown'
+    assert item(report, 'tcp53')['status'] == 'pass'
+
+
+def test_collector_serializes_empty_failed_fields_with_explicit_sentinel(tmp_path):
+    env = collector_env(tmp_path)
+    command(tmp_path, 'ip', '#!/bin/sh\nexit 127\n')
+    result = subprocess.run(['bash'], input=check.collector_script(), text=True, capture_output=True, env=env)
+    assert 'CFHA1\tipv4\t127\t-\n' in result.stdout
+    assert item(check.parse_report(result.stdout), 'ipv4')['status'] == 'unknown'

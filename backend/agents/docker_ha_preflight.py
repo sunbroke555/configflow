@@ -32,6 +32,7 @@ cf_emit() {
   if [ "${#cf_value}" -gt 16384 ]; then cf_value=OUTPUT_TRUNCATED; cf_rc=125; fi
   cf_encoded=$(set -o pipefail; printf '%s' "$cf_value" | base64 | tr -d '\r\n')
   if [ $? -ne 0 ]; then printf '%s\n' '采集编码失败，请重新运行检查命令。'; return 1; fi
+  [ -n "$cf_encoded" ] || cf_encoded='-'
   printf 'CFHA1\t%s\t%s\t%s\n' "$cf_key" "$cf_rc" "$cf_encoded"
 }
 cf_docker() {
@@ -73,6 +74,46 @@ cf_nesting() {
     if grep -Eq '(docker|lxc|kubepods|containerd)' /proc/1/cgroup; then printf '%s' container; else printf '%s' none; fi
   else return 1; fi
 }
+cf_ports() {
+  local cf_protocol=$1 cf_ss cf_rc cf_family cf_file cf_rows='' cf_table
+  if command -v ss >/dev/null 2>&1; then
+    if [ "$cf_protocol" = tcp ]; then cf_ss=$(ss -H -ltn 'sport = :53' 2>/dev/null)
+    else cf_ss=$(ss -H -lun 'sport = :53' 2>/dev/null); fi
+    cf_rc=$?
+    if [ "$cf_rc" = 0 ]; then printf 'source=ss\n%s' "$cf_ss"; return 0; fi
+  fi
+  command -v awk >/dev/null 2>&1 || return 127
+  for cf_family in 4 6; do
+    cf_file="/proc/net/$cf_protocol"
+    [ "$cf_family" = 4 ] || cf_file="${cf_file}6"
+    [ -r "$cf_file" ] || return 1
+    cf_table=$(awk -v family="$cf_family" -v protocol="$cf_protocol" '
+      function hex(value,width) { return length(value)==width && value !~ /[^0-9A-Fa-f]/ }
+      function pair(value,left,right,parts) { return split(value,parts,":")==2 && hex(parts[1],left) && hex(parts[2],right) }
+      NR==1 {
+        if (NF<12 || $1!="sl" || $2!="local_address" || ($3!="rem_address" && $3!="remote_address") || $4!="st" ||
+            $5!="tx_queue" || $6!="rx_queue" || $7!="tr" || $8!="tm->when" || $9!="retrnsmt" ||
+            $10!="uid" || $11!="timeout" || $12!="inode" ||
+            (NF!=12 && !(NF==15 && $13=="ref" && $14=="pointer" && $15=="drops"))) { bad=1; exit 2 }
+        header=1; next
+      }
+      {
+        width=(family==4 ? 8 : 32)
+        state=toupper($4)
+        if (NF<10 || NF>24 || $1 !~ /^[0-9]+:$/ || !pair($2,width,4) || !pair($3,width,4) || !hex($4,2) ||
+            !pair($5,8,8) || !pair($6,2,8) || !hex($7,8) || $8 !~ /^[0-9]+$/ || $9 !~ /^[0-9]+$/ || $10 !~ /^[0-9]+$/ ||
+            (protocol=="tcp" && state !~ /^(01|02|03|04|05|06|07|08|09|0A|0B|0C)$/) ||
+            (protocol=="udp" && state !~ /^(01|07)$/)) { bad=1; exit 2 }
+        split($2,local,":")
+        if (toupper(local[2])=="0035" && (protocol=="udp" || state=="0A")) print protocol " " family " " toupper($2) " " state
+      }
+      END { if (!header || bad) exit 2 }
+    ' "$cf_file") || return 2
+    if [ -n "$cf_table" ]; then cf_rows="${cf_rows}${cf_table}
+"; fi
+  done
+  printf 'source=proc-net-v1\ntables=%s,%s6\n%s' "$cf_protocol" "$cf_protocol" "$cf_rows"
+}
 cf_fingerprint() {
   local cf_file cf_identity cf_hash
   command -v sha256sum >/dev/null 2>&1 || return 127
@@ -97,8 +138,8 @@ cf_emit daemon_platform cf_local_docker info --format '{"os":{{json .OperatingSy
 cf_emit daemon_security cf_local_docker info --format '{{json .SecurityOptions}}'
 cf_emit compose cf_docker compose version --short
 cf_emit ipv4 ip -o -4 address show
-cf_emit udp53 ss -H -lun 'sport = :53'
-cf_emit tcp53 ss -H -ltn 'sport = :53'
+cf_emit udp53 cf_ports udp
+cf_emit tcp53 cf_ports tcp
 cf_emit nesting cf_nesting
 cf_emit machine_fingerprint cf_fingerprint
 printf '%s\n' 'CONFIGFLOW_DOCKER_HA_PREFLIGHT_V1_END'
@@ -119,6 +160,33 @@ def _unknown(reason):
                               '重新运行当前页面的检查命令，粘贴包含 V1_BEGIN 到 V1_END 的完整输出。')]}
 
 
+def _protocol_row(line):
+    line = line.lstrip(' \t')
+    match = re.fullmatch(r'CFHA1[ \t]+([a-z0-9_]+)[ \t]+(0|[1-9][0-9]{0,2})([ \t].*)?', line)
+    if not match or int(match[2]) > 255:
+        return None
+    key, code = match[1], int(match[2])
+    payload = (match[3] or '').strip(' \t')
+    if not payload and code == 0 and line != f'CFHA1\t{key}\t0\t':
+        # A collapsed three-column success cannot prove that its payload was empty.
+        return None
+    if payload != '-' and not re.fullmatch(r'[A-Za-z0-9+/]*={0,2}', payload):
+        return None
+    return key, code, payload
+
+
+def _markdown_protocol_line(line):
+    stripped = line.rstrip(' \t')
+    if stripped.endswith('\\'):
+        candidate = stripped[:-1]
+        marker = candidate.strip(' \t')
+        if marker in (BEGIN, END):
+            return marker
+        if _protocol_row(candidate) is not None:
+            return candidate
+    return line
+
+
 def _decode(output):
     if not isinstance(output, str):
         raise ValueError('output 须为检查命令的文本输出')
@@ -128,7 +196,7 @@ def _decode(output):
         raise ValueError('检查输出包含无效文本编码') from None
     if size > MAX_OUTPUT_BYTES:
         raise ValueError('检查输出超过 96 KiB，请只粘贴本次检查结果')
-    lines = output.replace('\r\n', '\n').splitlines()
+    lines = [_markdown_protocol_line(line) for line in output.replace('\r\n', '\n').splitlines()]
     starts = [i for i, line in enumerate(lines) if line.strip() == BEGIN]
     ends = [i for i, line in enumerate(lines) if line.strip() == END]
     if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
@@ -137,16 +205,16 @@ def _decode(output):
     for i, line in enumerate(lines):
         if i not in (start, end) and line.startswith('CONFIGFLOW_DOCKER_HA_PREFLIGHT_'):
             return None, '输出混有其他版本或重复的采集标记。'
-        if not start < i < end and line.startswith('CFHA1\t'):
+        if not start < i < end and re.match(r'^[ \t]*CFHA1(?:[ \t]|$)', line):
             return None, '完整块之外还有采集字段，请只保留本次完整输出。'
     values = {}
     for line in lines[start + 1:end]:
-        parts = line.split('\t')
-        if (len(parts) != 4 or parts[0] != 'CFHA1' or parts[1] not in FIELDS or parts[1] in values
-                or not re.fullmatch(r'0|[1-9][0-9]{0,2}', parts[2]) or int(parts[2]) > 255):
+        row = _protocol_row(line)
+        if row is None or row[0] not in FIELDS or row[0] in values:
             return None, '采集字段重复、缺损或格式不受支持。'
+        key, code, payload = row
         try:
-            decoded = base64.b64decode(parts[3], validate=True)
+            decoded = b'' if payload == '-' else base64.b64decode(payload, validate=True)
             if len(decoded) > MAX_FIELD_BYTES:
                 return None, '单项输出过大，无法确认采集结果完整。'
             text = decoded.decode('utf-8')
@@ -154,7 +222,7 @@ def _decode(output):
                 return None, '采集字段包含无效二进制内容。'
         except (ValueError, binascii.Error, UnicodeError):
             return None, '采集字段编码无效，请重新采集。'
-        values[parts[1]] = (int(parts[2]), text)
+        values[key] = (code, text)
     if set(values) != set(FIELDS):
         return None, '缺少必需检查项，不能把缺失结果视为通过。'
     return values, None
@@ -175,22 +243,42 @@ def _port_check(values, proto, mode):
     ident = proto.lower() + '53'
     code, text = values[ident]
     label = '宿主机 ' + proto + ' 53 端口'
+    if mode == 'macvlan':
+        return _check(ident, label, 'pass', 'Macvlan 不要求宿主机 53 端口空闲，此项不是安装前置条件；未读取或已有监听均不阻断。容器独立地址和 VIP 的可用性尚未验证。',
+                      '安装后检查容器的 DNS 监听，并从实际局域网设备验证容器地址与 VIP。')
     if code:
-        return _check(ident, label, 'unknown', '未能读取监听状态，不能视为端口空闲。', '确认 ss 可用及当前用户可读取套接字，再重新采集。')
-    lines = [line for line in text.splitlines() if line.strip()]
-    for line in lines:
-        columns = line.split()
-        if columns and columns[0] in ('udp', 'tcp'):
-            columns = columns[1:]
-        if (len(columns) != 5 or columns[0] not in (('UNCONN',) if proto == 'UDP' else ('LISTEN',))
-                or not columns[1].isdigit() or not columns[2].isdigit() or not columns[3].endswith(':53')):
-            return _check(ident, label, 'unknown', '无法识别 ss 的监听输出，尚未确认端口状态。', '重新运行页面提供的命令，不要手工改写检查项。')
+        return _check(ident, label, 'unknown', '未能读取当前网络命名空间的监听状态，不能视为端口空闲。',
+                      '重新运行新版只读命令；它会先使用 ss，再尝试 /proc/net。若均不可读，请在实际 Docker 宿主机检查，勿直接停止服务。')
+    lines = text.splitlines()
+    source = 'ss'
+    if lines and lines[0].startswith('source='):
+        source = lines.pop(0).removeprefix('source=')
+    if source == 'proc-net-v1':
+        expected = proto.lower()
+        if not lines or lines.pop(0) != f'tables={expected},{expected}6':
+            return _check(ident, label, 'unknown', '/proc/net 未确认 IPv4/IPv6 两张表均完整读取，不能视为端口空闲。')
+        for line in lines:
+            columns = line.split(' ')
+            if (len(columns) != 4 or columns[0] != expected or columns[1] not in ('4', '6')
+                    or not re.fullmatch(r'[0-9A-F]{' + ('8' if columns[1] == '4' else '32') + r'}:0035', columns[2])
+                    or columns[3] not in (('0A',) if proto == 'TCP' else ('01', '07'))):
+                return _check(ident, label, 'unknown', '/proc/net 端口记录格式无效，不能视为端口空闲。')
+    elif source == 'ss':
+        lines = [line for line in lines if line.strip()]
+        for line in lines:
+            columns = line.split()
+            if columns and columns[0] in ('udp', 'tcp'):
+                columns = columns[1:]
+            if (len(columns) != 5 or columns[0] not in (('UNCONN',) if proto == 'UDP' else ('LISTEN',))
+                    or not columns[1].isdigit() or not columns[2].isdigit() or not columns[3].endswith(':53')):
+                return _check(ident, label, 'unknown', '无法识别 ss 的监听输出，尚未确认端口状态。', '重新运行页面提供的命令，不要手工改写检查项。')
+    else:
+        return _check(ident, label, 'unknown', '端口检查来源未知，不能视为端口空闲。')
+    source_label = '/proc/net' if source == 'proc-net-v1' else 'ss'
     if lines and mode == 'host':
-        return _check(ident, label, 'fail', '检测到 ' + str(len(lines)) + ' 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。',
+        return _check(ident, label, 'fail', '通过 ' + source_label + ' 检测到 ' + str(len(lines)) + ' 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。',
                       '核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。')
-    if lines:
-        return _check(ident, label, 'pass', '宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。')
-    return _check(ident, label, 'pass', '本次采集未发现 53 端口监听；不代表后续启动时端口一定仍空闲。')
+    return _check(ident, label, 'pass', '本次通过 ' + source_label + ' 未发现当前网络命名空间的 53 端口监听；不代表其他命名空间或后续启动时仍空闲。')
 
 
 def parse_report(output, network_mode='host'):
