@@ -1,0 +1,14 @@
+{
+  "default_services_unchanged": true,
+  "host_dns_unchanged": true,
+  "namespace_and_links_removed": true,
+  "dedicated_cgroup_removed": true,
+  "preview_http": {
+    "15800": 200,
+    "15810": 200
+  },
+  "temporary_units_stopped": true,
+  "pve_modified": false,
+  "preview_modified": false,
+  "private_data_credentials_image_cache_removed": true
+}
