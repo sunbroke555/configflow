@@ -335,7 +335,7 @@ def test():
         if node.get('subscription_id') == 'node-dns-lab-subscription' and node.get('name') == 'LAB subscription HTTP':
             api('DELETE', '/api/nodes/' + node['id'])
     report = {'time': datetime.now(timezone.utc).isoformat(), 'preview_url': 'http://192.168.0.32:15800',
-        'isolation': 'Test server only; real OxiDNS + Go Agent command process harness. Docker metadata only disables native migration. No Docker daemon, system units, production DNS or subscription credentials.',
+        'isolation': 'Test server only; real OxiDNS + Go Agent command process harness. Docker metadata only disables native migration. No Docker daemon or OxiDNS/Agent system units; the separate preview uses task-specific backend/web transient units. No existing services, production DNS or subscription credentials are used.',
         'oxidns_sha256': hashlib.sha256((ROOT / 'bin/oxidns').read_bytes()).hexdigest(), 'steps': []}
     def record(name, **evidence):
         report['steps'].append({'name': name, 'passed': True, **evidence})

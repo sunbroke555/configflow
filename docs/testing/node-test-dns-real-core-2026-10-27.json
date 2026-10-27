@@ -1,7 +1,7 @@
 {
   "time": "2026-10-27T08:26:47.031095+00:00",
   "preview_url": "http://192.168.0.32:15800",
-  "isolation": "Test server only; real OxiDNS + Go Agent command process harness. Docker metadata only disables native migration. No Docker daemon, system units, production DNS or subscription credentials.",
+  "isolation": "Test server only; real OxiDNS + Go Agent command process harness. Docker metadata only disables native migration. No Docker daemon or OxiDNS/Agent system units; the separate preview uses task-specific backend/web transient units. No existing services, production DNS or subscription credentials are used.",
   "oxidns_sha256": "f3b8eab909047570fd3b068df8f0ed1cae8b323e920941ae3345c801ba5604e6",
   "steps": [
     {

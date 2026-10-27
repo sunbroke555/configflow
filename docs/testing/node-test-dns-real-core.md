@@ -14,6 +14,10 @@ the marker in `~/previews/configflow-node-dns-lab`. Its PID records include the
 Linux process start time and command, so stop operations do not target reused
 PIDs. All configuration, transaction journals, backups and logs stay in that
 private directory. It never runs an installer, Docker daemon or systemctl.
+The separate preview backend/web server uses the task-specific transient units
+`cf-node-dns-preview-backend` and `cf-node-dns-preview-web`, running as
+`sunbroke`. No existing system service was modified and no OxiDNS/Agent unit was
+installed by this harness.
 
 The Go Agent uses its existing `command` service backend to start/stop a real
 OxiDNS process. `deployment_method=docker` is metadata used to skip native Agent
