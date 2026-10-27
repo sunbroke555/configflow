@@ -11,14 +11,19 @@ from backend.common.profile_context import resolve_profile_id
 from backend.routes import agents_bp
 
 
-def _body():
-    raw = request.stream.read(16385)
-    if len(raw) > 16384:
+def _body(*, allow_check=False):
+    limit = 128 * 1024 if allow_check else 16384
+    raw = request.stream.read(limit + 1)
+    if len(raw) > limit:
         raise enrollment.EnrollmentError('安装请求内容过大。', 413)
     try:
         value = json.loads(raw)
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
+        if len(raw) > 16384:
+            raise enrollment.EnrollmentError('安装请求内容过大。', 413) from None
         raise ValueError('安装请求需要 JSON 对象。') from None
+    if len(raw) > 16384 and (not allow_check or not isinstance(value, dict) or value.get('action') != 'check'):
+        raise enrollment.EnrollmentError('安装请求内容过大。', 413)
     if not isinstance(value, dict):
         raise ValueError('安装请求需要 JSON 对象。')
     return value
@@ -40,7 +45,7 @@ def _respond(callback):
 @require_auth
 def docker_oxidns_ha_guide():
     def generate():
-        body = _body()
+        body = _body(allow_check=True)
         result = generate_guide(body)
         if body.get('action', 'generate') == 'generate' and body.get('mode', 'new') == 'new':
             profile_id = resolve_profile_id(request.headers.get('X-ConfigFlow-Profile'))

@@ -78,9 +78,8 @@ def identity_command(path):
 
 
 def inspection_command(container_name=''):
-    command = (_header() + 'uname -s\ndocker version\ndocker info --format \'OS={{.OSType}} Security={{json .SecurityOptions}}\'\n'
-               + '(docker compose version || true)\n(command -v ip >/dev/null && ip -br address || true)\n'
-               + '(command -v ss >/dev/null && ss -lntup \'sport = :53\' || true)\n')
+    from .docker_ha_preflight import collector_script
+    command = collector_script()
     if container_name:
         container_name = _name(container_name, '原容器名')
         command += ('docker inspect --format \'Name={{.Name}} Image={{.Config.Image}} Network={{.HostConfig.NetworkMode}}\' ' + Q(container_name) + '\n'
@@ -379,6 +378,9 @@ def generate_guide(request, enrollment=None):
     if not isinstance(request, dict):
         raise ValueError('请提交 JSON 对象')
     action = request.get('action', 'generate')
+    if action == 'check':
+        from .docker_ha_preflight import parse_report
+        return {'success': True, 'preflight_report': parse_report(request.get('output'), request.get('network_mode', 'host'))}
     if action == 'inspect':
         return {'success': True, 'inspection_command': inspection_command(request.get('container_name', ''))}
     if action == 'verify':
