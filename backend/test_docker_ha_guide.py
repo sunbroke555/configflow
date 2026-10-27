@@ -150,6 +150,17 @@ def lookup(value):
     sys.exit(1)
 if args[0]=='info': print('linux' if '.OSType' in args[-1] else '[]')
 elif args[0]=='image': print('[]' if '.Config.' in ' '.join(args) else '{}')
+elif args[0]=='network':
+    if args[1]=='create':
+        state['network']={'name':args[-1], 'owner':args[args.index('--label')+1].split('=',1)[1],
+                          'parent':args[args.index('--opt')+1].split('=',1)[1], 'subnet':args[args.index('--subnet')+1],
+                          'gateway':args[args.index('--gateway')+1] if '--gateway' in args else ''};save();print('network-id')
+    elif not state.get('network'): sys.exit(1)
+    elif '--format' in args:
+        fmt=args[args.index('--format')+1];net=state['network']
+        print('macvlan' if '.Driver' in fmt else net['parent'] if '.Options' in fmt else net['owner'] if '.Labels' in fmt
+              else '1' if 'len ' in fmt else net['subnet'] if '.Subnet' in fmt else net['gateway'])
+    else: print('{}')
 elif args[0] in ('inspect','container'):
     if args[0]=='container': args=args[1:]
     ident,c=lookup(args[-1]); fmt=args[args.index('--format')+1] if '--format' in args else ''
@@ -160,6 +171,7 @@ elif args[0] in ('inspect','container'):
     elif '.Type' in fmt:
         m=state['agent_mount' if '/opt/configflow-agent' in fmt else 'core_mount']
         print(m['type']+'|'+m['source']+'|true')
+    elif '.Config.Labels' in fmt: print(c.get('owner',''))
     elif '.Config.' in fmt: print('[]')
     elif '.Image' in fmt: print('original-image')
     elif '.RestartPolicy' in fmt: print('always:0')
@@ -178,7 +190,10 @@ elif args[0]=='cp': pass
 elif args[0]=='run':
     if '--rm' in args: sys.exit(1 if state.get('ha_journal') else 0)
     name=args[args.index('--name')+1]; ident=('b' if name.endswith('-ha') else 'c')*64
-    state['containers'][ident]={'name':name,'running':True};save()
+    if state.get('fail_before_main') and not name.endswith('-ha'):
+        if '--cidfile' in args: Path(args[args.index('--cidfile')+1]).write_text('')
+        sys.exit(123)
+    state['containers'][ident]={'name':name,'running':True, 'owner':args[args.index('--label')+1].split('=',1)[1] if '--label' in args else ''};save()
     if '--cidfile' in args: Path(args[args.index('--cidfile')+1]).write_text(ident+'\n')
     if state.get('fail_main') and not name.endswith('-ha'):
         state['containers'][ident]['running']=False;save();sys.exit(123)
@@ -298,3 +313,77 @@ def test_migration_preserves_old_environment_without_echoing_secrets(tmp_path):
     assert not result.stderr
     assert 'cf_runtime_env=$(' in script and '"$cf_runtime_env" > "$cf_backup/runtime.env"' in script
     assert 'umask 077' in script
+
+
+def new_host(tmp_path, monkeypatch, mode='host', **changes):
+    data = params(tmp_path)
+    if mode == 'macvlan':
+        data.update(network_mode=mode, ha_parent='eth0', ha_subnet='192.168.10.0/24', ha_gateway='192.168.10.1')
+    state, events, env = fake_host(tmp_path, data, **changes)
+    value = json.loads(state.read_text()); value['containers'] = {}; state.write_text(json.dumps(value))
+    monkeypatch.setattr('backend.agents.docker_ha_enrollment.bootstrap_command',
+                        lambda *_: 'printf bootstrap >> "$cf_state/bootstrap-count"\n')
+    guide = generate_guide(data, enrollment={'url': 'http://config.test/enroll/same-installation', 'token': 'private'})
+    return data, state, events, env, guide
+
+
+@pytest.mark.parametrize('failure', ['fail_main', 'fail_before_main'])
+def test_new_retry_reuses_only_owned_companion_and_resumes_failed_main(tmp_path, monkeypatch, failure):
+    data, state, events, env, guide = new_host(tmp_path, monkeypatch, **{failure: True})
+    first = run(guide['install_command'], tmp_path, env)
+    assert first.returncode != 0, first.stdout
+    value = json.loads(state.read_text()); value[failure] = False; state.write_text(json.dumps(value))
+    second = run(guide['install_command'], tmp_path, env)
+    assert second.returncode == 0, second.stderr
+    calls = [json.loads(line) for line in events.read_text().splitlines()]
+    starts = [call for call in calls if call[0] == 'run' and '--name' in call]
+    assert sum(call[call.index('--name')+1].endswith('-ha') for call in starts) == 1
+    assert len([c for c in json.loads(state.read_text())['containers'].values() if c['running']]) == 2
+    before = events.read_text()
+    assert run(guide['install_command'], tmp_path, env).returncode == 0
+    tail = events.read_text()[len(before):]
+    assert not any((lambda call: call[0] in ('start','stop','rename') or (call[0]=='run' and '--name' in call))(json.loads(line)) for line in tail.splitlines())
+    assert all('--network' in json.loads(line) and json.loads(line)[json.loads(line).index('--network')+1]=='none' for line in tail.splitlines() if json.loads(line)[0]=='run')
+    assert Path(data['data_dir'], '.ha-install', 'setup').exists()
+
+
+def test_new_retry_rejects_unrelated_same_name_even_with_copied_owner_label(tmp_path, monkeypatch):
+    _, state, events, env, guide = new_host(tmp_path, monkeypatch, fail_before_main=True)
+    assert run(guide['install_command'], tmp_path, env).returncode != 0
+    value = json.loads(state.read_text())
+    owned = value['containers'].pop('b'*64)
+    value['containers']['d'*64] = owned
+    state.write_text(json.dumps(value)); events.write_text('')
+    assert run(guide['install_command'], tmp_path, env).returncode != 0
+    assert not any(json.loads(line)[0] in ('run','start','stop','rename') for line in events.read_text().splitlines())
+
+
+def test_new_retry_reuses_owned_macvlan_but_rejects_changed_network(tmp_path, monkeypatch):
+    _, state, events, env, guide = new_host(tmp_path, monkeypatch, 'macvlan', fail_before_main=True)
+    assert run(guide['install_command'], tmp_path, env).returncode != 0
+    value = json.loads(state.read_text()); value['fail_before_main'] = False; state.write_text(json.dumps(value))
+    second = run(guide['install_command'], tmp_path, env)
+    assert second.returncode == 0, second.stderr
+    calls = [json.loads(line) for line in events.read_text().splitlines()]
+    assert sum(call[:2] == ['network','create'] for call in calls) == 1
+    before = events.read_text()
+    assert run(guide['install_command'], tmp_path, env).returncode == 0
+    tail = [json.loads(line) for line in events.read_text()[len(before):].splitlines()]
+    assert any(call[0]=='run' and '--network' in call and call[call.index('--network')+1]=='none' for call in tail)
+    assert not any(call[:2]==['network','create'] or (call[0]=='run' and '--name' in call) for call in tail)
+    value = json.loads(state.read_text()); value['network']['parent'] = 'other0'; state.write_text(json.dumps(value))
+    events.write_text('')
+    assert run(guide['install_command'], tmp_path, env).returncode != 0
+    assert not any(json.loads(line)[0] in ('run','start','stop','rename') for line in events.read_text().splitlines())
+
+
+def test_new_retry_rejects_changed_settings_and_does_not_rewrite_marker(tmp_path, monkeypatch):
+    data, state, events, env, guide = new_host(tmp_path, monkeypatch, fail_before_main=True)
+    assert run(guide['install_command'], tmp_path, env).returncode != 0
+    marker = Path(data['data_dir'], '.ha-install', 'setup')
+    before = marker.read_bytes()
+    changed = generate_guide({**data, 'oxidns_port': 9092}, enrollment={'url':'http://config.test/enroll/same-installation'})
+    events.write_text('')
+    assert run(changed['install_command'], tmp_path, env).returncode != 0
+    assert marker.read_bytes() == before
+    assert not any(json.loads(line)[0] in ('run','start','stop','rename') for line in events.read_text().splitlines())

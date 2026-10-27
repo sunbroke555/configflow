@@ -1,5 +1,6 @@
 """Copyable Docker HA setup steps; no Docker host is contacted by this module."""
 import ipaddress
+import hashlib
 import json
 import os
 import re
@@ -8,7 +9,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from .install_script import generate_docker_agent_compose, generate_docker_agent_run, validate_agent_name
+from .install_script import generate_docker_agent_compose, validate_agent_name
 
 IMAGE = 'thsrite/config-flow-agent:latest'
 Q = shlex.quote
@@ -97,12 +98,16 @@ def _daemon_check():
             + _fail('DNS 高可用需要 rootful Docker，当前是 rootless') + ' ;; esac\n')
 
 
-def _run(service, cid_file=None, env_file=None):
+def _run(service, cid_file=None, env_file=None, cid_variable=None):
     args = ['docker', 'run', '-d', '--name', service['container_name'], '--restart', 'unless-stopped', '--stop-timeout', '30']
     if cid_file:
         args += ['--cidfile', cid_file]
+    if cid_variable:
+        args += ['--cidfile', ('raw', '"$' + cid_variable + '"')]
     if env_file:
         args += ['--env-file', env_file]
+    if service.get('_owner'):
+        args += ['--label', 'io.configflow.dns-ha.installation=' + service['_owner']]
     if service.get('network_mode'):
         args += ['--network', service['network_mode']]
     else:
@@ -114,7 +119,131 @@ def _run(service, cid_file=None, env_file=None):
     for env in service['environment']:
         args += ['-e', env]
     args += [service['image']]
-    return ' \\\n  '.join(Q(arg) for arg in args) + '\n'
+    return ' \\\n  '.join(arg[1] if isinstance(arg, tuple) else Q(arg) for arg in args) + '\n'
+
+
+
+def _new_install(params, request, enrollment):
+    """Replay only this setup's immutable plan and captured container IDs."""
+    compose = yaml.safe_load(generate_docker_agent_compose(**params))
+    image = request.get('image', IMAGE)
+    plan = {**params, 'image': image, 'enrollment_url': (enrollment or {}).get('url', '')}
+    owner = hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    data = params['data_dir']
+    state = data + '/.ha-install'
+    for key, service in compose['services'].items():
+        service['image'] = image
+        service['labels'] = {'io.configflow.dns-ha.installation': owner}
+        service['_owner'] = owner
+        readonly = key == 'ha-companion'
+        service['volumes'] = [_volume({'type': 'bind', 'source': data + '/agent'}, '/opt/configflow-agent', readonly),
+                              _volume({'type': 'bind', 'source': data + '/oxidns'}, '/etc/oxidns', readonly),
+                              _volume({'type': 'bind', 'source': data + '/ha'}, '/var/lib/configflow-ha')]
+        service['volumes'].append({'type': 'bind', 'source': params['ha_host_id_path'],
+                                   'target': '/run/configflow-host-machine-id', 'read_only': True,
+                                   'bind': {'create_host_path': False}})
+        if key == 'agent' and params['network_mode'] == 'host':
+            service['volumes'].append({'type': 'bind', 'source': '/proc/1/ns/net', 'target': '/run/configflow-host-netns',
+                                       'read_only': True, 'bind': {'create_host_path': False}})
+    script = _header() + _daemon_check() + _identity_check(params['ha_host_id_path'])
+    script += 'cf_data=' + Q(data) + '\ncf_state=' + Q(state) + '\ncf_owner=' + Q(owner) + '\n'
+    script += '[ ! -L "$cf_data" ] && [ ! -L "$cf_state" ] && [ ! -L "$cf_state/setup" ] || ' + _fail('安装目录或标记为软链接；拒绝继续') + '\n'
+    script += 'if [ -e "$cf_state/setup" ]; then\n  [ -f "$cf_state/setup" ] && [ "$(cat "$cf_state/setup")" = "$cf_owner" ] || ' + _fail('数据目录属于另一份安装设置，请保留原命令续装或使用迁移') + '\nelse\n'
+    script += '  [ ! -e "$cf_state" ] && [ ! -e "$cf_data/agent/config-oxidns.json" ] && [ ! -L "$cf_data/agent/config-oxidns.json" ] || ' + _fail('目录已有身份或未识别的安装状态；请使用原命令或迁移，不能接管') + '\n'
+    for name in (params['agent_name'] + '-oxidns', params['agent_name'] + '-oxidns-ha'):
+        script += '  ! docker container inspect ' + Q(name) + ' >/dev/null 2>&1 || ' + _fail('同名容器已存在且不属于本次安装：' + name) + '\n'
+    script += '  mkdir -p -- "$cf_data"\n  mkdir -- "$cf_state"\n  (set -o noclobber; printf "%s\\n" "$cf_owner" > "$cf_state/setup")\nfi\n'
+    script += r'''
+# Only a recorded exact ID plus the immutable setup label permits reuse.
+cf_owned_container() {
+  local cf_role=$1 cf_name=$2 cf_id cf_record cf_saved cf_found=false
+  cf_id=$(docker container inspect --format '{{.Id}}' "$cf_name" 2>/dev/null || true)
+  for cf_record in "$cf_state/$cf_role-id."*; do
+    [ -e "$cf_record" ] || [ -L "$cf_record" ] || continue
+    [ ! -L "$cf_record" ] && [ -f "$cf_record" ] || { printf '%s\n' '安装 CID 记录异常，拒绝继续' >&2; return 1; }
+    [ -s "$cf_record" ] || continue
+    cf_saved=$(cat "$cf_record")
+    [[ "$cf_saved" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' '安装 CID 记录无效，拒绝继续' >&2; return 1; }
+    if [ "$cf_saved" = "$cf_id" ]; then
+      cf_found=true
+    elif docker container inspect "$cf_saved" >/dev/null 2>&1; then
+      printf '%s\n' '本次安装的容器已被改名，请先核对，拒绝创建重复服务' >&2; return 1
+    fi
+  done
+  if [ -n "$cf_id" ]; then
+    [ "$cf_found" = true ] && [ "$(docker inspect --format '{{index .Config.Labels "io.configflow.dns-ha.installation"}}' "$cf_id")" = "$cf_owner" ] || {
+      printf '%s\n' '同名容器不是本次安装记录的容器，拒绝接管' >&2; return 1;
+    }
+    printf '%s' "$cf_id"
+  fi
+}
+'''
+    main = compose['services']['agent']
+    script += 'cf_main_id=$(cf_owned_container main ' + Q(main['container_name']) + ')\n'
+    if 'ha-companion' in compose['services']:
+        script += 'cf_companion_id=$(cf_owned_container companion ' + Q(compose['services']['ha-companion']['container_name']) + ')\n'
+    if compose.get('networks'):
+        network = compose['networks']['dns-ha']
+        network['labels'] = {'io.configflow.dns-ha.installation': owner}
+        main['_network_name'] = network['name']
+        ipam = network['ipam']['config'][0]
+        script += 'if docker network inspect ' + Q(network['name']) + ' >/dev/null 2>&1; then\n'
+        checks = [('{{.Driver}}', 'macvlan'), ('{{index .Options "parent"}}', network['driver_opts']['parent']),
+                  ('{{index .Labels "io.configflow.dns-ha.installation"}}', owner),
+                  ('{{len .IPAM.Config}}', '1'), ('{{(index .IPAM.Config 0).Subnet}}', ipam['subnet'])]
+        if ipam.get('gateway'):
+            checks.append(('{{(index .IPAM.Config 0).Gateway}}', ipam['gateway']))
+        for fmt, value in checks:
+            script += '  [ "$(docker network inspect --format ' + Q(fmt) + ' ' + Q(network['name']) + ')" = ' + Q(value) + ' ] || ' + _fail('同名 Macvlan 网络不属于本次安装或参数已改变；拒绝复用') + '\n'
+        script += 'else\n'
+        args = ['docker', 'network', 'create', '--driver', 'macvlan', '--subnet', ipam['subnet'], '--opt', 'parent=' + network['driver_opts']['parent'],
+                '--label', 'io.configflow.dns-ha.installation=' + owner]
+        if ipam.get('gateway'):
+            args += ['--gateway', ipam['gateway']]
+        script += '  ' + ' '.join(map(Q, args + [network['name']])) + '\nfi\n'
+    script += 'docker image inspect ' + Q(image) + ' >/dev/null 2>&1 || docker pull ' + Q(image) + '\n'
+    for dirname in ('agent', 'oxidns', 'ha'):
+        script += '[ ! -L "$cf_data/' + dirname + '" ] || ' + _fail('数据子目录是软链接，拒绝继续') + '\n'
+    script += 'mkdir -p "$cf_data/agent" "$cf_data/oxidns" "$cf_data/ha"\n'
+    if enrollment:
+        from .docker_ha_enrollment import bootstrap_command
+        # A created Macvlan container retains its fixed IP even while stopped.
+        # Re-enrolling on that IP would collide; verify the durable seed locally.
+        proof = '''import json, sys
+from pathlib import Path
+root=Path('/opt/configflow-agent')
+path=root/'config-oxidns.json'; marker=root/'.docker-ha-installation.json'
+if path.is_symlink() or marker.is_symlink() or not path.is_file() or not marker.is_file():
+    sys.exit('本次安装的身份文件或标记缺失；请保留数据并检查，拒绝覆盖')
+try:
+    config=json.loads(path.read_text()); setup=json.loads(marker.read_text())
+except Exception:
+    sys.exit('本次安装的身份文件不可读，拒绝覆盖')
+if setup.get('url') != sys.argv[1] or any(not isinstance(config.get(k),str) or not config[k] or config[k]=='[REDACTED]' for k in ('agent_id','token')):
+    sys.exit('本次安装的身份与标记不匹配，拒绝继续')
+print('已核对本次安装的本地身份；保留原凭据并继续启动。')
+'''
+        script += 'if [ -z "$cf_main_id" ]; then\n' + bootstrap_command(enrollment, request) + '\nelse\n'
+        args = ['docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'python3', '--mount',
+                _mount_arg(_volume({'type': 'bind', 'source': data + '/agent'}, '/opt/configflow-agent', True)),
+                image, '-c', proof, enrollment['url']]
+        script += '  ' + ' '.join(map(Q, args)) + '\nfi\n'
+    else:
+        script += '[ ! -e "$cf_data/agent/config-oxidns.json" ] || ' + _fail('缺少本次注册凭据；请在页面重新生成安装命令') + '\n'
+    for role, service in [('companion', compose['services'].get('ha-companion')), ('main', main)]:
+        if service is None:
+            continue
+        script += 'if [ -n "$cf_' + role + '_id" ]; then\n'
+        script += '  if [ "$(docker inspect --format \'{{.State.Running}}\' "$cf_' + role + '_id")" != true ]; then docker start "$cf_' + role + '_id"; fi\nelse\n'
+        script += '  cf_attempt=$(tr -cd "0123456789abcdefABCDEF" < /proc/sys/kernel/random/uuid)\n'
+        script += '  [[ "$cf_attempt" =~ ^[0-9a-fA-F]{32}$ ]] || exit 1\n'
+        script += '  cf_cid_path="$cf_state/' + role + '-id.$cf_attempt"\n'
+        script += _run(service, cid_variable='cf_cid_path') + 'fi\n'
+    script += 'printf "%s\\n" "本次安装的容器已启动或恢复；请回到页面检查真实心跳和高可用环境，再配对。相同命令可安全续装，不会接管同名其他容器。"\n'
+    for service in compose['services'].values():
+        service.pop('_owner', None)
+        service.pop('_network_name', None)
+    return yaml.safe_dump(compose, sort_keys=False, allow_unicode=True).replace('$', '$$'), script
 
 
 def _migration(params, request):
@@ -290,23 +419,7 @@ def generate_guide(request, enrollment=None):
         compose, install, rollback = _migration(params, request)
     else:
         params['data_dir'] = _path(params['data_dir'], '持久数据根目录')
-        compose = generate_docker_agent_compose(**params).replace(IMAGE, image).replace('$', '$$')
-        install = generate_docker_agent_run(**params).replace(IMAGE, image)
-        preflight = _daemon_check() + _identity_check(params['ha_host_id_path'])
-        for name in (params['agent_name'] + '-oxidns', params['agent_name'] + '-oxidns-ha'):
-            preflight += '! docker container inspect ' + Q(name) + ' >/dev/null 2>&1 || ' + _fail('同名容器已存在，请选择迁移而不是新安装：' + name) + '\n'
-        config = params['data_dir'] + '/agent/config-oxidns.json'
-        if not enrollment:
-            preflight += '[ ! -e ' + Q(config) + ' ] && [ ! -L ' + Q(config) + ' ] || ' + _fail('数据目录已有 Agent 身份，请选择迁移，不覆盖旧配置') + '\n'
-        preflight += 'docker image inspect ' + Q(image) + ' >/dev/null 2>&1 || docker pull ' + Q(image) + '\n'
-        install = install.replace('set -e\n', 'set -e\n' + preflight, 1)
-        if enrollment:
-            from .docker_ha_enrollment import bootstrap_command
-            bootstrap = bootstrap_command(enrollment, request)
-            marker = 'mkdir -p "$cf_ha_data/agent" "$cf_ha_data/oxidns" "$cf_ha_data/ha"\n'
-            if marker not in install:
-                raise ValueError('安装脚本无法安全插入注册步骤')
-            install = install.replace(marker, marker + bootstrap + '\n', 1)
+        compose, install = _new_install(params, request, enrollment)
         rollback = ''
     inspection = inspection_command(request.get('container_name', '') if mode == 'migrate' else '')
     logs_name = request.get('container_name') if mode == 'migrate' else params['agent_name'] + '-oxidns'
