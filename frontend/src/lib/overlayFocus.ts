@@ -31,7 +31,9 @@ export function focusOverlayControl(event: Event) {
     }
 
     candidate.focus({ preventScroll: true })
-    if (document.activeElement !== candidate) continue
+    const focused = document.activeElement
+    // Roving groups synchronously delegate focus from their container to an item.
+    if (!(focused instanceof HTMLElement) || !candidate.contains(focused) || focused.closest('[data-field-help-trigger]')) continue
     if (candidate.tagName === 'INPUT') (candidate as HTMLInputElement).select()
     event.preventDefault()
     return

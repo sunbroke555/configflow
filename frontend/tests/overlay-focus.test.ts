@@ -89,6 +89,21 @@ describe.each(overlays)('$name automatic focus', overlay => {
     expect(visibleHelp()).toBeNull()
   })
 
+  it.each(['button', 'input'])('keeps focus delegated by a composite control to its inner %s', async kind => {
+    const child = kind === 'button'
+      ? '<button type="button" id="delegated-control" tabindex="-1">当前选项</button>'
+      : '<input id="delegated-control" tabindex="-1" value="当前选项" />'
+    await openOverlay(overlay, `${help}
+      <div tabindex="0" @focus="$event.currentTarget.querySelector('#delegated-control').focus()">
+        ${child}
+      </div>
+      <input id="later-control" @focus="$event.currentTarget.setAttribute('data-was-focused', 'true')" />`)
+    await vi.waitFor(() => expect(document.activeElement).toBe(element('delegated-control')))
+    expect(element('delegated-control').tabIndex).toBe(-1)
+    expect(element('later-control').hasAttribute('data-was-focused')).toBe(false)
+    expect(visibleHelp()).toBeNull()
+  })
+
   it('honors the page-owned automatic focus target', async () => {
     const onFocus = vi.fn((event: Event) => {
       event.preventDefault()
