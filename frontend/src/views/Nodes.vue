@@ -40,7 +40,8 @@
         </Button>
         <NodeLatencySettings :disabled="testing || reorder.active.value" @saved="loadLatency" />
         <Button class="shadow-glow" title="从 ConfigFlow 所在机器，经节点访问测试地址" :disabled="testing || reorder.active.value" :aria-label="testing ? `正在测速… ${completedTests}/${totalTests}` : '全部测速'" @click="speedTest">
-          <Zap :class="cn('size-4', testing && 'animate-pulse')" />
+          <Loader2 v-if="testing" class="size-4 animate-spin" aria-hidden="true" />
+          <Zap v-else class="size-4" aria-hidden="true" />
           {{ testing ? `正在测速… ${completedTests}/${totalTests}` : isPhone ? '测速' : '全部测速' }}
         </Button>
       </template>
@@ -198,7 +199,10 @@
             :class="cn('num text-right font-mono text-[12px] transition-colors', latencyTone(node), flashKeys.has(latencyKey(node)) && 'bg-primary-soft/40')"
             :title="testedAtLabel(node)"
           >
-            <Loader2 v-if="testingKeys.has(latencyKey(node))" class="ml-auto size-3.5 animate-spin text-muted-foreground" />
+            <span v-if="testingKeys.has(latencyKey(node))" class="inline-flex items-center justify-end gap-1.5 font-sans" :aria-busy="true">
+              <Loader2 v-if="activeTestingKeys.has(latencyKey(node))" class="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+              {{ activeTestingKeys.has(latencyKey(node)) ? '正在测速…' : '等待测速' }}
+            </span>
             <span v-else-if="unresolvedKeys.has(latencyKey(node))" class="text-muted-foreground" title="节点已删除或停用，请刷新后重试">不可用</span>
             <span v-else-if="latencyOf(node) === undefined" class="text-muted-foreground">未测速</span>
             <template v-else-if="latencyOf(node) === null">{{ failureLabel(node) }}</template>
@@ -269,12 +273,12 @@
         v-bind="listItem(Math.min(cfIndex, 24))"
         :data-name="node.name"
         :data-tile="cfIndex"
+        :aria-busy="testingKeys.has(latencyKey(node)) || undefined"
         :data-reorder-item="node.readonly ? undefined : ''"
         :class="cn(
           'node-tile group relative overflow-hidden rounded-[14px] border bg-card/90 px-[13px] pt-3 pb-2.5 transition-[transform,border-color,opacity] duration-300 ease-(--ease-flow) hover:-translate-y-0.5 hover:border-border-strong',
           selectedNodeIds.has(node.id) ? 'border-primary-accent/55' : 'border-border',
           !node.enabled && 'opacity-55',
-          testingKeys.has(latencyKey(node)) && 'is-testing',
           flashKeys.has(latencyKey(node)) && 'is-flash'
         )"
       >
@@ -377,7 +381,11 @@
 
         <div class="cf-reorder-mute mt-3 flex items-end justify-between gap-2">
           <span :title="testedAtLabel(node)" :class="cn('font-display text-[26px] leading-none font-medium tracking-[-0.02em]', latencyTone(node))">
-            <template v-if="unresolvedKeys.has(latencyKey(node))"><span class="text-[18px] text-muted-foreground" title="节点已删除或停用，请刷新后重试">不可用</span></template>
+            <span v-if="testingKeys.has(latencyKey(node))" class="inline-flex items-center gap-1.5 font-sans text-[14px] leading-6 tracking-normal">
+              <Loader2 v-if="activeTestingKeys.has(latencyKey(node))" class="size-4 shrink-0 animate-spin" aria-hidden="true" />
+              {{ activeTestingKeys.has(latencyKey(node)) ? '正在测速…' : '等待测速' }}
+            </span>
+            <template v-else-if="unresolvedKeys.has(latencyKey(node))"><span class="text-[18px] text-muted-foreground" title="节点已删除或停用，请刷新后重试">不可用</span></template>
             <template v-else-if="latencyOf(node) === undefined"><span class="text-[18px] text-muted-foreground">未测速</span></template>
             <template v-else-if="latencyOf(node) === null">{{ failureLabel(node) }}</template>
             <template v-else>{{ latencyOf(node) }}<small class="ml-0.5 font-mono text-[10.5px] text-muted-foreground">ms</small></template>
@@ -388,7 +396,7 @@
           </span>
         </div>
 
-        <p v-if="latencyMap[latencyKey(node)]?.error" class="mt-2 break-words text-xs text-destructive-accent">
+        <p v-if="!testingKeys.has(latencyKey(node)) && latencyMap[latencyKey(node)]?.error" class="mt-2 break-words text-xs text-destructive-accent">
           {{ latencyMap[latencyKey(node)]?.error }}
         </p>
         <!-- 最近 14 次代理延迟；失败画一截红色短柱 -->
@@ -1370,6 +1378,8 @@ const completedTests = ref(0)
 const totalTests = ref(0)
 let latencyDisposed = false
 const testingKeys = ref<Set<string>>(new Set())
+/** 当前发往服务器的批次；其余 testingKeys 仍在等待。 */
+const activeTestingKeys = ref<Set<string>>(new Set())
 const flashKeys = ref<Set<string>>(new Set())
 /** 测试期间已删除或停用的节点 */
 const unresolvedKeys = ref<Set<string>>(new Set())
@@ -1381,6 +1391,7 @@ const latencyKey = (node: any): string => node.readonly
 const latencyOf = (node: any): number | null | undefined => latencyMap.value[latencyKey(node)]?.latency
 const failureLabel = (node: any): string => latencyMap.value[latencyKey(node)]?.error_code === 'timeout' ? '超时' : '失败'
 const testedAtLabel = (node: any): string | undefined => {
+  if (testingKeys.value.has(latencyKey(node))) return activeTestingKeys.value.has(latencyKey(node)) ? '正在测速…' : '等待测速'
   const entry = latencyMap.value[latencyKey(node)]
   if (!entry) return undefined
   return [
@@ -1391,6 +1402,8 @@ const testedAtLabel = (node: any): string | undefined => {
   ].filter(Boolean).join('\n')
 }
 const latencyTone = (node: any): string => {
+  if (activeTestingKeys.value.has(latencyKey(node))) return 'text-primary-accent'
+  if (testingKeys.value.has(latencyKey(node))) return 'text-muted-foreground'
   const v = latencyOf(node)
   if (v === undefined) return ''
   if (v === null) return 'text-destructive-accent'
@@ -1457,6 +1470,7 @@ const runLatency = async (targets: any[]) => {
   try {
     for (const batch of latencyBatches(targetsByKey)) {
       if (latencyDisposed) return
+      activeTestingKeys.value = new Set(batch)
       const { data } = await nodeApi.testLatency(batch)
       if (latencyDisposed) return
       Object.assign(results, data?.results || {})
@@ -1468,6 +1482,7 @@ const runLatency = async (targets: any[]) => {
       unresolvedKeys.value = unresolved
       completedTests.value += batch.length
       testingKeys.value = new Set(keys.slice(completedTests.value))
+      activeTestingKeys.value = new Set()
     }
     const measured = Object.entries(results).filter(([, r]) => r.latency !== null)
     const failed = Object.keys(results).length - measured.length
@@ -1486,6 +1501,7 @@ const runLatency = async (targets: any[]) => {
   } finally {
     testing.value = false
     testingKeys.value = new Set()
+    activeTestingKeys.value = new Set()
   }
 }
 
@@ -1571,29 +1587,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.node-tile.is-testing > * {
-  opacity: 0.35;
-}
-
-.node-tile.is-testing::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(100deg, transparent 30%, var(--primary-soft) 50%, transparent 70%);
-  animation: tile-shimmer 1s linear infinite;
-}
-
 .node-tile.is-flash {
   animation: tile-flash 0.9s var(--ease-flow);
-}
-
-@keyframes tile-shimmer {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(100%);
-  }
 }
 
 @keyframes tile-flash {
