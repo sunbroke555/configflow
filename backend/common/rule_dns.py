@@ -12,7 +12,9 @@ import re
 
 from backend.common.config_repository import RULE_DNS_FIELDS, ProfileInUse
 from backend.common.oxidns_settings import OxidnsSettingsError
-from backend.converters.mosdns import DNS_RULE_TYPES
+from backend.converters.mosdns import DNS_RULE_TYPES as MOSDNS_RULE_TYPES
+
+DNS_RULE_TYPES = frozenset(MOSDNS_RULE_TYPES) - {'IP-CIDR', 'IP-CIDR6'}
 
 ACTIONS = ('refused', 'nxdomain', 'nodata', 'blackhole', 'upstream')
 LIST_ROUTES = ('direct', 'proxy')
@@ -356,7 +358,7 @@ def policy_dns_routes(config):
 
 def follow_route(item, config=None, *, routes=None):
     """DNS route implied by the rule's policy and configured group default."""
-    if item.get('itemType') != 'ruleset' and item.get('rule_type') not in DNS_RULE_TYPES:
+    if not convertible(item):
         return None
     policy = item.get('policy')
     if policy == 'DIRECT':
@@ -443,7 +445,6 @@ CHOICES = ('follow', 'default', *LIST_ROUTES, *INLINE_EXEC, 'blackhole')
 IP_RULE_TYPES = ('IP-CIDR', 'IP-CIDR6')
 _IP_BEHAVIORS = ('ipcidr', 'classical')
 _CACHE_TAGS = {'lazy_cache': 'cache', 'local_probe_cache': 'cache'}
-_FIRST_IP = '#{index} 开始参与 DNS 分流：所有未命中域名规则的查询将先向直连 DNS 探测一次'
 _UNCHANGED = 'OxiDNS 分流含自定义结构，DNS 未修改：{reason}'
 _STALE_UPSTREAM = '所选上游已不在 OxiDNS 上游设置中，请刷新后重选'
 _LINKED_UPSTREAM = '已绑定 DNS 联动，请改选直连 DNS'
@@ -461,11 +462,13 @@ def _native(settings):
 
 def convertible(item):
     """Whether a rule can take part in DNS routing at all."""
-    return item.get('itemType') == 'ruleset' or item.get('rule_type') in DNS_RULE_TYPES
+    if item.get('itemType') == 'ruleset':
+        return item.get('behavior', 'domain') != 'ipcidr'
+    return item.get('rule_type') in DNS_RULE_TYPES
 
 
 def has_ip_part(item, config=None):
-    """Whether routing this rule creates an IP group.
+    """Whether the source has IP entries (also used to recognize legacy routing).
 
     A classical set counts only when its known content has IP lines; unknown
     content, or no config to look it up in, keeps the old assumption that it does.
@@ -485,7 +488,9 @@ def default_route(default_forward):
 
 
 def probe_needed(routes, default_forward):
-    """IP groups only change an answer when one routes away from the fallback.
+    """Recognize historical IP pipelines, never used to enable a new probe.
+
+    IP groups only changed an answer when one routed away from the fallback.
 
     Without such a group the local probe would send every unmatched query to the
     local upstream and still end at the fallback, so it is left out.
@@ -568,18 +573,6 @@ def _active(config):
     return {item['id'] for item in _items(config) if isinstance(item.get('id'), str)}
 
 
-def _first_ip(config, values, default_forward=None):
-    """1-based position of the first routed rule that turns the local probe on."""
-    from backend.converters.oxidns import _selected
-    if default_forward is None:
-        default_forward = _oxidns(config).get('default_forward', 'forward_remote')
-    fallback = default_route(default_forward)
-    routed = {item['id'] for item, route in _selected(config, values)
-              if convertible(item) and has_ip_part(item, config) and route != fallback}
-    return next((index for index, item in enumerate(config.get('rule_configs') or [], 1)
-                 if isinstance(item, dict) and item.get('id') in routed), None)
-
-
 def _upstream_label(action):
     return _label(action['source'], action['upstream']['addr'])
 
@@ -630,7 +623,10 @@ def rule_dns_state(config, base_url='', agents=None):
         if not isinstance(identity, str):
             continue
         if not convertible(item):
-            rules[identity] = {'state': 'unsupported', 'reason': f'{item.get("rule_type")} 规则不参与 DNS 分流'}
+            kind = item.get("rule_type") or item.get("behavior") or "该类型"
+            reason = ("IP 规则仅用于连接分流，不参与 DNS 处理"
+                      if kind in (*IP_RULE_TYPES, "ipcidr") else f"{kind} 规则不参与 DNS 分流")
+            rules[identity] = {"state": "unsupported", "reason": reason}
             continue
         route, action = _route(values, identity), values['rule_actions'].get(identity)
         if identity not in active:
@@ -659,10 +655,9 @@ def rule_dns_state(config, base_url='', agents=None):
     main = next((item for item in plugins if isinstance(item, dict) and item.get('tag') == 'sequence_main'), {})
     steps = main.get('args') if isinstance(main.get('args'), list) else []
     default_forward = routing.get('default_forward') or settings.get('default_forward', 'forward_remote')
-    try:
-        probe = _first_ip(config, values, default_forward) is not None
-    except (KeyError, TypeError, OxidnsSettingsError):
-        probe = False
+    # Retained for older clients and hand-written native pipelines. Managed
+    # routing no longer probes a resolver to classify a returned IP.
+    probe = native and any(step.get("exec") == "jump local_probe" for step in steps)
     in_use = (native or any(agent.get('service_type') == 'oxidns' for agent in agents) or
               any(stored[key] for key in (*SELECTORS, *RULE_DNS_FIELDS)))
     mosdns = config.get('mosdns') if isinstance(config.get('mosdns'), dict) else {}
@@ -791,7 +786,8 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
         if identity not in rules:
             raise ProfileValidationError(f'规则不存在：{identity}，请刷新后重试')
         if choice != 'default' and not convertible(rules[identity]):
-            raise ProfileValidationError(f'{rules[identity].get("rule_type")} 规则不参与 DNS 分流，请把 DNS 设为默认上游')
+            kind = rules[identity].get('rule_type') or rules[identity].get('behavior') or '该类型'
+            raise ProfileValidationError(f'{kind} 规则不参与 DNS 分流，请把 DNS 设为默认上游')
     stored = _stored(settings)
     pruned = {key: ({identity: value for identity, value in stored[key].items() if identity in rules}
                     if isinstance(stored[key], dict) else [identity for identity in stored[key] if identity in rules])
@@ -834,11 +830,6 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
         if route != follow_route(previous[identity], routes=before_routes):
             _place(values, rules[identity], None if route is None else {'action': route})
     warnings = []
-    try:
-        before_ip = _first_ip(before, current['values'], (current['routing'] or {}).get('default_forward')
-                              or settings.get('default_forward', 'forward_remote'))
-    except (KeyError, TypeError, OxidnsSettingsError):
-        before_ip = None
     if not native:
         try:
             _normalize_rule_dns(values)
@@ -848,10 +839,9 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
                    if values[key] != stored[key] or _dirty(settings, stored, key)}
         if changed:
             after.setdefault('oxidns', {}).update(deepcopy(changed))
-        final = values
     else:
         import yaml
-        from backend.common.oxidns_common_routing import apply_routing, read_routing
+        from backend.common.oxidns_common_routing import apply_routing
         active = _active(after)
         for identity in follow:
             # Follow rules are never parked: enabling them asks the policy again.
@@ -875,13 +865,6 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
             settings['native_config'] = yaml.safe_dump(result, allow_unicode=True, sort_keys=False)
         for key in (*SELECTORS, *RULE_DNS_FIELDS):
             settings[key] = deepcopy(result_settings[key])
-        final = read_routing(result, result_settings, after)['values']
-    try:
-        after_ip = _first_ip(after, final, final.get('default_forward') or _oxidns(after).get('default_forward', 'forward_remote'))
-    except (KeyError, TypeError, OxidnsSettingsError):
-        after_ip = None
-    if before_ip is None and after_ip is not None:
-        warnings.append(_FIRST_IP.format(index=after_ip))
     return warnings
 
 

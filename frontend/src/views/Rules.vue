@@ -824,7 +824,7 @@ import { listItem } from '@/lib/motion'
 import { ruleApi, ruleSetApi, proxyGroupApi } from '@/api'
 import { cn } from '@/lib/utils'
 import { chipClass, dnsChip, dnsLabel, followRoute, isUpstreamValue, notifyRuleSaved, pinnedWithheld, ruleSetPayload } from '@/lib/ruleDns'
-import { isDnsRuleType } from '@/lib/oxidns'
+import { isOxidnsRule } from '@/lib/oxidns'
 import type { ProxyGroup, RuleDnsSnapshot, RuleDnsState, RuleDnsValue } from '@/types'
 import api from '@/api'
 import { getActiveProfileId } from '@/profileContext'
@@ -1403,7 +1403,7 @@ const loadDns = async () => {
 
 const mergeDns = (rules: Record<string, RuleDnsState>) => {
   if (dnsSnapshot.value) dnsSnapshot.value = { ...dnsSnapshot.value, rules: { ...dnsSnapshot.value.rules, ...rules } }
-  // 引擎状态（首条 IP、本地探测）可能随之变化，后台刷新一次。
+  // 规则的 DNS 状态可能随之变化，后台刷新一次。
   void loadDns()
 }
 
@@ -1521,7 +1521,7 @@ const followCandidates = computed(() => {
     const route = followRoute(item, snapshot.engine.policy_routes)
     if (state === 'explicit') return entry!.route === route
     // 默认上游且策略不单独处理（例如 REJECT）：标记后同样不改变生成结果。
-    return state === 'default' && route === null && (item.itemType === 'ruleset' || isDnsRuleType(item.rule_type))
+    return state === 'default' && route === null && isOxidnsRule(item)
   })
 })
 

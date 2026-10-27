@@ -72,7 +72,6 @@ oxidns check -c /etc/oxidns/config.yaml -d /etc/oxidns
 | 国内 / 国外 / 备用并发 | 2 / 1 / 2 | 各 forward 的上游竞速并发 |
 | 主缓存 | 10240 条 | 用于国内直连响应，`short_circuit: true` |
 | Lazy cache | 300 秒 | 允许在总保留期内返回过期正响应并后台刷新 |
-| 探测缓存 | 2048 条 | 只缓存国内探测结果，不启用 lazy |
 | 缓存持久化 | 关闭 | 可独立开启；升级或变更策略后应考虑旧缓存有效性 |
 | Provider 合并 | 开启 | 只合并相邻、策略相同的规则，保留直连/代理顺序 |
 | 轻量指标 | 开启 | 不默认启用逐条查询日志 |
@@ -80,28 +79,11 @@ oxidns check -c /etc/oxidns/config.yaml -d /etc/oxidns
 
 Lazy TTL 不是“原 TTL 再加 300 秒”。v1.6.1 的总保留期为 `max(原始 TTL, lazy_cache_ttl)`；例如原 TTL 60 秒时，可能在第 60–300 秒返回过期响应；原 TTL 600 秒不会额外延长。负响应不会按正响应的 stale 规则续用。
 
-国内探测使用独立子序列：
-
-```yaml
-- tag: local_probe_cache
-  type: cache
-  args:
-    size: 2048
-    short_circuit: false
-- tag: local_probe
-  type: sequence
-  args:
-    - exec: $local_probe_cache
-    - matches: ['!has_resp']
-      exec: $forward_local
-    - exec: return
-```
-
-主序列通过 `jump local_probe` 调用，随后继续按响应 IP 分流。不要改成 `goto local_probe` 或将探测缓存设为 `short_circuit: true`；那会改变父序列继续分类的行为。探测缓存不保存最终的代理/Fake-IP 响应。
+标准流程不再进行直连 DNS 探测，也不使用查询结果的 IP 决定 DNS 去向。未匹配域名规则的查询直接进入「未匹配时转发到」选中的 DNS。旧标准原生配置中的 IP 探测和分类流程会在生成配置时移除；自定义链无法安全识别时保留，仍需在完整参数中调整。探测缓存和自定义 IP 匹配仍可在完整参数／YAML 中查看和维护，不再出现在常用设置。
 
 ### 分流与扩展匹配
 
-规则按照配置空间中的顺序执行：先域名规则，再对未命中请求进行国内探测和 IP 分类，最后走默认转发。普通规则和订阅规则使用同一顺序。混合 classical 订阅拆分为域名、IP 两部分；正则中的逗号保留原义。
+规则按照配置空间中的顺序执行域名匹配，未命中后直接走默认转发。普通规则和订阅规则使用同一顺序。混合 classical 订阅只提取域名部分供 OxiDNS 使用，纯 IP 规则和 ipcidr 规则集不参与 DNS 分流；Mihomo 的连接规则仍保留完整内容。正则中的逗号保留原义。
 
 机器标签和规则文件名使用稳定的 ASCII 标识，中文名称、重复名称或带路径符号的名称不会成为 OxiDNS tag 或不安全的文件路径。
 
@@ -114,9 +96,9 @@ Lazy TTL 不是“原 TTL 再加 300 秒”。v1.6.1 的总保留期为 `max(原
 | 功能 | 模板行为与可配置项 |
 | --- | --- |
 | 查询记录 `query_recorder` | 放在主入口，记录 SQLite 查询历史；可调整保留天数、队列、批量写入和读并发，默认 7 天 |
-| IP 优选 `ip_selector` | 只接入国内真实 IP 分支；默认后台探测、`top_n: 0` 只排序，位于缓存之前，缓存保留原始应答 |
-| 动态域名集 | 可通过 OxiDNS API 管理，支持初始规则与直连/代理目的地；持久文件放在 `state/`；显式域名规则优先于学习结果 |
-| 自动学习 `learn_domain` | 可选，仅在明确命中 IP 分流规则的分支学习，不对未分类的默认结果学习；默认只学习成功、有 answer 的 A/AAAA 完整域名 |
+| IP 优选 `ip_selector` | 只接入直连真实 IP 分支；默认后台探测、`top_n: 0` 只排序，位于缓存之前，缓存保留原始应答 |
+| 动态域名集 | 可通过 OxiDNS API 管理，支持初始规则与直连/代理目的地；持久文件放在 `state/`；显式域名规则优先于动态名单 |
+| 自动学习 `learn_domain` | 标准流程不再按响应 IP 自动学习；已有动态域名名单仍可用于域名匹配，自定义学习流程可在完整参数／YAML 中维护 |
 | AdGuard DNS 规则 | 支持内联文本和 HTTP(S) 订阅，使用 `question` 匹配以保留 `dnstype`；可选 NXDOMAIN、NODATA、空地址或 REFUSED |
 | RouterOS address-list | 仅处理国内真实 IP 响应；支持凭据、TLS、队列、异步和 TTL 参数 |
 | RouterOS route | 同上，需要预先存在的路由表以及 IPv4/IPv6 网关；插件不会创建路由表、routing rule 或默认路由 |

@@ -81,7 +81,6 @@ describe('OxiDNS current common settings', () => {
   it.each([
     ['cache_size', 'cache_enabled'],
     ['cache_lazy_ttl', 'cache_enabled'],
-    ['probe_cache_size', 'probe_cache_enabled'],
     ['cache_dump_interval', 'cache_dump_enabled'],
     ['cache_dump_interval', 'cache_enabled'],
   ])('retains invalid %s without blocking %s from being disabled', async (field, toggle) => {
@@ -105,15 +104,11 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('change')).toHaveLength(2)
   })
 
-  it('keeps independent probe errors active when disabling the main cache', async () => {
-    const wrapper = await render({values: {...values(), cache_enabled: true, cache_size: 10240, probe_cache_enabled: true, probe_cache_size: 2048}})
+  it('does not offer the removed IP-probe cache in common settings', async () => {
+    const wrapper = await render({values: {...values(), probe_cache_enabled: true, probe_cache_size: 2048}})
     await click('缓存')
-    await input('oxi-cache_size', '')
-    await input('oxi-probe_cache_size', '')
-    await wrapper.get('#oxi-cache_enabled').trigger('click')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('探测缓存条目数')
-    await wrapper.get('#oxi-probe_cache_enabled').trigger('click')
-    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
+    expect(wrapper.find('#oxi-probe_cache_enabled').exists()).toBe(false)
+    expect(wrapper.find('#oxi-probe_cache_size').exists()).toBe(false)
   })
 
   it('updates cache error dependencies when the current projection changes externally', async () => {

@@ -258,17 +258,17 @@ def run(root, binary):
             assert local.count('direct.test') == 1
             results['direct_cache_hit'] = True
             for _ in range(20):
-                assert query(dns_port, 'probe.test')['ips'] == ['10.1.2.3']
-            assert local.count('probe.test') == 1
+                assert query(dns_port, 'probe.test')['ips'] == ['198.18.0.1']
+            assert local.count('probe.test') == 0
             local.set('probe.test', '203.0.113.10')
             local.set('direct.test', '10.2.3.5')
             time.sleep(2.2)
             assert query(dns_port, 'probe.test')['ips'] == ['198.18.0.1']
-            assert local.count('probe.test') == 2
+            assert local.count('probe.test') == 0
             for _ in range(10):
                 assert query(dns_port, 'probe.test')['ips'] == ['198.18.0.1']
-            assert local.count('probe.test') == 2
-            results['probe_cache_expiry_reclassifies_without_fakeip_pollution'] = True
+            assert local.count('probe.test') == 0
+            results['unmatched_domains_ignore_local_ip_answers'] = True
             assert query(dns_port, 'direct.test')['ips'] == ['10.2.3.4']
             for _ in range(50):
                 time.sleep(.05)
@@ -299,7 +299,7 @@ def run(root, binary):
     print(json.dumps(results, indent=2))
 
 
-# Per-rule DNS actions: every action on domain and IP rules, and pinned
+# Per-rule DNS actions on domains, ignored IP rules, and pinned
 # upstreams from each source list with and without the china_dns features
 # their chains copy. --prepare writes placeholder upstream addresses; --run maps
 # each to a loopback stub of the same role, so generated chain tags are kept.
@@ -311,7 +311,7 @@ RULE_DNS_STUBS = {  # role: (placeholder address, default A answer)
     'pin_remote': ('udp://192.0.2.5:53', '192.0.2.78'),
     'pin_fallback': ('udp://192.0.2.6:53', '192.0.2.79'),
 }
-# Local probe answers that select the IP rules below.
+# Local answers that would have selected IP rules in the old probe pipeline.
 RULE_DNS_PROBE_ANSWERS = {
     'ipdirect.test': '203.0.113.1', 'ipref.test': '203.0.113.20', 'ipnx.test': '203.0.113.40',
     'ipnodata.test': '203.0.113.50', 'ipbh.test': '203.0.113.70', 'ipup.test': '203.0.113.90',
@@ -338,7 +338,7 @@ RULE_DNS_RULES = (
     ('ip-up-remote', 'IP-CIDR', '203.0.113.96/28', 'pin_remote'),
     ('ip-proxy', 'IP-CIDR', '203.0.113.112/28', 'proxy'),
 )
-# A routed classical ruleset always has an IP part, so it alone turns on the local probe.
+# Mixed rule sets keep their domain action; their IP content does not affect DNS.
 RULE_DNS_CLASSICAL = (('classical', 'classical', 'DOMAIN-SUFFIX,cls.test\nIP-CIDR,198.18.5.0/24', 'nxdomain'),)
 _ROUTEROS = {'address': '127.0.0.1:9', 'username': 'smoke', 'password': 'test-only'}
 _FEATURES = {'ip_selector': {'enabled': True},
@@ -391,7 +391,7 @@ def prepare_rule_dns(root, scenario):
     from backend.common.oxidns_editor import prepare_editor
     from backend.common.oxidns_validation import validate_native_config
     from backend.converters.mosdns import _ruleset_parts, convert_rule_content_for_mosdns
-    from backend.converters.oxidns import _rule_path, generate_oxidns_config
+    from backend.converters.oxidns import _rule_path, generate_oxidns_config, ruleset_parts
     settings, rules, actions = rule_dns_inputs(scenario)
     # Rule sets are always downloadable through the rule proxy, which needs a token.
     config = {'rule_configs': rules,
@@ -401,6 +401,8 @@ def prepare_rule_dns(root, scenario):
     else:
         native = prepare_editor(settings, config)
         document = yaml.safe_load(native['native_config'])
+        actions = {identity: action for identity, action in actions.items()
+                   if not identity.startswith('ip-')}
         document, native = apply_routing(document, native, config, {'rule_actions': actions})
         # The recognizer must read back exactly what the applier wrote.
         assert read_routing(document, native, config)['values']['rule_actions'] == actions
@@ -413,7 +415,7 @@ def prepare_rule_dns(root, scenario):
     # Stand-ins for the rule files a deployment downloads through the rule proxy.
     for item in rules:
         if item['itemType'] == 'ruleset':
-            for part in _ruleset_parts(item['behavior']):
+            for part in ruleset_parts(item, config):
                 destination = root / _rule_path(item, part)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(convert_rule_content_for_mosdns(item['content'], part) + '\n')
@@ -424,7 +426,7 @@ def prepare_rule_dns(root, scenario):
 def run_rule_dns(root, binary):
     scenario = json.loads((root / 'rule-dns.json').read_text())['scenario']
     _, rules, features = RULE_DNS_SCENARIOS[scenario]
-    cached, probe_cached = features.get('cache_enabled', True), features.get('probe_cache_enabled', True)
+    cached = features.get('cache_enabled', True)
     remote_ttl = features.get('remote_ttl', 1)
     config = yaml.safe_load((root / 'config.yaml').read_text())
     stubs = {role: MockDNS(answer) for role, (_, answer) in RULE_DNS_STUBS.items()}
@@ -482,12 +484,11 @@ def run_rule_dns(root, binary):
             else:
                 raise AssertionError('temporary OxiDNS did not answer')
             if rules is RULE_DNS_CLASSICAL:
-                assert {'exec': 'jump local_probe'} in main
+                assert {'exec': 'jump local_probe'} not in main
                 expect('cls.test', 'NXDOMAIN', upstreams={})
-                expect('clsip.test', 'NXDOMAIN', upstreams={'local': 1})
-                # Unrouted names now reach the local upstream first, then the default forward.
-                expect('other.test', 'NOERROR', ['192.0.2.99'], {'local': 1, 'remote': 1})
-                results['classical_probe'] = True
+                expect('clsip.test', 'NOERROR', ['192.0.2.99'], {'remote': 1})
+                expect('other.test', 'NOERROR', ['192.0.2.99'], {'remote': 1})
+                results['classical_domain_only'] = True
             else:
                 expect('direct.test', 'NOERROR', ['198.51.100.1'], {'local': 1})
                 expect('proxy.test', 'NOERROR', ['192.0.2.99'], {'remote': 1})
@@ -500,23 +501,17 @@ def run_rule_dns(root, binary):
                 assert expect('bh.test', 'NOERROR', upstreams={}, qtype='MX')['authority'] == 1
                 expect('up-local2.test', 'NOERROR', ['192.0.2.77'], {'pin_local': 1})
                 expect('up-fallback.test', 'NOERROR', ['192.0.2.79'], {'pin_fallback': 1})
-                # IP rules match the local probe answer, then replace it.
-                expect('ipdirect.test', 'NOERROR', ['203.0.113.1'], {'local': 1})
-                expect('ipref.test', 'REFUSED', upstreams={'local': 1})
-                expect('ipnx.test', 'NXDOMAIN', upstreams={'local': 1})
-                expect('ipnodata.test', 'NOERROR', upstreams={'local': 1})
-                expect('ipbh.test', 'NOERROR', ['0.0.0.0'], {'local': 1})
-                expect('ipupr.test', 'NOERROR', ['192.0.2.78'], {'local': 1, 'pin_remote': 1})
-                expect('ipproxy.test', 'NOERROR', ['192.0.2.99'], {'local': 1, 'remote': 1})
-                expect('other.test', 'NOERROR', ['192.0.2.99'], {'local': 1, 'remote': 1})
+                # Old IP actions are ignored; unknown names use the default resolver.
+                for name in ('ipdirect.test', 'ipref.test', 'ipnx.test', 'ipnodata.test',
+                             'ipbh.test', 'ipupr.test', 'ipproxy.test', 'other.test'):
+                    expect(name, 'NOERROR', ['192.0.2.99'], {'remote': 1})
                 results['actions'] = True
                 # Each pinned upstream has its own cache, present only with cache_enabled.
                 first = expect('up-local.test', 'NOERROR', ['192.0.2.77'], {'pin_local': 1})
                 second = expect('up-local.test', 'NOERROR', ['192.0.2.77'], {'pin_local': 1 if cached else 2})
                 assert second['ttls'][0] <= first['ttls'][0]
-                expect('ipup.test', 'NOERROR', ['192.0.2.77'], {'local': 1, 'pin_local': 1})
-                expect('ipup.test', 'NOERROR', ['192.0.2.77'],
-                       {'local': 1 if probe_cached else 2, 'pin_local': 1 if cached else 2})
+                expect('ipup.test', 'NOERROR', ['192.0.2.99'], {'remote': 1})
+                expect('ipup.test', 'NOERROR', ['192.0.2.99'], {'remote': 2})
                 ttl = remote_ttl or 300
                 first = expect('up-remote.test', 'NOERROR', ['192.0.2.78'], {'pin_remote': 1})
                 second = expect('up-remote.test', 'NOERROR', ['192.0.2.78'], {'pin_remote': 1 if cached else 2})

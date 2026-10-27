@@ -225,6 +225,17 @@ def _native_projection(base, current, projected, settings, published, withheld):
         result, result_settings = apply_routing(document, projected['oxidns'], projected, changes, before_config=base)
     except OxidnsSettingsError as error:
         raise RuleSyncProjectionError(f'OxiDNS 规则分流无法自动更新：{str(error).rstrip("。")}；请手动检查并发布。') from None
+    # Withdrawing the last IP-only subscription can also withdraw the whole
+    # update service. Rule-only publication cannot change that lifecycle, and
+    # an empty download/reload plugin is not a runnable intermediate document.
+    for plugin in result.get('plugins', []):
+        empty_download = (plugin.get('tag') == 'rules_download' and plugin.get('type') == 'download'
+                          and isinstance(plugin.get('args'), dict) and plugin['args'].get('downloads') == [])
+        empty_reload = (plugin.get('tag') == 'rules_reload' and plugin.get('type') == 'reload_provider'
+                        and plugin.get('args') == [])
+        if empty_download or empty_reload:
+            raise RuleSyncProjectionError(
+                '本次规则变更需要停用 OxiDNS 规则下载或重载服务，无法单独自动同步；请手动完整发布。')
     result_settings['native_config'] = yaml.safe_dump(result, allow_unicode=True, sort_keys=False)
     projected['oxidns'] = result_settings
 

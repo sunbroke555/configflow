@@ -31,7 +31,7 @@ def test_follow_route_maps_direct_group_reject_and_unconvertible():
     for policy in ('REJECT', 'REJECT-DROP', 'PASS', '', None):
         assert follow_route({**rule, 'policy': policy}) is None
     assert follow_route({**rule, 'rule_type': 'GEOIP', 'policy': 'DIRECT'}) is None
-    assert follow_route({**rule, 'rule_type': 'IP-CIDR6', 'policy': 'DIRECT'}) == 'direct'
+    assert follow_route({**rule, 'rule_type': 'IP-CIDR6', 'policy': 'DIRECT'}) is None
     assert follow_route({'itemType': 'ruleset', 'behavior': 'classical', 'policy': 'Proxy'}) == 'proxy'
 
 
@@ -333,12 +333,14 @@ def space(**oxidns):
 def test_legacy_unselected_shows_default_and_lists_show_explicit():
     from backend.common.rule_dns import rule_dns_state
     state = rule_dns_state(space(direct_rules=['a'], proxy_rules=['b']))
+    assert state['rules'].pop('ip')['state'] == 'unsupported'
     assert state['rules'] == {'a': {'state': 'explicit', 'route': 'direct'},
                               'b': {'state': 'explicit', 'route': 'proxy'}}
     assert state['engine']['oxidns_in_use'] is True and state['engine']['default_forward'] == 'forward_remote'
     # Nothing in any list: every rule is the default upstream and OxiDNS is not in use.
     state = rule_dns_state(space())
-    assert state['rules'] == {} and state['engine']['oxidns_in_use'] is False
+    assert state['rules']['ip']['state'] == 'unsupported'
+    assert state['engine']['oxidns_in_use'] is False
 
 
 def test_follow_drift_state():
@@ -353,30 +355,29 @@ def test_follow_drift_state():
     assert rules['mixed'] == {'state': 'explicit', 'route': 'blackhole'}
 
 
-def test_default_dns_classical_without_probe_is_default():
+def test_classical_ip_metadata_never_enables_probe():
     from backend.common.rule_dns import has_ip_part, rule_dns_state
-    # A classical ruleset may create an IP group, so the form only defaults it to
-    # follow once the probe is already on.
+    # Source metadata still describes IP content for connection routing.
     assert has_ip_part({'itemType': 'ruleset', 'behavior': 'classical'})
     assert has_ip_part({'itemType': 'ruleset', 'behavior': 'ipcidr'})
     assert not has_ip_part({'itemType': 'ruleset', 'behavior': 'domain'})
     assert has_ip_part({'itemType': 'rule', 'rule_type': 'IP-CIDR6'})
     assert rule_dns_state(space(direct_rules=['a']))['engine']['local_probe_active'] is False
     # Unknown content: a classical set is still assumed to have IP lines.
-    assert rule_dns_state(space(direct_rulesets=['mixed']))['engine']['local_probe_active'] is True
+    assert rule_dns_state(space(direct_rulesets=['mixed']))['engine']['local_probe_active'] is False
     # Proxy like the proxy fallback: the probe could not change any answer.
     assert rule_dns_state(space(proxy_rulesets=['mixed']))['engine']['local_probe_active'] is False
 
 
-def test_policy_change_creating_first_ip_group_warns():
+def test_old_ip_follow_mark_cannot_enable_dns_probe():
     from backend.common.rule_dns import apply_rule_dns
     before = space(direct_rules=['a'], rule_dns_follow=['ip'])
     before['rule_configs'][3]['policy'] = 'REJECT'
     after = deepcopy(before)
     after['rule_configs'][3]['policy'] = 'DIRECT'
     warnings = apply_rule_dns(before, after, {})
-    assert warnings == ['#4 开始参与 DNS 分流：所有未命中域名规则的查询将先向直连 DNS 探测一次']
-    assert after['oxidns']['direct_rules'] == ['a', 'ip'] and after['oxidns']['rule_dns_follow'] == ['ip']
+    assert warnings == []
+    assert after['oxidns']['direct_rules'] == ['a']
     # Once a probe exists, later IP groups say nothing.
     again = deepcopy(after)
     again['rule_configs'][4]['policy'] = 'DIRECT'
@@ -410,6 +411,7 @@ def test_malformed_stored_actions_read_as_default_and_are_dropped_on_write():
               'c': {'action': 'upstream', 'upstream': {'addr': '1.1.1.1'}}, 'mixed': {'action': 'nodata'}}
     before = space(rule_actions=broken, rule_dns_parked={'ip': {'action': 'drop'}})
     rules = rule_dns_state(before)['rules']
+    assert rules.pop('ip')['state'] == 'unsupported'
     assert rules == {'mixed': {'state': 'explicit', 'route': 'nodata'}}
     assert explicit_route(before, 'a') is None
     # A write that leaves routing alone still removes what cannot be read.

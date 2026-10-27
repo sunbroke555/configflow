@@ -1,4 +1,4 @@
-"""OxiDNS only probes the local upstream when an IP group can change an answer."""
+"""Managed OxiDNS routes names directly; historical IP shapes remain readable."""
 import os
 
 import pytest
@@ -109,18 +109,15 @@ def test_ip_groups_that_all_match_the_fallback_skip_the_probe(rules_dir):
     main, _ = main_of(config)
     assert {'exec': 'jump local_probe'} not in main
     assert {'exec': 'drop_resp'} not in main
-    # The group is kept so the native YAML still records its DNS choice; without a
-    # response resp_ip never matches, so the result is the fallback.
-    assert {'matches': ['resp_ip $rules_ip_1'], 'exec': 'goto ip_requery_proxy'} in main
+    assert not any('resp_ip' in str(entry) for entry in main)
     assert main[-1] == {'exec': 'goto proxy_dns_seq'}
 
 
-def test_one_ip_group_away_from_the_fallback_keeps_the_probe(rules_dir):
+def test_ip_group_away_from_fallback_still_does_not_probe(rules_dir):
     config = library_config('IP-CIDR,203.0.113.0/24\n', rules_dir, default_forward='forward_local')
     main, _ = main_of(config)
-    probe = main.index({'exec': 'jump local_probe'})
-    assert main[probe + 1] == {'matches': ['resp_ip $rules_ip_1'], 'exec': 'goto ip_requery_proxy'}
-    assert main[probe + 2] == {'matches': ['has_resp'], 'exec': 'goto default_direct_ip'}
+    assert {'exec': 'jump local_probe'} not in main
+    assert not any('resp_ip' in str(entry) for entry in main)
     assert main[-1] == {'exec': 'goto china_dns'}
 
 
@@ -138,32 +135,19 @@ def test_probe_needed(routes, default_forward, expected):
 
 
 def test_native_legacy_empty_ip_part_is_recognised_and_dropped_on_rebuild(rules_dir, monkeypatch):
-    config = library_config(None, rules_dir)
-    config['rule_configs'] += [{'id': 'cn', 'itemType': 'ruleset', 'behavior': 'ipcidr', 'url': 'https://rules.test/cn.txt'},
-                               {'id': 'gh', 'itemType': 'rule', 'rule_type': 'DOMAIN-SUFFIX', 'value': 'github.com'}]
-    fields = {'proxy_rulesets': ['tiktok'], 'direct_rulesets': ['cn'], 'default_forward': 'forward_remote'}
-    # Published before this change: the uncached classical list got an IP group.
-    settings = prepare_editor(fields, config)
-    legacy = yaml.safe_load(settings['native_config'])
-    tags = {p['tag'] for p in legacy['plugins']}
-    assert sum(tag.startswith('rules_ip') for tag in tags) == 2
-
-    # Its content is now known to have no IP lines.
-    cache(rules_dir, config['rule_library'][0], 'DOMAIN-SUFFIX,tiktok.com\n')
-    rule_ip_presence._MEMO.clear()
+    from backend.test_oxidns_domain_only_native import legacy_config, plugin
+    config, legacy, settings = legacy_config(content_aware=True)
+    # A source that contained an IP part when published later becomes domain-only.
+    # The native file still references its old IP resource, while another source
+    # was already domain-only in the same content-aware document.
+    mixed = next(item for item in config['rule_configs'] if item['id'] == 'mixed')
+    mixed['content'] = 'DOMAIN,mixed.test'
     result = read_routing(legacy, settings, config)
-    assert result['capabilities']['proxy_rulesets']['editable'] is True
-    assert result['values']['proxy_rulesets'] == ['tiktok']
-    assert result['values']['direct_rulesets'] == ['cn']
-
-    # Any rule selection edit rebuilds the routing from the current content.
-    updated, _ = apply_routing(legacy, settings, config, {'proxy_rules': ['gh']})
-    main = next(p for p in updated['plugins'] if p['tag'] == 'sequence_main')['args']
-    ip_entries = [entry for entry in main if 'resp_ip' in str(entry)]
-    assert len(ip_entries) == 1 and 'goto direct_ip' in ip_entries[0]['exec']
-    # The cn group routes away from the proxy fallback, so the probe stays.
-    assert {'exec': 'jump local_probe'} in main
+    assert result['capabilities']['direct_rulesets']['editable'] is True
+    assert result['values']['direct_rulesets'] == ['mixed', 'domain_only', 'cidr']
+    updated, _ = apply_routing(legacy, settings, config, {'direct_rules': ['domain']})
+    main = plugin(updated, 'sequence_main')['args']
+    assert not any('resp_ip' in str(entry) for entry in main)
+    assert {'exec': 'jump local_probe'} not in main
     after = read_routing(updated, settings, config)
-    assert after['values']['proxy_rules'] == ['gh']
-    assert after['values']['proxy_rulesets'] == ['tiktok']
-    assert after['values']['direct_rulesets'] == ['cn']
+    assert after['values']['direct_rulesets'] == ['mixed', 'domain_only']

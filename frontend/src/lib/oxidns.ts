@@ -34,11 +34,11 @@ export const coreFields: OxidnsField[] = [
   toggle('metrics_enabled', '轻量指标', optionCopy('查看请求量和耗时，无需保存逐条查询。', '需要在 API 或 WebUI 查看 DNS 运行概况时开启。', '收集请求数量、响应耗时等汇总指标，不保存每次查询的历史。若要追查某个域名的请求过程，还需单独开启查询记录。')),
   toggle('aggregate_rules', '合并相邻同策略规则', optionCopy('合并相邻同类规则，保持原有分流顺序。', '规则较多、希望减少生成的规则插件数量时开启。', '仅合并类型相同、位置相邻且转发目标一致的规则，保留直连和代理规则的原始优先级，不会把分散的同策略规则全部合并。')),
   { path: 'block_qtypes', label: '屏蔽查询类型', type: 'numbers', wide: true, ...optionCopy('只屏蔽选定查询类型，留空则全部放行。', '明确需要阻止某类 DNS 查询时设置，不确定可留空。', '对选定类型返回空成功响应，不是查询错误。填写数字代码，如 65 为 HTTPS、255 为 ANY；删除全部条目即可停止屏蔽。'), documentation: { href: 'https://oxidns.org/dns-codes/#qtype-%E6%9F%A5%E8%AF%A2%E7%B1%BB%E5%9E%8B', label: '查询类型表' } },
-  { path: 'default_forward', label: '未匹配时转发到', ...optionCopy('未命中任何分流规则时，使用所选 DNS。', '为没有专门规则的网站指定默认查询方式。', '只有域名、动态规则和响应 IP 规则均未命中时才使用此上游。选择代理 DNS 后，是否启用备用查询仍由备用 DNS 设置决定。'), options: [{ value: 'forward_remote', label: '代理 DNS' }, { value: 'forward_local', label: '直连 DNS' }] }
+  { path: 'default_forward', label: '未匹配时转发到', ...optionCopy('未命中任何分流规则时，使用所选 DNS。', '为没有专门规则的网站指定默认查询方式。', '域名规则和动态域名都未匹配时，直接使用此上游，不先向直连 DNS 探测。选择代理 DNS 后，是否启用备用查询仍由备用 DNS 设置决定。'), options: [{ value: 'forward_remote', label: '代理 DNS' }, { value: 'forward_local', label: '直连 DNS' }] }
 ]
 
 export const upstreamFields: OxidnsField[] = [
-  { path: 'local_dns', label: '直连 DNS', type: 'upstreams', wide: true, placeholder: 'udp://223.5.5.5:53', emptyHint: '留空使用默认直连上游。', ...optionCopy('为直连网站查询真实地址，也用于 IP 分流。', '需要设置直连网站使用的 DNS，或按响应 IP 分流时使用。', '留空采用 223.5.5.5 和 119.29.29.29 的 UDP DNS。可逐条添加地址、展开连接参数，也可切换 YAML 编辑。') },
+  { path: 'local_dns', label: '直连 DNS', type: 'upstreams', wide: true, placeholder: 'udp://223.5.5.5:53', emptyHint: '留空使用默认直连上游。', ...optionCopy('为已选直连 DNS 的域名查询网站地址。', '需要设置已选直连 DNS 的域名所使用的查询服务器。', '留空采用 223.5.5.5 和 119.29.29.29 的 UDP DNS。可逐条添加地址、展开连接参数，也可切换 YAML 编辑。') },
   number('local_concurrent', '直连并发数', 1, upstreamConcurrencyCopy),
   { path: 'remote_dns', label: '代理 DNS / 外部 Fake-IP 上游', type: 'upstreams', wide: true, placeholder: 'udp://192.0.2.53:1053', emptyHint: '留空使用默认代理上游。', ...optionCopy('设置代理分流所用 DNS，临时地址需外部提供。', '需代理分流时设置；临时地址（Fake-IP）须由外部上游提供。', '留空用 Cloudflare / Google DoH，名称不代表自动走代理。域名上游可设 bootstrap 或 dial_addr，避免循环解析。') },
   number('remote_concurrent', '代理并发数', 1, upstreamConcurrencyCopy),
@@ -53,8 +53,6 @@ export const cacheFields: OxidnsField[] = [
   toggle('cache_enabled', '启用主缓存', optionCopy('重复访问直连网站时，直接复用查询结果。', '希望减少直连网站的重复查询、加快 DNS 响应时开启。', '保存直连分支的 DNS 响应，命中后直接返回。此主缓存不用于代理或 Fake-IP 分支，关闭它不会关闭其他独立缓存。')),
   number('cache_size', '主缓存条目数', 1, optionCopy('保存更多直连查询结果，同时占用更多内存。', '经常访问的域名较多，且设备有足够内存时可增大。', '设置主缓存最多保存的查询条目数，单位是条而非字节。更大的容量能容纳更多结果，但不保证每次查询都命中缓存。')),
   number('cache_lazy_ttl', 'Lazy cache 总保留时长（秒）', 0, optionCopy('允许先用过期结果应答，再在后台刷新。', '希望减少缓存刚过期时的等待，可以设置大于 0 的秒数。', '300 表示从写入起至少保留 300 秒，并非原 TTL 加 300 秒；原 TTL 更长时沿用原值。过期命中后后台刷新，0 仅关闭此功能。')),
-  toggle('probe_cache_enabled', '启用国内探测缓存', optionCopy('复用国内查询结果，仍继续判断 IP 分流。', '使用响应 IP 规则分流，希望减少重复国内 DNS 探测时开启。', '此缓存与主缓存独立，命中后仍返回主流程判断 IP 应走直连还是代理。不使用过期结果后台刷新的 lazy cache 机制。')),
-  number('probe_cache_size', '探测缓存条目数', 1, optionCopy('增加探测结果容量，减少重复查询的次数。', '已开启国内探测缓存，且重复查询较多时可增大。', '设置探测缓存能保留的查询条目数，与主缓存独立计数。增大可减少上游探测，也会增加内存占用，可按设备资源调整。')),
   toggle('cache_dump_enabled', '缓存持久化', optionCopy('将主缓存保存到磁盘，供服务重启后恢复。', '希望重启后继续使用主缓存，且能接受额外写盘时开启。', '定期保存缓存快照；v1.6.1 恢复时不会扣除停机时长，因此结果可能偏旧。默认关闭，只在主缓存同时启用时有意义。')),
   text('cache_dump_file', '缓存文件', optionCopy('指定缓存快照位置，使用工作目录内路径。', '已开启主缓存持久化，需要指定保存位置时填写。', '路径以 OxiDNS 工作目录为起点，如 ./state/cache.dump。只能使用相对路径，不能填写绝对路径或包含 ../ 的上级目录路径。')),
   number('cache_dump_interval', '持久化间隔（秒）', 1, optionCopy('控制缓存写盘频率，间隔越短写入越频繁。', '主缓存和缓存持久化均已开启时，此设置才生效。', '按此秒数定期将主缓存保存到磁盘。间隔较短可减少意外停止时丢失的缓存，但会增加磁盘写入；不会改变 DNS 响应的有效期。'))
@@ -128,23 +126,10 @@ export const featureGroups: Array<{ key: string; title: string; hint: string; he
     number('ip_selector.args.cache.ttl', '探测成功缓存（秒）', 1, optionCopy('复用成功测速的时长越长，重新探测越少。', '已开启探测结果缓存，需要平衡测速次数和更新速度。', '成功评分在此秒数内可复用。时间较长能减少探测，但网络发生变化后更新较慢；缩短可更快重新评估 IP，也会增加测速请求。')),
     number('ip_selector.args.cache.failure_ttl', '探测失败缓存（秒）', 1, optionCopy('控制多久后重试失败地址，越短恢复越及时。', '已开启探测结果缓存，希望控制失败 IP 的重试速度。', '失败评分保留到期后才会重新探测。较短可更快发现已恢复的地址，但会对持续故障的 IP 重复测速，增加连接开销。'))
   ] },
-  { key: 'dynamic_domain_set', title: '动态域名集与学习（实验性）', ...optionCopy('记住域名的分流选择，减少后续重复判断。', '需要 API 动态改规则，或试用按查询结果自动学习。', '学习后可直接按域名分流，可能固定后续结果。规则保存在 state/，部署时保留；已有明确域名规则仍优先于动态规则。'), fields: [
+  { key: 'dynamic_domain_set', title: '动态域名集（实验性）', ...optionCopy('按动态名单分流域名，明确的规则仍优先。', '需要使用已有动态域名，或通过 API 增删域名规则。', '名单保存在 state/，部署时保留。标准流程不再根据查询结果的 IP 自动学习；手工添加和历史已有的域名继续参与匹配。'), fields: [
     text('dynamic_domain_set.args.path', '动态规则文件', optionCopy('在 state 目录保存动态规则，重启后继续使用。', '使用动态域名集，需要保存 API 添加或学习到的规则。', '填写 state/ 下的相对路径。首次没有文件时创建，已有文件会在启动时读取；部署时保留该目录中的运行数据。')),
-    { path: 'dynamic_domain_set.route', label: '动态规则转发到', ...optionCopy('选择动态域名使用的 DNS，明确规则仍优先。', '希望指定动态域名集的查询去向时选择。', '命中后使用所选上游，但明确的域名规则优先。自动学习也只收录经响应 IP 规则分到此目标的域名，不会收录全部查询。'), options: [{ value: 'direct', label: '直连 DNS' }, { value: 'proxy', label: '代理 DNS' }] },
+    { path: 'dynamic_domain_set.route', label: '动态规则转发到', ...optionCopy('选择动态域名使用的 DNS，明确规则仍优先。', '希望指定动态域名集的查询去向时选择。', '命中名单后使用所选 DNS，已有明确的域名规则仍优先。这里只设置动态名单中域名的去向，不会根据查询结果的 IP 增加新域名。'), options: [{ value: 'direct', label: '直连 DNS' }, { value: 'proxy', label: '代理 DNS' }] },
     { path: 'dynamic_domain_set.args.bootstrap_rules', label: '初始规则', type: 'list', wide: true, ...optionCopy('首次创建动态文件时使用，不覆盖已有规则。', '动态规则文件尚不存在，需要预置域名规则时填写。', '仅首次创建文件时写入。full:example.com 只匹配该域名，domain:example.com 还匹配子域名；已有文件不覆盖。') },
-    number('dynamic_domain_set.args.queue_size', '写入队列', 1, optionCopy('缓冲等待保存的学习任务，应对查询高峰。', '已启用自动学习，需要暂存高峰期的规则写入任务。', '设置等待后台写入的任务容量。增大能容纳更多待写任务，但可能增加内存占用；它不限制最终规则文件中保存的域名总数。')),
-    number('dynamic_domain_set.args.batch_size', '每批条数', 1, optionCopy('凑满一批再保存，减少动态规则写入次数。', '自动学习产生较多规则，希望降低频繁写盘的开销。', '后台累计到此数量后批量追加规则。未满一批时仍会按刷新间隔写入，因此增大批次不代表零散规则一直无法保存。')),
-    number('dynamic_domain_set.args.flush_interval_ms', '刷新间隔（毫秒）', 1, optionCopy('控制学到的规则多久写盘，越短保存越及时。', '使用自动学习，需要控制规则保存到文件的及时程度。', '后台按此毫秒数将已学习规则追加到文件，未满一批也会提交。较短可更快落盘，但会增加磁盘写入频率。')),
-    toggle('dynamic_domain_set.learn', '启用自动学习', optionCopy('记住按 IP 判断的域名，下次直接按域名分流。', '希望复用响应 IP 分流结果，减少后续重复判断时开启。', '只学习查询的域名，不学习 CNAME 指向的域名。学到后可直接分流，也可能固定之后的分流结果；此功能仍属实验性。')),
-    select('dynamic_domain_set.learn_args.phase', '学习阶段', ['after', 'before'], optionCopy('选择确认响应后学习，或查询处理前就学习。', '自动学习已开启，需要决定何时把查询域名记入规则。', 'after 等后续处理完成并检查响应；before 提前学习，不检查查询是否成功、是否含答案。选择 before 时需接受错误结果也可能被学习。')),
-    select('dynamic_domain_set.learn_args.questions', '学习问题范围', ['first', 'all'], optionCopy('常见查询只有一个问题，通常只学习首个。', '自动学习已开启，且需要处理含多个 DNS 问题的请求。', 'first 只检查请求中的第一个问题，all 检查全部问题。多数常见 DNS 请求仅包含一个问题，此时两种选择没有区别。')),
-    { path: 'dynamic_domain_set.learn_args.qtypes', label: '学习查询类型', type: 'list', wide: true, ...optionCopy('只学习指定查询类型，至少保留一种类型。', '自动学习已开启，希望排除与分流无关的查询类型。', '只学习列表中的类型，例如 A 为 IPv4 查询、AAAA 为 IPv6 查询。至少保留一种类型，其他类型的请求不会被加入动态分流规则。') },
-    select('dynamic_domain_set.learn_args.rule_kind', '学习规则类型', ['full', 'domain'], optionCopy('选择只记住当前域名，或同时覆盖其子域名。', '自动学习已开启，需要决定新规则覆盖多大的域名范围。', 'full 仅匹配学到的完整域名；domain 也匹配其下级子域名，影响范围更广。不确定时可先用 full，避免连带改变子域名分流。')),
-    toggle('dynamic_domain_set.learn_args.success_only', '仅学习成功响应', optionCopy('处理结束后，仅学习返回成功状态的查询。', '自动学习已开启，且学习阶段选择 after 时生效。', '只接受响应码为 NOERROR 的结果，排除查询错误。成功状态不保证答案非空；before 阶段不会检查此条件。')),
-    toggle('dynamic_domain_set.learn_args.answer_required', '要求响应中含答案', optionCopy('处理结束后，跳过没有答案记录的查询。', '自动学习已开启，且学习阶段选择 after 时生效。', '要求 DNS 响应的 Answer 区至少有一条记录，避免学习空答案。此条件与成功响应检查独立；before 阶段不会检查。')),
-    toggle('dynamic_domain_set.learn_args.async', '异步学习', optionCopy('后台保存学习规则，让当前查询先继续处理。', '希望 DNS 查询无需等待动态规则保存完成时开启。', '开启后任务入队即可继续处理，由后台完成写入。关闭时等待写入完成，可能增加 DNS 响应时间；后台入队不代表已经写盘。')),
-    select('dynamic_domain_set.learn_args.error_mode', '学习失败行为', ['continue', 'stop', 'fail'], optionCopy('选择学习失败后继续查询，或中止当前处理。', '自动学习已开启，需要决定写入失败是否影响 DNS 处理。', 'continue 记录错误后继续，stop 终止当前执行链，fail 返回执行错误。后两项可能影响查询结果，不确定时可选 continue。')),
-    text('dynamic_domain_set.learn_args.timeout', '学习超时', optionCopy('同步学习时，限制当前查询等待写入的时间。', '仅在关闭异步学习、查询需等待规则写入时生效。', '填写带单位的时长，如 1s 或 500ms。超过时长按学习失败处理；开启异步学习后，当前查询不再按此设置等待后台保存。'))
   ] },
   { key: 'adguard', title: 'AdGuard DNS 过滤', ...optionCopy('按域名拦截广告，不支持网页内元素过滤。', '希望在 DNS 查询阶段拦截广告或其他域名时使用。', '支持 AdGuard DNS 规则子集，不支持网页元素、URL 路径、dnsrewrite 或 $client。规则文件随完整下载包提供。'), fields: [
     { path: 'adguard.content', label: '自定义规则', type: 'textarea', wide: true, rows: 5, placeholder: '||ads.example.com^\n@@||allowed.example.com^', ...optionCopy('每行填写一条拦截或放行规则，与订阅共用。', '希望在订阅规则之外，自行指定拦截或放行的域名。', '每行一条，如 ||ads.example.com^ 拦截，@@||allowed.example.com^ 放行；自定义与订阅规则一起参与匹配。') },
@@ -176,10 +161,15 @@ export const applyVerifiedOxidnsTemplate = (settings: Record<string, any>) => Ob
   worker_threads: 2, aggregate_rules: true, metrics_enabled: true,
   local_concurrent: 2, remote_concurrent: 1, fallback_concurrent: 2,
   fallback_threshold: 500, always_standby: false, remote_ttl: 1,
-  cache_enabled: true, cache_size: 10240, cache_lazy_ttl: 300, cache_dump_enabled: false,
-  probe_cache_enabled: true, probe_cache_size: 2048
+  cache_enabled: true, cache_size: 10240, cache_lazy_ttl: 300, cache_dump_enabled: false
 })
 
-/** 能转换为 DNS 匹配的单条规则类型，与后端 oxidns._routing_groups / mosdns._single_rule_groups 一致 */
+/** MosDNS 支持的单条规则类型；OxiDNS 仅使用下面的域名子集。 */
 export const DNS_RULE_TYPES = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX', 'IP-CIDR', 'IP-CIDR6']
 export const isDnsRuleType = (type: unknown) => typeof type === 'string' && DNS_RULE_TYPES.includes(type)
+
+/** OxiDNS 不再按响应 IP 分类；混合规则集只使用域名部分。 */
+export const OXIDNS_RULE_TYPES = ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-REGEX']
+export const isOxidnsRuleType = (type: unknown) => typeof type === 'string' && OXIDNS_RULE_TYPES.includes(type)
+export const isOxidnsRule = (item: { itemType?: unknown; rule_type?: unknown; behavior?: unknown }) =>
+  item.itemType === 'ruleset' ? item.behavior !== 'ipcidr' : isOxidnsRuleType(item.rule_type)

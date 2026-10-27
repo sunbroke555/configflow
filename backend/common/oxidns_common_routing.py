@@ -19,7 +19,7 @@ from backend.common.dns_watchdog import WATCHDOG_RULE
 from backend.common.oxidns_native import resource_references, relative_resource
 from backend.common.rule_dns import (
     BLACKHOLE_TAG, GROUP_TAG_RE, LIST_ROUTES, REAL_WRAPPERS, ROUTE_LABELS, UPSTREAM_PREFIX, Invalid,
-    chain_features, follow_route, helper_plugins, normalize_action, parse_exec, pinned_action, probe_needed,
+    chain_features, convertible, follow_route, has_ip_part, helper_plugins, normalize_action, parse_exec, pinned_action, probe_needed,
     policy_dns_routes, route_exec, route_key,
 )
 from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag, ruleset_parts, unavailable_rulesets
@@ -130,8 +130,10 @@ def _catalog(config):
                         if atom is not None:
                             atoms.setdefault(atom, set()).add(identity)
                             parts.add(part)
-        current = set(ruleset_parts(item, config)) if item.get('itemType') == 'ruleset' else parts
-        records[identity] = {'suffix': suffix, 'parts': parts, 'shapes': ({frozenset(parts), frozenset(current)}),
+        current = set(ruleset_parts(item, config)) if item.get('itemType') == 'ruleset' else (parts - {'ip'})
+        content_aware = parts if has_ip_part(item, config) else parts - {'ip'}
+        records[identity] = {'suffix': suffix, 'parts': parts,
+                             'shapes': {frozenset(parts), frozenset(content_aware), frozenset(current)},
                              'item': item}
     return records, atoms
 
@@ -221,6 +223,30 @@ def _analyze(document, settings, config):
                 not caps['custom_matches']['editable'] and legacy['capabilities']['custom_matches']['editable']):
             return legacy
     return state
+
+
+def _observed_legacy_groups(config, values, assigned, atoms, aggregate):
+    """Validate old per-rule parts even when a downloaded source later changed.
+
+    Content-aware releases omitted an IP part after seeing its source. The old
+    document may consequently contain any recognized per-rule combination, but
+    its resources, route and order must still exactly match the current catalog.
+    """
+    raw = _routing_groups(config, {**values, 'aggregate_rules': False}, legacy=True)
+    expected = {'domain': [], 'ip': []}
+    for part, groups in raw.items():
+        for group in groups:
+            owners = {identity for key, entries in group['args'].items() for value in entries
+                      for identity in atoms.get(_atom(part, key, value), ())}
+            if len(owners) != 1 or part not in assigned.get(next(iter(owners)), {}):
+                continue
+            target = expected[part]
+            if aggregate and target and target[-1]['route'] == group['route']:
+                for key, entries in group['args'].items():
+                    target[-1]['args'].setdefault(key, []).extend(entries)
+            else:
+                target.append(deepcopy(group))
+    return expected
 
 
 def _recognize(document, settings, config, claim):
@@ -372,12 +398,10 @@ def _recognize(document, settings, config, claim):
     matches = []
     if recognized:
         for aggregate in (True, False):
-            for legacy in (False, True):
-                expected = _routing_groups(config, {**values, 'aggregate_rules': aggregate}, legacy=legacy)
-                if all(_same([_describe(group) for group in groups[part]], [_describe(group) for group in expected[part]])
-                       for part in groups):
-                    matches.append(aggregate)
-                    break
+            expected = _observed_legacy_groups(config, values, assigned, atoms, aggregate)
+            if all(_same([_describe(group) for group in groups[part]], [_describe(group) for group in expected[part]])
+                   for part in groups):
+                matches.append(aggregate)
         recognized = bool(matches)
     if recognized:
         values['aggregate_rules'] = matches[0] if len(matches) == 1 else None
@@ -449,6 +473,40 @@ def read_routing(document, settings, config):
             state['values'][field] = aliased['values'][field]
             state['capabilities'][field] = aliased['capabilities'][field]
     return {'values': deepcopy(state['values']), 'capabilities': deepcopy(state['capabilities'])}
+
+
+def migrate_domain_only_routing(document, settings, config, base_url=''):
+    """Render old managed IP routing as domain-only without changing the draft.
+
+    Only a fully recognizable owned suffix is migrated. Hand-written providers,
+    includes, custom pipeline shapes and their downloads remain untouched. The
+    normal routing editor still exposes its lock reason for those documents.
+    """
+    from backend.common.oxidns_native import load_native_yaml
+    # Publication expands includes first. Check the source too so an expanded
+    # custom document is not mistaken for a wholly managed draft.
+    source = load_native_yaml(settings['native_config']) if settings.get('native_config', '').strip() else {}
+    if document.get('include') or source.get('include'):
+        return document, settings
+    current = _analyze(document, settings, config)
+    if not current.get('groups', {}).get('ip') or not all(
+            current['capabilities'][key]['editable'] for key in (*SELECTORS, 'rule_actions')):
+        return document, settings
+    # A recognizable routing suffix can still share a custom update pipeline.
+    # Automatic export preserves such a draft atomically; an explicit editor
+    # change continues to report the precise unsafe-update error to the user.
+    try:
+        rendered, values = apply_routing(document, settings, config, {}, base_url, before_config=config)
+        # Empty owned executors cannot be emitted with an empty download list.
+        import yaml
+        from backend.common.oxidns_common import _Context
+        from backend.common.oxidns_common_updates import finish_rule_updates
+        values['native_config'] = yaml.safe_dump(rendered, allow_unicode=True, sort_keys=False)
+        finish_rule_updates(_Context(rendered, values), {'direct_rulesets': []}, config, base_url)
+        values['native_config'] = yaml.safe_dump(rendered, allow_unicode=True, sort_keys=False)
+        return rendered, values
+    except OxidnsSettingsError:
+        return document, settings
 
 
 def _uses_rule(document, config, identity):
@@ -961,7 +1019,9 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
     values = {**deepcopy(current['values']), **deepcopy(changes)}
     if values['default_forward'] not in ('forward_local', 'forward_remote'):
         raise OxidnsSettingsError('默认转发目标无效。')
-    if not rebuild and changes.keys() <= {'default_forward'}:
+    migrate_ip = bool(current.get('groups', {}).get('ip')
+                      and current['capabilities']['direct_rules']['editable'])
+    if not rebuild and not migrate_ip and changes.keys() <= {'default_forward'}:
         result = deepcopy(document)
         args = _plugins(result)['sequence_main']['args']
         direct = values['default_forward'] == 'forward_local'
@@ -984,7 +1044,9 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
                                                    values['default_forward'], probe)
         return result, deepcopy(settings)
     known = _known(config)
-    active = _catalog(config)[0] if rebuild else current['records']
+    active = {identity: record for identity, record in
+              (_catalog(config)[0] if rebuild else current['records']).items()
+              if convertible(record['item'])}
     _validate_selections(values, changes, known)
     _take_over(values, current, changes, known, notices)
     parked, follow = _settle(values, settings, changes, current, known, active, policy_dns_routes(config))
@@ -996,7 +1058,7 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
         values['custom_matches'] = _normalize_custom_matches(values['custom_matches'])
     result, result_settings = deepcopy(document), deepcopy(settings)
     main = _plugins(result)['sequence_main']
-    routing_changed = rebuild or any(key in changes for key in (*SELECTORS, 'aggregate_rules', 'rule_actions'))
+    routing_changed = rebuild or migrate_ip or any(key in changes for key in (*SELECTORS, 'aggregate_rules', 'rule_actions'))
     if routing_changed:
         # There is no actual aggregate setting until adjacent same-route rules
         # exist. New rule selections use the existing grouped representation, or

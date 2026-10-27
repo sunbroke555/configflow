@@ -46,7 +46,7 @@ def test_projection_reads_native_rules_and_routing_instead_of_stale_metadata():
                     default_forward='forward_local', custom_matches=[{'exec': 'stale'}])
     settings['template_settings'].update(direct_rules=[], proxy_rules=['a'])
     result = read_routing(document, settings, config)
-    assert result['values']['direct_rules'] == ['a', 'b', 'ip']
+    assert result['values']['direct_rules'] == ['a', 'b']
     assert result['values']['proxy_rules'] == ['c']
     assert result['values']['direct_rulesets'] == ['rs']
     assert result['values']['aggregate_rules'] is True
@@ -69,7 +69,7 @@ def test_rule_selection_atomic_update_keeps_manual_fields_plugins_files_and_orde
         'direct_rules': ['b', 'ip'], 'proxy_rules': ['a', 'c'], 'proxy_rulesets': ['rs2'],
     })
     actual = project(updated, sources, config)
-    assert actual['direct_rules'] == ['b', 'ip']
+    assert actual['direct_rules'] == ['b']
     assert actual['proxy_rules'] == ['a', 'c']
     assert actual['proxy_rulesets'] == ['rs2']
     assert updated['future'] == document['future']
@@ -87,13 +87,13 @@ def test_aggregate_toggle_changes_only_owned_rule_grouping_and_is_inferred_again
     document, settings, config = prepared()
     updated, sources = apply_routing(document, settings, config, {'aggregate_rules': False})
     assert project(updated, sources, config)['aggregate_rules'] is False
-    assert project(updated, sources, config)['direct_rules'] == ['a', 'b', 'ip']
+    assert project(updated, sources, config)['direct_rules'] == ['a', 'b']
     restored, sources = apply_routing(updated, sources, config, {'aggregate_rules': True})
     assert project(restored, sources, config)['aggregate_rules'] is True
     assert plugin(restored, 'forward_local') == plugin(document, 'forward_local')
 
 
-def test_default_change_updates_ip_fallback_without_touching_custom_middle():
+def test_default_change_keeps_custom_middle_and_does_not_add_ip_probe():
     document, settings, config = prepared()
     main = plugin(document, 'sequence_main')['args']
     # An unusual custom clause prevents projection of rule selection, but does
@@ -102,8 +102,8 @@ def test_default_change_updates_ip_fallback_without_touching_custom_middle():
     before = deepcopy(document)
     updated, _ = apply_routing(document, settings, config, {'default_forward': 'forward_local'})
     new_main = plugin(updated, 'sequence_main')['args']
-    # Every IP route is direct like the new fallback: the probe and its wrapper go,
-    # the IP clauses and the custom middle stay.
+    # Domain-only routing changes the default without adding a probe or changing
+    # the unrelated custom middle.
     assert new_main == [entry for entry in main[:-1] if entry not in ({'exec': 'jump local_probe'}, {'exec': 'drop_resp'})] \
         + [{'exec': 'goto china_dns'}]
     assert document == before
@@ -224,12 +224,13 @@ def test_download_projection_accepts_unfinished_other_plugins_and_adguard_actual
     assert plugin(updated, 'unfinished')['args'] == {}
 
 
-def test_mixed_ruleset_projection_requires_both_domain_and_ip_parts():
+def test_mixed_ruleset_projection_requires_only_the_domain_part():
     document, settings, config = prepared(direct_rulesets=['mixed'])
     result = read_routing(document, settings, config)
     assert result['values']['direct_rulesets'] == ['mixed']
     assert result['capabilities']['direct_rulesets']['editable'] is True
-    provider = next(item for item in document['plugins'] if item['type'] == 'ip_set')
+    assert not any(item['type'] == 'ip_set' for item in document['plugins'])
+    provider = next(item for item in document['plugins'] if item['type'] == 'domain_set' and 'files' in item['args'])
     provider['args']['files'] = []
     assert read_routing(document, settings, config)['capabilities']['direct_rulesets']['editable'] is False
 
@@ -246,7 +247,7 @@ def test_features_dynamic_routing_and_custom_fields_survive_rule_and_default_bat
     })
     updated, sources = apply_routing(updated, sources, config, {'custom_match_position': 'head'})
     values = project(updated, sources, config)
-    assert values['direct_rules'] == ['a', 'ip']
+    assert values['direct_rules'] == ['a']
     assert values['default_forward'] == 'forward_local'
     assert values['custom_match_position'] == 'head'
     for tag in ['dynamic_domains', 'learn_classified_domain', 'ip_selector', 'adguard_rules', 'query_recorder', 'china_dns', 'ip_requery_proxy']:
@@ -255,10 +256,10 @@ def test_features_dynamic_routing_and_custom_fields_survive_rule_and_default_bat
 
 def test_adding_rule_never_creates_a_reference_to_missing_standard_helper():
     document, settings, config = prepared(direct_rules=[], proxy_rules=[], direct_rulesets=[])
-    document['plugins'] = [item for item in document['plugins'] if item['tag'] != 'direct_ip']
+    document['plugins'] = [item for item in document['plugins'] if item['tag'] != 'china_dns']
     before = deepcopy(document)
-    with pytest.raises(OxidnsSettingsError, match='direct_ip'):
-        apply_routing(document, settings, config, {'direct_rules': ['ip']})
+    with pytest.raises(OxidnsSettingsError, match='china_dns'):
+        apply_routing(document, settings, config, {'direct_rules': ['a']})
     assert document == before
 
 
@@ -363,7 +364,7 @@ def editable(result):
 
 
 @pytest.mark.parametrize('features', [{}, FEATURES], ids=['plain', 'features'])
-@pytest.mark.parametrize('identity', ['b', 'ip', 'mixed'], ids=['domain', 'ip', 'classical'])
+@pytest.mark.parametrize('identity', ['b', 'mixed'], ids=['domain', 'classical'])
 @pytest.mark.parametrize('action', list(ACTIONS))
 def test_read_apply_roundtrip_each_action(action, identity, features):
     config = policies()
@@ -436,7 +437,7 @@ def test_disable_routed_rule_does_not_raise_and_parks():
     assert sources['rule_dns_parked'] == {'b': {'action': 'blackhole'}, 'rs': {'action': 'direct'}}
     assert sources['rule_actions'] == {}
     values = read_routing(updated, sources, after)['values']
-    assert values['direct_rules'] == ['a', 'ip'] and values['direct_rulesets'] == []
+    assert values['direct_rules'] == ['a'] and values['direct_rulesets'] == []
     assert helpers(updated) == []
     assert _rule_path({'id': 'rs'}, 'domain').removeprefix('./') not in yaml.safe_dump(updated)
 
@@ -572,7 +573,7 @@ def test_apply_creates_and_removes_owned_helpers():
     assert helpers(updated) == ['cf_dns_blackhole', *chain(UP)]
     assert plugin(updated, 'cf_dns_blackhole') == BLACKHOLE_PLUGIN
     assert [entry['exec'] for entry in main_args(updated) if entry.get('matches', [''])[0].startswith('resp_ip $rules_')] \
-        == [f'goto cf_dns_up_{key}']
+        == []
     updated, sources = apply_routing(updated, sources, config, {'rule_actions': {'c': UP}})
     assert helpers(updated) == chain(UP)
     updated, sources = apply_routing(updated, sources, config, {'rule_actions': {}})
@@ -682,13 +683,13 @@ def test_custom_match_edit_preserves_invalid_helper_entry():
 def test_alias_rejections_are_recognised_and_written_canonically():
     config = policies()
     document, settings = native(config, direct_rules=['a'], aggregate_rules=False, rule_actions={
-        'b': {'action': 'refused'}, 'c': {'action': 'nxdomain'}, 'ip': {'action': 'nodata'}})
+        'b': {'action': 'refused'}, 'c': {'action': 'nxdomain'}, 'mixed': {'action': 'nodata'}})
     spelled = {'reject': 'REJECT 5', 'reject 3': 'reject NXDOMAIN', 'reject 0': 'reject noerror'}
     for entry in main_args(document):
         entry['exec'] = spelled.get(entry['exec'], entry['exec'])
     result = read_routing(document, settings, config)
     assert result['values']['rule_actions'] == {'b': {'action': 'refused'}, 'c': {'action': 'nxdomain'},
-                                                'ip': {'action': 'nodata'}}
+                                                'mixed': {'action': 'nodata'}}
     updated, _ = apply_routing(document, settings, config, {}, before_config=config)
     assert [entry['exec'] for entry in main_args(updated) if entry['exec'].lower().startswith('reject')
             and entry.get('matches', [''])[0].startswith(('qname $rules', 'resp_ip $rules'))] == ['reject', 'reject 3', 'reject 0']

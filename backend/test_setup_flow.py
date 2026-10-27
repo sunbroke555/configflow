@@ -650,7 +650,7 @@ def test_recommended_classical_library_is_ready_and_existing_sources_are_not_dup
     assert assert_gateway_onboarding_ready(candidate, base_url='https://config.test')['ready']
     downloads = get_oxidns_ruleset_downloads(candidate, 'https://config.test')
     assert any(item['local_path'].endswith('_domain.txt') for item in downloads)
-    assert any(item['local_path'].endswith('_ip.txt') for item in downloads)
+    assert not any(item['local_path'].endswith('_ip.txt') for item in downloads)
     assert len(downloads) > 30
     index = client.get('/api/setup').json
     telegram = next(item for item in index['domain_rules'] if item['id'] == 'builtin:telegram')

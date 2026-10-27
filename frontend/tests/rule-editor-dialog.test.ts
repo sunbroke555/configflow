@@ -208,26 +208,23 @@ describe('rule editor dialog', () => {
     expect(network.update).toHaveBeenCalledWith('rule-x', expect.objectContaining({ rule_type: 'GEOIP', dns: 'default' }), 'p1')
   })
 
-  it('warns about IP parts and the first IP rule, including classical rulesets', async () => {
+  it('keeps IP rules for connections and applies DNS only to classical domain parts', async () => {
     await render()
     await type('#rule-values', 'IP-CIDR,1.2.3.0/24')
-    expect(dnsTrigger().textContent).toContain('默认上游')
-    expect(text()).not.toContain('保存后会开启本地探测')
-    await pickDns('直连 DNS')
-    expect(text()).toContain('保存后会开启本地探测')
-    await click(button('另有 1 条提示'))
-    expect(text()).toContain('IPv4 网段不影响 IPv6 查询')
+    expect(dnsTrigger().disabled).toBe(true)
+    expect(text()).toContain('IP-CIDR 不参与 DNS 分流')
     expect(dialog().querySelector('#rule-noresolve')).not.toBeNull()
+    await click(save())
+    expect(network.compose.mock.calls[0]![0]).not.toHaveProperty('dns')
 
     wrappers.splice(0).forEach(wrapper => wrapper.unmount())
     document.body.innerHTML = ''
     await render({ initialSource: 'library' })
     ;(wrappers[0]!.vm as any).$.setupState.form.libraryIds = ['lib-b']
     await flushPromises()
-    // A classical ruleset may create an IP group: default upstream until chosen, then the first-IP warning.
-    expect(dnsTrigger().textContent).toContain('默认上游')
-    await pickDns('跟随策略')
-    expect(text()).toContain('保存后会开启本地探测')
+    expect(dnsTrigger().disabled).toBe(false)
+    expect(dnsTrigger().textContent).toContain('跟随策略')
+    expect(text()).not.toContain('本地探测')
   })
 
   it('treats a classical ruleset whose content has no IP lines as domain only', async () => {
@@ -239,11 +236,10 @@ describe('rule editor dialog', () => {
     expect(text()).not.toContain('本地探测')
   })
 
-  it('keeps pasted IP lines on the default upstream and sends dns_ip until DNS is chosen', async () => {
+  it('keeps pasted IP lines out of DNS when following the policy', async () => {
     await render()
     await type('#rule-values', 'openai.com\nIP-CIDR,1.2.3.0/24')
-    expect(text()).toContain('域名 1 条：跟随策略 · 直连 DNS ／ IP 1 条：默认上游')
-    expect(text()).toContain('IP 规则保持默认上游，避免为所有查询开启本地探测。')
+    expect(text()).toContain('域名 1 条：跟随策略 · 直连 DNS ／ IP 1 条：仅连接分流')
     await click(save())
     expect(network.compose).toHaveBeenCalledWith({
       source: { kind: 'values', rule_type: 'DOMAIN-SUFFIX', text: 'openai.com\nIP-CIDR,1.2.3.0/24' },
@@ -252,15 +248,15 @@ describe('rule editor dialog', () => {
     }, 'p1')
   })
 
-  it('applies a chosen DNS to every pasted line', async () => {
+  it('applies an explicit DNS choice only to pasted domain lines', async () => {
     await render()
     await type('#rule-values', 'openai.com\nIP-CIDR,1.2.3.0/24')
     await pickDns('黑洞')
-    expect(text()).toContain('保存后会开启本地探测')
+    expect(text()).not.toContain('本地探测')
     await click(save())
     const [payload] = network.compose.mock.calls[0]!
     expect(payload).toMatchObject({ dns: 'blackhole' })
-    expect(payload).not.toHaveProperty('dns_ip')
+    expect(payload).toHaveProperty('dns_ip', 'default')
   })
 
   it('points out when MosDNS handles the rule differently', async () => {
@@ -699,8 +695,8 @@ describe('rule editor dialog', () => {
     await click(save())
     const [id, payload] = network.setUpdate.mock.calls[0]!
     expect(id).toBe('set-a')
-    expect(payload).toMatchObject({ library_rule_id: 'lib-c', no_resolve: true, policy: 'REJECT' })
-    expect(payload).not.toHaveProperty('dns')
+    // Switching a domain source to pure IP clears its former DNS override.
+    expect(payload).toMatchObject({ library_rule_id: 'lib-c', no_resolve: true, policy: 'REJECT', dns: 'default' })
   })
 
   it('compares with MosDNS only when a MosDNS device is bound or the rule is in a MosDNS list', async () => {

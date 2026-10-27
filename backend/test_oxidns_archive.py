@@ -33,12 +33,13 @@ def test_complete_mixed_archive_deduplicates_fetch_and_excludes_runtime_state(mo
         files = {name: output.read(name).decode() for name in output.namelist()}
     assert sorted(calls) == ['https://rules.test/adguard', 'https://rules.test/mixed']
     assert config == original
-    assert len(files) == 6
+    assert len(files) == 5
     assert not any(name.startswith('state/') or name.endswith('.db') for name in files)
     assert 'host.test 192.0.2.10' == files['rules/custom_hosts.txt']
     assert '||custom-ads.test^' == files['rules/adguard-custom.txt']
     assert r'regexp:^node[0-9]{1,3}\.test$' in files.values()
-    assert '203.0.113.0/24' in files.values()
+    assert not any(name.endswith('_ip.txt') for name in files)
+    assert '203.0.113.0/24' not in files.values()
     assert any('$dnstype=A' in content for name, content in files.items() if name != 'config.yaml')
     for plugin in yaml.safe_load(files['config.yaml'])['plugins']:
         if isinstance(plugin.get('args'), dict):

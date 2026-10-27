@@ -55,8 +55,8 @@ def test_every_action_and_pinned_chain_is_generated(tmp_path, scenario):
     document = generated(tmp_path, scenario)
     execs = rule_execs(document)
     for route in ('reject', 'reject 3', 'reject 0', '$cf_dns_blackhole'):
-        # Once among the domain groups and once among the IP groups.
-        assert execs.count(route) == 2, route
+        # Only domain rules affect DNS answers.
+        assert execs.count(route) == 1, route
     assert plugins(document)['cf_dns_blackhole']['args'] == {'mode': 'null', 'short_circuit': True}
     cache = features['cache_enabled']
     wrappers = [f'${name}' for name in REAL_WRAPPERS] if 'ip_selector' in features else []
@@ -69,7 +69,7 @@ def test_every_action_and_pinned_chain_is_generated(tmp_path, scenario):
                     'accept']
         assert steps == expected, source
         # Domain and IP rules share one chain per pinned upstream.
-        assert execs.count(f'goto cf_dns_up_{key}') == (1 if source == 'fallback' else 2)
+        assert execs.count(f'goto cf_dns_up_{key}') == 1
         assert (f'cf_dns_cache_{key}' in plugins(document)) is cache
 
 
@@ -81,10 +81,11 @@ def test_native_applier_writes_the_template_helpers(tmp_path):
     assert main_execs(native) == main_execs(template)
 
 
-def test_routed_classical_ruleset_turns_on_local_probe(tmp_path):
+def test_routed_classical_ruleset_uses_only_domain_part(tmp_path):
     document = generated(tmp_path, 'classical')
-    assert main_execs(document)[-4:] == ['jump local_probe', 'reject 3', 'drop_resp', 'goto proxy_dns_seq']
-    assert len(list((tmp_path / 'rules').iterdir())) == 2
+    assert main_execs(document)[-2:] == ['reject 3', 'goto proxy_dns_seq']
+    assert 'jump local_probe' not in main_execs(document)
+    assert len(list((tmp_path / 'rules').iterdir())) == 1
 
 
 @pytest.mark.skipif(not BINARY, reason='Set OXIDNS_TEST_BINARY for real-core acceptance')
@@ -94,7 +95,7 @@ def test_real_core_answers_every_action(tmp_path, scenario):
     results = run_rule_dns(tmp_path, BINARY)
     assert results['check'].startswith('Configuration is valid')
     if scenario == 'classical':
-        assert results['classical_probe'] is True
+        assert results['classical_domain_only'] is True
     else:
         assert results['actions'] is results['pinned_down_servfail'] is True
         assert results['pinned_cache'] == ('hit' if RULE_DNS_SCENARIOS[scenario][2]['cache_enabled'] else 'disabled')

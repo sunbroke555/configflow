@@ -781,7 +781,7 @@ interface RuleLibraryItem {
   source_type?: 'url' | 'content'
   content?: string
   format?: string
-  /** 规则库列表接口补充：在 OxiDNS 中参与 DNS 时会产生 IP 部分 */
+  /** 规则库来源内容是否含 IP 条目；OxiDNS 只使用其中的域名部分 */
   has_ip_part?: boolean
 }
 
@@ -836,7 +836,8 @@ const referenceHasIp = computed(() => referenceItems.value.some(item => item.has
 const referenceEngine = computed(() => referenceDns.value?.engine ?? null)
 /** 不使用 OxiDNS 的配置空间不显示 DNS；读取失败时仍显示，说明本次不修改 DNS */
 const referenceDnsShown = computed(() => !referenceEngine.value || referenceEngine.value.oxidns_in_use)
-const referenceDnsDisabled = computed(() => !referenceEngine.value || !referenceEngine.value.editable)
+const referenceHasDomain = computed(() => referenceItems.value.some(item => item.behavior !== 'ipcidr'))
+const referenceDnsDisabled = computed(() => !referenceEngine.value || !referenceEngine.value.editable || !referenceHasDomain.value)
 const referenceDnsValue = computed<RuleDnsValue>(() => (referenceDnsDisabled.value ? 'default' : referenceDnsChoice.value))
 const referencePolicyRoute = computed(() => followRoute({ itemType: 'ruleset', policy: referencePolicy.value }, referenceEngine.value?.policy_routes))
 const referenceDefaultDns = computed(() => defaultDnsChoice({
@@ -852,13 +853,12 @@ const referenceDnsWarnings = computed(() => dnsWarnings({
   value: referenceDnsValue.value,
   policy: referencePolicy.value,
   policyRoute: referencePolicyRoute.value,
-  ipRouted: referenceHasIp.value,
   // 新加入的规则集不在 MosDNS 列表中，MosDNS 按默认上游处理。
   mosdns: referenceEngine.value?.agents.some(agent => agent.service_type === 'mosdns') ? { route: null } : null,
   explainExplicit: referenceDnsTouched.value,
   upstreamLabel: referenceUpstreamLabel.value
 }).filter(warning => warning.action !== 'resync'))
-const referenceDnsHint = computed(() => (isUpstreamValue(referenceDnsValue.value)
+const referenceDnsHint = computed(() => (!referenceHasDomain.value ? 'IP 规则集只用于连接分流，不参与 DNS' : isUpstreamValue(referenceDnsValue.value)
   ? PINNED_HINT : DNS_COPY[copyKey(referenceDnsValue.value)].hint))
 const referenceDnsHelp = computed(() => `${DNS_FIELD_HELP}\n\n${DNS_COPY[copyKey(referenceDnsValue.value)].help}`)
 function chooseReferenceDns(value: RuleDnsValue) {
@@ -887,7 +887,7 @@ const addReferences = async () => {
       const payload = (choice?: RuleDnsValue): ComposePayload => ({
         source: { kind: 'library', library_rule_ids: batch.ids },
         rule: { policy: referencePolicy.value, remark: '', group_name: '', no_resolve: batch.noResolve, enabled: true, position: 'top' },
-        ...(choice ? { dns: choice } : {})
+        ...(choice && !batch.noResolve ? { dns: choice } : {})
       })
       let response
       try {
