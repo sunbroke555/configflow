@@ -10,6 +10,7 @@ import {
   useForwardPropsEmits,
 } from "reka-ui"
 import { cn } from "@/lib/utils"
+import { focusOverlayControl } from "@/lib/overlayFocus"
 import DialogOverlay from "./DialogOverlay.vue"
 
 defineOptions({
@@ -24,6 +25,11 @@ const emits = defineEmits<DialogContentEmits>()
 const delegatedProps = reactiveOmit(props, "class")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
+
+function onOpenAutoFocus(event: Event) {
+  emits("openAutoFocus", event)
+  focusOverlayControl(event)
+}
 </script>
 
 <template>
@@ -31,7 +37,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
     <DialogOverlay />
     <DialogContent
       data-slot="dialog-content"
-      v-bind="{ ...$attrs, ...forwarded }"
+      v-bind="{ ...$attrs, ...forwarded, onOpenAutoFocus }"
       :class="
         cn(
           'bg-card data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-[calc(100%-2rem)] max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain translate-x-[-50%] translate-y-[-50%] gap-5 rounded-xl border border-border p-6 shadow-overlay duration-200 max-sm:p-4',

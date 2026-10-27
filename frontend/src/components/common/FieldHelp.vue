@@ -22,6 +22,7 @@ function closeOnEscape(event: KeyboardEvent) {
       <TooltipTrigger as-child>
         <button
           type="button"
+          data-field-help-trigger
           class="field-help-trigger inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-primary-accent focus-visible:ring-2 focus-visible:ring-primary-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           :aria-label="`${label}说明`"
           :aria-expanded="open"
