@@ -1,17 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { flushPromises, RouterLinkStub } from '@vue/test-utils'
+import { flushPromises } from '@vue/test-utils'
 import OxidnsMatchEditor from '@/components/generate/OxidnsMatchEditor.vue'
-import MultiSelect from '@/components/common/MultiSelect.vue'
 import { featureGroups } from '@/lib/oxidns'
 
 import { values, render, click, input, lastChange } from './helpers/oxidns-common-settings'
 
 describe('OxiDNS current common settings', () => {
-  it('shows all seven former control groups without tool, preview or save actions', async () => {
+  it('shows the common settings tabs without a duplicate rule editor or save actions', async () => {
     await render()
-    for (const label of ['核心设置', '分流规则', 'DNS 上游', '缓存', '特色功能', 'API / 日志', '高级']) {
-      expect(document.querySelector(`[role="tab"][data-state]`) && [...document.querySelectorAll('[role="tab"]')].some(tab => tab.textContent?.trim() === label)).toBe(true)
-    }
+    expect([...document.querySelectorAll('[role="tab"]')].map(tab => tab.textContent?.trim())).toEqual([
+      '核心设置', 'DNS 上游', '缓存', '特色功能', 'API / 日志', '高级',
+    ])
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(document.body.textContent).not.toContain('预览变更')
     expect(document.body.textContent).not.toContain('模板工具')
@@ -71,59 +70,19 @@ describe('OxiDNS current common settings', () => {
     expect(wrapper.emitted('change')).toHaveLength(1)
   })
 
-  it('lists only DNS-convertible single rules and flags selected unsupported ones', async () => {
-    const wrapper = await render({rules: [
-      {id: 'direct', name: 'Direct', rule_type: 'DOMAIN'}, {id: 'geo', name: 'Geo', rule_type: 'GEOIP'},
-      {id: 'port', name: 'Port', rule_type: 'DST-PORT'}, {id: 'cidr', name: 'Cidr', rule_type: 'IP-CIDR6'},
-    ], values: {...values(), direct_rules: ['direct'], proxy_rules: ['geo']}})
-    await click('分流规则')
-    const [, , direct, proxy] = wrapper.findAllComponents(MultiSelect)
-    expect(direct.props('options').map((item: any) => item.value)).toEqual(['direct', 'cidr'])
-    expect(proxy.props('options')).toEqual([
-      {value: 'geo', label: 'Geo（暂不能转换为 OxiDNS 规则，请移除）'}, {value: 'cidr', label: 'Cidr'},
-    ])
-  })
-
-  it('leaves rules with other DNS handling to the rules page and marks policy-following rules', async () => {
-    const wrapper = await render({
-      rules: [
-        {id: 'direct', name: 'Direct', rule_type: 'DOMAIN'}, {id: 'blocked', name: 'Blocked', rule_type: 'DOMAIN-SUFFIX'},
-        {id: 'pinned', name: 'Pinned', rule_type: 'DOMAIN'}, {id: 'cidr', name: 'Cidr', rule_type: 'IP-CIDR'},
-      ],
-      ruleSets: [{id: 'ads', name: 'Ads'}, {id: 'cn', name: 'CN'}],
-      values: {...values(), direct_rules: ['direct', 'blocked'], direct_rulesets: ['cn'], rule_dns_follow: ['direct', 'cn'],
-        rule_actions: {blocked: {action: 'refused'}, ads: {action: 'blackhole'}, pinned: {action: 'upstream', upstream: {addr: 'udp://10.0.0.53'}}}},
-    }, {stubs: {RouterLink: RouterLinkStub}})
-    await click('分流规则')
-    const [directSets, proxySets, direct, proxy] = wrapper.findAllComponents(MultiSelect)
-    expect(directSets.props('options')).toEqual([{value: 'cn', label: 'CN · 跟随策略'}])
-    expect(proxySets.props('options')).toEqual([])
-    expect(direct.props('options')).toEqual([{value: 'direct', label: 'Direct · 跟随策略'}, {value: 'cidr', label: 'Cidr'}])
-    expect(proxy.props('options').map((item: any) => item.value)).toEqual(['cidr'])
-    // A stale list entry for a rule with its own action is neither shown nor sent back.
-    expect(direct.props('modelValue')).toEqual(['direct'])
-    direct.vm.$emit('update:modelValue', ['direct', 'cidr'])
-    await flushPromises()
-    expect(lastChange(wrapper)).toEqual({direct_rules: ['direct', 'cidr']})
-    const note = wrapper.get('[data-rule-actions-summary]')
-    expect(note.text()).toContain('另有 3 条规则使用其他 DNS 处理（拒绝 1 · 黑洞 1 · 指定上游 1），请在策略规则页修改')
-    const link = note.getComponent(RouterLinkStub)
-    expect(link.props('to')).toBe('/rules')
-    expect(link.text()).toBe('打开策略规则')
-  })
-
-  it('shows no DNS handling summary when no rule uses other handling', async () => {
-    const wrapper = await render({values: {...values(), rule_actions: {}, rule_dns_follow: []}})
-    await click('分流规则')
-    expect(wrapper.find('[data-rule-actions-summary]').exists()).toBe(false)
-  })
-
-  it('sends rule selections and feature toggles as current field changes', async () => {
-    const wrapper = await render()
-    await click('分流规则')
-    wrapper.findAllComponents(MultiSelect)[2].vm.$emit('update:modelValue', ['direct', 'proxy'])
-    await flushPromises()
-    expect(lastChange(wrapper)).toEqual({direct_rules: ['direct', 'proxy']})
+  it('edits Hosts from core settings and retains its YAML draft while changing a feature', async () => {
+    const original = {...values(), custom_hosts: 'full:nas.example 192.0.2.10 2001:db8::10'}
+    const wrapper = await render({values: original})
+    await input('oxi-custom_hosts', 'full:nas.example 192.0.2.20 2001:db8::20')
+    expect(lastChange(wrapper)).toEqual({custom_hosts: 'full:nas.example 192.0.2.20 2001:db8::20'})
+    expect(original.custom_hosts).toBe('full:nas.example 192.0.2.10 2001:db8::10')
+    const hosts = wrapper.get('section[aria-label="自定义 Hosts"]')
+    await hosts.findAll('button').find(button => button.text().trim() === 'YAML')!.trigger('click')
+    const yaml = hosts.get('textarea')
+    expect((yaml.element as HTMLTextAreaElement).value).toContain('full:nas.example 192.0.2.20 2001:db8::20')
+    await yaml.setValue('- [unfinished')
+    expect(wrapper.emitted('change')).toHaveLength(1)
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('自定义 Hosts')
     await click('特色功能')
     const trigger = document.querySelector('[aria-label="查询记录设置"]') as HTMLButtonElement
     trigger.click(); await flushPromises()
@@ -131,6 +90,12 @@ describe('OxiDNS current common settings', () => {
     enabled.click(); await flushPromises()
     expect(lastChange(wrapper)).toEqual({'query_recorder.enabled': true})
     expect(document.getElementById('oxi-query_recorder.args.path')).not.toBeNull()
+    await click('核心设置')
+    expect((yaml.element as HTMLTextAreaElement).value).toBe('- [unfinished')
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toContain('自定义 Hosts')
+    await yaml.setValue('- full:nas.example 192.0.2.30 2001:db8::30')
+    expect(lastChange(wrapper)).toEqual({custom_hosts: 'full:nas.example 192.0.2.30 2001:db8::30'})
+    expect(wrapper.emitted('error')?.at(-1)?.[0]).toBe('')
   })
 
   it('retains upstream extension values and invalid YAML while changing another group', async () => {

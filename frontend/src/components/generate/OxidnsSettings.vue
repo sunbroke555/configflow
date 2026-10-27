@@ -44,7 +44,7 @@
               <p role="alert" class="text-sm text-destructive-accent">{{ projectionError }}</p>
               <Button variant="outline" @click="projectCommon">重新读取常用设置</Button>
             </div>
-            <OxidnsCommonSettings v-else-if="commonValues" :key="commonKey" :initial-feature="initialFeature" :values="commonValues" :capabilities="commonCapabilities" :custom-match-targets="customMatchTargets" :custom-match-target-tags="customMatchTargetTags" :rules="rules" :rule-sets="ruleSets" :disabled="saving" :navigation-disabled="editorLocked" @change="queueChanges" @error="editorErrors.common = $event" @navigate="nativeEditor?.showFull($event)" @full="nativeEditor?.showFull()" />
+            <OxidnsCommonSettings v-else-if="commonValues" :key="commonKey" :initial-feature="initialFeature" :values="commonValues" :capabilities="commonCapabilities" :custom-match-targets="customMatchTargets" :custom-match-target-tags="customMatchTargetTags" :disabled="saving" :navigation-disabled="editorLocked" @change="queueChanges" @error="editorErrors.common = $event" @navigate="nativeEditor?.showFull($event)" @full="nativeEditor?.showFull()" />
           </template>
         </OxidnsNativeEditor>
         <div ref="filesPanel" v-show="tab === 'files'" class="min-h-0 flex-1 overflow-y-auto">
@@ -90,7 +90,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Check, Download, Loader2 } from '@lucide/vue'
-import { oxidnsApi, ruleApi, ruleSetApi, type PublishGuard } from '@/api'
+import { oxidnsApi, type PublishGuard } from '@/api'
 import { choose, confirm, notify } from '@/lib/feedback'
 import { formatOxidnsIssuePath, readOxidnsValidationResult, type OxidnsValidationIssue } from '@/lib/oxidnsNativeValidation'
 import OxidnsNativeEditor from './OxidnsNativeEditor.vue'
@@ -112,8 +112,6 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ (event: 'update:open', value: boolean): void; (event: 'saved'): void }>()
 const settings = ref<Record<string, any> | null>(null)
-const rules = ref<any[]>([])
-const ruleSets = ref<any[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const loadError = ref('')
@@ -311,9 +309,7 @@ async function load() {
   invalidateValidation()
   Object.keys(editorErrors).forEach(key => delete editorErrors[key])
   try {
-    const [config, availableRules, availableSets] = await Promise.all([
-      oxidnsApi.getSettings(props.profileId), ruleApi.getAll(props.profileId), ruleSetApi.getAll(props.profileId)
-    ])
+    const config = await oxidnsApi.getSettings(props.profileId)
     if (version !== loadVersion) return
     settingsEtag = typeof config.headers?.etag === 'string' ? config.headers.etag : ''
     commonChanges = {}
@@ -324,8 +320,6 @@ async function load() {
     savedSource.value = JSON.stringify(settings.value)
     tab.value = 'config'
     nativeView.value = 'common'
-    rules.value = (availableRules.data || []).filter((item: any) => item.itemType === 'rule')
-    ruleSets.value = availableSets.data || []
     await projectCommon()
   } catch (error: any) {
     if (version === loadVersion) loadError.value = error.response?.data?.message || '加载 OxiDNS 配置失败，请重试。'
