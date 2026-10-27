@@ -1,5 +1,6 @@
 """Managed node-test DNS never publishes unrelated drafts or contacts a real host."""
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -300,8 +301,9 @@ def test_routes_require_separate_save_and_protect_selected_endpoint(env, monkeyp
     monkeypatch.setattr(nodes, '_verify_managed_dns', env.verify)
     client = make_client(env.repository)
     before = deepcopy(env.repository.get_system()['system_config'])
-    assert client.get('/api/nodes/latency/dns/managed').get_json()['agents'][0]['eligible']
-    response = client.post('/api/nodes/latency/dns/managed', json=env.payload)
+    offered = client.get('/api/nodes/latency/dns/managed').get_json()['agents'][0]
+    assert offered['eligible'] and offered['upstreams'][0]['validation'] == 'unverified'
+    response = client.post('/api/nodes/latency/dns/managed', json=selected_payload(env, offered['upstreams'][0]))
     assert response.status_code == 200
     created = response.get_json()
     binding = {'agent_id': env.agent_id, 'endpoint_id': created['endpoint_id']}
@@ -377,3 +379,113 @@ def test_normal_republication_requires_fresh_receipt_check_then_recovers(env):
         dns.validate_binding(env.repository.get_system(), binding)
     assert dns.resolve(env.manager, binding) == '192.0.2.2:15353'
     assert dns.validate_binding(env.repository.get_system(), binding) == '192.0.2.2:15353'
+
+
+def publish_forward_fixture(env, upstreams, **forward_options):
+    source = deepcopy(env.source)
+    document = yaml.safe_load(source['oxidns']['native_config'])
+    document['plugins'][0]['args'] = {'upstreams': upstreams, **forward_options}
+    source['oxidns']['native_config'] = yaml.safe_dump(document, sort_keys=False)
+    env.repository.save_profile('default', {'oxidns': source['oxidns']})
+    candidate = build_deployment_bundle(env.manager.get_agent_by_id(env.agent_id), source,
+        source['oxidns']['native_config'], deployment_id='fixture-' + str(len(upstreams)) + '-' + str(env.repository.config_revision('default')),
+        pinned_files=[{'path': 'rules/kept.txt', 'role': 'rule', 'content': b'full:old.test\n'}])
+    env.enroll(candidate, source)
+    env.live = candidate
+    return source
+
+
+def selected_payload(env, candidate=None):
+    candidate = candidate or dns.options(env.manager)['agents'][0]['upstreams'][0]
+    return {key: value for key, value in env.payload.items() if key != 'upstream'} | {'upstream_id': candidate['id']}
+
+
+def test_candidates_only_use_confirmed_upstreams_and_are_unverified(env):
+    before = dns.options(env.manager)['agents'][0]['upstreams']
+    assert len(before) == 1 and before[0]['eligible'] and before[0]['validation'] == 'unverified'
+    assert before[0]['address'] == 'udp://192.0.2.53'
+    assert 'forward_local' in before[0]['label']
+    assert before[0]['label'].startswith('本地上游（forward_local）')
+    def change(profile):
+        document = yaml.safe_load(profile['oxidns']['native_config'])
+        document['plugins'][0]['args']['upstreams'] = [{'addr': '192.0.2.99'}]
+        profile['oxidns']['native_config'] = yaml.safe_dump(document)
+    env.repository.update_profile_transaction('default', change)
+    assert dns.options(env.manager)['agents'][0]['upstreams'] == before
+    created = dns.create(env.manager, selected_payload(env), verify=env.verify); env.drain()
+    assert env.state(created['endpoint_id'])['status'] == 'ready'
+    document = yaml.safe_load(store.bundle_files(env.uploads[0])['config.yaml'][0])
+    assert all('192.0.2.99' not in str(p) for p in document['plugins'])
+    assert '192.0.2.99' in env.repository.get_profile('default')['oxidns']['native_config']
+    assert len(dns.options(env.manager)['agents'][0]['upstreams']) == 1  # owned forward excluded
+
+
+def test_selected_upstream_copies_all_supported_parameters(env):
+    upstream = {'addr': 'https://dns.example/dns-query', 'bootstrap': '192.0.2.53:5353',
+        'dial_addr': '192.0.2.54', 'bootstrap_version': 4, 'insecure_skip_verify': False,
+        'timeout': '3s', 'idle_timeout': '7s', 'max_conns': 8, 'min_conns': 1, 'tag': 'original',
+        'enable_http3': False, 'enable_pipeline': False, 'so_mark': 42, 'bind_to_device': 'eth0'}
+    publish_forward_fixture(env, [upstream], concurrent=1, response_selection='prefer_positive', short_circuit=False)
+    created = dns.create(env.manager, selected_payload(env), verify=env.verify); env.drain()
+    assert env.state(created['endpoint_id'])['status'] == 'ready'
+    record = env.manager.get_agent_by_id(env.agent_id)[dns.FIELD][created['endpoint_id']]
+    assert record['plugins'][0]['args'] == {'upstreams': [upstream], 'concurrent': 1,
+        'response_selection': 'prefer_positive', 'short_circuit': False}
+    again = dns.create(env.manager, selected_payload(env), verify=env.verify)
+    assert again['endpoint_id'] == created['endpoint_id'] and len(env.uploads) == 1
+
+
+def test_reordered_or_changed_published_candidates_reject_stale_id(env):
+    publish_forward_fixture(env, [{'addr': '192.0.2.53'}, {'addr': '192.0.2.54'}])
+    stale = selected_payload(env)
+    publish_forward_fixture(env, [{'addr': '192.0.2.54'}, {'addr': '192.0.2.53'}])
+    with pytest.raises(ValueError, match='已变更'):
+        dns.create(env.manager, stale, verify=env.verify)
+    assert not env.jobs and not env.uploads
+
+
+def test_candidate_rechecked_after_async_preparation_wait(env, monkeypatch):
+    created = dns.create(env.manager, selected_payload(env), verify=env.verify)
+    baseline = dns._baseline(env.manager, env.manager.get_agent_by_id(env.agent_id))
+    changed = deepcopy(baseline)
+    document = yaml.safe_load(changed['source']['oxidns']['native_config'])
+    document['plugins'][0]['args']['upstreams'] = [{'addr': '192.0.2.99'}]
+    changed['source']['oxidns']['native_config'] = yaml.safe_dump(document)
+    monkeypatch.setattr(dns, '_baseline', lambda *_args: changed)
+    env.drain()
+    assert env.state(created['endpoint_id'])['status'] == 'failed'
+    assert not env.uploads
+
+
+def test_candidate_is_id_only_and_manual_compatibility_remains(env):
+    payload = selected_payload(env)
+    with pytest.raises(ValueError, match='只提交'):
+        dns.create(env.manager, {**payload, 'upstream': '192.0.2.99'}, verify=env.verify)
+    with pytest.raises(ValueError, match='只提交'):
+        dns.create(env.manager, {**payload, 'bootstrap': []}, verify=env.verify)
+    created = env.create(); env.drain()
+    assert env.state(created['endpoint_id'])['status'] == 'ready'
+
+
+def test_unsupported_or_secret_upstream_never_leaks_credentials(env):
+    # Store a receipt directly: an upstream may be valid in a newer OxiDNS but
+    # not safely reusable by this version's narrowly scoped provisioner.
+    publish_forward_fixture(env, [{'addr': 'https://user:private-password@dns.example/dns-query?token=private-token'},
+        {'addr': '192.0.2.53', 'future_secret': 'private-extension'},
+        {'addr': '192.0.2.53', 'socks5': 'user:private-socks@127.0.0.1:1080'}])
+    candidates = dns.options(env.manager)['agents'][0]['upstreams']
+    assert len(candidates) == 3 and all(not c['eligible'] and c['reason'] for c in candidates)
+    assert all(value not in json.dumps(candidates) for value in
+               ('private-password', 'private-token', 'private-extension', 'private-socks'))
+    for candidate in candidates:
+        with pytest.raises(ValueError):
+            dns.create(env.manager, selected_payload(env, candidate), verify=env.verify)
+    assert not env.jobs
+
+
+def test_eligible_existing_candidate_still_requires_real_dns_verification(env):
+    created = dns.create(env.manager, selected_payload(env), verify=lambda _: {'success': False})
+    env.drain()
+    assert env.state(created['endpoint_id'])['status'] == 'failed'
+    with pytest.raises(ValueError):
+        dns.resolve(env.manager, {'agent_id': env.agent_id, 'endpoint_id': created['endpoint_id']})

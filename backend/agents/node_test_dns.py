@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import re
 import threading
 import uuid
 
@@ -29,6 +30,10 @@ TERMINAL = {'ready', 'failed', 'removed'}
 _pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='node-dns')
 _jobs, _jobs_lock = set(), threading.Lock()
 _log = logging.getLogger(__name__)
+_FORWARD_FIELDS = {'upstreams', 'concurrent', 'response_selection', 'short_circuit'}
+_UPSTREAM_FIELDS = {'tag', 'addr', 'outbound', 'dial_addr', 'port', 'bootstrap', 'bootstrap_version',
+    'socks5', 'idle_timeout', 'max_conns', 'min_conns', 'insecure_skip_verify', 'timeout',
+    'enable_pipeline', 'enable_http3', 'so_mark', 'bind_to_device'}
 
 
 def _enqueue(key, callback):
@@ -119,6 +124,94 @@ def _spec(payload):
             'upstream': upstream, 'bootstrap': config['bootstrap']}
 
 
+def _upstreams(agent, baseline):
+    """Return public candidates and private copied executor arguments.
+
+    Eligibility means representable without losing semantics, not a successful
+    DNS test. Never guess real/Fake-IP from a plugin name or an upstream address.
+    """
+    from backend.utils.node_dns import normalize_dns_servers
+    document = _document(baseline['source'].get('oxidns'))
+    owned = {p['tag'] for record in agent.get(FIELD, {}).values() for p in record.get('plugins', [])}
+    public, definitions = [], {}
+    for index, plugin in enumerate(document['plugins']):
+        if plugin.get('type') != 'forward' or plugin.get('tag') in owned:
+            continue
+        args = plugin.get('args') or {}
+        entries = args.get('upstreams', []) if isinstance(args, dict) else []
+        if not isinstance(entries, list):
+            continue
+        tag = plugin.get('tag', '')
+        label = tag if isinstance(tag, str) and re.fullmatch(r'[\w.-]{1,80}', tag) else f'转发器 {index + 1}'
+        if tag in ('forward_local', 'forward_remote', 'forward_fallback'):
+            label = {'forward_local': '本地上游', 'forward_remote': '远程上游',
+                     'forward_fallback': '备用上游'}[tag] + f'（{tag}）'
+        arguments_digest = hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        for offset, entry in enumerate(entries):
+            fingerprint = {'agent_id': agent['id'], 'profile_id': agent.get('profile_id', 'default'),
+                'position': [index, offset], 'tag': tag, 'args_digest': arguments_digest}
+            ident = hashlib.sha256(json.dumps(fingerprint, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            address, bootstrap, reason = '', [], ''
+            try:
+                if not isinstance(entry, dict) or set(args) - _FORWARD_FIELDS or set(entry) - _UPSTREAM_FIELDS:
+                    raise ValueError('包含暂不支持复用的扩展参数；不会自动丢弃这些参数')
+                raw = entry.get('addr')
+                if not isinstance(raw, str) or '${' in json.dumps(entry):
+                    raise ValueError('包含无法在管理端确认的动态参数')
+                if raw.startswith(('udp://', 'tcp://')):
+                    scheme, plain = raw.split('://', 1)
+                    address = scheme + '://' + normalize_dns_servers([plain])[0]
+                else:
+                    address = normalize_dns_servers([raw])[0]
+                    if '://' not in address:
+                        address = 'udp://' + address
+                if entry.get('bootstrap'):
+                    bootstrap = normalize_dns_servers([entry['bootstrap']], bootstrap=True)
+                if entry.get('dial_addr'):
+                    normalize_dns_servers([entry['dial_addr']], bootstrap=True)
+                if entry.get('bootstrap_version') == 6:
+                    raise ValueError('此上游依赖 IPv6 引导解析，暂不支持复用')
+                if entry.get('outbound') or entry.get('socks5'):
+                    raise ValueError('此上游依赖代理出站；请选择直接上游或手动填写')
+                if entry.get('bind_to_device') and not re.fullmatch(r'[\w.:-]{1,64}', str(entry['bind_to_device'])):
+                    raise ValueError('无法安全复用设备绑定参数')
+            except (ValueError, TypeError) as error:
+                # Address parsers use static messages; never echo credentials,
+                # query strings or the full upstream mapping in an API error.
+                reason = str(error) if isinstance(error, ValueError) else '此上游包含无法安全复用的参数类型'
+            candidate = {'id': ident, 'label': f'{label} · 上游 {offset + 1}' + (f' · {address}' if address else ''),
+                'address': address, 'bootstrap': bootstrap, 'eligible': not reason,
+                'reason': reason, 'validation': 'unverified'}
+            public.append(candidate)
+            if not reason:
+                # Keep the entire supported entry and forward-level settings.
+                # In particular dial_addr, bootstrap and TLS flags retain their
+                # original values, even when the display address is canonical.
+                definitions[ident] = {**{key: deepcopy(value) for key, value in args.items() if key != 'upstreams'},
+                                     'upstreams': [deepcopy(entry)]}
+    return public, definitions
+
+
+def _selected_spec(payload, agent, baseline):
+    if any(key in payload for key in ('upstream', 'bootstrap')):
+        raise ValueError('选择已有上游时只提交上游 ID，不能同时覆盖地址或引导 DNS')
+    ident = payload.get('upstream_id')
+    if not isinstance(ident, str) or not re.fullmatch('[0-9a-f]{64}', ident):
+        raise ValueError('请选择已发布配置中的可复用上游')
+    candidates, definitions = _upstreams(agent, baseline)
+    selected = next((c for c in candidates if c['id'] == ident), None)
+    if selected is None:
+        raise ValueError('已发布上游已变更，请刷新列表后重新选择')
+    if not selected['eligible']:
+        raise ValueError(selected['reason'])
+    address = _ipv4(payload.get('listen_address'))
+    port = payload.get('port', 15353)
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('监听端口必须在 1–65535 之间')
+    return {'listen_address': address, 'port': port, 'endpoint': f'{address}:{port}',
+        'upstream': selected['address'], 'bootstrap': selected['bootstrap'], 'forward_args': definitions[ident]}
+
+
 def _document(settings):
     if not isinstance(settings, dict) or settings.get('config_mode') != 'native':
         raise ValueError('托管接口需要已发布和当前草稿都使用 OxiDNS 原生配置')
@@ -186,7 +279,7 @@ def _plugins(endpoint_id, spec):
     if spec['bootstrap']:
         upstream['bootstrap'] = spec['bootstrap'][0]
     return [
-        {'tag': prefix + '_forward', 'type': 'forward', 'args': {'upstreams': [upstream]}},
+        {'tag': prefix + '_forward', 'type': 'forward', 'args': deepcopy(spec.get('forward_args', {'upstreams': [upstream]}))},
         {'tag': prefix + '_sequence', 'type': 'sequence', 'args': [
             {'exec': '$' + prefix + '_forward'}, {'matches': ['!has_resp'], 'exec': 'reject 2'}, {'exec': 'accept'}]},
         *[{'tag': prefix + '_' + protocol, 'type': protocol + '_server', 'args': {
@@ -269,10 +362,12 @@ def options(manager):
         if agent.get('service_type') != 'oxidns':
             continue
         reason = ''
+        upstreams = []
         try:
             _check_agent(agent)
             _exclusive(system, agent)
-            _baseline(manager, agent)
+            baseline = _baseline(manager, agent)
+            upstreams, _ = _upstreams(agent, baseline)
         except ValueError as exc:
             reason = str(exc)
         try:
@@ -282,19 +377,23 @@ def options(manager):
         profile_id = agent.get('profile_id', 'default')
         result.append({'id': agent['id'], 'name': agent.get('name', agent['id']), 'profile_id': profile_id,
             'profile_name': names.get(profile_id, profile_id), 'address': address, 'eligible': not reason,
+            'upstreams': upstreams, 'upstreams_reason': '' if any(u['eligible'] for u in upstreams) else
+                '已发布配置没有可复用的直接上游，可查看原因或手动填写',
             'reason': reason, 'endpoints': [_public(r) for r in agent.get(FIELD, {}).values() if r['status'] != 'removed']})
     return {'agents': result, 'default_port': 15353}
 
 
 def create(manager, payload, *, verify=None):
-    spec = _spec(payload)
+    if not isinstance(payload, dict):
+        raise ValueError('托管 DNS 参数无效')
     agent_id = payload.get('agent_id')
     with _lock(manager):
         system = manager.repository.get_system()
         agent = _agent(system, agent_id)
         _check_agent(agent)
         _exclusive(system, agent)
-        _baseline(manager, agent)
+        baseline = _baseline(manager, agent)
+        spec = _selected_spec(payload, agent, baseline) if 'upstream_id' in payload else _spec(payload)
         for record in agent.get(FIELD, {}).values():
             if record['status'] != 'removed' and all(record.get(k) == v for k, v in spec.items()):
                 if record['status'] == 'failed':
@@ -313,12 +412,16 @@ def create(manager, payload, *, verify=None):
                 'plugins': plugins, 'fingerprint': hashlib.sha256(json.dumps(plugins, sort_keys=True).encode()).hexdigest(),
                 'status': 'preparing', 'operation': 'create', 'message': '正在准备专用 DNS 接口',
                 'deployment_id': 'node-dns-' + uuid.uuid4().hex, 'installed': False}
+            if 'upstream_id' in payload:
+                record['source_upstream_id'] = payload['upstream_id']
             def add(system):
                 current = _agent(system, agent_id)
                 _check_agent(current)
                 _exclusive(system, current)
                 if current.get('profile_id', 'default') != record['profile_id'] or current.get('host') != record['agent_host']:
                     raise ValueError('Agent 绑定已变化，请刷新后重试')
+                if _publication(current) != _publication(agent):
+                    raise ValueError('已发布配置已变化，请刷新后重新选择上游')
                 current.setdefault(FIELD, {})[endpoint_id] = deepcopy(record)
             manager.repository.update_system_transaction(add)
             result = _public(record)
@@ -444,6 +547,10 @@ def _work(manager, agent_id, endpoint_id, verify):
                 outcome = manager.get_deployment(agent_id, ident)
             else:
                 baseline = _baseline(manager, agent)
+                if record['operation'] == 'create' and record.get('source_upstream_id'):
+                    _, definitions = _upstreams(agent, baseline)
+                    if definitions.get(record['source_upstream_id']) != record.get('forward_args'):
+                        raise ValueError('已发布上游已变更，请刷新列表后重新创建接口')
                 # Validate draft ownership before any remote mutation, but do
                 # not publish this draft. A second CAS merge happens afterward.
                 _patch(_document(manager.repository.get_profile(record['profile_id']).get('oxidns')), record, record['operation'])
