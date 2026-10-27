@@ -1524,6 +1524,13 @@ const showAddDialog = async () => {
   dialogVisible.value = true
 }
 
+/** 策略组保存可能连带更新跟随它的 DNS，将服务端提醒一并展示。 */
+const notifyGroupSaved = (data: { message?: string; warnings?: string[] } | undefined, fallback: string) => {
+  const message = data?.message || fallback
+  if (data?.warnings?.length) notify.warning(message, data.warnings.join('\n'))
+  else notify.success(message)
+}
+
 const handleToggle = (group: ProxyGroup) => {
   group.enabled = !group.enabled
   toggleGroupEnabled(group)
@@ -1535,7 +1542,7 @@ const toggleGroupEnabled = async (group: ProxyGroup) => {
   savingStatus.value[group.id] = true
   try {
     const response = await proxyGroupApi.update(group.id, group, profileId)
-    notify.success(response?.data?.message || (group.enabled ? '已启用' : '已禁用'))
+    notifyGroupSaved(response?.data, group.enabled ? '已启用' : '已禁用')
   } catch (error: any) {
     notify.error(error?.response?.data?.message || '更新状态失败')
     group.enabled = previous
@@ -1792,10 +1799,10 @@ const saveGroup = async () => {
       const delete_fields = ['url-test', 'fallback', 'load-balance'].includes(saveData.type || '')
         ? healthKeys.filter(key => original?.[key] !== undefined && saveData[key] === undefined) : []
       const response = await proxyGroupApi.update(saveData.id!, { ...saveData, ...(delete_fields.length ? { delete_fields } : {}) }, profileId)
-      notify.success(response?.data?.message || '更新成功')
+      notifyGroupSaved(response?.data, '更新成功')
     } else {
-      await proxyGroupApi.create(saveData, profileId)
-      notify.success('添加成功')
+      const response = await proxyGroupApi.create(saveData, profileId)
+      notifyGroupSaved(response?.data, '添加成功')
     }
     dialogVisible.value = false
     loadProxyGroups()
@@ -1816,7 +1823,7 @@ const deleteGroup = async (row: ProxyGroup) => {
     const ok = await confirmDanger('确定从当前配置中删除该策略组吗？删除后无法恢复。固定使用它的 Mihomo 入口将恢复各自的规则路由；若规则或其他策略组仍在使用它，请先修改这些设置。', { title: '删除策略组' })
     if (!ok) return
     const response = await proxyGroupApi.delete(row.id, profileId)
-    notify.success(response?.data?.message || '删除成功')
+    notifyGroupSaved(response?.data, '删除成功')
     loadProxyGroups()
   } catch (error: any) {
     notify.error(error?.response?.data?.message || '删除失败')
@@ -2148,7 +2155,7 @@ const persistDraft = async (fromSelection = false): Promise<boolean> => {
       ? { aggregations: [...snapshot.sources], aggregation_regex: snapshot.regex, aggregation_exclude_regex: snapshot.excludeRegex }
       : { subscriptions: [...snapshot.sources], regex: snapshot.regex, exclude_regex: snapshot.excludeRegex }
   try {
-    await proxyGroupApi.update(group.id, { ...group, ...patch }, profileId)
+    const response = await proxyGroupApi.update(group.id, { ...group, ...patch }, profileId)
     if (!viewActive) return false
     const savedGroup = proxyGroups.value.find(item => keyOf(item) === keyOf(group))
     if (!savedGroup) return false
@@ -2156,7 +2163,7 @@ const persistDraft = async (fromSelection = false): Promise<boolean> => {
     if (selectedKey.value === keyOf(group) && !draftDirty.value && savedCount !== null) {
       matchCounts.value = { ...matchCounts.value, [keyOf(group)]: savedCount }
     }
-    notify.success(`「${group.name}」已保存`)
+    notifyGroupSaved(response?.data, `「${group.name}」已保存`)
     return true
   } catch (error: any) {
     if (viewActive) notify.error(error.response?.data?.message || '保存失败')
