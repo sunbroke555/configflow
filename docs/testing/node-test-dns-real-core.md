@@ -114,6 +114,81 @@ OXIDNS_TEST_BINARY=/tmp/configflow-entry-flow-e2e-runtime/oxidns-v1.6.1/oxidns G
 That test covers actual core publication, health-failure rollback and manual
 rollback in temporary directories with loopback ports.
 
+## Existing published upstream acceptance
+
+The later [existing-upstream report](node-test-dns-existing-upstream-2026-10-27.json)
+uses a second empty backend at `127.0.0.1:15901` and a separate laboratory.
+The original public preview already contained user draft edits, so this run
+did not load, publish, clear or copy its database, credentials or configuration.
+Only source code and test binaries were reused. The secondary backend, Agent,
+OxiDNS and fixtures are ordinary private processes, with no system units.
+
+Set `CONFIGFLOW_NODE_DNS_LAB_VARIANT=upstreams`; the only permitted alternate
+paths are `~/previews/configflow-node-dns-upstreams-check` (backend) and
+`~/previews/configflow-node-dns-upstreams-lab` (Agent/core/fixtures). Ports are:
+
+| Port | Listener |
+| --- | --- |
+| 15901 | Independent backend, loopback only |
+| 18091 | Go Agent |
+| 15364 / 15363 | Original Fake-IP entry / managed entry |
+| 15365 / 15366 | Loopback real / fake fixture DNS |
+| 18092 / 18093 | Restricted HTTP proxy / loopback subscription and 204 target |
+| 19209 | Loopback OxiDNS API |
+
+The published baseline contains an unused `lab_real_forward` alongside its
+active Fake-IP path. Creation sends only its opaque upstream ID. The runner
+asserts that the deployed managed forward preserves its complete `concurrent`,
+`timeout`, `idle_timeout` and address parameters. A separate unpublished
+`lab_pending_draft` forward remains in the draft, is absent from candidates and
+is not deployed by managed creation. Only that runner-created sentinel is
+explicitly removed before the ordinary full publication test.
+
+All nine steps passed: Fake-IP failure was reproduced; managed UDP/TCP returned
+the real fixture address; explicit binding selection, ordinary republication
+and recreation each produced a 1 ms probe with one proxy connection and two
+actual HEAD 204 responses. Deletion closed UDP/TCP and retained the original
+entry and rule bytes. The second backend and all its lab processes were then
+stopped; all nine port numbers were confirmed closed. The public preview was
+left running. These local timings establish integration, not Internet latency.
+
+To reproduce in **new empty secondary directories**, first synchronize source
+and build the probe on the test server from the task worktree:
+
+```sh
+rt -- sh -c 'cd backend/node-probe && go build -trimpath -o /tmp/configflow-node-test-dns-modes-probe .'
+```
+
+Then run these commands on `.32` (the initial `mkdir` deliberately refuses to
+reuse an existing experiment):
+
+```sh
+task_source="$HOME/rt/program__configflow-node-test-dns-modes"
+lab_root="$HOME/previews/configflow-node-dns-upstreams-lab"
+backend_root="$HOME/previews/configflow-node-dns-upstreams-check"
+mkdir -m 700 "$lab_root" "$backend_root"
+mkdir "$lab_root/bin" "$backend_root/bin" "$backend_root/source"
+rsync -a --exclude=.git --exclude=node_modules --exclude=.venv --exclude=__pycache__ --exclude=.ci-results --exclude=frontend/dist "$task_source/" "$backend_root/source/"
+cp "$task_source/scripts/tests/node_test_dns_lab.py" "$lab_root/runner.py"
+cp /tmp/configflow-node-test-dns-modes-probe "$backend_root/bin/node-probe"
+cp /tmp/configflow-entry-flow-e2e-runtime/oxidns-v1.6.1/oxidns "$lab_root/bin/oxidns"
+cd "$task_source/backend/agents/go-agent"
+go build -trimpath -o "$lab_root/bin/configflow-agent" .
+touch "$lab_root/.lab-marker"
+chmod 600 "$lab_root/.lab-marker"
+export CONFIGFLOW_NODE_DNS_LAB_VARIANT=upstreams
+~/cf-test/.venv/bin/python "$lab_root/runner.py" backend-start
+~/cf-test/.venv/bin/python "$lab_root/runner.py" prepare
+~/cf-test/.venv/bin/python "$lab_root/runner.py" test
+~/cf-test/.venv/bin/python "$lab_root/runner.py" stop
+```
+
+The helper generates fresh mode-0600 registration/JWT secrets and initializes
+an empty repository before importing the app. Its source copy is independent
+of future `rt` synchronizations. The original default runner also now rejects
+any non-fixture draft before changing selection, deleting an endpoint or
+publishing; do not run it against the public preview after user edits.
+
 ## Evidence and cleanup
 
 `report.json` contains bounded public step evidence. `network-events.jsonl`
