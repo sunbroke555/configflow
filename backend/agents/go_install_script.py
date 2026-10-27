@@ -5,7 +5,7 @@ import re
 import shlex
 from pathlib import Path, PurePosixPath
 from typing import Optional
-from backend.agents.install_output import with_install_output
+from backend.agents.install_output import with_install_output, with_root_privileges
 
 
 INSTALL_GO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-go.sh").read_text(encoding="utf-8")
@@ -13,6 +13,8 @@ INSTALL_GO_AIO_SCRIPT_TEMPLATE = (Path(__file__).parent / "scripts" / "install-g
 INSTALL_GO_AIO_FORWARDING = (Path(__file__).parent / "scripts" / "aio-ipv4-forwarding.sh").read_text(encoding="utf-8")
 AGENT_INSTALL_DEPENDENCIES = (Path(__file__).parent / "scripts" / "agent-install-dependencies.sh").read_text(encoding="utf-8")
 AGENT_CORE_INSTALL_INTERFACE = "# ConfigFlow Agent + core installer interface: 1"
+DNS_HA_PREPARATION_INTERFACE = "# ConfigFlow DNS HA preparation interface: 1"
+DNS_HA_PREPARATION = (Path(__file__).parent / "scripts" / "prepare-dns-ha.sh").read_text(encoding="utf-8")
 _AGENT_INIT_DETECTION = '''if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
     INIT_SYSTEM="openrc"
 elif command -v systemctl >/dev/null 2>&1; then
@@ -110,6 +112,7 @@ def generate_go_agent_install_script(
     deployment_health_timeout: int = 30,
     install_core: bool = False,
     manage_ipv4_forwarding: Optional[bool] = False,
+    prepare_dns_ha: bool = False,
 ) -> str:
     """Generate an installer with explicit service lifecycle and deployment checks.
 
@@ -125,6 +128,10 @@ def generate_go_agent_install_script(
         raise ValueError("Go Agent transactional deployment supports mihomo, mosdns and oxidns")
     if not isinstance(install_core, bool):
         raise ValueError("install_core 必须为 true 或 false")
+    if not isinstance(prepare_dns_ha, bool):
+        raise ValueError("prepare_dns_ha 必须为 true 或 false")
+    if prepare_dns_ha and service_type != "oxidns":
+        raise ValueError("仅 OxiDNS 单服务 Go Agent 支持准备 DNS 高可用环境")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", agent_name):
         raise ValueError("Invalid agent name: use letters, numbers, hyphens or underscores")
     if not 1 <= int(agent_port) <= 65535:
@@ -153,6 +160,8 @@ def generate_go_agent_install_script(
             raise ValueError("Agent 端口不能与所安装核心的 DNS 监听端口相同")
     if not service_manager:
         service_manager = "__CONFIGFLOW_INIT__" if standard_restart else "command"
+    if prepare_dns_ha and service_manager == "command":
+        raise ValueError("DNS 高可用安装需要原生 systemd/OpenRC，不能使用自定义启停命令")
     if service_manager == "command" and not all((stop_command, start_command, status_command)):
         raise ValueError("Custom lifecycle requires stop_command, start_command and status_command; a restart command alone cannot support rollback")
     if manage_ipv4_forwarding is not None and not isinstance(manage_ipv4_forwarding, bool):
@@ -202,6 +211,13 @@ def generate_go_agent_install_script(
         "core_dependencies": " zoneinfo" if service_type == "oxidns" else "",
         "installation_action": "安装或升级 Go Agent（包含事务发布与失败回滚）",
         "core_install_phase": "",
+        "install_arguments": 'for cf_argument do\n    case "$cf_argument" in --verbose|-v) ;; *) cf_error "未知参数：$cf_argument"; exit 2 ;; esac\ndone',
+        "installation_choice": 'cf_ui "1) {installation_action}"\ncf_ui "2) 卸载 Agent"\ncf_ui "3) 取消"\ncf_prompt \'请输入选项 [1-3]: \'\nread -r choice < /dev/tty',
+        "dns_ha_functions": "",
+        "dns_ha_prepare": "",
+        "dns_ha_existing_config": "",
+        "agent_summary_port": str(cfg["agent_port"]),
+
         "agent_cleanup_trap": 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM',
     }
     # Every placeholder starts a line and carries its own newline, so the
@@ -272,12 +288,42 @@ def generate_go_agent_install_script(
         )
         replacements["init_detection"] = _CORE_INIT_DETECTION
         replacements["agent_cleanup_trap"] = "# The Agent cleanup trap above preserves the completed core phase."
+    replacements["installation_choice"] = replacements["installation_choice"].replace("{installation_action}", replacements["installation_action"])
+    if prepare_dns_ha:
+        replacements["init_detection"] = _CORE_INIT_DETECTION
+        replacements["install_arguments"] = '''choice=1
+for cf_argument do
+    case "$cf_argument" in
+        --verbose|-v) ;;
+        --uninstall) choice=2 ;;
+        --cancel) choice=3 ;;
+        *) cf_error "未知参数：$cf_argument"; exit 2 ;;
+    esac
+done'''
+        replacements["installation_choice"] = 'cf_ui "OxiDNS 高可用：自动准备环境并安装；VIP 在面板配对时设置。"'
+        replacements["dns_ha_functions"] = DNS_HA_PREPARATION.replace("{agent_port}", str(cfg["agent_port"])) + "\n"
+        replacements["dns_ha_prepare"] = 'agent_prepare_dns_ha\n'
+        replacements["dns_ha_existing_config"] = '''if [ -n "$DNS_HA_EXISTING_CONFIG" ]; then
+    cp "$DNS_HA_EXISTING_CONFIG" "$CONFIG_FILE.new"
+    chmod 600 "$CONFIG_FILE.new"
+fi
+'''
+        replacements["agent_summary_port"] = "$DNS_HA_EFFECTIVE_PORT"
+        if install_core:
+            replacements["core_install_phase"] = ('if [ -z "$DNS_HA_EXISTING_CONFIG" ]; then\n'
+                                                  + replacements["core_install_phase"] + 'fi\n')
+            replacements["agent_cleanup_trap"] = 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM'
     # Single pass: values containing braces must remain literal, especially JSON
     # commands and URLs. The config heredoc is quoted to disable shell expansion.
     script = re.sub(r"\{(" + "|".join(replacements) + r")\}", lambda match: replacements[match.group(1)], INSTALL_GO_SCRIPT_TEMPLATE)
     if install_core:
         script = script.replace("#!/bin/sh\n", f"#!/bin/sh\n{AGENT_CORE_INSTALL_INTERFACE}\n", 1)
-    return with_install_output(script)
+    rendered = with_install_output(script)
+    if prepare_dns_ha:
+        rendered = with_root_privileges(rendered)
+        lines = rendered.splitlines(keepends=True)
+        rendered = ''.join(lines[:2]) + DNS_HA_PREPARATION_INTERFACE + '\n' + ''.join(lines[2:])
+    return rendered
 
 
 def generate_go_aio_install_script(

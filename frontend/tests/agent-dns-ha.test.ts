@@ -95,7 +95,7 @@ describe('ordered configuration synchronization', () => {
     wrapper.findComponent(Select).vm.$emit('update:modelValue', 'oxi-2')
     await flushPromises()
     expect(document.body.textContent).toContain('Docker 成员需使用专用高可用安装')
-    expect(document.body.textContent).toContain('Shell 安装的成员需先安装 keepalived')
+    expect(document.body.textContent).toContain('Shell 成员的高可用安装命令会自动准备 keepalived')
   })
 
   it('does not announce enable success until both members and keepalived finish', async () => {

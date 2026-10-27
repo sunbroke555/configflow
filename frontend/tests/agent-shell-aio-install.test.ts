@@ -7,7 +7,7 @@ import OxiDNSHAPairing from '@/components/agents/OxiDNSHAPairing.vue'
 import api, { agentApi, profileApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { setActiveProfileId } from '@/profileContext'
-import { AGENT_CORE_INSTALL_INTERFACE, buildInstallCommand } from '@/lib/coreInstallCommand'
+import { AGENT_CORE_INSTALL_INTERFACE, DNS_HA_PREPARE_INTERFACE, buildInstallCommand } from '@/lib/coreInstallCommand'
 
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -220,6 +220,7 @@ describe('OxiDNS Docker high availability entry', () => {
   })
 })
 describe('OxiDNS Shell high availability entry', () => {
+  const haScript = `#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\n${DNS_HA_PREPARE_INTERFACE}\necho prepared`
   const guide = () => document.querySelector('[aria-label="OxiDNS Shell HA 安装引导"]')
   const deploymentModes = () => document.querySelector('[role="radiogroup"][aria-label="OxiDNS 部署方式"]')
   const checked = (value: string) => document.querySelector(`[role="radio"][value="${value}"]`)?.getAttribute('aria-checked')
@@ -245,10 +246,13 @@ describe('OxiDNS Shell high availability entry', () => {
     expect(document.body.textContent).toContain('keepalived')
     expect(document.body.textContent).toContain('支持两台 Shell')
     expect(document.body.textContent).toContain('Shell 与 Docker 混合')
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe('true')
+    expect(document.body.textContent).not.toContain('apt-get install')
+    vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse(haScript) as any)
     await click('生成安装命令')
     expect(agentApi.generateInstallCommand).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       name: 'shell-dns-a', type: 'oxidns', port: 8082, agent_ip: '192.168.0.201',
-      config_path: '/etc/oxidns/config.yaml',
+      config_path: '/etc/oxidns/config.yaml', install_core: true, prepare_dns_ha: true,
     }))
     const generated = generatedCommandUrl()
     await click('2. 验证与配对')
@@ -268,15 +272,70 @@ describe('OxiDNS Shell high availability entry', () => {
     expect((document.getElementById('agent-name') as HTMLInputElement).value).toBe('shell-dns-a')
   })
 
-  it('can install the OxiDNS core with the Agent inside Shell HA preparation', async () => {
+  it('defaults to installing the core and preparing HA in one unchanged short command', async () => {
+    await openGuide()
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe('true')
+    vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse(haScript) as any)
+    await click('生成安装命令')
+    expect(agentApi.generateInstallCommand).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'oxidns', install_core: true, prepare_dns_ha: true }))
+    expect(generatedCommandUrl()).toBe(`https://config.example.test${downloadPath}`)
+    expect((document.querySelector('[aria-label="一键安装命令"] textarea') as HTMLTextAreaElement).value).toBe(buildInstallCommand(`https://config.example.test${downloadPath}`))
+    expect(agentApi.generateCoreInstallCommand).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('restores ordinary core choice %s without leaking HA preparation', async ordinaryCore => {
+    await radio('oxidns')
+    if (ordinaryCore) { document.getElementById('agent-install-core')!.click(); await flushPromises() }
+    await radio('ha')
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe('true')
+    document.getElementById('agent-install-core')!.click()
+    await flushPromises()
+    await radio('standard')
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe(String(ordinaryCore))
+    vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse(ordinaryCore ? `#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho core` : '#!/bin/sh\necho agent') as any)
+    await click('生成安装命令')
+    const params = vi.mocked(agentApi.generateInstallCommand).mock.calls[0]![0]
+    expect(params.prepare_dns_ha).toBeUndefined()
+    expect(params.install_core).toBe(ordinaryCore ? true : undefined)
+  })
+
+  it('prepares HA when taking over an existing custom OxiDNS path without installing its core', async () => {
     await openGuide()
     document.getElementById('agent-install-core')!.click()
     await flushPromises()
-    vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse(`#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho installed-core`) as any)
+    await expand('服务管理高级配置（可选）')
+    await input('agent-config-path', '/opt/oxidns/config.yaml')
+    vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse(`#!/bin/sh\n${DNS_HA_PREPARE_INTERFACE}\necho prepared`) as any)
     await click('生成安装命令')
-    expect(agentApi.generateInstallCommand).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'oxidns', install_core: true }))
+    const params = vi.mocked(agentApi.generateInstallCommand).mock.calls[0]![0]
+    expect(params).toMatchObject({ type: 'oxidns', prepare_dns_ha: true, config_path: '/opt/oxidns/config.yaml' })
+    expect(params.install_core).toBeUndefined()
     expect(generatedCommandUrl()).toBe(`https://config.example.test${downloadPath}`)
-    expect(agentApi.generateCoreInstallCommand).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    `#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho old-server`,
+    `#!/bin/sh\n${AGENT_CORE_INSTALL_INTERFACE}\necho old-server\n# unrelated header\n${DNS_HA_PREPARE_INTERFACE}`,
+  ])('refuses a response that does not declare HA preparation in its header', async script => {
+    await openGuide()
+    vi.mocked(agentApi.generateInstallCommand).mockResolvedValueOnce(commandResponse(script) as any)
+    await click('生成安装命令')
+    expect(document.querySelector('[aria-label="一键安装命令"]')).toBeNull()
+    expect(notify.error).toHaveBeenCalledWith(expect.stringContaining('不支持自动准备高可用环境'))
+    expect(notify.success).not.toHaveBeenCalled()
+  })
+
+  it('discards a pending HA response after changing its core installation choice', async () => {
+    await openGuide()
+    let finish!: (response: any) => void
+    vi.mocked(agentApi.generateInstallCommand).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    await click('生成安装命令')
+    document.getElementById('agent-install-core')!.click()
+    await flushPromises()
+    finish(commandResponse(haScript))
+    await flushPromises()
+    expect(document.querySelector('[aria-label="一键安装命令"]')).toBeNull()
+    expect(notify.success).not.toHaveBeenCalled()
   })
 
   it.each(['success', 'error'])('ignores a pending Shell installation %s after entering verification', async outcome => {
@@ -344,7 +403,10 @@ describe('OxiDNS Shell high availability entry', () => {
     expect(document.getElementById('agent-name')).toBeNull()
     expect(findButton('生成安装命令')).toBeUndefined()
     await click('1. 安装与准备')
-    expect(document.getElementById('agent-install-core')).not.toBeNull()
+    expect(document.getElementById('agent-install-core')?.getAttribute('aria-checked')).toBe('false')
+    expect((document.getElementById('agent-name') as HTMLInputElement).value).toBe('Existing Shell DNS')
+    expect((document.getElementById('agent-port') as HTMLInputElement).value).toBe('8082')
+    expect((document.getElementById('agent-ip') as HTMLInputElement).value).toBe('192.168.0.201')
     expect(document.getElementById('docker-dns-ha')).toBeNull()
   })
 })

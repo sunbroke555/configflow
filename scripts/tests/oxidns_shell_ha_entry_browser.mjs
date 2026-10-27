@@ -94,7 +94,7 @@ try {
     await page.locator('#agent-name').fill(`shell-ha-ui-${width}`)
     await page.locator('#agent-ip').fill(width === 1440 ? '192.168.0.241' : '192.168.0.242')
     await page.locator('#agent-port').fill('8082')
-    await page.locator('#agent-install-core').click()
+    assert.equal(await page.locator('#agent-install-core').getAttribute('aria-checked'), 'true', 'HA installation defaults to the OxiDNS core')
     const pending = page.waitForResponse(response => new URL(response.url()).pathname === '/api/agents/install-command' && response.request().method() === 'POST')
     await page.getByRole('button', { name: '生成安装命令', exact: true }).click()
     const response = await pending
@@ -102,10 +102,12 @@ try {
     const requested = response.request().postDataJSON()
     assert.equal(requested.type, 'oxidns')
     assert.equal(requested.install_core, true)
+    assert.equal(requested.prepare_dns_ha, true)
     assert.equal(requested.port, 8082)
     const generated = await response.json()
     assert.ok(generated.script.startsWith('#!/'), 'Backend must return a shell script')
     assert.equal(generated.script.split('\n')[1], '# ConfigFlow Agent + core installer interface: 1')
+    assert.ok(generated.script.split('\n').slice(1, 4).includes('# ConfigFlow DNS HA preparation interface: 1'), 'Downloaded script must declare automatic HA preparation')
     assert.match(generated.download_path, /^\/api\/agents\/i\/[A-Za-z0-9_-]+$/)
     const script = await context.request.get(base + generated.download_path)
     assert.equal(script.status(), 200, 'Real generated installer link must download')
@@ -113,7 +115,7 @@ try {
     const commandField = page.locator('[aria-label="一键安装命令"] textarea').first()
     await commandField.waitFor()
     const command = await commandField.inputValue()
-    assert.ok(command.includes(base + generated.download_path), 'UI command must use the actual generated link')
+    assert.equal(command, `curl -fsSL '${base + generated.download_path}' -o configflow-install.sh && sh configflow-install.sh`, 'All HA preparation stays inside the short-link script')
     await page.getByRole('button', { name: '2. 验证与配对', exact: true }).click()
     assert.equal(await page.locator('#agent-name').count(), 0)
     assert.equal(await page.getByRole('button', { name: '生成安装命令', exact: true }).count(), 0)
@@ -182,7 +184,7 @@ try {
     // Fixture names and addresses only; no real installation command is mounted after reload.
     await page.screenshot({ path: join(evidence, `oxidns-shell-ha-pairing-${width}.png`), fullPage: false })
     assert.deepEqual(await liveAgents(), agentsBefore, 'Generating scripts and fixture checks must not register Agents')
-    report.cases.push({ width, theme, real_install_api: true, real_download_equal: true, includes_oxidns_core: true,
+    report.cases.push({ width, theme, real_install_api: true, real_download_equal: true, includes_oxidns_core: true, automatic_ha_preparation: true, unchanged_short_command: true,
       completed_command_retained: true, fixture_existing_shell_preselected: true, fixture_shell_shell_ready: true,
       fixture_shell_docker_ready: true, no_live_ha_activation: true, overflow: false })
     console.log(JSON.stringify({ width, theme, real_install_api: true, fixture_pairing: ['Shell + Shell', 'Shell + Docker'], overflow: false }))

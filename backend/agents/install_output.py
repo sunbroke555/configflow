@@ -10,7 +10,9 @@ INSTALL_OUTPUT_HELPERS = (_SCRIPTS / "install-output.sh").read_text(encoding="ut
 def with_root_privileges(script: str) -> str:
     """Keep privilege handling in the downloaded file, preserving stdin/args."""
     lines = script.splitlines(keepends=True)
-    split = 2 if len(lines) > 1 and lines[1].startswith('# ConfigFlow') else 1
+    split = 1
+    while split < len(lines) and lines[split].startswith('# ConfigFlow'):
+        split += 1
     return ''.join(lines[:split]) + '''if [ "$(id -u)" -ne 0 ]; then
     if ! command -v sudo >/dev/null 2>&1; then
         printf '%s\\n' '请使用 root 运行安装脚本，或先安装并配置 sudo。' >&2
