@@ -39,6 +39,7 @@ import { vi } from 'vitest'
 import MihomoPanel from '@/views/MihomoPanel.vue'
 import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
 import MihomoRules from '@/components/mihomo/MihomoRules.vue'
+import MihomoLogs from '@/components/mihomo/MihomoLogs.vue'
 import { agentApi, mihomoPanelApi } from '@/api'
 import { invalidateAgentSummaries } from '@/lib/agentSummaries'
 
@@ -48,7 +49,11 @@ vi.mock('@/api', () => {
   const ok = (data: unknown) => vi.fn().mockResolvedValue({ data: { success: true, data } })
   return {
     clientToolsApi: { notes: vi.fn().mockResolvedValue({ data: { success: true, notes: {} } }) },
-    agentApi: { getAll: vi.fn(), summaries: vi.fn() },
+    agentApi: {
+      getAll: vi.fn(), summaries: vi.fn(),
+      getLogSources: vi.fn().mockResolvedValue({ data: { success: true, sources: [{ id: 'core', label: 'Mihomo 日志', kind: 'journal', unit: 'mihomo' }] } }),
+      getLogs: vi.fn().mockResolvedValue({ data: { success: true, logs: 'Mihomo log entry' } })
+    },
     mihomoPanelApi: {
       version: ok({ version: 'v1.19.0' }),
       configs: ok({ mode: 'Rule' }),
@@ -93,6 +98,35 @@ describe('mihomo panel view', () => {
     expect(wrapper.text()).toContain('Trojan')
     expect(wrapper.text()).toContain('42 ms')
     expect(vi.mocked(mihomoPanelApi.proxies)).toHaveBeenCalledWith('gw')
+    wrapper.unmount()
+  })
+
+  it('places logs after rules and opens a directly linked logs tab', async () => {
+    routeState.route = reactive({ query: { agent: 'gw', tab: 'logs' } })
+    vi.mocked(agentApi.summaries).mockResolvedValue({ data: [
+      { id: 'gw', name: 'Gateway', service_type: 'mihomo', status: 'online' }
+    ] } as any)
+    routeState.replace.mockImplementation(({ query }) => { routeState.route.query = query })
+    const wrapper = mount(MihomoPanel)
+    await flushPromises()
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['策略', '连接', '规则', '日志'])
+    expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('日志')
+    expect(wrapper.getComponent(MihomoLogs).props()).toMatchObject({ agentId: 'gw', active: true })
+    expect(wrapper.text()).toContain('Mihomo log entry')
+    wrapper.unmount()
+  })
+
+  it('keeps the logs tab available when the core controller cannot be reached', async () => {
+    routeState.route = reactive({ query: { agent: 'gw', tab: 'logs' } })
+    vi.mocked(agentApi.summaries).mockResolvedValue({ data: [
+      { id: 'gw', name: 'Gateway', service_type: 'mihomo', status: 'online' }
+    ] } as any)
+    vi.mocked(mihomoPanelApi.version).mockRejectedValueOnce(new Error('core unavailable'))
+    const wrapper = mount(MihomoPanel)
+    await flushPromises()
+    expect(wrapper.text()).toContain('无法连接核心')
+    expect(wrapper.findComponent(MihomoLogs).exists()).toBe(true)
+    expect(wrapper.text()).toContain('Mihomo log entry')
     wrapper.unmount()
   })
 
