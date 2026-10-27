@@ -1,6 +1,16 @@
 #!/bin/sh
 set -e
 
+case "${SERVICE_TYPE:-}" in
+    oxidns-ha-host|oxidns-ha-macvlan)
+        exec python3 /usr/local/lib/configflow/docker-compose-compact.py "$@"
+        ;;
+    ha-companion-compact)
+        export CONFIGFLOW_DNS_HA=1 CONFIGFLOW_DNS_HA_NETWORK=host CONFIGFLOW_DNS_HA_IDENTITY=installation
+        exec /ha-companion-entrypoint.sh
+        ;;
+esac
+
 if [ "${SERVICE_TYPE:-}" = "ha-companion" ]; then
     exec /ha-companion-entrypoint.sh
 fi

@@ -363,7 +363,7 @@ def parse_report(output, network_mode='host'):
     fingerprint_ok = not code and re.fullmatch(r'[0-9a-f]{64}', fingerprint)
     checks.append(_check('host_identity', '宿主身份信息', 'pass' if fingerprint_ok else 'warning',
                          '已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。' if fingerprint_ok else '默认 /etc/machine-id 缺失、不可读、为软链接或未获取有效指纹；不能直接假定默认身份挂载可用，也尚不能对比两份输出。',
-                         None if fingerprint_ok else '后续请选择真实普通文件的持久绝对路径，不使用软链接；若缺失可仅创建一次，两台宿主不要复制同一身份文件。'))
+                         None if fingerprint_ok else '精简 Compose 会自动准备安装身份，无需此文件，独立主机以安装后的实时检查为准；使用脚本或旧 Compose 时仍需提供稳定的普通身份文件。'))
     statuses = {item['status'] for item in checks}
     status = next((s for s in ('fail', 'unknown', 'warning') if s in statuses), 'pass')
     summary = {'pass': '基础检查通过；仍需安装后的环境检测及真实局域网/VIP 验证。',

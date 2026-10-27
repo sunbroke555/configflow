@@ -35,6 +35,11 @@ def issue(repository, body, profile_id):
     # install is retried. Different settings never gain access to that identity.
     spec = {**body, 'mode': 'new', 'server_url': body['server_url'].rstrip('/'), 'profile_id': profile_id}
     spec.pop('action', None)
+    if spec.get('install_method') == 'compose_compact':
+        # Updating the image is routine maintenance, not a new Agent identity.
+        # The compact runtime does not use legacy host-file/volume choices.
+        for ignored in ('image', 'ha_host_id_path', 'create_host_identity'):
+            spec.pop(ignored, None)
     key = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
     index = root / (key + '.index')
     fd = os.open(root / '.issue.lock', os.O_RDWR | os.O_CREAT, 0o600)

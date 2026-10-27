@@ -15,10 +15,10 @@ IMAGE = 'thsrite/config-flow-agent:latest'
 Q = shlex.quote
 
 
-def _path(value, label):
+def _path(value, label, allow_colon=False):
     if (not isinstance(value, str) or not value.startswith('/') or value == '/'
-            or os.path.normpath(value) != value or any(c in value for c in ',:\x00\r\n')):
-        raise ValueError(label + '须为规范的绝对路径，不能包含逗号、冒号或换行')
+            or os.path.normpath(value) != value or any(c in value for c in (',\x00\r\n' if allow_colon else ',:\x00\r\n'))):
+        raise ValueError(label + '须为规范的绝对路径，不能包含' + ('逗号或换行' if allow_colon else '逗号、冒号或换行'))
     return value
 
 
@@ -394,9 +394,9 @@ def generate_guide(request, enrollment=None):
     if action != 'generate' or request.get('mode', 'new') not in ('new', 'migrate'):
         raise ValueError('安装步骤或模式无效')
     method = request.get('install_method', 'script')
-    if method not in ('script', 'compose', 'compose_direct'):
-        raise ValueError('install_method 须为 script、compose 或 compose_direct')
-    if method in ('compose', 'compose_direct') and request.get('mode', 'new') != 'new':
+    if method not in ('script', 'compose', 'compose_direct', 'compose_compact'):
+        raise ValueError('install_method 须为 script、compose、compose_direct 或 compose_compact')
+    if method in ('compose', 'compose_direct', 'compose_compact') and request.get('mode', 'new') != 'new':
         raise ValueError('Compose 安装包仅支持新安装；已有容器请使用迁移脚本')
     image = request.get('image', IMAGE)
     if not isinstance(image, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}', image):
@@ -416,18 +416,22 @@ def generate_guide(request, enrollment=None):
                   enable_mihomo=False, enable_oxidns=True, enable_dns_ha=True, oxidns_port=port,
                   ha_parent=request.get('ha_parent', ''), ha_subnet=request.get('ha_subnet', ''),
                   ha_gateway=request.get('ha_gateway', ''), ha_host_id_path=request.get('ha_host_id_path', '/etc/machine-id'))
-    create_identity = request.get('create_host_identity', False)
+    create_identity = False if method == 'compose_compact' else request.get('create_host_identity', False)
     if not isinstance(create_identity, bool):
         raise ValueError('create_host_identity 须为布尔值')
-    if not (method == 'compose_direct' and create_identity):
+    if method != 'compose_compact' and not (method == 'compose_direct' and create_identity):
         _path(params['ha_host_id_path'], '宿主身份文件')
-    identity = identity_command(params['ha_host_id_path']) if create_identity and method != 'compose_direct' else ''
+    identity = identity_command(params['ha_host_id_path']) if create_identity and method not in ('compose_direct', 'compose_compact') else ''
     mode = request.get('mode', 'new')
     if mode == 'migrate':
         compose, install, rollback = _migration(params, request)
     else:
-        params['data_dir'] = _path(params['data_dir'], '持久数据根目录')
-        if method == 'compose_direct':
+        params['data_dir'] = _path(params['data_dir'], '持久数据根目录', allow_colon=method == 'compose_compact')
+        if method == 'compose_compact':
+            from .docker_ha_compact import generate_compact
+            compose, direct = generate_compact(params, request, enrollment)
+            install = direct['command']
+        elif method == 'compose_direct':
             from .docker_ha_compose_direct import generate_direct
             compose, direct = generate_direct(params, request, enrollment)
             install = direct['command']
@@ -436,7 +440,7 @@ def generate_guide(request, enrollment=None):
         rollback = ''
     inspection = inspection_command(request.get('container_name', '') if mode == 'migrate' else '')
     logs_name = request.get('container_name') if mode == 'migrate' else params['agent_name'] + '-oxidns'
-    logs = ('docker compose logs --tail 80\n' if method == 'compose_direct'
+    logs = ('docker compose logs --tail 80\n' if method in ('compose_direct', 'compose_compact')
             else 'docker logs --tail 80 ' + Q(logs_name) + '\n')
     blocks = [{'id': 'inspect', 'title': '只读检查宿主机与原容器', 'command': inspection}]
     if identity:
@@ -463,4 +467,9 @@ def generate_guide(request, enrollment=None):
         result['warnings'] = ['只需保存 compose.yaml 并运行 docker compose up -d；需要包含内置安装器的新镜像和 Compose 2.20+。',
                               'YAML 包含仅用于本设备的24小时登记凭据，也可被 Docker inspect 读取；请勿公开分享。已保存 Agent 身份后重启不依赖该凭据。',
                               '初始化仅写应用数据目录；选用自动身份时还使用固定 Docker 身份卷。不要复制或删除该共享身份卷，不要运行 down -v。']
+    if method == 'compose_compact':
+        result['compose_deployment'] = direct
+        result['warnings'] = ['保存一份 compose.yaml 后启动即可；需要支持精简安装的新镜像与 Compose 2.20+。',
+                              'INSTALL_KEY 是本设备的限时安装凭据，请勿分享。首次登记完成后可移除，重建继续复用持久身份。',
+                              '安装身份保存在 Agent 数据目录中；两端需提供只读宿主校验信息，旧安装请沿用原 Compose 或使用迁移入口。']
     return result

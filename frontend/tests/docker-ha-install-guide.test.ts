@@ -19,7 +19,7 @@ const wrappers: ReturnType<typeof mount>[] = []
 const result = { success: true, inspection_command: 'docker version', identity_command: '', install_command: 'install-host-command', rollback_command: '', compose: 'services: {}', warnings: [] }
 const composeYaml = "name: cf-oxidns-test\nservices:\n  agent:\n    image: example/agent:ha\n    environment:\n      NOTE: '局域网 $value'\n"
 const composeDeployment = {
-  filename: 'compose.yaml', project_name: 'cf-oxidns-test', command: 'docker compose up -d', identity_mode: 'file',
+  filename: 'compose.yaml', project_name: 'cf-oxidns-test', command: 'docker compose up -d', identity_mode: 'installation', service_count: 2,
 }
 const composeResult = { ...result, compose: composeYaml, inspection_command: 'standalone-inspection-script', identity_command: 'standalone-identity-script', compose_deployment: composeDeployment }
 
@@ -73,7 +73,7 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = '' })
 
 describe('Docker HA installation guide', () => {
-  it('defaults to direct Compose and copies or downloads the exact UTF-8 YAML without host scripts', async () => {
+  it('defaults to compact Compose and copies or downloads the exact UTF-8 YAML without host scripts', async () => {
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: composeResult } as any)
     const createDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
     const revokeDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
@@ -90,7 +90,7 @@ describe('Docker HA installation guide', () => {
       await hosts(wrapper)
       await click(wrapper, '4. 执行安装')
       await click(wrapper, '生成主机 1 的Compose')
-      expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'new', install_method: 'compose_direct', agent_ip: '192.168.1.21', data_dir: '/srv/dns-1' }), 'space')
+      expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'new', install_method: 'compose_compact', agent_ip: '192.168.1.21', data_dir: '/srv/dns-1' }), 'space')
       expect(wrapper.text()).toContain('1. 保存 Compose')
       expect(wrapper.text()).toContain('2. 启动项目')
       expect(wrapper.text()).not.toContain('prepare.sh')
@@ -280,23 +280,45 @@ describe('Docker HA installation guide', () => {
     expect(wrapper.text()).toContain('已启用 HA 的旧容器会被迁移脚本拒绝')
   })
 
-  it('uses the shared Docker identity volume without asking for a writable host identity path', async () => {
+  it.each([['host', 2], ['macvlan', 1]] as const)('installs one %s node with automatic identity and leaves host 2 empty', async (network, serviceCount) => {
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: { ...composeResult,
-      compose_deployment: { ...composeDeployment, identity_mode: 'docker-volume' },
+      compose_deployment: { ...composeDeployment, service_count: serviceCount },
     } } as any)
     const wrapper = render()
+    await radio(wrapper, 'Docker HA 网络模式', network)
+    await click(wrapper, '2. 主机 1')
+    await wrapper.get('#docker-ha-host-1-ip').setValue('192.168.1.21')
+    await wrapper.get('#docker-ha-host-1-data').setValue('/srv/dns-1')
+    expect(wrapper.find('#docker-ha-host-1-identity').exists()).toBe(false)
+    expect(wrapper.find('#docker-ha-host-1-create-id').exists()).toBe(false)
+    expect(wrapper.text()).toContain('无需填写宿主身份文件')
+    await click(wrapper, '只安装这一台，前往部署')
+    await click(wrapper, '生成主机 1 的Compose')
+    const payload = vi.mocked(agentApi.generateDockerHAGuide).mock.calls.at(-1)![0]
+    expect(payload).toEqual(expect.objectContaining({ install_method: 'compose_compact', agent_ip: '192.168.1.21', data_dir: '/srv/dns-1' }))
+    expect(payload).not.toHaveProperty('create_host_identity')
+    expect(payload).not.toHaveProperty('ha_host_id_path')
+    expect(wrapper.text()).toContain(serviceCount === 2 ? 'Host 运行 OxiDNS 和独立 VIP 服务' : 'macvlan 容器内包含 OxiDNS、Agent 和 keepalived')
+    expect(wrapper.text()).not.toContain('configflow-ha-host-identity')
+    expect(wrapper.text()).not.toContain('standalone-identity-script')
+  })
+
+  it('does not let hidden script identity settings change compact enrollment inputs', async () => {
+    vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: composeResult } as any)
+    const wrapper = render()
+    await hosts(wrapper)
+    await click(wrapper, '4. 执行安装')
+    await click(wrapper, '生成主机 1 的Compose')
+    const original = vi.mocked(agentApi.generateDockerHAGuide).mock.calls.at(-1)![0]
+    await radio(wrapper, '新安装部署方式', 'script')
     await click(wrapper, '2. 主机 1')
     wrapper.getComponent(Checkbox).vm.$emit('update:modelValue', true)
     await flushPromises()
-    expect(wrapper.find('#docker-ha-host-1-identity').exists()).toBe(false)
-    expect(wrapper.text()).toContain('无需创建宿主机文件')
+    await wrapper.get('#docker-ha-host-1-identity').setValue('/srv/legacy-id')
     await click(wrapper, '4. 执行安装')
+    await radio(wrapper, '新安装部署方式', 'compose_compact')
     await click(wrapper, '生成主机 1 的Compose')
-    expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({
-      install_method: 'compose_direct', create_host_identity: true, ha_host_id_path: '',
-    }), 'space')
-    expect(wrapper.text()).toContain('configflow-ha-host-identity')
-    expect(wrapper.text()).not.toContain('standalone-identity-script')
+    expect(vi.mocked(agentApi.generateDockerHAGuide).mock.calls.at(-1)![0]).toEqual(original)
   })
 
   it('offers one-time stable host identity creation without reusing machine-id as a new output path', async () => {
@@ -397,7 +419,7 @@ describe('Docker HA installation guide', () => {
     expect(wrapper.text()).toContain('在线心跳不能代替安装检查')
   })
 
-  it.each(['file', 'docker-volume'])('pairs an existing Shell node with a checked Docker %s identity', async source => {
+  it.each(['file', 'docker-volume', 'installation'])('pairs an existing Shell node with a checked Docker %s identity', async source => {
     vi.mocked(agentApi.getAll).mockResolvedValue({ data: [device('a'), device('b', { deployment_method: 'shell' })] } as any)
     vi.mocked(agentApi.getDockerHAEnvironment).mockImplementation(async id => ({ data: environment(id, {
       oxidns_ha_container_protocols: id === 'b' ? [] : [1],
@@ -412,11 +434,11 @@ describe('Docker HA installation guide', () => {
     expect(wrapper.getComponent(PairStub).props('agents')).toHaveLength(2)
   })
 
-  it.each(['same-boot', 'missing-boot'])('blocks mixed file/volume pairing with %s evidence', async failure => {
+  it.each([['docker-volume', 'same-boot'], ['docker-volume', 'missing-boot'], ['installation', 'same-boot'], ['installation', 'missing-boot']])('blocks mixed %s pairing with %s evidence', async (source, failure) => {
     vi.mocked(agentApi.getAll).mockResolvedValue({ data: [device('a'), device('b', { deployment_method: 'shell' })] } as any)
     vi.mocked(agentApi.getDockerHAEnvironment).mockImplementation(async id => ({ data: environment(id, {
       oxidns_ha_environment: { kind: id === 'b' ? 'native' : 'container', ready: true,
-        host_id: (id === 'a' ? 'a' : 'b').repeat(64), host_id_source: id === 'a' ? 'docker-volume' : 'file',
+        host_id: (id === 'a' ? 'a' : 'b').repeat(64), host_id_source: id === 'a' ? source : 'file',
         host_boot_id: failure === 'missing-boot' && id === 'b' ? '' : 'c'.repeat(64) },
     }) } as any))
     const wrapper = render()

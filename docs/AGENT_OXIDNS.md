@@ -278,15 +278,17 @@ Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，�
 
 ### Docker DNS 高可用安装
 
-新装推荐在 **系统 → Agent → 生成安装脚本 → Docker 高可用引导** 中选择 **Compose 直接部署**。填写当前 Docker 主机后，下载或复制一份 `compose.yaml`，导入容器管理器的项目直接启动；命令行只需在文件所在目录执行 `docker compose up -d`。无需 `prepare.sh`、外部 `.env` 或登记脚本。需要 Compose 2.20+，并使用包含 `/usr/local/lib/configflow/docker-compose-install.py` 的新镜像（Agent 1.8.48-go 起）；旧版镜像只有 HA 支持还不够。
+新装推荐在 **系统 → Agent → 生成安装脚本 → Docker 高可用引导** 中选择 **精简 Compose**。填写当前主机后，可点 **只安装这一台，前往部署**，下载一份 `compose.yaml`，导入容器管理器的项目启动；命令行只需 `docker compose up -d`。无需 `prepare.sh`、外部 `.env` 或初始化容器。需要 Compose 2.20+ 和包含精简启动入口的新镜像（Agent 1.8.49-go 起）；部署前请拉取新镜像。
 
-初始化容器只准备所选专用数据目录，不安装宿主机软件或修改系统 DNS。首次启动由最终网络中的 Agent 容器登记，限时凭据有效 24 小时；已登记的容器重启、重建会复用持久身份，无需再次登记。首次凭据过期时保持设置不变重新生成 Compose，替换后再次启动。旧容器继续使用引导中的迁移入口，不能用新装 Compose 接管旧数据。
+Host 保留两个容器：OxiDNS/Agent 与独立的 keepalived。macvlan 使用一个容器，在其中运行 OxiDNS、Agent 和 keepalived，保留完整高可用功能。普通数据目录直接映射；Linux 启动身份和 Host 网络校验仍使用只读、禁止自动创建源路径的挂载。
 
-主机缺少身份文件时，勾选 **使用 Docker 身份卷** 即可，无需手动创建宿主机文件。各项目共享本机的 `configflow-ha-host-identity` 卷；保留该卷，不要复制到另一台主机。此模式要求两端 Agent 1.8.48-go 或更新版本，以提供实时宿主启动身份校验；已有 Shell 节点可从 Agent 卡片升级，生成的 Compose 已包含容器所需只读挂载。
+首次启动自动准备所选的三个专用数据子目录并向面板登记，不安装宿主软件或修改系统 DNS。限时安装凭据有效 24 小时；首次凭据过期时保持设置不变，重新生成 Compose 后启动。已登记的容器重启、重建会复用原身份，无需再次登记；之后可移除 `INSTALL_KEY`，保留 Host 高可用服务中的非秘密 `INSTALL_SCOPE`。
+
+安装身份自动保存在 `agent` 数据目录，无需填写宿主身份文件或创建身份卷。重建和升级时保留三个数据目录；两台设备分别安装，不要复制安装身份。配对会核对两端实际宿主启动身份，拒绝同机容器或缺少校验证据的节点；已有 Shell Agent 需支持启动身份上报。旧容器继续使用原 Compose 或引导中的迁移入口，精简新装不会接管旧数据。
 
 可以由 **一台 Shell 原生 OxiDNS + 一台 Docker OxiDNS** 组成高可用。已有 Shell 节点无需重装核心；确认 Agent 支持高可用与计划迁移、已安装 keepalived，两端绑定同一配置空间，在引导的 **验证与配对** 选择两台。Shell 端无需安装 Docker。Host 与 macvlan 均可与原生节点配对；仍需两台独立设备和可达的同一局域网。
 
-以下传统 Docker 入口与手动身份文件方式继续保留。
+以下传统 Docker 入口、旧版 Compose 与手动身份文件方式继续保留；已安装的项目不必为了精简而重装。
 
 需要包含 Docker HA 支持的新镜像（Agent 1.8.47-go 起）、两台不同的 Linux 宿主机、同一局域网与配置空间。两台宿主机使用 rootful Docker 和稳定地址，并允许彼此的 VRRP（IP 协议 112）及 DNS 通信。同一宿主机起两个容器不构成这套高可用；普通 bridge 容器、Docker Desktop 和非 Linux 宿主机不支持。每个受管 DNS 容器仅运行 OxiDNS，Mihomo、MosDNS 和 All-in-One 安装不启用此选项。
 
@@ -298,7 +300,7 @@ Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，�
 
 Host 模式的独立高可用容器使用同一个官方镜像，仅运行 keepalived 的专用 Supervisor。只有它额外获得 `NET_ADMIN`、`NET_RAW`；OxiDNS 容器通过专用 Unix socket 管理这一项服务，不能经该 socket 操作其他容器。两者共享受管 HA 目录，高可用容器只读访问 Agent 与核心目录。无需 Docker socket、`privileged` 或宿主 `/etc` 整目录挂载。主容器只读挂载 `/proc/1/ns/net`，用于核对实际 host 网络。
 
-两种模式都必须保留三个数据目录：`agent` 保存 Agent 身份、HA 归属与发布让位记录，`oxidns` 保存配置、规则、备份及核心状态，`ha` 保存受管 keepalived 配置与控制 socket。默认只读挂载宿主 `/etc/machine-id` 用于区分宿主机；若系统将稳定身份放在其他文件，可在 **Docker 高级配置 → 宿主机身份文件** 修改源路径。使用现有的稳定主机身份，同一宿主机的所有容器必须指向同一个文件，不要为每个容器随意生成不同 ID。
+新旧两种安装方式都必须保留三个数据目录：`agent` 保存 Agent 身份、HA 归属与发布让位记录，`oxidns` 保存配置、规则、备份及核心状态，`ha` 保存受管 keepalived 配置与控制 socket。下方手动身份文件说明仅适用于传统入口；精简 Compose 会自动保存安装身份。传统入口默认只读挂载宿主 `/etc/machine-id` 用于区分宿主机；若系统将稳定身份放在其他文件，可在 **Docker 高级配置 → 宿主机身份文件** 修改源路径。使用现有的稳定主机身份，同一宿主机的所有容器必须指向同一个文件，不要为每个容器随意生成不同 ID。
 
 若没有 `/etc/machine-id`，先检查 `/var/lib/dbus/machine-id`。两个位置都不存在、也没有其他稳定身份文件时，可在**宿主机上**一次性生成专用文件。先将下方路径替换为这台主机实际的**持久目录绝对路径**（例如 NAS 的共享文件夹），不要放在容器层或 `/tmp`。以有权创建该文件的用户执行；已有文件会保留，不会覆盖：
 
@@ -319,7 +321,7 @@ fi
 
 ### 可选：Macvlan 网络
 
-选择 **Macvlan** 时，为每台容器填写宿主网卡、局域网 CIDR、可选网关和固定 IPv4。容器地址、宿主地址和虚拟 IP 必须互不相同，且都需预留，不能与其他设备或 DHCP 分配冲突。参考 [docker-compose-oxidns-ha-macvlan.yaml](../docker/docker-compose-oxidns-ha-macvlan.yaml)。此模式只有一个容器，keepalived 在容器自己的网络空间内运行；该网络空间销毁时 VIP 随之消失。不要给它再接其他网络。
+选择 **Macvlan** 时，为每台容器填写宿主网卡、局域网 CIDR、可选网关和固定 IPv4。容器地址、宿主地址和虚拟 IP 必须互不相同，且都需预留，不能与其他设备或 DHCP 分配冲突。参考 [docker-compose-oxidns-ha-macvlan.yaml](../docker/docker-compose-oxidns-ha-macvlan.yaml)。此模式只有一个容器，其中同时运行 OxiDNS、Agent 与 keepalived。keepalived 在容器自己的网络空间内运行；该网络空间销毁时 VIP 随之消失。不要给它再接其他网络。
 
 macvlan 默认不能直接与宿主机通信；ConfigFlow 和 DNS 上游需位于可达的其他局域网主机，或已配置互通的 macvlan 网络。交换机和宿主网络驱动也需允许同一接口承载多个 MAC。无法使用 macvlan 时选择 Host，不需为此改变 NAS 品牌或安装方式。生成的 Run 脚本会新建专用 macvlan 网络；已有同名网络时停止，请沿用原 Compose/启动参数维护，不会盲目复用不明网络。
 

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -27,11 +28,14 @@ const haHostIdentityDirectory = "/run/configflow-host-identity"
 const haHostBootIDPath = "/run/configflow-host-boot-id"
 const haNativeBootIDPath = "/proc/sys/kernel/random/boot_id"
 const haHostNetNSPath = "/run/configflow-host-netns"
+const haInstallationIdentityFile = ".configflow-ha-identity"
+const haInstallationMarkerFile = ".configflow-compose-compact.json"
 
 var haEnvironmentRead = os.ReadFile
 var haEnvironmentStat = os.Stat
 var haEnvironmentLstat = os.Lstat
 var haBootIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
+var haInstallationIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var haCompanionPeerCheck = checkHACompanionPeer
 
 type haNamespace struct {
@@ -124,6 +128,50 @@ func haVolumeIdentity() string {
 		return ""
 	}
 	return haHostIdentity(path)
+}
+
+// An installation identity owns persistent HA state. Only the separately
+// mounted boot proof establishes host independence for this identity source.
+func haInstallationIdentity(directory string) string {
+	if !filepath.IsAbs(directory) || !haMounted(directory, true) {
+		return ""
+	}
+	info, err := haEnvironmentLstat(directory)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	readRegular := func(path string, limit int64) ([]byte, error) {
+		file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("installation proof is not a regular file")
+		}
+		data, err := io.ReadAll(io.LimitReader(file, limit+1))
+		if err != nil || int64(len(data)) > limit {
+			return nil, fmt.Errorf("installation proof cannot be read safely")
+		}
+		return data, nil
+	}
+	data, err := readRegular(filepath.Join(directory, haInstallationIdentityFile), 128)
+	identity := strings.TrimSpace(string(data))
+	if err != nil || !haInstallationIDPattern.MatchString(identity) {
+		return ""
+	}
+	data, err = readRegular(filepath.Join(directory, haInstallationMarkerFile), 65536)
+	var record struct {
+		Protocol       int    `json:"protocol"`
+		Ready          bool   `json:"ready"`
+		InstallationID string `json:"installation_id"`
+	}
+	if err != nil || json.Unmarshal(data, &record) != nil || record.Protocol != 2 || !record.Ready || record.InstallationID != identity {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(digest[:])
 }
 
 func haNamespaceAt(path string) (haNamespace, error) {
@@ -298,13 +346,22 @@ func haEnvironment(cfg *Config) haEnvironmentInfo {
 		if result.HostID == "" {
 			add("宿主身份卷必须只读挂载到 /run/configflow-host-identity，并包含有效的普通 host-id 文件，不能使用软链接")
 		}
+	case "installation":
+		result.HostIDSource = "installation"
+		result.HostID = haInstallationIdentity(filepath.Dir(cfg.AgentConfigFile))
+		if result.HostID == "" {
+			add("安装身份或初始化记录缺失、不匹配或不在持久目录中；请保留数据并检查容器启动日志")
+		}
 	default:
-		add("CONFIGFLOW_DNS_HA_IDENTITY 必须是 file 或 volume")
+		add("CONFIGFLOW_DNS_HA_IDENTITY 必须是 file、volume 或 installation")
 	}
 	if haMounted(haHostBootIDPath, false) {
 		if info, err := haEnvironmentLstat(haHostBootIDPath); err == nil && info.Mode().IsRegular() {
 			result.HostBootID = haBootIdentity(haHostBootIDPath)
 		}
+	}
+	if result.HostIDSource == "installation" && result.HostBootID == "" {
+		add("简洁 Compose 需要只读挂载真实宿主 boot_id，才能确认不同宿主机")
 	}
 	if iface, err := haContainerInterface(cfg, result.Network == "macvlan"); err != nil {
 		add(err.Error())
