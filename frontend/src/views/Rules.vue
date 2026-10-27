@@ -1422,7 +1422,7 @@ const ruleName = (item: any) => (item.itemType === 'ruleset' ? item.name || item
 const explicitDnsCount = (items: any[], policy: string) => (dnsColumn.value ? items.filter((item) => {
   const entry = dnsSnapshot.value?.rules[item.id]
   const own = entry && !entry.follow && (entry.state === 'explicit' || entry.state === 'disabled') ? entry.route ?? null : null
-  return own !== null && own !== followRoute({ ...item, policy })
+  return own !== null && own !== followRoute({ ...item, policy }, dnsSnapshot.value?.engine.policy_routes)
 }).length : 0)
 
 const applyPolicy = async (key: string, items: any[], policy: string, options: { groupName?: string } = {}) => {
@@ -1475,7 +1475,7 @@ const followCandidates = computed(() => {
   return allRules.value.filter(item => {
     const entry = snapshot.rules[item.id]
     const state = entry?.state || 'default'
-    const route = followRoute(item)
+    const route = followRoute(item, snapshot.engine.policy_routes)
     if (state === 'explicit') return entry!.route === route
     // 默认上游且策略不单独处理（例如 REJECT）：标记后同样不改变生成结果。
     return state === 'default' && route === null && (item.itemType === 'ruleset' || isDnsRuleType(item.rule_type))

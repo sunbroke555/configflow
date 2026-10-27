@@ -27,7 +27,7 @@ const emit = defineEmits<{ 'update:open': [value: boolean]; applied: [rules: Rec
 const value = ref<RuleDnsValue>('follow')
 const saving = ref(false)
 const convertible = (item: Item) => item.itemType === 'ruleset' || isDnsRuleType(item.rule_type)
-const policyRoute = computed(() => (props.items[0] ? followRoute({ itemType: 'ruleset', policy: props.items[0].policy }) : null))
+const policyRoute = computed(() => (props.items[0] ? followRoute({ itemType: 'ruleset', policy: props.items[0].policy }, props.snapshot?.engine.policy_routes) : null))
 const upstreamLabel = computed(() => (isUpstreamValue(value.value)
   ? props.snapshot?.upstreams.find(item => `upstream:${item.key}` === value.value)?.label : undefined))
 const label = computed(() => choiceLabel(value.value, { policyRoute: policyRoute.value, upstreamLabel: upstreamLabel.value }))

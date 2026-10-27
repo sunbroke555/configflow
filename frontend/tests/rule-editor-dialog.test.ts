@@ -495,6 +495,18 @@ describe('rule editor dialog', () => {
     expect(payload).not.toHaveProperty('name')
   })
 
+  it('previews a group follow choice from the DNS snapshot and updates when that route changes', async () => {
+    const wrapper = await render({ dns: snapshot({ policy_routes: { Proxy: 'direct' } }) })
+    await type('#rule-values', 'apple.com')
+    await choose(wrapper, '策略', 'Proxy')
+    expect(dnsTrigger().textContent).toContain('跟随策略 · 直连 DNS')
+    await wrapper.setProps({ dns: snapshot({ policy_routes: { Proxy: 'proxy' } }) })
+    await flushPromises()
+    expect(dnsTrigger().textContent).toContain('跟随策略 · 代理 DNS')
+    await click(save())
+    expect(network.compose.mock.calls[0]![0]).toMatchObject({ rule: { policy: 'Proxy' }, dns: 'follow' })
+  })
+
   it('offers to update a drifted follow rule to its policy', async () => {
     const item = { id: 'rule-d', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'd.test', policy: 'DIRECT', enabled: true }
     await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'rule-d': { state: 'follow_drift', route: 'proxy', follow_route: 'direct' } } }) })

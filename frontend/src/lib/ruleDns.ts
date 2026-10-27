@@ -38,7 +38,7 @@ export const PINNED_HINT = '已固定为当前地址，之后修改上游列表�
 /** 选项文案：拒绝、不存在、空应答、黑洞四条简述由用户确认，保持原样 */
 export const DNS_COPY = {
   follow: optionCopy('按策略自动选择 DNS，修改策略时一起变化', '大多数规则。',
-    'DIRECT 用直连 DNS，策略组用代理 DNS，REJECT 不单独处理；改策略时一起变化，单独设置的规则不受影响。'),
+    'DIRECT 用直连 DNS；策略组按配置的默认顺序与跟随来源判断，直连优先组用直连 DNS。无法确定时用代理 DNS，REJECT 不单独处理。设备面板临时切换不实时同步。'),
   default: optionCopy('不单独分流，交给未匹配时的上游', '只关心流量走向，或不想让 IP 规则触发本地探测。',
     '不生成分流条目，查询继续匹配后面的规则，最后交给「未匹配时转发到」；以前未勾选的规则都是这个状态。'),
   direct: optionCopy('用直连上游解析，适合国内和局域网网站', '国内站点、局域网服务。',
@@ -65,12 +65,13 @@ export const copyKey = (value: RuleDnsValue) => (isUpstreamValue(value) ? 'upstr
 
 interface PolicyItem { itemType?: string; rule_type?: string; policy?: string }
 
-/** 与后端 rule_dns.follow_route 一致：DIRECT → 直连，策略组 → 代理，REJECT 等内置策略和不能转换的单条规则不单独处理 */
-export function followRoute(item: PolicyItem): 'direct' | 'proxy' | null {
+/** 策略组使用服务端解析的默认出口；缺少映射时兼容旧版本，按代理处理。 */
+export function followRoute(item: PolicyItem, policyRoutes?: RuleDnsEngine['policy_routes']): 'direct' | 'proxy' | null {
   if (item.itemType !== 'ruleset' && !isDnsRuleType(item.rule_type)) return null
   const policy = item.policy
   if (policy === 'DIRECT') return 'direct'
   if (!policy || NON_PROXY_POLICIES.includes(policy)) return null
+  if (policyRoutes && Object.prototype.hasOwnProperty.call(policyRoutes, policy)) return policyRoutes[policy] ?? null
   return 'proxy'
 }
 

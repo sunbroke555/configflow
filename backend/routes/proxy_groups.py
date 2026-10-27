@@ -1,5 +1,6 @@
 """策略组管理路由"""
 import re
+from copy import deepcopy
 
 from flask import request, jsonify
 
@@ -93,6 +94,37 @@ def _clean_group_fields(group):
         group.pop('chain', None)
 
 
+def _sync_follow_dns(before, after):
+    """Keep opted-in DNS routes with changed group defaults in this transaction.
+
+    A custom native draft only blocks a group edit when a following rule would
+    actually move. Explicit DNS choices and unrelated group edits stay intact.
+    """
+    from backend.common.rule_dns import apply_rule_dns, follow_route, policy_dns_routes
+    settings = after.get('oxidns') or {}
+    following = set(settings.get('rule_dns_follow') or [])
+    if settings.get('config_mode') == 'native':
+        following &= {rule['id'] for rule in after.get('rule_configs', [])
+                      if rule.get('enabled', True) and rule.get('library_enabled', True)}
+    if not following:
+        return []
+    # The transaction snapshot hydrates only the old group's shared references.
+    # A newly selected node/provider must be visible while resolving its default.
+    shared = get_shared_config()
+    before = {**before, **shared}
+    current = {**after, **shared}
+    previous = {rule['id']: rule for rule in before.get('rule_configs', [])}
+    before_routes, after_routes = policy_dns_routes(before), policy_dns_routes(current)
+    changed = any(rule['id'] in following and rule['id'] in previous
+                  and follow_route(previous[rule['id']], routes=before_routes) != follow_route(rule, routes=after_routes)
+                  for rule in after.get('rule_configs', []))
+    if not changed:
+        return []
+    warnings = apply_rule_dns(before, current, {}, base_url=request.url_root.rstrip('/'), strict=True)
+    after['oxidns'] = current['oxidns']
+    return warnings
+
+
 @proxy_groups_bp.route('', methods=['GET', 'POST'])
 @require_auth
 def handle_proxy_groups():
@@ -112,14 +144,17 @@ def handle_proxy_groups():
         from backend.utils.health_check import initialize_group_health
         from backend.utils.group_candidates import validate_candidates
         initialize_group_health(group)
+        warnings = []
         def create(profile):
+            before = deepcopy(profile)
             validate_candidates(group, profile, get_shared_config())
             profile.setdefault('proxy_groups', []).append(group)
+            warnings.extend(_sync_follow_dns(before, profile))
         try:
             update_config_transaction(create)
         except CandidateValidationError as exc:
             return jsonify({'success': False, 'message': str(exc)}), 400
-        return jsonify({'success': True, 'data': group})
+        return jsonify({'success': True, 'data': group, **({'warnings': warnings} if warnings else {})})
 
 
 @proxy_groups_bp.route('/batch-health-url', methods=['PUT'])
@@ -178,8 +213,10 @@ def handle_proxy_group(group_id):
     if request.method == 'PUT' and not isinstance(group_data, dict):
         return jsonify({'success': False, 'message': '策略组请求必须是 JSON 对象'}), 400
     listener_changes = []
+    warnings = []
 
     def mutate(profile):
+        before = deepcopy(profile)
         groups = profile.setdefault('proxy_groups', [])
         original = next((g for g in groups if g.get('id') == group_id), None)
         if original is None:
@@ -231,6 +268,7 @@ def handle_proxy_group(group_id):
                     if rule.get('policy') == old_name:
                         rule['policy'] = new_name
             groups[groups.index(original)] = group_data
+        warnings.extend(_sync_follow_dns(before, profile))
 
     try:
         update_config_transaction(mutate)
@@ -238,7 +276,8 @@ def handle_proxy_group(group_id):
         return jsonify({'success': False, 'message': str(exc)}), 400
     except (Conflict, NotFound) as exc:
         return jsonify({'success': False, 'message': exc.description}), exc.code
-    result = {'success': True, **({'data': group_data} if group_data is not None else {})}
+    result = {'success': True, **({'data': group_data} if group_data is not None else {}),
+              **({'warnings': warnings} if warnings else {})}
     if listener_changes:
         removing = request.method == 'DELETE' or not group_data.get('enabled', True)
         result['listener_changes'] = listener_changes

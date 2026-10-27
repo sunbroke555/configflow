@@ -27,7 +27,7 @@ const entry = computed(() => props.snapshot?.rules[props.item.id])
 const engine = computed(() => props.snapshot?.engine)
 const chip = computed(() => engine.value && dnsChip(entry.value, engine.value))
 const name = computed(() => props.item.itemType === 'ruleset' ? props.item.name || props.item.id : props.item.value || props.item.id)
-const policyRoute = computed(() => followRoute(props.item))
+const policyRoute = computed(() => followRoute(props.item, engine.value?.policy_routes))
 const pendingText = computed(() => props.pending && choiceLabel(props.pending, { policyRoute: policyRoute.value }))
 const icons = { direct: ArrowRightLeft, proxy: Globe, upstream: Server, drift: TriangleAlert, lock: Lock }
 const readOnly = computed(() => !chip.value || entry.value?.state === 'unsupported' || entry.value?.state === 'disabled' || !engine.value?.editable)

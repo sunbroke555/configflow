@@ -482,6 +482,21 @@ def test_native_toggle_keeps_follow_and_reapplies_route():
     assert sources['rule_dns_follow'] == ['c']
 
 
+def test_native_reenable_follow_uses_updated_group_default():
+    config = policies()
+    config['proxy_groups'] = [{'id': 'direct', 'name': 'Direct group', 'type': 'select',
+                               'manual_nodes': ['DIRECT']}]
+    config = without(config, 'c', policy='Direct group')
+    document, settings = native(config, direct_rules=['a', 'c'], rule_dns_follow=['c'])
+    off = without(config, 'c', enabled=False)
+    disabled, sources = apply_routing(document, settings, off, {}, before_config=config)
+    assert sources['rule_dns_follow'] == ['c'] and sources['rule_dns_parked'] == {}
+    restored, sources = apply_routing(disabled, sources, config, {}, before_config=off)
+    values = read_routing(restored, sources, config)['values']
+    assert values['direct_rules'] == ['a', 'c'] and values['proxy_rules'] == []
+    assert sources['rule_dns_follow'] == ['c']
+
+
 def test_policy_rederive_not_invalidated():
     config = policies()
     document, settings = native(config, direct_rules=['a'], proxy_rules=['c'], rule_dns_follow=['c'])

@@ -306,9 +306,54 @@ def pinned_action(key, plugins):
     return {'action': 'upstream', 'source': source, 'upstream': deepcopy(entry)}
 
 
-def follow_route(item):
-    """DNS route implied by a rule's policy: DIRECT -> direct, a proxy group ->
-    proxy, REJECT-like built-ins and unconvertible single rules -> None."""
+def policy_dns_routes(config):
+    """DNS routes for configured group defaults, never a device's live choice.
+
+    Reuse Mihomo's managed membership ordering. Only manual selection has a
+    stable first candidate; automatic/empty/invalid groups stay on proxy DNS.
+    A follow group copies its source's type and candidates, as generation does.
+    """
+    from backend.utils.group_candidates import render_members
+    groups = {group['name']: group for group in config.get('proxy_groups') or []
+              if isinstance(group, dict) and isinstance(group.get('name'), str)}
+    by_id = {group['id']: group for group in groups.values() if isinstance(group.get('id'), str)}
+    resolved = {}
+
+    def resolve(name, visiting):
+        if name == 'DIRECT':
+            return 'direct'
+        if name in NON_PROXY_POLICIES:
+            return None
+        if name in resolved:
+            return resolved[name]
+        group = groups.get(name)
+        if (group is None or not group.get('enabled', True) or group.get('type') == 'chain'
+                or name in visiting or len(visiting) >= 64):
+            return 'proxy'
+        source = group
+        if group.get('follow_group'):
+            source = by_id.get(group['follow_group'])
+            # Writes forbid following another follower. Do not invent defaults
+            # for imported chains that Mihomo does not recursively expand.
+            if source is None or not source.get('enabled', True) or source.get('follow_group'):
+                return 'proxy'
+        if source.get('type') != 'select':
+            return 'proxy'
+        emitted = render_members(source, config)
+        # Backtick buckets can reorder even static candidates. Native exclusions
+        # can also remove the first one; neither has a reliable static default.
+        if '`' in emitted.get('filter', '') or source.get('exclude-filter') or source.get('exclude-type'):
+            return 'proxy'
+        candidates = emitted.get('proxies') or []
+        route = resolve(candidates[0], visiting | {name}) if candidates else 'proxy'
+        resolved[name] = route
+        return route
+
+    return {name: resolve(name, set()) for name in groups}
+
+
+def follow_route(item, config=None, *, routes=None):
+    """DNS route implied by the rule's policy and configured group default."""
     if item.get('itemType') != 'ruleset' and item.get('rule_type') not in DNS_RULE_TYPES:
         return None
     policy = item.get('policy')
@@ -316,7 +361,9 @@ def follow_route(item):
         return 'direct'
     if not isinstance(policy, str) or not policy or policy in NON_PROXY_POLICIES:
         return None
-    return 'proxy'
+    if routes is None:
+        routes = policy_dns_routes(config) if config is not None else {}
+    return routes.get(policy, 'proxy')
 
 
 def hydrate_ruleset(item, library_entry, profile_id):
@@ -573,6 +620,7 @@ def rule_dns_state(config, base_url='', agents=None):
     native = _native(settings)
     follow = set(values['rule_dns_follow'])
     active = _active(config)
+    policy_routes = policy_dns_routes(config)
     listed = {identity for key in SELECTORS for identity in stored[key]}
     rules = {}
     for item in config.get('rule_configs') or []:
@@ -585,13 +633,13 @@ def rule_dns_state(config, base_url='', agents=None):
         route, action = _route(values, identity), values['rule_actions'].get(identity)
         if identity not in active:
             if identity in follow:
-                route, action = follow_route(item), None
+                route, action = follow_route(item, routes=policy_routes), None
             elif native and identity in values['rule_dns_parked']:
                 action = values['rule_dns_parked'][identity]
                 route = route_key(action)
             entry = {'state': 'disabled', 'route': route, **({'follow': True} if identity in follow else {})}
         elif identity in follow:
-            expected = follow_route(item)
+            expected = follow_route(item, routes=policy_routes)
             entry = {'state': 'follow' if route == expected else 'follow_drift', 'route': route,
                      'follow_route': expected}
         elif route is None:
@@ -620,6 +668,7 @@ def rule_dns_state(config, base_url='', agents=None):
         'mode': settings.get('config_mode', 'template'),
         'editable': current['editable'], 'reason': current['reason'],
         'default_forward': default_forward,
+        'policy_routes': policy_routes,
         'prefer_ipv4': (any(isinstance(step, dict) and step.get('exec') == 'prefer_ipv4' for step in steps)
                         if native else settings.get('prefer_ipv4', True) is not False),
         'local_probe_active': probe,
@@ -662,11 +711,11 @@ def check_choice(value):
     raise ProfileValidationError(f'不支持的 DNS 处理：{value}')
 
 
-def _routing_view(config):
+def _routing_view(config, routes):
     """What the routing of a profile depends on, besides the OxiDNS settings."""
     return [(item.get('id'), item.get('itemType'), item.get('rule_type'), item.get('value'),
              item.get('behavior'), item.get('url'), item.get('enabled', True), item.get('library_enabled', True),
-             follow_route(item))
+             follow_route(item, routes=routes))
             for item in config.get('rule_configs') or [] if isinstance(item, dict)]
 
 
@@ -685,13 +734,13 @@ def _place(values, item, action):
         values['rule_actions'][identity] = deepcopy(action)
 
 
-def _resolve(choice, item, values, catalog):
+def _resolve(choice, item, values, catalog, routes):
     """The stored action for one assignment; None for default upstream."""
     from backend.common.config_repository import ProfileValidationError
     if choice == 'default':
         return None
     if choice == 'follow':
-        route = follow_route(item)
+        route = follow_route(item, routes=routes)
         return None if route is None else {'action': route}
     if not choice.startswith('upstream:'):
         return {'action': choice}
@@ -745,7 +794,8 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
     pruned = {key: ({identity: value for identity, value in stored[key].items() if identity in rules}
                     if isinstance(stored[key], dict) else [identity for identity in stored[key] if identity in rules])
               for key in RULE_DNS_FIELDS}
-    if not assignments and _routing_view(before) == _routing_view(after):
+    before_routes, after_routes = policy_dns_routes(before), policy_dns_routes(after)
+    if not assignments and _routing_view(before, before_routes) == _routing_view(after, after_routes):
         if any(pruned[key] != stored[key] or _dirty(settings, stored, key) for key in pruned):
             after['oxidns'].update(deepcopy(pruned))
         return []
@@ -769,7 +819,7 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
     follow = values['rule_dns_follow']
     for identity, choice in assignments.items():
         item = rules[identity]
-        _place(values, item, _resolve(choice, item, values, catalog))
+        _place(values, item, _resolve(choice, item, values, catalog, after_routes))
         if choice == 'follow':
             if identity not in follow:
                 follow.append(identity)
@@ -778,8 +828,8 @@ def apply_rule_dns(before, after, assignments, *, base_url='', strict=True):
     for identity in follow:
         if identity in assignments or identity not in previous or identity not in rules:
             continue
-        route = follow_route(rules[identity])
-        if route != follow_route(previous[identity]):
+        route = follow_route(rules[identity], routes=after_routes)
+        if route != follow_route(previous[identity], routes=before_routes):
             _place(values, rules[identity], None if route is None else {'action': route})
     warnings = []
     try:

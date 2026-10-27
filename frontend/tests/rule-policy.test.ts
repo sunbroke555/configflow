@@ -114,6 +114,15 @@ describe('inline policy selection', () => {
     expect(wrapper.get('button[aria-label^="b.test 的策略"]').text()).toBe('Japan')
   })
 
+  it('compares an explicit DNS choice with the new group default rather than its group name', async () => {
+    network.state.dns.engine = { ...engine, policy_routes: { Proxy: 'proxy', Japan: 'direct' } }
+    const wrapper = await render()
+    await pick(wrapper, 'b.test 的策略', 'Japan')
+    expect(network.rules.setPolicy).toHaveBeenCalledWith(['r-b'], 'Japan', { groupName: '' }, 'default')
+    expect(notify.warning).not.toHaveBeenCalled()
+    expect(notify.success).toHaveBeenCalledWith('策略已改为「Japan」', expect.anything(), expect.anything())
+  })
+
   it('does nothing when the current policy is picked again', async () => {
     const wrapper = await render()
     await pick(wrapper, 'lan.test 的策略', 'DIRECT')

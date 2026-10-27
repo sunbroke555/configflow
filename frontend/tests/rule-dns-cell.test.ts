@@ -130,6 +130,33 @@ describe('rule DNS column', () => {
     expect(dnsTrigger(wrapper, 'openai.com').attributes('aria-label')).toBe('openai.com 的 DNS：跟随策略：代理 DNS，点击修改')
   })
 
+  it('offers the server-resolved direct DNS route when following a strategy group', async () => {
+    network.state.dns.engine.policy_routes = { Proxy: 'direct' }
+    network.state.dns.rules['r-ai'] = { state: 'follow_drift', route: 'proxy', follow_route: 'direct' }
+    const wrapper = await render()
+    await dnsTrigger(wrapper, 'openai.com').trigger('click')
+    await flushPromises()
+    const follow = options().find(item => item.querySelector('.block')?.textContent?.trim() === '跟随策略')!
+    expect(follow.textContent).toContain('当前：直连 DNS')
+    follow.click()
+    await flushPromises()
+    expect(network.rules.setDns).toHaveBeenCalledWith({ 'r-ai': 'follow' }, {}, 'default')
+  })
+
+  it('uses the resolved group route in the batch selector and impact text', async () => {
+    network.state.rules = [rule('g1', 'a.test', 'Proxy'), rule('g2', 'b.test', 'Proxy')]
+    network.state.dns.engine.policy_routes = { Proxy: 'direct' }
+    network.state.dns.rules = {
+      g1: { state: 'follow', route: 'direct', follow_route: 'direct' },
+      g2: { state: 'follow', route: 'direct', follow_route: 'direct' }
+    }
+    const wrapper = await render()
+    await wrapper.get('button[aria-label="批量设置 2 条规则 的 DNS"]').trigger('click')
+    await flushPromises()
+    expect(document.querySelector('#rule-dns-batch')?.textContent).toContain('跟随策略 · 直连 DNS')
+    expect(document.querySelector('[data-batch-impact]')?.textContent).toContain('跟随策略 · 直连 DNS')
+  })
+
   it('shows skeleton chips while loading and never the default upstream', async () => {
     let resolve!: (value: { data: any }) => void
     network.rules.getDns.mockImplementationOnce(() => new Promise(done => { resolve = done }))
@@ -393,6 +420,20 @@ describe('rule DNS column', () => {
     await flushPromises()
     expect(notify.warning).toHaveBeenCalledWith('状态已更新', 'OxiDNS 分流含自定义结构，DNS 未修改：手写条目')
     expect(network.rules.getDns).toHaveBeenCalledTimes(2)
+  })
+
+  it('unifies only DNS choices matching the server-resolved group route', async () => {
+    network.state.dns.engine.policy_routes = { Proxy: 'direct' }
+    network.state.dns.rules['r-ai'] = { state: 'explicit', route: 'direct' }
+    network.state.dns.rules['r-ip'] = { state: 'explicit', route: 'proxy' }
+    const wrapper = await render()
+    const setup = (wrapper.vm as any).$.setupState
+    expect(setup.followCandidates.map((item: any) => item.id)).toEqual(['r-ai'])
+    const done = setup.unifyFollow()
+    await flushPromises()
+    settleConfirm('confirm')
+    await done
+    expect(network.rules.setDns).toHaveBeenCalledWith({ 'r-ai': 'follow' }, {}, 'default')
   })
 
   it('unifies rules whose DNS already matches their policy as follow, after confirming', async () => {
