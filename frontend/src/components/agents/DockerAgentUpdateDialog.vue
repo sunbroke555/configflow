@@ -47,6 +47,7 @@ async function copyCommand(command: string) {
 
       <div class="flex flex-col gap-4 text-sm leading-relaxed">
         <InfoNote>更新会短暂中断该容器中的 Agent 和核心服务。请等待当前配置发布完成，并保留原环境变量、网络、端口和数据挂载。</InfoNote>
+        <InfoNote v-if="agent.service_type === 'oxidns'">已开启 DNS 高可用时，先更新未持有虚拟 IP 的容器，确认其核心和高可用状态正常后再处理另一台，不要同时重建。保留所选网络、固定地址、权限、宿主机身份挂载和全部数据目录。Host 模式需保留独立高可用容器运行；普通容器不会因更新镜像而自动获得高可用支持。</InfoNote>
         <FormField label="原安装方式">
           <RadioGroup v-model="method" class="flex flex-wrap gap-5" aria-label="原安装方式">
             <label class="flex cursor-pointer items-center gap-2"><RadioGroupItem value="compose" />Docker Compose</label>

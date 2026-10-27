@@ -1078,12 +1078,19 @@ def get_docker_agent_compose():
             'mihomo_port': request.args.get('mihomo_port', 8080, type=int),
             'mosdns_port': request.args.get('mosdns_port', 8081, type=int),
             'enable_oxidns': str_to_bool(request.args.get('enable_oxidns', 'false')),
-            'oxidns_port': request.args.get('oxidns_port', 8082, type=int)
+            'oxidns_port': request.args.get('oxidns_port', 8082, type=int),
+            'enable_dns_ha': str_to_bool(request.args.get('enable_dns_ha', 'false')),
+            'ha_parent': request.args.get('ha_parent', '').strip(),
+            'ha_subnet': request.args.get('ha_subnet', '').strip(),
+            'ha_gateway': request.args.get('ha_gateway', '').strip(),
+            'ha_host_id_path': request.args.get('ha_host_id_path', '/etc/machine-id').strip(),
         }
 
         script = generate_docker_agent_compose(**params)
         return script, 200, {'Content-Type': 'text/yaml; charset=utf-8'}
 
+    except ValueError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -1106,12 +1113,19 @@ def get_docker_agent_run():
             'mihomo_port': request.args.get('mihomo_port', 8080, type=int),
             'mosdns_port': request.args.get('mosdns_port', 8081, type=int),
             'enable_oxidns': str_to_bool(request.args.get('enable_oxidns', 'false')),
-            'oxidns_port': request.args.get('oxidns_port', 8082, type=int)
+            'oxidns_port': request.args.get('oxidns_port', 8082, type=int),
+            'enable_dns_ha': str_to_bool(request.args.get('enable_dns_ha', 'false')),
+            'ha_parent': request.args.get('ha_parent', '').strip(),
+            'ha_subnet': request.args.get('ha_subnet', '').strip(),
+            'ha_gateway': request.args.get('ha_gateway', '').strip(),
+            'ha_host_id_path': request.args.get('ha_host_id_path', '/etc/machine-id').strip(),
         }
 
         script = generate_docker_agent_run(**params)
         return script, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
+    except ValueError as e:
+        return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

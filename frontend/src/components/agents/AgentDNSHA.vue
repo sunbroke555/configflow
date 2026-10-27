@@ -163,6 +163,8 @@ const candidates = computed(() => props.agents.filter(item => item.id !== props.
   && (item.profile_id || '') === (props.agent.profile_id || '')
   && !isDNSHAEnabled(item.oxidns_ha)))
 const selectedPeer = computed(() => candidates.value.find(item => item.id === peer.value))
+const includesDocker = computed(() => props.agent.deployment_method === 'docker' || selectedPeer.value?.deployment_method === 'docker')
+const includesNative = computed(() => props.agent.deployment_method !== 'docker' || (!!selectedPeer.value && selectedPeer.value.deployment_method !== 'docker'))
 
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/
 const vipError = computed(() => {
@@ -393,8 +395,9 @@ async function disable(force: boolean) {
             <li>开启时会把本配置空间已保存的配置与规则发布到两台；备机检查成功后才更新主机，任一步失败都会停止后续步骤。</li>
             <li>后续配置发布先更新未持有虚拟 IP 的设备，迁移虚拟 IP 并确认解析正常后，再更新原持有设备。</li>
             <li>规则自动同步开关以本次主机设置为准；开启后修改任一台的开关都会同时作用于两台。</li>
-            <li>两台在同一局域网（同一网段），虚拟 IP 未被其他设备或 DHCP 地址池占用。</li>
-            <li>两台都已安装 keepalived（如 <span class="font-mono">apt install keepalived</span>），且 Agent 已更新到支持高可用的版本。</li>
+            <li>两台位于不同宿主机、同一局域网（同一网段），虚拟 IP 未被其他设备或 DHCP 地址池占用，Agent 已更新到支持高可用的版本。</li>
+            <li v-if="includesNative">Shell 安装的成员需先安装 keepalived（如 <span class="font-mono">apt install keepalived</span>）。</li>
+            <li v-if="includesDocker">Docker 成员需使用专用高可用安装：Host 配合独立高可用容器，或使用 Macvlan，并通过网络、权限和持久化检查。普通容器不能只点开关启用。</li>
             <li>两台 OxiDNS 转发到同一个 Mihomo：代理 DNS 上游填 Mihomo 的局域网地址，不能用 127.0.0.1。</li>
             <li>开启或停用后，到上游路由页重新发布 DHCP DNS 与 DNS 劫持。</li>
           </ul>
