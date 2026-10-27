@@ -311,7 +311,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
           <p class="mt-0">保留全部设置和持久数据，修正报错后重试。首次安装凭据过期时，用相同设置重新生成{{ useCompose ? 'Compose，替换原文件后再次启动项目' : '安装命令' }}。已成功登记的 Compose 容器重启时复用本机身份，不需要重新注册。</p>
           <p class="mb-0">不要删除 Agent 身份和安装记录。改变名称、地址或目录前，先核对已有安装并选择迁移。</p>
         </details>
-        <DockerHAGuideCommand v-if="currentLogs" :title="currentLogs.title" :command="currentLogs.command" note="在同一台宿主机执行，查看实际容器的启动错误；修正原因后再刷新 Agent。" />
+        <DockerHAGuideCommand v-if="currentLogs" :title="currentLogs.title" :command="currentLogs.command" :note="useCompose ? '在 compose.yaml 所在目录执行，或在容器管理器查看各服务日志；初始化失败时先看 install-init。' : '在同一台宿主机执行，查看实际容器的启动错误；修正原因后再刷新 Agent。'" />
         <details v-if="currentResult.compose" class="min-w-0"><summary class="min-h-11 cursor-pointer py-3 text-[13px]">查看 Compose 定义</summary><DockerHAGuideCommand :title="useCompose ? 'compose.yaml' : 'Compose 定义（供核对）'" :command="currentResult.compose" :note="useCompose ? '此文件包含启动所需配置，可直接部署。' : '迁移必须使用上方安装脚本，以保留检查、备份和回滚路径。'" /></details>
         <DockerHAGuideCommand v-if="currentResult.rollback_command" title="迁移失败时回滚" :command="currentResult.rollback_command" note="只在对应主机运行。保留旧容器、备份和原数据，不删除卷；恢复后检查原 Agent 与 DNS 服务。" />
       </template>

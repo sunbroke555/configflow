@@ -35,6 +35,8 @@ def test_direct_is_one_yaml_with_minimal_init_mounts_and_final_network_enrollmen
                              create_host_identity=volume, **({'ha_host_id_path': ''} if volume else {}))
     assert 'compose_bundle' not in result
     assert result['identity_command'] == '' and result['install_command'] == 'docker compose up -d'
+    # Project-wide logs include install-init and HA companion when Agent never started.
+    assert next(block['command'] for block in result['command_blocks'] if block['id'] == 'logs') == 'docker compose logs --tail 80\n'
     info = result['compose_deployment']
     assert info['filename'] == 'compose.yaml' and info['identity_mode'] == ('docker-volume' if volume else 'file')
     compose = yaml.safe_load(result['compose'])

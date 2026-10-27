@@ -436,7 +436,8 @@ def generate_guide(request, enrollment=None):
         rollback = ''
     inspection = inspection_command(request.get('container_name', '') if mode == 'migrate' else '')
     logs_name = request.get('container_name') if mode == 'migrate' else params['agent_name'] + '-oxidns'
-    logs = 'docker logs --tail 80 ' + Q(logs_name) + '\n'
+    logs = ('docker compose logs --tail 80\n' if method == 'compose_direct'
+            else 'docker logs --tail 80 ' + Q(logs_name) + '\n')
     blocks = [{'id': 'inspect', 'title': '只读检查宿主机与原容器', 'command': inspection}]
     if identity:
         blocks.append({'id': 'identity', 'title': '仅在身份文件缺失时创建一次', 'command': identity})
