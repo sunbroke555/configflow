@@ -1,0 +1,48 @@
+{
+  "finished_at": 1793095493.3302348,
+  "task_daemon_inactive": true,
+  "defaults_and_dns_listeners_unchanged": true,
+  "before": {
+    "docker_service": "inactive",
+    "docker_socket": "inactive",
+    "listeners53": {
+      "udp": [
+        "127.0.0.53%lo:53",
+        "127.0.0.54:53"
+      ],
+      "tcp": [
+        "127.0.0.53%lo:53",
+        "127.0.0.54:53"
+      ]
+    },
+    "preview_http": {
+      "15800": 200,
+      "15810": 200
+    }
+  },
+  "after": {
+    "docker_service": "inactive",
+    "docker_socket": "inactive",
+    "listeners53": {
+      "udp": [
+        "127.0.0.53%lo:53",
+        "127.0.0.54:53"
+      ],
+      "tcp": [
+        "127.0.0.53%lo:53",
+        "127.0.0.54:53"
+      ]
+    },
+    "preview_http": {
+      "15800": 200,
+      "15810": 200
+    }
+  },
+  "pve_modified": false,
+  "task_directory_removed": true,
+  "raw_samples_removed": true,
+  "temporary_docker_data_removed": true,
+  "task_private_artifacts_removed": true,
+  "browser_processes_closed": true,
+  "preview_credentials_preserved": true
+}

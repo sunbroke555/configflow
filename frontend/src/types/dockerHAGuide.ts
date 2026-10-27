@@ -19,7 +19,8 @@ export interface DockerHAHostForm {
   ha_gateway: string
 }
 export interface DockerHAGuideRequest extends Partial<DockerHAHostForm> {
-  action?: 'inspect' | 'generate' | 'verify'
+  action?: 'inspect' | 'generate' | 'verify' | 'check'
+  output?: string
   vip?: string
   server_url?: string
   network_mode?: DockerHANetwork
@@ -36,6 +37,7 @@ export interface DockerHAGuideResult {
   compose: string
   install_command: string
   rollback_command: string
+  preflight_report?: DockerHAPreflightReport
   verification_command?: string
   command_blocks?: { id: string; title: string; command: string }[]
   warnings?: string[]
@@ -55,4 +57,19 @@ export interface DockerHAEnvironment {
     host_id?: string
     blockers?: string[]
   }
+}
+
+export type DockerHAPreflightStatus = 'pass' | 'warning' | 'fail' | 'unknown'
+export interface DockerHAPreflightCheck {
+  id: string
+  label: string
+  status: DockerHAPreflightStatus
+  detail: string
+  remedy?: string
+}
+export interface DockerHAPreflightReport {
+  status: DockerHAPreflightStatus
+  summary: string
+  checks: DockerHAPreflightCheck[]
+  host_fingerprint?: string
 }

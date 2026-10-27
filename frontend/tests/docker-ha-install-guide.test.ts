@@ -70,13 +70,33 @@ describe('Docker HA installation guide', () => {
   it('starts with host prerequisites and does not imply generated commands were executed', async () => {
     const wrapper = render()
     expect(wrapper.text()).toContain('Host + 独立 HA 容器（推荐）')
-    expect(wrapper.text()).toContain('Docker Engine 和 Compose')
+    expect(wrapper.text()).toContain('自动安装不依赖它')
     expect(wrapper.text()).toContain('强杀 HA 容器或整个 Docker 可能留下宿主 VIP')
     expect(agentApi.generateDockerHAGuide).not.toHaveBeenCalled()
     await click(wrapper, '生成环境检查命令')
     expect(agentApi.generateDockerHAGuide).toHaveBeenCalledWith({ action: 'inspect' }, 'space')
     expect(wrapper.text()).toContain('docker version')
     expect(wrapper.text()).not.toContain('安装完成')
+  })
+
+  it('keeps optional preflight inputs and results when leaving and returning to the preparation step', async () => {
+    const wrapper = render()
+    vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValueOnce({ data: { success: true, preflight_report: { status: 'fail', summary: 'Docker 尚未启动', checks: [
+      { id: 'docker', label: 'Docker 引擎', status: 'fail', detail: '无法连接', remedy: '启动 Docker 后重试。' },
+    ] } } } as any)
+    await wrapper.get('#docker-ha-preflight-output-1').setValue('saved host output')
+    await click(wrapper, '检测主机 1')
+    expect(wrapper.get('[data-preflight-report="1"]').text()).toContain('Docker 尚未启动')
+    await click(wrapper, '下一步：主机 1')
+    expect(wrapper.get('#docker-ha-host-1-name').isVisible()).toBe(true)
+    expect(wrapper.get('#docker-ha-preflight-output-1').isVisible()).toBe(false)
+    await click(wrapper, '上一步')
+    expect((wrapper.get('#docker-ha-preflight-output-1').element as HTMLTextAreaElement).value).toBe('saved host output')
+    expect(wrapper.get('[data-preflight-report="1"]').isVisible()).toBe(true)
+    // Optional pasted checks never gate the existing install workflow.
+    await click(wrapper, '4. 执行安装')
+    await click(wrapper, '生成主机 1 的安装命令')
+    expect(wrapper.text()).toContain('install-host-command')
   })
 
   it('preserves both drafts through step navigation and sends explicit image and new-install settings', async () => {

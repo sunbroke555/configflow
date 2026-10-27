@@ -11,6 +11,7 @@ import FormField from '@/components/common/FormField.vue'
 import AgentDNSHA from './AgentDNSHA.vue'
 import DockerHAHostForm from './DockerHAHostForm.vue'
 import DockerHAGuideCommand from './DockerHAGuideCommand.vue'
+import DockerHAPreflightFeedback from './DockerHAPreflightFeedback.vue'
 import type { Agent } from '@/types'
 import type { DockerHAEnvironment, DockerHAGuideResult, DockerHAHostForm as HostForm, DockerHANetwork } from '@/types/dockerHAGuide'
 
@@ -223,13 +224,13 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       <Button v-for="(label, index) in steps" :key="label" variant="outline" class="min-h-11 h-auto whitespace-normal px-2 py-2 text-xs" :class="step === index ? 'border-primary-accent bg-primary-soft text-primary-accent' : ''" :aria-current="step === index ? 'step' : undefined" @click="step = index">{{ index + 1 }}. {{ label }}</Button>
     </nav>
 
-    <div v-if="step === 0" class="flex flex-col gap-4">
+    <div v-show="step === 0" class="flex flex-col gap-4">
       <div class="rounded-md border border-border bg-muted p-3 text-[13px] leading-relaxed">
         <p class="mb-2 mt-0 font-semibold">开始前准备</p>
         <ul class="m-0 list-disc space-y-1 pl-5">
           <li>两台不同的 Linux 宿主机，位于同一局域网，使用固定 IPv4。两个容器放在同一主机不算双机 HA。</li>
-          <li>普通 Linux 先安装 Docker Engine 和 Compose 插件；NAS 在套件中心安装 Docker / Container Manager，并启用 SSH（群晖：控制面板 → 终端机和 SNMP → 启动 SSH 服务；其他 NAS 在系统 SSH 设置中开启）。以 root 或有 Docker 权限的管理员登录宿主机执行命令。</li>
-          <li>需要 rootful Docker；Docker Desktop、rootless 和普通 bridge 网络不满足此引导。确认宿主机 UDP 53 不被其他 DNS 服务占用。</li>
+          <li>普通 Linux 先安装 Docker Engine；Compose 用于后续维护，建议使用 2.30 及以上版本，自动安装不依赖它。NAS 在套件中心安装 Docker / Container Manager，并启用 SSH（群晖：控制面板 → 终端机和 SNMP → 启动 SSH 服务；其他 NAS 在系统 SSH 设置中开启）。以 root 或有 Docker 权限的管理员登录宿主机执行命令。</li>
+          <li>需要 rootful Docker；Docker Desktop、rootless 和普通 bridge 网络不满足此引导。确认宿主机 TCP / UDP 53 不被其他 DNS 服务占用。</li>
           <li>准备同一份 OxiDNS 配置：监听所有地址的 UDP 53，上游 DNS 从两台设备都可达。开启 HA 时会同步这个配置空间的配置和规则。</li>
           <li>为 VIP 预留一个同网段、未使用且在 DHCP 地址池之外的 IPv4；不要填写主机、容器或网关现有地址。</li>
         </ul>
@@ -246,11 +247,11 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       <FormField label="Agent Docker 镜像" html-for="docker-ha-image" hint="必须包含 OxiDNS Docker HA 与计划 VIP 迁移支持；两台使用同一镜像。"><Input id="docker-ha-image" v-model="image" class="font-mono" /></FormField>
       <Button variant="outline" class="min-h-11 self-start" :disabled="preflightBusy" @click="inspectHost()"><Loader2 v-if="preflightBusy" class="size-4 animate-spin" />生成环境检查命令</Button>
       <p v-if="preflightError" role="alert" class="m-0 text-sm text-destructive-accent">{{ preflightError }}</p>
-      <DockerHAGuideCommand v-if="preflight" title="两台宿主机分别检查" :command="preflight" note="只读检查 Linux、Docker、Compose、网卡和 53 端口。先解决报错，再继续填写主机。" />
-      <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">Docker 检查必须同时显示 Client 和 Server；只有 Client 表示引擎尚未启动或无访问权限。Compose 命令应输出版本。缺少任一项时，先在这台 Linux / NAS 的软件管理器完成安装并启动 Docker，再继续。</p>
+      <DockerHAGuideCommand v-if="preflight" title="两台宿主机分别检查" :command="preflight" collapsed note="复制完整命令到两台宿主机分别执行；将完整输出粘贴到下方检测，逐项查看需要处理的问题。" />
+      <DockerHAPreflightFeedback :profile-id="profile.id" :network="network" />
     </div>
 
-    <div v-else-if="step === 1 || step === 2" class="flex min-w-0 flex-col gap-4">
+    <div v-if="step === 1 || step === 2" class="flex min-w-0 flex-col gap-4">
       <h4 class="m-0 text-sm font-semibold">填写主机 {{ step }} · {{ network === 'host' ? '宿主机地址' : 'macvlan 容器地址' }}</h4>
       <DockerHAHostForm :host="hosts[step - 1]!" :index="step - 1" :network="network" />
       <details v-if="hosts[step - 1]!.mode === 'migrate'" class="text-[13px] leading-relaxed">
@@ -293,7 +294,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       </template>
     </div>
 
-    <div v-else class="flex min-w-0 flex-col gap-4">
+    <div v-else-if="step === 4" class="flex min-w-0 flex-col gap-4">
       <div class="flex flex-wrap items-center justify-between gap-2"><h4 class="m-0 text-sm font-semibold">读取两台 Agent 的真实环境</h4><Button variant="outline" class="min-h-11" :disabled="refreshing" @click="refresh"><RefreshCw class="size-4" :class="refreshing && 'animate-spin'" />刷新并检查两台 Agent</Button></div>
       <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">先刷新设备列表，再直接向所选 Agent 读取 HA 能力和环境。在线心跳不能代替安装检查；更换选择后需要重新刷新。</p>
       <details class="text-[13px] leading-relaxed"><summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或环境检查失败？</summary><ul class="mb-0 list-disc space-y-2 pl-5"><li>先查看对应宿主机的 Docker / Container Manager 容器日志，确认镜像拉取成功、OxiDNS 与 Agent 已启动；检查 53 端口冲突。</li><li>确认填写的 ConfigFlow 地址从容器可达、服务器能访问所填 Agent 地址和端口，防火墙允许流量。新装凭据有效期为 24 小时，过期时保留全部设置不变再重新生成；不要删除已有身份和安装记录。</li><li>Host 检查 companion 是否运行、共享 HA 目录和只读身份挂载是否一致；macvlan 检查网卡、子网、固定地址与宿主隔离限制。按下面实时返回的具体原因修正后重新刷新。</li></ul></details>

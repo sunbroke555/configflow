@@ -1,0 +1,2635 @@
+{
+  "started_at": 1793094470.5753064,
+  "collector_source_sha256": "4ed1d73090d5e4158221e4c0ed97fc92bc973071ecaba4887a17a6d1122ee985",
+  "collector_script_sha256": "311f8562e2f83f6aaee5f4223a4975bf204a6be1c0f6acc8a7dc6b374e87bbf1",
+  "baseline": {
+    "docker_service": "inactive",
+    "docker_socket": "inactive",
+    "listeners53": {
+      "udp": [
+        "127.0.0.53%lo:53",
+        "127.0.0.54:53"
+      ],
+      "tcp": [
+        "127.0.0.53%lo:53",
+        "127.0.0.54:53"
+      ]
+    },
+    "preview_http": {
+      "15800": 200,
+      "15810": 200
+    }
+  },
+  "real_samples": [
+    {
+      "name": "real-no-daemon",
+      "origin": "Real Linux host, default Docker inactive, actual loopback UDP/TCP53 listeners",
+      "sha256": "dae4cd28ded8d3d55d118c1319ed63aca40932737496f88a3060aa8a12369ad2",
+      "bytes": 1051,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "fail",
+              "detail": "Docker 命令或 daemon 未就绪，尚不能安装。",
+              "remedy": "先确认 Docker 服务已启动、当前用户有访问权限，并能运行 docker version 读取 Server 信息。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "unknown",
+              "detail": "未确认 daemon 为 Linux 容器模式。",
+              "remedy": "使用实际 Linux/NAS 上的 rootful Docker Engine。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "unknown",
+              "detail": "无法读取 daemon 的安全模式。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "fail",
+              "detail": "Docker 命令或 daemon 未就绪，尚不能安装。",
+              "remedy": "先确认 Docker 服务已启动、当前用户有访问权限，并能运行 docker version 读取 Server 信息。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "unknown",
+              "detail": "未确认 daemon 为 Linux 容器模式。",
+              "remedy": "使用实际 Linux/NAS 上的 rootful Docker Engine。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "unknown",
+              "detail": "无法读取 daemon 的安全模式。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "real-local-rootful",
+      "origin": "Real dedicated local Unix-socket rootful daemon; same untouched host and DNS listeners",
+      "sha256": "a2fca7e0281c1d3a08b20a4b0986d7474724598edcea851297f92286833797f0",
+      "bytes": 1159,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "pass",
+          "summary": "基础检查通过；仍需安装后的环境检测及真实局域网/VIP 验证。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "fixtures": [
+    {
+      "name": "fixture-missing-docker",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "7c992eaedbf6288e328c1925125887dff871d99b91c596e53d173ba91262e56f",
+      "bytes": 999,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "unknown",
+              "detail": "当前 Docker 目标为远端或无法确认；本机网卡、身份和端口结果不能代表 daemon 宿主。",
+              "remedy": "切换到实际宿主机的本地 Docker context；检查 DOCKER_CONTEXT/DOCKER_HOST 后重新采集。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "fail",
+              "detail": "Docker 命令或 daemon 未就绪，尚不能安装。",
+              "remedy": "先确认 Docker 服务已启动、当前用户有访问权限，并能运行 docker version 读取 Server 信息。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "unknown",
+              "detail": "未确认 daemon 为 Linux 容器模式。",
+              "remedy": "使用实际 Linux/NAS 上的 rootful Docker Engine。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "unknown",
+              "detail": "无法读取 daemon 的安全模式。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "warning",
+              "detail": "未检测到 Compose 2.30+；自动安装使用 Docker Run，可继续准备，Compose 维护模板暂不能直接使用。",
+              "remedy": "若需使用 Compose 维护模板，再安装或升级到 2.30+；安装脚本不要求 Compose。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "unknown",
+              "detail": "当前 Docker 目标为远端或无法确认；本机网卡、身份和端口结果不能代表 daemon 宿主。",
+              "remedy": "切换到实际宿主机的本地 Docker context；检查 DOCKER_CONTEXT/DOCKER_HOST 后重新采集。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "fail",
+              "detail": "Docker 命令或 daemon 未就绪，尚不能安装。",
+              "remedy": "先确认 Docker 服务已启动、当前用户有访问权限，并能运行 docker version 读取 Server 信息。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "unknown",
+              "detail": "未确认 daemon 为 Linux 容器模式。",
+              "remedy": "使用实际 Linux/NAS 上的 rootful Docker Engine。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "unknown",
+              "detail": "无法读取 daemon 的安全模式。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "warning",
+              "detail": "未检测到 Compose 2.30+；自动安装使用 Docker Run，可继续准备，Compose 维护模板暂不能直接使用。",
+              "remedy": "若需使用 Compose 维护模板，再安装或升级到 2.30+；安装脚本不要求 Compose。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-rootless",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "3d4f452bc9133c76d78e30ccc68552d1d0e6c0f9c629cc906068dc3f67973f9b",
+      "bytes": 1159,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "fail",
+              "detail": "检测到 rootless Docker，无法提供所需网络能力。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "fail",
+              "detail": "检测到 rootless Docker，无法提供所需网络能力。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-desktop",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "7269a53700a8ec0687a8b0e1b2f9d50b3f75a92f11c347a377c067cf374a445e",
+      "bytes": 1167,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "fail",
+              "detail": "检测到 Docker Desktop/其虚拟机内核，不支持此网络部署。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "fail",
+              "detail": "检测到 Docker Desktop/其虚拟机内核，不支持此网络部署。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-remote",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "a6241ae4f6de9d471abfa48ab695c5df436d4b9851d1b6b11b06cdbe6db52914",
+      "bytes": 1151,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "fail",
+              "detail": "当前 Docker 目标为远端或无法确认；本机网卡、身份和端口结果不能代表 daemon 宿主。",
+              "remedy": "切换到实际宿主机的本地 Docker context；检查 DOCKER_CONTEXT/DOCKER_HOST 后重新采集。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "fail",
+              "detail": "当前 Docker 目标为远端或无法确认；本机网卡、身份和端口结果不能代表 daemon 宿主。",
+              "remedy": "切换到实际宿主机的本地 Docker context；检查 DOCKER_CONTEXT/DOCKER_HOST 后重新采集。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-missing-ss",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "b60c95a8dab2a08034b052419c1ad6e3b9c50c85de4d864564538560495fac76",
+      "bytes": 963,
+      "reports": {
+        "host": {
+          "status": "unknown",
+          "summary": "部分必要检查未完成，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "unknown",
+              "detail": "未能读取监听状态，不能视为端口空闲。",
+              "remedy": "确认 ss 可用及当前用户可读取套接字，再重新采集。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "unknown",
+              "detail": "未能读取监听状态，不能视为端口空闲。",
+              "remedy": "确认 ss 可用及当前用户可读取套接字，再重新采集。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "unknown",
+          "summary": "部分必要检查未完成，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "unknown",
+              "detail": "未能读取监听状态，不能视为端口空闲。",
+              "remedy": "确认 ss 可用及当前用户可读取套接字，再重新采集。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "unknown",
+              "detail": "未能读取监听状态，不能视为端口空闲。",
+              "remedy": "确认 ss 可用及当前用户可读取套接字，再重新采集。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-missing-ip",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "efde7b1f675c51a1ea63732cc2f8478f46172a8973cd6643b328f1747b098059",
+      "bytes": 917,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "unknown",
+              "detail": "无法可靠读取非回环 IPv4 候选地址。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "unknown",
+          "summary": "部分必要检查未完成，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "unknown",
+              "detail": "无法可靠读取非回环 IPv4 候选地址。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-tcp-only",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "26fecc394a17ec16829697ec73081c61aa9c11b944334d38549f35ecd2831d59",
+      "bytes": 1031,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "本次采集未发现 53 端口监听；不代表后续启动时端口一定仍空闲。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "pass",
+          "summary": "基础检查通过；仍需安装后的环境检测及真实局域网/VIP 验证。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "本次采集未发现 53 端口监听；不代表后续启动时端口一定仍空闲。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-truncated",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "0913176ed9c516cedc7610111bfc0474e5f15d6c93bdfe958032e0035f245c9a",
+      "bytes": 1122,
+      "reports": {
+        "host": {
+          "status": "unknown",
+          "summary": "输出不完整或无法识别，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "output",
+              "label": "采集输出",
+              "status": "unknown",
+              "detail": "未找到唯一、完整的新版采集块；旧版输出、截断或拼接多次输出不能判定通过。",
+              "remedy": "重新运行当前页面的检查命令，粘贴包含 V1_BEGIN 到 V1_END 的完整输出。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "unknown",
+          "summary": "输出不完整或无法识别，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "output",
+              "label": "采集输出",
+              "status": "unknown",
+              "detail": "未找到唯一、完整的新版采集块；旧版输出、截断或拼接多次输出不能判定通过。",
+              "remedy": "重新运行当前页面的检查命令，粘贴包含 V1_BEGIN 到 V1_END 的完整输出。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-duplicate-block",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "7ab2637dce78645e274755581b5f4faf57a621aee164359a861fb7db0e7360cc",
+      "bytes": 2318,
+      "reports": {
+        "host": {
+          "status": "unknown",
+          "summary": "输出不完整或无法识别，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "output",
+              "label": "采集输出",
+              "status": "unknown",
+              "detail": "未找到唯一、完整的新版采集块；旧版输出、截断或拼接多次输出不能判定通过。",
+              "remedy": "重新运行当前页面的检查命令，粘贴包含 V1_BEGIN 到 V1_END 的完整输出。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "unknown",
+          "summary": "输出不完整或无法识别，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "output",
+              "label": "采集输出",
+              "status": "unknown",
+              "detail": "未找到唯一、完整的新版采集块；旧版输出、截断或拼接多次输出不能判定通过。",
+              "remedy": "重新运行当前页面的检查命令，粘贴包含 V1_BEGIN 到 V1_END 的完整输出。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-legacy-output",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "46d6f3b8eff9795d81890439dedc7ae6be743aa743870b59cf1c197b5d8fadb2",
+      "bytes": 61,
+      "reports": {
+        "host": {
+          "status": "unknown",
+          "summary": "输出不完整或无法识别，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "output",
+              "label": "采集输出",
+              "status": "unknown",
+              "detail": "未找到唯一、完整的新版采集块；旧版输出、截断或拼接多次输出不能判定通过。",
+              "remedy": "重新运行当前页面的检查命令，粘贴包含 V1_BEGIN 到 V1_END 的完整输出。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "unknown",
+          "summary": "输出不完整或无法识别，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "output",
+              "label": "采集输出",
+              "status": "unknown",
+              "detail": "未找到唯一、完整的新版采集块；旧版输出、截断或拼接多次输出不能判定通过。",
+              "remedy": "重新运行当前页面的检查命令，粘贴包含 V1_BEGIN 到 V1_END 的完整输出。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-deep-json",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "3c41a8075947f11a1d45109861a091d27d53cc47fd6125bf49f7d4176513f2e5",
+      "bytes": 6435,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "unknown",
+          "summary": "部分必要检查未完成，尚不能判断基础环境是否符合。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-malicious-text",
+      "origin": "Explicit protocol/text fixture derived from real capture; not an actual rootless/Desktop/remote host",
+      "sha256": "d3bfc451f802a89de8456b07b0ea06158774cb763291237b2d0002b1d5596bb1",
+      "bytes": 1254,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "pass",
+          "summary": "基础检查通过；仍需安装后的环境检测及真实局域网/VIP 验证。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "pass",
+              "detail": "Docker 使用本机 Unix socket；以下网卡与端口结果来自当前终端主机。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "pass",
+              "detail": "已同时读取 Docker 客户端和服务端版本。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "pass",
+              "detail": "Docker daemon 使用 Linux 容器。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "pass",
+              "detail": "未发现 Docker Desktop 标记。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "pass",
+              "detail": "服务端未启用 rootless 模式。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fixture-live-remote-trap",
+      "origin": "Actual collector with explicit DOCKER_HOST fixture pointing to a temporary local TCP connection counter; no real remote Docker daemon",
+      "sha256": "e83e986c6aa3a933402da88b65523847250062449b19ec66a85323bc1fd30ad7",
+      "bytes": 1103,
+      "reports": {
+        "host": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "fail",
+              "detail": "当前 Docker 目标为远端或无法确认；本机网卡、身份和端口结果不能代表 daemon 宿主。",
+              "remedy": "切换到实际宿主机的本地 Docker context；检查 DOCKER_CONTEXT/DOCKER_HOST 后重新采集。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "unknown",
+              "detail": "检查目标不是已确认的本机 Unix socket，已跳过 daemon 读取；这不代表远端服务未启动。",
+              "remedy": "先确认 Docker 服务已启动、当前用户有访问权限，并能运行 docker version 读取 Server 信息。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "unknown",
+              "detail": "未确认 daemon 为 Linux 容器模式。",
+              "remedy": "使用实际 Linux/NAS 上的 rootful Docker Engine。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "unknown",
+              "detail": "无法读取 daemon 的安全模式。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "fail",
+              "detail": "检测到 2 项监听；默认新装会同时绑定 TCP/UDP 53，包含回环地址的占用也需处理。",
+              "remedy": "核对现有 DNS 服务；若为待迁移的原 OxiDNS，请按迁移步骤操作。不要直接停止正在服务的主机；自定义仅单协议配置需另行确认。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        },
+        "macvlan": {
+          "status": "fail",
+          "summary": "发现需要处理的基础环境问题；处理后请重新采集。",
+          "checks": [
+            {
+              "id": "linux",
+              "label": "Linux 宿主环境",
+              "status": "pass",
+              "detail": "当前内核为 Linux。"
+            },
+            {
+              "id": "docker_endpoint",
+              "label": "Docker 检查目标",
+              "status": "fail",
+              "detail": "当前 Docker 目标为远端或无法确认；本机网卡、身份和端口结果不能代表 daemon 宿主。",
+              "remedy": "切换到实际宿主机的本地 Docker context；检查 DOCKER_CONTEXT/DOCKER_HOST 后重新采集。"
+            },
+            {
+              "id": "docker_daemon",
+              "label": "Docker CLI 与 daemon",
+              "status": "unknown",
+              "detail": "检查目标不是已确认的本机 Unix socket，已跳过 daemon 读取；这不代表远端服务未启动。",
+              "remedy": "先确认 Docker 服务已启动、当前用户有访问权限，并能运行 docker version 读取 Server 信息。"
+            },
+            {
+              "id": "docker_os",
+              "label": "Docker 容器系统",
+              "status": "unknown",
+              "detail": "未确认 daemon 为 Linux 容器模式。",
+              "remedy": "使用实际 Linux/NAS 上的 rootful Docker Engine。"
+            },
+            {
+              "id": "docker_platform",
+              "label": "原生 Docker Engine",
+              "status": "unknown",
+              "detail": "无法确认 Docker 运行平台。",
+              "remedy": "请在 Linux/NAS 原生 Docker Engine 上部署。"
+            },
+            {
+              "id": "docker_rootful",
+              "label": "Rootful Docker",
+              "status": "unknown",
+              "detail": "无法读取 daemon 的安全模式。",
+              "remedy": "使用宿主机的 rootful Docker 服务；不要用 privileged 代替环境检查。"
+            },
+            {
+              "id": "compose",
+              "label": "Compose 维护工具",
+              "status": "pass",
+              "detail": "Compose 支持迁移模板的 raw 环境文件格式。"
+            },
+            {
+              "id": "ipv4",
+              "label": "网卡 IPv4 信息",
+              "status": "pass",
+              "detail": "读取到 1 个候选 IPv4：ens18 · 192.168.0.32/24。其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。",
+              "remedy": "请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。"
+            },
+            {
+              "id": "udp53",
+              "label": "宿主机 UDP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "tcp53",
+              "label": "宿主机 TCP 53 端口",
+              "status": "pass",
+              "detail": "宿主机有监听，但 Macvlan 使用容器独立地址，不因此阻断；仍需确认容器地址未被占用。"
+            },
+            {
+              "id": "nesting",
+              "label": "虚拟化与嵌套容器",
+              "status": "pass",
+              "detail": "未发现常见容器嵌套标记；仍需后续网络验证。"
+            },
+            {
+              "id": "host_identity",
+              "label": "宿主身份信息",
+              "status": "pass",
+              "detail": "已获取默认 /etc/machine-id 的 SHA-256 指纹，不包含原始身份值。"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "pve_modified": false,
+  "empty_daemon_inventory": {
+    "containers": 0,
+    "images": 0
+  },
+  "daemon_unit": "cf-docker-preflight-20261027-8d4c035b",
+  "remote_no_contact_probe": {
+    "collector_executed": true,
+    "tcp_connections": 0,
+    "endpoint_echoed": false,
+    "remote_daemon_simulated": true
+  },
+  "real_api": {
+    "url": "http://192.168.0.32:15810",
+    "mocked_responses": false,
+    "cases": [
+      {
+        "sample": "real-no-daemon",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "real-no-daemon",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "real-local-rootful",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "real-local-rootful",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "pass"
+      },
+      {
+        "sample": "fixture-missing-docker",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-missing-docker",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-rootless",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-rootless",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-desktop",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-desktop",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-remote",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-remote",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-missing-ss",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-missing-ss",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-missing-ip",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-missing-ip",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-tcp-only",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-tcp-only",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "pass"
+      },
+      {
+        "sample": "fixture-truncated",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-truncated",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-duplicate-block",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-duplicate-block",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-legacy-output",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-legacy-output",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-deep-json",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-deep-json",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "unknown"
+      },
+      {
+        "sample": "fixture-malicious-text",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-malicious-text",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "pass"
+      },
+      {
+        "sample": "fixture-live-remote-trap",
+        "mode": "host",
+        "http_status": 200,
+        "diagnosis": "fail"
+      },
+      {
+        "sample": "fixture-live-remote-trap",
+        "mode": "macvlan",
+        "http_status": 200,
+        "diagnosis": "fail"
+      }
+    ],
+    "utf8_oversize_http_status": 400,
+    "live_collector_matches_capture": true
+  },
+  "final_parser_source_sha256": "622fea5a71d61c7ea64dfbfb1af1739586cc13f353552782c81d3eb867734b68",
+  "browser": {
+    "deployedPreview": "http://192.168.0.32:15810",
+    "actualUILogin": true,
+    "mockedAPIResponses": false,
+    "fixtureCasesExplicit": [
+      "rootless",
+      "legacy/truncated text",
+      "malicious text",
+      "UTF-8 oversize"
+    ],
+    "delayedActualResponseForRace": true,
+    "scenarios": [
+      {
+        "width": 1440,
+        "theme": "light",
+        "accent": "clay",
+        "checkResponses": [
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "macvlan"
+          }
+        ],
+        "metrics": [
+          {
+            "name": "desktop-host-conflict",
+            "viewport": 1440,
+            "pageWidth": 1440,
+            "dialogWidth": 758,
+            "dialogScroll": 758
+          },
+          {
+            "name": "desktop-macvlan-pass",
+            "viewport": 1440,
+            "pageWidth": 1440,
+            "dialogWidth": 758,
+            "dialogScroll": 758
+          }
+        ],
+        "assertions": [
+          "Real same-host UDP/TCP53 blocks Host but not Macvlan",
+          "Distinct real captures identify same host without exposing fingerprint",
+          "Mode change clears result and preserves text"
+        ]
+      },
+      {
+        "width": 375,
+        "theme": "dark",
+        "accent": "kraft",
+        "checkResponses": [
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "macvlan"
+          }
+        ],
+        "metrics": [
+          {
+            "name": "mobile-truncated-unknown",
+            "viewport": 375,
+            "pageWidth": 375,
+            "dialogWidth": 341,
+            "dialogScroll": 341
+          },
+          {
+            "name": "mobile-macvlan-pass",
+            "viewport": 375,
+            "pageWidth": 375,
+            "dialogWidth": 341,
+            "dialogScroll": 341
+          }
+        ],
+        "assertions": [
+          "Truncated and old output stay unknown",
+          "Editing invalidates result",
+          "Draft and result survive guide step navigation"
+        ]
+      },
+      {
+        "width": 375,
+        "theme": "light",
+        "accent": "sky",
+        "checkResponses": [
+          {
+            "status": 200,
+            "mode": "macvlan"
+          },
+          {
+            "status": 200,
+            "mode": "macvlan"
+          }
+        ],
+        "metrics": [
+          {
+            "name": "mobile-rootless-fixture",
+            "viewport": 375,
+            "pageWidth": 375,
+            "dialogWidth": 341,
+            "dialogScroll": 341
+          }
+        ],
+        "assertions": [
+          "Rootless fixture cannot pass Macvlan",
+          "Malicious pasted text is inert",
+          "Exact duplicates warn before detection",
+          "96KiB uses UTF-8 bytes and preserves rejected input without API request"
+        ]
+      },
+      {
+        "width": 1440,
+        "theme": "dark",
+        "accent": "clay",
+        "checkResponses": [
+          {
+            "status": 200,
+            "mode": "macvlan"
+          },
+          {
+            "status": 200,
+            "mode": "host"
+          }
+        ],
+        "metrics": [
+          {
+            "name": "desktop-stale-response-ignored",
+            "viewport": 1440,
+            "pageWidth": 1440,
+            "dialogWidth": 758,
+            "dialogScroll": 758
+          }
+        ],
+        "assertions": [
+          "Late real Host response cannot overwrite current Macvlan success"
+        ]
+      }
+    ],
+    "pageErrors": []
+  },
+  "screenshot_capture": {
+    "deployedPreview": "http://192.168.0.32:15810",
+    "actualUILogin": true,
+    "mockedAPIResponses": false,
+    "fixtureCasesExplicit": [
+      "rootless",
+      "legacy/truncated text",
+      "malicious text",
+      "UTF-8 oversize"
+    ],
+    "delayedActualResponseForRace": false,
+    "rawTextareaMaskedInScreenshots": true,
+    "scenarios": [
+      {
+        "width": 1440,
+        "theme": "light",
+        "accent": "clay",
+        "checkResponses": [
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "macvlan"
+          }
+        ],
+        "metrics": [
+          {
+            "name": "desktop-host-conflict",
+            "viewport": 1440,
+            "pageWidth": 1440,
+            "dialogWidth": 758,
+            "dialogScroll": 758
+          },
+          {
+            "name": "desktop-macvlan-pass",
+            "viewport": 1440,
+            "pageWidth": 1440,
+            "dialogWidth": 758,
+            "dialogScroll": 758
+          }
+        ],
+        "assertions": [
+          "Real same-host UDP/TCP53 blocks Host but not Macvlan",
+          "Distinct real captures identify same host without exposing fingerprint",
+          "Mode change clears result and preserves text"
+        ]
+      },
+      {
+        "width": 375,
+        "theme": "dark",
+        "accent": "kraft",
+        "checkResponses": [
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "host"
+          },
+          {
+            "status": 200,
+            "mode": "macvlan"
+          }
+        ],
+        "metrics": [
+          {
+            "name": "mobile-truncated-unknown",
+            "viewport": 375,
+            "pageWidth": 375,
+            "dialogWidth": 341,
+            "dialogScroll": 341
+          },
+          {
+            "name": "mobile-macvlan-pass",
+            "viewport": 375,
+            "pageWidth": 375,
+            "dialogWidth": 341,
+            "dialogScroll": 341
+          }
+        ],
+        "assertions": [
+          "Truncated and old output stay unknown",
+          "Editing invalidates result",
+          "Draft and result survive guide step navigation"
+        ]
+      }
+    ],
+    "pageErrors": []
+  },
+  "raw_samples_exported": false,
+  "machine_fingerprints_exported": false
+}
