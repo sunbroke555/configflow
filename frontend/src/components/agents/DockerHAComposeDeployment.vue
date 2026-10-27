@@ -36,7 +36,7 @@ async function copy() {
       <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">包含限时安装凭据，首次安装请在 24 小时内完成，请勿分享。</p>
     </section>
     <DockerHAGuideCommand title="2. 启动项目" :command="deployment.command" note="在 compose.yaml 所在目录执行；使用容器管理器时直接启动项目，无需 SSH 初始化。" />
-    <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">目录和登记由容器自动准备。项目名：<code class="font-mono [overflow-wrap:anywhere]">{{ deployment.project_name }}</code>。上线后前往下一步，选择 Docker 节点和已有 Shell 节点配对。</p>
+    <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">目录和登记由容器自动准备。项目名：<code class="font-mono [overflow-wrap:anywhere]">{{ deployment.project_name }}</code>。上线后前往下一步选择两台节点；支持 Shell 与 Docker 混合配对。</p>
     <p v-if="deployment.identity_mode === 'docker-volume'" class="m-0 text-[12px] leading-relaxed text-muted-foreground">本机标识保存在共享 Docker 卷 configflow-ha-host-identity 中；请保留该卷，不要复制到另一台主机。</p>
   </div>
 </template>

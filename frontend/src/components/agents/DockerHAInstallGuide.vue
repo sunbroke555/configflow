@@ -241,7 +241,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
         <p class="mb-2 mt-0 font-semibold">开始前准备</p>
         <ul class="m-0 list-disc space-y-1 pl-5">
           <li>两台不同的 Linux 宿主机，位于同一局域网，使用固定 IPv4。两个容器放在同一主机不算双机 HA。</li>
-          <li>普通 Linux 先安装 Docker Engine；新安装使用单份 Compose，需要 Docker Compose 2.20 或更新版本；也可选择不依赖 Compose 的 Shell 脚本。NAS 在套件中心安装 Docker / Container Manager。Compose 可直接导入项目启动；手动检查或使用 Shell 脚本时再通过 SSH 操作。</li>
+          <li>Docker 端先安装 Docker Engine；新安装使用单份 Compose，需要 Docker Compose 2.20 或更新版本；也可选择不依赖 Compose 的 Shell 脚本。NAS 在套件中心安装 Docker / Container Manager。Compose 可直接导入项目启动；手动检查或使用 Shell 脚本时再通过 SSH 操作。已有 Shell 节点无需安装 Docker。</li>
           <li>需要 rootful Docker；Docker Desktop、rootless 和普通 bridge 网络不满足此引导。</li>
           <li data-docker-ha-port-note><template v-if="network === 'host'">Host 使用宿主机网络，默认配置需要 TCP / UDP 53；已有监听需先核对并处理，不要直接停止正在服务的 DNS。</template><template v-else>macvlan 使用容器独立地址，宿主机 TCP / UDP 53 的占用不直接阻断；仍需确认容器地址与 VIP 未被其他设备使用。</template></li>
           <li>准备同一份 OxiDNS 配置：监听所有地址的 UDP 53，上游 DNS 从两台设备都可达。开启 HA 时会同步这个配置空间的配置和规则。</li>
@@ -256,7 +256,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       </FormField>
       <p v-if="network === 'host'" class="m-0 text-[13px] leading-relaxed">使用宿主机地址；OxiDNS 和 HA companion 分开运行，NET_ADMIN / NET_RAW 只授予 HA 容器。核心容器停止后 HA 仍可探测并让出 VIP；强杀 HA 容器或整个 Docker 可能留下宿主 VIP，需要恢复 HA 或人工清理。</p>
       <p v-else class="m-0 rounded-md bg-warning-soft p-3 text-[13px] leading-relaxed">需要宿主机和网络支持 macvlan，为每台容器分配独立 LAN 地址。macvlan 默认不能访问本宿主机；ConfigFlow 应部署在可达的其他 LAN 主机或同 macvlan 网络。NAS 不支持时使用 Host。</p>
-      <FormField label="ConfigFlow 服务器地址" html-for="docker-ha-server" persistent-hint hint="两台容器都必须能访问，不能填写 localhost 或 127.0.0.1。"><Input id="docker-ha-server" v-model="server" class="font-mono" placeholder="http://192.168.1.10:8000" /></FormField>
+      <FormField label="ConfigFlow 服务器地址" html-for="docker-ha-server" persistent-hint hint="两端都必须能访问，不能填写 localhost 或 127.0.0.1。"><Input id="docker-ha-server" v-model="server" class="font-mono" placeholder="http://192.168.1.10:8000" /></FormField>
       <FormField label="Agent Docker 镜像" html-for="docker-ha-image" hint="需包含单文件 Compose 初始化与 Docker HA 支持的新镜像；旧镜像需先升级。"><Input id="docker-ha-image" v-model="image" class="font-mono" /></FormField>
       <Button variant="outline" class="min-h-11 self-start" :disabled="preflightBusy" @click="inspectHost()"><Loader2 v-if="preflightBusy" class="size-4 animate-spin" />生成环境检查命令</Button>
       <p v-if="preflightError" role="alert" class="m-0 text-sm text-destructive-accent">{{ preflightError }}</p>
