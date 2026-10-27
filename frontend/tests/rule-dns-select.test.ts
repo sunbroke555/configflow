@@ -33,7 +33,7 @@ async function render(props: Record<string, unknown> = {}) {
   return wrapper
 }
 const options = () => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
-const option = (text: string) => options().find(item => item.textContent?.includes(text))!
+const option = (text: string) => options().find(item => item.querySelector('.text-sm, .font-mono')?.textContent?.includes(text))!
 async function search(value: string) {
   const input = document.querySelector<HTMLInputElement>('[aria-label="DNS（OxiDNS） 搜索"]')!
   input.value = value
