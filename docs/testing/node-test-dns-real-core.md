@@ -163,6 +163,7 @@ Then run these commands on `.32` (the initial `mkdir` deliberately refuses to
 reuse an existing experiment):
 
 ```sh
+set -eu
 task_source="$HOME/rt/program__configflow-node-test-dns-modes"
 lab_root="$HOME/previews/configflow-node-dns-upstreams-lab"
 backend_root="$HOME/previews/configflow-node-dns-upstreams-check"
