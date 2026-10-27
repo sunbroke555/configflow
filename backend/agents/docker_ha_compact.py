@@ -34,7 +34,7 @@ CompactDumper.add_representer(ImageName, lambda dumper, value: dumper.represent_
 
 
 def _annotate_compose(text, compose):
-    """Attach fixed maintenance notes at YAML node boundaries, never inside values."""
+    """Place maintenance notes on separate lines above their YAML entries."""
     notes = {('name',): '保持默认：项目名，重建时沿用'}
     for role, service in compose['services'].items():
         prefix = ('services', role)
@@ -95,12 +95,9 @@ def _annotate_compose(text, compose):
     def visit(node, path=(), key=None):
         if path in notes:
             line = (key or node).start_mark.line
-            # A wrapped quoted/plain scalar (or flow collection) must not receive
-            # a comment in the middle. Aliases retain their anchor's marks, so
-            # mapping keys identify their own output line instead.
-            wrapped = node.start_mark.line == line and node.end_mark.line > line and (
-                isinstance(node, yaml.ScalarNode) or node.flow_style)
-            annotations[line] = (notes[path], wrapped)
+            # Alias values retain their anchor's marks; mapping keys identify
+            # the current entry, including when its value wraps across lines.
+            annotations[line] = notes[path]
         if isinstance(node, yaml.MappingNode):
             for child_key, value in node.value:
                 visit(value, path + (child_key.value,), child_key)
@@ -112,10 +109,10 @@ def _annotate_compose(text, compose):
     lines = ['# 已按页面填写生成；地址、名称、端口或网络要调整，请回页面重新生成。',
              '# 已安装请保留原数据目录和身份；变更设备信息请使用迁移入口。']
     for index, line in enumerate(text.splitlines()):
-        note, wrapped = annotations.get(index, ('', False))
-        if note and wrapped:
+        note = annotations.get(index)
+        if note:
             lines.append(line[:len(line) - len(line.lstrip())] + '# ' + note)
-        lines.append(line + ('  # ' + note if note and not wrapped else ''))
+        lines.append(line)
     return '\n'.join(lines) + '\n'
 
 
