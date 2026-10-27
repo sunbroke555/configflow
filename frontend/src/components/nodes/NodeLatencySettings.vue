@@ -68,7 +68,7 @@
                 </div>
                 <Segmented v-model="upstreamMode" :options="upstreamModes" label="上游来源" block :disabled="busy || disabled" />
                 <template v-if="upstreamMode === 'existing'">
-                  <FormField label="现有上游" html-for="node-latency-existing-upstream" hint="使用所选设备已发布的上游配置，无需重复填写地址。" persistent-hint>
+                  <FormField label="现有上游" html-for="node-latency-existing-upstream" hint="复用已发布的上游参数，创建后独立保存；原上游后续修改不会自动同步。" persistent-hint>
                     <Select v-if="availableUpstreams.length" v-model="upstreamId" :disabled="busy || disabled">
                       <SelectTrigger id="node-latency-existing-upstream" class="min-h-11 w-full min-w-0"><SelectValue placeholder="选择要使用的上游" class="truncate" /></SelectTrigger>
                       <SelectContent><SelectItem v-for="candidate in availableUpstreams" :key="candidate.id" :value="candidate.id" :disabled="!candidate.eligible" class="max-w-[calc(100vw-4rem)] whitespace-normal break-all"><span class="min-w-0"><span class="block">{{ candidate.label }}</span><span v-if="!candidate.eligible && candidate.reason" class="block text-xs text-muted-foreground">{{ candidate.reason }}</span></span></SelectItem></SelectContent>
@@ -348,6 +348,7 @@ async function removeEndpoint() {
 }
 watch(mode, value => { error.value = ''; if (value === 'managed' && loaded.value && !managedLoaded.value) void loadManaged() })
 watch(agentId, () => { if (!loading.value) { endpointId.value = '__new__'; listenAddress.value = selectedAgent.value?.address || '' } })
+watch(endpointId, value => { if (value === '__new__' && !listenAddress.value.trim()) listenAddress.value = selectedAgent.value?.address || '' })
 watch([agentId, eligibleUpstreams], ([currentAgent, candidates], [previousAgent]) => {
   if (currentAgent !== previousAgent) { upstreamMode.value = 'existing'; upstreamId.value = '' }
   if (!candidates.some(candidate => candidate.id === upstreamId.value)) upstreamId.value = candidates.length === 1 ? candidates[0]!.id : ''

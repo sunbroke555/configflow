@@ -232,6 +232,21 @@ describe('节点库三模式测速 DNS 设置', () => {
     expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
   })
 
+  it('同一设备从已保存入口切换新入口时补全空监听 IP，保留已编辑的地址', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(managed))
+    vi.mocked(nodeApi.latencyManagedDns).mockResolvedValue({ data: { success: true, agents: [{ ...agent([endpoint()]), upstreams: [candidate()] }] } } as any)
+    await render()
+    await click('测速设置')
+    await choose('node-latency-endpoint', '创建新入口')
+    expect(input('node-latency-listen').value).toBe('192.0.2.2')
+    await enter('192.0.2.22', 'node-latency-listen')
+    await choose('node-latency-endpoint', '192.0.2.2:15353')
+    await choose('node-latency-endpoint', '创建新入口')
+    expect(input('node-latency-listen').value).toBe('192.0.2.22')
+    expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+  })
+
   it('域名 DoH / DoT 需要 Bootstrap；保存加密 DNS 不发布设备配置', async () => {
     await render()
     await click('测速设置')
