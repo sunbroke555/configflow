@@ -101,13 +101,16 @@ def api(method, path, body=None, allow_error=False, timeout=240):
     return code, data
 
 
-def document(address, workers=2):
-    return {'runtime': {'worker_threads': workers}, 'log': {'level': 'info'}, 'plugins': [
+def document(address, workers=2, *, main_tag='main', native_api=False):
+    result = {'runtime': {'worker_threads': workers}, 'log': {'level': 'info'}, 'plugins': [
         {'tag': 'lab_domains', 'type': 'domain_set', 'args': {'files': ['rules/lab.txt']}},
         {'tag': 'lab_answer', 'type': 'black_hole', 'args': {'mode': 'custom', 'ips': [address], 'short_circuit': True}},
-        {'tag': 'main', 'type': 'sequence', 'args': [{'exec': '$lab_answer'}]},
-        {'tag': 'udp', 'type': 'udp_server', 'args': {'entry': 'main', 'listen': '0.0.0.0:53'}},
-        {'tag': 'tcp', 'type': 'tcp_server', 'args': {'entry': 'main', 'listen': '0.0.0.0:53'}}]}
+        {'tag': main_tag, 'type': 'sequence', 'args': [{'exec': '$lab_answer'}]},
+        {'tag': 'udp', 'type': 'udp_server', 'args': {'entry': main_tag, 'listen': '0.0.0.0:53'}},
+        {'tag': 'tcp', 'type': 'tcp_server', 'args': {'entry': main_tag, 'listen': '0.0.0.0:53'}}]}
+    if native_api:
+        result['api'] = {'http': {'listen': '127.0.0.1:9199'}}
+    return result
 
 
 def server():
@@ -271,9 +274,9 @@ def wait_ha(agent_id, expected='succeeded', timeout=180):
     raise AssertionError('HA publication did not finish within timeout')
 
 
-def set_draft(address, *, workers=2, rule='full:shared.lab.invalid\n'):
+def set_draft(address, *, workers=2, rule='full:shared.lab.invalid\n', main_tag='main', native_api=False):
     _, settings = api('GET', '/api/oxidns/settings')
-    settings.update(config_mode='native', native_config=json.dumps(document(address, workers)),
+    settings.update(config_mode='native', native_config=json.dumps(document(address, workers, main_tag=main_tag, native_api=native_api)),
                     additional_files=[{'path': 'rules/lab.txt', 'encoding': 'text', 'content': rule}])
     return api('POST', '/api/oxidns/settings', settings)[1]
 
@@ -518,7 +521,7 @@ def edge_tests():
         put(131, '/run/systemd/system/oxidns.service.d/ha-sync-delay.conf', '[Service]\nExecStartPre=/bin/sleep 8\n')
         guest(131, 'systemctl', 'daemon-reload')
         try:
-            set_draft('198.51.100.70', workers=10, rule='full:guard-check.invalid\n')
+            set_draft('198.51.100.70', workers=10, rule='full:guard-check.invalid\n', main_tag='sequence_main', native_api=True)
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 enabling = pool.submit(api, 'PUT', f'/api/agents/{ids[130]}/oxidns-ha', {'peer_id': ids[131], 'vip': VIP})
                 deadline = time.monotonic() + 20

@@ -876,5 +876,228 @@
     "DNS probe samples every 100 ms with 300 ms timeout; samples cannot rule out shorter interruptions.",
     "Serial core restarts do not guarantee uninterrupted VIP DNS service; per-phase VIP failures are recorded.",
     "Native core cron downloads are unchanged and not exercised; group publication includes attached rule files."
-  ]
+  ],
+  "final_guard_checks": {
+    "source_sha256": {
+      "backend/agents/oxidns_ha_publish.py": "eced32f26cbdb3d117723087d42d64b1cc8b53d2a0e2977e6184823261a81714",
+      "backend/agents/oxidns_ha.py": "33790e55c65514ccb1bc14a39d3ca824d9836fc9350ecd8c72c86ce80d52a405",
+      "backend/agents/oxidns_rule_update.py": "f19810bb152ae5d53d8bdb0309be0af30dbce9743d87509231b2b46548237809",
+      "backend/agents/rule_sync.py": "a6921bd7b1991c31da26792b3721a378d7054c10ecfee717d37814227d895838",
+      "backend/routes/agents.py": "ad46dbd7545856370721e30179c409c070ef7cc82723b0d5957c90fd38ff0184",
+      "scripts/tests/oxidns_ha_sync_lab.py": "5e63fa2dde06c2ce41fb62e8b553cc39f6bc8107b28dd855231a463a2a5da80a"
+    },
+    "checks": [
+      {
+        "name": "disable-clears-config-and-publication-for-both-members",
+        "passed": true
+      },
+      {
+        "name": "manual-native-rules-blocked-during-initial-enable",
+        "passed": true,
+        "http_statuses": [
+          409,
+          409
+        ],
+        "publication": {
+          "active_agent_id": null,
+          "id": "99aed3977c2f43cf8f0b38665440da74",
+          "members": [
+            {
+              "agent_id": "agent_1793068727259_8f594d",
+              "deployment_id": "ha-0d31c8b73e39d60d22ede52e9d646d5aeae885845a0ff5e5",
+              "name": "HA lab 131",
+              "status": "succeeded"
+            },
+            {
+              "agent_id": "agent_1793068718405_67d1dd",
+              "deployment_id": "ha-b0bcc30e06394b49a7ee95d7290c0ff2",
+              "name": "HA lab 130",
+              "status": "succeeded"
+            }
+          ],
+          "message": "主备配置与规则均已发布成功",
+          "owner_agent_id": "agent_1793068718405_67d1dd",
+          "owner_deployment_id": "ha-b0bcc30e06394b49a7ee95d7290c0ff2",
+          "phase": "done",
+          "routers": [],
+          "status": "succeeded",
+          "updated_at": 1793069566,
+          "warnings": []
+        }
+      },
+      {
+        "name": "rule-sync-settings-propagate-from-either-member",
+        "passed": true,
+        "checks": [
+          {
+            "request_member": 131,
+            "settings": {
+              "130": {
+                "library": true,
+                "rules": true
+              },
+              "131": {
+                "library": true,
+                "rules": true
+              }
+            }
+          },
+          {
+            "request_member": 130,
+            "settings": {
+              "130": {
+                "library": false,
+                "rules": false
+              },
+              "131": {
+                "library": false,
+                "rules": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "manual-rules-keep-success-contract-and-complete-for-pair",
+        "passed": true,
+        "http_status": 202,
+        "task": {
+          "ha_publication": {
+            "active_agent_id": null,
+            "id": "d00e590788e64aa18baee4e47e08a4a4",
+            "members": [
+              {
+                "agent_id": "agent_1793068727259_8f594d",
+                "deployment_id": "rules-fdf2bbd527dd4d47a73c8aba7ea7117a",
+                "name": "HA lab 131",
+                "status": "succeeded"
+              },
+              {
+                "agent_id": "agent_1793068718405_67d1dd",
+                "deployment_id": "ha-275423354fdc929344de8b78f33bf6155474dbb9747fc5b7",
+                "name": "HA lab 130",
+                "status": "succeeded"
+              }
+            ],
+            "message": "主备配置与规则均已发布成功",
+            "owner_agent_id": "agent_1793068727259_8f594d",
+            "owner_deployment_id": "rules-fdf2bbd527dd4d47a73c8aba7ea7117a",
+            "phase": "done",
+            "status": "succeeded",
+            "updated_at": 1793069573
+          },
+          "success": true,
+          "task": {
+            "download_total": 0,
+            "downloaded": 0,
+            "id": "ha-d00e590788e64aa18baee4e47e08a4a4",
+            "phase": "done",
+            "reload_total": 0,
+            "reloaded": 0,
+            "status": "succeeded"
+          }
+        },
+        "publication": {
+          "active_agent_id": null,
+          "id": "d00e590788e64aa18baee4e47e08a4a4",
+          "members": [
+            {
+              "agent_id": "agent_1793068727259_8f594d",
+              "deployment_id": "rules-fdf2bbd527dd4d47a73c8aba7ea7117a",
+              "name": "HA lab 131",
+              "status": "succeeded"
+            },
+            {
+              "agent_id": "agent_1793068718405_67d1dd",
+              "deployment_id": "ha-275423354fdc929344de8b78f33bf6155474dbb9747fc5b7",
+              "name": "HA lab 130",
+              "status": "succeeded"
+            }
+          ],
+          "message": "主备配置与规则均已发布成功",
+          "owner_agent_id": "agent_1793068727259_8f594d",
+          "owner_deployment_id": "rules-fdf2bbd527dd4d47a73c8aba7ea7117a",
+          "phase": "done",
+          "status": "succeeded",
+          "updated_at": 1793069573
+        },
+        "files": {
+          "130": {
+            "hashes": {
+              "/etc/oxidns/config.yaml": "6853a2a34825351dcd58f0bc41450a1727fc28b65a7e5dd37eb6701e50be27bb",
+              "/etc/oxidns/rules/lab.txt": "712724a96537df5006c9dc276e15a1f9e0dfb91925fe983200b9afb02945b752"
+            },
+            "pid": "5951",
+            "active": "active"
+          },
+          "131": {
+            "hashes": {
+              "/etc/oxidns/config.yaml": "6853a2a34825351dcd58f0bc41450a1727fc28b65a7e5dd37eb6701e50be27bb",
+              "/etc/oxidns/rules/lab.txt": "712724a96537df5006c9dc276e15a1f9e0dfb91925fe983200b9afb02945b752"
+            },
+            "pid": "6231",
+            "active": "active"
+          }
+        },
+        "service_events": {
+          "130": [],
+          "131": []
+        }
+      },
+      {
+        "name": "disable-after-rules-clears-both-members",
+        "passed": true
+      }
+    ],
+    "finished_at": 1793069580.4606767,
+    "fixture_notes": [
+      "The original nine scenarios deliberately omit the native HTTP API to exercise real serialized service restarts.",
+      "Manual rule refresh additionally needs an identifiable sequence_main and a local native API for reload-only publication. Initial fixture attempts correctly failed these existing safety preconditions before live file replacement.",
+      "The final guard run enabled api.http on 127.0.0.1:9199 and used sequence_main, then completed a full baseline publication before exercising manual rule refresh."
+    ]
+  },
+  "cleanup": {
+    "verified_at": 1793069647.6103122,
+    "guests": {
+      "130": {
+        "status": "stopped",
+        "test_snapshot_removed": true,
+        "restored_from": "cf-ha-sync-20261027",
+        "identity_and_network": [
+          "hostname: cf-oxi-a-retest",
+          "net0: name=eth0,bridge=cfgt,gw=10.97.0.1,hwaddr=BC:24:11:E2:F5:57,ip=10.97.0.72/24,type=veth",
+          "onboot: 0"
+        ]
+      },
+      "131": {
+        "status": "stopped",
+        "test_snapshot_removed": true,
+        "restored_from": "cf-ha-sync-20261027",
+        "identity_and_network": [
+          "hostname: cf-oxi-b-retest",
+          "net0: name=eth0,bridge=cfgt,gw=10.97.0.1,hwaddr=BC:24:11:25:ED:96,ip=10.97.0.73/24,type=veth",
+          "onboot: 0"
+        ]
+      },
+      "132": {
+        "status": "stopped",
+        "test_snapshot_removed": true,
+        "restored_from": "cf-ha-sync-20261027",
+        "identity_and_network": [
+          "hostname: cf-app-retest",
+          "net0: name=eth0,bridge=cfgt,gw=10.97.0.1,hwaddr=BC:24:11:FD:38:14,ip=10.97.0.74/24,type=veth",
+          "onboot: 0"
+        ]
+      }
+    },
+    "http_tunnel_closed": true,
+    "production_instances_modified": false,
+    "network_or_firewall_modified": false,
+    "test_server_temporary_paths_removed": [
+      "/tmp/configflow-ha-sync",
+      "/tmp/configflow-ha-sync-source",
+      "/tmp/configflow-ha-sync-agent"
+    ],
+    "private_credentials_removed": true
+  }
 }
