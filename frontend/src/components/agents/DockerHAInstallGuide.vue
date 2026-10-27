@@ -25,7 +25,7 @@ const image = ref('thsrite/config-flow-agent:latest')
 const network = ref<DockerHANetwork>('host')
 const step = ref(0)
 const commandHost = ref('0')
-const installMethods = ref<('compose' | 'script')[]>(['compose', 'compose'])
+const installMethods = ref<('compose_direct' | 'script')[]>(['compose_direct', 'compose_direct'])
 const steps = ['准备环境', '主机 1', '主机 2', '执行安装', '验证与配对']
 const hosts = reactive<HostForm[]>([0, 1].map(index => ({
   mode: 'new', agent_name: index ? 'dns-b' : 'dns-a', agent_ip: '', oxidns_port: 8082,
@@ -45,7 +45,7 @@ let disposed = false
 const failureText = (error: any) => error?.response?.data?.message || error?.response?.data?.error || error?.message || '请求失败，请重试。'
 const currentHost = computed(() => Number(commandHost.value))
 const currentResult = computed(() => results.value[currentHost.value])
-const useCompose = computed(() => hosts[currentHost.value]!.mode === 'new' && installMethods.value[currentHost.value] === 'compose')
+const useCompose = computed(() => hosts[currentHost.value]!.mode === 'new' && installMethods.value[currentHost.value] === 'compose_direct')
 const currentLogs = computed(() => currentResult.value?.command_blocks?.find(block => block.id === 'logs'))
 hosts.forEach((host, index) => {
   watch([() => JSON.stringify(host), () => installMethods.value[index], network, image, server], () => {
@@ -97,7 +97,7 @@ async function generate(index: number) {
     }, profile.id)
     if (disposed || token !== requestIds[index]) return
     if (!data.success) throw new Error(data.message || '无法生成安装命令。')
-    if (hosts[index]!.mode === 'new' && installMethods.value[index] === 'compose' && !data.compose_bundle?.content_base64) throw new Error('部署包未生成，请重试或切换为 Shell 脚本。')
+    if (hosts[index]!.mode === 'new' && installMethods.value[index] === 'compose_direct' && (!data.compose_deployment || !data.compose?.trim())) throw new Error('Compose 未生成，请重试或切换为 Shell 脚本。')
     results.value[index] = data
   } catch (error) {
     if (!disposed && token === requestIds[index]) errors.value[index] = failureText(error)
@@ -115,13 +115,13 @@ const refreshError = ref('')
 const checkedAt = ref('')
 let refreshId = 0
 const selected = computed(() => selections.value.map(id => agents.value.find(agent => agent.id === id)))
-const candidates = computed(() => agents.value.filter(agent => agent.service_type === 'oxidns' && agent.deployment_method === 'docker'))
+const candidates = computed(() => agents.value.filter(agent => agent.service_type === 'oxidns'))
 const blockers = computed(() => {
   const reasons: string[] = []
   for (let index = 0; index < 2; index++) {
     const agent = selected.value[index]
     const label = `主机 ${index + 1}`
-    if (!agent) { reasons.push(`${label}：请选择已安装的 OxiDNS Docker Agent。`); continue }
+    if (!agent) { reasons.push(`${label}：请选择已安装的 OxiDNS Agent（Docker 或 Shell）。`); continue }
     if (agent.status !== 'online') reasons.push(`${label}：Agent 离线，检查容器日志、服务器地址和端口连通性。`)
     if (agent.profile_id !== profile.id) reasons.push(`${label}：尚未绑定配置空间「${profile.name}」。`)
     const environment = environments.value[agent.id]
@@ -129,10 +129,11 @@ const blockers = computed(() => {
     else if (!environment) reasons.push(`${label}：尚未实时检查 HA 环境，请刷新。`)
     else {
       const detail = environment.oxidns_ha_environment
-      if (!environment.oxidns_ha_protocols?.includes(1) || !environment.oxidns_ha_container_protocols?.includes(1) || !environment.oxidns_ha_handoff_protocols?.includes(1)) reasons.push(`${label}：Agent 缺少 Docker HA 或计划迁移能力，请按本引导重建为支持版本。`)
-      if (environment.service_type !== 'oxidns' || detail?.kind !== 'container') reasons.push(`${label}：实时返回的服务或部署类型不是 OxiDNS Docker。`)
+      const container = agent.deployment_method === 'docker' || detail?.kind === 'container'
+      if (!environment.oxidns_ha_protocols?.includes(1) || !environment.oxidns_ha_handoff_protocols?.includes(1) || (container && !environment.oxidns_ha_container_protocols?.includes(1))) reasons.push(`${label}：Agent 缺少所需的 HA 或计划迁移能力，请先升级。`)
+      if (environment.service_type !== 'oxidns' || (container ? detail?.kind !== 'container' : detail?.kind !== 'native')) reasons.push(`${label}：实时返回的服务或部署类型不符。`)
       if (detail?.ready !== true) reasons.push(`${label}：${detail?.blockers?.join('；') || 'HA 环境未就绪。'}`)
-      if (!detail?.host_id) reasons.push(`${label}：无法确认宿主身份文件。`)
+      if (!detail?.host_id) reasons.push(`${label}：无法确认宿主身份。`)
     }
   }
   if (selections.value[0] && selections.value[0] === selections.value[1]) reasons.push('需要选择两台不同的 Agent。')
@@ -141,6 +142,12 @@ const blockers = computed(() => {
   })
   const identities = selected.value.map(agent => agent && environments.value[agent.id]?.oxidns_ha_environment?.host_id)
   if (identities[0] && identities[0] === identities[1]) reasons.push('两台 Agent 的宿主身份相同；同一宿主机上的两个容器不能组成这组 HA。')
+  const details = selected.value.map(agent => agent && environments.value[agent.id]?.oxidns_ha_environment)
+  const bootIds = details.map(detail => detail?.host_boot_id)
+  const validBootIds = bootIds.every(id => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id))
+  if (details.some(detail => detail?.host_id_source === 'docker-volume') && !validBootIds) reasons.push('使用 Docker 身份卷时，两端需提供宿主校验证据；请升级 Agent 后重新检查。')
+  if (details.some(detail => detail?.host_id_source === 'unknown')) reasons.push('无法识别宿主身份来源，请升级 Agent 后重新检查。')
+  if (validBootIds && bootIds[0] === bootIds[1]) reasons.push('两台 Agent 来自同一宿主，不能组成主机高可用。')
   if (refreshError.value) reasons.push(refreshError.value)
   return reasons
 })
@@ -223,7 +230,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
   <section class="flex min-w-0 flex-col gap-5" aria-label="OxiDNS Docker HA 安装引导">
     <div>
       <h3 class="m-0 font-display text-xl">两台主机，共用一个 DNS 地址</h3>
-      <p class="mb-0 mt-2 text-[13px] leading-relaxed text-muted-foreground">按顺序在两台主机上执行命令，再回到这里检查和配对。本次使用配置空间「{{ profile.name }}」。</p>
+      <p class="mb-0 mt-2 text-[13px] leading-relaxed text-muted-foreground">已有 Shell 节点无需重装，只部署 Docker 端，再到“验证与配对”中选择两台。本次使用配置空间「{{ profile.name }}」。</p>
     </div>
     <nav class="grid grid-cols-3 gap-1.5 sm:grid-cols-5" aria-label="安装步骤">
       <Button v-for="(label, index) in steps" :key="label" variant="outline" class="min-h-11 h-auto whitespace-normal px-2 py-2 text-xs" :class="step === index ? 'border-primary-accent bg-primary-soft text-primary-accent' : ''" :aria-current="step === index ? 'step' : undefined" @click="step = index">{{ index + 1 }}. {{ label }}</Button>
@@ -234,7 +241,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
         <p class="mb-2 mt-0 font-semibold">开始前准备</p>
         <ul class="m-0 list-disc space-y-1 pl-5">
           <li>两台不同的 Linux 宿主机，位于同一局域网，使用固定 IPv4。两个容器放在同一主机不算双机 HA。</li>
-          <li>普通 Linux 先安装 Docker Engine；新安装推荐 Compose 部署，需要 Docker Compose 2.20 或更新版本；也可选择不依赖 Compose 的 Shell 脚本。NAS 在套件中心安装 Docker / Container Manager，并启用 SSH（群晖：控制面板 → 终端机和 SNMP → 启动 SSH 服务；其他 NAS 在系统 SSH 设置中开启）。以 root 或有 Docker 权限的管理员登录宿主机执行命令。</li>
+          <li>Docker 端先安装 Docker Engine；新安装使用单份 Compose，需要 Docker Compose 2.20 或更新版本；也可选择不依赖 Compose 的 Shell 脚本。NAS 在套件中心安装 Docker / Container Manager。Compose 可直接导入项目启动；手动检查或使用 Shell 脚本时再通过 SSH 操作。已有 Shell 节点无需安装 Docker。</li>
           <li>需要 rootful Docker；Docker Desktop、rootless 和普通 bridge 网络不满足此引导。</li>
           <li data-docker-ha-port-note><template v-if="network === 'host'">Host 使用宿主机网络，默认配置需要 TCP / UDP 53；已有监听需先核对并处理，不要直接停止正在服务的 DNS。</template><template v-else>macvlan 使用容器独立地址，宿主机 TCP / UDP 53 的占用不直接阻断；仍需确认容器地址与 VIP 未被其他设备使用。</template></li>
           <li>准备同一份 OxiDNS 配置：监听所有地址的 UDP 53，上游 DNS 从两台设备都可达。开启 HA 时会同步这个配置空间的配置和规则。</li>
@@ -249,8 +256,8 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       </FormField>
       <p v-if="network === 'host'" class="m-0 text-[13px] leading-relaxed">使用宿主机地址；OxiDNS 和 HA companion 分开运行，NET_ADMIN / NET_RAW 只授予 HA 容器。核心容器停止后 HA 仍可探测并让出 VIP；强杀 HA 容器或整个 Docker 可能留下宿主 VIP，需要恢复 HA 或人工清理。</p>
       <p v-else class="m-0 rounded-md bg-warning-soft p-3 text-[13px] leading-relaxed">需要宿主机和网络支持 macvlan，为每台容器分配独立 LAN 地址。macvlan 默认不能访问本宿主机；ConfigFlow 应部署在可达的其他 LAN 主机或同 macvlan 网络。NAS 不支持时使用 Host。</p>
-      <FormField label="ConfigFlow 服务器地址" html-for="docker-ha-server" persistent-hint hint="两台容器都必须能访问，不能填写 localhost 或 127.0.0.1。"><Input id="docker-ha-server" v-model="server" class="font-mono" placeholder="http://192.168.1.10:8000" /></FormField>
-      <FormField label="Agent Docker 镜像" html-for="docker-ha-image" hint="必须包含 OxiDNS Docker HA 与计划 VIP 迁移支持；两台使用同一镜像。"><Input id="docker-ha-image" v-model="image" class="font-mono" /></FormField>
+      <FormField label="ConfigFlow 服务器地址" html-for="docker-ha-server" persistent-hint hint="两端都必须能访问，不能填写 localhost 或 127.0.0.1。"><Input id="docker-ha-server" v-model="server" class="font-mono" placeholder="http://192.168.1.10:8000" /></FormField>
+      <FormField label="Agent Docker 镜像" html-for="docker-ha-image" hint="需包含单文件 Compose 初始化与 Docker HA 支持的新镜像；旧镜像需先升级。"><Input id="docker-ha-image" v-model="image" class="font-mono" /></FormField>
       <Button variant="outline" class="min-h-11 self-start" :disabled="preflightBusy" @click="inspectHost()"><Loader2 v-if="preflightBusy" class="size-4 animate-spin" />生成环境检查命令</Button>
       <p v-if="preflightError" role="alert" class="m-0 text-sm text-destructive-accent">{{ preflightError }}</p>
       <DockerHAGuideCommand v-if="preflight" title="两台宿主机分别检查" :command="preflight" collapsed note="复制完整命令到两台宿主机分别执行；将完整输出粘贴到下方检测，逐项查看需要处理的问题。" />
@@ -259,7 +266,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
 
     <div v-if="step === 1 || step === 2" class="flex min-w-0 flex-col gap-4">
       <h4 class="m-0 text-sm font-semibold">填写主机 {{ step }} · {{ network === 'host' ? '宿主机地址' : 'macvlan 容器地址' }}</h4>
-      <DockerHAHostForm :host="hosts[step - 1]!" :index="step - 1" :network="network" />
+      <DockerHAHostForm :host="hosts[step - 1]!" :index="step - 1" :network="network" :direct-compose="installMethods[step - 1] === 'compose_direct' && hosts[step - 1]!.mode === 'new'" />
       <details v-if="hosts[step - 1]!.mode === 'migrate'" class="text-[13px] leading-relaxed">
         <summary class="min-h-11 cursor-pointer py-3">旧容器已有 HA、额外挂载或自定义启动命令？</summary>
         <p class="mt-0">自动迁移仅支持官方单 OxiDNS 容器、默认入口和启动命令，以及原 Agent / OxiDNS 两个数据挂载。已有 Docker HA 容器停用后仍保留 HA 环境变量和额外挂载，不能使用自动迁移脚本。请按下面步骤保留原 Compose 手动重建，不要把新安装的 Compose 直接覆盖上去。</p>
@@ -283,16 +290,16 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       <p v-if="hosts[currentHost]!.mode === 'migrate'" class="m-0 text-[13px] leading-relaxed">迁移会核对原挂载并备份，请在对应宿主机执行脚本。已启用 HA 的旧容器会被迁移脚本拒绝；请返回主机步骤，展开手动重建说明。</p>
       <template v-else>
         <RadioGroup v-model="installMethods[currentHost]" class="flex flex-wrap gap-4" aria-label="新安装部署方式">
-          <label class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px]"><RadioGroupItem value="compose" />Compose 部署（推荐）</label>
+          <label class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px]"><RadioGroupItem value="compose_direct" />Compose 直接部署</label>
           <label class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px]"><RadioGroupItem value="script" />Shell 脚本</label>
         </RadioGroup>
-        <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">两台主机分别生成并部署，一次处理一台。</p>
+        <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">为当前 Docker 主机生成配置，已有 Shell 节点无需再次安装。</p>
       </template>
-      <Button class="min-h-11 self-start" :disabled="generating[currentHost]" @click="generate(currentHost)"><Loader2 v-if="generating[currentHost]" class="size-4 animate-spin" />生成主机 {{ currentHost + 1 }} 的{{ useCompose ? '部署包' : '安装命令' }}</Button>
+      <Button class="min-h-11 self-start" :disabled="generating[currentHost]" @click="generate(currentHost)"><Loader2 v-if="generating[currentHost]" class="size-4 animate-spin" />生成主机 {{ currentHost + 1 }} 的{{ useCompose ? 'Compose' : '安装命令' }}</Button>
       <p v-if="errors[currentHost]" role="alert" class="m-0 text-[13px] text-destructive-accent">{{ errors[currentHost] }}</p>
       <template v-if="currentResult">
-        <p class="m-0 text-[13px] text-muted-foreground">{{ useCompose ? '部署包已生成，尚未安装。' : '命令已生成，尚未验证安装。复制命令不会自动执行，也不代表设备已就绪。' }}</p>
-        <DockerHAComposeDeployment v-if="useCompose && currentResult.compose_bundle" :bundle="currentResult.compose_bundle" />
+        <p class="m-0 text-[13px] text-muted-foreground">{{ useCompose ? 'Compose 已生成，尚未安装。' : '命令已生成，尚未验证安装。复制命令不会自动执行，也不代表设备已就绪。' }}</p>
+        <DockerHAComposeDeployment v-if="useCompose && currentResult.compose_deployment" :deployment="currentResult.compose_deployment" :compose="currentResult.compose" />
         <template v-else>
           <ul v-if="currentResult.warnings?.length" class="m-0 list-disc space-y-1 pl-5 text-[13px]"><li v-for="warning in currentResult.warnings" :key="warning">{{ warning }}</li></ul>
           <DockerHAGuideCommand title="1. 检查宿主机" :command="currentResult.inspection_command" collapsed />
@@ -301,26 +308,26 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
         </template>
         <details v-if="hosts[currentHost]!.mode === 'new'" class="min-w-0 text-[13px] leading-relaxed">
           <summary class="min-h-11 cursor-pointer py-3">安装失败或凭据过期，如何继续？</summary>
-          <p class="mt-0">保留全部设置和持久数据，修正报错后重试。首次安装凭据过期时，用相同设置重新生成{{ useCompose ? '部署包，更新解压目录中的文件，再运行初始化和启动命令' : '安装命令' }}。已成功登记的 Compose 容器重启时复用本机身份，不需要重新注册。</p>
+          <p class="mt-0">保留全部设置和持久数据，修正报错后重试。首次安装凭据过期时，用相同设置重新生成{{ useCompose ? 'Compose，替换原文件后再次启动项目' : '安装命令' }}。已成功登记的 Compose 容器重启时复用本机身份，不需要重新注册。</p>
           <p class="mb-0">不要删除 Agent 身份和安装记录。改变名称、地址或目录前，先核对已有安装并选择迁移。</p>
         </details>
-        <DockerHAGuideCommand v-if="currentLogs" :title="currentLogs.title" :command="currentLogs.command" note="在同一台宿主机执行，查看实际容器的启动错误；修正原因后再刷新 Agent。" />
-        <details v-if="currentResult.compose" class="min-w-0"><summary class="min-h-11 cursor-pointer py-3 text-[13px]">查看 Compose 定义</summary><DockerHAGuideCommand :title="useCompose ? 'compose.yaml（部署包内）' : 'Compose 定义（供核对）'" :command="currentResult.compose" :note="useCompose ? '请保留部署包中的配套文件，初始化后再启动项目。' : '迁移必须使用上方安装脚本，以保留检查、备份和回滚路径。'" /></details>
+        <DockerHAGuideCommand v-if="currentLogs" :title="currentLogs.title" :command="currentLogs.command" :note="useCompose ? '在 compose.yaml 所在目录执行，或在容器管理器查看各服务日志；初始化失败时先看 install-init。' : '在同一台宿主机执行，查看实际容器的启动错误；修正原因后再刷新 Agent。'" />
+        <details v-if="currentResult.compose" class="min-w-0"><summary class="min-h-11 cursor-pointer py-3 text-[13px]">查看 Compose 定义</summary><DockerHAGuideCommand :title="useCompose ? 'compose.yaml' : 'Compose 定义（供核对）'" :command="currentResult.compose" :note="useCompose ? '此文件包含启动所需配置，可直接部署。' : '迁移必须使用上方安装脚本，以保留检查、备份和回滚路径。'" /></details>
         <DockerHAGuideCommand v-if="currentResult.rollback_command" title="迁移失败时回滚" :command="currentResult.rollback_command" note="只在对应主机运行。保留旧容器、备份和原数据，不删除卷；恢复后检查原 Agent 与 DNS 服务。" />
       </template>
     </div>
 
     <div v-else-if="step === 4" class="flex min-w-0 flex-col gap-4">
       <div class="flex flex-wrap items-center justify-between gap-2"><h4 class="m-0 text-sm font-semibold">读取两台 Agent 的真实环境</h4><Button variant="outline" class="min-h-11" :disabled="refreshing" @click="refresh"><RefreshCw class="size-4" :class="refreshing && 'animate-spin'" />刷新并检查两台 Agent</Button></div>
-      <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">先刷新设备列表，再直接向所选 Agent 读取 HA 能力和环境。在线心跳不能代替安装检查；更换选择后需要重新刷新。</p>
+      <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">可选择已存在的 Shell 节点与新 Docker 节点。先刷新设备列表，再读取两端 HA 能力和环境。在线心跳不能代替安装检查；更换选择后需要重新刷新。</p>
       <details class="text-[13px] leading-relaxed"><summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或环境检查失败？</summary><ul class="mb-0 list-disc space-y-2 pl-5"><li>先查看对应宿主机的 Docker / Container Manager 容器日志，确认镜像拉取成功、OxiDNS 与 Agent 已启动。{{ network === 'host' ? 'Host 检查宿主机 53 端口冲突。' : 'macvlan 检查容器自身的 DNS 监听和地址冲突，不要求宿主机 53 端口空闲。' }}</li><li>确认填写的 ConfigFlow 地址从容器可达、服务器能访问所填 Agent 地址和端口，防火墙允许流量。新装凭据有效期为 24 小时，过期时保留全部设置不变再重新生成；不要删除已有身份和安装记录。</li><li>Host 检查 companion 是否运行、共享 HA 目录和只读身份挂载是否一致；macvlan 检查网卡、子网、固定地址与宿主隔离限制。按下面实时返回的具体原因修正后重新刷新。</li></ul></details>
       <div class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
         <div v-for="index in [0, 1]" :key="index" class="min-w-0 space-y-2">
           <FormField :label="`主机 ${index + 1} 的 OxiDNS Agent`" :html-for="`docker-ha-verify-${index + 1}`">
-            <Select :model-value="selections[index]" @update:model-value="selectionChanged(index, $event)"><SelectTrigger :id="`docker-ha-verify-${index + 1}`" class="min-h-11 w-full min-w-0"><SelectValue placeholder="先刷新，再选择设备" /></SelectTrigger><SelectContent><SelectItem v-for="agent in candidates" :key="agent.id" :value="agent.id">{{ agent.name }} · {{ agent.host }}</SelectItem></SelectContent></Select>
+            <Select :model-value="selections[index]" @update:model-value="selectionChanged(index, $event)"><SelectTrigger :id="`docker-ha-verify-${index + 1}`" class="min-h-11 w-full min-w-0"><SelectValue placeholder="先刷新，再选择设备" /></SelectTrigger><SelectContent><SelectItem v-for="agent in candidates" :key="agent.id" :value="agent.id">{{ agent.name }} · {{ agent.host }} · {{ agent.deployment_method === 'docker' ? 'Docker' : 'Shell' }}</SelectItem></SelectContent></Select>
           </FormField>
           <Button v-if="selected[index] && selected[index]!.profile_id !== profile.id" variant="outline" class="min-h-11 h-auto w-full whitespace-normal" :disabled="!!binding" @click="bind(selected[index]!)">绑定到「{{ profile.name }}」</Button>
-          <p v-if="selected[index] && environments[selected[index]!.id]" class="m-0 text-xs text-muted-foreground">实时环境：{{ environments[selected[index]!.id]!.oxidns_ha_environment?.network || '未知网络' }} · {{ environments[selected[index]!.id]!.oxidns_ha_environment?.ready ? '容器环境就绪' : '容器环境未就绪' }}</p>
+          <p v-if="selected[index] && environments[selected[index]!.id]" class="m-0 text-xs text-muted-foreground">实时环境：{{ environments[selected[index]!.id]!.oxidns_ha_environment?.network || (environments[selected[index]!.id]!.oxidns_ha_environment?.kind === 'native' ? 'Shell 原生' : '未知网络') }} · {{ environments[selected[index]!.id]!.oxidns_ha_environment?.ready ? '环境就绪' : '环境未就绪' }}</p>
         </div>
       </div>
       <div v-if="blockers.length" role="status" class="rounded-md border border-warning/30 bg-warning-soft p-3 text-[13px]"><p class="mb-2 mt-0 font-semibold">配对前需要处理</p><ul class="m-0 list-disc space-y-1 pl-5"><li v-for="reason in blockers" :key="reason">{{ reason }}</li></ul></div>

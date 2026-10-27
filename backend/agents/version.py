@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.47-go"
+LATEST_AGENT_VERSION = "1.8.48-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.48-go": {
+        "date": "2026-10-27",
+        "features": [
+            "OxiDNS 高可用支持 Docker 持久身份卷，并用宿主实时启动身份核对 Shell 与 Docker 混合部署的独立主机边界",
+            "单文件 Compose 新装可在容器内初始化持久数据并安全登记，已有 Agent 身份在安装凭据过期后仍可重启复用"
+        ]
+    },
     "1.8.47-go": {
         "date": "2026-10-27",
         "features": [

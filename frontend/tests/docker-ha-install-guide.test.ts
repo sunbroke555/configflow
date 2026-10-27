@@ -17,13 +17,11 @@ vi.mock('@/lib/clipboard', () => ({ copyText: vi.fn() }))
 const PairStub = { name: 'AgentDNSHA', props: ['agent', 'agents', 'blocked', 'showInstallGuide'], template: '<div data-testid="pair" :data-blocked="blocked" />' }
 const wrappers: ReturnType<typeof mount>[] = []
 const result = { success: true, inspection_command: 'docker version', identity_command: '', install_command: 'install-host-command', rollback_command: '', compose: 'services: {}', warnings: [] }
-// A valid empty ZIP archive with binary zero bytes, so decoding is checked byte-for-byte.
-const zipBytes = new Uint8Array([80, 75, 5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-const composeBundle = {
-  filename: 'dns-a-compose.zip', project_name: 'cf-oxidns-test', content_base64: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==',
-  prepare_command: 'sudo bash prepare.sh', start_command: 'docker compose up -d',
+const composeYaml = "name: cf-oxidns-test\nservices:\n  agent:\n    image: example/agent:ha\n    environment:\n      NOTE: '局域网 $value'\n"
+const composeDeployment = {
+  filename: 'compose.yaml', project_name: 'cf-oxidns-test', command: 'docker compose up -d', identity_mode: 'file',
 }
-const composeResult = { ...result, inspection_command: 'standalone-inspection-script', identity_command: 'standalone-identity-script', compose_bundle: composeBundle }
+const composeResult = { ...result, compose: composeYaml, inspection_command: 'standalone-inspection-script', identity_command: 'standalone-identity-script', compose_deployment: composeDeployment }
 
 const device = (id: string, extra: Record<string, unknown> = {}) => ({
   id, name: `dns-${id}-oxidns`, host: `192.168.1.${id === 'a' ? 21 : 22}`, port: 8082,
@@ -75,7 +73,7 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); document.body.innerHTML = '' })
 
 describe('Docker HA installation guide', () => {
-  it('defaults to a Compose bundle and downloads the exact ZIP bytes with a temporary object URL', async () => {
+  it('defaults to direct Compose and copies or downloads the exact UTF-8 YAML without host scripts', async () => {
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: composeResult } as any)
     const createDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
     const revokeDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
@@ -91,33 +89,35 @@ describe('Docker HA installation guide', () => {
       const wrapper = render()
       await hosts(wrapper)
       await click(wrapper, '4. 执行安装')
-      await click(wrapper, '生成主机 1 的部署包')
-      expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'new', install_method: 'compose', agent_ip: '192.168.1.21', data_dir: '/srv/dns-1' }), 'space')
-      expect(wrapper.text()).toContain('1. 下载并解压')
-      expect(wrapper.text()).toContain('2. 初始化并启动')
-      expect(wrapper.text()).toContain(composeBundle.prepare_command)
-      expect(wrapper.text()).toContain(composeBundle.start_command)
+      await click(wrapper, '生成主机 1 的Compose')
+      expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'new', install_method: 'compose_direct', agent_ip: '192.168.1.21', data_dir: '/srv/dns-1' }), 'space')
+      expect(wrapper.text()).toContain('1. 保存 Compose')
+      expect(wrapper.text()).toContain('2. 启动项目')
+      expect(wrapper.text()).not.toContain('prepare.sh')
+      expect(wrapper.text()).toContain(composeDeployment.command)
       expect(wrapper.text()).not.toContain('standalone-inspection-script')
       expect(wrapper.text()).not.toContain('standalone-identity-script')
       expect(wrapper.text()).not.toContain('install-host-command')
+      await click(wrapper, '复制 Compose')
+      expect(copyText).toHaveBeenCalledWith(composeYaml)
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-      await click(wrapper, '下载 Compose 部署包')
+      await click(wrapper, '下载 compose.yaml')
       await vi.runOnlyPendingTimersAsync()
       vi.useRealTimers()
       expect(createURL).toHaveBeenCalledTimes(1)
       const blob = createURL.mock.calls[0]![0] as Blob
-      expect(blob.type).toBe('application/zip')
+      expect(blob.type).toBe('text/yaml;charset=utf-8')
       const contents = await new Promise<ArrayBuffer>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve(reader.result as ArrayBuffer)
         reader.onerror = () => reject(reader.error)
         reader.readAsArrayBuffer(blob)
       })
-      expect(new Uint8Array(contents)).toEqual(zipBytes)
-      expect(downloads).toEqual([{ href: 'blob:compose-download', filename: composeBundle.filename }])
+      expect(new TextDecoder().decode(contents)).toBe(composeYaml)
+      expect(downloads).toEqual([{ href: 'blob:compose-download', filename: composeDeployment.filename }])
       expect(revokeURL).toHaveBeenCalledWith('blob:compose-download')
       await radio(wrapper, '新安装部署方式', 'script')
-      expect(wrapper.findAll('button').some(button => button.text() === '下载 Compose 部署包')).toBe(false)
+      expect(wrapper.findAll('button').some(button => button.text() === '下载 compose.yaml')).toBe(false)
       expect(wrapper.text()).not.toContain('install-host-command')
     } finally {
       vi.useRealTimers()
@@ -129,12 +129,12 @@ describe('Docker HA installation guide', () => {
     }
   })
 
-  it('rejects a successful Compose response without a bundle instead of showing a download or script fallback', async () => {
+  it('rejects a successful Compose response without deployment metadata instead of showing a download or script fallback', async () => {
     const wrapper = render()
     await click(wrapper, '4. 执行安装')
-    await click(wrapper, '生成主机 1 的部署包')
+    await click(wrapper, '生成主机 1 的Compose')
     expect(wrapper.findAll('[role="alert"]').some(item => /部署包|Compose/.test(item.text()))).toBe(true)
-    expect(wrapper.findAll('button').some(button => button.text() === '下载 Compose 部署包')).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '下载 compose.yaml')).toBe(false)
     expect(wrapper.text()).not.toContain('install-host-command')
   })
 
@@ -143,14 +143,14 @@ describe('Docker HA installation guide', () => {
     let resolve!: (value: any) => void
     vi.mocked(agentApi.generateDockerHAGuide).mockImplementationOnce(() => new Promise(done => { resolve = done }) as any)
     await click(wrapper, '4. 执行安装')
-    await click(wrapper, '生成主机 1 的部署包')
+    await click(wrapper, '生成主机 1 的Compose')
     await radio(wrapper, '新安装部署方式', 'script')
     await click(wrapper, '生成主机 1 的安装命令')
     expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({ install_method: 'script' }), 'space')
     resolve({ data: composeResult })
     await flushPromises()
     expect(wrapper.text()).toContain('install-host-command')
-    expect(wrapper.findAll('button').some(button => button.text() === '下载 Compose 部署包')).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '下载 compose.yaml')).toBe(false)
   })
 
   it('keeps deployment method and results independent for both hosts and invalidates only an edited host', async () => {
@@ -158,22 +158,22 @@ describe('Docker HA installation guide', () => {
     await hosts(wrapper)
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValueOnce({ data: composeResult } as any)
     await click(wrapper, '4. 执行安装')
-    await click(wrapper, '生成主机 1 的部署包')
+    await click(wrapper, '生成主机 1 的Compose')
     await radio(wrapper, '执行命令的主机', '1')
-    expect(wrapper.findAll('button').some(button => button.text() === '生成主机 2 的部署包')).toBe(true)
-    expect(wrapper.findAll('button').some(button => button.text() === '下载 Compose 部署包')).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '生成主机 2 的Compose')).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === '下载 compose.yaml')).toBe(false)
     await radio(wrapper, '新安装部署方式', 'script')
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValueOnce({ data: { ...result, install_command: 'second-host-script' } } as any)
     await click(wrapper, '生成主机 2 的安装命令')
     expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({ install_method: 'script', agent_ip: '192.168.1.22' }), 'space')
     await radio(wrapper, '执行命令的主机', '0')
-    expect(wrapper.findAll('button').some(button => button.text() === '生成主机 1 的部署包')).toBe(true)
-    expect(wrapper.findAll('button').some(button => button.text() === '下载 Compose 部署包')).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === '生成主机 1 的Compose')).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === '下载 compose.yaml')).toBe(true)
     expect(wrapper.text()).not.toContain('second-host-script')
     await click(wrapper, '2. 主机 1')
     await wrapper.get('#docker-ha-host-1-data').setValue('/srv/changed-host-a')
     await click(wrapper, '4. 执行安装')
-    expect(wrapper.findAll('button').some(button => button.text() === '下载 Compose 部署包')).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '下载 compose.yaml')).toBe(false)
     await radio(wrapper, '执行命令的主机', '1')
     expect(wrapper.findAll('button').some(button => button.text() === '生成主机 2 的安装命令')).toBe(true)
     expect(wrapper.text()).toContain('second-host-script')
@@ -272,7 +272,7 @@ describe('Docker HA installation guide', () => {
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: { ...result, rollback_command: 'safe-rollback' } } as any)
     await click(wrapper, '4. 执行安装')
     expect(wrapper.findAllComponents(RadioGroup).some(group => group.attributes('aria-label') === '新安装部署方式')).toBe(false)
-    expect(wrapper.findAll('button').some(button => button.text() === '生成主机 1 的部署包')).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '生成主机 1 的Compose')).toBe(false)
     await click(wrapper, '生成主机 1 的安装命令')
     expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'migrate', install_method: 'script', container_name: 'old-oxidns', existing_agent_name: 'original-full-agent-name', agent_mount: { type: 'bind', source: '/srv/original/agent' }, core_mount: { type: 'volume', source: 'original-core-volume' }, ha_data_dir: '/srv/ha', backup_dir: '/srv/backups' }), 'space')
     expect(wrapper.text()).toContain('safe-rollback')
@@ -280,8 +280,29 @@ describe('Docker HA installation guide', () => {
     expect(wrapper.text()).toContain('已启用 HA 的旧容器会被迁移脚本拒绝')
   })
 
+  it('uses the shared Docker identity volume without asking for a writable host identity path', async () => {
+    vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: { ...composeResult,
+      compose_deployment: { ...composeDeployment, identity_mode: 'docker-volume' },
+    } } as any)
+    const wrapper = render()
+    await click(wrapper, '2. 主机 1')
+    wrapper.getComponent(Checkbox).vm.$emit('update:modelValue', true)
+    await flushPromises()
+    expect(wrapper.find('#docker-ha-host-1-identity').exists()).toBe(false)
+    expect(wrapper.text()).toContain('无需创建宿主机文件')
+    await click(wrapper, '4. 执行安装')
+    await click(wrapper, '生成主机 1 的Compose')
+    expect(agentApi.generateDockerHAGuide).toHaveBeenLastCalledWith(expect.objectContaining({
+      install_method: 'compose_direct', create_host_identity: true, ha_host_id_path: '',
+    }), 'space')
+    expect(wrapper.text()).toContain('configflow-ha-host-identity')
+    expect(wrapper.text()).not.toContain('standalone-identity-script')
+  })
+
   it('offers one-time stable host identity creation without reusing machine-id as a new output path', async () => {
     const wrapper = render()
+    await click(wrapper, '4. 执行安装')
+    await radio(wrapper, '新安装部署方式', 'script')
     await click(wrapper, '2. 主机 1')
     wrapper.getComponent(Checkbox).vm.$emit('update:modelValue', true)
     await flushPromises()
@@ -376,6 +397,34 @@ describe('Docker HA installation guide', () => {
     expect(wrapper.text()).toContain('在线心跳不能代替安装检查')
   })
 
+  it.each(['file', 'docker-volume'])('pairs an existing Shell node with a checked Docker %s identity', async source => {
+    vi.mocked(agentApi.getAll).mockResolvedValue({ data: [device('a'), device('b', { deployment_method: 'shell' })] } as any)
+    vi.mocked(agentApi.getDockerHAEnvironment).mockImplementation(async id => ({ data: environment(id, {
+      oxidns_ha_container_protocols: id === 'b' ? [] : [1],
+      oxidns_ha_environment: { kind: id === 'b' ? 'native' : 'container', ready: true,
+        host_id: (id === 'a' ? 'a' : 'b').repeat(64), host_id_source: id === 'a' ? source : 'file',
+        host_boot_id: (id === 'a' ? 'c' : 'd').repeat(64) },
+    }) } as any))
+    const wrapper = render()
+    await verify(wrapper)
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(false)
+    expect(wrapper.text()).toContain('Shell 原生')
+    expect(wrapper.getComponent(PairStub).props('agents')).toHaveLength(2)
+  })
+
+  it.each(['same-boot', 'missing-boot'])('blocks mixed file/volume pairing with %s evidence', async failure => {
+    vi.mocked(agentApi.getAll).mockResolvedValue({ data: [device('a'), device('b', { deployment_method: 'shell' })] } as any)
+    vi.mocked(agentApi.getDockerHAEnvironment).mockImplementation(async id => ({ data: environment(id, {
+      oxidns_ha_environment: { kind: id === 'b' ? 'native' : 'container', ready: true,
+        host_id: (id === 'a' ? 'a' : 'b').repeat(64), host_id_source: id === 'a' ? 'docker-volume' : 'file',
+        host_boot_id: failure === 'missing-boot' && id === 'b' ? '' : 'c'.repeat(64) },
+    }) } as any))
+    const wrapper = render()
+    await verify(wrapper)
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(true)
+    expect(wrapper.text()).toContain(failure === 'same-boot' ? '来自同一宿主' : '宿主校验证据')
+  })
+
   it('does not treat online heartbeat as readiness when live capability calls fail', async () => {
     vi.mocked(agentApi.getDockerHAEnvironment).mockRejectedValue(new Error('实时能力请求超时'))
     const wrapper = render()
@@ -386,7 +435,7 @@ describe('Docker HA installation guide', () => {
 
   it.each([
     ['environment blockers', { oxidns_ha_environment: { kind: 'container', ready: false, host_id: 'host-b', blockers: ['缺少独立 HA companion'] } }, '缺少独立 HA companion'],
-    ['protocol missing', { oxidns_ha_handoff_protocols: [] }, '缺少 Docker HA 或计划迁移能力'],
+    ['protocol missing', { oxidns_ha_handoff_protocols: [] }, '缺少所需的 HA 或计划迁移能力'],
     ['same host', { oxidns_ha_environment: { kind: 'container', ready: true, host_id: 'host-a' } }, '宿主身份相同'],
   ])('blocks pairing for %s', async (_name, override, text) => {
     vi.mocked(agentApi.getDockerHAEnvironment).mockImplementation(async id => ({ data: environment(id, id === 'b' ? override : {}) }) as any)

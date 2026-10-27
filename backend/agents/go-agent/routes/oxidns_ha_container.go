@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,10 +23,15 @@ const oxidnsHAContainerProtocol = 1
 const haSupervisorProgram = "configflow-keepalived"
 const haDockerDirectory = "/var/lib/configflow-ha"
 const haHostIDPath = "/run/configflow-host-machine-id"
+const haHostIdentityDirectory = "/run/configflow-host-identity"
+const haHostBootIDPath = "/run/configflow-host-boot-id"
+const haNativeBootIDPath = "/proc/sys/kernel/random/boot_id"
 const haHostNetNSPath = "/run/configflow-host-netns"
 
 var haEnvironmentRead = os.ReadFile
 var haEnvironmentStat = os.Stat
+var haEnvironmentLstat = os.Lstat
+var haBootIDPattern = regexp.MustCompile(`^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$`)
 var haCompanionPeerCheck = checkHACompanionPeer
 
 type haNamespace struct {
@@ -43,12 +49,14 @@ type haCompanionEvidence struct {
 }
 
 type haEnvironmentInfo struct {
-	Kind      string   `json:"kind"`
-	Network   string   `json:"network,omitempty"`
-	Ready     bool     `json:"ready"`
-	HostID    string   `json:"host_id"`
-	Interface string   `json:"interface,omitempty"`
-	Blockers  []string `json:"blockers"`
+	Kind         string   `json:"kind"`
+	Network      string   `json:"network,omitempty"`
+	Ready        bool     `json:"ready"`
+	HostID       string   `json:"host_id"`
+	HostIDSource string   `json:"host_id_source"`
+	HostBootID   string   `json:"host_boot_id,omitempty"`
+	Interface    string   `json:"interface,omitempty"`
+	Blockers     []string `json:"blockers"`
 }
 
 func haDockerOptIn() bool     { return os.Getenv("CONFIGFLOW_DNS_HA") == "1" }
@@ -88,6 +96,34 @@ func haHostIdentity(path string) string {
 	}
 	digest := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(digest[:])
+}
+
+// Boot identity is live evidence only. It must never become journal ownership,
+// since a reboot must not invalidate the persistent host identity.
+func haBootIdentity(path string) string {
+	data, err := haEnvironmentRead(path)
+	value := strings.TrimSpace(string(data))
+	if err != nil || !haBootIDPattern.MatchString(value) || value == "00000000-0000-0000-0000-000000000000" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(strings.ToLower(value)))
+	return hex.EncodeToString(digest[:])
+}
+
+func haVolumeIdentity() string {
+	if !haMounted(haHostIdentityDirectory, false) {
+		return ""
+	}
+	directory, err := haEnvironmentLstat(haHostIdentityDirectory)
+	if err != nil || !directory.IsDir() {
+		return ""
+	}
+	path := filepath.Join(haHostIdentityDirectory, "host-id")
+	info, err := haEnvironmentLstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return haHostIdentity(path)
 }
 
 func haNamespaceAt(path string) (haNamespace, error) {
@@ -219,8 +255,9 @@ func haContainerInterface(cfg *Config, macvlan bool) (string, error) {
 }
 
 func haEnvironment(cfg *Config) haEnvironmentInfo {
-	result := haEnvironmentInfo{Kind: "native", Ready: true, Blockers: []string{}}
+	result := haEnvironmentInfo{Kind: "native", Ready: true, HostIDSource: "file", Blockers: []string{}}
 	if cfg == nil || cfg.ServiceManager != "supervisor" {
+		result.HostBootID = haBootIdentity(haNativeBootIDPath)
 		result.HostID = haHostIdentity("/etc/machine-id")
 		if result.HostID == "" {
 			result.HostID = haHostIdentity("/var/lib/dbus/machine-id")
@@ -245,12 +282,28 @@ func haEnvironment(cfg *Config) haEnvironmentInfo {
 			add(path + " 必须独立读写挂载并持久保存，不能只存于容器层或 tmpfs")
 		}
 	}
-	if !haMounted(haHostIDPath, false) {
-		add("缺少只读挂载的宿主机身份文件")
-	} else {
-		result.HostID = haHostIdentity(haHostIDPath)
+	switch os.Getenv("CONFIGFLOW_DNS_HA_IDENTITY") {
+	case "", "file":
+		if !haMounted(haHostIDPath, false) {
+			add("缺少只读挂载的宿主机身份文件")
+		} else {
+			result.HostID = haHostIdentity(haHostIDPath)
+			if result.HostID == "" {
+				add("宿主机身份文件无效，无法排除同一 Docker 宿主")
+			}
+		}
+	case "volume":
+		result.HostIDSource = "docker-volume"
+		result.HostID = haVolumeIdentity()
 		if result.HostID == "" {
-			add("宿主机身份文件无效，无法排除同一 Docker 宿主")
+			add("宿主身份卷必须只读挂载到 /run/configflow-host-identity，并包含有效的普通 host-id 文件，不能使用软链接")
+		}
+	default:
+		add("CONFIGFLOW_DNS_HA_IDENTITY 必须是 file 或 volume")
+	}
+	if haMounted(haHostBootIDPath, false) {
+		if info, err := haEnvironmentLstat(haHostBootIDPath); err == nil && info.Mode().IsRegular() {
+			result.HostBootID = haBootIdentity(haHostBootIDPath)
 		}
 	}
 	if iface, err := haContainerInterface(cfg, result.Network == "macvlan"); err != nil {

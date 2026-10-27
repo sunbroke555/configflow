@@ -1088,6 +1088,11 @@ def agent_oxidns_ha_environment(agent_id):
         'network': environment.get('network') if environment.get('network') in ('host', 'macvlan') else '',
         'host_id': environment.get('host_id') if isinstance(environment.get('host_id'), str)
             and len(environment['host_id']) == 64 and all(c in '0123456789abcdef' for c in environment['host_id']) else '',
+        'host_id_source': environment.get('host_id_source', 'file')
+            if environment.get('host_id_source', 'file') in ('file', 'docker-volume') else 'unknown',
+        'host_boot_id': environment.get('host_boot_id') if isinstance(environment.get('host_boot_id'), str)
+            and len(environment['host_boot_id']) == 64
+            and all(c in '0123456789abcdef' for c in environment['host_boot_id']) else '',
         'interface': str(environment.get('interface') or '')[:64],
         'blockers': [failure_text(v, (agent.get('token'),))[:500] for v in environment.get('blockers', [])[:20]
             if isinstance(v, str)] if isinstance(environment.get('blockers'), list) else [],
