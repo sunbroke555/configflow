@@ -104,7 +104,7 @@
           <p v-if="checkResult" role="status" class="m-0 break-words text-sm" :class="checkResult.success ? 'text-success-accent' : 'text-destructive-accent'">{{ checkResult.success ? `解析成功：${checkResult.addresses.join('、')}` : checkResult.message || 'DNS 检测失败' }}<span v-if="checkResult.success && checkResult.latency_ms != null">（{{ checkResult.latency_ms }} ms）</span></p>
         </div>
         </div>
-        <div class="shrink-0 space-y-3 border-t border-border px-6 py-4 max-sm:px-4">
+        <div class="flex shrink-0 flex-col gap-4 border-t border-border px-6 py-4 max-sm:px-4">
           <p v-if="mode === 'managed' && selectedAgent && !selectedEndpoint && !managedLoading && !managedError" class="m-0 text-xs leading-relaxed text-warning-accent">将发布到「{{ selectedAgent.name }}」（{{ selectedAgent.profile_name || selectedAgent.profile_id }}）。验证返回真实 IP 后启用；失败保留原设置。</p>
         <DialogFooter class="flex-row gap-2">
           <Button type="button" variant="outline" class="min-h-11" :disabled="busy" @click="open = false">取消</Button>
