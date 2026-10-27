@@ -62,14 +62,24 @@ class PairDevices:
         self.before_upload = None
         self.ha_applied = []
         self.vip_holder = PRIMARY
+        self.vip_holders = None
         self.unhealthy = set()
+        self.vip_unhealthy = set()
+        self.handoff_protocols = {}
+        self.handoffs = {}
+        self.handoff_calls = []
+        self.handoff_unreachable = set()
+        self.handoff_lost_reply = set()
+        self.auto_handoff = True
 
     def request(self, agent, method, path, **kwargs):
         host = agent['host']
         self.calls.append((host, method, path))
         if (method, path) == ('get', 'capabilities'):
             return {'success': True, 'service_type': 'oxidns', 'deployment_protocols': [1],
-                    'oxidns_ha_protocols': [1], 'reload_only_protocols': [1], 'config_path': 'config.yaml'}
+                    'oxidns_ha_protocols': [1],
+                    'oxidns_ha_handoff_protocols': self.handoff_protocols.get(host, [1]),
+                    'reload_only_protocols': [1], 'config_path': 'config.yaml'}
         if (method, path) == ('post', 'deployments'):
             manifest, files = archive_files(kwargs['data'])
             ident = manifest['deployment_id']
@@ -104,10 +114,44 @@ class PairDevices:
         pytest.fail(f'unexpected deployment request: {host} {method} {path}')
 
     def status(self, agent):
-        master = agent['host'] == self.vip_holder
+        host = agent['host']
+        master = host in self.vip_holders if self.vip_holders is not None else host == self.vip_holder
         return {'protocol': 1, 'managed': {'active': True, 'pending': False},
                 'runtime': {'keepalived_running': True, 'role': 'master' if master else 'backup',
-                            'vip_present': master, 'healthy': agent['host'] not in self.unhealthy}, 'error': ''}
+                            'vip_present': master, 'healthy': host not in self.unhealthy,
+                            'vip_healthy': host not in self.vip_unhealthy},
+                'handoff': deepcopy(self.handoffs.get(host)), 'error': ''}
+
+    def handoff(self, agent, method, operation_id=None):
+        host, method = agent['host'], method.lower()
+        self.calls.append((host, method, 'handoff'))
+        self.handoff_calls.append((host, method, operation_id))
+        if (host, method) in self.handoff_unreachable:
+            raise requests.Timeout('handoff request unavailable')
+        active = self.handoffs.get(host)
+        peer = SECONDARY if host == PRIMARY else PRIMARY
+        if method == 'post':
+            assert operation_id, 'handoff mutations require a durable operation identity'
+            if active and active['operation_id'] != operation_id:
+                raise ValueError('another handoff operation owns this device')
+            self.handoffs[host] = {'operation_id': operation_id, 'active': True,
+                'peer_healthy': peer not in self.unhealthy, 'yielding': peer not in self.unhealthy,
+                'created_at': '2026-10-27T05:00:00Z'}
+            if self.auto_handoff and peer not in self.unhealthy:
+                self.vip_holder = peer
+        elif method == 'delete':
+            assert operation_id, 'cleanup must target the accepted handoff identity'
+            if active and active['operation_id'] != operation_id:
+                raise ValueError('another handoff operation owns this device')
+            self.handoffs.pop(host, None)
+            if self.auto_handoff:
+                self.vip_holder = PRIMARY
+        else:
+            assert method == 'get'
+        if (host, method) in self.handoff_lost_reply:
+            self.handoff_lost_reply.remove((host, method))
+            raise requests.Timeout('handoff applied, but reply lost')
+        return self.status(agent)
 
     def preview(self, _agent, _spec):
         return {'ok': True, 'blockers': [], 'interface': 'eth0', 'cidr': '192.0.2.0/24'}
@@ -169,6 +213,8 @@ def ha_publish(tmp_path, monkeypatch):
         monkeypatch.setattr(AgentManager, f'oxidns_ha_{name}',
                             lambda _self, *args, _name=name: getattr(devices, _name)(*args))
     monkeypatch.setattr(AgentManager, 'oxidns_ha_remove', lambda _self, _agent: {'removed': True})
+    monkeypatch.setattr(AgentManager, 'oxidns_ha_handoff',
+                        lambda _self, *args, **kwargs: devices.handoff(*args, **kwargs), raising=False)
     monkeypatch.setattr('requests.sessions.Session.request',
                         lambda *_args, **_kwargs: pytest.fail('unexpected external request'))
     primary = manager.register_agent({'name': 'DNS primary', 'host': PRIMARY, 'port': 8082,

@@ -60,6 +60,10 @@ export function deploymentStatusLabel(task: AgentDeployment) {
     if (task.status === 'rolling_back') return '正在恢复发布前配置'
     if (task.status === 'unknown') return '手动回滚结果待确认'
   }
+  if (task.ha_publication?.phase === 'handoff') {
+    if (['applying', 'checking'].includes(task.status)) return '正在迁移虚拟 IP'
+    if (task.status === 'unknown') return '虚拟 IP 迁移待确认'
+  }
   return deploymentLabels[task.status] || task.status
 }
 

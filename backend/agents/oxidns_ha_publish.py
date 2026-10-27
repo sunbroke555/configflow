@@ -20,6 +20,7 @@ import uuid
 from .deployment_bundle import DeploymentBundle, _pack, deployment_content_fingerprint
 from .diagnostics import failure_text
 from . import rule_sync_store as store
+from . import oxidns_ha_handoff as handoffs
 
 FIELD = 'oxidns_ha_publication'
 TERMINAL = {'succeeded', 'failed', 'rollback_failed'}
@@ -179,7 +180,7 @@ def _reserve(manager, members, owner_id, deployment_id, *, activate, enable=None
            'children': children, 'identities': {item['id']: _identity(item) for item in members},
            'status': 'preparing', 'phase': 'preparing', 'message': '正在准备同一份主备配置与规则',
            'active_agent_id': None, 'activate': activate, 'order': [], 'enable': enable,
-           'updated_at': int(time.time())}
+           'updated_at': int(time.time()), 'handoff_protocol': 1}
     def reserve(agents):
         by_id = {item['id']: item for item in agents}
         for member in members:
@@ -289,6 +290,15 @@ def _fail(manager, job, message, *, status='failed'):
     if pending:
         job.update(status='unknown', message=message + '；已提交的设备结果仍待确认，未继续另一台')
         return _save(manager, job)
+    if job.get('handoff'):
+        job['handoff_failure'] = {'message': message, 'status': status}
+        _save(manager, job)
+        try:
+            handoffs.release(manager, job)
+            handoffs.settle_failure(manager, job)
+        except handoffs.HandoffPending as error:
+            job.update(status='unknown', phase='handoff', message=message + '；' + str(error))
+            return _save(manager, job)
     # Never rewrite a submitted child's outcome; its own transaction remains
     # authoritative and can still be reconciled or recover its automatic rollback.
     for agent_id, deployment_id in job['children'].items():
@@ -364,6 +374,9 @@ def _child_bundle(bundle, agent_id, deployment_id):
 
 
 def _step(manager, job):
+    if job.get('handoff_failure'):
+        failure = job['handoff_failure']
+        return _fail(manager, job, failure['message'], status=failure['status'])
     members = _members(manager, job)
     payload, bundle = _read_payload(manager, job)
     if bundle is None and job.get('kind') == 'rules':
@@ -387,6 +400,7 @@ def _step(manager, job):
         bundle = prepared['bundle']
         payload = _write_payload(manager, job, payload, bundle)
     _require_listener(bundle)
+    handoffs.prepare(manager, job, members, bundle)
     if not job['order']:
         job['order'] = _order(manager, job, members)
         _save(manager, job)
@@ -408,10 +422,19 @@ def _step(manager, job):
         if not state.get('submitted'):
             if state.get('status') in CHILD_TERMINAL:
                 return _fail(manager, job, state.get('message') or '主备发布已中止')
-            job.update(status='applying' if job['activate'] else 'preparing', message='正在发布备机' if index == 0 else '正在发布主机')
+            if index and job['activate']:
+                handoffs.ensure(manager, job, members)
+            job.update(active_agent_id=agent_id, phase='standby' if index == 0 else 'primary')
+            job.update(status='applying' if job['activate'] else 'preparing', message=(
+                ('正在更新未持有虚拟 IP 的设备：' if index == 0 else '正在准备原持有虚拟 IP 的设备：')
+                + (agent.get('name') or agent_id)) if job.get('handoff_required') else
+                ('正在发布备机' if index == 0 else '正在发布主机'))
             _save(manager, job)
+            # Upload/validation can outlast the last VIP probe. Stage the old
+            # holder, then verify handoff again immediately before activation.
+            activate_now = job['activate'] and not (index and job.get('handoff_required'))
             result = manager._publish_deployment(agent_id, _child_bundle(bundle, agent_id, deployment_id),
-                activate=job['activate'], config_revision=payload.get('config_revision'),
+                activate=activate_now, config_revision=payload.get('config_revision'),
                 base_url=payload.get('base_url', ''), resource_config=payload.get('resource_config'),
                 source_snapshot=payload.get('source_snapshot'))
         else:
@@ -425,6 +448,12 @@ def _step(manager, job):
                              tuple(item.get('token') for item in members.values())),
                 status='rollback_failed' if result.get('status') == 'rollback_failed' else 'failed')
         if result.get('status') == 'ready' and job['activate']:
+            if index:
+                handoffs.ensure(manager, job, members)
+            job.update(active_agent_id=agent_id, phase='standby' if index == 0 else 'primary')
+            if index and job.get('handoff_required'):
+                job['message'] = '虚拟 IP 解析已确认，正在更新原持有设备：' + (agent.get('name') or agent_id)
+            _save(manager, job)
             result = manager._activate_deployment(agent_id, deployment_id)
             if result.get('http_status') in (400, 404, 405):
                 return _fail(manager, job, result.get('message') or '主备候选激活被拒绝')
@@ -446,6 +475,7 @@ def _step(manager, job):
     for member in members.values():
         if _runtime(manager, member).get('healthy') is not True:
             return _fail(manager, job, '主备配置已应用，但 DNS 健康检查未通过，请查看设备状态')
+    handoffs.finish(manager, job, members)
     if job.get('enable'):
         job.update(phase='keepalived', status='applying', message='配置已同步，正在启用主备虚拟 IP')
         _save(manager, job)
@@ -524,6 +554,9 @@ def advance(manager, agent_id):
             return summary(job) if job else None
         try:
             job = _reconcile_recovery(manager, job) if job.get('status') == 'rollback_failed' else _step(manager, job)
+        except handoffs.HandoffPending as error:
+            job.update(status='unknown' if error.unknown else 'checking', phase='handoff', message=str(error))
+            job = _save(manager, job)
         except Exception as error:
             # A transport error while reading live health can be retried without
             # publishing the next member. Preparation errors are definite.

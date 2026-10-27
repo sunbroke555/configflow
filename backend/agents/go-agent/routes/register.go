@@ -26,6 +26,7 @@ func RegisterRoutes(mux *http.ServeMux, cfg *Config) {
 	if cfg.ServiceType == "oxidns" {
 		mux.HandleFunc("/api/oxidns-ha", AuthMiddleware(cfg, OxiDNSHAHandler(cfg)))
 		mux.HandleFunc("/api/oxidns-ha/preview", AuthMiddleware(cfg, OxiDNSHAPreviewHandler(cfg)))
+		mux.HandleFunc("/api/oxidns-ha/handoff", AuthMiddleware(cfg, OxiDNSHAHandoffHandler(cfg)))
 	}
 	for _, action := range []string{"status", "preview", "apply", "remove", "forwarding"} {
 		mux.HandleFunc("/api/linux-gateway/"+action, AuthMiddleware(cfg, LinuxGatewayHandler(cfg, action)))

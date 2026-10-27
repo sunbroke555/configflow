@@ -5,7 +5,8 @@ import type { AgentHAPublication } from '@/types/agentHAPublication'
 
 const props = defineProps<{ publication: AgentHAPublication }>()
 const phase = computed(() => ({
-  preparing: '准备两台的配置与规则', standby: '更新备机', primary: '更新主机',
+  preparing: '准备两台的配置与规则', standby: '更新未持有虚拟 IP 的设备',
+  handoff: '迁移虚拟 IP 并确认解析', primary: '更新原持有虚拟 IP 的设备',
   keepalived: '启用主备切换', done: '主备发布',
 })[props.publication.phase])
 const memberStatus = (status: string) => ({ waiting: '等待前一台完成', pending: '等待前一台完成',

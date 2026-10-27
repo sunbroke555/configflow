@@ -40,6 +40,9 @@ VIP = '192.168.79.53'
 SERVER_URL = 'http://192.168.79.30:18080'
 LOCAL_URL = 'http://127.0.0.1:19282'
 REPO = Path(__file__).resolve().parents[2]
+SCRIPT = 'scripts/tests/oxidns_ha_sync_lab.py'
+UNIT_PREFIX = 'cf-ha-sync'
+AGENT_BINARY = Path('/tmp/configflow-ha-sync-agent')
 TERMINAL = {'succeeded', 'failed', 'rolled_back', 'rollback_failed'}
 
 
@@ -153,7 +156,7 @@ def start_tunnel():
         except ProcessLookupError:
             pass
     proc = subprocess.Popen(['ssh', '-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes',
-                             '-L', '127.0.0.1:19282:10.97.0.74:18080', 'pve'], stdout=subprocess.DEVNULL,
+                             '-L', LOCAL_URL.split('://', 1)[1] + ':10.97.0.74:18080', 'pve'], stdout=subprocess.DEVNULL,
                             stderr=(ROOT / 'tunnel.log').open('ab'))
     pidfile.write_text(str(proc.pid))
     time.sleep(.5)
@@ -171,8 +174,8 @@ def prepare():
     private(ROOT / 'private.json', creds)
     stage_source()
     put(132, GROOT + '/credentials.json', json.dumps(creds))
-    guest(132, 'systemd-run', '--unit=cf-ha-sync-backend', '--property=WorkingDirectory=' + GROOT,
-          '/opt/cf-retest/venv/bin/python', GROOT + '/source/scripts/tests/oxidns_ha_sync_lab.py', 'server')
+    guest(132, 'systemd-run', '--unit=' + UNIT_PREFIX + '-backend', '--property=WorkingDirectory=' + GROOT,
+          '/opt/cf-retest/venv/bin/python', GROOT + '/source/' + SCRIPT, 'server')
     start_tunnel()
     for _ in range(30):
         try:
@@ -185,7 +188,7 @@ def prepare():
     private(ROOT / 'private.json', creds)
     api('POST', '/api/server-domain', {'new_domain': SERVER_URL})
     members = {}
-    binary = Path('/tmp/configflow-ha-sync-agent').read_bytes()
+    binary = AGENT_BINARY.read_bytes()
     for cid, initial in ((130, '198.51.100.10'), (131, '198.51.100.11')):
         name, host = GUESTS[cid]
         guest(cid, 'systemctl', 'stop', 'configflow-agent', 'oxidns', 'keepalived', check=False)
@@ -215,7 +218,7 @@ def prepare():
                   'agent_id': member['id'], 'token': member['token'], 'enable_metrics': False}
         put(cid, GROOT + '/agent.json', json.dumps(config))
         guest(cid, 'systemctl', 'start', 'oxidns')
-        guest(cid, 'systemd-run', '--unit=cf-ha-sync-agent', '--property=WorkingDirectory=' + GROOT,
+        guest(cid, 'systemd-run', '--unit=' + UNIT_PREFIX + '-agent', '--property=WorkingDirectory=' + GROOT,
               GROOT + '/configflow-agent', '-config', GROOT + '/agent.json')
     creds['members'] = members
     private(ROOT / 'private.json', creds)
@@ -257,7 +260,7 @@ def snapshot(cid):
 
 
 def dns_snapshot():
-    script = 'import sys,json; sys.path.insert(0,"/opt/cf-ha-sync/source/scripts/tests"); from oxidns_ha_sync_lab import dns_query; print(json.dumps({host:dns_query(host) for host in ["192.168.79.21","192.168.79.22","192.168.79.53"]}))'
+    script = 'import sys,json; sys.path.insert(0,' + repr(GROOT + '/source/scripts/tests') + '); from oxidns_ha_sync_lab import dns_query; print(json.dumps({host:dns_query(host) for host in ["192.168.79.21","192.168.79.22","192.168.79.53"]}))'
     return json.loads(guest(132, '/opt/cf-retest/venv/bin/python', '-c', script))
 
 
@@ -324,8 +327,8 @@ def test():
               'scope': {'containers': list(GUESTS), 'network': 'isolated cfgt VLAN91', 'vip': VIP},
               'baseline': {str(cid): snapshot(cid) for cid in (130, 131)}, 'scenarios': []}
     assert report['baseline']['130']['hashes'] != report['baseline']['131']['hashes'], 'Initial fixtures must differ'
-    guest(132, 'systemd-run', '--unit=cf-ha-sync-probe', '/opt/cf-retest/venv/bin/python',
-          GROOT + '/source/scripts/tests/oxidns_ha_sync_lab.py', 'probe')
+    guest(132, 'systemd-run', '--unit=' + UNIT_PREFIX + '-probe', '/opt/cf-retest/venv/bin/python',
+          GROOT + '/source/' + SCRIPT, 'probe')
     def record(name, started, **details):
         events = service_events(started)
         assert_serial(events)
@@ -381,7 +384,7 @@ def test():
                     if state == 'activating': break
                     time.sleep(.1)
                 else: raise AssertionError('Standby did not enter delayed startup before backend restart')
-                guest(132, 'systemctl', 'restart', 'cf-ha-sync-backend')
+                guest(132, 'systemctl', 'restart', UNIT_PREFIX + '-backend')
                 try:
                     first_code = accepted.result()[0]
                 except (OSError, urllib.error.URLError):
@@ -606,7 +609,7 @@ def main():
     elif args.command == 'probe': probe()
     elif args.command == 'prepare': prepare()
     elif args.command == 'update-source':
-        guard(); stage_source(); guest(132, 'systemctl', 'restart', 'cf-ha-sync-backend'); start_tunnel()
+        guard(); stage_source(); guest(132, 'systemctl', 'restart', UNIT_PREFIX + '-backend'); start_tunnel()
     elif args.command == 'cleanup': cleanup()
     elif args.command == 'reset': cleanup(reset=True)
     elif args.command == 'test': test()
