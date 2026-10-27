@@ -16,7 +16,7 @@ const agent = (endpoints: ReturnType<typeof endpoint>[] = []) => ({ id: 'agent-a
 const candidate = (id = 'upstream-a', eligible = true) => ({ id, label: `forward_${id} · 上游 1 · tls://dns.example`, address: `tls://${id}.dns.example`, bootstrap: ['192.0.2.53'], eligible, reason: eligible ? '' : '此上游依赖代理出站，暂不支持复用', validation: 'unverified' as const })
 function response(dns: NodeLatencyDnsConfig = system) { return { data: { success: true, dns_servers: dns.servers, dns } } as any }
 function button(label: string) {
-  const found = [...document.querySelectorAll('button')].find(item => item.textContent?.trim() === label)
+  const found = [...document.querySelectorAll('button')].find(item => (item.getAttribute('aria-label') || item.textContent?.trim()) === label)
   expect(found, label).toBeDefined()
   return found!
 }
@@ -80,7 +80,7 @@ describe('节点库三模式测速 DNS 设置', () => {
     await click('测速设置')
     expect(nodeApi.latencySettings).toHaveBeenCalledOnce()
     expect(input()).toBeNull()
-    expect(document.body.textContent).toContain('服务器或容器的系统 DNS')
+    expect(document.body.textContent).toContain('ConfigFlow 所在服务器或容器的 DNS')
     expect(document.body.textContent).toContain('全部配置空间')
     await click('自定义 DNS')
     expect(input().value).toBe('')
@@ -381,7 +381,38 @@ describe('节点库三模式测速 DNS 设置', () => {
     expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
     expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
     await click('检测 DNS')
-    expect(document.body.textContent).toContain('解析成功：93.184.215.14')
+    const result = document.querySelector('[role="status"]')!
+    expect(result.textContent).toContain('解析成功')
+    expect(result.textContent).toContain('93.184.215.14')
+    expect(result.textContent).toContain('8 ms')
+  })
+
+  it('检测返回 Fake-IP 时依据错误码提供切换建议，切换模式清除结果且不保存', async () => {
+    vi.mocked(nodeApi.checkLatencyDns).mockResolvedValueOnce({ data: { success: false, addresses: [], error_code: 'dns_fake_ip', message: '上游返回虚拟地址' } } as any)
+    await render()
+    await click('测速设置')
+    await click('检测 DNS')
+    const result = document.querySelector('[role="status"]')!
+    expect(result.textContent).toContain('返回 Fake-IP')
+    expect(result.textContent).toContain('OxiDNS 托管或自定义 DNS')
+    expect(nodeApi.checkLatencyDns).toHaveBeenCalledExactlyOnceWith(system)
+    await click('自定义 DNS')
+    expect(document.querySelector('[role="status"]')).toBeNull()
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+    expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
+  })
+
+  it('一般检测失败保留后端原因，重试成功后替换失败状态', async () => {
+    vi.mocked(nodeApi.checkLatencyDns).mockResolvedValueOnce({ data: { success: false, addresses: [], error_code: 'timeout', message: 'DNS 查询超时，请检查网络和服务状态' } } as any)
+    await render()
+    await click('测速设置')
+    await click('检测 DNS')
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('DNS 查询超时，请检查网络和服务状态')
+    expect(document.querySelector('[role="status"]')?.textContent).not.toContain('Fake-IP')
+    await click('检测 DNS')
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('93.184.215.14')
+    expect(document.querySelector('[role="status"]')?.textContent).not.toContain('DNS 查询超时')
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
   })
 
   it('取消不提交，重新打开重新读取；明确选择系统模式才恢复系统 DNS', async () => {

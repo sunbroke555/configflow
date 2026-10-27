@@ -7,7 +7,7 @@
       <div class="shrink-0 space-y-3 border-b border-border px-6 pb-4 pt-6 max-sm:px-4 max-sm:pt-4">
         <DialogHeader>
           <DialogTitle>测速设置</DialogTitle>
-          <DialogDescription>为全部配置空间的节点测速解析服务器域名。</DialogDescription>
+          <DialogDescription>适用于全部配置空间的节点测速。</DialogDescription>
         </DialogHeader>
         <Segmented v-if="loaded" v-model="mode" :options="modes" label="测速 DNS 模式" block :disabled="busy || disabled" class="[&_[data-segment]]:px-2" />
         <p v-if="error" role="alert" class="m-0 break-words text-sm text-destructive-accent">{{ error }}</p>
@@ -15,7 +15,7 @@
       <p v-if="loading" role="status" class="m-0 p-6 text-sm text-muted-foreground max-sm:p-4">正在读取测速设置…</p>
       <form v-else-if="loaded" ref="settingsForm" class="flex min-h-0 min-w-0 flex-col" @submit.prevent="save">
         <div class="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-6 py-4 max-sm:px-4">
-        <p v-if="mode === 'system'" class="m-0 text-sm leading-relaxed text-muted-foreground">使用运行测速组件的服务器或容器的系统 DNS。若该路径返回 Fake-IP，请选择其他模式。</p>
+        <p v-if="mode === 'system'" class="m-0 text-sm leading-relaxed text-muted-foreground">使用 ConfigFlow 所在服务器或容器的 DNS。</p>
         <template v-else-if="mode === 'custom'">
           <FormField label="自定义 DNS" html-for="node-latency-dns" hint="每行一个地址，需返回真实 IP。支持 IPv4[:端口]、DoH 和 DoT。" :help="optionHelp('已有可用 DNS，或希望自行管理加密 DNS 时使用。', 'DoH 使用 https://主机/路径，DoT 使用 tls://主机[:端口]。不支持账号、查询参数和片段。配置仅供节点测速使用。')" persistent-hint>
             <Textarea id="node-latency-dns" v-model="servers" class="min-h-24 font-mono text-sm" :disabled="busy || disabled" :rows="3" placeholder="192.0.2.53:15353&#10;https://dns.example/dns-query&#10;tls://dns.example" spellcheck="false" />
@@ -98,10 +98,21 @@
             <p v-else-if="agentId" role="alert" class="m-0 text-sm text-warning-accent">已保存的设备不在可用列表中，请重新选择设备或切换模式。</p>
           </template>
         </div>
-        <div v-if="mode !== 'managed' || selectedEndpoint?.status === 'ready'" class="space-y-2 border-t border-border pt-3">
-          <Button type="button" variant="outline" class="min-h-11" :disabled="busy || checking || disabled" @click="checkDns"><Loader2 v-if="checking" class="size-4 animate-spin" />{{ checking ? '正在检测 DNS…' : '检测 DNS' }}</Button>
-          <p class="m-0 text-xs text-muted-foreground">仅从测速服务器查询 example.com，不保存设置。</p>
-          <p v-if="checkResult" role="status" class="m-0 break-words text-sm" :class="checkResult.success ? 'text-success-accent' : 'text-destructive-accent'">{{ checkResult.success ? `解析成功：${checkResult.addresses.join('、')}` : checkResult.message || 'DNS 检测失败' }}<span v-if="checkResult.success && checkResult.latency_ms != null">（{{ checkResult.latency_ms }} ms）</span></p>
+        <div v-if="mode !== 'managed' || selectedEndpoint?.status === 'ready'" class="flex flex-col gap-3 border-t border-border pt-3">
+          <div class="flex min-w-0 items-center justify-between gap-3">
+            <span class="text-sm font-medium">DNS 检测</span>
+            <Button type="button" variant="outline" class="min-h-11 shrink-0" :aria-label="checking ? '正在检测 DNS…' : '检测 DNS'" :disabled="busy || checking || disabled" @click="checkDns"><Loader2 v-if="checking" class="size-4 animate-spin" />{{ checking ? '检测中…' : '检测' }}</Button>
+          </div>
+          <div v-if="checkResult" role="status" aria-label="DNS 检测结果" class="flex min-w-0 items-start gap-2">
+            <CircleCheck v-if="checkResult.success" class="mt-0.5 size-4 shrink-0 text-success-accent" aria-hidden="true" />
+            <CircleAlert v-else class="mt-0.5 size-4 shrink-0" :class="checkReturnsFakeIp ? 'text-warning-accent' : 'text-destructive-accent'" aria-hidden="true" />
+            <div class="flex min-w-0 flex-col gap-1">
+              <p class="m-0 text-sm font-medium" :class="checkResult.success ? 'text-success-accent' : checkReturnsFakeIp ? 'text-warning-accent' : 'text-destructive-accent'">{{ checkResult.success ? '解析成功' : checkReturnsFakeIp ? '返回 Fake-IP' : '检测失败' }}<span v-if="checkResult.success && checkResult.latency_ms != null" class="ml-2 text-xs font-normal text-muted-foreground">{{ checkResult.latency_ms }} ms</span></p>
+              <p v-if="checkResult.success" class="m-0 break-all font-mono text-xs leading-relaxed text-muted-foreground">{{ checkResult.addresses.join('、') }}</p>
+              <p v-else-if="checkReturnsFakeIp" class="m-0 break-words text-xs leading-relaxed text-muted-foreground">{{ mode === 'system' ? '请切换为 OxiDNS 托管或自定义 DNS，以获取真实 IP。' : mode === 'custom' ? '请检查自定义 DNS 是否返回真实 IP，或切换为 OxiDNS 托管。' : '请检查托管入口的上游是否返回真实 IP，或切换为自定义 DNS。' }}</p>
+              <p v-else class="m-0 break-words text-xs leading-relaxed text-muted-foreground">{{ checkResult.message || '未能完成 DNS 查询，请重试。' }}</p>
+            </div>
+          </div>
         </div>
         </div>
         <div class="flex shrink-0 flex-col gap-4 border-t border-border px-6 py-4 max-sm:px-4">
@@ -120,7 +131,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
-import { ChevronRight, Loader2, RefreshCw, Settings2 } from '@lucide/vue'
+import { ChevronRight, CircleAlert, CircleCheck, Loader2, RefreshCw, Settings2 } from '@lucide/vue'
 import { nodeApi, type NodeLatencyDnsCheck, type NodeLatencyDnsConfig, type NodeLatencyDnsMode, type NodeLatencyManagedAgent, type NodeLatencyManagedEndpoint } from '@/api'
 import FormField from '@/components/common/FormField.vue'
 import Segmented from '@/components/common/Segmented.vue'
@@ -148,6 +159,7 @@ const bootstrap = ref('')
 const error = ref('')
 const checking = ref(false)
 const checkResult = ref<NodeLatencyDnsCheck | null>(null)
+const checkReturnsFakeIp = computed(() => !checkResult.value?.success && checkResult.value?.error_code === 'dns_fake_ip')
 const managedLoading = ref(false)
 const managedError = ref('')
 const managedBindingError = ref('')
