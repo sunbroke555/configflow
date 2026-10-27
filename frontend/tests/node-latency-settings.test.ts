@@ -1,24 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import NodeLatencySettings from '@/components/nodes/NodeLatencySettings.vue'
-import { nodeApi } from '@/api'
-import { notify } from '@/lib/feedback'
+import { nodeApi, type NodeLatencyDnsConfig } from '@/api'
+import { confirmDanger, notify } from '@/lib/feedback'
 
-vi.mock('@/api', () => ({ nodeApi: { latencySettings: vi.fn(), saveLatencySettings: vi.fn() } }))
-vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn() } }))
+vi.mock('@/api', () => ({ nodeApi: { latencySettings: vi.fn(), saveLatencySettings: vi.fn(), checkLatencyDns: vi.fn(), latencyManagedDns: vi.fn(), createLatencyManagedDns: vi.fn(), latencyManagedDnsStatus: vi.fn(), removeLatencyManagedDns: vi.fn() } }))
+vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn() }, confirmDanger: vi.fn() }))
 let wrapper: VueWrapper | undefined
-
-function response(dns_servers: string[] = []) { return { data: { success: true, dns_servers } } as any }
+const scrollDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+const system: NodeLatencyDnsConfig = { mode: 'system', servers: [], bootstrap: [], managed: {} }
+const custom = (servers = ['192.0.2.53:15353'], bootstrap: string[] = []): NodeLatencyDnsConfig => ({ mode: 'custom', servers, bootstrap, managed: {} })
+const managed: NodeLatencyDnsConfig = { mode: 'managed', servers: [], bootstrap: [], managed: { agent_id: 'agent-a', endpoint_id: 'dns-a' } }
+const endpoint = (status = 'ready') => ({ agent_id: 'agent-a', endpoint_id: 'dns-a', endpoint: '192.0.2.2:15353', status, upstream: '192.0.2.53' })
+const agent = (endpoints: ReturnType<typeof endpoint>[] = []) => ({ id: 'agent-a', name: '测试 DNS 设备', profile_id: 'profile-a', profile_name: '实验配置', address: '192.0.2.2', eligible: true, endpoints })
+function response(dns: NodeLatencyDnsConfig = system) { return { data: { success: true, dns_servers: dns.servers, dns } } as any }
 function button(label: string) {
   const found = [...document.querySelectorAll('button')].find(item => item.textContent?.trim() === label)
   expect(found, label).toBeDefined()
   return found!
 }
 async function click(label: string) { button(label).click(); await flushPromises() }
-function input() { return document.getElementById('node-latency-dns') as HTMLTextAreaElement }
-async function enter(value: string) {
-  input().value = value
-  input().dispatchEvent(new Event('input', { bubbles: true }))
+function input(id = 'node-latency-dns') { return document.getElementById(id) as HTMLInputElement }
+async function enter(value: string, id = 'node-latency-dns') {
+  input(id).value = value
+  input(id).dispatchEvent(new Event('input', { bubbles: true }))
+  await flushPromises()
+}
+async function choose(id: string, label: string) {
+  document.getElementById(id)!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  await flushPromises()
+  const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(item => item.textContent?.includes(label))
+  expect(option, label).toBeDefined()
+  option!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   await flushPromises()
 }
 async function submit() {
@@ -30,64 +43,124 @@ async function render(disabled = false) {
   await flushPromises()
   return wrapper
 }
+async function newManagedForm() {
+  await render()
+  await click('测速设置')
+  await click('OxiDNS 托管')
+  await choose('node-latency-agent', '测试 DNS 设备')
+  await enter('192.0.2.53', 'node-latency-upstream')
+}
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
   vi.mocked(nodeApi.latencySettings).mockResolvedValue(response())
   vi.mocked(nodeApi.saveLatencySettings).mockResolvedValue(response())
+  vi.mocked(nodeApi.latencyManagedDns).mockResolvedValue({ data: { success: true, agents: [agent()] } } as any)
+  vi.mocked(nodeApi.checkLatencyDns).mockResolvedValue({ data: { success: true, addresses: ['93.184.215.14'], latency_ms: 8 } } as any)
+  vi.mocked(nodeApi.createLatencyManagedDns).mockResolvedValue({ data: { success: true, ...endpoint('preparing') } } as any)
+  vi.mocked(nodeApi.latencyManagedDnsStatus).mockResolvedValue({ data: { success: true, ...endpoint() } } as any)
 })
 afterEach(() => {
   wrapper?.unmount()
   wrapper = undefined
   document.body.innerHTML = ''
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+  if (scrollDescriptor) Object.defineProperty(Element.prototype, 'scrollIntoView', scrollDescriptor)
+  else Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
 })
 
-describe('节点库独立测速 DNS 设置', () => {
-  it('仅打开时读取持久设置，不预填公共 DNS', async () => {
+describe('节点库三模式测速 DNS 设置', () => {
+  it('打开才读取，系统模式明确实际解析位置，不预填公共 DNS', async () => {
     await render()
     expect(nodeApi.latencySettings).not.toHaveBeenCalled()
     await click('测速设置')
     expect(nodeApi.latencySettings).toHaveBeenCalledOnce()
+    expect(input()).toBeNull()
+    expect(document.body.textContent).toContain('服务器或容器的系统 DNS')
+    expect(document.body.textContent).toContain('全部配置空间')
+    await click('自定义 DNS')
     expect(input().value).toBe('')
-    expect(document.body.textContent).toContain('留空使用系统 DNS')
-    expect(document.body.textContent).toContain('仅影响节点库测速')
   })
 
-  it('加载已保存的地址，将逗号和换行输入只提交为 DNS 地址列表', async () => {
-    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(['192.0.2.1', '192.0.2.2:5353']))
+  it('旧非空 DNS 作为自定义读取；仅显式保存三模式结构', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue({ data: { success: true, dns_servers: ['192.0.2.1:15353'] } } as any)
     await render()
     await click('测速设置')
-    expect(input().value).toBe('192.0.2.1\n192.0.2.2:5353')
+    expect(input().value).toBe('192.0.2.1:15353')
     await enter(' 192.0.2.3:5353, 192.0.2.4 \n192.0.2.5\n')
     await submit()
-    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith(['192.0.2.3:5353', '192.0.2.4', '192.0.2.5'])
+    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith(custom(['192.0.2.3:5353', '192.0.2.4', '192.0.2.5']))
     expect(wrapper!.emitted('saved')).toHaveLength(1)
     expect(notify.success).toHaveBeenCalledWith('测速设置已保存')
+    expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 
-  it('取消不提交，重新打开从服务器读取而不保留未保存输入', async () => {
-    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(['192.0.2.1']))
+  it('切换三个模式只编辑草稿，不创建、删除或保存；保留自定义输入', async () => {
+    await render()
+    await click('测速设置')
+    await click('自定义 DNS')
+    await enter('192.0.2.53:15353')
+    await click('OxiDNS 托管')
+    await click('系统 DNS')
+    await click('自定义 DNS')
+    expect(input().value).toBe('192.0.2.53:15353')
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+    expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
+    expect(nodeApi.removeLatencyManagedDns).not.toHaveBeenCalled()
+  })
+
+  it('域名 DoH / DoT 需要 Bootstrap；保存加密 DNS 不发布设备配置', async () => {
+    await render()
+    await click('测速设置')
+    await click('自定义 DNS')
+    await enter('https://dns.example/dns-query\ntls://dns.example:853')
+    await submit()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Bootstrap')
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+    await enter('192.0.2.53:15353', 'node-latency-bootstrap')
+    await submit()
+    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith(custom(['https://dns.example/dns-query', 'tls://dns.example:853'], ['192.0.2.53:15353']))
+    expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
+  })
+
+  it('检测当前草稿只查询 DNS，编辑后丢弃旧检测响应', async () => {
+    let finish!: (value: any) => void
+    vi.mocked(nodeApi.checkLatencyDns).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(custom()))
+    await render()
+    await click('测速设置')
+    await click('检测 DNS')
+    expect(nodeApi.checkLatencyDns).toHaveBeenCalledExactlyOnceWith(custom())
+    await enter('192.0.2.54')
+    finish({ data: { success: true, addresses: ['93.184.215.14'] } })
+    await flushPromises()
+    expect(document.body.textContent).not.toContain('解析成功')
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+    expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
+    await click('检测 DNS')
+    expect(document.body.textContent).toContain('解析成功：93.184.215.14')
+  })
+
+  it('取消不提交，重新打开重新读取；明确选择系统模式才恢复系统 DNS', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(custom()))
     await render()
     await click('测速设置')
     await enter('192.0.2.2')
     await click('取消')
     expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
     await click('测速设置')
-    expect(nodeApi.latencySettings).toHaveBeenCalledTimes(2)
-    expect(input().value).toBe('192.0.2.1')
-  })
-
-  it('清空提交空列表以恢复系统 DNS', async () => {
-    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(['192.0.2.1']))
-    await render()
-    await click('测速设置')
-    await enter(' \n ')
+    expect(input().value).toBe('192.0.2.53:15353')
+    await click('系统 DNS')
     await submit()
-    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith([])
+    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith(system)
   })
 
-  it('保存失败保留输入与弹窗，展示后端原因并允许重试', async () => {
-    vi.mocked(nodeApi.saveLatencySettings).mockRejectedValueOnce({ response: { data: { message: 'DNS 地址无效，请填写 IPv4 或 IPv4:端口' } } })
+  it('保存失败保留输入与弹窗，并允许重试', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(custom()))
+    vi.mocked(nodeApi.saveLatencySettings).mockRejectedValueOnce({ response: { data: { message: 'DNS 地址无效' } } })
     await render()
     await click('测速设置')
     await enter('invalid-dns')
@@ -95,62 +168,149 @@ describe('节点库独立测速 DNS 设置', () => {
     expect(input().value).toBe('invalid-dns')
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('DNS 地址无效')
     expect(wrapper!.emitted('saved')).toBeUndefined()
-    expect(notify.success).not.toHaveBeenCalled()
     await enter('192.0.2.1')
     await submit()
     expect(wrapper!.emitted('saved')).toHaveLength(1)
   })
 
-  it('读取失败时不提供空表单覆盖设置，可以重新读取', async () => {
+  it('设置读取失败不提供空表单覆盖，可以重新读取', async () => {
     vi.mocked(nodeApi.latencySettings).mockRejectedValueOnce(new Error('network'))
     await render()
     await click('测速设置')
-    expect(input()).toBeNull()
+    expect(document.querySelector('form')).toBeNull()
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('读取测速设置失败')
-    vi.mocked(nodeApi.latencySettings).mockResolvedValueOnce(response(['192.0.2.1']))
     await click('重新读取')
-    expect(input().value).toBe('192.0.2.1')
+    expect(document.querySelector('form')).not.toBeNull()
   })
 
-  it('测速进行时禁用设置入口与已打开的保存操作', async () => {
-    await render(true)
-    expect(button('测速设置').disabled).toBe(true)
+  it('托管设备读取失败不妨碍切换并保存系统 DNS', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(managed))
+    vi.mocked(nodeApi.latencyManagedDns).mockRejectedValueOnce(new Error('设备离线'))
+    await render()
     await click('测速设置')
-    expect(nodeApi.latencySettings).not.toHaveBeenCalled()
-    await wrapper!.setProps({ disabled: false })
-    await click('测速设置')
-    await wrapper!.setProps({ disabled: true })
-    expect(input().disabled).toBe(true)
-    expect(button('保存').disabled).toBe(true)
+    expect(document.body.textContent).toContain('设备离线')
+    await click('系统 DNS')
     await submit()
+    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith(system)
+  })
+
+  it('托管绑定失效显示原因，但可切换自定义；success:false 不算保存成功', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue({ data: { ...response(managed).data, managed_status: { status: 'unavailable', message: '绑定的 DNS 入口已不存在' } } } as any)
+    vi.mocked(nodeApi.saveLatencySettings).mockResolvedValueOnce({ data: { success: false, message: 'DNS 配置无效' } } as any)
+    await render()
+    await click('测速设置')
+    expect(document.body.textContent).toContain('绑定的 DNS 入口已不存在')
+    await click('自定义 DNS')
+    await enter('192.0.2.53')
+    await submit()
+    expect(input().value).toBe('192.0.2.53')
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('DNS 配置无效')
+    expect(notify.success).not.toHaveBeenCalled()
+  })
+
+  it('创建展示准确设备和空间，pending 不启用，ready 后才保存绑定', async () => {
+    await newManagedForm()
+    expect(input('node-latency-listen').value).toBe('192.0.2.2')
+    expect(document.body.textContent).toContain('实验配置')
+    expect(document.body.textContent).toContain('新增上述端口的 UDP / TCP 入口')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await click('创建并启用专用 DNS')
+    expect(nodeApi.createLatencyManagedDns).toHaveBeenCalledExactlyOnceWith({ agent_id: 'agent-a', listen_address: '192.0.2.2', port: 15353, upstream: '192.0.2.53' })
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+    expect(button('正在创建并验证…').disabled).toBe(true)
+    expect(button('取消').disabled).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith(managed)
+  })
+
+  it('托管创建失败保留输入，不启用；已创建但验证失败保留状态', async () => {
+    vi.mocked(nodeApi.createLatencyManagedDns).mockRejectedValueOnce({ response: { data: { message: '端口被占用' } } })
+    await newManagedForm()
+    await click('创建并启用专用 DNS')
+    expect(input('node-latency-upstream').value).toBe('192.0.2.53')
+    expect(document.body.textContent).toContain('端口被占用')
+    vi.mocked(nodeApi.createLatencyManagedDns).mockResolvedValueOnce({ data: { success: true, ...endpoint('failed'), message: '上游返回 Fake-IP' } } as any)
+    await click('创建并启用专用 DNS')
+    expect(document.body.textContent).toContain('上游返回 Fake-IP')
+    expect(button('保存').disabled).toBe(true)
     expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
   })
 
-  it('保存中禁止重复提交和关闭，完成后发出刷新事件', async () => {
-    let finish!: (value: any) => void
-    vi.mocked(nodeApi.saveLatencySettings).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  it('ready 后保存失败可直接重试保存，不重复创建', async () => {
+    vi.mocked(nodeApi.createLatencyManagedDns).mockResolvedValueOnce({ data: { success: true, ...endpoint() } } as any)
+    vi.mocked(nodeApi.saveLatencySettings).mockRejectedValueOnce({ response: { data: { message: '保存暂时失败' } } })
+    await newManagedForm()
+    await click('创建并启用专用 DNS')
+    expect(document.body.textContent).toContain('保存暂时失败')
+    expect(document.body.textContent).toContain('可用')
+    await submit()
+    expect(nodeApi.createLatencyManagedDns).toHaveBeenCalledOnce()
+    expect(nodeApi.saveLatencySettings).toHaveBeenCalledTimes(2)
+  })
+
+  it('现有 pending 入口不能保存，刷新到 ready 后仅保存，不发布', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(managed))
+    vi.mocked(nodeApi.latencyManagedDns).mockResolvedValue({ data: { success: true, agents: [agent([endpoint('publishing')])] } } as any)
     await render()
     await click('测速设置')
-    await enter('192.0.2.1')
+    expect(button('保存').disabled).toBe(true)
+    await submit()
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+    await click('刷新状态')
+    expect(button('保存').disabled).toBe(false)
+    await submit()
+    expect(nodeApi.saveLatencySettings).toHaveBeenCalledExactlyOnceWith(managed)
+    expect(nodeApi.createLatencyManagedDns).not.toHaveBeenCalled()
+  })
+
+  it('显式移除入口需确认；取消确认不发布', async () => {
+    vi.mocked(nodeApi.latencySettings).mockResolvedValue(response(managed))
+    vi.mocked(nodeApi.latencyManagedDns).mockResolvedValue({ data: { success: true, agents: [agent([endpoint()])] } } as any)
+    vi.mocked(confirmDanger).mockResolvedValue(false)
+    await render()
+    await click('测速设置')
+    await click('移除入口')
+    expect(confirmDanger).toHaveBeenCalledOnce()
+    expect(nodeApi.removeLatencyManagedDns).not.toHaveBeenCalled()
+    vi.mocked(confirmDanger).mockResolvedValue(true)
+    vi.mocked(nodeApi.removeLatencyManagedDns).mockRejectedValue({ response: { data: { message: '入口仍被测速设置引用' } } })
+    await click('移除入口')
+    expect(nodeApi.removeLatencyManagedDns).toHaveBeenCalledExactlyOnceWith('agent-a', 'dns-a')
+    expect(document.body.textContent).toContain('入口仍被测速设置引用')
+  })
+
+  it('测速禁用设置入口和已打开保存；保存中禁止重复提交和关闭', async () => {
+    await render(true)
+    expect(button('测速设置').disabled).toBe(true)
+    await wrapper!.setProps({ disabled: false })
+    await click('测速设置')
+    await wrapper!.setProps({ disabled: true })
+    expect(button('保存').disabled).toBe(true)
+    await submit()
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
+    await wrapper!.setProps({ disabled: false })
+    let finish!: (value: any) => void
+    vi.mocked(nodeApi.saveLatencySettings).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
     await submit()
     expect(button('正在保存…').disabled).toBe(true)
     expect(button('取消').disabled).toBe(true)
     expect(document.querySelector('[data-slot="dialog-close"]')).toBeNull()
     await submit()
     expect(nodeApi.saveLatencySettings).toHaveBeenCalledOnce()
-    finish(response(['192.0.2.1']))
+    finish(response())
     await flushPromises()
     expect(wrapper!.emitted('saved')).toHaveLength(1)
   })
 
-  it('不将 success:false 当作保存成功', async () => {
-    vi.mocked(nodeApi.saveLatencySettings).mockResolvedValueOnce({ data: { success: false } } as any)
-    await render()
-    await click('测速设置')
-    await enter('192.0.2.1')
-    await submit()
-    expect(input().value).toBe('192.0.2.1')
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('保存测速设置失败')
-    expect(wrapper!.emitted('saved')).toBeUndefined()
+  it('卸载后不再轮询或把创建结果保存为当前 DNS', async () => {
+    await newManagedForm()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await click('创建并启用专用 DNS')
+    wrapper!.unmount()
+    wrapper = undefined
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(nodeApi.latencyManagedDnsStatus).not.toHaveBeenCalled()
+    expect(nodeApi.saveLatencySettings).not.toHaveBeenCalled()
   })
 })
