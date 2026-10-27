@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import type { Component } from 'vue'
+import { defineComponent, h, type Component } from 'vue'
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import Rules from '@/views/Rules.vue'
 import RuleLibrary from '@/views/RuleLibrary.vue'
 import RuleDnsField from '@/components/rules/RuleDnsField.vue'
@@ -133,6 +134,115 @@ function expectReferenceOnly(payload: unknown) {
     expect(payload).not.toHaveProperty(field)
   }
 }
+
+async function renderRuleRoutes(path = '/rules') {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/rules', component: Rules }, { path: '/rule-library', component: RuleLibrary }]
+  })
+  await router.push(path)
+  await router.isReady()
+  const wrapper = mount(defineComponent({ setup: () => () => h(RouterView) }), {
+    attachTo: document.body,
+    global: { plugins: [router] }
+  })
+  wrappers.push(wrapper)
+  await flushPromises()
+  return { wrapper, router }
+}
+
+describe('rule library navigation', () => {
+  it.each([1024, 375])('opens the exact shared source from the folder link at %i px', async width => {
+    const previousWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+    network.state.library.push({ ...network.state.library[0], id: 'library-two' })
+    network.state.rules[0]!.library_rule_id = 'library-two'
+    try {
+      vi.mocked(window.matchMedia).mockImplementation((query: string) => ({
+        matches: query === '(max-width: 900px)' && width <= 900, media: query, onchange: null,
+        addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn()
+      }))
+      const { wrapper, router } = await renderRuleRoutes()
+      if (width < 900) await wrapper.get('[aria-label="卡片视图"]').trigger('click')
+      const link = wrapper.get('a[aria-label="在规则库中查看 Shared domains"]')
+      expect(link.attributes('href')).toBe('/rule-library?rule=library-two')
+      await link.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.query.rule).toBe('library-two')
+      const target = wrapper.get('[data-id="library-two"]')
+      expect(document.activeElement).toBe(target.element)
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+      expect(target.attributes('data-highlighted')).toBe('true')
+      expect(target.element.tagName).toBe(width < 900 ? 'DIV' : 'TR')
+      expect(wrapper.get('[data-id="library-one"]').attributes('data-highlighted')).toBeUndefined()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(network.post).not.toHaveBeenCalled()
+      expect(network.put).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousWidth })
+    }
+  })
+
+  it.each(['list', 'card'])('disables folder navigation while reordering in the %s view', async view => {
+    network.state.rules.push({ ...network.state.rules[0], id: 'ruleset-two', policy: 'REJECT', order: 1 })
+    const { wrapper, router } = await renderRuleRoutes()
+    if (view === 'card') await wrapper.get('[aria-label="卡片视图"]').trigger('click')
+    await menuAction('调整顺序')
+    expect(wrapper.find('a[href^="/rule-library"]').exists()).toBe(false)
+    expect(router.currentRoute.value.path).toBe('/rules')
+    await clickText('取消')
+    expect(wrapper.find('a[href^="/rule-library"]').exists()).toBe(true)
+  })
+
+  it('waits for the shared sources before resolving a direct link', async () => {
+    let resolveLibrary!: (value: { data: Record<string, unknown>[] }) => void
+    network.get.mockImplementationOnce(() => new Promise(resolve => { resolveLibrary = resolve }))
+    const warning = vi.spyOn(notify, 'warning').mockImplementation(() => 0)
+    const { wrapper } = await renderRuleRoutes('/rule-library?rule=library-one')
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    expect(warning).not.toHaveBeenCalled()
+    resolveLibrary({ data: structuredClone(network.state.library) })
+    await flushPromises()
+    expect(document.activeElement).toBe(wrapper.get('[data-id="library-one"]').element)
+    expect(warning).not.toHaveBeenCalled()
+  })
+
+  it('reveals a new target hidden by filters without changing bulk selection', async () => {
+    network.state.library.push({ ...network.state.library[0], id: 'library-two', name: 'Other source', behavior: 'ipcidr' })
+    const { wrapper, router } = await renderRuleRoutes('/rule-library?rule=library-one')
+    await wrapper.get('[aria-label="选择 Shared domains"]').trigger('click')
+    await wrapper.get('input[placeholder="搜索名称、地址或内容…"]').setValue('Shared')
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'domain')
+    await flushPromises()
+    expect(wrapper.find('[data-id="library-two"]').exists()).toBe(false)
+    await router.push('/rule-library?rule=library-two')
+    await flushPromises()
+    expect(document.activeElement).toBe(wrapper.get('[data-id="library-two"]').element)
+    expect(wrapper.get('[aria-label="选择 Shared domains"]').attributes('data-state')).toBe('checked')
+    expect(wrapper.get('[aria-label="选择 Other source"]').attributes('data-state')).toBe('unchecked')
+    await router.push('/rule-library')
+    await flushPromises()
+    expect(wrapper.get('[data-id="library-two"]').attributes('data-highlighted')).toBeUndefined()
+  })
+
+  it('reports a missing target after loading without selecting a different source', async () => {
+    const warning = vi.spyOn(notify, 'warning').mockImplementation(() => 0)
+    const { wrapper } = await renderRuleRoutes('/rule-library?rule=deleted-rule')
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-id="library-one"]').attributes('data-highlighted')).toBeUndefined()
+  })
+
+  it('reports a load failure without claiming the target is missing', async () => {
+    network.get.mockRejectedValueOnce(new Error('offline'))
+    const warning = vi.spyOn(notify, 'warning').mockImplementation(() => 0)
+    const error = vi.spyOn(notify, 'error').mockImplementation(() => 0)
+    await renderRuleRoutes('/rule-library?rule=library-one')
+    expect(error).toHaveBeenCalledWith('加载规则库失败')
+    expect(warning).not.toHaveBeenCalled()
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+  })
+})
 
 describe('profile rule references', () => {
   it('renames a whole mixed group with IDs and a label only, never stale rule fields', async () => {
