@@ -44,12 +44,8 @@ function identityChanged(value: boolean | 'indeterminate') {
       <FormField label="Agent 端口" :html-for="`${prefix}-port`">
         <Input :id="`${prefix}-port`" v-model.number="host.oxidns_port" class="font-mono" type="number" min="1024" max="65535" />
       </FormField>
-      <FormField v-if="host.mode === 'new'" label="这台主机上的数据保存目录" :html-for="`${prefix}-data`" persistent-hint :hint="`填写运行 Docker 的这台主机上的完整文件夹路径（以 / 开头）。这里长期保存 Agent 身份、OxiDNS 配置和规则、HA 状态；更新或重建容器时请保留并复用此目录。
-群晖示例：如果 docker 共享文件夹位于 volume1，可填 /volume1/docker/oxidns-a；如果位于 volume2，就改为 /volume2/docker/oxidns-a。
-普通 Linux 示例：/opt/configflow-oxidns。两台主机分别填写各自的目录。
-目标文件夹可以尚不存在，安装脚本会创建；请先确认上级存储卷或共享文件夹真实可用，并有写入权限。
-不要填写可能被清理的 /tmp，也不要照抄容器内部看到的 /data 等路径；需要填写对应的宿主机文件夹。`" class="sm:col-span-2">
-        <Input :id="`${prefix}-data`" v-model="host.data_dir" class="font-mono" placeholder="例如：/volume1/docker/oxidns-a 或 /opt/configflow-oxidns" />
+      <FormField v-if="host.mode === 'new'" label="主机数据目录" :html-for="`${prefix}-data`" persistent-hint hint="填写这台主机上保存配置和规则的文件夹，重建容器时保留。不要填 /tmp 或容器内路径。" class="sm:col-span-2">
+        <Input :id="`${prefix}-data`" v-model="host.data_dir" class="font-mono" placeholder="例如：/volume1/docker/oxidns-a" />
       </FormField>
       <template v-else>
         <FormField v-for="mount in (['agent_mount', 'core_mount'] as const)" :key="mount" :label="mount === 'agent_mount' ? '原 Agent 身份挂载' : '原 OxiDNS 数据挂载'" :html-for="`${prefix}-${mount}`" class="sm:col-span-2">
@@ -70,12 +66,11 @@ function identityChanged(value: boolean | 'indeterminate') {
     </div>
     <div class="flex flex-col gap-3 border-t border-border pt-4">
       <label :for="`${prefix}-create-id`" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px]">
-        <Checkbox :id="`${prefix}-create-id`" :model-value="host.create_host_identity" @update:model-value="identityChanged" />这台宿主机缺少稳定身份文件，需要创建
+        <Checkbox :id="`${prefix}-create-id`" :model-value="host.create_host_identity" @update:model-value="identityChanged" />主机没有身份文件，安装时创建
       </label>
-      <FormField :label="host.create_host_identity ? '新身份文件的持久绝对路径' : '现有宿主机身份文件'" :html-for="`${prefix}-identity`" persistent-hint :hint="host.create_host_identity ? '命令只在文件不存在时创建一次 UUID，不覆盖已有文件。同一宿主机的所有 HA 容器复用它，不复制给对端。' : '先检查 /etc/machine-id，再检查 /var/lib/dbus/machine-id。使用宿主机上的文件，不是容器内新生成的身份。'">
+      <FormField :label="host.create_host_identity ? '新身份文件保存路径' : '主机身份文件'" :html-for="`${prefix}-identity`" persistent-hint :hint="host.create_host_identity ? '在主机上创建后只读挂载到容器。同一主机长期复用，两台主机分别创建。' : '用于区分两台主机，通常填 /etc/machine-id；安装命令会将它只读挂载到容器。'">
         <Input :id="`${prefix}-identity`" v-model="host.ha_host_id_path" class="font-mono" :placeholder="host.create_host_identity ? '例如：/volume1/docker/configflow-host-id' : '/etc/machine-id'" />
       </FormField>
-      <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">宿主身份用于排除把两台容器放在同一主机的情况。内容需为单行 16–128 字节；创建命令使用 UUID 和私有文件权限。</p>
     </div>
   </div>
 </template>

@@ -168,7 +168,7 @@ describe('Docker HA installation guide', () => {
     wrapper.getComponent(Checkbox).vm.$emit('update:modelValue', true)
     await flushPromises()
     expect((wrapper.get('#docker-ha-host-1-identity').element as HTMLInputElement).value).toBe('')
-    expect(wrapper.text()).toContain('不复制给对端')
+    expect(wrapper.text()).toContain('两台主机分别创建')
     await wrapper.get('#docker-ha-host-1-identity').setValue('/volume1/docker/host-id')
     vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: { ...result, identity_command: 'create-id-once' } } as any)
     await click(wrapper, '4. 执行安装')
