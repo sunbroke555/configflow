@@ -109,6 +109,12 @@ def call(manager, agent_id, method, paths=None):
             or any(not isinstance(path, str) or not path for path in paths))):
         raise _fail('INVALID_REQUEST', 400)
     agent = _agent(manager, agent_id)
+    if (agent.get('oxidns_ha') or {}).get('enabled') is True:
+        from .oxidns_ha_publish import rules
+        try:
+            return rules(manager, agent_id, method)
+        except ValueError as error:
+            raise MonitorError('SERVICE_BUSY', 409, str(error)) from None
     if paths is not None and not supports_paths(agent):
         raise _fail('UPGRADE_REQUIRED', 409)
     payload = json.dumps({'paths': paths}) if paths is not None else '{}'

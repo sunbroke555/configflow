@@ -127,6 +127,7 @@ export interface Agent {
   dns_follow_state?: import('./agentDNSFollow').AgentDNSFollowState | null
   oxidns_ha?: import('./agentDNSHA').AgentDNSHAConfig | null
   oxidns_ha_state?: import('./agentDNSHA').AgentDNSHAState | null
+  oxidns_ha_publication?: import('./agentHAPublication').AgentHAPublication | null
   created_at?: string
   updated_at?: string
   cpu?: number

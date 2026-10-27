@@ -239,7 +239,7 @@ import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
-import { submitAgentRequests } from '@/lib/agentRequests'
+import { submitAgentRequests, uniquePublicationTargets } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { consumeAction } from '@/lib/actions'
 import { notify } from '@/lib/feedback'
@@ -499,7 +499,7 @@ const pushOne = async (agent: { id: string; name: string }): Promise<PushOutcome
 }
 
 const pushToAgents = async () => {
-  const targets = pushTargets.value.filter(a => !deploymentBusy(a.id))
+  const targets = uniquePublicationTargets(pushTargets.value.filter(a => !deploymentBusy(a.id)))
   if (!targets.length || pushing.value) return
   pushing.value = true
   try {

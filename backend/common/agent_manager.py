@@ -21,4 +21,6 @@ def init_agent_manager():
     _agent_manager = AgentManager(get_repository())
     from backend.agents.dns_follow import start_loop
     start_loop(_agent_manager)
+    from backend.agents.oxidns_ha_publish import start_loop as start_ha_publications
+    start_ha_publications(_agent_manager)
     return _agent_manager

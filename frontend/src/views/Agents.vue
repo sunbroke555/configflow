@@ -929,7 +929,7 @@ import AgentUpgradeStatus from '@/components/agents/AgentUpgradeStatus.vue'
 import AgentGatewayForwarding from '@/components/agents/AgentGatewayForwarding.vue'
 import OxiDNSRuleUpdate from '@/components/agents/OxiDNSRuleUpdate.vue'
 import AgentRuleSync from '@/components/agents/AgentRuleSync.vue'
-import { submitAgentRequests } from '@/lib/agentRequests'
+import { submitAgentRequests, uniquePublicationTargets } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { upgradeLabels, useAgentUpgrades } from '@/composables/useAgentUpgrades'
 import { useAgentGatewayForwarding } from '@/composables/useAgentGatewayForwarding'
@@ -2333,14 +2333,14 @@ const pushAll = async () => {
   const online = agents.value.filter(a => a.status === 'online' && !deploymentBusy(a.id))
   if (!online.length || pushingAll.value) return
   pushingAll.value = true
-  const results = await submitAgentRequests(online, agent => pushOne(agent, true))
+  const results = await submitAgentRequests(uniquePublicationTargets(online), agent => pushOne(agent, true))
   pushingAll.value = false
   const sent = results.filter(r => r === 'submitted' || r === 'done').length
   const failed = results.filter(r => r === 'failed').length
   const skipped = agents.value.length - online.length
   const tail = `${failed ? ` · ${failed} 台失败` : ''}${skipped ? ` · ${skipped} 台离线或发布中跳过` : ''}`
-  if (failed) notify.warning(`已向 ${sent} 台 Agent 提交推送${tail}`)
-  else notify.success(`已向 ${sent} 台 Agent 提交推送${tail}`)
+  if (failed) notify.warning(`已提交 ${sent} 项发布${tail}`)
+  else notify.success(`已提交 ${sent} 项发布${tail}`)
   void loadAgents()
 }
 

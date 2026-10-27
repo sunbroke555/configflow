@@ -37,9 +37,11 @@ export interface AgentDeployment {
   retrying?: boolean
   dns_checks?: AgentDNSCheck[]
   dns_checked_at?: string
+  ha_publication?: import('@/types/agentHAPublication').AgentHAPublication
 }
 
 export const deploymentLabels: Record<string, string> = {
+  applying: '主备发布中', waiting: '等待前一台完成',
   preparing: '准备文件', uploading: '上传中', receiving: '接收中',
   verifying: '校验中', ready: '已校验，待激活', stopping: '停止服务',
   backing_up: '备份中', replacing: '替换中', reloading: '热重载', starting: '启动服务',

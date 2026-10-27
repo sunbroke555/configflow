@@ -17,6 +17,7 @@ export interface AgentDNSHAState {
   updated_at?: number
   /** 首次开启失败且回滚未完成时才有（此时没有 oxidns_ha）：停用会清理这些 Agent 上的残留配置 */
   members?: string[]
+  publication?: import('./agentHAPublication').AgentHAPublication
 }
 
 /** 开启请求；省略 vrid 时由后端按虚拟 IP 末位派生 */
@@ -52,6 +53,7 @@ export interface AgentDNSHAStatus {
   state?: AgentDNSHAState | null
   members?: AgentDNSHAMember[]
   health?: AgentDNSHAHealth
+  publication?: import('./agentHAPublication').AgentHAPublication
   /** 仅开启接口返回：需要用户自行确认的事项（如无法确认两台转发到同一个 mihomo） */
   warnings?: string[]
   /** 仅开启接口返回：DHCP DNS 指向本组、需要重新发布的路由器 */

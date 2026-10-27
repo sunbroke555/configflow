@@ -1,0 +1,27 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { deploymentStatusLabel } from '@/composables/useAgentDeployments'
+import type { AgentHAPublication } from '@/types/agentHAPublication'
+
+const props = defineProps<{ publication: AgentHAPublication }>()
+const phase = computed(() => ({
+  preparing: '准备两台的配置与规则', standby: '更新备机', primary: '更新主机',
+  keepalived: '启用主备切换', done: '主备发布',
+})[props.publication.phase])
+const memberStatus = (status: string) => ({ waiting: '等待前一台完成', pending: '等待前一台完成',
+  succeeded: '发布成功', skipped: '未执行', blocked: '未执行',
+} as Record<string, string>)[status] || deploymentStatusLabel({ deployment_id: '', status })
+</script>
+
+<template>
+  <div class="min-w-0 space-y-1 text-xs leading-relaxed" role="status" aria-live="polite" data-ha-publication>
+    <p class="m-0 break-words text-foreground">{{ publication.message || phase }}</p>
+    <ol class="m-0 list-inside list-decimal space-y-1 p-0 text-muted-foreground">
+      <li v-for="member in publication.members" :key="member.agent_id" class="break-words"
+        :class="{ 'text-primary-accent': member.agent_id === publication.active_agent_id,
+          'text-destructive-accent': ['failed', 'rolled_back', 'rollback_failed'].includes(member.status) }">
+        {{ member.name }}：{{ memberStatus(member.status) }}
+      </li>
+    </ol>
+  </div>
+</template>

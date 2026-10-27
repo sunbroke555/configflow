@@ -165,9 +165,9 @@ def _changed_rule_paths(baseline, source):
     return sorted({relative_path(item['local_path']) for item in new} - unchanged) or None
 
 
-def prepare_candidate(agent, source, baseline, settings, deployment_id):
+def prepare_candidate(agent, source, baseline, settings, deployment_id, *, force_refresh=False):
     """Generate rule artifacts while pinning every non-rule delivery byte."""
-    from .deployment_bundle import build_deployment_bundle, retarget_config_path, _pack
+    from .deployment_bundle import build_deployment_bundle, retarget_config_path, relative_path, _pack
     from .rule_sync_projection import isolate_rule_bundle
     base_bundle = baseline['bundle']
     previous = store.bundle_files(base_bundle)
@@ -184,9 +184,10 @@ def prepare_candidate(agent, source, baseline, settings, deployment_id):
         content = generate_oxidns_config(source, base_url=base_url)
         downloads = get_oxidns_ruleset_downloads(source, base_url=base_url)
     reusable = (_reusable_rule_paths(service, previous, base_bundle.manifest['config_path'], baseline,
-                                     source, content, downloads, base_url) if settings['library'] else set())
+                                     source, content, downloads, base_url) if settings['library'] and not force_refresh else set())
+    forced_paths = {relative_path(item['local_path']) for item in downloads} if force_refresh else set()
     pinned = [{'path': path, 'content': value, 'role': role} for path, (value, role) in previous.items()
-              if role != 'config' and (role != 'rule' or not settings['library'] or path in reusable
+              if role != 'config' and path not in forced_paths and (role != 'rule' or not settings['library'] or path in reusable
                     or (service == 'oxidns' and not path.startswith('rules/rule_')))]
     local_dns_watchdog = True
     if service == 'oxidns':
@@ -274,6 +275,16 @@ class RuleSyncWorker:
         agent = next((item for item in self.manager.get_all_agents() if item['id'] == agent_id), None)
         if agent is None or agent.get('service_type') not in ('mihomo', 'oxidns'):
             return
+        from . import oxidns_ha_publish as publications
+        if publications.active(agent):
+            publications.advance(self.manager, agent_id)
+            return
+        members = publications.pair(self.manager, agent_id) if agent.get('service_type') == 'oxidns' else None
+        if members:
+            leaders = sorted((item for item in members if any(settings_for(item).values())),
+                             key=lambda item: ((item.get('oxidns_ha') or {}).get('role') != 'primary', item['id']))
+            if leaders and leaders[0]['id'] != agent_id:
+                return
         settings = settings_for(agent)
         if not any(settings.values()):
             return
@@ -293,11 +304,12 @@ class RuleSyncWorker:
             self._state(agent_id, 'blocked', f'请先将 Agent 升级到 {MIN_AGENT_VERSION} 或更新版本')
             return
         task = agent.get('latest_deployment') or {}
-        if task and task.get('status') not in TERMINAL:
+        if task and (task.get('status') not in TERMINAL or task.get('ha_publication')):
             task = self.manager.get_deployment(agent_id, task['deployment_id'])
-            self._state(agent_id, 'running' if old_state.get('deployment_id') == task.get('deployment_id') else 'pending',
-                        '等待配置发布完成，再检查规则变化', deployment_id=old_state.get('deployment_id'))
-            return
+            if task.get('status') not in TERMINAL:
+                self._state(agent_id, 'running' if old_state.get('deployment_id') == task.get('deployment_id') else 'pending',
+                            '等待配置发布完成，再检查规则变化', deployment_id=old_state.get('deployment_id'))
+                return
         if old_state.get('deployment_id') == task.get('deployment_id') and task:
             if task.get('status') != 'succeeded':
                 self._state(agent_id, 'failed', '规则热加载未完成，请查看设备发布状态；将稍后重试',
@@ -381,6 +393,8 @@ class RuleSyncWorker:
             self._publish(agent, settings, baseline, source, key)
 
     def _refresh(self, agent, settings, baseline, source, key):
+        if agent.get('service_type') == 'oxidns' and (agent.get('oxidns_ha') or {}).get('enabled') is True:
+            return self._publish(agent, settings, baseline, source, key)
         agent_id = agent['id']
         if not _unchanged(self.manager, agent, settings):
             return

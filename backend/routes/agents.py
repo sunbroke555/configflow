@@ -140,6 +140,9 @@ def _supports_self_restart(agent_version: str) -> bool:
 def _public_agent(agent):
     """Hide credentials and private deployment comparison metadata."""
     public = {key: value for key, value in agent.items() if key not in ('token', 'applied_content', 'dns_follow_job')}
+    if public.get('oxidns_ha_publication'):
+        from backend.agents.oxidns_ha_publish import summary
+        public['oxidns_ha_publication'] = summary(public['oxidns_ha_publication'])
     if 'deployments' in public:
         public['deployments'] = {key: _public_deployment(value)
                                  for key, value in public['deployments'].items()}
@@ -187,12 +190,15 @@ def agent_oxidns_ha(agent_id):
     manager = get_agent_manager()
     try:
         if request.method == 'PUT':
-            result = oxidns_ha.configure(manager, agent_id, request.get_json(silent=True))
+            result = oxidns_ha.configure(manager, agent_id, request.get_json(silent=True),
+                                         base_url=request.host_url.rstrip('/'))
         elif request.method == 'DELETE':
             result = oxidns_ha.disable(manager, agent_id, force=request.args.get('force', '').lower() in ('1', 'true'))
         else:
             result = oxidns_ha.status(manager, agent_id)
-        return jsonify(result)
+        publication = result.get('publication') or {}
+        code = 202 if request.method == 'PUT' and publication.get('status') not in ('succeeded', 'failed', 'rollback_failed') else 200
+        return jsonify(result), code
     except ValueError as error:
         secrets = tuple(agent.get('token') for agent in manager.get_all_agents())
         body = {'success': False, 'message': failure_text(str(error), secrets)}
@@ -202,6 +208,9 @@ def agent_oxidns_ha(agent_id):
 
 
 def _public_deployment(record):
+    if record.get('ha_publication'):
+        from backend.agents.oxidns_ha_publish import _aggregate
+        record = _aggregate(record, record['ha_publication'])
     return public_deployment_messages({key: value for key, value in record.items()
                                       if key not in ('prepared_content', 'oxidns_validation_receipt')})
 

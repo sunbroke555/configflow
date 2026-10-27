@@ -310,6 +310,7 @@ import { createDeploymentId, deploymentNeedsNotice, useAgentDeployments, type Ag
 import { oxidnsMonitorPath } from '@/composables/useOxiDNSDevices'
 import { choose, confirm, confirmDanger, notify } from '@/lib/feedback'
 import { normalizeClientRange } from '@/lib/oxidnsClientRange'
+import { uniquePublicationTargets } from '@/lib/agentRequests'
 import { usePageReloadGuard } from '@/lib/pageReloadGuard'
 import { getActiveProfileId } from '@/profileContext'
 import { getAuthSessionGeneration, getAuthToken } from '@/authSession'
@@ -938,7 +939,7 @@ async function publish() {
     { title: '发布 DNS 策略', confirmText: '发布' })) return
   publishing.value = true
   try {
-    for (const agent of targets) {
+    for (const agent of uniquePublicationTargets(targets)) {
       if (disposed) return
       delete rejected[agent.id]
       const deploymentId = createDeploymentId()

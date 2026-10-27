@@ -10,6 +10,8 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import FormField from '@/components/common/FormField.vue'
 import AgentStatusRow from './AgentStatusRow.vue'
+import AgentHAPublication from './AgentHAPublication.vue'
+import { haPublicationFinished } from '@/types/agentHAPublication'
 import type { Agent } from '@/types'
 import { isDNSHAEnabled, type AgentDNSHAInput, type AgentDNSHAMember, type AgentDNSHARemoveResult, type AgentDNSHAStatus } from '@/types/agentDNSHA'
 
@@ -17,7 +19,7 @@ const props = defineProps<{ agent: Agent; agents: Agent[]; blocked?: boolean }>(
 const emit = defineEmits<{ changed: [] }>()
 
 const enabled = computed(() => isDNSHAEnabled(props.agent.oxidns_ha))
-const config = computed(() => enabled.value ? props.agent.oxidns_ha! : null)
+const config = computed(() => status.value?.config || (enabled.value ? props.agent.oxidns_ha! : null))
 const haState = computed(() => props.agent.oxidns_ha_state || null)
 // 首次开启失败且设备上的回滚未完成：记录里只有失败状态，停用用来清理残留配置。
 const leftover = computed(() => !enabled.value && haState.value?.status === 'failed')
@@ -27,18 +29,25 @@ const peerAgent = computed(() => config.value ? props.agents.find(item => item.i
 const status = ref<AgentDNSHAStatus | null>(null)
 const statusLoading = ref(false)
 const statusError = ref('')
+const publication = computed(() => status.value?.publication || props.agent.oxidns_ha_publication)
+const publishing = computed(() => !!publication.value && !haPublicationFinished(publication.value.status))
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+let enablePublication = ''
+const enableUnknown = ref(false)
 const signature = computed(() => {
-  if (!config.value) return ''
-  const value = config.value
+  const task = props.agent.oxidns_ha_publication
+  const value = enabled.value ? props.agent.oxidns_ha! : null
+  if (!value) return task ? `${task.id}|${task.status}` : ''
   return [props.agent.id, value.group_id, value.peer_id, value.vip, value.vrid, value.role,
-    props.agent.status, peerAgent.value?.status || '', haState.value?.status || '', haState.value?.updated_at || ''].join('|')
+    props.agent.status, peerAgent.value?.status || '', haState.value?.status || '', haState.value?.updated_at || '', task?.id || '', task?.status || ''].join('|')
 })
 let generation = 0
 let disposed = false
-onUnmounted(() => { disposed = true; generation++ })
+onUnmounted(() => { disposed = true; generation++; clearTimeout(pollTimer) })
 const errorMessage = (failure: any) => failure?.response?.data?.message || failure?.response?.data?.error || failure?.message || '操作失败，请重试。'
 
 async function readStatus() {
+  clearTimeout(pollTimer)
   const current = ++generation
   statusLoading.value = true
   try {
@@ -47,15 +56,34 @@ async function readStatus() {
     if (data?.success === false) throw new Error(data.message || '无法读取 DNS 高可用状态。')
     status.value = data
     statusError.value = ''
+    if (data.publication && enableUnknown.value) {
+      enablePublication = data.publication.id
+      enableUnknown.value = false
+    }
+    if (enableUnknown.value && !data.publication) {
+      enableUnknown.value = false
+      error.value = '服务端未记录本次同步任务，请核对状态后重试。'
+      notify.error('无法确认开启结果', error.value)
+    }
+    if (data.publication && data.publication.id === enablePublication && haPublicationFinished(data.publication.status)) {
+      enablePublication = ''
+      emit('changed')
+      if (data.publication.status === 'succeeded' && data.config) enabledNotice(data)
+      else notify.error('DNS 高可用未开启完成', data.publication.message || '主备同步失败，请查看发布记录。')
+    }
   } catch (failure) {
     // 读取失败保留上次结果，只在展开处说明。
     if (!disposed && current === generation) statusError.value = errorMessage(failure)
   } finally {
     if (!disposed && current === generation) statusLoading.value = false
+    if (!disposed && current === generation && (publishing.value || enableUnknown.value)) {
+      pollTimer = setTimeout(() => { void readStatus() }, 2000)
+    }
   }
 }
 watch(signature, next => {
   if (next) { void readStatus(); return }
+  if (publishing.value || enableUnknown.value) return
   generation++
   status.value = null
   statusError.value = ''
@@ -124,7 +152,7 @@ const canForce = ref(false)
 const peer = ref('')
 const vip = ref('')
 const vrid = ref('')
-const busy = computed(() => !!action.value || !!props.blocked)
+const busy = computed(() => !!action.value || !!props.blocked || publishing.value || enableUnknown.value)
 const candidates = computed(() => props.agents.filter(item => item.id !== props.agent.id
   && item.service_type === 'oxidns'
   && (item.profile_id || '') === (props.agent.profile_id || '')
@@ -163,7 +191,7 @@ async function enable() {
   const peerAgentValue = selectedPeer.value!
   const address = vip.value.trim()
   const accepted = await confirm(
-    `将在 ${props.agent.name}（主机）和 ${peerAgentValue.name}（备机）上写入 keepalived 配置并启动服务，两台共用虚拟 IP ${address}。完成后需到上游路由页重新发布 DHCP DNS 与 DNS 劫持。`,
+    `将把当前配置空间已保存的 OxiDNS 配置与规则同步到 ${peerAgentValue.name}（备机）和 ${props.agent.name}（主机），备机发布并通过检查后再更新主机。两台成功后启用虚拟 IP ${address}；后续发布会按同样顺序更新两台。完成后需到上游路由页重新发布 DHCP DNS 与 DNS 劫持。`,
     { title: '开启 DNS 高可用', confirmText: '开启' },
   )
   if (!accepted || disposed) return
@@ -174,20 +202,33 @@ async function enable() {
     const { data } = await agentApi.setDNSHA(props.agent.id, input)
     if (disposed) return
     if (data?.success === false) throw new Error(data.message || '开启未完成。')
-    if (data?.config && Array.isArray(data.members)) status.value = data
+    status.value = data
     emit('changed')
     open.value = false
-    const republish = '请到上游路由页重新发布，让 DHCP DNS 与 DNS 劫持改用虚拟 IP。'
-    const warnings = (data?.warnings || []).filter(item => typeof item === 'string' && item)
-    if (warnings.length) notify.warning('已开启 DNS 高可用，请确认以下事项', [...warnings, republish].join('\n'))
-    else notify.success('已开启 DNS 高可用', republish)
-  } catch (failure) {
+    if (data.publication && !haPublicationFinished(data.publication.status)) {
+      enablePublication = data.publication.id
+      void readStatus()
+    } else if (data.publication && data.publication.status !== 'succeeded') {
+      notify.error('DNS 高可用未开启完成', data.publication.message || '主备同步失败，请查看发布记录。')
+    } else enabledNotice(data)
+  } catch (failure: any) {
     if (disposed) return
     error.value = errorMessage(failure)
-    notify.error('无法开启 DNS 高可用', error.value)
+    if (!failure?.response || failure.response.status >= 500) {
+      enableUnknown.value = true
+      error.value = '开启结果待确认，正在读取服务端状态。'
+      void readStatus()
+    } else notify.error('无法开启 DNS 高可用', error.value)
   } finally {
     if (!disposed) action.value = ''
   }
+}
+
+function enabledNotice(data: AgentDNSHAStatus) {
+  const republish = '请到上游路由页重新发布，让 DHCP DNS 与 DNS 劫持改用虚拟 IP。'
+  const warnings = (data.warnings || []).filter(item => typeof item === 'string' && item)
+  if (warnings.length) notify.warning('已开启 DNS 高可用，请确认以下事项', [...warnings, republish].join('\n'))
+  else notify.success('已开启 DNS 高可用', republish)
 }
 
 function routerNames(result: AgentDNSHARemoveResult) {
@@ -249,6 +290,7 @@ async function disable(force: boolean) {
         <Button variant="ghost" size="sm" class="min-h-11 text-xs" :disabled="!!action" aria-label="设置 DNS 高可用" @click="open = true">设置</Button>
       </template>
       <template #notice>
+        <AgentHAPublication v-if="publication && (publishing || publication.status !== 'succeeded')" :publication="publication" />
         <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground">
           <span v-if="holdsVip" class="chip chip-ok shrink-0" data-dns-ha-holder>主 · VIP <span class="font-mono">{{ config.vip }}</span></span>
           <span v-else-if="standby" class="chip shrink-0">备</span>
@@ -279,6 +321,15 @@ async function disable(force: boolean) {
           <Loader2 v-if="statusLoading" class="size-3.5 animate-spin" /><RefreshCw v-else class="size-3.5" />{{ statusLoading ? '正在读取…' : '刷新状态' }}
         </Button>
       </div>
+    </AgentStatusRow>
+    <AgentStatusRow v-else-if="publication || enableUnknown" label="DNS 高可用"
+      :status="enableUnknown ? '开启结果待确认' : publishing ? '正在同步主备' : '开启未完成'"
+      :tone="enableUnknown ? 'warning' : publishing ? 'progress' : 'danger'">
+      <template #actions><Button variant="ghost" size="sm" class="min-h-11 text-xs" :disabled="busy" aria-label="设置 DNS 高可用" @click="open = true">设置</Button></template>
+      <template #notice>
+        <AgentHAPublication v-if="publication" :publication="publication" />
+        <p v-if="statusError" class="m-0 text-warning-accent">刷新失败，正在重试：{{ statusError }}</p>
+      </template>
     </AgentStatusRow>
     <AgentStatusRow v-else label="DNS 高可用" status="未开启" tone="neutral">
       <template #actions>
@@ -334,6 +385,7 @@ async function disable(force: boolean) {
         <div v-else class="rounded-md border border-border p-3 text-xs leading-relaxed text-muted-foreground">
           <p class="m-0 font-medium text-foreground">开启前请确认</p>
           <ul class="m-0 mt-1.5 list-disc space-y-1 pl-4">
+            <li>开启时会把本配置空间已保存的配置与规则发布到两台；备机检查成功后才更新主机，任一步失败都会停止后续步骤。</li>
             <li>两台在同一局域网（同一网段），虚拟 IP 未被其他设备或 DHCP 地址池占用。</li>
             <li>两台都已安装 keepalived（如 <span class="font-mono">apt install keepalived</span>），且 Agent 已更新到支持高可用的版本。</li>
             <li>两台 OxiDNS 转发到同一个 Mihomo：代理 DNS 上游填 Mihomo 的局域网地址，不能用 127.0.0.1。</li>
