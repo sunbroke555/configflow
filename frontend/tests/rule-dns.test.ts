@@ -17,6 +17,23 @@ describe('followRoute', () => {
     expect(followRoute({ itemType: 'ruleset', policy: 'Proxy' })).toBe('proxy')
     for (const policy of ['REJECT', 'REJECT-DROP', 'PASS', '']) expect(followRoute({ itemType: 'ruleset', policy })).toBeNull()
   })
+  it('uses the server group routes, including a group with no DNS handling', () => {
+    const routes: NonNullable<RuleDnsEngine['policy_routes']> = {
+      '🎯 全球直连': 'direct', '🍎 苹果服务': 'direct', Proxy: 'proxy', Block: null
+    }
+    expect(followRoute({ itemType: 'ruleset', policy: '🎯 全球直连' }, routes)).toBe('direct')
+    expect(followRoute({ itemType: 'rule', rule_type: 'DOMAIN', policy: '🍎 苹果服务' }, routes)).toBe('direct')
+    expect(followRoute({ itemType: 'ruleset', policy: 'Proxy' }, routes)).toBe('proxy')
+    expect(followRoute({ itemType: 'ruleset', policy: 'Block' }, routes)).toBeNull()
+    expect(followRoute({ itemType: 'ruleset', policy: 'Unknown' }, routes)).toBe('proxy')
+    expect(followRoute({ itemType: 'ruleset', policy: 'toString' }, routes)).toBe('proxy')
+  })
+  it('keeps built-in policy and unsupported-rule semantics before consulting group routes', () => {
+    const routes: NonNullable<RuleDnsEngine['policy_routes']> = { DIRECT: 'proxy', REJECT: 'direct', Local: 'direct' }
+    expect(followRoute({ itemType: 'ruleset', policy: 'DIRECT' }, routes)).toBe('direct')
+    expect(followRoute({ itemType: 'ruleset', policy: 'REJECT' }, routes)).toBeNull()
+    expect(followRoute({ itemType: 'rule', rule_type: 'GEOIP', policy: 'Local' }, routes)).toBeNull()
+  })
   it('never routes single rules that cannot become DNS matches', () => {
     expect(followRoute({ itemType: 'rule', rule_type: 'GEOIP', policy: 'DIRECT' })).toBeNull()
     expect(followRoute({ itemType: 'rule', rule_type: 'IP-CIDR', policy: 'DIRECT' })).toBe('direct')

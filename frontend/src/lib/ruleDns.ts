@@ -32,19 +32,19 @@ export const CHOICE_LABELS: Record<string, string> = { follow: '跟随策略', d
 const SHORT_LABELS: Record<string, string> = { direct: '直连', proxy: '代理' }
 const NON_PROXY_POLICIES = ['REJECT', 'REJECT-DROP', 'PASS']
 
-export const DNS_FIELD_HELP = '仅对 OxiDNS 生效。自定义 Hosts、AdGuard 规则和「全部直连」的设备优先于这里的设置。'
+export const DNS_FIELD_HELP = 'DNS 用来把域名查成 IP 地址。这里选择用哪组 DNS 服务器查询，网站怎么连接仍由连接策略决定。仅对 OxiDNS 生效。自定义 Hosts、AdGuard 规则和「全部直连」的设备优先于这里的设置。'
 export const PINNED_HINT = '已固定为当前地址，之后修改上游列表不影响这条规则'
 
 /** 选项文案：拒绝、不存在、空应答、黑洞四条简述由用户确认，保持原样 */
 export const DNS_COPY = {
-  follow: optionCopy('按策略自动选择 DNS，修改策略时一起变化', '大多数规则。',
-    'DIRECT 用直连 DNS，策略组用代理 DNS，REJECT 不单独处理；改策略时一起变化，单独设置的规则不受影响。'),
-  default: optionCopy('不单独分流，交给未匹配时的上游', '只关心流量走向，或不想让 IP 规则触发本地探测。',
-    '不生成分流条目，查询继续匹配后面的规则，最后交给「未匹配时转发到」；以前未勾选的规则都是这个状态。'),
-  direct: optionCopy('用直连上游解析，适合国内和局域网网站', '国内站点、局域网服务。',
-    '交给直连 DNS，经过缓存，并执行 IP 优选、RouterOS 联动等直连处理；不随策略变化。'),
-  proxy: optionCopy('用代理上游解析，适合需代理的网站', '需要代理访问或可能被污染的域名。',
-    '交给代理 DNS，配置了备用上游时可回退，不进入主缓存；不随策略变化。'),
+  follow: optionCopy('按连接策略自动选 DNS，修改策略时一起变', '希望 DNS 自动跟随时。',
+    '按这里保存的策略选择 DNS，无法判断时用代理 DNS。连接策略选「拒绝」只拦连接，DNS 按「默认上游」处理。在 Mihomo 面板切换节点或策略组，不会改变 DNS。'),
+  default: optionCopy('不为网站指定 DNS，沿用其他 DNS 设置', '不想为网站单独指定 DNS 时。',
+    '访问网站要不要走代理，仍按这条规则设置。向哪台 DNS 服务器查询网站 IP 地址，按其他 DNS 规则决定；都没匹配时，使用「未匹配时转发到」选中的服务器。'),
+  direct: optionCopy('固定用直连 DNS 查询，不随连接策略改变', '希望域名一直用直连 DNS 查询时，常用于国内网站或内网服务。',
+    '使用 OxiDNS「DNS 上游」中直连列表的服务器查询地址。以后把连接策略改成代理，这条规则仍用直连 DNS。'),
+  proxy: optionCopy('固定用代理 DNS 查询，不随连接策略改变', '希望域名一直用代理 DNS 查询时，常用于需要代理访问的网站。',
+    '使用 OxiDNS「DNS 上游」中代理列表的服务器查询地址。以后把连接策略改成直连，这条规则仍用代理 DNS。'),
   upstream: optionCopy('只用你选的这一个上游解析，适合内网域名', '公司内网等必须用特定 DNS 的域名。',
     '为该上游生成独立转发和缓存，不与其他上游竞速；直连列表的上游同样做 IP 优选和 RouterOS 联动，代理列表的改写 TTL；失败时返回 SERVFAIL。'),
   refused: optionCopy('直接拒绝查询，客户端立即失败', '明确禁止解析的域名。',
@@ -65,12 +65,13 @@ export const copyKey = (value: RuleDnsValue) => (isUpstreamValue(value) ? 'upstr
 
 interface PolicyItem { itemType?: string; rule_type?: string; policy?: string }
 
-/** 与后端 rule_dns.follow_route 一致：DIRECT → 直连，策略组 → 代理，REJECT 等内置策略和不能转换的单条规则不单独处理 */
-export function followRoute(item: PolicyItem): 'direct' | 'proxy' | null {
+/** 策略组使用服务端解析的默认出口；缺少映射时兼容旧版本，按代理处理。 */
+export function followRoute(item: PolicyItem, policyRoutes?: RuleDnsEngine['policy_routes']): 'direct' | 'proxy' | null {
   if (item.itemType !== 'ruleset' && !isDnsRuleType(item.rule_type)) return null
   const policy = item.policy
   if (policy === 'DIRECT') return 'direct'
   if (!policy || NON_PROXY_POLICIES.includes(policy)) return null
+  if (policyRoutes && Object.prototype.hasOwnProperty.call(policyRoutes, policy)) return policyRoutes[policy] ?? null
   return 'proxy'
 }
 
@@ -144,7 +145,7 @@ export function dnsChip(entry: RuleDnsState | undefined, engine: Pick<RuleDnsEng
   }
   if (!route) {
     const text = `默认上游 · ${forwardLabel(engine.default_forward).replace(/ DNS$/, '')}`
-    return { text, tone: 'muted', title: `默认上游：${forwardLabel(engine.default_forward)}` }
+    return { text, tone: 'muted', title: `其他 DNS 规则都未匹配时，使用${forwardLabel(engine.default_forward)}` }
   }
   if (isUpstreamValue(route)) {
     // 只显示地址，直连 / 代理来源放在 title 与读屏文字中，避免地址被截断。

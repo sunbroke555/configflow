@@ -172,6 +172,8 @@ export interface RuleDnsEngine {
   editable: boolean
   reason: string
   default_forward: string
+  /** 服务端按策略组配置解析的默认 DNS 去向；缺省兼容旧版本响应 */
+  policy_routes?: Record<string, 'direct' | 'proxy' | null>
   prefer_ipv4: boolean
   local_probe_active: boolean
   oxidns_in_use: boolean

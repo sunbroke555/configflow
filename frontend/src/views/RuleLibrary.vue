@@ -825,7 +825,7 @@ const referenceEngine = computed(() => referenceDns.value?.engine ?? null)
 const referenceDnsShown = computed(() => !referenceEngine.value || referenceEngine.value.oxidns_in_use)
 const referenceDnsDisabled = computed(() => !referenceEngine.value || !referenceEngine.value.editable)
 const referenceDnsValue = computed<RuleDnsValue>(() => (referenceDnsDisabled.value ? 'default' : referenceDnsChoice.value))
-const referencePolicyRoute = computed(() => followRoute({ itemType: 'ruleset', policy: referencePolicy.value }))
+const referencePolicyRoute = computed(() => followRoute({ itemType: 'ruleset', policy: referencePolicy.value }, referenceEngine.value?.policy_routes))
 const referenceDefaultDns = computed(() => defaultDnsChoice({
   domain: referenceItems.value.some(item => item.behavior !== 'ipcidr'), ip: referenceHasIp.value
 }, referenceEngine.value))

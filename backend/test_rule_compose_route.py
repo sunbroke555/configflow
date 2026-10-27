@@ -30,9 +30,13 @@ RULES = [
 def space(tmp_path):
     """(client, repository): profile 'other' in template mode, cloned from default."""
     repository = ProfileRepository(tmp_path)
-    repository.save_shared({'rule_library': [dict(item) for item in LIBRARY]})
+    repository.save_shared({
+        'nodes': [{'id': 'node', 'name': 'Proxy node', 'type': 'http',
+                   'server': '192.0.2.1', 'port': 8080}],
+        'rule_library': [dict(item) for item in LIBRARY],
+    })
     repository.save_profile('default', {
-        'proxy_groups': [{'id': 'group', 'name': 'Proxy', 'type': 'select', 'manual_nodes': ['DIRECT']}],
+        'proxy_groups': [{'id': 'group', 'name': 'Proxy', 'type': 'select', 'manual_nodes': ['node']}],
         'rule_configs': [dict(item) for item in RULES],
     })
     repository.create_profile({'id': 'other', 'name': 'Other'}, clone_from='default')

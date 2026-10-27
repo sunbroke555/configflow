@@ -20,7 +20,7 @@ from backend.common.oxidns_native import resource_references, relative_resource
 from backend.common.rule_dns import (
     BLACKHOLE_TAG, GROUP_TAG_RE, LIST_ROUTES, REAL_WRAPPERS, ROUTE_LABELS, UPSTREAM_PREFIX, Invalid,
     chain_features, follow_route, helper_plugins, normalize_action, parse_exec, pinned_action, probe_needed,
-    route_exec, route_key,
+    policy_dns_routes, route_exec, route_key,
 )
 from backend.converters.oxidns import _items, _routing_groups, _rule_path, _base, _tag, ruleset_parts, unavailable_rulesets
 from backend.converters.mosdns import _build_rule_proxy_url
@@ -841,7 +841,7 @@ def _take_over(values, current, changes, known, notices):
                        for identity, before, after in taken)
 
 
-def _settle(values, settings, changes, current, known, active):
+def _settle(values, settings, changes, current, known, active, routes):
     """Keep only active rules in the selections; return (parked, follow).
 
     Choices of rules that left the active catalog are parked, parked choices of
@@ -874,7 +874,7 @@ def _settle(values, settings, changes, current, known, active):
         elif identity in parked:
             _assign(values, record['item'], parked.pop(identity))
         elif identity in follow and identity not in before:
-            route = follow_route(record['item'])
+            route = follow_route(record['item'], routes=routes)
             if route is not None:
                 _assign(values, record['item'], {'action': route})
     if not follow_given:
@@ -987,7 +987,7 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
     active = _catalog(config)[0] if rebuild else current['records']
     _validate_selections(values, changes, known)
     _take_over(values, current, changes, known, notices)
-    parked, follow = _settle(values, settings, changes, current, known, active)
+    parked, follow = _settle(values, settings, changes, current, known, active, policy_dns_routes(config))
     if 'aggregate_rules' in changes and type(values['aggregate_rules']) is not bool:
         raise OxidnsSettingsError('合并相邻规则必须为布尔值。')
     if 'custom_match_position' in changes and values['custom_match_position'] not in ('head', 'tail'):

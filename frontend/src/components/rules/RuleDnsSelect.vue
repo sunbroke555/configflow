@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{
   upstreams?: RuleDnsUpstream[]
   /** 当前固定的上游名称；已不在上游列表时仍作为只读项显示 */
   upstreamLabel?: string
-  /** 当前策略对应的跟随路由，用于「当前：代理 DNS」 */
+  /** 当前策略对应的跟随路由，用于「按当前配置：代理 DNS」 */
   policyRoute?: 'direct' | 'proxy' | null
   defaultForward?: string
   variant?: 'field' | 'cell'
@@ -39,8 +39,8 @@ watch(() => [props.disabled, props.loading], () => {
 
 const optionClass = 'min-h-11 cursor-pointer gap-2 px-2 py-1.5 md:min-h-9 [@media(pointer:coarse)]:min-h-11'
 const defaultOptions = computed(() => [
-  { value: 'follow' as const, label: CHOICE_LABELS.follow, detail: `当前：${props.policyRoute ? ROUTE_LABELS[props.policyRoute] : '默认上游'}`, ...DNS_COPY.follow },
-  { value: 'default' as const, label: CHOICE_LABELS.default, detail: `当前：${forwardLabel(props.defaultForward)}`, ...DNS_COPY.default }
+  { value: 'follow' as const, label: CHOICE_LABELS.follow, detail: `按当前配置：${props.policyRoute ? ROUTE_LABELS[props.policyRoute] : '默认上游'}`, ...DNS_COPY.follow },
+  { value: 'default' as const, label: CHOICE_LABELS.default, detail: `未匹配时：${forwardLabel(props.defaultForward)}`, ...DNS_COPY.default }
 ])
 const resolveOptions = computed(() => (['direct', 'proxy'] as const).map(value => ({ value, label: ROUTE_LABELS[value], ...DNS_COPY[value] })))
 const blockOptions = computed(() => BLOCK_ROUTES.map(value => ({ value, label: ROUTE_LABELS[value], ...DNS_COPY[value] })))
@@ -110,8 +110,7 @@ function choose(value: RuleDnsValue, disabled = false) {
               <Check class="size-4 shrink-0" :class="modelValue === option.value ? 'text-primary-accent' : 'opacity-0'" aria-hidden="true" />
               <span class="min-w-0 flex-1">
                 <span class="block text-sm font-medium">{{ option.label }}</span>
-                <span class="block text-xs text-muted-foreground">{{ option.hint }}</span>
-                <span class="hidden" aria-hidden="true">{{ option.help }}</span>
+                <span class="hidden" aria-hidden="true">{{ option.hint }} {{ option.help }}</span>
               </span>
               <FieldHelp :label="option.label" :text="`${option.hint}\n\n${option.help}`" content-class="z-[80]" />
             </CommandItem>

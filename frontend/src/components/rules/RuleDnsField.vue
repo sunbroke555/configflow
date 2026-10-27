@@ -4,7 +4,7 @@ import { ExternalLink, Info, TriangleAlert } from '@lucide/vue'
 import FormField from '@/components/common/FormField.vue'
 import { Button } from '@/components/ui/button'
 import RuleDnsSelect from '@/components/rules/RuleDnsSelect.vue'
-import type { DnsWarning } from '@/lib/ruleDns'
+import { DNS_COPY, copyKey, type DnsWarning } from '@/lib/ruleDns'
 import type { RuleDnsUpstream, RuleDnsValue } from '@/types'
 
 /** 表单中的 DNS 字段：分组选择器加一个警告槽，同一时间只显示一条，其余收进「另有 N 条提示」 */
@@ -24,13 +24,16 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ 'update:modelValue': [value: RuleDnsValue]; action: [kind: NonNullable<DnsWarning['action']>] }>()
 
+const hintInHelp = computed(() => !props.persistentHint
+  && ['follow', 'default', 'direct', 'proxy'].includes(props.modelValue)
+  && props.hint === DNS_COPY[copyKey(props.modelValue)].hint)
 const expanded = ref(false)
 const visible = computed(() => (expanded.value ? props.warnings : props.warnings.slice(0, 1)))
 watch(() => props.warnings.length, count => { if (count < 2) expanded.value = false })
 </script>
 
 <template>
-  <FormField label="DNS（OxiDNS）" html-for="rule-dns" :hint="hint" :help="help" :persistent-hint="persistentHint">
+  <FormField label="DNS（OxiDNS）" html-for="rule-dns" :hint="hintInHelp ? undefined : hint" :help="hintInHelp ? `${hint}\n\n${help}` : help" :persistent-hint="persistentHint">
     <RuleDnsSelect
       id="rule-dns"
       :model-value="modelValue"

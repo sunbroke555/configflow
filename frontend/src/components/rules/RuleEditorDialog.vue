@@ -181,7 +181,7 @@ const unsupportedType = computed(() => {
 const splitIp = computed(() => !editing.value && source.value === 'values' && !dnsTouched.value && parts.value.domain.length > 0 && parts.value.ip.length > 0)
 const policyRoute = computed(() => followRoute(isRuleset.value
   ? { itemType: 'ruleset', policy: form.policy }
-  : { itemType: 'rule', rule_type: ruleType.value || (parts.value.domain[0] || parts.value.ip[0])?.rule_type || 'DOMAIN', policy: form.policy }))
+  : { itemType: 'rule', rule_type: ruleType.value || (parts.value.domain[0] || parts.value.ip[0])?.rule_type || 'DOMAIN', policy: form.policy }, engine.value?.policy_routes))
 const fieldDisabled = computed(() => !dnsLoaded.value || locked.value || !!unsupportedType.value)
 const effectiveDns = computed<RuleDnsValue>(() => (fieldDisabled.value ? 'default' : dnsChoice.value))
 const defaultChoice = computed(() => defaultDnsChoice({ domain: hasDomainPart.value, ip: hasIpPart.value && !(source.value === 'values' && !editing.value) }, engine.value))
