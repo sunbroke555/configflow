@@ -605,6 +605,8 @@
       :dns-loading="dnsLoading"
       :profile-id="profileId"
       @saved="onEditorSaved"
+      @source-saved="onSourceSaved"
+      @reload-dns="loadDns"
       @enable="enableRule"
     />
 
@@ -1294,6 +1296,14 @@ const onEditorSaved = async ({ ids, dns }: { ids: string[]; dns?: Record<string,
   recentTimer = window.setTimeout(() => { recentKeys.value = new Set() }, 4000)
   await nextTick()
   rulesContainer.value?.querySelector<HTMLElement>(`[data-rule-key="${keys[0]}"]`)?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+}
+
+// 来源单独保存后刷新共享内容与 DNS，保留仍在编辑的当前规则草稿。
+const onSourceSaved = async (source: Record<string, any>) => {
+  ruleLibrary.value = ruleLibrary.value.map(item => item.id === source.id ? source : item)
+  const affected = allRules.value.filter(item => item.library_rule_id === source.id).map(item => item.id)
+  dnsStale.value = new Set([...dnsStale.value, ...affected])
+  await Promise.all([loadRuleLibrary(), loadAllRules(), loadDns()])
 }
 
 /** 粘贴时跳过的重复项已停用：「启用 #12」 */

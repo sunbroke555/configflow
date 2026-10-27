@@ -276,6 +276,42 @@ describe('profile rule references', () => {
     expect(payload).toMatchObject({ policy: 'DIRECT', enabled: true, formats: ['mihomo', 'surge'], mosdns: { target: 'direct' } })
   })
 
+  it.each(['delayed', 'failed'])('retains the DNS draft while a source save triggers a %s refresh', async result => {
+    const wrapper = await render(Rules)
+    await wrapper.get('button[aria-label="编辑"]').trigger('click')
+    await flushPromises()
+    wrapper.findComponent(RuleDnsField).vm.$emit('update:modelValue', 'blackhole')
+    await flushPromises()
+    await clickText('编辑来源')
+    const input = document.querySelector<HTMLInputElement>('#source-name')!
+    input.value = 'Updated source'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    network.put.mockImplementationOnce(async (_path, body) => {
+      network.state.library[0] = { ...body }
+      return { data: { success: true } }
+    })
+    let finish!: () => void
+    const dnsResponse = await network.rules.getDns.mock.results.at(-1)!.value
+    if (result === 'failed') network.rules.getDns.mockRejectedValueOnce(new Error('offline'))
+    else network.rules.getDns.mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => { resolve(dnsResponse) }
+    }))
+    await clickText('保存来源')
+    const save = () => Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] footer button')).find(button => button.textContent?.trim() === '保存')!
+    expect(save().disabled).toBe(true)
+    save().click()
+    await flushPromises()
+    expect(network.sets.update).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-dns-draft-pending]')?.textContent).toContain('已保留你的选择')
+    if (result === 'failed') await clickText('重新读取 DNS')
+    else { finish(); await flushPromises() }
+    expect(save().disabled).toBe(false)
+    save().click()
+    await flushPromises()
+    expect(network.sets.update).toHaveBeenCalledWith('ruleset-one', expect.objectContaining({ dns: 'blackhole' }), 'default')
+  })
+
   it('status changes only the profile reference, never the shared source', async () => {
     network.state.library[0]!.enabled = false
     network.state.rules[0]!.library_enabled = false

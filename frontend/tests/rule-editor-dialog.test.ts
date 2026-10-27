@@ -14,10 +14,11 @@ const network = vi.hoisted(() => ({
   post: vi.fn(async (path: string, body?: any): Promise<{ data: any }> => (path === '/rule-library/check-content'
     ? { data: { content: body.content, changes: [], errors: [] } }
     : { data: { success: true, available: true } })),
+  put: vi.fn(async (_path: string, _body: Record<string, any>) => ({ data: { success: true } })),
   copy: vi.fn(async (_text: string) => undefined)
 }))
 vi.mock('@/api', () => ({
-  default: { post: network.post },
+  default: { post: network.post, put: network.put },
   ruleApi: { compose: network.compose, update: network.update, create: network.create },
   ruleSetApi: { update: network.setUpdate }
 }))
@@ -429,7 +430,7 @@ describe('rule editor dialog', () => {
     expect(wrapper.emitted('update:open')).toEqual([[false]])
     await type('#rule-values', 'draft.test')
     await click(button('取消'))
-    expect(confirmState.description).toBe('放弃未保存的规则？')
+    expect(confirmState.description).toBe('放弃未保存的修改？')
     settleConfirm('cancel')
     await flushPromises()
     expect(wrapper.emitted('update:open')).toHaveLength(1)
@@ -485,7 +486,8 @@ describe('rule editor dialog', () => {
     const item = existing[2]!
     const wrapper = await render({ mode: 'edit', item, dns: snapshot({}, { rules: { 'set-a': { state: 'explicit', route: 'nxdomain' } } }) })
     expect(dialog().querySelector('[role="radiogroup"][aria-label="匹配来源"]')).toBeNull()
-    expect(text()).toContain('在规则库中编辑来源')
+    expect(button('编辑来源')).toBeTruthy()
+    expect(dialog().querySelector('a[href="/rule-library"]')).toBeNull()
     await choose(wrapper, '策略', 'Proxy')
     await click(save())
     const [id, payload] = network.setUpdate.mock.calls[0]!
@@ -505,6 +507,113 @@ describe('rule editor dialog', () => {
     expect(dnsTrigger().textContent).toContain('跟随策略 · 代理 DNS')
     await click(save())
     expect(network.compose.mock.calls[0]![0]).toMatchObject({ rule: { policy: 'Proxy' }, dns: 'follow' })
+  })
+
+  it('edits the shared source in the same dialog and preserves unsaved reference settings', async () => {
+    const wrapper = await render({ mode: 'edit', item: existing[2], dns: snapshot({}, { rules: { 'set-a': { state: 'follow', route: 'proxy', follow_route: 'proxy' } } }) })
+    const originalDialog = dialog()
+    await choose(wrapper, '策略', 'Proxy')
+    await pickDns('黑洞')
+    await type('#rule-remark', 'Keep this draft')
+    await click(button('编辑来源'))
+    expect(dialog()).toBe(originalDialog)
+    expect(text()).toContain('编辑规则集来源')
+    expect(text()).toContain('所有引用此规则集的配置')
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    await type('#source-name', 'Updated Ads')
+    await type('#source-url', 'https://rules.test/new.list')
+    await click(button('保存来源'))
+    expect(network.put).toHaveBeenCalledExactlyOnceWith('/rule-library/lib-a', expect.objectContaining({ name: 'Updated Ads', url: 'https://rules.test/new.list' }))
+    expect(network.setUpdate).not.toHaveBeenCalled()
+    expect(wrapper.emitted('source-saved')?.[0]?.[0]).toMatchObject({ id: 'lib-a', name: 'Updated Ads' })
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+    expect(dialog()).toBe(originalDialog)
+    expect(text()).toContain('Updated Ads')
+    expect(dialog().querySelector<HTMLInputElement>('#rule-remark')!.value).toBe('Keep this draft')
+    expect(document.activeElement).toBe(button('编辑来源'))
+    await wrapper.setProps({ dns: null, dnsLoading: true })
+    expect(save().disabled).toBe(true)
+    await click(save())
+    expect(network.setUpdate).not.toHaveBeenCalled()
+    await wrapper.setProps({
+      library: [{ ...library[0]!, name: 'Updated Ads', url: 'https://rules.test/new.list' }, library[1]!],
+      dns: snapshot({}, { rules: { 'set-a': { state: 'follow', route: 'proxy', follow_route: 'proxy' } } }), dnsLoading: false
+    })
+    await click(save())
+    expect(network.setUpdate).toHaveBeenCalledWith('set-a', expect.objectContaining({ policy: 'Proxy', dns: 'blackhole', remark: 'Keep this draft' }), 'p1')
+  })
+
+  it('keeps a DNS draft blocked after refresh failure and offers a retry', async () => {
+    const wrapper = await render({ mode: 'edit', item: existing[2] })
+    await pickDns('黑洞')
+    await click(button('编辑来源'))
+    await type('#source-name', 'Updated source')
+    await click(button('保存来源'))
+    await wrapper.setProps({ dns: null, dnsLoading: false })
+    expect(save().disabled).toBe(true)
+    expect(text()).toContain('已保留你的选择')
+    expect(dnsTrigger().textContent).toContain('黑洞')
+    expect(text()).not.toContain('本次不修改 DNS')
+    await click(button('重新读取 DNS'))
+    expect(wrapper.emitted('reload-dns')).toHaveLength(1)
+    expect(network.setUpdate).not.toHaveBeenCalled()
+    await wrapper.setProps({ dns: snapshot(), dnsLoading: false })
+    await click(save())
+    expect(network.setUpdate).toHaveBeenCalledWith('set-a', expect.objectContaining({ dns: 'blackhole' }), 'p1')
+  })
+
+  it('asks before discarding source edits and returns without discarding the reference draft', async () => {
+    const wrapper = await render({ mode: 'edit', item: existing[2] })
+    await choose(wrapper, '策略', 'Proxy')
+    await click(button('编辑来源'))
+    await type('#source-url', 'https://rules.test/unsaved.list')
+    await click(button('返回规则设置'))
+    expect(confirmState.description).toBe('放弃未保存的来源修改？')
+    settleConfirm('cancel')
+    await flushPromises()
+    expect(document.querySelector<HTMLInputElement>('#source-url')!.value).toBe('https://rules.test/unsaved.list')
+    await click(button('返回规则设置'))
+    settleConfirm('confirm')
+    await flushPromises()
+    expect(network.put).not.toHaveBeenCalled()
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+    expect(text()).toContain('https://rules.test/ads.list')
+    await click(save())
+    expect(network.setUpdate).toHaveBeenCalledWith('set-a', expect.objectContaining({ policy: 'Proxy' }), 'p1')
+  })
+
+  it('protects source drafts when closing and blocks leaving during a source save', async () => {
+    const wrapper = await render({ mode: 'edit', item: existing[2] })
+    await click(button('编辑来源'))
+    await type('#source-name', 'New name')
+    await click(dialog().querySelector('[aria-label="关闭"]'))
+    expect(confirmState.description).toBe('放弃未保存的修改？')
+    settleConfirm('cancel')
+    await flushPromises()
+    let finish!: (value: { data: { success: boolean } }) => void
+    network.put.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await click(button('保存来源'))
+    expect(dialog().querySelector('[aria-label="关闭"]')?.hasAttribute('disabled')).toBe(true)
+    expect(button('返回规则设置')?.disabled).toBe(true)
+    await click(button('返回规则设置'))
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+    finish({ data: { success: true } })
+    await flushPromises()
+    expect(button('编辑来源')).toBeTruthy()
+  })
+
+  it('edits a newly selected shared source without prematurely changing the reference', async () => {
+    const wrapper = await render({ mode: 'edit', item: existing[2] })
+    await click(dialog().querySelector('[aria-label="选择规则集"]'))
+    await click(Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(item => item.textContent?.includes('Corp')))
+    await click(button('编辑来源'))
+    expect(document.querySelector<HTMLTextAreaElement>('#source-content')!.value).toBe('DOMAIN,corp.lan')
+    await type('#source-content', 'DOMAIN,updated.lan')
+    await click(button('保存来源'))
+    expect(network.put).toHaveBeenCalledWith('/rule-library/lib-b', expect.objectContaining({ content: 'DOMAIN,updated.lan' }))
+    expect(network.setUpdate).not.toHaveBeenCalled()
+    await click(save())
+    expect(network.setUpdate).toHaveBeenCalledWith('set-a', expect.objectContaining({ library_rule_id: 'lib-b' }), 'p1')
   })
 
   it('offers to update a drifted follow rule to its policy', async () => {
