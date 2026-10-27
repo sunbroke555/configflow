@@ -296,6 +296,7 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 		}
 		if cfg.ServiceType == "oxidns" {
 			result["oxidns_ha_protocols"] = []int{oxidnsHAProtocol}
+			result["oxidns_ha_handoff_protocols"] = []int{oxidnsHAHandoffProtocol}
 		}
 		JsonResponse(w, 200, result)
 	}

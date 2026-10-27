@@ -430,7 +430,7 @@ func haPreflight(cfg *Config, spec OxiDNSHASpec, state *haState) ([]string, stri
 }
 
 func haStatus(cfg *Config) map[string]interface{} {
-	result := map[string]interface{}{"success": true, "protocol": oxidnsHAProtocol, "managed": nil, "error": ""}
+	result := map[string]interface{}{"success": true, "protocol": oxidnsHAProtocol, "managed": nil, "handoff": nil, "error": ""}
 	haMu.Lock()
 	state, err := loadHAState(cfg)
 	haMu.Unlock()
@@ -460,7 +460,21 @@ func haStatus(cfg *Config) map[string]interface{} {
 			}
 		}
 	}
-	result["runtime"] = map[string]interface{}{"keepalived_running": running, "vip_present": vipPresent, "role": role, "healthy": haCheckLocal(cfg) == nil}
+	localHealthy := haCheckLocal(cfg) == nil
+	vipHealthy := false
+	if state != nil && state.Active && !state.Pending {
+		_, name := haCheckTarget(cfg.ConfigPath)
+		vipHealthy = haHandoffProbe(net.JoinHostPort(state.Spec.VIP, "53"), name, haCheckTimeout) == nil
+	}
+	if handoff, handoffErr := haHandoffPublic(cfg, state, localHealthy); handoffErr != nil {
+		if result["error"] == "" {
+			result["error"] = handoffErr.Error()
+		}
+	} else {
+		result["handoff"] = handoff
+	}
+	result["runtime"] = map[string]interface{}{"keepalived_running": running, "vip_present": vipPresent, "role": role,
+		"healthy": localHealthy, "vip_healthy": vipHealthy}
 	return result
 }
 

@@ -33,7 +33,7 @@ func runAgent() int {
 	assumeTUN := flag.Bool("assume-tun-enabled", false, "With -prepare-tun: prepare TUN even when the bootstrap config has TUN disabled (gateway installer)")
 	environmentPeerConfig := flag.String("environment-peer-config", "", "Peer Agent candidate configuration for a joint native AIO environment check")
 	verbose := flag.Bool("verbose", false, "Expand one-shot command diagnostics; full details are always saved to a private log")
-	haCheck := flag.Bool("ha-check", false, "keepalived health check: exit 0 only when the local OxiDNS answers; no registration, listening or writes")
+	haCheck := flag.Bool("ha-check", false, "keepalived health and managed handoff check; no registration, listening or writes")
 
 	// 解析命令行参数
 	flag.Parse()

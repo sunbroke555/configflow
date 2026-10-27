@@ -101,7 +101,8 @@ const health = computed(() => status.value?.config ? status.value.health : undef
 
 const row = computed<{ status: string; tone: 'success' | 'warning' | 'danger' | 'progress' | 'neutral' }>(() => {
   if (publication.value?.status === 'ready') return { status: '主备配置待激活', tone: 'warning' }
-  if (publication.value?.status === 'unknown') return { status: '同步结果待确认', tone: 'warning' }
+  if (publication.value?.status === 'unknown') return { status: publication.value.phase === 'handoff' ? '虚拟 IP 迁移待确认' : '同步结果待确认', tone: 'warning' }
+  if (publishing.value && publication.value?.phase === 'handoff') return { status: '正在迁移虚拟 IP', tone: 'progress' }
   if (publishing.value) return { status: '正在同步主备', tone: 'progress' }
   if (publication.value && publication.value.status !== 'succeeded') return { status: '主备同步失败', tone: 'danger' }
   if (haState.value?.status === 'applying') return { status: '正在开启', tone: 'progress' }
@@ -195,7 +196,7 @@ async function enable() {
   const peerAgentValue = selectedPeer.value!
   const address = vip.value.trim()
   const accepted = await confirm(
-    `将把当前配置空间已保存的 OxiDNS 配置与规则同步到 ${peerAgentValue.name}（备机）和 ${props.agent.name}（主机），备机发布并通过检查后再更新主机。两台成功后启用虚拟 IP ${address}；后续发布会按同样顺序更新两台。完成后需到上游路由页重新发布 DHCP DNS 与 DNS 劫持。`,
+    `首次开启将把当前配置空间已保存的 OxiDNS 配置与规则同步到 ${peerAgentValue.name}（备机）和 ${props.agent.name}（主机），备机检查通过后更新主机，再启用虚拟 IP ${address}。后续配置发布会先更新未持有虚拟 IP 的设备，将虚拟 IP 迁移到该设备并确认解析正常后，再更新原持有设备。完成后需到上游路由页重新发布 DHCP DNS 与 DNS 劫持。`,
     { title: '开启 DNS 高可用', confirmText: '开启' },
   )
   if (!accepted || disposed) return
@@ -311,13 +312,13 @@ async function disable(force: boolean) {
         <dl class="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
           <dt>虚拟 IP</dt><dd class="m-0 font-mono">{{ config.vip }}</dd>
           <dt>VRID</dt><dd class="m-0 font-mono">{{ config.vrid }}</dd>
-          <dt>本机</dt><dd class="m-0">{{ config.role === 'primary' ? '主机（优先持有虚拟 IP）' : '备机' }}</dd>
+          <dt>配置角色</dt><dd class="m-0">{{ config.role === 'primary' ? '主机（优先持有虚拟 IP）' : '备机' }}</dd>
         </dl>
         <ul v-if="members.length" class="m-0 list-none space-y-1 p-0">
           <li v-for="member in members" :key="member.agent_id" class="[overflow-wrap:anywhere]">
             <span class="text-foreground">{{ member.name || member.agent_id }}</span>
             <span class="font-mono"> {{ member.host }}</span>
-            · {{ member.role_config === 'primary' ? '主机' : '备机' }} · {{ runtimeText(member) }}
+            · {{ member.role_config === 'primary' ? '配置主机' : '配置备机' }} · {{ runtimeText(member) }}
           </li>
         </ul>
         <p v-if="status && statusError" class="m-0 text-warning-accent">刷新失败，显示上次结果：{{ statusError }}</p>
@@ -352,12 +353,12 @@ async function disable(force: boolean) {
           <DialogDescription v-else>{{ agent.name }} 与另一台 OxiDNS 共用一个虚拟 IP，一台故障时由另一台继续应答。</DialogDescription>
         </DialogHeader>
         <dl v-if="config" class="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-sm">
-          <dt class="text-muted-foreground">主机</dt><dd class="m-0 [overflow-wrap:anywhere]">{{ config.role === 'primary' ? agent.name : peerName }}</dd>
-          <dt class="text-muted-foreground">备机</dt><dd class="m-0 [overflow-wrap:anywhere]">{{ config.role === 'primary' ? peerName : agent.name }}</dd>
+          <dt class="text-muted-foreground">配置主机</dt><dd class="m-0 [overflow-wrap:anywhere]">{{ config.role === 'primary' ? agent.name : peerName }}</dd>
+          <dt class="text-muted-foreground">配置备机</dt><dd class="m-0 [overflow-wrap:anywhere]">{{ config.role === 'primary' ? peerName : agent.name }}</dd>
           <dt class="text-muted-foreground">虚拟 IP</dt><dd class="m-0 font-mono">{{ config.vip }}</dd>
           <dt class="text-muted-foreground">VRID</dt><dd class="m-0 font-mono">{{ config.vrid }}</dd>
         </dl>
-        <p v-if="config" class="m-0 text-xs text-muted-foreground">如需更换对端或虚拟 IP，请先停用后重新开启。</p>
+        <p v-if="config" class="m-0 text-xs text-muted-foreground">当前主备以实际虚拟 IP 持有情况为准。如需更换对端或虚拟 IP，请先停用后重新开启。</p>
         <form v-else :id="`dns-ha-form-${agent.id}`" class="min-w-0 space-y-4" @submit.prevent="enable">
           <fieldset :disabled="busy" class="m-0 min-w-0 space-y-4 border-0 p-0">
             <FormField label="备机" :html-for="`dns-ha-peer-${agent.id}`" v-bind="oxidnsHaCopy.peer">
@@ -390,6 +391,7 @@ async function disable(force: boolean) {
           <p class="m-0 font-medium text-foreground">开启前请确认</p>
           <ul class="m-0 mt-1.5 list-disc space-y-1 pl-4">
             <li>开启时会把本配置空间已保存的配置与规则发布到两台；备机检查成功后才更新主机，任一步失败都会停止后续步骤。</li>
+            <li>后续配置发布先更新未持有虚拟 IP 的设备，迁移虚拟 IP 并确认解析正常后，再更新原持有设备。</li>
             <li>规则自动同步开关以本次主机设置为准；开启后修改任一台的开关都会同时作用于两台。</li>
             <li>两台在同一局域网（同一网段），虚拟 IP 未被其他设备或 DHCP 地址池占用。</li>
             <li>两台都已安装 keepalived（如 <span class="font-mono">apt install keepalived</span>），且 Agent 已更新到支持高可用的版本。</li>

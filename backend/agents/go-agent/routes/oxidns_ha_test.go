@@ -28,10 +28,10 @@ type haFixture struct {
 func newHAFixture(t *testing.T) *haFixture {
 	t.Helper()
 	oldOS, oldUID, oldLook, oldExe := haOS, haGeteuid, haLookPath, haExecutable
-	oldRun, oldSleep, oldDir, oldSecure := haRun, haSleep, haKeepalivedDir, haScriptSecure
+	oldRun, oldSleep, oldDir, oldSecure, oldProbe := haRun, haSleep, haKeepalivedDir, haScriptSecure, haHandoffProbe
 	t.Cleanup(func() {
 		haOS, haGeteuid, haLookPath, haExecutable = oldOS, oldUID, oldLook, oldExe
-		haRun, haSleep, haKeepalivedDir, haScriptSecure = oldRun, oldSleep, oldDir, oldSecure
+		haRun, haSleep, haKeepalivedDir, haScriptSecure, haHandoffProbe = oldRun, oldSleep, oldDir, oldSecure, oldProbe
 	})
 	root := t.TempDir()
 	f := &haFixture{
@@ -53,6 +53,7 @@ func newHAFixture(t *testing.T) *haFixture {
 	haExecutable = func() (string, error) { return "/opt/configflow-agent/configflow-agent", nil }
 	haScriptSecure = func(string) error { return nil }
 	haSleep = func(time.Duration) {}
+	haHandoffProbe = func(string, string, time.Duration) error { return nil }
 	haLookPath = func(name string) (string, error) {
 		if f.missing[name] {
 			return "", fmt.Errorf("not found")

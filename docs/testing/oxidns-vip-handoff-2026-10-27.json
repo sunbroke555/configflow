@@ -1,0 +1,1379 @@
+{
+  "started_at": 1793071371.451673,
+  "passed": true,
+  "source_sha256": {
+    "backend/agents/oxidns_ha_publish.py": "01249693e21ec700af0ed5c512714c159ca9b0ab4f68c4ded29b160971b67132",
+    "backend/agents/oxidns_ha.py": "33790e55c65514ccb1bc14a39d3ca824d9836fc9350ecd8c72c86ce80d52a405",
+    "backend/agents/manager.py": "7df7879943ab3b6a336ce3cc86c790f929f55da82ef6ea2615a1dcb6e1cf14b8",
+    "backend/agents/oxidns_ha_handoff.py": "c7e6eb627a05d8362ccd6948c74df31171e3fa1c49077d790cfb349ab6832f27",
+    "backend/agents/go-agent/routes/oxidns_ha.go": "ec76ae8b6e9935e91e6dba91f012b7163c5917c92c2a3600a0c122b9ba49a817",
+    "backend/agents/go-agent/routes/oxidns_ha_handoff.go": "ed6123867739774a19c3749bc0d2db92e1b13393418d5f6d5f80c4785d71325a",
+    "backend/agents/go-agent/routes/oxidns_ha_check.go": "a494d8f4decaa5168f06469165dac41142107bcd7848e6c7af29286b1e36bfcc",
+    "scripts/tests/oxidns_ha_sync_lab.py": "df37697c95757ae7e938d82a25ff88f79cb1224929054714f57953466efa2244",
+    "scripts/tests/oxidns_vip_handoff_lab.py": "46e7087717cb4026143643ba6c2c219354677c374f9b6a1753de23b4f4b2153f"
+  },
+  "agent_binary_sha256": "ccc79224b88ea814cf801f92f78073ebb185e8a213fe5d22fb4783cec8e391c6",
+  "scope": {
+    "containers": [
+      130,
+      131,
+      132
+    ],
+    "network": "isolated cfgt VLAN91",
+    "vip": "192.168.79.53"
+  },
+  "scenarios": [
+    {
+      "name": "publish-from-primary",
+      "started_at": 1793071391.0798814,
+      "finished_at": 1793071414.6566913,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071399.17682,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071399.177128,
+            "message": "[2026-10-27T03:23:19.176884] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071400.77375,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071400.77608,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071400.820585,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071406.591479,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071406.591878,
+            "message": "[2026-10-27T03:23:26.591600] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071392.125833,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071392.128216,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071392.178908,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071399.176376,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071399.176635,
+            "message": "[2026-10-27T03:23:19.176542] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071406.592924,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071406.593051,
+            "message": "[2026-10-27T03:23:26.591972] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 191,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "request_member": 130,
+      "http_status": 202,
+      "publication": {
+        "active_agent_id": null,
+        "id": "5ea05ac90ee74e808d08b540c5087541",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "ha-04b742c38bfe08276a32669ba8409ac83fc4b2ac890897cc",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "2e04d843d5044220b607ce843cc92ef2",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793071354255_56af03",
+        "owner_deployment_id": "2e04d843d5044220b607ce843cc92ef2",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793071407
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "375ead58c5300e4cde8f6999a5d4367d6600b2c5cbd9359d36e1de815afd16bb",
+            "/etc/oxidns/rules/lab.txt": "ca57ab7a8f641e1c89c70eb2d4fa9cf91920e3f8403af0e98c516de4c5daa7b0"
+          },
+          "pid": "696",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "375ead58c5300e4cde8f6999a5d4367d6600b2c5cbd9359d36e1de815afd16bb",
+            "/etc/oxidns/rules/lab.txt": "ca57ab7a8f641e1c89c70eb2d4fa9cf91920e3f8403af0e98c516de4c5daa7b0"
+          },
+          "pid": "574",
+          "active": "active"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.276
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.137
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.095
+        }
+      },
+      "handoff_proof": {
+        "old_holder": 130,
+        "updated_standby": 131,
+        "standby_started_at": 1793071392.178908,
+        "updated_vip_dns_at": 1793071399.2591774,
+        "old_holder_stopping_at": 1793071400.77375,
+        "vip_ready_lead_seconds": 1.514573
+      }
+    },
+    {
+      "name": "publish-from-secondary",
+      "started_at": 1793071415.57085,
+      "finished_at": 1793071438.5384257,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071423.203567,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071423.20378,
+            "message": "[2026-10-27T03:23:43.203719] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071424.834756,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071424.837005,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071424.882844,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071430.618526,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071430.618689,
+            "message": "[2026-10-27T03:23:50.618213] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071416.637769,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071416.639846,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071416.686604,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071423.203066,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071423.203357,
+            "message": "[2026-10-27T03:23:43.203165] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071430.619017,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071430.619081,
+            "message": "[2026-10-27T03:23:50.618262] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 185,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "request_member": 131,
+      "http_status": 202,
+      "publication": {
+        "active_agent_id": null,
+        "id": "88be00b20c53452297b6dd0099614f89",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "8c185a3250cf4c4596c85ab00fe92f3c",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "ha-87466b34db0ed19f18573a1368497c0d80fcc01d3e155dcc",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793071363088_4acff9",
+        "owner_deployment_id": "8c185a3250cf4c4596c85ab00fe92f3c",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793071430
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "dc1001f9d6f92705cc4d6b3f0f1545bd280f7ec08c484bf6dcd3aaedeee3e056",
+            "/etc/oxidns/rules/lab.txt": "6f19cbb9fbb882c861496cef69ba1d729be8c4df649317af8ceddf3d00782f2c"
+          },
+          "pid": "1016",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "dc1001f9d6f92705cc4d6b3f0f1545bd280f7ec08c484bf6dcd3aaedeee3e056",
+            "/etc/oxidns/rules/lab.txt": "6f19cbb9fbb882c861496cef69ba1d729be8c4df649317af8ceddf3d00782f2c"
+          },
+          "pid": "912",
+          "active": "active"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.271
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.123
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.097
+        }
+      },
+      "handoff_proof": {
+        "old_holder": 130,
+        "updated_standby": 131,
+        "standby_started_at": 1793071416.686604,
+        "updated_vip_dns_at": 1793071423.3019438,
+        "old_holder_stopping_at": 1793071424.834756,
+        "vip_ready_lead_seconds": 1.532812
+      }
+    },
+    {
+      "name": "publish-after-real-holder-failure-with-roles-reversed",
+      "started_at": 1793071446.6656122,
+      "finished_at": 1793071462.77889,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071447.775594,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071451.645835,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071451.646735,
+            "message": "[2026-10-27T03:24:11.645958] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071451.64638,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071451.646562,
+            "message": "[2026-10-27T03:24:11.646379] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071453.459782,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071453.463059,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071453.517505,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 109,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "request_member": 131,
+      "http_status": 202,
+      "publication": {
+        "active_agent_id": null,
+        "id": "b360c1e461734b81b0070920cddf8967",
+        "members": [
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "ha-e91be5e13da2f2650bb81404f6743f4966644bbcd07157a2",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "a54c51e8e5964b0493499cf55de19fd5",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793071363088_4acff9",
+        "owner_deployment_id": "a54c51e8e5964b0493499cf55de19fd5",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793071455
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "43d108345cbbaedadce5d1a510082de995beeb94b0228ef005e617cf88ce774a",
+            "/etc/oxidns/rules/lab.txt": "60b7288353ba73a258b7a074ce882fde4a74d1d56528e2007b7281f1c88c2690"
+          },
+          "pid": "1337",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "43d108345cbbaedadce5d1a510082de995beeb94b0228ef005e617cf88ce774a",
+            "/etc/oxidns/rules/lab.txt": "60b7288353ba73a258b7a074ce882fde4a74d1d56528e2007b7281f1c88c2690"
+          },
+          "pid": "1399",
+          "active": "active"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.45",
+          "ms": 0.22
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.45",
+          "ms": 0.176
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.45",
+          "ms": 0.076
+        }
+      },
+      "handoff_proof": {
+        "old_holder": 131,
+        "updated_standby": 130,
+        "standby_started_at": 1793071447.775594,
+        "updated_vip_dns_at": 1793071451.676272,
+        "old_holder_stopping_at": 1793071453.459782,
+        "vip_ready_lead_seconds": 1.78351
+      }
+    },
+    {
+      "name": "failed-vip-migration-leaves-old-holder-untouched",
+      "started_at": 1793071464.671807,
+      "finished_at": 1793071505.5957468,
+      "service_events": {
+        "130": [],
+        "131": [
+          {
+            "time": 1793071466.651569,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071466.654242,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071466.707654,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 367,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "old_holder": 130,
+      "before": {
+        "hashes": {
+          "/etc/oxidns/config.yaml": "43d108345cbbaedadce5d1a510082de995beeb94b0228ef005e617cf88ce774a",
+          "/etc/oxidns/rules/lab.txt": "60b7288353ba73a258b7a074ce882fde4a74d1d56528e2007b7281f1c88c2690"
+        },
+        "pid": "1337",
+        "active": "active"
+      },
+      "after": {
+        "hashes": {
+          "/etc/oxidns/config.yaml": "43d108345cbbaedadce5d1a510082de995beeb94b0228ef005e617cf88ce774a",
+          "/etc/oxidns/rules/lab.txt": "60b7288353ba73a258b7a074ce882fde4a74d1d56528e2007b7281f1c88c2690"
+        },
+        "pid": "1337",
+        "active": "active"
+      },
+      "publication": {
+        "active_agent_id": "agent_1793071363088_4acff9",
+        "id": "528ab720ba2c43b0a27987801f57465d",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "ha-993e1875149a6f41da5ee0767ad82491fac86570762857a0",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "fcb0cff6c78241bba56496e596198a20",
+            "name": "HA lab 130",
+            "status": "skipped"
+          }
+        ],
+        "message": "虚拟 IP 迁移或解析确认超时，原主机未更新",
+        "owner_agent_id": "agent_1793071354255_56af03",
+        "owner_deployment_id": "fcb0cff6c78241bba56496e596198a20",
+        "phase": "handoff",
+        "status": "failed",
+        "updated_at": 1793071498
+      }
+    },
+    {
+      "name": "retry-after-handoff-failure",
+      "started_at": 1793071507.55018,
+      "finished_at": 1793071531.4469504,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071515.264767,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071515.264824,
+            "message": "[2026-10-27T03:25:15.264583] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071517.633221,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071517.636033,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071517.685611,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071523.680126,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071523.680647,
+            "message": "[2026-10-27T03:25:23.680451] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071508.718962,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071508.72197,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071508.768726,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071515.264503,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071515.265025,
+            "message": "[2026-10-27T03:25:15.264971] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071523.68147,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071523.681641,
+            "message": "[2026-10-27T03:25:23.680700] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 194,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "request_member": 131,
+      "http_status": 202,
+      "publication": {
+        "active_agent_id": null,
+        "id": "2852e9b180d54cb59d8ca7fe4cbb980f",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "dc8d59d6f45a46ed89a9cb2f62007e5c",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "ha-87c3f686e073eeb89c8cc59b9e5bd1c8912c12307504ae53",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793071363088_4acff9",
+        "owner_deployment_id": "dc8d59d6f45a46ed89a9cb2f62007e5c",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793071523
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "82a6948cc77032e66c27e2c72227b9fa49b0c27bcd720fe0a1e4268620ad317d",
+            "/etc/oxidns/rules/lab.txt": "eed247e70fdf13347ceb22edcf447152faec863732c218df005ff0f64ca4fc7e"
+          },
+          "pid": "2312",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "82a6948cc77032e66c27e2c72227b9fa49b0c27bcd720fe0a1e4268620ad317d",
+            "/etc/oxidns/rules/lab.txt": "eed247e70fdf13347ceb22edcf447152faec863732c218df005ff0f64ca4fc7e"
+          },
+          "pid": "1950",
+          "active": "active"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.55",
+          "ms": 0.228
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.55",
+          "ms": 0.205
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.55",
+          "ms": 0.068
+        }
+      },
+      "handoff_proof": {
+        "old_holder": 130,
+        "updated_standby": 131,
+        "standby_started_at": 1793071508.768726,
+        "updated_vip_dns_at": 1793071515.2892437,
+        "old_holder_stopping_at": 1793071517.633221,
+        "vip_ready_lead_seconds": 2.343977
+      }
+    },
+    {
+      "name": "staged-pair-activation-from-secondary-performs-handoff",
+      "started_at": 1793071534.2672975,
+      "finished_at": 1793071559.6105957,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071545.293024,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071545.29307,
+            "message": "[2026-10-27T03:25:45.292666] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071546.345562,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071546.347654,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071546.394578,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071552.7096,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071552.709896,
+            "message": "[2026-10-27T03:25:52.709857] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071538.259324,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071538.260062,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071538.311627,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071545.292559,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071545.292909,
+            "message": "[2026-10-27T03:25:45.292699] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071552.709998,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071552.710043,
+            "message": "[2026-10-27T03:25:52.709652] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 206,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "ready_publication": {
+        "active_agent_id": null,
+        "id": "921b3adc4be345ef90c9d74145e0a3ab",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "ha-c4b10fc2c51f0febfb6563513374e993f42218a4225fb415",
+            "name": "HA lab 131",
+            "status": "ready"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "57af4b3db4904f7ca3415a817c282e62",
+            "name": "HA lab 130",
+            "status": "ready"
+          }
+        ],
+        "message": "两台候选配置已准备，激活时将先备机后主机",
+        "owner_agent_id": "agent_1793071354255_56af03",
+        "owner_deployment_id": "57af4b3db4904f7ca3415a817c282e62",
+        "phase": "primary",
+        "status": "ready",
+        "updated_at": 1793071535
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "921b3adc4be345ef90c9d74145e0a3ab",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "ha-c4b10fc2c51f0febfb6563513374e993f42218a4225fb415",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "57af4b3db4904f7ca3415a817c282e62",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793071354255_56af03",
+        "owner_deployment_id": "57af4b3db4904f7ca3415a817c282e62",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793071552
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "3c80484547f7e6548a1fb0fccd0d8618729783546876bf7122aa512b7a0d88eb",
+            "/etc/oxidns/rules/lab.txt": "1b45ad3b6a8f1d49c48cf8f316104b943df0d654f93fa7d5af66236f7dba939a"
+          },
+          "pid": "2675",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "3c80484547f7e6548a1fb0fccd0d8618729783546876bf7122aa512b7a0d88eb",
+            "/etc/oxidns/rules/lab.txt": "1b45ad3b6a8f1d49c48cf8f316104b943df0d654f93fa7d5af66236f7dba939a"
+          },
+          "pid": "2342",
+          "active": "active"
+        }
+      },
+      "handoff_proof": {
+        "old_holder": 130,
+        "updated_standby": 131,
+        "standby_started_at": 1793071538.311627,
+        "updated_vip_dns_at": 1793071545.34089,
+        "old_holder_stopping_at": 1793071546.345562,
+        "vip_ready_lead_seconds": 1.004672
+      }
+    },
+    {
+      "name": "configflow-and-agent-restarts-resume-same-handoff",
+      "started_at": 1793071560.6197767,
+      "finished_at": 1793071592.630878,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071568.32161,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071568.321742,
+            "message": "[2026-10-27T03:26:08.321325] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071580.187145,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071580.190473,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071580.237592,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071585.737704,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071585.738065,
+            "message": "[2026-10-27T03:26:25.737811] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071561.794458,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071561.797215,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071561.841712,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071568.321155,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071568.321479,
+            "message": "[2026-10-27T03:26:08.320695] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071585.73824,
+            "message": "[2026-10-27T03:26:25.737731] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071585.738692,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 274,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "initial_http_status": 202,
+      "handoff_before": {
+        "active": true,
+        "created_at": "2026-10-27T03:26:03.957908511Z",
+        "operation_id": "704c8baa5abd4d09a7cb244228b806e1",
+        "peer_healthy": true,
+        "yielding": true
+      },
+      "handoff_after_agent_restart": {
+        "active": true,
+        "created_at": "2026-10-27T03:26:03.957908511Z",
+        "operation_id": "704c8baa5abd4d09a7cb244228b806e1",
+        "peer_healthy": true,
+        "yielding": true
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "704c8baa5abd4d09a7cb244228b806e1",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "ha-f23c809b53321b0d54a79afd0b34546660ec8aecc47d8e87",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "09ea51b5f3f54fa8ad3d7d1263e7f1ea",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793071354255_56af03",
+        "owner_deployment_id": "09ea51b5f3f54fa8ad3d7d1263e7f1ea",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793071585
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "041f600fc1d7bc97f9d8161b2f7bbecec735455c141925615b95e7465df06bdf",
+            "/etc/oxidns/rules/lab.txt": "79155c300fbc8ac3a1503784692243a0ec8d81571b69c79cbee3c0217f98eed0"
+          },
+          "pid": "3018",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "041f600fc1d7bc97f9d8161b2f7bbecec735455c141925615b95e7465df06bdf",
+            "/etc/oxidns/rules/lab.txt": "79155c300fbc8ac3a1503784692243a0ec8d81571b69c79cbee3c0217f98eed0"
+          },
+          "pid": "2682",
+          "active": "active"
+        }
+      },
+      "handoff_proof": {
+        "old_holder": 130,
+        "updated_standby": 131,
+        "standby_started_at": 1793071561.841712,
+        "updated_vip_dns_at": 1793071568.3762891,
+        "old_holder_stopping_at": 1793071580.187145,
+        "vip_ready_lead_seconds": 11.810856
+      }
+    },
+    {
+      "name": "duplicate-and-competing-requests-do-not-repeat-handoff",
+      "started_at": 1793071593.5957842,
+      "finished_at": 1793071624.144979,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071608.351978,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071608.352104,
+            "message": "[2026-10-27T03:26:48.350911] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071610.287444,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071610.29089,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071610.341646,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071616.767796,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071616.768126,
+            "message": "[2026-10-27T03:26:56.768070] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071596.797688,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071596.801164,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071596.851189,
+            "message": "Starting oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071601.85917,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071608.350631,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071608.351353,
+            "message": "[2026-10-27T03:26:48.351220] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071616.768594,
+            "message": "[2026-10-27T03:26:56.767912] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071616.768996,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 227,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      },
+      "http_statuses": [
+        202,
+        202,
+        409
+      ],
+      "publication": {
+        "active_agent_id": null,
+        "id": "5d9e62a275534284b9ef157a70212397",
+        "members": [
+          {
+            "agent_id": "agent_1793071363088_4acff9",
+            "deployment_id": "ha-2fd2d00eb4edb4d5a40dc49bf974b028f4ff3492f9cac606",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793071354255_56af03",
+            "deployment_id": "359872ae1873405f9cbf467706551755",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793071354255_56af03",
+        "owner_deployment_id": "359872ae1873405f9cbf467706551755",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793071617
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "85bcda6257992f26cf94cb7ce31ce1ecac757e6d3b008126d94da0e746ba498f",
+            "/etc/oxidns/rules/lab.txt": "29d2f84a559c1569bb7e9dbc5faefbea62120c9a8710ddec2a086ce6c4cfc841"
+          },
+          "pid": "3402",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "85bcda6257992f26cf94cb7ce31ce1ecac757e6d3b008126d94da0e746ba498f",
+            "/etc/oxidns/rules/lab.txt": "29d2f84a559c1569bb7e9dbc5faefbea62120c9a8710ddec2a086ce6c4cfc841"
+          },
+          "pid": "3099",
+          "active": "active"
+        }
+      },
+      "handoff_proof": {
+        "old_holder": 130,
+        "updated_standby": 131,
+        "standby_started_at": 1793071601.85917,
+        "updated_vip_dns_at": 1793071608.3633096,
+        "old_holder_stopping_at": 1793071610.287444,
+        "vip_ready_lead_seconds": 1.924134
+      }
+    },
+    {
+      "name": "peer-dns-failure-overrides-persistent-yield-and-recovers",
+      "started_at": 1793071627.0984964,
+      "finished_at": 1793071660.6809661,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793071632.380569,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071632.380709,
+            "message": "[2026-10-27T03:27:12.379752] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071638.794739,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071638.794971,
+            "message": "[2026-10-27T03:27:18.794921] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071647.407019,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071647.40714,
+            "message": "[2026-10-27T03:27:27.406010] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071654.821148,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071654.821572,
+            "message": "[2026-10-27T03:27:34.821248] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793071632.379443,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071632.379922,
+            "message": "[2026-10-27T03:27:12.379789] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071634.563759,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793071634.568797,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071638.795334,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071638.795416,
+            "message": "[2026-10-27T03:27:18.794901] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071642.266701,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793071647.405709,
+            "message": "(cf_oxidns) Entering MASTER STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071647.406497,
+            "message": "[2026-10-27T03:27:27.406349] 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          },
+          {
+            "time": 1793071654.822557,
+            "message": "(cf_oxidns) Entering BACKUP STATE",
+            "unit": "keepalived.service"
+          },
+          {
+            "time": 1793071654.822731,
+            "message": "[2026-10-27T03:27:34.821507] Deleted 3: eth0.91    inet 192.168.79.53/24 scope global secondary eth0.91",
+            "unit": "cf-vip-handoff-addresses.service"
+          }
+        ]
+      },
+      "dns_probe": {
+        "samples": 243,
+        "vip_failed_samples": 14,
+        "both_nodes_unavailable_samples": 0
+      },
+      "handoff_before": {
+        "active": true,
+        "created_at": "2026-10-27T03:27:08.106582208Z",
+        "operation_id": "lab-peer-failure-efa9b00abbae4702b2b6ba27e9841a8b",
+        "peer_healthy": true,
+        "yielding": true
+      },
+      "handoff_during_peer_failure": {
+        "active": true,
+        "created_at": "2026-10-27T03:27:08.106582208Z",
+        "operation_id": "lab-peer-failure-efa9b00abbae4702b2b6ba27e9841a8b",
+        "peer_healthy": false,
+        "yielding": false
+      },
+      "handoff_after_peer_recovery": {
+        "active": true,
+        "created_at": "2026-10-27T03:27:08.106582208Z",
+        "operation_id": "lab-peer-failure-efa9b00abbae4702b2b6ba27e9841a8b",
+        "peer_healthy": true,
+        "yielding": true
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.65",
+          "ms": 0.281
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.65",
+          "ms": 0.163
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.65",
+          "ms": 0.089
+        }
+      }
+    }
+  ],
+  "probe_comparison": {
+    "previous_report": "oxidns-ha-sync-2026-10-27.json",
+    "previous_normal_publication_failed_samples": 2,
+    "target_interval_ms": 100,
+    "timeout_ms": 300
+  },
+  "initial_publication": {
+    "active_agent_id": null,
+    "id": "bc017f810b7942ab9df5536effc5d8db",
+    "members": [
+      {
+        "agent_id": "agent_1793071363088_4acff9",
+        "deployment_id": "ha-9745a72fcc86f894efc0f1623700061a35abd55fa038fc69",
+        "name": "HA lab 131",
+        "status": "succeeded"
+      },
+      {
+        "agent_id": "agent_1793071354255_56af03",
+        "deployment_id": "ha-2f3d6c4f62894bc1b42884f2f5b6c80d",
+        "name": "HA lab 130",
+        "status": "succeeded"
+      }
+    ],
+    "message": "主备配置与规则均已发布成功",
+    "owner_agent_id": "agent_1793071354255_56af03",
+    "owner_deployment_id": "ha-2f3d6c4f62894bc1b42884f2f5b6c80d",
+    "phase": "done",
+    "routers": [],
+    "status": "succeeded",
+    "updated_at": 1793071383,
+    "warnings": []
+  },
+  "initial_files": {
+    "130": {
+      "hashes": {
+        "/etc/oxidns/config.yaml": "ac2d84420f339d01682dc44dd3d70f2abbbe9df96b2837b2b21679d1173024b1",
+        "/etc/oxidns/rules/lab.txt": "89eb3b51ef2945d3d32d8ef4ef82741b0630fad2c7eff2f1b7537b12642ccb4b"
+      },
+      "pid": "372",
+      "active": "active"
+    },
+    "131": {
+      "hashes": {
+        "/etc/oxidns/config.yaml": "ac2d84420f339d01682dc44dd3d70f2abbbe9df96b2837b2b21679d1173024b1",
+        "/etc/oxidns/rules/lab.txt": "89eb3b51ef2945d3d32d8ef4ef82741b0630fad2c7eff2f1b7537b12642ccb4b"
+      },
+      "pid": "362",
+      "active": "active"
+    }
+  },
+  "dns_probe": {
+    "sample_count": 2553,
+    "sha256": "23307f51b9304a7bfb4a9e0d054609a1a0641bdbed01b77e62edab6b0971dae4",
+    "both_nodes_unavailable_samples": 0,
+    "vip_failed_samples": 30
+  },
+  "finished_at": 1793071666.7717385,
+  "intentional_holder_failure_gap": {
+    "started_at": 1793071438.5384257,
+    "finished_at": 1793071446.6656122,
+    "samples": 40,
+    "vip_failed_samples": 16,
+    "both_nodes_unavailable_samples": 0
+  },
+  "software": {
+    "oxidns": "oxidns 1.6.1 (full)",
+    "agent": "1.8.46-go"
+  },
+  "limitations": [
+    "Normal publication phases observed zero VIP DNS failures at a 100ms target interval and 300ms timeout; this does not prove packet-level zero interruption.",
+    "Intentional core failures are recorded separately; the complete run does include failed VIP queries.",
+    "Synthetic local DNS responses exercise handoff and restart ordering, not upstream Internet DNS availability or performance."
+  ],
+  "cleanup": {
+    "verified_at": 1793071824.1427372,
+    "guests": {
+      "130": {
+        "status": "stopped",
+        "snapshot_restored": "cf-vip-handoff-20261027",
+        "test_snapshot_removed": true,
+        "identity_and_network": [
+          "hostname: cf-oxi-a-retest",
+          "net0: name=eth0,bridge=cfgt,gw=10.97.0.1,hwaddr=BC:24:11:E2:F5:57,ip=10.97.0.72/24,type=veth",
+          "onboot: 0"
+        ]
+      },
+      "131": {
+        "status": "stopped",
+        "snapshot_restored": "cf-vip-handoff-20261027",
+        "test_snapshot_removed": true,
+        "identity_and_network": [
+          "hostname: cf-oxi-b-retest",
+          "net0: name=eth0,bridge=cfgt,gw=10.97.0.1,hwaddr=BC:24:11:25:ED:96,ip=10.97.0.73/24,type=veth",
+          "onboot: 0"
+        ]
+      },
+      "132": {
+        "status": "stopped",
+        "snapshot_restored": "cf-vip-handoff-20261027",
+        "test_snapshot_removed": true,
+        "identity_and_network": [
+          "hostname: cf-app-retest",
+          "net0: name=eth0,bridge=cfgt,gw=10.97.0.1,hwaddr=BC:24:11:FD:38:14,ip=10.97.0.74/24,type=veth",
+          "onboot: 0"
+        ]
+      }
+    },
+    "http_tunnel_closed": true,
+    "production_instances_modified": false,
+    "network_or_firewall_modified": false,
+    "test_server_temporary_paths_removed": [
+      "/tmp/configflow-vip-handoff",
+      "/tmp/configflow-vip-handoff-source",
+      "/tmp/configflow-vip-handoff-agent"
+    ],
+    "private_credentials_removed": true
+  }
+}

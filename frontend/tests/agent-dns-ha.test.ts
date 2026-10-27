@@ -128,6 +128,49 @@ describe('ordered configuration synchronization', () => {
     expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '同步结果待确认', tone: 'warning' })
     expect(notify.success).not.toHaveBeenCalled()
   })
+
+  it('shows the VIP handoff before updating the original holder and follows actual roles', async () => {
+    vi.useFakeTimers()
+    const pending = { ...publication(), phase: 'handoff',
+      message: '正在将虚拟 IP 迁移到备用 OxiDNS，并确认解析正常',
+      members: [{ agent_id: 'oxi-2', name: '备用 OxiDNS', deployment_id: 'deploy-2', status: 'succeeded' },
+        { agent_id: 'oxi-1', name: '主 OxiDNS', deployment_id: 'deploy-1', status: 'waiting' }] }
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: {
+      ...status('ok', [member('oxi-1', { vip_present: true }), member('oxi-2', {})]), publication: pending,
+    } } as any)
+    const wrapper = render({ oxidns_ha: ha, oxidns_ha_publication: pending })
+    await flushPromises()
+    expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '正在迁移虚拟 IP', tone: 'progress' })
+    expect(wrapper.get('[data-ha-publication]').text()).toContain('确认解析正常')
+    expect(wrapper.get('[data-ha-publication]').text()).toContain('等待前一台完成')
+    expect(notify.success).not.toHaveBeenCalled()
+
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: {
+      ...status('ok', [member('oxi-1', {}), member('oxi-2', { vip_present: true, role: 'master' })]),
+      publication: { ...pending, phase: 'primary', active_agent_id: 'oxi-1',
+        message: '虚拟 IP 解析已确认，正在更新原持有设备 主 OxiDNS' },
+    } } as any)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.get('[data-ha-publication]').text()).toContain('正在更新原持有设备')
+    expect(wrapper.find('[data-dns-ha-holder]').exists()).toBe(false)
+    expect(wrapper.findComponent(AgentStatusRow).props('tone')).toBe('progress')
+    expect(notify.success).not.toHaveBeenCalled()
+  })
+
+  it('keeps an unconfirmed handoff visible as a warning and continues checking', async () => {
+    vi.useFakeTimers()
+    const pending = { ...publication('unknown'), phase: 'handoff',
+      message: '虚拟 IP 迁移结果尚未确认，原持有设备未更新' }
+    vi.mocked(agentApi.getDNSHA).mockResolvedValue({ data: { ...status('ok', []), publication: pending } } as any)
+    const wrapper = render({ oxidns_ha: ha, oxidns_ha_publication: pending })
+    await flushPromises()
+    expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '虚拟 IP 迁移待确认', tone: 'warning' })
+    expect(wrapper.get('[data-status-notice]').text()).toContain('原持有设备未更新')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(agentApi.getDNSHA).toHaveBeenCalledTimes(2)
+    expect(notify.success).not.toHaveBeenCalled()
+  })
 })
 
 describe('DNS high availability when not enabled', () => {

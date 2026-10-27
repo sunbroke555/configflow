@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.45-go"
+LATEST_AGENT_VERSION = "1.8.46-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.46-go": {
+        "date": "2026-10-27",
+        "features": [
+            "OxiDNS 主备发布支持先让位虚拟 IP：备机更新健康后，经两台确认 VIP 解析再更新原主机；后台或 Agent 重启后可继续确认和清理",
+            "让位仅影响受管 VIP，保留故障自动接管；对端无法解析时恢复本机正常选举优先级"
+        ]
+    },
     "1.8.45-go": {
         "date": "2026-10-26",
         "features": [

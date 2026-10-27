@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
@@ -52,9 +53,20 @@ func haCheckTarget(configPath string) (string, string) {
 	return address, name
 }
 
-// haDNSAnswers accepts any reply with the same ID and QR set: an NXDOMAIN or
-// SERVFAIL still proves that the local process is answering.
+// haDNSAnswers preserves the local liveness check: any reply with the same
+// ID and QR set proves the core answers, including SERVFAIL during WAN faults.
 func haDNSAnswers(address, name string, timeout time.Duration) error {
+	return haDNSQuery(address, name, timeout, false)
+}
+
+// haDNSResolves is stricter for planned handoff peer and VIP verification.
+// Only NOERROR or NXDOMAIN with a complete matching question can authorize
+// restarting the other server; SERVFAIL and truncated packets cannot.
+func haDNSResolves(address, name string, timeout time.Duration) error {
+	return haDNSQuery(address, name, timeout, true)
+}
+
+func haDNSQuery(address, name string, timeout time.Duration, strict bool) error {
 	conn, err := net.DialTimeout("udp", address, timeout)
 	if err != nil {
 		return err
@@ -77,8 +89,15 @@ func haDNSAnswers(address, name string, timeout time.Duration) error {
 		if err != nil {
 			return fmt.Errorf("no reply: %w", err)
 		}
-		if n >= 12 && reply[0] == query[0] && reply[1] == query[1] && reply[2]&0x80 != 0 {
+		if !strict && n >= 12 && reply[0] == query[0] && reply[1] == query[1] && reply[2]&0x80 != 0 {
 			return nil
+		}
+		if n >= len(query) && reply[0] == query[0] && reply[1] == query[1] && reply[2]&0xfa == 0x80 &&
+			binary.BigEndian.Uint16(reply[4:6]) == 1 && bytes.Equal(reply[12:len(query)], query[12:]) {
+			if rcode := reply[3] & 0x0f; rcode == 0 || rcode == 3 {
+				return nil
+			}
+			return fmt.Errorf("DNS health query failed with RCODE %d", reply[3]&0x0f)
 		}
 	}
 }
@@ -93,8 +112,9 @@ func haCheckLocal(cfg *Config) error {
 }
 
 // RunOxiDNSHACheck is keepalived's track_script. It only reads the Agent and
-// OxiDNS configuration and sends one local query: no registration, listener,
-// file write or log output. Exit 0 means the local OxiDNS process answers.
+// OxiDNS configuration and sends a local query: no registration, listener,
+// file write or log output. During a managed handoff it also checks the saved
+// peer, yielding only while that peer answers healthy DNS queries.
 func RunOxiDNSHACheck(agentConfigFile string) int {
 	configPath := ""
 	if data, err := os.ReadFile(agentConfigFile); err == nil {
@@ -107,6 +127,10 @@ func RunOxiDNSHACheck(agentConfigFile string) int {
 	}
 	address, name := haCheckTarget(configPath)
 	if haDNSAnswers(address, name, haCheckTimeout) != nil {
+		return 1
+	}
+	cfg := &Config{AgentConfigFile: agentConfigFile, ConfigPath: configPath}
+	if state, err := loadHAState(cfg); err == nil && haYieldToPeer(cfg, state) {
 		return 1
 	}
 	return 0

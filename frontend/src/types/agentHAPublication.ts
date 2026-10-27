@@ -2,7 +2,7 @@
 export interface AgentHAPublication {
   id: string
   status: string
-  phase: 'preparing' | 'standby' | 'primary' | 'keepalived' | 'done'
+  phase: 'preparing' | 'standby' | 'handoff' | 'primary' | 'keepalived' | 'done'
   message?: string
   owner_agent_id: string
   owner_deployment_id: string

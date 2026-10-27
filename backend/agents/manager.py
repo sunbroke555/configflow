@@ -1628,6 +1628,14 @@ class AgentManager:
         """只撤销归属可验证的 keepalived 配置，并恢复服务原来的启用和运行状态。"""
         return self._oxidns_ha_request(agent, 'delete', (5, 90))
 
+    def oxidns_ha_handoff(self, agent: Dict[str, Any], method: str,
+                          operation_id: str) -> Dict[str, Any]:
+        """Yield this managed VIP without interrupting the DNS or keepalived service."""
+        if method not in ('get', 'post', 'delete'):
+            raise ValueError('Unsupported DNS handoff operation')
+        return self._oxidns_ha_request(agent, method, (5, 15), '/handoff',
+                                      **({'json': {'operation_id': operation_id}} if method != 'get' else {}))
+
     def region_targets(self, agent: Dict[str, Any]) -> List[Dict[str, Any]]:
         """探测组可切换的目标（节点与策略组）。"""
         return self._agent_json_request(agent, 'get', '/api/region-check/targets', 15, '区域检测').get('targets') or []
