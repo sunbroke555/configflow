@@ -68,7 +68,7 @@ def test_every_action_and_pinned_chain_is_generated(tmp_path, scenario):
                     *([f'ttl {features["remote_ttl"]}'] if source != 'local' and features['remote_ttl'] else []),
                     'accept']
         assert steps == expected, source
-        # Domain and IP rules share one chain per pinned upstream.
+        # Repeated domain rules share one chain per pinned upstream.
         assert execs.count(f'goto cf_dns_up_{key}') == 1
         assert (f'cf_dns_cache_{key}' in plugins(document)) is cache
 

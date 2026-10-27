@@ -194,11 +194,18 @@ def test_native_ip_addition_and_removal_keep_sequence_surroundings():
     old = bundle(before_doc, 'oxidns', {path: (b'old.test', 'rule')})
     new = bundle(after_doc, 'oxidns', {path: (b'old.test', 'rule')})
     isolated = isolate_rule_bundle(old, new, 'oxidns')
-    assert 'resp_ip $rules_ip_1' in str(unpack_document(isolated))
+    isolated_doc = unpack_document(isolated)
+    assert not any(plugin['type'] == 'ip_set' for plugin in isolated_doc['plugins'])
+    assert 'resp_ip ' not in str(isolated_doc)
+    assert 'full:old-inline.test' not in str(isolated_doc)
+    # The remaining library rule and every surrounding native plugin survive
+    # rule-only isolation unchanged; the new IP rule has no DNS consumer.
+    assert isolated_doc == after_doc
     reverted = project_rule_changes(projected, base, {'rules': True})
     reverted_doc = yaml.safe_load(reverted['oxidns']['native_config'])
-    assert 'resp_ip $rules_ip_1' not in str(reverted_doc)
-    isolate_rule_bundle(isolated, bundle(reverted_doc, 'oxidns', {path: (b'old.test', 'rule')}), 'oxidns')
+    assert 'resp_ip ' not in str(reverted_doc)
+    restored = isolate_rule_bundle(isolated, bundle(reverted_doc, 'oxidns', {path: (b'old.test', 'rule')}), 'oxidns')
+    assert unpack_document(restored) == before_doc
 
 
 def test_native_download_and_reload_follow_new_selected_sources():

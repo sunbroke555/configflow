@@ -429,6 +429,9 @@ def run_rule_dns(root, binary):
     cached = features.get('cache_enabled', True)
     remote_ttl = features.get('remote_ttl', 1)
     config = yaml.safe_load((root / 'config.yaml').read_text())
+    # Each scenario runs independently, including parallel pytest workers.
+    if isinstance(config.get('api', {}).get('http'), dict):
+        config['api']['http']['listen'] = f'127.0.0.1:{free_port()}'
     stubs = {role: MockDNS(answer) for role, (_, answer) in RULE_DNS_STUBS.items()}
     roles = {address: role for role, (address, _) in RULE_DNS_STUBS.items()}
     for name, ip in RULE_DNS_PROBE_ANSWERS.items():

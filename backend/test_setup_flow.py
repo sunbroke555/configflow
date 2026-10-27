@@ -651,7 +651,7 @@ def test_recommended_classical_library_is_ready_and_existing_sources_are_not_dup
     downloads = get_oxidns_ruleset_downloads(candidate, 'https://config.test')
     assert any(item['local_path'].endswith('_domain.txt') for item in downloads)
     assert not any(item['local_path'].endswith('_ip.txt') for item in downloads)
-    assert len(downloads) > 30
+    assert len(downloads) == 25  # One domain file per selected ruleset; no IP files.
     index = client.get('/api/setup').json
     telegram = next(item for item in index['domain_rules'] if item['id'] == 'builtin:telegram')
     assert 'library:existing_telegram' in telegram['aliases']
