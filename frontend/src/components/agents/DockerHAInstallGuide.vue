@@ -282,6 +282,11 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
         <DockerHAGuideCommand title="1. 检查宿主机" :command="currentResult.inspection_command" />
         <DockerHAGuideCommand v-if="currentResult.identity_command" title="2. 创建这台宿主机的身份文件" :command="currentResult.identity_command" note="仅在该宿主机执行一次；不要把文件复制给另一台主机。" />
         <DockerHAGuideCommand :title="currentResult.identity_command ? '3. 安装或迁移容器' : '2. 安装或迁移容器'" :command="currentResult.install_command" :note="hosts[currentHost]!.mode === 'migrate' ? '此脚本会核对原挂载、停止并备份旧容器、保留旧容器再重建；不要跳过脚本直接运行 Compose。迁移期间这台 DNS 会暂停。' : '脚本创建持久目录并启动容器。执行结束后前往下一步刷新 Agent，安装日志报错时先处理原因。'" />
+        <div v-if="hosts[currentHost]!.mode === 'new'" class="rounded-md border border-border bg-muted p-3 text-[13px] leading-relaxed">
+          <p class="mb-2 mt-0 font-semibold">新装中途失败，如何继续？</p>
+          <p class="m-0">保留全部设置不变，包括名称、地址、端口、服务器、网络参数、镜像和各持久路径。先修复命令报告的原因，再重跑原安装命令，或用相同设置重新生成后执行。安装凭据有效期为 24 小时；过期后也要保持相同设置重新生成。</p>
+          <p class="mb-0 mt-2">续装仅复用本次安装记录能确认的容器和网络，不接管其他同名容器。不要删除 Agent 身份文件、持久数据或安装记录，也不要手工改名。若需要改变设置，请先核对现有安装，再选择迁移或独立的新数据目录。</p>
+        </div>
         <DockerHAGuideCommand v-if="currentLogs" :title="currentLogs.title" :command="currentLogs.command" note="在同一台宿主机执行，查看实际容器的启动错误；修正原因后再刷新 Agent。" />
         <details v-if="currentResult.compose" class="min-w-0"><summary class="min-h-11 cursor-pointer py-3 text-[13px]">查看 Compose 定义</summary><DockerHAGuideCommand title="Compose 定义（供核对）" :command="currentResult.compose" note="迁移必须使用上方安装脚本，以保留检查、备份和回滚路径。" /></details>
         <DockerHAGuideCommand v-if="currentResult.rollback_command" title="迁移失败时回滚" :command="currentResult.rollback_command" note="只在对应主机运行。保留旧容器、备份和原数据，不删除卷；恢复后检查原 Agent 与 DNS 服务。" />
@@ -291,7 +296,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
     <div v-else class="flex min-w-0 flex-col gap-4">
       <div class="flex flex-wrap items-center justify-between gap-2"><h4 class="m-0 text-sm font-semibold">读取两台 Agent 的真实环境</h4><Button variant="outline" class="min-h-11" :disabled="refreshing" @click="refresh"><RefreshCw class="size-4" :class="refreshing && 'animate-spin'" />刷新并检查两台 Agent</Button></div>
       <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">先刷新设备列表，再直接向所选 Agent 读取 HA 能力和环境。在线心跳不能代替安装检查；更换选择后需要重新刷新。</p>
-      <details class="text-[13px] leading-relaxed"><summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或环境检查失败？</summary><ul class="mb-0 list-disc space-y-2 pl-5"><li>先查看对应宿主机的 Docker / Container Manager 容器日志，确认镜像拉取成功、OxiDNS 与 Agent 已启动；检查 53 端口冲突。</li><li>确认填写的 ConfigFlow 地址从容器可达、服务器能访问所填 Agent 地址和端口，防火墙允许流量。安装命令有时效，过期后重新生成。</li><li>Host 检查 companion 是否运行、共享 HA 目录和只读身份挂载是否一致；macvlan 检查网卡、子网、固定地址与宿主隔离限制。按下面实时返回的具体原因修正后重新刷新。</li></ul></details>
+      <details class="text-[13px] leading-relaxed"><summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或环境检查失败？</summary><ul class="mb-0 list-disc space-y-2 pl-5"><li>先查看对应宿主机的 Docker / Container Manager 容器日志，确认镜像拉取成功、OxiDNS 与 Agent 已启动；检查 53 端口冲突。</li><li>确认填写的 ConfigFlow 地址从容器可达、服务器能访问所填 Agent 地址和端口，防火墙允许流量。新装凭据有效期为 24 小时，过期时保留全部设置不变再重新生成；不要删除已有身份和安装记录。</li><li>Host 检查 companion 是否运行、共享 HA 目录和只读身份挂载是否一致；macvlan 检查网卡、子网、固定地址与宿主隔离限制。按下面实时返回的具体原因修正后重新刷新。</li></ul></details>
       <div class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
         <div v-for="index in [0, 1]" :key="index" class="min-w-0 space-y-2">
           <FormField :label="`主机 ${index + 1} 的 OxiDNS Agent`" :html-for="`docker-ha-verify-${index + 1}`">
