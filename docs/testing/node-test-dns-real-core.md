@@ -94,6 +94,12 @@ connection and two origin HEAD 204 responses. The original entry returned
 `198.18.0.99`, producing `dns_fake_ip`; the managed UDP and TCP entries both
 returned the fixture's real address `192.168.0.32`.
 
+Afterward, only the independent preview backend was restarted. The global DNS
+selection remained unchanged, its endpoint still resolved as ready, and the
+same subscription node again completed a 1 ms real worker probe. The lab Agent,
+OxiDNS and fixtures were left running. See the
+[restart evidence](node-test-dns-preview-restart-2026-10-27.json).
+
 The existing Go Agent real-core lifecycle regression also passed separately:
 
 ```sh
