@@ -33,6 +33,92 @@ CompactDumper.add_representer(FlowList, lambda dumper, value: dumper.represent_s
 CompactDumper.add_representer(ImageName, lambda dumper, value: dumper.represent_str(str(value)))
 
 
+def _annotate_compose(text, compose):
+    """Attach fixed maintenance notes at YAML node boundaries, never inside values."""
+    notes = {('name',): '保持默认：项目名，重建时沿用'}
+    for role, service in compose['services'].items():
+        prefix = ('services', role)
+        helper = role == 'ha-companion'
+        fields = {
+            'image': '保持默认：复用上方镜像' if helper else '可改：镜像版本，需支持精简安装；升级只改此处',
+            'container_name': '保持默认：容器名称',
+            'restart': '保持默认：异常重启，手动停止后保持停止',
+            'network_mode': '保持默认：使用宿主机网络',
+            'cap_add': '保持默认：管理 VIP、发送高可用报文',
+            'stop_grace_period': '保持默认：正常退出最多等待 30 秒',
+            'volumes': ('保持默认：与上方使用同一组目录，前两项只读' if helper else
+                        '核对：左侧是宿主机目录；安装后保留数据，右侧路径不改'),
+        }
+        for key, note in fields.items():
+            if key in service:
+                notes[prefix + (key,)] = note
+        environments = {
+            'SERVICE_TYPE': '保持默认：仅运行独立 VIP 服务' if helper else '保持默认：OxiDNS 与高可用运行入口',
+            'SERVER_URL': '核对：容器可访问的 ConfigFlow 地址',
+            'AGENT_NAME': '核对：设备登记名称',
+            'AGENT_IP': '核对：宿主机固定 IPv4' if service.get('network_mode') == 'host' else '核对：容器独立 IPv4',
+            'AGENT_PORT': '核对：Agent 管理端口，不是 DNS 端口',
+            'INSTALL_KEY': '保持生成值：安装凭据，请勿分享；登记成功后可删',
+            'INSTALL_SCOPE': '保持默认：核对安装归属，不是密码',
+        }
+        for key in service['environment']:
+            notes[prefix + ('environment', key)] = environments[key]
+        notes[prefix + ('logging', 'driver')] = '保持默认：容器日志格式'
+        notes[prefix + ('logging', 'options')] = ('可改：每份 5 MB，最多 2 份' if helper else '可改：每份 10 MB，最多 3 份')
+        for index, mount in enumerate(service['volumes']):
+            path = prefix + ('volumes', index)
+            if isinstance(mount, str):
+                notes[path] = ('Agent 身份', '配置与规则', '高可用状态')[index]
+            else:
+                if index < 3:
+                    notes[path + ('source',)] = '核对：宿主机持久目录'
+                else:
+                    notes[path + ('source',)] = ('保持默认：识别宿主，防止同机配对' if mount['source'].endswith('boot_id')
+                                                else '保持默认：核对 Host 网络；不是文本文件')
+                notes[path + ('type',)] = '保持默认：宿主路径直接挂载'
+                notes[path + ('target',)] = '保持默认：容器内路径，宿主机无需创建'
+                notes[path + ('read_only',)] = '保持默认：' + ('只读访问' if mount.get('read_only') else '允许保存数据')
+                notes[path + ('bind',)] = ('保持默认：源路径缺失即报错' if index >= 3 else '保持默认：自动创建数据目录')
+        if 'networks' in service:
+            notes[prefix + ('networks', 'dns-ha', 'ipv4_address')] = '核对：与 AGENT_IP 一致；需调整请重新生成'
+    if 'networks' in compose:
+        network = ('networks', 'dns-ha')
+        notes.update({
+            network + ('name',): '保持默认：专用网络名称',
+            network + ('driver',): '保持默认：容器使用独立局域网地址',
+            network + ('driver_opts', 'parent'): '核对：宿主机实际网卡',
+            network + ('ipam', 'config', 0, 'subnet'): '核对：局域网网段',
+            network + ('ipam', 'config', 0, 'gateway'): '核对：局域网网关',
+        })
+    annotations = {}
+
+    def visit(node, path=(), key=None):
+        if path in notes:
+            line = (key or node).start_mark.line
+            # A wrapped quoted/plain scalar (or flow collection) must not receive
+            # a comment in the middle. Aliases retain their anchor's marks, so
+            # mapping keys identify their own output line instead.
+            wrapped = node.start_mark.line == line and node.end_mark.line > line and (
+                isinstance(node, yaml.ScalarNode) or node.flow_style)
+            annotations[line] = (notes[path], wrapped)
+        if isinstance(node, yaml.MappingNode):
+            for child_key, value in node.value:
+                visit(value, path + (child_key.value,), child_key)
+        elif isinstance(node, yaml.SequenceNode):
+            for index, value in enumerate(node.value):
+                visit(value, path + (index,))
+
+    visit(yaml.compose(text))
+    lines = ['# 已按页面填写生成；地址、名称、端口或网络要调整，请回页面重新生成。',
+             '# 已安装请保留原数据目录和身份；变更设备信息请使用迁移入口。']
+    for index, line in enumerate(text.splitlines()):
+        note, wrapped = annotations.get(index, ('', False))
+        if note and wrapped:
+            lines.append(line[:len(line) - len(line.lstrip())] + '# ' + note)
+        lines.append(line + ('  # ' + note if note and not wrapped else ''))
+    return '\n'.join(lines) + '\n'
+
+
 def generate_compact(params, request, enrollment=None):
     data = params['data_dir']
     system_roots = ('/etc', '/usr', '/bin', '/sbin', '/proc', '/sys', '/dev', '/run', '/boot')
@@ -95,5 +181,5 @@ def generate_compact(params, request, enrollment=None):
         for network in compose['networks'].values():
             network['name'] = project + '-dns-ha'
     text = yaml.dump(compose, Dumper=CompactDumper, sort_keys=False, allow_unicode=True, width=1000).replace('$', '$$')
-    return text, {'filename': 'compose.yaml', 'project_name': project, 'command': 'docker compose up -d',
+    return _annotate_compose(text, compose), {'filename': 'compose.yaml', 'project_name': project, 'command': 'docker compose up -d',
                   'identity_mode': 'installation', 'service_count': len(services)}
