@@ -393,6 +393,11 @@ def generate_guide(request, enrollment=None):
         return {'success': True, 'verification_command': 'nslookup example.com ' + str(vip) + '\n'}
     if action != 'generate' or request.get('mode', 'new') not in ('new', 'migrate'):
         raise ValueError('安装步骤或模式无效')
+    method = request.get('install_method', 'script')
+    if method not in ('script', 'compose'):
+        raise ValueError('install_method 须为 script 或 compose')
+    if method == 'compose' and request.get('mode', 'new') != 'new':
+        raise ValueError('Compose 安装包仅支持新安装；已有容器请使用迁移脚本')
     image = request.get('image', IMAGE)
     if not isinstance(image, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}', image):
         raise ValueError('Docker 镜像名称无效')
@@ -433,9 +438,17 @@ def generate_guide(request, enrollment=None):
                {'id': 'logs', 'title': '查看启动日志', 'command': logs}]
     if rollback:
         blocks.append({'id': 'rollback', 'title': '需要时恢复原容器', 'command': rollback})
-    return {'success': True, 'inspection_command': inspection, 'identity_command': identity, 'compose': compose,
+    result = {'success': True, 'inspection_command': inspection, 'identity_command': identity, 'compose': compose,
             'install_command': install, 'rollback_command': rollback, 'command_blocks': blocks,
             'warnings': (['迁移仅适用于 ConfigFlow 单 OxiDNS 默认启动容器；先执行迁移脚本，不要直接 Compose up 跳过原挂载核对和备份。',
                           '已有高可用组请先在页面处理虚拟 IP 与停用；脚本拒绝迁移仍有 HA 记录的容器。',
                           '备份包含 Agent 身份与配置，请保护备份目录；旧容器和数据不会被删除。',
                           '迁移 Compose 的 raw 环境文件格式需要 Docker Compose 2.30+；安装命令使用 Docker Run，不依赖 Compose 版本。'] if mode == 'migrate' else ['首次安装请先执行安装命令完成安全注册；Compose 仅供查看或后续维护，直接 Compose up 不会执行注册步骤。'])}
+
+    if method == 'compose':
+        from .docker_ha_compose import generate_bundle
+        result['compose'], result['compose_bundle'] = generate_bundle(params, request, enrollment)
+        result['warnings'] = ['安装包仅支持新安装：解压后先执行 sudo bash prepare.sh，再运行 docker compose up -d；需要 Compose 2.20+。',
+                              '安装包包含限定本机的首次登记凭据，请勿公开分享；已登记并持久保存身份后，重启不依赖该凭据或登记 API。',
+                              '请在 Compose 安装包和备用安装脚本中选择一种方式，不要对同一数据目录混用。']
+    return result
