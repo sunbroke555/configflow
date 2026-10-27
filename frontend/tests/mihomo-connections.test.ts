@@ -6,7 +6,7 @@ import { compareSources, connectionMatcher, INNER_SOURCE } from '@/types/mihomo'
 import { confirmDanger } from '@/lib/feedback'
 import { CONNECTION_COLUMNS, CONNECTION_SETTINGS_KEY, DEFAULT_CONNECTION_COLUMNS } from '@/lib/mihomo-connections'
 
-vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn(), ruleTargets: vi.fn() }, mihomoPanelApi: { connections: vi.fn(), closeConnection: vi.fn(), closeAllConnections: vi.fn() } }))
+vi.mock('@/api', () => ({ clientToolsApi: { notes: vi.fn(), ruleTargets: vi.fn() }, mihomoPanelApi: { connections: vi.fn(), closeConnection: vi.fn(), closeAllConnections: vi.fn(), proxies: vi.fn(), proxyProviders: vi.fn(), selectProxy: vi.fn() } }))
 vi.mock('@/lib/feedback', () => ({ confirmDanger: vi.fn(), notify: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
 vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
 
@@ -374,6 +374,29 @@ describe('mihomo connections', () => {
     expect(dialog?.textContent).toContain('IPv4')
     expect(dialog?.textContent).toContain('200 B')
     expect(dialog?.textContent).toContain('100 B')
+  })
+
+  it('loads the detail proxy selector only on its tab and switches on the connection agent', async () => {
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([connection('a', 'www.example.com', '10.0.0.3')]))
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: {
+      Proxy: { name: 'Proxy', type: 'Selector', all: ['HK', 'DIRECT'], now: 'HK' },
+      HK: { name: 'HK', type: 'AnyTLS' }, DIRECT: { name: 'DIRECT', type: 'Direct' }
+    } } } } as any)
+    vi.mocked(mihomoPanelApi.proxyProviders).mockResolvedValue({ data: { data: { providers: {} } } } as any)
+    vi.mocked(mihomoPanelApi.selectProxy).mockResolvedValue({} as any)
+    localStorage.setItem('configflow:mihomo-panel:proxy-settings', JSON.stringify({ closeConnectionsOnSwitch: false }))
+    const { wrapper } = await render()
+    await wrapper.get('button[aria-label="查看 www.example.com:443 的连接详情"]').trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.proxies).not.toHaveBeenCalled()
+    const proxyTab = Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(button => button.textContent === '代理')!
+    proxyTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await flushPromises()
+    expect(mihomoPanelApi.proxies).toHaveBeenCalledExactlyOnceWith('gw')
+    document.body.querySelector<HTMLButtonElement>('button[aria-label="选择 DIRECT"]')!.click()
+    await flushPromises()
+    expect(mihomoPanelApi.selectProxy).toHaveBeenCalledExactlyOnceWith('gw', 'Proxy', 'DIRECT')
+    expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain('此连接建立时：Proxy → HK')
   })
 })
 
