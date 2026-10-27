@@ -95,7 +95,8 @@ def test_invalid_and_cyclic_groups_never_guess_direct():
     )
     routes = policy_dns_routes(config)
     assert all(routes[name] == 'proxy' for name in ('a', 'b', 'empty', 'disabled', 'missing_source',
-                                                  'disabled_source', 'invalid_follow_chain'))
+                                                  'invalid_follow_chain'))
+    assert routes['disabled_source'] == 'direct'
     assert follow_route(rule('r', 'missing'), config) == 'proxy'
     assert follow_route(rule('r', 'DIRECT'), config) == 'direct'
     assert follow_route(rule('r', 'REJECT'), config) is None

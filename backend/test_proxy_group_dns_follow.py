@@ -95,7 +95,10 @@ def test_group_default_reorder_updates_follow_dns_once_in_selected_profile(group
                 'profile_id': 'other', 'action': 'update', 'id': 'source',
                 'data': {'proxies_order': PROXY_FIRST},
             })
-        assert result['success']
+        assert result['action'] == 'update'
+        assert result['profile_id'] == 'other'
+        assert result['item']['id'] == 'source'
+        assert result['item']['proxies_order'] == PROXY_FIRST
     else:
         response = client.put('/api/proxy-groups/source', headers=HEADERS, json={'proxies_order': PROXY_FIRST})
         assert response.status_code == 200, response.get_json()

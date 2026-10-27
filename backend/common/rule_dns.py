@@ -335,8 +335,10 @@ def policy_dns_routes(config):
             source = by_id.get(group['follow_group'])
             # Writes forbid following another follower. Do not invent defaults
             # for imported chains that Mihomo does not recursively expand.
-            if source is None or not source.get('enabled', True) or source.get('follow_group'):
+            if source is None or source.get('follow_group'):
                 return 'proxy'
+        # A disabled source can still be a template for an enabled follower;
+        # Mihomo copies its configuration without emitting the source itself.
         if source.get('type') != 'select':
             return 'proxy'
         emitted = render_members(source, config)
