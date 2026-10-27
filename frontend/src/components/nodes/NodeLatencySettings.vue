@@ -83,6 +83,11 @@
                 </template>
                 <details :open="listenerExpanded" class="border-t border-border">
                   <summary class="flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 py-2 text-sm marker:content-none" @click.prevent="listenerExpanded = !listenerExpanded"><ChevronRight class="size-4 shrink-0 transition-transform" :class="{ 'rotate-90': listenerExpanded }" /><span>入口地址与端口</span><span class="min-w-0 break-all font-mono text-xs text-muted-foreground">{{ listenAddress.trim() || '未填写地址' }}:{{ port || '未填写端口' }}</span></summary>
+                  <div class="space-y-1 text-xs leading-relaxed text-muted-foreground">
+                    <p class="m-0">测速时，ConfigFlow 通过这个地址，让 OxiDNS 查询节点的真实 IP。</p>
+                    <p class="m-0">IP 地址：运行 OxiDNS 的那台设备的 IP。</p>
+                    <p class="m-0">端口：一般保持默认 <span class="font-mono">15353</span>，被占用时再换。</p>
+                  </div>
                   <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_6rem] gap-3 pb-1 pt-2">
                     <FormField label="监听 IPv4" html-for="node-latency-listen"><Input id="node-latency-listen" v-model="listenAddress" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="设备可访问的 IPv4" /></FormField>
                     <FormField label="端口" html-for="node-latency-port"><Input id="node-latency-port" v-model="port" class="min-h-11 font-mono" :disabled="busy || disabled" inputmode="numeric" /></FormField>
