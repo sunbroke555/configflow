@@ -4,7 +4,6 @@ The worker uses complete node credentials, never the running Mihomo controller.
 Results from earlier probe semantics are excluded from proxy-latency history.
 """
 import json
-import ipaddress
 import os
 import shutil
 import subprocess
@@ -16,9 +15,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlsplit
 
-from backend.common.config import get_repository, get_shared_config, get_system_config
+from backend.common.config import get_repository, get_shared_config
 from backend.common.config_repository import ProfileRepositoryError
 from backend.utils.logger import get_logger
+from backend.utils.node_dns import effective_settings, normalize_dns_servers
 from backend.utils.subscription_cache import load_subscription_cache
 from backend.utils.subscription_filter import filter_subscription_items
 
@@ -40,32 +40,8 @@ class ProbeBusy(RuntimeError):
     pass
 
 
-def normalize_dns_servers(value):
-    """Accept explicit IPv4 resolvers without URLs, credentials or bootstrap DNS."""
-    message = '测速 DNS 须为 IPv4 或 IPv4:端口，最多 4 个；留空使用系统 DNS'
-    if not isinstance(value, list) or len(value) > 4:
-        raise ValueError(message)
-    servers = []
-    for item in value:
-        if not isinstance(item, str):
-            raise ValueError(message)
-        host, separator, port = item.strip().partition(':')
-        try:
-            address = ipaddress.IPv4Address(host)
-            if address.is_unspecified or address.is_multicast:
-                raise ValueError
-            if separator and (not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535):
-                raise ValueError
-        except ValueError as exc:
-            raise ValueError(message) from exc
-        normalized = str(address) + (f':{int(port)}' if separator and int(port) != 53 else '')
-        if normalized not in servers:
-            servers.append(normalized)
-    return servers
-
-
 def dns_settings():
-    return normalize_dns_servers(get_system_config().get('system_config', {}).get('node_test_dns', []))
+    return effective_settings()['dns_servers']
 
 
 def settings() -> Dict[str, Any]:
@@ -81,10 +57,10 @@ def settings() -> Dict[str, Any]:
     except ValueError as exc:
         raise ProbeUnavailable('节点测速设置无效，请检查测试地址及超时（500–10000 毫秒）') from exc
     try:
-        dns_servers = dns_settings()
+        dns = effective_settings()
     except ValueError as exc:
         raise ProbeUnavailable(str(exc)) from exc
-    return {'url': url, 'timeout_ms': timeout, 'dns_servers': dns_servers,
+    return {'url': url, 'timeout_ms': timeout, **dns,
             'unified_delay': os.environ.get('CONFIGFLOW_NODE_TEST_UNIFIED_DELAY', '1').lower() not in ('0', 'false')}
 
 
@@ -168,12 +144,12 @@ def _run_probe(proxies, options):
         raise ProbeUnavailable('测速组件无法启动，请检查可执行权限和 CPU 架构') from exc
     # Do not expose worker stderr or the input (both may contain node credentials).
     if process.returncode == 3:
-        raise ProbeUnavailable('节点测速 DNS 设置无效，请使用 IPv4 或 IPv4:端口，多个 DNS 用逗号分隔')
+        raise ProbeUnavailable('节点测速 DNS 设置无效，请检查服务器地址及引导 DNS')
     if process.returncode:
         raise ProbeUnavailable('测速组件异常退出，请检查组件版本后重试')
     try:
         response = json.loads(process.stdout)
-        if response['version'] != 3:
+        if response['version'] != 4:
             raise ProbeUnavailable('测速组件版本不匹配，请更新 ConfigFlow 镜像；源码部署请重新构建 backend/node-probe')
         if not isinstance(response['results'], list):
             raise ValueError
@@ -266,7 +242,8 @@ def _run_tests(names, keys):
         entry = stored.get(key, {})
         same_test = (entry.get('url') == options['url']
                      and entry.get('unified_delay') == options['unified_delay']
-                     and entry.get('dns_servers', []) == options['dns_servers'])
+                     and entry.get('dns_servers', []) == options['dns_servers']
+                     and entry.get('dns_bootstrap', []) == options['dns_bootstrap'])
         history = list(entry.get('history') or [])[-(HISTORY_SIZE - 1):] if same_test else []
         history.append(measurement['latency'])
         stored[key] = {field: value for field, value in measurement.items() if field != 'name'}

@@ -154,24 +154,78 @@ def node_latency():
 @nodes_bp.route('/latency/settings', methods=['GET', 'POST'])
 @require_auth
 def node_latency_settings():
-    """Persistent DNS for the standalone node-library probe only."""
-    from backend.common.config import get_system_config, save_system_config
-    from backend.utils.node_latency import dns_settings, normalize_dns_servers
+    """Global DNS selection; creating a managed endpoint is a separate operation."""
+    from backend.utils.node_dns import describe_settings, normalize_dns_servers, save_config
 
-    if request.method == 'GET':
-        try:
-            return jsonify({'success': True, 'dns_servers': dns_settings()})
-        except ValueError as exc:
-            return jsonify({'success': False, 'message': str(exc)}), 400
-
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict) or 'dns_servers' not in payload:
-        return jsonify({'success': False, 'message': '请提供测速 DNS 列表，留空使用系统 DNS'}), 400
     try:
-        servers = normalize_dns_servers(payload['dns_servers'])
+        if request.method == 'GET':
+            return jsonify({'success': True, **describe_settings()})
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise ValueError('请提供测速 DNS 设置')
+        if 'dns' in payload:
+            value = payload['dns']
+        elif 'dns_servers' in payload:
+            servers = normalize_dns_servers(payload['dns_servers'])
+            value = {'mode': 'custom' if servers else 'system', 'servers': servers}
+        else:
+            raise ValueError('请提供测速 DNS 设置')
+        return jsonify({'success': True, **save_config(value)})
     except ValueError as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
-    config_data = get_system_config()
-    config_data.setdefault('system_config', {})['node_test_dns'] = servers
-    save_system_config(config_data)
-    return jsonify({'success': True, 'dns_servers': servers})
+
+
+@nodes_bp.route('/latency/dns/check', methods=['POST'])
+@require_auth
+def node_dns_check():
+    from backend.utils.node_dns import check_settings
+    from backend.utils.node_latency import ProbeUnavailable
+    payload = request.get_json(silent=True)
+    try:
+        if not isinstance(payload, dict) or 'dns' not in payload:
+            raise ValueError('请提供待检测的 DNS 设置')
+        return jsonify(check_settings(payload['dns']))
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+    except ProbeUnavailable as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 503
+
+
+def _verify_managed_dns(endpoint):
+    from backend.utils.node_dns import check_settings
+    return check_settings({'mode': 'custom', 'servers': [endpoint], 'bootstrap': []})
+
+
+@nodes_bp.route('/latency/dns/managed', methods=['GET', 'POST'])
+@require_auth
+def node_dns_managed():
+    from backend.agents import node_test_dns
+    from backend.common.agent_manager import get_agent_manager
+    manager = get_agent_manager()
+    try:
+        if request.method == 'GET':
+            result = node_test_dns.options(manager)
+        else:
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                raise ValueError('请提供 OxiDNS 托管接口设置')
+            result = node_test_dns.create(manager, payload, verify=_verify_managed_dns)
+        return jsonify({'success': True, **result})
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+
+
+@nodes_bp.route('/latency/dns/managed/<agent_id>/<endpoint_id>', methods=['GET', 'DELETE'])
+@require_auth
+def node_dns_managed_endpoint(agent_id, endpoint_id):
+    from backend.agents import node_test_dns
+    from backend.common.agent_manager import get_agent_manager
+    manager = get_agent_manager()
+    try:
+        if request.method == 'DELETE':
+            result = node_test_dns.remove(manager, agent_id, endpoint_id)
+        else:
+            result = node_test_dns.status(manager, agent_id, endpoint_id, verify=_verify_managed_dns)
+        return jsonify({'success': True, **result})
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
