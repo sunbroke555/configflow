@@ -6,7 +6,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import FormField from '@/components/common/FormField.vue'
 import type { DockerHAHostForm, DockerHANetwork } from '@/types/dockerHAGuide'
 
-const props = defineProps<{ host: DockerHAHostForm; index: number; network: DockerHANetwork }>()
+const props = defineProps<{ host: DockerHAHostForm; index: number; network: DockerHANetwork; directCompose?: boolean }>()
 const prefix = computed(() => `docker-ha-host-${props.index + 1}`)
 function identityChanged(value: boolean | 'indeterminate') {
   props.host.create_host_identity = value === true
@@ -66,11 +66,12 @@ function identityChanged(value: boolean | 'indeterminate') {
     </div>
     <div class="flex flex-col gap-3 border-t border-border pt-4">
       <label :for="`${prefix}-create-id`" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px]">
-        <Checkbox :id="`${prefix}-create-id`" :model-value="host.create_host_identity" @update:model-value="identityChanged" />主机没有身份文件，安装时创建
+        <Checkbox :id="`${prefix}-create-id`" :model-value="host.create_host_identity" @update:model-value="identityChanged" />{{ directCompose ? '主机缺少身份文件，使用 Docker 身份卷' : '主机没有身份文件，安装时创建' }}
       </label>
-      <FormField :label="host.create_host_identity ? '新身份文件保存路径' : '主机身份文件'" :html-for="`${prefix}-identity`" persistent-hint :hint="host.create_host_identity ? '在主机上创建后只读挂载到容器。同一主机长期复用，两台主机分别创建。' : '用于区分两台主机，通常填 /etc/machine-id；安装命令会将它只读挂载到容器。'">
+      <FormField v-if="!directCompose || !host.create_host_identity" :label="host.create_host_identity ? '新身份文件保存路径' : '主机身份文件'" :html-for="`${prefix}-identity`" persistent-hint :hint="host.create_host_identity ? '在主机上创建后只读挂载到容器。同一主机长期复用，两台主机分别创建。' : '用于区分两台主机，通常填 /etc/machine-id；安装命令会将它只读挂载到容器。'">
         <Input :id="`${prefix}-identity`" v-model="host.ha_host_id_path" class="font-mono" :placeholder="host.create_host_identity ? '例如：/volume1/docker/configflow-host-id' : '/etc/machine-id'" />
       </FormField>
+      <p v-if="directCompose && host.create_host_identity" class="m-0 text-[12px] leading-relaxed text-muted-foreground">由 Docker 持久卷自动保存本机标识，无需创建宿主机文件。两端需使用支持该校验的新版 Agent。</p>
     </div>
   </div>
 </template>

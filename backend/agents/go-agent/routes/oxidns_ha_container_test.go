@@ -35,6 +35,7 @@ func newHAContainerFixture(t *testing.T, mode string) *haContainerFixture {
 		links: `[{"ifname":"lo"},{"ifname":"eth0","link_netnsid":0,"linkinfo":{"info_kind":"macvlan"}}]`}
 	t.Setenv("CONFIGFLOW_DNS_HA", "1")
 	t.Setenv("CONFIGFLOW_DNS_HA_NETWORK", mode)
+	t.Setenv("CONFIGFLOW_DNS_HA_IDENTITY", "")
 	f.cfg.ServiceManager, f.cfg.AgentIP = "supervisor", f.spec.SelfIP
 	oldRead, oldStat, oldPeer := haEnvironmentRead, haEnvironmentStat, haCompanionPeerCheck
 	t.Cleanup(func() { haEnvironmentRead, haEnvironmentStat, haCompanionPeerCheck = oldRead, oldStat, oldPeer })

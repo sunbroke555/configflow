@@ -13,14 +13,39 @@ python3 - <<'PYCOMPANION'
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 directory = Path('/var/lib/configflow-ha/run')
 directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 os.chmod(directory, 0o700)
-identity = Path('/run/configflow-host-machine-id').read_bytes().strip()
-if not identity:
-    raise SystemExit('The existing host identity file is empty.')
+identity_mode = os.environ.get('CONFIGFLOW_DNS_HA_IDENTITY', 'file') or 'file'
+identity_path = Path('/run/configflow-host-machine-id')
+if identity_mode == 'volume':
+    identity_directory = Path('/run/configflow-host-identity')
+    # A read-only parent directory in the container layer is not a volume.
+    # Match an actual, read-only mount before reading its ordinary identity file.
+    def mount_path(value):
+        for escaped, literal in ((r'\040', ' '), (r'\011', '\t'), (r'\012', '\n'), (r'\134', '\\')):
+            value = value.replace(escaped, literal)
+        return value
+    mounted = False
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        left, separator, right = line.partition(' - ')
+        fields = left.split()
+        if separator and len(fields) >= 6 and mount_path(fields[4]) == str(identity_directory):
+            mounted = 'ro' in fields[5].split(',')
+            break
+    if not mounted or not stat.S_ISDIR(identity_directory.lstat().st_mode):
+        raise SystemExit('The host identity volume must be an independent read-only mount.')
+    identity_path = identity_directory / 'host-id'
+    if not stat.S_ISREG(identity_path.lstat().st_mode):
+        raise SystemExit('The host identity must be a regular file, not a symlink.')
+elif identity_mode != 'file':
+    raise SystemExit('CONFIGFLOW_DNS_HA_IDENTITY must be file or volume.')
+identity = identity_path.read_bytes().strip()
+if not 16 <= len(identity) <= 128 or b'\n' in identity or b'\r' in identity:
+    raise SystemExit('The host identity file is invalid.')
 cap_eff = next(line.split(':', 1)[1].strip() for line in Path('/proc/self/status').read_text().splitlines()
                if line.startswith('CapEff:'))
 

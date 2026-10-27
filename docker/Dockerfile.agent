@@ -47,6 +47,7 @@ COPY --from=oxidns-bin /usr/share/licenses/oxidns/LICENSE /usr/share/licenses/ox
 COPY backend/agents/go-agent/supervisord.conf /etc/supervisor/supervisord.conf
 COPY backend/agents/go-agent/supervisor/ /etc/supervisor/conf.d/
 COPY --chmod=755 docker/docker-agent-entrypoint-service.sh /entrypoint.sh
+COPY --chmod=644 docker/docker-compose-install.py /usr/local/lib/configflow/docker-compose-install.py
 COPY --chmod=755 docker/docker-ha-companion-entrypoint.sh /ha-companion-entrypoint.sh
 COPY docker/supervisor-ha-companion.conf /etc/supervisor/ha-companion.conf
 
