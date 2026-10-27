@@ -463,6 +463,10 @@ export const agentApi = {
   uninstall: (id: string) => api.post(`/agents/${id}/uninstall`),
   generateInstallCommand: (params: AgentInstallScriptParams) =>
     api.post<InstallCommandResult>('/agents/install-command', params),
+  generateDockerHAGuide: (params: import('@/types/dockerHAGuide').DockerHAGuideRequest, profileId?: string) =>
+    api.post<import('@/types/dockerHAGuide').DockerHAGuideResult>('/agents/docker-oxidns-ha-guide', params, profileOptions(profileId)),
+  getDockerHAEnvironment: (id: string) =>
+    api.get<import('@/types/dockerHAGuide').DockerHAEnvironment>(`/agents/${encodeURIComponent(id)}/oxidns-ha-environment`, { timeout: 60000 }),
   generateCoreInstallCommand: (target: 'both' | 'mihomo' | 'oxidns') =>
     api.post<InstallCommandResult>('/agents/core-install-command', { target }),
   generateDockerCompose: (params: any) =>

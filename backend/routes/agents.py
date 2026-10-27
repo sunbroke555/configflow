@@ -1060,6 +1060,38 @@ def report_agent_upgrade(agent_id):
 
 # Docker 相关路由（安装脚本生成）
 
+@bp.route('/<agent_id>/oxidns-ha-environment', methods=['GET'])
+@require_auth
+def agent_oxidns_ha_environment(agent_id):
+    """Live, read-only proof for the installation guide, including unpaired nodes."""
+    manager = get_agent_manager()
+    agent = manager.get_agent_by_id(agent_id)
+    if not agent or agent.get('service_type') != 'oxidns':
+        return jsonify({'success': False, 'message': 'OxiDNS Agent not found'}), 404
+    try:
+        capability = manager._deployment_request(agent, 'get', 'capabilities', timeout=5)
+    except Exception:
+        return jsonify({'success': False, 'message': '无法连接 Agent，请先检查容器日志和网络'}), 502
+    if not isinstance(capability, dict) or capability.get('success') is False:
+        return jsonify({'success': False, 'message': 'Agent 能力检查失败，请确认 Agent 已上线'}), 502
+    result = {'success': True, 'agent_id': agent_id, 'service_type': 'oxidns'}
+    for field in ('oxidns_ha_protocols', 'oxidns_ha_container_protocols', 'oxidns_ha_handoff_protocols'):
+        value = capability.get(field)
+        result[field] = [v for v in value if type(v) is int and 0 <= v < 100] if isinstance(value, list) else []
+    environment = capability.get('oxidns_ha_environment')
+    environment = environment if isinstance(environment, dict) else {}
+    result['oxidns_ha_environment'] = {
+        'kind': environment.get('kind') if environment.get('kind') in ('native', 'container') else 'unknown',
+        'ready': environment.get('ready') is True,
+        'network': environment.get('network') if environment.get('network') in ('host', 'macvlan') else '',
+        'host_id': environment.get('host_id') if isinstance(environment.get('host_id'), str)
+            and len(environment['host_id']) == 64 and all(c in '0123456789abcdef' for c in environment['host_id']) else '',
+        'interface': str(environment.get('interface') or '')[:64],
+        'blockers': [failure_text(v, (agent.get('token'),))[:500] for v in environment.get('blockers', [])[:20]
+            if isinstance(v, str)] if isinstance(environment.get('blockers'), list) else [],
+    }
+    return jsonify(result)
+
 @bp.route('/docker-agent-compose', methods=['GET'])
 @require_auth
 def get_docker_agent_compose():
