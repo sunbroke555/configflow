@@ -252,9 +252,17 @@ def parse_report(output, network_mode='host'):
             if iface is None:
                 malformed = True
             elif not any((iface.ip.is_loopback, iface.ip.is_link_local, iface.ip.is_unspecified, iface.ip.is_multicast, iface.ip.is_reserved)):
-                candidates.append(iface)
+                raw_name = match[1]
+                safe_name = re.sub(r'[^A-Za-z0-9_.:@-]', '', raw_name)[:48] or '未识别接口'
+                if safe_name != raw_name:
+                    safe_name += '（名称已截短或清理）'
+                candidates.append((safe_name, iface.with_prefixlen))
+    candidate_detail = ('读取到 ' + str(len(candidates)) + ' 个候选 IPv4：'
+                        + '；'.join(name + ' · ' + address for name, address in candidates[:8])
+                        + ('；仅显示前 8 条。' if len(candidates) > 8 else '。')
+                        + '其中可能有 Docker bridge，尚未验证局域网可达性或固定地址；不会自动选择网卡。')
     checks.append(_check('ipv4', '网卡 IPv4 信息', 'unknown' if code or malformed else 'pass' if candidates else 'warning',
-                         '读取到 ' + str(len(candidates)) + ' 个候选 IPv4；其中可能有 Docker bridge，尚未验证局域网可达性或固定地址。' if not code and not malformed and candidates else
+                         candidate_detail if not code and not malformed and candidates else
                          '无法可靠读取非回环 IPv4 候选地址。',
                          '请核对实际局域网网卡、静态地址及网关；Macvlan 还需确认 parent 接口和网段。'))
     checks += [_port_check(values, 'UDP', network_mode), _port_check(values, 'TCP', network_mode)]

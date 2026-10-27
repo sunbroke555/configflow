@@ -276,3 +276,30 @@ def test_collector_identity_symlink_is_not_claimed_compatible_with_installation(
     assert item(report,'host_identity')['status'] == 'pass'
     assert report['host_fingerprint'] == __import__('hashlib').sha256(target.read_text().strip().encode()).hexdigest()
     assert target.read_text().strip() not in result.stdout
+
+
+def test_ipv4_report_shows_actual_interfaces_and_prefixes_without_selecting_lan():
+    addresses = ('2: enp3s0 inet 192.168.10.20/24 scope global enp3s0\n'
+                 '3: docker0 inet 172.17.0.1/16 scope global docker0\n')
+    detail = item(check.parse_report(block(evidence(ipv4=(0, addresses)))), 'ipv4')['detail']
+    assert '2 个候选' in detail
+    assert 'enp3s0 · 192.168.10.20/24' in detail
+    assert 'docker0 · 172.17.0.1/16' in detail
+    assert 'Docker bridge' in detail and '尚未验证局域网' in detail and '不会自动选择' in detail
+
+
+def test_ipv4_report_bounds_visible_list_but_keeps_total_count():
+    addresses = ''.join(f'{n+1}: eth{n} inet 192.168.10.{n+1}/24 scope global eth{n}\n' for n in range(10))
+    detail = item(check.parse_report(block(evidence(ipv4=(0, addresses)))), 'ipv4')['detail']
+    assert '10 个候选' in detail and '仅显示前 8 条' in detail
+    assert 'eth7 · 192.168.10.8/24' in detail and 'eth8 ·' not in detail
+    assert detail.count(' · ') == 8
+
+
+def test_ipv4_report_cleans_control_and_markup_and_limits_interface_name():
+    name = 'eth<script>' + '\x1b[31m' + 'x' * 100
+    addresses = f'2: {name} inet 192.168.10.20/24 scope global interface\n'
+    detail = item(check.parse_report(block(evidence(ipv4=(0, addresses)))), 'ipv4')['detail']
+    assert '<' not in detail and '>' not in detail and '\x1b' not in detail
+    assert 'x' * 49 not in detail
+    assert '名称已截短或清理' in detail and ' · 192.168.10.20/24' in detail
