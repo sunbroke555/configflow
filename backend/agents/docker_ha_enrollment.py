@@ -6,6 +6,7 @@ the credentials of its exact new OxiDNS identity, even with registration locked.
 from datetime import datetime
 import hashlib
 import hmac
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -28,19 +29,45 @@ class EnrollmentError(ValueError):
 def issue(repository, body, profile_id):
     """Call only after guide input validation and administrator authentication."""
     repository.validate_profile_id(profile_id)
-    session_id, token = uuid.uuid4().hex, secrets.token_urlsafe(32)
-    expires = int(time.time()) + TTL
-    session = {'id': session_id, 'token_hash': hashlib.sha256(token.encode()).hexdigest(),
-               'expires': expires, 'profile_id': profile_id,
-               'name': body.get('agent_name', 'agent') + '-oxidns',
-               'host': body['agent_ip'], 'port': body.get('oxidns_port', 8082)}
     root = Path(repository.data_dir) / 'docker-ha-installations'
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(root / (session_id + '.json'), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'w') as output:
-        json.dump(session, output)
-    return {'url': body['server_url'].rstrip('/') + '/api/agents/docker-oxidns-ha-enroll/' + session_id,
-            'token': token, 'expires_at': expires}
+    # Retain the installation identity when a dialog closes or an interrupted
+    # install is retried. Different settings never gain access to that identity.
+    spec = {**body, 'mode': 'new', 'server_url': body['server_url'].rstrip('/'), 'profile_id': profile_id}
+    spec.pop('action', None)
+    key = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
+    index = root / (key + '.index')
+    fd = os.open(root / '.issue.lock', os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, 'r+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        session = None
+        if index.exists():
+            session_id = index.read_text()
+            if not re.fullmatch(r'[a-f0-9]{32}', session_id):
+                raise EnrollmentError('安装记录无法读取，请保留现场并检查服务端数据。', 409)
+            try:
+                session = json.loads((root / (session_id + '.json')).read_text())
+            except (FileNotFoundError, ValueError):
+                raise EnrollmentError('安装记录无法读取，请保留现场并检查服务端数据。', 409) from None
+        if session is None:
+            session = {'id': uuid.uuid4().hex, 'profile_id': profile_id,
+                       'name': body.get('agent_name', 'agent') + '-oxidns',
+                       'host': body['agent_ip'], 'port': body.get('oxidns_port', 8082)}
+        if session.get('expires', 0) <= time.time():
+            token = secrets.token_urlsafe(32)
+            session.update(token=token, token_hash=hashlib.sha256(token.encode()).hexdigest(), expires=int(time.time()) + TTL)
+            path = root / (session['id'] + '.json')
+            temp = path.with_suffix('.tmp')
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w') as output:
+                json.dump(session, output)
+            os.replace(temp, path)
+        if not index.exists():
+            fd = os.open(index, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w') as output:
+                output.write(session['id'])
+        return {'url': spec['server_url'] + '/api/agents/docker-oxidns-ha-enroll/' + session['id'],
+                'token': session['token'], 'expires_at': session['expires']}
 
 
 def enroll(repository, manager, session_id, token):
@@ -82,6 +109,9 @@ def bootstrap_command(enrollment, request):
     """Use the shipped image's Python; no Python/curl dependency on a NAS host."""
     data_dir = request['data_dir'].rstrip('/') + '/agent'
     image = request.get('image', 'thsrite/config-flow-agent:latest')
+    network = ['--network', 'host']
+    if request.get('network_mode') == 'macvlan':
+        network = ['--network', request.get('agent_name', 'agent') + '-oxidns-ha-net', '--ip', request['agent_ip']]
     values = json.dumps({'url': enrollment['url'], 'token': enrollment['token']}, ensure_ascii=True)
     source = '''import json, os, sys, urllib.error, urllib.request
 from pathlib import Path
@@ -125,6 +155,6 @@ with os.fdopen(fd, 'w') as output:
 print('本机 Agent 身份已登记；启动后等待真实心跳与高可用环境检查。')
 '''.replace('SETTINGS_LITERAL', repr(values))
     return ('# 安装凭据仅用于本机 OxiDNS，有效期 24 小时；不包含管理账号或全局注册密钥。\n'
-            + 'docker run --rm -i --network host --entrypoint python3 --mount '
+            + 'docker run --rm -i ' + ' '.join(map(shlex.quote, network)) + ' --entrypoint python3 --mount '
             + shlex.quote('type=bind,src=' + data_dir + ',dst=/opt/configflow-agent') + ' '
             + shlex.quote(image) + " - <<'CF_DOCKER_HA_ENROLL'\n" + source + 'CF_DOCKER_HA_ENROLL\n')

@@ -146,7 +146,7 @@ def install_profile_context(app) -> None:
                 # A successful self-registration may disclose exactly one top-level
                 # credential. Nested Agent records and every other API stay scrubbed.
                 if (
-                    endpoint == "agents.register_agent"
+                    endpoint in {"agents.register_agent", "agents.docker_oxidns_ha_enroll"}
                     and 200 <= response.status_code < 300
                     and isinstance(payload, dict)
                     and payload.get("success") is True

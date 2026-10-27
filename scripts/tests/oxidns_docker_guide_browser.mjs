@@ -1,7 +1,8 @@
 // Run on the test server against the snapshot-protected real backend.
 // CF_GUIDE_CREDENTIALS points to its private JSON; never include that file in reports.
 import { cp, mkdir, mkdtemp, readFile, symlink, writeFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { join, basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import assert from 'node:assert/strict'
@@ -13,16 +14,18 @@ const auth = await fetch(backend + '/api/auth/login', { method: 'POST', headers:
   body: JSON.stringify({ username: credentials.username, password: credentials.password }) })
 assert.equal(auth.status, 200)
 const token = (await auth.json()).token
+const lockHash = createHash('sha256').update(await readFile(join(root, 'frontend/package-lock.json'))).digest('hex').slice(0, 16)
+const modules = process.env.CF_NODE_MODULES || join(homedir(), 'cf-test/node_modules', lockHash, 'node_modules')
+const { createServer } = await import(pathToFileURL(join(modules, 'vite/dist/node/index.js')).href)
+const { chromium } = await import(process.env.CF_PLAYWRIGHT_MODULE)
 const results = join(root, '.ci-results/oxidns-docker-guide-browser')
 await mkdir(results, { recursive: true })
 const frozen = await mkdtemp(join(tmpdir(), 'cf-docker-guide-browser-'))
 await cp(join(root, 'frontend'), join(frozen, 'frontend'), { recursive: true,
   filter: source => !['node_modules', 'dist'].includes(basename(source)) })
-await symlink(join(root, 'frontend/node_modules'), join(frozen, 'frontend/node_modules'))
-const { createServer } = await import(pathToFileURL(join(root, 'frontend/node_modules/vite/dist/node/index.js')).href)
-const { chromium } = await import(process.env.CF_PLAYWRIGHT_MODULE)
+await symlink(modules, join(frozen, 'frontend/node_modules'))
 const report = { realBackend: true, mockedAPIs: false, commandExecution: 'See separate real Docker lab report.', scenarios: [], errors: [] }
-let vite, browser
+let vite, browser, activePage
 try {
   vite = await createServer({ root: join(frozen, 'frontend'), configFile: join(frozen, 'frontend/vite.config.mts'),
     server: { host: '0.0.0.0', port: 14381, strictPort: true, hmr: false, watch: { ignored: ['**/*'] },
@@ -40,14 +43,19 @@ try {
       localStorage.setItem('configflow-preferences', JSON.stringify({ accent, motion: false, texture: false, density: 1 }))
     }, { token, theme, accent })
     const page = await context.newPage()
+    activePage = page
     page.on('pageerror', error => report.errors.push(String(error)))
     const scenario = { theme, width, network, accent, requests: [], metrics: [] }
     page.on('response', response => {
+      if (response.status() === 401) report.errors.push('Unauthorized ' + new URL(response.url()).pathname)
       if (/docker-oxidns-ha-guide|oxidns-ha-environment/.test(response.url())) {
         scenario.requests.push({ path: new URL(response.url()).pathname, status: response.status() })
       }
     })
     const capture = async name => {
+      if (name === 'prepare') await page.locator('[aria-label="安装步骤"]').evaluate(element => {
+        element.closest('.cf-focus-gutter').scrollTop = 0
+      })
       const metrics = await page.evaluate(() => {
         const dialog = document.querySelector('[role="dialog"]')
         return { viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
@@ -55,7 +63,7 @@ try {
       })
       assert.ok(metrics.pageWidth <= width && metrics.dialogScroll <= metrics.dialogWidth + 1, JSON.stringify(metrics))
       scenario.metrics.push({ name, ...metrics })
-      await page.screenshot({ path: join(results, `${theme}-${width}-${network}-${name}.png`), fullPage: true })
+      await page.screenshot({ path: join(results, `${theme}-${width}-${network}-${name}.png`), fullPage: false })
     }
     const step = async number => page.getByRole('button', { name: new RegExp(`^${number}\\. `) }).click()
     const field = async (host, suffix, value) => page.locator(`#docker-ha-host-${host}-${suffix}`).fill(value)
@@ -66,12 +74,12 @@ try {
       return { status: response.status(), data: await response.json() }
     }
     await page.goto('http://127.0.0.1:14381/agents')
-    await page.getByRole('button', { name: '生成安装脚本', exact: true }).first().click()
+    await page.getByRole('button', { name: /生成\s*安装脚本/ }).first().click()
     await page.locator('[role="radio"][value="docker-ha"]').click()
     await page.locator('#docker-ha-server').fill('http://192.168.79.30:18080')
     await page.locator('[aria-label="Docker HA 网络模式"]').locator(`[value="${network}"]`).click()
     await page.getByRole('button', { name: '生成环境检查命令', exact: true }).click()
-    await page.getByRole('button', { name: /复制.*环境/ }).waitFor()
+    await page.getByRole('button', { name: '复制两台宿主机分别检查', exact: true }).waitFor()
     await capture('prepare')
 
     await step(2)
@@ -134,6 +142,20 @@ try {
     await step(5)
     await page.getByRole('button', { name: '刷新并检查两台 Agent', exact: true }).click()
     await page.getByText(/实时检查时间：/).waitFor({ timeout: 30000 })
+    // Select an actual laboratory Agent, deliberately twice: even a live
+    // capability response must not permit pairing a device with itself.
+    await page.locator('#docker-ha-verify-1').click()
+    if (await page.getByRole('option').count()) {
+      const label = await page.getByRole('option').first().innerText()
+      await page.getByRole('option').first().click()
+      await page.locator('#docker-ha-verify-2').click()
+      await page.getByRole('option', { name: label, exact: true }).click()
+      await page.getByRole('button', { name: '刷新并检查两台 Agent', exact: true }).click()
+      await page.getByText(/实时检查时间：/).waitFor({ timeout: 30000 })
+      await page.getByText('需要选择两台不同的 Agent。', { exact: true }).waitFor()
+      assert.ok(scenario.requests.some(request => request.path.endsWith('/oxidns-ha-environment')))
+      scenario.liveEnvironmentRead = true
+    } else await page.keyboard.press('Escape')
     await capture('live-check')
     scenario.copyWorks = true
     scenario.validationRecovery = true
@@ -144,6 +166,13 @@ try {
   assert.deepEqual(report.errors, [])
   await writeFile(join(results, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify({ scenarios: report.scenarios.length, errors: report.errors, report: join(results, 'report.json') }))
+} catch (error) {
+  if (activePage && !activePage.isClosed()) {
+    await activePage.screenshot({ path: join(results, 'failure.png'), fullPage: true })
+    await writeFile(join(results, 'failure.json'), JSON.stringify({ error: String(error), url: activePage.url(), errors: report.errors,
+      text: (await activePage.locator('body').innerText()).slice(0, 4000) }, null, 2))
+  }
+  throw error
 } finally {
   await browser?.close()
   await vite?.close()

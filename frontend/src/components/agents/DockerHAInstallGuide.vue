@@ -42,6 +42,7 @@ let disposed = false
 const failureText = (error: any) => error?.response?.data?.message || error?.response?.data?.error || error?.message || '请求失败，请重试。'
 const currentHost = computed(() => Number(commandHost.value))
 const currentResult = computed(() => results.value[currentHost.value])
+const currentLogs = computed(() => currentResult.value?.command_blocks?.find(block => block.id === 'logs'))
 hosts.forEach((host, index) => {
   watch([() => JSON.stringify(host), network, image, server], () => {
     requestIds[index]++
@@ -49,12 +50,12 @@ hosts.forEach((host, index) => {
     results.value[index] = null
     errors.value[index] = ''
   }, { flush: 'sync' })
-  watch(() => host.container_name, () => {
+  watch(() => [host.container_name, host.mode], () => {
     inspectIds[index]++
     inspecting.value[index] = false
     inspection.value[index] = ''
     inspectionError.value[index] = ''
-  })
+  }, { flush: 'sync' })
 })
 const preflight = ref('')
 const preflightBusy = ref(false)
@@ -253,12 +254,13 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       <h4 class="m-0 text-sm font-semibold">填写主机 {{ step }} · {{ network === 'host' ? '宿主机地址' : 'macvlan 容器地址' }}</h4>
       <DockerHAHostForm :host="hosts[step - 1]!" :index="step - 1" :network="network" />
       <details v-if="hosts[step - 1]!.mode === 'migrate'" class="text-[13px] leading-relaxed">
-        <summary class="min-h-11 cursor-pointer py-3">旧容器有额外挂载或自定义启动命令？</summary>
-        <p class="mt-0">自动迁移仅支持官方单 OxiDNS 容器、默认入口和启动命令，以及原 Agent / OxiDNS 两个数据挂载。脚本拒绝其他布局时，不要把新安装的 Compose 直接覆盖上去。</p>
+        <summary class="min-h-11 cursor-pointer py-3">旧容器已有 HA、额外挂载或自定义启动命令？</summary>
+        <p class="mt-0">自动迁移仅支持官方单 OxiDNS 容器、默认入口和启动命令，以及原 Agent / OxiDNS 两个数据挂载。已有 Docker HA 容器停用后仍保留 HA 环境变量和额外挂载，不能使用自动迁移脚本。请按下面步骤保留原 Compose 手动重建，不要把新安装的 Compose 直接覆盖上去。</p>
         <ol class="mb-0 list-decimal space-y-2 pl-5">
           <li>保存原 Compose 项目、环境变量、全部挂载和自定义启动参数；核对 Agent 完整名称和身份目录。备份原 Agent / OxiDNS 数据，保留旧镜像和容器作为回滚来源。</li>
           <li>以原 Compose 为基础，对照生成的 HA 定义补充专用 HA 持久目录、宿主身份挂载和网络设置。Host 还需独立 companion、共享 HA 目录与宿主网络证明挂载，网络权限只给 companion；macvlan 则给核心容器所需权限。保留原名称、数据、环境和其他业务挂载。</li>
-          <li>已有 HA 先安排客户端 DNS，确认 VIP 归属并在页面停用原组。一次只重建一台，先处理原备用；确认原 Agent 身份仍在、DNS 健康和新环境检查通过，再处理另一台。</li>
+          <li>已有 HA 先将路由器 DHCP / 客户端 DNS 临时改为仍在服务的健康 OxiDNS 固定地址，发布路由器配置并确认客户端解析正常。记录当前 VIP 持有者，然后在 Agent 卡片的「DNS 高可用 → 设置」中停用原组并等待清理完成；停用会让 VIP 下线。</li>
+          <li>一次只重建一台，先处理原备用；确认原 Agent 身份仍在、DNS 健康和新环境检查通过，再把临时 DNS 切到这台已恢复的固定地址，确认解析后处理另一台。两台恢复后重新配对，并从第三台 LAN 设备验证 VIP，最后才把客户端 DNS 切回 VIP。</li>
           <li>失败时停止新容器，使用原 Compose / 旧容器和备份恢复，检查原 DNS；不要删除原数据卷。无法确认自定义参数兼容时停止迁移，继续使用旧服务。</li>
         </ol>
       </details>
@@ -271,7 +273,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       <RadioGroup v-model="commandHost" class="flex gap-4" aria-label="执行命令的主机">
         <label v-for="index in [0, 1]" :key="index" class="flex min-h-11 items-center gap-2"><RadioGroupItem :value="String(index)" />主机 {{ index + 1 }} · {{ hosts[index]!.agent_ip || '未填写地址' }}</label>
       </RadioGroup>
-      <p class="m-0 text-[13px] leading-relaxed">一次只处理一台主机。复制到对应宿主机的 SSH 终端执行，不是在 ConfigFlow 所在机器执行。已启用 HA 的旧容器会被迁移脚本拒绝；先在原组确认 VIP / 客户端 DNS 安排并停用 HA，再逐台迁移，不要直接停止 VIP 持有者。</p>
+      <p class="m-0 text-[13px] leading-relaxed">一次只处理一台主机。复制到对应宿主机的 SSH 终端执行，不是在 ConfigFlow 所在机器执行。已启用 HA 的旧容器会被迁移脚本拒绝；即使停用后也应保留原 Compose 手动重建。返回对应主机步骤，展开“旧容器已有 HA、额外挂载或自定义启动命令？”完成临时 DNS 切换与逐台恢复，不要直接停止 VIP 持有者。</p>
       <Button class="min-h-11 self-start" :disabled="generating[currentHost]" @click="generate(currentHost)"><Loader2 v-if="generating[currentHost]" class="size-4 animate-spin" />生成主机 {{ currentHost + 1 }} 的安装命令</Button>
       <p v-if="errors[currentHost]" role="alert" class="m-0 text-[13px] text-destructive-accent">{{ errors[currentHost] }}</p>
       <template v-if="currentResult">
@@ -280,6 +282,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
         <DockerHAGuideCommand title="1. 检查宿主机" :command="currentResult.inspection_command" />
         <DockerHAGuideCommand v-if="currentResult.identity_command" title="2. 创建这台宿主机的身份文件" :command="currentResult.identity_command" note="仅在该宿主机执行一次；不要把文件复制给另一台主机。" />
         <DockerHAGuideCommand :title="currentResult.identity_command ? '3. 安装或迁移容器' : '2. 安装或迁移容器'" :command="currentResult.install_command" :note="hosts[currentHost]!.mode === 'migrate' ? '此脚本会核对原挂载、停止并备份旧容器、保留旧容器再重建；不要跳过脚本直接运行 Compose。迁移期间这台 DNS 会暂停。' : '脚本创建持久目录并启动容器。执行结束后前往下一步刷新 Agent，安装日志报错时先处理原因。'" />
+        <DockerHAGuideCommand v-if="currentLogs" :title="currentLogs.title" :command="currentLogs.command" note="在同一台宿主机执行，查看实际容器的启动错误；修正原因后再刷新 Agent。" />
         <details v-if="currentResult.compose" class="min-w-0"><summary class="min-h-11 cursor-pointer py-3 text-[13px]">查看 Compose 定义</summary><DockerHAGuideCommand title="Compose 定义（供核对）" :command="currentResult.compose" note="迁移必须使用上方安装脚本，以保留检查、备份和回滚路径。" /></details>
         <DockerHAGuideCommand v-if="currentResult.rollback_command" title="迁移失败时回滚" :command="currentResult.rollback_command" note="只在对应主机运行。保留旧容器、备份和原数据，不删除卷；恢复后检查原 Agent 与 DNS 服务。" />
       </template>

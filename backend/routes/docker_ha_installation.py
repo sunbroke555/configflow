@@ -57,6 +57,6 @@ def docker_oxidns_ha_enroll(session_id):
     def register():
         if _body() != {}:
             raise ValueError('安装登记无需提交设备信息，目标由生成命令时固定。')
-        return enrollment.enroll(get_repository(), get_agent_manager(), session_id,
-                                 parse_bearer_token(request.headers.get('Authorization')))
+        return {'success': True, **enrollment.enroll(get_repository(), get_agent_manager(), session_id,
+                                 parse_bearer_token(request.headers.get('Authorization')))}
     return _respond(register)

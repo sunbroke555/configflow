@@ -37,6 +37,7 @@ export interface DockerHAGuideResult {
   install_command: string
   rollback_command: string
   verification_command?: string
+  command_blocks?: { id: string; title: string; command: string }[]
   warnings?: string[]
 }
 export interface DockerHAEnvironment {

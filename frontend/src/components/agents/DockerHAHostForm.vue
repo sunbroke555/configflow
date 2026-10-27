@@ -24,7 +24,7 @@ function identityChanged(value: boolean | 'indeterminate') {
       </RadioGroup>
     </FormField>
     <p v-if="host.mode === 'migrate'" class="m-0 rounded-md border border-warning/30 bg-warning-soft p-3 text-[12px] leading-relaxed">
-      先读取旧容器信息，再填写原挂载和 Agent 完整名称。原 Agent 身份、配置、规则和 state 必须复用；不要填写新建的空目录或新卷。已经加入 HA 的设备，先在原高可用设置中处理迁移条件；不要直接停止持有 VIP 的容器。两台逐一迁移，先处理当前未持有 VIP 的一台。
+      先读取旧容器信息，再填写原挂载和 Agent 完整名称。原 Agent 身份、配置、规则和 state 必须复用；不要填写新建的空目录或新卷。已有 Docker HA 容器不适用自动迁移，请展开下方手动重建步骤。先安排临时 DNS，再处理原备用；不要直接停止持有 VIP 的容器。
     </p>
     <div class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
       <FormField v-if="host.mode === 'new'" label="Agent 名称前缀" :html-for="`${prefix}-name`" :hint="`安装后登记为 ${host.agent_name || '名称'}-oxidns。`">

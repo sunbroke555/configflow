@@ -177,6 +177,39 @@ describe('Docker HA installation guide', () => {
     expect((wrapper.get('#docker-ha-host-1-data').element as HTMLInputElement).value).toBe('/srv/dns-1')
   })
 
+  it('clears inspection commands when switching installation mode and ignores an old in-flight response', async () => {
+    const wrapper = render()
+    await click(wrapper, '2. 主机 1')
+    await click(wrapper, '生成这台主机的只读检查命令')
+    expect(wrapper.text()).toContain('docker version')
+    await radio(wrapper, '主机 1 安装方式', 'migrate')
+    expect(wrapper.text()).not.toContain('docker version')
+    await wrapper.get('#docker-ha-host-1-container').setValue('old-oxidns')
+    let resolve!: (value: any) => void
+    vi.mocked(agentApi.generateDockerHAGuide).mockImplementationOnce(() => new Promise(done => { resolve = done }) as any)
+    await click(wrapper, '生成这台主机的只读检查命令')
+    await radio(wrapper, '主机 1 安装方式', 'new')
+    resolve({ data: { success: true, inspection_command: 'docker inspect old-oxidns' } })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('docker inspect old-oxidns')
+  })
+
+  it('shows and copies the exact backend startup-log command for the current host', async () => {
+    vi.mocked(agentApi.generateDockerHAGuide).mockResolvedValue({ data: { ...result,
+      command_blocks: [{ id: 'logs', title: '查看启动日志', command: 'docker logs --tail 80 exact-old-container\n' }],
+    } } as any)
+    const wrapper = render()
+    await click(wrapper, '4. 执行安装')
+    await click(wrapper, '生成主机 1 的安装命令')
+    const logs = wrapper.findAllComponents(DockerHAGuideCommand).find(item => item.props('title') === '查看启动日志')!
+    expect(logs.props('command')).toBe('docker logs --tail 80 exact-old-container\n')
+    await logs.get('button').trigger('click')
+    await flushPromises()
+    expect(copyText).toHaveBeenCalledWith('docker logs --tail 80 exact-old-container\n')
+    await radio(wrapper, '执行命令的主机', '1')
+    expect(wrapper.text()).not.toContain('exact-old-container')
+  })
+
   it('enables pairing only after live checks and hides a recursive install-guide entry', async () => {
     const wrapper = render()
     await verify(wrapper)
