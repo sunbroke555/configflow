@@ -373,6 +373,14 @@ def _child_bundle(bundle, agent_id, deployment_id):
                  comparison_config=bundle.comparison_config)
 
 
+def _require_container_environment(manager, members):
+    # Re-check at mutation boundaries, including rule-only and resumed/staged
+    # transactions. A saved handoff decision is not current Docker readiness.
+    if any(member.get('deployment_method') == 'docker' for member in members.values()):
+        from .oxidns_ha import _require_pair_protocols
+        _require_pair_protocols(manager, list(members.values()))
+
+
 def _step(manager, job):
     if job.get('handoff_failure'):
         failure = job['handoff_failure']
@@ -422,6 +430,7 @@ def _step(manager, job):
         if not state.get('submitted'):
             if state.get('status') in CHILD_TERMINAL:
                 return _fail(manager, job, state.get('message') or '主备发布已中止')
+            _require_container_environment(manager, members)
             if index and job['activate']:
                 handoffs.ensure(manager, job, members)
             job.update(active_agent_id=agent_id, phase='standby' if index == 0 else 'primary')
@@ -448,6 +457,7 @@ def _step(manager, job):
                              tuple(item.get('token') for item in members.values())),
                 status='rollback_failed' if result.get('status') == 'rollback_failed' else 'failed')
         if result.get('status') == 'ready' and job['activate']:
+            _require_container_environment(manager, members)
             if index:
                 handoffs.ensure(manager, job, members)
             job.update(active_agent_id=agent_id, phase='standby' if index == 0 else 'primary')

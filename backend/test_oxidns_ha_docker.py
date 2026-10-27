@@ -113,9 +113,16 @@ def test_old_docker_agent_needs_recreation_instead_of_an_unconditional_ban(pair)
 
 
 @pytest.mark.parametrize('ready', [False, True])
-def test_existing_docker_pair_is_rechecked_before_publication_changes_either_core(ha_publish, monkeypatch, ready):
+@pytest.mark.parametrize('reload_only', [False, True])
+def test_existing_docker_pair_is_rechecked_before_publication_changes_either_core(ha_publish, monkeypatch, ready, reload_only):
     env = ha_publish
     env.pair()
+    if reload_only:
+        baseline = env.bundle(ident='ha-baseline', rule='domain:baseline.example')
+        env.manager.publish_deployment(env.primary['id'], baseline)
+        env.drain()
+        assert env.manager.get_deployment(env.primary['id'], baseline.manifest['deployment_id'])['status'] == 'succeeded'
+        env.devices.uploads.clear()
     env.manager._update_agents(lambda agents: [item.update(deployment_method='docker') for item in agents])
     original = env.devices.request
 
@@ -130,6 +137,11 @@ def test_existing_docker_pair_is_rechecked_before_publication_changes_either_cor
 
     monkeypatch.setattr(env.devices, 'request', request)
     candidate = env.bundle()
+    if reload_only:
+        from backend.agents.deployment_bundle import _pack
+        from backend.agents.rule_sync_store import bundle_files
+        candidate = _pack({**candidate.manifest, 'reload_only': True}, bundle_files(candidate), candidate.config_version,
+                          comparison_config=candidate.comparison_config)
     env.manager.publish_deployment(env.primary['id'], candidate)
     env.drain()
     state = env.manager.get_deployment(env.primary['id'], candidate.manifest['deployment_id'])
@@ -140,3 +152,34 @@ def test_existing_docker_pair_is_rechecked_before_publication_changes_either_cor
     else:
         assert state['status'] == 'failed'
         assert env.devices.uploads == []
+
+
+def test_staged_docker_pair_rechecks_environment_before_resumed_activation(ha_publish, monkeypatch):
+    env = ha_publish
+    env.pair()
+    env.manager._update_agents(lambda agents: [item.update(deployment_method='docker') for item in agents])
+    original = env.devices.request
+    ready = True
+
+    def request(agent, method, path, **kwargs):
+        response = original(agent, method, path, **kwargs)
+        if (method, path) == ('get', 'capabilities'):
+            response.update(oxidns_ha_container_protocols=[1], oxidns_ha_environment={
+                'kind': 'container', 'network': 'host', 'ready': ready,
+                'host_id': ('a' if agent['host'] == PRIMARY else 'b') * 64})
+        return response
+
+    monkeypatch.setattr(env.devices, 'request', request)
+    candidate = env.bundle()
+    env.manager.publish_deployment(env.primary['id'], candidate, activate=False)
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], candidate.manifest['deployment_id'])['status'] == 'ready'
+    assert len(env.devices.uploads) == 2 and not any(item['activate'] for item in env.devices.uploads)
+    ready = False
+    from backend.agents.manager import AgentManager
+    restarted = AgentManager(env.repository)
+    restarted.activate_deployment(env.primary['id'], candidate.manifest['deployment_id'])
+    env.drain(manager=restarted)
+    state = restarted.get_deployment(env.primary['id'], candidate.manifest['deployment_id'])
+    assert state['status'] == 'failed'
+    assert not any(path.endswith('/activate') for _, path in env.devices.mutations())
