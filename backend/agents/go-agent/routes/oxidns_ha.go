@@ -78,16 +78,17 @@ type haService struct {
 }
 
 type haState struct {
-	Version   int          `json:"version"`
-	Token     string       `json:"token"`
-	Active    bool         `json:"active"`
-	Pending   bool         `json:"pending"`
-	Spec      OxiDNSHASpec `json:"spec"`
-	Interface string       `json:"interface"`
-	CIDR      string       `json:"cidr"`
-	Files     []haFile     `json:"files"`
-	Service   haService    `json:"service"`
-	AppliedAt string       `json:"applied_at"`
+	Version         int          `json:"version"`
+	Token           string       `json:"token"`
+	Active          bool         `json:"active"`
+	Pending         bool         `json:"pending"`
+	Spec            OxiDNSHASpec `json:"spec"`
+	Interface       string       `json:"interface"`
+	CIDR            string       `json:"cidr"`
+	Files           []haFile     `json:"files"`
+	Service         haService    `json:"service"`
+	AppliedAt       string       `json:"applied_at"`
+	ContainerHostID string       `json:"container_host_id,omitempty"`
 }
 
 // haUnicastIPv4 accepts only canonical dotted IPv4 host addresses, so the same
@@ -169,8 +170,11 @@ func loadHAState(cfg *Config) (*haState, error) {
 			return nil, fmt.Errorf("DNS 高可用状态的文件摘要无效，保留现有 keepalived 配置")
 		}
 	}
-	if (state.Service.Manager != "systemd" && state.Service.Manager != "openrc") || state.Service.Unit != haServiceUnit {
+	if (state.Service.Manager != "systemd" && state.Service.Manager != "openrc" && state.Service.Manager != "supervisor") || state.Service.Unit != haServiceUnit {
 		return nil, fmt.Errorf("DNS 高可用状态的服务记录无效，保留现有 keepalived 配置")
+	}
+	if state.Service.Manager == "supervisor" && !haDigestPattern.MatchString(state.ContainerHostID) {
+		return nil, fmt.Errorf("容器 HA 状态缺少有效的宿主归属信息")
 	}
 	return &state, nil
 }
@@ -221,8 +225,13 @@ func haPlatform(cfg *Config) error {
 	if cfg == nil || cfg.ServiceType != "oxidns" {
 		return fmt.Errorf("DNS 高可用只能在 OxiDNS Agent 上配置")
 	}
-	if cfg.ServiceManager != "systemd" && cfg.ServiceManager != "openrc" {
-		return fmt.Errorf("DNS 高可用仅支持 Shell 原生安装（systemd 或 OpenRC），容器部署不支持")
+	if cfg.ServiceManager == "supervisor" {
+		environment := haEnvironment(cfg)
+		if !environment.Ready {
+			return fmt.Errorf("%s", strings.Join(environment.Blockers, "；"))
+		}
+	} else if cfg.ServiceManager != "systemd" && cfg.ServiceManager != "openrc" {
+		return fmt.Errorf("DNS 高可用需要原生 systemd/OpenRC 或受管 Docker HA 环境")
 	}
 	if haGeteuid() != 0 {
 		return fmt.Errorf("Agent 需要 root 权限才能管理 keepalived")
@@ -401,6 +410,15 @@ func haPreflight(cfg *Config, spec OxiDNSHASpec, state *haState) ([]string, stri
 		}
 	}
 	add(haPlatform(cfg))
+	if cfg != nil && cfg.ServiceManager == "supervisor" {
+		environment := haEnvironment(cfg)
+		if spec.SelfIP != cfg.AgentIP {
+			add(fmt.Errorf("HA 本机地址必须与容器固定 AGENT_IP 一致"))
+		}
+		if state != nil && (state.Service.Manager != "supervisor" || state.ContainerHostID != environment.HostID) {
+			add(fmt.Errorf("HA 记录属于其他宿主或安装方式，已保留原记录，请先确认并停用"))
+		}
+	}
 	validErr := validateOxiDNSHASpec(spec)
 	add(validErr)
 	toolsErr := haTools()
@@ -430,12 +448,15 @@ func haPreflight(cfg *Config, spec OxiDNSHASpec, state *haState) ([]string, stri
 }
 
 func haStatus(cfg *Config) map[string]interface{} {
-	result := map[string]interface{}{"success": true, "protocol": oxidnsHAProtocol, "managed": nil, "handoff": nil, "error": ""}
+	environment := haEnvironment(cfg)
+	result := map[string]interface{}{"success": true, "protocol": oxidnsHAProtocol, "managed": nil, "handoff": nil, "error": "", "environment": environment}
 	haMu.Lock()
 	state, err := loadHAState(cfg)
 	haMu.Unlock()
 	if err != nil {
 		result["error"] = err.Error()
+	} else if ownershipErr := haContainerOwnership(cfg, state, environment); ownershipErr != nil {
+		result["error"] = ownershipErr.Error()
 	}
 	running := false
 	if _, lookErr := haLookPath("keepalived"); lookErr == nil && cfg != nil {
@@ -564,7 +585,7 @@ func OxiDNSHAPreviewHandler(cfg *Config) http.HandlerFunc {
 		if err != nil {
 			blockers = append(blockers, err.Error())
 		}
-		JsonResponse(w, http.StatusOK, map[string]interface{}{"success": true, "ok": len(blockers) == 0, "blockers": blockers, "interface": iface, "cidr": cidr})
+		JsonResponse(w, http.StatusOK, map[string]interface{}{"success": true, "ok": len(blockers) == 0, "blockers": blockers, "interface": iface, "cidr": cidr, "environment": haEnvironment(cfg)})
 	}
 }
 
@@ -581,6 +602,25 @@ type haNotReady struct{ error }
 // alone so that an Agent restart never moves the virtual IP.
 func ReapplyOxiDNSHA(cfg *Config) {
 	if cfg == nil || cfg.ServiceType != "oxidns" || cfg.AgentConfigFile == "" {
+		return
+	}
+	if cfg.ServiceManager == "supervisor" && haDockerOptIn() {
+		// A companion can be recreated long after the application started.
+		// Only an owned active journal may restart its one managed program.
+		go func() {
+			lastMessage := ""
+			for {
+				if err := reconcileOxiDNSHA(cfg); err != nil {
+					if message := err.Error(); message != lastMessage {
+						log.Printf("oxidns ha: container recovery pending: %s", message)
+						lastMessage = message
+					}
+				} else {
+					lastMessage = ""
+				}
+				time.Sleep(5 * time.Second)
+			}
+		}()
 		return
 	}
 	if state, err := loadHAState(cfg); err == nil && state == nil {
@@ -615,6 +655,12 @@ func reconcileOxiDNSHA(cfg *Config) error {
 	if err != nil || state == nil || !state.Active || state.Pending {
 		return err
 	}
+	if err := haPlatform(cfg); err != nil {
+		return err
+	}
+	if err := haContainerOwnership(cfg, state, haEnvironment(cfg)); err != nil {
+		return err
+	}
 	if haFilesDrift(cfg, state) == nil && haServiceEnabled(state.Service.Manager) && haServiceRunning(state.Service.Manager) {
 		return nil
 	}
@@ -635,6 +681,9 @@ func reconcileOxiDNSHA(cfg *Config) error {
 	defer unlock()
 	state, err = loadHAState(cfg)
 	if err != nil || state == nil || !state.Active || state.Pending {
+		return err
+	}
+	if err := haContainerOwnership(cfg, state, haEnvironment(cfg)); err != nil {
 		return err
 	}
 	return repairOxiDNSHA(cfg, state)
