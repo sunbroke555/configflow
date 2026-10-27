@@ -3,29 +3,29 @@
     <Settings2 class="size-4" /><span class="max-sm:hidden">测速设置</span>
   </Button>
   <Dialog :open="open" @update:open="value => { if (!busy) open = value }">
-    <DialogContent class="max-w-xl" :show-close-button="!busy" @escape-key-down="event => { if (busy) event.preventDefault() }" @interact-outside="event => { if (busy) event.preventDefault() }">
-      <DialogHeader>
-        <DialogTitle>测速设置</DialogTitle>
-        <DialogDescription>用于全部配置空间的节点库测速，解析节点服务器域名。</DialogDescription>
-      </DialogHeader>
-      <p v-if="error" role="alert" class="m-0 break-words text-sm text-destructive-accent">{{ error }}</p>
-      <p v-if="loading" role="status" class="m-0 text-sm text-muted-foreground">正在读取测速设置…</p>
-      <form v-else-if="loaded" class="flex min-w-0 flex-col gap-4" @submit.prevent="save">
-        <Segmented v-model="mode" :options="modes" label="测速 DNS 模式" block :disabled="busy || disabled" class="[&_[data-segment]]:px-2" />
+    <DialogContent class="flex max-w-xl flex-col gap-0 overflow-hidden p-0 max-sm:p-0" :show-close-button="!busy" @escape-key-down="event => { if (busy) event.preventDefault() }" @interact-outside="event => { if (busy) event.preventDefault() }">
+      <div class="shrink-0 space-y-3 border-b border-border px-6 pb-4 pt-6 max-sm:px-4 max-sm:pt-4">
+        <DialogHeader>
+          <DialogTitle>测速设置</DialogTitle>
+          <DialogDescription>为全部配置空间的节点测速解析服务器域名。</DialogDescription>
+        </DialogHeader>
+        <Segmented v-if="loaded" v-model="mode" :options="modes" label="测速 DNS 模式" block :disabled="busy || disabled" class="[&_[data-segment]]:px-2" />
+        <p v-if="error" role="alert" class="m-0 break-words text-sm text-destructive-accent">{{ error }}</p>
+      </div>
+      <p v-if="loading" role="status" class="m-0 p-6 text-sm text-muted-foreground max-sm:p-4">正在读取测速设置…</p>
+      <form v-else-if="loaded" ref="settingsForm" class="flex min-h-0 min-w-0 flex-col" @submit.prevent="save">
+        <div class="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-6 py-4 max-sm:px-4">
         <p v-if="mode === 'system'" class="m-0 text-sm leading-relaxed text-muted-foreground">使用运行测速组件的服务器或容器的系统 DNS。若该路径返回 Fake-IP，请选择其他模式。</p>
         <template v-else-if="mode === 'custom'">
           <FormField label="自定义 DNS" html-for="node-latency-dns" hint="每行一个地址，需返回真实 IP。支持 IPv4[:端口]、DoH 和 DoT。" :help="optionHelp('已有可用 DNS，或希望自行管理加密 DNS 时使用。', 'DoH 使用 https://主机/路径，DoT 使用 tls://主机[:端口]。不支持账号、查询参数和片段。配置仅供节点测速使用。')" persistent-hint>
             <Textarea id="node-latency-dns" v-model="servers" class="min-h-24 font-mono text-sm" :disabled="busy || disabled" :rows="3" placeholder="192.0.2.53:15353&#10;https://dns.example/dns-query&#10;tls://dns.example" spellcheck="false" />
           </FormField>
-          <details :open="bootstrapRequired || !!bootstrap" class="rounded-lg border border-border px-3">
-            <summary class="flex min-h-11 cursor-pointer items-center text-sm text-muted-foreground">高级：DNS 主机名解析</summary>
-            <FormField label="Bootstrap DNS" html-for="node-latency-bootstrap" class="pb-3" :hint="bootstrapRequired ? 'DNS 地址包含域名，必须填写用于解析该域名的 IPv4 DNS，最多 4 个。' : '仅用于解析 DoH / DoT 的主机名；每行一个 IPv4[:端口]，最多 4 个。'" persistent-hint>
-              <Textarea id="node-latency-bootstrap" v-model="bootstrap" class="min-h-20 font-mono text-sm" :disabled="busy || disabled" :rows="2" placeholder="192.0.2.53:15353" spellcheck="false" />
-            </FormField>
-          </details>
+          <FormField v-if="bootstrapRequired || bootstrap.trim()" label="引导 DNS" html-for="node-latency-bootstrap" class="[&_p]:break-words" :hint="bootstrapHint(customDnsHostnames, false)" persistent-hint>
+            <Textarea id="node-latency-bootstrap" v-model="bootstrap" class="min-h-20 font-mono text-sm" :disabled="busy || disabled" :rows="2" placeholder="IPv4 或 IPv4:端口，每行一个" spellcheck="false" />
+          </FormField>
         </template>
         <div v-else class="flex min-w-0 flex-col gap-4">
-          <p class="m-0 text-sm leading-relaxed text-muted-foreground">专用入口把查询交给所选上游。创建后会实际查询，验证返回真实 IP 才启用；失败保留原设置。</p>
+          <p class="m-0 text-sm leading-relaxed text-muted-foreground">专用入口把节点域名查询交给所选上游。</p>
           <p v-if="managedBindingError" role="alert" class="m-0 break-words text-sm text-warning-accent">{{ managedBindingError }}</p>
           <p v-if="managedLoading" role="status" class="m-0 text-sm text-muted-foreground">正在读取 OxiDNS 设备…</p>
           <div v-if="managedError" class="space-y-2">
@@ -33,7 +33,7 @@
             <Button type="button" variant="outline" class="min-h-11" :disabled="managedLoading || busy" @click="loadManaged">重新读取设备</Button>
           </div>
           <template v-if="!managedLoading && !managedError">
-            <FormField label="OxiDNS 设备" html-for="node-latency-agent">
+            <FormField label="OxiDNS 设备" html-for="node-latency-agent" :hint="selectedAgent ? `配置空间：${selectedAgent.profile_name || selectedAgent.profile_id}` : undefined" persistent-hint>
               <Select v-model="agentId" :disabled="busy || disabled">
                 <SelectTrigger id="node-latency-agent" class="min-h-11 w-full min-w-0"><SelectValue placeholder="选择运行 OxiDNS 的设备" class="truncate" /></SelectTrigger>
                 <SelectContent><SelectItem v-for="agent in agents" :key="agent.id" :value="agent.id">{{ agent.name }}</SelectItem></SelectContent>
@@ -41,7 +41,6 @@
             </FormField>
             <p v-if="!agents.length" class="m-0 text-sm text-muted-foreground">暂无 OxiDNS 设备，请先在 Agent 中添加并发布 OxiDNS。</p>
             <template v-if="selectedAgent">
-              <p class="m-0 break-words text-xs leading-relaxed text-muted-foreground">目标设备：{{ selectedAgent.name }}<span v-if="selectedAgent.address">（{{ selectedAgent.address }}）</span><br>配置空间：{{ selectedAgent.profile_name || selectedAgent.profile_id }}</p>
               <p v-if="!agentAvailable" role="alert" class="m-0 text-sm text-warning-accent">{{ selectedAgent.reason || '该设备当前不可创建专用 DNS。' }}</p>
               <FormField v-if="agentEndpoints.length" label="专用 DNS 入口" html-for="node-latency-endpoint">
                 <Select v-model="endpointId" :disabled="busy || disabled">
@@ -52,7 +51,7 @@
                   </SelectContent>
                 </Select>
               </FormField>
-              <div v-if="selectedEndpoint" class="space-y-2 rounded-lg border border-border bg-secondary/40 p-3">
+              <div v-if="selectedEndpoint" class="space-y-2 border-t border-border pt-3">
                 <p role="status" class="m-0 break-words text-sm" :class="statusClass(selectedEndpoint.status)">{{ statusLabel(selectedEndpoint.status) }}<span v-if="selectedEndpoint.endpoint" class="font-mono"> · {{ selectedEndpoint.endpoint }}</span></p>
                 <p v-if="selectedEndpoint.message" class="m-0 break-words text-xs leading-relaxed text-muted-foreground">{{ selectedEndpoint.message }}</p>
                 <p v-if="selectedEndpoint.upstream" class="m-0 break-all text-xs text-muted-foreground">上游：{{ selectedEndpoint.upstream }}</p>
@@ -62,26 +61,33 @@
                 </div>
               </div>
               <template v-else>
-                <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_6rem] gap-3">
-                  <FormField label="监听 IPv4" html-for="node-latency-listen"><Input id="node-latency-listen" v-model="listenAddress" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="设备可访问的 IPv4" /></FormField>
-                  <FormField label="端口" html-for="node-latency-port"><Input id="node-latency-port" v-model="port" class="min-h-11 font-mono" :disabled="busy || disabled" inputmode="numeric" /></FormField>
+                <div role="radiogroup" aria-label="上游来源" class="flex min-w-0 gap-4 border-b border-border">
+                  <button v-for="source in upstreamModes" :key="source.value" type="button" role="radio" :aria-checked="upstreamMode === source.value" :tabindex="upstreamMode === source.value ? 0 : -1" class="min-h-11 border-b-2 px-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50" :class="upstreamMode === source.value ? 'border-primary text-primary-accent' : 'border-transparent text-muted-foreground hover:text-foreground'" :disabled="busy || disabled" @click="upstreamMode = source.value" @keydown="changeUpstreamSource($event, source.value)">{{ source.label }}</button>
                 </div>
-                <Segmented v-model="upstreamMode" :options="upstreamModes" label="上游来源" block :disabled="busy || disabled" />
                 <template v-if="upstreamMode === 'existing'">
-                  <FormField label="现有上游" html-for="node-latency-existing-upstream" hint="复用已发布的上游参数，创建后独立保存；原上游后续修改不会自动同步。" persistent-hint>
-                    <Select v-if="availableUpstreams.length" v-model="upstreamId" :disabled="busy || disabled">
-                      <SelectTrigger id="node-latency-existing-upstream" class="min-h-11 w-full min-w-0"><SelectValue placeholder="选择要使用的上游" class="truncate" /></SelectTrigger>
-                      <SelectContent><SelectItem v-for="candidate in availableUpstreams" :key="candidate.id" :value="candidate.id" :disabled="!candidate.eligible" class="max-w-[calc(100vw-4rem)] whitespace-normal break-all"><span class="min-w-0"><span class="block">{{ candidate.label }}</span><span v-if="!candidate.eligible && candidate.reason" class="block text-xs text-muted-foreground">{{ candidate.reason }}</span></span></SelectItem></SelectContent>
-                    </Select>
+                  <FormField label="现有上游" html-for="node-latency-existing-upstream" :help="optionHelp('选择此设备已发布配置中的上游，免于手动填写。', '创建时复制上游参数并独立保存；原上游后续修改不会自动同步。列表中的上游尚未验证，创建后通过专用入口查询，验证返回真实 IP 才启用。')">
+                    <div class="flex min-w-0 items-start gap-2">
+                      <Select v-if="availableUpstreams.length" v-model="upstreamId" :disabled="busy || disabled">
+                        <SelectTrigger id="node-latency-existing-upstream" class="min-h-11 min-w-0 flex-1" :title="selectedUpstream?.label"><SelectValue placeholder="选择要使用的上游" class="truncate"><span v-if="selectedUpstream">{{ selectedUpstream.address || selectedUpstream.label }}</span></SelectValue></SelectTrigger>
+                        <SelectContent><SelectItem v-for="candidate in availableUpstreams" :key="candidate.id" :value="candidate.id" :disabled="!candidate.eligible" class="max-w-[calc(100vw-4rem)] whitespace-normal break-all"><span class="min-w-0"><span class="block">{{ candidate.label }}</span><span v-if="!candidate.eligible && candidate.reason" class="block text-xs text-muted-foreground">{{ candidate.reason }}</span></span></SelectItem></SelectContent>
+                      </Select>
+                      <p v-else class="m-0 min-w-0 flex-1 py-3 text-sm text-muted-foreground">暂无可选择的上游</p>
+                      <Button type="button" variant="outline" class="size-11 shrink-0 p-0" aria-label="刷新上游" title="刷新上游" :disabled="busy || managedLoading || disabled" @click="loadManaged"><RefreshCw class="size-4" /><span class="sr-only">刷新上游</span></Button>
+                    </div>
                     <p v-if="!eligibleUpstreams.length" role="status" class="m-0 text-sm text-warning-accent">{{ unavailableUpstreamsReason }}</p>
-                    <Button type="button" variant="ghost" class="min-h-11 self-start" :disabled="busy || managedLoading || disabled" @click="loadManaged">刷新上游</Button>
                   </FormField>
                 </template>
                 <template v-else>
                   <FormField label="上游 DNS" html-for="node-latency-upstream" hint="支持 IPv4[:端口]、https://主机/路径 或 tls://主机[:端口]。" persistent-hint><Input id="node-latency-upstream" v-model="upstream" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="填写 DNS 地址" /></FormField>
-                  <FormField v-if="managedBootstrapRequired" label="上游 Bootstrap DNS" html-for="node-latency-managed-bootstrap" hint="用于解析上游 DNS 的主机名，仅填一个 IPv4[:端口]。" persistent-hint><Input id="node-latency-managed-bootstrap" v-model="managedBootstrap" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="IPv4 或 IPv4:端口" /></FormField>
+                  <FormField v-if="managedBootstrapRequired || managedBootstrap.trim()" label="引导 DNS" html-for="node-latency-managed-bootstrap" class="[&_p]:break-words" :hint="bootstrapHint(managedDnsHostnames, true)" persistent-hint><Input id="node-latency-managed-bootstrap" v-model="managedBootstrap" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="IPv4 或 IPv4:端口" /></FormField>
                 </template>
-                <p class="m-0 text-xs leading-relaxed text-warning-accent">创建并启用将修改并发布「{{ selectedAgent.profile_name || selectedAgent.profile_id }}」中设备「{{ selectedAgent.name }}」的 OxiDNS 配置，新增上述端口的 UDP / TCP 入口。验证成功后才启用测速设置。</p>
+                <details :open="listenerExpanded" class="border-t border-border">
+                  <summary class="flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 py-2 text-sm marker:content-none" @click.prevent="listenerExpanded = !listenerExpanded"><ChevronRight class="size-4 shrink-0 transition-transform" :class="{ 'rotate-90': listenerExpanded }" /><span>入口地址与端口</span><span class="min-w-0 break-all font-mono text-xs text-muted-foreground">{{ listenAddress.trim() || '未填写地址' }}:{{ port || '未填写端口' }}</span></summary>
+                  <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_6rem] gap-3 pb-1 pt-2">
+                    <FormField label="监听 IPv4" html-for="node-latency-listen"><Input id="node-latency-listen" v-model="listenAddress" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="设备可访问的 IPv4" /></FormField>
+                    <FormField label="端口" html-for="node-latency-port"><Input id="node-latency-port" v-model="port" class="min-h-11 font-mono" :disabled="busy || disabled" inputmode="numeric" /></FormField>
+                  </div>
+                </details>
               </template>
             </template>
             <p v-else-if="agentId" role="alert" class="m-0 text-sm text-warning-accent">已保存的设备不在可用列表中，请重新选择设备或切换模式。</p>
@@ -89,23 +95,27 @@
         </div>
         <div v-if="mode !== 'managed' || selectedEndpoint?.status === 'ready'" class="space-y-2 border-t border-border pt-3">
           <Button type="button" variant="outline" class="min-h-11" :disabled="busy || checking || disabled" @click="checkDns"><Loader2 v-if="checking" class="size-4 animate-spin" />{{ checking ? '正在检测 DNS…' : '检测 DNS' }}</Button>
-          <p class="m-0 text-xs text-muted-foreground">从测速服务器查询 example.com，不保存设置，也不进行节点测速。</p>
+          <p class="m-0 text-xs text-muted-foreground">仅从测速服务器查询 example.com，不保存设置。</p>
           <p v-if="checkResult" role="status" class="m-0 break-words text-sm" :class="checkResult.success ? 'text-success-accent' : 'text-destructive-accent'">{{ checkResult.success ? `解析成功：${checkResult.addresses.join('、')}` : checkResult.message || 'DNS 检测失败' }}<span v-if="checkResult.success && checkResult.latency_ms != null">（{{ checkResult.latency_ms }} ms）</span></p>
         </div>
-        <DialogFooter class="gap-2">
+        </div>
+        <div class="shrink-0 space-y-3 border-t border-border px-6 py-4 max-sm:px-4">
+          <p v-if="mode === 'managed' && selectedAgent && !selectedEndpoint && !managedLoading && !managedError" class="m-0 text-xs leading-relaxed text-warning-accent">将发布到「{{ selectedAgent.name }}」（{{ selectedAgent.profile_name || selectedAgent.profile_id }}）。验证返回真实 IP 后启用；失败保留原设置。</p>
+        <DialogFooter class="flex-row gap-2">
           <Button type="button" variant="outline" class="min-h-11" :disabled="busy" @click="open = false">取消</Button>
-          <Button v-if="mode === 'managed' && !selectedEndpoint" type="button" class="min-h-11" :disabled="busy || disabled || !agentAvailable || managedLoading || !!managedError || (upstreamMode === 'existing' && !selectedUpstream)" @click="createAndEnable"><Loader2 v-if="provisioning" class="size-4 animate-spin" />{{ provisioning ? '正在创建并验证…' : '创建并启用专用 DNS' }}</Button>
-          <Button v-else type="submit" class="min-h-11" :disabled="busy || disabled || (mode === 'managed' && selectedEndpoint?.status !== 'ready')"><Loader2 v-if="saving || provisioning" class="size-4 animate-spin" />{{ saving ? '正在保存…' : provisioning ? '正在创建并验证…' : '保存' }}</Button>
+          <Button v-if="mode === 'managed' && !selectedEndpoint" type="button" class="min-h-11 max-sm:flex-1" :disabled="busy || disabled || !agentAvailable || managedLoading || !!managedError || (upstreamMode === 'existing' && !selectedUpstream)" @click="createAndEnable"><Loader2 v-if="provisioning" class="size-4 animate-spin" />{{ provisioning ? '正在创建并验证…' : '创建并启用' }}</Button>
+          <Button v-else type="submit" class="min-h-11 max-sm:flex-1" :disabled="busy || disabled || (mode === 'managed' && selectedEndpoint?.status !== 'ready')"><Loader2 v-if="saving || provisioning" class="size-4 animate-spin" />{{ saving ? '正在保存…' : provisioning ? '正在创建并验证…' : '保存' }}</Button>
         </DialogFooter>
+        </div>
       </form>
-      <Button v-else variant="outline" class="min-h-11" @click="load">重新读取</Button>
+      <div v-else class="p-6 max-sm:p-4"><Button variant="outline" class="min-h-11" @click="load">重新读取</Button></div>
     </DialogContent>
   </Dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
-import { Loader2, Settings2 } from '@lucide/vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { ChevronRight, Loader2, RefreshCw, Settings2 } from '@lucide/vue'
 import { nodeApi, type NodeLatencyDnsCheck, type NodeLatencyDnsConfig, type NodeLatencyDnsMode, type NodeLatencyManagedAgent, type NodeLatencyManagedEndpoint } from '@/api'
 import FormField from '@/components/common/FormField.vue'
 import Segmented from '@/components/common/Segmented.vue'
@@ -143,6 +153,8 @@ const agentId = ref('')
 const endpointId = ref('__new__')
 const listenAddress = ref('')
 const port = ref('15353')
+const listenerExpanded = ref(false)
+const settingsForm = ref<HTMLFormElement | null>(null)
 const upstream = ref('')
 const upstreamModes = [{ value: 'existing', label: '选择现有上游' }, { value: 'manual', label: '手动指定' }]
 const upstreamMode = ref('existing')
@@ -163,11 +175,31 @@ const unavailableUpstreamsReason = computed(() => {
 })
 const splitLines = (value: string) => value.split(/[,\n]/).map(line => line.trim()).filter(Boolean)
 const ipv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/
-function needsBootstrap(value: string) {
-  try { const url = new URL(value); return ['https:', 'tls:'].includes(url.protocol) && !ipv4.test(url.hostname) } catch { return false }
+function isListenerIPv4(value: string) {
+  if (!ipv4.test(value)) return false
+  const parts = value.split('.').map(Number)
+  return parts.every(part => part <= 255) && parts.join('.') === value && parts[0] !== 127 && !(parts[0]! >= 224 && parts[0]! <= 239) && !['0.0.0.0', '255.255.255.255'].includes(value)
 }
-const bootstrapRequired = computed(() => splitLines(servers.value).some(needsBootstrap))
-const managedBootstrapRequired = computed(() => needsBootstrap(upstream.value.trim()))
+function dnsHostname(value: string) {
+  try { const url = new URL(value); return ['https:', 'tls:'].includes(url.protocol) && !ipv4.test(url.hostname) ? url.hostname : '' } catch { return '' }
+}
+const customDnsHostnames = computed(() => [...new Set(splitLines(servers.value).map(dnsHostname).filter(Boolean))])
+const managedDnsHostnames = computed(() => [dnsHostname(upstream.value.trim())].filter(Boolean))
+const bootstrapRequired = computed(() => customDnsHostnames.value.length > 0)
+const managedBootstrapRequired = computed(() => managedDnsHostnames.value.length > 0)
+function bootstrapHint(hostnames: string[], managed: boolean) {
+  const purpose = hostnames.length
+    ? `先用这里的 DNS 查询 ${hostnames.join('、')} 的 IP，再连接它查询节点域名。`
+    : '当前 DNS 地址不含服务商域名，无需引导 DNS；可清空已有值。'
+  return `${purpose}${managed ? '仅填一个 IPv4[:端口]。' : '每行一个 IPv4[:端口]，最多 4 个。'}`
+}
+function changeUpstreamSource(event: KeyboardEvent, value: string) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  upstreamMode.value = event.key === 'Home' ? 'existing' : event.key === 'End' ? 'manual' : value === 'existing' ? 'manual' : 'existing'
+  const group = (event.currentTarget as HTMLElement).parentElement
+  void nextTick(() => group?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus())
+}
 let disposed = false
 let loadVersion = 0
 let managedVersion = 0
@@ -186,10 +218,18 @@ function formConfig(): NodeLatencyDnsConfig {
 }
 function validationError() {
   if (mode.value === 'custom' && !splitLines(servers.value).length) return '请填写自定义 DNS，或选择系统 DNS。'
-  if (mode.value === 'custom' && bootstrapRequired.value && !splitLines(bootstrap.value).length) return 'DNS 地址包含域名，请填写 Bootstrap DNS。'
-  if (mode.value === 'custom' && splitLines(bootstrap.value).length > 4) return 'Bootstrap DNS 最多填写 4 个。'
+  if (mode.value === 'custom' && bootstrapRequired.value && !splitLines(bootstrap.value).length) return '请填写引导 DNS，以解析 DNS 服务商的域名。'
+  if (mode.value === 'custom' && splitLines(bootstrap.value).length > 4) return '引导 DNS 最多填写 4 个。'
   if (mode.value === 'managed' && selectedEndpoint.value?.status !== 'ready') return '专用 DNS 尚未验证成功，请等待可用后保存。'
   return ''
+}
+function focusField(id: string) {
+  void nextTick(() => settingsForm.value?.querySelector<HTMLElement>(`#${id}`)?.focus())
+}
+function validateForm() {
+  error.value = validationError()
+  if (error.value) focusField(mode.value === 'custom' ? (splitLines(servers.value).length ? 'node-latency-bootstrap' : 'node-latency-dns') : 'node-latency-endpoint')
+  return !error.value
 }
 function stopPolling() { clearTimeout(pollTimer); pollTimer = undefined; ++statusVersion }
 function upsertEndpoint(endpoint: NodeLatencyManagedEndpoint) {
@@ -210,6 +250,7 @@ async function load() {
   agents.value = []
   listenAddress.value = ''
   port.value = '15353'
+  listenerExpanded.value = false
   upstream.value = ''
   upstreamMode.value = 'existing'
   upstreamId.value = ''
@@ -249,8 +290,7 @@ async function loadManaged() {
 }
 async function save() {
   if (!loaded.value || busy.value || props.disabled) return
-  error.value = validationError()
-  if (!error.value) await persist(formConfig())
+  if (validateForm()) await persist(formConfig())
 }
 async function persist(dns: NodeLatencyDnsConfig) {
   saving.value = true
@@ -267,8 +307,7 @@ async function persist(dns: NodeLatencyDnsConfig) {
 }
 async function checkDns() {
   if (busy.value || checking.value || props.disabled) return
-  error.value = validationError()
-  if (error.value) return
+  if (!validateForm()) return
   const version = ++checkVersion
   checking.value = true
   checkResult.value = null
@@ -282,13 +321,15 @@ async function checkDns() {
 async function createAndEnable() {
   if (busy.value || props.disabled || !agentAvailable.value) return
   error.value = ''
-  if (!ipv4.test(listenAddress.value.trim()) || !/^\d+$/.test(port.value) || Number(port.value) < 1 || Number(port.value) > 65535) {
+  if (!isListenerIPv4(listenAddress.value.trim()) || !/^\d+$/.test(port.value) || Number(port.value) < 1 || Number(port.value) > 65535) {
     error.value = '请填写监听 IPv4 和 1–65535 范围内的端口。'
+    listenerExpanded.value = true
+    focusField(!isListenerIPv4(listenAddress.value.trim()) ? 'node-latency-listen' : 'node-latency-port')
     return
   }
-  if (upstreamMode.value === 'existing' && !selectedUpstream.value) { error.value = '请选择现有上游，或切换为手动指定。'; return }
-  if (upstreamMode.value === 'manual' && !upstream.value.trim()) { error.value = '请填写上游 DNS 地址。'; return }
-  if (upstreamMode.value === 'manual' && managedBootstrapRequired.value && (!managedBootstrap.value.trim() || splitLines(managedBootstrap.value).length !== 1)) { error.value = '上游 DNS 包含域名，请填写一个 Bootstrap DNS（IPv4[:端口]）。'; return }
+  if (upstreamMode.value === 'existing' && !selectedUpstream.value) { error.value = '请选择现有上游，或切换为手动指定。'; focusField('node-latency-existing-upstream'); return }
+  if (upstreamMode.value === 'manual' && !upstream.value.trim()) { error.value = '请填写上游 DNS 地址。'; focusField('node-latency-upstream'); return }
+  if (upstreamMode.value === 'manual' && managedBootstrapRequired.value && (!managedBootstrap.value.trim() || splitLines(managedBootstrap.value).length !== 1)) { error.value = '请填写一个引导 DNS（IPv4[:端口]），以解析 DNS 服务商的域名。'; focusField('node-latency-managed-bootstrap'); return }
   provisioning.value = true
   pollCount = 0
   try {
