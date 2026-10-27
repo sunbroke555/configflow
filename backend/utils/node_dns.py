@@ -43,7 +43,7 @@ def _server(value):
     if '://' not in value:
         return _ipv4_server(value, DNS_ERROR)
     try:
-        if len(value) > 2048 or any(c.isspace() or ord(c) < 32 for c in value) or any(c in value for c in ('?', '#', '\\')):
+        if len(value) > 2048 or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) or any(c in value for c in ('?', '#', '\\')):
             raise ValueError
         parsed = urlsplit(value)
         if parsed.scheme not in ('https', 'tls') or not parsed.hostname or parsed.username is not None or parsed.password is not None:
@@ -57,6 +57,8 @@ def _server(value):
         else:
             if address.version != 4 or address.is_unspecified or address.is_multicast:
                 raise ValueError
+        if re.search(r'%(?![0-9a-fA-F]{2})', parsed.path):
+            raise ValueError
         port = parsed.port
         if (port is not None and not 1 <= port <= 65535) or parsed.netloc.endswith(':'):
             raise ValueError

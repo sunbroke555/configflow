@@ -42,7 +42,7 @@ def test_canonical_dns_addresses(raw, expected):
     'https://user:password@dns.example/dns-query', 'https://dns.example/dns-query?',
     'https://dns.example/dns-query#', 'https://dns.example/dns-query?token=secret',
     'https://dns.example:0', 'https://dns.example:', 'https://dns.example:65536',
-    'https://dns.example/a\nb', 'https://dns.example\\evil', 'tls://dns.example/',
+    'https://dns.example/a\nb', 'https://dns.example/dns%zz', 'https://dns.example/dns\x7f', 'https://dns.example\\evil', 'tls://dns.example/',
     'http://192.0.2.53', 'udp://192.0.2.53', 'https://[::1]/dns-query',
     'https://0.0.0.0/dns-query', 'https://224.0.0.1/dns-query', 'tls://bad_host', 'tls://dns.example..',
     '192.0.2.53:0', '192.0.2.53:65536', '192.0.2.53:', 'dns.example',
