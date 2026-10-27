@@ -1,0 +1,19 @@
+{
+  "backend/agents/scripts/agent-install-dependencies.sh": "6f285f4bfe4a3a65bed01fe177a5ec96deac82ce1a94610555bee952f51fe3b6",
+  "backend/agents/scripts/agent.sh": "d4ecb1bf6a133aab92a7744899ffd84a3ba5d9ffd61d7dc0b2b66becb6460d7b",
+  "backend/agents/scripts/aio-ipv4-forwarding.sh": "f07d5ef4b74d706b1c56fd0fb9a14ce57ac9beb521639e45e2cd6f81031d22e4",
+  "backend/agents/scripts/cli-output.sh": "b6225481ad36aab22b9e5cccfdd01cbabf531706002eedf0e41a16fa7e4b1695",
+  "backend/agents/scripts/detect-gateway-network.sh": "2e825f5fa0600ac0b9748dbc9ee6da28655b4f141629c67cf0149c6da7537591",
+  "backend/agents/scripts/install-cores.sh": "3d1485991ea570092c9ee246a485d08dc184725a4f4de57462a19fec8858c6dc",
+  "backend/agents/scripts/install-gateway.sh": "d152245d469ba5c1a2a331473d7f3cc010cd5395fbc3e20170e39832269b7636",
+  "backend/agents/scripts/install-go-aio.sh": "a22cc65fca68a54deb4ad264e2fc642e7f9806a1598176f6b4e9cf4d1a8a0a0a",
+  "backend/agents/scripts/install-go.sh": "eee47bc57d056d0738ac43d12d90e83de7f225bd2b23f567f45cafe274d10e54",
+  "backend/agents/scripts/install-output.sh": "9f38c186e476c20f749a9ede79fd8801f1d2d3c0f9a87015746fe8364f6f6e03",
+  "backend/agents/scripts/install.sh": "341d7900cf521740aa6be88817322d686bd76b358482d8d2717a74b4a68e8b7c",
+  "backend/agents/scripts/prepare-dns-ha.sh": "678e4305071b4e14f20b532b1af905608779df2cba00e6d5482ca63299142e2e",
+  "backend/agents/scripts/update-agent.sh": "db02d38e755814887c253417b8ba20c77ae97c270734904c987697f0b8d30da2",
+  "backend/agents/go_install_script.py": "d8a0f191ff95f6e7f2b1aff8256751ac6023fe776f943fb48685a3711da5417e",
+  "backend/routes/agents.py": "51cf241a1230617de46c62371fbc61ebed4c75c8b678f5ee4009005ffb50a6a8",
+  "backend/agents/core_install_script.py": "d0647127e0be20f0fc70b7cf037b747064e9bff7fd4a889452a425bff265b49a",
+  "backend/agents/install_output.py": "939b010392641e837709865d6da92318a9615a13cb1f65c3ca53f8556d141f75"
+}

@@ -17,6 +17,8 @@ const reportPath = join(evidence, 'oxidns-shell-ha-entry-browser.json')
 const report = {
   started_at: new Date().toISOString(), preview: base, cases: [],
   real_api_scope: 'Generate and retrieve Shell Agent + OxiDNS core installation scripts; never execute them',
+  agent_binary_check: 'HEAD availability and non-empty binary metadata only; no architecture execution',
+  agent_binary_downloads: [],
   fixture_scope: 'Read-only Agent list and HA environment responses for pairing UI; no live HA activation',
   installed_or_registered: false, ha_activated: false, errors: 0,
 }
@@ -41,6 +43,20 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 960 }, colorScheme: theme, reducedMotion: 'reduce' })
     const auth = await context.request.get(base + '/api/auth/status')
     assert.equal((await auth.json()).authEnabled, false, 'Test preview must remain login-free')
+    if (!report.agent_binary_downloads.length) {
+      phase = `${width}: real Agent binary availability`
+      report.agent_binary_downloads = await Promise.all(['amd64', 'arm64', 'armv7'].map(async architecture => {
+        const response = await context.request.head(`${base}/api/agents/download/configflow-agent-linux-${architecture}`)
+        const headers = response.headers()
+        const contentType = (headers['content-type'] || '').split(';')[0].trim()
+        const contentLength = Number(headers['content-length'])
+        assert.equal(response.status(), 200, `${architecture} Agent download must be available`)
+        assert.equal(contentType, 'application/octet-stream', `${architecture} Agent download must be a binary`)
+        assert.ok(Number.isFinite(contentLength) && contentLength > 0, `${architecture} Agent binary must not be empty`)
+        return { architecture, http_status: response.status(), content_type: contentType, content_length: contentLength }
+      }))
+      phase = `${width}: real Shell entry`
+    }
     const liveAgents = async () => {
       const response = await context.request.get(base + '/api/agents')
       assert.equal(response.status(), 200)

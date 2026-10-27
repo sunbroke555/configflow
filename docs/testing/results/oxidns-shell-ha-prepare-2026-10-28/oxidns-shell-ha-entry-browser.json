@@ -1,0 +1,66 @@
+{
+  "started_at": "2026-10-27T16:11:25.461Z",
+  "preview": "http://192.168.0.32:15810",
+  "cases": [
+    {
+      "width": 1440,
+      "theme": "light",
+      "real_install_api": true,
+      "real_download_equal": true,
+      "includes_oxidns_core": true,
+      "automatic_ha_preparation": true,
+      "unchanged_short_command": true,
+      "completed_command_retained": true,
+      "fixture_existing_shell_preselected": true,
+      "fixture_shell_shell_ready": true,
+      "fixture_shell_docker_ready": true,
+      "no_live_ha_activation": true,
+      "overflow": false
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "real_install_api": true,
+      "real_download_equal": true,
+      "includes_oxidns_core": true,
+      "automatic_ha_preparation": true,
+      "unchanged_short_command": true,
+      "completed_command_retained": true,
+      "fixture_existing_shell_preselected": true,
+      "fixture_shell_shell_ready": true,
+      "fixture_shell_docker_ready": true,
+      "no_live_ha_activation": true,
+      "overflow": false
+    }
+  ],
+  "real_api_scope": "Generate and retrieve Shell Agent + OxiDNS core installation scripts; never execute them",
+  "agent_binary_check": "HEAD availability and non-empty binary metadata only; no architecture execution",
+  "agent_binary_downloads": [
+    {
+      "architecture": "amd64",
+      "http_status": 200,
+      "content_type": "application/octet-stream",
+      "content_length": 10305696
+    },
+    {
+      "architecture": "arm64",
+      "http_status": 200,
+      "content_type": "application/octet-stream",
+      "content_length": 9437344
+    },
+    {
+      "architecture": "armv7",
+      "http_status": 200,
+      "content_type": "application/octet-stream",
+      "content_length": 10092704
+    }
+  ],
+  "fixture_scope": "Read-only Agent list and HA environment responses for pairing UI; no live HA activation",
+  "installed_or_registered": false,
+  "ha_activated": false,
+  "errors": 0,
+  "entry_asset": "/assets/index-DxnFnnox.js",
+  "status": "passed",
+  "blocked_write_count": 0,
+  "completed_at": "2026-10-27T16:11:29.555Z"
+}

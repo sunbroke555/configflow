@@ -1,0 +1,17 @@
+{
+  "15800": {
+    "url": "http://192.168.0.32:15800/login",
+    "status": 200
+  },
+  "15810": {
+    "url": "http://192.168.0.32:15810/login",
+    "status": 200
+  },
+  "default_runtime_units": {
+    "docker.service": "inactive",
+    "docker.socket": "inactive",
+    "containerd.service": "inactive"
+  },
+  "at": 1793117386.2279503,
+  "default_runtime_unchanged_from_known_inactive_baseline": true
+}

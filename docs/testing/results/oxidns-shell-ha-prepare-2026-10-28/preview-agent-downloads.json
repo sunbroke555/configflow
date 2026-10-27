@@ -1,0 +1,35 @@
+{
+  "checked_at": "2026-10-27T16:09:43.366298+00:00",
+  "base": "http://192.168.0.32:15810",
+  "agent_version": "1.8.49-go",
+  "build_only_architectures": [
+    "arm64",
+    "armv7"
+  ],
+  "downloads": [
+    {
+      "arch": "amd64",
+      "status": 200,
+      "bytes": 10305696,
+      "sha256": "4b053272e366103b787c6af92444a5344a546b267654419d042c899ae4a48ca1",
+      "download_equal": true
+    },
+    {
+      "arch": "arm64",
+      "status": 200,
+      "bytes": 9437344,
+      "sha256": "8b78ef904007b30eaf8253f205abc9eedd00893032992be20f4f2c23268d98de",
+      "download_equal": true
+    },
+    {
+      "arch": "armv7",
+      "status": 200,
+      "bytes": 10092704,
+      "sha256": "183974ee1aceb3a5a7cf0da459ed64604b16137106f478090c64cd78adaa9098",
+      "download_equal": true
+    }
+  ],
+  "auth_enabled": false,
+  "amd64_same_as_four_system_lab": true,
+  "status": "passed"
+}
