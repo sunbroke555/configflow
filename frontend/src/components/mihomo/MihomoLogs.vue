@@ -25,7 +25,7 @@
       <span role="status">{{ refreshStatus }}</span>
       <span>最近 {{ MAX_LINES }} 行<span v-if="search.trim()"> · 匹配 {{ matchingLines.length }} 行</span></span>
       <span v-if="updatedAt" class="num">更新于 {{ updatedAt }}</span>
-      <Button variant="ghost" size="sm" class="ml-auto min-h-11" :aria-pressed="follow" @click="toggleFollow">
+      <Button variant="ghost" size="sm" class="ml-auto min-h-11" :class="follow && 'bg-primary-soft text-primary-accent'" :aria-pressed="follow" @click="toggleFollow">
         <ArrowDownToLine class="size-3.5" />跟随日志
       </Button>
     </div>
