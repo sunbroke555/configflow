@@ -59,7 +59,7 @@ func TestProxyDNSNameServers(t *testing.T) {
 			}
 		}
 	}
-	for _, raw := range []string{"", " ", "127.0.0.1,127.0.0.2", "dns.example.com", "https://dns.example.com/dns-query", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1,", ",127.0.0.1", "secret@127.0.0.1", "::1", "[::1]:5353", "[fe80::1%eth0]:53", "0.0.0.0", "0.0.0.0:53", "224.0.0.1", "239.1.1.1:53"} {
+	for _, raw := range []string{"", " ", "127.0.0.1,127.0.0.2", "dns.example.com", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1,", ",127.0.0.1", "secret@127.0.0.1", "::1", "[::1]:5353", "[fe80::1%eth0]:53", "0.0.0.0", "0.0.0.0:53", "224.0.0.1", "239.1.1.1:53"} {
 		if _, err := proxyDNSNameServers([]string{raw}); !errors.Is(err, errProxyDNSConfig) {
 			t.Fatalf("accepted invalid setting %q", raw)
 		}
@@ -193,7 +193,7 @@ func dnsWorker(t *testing.T, node map[string]any, setting []string, systemMode s
 		Version int      `json:"version"`
 		Results []result `json:"results"`
 	}
-	if err := json.Unmarshal(output, &decoded); err != nil || decoded.Version != 3 || len(decoded.Results) != 1 {
+	if err := json.Unmarshal(output, &decoded); err != nil || decoded.Version != responseVersion || len(decoded.Results) != 1 {
 		t.Fatalf("invalid worker response: %q, %v", output, err)
 	}
 	return decoded.Results[0], output, nil
@@ -337,7 +337,7 @@ func TestProxyDNSWorkerFlattenedErrors(t *testing.T) {
 func TestProxyDNSTargetResolverScope(t *testing.T) {
 	if os.Getenv("CONFIGFLOW_PROBE_DNS_SCOPE_CHILD") == "1" {
 		resolver.SystemResolver = &fixedProxyDNS{addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
-		if err := configureProxyDNS([]string{os.Getenv("CONFIGFLOW_PROBE_DNS_SCOPE_SERVER")}); err != nil {
+		if err := configureProxyDNS([]string{os.Getenv("CONFIGFLOW_PROBE_DNS_SCOPE_SERVER")}, nil); err != nil {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
