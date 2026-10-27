@@ -327,6 +327,8 @@ macvlan 默认不能直接与宿主机通信；ConfigFlow 和 DNS 上游需位�
 
 群晖 Container Manager 可在 **项目 → 新增** 中导入 Compose，并支持 host 网络与自定义容器权限；无需通过定时任务循环执行发布。具体入口参见群晖官方[网络](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_network?version=7)、[容器](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_container?version=7)与[项目](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project?version=7)说明。官方说明支持网络和部署入口，不代表本项目已在每个 NAS 型号上验证。
 
+兼容性按实际 Docker 能力检查，不使用 NAS 品牌白名单。群晖、飞牛、极空间均需核对 Compose 2.20+、rootful Docker、只读宿主校验挂载和所需网络权限；支持 Compose 本身不等于已支持 VIP 高可用。本轮精简安装在隔离 PVE 的 Linux 节点完成 Host/macvlan 与 Shell 混合测试，尚未在这些 NAS 固件或实体断电场景逐一验证。
+
 ## 查看 Agent 和核心日志
 
 1. 在 **系统 → Agent** 找到设备，打开卡片上的「日志」。

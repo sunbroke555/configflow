@@ -1,0 +1,704 @@
+{
+  "scenarios": [
+    {
+      "name": "compact-host-registered",
+      "time": 1793107825.2255166,
+      "no_prepare_script": true,
+      "only_external_file": "compose.yaml",
+      "real_online": true,
+      "ha_environment_ready": true,
+      "identity_mode": "installation",
+      "service_count": 2,
+      "no_global_identity_volume": true,
+      "read_only_boot_evidence": true,
+      "host_main_has_no_added_caps": true,
+      "helper_has_no_install_token": true,
+      "host_network_state_unchanged": true,
+      "yaml_lines": 49,
+      "previous_yaml_lines": 166,
+      "yaml_bytes": 1717,
+      "previous_yaml_bytes": 4970,
+      "agent_version": "1.8.49-go",
+      "compose_version": "2.20.0",
+      "firewall_checks": {
+        "routes": 0,
+        "nft": 0,
+        "iptables": "unavailable",
+        "ip6tables": "unavailable"
+      }
+    },
+    {
+      "name": "host-expired-token-offline-recreate",
+      "time": 1793107870.8136287,
+      "expired_token_http": 401,
+      "backend_was_stopped": true,
+      "agent_identity_preserved": true,
+      "installation_identity_preserved": true,
+      "config_and_rules_preserved": true,
+      "additional_enrollment_requests": 0,
+      "compose_version": "2.20.0"
+    },
+    {
+      "name": "host-installed-tcp53",
+      "time": 1793107975.3670063,
+      "observer": "CT132",
+      "protocol": "TCP",
+      "answers": {
+        "192.168.79.21": {
+          "rcode": 0,
+          "ip": "198.51.100.10",
+          "ms": 2.157
+        },
+        "192.168.79.22": {
+          "rcode": 0,
+          "ip": "198.51.100.11",
+          "ms": 0.492
+        }
+      }
+    },
+    {
+      "name": "host-identity-corruption-guard",
+      "time": 1793108027.857097,
+      "cases": [
+        {
+          "fault": "changed",
+          "startup_refused": true,
+          "marker_preserved": true,
+          "no_reregistration": true
+        },
+        {
+          "fault": "missing",
+          "startup_refused": true,
+          "marker_preserved": true,
+          "no_reregistration": true
+        },
+        {
+          "fault": "symlink",
+          "startup_refused": true,
+          "marker_preserved": true,
+          "no_reregistration": true
+        }
+      ],
+      "original_identity_and_config_restored": true
+    },
+    {
+      "name": "host-mixed-enable-syncs-fallback-and-rules",
+      "time": 1793108069.552885,
+      "publication_status": "succeeded",
+      "initial_answers": [
+        "198.51.100.10",
+        "198.51.100.11"
+      ],
+      "final_answer": "198.51.100.20",
+      "file_hashes_equal": true,
+      "primary": "native-shell",
+      "backup": "docker-host",
+      "tcp53_answers": {
+        "192.168.79.21": {
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 1.513
+        },
+        "192.168.79.22": {
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.429
+        },
+        "192.168.79.53": {
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.307
+        }
+      }
+    },
+    {
+      "name": "host-planned-publish",
+      "time": 1793108132.8639488,
+      "started_at": 1793108095.8719923,
+      "finished_at": 1793108131.9112911,
+      "dns_probe": {
+        "samples": 350,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "max_vip_latency_ms": 3.722,
+        "failed_probe_window_s": 0
+      },
+      "publication_status": "succeeded",
+      "standby_started_at": 1793108098.788816,
+      "new_vip_dns_at": 1793108109.1321368,
+      "native_primary_stopped_at": 1793108112.445881,
+      "ordered_handoff_proved": true,
+      "service_events": {
+        "shell": [
+          {
+            "time": 1793108112.445881,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793108112.448388,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793108112.497654,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "host": [
+          {
+            "time": 1793108098.260754,
+            "message": "2026-10-27 21:34:58,260 INFO stopped: oxidns (exit status 0)"
+          },
+          {
+            "time": 1793108098.788816,
+            "message": "2026-10-27 21:34:58,788 INFO spawned: 'oxidns' with pid 227"
+          }
+        ]
+      },
+      "file_hashes_equal": true,
+      "tcp53_answers": {
+        "192.168.79.21": {
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 1.602
+        },
+        "192.168.79.22": {
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.374
+        },
+        "192.168.79.53": {
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.285
+        }
+      }
+    },
+    {
+      "name": "host-native-core-stop-and-recovery",
+      "time": 1793108172.0968165,
+      "started_at": 1793108151.1549945,
+      "finished_at": 1793108171.1327283,
+      "dns_probe": {
+        "samples": 131,
+        "vip_failed_samples": 17,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793108152.1031399,
+          1793108152.4042408,
+          1793108152.7048562,
+          1793108153.0057518,
+          1793108153.3066225,
+          1793108153.6073804,
+          1793108153.908251,
+          1793108154.209105,
+          1793108154.509818,
+          1793108154.8106906,
+          1793108155.1115522,
+          1793108155.4121938,
+          1793108155.7130992,
+          1793108156.013936,
+          1793108156.3147893,
+          1793108156.616214,
+          1793108156.917435
+        ],
+        "max_vip_latency_ms": 300.568,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 5.115
+      },
+      "takeover_observed": true,
+      "recovery_observed": true,
+      "recovered_at": 1793108169.1576762
+    },
+    {
+      "name": "host-planned-yield-before-core-fault",
+      "time": 1793108182.9026291,
+      "started_at": 1793108173.0217247,
+      "finished_at": 1793108181.9807167,
+      "dns_probe": {
+        "samples": 90,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "max_vip_latency_ms": 4.037,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 0
+      },
+      "takeover_observed": true
+    },
+    {
+      "name": "host-active-docker-core-process-stop-and-recovery",
+      "time": 1793108217.4937978,
+      "started_at": 1793108183.8985085,
+      "finished_at": 1793108216.5536206,
+      "dns_probe": {
+        "samples": 244,
+        "vip_failed_samples": 12,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793108187.9692237,
+          1793108188.2701774,
+          1793108188.5717783,
+          1793108188.8726397,
+          1793108189.1734767,
+          1793108189.4744225,
+          1793108189.775259,
+          1793108190.0758135,
+          1793108190.3766146,
+          1793108190.6773872,
+          1793108190.9782147,
+          1793108191.2790942
+        ],
+        "max_vip_latency_ms": 300.6,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 3.61
+      },
+      "takeover_observed": true,
+      "container_and_agent_stayed_running": true,
+      "recovered_identity_preserved": true,
+      "recovered_at": 1793108211.6751258
+    },
+    {
+      "name": "host-planned-yield-before-container-fault",
+      "time": 1793108228.1905127,
+      "started_at": 1793108218.4033217,
+      "finished_at": 1793108227.2297227,
+      "dns_probe": {
+        "samples": 88,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "max_vip_latency_ms": 2.449,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 0
+      },
+      "takeover_observed": true
+    },
+    {
+      "name": "host-active-docker-container-kill-and-recovery",
+      "time": 1793108255.7669115,
+      "started_at": 1793108229.1681724,
+      "finished_at": 1793108254.8060632,
+      "dns_probe": {
+        "samples": 175,
+        "vip_failed_samples": 12,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793108233.0588753,
+          1793108233.3598654,
+          1793108233.660697,
+          1793108233.9615488,
+          1793108234.2623813,
+          1793108234.5632243,
+          1793108234.8639615,
+          1793108235.1648655,
+          1793108235.4656348,
+          1793108235.7664752,
+          1793108236.0675879,
+          1793108236.3687377
+        ],
+        "max_vip_latency_ms": 300.648,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 3.61
+      },
+      "takeover_observed": true,
+      "recovered_identity_preserved": true,
+      "recovered_at": 1793108249.0086346,
+      "companion_survived": true
+    },
+    {
+      "name": "host-probe-exported",
+      "time": 1793108285.1694858,
+      "total_samples": 1800,
+      "raw_probe_contains_credentials": false
+    },
+    {
+      "name": "compact-macvlan-registered",
+      "time": 1793108310.1817684,
+      "no_prepare_script": true,
+      "only_external_file": "compose.yaml",
+      "real_online": true,
+      "ha_environment_ready": true,
+      "identity_mode": "installation",
+      "service_count": 1,
+      "no_global_identity_volume": true,
+      "read_only_boot_evidence": true,
+      "host_main_has_no_added_caps": false,
+      "helper_has_no_install_token": true,
+      "host_network_state_unchanged": true,
+      "yaml_lines": 39,
+      "previous_yaml_lines": 128,
+      "yaml_bytes": 1239,
+      "previous_yaml_bytes": 3865,
+      "agent_version": "1.8.49-go",
+      "compose_version": "2.20.0",
+      "firewall_checks": {
+        "routes": 0,
+        "nft": 0,
+        "iptables": "unavailable",
+        "ip6tables": "unavailable"
+      }
+    },
+    {
+      "name": "macvlan-installed-tcp53",
+      "time": 1793108335.041247,
+      "observer": "CT132",
+      "protocol": "TCP",
+      "answers": {
+        "192.168.79.21": {
+          "rcode": 0,
+          "ip": "198.51.100.10",
+          "ms": 1.696
+        },
+        "192.168.79.82": {
+          "rcode": 0,
+          "ip": "198.51.100.11",
+          "ms": 0.462
+        }
+      }
+    },
+    {
+      "name": "macvlan-expired-token-offline-recreate",
+      "time": 1793108357.4929812,
+      "expired_token_http": 401,
+      "backend_was_stopped": true,
+      "agent_identity_preserved": true,
+      "installation_identity_preserved": true,
+      "config_and_rules_preserved": true,
+      "additional_enrollment_requests": 0,
+      "compose_version": "2.20.0"
+    },
+    {
+      "name": "macvlan-identity-corruption-guard",
+      "time": 1793108412.808448,
+      "cases": [
+        {
+          "fault": "changed",
+          "startup_refused": true,
+          "marker_preserved": true,
+          "no_reregistration": true
+        },
+        {
+          "fault": "missing",
+          "startup_refused": true,
+          "marker_preserved": true,
+          "no_reregistration": true
+        },
+        {
+          "fault": "symlink",
+          "startup_refused": true,
+          "marker_preserved": true,
+          "no_reregistration": true
+        }
+      ],
+      "original_identity_and_config_restored": true
+    },
+    {
+      "name": "distinct-installations-same-host-guard",
+      "time": 1793108415.8509686,
+      "different_persistent_installation_ids": true,
+      "same_real_boot_identity": true,
+      "pairing_http": 409,
+      "same_host_pairing_rejected": true
+    },
+    {
+      "name": "macvlan-mixed-enable-syncs-fallback-and-rules",
+      "time": 1793108468.2479992,
+      "publication_status": "succeeded",
+      "initial_answers": [
+        "198.51.100.10",
+        "198.51.100.11"
+      ],
+      "final_answer": "198.51.100.70",
+      "file_hashes_equal": true,
+      "primary": "native-shell",
+      "backup": "docker-macvlan",
+      "tcp53_answers": {
+        "192.168.79.21": {
+          "rcode": 0,
+          "ip": "198.51.100.70",
+          "ms": 1.635
+        },
+        "192.168.79.82": {
+          "rcode": 0,
+          "ip": "198.51.100.70",
+          "ms": 0.37
+        },
+        "192.168.79.53": {
+          "rcode": 0,
+          "ip": "198.51.100.70",
+          "ms": 0.271
+        }
+      }
+    },
+    {
+      "name": "macvlan-planned-publish",
+      "time": 1793108514.0205343,
+      "started_at": 1793108475.5178843,
+      "finished_at": 1793108513.072248,
+      "dns_probe": {
+        "samples": 365,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "max_vip_latency_ms": 4.347,
+        "failed_probe_window_s": 0
+      },
+      "publication_status": "succeeded",
+      "standby_started_at": 1793108478.444227,
+      "new_vip_dns_at": 1793108488.4571476,
+      "native_primary_stopped_at": 1793108492.791388,
+      "ordered_handoff_proved": true,
+      "service_events": {
+        "shell": [
+          {
+            "time": 1793108492.791388,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793108492.794652,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793108492.841611,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "macvlan": [
+          {
+            "time": 1793108478.064806,
+            "message": "2026-10-27 21:41:18,064 INFO stopped: oxidns (exit status 0)"
+          },
+          {
+            "time": 1793108478.444227,
+            "message": "2026-10-27 21:41:18,443 INFO spawned: 'oxidns' with pid 398"
+          }
+        ]
+      },
+      "file_hashes_equal": true,
+      "tcp53_answers": {
+        "192.168.79.21": {
+          "rcode": 0,
+          "ip": "198.51.100.80",
+          "ms": 1.709
+        },
+        "192.168.79.82": {
+          "rcode": 0,
+          "ip": "198.51.100.80",
+          "ms": 0.387
+        },
+        "192.168.79.53": {
+          "rcode": 0,
+          "ip": "198.51.100.80",
+          "ms": 0.248
+        }
+      }
+    },
+    {
+      "name": "macvlan-native-core-stop-and-recovery",
+      "time": 1793108542.9916244,
+      "started_at": 1793108518.2037115,
+      "finished_at": 1793108542.057949,
+      "dns_probe": {
+        "samples": 158,
+        "vip_failed_samples": 15,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793108519.2023969,
+          1793108519.5039127,
+          1793108519.8047128,
+          1793108520.1055298,
+          1793108520.406371,
+          1793108520.7072282,
+          1793108521.007927,
+          1793108521.3088586,
+          1793108521.6097307,
+          1793108521.9105558,
+          1793108522.211366,
+          1793108522.5121546,
+          1793108522.8129375,
+          1793108523.1155922,
+          1793108523.416649
+        ],
+        "max_vip_latency_ms": 301.418,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 4.514
+      },
+      "takeover_observed": true,
+      "recovery_observed": true,
+      "recovered_at": 1793108540.097724
+    },
+    {
+      "name": "macvlan-planned-yield-before-core-fault",
+      "time": 1793108555.7159076,
+      "started_at": 1793108543.9075775,
+      "finished_at": 1793108554.7618995,
+      "dns_probe": {
+        "samples": 108,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "max_vip_latency_ms": 3.295,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 0
+      },
+      "takeover_observed": true
+    },
+    {
+      "name": "macvlan-active-docker-core-process-stop-and-recovery",
+      "time": 1793108594.1237473,
+      "started_at": 1793108556.695577,
+      "finished_at": 1793108593.190043,
+      "dns_probe": {
+        "samples": 266,
+        "vip_failed_samples": 14,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793108560.7802515,
+          1793108561.0812206,
+          1793108561.3822563,
+          1793108561.6829152,
+          1793108561.9838471,
+          1793108562.2847555,
+          1793108562.5855522,
+          1793108562.8863392,
+          1793108563.1871617,
+          1793108563.487822,
+          1793108563.788603,
+          1793108564.0894248,
+          1793108564.3902524,
+          1793108564.6908586
+        ],
+        "max_vip_latency_ms": 300.609,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 4.211
+      },
+      "takeover_observed": true,
+      "container_and_agent_stayed_running": true,
+      "recovered_identity_preserved": true,
+      "recovered_at": 1793108588.2513137
+    },
+    {
+      "name": "macvlan-planned-yield-before-container-fault",
+      "time": 1793108606.7517169,
+      "started_at": 1793108595.0559237,
+      "finished_at": 1793108605.7970438,
+      "dns_probe": {
+        "samples": 107,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "max_vip_latency_ms": 3.081,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 0
+      },
+      "takeover_observed": true
+    },
+    {
+      "name": "macvlan-active-docker-container-kill-and-recovery",
+      "time": 1793108665.8262675,
+      "started_at": 1793108607.7218223,
+      "finished_at": 1793108664.9046125,
+      "dns_probe": {
+        "samples": 283,
+        "vip_failed_samples": 11,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793108611.6739326,
+          1793108611.9748888,
+          1793108612.2757728,
+          1793108612.5766375,
+          1793108612.877441,
+          1793108613.1782696,
+          1793108613.4788525,
+          1793108613.779787,
+          1793108614.0805488,
+          1793108614.381433,
+          1793108614.6822917
+        ],
+        "max_vip_latency_ms": 300.771,
+        "successful_answers_match_published_config": true,
+        "failed_probe_window_s": 3.309
+      },
+      "takeover_observed": true,
+      "recovered_identity_preserved": true,
+      "recovered_at": 1793108659.9457996,
+      "companion_survived": null
+    },
+    {
+      "name": "macvlan-probe-exported",
+      "time": 1793108708.240418,
+      "total_samples": 1796,
+      "raw_probe_contains_credentials": false
+    }
+  ],
+  "scenario_count": 25,
+  "matrix_agent_version": "1.8.49-go",
+  "product_commit": "9d2d77cd2b8e4992389bf3e1c31569268b1e0c5a",
+  "upstream_base": "f8e9f2ef",
+  "docker_engine_version": "29.9.2",
+  "image": {
+    "id": "sha256:d2feeaf5ed855df6ec3332fd32f8b9dd7ecfe0bb6fd8ce2c8efd546d2284e99e",
+    "created": "2026-10-27T13:29:05.072918285Z",
+    "architecture": "amd64",
+    "os": "linux",
+    "tag": "cf-compose-compact:20261027"
+  },
+  "runtime_image_ids": {
+    "host": "sha256:3cbdb068e3e877aa2948eb10eaf353a0c5ac589e827d6ba7634cd3aa8ae9b130",
+    "macvlan": "sha256:3cbdb068e3e877aa2948eb10eaf353a0c5ac589e827d6ba7634cd3aa8ae9b130"
+  },
+  "test_image_published_to_registry": false,
+  "compose_minimum_version": {
+    "version": "2.20.0",
+    "sha256": "b49e358d11c198fa228fb7eca2a177affd8e1e33e06d29940668668482f797cd",
+    "source": "official Docker Compose v2.20.0 release"
+  },
+  "all_installs_compose_version": "2.20.0",
+  "runtime_scope": "CT130 native Shell Agent + CT131 independent Docker daemon + CT132 observer, on the same isolated PVE laboratory host; not physical NAS or physical power-loss tests",
+  "network_scope": "Only cfgt VLAN91; no production guest or production LAN modification",
+  "probe_method": {
+    "observer": "CT132",
+    "protocol": "UDP",
+    "tcp_coverage": "Initial nodes, HA enable and completed publish from CT132",
+    "cadence_target_ms": 100,
+    "timeout_ms": 300,
+    "success": "rcode0 with198.51.100.* A answer",
+    "ordering_timestamp": "Per-query completed_at and system lifecycle events share PVE clock"
+  },
+  "source_sha256": {
+    "backend/agents/docker_ha_compact.py": "9ef042ad6bdcef44f0022d5a873cb4e60fef66af8dfb3e25d221cab1b01ed0d1",
+    "backend/agents/docker_ha_guide.py": "9ad9365781e4b21735649f4607ef76778fc22a6a94c01fa4179c7acc8161b5bc",
+    "backend/agents/oxidns_ha.py": "a40198ce00f16cac78021bfb72873f5c0b4bc2b32a98d20cafbfd7f1df7ebd67",
+    "backend/agents/docker_ha_enrollment.py": "707e8c0a4b2703d3fb61aab64bd11725d0eef5d6027647515ce6b922dc5e26f0",
+    "docker/docker-compose-compact.py": "47582265a1b80da8667acbbb05f7eb449fbabe916aa59290c49734c6ebf8b394",
+    "docker/Dockerfile.agent": "64c61016253bf450c032fd04a8e49de77dcdade9d63c391ba54db7355db1129f",
+    "docker/docker-agent-entrypoint-service.sh": "78f1e5effe7e0e74fd73b930e0db8053cac0769e22b849d57d48ba8ccd1ab2e1",
+    "docker/docker-ha-companion-entrypoint.sh": "defc6e0eb36a6713f5140fd6215c35a65447fb26d111dfcc3dc1ae5fab6aa57a",
+    "backend/agents/go-agent/routes/oxidns_ha_container.go": "3e0e0a553d65b56cbf76e8f6cd5f1ee41d03fd99e23cd4ef9d4e224e4dc87a00",
+    "backend/agents/go-agent/upgrade/migration.go": "a8ec791f7327418d862521dc6b42bb84f8a9f3155b6fcd165709ea9e58139b08",
+    "backend/agents/version.py": "2cf0d0715cba3b4d0b96a4ca5f01917a925e0e074cdf6dfade72516d59f782d7"
+  },
+  "native_agent_binary_sha256": "94236049303c728069ebe7d170ae727f1c8f36a8b7819b78d1924a82f9486e3e",
+  "probe_totals": {
+    "host": {
+      "samples": 1800,
+      "vip_failed_samples": 41
+    },
+    "macvlan": {
+      "samples": 1796,
+      "vip_failed_samples": 40
+    }
+  },
+  "image_digest_evidence": {
+    "source": "Captured output of the same BuildKit exporter during the actual build; not a post-cleanup OCI manifest read",
+    "file": "build-export-excerpt.txt",
+    "index_digest": "sha256:d2feeaf5ed855df6ec3332fd32f8b9dd7ecfe0bb6fd8ce2c8efd546d2284e99e",
+    "manifest_digest": "sha256:7a80c24cebcb97a841e0573c5689946ad7dbe11b8b70955a7ea55b136e20c1b8",
+    "config_digest": "sha256:3cbdb068e3e877aa2948eb10eaf353a0c5ac589e827d6ba7634cd3aa8ae9b130",
+    "attestation_manifest_digest": "sha256:390fdfa6b9591b77cd730974c44a3f034518ef6569371c33856b4819f71afeb9",
+    "image_id_field": "docker image inspect .Id refers to the exported index in this Docker29 builder",
+    "runtime_image_ids_field": "docker container inspect .Image refers to image config; both match the exported config digest",
+    "original_build_directory_and_archive_removed": true
+  }
+}

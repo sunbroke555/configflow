@@ -390,6 +390,37 @@ def dns_observe(mode):
     return json.loads(lab.guest(132, 'python3', '-c', code))
 
 
+
+def tcp_observe(mode, include_vip=True):
+    script = r"""import json,os,socket,struct,sys,time
+hosts=json.load(sys.stdin);result={}
+for host in hosts:
+ ident=os.urandom(2);name='sync.lab.invalid'
+ query=ident+b'\x01\x00\x00\x01'+b'\0'*6+b''.join(bytes([len(p)])+p.encode() for p in name.split('.'))+b'\0\0\x01\0\x01'
+ started=time.monotonic()
+ with socket.create_connection((host,53),timeout=2) as sock:
+  sock.settimeout(2);sock.sendall(struct.pack('!H',len(query))+query)
+  def exact(n):
+   value=b''
+   while len(value)<n:
+    part=sock.recv(n-len(value))
+    if not part:raise RuntimeError('Short TCP DNS response')
+    value+=part
+   return value
+  response=exact(struct.unpack('!H',exact(2))[0])
+ assert response[:2]==ident and response[2]&0x80 and response[3]&15==0 and response[7]
+ result[host]={'rcode':response[3]&15,'ip':socket.inet_ntoa(response[-4:]),'ms':round((time.monotonic()-started)*1000,3)}
+print(json.dumps(result))
+"""
+    return json.loads(lab.guest(132, 'python3', '-c', script, data=json.dumps(node_addresses(mode)[:3 if include_vip else 2]).encode()))
+
+
+def install_tcp(mode):
+    answers = tcp_observe(mode, include_vip=False)
+    assert [answers[a]['ip'] for a in node_addresses(mode)[:2]] == ['198.51.100.10', '198.51.100.11']
+    record(mode + '-installed-tcp53', observer='CT132', protocol='TCP', answers=answers)
+
+
 def snapshots(mode):
     return {'shell': lab.snapshot(130), mode: {'hashes': snapshot_core(mode)['hashes']}}
 
@@ -427,9 +458,10 @@ def mixed_enable(mode):
     completed = lab.wait_ha(ids['shell']); wait_owner(mode, 'shell')
     after = snapshots(mode); assert after['shell']['hashes'] == after[mode]['hashes']
     answers = dns_observe(mode); assert all(v.get('ip') == address for v in answers.values())
+    tcp_answers = tcp_observe(mode); assert all(v['ip'] == address for v in tcp_answers.values())
     record(mode + '-mixed-enable-syncs-fallback-and-rules', publication_status=completed['publication']['status'],
            initial_answers=[initial[a]['ip'] for a in node_addresses(mode)[:2]], final_answer=address,
-           file_hashes_equal=True, primary='native-shell', backup='docker-' + mode)
+           file_hashes_equal=True, primary='native-shell', backup='docker-' + mode, tcp53_answers=tcp_answers)
     lab.put(132, lab.GROOT + '/source/' + lab.SCRIPT, Path(__file__).read_bytes())
     lab.guest(132, 'systemd-run', '--unit=' + lab.UNIT_PREFIX + '-probe-' + mode,
               '/opt/cf-retest/venv/bin/python', lab.GROOT + '/source/' + lab.SCRIPT, 'probe-' + mode)
@@ -443,6 +475,7 @@ def mixed_publish(mode):
     started = observer_time(); set_saved(address, 'full:mixed-published-' + mode + '.invalid\n', workers=4)
     lab.publish(ids[mode]); complete = lab.wait_ha(ids[mode]); wait_owner(mode, 'shell')
     answers = dns_observe(mode); assert all(v.get('ip') == address for v in answers.values())
+    tcp_answers = tcp_observe(mode); assert all(v['ip'] == address for v in tcp_answers.values())
     hashes = snapshots(mode); assert hashes['shell']['hashes'] == hashes[mode]['hashes']
     events = service_events(mode, started)
     standby_starts = [v['time'] for v in events[mode] if "spawned: 'oxidns'" in v['message']]
@@ -452,7 +485,7 @@ def mixed_publish(mode):
     assert standby_starts[0] < healthy[0] < primary_stops[0]
     phase(mode, 'planned-publish', started, publication_status=complete['publication']['status'],
           standby_started_at=standby_starts[0], new_vip_dns_at=healthy[0], native_primary_stopped_at=primary_stops[0],
-          ordered_handoff_proved=True, service_events=events, file_hashes_equal=True)
+          ordered_handoff_proved=True, service_events=events, file_hashes_equal=True, tcp53_answers=tcp_answers)
 
 
 def mixed_faults(mode):
@@ -467,15 +500,37 @@ def mixed_faults(mode):
         lab.guest(130, 'systemctl', 'start', 'oxidns')
     wait_owner(mode, 'shell'); recovered = observer_time(); time.sleep(1)
     phase(mode, 'native-core-stop-and-recovery', started, takeover_observed=True, recovery_observed=True, recovered_at=recovered)
-    # Planned yield first makes the Docker core the active VIP holder, so killing
-    # it tests actual failover rather than stopping an idle backup.
+    # First stop only OxiDNS inside the active Docker member. Agent and the
+    # HA manager stay up, so this differs from losing the entire container.
     operation = 'lab-' + uuid.uuid4().hex
     yielding = observer_time()
     assert agent_api('shell', 'POST', '/api/oxidns-ha/handoff', {'operation_id': operation})['code'] == 200
     wait_owner(mode, mode); time.sleep(.5)
-    phase(mode, 'planned-yield-before-fault', yielding, takeover_observed=True)
+    phase(mode, 'planned-yield-before-core-fault', yielding, takeover_observed=True)
     started = observer_time(); name = 'compact-' + mode + '-oxidns'
     before = snapshot_core(mode)
+    docker('exec', name, 'supervisorctl', '-c', '/etc/supervisor/supervisord.conf', 'stop', 'oxidns')
+    try:
+        assert json.loads(docker('inspect', name))[0]['State']['Running']
+        assert agent_api(mode, 'GET', '/api/capabilities')['code'] == 200
+        wait_owner(mode, 'shell')
+        answer = dns_observe(mode)[VIP]; assert answer['ok'] and answer['rcode'] == 0 and answer['ip'] == expected
+        time.sleep(1)
+    finally:
+        docker('exec', name, 'supervisorctl', '-c', '/etc/supervisor/supervisord.conf', 'start', 'oxidns')
+        agent_api('shell', 'DELETE', '/api/oxidns-ha/handoff', {'operation_id': operation})
+    wait_owner(mode, 'shell'); recovered = observer_time(); time.sleep(1)
+    after = snapshot_core(mode)
+    assert before['config']['agent_id'] == after['config']['agent_id'] and before['config']['token'] == after['config']['token']
+    phase(mode, 'active-docker-core-process-stop-and-recovery', started, takeover_observed=True,
+          container_and_agent_stayed_running=True, recovered_identity_preserved=True, recovered_at=recovered)
+    # Repeat the handoff, then kill the complete container as a separate fault.
+    operation = 'lab-' + uuid.uuid4().hex
+    yielding = observer_time()
+    assert agent_api('shell', 'POST', '/api/oxidns-ha/handoff', {'operation_id': operation})['code'] == 200
+    wait_owner(mode, mode); time.sleep(.5)
+    phase(mode, 'planned-yield-before-container-fault', yielding, takeover_observed=True)
+    started = observer_time(); before = snapshot_core(mode)
     docker('kill', '--signal=KILL', name)
     try:
         wait_owner(mode, 'shell')
@@ -487,7 +542,7 @@ def mixed_faults(mode):
     wait_owner(mode, 'shell'); recovered = observer_time(); time.sleep(1)
     after = snapshot_core(mode)
     assert before['config']['agent_id'] == after['config']['agent_id'] and before['config']['token'] == after['config']['token']
-    phase(mode, 'active-docker-core-kill-and-recovery', started, takeover_observed=True, recovered_identity_preserved=True, recovered_at=recovered,
+    phase(mode, 'active-docker-container-kill-and-recovery', started, takeover_observed=True, recovered_identity_preserved=True, recovered_at=recovered,
           companion_survived=(mode != 'host' or docker('inspect', 'compact-host-oxidns-ha', '--format', '{{.State.Running}}').decode().strip() == 'true'))
 
 
@@ -520,16 +575,31 @@ def same_host_checks():
 def export_evidence():
     import gzip
     report = json.loads((ROOT / 'report.json').read_text())
+    expected = {'distinct-installations-same-host-guard'}
+    for mode in ('host', 'macvlan'):
+        expected.add('compact-' + mode + '-registered')
+        expected.update(mode + '-' + suffix for suffix in ('installed-tcp53', 'expired-token-offline-recreate',
+            'identity-corruption-guard', 'mixed-enable-syncs-fallback-and-rules', 'planned-publish',
+            'native-core-stop-and-recovery', 'planned-yield-before-core-fault',
+            'active-docker-core-process-stop-and-recovery', 'planned-yield-before-container-fault',
+            'active-docker-container-kill-and-recovery', 'probe-exported'))
+    assert len(report['scenarios']) == len(expected) and {case['name'] for case in report['scenarios']} == expected
+    report['scenario_count'] = len(expected)
     report['matrix_agent_version'] = '1.8.49-go'
+    report['product_commit'] = '9d2d77cd2b8e4992389bf3e1c31569268b1e0c5a'
+    report['upstream_base'] = 'f8e9f2ef'
+    report['docker_engine_version'] = docker('version', '--format', '{{.Server.Version}}').decode().strip()
     report['image'] = json.loads((ROOT / 'image.json').read_text())
+    report['runtime_image_ids'] = {mode: json.loads(docker('inspect', 'compact-' + mode + '-oxidns'))[0]['Image'] for mode in ('host', 'macvlan')}
+    report['test_image_published_to_registry'] = False
     report['compose_minimum_version'] = json.loads((ROOT / 'compose-2.20.json').read_text())
     report['all_installs_compose_version'] = '2.20.0'
     report['runtime_scope'] = 'CT130 native Shell Agent + CT131 independent Docker daemon + CT132 observer, on the same isolated PVE laboratory host; not physical NAS or physical power-loss tests'
     report['network_scope'] = 'Only cfgt VLAN91; no production guest or production LAN modification'
-    report['probe_method'] = {'observer': 'CT132', 'cadence_target_ms': 100, 'timeout_ms': 300,
+    report['probe_method'] = {'observer': 'CT132', 'protocol': 'UDP', 'tcp_coverage': 'Initial nodes, HA enable and completed publish from CT132', 'cadence_target_ms': 100, 'timeout_ms': 300,
         'success': 'rcode0 with198.51.100.* A answer', 'ordering_timestamp': 'Per-query completed_at and system lifecycle events share PVE clock'}
     names = ['backend/agents/docker_ha_compact.py', 'backend/agents/docker_ha_guide.py',
-             'backend/agents/oxidns_ha.py', 'docker/docker-compose-compact.py', 'docker/Dockerfile.agent',
+             'backend/agents/oxidns_ha.py', 'backend/agents/docker_ha_enrollment.py', 'docker/docker-compose-compact.py', 'docker/Dockerfile.agent', 'docker/docker-agent-entrypoint-service.sh',
              'docker/docker-ha-companion-entrypoint.sh', 'backend/agents/go-agent/routes/oxidns_ha_container.go', 'backend/agents/go-agent/upgrade/migration.go', 'backend/agents/version.py']
     report['source_sha256'] = {name: hashlib.sha256((lab.REPO / name).read_bytes()).hexdigest() for name in names}
     report['native_agent_binary_sha256'] = hashlib.sha256((ROOT / 'configflow-agent').read_bytes()).hexdigest()
@@ -542,7 +612,7 @@ def export_evidence():
                 selected = [row for row in rows if case['started_at'] <= row['time'] <= case['finished_at']]
                 failed = [row['nodes'][2] for row in selected if not row['nodes'][2]['ok']]
                 assert len(selected) == case['dns_probe']['samples'] and len(failed) == case['dns_probe']['vip_failed_samples']
-                if any(label in case['name'] for label in ('core-stop', 'core-kill', 'yield-before')):
+                if any(label in case['name'] for label in ('core-stop', 'core-process-stop', 'container-kill', 'yield-before')):
                     expected = '198.51.100.40' if mode == 'host' else '198.51.100.80'
                     assert all(row['nodes'][2]['ip'] == expected for row in selected if row['nodes'][2]['ok'])
                     case['dns_probe']['successful_answers_match_published_config'] = True
@@ -571,6 +641,7 @@ def cleanup():
         memory = int(next(line.split(':', 1)[1] for line in config.splitlines() if line.startswith('memory:')))
         expected = int(next(line.split(':', 1)[1] for line in baseline['guests'][str(cid)]['config'].splitlines() if line.startswith('memory:')))
         assert memory == expected
+        assert config == baseline['guests'][str(cid)]['config'], 'Guest configuration differs from pre-test baseline'
         assert lab.pve('pct', 'status', cid).decode().strip() == 'status: stopped'
         assert lab.SNAPSHOT not in lab.pve('pct', 'listsnapshot', cid).decode()
         guests[str(cid)] = {'status': 'stopped', 'memory_mib': memory, 'snapshot_removed': True, 'disk_and_config_restored': True}
@@ -596,7 +667,7 @@ def cleanup():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install-docker', 'prepare-backend', 'server', 'dns-fixture', 'install-host', 'install-macvlan', 'expiry-host', 'expiry-macvlan', 'enable-host', 'enable-macvlan', 'publish-host', 'publish-macvlan', 'faults-host', 'faults-macvlan', 'finish-host', 'finish-macvlan', 'probe-host', 'probe-macvlan', 'same-host-checks', 'identity-host', 'identity-macvlan', 'export-evidence', 'cleanup'])
+    parser.add_argument('command', choices=['install-docker', 'prepare-backend', 'server', 'dns-fixture', 'install-host', 'install-macvlan', 'expiry-host', 'expiry-macvlan', 'enable-host', 'enable-macvlan', 'publish-host', 'publish-macvlan', 'faults-host', 'faults-macvlan', 'finish-host', 'finish-macvlan', 'probe-host', 'probe-macvlan', 'same-host-checks', 'identity-host', 'identity-macvlan', 'tcp-host', 'tcp-macvlan', 'export-evidence', 'cleanup'])
     command = parser.parse_args().command
     {'install-docker': install_docker, 'prepare-backend': prepare_backend, 'server': lab.server, 'dns-fixture': legacy.dns_fixture,
      'install-host': lambda: install_mode('host'), 'install-macvlan': lambda: install_mode('macvlan'),
@@ -606,4 +677,4 @@ if __name__ == '__main__':
      'faults-host': lambda: mixed_faults('host'), 'faults-macvlan': lambda: mixed_faults('macvlan'),
      'finish-host': lambda: finish_mode('host'), 'finish-macvlan': lambda: finish_mode('macvlan'),
      'probe-host': lambda: dns_probe('host'), 'probe-macvlan': lambda: dns_probe('macvlan'),
-     'same-host-checks': same_host_checks, 'identity-host': lambda: identity_corruption('host'), 'identity-macvlan': lambda: identity_corruption('macvlan'), 'export-evidence': export_evidence, 'cleanup': cleanup}[command]()
+     'tcp-host': lambda: install_tcp('host'), 'tcp-macvlan': lambda: install_tcp('macvlan'), 'same-host-checks': same_host_checks, 'identity-host': lambda: identity_corruption('host'), 'identity-macvlan': lambda: identity_corruption('macvlan'), 'export-evidence': export_evidence, 'cleanup': cleanup}[command]()

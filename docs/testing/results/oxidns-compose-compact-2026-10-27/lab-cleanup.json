@@ -1,0 +1,37 @@
+{
+  "preview_http_status": {
+    "15800": 200,
+    "15810": 200
+  },
+  "preview15810_authentication_remains_disabled": true,
+  "test_server_port53_matches_pretest_baseline": true,
+  "guests": {
+    "130": {
+      "status": "stopped",
+      "memory_mib": 384,
+      "snapshot_removed": true,
+      "disk_and_config_restored": true
+    },
+    "131": {
+      "status": "stopped",
+      "memory_mib": 384,
+      "snapshot_removed": true,
+      "disk_and_config_restored": true
+    },
+    "132": {
+      "status": "stopped",
+      "memory_mib": 1536,
+      "snapshot_removed": true,
+      "disk_and_config_restored": true
+    }
+  },
+  "default_docker_services": {
+    "docker": "inactive",
+    "docker.socket": "inactive",
+    "containerd": "inactive"
+  },
+  "builder_stopped": true,
+  "tunnel_closed": true,
+  "production_guests_modified": false,
+  "private_directory_credentials_image_cache_removed": true
+}
