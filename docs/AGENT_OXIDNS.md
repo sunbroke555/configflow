@@ -278,11 +278,11 @@ Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，�
 
 ### Docker DNS 高可用安装
 
-新装推荐在 **系统 → Agent → 生成安装脚本 → Docker 高可用引导** 中选择 **Compose 直接部署**。填写当前 Docker 主机后，下载或复制一份 `compose.yaml`，导入容器管理器的项目直接启动；命令行只需在文件所在目录执行 `docker compose up -d`。无需 `prepare.sh`、外部 `.env` 或登记脚本。需要 Compose 2.20+，并使用包含 `/usr/local/lib/configflow/docker-compose-install.py` 的新镜像；旧版镜像只有 HA 支持还不够。
+新装推荐在 **系统 → Agent → 生成安装脚本 → Docker 高可用引导** 中选择 **Compose 直接部署**。填写当前 Docker 主机后，下载或复制一份 `compose.yaml`，导入容器管理器的项目直接启动；命令行只需在文件所在目录执行 `docker compose up -d`。无需 `prepare.sh`、外部 `.env` 或登记脚本。需要 Compose 2.20+，并使用包含 `/usr/local/lib/configflow/docker-compose-install.py` 的新镜像（Agent 1.8.48-go 起）；旧版镜像只有 HA 支持还不够。
 
 初始化容器只准备所选专用数据目录，不安装宿主机软件或修改系统 DNS。首次启动由最终网络中的 Agent 容器登记，限时凭据有效 24 小时；已登记的容器重启、重建会复用持久身份，无需再次登记。首次凭据过期时保持设置不变重新生成 Compose，替换后再次启动。旧容器继续使用引导中的迁移入口，不能用新装 Compose 接管旧数据。
 
-主机缺少身份文件时，勾选 **使用 Docker 身份卷** 即可，无需手动创建宿主机文件。各项目共享本机的 `configflow-ha-host-identity` 卷；保留该卷，不要复制到另一台主机。此模式要求两端使用支持实时宿主启动身份校验的新 Agent；生成的 Compose 已包含所需只读挂载。
+主机缺少身份文件时，勾选 **使用 Docker 身份卷** 即可，无需手动创建宿主机文件。各项目共享本机的 `configflow-ha-host-identity` 卷；保留该卷，不要复制到另一台主机。此模式要求两端 Agent 1.8.48-go 或更新版本，以提供实时宿主启动身份校验；已有 Shell 节点可从 Agent 卡片升级，生成的 Compose 已包含容器所需只读挂载。
 
 可以由 **一台 Shell 原生 OxiDNS + 一台 Docker OxiDNS** 组成高可用。已有 Shell 节点无需重装核心；确认 Agent 支持高可用与计划迁移、已安装 keepalived，两端绑定同一配置空间，在引导的 **验证与配对** 选择两台。Shell 端无需安装 Docker。Host 与 macvlan 均可与原生节点配对；仍需两台独立设备和可达的同一局域网。
 

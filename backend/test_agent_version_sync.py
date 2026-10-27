@@ -2,7 +2,7 @@
 from pathlib import Path
 import re
 
-from backend.agents.version import LATEST_AGENT_VERSION, VERSION_CHANGELOG
+from backend.agents.version import LATEST_AGENT_VERSION, VERSION_CHANGELOG, has_update
 
 
 MIGRATION_GO = Path(__file__).resolve().parent / "agents/go-agent/upgrade/migration.go"
@@ -20,3 +20,10 @@ def test_latest_agent_version_has_changelog_entry():
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", entry["date"])
     assert entry["features"] and all(isinstance(item, str) and item for item in entry["features"])
     assert next(iter(VERSION_CHANGELOG)) == LATEST_AGENT_VERSION
+
+
+def test_existing_docker_ha_agent_can_update_for_mixed_host_identity_support():
+    # Existing Shell Agents need the new boot-identity capability before pairing
+    # with Docker identity volumes; the normal UI only offers has_update=True.
+    assert has_update("1.8.47-go") is True
+    assert has_update(LATEST_AGENT_VERSION) is False
