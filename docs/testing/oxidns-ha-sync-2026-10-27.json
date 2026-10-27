@@ -1,0 +1,880 @@
+{
+  "started_at": 1793068762.935122,
+  "passed": true,
+  "scope": {
+    "containers": [
+      130,
+      131,
+      132
+    ],
+    "network": "isolated cfgt VLAN91",
+    "vip": "192.168.79.53"
+  },
+  "baseline": {
+    "130": {
+      "hashes": {
+        "/etc/oxidns/config.yaml": "c4bbcbd69837bae3366619205eceb0c9ee3b896c770f941b951d6db820e91fc0",
+        "/etc/oxidns/rules/lab.txt": "6ad02d78130a4a78c372dee5e8bdde784a0138c8a12b58b8a6d3d6e5434f890e"
+      },
+      "pid": "312",
+      "active": "active"
+    },
+    "131": {
+      "hashes": {
+        "/etc/oxidns/config.yaml": "47498571fa4c0f49f00d3fa2292659fc460c7368758de4e6f0e9e58f7bc647d9",
+        "/etc/oxidns/rules/lab.txt": "8e57eaac7285fe5346e03a098739a79d54b4507448e7f14620bdfb37332f701f"
+      },
+      "pid": "313",
+      "active": "active"
+    }
+  },
+  "scenarios": [
+    {
+      "name": "enable-synchronizes-different-initial-configurations",
+      "started_at": 1793068765.857734,
+      "finished_at": 1793068781.895499,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068769.626474,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068769.627056,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068769.681747,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": [
+          {
+            "time": 1793068766.88303,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068766.885542,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068766.932928,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "ddc87d28c6a6492d9e7cd02a70863de3",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "ha-828aeab0fde68404da91f3b456fc38ff671fe019a8d20862",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "ha-9d32ff28d89246bdbdda2abfc294ebff",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793068718405_67d1dd",
+        "owner_deployment_id": "ha-9d32ff28d89246bdbdda2abfc294ebff",
+        "phase": "done",
+        "routers": [],
+        "status": "succeeded",
+        "updated_at": 1793068776,
+        "warnings": []
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ac2d84420f339d01682dc44dd3d70f2abbbe9df96b2837b2b21679d1173024b1",
+            "/etc/oxidns/rules/lab.txt": "89eb3b51ef2945d3d32d8ef4ef82741b0630fad2c7eff2f1b7537b12642ccb4b"
+          },
+          "pid": "406",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ac2d84420f339d01682dc44dd3d70f2abbbe9df96b2837b2b21679d1173024b1",
+            "/etc/oxidns/rules/lab.txt": "89eb3b51ef2945d3d32d8ef4ef82741b0630fad2c7eff2f1b7537b12642ccb4b"
+          },
+          "pid": "394",
+          "active": "active"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.23
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.147
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.065
+        }
+      },
+      "ha_health": "ok",
+      "dns_probe": {
+        "samples": 95,
+        "vip_failed_samples": 32,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "publish-from-130-updates-both-members",
+      "started_at": 1793068781.895907,
+      "finished_at": 1793068792.2422817,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068785.557952,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068785.560115,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068785.609645,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": [
+          {
+            "time": 1793068782.946101,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068782.948861,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068782.99817,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "b94e4e0a1c1941c1b8e508c10299aacd",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "ha-82425f0fccc332b31552ff79494110964212d7df865b45cc",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "b2444b9d93c94d449fe099ae1faebd4e",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793068718405_67d1dd",
+        "owner_deployment_id": "b2444b9d93c94d449fe099ae1faebd4e",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793068787
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "375ead58c5300e4cde8f6999a5d4367d6600b2c5cbd9359d36e1de815afd16bb",
+            "/etc/oxidns/rules/lab.txt": "2c93f721bce7bd3b98bccdfbafeec9d14934d595c918cd3a03493be0460af3a8"
+          },
+          "pid": "630",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "375ead58c5300e4cde8f6999a5d4367d6600b2c5cbd9359d36e1de815afd16bb",
+            "/etc/oxidns/rules/lab.txt": "2c93f721bce7bd3b98bccdfbafeec9d14934d595c918cd3a03493be0460af3a8"
+          },
+          "pid": "602",
+          "active": "active"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.317
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.166
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.079
+        }
+      },
+      "dns_probe": {
+        "samples": 95,
+        "vip_failed_samples": 2,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "publish-from-131-updates-both-members",
+      "started_at": 1793068792.242579,
+      "finished_at": 1793068803.3088844,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068796.216607,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068796.218821,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068796.265638,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": [
+          {
+            "time": 1793068793.329249,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068793.331668,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068793.37989,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "55a3eb9edb6d4b838869655266504658",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "9920ad0110d54283a04f75125f5fadf0",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "ha-64ccf758d46839c10fd826864ed8be184e922a5047ac9ac7",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793068727259_8f594d",
+        "owner_deployment_id": "9920ad0110d54283a04f75125f5fadf0",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793068798
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "dc1001f9d6f92705cc4d6b3f0f1545bd280f7ec08c484bf6dcd3aaedeee3e056",
+            "/etc/oxidns/rules/lab.txt": "963d7fd8e0651afa38543a3054ab34a811718702c3a13e13e9d61171a6ce5c3c"
+          },
+          "pid": "735",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "dc1001f9d6f92705cc4d6b3f0f1545bd280f7ec08c484bf6dcd3aaedeee3e056",
+            "/etc/oxidns/rules/lab.txt": "963d7fd8e0651afa38543a3054ab34a811718702c3a13e13e9d61171a6ce5c3c"
+          },
+          "pid": "726",
+          "active": "active"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.293
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.16
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.40",
+          "ms": 0.12
+        }
+      },
+      "dns_probe": {
+        "samples": 103,
+        "vip_failed_samples": 2,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "stage-both-without-restart-then-activate-from-secondary",
+      "started_at": 1793068803.3091578,
+      "finished_at": 1793068818.4064224,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068811.409091,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068811.411305,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068811.456786,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": [
+          {
+            "time": 1793068809.34701,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068809.349671,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068809.397601,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "ready_publication": {
+        "active_agent_id": null,
+        "id": "be21f98a601b4060ba6fa963ea2059f4",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "ha-22e28878014de8ee66b9d8db651a2ce0438ed7d6e9afae5e",
+            "name": "HA lab 131",
+            "status": "ready"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "fab45626084149b184a92553fafa532c",
+            "name": "HA lab 130",
+            "status": "ready"
+          }
+        ],
+        "message": "两台候选配置已准备，激活时将先备机后主机",
+        "owner_agent_id": "agent_1793068718405_67d1dd",
+        "owner_deployment_id": "fab45626084149b184a92553fafa532c",
+        "phase": "primary",
+        "status": "ready",
+        "updated_at": 1793068806
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "be21f98a601b4060ba6fa963ea2059f4",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "ha-22e28878014de8ee66b9d8db651a2ce0438ed7d6e9afae5e",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "fab45626084149b184a92553fafa532c",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793068718405_67d1dd",
+        "owner_deployment_id": "fab45626084149b184a92553fafa532c",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793068813
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "79c9915542a7e2b686165d9e8fd9c494dad288d24325a6ee9508d3642b42cfb1",
+            "/etc/oxidns/rules/lab.txt": "365868dc5aeaab155202c97f40c24f645ce8d718c328d425ab277d135a3a5563"
+          },
+          "pid": "884",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "79c9915542a7e2b686165d9e8fd9c494dad288d24325a6ee9508d3642b42cfb1",
+            "/etc/oxidns/rules/lab.txt": "365868dc5aeaab155202c97f40c24f645ce8d718c328d425ab277d135a3a5563"
+          },
+          "pid": "895",
+          "active": "active"
+        }
+      },
+      "dns_probe": {
+        "samples": 143,
+        "vip_failed_samples": 2,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "backend-restart-resumes-publication-without-restarting-a-member-twice",
+      "started_at": 1793068818.4067557,
+      "finished_at": 1793068839.1442313,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068832.205813,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068832.208172,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068832.252379,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": [
+          {
+            "time": 1793068821.501794,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068821.504407,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068821.555015,
+            "message": "Starting oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068829.564069,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "initial_http_status": 202,
+      "publication": {
+        "active_agent_id": null,
+        "id": "124d2620b42c403088a04adb7c6d0593",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "ha-b9ed01873b7b6139cff5f1564cb32ecf60d14a45c48ad7c6",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "b88435b2bddc4277ae6e4657ba48fa0b",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793068718405_67d1dd",
+        "owner_deployment_id": "b88435b2bddc4277ae6e4657ba48fa0b",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793068833
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "05d26263d7a6b188be8f604ca98dc31cdf57974cc905481f4d656cc2ed901df7",
+            "/etc/oxidns/rules/lab.txt": "54bb4fa4496df8612797d5c8ad97a14824b5964e193939e0a7238b0f628d2bdc"
+          },
+          "pid": "1076",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "05d26263d7a6b188be8f604ca98dc31cdf57974cc905481f4d656cc2ed901df7",
+            "/etc/oxidns/rules/lab.txt": "54bb4fa4496df8612797d5c8ad97a14824b5964e193939e0a7238b0f628d2bdc"
+          },
+          "pid": "1115",
+          "active": "active"
+        }
+      },
+      "dns_probe": {
+        "samples": 146,
+        "vip_failed_samples": 2,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "standby-start-failure-rolls-back-and-leaves-primary-untouched",
+      "started_at": 1793068841.1524649,
+      "finished_at": 1793068854.2386377,
+      "service_events": {
+        "130": [],
+        "131": [
+          {
+            "time": 1793068847.041016,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068847.044283,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068847.089103,
+            "message": "Starting oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068847.090866,
+            "message": "Failed to start oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068847.150053,
+            "message": "Starting oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068847.151561,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "publication": {
+        "active_agent_id": "agent_1793068727259_8f594d",
+        "id": "21eed98373134b1981bfd83b950e6b57",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "ha-8a50c6f720d65f20d10380e61fc2e87c676d8632632f3066",
+            "name": "HA lab 131",
+            "status": "rolled_back"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "034bcd2bc5284a67958a0f0b2175b913",
+            "name": "HA lab 130",
+            "status": "failed"
+          }
+        ],
+        "message": "备机发布失败：service start failed: Job for oxidns.service failed because the control process exited with error code.: Failed to start oxidns.service - ConfigFlow laboratory oxidns.",
+        "owner_agent_id": "agent_1793068718405_67d1dd",
+        "owner_deployment_id": "034bcd2bc5284a67958a0f0b2175b913",
+        "phase": "standby",
+        "status": "failed",
+        "updated_at": 1793068849
+      },
+      "before": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "05d26263d7a6b188be8f604ca98dc31cdf57974cc905481f4d656cc2ed901df7",
+            "/etc/oxidns/rules/lab.txt": "54bb4fa4496df8612797d5c8ad97a14824b5964e193939e0a7238b0f628d2bdc"
+          },
+          "pid": "1076",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "05d26263d7a6b188be8f604ca98dc31cdf57974cc905481f4d656cc2ed901df7",
+            "/etc/oxidns/rules/lab.txt": "54bb4fa4496df8612797d5c8ad97a14824b5964e193939e0a7238b0f628d2bdc"
+          },
+          "pid": "1115",
+          "active": "active"
+        }
+      },
+      "after": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "05d26263d7a6b188be8f604ca98dc31cdf57974cc905481f4d656cc2ed901df7",
+            "/etc/oxidns/rules/lab.txt": "54bb4fa4496df8612797d5c8ad97a14824b5964e193939e0a7238b0f628d2bdc"
+          },
+          "pid": "1076",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "05d26263d7a6b188be8f604ca98dc31cdf57974cc905481f4d656cc2ed901df7",
+            "/etc/oxidns/rules/lab.txt": "54bb4fa4496df8612797d5c8ad97a14824b5964e193939e0a7238b0f628d2bdc"
+          },
+          "pid": "1343",
+          "active": "active"
+        }
+      },
+      "dns_probe": {
+        "samples": 127,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "retry-after-failure-updates-both-members",
+      "started_at": 1793068857.2037728,
+      "finished_at": 1793068867.673993,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068860.918976,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068860.920165,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068860.964125,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": [
+          {
+            "time": 1793068858.286299,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068858.289316,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068858.336589,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "9534d69eecf14a508180f65b565e32d1",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "b64b1e521aa442efbd35d7e03dae9c0b",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "ha-38013729126b85c00ec0f7a7914c50442feb93aa3e741983",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793068727259_8f594d",
+        "owner_deployment_id": "b64b1e521aa442efbd35d7e03dae9c0b",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793068862
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "000c2c3cc5ebdda9901f2d755a64f2c1b361a70280eeec4c5c49b20221917f9b",
+            "/etc/oxidns/rules/lab.txt": "62e674961bc2f302e5c0d6e57ab815cbf0cda095a9ea4324e73850379e7526cc"
+          },
+          "pid": "1320",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "000c2c3cc5ebdda9901f2d755a64f2c1b361a70280eeec4c5c49b20221917f9b",
+            "/etc/oxidns/rules/lab.txt": "62e674961bc2f302e5c0d6e57ab815cbf0cda095a9ea4324e73850379e7526cc"
+          },
+          "pid": "1474",
+          "active": "active"
+        }
+      },
+      "dns_probe": {
+        "samples": 96,
+        "vip_failed_samples": 2,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "duplicates-and-concurrent-peer-publications",
+      "started_at": 1793068867.6743813,
+      "finished_at": 1793068883.8301785,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068877.791491,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068877.794376,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068877.845145,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": [
+          {
+            "time": 1793068870.900835,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068870.903052,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068870.947924,
+            "message": "Starting oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068874.958866,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ]
+      },
+      "http_statuses": [
+        202,
+        202,
+        409
+      ],
+      "publication": {
+        "active_agent_id": null,
+        "id": "5cab6c4862ce4361b909521021f030b5",
+        "members": [
+          {
+            "agent_id": "agent_1793068727259_8f594d",
+            "deployment_id": "ha-58b15c7a75254577f9ac0e3045f2d54ffd313c2c8788348d",
+            "name": "HA lab 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793068718405_67d1dd",
+            "deployment_id": "770cf1536a9d461995089f7e638eef69",
+            "name": "HA lab 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793068718405_67d1dd",
+        "owner_deployment_id": "770cf1536a9d461995089f7e638eef69",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793068879
+      },
+      "files": {
+        "130": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "175e7e18a3ef95b7ac9faac337cfb0f72882b0dff4e2fed151ce152ecd844311",
+            "/etc/oxidns/rules/lab.txt": "34372a8a5a6eb587e50404f76a231699d12c9ced937c80cd911c7fd9fce94413"
+          },
+          "pid": "1489",
+          "active": "active"
+        },
+        "131": {
+          "hashes": {
+            "/etc/oxidns/config.yaml": "175e7e18a3ef95b7ac9faac337cfb0f72882b0dff4e2fed151ce152ecd844311",
+            "/etc/oxidns/rules/lab.txt": "34372a8a5a6eb587e50404f76a231699d12c9ced937c80cd911c7fd9fce94413"
+          },
+          "pid": "1672",
+          "active": "active"
+        }
+      },
+      "dns_probe": {
+        "samples": 127,
+        "vip_failed_samples": 2,
+        "both_nodes_unavailable_samples": 0
+      }
+    },
+    {
+      "name": "real-core-failure-and-recovery-retain-dns-service",
+      "started_at": 1793068885.7845678,
+      "finished_at": 1793068897.468152,
+      "service_events": {
+        "130": [
+          {
+            "time": 1793068886.805525,
+            "message": "Stopping oxidns.service - ConfigFlow laboratory oxidns..."
+          },
+          {
+            "time": 1793068886.80821,
+            "message": "Stopped oxidns.service - ConfigFlow laboratory oxidns."
+          },
+          {
+            "time": 1793068894.009075,
+            "message": "Started oxidns.service - ConfigFlow laboratory oxidns."
+          }
+        ],
+        "131": []
+      },
+      "health": "ok",
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.60",
+          "ms": 0.24
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.60",
+          "ms": 0.136
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.60",
+          "ms": 0.061
+        }
+      },
+      "dns_probe": {
+        "samples": 66,
+        "vip_failed_samples": 16,
+        "both_nodes_unavailable_samples": 0
+      }
+    }
+  ],
+  "dns_probe": {
+    "sample_count": 1088,
+    "both_nodes_unavailable_samples": 0,
+    "sha256": "977555861b4ed90d8204ce691d21f849d52f99a2a69c0a16a11fa60da3cefbdc"
+  },
+  "finished_at": 1793068900.8401403,
+  "software": {
+    "oxidns": "1.6.1 (full)",
+    "agent": "1.8.45-go",
+    "agent_binary_sha256": "d5cd04b8fc45c3659bb49eb3964902c80cd897a15c60b6b8cde0b702fa1e2780"
+  },
+  "source_sha256": {
+    "backend/agents/oxidns_ha_publish.py": "aa384e251afa975b9476d5ddc6af7d260e83ad3eeb3e5d8c89e0aae1757bd4e4",
+    "backend/agents/oxidns_ha.py": "766cb9c97b9066d90cb82b61e07cd0e434054944545e1379e2f65119f59950d3",
+    "backend/agents/manager.py": "c7f1666ec36fc26e809a89b7ac2371305b196738c32520ad1fe6fb5287474345",
+    "backend/routes/agents.py": "ad46dbd7545856370721e30179c409c070ef7cc82723b0d5957c90fd38ff0184",
+    "backend/agents/rule_sync.py": "a6921bd7b1991c31da26792b3721a378d7054c10ecfee717d37814227d895838",
+    "backend/agents/oxidns_rule_update.py": "8342c479a47740ac079550e52cad683e40a84eee1fca3eacd7e6ec4708733756",
+    "scripts/tests/oxidns_ha_sync_lab.py": "50c0c930762768de1601796a7e0ea885af9efd510c66d596948a1f684f090138"
+  },
+  "limitations": [
+    "DNS probe samples every 100 ms with 300 ms timeout; samples cannot rule out shorter interruptions.",
+    "Serial core restarts do not guarantee uninterrupted VIP DNS service; per-phase VIP failures are recorded.",
+    "Native core cron downloads are unchanged and not exercised; group publication includes attached rule files."
+  ]
+}
