@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import Agents from '@/views/Agents.vue'
+import AgentDNSHA from '@/components/agents/AgentDNSHA.vue'
 import api, { agentApi, profileApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { setActiveProfileId } from '@/profileContext'
@@ -51,7 +52,7 @@ beforeEach(async () => {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/agents', component: { render: () => null } }] })
   await router.push('/agents')
   await router.isReady()
-  wrapper = mount(Agents, { attachTo: document.body, global: { plugins: [router] } })
+  wrapper = mount(Agents, { attachTo: document.body, global: { plugins: [router], stubs: { FlowMap: true } } })
   await flushPromises()
   await click('生成安装脚本')
   await input('agent-name', 'home-proxy')
@@ -97,13 +98,124 @@ function generatedCommandUrl() {
   return commandUrl(command)
 }
 
-it('opens the complete Docker HA guide inside the existing installation dialog', async () => {
-  await radio('docker-ha')
-  expect(document.querySelector('[aria-label="OxiDNS Docker HA 安装引导"]')).not.toBeNull()
-  expect(document.getElementById('docker-ha-image')).not.toBeNull()
-  expect(document.getElementById('agent-name')).toBeNull()
-  await radio('ordinary')
-  expect(document.getElementById('agent-name')).not.toBeNull()
+describe('OxiDNS Docker high availability entry', () => {
+  const guide = () => document.querySelector('[aria-label="OxiDNS Docker HA 安装引导"]')
+  const deploymentModes = () => document.querySelector('[role="radiogroup"][aria-label="OxiDNS 部署方式"]')
+  const checked = (value: string) => document.querySelector(`[role="radio"][value="${value}"]`)?.getAttribute('aria-checked')
+
+  async function openGuide() {
+    await radio('docker')
+    await radio('oxidns')
+    await radio('ha')
+  }
+
+  it('groups high availability under Docker OxiDNS and preserves ordinary inputs when returning', async () => {
+    const usageModes = document.querySelector('[role="radiogroup"][aria-label="使用模式"]')!
+    expect([...usageModes.querySelectorAll('[role="radio"]')].map(element => element.getAttribute('value'))).toEqual(['ordinary', 'gateway'])
+    expect(deploymentModes()).toBeNull()
+    await radio('docker')
+    expect(deploymentModes()).toBeNull()
+    await radio('oxidns')
+    expect(deploymentModes()?.textContent).toContain('常规安装')
+    expect(deploymentModes()?.textContent).toContain('高可用安装')
+    expect(checked('standard')).toBe('true')
+    await input('agent-name', 'existing-dns')
+    await input('agent-ip', '192.168.0.105')
+    await input('docker-container', 'existing-oxidns')
+
+    await radio('ha')
+    expect(guide()).not.toBeNull()
+    expect(document.getElementById('docker-ha-image')).not.toBeNull()
+    expect(checked('ordinary')).toBe('true')
+    expect(checked('docker')).toBe('true')
+    expect(checked('oxidns')).toBe('true')
+    expect(document.getElementById('agent-name')).toBeNull()
+    expect(findButton('生成 Docker 部署命令')).toBeUndefined()
+
+    await radio('standard')
+    expect(guide()).toBeNull()
+    expect((document.getElementById('agent-name') as HTMLInputElement).value).toBe('existing-dns')
+    expect((document.getElementById('agent-ip') as HTMLInputElement).value).toBe('192.168.0.105')
+    expect((document.getElementById('docker-container') as HTMLInputElement).value).toBe('existing-oxidns')
+    expect(findButton('生成 Docker 部署命令')).toBeTruthy()
+  })
+
+  it.each(['success', 'error'])('ignores an ordinary Docker generation %s arriving after switching to HA', async outcome => {
+    await radio('docker')
+    await radio('oxidns')
+    let finish!: (response: any) => void
+    let fail!: (reason: Error) => void
+    vi.mocked(api.get).mockReturnValueOnce(new Promise((resolve, reject) => { finish = resolve; fail = reject }))
+    await click('生成 Docker 部署命令')
+    await radio('ha')
+    if (outcome === 'success') finish({ data: 'stale ordinary compose' })
+    else fail(new Error('stale ordinary failure'))
+    await flushPromises()
+    expect(guide()).not.toBeNull()
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(notify.error).not.toHaveBeenCalled()
+    await radio('standard')
+    expect([...document.querySelectorAll('textarea')].map(element => element.value).join('\n')).not.toContain('stale ordinary compose')
+    expect(findButton('生成 Docker 部署命令')?.disabled).toBe(false)
+  })
+
+  it.each(['mihomo', 'mosdns', 'aio'])('returns to normal installation when switching from HA to Docker %s', async mode => {
+    await openGuide()
+    await radio(mode)
+    expect(guide()).toBeNull()
+    expect(deploymentModes()).toBeNull()
+    expect(document.getElementById('agent-name')).not.toBeNull()
+    expect(findButton('生成 Docker 部署命令')).toBeTruthy()
+    await radio('oxidns')
+    expect(checked('standard')).toBe('true')
+    expect(guide()).toBeNull()
+  })
+
+  it('keeps Shell and gateway independent of the Docker high availability choice', async () => {
+    await openGuide()
+    await radio('shell')
+    expect(guide()).toBeNull()
+    expect(deploymentModes()).toBeNull()
+    expect(findButton('生成安装命令')).toBeTruthy()
+    await radio('docker')
+    expect(checked('standard')).toBe('true')
+    await radio('gateway')
+    expect(deploymentModes()).toBeNull()
+    expect(guide()).toBeNull()
+    expect(findButton('开始或继续网关安装')).toBeTruthy()
+  })
+
+  it('starts a newly opened installation dialog without a previous HA selection', async () => {
+    await openGuide()
+    await click('关闭')
+    await click('生成安装脚本')
+    expect(checked('ordinary')).toBe('true')
+    expect(checked('shell')).toBe('true')
+    expect(guide()).toBeNull()
+    await radio('docker')
+    await radio('oxidns')
+    expect(checked('standard')).toBe('true')
+  })
+
+  it('opens the OxiDNS HA guide directly from an Agent card', async () => {
+    await click('关闭')
+    vi.mocked(agentApi.getAll).mockResolvedValue({ data: [{
+      id: 'docker-oxidns', name: 'Existing Docker DNS', service_type: 'oxidns',
+      host: '192.168.0.105', port: 8082, status: 'offline', deployment_method: 'docker', profile_id: 'default',
+    }] } as any)
+    await click('刷新')
+    const card = wrapper.findComponent(AgentDNSHA)
+    expect(card.exists()).toBe(true)
+    card.vm.$emit('install-guide')
+    await flushPromises()
+    expect(guide()).not.toBeNull()
+    for (const value of ['ordinary', 'docker', 'oxidns', 'ha']) expect(checked(value)).toBe('true')
+    expect(document.getElementById('agent-name')).toBeNull()
+    await radio('standard')
+    expect(document.getElementById('docker-dns-ha')).not.toBeNull()
+    await radio('shell')
+    expect(checked('oxidns')).toBe('true')
+  })
 })
 function commandUrl(command: string) {
   return command.match(/'(https?:\/\/[^']+)'/)![1]!

@@ -103,9 +103,31 @@ try {
       return (await response.json()).map(agent => agent.id).sort()
     }
     const agentsBefore = await ids()
-    phase = `${network}: fill hosts and identity choice`
+    phase = `${network}: OxiDNS service entry and return`
     await page.getByRole('button', { name: /生成\s*安装脚本/ }).first().click()
-    await page.locator('[role="radio"][value="docker-ha"]').click()
+    const usageModes = page.locator('[role="radiogroup"][aria-label="使用模式"]')
+    assert.deepEqual(await usageModes.locator('[role="radio"]').evaluateAll(items => items.map(item => item.getAttribute('value'))), ['ordinary', 'gateway'])
+    assert.equal(await page.locator('[role="radio"][value="docker-ha"]').count(), 0, 'HA must not be a top-level installation mode')
+    await page.locator('[role="radio"][value="docker"]').click()
+    await page.locator('[role="radio"][value="oxidns"]').click()
+    const deploymentModes = page.locator('[role="radiogroup"][aria-label="OxiDNS 部署方式"]')
+    assert.equal(await deploymentModes.locator('[value="standard"]').getAttribute('aria-checked'), 'true')
+    const ordinaryName = `entry-preserved-${network}`
+    await page.locator('#agent-name').fill(ordinaryName)
+    await deploymentModes.locator('[value="ha"]').click()
+    for (const value of ['ordinary', 'docker', 'oxidns']) {
+      assert.equal(await page.locator(`[role="radio"][value="${value}"]`).getAttribute('aria-checked'), 'true')
+    }
+    assert.equal(await page.locator('#agent-name').count(), 0)
+    assert.equal(await page.getByRole('button', { name: '生成 Docker 部署命令', exact: true }).count(), 0)
+    await deploymentModes.locator('[value="standard"]').click()
+    assert.equal(await page.locator('#agent-name').inputValue(), ordinaryName, 'Returning from HA must retain the ordinary form')
+    await deploymentModes.locator('[value="ha"]').click()
+    await page.locator('[aria-label="OxiDNS Docker HA 安装引导"]').waitFor()
+    await deploymentModes.scrollIntoViewIfNeeded()
+    // Entry only: no install credential has been generated at this point.
+    await page.screenshot({ path: join(evidence, `oxidns-docker-ha-service-entry-${network}.png`), fullPage: false })
+    phase = `${network}: fill hosts and identity choice`
     await page.locator('#docker-ha-server').fill(base)
     await page.locator(`[aria-label="Docker HA 网络模式"] [value="${network}"]`).click()
     const step = async number => page.getByRole('button', { name: new RegExp(`^${number}\\. `) }).click()
@@ -209,7 +231,7 @@ try {
     assert.deepEqual(await ids(), agentsBefore, 'Generating configuration must not register Agents')
     report.cases.push({ width, theme, network, identity_mode: 'installation', service_count: network === 'host' ? 2 : 1, download_bytes_equal: true,
       clipboard_equal: true, no_sidecar_files: true, no_identity_form: true, single_host_shortcut: true, script_and_migration: true,
-      mixed_pair_help: true, overflow: false })
+      mixed_pair_help: true, entry_under_oxidns: true, no_top_level_ha: true, ordinary_form_preserved: true, overflow: false })
     console.log(JSON.stringify({ width, theme, network, downloads_validated: 2, clipboard_equal: true, overflow: false }))
     await context.close()
   }
