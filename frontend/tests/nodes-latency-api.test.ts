@@ -52,6 +52,13 @@ describe('node latency API identity', () => {
     expect(post).toHaveBeenCalledWith('/nodes/latency', { keys }, { timeout: 120000 })
   })
 
+  it('creates from an existing upstream ID without copying its DNS parameters', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { success: true } })
+    const draft = { agent_id: 'agent-a', listen_address: '192.0.2.2', port: 15353, upstream_id: 'published-upstream-id' }
+    await nodeApi.createLatencyManagedDns(draft)
+    expect(post).toHaveBeenCalledExactlyOnceWith('/nodes/latency/dns/managed', draft)
+  })
+
   it('keeps an empty selection explicit rather than requesting all nodes', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { results: {} } })
     await nodeApi.testLatency([])

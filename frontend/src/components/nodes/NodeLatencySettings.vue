@@ -25,7 +25,7 @@
           </details>
         </template>
         <div v-else class="flex min-w-0 flex-col gap-4">
-          <p class="m-0 text-sm leading-relaxed text-muted-foreground">在指定 OxiDNS 设备上创建独立的真实 IP 解析入口，无需维护节点域名列表。切换模式会保留已创建的入口。</p>
+          <p class="m-0 text-sm leading-relaxed text-muted-foreground">专用入口把查询交给所选上游。创建后会实际查询，验证返回真实 IP 才启用；失败保留原设置。</p>
           <p v-if="managedBindingError" role="alert" class="m-0 break-words text-sm text-warning-accent">{{ managedBindingError }}</p>
           <p v-if="managedLoading" role="status" class="m-0 text-sm text-muted-foreground">正在读取 OxiDNS 设备…</p>
           <div v-if="managedError" class="space-y-2">
@@ -66,8 +66,21 @@
                   <FormField label="监听 IPv4" html-for="node-latency-listen"><Input id="node-latency-listen" v-model="listenAddress" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="设备可访问的 IPv4" /></FormField>
                   <FormField label="端口" html-for="node-latency-port"><Input id="node-latency-port" v-model="port" class="min-h-11 font-mono" :disabled="busy || disabled" inputmode="numeric" /></FormField>
                 </div>
-                <FormField label="真实 IP 上游 DNS" html-for="node-latency-upstream" hint="填写现有返回真实 IP 的 DNS：IPv4[:端口]、https://主机/路径 或 tls://主机[:端口]。" persistent-hint><Input id="node-latency-upstream" v-model="upstream" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="返回真实 IP 的 DNS" /></FormField>
-                <FormField v-if="managedBootstrapRequired" label="上游 Bootstrap DNS" html-for="node-latency-managed-bootstrap" hint="用于解析上游 DNS 的主机名，仅填一个 IPv4[:端口]。" persistent-hint><Input id="node-latency-managed-bootstrap" v-model="managedBootstrap" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="IPv4 或 IPv4:端口" /></FormField>
+                <Segmented v-model="upstreamMode" :options="upstreamModes" label="上游来源" block :disabled="busy || disabled" />
+                <template v-if="upstreamMode === 'existing'">
+                  <FormField label="现有上游" html-for="node-latency-existing-upstream" hint="使用所选设备已发布的上游配置，无需重复填写地址。" persistent-hint>
+                    <Select v-if="availableUpstreams.length" v-model="upstreamId" :disabled="busy || disabled">
+                      <SelectTrigger id="node-latency-existing-upstream" class="min-h-11 w-full min-w-0"><SelectValue placeholder="选择要使用的上游" class="truncate" /></SelectTrigger>
+                      <SelectContent><SelectItem v-for="candidate in availableUpstreams" :key="candidate.id" :value="candidate.id" :disabled="!candidate.eligible" class="max-w-[calc(100vw-4rem)] whitespace-normal break-all"><span class="min-w-0"><span class="block">{{ candidate.label }}</span><span v-if="!candidate.eligible && candidate.reason" class="block text-xs text-muted-foreground">{{ candidate.reason }}</span></span></SelectItem></SelectContent>
+                    </Select>
+                    <p v-if="!eligibleUpstreams.length" role="status" class="m-0 text-sm text-warning-accent">{{ unavailableUpstreamsReason }}</p>
+                    <Button type="button" variant="ghost" class="min-h-11 self-start" :disabled="busy || managedLoading || disabled" @click="loadManaged">刷新上游</Button>
+                  </FormField>
+                </template>
+                <template v-else>
+                  <FormField label="上游 DNS" html-for="node-latency-upstream" hint="支持 IPv4[:端口]、https://主机/路径 或 tls://主机[:端口]。" persistent-hint><Input id="node-latency-upstream" v-model="upstream" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="填写 DNS 地址" /></FormField>
+                  <FormField v-if="managedBootstrapRequired" label="上游 Bootstrap DNS" html-for="node-latency-managed-bootstrap" hint="用于解析上游 DNS 的主机名，仅填一个 IPv4[:端口]。" persistent-hint><Input id="node-latency-managed-bootstrap" v-model="managedBootstrap" class="min-h-11 font-mono" :disabled="busy || disabled" placeholder="IPv4 或 IPv4:端口" /></FormField>
+                </template>
                 <p class="m-0 text-xs leading-relaxed text-warning-accent">创建并启用将修改并发布「{{ selectedAgent.profile_name || selectedAgent.profile_id }}」中设备「{{ selectedAgent.name }}」的 OxiDNS 配置，新增上述端口的 UDP / TCP 入口。验证成功后才启用测速设置。</p>
               </template>
             </template>
@@ -81,7 +94,7 @@
         </div>
         <DialogFooter class="gap-2">
           <Button type="button" variant="outline" class="min-h-11" :disabled="busy" @click="open = false">取消</Button>
-          <Button v-if="mode === 'managed' && !selectedEndpoint" type="button" class="min-h-11" :disabled="busy || disabled || !agentAvailable || managedLoading || !!managedError" @click="createAndEnable"><Loader2 v-if="provisioning" class="size-4 animate-spin" />{{ provisioning ? '正在创建并验证…' : '创建并启用专用 DNS' }}</Button>
+          <Button v-if="mode === 'managed' && !selectedEndpoint" type="button" class="min-h-11" :disabled="busy || disabled || !agentAvailable || managedLoading || !!managedError || (upstreamMode === 'existing' && !selectedUpstream)" @click="createAndEnable"><Loader2 v-if="provisioning" class="size-4 animate-spin" />{{ provisioning ? '正在创建并验证…' : '创建并启用专用 DNS' }}</Button>
           <Button v-else type="submit" class="min-h-11" :disabled="busy || disabled || (mode === 'managed' && selectedEndpoint?.status !== 'ready')"><Loader2 v-if="saving || provisioning" class="size-4 animate-spin" />{{ saving ? '正在保存…' : provisioning ? '正在创建并验证…' : '保存' }}</Button>
         </DialogFooter>
       </form>
@@ -131,12 +144,23 @@ const endpointId = ref('__new__')
 const listenAddress = ref('')
 const port = ref('15353')
 const upstream = ref('')
+const upstreamModes = [{ value: 'existing', label: '选择现有上游' }, { value: 'manual', label: '手动指定' }]
+const upstreamMode = ref('existing')
+const upstreamId = ref('')
 const managedBootstrap = ref('')
 const statusLoading = ref(false)
 const selectedAgent = computed(() => agents.value.find(agent => agent.id === agentId.value))
 const agentAvailable = computed(() => !!selectedAgent.value?.eligible)
 const agentEndpoints = computed(() => endpoints.value.filter(endpoint => endpoint.agent_id === agentId.value && endpoint.status !== 'removed'))
 const selectedEndpoint = computed(() => agentEndpoints.value.find(endpoint => endpoint.endpoint_id === endpointId.value))
+const availableUpstreams = computed(() => selectedAgent.value?.upstreams || [])
+const eligibleUpstreams = computed(() => availableUpstreams.value.filter(candidate => candidate.eligible))
+const selectedUpstream = computed(() => eligibleUpstreams.value.find(candidate => candidate.id === upstreamId.value))
+const unavailableUpstreamsReason = computed(() => {
+  if (selectedAgent.value?.upstreams_reason) return `${selectedAgent.value.upstreams_reason} 可切换为手动指定。`
+  const reasons = [...new Set(availableUpstreams.value.map(candidate => candidate.reason).filter(Boolean))]
+  return reasons.length ? `${reasons.join('；')}。可切换为手动指定。` : '已发布配置中没有支持复用的上游，可手动指定或先发布上游配置。'
+})
 const splitLines = (value: string) => value.split(/[,\n]/).map(line => line.trim()).filter(Boolean)
 const ipv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/
 function needsBootstrap(value: string) {
@@ -187,6 +211,8 @@ async function load() {
   listenAddress.value = ''
   port.value = '15353'
   upstream.value = ''
+  upstreamMode.value = 'existing'
+  upstreamId.value = ''
   managedBootstrap.value = ''
   try {
     const { data } = await nodeApi.latencySettings()
@@ -256,15 +282,21 @@ async function checkDns() {
 async function createAndEnable() {
   if (busy.value || props.disabled || !agentAvailable.value) return
   error.value = ''
-  if (!ipv4.test(listenAddress.value.trim()) || !/^\d+$/.test(port.value) || Number(port.value) < 1 || Number(port.value) > 65535 || !upstream.value.trim()) {
-    error.value = '请填写监听 IPv4、1–65535 范围内的端口和真实 IP 上游 DNS。'
+  if (!ipv4.test(listenAddress.value.trim()) || !/^\d+$/.test(port.value) || Number(port.value) < 1 || Number(port.value) > 65535) {
+    error.value = '请填写监听 IPv4 和 1–65535 范围内的端口。'
     return
   }
-  if (managedBootstrapRequired.value && (!managedBootstrap.value.trim() || splitLines(managedBootstrap.value).length !== 1)) { error.value = '上游 DNS 包含域名，请填写一个 Bootstrap DNS（IPv4[:端口]）。'; return }
+  if (upstreamMode.value === 'existing' && !selectedUpstream.value) { error.value = '请选择现有上游，或切换为手动指定。'; return }
+  if (upstreamMode.value === 'manual' && !upstream.value.trim()) { error.value = '请填写上游 DNS 地址。'; return }
+  if (upstreamMode.value === 'manual' && managedBootstrapRequired.value && (!managedBootstrap.value.trim() || splitLines(managedBootstrap.value).length !== 1)) { error.value = '上游 DNS 包含域名，请填写一个 Bootstrap DNS（IPv4[:端口]）。'; return }
   provisioning.value = true
   pollCount = 0
   try {
-    const { data } = await nodeApi.createLatencyManagedDns({ agent_id: agentId.value, listen_address: listenAddress.value.trim(), port: Number(port.value), upstream: upstream.value.trim(), ...(managedBootstrapRequired.value ? { bootstrap: splitLines(managedBootstrap.value) } : {}) })
+    const target = { agent_id: agentId.value, listen_address: listenAddress.value.trim(), port: Number(port.value) }
+    const payload = upstreamMode.value === 'existing'
+      ? { ...target, upstream_id: upstreamId.value }
+      : { ...target, upstream: upstream.value.trim(), ...(managedBootstrapRequired.value ? { bootstrap: splitLines(managedBootstrap.value) } : {}) }
+    const { data } = await nodeApi.createLatencyManagedDns(payload)
     if (disposed) return
     if (!data.success || !data.endpoint_id) throw new Error(data.message || '创建专用 DNS 失败，请重试。')
     upsertEndpoint(data)
@@ -316,6 +348,10 @@ async function removeEndpoint() {
 }
 watch(mode, value => { error.value = ''; if (value === 'managed' && loaded.value && !managedLoaded.value) void loadManaged() })
 watch(agentId, () => { if (!loading.value) { endpointId.value = '__new__'; listenAddress.value = selectedAgent.value?.address || '' } })
+watch([agentId, eligibleUpstreams], ([currentAgent, candidates], [previousAgent]) => {
+  if (currentAgent !== previousAgent) { upstreamMode.value = 'existing'; upstreamId.value = '' }
+  if (!candidates.some(candidate => candidate.id === upstreamId.value)) upstreamId.value = candidates.length === 1 ? candidates[0]!.id : ''
+})
 watch([agentId, endpointId], () => { if (!loading.value) managedBindingError.value = ''; if (!provisioning.value) { stopPolling(); statusLoading.value = false } })
 watch([mode, servers, bootstrap, agentId, endpointId], () => { ++checkVersion; checking.value = false; checkResult.value = null })
 watch(open, value => { if (!value) { ++loadVersion; ++managedVersion; ++checkVersion; stopPolling(); managedLoading.value = false; statusLoading.value = false; checking.value = false } })

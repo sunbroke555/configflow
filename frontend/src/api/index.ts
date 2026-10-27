@@ -126,6 +126,15 @@ export interface NodeLatencyManagedEndpoint {
   upstream?: string
   message?: string
 }
+export interface NodeLatencyManagedUpstream {
+  id: string
+  label: string
+  address: string
+  bootstrap: string[]
+  eligible: boolean
+  reason: string
+  validation: 'unverified'
+}
 export interface NodeLatencyManagedAgent {
   id: string
   name: string
@@ -135,7 +144,13 @@ export interface NodeLatencyManagedAgent {
   eligible?: boolean
   reason?: string
   endpoints?: NodeLatencyManagedEndpoint[]
+  upstreams?: NodeLatencyManagedUpstream[]
+  upstreams_reason?: string
 }
+export type NodeLatencyManagedCreate = { agent_id: string; listen_address: string; port: number } & (
+  { upstream_id: string; upstream?: never; bootstrap?: never } |
+  { upstream: string; bootstrap?: string[]; upstream_id?: never }
+)
 export interface NodeLatencyDnsSettings {
   success: boolean
   dns_servers: string[]
@@ -163,7 +178,7 @@ export const nodeApi = {
   saveLatencySettings: (dns: NodeLatencyDnsConfig | string[]) => api.post<NodeLatencyDnsSettings>('/nodes/latency/settings', Array.isArray(dns) ? { dns_servers: dns } : { dns }),
   checkLatencyDns: (dns: NodeLatencyDnsConfig) => api.post<NodeLatencyDnsCheck>('/nodes/latency/dns/check', { dns }, { timeout: 120000 }),
   latencyManagedDns: () => api.get<{ success: boolean; agents: NodeLatencyManagedAgent[]; default_port?: number; message?: string }>('/nodes/latency/dns/managed'),
-  createLatencyManagedDns: (data: { agent_id: string; listen_address: string; port: number; upstream: string; bootstrap?: string[] }) => api.post<NodeLatencyManagedEndpoint & { success: boolean }>('/nodes/latency/dns/managed', data),
+  createLatencyManagedDns: (data: NodeLatencyManagedCreate) => api.post<NodeLatencyManagedEndpoint & { success: boolean }>('/nodes/latency/dns/managed', data),
   latencyManagedDnsStatus: (agentId: string, endpointId: string) => api.get<NodeLatencyManagedEndpoint & { success: boolean }>(`/nodes/latency/dns/managed/${encodeURIComponent(agentId)}/${encodeURIComponent(endpointId)}`),
   removeLatencyManagedDns: (agentId: string, endpointId: string) => api.delete<NodeLatencyManagedEndpoint & { success: boolean }>(`/nodes/latency/dns/managed/${encodeURIComponent(agentId)}/${encodeURIComponent(endpointId)}`),
   /** 通过独立组件测试代理延迟；每批最多 20 个节点 */
