@@ -109,7 +109,12 @@ def call(manager, agent_id, method, paths=None):
             or any(not isinstance(path, str) or not path for path in paths))):
         raise _fail('INVALID_REQUEST', 400)
     agent = _agent(manager, agent_id)
-    if (agent.get('oxidns_ha') or {}).get('enabled') is True:
+    from .oxidns_ha_publish import FIELD, active
+    paired = (agent.get('oxidns_ha') or {}).get('enabled') is True
+    if method == 'POST' and active(agent) and not (
+            paired and (agent.get(FIELD) or {}).get('kind') == 'rules'):
+        raise MonitorError('SERVICE_BUSY', 409, 'DNS 主备正在同步，请等待两台发布完成后更新规则')
+    if paired:
         from .oxidns_ha_publish import rules
         try:
             return rules(manager, agent_id, method)

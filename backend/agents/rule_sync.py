@@ -111,7 +111,23 @@ def configure(manager, agent_id, settings):
         raise ValueError('library 和 rules 必须分别为布尔值')
     # Keep an accepted job's identity so process restart/disable/re-enable can
     # reconcile it; switching off prevents subsequent jobs, not an accepted API.
-    _update(manager, agent_id, settings=settings)
+    from . import oxidns_ha_publish as publications
+    agent = manager.get_agent_by_id(agent_id)
+    if publications.active(agent) and (agent.get(publications.FIELD) or {}).get('enable'):
+        raise ValueError('DNS 高可用正在开启，请完成后再修改主备规则自动同步设置')
+    members = publications.pair(manager, agent_id)
+    if members:
+        def save(agents):
+            by_id = {item['id']: item for item in agents}
+            for member in members:
+                current = by_id.get(member['id'])
+                if not current or current.get('oxidns_ha') != member.get('oxidns_ha'):
+                    raise ValueError('主备关系已改变，请刷新后重试')
+            for member in members:
+                by_id[member['id']].setdefault('rule_sync', {})['settings'] = deepcopy(settings)
+        manager._update_agents(save)
+    else:
+        _update(manager, agent_id, settings=settings)
     return status(manager, agent_id)
 
 

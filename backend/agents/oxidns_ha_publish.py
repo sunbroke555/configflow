@@ -8,6 +8,7 @@ from contextlib import contextmanager, ExitStack
 from copy import deepcopy
 import fcntl
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ import threading
 import time
 import uuid
 
-from .deployment_bundle import DeploymentBundle, _pack
+from .deployment_bundle import DeploymentBundle, _pack, deployment_content_fingerprint
 from .diagnostics import failure_text
 from . import rule_sync_store as store
 
@@ -148,9 +149,11 @@ def _save(manager, job):
             if not agent or (agent.get(FIELD) or {}).get('id') != job['id']:
                 raise ValueError('主备发布记录已经改变，已停止继续操作')
             state = agent.get('deployments', {}).get(deployment_id) or {}
+            member_status = state.get('status', 'preparing')
+            if not state.get('submitted') and agent_id != job.get('active_agent_id'):
+                member_status = 'skipped' if member_status == 'failed' else 'waiting'
             members.append({'agent_id': agent_id, 'name': agent.get('name') or agent_id,
-                            'deployment_id': deployment_id, 'status': (state.get('status', 'preparing') if state.get('submitted')
-                                or agent_id == job.get('active_agent_id') or state.get('status') in CHILD_TERMINAL else 'waiting')})
+                            'deployment_id': deployment_id, 'status': member_status})
         job['members'] = members
         for agent_id, deployment_id in job['children'].items():
             agent = by_id[agent_id]
@@ -181,7 +184,7 @@ def _reserve(manager, members, owner_id, deployment_id, *, activate, enable=None
         by_id = {item['id']: item for item in agents}
         for member in members:
             current = by_id.get(member['id'])
-            if not current or _identity(current) != _identity(member):
+            if not current or _identity(current) != _identity(member) or current.get('oxidns_ha') != member.get('oxidns_ha'):
                 raise ValueError('主备设备信息已改变，请刷新后重试')
             if active(current):
                 raise ValueError('DNS 主备已有发布正在执行，请等待两台完成')
@@ -224,7 +227,8 @@ def start_enable(manager, agent, peer, request, *, base_url='', warnings=None, r
             raise ValueError('DNS 主备正在处理，请稍后重试')
         job = _reserve(manager, [agent, peer], agent['id'], 'ha-' + uuid.uuid4().hex,
                        activate=True, enable=deepcopy(request))
-        job.update(warnings=warnings or [], routers=routers or [])
+        from .rule_sync import settings_for
+        job.update(warnings=warnings or [], routers=routers or [], rule_sync_settings=settings_for(agent))
         try:
             _write_payload(manager, job, {'source_snapshot': source, 'resource_config': source,
                                         'config_revision': revision, 'base_url': base_url})
@@ -245,8 +249,13 @@ def publish(manager, agent_id, bundle, *, activate=True, config_revision=None, b
             base_url=base_url, resource_config=resource_config, source_snapshot=source_snapshot)
     previous = (manager.get_agent_by_id(agent_id) or {}).get(FIELD) or {}
     if previous.get('children', {}).get(agent_id) == bundle.manifest['deployment_id']:
+        payload, original = _read_payload(manager, previous)
+        if original is None or deployment_content_fingerprint(original.manifest) != deployment_content_fingerprint(bundle.manifest):
+            raise ValueError('发布任务 ID 已用于其他内容，请使用新的发布任务')
         advance(manager, agent_id)
         return deployment(manager, agent_id, bundle.manifest['deployment_id'])
+    if previous.get('status') == 'rollback_failed':
+        advance(manager, agent_id)
     temporary = {'children': {item['id']: '' for item in members}}
     with _lock(manager, temporary) as acquired:
         if not acquired:
@@ -274,6 +283,12 @@ def publish(manager, agent_id, bundle, *, activate=True, config_revision=None, b
 
 
 def _fail(manager, job, message, *, status='failed'):
+    pending = any((state := (manager.get_agent_by_id(agent_id) or {}).get('deployments', {}).get(deployment_id, {})).get('submitted')
+                  and state.get('status') not in CHILD_TERMINAL | {'ready'}
+                  for agent_id, deployment_id in job['children'].items())
+    if pending:
+        job.update(status='unknown', message=message + '；已提交的设备结果仍待确认，未继续另一台')
+        return _save(manager, job)
     # Never rewrite a submitted child's outcome; its own transaction remains
     # authoritative and can still be reconciled or recover its automatic rollback.
     for agent_id, deployment_id in job['children'].items():
@@ -317,6 +332,30 @@ def _order(manager, job, members):
     return [key for key in members if key != holders[0]] + holders
 
 
+def _require_listener(bundle):
+    """Mirror the Agent's HA listener preflight against the new immutable file."""
+    import yaml
+    document = yaml.safe_load(store.bundle_files(bundle)[bundle.manifest['config_path']][0])
+    for plugin in document.get('plugins', []):
+        if not isinstance(plugin, dict) or plugin.get('type') != 'udp_server':
+            continue
+        args = plugin.get('args') or {}
+        listen = args.get('listen') if isinstance(args, dict) else None
+        if not isinstance(listen, str):
+            continue
+        host, separator, port = listen.strip().rpartition(':')
+        if not separator or port != '53':
+            continue
+        if host in ('', '*'):
+            return
+        try:
+            if ipaddress.ip_address(host.strip('[]')).is_unspecified:
+                return
+        except ValueError:
+            pass
+    raise ValueError('主备候选配置必须保留通配地址的 UDP 53 监听（如 0.0.0.0:53），未更新任何核心')
+
+
 def _child_bundle(bundle, agent_id, deployment_id):
     manifest = deepcopy(bundle.manifest)
     manifest.update(agent_id=agent_id, deployment_id=deployment_id)
@@ -347,6 +386,7 @@ def _step(manager, job):
             base_url=payload['base_url'], deployment_id=job['owner_deployment_id'])
         bundle = prepared['bundle']
         payload = _write_payload(manager, job, payload, bundle)
+    _require_listener(bundle)
     if not job['order']:
         job['order'] = _order(manager, job, members)
         _save(manager, job)
@@ -410,7 +450,7 @@ def _step(manager, job):
         job.update(phase='keepalived', status='applying', message='配置已同步，正在启用主备虚拟 IP')
         _save(manager, job)
         from .oxidns_ha import _configure_keepalived
-        _configure_keepalived(manager, job['owner_agent_id'], job['enable'])
+        _configure_keepalived(manager, job['owner_agent_id'], job['enable'], rule_sync_settings=job.get('rule_sync_settings'))
     job.update(status='succeeded', phase='done', active_agent_id=None, message='主备配置与规则均已发布成功')
     return _save(manager, job)
 
@@ -444,7 +484,7 @@ def rules(manager, agent_id, method):
                 _fail(manager, job, '主备规则更新准备失败，请重新发布配置')
                 raise
     if job.get('kind') != 'rules':
-        return {'task': {'id': '', 'status': 'idle', 'phase': 'idle', 'downloaded': 0,
+        return {'success': True, 'task': {'id': '', 'status': 'idle', 'phase': 'idle', 'downloaded': 0,
                         'download_total': 0, 'reloaded': 0, 'reload_total': 0}}, 200
     start_loop(manager)
     advance(manager, agent_id)
@@ -455,22 +495,35 @@ def rules(manager, agent_id, method):
             'downloaded': 0, 'download_total': 0, 'reloaded': 0, 'reload_total': 0}
     if state == 'failed':
         task.update(code='RULE_UPDATE_FAILED', message=job['message'])
-    return {'task': task, 'ha_publication': summary(job)}, 202 if state == 'running' else 200
+    return {'success': True, 'task': task, 'ha_publication': summary(job)}, 202 if state == 'running' else 200
+
+
+def _reconcile_recovery(manager, job):
+    unresolved = False
+    for agent_id, deployment_id in job['children'].items():
+        state = (manager.get_agent_by_id(agent_id) or {}).get('deployments', {}).get(deployment_id) or {}
+        if state.get('status') == 'rollback_failed':
+            state = manager._get_deployment(agent_id, deployment_id)
+        if state.get('status') not in ('succeeded', 'failed', 'rolled_back') or state.get('pending'):
+            unresolved = True
+    if not unresolved:
+        job.update(status='failed', message='设备回滚恢复已确认；原主备发布未完成，可重新发布')
+    return _save(manager, job)
 
 
 def advance(manager, agent_id):
     agent = manager.get_agent_by_id(agent_id) or {}
     job = agent.get(FIELD) or {}
-    if not job or job.get('status') in TERMINAL or job.get('status') == 'ready':
+    if not job or job.get('status') in {'succeeded', 'failed', 'ready'}:
         return summary(job) if job else None
     with _lock(manager, job) as acquired:
         if not acquired:
             return summary(job)
         job = deepcopy((manager.get_agent_by_id(agent_id) or {}).get(FIELD) or {})
-        if not job or job.get('status') in TERMINAL or job.get('status') == 'ready':
+        if not job or job.get('status') in {'succeeded', 'failed', 'ready'}:
             return summary(job) if job else None
         try:
-            job = _step(manager, job)
+            job = _reconcile_recovery(manager, job) if job.get('status') == 'rollback_failed' else _step(manager, job)
         except Exception as error:
             # A transport error while reading live health can be retried without
             # publishing the next member. Preparation errors are definite.
@@ -551,7 +604,7 @@ def start_loop(manager):
                     seen = set()
                     for agent in manager.get_all_agents():
                         job = agent.get(FIELD) or {}
-                        if active(agent) and job.get('status') != 'ready' and job.get('id') not in seen:
+                        if (active(agent) or job.get('status') == 'rollback_failed') and job.get('status') != 'ready' and job.get('id') not in seen:
                             seen.add(job['id'])
                             advance(manager, agent['id'])
                 except Exception as error:

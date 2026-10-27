@@ -18,6 +18,7 @@
         <Loader2 class="size-3.5 animate-spin" />{{ saving ? '正在保存…' : '读取设置…' }}
       </span>
     </div>
+    <p v-if="highAvailability" class="mt-1 mb-0 text-xs leading-5 text-foreground">高可用组共用这些开关，修改后同时作用于主备两台；规则按先备机后主机的顺序发布。</p>
     <p v-if="loaded && !baselineReady" class="mt-1 mb-0 text-xs leading-5 text-warning-accent">{{ baselineHint }}</p>
     <p v-if="loaded" role="status" aria-live="polite" class="mt-1 mb-0 flex min-w-0 items-start gap-1.5 text-xs leading-5" :class="stateTone">
       <Loader2 v-if="state.status === 'running'" class="mt-0.5 size-3.5 shrink-0 animate-spin" />
@@ -39,7 +40,7 @@ import FieldHelp from '@/components/common/FieldHelp.vue'
 import { notify } from '@/lib/feedback'
 import { agentRuleSyncApi, type AgentRuleSyncResponse, type AgentRuleSyncSettings, type AgentRuleSyncState } from '@/api/agentRuleSync'
 
-const props = defineProps<{ agentId: string }>()
+const props = defineProps<{ agentId: string; highAvailability?: boolean }>()
 const baselineHint = '先成功发布一次配置，建立自动同步基线'
 const options: { key: keyof AgentRuleSyncSettings; label: string; help: string }[] = [
   { key: 'library', label: '规则库自动同步', help: '同步已启用引用的规则集内容及新增引用，只下载有变化的规则文件。仅新增未引用的规则库条目不会触发同步。' },

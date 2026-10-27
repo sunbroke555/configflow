@@ -642,7 +642,7 @@ def test_http_api(authenticated_app, monkeypatch):  # noqa: F811
     secondary = manager.register_agent({'name': 'DNS-B', 'host': SECONDARY_HOST, 'service_type': 'oxidns'})
     path = f'/api/agents/{primary["id"]}/oxidns-ha'
     assert client.get(path).status_code == 401
-    assert client.get(path, headers=admin).get_json() == {'success': True, 'config': None, 'publication': None}
+    assert client.get(path, headers=admin).get_json() == {'success': True, 'config': None}
     devices.blockers[SECONDARY_HOST] = ['缺少 keepalived']
     rejected = client.put(path, headers=admin, json={'peer_id': secondary['id'], 'vip': VIP})
     assert rejected.status_code == 409 and rejected.get_json()['blockers'] == ['DNS-B：缺少 keepalived']

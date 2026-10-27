@@ -254,7 +254,7 @@
             </Button>
           </div>
 
-          <AgentRuleSync v-if="['mihomo', 'oxidns'].includes(agent.service_type)" :agent-id="agent.id">
+          <AgentRuleSync v-if="['mihomo', 'oxidns'].includes(agent.service_type)" :agent-id="agent.id" :high-availability="agent.oxidns_ha?.enabled === true">
             <template v-if="agent.service_type === 'oxidns'" #actions>
               <Button type="button" variant="outline" size="sm" class="shrink-0"
                 :disabled="ruleUpdateBlocked(agent) || !ruleUpdateRefs[agent.id] || ruleUpdateRefs[agent.id]?.busy"

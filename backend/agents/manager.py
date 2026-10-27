@@ -829,7 +829,7 @@ class AgentManager:
     def rollback_deployment(self, agent_id, deployment_id):
         """Reserve a rollback before network I/O so a new push cannot race it."""
         agent = self.get_agent_by_id(agent_id) or {}
-        if _oxidns_ha_busy(agent) or (agent.get('deployments', {}).get(deployment_id) or {}).get('ha_publication'):
+        if _oxidns_ha_enabled(agent) or _oxidns_ha_busy(agent) or (agent.get('deployments', {}).get(deployment_id) or {}).get('ha_publication'):
             return {'success': False, 'http_status': 409, 'rollback_rejected': True,
                     'rollback_message': '主备发布不能单独回滚一台；请将目标配置重新发布到主备',
                     'message': '主备发布不能单独回滚一台；请将目标配置重新发布到主备'}
@@ -840,6 +840,10 @@ class AgentManager:
             state = agent.get('deployments', {}).get(deployment_id)
             if not state:
                 return {'success': False, 'message': 'Deployment not found', 'http_status': 404}
+            if _oxidns_ha_enabled(agent) or _oxidns_ha_busy(agent):
+                return {'success': False, 'http_status': 409, 'rollback_rejected': True,
+                        'rollback_message': '请将目标配置重新发布到主备，不能单独回滚成员',
+                        'message': '请将目标配置重新发布到主备，不能单独回滚成员'}
             if _upgrade_busy(agent):
                 return {'success': False, 'message': 'Agent update is in progress', 'http_status': 409}
             if _dns_follow_busy(agents, agent_id):

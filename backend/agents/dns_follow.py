@@ -197,6 +197,9 @@ def options(manager, target_id):
 
 
 def _mutable(target):
+    from .oxidns_ha_publish import active
+    if active(target):
+        raise FollowError('DNS 主备配置正在同步，请等待两台发布完成后修改联动')
     if (target.get('dns_follow_state') or {}).get('status') in _RUNNING:
         raise FollowError('OxiDNS 联动发布尚未确认结束，请等待结果后再修改绑定')
 
@@ -213,6 +216,8 @@ def configure(manager, target_id, payload):
                 or payload.get('connection') not in ('auto', 'network')):
             raise FollowError('请选择上游和连接方式')
         binding = {key: payload[key] for key in ('source_agent_id', 'upstream_tag', 'upstream_index', 'connection')}
+        if (target.get('oxidns_ha') or {}).get('enabled') is True and binding['connection'] != 'network':
+            raise FollowError('DNS 主备必须通过同一个 Mihomo 网络地址联动，请选择网络地址连接')
         if binding['connection'] == 'network':
             binding['address'] = _network_host(payload.get('address'))
         else:
