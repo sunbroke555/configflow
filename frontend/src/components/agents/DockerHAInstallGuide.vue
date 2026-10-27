@@ -230,7 +230,8 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
         <ul class="m-0 list-disc space-y-1 pl-5">
           <li>两台不同的 Linux 宿主机，位于同一局域网，使用固定 IPv4。两个容器放在同一主机不算双机 HA。</li>
           <li>普通 Linux 先安装 Docker Engine；Compose 用于后续维护，建议使用 2.30 及以上版本，自动安装不依赖它。NAS 在套件中心安装 Docker / Container Manager，并启用 SSH（群晖：控制面板 → 终端机和 SNMP → 启动 SSH 服务；其他 NAS 在系统 SSH 设置中开启）。以 root 或有 Docker 权限的管理员登录宿主机执行命令。</li>
-          <li>需要 rootful Docker；Docker Desktop、rootless 和普通 bridge 网络不满足此引导。确认宿主机 TCP / UDP 53 不被其他 DNS 服务占用。</li>
+          <li>需要 rootful Docker；Docker Desktop、rootless 和普通 bridge 网络不满足此引导。</li>
+          <li data-docker-ha-port-note><template v-if="network === 'host'">Host 使用宿主机网络，默认配置需要 TCP / UDP 53；已有监听需先核对并处理，不要直接停止正在服务的 DNS。</template><template v-else>macvlan 使用容器独立地址，宿主机 TCP / UDP 53 的占用不直接阻断；仍需确认容器地址与 VIP 未被其他设备使用。</template></li>
           <li>准备同一份 OxiDNS 配置：监听所有地址的 UDP 53，上游 DNS 从两台设备都可达。开启 HA 时会同步这个配置空间的配置和规则。</li>
           <li>为 VIP 预留一个同网段、未使用且在 DHCP 地址池之外的 IPv4；不要填写主机、容器或网关现有地址。</li>
         </ul>
@@ -297,7 +298,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
     <div v-else-if="step === 4" class="flex min-w-0 flex-col gap-4">
       <div class="flex flex-wrap items-center justify-between gap-2"><h4 class="m-0 text-sm font-semibold">读取两台 Agent 的真实环境</h4><Button variant="outline" class="min-h-11" :disabled="refreshing" @click="refresh"><RefreshCw class="size-4" :class="refreshing && 'animate-spin'" />刷新并检查两台 Agent</Button></div>
       <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">先刷新设备列表，再直接向所选 Agent 读取 HA 能力和环境。在线心跳不能代替安装检查；更换选择后需要重新刷新。</p>
-      <details class="text-[13px] leading-relaxed"><summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或环境检查失败？</summary><ul class="mb-0 list-disc space-y-2 pl-5"><li>先查看对应宿主机的 Docker / Container Manager 容器日志，确认镜像拉取成功、OxiDNS 与 Agent 已启动；检查 53 端口冲突。</li><li>确认填写的 ConfigFlow 地址从容器可达、服务器能访问所填 Agent 地址和端口，防火墙允许流量。新装凭据有效期为 24 小时，过期时保留全部设置不变再重新生成；不要删除已有身份和安装记录。</li><li>Host 检查 companion 是否运行、共享 HA 目录和只读身份挂载是否一致；macvlan 检查网卡、子网、固定地址与宿主隔离限制。按下面实时返回的具体原因修正后重新刷新。</li></ul></details>
+      <details class="text-[13px] leading-relaxed"><summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或环境检查失败？</summary><ul class="mb-0 list-disc space-y-2 pl-5"><li>先查看对应宿主机的 Docker / Container Manager 容器日志，确认镜像拉取成功、OxiDNS 与 Agent 已启动。{{ network === 'host' ? 'Host 检查宿主机 53 端口冲突。' : 'macvlan 检查容器自身的 DNS 监听和地址冲突，不要求宿主机 53 端口空闲。' }}</li><li>确认填写的 ConfigFlow 地址从容器可达、服务器能访问所填 Agent 地址和端口，防火墙允许流量。新装凭据有效期为 24 小时，过期时保留全部设置不变再重新生成；不要删除已有身份和安装记录。</li><li>Host 检查 companion 是否运行、共享 HA 目录和只读身份挂载是否一致；macvlan 检查网卡、子网、固定地址与宿主隔离限制。按下面实时返回的具体原因修正后重新刷新。</li></ul></details>
       <div class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
         <div v-for="index in [0, 1]" :key="index" class="min-w-0 space-y-2">
           <FormField :label="`主机 ${index + 1} 的 OxiDNS Agent`" :html-for="`docker-ha-verify-${index + 1}`">
