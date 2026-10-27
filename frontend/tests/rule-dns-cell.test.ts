@@ -68,6 +68,7 @@ beforeEach(() => {
       'r-ads': { state: 'explicit', route: 'nxdomain' },
       'r-ai': { state: 'follow', route: 'proxy', follow_route: 'proxy' },
       'r-cn': { state: 'follow', route: 'direct', follow_route: 'direct' },
+      'r-ip': { state: 'unsupported', reason: 'IP-CIDR 规则仅用于连接分流，不参与 DNS' },
       'r-geo': { state: 'unsupported', reason: 'GEOIP 规则不参与 DNS 分流' },
       'r-moved': { state: 'follow_drift', route: 'proxy', follow_route: 'direct' },
       'r-off': { state: 'disabled', route: 'blackhole' },
@@ -112,7 +113,7 @@ describe('rule DNS column', () => {
     expect(dnsTrigger(wrapper, 'doubleclick.net').classes()).toContain('chip-bad')
     expect(text('openai.com')).toContain('跟随策略 · 代理')
     expect(text('baidu.com')).toContain('跟随策略 · 直连')
-    expect(text('10.0.0.0/8')).toContain('默认上游 · 代理')
+    expect(text('10.0.0.0/8')).toContain('不参与')
     expect(row(wrapper, 'CN').get('[aria-label="GEOIP 规则不参与 DNS 分流"]').text()).toBe('不参与')
     expect(text('moved.example')).toContain('代理 · 与策略不一致')
     expect(dnsTrigger(wrapper, 'moved.example').classes()).toContain('chip-warn')

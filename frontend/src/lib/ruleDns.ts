@@ -8,7 +8,7 @@ import { isAxiosError } from 'axios'
 import { copyText } from '@/lib/clipboard'
 import { choose, notify } from '@/lib/feedback'
 import { optionCopy } from '@/lib/optionCopy'
-import { isDnsRuleType } from '@/lib/oxidns'
+import { isDnsRuleType, isOxidnsRule, isOxidnsRuleType } from '@/lib/oxidns'
 import type { RuleDnsAgent, RuleDnsEngine, RuleDnsRoute, RuleDnsState, RuleDnsUpstream, RuleDnsValue } from '@/types'
 
 export const RULE_TYPES = [
@@ -17,7 +17,7 @@ export const RULE_TYPES = [
 ]
 /** 值内含逗号或为空，不能按行粘贴，每次单独添加一条 */
 export const SINGLE_RULE_TYPES = ['AND', 'OR', 'NOT', 'MATCH']
-/** 参与 DNS 时生成 IP 组（需要本地探测）的单条规则类型 */
+/** 只参与连接分流的单条 IP 规则类型 */
 export const IP_DNS_RULE_TYPES = ['IP-CIDR', 'IP-CIDR6']
 /** 显示 no-resolve 开关的类型；逻辑规则中仅对 IP 子条件生效 */
 export const NO_RESOLVE_RULE_TYPES = ['IP-CIDR', 'IP-CIDR6', 'IP-SUFFIX', 'GEOIP', 'AND', 'OR', 'NOT']
@@ -32,7 +32,7 @@ export const CHOICE_LABELS: Record<string, string> = { follow: '跟随策略', d
 const SHORT_LABELS: Record<string, string> = { direct: '直连', proxy: '代理' }
 const NON_PROXY_POLICIES = ['REJECT', 'REJECT-DROP', 'PASS']
 
-export const DNS_FIELD_HELP = 'DNS 用来把域名查成 IP 地址。这里选择用哪组 DNS 服务器查询，网站怎么连接仍由连接策略决定。仅对 OxiDNS 生效。自定义 Hosts、AdGuard 规则和「全部直连」的设备优先于这里的设置。'
+export const DNS_FIELD_HELP = 'DNS 用来把域名查成 IP 地址。混合规则集只使用域名部分；IP 规则仅用于连接分流。这里选择用哪组 DNS 服务器查询，网站怎么连接仍由连接策略决定。仅对 OxiDNS 生效。自定义 Hosts、AdGuard 规则和「全部直连」的设备优先于这里的设置。'
 export const PINNED_HINT = '已固定为当前地址，之后修改上游列表不影响这条规则'
 
 /** 选项文案：拒绝、不存在、空应答、黑洞四条简述由用户确认，保持原样 */
@@ -63,11 +63,11 @@ export const isBlockRoute = (value: unknown) => (BLOCK_ROUTES as readonly unknow
 /** 选项文案的键：所有指定上游共用一条 */
 export const copyKey = (value: RuleDnsValue) => (isUpstreamValue(value) ? 'upstream' : value) as keyof typeof DNS_COPY
 
-interface PolicyItem { itemType?: string; rule_type?: string; policy?: string }
+interface PolicyItem { itemType?: string; rule_type?: string; policy?: string; behavior?: string }
 
 /** 策略组使用服务端解析的默认出口；缺少映射时兼容旧版本，按代理处理。 */
 export function followRoute(item: PolicyItem, policyRoutes?: RuleDnsEngine['policy_routes']): 'direct' | 'proxy' | null {
-  if (item.itemType !== 'ruleset' && !isDnsRuleType(item.rule_type)) return null
+  if (!isOxidnsRule(item)) return null
   const policy = item.policy
   if (policy === 'DIRECT') return 'direct'
   if (!policy || NON_PROXY_POLICIES.includes(policy)) return null
@@ -79,7 +79,7 @@ export function followRoute(item: PolicyItem, policyRoutes?: RuleDnsEngine['poli
 export const forwardLabel = (defaultForward?: string) =>
   defaultForward === 'forward_local' ? '直连 DNS' : defaultForward === 'forward_fallback' ? '备用 DNS' : '代理 DNS'
 
-/** 未命中任何规则时的去向；IP 规则都和它相同时不需要本地探测 */
+/** 未命中任何域名规则时的去向 */
 export const defaultRoute = (defaultForward?: string): 'direct' | 'proxy' =>
   defaultForward === 'forward_local' ? 'direct' : 'proxy'
 
@@ -166,16 +166,15 @@ export const dnsLabel = (entry: RuleDnsState | undefined, engine: Pick<RuleDnsEn
 export const chipClass = (tone: DnsChipTone) =>
   tone === 'bad' ? 'chip-bad' : tone === 'warn' ? 'chip-warn' : tone === 'muted' ? 'text-muted-foreground' : 'text-foreground'
 
-/** 来源会产生哪些 DNS 匹配：domain 为域名部分，ip 为 IP 部分（包括 classical 规则集） */
+/** 来源内容的类型：domain 为域名部分，ip 为连接 IP 规则（包括 classical 规则集） */
 export interface DnsSourceParts { domain: boolean; ip: boolean }
 
 /**
- * 新规则的默认 DNS（§2.5）：不使用 OxiDNS、纯 IP 来源、或会产生 IP 部分但本地探测未开启时为默认上游，
- * 其余跟随策略。混合粘贴的 IP 行另行用 dns_ip 保持默认上游，这里只传域名部分。
+ * 新规则的默认 DNS：域名部分跟随策略；不使用 OxiDNS 或纯 IP 来源保持默认上游。
+ * 混合粘贴的 IP 行始终不参与 DNS，连接规则原样保留。
  */
-export function defaultDnsChoice(source: DnsSourceParts, engine: Pick<RuleDnsEngine, 'oxidns_in_use' | 'local_probe_active'> | null | undefined): RuleDnsValue {
+export function defaultDnsChoice(source: DnsSourceParts, engine: Pick<RuleDnsEngine, 'oxidns_in_use'> | null | undefined): RuleDnsValue {
   if (!engine?.oxidns_in_use || !source.domain) return 'default'
-  if (source.ip && !engine.local_probe_active) return 'default'
   return 'follow'
 }
 
@@ -311,10 +310,10 @@ export function parsePastedRules(text: string, defaultType: string): PasteResult
   return result
 }
 
-/** 按 DNS 匹配拆分：域名行、IP 行，以及不参与 DNS 的行 */
+/** 按用途拆分：DNS 可用的域名行、连接 IP 行，以及其他连接规则 */
 export function splitPaste(rows: PasteRow[]) {
   return {
-    domain: rows.filter(row => isDnsRuleType(row.rule_type) && !IP_DNS_RULE_TYPES.includes(row.rule_type)),
+    domain: rows.filter(row => isOxidnsRuleType(row.rule_type)),
     ip: rows.filter(row => IP_DNS_RULE_TYPES.includes(row.rule_type)),
     unsupported: rows.filter(row => !isDnsRuleType(row.rule_type))
   }
@@ -328,7 +327,7 @@ export function pasteToRuleset(rows: PasteRow[]): { behavior: 'domain' | 'classi
   return { behavior: 'classical', content: rows.map(row => `${row.rule_type},${row.value}${row.no_resolve ? ',no-resolve' : ''}`).join('\n') }
 }
 
-export type DnsWarningKind = 'locked' | 'unloaded' | 'ip' | 'mosdns' | 'policy'
+export type DnsWarningKind = 'locked' | 'unloaded' | 'mosdns' | 'policy'
 export interface DnsWarning {
   kind: DnsWarningKind
   tone: 'warning' | 'info'
@@ -336,7 +335,7 @@ export interface DnsWarning {
   action?: 'open-config' | 'follow' | 'resync'
   actionLabel?: string
 }
-const WARNING_ORDER: DnsWarningKind[] = ['locked', 'unloaded', 'ip', 'mosdns', 'policy']
+const WARNING_ORDER: DnsWarningKind[] = ['locked', 'unloaded', 'mosdns', 'policy']
 
 export interface DnsWarningContext {
   engine?: RuleDnsEngine | null
@@ -346,10 +345,6 @@ export interface DnsWarningContext {
   policy: string
   /** 当前策略对应的跟随路由 */
   policyRoute: 'direct' | 'proxy' | null
-  /** 本次保存会让 IP 部分参与 DNS */
-  ipRouted?: boolean
-  /** 混合粘贴的 IP 行保持默认上游 */
-  ipKeptDefault?: boolean
   /** 绑定了 MosDNS 时，这条规则在 MosDNS 中的路由 */
   mosdns?: { route: 'direct' | 'proxy' | null } | null
   /** 编辑时的已有偏离：跟随策略但实际路由不同 */
@@ -361,7 +356,7 @@ export interface DnsWarningContext {
   upstreamLabel?: string
 }
 
-/** 字段下方警告槽的内容，按优先级排序：锁定、未加载、IP、MosDNS、策略说明 */
+/** 字段下方警告槽的内容，按优先级排序：锁定、未加载、MosDNS、策略说明 */
 export function dnsWarnings(context: DnsWarningContext): DnsWarning[] {
   const warnings: DnsWarning[] = []
   const { engine, value, policyRoute } = context
@@ -372,18 +367,6 @@ export function dnsWarnings(context: DnsWarningContext): DnsWarning[] {
   if (context.unloaded) warnings.push({ kind: 'unloaded', tone: 'warning', text: 'DNS 状态未加载，本次不修改 DNS' })
   const route = value === 'follow' ? policyRoute : value === 'default' ? null : value
   if (!context.unloaded && engine?.editable !== false) {
-    if (route && context.ipRouted) {
-      // 去向和「未匹配时转发到」相同的 IP 规则不改变结果，不会开启本地探测。
-      if (engine?.local_probe_active || !engine || route !== defaultRoute(engine.default_forward)) {
-        if (!engine?.local_probe_active) {
-          warnings.push({ kind: 'ip', tone: 'warning', text: '保存后会开启本地探测：没命中域名规则的域名会先发给直连 DNS 解析一次，再用解析出的 IP 对照 IP 规则。' })
-        }
-        warnings.push({ kind: 'ip', tone: 'info', text: 'IP 规则按直连 DNS 的解析结果匹配：查询已先发给直连 DNS，命中后再替换为所选结果；IPv4 网段不影响 IPv6 查询。' })
-      } else {
-        warnings.push({ kind: 'ip', tone: 'info', text: `IP 规则和未匹配时的去向（${forwardLabel(engine.default_forward)}）相同，不需要开启本地探测。` })
-      }
-    }
-    if (context.ipKeptDefault) warnings.push({ kind: 'ip', tone: 'info', text: 'IP 规则保持默认上游，避免为所有查询开启本地探测。' })
     // MosDNS 只有直连 / 代理两种分流；拦截和指定上游在 MosDNS 中没有对应行为。
     const comparable = route === 'direct' || route === 'proxy' || route === null ? route : 'other'
     if (context.mosdns && context.mosdns.route !== comparable) {

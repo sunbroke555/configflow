@@ -142,9 +142,10 @@ def _ensure_dns_rule_type(config, rule, dns):
     if convertible(rule):
         return
     kind = rule.get('rule_type')
+    from backend.converters.mosdns import DNS_RULE_TYPES as MOSDNS_RULE_TYPES
     mosdns = config.get('mosdns') if isinstance(config.get('mosdns'), dict) else {}
     for key, group in (('direct_rules', '直连规则'), ('proxy_rules', '代理规则')):
-        if isinstance(mosdns.get(key), list) and rule['id'] in mosdns[key]:
+        if kind not in MOSDNS_RULE_TYPES and isinstance(mosdns.get(key), list) and rule['id'] in mosdns[key]:
             raise ProfileValidationError(
                 f'此规则已用于 MosDNS {group}，{kind} 类型暂不能转换为 MosDNS 规则。'
                 '请先在 MosDNS 设置中取消选择，或新建一条规则。')
@@ -483,7 +484,9 @@ def compose_rules():
             items[0:0] = hydrated
         else:
             items.extend(hydrated)
-        assignments = {identity: choice for identity, choice in assignments.items() if choice != 'default'}
+        dns_capable = {item['id'] for item in hydrated if convertible(item)}
+        assignments = {identity: choice for identity, choice in assignments.items()
+                       if choice != 'default' and identity in dns_capable}
         if assignments:
             warnings.extend(apply_rule_dns(before, profile, assignments, base_url=base_url, strict=True))
 

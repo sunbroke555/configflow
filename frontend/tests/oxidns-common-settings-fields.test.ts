@@ -64,7 +64,9 @@ describe('OxiDNS current common settings', () => {
     const wrapper = await render()
     await click('填入已验证性能参数')
     const changes = lastChange(wrapper) as Record<string, any>
-    expect(changes).toMatchObject({worker_threads: 2, cache_lazy_ttl: 300, probe_cache_size: 2048})
+    expect(changes).toMatchObject({worker_threads: 2, cache_lazy_ttl: 300})
+    expect(changes).not.toHaveProperty('probe_cache_size')
+    expect(changes).not.toHaveProperty('probe_cache_enabled')
     expect(changes).not.toHaveProperty('local_dns')
     expect(changes).not.toHaveProperty('direct_rules')
     expect(wrapper.emitted('change')).toHaveLength(1)

@@ -42,15 +42,16 @@ def test_verified_defaults_independent_from_mosdns():
     assert next(p for p in mos['plugins'] if p['tag'] == 'lazy_cache')['args']['lazy_cache_ttl'] == 21600
 
 
-def test_probe_cache_isolated_child_returns_to_ip_classification():
-    # A direct IP route differs from the proxy fallback, so the probe is written.
+def test_legacy_probe_helper_is_not_called_by_managed_routing():
+    # Keep the helper for custom native pipelines, but never invoke it automatically.
     p = plugins({'direct_rules': ['ip']}, [rule('ip', '203.0.113.0/24', 'IP-CIDR')])
     assert p['local_probe_cache']['args'] == {'size': 2048, 'short_circuit': False}
     assert p['local_probe']['args'] == [
         {'exec': '$local_probe_cache'}, {'matches': ['!has_resp'], 'exec': '$forward_local'}, {'exec': 'return'}]
     main = p['sequence_main']['args']
-    probe_index = main.index({'exec': 'jump local_probe'})
-    assert main[probe_index + 1] == {'matches': ['resp_ip $rules_ip_1'], 'exec': 'goto direct_ip'}
+    assert {'exec': 'jump local_probe'} not in main
+    assert not any('resp_ip' in str(step) for step in main)
+    assert main[-1] == {'exec': 'goto proxy_dns_seq'}
     assert p['ip_requery_proxy']['args'][0] == {'exec': 'drop_resp'}
     assert not any('$lazy_cache' in str(entry) for entry in p['proxy_dns_seq']['args'])
 
@@ -65,7 +66,7 @@ def test_aggregation_preserves_alternating_rule_priority_and_regex_commas():
     assert p['rules_domain_3']['args']['exps'] == [r'regexp:^n[0-9]{1,3}\.test$']
     domains = [entry['exec'] for entry in p['sequence_main']['args'] if str(entry.get('matches', [''])[0]).startswith('qname $rules_')]
     assert domains == ['goto china_dns', 'goto proxy_dns_seq', 'goto china_dns']
-    assert [p[f'rules_ip_{n}']['args']['ips'] for n in (1, 2)] == [['203.0.113.0/24'], ['203.0.113.1/32']]
+    assert not any(tag.startswith('rules_ip_') for tag in p)
 
 
 def test_aggregation_can_be_disabled():
@@ -78,8 +79,8 @@ def test_download_paths_are_stable_ascii_and_names_cannot_escape():
         'oxidns': {'direct_rulesets': ['a', 'b']},
         'rule_configs': [dict(id=i, name='../同名规则', itemType='ruleset', behavior='classical', url='https://rules.test/source') for i in ('a', 'b')]}
     downloads = get_oxidns_ruleset_downloads(config, base_url='https://config.test')
-    assert len({d['local_path'] for d in downloads}) == 4
-    assert all(re.fullmatch(r'./rules/rule_[a-f0-9]{16}_(domain|ip).txt', d['local_path']) for d in downloads)
+    assert len({d['local_path'] for d in downloads}) == 2
+    assert all(re.fullmatch(r'./rules/rule_[a-f0-9]{16}_domain.txt', d['local_path']) for d in downloads)
     assert all('/profiles/home/mosdns/rule-proxy?' in d['url'] for d in downloads)
     assert [d['local_path'] for d in downloads] == [d['local_path'] for d in get_oxidns_ruleset_downloads(config)]
     p = yaml.safe_load(generate_oxidns_config(config))['plugins']
@@ -98,7 +99,8 @@ def test_advanced_features_preserve_real_response_boundaries_and_runtime_state()
     assert '$ip_selector' not in str(p['proxy_dns_seq']) + str(p['local_probe'])
     assert {'exec': '$learn_classified_domain'} in p['direct_ip']['args']
     assert {'exec': '$learn_classified_domain'} not in p['default_direct_ip']['args']
-    assert {'matches': ['has_resp'], 'exec': 'goto default_direct_ip'} in p['sequence_main']['args']
+    assert p['sequence_main']['args'][-1] == {'exec': 'goto china_dns'}
+    assert {'exec': 'jump local_probe'} not in p['sequence_main']['args']
     assert '$learn_classified_domain' not in str(p['china_dns']) + str(p['proxy_dns_seq'])
     assert get_oxidns_custom_files({'oxidns': s}) == []
     assert p['dynamic_domains']['args']['path'].startswith('./state/')
@@ -157,8 +159,8 @@ def test_native_rule_update_lists_converted_downloads_and_targeted_providers(sch
         'rule_configs': [{'id': 'a', 'name': 'test', 'itemType': 'ruleset', 'behavior': 'classical', 'url': 'https://rules.test/list'}]}
     doc = yaml.safe_load(generate_oxidns_config(config, 'https://config.test'))
     p = {item['tag']: item for item in doc['plugins']}
-    assert len(p['rules_download']['args']['downloads']) == 2
-    assert p['rules_reload']['args'] == ['$rules_domain_1', '$rules_ip_1']
+    assert len(p['rules_download']['args']['downloads']) == 1
+    assert p['rules_reload']['args'] == ['$rules_domain_1']
     assert p['rules_refresh']['args'] == [{'exec': '$rules_download'}, {'exec': '$rules_reload'}]
     if scheduled:
         assert p['rules_cron']['args']['jobs'][0]['executors'] == ['$rules_refresh']
@@ -457,8 +459,8 @@ def test_invalid_or_ambiguous_hosts_fail_in_preview_and_download_instead_of_drop
             render(config)
 
 
-# Rule DNS actions must not change any existing output. The digests below are the
-# generator output at e4b926f for these settings (computed with that revision).
+# Golden output for managed domain-only routing; empty action metadata must not
+# alter the generated document. Legacy IP choices remain inert.
 def golden_rules():
     return [
         rule('d1', 'example.test'), rule('d2', 'x.example.test', 'DOMAIN'), rule('d3', 'ads', 'DOMAIN-KEYWORD'),
@@ -476,7 +478,7 @@ GOLDEN_ROUTING = {'direct_rules': ['d1', 'd3', 'i1', 'off'], 'proxy_rules': ['d2
                   'custom_match_position': 'head', 'custom_hosts': 'full:nas.test 192.168.1.2', 'block_qtypes': [65]}
 GOLDEN_CASES = {
     'defaults': ({}, '008e259709b5b359e1bfe14748d3077fe161c9555c81fe55315b8156b3ec6fa5'),
-    'routing': (GOLDEN_ROUTING, '238d0bac816e02427cf24de486fbf9a5ef447e843a12aac5336656b22a1dfe83'),
+    'routing': (GOLDEN_ROUTING, '8ff25727c430eff6b48db19e654fb6f9b4491d8d078c66e372421fc2b8f2231e'),
     'features': ({**GOLDEN_ROUTING, 'aggregate_rules': False, 'default_forward': 'forward_local', 'cache_lazy_ttl': 0,
                   'custom_match_position': 'tail', 'fallback_dns': 'udp://9.9.9.9', 'remote_ttl': 60,
                   'local_dns': 'udp://10.0.0.1\nudp://10.0.0.2',
@@ -487,12 +489,12 @@ GOLDEN_CASES = {
                   'query_recorder': {'enabled': True}, 'adguard': {'enabled': True, 'urls': ['https://rules.test/adguard.txt']},
                   'api': {'enabled': True}, 'log': {'file': './oxidns.log'}, 'rule_update': {'enabled': True},
                   'device_policies': [{'ip': '192.168.1.10', 'name': 'pc', 'mode': 'direct'}]},
-                 'fbe37670191252cd1bcbf9dfa1084d027b9cc2cc0fb2e2c3127939e901f9984d'),
+                 '3e7c61ee57c8b316a4db474a0cd4816925f711cea7a847d4c73a0ef4cec1f6d3'),
     'minimal': ({**GOLDEN_ROUTING, 'cache_enabled': False, 'probe_cache_enabled': False, 'prefer_ipv4': False,
                  'metrics_enabled': False, 'tcp_enabled': False, 'remote_ttl': 0, 'block_qtypes': [],
                  'ros_route': {'enabled': True, 'args': {'address': '192.168.88.1', 'username': 'u', 'password': 'p',
                                                          'routing_table': 'proxy', 'gateway4': '10.0.0.1'}}},
-                'b0878fe1159a53109af012bc32f80917ae4d816be666e677275b52bafd31cdf5'),
+                'af157b644aa945bfa93cdf935b787c8d6ffdc227051a6dfad420ef8d11e94cfc'),
 }
 
 
@@ -528,10 +530,8 @@ def test_template_emits_exec_for_each_action_domain_and_ip(action, expected, kin
     stored = PINNED if action == 'upstream' else {'action': action}
     p = plugins({'rule_actions': {'a': stored}}, [rule('a', value, kind)])
     part = 'domain' if match == 'qname' else 'ip'
-    assert main_execs(p, match) == [(f'rules_{part}_1', expected)]
-    if part == 'ip':
-        main = p['sequence_main']['args']
-        assert main.index({'exec': 'jump local_probe'}) < main.index({'matches': ['resp_ip $rules_ip_1'], 'exec': expected})
+    assert main_execs(p, match) == ([(f'rules_{part}_1', expected)] if part == 'domain' else [])
+    assert {'exec': 'jump local_probe'} not in p['sequence_main']['args']
 
 
 def test_rule_actions_take_precedence_over_lists():
@@ -539,7 +539,7 @@ def test_rule_actions_take_precedence_over_lists():
     p = plugins({'direct_rules': ['a', 'c'], 'proxy_rules': ['b'],
                  'rule_actions': {'a': {'action': 'nxdomain'}, 'c': {'action': 'refused'}}}, rules)
     assert main_execs(p, 'qname') == [('rules_domain_1', 'reject 3'), ('rules_domain_2', 'goto proxy_dns_seq')]
-    assert main_execs(p, 'resp_ip') == [('rules_ip_1', 'reject')]
+    assert main_execs(p, 'resp_ip') == []
     assert p['rules_domain_1']['args'] == {'exps': ['domain:a.test']}
 
 
@@ -619,8 +619,8 @@ def test_actions_keep_rule_order_and_section_positions():
     main = plugins(settings, rules)['sequence_main']['args']
     execs = [entry['exec'] for entry in main[main.index({'exec': 'prefer_ipv4'}) + 2:]]
     assert execs == ['$cf_dns_blackhole', 'goto china_dns', 'reject', 'reject 3', 'goto china_dns',
-                     'jump local_probe', 'reject 3', 'goto ip_requery_proxy', 'drop_resp', 'goto proxy_dns_seq']
-    assert main[-6]['matches'] == ['qname $dynamic_domains']
+                     'goto proxy_dns_seq']
+    assert main[-2]['matches'] == ['qname $dynamic_domains']
 
 
 def test_action_on_unconvertible_rule_is_rejected():

@@ -300,7 +300,9 @@ def finish_rule_updates(ctx, changes, config, base_url=''):
 
 
 def prepare_native_rule_updates(document, settings, config, base_url=''):
-    """Add manual-update capability to a rendered copy, never the saved draft."""
+    """Render current routing and manual updates without changing the saved draft."""
+    from backend.common.oxidns_common_routing import migrate_domain_only_routing
+    document, settings = migrate_domain_only_routing(document, settings, config, base_url)
     if any(item.get('type') in ('download', 'reload_provider') or item.get('tag') in _PIPELINE
            for item in document.get('plugins', [])):
         return document

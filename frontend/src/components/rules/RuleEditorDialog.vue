@@ -19,7 +19,7 @@ import RuleContentIssues from '@/components/rules/RuleContentIssues.vue'
 import RuleSourceEditor from '@/components/rules/RuleSourceEditor.vue'
 import api, { ruleApi, ruleSetApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
-import { isDnsRuleType } from '@/lib/oxidns'
+import { isOxidnsRuleType } from '@/lib/oxidns'
 import { CLASSICAL_CONTENT_HINT, prepareRuleContent, type RuleContentCheck } from '@/lib/ruleset-content'
 import { detectRuleContentFormat, domainRuleLine } from '@/lib/ruleset-format'
 import {
@@ -177,7 +177,7 @@ const libraryItems = computed<Item[]>(() => (editing.value
     : source.value === 'new_library' ? [form.library] : []))
 const behaviors = computed(() => libraryItems.value.map(item => item.behavior || 'domain'))
 const hasDomainPart = computed(() => (ruleType.value
-  ? isDnsRuleType(ruleType.value) && !IP_DNS_RULE_TYPES.includes(ruleType.value)
+  ? isOxidnsRuleType(ruleType.value)
   : source.value === 'values' && !editing.value ? parts.value.domain.length > 0
     : behaviors.value.some(behavior => behavior !== 'ipcidr')))
 const hasIpPart = computed(() => (ruleType.value
@@ -187,14 +187,15 @@ const hasIpPart = computed(() => (ruleType.value
     : libraryItems.value.some(item => item.has_ip_part ?? ['ipcidr', 'classical'].includes(item.behavior || 'domain'))))
 /** 不参与 DNS 分流的类型：字段禁用并固定为默认上游 */
 const unsupportedType = computed(() => {
-  if (ruleType.value) return isDnsRuleType(ruleType.value) ? '' : ruleType.value
-  if (!editing.value && source.value === 'values') return parts.value.unsupported[0]?.rule_type || ''
+  if (ruleType.value) return isOxidnsRuleType(ruleType.value) ? '' : ruleType.value
+  if (!editing.value && source.value === 'values') return !parts.value.domain.length && parts.value.ip.length ? parts.value.ip[0]!.rule_type : parts.value.unsupported[0]?.rule_type || ''
+  if (behaviors.value.length && behaviors.value.every(behavior => behavior === 'ipcidr')) return 'IP 规则集'
   return ''
 })
-/** 混合粘贴且未手动选择时，IP 行保持默认上游 */
-const splitIp = computed(() => !editing.value && source.value === 'values' && !dnsTouched.value && parts.value.domain.length > 0 && parts.value.ip.length > 0)
+/** 混合粘贴的 DNS 选择只作用于域名行，IP 行始终只用于连接分流。 */
+const splitIp = computed(() => !editing.value && source.value === 'values' && parts.value.domain.length > 0 && parts.value.ip.length > 0)
 const policyRoute = computed(() => followRoute(isRuleset.value
-  ? { itemType: 'ruleset', policy: form.policy }
+  ? { itemType: 'ruleset', policy: form.policy, behavior: behaviors.value.every(behavior => behavior === 'ipcidr') ? 'ipcidr' : 'domain' }
   : { itemType: 'rule', rule_type: ruleType.value || (parts.value.domain[0] || parts.value.ip[0])?.rule_type || 'DOMAIN', policy: form.policy }, engine.value?.policy_routes))
 const fieldDisabled = computed(() => !dnsLoaded.value || locked.value || !!unsupportedType.value)
 const dnsDraftPending = computed(() => (dnsTouched.value || resync.value) && !dnsLoaded.value)
@@ -229,8 +230,6 @@ const warnings = computed<DnsWarning[]>(() => {
     value: effectiveDns.value,
     policy: form.policy,
     policyRoute: policyRoute.value,
-    ipRouted: hasIpPart.value && !splitIp.value,
-    ipKeptDefault: splitIp.value && effectiveDns.value !== 'default',
     mosdns: mosdnsContext.value,
     drift: entry.value?.state === 'follow_drift' && !policyChanged ? { route: entry.value.route ?? null, label: entry.value.upstream_label } : null,
     resync: resync.value,
@@ -243,7 +242,7 @@ const dnsHint = computed(() => {
   if (unsupportedType.value) return `${unsupportedType.value} 不参与 DNS 分流`
   if (props.dnsLoading && !dnsLoaded.value) return '正在读取 DNS 状态…'
   if (!inUse.value) return '当前配置空间未使用 OxiDNS'
-  if (splitIp.value) return `域名 ${parts.value.domain.length} 条：${choiceLabel(effectiveDns.value, { policyRoute: policyRoute.value, upstreamLabel: upstreamLabel.value })} ／ IP ${parts.value.ip.length} 条：默认上游`
+  if (splitIp.value) return `域名 ${parts.value.domain.length} 条：${choiceLabel(effectiveDns.value, { policyRoute: policyRoute.value, upstreamLabel: upstreamLabel.value })} ／ IP ${parts.value.ip.length} 条：仅连接分流`
   if (isUpstreamValue(effectiveDns.value)) return PINNED_HINT
   return DNS_COPY[copyKey(effectiveDns.value)].hint
 })

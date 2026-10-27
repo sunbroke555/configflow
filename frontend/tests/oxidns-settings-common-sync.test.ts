@@ -18,7 +18,6 @@ vi.mock('@/api', () => ({
 describe('unified OxiDNS profile settings', () => {
   it.each([
     ['cache_size', 'cache_enabled'],
-    ['probe_cache_size', 'probe_cache_enabled'],
     ['cache_dump_interval', 'cache_dump_enabled'],
   ])('synchronizes and saves disabling %s despite its unfinished draft', async (field, toggle) => {
     const initial = settings()

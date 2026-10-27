@@ -12,7 +12,7 @@ import re
 import yaml
 
 from backend.common.oxidns_settings import BLOCK_QTYPES_EXEC, normalize_oxidns_settings, OxidnsSettingsError
-from backend.common.rule_dns import has_ip_part, helper_plugins, probe_needed, route_exec, route_key
+from backend.common.rule_dns import has_ip_part, helper_plugins, route_exec, route_key
 from backend.common.oxidns_native import (managed_files, native_document,
     relative_resource, resource_references)
 from backend.converters.mosdns import (
@@ -103,8 +103,11 @@ def unavailable_rulesets(config, paths):
 
 def get_oxidns_ruleset_downloads(config_data, base_url=''):
     settings = _settings(config_data)
-    native_paths = ({relative_resource(path) for path in resource_references(native_document(settings))}
-                    if settings['config_mode'] == 'native' else None)
+    native_paths = None
+    if settings['config_mode'] == 'native':
+        from backend.common.oxidns_common_routing import migrate_domain_only_routing
+        document, settings = migrate_domain_only_routing(native_document(settings), settings, config_data, base_url)
+        native_paths = {relative_resource(path) for path in resource_references(document)}
     effective = _base(config_data, base_url)
     downloads = []
     selections = {key: value if isinstance(value, (list, dict)) else [] for key, value in settings.items()}
@@ -205,24 +208,29 @@ def _hosts_file_content(text):
 
 
 def ruleset_parts(item, config):
-    """The parts a ruleset routes in OxiDNS; a classical set without IP lines has no IP part."""
-    parts = _ruleset_parts(item.get('behavior', 'domain'))
-    if 'ip' in parts and not has_ip_part(item, config):
-        parts = [part for part in parts if part != 'ip']
-    return parts
+    """Managed DNS routing only uses names, never addresses returned by an upstream."""
+    return [part for part in _ruleset_parts(item.get('behavior', 'domain')) if part == 'domain']
 
 
 def _routing_groups(config, settings, *, legacy=False):
-    """Ordered routing groups; legacy=True gives the shape before content-aware IP parts."""
+    """Managed domain groups, or historical IP shapes for safe native recognition.
+
+    ``legacy=True`` predates content-aware IP parts; ``content-aware`` keeps
+    the intermediate format. Neither legacy shape is used for new routing.
+    """
     groups = {'domain': [], 'ip': []}
     for item, route in _selected(config, settings):
         if item.get('itemType') == 'ruleset':
             parts = (_ruleset_parts(item.get('behavior', 'domain')) if legacy
                      else ruleset_parts(item, config))
+            if legacy == 'content-aware' and not has_ip_part(item, config):
+                parts = [part for part in parts if part != 'ip']
             entries = [(part, {'files': [_rule_path(item, part)]}) for part in parts]
         else:
             kind, value = item.get('rule_type', ''), item.get('value', '')
             part = 'ip' if kind in ('IP-CIDR', 'IP-CIDR6') else 'domain'
+            if part == 'ip' and not legacy:
+                continue
             if kind not in DNS_RULE_TYPES:
                 raise OxidnsSettingsError(f'所选规则类型暂不能转换为 OxiDNS 规则：{kind}')
             converted = convert_rule_content_for_mosdns(f'{kind},{value}', part).strip()
@@ -419,19 +427,8 @@ def generate_oxidns_config(config_data, base_url=''):
     # Explicit rules override previously learned classifications.
     if dynamic['enabled']:
         main.append({'matches': ['qname $dynamic_domains'], 'exec': 'goto ' + ('china_dns' if dynamic['route'] == 'direct' else 'proxy_dns_seq')})
-    probe = probe_needed([group['route'] for group in groups['ip']], s['default_forward'])
-    if probe:
-        main.append({'exec': 'jump local_probe'})
-    for group in groups['ip']:
-        # Without the probe nothing has answered yet, so these never match and every
-        # query reaches the fallback, which every IP route here equals. They stay so
-        # the routes remain readable from the document.
-        main.append({'matches': [f'resp_ip ${group["tag"]}'], 'exec': route_exec(group['route'], 'ip')})
-    if probe:
-        if s['default_forward'] == 'forward_local':
-            main.append({'matches': ['has_resp'], 'exec': 'goto default_direct_ip'})
-        else:
-            main.append({'exec': 'drop_resp'})
+    # A DNS response must not decide where an otherwise unmatched name is sent.
+    # IP rules remain available to connection routing; DNS falls back directly.
     main.append({'exec': 'goto china_dns' if s['default_forward'] == 'forward_local' else 'goto proxy_dns_seq'})
     add('sequence_main', 'sequence', main)
     add('server_udp', 'udp_server', {'listen': s['listen'], 'entry': 'sequence_main'})

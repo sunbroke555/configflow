@@ -9,7 +9,7 @@
           <div class="flex flex-wrap items-center gap-1">
             <h3 class="mr-auto text-sm font-semibold">核心设置</h3>
             <Button variant="outline" type="button" class="min-h-11 text-xs" :disabled="disabled || !canApplyPerformance || Boolean(activeError())" @click="applyPerformance">填入已验证性能参数</Button>
-            <FieldHelp label="已验证性能参数" :text="canApplyPerformance ? optionHelp('想使用已验证的一组性能参数，且当前结构支持编辑。', '填入 2 线程、300 秒过期缓存保留、2048 条探测缓存及并发和备用参数。保留上游地址、规则及自定义参数，仅改草稿，需统一保存。') : '当前性能设置使用自定义结构，请通过完整参数编辑。'" />
+            <FieldHelp label="已验证性能参数" :text="canApplyPerformance ? optionHelp('想使用已验证的一组性能参数，且当前结构支持编辑。', '填入 2 线程、300 秒过期缓存保留及并发和备用参数。保留上游地址、规则及自定义参数，仅改草稿，需统一保存。') : '当前性能设置使用自定义结构，请通过完整参数编辑。'" />
           </div>
           <OxidnsFields :settings="draft" :fields="coreFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
           <OxidnsFields class="border-t border-border pt-4" :settings="draft" :fields="hostFields" :disabled="disabled" :capabilities="fieldCapabilities" :navigation-disabled="navigationDisabled" @change="change" @error="setError" @navigate="navigate" />
@@ -92,13 +92,13 @@ const openedFeatures = reactive(new Set(props.initialFeature ? [props.initialFea
 const customReason = '当前配置使用自定义结构，请通过完整参数编辑，现有内容会保留。'
 const coreFields = sourceCoreFields
 const upstreamDescriptions: Record<string, ReturnType<typeof optionCopy>> = {
-  local_dns: optionCopy('为直连网站查询真实地址，也用于 IP 分流。', '需要设置当前配置中直连查询和响应 IP 探测的上游。', '逐条添加正在使用的地址，展开可调整连接参数，也可切换 YAML 编辑完整上游对象。这里编辑现有配置，不会因清空列表自动补入默认地址。'),
+  local_dns: optionCopy('为已选直连 DNS 的域名查询网站地址。', '需要设置当前配置中直连域名查询所使用的服务器。', '逐条添加正在使用的地址，展开可调整连接参数，也可切换 YAML 编辑完整上游对象。这里编辑现有配置，不会因清空列表自动补入默认地址。'),
   remote_dns: optionCopy('设置代理分流的查询上游，临时地址由它提供。', '需要调整代理分流所用上游，Fake-IP 须由外部上游提供。', '逐条填写当前上游。域名地址可用引导 DNS 或指定连接 IP，避免循环解析；标为代理 DNS 不会自动让连接走代理。'),
 }
 const upstreamFields = sourceUpstreamFields.map(field => upstreamDescriptions[field.path] ? { ...field, ...upstreamDescriptions[field.path], emptyHint: '尚未配置上游，点击添加上游填写地址。' } : field)
 const tabs = [{ value: 'core', label: '核心设置' }, { value: 'upstreams', label: 'DNS 上游' }, { value: 'cache', label: '缓存' }, { value: 'features', label: '特色功能' }, { value: 'access', label: 'API / 日志' }, { value: 'advanced', label: '高级' }]
 const hostFields: OxidnsField[] = [{ path: 'custom_hosts', label: '自定义 Hosts', type: 'lines', wide: true, placeholder: 'full:example.com 192.0.2.10 2001:db8::10', ...optionCopy('为指定域名固定返回地址，支持双栈查询。', '希望手动指定某个域名的查询结果，而非交给上游解析。', '每条填写域名规则和一个或多个 IP，支持 IPv4、IPv6。可逐条编辑，也可切换 YAML 批量填写，地址应按希望的匹配范围设置。') }]
-const positionFields: OxidnsField[] = [{ path: 'custom_match_position', label: '自定义匹配执行顺序', ...optionCopy('选择先执行自定义匹配，还是先执行分流规则。', '添加自定义匹配后，需要调整执行顺序时设置。', '此处只调整与策略规则页所设域名分流的先后。先执行的一方若结束请求，就不再执行另一方。自定义匹配始终早于动态域名集和响应 IP 分流。'), options: [{ value: 'head', label: '先执行自定义匹配' }, { value: 'tail', label: '先执行分流规则' }] }]
+const positionFields: OxidnsField[] = [{ path: 'custom_match_position', label: '自定义匹配执行顺序', ...optionCopy('选择先执行自定义匹配，还是先执行分流规则。', '添加自定义匹配后，需要调整执行顺序时设置。', '此处只调整与策略规则页所设域名分流的先后。先执行的一方若结束请求，就不再执行另一方。自定义匹配始终早于动态域名集和默认转发。'), options: [{ value: 'head', label: '先执行自定义匹配' }, { value: 'tail', label: '先执行分流规则' }] }]
 const read = (path: string): unknown => path.split('.').reduce<unknown>((value, key) =>
   value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined, draft)
 const customMatches = computed(() => {
@@ -164,7 +164,6 @@ function checkApiAuth() {
 const cacheErrorDependencies: Record<string, string[]> = {
   cache_size: ['cache_enabled'],
   cache_lazy_ttl: ['cache_enabled'],
-  probe_cache_size: ['probe_cache_enabled'],
   cache_dump_file: ['cache_enabled', 'cache_dump_enabled'],
   cache_dump_interval: ['cache_enabled', 'cache_dump_enabled'],
 }

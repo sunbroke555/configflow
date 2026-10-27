@@ -8,11 +8,11 @@ import FormField from '@/components/common/FormField.vue'
 import RuleDnsSelect from '@/components/rules/RuleDnsSelect.vue'
 import { ruleApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
-import { isDnsRuleType } from '@/lib/oxidns'
+import { isOxidnsRule } from '@/lib/oxidns'
 import { CHOICE_LABELS, DNS_COPY, PINNED_HINT, choiceLabel, copyKey, followRoute, isUpstreamValue, notifyRuleSaved, pinnedWithheld, stateValue } from '@/lib/ruleDns'
 import type { RuleDnsSnapshot, RuleDnsState, RuleDnsValue } from '@/types'
 
-type Item = { id: string; itemType?: string; rule_type?: string; policy?: string }
+type Item = { id: string; itemType?: string; rule_type?: string; behavior?: string; policy?: string }
 
 /** 当前展示分组的 DNS 批量设置；覆盖单独设置前先确认影响 */
 const props = defineProps<{
@@ -26,7 +26,7 @@ const emit = defineEmits<{ 'update:open': [value: boolean]; applied: [rules: Rec
 
 const value = ref<RuleDnsValue>('follow')
 const saving = ref(false)
-const convertible = (item: Item) => item.itemType === 'ruleset' || isDnsRuleType(item.rule_type)
+const convertible = (item: Item) => isOxidnsRule(item) && props.snapshot?.rules[item.id]?.state !== 'unsupported'
 const policyRoute = computed(() => (props.items[0] ? followRoute({ itemType: 'ruleset', policy: props.items[0].policy }, props.snapshot?.engine.policy_routes) : null))
 const upstreamLabel = computed(() => (isUpstreamValue(value.value)
   ? props.snapshot?.upstreams.find(item => `upstream:${item.key}` === value.value)?.label : undefined))
@@ -53,7 +53,7 @@ const impact = computed(() => {
   const skipped = new Map<string, number>()
   for (const item of props.items) {
     if (!convertible(item)) {
-      if (value.value !== 'default') skipped.set(item.rule_type || '', (skipped.get(item.rule_type || '') || 0) + 1)
+      if (value.value !== 'default') skipped.set(item.rule_type || item.behavior || '不支持的规则', (skipped.get(item.rule_type || item.behavior || '不支持的规则') || 0) + 1)
       continue
     }
     const current = stateValue(props.snapshot?.rules[item.id])

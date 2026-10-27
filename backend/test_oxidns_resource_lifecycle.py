@@ -18,6 +18,7 @@ CONFIG = {
     'rule_configs': [
         {'id': 'subscription', 'itemType': 'ruleset', 'behavior': 'domain', 'url': URL},
         {'id': 'inline_ip', 'itemType': 'rule', 'rule_type': 'IP-CIDR', 'value': '192.0.2.0/24'},
+        {'id': 'inline_domain', 'itemType': 'rule', 'rule_type': 'DOMAIN', 'value': 'inline.test'},
     ],
 }
 
@@ -107,11 +108,12 @@ def test_last_subscription_removal_and_reenable_produce_valid_native_configs(sou
     assert [job['schedule'] for job in cron['jobs'] if job.get('name') == 'refresh_rules'] == ['5 2 * * *']
 
 
-def test_replacing_last_subscription_with_inline_rule_does_not_leave_empty_download():
-    result = _patch(_prepared('routing'), {'direct_rulesets': [], 'direct_rules': ['inline_ip']})
+@pytest.mark.parametrize('identity, expected', [('inline_domain', ['inline_domain']), ('inline_ip', [])])
+def test_replacing_last_subscription_with_inline_rule_does_not_leave_empty_download(identity, expected):
+    result = _patch(_prepared('routing'), {'direct_rulesets': [], 'direct_rules': [identity]})
     document = native_document(result)
-    assert read_common_settings(result, CONFIG)['values']['direct_rules'] == ['inline_ip']
-    assert any(item['type'] == 'ip_set' for item in document['plugins'])
+    assert read_common_settings(result, CONFIG)['values']['direct_rules'] == expected
+    assert not any(item['type'] == 'ip_set' for item in document['plugins'])
     assert read_common_settings(result, CONFIG)['values']['rule_update']['enabled'] is False
 
 

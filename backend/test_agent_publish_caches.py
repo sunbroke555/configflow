@@ -247,7 +247,7 @@ def test_two_agents_parse_a_shared_rule_source_once(library_env, monkeypatch, se
     assert parses == parsed_first, parses
     # Not an exact count: the release's parallel downloads of one source (its
     # domain and IP files) may both validate it before either caches the verdict.
-    assert len(parsed_first) >= 3, parsed_first
+    assert len(parsed_first) >= (2 if service == 'oxidns' else 3), parsed_first
     assert deployment_content_fingerprint(first['bundle'].manifest) == \
         deployment_content_fingerprint(second['bundle'].manifest)
     cached = bundle_files(second)

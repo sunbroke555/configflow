@@ -862,7 +862,7 @@ describe('shared rule library', () => {
     expect(network.rules.compose).not.toHaveBeenCalled()
   })
 
-  it('keeps IP rulesets on the default upstream until chosen and sends no-resolve per batch', async () => {
+  it('keeps IP rulesets out of DNS and applies the selection only to domain batches', async () => {
     network.state.rules = []
     network.state.library.push({ id: 'library-ip', name: 'Shared networks', source_type: 'content', content: '10.0.0.0/8', url: '', behavior: 'ipcidr', format: 'text', enabled: true, has_ip_part: true })
     const wrapper = await render(RuleLibrary)
@@ -870,23 +870,21 @@ describe('shared rule library', () => {
     await flushPromises()
     const field = wrapper.getComponent(RuleDnsField)
     expect(field.props('modelValue')).toBe('default')
-    field.vm.$emit('update:modelValue', 'blackhole')
-    await flushPromises()
-    // Routing an IP ruleset in DNS turns on local probing for every query.
-    expect(field.props('warnings').map((item: any) => item.text).join('\n')).toContain('保存后会开启本地探测')
+    expect(field.props('disabled')).toBe(true)
+    expect(field.props('hint')).toContain('只用于连接分流')
     await clickText('加入配置')
     expect(network.rules.compose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      source: { kind: 'library', library_rule_ids: ['library-ip'] }, dns: 'blackhole',
+      source: { kind: 'library', library_rule_ids: ['library-ip'] },
       rule: expect.objectContaining({ no_resolve: true })
     }), 'default')
 
     network.rules.compose.mockClear()
     ;(wrapper.vm as any).$.setupState.showReferenceDialog(['library-one', 'library-ip'])
     await flushPromises()
-    expect(wrapper.getComponent(RuleDnsField).props('modelValue')).toBe('default')
+    expect(wrapper.getComponent(RuleDnsField).props('modelValue')).toBe('follow')
     await clickText('加入配置')
     expect(network.rules.compose.mock.calls.map(([payload]) => [payload.source.library_rule_ids, payload.rule.no_resolve, payload.dns]))
-      .toEqual([[['library-ip'], true, undefined], [['library-one'], false, undefined]])
+      .toEqual([[['library-ip'], true, undefined], [['library-one'], false, 'follow']])
   })
 
   it.each([

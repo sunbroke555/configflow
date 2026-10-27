@@ -137,18 +137,25 @@ def test_compose_multiline_prefix_types_comments_wildcards_and_limit(space):
     assert repository.export_all() == before
 
 
-def test_compose_mixed_paste_applies_dns_ip(space):
+def test_compose_mixed_paste_only_applies_dns_to_domains(space):
     client, repository = space
     response = compose(client, values('ads.test\nIP-CIDR,203.0.113.0/24'), dns='blackhole', dns_ip='default')
     assert response.status_code == 200, response.get_json()
     domain, ip = response.get_json()['data']['rules']
     assert oxidns(repository)['rule_actions'] == {domain['id']: {'action': 'blackhole'}}
-    assert response.get_json()['dns'][ip['id']] == {'state': 'default', 'route': None}
-    # Without dns_ip every line takes dns; the first IP group is announced.
+    assert response.get_json()['dns'][ip['id']]['state'] == 'unsupported'
+    # An explicit IP DNS action is rejected atomically; the UI submits default
+    # for IP rows while retaining the selected DNS action for domain rows.
+    before = repository.export_all()
     response = compose(client, values('IP-CIDR,198.51.100.0/24\nnx.test'), dns='nxdomain')
+    assert response.status_code == 400
+    assert repository.export_all() == before
+    response = compose(client, values('IP-CIDR,198.51.100.0/24\nnx.test'), dns='nxdomain', dns_ip='default')
+    assert response.status_code == 200, response.get_json()
     first, second = response.get_json()['data']['rules']
-    assert {first['id'], second['id']} <= set(oxidns(repository)['rule_actions'])
-    assert response.get_json()['warnings'] == ['#1 开始参与 DNS 分流：所有未命中域名规则的查询将先向直连 DNS 探测一次']
+    assert first['id'] not in oxidns(repository)['rule_actions']
+    assert oxidns(repository)['rule_actions'][second['id']] == {'action': 'nxdomain'}
+    assert response.get_json()['warnings'] == []
 
 
 def test_compose_skips_existing_duplicates_and_reports_disabled(space):
@@ -173,8 +180,44 @@ def test_compose_existing_library_multiple_ids(space):
     assert stored == created and all('url' not in item and 'behavior' not in item for item in stored)
     assert stored[0]['remark'] == 'note'
     assert oxidns(repository)['proxy_rulesets'] == [item['id'] for item in created]
-    # Proxy like the proxy fallback: the IP part cannot change an answer, so no probe starts.
+    # Mixed sources contribute only domain rules to DNS.
     assert response.get_json()['warnings'] == []
+
+
+
+@pytest.mark.parametrize('native', [False, True])
+def test_compose_domain_and_ip_libraries_keeps_both_connection_rules(space, native):
+    client, repository = space
+    shared = repository.get_shared()
+    shared['rule_library'].append({'id': 'ips', 'name': 'IP only', 'source_type': 'content',
+                                  'content': '192.0.2.0/24', 'behavior': 'ipcidr', 'enabled': True})
+    repository.save_shared(shared)
+    if native:
+        make_native(client)
+    response = compose(client, {'kind': 'library', 'library_rule_ids': ['ads', 'ips']}, dns='follow')
+    assert response.status_code == 200, response.get_json()
+    domain, ip = response.get_json()['data']['rules']
+    assert [item['library_rule_id'] for item in (domain, ip)] == ['ads', 'ips']
+    assert all(item['policy'] == 'DIRECT' for item in (domain, ip))
+    assert repository.get_profile('other')['rule_configs'][:2] == [domain, ip]
+    states = response.get_json()['dns']
+    assert states[domain['id']]['state'] == 'follow'
+    assert states[ip['id']]['state'] == 'unsupported'
+    settings = native_values(repository)['values'] if native else oxidns(repository)
+    assert settings['direct_rulesets'] == [domain['id']]
+    assert ip['id'] not in settings['rule_dns_follow']
+
+
+def test_changing_a_mosdns_selected_domain_to_ip_still_works(space):
+    client, repository = space
+    response = client.post('/api/mosdns/rulesets', headers=HEADERS, json={'direct_rules': ['inline']})
+    assert response.status_code == 200, response.get_json()
+    response = client.put('/api/rules/inline', headers=HEADERS,
+                          json={'rule_type': 'IP-CIDR', 'value': '192.0.2.0/24'})
+    assert response.status_code == 200, response.get_json()
+    profile = repository.get_profile('other')
+    assert profile['mosdns']['direct_rules'] == ['inline']
+    assert next(item for item in profile['rule_configs'] if item['id'] == 'inline')['rule_type'] == 'IP-CIDR'
 
 
 def test_compose_library_already_referenced_409_code_in_usages(space):
@@ -413,7 +456,7 @@ def test_get_rules_dns_engine_agents_auto_sync_and_in_use(space):
     assert client.post('/api/mosdns/rulesets', headers=HEADERS, json={'direct_rules': ['inline']}).status_code == 200
     compose(client, {'kind': 'library', 'library_rule_ids': ['mixed']}, dns='direct')
     body = client.get('/api/rules/dns', headers=HEADERS).get_json()
-    assert body['engine']['local_probe_active'] is True
+    assert body['engine']['local_probe_active'] is False
     assert body['mosdns'] == {'inline': 'direct'}
     make_native(client)
     body = client.get('/api/rules/dns', headers=HEADERS).get_json()

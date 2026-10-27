@@ -134,7 +134,8 @@ def test_oxidns_transaction_preparation_uses_profile_rules_and_independent_setti
     prepared = _prepare_transactional_content(AGENT, config, base_url='https://config.test')
     bundle = prepared['bundle']
     assert bundle.manifest['service_type'] == 'oxidns'
-    assert len(bundle.manifest['files']) == 3
+    assert len(bundle.manifest['files']) == 2
+    assert not any(f['path'].endswith('_ip.txt') for f in bundle.manifest['files'])
     assert not any(f['path'].startswith('state/') for f in bundle.manifest['files'])
     assert generate_agent_config(config, AGENT)['service_type'] == 'oxidns'
     original = deployment_content_fingerprint(bundle.manifest)
