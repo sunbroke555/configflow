@@ -1,0 +1,52 @@
+{
+  "scenarios": [
+    {
+      "mode": "host",
+      "generation_and_prepare_register_nothing": true,
+      "registered_online": true,
+      "ha_environment_ready": true,
+      "read_only_host_identity": true,
+      "read_only_bootstrap_directory": true,
+      "expired_installation_http": 401,
+      "ordinary_restart_keeps_identity": true,
+      "renewed_settings_visible_through_read_only_directory": true,
+      "force_recreated_container": true,
+      "agent_identity_and_token_preserved": true,
+      "additional_enrollment_requests": 0,
+      "dns_fixture_answer_before_and_after": "198.51.100.27",
+      "real_nas_test": false
+    },
+    {
+      "mode": "macvlan",
+      "generation_and_prepare_register_nothing": true,
+      "registered_online": true,
+      "ha_environment_ready": true,
+      "read_only_host_identity": true,
+      "read_only_bootstrap_directory": true,
+      "expired_installation_http": 401,
+      "ordinary_restart_keeps_identity": true,
+      "renewed_settings_visible_through_read_only_directory": true,
+      "force_recreated_container": true,
+      "agent_identity_and_token_preserved": true,
+      "additional_enrollment_requests": 0,
+      "dns_fixture_answer_before_and_after": "198.51.100.27",
+      "real_nas_test": false
+    }
+  ],
+  "provenance": {
+    "image": "cf-oxidns-compose-lab:20261027",
+    "image_id": "sha256:1a7a2c04c028b57990e9319269bf56938a868a18f61095bf83110f11570c2116",
+    "dockerfile_sha256": "53188967b17f7b4898ad2fcbfa9ed501df9aa98920e4d2d2bdf862406ff6af7a"
+  },
+  "administrator_or_global_registration_secrets_in_packages": false,
+  "scope": "Actual Linux Docker Compose containers in a dedicated daemon, PID/mount/network namespaces; no physical NAS or HA failover test in this run",
+  "expiry_fixture": "Only the temporary backend installation sessions were assigned expires=0; actual enroll calls returned401. No wall-clock24h wait.",
+  "dns_fixture": "After fresh registration, an isolated black_hole config answers compose-lab.invalid with198.51.100.27 without using WAN DNS.",
+  "source_sha256": {
+    "backend/agents/docker_ha_compose.py": "79c7f47fc71c0f950cad2193f63600f1174f38103e283dd3742ca74b0fa0d019",
+    "backend/agents/docker_ha_guide.py": "9b6dab1ec8e17752c8d79f596a39461a437894a6e7e839520a63c4b48a7db190",
+    "backend/agents/docker_ha_enrollment.py": "e2fe262fc65a4afd1258904efff7a07fd46c547ef30e1daf38780bad0fa53dda",
+    "docker/Dockerfile.agent": "53188967b17f7b4898ad2fcbfa9ed501df9aa98920e4d2d2bdf862406ff6af7a",
+    "docker/docker-agent-entrypoint-service.sh": "32034b52e7162517343c24d2a180b2493eea05229eae1d9d27def38481968d37"
+  }
+}

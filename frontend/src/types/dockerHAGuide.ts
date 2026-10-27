@@ -20,6 +20,7 @@ export interface DockerHAHostForm {
 }
 export interface DockerHAGuideRequest extends Partial<DockerHAHostForm> {
   action?: 'inspect' | 'generate' | 'verify' | 'check'
+  install_method?: 'compose' | 'script'
   output?: string
   vip?: string
   server_url?: string
@@ -29,6 +30,13 @@ export interface DockerHAGuideRequest extends Partial<DockerHAHostForm> {
   enable_oxidns?: boolean
   enable_mihomo?: boolean
 }
+export interface DockerHAComposeBundle {
+  project_name: string
+  filename: string
+  content_base64: string
+  prepare_command: string
+  start_command: string
+}
 export interface DockerHAGuideResult {
   success: boolean
   message?: string
@@ -37,6 +45,7 @@ export interface DockerHAGuideResult {
   compose: string
   install_command: string
   rollback_command: string
+  compose_bundle?: DockerHAComposeBundle
   preflight_report?: DockerHAPreflightReport
   verification_command?: string
   command_blocks?: { id: string; title: string; command: string }[]
