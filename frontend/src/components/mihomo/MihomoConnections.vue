@@ -193,7 +193,7 @@
     </div>
     <DeviceNoteDialog v-if="noteIP" :key="agentId + noteIP" :agent-id="agentId" :ip="noteIP" @close="noteIP = ''" @saved="applyNotes" />
     <ConnectionRuleDialog v-if="ruleAction" :key="agentId" :agent-id="agentId" :values="ruleAction.values" :target="ruleAction.target" @close="ruleAction = null" />
-    <MihomoConnectionDetail :row="selected" :source-name="selected ? sourceName(selected) : ''" @close="selectedId = ''" />
+    <MihomoConnectionDetail :agent-id="agentId" :row="selected" :source-name="selected ? sourceName(selected) : ''" @close="selectedId = ''" @proxy-changed="load" />
   </div>
 </template>
 
