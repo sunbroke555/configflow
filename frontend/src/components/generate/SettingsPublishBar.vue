@@ -14,7 +14,7 @@ import { createDeploymentId, deploymentNeedsNotice, deploymentStatusLabel, useAg
 import { stripTrailingPunctuation } from '@/lib/text'
 
 type ServiceType = 'mihomo' | 'mosdns' | 'oxidns' | 'surge'
-type Agent = { id: string; name: string; profile_id?: string; service_type: string; status?: string; enabled?: boolean; latest_deployment?: AgentDeployment; dns_follow?: { source_agent_id: string } | null }
+type Agent = { id: string; name: string; profile_id?: string; service_type: string; status?: string; enabled?: boolean; latest_deployment?: AgentDeployment; dns_follow?: { source_agent_id: string } | null; oxidns_ha?: import('@/types/agentDNSHA').AgentDNSHAConfig | null }
 type Profile = { id: string; name: string; is_default?: boolean }
 type Attempt = { session: number; agentId: string; agentName: string; profileId: string; serviceType: ServiceType; deploymentId?: string; saved: boolean; inherited?: boolean }
 
@@ -57,6 +57,8 @@ const matches = (agent: Agent, items: Profile[], profileId = props.profileId, se
 const online = (agent?: Agent) => !!agent && agent.status === 'online' && agent.enabled !== false
 const candidates = computed(() => agents.value.filter(agent => matches(agent, profiles.value)))
 const selected = computed(() => candidates.value.find(agent => agent.id === selectedId.value))
+const haPeer = computed(() => selected.value?.oxidns_ha?.enabled === true
+  ? agents.value.find(agent => agent.id === selected.value?.oxidns_ha?.peer_id) : undefined)
 const visibleAttempt = computed(() => attempt.value?.session === session && props.open ? attempt.value : null)
 const task = computed(() => {
   const current = visibleAttempt.value
@@ -322,6 +324,7 @@ onUnmounted(() => { disposed = true; session++ })
         </div>
         <p v-else-if="selected" class="m-0 break-words">发布到：<span class="font-medium text-foreground">{{ selected.name }}</span>{{ selected.enabled === false ? '（已禁用）' : selected.status !== 'online' ? '（离线）' : '' }}</p>
         <p v-else-if="!loadError && !targetUnavailable" class="m-0 break-words">此配置空间尚未绑定 {{ serviceLabel }} 设备，可先保存草稿。</p>
+        <p v-if="selected?.oxidns_ha?.enabled" class="m-0 break-words text-foreground" data-ha-publish-target>同时更新高可用对端 {{ haPeer?.name || selected.oxidns_ha.peer_id }}，先备机、检查成功后再主机。</p>
         <p v-if="!loading && !loadError && targetUnavailable" class="m-0 break-words text-warning-accent" role="status">原目标设备不可用于此配置空间的 {{ serviceLabel }} 配置，请重新选择设备；仍可保存草稿。</p>
       </div>
       <div class="grid min-w-0 shrink-0 grid-cols-2 gap-2 sm:flex">

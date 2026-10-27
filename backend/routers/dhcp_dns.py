@@ -64,6 +64,8 @@ def dns_ha_settings(agent_id: str, agent: Dict[str, Any], peer: Optional[Dict[st
         settings['dns_error'] = '所选 DNS Agent 的高可用配对不完整，请到 Agent 页重新设置 DNS 高可用'
     elif any((item.get('oxidns_ha_state') or {}).get('status') != 'succeeded' for item in (agent, peer)):
         settings['dns_error'] = '所选 DNS Agent 的高可用尚未部署成功，请到 Agent 页查看'
+    elif any((item.get('oxidns_ha_publication') or {}).get('status') not in (None, 'succeeded') for item in (agent, peer)):
+        settings['dns_error'] = '主备配置同步尚未成功，请先确认两台发布结果再下发虚拟 IP'
     elif all(item.get('status') != 'online' for item in (agent, peer)):
         settings['dns_error'] = '所选 DNS 高可用的两台 Agent 均离线，无法下发 DHCP DNS'
     else:

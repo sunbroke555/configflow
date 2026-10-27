@@ -69,6 +69,56 @@ beforeEach(() => {
 afterEach(() => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount())
   document.body.innerHTML = ''
+  vi.useRealTimers()
+})
+
+const publication = (status = 'applying') => ({
+  id: 'publication-1', status, phase: status === 'succeeded' ? 'done' : 'standby',
+  message: status === 'succeeded' ? '主备配置与规则均已发布成功' : '正在发布备机',
+  owner_agent_id: 'oxi-1', owner_deployment_id: 'deploy-1', active_agent_id: 'oxi-2',
+  members: [{ agent_id: 'oxi-2', name: '备用 OxiDNS', deployment_id: 'deploy-2', status: status === 'succeeded' ? 'succeeded' : 'checking' },
+    { agent_id: 'oxi-1', name: '主 OxiDNS', deployment_id: 'deploy-1', status: status === 'succeeded' ? 'succeeded' : 'waiting' }],
+})
+
+describe('ordered configuration synchronization', () => {
+  it('does not announce enable success until both members and keepalived finish', async () => {
+    vi.useFakeTimers()
+    vi.mocked(agentApi.setDNSHA).mockResolvedValueOnce({ data: { success: true, config: null, publication: publication() } } as any)
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: { success: true, config: null, publication: publication() } } as any)
+    const wrapper = render()
+    await click('设置 DNS 高可用')
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'oxi-2')
+    await type('dns-ha-vip-oxi-1', '192.168.0.53')
+    await submit()
+    expect(notify.success).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-ha-publication]').text()).toContain('备用 OxiDNS')
+    expect(wrapper.get('[data-ha-publication]').text()).toContain('等待前一台完成')
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: { ...status('ok', []), publication: publication('succeeded') } } as any)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(notify.success).toHaveBeenCalledExactlyOnceWith('已开启 DNS 高可用', expect.any(String))
+    expect(wrapper.text()).toContain('主备正常')
+  })
+
+  it('resumes an unfinished first enable after reopening the page and retains its failure', async () => {
+    vi.useFakeTimers()
+    const pending = publication()
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: { success: true, config: null, publication: pending } } as any)
+    const wrapper = render({ oxidns_ha_publication: pending })
+    await flushPromises()
+    expect(agentApi.getDNSHA).toHaveBeenCalledWith('oxi-1')
+    expect(wrapper.text()).toContain('正在同步主备')
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: { success: true, config: null,
+      publication: { ...publication('failed'), message: '备机健康检查失败，主机未更新' } } } as any)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('备机健康检查失败，主机未更新')
+    expect(wrapper.text()).toContain('开启未完成')
+    expect(notify.success).not.toHaveBeenCalled()
+    const calls = vi.mocked(agentApi.getDNSHA).mock.calls.length
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(agentApi.getDNSHA).toHaveBeenCalledTimes(calls)
+  })
 })
 
 describe('DNS high availability when not enabled', () => {

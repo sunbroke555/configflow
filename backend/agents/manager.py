@@ -91,6 +91,11 @@ def _oxidns_ha_enabled(agent):
     return ((agent or {}).get('oxidns_ha') or {}).get('enabled') is True
 
 
+def _oxidns_ha_busy(agent):
+    from .oxidns_ha_publish import active
+    return active(agent)
+
+
 OXIDNS_HA_LOCKED = 'DNS 高可用已开启，请先停用 DNS 高可用'
 
 
@@ -202,9 +207,10 @@ class AgentManager:
                         or (requested_profile_id and requested_profile_id != existing_agent.get('profile_id'))
                         or agent_data.get('port', 8080) != existing_agent.get('port')):
                     raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再改变 Agent 注册信息')
-                if _oxidns_ha_enabled(existing_agent) and (
+                if (_oxidns_ha_enabled(existing_agent) or _oxidns_ha_busy(existing_agent)) and (
                         agent_data.get('service_type', 'mihomo') != existing_agent.get('service_type')
-                        or (requested_profile_id and requested_profile_id != existing_agent.get('profile_id'))):
+                        or (requested_profile_id and requested_profile_id != existing_agent.get('profile_id'))
+                        or agent_data.get('port', 8080) != existing_agent.get('port')):
                     raise AgentDeploymentConflict(OXIDNS_HA_LOCKED)
                 agent_id = existing_agent['id']
                 token = existing_agent['token']
@@ -231,7 +237,7 @@ class AgentManager:
                     'domain_discovery_enabled': existing_agent.get('domain_discovery_enabled', False),
                 }
                 for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job', 'rule_sync',
-                              'oxidns_ha', 'oxidns_ha_state'):
+                              'oxidns_ha', 'oxidns_ha_state', 'oxidns_ha_publication'):
                     if field in existing_agent:
                         updated_agent[field] = deepcopy(existing_agent[field])
                 if existing_agent.get('gateway_installation_id'):
@@ -320,7 +326,7 @@ class AgentManager:
                         key in updates and updates[key] != agent.get(key)
                         for key in ('host', 'port', 'enabled', 'service_type', 'profile_id')):
                     raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再修改 Agent')
-                if _oxidns_ha_enabled(agent) and any(
+                if (_oxidns_ha_enabled(agent) or _oxidns_ha_busy(agent)) and any(
                         key in updates and updates[key] != agent.get(key)
                         for key in ('host', 'port', 'enabled', 'service_type', 'profile_id')):
                     raise AgentDeploymentConflict(OXIDNS_HA_LOCKED)
@@ -363,7 +369,7 @@ class AgentManager:
             if {agent['id'] for agent in bound} != set(expected_agent_ids):
                 raise ProfileInUse('Agent 绑定已变化，请刷新列表后重新确认')
             blocked = [agent.get('name') or agent['id'] for agent in bound
-                       if _upgrade_busy(agent) or any(task.get('status') not in ('succeeded', 'failed', 'rolled_back')
+                       if _upgrade_busy(agent) or _oxidns_ha_busy(agent) or any(task.get('status') not in ('succeeded', 'failed', 'rolled_back')
                                                      for task in agent.get('deployments', {}).values())]
             if blocked:
                 raise AgentDeploymentConflict(f'以下 Agent 正在发布、更新或等待恢复，请完成后再改绑：{"、".join(blocked)}')
@@ -384,7 +390,7 @@ class AgentManager:
                 raise AgentDeploymentConflict('Agent 正在更新或等待恢复')
             if _dns_follow_busy(agents, agent_id):
                 raise AgentDeploymentConflict('DNS 联动发布正在执行，请等待结果后再删除 Agent')
-            if _oxidns_ha_enabled(agent):
+            if _oxidns_ha_enabled(agent) or _oxidns_ha_busy(agent):
                 raise AgentDeploymentConflict(OXIDNS_HA_LOCKED)
             initial_len = len(agents)
             agents[:] = [agent for agent in agents if agent['id'] != agent_id]
@@ -470,6 +476,10 @@ class AgentManager:
             agent = next((item for item in agents if item['id'] == agent_id), None)
             if agent is None:
                 return {'success': False, 'message': 'Agent not found', 'http_status': 404}
+            from .oxidns_ha_publish import conflict
+            pair_conflict = conflict(agent, deployment_id)
+            if pair_conflict:
+                return pair_conflict
             follow = agent.get('dns_follow_state') or {}
             if follow.get('status') in ('preparing', 'publishing') and follow.get('target_deployment_id') != deployment_id:
                 return {'success': False, 'message': 'DNS 联动发布正在执行，请等待结果后再发布 OxiDNS', 'http_status': 409}
@@ -702,6 +712,10 @@ class AgentManager:
             time.sleep(min(.1, remaining))
 
     def get_deployment(self, agent_id, deployment_id):
+        from .oxidns_ha_publish import deployment
+        return deployment(self, agent_id, deployment_id)
+
+    def _get_deployment(self, agent_id, deployment_id):
         agent = self.get_agent_by_id(agent_id)
         if not agent:
             return {'success': False, 'message': 'Agent not found', 'http_status': 404}
@@ -760,7 +774,11 @@ class AgentManager:
             return {**state, 'message': 'Deployment status temporarily unavailable', 'pending': True}
 
     def activate_deployment(self, agent_id, deployment_id):
-        state = self.get_deployment(agent_id, deployment_id)
+        from .oxidns_ha_publish import activate
+        return activate(self, agent_id, deployment_id)
+
+    def _activate_deployment(self, agent_id, deployment_id):
+        state = self._get_deployment(agent_id, deployment_id)
         agent = self.get_agent_by_id(agent_id)
         if state.get('http_status'):
             return state
@@ -810,6 +828,11 @@ class AgentManager:
 
     def rollback_deployment(self, agent_id, deployment_id):
         """Reserve a rollback before network I/O so a new push cannot race it."""
+        agent = self.get_agent_by_id(agent_id) or {}
+        if _oxidns_ha_busy(agent) or (agent.get('deployments', {}).get(deployment_id) or {}).get('ha_publication'):
+            return {'success': False, 'http_status': 409, 'rollback_rejected': True,
+                    'rollback_message': '主备发布不能单独回滚一台；请将目标配置重新发布到主备',
+                    'message': '主备发布不能单独回滚一台；请将目标配置重新发布到主备'}
         def reserve(agents):
             agent = next((item for item in agents if item['id'] == agent_id), None)
             if agent is None:
@@ -912,6 +935,12 @@ class AgentManager:
 
     def publish_deployment(self, agent_id, bundle, *, activate=True, config_revision=None, base_url='',
                            resource_config=None, source_snapshot=None):
+        from .oxidns_ha_publish import publish
+        return publish(self, agent_id, bundle, activate=activate, config_revision=config_revision,
+                       base_url=base_url, resource_config=resource_config, source_snapshot=source_snapshot)
+
+    def _publish_deployment(self, agent_id, bundle, *, activate=True, config_revision=None, base_url='',
+                            resource_config=None, source_snapshot=None):
         agent = self.get_agent_by_id(agent_id)
         if not agent:
             return {'success': False, 'message': 'Agent not found', 'http_status': 404}
@@ -1102,6 +1131,10 @@ class AgentManager:
                     'error_details': failure_text(str(e), (agent.get('token'),))}
 
     def restart_agent_service(self, agent_id: str) -> Dict[str, Any]:
+        from .oxidns_ha_publish import service_operation
+        return service_operation(self, agent_id, lambda: self._restart_agent_service(agent_id))
+
+    def _restart_agent_service(self, agent_id: str) -> Dict[str, Any]:
         """
         触发 Agent 重启服务
 
@@ -1288,6 +1321,10 @@ class AgentManager:
             return {'success': False, 'message': f'Connection error: {str(e)}'}
 
     def uninstall_agent(self, agent_id: str) -> Dict[str, Any]:
+        from .oxidns_ha_publish import service_operation
+        return service_operation(self, agent_id, lambda: self._uninstall_agent(agent_id), uninstall=True)
+
+    def _uninstall_agent(self, agent_id: str) -> Dict[str, Any]:
         """
         卸载远程 Agent
 
@@ -1328,6 +1365,10 @@ class AgentManager:
             return {'success': False, 'message': f'Connection error: {str(e)}'}
 
     def update_agent_version(self, agent_id: str, new_version: str, binary_url: str) -> Dict[str, Any]:
+        from .oxidns_ha_publish import service_operation
+        return service_operation(self, agent_id, lambda: self._update_agent_version(agent_id, new_version, binary_url))
+
+    def _update_agent_version(self, agent_id: str, new_version: str, binary_url: str) -> Dict[str, Any]:
         """
         触发 Agent 更新
 

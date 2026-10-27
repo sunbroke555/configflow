@@ -204,6 +204,9 @@ def start(manager, agent_id):
 
     def reserve(agents):
         current = next(item for item in agents if item['id'] == agent_id)
+        from .oxidns_ha_publish import active
+        if active(current):
+            raise ValueError('DNS 主备正在同步，请等待两台发布完成后升级')
         previous = current.get('latest_upgrade') or {}
         if previous.get('update_id') != (agent.get('latest_upgrade') or {}).get('update_id'):
             raise ValueError('当前更新任务已改变，请刷新后查看最新结果')

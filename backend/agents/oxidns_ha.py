@@ -338,7 +338,35 @@ def _fail(manager, attempted, previous, by_id, ids, cause):
     raise HAError(message)
 
 
-def configure(manager, agent_id, request):
+def configure(manager, agent_id, request, *, base_url=''):
+    """Capture one configuration and sync both cores before enabling the VIP."""
+    from . import oxidns_ha_publish as publications
+    with _lock(manager):
+        agents = manager.get_all_agents()
+        by_id = {item['id']: item for item in agents}
+        agent = by_id.get(agent_id)
+        peer_id = request.get('peer_id') if isinstance(request, dict) else None
+        peer = by_id.get(peer_id) if isinstance(peer_id, str) else None
+        settings = normalize(request, agent, peer, agents)
+        blockers, warnings = upstream_findings(manager, agent, peer)
+        if blockers:
+            raise HAError('无法开启 DNS 高可用：' + '；'.join(blockers), blockers=blockers)
+        for member in (agent, peer):
+            _require_protocol(manager, member)
+        specs = {agent['id']: _spec(settings['vip'], settings['vrid'], 'primary', agent, peer),
+                 peer['id']: _spec(settings['vip'], settings['vrid'], 'secondary', peer, agent)}
+        blockers = _preview(manager, [agent, peer], specs)
+        if blockers:
+            raise HAError('无法开启 DNS 高可用：' + '；'.join(blockers), blockers=blockers)
+        intent = {'peer_id': peer['id'], 'vip': settings['vip'], 'vrid': settings['vrid']}
+        publication = publications.start_enable(manager, agent, peer, intent,
+            base_url=base_url or (agent.get('applied_content') or {}).get('base_url', ''),
+            warnings=warnings, routers=routers_using(manager, {agent['id'], peer['id']}))
+    return {'success': True, 'config': agent.get('oxidns_ha'), 'publication': publication,
+            'warnings': warnings, 'routers': routers_using(manager, {agent['id'], peer['id']})}
+
+
+def _configure_keepalived(manager, agent_id, request):
     """Enable (or change) the pair with this Agent as primary."""
     with _lock(manager):
         agents = manager.get_all_agents()
@@ -416,6 +444,9 @@ def disable(manager, agent_id, force=False):
         agents = manager.get_all_agents()
         by_id = {item['id']: item for item in agents}
         agent = by_id.get(agent_id)
+        from .oxidns_ha_publish import active
+        if active(agent):
+            raise HAError('主备配置发布尚未结束，请确认两台结果后再停用高可用')
         if not agent:
             raise HAError('Agent 不存在')
         ha = agent.get('oxidns_ha')
@@ -501,14 +532,19 @@ def _health(members, state):
 
 
 def status(manager, agent_id):
-    """Pair settings and live roles; requests Agents only while enabled."""
+    """Pair settings, publication progress and live roles."""
+    from . import oxidns_ha_publish as publications
+    publications.start_loop(manager)
+    publications.advance(manager, agent_id)
     agents = manager.get_all_agents()
     by_id = {item['id']: item for item in agents}
     agent = by_id.get(agent_id)
     if not agent:
         raise HAError('Agent 不存在')
+    publication = publications.summary(agent.get(publications.FIELD) or {}) or None
     if not enabled(agent):
-        return {'success': True, 'config': None}
+        return {'success': True, 'config': None, 'publication': publication,
+                'warnings': (publication or {}).get('warnings', []), 'routers': (publication or {}).get('routers', [])}
     ha = agent['oxidns_ha']
     peer = by_id.get(ha.get('peer_id'))
     members = [_member(manager, agent, ha.get('role'))]
@@ -520,4 +556,6 @@ def status(manager, agent_id):
     else:
         members.append(_member(manager, peer, peer['oxidns_ha'].get('role')))
     state = agent.get('oxidns_ha_state')
-    return {'success': True, 'config': ha, 'state': state, 'members': members, 'health': _health(members, state)}
+    return {'success': True, 'config': ha, 'state': state, 'members': members, 'health': _health(members, state),
+            'publication': publication, 'warnings': (publication or {}).get('warnings', []),
+            'routers': (publication or {}).get('routers', [])}

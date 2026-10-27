@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { CircleCheck, CircleX, Loader2, TriangleAlert } from '@lucide/vue'
-import { deploymentStatusLabel, type AgentDeployment } from '@/composables/useAgentDeployments'
+import { deploymentNeedsNotice, deploymentStatusLabel, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentStatusRow from './AgentStatusRow.vue'
+import AgentHAPublication from './AgentHAPublication.vue'
 
 const props = defineProps<{ task: AgentDeployment; compact?: boolean; label?: string }>()
+const groupNotice = computed(() => !!props.task.ha_publication && deploymentNeedsNotice(props.task))
 const statusLabel = computed(() => props.task.request_pending ? '提交请求'
   : `${props.task.query_error ? '上次报告：' : ''}${deploymentStatusLabel(props.task)}`)
 const tone = computed(() => {
@@ -40,11 +42,18 @@ const compactLabel = computed(() => {
 
 <template>
   <AgentStatusRow v-if="compact" :label="props.label || (task.manual_rollback || task.rollback_rejected ? '配置回滚' : '配置推送')" :status="compactLabel" :tone="tone">
-    <template v-if="$slots.notice" #notice><slot name="notice" /></template>
+    <template v-if="$slots.notice || groupNotice" #notice>
+      <AgentHAPublication v-if="task.ha_publication && groupNotice" :publication="task.ha_publication" />
+      <slot name="notice" />
+    </template>
+    <AgentHAPublication v-if="task.ha_publication && !groupNotice" :publication="task.ha_publication" />
     <slot name="details" />
   </AgentStatusRow>
-  <p v-else class="m-0 flex min-w-0 items-start gap-2 text-[13px] font-semibold leading-relaxed" :class="presentation.text">
-    <component :is="presentation.icon" class="mt-0.5 size-4 shrink-0" :class="{ 'animate-spin': tone === 'progress' }" aria-hidden="true" />
-    <span class="min-w-0 break-words"><slot>{{ statusLabel }}</slot></span>
-  </p>
+  <template v-else>
+    <p class="m-0 flex min-w-0 items-start gap-2 text-[13px] font-semibold leading-relaxed" :class="presentation.text">
+      <component :is="presentation.icon" class="mt-0.5 size-4 shrink-0" :class="{ 'animate-spin': tone === 'progress' }" aria-hidden="true" />
+      <span class="min-w-0 break-words"><slot>{{ statusLabel }}</slot></span>
+    </p>
+    <AgentHAPublication v-if="task.ha_publication" :publication="task.ha_publication" />
+  </template>
 </template>

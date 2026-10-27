@@ -1,4 +1,4 @@
-"""OxiDNS DNS high availability: pairing, Agent orchestration and the routers that hand out the VIP."""
+"""Keepalived pairing and router behavior; publication orchestration is tested in test_oxidns_ha_publish."""
 import copy
 
 import pytest
@@ -66,6 +66,8 @@ class Devices:
 
 @pytest.fixture
 def pair(tmp_path, monkeypatch):
+    from backend.agents import oxidns_ha_publish
+    monkeypatch.setattr(oxidns_ha_publish, 'start_loop', lambda _: None)
     previous = config_store._repository
     repository = ProfileRepository(tmp_path)
     config_store.set_repository(repository)
@@ -84,7 +86,7 @@ def pair(tmp_path, monkeypatch):
 
 
 def enable(manager, primary, secondary, **request):
-    return oxidns_ha.configure(manager, primary['id'], {'peer_id': secondary['id'], 'vip': VIP, **request})
+    return oxidns_ha._configure_keepalived(manager, primary['id'], {'peer_id': secondary['id'], 'vip': VIP, **request})
 
 
 def test_enable_applies_secondary_first_and_writes_both_records(pair):
@@ -181,7 +183,7 @@ def test_reconfiguring_the_same_pair_keeps_its_group(pair):
     enable(manager, primary, secondary)
     group = manager.get_agent_by_id(primary['id'])['oxidns_ha']['group_id']
     # From the other card: that Agent becomes the primary.
-    oxidns_ha.configure(manager, secondary['id'], {'peer_id': primary['id'], 'vip': '192.168.1.54'})
+    oxidns_ha._configure_keepalived(manager, secondary['id'], {'peer_id': primary['id'], 'vip': '192.168.1.54'})
     first, second = (manager.get_agent_by_id(item['id']) for item in (primary, secondary))
     assert first['oxidns_ha']['group_id'] == second['oxidns_ha']['group_id'] == group
     assert (first['oxidns_ha']['role'], second['oxidns_ha']['role']) == ('secondary', 'primary')
@@ -294,7 +296,7 @@ def test_cleanup_marker_never_touches_a_member_in_a_new_pair(pair):
     devices.fail_remove.clear()
     third = manager.register_agent({'name': 'DNS-C', 'host': '192.168.1.22', 'service_type': 'oxidns',
                                     'deployment_method': 'shell'})
-    oxidns_ha.configure(manager, secondary['id'], {'peer_id': third['id'], 'vip': VIP})
+    oxidns_ha._configure_keepalived(manager, secondary['id'], {'peer_id': third['id'], 'vip': VIP})
     devices.calls.clear()
     oxidns_ha.disable(manager, primary['id'])
     assert devices.kinds() == [('remove', PRIMARY_HOST)]
@@ -628,6 +630,8 @@ def test_agent_status_without_a_success_field_is_returned(tmp_path, monkeypatch)
 
 
 def test_http_api(authenticated_app, monkeypatch):  # noqa: F811
+    from backend.agents import oxidns_ha_publish
+    monkeypatch.setattr(oxidns_ha_publish, 'start_loop', lambda _: None)
     client, manager, _, admin, _ = authenticated_app
     devices = Devices()
     monkeypatch.setattr(AgentManager, '_deployment_request', lambda _self, *args, **kwargs: devices.capabilities(*args, **kwargs))
@@ -638,13 +642,21 @@ def test_http_api(authenticated_app, monkeypatch):  # noqa: F811
     secondary = manager.register_agent({'name': 'DNS-B', 'host': SECONDARY_HOST, 'service_type': 'oxidns'})
     path = f'/api/agents/{primary["id"]}/oxidns-ha'
     assert client.get(path).status_code == 401
-    assert client.get(path, headers=admin).get_json() == {'success': True, 'config': None}
+    assert client.get(path, headers=admin).get_json() == {'success': True, 'config': None, 'publication': None}
     devices.blockers[SECONDARY_HOST] = ['缺少 keepalived']
     rejected = client.put(path, headers=admin, json={'peer_id': secondary['id'], 'vip': VIP})
     assert rejected.status_code == 409 and rejected.get_json()['blockers'] == ['DNS-B：缺少 keepalived']
     devices.blockers.clear()
-    enabled = client.put(path, headers=admin, json={'peer_id': secondary['id'], 'vip': VIP}).get_json()
-    assert enabled['config']['role'] == 'primary' and enabled['routers'] == []
+    response = client.put(path, headers=admin, json={'peer_id': secondary['id'], 'vip': VIP})
+    started = response.get_json()
+    assert response.status_code == 202
+    assert started['config'] is None and started['publication']['status'] == 'preparing'
+    assert not any(call[0] == 'apply' for call in devices.calls)
+    # HTTP start is asynchronous. The dedicated publication tests drive both
+    # real transaction journals; finish this reservation before testing HA CRUD.
+    job = manager.get_agent_by_id(primary['id'])[oxidns_ha_publish.FIELD]
+    oxidns_ha_publish._fail(manager, job, 'test reservation finished')
+    enabled = enable(manager, primary, secondary)
     listed = next(item for item in client.get('/api/agents', headers=admin).get_json() if item['id'] == primary['id'])
     assert listed['oxidns_ha'] == enabled['config'] and 'token' not in listed
     blocked = client.delete(f'/api/agents/{secondary["id"]}', headers=admin)

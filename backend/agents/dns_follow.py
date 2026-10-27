@@ -571,6 +571,9 @@ def _target_release_in_flight(manager, target):
     Checking during that window compares the old baseline with the new active
     release and fails spuriously; once it ends the next round sees the result.
     """
+    from .oxidns_ha_publish import active
+    if active(target):
+        return True
     latest = target.get('latest_deployment') or {}
     if not latest.get('deployment_id') or latest.get('status') in _TERMINAL:
         return False

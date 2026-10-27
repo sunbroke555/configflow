@@ -22,6 +22,7 @@ def _state(profile_id):
     from backend.routes.agents import _public_deployment
     agents = [{'id': agent['id'], 'name': agent.get('name') or agent['id'], 'host': agent.get('host') or '',
                'status': agent.get('status') or 'offline',
+               'oxidns_ha': agent.get('oxidns_ha'),
                'deployment': _public_deployment(agent['latest_deployment']) if agent.get('latest_deployment') else None}
               for agent in get_agent_manager().get_all_agents()
               if agent.get('service_type') == 'oxidns' and (agent.get('profile_id') or default) == profile_id]
